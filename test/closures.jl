@@ -110,3 +110,29 @@ end
     local lam = D.Lambda__(only(methods(ClosuresCases.mk(1))), :closures, mi, c, 0)
     @test lam.enclosing_member_closures === c && lam.index == 0
 end
+
+@testset "closures.dart: ClosureLayouter's counts, no closure called through a vtable" begin
+    local W = WasmTarget
+    local t = D.Translator(W.check_subset(ClosuresCases.mk, (Int,), "closures"), D.TranslatorOptions())
+    local l = D.ClosureLayouter(t)
+    # Julia's verifier admits no unresolved call: the walk registers nothing
+    collect(l)
+    @test D.max_type_argument_count(l) == 0 && !l.uses_function_apply_with_named_arguments[]
+    # a method's signature: its positional arguments after the function object, its keyword names
+    D._visit_function_node(l, only(methods(ClosuresCases.kf)))
+    D._visit_function_node(l, only(methods(ClosuresCases.kh)))
+    @test D.max_type_argument_count(l) == 1 && D.max_positional_count_for(l, 0) == 2
+    local seen = Int[]
+    D.for_each_positional_argument_count(l, 0, n -> push!(seen, n))
+    @test seen == [0, 1]
+    D.register_call(D._representations_for_counts(l, 0, 1), (:a, :d))
+    D.compute_clusters(l)
+    local r = D._representations_for_counts(l, 0, 1)
+    @test r.cluster_for_name["a"] === r.cluster_for_name["d"] && r.cluster_for_name["a"].names == ["a", "b", "d"]
+    # building a representation reaches the unported vtable layout, a located rejection
+    local e = try; D.get_closure_representation(l, 0, 1, String[]); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unported
+    # Julia has no function types and no generic instantiation: those paths reject as Internal
+    local e2 = try; l.function_type_type[]; nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Internal
+end

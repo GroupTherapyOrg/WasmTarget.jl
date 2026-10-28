@@ -74,9 +74,101 @@ end
 end
 
 """
-ClosureLayouter's dart fields: `translator`, `procedureAttributeMetadata`, `representations`, `visitedConstants`, `currentMember`, `usesFunctionApplyWithNamedArguments`, `_vtableBaseStructUninitialized`, `vtableBaseStruct`, `vtableDynamicClosureCallEntryIndex`, `instantiationContextBaseStruct`, `nonGenericVtableBaseStruct`, `genericVtableBaseStruct`, `vtableInstantiationTypeComparisonFunctionIndex`, `vtableInstantiationTypeHashFunctionIndex`, `vtableInstantiationFunctionIndex`, `instantiationClosureTypeComparisonFunctionType`, `instantiationClosureTypeHashFunctionType`, `closureBaseStruct`, `functionTypeType`, `_instantiationContextBaseStructs`, `_instantiationTypeComparisonFunctions`, `_instantiationTypeHashFunctions`.
+Lays out the closures: the representation for each number of type arguments and positional
+parameters and each combination of named ones, and the base structs of the vtables, the closures
+and the instantiation contexts, each defined on first use.
+
+dart counts the signatures of every function that may become a closure value and every call of
+one. Julia's verifier admits no call of a function value it cannot resolve to a method
+(src/julia/subset.jl), so every call is resolved and no closure is ever called through a vtable
+(see `collect`). dart's `procedureAttributeMetadata` is TFA's, whose Julia counterpart is the
+inference the NIR holds. `visitedConstants` serves the walk over Kernel's constant trees, which the
+NIR does not have. `functionTypeType` (dart's `_FunctionType`) belongs to dart's function types,
+which Julia does not have, so it rejects as `Internal` when read.
 """
-@parity "dart2wasm/lib/closures.dart:209 ClosureLayouter" @unported struct ClosureLayouter end
+@parity "dart2wasm/lib/closures.dart:209 ClosureLayouter" mutable struct ClosureLayouter
+    const translator::KernelNodes
+    const representations::Late{Vector{Vector{ClosureRepresentationsForParameterCount}}}
+    current_member::Union{Core.MethodInstance,Nothing}
+    const uses_function_apply_with_named_arguments::Late{Bool}
+    const _vtable_base_struct_uninitialized::Late{WasmBuilder.IR.StructType}
+    const vtable_base_struct::Late{WasmBuilder.IR.StructType}
+    const vtable_dynamic_closure_call_entry_index::Late{Union{Int,Nothing}}
+    const instantiation_context_base_struct::Late{WasmBuilder.IR.StructType}
+    const non_generic_vtable_base_struct::Late{WasmBuilder.IR.StructType}
+    const generic_vtable_base_struct::Late{WasmBuilder.IR.StructType}
+    const vtable_instantiation_type_comparison_function_index::Late{Int}
+    const vtable_instantiation_type_hash_function_index::Late{Int}
+    const vtable_instantiation_function_index::Late{Int}
+    const instantiation_closure_type_comparison_function_type::Late{WasmBuilder.IR.FunctionType}
+    const instantiation_closure_type_hash_function_type::Late{WasmBuilder.IR.FunctionType}
+    const closure_base_struct::Late{WasmBuilder.IR.StructType}
+    const function_type_type::Late{WasmBuilder.IR.RefType}
+    const _instantiation_context_base_structs::Dict{Int,WasmBuilder.IR.StructType}
+    const _instantiation_type_comparison_functions::Dict{Int,IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}}
+    const _instantiation_type_hash_functions::Dict{Int,IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}}
+    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at :462
+    # is its outer function, and each late field's initializer reads the layouter itself
+    function ClosureLayouter(::Val{:_}, translator::KernelNodes)
+        local self
+        local ref(t::WasmBuilder.IR.DefType) = WasmBuilder.IR.RefType_def(t; nullable = false)
+        local fixed(t::WasmBuilder.IR.StorageType) = WasmBuilder.IR.FieldType(t; mutable = false)
+        self = new(translator,
+            Late{Vector{Vector{ClosureRepresentationsForParameterCount}}}("dart2wasm/lib/closures.dart:214 ClosureLayouter.representations"),
+            nothing,
+            Late{Bool}("dart2wasm/lib/closures.dart:222 ClosureLayouter.usesFunctionApplyWithNamedArguments"),
+            # Uninitialized (no field types added yet) struct for base vtable to allow cyclic types
+            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:231 ClosureLayouter._vtableBaseStructUninitialized",
+                () -> _define_struct(self, "#VtableBase")),
+            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:234 ClosureLayouter.vtableBaseStruct", function ()
+                local vtable = self._vtable_base_struct_uninitialized[]
+                local index = length(vtable.fields)
+                if self.uses_function_apply_with_named_arguments[]
+                    push!(vtable.fields, fixed(ref(self.translator.dynamic_call_vtable_entry_function_type[])))
+                    vtable.field_names[index] = "dynamicClosureCallEntry"
+                end
+                return vtable
+            end),
+            Late{Union{Int,Nothing}}("dart2wasm/lib/closures.dart:255 ClosureLayouter.vtableDynamicClosureCallEntryIndex",
+                () -> isempty(self.vtable_base_struct[].fields) ? nothing : length(self.vtable_base_struct[].fields) - 1),
+            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:260 ClosureLayouter.instantiationContextBaseStruct",
+                () -> _define_struct(self, "#InstantiationClosureContextBase";
+                    named_fields = ["genericClosure" => fixed(ref(self.closure_base_struct[]))], brand = true)),
+            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:271 ClosureLayouter.nonGenericVtableBaseStruct",
+                () -> _define_struct(self, "#NonGenericVtableBase"; super_type = self.vtable_base_struct[])),
+            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:277 ClosureLayouter.genericVtableBaseStruct",
+                () -> _define_struct(self, "#GenericVtableBase"; named_fields = [
+                        "closureEqualFun" => fixed(ref(self.instantiation_closure_type_comparison_function_type[])),
+                        "closureHashCodeFun" => fixed(ref(self.instantiation_closure_type_hash_function_type[])),
+                        "instantiateGenericClosureFun" => fixed(WasmBuilder.IR.RefType_func(; nullable = false))],
+                    super_type = self.vtable_base_struct[])),
+            Late{Int}("dart2wasm/lib/closures.dart:306 ClosureLayouter.vtableInstantiationTypeComparisonFunctionIndex",
+                () -> length(self.generic_vtable_base_struct[].fields) - 3),
+            Late{Int}("dart2wasm/lib/closures.dart:309 ClosureLayouter.vtableInstantiationTypeHashFunctionIndex",
+                () -> length(self.generic_vtable_base_struct[].fields) - 2),
+            Late{Int}("dart2wasm/lib/closures.dart:312 ClosureLayouter.vtableInstantiationFunctionIndex",
+                () -> length(self.generic_vtable_base_struct[].fields) - 1),
+            Late{WasmBuilder.IR.FunctionType}("dart2wasm/lib/closures.dart:327 ClosureLayouter.instantiationClosureTypeComparisonFunctionType",
+                () -> WasmBuilder.define_function(types_builder(self.translator),
+                    WasmBuilder.IR.ValueType[ref(self.instantiation_context_base_struct[]), ref(self.instantiation_context_base_struct[])],
+                    WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i32])),   # bool
+            Late{WasmBuilder.IR.FunctionType}("dart2wasm/lib/closures.dart:336 ClosureLayouter.instantiationClosureTypeHashFunctionType",
+                () -> WasmBuilder.define_function(types_builder(self.translator),
+                    WasmBuilder.IR.ValueType[ref(self.instantiation_context_base_struct[])],
+                    WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i64])),   # hash
+            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:345 ClosureLayouter.closureBaseStruct",
+                () -> _define_struct(self, "#ClosureBase"; named_fields = [
+                        "vtable" => fixed(ref(self._vtable_base_struct_uninitialized[])),
+                        "functionType" => fixed(self.function_type_type[])],
+                    super_type = self.translator.closure_info.struct_)),
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/closures.dart:379 ClosureLayouter.functionTypeType",
+                () -> reject!(Internal("dart2wasm/lib/closures.dart:379 ClosureLayouter.functionTypeType: Julia has no function types"), "ClosureLayouter.functionTypeType")),
+            Dict{Int,WasmBuilder.IR.StructType}(),
+            Dict{Int,IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}}(),
+            Dict{Int,IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}}())
+        return self
+    end
+end
 
 """
 The closure representations for one number of positional parameters: the one without named
@@ -293,47 +385,167 @@ end
 # dart's List.toString, `[a, b]`; Julia's show writes to the stream it is given
 @parity "dart2wasm/lib/closures.dart:196 NameCombination.toString" Base.show(io::IO, self::NameCombination)::Nothing = print(io, "[", join(self.names, ", "), "]")
 
-@parity "dart2wasm/lib/closures.dart:377 ClosureLayouter.typeType" @unported function type_type(self::ClosureLayouter) end
+@parity "dart2wasm/lib/closures.dart:377 ClosureLayouter.typeType" type_type(self::ClosureLayouter)::WasmBuilder.IR.RefType = non_nullable_type_type(self.translator.types)
 
-@parity "dart2wasm/lib/closures.dart:384 ClosureLayouter._getInstantiationContextBaseStruct" @unported function _get_instantiation_context_base_struct(self::ClosureLayouter, num_types::Int64) end
+@parity "dart2wasm/lib/closures.dart:384 ClosureLayouter._getInstantiationContextBaseStruct" function _get_instantiation_context_base_struct(self::ClosureLayouter, num_types::Int64)::WasmBuilder.IR.StructType
+    local type_field = WasmBuilder.IR.FieldType(type_type(self); mutable = false)
+    return get!(self._instantiation_context_base_structs, num_types) do
+        _define_struct(self, "#InstantiationClosureContextBase-$num_types";
+                       named_fields = ["typeArgument$i" => type_field for i in 0:num_types-1],
+                       super_type = self.instantiation_context_base_struct[])
+    end
+end
 
-@parity "dart2wasm/lib/closures.dart:401 ClosureLayouter._getInstantiationTypeComparisonFunction" @unported function _get_instantiation_type_comparison_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, num_types::Int64) end
+@parity "dart2wasm/lib/closures.dart:401 ClosureLayouter._getInstantiationTypeComparisonFunction" _get_instantiation_type_comparison_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, num_types::Int64)::WasmBuilder.IR.BaseFunction =
+    get!(() -> _create_instantiation_type_comparison_function(self, module_, num_types),
+         get!(IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}, self._instantiation_type_comparison_functions, num_types), module_)
 
-@parity "dart2wasm/lib/closures.dart:414 ClosureLayouter._getInstantiationTypeHashFunction" @unported function _get_instantiation_type_hash_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, num_types::Int64) end
+@parity "dart2wasm/lib/closures.dart:414 ClosureLayouter._getInstantiationTypeHashFunction" _get_instantiation_type_hash_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, num_types::Int64)::WasmBuilder.IR.BaseFunction =
+    get!(() -> _create_instantiation_type_hash_function(self, module_, num_types),
+         get!(IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}, self._instantiation_type_hash_functions, num_types), module_)
 
-@parity "dart2wasm/lib/closures.dart:437 ClosureLayouter._defineStruct" @unported function _define_struct(self::ClosureLayouter, name::String; named_fields = nothing, super_type = nothing, brand = nothing) end
+"""
+Defines a struct named `name`: the supertype's fields and their names first, then `named_fields`
+in order (dart's insertion-ordered Map, here its pairs).
+"""
+@parity "dart2wasm/lib/closures.dart:437 ClosureLayouter._defineStruct" function _define_struct(self::ClosureLayouter, name::String;
+        named_fields::Union{Vector{Pair{String,WasmBuilder.IR.FieldType}},Nothing} = nothing,
+        super_type::Union{WasmBuilder.IR.StructType,Nothing} = nothing, brand::Union{Bool,Nothing} = nothing)::WasmBuilder.IR.StructType
+    local type_ = WasmBuilder.define_struct(types_builder(self.translator), name; super_type = super_type,
+                                            brand = something(brand, unique_types(self.translator.options)))
+    if super_type !== nothing
+        append!(type_.fields, super_type.fields)
+        merge!(type_.field_names, super_type.field_names)
+    end
+    if named_fields !== nothing
+        for (field_name, value) in named_fields
+            local index = length(type_.fields)
+            push!(type_.fields, value)
+            type_.field_names[index] = field_name
+        end
+    end
+    return type_
+end
 
-@parity "dart2wasm/lib/closures.dart:460 ClosureLayouter.topType" @unported function top_type(self::ClosureLayouter) end
+@parity "dart2wasm/lib/closures.dart:460 ClosureLayouter.topType" top_type(self::ClosureLayouter)::WasmBuilder.IR.ValueType = self.translator.top_type[]
 
-@parity "dart2wasm/lib/closures.dart:462 ClosureLayouter" @unported function ClosureLayouter(translator) end
+@parity "dart2wasm/lib/closures.dart:462 ClosureLayouter" ClosureLayouter(translator::KernelNodes)::ClosureLayouter = ClosureLayouter(Val(:_), translator)
 
-@parity "dart2wasm/lib/closures.dart:467 ClosureLayouter.collect" @unported function Base.collect(self::ClosureLayouter) end
+"""
+Counts the closure signatures and calls, then clusters them. dart walks the component for every
+function that may become a closure value and every call of one. Julia's verifier admits no call it
+cannot resolve to a method, so the program never calls a function value through a vtable: every
+call of a closure is an invoke of its method (src/julia/subset.jl). The walk therefore registers no
+signature and no call.
+"""
+@parity "dart2wasm/lib/closures.dart:467 ClosureLayouter.collect" function Base.collect(self::ClosureLayouter)::Nothing
+    self.uses_function_apply_with_named_arguments[] = false
+    self.representations[] = Vector{ClosureRepresentationsForParameterCount}[]
+    compute_clusters(self)
+    return nothing
+end
 
-@parity "dart2wasm/lib/closures.dart:475 ClosureLayouter.computeClusters" @unported function compute_clusters(self::ClosureLayouter) end
+@parity "dart2wasm/lib/closures.dart:475 ClosureLayouter.computeClusters" function compute_clusters(self::ClosureLayouter)::Nothing
+    local representations = self.representations[]
+    for type_count in 0:length(representations)-1
+        local representations_for_type_count = representations[type_count + 1]
+        for positional_count in 0:length(representations_for_type_count)-1
+            local representations_for_counts = representations_for_type_count[positional_count + 1]
+            if type_count > 0
+                # Due to generic function instantiations, any name combination that occurs in a call of
+                # a non-generic function also counts as occurring in a call of all corresponding
+                # generic functions. Thus, the generic closure inherits the combinations for the
+                # corresponding closure with zero type parameters.
+                inherit_combinations_from(representations_for_counts, representations[1][positional_count + 1])
+            end
+            compute_clusters(representations_for_counts)
+        end
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/closures.dart:502 ClosureLayouter.maxTypeArgumentCount" @unported function max_type_argument_count(self::ClosureLayouter) end
+@parity "dart2wasm/lib/closures.dart:502 ClosureLayouter.maxTypeArgumentCount" max_type_argument_count(self::ClosureLayouter)::Int = length(self.representations[])
 
-@parity "dart2wasm/lib/closures.dart:504 ClosureLayouter.maxPositionalCountFor" @unported function max_positional_count_for(self::ClosureLayouter, type_count::Int64) end
+@parity "dart2wasm/lib/closures.dart:504 ClosureLayouter.maxPositionalCountFor" max_positional_count_for(self::ClosureLayouter, type_count::Int64)::Int = length(self.representations[][type_count + 1])
 
-@parity "dart2wasm/lib/closures.dart:506 ClosureLayouter.forEachPositionalArgumentCount" @unported function for_each_positional_argument_count(self::ClosureLayouter, type_count::Int64, fun::Function) end
+# dart's loop bound reads `representations[positionalCount]`, which indexes by the wrong count; the
+# positional counts of `typeCount` are `representations[typeCount]`'s
+@parity "dart2wasm/lib/closures.dart:506 ClosureLayouter.forEachPositionalArgumentCount" function for_each_positional_argument_count(self::ClosureLayouter, type_count::Int64, fun::Function)::Nothing
+    for positional_count in 0:length(self.representations[][type_count + 1])-1
+        fun(positional_count)
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/closures.dart:521 ClosureLayouter.getClosureRepresentation" @unported function get_closure_representation(self::ClosureLayouter, type_count::Int64, positional_count::Int64, names::Vector{String}) end
+"""
+The representation of the closures with `type_count` type parameters, at most `positional_count`
+positional parameters and the named parameters `names`, sorted; `nothing` when the names span
+clusters.
+"""
+@parity "dart2wasm/lib/closures.dart:521 ClosureLayouter.getClosureRepresentation" function get_closure_representation(self::ClosureLayouter, type_count::Int64, positional_count::Int64, names::Vector{String})::Union{ClosureRepresentation,Nothing}
+    local representations = _representations_for_counts(self, type_count, positional_count)
+    if representations.without_named === nothing
+        local parent = positional_count == 0 ? nothing : get_closure_representation(self, type_count, positional_count - 1, String[])
+        representations.without_named = _create_representation(self, type_count, positional_count, String[], parent, nothing, Int[positional_count])
+    end
+    isempty(names) && return representations.without_named
+    local cluster = cluster_for_names(representations, names)
+    cluster === nothing && return nothing
+    if cluster.representation === nothing
+        cluster.representation = _create_representation(self, type_count, positional_count, names, representations.without_named,
+            cluster.index_of_combination, Int[positional_count + length(first(p).names) for p in cluster.index_of_combination])
+    end
+    return cluster.representation
+end
 
 @parity "dart2wasm/lib/closures.dart:562 ClosureLayouter._createRepresentation" @unported function _create_representation(self::ClosureLayouter, type_count::Int64, max_positional_count::Int64, names::Vector{String}, parent::Union{Nothing,ClosureRepresentation}, index_of_combination::Union{Nothing,Dict{NameCombination,Int64}}, param_counts) end
 
-@parity "dart2wasm/lib/closures.dart:781 ClosureLayouter._createInstantiationTrampoline" @unported function _create_instantiation_trampoline(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, name::String, type_count::Int64, generic_closure_struct::WasmBuilder.IR.StructType, instantiation_context_base_struct::WasmBuilder.IR.StructType, instantiated_vtable_struct::WasmBuilder.IR.StructType, instantiated_vtable_field_index::Int64, generic_vtable_struct::WasmBuilder.IR.StructType, generic_vtable_field_index::Int64) end
+# a generic closure's instantiation (dart's `f<int>`); a Julia function takes no type arguments, so
+# no representation has a type count and no closure is instantiated
+@parity "dart2wasm/lib/closures.dart:781 ClosureLayouter._createInstantiationTrampoline" _create_instantiation_trampoline(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, name::String, type_count::Int64,
+        generic_closure_struct::WasmBuilder.IR.StructType, instantiation_context_base_struct::WasmBuilder.IR.StructType,
+        instantiated_vtable_struct::WasmBuilder.IR.StructType, instantiated_vtable_field_index::Int64,
+        generic_vtable_struct::WasmBuilder.IR.StructType, generic_vtable_field_index::Int64)::WasmBuilder.IR.BaseFunction =
+    reject!(Internal("dart2wasm/lib/closures.dart:781 ClosureLayouter._createInstantiationTrampoline: a Julia function takes no type arguments, so no closure is instantiated"), "ClosureLayouter._createInstantiationTrampoline")
 
-@parity "dart2wasm/lib/closures.dart:853 ClosureLayouter._createInstantiationDynamicCallEntry" @unported function _create_instantiation_dynamic_call_entry(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, type_count::Int64, instantiation_context_struct::WasmBuilder.IR.StructType) end
+# a generic closure's instantiation; a Julia function takes no type arguments
+@parity "dart2wasm/lib/closures.dart:853 ClosureLayouter._createInstantiationDynamicCallEntry" _create_instantiation_dynamic_call_entry(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, type_count::Int64,
+        instantiation_context_struct::WasmBuilder.IR.StructType)::WasmBuilder.IR.BaseFunction =
+    reject!(Internal("dart2wasm/lib/closures.dart:853 ClosureLayouter._createInstantiationDynamicCallEntry: a Julia function takes no type arguments, so no closure is instantiated"), "ClosureLayouter._createInstantiationDynamicCallEntry")
 
 @parity "dart2wasm/lib/closures.dart:919 ClosureLayouter._createInstantiationFunction" @unported function _create_instantiation_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, type_count::Int64, instantiated_representation::ClosureRepresentation, instantiation_trampolines::Vector{WasmBuilder.IR.BaseFunction}, function_type::WasmBuilder.IR.FunctionType, context_struct::WasmBuilder.IR.StructType, generic_closure_struct::WasmBuilder.IR.StructType, name::String) end
 
-@parity "dart2wasm/lib/closures.dart:1010 ClosureLayouter._createInstantiationTypeComparisonFunction" @unported function _create_instantiation_type_comparison_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, num_types::Int64) end
+# the equality of two instantiations of a generic closure; a Julia function takes no type arguments
+@parity "dart2wasm/lib/closures.dart:1010 ClosureLayouter._createInstantiationTypeComparisonFunction" _create_instantiation_type_comparison_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, num_types::Int64)::WasmBuilder.IR.BaseFunction =
+    reject!(Internal("dart2wasm/lib/closures.dart:1010 ClosureLayouter._createInstantiationTypeComparisonFunction: a Julia function takes no type arguments, so no closure is instantiated"), "ClosureLayouter._createInstantiationTypeComparisonFunction")
 
-@parity "dart2wasm/lib/closures.dart:1063 ClosureLayouter._createInstantiationTypeHashFunction" @unported function _create_instantiation_type_hash_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, num_types::Int64) end
+# the hash of an instantiation of a generic closure; a Julia function takes no type arguments
+@parity "dart2wasm/lib/closures.dart:1063 ClosureLayouter._createInstantiationTypeHashFunction" _create_instantiation_type_hash_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, num_types::Int64)::WasmBuilder.IR.BaseFunction =
+    reject!(Internal("dart2wasm/lib/closures.dart:1063 ClosureLayouter._createInstantiationTypeHashFunction: a Julia function takes no type arguments, so no closure is instantiated"), "ClosureLayouter._createInstantiationTypeHashFunction")
 
-@parity "dart2wasm/lib/closures.dart:1101 ClosureLayouter._representationsForCounts" @unported function _representations_for_counts(self::ClosureLayouter, type_count::Int64, positional_count::Int64) end
+@parity "dart2wasm/lib/closures.dart:1101 ClosureLayouter._representationsForCounts" function _representations_for_counts(self::ClosureLayouter, type_count::Int64, positional_count::Int64)::ClosureRepresentationsForParameterCount
+    local representations = self.representations[]
+    while length(representations) <= type_count
+        push!(representations, ClosureRepresentationsForParameterCount[])
+    end
+    local positionals = representations[type_count + 1]
+    while length(positionals) <= positional_count
+        push!(positionals, ClosureRepresentationsForParameterCount())
+    end
+    return positionals[positional_count + 1]
+end
 
-@parity "dart2wasm/lib/closures.dart:1116 ClosureLayouter._visitFunctionNode" @unported function _visit_function_node(self::ClosureLayouter, function_node) end
+"""
+Registers a function's signature. A Julia method takes no type parameters at a call, its
+positional parameters are its arguments after the function object (`nargs - 1`), and its named
+parameters are its keyword arguments.
+"""
+@parity "dart2wasm/lib/closures.dart:1116 ClosureLayouter._visitFunctionNode" function _visit_function_node(self::ClosureLayouter, function_node::Method)::Nothing
+    local representations = _representations_for_counts(self, 0, function_node.nargs - 1)
+    register_function(representations, function_node)
+    # a generic function also counts as the non-generic one; a Julia method's type count is 0
+    return nothing
+end
 
 @parity "dart2wasm/lib/closures.dart:1137 ClosureLayouter._visitFunctionInvocation" @unported function _visit_function_invocation(self::ClosureLayouter, arguments) end
 
