@@ -33,6 +33,7 @@ anchor in `src/` has a row.)
 | Component | Functions | Model |
 |---|---|---|
 | Stackifier, LLVM's (dev/LEDGER.md D42) | `sort_blocks` (src/llvm/cfg_sort.jl), `place_markers`, `place_loop_marker`, `place_block_marker`, `rewrite_depth_immediates` (src/llvm/cfg_stackify.jl), over Core.Compiler's CFG and dominator tree | CFGStackify |
+| FixIrreducibleControlFlow, LLVM's (dev/LEDGER.md D42) | `process_region`, `make_single_entry_loop`, `calculate` (src/llvm/fix_irreducible_control_flow.jl), before CFGSort | FixIrreducible |
 | ClassId numbering | `assign_type_ids!` (types.jl) | ClassIdDispatch |
 | Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |
 | Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis` (every edge's reason recorded, ReasonsComplete; each retarget recomputed every round from Julia's MethodInstance, RetargetsSound), `_dynamic_dispatch_candidate_mis`, `_closed_world_edge`, `_called_function` (an invoke_in_world no one method covers is a dynamic site, WorldSites), `_prune_external_leaf_subgraphs`, `plan_closed_world` (reads the world, writes none of it) (trimcollect.jl) | ClosedWorld |
