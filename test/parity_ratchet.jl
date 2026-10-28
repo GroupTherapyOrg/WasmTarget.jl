@@ -1700,6 +1700,83 @@ function smoke_dealing_faults()::Int
     return bad + length(symdiff(want, Set(got))) + (length(got) - length(Set(got)))
 end
 
+# ---- L227: a removed test is named (the Removes-test rule, A33E1; dev/CHARTER.md C10) -------------
+# the corpora whose cases a change may remove only by name: their case keys by corpus_case_keys
+const REMOVAL_CORPORA = ("test/smoke_corpus.jl", "test/probe_corpus.jl")
+
+# the removals a message does not name: `deleted` the test files the change deletes, `cases` each
+# corpus's removed case keys (corpus => keys), `emptied` the corpora the change leaves with no case or
+# deletes; `<corpus>:*` or the corpus's path names its cases only when it is emptied, so a blanket
+# never hides one dropped case among kept ones (audit 34)
+function unnamed_removals(msg::AbstractString, deleted::AbstractVector{<:AbstractString},
+                          cases::AbstractDict{String,<:AbstractSet{String}},
+                          emptied::AbstractSet{String}=Set{String}())::Vector{String}
+    local named = Set{String}()
+    for m in eachmatch(r"^Removes-test: (\S+) (?:—|--) \S.*$"m, msg)
+        push!(named, m[1])
+    end
+    local out = String[f for f in deleted if !(f in named)]
+    for (corpus, ks) in cases, k in sort!(collect(ks))
+        local what = corpus * ":" * k
+        what in named || (corpus in emptied && ((corpus * ":*") in named || corpus in named)) || push!(out, what)
+    end
+    return out
+end
+
+# the removals of the commits from `base` (its merge base with HEAD) to HEAD in the repository at
+# `root` that their messages do not name, a sentence each; `base` the commit the change is measured
+# from (dev/check.sh's CHECK_BASE: its parent for each commit dev/ship.sh lands)
+function removals_unnamed(root::AbstractString, base::AbstractString)::Vector{String}
+    local git(args...) = readchomp(`git -C $root $args`)
+    local has(rev, f) = success(pipeline(`git -C $root cat-file -e $rev:$f`; stderr = devnull))
+    success(pipeline(`git -C $root rev-parse --verify -q $base^\{commit\}`; stdout = devnull, stderr = devnull)) ||
+        return ["the change's base $base names no commit: its removals cannot be read (CHECK_BASE)"]
+    local mb = git("merge-base", base, "HEAD")
+    local msg = git("log", "--format=%B", "$mb..HEAD")
+    local deleted = String.(split(git("diff", "--name-only", "--no-renames", "--diff-filter=D", mb, "HEAD", "--", "test"), '\n'; keepempty = false))
+    local cases = Dict{String,Set{String}}(); local emptied = Set{String}()
+    for c in REMOVAL_CORPORA
+        has(mb, c) || continue
+        local now = has("HEAD", c) ? corpus_case_keys(git("show", "HEAD:$c")) : Set{String}()
+        cases[c] = setdiff(corpus_case_keys(git("show", "$mb:$c")), now)
+        isempty(now) && push!(emptied, c)
+    end
+    return ["the change removes $w and its message does not name it: add `Removes-test: $w — <reason>`"
+            for w in unnamed_removals(msg, deleted, cases, emptied)]
+end
+
+# L227's negative test: planted messages and removals, and a scratch repository, answer as stated
+function removals_negatives_missed()::Vector{String}
+    local out = String[]
+    local none_ = Dict{String,Set{String}}()
+    local lost = Dict("test/smoke_corpus.jl" => Set(["num/mul"]))
+    local f = "test/old.jl"
+    count(!, [unnamed_removals("x", [f], none_) == [f],
+              isempty(unnamed_removals("x\nRemoves-test: $f — its cases moved into the ratchet\n", [f], none_)),
+              unnamed_removals("Removes-test: $f — \n", [f], none_) == [f],
+              isempty(unnamed_removals("Removes-test: test/smoke_corpus.jl:num/mul — WT1-only\n", String[], lost)),
+              isempty(unnamed_removals("Removes-test: test/smoke_corpus.jl:* — the legacy lane runs them\n", String[], lost, Set(["test/smoke_corpus.jl"]))),
+              unnamed_removals("Removes-test: test/smoke_corpus.jl:* — a blanket over kept cases\n", String[], lost) == ["test/smoke_corpus.jl:num/mul"],
+              unnamed_removals("Removes-test: test/smoke_corpus.jl:num/add — another case\n", String[], lost) == ["test/smoke_corpus.jl:num/mul"]]) == 0 ||
+        push!(out, "negative missed: a planted message's removals")
+    # a scratch repository: a case and a test file removed with no line, then named
+    mktempdir() do t
+        local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
+        g("init", "-q"); mkpath(joinpath(t, "test"))
+        local corpus = joinpath(t, "test", "smoke_corpus.jl")
+        write(corpus, "_g(\"num\", Any[\n    (\"add\", +, 1, 2),\n    (\"mul\", *, 1, 2),\n])\n")
+        write(joinpath(t, "test", "old.jl"), "1\n"); g("add", "test"); g("commit", "-qm", "c0")
+        local c0 = readchomp(`git -C $t rev-parse HEAD`)
+        write(corpus, "_g(\"num\", Any[\n    (\"add\", +, 1, 2),\n])\n"); g("rm", "-q", "test/old.jl"); g("commit", "-qam", "drop")
+        length(removals_unnamed(t, c0)) == 2 || push!(out, "negative missed: a dropped case and a deleted file, unnamed")
+        g("commit", "-q", "--amend", "-m", "drop\n\nRemoves-test: test/smoke_corpus.jl:num/mul — moved\nRemoves-test: test/old.jl — gone")
+        isempty(removals_unnamed(t, c0)) || push!(out, "negative missed: the same removals, named")
+        isempty(removals_unnamed(t, "HEAD")) || push!(out, "negative missed: a change with no removal")
+        length(removals_unnamed(t, "nosuchref")) == 1 || push!(out, "negative missed: a base that names no commit")
+    end
+    return out
+end
+
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
@@ -2038,6 +2115,12 @@ const LOCKS = [
             startswith(o, "src: ") || push!(v, "dev/src_progress.sh printed no src line")
             occursin(SHIP_SRC_LINE, read(joinpath(ROOT, "dev", "ship.sh"), String)) ||
                 push!(v, "dev/ship.sh does not print the src progress line after its landing")
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
+    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34). Behavior, run here: seven planted messages and a scratch repository answer as stated (dev/CHARTER.md C10)",
+        () -> begin
+            local v = vcat(removals_unnamed(ROOT, get(ENV, "CHECK_BASE", "origin/wt2")), removals_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
