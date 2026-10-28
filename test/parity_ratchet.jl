@@ -1041,16 +1041,27 @@ function findings_off_row_here()::Vector{String}
         local m = match(r"^\| (1\.[A-Za-z0-9]+|D\d+) \|", l)
         m === nothing || (rows[String(m[1])] = String(l))
     end
+    local fixed = audit_fixes(ROOT, first(split(last(entries), '\n')))
+    fixed === nothing && return ["no git history: the findings' fixes cannot be read"]
+    return findings_off_row(open_findings(last(entries)), rows, fixed)
+end
+
+# the findings the `Fixes:` lines of the commits after an entry's own name: its own the commit that
+# added its heading to dev/AUDIT.md, not the last to touch the file, so a later edit elsewhere in the
+# log hides no fix (2026-10-28: a header edit hid A40E1's); an entry not yet committed has no fix
+# after it; nothing when there is no history
+function audit_fixes(root::AbstractString, heading::AbstractString)::Union{Nothing,Set{String}}
     local fixed = Set{String}()
     try
-        local c = readchomp(`git -C $ROOT log -1 --format=%H -- dev/AUDIT.md`)
-        for l in split(readchomp(`git -C $ROOT log $c..HEAD --format=%B`), '\n')
+        local c = readchomp(`git -C $root log -1 --format=%H -S$heading -- dev/AUDIT.md`)
+        isempty(c) && return fixed
+        for l in split(readchomp(`git -C $root log $c..HEAD --format=%B`), '\n')
             startswith(l, "Fixes:") && union!(fixed, String[x.match for x in eachmatch(r"\bA\d+[A-Z]\d+\b", l)])
         end
     catch
-        return ["no git history: the findings' fixes cannot be read"]
+        return nothing
     end
-    return findings_off_row(open_findings(last(entries)), rows, fixed)
+    return fixed
 end
 
 # L154's negative test: planted entries, rows and fixes each answer as stated
@@ -1066,6 +1077,19 @@ function findings_negatives_missed()::Vector{String}
     length(open_findings(entry)) == 5 || push!(out, "negative missed: the open findings read ($(length(open_findings(entry))) of 5)")
     for (what, r, fx, want) in cases
         length(findings_off_row(open_findings(entry), r, fx)) == want || push!(out, "negative missed: $what")
+    end
+    # the fixes after an entry, on a scratch repository: a fix lands after the entry, then an edit of the
+    # log's header; the fix is still read, and one before the entry is not
+    mktempdir() do t
+        local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
+        local log = joinpath(t, "dev", "AUDIT.md")
+        g("init", "-q"); mkpath(dirname(log))
+        write(log, "# log\n"); g("add", "dev/AUDIT.md"); g("commit", "-qm", "c0\n\nFixes: A0B9")
+        write(log, "# log\n\n## e1 (a..b)\n"); g("commit", "-qam", "entry")
+        write(joinpath(t, "f"), "x"); g("add", "f"); g("commit", "-qm", "fix\n\nFixes: A1B2")
+        write(log, "# the log\n\n## e1 (a..b)\n"); g("commit", "-qam", "header")
+        audit_fixes(t, "## e1 (a..b)") == Set(["A1B2"]) || push!(out, "negative missed: a fix after the entry, then a header edit")
+        audit_fixes(t, "## e2 (b..c)") == Set{String}() || push!(out, "negative missed: an entry not yet committed")
     end
     return out
 end
