@@ -58,7 +58,10 @@ struct A <: S; x::Int; end
 struct B <: S; y::Float64; end
 area(a::A) = Float64(a.x)
 area(b::B) = b.y
-k(s::S) = area(s)
+# an entry typed S has no compileable specialization (Julia's subset check rejects it), so the entry is
+# concrete and the abstract receiver is a field of it
+struct Holder; s::S; end
+k(h::Holder) = area(h.s)
 end
 
 @testset "dispatch_table.dart, dynamic_dispatch_table.dart: empty by the trim verifier's subset (D32)" begin
@@ -66,7 +69,7 @@ end
     local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
     # an abstract receiver: Julia union-splits the call into isa tests and invokes, so no NIR
     # statement is a dynamic call
-    local t = DD.Translator(W.check_subset(EmptyTableCases.k, (EmptyTableCases.S,), "dispatch_table"), data, DD.TranslatorOptions())
+    local t = DD.Translator(W.check_subset(EmptyTableCases.k, (EmptyTableCases.Holder,), "dispatch_table"), data, DD.TranslatorOptions())
     DD._init_modules(t, nothing)
     collect(DD.ClassInfoCollector(t))
     @test isempty(DD.DynamicCallSiteCollector_collect(t.component))

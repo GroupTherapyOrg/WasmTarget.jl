@@ -13,7 +13,7 @@ const W = WasmTarget.Dart2Wasm
 
 module Targets
 two(a::Int, b::Int) = a + b
-rest(a::Int, xs::Int...) = a + sum(xs; init = 0)
+rest(a::Int, xs::Int...) = a + length(xs)   # sum over a tuple of any length is a dynamic kwcall to the verifier
 end
 
 nir_body(f, at) = only(b for b in WT.build_nir(WT.check_subset(f, at, "functions"), "functions") if b.ci.def.def.name === nameof(f))

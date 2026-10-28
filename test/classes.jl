@@ -10,7 +10,10 @@ struct Pt; x::Float64; y::Int32; end
 f_arith(a::Int, b::Int) = a < b ? a + b : a * b
 f_struct(n::Int) = n > 0 ? Pt(1.0, Int32(n)) : nothing
 f_vector(v::Vector{Int}) = sum(v)
-f_open(x::Vector) = length(x)
+# a field of the UnionAll type Vector: the entry is concrete (an entry typed Vector has no compileable
+# specialization, so Julia's subset check rejects it first), the value the walk meets is not
+struct Open; v::Vector; end
+f_open(o::Open) = length(o.v)
 @enum Hue red blue
 f_enum(c::Hue) = c == red ? 1 : 2
 end
@@ -48,7 +51,7 @@ _classes(f, at) = W.closed_world_classes(W.build_nir(W.check_subset(f, at, "clas
     # an @enum is a class under its Enum supertype
     @test ClassesCases.Hue in _classes(ClassesCases.f_enum, (ClassesCases.Hue,))
     # a value of a UnionAll type not under Type rejects, located at the walk
-    local e = try; _classes(ClassesCases.f_open, (Vector,)); nothing; catch x; x; end
+    local e = try; _classes(ClassesCases.f_open, (ClassesCases.Open,)); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("src/julia/classes.jl", e.rejection.row)
 end
 
