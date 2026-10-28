@@ -1147,6 +1147,14 @@ const DART_TEST_ROOTS = ("pkg/dart2wasm/test/", "tests/web/wasm/", "tests/langua
 const DART_TEST_FIELDS = Dict("behavior" => ["what", "cases"], "structural" => ["what", "property", "cases"],
                               "not_portable" => ["what", "reason"], "helper" => ["what", "of"])
 const DartTestEntry = Pair{String,Dict{String,Union{String,Vector{String}}}}
+# the exclusions of dev/PARITY_MASTER.md's Scope, by its own words (each must stand in that section): a
+# directory is not portable only by one of them, every file under it then outside WT's scope; any other
+# directory is split by file, its runtime files ported and each static one not portable by its own reason
+const DART_SCOPE_EXCLUSIONS = ["reflection", "eval", "world-age mutation", "runtime method definition", "async", "tasks",
+                               "threads", "atomics", "deferred loading", "ccall", "dlopen", "filesystem", "sockets"]
+# a hedged reason admits portable files under it (dev/AUDIT.md A41E6)
+const DART_HEDGE = r"\b(mostly|largely|mainly|partly|ported under)\b"i
+_dart_names(text::AbstractString, term::AbstractString) = occursin(Regex("\\b" * replace(term, "-" => "\\-") * "\\b", "i"), text)
 
 # the entries of a map's text in order, and its faults as a text: a line that is no header, field,
 # comment or blank, a value that is no one-line string or list of strings, a header or field twice
@@ -1184,7 +1192,7 @@ end
 
 # the faults of a map against the .dart files at the pin and the smoke corpus's case keys
 function dart_test_faults(entries::AbstractVector{DartTestEntry}, files::AbstractVector{String},
-                          cases::AbstractSet{String})::Vector{String}
+                          cases::AbstractSet{String}, exclusions::AbstractVector{String} = DART_SCOPE_EXCLUSIONS)::Vector{String}
     local out = String[]
     local named = Set{String}(first.(entries))
     for (key, d) in entries
@@ -1209,6 +1217,10 @@ function dart_test_faults(entries::AbstractVector{DartTestEntry}, files::Abstrac
             local list = k in ("cases", "of")
             if v === nothing || (list ? !(v isa Vector{String}) : !(v isa String) || isempty(strip(v)))
                 push!(out, "$at, $kind, has no $(list ? "list" : "text") $k")
+            elseif k == "reason"
+                occursin(DART_HEDGE, v) && push!(out, "$at, not portable, gives a hedged reason ($(match(DART_HEDGE, v).match)): split it by file")
+                endswith(key, "/") && !any(t -> _dart_names(v, t), exclusions) &&
+                    push!(out, "$at, a directory not portable, names no scope exclusion of dev/PARITY_MASTER.md ($(join(exclusions, ", "))): split it by file")
             elseif k == "cases"
                 foreach(c -> c in cases || push!(out, "$at names the smoke case $c, which test/smoke_corpus.jl does not hold"), v)
             elseif k == "of"
@@ -1264,11 +1276,36 @@ function dart_tests_faults_here()::Vector{String}
     local entries, out = dart_test_entries(_text(DART_TESTS_PATH))
     local files = dart_test_files_at_pin()
     files === nothing && return vcat(out, ["no checkout of dart-lang/sdk holding the pinned commit at ~/.cache/wasmtarget/dart-sdk: bash dev/fetch_dart_sdk.sh"])
+    local scope = something(match(r"^## Scope\n(.*?)(?=^## |\z)"ms, _text(joinpath(ROOT, "dev", "PARITY_MASTER.md"))), (nothing,))[1]
+    for t in DART_SCOPE_EXCLUSIONS
+        scope !== nothing && _dart_names(replace(scope, r"\s+" => " "), t) || push!(out, "the scope exclusion \"$t\" stands in no Scope section of dev/PARITY_MASTER.md")
+    end
     append!(out, dart_test_faults(entries, files, smoke_case_keys()))
-    local n(kind) = count(e -> get(last(e), "kind", "") == kind, entries)
-    local ported = count(e -> get(last(e), "kind", "") == "behavior" && !isempty(get(last(e), "cases", String[])), entries)
-    println("    · dart tests at the pin: $(length(files)) files in $(length(entries)) entries: $(n("behavior")) behavior ($ported ported), ",
-            "$(n("structural")) structural, $(n("not_portable")) not portable, $(n("helper")) helpers")
+    # the counts by file, each file under the entry covering it
+    local by = Dict{String,DartTestEntry}()
+    for e in entries
+        by[first(e)] = e
+    end
+    local state = Dict{String,Int}()
+    for f in files
+        local e = get(by, f, nothing)
+        if e === nothing
+            local d = dirname(f) * "/"
+            while !haskey(by, d) && length(d) > 1
+                d = dirname(d[1:end-1]) * "/"
+            end
+            e = get(by, d, nothing)
+        end
+        e === nothing && continue
+        local k = get(last(e), "kind", "")
+        k isa String || continue
+        k in ("behavior", "structural") && (k *= isempty(get(last(e), "cases", String[])) ? " pending" : " ported")
+        state[k] = get(state, k, 0) + 1
+    end
+    local s(k) = get(state, k, 0)
+    println("    · dart tests at the pin, by file: $(length(files)) files in $(length(entries)) entries: behavior $(s("behavior ported")) ported, ",
+            "$(s("behavior pending")) pending; structural $(s("structural ported")) ported, $(s("structural pending")) pending; ",
+            "$(s("not_portable")) not portable; $(s("helper")) helpers")
     return out
 end
 
@@ -1286,7 +1323,7 @@ function dart_tests_negatives_missed()::Vector{String}
         ["tests/language/d/"]
         kind = "not_portable"
         what = "w"
-        reason = "r"
+        reason = "deferred loading, outside dev/PARITY_MASTER.md's scope"
 
         ["tests/web/wasm/h.dart"]
         kind = "helper"
@@ -1300,13 +1337,17 @@ function dart_tests_negatives_missed()::Vector{String}
         ("an entry naming no file at the pin", base * "[\"tests/web/wasm/gone_test.dart\"]\nkind = \"not_portable\"\nwhat = \"w\"\nreason = \"r\"\n", files, 1),
         ("a file covered by its own entry and its directory's", base * "[\"tests/language/d/x_test.dart\"]\nkind = \"not_portable\"\nwhat = \"w\"\nreason = \"r\"\n", files, 1),
         ("a ported entry naming a case the corpus does not hold", replace(base, "[\"dart_web/a\"]" => "[\"dart_web/zzz\"]"), files, 1),
-        ("a not portable entry with no reason", replace(base, "reason = \"r\"\n" => ""), files, 1),
+        ("a not portable entry with no reason", replace(base, r"reason = .*\n" => ""), files, 1),
+        ("a directory not portable naming no scope exclusion", replace(base, "deferred loading, outside" => "dart syntax, outside"), files, 1),
+        ("a directory not portable by an exclusion as a word only", replace(base, "deferred loading, outside" => "dart's evaluation, outside"), files, 1),
+        ("a hedged reason", replace(base, "deferred loading, outside" => "deferred loading, mostly outside"), files, 1),
+        ("a file not portable by a hedged reason", base * "[\"tests/web/wasm/gone_test.dart\"]\nkind = \"not_portable\"\nwhat = \"w\"\nreason = \"largely static\"\n", vcat(files, "tests/web/wasm/gone_test.dart"), 1),
         ("a structural entry with no property", replace(base, "kind = \"behavior\"" => "kind = \"structural\""), files, 1),
         ("an unknown kind", replace(base, "kind = \"behavior\"" => "kind = \"ported\""), files, 1),
         ("a helper serving no entry", replace(base, "of = [\"pkg/dart2wasm/test/a_test.dart\"]" => "of = [\"tests/web/wasm/x_test.dart\"]"), files, 1),
         ("a line that is no field", base * "kind behavior\n", files, 1),
         ("a header twice", base * "[\"tests/web/wasm/h.dart\"]\n", files, 2),
-        ("a field the kind does not carry", replace(base, "reason = \"r\"\n" => "reason = \"r\"\ncases = []\n"), files, 1),
+        ("a field the kind does not carry", replace(base, "what = \"w\"\nreason" => "what = \"w\"\ncases = []\nreason"), files, 1),
         ("an entry under no root", base * "[\"tests/corelib/z_test.dart\"]\nkind = \"not_portable\"\nwhat = \"w\"\nreason = \"r\"\n", vcat(files, "tests/corelib/z_test.dart"), 1),
     ]
     local out = String[]
@@ -1315,7 +1356,7 @@ function dart_tests_negatives_missed()::Vector{String}
         got == want || push!(out, "negative missed: $what gives $got faults, not $want")
     end
     local e = first(dart_test_entries(base))
-    (length(e) == 3 && last(e[1])["cases"] == ["dart_web/a"] && last(e[2])["reason"] == "r") ||
+    (length(e) == 3 && last(e[1])["cases"] == ["dart_web/a"] && startswith(last(e[2])["reason"], "deferred loading")) ||
         push!(out, "negative missed: the planted map's entries read back")
     return out
 end
@@ -2136,7 +2177,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L226_dart_tests_mapped" => ("dart2wasm's test set is ported with Julia as the ground truth (Dale 2026-10-22: \"we should ALSO port darts TEST set but with julia as the ground truth of course\", dev/LEDGER.md D41): every .dart file under pkg/dart2wasm/test, tests/web/wasm and tests/language at the commit dev/PARITY_MASTER.md pins, read from that commit's tree in the checkout at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh), is covered by exactly one entry of test/dart_tests.toml, its own path or a directory's: behavior, naming the test/smoke_corpus.jl cases that port it (each existing, by corpus_case_keys), structural, stating the property its golden pins, not portable, stating why, or a helper, naming the entries it serves; every entry names a file or directory at the pin and carries exactly its kind's fields, so a new dart test file at the pin, a dropped entry or a stale one fails. A stopgap by its kind: a check over a map, the porting itself behavior the differential lane judges. Behavior, run here: dart_tests_negatives_missed plants a whole map and twelve faults, each answering as stated (dev/CHARTER.md C2)",
+    "L226_dart_tests_mapped" => ("dart2wasm's test set is ported with Julia as the ground truth (Dale 2026-10-22: \"we should ALSO port darts TEST set but with julia as the ground truth of course\", dev/LEDGER.md D41): every .dart file under pkg/dart2wasm/test, tests/web/wasm and tests/language at the commit dev/PARITY_MASTER.md pins, read from that commit's tree in the checkout at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh), is covered by exactly one entry of test/dart_tests.toml, its own path or a directory's: behavior, naming the test/smoke_corpus.jl cases that port it (each existing, by corpus_case_keys), structural, stating the property its golden pins, not portable, stating why in an unhedged reason (no \"mostly\", \"largely\", \"mainly\", \"partly\" or \"ported under\"), a directory only by an exclusion dev/PARITY_MASTER.md's Scope section names (each of DART_SCOPE_EXCLUSIONS stands there; any other directory is split by file, the lead's ruling of 2026-10-28, dev/AUDIT.md A41E6), or a helper, naming the entries it serves; every entry names a file or directory at the pin and carries exactly its kind's fields, so a new dart test file at the pin, a dropped entry or a stale one fails. A stopgap by its kind: a check over a map, the porting itself behavior the differential lane judges. Behavior, run here: dart_tests_negatives_missed plants a whole map and sixteen faults, each answering as stated (dev/CHARTER.md C2)",
         () -> begin
             local v = vcat(dart_tests_faults_here(), dart_tests_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)

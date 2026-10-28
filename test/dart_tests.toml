@@ -26,7 +26,7 @@ cases = []
 
 ["pkg/dart2wasm/test/util.dart"]
 kind = "helper"
-of = ["pkg/dart2wasm/test/ir_test.dart", "pkg/dart2wasm/test/wasm_read_write_test.dart", "pkg/dart2wasm/test/wasm2wat_test.dart", "pkg/dart2wasm/test/self_compile_test.dart", "pkg/dart2wasm/test/record_use_test.dart", "pkg/dart2wasm/test/phases/", "pkg/dart2wasm/test/deferred_loading/"]
+of = ["pkg/dart2wasm/test/ir_test.dart", "pkg/dart2wasm/test/wasm_read_write_test.dart", "pkg/dart2wasm/test/wasm2wat_test.dart", "pkg/dart2wasm/test/self_compile_test.dart", "pkg/dart2wasm/test/record_use_test.dart", "pkg/dart2wasm/test/phases/phases_test.dart", "pkg/dart2wasm/test/deferred_loading/"]
 what = "process and temporary-directory helpers of the tooling tests"
 
 ["pkg/dart2wasm/test/wasm_read_write_test.dart"]
@@ -49,14 +49,69 @@ kind = "not_portable"
 what = "dart2wasm records the uses of @RecordUse-annotated definitions into a JSON file"
 reason = "package:record_use is dart's build-hook tooling with no Julia counterpart"
 
-["pkg/dart2wasm/test/phases/"]
+["pkg/dart2wasm/test/phases/data/main.dart"]
 kind = "not_portable"
-what = "the compiler run in phases: kernel from the CFE, the TFA dill, wasm, then wasm-opt, each phase's output resumed by the next"
+what = "the compiler run in phases: kernel from the CFE, the TFA dill, wasm, then wasm-opt, each phase's output resumed by the next: data/main.dart"
 reason = "dart's kernel pipeline and its dill files; WT's front end is Julia's own inference (D3), whose stages are Julia's"
 
-["pkg/dart2wasm/test/dry_run/"]
+["pkg/dart2wasm/test/phases/phases_test.dart"]
 kind = "not_portable"
-what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types"
+what = "the compiler run in phases: kernel from the CFE, the TFA dill, wasm, then wasm-opt, each phase's output resumed by the next: phases_test.dart"
+reason = "dart's kernel pipeline and its dill files; WT's front end is Julia's own inference (D3), whose stages are Julia's"
+
+["pkg/dart2wasm/test/dry_run/dry_run_test.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: dry_run_test.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/avoid_double_and_int_checks.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/avoid_double_and_int_checks.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/import_ffi.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/import_ffi.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/import_ffi_with_flag.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/import_ffi_with_flag.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/import_html.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/import_html.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/import_js.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/import_js.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/import_jsutil.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/import_jsutil.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/import_packagejs.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/import_packagejs.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/invalid_js_interop.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/invalid_js_interop.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/invalid_runtime_check_with_js_interop_types.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/invalid_runtime_check_with_js_interop_types.dart"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/dry_run/testcases/valid_interop_import.dart"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types: testcases/valid_interop_import.dart"
 reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
 
 ["pkg/dart2wasm/test/deferred_loading/"]
@@ -709,9 +764,9 @@ what = "source maps after wasm-opt at -O4 with deferred loading"
 reason = "binaryen's optimizer and deferred loading, both outside WT's scope"
 
 ["tests/web/wasm/source_map_unminification_test.dart"]
-kind = "not_portable"
-what = "minified class names are recovered from the source map"
-reason = "a dart2wasm option (--minify); WT does not minify names"
+kind = "behavior"
+what = "minified class names are recovered from the source map (Namer's minify path is ported, so this is behavior to port once WT emits)"
+cases = []
 
 ["tests/web/wasm/utils.dart"]
 kind = "helper"
@@ -798,32 +853,52 @@ kind = "not_portable"
 what = "a dynamic closure call with many combinations of 16 named arguments"
 reason = "dynamic calls are outside Julia's strict subset (D32); Julia resolves keyword calls statically"
 
-["tests/web/wasm/simd/"]
+["tests/web/wasm/simd/simd_const_error_test.dart"]
 kind = "not_portable"
-what = "dart:_wasm's v128 SIMD types: constants, lane operations, vector arithmetic and a vector-backed Offset class"
+what = "dart:_wasm's v128 SIMD types: constants, lane operations, vector arithmetic and a vector-backed Offset class: simd_const_error_test.dart"
+reason = "dart:_wasm exposes wasm types to user code; a Julia program has no wasm-level types"
+
+["tests/web/wasm/simd/simd_const_test.dart"]
+kind = "not_portable"
+what = "dart:_wasm's v128 SIMD types: constants, lane operations, vector arithmetic and a vector-backed Offset class: simd_const_test.dart"
+reason = "dart:_wasm exposes wasm types to user code; a Julia program has no wasm-level types"
+
+["tests/web/wasm/simd/simd_smoke_test.dart"]
+kind = "not_portable"
+what = "dart:_wasm's v128 SIMD types: constants, lane operations, vector arithmetic and a vector-backed Offset class: simd_smoke_test.dart"
+reason = "dart:_wasm exposes wasm types to user code; a Julia program has no wasm-level types"
+
+["tests/web/wasm/simd/simd_test.dart"]
+kind = "not_portable"
+what = "dart:_wasm's v128 SIMD types: constants, lane operations, vector arithmetic and a vector-backed Offset class: simd_test.dart"
+reason = "dart:_wasm exposes wasm types to user code; a Julia program has no wasm-level types"
+
+["tests/web/wasm/simd/vector_test.dart"]
+kind = "not_portable"
+what = "dart:_wasm's v128 SIMD types: constants, lane operations, vector arithmetic and a vector-backed Offset class: vector_test.dart"
 reason = "dart:_wasm exposes wasm types to user code; a Julia program has no wasm-level types"
 
 # ---- tests/language: the language tests dart2wasm runs (tests/language/language_dart2wasm.status), by directory ----
 
 ["tests/language/abstract/"]
-kind = "not_portable"
+kind = "behavior"
 what = "dart abstract classes and members: instantiation and override rules"
-reason = "dart's abstract classes hold members and fields and their errors are static diagnostics; Julia's abstract types hold neither"
+cases = []
 
 ["tests/language/accessor_conflict/"]
-kind = "not_portable"
+kind = "behavior"
 what = "getters and setters conflicting across a class hierarchy"
-reason = "dart accessors; Julia has no getters or setters on fields"
+cases = []
 
 ["tests/language/anonymous_methods/"]
-kind = "not_portable"
+kind = "behavior"
 what = "anonymous methods, an experimental dart syntax"
-reason = "dart syntax with no Julia counterpart"
+cases = []
 
 ["tests/language/argument/"]
-kind = "not_portable"
+kind = "behavior"
 what = "argument-count and argument-type errors at calls"
-reason = "static diagnostics of dart's front end"
+cases = []
 
 ["tests/language/assert/"]
 kind = "behavior"
@@ -831,9 +906,9 @@ what = "assert statements, their messages and evaluation"
 cases = []
 
 ["tests/language/assign/"]
-kind = "not_portable"
+kind = "behavior"
 what = "assignments to finals, getters and undefined names"
-reason = "static diagnostics of dart's front end"
+cases = []
 
 ["tests/language/async/"]
 kind = "not_portable"
@@ -896,19 +971,19 @@ what = "canonical identity of constant values"
 cases = []
 
 ["tests/language/cascade/"]
-kind = "not_portable"
+kind = "behavior"
 what = "cascade expressions (..)"
-reason = "dart syntax with no Julia counterpart"
+cases = []
 
 ["tests/language/class/"]
-kind = "not_portable"
+kind = "behavior"
 what = "class declarations, members and their static rules"
-reason = "dart classes with members, getters and inheritance; Julia's structs and methods are ported by the behavior directories"
+cases = []
 
 ["tests/language/class_modifiers/"]
-kind = "not_portable"
+kind = "behavior"
 what = "sealed, base, interface and final class modifiers"
-reason = "dart class modifiers, mostly static diagnostics; Julia's types have none"
+cases = []
 
 ["tests/language/closure/bound_closure_equality_test.dart"]
 kind = "behavior"
@@ -1221,9 +1296,9 @@ what = "a super method call inside a closure passed to forEach"
 cases = ["dart_closure/with_super_send"]
 
 ["tests/language/compile_time_constant/"]
-kind = "not_portable"
+kind = "behavior"
 what = "dart const expressions evaluated at compile time"
-reason = "dart's const semantics; Julia folds constants by its own inference, ported where Julia answers it (D3)"
+cases = []
 
 ["tests/language/const/cast1_test.dart"]
 kind = "behavior"
@@ -1636,14 +1711,14 @@ what = "untyped, typed and generic constants at top level and local, empty const
 cases = ["dart_const/var"]
 
 ["tests/language/const_functions/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the experimental const-functions feature"
-reason = "dart's const evaluation, static diagnostics"
+cases = []
 
 ["tests/language/constants_2018/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the 2018 extensions of dart constant expressions"
-reason = "dart's const semantics"
+cases = []
 
 ["tests/language/constructor/"]
 kind = "behavior"
@@ -1656,14 +1731,14 @@ what = "if and for elements in collection literals (Julia's comprehensions and g
 cases = []
 
 ["tests/language/covariant/"]
-kind = "not_portable"
+kind = "behavior"
 what = "covariant parameters and their runtime checks"
-reason = "dart's covariant generics; Julia's parametric types are invariant"
+cases = []
 
 ["tests/language/covariant_override/"]
-kind = "not_portable"
+kind = "behavior"
 what = "covariant overrides"
-reason = "dart's covariant generics; Julia's parametric types are invariant"
+cases = []
 
 ["tests/language/deferred/"]
 kind = "not_portable"
@@ -1671,9 +1746,9 @@ what = "deferred imports and loadLibrary"
 reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
 
 ["tests/language/dot_shorthands/"]
-kind = "not_portable"
+kind = "behavior"
 what = "dot-shorthand syntax (.name for a context type's member)"
-reason = "dart syntax resolved by a context type, mostly static diagnostics"
+cases = []
 
 ["tests/language/double/"]
 kind = "behavior"
@@ -1696,9 +1771,9 @@ what = "integer literals in double contexts: typed locals, constants, assignment
 cases = ["dart_language/double_literals_implicit_double_context"]
 
 ["tests/language/dynamic/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the dynamic type and dynamic calls"
-reason = "dynamic calls are outside Julia's strict subset (D32)"
+cases = []
 
 ["tests/language/enum/"]
 kind = "behavior"
@@ -1946,29 +2021,29 @@ what = "multiple on-clauses after an awaited async throw (issue 55347)"
 reason = "async: the regression is in the async state machine across an await; also not a _test file"
 
 ["tests/language/export/"]
-kind = "not_portable"
+kind = "behavior"
 what = "library exports and combinators"
-reason = "dart's library system; Julia's modules are ported nowhere by WT, which compiles one closed world"
+cases = []
 
 ["tests/language/extension_methods/"]
-kind = "not_portable"
+kind = "behavior"
 what = "extension methods"
-reason = "dart's static extension dispatch; Julia's methods are its multiple dispatch"
+cases = []
 
 ["tests/language/extension_type/"]
-kind = "not_portable"
+kind = "behavior"
 what = "extension types"
-reason = "dart's zero-cost wrapper types, statically resolved"
+cases = []
 
 ["tests/language/external_abstract_fields/"]
-kind = "not_portable"
+kind = "behavior"
 what = "external and abstract field declarations"
-reason = "dart declarations, static diagnostics"
+cases = []
 
 ["tests/language/factory/"]
-kind = "not_portable"
+kind = "behavior"
 what = "factory constructors and their static rules"
-reason = "dart's factory constructors; a Julia outer constructor is a method, ported under constructor"
+cases = []
 
 ["tests/language/field/"]
 kind = "behavior"
@@ -1976,9 +2051,9 @@ what = "field reads, writes and initializers"
 cases = []
 
 ["tests/language/final/"]
-kind = "not_portable"
+kind = "behavior"
 what = "final variables and fields"
-reason = "dart's single-assignment rules, static diagnostics"
+cases = []
 
 ["tests/language/function/"]
 kind = "behavior"
@@ -1986,9 +2061,9 @@ what = "functions: optional and named parameters, recursion, functions as values
 cases = []
 
 ["tests/language/function_subtype/"]
-kind = "not_portable"
+kind = "behavior"
 what = "subtyping between function types"
-reason = "dart's structural function types; a Julia function's type is its own singleton"
+cases = []
 
 ["tests/language/function_type/function_type0_test.dart"]
 kind = "behavior"
@@ -2921,14 +2996,14 @@ what = "generic methods and their type arguments (Julia's where clauses)"
 cases = []
 
 ["tests/language/getter/"]
-kind = "not_portable"
+kind = "behavior"
 what = "getters and setters"
-reason = "dart accessors; Julia has no getters or setters on fields"
+cases = []
 
 ["tests/language/identifier/"]
-kind = "not_portable"
+kind = "behavior"
 what = "identifiers, built-in identifiers and their static rules"
-reason = "dart syntax, static diagnostics"
+cases = []
 
 ["tests/language/identity/closure2_test.dart"]
 kind = "behavior"
@@ -2986,84 +3061,84 @@ what = "a list rebound in a branch never taken, then appended to in a loop"
 cases = ["dart_language/if_nested_if"]
 
 ["tests/language/if_null/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the if-null operator ?? and ??="
-reason = "dart's null-aware syntax over nullable types"
+cases = []
 
 ["tests/language/implicit_creation/"]
-kind = "not_portable"
+kind = "behavior"
 what = "instance creation without new or const"
-reason = "dart syntax with no Julia counterpart"
+cases = []
 
 ["tests/language/implicit_downcast_during/"]
-kind = "not_portable"
+kind = "behavior"
 what = "implicit downcasts in assignments, calls and returns"
-reason = "dart's static typing, static diagnostics"
+cases = []
 
 ["tests/language/import/"]
-kind = "not_portable"
+kind = "behavior"
 what = "imports, prefixes and conditional imports"
-reason = "dart's library system; WT compiles one closed world"
+cases = []
 
 ["tests/language/inference/"]
-kind = "not_portable"
+kind = "behavior"
 what = "dart type inference"
-reason = "dart's static inference; Julia's inference is its own and the ground truth (D3)"
+cases = []
 
 ["tests/language/inference_update_1/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the first dart type inference update"
-reason = "dart's static inference"
+cases = []
 
 ["tests/language/inference_update_2/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the second dart type inference update (private field promotion)"
-reason = "dart's static inference"
+cases = []
 
 ["tests/language/inference_update_3/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the third dart type inference update"
-reason = "dart's static inference"
+cases = []
 
 ["tests/language/inference_update_4/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the fourth dart type inference update"
-reason = "dart's static inference"
+cases = []
 
 ["tests/language/inference_using_bounds/"]
-kind = "not_portable"
+kind = "behavior"
 what = "inference of type arguments from bounds"
-reason = "dart's static inference"
+cases = []
 
 ["tests/language/initializing_formal/"]
-kind = "not_portable"
+kind = "behavior"
 what = "initializing formals (this.x parameters)"
-reason = "dart constructor syntax; Julia's constructors are ported under constructor"
+cases = []
 
 ["tests/language/instance/"]
-kind = "not_portable"
+kind = "behavior"
 what = "instance member access and its static rules"
-reason = "dart's class members, static diagnostics"
+cases = []
 
 ["tests/language/instantiate_to_bound/"]
-kind = "not_portable"
+kind = "behavior"
 what = "instantiate-to-bound of raw generic types"
-reason = "dart's static typing"
+cases = []
 
 ["tests/language/interceptor/"]
-kind = "not_portable"
+kind = "behavior"
 what = "dart2js interceptors of methods on core types"
-reason = "a dart2js runtime mechanism, with dynamic calls outside Julia's strict subset (D32)"
+cases = []
 
 ["tests/language/interface/"]
-kind = "not_portable"
+kind = "behavior"
 what = "interfaces and implements"
-reason = "dart's implements; Julia's abstract types carry no interface members"
+cases = []
 
 ["tests/language/invalid_returns/"]
-kind = "not_portable"
+kind = "behavior"
 what = "invalid return statements"
-reason = "static diagnostics of dart's front end"
+cases = []
 
 ["tests/language/is/"]
 kind = "behavior"
@@ -3071,24 +3146,24 @@ what = "type tests with is and is! (Julia's isa)"
 cases = []
 
 ["tests/language/label/"]
-kind = "not_portable"
+kind = "behavior"
 what = "labelled statements with break and continue"
-reason = "dart labels; Julia's @goto and @label are a different construct, ported under loop"
+cases = []
 
 ["tests/language/lazy/"]
-kind = "not_portable"
+kind = "behavior"
 what = "lazily initialized statics"
-reason = "dart's lazy static initialization; a Julia global's initializer runs at load"
+cases = []
 
 ["tests/language/least_upper_bound/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the least upper bound of types"
-reason = "dart's static typing"
+cases = []
 
 ["tests/language/library/"]
-kind = "not_portable"
+kind = "behavior"
 what = "libraries, parts and their names"
-reason = "dart's library system"
+cases = []
 
 ["tests/language/list/"]
 kind = "behavior"
@@ -3101,19 +3176,19 @@ what = "for, while and do loops with break and continue"
 cases = []
 
 ["tests/language/main/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the forms of main and its arguments"
-reason = "dart's entry point; WT's entry points are its compile call's signatures"
+cases = []
 
 ["tests/language/malbounded/"]
-kind = "not_portable"
+kind = "behavior"
 what = "type arguments outside their bounds"
-reason = "static diagnostics of dart's front end"
+cases = []
 
 ["tests/language/malformed/"]
-kind = "not_portable"
+kind = "behavior"
 what = "malformed types"
-reason = "static diagnostics of dart's front end"
+cases = []
 
 ["tests/language/map/"]
 kind = "behavior"
@@ -3121,9 +3196,9 @@ what = "maps: literals, lookup, insertion and iteration (Julia's Dict)"
 cases = []
 
 ["tests/language/metadata/"]
-kind = "not_portable"
+kind = "behavior"
 what = "annotations"
-reason = "dart metadata; Julia has none in the closed world"
+cases = []
 
 ["tests/language/method/"]
 kind = "behavior"
@@ -3131,34 +3206,34 @@ what = "instance and static methods, their invocation and binding"
 cases = []
 
 ["tests/language/mixin/"]
-kind = "not_portable"
+kind = "behavior"
 what = "mixins"
-reason = "dart mixin application; Julia has no mixins"
+cases = []
 
 ["tests/language/mixin_constructor_forwarding/"]
-kind = "not_portable"
+kind = "behavior"
 what = "constructors forwarded through mixin applications"
-reason = "dart mixins"
+cases = []
 
 ["tests/language/mixin_declaration/"]
-kind = "not_portable"
+kind = "behavior"
 what = "mixin declarations"
-reason = "dart mixins"
+cases = []
 
 ["tests/language/mixin_legacy/"]
-kind = "not_portable"
+kind = "behavior"
 what = "legacy class-as-mixin application"
-reason = "dart mixins"
+cases = []
 
 ["tests/language/named_arguments_anywhere/"]
-kind = "not_portable"
+kind = "behavior"
 what = "named arguments before positional ones"
-reason = "dart syntax; Julia's keyword arguments follow a semicolon"
+cases = []
 
 ["tests/language/new/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the new keyword"
-reason = "dart syntax"
+cases = []
 
 ["tests/language/nnbd/boolean_conversion/boolean_conversion_error_test.dart"]
 kind = "not_portable"
@@ -4131,19 +4206,19 @@ what = "while (x is String) promotes in the body"
 cases = ["dart_nnbd/type_promotion_while_condition_true"]
 
 ["tests/language/no_such_method/"]
-kind = "not_portable"
+kind = "behavior"
 what = "noSuchMethod"
-reason = "dart's noSuchMethod; Julia raises a MethodError"
+cases = []
 
 ["tests/language/nonfunction_type_aliases/"]
-kind = "not_portable"
+kind = "behavior"
 what = "typedefs of non-function types"
-reason = "dart typedefs, static"
+cases = []
 
 ["tests/language/nosuchmethod_forwarding/"]
-kind = "not_portable"
+kind = "behavior"
 what = "noSuchMethod forwarders"
-reason = "dart's noSuchMethod"
+cases = []
 
 ["tests/language/null/"]
 kind = "behavior"
@@ -4151,14 +4226,14 @@ what = "null values and comparisons (Julia's nothing)"
 cases = []
 
 ["tests/language/null_aware/"]
-kind = "not_portable"
+kind = "behavior"
 what = "null-aware access ?. and spreads"
-reason = "dart's null-aware syntax over nullable types"
+cases = []
 
 ["tests/language/null_aware_elements/"]
-kind = "not_portable"
+kind = "behavior"
 what = "null-aware collection elements"
-reason = "dart's null-aware syntax"
+cases = []
 
 ["tests/language/number/"]
 kind = "behavior"
@@ -4176,9 +4251,9 @@ what = "regressions of compiler optimizations on ordinary programs, to classify 
 cases = []
 
 ["tests/language/override/"]
-kind = "not_portable"
+kind = "behavior"
 what = "override rules"
-reason = "dart's override checks, static diagnostics"
+cases = []
 
 ["tests/language/parameter/"]
 kind = "behavior"
@@ -4186,9 +4261,9 @@ what = "optional, named and default parameters (Julia's optional and keyword arg
 cases = []
 
 ["tests/language/part/"]
-kind = "not_portable"
+kind = "behavior"
 what = "part and part of"
-reason = "dart's library system"
+cases = []
 
 ["tests/language/patterns/call_tear_off_error_test.dart"]
 kind = "not_portable"
@@ -4721,24 +4796,24 @@ what = "bare and typed wildcards in a list pattern variable declaration"
 cases = ["dart_patterns/wildcard_in_pattern_variable_declaration"]
 
 ["tests/language/prefix/"]
-kind = "not_portable"
+kind = "behavior"
 what = "import prefixes"
-reason = "dart's library system"
+cases = []
 
 ["tests/language/primary_constructors/"]
-kind = "not_portable"
+kind = "behavior"
 what = "primary constructors"
-reason = "dart syntax, mostly static diagnostics"
+cases = []
 
 ["tests/language/private/"]
-kind = "not_portable"
+kind = "behavior"
 what = "library-private names"
-reason = "dart's library privacy; Julia has no module privacy"
+cases = []
 
 ["tests/language/private_named_parameters/"]
-kind = "not_portable"
+kind = "behavior"
 what = "private named parameters"
-reason = "dart syntax"
+cases = []
 
 ["tests/language/propagate/"]
 kind = "behavior"
@@ -4751,9 +4826,9 @@ what = "records: literals, fields, equality (Julia's Tuple and NamedTuple)"
 cases = []
 
 ["tests/language/redirecting/"]
-kind = "not_portable"
+kind = "behavior"
 what = "redirecting constructors and factories"
-reason = "dart constructor syntax; Julia's constructors are ported under constructor"
+cases = []
 
 ["tests/language/reg_exp/"]
 kind = "not_portable"
@@ -4766,9 +4841,9 @@ what = "regression tests of every kind, to classify file by file when ported"
 cases = []
 
 ["tests/language/resolution/"]
-kind = "not_portable"
+kind = "behavior"
 what = "name resolution"
-reason = "dart's static resolution"
+cases = []
 
 ["tests/language/return/in_loop_test.dart"]
 kind = "behavior"
@@ -4796,19 +4871,19 @@ what = "regressions of compiler rewrites of assignments, conditions and loops"
 cases = []
 
 ["tests/language/scaling/"]
-kind = "not_portable"
+kind = "behavior"
 what = "a class with very many type parameters"
-reason = "dart's reified type arguments at scale; Julia's parametric types are tested under generic"
+cases = []
 
 ["tests/language/script/"]
-kind = "not_portable"
+kind = "behavior"
 what = "scripts and their directives"
-reason = "dart's script syntax"
+cases = []
 
 ["tests/language/sealed_class/"]
-kind = "not_portable"
+kind = "behavior"
 what = "sealed classes"
-reason = "dart class modifiers; Julia's closed sums are WT's own (D8)"
+cases = []
 
 ["tests/language/set_literals/"]
 kind = "behavior"
@@ -4816,29 +4891,29 @@ what = "set literals and set operations (Julia's Set)"
 cases = []
 
 ["tests/language/setter/"]
-kind = "not_portable"
+kind = "behavior"
 what = "setters"
-reason = "dart accessors; Julia has no setters"
+cases = []
 
 ["tests/language/sound_flow_analysis/"]
-kind = "not_portable"
+kind = "behavior"
 what = "sound flow analysis"
-reason = "dart's static flow analysis"
+cases = []
 
 ["tests/language/spread_collections/"]
-kind = "not_portable"
+kind = "behavior"
 what = "spread elements in collection literals"
-reason = "dart syntax with null-aware spreads, static diagnostics"
+cases = []
 
 ["tests/language/stack_trace/"]
-kind = "not_portable"
+kind = "behavior"
 what = "stack traces of thrown errors"
-reason = "dart's StackTrace objects; WT's located rejections and source maps are ported under source_map_simple_test"
+cases = []
 
 ["tests/language/static/"]
-kind = "not_portable"
+kind = "behavior"
 what = "static members and their static rules"
-reason = "dart class statics"
+cases = []
 
 ["tests/language/string/"]
 kind = "behavior"
@@ -4846,9 +4921,9 @@ what = "strings: literals, interpolation, concatenation, comparison and code uni
 cases = []
 
 ["tests/language/subtyping_static/"]
-kind = "not_portable"
+kind = "behavior"
 what = "static subtyping"
-reason = "dart's static typing"
+cases = []
 
 ["tests/language/super/abstract_method_test.dart"]
 kind = "behavior"
@@ -5126,9 +5201,9 @@ what = "initializer list order across subclass initializers, super constructor a
 cases = ["dart_super/super"]
 
 ["tests/language/superinterface_variance/"]
-kind = "not_portable"
+kind = "behavior"
 what = "variance of superinterfaces"
-reason = "dart's variance rules, static diagnostics"
+cases = []
 
 ["tests/language/switch/aborting_switch_case_test.dart"]
 kind = "behavior"
@@ -5356,34 +5431,79 @@ what = "sync* generators"
 reason = "resumable functions; dev/PARITY_MASTER.md scopes out tasks"
 
 ["tests/language/syntax/"]
-kind = "not_portable"
+kind = "behavior"
 what = "parser regressions"
-reason = "dart syntax"
+cases = []
 
-["tests/language/test_runner/"]
+["tests/language/test_runner/impl/imported_library.dart"]
 kind = "not_portable"
-what = "the test runner's own expectations"
+what = "the test runner's own expectations: impl/imported_library.dart"
+reason = "dart's test tooling"
+
+["tests/language/test_runner/impl/imported_library2.dart"]
+kind = "not_portable"
+what = "the test runner's own expectations: impl/imported_library2.dart"
+reason = "dart's test tooling"
+
+["tests/language/test_runner/impl/imported_library_part.dart"]
+kind = "not_portable"
+what = "the test runner's own expectations: impl/imported_library_part.dart"
+reason = "dart's test tooling"
+
+["tests/language/test_runner/impl/imported_library_with_part.dart"]
+kind = "not_portable"
+what = "the test runner's own expectations: impl/imported_library_with_part.dart"
+reason = "dart's test tooling"
+
+["tests/language/test_runner/impl/part.dart"]
+kind = "not_portable"
+what = "the test runner's own expectations: impl/part.dart"
+reason = "dart's test tooling"
+
+["tests/language/test_runner/imported_library_failure_test.dart"]
+kind = "not_portable"
+what = "the test runner's own expectations: imported_library_failure_test.dart"
+reason = "dart's test tooling"
+
+["tests/language/test_runner/imported_library_part_failure_test.dart"]
+kind = "not_portable"
+what = "the test runner's own expectations: imported_library_part_failure_test.dart"
+reason = "dart's test tooling"
+
+["tests/language/test_runner/library_failure_test.dart"]
+kind = "not_portable"
+what = "the test runner's own expectations: library_failure_test.dart"
+reason = "dart's test tooling"
+
+["tests/language/test_runner/part_failure_test.dart"]
+kind = "not_portable"
+what = "the test runner's own expectations: part_failure_test.dart"
+reason = "dart's test tooling"
+
+["tests/language/test_runner/transitively_imported_library_failure_test.dart"]
+kind = "not_portable"
+what = "the test runner's own expectations: transitively_imported_library_failure_test.dart"
 reason = "dart's test tooling"
 
 ["tests/language/this/"]
-kind = "not_portable"
+kind = "behavior"
 what = "this in members"
-reason = "dart's implicit receiver"
+cases = []
 
 ["tests/language/this_promotion/"]
-kind = "not_portable"
+kind = "behavior"
 what = "promotion of this"
-reason = "dart's static flow analysis"
+cases = []
 
 ["tests/language/top_level/"]
-kind = "not_portable"
+kind = "behavior"
 what = "top-level declarations and their collisions"
-reason = "dart's library scoping, static diagnostics"
+cases = []
 
 ["tests/language/type/"]
-kind = "not_portable"
+kind = "behavior"
 what = "typedef equality and type checks of function types"
-reason = "dart's structural function types"
+cases = []
 
 ["tests/language/type_object/"]
 kind = "behavior"
@@ -5391,19 +5511,19 @@ what = "type literals and Type objects (Julia's typeof and DataType values)"
 cases = []
 
 ["tests/language/type_promotion/"]
-kind = "not_portable"
+kind = "behavior"
 what = "type promotion"
-reason = "dart's static flow analysis"
+cases = []
 
 ["tests/language/type_variable/"]
-kind = "not_portable"
+kind = "behavior"
 what = "type variables and their static rules"
-reason = "dart's reified type variables, mostly static diagnostics; Julia's are ported under generic"
+cases = []
 
 ["tests/language/typedef/"]
-kind = "not_portable"
+kind = "behavior"
 what = "typedefs"
-reason = "dart typedefs, static"
+cases = []
 
 ["tests/language/unsorted/"]
 kind = "behavior"
@@ -5411,34 +5531,34 @@ what = "unsorted tests of every kind, to classify file by file when ported"
 cases = []
 
 ["tests/language/value_class/"]
-kind = "not_portable"
+kind = "behavior"
 what = "value classes"
-reason = "an experimental dart feature"
+cases = []
 
 ["tests/language/variable/"]
-kind = "not_portable"
+kind = "behavior"
 what = "variable declarations and their static rules"
-reason = "dart's variable rules, mostly static diagnostics"
+cases = []
 
 ["tests/language/variance/"]
-kind = "not_portable"
+kind = "behavior"
 what = "declaration-site variance"
-reason = "an experimental dart feature"
+cases = []
 
 ["tests/language/void/"]
-kind = "not_portable"
+kind = "behavior"
 what = "the void type"
-reason = "dart's void, static"
+cases = []
 
 ["tests/language/why_not_promoted/"]
-kind = "not_portable"
+kind = "behavior"
 what = "why-not-promoted diagnostics"
-reason = "static diagnostics of dart's front end"
+cases = []
 
 ["tests/language/wildcard_variables/"]
-kind = "not_portable"
+kind = "behavior"
 what = "wildcard variables"
-reason = "dart syntax"
+cases = []
 
 # ---- tests/language: the top-level files ----
 
