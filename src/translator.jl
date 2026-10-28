@@ -172,15 +172,20 @@ end
 """The functions whose code is still to generate, taken last in, first out."""
 @parity "dart2wasm/lib/translator.dart:2661 CompilationQueue" struct CompilationQueue
     translator::KernelNodes
-    _pending::Vector{CompilationTask}
+    _pending::Vector{AbstractCompilationTask}
     # the struct's one constructor, tagged; dart's constructor at :2665 is its outer function
-    CompilationQueue(::Val{:_}, translator::KernelNodes) = new(translator, CompilationTask[])
+    CompilationQueue(::Val{:_}, translator::KernelNodes) = new(translator, AbstractCompilationTask[])
 end
 
-@parity "dart2wasm/lib/translator.dart:2675 CompilationTask" abstract type CompilationTask end
+@parity "dart2wasm/lib/translator.dart:2675 CompilationTask" abstract type AbstractCompilationTask end
+
+"""
+CompilationTask's dart fields: `function`, `_codeGenerator`.
+"""
+@parity "dart2wasm/lib/translator.dart:2675 CompilationTask" @unported struct CompilationTask <: AbstractCompilationTask end
 
 """A member's function whose code is to be generated, by its code generator."""
-@parity "dart2wasm/lib/translator.dart:2694 AstCompilationTask" struct AstCompilationTask <: CompilationTask
+@parity "dart2wasm/lib/translator.dart:2694 AstCompilationTask" struct AstCompilationTask <: AbstractCompilationTask
     # CompilationTask's fields, then the class's own
     function_::WasmBuilder.FunctionBuilder
     _code_generator::CodeGenerator
@@ -703,20 +708,20 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2667 CompilationQueue.isEmpty" is_empty(self::CompilationQueue)::Bool = isempty(self._pending)
 
-@parity "dart2wasm/lib/translator.dart:2668 CompilationQueue.add" function add(self::CompilationQueue, entry::CompilationTask)::Nothing
+@parity "dart2wasm/lib/translator.dart:2668 CompilationQueue.add" function add(self::CompilationQueue, entry::AbstractCompilationTask)::Nothing
     push!(self._pending, entry)
     return nothing
 end
 
 # dart's removeLast throws on an empty list; here a located rejection
-@parity "dart2wasm/lib/translator.dart:2672 CompilationQueue.pop" function pop(self::CompilationQueue)::CompilationTask
+@parity "dart2wasm/lib/translator.dart:2672 CompilationQueue.pop" function pop(self::CompilationQueue)::AbstractCompilationTask
     isempty(self._pending) && reject!(Internal("dart2wasm/lib/translator.dart:2672 CompilationQueue.pop: the queue is empty"), "CompilationQueue.pop")
     return pop!(self._pending)
 end
 
 @parity "dart2wasm/lib/translator.dart:2679 CompilationTask" @unported function CompilationTask(function_, _code_generator) end
 
-@parity "dart2wasm/lib/translator.dart:2681 CompilationTask.run" function Base.run(self::CompilationTask, translator::Translator, print_kernel::Bool, print_wasm::Bool)::Nothing
+@parity "dart2wasm/lib/translator.dart:2681 CompilationTask.run" function Base.run(self::AbstractCompilationTask, translator::Translator, print_kernel::Bool, print_wasm::Bool)::Nothing
     if print_wasm
         println("#$(self.function_.function_name) (synthetic)")
         println(self.function_.type)
@@ -875,7 +880,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:4029 WasmTableImporter" @unported function WasmTableImporter(_translator, _export_prefix) end
 
-@parity "dart2wasm/lib/translator.dart:4032 WasmTableImporter.import" @unported function var"import"(self::WasmTableImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.Table, module_name::String, import_name::String) end
+@parity "dart2wasm/lib/translator.dart:4032 WasmTableImporter.import" @unported function var"import"(self::WasmTableImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.AbstractTable, module_name::String, import_name::String) end
 
 @parity "dart2wasm/lib/translator.dart:4049 WasmTagImporter" @unported function WasmTagImporter(_translator, _export_prefix) end
 

@@ -16,7 +16,7 @@ end
 @parity "wasm_builder/lib/src/builder/exports.dart:9 ExportsBuilder" function ExportsBuilder end
 
 """Exports `exportable` under `name`, which must be unique (`export` is a Julia keyword)."""
-@parity "wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export" function var"export"(b::ExportsBuilder, name::String, exportable::Union{IR.BaseFunction,IR.Global,IR.Table,IR.Memory,IR.Tag})::Nothing
+@parity "wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export" function var"export"(b::ExportsBuilder, name::String, exportable::Union{IR.BaseFunction,IR.Global,IR.AbstractTable,IR.Memory,IR.Tag})::Nothing
     any(e -> e.name == name, b._exports) && reject!(InvalidModule("wasm_builder/lib/src/builder/exports.dart:15 ExportsBuilder.export: a second export named '$name'"), "export_")
     push!(b._exports, var"export"(exportable, name))
     nothing

@@ -1154,9 +1154,9 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:6076 MacroAssembler.loadClassId" @unported function load_class_id(self::WasmBuilder.InstructionsBuilder, translator::Translator, receiver_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:6085 MacroAssembler.fillTableRange" @unported function fill_table_range(self::WasmBuilder.InstructionsBuilder, table::WasmBuilder.IR.Table, start::Int64, stride_width::Int64, fun::WasmBuilder.IR.BaseFunction) end
+@parity "dart2wasm/lib/code_generator.dart:6085 MacroAssembler.fillTableRange" @unported function fill_table_range(self::WasmBuilder.InstructionsBuilder, table::WasmBuilder.IR.AbstractTable, start::Int64, stride_width::Int64, fun::WasmBuilder.IR.BaseFunction) end
 
-@parity "dart2wasm/lib/code_generator.dart:6097 MacroAssembler.fillTableRangeWithIncreasingIntegers" @unported function fill_table_range_with_increasing_integers(self::WasmBuilder.InstructionsBuilder, table::WasmBuilder.IR.Table, start::Int64, stride_width::Int64, start_value::Int64) end
+@parity "dart2wasm/lib/code_generator.dart:6097 MacroAssembler.fillTableRangeWithIncreasingIntegers" @unported function fill_table_range_with_increasing_integers(self::WasmBuilder.InstructionsBuilder, table::WasmBuilder.IR.AbstractTable, start::Int64, stride_width::Int64, start_value::Int64) end
 
 @parity "dart2wasm/lib/code_generator.dart:6150 CallTarget" @unported function CallTarget(signature) end
 

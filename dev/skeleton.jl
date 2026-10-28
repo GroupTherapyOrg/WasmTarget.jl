@@ -680,6 +680,9 @@ end
 spell_module(m::AbstractString, from::AbstractString)::String =
     startswith(m, from * ".") ? m[length(from)+2:end] : String(m)
 
+# a concrete dart class another class extends: two Julia definitions, Abstract<X> and X (stub)
+is_pair(S::Scope, file::AbstractString, d::Decl)::Bool = d.kind == :class && "$file|$(d.symbol)" in S.extended
+
 # a dart sealed class: its mirror is a @closed sum of the classes that extend or implement it
 is_sealed(d::Decl)::Bool = d.kind == :abstract && "sealed" in d.modifiers
 
@@ -843,6 +846,8 @@ function type_ref(S::Scope, s::AbstractString, from::AbstractString; at::Abstrac
         tk == :function && return "Function"
         tk == :alias && return julia_type(S.decls[k][td].rettype, S, k; at = at)
     end
+    # dart's X, of a class another extends, is the hierarchy: Abstract<X>
+    any(d -> d.symbol == n && is_pair(S, k, d), S.decls[k]) && return spell("Abstract" * n, k, at)
     return spell(n, k, at)
 end
 
@@ -1180,11 +1185,15 @@ function stub(file::String, d::Decl, S::Scope, fields::Vector{Decl})::String
         local sk = isempty(sup) ? nothing : declaring(n, p, file)
         sk !== nothing && haskey(S.sealed, "$sk|$n") && (sp = "")
         local super = isempty(sp) ? "" : " <: $sp"
-        if d.kind != :class || "$file|$(d.symbol)" in S.extended
-            return "@parity \"$a\" abstract type $(d.symbol)$super end"
-        end
+        d.kind != :class && return "@parity \"$a\" abstract type $(d.symbol)$super end"
         local doc = isempty(fields) ? "" :
             "\"\"\"\n$(d.symbol)'s dart fields: " * join(("`$(f.symbol[length(d.symbol)+2:end])`" for f in fields), ", ") * ".\n\"\"\"\n"
+        # a concrete class another extends: Julia's own shape (AbstractArray and Array), the hierarchy
+        # abstract type Abstract<X> and X the struct of dart's own instances, both at X's line
+        if is_pair(S, file, d)
+            return "@parity \"$a\" abstract type Abstract$(d.symbol)$super end\n\n" *
+                   doc * "@parity \"$a\" @unported struct $(d.symbol) <: Abstract$(d.symbol) end"
+        end
         return doc * "@parity \"$a\" @unported struct $(d.symbol)$super end"
     elseif d.kind == :enum
         return "@parity \"$a\" @enum $(d.symbol) " * join(("$(d.symbol)_$(v)" for v in enum_values(file, d)), " ")
@@ -1349,6 +1358,7 @@ function src_anchors()::Dict{String,Tuple{String,Bool}}
     local out = Dict{String,Tuple{String,Bool}}()
     local srcdir = joinpath(ROOT, "src")
     local keys = Set(scope())
+    local abstract_seen = Set{String}()   # anchors whose abstract type a segment holds
     for (dir, _, files) in walkdir(srcdir), f in files
         endswith(f, ".jl") || continue
         local path = joinpath(dir, f)
@@ -1357,10 +1367,14 @@ function src_anchors()::Dict{String,Tuple{String,Bool}}
         for s in last(segments(read(path, String), path))
             local a = canonical_anchor(s.anchor, keys)
             isempty(a) && continue
+            local isabs = occursin(r"^@parity \"[^\"]+\" abstract type "m, s.text)
+            local pair_seen = isabs != (a in abstract_seen) ? Set([a]) : Set{String}()
+            isabs && push!(abstract_seen, a)
             if haskey(out, a)
                 # one dart definition may take several filled Julia definitions (a struct and its
                 # default constructor); a filled one wins over a stub, which goes; two stubs refuse
-                (out[a][2] && generated(s)) && error("skeleton: $a is stubbed twice: $(out[a][1]) and $path")
+                # a pair's abstract type beside its struct stub is two parts of one definition
+                (out[a][2] && generated(s) && !(a in pair_seen)) && error("skeleton: $a is stubbed twice: $(out[a][1]) and $path")
                 generated(s) && continue
                 out[a][2] || continue
             end
@@ -1382,6 +1396,7 @@ function generate(file::String, S::Scope, anchors::Dict{String,Tuple{String,Bool
     local keys = Set(scope())
     local texts = String[]
     local held = String[]       # each output entry's anchor, in order
+    local parts = Dict{String,Vector{Symbol}}()   # a pair's parts the output holds (:abstract, :struct)
     for s in segs
         local a = canonical_anchor(s.anchor, keys)
         isempty(a) && error("skeleton: $path:$(s.first): a definition with no @parity anchor")
@@ -1398,7 +1413,23 @@ function generate(file::String, S::Scope, anchors::Dict{String,Tuple{String,Bool
         (gen && haskey(anchors, a) && !anchors[a][2] && anchors[a][1] != path) && continue
         local text = gen ? stub(f, d, S, fields_of(d, S.decls[f])) :
                      a == s.anchor ? s.text : replace(s.text, "\"" * s.anchor * "\"" => "\"" * a * "\""; count = 1)
+        if is_pair(S, f, d)
+            # one of a pair's two parts: its abstract type, or its struct (a stub, or filled)
+            local part = occursin(r"^@parity \"[^\"]+\" abstract type "m, s.text) ? :abstract : :struct
+            local both = split(stub(f, d, S, fields_of(d, S.decls[f])), "\n\n"; limit = 2)
+            gen && (text = part == :abstract ? both[1] : both[2])
+            push!(get!(parts, a, Symbol[]), part)
+        end
         push!(texts, text); push!(held, a)
+    end
+    # a pair holding one part gains the other beside it: the abstract type before the struct
+    for (a, ps) in parts
+        length(ps) == 1 || continue
+        local f, d = bykey[a]
+        local both = split(stub(f, d, S, fields_of(d, S.decls[f])), "\n\n"; limit = 2)
+        local k = findfirst(==(a), held)
+        ps[1] == :abstract ? (insert!(texts, k + 1, both[2]); insert!(held, k + 1, a)) :
+                             (insert!(texts, k, both[1]); insert!(held, k, a))
     end
     local order = ordered(S.decls[file])
     for (i, d) in enumerate(order)

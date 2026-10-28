@@ -23,11 +23,11 @@ We use this mechanism if the constant is accessed across modules and each module
 own copy of the initializer function.
 """
 @parity "dart2wasm/lib/constants.dart:56 TableBasedConstantDefinition" struct TableBasedConstantDefinition
-    table::WasmBuilder.IR.Table
+    table::WasmBuilder.IR.AbstractTable
     table_index::Int
     _init_function_per_using_module::LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}
     # the struct's one constructor, tagged; dart's constructor at :61 is its outer function
-    TableBasedConstantDefinition(::Val{:_}, table::WasmBuilder.IR.Table, table_index::Int,
+    TableBasedConstantDefinition(::Val{:_}, table::WasmBuilder.IR.AbstractTable, table_index::Int,
             _init_function_per_using_module::LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}) =
         new(table, table_index, _init_function_per_using_module)
 end
@@ -208,7 +208,7 @@ them during codegen phase when we know to place them to the main module).
     return f
 end
 
-@parity "dart2wasm/lib/constants.dart:61 TableBasedConstantDefinition" TableBasedConstantDefinition(table::WasmBuilder.IR.Table, table_index::Int,
+@parity "dart2wasm/lib/constants.dart:61 TableBasedConstantDefinition" TableBasedConstantDefinition(table::WasmBuilder.IR.AbstractTable, table_index::Int,
         _init_function_per_using_module::LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction})::TableBasedConstantDefinition =
     TableBasedConstantDefinition(Val(:_), table, table_index, _init_function_per_using_module)
 

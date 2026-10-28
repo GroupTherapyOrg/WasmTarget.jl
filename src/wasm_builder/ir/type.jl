@@ -184,12 +184,17 @@ end
     end
 end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1289 _WithMutability" abstract type _WithMutability <: WasmBuilder.Serializable end
+@parity "wasm_builder/lib/src/ir/type.dart:1289 _WithMutability" abstract type Abstract_WithMutability <: WasmBuilder.Serializable end
+
+"""
+_WithMutability's dart fields: `type`, `mutable`.
+"""
+@parity "wasm_builder/lib/src/ir/type.dart:1289 _WithMutability" @unported struct _WithMutability <: Abstract_WithMutability end
 
 """
 A type for a global: a value type and a mutability.
 """
-@parity "wasm_builder/lib/src/ir/type.dart:1317 GlobalType" struct GlobalType <: _WithMutability
+@parity "wasm_builder/lib/src/ir/type.dart:1317 GlobalType" struct GlobalType <: Abstract_WithMutability
     # _WithMutability's fields
     type::ValueType
     mutable::Bool
@@ -200,7 +205,7 @@ end
 """
 A type for a struct field or an array element: a storage type and a mutability.
 """
-@parity "wasm_builder/lib/src/ir/type.dart:1338 FieldType" struct FieldType <: _WithMutability
+@parity "wasm_builder/lib/src/ir/type.dart:1338 FieldType" struct FieldType <: Abstract_WithMutability
     # _WithMutability's fields
     type::StorageType
     mutable::Bool
@@ -838,12 +843,12 @@ end
 # subclasses' constructors do its work; this line declares the name and adds no method
 @parity "wasm_builder/lib/src/ir/type.dart:1293 _WithMutability" function _WithMutability end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1296 _WithMutability.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::_WithMutability)::Nothing
+@parity "wasm_builder/lib/src/ir/type.dart:1296 _WithMutability.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::Abstract_WithMutability)::Nothing
     write(s, t.type)
     WasmBuilder.write_byte(s, t.mutable ? 0x01 : 0x00)
 end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1311 _WithMutability.toString" Base.show(io::IO, t::_WithMutability) = print(io, t.mutable ? "var " : "const ", t.type)
+@parity "wasm_builder/lib/src/ir/type.dart:1311 _WithMutability.toString" Base.show(io::IO, t::Abstract_WithMutability) = print(io, t.mutable ? "var " : "const ", t.type)
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method

@@ -723,14 +723,17 @@ end
     "*" => :*, "/" => :/, "~/" => :div, "%" => :mod, "<" => :<, ">" => :>, "<=" => :<=, ">=" => :>=,
     "&" => :&, "|" => :|, "^" => :xor, "~" => :~, "<<" => :<<, ">>" => :>>, ">>>" => :>>>)
 
-# the Julia names the rule admits for an anchor's symbol: `X` its type or unnamed constructor X (a
-# top-level function or variable `f`: snake(f)); `X.m` the Base function DART_BASE names for m alone,
-# else snake(m) (a method, getter or field), X_snake(m) (a static or named constructor) or
-# set_snake(m)! (a setter). A dart name that is a Julia keyword is written var"<name>", Julia's own
-# spelling of any identifier, so the rule needs no case for it
+# the Julia names the rule admits for an anchor's symbol: `X` its type or unnamed constructor X, or
+# Abstract<X> the hierarchy of a class another extends (a top-level function or variable `f`:
+# snake(f)); `X.m` the Base function DART_BASE names for m alone, else snake(m) (a method, getter or
+# field), X_snake(m) (a static or named constructor) or set_snake(m)! (a setter). A dart name that is
+# a Julia keyword is written var"<name>", Julia's own spelling of any identifier, so the rule needs no
+# case for it
 @quarantine "dart and Julia name a definition by different conventions; one rule maps them" Base.Symbol function _admitted_names(symbol::AbstractString)::Vector{Symbol}
     local parts = split(symbol, '.'; limit = 2)
-    length(parts) == 1 && return unique([Symbol(symbol), Symbol(snake(symbol))])
+    # a class another extends is also its hierarchy, Abstract<X>: Julia's own convention for a
+    # concrete type with subtypes (precedent(julia: AbstractArray and Array, AbstractDict and Dict))
+    length(parts) == 1 && return unique([Symbol(symbol), Symbol(snake(symbol)), Symbol("Abstract", symbol)])
     local x, m = parts
     haskey(DART_BASE, m) && return Symbol[DART_BASE[m]]
     return Symbol[Symbol(snake(m)), Symbol(x, "_", snake(m)), Symbol("set_", snake(m), "!")]

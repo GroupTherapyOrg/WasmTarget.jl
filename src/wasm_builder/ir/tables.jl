@@ -15,7 +15,7 @@ end
 @parity "wasm_builder/lib/src/ir/tables.dart:15 Tables" function Tables end
 
 # dart's operator [] takes the wasm table index, 0-based: imports first.
-@parity "wasm_builder/lib/src/ir/tables.dart:17 Tables.[]" function Base.getindex(t::Tables, index::Int)::Table
+@parity "wasm_builder/lib/src/ir/tables.dart:17 Tables.[]" function Base.getindex(t::Tables, index::Int)::AbstractTable
     index < length(t.imported) ? t.imported[index+1] : t.defined[index-length(t.imported)+1]
 end
 

@@ -16,15 +16,15 @@ end
 # The classes that mix in Indexable (BaseFunction, Global, Table, Memory, Tag) cannot also subtype
 # it in Julia, so its members take their Union.
 # dart's abstract getter, which each class's field `finalizableIndex` answers
-@parity "wasm_builder/lib/src/ir/indexable.dart:11 Indexable.finalizableIndex" WasmBuilder.finalizable_index(x::Union{BaseFunction,Global,Table,Memory,Tag})::Finalizable{Int} = x.finalizable_index
+@parity "wasm_builder/lib/src/ir/indexable.dart:11 Indexable.finalizableIndex" WasmBuilder.finalizable_index(x::Union{BaseFunction,Global,AbstractTable,Memory,Tag})::Finalizable{Int} = x.finalizable_index
 
 """
 The part's index; valid only after finalization, a read before it rejects.
 """
-@parity "wasm_builder/lib/src/ir/indexable.dart:15 Indexable.index" WasmBuilder.index(x::Union{BaseFunction,Global,Table,Memory,Tag})::Int = WasmBuilder.value(x.finalizable_index)
+@parity "wasm_builder/lib/src/ir/indexable.dart:15 Indexable.index" WasmBuilder.index(x::Union{BaseFunction,Global,AbstractTable,Memory,Tag})::Int = WasmBuilder.value(x.finalizable_index)
 
 """
 The part's debugging name; always valid, though not unique. Parts with a better name define their
 own.
 """
-@parity "wasm_builder/lib/src/ir/indexable.dart:20 Indexable.name" WasmBuilder.name(x::Union{BaseFunction,Global,Table,Memory,Tag})::String = string(x._id[])
+@parity "wasm_builder/lib/src/ir/indexable.dart:20 Indexable.name" WasmBuilder.name(x::Union{BaseFunction,Global,AbstractTable,Memory,Tag})::String = string(x._id[])

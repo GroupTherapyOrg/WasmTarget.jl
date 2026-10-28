@@ -61,7 +61,7 @@ Gets the wasm table used to reference this table in `module_`.
 This can either be the table definition itself or an import of it. Imports the table into
 `module_` if it is not imported yet.
 """
-@parity "dart2wasm/lib/table_based_globals.dart:56 TypeSpecificGlobalTable.getWasmTable" get_wasm_table(self::TypeSpecificGlobalTable, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Table = get(self._imported_wasm_tables, self._defined_wasm_table[], module_)
+@parity "dart2wasm/lib/table_based_globals.dart:56 TypeSpecificGlobalTable.getWasmTable" get_wasm_table(self::TypeSpecificGlobalTable, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.AbstractTable = get(self._imported_wasm_tables, self._defined_wasm_table[], module_)
 
 """
 Returns the index for `object` in the table allocating one if necessary; `init_module` and `init`

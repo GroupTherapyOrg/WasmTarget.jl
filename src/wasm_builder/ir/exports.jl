@@ -15,14 +15,14 @@ end
 # The classes that mix in Exportable (BaseFunction, Global, Table, Memory, Tag) cannot also subtype it
 # in Julia, so its members take their Union.
 # dart's abstract getter, which each class's field `enclosingModule` answers
-@parity "wasm_builder/lib/src/ir/exports.dart:11 Exportable.enclosingModule" WasmBuilder.enclosing_module(x::Union{BaseFunction,Global,Table,Memory,Tag})::AbstractModule = x.enclosing_module
+@parity "wasm_builder/lib/src/ir/exports.dart:11 Exportable.enclosingModule" WasmBuilder.enclosing_module(x::Union{BaseFunction,Global,AbstractTable,Memory,Tag})::AbstractModule = x.enclosing_module
 
 # dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
-@parity "wasm_builder/lib/src/ir/exports.dart:13 Exportable.buildExport" WasmBuilder.build_export(x::Union{BaseFunction,Global,Table,Memory,Tag}, name::String)::Export =
+@parity "wasm_builder/lib/src/ir/exports.dart:13 Exportable.buildExport" WasmBuilder.build_export(x::Union{BaseFunction,Global,AbstractTable,Memory,Tag}, name::String)::Export =
     reject!(Internal("wasm_builder/lib/src/ir/exports.dart:13 Exportable.buildExport: abstract in $(typeof(x))"), "build_export")
 
 """All exports must have unique names."""
-@parity "wasm_builder/lib/src/ir/exports.dart:16 Exportable.export" function WasmBuilder.var"export"(x::Union{BaseFunction,Global,Table,Memory,Tag}, name::String)::Export
+@parity "wasm_builder/lib/src/ir/exports.dart:16 Exportable.export" function WasmBuilder.var"export"(x::Union{BaseFunction,Global,AbstractTable,Memory,Tag}, name::String)::Export
     x.exported_name[] = name
     return WasmBuilder.build_export(x, name)
 end

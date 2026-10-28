@@ -801,7 +801,7 @@ end
 end
 
 """Emit a `call_indirect` instruction."""
-@parity "wasm_builder/lib/src/builder/instructions.dart:960 InstructionsBuilder.call_indirect" function call_indirect(b::InstructionsBuilder, type::IR.FunctionType, table::Union{IR.Table,Nothing}=nothing)::Nothing
+@parity "wasm_builder/lib/src/builder/instructions.dart:960 InstructionsBuilder.call_indirect" function call_indirect(b::InstructionsBuilder, type::IR.FunctionType, table::Union{IR.AbstractTable,Nothing}=nothing)::Nothing
     trace = table === nothing ? ("call_indirect", type) : ("call_indirect", type, name(table))
     _verify_types(b, IR.ValueType[type.inputs..., IR.NumType_i32], type.outputs; trace)
     (table === nothing || table.enclosing_module === var"module"(b)) || _report_error(b, "Table of another module in 'call_indirect'")
@@ -880,7 +880,7 @@ end
 end
 
 """Emit a `table.get` instruction."""
-@parity "wasm_builder/lib/src/builder/instructions.dart:1084 InstructionsBuilder.table_get" function table_get(b::InstructionsBuilder, table::IR.Table)::Nothing
+@parity "wasm_builder/lib/src/builder/instructions.dart:1084 InstructionsBuilder.table_get" function table_get(b::InstructionsBuilder, table::IR.AbstractTable)::Nothing
     _verify_types(b, IR.ValueType[IR.NumType_i32], IR.ValueType[table.type]; trace=("table.get", name(table)))
     table.enclosing_module === var"module"(b) || reject!(InvalidModule("wasm_builder/lib/src/builder/instructions.dart:1085 table of another module"), "table_get")
     _add(b, IR.TableGet(table))
@@ -888,7 +888,7 @@ end
 end
 
 """Emit a `table.set` instruction."""
-@parity "wasm_builder/lib/src/builder/instructions.dart:1097 InstructionsBuilder.table_set" function table_set(b::InstructionsBuilder, table::IR.Table)::Nothing
+@parity "wasm_builder/lib/src/builder/instructions.dart:1097 InstructionsBuilder.table_set" function table_set(b::InstructionsBuilder, table::IR.AbstractTable)::Nothing
     _verify_types(b, IR.ValueType[IR.NumType_i32, table.type], IR.ValueType[]; trace=("table.set", name(table)))
     table.enclosing_module === var"module"(b) || reject!(InvalidModule("wasm_builder/lib/src/builder/instructions.dart:1098 table of another module"), "table_set")
     _add(b, IR.TableSet(table))
@@ -896,7 +896,7 @@ end
 end
 
 """Emit a `table.size` instruction."""
-@parity "wasm_builder/lib/src/builder/instructions.dart:1110 InstructionsBuilder.table_fill" function table_fill(b::InstructionsBuilder, table::IR.Table)::Nothing
+@parity "wasm_builder/lib/src/builder/instructions.dart:1110 InstructionsBuilder.table_fill" function table_fill(b::InstructionsBuilder, table::IR.AbstractTable)::Nothing
     _verify_types(b, IR.ValueType[IR.NumType_i32, table.type, IR.NumType_i32], IR.ValueType[]; trace=("table.fill", name(table)))
     table.enclosing_module === var"module"(b) || reject!(InvalidModule("wasm_builder/lib/src/builder/instructions.dart:1111 table of another module"), "table_fill")
     _add(b, IR.TableFill(table))
@@ -904,7 +904,7 @@ end
 end
 
 """Emit a `table.size` instruction."""
-@parity "wasm_builder/lib/src/builder/instructions.dart:1123 InstructionsBuilder.table_size" function table_size(b::InstructionsBuilder, table::IR.Table)::Nothing
+@parity "wasm_builder/lib/src/builder/instructions.dart:1123 InstructionsBuilder.table_size" function table_size(b::InstructionsBuilder, table::IR.AbstractTable)::Nothing
     _verify_types(b, IR.ValueType[], IR.ValueType[IR.NumType_i32]; trace=("table.size", name(table)))
     table.enclosing_module === var"module"(b) || reject!(InvalidModule("wasm_builder/lib/src/builder/instructions.dart:1124 table of another module"), "table_size")
     _add(b, IR.TableSize(table))

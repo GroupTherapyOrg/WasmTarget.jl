@@ -11,23 +11,23 @@ Initializes a specific table with function references; only for a table of type
 """
 @parity "wasm_builder/lib/src/ir/element.dart:20 ActiveFunctionElementSegment" struct ActiveFunctionElementSegment
     # ActiveElementSegment's fields, and its own
-    table::Table
+    table::AbstractTable
     start_index::Int
     entries::Vector{BaseFunction}
     # dart's constructor (line 23), the struct's one inner constructor: `entries ?? []`
-    ActiveFunctionElementSegment(table::Table, start_index::Int, entries::Union{Vector{BaseFunction},Nothing} = nothing) =
+    ActiveFunctionElementSegment(table::AbstractTable, start_index::Int, entries::Union{Vector{BaseFunction},Nothing} = nothing) =
         new(table, start_index, entries === nothing ? BaseFunction[] : entries)
 end
 
 """Initializes a specific table with initialization expressions."""
 @parity "wasm_builder/lib/src/ir/element.dart:84 ActiveExpressionElementSegment" struct ActiveExpressionElementSegment
     # ActiveElementSegment's fields, and its own
-    table::Table
+    table::AbstractTable
     start_index::Int
     type::RefType
     expressions::Vector{Vector{Instruction}}
     # dart's constructor (line 88), the struct's one inner constructor: `expressions = []`
-    ActiveExpressionElementSegment(table::Table, type::RefType, start_index::Int) = new(table, start_index, type, Vector{Instruction}[])
+    ActiveExpressionElementSegment(table::AbstractTable, type::RefType, start_index::Int) = new(table, start_index, type, Vector{Instruction}[])
 end
 
 @parity "wasm_builder/lib/src/ir/element.dart:151 DeclarativeElementSegment" struct DeclarativeElementSegment
@@ -40,7 +40,7 @@ end
 
 # dart's sealed class is abstract: its constructor runs only as a subclass's super constructor, whose
 # struct holds its fields; called on its own it is dart's compile error
-@parity "wasm_builder/lib/src/ir/element.dart:14 ActiveElementSegment" function ActiveElementSegment(table::Table, start_index::Int)::Union{}
+@parity "wasm_builder/lib/src/ir/element.dart:14 ActiveElementSegment" function ActiveElementSegment(table::AbstractTable, start_index::Int)::Union{}
     reject!(Internal("wasm_builder/lib/src/ir/element.dart:14 ActiveElementSegment: the sealed class is constructed only through a subclass"), "ActiveElementSegment")
 end
 

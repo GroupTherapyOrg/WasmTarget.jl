@@ -2,7 +2,7 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """A table defined in a module."""
-@parity "wasm_builder/lib/src/builder/table.dart:9 TableBuilder" mutable struct TableBuilder <: IR.Table
+@parity "wasm_builder/lib/src/builder/table.dart:9 TableBuilder" mutable struct TableBuilder <: IR.AbstractTable
     const finalizable_index::IR.Finalizable{Int}
     const type::IR.RefType
     min_size::Int

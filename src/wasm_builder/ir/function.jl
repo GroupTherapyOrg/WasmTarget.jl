@@ -72,7 +72,7 @@ end
 @parity "wasm_builder/lib/src/ir/function.dart:67 BaseFunction.name" function WasmBuilder.name(f::BaseFunction)::String
     local n = f.function_name
     # dart's `super.name`, Indexable's: Julia's invoke calls the method of the Union it is defined on
-    return n === nothing ? invoke(WasmBuilder.name, Tuple{Union{BaseFunction,Global,Table,Memory,Tag}}, f) : n
+    return n === nothing ? invoke(WasmBuilder.name, Tuple{Union{BaseFunction,Global,AbstractTable,Memory,Tag}}, f) : n
 end
 
 """Creates an export of this function in this module."""

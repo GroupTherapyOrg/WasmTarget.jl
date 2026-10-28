@@ -4,13 +4,13 @@
 """Builder for the elements section of a wasm module."""
 @parity "wasm_builder/lib/src/builder/elements.dart:11 ElementsBuilder" mutable struct ElementsBuilder
     const _module_builder::AbstractModuleBuilder
-    const _function_table_builders::LinkedHashMap{IR.Table,ActiveFunctionSegmentBuilder}
-    const _expression_table_builders::LinkedHashMap{IR.Table,ActiveExpressionSegmentBuilder}
+    const _function_table_builders::LinkedHashMap{IR.AbstractTable,ActiveFunctionSegmentBuilder}
+    const _expression_table_builders::LinkedHashMap{IR.AbstractTable,ActiveExpressionSegmentBuilder}
     const declarative_segment_builder::DeclarativeSegmentBuilder
     _built::Union{IR.Elements,Nothing}
     # dart's constructor (line 20), the struct's one inner constructor
     function ElementsBuilder(module_builder::AbstractModuleBuilder)
-        new(module_builder, LinkedHashMap{IR.Table,ActiveFunctionSegmentBuilder}(), LinkedHashMap{IR.Table,ActiveExpressionSegmentBuilder}(), DeclarativeSegmentBuilder(module_builder), nothing)
+        new(module_builder, LinkedHashMap{IR.AbstractTable,ActiveFunctionSegmentBuilder}(), LinkedHashMap{IR.AbstractTable,ActiveExpressionSegmentBuilder}(), DeclarativeSegmentBuilder(module_builder), nothing)
     end
 end
 
@@ -25,21 +25,21 @@ end
 end
 
 @parity "wasm_builder/lib/src/builder/elements.dart:78 ActiveFunctionSegmentBuilder" mutable struct ActiveFunctionSegmentBuilder
-    const table::IR.Table
+    const table::IR.AbstractTable
     const _functions::LinkedHashMap{Int,IR.BaseFunction}
     _built::Union{Vector{IR.ActiveElementSegment},Nothing}
     # dart's constructor (line 82), the struct's one inner constructor
-    function ActiveFunctionSegmentBuilder(table::IR.Table)
+    function ActiveFunctionSegmentBuilder(table::IR.AbstractTable)
         new(table, LinkedHashMap{Int,IR.BaseFunction}(), nothing)
     end
 end
 
 @parity "wasm_builder/lib/src/builder/elements.dart:131 ActiveExpressionSegmentBuilder" mutable struct ActiveExpressionSegmentBuilder
-    const table::IR.Table
+    const table::IR.AbstractTable
     const _expressions::LinkedHashMap{Int,InstructionsBuilder}
     _built::Union{Vector{IR.ActiveElementSegment},Nothing}
     # dart's constructor (line 136), the struct's one inner constructor
-    function ActiveExpressionSegmentBuilder(table::IR.Table)
+    function ActiveExpressionSegmentBuilder(table::IR.AbstractTable)
         new(table, LinkedHashMap{Int,InstructionsBuilder}(), nothing)
     end
 end
@@ -52,13 +52,13 @@ end
 
 @parity "wasm_builder/lib/src/builder/elements.dart:22 ElementsBuilder.hasActiveElementSegments" has_active_element_segments(b::ElementsBuilder)::Bool = !isempty(b._function_table_builders) || !isempty(b._expression_table_builders)
 
-@parity "wasm_builder/lib/src/builder/elements.dart:25 ElementsBuilder.activeFunctionSegmentBuilderFor" function active_function_segment_builder_for(b::ElementsBuilder, table::IR.Table)::ActiveFunctionSegmentBuilder
+@parity "wasm_builder/lib/src/builder/elements.dart:25 ElementsBuilder.activeFunctionSegmentBuilderFor" function active_function_segment_builder_for(b::ElementsBuilder, table::IR.AbstractTable)::ActiveFunctionSegmentBuilder
     is_subtype_of(table.type, IR.RefType_func(nullable=true)) || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:26 ElementsBuilder.activeFunctionSegmentBuilderFor: table of type $(table.type) holds no function references"), "active_function_segment_builder_for")
     table.enclosing_module === b._module_builder.module_ || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:27 ElementsBuilder.activeFunctionSegmentBuilderFor: the table belongs to another module"), "active_function_segment_builder_for")
     get!(() -> ActiveFunctionSegmentBuilder(table), b._function_table_builders, table)
 end
 
-@parity "wasm_builder/lib/src/builder/elements.dart:34 ElementsBuilder.activeExpressionSegmentBuilderFor" function active_expression_segment_builder_for(b::ElementsBuilder, table::IR.Table)::ActiveExpressionSegmentBuilder
+@parity "wasm_builder/lib/src/builder/elements.dart:34 ElementsBuilder.activeExpressionSegmentBuilderFor" function active_expression_segment_builder_for(b::ElementsBuilder, table::IR.AbstractTable)::ActiveExpressionSegmentBuilder
     table.enclosing_module === b._module_builder.module_ || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:37 ElementsBuilder.activeExpressionSegmentBuilderFor: the table belongs to another module"), "active_expression_segment_builder_for")
     get!(() -> ActiveExpressionSegmentBuilder(table), b._expression_table_builders, table)
 end

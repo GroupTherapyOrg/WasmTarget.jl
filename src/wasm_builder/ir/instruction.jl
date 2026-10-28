@@ -153,9 +153,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1228 CallIndirect" struct CallIndirect <: Instruction
     type::FunctionType
-    table::Union{Table,Nothing}
+    table::Union{AbstractTable,Nothing}
     # dart's constructor (line 1235), the struct's one inner constructor
-    CallIndirect(type::FunctionType, table::Union{Table,Nothing}) = new(type, table)
+    CallIndirect(type::FunctionType, table::Union{AbstractTable,Nothing}) = new(type, table)
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1262 CallRef" struct CallRef <: Instruction
@@ -211,27 +211,27 @@ end
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1483 TableSet" struct TableSet <: Instruction
-    table::Table
+    table::AbstractTable
     # dart's constructor (line 1486), the struct's one inner constructor
-    TableSet(table::Table) = new(table)
+    TableSet(table::AbstractTable) = new(table)
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1508 TableGet" struct TableGet <: Instruction
-    table::Table
+    table::AbstractTable
     # dart's constructor (line 1511), the struct's one inner constructor
-    TableGet(table::Table) = new(table)
+    TableGet(table::AbstractTable) = new(table)
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1533 TableFill" struct TableFill <: Instruction
-    table::Table
+    table::AbstractTable
     # dart's constructor (line 1536), the struct's one inner constructor
-    TableFill(table::Table) = new(table)
+    TableFill(table::AbstractTable) = new(table)
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1559 TableSize" struct TableSize <: Instruction
-    table::Table
+    table::AbstractTable
     # dart's constructor (line 1562), the struct's one inner constructor
-    TableSize(table::Table) = new(table)
+    TableSize(table::AbstractTable) = new(table)
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1585 MemoryOffsetAlign" struct MemoryOffsetAlign <: WasmBuilder.Serializable
