@@ -2,24 +2,59 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-RecordShape's dart fields: `positionals`, `_names`.
+The shape of a record: the number of positional fields and the names of the named ones.
+
+`_names` maps each name to its index in the record's payload, sorted by name, as dart's
+`SplayTreeMap` keeps it (Julia's Base has no sorted map, so the pairs are held in key order).
 """
-@parity "dart2wasm/lib/records.dart:13 RecordShape" @unported struct RecordShape end
+@parity "dart2wasm/lib/records.dart:13 RecordShape" struct RecordShape
+    positionals::Int
+    _names::Vector{Pair{String,Int}}
+    # the struct's one constructor, tagged; dart's constructor at :30 is its outer function
+    RecordShape(::Val{:_}, positionals::Int, _names::Vector{Pair{String,Int}}) = new(positionals, _names)
+end
 
-@parity "dart2wasm/lib/records.dart:22 RecordShape.names" @unported function Base.names(self::RecordShape) end
+"""The names of the named fields, sorted."""
+@parity "dart2wasm/lib/records.dart:22 RecordShape.names" Base.names(self::RecordShape)::Vector{String} = String[first(p) for p in self._names]
 
-@parity "dart2wasm/lib/records.dart:25 RecordShape.numFields" @unported function num_fields(self::RecordShape) end
+@parity "dart2wasm/lib/records.dart:25 RecordShape.numFields" num_fields(self::RecordShape)::Int = self.positionals + length(self._names)
 
-@parity "dart2wasm/lib/records.dart:30 RecordShape" @unported function RecordShape(positionals, names) end
+# dart's SplayTreeMap.fromIterables: each name to its position after the positionals, a repeated
+# name keeping its last value, the map ordered by name (String's compareTo; Julia's isless orders
+# by code point, the same order for every name a record field can have below U+10000)
+@parity "dart2wasm/lib/records.dart:30 RecordShape" function RecordShape(positionals::Int, names::Vector{String})::RecordShape
+    local index = Dict{String,Int}()
+    for (i, name) in enumerate(names)
+        index[name] = i - 1 + positionals
+    end
+    return RecordShape(Val(:_), positionals, sort!(collect(index); by = first))
+end
 
 @parity "dart2wasm/lib/records.dart:36 RecordShape.fromType" @unported function RecordShape_from_type(record_type) end
 
-@parity "dart2wasm/lib/records.dart:40 RecordShape.toString" @unported function Base.show(io::IO, self::RecordShape) end
+# dart's toString, a Map printing as `{k: v, ...}`; Julia's show writes to the stream it is given
+@parity "dart2wasm/lib/records.dart:40 RecordShape.toString" Base.show(io::IO, self::RecordShape)::Nothing =
+    print(io, "Record(positionals: ", self.positionals, ", names: {", join(("$(k): $(v)" for (k, v) in self._names), ", "), "})")
 
-@parity "dart2wasm/lib/records.dart:43 RecordShape.==" @unported function Base.:(==)(self::RecordShape, other::Any) end
+# dart's `other is! RecordShape` arm: an `other` of another type takes Julia's fallback `==`, false
+@parity "dart2wasm/lib/records.dart:43 RecordShape.==" function Base.:(==)(self::RecordShape, other::RecordShape)::Bool
+    self.positionals != other.positionals && return false
+    length(self._names) != length(other._names) && return false
+    for (a, b) in zip(self._names, other._names)
+        first(a) != first(b) && return false
+    end
+    return true
+end
 
-@parity "dart2wasm/lib/records.dart:69 RecordShape.hashCode" @unported function Base.hash(self::RecordShape, h::UInt) end
+# dart's Object.hash(positionals, Object.hashAll(names)); Julia's hash takes the seed it mixes into
+@parity "dart2wasm/lib/records.dart:69 RecordShape.hashCode" Base.hash(self::RecordShape, h::UInt)::UInt = hash(names(self), hash(self.positionals, h))
 
-@parity "dart2wasm/lib/records.dart:72 RecordShape.getPositionalIndex" @unported function get_positional_index(self::RecordShape, position::Int64) end
+"""Struct index of a positional field."""
+@parity "dart2wasm/lib/records.dart:72 RecordShape.getPositionalIndex" get_positional_index(self::RecordShape, position::Int64)::Int = FieldIndex_record_field_base() + position
 
-@parity "dart2wasm/lib/records.dart:75 RecordShape.getNameIndex" @unported function get_name_index(self::RecordShape, name::String) end
+"""Struct index of a named field; a name not in the record rejects, located, where dart throws."""
+@parity "dart2wasm/lib/records.dart:75 RecordShape.getNameIndex" function get_name_index(self::RecordShape, name::String)::Int
+    local i = findfirst(p -> first(p) == name, self._names)
+    i === nothing && reject!(Internal("dart2wasm/lib/records.dart:75 RecordImplementation.getNameIndex: name $name not in record: $(sprint(show, self))"), "RecordShape.getNameIndex")
+    return FieldIndex_record_field_base() + last(self._names[i])
+end
