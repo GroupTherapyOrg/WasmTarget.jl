@@ -498,7 +498,48 @@ clusters.
     return cluster.representation
 end
 
-@parity "dart2wasm/lib/closures.dart:562 ClosureLayouter._createRepresentation" @unported function _create_representation(self::ClosureLayouter, type_count::Int64, max_positional_count::Int64, names::Vector{String}, parent::Union{Nothing,ClosureRepresentation}, index_of_combination::Union{Nothing,Dict{NameCombination,Int64}}, param_counts) end
+"""
+Creates the representation of a closure signature: a vtable struct below its parent's (or the
+non-generic vtable base), a closure struct below its parent's (or the closure base) whose vtable
+field is the new vtable, and a vtable entry per parameter count, a function of the context and the
+positional arguments.
+
+dart's generic branch (a type count above 0) adds the instantiation function, the instantiation
+context and the instantiation thunks. A Julia function takes no type arguments, so no Julia
+representation has a type count, and that branch rejects as `Internal`.
+"""
+@parity "dart2wasm/lib/closures.dart:562 ClosureLayouter._createRepresentation" function _create_representation(self::ClosureLayouter, type_count::Int64, max_positional_count::Int64, names::Vector{String},
+        parent::Union{Nothing,ClosureRepresentation}, index_of_combination::Union{Nothing,Vector{Pair{NameCombination,Int}}},
+        param_counts::Vector{Int})::ClosureRepresentation
+    local at = "dart2wasm/lib/closures.dart:562 ClosureLayouter._createRepresentation"
+    type_count > 0 && reject!(Internal("$at: a Julia function takes no type arguments, so no representation is generic"), at)
+    local translator = self.translator
+    local name_tags = String["$type_count", "$max_positional_count", names...]
+    local vtable_name = join(["#Vtable"; name_tags], "-")
+    local closure_name = join(["#Closure"; name_tags], "-")
+    local parent_vtable_struct = parent !== nothing ? parent.vtable_struct : self.non_generic_vtable_base_struct[]
+    local vtable_struct = _define_struct(self, vtable_name; super_type = parent_vtable_struct)
+    # Define a new struct type for the closure, extending [closureBaseStruct] directly or indirectly,
+    # and install a new vtable struct (which is a subtype of the vtable struct of the
+    # [closureBaseStruct]).
+    local closure_struct_super = parent !== nothing ? parent.closure_struct : self.closure_base_struct[]
+    local closure_struct = _define_struct(self, closure_name; super_type = closure_struct_super)
+    get(closure_struct.field_names, 3, nothing) == "vtable" ||
+        reject!(Internal("$at: the closure struct's field 3 is not its vtable"), at)
+    closure_struct.fields[3 + 1] = WasmBuilder.IR.FieldType(WasmBuilder.IR.RefType_def(vtable_struct; nullable = false); mutable = false)
+    # Add vtable fields for additional entry points relative to the parent.
+    for param_count in param_counts
+        local entry = WasmBuilder.define_function(types_builder(translator),
+            WasmBuilder.IR.ValueType[closure_context_field_type(); fill(top_type(self), param_count)],
+            WasmBuilder.IR.ValueType[top_type(self)])
+        local index = length(vtable_struct.fields)
+        push!(vtable_struct.fields, WasmBuilder.IR.FieldType(WasmBuilder.IR.RefType_def(entry; nullable = false); mutable = false))
+        vtable_struct.field_names[index] = "closureCallEntry-$type_count-$param_count"
+    end
+    local vtable_base_index = length(self.non_generic_vtable_base_struct[].fields)
+    return ClosureRepresentation(translator, vtable_base_index, type_count, max_positional_count, vtable_struct, closure_struct,
+                                 index_of_combination, nothing)
+end
 
 # a generic closure's instantiation (dart's `f<int>`); a Julia function takes no type arguments, so
 # no representation has a type count and no closure is instantiated

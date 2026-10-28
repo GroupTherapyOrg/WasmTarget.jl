@@ -129,9 +129,13 @@ end
     D.compute_clusters(l)
     local r = D._representations_for_counts(l, 0, 1)
     @test r.cluster_for_name["a"] === r.cluster_for_name["d"] && r.cluster_for_name["a"].names == ["a", "b", "d"]
-    # building a representation reaches the unported vtable layout, a located rejection
+    # building a representation defines its structs in the main module, which the translator builds
+    # later; a read before rejects, located. A generic one rejects first, a Julia function taking no
+    # type arguments
     local e = try; D.get_closure_representation(l, 0, 1, String[]); nothing; catch x; x; end
-    @test e isa W.RejectionError && e.rejection isa W.Unported
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+    local eg = try; D._create_representation(l, 1, 0, String[], nothing, nothing, Int[0]); nothing; catch x; x; end
+    @test eg isa W.RejectionError && eg.rejection isa W.Internal && occursin("no type arguments", eg.rejection.site)
     # Julia has no function types and no generic instantiation: those paths reject as Internal
     local e2 = try; l.function_type_type[]; nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Internal
