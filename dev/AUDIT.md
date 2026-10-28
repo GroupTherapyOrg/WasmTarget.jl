@@ -4208,3 +4208,73 @@ Resolution: this entry lands alone, as one commit, prose only, and fixes nothing
 a94bf136; A41S17, A41S18, A42S1, A42S2, A43S1 and A45S5 by 59c80dcc; A41S10 by f69d97f9; A41S11 by 93b7ecea; A41S14 by
 98b5fd9c; A41E8 and A41E9 by aa2e552a. A47S1 is open on MARCH 1.D. A47E1 is open on MARCH 1.T. A47E2 is open on MARCH
 1.A6. A47E3 is open on MARCH 1.L.
+
+## 2026-10-28 — audited through 34065d0e (360363ab..34065d0e: the closures' Kernel visitors [out], C2's LLVM anchor, the startup flag and constant initializers, entry 47, one ship per lane, LoopInfo, CFGSort, CFGStackify, the FixIrreducible model, the selectors, the field check, barrel exports, closureInfo, saturating truncations, throw_ref, PiNode, one progress total, the rest of the intrinsics)
+
+The forty-eighth audit, beside the work, covers 0ff72a54 (closures.dart's Kernel visitors [out]), be1a65ef (C2 admits
+an @parity anchor at the llvm pin; `Charter-change: C2 — Dale 2026-10-28: "yes" (to the wording …)`), 025b30cc
+(`_initialize_at_startup` false; a binding's initializer only when const and mutation-free), c1db3621 (ParameterInfo's
+sentinel, local functions, merge), 3a253fc3 (WasmI32 and wasm array constants), 4ddec0f3 (entry 47; its author's),
+a5621640 (one ship per lane; the header says what is checked where), b8b8d61f (LoopInfo over Julia's CFG), afa34011
+(SelectorInfo, DynamicSelector), cfafd72e (`skeleton.jl diff` checks each filled struct's dart fields), 0a3deefe
+(DartGlobals over the bindings the closed world reads), d063a327 (the barrel files' export directives), ce722aa5 and
+465f1738 (closureInfo is Function's), f5ea3cba (RuntimeTypeInformation's tables against Julia's `<:`), 02ae4bf2
+(fptosi and fptoui saturate; A47S1), 5cf29a7f (answered definitions' reasons in Julia's terms), f42f5f39 (throw_ref
+takes an exnref; element expressions; check_forward over every loaded module; A45S1, A45S3), 517aac7a (CFGSort), b166efb6
+(CFGStackify), c85ad6af (a PiNode as dart's unchecked AsExpression), fe3ad4d0 (wasm_builder_reach's ruling cited),
+ee829408 (dev/formal/FixIrreducible.tla), 81103f31 (src progress counts the generator's definitions) and 34065d0e (the
+remainder of intrinsics.dart). The LLVM ports (b8b8d61f, 517aac7a, b166efb6, ee829408) are read against the llvm pin by a
+sub-audit whose report joins entry 49. Every finding rests on one exact command, quoted. Standing items. The total:
+`julia dev/skeleton.jl count` in a scratch worktree of each commit gives 3498 at 0ff72a54's parent, 3449 at 0ff72a54
+(closures.dart 112 → 63: its 15 rows, _CaptureFinder and _ContextCollector with their members and ClosureLayouter's
+thirteen walkers), 3449 at afa34011's parent and 3446 at afa34011 (DynamicCallSiteCollector's visitDynamicInvocation,
+visitDynamicGet and visitDynamicSet); since 81103f31 the progress line reads the same total ("src: 2808 of 3446"). Each
+row names the Julia step that does the work: lowering's closure conversion, and the trim verifier admitting no call it
+cannot resolve (D32). Traps: 02ae4bf2 lowers fptosi and fptoui to the saturating truncations (0xfc prefix), its test
+checking the trapping opcodes are not emitted; 34065d0e adds no trapping instruction (`git show 34065d0e -- src | grep
+'^+' | grep -c 'unreachable(\|ref_cast(\|_trunc_f\|_div_[su](\|_rem_[su]('` gives 0); c85ad6af's PiNode reaches
+convertType's ref.cast only for a narrowing Julia's inference proved, a cast that cannot fail. Test integrity: compile()
+has not landed; the first entry of its own follows it. Findings A48S1 and A48E1.
+
+Area: builder — f42f5f39 fixes A45S1 (throw_ref verifies an exnref and refuses otherwise, dart's gap fixed at its
+source) and the inventory's partial row (an element expression's result checked against its table's element type: 0 of
+the 22 rules missing). d063a327 ports the barrel files' `export … show/hide` directives as `@dart_export`, Julia `public`
+in their module, checked at load against the pin; sound (precedent: dart's export, Rust's `pub use`).
+
+Area: collection and planning — 025b30cc fixes A45S4: no pragma answers false (util.dart:64's `return null;`), and a
+binding's value is its initializer only when it is const and `Base.ismutationfree` of its type, since a module's
+`__init__` runs again at load; Julia's answer, D3. 0a3deefe counts the closed world's global bindings as dart's static
+fields, typed by `Core.get_binding_type`. ce722aa5's closureInfo is Function's class, the supertype of every function
+object. afa34011's dispatch tables are empty by Julia's answer, the same code filling them were the subset to admit
+dynamic calls, as the lead's rule wants of a runtime structure. (A48S1, low) The rule says the dispatch tables are never
+[out], and afa34011's three rows sit in dynamic_dispatch_table.dart: they take out DynamicCallSiteCollector's visitors, a
+Kernel walk, not the table, so they meet kind (b); the file's header should say which of its definitions are the
+structure (ported) and which the walk ([out]), so the next row there is read against that line.
+
+stopgap in disguise: the [out] rows are an exact list, each with its reason, read by the generator; the field check
+(cfafd72e) is a check that `diff` runs, not yet a landing's (A48E1).
+precedent: the initializer rule, juliac's image and Julia's `__init__`; closureInfo, Julia's Function; the export
+directives, dart's show/hide and Rust's `pub use`.
+
+Area: emission and diagnostics — 34065d0e: generateEqualsIntrinsic lowers Base's `==` on two operands of one type at
+its own width to i32.eq, i64.eq, f32.eq or f64.eq, which compute Base's answer (bit equality of integers, IEEE equality
+of floats: NaN unequal, 0.0 == -0.0); the unary map folds a literal operand as Julia computes it. 02ae4bf2 fixes A47S1
+(native and node agree on unsafe_trunc of NaN, ±1e30, ±3.7 per its message; its test checks the opcodes). Sound.
+
+Area: enforcement and prose — every hunk of a5621640, cfafd72e, 81103f31, be1a65ef and fe3ad4d0. be1a65ef's trailer
+follows 143876a4's form and quotes Dale's "yes" to the wording, which D42's ledger row supports ("julia compiler ITSELF
+along with another language like RUST or c-sharp"). 81103f31 fixes A46S2's two totals: the progress line's total is the
+generator's, a definition ported when no stub is left at it, so the 93 enum values and field accessors count no more;
+A47E2 stands, a definition answered by a rejection still counting as ported until the three-way count the lead routed
+to wt3-skeleton lands. a5621640 fixes A47E3. (A48E1, medium) The generator's diff still runs in no landing:
+cfafd72e's own words, "`diff` is not yet a landing gate", and `git show 34065d0e:dev/check.sh | grep -c skeleton` gives
+0, while its new field check reports 242 missing dart fields on wt2 (Translator's 201 KernelNodes mixin fields among
+them). A46S2's gate half stands: a port that drops a stub or a field lands unseen, and the 100% gate the lead set (stubs
+at 0) cannot hold until the diff is in every check. Requirements: D5 (A48E1); the [out] rule (A48S1); no lock fired
+inside its band.
+
+Landing times: entry 47 landed with the median of five shown by ship; a5621640 adds the per-lane slot.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A47S1 is fixed by 02ae4bf2; A45S4
+by 025b30cc; A45S1 and A45S3 by f42f5f39; A47E3 by a5621640; A41S9 by cfafd72e for `diff`; A46S2's two totals by
+81103f31. A48S1 is open on MARCH 1.A4. A48E1 is open on MARCH 1.A6.
