@@ -39,6 +39,8 @@ import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 # ported code rejects where dart throws (src/julia/reject.jl); dart's `late final` fields (src/julia/late.jl);
 # dart's insertion-ordered Map and Set (src/julia/linked_hash_map.jl)
 import ..reject!, ..Internal, ..Unported, ..Unquarantined, ..OutsideSubset, ..Late, ..LinkedHashMap, ..LinkedHashSet
+# wasm-opt over a module's bytes, dart's runWasmOpt (src/julia/wasm_opt.jl)
+import ..run_wasm_opt
 # vm's UnionFind, which closures.dart imports (src/julia/union_find.jl)
 import ..UnionFind, ..uf_add!, ..uf_find!, ..uf_union!
 # the forward declaration of Closures, which Lambda points back to (src/julia/forward.jl)

@@ -57,9 +57,18 @@ emitted module's file name to its bytes. That is the one departure from dart's c
 end
 
 """
-OptResult's dart fields: `mainWasmFile`, `numModules`.
+The optimizer's result: the main wasm module and the number of modules wasm-opt rewrote. As
+CodegenResult does, it holds each optimized module's bytes by file name (`wasm_files`), where dart
+overwrites each module's file: the one departure.
 """
-@parity "dart2wasm/lib/compile.dart:101 OptResult" @unported struct OptResult end
+@parity "dart2wasm/lib/compile.dart:101 OptResult" struct OptResult
+    main_wasm_file::String
+    num_modules::Int
+    wasm_files::LinkedHashMap{String,Vector{UInt8}}
+    # the struct's one constructor, tagged; dart's constructor at :105 is its outer function
+    OptResult(::Val{:_}, main_wasm_file::String, num_modules::Int, wasm_files::LinkedHashMap{String,Vector{UInt8}}) =
+        new(main_wasm_file, num_modules, wasm_files)
+end
 
 @parity "dart2wasm/lib/compile.dart:108 CompilationError" @closed const CompilationError = Union{CFECrashError, CFECompileTimeErrors}
 
@@ -90,7 +99,8 @@ _RecordClassesRepository's dart fields: `mapping`.
     return CodegenResult(Val(:_), main_wasm_file, module_ids, wasm_files)
 end
 
-@parity "dart2wasm/lib/compile.dart:105 OptResult" @unported function OptResult(main_wasm_file, num_modules) end
+@parity "dart2wasm/lib/compile.dart:105 OptResult" OptResult(main_wasm_file::String, num_modules::Int, wasm_files::LinkedHashMap{String,Vector{UInt8}})::OptResult =
+    OptResult(Val(:_), main_wasm_file, num_modules, wasm_files)
 
 @parity "dart2wasm/lib/compile.dart:117 CFECrashError" @unported function CFECrashError(error, stack_trace) end
 
@@ -100,15 +110,59 @@ end
 
 @parity "dart2wasm/lib/compile.dart:138 librariesToIndex" @unported function libraries_to_index(mode::Mode) end
 
-@parity "dart2wasm/lib/compile.dart:159 _binaryenFlags" @unported function _binaryen_flags() end
+"""wasm-opt's flags for one module, dart's, verbatim (compile.dart:159-183)."""
+@parity "dart2wasm/lib/compile.dart:159 _binaryenFlags" _binaryen_flags()::Vector{String} = String[
+    "--enable-gc",
+    "--enable-reference-types",
+    "--enable-multivalue",
+    "--enable-exception-handling",
+    "--enable-nontrapping-float-to-int",
+    "--enable-sign-ext",
+    "--enable-bulk-memory",
+    "--enable-threads",
+    "--enable-simd",
+    "--closed-world",
+    "--traps-never-happen",
+    "--string-lifting",
+    "--pass-arg=string-constants-module@",
+    "--type-unfinalizing",
+    "-Os",
+    "--type-ssa",
+    "--gufa",
+    "-Os",
+    "--type-merging",
+    "--string-lowering-magic-imports-assert",
+    "-Os",
+    "--type-finalizing",
+    "--minimize-rec-groups",
+]
 
-@parity "dart2wasm/lib/compile.dart:185 _binaryenFlagsMultiModule" @unported function _binaryen_flags_multi_module() end
+"""wasm-opt's flags when the program is split into modules, dart's, verbatim (compile.dart:185-203)."""
+@parity "dart2wasm/lib/compile.dart:185 _binaryenFlagsMultiModule" _binaryen_flags_multi_module()::Vector{String} = String[
+    "--enable-gc",
+    "--enable-reference-types",
+    "--enable-multivalue",
+    "--enable-exception-handling",
+    "--enable-nontrapping-float-to-int",
+    "--enable-sign-ext",
+    "--enable-bulk-memory",
+    "--enable-threads",
+    "--enable-simd",
+    "--traps-never-happen",
+    "--string-lifting",
+    "--pass-arg=string-constants-module@",
+    "-Os",
+    "--gufa",
+    "-Os",
+    "--string-lowering-magic-imports-assert",
+    "-Os",
+]
 
 """
 Compile the program `world`, Julia's trim verifier having accepted it, running `options.phases`:
 cfe and tfa are the world as given (Julia's front end and its trim inference, CfeResult and
-TfaResult), codegen translates it to its modules (CodegenResult). The opt phase (wasm-opt) comes with
-the next commit; asked for now, it rejects, located.
+TfaResult), codegen translates it to its modules (CodegenResult), opt runs wasm-opt over them
+(OptResult).
 
 dart's compile reads the program from its main URI and writes each phase's output through its file
 manager; a Julia program is the ClosedWorld check_subset made, and the result holds the bytes
@@ -119,6 +173,7 @@ the phases read.
     local at = "dart2wasm/lib/compile.dart:216 compile"
     local cfe_result::Union{CfeResult,Nothing} = nothing
     local tfa_result::Union{TfaResult,Nothing} = nothing
+    local codegen_result::Union{CodegenResult,Nothing} = nothing
     local last_result::Union{CompilationResult,Nothing} = nothing
     for phase in options.phases
         if phase == CompilerPhase_cfe
@@ -129,9 +184,13 @@ the phases read.
             last_result = tfa_result
         elseif phase == CompilerPhase_codegen
             local tfa = tfa_result === nothing ? _run_tfa_phase(something(cfe_result, CfeResult(world)), options) : tfa_result
-            last_result = _run_codegen_phase(tfa, options)
+            codegen_result = _run_codegen_phase(tfa, options)
+            last_result = codegen_result
         elseif phase == CompilerPhase_opt
-            reject!(Unported("dart2wasm/lib/compile.dart:711 _runOptPhase"), at)
+            # dart reads the codegen phase's files when it ran before (_loadCodegenResult); a library
+            # compile has no files, so opt follows codegen in the same compile
+            codegen_result === nothing && reject!(Unquarantined("src/compile.jl compile: the opt phase without codegen before it, whose files a library compile has none of"), at)
+            last_result = _run_opt_phase(codegen_result, options)
         else
             reject!(Internal("$at: the phase $phase"), at)
         end
@@ -193,7 +252,33 @@ module (js/runtime_generator.dart), not yet ported: it rejects, located.
     return CodegenResult(options.output_file, module_ids, wasm_files)
 end
 
-@parity "dart2wasm/lib/compile.dart:711 _runOptPhase" @unported function _run_opt_phase(codegen_result::CodegenResult, options::WasmCompilerOptions, io_manager::NoCounterpart) end
+"""
+Run wasm-opt over each module to optimize (the options' ids, else every emitted module's), with
+dart's flags, toolchain annotations stripped as asked and module names emitted, and `-g` unless the
+names are stripped (io_util.dart's runWasmOpt). dart runs the modules in a pool of processes; here
+one after the other. dart's saveUnopt copies the unoptimized file aside; the CodegenResult a caller
+holds is that module's bytes. A failure of wasm-opt rejects, located (src/julia/wasm_opt.jl).
+"""
+@parity "dart2wasm/lib/compile.dart:711 _runOptPhase" function _run_opt_phase(codegen_result::CodegenResult, options::WasmCompilerOptions)::OptResult
+    local at = "dart2wasm/lib/compile.dart:711 _runOptPhase"
+    local module_ids_to_optimize = isempty(options.module_ids_to_optimize) ? codegen_result.module_ids : options.module_ids_to_optimize
+    local num_modules = length(module_ids_to_optimize)
+    local wasm_opt_flags = String[(use_multi_module_opt(options) ? _binaryen_flags_multi_module() : _binaryen_flags())...]
+    options.strip_toolchain_annotations && push!(wasm_opt_flags, "--strip-toolchain-annotations")
+    # dart passes --emit-module-names, which keeps the module's name in the name section; wasm-opt 130,
+    # Binaryen_jll's newest and the one pinned (dev/PARITY_MASTER.md), predates it, dart's binaryen
+    # rev being newer: the one gap, the name section alone, the code untouched
+    options.strip_wasm || push!(wasm_opt_flags, "-g")
+    local wasm_files = LinkedHashMap{String,Vector{UInt8}}()
+    for module_id in sort!(collect(module_ids_to_optimize))
+        local name = WasmCompilerOptions_module_name_for_id(codegen_result.main_wasm_file, module_id)
+        local bytes = get(codegen_result.wasm_files, name, nothing)
+        bytes === nothing && reject!(Internal("$at: no module $name was emitted"), at)
+        options.translator_options.verbose && println("Running wasm-opt $wasm_opt_flags on $name")
+        wasm_files[name] = run_wasm_opt(bytes, wasm_opt_flags, at)
+    end
+    return OptResult(options.output_file, num_modules, wasm_files)
+end
 
 # deferred loading is out of scope (dev/PARITY_MASTER.md): its strategy and the multi-module stress
 # test's reject, located; every other compile takes the default strategy, one module

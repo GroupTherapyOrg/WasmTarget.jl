@@ -33,6 +33,18 @@ MachineFunction's blocks and MachineDominatorTree. The formal statement the mode
 Norman Ramsey, "Beyond Relooper: recursive translation of unstructured control flow to structured
 control flow", ICFP 2022 (GHC's wasm backend, `GHC.Wasm.ControlFlow.FromCmm`).
 
+## The optimizer: wasm-opt, dart's opt phase
+
+dart2wasm's opt phase (`compile.dart:711`, its flags `:159` and `:185` verbatim) runs Binaryen's
+wasm-opt over each module, and the user-facing `dart compile wasm` runs it by default
+(`pkg/dartdev/lib/src/commands/compile.dart:874-875`); `WasmTarget.compile` does the same
+(`optimize = false` leaves it out). wasm-opt comes from **Binaryen_jll `0.130.0`** (wasm-opt
+version 130), pinned in `Project.toml`. dart's own binaryen at the pin is rev
+**`9926156a583cec3d22d521232b31c70fa9a87dc1`** (`DEPS`, `binaryen_rev`), newer than 130: the gap is
+one flag, `--emit-module-names` (the module's name kept in the name section), which wasm-opt 130
+lacks and the opt phase leaves out. wasm-opt's output is not built by WasmTarget's builder, so the
+differential runner checks the optimized module against native Julia beside the unoptimized one.
+
 ## Scope
 
 A reachable construct outside the supported surface rejects loudly and located
