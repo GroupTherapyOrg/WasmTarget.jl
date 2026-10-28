@@ -358,3 +358,41 @@ end
     local e2 = rejection(() -> D.translate_statement(g, W.NirPi(W.NirArgument(2), Int32), nothing))
     @test !(e2.rejection isa W.Unquarantined)
 end
+
+@testset "code_generator.dart: MacroAssembler's class-id search, loops and tables" begin
+    local B = W.WasmBuilder
+    # f(classId) = whether it lies in `ranges`, through emitClassIdRangeCheck: a linear search for three
+    # ranges or fewer, a bisection beyond; each module accepted by the builder at every instruction
+    local range_module(ranges) = begin
+        local mb = B.ModuleBuilder("m", nothing)
+        local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[IR.NumType_i32], IR.ValueType[IR.NumType_i32]), "f")
+        local b = B.body(fb)
+        B.local_get(b, B.locals(fb)[1])
+        D.emit_class_id_range_check(b, ranges)
+        B.var"end"(b)
+        local s = B.Serializer(); B.serialize(s, B.build(mb)); B.data(s)
+    end
+    # run by node over class ids 0..45 each answers Julia's `any(r -> contains(r, id), ranges)` (the
+    # commit records the differential)
+    for ranges in ([D.Range(3, 3)], [D.Range(1, 2), D.Range(5, 9)],
+                   [D.Range(0, 0), D.Range(2, 4), D.Range(7, 7), D.Range(10, 20), D.Range(30, 31)],
+                   [D.Range(i, i + 1) for i in 0:4:40])
+        @test range_module(ranges)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    end
+    # an empty search with no miss is WasmTarget's own defect
+    local mb = B.ModuleBuilder("m", nothing)
+    local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[IR.NumType_i32], IR.ValueType[IR.NumType_i32]), "f")
+    @test rejection(() -> D._linear_class_id_search(B.body(fb), NamedTuple{(:range, :value), Tuple{D.Range, Nothing}}[], IR.ValueType[], _ -> nothing, nothing)).rejection isa W.Internal
+    # incrementingLoop and emitDenseTableBranch build valid control: a sum of 0..n-1 and a three-way table
+    local mb2 = B.ModuleBuilder("m", nothing)
+    local fb2 = B.define(mb2.functions[], B.define_function(mb2.types[], IR.ValueType[IR.NumType_i32], IR.ValueType[IR.NumType_i32]), "g")
+    local b2 = B.body(fb2)
+    local acc = B.add_local(b2, IR.NumType_i32)
+    D.incrementing_loop(b2; push_start = () -> B.i32_const(b2, 0), push_limit = () -> B.local_get(b2, B.locals(fb2)[1]),
+        gen_body = v -> (B.local_get(b2, acc); B.local_get(b2, v); B.i32_add(b2); B.local_set(b2, acc)))
+    D.emit_dense_table_branch(b2, IR.ValueType[IR.NumType_i32], 3, () -> B.local_get(b2, acc),
+        i -> B.i32_const(b2, 10 * (i + 1)), () -> B.i32_const(b2, -1))
+    B.var"end"(b2)
+    local s2 = B.Serializer(); B.serialize(s2, B.build(mb2))
+    @test B.data(s2)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+end

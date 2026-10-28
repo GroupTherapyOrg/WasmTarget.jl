@@ -1125,19 +1125,221 @@ end
     return outputs
 end
 
-@parity "dart2wasm/lib/code_generator.dart:5573 MacroAssembler.emitDenseTableBranch" @unported function emit_dense_table_branch(self::WasmBuilder.InstructionsBuilder, outputs::Vector{WasmBuilder.IR.ValueType}, n::Int64, push_branch_expression::Function, handle_case::Function, handle_default::Function) end
+@parity "dart2wasm/lib/code_generator.dart:5573 MacroAssembler.emitDenseTableBranch" function emit_dense_table_branch(self::WasmBuilder.InstructionsBuilder, outputs::Vector{WasmBuilder.IR.ValueType}, n::Int, push_branch_expression::Function, handle_case::Function, handle_default::Function)::Nothing
+    local done = WasmBuilder.block(self, WasmBuilder.IR.ValueType[], outputs)
+    local default_case = WasmBuilder.block(self)
+    local label_stack = WasmBuilder.Label[]
+    for _ in 0:n-1
+        push!(label_stack, WasmBuilder.block(self))
+    end
+    push_branch_expression()
+    WasmBuilder.br_table(self, label_stack, default_case)
+    for i in n-1:-1:0
+        WasmBuilder.var"end"(self)
+        handle_case(i)
+        WasmBuilder.br(self, done)
+    end
+    WasmBuilder.var"end"(self) # defaultCase
+    handle_default()
+    WasmBuilder.var"end"(self) # done
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5600 MacroAssembler.incrementingLoop" @unported function incrementing_loop(self::WasmBuilder.InstructionsBuilder; push_start::Function, push_limit::Function, gen_body::Function, step::Int64 = 1) end
+@parity "dart2wasm/lib/code_generator.dart:5600 MacroAssembler.incrementingLoop" function incrementing_loop(self::WasmBuilder.InstructionsBuilder; push_start::Function, push_limit::Function, gen_body::Function, step::Int = 1)::Nothing
+    local end_loop = WasmBuilder.block(self)
+    local limit_var = WasmBuilder.add_local(self, WasmBuilder.IR.NumType_i32)
+    local loop_var = WasmBuilder.add_local(self, WasmBuilder.IR.NumType_i32)
+    push_limit()
+    WasmBuilder.local_set(self, limit_var)
+    push_start()
+    WasmBuilder.local_set(self, loop_var)
+    local loop_label = WasmBuilder.loop(self)
+    WasmBuilder.local_get(self, loop_var)
+    WasmBuilder.local_get(self, limit_var)
+    WasmBuilder.i32_ge_u(self)
+    WasmBuilder.br_if(self, end_loop)
+    gen_body(loop_var)
+    WasmBuilder.local_get(self, loop_var)
+    WasmBuilder.i32_const(self, step)
+    WasmBuilder.i32_add(self)
+    WasmBuilder.local_set(self, loop_var)
+    WasmBuilder.br(self, loop_label)
+    WasmBuilder.var"end"(self)
+    WasmBuilder.var"end"(self)
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5636 MacroAssembler.concatenateWasmArrays" @unported function concatenate_wasm_arrays(self::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType; push_default_element::Function) end
+# `[ref Array] [ref Array] -> [ref Array]`: the two arrays on the stack, of one type, joined into a new
+# one, `push_default_element` the filler that holds space until the values are copied
+@parity "dart2wasm/lib/code_generator.dart:5636 MacroAssembler.concatenateWasmArrays" function concatenate_wasm_arrays(self::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType; push_default_element::Function)::Nothing
+    local array_ref_type = WasmBuilder.IR.RefType(array_type; nullable = false)
+    local new_array = WasmBuilder.add_local(self, array_ref_type)
+    local old_array = WasmBuilder.add_local(self, array_ref_type)
+    local new_array_len = WasmBuilder.add_local(self, WasmBuilder.IR.NumType_i32)
+    local old_array_len = WasmBuilder.add_local(self, WasmBuilder.IR.NumType_i32)
+    local joined_array = WasmBuilder.add_local(self, array_ref_type)
+    WasmBuilder.local_set(self, new_array)
+    WasmBuilder.local_set(self, old_array)
+    push_default_element(self, old_array, new_array)
+    WasmBuilder.local_get(self, new_array)
+    WasmBuilder.array_len(self)
+    WasmBuilder.local_set(self, new_array_len)
+    WasmBuilder.local_get(self, old_array)
+    WasmBuilder.array_len(self)
+    WasmBuilder.local_tee(self, old_array_len)
+    WasmBuilder.local_get(self, new_array_len)
+    WasmBuilder.i32_add(self)
+    WasmBuilder.array_new(self, array_type)
+    WasmBuilder.local_tee(self, joined_array)
+    WasmBuilder.i32_const(self, 0)
+    WasmBuilder.local_get(self, old_array)
+    WasmBuilder.i32_const(self, 0)
+    WasmBuilder.local_get(self, old_array_len)
+    WasmBuilder.array_copy(self, array_type, array_type)
+    WasmBuilder.local_get(self, joined_array)
+    WasmBuilder.local_get(self, old_array_len)
+    WasmBuilder.local_get(self, new_array)
+    WasmBuilder.i32_const(self, 0)
+    WasmBuilder.local_get(self, new_array_len)
+    WasmBuilder.array_copy(self, array_type, array_type)
+    WasmBuilder.local_get(self, joined_array)
+    WasmBuilder.var"end"(self)
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5684 MacroAssembler.emitClassIdRangeCheck" @unported function emit_class_id_range_check(self::WasmBuilder.InstructionsBuilder, ranges::Vector{Range}) end
+# `[i32] -> [i32]`: a class id consumed, whether it lies in one of `ranges` left as a bool
+@parity "dart2wasm/lib/code_generator.dart:5684 MacroAssembler.emitClassIdRangeCheck" function emit_class_id_range_check(self::WasmBuilder.InstructionsBuilder, ranges::Vector{Range})::Nothing
+    local range_values = [(range = r, value = nothing) for r in ranges]
+    class_id_search(self, range_values, WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i32],
+        _ -> WasmBuilder.i32_const(self, 1), () -> WasmBuilder.i32_const(self, 0))
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5709 MacroAssembler.classIdSearch" @unported function class_id_search(self::WasmBuilder.InstructionsBuilder, ranges::Vector{NamedTuple{(:range, :value)}}, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
+# `[i32] -> [outputs]`: a class id consumed, searched linearly or by bisection among `ranges`
+# (non-empty, non-overlapping and sorted); `match` called on a matching value, `miss` (if given) when
+# none matches, each leaving `outputs`
+@parity "dart2wasm/lib/code_generator.dart:5709 MacroAssembler.classIdSearch" function class_id_search(self::WasmBuilder.InstructionsBuilder, ranges::Vector{NamedTuple{(:range, :value), Tuple{Range, T}}}, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function})::Nothing where {T}
+    local linear_search = length(ranges) <= 3
+    if self.trace_enabled
+        WasmBuilder.comment(self, "Class id $(linear_search ? "linear" : "binary") search:")
+        for (; range, value) in ranges
+            WasmBuilder.comment(self, "  - $range -> $value")
+        end
+    end
+    if linear_search
+        _linear_class_id_search(self, ranges, outputs, match, miss)
+    else
+        _binary_class_id_search(self, ranges, outputs, match, miss)
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5729 MacroAssembler._binaryClassIdSearch" @unported function _binary_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges::Vector{NamedTuple{(:range, :value)}}, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
+@parity "dart2wasm/lib/code_generator.dart:5729 MacroAssembler._binaryClassIdSearch" function _binary_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges::Vector{NamedTuple{(:range, :value), Tuple{Range, T}}}, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function})::Nothing where {T}
+    local at = "dart2wasm/lib/code_generator.dart:5729 MacroAssembler._binaryClassIdSearch"
+    isempty(ranges) && miss === nothing && reject!(Internal("$at: no range and no miss"), at)
+    if miss !== nothing && isempty(ranges)
+        WasmBuilder.drop(self)
+        miss()
+        return nothing
+    end
+    local class_id = WasmBuilder.add_local(self, WasmBuilder.IR.NumType_i32)
+    WasmBuilder.local_set(self, class_id)
+    local done = WasmBuilder.block(self, WasmBuilder.IR.ValueType[], outputs)
+    local fail = WasmBuilder.block(self)
+    local search
+    search = (left::Int, right::Int, search_area::Range) -> begin
+        if left == right
+            local entry = ranges[left + 1]
+            local range = entry.range
+            contains_range(search_area, range) || reject!(Internal("$at: $range outside $search_area"), at)
+            if miss === nothing || contains_range(range, search_area)
+                match(entry.value)
+                WasmBuilder.br(self, done)
+                return nothing
+            end
+            WasmBuilder.local_get(self, class_id)
+            if length(range) == 1
+                WasmBuilder.i32_const(self, range.start)
+                WasmBuilder.i32_eq(self)
+            else
+                if search_area.end_ <= range.end_
+                    WasmBuilder.i32_const(self, range.start)
+                    WasmBuilder.i32_ge_u(self)
+                elseif range.start <= search_area.start
+                    WasmBuilder.i32_const(self, range.end_)
+                    WasmBuilder.i32_le_u(self)
+                else
+                    WasmBuilder.i32_const(self, range.start)
+                    WasmBuilder.i32_sub(self)
+                    WasmBuilder.i32_const(self, length(range))
+                    WasmBuilder.i32_lt_u(self)
+                end
+            end
+            WasmBuilder.if_(self)
+            match(entry.value)
+            WasmBuilder.br(self, done)
+            WasmBuilder.var"end"(self)
+            WasmBuilder.br(self, fail)
+            return nothing
+        end
+        local mid = div(left + right, 2)
+        local mid_range = ranges[mid + 1].range
+        WasmBuilder.local_get(self, class_id)
+        WasmBuilder.i32_const(self, mid_range.end_)
+        WasmBuilder.i32_le_u(self)
+        WasmBuilder.if_(self)
+        search(left, mid, Range(search_area.start, mid_range.end_))
+        WasmBuilder.var"end"(self)
+        search(mid + 1, right, Range(mid_range.end_ + 1, search_area.end_))
+        return nothing
+    end
+    search(0, length(ranges) - 1, Range(0, Int(0xffffffff)))
+    WasmBuilder.var"end"(self) # fail
+    if miss !== nothing
+        miss()
+        WasmBuilder.br(self, done)
+    else
+        WasmBuilder.unreachable(self)
+    end
+    WasmBuilder.var"end"(self) # done
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5805 MacroAssembler._linearClassIdSearch" @unported function _linear_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges::Vector{NamedTuple{(:range, :value)}}, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
+@parity "dart2wasm/lib/code_generator.dart:5805 MacroAssembler._linearClassIdSearch" function _linear_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges::Vector{NamedTuple{(:range, :value), Tuple{Range, T}}}, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function})::Nothing where {T}
+    local at = "dart2wasm/lib/code_generator.dart:5805 MacroAssembler._linearClassIdSearch"
+    isempty(ranges) && miss === nothing && reject!(Internal("$at: no range and no miss"), at)
+    if miss !== nothing && isempty(ranges)
+        WasmBuilder.drop(self)
+        miss()
+        return nothing
+    end
+    local class_id = WasmBuilder.add_local(self, WasmBuilder.IR.NumType_i32)
+    WasmBuilder.local_set(self, class_id)
+    local done = WasmBuilder.block(self, WasmBuilder.IR.ValueType[], outputs)
+    for (; range, value) in ranges
+        WasmBuilder.local_get(self, class_id)
+        WasmBuilder.i32_const(self, range.start)
+        if length(range) == 1
+            WasmBuilder.i32_eq(self)
+        else
+            WasmBuilder.i32_sub(self)
+            WasmBuilder.i32_const(self, length(range))
+            WasmBuilder.i32_lt_u(self)
+        end
+        WasmBuilder.if_(self)
+        match(value)
+        WasmBuilder.br(self, done)
+        WasmBuilder.var"end"(self)
+    end
+    if miss !== nothing
+        miss()
+        WasmBuilder.br(self, done)
+    else
+        WasmBuilder.unreachable(self)
+    end
+    WasmBuilder.var"end"(self) # done
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:5849 MacroAssembler.emitInstantiationClosureCheck" @unported function emit_instantiation_closure_check(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
 
@@ -1155,9 +1357,37 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext" @unported function clone_function_level_context(self::WasmBuilder.InstructionsBuilder, closures::Closures, context::Context, function_node::NirBody) end
 
-@parity "dart2wasm/lib/code_generator.dart:6035 MacroAssembler.invoke" @unported function MacroAssembler_invoke(self::WasmBuilder.InstructionsBuilder, target::CallTarget; force_inline::Bool = false) end
+@parity "dart2wasm/lib/code_generator.dart:6035 MacroAssembler.invoke" function MacroAssembler_invoke(self::WasmBuilder.InstructionsBuilder, target::CallTarget; force_inline::Bool = false)::Vector{WasmBuilder.IR.ValueType}
+    if supports_inlining(target)
+        if force_inline
+            WasmBuilder.comment(self, "Inlining $(name(target)), reason: forced")
+            return inline_call_to(self, target)
+        end
+        local decision = should_inline(target)
+        if decision.should_inline
+            WasmBuilder.comment(self, "Inlining $(name(target)), reason: $(decision.reason)")
+            return inline_call_to(self, target)
+        else
+            WasmBuilder.comment(self, "Not inlining, reason: $(decision.reason)")
+        end
+    end
+    WasmBuilder.comment(self, "Direct call to $(name(target))")
+    WasmBuilder.call(self, var"function"(target))
+    return emit_unreachable_if_no_result(self, target.signature.outputs)
+end
 
-@parity "dart2wasm/lib/code_generator.dart:6054 MacroAssembler.inlineCallTo" @unported function inline_call_to(self::WasmBuilder.InstructionsBuilder, target::CallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6054 MacroAssembler.inlineCallTo" function inline_call_to(self::WasmBuilder.InstructionsBuilder, target::CallTarget)::Vector{WasmBuilder.IR.ValueType}
+    supports_inlining(target) || reject!(Internal("dart2wasm/lib/code_generator.dart:6054 MacroAssembler.inlineCallTo: $(name(target)) does not support inlining"), "inlineCallTo")
+    local inlined_locals = WasmBuilder.IR.Local[WasmBuilder.add_local(self, t) for t in target.signature.inputs]
+    for local_ in reverse(inlined_locals)
+        WasmBuilder.local_set(self, local_)
+    end
+    local call_block = WasmBuilder.block(self, WasmBuilder.IR.ValueType[], target.signature.outputs)
+    return WasmBuilder.with_inlined_frame(self, name(target)) do
+        generate(inlining_code_gen(target), self, inlined_locals, call_block)
+        emit_unreachable_if_no_result(self, target.signature.outputs)
+    end
+end
 
 @parity "dart2wasm/lib/code_generator.dart:6070 MacroAssembler.pushObjectHeaderFields" function push_object_header_fields(self::WasmBuilder.InstructionsBuilder, translator::Translator, class_info::ClassInfo)::Nothing
     WasmBuilder.i32_const(self, class_id(class_info))
@@ -1165,11 +1395,57 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:6076 MacroAssembler.loadClassId" @unported function load_class_id(self::WasmBuilder.InstructionsBuilder, translator::Translator, receiver_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:6076 MacroAssembler.loadClassId" function load_class_id(self::WasmBuilder.InstructionsBuilder, translator::Translator, receiver_type::WasmBuilder.IR.ValueType)::Nothing
+    local at = "dart2wasm/lib/code_generator.dart:6076 MacroAssembler.loadClassId"
+    WasmBuilder.nullable(receiver_type) && reject!(Internal("$at: a nullable receiver $receiver_type"), at)
+    WasmBuilder.struct_get(self, translator.class_info_collector[].top_info[].struct_, FieldIndex_class_id())
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:6085 MacroAssembler.fillTableRange" @unported function fill_table_range(self::WasmBuilder.InstructionsBuilder, table::WasmBuilder.IR.AbstractTable, start::Int64, stride_width::Int64, fun::WasmBuilder.IR.BaseFunction) end
+@parity "dart2wasm/lib/code_generator.dart:6085 MacroAssembler.fillTableRange" function fill_table_range(self::WasmBuilder.InstructionsBuilder, table::WasmBuilder.IR.AbstractTable, start::Int, stride_width::Int, fun::WasmBuilder.IR.BaseFunction)::Nothing
+    WasmBuilder.i32_const(self, start)
+    WasmBuilder.ref_func(self, fun)
+    WasmBuilder.i32_const(self, stride_width)
+    WasmBuilder.table_fill(self, table)
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:6097 MacroAssembler.fillTableRangeWithIncreasingIntegers" @unported function fill_table_range_with_increasing_integers(self::WasmBuilder.InstructionsBuilder, table::WasmBuilder.IR.AbstractTable, start::Int64, stride_width::Int64, start_value::Int64) end
+@parity "dart2wasm/lib/code_generator.dart:6097 MacroAssembler.fillTableRangeWithIncreasingIntegers" function fill_table_range_with_increasing_integers(self::WasmBuilder.InstructionsBuilder, table::WasmBuilder.IR.AbstractTable, start::Int, stride_width::Int, start_value::Int)::Nothing
+    # index = start
+    local index = WasmBuilder.add_local(self, WasmBuilder.IR.NumType_i32)
+    WasmBuilder.i32_const(self, start)
+    WasmBuilder.local_set(self, index)
+    # value = startValue
+    local value = WasmBuilder.add_local(self, WasmBuilder.IR.NumType_i32)
+    WasmBuilder.i32_const(self, start_value)
+    WasmBuilder.local_set(self, value)
+    # while (index < (start + strideWidth)) { ... }
+    local done = WasmBuilder.block(self)
+    local next = WasmBuilder.loop(self)
+    WasmBuilder.local_get(self, index)
+    WasmBuilder.i32_const(self, start + stride_width)
+    WasmBuilder.i32_ge_u(self)
+    WasmBuilder.br_if(self, done)
+    # table[index] = value
+    WasmBuilder.local_get(self, index)
+    WasmBuilder.local_get(self, value)
+    WasmBuilder.i31_new(self)
+    WasmBuilder.table_set(self, table)
+    # index++
+    WasmBuilder.local_get(self, index)
+    WasmBuilder.i32_const(self, 1)
+    WasmBuilder.i32_add(self)
+    WasmBuilder.local_set(self, index)
+    # value++
+    WasmBuilder.local_get(self, value)
+    WasmBuilder.i32_const(self, 1)
+    WasmBuilder.i32_add(self)
+    WasmBuilder.local_set(self, value)
+    WasmBuilder.br(self, next)
+    WasmBuilder.var"end"(self) # next
+    WasmBuilder.var"end"(self) # done
+    return nothing
+end
 
 # dart's constructor of the abstract class, which each call target's constructor makes with its
 # signature; this line declares it and adds no method
