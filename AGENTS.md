@@ -47,6 +47,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D40** The rebuild always has a lane porting compiler src; a status leads with src progress.
 - **D41** Port dart's tests, Julia's answer the expected value; every dart test file has one entry.
 - **D42** Without a dart port, port Julia's compiler and LLVM's (pinned); invent no algorithm.
+- **D43** 100% port, then Julia and JS fuzzing, then drift re-audits; nothing bespoke before them.
 <!-- ledger:end -->
 
 ## How to work
