@@ -320,14 +320,47 @@ mirror_samples!(_nir_stmt, :NirStmt,
     return Type[ci.rettype]
 end
 
+# The token only this file holds: NirWorld's sole constructor takes it, so no code outside this file
+# makes a NirWorld (construction_check(::Val{:ClosedWorld}), src/julia/subset.jl).
+@quarantine "Julia has no private constructors; an unexported token held by this file alone stands in for one" Core.DataType struct _NirToken
+    _NirToken() = new()
+end
+
 """
-    build_nir(world::ClosedWorld, at::String) -> Vector{NirBody}
+    NirWorld
+
+The closed world in NIR, dart's Kernel `Component`: `bodies`, every function of the ClosedWorld Julia's
+trim verifier accepted, in Julia's order. Read as a list (iterate, index, length), never built as one.
+
+A typestate by construction: its one constructor takes the token `_NirToken`, which only this file
+holds, and `build_nir`, which takes a `ClosedWorld`, is its only caller, so a stage that takes a
+`NirWorld` (the Translator's component) is reached by a program Julia's verifier accepted alone; a
+`Vector{NirBody}` anyone can build would reopen that road (A41-M2).
+
+precedent(rust: typestate with a private constructor, the value made by one function of its module).
+Julia's differs: it has no private constructors, so the sole constructor and the token's are checked
+by reflection when the package loads (check_sole_constructor), with ClosedWorld's: the next state of the
+same typestate (construction_check(::Val{:ClosedWorld}), src/julia/subset.jl; L220).
+"""
+@quarantine "Julia has no private constructors; the NIR of a closed world is a typestate a token guards" Base.Vector struct NirWorld
+    bodies::Vector{NirBody}
+    NirWorld(::_NirToken, bodies::Vector{NirBody}) = new(bodies)
+end
+
+# the bodies read as a list: iterated, indexed and counted in Julia's order
+@quarantine "Julia's iteration protocol reads a NirWorld's bodies as a list" Base.iterate Base.iterate(w::NirWorld, i::Int = 1) = iterate(w.bodies, i)
+@quarantine "Julia's collection protocol counts a NirWorld's bodies" Base.length Base.length(w::NirWorld)::Int = length(w.bodies)
+@quarantine "Julia's collection protocol names a NirWorld's element type" Base.eltype Base.eltype(::Type{NirWorld}) = NirBody
+@quarantine "Julia's indexing reads a NirWorld's bodies by position" Base.getindex Base.getindex(w::NirWorld, i::Int)::NirBody = w.bodies[i]
+
+"""
+    build_nir(world::ClosedWorld, at::String) -> NirWorld
 
 Every function of the closed world Julia's trim verifier accepted, in NIR, in Julia's order: each
 statement its kind of `NirStmt`, each operand of `NirValue`, each type Julia's. A form outside the
 census rejects with `Unquarantined`, located at the compile `at` names.
 """
-@quarantine "the closed world Julia inferred comes as CodeInstance and CodeInfo pairs, read once" Core.CodeInfo function build_nir(world::ClosedWorld, at::String)::Vector{NirBody}
+@quarantine "the closed world Julia inferred comes as CodeInstance and CodeInfo pairs, read once" Core.CodeInfo function build_nir(world::ClosedWorld, at::String)::NirWorld
     local xs = world.codeinfos
     iseven(length(xs)) || reject!(Internal("src/julia/nir.jl: the closed world holds $(length(xs)) entries, not CodeInstance and CodeInfo pairs"), at)
     local bodies = NirBody[]
@@ -337,7 +370,7 @@ census rejects with `Unquarantined`, located at the compile `at` names.
             reject!(Internal("src/julia/nir.jl: the closed world's entry $k is a $(typeof(ci)) and $(typeof(src)), not a CodeInstance and its CodeInfo"), at)
         push!(bodies, NirBody(ci, NirStmt[_nir_stmt(st, at) for st in src.code], _nir_types(ci, src, at)))
     end
-    return bodies
+    return NirWorld(_NirToken(), bodies)
 end
 
 # the two closed sums' assertions, run when the package loads
@@ -414,13 +447,13 @@ located, its trailing tuple not yet read.
 end
 
 """
-    nir_body_of(bodies, mi) -> NirBody
+    nir_body_of(world, mi) -> NirBody
 
-The body among `bodies` (the closed world's NIR) Julia inferred for `mi`: dart's member's
+The body in `world` (the closed world's NIR) Julia inferred for `mi`: dart's member's
 `function.body`; a method the closed world lacks rejects, located.
 """
-@quarantine "a MethodInstance's body is the CodeInstance Julia inferred for it in the closed world" Core.MethodInstance function nir_body_of(bodies::Vector{NirBody}, mi::Core.MethodInstance)::NirBody
-    for nb in bodies
+@quarantine "a MethodInstance's body is the CodeInstance Julia inferred for it in the closed world" Core.MethodInstance function nir_body_of(world::NirWorld, mi::Core.MethodInstance)::NirBody
+    for nb in world
         nb.ci.def === mi && return nb
     end
     reject!(Internal("src/julia/nir.jl: the closed world holds no body for $mi"), "$mi")

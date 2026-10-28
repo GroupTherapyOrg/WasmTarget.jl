@@ -9,9 +9,9 @@
 @quarantine "a type is a value in Julia, its class one of Julia's kinds" Core.DataType const _KINDS = (DataType, UnionAll, Union, Core.TypeofBottom)
 
 """
-    closed_world_classes(bodies, at) -> Vector{DataType}
+    closed_world_classes(world, at) -> Vector{DataType}
 
-The classes of the closed world `bodies`, in the order its walk first meets them: each body in
+The classes of the closed world `world`, its NIR, in the order its walk first meets them: each body in
 order, its argument types (its MethodInstance's signature), then each statement's type, then its
 return type. A type meets the walk by Julia's own inferred form: a `Union` by its members, a
 `Vararg` by its element, a type as a value (`Type{X}`, or a `UnionAll` under `Type`) by its kind
@@ -24,10 +24,10 @@ Julia's differs: a program declares no class list, so the list is the types Juli
 values, each met once, and a parametric instance (`Vector{Int64}`) is a class of its own, as Julia's
 `supertype` gives it.
 """
-@quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values" Base.unwrap_unionall function closed_world_classes(bodies::Vector{NirBody}, at::String)::Vector{DataType}
+@quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values" Base.unwrap_unionall function closed_world_classes(world::NirWorld, at::String)::Vector{DataType}
     local out = DataType[]
     local seen = Base.IdSet{DataType}()
-    for b in bodies
+    for b in world
         foreach(t -> _meet_value!(out, seen, t, at), Base.unwrap_unionall(b.ci.def.specTypes).parameters)
         foreach(t -> _meet_value!(out, seen, t, at), b.types)
         _meet_value!(out, seen, b.ci.rettype, at)

@@ -111,7 +111,7 @@ the translator holds each collaborator.
 """
 @parity "dart2wasm/lib/translator.dart:96 Translator" struct Translator <: KernelNodes
     options::TranslatorOptions
-    component::Vector{NirBody}
+    component::NirWorld
     table_based_globals::Late{TableBasedGlobals}
     globals::Late{Globals}
     dart_globals::Late{DartGlobals}

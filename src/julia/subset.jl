@@ -79,9 +79,11 @@ numbers them.
 end
 
 # the typestate's assertion, run when the package loads: ClosedWorld and its token each have one
-# constructor method, both in this file, ClosedWorld's taking the token (a construction, L220)
+# constructor method, both in this file, ClosedWorld's taking the token (a construction, L220); and
+# its next state, src/julia/nir.jl's NirWorld, which build_nir makes from a ClosedWorld, the same
 @quarantine "the typestate's assertion, run when the package loads" Base.Val construction_check(::Val{:ClosedWorld})::Int =
-    check_sole_constructor(ClosedWorld, _SubsetToken, @__FILE__)
+    check_sole_constructor(ClosedWorld, _SubsetToken, @__FILE__) +
+    check_sole_constructor(NirWorld, _NirToken, joinpath(@__DIR__, "nir.jl"))
 
 # no method of WasmTarget but check_subset names the token or makes either: read in every method's
 # lowered code when the package loads. A stopgap, not a construction (L224): Julia has no module

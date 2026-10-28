@@ -32,7 +32,7 @@ The class of each record shape of the program. A Julia record value is an instan
 `Tuple` or `NamedTuple` class, which the closed world holds like any class (src/julia/classes.jl),
 with Base's `==`, `hash` and `show`. No class belongs to a shape, so the map is empty.
 """
-@parity "dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" generate_record_classes(component::Vector{NirBody})::Dict{RecordShape,DataType} = Dict{RecordShape,DataType}()
+@parity "dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" generate_record_classes(component::NirWorld)::Dict{RecordShape,DataType} = Dict{RecordShape,DataType}()
 
 """dart's `Object?`, Julia's `Any`, which holds `nothing`."""
 @parity "dart2wasm/lib/record_class_generator.dart:230 _RecordClassGenerator.nullableObjectType" nullable_object_type(self::_RecordClassGenerator)::Type = Any

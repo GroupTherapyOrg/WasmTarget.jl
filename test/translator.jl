@@ -30,7 +30,7 @@ end
     local W = WasmTarget
     local t = D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(standalone = true))
     # the program is the closed world's NIR, the entry's body among it
-    @test t.component isa Vector{W.NirBody} && !isempty(t.component)
+    @test t.component isa W.NirWorld && !isempty(t.component.bodies)
     @test D.is_standalone(t) && !D.is_standalone(D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions()))
     # a translator comes from a ClosedWorld alone, never from loose NIR bodies (audit M2)
     @test all(m -> any(p -> p === W.ClosedWorld, Base.unwrap_unionall(m.sig).parameters), methods(D.Translator))
