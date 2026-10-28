@@ -3,40 +3,108 @@
 
 @parity "wasm_builder/lib/src/ir/memory.dart:10 Memory" abstract type Memory end
 
-@parity "wasm_builder/lib/src/ir/memory.dart:65 DefinedMemory" @unported struct DefinedMemory <: Memory end
+"""A memory defined in a module."""
+@parity "wasm_builder/lib/src/ir/memory.dart:65 DefinedMemory" struct DefinedMemory <: Memory
+    finalizable_index::Finalizable{Int}
+    shared::Bool
+    min_size::Int
+    max_size::Union{Int,Nothing}
+    enclosing_module::AbstractModule
+    exported_name::Late{String}
+    # Indexable's `late final int _id = _globalId++`, numbered on its first read
+    _id::Late{Int}
+    # dart's constructor (line 66), the struct's one inner constructor, with Memory's (line 19)
+    function DefinedMemory(enclosing_module::AbstractModule, finalizable_index::Finalizable{Int}, shared::Bool, min_size::Int, max_size::Union{Int,Nothing})
+        # Memory's constructor asserts a shared memory's maximum size (memory.dart:26)
+        shared && max_size === nothing && reject!(Internal("wasm_builder/lib/src/ir/memory.dart:27 Memory: shared memory must specify a maximum size"), "DefinedMemory")
+        new(finalizable_index, shared, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+    end
+end
 
-"""
-ImportedMemory's dart fields: `module`, `name`.
-"""
-@parity "wasm_builder/lib/src/ir/memory.dart:100 ImportedMemory" @unported struct ImportedMemory <: Memory end
+"""An imported memory."""
+@parity "wasm_builder/lib/src/ir/memory.dart:100 ImportedMemory" struct ImportedMemory <: Memory
+    finalizable_index::Finalizable{Int}
+    shared::Bool
+    min_size::Int
+    max_size::Union{Int,Nothing}
+    enclosing_module::AbstractModule
+    exported_name::Late{String}
+    module_::String
+    name::String
+    # Indexable's `late final int _id = _globalId++`, numbered on its first read
+    _id::Late{Int}
+    # dart's constructor (line 106), the struct's one inner constructor, with Memory's (line 19)
+    function ImportedMemory(enclosing_module::AbstractModule, module_::String, name::String, finalizable_index::Finalizable{Int}, shared::Bool, min_size::Int, max_size::Union{Int,Nothing})
+        # Memory's constructor asserts a shared memory's maximum size (memory.dart:26)
+        shared && max_size === nothing && reject!(Internal("wasm_builder/lib/src/ir/memory.dart:27 Memory: shared memory must specify a maximum size"), "ImportedMemory")
+        new(finalizable_index, shared, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+    end
+end
 
-"""
-MemoryExport's dart fields: `memory`.
-"""
-@parity "wasm_builder/lib/src/ir/memory.dart:136 MemoryExport" @unported struct MemoryExport <: Export end
+@parity "wasm_builder/lib/src/ir/memory.dart:136 MemoryExport" struct MemoryExport <: Export
+    name::String
+    memory::Memory
+    # dart's constructor (line 139), the struct's one inner constructor
+    MemoryExport(name::String, memory::Memory) = new(name, memory)
+end
 
-@parity "wasm_builder/lib/src/ir/memory.dart:19 Memory" @unported function Memory(enclosing_module, finalizable_index, shared, min_size, optional...) end
+# dart's constructor of the abstract class assigns its fields and asserts a shared memory's maximum,
+# which each subclass's struct and its constructor do; this line declares the name and adds no method
+@parity "wasm_builder/lib/src/ir/memory.dart:19 Memory" function Memory end
 
-@parity "wasm_builder/lib/src/ir/memory.dart:31 Memory._serializeLimits" @unported function WasmBuilder._serialize_limits(self::Memory, s::WasmBuilder.Serializer) end
+@parity "wasm_builder/lib/src/ir/memory.dart:31 Memory._serializeLimits" function WasmBuilder._serialize_limits(s::WasmBuilder.Serializer, m::Memory)::Nothing
+    if m.shared
+        max_size = m.max_size::Int
+        WasmBuilder.write_byte(s, 0x03)
+        WasmBuilder.write_unsigned(s, m.min_size)
+        WasmBuilder.write_unsigned(s, max_size)
+    elseif m.max_size === nothing
+        WasmBuilder.write_byte(s, 0x00)
+        WasmBuilder.write_unsigned(s, m.min_size)
+    else
+        WasmBuilder.write_byte(s, 0x01)
+        WasmBuilder.write_unsigned(s, m.min_size)
+        WasmBuilder.write_unsigned(s, m.max_size)
+    end
+end
 
-@parity "wasm_builder/lib/src/ir/memory.dart:49 Memory.buildExport" @unported function WasmBuilder.build_export(self::Memory, name::String) end
+"""Export a memory from the module."""
+@parity "wasm_builder/lib/src/ir/memory.dart:49 Memory.buildExport" WasmBuilder.build_export(m::Memory, name::String)::Export = MemoryExport(name, m)
 
 @parity "wasm_builder/lib/src/ir/memory.dart:51 Memory.printTo" @unported function WasmBuilder.print_to(self::Memory, p) end
 
 @parity "wasm_builder/lib/src/ir/memory.dart:53 Memory._printType" @unported function WasmBuilder._print_type(self::Memory, p) end
 
-@parity "wasm_builder/lib/src/ir/memory.dart:66 DefinedMemory" @unported function DefinedMemory(enclosing_module, finalizable_index, shared, min_size, max_size) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/memory.dart:66 DefinedMemory" function DefinedMemory end
 
-@parity "wasm_builder/lib/src/ir/memory.dart:75 DefinedMemory.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::DefinedMemory) end
+@parity "wasm_builder/lib/src/ir/memory.dart:75 DefinedMemory.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, m::DefinedMemory)::Nothing = WasmBuilder._serialize_limits(s, m)
 
 @parity "wasm_builder/lib/src/ir/memory.dart:78 DefinedMemory.printTo" @unported function WasmBuilder.print_to(self::DefinedMemory, p) end
 
-@parity "wasm_builder/lib/src/ir/memory.dart:106 ImportedMemory" @unported function ImportedMemory(enclosing_module, module_, name, finalizable_index, shared, min_size, max_size) end
+# An imported memory's name is its import field name (memory.dart:104 `final String name`).
+@parity "wasm_builder/lib/src/ir/memory.dart:104 ImportedMemory.name" WasmBuilder.name(m::ImportedMemory)::String = m.name
 
-@parity "wasm_builder/lib/src/ir/memory.dart:117 ImportedMemory.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::ImportedMemory) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/memory.dart:106 ImportedMemory" function ImportedMemory end
+
+@parity "wasm_builder/lib/src/ir/memory.dart:117 ImportedMemory.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, m::ImportedMemory)::Nothing
+    WasmBuilder.write_name(s, m.module_)
+    WasmBuilder.write_name(s, m.name)
+    WasmBuilder.write_byte(s, 0x02)
+    WasmBuilder._serialize_limits(s, m)
+end
 
 @parity "wasm_builder/lib/src/ir/memory.dart:125 ImportedMemory.printTo" @unported function WasmBuilder.print_to(self::ImportedMemory, p) end
 
-@parity "wasm_builder/lib/src/ir/memory.dart:139 MemoryExport" @unported function MemoryExport(name, memory) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/memory.dart:139 MemoryExport" function MemoryExport end
 
-@parity "wasm_builder/lib/src/ir/memory.dart:142 MemoryExport.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::MemoryExport) end
+@parity "wasm_builder/lib/src/ir/memory.dart:142 MemoryExport.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, e::MemoryExport)::Nothing
+    WasmBuilder.write_name(s, e.name)
+    WasmBuilder.write_byte(s, 0x02)
+    WasmBuilder.write_unsigned(s, WasmBuilder.index(e.memory))
+end

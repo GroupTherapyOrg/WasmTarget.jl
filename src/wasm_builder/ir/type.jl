@@ -7,424 +7,681 @@
 
 @parity "wasm_builder/lib/src/ir/type.dart:82 NumTypeKind" @enum NumTypeKind NumTypeKind_i32 NumTypeKind_i64 NumTypeKind_f32 NumTypeKind_f64 NumTypeKind_v128
 
-"""
-NumType's dart fields: `kind`.
-"""
-@parity "wasm_builder/lib/src/ir/type.dart:85 NumType" @unported struct NumType <: ValueType end
+"""A *number type* or *vector type*."""
+@parity "wasm_builder/lib/src/ir/type.dart:85 NumType" struct NumType <: ValueType
+    kind::NumTypeKind
+    # dart's NumType._ (line 88), the struct's one inner constructor
+    NumType(::Val{:_}, kind::NumTypeKind) = new(kind)
+end
 
-"""
-RefType's dart fields: `heapType`, `nullable`.
-"""
-@parity "wasm_builder/lib/src/ir/type.dart:164 RefType" @unported struct RefType <: ValueType end
+"""A *reference type*."""
+@parity "wasm_builder/lib/src/ir/type.dart:164 RefType" struct RefType <: ValueType
+    # The *heap type* of this reference type.
+    heap_type::HeapType
+    # The nullability of this reference type.
+    nullable::Bool
+    # dart's RefType._ (line 178), the struct's one inner constructor
+    RefType(::Val{:_}, heap_type::HeapType, nullable::Bool) = new(heap_type, nullable)
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:299 HeapType" abstract type HeapType <: WasmBuilder.Serializable end
 
-@parity "wasm_builder/lib/src/ir/type.dart:405 CommonHeapType" @unported struct CommonHeapType <: HeapType end
+"""
+Internal supertype above any, func and extern, only used to state the input constraints of
+instructions polymorphic across the three hierarchies; not a real wasm heap type.
+"""
+@parity "wasm_builder/lib/src/ir/type.dart:405 CommonHeapType" struct CommonHeapType <: HeapType
+    # dart's CommonHeapType._ (line 406), the struct's one inner constructor
+    CommonHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:430 ExternHeapType" @unported struct ExternHeapType <: HeapType end
+"""The `extern` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:430 ExternHeapType" struct ExternHeapType <: HeapType
+    # dart's ExternHeapType._ (line 431), the struct's one inner constructor
+    ExternHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:456 AnyHeapType" @unported struct AnyHeapType <: HeapType end
+"""The `any` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:456 AnyHeapType" struct AnyHeapType <: HeapType
+    # dart's AnyHeapType._ (line 457), the struct's one inner constructor
+    AnyHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:482 EqHeapType" @unported struct EqHeapType <: HeapType end
+"""The `eq` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:482 EqHeapType" struct EqHeapType <: HeapType
+    # dart's EqHeapType._ (line 483), the struct's one inner constructor
+    EqHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:508 FuncHeapType" @unported struct FuncHeapType <: HeapType end
+"""The `func` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:508 FuncHeapType" struct FuncHeapType <: HeapType
+    # dart's FuncHeapType._ (line 509), the struct's one inner constructor
+    FuncHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:534 StructHeapType" @unported struct StructHeapType <: HeapType end
+"""The `struct` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:534 StructHeapType" struct StructHeapType <: HeapType
+    # dart's StructHeapType._ (line 535), the struct's one inner constructor
+    StructHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:563 ArrayHeapType" @unported struct ArrayHeapType <: HeapType end
+"""The `array` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:563 ArrayHeapType" struct ArrayHeapType <: HeapType
+    # dart's ArrayHeapType._ (line 564), the struct's one inner constructor
+    ArrayHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:592 I31HeapType" @unported struct I31HeapType <: HeapType end
+"""The `i31` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:592 I31HeapType" struct I31HeapType <: HeapType
+    # dart's I31HeapType._ (line 593), the struct's one inner constructor
+    I31HeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:621 NoneHeapType" @unported struct NoneHeapType <: HeapType end
+"""The `none` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:621 NoneHeapType" struct NoneHeapType <: HeapType
+    # dart's NoneHeapType._ (line 622), the struct's one inner constructor
+    NoneHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:650 NoExternHeapType" @unported struct NoExternHeapType <: HeapType end
+"""The `noextern` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:650 NoExternHeapType" struct NoExternHeapType <: HeapType
+    # dart's NoExternHeapType._ (line 651), the struct's one inner constructor
+    NoExternHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:679 NoFuncHeapType" @unported struct NoFuncHeapType <: HeapType end
+"""The `nofunc` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:679 NoFuncHeapType" struct NoFuncHeapType <: HeapType
+    # dart's NoFuncHeapType._ (line 680), the struct's one inner constructor
+    NoFuncHeapType(::Val{:_}) = new()
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:708 DefType" abstract type DefType <: HeapType end
 
-"""
-UnresolvedDefType's dart fields: `typeIndex`.
-"""
-@parity "wasm_builder/lib/src/ir/type.dart:882 UnresolvedDefType" @unported struct UnresolvedDefType <: DefType end
+@parity "wasm_builder/lib/src/ir/type.dart:882 UnresolvedDefType" mutable struct UnresolvedDefType <: DefType
+    # DefType's fields, then the class's own
+    _index::Union{Int,Nothing}
+    const super_type::Union{DefType,Nothing}
+    const depth::Int
+    has_any_subtypes::Bool
+    const type_index::Int
+    # dart's constructor (line 885), the struct's one inner constructor: DefType's with no supertype
+    UnresolvedDefType(type_index::Int) = new(nothing, nothing, 0, false, type_index)
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:920 ExnHeapType" @unported struct ExnHeapType <: HeapType end
+"""The `exn` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:920 ExnHeapType" struct ExnHeapType <: HeapType
+    # dart's ExnHeapType._ (line 921), the struct's one inner constructor
+    ExnHeapType(::Val{:_}) = new()
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:946 NoExnHeapType" @unported struct NoExnHeapType <: HeapType end
+"""The `noexn` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:946 NoExnHeapType" struct NoExnHeapType <: HeapType
+    # dart's NoExnHeapType._ (line 947), the struct's one inner constructor
+    NoExnHeapType(::Val{:_}) = new()
+end
 
-"""
-FunctionType's dart fields: `inputs`, `outputs`.
-"""
-@parity "wasm_builder/lib/src/ir/type.dart:974 FunctionType" @unported struct FunctionType <: DefType end
+"""A custom function type."""
+@parity "wasm_builder/lib/src/ir/type.dart:974 FunctionType" mutable struct FunctionType <: DefType
+    # DefType's fields, then the class's own
+    _index::Union{Int,Nothing}
+    const super_type::Union{DefType,Nothing}
+    const depth::Int
+    has_any_subtypes::Bool
+    const inputs::Vector{ValueType}
+    const outputs::Vector{ValueType}
+    # dart's constructor (line 978), the struct's one inner constructor
+    function FunctionType(inputs::Vector{ValueType}, outputs::Vector{ValueType}; super_type::Union{DefType,Nothing} = nothing)
+        # DefType's constructor (line 719): the depth of the supertype chain, and the supertype marked
+        # as having subtypes
+        local depth = super_type === nothing ? 0 : super_type.depth + 1
+        super_type === nothing || (super_type.has_any_subtypes = true)
+        new(nothing, super_type, depth, false, inputs, outputs)
+    end
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1103 DataType" abstract type DataType <: DefType end
 
-"""
-StructType's dart fields: `fields`, `fieldNames`.
-"""
-@parity "wasm_builder/lib/src/ir/type.dart:1119 StructType" @unported struct StructType <: DataType end
+"""A custom `struct` type."""
+@parity "wasm_builder/lib/src/ir/type.dart:1119 StructType" mutable struct StructType <: DataType
+    # DefType's and DataType's fields, then the class's own
+    _index::Union{Int,Nothing}
+    const super_type::Union{DefType,Nothing}
+    const depth::Int
+    has_any_subtypes::Bool
+    name::Union{String,Nothing}
+    const fields::Vector{FieldType}
+    const field_names::LinkedHashMap{Int,String}
+    # dart's constructor (line 1123), the struct's one inner constructor: `fields` starts empty and
+    # takes the given ones
+    function StructType(name::Union{String,Nothing}; fields::Union{Vector{FieldType},Nothing} = nothing, super_type::Union{DefType,Nothing} = nothing)
+        # DefType's constructor (line 719): the depth of the supertype chain, and the supertype marked
+        # as having subtypes
+        local depth = super_type === nothing ? 0 : super_type.depth + 1
+        super_type === nothing || (super_type.has_any_subtypes = true)
+        new(nothing, super_type, depth, false, name, fields === nothing ? FieldType[] : copy(fields), LinkedHashMap{Int,String}())
+    end
+end
 
-"""
-ArrayType's dart fields: `elementType`.
-"""
-@parity "wasm_builder/lib/src/ir/type.dart:1229 ArrayType" @unported struct ArrayType <: DataType end
+"""A custom `array` type."""
+@parity "wasm_builder/lib/src/ir/type.dart:1229 ArrayType" mutable struct ArrayType <: DataType
+    # DefType's and DataType's fields, then the class's own
+    _index::Union{Int,Nothing}
+    const super_type::Union{DefType,Nothing}
+    const depth::Int
+    has_any_subtypes::Bool
+    name::Union{String,Nothing}
+    const element_type::Late{FieldType}
+    # dart's constructor (line 1232), the struct's one inner constructor: the element type assigned
+    # when given
+    function ArrayType(name::Union{String,Nothing}; element_type::Union{FieldType,Nothing} = nothing, super_type::Union{DefType,Nothing} = nothing)
+        # DefType's constructor (line 719): the depth of the supertype chain, and the supertype marked
+        # as having subtypes
+        local depth = super_type === nothing ? 0 : super_type.depth + 1
+        super_type === nothing || (super_type.has_any_subtypes = true)
+        local e = Late{FieldType}("wasm_builder/lib/src/ir/type.dart:1230 ArrayType.elementType")
+        element_type === nothing || (e[] = element_type)
+        new(nothing, super_type, depth, false, name, e)
+    end
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1289 _WithMutability" abstract type _WithMutability <: WasmBuilder.Serializable end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1317 GlobalType" @unported struct GlobalType <: _WithMutability end
+"""
+A type for a global: a value type and a mutability.
+"""
+@parity "wasm_builder/lib/src/ir/type.dart:1317 GlobalType" struct GlobalType <: _WithMutability
+    # _WithMutability's fields
+    type::ValueType
+    mutable::Bool
+    # dart's constructor (line 1318), the struct's one inner constructor
+    GlobalType(type::ValueType; mutable::Bool = true) = new(type, mutable)
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1338 FieldType" @unported struct FieldType <: _WithMutability end
+"""
+A type for a struct field or an array element: a storage type and a mutability.
+"""
+@parity "wasm_builder/lib/src/ir/type.dart:1338 FieldType" struct FieldType <: _WithMutability
+    # _WithMutability's fields
+    type::StorageType
+    mutable::Bool
+    # dart's constructor (line 1339), the struct's one inner constructor
+    FieldType(type::StorageType; mutable::Bool = true) = new(type, mutable)
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1367 PackedTypeKind" @enum PackedTypeKind PackedTypeKind_i8 PackedTypeKind_i16
 
-"""
-PackedType's dart fields: `kind`.
-"""
-@parity "wasm_builder/lib/src/ir/type.dart:1370 PackedType" @unported struct PackedType <: StorageType end
+"""A *packed type*, i.e. a storage type that only exists in memory."""
+@parity "wasm_builder/lib/src/ir/type.dart:1370 PackedType" struct PackedType <: StorageType
+    kind::PackedTypeKind
+    # dart's PackedType._ (line 1373), the struct's one inner constructor
+    PackedType(::Val{:_}, kind::PackedTypeKind) = new(kind)
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:14 StorageType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::StorageType, other::StorageType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:14 StorageType.isSubtypeOf" WasmBuilder.is_subtype_of(self::StorageType, other::StorageType)::Bool = reject!(Internal("wasm_builder/lib/src/ir/type.dart:14 StorageType.isSubtypeOf: abstract in $(typeof(self))"), "is_subtype_of")
 
-@parity "wasm_builder/lib/src/ir/type.dart:18 StorageType.unpacked" @unported function WasmBuilder.unpacked(self::StorageType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:18 StorageType.unpacked" WasmBuilder.unpacked(self::StorageType)::ValueType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:18 StorageType.unpacked: abstract in $(typeof(self))"), "unpacked")
 
-@parity "wasm_builder/lib/src/ir/type.dart:21 StorageType.isPrimitive" @unported function WasmBuilder.is_primitive(self::StorageType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:21 StorageType.isPrimitive" WasmBuilder.is_primitive(self::StorageType)::Bool = reject!(Internal("wasm_builder/lib/src/ir/type.dart:21 StorageType.isPrimitive: abstract in $(typeof(self))"), "is_primitive")
 
-@parity "wasm_builder/lib/src/ir/type.dart:24 StorageType.byteSize" @unported function WasmBuilder.byte_size(self::StorageType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:24 StorageType.byteSize" WasmBuilder.byte_size(self::StorageType)::Int = reject!(Internal("wasm_builder/lib/src/ir/type.dart:24 StorageType.byteSize: abstract in $(typeof(self))"), "byte_size")
 
 @parity "wasm_builder/lib/src/ir/type.dart:26 StorageType.deserialize" @unported function StorageType_deserialize(d, types::Vector{DefType}) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:40 ValueType" @unported function ValueType() end
+# dart's constructor of the abstract class, whose fields each subclass's struct holds and whose
+# subclasses' constructors do its work; this line declares the name and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:40 ValueType" function ValueType end
 
-@parity "wasm_builder/lib/src/ir/type.dart:43 ValueType.unpacked" @unported function WasmBuilder.unpacked(self::ValueType) end
+@parity "wasm_builder/lib/src/ir/type.dart:43 ValueType.unpacked" WasmBuilder.unpacked(t::ValueType)::ValueType = t
 
-@parity "wasm_builder/lib/src/ir/type.dart:46 ValueType.isPrimitive" @unported function WasmBuilder.is_primitive(self::ValueType) end
+@parity "wasm_builder/lib/src/ir/type.dart:46 ValueType.isPrimitive" WasmBuilder.is_primitive(::ValueType)::Bool = false
 
-@parity "wasm_builder/lib/src/ir/type.dart:49 ValueType.byteSize" @unported function WasmBuilder.byte_size(self::ValueType) end
+@parity "wasm_builder/lib/src/ir/type.dart:49 ValueType.byteSize" WasmBuilder.byte_size(t::ValueType)::Int = reject!(Internal("wasm_builder/lib/src/ir/type.dart:49 ValueType.byteSize: size of non-primitive type $t"), "byte_size")
 
-@parity "wasm_builder/lib/src/ir/type.dart:52 ValueType.nullable" @unported function WasmBuilder.nullable(self::ValueType) end
+"""Whether this type is nullable. Primitive types are never nullable."""
+@parity "wasm_builder/lib/src/ir/type.dart:52 ValueType.nullable" WasmBuilder.nullable(::ValueType)::Bool = false
 
-@parity "wasm_builder/lib/src/ir/type.dart:56 ValueType.withNullability" @unported function WasmBuilder.with_nullability(self::ValueType, nullable::Bool) end
+"""The version of this type with the given nullability, where both exist."""
+@parity "wasm_builder/lib/src/ir/type.dart:56 ValueType.withNullability" WasmBuilder.with_nullability(t::ValueType, ::Bool)::ValueType = t
 
-@parity "wasm_builder/lib/src/ir/type.dart:59 ValueType.defaultable" @unported function WasmBuilder.defaultable(self::ValueType) end
+"""Whether this type is defaultable. Primitive types are always defaultable."""
+@parity "wasm_builder/lib/src/ir/type.dart:59 ValueType.defaultable" WasmBuilder.defaultable(::ValueType)::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:65 ValueType.containedDefType" @unported function WasmBuilder.contained_def_type(self::ValueType) end
+"""The heap `DefType` this type references, if any; the type builder collects them."""
+@parity "wasm_builder/lib/src/ir/type.dart:65 ValueType.containedDefType" WasmBuilder.contained_def_type(::ValueType)::Union{DefType,Nothing} = nothing
 
 @parity "wasm_builder/lib/src/ir/type.dart:67 ValueType.deserialize" @unported function ValueType_deserialize(d, types::Vector{DefType}) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:88 NumType._" @unported function NumType__(kind) end
+@parity "wasm_builder/lib/src/ir/type.dart:88 NumType._" NumType__(kind::NumTypeKind)::NumType = NumType(Val(:_), kind)
 
-@parity "wasm_builder/lib/src/ir/type.dart:91 NumType.i32" @unported function NumType_i32() end
+"""The `i32` type."""
+@parity "wasm_builder/lib/src/ir/type.dart:91 NumType.i32" const NumType_i32 = NumType__(NumTypeKind_i32)
 
-@parity "wasm_builder/lib/src/ir/type.dart:94 NumType.i64" @unported function NumType_i64() end
+"""The `i64` type."""
+@parity "wasm_builder/lib/src/ir/type.dart:94 NumType.i64" const NumType_i64 = NumType__(NumTypeKind_i64)
 
-@parity "wasm_builder/lib/src/ir/type.dart:97 NumType.f32" @unported function NumType_f32() end
+"""The `f32` type."""
+@parity "wasm_builder/lib/src/ir/type.dart:97 NumType.f32" const NumType_f32 = NumType__(NumTypeKind_f32)
 
-@parity "wasm_builder/lib/src/ir/type.dart:100 NumType.f64" @unported function NumType_f64() end
+"""The `f64` type."""
+@parity "wasm_builder/lib/src/ir/type.dart:100 NumType.f64" const NumType_f64 = NumType__(NumTypeKind_f64)
 
-@parity "wasm_builder/lib/src/ir/type.dart:103 NumType.v128" @unported function NumType_v128() end
+"""The `v128` type."""
+@parity "wasm_builder/lib/src/ir/type.dart:103 NumType.v128" const NumType_v128 = NumType__(NumTypeKind_v128)
 
-@parity "wasm_builder/lib/src/ir/type.dart:106 NumType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::NumType, other::StorageType) end
+@parity "wasm_builder/lib/src/ir/type.dart:106 NumType.isSubtypeOf" WasmBuilder.is_subtype_of(t::NumType, other::StorageType)::Bool = t == other
 
-@parity "wasm_builder/lib/src/ir/type.dart:109 NumType.isPrimitive" @unported function WasmBuilder.is_primitive(self::NumType) end
+@parity "wasm_builder/lib/src/ir/type.dart:109 NumType.isPrimitive" WasmBuilder.is_primitive(::NumType)::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:112 NumType.byteSize" @unported function WasmBuilder.byte_size(self::NumType) end
+@parity "wasm_builder/lib/src/ir/type.dart:112 NumType.byteSize" function WasmBuilder.byte_size(t::NumType)::Int
+    # dart's exhaustive switch over the enum, each value named
+    local k = t.kind
+    (k == NumTypeKind_i32 || k == NumTypeKind_f32) && return 4
+    (k == NumTypeKind_i64 || k == NumTypeKind_f64) && return 8
+    k == NumTypeKind_v128 && return 16
+    reject!(Internal("wasm_builder/lib/src/ir/type.dart:113 NumType.byteSize: no arm for $k"), "byte_size")
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:121 NumType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::NumType) end
+@parity "wasm_builder/lib/src/ir/type.dart:121 NumType.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::NumType)::Nothing
+    # dart's exhaustive switch over the enum, each value named
+    local k = t.kind
+    k == NumTypeKind_i32 && return WasmBuilder.write_byte(s, 0x7F) # -0x01
+    k == NumTypeKind_i64 && return WasmBuilder.write_byte(s, 0x7E) # -0x02
+    k == NumTypeKind_f32 && return WasmBuilder.write_byte(s, 0x7D) # -0x03
+    k == NumTypeKind_f64 && return WasmBuilder.write_byte(s, 0x7C) # -0x04
+    k == NumTypeKind_v128 && return WasmBuilder.write_byte(s, 0x7B) # -0x05
+    reject!(Internal("wasm_builder/lib/src/ir/type.dart:122 NumType.serialize: no arm for $k"), "serialize")
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:141 NumType.deserialize" @unported function NumType_deserialize(d) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:160 NumType.toString" @unported function Base.show(io::IO, self::NumType) end
+# dart's Enum.name, the value's own name: a Julia @enum value prints with its type's prefix
+@parity "wasm_builder/lib/src/ir/type.dart:160 NumType.toString" Base.show(io::IO, t::NumType) = print(io, chopprefix(string(t.kind), "NumTypeKind_"))
 
-@parity "wasm_builder/lib/src/ir/type.dart:172 RefType" @unported function RefType(heap_type; nullable = nothing) end
+@parity "wasm_builder/lib/src/ir/type.dart:170 RefType.nullable" WasmBuilder.nullable(t::RefType)::Bool = t.nullable
 
-@parity "wasm_builder/lib/src/ir/type.dart:178 RefType._" @unported function RefType__(heap_type, nullable) end
+@parity "wasm_builder/lib/src/ir/type.dart:172 RefType" function RefType(heap_type::HeapType; nullable::Union{Bool,Nothing}=nothing)::RefType
+    n = nullable === nothing ? WasmBuilder.nullable_by_default(heap_type) : nullable
+    n === nothing && reject!(Internal("wasm_builder/lib/src/ir/type.dart:176 RefType: unspecified nullability of a reference to $heap_type"), "RefType")
+    RefType(Val(:_), heap_type, n)
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:181 RefType.common" @unported function RefType_common(; nullable::Bool) end
+@parity "wasm_builder/lib/src/ir/type.dart:178 RefType._" RefType__(heap_type::HeapType, nullable::Bool)::RefType = RefType(Val(:_), heap_type, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:185 RefType.extern" @unported function RefType_extern(; nullable::Bool) end
+"""Internal supertype above any, func and extern. Not a real wasm ref type."""
+@parity "wasm_builder/lib/src/ir/type.dart:181 RefType.common" RefType_common(; nullable::Bool)::RefType = RefType__(HeapType_common, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:189 RefType.any" @unported function RefType_any(; nullable::Bool) end
+"""A (possibly nullable) reference to the `extern` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:185 RefType.extern" RefType_extern(; nullable::Bool)::RefType = RefType__(HeapType_extern, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:192 RefType.eq" @unported function RefType_eq(; nullable::Bool) end
+"""A (possibly nullable) reference to the `any` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:189 RefType.any" RefType_any(; nullable::Bool)::RefType = RefType__(HeapType_any, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:195 RefType.func" @unported function RefType_func(; nullable::Bool) end
+"""A (possibly nullable) reference to the `eq` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:192 RefType.eq" RefType_eq(; nullable::Bool)::RefType = RefType__(HeapType_eq, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:199 RefType.struct" @unported function RefType_struct(; nullable::Bool) end
+"""A (possibly nullable) reference to the `func` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:195 RefType.func" RefType_func(; nullable::Bool)::RefType = RefType__(HeapType_func, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:203 RefType.array" @unported function RefType_array(; nullable::Bool) end
+"""A (possibly nullable) reference to the `struct` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:199 RefType.struct" RefType_struct(; nullable::Bool)::RefType = RefType__(HeapType_struct, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:207 RefType.i31" @unported function RefType_i31(; nullable::Bool) end
+"""A (possibly nullable) reference to the `array` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:203 RefType.array" RefType_array(; nullable::Bool)::RefType = RefType__(HeapType_array, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:210 RefType.none" @unported function RefType_none(; nullable::Bool) end
+"""A (possibly nullable) reference to the `i31` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:207 RefType.i31" RefType_i31(; nullable::Bool)::RefType = RefType__(HeapType_i31, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:214 RefType.noextern" @unported function RefType_noextern(; nullable::Bool) end
+"""A (possibly nullable) reference to the `none` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:210 RefType.none" RefType_none(; nullable::Bool)::RefType = RefType__(HeapType_none, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:218 RefType.nofunc" @unported function RefType_nofunc(; nullable::Bool) end
+"""A (possibly nullable) reference to the `noextern` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:214 RefType.noextern" RefType_noextern(; nullable::Bool)::RefType = RefType__(HeapType_noextern, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:222 RefType.exn" @unported function RefType_exn(; nullable::Bool) end
+"""A (possibly nullable) reference to the `nofunc` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:218 RefType.nofunc" RefType_nofunc(; nullable::Bool)::RefType = RefType__(HeapType_nofunc, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:225 RefType.def" @unported function RefType_def(def_type::DefType; nullable::Bool) end
+"""A (possibly nullable) reference to the `exn` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:222 RefType.exn" RefType_exn(; nullable::Bool)::RefType = RefType__(HeapType_exn, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:229 RefType.withNullability" @unported function WasmBuilder.with_nullability(self::RefType, nullable::Bool) end
+"""A (possibly nullable) reference to a custom heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:225 RefType.def" RefType_def(def_type::DefType; nullable::Bool)::RefType = RefType__(def_type, nullable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:233 RefType.defaultable" @unported function WasmBuilder.defaultable(self::RefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:229 RefType.withNullability" function WasmBuilder.with_nullability(t::RefType, nullable::Bool)::RefType
+    nullable == t.nullable ? t : RefType(t.heap_type; nullable)
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:236 RefType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::RefType, other::StorageType) end
+@parity "wasm_builder/lib/src/ir/type.dart:233 RefType.defaultable" WasmBuilder.defaultable(t::RefType)::Bool = t.nullable
 
-@parity "wasm_builder/lib/src/ir/type.dart:243 RefType.containedDefType" @unported function WasmBuilder.contained_def_type(self::RefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:236 RefType.isSubtypeOf" function WasmBuilder.is_subtype_of(t::RefType, other::StorageType)::Bool
+    other isa RefType || return false
+    t.nullable && !other.nullable && return false
+    WasmBuilder.is_subtype_of(t.heap_type, other.heap_type)
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:249 RefType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::RefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:243 RefType.containedDefType" function WasmBuilder.contained_def_type(t::RefType)::Union{DefType,Nothing}
+    type = t.heap_type
+    type isa DefType ? type : nothing
+end
+
+@parity "wasm_builder/lib/src/ir/type.dart:249 RefType.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::RefType)::Nothing
+    if t.nullable !== WasmBuilder.nullable_by_default(t.heap_type)
+        WasmBuilder.write_byte(s, t.nullable ? 0x63 : 0x64) # -0x1d, -0x1c
+    end
+    write(s, t.heap_type)
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:256 RefType.deserialize" @unported function RefType_deserialize(d, types::Vector{DefType}) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:281 RefType.toString" @unported function Base.show(io::IO, self::RefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:281 RefType.toString" function Base.show(io::IO, t::RefType)
+    if t.nullable === WasmBuilder.nullable_by_default(t.heap_type)
+        print(io, WasmBuilder.shorthand_name(t.heap_type), "ref")
+    else
+        print(io, "ref ", t.nullable ? "null " : "", t.heap_type)
+    end
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:289 RefType.==" @unported function Base.:(==)(self::RefType, other::Any) end
+# dart's `other is RefType &&` arm: Julia's `==` of a RefType and any other type is false
+@parity "wasm_builder/lib/src/ir/type.dart:289 RefType.==" Base.:(==)(self::RefType, other::RefType)::Bool = other.heap_type == self.heap_type && other.nullable == self.nullable
 
-@parity "wasm_builder/lib/src/ir/type.dart:295 RefType.hashCode" @unported function Base.hash(self::RefType, h::UInt) end
+# dart's `heapType.hashCode * (nullable ? -1 : 1)`; Julia's hash takes the seed it mixes in
+@parity "wasm_builder/lib/src/ir/type.dart:295 RefType.hashCode" Base.hash(self::RefType, h::UInt)::UInt = hash(self.heap_type, hash(self.nullable, h))
 
-@parity "wasm_builder/lib/src/ir/type.dart:300 HeapType" @unported function HeapType() end
+# dart's constructor of the abstract class, whose fields each subclass's struct holds and whose
+# subclasses' constructors do its work; this line declares the name and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:300 HeapType" function HeapType end
 
-@parity "wasm_builder/lib/src/ir/type.dart:303 HeapType.common" @unported function HeapType_common() end
+"""Internal supertype above any, func and extern. Not a real wasm heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:303 HeapType.common" const HeapType_common = CommonHeapType(Val(:_))  # dart's CommonHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:306 HeapType.extern" @unported function HeapType_extern() end
+"""The `extern` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:306 HeapType.extern" const HeapType_extern = ExternHeapType(Val(:_))  # dart's ExternHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:309 HeapType.any" @unported function HeapType_any() end
+"""The `any` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:309 HeapType.any" const HeapType_any = AnyHeapType(Val(:_))  # dart's AnyHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:312 HeapType.eq" @unported function HeapType_eq() end
+"""The `eq` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:312 HeapType.eq" const HeapType_eq = EqHeapType(Val(:_))  # dart's EqHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:315 HeapType.func" @unported function HeapType_func() end
+"""The `func` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:315 HeapType.func" const HeapType_func = FuncHeapType(Val(:_))  # dart's FuncHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:318 HeapType.struct" @unported function HeapType_struct() end
+"""The `struct` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:318 HeapType.struct" const HeapType_struct = StructHeapType(Val(:_))  # dart's StructHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:321 HeapType.array" @unported function HeapType_array() end
+"""The `array` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:321 HeapType.array" const HeapType_array = ArrayHeapType(Val(:_))  # dart's ArrayHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:324 HeapType.i31" @unported function HeapType_i31() end
+"""The `i31` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:324 HeapType.i31" const HeapType_i31 = I31HeapType(Val(:_))  # dart's I31HeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:327 HeapType.none" @unported function HeapType_none() end
+"""The `none` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:327 HeapType.none" const HeapType_none = NoneHeapType(Val(:_))  # dart's NoneHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:330 HeapType.noextern" @unported function HeapType_noextern() end
+"""The `noextern` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:330 HeapType.noextern" const HeapType_noextern = NoExternHeapType(Val(:_))  # dart's NoExternHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:333 HeapType.nofunc" @unported function HeapType_nofunc() end
+"""The `nofunc` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:333 HeapType.nofunc" const HeapType_nofunc = NoFuncHeapType(Val(:_))  # dart's NoFuncHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:336 HeapType.exn" @unported function HeapType_exn() end
+"""The `exn` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:336 HeapType.exn" const HeapType_exn = ExnHeapType(Val(:_))  # dart's ExnHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:339 HeapType.noexn" @unported function HeapType_noexn() end
+"""The `noexn` heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:339 HeapType.noexn" const HeapType_noexn = NoExnHeapType(Val(:_))  # dart's NoExnHeapType._()
 
-@parity "wasm_builder/lib/src/ir/type.dart:345 HeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::HeapType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:345 HeapType.nullableByDefault" WasmBuilder.nullable_by_default(self::HeapType)::Union{Bool,Nothing} = reject!(Internal("wasm_builder/lib/src/ir/type.dart:345 HeapType.nullableByDefault: abstract in $(typeof(self))"), "nullable_by_default")
 
-@parity "wasm_builder/lib/src/ir/type.dart:348 HeapType.topType" @unported function WasmBuilder.top_type(self::HeapType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:348 HeapType.topType" WasmBuilder.top_type(self::HeapType)::HeapType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:348 HeapType.topType: abstract in $(typeof(self))"), "top_type")
 
-@parity "wasm_builder/lib/src/ir/type.dart:351 HeapType.bottomType" @unported function WasmBuilder.bottom_type(self::HeapType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:351 HeapType.bottomType" WasmBuilder.bottom_type(self::HeapType)::HeapType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:351 HeapType.bottomType: abstract in $(typeof(self))"), "bottom_type")
 
-@parity "wasm_builder/lib/src/ir/type.dart:354 HeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::HeapType, other::HeapType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:354 HeapType.isSubtypeOf" WasmBuilder.is_subtype_of(self::HeapType, other::HeapType)::Bool = reject!(Internal("wasm_builder/lib/src/ir/type.dart:354 HeapType.isSubtypeOf: abstract in $(typeof(self))"), "is_subtype_of")
 
-@parity "wasm_builder/lib/src/ir/type.dart:357 HeapType.isStructuralSubtypeOf" @unported function WasmBuilder.is_structural_subtype_of(self::HeapType, other::HeapType) end
+"""Whether this heap type is a structural subtype of the other heap type."""
+@parity "wasm_builder/lib/src/ir/type.dart:357 HeapType.isStructuralSubtypeOf" WasmBuilder.is_structural_subtype_of(t::HeapType, other::HeapType)::Bool = WasmBuilder.is_subtype_of(t, other)
 
-@parity "wasm_builder/lib/src/ir/type.dart:359 HeapType.shorthandName" @unported function WasmBuilder.shorthand_name(self::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:359 HeapType.shorthandName" WasmBuilder.shorthand_name(t::HeapType)::String = string(t)
 
 @parity "wasm_builder/lib/src/ir/type.dart:361 HeapType.deserialize" @unported function HeapType_deserialize(d, types::Vector{DefType}) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:406 CommonHeapType._" @unported function CommonHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:406 CommonHeapType._" CommonHeapType__()::CommonHeapType = CommonHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:409 CommonHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::CommonHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:409 CommonHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::CommonHeapType)::Union{Bool,Nothing} = nothing
 
-@parity "wasm_builder/lib/src/ir/type.dart:412 CommonHeapType.topType" @unported function WasmBuilder.top_type(self::CommonHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:412 CommonHeapType.topType" WasmBuilder.top_type(::CommonHeapType)::HeapType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:412 CommonHeapType.topType: no top type of internal common supertype"), "top_type")
 
-@parity "wasm_builder/lib/src/ir/type.dart:415 CommonHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::CommonHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:415 CommonHeapType.bottomType" WasmBuilder.bottom_type(::CommonHeapType)::HeapType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:415 CommonHeapType.bottomType: no bottom type of internal common supertype"), "bottom_type")
 
-@parity "wasm_builder/lib/src/ir/type.dart:419 CommonHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::CommonHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:419 CommonHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::CommonHeapType, other::HeapType)::Bool = other === HeapType_common
 
-@parity "wasm_builder/lib/src/ir/type.dart:422 CommonHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::CommonHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:422 CommonHeapType.serialize" WasmBuilder.serialize(::WasmBuilder.Serializer, ::CommonHeapType)::Nothing = reject!(Internal("wasm_builder/lib/src/ir/type.dart:422 CommonHeapType.serialize: attempt to serialize internal common supertype"), "serialize")
 
-@parity "wasm_builder/lib/src/ir/type.dart:426 CommonHeapType.toString" @unported function Base.show(io::IO, self::CommonHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:426 CommonHeapType.toString" Base.show(io::IO, ::CommonHeapType) = print(io, "#common")
 
-@parity "wasm_builder/lib/src/ir/type.dart:431 ExternHeapType._" @unported function ExternHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:431 ExternHeapType._" ExternHeapType__()::ExternHeapType = ExternHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:433 ExternHeapType.defaultNullability" @unported function ExternHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:433 ExternHeapType.defaultNullability" ExternHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:436 ExternHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::ExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:436 ExternHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::ExternHeapType)::Union{Bool,Nothing} = ExternHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:439 ExternHeapType.topType" @unported function WasmBuilder.top_type(self::ExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:439 ExternHeapType.topType" WasmBuilder.top_type(::ExternHeapType)::HeapType = HeapType_extern
 
-@parity "wasm_builder/lib/src/ir/type.dart:442 ExternHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::ExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:442 ExternHeapType.bottomType" WasmBuilder.bottom_type(::ExternHeapType)::HeapType = HeapType_noextern
 
-@parity "wasm_builder/lib/src/ir/type.dart:445 ExternHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::ExternHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:445 ExternHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::ExternHeapType, other::HeapType)::Bool = other === HeapType_common || other === HeapType_extern
 
-@parity "wasm_builder/lib/src/ir/type.dart:449 ExternHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::ExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:449 ExternHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::ExternHeapType)::Nothing = WasmBuilder.write_byte(s, 0x6F) # -0x11
 
-@parity "wasm_builder/lib/src/ir/type.dart:452 ExternHeapType.toString" @unported function Base.show(io::IO, self::ExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:452 ExternHeapType.toString" Base.show(io::IO, ::ExternHeapType) = print(io, "extern")
 
-@parity "wasm_builder/lib/src/ir/type.dart:457 AnyHeapType._" @unported function AnyHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:457 AnyHeapType._" AnyHeapType__()::AnyHeapType = AnyHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:459 AnyHeapType.defaultNullability" @unported function AnyHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:459 AnyHeapType.defaultNullability" AnyHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:462 AnyHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::AnyHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:462 AnyHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::AnyHeapType)::Union{Bool,Nothing} = AnyHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:465 AnyHeapType.topType" @unported function WasmBuilder.top_type(self::AnyHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:465 AnyHeapType.topType" WasmBuilder.top_type(::AnyHeapType)::HeapType = HeapType_any
 
-@parity "wasm_builder/lib/src/ir/type.dart:468 AnyHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::AnyHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:468 AnyHeapType.bottomType" WasmBuilder.bottom_type(::AnyHeapType)::HeapType = HeapType_none
 
-@parity "wasm_builder/lib/src/ir/type.dart:471 AnyHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::AnyHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:471 AnyHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::AnyHeapType, other::HeapType)::Bool = other === HeapType_common || other === HeapType_any
 
-@parity "wasm_builder/lib/src/ir/type.dart:475 AnyHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::AnyHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:475 AnyHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::AnyHeapType)::Nothing = WasmBuilder.write_byte(s, 0x6E) # -0x12
 
-@parity "wasm_builder/lib/src/ir/type.dart:478 AnyHeapType.toString" @unported function Base.show(io::IO, self::AnyHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:478 AnyHeapType.toString" Base.show(io::IO, ::AnyHeapType) = print(io, "any")
 
-@parity "wasm_builder/lib/src/ir/type.dart:483 EqHeapType._" @unported function EqHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:483 EqHeapType._" EqHeapType__()::EqHeapType = EqHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:485 EqHeapType.defaultNullability" @unported function EqHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:485 EqHeapType.defaultNullability" EqHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:488 EqHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::EqHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:488 EqHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::EqHeapType)::Union{Bool,Nothing} = EqHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:491 EqHeapType.topType" @unported function WasmBuilder.top_type(self::EqHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:491 EqHeapType.topType" WasmBuilder.top_type(::EqHeapType)::HeapType = HeapType_any
 
-@parity "wasm_builder/lib/src/ir/type.dart:494 EqHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::EqHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:494 EqHeapType.bottomType" WasmBuilder.bottom_type(::EqHeapType)::HeapType = HeapType_none
 
-@parity "wasm_builder/lib/src/ir/type.dart:497 EqHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::EqHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:497 EqHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::EqHeapType, other::HeapType)::Bool = other === HeapType_common || other === HeapType_any || other === HeapType_eq
 
-@parity "wasm_builder/lib/src/ir/type.dart:501 EqHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::EqHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:501 EqHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::EqHeapType)::Nothing = WasmBuilder.write_byte(s, 0x6D) # -0x13
 
-@parity "wasm_builder/lib/src/ir/type.dart:504 EqHeapType.toString" @unported function Base.show(io::IO, self::EqHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:504 EqHeapType.toString" Base.show(io::IO, ::EqHeapType) = print(io, "eq")
 
-@parity "wasm_builder/lib/src/ir/type.dart:509 FuncHeapType._" @unported function FuncHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:509 FuncHeapType._" FuncHeapType__()::FuncHeapType = FuncHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:511 FuncHeapType.defaultNullability" @unported function FuncHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:511 FuncHeapType.defaultNullability" FuncHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:514 FuncHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::FuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:514 FuncHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::FuncHeapType)::Union{Bool,Nothing} = FuncHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:517 FuncHeapType.topType" @unported function WasmBuilder.top_type(self::FuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:517 FuncHeapType.topType" WasmBuilder.top_type(::FuncHeapType)::HeapType = HeapType_func
 
-@parity "wasm_builder/lib/src/ir/type.dart:520 FuncHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::FuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:520 FuncHeapType.bottomType" WasmBuilder.bottom_type(::FuncHeapType)::HeapType = HeapType_nofunc
 
-@parity "wasm_builder/lib/src/ir/type.dart:523 FuncHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::FuncHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:523 FuncHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::FuncHeapType, other::HeapType)::Bool = other === HeapType_common || other === HeapType_func
 
-@parity "wasm_builder/lib/src/ir/type.dart:527 FuncHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::FuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:527 FuncHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::FuncHeapType)::Nothing = WasmBuilder.write_byte(s, 0x70) # -0x10
 
-@parity "wasm_builder/lib/src/ir/type.dart:530 FuncHeapType.toString" @unported function Base.show(io::IO, self::FuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:530 FuncHeapType.toString" Base.show(io::IO, ::FuncHeapType) = print(io, "func")
 
-@parity "wasm_builder/lib/src/ir/type.dart:535 StructHeapType._" @unported function StructHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:535 StructHeapType._" StructHeapType__()::StructHeapType = StructHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:537 StructHeapType.defaultNullability" @unported function StructHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:537 StructHeapType.defaultNullability" StructHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:540 StructHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::StructHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:540 StructHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::StructHeapType)::Union{Bool,Nothing} = StructHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:543 StructHeapType.topType" @unported function WasmBuilder.top_type(self::StructHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:543 StructHeapType.topType" WasmBuilder.top_type(::StructHeapType)::HeapType = HeapType_any
 
-@parity "wasm_builder/lib/src/ir/type.dart:546 StructHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::StructHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:546 StructHeapType.bottomType" WasmBuilder.bottom_type(::StructHeapType)::HeapType = HeapType_none
 
-@parity "wasm_builder/lib/src/ir/type.dart:549 StructHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::StructHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:549 StructHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::StructHeapType, other::HeapType)::Bool = other === HeapType_common || other === HeapType_any || other === HeapType_eq || other === HeapType_struct
 
-@parity "wasm_builder/lib/src/ir/type.dart:556 StructHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::StructHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:556 StructHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::StructHeapType)::Nothing = WasmBuilder.write_byte(s, 0x6B) # -0x15
 
-@parity "wasm_builder/lib/src/ir/type.dart:559 StructHeapType.toString" @unported function Base.show(io::IO, self::StructHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:559 StructHeapType.toString" Base.show(io::IO, ::StructHeapType) = print(io, "struct")
 
-@parity "wasm_builder/lib/src/ir/type.dart:564 ArrayHeapType._" @unported function ArrayHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:564 ArrayHeapType._" ArrayHeapType__()::ArrayHeapType = ArrayHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:566 ArrayHeapType.defaultNullability" @unported function ArrayHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:566 ArrayHeapType.defaultNullability" ArrayHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:569 ArrayHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::ArrayHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:569 ArrayHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::ArrayHeapType)::Union{Bool,Nothing} = ArrayHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:572 ArrayHeapType.topType" @unported function WasmBuilder.top_type(self::ArrayHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:572 ArrayHeapType.topType" WasmBuilder.top_type(::ArrayHeapType)::HeapType = HeapType_any
 
-@parity "wasm_builder/lib/src/ir/type.dart:575 ArrayHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::ArrayHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:575 ArrayHeapType.bottomType" WasmBuilder.bottom_type(::ArrayHeapType)::HeapType = HeapType_none
 
-@parity "wasm_builder/lib/src/ir/type.dart:578 ArrayHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::ArrayHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:578 ArrayHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::ArrayHeapType, other::HeapType)::Bool = other === HeapType_common || other === HeapType_any || other === HeapType_eq || other === HeapType_array
 
-@parity "wasm_builder/lib/src/ir/type.dart:585 ArrayHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::ArrayHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:585 ArrayHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::ArrayHeapType)::Nothing = WasmBuilder.write_byte(s, 0x6A) # -0x16
 
-@parity "wasm_builder/lib/src/ir/type.dart:588 ArrayHeapType.toString" @unported function Base.show(io::IO, self::ArrayHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:588 ArrayHeapType.toString" Base.show(io::IO, ::ArrayHeapType) = print(io, "array")
 
-@parity "wasm_builder/lib/src/ir/type.dart:593 I31HeapType._" @unported function I31HeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:593 I31HeapType._" I31HeapType__()::I31HeapType = I31HeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:595 I31HeapType.defaultNullability" @unported function I31HeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:595 I31HeapType.defaultNullability" I31HeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:598 I31HeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::I31HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:598 I31HeapType.nullableByDefault" WasmBuilder.nullable_by_default(::I31HeapType)::Union{Bool,Nothing} = I31HeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:601 I31HeapType.topType" @unported function WasmBuilder.top_type(self::I31HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:601 I31HeapType.topType" WasmBuilder.top_type(::I31HeapType)::HeapType = HeapType_any
 
-@parity "wasm_builder/lib/src/ir/type.dart:604 I31HeapType.bottomType" @unported function WasmBuilder.bottom_type(self::I31HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:604 I31HeapType.bottomType" WasmBuilder.bottom_type(::I31HeapType)::HeapType = HeapType_none
 
-@parity "wasm_builder/lib/src/ir/type.dart:607 I31HeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::I31HeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:607 I31HeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::I31HeapType, other::HeapType)::Bool = other === HeapType_common || other === HeapType_any || other === HeapType_eq || other === HeapType_i31
 
-@parity "wasm_builder/lib/src/ir/type.dart:614 I31HeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::I31HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:614 I31HeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::I31HeapType)::Nothing = WasmBuilder.write_byte(s, 0x6C) # -0x14
 
-@parity "wasm_builder/lib/src/ir/type.dart:617 I31HeapType.toString" @unported function Base.show(io::IO, self::I31HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:617 I31HeapType.toString" Base.show(io::IO, ::I31HeapType) = print(io, "i31")
 
-@parity "wasm_builder/lib/src/ir/type.dart:622 NoneHeapType._" @unported function NoneHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:622 NoneHeapType._" NoneHeapType__()::NoneHeapType = NoneHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:624 NoneHeapType.defaultNullability" @unported function NoneHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:624 NoneHeapType.defaultNullability" NoneHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:627 NoneHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::NoneHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:627 NoneHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::NoneHeapType)::Union{Bool,Nothing} = NoneHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:630 NoneHeapType.topType" @unported function WasmBuilder.top_type(self::NoneHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:630 NoneHeapType.topType" WasmBuilder.top_type(::NoneHeapType)::HeapType = HeapType_any
 
-@parity "wasm_builder/lib/src/ir/type.dart:633 NoneHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::NoneHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:633 NoneHeapType.bottomType" WasmBuilder.bottom_type(::NoneHeapType)::HeapType = HeapType_none
 
-@parity "wasm_builder/lib/src/ir/type.dart:636 NoneHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::NoneHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:636 NoneHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::NoneHeapType, other::HeapType)::Bool = other === HeapType_common || WasmBuilder.bottom_type(other) === HeapType_none
 
-@parity "wasm_builder/lib/src/ir/type.dart:640 NoneHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::NoneHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:640 NoneHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::NoneHeapType)::Nothing = WasmBuilder.write_byte(s, 0x71) # -0x0f
 
-@parity "wasm_builder/lib/src/ir/type.dart:643 NoneHeapType.toString" @unported function Base.show(io::IO, self::NoneHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:643 NoneHeapType.toString" Base.show(io::IO, ::NoneHeapType) = print(io, "none")
 
-@parity "wasm_builder/lib/src/ir/type.dart:646 NoneHeapType.shorthandName" @unported function WasmBuilder.shorthand_name(self::NoneHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:646 NoneHeapType.shorthandName" WasmBuilder.shorthand_name(::NoneHeapType)::String = "null"
 
-@parity "wasm_builder/lib/src/ir/type.dart:651 NoExternHeapType._" @unported function NoExternHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:651 NoExternHeapType._" NoExternHeapType__()::NoExternHeapType = NoExternHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:653 NoExternHeapType.defaultNullability" @unported function NoExternHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:653 NoExternHeapType.defaultNullability" NoExternHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:656 NoExternHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::NoExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:656 NoExternHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::NoExternHeapType)::Union{Bool,Nothing} = NoExternHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:659 NoExternHeapType.topType" @unported function WasmBuilder.top_type(self::NoExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:659 NoExternHeapType.topType" WasmBuilder.top_type(::NoExternHeapType)::HeapType = HeapType_extern
 
-@parity "wasm_builder/lib/src/ir/type.dart:662 NoExternHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::NoExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:662 NoExternHeapType.bottomType" WasmBuilder.bottom_type(::NoExternHeapType)::HeapType = HeapType_noextern
 
-@parity "wasm_builder/lib/src/ir/type.dart:665 NoExternHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::NoExternHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:665 NoExternHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::NoExternHeapType, other::HeapType)::Bool = other === HeapType_common || WasmBuilder.bottom_type(other) === HeapType_noextern
 
-@parity "wasm_builder/lib/src/ir/type.dart:669 NoExternHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::NoExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:669 NoExternHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::NoExternHeapType)::Nothing = WasmBuilder.write_byte(s, 0x72) # -0x0e
 
-@parity "wasm_builder/lib/src/ir/type.dart:672 NoExternHeapType.toString" @unported function Base.show(io::IO, self::NoExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:672 NoExternHeapType.toString" Base.show(io::IO, ::NoExternHeapType) = print(io, "noextern")
 
-@parity "wasm_builder/lib/src/ir/type.dart:675 NoExternHeapType.shorthandName" @unported function WasmBuilder.shorthand_name(self::NoExternHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:675 NoExternHeapType.shorthandName" WasmBuilder.shorthand_name(::NoExternHeapType)::String = "nullextern"
 
-@parity "wasm_builder/lib/src/ir/type.dart:680 NoFuncHeapType._" @unported function NoFuncHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:680 NoFuncHeapType._" NoFuncHeapType__()::NoFuncHeapType = NoFuncHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:682 NoFuncHeapType.defaultNullability" @unported function NoFuncHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:682 NoFuncHeapType.defaultNullability" NoFuncHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:685 NoFuncHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::NoFuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:685 NoFuncHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::NoFuncHeapType)::Union{Bool,Nothing} = NoFuncHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:688 NoFuncHeapType.topType" @unported function WasmBuilder.top_type(self::NoFuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:688 NoFuncHeapType.topType" WasmBuilder.top_type(::NoFuncHeapType)::HeapType = HeapType_func
 
-@parity "wasm_builder/lib/src/ir/type.dart:691 NoFuncHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::NoFuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:691 NoFuncHeapType.bottomType" WasmBuilder.bottom_type(::NoFuncHeapType)::HeapType = HeapType_nofunc
 
-@parity "wasm_builder/lib/src/ir/type.dart:694 NoFuncHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::NoFuncHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:694 NoFuncHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::NoFuncHeapType, other::HeapType)::Bool = other === HeapType_common || WasmBuilder.bottom_type(other) === HeapType_nofunc
 
-@parity "wasm_builder/lib/src/ir/type.dart:698 NoFuncHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::NoFuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:698 NoFuncHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::NoFuncHeapType)::Nothing = WasmBuilder.write_byte(s, 0x73) # -0x0d
 
-@parity "wasm_builder/lib/src/ir/type.dart:701 NoFuncHeapType.toString" @unported function Base.show(io::IO, self::NoFuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:701 NoFuncHeapType.toString" Base.show(io::IO, ::NoFuncHeapType) = print(io, "nofunc")
 
-@parity "wasm_builder/lib/src/ir/type.dart:704 NoFuncHeapType.shorthandName" @unported function WasmBuilder.shorthand_name(self::NoFuncHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:704 NoFuncHeapType.shorthandName" WasmBuilder.shorthand_name(::NoFuncHeapType)::String = "nullfunc"
 
-@parity "wasm_builder/lib/src/ir/type.dart:719 DefType" @unported function DefType(; super_type = nothing) end
+# dart's constructor of the abstract class, whose fields each subclass's struct holds and whose
+# subclasses' constructors do its work; this line declares the name and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:719 DefType" function DefType end
 
-@parity "wasm_builder/lib/src/ir/type.dart:724 DefType.index" @unported function WasmBuilder.index(self::DefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:724 DefType.index" function WasmBuilder.index(t::DefType)::Int
+    i = t._index
+    i === nothing && reject!(Internal("wasm_builder/lib/src/ir/type.dart:724 DefType.index: $(nameof(typeof(t))) $t not added to module"), "index")
+    i
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:725 DefType.index" @unported function WasmBuilder.set_index!(self::DefType, i::Int64) end
+@parity "wasm_builder/lib/src/ir/type.dart:725 DefType.index" function WasmBuilder.set_index!(t::DefType, i::Int)::Nothing
+    t._index = i
+    nothing
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:727 DefType.hasSuperType" @unported function WasmBuilder.has_super_type(self::DefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:727 DefType.hasSuperType" WasmBuilder.has_super_type(t::DefType)::Bool = t.super_type !== nothing
 
-@parity "wasm_builder/lib/src/ir/type.dart:730 DefType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::DefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:730 DefType.nullableByDefault" WasmBuilder.nullable_by_default(::DefType)::Union{Bool,Nothing} = nothing
 
-@parity "wasm_builder/lib/src/ir/type.dart:733 DefType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::DefType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:733 DefType.isSubtypeOf" function WasmBuilder.is_subtype_of(t::DefType, other::HeapType)::Bool
+    t === other && return true
+    sup = t.super_type
+    WasmBuilder.is_subtype_of(sup === nothing ? WasmBuilder.abstract_super_type(t) : sup, other)
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:738 DefType.abstractSuperType" @unported function WasmBuilder.abstract_super_type(self::DefType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:738 DefType.abstractSuperType" WasmBuilder.abstract_super_type(self::DefType)::HeapType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:738 DefType.abstractSuperType: abstract in $(typeof(self))"), "abstract_super_type")
 
-@parity "wasm_builder/lib/src/ir/type.dart:740 DefType.constituentTypes" @unported function WasmBuilder.constituent_types(self::DefType) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:740 DefType.constituentTypes" WasmBuilder.constituent_types(self::DefType)::Vector{StorageType} = reject!(Internal("wasm_builder/lib/src/ir/type.dart:740 DefType.constituentTypes: abstract in $(typeof(self))"), "constituent_types")
 
-@parity "wasm_builder/lib/src/ir/type.dart:743 DefType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::DefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:743 DefType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, t::DefType)::Nothing = WasmBuilder.write_signed(s, WasmBuilder.index(t))
 
-@parity "wasm_builder/lib/src/ir/type.dart:747 DefType.serializeDefinition" @unported function WasmBuilder.serialize_definition(self::DefType, s::WasmBuilder.Serializer) end
+"""Serialize the type for the type section, including the supertype reference, if any."""
+@parity "wasm_builder/lib/src/ir/type.dart:747 DefType.serializeDefinition" function WasmBuilder.serialize_definition(s::WasmBuilder.Serializer, t::DefType)::Nothing
+    if WasmBuilder.has_super_type(t)
+        sup = t.super_type::DefType
+        WasmBuilder.write_byte(s, t.has_any_subtypes ? 0x50 : 0x4F) # -0x30, -0x31
+        WasmBuilder.write_unsigned(s, 1)
+        WasmBuilder.is_structural_subtype_of(t, sup) || reject!(Internal("wasm_builder/lib/src/ir/type.dart:751 DefType.serializeDefinition: $t is not a structural subtype of its declared supertype $sup"), "serialize_definition")
+        write(s, sup)
+    elseif t.has_any_subtypes
+        WasmBuilder.write_byte(s, 0x50) # -0x30
+        WasmBuilder.write_unsigned(s, 0)
+    end
+    WasmBuilder.serialize_definition_inner(s, t)
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:761 DefType.serializeDefinitionInner" @unported function WasmBuilder.serialize_definition_inner(self::DefType, s::WasmBuilder.Serializer) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/type.dart:761 DefType.serializeDefinitionInner" WasmBuilder.serialize_definition_inner(s::WasmBuilder.Serializer, self::DefType)::Nothing = reject!(Internal("wasm_builder/lib/src/ir/type.dart:761 DefType.serializeDefinitionInner: abstract in $(typeof(self))"), "serialize_definition_inner")
 
 @parity "wasm_builder/lib/src/ir/type.dart:763 DefType.deserializeAllocate" @unported function DefType_deserialize_allocate(d, existing::Vector{DefType}) end
 
@@ -436,71 +693,95 @@ PackedType's dart fields: `kind`.
 
 @parity "wasm_builder/lib/src/ir/type.dart:879 DefType.printTypeDefToInternal" @unported function WasmBuilder.print_type_def_to_internal(self::DefType, p) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:885 UnresolvedDefType" @unported function UnresolvedDefType(type_index) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:885 UnresolvedDefType" function UnresolvedDefType end
 
-@parity "wasm_builder/lib/src/ir/type.dart:888 UnresolvedDefType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::UnresolvedDefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:888 UnresolvedDefType.nullableByDefault" WasmBuilder.nullable_by_default(::UnresolvedDefType)::Union{Bool,Nothing} = reject!(Internal("wasm_builder/lib/src/ir/type.dart:889 UnresolvedDefType.nullableByDefault: cannot obtain nullableByDefault of unresolved type"), "nullable_by_default")
 
-@parity "wasm_builder/lib/src/ir/type.dart:892 UnresolvedDefType.abstractSuperType" @unported function WasmBuilder.abstract_super_type(self::UnresolvedDefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:892 UnresolvedDefType.abstractSuperType" WasmBuilder.abstract_super_type(::UnresolvedDefType)::HeapType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:893 UnresolvedDefType.abstractSuperType: cannot obtain abstractSuperType of unresolved type"), "abstract_super_type")
 
-@parity "wasm_builder/lib/src/ir/type.dart:896 UnresolvedDefType.constituentTypes" @unported function WasmBuilder.constituent_types(self::UnresolvedDefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:896 UnresolvedDefType.constituentTypes" WasmBuilder.constituent_types(::UnresolvedDefType)::Vector{StorageType} = reject!(Internal("wasm_builder/lib/src/ir/type.dart:897 UnresolvedDefType.constituentTypes: cannot obtain constituentTypes of unresolved type"), "constituent_types")
 
-@parity "wasm_builder/lib/src/ir/type.dart:900 UnresolvedDefType.topType" @unported function WasmBuilder.top_type(self::UnresolvedDefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:900 UnresolvedDefType.topType" WasmBuilder.top_type(::UnresolvedDefType)::HeapType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:900 UnresolvedDefType.topType: cannot obtain topType of unresolved type"), "top_type")
 
-@parity "wasm_builder/lib/src/ir/type.dart:903 UnresolvedDefType.bottomType" @unported function WasmBuilder.bottom_type(self::UnresolvedDefType) end
+@parity "wasm_builder/lib/src/ir/type.dart:903 UnresolvedDefType.bottomType" WasmBuilder.bottom_type(::UnresolvedDefType)::HeapType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:904 UnresolvedDefType.bottomType: cannot obtain bottomType of unresolved type"), "bottom_type")
 
-@parity "wasm_builder/lib/src/ir/type.dart:907 UnresolvedDefType.serializeDefinitionInner" @unported function WasmBuilder.serialize_definition_inner(self::UnresolvedDefType, s::WasmBuilder.Serializer) end
+@parity "wasm_builder/lib/src/ir/type.dart:907 UnresolvedDefType.serializeDefinitionInner" WasmBuilder.serialize_definition_inner(::WasmBuilder.Serializer, ::UnresolvedDefType)::Nothing = reject!(Internal("wasm_builder/lib/src/ir/type.dart:908 UnresolvedDefType.serializeDefinitionInner: cannot serialize unresolved type"), "serialize_definition_inner")
 
 @parity "wasm_builder/lib/src/ir/type.dart:911 UnresolvedDefType.deserializeFillInner" @unported function WasmBuilder.deserialize_fill_inner(self::UnresolvedDefType, d, existing::Vector{DefType}) end
 
 @parity "wasm_builder/lib/src/ir/type.dart:915 UnresolvedDefType.printTypeDefToInternal" @unported function WasmBuilder.print_type_def_to_internal(self::UnresolvedDefType, p) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:921 ExnHeapType._" @unported function ExnHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:921 ExnHeapType._" ExnHeapType__()::ExnHeapType = ExnHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:923 ExnHeapType.defaultNullability" @unported function ExnHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:923 ExnHeapType.defaultNullability" ExnHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:926 ExnHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::ExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:926 ExnHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::ExnHeapType)::Union{Bool,Nothing} = ExnHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:929 ExnHeapType.topType" @unported function WasmBuilder.top_type(self::ExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:929 ExnHeapType.topType" WasmBuilder.top_type(::ExnHeapType)::HeapType = HeapType_exn
 
-@parity "wasm_builder/lib/src/ir/type.dart:932 ExnHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::ExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:932 ExnHeapType.bottomType" WasmBuilder.bottom_type(::ExnHeapType)::HeapType = HeapType_noexn
 
-@parity "wasm_builder/lib/src/ir/type.dart:935 ExnHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::ExnHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:935 ExnHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::ExnHeapType, other::HeapType)::Bool = other === HeapType_common || other === HeapType_exn
 
-@parity "wasm_builder/lib/src/ir/type.dart:939 ExnHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::ExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:939 ExnHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::ExnHeapType)::Nothing = WasmBuilder.write_byte(s, 0x69) # -0x17
 
-@parity "wasm_builder/lib/src/ir/type.dart:942 ExnHeapType.toString" @unported function Base.show(io::IO, self::ExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:942 ExnHeapType.toString" Base.show(io::IO, ::ExnHeapType) = print(io, "exn")
 
-@parity "wasm_builder/lib/src/ir/type.dart:947 NoExnHeapType._" @unported function NoExnHeapType__() end
+@parity "wasm_builder/lib/src/ir/type.dart:947 NoExnHeapType._" NoExnHeapType__()::NoExnHeapType = NoExnHeapType(Val(:_))
 
-@parity "wasm_builder/lib/src/ir/type.dart:949 NoExnHeapType.defaultNullability" @unported function NoExnHeapType_default_nullability() end
+@parity "wasm_builder/lib/src/ir/type.dart:949 NoExnHeapType.defaultNullability" NoExnHeapType_default_nullability()::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:952 NoExnHeapType.nullableByDefault" @unported function WasmBuilder.nullable_by_default(self::NoExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:952 NoExnHeapType.nullableByDefault" WasmBuilder.nullable_by_default(::NoExnHeapType)::Union{Bool,Nothing} = NoExnHeapType_default_nullability()
 
-@parity "wasm_builder/lib/src/ir/type.dart:955 NoExnHeapType.topType" @unported function WasmBuilder.top_type(self::NoExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:955 NoExnHeapType.topType" WasmBuilder.top_type(::NoExnHeapType)::HeapType = HeapType_exn
 
-@parity "wasm_builder/lib/src/ir/type.dart:958 NoExnHeapType.bottomType" @unported function WasmBuilder.bottom_type(self::NoExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:958 NoExnHeapType.bottomType" WasmBuilder.bottom_type(::NoExnHeapType)::HeapType = HeapType_noexn
 
-@parity "wasm_builder/lib/src/ir/type.dart:961 NoExnHeapType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::NoExnHeapType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:961 NoExnHeapType.isSubtypeOf" WasmBuilder.is_subtype_of(::NoExnHeapType, other::HeapType)::Bool = other === HeapType_common || other === HeapType_exn || other === HeapType_noexn
 
-@parity "wasm_builder/lib/src/ir/type.dart:967 NoExnHeapType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::NoExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:967 NoExnHeapType.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, ::NoExnHeapType)::Nothing = WasmBuilder.write_byte(s, 0x74) # -0x0c
 
-@parity "wasm_builder/lib/src/ir/type.dart:970 NoExnHeapType.toString" @unported function Base.show(io::IO, self::NoExnHeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:970 NoExnHeapType.toString" Base.show(io::IO, ::NoExnHeapType) = print(io, "noexn")
 
-@parity "wasm_builder/lib/src/ir/type.dart:978 FunctionType" @unported function FunctionType(inputs, outputs; super_type = nothing) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:978 FunctionType" function FunctionType end
 
-@parity "wasm_builder/lib/src/ir/type.dart:981 FunctionType.abstractSuperType" @unported function WasmBuilder.abstract_super_type(self::FunctionType) end
+@parity "wasm_builder/lib/src/ir/type.dart:981 FunctionType.abstractSuperType" WasmBuilder.abstract_super_type(::FunctionType)::HeapType = HeapType_func
 
-@parity "wasm_builder/lib/src/ir/type.dart:984 FunctionType.topType" @unported function WasmBuilder.top_type(self::FunctionType) end
+@parity "wasm_builder/lib/src/ir/type.dart:984 FunctionType.topType" WasmBuilder.top_type(::FunctionType)::HeapType = HeapType_func
 
-@parity "wasm_builder/lib/src/ir/type.dart:987 FunctionType.bottomType" @unported function WasmBuilder.bottom_type(self::FunctionType) end
+@parity "wasm_builder/lib/src/ir/type.dart:987 FunctionType.bottomType" WasmBuilder.bottom_type(::FunctionType)::HeapType = HeapType_nofunc
 
-@parity "wasm_builder/lib/src/ir/type.dart:990 FunctionType.constituentTypes" @unported function WasmBuilder.constituent_types(self::FunctionType) end
+@parity "wasm_builder/lib/src/ir/type.dart:990 FunctionType.constituentTypes" WasmBuilder.constituent_types(t::FunctionType)::Vector{StorageType} = StorageType[t.inputs; t.outputs]
 
-@parity "wasm_builder/lib/src/ir/type.dart:993 FunctionType.isStructuralSubtypeOf" @unported function WasmBuilder.is_structural_subtype_of(self::FunctionType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:993 FunctionType.isStructuralSubtypeOf" function WasmBuilder.is_structural_subtype_of(t::FunctionType, other::HeapType)::Bool
+    (other === HeapType_common || other === HeapType_func) && return true
+    other isa FunctionType || return false
+    length(t.inputs) == length(other.inputs) || return false
+    length(t.outputs) == length(other.outputs) || return false
+    for i in eachindex(t.inputs)
+        # Inputs are contravariant.
+        WasmBuilder.is_subtype_of(other.inputs[i], t.inputs[i]) || return false
+    end
+    for i in eachindex(t.outputs)
+        # Outputs are covariant.
+        WasmBuilder.is_subtype_of(t.outputs[i], other.outputs[i]) || return false
+    end
+    true
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1009 FunctionType.isStructurallyEqualTo" @unported function WasmBuilder.is_structurally_equal_to(self::FunctionType, other::FunctionType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1009 FunctionType.isStructurallyEqualTo" function WasmBuilder.is_structurally_equal_to(t::FunctionType, other::FunctionType)::Bool
+    t.inputs == other.inputs && t.outputs == other.outputs
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1022 FunctionType.serializeDefinitionInner" @unported function WasmBuilder.serialize_definition_inner(self::FunctionType, s::WasmBuilder.Serializer) end
+@parity "wasm_builder/lib/src/ir/type.dart:1022 FunctionType.serializeDefinitionInner" function WasmBuilder.serialize_definition_inner(s::WasmBuilder.Serializer, t::FunctionType)::Nothing
+    WasmBuilder.write_byte(s, 0x60) # -0x20
+    WasmBuilder.write_list(s, t.inputs)
+    WasmBuilder.write_list(s, t.outputs)
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1028 FunctionType.deserializeAllocate" @unported function FunctionType_deserialize_allocate(d, super_type::Union{Nothing,DefType}, existing::Vector{DefType}) end
 
@@ -512,27 +793,59 @@ PackedType's dart fields: `kind`.
 
 @parity "wasm_builder/lib/src/ir/type.dart:1073 FunctionType.printSignatureWithNamesTo" @unported function WasmBuilder.print_signature_with_names_to(self::FunctionType, p; one_line = nothing) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1099 FunctionType.toString" @unported function Base.show(io::IO, self::FunctionType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1099 FunctionType.toString" function Base.show(io::IO, t::FunctionType)
+    print(io, "(", join(t.inputs, ", "), ") -> (", join(t.outputs, ", "), ")")
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1106 DataType" @unported function DataType(name; super_type = nothing) end
+# dart's constructor of the abstract class, whose fields each subclass's struct holds and whose
+# subclasses' constructors do its work; this line declares the name and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:1106 DataType" function DataType end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1109 DataType.topType" @unported function WasmBuilder.top_type(self::DataType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1109 DataType.topType" WasmBuilder.top_type(::DataType)::HeapType = HeapType_any
 
-@parity "wasm_builder/lib/src/ir/type.dart:1112 DataType.bottomType" @unported function WasmBuilder.bottom_type(self::DataType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1112 DataType.bottomType" WasmBuilder.bottom_type(::DataType)::HeapType = HeapType_none
 
-@parity "wasm_builder/lib/src/ir/type.dart:1115 DataType.toString" @unported function Base.show(io::IO, self::DataType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1115 DataType.toString" Base.show(io::IO, t::DataType) = print(io, something(t.name, "<unnamed>"))
 
-@parity "wasm_builder/lib/src/ir/type.dart:1123 StructType" @unported function StructType(name; fields = nothing, super_type = nothing) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:1123 StructType" function StructType end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1128 StructType.abstractSuperType" @unported function WasmBuilder.abstract_super_type(self::StructType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1128 StructType.abstractSuperType" WasmBuilder.abstract_super_type(::StructType)::HeapType = HeapType_struct
 
-@parity "wasm_builder/lib/src/ir/type.dart:1131 StructType.constituentTypes" @unported function WasmBuilder.constituent_types(self::StructType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1131 StructType.constituentTypes" WasmBuilder.constituent_types(t::StructType)::Vector{StorageType} = StorageType[f.type for f in t.fields]
 
-@parity "wasm_builder/lib/src/ir/type.dart:1136 StructType.isStructuralSubtypeOf" @unported function WasmBuilder.is_structural_subtype_of(self::StructType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1136 StructType.isStructuralSubtypeOf" function WasmBuilder.is_structural_subtype_of(t::StructType, other::HeapType)::Bool
+    if other === HeapType_common || other === HeapType_any || other === HeapType_eq || other === HeapType_struct
+        return true
+    end
+    other isa StructType || return false
+    length(t.fields) < length(other.fields) && return false
+    for i in eachindex(other.fields)
+        WasmBuilder.is_subtype_of(t.fields[i], other.fields[i]) || return false
+    end
+    true
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1155 StructType.isStructurallyEqualTo" @unported function WasmBuilder.is_structurally_equal_to(self::StructType, other::StructType) end
+"""
+Whether this is structurally equivalent to `other`: the same as
+`is_structural_subtype_of(t, other) && is_structural_subtype_of(other, t)`.
+"""
+@parity "wasm_builder/lib/src/ir/type.dart:1155 StructType.isStructurallyEqualTo" function WasmBuilder.is_structurally_equal_to(t::StructType, other::StructType)::Bool
+    length(t.fields) == length(other.fields) || return false
+    for i in eachindex(other.fields)
+        f1 = t.fields[i]
+        f2 = other.fields[i]
+        f1.mutable == f2.mutable || return false
+        f1.type == f2.type || return false
+    end
+    true
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1167 StructType.serializeDefinitionInner" @unported function WasmBuilder.serialize_definition_inner(self::StructType, s::WasmBuilder.Serializer) end
+@parity "wasm_builder/lib/src/ir/type.dart:1167 StructType.serializeDefinitionInner" function WasmBuilder.serialize_definition_inner(s::WasmBuilder.Serializer, t::StructType)::Nothing
+    WasmBuilder.write_byte(s, 0x5F) # -0x21
+    WasmBuilder.write_list(s, t.fields)
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1172 StructType.deserializeAllocate" @unported function StructType_deserialize_allocate(d, super_type::Union{Nothing,DefType}, existing::Vector{DefType}) end
 
@@ -540,15 +853,26 @@ PackedType's dart fields: `kind`.
 
 @parity "wasm_builder/lib/src/ir/type.dart:1187 StructType.printTypeDefToInternal" @unported function WasmBuilder.print_type_def_to_internal(self::StructType, p) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1232 ArrayType" @unported function ArrayType(name; element_type = nothing, super_type = nothing) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:1232 ArrayType" function ArrayType end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1237 ArrayType.abstractSuperType" @unported function WasmBuilder.abstract_super_type(self::ArrayType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1237 ArrayType.abstractSuperType" WasmBuilder.abstract_super_type(::ArrayType)::HeapType = HeapType_array
 
-@parity "wasm_builder/lib/src/ir/type.dart:1240 ArrayType.constituentTypes" @unported function WasmBuilder.constituent_types(self::ArrayType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1240 ArrayType.constituentTypes" WasmBuilder.constituent_types(t::ArrayType)::Vector{StorageType} = StorageType[t.element_type[].type]
 
-@parity "wasm_builder/lib/src/ir/type.dart:1243 ArrayType.isStructuralSubtypeOf" @unported function WasmBuilder.is_structural_subtype_of(self::ArrayType, other::HeapType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1243 ArrayType.isStructuralSubtypeOf" function WasmBuilder.is_structural_subtype_of(t::ArrayType, other::HeapType)::Bool
+    if other === HeapType_common || other === HeapType_any || other === HeapType_eq || other === HeapType_array
+        return true
+    end
+    other isa ArrayType || return false
+    WasmBuilder.is_subtype_of(t.element_type[], other.element_type[])
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1255 ArrayType.serializeDefinitionInner" @unported function WasmBuilder.serialize_definition_inner(self::ArrayType, s::WasmBuilder.Serializer) end
+@parity "wasm_builder/lib/src/ir/type.dart:1255 ArrayType.serializeDefinitionInner" function WasmBuilder.serialize_definition_inner(s::WasmBuilder.Serializer, t::ArrayType)::Nothing
+    WasmBuilder.write_byte(s, 0x5E) # -0x22
+    write(s, t.element_type[])
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1260 ArrayType.deserializeAllocate" @unported function ArrayType_deserialize_allocate(d, super_type::Union{Nothing,DefType}, existing::Vector{DefType}) end
 
@@ -556,46 +880,79 @@ PackedType's dart fields: `kind`.
 
 @parity "wasm_builder/lib/src/ir/type.dart:1275 ArrayType.printTypeDefToInternal" @unported function WasmBuilder.print_type_def_to_internal(self::ArrayType, p) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1293 _WithMutability" @unported function _WithMutability(type_; mutable_) end
+# dart's constructor of the abstract class, whose fields each subclass's struct holds and whose
+# subclasses' constructors do its work; this line declares the name and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:1293 _WithMutability" function _WithMutability end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1296 _WithMutability.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::_WithMutability) end
+@parity "wasm_builder/lib/src/ir/type.dart:1296 _WithMutability.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::_WithMutability)::Nothing
+    write(s, t.type)
+    WasmBuilder.write_byte(s, t.mutable ? 0x01 : 0x00)
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1301 _WithMutability.deserialize" @unported function _WithMutability_deserialize(d, fun) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1311 _WithMutability.toString" @unported function Base.show(io::IO, self::_WithMutability) end
+@parity "wasm_builder/lib/src/ir/type.dart:1311 _WithMutability.toString" Base.show(io::IO, t::_WithMutability) = print(io, t.mutable ? "var " : "const ", t.type)
 
-@parity "wasm_builder/lib/src/ir/type.dart:1318 GlobalType" @unported function GlobalType(type_; mutable_ = nothing) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:1318 GlobalType" function GlobalType end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1320 GlobalType.deserialize" @unported function GlobalType_deserialize(d, types::Vector{DefType}) end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1328 GlobalType.printTo" @unported function WasmBuilder.print_to(self::GlobalType, p) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1339 FieldType" @unported function FieldType(type_; mutable_ = nothing) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/type.dart:1339 FieldType" function FieldType end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1342 FieldType.i8" @unported function FieldType_i8(; mutable_ = nothing) end
+"""The `i8` storage type as a field type."""
+@parity "wasm_builder/lib/src/ir/type.dart:1342 FieldType.i8" FieldType_i8(; mutable::Bool=true)::FieldType = FieldType(PackedType_i8; mutable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:1345 FieldType.i16" @unported function FieldType_i16(; mutable_ = nothing) end
+"""The `i16` storage type as a field type."""
+@parity "wasm_builder/lib/src/ir/type.dart:1345 FieldType.i16" FieldType_i16(; mutable::Bool=true)::FieldType = FieldType(PackedType_i16; mutable)
 
-@parity "wasm_builder/lib/src/ir/type.dart:1347 FieldType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::FieldType, other::FieldType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1347 FieldType.isSubtypeOf" function WasmBuilder.is_subtype_of(t::FieldType, other::FieldType)::Bool
+    t.mutable == other.mutable || return false
+    if t.mutable
+        # Mutable fields are invariant.
+        t.type == other.type
+    else
+        # Immutable fields are covariant.
+        WasmBuilder.is_subtype_of(t.type, other.type)
+    end
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1358 FieldType.deserialize" @unported function FieldType_deserialize(d, existing::Vector{DefType}) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1373 PackedType._" @unported function PackedType__(kind) end
+@parity "wasm_builder/lib/src/ir/type.dart:1373 PackedType._" PackedType__(kind::PackedTypeKind)::PackedType = PackedType(Val(:_), kind)
 
-@parity "wasm_builder/lib/src/ir/type.dart:1376 PackedType.i8" @unported function PackedType_i8() end
+"""The `i8` storage type."""
+@parity "wasm_builder/lib/src/ir/type.dart:1376 PackedType.i8" const PackedType_i8 = PackedType__(PackedTypeKind_i8)
 
-@parity "wasm_builder/lib/src/ir/type.dart:1379 PackedType.i16" @unported function PackedType_i16() end
+"""The `i16` storage type."""
+@parity "wasm_builder/lib/src/ir/type.dart:1379 PackedType.i16" const PackedType_i16 = PackedType__(PackedTypeKind_i16)
 
-@parity "wasm_builder/lib/src/ir/type.dart:1382 PackedType.unpacked" @unported function WasmBuilder.unpacked(self::PackedType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1382 PackedType.unpacked" WasmBuilder.unpacked(::PackedType)::ValueType = NumType_i32
 
-@parity "wasm_builder/lib/src/ir/type.dart:1385 PackedType.isSubtypeOf" @unported function WasmBuilder.is_subtype_of(self::PackedType, other::StorageType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1385 PackedType.isSubtypeOf" WasmBuilder.is_subtype_of(t::PackedType, other::StorageType)::Bool = t == other
 
-@parity "wasm_builder/lib/src/ir/type.dart:1388 PackedType.isPrimitive" @unported function WasmBuilder.is_primitive(self::PackedType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1388 PackedType.isPrimitive" WasmBuilder.is_primitive(::PackedType)::Bool = true
 
-@parity "wasm_builder/lib/src/ir/type.dart:1391 PackedType.byteSize" @unported function WasmBuilder.byte_size(self::PackedType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1391 PackedType.byteSize" function WasmBuilder.byte_size(t::PackedType)::Int
+    # dart's exhaustive switch over the enum, each value named
+    t.kind == PackedTypeKind_i8 && return 1
+    t.kind == PackedTypeKind_i16 && return 2
+    reject!(Internal("wasm_builder/lib/src/ir/type.dart:1392 PackedType.byteSize: no arm for $(t.kind)"), "byte_size")
+end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1399 PackedType.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::PackedType) end
+@parity "wasm_builder/lib/src/ir/type.dart:1399 PackedType.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::PackedType)::Nothing
+    # dart's exhaustive switch over the enum, each value named
+    t.kind == PackedTypeKind_i8 && return WasmBuilder.write_byte(s, 0x78) # -0x8
+    t.kind == PackedTypeKind_i16 && return WasmBuilder.write_byte(s, 0x77) # -0x9
+    reject!(Internal("wasm_builder/lib/src/ir/type.dart:1400 PackedType.serialize: no arm for $(t.kind)"), "serialize")
+end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1410 PackedType.deserialize" @unported function PackedType_deserialize(d) end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1423 PackedType.toString" @unported function Base.show(io::IO, self::PackedType) end
+# dart's Enum.name, the value's own name: a Julia @enum value prints with its type's prefix
+@parity "wasm_builder/lib/src/ir/type.dart:1423 PackedType.toString" Base.show(io::IO, t::PackedType) = print(io, chopprefix(string(t.kind), "PackedTypeKind_"))

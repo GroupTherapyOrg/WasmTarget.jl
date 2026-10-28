@@ -1245,23 +1245,48 @@ end
 @quarantine "the typed signatures' assertion, run when the package loads" Base.Val construction_check(::Val{:check_typed_signatures})::Int = check_typed_signatures(@__MODULE__)
 
 # why the dart class at `anchor` does not declare `field` (a Julia field name) nullable, or nothing
-# when it does: a member at column 2 of the class's body declaring the field whose snake name it is,
-# its type ending in `?`
+# when it does: a member at column 2 of the class's body, or of a class it extends or mixes in (a
+# struct holds its dart superclasses' fields), declaring the field whose snake name it is, its type
+# ending in `?`
 @quarantine "dart's sound null safety marks a nullable field T?; Julia reads the pinned class body" Base.readlines function _dart_nullable(sdk::String, anchor::String, field::Symbol)::Union{String,Nothing}
     local a = match(ANCHOR_RX, anchor)
     local path = joinpath(sdk, "pkg", a[1])
     isfile(path) || return "the pin has no pkg/$(a[1])"
     local lines = get!(() -> readlines(path), _PIN_LINES, path)
-    for j in parse(Int, a[2])+1:length(lines)
-        local l = lines[j]
-        startswith(l, "}") && break
-        startswith(l, "  ") && !startswith(l, "   ") || continue
-        for d in eachmatch(r"([^\s(]+)\s+([A-Za-z_$][\w$]*)\s*(?:;|=(?![=>]))", l)
-            snake(d[2]) == string(field) || continue
-            return endswith(d[1], "?") ? nothing : "dart declares $(d[2]) as $(d[1]), not nullable (line $j)"
+    local pkgdir = a[1][1:findfirst('/', a[1])]
+    # a class of the anchor's package, by name: its file's lines and declaration line, or nothing
+    local find(name) = begin
+        local i = _class_line(lines, name)
+        i == 0 || return (lines, i)
+        for d in DART_FILES
+            startswith(d, pkgdir) || continue
+            local p = joinpath(sdk, "pkg", d)
+            local ls = get!(() -> readlines(p), _PIN_LINES, p)
+            local k = _class_line(ls, name)
+            k == 0 || return (ls, k)
         end
+        nothing
     end
-    return "the dart class declares no field $(field)"
+    local declared(ls, ln, depth) = begin
+        for j in ln+1:length(ls)
+            local l = ls[j]
+            startswith(l, "}") && break
+            startswith(l, "  ") && !startswith(l, "   ") || continue
+            for d in eachmatch(r"([^\s(]+)\s+([A-Za-z_$][\w$]*)\s*(?:;|=(?![=>]))", l)
+                snake(d[2]) == string(field) || continue
+                return endswith(d[1], "?") ? nothing : "dart declares $(d[2]) as $(d[1]), not nullable (line $j)"
+            end
+        end
+        depth < 8 || return "the dart class declares no field $(field)"
+        for sup in _dart_supers(ls, ln)
+            local w = find(sup)
+            w === nothing && continue
+            local why = declared(w[1], w[2], depth + 1)
+            why == "the dart class declares no field $(field)" || return why
+        end
+        return "the dart class declares no field $(field)"
+    end
+    return declared(lines, parse(Int, a[2]), 0)
 end
 
 """

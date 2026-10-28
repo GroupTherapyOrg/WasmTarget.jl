@@ -2,16 +2,34 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-Finalizable's dart fields: `_value`.
+A part of the module graph whose value (an index) is known only once the module is finalized;
+reading it before then rejects.
 """
-@parity "wasm_builder/lib/src/ir/finalizable.dart:14 Finalizable" @unported struct Finalizable end
+@parity "wasm_builder/lib/src/ir/finalizable.dart:14 Finalizable" mutable struct Finalizable{T}
+    _value::Union{T,Nothing}
+    # dart's implicit constructor, the field unset
+    Finalizable{T}() where {T} = new{T}(nothing)
+end
 
-@parity "wasm_builder/lib/src/ir/finalizable.dart:17 Finalizable.value" @unported function WasmBuilder.set_value!(self::Finalizable, v) end
+# The setter and finalize take dart's T as Int: Finalizable's one instantiation at the pin is dart's
+# typedef FinalizableIndex = Finalizable<int> (finalizable.dart:42), which the port spells
+# Finalizable{Int}; Julia's `v::T` would leave T unbounded.
+@parity "wasm_builder/lib/src/ir/finalizable.dart:17 Finalizable.value" WasmBuilder.set_value!(f::Finalizable{Int}, v::Int)::Nothing = finalize(f, v)
 
-@parity "wasm_builder/lib/src/ir/finalizable.dart:19 Finalizable.value" @unported function WasmBuilder.value(self::Finalizable) end
+@parity "wasm_builder/lib/src/ir/finalizable.dart:19 Finalizable.value" function WasmBuilder.value(f::Finalizable{T})::T where {T}
+    local v = f._value
+    v === nothing && reject!(Internal("wasm_builder/lib/src/ir/finalizable.dart:22 Finalizable.value: value not yet finalized"), "value")
+    return v
+end
 
-@parity "wasm_builder/lib/src/ir/finalizable.dart:27 Finalizable.finalize" @unported function Base.finalize(self::Finalizable, v) end
+@parity "wasm_builder/lib/src/ir/finalizable.dart:27 Finalizable.finalize" function Base.finalize(f::Finalizable{Int}, v::Int)::Nothing
+    f._value === nothing || reject!(Internal("wasm_builder/lib/src/ir/finalizable.dart:29 Finalizable.finalize: value already finalized"), "finalize")
+    f._value = v
+    return nothing
+end
 
-@parity "wasm_builder/lib/src/ir/finalizable.dart:34 Finalizable.isFinal" @unported function WasmBuilder.is_final(self::Finalizable) end
+# dart's isFinal is true while the value is still unset, and toString then prints `null` (the
+# unset value), `<NF>` once it is set: ported as dart has it.
+@parity "wasm_builder/lib/src/ir/finalizable.dart:34 Finalizable.isFinal" WasmBuilder.is_final(f::Finalizable)::Bool = f._value === nothing
 
-@parity "wasm_builder/lib/src/ir/finalizable.dart:39 Finalizable.toString" @unported function Base.show(io::IO, self::Finalizable) end
+@parity "wasm_builder/lib/src/ir/finalizable.dart:39 Finalizable.toString" Base.show(io::IO, f::Finalizable) = print(io, WasmBuilder.is_final(f) ? "null" : "<NF>")

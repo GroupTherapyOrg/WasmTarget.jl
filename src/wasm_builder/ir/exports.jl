@@ -5,17 +5,32 @@
 
 @parity "wasm_builder/lib/src/ir/exports.dart:23 Export" abstract type Export <: WasmBuilder.Serializable end
 
-"""
-Exports's dart fields: `exported`.
-"""
-@parity "wasm_builder/lib/src/ir/exports.dart:29 Exports" @unported struct Exports end
+@parity "wasm_builder/lib/src/ir/exports.dart:29 Exports" struct Exports
+    # All exports of this module.
+    exported::Vector{Export}
+    # dart's constructor (line 33), the struct's one inner constructor
+    Exports(exported::Vector{Export}) = new(exported)
+end
 
-@parity "wasm_builder/lib/src/ir/exports.dart:11 Exportable.enclosingModule" @unported function WasmBuilder.enclosing_module(self::Exportable) end
+# The classes that mix in Exportable (BaseFunction, Global, Table, Memory, Tag) cannot also subtype it
+# in Julia, so its members take their Union.
+# dart's abstract getter, which each class's field `enclosingModule` answers
+@parity "wasm_builder/lib/src/ir/exports.dart:11 Exportable.enclosingModule" WasmBuilder.enclosing_module(x::Union{BaseFunction,Global,Table,Memory,Tag})::AbstractModule = x.enclosing_module
 
-@parity "wasm_builder/lib/src/ir/exports.dart:13 Exportable.buildExport" @unported function WasmBuilder.build_export(self::Exportable, name::String) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/ir/exports.dart:13 Exportable.buildExport" WasmBuilder.build_export(x::Union{BaseFunction,Global,Table,Memory,Tag}, name::String)::Export =
+    reject!(Internal("wasm_builder/lib/src/ir/exports.dart:13 Exportable.buildExport: abstract in $(typeof(x))"), "build_export")
 
-@parity "wasm_builder/lib/src/ir/exports.dart:16 Exportable.export" @unported function WasmBuilder.var"export"(self::Exportable, name::String) end
+"""All exports must have unique names."""
+@parity "wasm_builder/lib/src/ir/exports.dart:16 Exportable.export" function WasmBuilder.var"export"(x::Union{BaseFunction,Global,Table,Memory,Tag}, name::String)::Export
+    x.exported_name[] = name
+    return WasmBuilder.build_export(x, name)
+end
 
-@parity "wasm_builder/lib/src/ir/exports.dart:26 Export" @unported function Export(name) end
+# dart's constructor of the abstract class assigns its field `name`, which each subclass's struct
+# holds; their constructors do it, and this line declares the name and adds no method
+@parity "wasm_builder/lib/src/ir/exports.dart:26 Export" function Export end
 
-@parity "wasm_builder/lib/src/ir/exports.dart:33 Exports" @unported function Exports(exported) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/exports.dart:33 Exports" function Exports end

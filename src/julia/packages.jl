@@ -7,12 +7,13 @@
 @quarantine "Julia has no per-file namespace; dart's wasm_builder package is a module" Core.Module module WasmBuilder
 import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 # ported code rejects where dart throws (src/julia/reject.jl)
-import ..reject!, ..Internal, ..Unported
-# dart's `late final` fields (src/julia/late.jl)
-import ..Late
+import ..reject!, ..Internal, ..Unported, ..InvalidModule
+# dart's `late final` fields (src/julia/late.jl); dart's insertion-ordered Map and Set
+# (src/julia/linked_hash_map.jl); the forward declaration of IR.Module (src/julia/forward.jl)
+import ..Late, ..LinkedHashMap, ..LinkedHashSet, ..AbstractModule
 @quarantine "dart's builder and serializer import ir under the prefix ir; a prefix is a module in Julia" Core.Module module IR
 import ...@parity, ...@unported, ...@closed, ...@exhaustive
-import ...reject!, ...Internal, ...Unported, ...Late
+import ...reject!, ...Internal, ...Unported, ...InvalidModule, ...Late, ...LinkedHashMap, ...LinkedHashSet, ...AbstractModule
 import ..WasmBuilder
 end
 end

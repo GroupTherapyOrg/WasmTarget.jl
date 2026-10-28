@@ -3,21 +3,63 @@
 
 @parity "wasm_builder/lib/src/ir/data_segment.dart:11 BaseDataSegment" abstract type BaseDataSegment end
 
-"""
-DataSegment's dart fields: `content`.
-"""
-@parity "wasm_builder/lib/src/ir/data_segment.dart:25 DataSegment" @unported struct DataSegment <: BaseDataSegment end
+"""A data segment in a module."""
+@parity "wasm_builder/lib/src/ir/data_segment.dart:25 DataSegment" struct DataSegment <: BaseDataSegment
+    # BaseDataSegment's `late final` fields, and DataSegment's own
+    index::Late{Int}
+    memory::Late{Union{Memory,Nothing}}
+    offset::Late{Union{Int,Nothing}}
+    content::Late{Vector{UInt8}}
+    # the struct's one constructor, every field unassigned: dart's DataSegment and
+    # DataSegment.uninitialized are the anchored functions below, each making the value through it
+    DataSegment(::Val{:uninitialized}) = new(
+        Late{Int}("wasm_builder/lib/src/ir/data_segment.dart:12 BaseDataSegment.index"),
+        Late{Union{Memory,Nothing}}("wasm_builder/lib/src/ir/data_segment.dart:13 BaseDataSegment.memory"),
+        Late{Union{Int,Nothing}}("wasm_builder/lib/src/ir/data_segment.dart:14 BaseDataSegment.offset"),
+        Late{Vector{UInt8}}("wasm_builder/lib/src/ir/data_segment.dart:26 DataSegment.content"))
+end
 
-@parity "wasm_builder/lib/src/ir/data_segment.dart:16 BaseDataSegment" @unported function BaseDataSegment(index, memory, offset) end
+# dart's constructors of the abstract class assign its fields, which DataSegment's struct holds;
+# DataSegment's constructors below do it, and this line declares the name and adds no method
+@parity "wasm_builder/lib/src/ir/data_segment.dart:16 BaseDataSegment" function BaseDataSegment end
 
-@parity "wasm_builder/lib/src/ir/data_segment.dart:17 BaseDataSegment.uninitialized" @unported function BaseDataSegment_uninitialized() end
+@parity "wasm_builder/lib/src/ir/data_segment.dart:17 BaseDataSegment.uninitialized" BaseDataSegment_uninitialized()::DataSegment = DataSegment_uninitialized()
 
 @parity "wasm_builder/lib/src/ir/data_segment.dart:19 BaseDataSegment.printTo" @unported function WasmBuilder.print_to(self::BaseDataSegment, p) end
 
-@parity "wasm_builder/lib/src/ir/data_segment.dart:28 DataSegment" @unported function DataSegment(index, content, memory, offset) end
+@parity "wasm_builder/lib/src/ir/data_segment.dart:28 DataSegment" function DataSegment(index::Int, content::Vector{UInt8}, memory::Union{Memory,Nothing}, offset::Union{Int,Nothing})::DataSegment
+    local d = DataSegment(Val(:uninitialized))
+    d.index[] = index
+    d.content[] = content
+    d.memory[] = memory
+    d.offset[] = offset
+    return d
+end
 
-@parity "wasm_builder/lib/src/ir/data_segment.dart:29 DataSegment.uninitialized" @unported function DataSegment_uninitialized() end
+@parity "wasm_builder/lib/src/ir/data_segment.dart:29 DataSegment.uninitialized" DataSegment_uninitialized()::DataSegment = DataSegment(Val(:uninitialized))
 
-@parity "wasm_builder/lib/src/ir/data_segment.dart:32 DataSegment.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::DataSegment) end
+@parity "wasm_builder/lib/src/ir/data_segment.dart:32 DataSegment.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, d::DataSegment)::Nothing
+    local memory = d.memory[]
+    if memory !== nothing
+        # Active segment
+        if WasmBuilder.index(memory) == 0
+            WasmBuilder.write_byte(s, 0x00)
+        else
+            WasmBuilder.write_byte(s, 0x02)
+            WasmBuilder.write_unsigned(s, WasmBuilder.index(memory))
+        end
+        WasmBuilder.write_byte(s, 0x41) # i32.const
+        local offset = d.offset[]
+        offset === nothing && reject!(Internal("wasm_builder/lib/src/ir/data_segment.dart:45 DataSegment.serialize: an active segment without an offset"), "serialize")
+        WasmBuilder.write_signed(s, offset)
+        WasmBuilder.write_byte(s, 0x0B) # end
+    else
+        # Passive segment
+        WasmBuilder.write_byte(s, 0x01)
+    end
+    local content = d.content[]
+    WasmBuilder.write_unsigned(s, length(content))
+    WasmBuilder.write_bytes(s, content)
+end
 
 @parity "wasm_builder/lib/src/ir/data_segment.dart:53 DataSegment.printTo" @unported function WasmBuilder.print_to(self::DataSegment, p) end

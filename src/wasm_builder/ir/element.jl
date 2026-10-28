@@ -6,44 +6,118 @@
 @parity "wasm_builder/lib/src/ir/element.dart:10 ActiveElementSegment" @closed const ActiveElementSegment = Union{ActiveFunctionElementSegment, ActiveExpressionElementSegment}
 
 """
-ActiveFunctionElementSegment's dart fields: `entries`.
+Initializes a specific table with function references; only for a table of type
+`RefType_func(nullable=true)`.
 """
-@parity "wasm_builder/lib/src/ir/element.dart:20 ActiveFunctionElementSegment" @unported struct ActiveFunctionElementSegment end
+@parity "wasm_builder/lib/src/ir/element.dart:20 ActiveFunctionElementSegment" struct ActiveFunctionElementSegment
+    # ActiveElementSegment's fields, and its own
+    table::Table
+    start_index::Int
+    entries::Vector{BaseFunction}
+    # dart's constructor (line 23), the struct's one inner constructor: `entries ?? []`
+    ActiveFunctionElementSegment(table::Table, start_index::Int, entries::Union{Vector{BaseFunction},Nothing} = nothing) =
+        new(table, start_index, entries === nothing ? BaseFunction[] : entries)
+end
 
-"""
-ActiveExpressionElementSegment's dart fields: `type`, `expressions`.
-"""
-@parity "wasm_builder/lib/src/ir/element.dart:84 ActiveExpressionElementSegment" @unported struct ActiveExpressionElementSegment end
+"""Initializes a specific table with initialization expressions."""
+@parity "wasm_builder/lib/src/ir/element.dart:84 ActiveExpressionElementSegment" struct ActiveExpressionElementSegment
+    # ActiveElementSegment's fields, and its own
+    table::Table
+    start_index::Int
+    type::RefType
+    expressions::Vector{Vector{Instruction}}
+    # dart's constructor (line 88), the struct's one inner constructor: `expressions = []`
+    ActiveExpressionElementSegment(table::Table, type::RefType, start_index::Int) = new(table, start_index, type, Vector{Instruction}[])
+end
 
-"""
-DeclarativeElementSegment's dart fields: `entries`.
-"""
-@parity "wasm_builder/lib/src/ir/element.dart:151 DeclarativeElementSegment" @unported struct DeclarativeElementSegment end
+@parity "wasm_builder/lib/src/ir/element.dart:151 DeclarativeElementSegment" struct DeclarativeElementSegment
+    entries::Vector{BaseFunction}
+    # dart's constructor (line 154), the struct's one inner constructor
+    DeclarativeElementSegment(entries::Vector{BaseFunction}) = new(entries)
+end
 
 @parity "wasm_builder/lib/src/ir/element.dart:186 _ElemKind" abstract type _ElemKind end
 
-@parity "wasm_builder/lib/src/ir/element.dart:14 ActiveElementSegment" @unported function ActiveElementSegment(table, start_index) end
+# dart's sealed class is abstract: its constructor runs only as a subclass's super constructor, whose
+# struct holds its fields; called on its own it is dart's compile error
+@parity "wasm_builder/lib/src/ir/element.dart:14 ActiveElementSegment" function ActiveElementSegment(table::Table, start_index::Int)::Union{}
+    reject!(Internal("wasm_builder/lib/src/ir/element.dart:14 ActiveElementSegment: the sealed class is constructed only through a subclass"), "ActiveElementSegment")
+end
 
-@parity "wasm_builder/lib/src/ir/element.dart:23 ActiveFunctionElementSegment" @unported function ActiveFunctionElementSegment(table, start_index, optional...) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/element.dart:23 ActiveFunctionElementSegment" function ActiveFunctionElementSegment end
 
-@parity "wasm_builder/lib/src/ir/element.dart:30 ActiveFunctionElementSegment.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::ActiveFunctionElementSegment) end
+@parity "wasm_builder/lib/src/ir/element.dart:30 ActiveFunctionElementSegment.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, e::ActiveFunctionElementSegment)::Nothing
+    use_table0_encoding = WasmBuilder.index(e.table) == 0
+    if use_table0_encoding
+        WasmBuilder.write_byte(s, 0x00)
+    else
+        WasmBuilder.write_byte(s, 0x02)
+        WasmBuilder.write_unsigned(s, WasmBuilder.index(e.table))
+    end
+    serialize_table_offset(s, e.start_index)
+
+    if !use_table0_encoding
+        WasmBuilder.write_byte(s, _ElemKind_ref_func())
+    end
+
+    WasmBuilder.write_unsigned(s, length(e.entries))
+    for entry in e.entries
+        WasmBuilder.write_unsigned(s, WasmBuilder.index(entry))
+    end
+end
 
 @parity "wasm_builder/lib/src/ir/element.dart:50 ActiveFunctionElementSegment.deserialize" @unported function ActiveFunctionElementSegment_deserialize(d, module_::Module, types::Types, functions::Functions, tables::Tables, globals::Globals) end
 
-@parity "wasm_builder/lib/src/ir/element.dart:88 ActiveExpressionElementSegment" @unported function ActiveExpressionElementSegment(table, type_, start_index) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/element.dart:88 ActiveExpressionElementSegment" function ActiveExpressionElementSegment end
 
-@parity "wasm_builder/lib/src/ir/element.dart:91 ActiveExpressionElementSegment.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::ActiveExpressionElementSegment) end
+@parity "wasm_builder/lib/src/ir/element.dart:91 ActiveExpressionElementSegment.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, e::ActiveExpressionElementSegment)::Nothing
+    use_table_table0_ref_null_func_encoding = WasmBuilder.index(e.table) == 0 && e.type == RefType_func(nullable=true)
+    if use_table_table0_ref_null_func_encoding
+        WasmBuilder.write_byte(s, 0x04)
+    else
+        WasmBuilder.write_byte(s, 0x06)
+        WasmBuilder.write_unsigned(s, WasmBuilder.index(e.table))
+    end
+    serialize_table_offset(s, e.start_index)
+    if !use_table_table0_ref_null_func_encoding
+        write(s, e.type)
+    end
+    WasmBuilder.write_unsigned(s, length(e.expressions))
+    for expression in e.expressions
+        for instruction in expression
+            WasmBuilder.serialize(s, instruction)
+        end
+    end
+end
 
 @parity "wasm_builder/lib/src/ir/element.dart:112 ActiveExpressionElementSegment.deserialize" @unported function ActiveExpressionElementSegment_deserialize(d, module_::Module, types::Types, functions::Functions, tables::Tables, globals::Globals) end
 
-@parity "wasm_builder/lib/src/ir/element.dart:154 DeclarativeElementSegment" @unported function DeclarativeElementSegment(entries) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/element.dart:154 DeclarativeElementSegment" function DeclarativeElementSegment end
 
-@parity "wasm_builder/lib/src/ir/element.dart:157 DeclarativeElementSegment.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::DeclarativeElementSegment) end
+@parity "wasm_builder/lib/src/ir/element.dart:157 DeclarativeElementSegment.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, e::DeclarativeElementSegment)::Nothing
+    isempty(e.entries) && return nothing
+    WasmBuilder.write_byte(s, 0x03)
+    WasmBuilder.write_byte(s, _ElemKind_ref_func())
+
+    WasmBuilder.write_unsigned(s, length(e.entries))
+    for entry in e.entries
+        WasmBuilder.write_unsigned(s, WasmBuilder.index(entry))
+    end
+end
 
 @parity "wasm_builder/lib/src/ir/element.dart:168 DeclarativeElementSegment.deserialize" @unported function DeclarativeElementSegment_deserialize(d, functions::Functions) end
 
-@parity "wasm_builder/lib/src/ir/element.dart:187 _ElemKind.refFunc" @unported function _ElemKind_ref_func() end
+@parity "wasm_builder/lib/src/ir/element.dart:187 _ElemKind.refFunc" _ElemKind_ref_func()::UInt8 = 0x00
 
-@parity "wasm_builder/lib/src/ir/element.dart:191 serializeTableOffset" @unported function serialize_table_offset(self::WasmBuilder.Serializer, offset::Int64) end
+@parity "wasm_builder/lib/src/ir/element.dart:191 serializeTableOffset" function serialize_table_offset(s::WasmBuilder.Serializer, offset::Int)::Nothing
+    WasmBuilder.serialize(s, I32Const(offset))
+    WasmBuilder.serialize(s, End())
+end
 
 @parity "wasm_builder/lib/src/ir/element.dart:198 deserializeTableOffset" @unported function deserialize_table_offset(self, types::Types, functions::Functions, globals::Globals) end

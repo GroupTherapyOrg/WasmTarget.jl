@@ -3,10 +3,21 @@
 
 @parity "wasm_builder/lib/src/ir/indexable.dart:7 Indexable" abstract type Indexable end
 
-@parity "wasm_builder/lib/src/ir/indexable.dart:8 Indexable._globalId" @unported function Indexable__global_id() end
+# dart's static counter that numbers the parts (each part's `_id`, assigned on its first read)
+@parity "wasm_builder/lib/src/ir/indexable.dart:8 Indexable._globalId" const Indexable__global_id = Ref{Int}(0)
 
-@parity "wasm_builder/lib/src/ir/indexable.dart:11 Indexable.finalizableIndex" @unported function WasmBuilder.finalizable_index(self::Indexable) end
+# The classes that mix in Indexable (BaseFunction, Global, Table, Memory, Tag) cannot also subtype
+# it in Julia, so its members take their Union.
+# dart's abstract getter, which each class's field `finalizableIndex` answers
+@parity "wasm_builder/lib/src/ir/indexable.dart:11 Indexable.finalizableIndex" WasmBuilder.finalizable_index(x::Union{BaseFunction,Global,Table,Memory,Tag})::Finalizable{Int} = x.finalizable_index
 
-@parity "wasm_builder/lib/src/ir/indexable.dart:15 Indexable.index" @unported function WasmBuilder.index(self::Indexable) end
+"""
+The part's index; valid only after finalization, a read before it rejects.
+"""
+@parity "wasm_builder/lib/src/ir/indexable.dart:15 Indexable.index" WasmBuilder.index(x::Union{BaseFunction,Global,Table,Memory,Tag})::Int = WasmBuilder.value(x.finalizable_index)
 
-@parity "wasm_builder/lib/src/ir/indexable.dart:20 Indexable.name" @unported function WasmBuilder.name(self::Indexable) end
+"""
+The part's debugging name; always valid, though not unique. Parts with a better name define their
+own.
+"""
+@parity "wasm_builder/lib/src/ir/indexable.dart:20 Indexable.name" WasmBuilder.name(x::Union{BaseFunction,Global,Table,Memory,Tag})::String = string(x._id[])

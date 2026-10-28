@@ -3,34 +3,94 @@
 
 @parity "wasm_builder/lib/src/ir/table.dart:10 Table" abstract type Table <: WasmBuilder.Serializable end
 
-@parity "wasm_builder/lib/src/ir/table.dart:48 DefinedTable" @unported struct DefinedTable <: Table end
+"""A table defined in a module."""
+@parity "wasm_builder/lib/src/ir/table.dart:48 DefinedTable" mutable struct DefinedTable <: Table
+    const finalizable_index::Finalizable{Int}
+    const type::RefType
+    # Mutable so that a table's size does not need to be known before the table is instantiated.
+    min_size::Int
+    const max_size::Union{Int,Nothing}
+    const enclosing_module::AbstractModule
+    const exported_name::Late{String}
+    # Indexable's `late final int _id = _globalId++`, numbered on its first read
+    const _id::Late{Int}
+    # dart's constructor (line 49), the struct's one inner constructor
+    DefinedTable(enclosing_module::AbstractModule, finalizable_index::Finalizable{Int}, type::RefType, min_size::Int, max_size::Union{Int,Nothing}) =
+        new(finalizable_index, type, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+end
 
-"""
-ImportedTable's dart fields: `module`, `name`.
-"""
-@parity "wasm_builder/lib/src/ir/table.dart:79 ImportedTable" @unported struct ImportedTable <: Table end
+"""An imported table."""
+@parity "wasm_builder/lib/src/ir/table.dart:79 ImportedTable" mutable struct ImportedTable <: Table
+    const finalizable_index::Finalizable{Int}
+    const type::RefType
+    min_size::Int
+    const max_size::Union{Int,Nothing}
+    const enclosing_module::AbstractModule
+    const exported_name::Late{String}
+    const module_::String
+    const name::String
+    # Indexable's `late final int _id = _globalId++`, numbered on its first read
+    const _id::Late{Int}
+    # dart's constructor (line 85), the struct's one inner constructor
+    ImportedTable(enclosing_module::AbstractModule, module_::String, name::String, finalizable_index::Finalizable{Int}, type::RefType, min_size::Int, max_size::Union{Int,Nothing}) =
+        new(finalizable_index, type, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+end
 
-"""
-TableExport's dart fields: `table`.
-"""
-@parity "wasm_builder/lib/src/ir/table.dart:114 TableExport" @unported struct TableExport <: Export end
+@parity "wasm_builder/lib/src/ir/table.dart:114 TableExport" struct TableExport <: Export
+    name::String
+    table::Table
+    # dart's constructor (line 117), the struct's one inner constructor
+    TableExport(name::String, table::Table) = new(name, table)
+end
 
-@parity "wasm_builder/lib/src/ir/table.dart:21 Table" @unported function Table(enclosing_module, finalizable_index, type_, min_size, max_size) end
+# dart's constructor of the abstract class assigns its fields, which each subclass's struct holds; their
+# constructors do it, and this line declares the name and adds no method
+@parity "wasm_builder/lib/src/ir/table.dart:21 Table" function Table end
 
-@parity "wasm_builder/lib/src/ir/table.dart:30 Table.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::Table) end
+@parity "wasm_builder/lib/src/ir/table.dart:30 Table.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::Table)::Nothing
+    write(s, t.type)
+    if t.max_size === nothing
+        WasmBuilder.write_byte(s, 0x00)
+        WasmBuilder.write_unsigned(s, t.min_size)
+    else
+        WasmBuilder.write_byte(s, 0x01)
+        WasmBuilder.write_unsigned(s, t.min_size)
+        WasmBuilder.write_unsigned(s, t.max_size)
+    end
+end
 
-@parity "wasm_builder/lib/src/ir/table.dart:44 Table.buildExport" @unported function WasmBuilder.build_export(self::Table, name::String) end
+"""Export a table from the module."""
+@parity "wasm_builder/lib/src/ir/table.dart:44 Table.buildExport" WasmBuilder.build_export(t::Table, name::String)::Export = TableExport(name, t)
 
-@parity "wasm_builder/lib/src/ir/table.dart:49 DefinedTable" @unported function DefinedTable(enclosing_module, finalizable_index, type_, min_size, max_size) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/table.dart:49 DefinedTable" function DefinedTable end
 
 @parity "wasm_builder/lib/src/ir/table.dart:57 DefinedTable.printTo" @unported function WasmBuilder.print_to(self::DefinedTable, p) end
 
-@parity "wasm_builder/lib/src/ir/table.dart:85 ImportedTable" @unported function ImportedTable(enclosing_module, module_, name, finalizable_index, type_, min_size, max_size) end
+# An imported table's name is its import field name (table.dart:83 `final String name`).
+@parity "wasm_builder/lib/src/ir/table.dart:83 ImportedTable.name" WasmBuilder.name(t::ImportedTable)::String = t.name
 
-@parity "wasm_builder/lib/src/ir/table.dart:96 ImportedTable.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::ImportedTable) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/table.dart:85 ImportedTable" function ImportedTable end
+
+@parity "wasm_builder/lib/src/ir/table.dart:96 ImportedTable.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::ImportedTable)::Nothing
+    WasmBuilder.write_name(s, t.module_)
+    WasmBuilder.write_name(s, t.name)
+    WasmBuilder.write_byte(s, 0x01)
+    # dart's `super.serialize(s)`: Julia's invoke calls the method of the supertype.
+    invoke(WasmBuilder.serialize, Tuple{WasmBuilder.Serializer,Table}, s, t)
+end
 
 @parity "wasm_builder/lib/src/ir/table.dart:103 ImportedTable.printTo" @unported function WasmBuilder.print_to(self::ImportedTable, p) end
 
-@parity "wasm_builder/lib/src/ir/table.dart:117 TableExport" @unported function TableExport(name, table) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/ir/table.dart:117 TableExport" function TableExport end
 
-@parity "wasm_builder/lib/src/ir/table.dart:120 TableExport.serialize" @unported function WasmBuilder.serialize(s::WasmBuilder.Serializer, self::TableExport) end
+@parity "wasm_builder/lib/src/ir/table.dart:120 TableExport.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, e::TableExport)::Nothing
+    WasmBuilder.write_name(s, e.name)
+    WasmBuilder.write_byte(s, 0x01)
+    WasmBuilder.write_unsigned(s, WasmBuilder.index(e.table))
+end

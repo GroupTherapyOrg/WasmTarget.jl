@@ -997,27 +997,7 @@ function stub(file::String, d::Decl, S::Scope, fields::Vector{Decl})::String
 end
 
 # an enum's value names, in order: the first identifier of each item before the `;` or `}` closing them
-function enum_values(file::String, d::Decl)::Vector{String}
-    local toks = lex(read(dart_source(file), String), file)
-    local k = findfirst(i -> toks[i].text == "enum" && i < length(toks) && toks[i+1].text == d.symbol && toks[i+1].line == d.line, eachindex(toks))
-    k === nothing && error("skeleton: $file:$(d.line): enum $(d.symbol) not found")
-    local i = findnext(t -> t.text == "{", toks, k) + 1
-    local out, expect = String[], true
-    while i <= length(toks) && !(toks[i].text in (";", "}"))
-        local t = toks[i].text
-        if t in ("(", "[", "{", "<")
-            i = close_of(toks, i, file); continue
-        elseif t == "@"
-            i = skip_metadata(toks, i, file); continue
-        elseif t == ","
-            expect = true
-        elseif expect && toks[i].kind == :ident
-            push!(out, t); expect = false
-        end
-        i += 1
-    end
-    return out
-end
+enum_values(file::String, d::Decl)::Vector{String} = String[v for (v, _) in enum_value_lines(file, d)]
 
 # a file's counted declarations in the order its skeleton holds them: the type declarations first (two
 # passes load them before any signature names them), then every other definition, each in dart's order
@@ -1193,9 +1173,43 @@ function generate(file::String, S::Scope, anchors::Dict{String,Tuple{String,Bool
 end
 
 # every declaration at the pin by its anchor: anchor => (key, declaration). An instance field is one
-# too: a filled accessor may anchor at it, though the generator stubs none (a field is its struct's)
-by_anchor(S::Scope)::Dict{String,Tuple{String,Decl}} =
-    Dict(anchor(f, d) => (f, d) for f in scope() for d in S.decls[f] if d.kind != :typedef)
+# too: a filled accessor may anchor at it, though the generator stubs none (a field is its struct's);
+# so is an enum's value, which a filled enum that is a struct (dart's enum with fields and a mixin,
+# V128Instruction) defines as a constant anchored at its line
+function by_anchor(S::Scope)::Dict{String,Tuple{String,Decl}}
+    local out = Dict(anchor(f, d) => (f, d) for f in scope() for d in S.decls[f] if d.kind != :typedef)
+    for f in scope(), d in S.decls[f]
+        d.kind == :enum || continue
+        for (v, line) in enum_value_lines(f, d)
+            local e = Decl(:enumvalue, "$(d.symbol).$v", line, String[], "", Tok[], Tok[])
+            out[anchor(f, e)] = (f, e)
+        end
+    end
+    return out
+end
+
+# an enum's values, each with its line
+function enum_value_lines(file::String, d::Decl)::Vector{Tuple{String,Int}}
+    local toks = lex(read(dart_source(file), String), file)
+    local k = findfirst(i -> toks[i].text == "enum" && i < length(toks) && toks[i+1].text == d.symbol && toks[i+1].line == d.line, eachindex(toks))
+    k === nothing && error("skeleton: $file:$(d.line): enum $(d.symbol) not found")
+    local i = findnext(t -> t.text == "{", toks, k) + 1
+    local out, expect = Tuple{String,Int}[], true
+    while i <= length(toks) && !(toks[i].text in (";", "}"))
+        local t = toks[i].text
+        if t in ("(", "[", "{", "<")
+            i = close_of(toks, i, file); continue
+        elseif t == "@"
+            i = skip_metadata(toks, i, file); continue
+        elseif t == ","
+            expect = true
+        elseif expect && toks[i].kind == :ident
+            push!(out, (t, toks[i].line)); expect = false
+        end
+        i += 1
+    end
+    return out
+end
 
 # write every in-scope file's skeleton (only files that change are written)
 function write_main()::Int

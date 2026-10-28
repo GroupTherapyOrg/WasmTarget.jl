@@ -112,7 +112,13 @@ end
     write_bytes(s, bytes)
 end
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:109 Serializer.write" @unported function Base.write(self::Serializer, object::Serializable) end
+# dart's Serializable is an interface: the classes that implement it beside their superclass (a defined
+# function extends BaseFunction, an element segment is a kind of a sealed sum, the module is
+# AbstractModule's one subtype) cannot also subtype it in Julia, so `write` names them beside it
+@parity "wasm_builder/lib/src/serialize/serializer.dart:109 Serializer.write" function Base.write(s::Serializer, object::Union{Serializable,IR.ElementSegment,IR.DataSegment,IR.DefinedFunction,IR.ImportedFunction,IR.DefinedGlobal,IR.ImportedGlobal,IR.DefinedMemory,IR.ImportedMemory,IR.DefinedTag,IR.ImportedTag,IR.Module})::Nothing
+    serialize(s, object)
+    return nothing
+end
 
 @parity "wasm_builder/lib/src/serialize/serializer.dart:113 Serializer.writeList" function write_list(s::Serializer, objects::AbstractVector)::Nothing
     write_unsigned(s, length(objects))
