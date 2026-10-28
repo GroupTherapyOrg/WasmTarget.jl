@@ -31,7 +31,15 @@ positional and required. Its context is its callee, argument 1, when the callee 
     end
 end
 
-@parity "dart2wasm/lib/param_info.dart:35 ParameterInfo.defaultValueSentinel" @unported function ParameterInfo_default_value_sentinel() end
+"""
+A special marker value to use for default parameter values to indicate that different
+implementations within the same selector have different default values: dart's
+`UnevaluatedConstant(InvalidExpression(...))`, a constant equal to no other. Here the NIR's literal of
+a symbol `gensym` makes, which no program value is; a static `final`, a Late cell initialized on its
+first read.
+"""
+@parity "dart2wasm/lib/param_info.dart:35 ParameterInfo.defaultValueSentinel" const ParameterInfo_default_value_sentinel = Late{NirConst}(
+    "dart2wasm/lib/param_info.dart:35 ParameterInfo.defaultValueSentinel", () -> NirConst(Core.Const(gensym("Default value sentinel"))))
 
 @parity "dart2wasm/lib/param_info.dart:39 ParameterInfo.paramCount" param_count(self::ParameterInfo)::Int = length(self.positional) + length(self.named)
 
@@ -56,6 +64,52 @@ rejects, located. `use_default_value_sentinel` has nothing to mark: no parameter
     return ParameterInfo__(!Base.issingletontype(params[1]), 0, positional, LinkedHashMap{String,Union{Nothing,Constant}}())
 end
 
-@parity "dart2wasm/lib/param_info.dart:115 ParameterInfo.fromLocalFunction" @unported function ParameterInfo_from_local_function(function_::NirBody) end
+"""
+The parameter info of a local function, a body of the NIR (Kernel's FunctionNode, the Kernel table's
+row): a Julia closure is a method of its struct's call, its MethodInstance specialized as any member's, so its parameters are the specialization's arguments
+after the callee, every one positional and required, none named, and no type parameter; it always
+takes its context, the closure itself.
+"""
+@parity "dart2wasm/lib/param_info.dart:115 ParameterInfo.fromLocalFunction" function ParameterInfo_from_local_function(function_::NirBody)::ParameterInfo
+    local mi = function_.ci.def::Core.MethodInstance
+    local sig = Base.unwrap_unionall(mi.specTypes)::DataType
+    local params = sig.parameters
+    any(p -> p isa Core.TypeofVararg, params) &&
+        reject!(Unquarantined("src/param_info.jl fromLocalFunction: the Vararg signature $(mi.specTypes), whose argument count Julia left open"), "dart2wasm/lib/param_info.dart:115 ParameterInfo.fromLocalFunction")
+    local positional = Union{Nothing,Constant}[nothing for _ in 2:length(params)]
+    return ParameterInfo__(true, 0, positional, LinkedHashMap{String,Union{Nothing,Constant}}())
+end
 
-@parity "dart2wasm/lib/param_info.dart:129 ParameterInfo.merge" @unported function Base.merge(self::ParameterInfo, other::ParameterInfo) end
+@parity "dart2wasm/lib/param_info.dart:129 ParameterInfo.merge" function Base.merge(self::ParameterInfo, other::ParameterInfo)::Nothing
+    self.type_param_count == other.type_param_count ||
+        reject!(Internal("dart2wasm/lib/param_info.dart:130 ParameterInfo.merge: $(self.type_param_count) and $(other.type_param_count) type parameters"), "ParameterInfo.merge")
+    self.takes_context_or_receiver == other.takes_context_or_receiver ||
+        reject!(Internal("dart2wasm/lib/param_info.dart:131 ParameterInfo.merge: one takes a context or receiver and the other not"), "ParameterInfo.merge")
+    for i in 1:length(other.positional)
+        if i > length(self.positional)
+            push!(self.positional, other.positional[i])
+        else
+            if self.positional[i] === nothing
+                self.positional[i] = other.positional[i]
+            elseif other.positional[i] !== nothing
+                if self.positional[i] != other.positional[i]
+                    # Default value differs between implementations.
+                    self.positional[i] = ParameterInfo_default_value_sentinel[]
+                end
+            end
+        end
+    end
+    for name in collect(keys(other.named))
+        local value = get(self.named, name, nothing)
+        local other_value = other.named[name]
+        if value === nothing
+            self.named[name] = other_value
+        elseif other_value !== nothing
+            if value != other_value
+                # Default value differs between implementations.
+                self.named[name] = ParameterInfo_default_value_sentinel[]
+            end
+        end
+    end
+    return nothing
+end

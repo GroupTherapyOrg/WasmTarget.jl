@@ -27,3 +27,27 @@ _mi(f, T) = Core.Compiler.specialize_method(Base._which(Base.signature_type(f, T
     # no named parameters: names and their indices are empty
     @test isempty(pf.names[]) && isempty(pf.name_index[])
 end
+
+_pc(x) = WasmTarget.NirConst(Core.Const(x))
+_pinfo(pos, named = Pair{String,Any}[]) = DP.ParameterInfo__(true, 0, Union{Nothing,WasmTarget.NirConst}[pos...],
+    (m = WasmTarget.LinkedHashMap{String,Union{Nothing,WasmTarget.NirConst}}(); foreach(((k, v),) -> (m[k] = v), named); m))
+
+@testset "param_info.dart: a local function, and merging an override group" begin
+    # a closure: its specialization's arguments after the callee, all required, its context taken
+    local clo = ParamCases.make(2)
+    local world = WasmTarget.build_nir(WasmTarget.check_subset(clo, (Int,), "param_info"), "param_info")
+    local body = only(b for b in world if b.ci.def.specTypes == Tuple{typeof(clo),Int})
+    local pl = DP.ParameterInfo_from_local_function(body)
+    @test pl.takes_context_or_receiver && pl.type_param_count == 0 && pl.positional == [nothing] && isempty(pl.named)
+    # merge: a required slot takes the other's default, equal defaults stay, differing ones meet the
+    # sentinel, a constant equal to no program value
+    local s = DP.ParameterInfo_default_value_sentinel[]
+    @test s === DP.ParameterInfo_default_value_sentinel[] && s != _pc(Symbol("Default value sentinel"))
+    local a = _pinfo([nothing, _pc(1), _pc(2)], ["x" => _pc(:a), "y" => nothing])
+    DP.merge(a, _pinfo([_pc(0), _pc(1), _pc(3), _pc(4)], ["x" => _pc(:b), "y" => _pc(5), "z" => nothing]))
+    @test a.positional == Union{Nothing,WasmTarget.NirConst}[_pc(0), _pc(1), s, _pc(4)]
+    @test a.named["x"] === s && a.named["y"] === _pc(5) && a.named["z"] === nothing && collect(keys(a.named)) == ["x", "y", "z"]
+    local e = try; DP.merge(a, DP.ParameterInfo__(false, 0, Union{Nothing,WasmTarget.NirConst}[],
+        WasmTarget.LinkedHashMap{String,Union{Nothing,WasmTarget.NirConst}}())); nothing; catch x; x; end
+    @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal
+end
