@@ -14,10 +14,86 @@ end
     row::String
 end
 
-"""Julia's trim verifier rejects the program; `reason` is Julia's own text."""
-@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct OutsideSubset
-    reason::String
+"""
+    TrimErrorKind
+
+What Julia's trim verifier found at a statement: one member per description its `CallMissing` and
+`CCallableMissing` carry (Compiler/src/verifytrim.jl, Julia 1.12 and 1.13), and the two ways an
+entry has nothing to verify, no unique method or no compileable specialization.
+
+precedent(rust: a fieldless enum; dart: enum). Julia's differs: an @enum is closed by its type, and
+the verifier states each kind only as text, which `TRIM_ERROR_KINDS` (src/julia/subset.jl) reads
+into a member; a text with no member is an Internal rejection, never a guess.
+"""
+@quarantine "Julia's verifier states each error's kind as text; an @enum closes the set of kinds" Base.var"@enum" @enum TrimErrorKind begin
+    unresolved_invoke
+    unresolved_builtin_call
+    unresolved_function_call
+    unresolved_call_argument
+    unresolved_finalizer
+    unimplemented_apply
+    unimplemented_call_in_world_total
+    unimplemented_invoke
+    unimplemented_invoke_in_world
+    unimplemented_invokelatest
+    unimplemented_modifyfield
+    unimplemented_modifyglobal
+    unimplemented_memoryrefmodify
+    unresolved_call
+    unresolved_cfunction
+    runtime_ccall
+    nonconstant_ccall
+    unresolved_opaque_closure
+    unresolved_ccallable
+    ccallable_return_mismatch
+    no_unique_method
+    no_compileable_specialization
 end
+
+"""
+    TrimError(kind, codeinst, stmtidx, frames, cause)
+
+One error Julia's trim verifier reports, as Julia gives it: `kind`; `cause`, Julia's own record (a
+TrimVerifier `CallMissing`, which holds the CodeInstance, its CodeInfo and sptypes, the statement
+index and the description; a `CCallableMissing`; or, for an entry with nothing to verify, Julia's
+`which` text); `codeinst` and `stmtidx` the statement, nothing and 0 where there is none; and
+`frames`, Julia's stack frames for it, the inline chain innermost first and then each caller
+(TrimVerifier.verify_create_stackframes), empty where there is no statement.
+"""
+@quarantine "the verifier's own records, its CallMissing and the stack frames it builds, kept as Julia gives them" Base.StackTraces.StackFrame struct TrimError
+    kind::TrimErrorKind
+    codeinst::Union{Nothing,Core.CodeInstance}
+    stmtidx::Int
+    frames::Vector{Base.StackTraces.StackFrame}
+    cause::Any
+end
+
+"""Julia's trim verifier rejects the program: `errors`, each it reports, in its order."""
+@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Base.Vector struct OutsideSubset
+    errors::Vector{TrimError}
+end
+
+# one verifier error in Julia's own words, as juliac prints it (verify_print_error): its description,
+# the statement and the stack frames, from the records the error keeps
+@quarantine "the verifier's text is Julia's, printed by its own printers from its own records" Core.Compiler.TrimVerifier.verify_print_stmt function _trim_text(e::TrimError)::String
+    return sprint() do io
+        local c = e.cause
+        if c isa Core.Compiler.TrimVerifier.CallMissing
+            print(io, c.desc, " from statement ")
+            Core.Compiler.TrimVerifier.verify_print_stmt(IOContext{IO}(io), c.codeinfo, c.sptypes, c.stmtidx)
+            Base.show_backtrace(io, e.frames)
+        elseif c isa Core.Compiler.TrimVerifier.CCallableMissing
+            Core.Compiler.TrimVerifier.verify_print_error(IOContext{IO}(io), c, Core.Compiler.TrimVerifier.ParentMap())
+        else
+            print(io, c)
+        end
+    end
+end
+
+# the errors' text, each the verifier reports numbered as juliac numbers them; an entry with nothing to
+# verify, Julia's own text alone
+@quarantine "the verifier's errors numbered as juliac prints them" Base.join _trim_texts(errors::Vector{TrimError})::String =
+    rstrip(join(((e.cause isa String ? "" : "Verifier error #$i: ") * _trim_text(e) for (i, e) in enumerate(errors)), "\n\n"))
 
 """The module WasmTarget built is not valid wasm; `site` names where it was found."""
 @quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct InvalidModule
@@ -63,7 +139,7 @@ end
     @exhaustive r::Rejection begin
         (u::Unported) => "unported: the dart definition $(u.anchor)"
         (q::Unquarantined) => "unported: the Julia-only definition $(q.row)"
-        (o::OutsideSubset) => "outside the strict subset: $(o.reason)"
+        (o::OutsideSubset) => "outside the strict subset: $(_trim_texts(o.errors))"
         (i::InvalidModule) => "invalid module at $(i.site)"
         (n::Internal) => "internal error at $(n.site)"
     end

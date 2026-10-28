@@ -64,13 +64,14 @@ end
 # the definitions a dart case's compile reaches first today
 const _COMPILE = WasmTarget.Unported(WasmTarget.anchor_of(WasmTarget.Dart2Wasm.compile))
 
-# a case outside the strict subset (D32): Julia's verifier's verdict, recorded by its first line up to the
-# unresolved statement's callee, which names no line of the corpus (the operands' printed types vary
-# with what inference cached before, `n::Int64` after a native run and `n::Any` before one)
-_outside(statement::String) = WasmTarget.OutsideSubset(statement)
+# a case outside the strict subset (D32): Julia's verifier's verdict, recorded by the kind of each error
+# it reports (WasmTarget.TrimErrorKind), which names no line of the corpus and no printed operand type
+# (those vary with what inference cached before, `n::Int64` after a native run and `n::Any` before one)
+const _Outside = Tuple{Symbol,Vector{WasmTarget.TrimErrorKind}}
+_outside(kinds::WasmTarget.TrimErrorKind...) = (:outside, collect(kinds))
 
 # each case: native Julia's answer and the rejection its compile gives today
-const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
+const DART_CASES = Dict{String,Tuple{Any,Union{WasmTarget.Rejection,_Outside}}}(
     # tests/web/wasm
     "dart_web_wasm/assertion_failure_message" => (1, _COMPILE),
     "dart_web_wasm/boxed_value_tearoff" => (4, _COMPILE),
@@ -688,7 +689,7 @@ const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
 # a case's answer is native's: of its type, and isequal (a NaN equal to itself, -0.0 apart from 0.0)
 _dart_same(got, native) = typeof(got) == typeof(native) && isequal(got, native)
 
-# what a compile gives: its rejection (an OutsideSubset by its first line), or :compiled
+# what a compile gives: its rejection (an OutsideSubset by its errors' kinds), or :compiled
 _dart_outcome(f, args) = try
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: compiling $(nameof(typeof(f))) $(typeof(args))")
     WasmTarget.compile(f, Tuple(map(typeof, args)))
@@ -697,9 +698,7 @@ catch e
     e isa WasmTarget.RejectionError || rethrow()
     local r = e.rejection
     r isa WasmTarget.OutsideSubset || return r
-    local line = String(first(split(r.reason, '\n')))
-    local m = match(r"^(.*? from statement \(?[^(]+)", line)
-    return _outside(m === nothing ? line : String(m[1]))
+    return _outside((t.kind for t in r.errors)...)
 end
 
 @testset "dart2wasm's tests, Julia the ground truth" begin

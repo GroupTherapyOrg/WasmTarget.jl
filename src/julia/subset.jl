@@ -5,8 +5,8 @@
 # the active project stubbed out), which WasmTarget does not do. A compile
 # infers its program once, here, as trimming does: Core.Compiler's typeinf_ext_toplevel in TRIM_UNSAFE
 # mode over the closed world one entry reaches. Julia's TrimVerifier then judges what it inferred: an
-# error rejects the program as OutsideSubset with Julia's own text, which names the statement and its
-# stacktrace; a warning is a note, as juliac treats it ("errors are fatal, warnings are not",
+# error rejects the program as OutsideSubset, keeping Julia's own record of it with its statement and
+# stack frames (shown in Julia's text); a warning is a note, as juliac treats it ("errors are fatal, warnings are not",
 # verify_typeinf_trim). Nothing else in src infers or asks Julia for typed code.
 
 # The token only this file holds: ClosedWorld's sole constructor takes it, so no code outside this file
@@ -20,7 +20,9 @@ end
 
 The program a compile has once Julia's trim verifier accepts it: `codeinfos`, what
 `typeinf_ext_toplevel` returned, a `Core.CodeInstance` followed by its `Core.CodeInfo` for every
-function the entry reaches, inferred once; `notes`, the verifier's warnings in Julia's text.
+function the entry reaches, inferred once; `notes`, the verifier's warnings, each a `TrimError`; and
+`parents`, the verifier's map from each CodeInstance to the caller and statement that first reached
+it, from which TrimVerifier.verify_create_stackframes locates any statement of the world.
 
 A typestate by construction: its one constructor takes the token `_SubsetToken`, which only this
 file holds, and `check_subset` is its only caller, so every stage after the subset check takes a
@@ -32,8 +34,10 @@ by reflection when the package loads (check_sole_constructor).
 """
 @quarantine "Julia's trim inference returns the closed world as an untyped list of CodeInstance and CodeInfo pairs" Core.Any struct ClosedWorld
     codeinfos::Vector{Any}
-    notes::Vector{String}
-    ClosedWorld(::_SubsetToken, codeinfos::Vector{Any}, notes::Vector{String}) = new(codeinfos, notes)
+    notes::Vector{TrimError}
+    parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}
+    ClosedWorld(::_SubsetToken, codeinfos::Vector{Any}, notes::Vector{TrimError},
+                parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}) = new(codeinfos, notes, parents)
 end
 
 # Julia's closed-world inference for trimming, from the entry's MethodInstance at `world`. Julia 1.13
@@ -61,10 +65,39 @@ end
     end
 end
 
-# One verifier error or warning in Julia's own words: its statement and stacktrace, as
-# `juliac --trim` prints it (verify_print_error writes to an IOContext{IO}).
-@quarantine "the verifier's text is Julia's, printed by its own verify_print_error" Core.Compiler.TrimVerifier.verify_print_error function _verifier_text(desc, parents)::String
-    return sprint(io -> Core.Compiler.TrimVerifier.verify_print_error(IOContext{IO}(io), desc, parents))
+# Each description Julia's trim verifier gives (Compiler/src/verifytrim.jl's CallMissing and
+# CCallableMissing, 1.12 and 1.13), read into its TrimErrorKind
+@quarantine "Julia's verifier states each error's kind as text, read here into the closed set of kinds" Base.Dict const TRIM_ERROR_KINDS = Dict{String,TrimErrorKind}(
+    "unresolved invoke" => unresolved_invoke,
+    "unresolved call to (unknown) builtin" => unresolved_builtin_call,
+    "unresolved call to function" => unresolved_function_call,
+    "unresolved argument to call" => unresolved_call_argument,
+    "unresolved finalizer registered" => unresolved_finalizer,
+    "trim verification not yet implemented for builtin `Core._apply`" => unimplemented_apply,
+    "trim verification not yet implemented for builtin `Core._call_in_world_total`" => unimplemented_call_in_world_total,
+    "trim verification not yet implemented for builtin `Core.invoke`" => unimplemented_invoke,
+    "trim verification not yet implemented for builtin `Core.invoke_in_world`" => unimplemented_invoke_in_world,
+    "trim verification not yet implemented for builtin `Core.invokelatest`" => unimplemented_invokelatest,
+    "trim verification not yet implemented for builtin `Core.modifyfield!`" => unimplemented_modifyfield,
+    "trim verification not yet implemented for builtin `Core.modifyglobal!`" => unimplemented_modifyglobal,
+    "trim verification not yet implemented for builtin `Core.memoryrefmodify!`" => unimplemented_memoryrefmodify,
+    "unresolved call" => unresolved_call,
+    "unresolved cfunction" => unresolved_cfunction,
+    "disallowed ccall into a runtime function" => runtime_ccall,
+    "disallowed ccall with non-constant name and no library" => nonconstant_ccall,
+    "unresolved opaque closure" => unresolved_opaque_closure,
+    "unresolved ccallable" => unresolved_ccallable,
+    "ccallable declared return type does not match inference" => ccallable_return_mismatch,
+)
+
+# One error the verifier reports, kept as Julia gives it: its kind, its statement and Julia's stack
+# frames for it (verify_create_stackframes over the verifier's parents); a description with no kind
+# in TRIM_ERROR_KINDS is an Internal rejection, the table behind this Julia's verifier
+@quarantine "the verifier's error and the stack frames Julia builds for it, kept as Julia gives them" Core.Compiler.TrimVerifier.verify_create_stackframes function _trim_error(@nospecialize(cause), parents, at::String)::TrimError
+    local kind = get(TRIM_ERROR_KINDS, string(cause.desc), nothing)
+    kind === nothing && reject!(Internal("src/julia/subset.jl TRIM_ERROR_KINDS: Julia $VERSION's trim verifier reports \"$(cause.desc)\", a description it has no kind for"), at)
+    cause isa Core.Compiler.TrimVerifier.CallMissing || return TrimError(kind, nothing, 0, Base.StackTraces.StackFrame[], cause)
+    return TrimError(kind, cause.codeinst, cause.stmtidx, Core.Compiler.TrimVerifier.verify_create_stackframes(cause.codeinst, cause.stmtidx, parents), cause)
 end
 
 """
@@ -72,9 +105,9 @@ end
 
 Infer the program `f(argtypes...)` once, as Julia's trimming does, from the specialization Julia
 compiles for that call (`_entry_specialization`), and let Julia's trim verifier judge it. Returns the
-closed world it accepts; rejects with `OutsideSubset`, Julia's text, when the entry has no unique method
-(Julia's `which` text) or no compileable specialization, or the verifier reports an error, each
-numbered as juliac numbers them.
+closed world it accepts; rejects with `OutsideSubset` when the entry has no unique method (Julia's
+`which` text) or no compileable specialization, or the verifier reports errors, each a `TrimError`
+holding Julia's own record, its statement and its stack frames.
 """
 @quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed" Core.Compiler.TrimVerifier.get_verify_typeinf_trim function check_subset(@nospecialize(f), argtypes::Tuple, at::String)::ClosedWorld
     local sig = Base.signature_type(f, argtypes)
@@ -86,19 +119,19 @@ numbered as juliac numbers them.
             Base._which(sig; world = world)
         catch e
             e isa ErrorException || rethrow()
-            reject!(OutsideSubset(sprint(showerror, e)), at)
+            reject!(OutsideSubset([TrimError(no_unique_method, nothing, 0, Base.StackTraces.StackFrame[], sprint(showerror, e))]), at)
         end
-        reject!(OutsideSubset("$sig: Julia gives the call no compileable specialization"), at)
+        reject!(OutsideSubset([TrimError(no_compileable_specialization, nothing, 0, Base.StackTraces.StackFrame[],
+                                         "$sig: Julia gives the call no compileable specialization")]), at)
     end
     local codeinfos = _trim_infer(mi, world)
     local errors, parents = Core.Compiler.TrimVerifier.get_verify_typeinf_trim(codeinfos)
-    local fatal = String[]; local notes = String[]
-    for (warn, desc) in errors
-        warn ? push!(notes, "Verifier warning #$(length(notes) + 1): " * _verifier_text(desc, parents)) :
-               push!(fatal, "Verifier error #$(length(fatal) + 1): " * _verifier_text(desc, parents))
+    local fatal = TrimError[]; local notes = TrimError[]
+    for (warn, cause) in errors
+        push!(warn ? notes : fatal, _trim_error(cause, parents, at))
     end
-    isempty(fatal) || reject!(OutsideSubset(rstrip(join(fatal))), at)
-    return ClosedWorld(_SubsetToken(), codeinfos, notes)
+    isempty(fatal) || reject!(OutsideSubset(fatal), at)
+    return ClosedWorld(_SubsetToken(), codeinfos, notes, parents)
 end
 
 # the typestate's assertion, run when the package loads: ClosedWorld and its token each have one

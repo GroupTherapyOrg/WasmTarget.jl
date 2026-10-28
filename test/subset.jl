@@ -46,3 +46,39 @@ end
     end
     @test r isa WasmTarget.OutsideSubset
 end
+
+module SubsetErrors
+dyn(x::Int) = Base.inferencebarrier(x) + 1
+end
+
+@testset "check_subset: OutsideSubset keeps the verifier's records" begin
+    local W = WasmTarget
+    local rejection(f, at) = try
+        W.check_subset(f, at, "subset"); nothing
+    catch e
+        e isa W.RejectionError ? e : rethrow()
+    end
+    # a call inference cannot resolve: Julia's CallMissing, its statement and its stack frames
+    local e = rejection(SubsetErrors.dyn, (Int,))
+    local o = e.rejection
+    @test o isa W.OutsideSubset && length(o.errors) == 1
+    local t = only(o.errors)
+    @test t.kind == W.unresolved_call
+    @test t.codeinst isa Core.CodeInstance && t.stmtidx > 0
+    @test t.cause isa Core.Compiler.TrimVerifier.CallMissing && t.cause.stmtidx == t.stmtidx
+    @test !isempty(t.frames) && t.frames[1].func === :dyn
+    # shown in Julia's own words, numbered as juliac numbers them
+    @test occursin("Verifier error #1: unresolved call from statement", sprint(showerror, e))
+    # an unimplemented builtin and an entry with no method each have their kind
+    @test only(rejection(SubsetCases.dw, (Int,)).rejection.errors).kind == W.unimplemented_invoke_in_world
+    local nm = only(rejection(SubsetCases.g, (String,)).rejection.errors)
+    @test nm.kind == W.no_unique_method && nm.codeinst === nothing && isempty(nm.frames)
+    # its text is Julia's `which` text alone, no verifier number
+    @test !occursin("Verifier error", sprint(showerror, rejection(SubsetCases.g, (String,))))
+    # every description has one kind, and every kind but the entry's two has one description
+    local described = collect(values(W.TRIM_ERROR_KINDS))
+    @test allunique(described)
+    @test Set(described) == Set(k for k in instances(W.TrimErrorKind) if !(k in (W.no_unique_method, W.no_compileable_specialization)))
+    # an accepted world keeps the verifier's parents, from which any statement is located
+    @test WasmTarget.check_subset(SubsetCases.g, (Int,), "subset").parents isa IdDict
+end
