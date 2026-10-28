@@ -30,7 +30,7 @@ trap 'rm -rf "$slots/$slot"' EXIT
 [ $(( $(date +%s) - w0 )) -gt 0 ] && echo "check: waited $(( $(date +%s) - w0 ))s for a slot"
 export JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2
 # the landing compiles a fixed core of the dart corpus, never a set that grows with the port; the whole
-# corpus runs beside the landings on wt2's head (test/src/dart_tests.jl)
+# corpus runs beside the landings on wt2's head (dev/corpus.sh, test/src/dart_tests.jl)
 export WT_LANDING_CORE=1
 mkdir -p .wtd; s0=$(date +%s)
 base=${CHECK_BASE:-origin/wt2}
