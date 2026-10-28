@@ -67,6 +67,17 @@ const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
     "dart_language/identity_strict_equal" => (48724, _COMPILE),
     "dart_language/double_literals_double_literal_coercion" => (59, _COMPILE),
     "dart_language/double_literals_implicit_double_context" => (31, _COMPILE),
+    # the structural tests of pkg/dart2wasm/test/ir_tests and tests/web/wasm
+    "dart_structural/hello" => (0, _COMPILE),
+    "dart_structural/always_throws" => (-1, _COMPILE),
+    "dart_structural/constant_string_ops" => (11003102, _COMPILE),
+    "dart_structural/math_min_max" => (2.1162671e7, _COMPILE),
+    "dart_structural/globals" => (120, _COMPILE),
+    "dart_structural/try_blocks" => (876, _COMPILE),
+    "dart_structural/type_brand" => (12341234, _COMPILE),
+    "dart_structural/large_const_set" => (100011, _COMPILE),
+    "dart_structural/long_string_import" => (100122, _COMPILE),
+    "dart_structural/source_map_simple" => (-1, _COMPILE),
 )
 
 # what a compile gives: its rejection, or :compiled

@@ -134,3 +134,4 @@
 0.3	0.4	xfail wide_primitive
 3.2	3.2	dart_web_wasm
 3.0	3.0	dart_language
+2.8	2.8	dart_structural

@@ -70,7 +70,7 @@ reason = "deferred loading splits the program into modules loaded on demand; dev
 kind = "structural"
 what = "main prints a constant string"
 property = "the entry function's body is the constant string's global read and one call of the print function, nothing else"
-cases = []
+cases = ["dart_structural/hello"]
 
 ["pkg/dart2wasm/test/ir_tests/standalone.dart"]
 kind = "not_portable"
@@ -81,13 +81,13 @@ reason = "a dart2wasm option selecting a JS-free host; WT has one host contract 
 kind = "structural"
 what = "a call of a function whose return type is Never is followed by unreachable"
 property = "a call Julia infers as Union{} (a callee that always throws) is followed by unreachable and nothing after it, and the throwing callee ends in its throw call and unreachable"
-cases = []
+cases = ["dart_structural/always_throws"]
 
 ["pkg/dart2wasm/test/ir_tests/constant_string_ops.dart"]
 kind = "structural"
 what = "length and codeUnitAt of a constant string fold to constants; constant strings concatenate"
 property = "a query Julia's optimizer folds on a constant string (its length, a code unit) is a constant in the module, no call; concatenation of constant strings emits one concatenation"
-cases = []
+cases = ["dart_structural/constant_string_ops"]
 
 ["pkg/dart2wasm/test/ir_tests/pure_function.dart"]
 kind = "not_portable"
@@ -103,7 +103,7 @@ reason = "a dart pragma on an external declaration; Julia has no external declar
 kind = "structural"
 what = "math.min and math.max of int, double and num operands"
 property = "min and max of two Int64 compile to a compare and select on i64 with no call; of two Float64 to Julia's own min and max bodies (NaN and signed zero as Julia answers them); a mixed pair promotes first"
-cases = []
+cases = ["dart_structural/math_min_max"]
 
 ["pkg/dart2wasm/test/ir_tests/constructor.dart"]
 kind = "not_portable"
@@ -139,19 +139,19 @@ reason = "a call on an untyped receiver is outside Julia's strict subset (D32)"
 kind = "structural"
 what = "static fields with constant, eager and lazy initializers, read and written, placed in globals or a table"
 property = "a Julia global (const and typed non-const, initialized by a constant or by a call) reads and writes through one wasm global of its type, a lazy initializer run once before the first read"
-cases = []
+cases = ["dart_structural/globals"]
 
 ["pkg/dart2wasm/test/ir_tests/try_blocks.dart"]
 kind = "structural"
 what = "the catch clauses of try blocks select the Dart and JS exception tags by the caught type"
 property = "a Julia try/catch catches with WT's one exception tag (Julia catches every exception, its catch clause untyped), the handler a catch of that tag"
-cases = []
+cases = ["dart_structural/try_blocks"]
 
 ["pkg/dart2wasm/test/ir_tests/type_brand.dart"]
 kind = "structural"
 what = "--unique-types gives each class its own struct type, distinct by brand"
 property = "two Julia structs with the same field layout are two distinct wasm struct types (each its own class id and type), never merged by shape"
-cases = []
+cases = ["dart_structural/type_brand"]
 
 ["pkg/dart2wasm/test/ir_tests/type_nobrand.dart"]
 kind = "not_portable"
@@ -579,7 +579,7 @@ reason = "JS interop; WT's host contract is its own import set (1.F)"
 kind = "structural"
 what = "a const set of 10,001 ints, more elements than array.new_fixed allows"
 property = "a constant array longer than array.new_fixed's limit of 10,000 elements is allocated with array.new and filled, never one array.new_fixed past the limit"
-cases = []
+cases = ["dart_structural/large_const_set"]
 
 ["tests/web/wasm/lazy_const_record_test.dart"]
 kind = "behavior"
@@ -600,7 +600,7 @@ reason = "JS interop and the host page; WT's host contract is its own import set
 kind = "structural"
 what = "printing a string literal of 100,001 bytes, one past the JS shells' limit on import names"
 property = "a string constant longer than 100,000 bytes is emitted in a form every host loads, never as an import name past that limit"
-cases = []
+cases = ["dart_structural/long_string_import"]
 
 ["tests/web/wasm/masquerade_test.dart"]
 kind = "not_portable"
@@ -691,7 +691,7 @@ reason = "JS interop; WT's host contract is its own import set (1.F)"
 kind = "structural"
 what = "the source map maps a thrown error's stack frames to dart file, line, column and function"
 property = "WT's source map maps each frame of a thrown error's stack to the Julia file, line and function of its statement"
-cases = []
+cases = ["dart_structural/source_map_simple"]
 
 ["tests/web/wasm/source_map_simple_lib.dart"]
 kind = "helper"

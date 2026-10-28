@@ -2905,3 +2905,77 @@ _g("dart_language", Any[
     ("double_literals_implicit_double_context", (n::Int64) -> (v::Float64 = 0; v = v + n; o = _DlSetter(0); o.x = 2 + n; w::Float64 = 0x02;
         l = Float64[1, 2]; push!(l, 3); _dw_bits(v === 0.0, o.x === 2.0, w === 2.0, l[3] === 3.0, sum(l) === 6.0)), Int64(0)),
 ])
+
+# ---- dart2wasm's structural tests at the pin (test/dart_tests.toml, dev/LEDGER.md D41) -------------
+# Each case writes the construct a golden of pkg/dart2wasm/test/ir_tests or a structural test of
+# tests/web/wasm compiles, named by the dart file less `_test`; the golden's property is checked on
+# WT's module once the compiler emits (dev/MARCH.md 1.T), native Julia's answer meanwhile.
+# hello: one print of a constant string (to devnull, so the suite's output stays its own)
+# always_throws: a call of a function whose return type is Union{} (dart's Never)
+@noinline _ds_always_throws(x::Int64)::Union{} = throw(ArgumentError("fooAlwaysThrows"))
+@noinline _ds_foo(x::Int64) = x > 0 ? _ds_always_throws(x) : x
+# math_min_max: min and max of Int64, Float64 and mixed operands, each in a function of its own
+@noinline _ds_min_ii(a::Int64, b::Int64) = min(a, b)
+@noinline _ds_max_ii(a::Int64, b::Int64) = max(a, b)
+@noinline _ds_min_dd(a::Float64, b::Float64) = min(a, b)
+@noinline _ds_max_dd(a::Float64, b::Float64) = max(a, b)
+@noinline _ds_min_id(a::Int64, b::Float64) = min(a, b)
+@noinline _ds_max_id(a::Int64, b::Float64) = max(a, b)
+@noinline _ds_min_nn(a::Union{Int64,Float64}, b::Union{Int64,Float64}) = min(a, b)
+@noinline _ds_max_nn(a::Union{Int64,Float64}, b::Union{Int64,Float64}) = max(a, b)
+# globals: globals with constant and computed initializers, typed and nullable, read and written
+struct _DsFoo
+    s::String
+end
+const _DS_FOO0 = _DsFoo("foo0")
+const _DS_FOO1 = Ref(_DsFoo("foo1"))
+const _DS_BAR1 = Ref{Union{Nothing,_DsFoo}}(_DsFoo("bar1"))
+const _DS_BAR3 = Ref{Union{Nothing,_DsFoo}}(nothing)
+global _ds_baz::Union{Nothing,_DsFoo} = _DsFoo("baz1")
+function _ds_globals(n::Int64)
+    local r = ncodeunits(_DS_FOO0.s) + ncodeunits(_DS_FOO1[].s) + (_DS_BAR3[] === nothing ? 1 : 0)
+    _DS_FOO1[] = _DsFoo("")
+    _DS_BAR1[] = nothing
+    _DS_BAR3[] = _DsFoo("x")
+    global _ds_baz = nothing
+    r += ncodeunits(_DS_FOO1[].s) + (_DS_BAR1[] === nothing ? 10 : 0) + ncodeunits(something(_DS_BAR3[]).s) + (_ds_baz === nothing ? 100 : 0)
+    _DS_FOO1[] = _DsFoo("foo1"); _DS_BAR1[] = _DsFoo("bar1"); _DS_BAR3[] = nothing; global _ds_baz = _DsFoo("baz1")
+    return r + n
+end
+# try_blocks: catch clauses selecting by the caught exception's type
+@noinline _ds_f(n::Int64) = n == 0 ? throw(ErrorException("Hi")) : n
+_ds_try1(n::Int64) = (try; _ds_f(n); catch e; e isa ErrorException ? -1 : rethrow(); end)
+_ds_try2(n::Int64) = (try; _ds_f(n); catch; -2; end)
+_ds_try3(n::Int64) = (try; _ds_f(n); catch e; e isa ArgumentError ? -3 : -4; end)
+# type_brand: structs of one layout, each its own type
+struct _DsFoo1; s1::String; a1::Int64; end
+struct _DsFoo2; s2::String; a2::Int64; end
+struct _DsFoo3; s3::String; a3::Int64; end
+struct _DsBar1; s1::String; d1::Float64; end
+_ds_brand(x::_DsFoo1) = 1
+_ds_brand(x::_DsFoo2) = 2
+_ds_brand(x::_DsFoo3) = 3
+_ds_brand(x::_DsBar1) = 4
+# large_const_set: a constant set of 10,001 integers
+const _DS_SET = Set{Int64}(0:10000)
+# long_string_import: a string literal of 100,001 bytes
+const _DS_LONG = repeat("x", 100000) * "y"
+# source_map_simple: an error thrown two calls deep and caught where it is thrown from
+@noinline _ds_g(n::Int64) = n > 0 ? throw(ErrorException("g")) : n
+@noinline _ds_sf(n::Int64) = _ds_g(n) + 1
+_g("dart_structural", Any[
+    ("hello", (n::Int64) -> (print(devnull, "hello world"); n), Int64(0)),
+    ("always_throws", (n::Int64) -> (try; _ds_foo(n); catch e; e isa ArgumentError ? Int64(-1) : Int64(-2); end), Int64(1)),
+    ("constant_string_ops", (n::Int64) -> (a = "hello"; b = "world"; ncodeunits("foo") * 1000 + Int64(codeunit("foo", 1)) + ncodeunits(a * " " * b) * 10^6 + n), Int64(0)),
+    ("math_min_max", (k::Bool) -> (ia = k ? Int64(1) : Int64(2); ib = k ? Int64(2) : Int64(1); da = k ? 1.5 : 2.5; db = k ? 2.5 : 1.5;
+        na = k ? ia : 1.2; nb = k ? ib : 1.2;
+        Float64(_ds_min_ii(ia, ib) + 10 * _ds_max_ii(ia, ib)) + 100 * _ds_min_dd(da, db) + 1000 * _ds_max_dd(da, db) + 10^4 * _ds_min_id(ia, da) +
+        10^5 * _ds_max_id(ia, da) + 10^6 * _ds_min_nn(na, nb) + 10^7 * _ds_max_nn(na, nb)), true),
+    ("globals", (n::Int64) -> _ds_globals(n), Int64(0)),
+    ("try_blocks", (n::Int64) -> _ds_try1(n) * 100 + _ds_try2(n) * 10 + _ds_try3(n) + _ds_try1(n + 1) * 1000, Int64(0)),
+    ("type_brand", (n::Int64) -> (l = Union{_DsFoo1,_DsFoo2,_DsFoo3,_DsBar1}[_DsFoo1("1", n), _DsFoo2("1", n), _DsFoo3("1", n), _DsBar1("1", 1.1)];
+        s = Int64(0); for e in vcat(l, l); s = 10s + _ds_brand(e); end; s), Int64(1)),
+    ("large_const_set", (n::Int64) -> (n in _DS_SET ? 1 : 0) + length(_DS_SET) * 10, Int64(10000)),
+    ("long_string_import", (n::Int64) -> ncodeunits(_DS_LONG) + Int64(codeunit(_DS_LONG, ncodeunits(_DS_LONG))) + n, Int64(0)),
+    ("source_map_simple", (n::Int64) -> (try; _ds_sf(n); catch e; e isa ErrorException ? Int64(-1) : Int64(-2); end), Int64(1)),
+])
