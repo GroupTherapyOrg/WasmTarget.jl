@@ -179,10 +179,16 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2675 CompilationTask" abstract type CompilationTask end
 
-"""
-AstCompilationTask's dart fields: `reference`.
-"""
-@parity "dart2wasm/lib/translator.dart:2694 AstCompilationTask" @unported struct AstCompilationTask <: CompilationTask end
+"""A member's function whose code is to be generated, by its code generator."""
+@parity "dart2wasm/lib/translator.dart:2694 AstCompilationTask" struct AstCompilationTask <: CompilationTask
+    # CompilationTask's fields, then the class's own
+    function_::WasmBuilder.FunctionBuilder
+    _code_generator::CodeGenerator
+    reference::Core.MethodInstance
+    # the struct's one constructor, tagged; dart's constructor at :2697 is its outer function
+    AstCompilationTask(::Val{:_}, function_::WasmBuilder.FunctionBuilder, _code_generator::CodeGenerator, reference::Core.MethodInstance) =
+        new(function_, _code_generator, reference)
+end
 
 """
 _ClosureTrampolineGenerator's dart fields: `translator`, `trampoline`, `target`, `typeCount`, `posArgCount`, `argNames`, `paramInfo`.
@@ -204,10 +210,13 @@ NodeCounter's dart fields: `translator`, `hadReturn`, `count`.
 """
 @parity "dart2wasm/lib/translator.dart:3417 NodeCounter" @unported struct NodeCounter end
 
-"""
-InliningDecision's dart fields: `shouldInline`, `reason`.
-"""
-@parity "dart2wasm/lib/translator.dart:3573 InliningDecision" @unported struct InliningDecision end
+"""Whether a call is inlined, and why."""
+@parity "dart2wasm/lib/translator.dart:3573 InliningDecision" struct InliningDecision
+    should_inline::Bool
+    reason::Union{String,Nothing}
+    # the struct's one constructor, tagged; dart's constructor at :3576 is its outer function
+    InliningDecision(::Val{:_}, should_inline::Bool, reason::Union{String,Nothing}) = new(should_inline, reason)
+end
 
 """
 PartialInstantiator's dart fields: `translator`, `callingModule`, `_oneTypeArgument`, `_twoTypeArguments`.
@@ -309,6 +318,7 @@ end
     local self = Translator(Val(:_), world, _module_output_data, options)
     # the constructor's body: each collaborator built over the translator, as its piece is ported
     self.compilation_queue[] = CompilationQueue(self)
+    self.functions[] = FunctionCollector(self)
     return self
 end
 
@@ -352,11 +362,53 @@ end
 
 @parity "dart2wasm/lib/translator.dart:815 Translator._printFunction" @unported function _print_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, name::Any) end
 
-@parity "dart2wasm/lib/translator.dart:830 Translator.callReference" @unported function call_reference(self::Translator, reference::Core.MethodInstance, b::WasmBuilder.InstructionsBuilder) end
+"""Call `reference` directly on `b`, inlining it where allowed and beneficial; the call's outputs."""
+@parity "dart2wasm/lib/translator.dart:830 Translator.callReference" call_reference(self::Translator, reference::Core.MethodInstance, b::WasmBuilder.InstructionsBuilder)::Vector{WasmBuilder.IR.ValueType} =
+    call_target(self, direct_call_target(self, reference), b, reference)
 
-@parity "dart2wasm/lib/translator.dart:835 Translator.callTarget" @unported function call_target(self::Translator, call_target::CallTarget, b::WasmBuilder.InstructionsBuilder, optional...) end
+@parity "dart2wasm/lib/translator.dart:835 Translator.callTarget" function call_target(self::Translator, call_target::CallTarget, b::WasmBuilder.InstructionsBuilder,
+        reference::Union{Core.MethodInstance,Nothing} = nothing)::Vector{WasmBuilder.IR.ValueType}
+    local outputs::Vector{WasmBuilder.IR.ValueType}
+    if supports_inlining(call_target)
+        local decision = should_inline(call_target)::InliningDecision
+        if decision.should_inline
+            WasmBuilder.comment(b, "Inlining $(name(call_target)), reason: $(decision.reason)")
+            outputs = inline_call_to(b, call_target)
+        else
+            WasmBuilder.comment(b, "Not inlining, reason: $(decision.reason)")
+            outputs = call_function(self, var"function"(call_target), b, reference)
+        end
+    else
+        outputs = call_function(self, var"function"(call_target), b, reference)
+    end
+    if synthesize_null_return_value(call_target)
+        isempty(outputs) || reject!(Internal("dart2wasm/lib/translator.dart:835 Translator.callTarget: a synthesized null after outputs"), "Translator.callTarget")
+        WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+        return WasmBuilder.IR.ValueType[WasmBuilder.IR.RefType(WasmBuilder.IR.HeapType_none; nullable = true)]
+    end
+    if synthesize_no_return(call_target)
+        isempty(outputs) || reject!(Internal("dart2wasm/lib/translator.dart:835 Translator.callTarget: no return after outputs"), "Translator.callTarget")
+        WasmBuilder.unreachable(b)
+        return WasmBuilder.IR.ValueType[]
+    end
+    return outputs
+end
 
-@parity "dart2wasm/lib/translator.dart:875 Translator.callFunction" @unported function call_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, b::WasmBuilder.InstructionsBuilder, optional...) end
+"""
+Call `function_` on `b`: directly when it is defined in the caller's module. dart reaches a function
+of another module through the dispatch or the cross-module table; deferred loading is out of scope,
+so every function is the one module's and another module's is a located rejection.
+"""
+@parity "dart2wasm/lib/translator.dart:875 Translator.callFunction" function call_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, b::WasmBuilder.InstructionsBuilder,
+        target::Union{Core.MethodInstance,Nothing} = nothing)::Vector{WasmBuilder.IR.ValueType}
+    # If the target function is defined in the same module as the caller, just invoke it.
+    local target_module_builder = self.module_to_builder[function_.enclosing_module]
+    if target_module_builder === b.module_builder
+        WasmBuilder.call(b, function_)
+        return emit_unreachable_if_no_result(b, function_.type.outputs)
+    end
+    reject!(Internal("dart2wasm/lib/translator.dart:875 Translator.callFunction: a call across modules, which one module never makes"), "Translator.callFunction")
+end
 
 @parity "dart2wasm/lib/translator.dart:911 Translator.callDispatchTable" @unported function call_dispatch_table(self::Translator, b::WasmBuilder.InstructionsBuilder, selector::SelectorInfo; interface_target = nothing, use_unchecked_entry::Bool) end
 
@@ -539,9 +591,14 @@ type and the MethodInstance is specialized on the types it is called with, so no
 
 @parity "dart2wasm/lib/translator.dart:1835 Translator._typeFromNamedParameters" @unported function _type_from_named_parameters(self::Translator, named_order::Vector{NirArgument}, named_type::Vector{NirArgument}) end
 
-@parity "dart2wasm/lib/translator.dart:1857 Translator.directCallTarget" @unported function direct_call_target(self::Translator, target::Core.MethodInstance) end
+@parity "dart2wasm/lib/translator.dart:1857 Translator.directCallTarget" function direct_call_target(self::Translator, target::Core.MethodInstance)::AstCallTarget
+    local signature = signature_for_direct_call(self, target)
+    return AstCallTarget(signature, self, target)
+end
 
-@parity "dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall" @unported function signature_for_direct_call(self::Translator, target::Core.MethodInstance) end
+# a Julia member calls through no selector (src/dispatch_table.jl): its own function type
+@parity "dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall" signature_for_direct_call(self::Translator, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType =
+    get_function_type(self.functions[], target)
 
 @parity "dart2wasm/lib/translator.dart:1872 Translator.synthesizeNullReturnValue" @unported function synthesize_null_return_value(self::Translator, target::Core.MethodInstance) end
 
@@ -568,7 +625,14 @@ type and the MethodInstance is specialized on the types it is called with, so no
 
 @parity "dart2wasm/lib/translator.dart:2072 Translator.typeOfCheckedParameterVariable" @unported function type_of_checked_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue" @unported function type_of_return_value(self::Translator, member::Core.MethodInstance) end
+# dart reads TFA's inferred return type, else the declared one; a Julia member's is the return type
+# Julia inferred for it, its CodeInstance's rettype in the closed world
+@parity "dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue" function type_of_return_value(self::Translator, member::Core.MethodInstance)::Type
+    for b in self.component
+        b.ci.def === member && return b.ci.rettype
+    end
+    reject!(Internal("dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue: $member is no body of the closed world"), "Translator.typeOfReturnValue")
+end
 
 # dart narrows a field's declared type by TFA's inferred type; Julia's inference does not narrow a
 # field, so its type is its declared one
@@ -652,11 +716,36 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2679 CompilationTask" @unported function CompilationTask(function_, _code_generator) end
 
-@parity "dart2wasm/lib/translator.dart:2681 CompilationTask.run" @unported function Base.run(self::CompilationTask, translator::Translator, print_kernel::Bool, print_wasm::Bool) end
+@parity "dart2wasm/lib/translator.dart:2681 CompilationTask.run" function Base.run(self::CompilationTask, translator::Translator, print_kernel::Bool, print_wasm::Bool)::Nothing
+    if print_wasm
+        println("#$(self.function_.function_name) (synthetic)")
+        println(self.function_.type)
+    end
+    generate(self._code_generator, WasmBuilder.body(self.function_), WasmBuilder.locals(self.function_), nothing)
+    print_wasm && println(WasmBuilder.trace(WasmBuilder.body(self.function_)))
+    return nothing
+end
 
-@parity "dart2wasm/lib/translator.dart:2697 AstCompilationTask" @unported function AstCompilationTask(function_, _create_code_generator, reference) end
+@parity "dart2wasm/lib/translator.dart:2697 AstCompilationTask" AstCompilationTask(function_::WasmBuilder.FunctionBuilder, _create_code_generator::CodeGenerator, reference::Core.MethodInstance)::AstCompilationTask =
+    AstCompilationTask(Val(:_), function_, _create_code_generator, reference)
 
-@parity "dart2wasm/lib/translator.dart:2701 AstCompilationTask.run" @unported function Base.run(self::AstCompilationTask, translator::Translator, print_kernel::Bool, print_wasm::Bool) end
+# dart prints the member's Kernel (its initializers and body) with printKernel; a Julia member's is
+# the optimized IR Julia inferred, its body's CodeInfo
+@parity "dart2wasm/lib/translator.dart:2701 AstCompilationTask.run" function Base.run(self::AstCompilationTask, translator::Translator, print_kernel::Bool, print_wasm::Bool)::Nothing
+    if print_kernel || print_wasm
+        println("#$(self.function_.function_name): $(self.reference)")
+        println(self.function_.type)
+    end
+    if print_kernel
+        for b in translator.component
+            b.ci.def === self.reference && println(Base.code_typed_by_type(self.reference.specTypes; optimize = true)[1][1])
+        end
+        print_wasm || println()
+    end
+    generate(self._code_generator, WasmBuilder.body(self.function_), WasmBuilder.locals(self.function_), nothing)
+    print_wasm && println(WasmBuilder.trace(WasmBuilder.body(self.function_)))
+    return nothing
+end
 
 @parity "dart2wasm/lib/translator.dart:2744 AstCompilationTask._getNames" @unported function _get_names(self::AstCompilationTask, translator::Translator) end
 
@@ -726,7 +815,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3563 NodeCounter._countInstanceCallCost" @unported function _count_instance_call_cost(self::NodeCounter, node::NirStmt) end
 
-@parity "dart2wasm/lib/translator.dart:3576 InliningDecision" @unported function InliningDecision(should_inline, reason) end
+@parity "dart2wasm/lib/translator.dart:3576 InliningDecision" InliningDecision(should_inline::Bool, reason::Union{String,Nothing})::InliningDecision = InliningDecision(Val(:_), should_inline, reason)
 
 @parity "dart2wasm/lib/translator.dart:3610 PartialInstantiator" @unported function PartialInstantiator(translator, calling_module) end
 

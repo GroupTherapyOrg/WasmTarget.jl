@@ -2,14 +2,41 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-FunctionCollector's dart fields: `translator`, `_functions`, `_dynamicForwarderFunctions`, `_invocationCreatorStubs`, `_lambdas`, `_calledSelectors`, `_calledUncheckedSelectors`, `_calledDynamicSelectors`, `_allocatedClasses`, `_pendingAllocation`, `_pendingAllocationDynamic`.
+Creates the wasm function of each member the program reaches, queueing its code for generation,
+and manages the compilation queue that achieves tree shaking. A member is a Core.MethodInstance.
+
+Fields to come (4, each with its functions.dart line, the dynamic calls' and closures' maps, which
+no program Julia's trim verifier accepts reaches yet): `_dynamicForwarderFunctions` :27,
+`_invocationCreatorStubs` :30, `_lambdas` :32, `_pendingAllocationDynamic` :42.
 """
-@parity "dart2wasm/lib/functions.dart:21 FunctionCollector" @unported struct FunctionCollector end
+@parity "dart2wasm/lib/functions.dart:21 FunctionCollector" struct FunctionCollector
+    translator::KernelNodes
+    _functions::LinkedHashMap{Core.MethodInstance,WasmBuilder.IR.BaseFunction}
+    _called_selectors::Set{Int}
+    _called_unchecked_selectors::Set{Int}
+    _called_dynamic_selectors::Set{CallShape}
+    _allocated_classes::Set{Int}
+    _pending_allocation::Dict{Int,Vector{Core.MethodInstance}}
+    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at :44
+    # is its outer function
+    FunctionCollector(::Val{:_}, translator::KernelNodes) =
+        new(translator, LinkedHashMap{Core.MethodInstance,WasmBuilder.IR.BaseFunction}(), Set{Int}(), Set{Int}(),
+            Set{CallShape}(), Set{Int}(), Dict{Int,Vector{Core.MethodInstance}}())
+end
 
 """
-_FunctionTypeGenerator's dart fields: `translator`, `synthesizeNullReturnValue`, `synthesizeNoReturn`.
+The wasm function type of a member, by its kind: dart's visitor over Field, Procedure and
+Constructor. A Julia member is a method, dart's Procedure: Julia's fields have no implicit
+accessors (getfield is the code generator's) and its constructors are methods.
 """
-@parity "dart2wasm/lib/functions.dart:465 _FunctionTypeGenerator" @unported struct _FunctionTypeGenerator end
+@parity "dart2wasm/lib/functions.dart:465 _FunctionTypeGenerator" struct _FunctionTypeGenerator
+    translator::KernelNodes
+    synthesize_null_return_value::Bool
+    synthesize_no_return::Bool
+    # the struct's one constructor, tagged; dart's constructor at :470 is its outer function
+    _FunctionTypeGenerator(::Val{:_}, translator::KernelNodes, synthesize_null_return_value::Bool, synthesize_no_return::Bool) =
+        new(translator, synthesize_null_return_value, synthesize_no_return)
+end
 
 @parity "dart2wasm/lib/functions.dart:949 CallShape" @closed const CallShape = Union{MethodCallShape, GetterCallShape, SetterCallShape}
 
@@ -22,7 +49,7 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:1061 SetterCallShape" @unported struct SetterCallShape end
 
-@parity "dart2wasm/lib/functions.dart:44 FunctionCollector" @unported function FunctionCollector(translator) end
+@parity "dart2wasm/lib/functions.dart:44 FunctionCollector" FunctionCollector(translator::KernelNodes)::FunctionCollector = FunctionCollector(Val(:_), translator)
 
 @parity "dart2wasm/lib/functions.dart:46 FunctionCollector.interopNamer" @unported function interop_namer(self::FunctionCollector) end
 
@@ -34,9 +61,33 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:71 FunctionCollector.initialize" @unported function initialize(self::FunctionCollector) end
 
-@parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" @unported function get_existing_function(self::FunctionCollector, target::Core.MethodInstance) end
+@parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" get_existing_function(self::FunctionCollector, target::Core.MethodInstance)::Union{WasmBuilder.IR.BaseFunction,Nothing} = get(self._functions, target, nothing)
 
-@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" @unported function get_function(self::FunctionCollector, target::Core.MethodInstance) end
+"""
+The wasm function of `target`, made on first request in its module and queued for its code.
+
+A Julia member carries none of dart's pragmas: no `wasm:import` (a foreign call is a host import,
+dev/MARCH.md 1.F), no `wasm:export` (the entry's export is the compile's), no `wasm:pure`; its
+inlining hint is Julia's own declaration, `@noinline` 0 and `@inline` 127 (dart's never- and
+prefer-inline pragmas).
+"""
+@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.BaseFunction
+    local existing = get(self._functions, target, nothing)
+    existing === nothing || return existing
+    local translator = self.translator
+    local method = target.def::Method
+    local never_inline = Core.Compiler.is_declared_noinline(method)
+    local always_inline = Core.Compiler.is_declared_inline(method)
+    local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
+    local module_ = module_for_reference(translator, target)
+    local ftype = signature_for_direct_call(translator, target)
+    local function_ = WasmBuilder.define(module_.functions[], ftype, get_function_name(self, target))
+    function_.is_pure = false
+    function_.inline_hint = inline_hint
+    self._functions[target] = function_
+    add(translator.compilation_queue[], AstCompilationTask(function_, get_member_code_generator(translator, function_, target), target))
+    return function_
+end
 
 @parity "dart2wasm/lib/functions.dart:192 FunctionCollector.hasDynamicSelectorCall" @unported function has_dynamic_selector_call(self::FunctionCollector, shape::CallShape) end
 
@@ -48,17 +99,40 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:233 FunctionCollector.getLambdaFunction" @unported function get_lambda_function(self::FunctionCollector, lambda::Lambda) end
 
-@parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" @unported function get_function_type(self::FunctionCollector, target::Core.MethodInstance) end
+@parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" function get_function_type(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType
+    # We first try to get the function type by seeing if we already compiled the target function.
+    local existing_function = get_existing_function(self, target)
+    existing_function === nothing || return existing_function.type
+    return _get_function_type(self, target)
+end
 
 @parity "dart2wasm/lib/functions.dart:262 FunctionCollector.getLambdaFunctionType" @unported function get_lambda_function_type(self::FunctionCollector, lambda::Lambda) end
 
-@parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" @unported function _get_function_type(self::FunctionCollector, target::Core.MethodInstance) end
+# dart's `member.accept1(visitor, target)`: a Julia member is a method, the visitor's Procedure arm
+@parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" function _get_function_type(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType
+    local generator = _FunctionTypeGenerator(self.translator, synthesize_null_return_value(self, target), synthesize_no_return(self, target))
+    return visit_procedure(generator, target, target)
+end
 
-@parity "dart2wasm/lib/functions.dart:306 FunctionCollector.synthesizeNullReturnValue" @unported function synthesize_null_return_value(self::FunctionCollector, target::Core.MethodInstance) end
+# a member returning only `nothing` (dart's null) returns nothing in wasm; its caller makes the null
+@parity "dart2wasm/lib/functions.dart:306 FunctionCollector.synthesizeNullReturnValue" function synthesize_null_return_value(self::FunctionCollector, target::Core.MethodInstance)::Bool
+    local wasm_type = translate_return_type(self.translator, type_of_return_value(self.translator, target))
+    return wasm_type isa WasmBuilder.IR.RefType && wasm_type.heap_type === WasmBuilder.IR.HeapType_none && wasm_type.nullable
+end
 
-@parity "dart2wasm/lib/functions.dart:319 FunctionCollector.synthesizeNoReturn" @unported function synthesize_no_return(self::FunctionCollector, target::Core.MethodInstance) end
+# a member Julia inferred never returns (Union{}) returns nothing in wasm; its caller emits unreachable
+@parity "dart2wasm/lib/functions.dart:319 FunctionCollector.synthesizeNoReturn" function synthesize_no_return(self::FunctionCollector, target::Core.MethodInstance)::Bool
+    local wasm_type = translate_return_type(self.translator, type_of_return_value(self.translator, target))
+    return wasm_type isa WasmBuilder.IR.RefType && wasm_type.heap_type === WasmBuilder.IR.HeapType_none && !wasm_type.nullable
+end
 
-@parity "dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName" @unported function get_function_name(self::FunctionCollector, target::Core.MethodInstance) end
+# dart's `member.toString()`, a member's qualified name; a Julia member's is its function's name and
+# the argument types it is specialized on
+@parity "dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName" function get_function_name(self::FunctionCollector, target::Core.MethodInstance)::String
+    local method = target.def::Method
+    local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
+    return "$(method.module).$(method.name)($(join(("::$p" for p in params[2:end]), ", ")))"
+end
 
 @parity "dart2wasm/lib/functions.dart:377 FunctionCollector.getLambdaFunctionName" @unported function get_lambda_function_name(self::FunctionCollector, lambda::Lambda) end
 
@@ -78,11 +152,22 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:461 FunctionCollector.translatedProcedures" @unported function translated_procedures(self::FunctionCollector) end
 
-@parity "dart2wasm/lib/functions.dart:470 _FunctionTypeGenerator" @unported function _FunctionTypeGenerator(translator, synthesize_null_return_value, synthesize_no_return) end
+@parity "dart2wasm/lib/functions.dart:470 _FunctionTypeGenerator" _FunctionTypeGenerator(translator::KernelNodes, synthesize_null_return_value::Bool, synthesize_no_return::Bool)::_FunctionTypeGenerator =
+    _FunctionTypeGenerator(Val(:_), translator, synthesize_null_return_value, synthesize_no_return)
 
 @parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" @unported function visit_field(self::_FunctionTypeGenerator, node::ClassField, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:511 _FunctionTypeGenerator.visitProcedure" @unported function visit_procedure(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance) end
+"""
+A method's function type: its parameters' and return's wasm types, after its callee's when the
+callee is a context (a closure's captured struct), dart's receiver of an instance member.
+"""
+@parity "dart2wasm/lib/functions.dart:511 _FunctionTypeGenerator.visitProcedure" function visit_procedure(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType
+    local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
+    local receiver_type = Base.issingletontype(params[1]) ? nothing : translate_type(self.translator, params[1])
+    return _make_function_type(self.translator, target, receiver_type;
+                               synthesize_null_return_value = self.synthesize_null_return_value,
+                               synthesize_no_return = self.synthesize_no_return)
+end
 
 @parity "dart2wasm/lib/functions.dart:550 _FunctionTypeGenerator.visitConstructor" @unported function visit_constructor(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance) end
 
@@ -94,7 +179,21 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" @unported function _get_constructor_input_types(translator::Translator, member::Core.MethodInstance, type_parameters::Vector{TypeVar}, parameters::Vector{NirArgument}, translate_type::Function; is_body_parameter = nothing) end
 
-@parity "dart2wasm/lib/functions.dart:731 _getInputTypes" @unported function _get_input_types(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}, is_import_or_export::Bool, translate_type::Function) end
+# a Julia member has no type parameters (its MethodInstance binds them) and no named parameters; its
+# parameters are the arguments after the callee, each of the type it is specialized on
+@parity "dart2wasm/lib/functions.dart:731 _getInputTypes" function _get_input_types(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType},
+        is_import_or_export::Bool, translate_type::Function)::Vector{WasmBuilder.IR.ValueType}
+    local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
+    local inputs = WasmBuilder.IR.ValueType[]
+    if receiver_type !== nothing
+        is_import_or_export && reject!(Internal("dart2wasm/lib/functions.dart:731 _getInputTypes: an import or export with a receiver"), "_getInputTypes")
+        push!(inputs, receiver_type)
+    end
+    for p in params[2:end]
+        push!(inputs, translate_type(p)::WasmBuilder.IR.ValueType)
+    end
+    return inputs
+end
 
 @parity "dart2wasm/lib/functions.dart:787 makeFunctionTypeForBody" @unported function make_function_type_for_body(translator::Translator, member::Core.MethodInstance, synthesize_null_return_value::Bool, synthesize_no_return::Bool) end
 
@@ -108,7 +207,17 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:875 makeInvocationCreatorSignature" @unported function make_invocation_creator_signature(translator::Translator, shape::MethodCallShape) end
 
-@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" @unported function _make_function_type(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}; synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export = nothing) end
+# dart's external types for an import or export (translateExternalType) wait for the host imports
+# (dev/MARCH.md 1.F): such a function type rejects, located
+@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" function _make_function_type(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType};
+        synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export::Bool = false)::WasmBuilder.IR.FunctionType
+    is_import_or_export && reject!(Unquarantined("src/functions.jl _makeFunctionType: an import or export's external types (dev/MARCH.md 1.F)"), "dart2wasm/lib/functions.dart:890 _makeFunctionType")
+    local inputs = _get_input_types(translator, target, receiver_type, is_import_or_export, (t::Type) -> translate_type(translator, t))
+    local has_no_return_value = synthesize_null_return_value || synthesize_no_return
+    local outputs = has_no_return_value ? WasmBuilder.IR.ValueType[] :
+        WasmBuilder.IR.ValueType[translate_return_type(translator, type_of_return_value(translator, target))]
+    return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
+end
 
 @parity "dart2wasm/lib/functions.dart:951 CallShape" @unported function CallShape(name) end
 

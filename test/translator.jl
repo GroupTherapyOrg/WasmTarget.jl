@@ -257,3 +257,43 @@ end
     local e2 = try; D.convert_type(t, b, IR.NumType_i32, shape); nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Unquarantined && occursin("1.D", e2.rejection.row)
 end
+
+module FirstCases
+f(x::Int32) = x + Int32(1)
+nothing_or(n::Int) = n > 0 ? n : nothing
+end
+
+@testset "functions.dart: a member's function, its type and its queued code" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(FirstCases.f, (Int32,), "translator"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local mi = only(b.ci.def for b in t.component if b.ci.def.def.name === :f)
+    # the return type is Julia's inferred one
+    @test D.type_of_return_value(t, mi) === only(Base.return_types(FirstCases.f, (Int32,))) === Int32
+    local fc = t.functions[]
+    @test D.get_existing_function(fc, mi) === nothing
+    # the function type: the arguments after the singleton callee, then the return, Julia's types' wasm types
+    local ft = D.get_function_type(fc, mi)
+    @test ft.inputs == [IR.NumType_i32] && ft.outputs == [IR.NumType_i32]
+    # the types builder makes one function type per signature: the same type each time
+    @test D.signature_for_direct_call(t, mi) === ft
+    local fn = D.get_function(fc, mi)
+    @test D.get_function(fc, mi) === fn && D.get_existing_function(fc, mi) === fn
+    @test fn.type === ft && fn.function_name == "$(parentmodule(FirstCases.f)).f(::Int32)"
+    @test fn.inline_hint === nothing && !fn.is_pure
+    # defined in the main module and queued once for its code generator
+    @test fn.enclosing_module === D.main_module(t).module_
+    local q = t.compilation_queue[]
+    @test length(q._pending) == 1 && only(q._pending) isa D.AstCompilationTask && only(q._pending).reference === mi
+    # a member returning nothing or an Int: not a null-only return, so it returns its nullable box
+    local t2 = D.Translator(W.check_subset(FirstCases.nothing_or, (Int,), "translator"), data, D.TranslatorOptions())
+    D._init_modules(t2, nothing)
+    collect(D.ClassInfoCollector(t2))
+    local mi2 = only(b.ci.def for b in t2.component if b.ci.def.def.name === :nothing_or)
+    @test !D.synthesize_null_return_value(t2.functions[], mi2) && !D.synthesize_no_return(t2.functions[], mi2)
+    @test D.get_function_type(t2.functions[], mi2).outputs == [t2.class_info[Int64].nullable_type]
+    @test D.InliningDecision(true, "small").should_inline
+end
