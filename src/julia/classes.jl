@@ -16,7 +16,9 @@ The classes of the closed world `world`, its NIR, in the order its walk first me
 order, its argument types (its MethodInstance's signature), then each statement's type, then its
 return type. A type meets the walk by Julia's own inferred form: a `Union` by its members, a
 `Vararg` by its element, a type as a value (`Type{X}`, or a `UnionAll` under `Type`) by its kind
-(`typeof(X)`, or every kind when `X` is not known); any other `UnionAll` rejects, located. A class
+(`typeof(X)`, or every kind when `X` is not known) and by the classes `X` denotes (`X` itself, or each
+member of a Union, that is a DataType with no free type variable), whose ids a type value's layout
+holds; any other `UnionAll` rejects, located. A class
 met brings its supertype chain to `Any`, the root, and a concrete class that is not a kind brings
 its field types, each met as a value's type. `Union{}`, the type of no value, brings nothing.
 
@@ -48,7 +50,16 @@ end
         foreach(k -> _meet_class!(out, seen, k, at), _KINDS)
     elseif t isa DataType && Base.isType(t)
         local x = t.parameters[1]
-        x isa TypeVar ? foreach(k -> _meet_class!(out, seen, k, at), _KINDS) : _meet_class!(out, seen, typeof(x), at)
+        if x isa TypeVar
+            foreach(k -> _meet_class!(out, seen, k, at), _KINDS)
+        else
+            _meet_class!(out, seen, typeof(x), at)
+            # the classes the type value denotes, so its layout's classId has one (the kinds' fields,
+            # below): a DataType with no free type variable, or each such member of a Union
+            for d in (x isa Union ? Base.uniontypes(x) : Any[x])
+                d isa DataType && !Base.has_free_typevars(d) && _meet_class!(out, seen, d, at)
+            end
+        end
     elseif t isa DataType
         _meet_class!(out, seen, t, at)
     else

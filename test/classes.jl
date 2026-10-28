@@ -51,3 +51,19 @@ _classes(f, at) = W.closed_world_classes(W.build_nir(W.check_subset(f, at, "clas
     local e = try; _classes(ClassesCases.f_open, (Vector,)); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("src/julia/classes.jl", e.rejection.row)
 end
+
+module ClassesTypeValueCases
+f_type(::Type{T}) where {T} = T
+f_vec_eltype(n::Int) = n > 0 ? Vector{Int} : Vector{Float64}
+end
+
+@testset "classes: a type value brings the classes it denotes" begin
+    local W = WasmTarget
+    local cs(f, at) = W.closed_world_classes(W.build_nir(W.check_subset(f, at, "classes"), "classes"), "classes")
+    # Type{Int8}: its kind, DataType, and Int8 itself, whose class id a type value's layout holds
+    local c = cs(ClassesTypeValueCases.f_type, (Type{Int8},))
+    @test DataType in c && Int8 in c
+    # a Union of type values: each member it can denote
+    local c2 = cs(ClassesTypeValueCases.f_vec_eltype, (Int,))
+    @test Vector{Int} in c2 && Vector{Float64} in c2
+end
