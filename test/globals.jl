@@ -44,3 +44,24 @@ _rejection(f) = try; f(); nothing; catch x; x isa WasmTarget.RejectionError ? x.
     # the sealed class is constructed only through a subclass
     @test _rejection(() -> D.DartGlobalDefinition()) isa WasmTarget.Internal
 end
+
+module GlobalsProgram
+global counter::Int = 0
+global scale::Float64 = 2.0
+read_counter(x::Int) = counter + x + round(Int, scale)
+end
+
+@testset "globals.dart: a program's static fields" begin
+    local t = D.Translator(WasmTarget.check_subset(GlobalsProgram.read_counter, (Int,), "globals"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local g = D.DartGlobals(t)
+    # the bindings the closed world reads, each counted once by its wasm type; the functions it
+    # calls (round, +) are declarations, never fields
+    local tc = D.translate_type_of_field(t, GlobalRef(GlobalsProgram, :counter))
+    local ts = D.translate_type_of_field(t, GlobalRef(GlobalsProgram, :scale))
+    @test tc != ts && g._field_type_count[tc] == 1 && g._field_type_count[ts] == 1 && sum(values(g._field_type_count)) == 2
+    # a definition reads the main module, which this translator, its modules not yet built, does
+    # not have: a located rejection, never a value
+    local e = try; D.get_definition_for_static_field(g, GlobalRef(GlobalsProgram, :counter)); nothing; catch x; x; end
+    @test e isa WasmTarget.RejectionError
+end

@@ -718,11 +718,12 @@ A field Julia holds no value in (`#undef`) rejects, located.
         sub_constants[index + 1] === nothing || reject!(Internal("$at: the field index $index of $cls is given twice"), at)
         local field_value = if field.index == 0
             # a kind's fields that are not Julia's own (src/julia/classes.jl _kind_instance_fields):
-            # dart's _Type.isDeclaredNullable, Julia's `Nothing <: T`, and _InterfaceType.classId, the
+            # dart's _Type.isDeclaredNullable (types.jl's encodedNullability, Julia's `Nothing <: T`),
+            # and _InterfaceType.classId, the
             # id of the class T denotes, as dart's _makeTypeConstant and _makeInterfaceTypeConstant
             # fill them
             Base.iskindtype(cls) || reject!(Internal("$at: the field $(field.name) of $cls, no kind, has no index"), at)
-            field.name == "isDeclaredNullable" ? (Nothing <: v) :
+            field.name == "isDeclaredNullable" ? (encoded_nullability(v) == 1) :
             field.name == "classId" ? Int32(translator.class_id_numbering[].class_ids[v]) :
             reject!(Internal("$at: the kind $cls's field $(field.name), not one of classes.jl's"), at)
         else

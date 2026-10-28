@@ -120,7 +120,55 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/globals.dart:97 DartGlobals" @unported function DartGlobals(translator) end
+"""
+Counts the program's static fields of each wasm type. dart counts every static field of every
+library; a Julia program's static fields are the global bindings the closed world reads (each
+`GlobalRef` of its NIR, an operand or a statement), but a binding of a function, a type or a module,
+which declare Julia's methods, classes and modules as dart's procedures, classes and libraries do.
+"""
+@parity "dart2wasm/lib/globals.dart:97 DartGlobals" function DartGlobals(translator::Translator)::DartGlobals
+    local self = DartGlobals(Val(:_), translator)
+    local seen = Set{GlobalRef}()
+    local count(ref::GlobalRef) = begin
+        ref in seen && return nothing
+        push!(seen, ref)
+        isdefinedglobal(ref.mod, ref.name) && getglobal(ref.mod, ref.name) isa Union{Function,Type,Module} && return nothing
+        local wasm_type = translate_type_of_field(translator, ref)
+        self._field_type_count[wasm_type] = get(self._field_type_count, wasm_type, 0) + 1
+        return nothing
+    end
+    local operand(v::Union{Nothing,NirValue}) = v isa NirGlobal ? count(v.ref) : nothing
+    for body in translator.component, st in body.stmts
+        @exhaustive st::NirStmt begin
+            (x::NirCall) => foreach(operand, x.args)
+            (x::NirInvoke) => foreach(operand, x.args)
+            (x::NirNew) => foreach(operand, x.args)
+            (x::NirForeignCall) => foreach(operand, x.args)
+            (x::NirBoundscheck) => foreach(operand, x.args)
+            (x::NirGCPreserveBegin) => foreach(operand, x.args)
+            (x::NirGCPreserveEnd) => foreach(operand, x.args)
+            (x::NirLeave) => foreach(operand, x.args)
+            (x::NirPopException) => foreach(operand, x.args)
+            (x::NirTheException) => foreach(operand, x.args)
+            (x::NirLoopInfo) => foreach(operand, x.args)
+            (x::NirThrowUndefIfNot) => foreach(operand, x.args)
+            (x::NirCFunction) => foreach(operand, x.args)
+            (x::NirInvokeModify) => foreach(operand, x.args)
+            NirGoto => nothing
+            (x::NirGotoIfNot) => operand(x.cond)
+            (x::NirReturn) => operand(x.val)
+            NirUnreachable => nothing
+            (x::NirPhi) => foreach(operand, x.values)
+            (x::NirPi) => operand(x.val)
+            (x::NirEnter) => operand(x.scope)
+            (x::NirUpsilon) => operand(x.val)
+            (x::NirPhiC) => foreach(operand, x.values)
+            NirNothing => nothing
+            (x::NirGlobalRead) => count(x.ref)
+        end
+    end
+    return self
+end
 
 """
 dart's literal initializer of a static field, its constant. A Julia global binding has no
@@ -141,7 +189,59 @@ A deliberate difference from dart, whose initializer is the field's literal expr
     return NirConst(Core.Const(value))
 end
 
-@parity "dart2wasm/lib/globals.dart:126 DartGlobals.getDefinitionForStaticField" @unported function get_definition_for_static_field(self::DartGlobals, field::ClassField) end
+"""
+Return (and if needed create) the Wasm global corresponding to a static field, a Julia global
+binding. Julia has no late static fields; a binding's module is the main module (deferred loading is
+out of scope); a binding is final when it is `const`. A binding has no initializer expression, so
+the start-function path (dart's `field.initializer != null`) is taken only by the pragma, which no
+binding carries; and the lazy path, dart's static field initializer function, is the binding's
+module's top level or `__init__`, which the closed world does not compile: it rejects, located,
+until that path is ported.
+"""
+@parity "dart2wasm/lib/globals.dart:126 DartGlobals.getDefinitionForStaticField" function get_definition_for_static_field(self::DartGlobals, field::GlobalRef)::DartGlobalDefinition
+    local existing = get(self._definitions, field, nothing)
+    existing === nothing || return existing
+    local translator = self.translator
+    local field_type = translate_type_of_field(translator, field)
+    local number_of_fields_with_same_type = get(self._field_type_count, field_type, nothing)
+    number_of_fields_with_same_type === nothing &&
+        reject!(Internal("dart2wasm/lib/globals.dart:131 DartGlobals.getDefinitionForStaticField: the binding $field is no static field the closed world reads"), "DartGlobals.getDefinitionForStaticField")
+    local use_table_slot = number_of_fields_with_same_type >= dart_field_table_use_cutoff() && field_type isa WasmBuilder.IR.RefType
+
+    local module_ = main_module(translator)
+
+    # If the initializer expression is a constant expression then the field
+    # doesn't have to become lazy.
+    #
+    # If the type is non-nullable we prefer to use a global as using a table
+    # can cause null checks on usages. Oterhwise we use [useTableSlot]
+    # heuristic to determine whether to use a table or not.
+    local init = get_constant_initializer(self, field)
+    if init !== nothing && try_instantiate_eagerly_from(translator.constants[], module_, init, field_type)
+        if use_table_slot && WasmBuilder.nullable(field_type)
+            return self._definitions[field] = _define_table_based_field(self, field, field_type::WasmBuilder.IR.RefType, module_, init, nothing)
+        end
+        return self._definitions[field] = _define_global_based_field(self, field, field_type, module_, !isconst(field.mod, field.name), init, nothing)
+    end
+
+    # Maybe we can emit the initialization in the start function. If so,
+    # that's preferred as we don't need to pay for lazy-init check on each
+    # access.
+    if _initialize_at_startup(self, field)
+        local definition = _define_global_based_field(self, field, field_type, module_, true, init, nothing)
+
+        # We have to initialize the global field in the same module as where
+        # the field value is defined in.
+        generate(EagerStaticFieldInitializerCodeGenerator(translator, field, definition.global_),
+            WasmBuilder.body(WasmBuilder.start_function(module_)), WasmBuilder.IR.Local[], nothing)
+
+        return self._definitions[field] = definition
+    end
+
+    # Add initializer function to the compilation queue: a binding's initializer is its module's top
+    # level or __init__, which the closed world does not compile.
+    reject!(Unquarantined("src/globals.jl getDefinitionForStaticField: the binding $field, with no build-time constant, whose initializer the closed world does not compile"), "DartGlobals.getDefinitionForStaticField")
+end
 
 @parity "dart2wasm/lib/globals.dart:225 DartGlobals._defineInitializerFlag" function _define_initializer_flag(self::DartGlobals, field::GlobalRef, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.GlobalBuilder
     local member_name = _member_name(self, field)
