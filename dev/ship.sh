@@ -14,6 +14,12 @@ cd "$(dirname "$0")/.."
 lane=$(pwd -P)
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || echo "ship: uncommitted changes stay here and are not landed"
+# a lane mid-rebase, mid-merge, mid-cherry-pick or mid-revert has a HEAD that is not its work: refuse,
+# never land a half-finished history (a ship from a mid-rebase worktree landed the wrong commits twice)
+gitdir="$(git rev-parse --path-format=absolute --git-dir)"
+for op in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+  [ -e "$gitdir/$op" ] && { echo "ship: REFUSED: this worktree is mid-operation ($op); finish or abort it, then ship"; exit 2; }
+done
 # the landing runs in a scratch worktree of this lane's HEAD, so the lane keeps editing while it
 # lands: a rebase or an abort there never touches the lane's files (a lane lost uncommitted edits
 # when ship rebased its own tree). Its untracked Manifest and preferences come along, and its checks
