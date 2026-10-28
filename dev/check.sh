@@ -7,14 +7,14 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 . dev/depot.sh; wt_depot_export "$(pwd)"
-# D31: the machine is shared (Dale's own jobs run beside the lanes), so at most three checks run at
+# D31: the machine is shared (Dale's own jobs run beside the lanes), so at most four checks run at
 # once across every lane, each holding a slot in the repository's common dir; a slot whose holder
 # died is freed. The wait is reported and not counted in D14's band, which times the check itself.
 slots="$(git rev-parse --path-format=absolute --git-common-dir)/wt-check-slots"; mkdir -p "$slots"
 w0=$(date +%s); slot=""
 # the landing-lock holder (dev/ship.sh sets CHECK_RESERVED) takes slot L alone, so it never waits
 # behind other lanes' optimistic checks
-ids="1 2 3"; [ "${CHECK_RESERVED:-}" = 1 ] && ids="L"
+ids="1 2 3 4"; [ "${CHECK_RESERVED:-}" = 1 ] && ids="L"
 while [ -z "$slot" ]; do
   for i in $ids; do
     if mkdir "$slots/$i" 2>/dev/null; then echo $$ > "$slots/$i/pid"; slot=$i; break; fi
@@ -62,7 +62,8 @@ wall=$(( $(date +%s) - s0 ))
 # a machine loaded past its cores (Dale's own jobs share it) leaves the band unjudged, never a
 # scaled pass: the time is printed with the load, as the retired timing ratchet left a slow
 # machine's timing unjudged (L195)
-load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{ print int($2) }'); cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+load=$( { sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg 2>/dev/null; } | tr -d '{}' | awk '{ print int($1) }')
+cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
 if [ $wall -gt 120 ]; then
   if [ "${load:-0}" -gt "$cores" ]; then echo "check: ${wall}s, past D14's band but UNJUDGED: load ${load} on ${cores} cores"
   else echo "check: RED — ${wall}s, past D14's band (a 60-s target, red past 120 s) at load ${load} on ${cores} cores"; exit 1; fi
