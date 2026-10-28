@@ -287,3 +287,28 @@ loads; a caller outside the package can still reach the token, a limit of the la
     isempty(escapes) || throw(ConstructionViolation(name, "code a lowered read cannot see (@generated, eval, include, a module lookup by a computed name): $(join(escapes, "; "))"))
     return 0
 end
+
+"""
+    core_kinds() -> Tuple{Vararg{DataType}}
+
+Julia's kinds, the concrete types of a type as a value: every type Core binds that `Base.iskindtype`
+accepts, in the order `names(Core)` lists them. Julia 1.12 has four (`DataType`, `UnionAll`,
+`Union`, `typeof(Union{})`), and Julia 1.14 seven (base/runtime_internals.jl adds `Core.AnyType`,
+`TypeEq` and `Core.TypeEgal`). The predicate is read, never its list copied (D3, D5). The read looks
+bindings up by computed names, which is reflection, so it lives in this file, which the
+closed-world maker check reads as reflection.
+
+precedent(rust: `std::any::TypeId` reflection over the compiler's own registry). Julia's differs: its
+kinds are bindings of Core that a predicate names, so the list is read from Core when the package loads.
+"""
+@quarantine "Julia's kinds are Core's bindings Base.iskindtype accepts; reading them looks bindings up by name" Base.iskindtype function core_kinds()::Tuple{Vararg{DataType}}
+    # a loop, not a comprehension: a comprehension's closure has no file, so the maker check could not
+    # read it as this file's reflection
+    local kinds = DataType[]
+    for n in names(Core; all = true)
+        isdefined(Core, n) || continue
+        local b = getglobal(Core, n)
+        b isa DataType && Base.iskindtype(b) && push!(kinds, b)
+    end
+    return Tuple(kinds)
+end

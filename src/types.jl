@@ -515,9 +515,9 @@ the value itself. Julia's classes have no type arguments, so the type's argument
 @parity "dart2wasm/lib/types.dart:619 _TypeCheckers.canUseTypeCheckHelper" function can_use_type_check_helper(self::_TypeCheckers, tested_against_type::Type, operand_type::Type)::Tuple{Union{Type,Nothing},Bool}
     # The is/as check helpers are for cid-range checks of types told by their class.
     Base.has_free_typevars(tested_against_type) && return (nothing, false)
-    # Julia's kinds, Base.iskindtype's four: each wholly in the type or wholly out of it
-    all(k -> k <: tested_against_type || typeintersect(k, tested_against_type) === Union{},
-        (DataType, UnionAll, Union, Core.TypeofBottom)) || return (nothing, false)
+    # Julia's kinds (src/julia/classes.jl, read from Base.iskindtype): each wholly in the type or
+    # wholly out of it
+    all(k -> k <: tested_against_type || typeintersect(k, tested_against_type) === Union{}, _KINDS) || return (nothing, false)
     _has_only_default_type_arguments(self, tested_against_type) && return (tested_against_type, false)
     reject!(Internal("dart2wasm/lib/types.dart:619 _TypeCheckers.canUseTypeCheckHelper: $tested_against_type has type arguments"), "_TypeCheckers.canUseTypeCheckHelper")
 end

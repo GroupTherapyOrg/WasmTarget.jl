@@ -5,8 +5,9 @@
 # closed world Julia inferred, read once as the NIR, so its classes are the types the NIR carries.
 # Julia answers every edge (ledger D3): a class's parent is its `supertype`, never re-derived.
 
-# Julia's kinds, the concrete types of a type as a value: Base.iskindtype's four
-@quarantine "a type is a value in Julia, its class one of Julia's kinds" Core.DataType const _KINDS = (DataType, UnionAll, Union, Core.TypeofBottom)
+# Julia's kinds, the concrete types of a type as a value, read from Base.iskindtype over Core's
+# bindings (src/julia/construction.jl, core_kinds), never a copy of its list (D3, D5)
+@quarantine "a type is a value in Julia, its class one of Julia's kinds, which Base.iskindtype names" Core.DataType const _KINDS = core_kinds()::Tuple{Vararg{DataType}}
 
 """
     closed_world_classes(world, at) -> Vector{DataType}
