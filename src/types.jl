@@ -322,7 +322,9 @@ end
 """The type of a type value: dart's `_Type`, Julia's `Type`, which every type is an instance of."""
 @parity "dart2wasm/lib/types.dart:116 Types.typeType" type_type(self::Types)::Type = Type
 
-@parity "dart2wasm/lib/types.dart:119 Types.coreTypes" @unported function core_types(self::Types) end
+# Kernel's CoreTypes has no Julia counterpart (src/julia/kernel.jl): a port names Julia's types directly
+@parity "dart2wasm/lib/types.dart:119 Types.coreTypes" core_types(self::Types)::NoCounterpart =
+    reject!(Internal("dart2wasm/lib/types.dart:119 Types.coreTypes: Kernel's CoreTypes has no Julia counterpart; a port names Julia's types directly"), "Types.coreTypes")
 
 """
 Whether a type value can be made as a constant: dart's test for a type with no type parameter in it,
@@ -502,7 +504,12 @@ value can fail.
 @parity "dart2wasm/lib/types.dart:597 Types._requiresOnlyNullAssignabilityCheck" _requires_only_null_assignability_check(self::Types, operand_type::Type, tested_against_type::Type)::Bool =
     operand_type <: Union{tested_against_type, Nothing}
 
-@parity "dart2wasm/lib/types.dart:615 _TypeCheckers" @unported function _TypeCheckers(type_environment, rtt) end
+# the abstract checkers' constructor, which each subtype's constructor calls as its super: in Julia an
+# abstract type is never constructed, and IsCheckers and AsCheckers hold the runtime type information
+# themselves; dart's TypeEnvironment has no Julia counterpart (Julia's subtyping is Base's <:), so no
+# call can reach this method
+@parity "dart2wasm/lib/types.dart:615 _TypeCheckers" _TypeCheckers(type_environment::NoCounterpart, rtt::RuntimeTypeInformation)::_TypeCheckers =
+    reject!(Internal("dart2wasm/lib/types.dart:615 _TypeCheckers: an abstract type's constructor; each checker's own holds rtt"), "_TypeCheckers")
 
 """
 The type an is or as checker checks, and whether its arguments are checked; `nothing` where no
@@ -729,7 +736,9 @@ end
 
 @parity "dart2wasm/lib/types.dart:1195 RuntimeTypeInformation.noSubstitutionIndex" RuntimeTypeInformation_no_substitution_index()::Int = 0
 
-@parity "dart2wasm/lib/types.dart:1197 RuntimeTypeInformation.coreTypes" @unported function core_types(self::RuntimeTypeInformation) end
+# Kernel's CoreTypes has no Julia counterpart (src/julia/kernel.jl): a port names Julia's types directly
+@parity "dart2wasm/lib/types.dart:1197 RuntimeTypeInformation.coreTypes" core_types(self::RuntimeTypeInformation)::NoCounterpart =
+    reject!(Internal("dart2wasm/lib/types.dart:1197 RuntimeTypeInformation.coreTypes: Kernel's CoreTypes has no Julia counterpart; a port names Julia's types directly"), "RuntimeTypeInformation.coreTypes")
 
 @parity "dart2wasm/lib/types.dart:1198 RuntimeTypeInformation.types" types(self::RuntimeTypeInformation)::Types = self.translator.types[]
 

@@ -52,3 +52,10 @@ end
     local e = try; D.visit_record_type(D._RecordVisitor(g), Tuple{Int,Int}); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
 end
+
+@testset "record_class_generator.dart: a shape's field names, a constant" begin
+    local D = WasmTarget.Dart2Wasm
+    local g = D._RecordClassGenerator(Dict{D.RecordShape,DataType}())
+    @test D._field_names_constant(g, D.RecordShape(1, ["b", "a"])).c.val == ("a", "b")
+    @test D.default_constant_reference(D._RecordVisitor(g), WasmTarget.NirConst(Core.Const((1, 2)))) === nothing
+end

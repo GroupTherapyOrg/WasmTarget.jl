@@ -94,7 +94,13 @@ A record shape's fields, `\$1`, `\$2`, ... then the names. A Julia tuple's field
 @parity "dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper" _generate_record_runtime_type_helper(self::_RecordClassGenerator, name::String, target::Method, shape::RecordShape, fields::Vector{ClassField})::Method =
     reject!(Internal("dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper: a Julia tuple's runtime type is its class, typeof"), "_RecordClassGenerator._generateRecordRuntimeTypeHelper")
 
-@parity "dart2wasm/lib/record_class_generator.dart:746 _RecordClassGenerator._fieldNamesConstant" @unported function _field_names_constant(self::_RecordClassGenerator, shape::RecordShape) end
+"""
+The constant array of a shape's field names, dart's immutable `WasmArray<String>`: the NIR's literal
+(Kernel's Constant, src/julia/kernel.jl) of the names, in RecordShape's sorted order, as a tuple of
+strings.
+"""
+@parity "dart2wasm/lib/record_class_generator.dart:746 _RecordClassGenerator._fieldNamesConstant" _field_names_constant(self::_RecordClassGenerator, shape::RecordShape)::NirConst =
+    NirConst(Core.Const(Tuple(names(shape))))
 
 @parity "dart2wasm/lib/record_class_generator.dart:764 _RecordVisitor" _RecordVisitor(class_generator::_RecordClassGenerator)::_RecordVisitor = _RecordVisitor(Val(:_), class_generator)
 
@@ -104,4 +110,6 @@ A record shape's fields, `\$1`, `\$2`, ... then the names. A Julia tuple's field
     return nothing
 end
 
-@parity "dart2wasm/lib/record_class_generator.dart:773 _RecordVisitor.defaultConstantReference" @unported function default_constant_reference(self::_RecordVisitor, node::NirConst) end
+# dart walks a constant's parts for the record types in it; a NirConst is Julia's value, and the class
+# of a tuple in it is its own type, which the closed world holds like any class: nothing to generate
+@parity "dart2wasm/lib/record_class_generator.dart:773 _RecordVisitor.defaultConstantReference" default_constant_reference(self::_RecordVisitor, node::NirConst)::Nothing = nothing
