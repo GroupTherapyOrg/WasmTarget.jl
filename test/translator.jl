@@ -50,3 +50,19 @@ end
     local e2 = try; uleb(-1); nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Internal
 end
+
+@testset "translator.dart: translateStorageType's located rejections" begin
+    local W = WasmTarget
+    local t = D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.TranslatorOptions())
+    # a UnionAll and a type as a value of a type Julia left open are no class: located rejections,
+    # before any wasm type is made
+    for ty in (Vector, Type{T} where T, AbstractVector{<:Integer})
+        local e = try; D.translate_storage_type(t, ty); nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Unquarantined
+    end
+    local e = try; D.translate_type(t, Base.unwrap_unionall(Type{T} where T)); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("type as a value", e.rejection.row)
+    # the late top type and builtin types, read before collect, the classes unassigned
+    local e2 = try; t.top_type[]; nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Unported && occursin("Translator.classes", e2.rejection.anchor)
+end

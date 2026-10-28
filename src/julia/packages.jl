@@ -21,7 +21,7 @@ end
 @quarantine "Julia has no per-file namespace; dart's dart2wasm package is a module" Core.Module module Dart2Wasm
 import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 # ported code rejects where dart throws (src/julia/reject.jl); dart's `late final` fields (src/julia/late.jl)
-import ..reject!, ..Internal, ..Unported, ..Late
+import ..reject!, ..Internal, ..Unported, ..Unquarantined, ..Late
 # the program, as Julia's trim verifier accepts it and the NIR reads it (src/julia/subset.jl, nir.jl),
 # and its classes, Julia's answers where dart reads a Kernel Class (src/julia/classes.jl)
 import ..ClosedWorld, ..NirBody, ..build_nir, ..closed_world_classes, ..class_superclass, ..class_is_abstract,

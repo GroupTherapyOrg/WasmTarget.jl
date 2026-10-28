@@ -73,8 +73,11 @@ The translation from the program to wasm, and the hub of the compiler's global s
 Its fields arrive with the pieces that read them: `options`; `component`, the program, the NIR of
 the closed world Julia's trim verifier accepted (dart's Kernel `Component`); `compilationQueue`;
 `classes`, `classesSupersFirst`, `classIdNumbering`, `classInfo` (a class is a Julia DataType, keyed
-by identity), `classForHeapType`, `fieldIndex` (a field a ClassField, src/julia/classes.jl). dart's
-fields still to come: `symbols`, `libraries`, `coreTypes`, `typeEnvironment`, `hierarchy`,
+by identity), `classForHeapType`, `fieldIndex` (a field a ClassField, src/julia/classes.jl),
+`topType`, `builtinTypes` (Julia's primitive classes with a wasm representation: `Bool`, `Char` and
+the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8- and 16-bit
+integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
+every other primitive class have none). dart's fields still to come: `symbols`, `libraries`, `coreTypes`, `typeEnvironment`, `hierarchy`,
 `subtypes`, the TFA metadata maps (Julia's inference, held by the NIR), `index`,
 `closureLayouter`, `classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`,
 `dispatchTable`, `dynamicDispatchTable`, `globals`, `dartGlobals`, `constants`, `types`,
@@ -95,14 +98,29 @@ the translator holds each collaborator.
     class_info::IdDict{DataType,ClassInfo}
     class_for_heap_type::Dict{WasmBuilder.IR.HeapType,ClassInfo}
     field_index::Dict{ClassField,Int}
+    top_type::Late{WasmBuilder.IR.RefType}
+    builtin_types::Late{IdDict{DataType,WasmBuilder.IR.StorageType}}
     # dart's field initializers and the constructor's initializer list; a late field is assigned by
-    # the code that builds it (the constructor's body at :470, ClassInfoCollector.collect)
-    Translator(component::Vector{NirBody}, options::TranslatorOptions) =
-        new(options, component, Late{CompilationQueue}("dart2wasm/lib/translator.dart:158 Translator.compilationQueue"),
+    # the code that builds it (the constructor's body at :470, ClassInfoCollector.collect), and a late
+    # field with an initializer reads the translator itself
+    function Translator(component::Vector{NirBody}, options::TranslatorOptions)
+        local self
+        self = new(options, component, Late{CompilationQueue}("dart2wasm/lib/translator.dart:158 Translator.compilationQueue"),
             Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:174 Translator.classes"),
             Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:180 Translator.classesSupersFirst"),
             Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"),
-            IdDict{DataType,ClassInfo}(), Dict{WasmBuilder.IR.HeapType,ClassInfo}(), Dict{ClassField,Int}())
+            IdDict{DataType,ClassInfo}(), Dict{WasmBuilder.IR.HeapType,ClassInfo}(), Dict{ClassField,Int}(),
+            # The wasm type used to hold values of Dart top types (e.g. `Object?`, `dynamic`)
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:278 Translator.topType", () -> self.classes[][1].nullable_type),
+            Late{IdDict{DataType,WasmBuilder.IR.StorageType}}("dart2wasm/lib/translator.dart:344 Translator.builtinTypes", () -> IdDict{DataType,WasmBuilder.IR.StorageType}(
+                Bool => WasmBuilder.IR.NumType_i32,
+                Int8 => WasmBuilder.IR.PackedType_i8, UInt8 => WasmBuilder.IR.PackedType_i8,
+                Int16 => WasmBuilder.IR.PackedType_i16, UInt16 => WasmBuilder.IR.PackedType_i16,
+                Int32 => WasmBuilder.IR.NumType_i32, UInt32 => WasmBuilder.IR.NumType_i32, Char => WasmBuilder.IR.NumType_i32,
+                Int64 => WasmBuilder.IR.NumType_i64, UInt64 => WasmBuilder.IR.NumType_i64,
+                Float32 => WasmBuilder.IR.NumType_f32, Float64 => WasmBuilder.IR.NumType_f64)))
+        return self
+    end
 end
 
 """The functions whose code is still to generate, taken last in, first out."""
@@ -286,15 +304,70 @@ end
 
 @parity "dart2wasm/lib/translator.dart:1034 Translator.getJsExceptionTag" @unported function get_js_exception_tag(self::Translator, module_::WasmBuilder.ModuleBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:1037 Translator.translateReturnType" @unported function translate_return_type(self::Translator, type_) end
+# dart's non-nullable Never is Julia's Union{}, the type of no value
+@parity "dart2wasm/lib/translator.dart:1037 Translator.translateReturnType" function translate_return_type(self::Translator, type_::Type)::WasmBuilder.IR.ValueType
+    type_ === Union{} && return WasmBuilder.IR.RefType_none(; nullable = false)
+    return translate_type(self, type_)
+end
 
-@parity "dart2wasm/lib/translator.dart:1044 Translator.translateType" @unported function translate_type(self::Translator, type_) end
+"""
+The wasm value type of a value of the Julia type `type_`: its storage type, a packed i8 or i16
+read as the zero-extended i32 (dart's WasmI8 and WasmI16; Julia's 8- and 16-bit integers).
+"""
+@parity "dart2wasm/lib/translator.dart:1044 Translator.translateType" function translate_type(self::Translator, type_::Type)::WasmBuilder.IR.ValueType
+    local wasm_type = translate_storage_type(self, type_)
+    wasm_type isa WasmBuilder.IR.ValueType && return wasm_type
+    # We represent the packed i8/i16 types as zero-extended i32 type.
+    wasm_type isa WasmBuilder.IR.PackedType && return WasmBuilder.IR.NumType_i32
+    reject!(Internal("dart2wasm/lib/translator.dart:1044 Translator.translateType: Cannot translate $type_ to wasm type."), "Translator.translateType")
+end
 
 @parity "dart2wasm/lib/translator.dart:1056 Translator._hasSuperclass" @unported function _has_superclass(self::Translator, cls, superclass) end
 
 @parity "dart2wasm/lib/translator.dart:1064 Translator.isWasmType" @unported function is_wasm_type(self::Translator, cls) end
 
-@parity "dart2wasm/lib/translator.dart:1067 Translator.translateStorageType" @unported function translate_storage_type(self::Translator, type_; unbox = nothing) end
+"""
+The wasm storage type of a value of the Julia type `type_`, Julia's answers where dart reads a
+DartType: `Union{}`, the type of no value, and `Nothing` are dart's Never and Null, the nullable
+none reference; `Any` is dart's `Object?`, the top type; a `Union` holding `Nothing` is nullable,
+its other members' class `Base.nonnothingtype`, and a `Union` of classes is Julia's `typejoin` of
+its members, their nearest common superclass; a type as a value (`Type{X}`) is its kind
+(`typeof(X)`), as the closed world's walk meets it. A class is a primitive one's builtin type
+(`unbox`; nullable, its own class, the box) or the class's representation. A `UnionAll`, a
+`TypeVar`, a type as a value of an unknown type and a primitive class with no wasm representation
+(`Int128`, `Float16`, `Ptr`) reject, located.
+"""
+@parity "dart2wasm/lib/translator.dart:1067 Translator.translateStorageType" function translate_storage_type(self::Translator, type_::Type; unbox::Bool = true)::WasmBuilder.IR.StorageType
+    local at = "dart2wasm/lib/translator.dart:1067 Translator.translateStorageType"
+    type_ === Union{} && return WasmBuilder.IR.RefType_none(; nullable = true)
+    type_ === Nothing && return WasmBuilder.IR.RefType_none(; nullable = true)
+    type_ === Any && return self.top_type[]
+    local nullable = false
+    local cls = type_
+    if cls isa Union
+        nullable = Nothing <: cls
+        nullable && (cls = Base.nonnothingtype(cls))
+        cls isa Union && (cls = typejoin(Base.uniontypes(cls)...))
+        cls === Any && return WasmBuilder.with_nullability(self.top_type[], nullable)
+    end
+    cls isa DataType && Base.isType(cls) && (cls = cls.parameters[1] isa TypeVar ?
+        reject!(Unquarantined("src/translator.jl translateStorageType: the type as a value $type_, of a type Julia left open"), at) :
+        typeof(cls.parameters[1]))
+    cls isa DataType || reject!(Unquarantined("src/translator.jl translateStorageType: $type_, no class but a $(typeof(cls))"), at)
+    if isprimitivetype(cls)
+        # Built-in type? Its box is the primitive class itself
+        local builtin = unbox ? get(self.builtin_types[], cls, nothing) : nothing
+        if builtin !== nothing
+            nullable || return builtin
+            return type_with_nullability(self.class_info[cls], nullable)
+        end
+        unbox && reject!(Unquarantined("src/translator.jl translateStorageType: the primitive class $cls, with no wasm representation"), at)
+    end
+    # Regular class.
+    local info = get(self.class_info, cls, nothing)
+    info === nothing && reject!(Internal("$at: the class $cls has no class info"), at)
+    return WasmBuilder.with_nullability(repr(info), nullable)
+end
 
 @parity "dart2wasm/lib/translator.dart:1205 Translator.arrayTypeForDartType" @unported function array_type_for_dart_type(self::Translator, type_; mutable_::Bool) end
 
@@ -366,11 +439,13 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue" @unported function type_of_return_value(self::Translator, member) end
 
-@parity "dart2wasm/lib/translator.dart:2087 Translator.typeOfField" @unported function type_of_field(self::Translator, node) end
+# dart narrows a field's declared type by TFA's inferred type; Julia's inference does not narrow a
+# field, so its type is its declared one
+@parity "dart2wasm/lib/translator.dart:2087 Translator.typeOfField" type_of_field(self::Translator, node::ClassField)::Type = node.type
 
 @parity "dart2wasm/lib/translator.dart:2092 Translator.translateTypeOfParameter" @unported function translate_type_of_parameter(self::Translator, node, is_required::Bool) end
 
-@parity "dart2wasm/lib/translator.dart:2096 Translator.translateTypeOfField" @unported function translate_type_of_field(self::Translator, node) end
+@parity "dart2wasm/lib/translator.dart:2096 Translator.translateTypeOfField" translate_type_of_field(self::Translator, node::ClassField)::WasmBuilder.IR.ValueType = translate_type(self, type_of_field(self, node))
 
 @parity "dart2wasm/lib/translator.dart:2100 Translator.translateTypeOfLocalVariable" @unported function translate_type_of_local_variable(self::Translator, node) end
 
