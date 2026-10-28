@@ -27,6 +27,7 @@ import ..ClosedWorld, ..NirBody, ..build_nir, ..closed_world_classes, ..class_su
 import ..WasmBuilder
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
 import ...@parity, ...@unported, ...@closed, ...@exhaustive
+import ...reject!, ...Internal, ...Unported
 import ...WasmBuilder
 import ..Dart2Wasm
 end

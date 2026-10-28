@@ -2,9 +2,17 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-Namer's dart fields: `minify`, `_usedNames`, `_nextId`.
+Wasm import and export names for a module: each Namer a namespace, unique within it. With
+`minify`, names are the shortest strings of a counter; without, the name asked for, suffixed `_<n>`
+until unused.
 """
-@parity "dart2wasm/lib/namer.dart:23 Namer" @unported struct Namer end
+@parity "dart2wasm/lib/namer.dart:23 Namer" mutable struct Namer
+    const minify::Bool
+    const _used_names::Set{String}
+    _next_id::Int
+    # the struct's one constructor, tagged; dart's constructor at :28 is its outer function
+    Namer(::Val{:_}, minify::Bool) = new(minify, Set{String}(), 0)
+end
 
 """
 _ExternalMemberNamer's dart fields: `_exportNamer`, `coreTypes`.
@@ -21,13 +29,38 @@ InteropMemberNamer's dart fields: `_externalMemberNamer`, `_interopHelperMemberN
 """
 @parity "dart2wasm/lib/namer.dart:138 InteropMemberNamer" @unported struct InteropMemberNamer end
 
-@parity "dart2wasm/lib/namer.dart:28 Namer" @unported function Namer(; minify = nothing) end
+@parity "dart2wasm/lib/namer.dart:28 Namer" Namer(; minify::Bool = false)::Namer = Namer(Val(:_), minify)
 
-@parity "dart2wasm/lib/namer.dart:32 Namer.reserveName" @unported function reserve_name(self::Namer, name::String) end
+"""Reserve `name`, which a pre-specified name such as an export might collide with."""
+@parity "dart2wasm/lib/namer.dart:32 Namer.reserveName" function reserve_name(self::Namer, name::String)::Nothing
+    self.minify || return nothing
+    name in self._used_names && reject!(Internal("dart2wasm/lib/namer.dart:32 Namer.reserveName: Name '$name' is already reserved"), "Namer.reserveName")
+    push!(self._used_names, name)
+    return nothing
+end
 
-@parity "dart2wasm/lib/namer.dart:38 Namer._jsSanitizeName" @unported function Namer__js_sanitize_name(name::String) end
+@parity "dart2wasm/lib/namer.dart:38 Namer._jsSanitizeName" Namer__js_sanitize_name(name::String)::String = replace(name, r"[^a-zA-Z0-9_$]" => "_")
 
-@parity "dart2wasm/lib/namer.dart:45 Namer.getName" @unported function get_name(self::Namer, name::String; js_safe_name = nothing) end
+"""The name assigned to `name`, which is unique among the names given to this namespace."""
+@parity "dart2wasm/lib/namer.dart:45 Namer.getName" function get_name(self::Namer, name::String; js_safe_name::Bool = false)::String
+    # dart's `Set.add` answers whether the element was new
+    local add!(n::String) = n in self._used_names ? false : (push!(self._used_names, n); true)
+    if !self.minify
+        local basename = name = js_safe_name ? Namer__js_sanitize_name(name) : name
+        local counter = 0
+        while !add!(name)
+            name = "$(basename)_$(counter)"
+            counter += 1
+        end
+        return name
+    end
+    while true
+        name = js_safe_name ? Util.int_to_min_js_safe_string(self._next_id) : Util.int_to_min_string(self._next_id)
+        self._next_id += 1
+        add!(name) && break
+    end
+    return name
+end
 
 @parity "dart2wasm/lib/namer.dart:74 _ExternalMemberNamer" @unported function _ExternalMemberNamer(core_types, _export_namer) end
 
