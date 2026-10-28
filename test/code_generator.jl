@@ -49,9 +49,10 @@ rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(
     # the intrinsifier is built on its first read, over the generator itself, as dart's late field
     @test D.translator(g.intrinsifier[]) === g.translator && g.intrinsifier[].code_gen === g
     @test D.type_of_exp(g.intrinsifier[], call.args[2]) == IR.NumType_i32
-    # the used call declares its variable, typed by the translator's local-variable type
+    # the used call declares its variable, typed by the translator's local-variable type, as a local
+    # of the builder, which `generate` gives: before it, the late builder rejects, located
     local e = rejection(() -> D.translate_statement(g, g.body.stmts[1], W.NirSSA(1)))
-    @test e.rejection isa W.Unported && occursin("translateTypeOfLocalVariable", e.rejection.anchor)
+    @test e.rejection isa W.Unported && occursin("AstCodeGenerator.b", e.rejection.anchor)
     # nothing is emitted before `generate` gives the builder: the late builder rejects, located
     @test occursin("AstCodeGenerator.b", rejection(() -> D.add_local(g, IR.NumType_i32)).rejection.anchor)
     # a Julia method has one entry: the multiple-entry paths are WasmTarget's own defect if reached
@@ -107,6 +108,11 @@ end
 @testset "code_generator.dart: translateStatement over the NIR" begin
     local t = D.Translator(W.check_subset(CodegenCases.shapes, (Int,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local t2 = D.Translator(W.check_subset(CodegenCases.loop, (Int,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    # the class table an allocation's type reads, as translate fills it before any code
+    for tt in (t, t2)
+        D._init_modules(tt, nothing)
+        collect(D.ClassInfoCollector(tt))
+    end
     local gens = [D.SynchronousProcedureCodeGenerator(Val(:_), tt, IR.FunctionType(IR.ValueType[], IR.ValueType[]), b.ci.def, b)
                   for tt in (t, t2) for b in tt.component]
     local forms = Set(W.stmt_form(st) for g in gens for st in g.body.stmts)
@@ -114,13 +120,14 @@ end
     for g in gens, (k, st) in enumerate(g.body.stmts)
         local r = rejection(() -> D.translate_statement(g, st, W.NirSSA(k)))
         if st isa W.NirReturn
-            # the return translates its value at the return type, the translator's outputOrVoid
-            @test r.rejection isa W.Unported && occursin("outputOrVoid", r.rejection.anchor)
+            # the return translates its value at the return type, the translator's outputOrVoid, which
+            # answers; what stops it is past the translator
+            @test r isa W.RejectionError && !occursin("outputOrVoid", string(r.rejection))
         elseif st isa W.NirNothing
             @test r === nothing
         elseif st isa Union{W.NirCall, W.NirInvoke, W.NirNew, W.NirGlobalRead}
             # a used value is a local declared with its initializer; an unused one an expression statement
-            @test r.rejection isa W.Unported && occursin("translateTypeOfLocalVariable", r.rejection.anchor)
+            @test r.rejection isa W.Unported && occursin("AstCodeGenerator.b", r.rejection.anchor)
             # the unused one is translated at the void marker: its expression's own visitor, which
             # stops at the first piece not yet given here (a constant, a parameter, an allocation)
             local r2 = rejection(() -> D.translate_statement(g, st, nothing))

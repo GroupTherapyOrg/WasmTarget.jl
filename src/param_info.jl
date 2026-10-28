@@ -2,19 +2,59 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-ParameterInfo's dart fields: `typeParamCount`, `positional`, `named`, `takesContextOrReceiver`, `names`, `nameIndex`.
+Information about the optional parameters and their default values of a member: its type parameter
+count, each positional parameter's default (`nothing` where it is required), each named one's, and
+whether it takes a context or receiver; `names` and `nameIndex`, late, from the named ones.
+
+A Julia member is a Core.MethodInstance: specialized on its argument types, its type parameters
+bound, its optional and keyword arguments lowered into methods of their own, so every parameter is
+positional and required. Its context is its callee, argument 1, when the callee is not a singleton
+(a closure's captured struct).
 """
-@parity "dart2wasm/lib/param_info.dart:11 ParameterInfo" @unported struct ParameterInfo end
+@parity "dart2wasm/lib/param_info.dart:11 ParameterInfo" struct ParameterInfo
+    type_param_count::Int
+    positional::Vector{Union{Nothing,Constant}}
+    named::LinkedHashMap{String,Union{Nothing,Constant}}
+    takes_context_or_receiver::Bool
+    names::Late{Vector{String}}
+    name_index::Late{Dict{String,Int}}
+    # the struct's one constructor, tagged, with dart's late initializers (read only when the info is
+    # complete); dart's constructor `_` at :52 is its outer function
+    function ParameterInfo(::Val{:_}, takes_context_or_receiver::Bool, type_param_count::Int,
+            positional::Vector{Union{Nothing,Constant}}, named::LinkedHashMap{String,Union{Nothing,Constant}})
+        local self
+        self = new(type_param_count, positional, named, takes_context_or_receiver,
+                   Late{Vector{String}}("dart2wasm/lib/param_info.dart:26 ParameterInfo.names", () -> sort!(collect(keys(self.named)))),
+                   Late{Dict{String,Int}}("dart2wasm/lib/param_info.dart:28 ParameterInfo.nameIndex",
+                       () -> Dict{String,Int}(n => length(self.positional) + i - 1 for (i, n) in enumerate(self.names[]))))
+        return self
+    end
+end
 
 @parity "dart2wasm/lib/param_info.dart:35 ParameterInfo.defaultValueSentinel" @unported function ParameterInfo_default_value_sentinel() end
 
-@parity "dart2wasm/lib/param_info.dart:39 ParameterInfo.paramCount" @unported function param_count(self::ParameterInfo) end
+@parity "dart2wasm/lib/param_info.dart:39 ParameterInfo.paramCount" param_count(self::ParameterInfo)::Int = length(self.positional) + length(self.named)
 
 @parity "dart2wasm/lib/param_info.dart:41 ParameterInfo._defaultValue" @unported function ParameterInfo__default_value(param) end
 
-@parity "dart2wasm/lib/param_info.dart:52 ParameterInfo._" @unported function ParameterInfo__(takes_context_or_receiver, type_param_count, positional, named) end
+@parity "dart2wasm/lib/param_info.dart:52 ParameterInfo._" ParameterInfo__(takes_context_or_receiver::Bool, type_param_count::Int, positional::Vector{Union{Nothing,Constant}},
+        named::LinkedHashMap{String,Union{Nothing,Constant}})::ParameterInfo =
+    ParameterInfo(Val(:_), takes_context_or_receiver, type_param_count, positional, named)
 
-@parity "dart2wasm/lib/param_info.dart:59 ParameterInfo.fromMember" @unported function ParameterInfo_from_member(target, use_default_value_sentinel::Bool) end
+"""
+The parameter info of the member `target`: no type parameters, a required positional parameter for
+each argument after the callee (Julia's specialization signature), none named, and the callee
+taken as the context unless Julia's type of it is a singleton. A Vararg left in the signature
+rejects, located. `use_default_value_sentinel` has nothing to mark: no parameter is optional.
+"""
+@parity "dart2wasm/lib/param_info.dart:59 ParameterInfo.fromMember" function ParameterInfo_from_member(target::Core.MethodInstance, use_default_value_sentinel::Bool)::ParameterInfo
+    local sig = Base.unwrap_unionall(target.specTypes)::DataType
+    local params = sig.parameters
+    any(p -> p isa Core.TypeofVararg, params) &&
+        reject!(Unquarantined("src/param_info.jl fromMember: the Vararg signature $(target.specTypes), whose argument count Julia left open"), "dart2wasm/lib/param_info.dart:59 ParameterInfo.fromMember")
+    local positional = Union{Nothing,Constant}[nothing for _ in 2:length(params)]
+    return ParameterInfo__(!Base.issingletontype(params[1]), 0, positional, LinkedHashMap{String,Union{Nothing,Constant}}())
+end
 
 @parity "dart2wasm/lib/param_info.dart:115 ParameterInfo.fromLocalFunction" @unported function ParameterInfo_from_local_function(function_) end
 

@@ -219,3 +219,41 @@ end
     @test D.translate_type(t, ModuleCases.Shape) == anyi.non_nullable_type
     @test D.translate_type(t, Union{Nothing,Int32}) == int32.nullable_type
 end
+
+@testset "translator.dart: the code generator's helpers" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(ModuleCases.shapes, (Int,), "translator"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local mi = Core.Compiler.specialize_method(Base._which(Base.signature_type(ModuleCases.shapes, (Int,))))
+    # Julia checks no parameter on entry; a member's parameter info is made once
+    @test !D.need_to_check_types_for(t, mi)
+    local p = D.param_info_for_direct_call(t, mi)
+    @test p === D.param_info_for_direct_call(t, mi) && p.positional == [nothing]
+    # a parameter or local takes the wasm type of the Julia type inferred for it
+    @test D.translate_type_of_parameter(t, Int, true) == IR.NumType_i64
+    @test D.translate_type_of_local_variable(t, Int32) == IR.NumType_i32
+    @test D.translate_type_of_local_variable(t, ModuleCases.Shape) == D.repr(t.class_info[ModuleCases.Shape])
+    # no output is the void marker, one is itself
+    local void = t.void_marker[]
+    @test D.output_or_void(t, IR.ValueType[]) === void && D.output_or_void(t, IR.ValueType[IR.NumType_i32]) == IR.NumType_i32
+    local e = try; D.output_or_void(t, IR.ValueType[IR.NumType_i32, IR.NumType_i64]); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+    # conversions: none between equal types, across the void marker, by subtyping
+    @test !D.needs_conversion(t, IR.NumType_i32, IR.NumType_i32) && D.needs_conversion(t, IR.NumType_i32, void)
+    local sq = t.class_info[ModuleCases.Square]
+    local shape = D.repr(t.class_info[ModuleCases.Shape])
+    @test !D.needs_conversion(t, sq.non_nullable_type, shape) && D.needs_conversion(t, shape, sq.non_nullable_type)
+    local m = D.main_module(t)
+    local b = W.WasmBuilder.InstructionsBuilder(m, IR.ValueType[shape], IR.ValueType[sq.non_nullable_type])
+    W.WasmBuilder.local_get(b, b.locals[1])
+    D.convert_type(t, b, shape, shape)                       # equal: nothing emitted
+    local n = length(b._instructions)
+    D.convert_type(t, b, shape, sq.non_nullable_type)        # downcast: one ref.cast, accepted by the builder
+    @test length(b._instructions) == n + 1
+    # boxing needs the value's Julia class: a located rejection here
+    local e2 = try; D.convert_type(t, b, IR.NumType_i32, shape); nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Unquarantined && occursin("1.D", e2.rejection.row)
+end

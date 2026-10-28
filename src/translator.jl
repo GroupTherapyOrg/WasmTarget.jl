@@ -75,7 +75,7 @@ program, the NIR of the closed world Julia's trim verifier accepted (dart's Kern
 `tableBasedGlobals`, `globals`, `dartGlobals`, `constants`, `compilationQueue`, `functions` (each
 late, assigned where dart assigns it once its class is ported); `membersBeingGenerated` (a member
 a Core.MethodInstance); `voidMarker`; `_moduleOutputData`, `_outputToBuilder`, `_builderToOutput`,
-`moduleToBuilder` (one
+`staticParamInfo`; `moduleToBuilder` (one
 module: deferred loading is out of scope);
 `classes`, `classesSupersFirst`, `classIdNumbering`, `classInfo` (a class is a Julia DataType, keyed
 by identity), `classForHeapType`, `fieldIndex` (a field a ClassField, src/julia/classes.jl),
@@ -84,15 +84,14 @@ the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8
 integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
 every other primitive class have none).
 
-Fields to come (73, each with its translator.dart line): `symbols` :100, `libraries` :104,
+Fields to come (72, each with its translator.dart line): `symbols` :100, `libraries` :104,
 `coreTypes` :106, `typeEnvironment` :107, `hierarchy` :108, `subtypes` :109, `directCallMetadata`
 :115, `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123, `inferredReturnTypeMetadata`
 :127, `unboxingInfoMetadata` :131, `procedureAttributeMetadata` :136, `unreachableMetadata` :140,
 `index` :146, `closureLayouter` :147, `classInfoCollector` :148, `crossModuleFunctionTable` :149,
 `dispatchTable` :151, `dynamicDispatchTable` :152, `types` :156, `_exceptionTags` :157, `loadingMap`
 :161, `exportNamer` :163, `interopMemberNamer` :164, `internalizedStringsForJSRuntime` :189,
-`_internalizedStringGlobals` :190, `typeParameterIndex` :195, `staticParamInfo` :196,
-`_declaredFieldTables` :197, `_importedFieldTables` :198, `membersContainingInnerFunctions` :202,
+`_internalizedStringGlobals` :190, `typeParameterIndex` :195, `_declaredFieldTables` :197, `_importedFieldTables` :198, `membersContainingInnerFunctions` :202,
 `constructorClosures` :204, `constructorInfo` :205, `_memories` :210, `_ffiMemoryImports` :213,
 `recordClasses` :228, `immutableArrayTypeCache` :231, `mutableArrayTypeCache` :232,
 `functionRefCache` :233, `tearOffFunctionCache` :235, `closureImplementations` :238, `objectInfo`
@@ -125,6 +124,7 @@ the translator holds each collaborator.
     class_info::IdDict{DataType,ClassInfo}
     class_for_heap_type::Dict{WasmBuilder.IR.HeapType,ClassInfo}
     field_index::Dict{ClassField,Int}
+    static_param_info::IdDict{Core.MethodInstance,ParameterInfo}
     members_being_generated::Base.IdSet{Core.MethodInstance}
     void_marker::Late{WasmBuilder.IR.ValueType}
     top_type::Late{WasmBuilder.IR.RefType}
@@ -151,7 +151,7 @@ the translator holds each collaborator.
             Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:180 Translator.classesSupersFirst"),
             Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"),
             IdDict{DataType,ClassInfo}(), Dict{WasmBuilder.IR.HeapType,ClassInfo}(), Dict{ClassField,Int}(),
-            Base.IdSet{Core.MethodInstance}(),
+            IdDict{Core.MethodInstance,ParameterInfo}(), Base.IdSet{Core.MethodInstance}(),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/translator.dart:206 Translator.voidMarker",
                 () -> WasmBuilder.IR.RefType_def(WasmBuilder.IR.StructType("void"); nullable = true)),
             # The wasm type used to hold values of Dart top types (e.g. `Object?`, `dynamic`)
@@ -461,15 +461,67 @@ end
 
 @parity "dart2wasm/lib/translator.dart:1360 Translator.getClosure" @unported function get_closure(self::Translator, function_node, target::CallTarget, closure_module::WasmBuilder.ModuleBuilder, param_info::ParameterInfo, name::String) end
 
-@parity "dart2wasm/lib/translator.dart:1589 Translator.outputOrVoid" @unported function output_or_void(self::Translator, outputs::Vector{WasmBuilder.IR.ValueType}) end
+@parity "dart2wasm/lib/translator.dart:1589 Translator.outputOrVoid" function output_or_void(self::Translator, outputs::Vector{WasmBuilder.IR.ValueType})::WasmBuilder.IR.ValueType
+    isempty(outputs) && return self.void_marker[]
+    length(outputs) == 1 || reject!(Internal("dart2wasm/lib/translator.dart:1589 Translator.outputOrVoid: $(length(outputs)) outputs, not one"), "Translator.outputOrVoid")
+    return outputs[1]
+end
 
-@parity "dart2wasm/lib/translator.dart:1593 Translator.needsConversion" @unported function needs_conversion(self::Translator, from::WasmBuilder.IR.ValueType, to::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/translator.dart:1593 Translator.needsConversion" needs_conversion(self::Translator, from::WasmBuilder.IR.ValueType, to::WasmBuilder.IR.ValueType)::Bool =
+    xor(from == self.void_marker[], to == self.void_marker[]) || !WasmBuilder.is_subtype_of(from, to)
 
-@parity "dart2wasm/lib/translator.dart:1597 Translator.convertType" @unported function convert_type(self::Translator, b::WasmBuilder.InstructionsBuilder, from::WasmBuilder.IR.ValueType, to::WasmBuilder.IR.ValueType) end
+"""
+Emit the conversion of a value of wasm type `from` on `b`'s stack to `to`: nothing when they are
+the same, a drop or an unreachable across the void marker, a null check or a downcast between
+references. dart boxes and unboxes by the wasm type alone (its one boxed class per i32, i64, f64);
+a Julia wasm type is many classes (`Int32`, `UInt32`, `Char` and `Bool` are each i32), so a box is
+made or read where the value's Julia class is known, by the code generator (dev/MARCH.md 1.D), and
+here it rejects, located, as a conversion between two non-reference types does.
+"""
+@parity "dart2wasm/lib/translator.dart:1597 Translator.convertType" function convert_type(self::Translator, b::WasmBuilder.InstructionsBuilder, from::WasmBuilder.IR.ValueType, to::WasmBuilder.IR.ValueType)::Nothing
+    local at = "dart2wasm/lib/translator.dart:1597 Translator.convertType"
+    from === to && return nothing
+    local void = self.void_marker[]
+    if from == void || to == void
+        if from != void
+            WasmBuilder.drop(b)
+            return nothing
+        end
+        if to != void
+            # This can happen e.g. when a `return;` is guaranteed to be never taken
+            # but TFA didn't remove the dead code.
+            WasmBuilder.unreachable(b)
+            return nothing
+        end
+    end
+    if !WasmBuilder.is_subtype_of(from, to)
+        if from isa WasmBuilder.IR.RefType && to isa WasmBuilder.IR.RefType
+            if WasmBuilder.is_subtype_of(WasmBuilder.with_nullability(from, false), to)
+                # Null check
+                WasmBuilder.ref_as_non_null(b)
+            else
+                # Downcast
+                WasmBuilder.ref_cast(b, to)
+            end
+        elseif to isa WasmBuilder.IR.RefType
+            reject!(Unquarantined("dart2wasm/lib/translator.dart:1597 convertType: boxing a $from, whose Julia class the code generator knows (dev/MARCH.md 1.D)"), at)
+        elseif from isa WasmBuilder.IR.RefType
+            reject!(Unquarantined("dart2wasm/lib/translator.dart:1597 convertType: unboxing to a $to, whose Julia class the code generator knows (dev/MARCH.md 1.D)"), at)
+        else
+            reject!(Internal("$at: Conversion between non-reference types (from $from to $to)"), at)
+        end
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/translator.dart:1663 Translator.getFunctionEntry" @unported function get_function_entry(self::Translator, target; unchecked_entry::Bool) end
 
-@parity "dart2wasm/lib/translator.dart:1683 Translator.needToCheckTypesFor" @unported function need_to_check_types_for(self::Translator, member) end
+"""
+Whether a call to `member` must check its arguments' types on entry. dart checks the covariant
+parameters of an instance member; a Julia method has none: Julia dispatches on every argument's
+type and the MethodInstance is specialized on the types it is called with, so no entry checks.
+"""
+@parity "dart2wasm/lib/translator.dart:1683 Translator.needToCheckTypesFor" need_to_check_types_for(self::Translator, member::Core.MethodInstance)::Bool = false
 
 @parity "dart2wasm/lib/translator.dart:1692 Translator._needToCheckTypesFor" @unported function _need_to_check_types_for(self::Translator, member) end
 
@@ -495,7 +547,10 @@ end
 
 @parity "dart2wasm/lib/translator.dart:1884 Translator.synthesizeNoReturn" @unported function synthesize_no_return(self::Translator, target) end
 
-@parity "dart2wasm/lib/translator.dart:1896 Translator.paramInfoForDirectCall" @unported function param_info_for_direct_call(self::Translator, target) end
+# a Julia member calls through no selector (src/dispatch_table.jl: the trim verifier leaves no
+# dynamic call), so its info is the static one, made once per member
+@parity "dart2wasm/lib/translator.dart:1896 Translator.paramInfoForDirectCall" param_info_for_direct_call(self::Translator, target::Core.MethodInstance)::ParameterInfo =
+    get!(() -> ParameterInfo_from_member(target, false), self.static_param_info, target)
 
 @parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" @unported function precise_this_for(self::Translator, member; nullable = nothing) end
 
@@ -519,11 +574,22 @@ end
 # field, so its type is its declared one
 @parity "dart2wasm/lib/translator.dart:2087 Translator.typeOfField" type_of_field(self::Translator, node::ClassField)::Type = node.type
 
-@parity "dart2wasm/lib/translator.dart:2092 Translator.translateTypeOfParameter" @unported function translate_type_of_parameter(self::Translator, node, is_required::Bool) end
+# dart reads the parameter's TFA-inferred type, else its declared one; the code generator passes the
+# type Julia inferred for the argument (its MethodInstance's signature)
+@parity "dart2wasm/lib/translator.dart:2092 Translator.translateTypeOfParameter" translate_type_of_parameter(self::Translator, type_::Type, is_required::Bool)::WasmBuilder.IR.ValueType =
+    translate_type(self, type_)
 
 @parity "dart2wasm/lib/translator.dart:2096 Translator.translateTypeOfField" translate_type_of_field(self::Translator, node::ClassField)::WasmBuilder.IR.ValueType = translate_type(self, type_of_field(self, node))
 
-@parity "dart2wasm/lib/translator.dart:2100 Translator.translateTypeOfLocalVariable" @unported function translate_type_of_local_variable(self::Translator, node) end
+# the type Julia inferred for the local (the code generator passes it); a cyclic class's locals are
+# never assigned, so they take the top type, whose dummy initialization is a ref.null
+@parity "dart2wasm/lib/translator.dart:2100 Translator.translateTypeOfLocalVariable" function translate_type_of_local_variable(self::Translator, type_::Type)::WasmBuilder.IR.ValueType
+    if type_ isa DataType
+        local info = get(self.class_info, type_, nothing)
+        info !== nothing && is_cyclic(info) && return self.top_type[]
+    end
+    return translate_type(self, type_)
+end
 
 @parity "dart2wasm/lib/translator.dart:2115 Translator._inferredTypeOfParameterVariable" @unported function _inferred_type_of_parameter_variable(self::Translator, node) end
 
