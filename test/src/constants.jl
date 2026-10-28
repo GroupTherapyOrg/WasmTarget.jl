@@ -159,3 +159,28 @@ struct _DagHashNode; a::Any; b::Any; end
     @test hash(WasmTarget.NirConst(Core.Const(Int32(3)))) == hash(WasmTarget.NirConst(Core.Const(Int32(3))))
     @test WasmTarget.NirConst(Core.Const(Int32(3))) != WasmTarget.NirConst(Core.Const(Int64(3)))
 end
+
+module ConstantsRest
+using Test, WasmTarget
+const D = WasmTarget.Dart2Wasm
+const I = WasmTarget.WasmBuilder.IR
+struct Nodes <: D.KernelNodes
+    options::D.TranslatorOptions
+end
+k(x) = WasmTarget.NirConst(Core.Const(x))
+rej(f) = try; f(); nothing; catch x; x isa WasmTarget.RejectionError ? x.rejection : rethrow(); end
+@testset "constants.dart: the kinds Julia answers empty or as another" begin
+    local cs = D.Constants(Nodes(D.TranslatorOptions()))
+    local cr = D.ConstantCreator(cs)
+    # a type variable is an instance of TypeVar; a function type has no named parameters
+    local tv = TypeVar(:T)
+    @test D._make_type_parameter_type_constant(cs, tv) === k(tv) && D._make_structural_parameter_type_constant(cs, tv) === k(tv)
+    @test D.make_named_parameters_array(cs, typeof(sin)).c.val.entries === ()
+    @test D.make_named_parameter_constant(cs, Pair{Symbol,Type}(:x, Int)) === k(Pair{Symbol,Type}(:x, Int))
+    @test rej(() -> D._make_top_type_constant(cs, Union{Int,String})) isa WasmTarget.Internal
+    # Julia has no constant map, set or list form; a constant array rejects, located
+    @test rej(() -> D._uninitialized_hash_base_index_constant(cr)) isa WasmTarget.Unquarantined
+    @test rej(() -> D.ensure_constant(cs, k([1, 2]))) isa WasmTarget.Unquarantined
+    @test rej(() -> D.core_types(cs)) isa WasmTarget.Internal
+end
+end
