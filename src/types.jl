@@ -322,6 +322,8 @@ end
 """The type of a type value: dart's `_Type`, Julia's `Type`, which every type is an instance of."""
 @parity "dart2wasm/lib/types.dart:116 Types.typeType" type_type(self::Types)::Type = Type
 
+@parity "dart2wasm/lib/types.dart:119 Types.coreTypes" @unported function core_types(self::Types) end
+
 """
 Whether a type value can be made as a constant: dart's test for a type with no type parameter in it,
 which is Julia's type with no free type variable (`Base.has_free_typevars`). A static parameter
@@ -400,8 +402,7 @@ flattened and ordered), and it has no `FutureOr`, so the type is already normal.
 
 """
 Makes a type value on the stack and returns its wasm type. A type with no free type variable is a
-constant: Julia's type value itself, as the NIR holds a literal (`Core.Const`), its kind of Constant
-`julia_constant`'s (src/julia/constant.jl). dart makes the other
+constant: Julia's type value itself, as the NIR holds a literal (`NirConst`, Kernel's Constant). dart makes the other
 types at run time from the type parameters in scope. In Julia a type with a free type variable
 reaches code only in a method Julia did not specialize on that parameter, and there it rejects,
 located, until such methods compile.
@@ -411,7 +412,7 @@ located, until such methods compile.
     type_ = normalize(self, type_)
     local b = code_gen.b
     if is_type_constant(self, type_)
-        instantiate_constant(self.translator.constants[], b, julia_constant(Core.Const(type_), "Types.makeType"), non_nullable_type_type(self))
+        instantiate_constant(self.translator.constants[], b, NirConst(Core.Const(type_)), non_nullable_type_type(self))
         return non_nullable_type_type(self)
     end
     reject!(Unquarantined("src/types.jl makeType: the type $type_, whose free type variables an unspecialized method leaves to run time"), "Types.makeType")
@@ -500,6 +501,8 @@ value can fail.
 """
 @parity "dart2wasm/lib/types.dart:597 Types._requiresOnlyNullAssignabilityCheck" _requires_only_null_assignability_check(self::Types, operand_type::Type, tested_against_type::Type)::Bool =
     operand_type <: Union{tested_against_type, Nothing}
+
+@parity "dart2wasm/lib/types.dart:615 _TypeCheckers" @unported function _TypeCheckers(type_environment, rtt) end
 
 """
 The type an is or as checker checks, and whether its arguments are checked; `nothing` where no
@@ -865,14 +868,13 @@ beside it, the canonical substitutions, each class's row offset (-1 for none) an
         Constant[substitution for substitution in self._substitution_table_by_index[]])
     self.type_row_displacement_offsets[] = make_array_of(constants, Int32,
         Constant[make_wasm_i32(constants, (r = row_for_superclass[class_id + 1]) === nothing ? -1 : r.offset[]) for class_id in 0:n_classes-1])
-    self.type_names[] = minify(translator.options) ? julia_constant(Core.Const(nothing), "RuntimeTypeInformation._setupRtt") : _get_type_names(self)
+    self.type_names[] = minify(translator.options) ? NirConst(Core.Const(nothing)) : _get_type_names(self)
     return nothing
 end
 
 """Each class's name, the top type's empty: a Julia class's name is its type's text."""
 @parity "dart2wasm/lib/types.dart:1424 RuntimeTypeInformation._getTypeNames" function _get_type_names(self::RuntimeTypeInformation)::Constant
-    local at = "RuntimeTypeInformation._getTypeNames"
-    local name_constants = Constant[julia_constant(Core.Const(info.cls === nothing ? "" : string(info.cls)), at)
+    local name_constants = Constant[NirConst(Core.Const(info.cls === nothing ? "" : string(info.cls)))
                                     for info in self.translator.classes[]]
     return make_array_of(self.translator.constants[], String, name_constants)
 end
