@@ -105,6 +105,23 @@ end
     @test _rejection(() -> D._make_bottom_type_constant(cs, Int)) isa WasmTarget.Internal
 end
 
+@testset "constants.dart: the wasm array and WasmI32 constants" begin
+    local cs = D.Constants(ConstantsNodes(D.TranslatorOptions()))
+    # a WasmI32 is Julia's Int32; out of range rejects
+    @test D.make_wasm_i32(cs, 7) === kind(Int32(7)) && D.make_wasm_i32(cs, -1) === kind(Int32(-1))
+    @test _rejection(() -> D.make_wasm_i32(cs, 2^31)) isa WasmTarget.Internal
+    # arrays compare field by field, as Kernel canonicalizes the InstanceConstants dart builds
+    local a = D.make_array_of(cs, Int32, [D.make_wasm_i32(cs, 1), D.make_wasm_i32(cs, 2)])
+    @test a === D.make_array_of(cs, Int32, [D.make_wasm_i32(cs, 1), D.make_wasm_i32(cs, 2)])
+    @test a !== D.make_array_of(cs, Int32, [D.make_wasm_i32(cs, 1), D.make_wasm_i32(cs, 2)]; mutable_ = false)
+    @test a.c.val isa WasmTarget.WasmArrayLiteral && a.c.val.mutable && a.c.val.element_type === Int32
+    local d = Dict{WasmTarget.NirConst,Int}(a => 1)
+    @test d[D.make_array_of(cs, Int32, [D.make_wasm_i32(cs, 1), D.make_wasm_i32(cs, 2)])] == 1
+    # a type array: each type lowered to its kind's instance
+    local ta = D.make_type_array(cs, Type[Union{Int,String}, Union{}])
+    @test ta.c.val.element_type === Type && ta.c.val.entries === (kind(Union{Int,String}), kind(Union{}))
+end
+
 @testset "constants.dart: emitting into a module" begin
     local cs = D.Constants(ConstantsNodes(D.TranslatorOptions()))
     local mb = W.ModuleBuilder("m", nothing)

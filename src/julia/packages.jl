@@ -41,6 +41,8 @@ import ..ClosedWorld, ..NirBody, ..NirWorld, ..NoCounterpart, ..build_nir, .._KI
        ..NirValue, ..NirSSA, ..NirArgument, ..NirGlobal, ..NirConst
 # Kernel's constants by the Kernel table's rows (src/julia/constant.jl)
 import ..Constant, ..InstanceConstant
+# dart:_wasm's array literal, the runtime type tables' constants (src/julia/wasm_array.jl)
+import ..WasmArrayLiteral
 # what the code generator reads from a body (src/julia/nir.jl)
 import ..TreeNode_no_offset, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
        ..nir_invoke_target, ..nir_callee

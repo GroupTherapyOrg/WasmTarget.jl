@@ -266,15 +266,31 @@ end
     return self._byte_segments[module_] = WasmBuilder.define(module_.data_segments)
 end
 
-@parity "dart2wasm/lib/constants.dart:211 Constants.makeWasmI32" @unported function make_wasm_i32(self::Constants, value::Int64) end
+"""
+dart's `WasmI32` constant, an unboxed 32-bit integer: Julia's `Int32` is that value, the NIR's literal
+of it. A value outside the 32-bit range rejects, located.
+"""
+@parity "dart2wasm/lib/constants.dart:211 Constants.makeWasmI32" function make_wasm_i32(self::Constants, value::Int)::NirConst
+    typemin(Int32) <= value <= typemax(Int32) ||
+        reject!(Internal("dart2wasm/lib/constants.dart:211 Constants.makeWasmI32: $value outside the 32-bit range"), "Constants.makeWasmI32")
+    return NirConst(Core.Const(Int32(value)))
+end
 
-@parity "dart2wasm/lib/constants.dart:218 Constants.makeTypeArray" @unported function make_type_array(self::Constants, types::AbstractVector{Type}) end
+"""Makes a `WasmArray<_Type>` constant: each type lowered to its type object (`_lowerTypeToConstant`)."""
+@parity "dart2wasm/lib/constants.dart:218 Constants.makeTypeArray" make_type_array(self::Constants, types::AbstractVector{Type})::NirConst =
+    make_array_of(self, Type, NirConst[_lower_type_to_constant(self, t) for t in types])
 
 @parity "dart2wasm/lib/constants.dart:226 Constants.makeNamedParameterConstant" @unported function make_named_parameter_constant(self::Constants, n::Pair{Symbol,Type}) end
 
 @parity "dart2wasm/lib/constants.dart:245 Constants.makeNamedParametersArray" @unported function make_named_parameters_array(self::Constants, type_::Type) end
 
-@parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" @unported function make_array_of(self::Constants, element_type::Type, entries::Vector{NirConst}; mutable_::Bool = true) end
+"""
+Creates a `WasmArray<T>` (or, not `mutable_`, an `ImmutableWasmArray<T>`) with the given constants:
+the NIR's literal of a WasmArrayLiteral (src/julia/wasm_array.jl), compared field by field as Kernel
+compares the InstanceConstant dart builds.
+"""
+@parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" make_array_of(self::Constants, element_type::Type, entries::Vector{NirConst}; mutable_::Bool = true)::NirConst =
+    NirConst(Core.Const(WasmArrayLiteral(element_type, mutable_, Tuple(entries))))
 
 @parity "dart2wasm/lib/constants.dart:268 Constants.dummyStructConstant" dummy_struct_constant(self::Constants)::DummyValueConstant =
     _get_dummy_value_constant(self, WasmBuilder.IR.HeapType_struct; name = "#DummyStruct")
@@ -673,14 +689,18 @@ end
 
 """
 An object: the struct of its class, `typeof` its value, the object header, then each field's value
-as a sub-constant; a type as a value, lowered (`_lowerTypeToConstant`), is its kind's instance. dart's wasm array and wasm value classes have no Julia counterpart; a Julia class
-stores no type arguments (its parameters are bound), so the type-argument slots dart fills are none.
+as a sub-constant; a type as a value, lowered (`_lowerTypeToConstant`), is its kind's instance. dart's
+wasm array class is a WasmArrayLiteral (makeArrayOf), built by `_makeWasmArrayLiteral`; dart's wasm
+value classes (WasmI32 and the rest) are Julia's primitive values, never an instance here. A Julia
+class stores no type arguments (its parameters are bound), so the type-argument slots dart fills are
+none.
 A field Julia holds no value in (`#undef`) rejects, located.
 """
 @parity "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant" function visit_instance_constant(self::ConstantCreator, constant::NirConst)::Union{ConstantInfo,Nothing}
     local at = "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant"
     local translator = self.constants.translator
     local v = constant.c.val
+    v isa WasmArrayLiteral && return _make_wasm_array_literal(self, constant; mutable_ = v.mutable)
     local cls = typeof(v)
 
     isprimitivetype(cls) && reject!(Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation"), at)
@@ -726,7 +746,114 @@ A field Julia holds no value in (`#undef`) rejects, located.
     end; can_be_eager = true)
 end
 
-@parity "dart2wasm/lib/constants.dart:984 ConstantCreator._makeWasmArrayLiteral" @unported function _make_wasm_array_literal(self::ConstantCreator, constant::NirConst; mutable_::Bool) end
+@parity "dart2wasm/lib/constants.dart:984 ConstantCreator._makeWasmArrayLiteral" function _make_wasm_array_literal(self::ConstantCreator, constant::NirConst; mutable_::Bool)::Union{ConstantInfo,Nothing}
+    local at = "dart2wasm/lib/constants.dart:984 ConstantCreator._makeWasmArrayLiteral"
+    local translator = self.constants.translator
+    local literal = constant.c.val::WasmArrayLiteral
+    local array_type = array_type_for_dart_type(translator, literal.element_type; mutable_ = mutable_)
+    local element_type = WasmBuilder.unpacked(array_type.element_type.type)
+
+    local elements = NirConst[e for e in literal.entries]
+    local too_large_for_array_new_fixed = length(elements) > max_array_new_fixed_length()
+    local child_constants = ConstantInfo[]
+    for element in elements
+        local info = ensure_constant(self, element)
+        info === nothing || push!(child_constants, info)
+    end
+
+    if too_large_for_array_new_fixed && !mutable_
+        reject!(Internal("$at: Cannot allocate immutable wasm array of size $(length(elements))"), at)
+    end
+
+    return create_constant(self, constant, child_constants, WasmBuilder.IR.RefType_def(array_type; nullable = false), function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
+        if too_large_for_array_new_fixed
+            # We use WasmArray<WasmI32> for some RTT data structures. Those arrays
+            # can get rather large and cross the 10k limit.
+            #
+            # If so, we prefer to initialize the array from data section over
+            # emitting a *lot* of code to store individual array elements.
+            #
+            # This can be a little bit larger than individual array stores, but the
+            # data section will compress better, so for app.wasm.gz it'a a win and
+            # will cause much faster validation & faster initialization.
+            local field_type = array_type.element_type.type
+            local is_i32 = field_type == WasmBuilder.IR.NumType_i32
+            local is_i16 = field_type == WasmBuilder.IR.PackedType_i16
+            if is_i32 || is_i16
+                # Initialize array contents from passive data segment.
+                local segment = byte_segment(self.constants, b.module_builder)
+                # each entry is a WasmI32 constant, Julia's Int32 (makeWasmI32), written little-endian
+                local value(e::NirConst) = e.c.val isa Int32 ? e.c.val :
+                    reject!(Internal("$at: an entry $(e.c.val) of a data-initialized array is no WasmI32"), at)
+                local bytes = is_i16 ? reinterpret(UInt8, UInt16[htol(UInt16(value(e) % UInt16)) for e in elements]) :
+                    reinterpret(UInt8, UInt32[htol(reinterpret(UInt32, value(e))) for e in elements])
+                WasmBuilder.i32_const(b, length(segment))
+                WasmBuilder.i32_const(b, length(elements))
+                WasmBuilder.array_new_data(b, array_type, segment)
+                WasmBuilder.append(segment, Vector{UInt8}(bytes))
+                return nothing
+            end
+
+            # We will initialize the array with one of the elements (using
+            # `array.new`) and update the fields.
+            #
+            # For the initial element pick the one that occurs the most to save
+            # some work when the array has duplicates.
+            local occurrences = LinkedHashMap{NirConst,Int}()
+            for element in elements
+                occurrences[element] = get(occurrences, element, 0) + 1
+            end
+
+            local initial_element = elements[1]
+            local initial_element_occurrences = 1
+            for (k, n) in occurrences
+                if n > initial_element_occurrences
+                    initial_element_occurrences = n
+                    initial_element = k
+                end
+            end
+
+            local array_local = WasmBuilder.add_local(b, WasmBuilder.IR.RefType_def(array_type; nullable = false))
+            instantiate_constant(self.constants, b, initial_element, element_type)
+            WasmBuilder.i32_const(b, length(elements))
+            WasmBuilder.array_new(b, array_type)
+            WasmBuilder.local_set(b, array_local)
+
+            local i = 0
+            while i < length(elements)
+                # If it's the same as initial element, nothing to do.
+                local v = elements[i + 1]
+                i += 1
+                v == initial_element && continue
+
+                # Find out how many times the current element repeats.
+                local start_inclusive = i - 1
+                while i < length(elements) && elements[i + 1] == v
+                    i += 1
+                end
+                local end_exclusive = i
+                local count = end_exclusive - start_inclusive
+
+                WasmBuilder.local_get(b, array_local)
+                WasmBuilder.i32_const(b, start_inclusive)
+                instantiate_constant(self.constants, b, v, element_type)
+                if count > 1
+                    WasmBuilder.i32_const(b, count)
+                    WasmBuilder.array_fill(b, array_type)
+                else
+                    WasmBuilder.array_set(b, array_type)
+                end
+            end
+            WasmBuilder.local_get(b, array_local)
+        else
+            for element in elements
+                instantiate_constant(self.constants, b, element, element_type)
+            end
+            WasmBuilder.array_new_fixed(b, array_type, length(elements))
+        end
+        return nothing
+    end; can_be_eager = !too_large_for_array_new_fixed)
+end
 
 @parity "dart2wasm/lib/constants.dart:1128 ConstantCreator.visitListConstant" @unported function visit_list_constant(self::ConstantCreator, constant::NirConst) end
 
@@ -857,8 +984,15 @@ end
     reject!(Internal("dart2wasm/lib/constants.dart:1753 TypeOfConstantVisitor.visitAuxiliaryConstant: Unexpected auxiliary constant: $d"), "TypeOfConstantVisitor.visitAuxiliaryConstant")
 end
 
-@parity "dart2wasm/lib/constants.dart:1757 TypeOfConstantVisitor.visitInstanceConstant" visit_instance_constant(self::TypeOfConstantVisitor, constant::NirConst)::WasmBuilder.IR.RefType =
-    _type_of_class(self, typeof(constant.c.val))
+# dart's wasm array class (a WasmArrayLiteral) is typed by its array type, every other object by its class
+@parity "dart2wasm/lib/constants.dart:1757 TypeOfConstantVisitor.visitInstanceConstant" function visit_instance_constant(self::TypeOfConstantVisitor, constant::NirConst)::WasmBuilder.IR.RefType
+    local v = constant.c.val
+    if v isa WasmArrayLiteral
+        local array_type = array_type_for_dart_type(self.translator, v.element_type; mutable_ = v.mutable)
+        return WasmBuilder.IR.RefType_def(array_type; nullable = false)
+    end
+    return _type_of_class(self, typeof(v))
+end
 
 @parity "dart2wasm/lib/constants.dart:1780 TypeOfConstantVisitor.visitStaticTearOffConstant" @unported function visit_static_tear_off_constant(self::TypeOfConstantVisitor, constant::Function) end
 
