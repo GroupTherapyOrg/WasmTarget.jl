@@ -23,6 +23,7 @@ const SRC_TESTS = [
     "parity.jl",
     "records.jl",
     "source_map_utils.jl",
+    "subset.jl",
     "target.jl",
     "translator.jl",
     "types.jl",
@@ -34,13 +35,13 @@ const SRC_TESTS = [
     "wasm_builder/ir_modules.jl",
     "wasm_builder/serializer.jl",
 ]
-# WT_PROGRESS names a file dev/check.sh reads when a stage outlives its hard limit: the test file and
-# the case running then, so a hang names itself
-const WT_PROGRESS = get(ENV, "WT_PROGRESS", "")
-wt_progress(what::AbstractString) = isempty(WT_PROGRESS) || write(WT_PROGRESS, what)
+# the list's own form, checked, so a conflict resolution that collapses it fails here
+let entries = filter(l -> occursin(r"^    \"[^\"]+\",$", l), readlines(@__FILE__))
+    length(entries) == length(SRC_TESTS) && issorted(SRC_TESTS) ||
+        error("test/src_tests.jl: SRC_TESTS holds one file per line, in sorted order")
+end
 @testset "src" begin
     for f in SRC_TESTS
-        wt_progress(f)
         @testset "$f" begin include(joinpath(@__DIR__, f)) end
     end
 end
