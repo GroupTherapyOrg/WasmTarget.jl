@@ -11,8 +11,21 @@ set -uo pipefail
 # the one march branch on origin (D23): every lane lands here; worktrees and their branches stay local
 MARCH=wt2
 cd "$(dirname "$0")/.."
-[ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "ship: commit or drop your changes first"; exit 2; }
+lane=$(pwd -P)
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
+[ -z "$(git status --porcelain --untracked-files=no)" ] || echo "ship: uncommitted changes stay here and are not landed"
+# the landing runs in a scratch worktree of this lane's HEAD, so the lane keeps editing while it
+# lands: a rebase or an abort there never touches the lane's files (a lane lost uncommitted edits
+# when ship rebased its own tree). Its untracked Manifest and preferences come along, and its checks
+# compile into the lane's depot.
+start=$(git rev-parse HEAD)
+scratch="$common/wt-ship/$(basename "$lane")"
+git worktree remove --force "$scratch" 2>/dev/null; rm -rf "$scratch"
+git worktree add -q --detach "$scratch" "$start" || { echo "ship: cannot make the scratch worktree"; exit 1; }
+for f in Manifest.toml LocalPreferences.toml; do [ -f "$lane/$f" ] && cp "$lane/$f" "$scratch/$f"; done
+export WT_DEPOT_DIR="$lane"
+cleanup_scratch() { cd "$lane" && git worktree remove --force "$scratch" 2>/dev/null; }
+cd "$scratch"
 log="$common/wt-landings.tsv"   # one log for every lane: D13's band
 lock="$common/wt-landing-lock"
 # every commit is checked on its own tree, against its parent (the rule bors and git rebase --exec
@@ -25,6 +38,7 @@ checked_rebase() {
   fi
 }
 release() { rm -rf "$lock"; }
+trap cleanup_scratch EXIT
 git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
 [ "$(git rev-list --count "origin/$MARCH..HEAD")" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
 first=$(git log --reverse --format=%at "origin/$MARCH..HEAD" | head -1)
@@ -37,7 +51,7 @@ while ! mkdir "$lock" 2>/dev/null; do
   elif [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rm -rf "$lock"; fi
   sleep 2
 done
-echo $$ > "$lock/pid"; trap release EXIT
+echo $$ > "$lock/pid"; trap 'release; cleanup_scratch' EXIT
 # under the lock the re-check takes the reserved slot (dev/check.sh's slot L), so the holder never
 # waits behind other lanes' optimistic checks; a push a lane on an older dev/ship.sh beat (one that
 # takes no lock) is fetched and re-checked again, at most three times
@@ -51,7 +65,7 @@ for try in 1 2 3; do
   git fetch -q origin "$MARCH" && git merge-base --is-ancestor "origin/$MARCH" HEAD && break
 done
 if git push -q origin HEAD:$MARCH; then
-  release; trap - EXIT
+  release; trap cleanup_scratch EXIT
   secs=$(( $(date +%s) - first ))
   printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$secs" >> "$log"
   med=$(tail -5 "$log" | cut -f3 | sort -n | awk '{ a[NR] = $1 } END { print a[int((NR + 1) / 2)] }')
@@ -60,6 +74,10 @@ if git push -q origin HEAD:$MARCH; then
   if [ "$med" -gt 600 ]; then echo "ship: RED — the median of the last five landings is ${med}s, past D13's band (a 300-s target, red past 600 s): find what slows the loop"
   else echo "ship: median of the last five landings ${med}s (D13: a 300-s target, red past 600 s)"; fi
   # the rebuild's src progress, dev/src_progress.sh's line the check's ratchet printed for this tree (L208, D40)
+  # the lane's own branch follows when it is as ship found it: clean, and HEAD unmoved
+  if [ "$(git -C "$lane" rev-parse HEAD)" = "$start" ] && [ -z "$(git -C "$lane" status --porcelain --untracked-files=no)" ]; then
+    git -C "$lane" rebase -q "origin/$MARCH" && echo "ship: this lane's branch is now on origin/$MARCH"
+  else echo "ship: this lane moved on while landing; run git rebase origin/$MARCH when ready (the landed commits drop out)"; fi
     grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'; exit 0
 fi
 echo "ship: the push was refused under the landing lock"; exit 1

@@ -6,7 +6,9 @@
 # red past 120 s. CHECK_BASE names the commit the change is measured from (default origin/wt2).
 set -uo pipefail
 cd "$(dirname "$0")/.."
-. dev/depot.sh; wt_depot_export "$(pwd)"
+# the depot of the lane being checked: dev/ship.sh checks in a scratch worktree of the lane and
+# names the lane in WT_DEPOT_DIR, so its compiled images are the lane's, never a cold depot
+. dev/depot.sh; wt_depot_export "${WT_DEPOT_DIR:-$(pwd)}"
 # D31: the machine is shared (Dale's own jobs run beside the lanes), so at most four checks run at
 # once across every lane, each holding a slot in the repository's common dir; a slot whose holder
 # died is freed. The wait is reported and not counted in D14's band, which times the check itself.
