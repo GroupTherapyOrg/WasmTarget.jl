@@ -1,0 +1,73 @@
+# dart2wasm's intrinsics.dart, the remainder ported (src/intrinsics.jl, dev/MARCH.md 1.D): the literal
+# extractors, the lane index, the lookups and the call-site intrinsics, Julia's operations the answer.
+using Test
+using WasmTarget
+
+const DI = WasmTarget.Dart2Wasm
+const WI = WasmTarget
+const IRI = WI.WasmBuilder.IR
+
+module IntrinsicCases
+eq64(x::Int64) = x + 1
+eqf(x::Float64) = x * 2.0
+end
+
+intr_translator_of(f, argtypes) = DI.Translator(WI.check_subset(f, argtypes, "intrinsics"),
+    DI.build_module_output_data(DI.DefaultModuleStrategy(DI.WasmCompilerOptions_default_options())), DI.TranslatorOptions())
+function intr_codegen_of(f, argtypes, ins, outs)
+    local t = intr_translator_of(f, argtypes)
+    local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === nameof(f))
+    return DI.get_inlinable_member_code_generator(t, IRI.FunctionType(IRI.ValueType[ins...], IRI.ValueType[outs...]), mi)
+end
+intr_rejection(f) = try; f(); nothing; catch e; e isa WI.RejectionError ? e : rethrow(); end
+
+@testset "intrinsics.dart: literals, lanes and lookups" begin
+    local lit(v) = WI.NirConst(Core.Const(v))
+    # an integer literal is dart's int, Julia's Int64; a float literal Float64; anything else none
+    @test DI.extract_int_value(lit(3)) == 3 && DI.extract_int_value(lit(Int32(3))) === nothing && DI.extract_int_value(WI.NirSSA(1)) === nothing
+    @test DI._extract_double_value(lit(2.5)) == 2.5 && DI._extract_double_value(lit(2.5f0)) === nothing
+    @test DI._extract_lane_indices(lit((1, 2, 3))) == [1, 2, 3] && DI._extract_lane_indices(lit((1, 2.0))) === nothing
+    @test DI._extract_lane_indices(lit(1)) === nothing
+    # no Julia method is one of dart's library members: the lookups are empty, a triple names none
+    @test isempty(DI.MemberIntrinsic__lookup[]) && isempty(DI.StaticIntrinsic__lookup[])
+    local e = intr_rejection(() -> DI.MemberIntrinsic("dart:core", "Object", "=="))
+    @test e.rejection isa WI.Internal
+    local g = intr_codegen_of(IntrinsicCases.eq64, (Int64,), [IRI.NumType_i64], [IRI.NumType_i64])
+    local ii = g.intrinsifier[]
+    # a lane index: a literal within the lanes; another, a located rejection
+    local st = WI.NirNothing()
+    @test DI._get_simd_lane_index(ii, lit(1), 4, st) == 1
+    for bad in (lit(4), lit(-1), WI.NirSSA(1))
+        @test intr_rejection(() -> DI._get_simd_lane_index(ii, bad, 4, st)).rejection isa WI.Internal
+    end
+    # the folded unary operators are Julia's intrinsics, rounding a float to its own type
+    @test haskey(DI.Intrinsifier__inline_unary_operator_map[][IRI.NumType_i64], Core.Intrinsics.neg_int)
+    @test Set(keys(DI.Intrinsifier__inline_unary_operator_map[][IRI.NumType_f64])) ==
+          Set([Core.Intrinsics.neg_float, Core.Intrinsics.floor_llvm, Core.Intrinsics.ceil_llvm, Core.Intrinsics.trunc_llvm])
+    @test DI.Intrinsifier__unary_result_map[][Core.Intrinsics.floor_llvm] == IRI.NumType_f64
+    @test DI.types(ii) === DI.translator(ii).types[]
+end
+
+@testset "intrinsics.dart: the call-site intrinsics over Julia's calls" begin
+    local lit(v) = WI.NirConst(Core.Const(v))
+    local g = intr_codegen_of(IntrinsicCases.eq64, (Int64,), [IRI.NumType_i64], [IRI.NumType_i64])
+    local ii = g.intrinsifier[]
+    local x = WI.NirArgument(2)
+    local mi(f, T) = Core.Compiler.specialize_method(Base._which(Base.signature_type(f, T)))
+    local inv(m, args...) = WI.NirInvoke(m, WI.NirValue[lit(m.def.name === :(==) ? (==) : (+)), args...])
+    # Base's == on two Int64s is their bit equality, which i64.eq computes: the arm translates its
+    # operands first, which needs the builder `generate` gives; Julia's own answer stands beside it
+    @test (typemin(Int64) == typemin(Int64)) && !(1 == 2) && !(NaN == NaN) && (0.0 == -0.0)
+    local e = intr_rejection(() -> DI.generate_equals_intrinsic(ii, inv(mi(==, (Int64, Int64)), x, lit(3))))
+    @test e !== nothing && e.rejection isa WI.Internal && occursin("undefined variable", e.rejection.site)
+    # two types, or another method, is no equality intrinsic
+    @test DI.generate_equals_intrinsic(ii, inv(mi(==, (Int64, Float64)), x, lit(3.0))) === nothing
+    @test DI.generate_equals_intrinsic(ii, inv(mi(+, (Int64, Int64)), x, lit(3))) === nothing
+    # a resolved call, a field read, a global read and a function value's call are no intrinsics
+    @test DI.generate_instance_intrinsic(ii, inv(mi(+, (Int64, Int64)), x, lit(3))) === nothing
+    @test DI.generate_instance_getter_intrinsic(ii, WI.NirCall(WI.NirValue[lit(getfield), x, lit(:a)])) === nothing
+    @test DI.generate_static_getter_intrinsic(ii, WI.NirGlobalRead(GlobalRef(Base, :pi))) === nothing
+    @test DI.generate_function_call_intrinsic(ii, inv(mi(+, (Int64, Int64)), x, lit(3))) === nothing
+    # dart:_wasm's typed array and memory intrinsics, which no Julia call is: located rejections
+    @test intr_rejection(() -> DI.read_int_array(ii, inv(mi(+, (Int64, Int64)), x, lit(3)); unsigned = true)).rejection isa WI.Internal
+end

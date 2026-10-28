@@ -15,22 +15,45 @@ external members marked `wasm:intrinsic`); `code_gen` the code generator whose b
     Intrinsifier(::Val{:_}, code_gen::AstCodeGenerator) = new(code_gen)
 end
 
-@parity "dart2wasm/lib/intrinsics.dart:73 MemberIntrinsic" @unported function MemberIntrinsic(library, cls, name) end
+# dart's enhanced-enum constructor gives each intrinsic the dart:core member (library, class, name) it
+# stands for; a Julia intrinsic is a function of its own (Core.IntrinsicFunction), matched by identity,
+# so no library, class or name names one
+@parity "dart2wasm/lib/intrinsics.dart:73 MemberIntrinsic" MemberIntrinsic(library::String, cls::Union{String,Nothing}, name::String)::MemberIntrinsic =
+    reject!(Internal("dart2wasm/lib/intrinsics.dart:73 MemberIntrinsic: a Julia intrinsic is a function of its own, matched by identity; no dart:core member ($library, $cls, $name) names one"), "MemberIntrinsic")
 
-@parity "dart2wasm/lib/intrinsics.dart:75 MemberIntrinsic._lookup" @unported function MemberIntrinsic__lookup() end
+"""
+The member intrinsics by library, class and name, built on first read (dart's static, populated by
+`_populateLookup`). A Julia method's library is a Julia module, never one of dart's libraries, so
+the map is empty (MemberIntrinsic.fromProcedure answers nothing).
+"""
+@parity "dart2wasm/lib/intrinsics.dart:75 MemberIntrinsic._lookup" const MemberIntrinsic__lookup = Late{Dict{String,Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}}}(
+    "dart2wasm/lib/intrinsics.dart:75 MemberIntrinsic._lookup", () -> MemberIntrinsic__populate_lookup())
 
-@parity "dart2wasm/lib/intrinsics.dart:78 MemberIntrinsic._populateLookup" @unported function MemberIntrinsic__populate_lookup() end
+# dart files each intrinsic under its member's library, class and name; no Julia method is a dart:core
+# member, so none is filed
+@parity "dart2wasm/lib/intrinsics.dart:78 MemberIntrinsic._populateLookup" MemberIntrinsic__populate_lookup()::Dict{String,Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}} =
+    Dict{String,Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}}()
 
 # a Julia method is never an intrinsic: Julia's intrinsics and builtins are functions of their own
 # (Core.IntrinsicFunction, Core.Builtin) that a call names directly, so no method stands for one, and
 # dart's `_typeArguments` pragma has no Julia counterpart
 @parity "dart2wasm/lib/intrinsics.dart:88 MemberIntrinsic.fromProcedure" MemberIntrinsic_from_procedure(member::Core.MethodInstance)::Union{MemberIntrinsic,Nothing} = nothing
 
-@parity "dart2wasm/lib/intrinsics.dart:399 StaticIntrinsic" @unported function StaticIntrinsic(library, cls, name) end
+# dart's enhanced-enum constructor gives each intrinsic the dart:_wasm member it stands for; Julia's own
+# operations are its builtins, which generateStaticIntrinsic matches by the callee
+@parity "dart2wasm/lib/intrinsics.dart:399 StaticIntrinsic" StaticIntrinsic(library::String, cls::Union{String,Nothing}, name::String)::StaticIntrinsic =
+    reject!(Internal("dart2wasm/lib/intrinsics.dart:399 StaticIntrinsic: Julia's operations are its builtins, matched by the callee; no dart:_wasm member ($library, $cls, $name) names one"), "StaticIntrinsic")
 
-@parity "dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup" @unported function StaticIntrinsic__lookup() end
+"""
+The static intrinsics by library, class and name, built on first read. A Julia method's library is a
+Julia module, never dart:_wasm, so the map is empty (StaticIntrinsic.fromProcedure answers nothing).
+"""
+@parity "dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup" const StaticIntrinsic__lookup = Late{Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}}}(
+    "dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup", () -> StaticIntrinsic__populate_lookup())
 
-@parity "dart2wasm/lib/intrinsics.dart:404 StaticIntrinsic._populateLookup" @unported function StaticIntrinsic__populate_lookup() end
+# no Julia method is a dart:_wasm member, so none is filed
+@parity "dart2wasm/lib/intrinsics.dart:404 StaticIntrinsic._populateLookup" StaticIntrinsic__populate_lookup()::Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}} =
+    Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}}()
 
 # a Julia method is never one of dart:_wasm's static intrinsics: Julia's own operations are calls of
 # its builtins, which generateStaticIntrinsic matches by the callee
@@ -146,13 +169,61 @@ end
         Core.Intrinsics.trunc_llvm => c -> WasmBuilder.f64_trunc(c.b[]),
         Core.Intrinsics.rint_llvm => c -> WasmBuilder.f64_nearest(c.b[]))))
 
-@parity "dart2wasm/lib/intrinsics.dart:506 Intrinsifier._inlineUnaryOperatorMap" @unported function Intrinsifier__inline_unary_operator_map() end
+"""
+The unary operators dart folds when their operand is a literal: an integer's negation and
+complement, a float's negation and rounding (dart's `unary-`, `~`, `floorToDouble`, `ceilToDouble`,
+`truncateToDouble`), Julia's `neg_int`, `not_int`, `neg_float`, `floor_llvm`, `ceil_llvm` and
+`trunc_llvm`, each folded as Julia computes it (integer negation and complement wrap). dart's
+`toDouble` is Julia's `sitofp`, a conversion with its type operand, which generateStaticIntrinsic
+answers. A static final, lazily initialized as dart's is (Late).
+"""
+@parity "dart2wasm/lib/intrinsics.dart:506 Intrinsifier._inlineUnaryOperatorMap" const Intrinsifier__inline_unary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(
+    "dart2wasm/lib/intrinsics.dart:506 Intrinsifier._inlineUnaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(
+    WasmBuilder.IR.NumType_i64 => Dict{Core.IntrinsicFunction,Function}(
+        Core.Intrinsics.neg_int => (c, receiver) -> begin
+            local v = extract_int_value(receiver)
+            if v === nothing
+                translate_expression(c, receiver, WasmBuilder.IR.NumType_i64)
+                WasmBuilder.i64_const(c.b[], -1); WasmBuilder.i64_mul(c.b[])
+            else
+                WasmBuilder.i64_const(c.b[], -v)
+            end
+        end,
+        Core.Intrinsics.not_int => (c, receiver) -> begin
+            local v = extract_int_value(receiver)
+            if v === nothing
+                translate_expression(c, receiver, WasmBuilder.IR.NumType_i64)
+                WasmBuilder.i64_const(c.b[], -1); WasmBuilder.i64_xor(c.b[])
+            else
+                WasmBuilder.i64_const(c.b[], ~v)
+            end
+        end),
+    WasmBuilder.IR.NumType_f64 => Dict{Core.IntrinsicFunction,Function}(
+        (op => (c, receiver) -> begin
+            local v = _extract_double_value(receiver)
+            if v === nothing
+                translate_expression(c, receiver, WasmBuilder.IR.NumType_f64)
+                emit(c.b[])
+            else
+                WasmBuilder.f64_const(c.b[], fold(v))
+            end
+        end for (op, emit, fold) in ((Core.Intrinsics.neg_float, WasmBuilder.f64_neg, -), (Core.Intrinsics.floor_llvm, WasmBuilder.f64_floor, floor),
+                                     (Core.Intrinsics.ceil_llvm, WasmBuilder.f64_ceil, ceil), (Core.Intrinsics.trunc_llvm, WasmBuilder.f64_trunc, trunc)))...)))
 
-@parity "dart2wasm/lib/intrinsics.dart:578 Intrinsifier._unaryResultMap" @unported function Intrinsifier__unary_result_map() end
+"""
+The result type of a folded unary operator other than its operand's: dart's `toDouble` and the
+rounding to a double. Julia's rounding (`floor_llvm`, `ceil_llvm`, `trunc_llvm`) returns its
+operand's own float type, and `toDouble` is a conversion (`sitofp`), so each rounding's result is
+f64 only as the operand's, as dart has it.
+"""
+@parity "dart2wasm/lib/intrinsics.dart:578 Intrinsifier._unaryResultMap" const Intrinsifier__unary_result_map = Late{Dict{Core.IntrinsicFunction,WasmBuilder.IR.ValueType}}(
+    "dart2wasm/lib/intrinsics.dart:578 Intrinsifier._unaryResultMap", () -> Dict{Core.IntrinsicFunction,WasmBuilder.IR.ValueType}(
+        Core.Intrinsics.floor_llvm => WasmBuilder.IR.NumType_f64, Core.Intrinsics.ceil_llvm => WasmBuilder.IR.NumType_f64,
+        Core.Intrinsics.trunc_llvm => WasmBuilder.IR.NumType_f64))
 
 @parity "dart2wasm/lib/intrinsics.dart:585 Intrinsifier.translator" translator(self::Intrinsifier)::Translator = self.code_gen.translator
 
-@parity "dart2wasm/lib/intrinsics.dart:586 Intrinsifier.types" @unported function types(self::Intrinsifier) end
+@parity "dart2wasm/lib/intrinsics.dart:586 Intrinsifier.types" types(self::Intrinsifier)::Types = translator(self).types[]
 
 @parity "dart2wasm/lib/intrinsics.dart:587 Intrinsifier.b" b(self::Intrinsifier)::WasmBuilder.InstructionsBuilder = self.code_gen.b[]
 
@@ -169,15 +240,64 @@ end
 
 @parity "dart2wasm/lib/intrinsics.dart:603 Intrinsifier" Intrinsifier(code_gen::AstCodeGenerator)::Intrinsifier = Intrinsifier(Val(:_), code_gen)
 
-@parity "dart2wasm/lib/intrinsics.dart:607 Intrinsifier.generateInstanceGetterIntrinsic" @unported function generate_instance_getter_intrinsic(self::Intrinsifier, node::NirCall) end
+"""
+A field read inlined as an intrinsic, or `nothing`. dart's are getters of dart:_wasm's classes
+(WasmAnyRef, WasmArrayRef, WasmTable) and int's bit counts. A Julia field read (`getfield`) reads
+its object's field, no class of Julia's is one of dart:_wasm's, and Julia's bit counts are its
+intrinsics (`ctlz_int`, `cttz_int`, `ctpop_int`, the unary map), so no read is one.
+"""
+@parity "dart2wasm/lib/intrinsics.dart:607 Intrinsifier.generateInstanceGetterIntrinsic" generate_instance_getter_intrinsic(self::Intrinsifier, node::NirCall)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
-@parity "dart2wasm/lib/intrinsics.dart:685 Intrinsifier.generateInstanceIntrinsic" @unported function generate_instance_intrinsic(self::Intrinsifier, node::NirInvoke) end
+"""
+An instance call inlined as an intrinsic, or `nothing`. dart's are dart:_wasm's members and the int,
+double and bool operators by name. A Julia call Julia resolved names a method (MemberIntrinsic
+answers none), and Julia's operators are its intrinsics, calls of their own that
+generateStaticIntrinsic matches, so no resolved call is one.
+"""
+@parity "dart2wasm/lib/intrinsics.dart:685 Intrinsifier.generateInstanceIntrinsic" generate_instance_intrinsic(self::Intrinsifier, node::NirInvoke)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
-@parity "dart2wasm/lib/intrinsics.dart:1018 Intrinsifier.generateEqualsIntrinsic" @unported function generate_equals_intrinsic(self::Intrinsifier, node::NirInvoke) end
+"""
+An equality on unboxed operands: both i32, i64, f32 or f64, compared by their instruction. A Julia
+equality left as a call is a resolved call of Base's `==`; for two operands of one type held at its
+own width (a 32- or 64-bit integer, Bool, Float32 or Float64), Base defines `==` as the bit
+equality of the integers and IEEE equality of the floats (NaN unequal, 0.0 equal to -0.0), which
+those instructions compute. Any other call, or operands of two types, is no intrinsic.
+"""
+@parity "dart2wasm/lib/intrinsics.dart:1018 Intrinsifier.generateEqualsIntrinsic" function generate_equals_intrinsic(self::Intrinsifier, node::NirInvoke)::Union{WasmBuilder.IR.ValueType,Nothing}
+    local target = nir_invoke_target(node)
+    (target.def isa Method && target.def.module === Base && target.def.name === :(==) && length(node.args) == 3) || return nothing
+    local left = node.args[2]; local right = node.args[3]
+    local left_t = dart_type_of(self, left); local right_t = dart_type_of(self, right)
+    left_t === right_t && (left_t === Bool || left_t in (Int32, UInt32, Int64, UInt64, Float32, Float64)) || return nothing
+    local left_type = type_of_exp(self, left); local right_type = type_of_exp(self, right)
+    local code_gen = self.code_gen
+    for (w, eq) in ((WasmBuilder.IR.NumType_i32, WasmBuilder.i32_eq), (WasmBuilder.IR.NumType_i64, WasmBuilder.i64_eq),
+                    (WasmBuilder.IR.NumType_f32, WasmBuilder.f32_eq), (WasmBuilder.IR.NumType_f64, WasmBuilder.f64_eq))
+        if left_type == w && right_type == w
+            translate_expression(code_gen, left, w)
+            translate_expression(code_gen, right, w)
+            eq(b(self))
+            return WasmBuilder.IR.NumType_i32
+        end
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/intrinsics.dart:1059 Intrinsifier.generateStaticGetterIntrinsic" @unported function generate_static_getter_intrinsic(self::Intrinsifier, node::NirGlobalRead) end
+"""
+A static read inlined as an intrinsic, or `nothing`. dart's are its ClassID getters and dart:_wasm's
+statics. A Julia global read reads its binding, no binding is one of dart's, and a class id is
+WasmTarget's own (src/class_info.jl), so no read is one.
+"""
+@parity "dart2wasm/lib/intrinsics.dart:1059 Intrinsifier.generateStaticGetterIntrinsic" generate_static_getter_intrinsic(self::Intrinsifier, node::NirGlobalRead)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
-@parity "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex" @unported function _get_simd_lane_index(self::Intrinsifier, argument::NirValue, num_lanes::Int64, node::NirStmt) end
+# dart throws ArgumentError for a lane that is no literal or out of range; here located rejections
+@parity "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex" function _get_simd_lane_index(self::Intrinsifier, argument::NirValue, num_lanes::Int64, node::NirStmt)::Int
+    local at = "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex"
+    local lane = extract_int_value(argument)
+    lane === nothing && reject!(Internal("$at: Lane index must be an integer literal or constant: $node"), at)
+    (lane < 0 || lane >= num_lanes) && reject!(Internal("$at: Lane index, $lane, out of bounds: $node"), at)
+    return lane
+end
 
 # A call Julia resolved names a method, never one of dart:_wasm's intrinsics; a call of a builtin is
 # Julia's own operation: `===` dart's identical, `ifelse` a select, a conversion or a shift its case of
@@ -398,7 +518,12 @@ end
 # struct is one, so no allocation is intrinsified
 @parity "dart2wasm/lib/intrinsics.dart:2836 Intrinsifier.generateConstructorIntrinsic" generate_constructor_intrinsic(self::Intrinsifier, node::NirNew)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
-@parity "dart2wasm/lib/intrinsics.dart:2875 Intrinsifier.generateFunctionCallIntrinsic" @unported function generate_function_call_intrinsic(self::Intrinsifier, node::NirInvoke) end
+"""
+A call of a function value inlined as an intrinsic, or `nothing`. dart's are calls of dart:_wasm's
+WasmFunction and of a closure's vtable entry. A Julia call of a function value is an invoke of its
+method, Julia having resolved it, so no call is one.
+"""
+@parity "dart2wasm/lib/intrinsics.dart:2875 Intrinsifier.generateFunctionCallIntrinsic" generate_function_call_intrinsic(self::Intrinsifier, node::NirInvoke)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
 # no Julia method is a member intrinsic (MemberIntrinsic.fromProcedure), so its function is its body
 @parity "dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic" function generate_member_intrinsic(self::Intrinsifier, target::Core.MethodInstance, function_type::WasmBuilder.IR.FunctionType, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Bool
@@ -407,14 +532,41 @@ end
     reject!(Unported("dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic"), "the member intrinsic $intrinsic of $target")
 end
 
-@parity "dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray" @unported function read_int_array(self::Intrinsifier, node::NirInvoke; unsigned::Bool) end
+# the read of dart:_wasm's typed WasmArray, one of its static intrinsics, which no Julia call is
+# (StaticIntrinsic.fromProcedure); a Julia array's element is read by its own methods
+@parity "dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray" read_int_array(self::Intrinsifier, node::NirInvoke; unsigned::Bool)::WasmBuilder.IR.ValueType =
+    reject!(Internal("dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray: a read of dart:_wasm's typed WasmArray, which no Julia call is"), "Intrinsifier.readIntArray")
 
-@parity "dart2wasm/lib/intrinsics.dart:3536 Intrinsifier._extractMemoryFromCall" @unported function _extract_memory_from_call(self::Intrinsifier, expr::NirValue, builder::WasmBuilder.InstructionsBuilder) end
+# the memory a dart:_wasm memory intrinsic names, which no Julia call is: Julia's memory is its
+# objects (WasmGC), not a linear memory a call names
+@parity "dart2wasm/lib/intrinsics.dart:3536 Intrinsifier._extractMemoryFromCall" _extract_memory_from_call(self::Intrinsifier, expr::NirValue, builder::WasmBuilder.InstructionsBuilder)::WasmBuilder.IR.Memory =
+    reject!(Internal("dart2wasm/lib/intrinsics.dart:3536 Intrinsifier._extractMemoryFromCall: a dart:_wasm memory access, which no Julia call is"), "Intrinsifier._extractMemoryFromCall")
 
-@parity "dart2wasm/lib/intrinsics.dart:3549 Intrinsifier._extractMemoryOperands" @unported function _extract_memory_operands(self::Intrinsifier, call::NirInvoke, builder::WasmBuilder.InstructionsBuilder) end
+# the memory, offset and alignment of a dart:_wasm memory intrinsic, which no Julia call is
+@parity "dart2wasm/lib/intrinsics.dart:3549 Intrinsifier._extractMemoryOperands" _extract_memory_operands(self::Intrinsifier, call::NirInvoke, builder::WasmBuilder.InstructionsBuilder)::NamedTuple{(:memory, :offset, :align),Tuple{WasmBuilder.IR.Memory,Int,Int}} =
+    reject!(Internal("dart2wasm/lib/intrinsics.dart:3549 Intrinsifier._extractMemoryOperands: a dart:_wasm memory access, which no Julia call is"), "Intrinsifier._extractMemoryOperands")
 
-@parity "dart2wasm/lib/intrinsics.dart:3573 extractIntValue" @unported function extract_int_value(expr::NirValue) end
+"""
+An operand's value when it is an integer literal (dart's `int`, Julia's `Int64`, the NIR's literal),
+else `nothing`.
+"""
+@parity "dart2wasm/lib/intrinsics.dart:3573 extractIntValue" extract_int_value(expr::NirValue)::Union{Int,Nothing} =
+    expr isa NirConst && expr.c.val isa Int64 ? expr.c.val : nothing
 
-@parity "dart2wasm/lib/intrinsics.dart:3588 _extractLaneIndices" @unported function _extract_lane_indices(expr::NirValue) end
+"""
+An operand's integers when it is a constant list of them (dart's ListConstant; Julia's literal tuple
+of `Int64`s), else `nothing`.
+"""
+@parity "dart2wasm/lib/intrinsics.dart:3588 _extractLaneIndices" function _extract_lane_indices(expr::NirValue)::Union{Vector{Int},Nothing}
+    expr isa NirConst && expr.c.val isa Tuple || return nothing
+    local bytes = Int[]
+    for entry in expr.c.val
+        entry isa Int64 || return nothing
+        push!(bytes, entry)
+    end
+    return bytes
+end
 
-@parity "dart2wasm/lib/intrinsics.dart:3606 _extractDoubleValue" @unported function _extract_double_value(expr::NirValue) end
+"""An operand's value when it is a float literal (dart's `double`, Julia's `Float64`), else `nothing`."""
+@parity "dart2wasm/lib/intrinsics.dart:3606 _extractDoubleValue" _extract_double_value(expr::NirValue)::Union{Float64,Nothing} =
+    expr isa NirConst && expr.c.val isa Float64 ? expr.c.val : nothing
