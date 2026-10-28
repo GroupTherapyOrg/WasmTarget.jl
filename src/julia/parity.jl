@@ -128,9 +128,14 @@ let defs = quote
         REGISTRY
 
     Every checked definition of every module, in load order; the totality checks read it. Filled
-    when the package loads (at precompile, and saved in the package image with the module).
+    when the package loads (at precompile, and saved in the package image with the module). A
+    definition evaluated again (Revise reloading its file in a live session, D39) replaces its own
+    entry, found by its identity (`_identity`), so the registry holds one entry per definition.
     """
     @quarantine "Julia keeps no declaration table to reflect on; the macros build one at load" Base.Vector const REGISTRY = Vector{RegistryEntry}()
+
+    # each definition's place in REGISTRY by its identity (`_identity`)
+    @quarantine "Julia keeps no declaration table; an index by identity finds a definition evaluated again" Base.Dict const _IDENTITIES = Dict{String,Int}()
 
     # the worlds at which the definitions being evaluated began, innermost last (a module's
     # definitions are evaluated inside its own)
@@ -147,17 +152,37 @@ let defs = quote
     # notes the world a definition's evaluation begins at
     @quarantine "a definition's evaluation begins at the world it reads" Base.get_world_counter _mark!()::Nothing = (push!(_WORLDS, Base.get_world_counter()); nothing)
 
-    # records a checked definition with the worlds its evaluation spanned, after `w0` up to `w1`, in
-    # this process
-    @quarantine "the registry grows as the package loads, each entry stamped with its worlds" Base.getpid function _register_range!(e::RegistryEntry, w0::UInt, w1::UInt)::Nothing
+    # records a checked definition of identity `id` with the worlds its evaluation spanned, after `w0`
+    # up to `w1`, in this process: a new entry, or in place of the entry of its earlier evaluation
+    # (two definitions of one identity at load are one method overwriting another, whose first
+    # method no entry then covers, so the load refuses it, _attribute!'s orphans)
+    @quarantine "the registry grows as the package loads, each entry stamped with its worlds" Base.getpid function _register_range!(e::RegistryEntry, id::String, w0::UInt, w1::UInt)::Nothing
         local T = typeof(e)
         local fields = Any[getfield(e, i) for i in 1:fieldcount(T)-3]
-        push!(REGISTRY, T(fields..., (w0 + 1):w1, Int32(getpid()), Method[]))
+        local entry = T(fields..., (w0 + 1):w1, Int32(getpid()), Method[])
+        local i = get(_IDENTITIES, id, 0)
+        i == 0 ? (push!(REGISTRY, entry); _IDENTITIES[id] = length(REGISTRY)) : (REGISTRY[i] = entry)
         return nothing
     end
 
     # records a checked definition whose evaluation began at the last _mark! and ends now
-    @quarantine "the registry grows as the package loads, Julia's top-level evaluation" Base.get_world_counter _register!(e::RegistryEntry)::Nothing = _register_range!(e, pop!(_WORLDS), Base.get_world_counter())
+    @quarantine "the registry grows as the package loads, Julia's top-level evaluation" Base.get_world_counter _register!(e::RegistryEntry, id::String)::Nothing = _register_range!(e, id, pop!(_WORLDS), Base.get_world_counter())
+
+    # a definition's identity across its evaluations: its module and, for a function or a macro, its
+    # signature as written, every line number dropped (a method is its signature, as Julia's method
+    # table keys it, and a Revise of its file evaluates it again under the same one, wherever its
+    # lines moved); for any other form, the form and its names
+    @quarantine "a method is identified by its signature, Julia's method table key, never by its lines" Core.LineNumberNode function _identity(mod::Module, def, source::LineNumberNode)::String
+        local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
+        local d = def
+        while Meta.isexpr(d, :macrocall) && d.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@closed"), Symbol("@unported"))
+            d = d.args[end]
+        end
+        local form = Meta.isexpr(d, (:function, :(=), :macro)) && !(d.args[1] isa Symbol) ?
+            string(d.head, " ", unlined(d.args[1])) :
+            string(Meta.isexpr(d, :macrocall) ? d.args[1] : d.head, " ", join(first(_defines(d, source)), ","))
+        return join(fullname(mod), ".") * " " * form
+    end
 
     # whether `file` lies in the directory `dir` (both absolute)
     @quarantine "a source file's place is its path" Base.startswith _inside(file::AbstractString, dir::AbstractString)::Bool = startswith(normpath(file), joinpath(normpath(dir), ""))
@@ -298,7 +323,7 @@ let defs = quote
     # module, whose expression must stand at top level, in a top-level expression
     @quarantine "a definition's evaluation is bracketed by world reads, Julia's top-level evaluation" Base.Meta.isexpr function _expansion(source::LineNumberNode, def, e::RegistryEntry)::Expr
         local mark = Expr(:call, GlobalRef(@__MODULE__, :_mark!))
-        local reg = Expr(:call, GlobalRef(@__MODULE__, :_register!), e)
+        local reg = Expr(:call, GlobalRef(@__MODULE__, :_register!), e, _identity(e.mod, def, source))
         Meta.isexpr(def, :module) && return Expr(:toplevel, mark, def, reg, nothing)
         return Expr(:block, mark, Expr(:macrocall, GlobalRef(Core, Symbol("@__doc__")), source, def), reg, nothing)
     end
@@ -333,7 +358,8 @@ end
     end
     for (source, necessity, api, def, w0, w1) in marked
         Core.eval(@__MODULE__, Expr(:call, :_register_range!, Expr(:call, :_quarantine_entry, @__MODULE__, QuoteNode(source),
-                                                                     necessity, QuoteNode(api), QuoteNode(def)), w0, w1))
+                                                                     necessity, QuoteNode(api), QuoteNode(def)),
+                                    Expr(:call, :_identity, @__MODULE__, QuoteNode(def), QuoteNode(source)), w0, w1))
     end
 end
 
