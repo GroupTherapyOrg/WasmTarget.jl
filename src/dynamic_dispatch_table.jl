@@ -2,37 +2,106 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-DynamicDispatchTable's dart fields: `translator`, `_definedTargetsTable`, `_importedTargetsTable`, `_definedClassIdsTable`, `_importedClassIdsTable`, `_table`, `dynamicSelectors`.
+The tables of dynamic calls: for each call shape a dynamic call site has, the classes whose member
+answers it, by class id, a targets table and a class ids table, packed with unique offsets.
+
+Julia's trim verifier, whose subset WasmTarget compiles (ledger D32), rejects every unresolved call,
+so no NIR statement is a dynamic call, no call shape is collected (DynamicCallSiteCollector), and the
+tables are empty by Julia's answer. If the subset ever admitted a dynamic call, the same code would
+fill them.
+
+Fields to come (1, its dynamic_dispatch_table.dart line): `dynamicSelectors` :41, made by build for
+each collected shape, of which a Julia program has none.
 """
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:25 DynamicDispatchTable" @unported struct DynamicDispatchTable end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:25 DynamicDispatchTable" struct DynamicDispatchTable
+    translator::KernelNodes
+    _defined_targets_table::Late{WasmBuilder.TableBuilder}
+    _imported_targets_table::Late{WasmTableImporter}
+    _defined_class_ids_table::Late{WasmBuilder.TableBuilder}
+    _imported_class_ids_table::Late{WasmTableImporter}
+    _table::Late{Vector{Union{TableEntry,Nothing}}}
+    # the struct's one constructor, tagged, with dart's late initializers; dart's constructor at :44
+    # is its outer function
+    function DynamicDispatchTable(::Val{:_}, translator::KernelNodes)
+        local self
+        self = new(translator,
+            Late{WasmBuilder.TableBuilder}("dart2wasm/lib/dynamic_dispatch_table.dart:28 DynamicDispatchTable._definedTargetsTable"),
+            Late{WasmTableImporter}("dart2wasm/lib/dynamic_dispatch_table.dart:29 DynamicDispatchTable._importedTargetsTable",
+                () -> WasmTableImporter(self.translator, "dynamicDispatchTargets")),
+            Late{WasmBuilder.TableBuilder}("dart2wasm/lib/dynamic_dispatch_table.dart:34 DynamicDispatchTable._definedClassIdsTable"),
+            Late{WasmTableImporter}("dart2wasm/lib/dynamic_dispatch_table.dart:35 DynamicDispatchTable._importedClassIdsTable",
+                () -> WasmTableImporter(self.translator, "dynamicDispatchClassIds")),
+            Late{Vector{Union{TableEntry,Nothing}}}("dart2wasm/lib/dynamic_dispatch_table.dart:40 DynamicDispatchTable._table"))
+        return self
+    end
+end
 
 """
 DynamicSelector's dart fields: `shape`, `signature`, `targets`, `offset`.
 """
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:330 DynamicSelector" @unported struct DynamicSelector end
 
+"""The call shapes of the program's dynamic call sites, dart's recursive visitor over the component."""
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:355 DynamicCallSiteCollector" struct DynamicCallSiteCollector
+    _caller_shapes::Set{CallShape}
+    # the struct's one constructor, tagged; dart's constructor `_` at :358 is its outer function
+    DynamicCallSiteCollector(::Val{:_}) = new(Set{CallShape}())
+end
+
+"""A slot of the dynamic dispatch table: the target, the receiver's class id and the call shape (dart's record typedef)."""
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:406 TableEntry" struct TableEntry
+    target::Core.MethodInstance
+    class_id::Int
+    shape::CallShape
+    # dart's record has no constructor of its own; the struct's one
+    TableEntry(target::Core.MethodInstance, class_id::Int, shape::CallShape) = new(target, class_id, shape)
+end
+
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:44 DynamicDispatchTable" DynamicDispatchTable(translator::KernelNodes)::DynamicDispatchTable = DynamicDispatchTable(Val(:_), translator)
+
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:46 DynamicDispatchTable.getTargetsTable" get_targets_table(self::DynamicDispatchTable, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.AbstractTable =
+    get(self._imported_targets_table[], self._defined_targets_table[], module_)
+
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:49 DynamicDispatchTable.getClassIdsTable" get_class_ids_table(self::DynamicDispatchTable, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.AbstractTable =
+    get(self._imported_class_ids_table[], self._defined_class_ids_table[], module_)
+
 """
-DynamicCallSiteCollector's dart fields: `_callerShapes`.
+Make a selector for each collected call shape, its row of classes by id, and pack the rows with
+unique offsets; define the targets and class ids tables. A Julia program has no dynamic call shape
+(the type's docstring); a shape, if one were collected, waits for its selector (DynamicSelector).
 """
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:355 DynamicCallSiteCollector" @unported struct DynamicCallSiteCollector end
-
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:406 TableEntry" @unported struct TableEntry end
-
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:44 DynamicDispatchTable" @unported function DynamicDispatchTable(translator) end
-
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:46 DynamicDispatchTable.getTargetsTable" @unported function get_targets_table(self::DynamicDispatchTable, module_::WasmBuilder.ModuleBuilder) end
-
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:49 DynamicDispatchTable.getClassIdsTable" @unported function get_class_ids_table(self::DynamicDispatchTable, module_::WasmBuilder.ModuleBuilder) end
-
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:52 DynamicDispatchTable.build" @unported function build(self::DynamicDispatchTable, dynamic_call_shapes::Set{CallShape}) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:52 DynamicDispatchTable.build" function build(self::DynamicDispatchTable, dynamic_call_shapes::Set{CallShape})::Nothing
+    local translator = self.translator
+    isempty(dynamic_call_shapes) ||
+        reject!(Unported("dart2wasm/lib/dynamic_dispatch_table.dart:330 DynamicSelector"), "DynamicDispatchTable.build")
+    local rows = Row{TableEntry}[]
+    # A dynamic call may not succeed, so the offsets are unique
+    self._table[] = build_row_displacement_table(rows; unique_offsets = true)
+    local m = main_module(translator)
+    self._defined_targets_table[] = WasmBuilder.define(m.tables[], WasmBuilder.IR.RefType_func(; nullable = true), length(self._table[]))
+    self._defined_class_ids_table[] = WasmBuilder.define(m.tables[], WasmBuilder.IR.RefType_i31(; nullable = true), length(self._table[]))
+    return nothing
+end
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:141 DynamicDispatchTable._lookupTarget" @unported function _lookup_target(self::DynamicDispatchTable, selector::DynamicSelector, class_id::Int64) end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:194 DynamicDispatchTable.output" @unported function output(self::DynamicDispatchTable) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:194 DynamicDispatchTable.output" function output(self::DynamicDispatchTable)::Nothing
+    output_target_table(self)
+    output_class_id_table(self)
+    return nothing
+end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:199 DynamicDispatchTable.outputTargetTable" @unported function output_target_table(self::DynamicDispatchTable) end
+# the table is empty in a Julia program (the type's docstring); an entry, if one were placed, waits for
+# the dynamic forwarders of its shape
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:199 DynamicDispatchTable.outputTargetTable" function output_target_table(self::DynamicDispatchTable)::Nothing
+    any(!isnothing, self._table[]) && reject!(Unported("dart2wasm/lib/functions.dart:195 FunctionCollector.getExistingDynamicForwarder"), "DynamicDispatchTable.outputTargetTable")
+    return nothing
+end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:257 DynamicDispatchTable.outputClassIdTable" @unported function output_class_id_table(self::DynamicDispatchTable) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:257 DynamicDispatchTable.outputClassIdTable" function output_class_id_table(self::DynamicDispatchTable)::Nothing
+    any(!isnothing, self._table[]) && reject!(Unported("dart2wasm/lib/dynamic_dispatch_table.dart:408 buildIntegerExpression"), "DynamicDispatchTable.outputClassIdTable")
+    return nothing
+end
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:311 DynamicDispatchTable._findNextEntry" @unported function _find_next_entry(self::DynamicDispatchTable, start::Int64) end
 
@@ -52,11 +121,25 @@ DynamicCallSiteCollector's dart fields: `_callerShapes`.
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:352 DynamicSelector.toString" @unported function Base.show(io::IO, self::DynamicSelector) end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:358 DynamicCallSiteCollector._" @unported function DynamicCallSiteCollector__() end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:358 DynamicCallSiteCollector._" DynamicCallSiteCollector__()::DynamicCallSiteCollector = DynamicCallSiteCollector(Val(:_))
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:360 DynamicCallSiteCollector.collect" @unported function DynamicCallSiteCollector_collect(component::NirWorld) end
+"""
+The call shapes of `component`'s dynamic call sites. dart visits Kernel's dynamic invocations,
+gets and sets and its calls of a Function value; Julia's trim verifier (D32) leaves no unresolved
+call in the NIR, and a call of a function value is an invoke of its MethodInstance
+(visitFunctionInvocation), so no statement adds a shape.
+"""
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:360 DynamicCallSiteCollector.collect" function DynamicCallSiteCollector_collect(component::NirWorld)::Set{CallShape}
+    local collector = DynamicCallSiteCollector__()
+    for body in component, st in body.stmts
+        st isa NirInvoke && visit_function_invocation(collector, st)
+    end
+    return collector._caller_shapes
+end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:367 DynamicCallSiteCollector.visitFunctionInvocation" @unported function visit_function_invocation(self::DynamicCallSiteCollector, node::NirInvoke) end
+# dart adds a getter shape for a call of a Function value, a closure called through its field; a
+# Julia invoke names the MethodInstance it calls, a closure's among them, so no shape
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:367 DynamicCallSiteCollector.visitFunctionInvocation" visit_function_invocation(self::DynamicCallSiteCollector, node::NirInvoke)::Nothing = nothing
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:377 DynamicCallSiteCollector.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::DynamicCallSiteCollector, node::NoCounterpart) end
 

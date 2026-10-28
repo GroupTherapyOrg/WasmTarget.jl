@@ -7,14 +7,59 @@ SelectorInfo's dart fields: `dispatchTable`, `id`, `callCount`, `paramInfo`, `is
 @parity "dart2wasm/lib/dispatch_table.dart:30 SelectorInfo" @unported struct SelectorInfo end
 
 """
-SelectorTargets's dart fields: `allTargetRanges`, `_dispatchTableRanges`, `staticDispatchRanges`, `offset`, `_targetSet`.
+The targets of a selector by class id ranges: all of them, the ones called through the dispatch
+table and the ones called directly; the selector's offset in the table once placed.
 """
-@parity "dart2wasm/lib/dispatch_table.dart:328 SelectorTargets" @unported struct SelectorTargets end
+@parity "dart2wasm/lib/dispatch_table.dart:328 SelectorTargets" mutable struct SelectorTargets
+    const all_target_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}}
+    const _dispatch_table_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}}
+    const static_dispatch_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}}
+    offset::Union{Int,Nothing}
+    const _target_set::Late{Base.IdSet{Core.MethodInstance}}
+    # the struct's one constructor, tagged; dart's constructor at :360 is its outer function
+    function SelectorTargets(::Val{:_}, all_target_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}}, _dispatch_table_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}},
+            static_dispatch_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}})
+        local self
+        self = new(all_target_ranges, _dispatch_table_ranges, static_dispatch_ranges, nothing,
+                   Late{Base.IdSet{Core.MethodInstance}}("dart2wasm/lib/dispatch_table.dart:392 SelectorTargets._targetSet",
+                       () -> Base.IdSet{Core.MethodInstance}(e.target for e in self.all_target_ranges)))
+        return self
+    end
+end
 
 """
-DispatchTable's dart fields: `procedureAttributeMetadata`, `translator`, `_selectorMetadata`, `_selectorInfo`, `_table`, `_tableIndexForReference`, `_definedWasmTable`, `_importedWasmTables`.
+Builds the dispatch table for member calls: for each selector a row of the classes that implement
+it, by class id, packed into one wasm table an instance call indexes by its receiver's class id.
+
+A Julia member is no instance member: Julia dispatches on every argument and a method belongs to
+its generic function, not to a class, so no class contributes a selector; and Julia's trim
+verifier, whose subset WasmTarget compiles (ledger D32), rejects every unresolved call, leaving each
+call resolved (an invoke) or split by Julia into isa tests and invokes. So the table this builds is
+empty by Julia's answer. If the subset ever admitted a dynamic call, the same code would fill it.
+
+Fields to come (2, each with its dispatch_table.dart line, TFA's selector metadata, which a Julia
+member never reads): `procedureAttributeMetadata` :399, `_selectorMetadata` :403.
 """
-@parity "dart2wasm/lib/dispatch_table.dart:396 DispatchTable" @unported struct DispatchTable end
+@parity "dart2wasm/lib/dispatch_table.dart:396 DispatchTable" struct DispatchTable
+    translator::KernelNodes
+    _selector_info::LinkedHashMap{Int,SelectorInfo}
+    _table::Late{Vector{Union{Core.MethodInstance,Nothing}}}
+    _table_index_for_reference::Late{IdDict{Core.MethodInstance,Int}}
+    _defined_wasm_table::Late{WasmBuilder.TableBuilder}
+    _imported_wasm_tables::Late{WasmTableImporter}
+    # the struct's one constructor, tagged, with dart's initializers; dart's constructor at :427 is
+    # its outer function
+    function DispatchTable(::Val{:_}, translator::KernelNodes)
+        local self
+        self = new(translator, LinkedHashMap{Int,SelectorInfo}(),
+            Late{Vector{Union{Core.MethodInstance,Nothing}}}("dart2wasm/lib/dispatch_table.dart:409 DispatchTable._table"),
+            Late{IdDict{Core.MethodInstance,Int}}("dart2wasm/lib/dispatch_table.dart:413 DispatchTable._tableIndexForReference"),
+            Late{WasmBuilder.TableBuilder}("dart2wasm/lib/dispatch_table.dart:415 DispatchTable._definedWasmTable"),
+            Late{WasmTableImporter}("dart2wasm/lib/dispatch_table.dart:416 DispatchTable._importedWasmTables",
+                () -> WasmTableImporter(self.translator, "dispatch")))
+        return self
+    end
+end
 
 """
 A row of a row-displacement table: its values sparsely, `(index, value)` sorted by index, and the
@@ -44,27 +89,121 @@ end
 
 @parity "dart2wasm/lib/dispatch_table.dart:291 SelectorInfo.containsTarget" @unported function contains_target(self::SelectorInfo, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/dispatch_table.dart:360 SelectorTargets" @unported function SelectorTargets(all_target_ranges, _dispatch_table_ranges, static_dispatch_ranges) end
+# dart asserts the dispatched and static ranges split all of them, in order: a located rejection
+@parity "dart2wasm/lib/dispatch_table.dart:360 SelectorTargets" function SelectorTargets(all_target_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}}, _dispatch_table_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}},
+        static_dispatch_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}})::SelectorTargets
+    length(all_target_ranges) == length(_dispatch_table_ranges) + length(static_dispatch_ranges) ||
+        reject!(Internal("dart2wasm/lib/dispatch_table.dart:360 SelectorTargets: the ranges do not split the targets"), "SelectorTargets")
+    local d = 1; local st = 1
+    for e in all_target_ranges
+        if d <= length(_dispatch_table_ranges) && _dispatch_table_ranges[d] == e
+            d += 1
+        elseif st <= length(static_dispatch_ranges) && static_dispatch_ranges[st] == e
+            st += 1
+        else
+            reject!(Internal("dart2wasm/lib/dispatch_table.dart:360 SelectorTargets: the ranges do not split the targets in order"), "SelectorTargets")
+        end
+    end
+    return SelectorTargets(Val(:_), all_target_ranges, _dispatch_table_ranges, static_dispatch_ranges)
+end
 
-@parity "dart2wasm/lib/dispatch_table.dart:397 DispatchTable._functionType" @unported function DispatchTable__function_type() end
+@parity "dart2wasm/lib/dispatch_table.dart:397 DispatchTable._functionType" DispatchTable__function_type()::WasmBuilder.IR.RefType = WasmBuilder.IR.RefType_func(; nullable = true)
 
-@parity "dart2wasm/lib/dispatch_table.dart:424 DispatchTable.getWasmTable" @unported function get_wasm_table(self::DispatchTable, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/dispatch_table.dart:424 DispatchTable.getWasmTable" get_wasm_table(self::DispatchTable, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.AbstractTable =
+    get(self._imported_wasm_tables[], self._defined_wasm_table[], module_)
 
-@parity "dart2wasm/lib/dispatch_table.dart:427 DispatchTable" @unported function DispatchTable(translator) end
+@parity "dart2wasm/lib/dispatch_table.dart:427 DispatchTable" DispatchTable(translator::KernelNodes)::DispatchTable = DispatchTable(Val(:_), translator)
 
-@parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" @unported function selector_for_target(self::DispatchTable, target::Core.MethodInstance) end
+# dart reads TFA's selector id of an instance member; a Julia member is none (its docstring)
+@parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" selector_for_target(self::DispatchTable, target::Core.MethodInstance)::SelectorInfo =
+    reject!(Internal("dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget: $target, no instance member, has no selector"), "DispatchTable.selectorForTarget")
 
-@parity "dart2wasm/lib/dispatch_table.dart:451 DispatchTable.indexForTarget" @unported function index_for_target(self::DispatchTable, target::Core.MethodInstance) end
+@parity "dart2wasm/lib/dispatch_table.dart:451 DispatchTable.indexForTarget" index_for_target(self::DispatchTable, target::Core.MethodInstance)::Union{Int,Nothing} =
+    get(self._table_index_for_reference[], target, nothing)
 
-@parity "dart2wasm/lib/dispatch_table.dart:453 DispatchTable._createSelectorForTarget" @unported function _create_selector_for_target(self::DispatchTable, target::Core.MethodInstance) end
+# made only for an instance member's target (build's addMember), which a Julia member never is
+@parity "dart2wasm/lib/dispatch_table.dart:453 DispatchTable._createSelectorForTarget" _create_selector_for_target(self::DispatchTable, target::Core.MethodInstance)::SelectorInfo =
+    reject!(Internal("dart2wasm/lib/dispatch_table.dart:453 DispatchTable._createSelectorForTarget: $target, no instance member"), "DispatchTable._createSelectorForTarget")
 
-@parity "dart2wasm/lib/dispatch_table.dart:489 DispatchTable._initializeWasmTable" @unported function _initialize_wasm_table(self::DispatchTable) end
+@parity "dart2wasm/lib/dispatch_table.dart:489 DispatchTable._initializeWasmTable" function _initialize_wasm_table(self::DispatchTable)::Nothing
+    local translator = self.translator
+    self._defined_wasm_table[] = WasmBuilder.define(main_module(translator).tables[], DispatchTable__function_type(), length(self._table[]))
+    for module_ in modules(translator)
+        # Ensure the dispatch table is imported into every module as the first table.
+        get_wasm_table(self, module_)
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/dispatch_table.dart:501 DispatchTable.build" @unported function build(self::DispatchTable) end
+"""
+Collect each class's selectors, their targets by class id, the selectors called through the table,
+and pack their rows. A Julia class has no instance member (the type's docstring): every class's
+selectors are its superclass's, none, so no selector has a target, none is called through the
+table, and the table is empty; a selector, if one were made, is no Julia member's, a located
+rejection.
+"""
+@parity "dart2wasm/lib/dispatch_table.dart:501 DispatchTable.build" function build(self::DispatchTable)::Nothing
+    local translator = self.translator
+    # Maps class to selector IDs of the class
+    local selectors_in_class = IdDict{DataType,LinkedHashMap{SelectorInfo,Core.MethodInstance}}()
+    for info in translator.classes_supers_first[]
+        # the top type has the members of Object, Julia's Any
+        local cls = something(info.cls, Any)
+        local super_info = info.super_info
+        local selectors = LinkedHashMap{SelectorInfo,Core.MethodInstance}()
+        if super_info !== nothing
+            for (k, v) in selectors_in_class[something(super_info.cls, Any)]
+                selectors[k] = v
+            end
+        end
+        # Julia's class has no instance member: a method belongs to its generic function
+        selectors_in_class[cls] = selectors
+    end
+    local selector_targets = LinkedHashMap{SelectorInfo,LinkedHashMap{Int,Core.MethodInstance}}()
+    local classes = translator.classes[]
+    for class_id in 0:translator.class_id_numbering[].max_concrete_class_id
+        local cls = classes[class_id + 1].cls
+        cls === nothing && continue
+        for (selector_info, target) in selectors_in_class[cls]
+            get!(() -> LinkedHashMap{Int,Core.MethodInstance}(), selector_targets, selector_info)[class_id] = target
+        end
+    end
+    (isempty(self._selector_info) && isempty(selector_targets)) ||
+        reject!(Internal("dart2wasm/lib/dispatch_table.dart:501 DispatchTable.build: a selector, which no Julia member makes"), "DispatchTable.build")
+    # Assign selector offsets: no selector is used via a dispatch table call
+    local rows = Row{Core.MethodInstance}[]
+    self._table[] = build_row_displacement_table(rows)
+    local index = IdDict{Core.MethodInstance,Int}()
+    for (i, entry) in enumerate(self._table[])
+        entry === nothing && continue
+        haskey(index, entry) || (index[entry] = i - 1)
+    end
+    self._table_index_for_reference[] = index
+    _initialize_wasm_table(self)
+    return nothing
+end
 
-@parity "dart2wasm/lib/dispatch_table.dart:800 DispatchTable.output" @unported function output(self::DispatchTable) end
+"""
+Fill the dispatch table's slots with their targets, a long run of one target by `table.fill` in the
+start function, a short one in the element section. The table is empty in a Julia program (the
+type's docstring), so nothing is filled; a slot a target held, if one did, is set in the element
+section, dart's table.fill of a long run waiting for a table that has entries.
+"""
+@parity "dart2wasm/lib/dispatch_table.dart:800 DispatchTable.output" function output(self::DispatchTable)::Nothing
+    local translator = self.translator
+    local table = self._table[]
+    for (i, target) in enumerate(table)
+        target === nothing && continue
+        local target_function = get_existing_function(translator.functions[], target)
+        target_function === nothing && continue
+        local target_module_builder = translator.module_to_builder[target_function.enclosing_module]
+        WasmBuilder.set_function_at(WasmBuilder.active_function_segment_builder_for(target_module_builder.elements[], get_wasm_table(self, target_module_builder)), i - 1, target_function)
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/dispatch_table.dart:919 _isUsedViaDispatchTableCall" @unported function _is_used_via_dispatch_table_call(selector::SelectorInfo) end
+@parity "dart2wasm/lib/dispatch_table.dart:919 _isUsedViaDispatchTableCall" _is_used_via_dispatch_table_call(selector::SelectorInfo)::Bool =
+    reject!(Internal("dart2wasm/lib/dispatch_table.dart:919 _isUsedViaDispatchTableCall: a selector, which no Julia member makes"), "_isUsedViaDispatchTableCall")
 
 @parity "dart2wasm/lib/dispatch_table.dart:926 _parameterInfoFromReferences" @unported function _parameter_info_from_references(unreachable_metadata::NoCounterpart, references::Vector{Core.MethodInstance}, use_default_value_sentinel::Bool) end
 

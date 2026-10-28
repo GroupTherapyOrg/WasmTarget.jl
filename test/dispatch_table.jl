@@ -51,3 +51,36 @@ _mi(f, T) = Core.Compiler.specialize_method(Base._which(Base.signature_type(f, T
         @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal
     end
 end
+
+module EmptyTableCases
+abstract type S end
+struct A <: S; x::Int; end
+struct B <: S; y::Float64; end
+area(a::A) = Float64(a.x)
+area(b::B) = b.y
+k(s::S) = area(s)
+end
+
+@testset "dispatch_table.dart, dynamic_dispatch_table.dart: empty by the trim verifier's subset (D32)" begin
+    local W = WasmTarget
+    local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
+    # an abstract receiver: Julia union-splits the call into isa tests and invokes, so no NIR
+    # statement is a dynamic call
+    local t = DD.Translator(W.check_subset(EmptyTableCases.k, (EmptyTableCases.S,), "dispatch_table"), data, DD.TranslatorOptions())
+    DD._init_modules(t, nothing)
+    collect(DD.ClassInfoCollector(t))
+    @test isempty(DD.DynamicCallSiteCollector_collect(t.component))
+    local dt = t.dispatch_table[]
+    DD.build(dt)
+    # no class has an instance member: no selector, an empty table, defined in the main module
+    @test isempty(dt._selector_info) && isempty(dt._table[]) && isempty(dt._table_index_for_reference[])
+    @test dt._defined_wasm_table[].min_size == 0 && DD.get_wasm_table(dt, DD.main_module(t)) === dt._defined_wasm_table[]
+    @test DD.index_for_target(dt, first(b.ci.def for b in t.component)) === nothing
+    local ddt = t.dynamic_dispatch_table[]
+    DD.build(ddt, DD.DynamicCallSiteCollector_collect(t.component))
+    @test isempty(ddt._table[]) && ddt._defined_targets_table[].min_size == 0 && ddt._defined_class_ids_table[].min_size == 0
+    DD.output(dt); DD.output(ddt)
+    # a member asks for no selector: a located rejection
+    local e = try; DD.selector_for_target(dt, first(b.ci.def for b in t.component)); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+end

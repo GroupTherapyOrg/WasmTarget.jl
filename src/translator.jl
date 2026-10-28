@@ -72,7 +72,7 @@ The translation from the program to wasm, and the hub of the compiler's global s
 
 Its fields arrive with the pieces that read them, in dart's order: `options`; `component`, the
 program, the NIR of the closed world Julia's trim verifier accepted (dart's Kernel `Component`);
-`closureLayouter`, `classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`,
+`closureLayouter`, `classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`, `dispatchTable`, `dynamicDispatchTable`,
 `globals`, `dartGlobals`, `constants`, `types`, `compilationQueue`, `functions` (each
 late, assigned where dart assigns it once its class is ported); `membersBeingGenerated` (a member
 a Core.MethodInstance); `voidMarker`; `_moduleOutputData`, `_outputToBuilder`, `_builderToOutput`,
@@ -85,11 +85,11 @@ the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8
 integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
 every other primitive class have none).
 
-Fields to come (66, each with its translator.dart line): `symbols` :100, `libraries` :104,
+Fields to come (64, each with its translator.dart line): `symbols` :100, `libraries` :104,
 `coreTypes` :106, `typeEnvironment` :107, `hierarchy` :108, `subtypes` :109, `directCallMetadata`
 :115, `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123, `inferredReturnTypeMetadata`
 :127, `unboxingInfoMetadata` :131, `procedureAttributeMetadata` :136, `unreachableMetadata` :140,
-`index` :146, `dispatchTable` :151, `dynamicDispatchTable` :152, `_exceptionTags` :157, `loadingMap`
+`index` :146, `_exceptionTags` :157, `loadingMap`
 :161, `interopMemberNamer` :164, `internalizedStringsForJSRuntime` :189,
 `_internalizedStringGlobals` :190, `typeParameterIndex` :195, `_declaredFieldTables` :197, `_importedFieldTables` :198, `membersContainingInnerFunctions` :202,
 `constructorClosures` :204, `constructorInfo` :205, `_memories` :210, `_ffiMemoryImports` :213,
@@ -116,6 +116,8 @@ the translator holds each collaborator.
     class_info_collector::Late{ClassInfoCollector}
     cross_module_function_table::Late{CrossModuleFunctionTable}
     table_based_globals::Late{TableBasedGlobals}
+    dispatch_table::Late{DispatchTable}
+    dynamic_dispatch_table::Late{DynamicDispatchTable}
     globals::Late{Globals}
     dart_globals::Late{DartGlobals}
     constants::Late{Constants}
@@ -151,6 +153,8 @@ the translator holds each collaborator.
             Late{ClassInfoCollector}("dart2wasm/lib/translator.dart:148 Translator.classInfoCollector"),
             Late{CrossModuleFunctionTable}("dart2wasm/lib/translator.dart:149 Translator.crossModuleFunctionTable"),
             Late{TableBasedGlobals}("dart2wasm/lib/translator.dart:150 Translator.tableBasedGlobals"),
+            Late{DispatchTable}("dart2wasm/lib/translator.dart:151 Translator.dispatchTable"),
+            Late{DynamicDispatchTable}("dart2wasm/lib/translator.dart:152 Translator.dynamicDispatchTable"),
             Late{Globals}("dart2wasm/lib/translator.dart:153 Translator.globals"),
             Late{DartGlobals}("dart2wasm/lib/translator.dart:154 Translator.dartGlobals"),
             Late{Constants}("dart2wasm/lib/translator.dart:155 Translator.constants"),
@@ -387,6 +391,8 @@ end
     self.class_info_collector[] = ClassInfoCollector(self)
     self.cross_module_function_table[] = CrossModuleFunctionTable(self)
     self.table_based_globals[] = TableBasedGlobals(self)
+    self.dispatch_table[] = DispatchTable(self)
+    self.dynamic_dispatch_table[] = DynamicDispatchTable(self)
     self.compilation_queue[] = CompilationQueue(self)
     self.functions[] = FunctionCollector(self)
     self.types[] = Types(self)
