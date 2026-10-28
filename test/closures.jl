@@ -6,6 +6,11 @@ using WasmTarget
 const D = WasmTarget.Dart2Wasm
 const IR = WasmTarget.WasmBuilder.IR
 
+# a method's body as the closed world holds it, its NirBody
+body_of(f, at) = WasmTarget.Dart2Wasm.Translator(WasmTarget.check_subset(f, at, "closures"),
+    WasmTarget.Dart2Wasm.build_module_output_data(WasmTarget.Dart2Wasm.DefaultModuleStrategy(WasmTarget.Dart2Wasm.WasmCompilerOptions_default_options())),
+    WasmTarget.Dart2Wasm.TranslatorOptions()).component.bodies[1]
+
 module ClosuresCases
 kf(x; a = 1, b = 2) = x + a + b
 kg(x; c = 1) = x + c
@@ -35,7 +40,7 @@ end
     local r = D.ClosureRepresentationsForParameterCount()
     # each method's keyword arguments are one union: kf's a and b, kh's b and d, kg's c alone
     for f in (ClosuresCases.kf, ClosuresCases.kg, ClosuresCases.kh)
-        D.register_function(r, only(methods(f)))
+        D.register_function(r, body_of(f, (Int,)))
     end
     @test first.(r.name_ids) == ["a", "b", "c", "d"]
     # the calls' keyword names, a NamedTuple's names: each combination once, in compareTo order
@@ -107,7 +112,7 @@ end
     @test D.parent_field_index(child) == 0 && D.this_field_index(child) == 1
     local cap = D.Capture(W.ClassField(closure_type, 1, "a", Int, false), false)
     @test !cap.written && !cap.is_in_initializer
-    local lam = D.Lambda__(only(methods(ClosuresCases.mk(1))), :closures, mi, c, 0)
+    local lam = D.Lambda__(t.component.bodies[1], :closures, mi, c, 0)
     @test lam.enclosing_member_closures === c && lam.index == 0
 end
 
@@ -119,8 +124,8 @@ end
     collect(l)
     @test D.max_type_argument_count(l) == 0 && !l.uses_function_apply_with_named_arguments[]
     # a method's signature: its positional arguments after the function object, its keyword names
-    D._visit_function_node(l, only(methods(ClosuresCases.kf)))
-    D._visit_function_node(l, only(methods(ClosuresCases.kh)))
+    D._visit_function_node(l, body_of(ClosuresCases.kf, (Int,)))
+    D._visit_function_node(l, body_of(ClosuresCases.kh, (Int,)))
     @test D.max_type_argument_count(l) == 1 && D.max_positional_count_for(l, 0) == 2
     local seen = Int[]
     D.for_each_positional_argument_count(l, 0, n -> push!(seen, n))
@@ -136,7 +141,33 @@ end
     @test e isa W.RejectionError && e.rejection isa W.Internal
     local eg = try; D._create_representation(l, 1, 0, String[], nothing, nothing, Int[0]); nothing; catch x; x; end
     @test eg isa W.RejectionError && eg.rejection isa W.Internal && occursin("no type arguments", eg.rejection.site)
-    # Julia has no function types and no generic instantiation: those paths reject as Internal
+    # a function type is a Tuple type, its value a DataType: a world with no DataType class rejects
     local e2 = try; l.function_type_type[]; nothing; catch x; x; end
-    @test e2 isa W.RejectionError && e2.rejection isa W.Internal
+    @test e2 isa W.RejectionError && e2.rejection isa W.Internal && occursin("function type's class", e2.rejection.site)
+end
+
+@testset "closures.dart: the capture finder and context collector at depth 0" begin
+    local W = WasmTarget
+    local t = D.Translator(W.check_subset(ClosuresCases.mk, (Int,), "closures"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local body = t.component.bodies[1]
+    local mi = body.ci.def
+    local c = D.Closures(t, mi; find_captures = false)
+    local f = D._CaptureFinder(c, mi)
+    @test D.depth(f) == 0 && f._current_source === mi.def.file && D.translator(f) === t
+    # the member's own body at depth 0: its uses of values, arguments, `this` and static parameters
+    # are no captures, as dart's rule answers there
+    D.visit_function_node(f, body)
+    D.default_variable(f, W.NirSSA(1)); D.visit_variable_get(f, W.NirSSA(1)); D.visit_variable_get(f, W.NirArgument(2))
+    D.visit_type_parameter_type(f, TypeVar(:T)); D.visit_this_expression(f, W.NirArgument(1))
+    @test isempty(c.captures) && isempty(c.lambdas) && !c._is_this_captured && isempty(f.variable_depth)
+    # one level deeper, a variable declared outside is a capture, which Julia never leaves in the NIR
+    push!(f.function_is_sync_star_or_async, false)
+    local e = try; D.visit_variable_get(f, W.NirSSA(1)); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+    D._visit_this(f)
+    @test c._is_this_captured
+    # the context collector: a member's one scope is its own context, the outermost holding `this`
+    local cc = D._ContextCollector(c, false)
+    collect(cc, mi)
+    @test haskey(c.contexts, mi) && c.contexts[mi].contains_this && c.contexts[mi].parent === nothing && cc.current_context === nothing
 end
