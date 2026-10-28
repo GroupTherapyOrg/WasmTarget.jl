@@ -197,14 +197,38 @@ let defs = quote
         end
     end
 
-    # the last line a definition's expression spans
-    @quarantine "Julia's parser records lines as LineNumberNodes inside the expression" Core.LineNumberNode function _last_line(ex, line::Int)::Int
-        ex isa LineNumberNode && return max(line, ex.line)
-        ex isa Expr || return line
-        for a in ex.args
-            line = _last_line(a, line)
+    # the file whose text the definitions being evaluated come from, its text and the byte index each
+    # line starts at: one file at a time, as the package loads them
+    @quarantine "a definition's text is read from its file, one file held while the package loads it" Base.Ref const _SOURCE = Ref{Tuple{String,String,Vector{Int}}}(("", "", Int[]))
+
+    # the text of `file` and the byte index each of its lines starts at
+    @quarantine "a definition's text is read from its file, Julia's include unit" Base.read function _source_text(file::String)::Tuple{String,Vector{Int}}
+        local held = _SOURCE[]
+        held[1] == file && return (held[2], held[3])
+        local text = read(file, String)
+        local starts = vcat(1, [i + 1 for i in findall(==(UInt8('\n')), codeunits(text))])
+        _SOURCE[] = (file, text, starts)
+        return (text, starts)
+    end
+
+    # the last line of a definition's text: Julia's parser reads the statement at its macro's line in
+    # its file and says where that statement's text ends, its closing `end` included (the parsed
+    # expression records no line for a closing `end`, so its last LineNumberNode stops a line short);
+    # a definition with no file, evaluated from an expression alone, ends at the last line its
+    # expression records
+    @quarantine "Julia's parser says where a statement's text ends; the parsed expression records no line for its closing end" Base.Meta.parse function _last_line(def, source::LineNumberNode)::Int
+        local file = string(something(source.file, :none))
+        if isfile(file)
+            local text, starts = _source_text(file)
+            if 1 <= source.line <= length(starts)
+                local _, next = Meta.parse(text, starts[source.line]; raise = false)
+                local stop = findprev(!isspace, text, prevind(text, next))
+                stop === nothing || return searchsortedlast(starts, stop)
+            end
         end
-        return line
+        local recorded(ex, line) = ex isa LineNumberNode ? max(line, ex.line) :
+                                   ex isa Expr ? foldl((l, a) -> recorded(a, l), ex.args; init = line) : line
+        return recorded(def, source.line)
     end
 
     # a function definition's call, under its `where` and return annotation; nothing for no call
@@ -315,7 +339,7 @@ let defs = quote
         (_inside(file, SRC) || _within(mod, @__MODULE__)) && !_inside(file, julia) &&
             refuse("a definition outside src/julia carries @parity, the dart definition it copies")
         local names, _ = _defines(def, source)
-        return QuarantineEntry(mod, necessity, string(api), names, Symbol(file), source.line, _last_line(def, source.line),
+        return QuarantineEntry(mod, necessity, string(api), names, Symbol(file), source.line, _last_line(def, source),
                                UInt(0):UInt(0), Int32(0), Method[])
     end
 
@@ -992,7 +1016,7 @@ end
     end
     local declares = Meta.isexpr(def, :struct) || Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive) ||
         (Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@enum"), Symbol("@closed")))
-    return (ParityEntry(mod, anchor, ported, declares, names, Symbol(file), source.line, _last_line(def, source.line), UInt(0):UInt(0), Int32(0), Method[]), def)
+    return (ParityEntry(mod, anchor, ported, declares, names, Symbol(file), source.line, _last_line(def, source), UInt(0):UInt(0), Int32(0), Method[]), def)
 end
 
 """

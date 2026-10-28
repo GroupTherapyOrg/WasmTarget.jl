@@ -30,3 +30,15 @@ end
     local p2 = only(x for x in W.REGISTRY if x isa W.ParityEntry && x.anchor == p.anchor)
     @test p2.pid == getpid() && p2.worlds != p.worlds
 end
+
+# an entry's lines are its definition's whole text: parsed alone, lines first to last are one
+# complete statement, its closing `end` the last line (a line short, the statement is incomplete)
+@testset "the registry: an entry's lines span its definition's text" begin
+    local text(e, a, b) = join(readlines(string(e.file))[a:b], '\n')
+    local complete(s) = (ex = Meta.parse(s; raise = false); !(Meta.isexpr(ex, :incomplete) || Meta.isexpr(ex, :error)))
+    local q = only(x for x in W.REGISTRY if x isa W.QuarantineEntry && :check_subset in x.names)
+    @test strip(readlines(string(q.file))[q.last]) == "end"
+    @test complete(text(q, q.first, q.last)) && !complete(text(q, q.first, q.last - 1))
+    local bad = [e for e in W.REGISTRY if isfile(string(e.file)) && !complete(text(e, e.first, e.last))]
+    @test isempty(bad)
+end
