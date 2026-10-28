@@ -3645,3 +3645,108 @@ Resolution: this entry lands alone, as one commit, prose only, and fixes nothing
 (L148 checks the log's shape and reports the lag; the old landing path deleted), past this range, to be read in entry 42.
 A41S1 is open on MARCH 1.A4. A41S2 and A41S3 are open on MARCH 1.C. A41S4, A41E1, A41E3 and A41E5 are open on MARCH 1.L.
 A41E6 and A41E7 are open on MARCH 1.T.
+
+## 2026-10-28 — audited through 1fabf0c0 (8f63b00c..1fabf0c0: CompilationQueue, RecordShape, L154's entry commit, the old landing path deleted, ClassInfo and its collector, wasm_builder's IR and sections, translateType, entry 41, a Translator only from a ClosedWorld, the skeleton's imports)
+
+The forty-second audit, beside the work, covers 27fe9c7c (CompilationQueue, drainCompletionQueue, isStandalone,
+writeULEB128), b0c6d789 (RecordShape), 6e96d768 (L154 reads the fixes after the commit adding the latest entry's heading),
+4bf77429 (the old landing path deleted; L148 the log's shape with the lag reported; C0 and C10 rewritten;
+`Charter-change: C0 C10 authorised by Dale 2026-10-28`), 8c659360 (ClassInfo, ClassInfoCollector, collect; ClassField),
+e0b7e226 (src/wasm_builder/ir/ and serialize/sections.jl ported in place of their stubs), 5f974c99 (translateType,
+translateStorageType, translateReturnType, the builtin types), 6a52b2cf (their tests), 629d8c39 (entry 41; its author's),
+653fbfc1 (a Translator only from a ClosedWorld; implemented types by Julia's `<:`) and 1fabf0c0 (the skeleton resolves a
+type name through its file's imports). No wrong answer: WasmTarget compiles nothing yet. Every finding rests on one exact
+command, quoted. Entry 41 missed one defect in its own range, the orchestrator's H1: 07aa7542 typed 29 stub parameters
+with WasmBuilder's Block, Expression, Throw, Rethrow and FunctionType where dart means Kernel's, fixed at its source by
+1fabf0c0. Findings A42S1 to A42S5 and A42E1.
+
+Area: builder — e0b7e226: each IR class's struct has its one inner constructor; dart's abstract members reject as
+Internal on the abstract type; `late final` fields are Late cells. Its goldens come from outside the code under test,
+`wasm-tools parse` 1.244.0's bytes for each instruction's text (test/wasm_builder/ir_modules.jl:1–6). It departs from
+dart at one place, measured against the format: dart writes a multi-memory memarg's offset before its memory index
+(`sed -n 1593,1601p pkg/wasm_builder/lib/src/ir/instruction.dart`: `s.writeByte(64 + align); s.writeUnsigned(offset);
+s.writeUnsigned(memory.index);`), where the multi-memory binary format reads the index first; the port writes the index
+first, a dart defect fixed at the source with a case (D12), not a drift. (A42S4, low) `const Indexable__global_id =
+Ref{Int}(0)` (src/wasm_builder/ir/indexable.jl) ports dart's `static int _globalId` as process-global state: every part's
+debugging `name` counts the parts built before it in the session, so two compiles of one program name their parts apart,
+and a value a precompile workload leaves in the Ref is saved in the package image. The name reaches no emitted section
+(sections.dart reads `functionName`, `grep -n '\.name\b' serialize/sections.dart` gives only line 886's defType.name),
+so it is low; the counter belongs to the ModuleBuilder, the one owner of a compile's parts. (A42S5, low) Serializer.write
+takes `Union{Serializable, IR.ElementSegment, IR.DataSegment, IR.DefinedFunction, …, IR.Module}`
+(src/wasm_builder/serialize/serializer.jl:118): Julia's one supertype cannot also place dart's interface implementors under
+Serializable, so the interface is a hand list at one method, and an implementor left out fails as a MethodError at the
+call, not a located rejection where it is declared; the list matches `grep -rn 'implements Serializable\|implements
+Import' pkg/wasm_builder/lib/src` today.
+
+Area: collection and planning — 8c659360, 653fbfc1, b0c6d789, 27fe9c7c. 653fbfc1 fixes A41S2: Translator's one inner
+constructor is `Translator(::Val{:_}, world::ClosedWorld, options)` (src/translator.jl:129), the component read from the
+ClosedWorld. Its implemented types are Julia's `<:` off the supertype chain for a concrete class
+(`class_implemented_types`, src/julia/classes.jl), so `Tuple{Int64}` implements `Tuple{Any}` and the ranges follow
+Julia's subtyping for the covariant Tuples, where 95447a02 rejected them. A41S3 stands: `DataType <: Type{Int}` is false,
+so no class implements Type{Int} while the value Int is a member. Masquerades: `_compute_masquerades` is empty because
+`typeof` is a value's own class; sound. CompilationQueue keeps dart's last-in, first-out `removeLast`, an empty pop a
+located Internal rejection; sound.
+
+(A42S2, medium) A field Julia may leave undefined gets a non-nullable wasm field. dart's typeOfField asserts its field is
+not `late` (`sed -n 2087,2090p translator.dart`: `assert(!node.isLate);`), its late fields lowered to nullable storage
+before; the port drops the assertion, `type_of_field(self, node::ClassField)::Type = node.type` (src/translator.jl:467),
+and _generate_fields stores `translate_type_of_field` as the field's type. Julia's compiler answers which fields may be
+undefined: `julia --startup-file=no -e 'mutable struct M; a::Vector{Int}; b::Int; M() = new(); M(a) = new(a); end;
+println(Base.Compiler.datatype_min_ninitialized(M))'` gives 0, and `isdefined(M(), :a)` is false, yet M's field `a` would
+be a non-nullable reference, which wasm cannot leave unset. When `new` with fewer arguments is emitted, the choice is a
+default value or a rejection; D3 asks for Julia's answer at the field: a reference field past
+datatype_min_ninitialized(T) is nullable, read with Julia's UndefRefError check, or the field rejects, located, until it
+is.
+
+(A42S3, medium) RecordShape takes dart's records, whose named fields form a sorted set, where Julia's named tuples are
+ordered. `julia --startup-file=no -e 'println((typeof((b=1,a=2)) == typeof((a=2,b=1)), (b=1,a=2) == (a=2,b=1),
+fieldnames(typeof((b=1,a=2)))))'` gives "(false, false, (:b, :a))". The port sorts the names
+(`sort!(collect(index); by = first)`, src/records.jl) and test/records.jl:15–16 expects shapes "equal by positionals and
+names, whatever the names' given order; hashed alike", dart's answer as the expected value. When fromType maps
+NamedTuple{(:b,:a)} and NamedTuple{(:a,:b)}, they would share one shape, one record class and one field order, two Julia
+types made one. The shape of a NamedTuple keeps Julia's field order, and the test expects what Julia says.
+
+Area: emission and diagnostics — 5f974c99's translateStorageType: Union{} and Nothing are the nullable none reference,
+Any the top type, a Union with Nothing nullable over `Base.nonnothingtype`, other Unions `typejoin`'s class, a type as a
+value its kind, and a UnionAll, an open Type{T} and a primitive class with no wasm type reject, located; the structure is
+dart's (`sed -n 1067,1140p translator.dart`), the DartType reads replaced at named points. (A42S1, medium) The packed
+integers carry dart's representation without dart's reason. dart's translateType: "We represent the packed i8/i16 types
+as zero-extended i32 type. Dart code can currently only obtain them via loading from packed arrays and only use them for
+storing into packed arrays (there are no conversion or other operations on WasmI8/WasmI16)" (`sed -n 1048,1051p
+translator.dart`). The port keeps the first sentence (src/translator.jl, translate_type) and maps Julia's Int8, UInt8,
+Int16 and UInt16 to i8 and i16 (builtin_types), integers Julia computes with, compares signed and converts. Julia's answer
+for a small integer held in a wider register is its ABI's: `julia --startup-file=no -e 'using InteractiveUtils; f(x)=x;
+code_llvm(stdout, f, (Int8,); debuginfo=:none); code_llvm(stdout, f, (UInt8,); debuginfo=:none)' | grep define` gives
+`define i8 @julia_f_129(i8 signext %"x::Int8")` and `define i8 @julia_f_131(i8 zeroext %"x::UInt8")`: Int8 sign-extended,
+UInt8 zero-extended. A zero-extended Int8(-1) is 255 in its i32, so a signed compare or a widening that trusts the i32
+answers wrong unless every signed operation re-extends; the representation needs Julia's answer (signext for the signed
+classes, zeroext for the unsigned), stated with its precedent and checked where a value is read from a packed field
+(struct.get_s for Int8 and Int16, struct.get_u for UInt8 and UInt16). One smaller point: the nullable primitive path
+reads `self.class_info[cls]`, a KeyError when the box was never collected, where the class path beside it rejects
+`the class … has no class info`, located.
+
+stopgap in disguise: the ClosedWorld typestate now reaches the Translator by construction (653fbfc1); the Serializable
+interface is a hand list at one method (A42S5); RecordShape's sorted names and the packed integers' zero extension are
+dart's semantics passing for Julia's (A42S3, A42S1).
+precedent: the Translator's tagged constructor, Rust's private-field construction; implemented types, dart's
+implementedTypes answered by Julia's `<:`; the memarg order, the multi-memory binary format and wasm-tools, its alarm.
+
+Area: enforcement and prose — every hunk of 4bf77429 (.github/workflows, .gitignore, AGENTS.md, dev/, test/), 6e96d768
+and 653fbfc1's and 1fabf0c0's test and dev hunks. 4bf77429 fixes A41E2 (L148 checks the chain, the four areas and the
+Resolution and reports the lag, its own negative) and A41E4 (dev/land.sh, land_queue.sh, block.jl, the runner and
+L194, L195, L197 and L198 deleted). 6e96d768 is sound: `git log -1 -S<heading> -- dev/AUDIT.md` finds the commit that
+added the entry's heading, so a later header edit hides no Fixes: line, and its scratch-repository case reaches it.
+(A42E1, medium) 4bf77429 rewrites C10 and drops its numbers with nothing to check them: the old text's "a 60-s target, red
+only past twice it" and L197's "a 300-s target for every change red only past 600 s" leave the charter (`git show
+4bf77429 -- dev/CHARTER.md`), while dev/LEDGER.md's D13 and D14 still state those bands and cite dev/ship.sh and
+dev/check.sh, which judge no time (A41E3). The change is a weakening of C10 under `Charter-change: C0 C10 authorised by
+Dale 2026-10-28`, and no program can confirm the line: `grep -c 2026-10-28 dev/.block/charter_authorised` in the main
+tree gives 0, and since 4bf77429 no file in the tree reads that record (A41E5). Requirements: D3 (A42S1, A42S2, A42S3);
+D9 (A42S5, the KeyError); D17 and D19 (A42E1); no lock fired inside its band.
+
+Landing times: not measured; dev/ship.sh writes no landing log (A41E3). Entry 41 landed in 37.5 s of `bash dev/ship.sh`
+wall, its check 35 s.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41S2 is fixed by 653fbfc1, and A41E2
+and A41E4 by 4bf77429. A42S1, A42S2 and A42S3 are open on MARCH 1.C. A42S4 and A42S5 are open on MARCH 1.B. A42E1 is
+open on MARCH 1.L.
