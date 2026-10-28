@@ -225,9 +225,43 @@ end
 end
 
 """
-RuntimeTypeInformation's dart fields: `translator`, `_substitutionSubclassToSuperclass`, `_substitutionSuperclassToSubclass`, `_substitutionTable`, `_substitutionTableByIndex`, `typeRowDisplacementOffsets`, `typeRowDisplacementTable`, `typeRowDisplacementSubstTable`, `canonicalSubstitutionTable`, `typeNames`, `_requiresSubstitutionForSubclasses`.
+The data the runtime's type checks read: the name of every class, and a row-displacement table of
+which class is a subclass of which, with the substitution that turns a subclass's type arguments
+into the superclass's.
+
+A Julia class is an instance with its parameters bound, so a superclass's arguments are fixed by
+the superclass itself. Every substitution is therefore the identity (`noSubstitutionIndex`), and the
+canonical substitution table holds the empty one alone. A class's subclasses are the classes of the
+closed world whose supertype chain reaches it, which is Julia's `supertype` answer where dart reads
+its class hierarchy. dart's maps iterate in insertion order, and so the rows do: LinkedHashMap.
 """
-@parity "dart2wasm/lib/types.dart:1190 RuntimeTypeInformation" @unported struct RuntimeTypeInformation end
+@parity "dart2wasm/lib/types.dart:1190 RuntimeTypeInformation" struct RuntimeTypeInformation
+    translator::KernelNodes
+    _substitution_subclass_to_superclass::Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}
+    _substitution_superclass_to_subclass::Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}
+    _substitution_table::Late{Dict{InstanceConstant,Int}}
+    _substitution_table_by_index::Late{Vector{InstanceConstant}}
+    type_row_displacement_offsets::Late{Constant}
+    type_row_displacement_table::Late{Constant}
+    type_row_displacement_subst_table::Late{Constant}
+    canonical_substitution_table::Late{Constant}
+    type_names::Late{Constant}
+    _requires_substitution_for_subclasses::Dict{Int,Bool}
+    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
+    # :1217, which builds the rules and the tables, is its outer function
+    RuntimeTypeInformation(::Val{:_}, translator::KernelNodes) =
+        new(translator,
+            Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}("dart2wasm/lib/types.dart:1200 RuntimeTypeInformation._substitutionSubclassToSuperclass"),
+            Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}("dart2wasm/lib/types.dart:1201 RuntimeTypeInformation._substitutionSuperclassToSubclass"),
+            Late{Dict{InstanceConstant,Int}}("dart2wasm/lib/types.dart:1202 RuntimeTypeInformation._substitutionTable"),
+            Late{Vector{InstanceConstant}}("dart2wasm/lib/types.dart:1203 RuntimeTypeInformation._substitutionTableByIndex"),
+            Late{Constant}("dart2wasm/lib/types.dart:1205 RuntimeTypeInformation.typeRowDisplacementOffsets"),
+            Late{Constant}("dart2wasm/lib/types.dart:1206 RuntimeTypeInformation.typeRowDisplacementTable"),
+            Late{Constant}("dart2wasm/lib/types.dart:1207 RuntimeTypeInformation.typeRowDisplacementSubstTable"),
+            Late{Constant}("dart2wasm/lib/types.dart:1208 RuntimeTypeInformation.canonicalSubstitutionTable"),
+            Late{Constant}("dart2wasm/lib/types.dart:1209 RuntimeTypeInformation.typeNames"),
+            Dict{Int,Bool}())
+end
 
 """
 Computes the type parameter offset of each binder nested in a type, and the index of each of its
@@ -318,7 +352,7 @@ Julia may be values as well as types. The array is a constant when every element
 """
 @parity "dart2wasm/lib/types.dart:192 Types._makeTypeArray" function _make_type_array(self::Types, code_gen::AstCodeGenerator, types::Vector{Type})::Nothing
     if all(t -> is_type_constant(self, t), types)
-        local constants = self.translator.constants
+        local constants = self.translator.constants[]
         instantiate_constant(constants, code_gen.b, make_type_array(constants, types), self.type_array_expected_type[])
     else
         for type_ in types
@@ -366,7 +400,8 @@ flattened and ordered), and it has no `FutureOr`, so the type is already normal.
 
 """
 Makes a type value on the stack and returns its wasm type. A type with no free type variable is a
-constant: Julia's type value itself, as the NIR holds a literal (`Core.Const`). dart makes the other
+constant: Julia's type value itself, as the NIR holds a literal (`Core.Const`), its kind of Constant
+`julia_constant`'s (src/julia/constant.jl). dart makes the other
 types at run time from the type parameters in scope. In Julia a type with a free type variable
 reaches code only in a method Julia did not specialize on that parameter, and there it rejects,
 located, until such methods compile.
@@ -376,7 +411,7 @@ located, until such methods compile.
     type_ = normalize(self, type_)
     local b = code_gen.b
     if is_type_constant(self, type_)
-        instantiate_constant(self.translator.constants, b, Core.Const(type_), non_nullable_type_type(self))
+        instantiate_constant(self.translator.constants[], b, julia_constant(Core.Const(type_), "Types.makeType"), non_nullable_type_type(self))
         return non_nullable_type_type(self)
     end
     reject!(Unquarantined("src/types.jl makeType: the type $type_, whose free type variables an unspecialized method leaves to run time"), "Types.makeType")
@@ -693,21 +728,180 @@ end
 
 @parity "dart2wasm/lib/types.dart:1197 RuntimeTypeInformation.coreTypes" @unported function core_types(self::RuntimeTypeInformation) end
 
-@parity "dart2wasm/lib/types.dart:1198 RuntimeTypeInformation.types" @unported function types(self::RuntimeTypeInformation) end
+@parity "dart2wasm/lib/types.dart:1198 RuntimeTypeInformation.types" types(self::RuntimeTypeInformation)::Types = self.translator.types[]
 
-@parity "dart2wasm/lib/types.dart:1217 RuntimeTypeInformation" @unported function RuntimeTypeInformation(translator) end
+@parity "dart2wasm/lib/types.dart:1217 RuntimeTypeInformation" function RuntimeTypeInformation(translator::KernelNodes)::RuntimeTypeInformation
+    local self = RuntimeTypeInformation(Val(:_), translator)
+    _build_type_rules(self)
+    _setup_rtt(self)
+    return self
+end
 
-@parity "dart2wasm/lib/types.dart:1222 RuntimeTypeInformation.requiresTypeArgumentSubstitution" @unported function requires_type_argument_substitution(self::RuntimeTypeInformation, superclass) end
+@parity "dart2wasm/lib/types.dart:1222 RuntimeTypeInformation.requiresTypeArgumentSubstitution" function requires_type_argument_substitution(self::RuntimeTypeInformation, superclass::DataType)::Bool
+    local id = get(self.translator.class_id_numbering[].class_ids, superclass, nothing)
+    id === nothing && reject!(Internal("dart2wasm/lib/types.dart:1222 RuntimeTypeInformation.requiresTypeArgumentSubstitution: $superclass has no class id"), "RuntimeTypeInformation.requiresTypeArgumentSubstitution")
+    return get!(self._requires_substitution_for_subclasses, id) do
+        local subclass_substitutions = get(self._substitution_superclass_to_subclass[], id, nothing)
+        subclass_substitutions === nothing && return false
+        for (_, substitution_index) in subclass_substitutions
+            substitution_index != RuntimeTypeInformation_no_substitution_index() && return true
+        end
+        return false
+    end
+end
 
-@parity "dart2wasm/lib/types.dart:1236 RuntimeTypeInformation._buildTypeRules" @unported function _build_type_rules(self::RuntimeTypeInformation) end
+"""
+Builds the type rules: for each class but the top type and `Any` (dart's Object, which the subtype
+check handles directly), each subclass's substitution, the identity in Julia. dart asks its class
+hierarchy for the superclass's type arguments as the subclass sees them. A Julia class has none to
+see, being an instance with its parameters bound, so the list is empty.
+"""
+@parity "dart2wasm/lib/types.dart:1236 RuntimeTypeInformation._buildTypeRules" function _build_type_rules(self::RuntimeTypeInformation)::Nothing
+    local translator = self.translator
+    local sub_to_super = self._substitution_subclass_to_superclass[] = LinkedHashMap{Int,LinkedHashMap{Int,Int}}()
+    local super_to_sub = self._substitution_superclass_to_subclass[] = LinkedHashMap{Int,LinkedHashMap{Int,Int}}()
+    local table = self._substitution_table[] = Dict{InstanceConstant,Int}()
+    local table_by_index = self._substitution_table_by_index[] = InstanceConstant[]
+    local no_substitution = make_type_array(translator.constants[], Type[])
+    table[no_substitution] = RuntimeTypeInformation_no_substitution_index()
+    push!(table_by_index, no_substitution)
+    local classes = translator.classes[]
+    for class_info in classes
+        local superclass = class_info.cls
+        # We don't need type rules for any class without a superclass, or for classes whose
+        # supertype is [Object]. The latter case will be handled directly in the subtype checking
+        # algorithm.
+        (superclass === nothing || superclass === Any) && continue
+        # dart's translator.subtypes.getSubtypesOf(superclass), less the class itself: the classes
+        # whose supertype chain reaches it
+        for sub_info in classes
+            local subtype = sub_info.cls
+            (subtype === nothing || subtype === superclass) && continue
+            local c = class_superclass(subtype)
+            while c !== nothing && c !== superclass
+                c = class_superclass(c)
+            end
+            c === nothing && continue
+            _add(types(self).interface_type_environment, subtype)
+            # the superclass's type arguments as the subclass sees them: none, a Julia class's
+            # parameters being bound
+            local type_arguments = Union{Type,TypeVar}[]
+            local substitution_index::Int
+            if _is_identity_substitution(self, type_arguments)
+                substitution_index = RuntimeTypeInformation_no_substitution_index()
+            else
+                local substitution = make_type_array(translator.constants[], Type[t for t in type_arguments])
+                local index = get(table, substitution, nothing)
+                if index === nothing
+                    index = length(table_by_index)
+                    push!(table_by_index, substitution)
+                    table[substitution] = index
+                end
+                substitution_index = index
+            end
+            local subclass_id = class_id(sub_info)
+            local superclass_id = class_id(class_info)
+            get!(LinkedHashMap{Int,Int}, sub_to_super, subclass_id)[superclass_id] = substitution_index
+            get!(LinkedHashMap{Int,Int}, super_to_sub, superclass_id)[subclass_id] = substitution_index
+        end
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/types.dart:1320 RuntimeTypeInformation._isIdentitySubstitution" @unported function _is_identity_substitution(self::RuntimeTypeInformation, type_arguments::Union{Nothing,Vector{Any}}) end
+"""
+Whether substituting `type_arguments` changes nothing: the classes are unrelated (`nothing`), or each
+argument is the subclass's own type parameter at its own index (a `TypeVar`, dart's non-nullable
+TypeParameterType; Julia's nullable type is a Union, never a TypeVar).
+"""
+@parity "dart2wasm/lib/types.dart:1320 RuntimeTypeInformation._isIdentitySubstitution" function _is_identity_substitution(self::RuntimeTypeInformation, type_arguments::Union{Nothing,Vector{Union{Type,TypeVar}}})::Bool
+    # This happen if the classes are not related to each other.
+    type_arguments === nothing && return true
+    for i in 0:length(type_arguments)-1
+        local type_argument = type_arguments[i + 1]
+        type_argument isa TypeVar || return false
+        i != lookup(types(self).interface_type_environment, type_argument) && return false
+    end
+    return true
+end
 
-@parity "dart2wasm/lib/types.dart:1342 RuntimeTypeInformation._setupRtt" @unported function _setup_rtt(self::RuntimeTypeInformation) end
+"""
+Builds the tables: a row per superclass of the (superclass id, substitution index) of each subclass
+id in its ranges, displaced into one table (invalid class id 0 in a hole), the substitution indices
+beside it, the canonical substitutions, each class's row offset (-1 for none) and the class names
+(null when minified).
+"""
+@parity "dart2wasm/lib/types.dart:1342 RuntimeTypeInformation._setupRtt" function _setup_rtt(self::RuntimeTypeInformation)::Nothing
+    local translator = self.translator
+    local constants = translator.constants[]
+    local n_classes = length(translator.classes[])
+    local row_for_superclass = Vector{Union{Row{Tuple{Int,Int}},Nothing}}(nothing, n_classes)
+    local rows = Row{Tuple{Int,Int}}[]
+    local ranges = _build_ranges(self, self._substitution_superclass_to_subclass[])
+    for (super_id, subs) in ranges
+        isempty(subs) && continue
+        local row_entries = NamedTuple{(:index, :value),Tuple{Int,Tuple{Int,Int}}}[]
+        for (range, substitution_index) in subs
+            for class_id in range.start:range.end_
+                push!(row_entries, (index = class_id, value = (super_id, substitution_index)))
+            end
+        end
+        local row = Row(row_entries)
+        push!(rows, row)
+        row_for_superclass[super_id + 1] = row
+    end
+    local max_id = translator.class_id_numbering[].max_class_id
+    local normalize_(value::Int)::Int = (100 * value) ÷ max_id
+    local weight(row::Row)::Int = normalize_(length(row.values)) + normalize_(holes(row))
+    sort!(rows; by = weight, rev = true)
+    local table = build_row_displacement_table(rows; first_available = 1)
+    local invalid_class_id = 0
+    local entry_constants(f::Function) = Constant[make_wasm_i32(constants, f(entry)) for entry in table]
+    self.type_row_displacement_table[] = make_array_of(constants, Int32,
+        entry_constants(e -> e === nothing ? invalid_class_id : e[1]))
+    # dart stores the substitution indices as WasmI16, each made as a WasmI32 constant
+    self.type_row_displacement_subst_table[] = make_array_of(constants, Int16,
+        entry_constants(e -> e === nothing ? RuntimeTypeInformation_no_substitution_index() : e[2]))
+    self.canonical_substitution_table[] = make_array_of(constants, Vector{Type},
+        Constant[substitution for substitution in self._substitution_table_by_index[]])
+    self.type_row_displacement_offsets[] = make_array_of(constants, Int32,
+        Constant[make_wasm_i32(constants, (r = row_for_superclass[class_id + 1]) === nothing ? -1 : r.offset[]) for class_id in 0:n_classes-1])
+    self.type_names[] = minify(translator.options) ? julia_constant(Core.Const(nothing), "RuntimeTypeInformation._setupRtt") : _get_type_names(self)
+    return nothing
+end
 
-@parity "dart2wasm/lib/types.dart:1424 RuntimeTypeInformation._getTypeNames" @unported function _get_type_names(self::RuntimeTypeInformation) end
+"""Each class's name, the top type's empty: a Julia class's name is its type's text."""
+@parity "dart2wasm/lib/types.dart:1424 RuntimeTypeInformation._getTypeNames" function _get_type_names(self::RuntimeTypeInformation)::Constant
+    local at = "RuntimeTypeInformation._getTypeNames"
+    local name_constants = Constant[julia_constant(Core.Const(info.cls === nothing ? "" : string(info.cls)), at)
+                                    for info in self.translator.classes[]]
+    return make_array_of(self.translator.constants[], String, name_constants)
+end
 
-@parity "dart2wasm/lib/types.dart:1442 RuntimeTypeInformation._buildRanges" @unported function _build_ranges(self::RuntimeTypeInformation, map::Dict{Int64,Dict{Int64,Int64}}) end
+"""
+For each class id, its map from class id to value as ranges of consecutive ids that share a value,
+in id order.
+"""
+@parity "dart2wasm/lib/types.dart:1442 RuntimeTypeInformation._buildRanges" function _build_ranges(self::RuntimeTypeInformation, map::LinkedHashMap{Int,LinkedHashMap{Int,Int}})::LinkedHashMap{Int,Vector{Tuple{Range,Int}}}
+    local range_values = LinkedHashMap{Int,Vector{Tuple{Range,Int}}}()
+    for (id, subs) in map
+        local entries = Tuple{Range,Int}[(Range(k, k), v) for (k, v) in subs]
+        sort!(entries; by = e -> e[1].start)
+        local write_index = 1
+        for read_index in 2:length(entries)
+            local current = entries[write_index]
+            local next = entries[read_index]
+            if current[2] == next[2] && current[1].end_ + 1 == next[1].start
+                entries[write_index] = (Range(current[1].start, next[1].end_), current[2])
+                continue
+            end
+            write_index += 1
+            entries[write_index] = next
+        end
+        resize!(entries, min(write_index, length(entries)))
+        range_values[id] = entries
+    end
+    return range_values
+end
 
 @parity "dart2wasm/lib/types.dart:1492 _FunctionTypeParameterOffsetCollector" _FunctionTypeParameterOffsetCollector(types::Types)::_FunctionTypeParameterOffsetCollector =
     _FunctionTypeParameterOffsetCollector(Val(:_), types)

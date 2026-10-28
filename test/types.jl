@@ -91,3 +91,23 @@ end
     local e = try; D.get_function_type_parameter_index(types, TypeVar(:U)); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
 end
+
+@testset "types.dart: RuntimeTypeInformation's ranges and substitutions" begin
+    local W = WasmTarget
+    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local rtt = D.RuntimeTypeInformation(Val(:_), t)
+    @test D.RuntimeTypeInformation_no_substitution_index() == 0
+    # consecutive class ids with one value join into a range, in id order
+    local m = W.LinkedHashMap{Int,W.LinkedHashMap{Int,Int}}()
+    local subs = W.LinkedHashMap{Int,Int}()
+    for (k, v) in ((6, 1), (1, 0), (3, 1), (2, 0), (5, 1))
+        subs[k] = v
+    end
+    m[5] = subs
+    local r = D._build_ranges(rtt, m)
+    @test [((x[1].start, x[1].end_), x[2]) for x in r[5]] == [((1, 2), 0), ((3, 3), 1), ((5, 6), 1)]
+    # unrelated classes, or a superclass that takes no arguments, substitute nothing
+    @test D._is_identity_substitution(rtt, nothing)
+    @test D._is_identity_substitution(rtt, Union{Type,TypeVar}[])
+    @test !D._is_identity_substitution(rtt, Union{Type,TypeVar}[Int])
+end
