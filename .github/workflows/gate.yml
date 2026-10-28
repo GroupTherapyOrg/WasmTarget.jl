@@ -161,6 +161,11 @@ jobs:
         if: matrix.lane == 'ratchet' || matrix.lane == 'suite'
         run: bash dev/fetch_dart_sdk.sh
 
+      # the llvm-project sources the stackifier's anchors cite, at the llvm pin (dev/LEDGER.md D42)
+      - name: Pinned LLVM WebAssembly sources
+        if: matrix.lane == 'ratchet' || matrix.lane == 'suite'
+        run: bash dev/fetch_llvm.sh
+
       - name: dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}
         run: |
           # the job's stdout can be a non-blocking pipe, where one large write fails part-way

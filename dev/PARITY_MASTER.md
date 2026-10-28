@@ -17,6 +17,22 @@ dart2wasm is a structural oracle, not a feature checklist: Julia and Dart have d
 semantics, so a dart-shaped implementation is accepted only when native Julia agrees on
 behavior, and anything Julia does not force stays out.
 
+## The second oracle: LLVM's WebAssembly stackifier
+
+dart2wasm has no counterpart for structuring control flow, since Kernel is already structured;
+Julia's IR is a flat CFG of basic blocks. Where dart provides no port, the port comes from Julia's
+compiler and a production compiler of another language (dev/LEDGER.md D42), never an invented
+algorithm: llvm/llvm-project **`7a941dfb2877a0b8cf30323fefa85ad019e0b0f5`** (llvmorg-23.1.4),
+the WebAssembly backend behind Rust, C, C++ and C#'s NativeAOT-LLVM:
+`llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow.cpp`,
+`WebAssemblyCFGSort.cpp` and `WebAssemblyCFGStackify.cpp`, with the loop and dominator headers they
+cite (<https://github.com/llvm/llvm-project/tree/7a941dfb2877a0b8cf30323fefa85ad019e0b0f5/llvm/lib/Target/WebAssembly>).
+`dev/fetch_llvm.sh` makes the sparse checkout at `~/.cache/wasmtarget/llvm-project`. The inputs are
+Julia's own (D3): Core.Compiler's CFG and dominator tree stand where LLVM reads its
+MachineFunction's blocks and MachineDominatorTree. The formal statement the model checks against is
+Norman Ramsey, "Beyond Relooper: recursive translation of unstructured control flow to structured
+control flow", ICFP 2022 (GHC's wasm backend, `GHC.Wasm.ControlFlow.FromCmm`).
+
 ## Scope
 
 A reachable construct outside the supported surface rejects loudly and located

@@ -119,6 +119,11 @@ jobs:
         shell: bash
         run: bash dev/fetch_dart_sdk.sh
 
+      # The llvm-project sources the stackifier's anchors cite, at the llvm pin (dev/LEDGER.md D42).
+      - name: Pinned LLVM WebAssembly sources
+        shell: bash
+        run: bash dev/fetch_llvm.sh
+
       # The inner-loop lanes, on both Julia versions: the differential smoke
       # corpus (the 1.13 reduce miscompile lived only here — Pkg.test never
       # saw it), the structural ratchet, and — on 1.12, whose typed IR the
