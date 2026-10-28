@@ -67,3 +67,19 @@ end
 @quarantine "AbstractModule's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractModule})::Int = check_forward(AbstractModule, WasmBuilder.IR.Module, @__MODULE__)
 @quarantine "AbstractModuleBuilder's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractModuleBuilder})::Int = check_forward(AbstractModuleBuilder, WasmBuilder.ModuleBuilder, @__MODULE__)
 @quarantine "AbstractInstructionsBuilder's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractInstructionsBuilder})::Int = check_forward(AbstractInstructionsBuilder, WasmBuilder.InstructionsBuilder, @__MODULE__)
+
+"""
+    AbstractClosures
+
+The forward declaration of `Dart2Wasm.Closures`, its one subtype: the type of a Lambda's
+`enclosing_member_closures`, declared before Lambda so that Closures, which maps each function to
+its Lambda, can follow (closures.dart:1327 and :1440 name each other).
+
+precedent(c: a forward-declared struct; ocaml: a signature before its implementation). Julia's
+differs: it has no forward declaration, so an abstract type stands for the struct and its one
+subtype is checked by reflection when the package loads.
+"""
+@quarantine "Julia has no forward struct declaration; a Lambda's back-pointer to its Closures names this abstract type" Core.DataType abstract type AbstractClosures end
+
+# checked when every definition exists (src/WasmTarget.jl calls it after include_dart)
+@quarantine "AbstractClosures's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractClosures})::Int = check_forward(AbstractClosures, Dart2Wasm.Closures, @__MODULE__)

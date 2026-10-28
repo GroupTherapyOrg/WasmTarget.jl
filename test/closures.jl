@@ -10,6 +10,12 @@ module ClosuresCases
 kf(x; a = 1, b = 2) = x + a + b
 kg(x; c = 1) = x + c
 kh(x; b = 1, d = 2) = x + b + d
+mk(a::Int) = (b -> a + b)
+function mbox(n::Int)
+    x::Int = n
+    f = () -> (x += 1)
+    return f
+end
 end
 
 @testset "closures.dart: NameCombination" begin
@@ -67,4 +73,40 @@ end
     @test D.get_vtable_entry_at(v2, 0) === ft
     local e3 = try; D.get_vtable_entry_at(v2, 1); nothing; catch x; x; end
     @test e3 isa W.RejectionError && e3.rejection isa W.Internal
+end
+
+@testset "closures.dart: a member's closures, Julia's lowering the answer" begin
+    local W = WasmTarget
+    local t = D.Translator(W.check_subset(ClosuresCases.mk, (Int,), "closures"), D.TranslatorOptions())
+    local mi = t.component[1].ci.def
+    # Julia's lowering made the closure a type of its own, its fields the captures: the member's NIR
+    # allocates it and holds no nested function, so no lambda, capture or context is left to find
+    local c = D.Closures(t, mi; find_captures = true)
+    @test isempty(c.lambdas) && isempty(c.captures) && isempty(c.contexts) && isempty(c.closurized_functions)
+    @test !c._is_this_captured && c._nullable_this_type === nothing
+    @test any(st -> st isa W.NirNew, t.component[1].stmts)
+    local closure_type = typeof(ClosuresCases.mk(1))
+    @test closure_type <: Function && fieldnames(closure_type) == (:a,) && fieldtypes(closure_type) == (Int,)
+    # a captured variable that is assigned is a Core.Box, Julia's written capture
+    local tb = D.Translator(W.check_subset(ClosuresCases.mbox, (Int,), "closures"), D.TranslatorOptions())
+    local b1 = tb.component[1]
+    @test any(k -> b1.stmts[k] isa W.NirNew && b1.types[k] === Core.Box, eachindex(b1.stmts))
+    @test fieldtypes(typeof(ClosuresCases.mbox(1))) == (Core.Box,)
+    @test isempty(D.Closures(tb, tb.component[1].ci.def; find_captures = true).captures)
+
+    # a context: empty without variables, type parameters or `this`; its parent first, then `this`
+    local ctx = D.Context(mi, nothing, false)
+    @test D.is_empty(ctx)
+    for f in (D.parent_field_index, D.this_field_index)
+        local e = try; f(ctx); nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Internal
+    end
+    local with_this = D.Context(mi, nothing, true)
+    @test !D.is_empty(with_this) && D.this_field_index(with_this) == 0
+    local child = D.Context(mi, with_this, true)
+    @test D.parent_field_index(child) == 0 && D.this_field_index(child) == 1
+    local cap = D.Capture(W.ClassField(closure_type, 1, "a", Int, false), false)
+    @test !cap.written && !cap.is_in_initializer
+    local lam = D.Lambda__(only(methods(ClosuresCases.mk(1))), :closures, mi, c, 0)
+    @test lam.enclosing_member_closures === c && lam.index == 0
 end

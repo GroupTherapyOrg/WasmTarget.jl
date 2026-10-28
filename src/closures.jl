@@ -111,24 +111,102 @@ SplayTreeMap, its pairs in `compareTo` order), and the representation they share
 end
 
 """
-Lambda's dart fields: `functionNode`, `functionNodeSource`, `enclosingMember`, `enclosingMemberClosures`, `index`, `callTarget`.
+A local function or function expression: dart's FunctionNode, its source, the member enclosing it,
+that member's closures, its index in a pre-order walk of the member's body, and its call target.
+
+Its `enclosingMemberClosures` is held as `AbstractClosures` (src/julia/forward.jl), because Lambda
+and Closures name each other. Julia's counterpart is a closure type's call method. Julia's lowering makes it a method of its own
+(on `typeof(f)`, whose fields are the captures), so `functionNode` is that `Method`, its source the
+method's file, and the enclosing member the `MethodInstance` that allocates the closure. The
+closed world reaches the method as any other, so `Closures` creates no Lambda (see
+`Closures._findCaptures`).
 """
-@parity "dart2wasm/lib/closures.dart:1327 Lambda" @unported struct Lambda end
+@parity "dart2wasm/lib/closures.dart:1327 Lambda" struct Lambda
+    function_node::Method
+    function_node_source::Symbol
+    enclosing_member::Core.MethodInstance
+    enclosing_member_closures::AbstractClosures
+    index::Int
+    call_target::Late{LambdaCallTarget}
+    # dart's constructor `Lambda._`, the struct's one constructor tagged by the dart name; the late
+    # call target is assigned by the code that creates the lambda
+    Lambda(::Val{:_}, function_node::Method, function_node_source::Symbol, enclosing_member::Core.MethodInstance,
+           enclosing_member_closures::AbstractClosures, index::Int) =
+        new(function_node, function_node_source, enclosing_member, enclosing_member_closures, index,
+            Late{LambdaCallTarget}("dart2wasm/lib/closures.dart:1337 Lambda.callTarget"))
+end
 
 """
-Context's dart fields: `owner`, `parent`, `variables`, `typeParameters`, `containsThis`, `struct`, `currentLocal`.
+The context of one or more closures, holding their captured variables: the scope it covers (its
+owner), its parent context, its variables and type parameters, whether it holds `this`, its struct
+and the local pointing to it during code generation.
+
+Julia's counterpart of a context is the closure object itself: Julia's lowering gives each closure
+a struct of its captures (`typeof(f)`'s fields, a written variable a `Core.Box` shared with its
+scope), laid out as any class (src/class_info.jl). A context's owner is the member's
+`MethodInstance`, a variable the closure object's field (`ClassField`), a type parameter a
+`TypeVar`; `Closures` creates no context (see `Closures._findCaptures`).
 """
-@parity "dart2wasm/lib/closures.dart:1365 Context" @unported struct Context end
+@parity "dart2wasm/lib/closures.dart:1365 Context" mutable struct Context
+    const owner::Core.MethodInstance
+    parent::Union{Context,Nothing}
+    const variables::Vector{ClassField}
+    const type_parameters::Vector{TypeVar}
+    const contains_this::Bool
+    const struct_::Late{WasmBuilder.IR.StructType}
+    current_local::WasmBuilder.IR.Local
+    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
+    # :1407 is its outer function, and the late struct is assigned by Closures._buildContexts.
+    # currentLocal is dart's non-final late field, which code generation assigns again and again: the
+    # mutable field is left undefined until then, and a read before is Julia's UndefRefError, dart's
+    # LateInitializationError
+    Context(::Val{:_}, owner::Core.MethodInstance, parent::Union{Context,Nothing}, contains_this::Bool) =
+        new(owner, parent, ClassField[], TypeVar[], contains_this,
+            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:1386 Context.struct"))
+end
 
 """
-Capture's dart fields: `variable`, `isInInitializer`, `context`, `fieldIndex`, `written`.
+A captured variable or type parameter: Julia's closure object's field (`ClassField`) or a `TypeVar`,
+whether it was captured in a constructor's initializer, its context, its field index there, and
+whether it is written after its initialization (in Julia, a field of type `Core.Box`, the cell
+Julia's lowering gives a captured variable that is assigned).
 """
-@parity "dart2wasm/lib/closures.dart:1411 Capture" @unported struct Capture end
+@parity "dart2wasm/lib/closures.dart:1411 Capture" mutable struct Capture
+    const variable::Union{ClassField,TypeVar}
+    const is_in_initializer::Bool
+    const context::Late{Context}
+    const field_index::Late{Int}
+    written::Bool
+    # the struct's one constructor, tagged; dart's constructor at :1432 is its outer function
+    Capture(::Val{:_}, variable::Union{ClassField,TypeVar}, is_in_initializer::Bool) =
+        new(variable, is_in_initializer, Late{Context}("dart2wasm/lib/closures.dart:1418 Capture.context"),
+            Late{Int}("dart2wasm/lib/closures.dart:1422 Capture.fieldIndex"), false)
+end
 
 """
-Closures's dart fields: `translator`, `lambdas`, `captures`, `contexts`, `closurizedFunctions`, `_member`, `_isThisCaptured`, `_nullableThisType`.
+The contexts and closures of one member: its lambdas, its captures, the contexts of the scopes
+that have one, the local functions used as values, the member itself, whether it captures `this`,
+and the nullable type of `this`.
+
+In Julia a member is a `MethodInstance`. A Julia method has no `this` (its function object is an
+argument like any other), so `_nullableThisType` is `nothing`. A local function used as a value is
+a closure object, so `closurizedFunctions` holds methods.
 """
-@parity "dart2wasm/lib/closures.dart:1440 Closures" @unported struct Closures end
+@parity "dart2wasm/lib/closures.dart:1440 Closures" mutable struct Closures <: AbstractClosures
+    const translator::KernelNodes
+    const lambdas::Dict{Method,Lambda}
+    const captures::Dict{Union{ClassField,TypeVar},Capture}
+    const contexts::IdDict{Core.MethodInstance,Context}
+    const closurized_functions::Set{Method}
+    const _member::Core.MethodInstance
+    _is_this_captured::Bool
+    const _nullable_this_type::Union{WasmBuilder.IR.RefType,Nothing}
+    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
+    # :1489, which finds the captures, is its outer function
+    Closures(::Val{:_}, translator::KernelNodes, _member::Core.MethodInstance) =
+        new(translator, Dict{Method,Lambda}(), Dict{Union{ClassField,TypeVar},Capture}(), IdDict{Core.MethodInstance,Context}(),
+            Set{Method}(), _member, false, nothing)
+end
 
 """
 _CaptureFinder's dart fields: `closures`, `member`, `isInInitializer`, `variableDepth`, `functionIsSyncStarOrAsync`, `_currentSource`.
@@ -362,29 +440,105 @@ within one cluster its index there, in `compareTo` order.
     return nothing
 end
 
-@parity "dart2wasm/lib/closures.dart:1340 Lambda._" @unported function Lambda__(function_node, function_node_source, enclosing_member, enclosing_member_closures, index) end
+@parity "dart2wasm/lib/closures.dart:1340 Lambda._" Lambda__(function_node::Method, function_node_source::Symbol, enclosing_member::Core.MethodInstance,
+        enclosing_member_closures::Closures, index::Int)::Lambda =
+    Lambda(Val(:_), function_node, function_node_source, enclosing_member, enclosing_member_closures, index)
 
-@parity "dart2wasm/lib/closures.dart:1393 Context.isEmpty" @unported function is_empty(self::Context) end
+@parity "dart2wasm/lib/closures.dart:1393 Context.isEmpty" is_empty(self::Context)::Bool = isempty(self.variables) && isempty(self.type_parameters) && !self.contains_this
 
-@parity "dart2wasm/lib/closures.dart:1396 Context.parentFieldIndex" @unported function parent_field_index(self::Context) end
+# dart asserts the context has a parent; here a located rejection
+@parity "dart2wasm/lib/closures.dart:1396 Context.parentFieldIndex" function parent_field_index(self::Context)::Int
+    self.parent === nothing && reject!(Internal("dart2wasm/lib/closures.dart:1396 Context.parentFieldIndex: the context has no parent"), "Context.parentFieldIndex")
+    return 0
+end
 
-@parity "dart2wasm/lib/closures.dart:1401 Context.thisFieldIndex" @unported function this_field_index(self::Context) end
+# dart asserts the context holds `this`; here a located rejection
+@parity "dart2wasm/lib/closures.dart:1401 Context.thisFieldIndex" function this_field_index(self::Context)::Int
+    self.contains_this || reject!(Internal("dart2wasm/lib/closures.dart:1401 Context.thisFieldIndex: the context holds no `this`"), "Context.thisFieldIndex")
+    return self.parent !== nothing ? 1 : 0
+end
 
-@parity "dart2wasm/lib/closures.dart:1407 Context" @unported function Context(owner, parent, contains_this) end
+@parity "dart2wasm/lib/closures.dart:1407 Context" Context(owner::Core.MethodInstance, parent::Union{Context,Nothing}, contains_this::Bool)::Context = Context(Val(:_), owner, parent, contains_this)
 
-@parity "dart2wasm/lib/closures.dart:1432 Capture" @unported function Capture(variable, is_in_initializer) end
+@parity "dart2wasm/lib/closures.dart:1432 Capture" Capture(variable::Union{ClassField,TypeVar}, is_in_initializer::Bool)::Capture = Capture(Val(:_), variable, is_in_initializer)
 
-@parity "dart2wasm/lib/closures.dart:1436 Capture.type" @unported function type(self::Capture) end
+# a field index is wasm's, from 0; Julia's vectors count from 1
+@parity "dart2wasm/lib/closures.dart:1436 Capture.type" type(self::Capture)::WasmBuilder.IR.ValueType =
+    WasmBuilder.unpacked(self.context[].struct_[].fields[self.field_index[] + 1].type)
 
-@parity "dart2wasm/lib/closures.dart:1489 Closures" @unported function Closures(translator, _member; find_captures::Bool) end
+"""
+The contexts and closures of `member`; with `find_captures`, its captures found, its contexts
+collected and their structs built (see `_findCaptures` for Julia's answer).
+"""
+@parity "dart2wasm/lib/closures.dart:1489 Closures" function Closures(translator::KernelNodes, _member::Core.MethodInstance; find_captures::Bool)::Closures
+    local self = Closures(Val(:_), translator, _member)
+    if find_captures
+        _find_captures(self)
+        _collect_contexts(self)
+        _build_contexts(self)
+    end
+    return self
+end
 
-@parity "dart2wasm/lib/closures.dart:1500 Closures.typeType" @unported function type_type(self::Closures) end
+@parity "dart2wasm/lib/closures.dart:1500 Closures.typeType" type_type(self::Closures)::WasmBuilder.IR.RefType = non_nullable_type_type(self.translator.types)
 
-@parity "dart2wasm/lib/closures.dart:1502 Closures._findCaptures" @unported function _find_captures(self::Closures) end
+"""
+Finds the member's captured variables. dart walks the member's body for variables a nested function
+uses. Julia answers this in its lowering: a nested function is a closure type of its own whose
+fields are the variables it captures, each read through its function object (`getfield(#self#,
+:x)`), and a captured variable that is assigned becomes a shared `Core.Box`. So the member's NIR
+holds no nested function and shares no variable with one, and there is no capture left to find.
+"""
+@parity "dart2wasm/lib/closures.dart:1502 Closures._findCaptures" _find_captures(self::Closures)::Nothing = nothing
 
-@parity "dart2wasm/lib/closures.dart:1524 Closures._collectContexts" @unported function _collect_contexts(self::Closures) end
+@parity "dart2wasm/lib/closures.dart:1524 Closures._collectContexts" function _collect_contexts(self::Closures)::Nothing
+    if !isempty(self.captures) || self._is_this_captured
+        collect(_ContextCollector(self, self.translator.options.enable_asserts), self._member)
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/closures.dart:1533 Closures._buildContexts" @unported function _build_contexts(self::Closures) end
+"""
+Defines a struct for each non-empty context, then lays it out: the parent context, `this`, each
+variable (its field's type, nullable) and each type parameter. dart names a context by its owner,
+a constructor's or a scope's location; a Julia context's owner is its member.
+"""
+@parity "dart2wasm/lib/closures.dart:1533 Closures._buildContexts" function _build_contexts(self::Closures)::Nothing
+    local at = "dart2wasm/lib/closures.dart:1533 Closures._buildContexts"
+    local translator = self.translator
+    # Make struct definitions
+    for context in values(self.contexts)
+        is_empty(context) && continue
+        context.struct_[] = WasmBuilder.define_struct(types_builder(translator), "<context $(context.owner)>";
+                                                      brand = unique_types(translator.options))
+    end
+    # Build object layouts
+    for context in values(self.contexts)
+        is_empty(context) && continue
+        local struct_ = context.struct_[]
+        local parent = context.parent
+        if parent !== nothing
+            is_empty(parent) && reject!(Internal("$at: the parent of a context is empty"), at)
+            push!(struct_.fields, WasmBuilder.IR.FieldType(WasmBuilder.IR.RefType_def(parent.struct_[]; nullable = true)))
+        end
+        if context.contains_this
+            local this_type = self._nullable_this_type
+            this_type === nothing && reject!(Internal("$at: a context holds `this` of a member with none"), at)
+            push!(struct_.fields, WasmBuilder.IR.FieldType(this_type))
+        end
+        for variable in context.variables
+            local index = length(struct_.fields)
+            push!(struct_.fields, WasmBuilder.IR.FieldType(WasmBuilder.with_nullability(translate_type(translator, variable.type), true)))
+            self.captures[variable].field_index[] = index
+        end
+        for parameter in context.type_parameters
+            local index = length(struct_.fields)
+            push!(struct_.fields, WasmBuilder.IR.FieldType(WasmBuilder.with_nullability(type_type(self), true)))
+            self.captures[parameter].field_index[] = index
+        end
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/closures.dart:1605 _CaptureFinder.depth" @unported function depth(self::_CaptureFinder) end
 
