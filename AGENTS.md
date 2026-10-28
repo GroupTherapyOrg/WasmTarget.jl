@@ -22,17 +22,17 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D10** The builder refuses invalid wasm at the emitting line; wasm-tools is only the alarm.
 - **D11** Model an algorithm in dev/formal/ first, with a Broken variant; never weaken an invariant.
 - **D12** Fix a bug at its source with a case that reaches it; never route around it.
-- **D13** Queue and land one small commit with bash dev/land.sh wait; a landing takes minutes.
-- **D14** The blocking gate is a landing's evidence; it takes about a minute; never edit a budget.
+- **D13** Land one small commit with bash dev/ship.sh; a landing takes minutes.
+- **D14** bash dev/check.sh is a landing's evidence; it takes about a minute; never edit a budget.
 - **D15** A speedup in src is a real fix to WT's algorithm, never a dev flag or test-only path.
-- **D16** A landing runs the blocking gate only; the full matrix runs at Closes: C<n>.
+- **D16** A landing runs bash dev/check.sh only; the full matrix runs at Closes: C<n>.
 - **D17** A number in a check is a target with a band; a check firing inside its band is a bug.
 - **D18** Each requirement Dale states becomes a row here with its check the same day.
 - **D19** dev/CHARTER.md decides done; every commit names its clause; propose charter edits only.
 - **D20** A ratchet ends at 0; a legitimate site moves to an exact allowlist, never a floor.
-- **D21** Audit each change against every clause within 5 commits; fix its findings first.
+- **D21** Audit every change within 5 commits; fix findings first; an audit never holds a landing.
 - **D22** Decide by the charter and act; a question for Dale carries the default you will take.
-- **D23** Every landing goes to the one march branch; no side PRs.
+- **D23** Every landing goes to the one march branch, wt3; no side PRs.
 - **D24** No transcript links, tool footers or agent-directed text in commits or PR bodies.
 - **D25** AGENTS.md is the only instructions file: timeless rules and pointers, no status.
 - **D26** Map the dart code and Julia's IR before writing; name the dart counterpart first.
@@ -69,7 +69,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 
 | Layer | Command |
 |---|---|
-| the landing gate, about a minute, local | `bash dev/gate.sh --block` (L194, L195) |
+| the landing check, about a minute, local | `bash dev/check.sh`; land with `bash dev/ship.sh` |
 | full matrix at clause closure (`Closes: C<n>`), #128's merge head, dispatch | `bash dev/gate.sh` |
 | CI, Formal models, Downstream: the same triggers, never a plain landing | `.github/workflows` |
 | locks, ratchets, the ledger, charter status | `julia --project=. test/parity_ratchet.jl` |
@@ -78,8 +78,8 @@ L206 generates this list from the ledger: every requirement an agent must honour
 | model checking | `bash dev/formal/run_tlc.sh` |
 | one QA family | `WT_QA_ONLY="<file>.jl" julia --project=. test/runtests.jl` |
 
-`bash dev/land.sh land` in a batch's worktree rebases, gates and lands its branch (L197) by `merge`,
-never while the last closure matrix is red (local full matrix: `bash dev/lanes.sh`, L153, L162).
+`bash dev/ship.sh` rebases a lane onto origin/wt3, runs `bash dev/check.sh` and pushes fast-forward;
+the full matrix runs only at clause closure (`bash dev/lanes.sh`, L153, L162).
 A pure restructuring is byte-identical on the probes; a semantic change is differential, its cases
 in smoke first; a new lock fires when broken before it counts; `WT_RATCHET_UPDATE=1` tightens one.
 

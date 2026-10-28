@@ -1,0 +1,1 @@
+L148 the audit window: audits run beside the work on wt3 and never block a landing (D21 as Dale restated it 2026-10-28)
