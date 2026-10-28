@@ -18,10 +18,15 @@ ClassIdNumbering's dart fields: `translator`, `_subclasses`, `_implementors`, `_
 """
 @parity "dart2wasm/lib/class_info.dart:780 ClassIdNumbering" @unported struct ClassIdNumbering end
 
-"""
-Range's dart fields: `start`, `end`.
-"""
-@parity "dart2wasm/lib/class_info.dart:1059 Range" @unported struct Range end
+"""A range of class ids, both ends inclusive."""
+@parity "dart2wasm/lib/class_info.dart:1059 Range" struct Range
+    start::Int
+    end_::Int
+    # dart's generative constructors `Range._` and `Range.empty`, the struct's one constructor tagged by
+    # the dart name (Julia has no named constructors, and the factory `Range(start, end)` takes the
+    # default constructor's signature)
+    Range(::Val{:_}, start::Int, end_::Int) = new(start, end_)
+end
 
 @parity "dart2wasm/lib/class_info.dart:19 FieldIndex.asyncSuspendStateResume" @unported function FieldIndex_async_suspend_state_resume() end
 
@@ -153,26 +158,64 @@ Range's dart fields: `start`, `end`.
 
 @parity "dart2wasm/lib/class_info.dart:1054 ClassIdNumbering.getConcreteSubclassRanges" @unported function get_concrete_subclass_ranges(self::ClassIdNumbering, klass) end
 
-@parity "dart2wasm/lib/class_info.dart:1063 Range._" @unported function Range__(start, end_) end
+@parity "dart2wasm/lib/class_info.dart:1063 Range._" function Range__(start::Int, end_::Int)::Range
+    start <= end_ || reject!(Internal("dart2wasm/lib/class_info.dart:1063 Range._: start $start past end $end_"), "Range._")
+    return Range(Val(:_), start, end_)
+end
 
-@parity "dart2wasm/lib/class_info.dart:1064 Range.empty" @unported function Range_empty() end
+@parity "dart2wasm/lib/class_info.dart:1064 Range.empty" Range_empty()::Range = Range(Val(:_), 0, -1)
 
-@parity "dart2wasm/lib/class_info.dart:1065 Range" @unported function Range(start::Int64, end_::Int64) end
+@parity "dart2wasm/lib/class_info.dart:1065 Range" function Range(start::Int64, end_::Int64)::Range
+    end_ < start && return Range_empty()
+    return Range__(start, end_)
+end
 
-@parity "dart2wasm/lib/class_info.dart:1070 Range.length" @unported function Base.length(self::Range) end
+@parity "dart2wasm/lib/class_info.dart:1070 Range.length" Base.length(self::Range)::Int = 1 + (self.end_ - self.start)
 
-@parity "dart2wasm/lib/class_info.dart:1071 Range.isEmpty" @unported function is_empty(self::Range) end
+@parity "dart2wasm/lib/class_info.dart:1071 Range.isEmpty" is_empty(self::Range)::Bool = length(self) == 0
 
-@parity "dart2wasm/lib/class_info.dart:1073 Range.contains" @unported function Base.contains(self::Range, id::Int64) end
+@parity "dart2wasm/lib/class_info.dart:1073 Range.contains" Base.contains(self::Range, id::Int64)::Bool = self.start <= id && id <= self.end_
 
-@parity "dart2wasm/lib/class_info.dart:1074 Range.containsRange" @unported function contains_range(self::Range, other::Range) end
+@parity "dart2wasm/lib/class_info.dart:1074 Range.containsRange" contains_range(self::Range, other::Range)::Bool = self.start <= other.start && other.end_ <= self.end_
 
-@parity "dart2wasm/lib/class_info.dart:1076 Range.shiftBy" @unported function shift_by(self::Range, offset::Int64) end
+@parity "dart2wasm/lib/class_info.dart:1076 Range.shiftBy" function shift_by(self::Range, offset::Int64)::Range
+    is_empty(self) && return self
+    return Range(self.start + offset, self.end_ + offset)
+end
 
-@parity "dart2wasm/lib/class_info.dart:1082 Range.hashCode" @unported function Base.hash(self::Range, h::UInt) end
+# dart's hashCode, Object.hash(start, end); Julia's hash takes the seed it mixes into
+@parity "dart2wasm/lib/class_info.dart:1082 Range.hashCode" Base.hash(self::Range, h::UInt)::UInt = hash(self.end_, hash(self.start, h))
 
-@parity "dart2wasm/lib/class_info.dart:1085 Range.==" @unported function Base.:(==)(self::Range, other) end
+# dart's `other is Range && ...`: an `other` of another type takes Julia's fallback `==`, `===`, false
+@parity "dart2wasm/lib/class_info.dart:1085 Range.==" Base.:(==)(self::Range, other::Range)::Bool = other.start == self.start && other.end_ == self.end_
 
-@parity "dart2wasm/lib/class_info.dart:1089 Range.toString" @unported function Base.show(io::IO, self::Range) end
+# dart's toString; Julia's show writes to the stream it is given
+@parity "dart2wasm/lib/class_info.dart:1089 Range.toString" Base.show(io::IO, self::Range)::Nothing = print(io, is_empty(self) ? "[]" : "[$(self.start), $(self.end_)]")
 
-@parity "dart2wasm/lib/class_info.dart:1093 RangeListExtention.normalize" @unported function normalize(self) end
+"""Merge the ranges of `self` in place: sorted by start, each overlapping or adjacent run one range."""
+@parity "dart2wasm/lib/class_info.dart:1093 RangeListExtention.normalize" function normalize(self::Vector{Range})::Nothing
+    isempty(self) && return nothing
+    # Ensure we sort ranges by start of the range.
+    sort!(self; by = r -> r.start)
+    local current = 1
+    local current_range = self[1]
+    for read in 2:length(self)
+        local next_range = self[read]
+        if is_empty(current_range)
+            current_range = next_range
+            continue
+        end
+        is_empty(next_range) && continue
+        contains_range(current_range, next_range) && continue
+        if contains(current_range, next_range.start) || (current_range.end_ + 1) == next_range.start
+            current_range = Range(current_range.start, next_range.end_)
+            continue
+        end
+        self[current] = current_range
+        current += 1
+        current_range = next_range
+    end
+    self[current] = current_range
+    resize!(self, current)
+    return nothing
+end
