@@ -12,11 +12,15 @@ cd "$(dirname "$0")/.."
 # died is freed. The wait is reported and not counted in D14's band, which times the check itself.
 slots="$(git rev-parse --path-format=absolute --git-common-dir)/wt-check-slots"; mkdir -p "$slots"
 w0=$(date +%s); slot=""
+# the landing-lock holder (dev/ship.sh sets CHECK_RESERVED) takes slot L alone, so it never waits
+# behind other lanes' optimistic checks
+ids="1 2 3"; [ "${CHECK_RESERVED:-}" = 1 ] && ids="L"
 while [ -z "$slot" ]; do
-  for i in 1 2 3; do
+  for i in $ids; do
     if mkdir "$slots/$i" 2>/dev/null; then echo $$ > "$slots/$i/pid"; slot=$i; break; fi
     holder=$(cat "$slots/$i/pid" 2>/dev/null || true)
-    [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null && rm -rf "$slots/$i"
+    if [ -n "$holder" ]; then kill -0 "$holder" 2>/dev/null || rm -rf "$slots/$i"
+    elif [ -n "$(find "$slots/$i" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rm -rf "$slots/$i"; fi
   done
   [ -n "$slot" ] || sleep 2
 done
@@ -34,6 +38,13 @@ if [ $rc -ne 0 ]; then
   exit 1
 fi
 echo "check: ratchet passes ($(( $(date +%s) - s0 ))s)"
+# D19: dev/CHARTER.md changes only with Dale's say-so, which the commit names in its trailer
+# `Charter-change: <clauses> — Dale <YYYY-MM-DD>: "<his words>"`; the audit reads each claim
+# against the conversation (a stopgap: no program can verify Dale's words)
+for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD" -- dev/CHARTER.md); do
+  git log -1 --format=%B "$c" | grep -qE '^Charter-change: .*Dale [0-9]{4}-[0-9]{2}-[0-9]{2}: ".+"' ||
+    { echo "check: $(git log -1 --format='%h %s' "$c" | cut -c1-80) changes dev/CHARTER.md with no Charter-change trailer quoting Dale (D19)"; exit 1; }
+done
 julia --project=. --startup-file=no test/src_tests.jl || { echo "check: src tests red"; exit 1; }
 # the models the change touches: a changed dev/formal/<Name>.tla or MC<Name>*.{tla,cfg} selects
 # every instance MC<Name>*.cfg of that model

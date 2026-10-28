@@ -1862,7 +1862,7 @@ const LOCKS = [
                           count("    needs: closure\n    if: needs.closure.outputs.run == 'true'\n", gate) == 1,
                       occursin(raw"        printf '%s\n' \"$status\" | grep -qE \"^$c +.* CLOSED( |$)\" ||", read(joinpath(ROOT, "dev", "hooks", "commit-msg"), String)),
                       # a landed head reaches gate.yml by the landing's one push, the march branch's: no other ref
-                      count(r"\bgit\b[^\n]*\bpush\b", ship) == 1 && occursin(raw"  if git push -q origin HEAD:$MARCH; then", ship) && !occursin("refs/heads/", ship),
+                      count(r"\bgit\b[^\n]*\bpush\b", ship) == 1 && occursin(r"^if git push -q origin HEAD:\$MARCH; then$"m, ship) && !occursin("refs/heads/", ship),
                       # the first red lane ends the run (batch 111: a 1.13 failure surfaced at minute 29)
                       occursin(raw"stop() { [ $fail -eq 0 ] || { echo \"LANES red\"; exit 1; }; }", lanes),
                       occursin(join([raw"lane ratchet  $JULIA --project=. test/parity_ratchet.jl", "stop"], '\n'), lanes),

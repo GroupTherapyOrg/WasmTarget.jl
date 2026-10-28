@@ -1,34 +1,65 @@
 #!/usr/bin/env bash
-# Land this worktree's commits on the march branch: rebase onto it, run dev/check.sh, push fast-forward.
-# A push another lane beat is rebased and checked again. Never a merge commit, never a force push.
+# Land this worktree's commits on the march branch: rebase onto it, run dev/check.sh on every
+# commit, push fast-forward. Never a merge commit, never a force push.
+#
+# The check runs first outside any lock, so lanes check side by side. Then the lane takes the
+# landing lock (one lane at a time, held for a fetch and a push, and for a re-check only when
+# another lane landed meanwhile), so a landing is checked again at most once and never starves:
+# the optimistic-then-serialized landing of a merge queue (bors, GitHub's merge queue), its
+# serialized part kept short.
 set -uo pipefail
 # the one march branch on origin (D23): every lane lands here; worktrees and their branches stay local
 MARCH=wt2
 cd "$(dirname "$0")/.."
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "ship: commit or drop your changes first"; exit 2; }
-log="$(git rev-parse --git-common-dir)/wt-landings.tsv"   # one log for every lane: D13's band
-for try in 1 2 3 4 5; do
-  git fetch -q origin "$MARCH" || { sleep 5; continue; }
-  [ "$(git rev-list --count origin/$MARCH..HEAD)" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
-  first=$(git log --reverse --format=%at origin/$MARCH..HEAD | head -1)
-  # every commit is checked on its own tree, against its parent (the rule bors and git rebase
-  # --exec keep: each landed commit passes), so no landed commit is red
-  # (the check runs with git's own rebase variables cleared: the ratchet's plants make scratch
-  # repositories, and an inherited GIT_DIR or GIT_INDEX_FILE would point them at this one)
-  if ! git rebase -q origin/$MARCH --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh'; then
+common="$(git rev-parse --path-format=absolute --git-common-dir)"
+log="$common/wt-landings.tsv"   # one log for every lane: D13's band
+lock="$common/wt-landing-lock"
+# every commit is checked on its own tree, against its parent (the rule bors and git rebase --exec
+# keep: each landed commit passes), with git's own rebase variables cleared: the ratchet's plants
+# make scratch repositories, and an inherited GIT_DIR or GIT_INDEX_FILE would point them at this one
+checked_rebase() {
+  if ! git rebase -q "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh'; then
     if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then git rebase --abort; fi
-    echo "ship: a commit's check is red or the rebase conflicts; the branch is as it was. Fix it and ship again"; exit 1
+    return 1
   fi
-  if git push -q origin HEAD:$MARCH; then
-    secs=$(( $(date +%s) - first ))
-    printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$secs" >> "$log"
-    med=$(tail -5 "$log" | cut -f3 | sort -n | awk '{ a[NR] = $1 } END { print a[int((NR + 1) / 2)] }')
-    echo "ship: landed $(git rev-parse --short HEAD) on $MARCH, ${secs}s from its first commit to landed"
-    if [ "$med" -gt 600 ]; then echo "ship: RED — the median of the last five landings is ${med}s, past D13's band (a 300-s target, red past 600 s)"
-    else echo "ship: median of the last five landings ${med}s (D13: a 300-s target, red past 600 s)"; fi
-    # the rebuild's src progress, dev/src_progress.sh's line the check's ratchet printed for this tree (L208, D40)
-    grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'; exit 0
-  fi
-  echo "ship: another lane landed first; again ($try)"
+}
+release() { rm -rf "$lock"; }
+git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
+[ "$(git rev-list --count "origin/$MARCH..HEAD")" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
+first=$(git log --reverse --format=%at "origin/$MARCH..HEAD" | head -1)
+checked_rebase || { echo "ship: a commit's check is red or the rebase conflicts; the branch is as it was. Fix it and ship again"; exit 1; }
+# the landing lock: a directory holding its holder's pid; a holder that died frees it, and so does
+# a lock older than 10 minutes with no pid written (its holder died before writing it)
+while ! mkdir "$lock" 2>/dev/null; do
+  holder=$(cat "$lock/pid" 2>/dev/null || true)
+  if [ -n "$holder" ]; then kill -0 "$holder" 2>/dev/null || rm -rf "$lock"
+  elif [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rm -rf "$lock"; fi
+  sleep 2
 done
-echo "ship: gave up after 5 races"; exit 1
+echo $$ > "$lock/pid"; trap release EXIT
+# under the lock the re-check takes the reserved slot (dev/check.sh's slot L), so the holder never
+# waits behind other lanes' optimistic checks; a push a lane on an older dev/ship.sh beat (one that
+# takes no lock) is fetched and re-checked again, at most three times
+export CHECK_RESERVED=1
+for try in 1 2 3; do
+  git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
+  if ! git merge-base --is-ancestor "origin/$MARCH" HEAD; then
+    echo "ship: another lane landed while this one checked; checking again under the landing lock"
+    checked_rebase || { echo "ship: a commit's check is red on the new base or the rebase conflicts; the branch is as it was. Fix it and ship again"; exit 1; }
+  fi
+  git fetch -q origin "$MARCH" && git merge-base --is-ancestor "origin/$MARCH" HEAD && break
+done
+if git push -q origin HEAD:$MARCH; then
+  release; trap - EXIT
+  secs=$(( $(date +%s) - first ))
+  printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$secs" >> "$log"
+  med=$(tail -5 "$log" | cut -f3 | sort -n | awk '{ a[NR] = $1 } END { print a[int((NR + 1) / 2)] }')
+  echo "ship: landed $(git rev-parse --short HEAD) on $MARCH, ${secs}s from its first commit to landed"
+  # D13's band judges the loop, not this change: past it, the slowest step is the finding to fix
+  if [ "$med" -gt 600 ]; then echo "ship: RED — the median of the last five landings is ${med}s, past D13's band (a 300-s target, red past 600 s): find what slows the loop"
+  else echo "ship: median of the last five landings ${med}s (D13: a 300-s target, red past 600 s)"; fi
+  # the rebuild's src progress, dev/src_progress.sh's line the check's ratchet printed for this tree (L208, D40)
+    grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'; exit 0
+fi
+echo "ship: the push was refused under the landing lock"; exit 1
