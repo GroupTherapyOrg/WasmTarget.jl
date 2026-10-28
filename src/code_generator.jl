@@ -388,6 +388,7 @@ end
                 f === Core.getfield ? visit_instance_get(self, c, expected_type) :
                 f === Core.setfield! ? visit_instance_set(self, c, expected_type) :
                 f === Core.isa ? visit_is_expression(self, c, expected_type) :
+                f === Core.typeassert ? visit_as_expression(self, c, expected_type) :
                 f === Core.throw ? visit_throw(self, c, expected_type) :
                 f === Core.tuple ? visit_record_literal(self, c, expected_type) :
                 visit_static_invocation(self, c, expected_type)
@@ -998,16 +999,43 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:3154 AstCodeGenerator.visitTypeLiteral" @unported function visit_type_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3159 AstCodeGenerator.visitIsExpression" @unported function visit_is_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+# Julia's isa(x, T), Kernel's IsExpression: the operand boxed in the top type (nullable where its type
+# admits `nothing`, the null of the nullable representation), the test types.dart's emitIsTest; the
+# tested type the second operand's value, a literal or a constant binding (its static type Type{T})
+@parity "dart2wasm/lib/code_generator.dart:3159 AstCodeGenerator.visitIsExpression" function visit_is_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local operand = node.args[2]
+    local operand_type = dart_type_of(self, operand)
+    local tested_static = dart_type_of(self, node.args[3])
+    tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type ||
+        reject!(Unquarantined("src/julia: a type test against a type computed at run time ($tested_static)"), "$(self.enclosing_member)")
+    local tested = tested_static.parameters[1]
+    local boxed_operand_type = Nothing <: operand_type ? self.translator.top_type[] : self.translator.top_type_non_nullable[]
+    translate_expression(self, operand, boxed_operand_type)
+    emit_is_test(self.translator.types[], self, tested, operand_type; location = "$(self.enclosing_member)")
+    return WasmBuilder.IR.NumType_i32
+end
 
 # Julia's PiNode is a narrowing its inference proved on this path, dart's unchecked AsExpression:
 # the operand at the expected type, the conversion a downcast where the wasm types differ; the
-# checked form, Julia's typeassert, is the stub below until the translator's topTypeNonNullable
+# checked form, Julia's typeassert, is the method below
 @parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" function visit_as_expression(self::AstCodeGenerator, node::NirPi, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     return translate_expression(self, node.val, expected_type)
 end
 
-@parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" @unported function visit_as_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+# Julia's typeassert(x, T), the checked AsExpression: Julia checks it whatever dart's options say about
+# omitting checks (a failed typeassert is a TypeError Julia's program may catch), so the operand is
+# boxed in the top type and types.dart's emitAsCheck checks it
+@parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" function visit_as_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local operand = node.args[2]
+    local operand_type = dart_type_of(self, operand)
+    local tested_static = dart_type_of(self, node.args[3])
+    tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type ||
+        reject!(Unquarantined("src/julia: a type test against a type computed at run time ($tested_static)"), "$(self.enclosing_member)")
+    local tested = tested_static.parameters[1]
+    local boxed_operand_type = Nothing <: operand_type ? self.translator.top_type[] : self.translator.top_type_non_nullable[]
+    translate_expression(self, operand, boxed_operand_type)
+    return emit_as_check(self.translator.types[], self, tested, operand_type, boxed_operand_type; location = "$(self.enclosing_member)")
+end
 
 @parity "dart2wasm/lib/code_generator.dart:3194 AstCodeGenerator.visitLoadLibrary" @unported function visit_load_library(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 

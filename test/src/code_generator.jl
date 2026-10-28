@@ -504,3 +504,32 @@ end
     # the add of two Int8s puts its result back sign-extended (i32.extend8_s, 0xc0)
     @test 0xc0 in compile_one(C.add8, (Int8, Int8))
 end
+
+module TypeTestCases
+# the entry's signature is concrete (Julia compiles no specialization for a Union signature); the
+# operand under test is the field read, whose inferred type is the Union
+maybe(r::Base.RefValue{Union{Nothing,Int64}}) = r[] isa Int64
+end
+
+@testset "code_generator.dart: isa and typeassert through types.dart's tests" begin
+    local t = translator_of(TypeTestCases.maybe, (Base.RefValue{Union{Nothing,Int64}},))
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    local body = only(t.component)
+    local g = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
+    local mb = D.main_module(t)
+    g.b[] = W.WasmBuilder.body(W.WasmBuilder.define(mb.functions[], W.WasmBuilder.define_function(mb.types[], IR.ValueType[], IR.ValueType[]), "probe"))
+    local x = W.NirSSA(findfirst(==(Union{Nothing,Int64}), body.types))
+    local isa_call = W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.isa)), x, W.NirConst(Core.Const(Int64))])
+    local ta_call = W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.typeassert)), x, W.NirConst(Core.Const(Int64))])
+    # routed to visitIsExpression and visitAsExpression; each reaches its operand's local (the field
+    # read is never visited here), a located rejection, past the routing and the tested type
+    for c in (isa_call, ta_call)
+        local e = rejection(() -> D.translate_expression(g, c, IR.NumType_i32))
+        @test e.rejection isa W.Internal && occursin("undefined variable", e.rejection.site)
+    end
+    # a type computed at run time is no type test's constant
+    local dyn = W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.isa)), x, x])
+    @test rejection(() -> D.visit_is_expression(g, dyn, IR.NumType_i32)).rejection isa W.Unquarantined
+end
