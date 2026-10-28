@@ -48,6 +48,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D41** Port dart's tests, Julia's answer the expected value; every dart test file has one entry.
 - **D42** Without a dart port, port Julia's compiler and LLVM's (pinned); invent no algorithm.
 - **D43** 100% port, then Julia and JS fuzzing, then drift re-audits; nothing bespoke before them.
+- **D44** After the re-audits: assess Lean formalization; then bespoke work; then a fast WT package.
 <!-- ledger:end -->
 
 ## How to work
