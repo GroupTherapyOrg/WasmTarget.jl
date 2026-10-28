@@ -12,9 +12,3 @@
 end
 
 @parity "dart2wasm/lib/wasm_annotations.dart:16 MemoryLimits" MemoryLimits(; min_size::Int, max_size::Union{Int,Nothing} = nothing)::MemoryLimits = MemoryLimits(Val(:_), min_size, max_size)
-
-@parity "dart2wasm/lib/wasm_annotations.dart:19 MemoryLimits.readAnnotation" @unported function MemoryLimits_read_annotation(nodes::KernelNodes, member::Core.MethodInstance) end
-
-@parity "dart2wasm/lib/wasm_annotations.dart:35 MemoryLimits._readMemoryType" @unported function MemoryLimits__read_memory_type(nodes::KernelNodes, constant::NirConst) end
-
-@parity "dart2wasm/lib/wasm_annotations.dart:43 MemoryLimits._readLimits" @unported function MemoryLimits__read_limits(nodes::KernelNodes, constant::NirConst) end

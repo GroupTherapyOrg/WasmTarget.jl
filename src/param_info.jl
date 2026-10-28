@@ -43,8 +43,6 @@ first read.
 
 @parity "dart2wasm/lib/param_info.dart:39 ParameterInfo.paramCount" param_count(self::ParameterInfo)::Int = length(self.positional) + length(self.named)
 
-@parity "dart2wasm/lib/param_info.dart:41 ParameterInfo._defaultValue" @unported function ParameterInfo__default_value(param::NirArgument) end
-
 @parity "dart2wasm/lib/param_info.dart:52 ParameterInfo._" ParameterInfo__(takes_context_or_receiver::Bool, type_param_count::Int, positional::Vector{Union{Nothing,Constant}},
         named::LinkedHashMap{String,Union{Nothing,Constant}})::ParameterInfo =
     ParameterInfo(Val(:_), takes_context_or_receiver, type_param_count, positional, named)

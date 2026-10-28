@@ -962,17 +962,17 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue" @unported function handle_field_initializer_value(self::NodeCounter, value::Union{Nothing,NirValue}) end
 
-@parity "dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock" @unported function visit_block(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock" @unported function visit_block(self::NodeCounter, node) end
 
-@parity "dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement" @unported function visit_empty_statement(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement" @unported function visit_empty_statement(self::NodeCounter, node::NirNothing) end
 
 @parity "dart2wasm/lib/translator.dart:3478 NodeCounter.visitReturnStatement" @unported function visit_return_statement(self::NodeCounter, node::NirReturn) end
 
-@parity "dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement" @unported function visit_labeled_statement(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement" @unported function visit_labeled_statement(self::NodeCounter, node) end
 
 @parity "dart2wasm/lib/translator.dart:3494 NodeCounter.visitBlockExpression" @unported function visit_block_expression(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement" @unported function visit_expression_statement(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement" @unported function visit_expression_statement(self::NodeCounter, node::NirStmt) end
 
 @parity "dart2wasm/lib/translator.dart:3504 NodeCounter.visitLet" @unported function visit_let(self::NodeCounter, node::NoCounterpart) end
 

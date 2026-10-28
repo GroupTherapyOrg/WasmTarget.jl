@@ -503,9 +503,9 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:775 AstCodeGenerator.visitLabeledStatement" @unported function visit_labeled_statement(self::AstCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:775 AstCodeGenerator.visitLabeledStatement" @unported function visit_labeled_statement(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:784 AstCodeGenerator.visitBreakStatement" @unported function visit_break_statement(self::AstCodeGenerator, node::NirGoto) end
+@parity "dart2wasm/lib/code_generator.dart:784 AstCodeGenerator.visitBreakStatement" @unported function visit_break_statement(self::AstCodeGenerator, node) end
 
 # a NIR variable is never captured (allocateContext) and always has its initializer, the statement
 # whose value it names
@@ -526,9 +526,9 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:916 AstCodeGenerator.visitAssertBlock" @unported function visit_assert_block(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:925 AstCodeGenerator.visitTryCatch" @unported function visit_try_catch(self::AstCodeGenerator, node::NirEnter) end
+@parity "dart2wasm/lib/code_generator.dart:925 AstCodeGenerator.visitTryCatch" @unported function visit_try_catch(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally" @unported function visit_try_finally(self::AstCodeGenerator, node::NirEnter) end
+@parity "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally" @unported function visit_try_finally(self::AstCodeGenerator, node) end
 
 @parity "dart2wasm/lib/code_generator.dart:1197 AstCodeGenerator.visitExpressionStatement" function visit_expression_statement(self::AstCodeGenerator, node::NirStmt)::Nothing
     translate_expression(self, node, void_marker(self))
@@ -541,15 +541,15 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional" @unported function _conditional(self::AstCodeGenerator, condition::NirValue, then::Function, otherwise::Union{Nothing,Function}, result::Vector{WasmBuilder.IR.ValueType}) end
 
-@parity "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement" @unported function visit_if_statement(self::AstCodeGenerator, node::NirGotoIfNot) end
+@parity "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement" @unported function visit_if_statement(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:1287 AstCodeGenerator.visitDoStatement" @unported function visit_do_statement(self::AstCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:1287 AstCodeGenerator.visitDoStatement" @unported function visit_do_statement(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:1296 AstCodeGenerator.visitWhileStatement" @unported function visit_while_statement(self::AstCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:1296 AstCodeGenerator.visitWhileStatement" @unported function visit_while_statement(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:1308 AstCodeGenerator.visitForStatement" @unported function visit_for_statement(self::AstCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:1308 AstCodeGenerator.visitForStatement" @unported function visit_for_statement(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:1325 AstCodeGenerator.emitForStatementUpdate" @unported function emit_for_statement_update(self::AstCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:1325 AstCodeGenerator.emitForStatementUpdate" @unported function emit_for_statement_update(self::AstCodeGenerator, node) end
 
 @parity "dart2wasm/lib/code_generator.dart:1356 AstCodeGenerator.visitForInStatement" @unported function visit_for_in_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
@@ -576,9 +576,9 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1405 AstCodeGenerator.visitSwitchStatement" @unported function visit_switch_statement(self::AstCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:1405 AstCodeGenerator.visitSwitchStatement" @unported function visit_switch_statement(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:1554 AstCodeGenerator.visitContinueSwitchStatement" @unported function visit_continue_switch_statement(self::AstCodeGenerator, node::NirGoto) end
+@parity "dart2wasm/lib/code_generator.dart:1554 AstCodeGenerator.visitContinueSwitchStatement" @unported function visit_continue_switch_statement(self::AstCodeGenerator, node) end
 
 @parity "dart2wasm/lib/code_generator.dart:1581 AstCodeGenerator.visitYieldStatement" @unported function visit_yield_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
@@ -899,6 +899,7 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" function visit_as_expression(self::AstCodeGenerator, node::NirPi, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     return translate_expression(self, node.val, expected_type)
 end
+
 @parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" @unported function visit_as_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:3194 AstCodeGenerator.visitLoadLibrary" @unported function visit_load_library(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
@@ -1116,9 +1117,9 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5182 BrTableInfo.emitBrTableExpr" @unported function emit_br_table_expr(self::BrTableInfo, b::WasmBuilder.InstructionsBuilder, switch_expr_local::WasmBuilder.IR.Local) end
 
-@parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" @unported function SwitchInfo(code_gen::AstCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" @unported function SwitchInfo(code_gen::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases" @unported function _initialize_special_cases(self::SwitchInfo, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases" @unported function _initialize_special_cases(self::SwitchInfo, node) end
 
 @parity "dart2wasm/lib/code_generator.dart:5534 _VirtualCallKind.toString" @unported function Base.show(io::IO, self::_VirtualCallKind) end
 

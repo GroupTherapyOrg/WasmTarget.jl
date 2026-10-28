@@ -25,7 +25,10 @@ const ROOT = normpath(joinpath(@__DIR__, ".."))
 # ---- the pin and the sdk -------------------------------------------------------------------------
 pin()::String = match(r"\b[0-9a-f]{40}\b", read(joinpath(ROOT, "dev", "PARITY_MASTER.md"), String)).match
 
-function sdk()::String
+# the checkout, verified at the pin once per run (each library path asks for it)
+const SDK = String[]
+sdk()::String = isempty(SDK) ? (push!(SDK, _sdk()); SDK[1]) : SDK[1]
+function _sdk()::String
     local dir = get(ENV, "WT_DART_SDK", joinpath(homedir(), ".cache", "wasmtarget", "dart-sdk"))
     local head = try
         readchomp(`git -C $dir rev-parse HEAD`)
@@ -848,7 +851,8 @@ function type_ref(S::Scope, s::AbstractString, from::AbstractString; at::Abstrac
         local row = get(kernel_types(), (r, n), nothing)
         row === nothing && error("skeleton: $from: the type $n ($r) has no row in KERNEL_TYPES (src/julia/kernel.jl)")
         push!(KERNEL_USED, (r, n))
-        return row
+        # a row whose types are planned (`planned: <row>`): the parameter stays unannotated until then
+        return startswith(row, "planned: ") ? "" : row
     end
     local k = r
     local td = findfirst(d -> d.kind == :typedef && d.symbol == n, S.decls[k])
@@ -1407,7 +1411,7 @@ function src_anchors()::Dict{String,Tuple{String,Bool}}
         local path = joinpath(dir, f)
         startswith(path, joinpath(srcdir, "julia")) && continue
         path == joinpath(srcdir, "WasmTarget.jl") && continue
-        for s in last(segments(read(path, String), path))
+        for s in last(segments(src_text(path), path))
             local a = canonical_anchor(s.anchor, keys)
             isempty(a) && continue
             local isabs = occursin(r"^@parity \"[^\"]+\" abstract type "m, s.text)
@@ -1435,7 +1439,7 @@ end
 function generate(file::String, S::Scope, anchors::Dict{String,Tuple{String,Bool}}, bykey::Dict{String,Tuple{String,Decl}})::String
     local path = jl_file(file)
     isfile(path) || return render(file, S)
-    local preamble, segs = segments(read(path, String), path)
+    local preamble, segs = segments(src_text(path), path)
     local keys = Set(scope())
     local texts = String[]
     local held = String[]       # each output entry's anchor, in order
@@ -1558,28 +1562,40 @@ end
 
 # the no-diff check: every in-scope file is exactly what the generator writes (a hand-edited stub, a
 # missing stub or a filled definition out of dart's order differs)
-function diff_main()::Int
-    local S = read_scope()
+# src's text of a file, read through SRC_READ, which the ratchet's plants replace (L210)
+const SRC_READ = Ref{Function}(p -> read(p, String))
+src_text(path::AbstractString)::String = SRC_READ[](path)
+
+# whether in-scope file `f` is missing or differs from what the generator writes, or nothing
+function file_fault(f::String, S::Scope, anchors, bykey)::Union{Nothing,String}
+    local path = jl_file(f)
+    isfile(path) || return "$(relpath(path, ROOT)) is missing"
+    local text = generate(f, S, anchors, bykey)
+    src_text(path) == text || return "$(relpath(path, ROOT)) differs from what dev/skeleton.jl writes"
+    return nothing
+end
+
+# the no-diff check's faults: the scope's, each file that differs, each stale Kernel row and, with
+# `fields`, each filled struct's field faults and each filled definition's Kernel-typed parameter that
+# is not the table's type
+function diff_faults(S::Scope = read_scope(); fields::Bool = true)::Vector{String}
     local anchors = src_anchors()
     local bykey = by_anchor(S)
-    local bad = length(scope_faults())
-    foreach(x -> println("✗ ", x), scope_faults())
+    local out = scope_faults()
     for f in scope()
-        local path = jl_file(f)
-        local text = generate(f, S, anchors, bykey)
-        if !isfile(path)
-            bad += 1; println("✗ $(relpath(path, ROOT)) is missing")
-        elseif read(path, String) != text
-            bad += 1; println("✗ $(relpath(path, ROOT)) differs from what dev/skeleton.jl writes")
-        end
+        local x = file_fault(f, S, anchors, bykey)
+        x === nothing || push!(out, x)
     end
-    for r in unused_kernel_rows(S)
-        bad += 1; println("✗ KERNEL_TYPES row $r: no in-scope file names it")
-    end
-    for x in field_faults(S)
-        bad += 1; println("✗ ", x)
-    end
-    return bad
+    append!(out, ("KERNEL_TYPES row $r: no in-scope file names it" for r in unused_kernel_rows(S)))
+    fields && append!(out, field_faults(S))
+    fields && append!(out, kernel_param_faults(S))
+    return out
+end
+
+function diff_main()::Int
+    local out = diff_faults()
+    foreach(x -> println("✗ ", x), out)
+    return length(out)
 end
 
 # ---- the fields: a ported struct keeps every dart instance field ------------------------------------
@@ -1638,7 +1654,7 @@ function field_faults(S::Scope)::Vector{String}
     for f in scope()
         local path = jl_file(f)
         isfile(path) || continue
-        for s in last(segments(read(path, String), path))
+        for s in last(segments(src_text(path), path))
             generated(s) && continue
             local a = canonical_anchor(s.anchor, keys)
             haskey(bykey, a) || continue
@@ -1657,6 +1673,94 @@ function field_faults(S::Scope)::Vector{String}
             end
             for n in come
                 any(w -> w[1] == n, want) || push!(out, "$at lists `$n` to come, which is no instance field of the dart class")
+            end
+        end
+    end
+    return out
+end
+
+# ---- the Kernel-typed parameters of filled definitions ------------------------------------------
+# The Kernel table types every Kernel-typed parameter, filled or stubbed (the lead's ruling, A46S1): a
+# filled definition's parameter whose dart type is a Kernel type is annotated with the table's row, as
+# the stub was. Parameters are matched by position (the receiver aside) and keywords by name; a
+# definition whose positional count differs from dart's is not matched (a port that reshaped it).
+
+# whether a dart parameter's type names a Kernel table row (its head type, past `?` and arguments)
+function kernel_typed(p::Param, S::Scope, from::AbstractString)::Bool
+    local ts = filter(t -> !(t in ("final", "const", "covariant", "required", "late", "var")), split(p.dart))
+    local i = findfirst(==(p.name), ts)
+    i === nothing || i == 1 && return false
+    local head = ts[1]
+    local pre = i >= 4 && ts[2] == "." ? (ts[1], ts[3]) : ("", head)
+    occursin(r"^[A-Z_]", pre[2]) || return false
+    local r = try resolve(pre[2], pre[1], from) catch; nothing end
+    return r !== nothing && !(r in scope_set()) && !startswith(r, "dart:") && haskey(kernel_types(), (r, pre[2]))
+end
+
+# a parsed definition's call: its positional arguments and keyword arguments, each name => annotation
+function call_args(ex)
+    while Meta.isexpr(ex, :macrocall); ex = ex.args[end]; end
+    (Meta.isexpr(ex, :function) || Meta.isexpr(ex, :(=))) && length(ex.args) == 2 || return nothing
+    local c = ex.args[1]
+    while Meta.isexpr(c, :where) || Meta.isexpr(c, :(::)) && length(c.args) == 2 && Meta.isexpr(c.args[1], :call) || Meta.isexpr(c, :where)
+        c = c.args[1]
+    end
+    Meta.isexpr(c, :call) || return nothing
+    local ann(a) = Meta.isexpr(a, :kw) ? ann(a.args[1]) : Meta.isexpr(a, :(::)) ? (length(a.args) == 2 ? (string(a.args[1]), string(a.args[2])) : ("", string(a.args[1]))) : (string(a), "")
+    local pos = Tuple{String,String}[]
+    local kw = Dict{String,String}()
+    for a in c.args[2:end]
+        if Meta.isexpr(a, :parameters)
+            foreach(k -> (local x = ann(k); kw[x[1]] = x[2]), a.args)
+        else
+            push!(pos, ann(a))
+        end
+    end
+    return (pos, kw)
+end
+
+# two annotations name one type: equal text, a Union's members in any order
+function same_type(a::AbstractString, b::AbstractString)::Bool
+    local norm(x) = (local e = try Meta.parse(x) catch; x end;
+                     Meta.isexpr(e, :curly) && e.args[1] === :Union ? Set(string.(e.args[2:end])) : replace(string(e), " " => ""))
+    return norm(a) == norm(b)
+end
+
+function kernel_param_faults(S::Scope)::Vector{String}
+    local out = String[]
+    local keys = Set(scope())
+    local bykey = by_anchor(S)
+    for f in scope()
+        local path = jl_file(f)
+        isfile(path) || continue
+        for s in last(segments(src_text(path), path))
+            generated(s) && continue
+            local a = canonical_anchor(s.anchor, keys)
+            haskey(bykey, a) || continue
+            local key, d = bykey[a]
+            d.kind in (:function, :method, :constructor, :factory, :operator, :setter) || continue
+            local ex = try Meta.parse(s.text) catch; nothing end
+            local args = ex === nothing ? nothing : call_args(ex)
+            args === nothing && continue
+            local pos, kw = args
+            local ps = params(d.params, S, key)
+            local req = [p for p in ps if p.section == :required]
+            local self = last(julia_name(d)) && !(occursin('.', d.symbol) && split(d.symbol, '.')[2] in ("toString", "hashCode"))
+            local jpos = self ? pos[2:end] : pos
+            local at = "$(relpath(path, ROOT)):$(s.first) $(d.symbol)"
+            local check(p, got) = begin
+                kernel_typed(p, S, key) || return
+                isempty(p.jtype) && return   # a planned row: unannotated until its types exist
+                same_type(got, p.jtype) ||
+                    push!(out, "$at: `$(p.name)` is $(isempty(got) ? "unannotated" : got), the Kernel table's $(p.jtype)")
+            end
+            if length(jpos) == length(req) + any(p -> p.section == :optional, ps)
+                for (p, (_, got)) in zip(req, jpos)
+                    check(p, got)
+                end
+            end
+            for p in ps
+                p.section == :named && haskey(kw, jname(p.name)) && check(p, kw[jname(p.name)])
             end
         end
     end
@@ -1964,6 +2068,10 @@ function scope_faults()::Vector{String}
     for f in union(ins, keys(outs))
         f in all || push!(out, "$f is no dart file at the pin")
     end
+    # each row says its kind (the scope file's header): a scope exclusion or the Julia step
+    for sec in ("out", "out_definitions", "out_types"), (k, why) in scope_section(sec)
+        occursin(r"^(scope|julia): \S", why) || push!(out, "dev/skeleton_scope.toml [$sec] \"$k\": its reason opens with no kind, `scope: ` or `julia: `")
+    end
     return out
 end
 
@@ -1986,20 +2094,24 @@ function count_main()
     println(rpad("in scope, in all", 50), lpad(total, 6))
 end
 
-function check_main()::Int
-    local bad = 0
+# the two readers' disagreements, one per in-scope file whose declaration lines differ
+function check_faults()::Vector{String}
+    local out = String[]
     for f in scope()
         local path = dart_source(f)
         local lexed = sort(unique(Int[d.line for d in read_dart(path)]))
         local indented = sort(unique(indented_lines(path)))
-        if lexed != indented
-            bad += 1
-            println("✗ $f: the lexer reads $(length(lexed)) declaration lines, the indentation $(length(indented))")
-            println("    the lexer alone: ", first(setdiff(lexed, indented), 12))
-            println("    the indentation alone: ", first(setdiff(indented, lexed), 12))
-        end
+        lexed == indented || push!(out, "$f: the lexer reads $(length(lexed)) declaration lines, the indentation " *
+            "$(length(indented)); the lexer alone $(first(setdiff(lexed, indented), 12)), the indentation alone " *
+            "$(first(setdiff(indented, lexed), 12))")
     end
-    return bad
+    return out
+end
+
+function check_main()::Int
+    local out = check_faults()
+    foreach(x -> println("✗ ", x), out)
+    return length(out)
 end
 
 end # module

@@ -186,9 +186,6 @@ end
 # Julia invoke names the MethodInstance it calls, a closure's among them, so no shape
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:367 DynamicCallSiteCollector.visitFunctionInvocation" visit_function_invocation(self::DynamicCallSiteCollector, node::NirInvoke)::Nothing = nothing
 
-
-
-
 """A constant expression of the i31 reference holding `value`: an entry of the class ids table."""
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:408 buildIntegerExpression" function build_integer_expression(module_::WasmBuilder.ModuleBuilder, value::Int64)::WasmBuilder.InstructionsBuilder
     local b = WasmBuilder.InstructionsBuilder(module_, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[WasmBuilder.IR.RefType_i31(; nullable = false)];

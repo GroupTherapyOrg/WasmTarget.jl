@@ -416,6 +416,66 @@ function closed_world_makers_negatives_missed(wt::Module)::Vector{String}
     return out
 end
 
+# ---- L210's file map made exact: src outside src/julia is what dev/skeleton.jl writes ------------
+# The generator, loaded once into its own module: its two dart readers agree on every in-scope file,
+# every in-scope src file is exactly what `write` writes from the pin (each stub regenerated in place,
+# each filled definition kept), and no KERNEL_TYPES row is stale. A port that deletes a stub, edits
+# one by hand or drifts from the generator fails the landing (A46S2).
+const _SKELETON = Module[]
+function skeleton_module()::Module
+    isempty(_SKELETON) || return _SKELETON[1]
+    local m = Module(:SkeletonRun)
+    Base.include(m, joinpath(ROOT, "dev", "skeleton.jl"))
+    push!(_SKELETON, Base.invokelatest(getglobal, m, :Skeleton))
+    return _SKELETON[1]
+end
+skeleton_call(f::Symbol, args...; kw...) = Base.invokelatest(getglobal(skeleton_module(), f), args...; kw...)
+
+function skeleton_faults_here()::Vector{String}
+    local S = skeleton_call(:read_scope)
+    return ["the tree: " * x for x in vcat(skeleton_call(:check_faults), skeleton_call(:diff_faults, S; fields = false))]
+end
+
+# its plants, each the generator's own check on a planted text of src/translator.jl, a file holding
+# stubs and filled definitions: a hand-edited stub, a deleted stub and a stale KERNEL_TYPES row each
+# refused, an edited filled definition passed
+function skeleton_negatives_missed()::Vector{String}
+    local out = String[]
+    local sk = skeleton_module()
+    local S = skeleton_call(:read_scope)
+    local f = "dart2wasm/lib/translator.dart"
+    local path = skeleton_call(:jl_file, f)
+    local real = read(path, String)
+    local bykey = skeleton_call(:by_anchor, S)
+    local hook = getglobal(sk, :SRC_READ)
+    local fault(text) = begin
+        local old = hook[]
+        hook[] = p -> p == path ? text : read(p, String)
+        try
+            skeleton_call(:file_fault, f, S, skeleton_call(:src_anchors), bykey) !== nothing
+        finally
+            hook[] = old
+        end
+    end
+    fault(real) && return ["the tree's src/translator.jl differs from what the generator writes; its plants cannot run"]
+    local stub = match(r"\n(@parity \"[^\"]+\" @unported function [^\n]*\((?:[^\n]*)\) end)\n", real)
+    stub === nothing && return ["src/translator.jl holds no stub to plant"]
+    fault(replace(real, stub[1] => replace(stub[1], ") end" => ", planted) end"); count = 1)) ||
+        push!(out, "negative missed: a hand-edited stub passes")
+    fault(replace(real, "\n" * stub[1] * "\n" => "\n"; count = 1)) || push!(out, "negative missed: a deleted stub passes")
+    local filled = match(r"\n(@parity \"[^\"]+\" function [^\n]*\n)(?=    )", real)
+    filled === nothing && return vcat(out, ["src/translator.jl holds no filled definition to plant"])
+    fault(replace(real, filled[1] => filled[1] * "    # planted\n"; count = 1)) && push!(out, "negative missed: an edited filled definition fails")
+    local kernel = skeleton_call(:kernel_types)
+    kernel[("kernel/lib/ast.dart", "PlantedNode")] = "NoCounterpart"
+    try
+        any(r -> occursin("PlantedNode", r), skeleton_call(:unused_kernel_rows, S)) || push!(out, "negative missed: a stale KERNEL_TYPES row passes")
+    finally
+        delete!(kernel, ("kernel/lib/ast.dart", "PlantedNode"))
+    end
+    return out
+end
+
 # the file map's, the anchors' and the quarantine's plants (src/julia/parity.jl): fixed source each
 # check or macro must refuse or pass, loaded into fresh modules under /plant/src (outside WT's src, so
 # only the plants' own rules apply) or, for the location rules, under WT's own src/julia and src/
@@ -432,6 +492,9 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         e isa V
     end
     if definition === :include_dart
+        # the file map made exact (the lead's ruling on M2, A46S2): src is what dev/skeleton.jl writes
+        append!(out, skeleton_faults_here())
+        append!(out, skeleton_negatives_missed())
         local dir = mktempdir()
         mkpath(joinpath(dir, "julia")); mkpath(joinpath(dir, "wasm_builder", "ir"))
         foreach(f -> write(joinpath(dir, f), "\n"), ("translator.jl", "WasmTarget.jl", joinpath("julia", "x.jl"), joinpath("wasm_builder", "ir", "type.jl")))
@@ -2180,7 +2243,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L210_file_map" => ("a file of src/ outside src/julia loads only through `include_dart(\"<file>.dart\", ...)` (Dale: dart2wasm 1:1 file for file, dev/LEDGER.md D1): each path a key of the pin table DART_FILES, its path under the pinned sdk's pkg/, loaded into its module (DART_MODULES: one per dart package, Dart2Wasm and WasmBuilder, and one per library dart imports under a prefix, WasmBuilder.IR, Dart2Wasm.Util and Dart2Wasm.JS, declared in src/julia/packages.jl), in two passes, every file's type declarations first, each after those its supertype and field types name, two declarations that need each other refused, then the rest; when WasmTarget has loaded the files it loaded are exactly the .jl files under src/ outside src/julia, src/WasmTarget.jl aside, read from the directory listing, never from text, every directory an include dependency by its listing; construction_check(::Val{:include_dart}) asserts it when WasmTarget loads (check_include_dart), and this lock only calls it, with its plants (a file loaded otherwise and an included file with no source each refused, a dart file outside the pin table refused by include_dart, a directory whose every file is included passed; a method naming a type a later file declares loaded, two declarations that need each other refused, one name in a package and its prefixed library's module loaded in both, each key's module) (dev/CHARTER.md C2)",
+    "L210_file_map" => ("a file of src/ outside src/julia loads only through `include_dart(\"<file>.dart\", ...)` (Dale: dart2wasm 1:1 file for file, dev/LEDGER.md D1): each path a key of the pin table DART_FILES, its path under the pinned sdk's pkg/, loaded into its module (DART_MODULES: one per dart package, Dart2Wasm and WasmBuilder, and one per library dart imports under a prefix, WasmBuilder.IR, Dart2Wasm.Util and Dart2Wasm.JS, declared in src/julia/packages.jl), in two passes, every file's type declarations first, each after those its supertype and field types name, two declarations that need each other refused, then the rest; when WasmTarget has loaded the files it loaded are exactly the .jl files under src/ outside src/julia, src/WasmTarget.jl aside, read from the directory listing, never from text, every directory an include dependency by its listing; construction_check(::Val{:include_dart}) asserts it when WasmTarget loads (check_include_dart), and this lock only calls it, with its plants (a file loaded otherwise and an included file with no source each refused, a dart file outside the pin table refused by include_dart, a directory whose every file is included passed; a method naming a type a later file declares loaded, two declarations that need each other refused, one name in a package and its prefixed library's module loaded in both, each key's module). The map made exact (the lead's ruling, A46S2): dev/skeleton.jl, run in this lock, finds its two dart readers agreeing on every in-scope file, every in-scope src file exactly what it writes from the pin (each stub regenerated in place, each filled definition kept) and no KERNEL_TYPES row stale; its plants on src/translator.jl: a hand-edited stub, a deleted stub and a stale row each refused, an edited filled definition passed (dev/CHARTER.md C2)",
         ConstructionLock(:include_dart)),
     "L211_anchor" => ("every definition outside src/julia carries `@parity \"<file>.dart:<line> <Symbol>\"`, the dart definition it copies at the pin (Dale: dart2wasm 1:1 through and through, dev/LEDGER.md D1): the macro refuses, at the definition's line, an anchor not of that form or whose file is no key of DART_FILES, a file in src/julia or one include_dart did not load, and a Julia name other than the one rule's (snake; a dart operator, toString or hashCode the Base function DART_BASE names alone; a Julia keyword name written var\"<name>\"), and expands `@unported` into a body rejecting with the anchor; when WasmTarget has loaded, every method it or a module under it defines is matched by identity to the definition whose evaluation made it (the world its evaluation spanned), and lies in that definition (its file, a body Julia gives no location, or the methods Julia's @enum writes for the enum it declares), and every binding is a marked definition's, by reflection over the method table and the bindings; construction_check(::Val{:parity}) asserts it (check_parity), and this lock only calls it, with its plants (an unmarked method, an unmarked binding, a Base method on a marked definition's line, an unregistered @enum, an anchor outside the pin table or with no line, a name not the rule's, a keyword name with a trailing _, toString as to_string, @parity in src/julia or in a file include_dart did not load, @unported outside @parity or with a body each refused; marked definitions, a registered @enum, var\"export\" and Base.show and Base.hash for toString and hashCode passed, an @unported stub rejecting with its anchor, and an @unported struct with no value, neither a singleton instance nor a constructor that returns; the snake rule; anchor_of reading a definition's anchor by the object it binds and refusing an unmarked one) (dev/CHARTER.md C2)",
         ConstructionLock(:parity)),

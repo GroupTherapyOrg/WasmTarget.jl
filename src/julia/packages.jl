@@ -41,7 +41,7 @@ import ..ClosedWorld, ..NirBody, ..NirWorld, ..NoCounterpart, ..build_nir, .._KI
        ..NirCFunction, ..NirInvokeModify, ..NirGoto, ..NirGotoIfNot, ..NirReturn, ..NirUnreachable, ..NirPhi, ..NirPi,
        ..NirEnter, ..NirUpsilon, ..NirPhiC, ..NirNothing, ..NirGlobalRead,
        ..NirValue, ..NirSSA, ..NirArgument, ..NirGlobal, ..NirConst
-# Kernel's constants by the Kernel table's rows (src/julia/constant.jl)
+# Kernel's constants by the Kernel table's rows (src/julia/kernel.jl)
 import ..Constant, ..InstanceConstant
 # dart:_wasm's array literal, the runtime type tables' constants (src/julia/wasm_array.jl)
 import ..WasmArrayLiteral

@@ -5,7 +5,8 @@
 # types every stub through this table, the one source, and refuses a type with no row, so each row is
 # a decision. A counterpart `NoCounterpart` says Julia has none: no value of it exists, so a stub
 # taking one can never be called, and its port drops or quarantines the parameter; as a supertype it
-# gives none. The platform's types (dart:core, dart:typed_data) are the generator's DART_TYPES.
+# gives none. A counterpart `planned: <row>` names the dev/MARCH.md row whose types will answer it; until
+# they exist a stub leaves the parameter unannotated. The platform's types (dart:core, dart:typed_data) are the generator's DART_TYPES.
 
 """
     NoCounterpart
@@ -143,21 +144,21 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "LogicalExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis"),
     ("kernel/lib/ast.dart", "ConditionalExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis"),
     ("kernel/lib/ast.dart", "FileUriExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis"),
-    ("kernel/lib/ast.dart", "IfStatement") => ("NirGotoIfNot", "a conditional is Julia's conditional jump"),
+    ("kernel/lib/ast.dart", "IfStatement") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
     ("kernel/lib/ast.dart", "ReturnStatement") => ("NirReturn", "a return is Julia's ReturnNode"),
-    ("kernel/lib/ast.dart", "BreakStatement") => ("NirGoto", "a jump is Julia's GotoNode"),
-    ("kernel/lib/ast.dart", "ContinueSwitchStatement") => ("NirGoto", "a jump is Julia's GotoNode"),
-    ("kernel/lib/ast.dart", "TryCatch") => ("NirEnter", "a try region is Julia's EnterNode; Julia lowers finally to a catch that rethrows"),
-    ("kernel/lib/ast.dart", "TryFinally") => ("NirEnter", "a try region is Julia's EnterNode; Julia lowers finally to a catch that rethrows"),
-    ("kernel/lib/ast.dart", "Block") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "EmptyStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "ExpressionStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "LabeledStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "WhileStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "DoStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "ForStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
+    ("kernel/lib/ast.dart", "BreakStatement") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
+    ("kernel/lib/ast.dart", "ContinueSwitchStatement") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
+    ("kernel/lib/ast.dart", "TryCatch") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
+    ("kernel/lib/ast.dart", "TryFinally") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
+    ("kernel/lib/ast.dart", "Block") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
+    ("kernel/lib/ast.dart", "EmptyStatement") => ("NirNothing", "an empty statement is the statement Julia's optimizer left as nothing"),
+    ("kernel/lib/ast.dart", "ExpressionStatement") => ("NirStmt", "an expression evaluated for its effect is a statement of Julia's optimized IR"),
+    ("kernel/lib/ast.dart", "LabeledStatement") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
+    ("kernel/lib/ast.dart", "WhileStatement") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
+    ("kernel/lib/ast.dart", "DoStatement") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
+    ("kernel/lib/ast.dart", "ForStatement") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
     ("kernel/lib/ast.dart", "ForInStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "SwitchStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
+    ("kernel/lib/ast.dart", "SwitchStatement") => ("planned: 1.D stackifier regions", "a structured statement is a structured region of the stackifier (LLVM CFGStackify's port, wt3-stackify) over Julia's CFG, dart's visitor ported over it 1:1; the region types are to come (the lead's ruling, A46S1)"),
     ("kernel/lib/ast.dart", "SwitchCase") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
     ("kernel/lib/ast.dart", "PatternSwitchStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
     ("kernel/lib/ast.dart", "PatternVariableDeclaration") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
@@ -174,29 +175,29 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "AuxiliaryInitializer") => ("NoCounterpart", "no counterpart: a Julia inner constructor has no initializer list; its new() is NirNew"),
     ("kernel/lib/core_types.dart", "CoreTypes") => ("NoCounterpart", "no counterpart: a port names Julia's types directly (the lead's ruling)"),
     ("kernel/lib/class_hierarchy.dart", "ClassHierarchy") => ("NoCounterpart", "no counterpart: Julia's supertype and subtyping answer it"),
-    ("kernel/lib/library_index.dart", "LibraryIndex") => ("NoCounterpart", "no counterpart: a port names Julia's bindings directly"),
-    ("kernel/lib/reference_from_index.dart", "ReferenceFromIndex") => ("NoCounterpart", "no counterpart: Kernel's incremental-compilation index"),
     ("kernel/lib/type_environment.dart", "StaticTypeContext") => ("NoCounterpart", "no counterpart: Julia's inference typed every statement"),
     ("kernel/lib/target/targets.dart", "Target") => ("NoCounterpart", "no counterpart: the front end's plumbing; WT is a library and rejects with reject!"),
     ("kernel/lib/target/targets.dart", "ConstantsBackend") => ("NoCounterpart", "no counterpart: the front end's plumbing; WT is a library and rejects with reject!"),
-    ("kernel/lib/target/targets.dart", "DiagnosticReporter") => ("NoCounterpart", "no counterpart: the front end's plumbing; WT is a library and rejects with reject!"),
-    ("kernel/lib/target/changed_structure_notifier.dart", "ChangedStructureNotifier") => ("NoCounterpart", "no counterpart: the front end's plumbing"),
     ("kernel/lib/verifier.dart", "Verification") => ("NoCounterpart", "no counterpart: Julia's trim verifier is the verifier (src/julia/subset.jl)"),
-    ("kernel/lib/verifier.dart", "VerificationStage") => ("NoCounterpart", "no counterpart: Julia's trim verifier is the verifier (src/julia/subset.jl)"),
     ("kernel/lib/src/printer.dart", "AstPrinter") => ("NoCounterpart", "no counterpart: Kernel's printer"),
     ("kernel/lib/visitor.dart", "Visitor") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
     ("kernel/lib/visitor.dart", "VisitorDefault") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
     ("kernel/lib/visitor.dart", "RecursiveVisitor") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
-    ("kernel/lib/visitor.dart", "Transformer") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
     ("kernel/lib/visitor.dart", "ConstantVisitor") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
     ("kernel/lib/visitor.dart", "MemberVisitor1") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
     ("kernel/lib/visitor.dart", "ExpressionVisitor1") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
     ("vm/lib/metadata/inferred_type.dart", "InferredType") => ("Type", "the global type flow analysis' type is Julia's inferred type"),
     ("vm/lib/metadata/unreachable.dart", "UnreachableNodeMetadataRepository") => ("NoCounterpart", "no counterpart: Julia's IR marks unreachable code itself (NirUnreachable)"),
-    ("front_end/lib/src/kernel/constant_evaluator.dart", "ConstantEvaluator") => ("NoCounterpart", "no counterpart: Julia's inference folds constants (Core.Const)"),
     ("front_end/lib/src/api_prototype/file_system.dart", "FileSystem") => ("NoCounterpart", "no counterpart: the front end's input"),
-    ("_fe_analyzer_shared/lib/src/messages/codes.dart", "Message") => ("NoCounterpart", "no counterpart: a diagnostic is a located rejection (reject!)"),
-    ("_fe_analyzer_shared/lib/src/messages/codes.dart", "LocatedMessage") => ("NoCounterpart", "no counterpart: a diagnostic is a located rejection (reject!)"),
     ("dart2wasm/lib/io_util.dart", "CompilerPhaseInputOutputManager") => ("NoCounterpart", "no counterpart: the command-line driver's files; WT is a library"),
 
 )
+
+# Two rows a port spells by their Kernel names (param_info.dart's default values, types.dart's
+# substitution tables), bound here, the table's file, so the table is the one place they are named.
+
+"""Kernel's `Constant`: the NIR's literal, `NirConst` (KERNEL_TYPES' row)."""
+@quarantine "Kernel's Constant is the NIR's literal; the Kernel table's row, by its Kernel name" WasmTarget.NirConst const Constant = NirConst
+
+"""Kernel's `InstanceConstant`: a `NirConst` of an object that is no other kind's value (KERNEL_TYPES' row)."""
+@quarantine "Kernel's InstanceConstant is the NIR's literal of an object; the Kernel table's row, by its Kernel name" WasmTarget.NirConst const InstanceConstant = NirConst

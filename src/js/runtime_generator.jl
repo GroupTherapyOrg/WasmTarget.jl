@@ -6,8 +6,6 @@ RuntimeFinalizer's dart fields: `_coreTypes`, `_interopMemberNamer`.
 """
 @parity "dart2wasm/lib/js/runtime_generator.dart:53 RuntimeFinalizer" @unported struct RuntimeFinalizer end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:20 _performJSInteropTransformations" @unported function _perform_js_interop_transformations(core_types::NoCounterpart, class_hierarchy::NoCounterpart, interop_dependent_libraries::Set{Module}) end
-
 """
 dart's `json.encode(s)` of a string (dart:convert's `_JsonStringifier.writeStringContent`): the
 string quoted, `"` and `\\` escaped, a control character below 32 as `\\b`, `\\t`, `\\n`, `\\f`,
@@ -98,8 +96,6 @@ end
 end
 
 @parity "dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate" @unported function Dart2Wasm.generate(self::RuntimeFinalizer, main_module_name::String, translated_procedures::AbstractVector{Core.MethodInstance}, constant_strings::Vector{String}, require_js_builtin::Bool, supports_additional_module_loading::Bool) end
-
-@parity "dart2wasm/lib/js/runtime_generator.dart:179 performJSInteropTransformations" @unported function perform_js_interop_transformations(libraries::Vector{Module}, core_types::NoCounterpart, class_hierarchy::NoCounterpart) end
 
 # Removes indentation common among all lines of [block] (except for first one)
 @parity "dart2wasm/lib/js/runtime_generator.dart:203 _unindentJsCode" function _unindent_js_code(block::String)::Vector{String}
