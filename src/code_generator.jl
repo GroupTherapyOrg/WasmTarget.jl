@@ -500,7 +500,7 @@ end
 # (src/llvm/target_machine.jl's addPreEmitPass: FixIrreducibleControlFlow, CFGSort, CFGStackify, over
 # Julia's own CFG and dominator tree; dev/LEDGER.md D42), its machine code lowered in layout order as
 # LLVM's MCInstLower does: BLOCK and LOOP the wasm block and loop (a scope ending the body typed by
-# the function's results), their ENDs `end`, BR `br`, BR_IF and BR_UNLESS `br_if` on the condition
+# the function's results), their ENDs `end`, BR `br`, BR_IF and BR_UNLESS branchIf on the condition
 # (negated for BR_UNLESS), and STMTS the block's Julia statements through translateStatement. A phi
 # is a local assigned on each edge into its block, as LLVM's PHI elimination copies in each
 # predecessor: before an unconditional branch or a fallthrough, and inside an `if` around a
@@ -584,13 +584,15 @@ end
         elseif mi.opcode in (BR_IF, BR_UNLESS)
             local depth = (mi.operands[1]::MOImm).imm
             local cond = (node.stmts[(mi.operands[2]::MOImm).imm]::NirGotoIfNot).cond
-            translate_expression(self, cond, WasmBuilder.IR.NumType_i32)
-            mi.opcode == BR_UNLESS && WasmBuilder.i32_eqz(b)
             local ms = moves(mb, target_at(depth)[2])
             if isempty(ms)
-                WasmBuilder.br_if(b, labels[end - depth][2])
+                branch_if(self, cond, labels[end - depth][2]; negated = mi.opcode == BR_UNLESS)
+            elseif mi.opcode == BR_IF
+                # the edge split: its moves only where the branch is taken, inside the if (one label deeper)
+                _conditional(self, cond, () -> (emit_moves(ms); WasmBuilder.br(b, labels[end - depth][2])), nothing, WasmBuilder.IR.ValueType[])
             else
-                # the edge split: its moves only where the branch is taken
+                translate_expression(self, cond, WasmBuilder.IR.NumType_i32)
+                WasmBuilder.i32_eqz(b)
                 WasmBuilder.if_(b)
                 emit_moves(ms)
                 WasmBuilder.br(b, labels[end - depth][2])
@@ -644,11 +646,39 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1201 AstCodeGenerator._hasLogicalOperator" @unported function _has_logical_operator(self::AstCodeGenerator, condition::NirValue) end
+# a NIR condition is an operand, never Kernel's Not or LogicalExpression: Julia lowers `!`, `&&` and
+# `||` to calls and jumps before its IR, so no condition has a logical operator to fold
+@parity "dart2wasm/lib/code_generator.dart:1201 AstCodeGenerator._hasLogicalOperator" _has_logical_operator(self::AstCodeGenerator, condition::NirValue)::Bool = false
 
-@parity "dart2wasm/lib/code_generator.dart:1208 AstCodeGenerator.branchIf" @unported function branch_if(self::AstCodeGenerator, condition::Union{Nothing,NirValue}, target::WasmBuilder.Label; negated::Bool) end
+# a NIR condition is an operand (_hasLogicalOperator): no Not to fold, no LogicalExpression to split,
+# so the branch is the condition, negated where asked, and br_if
+@parity "dart2wasm/lib/code_generator.dart:1208 AstCodeGenerator.branchIf" function branch_if(self::AstCodeGenerator, condition::Union{Nothing,NirValue}, target::WasmBuilder.Label; negated::Bool)::Nothing
+    local b = self.b[]
+    if condition === nothing
+        negated || WasmBuilder.br(b, target)
+        return nothing
+    end
+    translate_expression(self, condition, WasmBuilder.IR.NumType_i32)
+    negated && WasmBuilder.i32_eqz(b)
+    WasmBuilder.br_if(b, target)
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional" @unported function _conditional(self::AstCodeGenerator, condition::NirValue, then::Function, otherwise::Union{Nothing,Function}, result::Vector{WasmBuilder.IR.ValueType}) end
+@parity "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional" function _conditional(self::AstCodeGenerator, condition::NirValue, then::Function, otherwise::Union{Nothing,Function}, result::Vector{WasmBuilder.IR.ValueType})::Nothing
+    local b = self.b[]
+    _has_logical_operator(self, condition) &&
+        reject!(Internal("dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional: a NIR condition with a logical operator"), "$(self.enclosing_member)")
+    # Simple condition
+    translate_expression(self, condition, WasmBuilder.IR.NumType_i32)
+    WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], result)
+    then()
+    if otherwise !== nothing
+        WasmBuilder.else_(b)
+        otherwise()
+    end
+    WasmBuilder.var"end"(b)
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement" @unported function visit_if_statement(self::AstCodeGenerator, node) end
 
