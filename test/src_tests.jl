@@ -34,8 +34,13 @@ const SRC_TESTS = [
     "wasm_builder/ir_modules.jl",
     "wasm_builder/serializer.jl",
 ]
+# WT_PROGRESS names a file dev/check.sh reads when a stage outlives its hard limit: the test file and
+# the case running then, so a hang names itself
+const WT_PROGRESS = get(ENV, "WT_PROGRESS", "")
+wt_progress(what::AbstractString) = isempty(WT_PROGRESS) || write(WT_PROGRESS, what)
 @testset "src" begin
     for f in SRC_TESTS
+        wt_progress(f)
         @testset "$f" begin include(joinpath(@__DIR__, f)) end
     end
 end

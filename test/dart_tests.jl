@@ -690,6 +690,7 @@ _dart_same(got, native) = typeof(got) == typeof(native) && isequal(got, native)
 
 # what a compile gives: its rejection (an OutsideSubset by its first line), or :compiled
 _dart_outcome(f, args) = try
+    isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: compiling $(nameof(typeof(f))) $(typeof(args))")
     WasmTarget.compile(f, Tuple(map(typeof, args)))
     :compiled
 catch e

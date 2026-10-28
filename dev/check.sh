@@ -34,8 +34,23 @@ base=${CHECK_BASE:-origin/wt2}
 # the ratchet and the tests of ported code run side by side (two processes, one thread each): the
 # landing-lock holder's re-check is the loop's one serial step, so its wall is the slower of the two
 julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
+# a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
+# test file and case it was running (WT_PROGRESS), never an hour of a pinned core (2026-10-28: a
+# shared-DAG constant hashed in 2^40 steps and held a landing for 50 minutes)
+WT_HARD_LIMIT=${WT_HARD_LIMIT:-480}
+export WT_PROGRESS="$PWD/.wtd/progress"; : > "$WT_PROGRESS"
 julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
 julia --project=. --startup-file=no test/src_tests.jl > .wtd/src_tests.out 2>&1 & tpid=$!
+hung=""
+while kill -0 $rpid 2>/dev/null || kill -0 $tpid 2>/dev/null; do
+  if [ $(( $(date +%s) - s0 )) -gt "$WT_HARD_LIMIT" ]; then
+    kill -0 $rpid 2>/dev/null && { hung="the ratchet"; pkill -P $rpid 2>/dev/null; kill $rpid 2>/dev/null; }
+    kill -0 $tpid 2>/dev/null && { hung="${hung:+$hung and }the src tests, at: $(cat "$WT_PROGRESS" 2>/dev/null)"; pkill -P $tpid 2>/dev/null; kill $tpid 2>/dev/null; }
+    break
+  fi
+  sleep 2
+done
+if [ -n "$hung" ]; then echo "check: RED — past the hard limit of ${WT_HARD_LIMIT}s, a hang or a blow-up: $hung"; exit 1; fi
 wait $rpid; rc=$?
 wait $tpid; trc=$?
 if [ $rc -ne 0 ]; then
