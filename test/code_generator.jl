@@ -476,3 +476,18 @@ end
     # dart's topType without null, read once from the top type
     @test t.top_type_non_nullable[] == W.WasmBuilder.with_nullability(t.top_type[], false) && !t.top_type_non_nullable[].nullable
 end
+
+@testset "code_generator.dart: an unresolved call and a field outside the layout reject at their rows" begin
+    local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    # a generic call Julia left unresolved (the trim verifier's must-throw warning) is dart's dynamic
+    # invocation, rejected at that row, not at the intrinsifier's
+    local e = rejection(() -> D.visit_static_invocation(g, W.NirCall(W.NirValue[W.NirConst(Core.Const(sin)), W.NirArgument(2)]), IR.NumType_f64))
+    @test e.rejection isa W.Unported && occursin("visitDynamicInvocation", e.rejection.anchor)
+    # a field the class layout does not hold is a valid program outside the representation (A44S1)
+    local t = translator_of(FieldGenCases.getb, (FieldGenCases.P,))
+    local body = only(t.component)
+    local gb = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
+    local gf = body.stmts[findfirst(s -> s isa W.NirCall, body.stmts)]::W.NirCall
+    local nofield = W.NirCall(W.NirValue[gf.args[1], gf.args[2], W.NirConst(Core.Const(:nope))])
+    @test rejection(() -> D.visit_instance_get(gb, nofield, IR.NumType_f64)).rejection isa W.Unquarantined
+end

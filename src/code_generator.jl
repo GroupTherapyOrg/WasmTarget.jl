@@ -17,11 +17,15 @@ dart's AstCodeGenerator fields it holds (code_generator.dart:67): `translator`, 
 `enclosingMember`, the late `b`, `paramLocals` and `returnLabel` that `generate` assigns,
 `intrinsifier`, `exceptionLocationPrinted`, `locals` (a variable is a NIR argument or a used SSA
 statement, Julia's own names for a value), `thisLocal`, `preciseThisLocal`, `returnValueLocal`,
-`returnFinalizers` and `_sourceMapFileOffset`. dart's fields still to come with the pieces that read
-them: `typeContext`, `closures`, `typeLocals`, `breakFinalizers`, `tryBlockLocals`,
-`switchLabels`, `switchBackwardJumpInfos`, `_sourceMapSource`. dart's `kind`, an EntryPoint of
+`returnFinalizers` and `_sourceMapFileOffset`. dart's `kind`, an EntryPoint of
 reference_extensions.dart (out of scope), is always `EntryPoint.normal`: Julia checks no covariant
-parameter, so a method has one entry. `used`, the statements whose value an operand reads, is what
+parameter, so a method has one entry, and the field arrives only if another entry does.
+
+Fields to come: `kind` :3608, `typeContext` :77, `closures` :82, `typeLocals` :90, `breakFinalizers`
+:98, `tryBlockLocals` :101, `switchLabels` :104, `switchBackwardJumpInfos` :108, `_sourceMapSource`
+:159, each with the piece that reads it.
+
+`used`, the statements whose value an operand reads, is what
 Julia's SSA form forces: dart's Kernel nests an expression in its one use, NIR names it by
 SSAValue, so a used statement is a variable declaration and an unused one an expression statement.
 """
@@ -803,9 +807,15 @@ end
     return output_or_void(self.translator, call(self, target))
 end
 
-# a call of a builtin or an intrinsic, the one call Julia's verifier leaves unresolved: Julia's own
-# operations, which the intrinsifier emits; one it has no arm for rejects at the call, located
+# a call Julia left unresolved: a builtin or an intrinsic, Julia's own operations, which the
+# intrinsifier emits (one it has no arm for rejects at the call, located); or a generic call the trim
+# verifier admits only as a warning, its result Union{} (it must throw: verifytrim.jl), which is
+# dart's dynamic invocation and rejects at that row, located
 @parity "dart2wasm/lib/code_generator.dart:1668 AstCodeGenerator.visitStaticInvocation" function visit_static_invocation(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local f = nir_callee(node)
+    f isa Core.Builtin ||
+        reject!(Unported("dart2wasm/lib/code_generator.dart:1861 AstCodeGenerator.visitDynamicInvocation"),
+            "$(self.enclosing_member): a call of $f Julia left unresolved, its result Union{} (the trim verifier's must-throw warning)")
     local intrinsic_result = generate_static_intrinsic(self.intrinsifier[], node)
     intrinsic_result === nothing || return intrinsic_result
     reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"),
@@ -876,7 +886,7 @@ end
     local key = name.c.val
     local fields = class_instance_fields(cls, at)
     local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
-    k === nothing && reject!(Internal("$at: $cls has no field $key"), "$(self.enclosing_member)")
+    k === nothing && reject!(Unquarantined("src/julia/classes.jl: the field $key of $cls, which its class layout (a kind's runtime type layout) does not hold"), "$(self.enclosing_member)")
     return _direct_get(self, fields[k], receiver)
 end
 
@@ -924,7 +934,7 @@ end
     local key = name.c.val
     local fields = class_instance_fields(cls, at)
     local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
-    k === nothing && reject!(Internal("$at: $cls has no field $key"), "$(self.enclosing_member)")
+    k === nothing && reject!(Unquarantined("src/julia/classes.jl: the field $key of $cls, which its class layout (a kind's runtime type layout) does not hold"), "$(self.enclosing_member)")
     fields[k].mutable || reject!(Unquarantined("src/julia: a write of $cls's field $key, which Julia does not let change"), "$(self.enclosing_member)")
     return _direct_set(self, fields[k], receiver, node.args[4]; preserved = preserved, use_unchecked_entry = false)
 end
