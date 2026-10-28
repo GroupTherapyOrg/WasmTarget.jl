@@ -910,10 +910,315 @@ kind = "not_portable"
 what = "sealed, base, interface and final class modifiers"
 reason = "dart class modifiers, mostly static diagnostics; Julia's types have none"
 
-["tests/language/closure/"]
+["tests/language/closure/bound_closure_equality_test.dart"]
 kind = "behavior"
-what = "closures: capture, mutation of captured variables, closures in loops and as values"
-cases = []
+what = "tear-offs of one method from distinct, constant and differently-typed receivers (and of indexOf on strings and lists) compared by == and hashCode and collected in a set"
+cases = ["dart_closure/bound_closure_equality"]
+
+["tests/language/closure/bound_closure_primitives_test.dart"]
+kind = "behavior"
+what = "a tear-off of List.add and of a one-argument method stored in one variable and called"
+cases = ["dart_closure/bound_closure_primitives"]
+
+["tests/language/closure/break1_test.dart"]
+kind = "behavior"
+what = "closures over loop-scoped objects and strings when an inner loop breaks the outer labeled loop"
+cases = ["dart_closure/break1"]
+
+["tests/language/closure/break2_test.dart"]
+kind = "behavior"
+what = "a closure over an outer object called after a labeled break from a nested loop"
+cases = ["dart_closure/break2"]
+
+["tests/language/closure/break_test.dart"]
+kind = "behavior"
+what = "closures over objects and strings declared inside labeled loops left by break L2 and break L1"
+cases = ["dart_closure/break"]
+
+["tests/language/closure/call_wrong_argument_count_test.dart"]
+kind = "behavior"
+what = "a two-parameter local function called with three arguments throws"
+cases = ["dart_closure/call_wrong_argument_count"]
+
+["tests/language/closure/closure2_test.dart"]
+kind = "behavior"
+what = "a closure over a parameter passed to and invoked by another function"
+cases = ["dart_closure/closure2"]
+
+["tests/language/closure/closure3_test.dart"]
+kind = "behavior"
+what = "an immediately invoked closure whose discarded subtraction on null throws NoSuchMethodError"
+cases = ["dart_closure/closure3"]
+
+["tests/language/closure/closure4_test.dart"]
+kind = "behavior"
+what = "a local function captured inside a closure created within itself, called directly"
+cases = ["dart_closure/closure4"]
+
+["tests/language/closure/closure5_test.dart"]
+kind = "behavior"
+what = "a local function captured inside a closure created within itself, called through another closure"
+cases = ["dart_closure/closure5"]
+
+["tests/language/closure/closure6_test.dart"]
+kind = "behavior"
+what = "a closure capturing a local function named length, a final named box_0, a variable and a method call"
+cases = ["dart_closure/closure6"]
+
+["tests/language/closure/closure7_test.dart"]
+kind = "behavior"
+what = "implicitly bound tear-offs of two classes' methods with differing named-parameter defaults called with and without named arguments"
+cases = ["dart_closure/closure7"]
+
+["tests/language/closure/closure8_test.dart"]
+kind = "behavior"
+what = "a generic class's tear-off passed as a callback parameter of another generic class (regression, no assertion)"
+cases = ["dart_closure/closure8"]
+
+["tests/language/closure/closure_test.dart"]
+kind = "behavior"
+what = "a local function post-incrementing a captured object's field"
+cases = ["dart_closure/closure"]
+
+["tests/language/closure/closures_initializer2_test.dart"]
+kind = "behavior"
+what = "a constructor-initializer closure returning T, made in a loop and checked to be a Type"
+cases = ["dart_closure/closures_initializer2"]
+
+["tests/language/closure/closures_initializer_test.dart"]
+kind = "behavior"
+what = "closures in constructor initializers returning <T>[] and T, checked by is List<int> and == int"
+cases = ["dart_closure/closures_initializer"]
+
+["tests/language/closure/closures_with_complex_params_test.dart"]
+kind = "behavior"
+what = "closures with nested parameterized parameter types, an optional one with a const default, and function-typed parameters"
+cases = ["dart_closure/closures_with_complex_params"]
+
+["tests/language/closure/cycles_test.dart"]
+kind = "not_portable"
+what = "context chains from closures registered with Timer.run must not retain memory"
+reason = "depends on dart:async Timer.run callbacks and checks memory retention by allocation pressure; no runtime assertion beyond not running out of memory"
+
+["tests/language/closure/dynamic_closure_param_test.dart"]
+kind = "behavior"
+what = "a tear-off of an override with extra optional positional parameters passed where a one-parameter function is expected"
+cases = ["dart_closure/dynamic_closure_param"]
+
+["tests/language/closure/dynamic_test.dart"]
+kind = "behavior"
+what = "a closure with typed positional and named parameters invoked dynamically with named permutations, subtypes, missing/unknown arguments and wrong types"
+cases = ["dart_closure/dynamic"]
+
+["tests/language/closure/forwarding_stub_tearoff_generic_test.dart"]
+kind = "behavior"
+what = "a forwarding-stub tear-off through a generic interface accepts B and rejects A at call time"
+cases = ["dart_closure/forwarding_stub_tearoff_generic"]
+
+["tests/language/closure/forwarding_stub_tearoff_test.dart"]
+kind = "behavior"
+what = "a forwarding-stub tear-off through a covariant interface accepts B and rejects A at call time"
+cases = ["dart_closure/forwarding_stub_tearoff"]
+
+["tests/language/closure/identity_equality_nosuchmethod_tearoff_test.dart"]
+kind = "behavior"
+what = "identity and equality of noSuchMethod super tear-offs from the two copies of a mixin and a plain tear-off"
+cases = ["dart_closure/identity_equality_nosuchmethod_tearoff"]
+
+["tests/language/closure/identity_equality_tearoff_test.dart"]
+kind = "behavior"
+what = "identity and equality of top-level, static, instance, generic-instantiated, const and mixin super tear-offs"
+cases = ["dart_closure/identity_equality_tearoff"]
+
+["tests/language/closure/identity_equality_tostring_tearoff_test.dart"]
+kind = "behavior"
+what = "identity and equality of toString super tear-offs from the two copies of a mixin and a plain tear-off"
+cases = ["dart_closure/identity_equality_tostring_tearoff"]
+
+["tests/language/closure/implicit1_test.dart"]
+kind = "behavior"
+what = "a static method and a bound instance method passed as a typedef'd handler and called"
+cases = ["dart_closure/implicit1"]
+
+["tests/language/closure/implicit2_test.dart"]
+kind = "behavior"
+what = "a method calling an immediately invoked closure over a field, called directly and through its tear-off"
+cases = ["dart_closure/implicit2"]
+
+["tests/language/closure/implicit_closure_test.dart"]
+kind = "behavior"
+what = "a closure stored in an untyped field and called, a method returning a local closure, and a method tear-off"
+cases = ["dart_closure/implicit_closure"]
+
+["tests/language/closure/in_constructor_test.dart"]
+kind = "behavior"
+what = "a generic class's closure field returning <T>[] set by a factory or by the constructor default, checked by is List<T>"
+cases = ["dart_closure/in_constructor"]
+
+["tests/language/closure/in_field_initializer_test.dart"]
+kind = "behavior"
+what = "a field initialized to a map holding a closure, looked up and called"
+cases = ["dart_closure/in_field_initializer"]
+
+["tests/language/closure/in_initializer2_test.dart"]
+kind = "behavior"
+what = "an initializer closure over a parameter called by the superclass constructor before the body runs"
+cases = ["dart_closure/in_initializer2"]
+
+["tests/language/closure/in_initializer_test.dart"]
+kind = "behavior"
+what = "a constructor parameter captured by two initializer closures and reassigned in the body; a subclass's own initializer closure"
+cases = ["dart_closure/in_initializer"]
+
+["tests/language/closure/instantiation_closure_equality_test.dart"]
+kind = "behavior"
+what = "generic closures created in a loop: equality of their instantiations agrees with equality of the closures"
+cases = ["dart_closure/instantiation_closure_equality"]
+
+["tests/language/closure/internals_test.dart"]
+kind = "not_portable"
+what = "reading target, self and receiver getters off a tear-off"
+reason = "static diagnostics only: each line is an UNDEFINED_GETTER compile-time error; no runtime check remains"
+
+["tests/language/closure/invoked_through_interface_target_field_test.dart"]
+kind = "behavior"
+what = "a field holding a generic method tear-off, invoked as an interface method, throws on a String and accepts an int (the field/method conflict itself is a compile error)"
+cases = ["dart_closure/invoked_through_interface_target_field"]
+
+["tests/language/closure/invoked_through_interface_target_getter_test.dart"]
+kind = "behavior"
+what = "a getter returning a generic method tear-off, invoked as an interface method, throws on a String and accepts an int (the getter/method conflict itself is a compile error)"
+cases = ["dart_closure/invoked_through_interface_target_getter"]
+
+["tests/language/closure/minify_closure_variable_collision_test.dart"]
+kind = "behavior"
+what = "a closure over 14 locals stored in a list, compared with a class whose == is always true, and called"
+cases = ["dart_closure/minify_closure_variable_collision"]
+
+["tests/language/closure/nested_generic_closure_test.dart"]
+kind = "not_portable"
+what = "run-time types of functions taking generic function parameters (X Function<X>(X)) checked with Expect.type and is"
+reason = "its only checks are reified rank-2 generic function types; Julia functions carry no signature type and have no generic function types"
+
+["tests/language/closure/param_null_to_object_test.dart"]
+kind = "behavior"
+what = "closures whose Null/Never/String parameter types are weakened to Object? checked against function types"
+cases = ["dart_closure/param_null_to_object"]
+
+["tests/language/closure/parameter_default_type_checking_error_test.dart"]
+kind = "not_portable"
+what = "default values of closure parameters checked against explicit and inferred parameter types"
+reason = "static diagnostics only: every section is a LIST_ELEMENT_TYPE_NOT_ASSIGNABLE compile-time error and main is empty"
+
+["tests/language/closure/parameter_default_type_inference_test.dart"]
+kind = "behavior"
+what = "optional positional and named closure-parameter defaults take their context type and are the canonical const list"
+cases = ["dart_closure/parameter_default_type_inference"]
+
+["tests/language/closure/parameter_types_test.dart"]
+kind = "behavior"
+what = "a closure counting its calls, called with a String and then through a Function field with an int"
+cases = ["dart_closure/parameter_types"]
+
+["tests/language/closure/parse_closures_in_initializers_test.dart"]
+kind = "behavior"
+what = "function literals in initializers: parenthesized, in a list, in a map and as an argument (the string-interpolated closure is omitted)"
+cases = ["dart_closure/parse_closures_in_initializers"]
+
+["tests/language/closure/partial_instantiation_eager_bounds_check_test.dart"]
+kind = "behavior"
+what = "partially instantiating a generic method tear-off with a type outside its bound throws at instantiation"
+cases = ["dart_closure/partial_instantiation_eager_bounds_check"]
+
+["tests/language/closure/partial_instantiation_static_bounds_check_test.dart"]
+kind = "not_portable"
+what = "assigning generic tear-offs to function types whose argument violates the type-parameter bound"
+reason = "static diagnostics only: each assignment is an INVALID_ASSIGNMENT compile-time error; no runtime check remains"
+
+["tests/language/closure/partial_tearoff_instantiation_test.dart"]
+kind = "behavior"
+what = "a generic top-level function as a const field default, called with and without explicit type arguments, and a runtime type error section"
+cases = ["dart_closure/partial_tearoff_instantiation"]
+
+["tests/language/closure/regress46568_test.dart"]
+kind = "behavior"
+what = "two const generic-function instantiations are not canonicalized together and each calls its own function"
+cases = ["dart_closure/regress46568"]
+
+["tests/language/closure/regression_62319_test.dart"]
+kind = "behavior"
+what = "a null-aware call on a never-instantiated class's method returning a closure, never taken (dart2wasm compile crash regression)"
+cases = ["dart_closure/regression_62319"]
+
+["tests/language/closure/self_reference_test.dart"]
+kind = "behavior"
+what = "a local function recursing into itself inside try/finally, counting in finally"
+cases = ["dart_closure/self_reference"]
+
+["tests/language/closure/shared_state_test.dart"]
+kind = "behavior"
+what = "two closures sharing one mutable binding, created plainly, in a loop and in a nested loop"
+cases = ["dart_closure/shared_state"]
+
+["tests/language/closure/side_effect_test.dart"]
+kind = "behavior"
+what = "a closure in a static field and a local closure writing a global, called from methods"
+cases = ["dart_closure/side_effect"]
+
+["tests/language/closure/tearoff_bounds_instantiation_test.dart"]
+kind = "not_portable"
+what = "the printed runtimeType of a generic method tear-off from C<int> equals a top-level generic function's"
+reason = "its only check compares printed reified function types; Julia functions carry no signature type to print"
+
+["tests/language/closure/tearoff_dynamic_test.dart"]
+kind = "behavior"
+what = "tear-offs and super tear-offs through static and dynamic receivers: equality, hashCode, wrong-argument throws, toString and noSuchMethod tear-offs (noSuchMethod part omitted)"
+cases = ["dart_closure/tearoff_dynamic"]
+
+["tests/language/closure/tearoff_super_default_test.dart"]
+kind = "behavior"
+what = "a super tear-off and super calls of a method whose override has a different optional-positional default"
+cases = ["dart_closure/tearoff_super_default"]
+
+["tests/language/closure/type_arguments_test.dart"]
+kind = "behavior"
+what = "type arguments of local generic functions: explicit, instantiated to bounds and through partial tear-off instantiation (B<Z,P> part omitted)"
+cases = ["dart_closure/type_arguments"]
+
+["tests/language/closure/type_test.dart"]
+kind = "behavior"
+what = "a closure's result cast to a subtype it is not throws a TypeError"
+cases = ["dart_closure/type_test"]
+
+["tests/language/closure/type_variable_test.dart"]
+kind = "behavior"
+what = "a local function inside a generic class method returns the type parameter T"
+cases = ["dart_closure/type_variable"]
+
+["tests/language/closure/type_variables_test.dart"]
+kind = "behavior"
+what = "closures in a generic class's constructor and method construct A<T> (the async closure check is omitted)"
+cases = ["dart_closure/type_variables"]
+
+["tests/language/closure/unnamed_closure_test.dart"]
+kind = "behavior"
+what = "an immediately invoked closure with a do-while(false) loop applying operator [] to a non-list"
+cases = ["dart_closure/unnamed_closure"]
+
+["tests/language/closure/variable_shadow_test.dart"]
+kind = "behavior"
+what = "a returned local function whose parameter shadows the enclosing parameter and reads an intermediate local"
+cases = ["dart_closure/variable_shadow"]
+
+["tests/language/closure/with_super_field_test.dart"]
+kind = "behavior"
+what = "super.field read inside a closure while a subclass getter overrides the field"
+cases = ["dart_closure/with_super_field"]
+
+["tests/language/closure/with_super_send_test.dart"]
+kind = "behavior"
+what = "a super method call inside a closure passed to forEach"
+cases = ["dart_closure/with_super_send"]
 
 ["tests/language/compile_time_constant/"]
 kind = "not_portable"
@@ -1400,10 +1705,245 @@ kind = "behavior"
 what = "enums, their values, indexes and names (Julia's @enum)"
 cases = []
 
-["tests/language/exception/"]
+["tests/language/exception/catch_liveness_test.dart"]
 kind = "behavior"
-what = "throw, try, catch, finally and rethrow"
-cases = []
+what = "a local assigned after a throwing call keeps its value in catch and after"
+cases = ["dart_exception/catch_liveness"]
+
+["tests/language/exception/code_after_try_is_executed_test.dart"]
+kind = "behavior"
+what = "code after try/on String catch runs; a later throw escapes (runtime error section)"
+cases = ["dart_exception/code_after_try_is_executed"]
+
+["tests/language/exception/exception_test.dart"]
+kind = "behavior"
+what = "on String catch twice; a TypeError selected among on String / on TypeError / catch"
+cases = ["dart_exception/exception"]
+
+["tests/language/exception/finally10_test.dart"]
+kind = "behavior"
+what = "a catch that rethrows still runs finally"
+cases = ["dart_exception/finally10"]
+
+["tests/language/exception/finally11_test.dart"]
+kind = "behavior"
+what = "a catch with a nested try/catch that rethrows still runs finally"
+cases = ["dart_exception/finally11"]
+
+["tests/language/exception/finally12_test.dart"]
+kind = "behavior"
+what = "break in an inner finally overridden by return in the outer finally"
+cases = ["dart_exception/finally12"]
+
+["tests/language/exception/finally1_test.dart"]
+kind = "behavior"
+what = "return in try runs finally after the return value is taken"
+cases = ["dart_exception/finally1"]
+
+["tests/language/exception/finally2_test.dart"]
+kind = "behavior"
+what = "return through two nested finally blocks"
+cases = ["dart_exception/finally2"]
+
+["tests/language/exception/finally3_test.dart"]
+kind = "behavior"
+what = "labeled continue of an outer loop out of nested try/finally, then return through finally"
+cases = ["dart_exception/finally3"]
+
+["tests/language/exception/finally4_test.dart"]
+kind = "behavior"
+what = "return after a try/finally; a later try/finally never runs"
+cases = ["dart_exception/finally4"]
+
+["tests/language/exception/finally5_test.dart"]
+kind = "behavior"
+what = "returns through nested finally blocks on two parameter-chosen paths"
+cases = ["dart_exception/finally5"]
+
+["tests/language/exception/finally6_test.dart"]
+kind = "behavior"
+what = "break of an inner labeled loop inside nested try/finally"
+cases = ["dart_exception/finally6"]
+
+["tests/language/exception/finally7_test.dart"]
+kind = "behavior"
+what = "exception thrown from a closure capturing a variable; catch and finally call another closure"
+cases = ["dart_exception/finally7"]
+
+["tests/language/exception/finally8_test.dart"]
+kind = "behavior"
+what = "throw, break and return in finally override a pending return"
+cases = ["dart_exception/finally8"]
+
+["tests/language/exception/finally9_test.dart"]
+kind = "behavior"
+what = "throw in finally after try/catch; break out of a loop from a try/catch/finally nested in finally"
+cases = ["dart_exception/finally9"]
+
+["tests/language/exception/finally_test.dart"]
+kind = "behavior"
+what = "a field update in try is seen by finally"
+cases = ["dart_exception/finally"]
+
+["tests/language/exception/identity_test.dart"]
+kind = "behavior"
+what = "a thrown string, object, int and double are caught as the same value"
+cases = ["dart_exception/identity"]
+
+["tests/language/exception/in_increment_test.dart"]
+kind = "behavior"
+what = "a field increment throws (no + on the value); the store never completes"
+cases = ["dart_exception/in_increment"]
+
+["tests/language/exception/multiple_breaks_crossing_finally_test.dart"]
+kind = "behavior"
+what = "breaks to two different labeled blocks crossing one finally"
+cases = ["dart_exception/multiple_breaks_crossing_finally"]
+
+["tests/language/exception/nested_catch_rethrow_test.dart"]
+kind = "behavior"
+what = "rethrow after a nested try/catch rethrows the outer exception"
+cases = ["dart_exception/nested_catch_rethrow"]
+
+["tests/language/exception/on_catch_malformed_type_test.dart"]
+kind = "not_portable"
+what = "on-catch clauses naming a non-type"
+reason = "static error test: Unavailable is not a type (NON_TYPE_IN_CATCH_CLAUSE); every expectation depends on the malformed clause"
+
+["tests/language/exception/rethrow_test.dart"]
+kind = "behavior"
+what = "rethrow keeps the identical exception, also past an on-clause of another type"
+cases = ["dart_exception/rethrow"]
+
+["tests/language/exception/throw1_test.dart"]
+kind = "behavior"
+what = "first matching on-clause wins: an interface clause before the exact class"
+cases = ["dart_exception/throw1"]
+
+["tests/language/exception/throw2_test.dart"]
+kind = "behavior"
+what = "a throw inside a catch caught by a nested try, then finally"
+cases = ["dart_exception/throw2"]
+
+["tests/language/exception/throw3_test.dart"]
+kind = "behavior"
+what = "a callee catches and rethrows; the caller catches, then finally"
+cases = ["dart_exception/throw3"]
+
+["tests/language/exception/throw4_test.dart"]
+kind = "behavior"
+what = "no matching on-clause in the callee: its finally runs, then the implicit rethrow"
+cases = ["dart_exception/throw4"]
+
+["tests/language/exception/throw5_test.dart"]
+kind = "behavior"
+what = "no matching on-clause and no finally in the callee: implicit rethrow"
+cases = ["dart_exception/throw5"]
+
+["tests/language/exception/throw6_test.dart"]
+kind = "behavior"
+what = "try/finally without catch: finally runs, the exception propagates"
+cases = ["dart_exception/throw6"]
+
+["tests/language/exception/throw8_test.dart"]
+kind = "behavior"
+what = "a throw in finally replaces a pending return"
+cases = ["dart_exception/throw8"]
+
+["tests/language/exception/throw_expr_test.dart"]
+kind = "behavior"
+what = "throw expressions: of assignment, increment, sum, nested throw, throwing argument, interpolation, cascade, getter"
+cases = ["dart_exception/throw_expr"]
+
+["tests/language/exception/throw_test.dart"]
+kind = "behavior"
+what = "a thrown class caught by its on-clause, then finally"
+cases = ["dart_exception/throw"]
+
+["tests/language/exception/try_catch2_test.dart"]
+kind = "behavior"
+what = "nested try/catch with no exception thrown"
+cases = ["dart_exception/try_catch2"]
+
+["tests/language/exception/try_catch3_test.dart"]
+kind = "behavior"
+what = "many trys with no exception, a parametric on-clause, finally sets the result"
+cases = ["dart_exception/try_catch3"]
+
+["tests/language/exception/try_catch4_test.dart"]
+kind = "behavior"
+what = "return, break and continue in try or catch overridden by continue in finally"
+cases = ["dart_exception/try_catch4"]
+
+["tests/language/exception/try_catch5_test.dart"]
+kind = "behavior"
+what = "a return in an inner try overridden by continue in two finally blocks"
+cases = ["dart_exception/try_catch5"]
+
+["tests/language/exception/try_catch_on_syntax_test.dart"]
+kind = "behavior"
+what = "on-clauses tried in order against a subclass (syntax-error sections dropped)"
+cases = ["dart_exception/try_catch_on_syntax"]
+
+["tests/language/exception/try_catch_optimized1_test.dart"]
+kind = "behavior"
+what = "locals, parameters and the caught value read in catch after a throw in optimized code"
+cases = ["dart_exception/try_catch_optimized1"]
+
+["tests/language/exception/try_catch_optimized2_test.dart"]
+kind = "behavior"
+what = "a loop sum survives a call through try/finally"
+cases = ["dart_exception/try_catch_optimized2"]
+
+["tests/language/exception/try_catch_optimized3_test.dart"]
+kind = "behavior"
+what = "a double updated in try is read in catch"
+cases = ["dart_exception/try_catch_optimized3"]
+
+["tests/language/exception/try_catch_optimized4_test.dart"]
+kind = "behavior"
+what = "a catch that rethrows the caught value with throw, in a loop"
+cases = ["dart_exception/try_catch_optimized4"]
+
+["tests/language/exception/try_catch_optimized5_test.dart"]
+kind = "behavior"
+what = "an optional parameter updated in try is read in catch"
+cases = ["dart_exception/try_catch_optimized5"]
+
+["tests/language/exception/try_catch_osr_test.dart"]
+kind = "behavior"
+what = "loops before, inside and after a try/catch around a call through try/finally"
+cases = ["dart_exception/try_catch_osr"]
+
+["tests/language/exception/try_catch_regress_27483_test.dart"]
+kind = "behavior"
+what = "a local updated in try is read in catch"
+cases = ["dart_exception/try_catch_regress_27483"]
+
+["tests/language/exception/try_catch_syntax_test.dart"]
+kind = "not_portable"
+what = "malformed try/catch/finally/rethrow forms"
+reason = "whole file is syntax and compile-time error sections; nothing runs once they are removed"
+
+["tests/language/exception/try_catch_test.dart"]
+kind = "behavior"
+what = "on-clause order over a class hierarchy, nested trys, catch-all, catch variable scope (test12 static error dropped)"
+cases = ["dart_exception/try_catch"]
+
+["tests/language/exception/try_finally_regress_25333_test.dart"]
+kind = "behavior"
+what = "a try/catch inside a finally entered by an exception; the original exception continues"
+cases = ["dart_exception/try_finally_regress_25333"]
+
+["tests/language/exception/try_finally_regress_25654_test.dart"]
+kind = "behavior"
+what = "a labeled break out of try/finally runs finally once, then a throw"
+cases = ["dart_exception/try_finally_regress_25654"]
+
+["tests/language/exception/try_multiple_catch_async.dart"]
+kind = "not_portable"
+what = "multiple on-clauses after an awaited async throw (issue 55347)"
+reason = "async: the regression is in the async state machine across an await; also not a _test file"
 
 ["tests/language/export/"]
 kind = "not_portable"
@@ -1955,10 +2495,425 @@ kind = "helper"
 what = "the dart:io script that writes the function_type<N>_test.dart files from typedef shapes (no test of its own)"
 of = ["tests/language/function_type/function_type0_test.dart", "tests/language/function_type/function_type1_test.dart", "tests/language/function_type/function_type2_test.dart", "tests/language/function_type/function_type3_test.dart", "tests/language/function_type/function_type4_test.dart", "tests/language/function_type/function_type5_test.dart", "tests/language/function_type/function_type6_test.dart", "tests/language/function_type/function_type7_test.dart", "tests/language/function_type/function_type8_test.dart", "tests/language/function_type/function_type9_test.dart", "tests/language/function_type/function_type10_test.dart", "tests/language/function_type/function_type11_test.dart", "tests/language/function_type/function_type12_test.dart", "tests/language/function_type/function_type13_test.dart", "tests/language/function_type/function_type14_test.dart", "tests/language/function_type/function_type15_test.dart", "tests/language/function_type/function_type16_test.dart", "tests/language/function_type/function_type17_test.dart", "tests/language/function_type/function_type18_test.dart", "tests/language/function_type/function_type19_test.dart", "tests/language/function_type/function_type20_test.dart", "tests/language/function_type/function_type21_test.dart", "tests/language/function_type/function_type22_test.dart", "tests/language/function_type/function_type23_test.dart", "tests/language/function_type/function_type24_test.dart", "tests/language/function_type/function_type25_test.dart", "tests/language/function_type/function_type26_test.dart", "tests/language/function_type/function_type27_test.dart", "tests/language/function_type/function_type28_test.dart", "tests/language/function_type/function_type29_test.dart", "tests/language/function_type/function_type30_test.dart", "tests/language/function_type/function_type31_test.dart", "tests/language/function_type/function_type32_test.dart", "tests/language/function_type/function_type33_test.dart", "tests/language/function_type/function_type34_test.dart", "tests/language/function_type/function_type35_test.dart", "tests/language/function_type/function_type36_test.dart", "tests/language/function_type/function_type37_test.dart", "tests/language/function_type/function_type38_test.dart", "tests/language/function_type/function_type39_test.dart", "tests/language/function_type/function_type40_test.dart", "tests/language/function_type/function_type41_test.dart", "tests/language/function_type/function_type42_test.dart", "tests/language/function_type/function_type43_test.dart", "tests/language/function_type/function_type44_test.dart", "tests/language/function_type/function_type45_test.dart", "tests/language/function_type/function_type46_test.dart", "tests/language/function_type/function_type47_test.dart", "tests/language/function_type/function_type48_test.dart", "tests/language/function_type/function_type49_test.dart", "tests/language/function_type/function_type50_test.dart", "tests/language/function_type/function_type51_test.dart", "tests/language/function_type/function_type52_test.dart", "tests/language/function_type/function_type53_test.dart", "tests/language/function_type/function_type54_test.dart", "tests/language/function_type/function_type55_test.dart", "tests/language/function_type/function_type56_test.dart", "tests/language/function_type/function_type57_test.dart", "tests/language/function_type/function_type58_test.dart", "tests/language/function_type/function_type59_test.dart", "tests/language/function_type/function_type60_test.dart", "tests/language/function_type/function_type61_test.dart", "tests/language/function_type/function_type62_test.dart", "tests/language/function_type/function_type63_test.dart", "tests/language/function_type/function_type64_test.dart", "tests/language/function_type/function_type65_test.dart", "tests/language/function_type/function_type66_test.dart", "tests/language/function_type/function_type67_test.dart", "tests/language/function_type/function_type68_test.dart", "tests/language/function_type/function_type69_test.dart", "tests/language/function_type/function_type70_test.dart", "tests/language/function_type/function_type71_test.dart", "tests/language/function_type/function_type72_test.dart", "tests/language/function_type/function_type73_test.dart", "tests/language/function_type/function_type74_test.dart", "tests/language/function_type/function_type75_test.dart", "tests/language/function_type/function_type76_test.dart", "tests/language/function_type/function_type77_test.dart", "tests/language/function_type/function_type78_test.dart", "tests/language/function_type/function_type79_test.dart", "tests/language/function_type/function_type80_test.dart", "tests/language/function_type/function_type81_test.dart", "tests/language/function_type/function_type82_test.dart", "tests/language/function_type/function_type83_test.dart", "tests/language/function_type/function_type84_test.dart", "tests/language/function_type/function_type85_test.dart", "tests/language/function_type/function_type86_test.dart", "tests/language/function_type/function_type87_test.dart", "tests/language/function_type/function_type88_test.dart", "tests/language/function_type/function_type89_test.dart", "tests/language/function_type/function_type90_test.dart", "tests/language/function_type/function_type91_test.dart", "tests/language/function_type/function_type92_test.dart", "tests/language/function_type/function_type93_test.dart", "tests/language/function_type/function_type94_test.dart", "tests/language/function_type/function_type95_test.dart", "tests/language/function_type/function_type96_test.dart", "tests/language/function_type/function_type97_test.dart", "tests/language/function_type/function_type98_test.dart", "tests/language/function_type/function_type99_test.dart"]
 
-["tests/language/generic/"]
+["tests/language/generic/async_star_test.dart"]
+kind = "not_portable"
+what = "a generic async* function yielding its argument, consumed by await for"
+reason = "depends on async*/Stream and await for (async), which have no Julia meaning here"
+
+["tests/language/generic/async_test.dart"]
+kind = "not_portable"
+what = "a generic async function awaited"
+reason = "depends on async/await and Future (async), which have no Julia meaning here"
+
+["tests/language/generic/cascaded_forwarding_stubs_generic_test.dart"]
 kind = "behavior"
-what = "generic classes and their reified type arguments (Julia's parametric types)"
-cases = []
+what = "forwarding stubs that type-check parameters an interface's type argument narrows"
+cases = ["dart_generic/cascaded_forwarding_stubs_generic"]
+
+["tests/language/generic/closure_test.dart"]
+kind = "behavior"
+what = "a generic class's closure over T and its torn-off method: runtime types and is-checks against generic typedefs"
+cases = ["dart_generic/closure"]
+
+["tests/language/generic/conflicting_generic_interfaces_hierarchy_loop_infinite_test.dart"]
+kind = "not_portable"
+what = "a class hierarchy loop giving infinitely many implemented types"
+reason = "whole file is the RECURSIVE_INTERFACE_INHERITANCE compile-time error"
+
+["tests/language/generic/conflicting_generic_interfaces_hierarchy_loop_test.dart"]
+kind = "not_portable"
+what = "a class hierarchy loop giving finitely many implemented types"
+reason = "whole file is the RECURSIVE_INTERFACE_INHERITANCE compile-time error"
+
+["tests/language/generic/conflicting_generic_interfaces_no_conflict_test.dart"]
+kind = "behavior"
+what = "a class implementing I<int> through two paths, constructed"
+cases = ["dart_generic/conflicting_generic_interfaces_no_conflict"]
+
+["tests/language/generic/conflicting_generic_interfaces_simple_test.dart"]
+kind = "not_portable"
+what = "a class implementing both I<int> and I<String>"
+reason = "whole file is the CONFLICTING_GENERIC_INTERFACES compile-time error"
+
+["tests/language/generic/constructor_mixin2_test.dart"]
+kind = "behavior"
+what = "a generic constructor through a two-mixin application D<Y> = A<Y> with B, C, argument checked against Y"
+cases = ["dart_generic/constructor_mixin2"]
+
+["tests/language/generic/constructor_mixin3_test.dart"]
+kind = "behavior"
+what = "constructors of mixin applications fixing the type argument (A<int>, A<String>) called with an int"
+cases = ["dart_generic/constructor_mixin3"]
+
+["tests/language/generic/constructor_mixin_test.dart"]
+kind = "behavior"
+what = "a generic constructor through a mixin application C<Y> = A<Y> with B, argument checked against Y"
+cases = ["dart_generic/constructor_mixin"]
+
+["tests/language/generic/creation_test.dart"]
+kind = "behavior"
+what = "methods allocating A with permuted and nested type arguments, through subclasses fixing or reordering them"
+cases = ["dart_generic/creation"]
+
+["tests/language/generic/deep_test.dart"]
+kind = "behavior"
+what = "Peano numbers as deeply nested generic types S<S<Z>>, tested by is and walked recursively"
+cases = ["dart_generic/deep"]
+
+["tests/language/generic/f_bounded_equality_test.dart"]
+kind = "behavior"
+what = "an F-bounded class's type parameter read back and compared with runtimeType"
+cases = ["dart_generic/f_bounded_equality"]
+
+["tests/language/generic/f_bounded_quantification2_test.dart"]
+kind = "behavior"
+what = "an F-bounded class hierarchy implementing F-bounded interfaces, constructed"
+cases = ["dart_generic/f_bounded_quantification2"]
+
+["tests/language/generic/f_bounded_quantification3_test.dart"]
+kind = "behavior"
+what = "two mutually F-bounded classes each constructing both from its type parameters"
+cases = ["dart_generic/f_bounded_quantification3"]
+
+["tests/language/generic/f_bounded_quantification4_test.dart"]
+kind = "behavior"
+what = "runtimeType of an F-bounded class instantiated with its own raw type (instantiate to bounds)"
+cases = ["dart_generic/f_bounded_quantification4"]
+
+["tests/language/generic/f_bounded_quantification5_test.dart"]
+kind = "behavior"
+what = "runtimeType of a bounded generic class instantiated with a generic type"
+cases = ["dart_generic/f_bounded_quantification5"]
+
+["tests/language/generic/f_bounded_quantification_test.dart"]
+kind = "not_portable"
+what = "F-bounded type arguments that violate the bound"
+reason = "whole file is TYPE_ARGUMENT_NOT_MATCHING_BOUNDS compile-time errors; the valid lines have no runtime check"
+
+["tests/language/generic/field_mixin2_test.dart"]
+kind = "behavior"
+what = "a generic mixin field initialized with the type literal T"
+cases = ["dart_generic/field_mixin2"]
+
+["tests/language/generic/field_mixin3_test.dart"]
+kind = "behavior"
+what = "a generic mixin field initialized with an is A<T> test"
+cases = ["dart_generic/field_mixin3"]
+
+["tests/language/generic/field_mixin4_test.dart"]
+kind = "behavior"
+what = "a generic mixin field initialized by a try catching on T"
+cases = ["dart_generic/field_mixin4"]
+
+["tests/language/generic/field_mixin5_test.dart"]
+kind = "behavior"
+what = "a generic mixin field initialized by a closure returning T"
+cases = ["dart_generic/field_mixin5"]
+
+["tests/language/generic/field_mixin6_test.dart"]
+kind = "behavior"
+what = "a generic mixin field of type T initialized from an int, failing for T = String"
+cases = ["dart_generic/field_mixin6"]
+
+["tests/language/generic/field_mixin_test.dart"]
+kind = "behavior"
+what = "a generic mixin field initialized with A<T>, tested by is through mixin applications"
+cases = ["dart_generic/field_mixin"]
+
+["tests/language/generic/function_bounds_test.dart"]
+kind = "behavior"
+what = "generic functions with bounded type parameters called dynamically: instantiate to bounds and argument and bound checks"
+cases = ["dart_generic/function_bounds"]
+
+["tests/language/generic/function_dcall_test.dart"]
+kind = "behavior"
+what = "generic functions called dynamically with explicit type arguments, passed as non-generic and generic function arguments"
+cases = ["dart_generic/function_dcall"]
+
+["tests/language/generic/function_subtype_parametrized_typedef_test.dart"]
+kind = "not_portable"
+what = "subtyping of generic function types with bounds through a parameterized typedef"
+reason = "whole file is INVALID_ASSIGNMENT static errors; main is empty"
+
+["tests/language/generic/function_subtype_test.dart"]
+kind = "not_portable"
+what = "subtyping of generic function types with different bounds"
+reason = "whole file is INVALID_ASSIGNMENT static errors; main is empty"
+
+["tests/language/generic/function_type_as_type_argument_test.dart"]
+kind = "behavior"
+what = "a generic function called with a type argument, through a variable and through a dynamic list"
+cases = ["dart_generic/function_type_as_type_argument"]
+
+["tests/language/generic/function_typedef2_test.dart"]
+kind = "not_portable"
+what = "typedefs of non-function types and malformed function types before Dart 2.13"
+reason = "every runtime check names a typedef that is a compile-time error (L, M); nothing runs once they are removed"
+
+["tests/language/generic/function_typedef3_test.dart"]
+kind = "not_portable"
+what = "malformed function typedefs after Dart 2.13"
+reason = "every runtime check names a typedef that is a compile-time error (L, M); nothing runs once they are removed"
+
+["tests/language/generic/function_typedef_test.dart"]
+kind = "behavior"
+what = "is-checks of functions against parameterized function typedefs"
+cases = ["dart_generic/function_typedef"]
+
+["tests/language/generic/functions_test.dart"]
+kind = "behavior"
+what = "a persistent binary tree with generic top-level and member functions: insert, map<U>, foldPre<S>"
+cases = ["dart_generic/functions"]
+
+["tests/language/generic/generic2_test.dart"]
+kind = "behavior"
+what = "is-tests against a type parameter, direct and through a subclass fixing it"
+cases = ["dart_generic/generic2"]
+
+["tests/language/generic/generic_function_type_argument_test.dart"]
+kind = "behavior"
+what = "generic function types as type arguments: a list of a generic function, the function applied to itself"
+cases = ["dart_generic/generic_function_type_argument"]
+
+["tests/language/generic/generic_metadata_test.dart"]
+kind = "not_portable"
+what = "metadata annotations with type arguments on every kind of declaration"
+reason = "annotations have no runtime effect; main only declares annotated locals"
+
+["tests/language/generic/generic_test.dart"]
+kind = "behavior"
+what = "bounded generic classes allocated in initializers and tested by is against T"
+cases = ["dart_generic/generic"]
+
+["tests/language/generic/generics2_test.dart"]
+kind = "behavior"
+what = "a two-parameter generic class extending a raw generic class, constructed"
+cases = ["dart_generic/generics2"]
+
+["tests/language/generic/generics3_test.dart"]
+kind = "behavior"
+what = "a method allocating a generic class parameterized by a generic of T (regression 8710)"
+cases = ["dart_generic/generics3"]
+
+["tests/language/generic/generics_test.dart"]
+kind = "behavior"
+what = "comparisons as arguments not parsed as type arguments, a Map passed and written, nested generic types"
+cases = ["dart_generic/generics"]
+
+["tests/language/generic/inheritance_test.dart"]
+kind = "behavior"
+what = "is-checks of a generic instance and of subclasses fixing the type argument"
+cases = ["dart_generic/inheritance"]
+
+["tests/language/generic/instanceof.dart"]
+kind = "helper"
+what = "part file with Foo<T>.isT and isListT and the shared testMain"
+of = ["tests/language/generic/instanceof_test.dart", "tests/language/generic/many_generic_instanceof_test.dart"]
+
+["tests/language/generic/instanceof2_test.dart"]
+kind = "behavior"
+what = "partially typed generic instances built by a factory and a constructor that fix one type argument"
+cases = ["dart_generic/instanceof2"]
+
+["tests/language/generic/instanceof3_test.dart"]
+kind = "behavior"
+what = "is-checks against generic interfaces reached through fixed type arguments"
+cases = ["dart_generic/instanceof3"]
+
+["tests/language/generic/instanceof4_test.dart"]
+kind = "behavior"
+what = "is T where T is an interface a generic class implements"
+cases = ["dart_generic/instanceof4"]
+
+["tests/language/generic/instanceof5_test.dart"]
+kind = "behavior"
+what = "is T where a class reaches T through a mixin with swapped type arguments"
+cases = ["dart_generic/instanceof5"]
+
+["tests/language/generic/instanceof_test.dart"]
+kind = "behavior"
+what = "is T and is List<T> for many T, repeated (part instanceof.dart)"
+cases = ["dart_generic/instanceof"]
+
+["tests/language/generic/instantiate_tearoff_after_contravariance_check_test.dart"]
+kind = "behavior"
+what = "a generic method tear-off instantiated after a contravariance type check"
+cases = ["dart_generic/instantiate_tearoff_after_contravariance_check"]
+
+["tests/language/generic/instantiate_tearoff_of_call_test.dart"]
+kind = "behavior"
+what = "f.call of a generic function instantiated as int and String functions, rejecting the other type"
+cases = ["dart_generic/instantiate_tearoff_of_call"]
+
+["tests/language/generic/instantiate_tearoff_test.dart"]
+kind = "behavior"
+what = "generic functions (top-level, local, nested) instantiated by assignment to non-generic function types"
+cases = ["dart_generic/instantiate_tearoff"]
+
+["tests/language/generic/instantiate_to_bounds_super_bounded_test.dart"]
+kind = "not_portable"
+what = "super-bounded types produced by instantiate-to-bounds in many declaration contexts"
+reason = "static checks only (compile-time error and ok sections); main has no runtime check"
+
+["tests/language/generic/instantiate_type_variable_test.dart"]
+kind = "not_portable"
+what = "new T() inside a generic class"
+reason = "whole file is the CREATION_WITH_NON_TYPE compile-time error"
+
+["tests/language/generic/is_check_test.dart"]
+kind = "behavior"
+what = "this is A<int> inside a generic class for raw, int and String instances"
+cases = ["dart_generic/is_check"]
+
+["tests/language/generic/list_checked_test.dart"]
+kind = "behavior"
+what = "a List<String> assigned to a List<int> variable through dynamic throws"
+cases = ["dart_generic/list_checked"]
+
+["tests/language/generic/local_functions_test.dart"]
+kind = "behavior"
+what = "generic local functions and generic function parameters"
+cases = ["dart_generic/local_functions"]
+
+["tests/language/generic/many_generic_instanceof_test.dart"]
+kind = "behavior"
+what = "is T and is List<T> for many T, repeated 20 times (part instanceof.dart)"
+cases = ["dart_generic/many_generic_instanceof"]
+
+["tests/language/generic/metadata_in_function_body_test.dart"]
+kind = "not_portable"
+what = "annotations with type arguments inside a function body"
+reason = "whole file is the annotation-type-argument syntactic error; nothing runs"
+
+["tests/language/generic/metadata_test.dart"]
+kind = "not_portable"
+what = "annotations with type arguments on a top-level declaration"
+reason = "whole file is the annotation-type-argument syntactic error; main is empty"
+
+["tests/language/generic/method_types_test.dart"]
+kind = "behavior"
+what = "generic methods (mixin, class, top-level) checked against generic function typedefs"
+cases = ["dart_generic/method_types"]
+
+["tests/language/generic/mock_test.dart"]
+kind = "not_portable"
+what = "a Mock with noSuchMethod implementing a class with an F-bounded generic method"
+reason = "main is empty: the file only checks that the declarations compile"
+
+["tests/language/generic/native_test.dart"]
+kind = "behavior"
+what = "is T where T is a core library type (Iterable, Pattern, Comparable)"
+cases = ["dart_generic/native"]
+
+["tests/language/generic/no_such_method_dispatcher_test.dart"]
+kind = "behavior"
+what = "noSuchMethod reached by generic calls of the wrong shape, with type, positional and named arguments"
+cases = ["dart_generic/no_such_method_dispatcher"]
+
+["tests/language/generic/object_type_test.dart"]
+kind = "behavior"
+what = "is T with T = Object"
+cases = ["dart_generic/object_type"]
+
+["tests/language/generic/parameterized_extends_test.dart"]
+kind = "behavior"
+what = "is-checks of generic classes whose type parameters are bounded by each other"
+cases = ["dart_generic/parameterized_extends"]
+
+["tests/language/generic/recursive_generic_test.dart"]
+kind = "behavior"
+what = "F-bounded classes: an overridden method, each level's T read back, runtimeType of a recursive supertype"
+cases = ["dart_generic/recursive_generic"]
+
+["tests/language/generic/regress_45767_test.dart"]
+kind = "behavior"
+what = "is-checks against F-bounded supertypes with nullable type arguments (regression 45767)"
+cases = ["dart_generic/regress_45767"]
+
+["tests/language/generic/reify_typevar_static_test.dart"]
+kind = "behavior"
+what = "T read in factory, redirecting and ordinary constructors"
+cases = ["dart_generic/reify_typevar_static"]
+
+["tests/language/generic/self_reference_test.dart"]
+kind = "behavior"
+what = "a class whose superclass is parameterized by the class, constructed"
+cases = ["dart_generic/self_reference"]
+
+["tests/language/generic/sends_test.dart"]
+kind = "behavior"
+what = "generic invocations versus relational and shift expressions as arguments"
+cases = ["dart_generic/sends"]
+
+["tests/language/generic/super_bounded_types_and_nested_variance_test.dart"]
+kind = "not_portable"
+what = "instantiate-to-bound and super-boundedness of nested type arguments by variance"
+reason = "static type checks only: assignments of typed variables, no runtime check"
+
+["tests/language/generic/super_bounded_types_and_variance_test.dart"]
+kind = "not_portable"
+what = "instantiate-to-bound and super-bounded types of raw type aliases by variance"
+reason = "static type checks only: assignments of typed variables, no runtime check"
+
+["tests/language/generic/super_bounded_types_error2_test.dart"]
+kind = "not_portable"
+what = "contravariant types that violate their bounds and are not super-bounded"
+reason = "whole file is compile-time errors on type annotations"
+
+["tests/language/generic/super_bounded_types_error_test.dart"]
+kind = "not_portable"
+what = "types that violate their bounds and are not super-bounded"
+reason = "whole file is compile-time errors on type annotations"
+
+["tests/language/generic/super_bounded_types_test.dart"]
+kind = "not_portable"
+what = "super-bounded types accepted in declarations"
+reason = "static type acceptance only: declarations of typed locals, no runtime check"
+
+["tests/language/generic/sync_star_test.dart"]
+kind = "behavior"
+what = "a generic sync* function yielding its argument three times, iterated"
+cases = ["dart_generic/sync_star"]
+
+["tests/language/generic/syntax_test.dart"]
+kind = "behavior"
+what = "a parameterized type in a closure parameter versus comparisons as arguments"
+cases = ["dart_generic/syntax"]
+
+["tests/language/generic/tearoff_test.dart"]
+kind = "behavior"
+what = "the generic min torn off as a non-generic int function, rejecting type arguments"
+cases = ["dart_generic/tearoff"]
+
+["tests/language/generic/type_argument_in_super_type_test.dart"]
+kind = "behavior"
+what = "a field returned as T of the superclass's type argument, and as int, which throws"
+cases = ["dart_generic/type_argument_in_super_type"]
+
+["tests/language/generic/type_argument_substitution_test.dart"]
+kind = "behavior"
+what = "is X<A<String>> on an X<B> where B extends A<K>"
+cases = ["dart_generic/type_argument_substitution"]
+
+["tests/language/generic/type_parameter_literal_test.dart"]
+kind = "behavior"
+what = "T returned as a Type value"
+cases = ["dart_generic/type_parameter_literal"]
+
+["tests/language/generic/type_parameter_test.dart"]
+kind = "behavior"
+what = "a closure capturing T creating a Set<T>, via factory and named constructor"
+cases = ["dart_generic/type_parameter"]
+
+["tests/language/generic/typedef_test.dart"]
+kind = "behavior"
+what = "is and as on generic function typedefs, with type parameters from an enclosing class"
+cases = ["dart_generic/typedef"]
+
+["tests/language/generic/wrong_number_type_arguments_test.dart"]
+kind = "not_portable"
+what = "Map with one type argument"
+reason = "whole file is WRONG_NUMBER_OF_TYPE_ARGUMENTS compile-time errors"
 
 ["tests/language/generic_methods/"]
 kind = "behavior"
@@ -4574,12 +5529,12 @@ reason = "a dart pragma, and a dynamic call outside Julia's strict subset (D32)"
 
 ["tests/language/dynamic_type_helper.dart"]
 kind = "helper"
-of = ["tests/language/function_subtype/", "tests/language/generic/", "tests/language/mixin_legacy/", "tests/language/mixin/"]
+of = ["tests/language/function_subtype/", "tests/language/generic/constructor_mixin2_test.dart", "tests/language/generic/constructor_mixin3_test.dart", "tests/language/generic/constructor_mixin_test.dart", "tests/language/mixin_legacy/", "tests/language/mixin/"]
 what = "checks of a value's dynamic type"
 
 ["tests/language/static_type_helper.dart"]
 kind = "helper"
-of = ["tests/language/anonymous_methods/", "tests/language/async_star/", "tests/language/async/", "tests/language/await/", "tests/language/call/", "tests/language/closure/", "tests/language/constructor/", "tests/language/extension_methods/", "tests/language/extension_type/", "tests/language/generic_methods/", "tests/language/generic/", "tests/language/if_null/", "tests/language/inference_update_1/", "tests/language/inference_update_2/", "tests/language/inference_update_3/", "tests/language/inference_update_4/", "tests/language/inference_using_bounds/", "tests/language/inference/", "tests/language/least_upper_bound/", "tests/language/mixin/", "tests/language/nnbd/flow_analysis/boolean_parameter_test.dart", "tests/language/nnbd/flow_analysis/demotion_and_type_of_interest_promotion_test.dart", "tests/language/nnbd/flow_analysis/expr_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/identical_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_compound_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_capture_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_does_not_detect_aliases_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_expression_types_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_new_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_join_equivalent_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_logical_op_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_null_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_on_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_try_finally_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_undefeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_cascade_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_conditional_test.dart", "tests/language/nnbd/flow_analysis/postfix_increment_decrement_test.dart", "tests/language/nnbd/flow_analysis/this_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/this_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_expr_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_never_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_variable_property_test.dart", "tests/language/nnbd/flow_analysis/variable_property_not_promoted_test.dart", "tests/language/nnbd/inference/late_variable_type_for_promotion_test.dart", "tests/language/nnbd/inference/variable_initialization_promotion_test.dart", "tests/language/nonfunction_type_aliases/", "tests/language/null_aware_elements/", "tests/language/null_aware/", "tests/language/operator/", "tests/language/patterns/empty_switch_expression_test.dart", "tests/language/patterns/flow_analysis/boolean_condition_test.dart", "tests/language/patterns/flow_analysis/cast_pattern_error_test.dart", "tests/language/patterns/flow_analysis/constant_pattern_error_test.dart", "tests/language/patterns/flow_analysis/for_in_collection_element_error_test.dart", "tests/language/patterns/flow_analysis/for_in_statement_error_test.dart", "tests/language/patterns/flow_analysis/if_case_element_error_test.dart", "tests/language/patterns/flow_analysis/if_case_statement_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_with_nullable_list_scrutinee_test.dart", "tests/language/patterns/flow_analysis/logical_and_pattern_error_test.dart", "tests/language/patterns/flow_analysis/logical_or_pattern_error_test.dart", "tests/language/patterns/flow_analysis/map_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_assert_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_check_in_guard_test.dart", "tests/language/patterns/flow_analysis/null_check_pattern_error_test.dart", "tests/language/patterns/flow_analysis/object_pattern_error_test.dart", "tests/language/patterns/flow_analysis/pattern_assignment_error_test.dart", "tests/language/patterns/flow_analysis/pattern_inside_guard_error_test.dart", "tests/language/patterns/flow_analysis/pattern_variable_declaration_error_test.dart", "tests/language/patterns/flow_analysis/record_pattern_error_test.dart", "tests/language/patterns/flow_analysis/relational_pattern_error_test.dart", "tests/language/patterns/flow_analysis/split_point_test.dart", "tests/language/patterns/flow_analysis/switch_expression_error_test.dart", "tests/language/patterns/flow_analysis/switch_statement_error_test.dart", "tests/language/patterns/flow_analysis/variable_pattern_error_test.dart", "tests/language/patterns/flow_analysis/wildcard_pattern_error_test.dart", "tests/language/patterns/issue52409_test.dart", "tests/language/patterns/object_pattern_inference_test.dart", "tests/language/patterns/schema_test.dart", "tests/language/patterns/switch_trivial_exhaustiveness_error_test.dart", "tests/language/patterns/type_question_before_when_test.dart", "tests/language/primary_constructors/", "tests/language/private_named_parameters/", "tests/language/records/", "tests/language/regress/", "tests/language/sound_flow_analysis/", "tests/language/spread_collections/", "tests/language/switch/case_null_legacy_flow_analysis_test.dart", "tests/language/sync_star/", "tests/language/this_promotion/", "tests/language/type_object/", "tests/language/type_promotion/", "tests/language/typedef/"]
+of = ["tests/language/anonymous_methods/", "tests/language/async_star/", "tests/language/async/", "tests/language/await/", "tests/language/call/", "tests/language/closure/parameter_default_type_inference_test.dart", "tests/language/constructor/", "tests/language/extension_methods/", "tests/language/extension_type/", "tests/language/generic_methods/", "tests/language/generic/generic_function_type_argument_test.dart", "tests/language/if_null/", "tests/language/inference_update_1/", "tests/language/inference_update_2/", "tests/language/inference_update_3/", "tests/language/inference_update_4/", "tests/language/inference_using_bounds/", "tests/language/inference/", "tests/language/least_upper_bound/", "tests/language/mixin/", "tests/language/nnbd/flow_analysis/boolean_parameter_test.dart", "tests/language/nnbd/flow_analysis/demotion_and_type_of_interest_promotion_test.dart", "tests/language/nnbd/flow_analysis/expr_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/identical_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_compound_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_capture_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_does_not_detect_aliases_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_expression_types_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_new_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_join_equivalent_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_logical_op_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_null_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_on_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_try_finally_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_undefeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_cascade_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_conditional_test.dart", "tests/language/nnbd/flow_analysis/postfix_increment_decrement_test.dart", "tests/language/nnbd/flow_analysis/this_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/this_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_expr_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_never_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_variable_property_test.dart", "tests/language/nnbd/flow_analysis/variable_property_not_promoted_test.dart", "tests/language/nnbd/inference/late_variable_type_for_promotion_test.dart", "tests/language/nnbd/inference/variable_initialization_promotion_test.dart", "tests/language/nonfunction_type_aliases/", "tests/language/null_aware_elements/", "tests/language/null_aware/", "tests/language/operator/", "tests/language/patterns/empty_switch_expression_test.dart", "tests/language/patterns/flow_analysis/boolean_condition_test.dart", "tests/language/patterns/flow_analysis/cast_pattern_error_test.dart", "tests/language/patterns/flow_analysis/constant_pattern_error_test.dart", "tests/language/patterns/flow_analysis/for_in_collection_element_error_test.dart", "tests/language/patterns/flow_analysis/for_in_statement_error_test.dart", "tests/language/patterns/flow_analysis/if_case_element_error_test.dart", "tests/language/patterns/flow_analysis/if_case_statement_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_with_nullable_list_scrutinee_test.dart", "tests/language/patterns/flow_analysis/logical_and_pattern_error_test.dart", "tests/language/patterns/flow_analysis/logical_or_pattern_error_test.dart", "tests/language/patterns/flow_analysis/map_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_assert_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_check_in_guard_test.dart", "tests/language/patterns/flow_analysis/null_check_pattern_error_test.dart", "tests/language/patterns/flow_analysis/object_pattern_error_test.dart", "tests/language/patterns/flow_analysis/pattern_assignment_error_test.dart", "tests/language/patterns/flow_analysis/pattern_inside_guard_error_test.dart", "tests/language/patterns/flow_analysis/pattern_variable_declaration_error_test.dart", "tests/language/patterns/flow_analysis/record_pattern_error_test.dart", "tests/language/patterns/flow_analysis/relational_pattern_error_test.dart", "tests/language/patterns/flow_analysis/split_point_test.dart", "tests/language/patterns/flow_analysis/switch_expression_error_test.dart", "tests/language/patterns/flow_analysis/switch_statement_error_test.dart", "tests/language/patterns/flow_analysis/variable_pattern_error_test.dart", "tests/language/patterns/flow_analysis/wildcard_pattern_error_test.dart", "tests/language/patterns/issue52409_test.dart", "tests/language/patterns/object_pattern_inference_test.dart", "tests/language/patterns/schema_test.dart", "tests/language/patterns/switch_trivial_exhaustiveness_error_test.dart", "tests/language/patterns/type_question_before_when_test.dart", "tests/language/primary_constructors/", "tests/language/private_named_parameters/", "tests/language/records/", "tests/language/regress/", "tests/language/sound_flow_analysis/", "tests/language/spread_collections/", "tests/language/switch/case_null_legacy_flow_analysis_test.dart", "tests/language/sync_star/", "tests/language/this_promotion/", "tests/language/type_object/", "tests/language/type_promotion/", "tests/language/typedef/"]
 what = "checks of an expression's static type"
 
 ["tests/language/syntax_helper.dart"]

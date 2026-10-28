@@ -16187,3 +16187,3217 @@ _g("dart_const", Any[
                  isempty(()), isempty(Int64[]), isempty(Dict{String,Int64}()), _CoVarFoo{Any}() === _CoVarFoo{Any}(), _CoVarFoo{Int64}() isa _CoVarFoo,
                  _CoVarHelper._CoVarHelperFoo{Int64}() isa _CoVarHelper._CoVarHelperFoo, !(_CoVarFoo{Int64}() isa _CoVarHelper._CoVarHelperFoo))), Int64(1)),
 ])
+
+# ---- tests/language/closure: closures, tear-offs and their equality ----
+# A dart tear-off `o.m` is _ClBound(m, o): equal when its function and receiver are; a super tear-off
+# `super.m` is _ClSuper{S}(m, o), whose call invokes m's method for the supertype S.
+struct _ClBound{F,O}
+    f::F
+    o::O
+end
+_ClBound(f::F, ::Type{T}) where {F,T} = _ClBound{F,Type{T}}(f, T)
+(b::_ClBound)() = b.f(b.o)
+(b::_ClBound)(x) = b.f(b.o, x)
+(b::_ClBound)(x, y) = b.f(b.o, x, y)
+struct _ClSuper{S,F,O}
+    f::F
+    o::O
+end
+_ClSuper{S}(f::F, o::O) where {S,F,O} = _ClSuper{S,F,O}(f, o)
+(t::_ClSuper{S})() where {S} = invoke(t.f, Tuple{S}, t.o)
+(t::_ClSuper{S})(x::X) where {S,X} = invoke(t.f, Tuple{S,X}, t.o, x)
+(t::_ClSuper{S})(x::X, y::Y) where {S,X,Y} = invoke(t.f, Tuple{S,X,Y}, t.o, x, y)
+
+# bound_closure_equality: tear-offs of one method from distinct, constant and differently-typed receivers
+mutable struct _ClBceA
+    x::Int64
+end
+mutable struct _ClBceB
+    x::Int64
+end
+struct _ClBceK end
+_cl_bce_foo(::Union{_ClBceA,_ClBceB,_ClBceK}) = Int64(42)
+_cl_bce_index_of(s::Union{String,Vector{Int64}}, x) = (i = findfirst(isequal(x), s); i === nothing ? Int64(-1) : Int64(i) - 1)
+# bound_closure_primitives: a tear-off of Vector's push! and of a one-argument method, called alike
+struct _ClBcpA end
+_cl_bcp_foo(::_ClBcpA, a) = a
+# break, break1, break2: closures over objects and strings declared in loops left by break
+mutable struct _ClBrk
+    field::Int64
+end
+function _cl_break(n::Int64)
+    o1 = _ClBrk(n)
+    newstr = "abcdefgh"
+    foo = () -> (o1.field += 1; length(newstr) == 8)
+    ok = true
+    loop = true
+    while loop
+        newstr1 = "abcd"
+        o2 = _ClBrk(n)
+        foo1 = () -> (o2.field += 1; length(newstr1) == 4)
+        ok &= length(newstr1) == 4
+        while loop
+            newint = 0
+            o3 = _ClBrk(n)
+            foo2 = () -> (o3.field += 1; newint == 0)
+            ok &= foo2()
+            break
+        end
+        ok &= foo1()
+        ok &= length(newstr1) == 4
+        break
+    end
+    ok &= foo()
+    return _dw_bits(ok, o1.field == 4)
+end
+function _cl_break1(n::Int64)
+    o1 = _ClBrk(n)
+    newstr = "abcdefgh"
+    foo = () -> (o1.field += 1; length(newstr) == 8)
+    ok = true
+    loop = true
+    calls = 0
+    while loop
+        newstr1 = "abcd"
+        o2 = _ClBrk(n)
+        foo1 = () -> (o2.field += 1; length(newstr1) == 4)
+        ok &= length(newstr1) == 4
+        brk = false
+        while loop
+            newint = 0
+            o3 = _ClBrk(n)
+            foo2 = () -> (o3.field += 1; newint == 0)
+            ok &= foo2()
+            brk = true
+            break
+        end
+        brk && break
+        calls += 1
+        ok &= foo1()
+    end
+    ok &= foo()
+    return _dw_bits(ok, o1.field == 4, calls == 0)
+end
+function _cl_break2(n::Int64)
+    o1 = _ClBrk(n)
+    newstr = "abcdefgh"
+    foo = () -> (o1.field += 1; length(newstr) == 8)
+    ok = true
+    loop = true
+    while loop
+        newstr1 = "abcd"
+        ok &= length(newstr1) == 4
+        brk = false
+        while loop
+            newint = 0
+            ok &= length(newstr1) == 4 && newint == 0
+            brk = true
+            break
+        end
+        brk && break
+    end
+    ok &= foo()
+    return _dw_bits(ok, o1.field == 4)
+end
+# call_wrong_argument_count: a two-argument closure called with three
+_cl_cwac_melke(f) = f(1, 2, 3)
+# closure: a closure post-incrementing a captured object's field
+mutable struct _ClCA
+    field::Int64
+end
+# closure2: a closure over a parameter passed to and called by another function
+_cl_c2_bounce(fn) = fn()
+_cl_c2_demo(s) = (a = _cl_c2_bounce(() -> s); a)
+# closure3: a closure whose discarded subtraction has no method for its operands
+_cl_c3_test(x, y) = (() -> (x - y; nothing))()
+# closure4, closure5: a closure that reaches itself from a closure it creates (passed as `self`)
+_cl_c4_foo(f) = f(499)
+function _cl_c4(x0::Int64)
+    fun = (self, x::Int64) -> x < 3 ? (_cl_c4_foo(y -> self(self, y))::Int64) : x
+    return fun(fun, x0)
+end
+function _cl_c5(x0::Int64)
+    fun = (self, x::Int64) -> x < 3 ? (_cl_c4_foo(y -> self(self, y))::Int64) : x
+    return _cl_c4_foo(y -> fun(fun, y)) * x0
+end
+# closure6: a closure over a local function named like Base's, a constant, a variable and a method
+struct _ClC6A end
+_cl_c6_bar(::_ClC6A) = Int64(42)
+function _cl_c6_foo(a::_ClC6A, n::Int64)
+    length = () -> Int64(400)
+    box_0 = 28
+    x = 28 + n
+    f = () -> length() + box_0 + x + _cl_c6_bar(a)
+    return f()
+end
+# closure7: tear-offs of two classes' methods with keyword defaults, called with and without keywords
+struct _ClC7A end
+struct _ClC7B end
+struct _ClC7Tear{F,O}
+    f::F
+    o::O
+end
+(t::_ClC7Tear)(x; kw...) = t.f(t.o, x; kw...)
+_cl_c7_foo(::_ClC7A) = Int64(499)
+_cl_c7_foo(::_ClC7B) = Int64(4990)
+_cl_c7_fooo(::_ClC7A) = Int64(4999)
+_cl_c7_fooo(::_ClC7B) = Int64(49990)
+_cl_c7_bar(::_ClC7A, x; y = 8, z = 10) = "1 $x $y $z"
+_cl_c7_bar(::_ClC7B, x; y = 8, z = 10) = "1B $x $y $z"
+_cl_c7_gee(::_ClC7A, x; y = 9, z = 11) = "2 $x $y $z"
+_cl_c7_gee(::_ClC7B, x; y = 9, z = 11) = "2B $x $y $z"
+_cl_c7_toto(::_ClC7A, x; y = 8, z = 10) = "3 $x $y $z"
+_cl_c7_toto(::_ClC7B, x; y = 8, z = 10) = "3B $x $y $z"
+_cl_c7_fisk(::_ClC7A, x; y = 8, zz = 10) = "4 $x $y $zz"
+_cl_c7_fisk(::_ClC7B, x; y = 8, zz = 10) = "4B $x $y $zz"
+_cl_c7_titi(::_ClC7A, x; y = 8, zz = 77) = "5 $x $y $zz"
+_cl_c7_titi(::_ClC7B, x; y = 8, zz = 77) = "5B $x $y $zz"
+function _cl_c7(n::Int64)
+    a = _ClC7A()
+    b = _ClC7B()
+    barA = _ClC7Tear(_cl_c7_bar, a); barB = _ClC7Tear(_cl_c7_bar, b)
+    geeA = _ClC7Tear(_cl_c7_gee, a); geeB = _ClC7Tear(_cl_c7_gee, b)
+    totoA = _ClC7Tear(_cl_c7_toto, a); totoB = _ClC7Tear(_cl_c7_toto, b)
+    fiskA = _ClC7Tear(_cl_c7_fisk, a); fiskB = _ClC7Tear(_cl_c7_fisk, b)
+    titiA = _ClC7Tear(_cl_c7_titi, a); titiB = _ClC7Tear(_cl_c7_titi, b)
+    return _dw_bits(_ClBound(_cl_c7_foo, a)() == 499, _ClBound(_cl_c7_foo, b)() == 4990, _ClBound(_cl_c7_fooo, a)() == 4999,
+                    _ClBound(_cl_c7_fooo, b)() == 49990, barA(n) == "1 33 8 10", barB(n) == "1B 33 8 10", geeA(n) == "2 33 9 11",
+                    geeB(n) == "2B 33 9 11", totoA(n) == "3 33 8 10", totoB(n) == "3B 33 8 10", barA(35, z = 77) == "1 35 8 77",
+                    geeB(35, z = 77) == "2B 35 9 77", totoA(35, z = 77) == "3 35 8 77", fiskA(311, zz = 987) == "4 311 8 987",
+                    fiskB(311, zz = 987) == "4B 311 8 987", titiA(311, zz = 987) == "5 311 8 987",
+                    fiskA(311, y = 765, zz = 987) == "4 311 765 987", titiB(311, y = 765, zz = 987) == "5B 311 765 987")
+end
+# closure8: a generic class's tear-off passed as another generic class's callback
+struct _ClC8C{E} end
+struct _ClC8D{E} end
+_cl_c8_for_each(::_ClC8C{E}, callback) where {E} = nothing
+_cl_c8_lala(::_ClC8D{E}, element::E) where {E} = nothing
+# closures_initializer: a constructor storing closures that build a T[] and return T
+struct _ClCiA{T,F}
+    t::F
+    _ClCiA{T}() where {T} = (f = () -> T[]; new{T,typeof(f)}(f))
+end
+struct _ClCiB{T,F}
+    t::F
+    _ClCiB{T}() where {T} = (f = () -> T; new{T,typeof(f)}(f))
+end
+# closures_initializer2: a constructor storing a closure returning T, made in a loop
+struct _ClCi2A{T,F}
+    t::F
+    _ClCi2A{T}() where {T} = (f = () -> T; new{T,typeof(f)}(f))
+end
+# closures_with_complex_params: closures whose parameters are nested parametric structs, one with a default
+struct _ClPair{A,B}
+    fst::A
+    snd::B
+end
+const _CL_DEFAULT_PAIR = _ClPair{Int64,_ClPair{Int64,Int64}}(-1, _ClPair{Int64,Int64}(-2, -3))
+function _cl_cwcp(n::Int64)
+    e = _ClPair{Int64,_ClPair{Int64,Int64}}(100n, _ClPair{Int64,Int64}(200n, 300n))
+    cdar1 = (pr::_ClPair{Int64,_ClPair{Int64,Int64}}) -> pr.snd.fst
+    cdar2 = (pr::_ClPair{Int64,_ClPair{Int64,Int64}}) -> pr.snd.fst
+    ocdar1(pr::_ClPair{Int64,_ClPair{Int64,Int64}} = _CL_DEFAULT_PAIR) = pr.snd.fst
+    ocdar2(pr::_ClPair{Int64,_ClPair{Int64,Int64}} = _CL_DEFAULT_PAIR) = pr.snd.fst
+    f1 = (pr::_ClPair{Int64,_ClPair{Int64,Int64}}) -> pr.snd.fst + 1
+    f2 = (pr::_ClPair{Int64,_ClPair{Int64,Int64}}) -> pr.snd.fst + 2
+    ap1 = (f, pr::_ClPair{Int64,_ClPair{Int64,Int64}}) -> f(pr) * 10
+    ap2 = (f, pr::_ClPair{Int64,_ClPair{Int64,Int64}}) -> f(pr) * 100
+    return _dw_bits(cdar1(e) == 200, cdar2(e) == 200, ocdar1(e) == 200, ocdar2(e) == 200, ocdar1() == -2,
+                    ap1(f1, e) == 2010, ap1(f2, e) == 2020, ap2(f1, e) == 20100, ap2(f2, e) == 20200)
+end
+# dynamic_closure_param: a tear-off of a method with optional positionals called with one argument
+struct _ClDcpArg end
+abstract type _ClDcpBase{T} end
+abstract type _ClDcpAbsA <: _ClDcpBase{_ClDcpArg} end
+struct _ClDcpA <: _ClDcpAbsA end
+struct _ClDcpB <: _ClDcpAbsA end
+_cl_dcp_foo(::_ClDcpA, a::_ClDcpArg, b::Union{Nothing,String} = nothing) = b === nothing ? Int64(1) : Int64(2)
+_cl_dcp_foo(::_ClDcpB, a::_ClDcpArg, b::Union{Nothing,String} = nothing, c::Int64 = Int64(0)) = (b === nothing ? Int64(10) : Int64(20)) + c
+_cl_dcp_check(closure) = closure(_ClDcpArg())
+# dynamic: a closure with typed positionals and keywords called with keyword permutations, subtypes,
+# missing or unknown arguments and wrongly typed ones
+abstract type _ClDynAbsA end
+struct _ClDynA <: _ClDynAbsA
+    nonce::Int64
+end
+struct _ClDynC <: _ClDynAbsA
+    nonce::Int64
+end
+struct _ClDynB
+    nonce::Int64
+end
+_cl_dyn_try(g) = try; g(); Int64(0); catch e; e isa MethodError ? Int64(1) : e isa TypeError ? Int64(2) : Int64(3); end
+_cl_dyn_f(a1::String, a2::Int64, a3::_ClDynAbsA; n1::String = "default_named", n2::Int64 = -1, n3::_ClDynAbsA = _ClDynA(-1)) =
+    ncodeunits(a1) + a2 + a3.nonce + ncodeunits(n1) + n2 + n3.nonce
+function _cl_dyn(n::Int64)
+    f = _cl_dyn_f
+    s = f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2)) +
+        f("test_fixed", n, _ClDynA(1), n1 = "test_named", n3 = _ClDynA(2), n2 = 2) +
+        f("test_fixed", n, _ClDynA(1), n2 = 2, n1 = "test_named", n3 = _ClDynA(2)) +
+        f("test_fixed", n, _ClDynA(1), n3 = _ClDynA(2), n2 = 2, n1 = "test_named") +
+        f("test_fixed", n, _ClDynC(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2)) +
+        f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynC(2)) +
+        f("test_fixed", n, _ClDynA(1))
+    codes = (_cl_dyn_try(() -> f()),
+             _cl_dyn_try(() -> f("test_fixed", n, _ClDynA(1), n4 = 4)),
+             _cl_dyn_try(() -> f(100, n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2))),
+             _cl_dyn_try(() -> f("test_fixed", 1.1, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2))),
+             _cl_dyn_try(() -> f("test_fixed", n, _ClDynB(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2))),
+             _cl_dyn_try(() -> f("test_fixed", n, _ClDynA(1), n1 = 100, n2 = 2, n3 = _ClDynA(2))),
+             _cl_dyn_try(() -> f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2.2, n3 = _ClDynA(2))),
+             _cl_dyn_try(() -> f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynB(2))))
+    k = s
+    for c in codes
+        k = 4k + c
+    end
+    return k
+end
+# forwarding_stub_tearoff: one method torn off through a class and two supertypes; a wrong argument
+# type is rejected when the tear-off is called
+abstract type _ClFsA end
+struct _ClFsAA <: _ClFsA end
+struct _ClFsB <: _ClFsA end
+abstract type _ClFsI end
+abstract type _ClFsC <: _ClFsI end
+struct _ClFsD <: _ClFsC end
+_cl_fs_f(::_ClFsC, x::_ClFsB) = Int64(1)
+function _cl_fs_check(tearoff)
+    ok = tearoff(_ClFsB()) == 1
+    threw = try; tearoff(_ClFsAA()); false; catch e; e isa MethodError; end
+    return _dw_bits(applicable(tearoff, _ClFsAA()), ok, threw)
+end
+# forwarding_stub_tearoff_generic: the same through a parametric interface I{T} with T = B
+abstract type _ClFsgA end
+struct _ClFsgAA <: _ClFsgA end
+struct _ClFsgB <: _ClFsgA end
+abstract type _ClFsgI{T} end
+abstract type _ClFsgC <: _ClFsgI{_ClFsgB} end
+struct _ClFsgD <: _ClFsgC end
+_cl_fsg_f(::_ClFsgI{T}, x::T) where {T} = Int64(2)
+_cl_fsg_f(::_ClFsgC, x::_ClFsgB) = Int64(1)
+function _cl_fsg_check(tearoff)
+    ok = tearoff(_ClFsgB()) == 1
+    threw = try; tearoff(_ClFsgAA()); false; catch e; e isa MethodError; end
+    return _dw_bits(applicable(tearoff, _ClFsgAA()), ok, threw)
+end
+# identity_equality_tearoff, identity_equality_nosuchmethod_tearoff, identity_equality_tostring_tearoff:
+# A, A-with-M, AM, AM-with-M, AMM as a supertype chain; M's method calls its super's (invoke)
+abstract type _ClIeA end
+abstract type _ClIeAwM <: _ClIeA end
+abstract type _ClIeAM <: _ClIeAwM end
+abstract type _ClIeAMwM <: _ClIeAM end
+mutable struct _ClIeAMM <: _ClIeAMwM
+    id::Int64
+end
+mutable struct _ClIeAMx <: _ClIeAM
+    id::Int64
+end
+mutable struct _ClIeAx <: _ClIeA
+    id::Int64
+end
+_cl_ie_top() = nothing
+_cl_ie_gen_top(::Type{X}) where {X} = nothing
+_cl_ie_static() = nothing
+_cl_ie_gen_static(::Type{X}) where {X} = nothing
+_cl_ie_instance(::_ClIeA) = nothing
+_cl_ie_gen_instance(::_ClIeA, ::Type{X}) where {X} = nothing
+_cl_ie_mixed_in(::_ClIeAwM) = nothing
+_cl_ie_super(::_ClIeA) = Int64(0)
+_cl_ie_super(o::_ClIeAwM) = invoke(_cl_ie_super, Tuple{_ClIeA}, o) + 1
+_cl_ie_super(o::_ClIeAMwM) = invoke(_cl_ie_super, Tuple{_ClIeAwM}, o) + 1
+_cl_ie_x(::Type{X}) where {X} = _ClBound(_cl_ie_gen_top, X)
+const _CL_IE_CTOP = _cl_ie_top
+const _CL_IE_CGEN_TOP = _cl_ie_gen_top
+const _CL_IE_CSTATIC = _cl_ie_static
+const _CL_IE_CINT_TOP1 = _ClBound(_cl_ie_gen_top, Int64)
+const _CL_IE_CINT_TOP2 = _ClBound(_cl_ie_gen_top, Int64)
+const _CL_IE_CINT_STATIC1 = _ClBound(_cl_ie_gen_static, Int64)
+const _CL_IE_CINT_STATIC2 = _ClBound(_cl_ie_gen_static, Int64)
+const _CL_IE_CSTRING_TOP = _ClBound(_cl_ie_gen_top, String)
+function _cl_ie(n::Int64)
+    a = _ClIeAx(n)
+    a2 = _ClIeAx(n + 1)
+    vTop = _cl_ie_top
+    vStatic = _cl_ie_static
+    vInst = _ClBound(_cl_ie_instance, a)
+    vGenInst = _ClBound(_cl_ie_gen_instance, a)
+    vIntInst1 = _ClBound(vGenInst, Int64)
+    vIntInst2 = _ClBound(_ClBound(_cl_ie_gen_instance, a), Int64)
+    vStrInst = _ClBound(vGenInst, String)
+    v2IntInst = _ClBound(_ClBound(_cl_ie_gen_instance, a2), Int64)
+    am = _ClIeAMx(n)
+    amm = _ClIeAMM(n)
+    s1 = _ClSuper{_ClIeAwM}(_cl_ie_super, amm)
+    s2 = _ClSuper{_ClIeAMwM}(_cl_ie_super, amm)
+    ns = _ClBound(_cl_ie_super, amm)
+    return _dw_bits(_cl_ie_top === _cl_ie_top, _cl_ie_static === _cl_ie_static, vInst == _ClBound(_cl_ie_instance, a),
+                    _cl_ie_gen_top === _CL_IE_CGEN_TOP, _cl_ie_top === vTop && _CL_IE_CTOP === vTop, _cl_ie_static === _CL_IE_CSTATIC,
+                    _cl_ie_top != _cl_ie_gen_top && _cl_ie_top !== _cl_ie_gen_top, vTop != vStatic, vTop != vInst, vInst != vGenInst,
+                    vInst != _ClBound(_cl_ie_instance, a2), _CL_IE_CINT_TOP1 === _CL_IE_CINT_TOP2, _CL_IE_CINT_STATIC1 === _CL_IE_CINT_STATIC2,
+                    _CL_IE_CINT_TOP1 != _CL_IE_CINT_STATIC1, _CL_IE_CINT_TOP1 !== _CL_IE_CSTRING_TOP, vIntInst1 == vIntInst2,
+                    vIntInst1 != v2IntInst, vIntInst1 != vStrInst, _cl_ie_x(Int64) == _CL_IE_CINT_TOP1,
+                    _ClBound(_cl_ie_mixed_in, am) == _ClBound(_cl_ie_mixed_in, am), _ClBound(_cl_ie_super, am) == _ClBound(_cl_ie_super, am),
+                    s1 == _ClSuper{_ClIeAwM}(_cl_ie_super, amm), s2 == _ClSuper{_ClIeAMwM}(_cl_ie_super, amm), s1 != s2 && s1 !== s2,
+                    ns != s1, s1() == 1, s2() == 2, ns() == 2, _ClBound(_cl_ie_super, am)() == 1)
+end
+struct _ClIensInv
+    name::String
+end
+_cl_iens_nsm(::_ClIeA, i::_ClIensInv) = "A"
+_cl_iens_nsm(o::_ClIeAwM, i::_ClIensInv) = invoke(_cl_iens_nsm, Tuple{_ClIeA,_ClIensInv}, o, i) * " M on A"
+_cl_iens_nsm(o::_ClIeAMwM, i::_ClIensInv) = invoke(_cl_iens_nsm, Tuple{_ClIeAwM,_ClIensInv}, o, i) * " M on A"
+function _cl_iens(n::Int64)
+    amm = _ClIeAMM(n)
+    i = _ClIensInv("foo")
+    s1 = _ClSuper{_ClIeAwM}(_cl_iens_nsm, amm); s1b = _ClSuper{_ClIeAwM}(_cl_iens_nsm, amm)
+    s2 = _ClSuper{_ClIeAMwM}(_cl_iens_nsm, amm); s2b = _ClSuper{_ClIeAMwM}(_cl_iens_nsm, amm)
+    ns = _ClBound(_cl_iens_nsm, amm); nsb = _ClBound(_cl_iens_nsm, amm)
+    return _dw_bits(s1 == s1b && s1b == s1, s2 == s2b && s2b == s2, s1 != s2 && s2 != s1 && s1 !== s2, ns == nsb && nsb == ns,
+                    s1 != ns && ns != s1 && s1 !== ns, s2 != ns, s1(i) == "A M on A", s2(i) == "A M on A M on A", ns(i) == "A M on A M on A")
+end
+_cl_iets_str(::_ClIeA) = "A"
+_cl_iets_str(o::_ClIeAwM) = invoke(_cl_iets_str, Tuple{_ClIeA}, o) * " M on A"
+_cl_iets_str(o::_ClIeAMwM) = invoke(_cl_iets_str, Tuple{_ClIeAwM}, o) * " M on A"
+function _cl_iets(n::Int64)
+    amm = _ClIeAMM(n)
+    s1 = _ClSuper{_ClIeAwM}(_cl_iets_str, amm); s1b = _ClSuper{_ClIeAwM}(_cl_iets_str, amm)
+    s2 = _ClSuper{_ClIeAMwM}(_cl_iets_str, amm); s2b = _ClSuper{_ClIeAMwM}(_cl_iets_str, amm)
+    ns = _ClBound(_cl_iets_str, amm); nsb = _ClBound(_cl_iets_str, amm)
+    return _dw_bits(s1 == s1b && s1b == s1, s2 == s2b && s2b == s2, s1 != s2 && s2 != s1 && s1 !== s2, ns == nsb && nsb == ns,
+                    s1 != ns && ns != s1 && s1 !== ns, s2 != ns, s1() == "A M on A", s2() == "A M on A M on A", ns() == "A M on A M on A")
+end
+# implicit_closure: a closure stored in an untyped field, a method returning a local closure, a tear-off
+mutable struct _ClIcFirst
+    i::Int64
+    b::Any
+end
+_cl_ic_foo(o::_ClIcFirst) = o.i
+_cl_ic_foo1(o::_ClIcFirst) = (loc = () -> o.i; loc)
+# implicit1: a static function and a bound method passed as a handler
+struct _ClI1Hello end
+_cl_i1_handler1(e::Bool) = e ? Int64(10) : Int64(1)
+_cl_i1_handler2(::_ClI1Hello, e::Bool) = e ? Int64(20) : Int64(2)
+_cl_i1_add_event_listener(::_ClI1Hello, s::String, handler, status::Bool) = handler(status)
+# implicit2: a method calling an immediately invoked closure over a field, then torn off
+struct _ClI2B end
+_cl_i2_bfoo(::_ClI2B, i) = 499 + i
+struct _ClI2A
+    b::_ClI2B
+end
+_ClI2A() = _ClI2A(_ClI2B())
+_cl_i2_afoo(a::_ClI2A, i) = (() -> _cl_i2_bfoo(a.b, i))()
+# in_constructor: a parametric struct whose closure building T[] comes from a factory or a default
+struct _ClIncA{T,F}
+    closure::F
+    _ClIncA{T}(c::F) where {T,F} = new{T,F}(c)
+end
+_ClIncA{T}(::Nothing = nothing) where {T} = _ClIncA{T}(() -> T[])
+_cl_inc_factory(::Type{T}) where {T} = _ClIncA{T}(() -> T[])
+# in_field_initializer: a field initialized to a Dict holding a closure
+struct _ClIfiFoo{D}
+    closures::D
+end
+_ClIfiFoo() = _ClIfiFoo(Dict("a" => (x::Int64, y::Int64) -> x + y))
+# in_initializer: two closures in a constructor sharing a parameter reassigned after them; a subtype's own
+struct _ClIniA{F,G}
+    f::F
+    g::G
+end
+function _cl_ini_a(a0::Int64)
+    local a::Int64 = a0
+    f = () -> 42 + a
+    g = () -> (a += 1; a)
+    a = 4
+    return _ClIniA(f, g)
+end
+_cl_ini_b() = _cl_ini_a(Int64(42))
+function _cl_ini_c(a0::Int64)
+    local a::Int64 = a0
+    h = () -> (a += 1; a)
+    return (h, _cl_ini_a(Int64(42)))
+end
+# in_initializer2: a closure over a parameter, called by the supertype's constructor before the body
+struct _ClIni2A{F}
+    f::F
+end
+function _cl_ini2_a(a0::Int64)
+    local a::Int64 = a0
+    f = () -> (a += 1; a)
+    s_check = f() == 2
+    body_check = a == 2
+    return (_ClIni2A(f), s_check, body_check)
+end
+# instantiation_closure_equality: closures made in a loop and their instantiations agree on ==
+function _cl_ice(n::Int64)
+    local x::Int64 = 0
+    f = [(t::Type) -> (x += 1; nothing) for i in 1:(n + 1)]
+    agree = (f[1] == f[2]) == (_ClBound(f[1], Int64) == _ClBound(f[2], Int64))
+    f[1](Int64)
+    _ClBound(f[2], Int64)()
+    return _dw_bits(agree, x == 2)
+end
+# invoked_through_interface_target_field: a field holding a bound generic method, called as the
+# interface's method, rejects a String and accepts an Int64
+abstract type _ClItfA end
+struct _ClItfD{T} end
+_cl_itf_m(::_ClItfD{T}, t::T) where {T} = nothing
+struct _ClItfC{F} <: _ClItfA
+    foo::F
+end
+_cl_itf_bar(d::_ClItfD{Int64}) = _ClBound(_cl_itf_m, d)
+_cl_itf_foo(a::_ClItfC, x) = a.foo(x)
+function _cl_itf_baz(a::_ClItfA, n::Int64)
+    threw = try; _cl_itf_foo(a, "hi"); false; catch e; e isa MethodError; end
+    _cl_itf_foo(a, n)
+    return threw
+end
+# invoked_through_interface_target_getter: the same through a getter returning the bound method
+abstract type _ClItgA end
+struct _ClItgD{T} end
+_cl_itg_m(::_ClItgD{T}, t::T) where {T} = nothing
+struct _ClItgC <: _ClItgA end
+_cl_itg_bar(d::_ClItgD{Int64}) = _ClBound(_cl_itg_m, d)
+_cl_itg_foo_getter(::_ClItgC) = _cl_itg_bar(_ClItgD{Int64}())
+_cl_itg_foo(a::_ClItgC, x) = _cl_itg_foo_getter(a)(x)
+function _cl_itg_baz(a::_ClItgA, n::Int64)
+    threw = try; _cl_itg_foo(a, "hi"); false; catch e; e isa MethodError; end
+    _cl_itg_foo(a, n)
+    return threw
+end
+# minify_closure_variable_collision: a closure over 14 locals compared with a class whose == is always true
+struct _ClMcvA end
+Base.:(==)(::_ClMcvA, ::Any) = true
+function _cl_mcv_foo(x::Int64)
+    a = x; b = x; c = x; d = x; e = x; f = x; g = x; h = x; i = x; j = x; k = x; l = x; m = x; n = x
+    return () -> a + b + c + d + e + f + g + h + i + j + k + l + m + n
+end
+# param_null_to_object: closures with an untyped, a String and a Nothing parameter asked what they accept
+# parameter_default_type_inference: local functions whose optional and keyword defaults are constant lists
+const _CL_PDTI_NUM = Real[]
+const _CL_PDTI_INT = Int64[]
+function _cl_pdti(n::Int64)
+    pos_explicit(x::Vector{Real} = _CL_PDTI_NUM) = x isa Vector{Real} && x === _CL_PDTI_NUM
+    pos_from_required(x::Vector{Int64} = _CL_PDTI_INT) = x isa Vector{Int64} && x === _CL_PDTI_INT
+    pos_from_optional(x = _CL_PDTI_INT) = x isa Vector{Int64} && x === _CL_PDTI_INT
+    named_explicit(; x::Vector{Real} = _CL_PDTI_NUM) = x isa Vector{Real} && x === _CL_PDTI_NUM
+    named_from_required(; x::Vector{Int64} = _CL_PDTI_INT) = x isa Vector{Int64} && x === _CL_PDTI_INT
+    named_from_optional(; x = _CL_PDTI_INT) = x isa Vector{Int64} && x === _CL_PDTI_INT
+    return _dw_bits(pos_explicit(), pos_from_required(), pos_from_optional(), named_explicit(), named_from_required(),
+                    named_from_optional(), !pos_from_required(Int64[n]))
+end
+# parameter_types: a closure counting its calls, called with a String and then through a field with an Int64
+struct _ClPtA{F}
+    f::F
+end
+_cl_pt_do(a::_ClPtA) = a.f(1)
+function _cl_pt(n::Int64)
+    local invokeCount::Int64 = 0
+    local ok::Bool = true
+    closure = a -> (c = invokeCount; invokeCount = c + 1; c == 1 && (ok = ok & (a isa Int64)); nothing)
+    closure("s")
+    _cl_pt_do(_ClPtA(closure))
+    return _dw_bits(ok, invokeCount == 2)
+end
+# parse_closures_in_initializers: closures stored by constructors directly, in a list, in a Dict and as an argument
+struct _ClPciA{X}
+    x::X
+end
+_cl_pci_foo(f) = f()
+_cl_pci_parenthesized(y) = _ClPciA(() -> y)
+_cl_pci_list(y) = _ClPciA([() -> y])
+_cl_pci_map(y) = _ClPciA(Dict("fun" => () -> y))
+_cl_pci_arg(y) = _ClPciA(_cl_pci_foo(() -> y))
+# partial_instantiation_eager_bounds_check: instantiating a method's S <: T with S = String rejects at once
+struct _ClPiebC{T} end
+_cl_pieb_foo(::_ClPiebC{T}, x::S) where {T,S<:T} = nothing
+struct _ClPiebFn{S,C}
+    c::C
+    _ClPiebFn{S}(c::_ClPiebC{T}) where {T,S<:T} = new{S,_ClPiebC{T}}(c)
+end
+(fn::_ClPiebFn{S})(x::S) where {S} = _cl_pieb_foo(fn.c, x)
+# partial_tearoff_instantiation: a generic function as a field default, called with and without a Type argument
+const _CL_PTI_LATEST = Ref{Union{Int64,String}}(Int64(0))
+_cl_pti_default(v) = _cl_pti_default(Any, v)
+_cl_pti_default(::Type{T}, v::T) where {T} = (_CL_PTI_LATEST[] = v; nothing)
+_cl_pti_foo()::Union{Int64,String} = _CL_PTI_LATEST[] == -1 ? Int64(-1) : "not -1"
+struct _ClPtiX1{F}
+    f::F
+end
+_ClPtiX1(; f = _cl_pti_default) = _ClPtiX1(f)
+mutable struct _ClPtiY1{F}
+    f::F
+end
+function _cl_pti(n::Int64)
+    x = _ClPtiX1()
+    x.f("hello1"); r1 = _CL_PTI_LATEST[] == "hello1"
+    x.f(Any, "hello2"); r2 = _CL_PTI_LATEST[] == "hello2"
+    x.f(String, "hello3"); r3 = _CL_PTI_LATEST[] == "hello3"
+    x.f(Int64, 42n); r4 = _CL_PTI_LATEST[] == 42
+    e2 = try; x.f(Int64, _cl_pti_foo()); false; catch e; e isa MethodError; end
+    y = _ClPtiY1(_cl_pti_default)
+    y.f = _cl_pti_default
+    y.f("hello4"); r5 = _CL_PTI_LATEST[] == "hello4"
+    y.f(Any, "hello5"); r6 = _CL_PTI_LATEST[] == "hello5"
+    y.f(String, "hello6"); r7 = _CL_PTI_LATEST[] == "hello6"
+    y.f(Int64, 43n); r8 = _CL_PTI_LATEST[] == 43
+    e4 = try; y.f(Int64, _cl_pti_foo()); false; catch e; e isa MethodError; end
+    return _dw_bits(r1, r2, r3, r4, e2, r5, r6, r7, r8, e4)
+end
+# regress46568: two constant instantiations of different generic functions differ and count their calls
+const _CL_R46_TOP_COUNT = Ref(Int64(0))
+const _CL_R46_STATIC_COUNT = Ref(Int64(0))
+_cl_r46_gen_top(::Type{T}) where {T} = (_CL_R46_TOP_COUNT[] += 1; nothing)
+_cl_r46_gen_static(::Type{T}) where {T} = (_CL_R46_STATIC_COUNT[] += 1; nothing)
+const _CL_R46_CINT_TOP = _ClBound(_cl_r46_gen_top, Int64)
+const _CL_R46_CINT_STATIC = _ClBound(_cl_r46_gen_static, Int64)
+function _cl_r46(n::Int64)
+    t0 = _CL_R46_TOP_COUNT[]
+    s0 = _CL_R46_STATIC_COUNT[]
+    a = _CL_R46_CINT_TOP !== _CL_R46_CINT_STATIC
+    b = _CL_R46_CINT_TOP != _CL_R46_CINT_STATIC
+    _CL_R46_CINT_TOP()
+    c = _CL_R46_TOP_COUNT[] - t0 == n && _CL_R46_STATIC_COUNT[] - s0 == 0
+    _CL_R46_CINT_STATIC()
+    d = _CL_R46_TOP_COUNT[] - t0 == n && _CL_R46_STATIC_COUNT[] - s0 == n
+    return _dw_bits(a, b, c, d)
+end
+# regression_62319: a nullable receiver of a never-made class whose method returns a closure, never called
+struct _ClR62Foo
+    next::_ClR62Foo
+end
+_cl_r62_foo()::_ClR62Foo = throw(ErrorException("Foo(foo) reads foo while initializing it"))
+_cl_r62_get_closure(foo::_ClR62Foo) = () -> (foo; foo.next; nothing)
+function _cl_r62(s::String)
+    local f::Union{Nothing,_ClR62Foo} = nothing
+    if parse(Int64, s) == 0
+        f = _cl_r62_foo()
+    end
+    fun = f === nothing ? nothing : _cl_r62_get_closure(f)
+    fun === nothing || fun()
+    return fun === nothing
+end
+# self_reference: a closure recursing into itself (passed as `self`) inside try/finally, counting in finally
+function _cl_sr(n::Int64)
+    local counter::Int64 = 0
+    inner = (self, value::Int64) -> begin
+        value == 0 && return Int64(0)
+        try
+            return self(self, value - 1)::Int64
+        finally
+            counter += 1
+        end
+    end
+    r = inner(inner, n)
+    return _dw_bits(r == 0, counter == 199)
+end
+# shared_state: two closures sharing one mutable binding, made plainly, in a loop and in a nested loop
+function _cl_ss_plain()
+    local j::Int64 = 1000
+    f = (x::Int64) -> (q = j; j = x; q)
+    g = (x::Int64) -> (q = j; j = x; q)
+    return (f, g)
+end
+function _cl_ss_loop()
+    for i in 0:1
+        local j::Int64 = i * 1000
+        f = (x::Int64) -> (q = j; j = x; q)
+        g = (x::Int64) -> (q = j; j = x; q)
+        i == 1 && return (f, g)
+    end
+    error("unreachable")
+end
+function _cl_ss_nested()
+    for o in 0:1
+        local j::Int64 = o * 1000
+        for i in 0:1
+            f = (x::Int64) -> (q = j; j = x; q)
+            g = (x::Int64) -> (q = j; j = x; q)
+            o == 1 && i == 1 && return (f, g)
+        end
+    end
+    error("unreachable")
+end
+_cl_ss_test(fg) = (f = fg[1]; g = fg[2]; _dw_bits(f(100) == 1000, f(200) == 100, f(300) == 200, g(400) == 300, g(500) == 400))
+# side_effect: a global closure and a local closure writing a global, called from methods
+const _CL_SE_B = Ref{Union{Nothing,Int64}}(nothing)
+const _CL_SE_A = () -> (_CL_SE_B[] = 42; nothing)
+struct _ClSeC end
+const _CL_SE_CS = [_ClSeC()]
+_cl_se_non_inlinable1(::_ClSeC) = _CL_SE_A()
+_cl_se_non_inlinable2(::_ClSeC) = (a = () -> (_CL_SE_B[] = 42; nothing); a())
+function _cl_se(n::Int64)
+    _CL_SE_B[] = nothing
+    temp = _CL_SE_CS[n]
+    r1 = _CL_SE_B[] === nothing
+    _cl_se_non_inlinable1(temp)
+    r2 = _CL_SE_B[] == 42
+    _CL_SE_B[] = nothing
+    r3 = _CL_SE_B[] === nothing
+    _cl_se_non_inlinable2(temp)
+    r4 = _CL_SE_B[] == 42
+    return _dw_bits(r1, r2, r3, r4)
+end
+# tearoff_dynamic: tear-offs and super tear-offs compared by == and hash, called with a wrong argument
+# type, and string tear-offs of several values
+abstract type _ClTdAbsC end
+mutable struct _ClTdC <: _ClTdAbsC
+    id::Int64
+end
+mutable struct _ClTdD <: _ClTdAbsC
+    id::Int64
+end
+_cl_td_f(::_ClTdAbsC, x::Int64) = x + 1
+_cl_td_f(::_ClTdD, x::Int64) = x + 41
+_cl_td_g(::_ClTdAbsC, x::Int64) = x + 2
+_cl_td_super_f(d::_ClTdD) = _ClSuper{_ClTdAbsC}(_cl_td_f, d)
+_cl_td_super_g(d::_ClTdD) = _ClSuper{_ClTdAbsC}(_cl_td_g, d)
+_cl_td_eq(f1, f2) = f1 == f2 && hash(f1) == hash(f2)
+_cl_td_throws(f) = try; f(2.5); false; catch e; e isa MethodError; end
+function _cl_td(n::Int64)
+    c = _ClTdC(n)
+    f1 = _ClBound(_cl_td_f, c)
+    f2 = _ClBound(_cl_td_f, c)
+    dyn = (_cl_td_throws(f1), f1(41) == 42, _cl_td_eq(f1, f1), _cl_td_eq(f1, f2), _cl_td_eq(_ClBound(_cl_td_g, c), _ClBound(_cl_td_g, c)),
+           f1 != _ClBound(_cl_td_f, _ClTdC(n)), f1 != _ClBound(_cl_td_g, c), nothing != f1, f1 != nothing)
+    d = _ClTdD(n)
+    s1 = _cl_td_super_f(d)
+    s2 = _cl_td_super_f(d)
+    sup = (_cl_td_throws(_ClBound(_cl_td_f, d)), s1(41) == 42, _cl_td_eq(s1, s1), _cl_td_eq(s1, s2), _cl_td_eq(_ClBound(_cl_td_f, d), _ClBound(_cl_td_f, d)),
+           s1 != _ClBound(_cl_td_f, d), s1 != _cl_td_super_f(_ClTdD(n)), s1 != _cl_td_super_g(d),
+           _cl_td_eq(_cl_td_super_g(d), _cl_td_super_g(d)), _ClBound(_cl_td_f, d)(41) == 82)
+    str = (_cl_td_eq(_ClBound(string, n), _ClBound(string, n)), _ClBound(string, n)() == string(n),
+           _cl_td_eq(_ClBound(string, "hi"), _ClBound(string, "hi")), _ClBound(string, true)() == "true")
+    return _dw_bits(dyn..., sup..., str...)
+end
+# tearoff_super_default: a super tear-off and super calls of a method whose override has another
+# positional default (Julia's default forwards through dispatch, so a one-argument super call
+# reaches the override with the super's default)
+abstract type _ClTsdP1 end
+struct _ClTsdA1 <: _ClTsdP1
+    i1::Int64
+end
+struct _ClTsdB1 <: _ClTsdP1
+    i1::Int64
+end
+_ClTsdB1() = _ClTsdB1(100)
+_cl_tsd_str(o::_ClTsdA1) = "A1($(o.i1))"
+_cl_tsd_str(o::_ClTsdB1) = "B1($(o.i1))"
+_cl_tsd_foo(o::_ClTsdP1, i::Int64, s::String = "A1.s") = "$(_cl_tsd_str(o)).A1.foo($i, $s)"
+_cl_tsd_foo(o::_ClTsdB1, i::Int64, s::String = "B1.s") = "$(_cl_tsd_str(o)).B1.foo($i, $s)"
+_cl_tsd_getsuperfoo(b::_ClTsdB1) = _ClSuper{_ClTsdP1}(_cl_tsd_foo, b)
+_cl_tsd_callsuperfoo1(b::_ClTsdB1, i::Int64) = invoke(_cl_tsd_foo, Tuple{_ClTsdP1,Int64}, b, i)
+_cl_tsd_callsuperfoo2(b::_ClTsdB1, i::Int64, s::String) = invoke(_cl_tsd_foo, Tuple{_ClTsdP1,Int64,String}, b, i, s)
+abstract type _ClTsdP2 end
+struct _ClTsdA2 <: _ClTsdP2
+    i2::Int64
+end
+struct _ClTsdB2 <: _ClTsdP2
+    i2::Int64
+end
+_ClTsdB2() = _ClTsdB2(200)
+_cl_tsd_str(o::_ClTsdA2) = "A2($(o.i2))"
+_cl_tsd_str(o::_ClTsdB2) = "B2($(o.i2))"
+_cl_tsd_foo(o::_ClTsdP2, i::Int64, s::String = "A2.s") = "$(_cl_tsd_str(o)).A2.foo($i, $s)"
+_cl_tsd_foo(o::_ClTsdB2, i::Int64, s::String = "B2.s") = "$(_cl_tsd_str(o)).B2.foo($i, $s)"
+_cl_tsd_getsuperfoo(b::_ClTsdB2) = _ClSuper{_ClTsdP2}(_cl_tsd_foo, b)
+_cl_tsd_callsuperfoo1(b::_ClTsdB2, i::Int64) = invoke(_cl_tsd_foo, Tuple{_ClTsdP2,Int64}, b, i)
+_cl_tsd_callsuperfoo2(b::_ClTsdB2, i::Int64, s::String) = invoke(_cl_tsd_foo, Tuple{_ClTsdP2,Int64,String}, b, i, s)
+function _cl_tsd(n::Int64)
+    b1superfoo = _cl_tsd_getsuperfoo(_ClTsdB1())
+    r1 = (b1superfoo(50n) == "B1(100).B1.foo(50, A1.s)", b1superfoo(51, "xxxx") == "B1(100).A1.foo(51, xxxx)")
+    a1foo = _ClBound(_cl_tsd_foo, _ClTsdA1(20))
+    b1foo = _ClBound(_cl_tsd_foo, _ClTsdB1())
+    r2 = (a1foo(52) == "A1(20).A1.foo(52, A1.s)", a1foo(53, "xxxx") == "A1(20).A1.foo(53, xxxx)",
+          b1foo(54) == "B1(100).B1.foo(54, B1.s)", b1foo(55, "xxxx") == "B1(100).B1.foo(55, xxxx)",
+          _cl_tsd_callsuperfoo1(_ClTsdB1(), 56) == "B1(100).B1.foo(56, A1.s)",
+          _cl_tsd_callsuperfoo2(_ClTsdB1(), 57, "xxxx") == "B1(100).A1.foo(57, xxxx)")
+    a2foo = _ClBound(_cl_tsd_foo, _ClTsdA2(20))
+    b2foo = _ClBound(_cl_tsd_foo, _ClTsdB2())
+    r3 = (a2foo(60) == "A2(20).A2.foo(60, A2.s)", a2foo(61, "xxxx") == "A2(20).A2.foo(61, xxxx)",
+          b2foo(62) == "B2(200).B2.foo(62, B2.s)", b2foo(63, "xxxx") == "B2(200).B2.foo(63, xxxx)",
+          _cl_tsd_callsuperfoo1(_ClTsdB2(), 64) == "B2(200).B2.foo(64, A2.s)",
+          _cl_tsd_callsuperfoo2(_ClTsdB2(), 65, "xxxx") == "B2(200).A2.foo(65, xxxx)")
+    b2superfoo = _cl_tsd_getsuperfoo(_ClTsdB2())
+    r4 = (b2superfoo(66) == "B2(200).B2.foo(66, A2.s)", b2superfoo(67, "xxxx") == "B2(200).A2.foo(67, xxxx)")
+    return _dw_bits(r1..., r2..., r3..., r4...)
+end
+# type_arguments: a method's type parameters, bounded by the struct's, passed explicitly, at their
+# bounds and through a closure instantiating them; a nested function bounded by both levels
+struct _ClTaA{P}
+    args::Vector{Type}
+end
+abstract type _ClTaMyIterable <: AbstractVector{Int64} end
+_cl_ta_bar(a::_ClTaA{P}, ::Type{Q}, ::Type{T1}, ::Type{T2}, arg::Union{Nothing,Dict{T1,T2}}) where {P,Q,T1<:P,T2<:Q} =
+    (push!(a.args, T1); push!(a.args, T2); nothing)
+function _cl_ta_foo(a::_ClTaA{P}, ::Type{Q}, ::Type{Q1}, ::Type{Q2}, ::Type{Q3}, ::Type{Q4}) where {P,Q,Q1<:P,Q2<:Q,Q3<:P,Q4<:Q}
+    _cl_ta_bar(a, Q, Q1, Q2, nothing)
+    _cl_ta_bar(a, Q, P, Q, nothing)
+    instantiated = arg -> _cl_ta_bar(a, Q, Q3, Q4, arg)
+    instantiated(nothing)
+    return nothing
+end
+struct _ClTaC{P}
+    args::Vector{Type}
+end
+_cl_ta_bar2(c::_ClTaC, ::Type{Q1}, ::Type{T1}, ::Type{T2}, arg::Union{Nothing,Vector{T2}}) where {Q1,T1,T2<:Dict{Q1,T1}} =
+    (push!(c.args, T2); nothing)
+_cl_ta_cbar(c::_ClTaC, ::Type{Q1}, ::Type{T1}, arg) where {Q1,T1} = (f = a2 -> _cl_ta_bar2(c, Q1, T1, Dict{Q1,T1}, a2); f(nothing))
+_cl_ta_cfoo(c::_ClTaC, ::Type{Q1}) where {Q1} = _cl_ta_cbar(c, Q1, Int64, nothing)
+function _cl_ta(n::Int64)
+    a = _ClTaA{Real}(Type[])
+    _cl_ta_foo(a, AbstractVector, Int64, Vector{Int64}, Float64, _ClTaMyIterable)
+    e = _ClTaC{Int64}(Type[])
+    _cl_ta_cfoo(e, Real)
+    return _dw_bits(length(a.args) == 6, a.args[1] === Int64, a.args[2] === Vector{Int64}, a.args[3] === Real,
+                    a.args[4] === AbstractVector, a.args[5] === Float64, a.args[6] === _ClTaMyIterable,
+                    length(e.args) == n, e.args[1] === Dict{Real,Int64})
+end
+# type_test: a closure's result asserted to be a subtype it is not
+abstract type _ClTtA end
+struct _ClTtAA <: _ClTtA end
+struct _ClTtB <: _ClTtA end
+_cl_tt_ca(x::String)::_ClTtA = _ClTtAA()
+_cl_tt_aclosure(x::String)::_ClTtA = _cl_tt_ca(x)
+_cl_tt_bclosure()::_ClTtA = _ClTtAA()
+_cl_tt_test(func, value::String) = try; func(value)::_ClTtB; false; catch e; e isa TypeError; end
+# type_variable: a closure returning its struct's type parameter
+struct _ClTvA{T} end
+_cl_tv_foo(::_ClTvA{T}) where {T} = (bar = () -> T; bar())
+# type_variables: closures building a _ClTvsA{T} from a constructor and a method
+struct _ClTvsA{T} end
+_cl_tvs_bar(::Type{T}) where {T} = (g = () -> (_ClTvsA{T}(); nothing); g(); _ClTvsA{T}())
+_cl_tvs_foo(::_ClTvsA{T}) where {T} = (g = () -> _ClTvsA{T}(); g())
+# unnamed_closure: an immediately invoked closure with a one-pass loop indexing a non-array
+struct _ClUcA end
+Base.getindex(::_ClUcA, index) = index
+_cl_uc_get_non_array() = _ClUcA()
+# variable_shadow: a returned closure whose parameter shadows the enclosing one
+_cl_vs_foo(x) = (y = x; bar = x -> y - x; bar)
+# with_super_field: a super field read inside a closure while a subtype's getter overrides it
+abstract type _ClWsfA end
+struct _ClWsfB <: _ClWsfA
+    a::Int64
+end
+_ClWsfB() = _ClWsfB(42)
+_cl_wsf_a(o::_ClWsfA) = o.a
+_cl_wsf_a(::_ClWsfB) = Int64(54)
+_cl_wsf_return_super(b::_ClWsfB) = invoke(_cl_wsf_a, Tuple{_ClWsfA}, b)
+_cl_wsf_return_super_in_closure(b::_ClWsfB) = () -> invoke(_cl_wsf_a, Tuple{_ClWsfA}, b)
+# with_super_send: a super call inside a closure passed to foreach
+abstract type _ClWssSuper end
+struct _ClWssSuperC <: _ClWssSuper end
+struct _ClWssSub <: _ClWssSuper end
+_cl_wss_m(::_ClWssSuper) = "super"
+_cl_wss_m(::_ClWssSub) = "sub"
+function _cl_wss_test(s::_ClWssSub)
+    local x::String = ""
+    foreach(e -> (x = invoke(_cl_wss_m, Tuple{_ClWssSuper}, s)), Int64[0])
+    return x
+end
+_g("dart_closure", Any[
+    ("bound_closure_equality", (n::Int64) -> (a1 = _ClBceA(n); a2 = _ClBceA(n); b1 = _ClBceB(n);
+        t1 = _ClBound(_cl_bce_foo, a1); s1 = _ClBound(_cl_bce_index_of, "foo"); l1 = _ClBound(_cl_bce_index_of, Int64[]);
+        _dw_bits(t1 == _ClBound(_cl_bce_foo, a1), hash(t1) == hash(_ClBound(_cl_bce_foo, a1)), t1 != _ClBound(_cl_bce_foo, a2),
+                 t1 != _ClBound(_cl_bce_foo, b1), t1() == 42, _ClBound(_cl_bce_foo, _ClBceK()) == _ClBound(_cl_bce_foo, _ClBceK()),
+                 s1 == _ClBound(_cl_bce_index_of, "foo"), s1 != _ClBound(_cl_bce_index_of, "bar"), l1 == l1,
+                 l1 != _ClBound(_cl_bce_index_of, Int64[]), s1('o') == 1)), Int64(1)),
+    ("bound_closure_primitives", (n::Int64) -> (v = Int64[]; m1 = _ClBound(push!, v); m1(n); m2 = _ClBound(_cl_bcp_foo, _ClBcpA());
+        _dw_bits(m2(n) == 42, length(v) == 1, n in v)), Int64(42)),
+    ("break", (n::Int64) -> _cl_break(n), Int64(3)),
+    ("break1", (n::Int64) -> _cl_break1(n), Int64(3)),
+    ("break2", (n::Int64) -> _cl_break2(n), Int64(3)),
+    ("call_wrong_argument_count", (n::Int64) -> (kuh = (a::Int64, b::Int64) -> a + b + n;
+        try; _cl_cwac_melke(kuh); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end), Int64(1)),
+    ("closure", (n::Int64) -> (o = _ClCA(n); foo = () -> (v = o.field; o.field += 1; v); _dw_bits(foo() == 3, o.field == 4)), Int64(3)),
+    ("closure2", (s::String) -> _cl_c2_demo(s) == "Bounce!", "Bounce!"),
+    ("closure3", (n::Int64) -> (x = n > 0 ? nothing : n;
+        try; _cl_c3_test(x, 2); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end), Int64(1)),
+    ("closure4", (n::Int64) -> _cl_c4(n), Int64(499)),
+    ("closure5", (n::Int64) -> _cl_c5(n), Int64(1)),
+    ("closure6", (n::Int64) -> _cl_c6_foo(_ClC6A(), n), Int64(1)),
+    ("closure7", (n::Int64) -> _cl_c7(n), Int64(33)),
+    ("closure8", (n::Int64) -> (c = _ClC8C{Int64}(); _cl_c8_for_each(c, _ClBound(_cl_c8_lala, _ClC8D{Int64}())); n), Int64(1)),
+    ("closures_initializer", (n::Int64) -> _dw_bits(_ClCiA{Int64}().t() isa Vector{Int64}, _ClCiA{String}().t() isa Vector{Int64},
+        _ClCiB{Int64}().t() isa Type, _ClCiB{Int64}().t() === Int64), Int64(1)),
+    ("closures_initializer2", (n::Int64) -> (k = Int64(0); for i in 1:n; k += _ClCi2A{Int64}().t() isa Type; end; k), Int64(1)),
+    ("closures_with_complex_params", (n::Int64) -> _cl_cwcp(n), Int64(1)),
+    ("dynamic_closure_param", (n::Int64) -> _cl_dcp_check(_ClBound(_cl_dcp_foo, _ClDcpA())) * 100 + _cl_dcp_foo(_ClDcpB(), _ClDcpArg(), "b", 3n), Int64(1)),
+    ("dynamic", (n::Int64) -> _cl_dyn(n), Int64(1)),
+    ("forwarding_stub_tearoff_generic", (n::Int64) -> (d = _ClFsgD(); c::_ClFsgC = d; i::_ClFsgI{_ClFsgB} = d;
+        _cl_fsg_check(_ClBound(_cl_fsg_f, d)) * 100 + _cl_fsg_check(_ClBound(_cl_fsg_f, c)) * 10 + _cl_fsg_check(_ClBound(_cl_fsg_f, i)) + n), Int64(0)),
+    ("forwarding_stub_tearoff", (n::Int64) -> (d = _ClFsD(); c::_ClFsC = d; i::_ClFsI = d;
+        _cl_fs_check(_ClBound(_cl_fs_f, d)) * 100 + _cl_fs_check(_ClBound(_cl_fs_f, c)) * 10 + _cl_fs_check(_ClBound(_cl_fs_f, i)) + n), Int64(0)),
+    ("identity_equality_nosuchmethod_tearoff", (n::Int64) -> _cl_iens(n), Int64(1)),
+    ("identity_equality_tearoff", (n::Int64) -> _cl_ie(n), Int64(1)),
+    ("identity_equality_tostring_tearoff", (n::Int64) -> _cl_iets(n), Int64(1)),
+    ("implicit_closure", (n::Int64) -> (obj = _ClIcFirst(n, nothing); func = () -> obj.i; obj.b = func; ib1 = _cl_ic_foo1(obj);
+        ib = _ClBound(_cl_ic_foo, obj); _dw_bits((obj.b::typeof(func))() == 20, ib1() == obj.i, ib() == obj.i)), Int64(20)),
+    ("implicit1", (b::Bool) -> (h = _ClI1Hello(); _cl_i1_add_event_listener(h, "click", _cl_i1_handler1, b) * 100 +
+        _cl_i1_add_event_listener(h, "click", _ClBound(_cl_i1_handler2, h), b)), false),
+    ("implicit2", (n::Int64) -> (a = _ClI2A(); f = _ClBound(_cl_i2_afoo, a); _dw_bits(_cl_i2_afoo(a, 11n) == 510, f(22n) == 521)), Int64(1)),
+    ("in_constructor", (n::Int64) -> _dw_bits(_cl_inc_factory(Any).closure() isa Vector, _ClIncA{Any}().closure() isa Vector,
+        _cl_inc_factory(Int64).closure() isa Vector{Int64}, _ClIncA{Int64}().closure() isa Vector{Int64},
+        _cl_inc_factory(Int64).closure() isa Vector{String}, _ClIncA{Int64}().closure() isa Vector{String}), Int64(1)),
+    ("in_field_initializer", (n::Int64) -> (closures = _ClIfiFoo().closures; closures["a"](4n, 2)), Int64(1)),
+    ("in_initializer", (n::Int64) -> (x = _cl_ini_a(n); y = _cl_ini_b(); (h, z) = _cl_ini_c(n - 1);
+        _dw_bits(x.f() == 46, x.g() == 5, x.f() == 47, y.f() == 46, y.g() == 5, y.f() == 47, z.f() == 46, z.g() == 5, z.f() == 47,
+                 h() == 1, h() == 2, z.f() == 47, z.g() == 6, z.f() == 48)), Int64(1)),
+    ("in_initializer2", (n::Int64) -> ((a, s, b) = _cl_ini2_a(n); _dw_bits(s, b, a.f() == 3)), Int64(1)),
+    ("instantiation_closure_equality", (n::Int64) -> _cl_ice(n), Int64(1)),
+    ("invoked_through_interface_target_field", (n::Int64) -> _cl_itf_baz(_ClItfC(_cl_itf_bar(_ClItfD{Int64}())), n), Int64(1)),
+    ("invoked_through_interface_target_getter", (n::Int64) -> _cl_itg_baz(_ClItgC(), n), Int64(1)),
+    ("minify_closure_variable_collision", (x::Int64) -> (arr = [_cl_mcv_foo(x)]; _dw_bits(arr[1] == _ClMcvA(), arr[1]() == 42 * 14)), Int64(42)),
+    ("param_null_to_object", (n::Int64) -> (f = x -> 1; h = (x::String) -> 1; i = (x::Nothing) -> 1;
+        _dw_bits(applicable(f, nothing), applicable(f, "s"), applicable(f, n), applicable(h, nothing), applicable(h, "s"), applicable(h, n),
+                 applicable(i, nothing), applicable(i, "s"), applicable(i, n), f(nothing) + h("s") + i(nothing) == 3)), Int64(1)),
+    ("parameter_default_type_inference", (n::Int64) -> _cl_pdti(n), Int64(1)),
+    ("parameter_types", (n::Int64) -> _cl_pt(n), Int64(1)),
+    ("parse_closures_in_initializers", (n::Int64) -> (a1 = _cl_pci_parenthesized(499n); a3 = _cl_pci_list(99n); a4 = _cl_pci_map(314n);
+        a5 = _cl_pci_arg(123n); _dw_bits(a1.x isa Function, a1.x() == 499, a3.x[1] isa Function, a3.x[1]() == 99,
+                                         a4.x["fun"] isa Function, a4.x["fun"]() == 314, a5.x == 123)), Int64(1)),
+    ("partial_instantiation_eager_bounds_check", (n::Int64) -> (c = _ClPiebC{Int64}(); fi = _ClPiebFn{Int64}(c); fi(n);
+        code = try; _ClPiebFn{String}(c); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end; code * 10 + (fi isa _ClPiebFn)), Int64(1)),
+    ("partial_tearoff_instantiation", (n::Int64) -> _cl_pti(n), Int64(1)),
+    ("regress46568", (n::Int64) -> _cl_r46(n), Int64(1)),
+    ("regression_62319", (s::String) -> _cl_r62(s), "1"),
+    ("self_reference", (n::Int64) -> _cl_sr(n), Int64(199)),
+    ("shared_state", (n::Int64) -> _cl_ss_test(_cl_ss_plain()) * 1024 + _cl_ss_test(_cl_ss_loop()) * 32 + _cl_ss_test(_cl_ss_nested()) + n, Int64(0)),
+    ("side_effect", (n::Int64) -> _cl_se(n), Int64(1)),
+    ("tearoff_dynamic", (n::Int64) -> _cl_td(n), Int64(1)),
+    ("tearoff_super_default", (n::Int64) -> _cl_tsd(n), Int64(1)),
+    ("type_arguments", (n::Int64) -> _cl_ta(n), Int64(1)),
+    ("type_test", (n::Int64) -> _dw_bits(_cl_tt_test(_cl_tt_aclosure, "foo"), _cl_tt_test(bar -> _cl_tt_bclosure(), "baz")) + n, Int64(0)),
+    ("type_variable", (n::Int64) -> _cl_tv_foo(_ClTvA{Int64}()) === Int64, Int64(1)),
+    ("type_variables", (n::Int64) -> _dw_bits(_cl_tvs_foo(_ClTvsA{Int64}()) isa _ClTvsA{Int64}, _cl_tvs_foo(_cl_tvs_bar(Int64)) isa _ClTvsA{Int64}) + n, Int64(0)),
+    ("unnamed_closure", (n::Int64) -> (() -> (res = Int64(0); while true; a = _cl_uc_get_non_array(); res = a[42n]; break; end; res))(), Int64(1)),
+    ("variable_shadow", (n::Int64) -> _cl_vs_foo(10n)(20n), Int64(1)),
+    ("with_super_field", (n::Int64) -> (b = _ClWsfB(); _dw_bits(_cl_wsf_a(b) == 54, _cl_wsf_return_super(b) == 42,
+        _cl_wsf_return_super_in_closure(b)() == 42) + n), Int64(0)),
+    ("with_super_send", (n::Int64) -> _dw_bits(_cl_wss_test(_ClWssSub()) == "super", _cl_wss_m(_ClWssSuperC()) == "super",
+        _cl_wss_m(_ClWssSub()) == "sub") + n, Int64(0)),
+])
+
+# ---- dart2wasm's tests at the pin, tests/language/exception ----------------------------------------
+# shared: a helper's mutable int field (dart's Helper.i, a static sum, a counter) and the loop to 10
+mutable struct _ExCell
+    i::Int64
+end
+_ex_func() = (i = Int64(0); while i < 10; i += 1; end; i)
+_ex_two() = Int64(2)
+# shared exception classes: TestException and its implementers (throw1, throw2, try_catch2, try_catch3)
+abstract type _ExTestEx <: Exception end
+struct _ExMyEx <: _ExTestEx
+    message_::String
+end
+struct _ExMyEx2 <: _ExTestEx
+    message_::String
+end
+struct _ExMyEx3 <: _ExTestEx
+    message_::String
+end
+_ExMyEx() = _ExMyEx("")
+_ExMyEx2() = _ExMyEx2("")
+_ExMyEx3() = _ExMyEx3("")
+# shared: a standalone MyException(message_) (throw, throw3, finally7)
+struct _ExPlainEx <: Exception
+    message_::String
+end
+_ExPlainEx() = _ExPlainEx("")
+# shared: three unrelated MyException1/2/3 (throw4, throw5, throw6)
+struct _ExMy1 <: Exception
+    message_::String
+end
+struct _ExMy2 <: Exception
+    message_::String
+end
+struct _ExMy3 <: Exception
+    message_::String
+end
+_ExMy1() = _ExMy1("1")
+_ExMy2() = _ExMy2("2")
+_ExMy3() = _ExMy3("3")
+# shared: MyException with subclasses MyException1/2 (try_catch, try_catch_on_syntax)
+abstract type _ExTcBase <: Exception end
+struct _ExTcMy <: _ExTcBase end
+struct _ExTcMy1 <: _ExTcBase end
+struct _ExTcMy2 <: _ExTcBase end
+
+# catch_liveness: a local assigned after a throwing call keeps its old value in catch and after
+_ex_cl_foo(n::Int64) = n
+_ex_cl_throw() = throw("x")
+function _ex_catch_liveness(n::Int64)
+    x = Int64(10)
+    e2 = nothing
+    incatch = false
+    try
+        t = _ex_cl_foo(n)
+        _ex_cl_throw()
+        x = 3 + t
+    catch e
+        incatch = x == 10
+        e2 = e
+    end
+    return _dw_bits(incatch, x == 10, e2 isa String && e2 == "x")
+end
+# code_after_try_is_executed: code after a try/catch runs; a later throw escapes
+function _ex_cat(b::Bool)
+    exception = nothing
+    try
+        throw("foo")
+    catch ex
+        ex isa String || rethrow()
+        exception = ex
+    end
+    ok = exception isa String
+    b && throw("foo")
+    return ok
+end
+# exception: on String catch twice, then a TypeError picked out of on String / on TypeError / catch
+_ex_ex_cast(v::Union{Nothing,String}) = v::String
+function _ex_exception(n::Int64)
+    i = Int64(0)
+    try
+        throw("Hello")
+    catch s
+        s isa String ? (i += 10) : rethrow()
+    end
+    try
+        throw("bye")
+    catch s
+        s isa String ? (i += 10) : rethrow()
+    end
+    correct = false
+    try
+        throw(_ex_ex_cast(n > 0 ? nothing : "s"))
+    catch e
+        if e isa String
+            correct = false
+        elseif e isa TypeError
+            correct = true
+        else
+            correct = false
+        end
+    end
+    return _dw_bits(i == 20, correct)
+end
+# finally: a field updated in try is seen by finally
+function _ex_finally_foo(a::_ExCell)
+    executed = false
+    seen = Int64(0)
+    if a.i == 42
+        try
+            a.i = 12
+        finally
+            seen = a.i
+            executed = true
+        end
+    end
+    return _dw_bits(seen == 12, executed)
+end
+# finally1: return in try; the finally updates the field after the value is taken
+function _ex_finally1_f1(h::_ExCell)
+    try
+        j = _ex_func()
+        h.i = 1
+        return h.i
+    finally
+        h.i = h.i + 800
+    end
+    return h.i + 200
+end
+# finally2: return through two nested finally blocks
+function _ex_finally2_f1(h::_ExCell)
+    try
+        j = _ex_func()
+        try
+            h.i = 1
+            return h.i
+        finally
+            h.i = h.i + 400
+        end
+        h.i = 2
+        return h.i
+    finally
+        h.i = h.i + 800
+    end
+    return h.i + 200
+end
+# finally3: continue of an outer loop out of two nested try/finally (a flag; Julia's continue is
+# innermost), then a return through a finally
+function _ex_finally3_f1(h::_ExCell)
+    try
+        try
+            j = _ex_func()
+            while h.i <= 0
+                if h.i == 0
+                    try
+                        h.i = 1
+                        _ex_func()
+                        try
+                            j2 = _ex_func()
+                            cont = false
+                            while j2 < 50
+                                j2 += _ex_func()
+                                if j2 > 30
+                                    cont = true
+                                    break
+                                end
+                            end
+                            cont || (h.i = 200000)
+                        finally
+                            h.i = h.i + 200
+                        end
+                    finally
+                        h.i = h.i + 400
+                    end
+                end
+            end
+        finally
+            h.i = h.i + 800
+        end
+        return h.i
+    finally
+        h.i = h.i + 1600
+    end
+    h.i = h.i + 2000000
+    return Int64(1)
+end
+# finally4: a return after a try/finally; a later try/finally never runs
+function _ex_finally4_f1(h::_ExCell)
+    try
+        j = _ex_func()
+        h.i = 1
+    finally
+        h.i = h.i + 10
+    end
+    return h.i + 200
+    try
+        j = _ex_func()
+    finally
+        h.i = h.i + 10
+    end
+end
+# finally5: returns through nested finally blocks on two paths chosen by a parameter
+function _ex_finally5_f1(h::_ExCell, param::Int64)
+    if param == 0
+        try
+            j = _ex_func()
+            try
+                h.i = 1
+                return h.i
+            finally
+                h.i = h.i + 400
+            end
+            h.i = 2
+            return h.i
+        finally
+            h.i = h.i + 800
+        end
+        return h.i + 200
+    end
+    try
+        j = _ex_func()
+        try
+            h.i = 4
+            return h.i
+        finally
+            h.i = h.i + 100
+        end
+        h.i = 2
+        return h.i
+    finally
+        h.i = h.i + 200
+    end
+    return h.i + 200
+end
+# finally6: break of the inner loop inside nested try/finally, normal flow through every finally
+function _ex_finally6_f1(h::_ExCell)
+    try
+        try
+            j = _ex_func()
+            while h.i <= 0
+                if h.i == 0
+                    try
+                        h.i = 1
+                        _ex_func()
+                        try
+                            j2 = _ex_func()
+                            while j2 < 50
+                                j2 += _ex_func()
+                                if j2 > 30
+                                    break
+                                end
+                            end
+                            h.i += 200000
+                        finally
+                            h.i = h.i + 200
+                        end
+                    finally
+                        h.i = h.i + 400
+                    end
+                end
+            end
+        finally
+            h.i = h.i + 800
+        end
+        return h.i
+    finally
+        h.i = h.i + 1600
+    end
+    h.i = h.i + 2000000
+    return Int64(1)
+end
+# finally7: an exception thrown from a closure capturing a variable; catch and finally call another
+function _ex_finally7_f1(k0::Int64)
+    k = Ref(k0)
+    mk = (j::Int64) -> (() -> (j == 5 && throw(_ExPlainEx("Test for exception being thrown")); k[] += 10; j))
+    a = [mk(i) for i in 0:9]
+    b = a[1]
+    try
+        for i in 1:10
+            a[i]()
+        end
+    catch exception
+        exception isa _ExPlainEx || rethrow()
+        k[] += 100
+        b()
+    finally
+        k[] += 1000
+        b()
+    end
+    return k[]
+end
+# finally8: throw, break and return inside a finally override a pending return
+function _ex_finally8_foo(s::_ExCell)
+    s.i = 0
+    try
+        s.i += 1
+        return "hi"
+    finally
+        s.i += 1
+        throw("ball")
+        s.i += 1
+    end
+end
+function _ex_finally8_foo1(s::_ExCell)
+    loop = true
+    s.i = 0
+    while loop
+        try
+            s.i += 1
+            return "hi"
+        finally
+            s.i += 1
+            break
+            s.i += 1
+        end
+    end
+    return nothing
+end
+function _ex_finally8_foo2(s::_ExCell)
+    loop = true
+    s.i = 0
+    try
+        s.i += 1
+        return "hi"
+    finally
+        s.i += 1
+        return Int64(10)
+        s.i += 1
+    end
+end
+function _ex_finally8_foo3(s::_ExCell)
+    s.i = 0
+    try
+        s.i += 1
+        return "hi"
+    finally
+        s.i += 1
+        return Int64(10)
+        s.i += 1
+    end
+end
+function _ex_finally8_main(s::_ExCell)
+    r1 = _ex_finally8_foo1(s)
+    s1 = s.i
+    r2 = _ex_finally8_foo2(s)
+    s2 = s.i
+    r3 = _ex_finally8_foo3(s)
+    s3 = s.i
+    thrown = false
+    try
+        _ex_finally8_foo(s)
+    catch e
+        thrown = e isa String && e == "ball"
+    end
+    return _dw_bits(s1 == 2, s2 == 2, s3 == 2, s.i == 2, r1 === nothing, r2 === Int64(10), r3 === Int64(10), thrown)
+end
+# finally9: a throw in finally after try/catch, and a break out of a loop from a nested
+# try/catch/finally inside a finally (a flag; Julia's break is innermost)
+function _ex_finally9_foo(s::_ExCell)
+    s.i = 0
+    try
+        s.i += 1
+        return "hi"
+    catch e
+        s.i += 1
+        throw("ball")
+        s.i += 1
+    finally
+        s.i += 1
+        throw("ball")
+        s.i += 1
+    end
+end
+function _ex_finally9_foo1(s::_ExCell)
+    loop = true
+    s.i = 0
+    while loop
+        try
+            s.i += 1
+            return "hi"
+        catch ex
+            s.i += 1
+        finally
+            brk = false
+            try
+                while loop
+                    s.i += 1
+                    brk = true
+                    break
+                    s.i += 1
+                end
+            catch ex
+                s.i += 1
+            finally
+                s.i += 1
+            end
+            brk && break
+        end
+    end
+    return nothing
+end
+function _ex_finally9_main(s::_ExCell)
+    r1 = _ex_finally9_foo1(s)
+    s1 = s.i
+    thrown = false
+    try
+        _ex_finally9_foo(s)
+    catch e
+        thrown = true
+    end
+    return _dw_bits(s1 == 3, r1 === nothing, thrown, s.i == 2)
+end
+# finally10 / finally11: a catch that rethrows (after a nested try/catch in finally11) still runs finally
+mutable struct _ExF10A
+    field::Union{Nothing,Int64}
+end
+_ex_f10_start(a::_ExF10A) = nothing
+_ex_f10_stop(a::_ExF10A) = (a.field = 42; nothing)
+struct _ExF10B
+    totalCompileTime::_ExF10A
+    runCompiler::String
+end
+function _ex_finally10_run(b::_ExF10B)
+    _ex_f10_start(b.totalCompileTime)
+    try
+        throw("foo")
+    catch exception
+        string(b.runCompiler)
+        string(b.runCompiler)
+        rethrow()
+    finally
+        _ex_f10_stop(b.totalCompileTime)
+    end
+end
+function _ex_finally11_run(b::_ExF10B)
+    _ex_f10_start(b.totalCompileTime)
+    try
+        throw("foo")
+    catch exception
+        try
+            string(b.runCompiler)
+            string(b.runCompiler)
+        catch exception2
+        end
+        rethrow()
+    finally
+        _ex_f10_stop(b.totalCompileTime)
+    end
+end
+function _ex_finally10_main(f::F, n::Int64) where {F}
+    b = _ExF10B(_ExF10A(nothing), string(n))
+    try
+        f(b)
+        throw("Expected exception")
+    catch exception
+    end
+    return something(b.totalCompileTime.field, Int64(-1))
+end
+# finally12: a break in an inner finally is overridden by a return in the outer finally
+function _ex_finally12_foo(a::_ExCell)
+    b = a.i == 8
+    while !b
+        try
+            try
+                nothing
+            finally
+                a.i = 8
+                break
+            end
+        finally
+            return a.i == 8
+        end
+    end
+    return nothing
+end
+# identity: a thrown object is caught as the same value (string, object, int, double)
+mutable struct _ExIdA end
+function _ex_id_check(x::T) where {T}
+    try
+        throw(x)
+    catch e
+        return e isa T && e == x
+    end
+end
+# in_increment: an increment of a field throws (no + on the object); the store never happens
+mutable struct _ExIiA
+    field::Union{_ExIiA,Int64}
+end
+_ex_ii_foo(a::_ExIiA, i::Int64) = (a.field = a.field + 1; nothing)
+function _ex_in_increment(n::Int64)
+    a = _ExIiA(n)
+    a.field = _ExIiA(n)
+    caught = Int64(0)
+    for i in 0:19
+        try
+            _ex_ii_foo(a, i)
+        catch e
+            e isa MethodError && (caught += 1)
+        end
+    end
+    return caught * 10 + (a.field isa _ExIiA ? 1 : 0)
+end
+# multiple_breaks_crossing_finally: breaks to two different labeled blocks cross one finally (a
+# loop for block b and a flag for block a)
+function _ex_mbcf(n::Int64)
+    s = string(n)
+    brk = Int64(0)
+    while true
+        try
+            if n == 1
+                brk = 1
+                break
+            else
+                brk = 2
+                break
+            end
+            s *= "/"
+        finally
+            s *= "-"
+        end
+        s *= "*"
+        break
+    end
+    brk == 1 && return s * "a"
+    return s * "b"
+end
+# nested_catch_rethrow: rethrow after a nested try/catch rethrows the outer exception (the sync
+# bodies of doThrow1..4; the async stream part is dart-only)
+_ex_ncr_e1(e::String) = throw(e)
+_ex_ncr_e2(e::String) = throw(e)
+function _ex_ncr_t1()
+    try
+        _ex_ncr_e1("outer")
+    catch
+        try
+            _ex_ncr_e2("inner")
+        catch
+        end
+        rethrow()
+    end
+end
+function _ex_ncr_t2()
+    try
+        _ex_ncr_e2("outer")
+    catch
+        try
+            _ex_ncr_e1("inner")
+        catch
+            try
+                _ex_ncr_e1("more inner")
+            catch
+            end
+        end
+        rethrow()
+    end
+end
+function _ex_ncr_t3()
+    try
+        _ex_ncr_e1("outer")
+    catch
+        try
+            nothing
+        catch
+            try
+                nothing
+            catch
+            end
+        end
+        rethrow()
+    end
+end
+function _ex_ncr_t4()
+    try
+        _ex_ncr_e1("outer")
+    catch
+        try
+            _ex_ncr_e2("inner")
+        catch e
+            e isa Bool || rethrow()
+        end
+        rethrow()
+    end
+end
+_ex_ncr_caught(f::F) where {F} = try; f(); "none"; catch e; e isa String ? e : "?"; end
+# rethrow: rethrow keeps the identical exception, also past a catch of another type
+mutable struct _ExRtMy <: Exception
+    tag::Int64
+end
+struct _ExRtOther <: Exception end
+mutable struct _ExRtT
+    cur::Union{Nothing,_ExRtMy}
+end
+_ex_rt_throw(t::_ExRtT) = (ex = _ExRtMy(1); t.cur = ex; throw(ex))
+function _ex_rt_rethrow(t::_ExRtT)
+    inner = false
+    outer = false
+    try
+        try
+            _ex_rt_throw(t)
+        catch e
+            inner = e === t.cur
+            rethrow()
+        end
+    catch e
+        outer = e === t.cur
+    end
+    return _dw_bits(inner, outer)
+end
+function _ex_rt_past(t::_ExRtT)
+    inner = false
+    mid = false
+    outer = false
+    try
+        try
+            try
+                _ex_rt_throw(t)
+            catch e
+                inner = e === t.cur
+                rethrow()
+            end
+        catch e
+            e isa _ExRtOther || rethrow()
+            mid = true
+        end
+    catch e
+        outer = e === t.cur
+    end
+    return _dw_bits(inner, !mid, outer)
+end
+# throw_expr: throw of an assignment, an increment, a sum, a nested throw, a throwing argument,
+# a throwing interpolation, a throwing cascade store and a throwing getter
+_ex_te_foo(x::Int64, y::Int64) = throw("foo" * string(x))
+_ex_te_bar(x::Int64, y::Int64) = throw("foo" * string(throw(x)))
+mutable struct _ExTeQ
+    qqq::Union{Nothing,Int64}
+end
+_ex_te_q_f(q::_ExTeQ, x::Int64) = (q.qqq = x; nothing)
+_ex_te_nono(q::_ExTeQ)::_ExTeQ = throw("nono")
+function _ex_throw_expr(n::Int64)
+    x = 6 * n
+    a1 = false
+    try
+        throw((x = 10))
+        x = 0
+    catch e
+        a1 = e === Int64(10) && x == 10
+        x = 15
+    end
+    a2 = x == 15
+    x = 100
+    a3 = false
+    try
+        throw((x += 1) - 1)
+        x = 0
+    catch e
+        a3 = e === Int64(100) && x == 101
+        x = 150
+    end
+    a4 = x == 150
+    y = 6 * n
+    b1 = false
+    try
+        throw(y + 4)
+    catch e
+        b1 = e === Int64(10) && y == 6
+        y = 15
+    end
+    b2 = y == 15
+    c1 = false
+    try
+        throw(throw(throw("up")))
+    catch e
+        c1 = e isa String && e == "up"
+    end
+    z = 10 * n
+    c2 = false
+    try
+        _ex_te_foo((z = 12), throw(7))
+    catch e
+        c2 = e === Int64(7) && z == 12
+    end
+    z = 10
+    c3 = false
+    try
+        _ex_te_foo((z += 1) - 1, Int64(10))
+    catch e
+        c3 = e isa String && e == "foo10" && z == 11
+    end
+    z = 100
+    c4 = false
+    try
+        _ex_te_bar((z += 1), Int64(10))
+    catch e
+        c4 = e === Int64(101) && z == 101
+    end
+    q = _ExTeQ(nothing)
+    c5 = false
+    try
+        _ex_te_q_f(q, Int64(11))
+        q.qqq = throw(77)
+        _ex_te_q_f(q, Int64(22))
+    catch e
+        c5 = e === Int64(77) && q.qqq === Int64(11)
+    end
+    d1 = try; _ex_te_nono(q); false; catch e; e isa String && e == "nono"; end
+    return _dw_bits(a1, a2, a3, a4, b1, b2, c1, c2, c3, c4, c5, d1)
+end
+# throw: a thrown MyException caught by on MyException, then finally
+function _ex_throw_f1(i::Int64)
+    try
+        j = _ex_func()
+        j > 0 && throw(_ExPlainEx("Test for exception being thrown"))
+    catch exception
+        exception isa _ExPlainEx || rethrow()
+        i = 100
+    finally
+        i = i + 800
+    end
+    return i
+end
+# throw1: the first matching on-clause wins: an interface clause before the exact class
+function _ex_throw1_f1(i::Int64)
+    try
+        j = _ex_func()
+        j > 0 && throw(_ExMyEx2("Test for exception being thrown"))
+    catch exception
+        if exception isa _ExMyEx3
+            i = 100
+        elseif exception isa _ExTestEx
+            i = 50
+        elseif exception isa _ExMyEx2
+            i = 150
+        elseif exception isa _ExMyEx
+            i = 200
+        else
+            rethrow()
+        end
+    finally
+        i = i + 800
+    end
+    return i
+end
+# throw2: a throw from a called function, caught; a second throw inside the catch caught by a nested try
+_ex_throw2_func() = (i = _ex_func(); i > 0 && throw(_ExMyEx2("Test for exception being thrown")); i)
+function _ex_throw2_f1(i::Int64)
+    try
+        j = _ex_throw2_func()
+    catch exception
+        if exception isa _ExMyEx3
+            i = 100
+        elseif exception isa _ExMyEx2
+            try
+                i = _ex_throw2_func()
+                i = 200
+            catch e2
+                e2 isa _ExTestEx || rethrow()
+                i = 50
+            end
+        elseif exception isa _ExMyEx
+            i = _ex_throw2_func()
+        else
+            rethrow()
+        end
+    finally
+        i = i + 800
+    end
+    return i
+end
+# throw3: a callee catches and rethrows; the caller catches, then finally
+function _ex_throw3_func()
+    try
+        i = _ex_func()
+        i > 0 && throw(_ExPlainEx("Test for exception being thrown"))
+    catch ex
+        ex isa _ExPlainEx || rethrow()
+        rethrow()
+    end
+    return Int64(10)
+end
+function _ex_throw3_f1(i::Int64)
+    try
+        i = 100
+        i = _ex_throw3_func()
+        i = 200
+    catch exception
+        exception isa _ExPlainEx || rethrow()
+        i = 50
+    finally
+        i = i + 800
+    end
+    return i
+end
+# throw4: no matching on-clause in the callee: its finally runs, then the implicit rethrow
+function _ex_throw4_func(h::_ExCell)
+    h.i = 0
+    try
+        while h.i < 10
+            h.i += 1
+        end
+        h.i > 0 && throw(_ExMy1("Test for MyException1 being thrown"))
+    catch exception
+        if exception isa _ExMy3
+            h.i = 300
+        elseif exception isa _ExMy2
+            h.i = 200
+        else
+            rethrow()
+        end
+    finally
+        h.i = 800
+    end
+    return h.i
+end
+function _ex_throw4_f1(h::_ExCell)
+    j = Int64(0)
+    try
+        j = _ex_throw4_func(h)
+    catch exception
+        if exception isa _ExMy3
+            h.i = h.i + 300
+        elseif exception isa _ExMy2
+            h.i = h.i + 200
+        elseif exception isa _ExMy1
+            h.i = h.i + 100
+        else
+            rethrow()
+        end
+    finally
+        h.i = h.i + 1000
+    end
+    return h.i
+end
+# throw5: no matching on-clause and no finally in the callee: the implicit rethrow
+function _ex_throw5_func()
+    i = Int64(0)
+    try
+        while i < 10
+            i += 1
+        end
+        i > 0 && throw(_ExMy1("Test for MyException1 being thrown"))
+    catch exception
+        if exception isa _ExMy3
+            i = 300
+        elseif exception isa _ExMy2
+            i = 200
+        else
+            rethrow()
+        end
+    end
+    return i
+end
+function _ex_throw5_f1(i::Int64)
+    try
+        j = _ex_throw5_func()
+    catch exception
+        if exception isa _ExMy3
+            i = 300
+        elseif exception isa _ExMy2
+            i = 200
+        elseif exception isa _ExMy1
+            i = 100
+        else
+            rethrow()
+        end
+    finally
+        i = i + 800
+    end
+    return i
+end
+# throw6: try/finally without catch in the callee: finally runs, the exception propagates
+function _ex_throw6_func(h::_ExCell)
+    h.i = 0
+    try
+        while h.i < 10
+            h.i += 1
+        end
+        h.i > 0 && throw(_ExMy1("Test for MyException1 being thrown"))
+    finally
+        h.i = 800
+    end
+    return h.i
+end
+function _ex_throw6_f1(h::_ExCell)
+    j = Int64(0)
+    try
+        j = _ex_throw6_func(h)
+    catch exception
+        exception isa _ExMy1 || rethrow()
+        h.i = h.i + 100
+    finally
+        h.i = h.i + 1000
+    end
+    return h.i
+end
+# throw8: a throw in finally replaces a pending return
+function _ex_throw8_bar(c::_ExCell)
+    try
+        try
+            return Int64(499)
+        catch e
+            rethrow()
+        end
+    finally
+        c.i += 1
+        throw("quit finally with throw")
+    end
+end
+function _ex_throw8_main(c::_ExCell)
+    hasThrown = false
+    count1 = false
+    try
+        _ex_throw8_bar(c)
+    catch x
+        hasThrown = true
+        count1 = c.i == 1
+    end
+    return _dw_bits(count1, hasThrown)
+end
+# try_catch_on_syntax: on-clauses tried in order against a subclass; a catch with error and trace
+function _ex_tcos_test1(n::Int64)
+    foo = Int64(0)
+    try
+        throw(_ExTcMy1())
+    catch e
+        if e isa _ExTcMy2
+            foo = 1
+        elseif e isa _ExTcMy1
+            foo = 2
+        elseif e isa _ExTcBase
+            foo = 3
+        else
+            rethrow()
+        end
+    end
+    return foo
+end
+_ex_tcos_final() = try; throw("catch this!"); false; catch e; e isa String && e == "catch this!"; end
+# try_catch_optimized1: locals, parameters and the caught value read in catch after a throw
+_ex_tco1_maythrow(x::Union{Nothing,String}) = (x === nothing && throw(42); Int64(99))
+struct _ExTco1A end
+_ex_tco1_amaythrow(::_ExTco1A, x::Union{Nothing,String}) = (x === nothing && throw(42); Int64(99))
+function _ex_tco1_f1(x::Union{Nothing,String})
+    result = Int64(123)
+    try
+        result = _ex_tco1_maythrow(x)
+        result > 100 && throw(42)
+    catch e
+        (result == 123 && e === Int64(42)) || throw("ERROR")
+        result = Int64(0)
+    end
+    return result
+end
+function _ex_tco1_f2(x::Union{Nothing,String})
+    local result::Union{Nothing,Int64,String} = Int64(123)
+    a = _ExTco1A()
+    try
+        result = (result::Int64) + 1
+        result = _ex_tco1_amaythrow(a, x)
+    catch e
+        result === Int64(124) || throw("ERROR")
+        result = x
+    end
+    return result
+end
+function _ex_tco1_f3(x::Union{Nothing,String}, y::Int64)
+    result = Int64(123)
+    a = _ExTco1A()
+    try
+        result += 1
+        result = _ex_tco1_amaythrow(a, x)
+    catch e
+        result = y + 1
+    end
+    return result
+end
+function _ex_tco1_f7(d::Float64)
+    t = d
+    try
+        a = trunc(Int64, d)
+        return false
+    catch e
+        e isa InexactError || rethrow()
+        t === d || throw("ERROR")
+        return true
+    end
+end
+function _ex_tco1_f10(x::Union{Nothing,String}, y::Float64)
+    result = Int64(123)
+    try
+        result = _ex_tco1_maythrow(x)
+    catch e
+        (result == 123 && y / 2.0 == 0.5) || throw("ERROR")
+        result = Int64(0)
+    end
+    return result
+end
+function _ex_tco1_f11(x::Union{Nothing,String})
+    result = Int64(123)
+    tmp = x
+    try
+        result = _ex_tco1_maythrow(x)
+        result > 100 && throw(42)
+    catch e
+        (result == 123 && tmp === x) || throw("ERROR")
+        result = Int64(0)
+    end
+    return result
+end
+function _ex_tco1_f13(x::Union{Nothing,String})
+    result = Int64(123)
+    try
+        try
+            result = _ex_tco1_maythrow(x)
+            result > 100 && throw(42)
+        catch e
+            result == 123 || throw("ERROR")
+            result = Int64(0)
+        end
+        _ex_tco1_maythrow(x)
+    catch e
+        result += 1
+    end
+    return result
+end
+function _ex_try_catch_optimized1(s::String)
+    return _dw_bits(_ex_tco1_f1(s) == 99, _ex_tco1_f1(nothing) == 0, _ex_tco1_f2(s) === Int64(99), _ex_tco1_f2(nothing) === nothing,
+        _ex_tco1_f3("123", Int64(0)) == 99, _ex_tco1_f3(nothing, Int64(0x3fffffff)) == 0x40000000,
+        _ex_tco1_f7(1.2) == false, _ex_tco1_f7(Inf) == true, _ex_tco1_f7(-Inf) == true, _ex_tco1_f7(123456789012345.0) == false,
+        _ex_tco1_f10(nothing, 1.0) == 0, _ex_tco1_f10(s, 1.0) == 99, _ex_tco1_f11(s) == 99, _ex_tco1_f11(nothing) == 0,
+        _ex_tco1_f13(s) == 99, _ex_tco1_f13(nothing) == 1)
+end
+# try_catch_optimized2: a loop's sum survives a call through try/finally
+_ex_tco2_bar() = (try; nothing; finally; nothing; end; nothing)
+function _ex_tco2_foo(a::Vector{Int64})
+    r = Int64(0)
+    for i in a
+        r += i
+    end
+    try
+        _ex_tco2_bar()
+    finally
+        nothing
+    end
+    return r
+end
+# try_catch_optimized3: a double updated in try is read in catch
+_ex_tco3_foo(b::Bool) = (b && throw(123); nothing)
+function _ex_tco3_test(x::Float64, b::Bool)
+    try
+        x += 1.0
+        _ex_tco3_foo(b)
+    catch e
+        result = x - 1.0
+        result == 1.0 || throw("ERROR")
+        return result
+    end
+    return nothing
+end
+# try_catch_optimized4: a catch that rethrows the caught value with throw, in a loop
+struct _ExTco4Err <: Exception end
+function _ex_tco4_maythrow(i::Int64)
+    try
+        i <= 5 && throw(_ExTco4Err())
+    catch e
+        throw(e)
+    end
+    return nothing
+end
+function _ex_tco4_loop(a::Vector{Int64})
+    failed = false
+    caught = Int64(0)
+    for i in a
+        try
+            res = _ex_tco4_maythrow(i)::String
+            failed = true
+        catch e
+            e isa _ExTco4Err ? (caught += 1) : rethrow()
+        end
+        failed && return Int64(-1)
+    end
+    return caught
+end
+# try_catch_optimized5: an optional parameter updated in try is read in catch
+_ex_tco5_m1(b::Int64) = (b == 1 && throw(123); nothing)
+_ex_tco5_m2(b::Int64) = (b == 2 && throw(456); nothing)
+function _ex_tco5_test1(b::Int64, state::Int64 = Int64(0))
+    try
+        state += 1
+        _ex_tco5_m1(b)
+        state += 1
+        _ex_tco5_m2(b)
+        state += 1
+    catch e
+        b == 1 && state != 1 && throw("fail1")
+        b == 2 && state != 2 && throw("fail2")
+        b == 3 && state != 3 && throw("fail3")
+        return e isa Int64 ? e : rethrow()
+    end
+    return "no throw"
+end
+function _ex_tco5_test2(b::Int64, state::Int64 = Int64(-1))
+    state = 0
+    try
+        state += 1
+        _ex_tco5_m1(b)
+        state += 1
+        _ex_tco5_m2(b)
+        state += 1
+    catch e
+        b == 1 && state != 1 && throw("fail1")
+        b == 2 && state != 2 && throw("fail2")
+        b == 3 && state != 3 && throw("fail3")
+        return e isa Int64 ? e : rethrow()
+    end
+    return "no throw"
+end
+# try_catch_osr: loops before, inside and after a try/catch around a call through try/finally
+function _ex_tcosr_maythrow(x::Union{Nothing,Int64})
+    try
+        x === nothing && throw(42)
+        return Int64(99)
+    finally
+        nothing
+    end
+end
+function _ex_tcosr_f1()
+    s = Int64(0)
+    t = "abc"
+    for i in 0:20
+        s += i
+    end
+    try
+        _ex_tcosr_maythrow(nothing)
+    catch e
+        (t == "abc" && e === Int64(42)) || throw("ERROR")
+        s += 1
+    end
+    return s
+end
+function _ex_tcosr_f2(x::Int64 = Int64(1))
+    s = Int64(0)
+    t = "abc"
+    try
+        try
+            for i in 0:19
+                i == 18 && _ex_tcosr_maythrow(nothing)
+                s += x
+            end
+        catch e
+            (x == 1 && t == "abc" && e === Int64(42)) || throw("ERROR")
+            s += 1
+        end
+    catch e
+    end
+    return s
+end
+function _ex_tcosr_f3()
+    s = Int64(0)
+    t = "abc"
+    try
+        _ex_tcosr_maythrow(nothing)
+    catch e
+        t == "abc" || throw("ERROR")
+        for i in 0:20
+            s += i
+        end
+        (t == "abc" && e === Int64(42)) || throw("ERROR")
+        return s
+    end
+    return nothing
+end
+function _ex_tcosr_f4()
+    s = Int64(0)
+    t = "abc"
+    try
+        for i in 0:20
+            i == 18 && _ex_tcosr_maythrow(nothing)
+            s += i
+        end
+    catch e
+        (t == "abc" && e === Int64(42)) || throw("ERROR")
+        s += 1
+    end
+    return s
+end
+function _ex_tcosr_f5()
+    local s::Int64
+    t = "abc"
+    try
+        _ex_tcosr_maythrow(nothing)
+    catch e
+        (t == "abc" && e === Int64(42)) || throw("ERROR")
+        s = 0
+    end
+    for i in 0:20
+        s += i
+    end
+    t == "abc" || throw("ERROR")
+    return s
+end
+# try_catch_regress_27483: a local updated in try is read in catch (shares try_catch_optimized5's m1/m2)
+function _ex_tcr27483_test(b::Int64)
+    state = Int64(0)
+    try
+        state += 1
+        _ex_tco5_m1(b)
+        state += 1
+        _ex_tco5_m2(b)
+        state += 1
+    catch e
+        b == 1 && state != 1 && throw("fail1")
+        b == 2 && state != 2 && throw("fail2")
+        b == 3 && state != 3 && throw("fail3")
+        return e isa Int64 ? e : rethrow()
+    end
+    return "no throw"
+end
+# try_catch: on-clause order over a class hierarchy, nested trys, catch-all, catch variable scope
+function _ex_tc_test1()
+    foo = Int64(0)
+    try
+        throw(_ExTcMy1())
+    catch e
+        if e isa _ExTcMy2; foo = 1
+        elseif e isa _ExTcMy1; foo = 2
+        elseif e isa _ExTcBase; foo = 3
+        else rethrow() end
+    end
+    return foo == 2
+end
+function _ex_tc_test2()
+    foo = Int64(0)
+    try
+        throw(_ExTcMy1())
+    catch e
+        if e isa _ExTcMy2; foo = 1
+        elseif e isa _ExTcBase; foo = 2
+        elseif e isa _ExTcMy1; foo = 3
+        else rethrow() end
+    end
+    return foo == 2
+end
+function _ex_tc_test3()
+    foo = Int64(0)
+    try
+        throw(_ExTcMy())
+    catch e
+        if e isa _ExTcMy2; foo = 1
+        elseif e isa _ExTcMy1; foo = 2
+        elseif e isa _ExTcBase; foo = 3
+        else rethrow() end
+    end
+    return foo == 3
+end
+function _ex_tc_test4()
+    foo = Int64(0)
+    ok = false
+    try
+        try
+            throw(_ExTcMy())
+        catch e
+            if e isa _ExTcMy2; foo = 1
+            elseif e isa _ExTcMy1; foo = 2
+            else rethrow() end
+        end
+    catch e
+        e isa _ExTcBase || rethrow()
+        ok = foo == 0
+        foo = 3
+    end
+    return ok && foo == 3
+end
+function _ex_tc_test5()
+    foo = Int64(0)
+    try
+        throw(_ExTcMy1())
+    catch e
+        if e isa _ExTcMy2; foo = 1
+        else foo = 2 end
+    end
+    return foo == 2
+end
+function _ex_tc_test6()
+    foo = Int64(0)
+    try
+        throw(_ExTcMy())
+    catch e
+        if e isa _ExTcMy2; foo = 1
+        elseif e isa _ExTcMy1; foo = 2
+        else foo = 3 end
+    end
+    return foo == 3
+end
+function _ex_tc_test7()
+    foo = Int64(0)
+    ok = false
+    try
+        try
+            throw(_ExTcMy())
+        catch e
+            if e isa _ExTcMy2; foo = 1
+            elseif e isa _ExTcMy1; foo = 2
+            else rethrow() end
+        end
+    catch e
+        ok = foo == 0
+        foo = 3
+    end
+    return ok && foo == 3
+end
+function _ex_tc_test8()
+    e = Int64(3)
+    caught = false
+    try
+        throw(_ExTcMy())
+    catch exc
+        caught = true
+    end
+    return caught && e == 3
+end
+function _ex_tc_test9()
+    local e::Union{Int64,String} = Int64(6)
+    try
+        throw("up")
+    catch x
+        if x isa String; e = "s"
+        elseif x isa Int64; e = "i"
+        else rethrow() end
+    end
+    return e == "s"
+end
+function _ex_tc_test10()
+    try
+        throw("up")
+    catch e
+        e isa String || rethrow()
+        let e = Int64(1)
+            return e == 1
+        end
+    end
+end
+function _ex_tc_test11()
+    e0 = Int64(11)
+    ok = false
+    try
+        throw("up")
+    catch e1
+        if e1 isa Int64
+            ok = false
+        elseif e1 isa String
+            ok = e0 == 11
+        else
+            rethrow()
+        end
+    end
+    return ok
+end
+# try_catch2: nested try/catch with no exception thrown
+function _ex_tc2_f1(i::Int64)
+    try
+        j = _ex_two()
+        i = i + 1
+        try
+            j = _ex_two() + _ex_func() + j
+            i = i + 1
+        catch e
+            e isa _ExTestEx || rethrow()
+            j = 50
+        end
+        j = _ex_func() + j
+    catch exception
+        if exception isa _ExMyEx
+            i = 100
+        elseif exception isa _ExTestEx
+            i = 200
+        else
+            rethrow()
+        end
+    end
+    return i
+end
+# try_catch3: many trys with no exception thrown, a parametric on-clause, a finally that sets the result
+struct _ExTc3Param{U,V} <: _ExTestEx
+    _message::String
+end
+function _ex_tc3_test1(i::Int64)
+    try
+        j = _ex_two()
+        j = _ex_func()
+        try
+            k = _ex_two()
+            _ex_func()
+        catch ex
+            if ex isa _ExMyEx
+                local i2 = Int64(10)
+            elseif ex isa _ExTestEx
+                local k2 = Int64(10)
+            else
+                rethrow()
+            end
+        end
+        try
+            j = j + 24
+        catch e
+            e isa _ExTestEx || rethrow()
+            i = 300
+        end
+        try
+            j += 20
+        catch e
+            e isa _ExTestEx || rethrow()
+            i = 400
+        end
+        try
+            j += 40
+        catch e
+            e isa _ExTestEx || rethrow()
+            i = 600
+        end
+        try
+            j += 60
+        catch e
+            e isa _ExTestEx || rethrow()
+            i = 700
+        end
+        try
+            j += 80
+        catch e
+            e isa _ExMyEx || rethrow()
+            i = 500
+        end
+    catch e
+        if e isa _ExTc3Param{String,_ExTestEx}
+            i = 800
+            rethrow()
+        elseif e isa _ExMyEx
+            i = 100
+        elseif e isa _ExTestEx
+            i = 200
+        else
+            rethrow()
+        end
+    finally
+        i = 900
+    end
+    return i
+end
+# try_catch4: return, break and continue in try or catch overridden by continue in finally (a
+# module variable as a cell)
+_ex_tc4_throw() = throw(2)
+function _ex_tc4_foo1(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            a.i = 8
+            return false
+        finally
+            b = 8 == a.i
+            entered = true
+            continue
+        end
+    end
+end
+function _ex_tc4_foo2(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            a.i = 8
+            _ex_tc4_throw()
+            return false
+        catch e
+            b = 8 == a.i
+            entered = true
+            continue
+        end
+    end
+end
+function _ex_tc4_foo3(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            _ex_tc4_throw()
+        catch e
+            a.i = 8
+            entered = true
+            return false
+        finally
+            b = 8 == a.i
+            entered = true
+            continue
+        end
+    end
+end
+function _ex_tc4_foo4(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            a.i = 8
+            break
+        finally
+            b = 8 == a.i
+            entered = true
+            continue
+        end
+    end
+    return false
+end
+function _ex_tc4_foo5(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            a.i = 8
+            _ex_tc4_throw()
+            break
+        catch e
+            b = 8 == a.i
+            entered = true
+            continue
+        end
+    end
+    return false
+end
+function _ex_tc4_foo6(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            _ex_tc4_throw()
+        catch e
+            a.i = 8
+            entered = true
+            break
+        finally
+            b = 8 == a.i
+            entered = true
+            continue
+        end
+    end
+    return false
+end
+function _ex_tc4_foo7(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            a.i = 8
+            continue
+        finally
+            b = 8 == a.i
+            entered = true
+            continue
+        end
+    end
+end
+function _ex_tc4_foo8(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            a.i = 8
+            _ex_tc4_throw()
+            continue
+        catch e
+            b = 8 == a.i
+            entered = true
+            continue
+        end
+    end
+end
+function _ex_tc4_foo9(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            _ex_tc4_throw()
+        catch e
+            a.i = 8
+            entered = true
+            continue
+        finally
+            b = 8 == a.i
+            entered = true
+            continue
+        end
+    end
+end
+_ex_tc4_run(f::F, a::_ExCell) where {F} = (a.i = Int64(0); f(a))
+# try_catch5: a return in an inner try overridden by continue in both finally blocks
+function _ex_tc5_foo1(a::_ExCell)
+    b = false
+    entered = false
+    while true
+        entered && return b
+        b = 8 == a.i
+        try
+            try
+                a.i = 8
+                return false
+            finally
+                b = 8 == a.i
+                entered = true
+                continue
+            end
+        finally
+            continue
+        end
+    end
+end
+# try_finally_regress_25333: a try/catch inside a finally entered by an exception; the original
+# exception continues after it
+function _ex_tfr25333_test1(c::_ExCell)
+    try
+        throw("Ball")
+    finally
+        try
+            throw("Frisbee")
+        catch e
+            (e isa String && e == "Frisbee") && (c.i += 1)
+        end
+    end
+end
+_ex_tfr25333_throw() = throw("Ball")
+function _ex_tfr25333_test2(c::_ExCell)
+    try
+        _ex_tfr25333_throw()
+    finally
+        try
+            throw("Frisbee")
+        catch e
+            (e isa String && e == "Frisbee") && (c.i += 1)
+        end
+    end
+end
+_ex_tfr25333_main(f::F, c::_ExCell) where {F} = try; f(c); false; catch e; e isa String && e == "Ball"; end
+# try_finally_regress_25654: a break out of try/finally runs finally once, then a throw
+function _ex_tfr25654_test(c::_ExCell)
+    while true
+        try
+            break
+        finally
+            c.i += 1
+        end
+    end
+    throw("ex")
+end
+function _ex_tfr25654_main(c::_ExCell)
+    caught = false
+    try
+        _ex_tfr25654_test(c)
+    catch e
+        caught = e isa String && e == "ex"
+    end
+    return _dw_bits(caught, c.i == 1)
+end
+
+_g("dart_exception", Any[
+    ("catch_liveness", (n::Int64) -> _ex_catch_liveness(n), Int64(1)),
+    ("code_after_try_is_executed", (b::Bool) -> _dw_bits(_ex_cat(b), (try; _ex_cat(!b); false; catch e; e isa String; end)), false),
+    ("exception", (n::Int64) -> _ex_exception(n), Int64(1)),
+    ("finally", (n::Int64) -> _ex_finally_foo(_ExCell(42 * n)), Int64(1)),
+    ("finally1", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally1_f1(h); _dw_bits(r == 1, h.i == 801)), Int64(1)),
+    ("finally2", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally2_f1(h); _dw_bits(r == 1, h.i == 1201)), Int64(1)),
+    ("finally3", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally3_f1(h); _dw_bits(r == 1401, h.i == 3001)), Int64(1)),
+    ("finally4", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally4_f1(h); _dw_bits(r == 211, h.i == 11)), Int64(1)),
+    ("finally5", (n::Int64) -> (h = _ExCell(0); r1 = _ex_finally5_f1(h, n - 1); i1 = h.i; r2 = _ex_finally5_f1(h, n);
+        _dw_bits(r1 == 1, i1 == 1201, r2 == 4, h.i == 304)), Int64(1)),
+    ("finally6", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally6_f1(h); _dw_bits(r == 201401, h.i == 203001)), Int64(1)),
+    ("finally7", (n::Int64) -> _ex_finally7_f1(n), Int64(1)),
+    ("finally8", (n::Int64) -> _ex_finally8_main(_ExCell(n)), Int64(1)),
+    ("finally9", (n::Int64) -> _ex_finally9_main(_ExCell(n)), Int64(1)),
+    ("finally10", (n::Int64) -> _ex_finally10_main(_ex_finally10_run, n), Int64(1)),
+    ("finally11", (n::Int64) -> _ex_finally10_main(_ex_finally11_run, n), Int64(1)),
+    ("finally12", (n::Int64) -> _ex_finally12_foo(_ExCell(n)) === true, Int64(0)),
+    ("identity", (n::Int64) -> _dw_bits(_ex_id_check("str"), _ex_id_check(_ExIdA()), _ex_id_check(n), _ex_id_check(1.2)), Int64(1)),
+    ("in_increment", (n::Int64) -> _ex_in_increment(n), Int64(0)),
+    ("multiple_breaks_crossing_finally", (n::Int64) -> _dw_bits(_ex_mbcf(n) == "1-a", _ex_mbcf(n + 1) == "2-b"), Int64(1)),
+    ("nested_catch_rethrow", (n::Int64) -> _dw_bits(_ex_ncr_caught(_ex_ncr_t1) == "outer", _ex_ncr_caught(_ex_ncr_t2) == "outer",
+        _ex_ncr_caught(_ex_ncr_t3) == "outer", _ex_ncr_caught(_ex_ncr_t4) == "inner") + n, Int64(0)),
+    ("rethrow", (n::Int64) -> (t = _ExRtT(nothing); _ex_rt_rethrow(t) * 8 + _ex_rt_past(t) + n), Int64(0)),
+    ("throw_expr", (n::Int64) -> _ex_throw_expr(n), Int64(1)),
+    ("throw", (n::Int64) -> _ex_throw_f1(n), Int64(1)),
+    ("throw1", (n::Int64) -> _ex_throw1_f1(n), Int64(1)),
+    ("throw2", (n::Int64) -> _ex_throw2_f1(n), Int64(1)),
+    ("throw3", (n::Int64) -> _ex_throw3_f1(n), Int64(1)),
+    ("throw4", (n::Int64) -> _ex_throw4_f1(_ExCell(n - 1)), Int64(1)),
+    ("throw5", (n::Int64) -> _ex_throw5_f1(n), Int64(1)),
+    ("throw6", (n::Int64) -> _ex_throw6_f1(_ExCell(n - 1)), Int64(1)),
+    ("throw8", (n::Int64) -> _ex_throw8_main(_ExCell(n)), Int64(0)),
+    ("try_catch_on_syntax", (n::Int64) -> _ex_tcos_test1(n) * 10 + (_ex_tcos_final() ? 1 : 0), Int64(1)),
+    ("try_catch_optimized1", (s::String) -> _ex_try_catch_optimized1(s), "abc"),
+    ("try_catch_optimized2", (n::Int64) -> (a = Int64[n, 2, 3]; r = Int64(0); for _ in 1:20; r = _ex_tco2_foo(a); end; r), Int64(1)),
+    ("try_catch_optimized3", (x::Float64) -> (r = _ex_tco3_test(x, true); _dw_bits(_ex_tco3_test(x, false) === nothing, something(r, -1.0) == 1.0)), 1.0),
+    ("try_catch_optimized4", (n::Int64) -> (a = Int64[n, 2, 3, 4, 5]; s = Int64(0); for _ in 1:20; s += _ex_tco4_loop(a); end; s), Int64(1)),
+    ("try_catch_optimized5", (n::Int64) -> _dw_bits(_ex_tco5_test1(n) == "no throw", _ex_tco5_test1(n + 1) == 123, _ex_tco5_test1(n + 2) == 456,
+        _ex_tco5_test2(n) == "no throw", _ex_tco5_test2(n + 1) == 123, _ex_tco5_test2(n + 2) == 456), Int64(0)),
+    ("try_catch_osr", (n::Int64) -> _dw_bits(_ex_tcosr_f1() == 211, _ex_tcosr_f2() == 19, something(_ex_tcosr_f3(), Int64(-1)) == 210,
+        _ex_tcosr_f4() == 9 * 17 + 1, _ex_tcosr_f5() == 210) + n, Int64(0)),
+    ("try_catch_regress_27483", (n::Int64) -> _dw_bits(_ex_tcr27483_test(n) == "no throw", _ex_tcr27483_test(n + 1) == 123, _ex_tcr27483_test(n + 2) == 456), Int64(0)),
+    ("try_catch", (n::Int64) -> _dw_bits(_ex_tc_test1(), _ex_tc_test2(), _ex_tc_test3(), _ex_tc_test4(), _ex_tc_test5(), _ex_tc_test6(),
+        _ex_tc_test7(), _ex_tc_test8(), _ex_tc_test9(), _ex_tc_test10(), _ex_tc_test11()) + n, Int64(0)),
+    ("try_catch2", (n::Int64) -> _ex_tc2_f1(n), Int64(1)),
+    ("try_catch3", (n::Int64) -> _ex_tc3_test1(n), Int64(1)),
+    ("try_catch4", (n::Int64) -> (a = _ExCell(n); _dw_bits(_ex_tc4_run(_ex_tc4_foo1, a), _ex_tc4_run(_ex_tc4_foo2, a), _ex_tc4_run(_ex_tc4_foo3, a),
+        _ex_tc4_run(_ex_tc4_foo4, a), _ex_tc4_run(_ex_tc4_foo5, a), _ex_tc4_run(_ex_tc4_foo6, a), _ex_tc4_run(_ex_tc4_foo7, a),
+        _ex_tc4_run(_ex_tc4_foo8, a), _ex_tc4_run(_ex_tc4_foo9, a))), Int64(0)),
+    ("try_catch5", (n::Int64) -> (a = _ExCell(n); _ex_tc4_run(_ex_tc5_foo1, a)), Int64(0)),
+    ("try_finally_regress_25333", (n::Int64) -> (c = _ExCell(n); _dw_bits(_ex_tfr25333_main(_ex_tfr25333_test1, c), _ex_tfr25333_main(_ex_tfr25333_test2, c), c.i == 2)), Int64(0)),
+    ("try_finally_regress_25654", (n::Int64) -> _ex_tfr25654_main(_ExCell(n)), Int64(0)),
+])
+
+# ---- dart2wasm's tests at the pin, tests/language/generic (group dart_generic) -----------------
+# Each case is named by the dart file's path under tests/language/generic, `/` written `_`, less
+# `_test`; dart's covariant generics are Julia's invariant ones, and Julia's answer is expected.
+# cascaded_forwarding_stubs_generic: a method whose parameters an interface's type argument narrows,
+# called with a value outside it
+abstract type _GeCfA end
+struct _GeCfAa <: _GeCfA end
+struct _GeCfB <: _GeCfA end
+struct _GeCfE end
+_ge_cf_f(::_GeCfE, x::_GeCfB, y::_GeCfB) = Int64(1)
+_ge_cf_try(e::_GeCfE, x::_GeCfA, y::_GeCfA) = (try; _ge_cf_f(e, x, y); catch err; err isa MethodError ? Int64(-1) : Int64(-2); end)
+# closure: a parametric struct's closure over its type parameter and its bound method, applied and
+# asked which arguments they accept
+struct _GeClC{T} end
+_ge_cl_gm(::_GeClC{T}, x::T) where {T} = x
+_ge_cl_f(::_GeClC{T}) where {T} = (x::T) -> x
+_ge_cl_g(c::_GeClC{T}) where {T} = (x::T) -> _ge_cl_gm(c, x)
+# conflicting_generic_interfaces_no_conflict: a struct below an abstract type implementing I{Int64}
+abstract type _GeCgI{T} end
+abstract type _GeCgA <: _GeCgI{Int64} end
+struct _GeCgC <: _GeCgA end
+# constructor_mixin, constructor_mixin2, constructor_mixin3: a struct of a mixin application built
+# from an Int64, converted to its type argument
+abstract type _GeCmA{X} end
+struct _GeCmC{Y} <: _GeCmA{Y}
+    x::Y
+end
+struct _GeCm2D{Y} <: _GeCmA{Y}
+    x::Y
+end
+struct _GeCm3C1 <: _GeCmA{Int64}
+    x::Int64
+end
+struct _GeCm3C2 <: _GeCmA{String}
+    x::String
+end
+_ge_cm_try(::Type{K}, v::Int64) where {K} = (try; K(v); Int64(1); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end)
+# creation: methods building a parametric struct from a permutation of the receiver's parameters,
+# through subtypes that fix or reorder them
+abstract type _GeCrAbs{X,Y,Z} end
+struct _GeCrA{X,Y,Z} <: _GeCrAbs{X,Y,Z} end
+struct _GeCrU end
+struct _GeCrV end
+struct _GeCrW end
+struct _GeCrB <: _GeCrAbs{_GeCrU,_GeCrV,_GeCrW} end
+struct _GeCrC{T} <: _GeCrAbs{_GeCrU,T,_GeCrW} end
+struct _GeCrD{X,Y,Z} <: _GeCrAbs{Y,Z,X} end
+const _GeCrUVW = _GeCrA{_GeCrA{_GeCrU,_GeCrU,_GeCrU},_GeCrA{_GeCrV,_GeCrV,_GeCrV},_GeCrA{_GeCrW,_GeCrW,_GeCrW}}
+_ge_cr_shift(::_GeCrAbs{X,Y,Z}) where {X,Y,Z} = _GeCrA{Z,X,Y}()
+_ge_cr_swap(::_GeCrAbs{X,Y,Z}) where {X,Y,Z} = _GeCrA{Z,Y,X}()
+_ge_cr_first(::_GeCrAbs{X,Y,Z}) where {X,Y,Z} = _GeCrA{X,X,X}()
+_ge_cr_last(::_GeCrAbs{X,Y,Z}) where {X,Y,Z} = _GeCrA{Z,Z,Z}()
+_ge_cr_wrap(::_GeCrAbs{X,Y,Z}) where {X,Y,Z} = _GeCrA{_GeCrA{X,X,X},_GeCrA{Y,Y,Y},_GeCrA{Z,Z,Z}}()
+_ge_cr_same(a, b) = typeof(a) === typeof(b)
+# deep: Peano numbers as deeply nested parametric structs, tested by isa and walked by dispatch
+abstract type _GeDN end
+struct _GeDZ <: _GeDN end
+struct _GeDS{K} <: _GeDN
+    before::K
+end
+_ge_d_add1(z::_GeDZ) = _GeDS{_GeDZ}(z)
+_ge_d_add1(s::_GeDS{K}) where {K} = _GeDS{_GeDS{K}}(s)
+_ge_d_add4(x) = _ge_d_add1(_ge_d_add1(_ge_d_add1(_ge_d_add1(x))))
+_ge_d_sub1(s::_GeDS) = s.before
+_ge_d_int(::_GeDZ) = Int64(0)
+_ge_d_int(s::_GeDS) = _ge_d_int(_ge_d_sub1(s)) + Int64(1)
+_ge_d_even(::_GeDZ) = true
+_ge_d_even(::_GeDS{_GeDZ}) = false
+_ge_d_even(s::_GeDS{<:_GeDS}) = _ge_d_even(_ge_d_sub1(_ge_d_sub1(s)))
+# f_bounded_equality: a struct whose supertype's parameter is itself, read back as a type
+abstract type _GeFeMagnitude{T} end
+struct _GeFeReal <: _GeFeMagnitude{_GeFeReal} end
+_ge_fe_t(::_GeFeMagnitude{T}) where {T} = T
+abstract type _GeFeFBound{F} end
+struct _GeFeBar <: _GeFeFBound{_GeFeBar} end
+_ge_fe_f(::_GeFeFBound{F}) where {F} = F
+# f_bounded_quantification2: an F-bounded parametric struct below two abstract interfaces
+abstract type _GeFq2EntityApi{T} end
+abstract type _GeFq2EntitiesApi{T} end
+abstract type _GeFq2ConceptEntityAbs{T} <: _GeFq2EntityApi{T} end
+struct _GeFq2ConceptEntity{T} <: _GeFq2ConceptEntityAbs{T} end
+struct _GeFq2Concept <: _GeFq2ConceptEntityAbs{_GeFq2Concept} end
+struct _GeFq2Entities{T} <: _GeFq2EntitiesApi{T} end
+# f_bounded_quantification3: two mutually F-bounded parametric structs, each building both from
+# its own parameters
+struct _GeFq3Bar end
+struct _GeFq3Baz end
+struct _GeFq3FBound1{F1,F2} end
+struct _GeFq3FBound2{F1,F2} end
+_ge_fq3_test(::_GeFq3FBound1{F1,F2}) where {F1,F2} = (_GeFq3FBound1{F1,F2}(), _GeFq3FBound2{F1,F2}())
+_ge_fq3_test(::_GeFq3FBound2{F1,F2}) where {F1,F2} = (_GeFq3FBound1{F1,F2}(), _GeFq3FBound2{F1,F2}())
+# f_bounded_quantification4: a struct whose supertype is parameterized by itself, instantiated with
+# its own UnionAll
+abstract type _GeFq4A{T} end
+abstract type _GeFq4B{T} <: _GeFq4A{T} end
+struct _GeFq4Foo{T} <: _GeFq4B{_GeFq4Foo{T}} end
+# f_bounded_quantification5: a bounded parameter instantiated with a parametric type
+struct _GeFq5B{T} end
+struct _GeFq5A{T<:_GeFq5B} end
+# field_mixin, field_mixin2..5: a mixin's field initializer reading the type argument (a value of
+# it, the type itself, an isa against it, a catch by it, a closure returning it)
+struct _GeFmA{U} end
+abstract type _GeFmM{T} end
+struct _GeFmC1{V} <: _GeFmM{V} end
+struct _GeFmC2 <: _GeFmM{Int64} end
+struct _GeFmC3 <: _GeFmM{String} end
+_ge_fm_field(::_GeFmM{T}) where {T} = _GeFmA{T}()
+_ge_fm2_field(::_GeFmM{T}) where {T} = T
+_ge_fm3_field(::_GeFmM{T}) where {T} = _GeFmA{Int64}() isa _GeFmA{T}
+_ge_fm4_field(::_GeFmM{T}) where {T} = (try; throw(Int64(0)); catch e; e isa T; end)
+_ge_fm5_field(::_GeFmM{T}) where {T} = (() -> T)()
+# field_mixin6: a field of the type argument initialized from an Int64 by the constructor
+struct _GeFm6C1{V}
+    field2::V
+    _GeFm6C1{V}() where {V} = new{V}(Int64(0))
+end
+struct _GeFm6C2
+    field2::Int64
+    _GeFm6C2() = new(Int64(0))
+end
+struct _GeFm6C3
+    field2::String
+    _GeFm6C3() = new(Int64(0))
+end
+_ge_fm6_try(::Type{K}) where {K} = (try; K(); Int64(1); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end)
+# function_bounds: methods whose type parameters are bounded, one bound by another, called with
+# arguments in and out of the bounds
+_ge_fb_f(x::T) where {T<:Real} = x
+_ge_fb_g(x::T, y::U) where {U<:Real,T<:U} = x
+_ge_fb_h(x::T, y::U) where {U<:Real,T<:U} = (T, U)
+# function_dcall: a generic function called with explicit and Any type arguments, passed where a
+# one-argument function is expected and passed to a generic function that instantiates it
+_ge_dc_plus(a::Int64, b::Int64) = a + b
+_ge_dc_plus(a::String, b::String) = a * b
+_ge_dc_f(::Type{T}, a::T, b::T) where {T} = _ge_dc_plus(a, b)::T
+_ge_dc_h(::Type{T}, a) where {T} = a::T
+_ge_dc_foo1(f::F, a) where {F} = f(a)
+_ge_dc_foo(::Type{S}, f::F, a::S) where {S,F} = f(S, a)
+# function_type_as_type_argument: a generic function called, bound to a variable and held in a list
+_ge_ft_foo(i::T) where {T} = i
+# function_typedef: which argument types each of three functions accepts (hasmethod), against a
+# parametric function signature
+_ge_ftd_foo(x::Vector, bar, z::Real) = nothing
+_ge_ftd_foo2(x::Vector{Int64}, bar, z::Real) = nothing
+_ge_ftd_foo3(x::Vector{T}, y, z::Real) where {T} = nothing
+# functions: a persistent binary tree of parametric nodes, with generic insert, map and fold
+struct _GeFnNode{K,V}
+    key::K
+    value::V
+    left::Union{Nothing,_GeFnNode{K,V}}
+    right::Union{Nothing,_GeFnNode{K,V}}
+end
+struct _GeFnTree{K,V}
+    root::Union{Nothing,_GeFnNode{K,V}}
+end
+_ge_fn_insert_opt(::Type{K}, ::Type{V}, ::Nothing, key::K, value::V) where {K,V} = _GeFnNode{K,V}(key, value, nothing, nothing)
+_ge_fn_insert_opt(::Type{K}, ::Type{V}, t::_GeFnNode{K,V}, key::K, value::V) where {K,V} = _ge_fn_insert(t, key, value)
+function _ge_fn_insert(n::_GeFnNode{K,V}, key::K, value::V) where {K,V}
+    c = cmp(key, n.key)
+    c == 0 && return n
+    left = n.left
+    right = n.right
+    if c < 0
+        left = _ge_fn_insert_opt(K, V, n.left, key, value)
+    else
+        right = _ge_fn_insert_opt(K, V, n.right, key, value)
+    end
+    return _GeFnNode{K,V}(n.key, n.value, left, right)
+end
+_ge_fn_map_opt(::Type{U}, ::Nothing, f) where {U} = nothing
+_ge_fn_map_opt(::Type{U}, t::_GeFnNode, f::F) where {U,F} = _ge_fn_map(U, t, f)
+_ge_fn_map(::Type{U}, n::_GeFnNode{K,V}, f::F) where {U,K,V,F} =
+    _GeFnNode{K,U}(n.key, f(n.value), _ge_fn_map_opt(U, n.left, f), _ge_fn_map_opt(U, n.right, f))
+_ge_fn_fold_opt(::Type{S}, ::Nothing, init::S, f) where {S} = init
+_ge_fn_fold_opt(::Type{S}, t::_GeFnNode, init::S, f::F) where {S,F} = _ge_fn_fold(S, t, init, f)
+function _ge_fn_fold(::Type{S}, n::_GeFnNode, init::S, f::F) where {S,F}
+    s = init
+    s = f(n.value, s)::S
+    s = _ge_fn_fold_opt(S, n.left, s, f)
+    s = _ge_fn_fold_opt(S, n.right, s, f)
+    return s
+end
+_ge_fn_tinsert(t::_GeFnTree{K,V}, key::K, value::V) where {K,V} = _GeFnTree{K,V}(_ge_fn_insert_opt(K, V, t.root, key, value))
+_ge_fn_tmap(::Type{U}, t::_GeFnTree{K,V}, f::F) where {U,K,V,F} = _GeFnTree{K,U}(_ge_fn_map_opt(U, t.root, f))
+_ge_fn_tfold(::Type{S}, t::_GeFnTree, init::S, f::F) where {S,F} = _ge_fn_fold_opt(S, t.root, init, f)
+# generic: a struct whose parameter is bounded by an abstract type, holding another, tested by isa
+abstract type _GeGA end
+struct _GeGAA <: _GeGA end
+struct _GeGAX end
+struct _GeGB{T<:_GeGA}
+    a_::_GeGA
+    t_::T
+end
+struct _GeGC{T<:_GeGA}
+    b_::_GeGB{T}
+end
+struct _GeGD
+    caa_::_GeGC{_GeGAA}
+end
+_ge_g_ist(::_GeGB{T}, x) where {T} = x isa T
+_ge_g_mkc(::Type{T}, t::T) where {T<:_GeGA} = _GeGC{T}(_GeGB{T}(t, t))
+_ge_g_mkd() = _GeGD(_ge_g_mkc(_GeGAA, _GeGAA()))
+# generic2: isa against a struct's type parameter, through a subtype that fixes it
+abstract type _GeG2AAbs{T} end
+struct _GeG2A{T} <: _GeG2AAbs{T} end
+struct _GeG2B end
+struct _GeG2Obj end
+struct _GeG2C <: _GeG2AAbs{Int64} end
+_ge_g2_foo(::_GeG2AAbs{T}, o) where {T} = o isa T
+# generic_function_type_argument: a generic function held in a list of its own type, applied to
+# itself
+_ge_gfa_f(value::T) where {T} = value
+_ge_gfa_fb(value::T) where {T<:Function} = value
+# generics: comparisons as arguments, a Dict passed and written, a deeply nested parametric type
+_ge_gs_myfunc(a::Bool, b::Bool) = (a == true && b == false) ? Int64(42) : Int64(0)
+_ge_gs_takes_map(m::Dict{Int64,Int64}) = (m[0] = 2; nothing)
+struct _GeGsLong{A,B,C} end
+# generics2: a two-parameter struct below an abstract type of one parameter
+abstract type _GeGs2A{E} end
+struct _GeGs2Pair{P,Q} <: _GeGs2A{Any}
+    fst::P
+    snd::Q
+end
+# generics3: a method building a struct parameterized by a struct of the receiver's parameter
+struct _GeG3C1{T} end
+abstract type _GeG3C2{T} end
+abstract type _GeG3C3{T} <: _GeG3C2{_GeG3C1{T}} end
+struct _GeG3C4{T} <: _GeG3C3{T} end
+struct _GeG3C5{T}
+    x::T
+end
+_ge_g3_f(::_GeG3C4{T}) where {T} = _GeG3C5{_GeG3C1{T}}(_GeG3C1{T}())
+# inheritance: isa of a parametric struct and of subtypes that fix the parameter to Any
+abstract type _GeInAAbs{T} end
+struct _GeInA{T} <: _GeInAAbs{T} end
+abstract type _GeInBAbs <: _GeInAAbs{Any} end
+struct _GeInB <: _GeInBAbs end
+struct _GeInC <: _GeInBAbs end
+# instanceof, many_generic_instanceof (part instanceof.dart): isa against T and Vector{T} for many T
+struct _GeIoFoo{T} end
+_ge_io_ist(::_GeIoFoo{T}, x) where {T} = x isa T
+_ge_io_islistt(::_GeIoFoo{T}, x) where {T} = x isa Vector{T}
+_ge_io_t5(f::_GeIoFoo, l0, lo, li, ln, ls) = (_ge_io_ist(f, l0), _ge_io_ist(f, lo), _ge_io_ist(f, li), _ge_io_ist(f, ln), _ge_io_ist(f, ls))
+_ge_io_l5(f::_GeIoFoo, l0, lo, li, ln, ls) = (_ge_io_islistt(f, l0), _ge_io_islistt(f, lo), _ge_io_islistt(f, li), _ge_io_islistt(f, ln), _ge_io_islistt(f, ls))
+function _ge_io_main()
+    l0 = fill(nothing, 5)
+    lo = Vector{Any}(fill("o", 5))
+    li = fill(Int64(0), 5)
+    ln = Vector{Real}(fill(Int64(0), 5))
+    ls = fill("s", 5)
+    fs = _GeIoFoo{String}()
+    fa = _GeIoFoo{Any}()
+    return _dw_bits(_ge_io_ist(fs, "string"), _ge_io_ist(fs, Int64(1)), _ge_io_ist(fs, "string"), _ge_io_ist(fs, Int64(1)),
+                    _ge_io_ist(fs, "string"), _ge_io_ist(fs, Int64(1)),
+                    _ge_io_t5(fa, l0, lo, li, ln, ls)..., _ge_io_t5(_GeIoFoo{Vector}(), l0, lo, li, ln, ls)...,
+                    _ge_io_t5(_GeIoFoo{Vector{Any}}(), l0, lo, li, ln, ls)..., _ge_io_t5(_GeIoFoo{Vector{Int64}}(), l0, lo, li, ln, ls)...,
+                    _ge_io_t5(_GeIoFoo{Vector{Real}}(), l0, lo, li, ln, ls)..., _ge_io_t5(_GeIoFoo{Vector{String}}(), l0, lo, li, ln, ls)...,
+                    _ge_io_l5(fa, l0, lo, li, ln, ls)..., _ge_io_l5(_GeIoFoo{Any}(), l0, lo, li, ln, ls)...,
+                    _ge_io_l5(_GeIoFoo{Int64}(), l0, lo, li, ln, ls)..., _ge_io_l5(_GeIoFoo{Real}(), l0, lo, li, ln, ls)...,
+                    _ge_io_l5(fs, l0, lo, li, ln, ls)...)
+end
+# instanceof2: a parametric struct built by a factory and by a method that fixes one parameter
+struct _GeIo2Foo{K,V} end
+struct _GeIo2Moo{K,V} end
+_ge_io2_fac(::Type{_GeIo2Foo{K,V}}) where {K,V} = _GeIo2Foo{K,V}()
+_ge_io2_foostring(::_GeIo2Foo{K,V}) where {K,V} = _ge_io2_fac(_GeIo2Foo{K,String})
+_ge_io2_moostring(::_GeIo2Moo{K,V}) where {K,V} = _GeIo2Moo{K,String}()
+function _ge_io2_all()
+    fin = _GeIo2Foo{Int64,Real}()
+    fraw = _GeIo2Foo{Any,Any}()
+    mn = _GeIo2Moo{Int64,Real}()
+    mraw = _GeIo2Moo{Any,Any}()
+    return _dw_bits(fin isa _GeIo2Foo{Int64,Real}, !(fin isa _GeIo2Foo{Int64,String}),
+                    !(_ge_io2_foostring(fin) isa _GeIo2Foo{Int64,Real}), _ge_io2_foostring(fin) isa _GeIo2Foo{Int64,String},
+                    !(fraw isa _GeIo2Foo{Int64,Real}), !(fraw isa _GeIo2Foo{Int64,String}), fraw isa _GeIo2Foo{Any,Any},
+                    !(_ge_io2_foostring(fraw) isa _GeIo2Foo{Int64,Real}), !(_ge_io2_foostring(fraw) isa _GeIo2Foo{Int64,String}),
+                    _ge_io2_foostring(fraw) isa _GeIo2Foo{Any,String},
+                    mn isa _GeIo2Moo{Int64,Real}, !(mn isa _GeIo2Moo{Int64,String}),
+                    !(_ge_io2_moostring(mn) isa _GeIo2Moo{Int64,Real}), _ge_io2_moostring(mn) isa _GeIo2Moo{Int64,String},
+                    !(mraw isa _GeIo2Moo{Int64,Real}), !(mraw isa _GeIo2Moo{Int64,String}), mraw isa _GeIo2Moo{Any,Any},
+                    !(_ge_io2_moostring(mraw) isa _GeIo2Moo{Int64,Real}), !(_ge_io2_moostring(mraw) isa _GeIo2Moo{Int64,String}),
+                    _ge_io2_moostring(mraw) isa _GeIo2Moo{Any,String})
+end
+# instanceof3: isa against abstract parametric types that structs reach through fixed parameters
+abstract type _GeIo3I{T} end
+struct _GeIo3A <: _GeIo3I{Bool} end
+abstract type _GeIo3BAbs{T} <: _GeIo3I{Bool} end
+struct _GeIo3B{T} <: _GeIo3BAbs{T} end
+abstract type _GeIo3K{T} end
+abstract type _GeIo3L{T} <: _GeIo3K{Bool} end
+struct _GeIo3C <: _GeIo3L{String} end
+struct _GeIo3D <: _GeIo3BAbs{String} end
+_ge_io3_all(a, b, c, d) = _dw_bits(a isa _GeIo3I{String}, a isa _GeIo3I{Bool}, b isa _GeIo3I{String}, c isa _GeIo3K{String},
+                                   c isa _GeIo3K{String}, c isa _GeIo3L{String}, c isa _GeIo3L{Bool}, c isa _GeIo3K{Bool},
+                                   c isa _GeIo3K{String}, d isa _GeIo3I{String}, d isa _GeIo3I{Bool})
+# instanceof4: isa against T where T is an abstract type a parametric struct implements
+struct _GeIo4A{T} end
+_ge_io4_foo(::_GeIo4A{T}, x) where {T} = x isa T
+abstract type _GeIo4BB end
+struct _GeIo4B{T} <: _GeIo4BB end
+_ge_io4_bfoo(::_GeIo4B{T}) where {T} = _ge_io4_foo(_GeIo4A{T}(), _GeIo4B{Any}())
+# instanceof5: isa against T where a struct reaches T with its parameters swapped
+abstract type _GeIo5B{T,S} end
+struct _GeIo5C{U,V} <: _GeIo5B{V,U} end
+struct _GeIo5D{T} end
+_ge_io5_foo(::_GeIo5D{T}, x) where {T} = x isa T
+# instantiate_tearoff: a generic function instantiated as Int64 and String closures, which reject
+# the other type, and a closure built inside a generic function reading its parameter
+_ge_it_f(x::T) where {T} = x
+_ge_it_test(fi::FI, fs::FS) where {FI,FS} = _dw_bits(applicable(fi, Int64(1)), !applicable(fi, "s"), fi(Int64(1)) == 1,
+    (try; fi("oops"); false; catch e; e isa MethodError; end), applicable(fs, "s"), !applicable(fs, Int64(1)), fs("hello") == "hello",
+    (try; fs(Int64(1)); false; catch e; e isa MethodError; end))
+_ge_it_bar(::Type{X}) where {X} = (x::X, t::Int64) -> (X, Int64)
+# instantiate_tearoff_after_contravariance_check: a method returning a closure typed by the
+# receiver's parameter, asked whether it accepts the parameter's supertype
+abstract type _GeItcA end
+struct _GeItcAa <: _GeItcA end
+struct _GeItcB <: _GeItcA end
+struct _GeItcC{T} end
+_ge_itc_f(::_GeItcC{T}, x::U) where {T,U} = (y::T) -> nothing
+# instantiate_tearoff_of_call: a generic function value instantiated as Int64 and String closures
+_ge_itoc_f(x::T) where {T} = x
+_ge_itoc_test(f::F) where {F} = (intf = (x::Int64) -> f(x); strf = (x::String) -> f(x);
+    _dw_bits(applicable(intf, Int64(1)), !applicable(intf, "s"), intf(Int64(1)) == 1, (try; intf("oops"); false; catch e; e isa MethodError; end),
+             applicable(strf, "s"), !applicable(strf, Int64(1)), strf("hello") == "hello", (try; strf(Int64(1)); false; catch e; e isa MethodError; end)))
+# is_check: a method testing its receiver against one instantiation
+struct _GeIcA{T} end
+_ge_ic_foo(a::_GeIcA) = a isa _GeIcA{Int64}
+# local_functions: a generic function taking a generic function, passed a local one and an
+# anonymous one
+_ge_lf_f(g::G) where {G} = g(Dict{Int64,Int64}(1 => 42), Int64(1))
+# method_types: which arguments generic methods accept (hasmethod), against function signatures
+abstract type _GeMtMixin{E} end
+struct _GeMtClass{F} <: _GeMtMixin{F} end
+_ge_mt_convert1(::_GeMtMixin{E}, input::I) where {E,I} = throw(ErrorException("uncalled"))
+_ge_mt_convert2(::_GeMtClass{F}, ::Type{O}, input::F) where {F,O} = throw(ErrorException("uncalled"))
+_ge_mt_convert3(::Type{O}, input::I) where {I,O} = throw(ErrorException("uncalled"))
+# native: isa against T where T is an abstract library type (vectors, strings)
+struct _GeNaA{T} end
+_ge_na_foo(::_GeNaA{T}, o) where {T} = o isa T
+struct _GeNaB end
+struct _GeNaC end
+# no_such_method_dispatcher: a varargs fallback method (dart's noSuchMethod) beside a method taking
+# type arguments, reached by calls of the wrong shape
+abstract type _GeNsA end
+struct _GeNsAa <: _GeNsA end
+struct _GeNsB <: _GeNsA end
+struct _GeNsC end
+_ge_ns_foo(::_GeNsA, args...; kw...) = Int64(123)
+_ge_ns_bar(::_GeNsA, ::Type{U}, ::Type{V}, x) where {U,V} = x + 1
+_ge_ns_bar(::_GeNsA, x) = x + 1
+_ge_ns_bar(::_GeNsA, args...; kw...) = Int64(123)
+_ge_ns_cbar(::_GeNsC, args...; kw...) = (args === (Int64, _GeNsA, Int64(100)) && kw[:n1] == 101 && kw[:n2] == 102) ? Int64(123) : Int64(0)
+# object_type: isa against a type parameter that is Any
+struct _GeOtTester{T} end
+struct _GeOtObject end
+_ge_ot_test(::_GeOtTester{T}, x) where {T} = x isa T
+# parameterized_extends: parametric structs whose parameter is bounded by another parameter
+struct _GePeA{T} end
+struct _GePeB{T1,T2<:_GePeA{T1}} end
+struct _GePeC{T1,T2} end
+# recursive_generic: F-bounded parametric types, a method overridden below, each level's parameter
+# read back
+abstract type _GeRgS{T} end
+struct _GeRgC{T} <: _GeRgS{_GeRgC{T}} end
+struct _GeRgD end
+_ge_rg_m(::_GeRgS) = Int64(123)
+_ge_rg_m(::_GeRgC) = Int64(456)
+_ge_rg_st(::_GeRgS{T}) where {T} = T
+_ge_rg_ct(::_GeRgC{T}) where {T} = T
+abstract type _GeRgF{L,R} end
+struct _GeRgE{L,R} <: _GeRgF{_GeRgE{L,Any},R} end
+_ge_rg_type(::Type{T}) where {T} = T
+# regress_45767: F-bounded supertypes parameterized by the struct at Any and at Union{Nothing,T}
+abstract type _GeR45I{T} end
+abstract type _GeR45F{E} <: _GeR45I{E} end
+struct _GeR45A{T} <: _GeR45F{_GeR45A{Any}} end
+struct _GeR45B{T} <: _GeR45F{_GeR45B{Union{Nothing,T}}} end
+# reify_typevar_static: constructors storing their type parameter, or nothing, in a field
+struct _GeRtC{T}
+    x::Union{Nothing,DataType}
+end
+_ge_rt_factory(::Type{T}, b::Bool) where {T} = _GeRtC{Any}(b ? T : nothing)
+_ge_rt_redirecting(::Type{T}, b::Bool) where {T} = _GeRtC{T}(b ? T : nothing)
+_ge_rt_ordinary(::Type{T}, b::Bool) where {T} = _GeRtC{T}(b ? T : nothing)
+# self_reference: a struct whose supertype is parameterized by the struct
+abstract type _GeSrBar{T} end
+struct _GeSrFoo{T} <: _GeSrBar{_GeSrFoo{T}} end
+# sends: calls with explicit type arguments beside comparisons and shifts as arguments
+_ge_se_f(arg1, arg2 = nothing) = nothing
+_ge_se_g(::Type{X}, ::Type{Y}, arg) where {X,Y} = nothing
+# sync_star: a generic function returning a lazy generator (dart's sync*) of its argument, iterated
+_ge_ss_foo(x::T) where {T} = (x for i in 0:2)
+# syntax: a closure whose argument is typed by a five-parameter type, beside comparisons as arguments
+struct _GeSyTest{B,C,D,E,F} end
+abstract type _GeSyA{B,C,D,E,F} end
+_ge_sy_foo(x1, x2, x3, x4, x5) = _dw_bits(x1 == true, x2 == 3, x3 == 4, x4 == 5, x5 == false)
+_ge_sy_bar(x::X) where {X} = x(nothing) === nothing
+function _ge_sy_test(::_GeSyTest{B,C,D,E,F}) where {B,C,D,E,F}
+    a = 1; b = 2; c = 3; d = 4; e = 5; f = 6; g = 7; h = nothing
+    r1 = _ge_sy_bar((g::Union{Nothing,_GeSyA{B,C,D,E,F}}) -> h)
+    r2 = _ge_sy_foo(a < b, c, d, e, f > g)
+    return r2 * 2 + Int64(r1)
+end
+# tearoff: a generic min (Base's, a method's, a local one) taken as an Int64 two-argument closure,
+# which rejects a type argument
+struct _GeToC end
+_ge_to_m(::_GeToC, x::T, y::T) where {T<:Real} = min(x, y)
+_ge_to_m2(::_GeToC, x::Int64, y::Int64) = min(x, y)
+_ge_to_int2(f::F) where {F} = (x::Int64, y::Int64) -> f(x, y)
+_ge_to_test(f::F) where {F} = (g = _ge_to_int2(f); _dw_bits(g(123, 456) == 123, (try; g(Int64, 123, 456); false; catch e; e isa MethodError; end)))
+# type_argument_in_super_type: a field returned as the supertype's parameter and asserted Int64
+struct _GeTsC end
+abstract type _GeTsA{T} end
+struct _GeTsB <: _GeTsA{_GeTsC}
+    field::_GeTsC
+end
+_ge_ts_foo(a::_GeTsA{T}) where {T} = a.field::T
+_ge_ts_bar(a::_GeTsA) = a.field::Int64
+# type_argument_substitution: isa against a struct parameterized by an abstract instantiation
+struct _GeTasK end
+abstract type _GeTasA{T} end
+struct _GeTasB <: _GeTasA{_GeTasK} end
+struct _GeTasX{T} end
+# type_parameter: a struct holding a closure that builds a Set of its type parameter
+struct _GeTpA{T,F}
+    closure::F
+end
+_ge_tp_a(::Type{T}) where {T} = (c = () -> Set{T}(); _GeTpA{T,typeof(c)}(c))
+_ge_tp_bar(::Type{T}) where {T} = (c = () -> Set{T}(); _GeTpA{T,typeof(c)}(c))
+# type_parameter_literal: a method returning its receiver's type parameter
+struct _GeTplD{T} end
+_ge_tpl_gett(::_GeTplD{T}) where {T} = T
+# typedef: closures typed by a struct's parameters and a generic closure, asked what they accept
+struct _GeTdG{Y,Z} end
+function _ge_td_gtest(::_GeTdG{Y,Z}, y1::Y, z1::Z) where {Y,Z}
+    d = (x::Y, y::Y) -> y
+    d2 = function (y::Y, s::S) where {S}
+        (y, s)
+    end
+    return _dw_bits(applicable(d, y1, y1), applicable(d, z1, z1) == (Y === Z), applicable(d2, y1, z1),
+                    applicable(d2, z1, z1) == (Y === Z), applicable(d2, "k", z1) == (Y === String))
+end
+_g("dart_generic", Any[
+    ("cascaded_forwarding_stubs_generic", (n::Int64) -> (e = _GeCfE(); a = n > 0 ? _GeCfAa() : _GeCfB(); b = n > 0 ? _GeCfB() : _GeCfAa();
+        _dw_bits(_ge_cf_try(e, b, b) == 1, _ge_cf_try(e, a, b) == -1, _ge_cf_try(e, b, a) == -1)), Int64(1)),
+    ("closure", (n::Int64) -> (ci = _GeClC{Int64}(); f = _ge_cl_f(ci); g = _ge_cl_g(ci); fb = _ge_cl_f(_GeClC{Bool}()); fd = _ge_cl_f(_GeClC{Any}());
+        _dw_bits(f(21n) == 21, g(14n) == 14, f isa Function, applicable(f, n), !applicable(f, true), applicable(g, n), !applicable(g, true),
+                 applicable(fb, true), !applicable(fb, n), applicable(fd, n), applicable(fd, true))), Int64(1)),
+    ("conflicting_generic_interfaces_no_conflict", (n::Int64) -> (c = n > 0 ? _GeCgC() : nothing;
+        _dw_bits(c isa _GeCgI{Int64}, c isa _GeCgA, c isa _GeCgI{String})), Int64(1)),
+    ("constructor_mixin", (n::Int64) -> _dw_bits(_ge_cm_try(_GeCmC{Int64}, n) == 1, _ge_cm_try(_GeCmC{String}, n) < 0), Int64(0)),
+    ("constructor_mixin2", (n::Int64) -> _dw_bits(_ge_cm_try(_GeCm2D{Int64}, n) == 1, _ge_cm_try(_GeCm2D{String}, n) < 0), Int64(0)),
+    ("constructor_mixin3", (n::Int64) -> _dw_bits(_ge_cm_try(_GeCm3C1, n) == 1, _ge_cm_try(_GeCm3C2, n) < 0), Int64(0)),
+    ("creation", (n::Int64) -> (a = _GeCrA{_GeCrU,_GeCrV,_GeCrW}(); b = _GeCrB(); c = _GeCrC{_GeCrV}(); d = _GeCrD{_GeCrU,_GeCrV,_GeCrW}();
+        _dw_bits(_ge_cr_same(_GeCrA{_GeCrW,_GeCrU,_GeCrV}(), _ge_cr_shift(a)), _ge_cr_same(_GeCrA{_GeCrW,_GeCrV,_GeCrU}(), _ge_cr_swap(a)),
+                 _ge_cr_same(_GeCrA{_GeCrU,_GeCrU,_GeCrU}(), _ge_cr_first(a)), _ge_cr_same(_GeCrA{_GeCrW,_GeCrW,_GeCrW}(), _ge_cr_last(a)),
+                 _ge_cr_same(_GeCrUVW(), _ge_cr_wrap(a)), _ge_cr_same(_GeCrUVW(), _ge_cr_wrap(b)), _ge_cr_same(_GeCrUVW(), _ge_cr_wrap(c)),
+                 _ge_cr_same(_GeCrA{_GeCrA{_GeCrV,_GeCrV,_GeCrV},_GeCrA{_GeCrW,_GeCrW,_GeCrW},_GeCrA{_GeCrU,_GeCrU,_GeCrU}}(), _ge_cr_wrap(d)))), Int64(1)),
+    ("deep", (n::Int64) -> (z = _GeDZ(); n1 = _ge_d_add1(z); n2 = _ge_d_add1(n1); n3 = _ge_d_add1(n2); n4 = _ge_d_add4(z);
+        n10 = _ge_d_add1(_ge_d_add1(_ge_d_add4(_ge_d_add4(z))));
+        _dw_bits(z isa _GeDZ, n1 isa _GeDS{_GeDZ}, n2 isa _GeDS{_GeDS{_GeDZ}}, n3 isa _GeDS{_GeDS{_GeDS{_GeDZ}}},
+                 n10 isa _GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDZ}}}}}}}}}},
+                 !(z isa _GeDS), !(n1 isa _GeDZ), !(n1 isa _GeDS{<:_GeDS}), !(n2 isa _GeDZ), !(n2 isa _GeDS{_GeDZ}), !(n2 isa _GeDS{<:_GeDS{<:_GeDS}}),
+                 n4 isa _GeDS{<:_GeDS}, n4 isa _GeDS{<:_GeDS{<:_GeDS}}, n4 isa _GeDS{<:_GeDS{<:_GeDS{<:_GeDS}}},
+                 !(n4 isa _GeDS{<:_GeDS{<:_GeDS{<:_GeDS{<:_GeDS}}}}),
+                 _ge_d_even(z), !_ge_d_even(n1), _ge_d_even(n2), !_ge_d_even(n3), _ge_d_even(n4),
+                 _ge_d_int(z) == 0, _ge_d_int(n1) == 1, _ge_d_int(n2) == 2) * 1000 + _ge_d_int(n10) + n), Int64(0)),
+    ("f_bounded_equality", (n::Int64) -> (r = _GeFeReal(); b = _GeFeBar();
+        _dw_bits(typeof(r) === _GeFeReal, _ge_fe_t(r) === _GeFeReal, typeof(r) === _ge_fe_t(r),
+                 typeof(b) === _GeFeBar, _ge_fe_f(b) === _GeFeBar, typeof(b) === _ge_fe_f(b))), Int64(1)),
+    ("f_bounded_quantification2", (n::Int64) -> (ce = _GeFq2ConceptEntity{_GeFq2Concept}();
+        _dw_bits(ce isa _GeFq2EntityApi{_GeFq2Concept}, _GeFq2Concept() isa _GeFq2EntityApi{_GeFq2Concept},
+                 _GeFq2Entities{_GeFq2Concept}() isa _GeFq2EntitiesApi{_GeFq2Concept})), Int64(1)),
+    ("f_bounded_quantification3", (n::Int64) -> (t1 = _ge_fq3_test(_GeFq3FBound1{_GeFq3Bar,_GeFq3Baz}()); t2 = _ge_fq3_test(_GeFq3FBound2{_GeFq3Bar,_GeFq3Baz}());
+        _dw_bits(t1[1] isa _GeFq3FBound1{_GeFq3Bar,_GeFq3Baz}, t1[2] isa _GeFq3FBound2{_GeFq3Bar,_GeFq3Baz},
+                 t2[1] isa _GeFq3FBound1{_GeFq3Bar,_GeFq3Baz}, t2[2] isa _GeFq3FBound2{_GeFq3Bar,_GeFq3Baz})), Int64(1)),
+    ("f_bounded_quantification4", (n::Int64) -> (x = _GeFq4Foo{_GeFq4Foo}();
+        _dw_bits(typeof(x) === _GeFq4Foo{_GeFq4Foo}, x isa _GeFq4B{_GeFq4Foo{_GeFq4Foo}}, x isa _GeFq4A{_GeFq4Foo{_GeFq4Foo}})), Int64(1)),
+    ("f_bounded_quantification5", (n::Int64) -> typeof(_GeFq5A{_GeFq5B{Int64}}()) === _GeFq5A{_GeFq5B{Int64}}, Int64(1)),
+    ("field_mixin", (n::Int64) -> _dw_bits(_ge_fm_field(_GeFmC1{Int64}()) isa _GeFmA{Int64}, _ge_fm_field(_GeFmC1{Int64}()) isa _GeFmA{String},
+        _ge_fm_field(_GeFmC1{String}()) isa _GeFmA{Int64}, _ge_fm_field(_GeFmC1{String}()) isa _GeFmA{String},
+        _ge_fm_field(_GeFmC2()) isa _GeFmA{Int64}, _ge_fm_field(_GeFmC2()) isa _GeFmA{String},
+        _ge_fm_field(_GeFmC3()) isa _GeFmA{Int64}, _ge_fm_field(_GeFmC3()) isa _GeFmA{String}), Int64(1)),
+    ("field_mixin2", (n::Int64) -> _dw_bits(_ge_fm2_field(_GeFmC1{Int64}()) === Int64, _ge_fm2_field(_GeFmC1{String}()) === String,
+        _ge_fm2_field(_GeFmC2()) === Int64, _ge_fm2_field(_GeFmC3()) === String), Int64(1)),
+    ("field_mixin3", (n::Int64) -> _dw_bits(_ge_fm3_field(_GeFmC1{Int64}()), _ge_fm3_field(_GeFmC1{String}()),
+        _ge_fm3_field(_GeFmC2()), _ge_fm3_field(_GeFmC3())), Int64(1)),
+    ("field_mixin4", (n::Int64) -> _dw_bits(_ge_fm4_field(_GeFmC1{Int64}()), _ge_fm4_field(_GeFmC1{String}()),
+        _ge_fm4_field(_GeFmC2()), _ge_fm4_field(_GeFmC3())), Int64(1)),
+    ("field_mixin5", (n::Int64) -> _dw_bits(_ge_fm5_field(_GeFmC1{Int64}()) === Int64, _ge_fm5_field(_GeFmC1{String}()) === String,
+        _ge_fm5_field(_GeFmC2()) === Int64, _ge_fm5_field(_GeFmC3()) === String), Int64(1)),
+    ("field_mixin6", (n::Int64) -> _dw_bits(_ge_fm6_try(_GeFm6C1{Int64}) == 1, _ge_fm6_try(_GeFm6C2) == 1,
+        _ge_fm6_try(_GeFm6C1{String}) < 0, _ge_fm6_try(_GeFm6C3) < 0), Int64(1)),
+    ("function_bounds", (x::Float64) -> (n = Int64(x);
+        _dw_bits(_ge_fb_h(-n, -n) === (Int64, Int64), _ge_fb_f(n) == 42, (try; _ge_fb_g(x, n) == x; catch e; !(e isa MethodError); end),
+                 _ge_fb_g(n, Int64(100)) == 42, (try; _ge_fb_f("42"); false; catch e; e isa MethodError; end),
+                 (try; _ge_fb_g("hi", Int64(100)); false; catch e; e isa MethodError; end))), 42.0),
+    ("function_dcall", (n::Int64) -> (l = Union{Int64,Float64}[n, 2n, 3n];
+        _dw_bits(_ge_dc_f(Int64, 40n, Int64(2)) == 42, _ge_dc_f(String, "hi", "!") == "hi!", _ge_dc_f(Any, 40n, Int64(2)) == 42,
+                 _ge_dc_f(Any, "hi", "!") == "hi!", (try; _ge_dc_foo1(_ge_dc_h, 42n); false; catch e; e isa MethodError; end),
+                 (try; map(_ge_dc_h, l); false; catch e; e isa MethodError; end), map(x -> _ge_dc_h(Int64, x), l) == [1, 2, 3],
+                 _ge_dc_foo(Int64, _ge_dc_h, 42n) == 42, _ge_dc_foo(Any, _ge_dc_h, 42n) == 42)), Int64(1)),
+    ("function_type_as_type_argument", (n::Int64) -> (bar = _ge_ft_foo; dl = [_ge_ft_foo];
+        _dw_bits(_ge_ft_foo(n) == 42, bar(n) == 42, dl[1](n) == 42)), Int64(42)),
+    ("function_typedef", (n::Int64) -> _dw_bits(hasmethod(_ge_ftd_foo, Tuple{Vector{Any},Function,Real}), hasmethod(_ge_ftd_foo, Tuple{Vector{Int64},Function,Real}),
+        hasmethod(_ge_ftd_foo, Tuple{Vector{Bool},Function,Real}), hasmethod(_ge_ftd_foo2, Tuple{Vector{Any},Function,Real}),
+        hasmethod(_ge_ftd_foo2, Tuple{Vector{Int64},Function,Real}), hasmethod(_ge_ftd_foo2, Tuple{Vector{Bool},Function,Real}),
+        hasmethod(_ge_ftd_foo3, Tuple{Vector{Any},Function,Real}), hasmethod(_ge_ftd_foo3, Tuple{Vector{Int64},Function,Real}),
+        hasmethod(_ge_ftd_foo3, Tuple{Vector{Bool},Function,Real})), Int64(1)),
+    ("functions", (n::Int64) -> (t = _GeFnTree{Int64,String}(nothing); t = _ge_fn_tinsert(t, n - 1, ""); t = _ge_fn_tinsert(t, n, " ");
+        t = _ge_fn_tinsert(t, n + 1, "  "); t = _ge_fn_tinsert(t, n + 2, "   "); it = _ge_fn_tmap(Int64, t, (s::String) -> Int64(ncodeunits(s)));
+        _ge_fn_tfold(Int64, it, Int64(0), (i::Int64, s::Int64) -> i + s)), Int64(1)),
+    ("generic_function_type_argument", (n::Int64) -> (list = [_ge_gfa_f]; push!(list, _ge_gfa_f(_ge_gfa_f)); list2 = [_ge_gfa_fb]; push!(list2, _ge_gfa_fb(_ge_gfa_fb));
+        _dw_bits(list isa Vector{typeof(_ge_gfa_f)}, eltype(list) <: Function, length(list) == 2 && list[2] === _ge_gfa_f,
+                 length(list2) == 2 && list2[2] === _ge_gfa_fb, list[2](n) == n)), Int64(7)),
+    ("generic", (n::Int64) -> (d = _ge_g_mkd(); c = _ge_g_mkc(_GeGA, _GeGAA());
+        _dw_bits(d.caa_.b_ isa _GeGB{_GeGAA}, _ge_g_ist(d.caa_.b_, _GeGAA()), c isa _GeGC{_GeGA}, !(c isa _GeGC{_GeGAA}),
+                 c.b_ isa _GeGB, !(c.b_ isa _GeGB{_GeGAA}), _ge_g_ist(c.b_, _GeGAA()), !_ge_g_ist(c.b_, _GeGAX()))), Int64(1)),
+    ("generic2", (n::Int64) -> _dw_bits(_ge_g2_foo(_GeG2A{Any}(), _GeG2B()), _ge_g2_foo(_GeG2A{Any}(), n), _ge_g2_foo(_GeG2A{Int64}(), _GeG2Obj()),
+        _ge_g2_foo(_GeG2A{Int64}(), "hest"), _ge_g2_foo(_GeG2A{_GeG2B}(), _GeG2B()), _ge_g2_foo(_GeG2A{_GeG2B}(), _GeG2Obj()),
+        _ge_g2_foo(_GeG2A{_GeG2B}(), n), _ge_g2_foo(_GeG2C(), n), _ge_g2_foo(_GeG2C(), _GeG2Obj()), _ge_g2_foo(_GeG2C(), "hest"),
+        _ge_g2_foo(_GeG2A{Vector{Int64}}(), Int64[]), _ge_g2_foo(_GeG2A{Vector{Int64}}(), String[])), Int64(1)),
+    ("generics", (n::Int64) -> (a = n; b = 2n; c = 3n; d = 4n; e = Dict{Int64,Int64}(); _ge_gs_takes_map(e);
+        id = _GeGsLong{String,Int64,_GeGsLong{Int64,Vector{Int64},Dict{Int64,Dict{Int64,Int64}}}}();
+        _dw_bits(a < b, _ge_gs_myfunc(a < b, c > d) == 42, e[0] == 2, id isa _GeGsLong{String,Int64,<:_GeGsLong})), Int64(1)),
+    ("generics2", (n::Int64) -> (p1 = _GeGs2Pair{Int64,Int64}(n, Int64(2)); p2 = _GeGs2Pair{String,Int64}("1", Int64(2));
+        p1.fst + p1.snd + Int64(ncodeunits(p2.fst)) + p2.snd + (p1 isa _GeGs2A{Any} ? Int64(100) : Int64(0))), Int64(1)),
+    ("generics3", (n::Int64) -> (c4 = _GeG3C4{String}(); r = _ge_g3_f(c4);
+        _dw_bits(r isa _GeG3C5{_GeG3C1{String}}, r.x isa _GeG3C1{String}, c4 isa _GeG3C2{_GeG3C1{String}})), Int64(1)),
+    ("inheritance", (n::Int64) -> (a = _GeInA{String}(); b = _GeInB(); c = _GeInC();
+        _dw_bits(a isa Any, a isa _GeInAAbs{Any}, a isa _GeInAAbs{String}, !(a isa _GeInAAbs{Int64}), b isa Any, b isa _GeInAAbs{Any},
+                 !(b isa _GeInAAbs{String}), c isa Any, c isa _GeInAAbs{Any}, !(c isa _GeInAAbs{String}), c isa _GeInBAbs)), Int64(1)),
+    ("instanceof", (n::Int64) -> (r = Int64(0); for i in 1:n; r = _ge_io_main(); end; r), Int64(5)),
+    ("instanceof2", (n::Int64) -> (r = Int64(0); for i in 1:n; r = _ge_io2_all(); end; r), Int64(5)),
+    ("instanceof3", (n::Int64) -> (r = Int64(0); for i in 1:n; r = _ge_io3_all(_GeIo3A(), _GeIo3B{String}(), _GeIo3C(), _GeIo3D()); end; r), Int64(5)),
+    ("instanceof4", (n::Int64) -> _ge_io4_bfoo(_GeIo4B{_GeIo4BB}()), Int64(1)),
+    ("instanceof5", (n::Int64) -> _ge_io5_foo(_GeIo5D{_GeIo5B{Int64,Bool}}(), _GeIo5C{Bool,Int64}()), Int64(1)),
+    ("instantiate_tearoff_after_contravariance_check", (n::Int64) -> _dw_bits(applicable(_ge_itc_f(_GeItcC{_GeItcA}(), n), _GeItcAa()),
+        applicable(_ge_itc_f(_GeItcC{_GeItcB}(), n), _GeItcAa())), Int64(1)),
+    ("instantiate_tearoff_of_call", (n::Int64) -> _ge_itoc_test(_ge_itoc_f), Int64(1)),
+    ("instantiate_tearoff", (n::Int64) -> (if1 = (x::Int64) -> _ge_it_f(x); sf1 = (x::String) -> _ge_it_f(x); loc(x::T) where {T} = x;
+        if2 = (x::Int64) -> loc(x); sf2 = (x::String) -> loc(x); fn = _ge_it_bar(String);
+        (_ge_it_test(if1, sf1) * 256 + _ge_it_test(if2, sf2)) * 4 + 2 * Int64(fn("a", n) === (String, Int64)) + Int64(applicable(fn, n, n))), Int64(1)),
+    ("is_check", (n::Int64) -> _dw_bits(_ge_ic_foo(_GeIcA{Any}()), _ge_ic_foo(_GeIcA{Int64}()), _ge_ic_foo(_GeIcA{String}())), Int64(1)),
+    ("list_checked", (n::Int64) -> (v = n > 0 ? String[] : Int64[];
+        try; t = v::Vector{Int64}; Int64(length(t)); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end), Int64(1)),
+    ("local_functions", (n::Int64) -> (h(m::Dict{X,Y}, x::X) where {X,Y} = m[x];
+        _dw_bits(_ge_lf_f(h) == 42, _ge_lf_f(function (m::Dict{X,Y}, x::X) where {X,Y}; m[x]; end) == 42)), Int64(1)),
+    ("many_generic_instanceof", (n::Int64) -> (r = Int64(0); for i in 1:n; r = _ge_io_main(); end; r), Int64(20)),
+    ("method_types", (n::Int64) -> _dw_bits(hasmethod(_ge_mt_convert1, Tuple{_GeMtClass{String},Int64}), hasmethod(_ge_mt_convert1, Tuple{_GeMtClass{String},String}),
+        hasmethod(_ge_mt_convert2, Tuple{_GeMtClass{String},Type{Int64},String}), hasmethod(_ge_mt_convert2, Tuple{_GeMtClass{String},Type{Int64},Int64}),
+        hasmethod(_ge_mt_convert3, Tuple{Type{Int64},String}), hasmethod(_ge_mt_convert3, Tuple{Any,Any,Any})), Int64(1)),
+    ("native", (n::Int64) -> _dw_bits(_ge_na_foo(_GeNaA{AbstractVector{_GeNaB}}(), _GeNaB[]), _ge_na_foo(_GeNaA{AbstractVector{_GeNaC}}(), _GeNaB[]),
+        _ge_na_foo(_GeNaA{Union{AbstractString,Regex}}(), "hest"), _ge_na_foo(_GeNaA{AbstractString}(), "hest"), _ge_na_foo(_GeNaA{_GeNaC}(), "hest")), Int64(1)),
+    ("no_such_method_dispatcher", (n::Int64) -> (a = _GeNsAa(); b = _GeNsB(); c = _GeNsC();
+        _dw_bits(_ge_ns_foo(a, Int64, _GeNsA) == 123, _ge_ns_bar(b, Int64, _GeNsA, n) == 2, _ge_ns_bar(b, n) == 2, _ge_ns_bar(b, Int64, _GeNsA) == 123,
+                 _ge_ns_bar(b, Int64, _GeNsA, 2n) == 3, _ge_ns_bar(b, Int64, n) == 123, _ge_ns_bar(b, Int64, _GeNsA, n, 2, 3) == 123,
+                 _ge_ns_bar(b, Int64, _GeNsA, n, 2; foo = 3) == 123, _ge_ns_cbar(c, Int64, _GeNsA, 100n; n1 = 101, n2 = 102) == 123,
+                 _ge_ns_cbar(c, Int64, _GeNsA, 100n; n2 = 102, n1 = 101) == 123)), Int64(1)),
+    ("object_type", (n::Int64) -> _ge_ot_test(_GeOtTester{Any}(), _GeOtObject()), Int64(1)),
+    ("parameterized_extends", (n::Int64) -> (a = _GePeA{String}(); b = _GePeB{String,_GePeA{String}}(); c = _GePeC{_GePeA{String},String}();
+        _dw_bits(a isa Any, a isa _GePeA{Any}, a isa _GePeA{String}, !(a isa _GePeA{Int64}),
+                 b isa Any, b isa _GePeB{Any,_GePeA{Any}}, b isa _GePeB{String,_GePeA{String}}, !(b isa _GePeB{Int64,_GePeA{Int64}}),
+                 c isa Any, c isa _GePeC{_GePeA{Any},Any}, c isa _GePeC{_GePeA{String},String}, !(c isa _GePeC{_GePeA{Int64},Int64}))), Int64(1)),
+    ("recursive_generic", (n::Int64) -> (c = _GeRgC{_GeRgD}(); e = _GeRgE{Int64,String}();
+        _dw_bits(typeof(e) === _ge_rg_type(_GeRgE{Int64,String}), e isa _GeRgF{_GeRgE{Int64,Any},String}, _ge_rg_m(c) == 456,
+                 _ge_rg_ct(c) === _GeRgD, _ge_rg_st(c) === _GeRgC{_GeRgD})), Int64(1)),
+    ("regress_45767", (n::Int64) -> _dw_bits(_GeR45A{Bool}() isa _GeR45I{_GeR45A{Any}}, _GeR45B{Bool}() isa _GeR45I{_GeR45B{Union{Nothing,Bool}}},
+        _GeR45B{Bool}() isa _GeR45I{_GeR45B{Bool}}), Int64(1)),
+    ("reify_typevar_static", (b::Bool) -> _dw_bits(_ge_rt_factory(Any, b).x === nothing, _ge_rt_redirecting(Any, b).x === nothing,
+        _ge_rt_ordinary(Any, b).x === nothing, _ge_rt_ordinary(Int64, !b).x === Int64), false),
+    ("self_reference", (n::Int64) -> (x = _GeSrFoo{Int64}(); _dw_bits(x isa _GeSrBar{_GeSrFoo{Int64}}, typeof(x) === _GeSrFoo{Int64})), Int64(1)),
+    ("sends", (a::Int64) -> (b = a + 1; c = a + 2; d = a + 3;
+        _dw_bits(_ge_se_f(_ge_se_g(Int64, String, 3)) === nothing, _ge_se_f(_ge_se_g(Int64, Vector{String}, 3)) === nothing,
+                 _ge_se_f(_ge_se_g(Int64, String, 3), 4) === nothing, _ge_se_f(_ge_se_g(Int64, Vector{String}, 3), 4) === nothing,
+                 _ge_se_f(a < b, c > 3) === nothing, a < b, c > 3, c >> 3 == 0, c < d >> 3)), Int64(0)),
+    ("sync_star", (n::Int64) -> (s = Int64(0); ok = true; for x in _ge_ss_foo(n); ok &= x == 1; s += 1; end; _dw_bits(ok, s == 3)), Int64(1)),
+    ("syntax", (n::Int64) -> _ge_sy_test(_GeSyTest{Any,Any,Any,Any,Any}()) + 0n, Int64(1)),
+    ("tearoff", (n::Int64) -> (c = _GeToC(); m(x::T, y::T) where {T<:Real} = min(x, y); f = min;
+        _dw_bits(_ge_to_test(min) == 3, _ge_to_test(Base.min) == 3, _ge_to_test((x, y) -> _ge_to_m(c, x, y)) == 3, _ge_to_test(m) == 3,
+                 _ge_to_test(f) == 3, _ge_to_m(c, 123n, Int64(456)) == 123, (try; _ge_to_m2(c, Int64, 123n, 456); false; catch e; e isa MethodError; end))), Int64(1)),
+    ("type_argument_in_super_type", (n::Int64) -> (b = _GeTsB(_GeTsC());
+        _dw_bits(b.field === _ge_ts_foo(b), (try; _ge_ts_bar(b); false; catch e; e isa TypeError; end))), Int64(1)),
+    ("type_argument_substitution", (n::Int64) -> (v = n != 42 ? _GeTasX{_GeTasB}() : _GeTasX{_GeTasA{String}}(); v isa _GeTasX{_GeTasA{String}}), Int64(1)),
+    ("type_parameter", (n::Int64) -> (s1 = _ge_tp_a(Any).closure(); s2 = _ge_tp_bar(Any).closure(); s3 = _ge_tp_a(Int64).closure(); s4 = _ge_tp_bar(Int64).closure();
+        _dw_bits(s1 isa Set, s2 isa Set, s3 isa Set{Int64}, s3 isa Set{Float64}, s4 isa Set{Int64}, s4 isa Set{Float64})), Int64(1)),
+    ("type_parameter_literal", (n::Int64) -> _ge_tpl_gett(_GeTplD{Int64}()) === Int64, Int64(1)),
+    ("typedef", (n::Int64) -> (d = (x::Int64, y::Int64) -> x + y; b = function (x::S, y::S) where {S}; x isa String ? x : y; end;
+        _dw_bits(applicable(d, n, Int64(2)), d(n, Int64(2)) == 3, b(n, Int64(2)) == 2, b("a", "b") == "a",
+                 _ge_td_gtest(_GeTdG{Int64,String}(), n, "s") == 31, _ge_td_gtest(_GeTdG{String,String}(), "t", "s") == 31)), Int64(1)),
+])
