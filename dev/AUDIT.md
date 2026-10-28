@@ -4120,3 +4120,91 @@ check's two halves side by side to shorten the serial re-check.
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41E6 and A41E7 are fixed by 9153798a;
 A43S2 and A41S6 are answered for stubs by d1143fba, their filled half carried as A46S1. A46S1 is open on MARCH 1.A4.
 A46S2 is open on MARCH 1.A6. A46E1 is open on MARCH 1.B.
+
+## 2026-10-28 — audited through 360363ab (95dd5b6e..360363ab: the call path, ordered shapes, native answers by change, Bool's not and the bit counts, entry 46, Abstract<X>, kinds from Base, call targets, one lock check, the CFGStackify model, the closures' visitors, the collaborators, audit fixes, LLVM anchors, dart defaults, facts that name themselves, the spec's validation rules, translate end to end)
+
+The forty-seventh audit, beside the work, covers de918a8c (FunctionCollector, the call path), a94bf136 (a shape is its
+names with their indices), 9f47da82 (native answers proven only for the cases a change touches), b7c2ab9f (Bool's
+not, flipsign_int, ctlz/cttz/ctpop, the fast-math floats), b465c22f (entry 46; its author's), f69d97f9 (a concrete
+class another extends is Abstract<X> and struct X), 0ed2f502 (Julia's kinds from Base.iskindtype), 98b5fd9c (one
+`snake`; watch-point rejections named), 3761d543 (CallTarget, AstCallTarget), d10956d6 (under the landing lock the
+rebased tip checked once), 74f9fa48 (dev/formal/CFGStackify.tla, the invented Stackifier model deleted), 078a8fd5 (a type
+value brings the classes it denotes), c27588f3 (the capture finder and context collector over the NIR), e602591f (the
+collaborators the Translator's constructor builds; the importers), 59c80dcc (Fixes: A41S17 A41S18 A42S1 A42S2 A43S1
+A45S5), f7e90da0 (CompilationTask's struct), adb62ca3 (LLVM_FILES and LLVM anchors resolved at the llvm pin), 02e8f55e
+(types.dart's last five definitions), 93b7ecea (a stub's named parameter takes dart's default or none), aa2e552a (the
+600 dart cases return their facts and depend on their argument; A41E8, A41E9), 33c8969c (the spec's validation rules
+dart leaves to the engine, refused at the builder) and 360363ab (translate, end to end; the entry exported). Every
+finding rests on one exact command, quoted. The two standing items: the in-scope total, `julia dev/skeleton.jl count`
+at 360363ab, is "in scope, in all 3498", unmoved, and no commit changes dev/skeleton_scope.toml (`git log
+95dd5b6e..360363ab -- dev/skeleton_scope.toml` is empty); the progress line reads "src: 2922 of 3590", its total one
+less than entry 46's 3591 as f69d97f9 counts Abstract<X> and struct X as one definition. Traps: one instruction that can
+trap where Julia defines a value (A47S1); Julia's `div` and `rem` reach WT as checked_sdiv_int and checked_srem_int
+(`julia -e 'f(x,y)=div(x,y); g(x,y)=rem(x,y); …code_typed…'` lists `Base.checked_sdiv_int` and `Base.checked_srem_int`),
+which have no arm and reject, so no DivideError is a trap today; when they are ported each is a check that throws, never
+i64.div_s's trap. Findings A47S1, A47E1, A47E2 and A47E3.
+
+Area: builder — 33c8969c inventories WebAssembly 3.0's validation rules in test/wasm_builder/builder_validation.jl and
+names each rule's refusing check: 20 rules dart leaves to V8 now refuse at the emitting or defining call (br_table's one
+arity, a mutable field for struct.set, array.copy's element subtype, call_indirect's funcref table, an immutable global in
+a constant expression, lane bounds, a u32 memarg offset), one case each, one partial and said so; sound, D10. 98b5fd9c
+fixes A41S14: skeleton.jl reads parity.jl's `snake`, and four watch-point rejections name real anchors.
+
+Area: collection and planning — a94bf136 fixes A42S3 and A45S2, re-measured at 360363ab with this tree's depot: the
+two NamedTuple orders now give "(false, false, 3, 2)", unequal shapes with their own indices. 59c80dcc fixes A42S2 (a
+reference field past `Core.Compiler.datatype_min_ninitialized` is nullable), A42S1 (Julia's ABI stated: signext for
+the signed classes, zeroext for the unsigned and Bool), A43S1, A41S17 (moduleNameToId reads 0x), A41S18 and A45S5
+(emitCodegen fixed at its source, D12). f69d97f9 fixes A41S10 with Julia's own shape for a concrete dart class others
+extend, `abstract type Abstract<X>` and `struct X <: Abstract<X>` (precedent AbstractArray and Array); 0ed2f502 reads
+Julia's kinds from Base.iskindtype where a copy of its list would miss Julia 1.14's three new kinds (D3, D5); 93b7ecea
+fixes A41S11 (a named parameter takes dart's default, or stays required where it does not translate, never `nothing`).
+de918a8c's typeOfReturnValue is the CodeInstance's rettype, Julia's answer. 74f9fa48 models LLVM's CFGSort and
+CFGStackify over every reducible CFG of N blocks with a Broken instance per claim, before the port (D11, D42).
+adb62ca3's LLVM anchors resolve at the llvm pin by clang-format's columns, L213's plants grown by nine wrong forms.
+
+stopgap in disguise: Abstract<X> and the anchors are constructions; the validation inventory is a test that names a check
+per rule; the native-answer selection is a diff over text (A47E1).
+precedent: Abstract<X>, Julia's AbstractArray and Array; CFGStackify, LLVM's WebAssembly backend at its pin; the
+validation rules, the WebAssembly 3.0 specification's.
+
+Area: emission and diagnostics — b7c2ab9f's not_int on a Bool is an xor with 1 (Julia's Bool an i1), flipsign_int a select
+over the wrapping negation, the bit counts the width for zero, as Julia's. (A47S1, medium) fptosi and fptoui lower to
+wasm's trapping truncations (src/intrinsics.jl:269–272: `i64_trunc_f64_s`, `i32_trunc_f64_u`, …) on the comment
+"fptosi and fptoui trap where Julia leaves the value undefined" (:244). Julia does not leave it an error: its
+`unsafe_trunc` is a bare fptosi (`code_typed(x -> unsafe_trunc(Int64, x), (Float64,))` holds `Base.fptosi` alone) and
+"an arbitrary value will be returned" when the value is not representable; natively `unsafe_trunc(Int64, NaN)` is 0
+and `unsafe_trunc(Int64, 1e30)` 9223372036854775807 on this machine. A wasm trap there is no Julia behavior, and under
+dart's wasm-opt flags (`--traps-never-happen`, compile.dart:159) the optimizer may treat the trapping path as
+unreachable. The saturating `i64.trunc_sat_f64_s` and kin give a value for every input, and aarch64's native answers
+exactly.
+
+Area: enforcement and prose — every hunk of 9f47da82, d10956d6, aa2e552a and the test hunks of the range. aa2e552a
+fixes A41E8 and A41E9: each case returns its dart test's facts as a tuple, `_dw_bits` and the folds are gone, and 104
+cases whose typed IR was a single `return <constant>` now depend on their argument. (A47E1, medium) 9f47da82 proves a
+case's native answer only when its group's text changed, and a group's text is everything from the previous group's
+close to its own (`_dart_group_texts`, test/dart_tests.jl), so a helper written in one group's text and used in others
+re-proves only the first: `_dw_facts(xs...) = xs` sits at test/smoke_corpus.jl:2489, inside dart_web_wasm's text, and
+`awk '/^_g\("dart_/{g=$0} /_dw_facts\(/{print g}' test/smoke_corpus.jl | sort | uniq -c` counts it in dart_patterns 520
+times, dart_nnbd 91, dart_const 60 and every other group; an edit to it leaves those groups' recorded answers unproven.
+The unit should be the corpus file outside each group's case list (any change there re-proves every group), or each
+case's free names resolved to their definitions. (A47E2, medium) The progress numerator counts a definition whose body is
+only a rejection as ported. Across src/, an awk count of filled one-line definitions whose body is `reject!(` gives 41
+(record_class_generator.jl 11, types.jl 7, constants.jl 7, code_generator.jl 5, …), among them 02e8f55e's
+`core_types(self::Types)::NoCounterpart = reject!(Internal(… "Kernel's CoreTypes has no Julia counterpart" …))`
+(src/types.jl:326) and b369cfab's eleven record-class generators. Where dart's body is itself a throw, the rejection is
+its port; where it stands for "no Julia counterpart", the definition is answered, not ported, and "2922 of 3590" counts
+it beside running code. The line should count the two apart, so 100% means every definition runs or ports a throw.
+(A47E3, low) dev/ship.sh still says "every commit is checked on its own tree, against its parent (… each landed commit
+passes)" (dev/ship.sh:31–32), but since d10956d6 a stack rebased under the lock onto a new base has only its tip checked
+there, each earlier commit checked on its old base alone, so an intermediate landed commit can be red on the base it
+landed on. A merge queue's choice, the comment should say so. The first compile's run by node is again in a message
+alone (360363ab: "Run by node, the serialized module answers 1 42 0 …"), A46E1, which the lead routed to wt3-tests.
+Requirements: the standing trap rule and D3 (A47S1); D5 (A47E1); the denominator rule (A47E2); C9 (A47E3); no lock
+fired inside its band.
+
+Landing times: entry 46 landed with the median of five at 530 s (ship's line); d10956d6 holds the lock for one check.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A42S3 and A45S2 are fixed by
+a94bf136; A41S17, A41S18, A42S1, A42S2, A43S1 and A45S5 by 59c80dcc; A41S10 by f69d97f9; A41S11 by 93b7ecea; A41S14 by
+98b5fd9c; A41E8 and A41E9 by aa2e552a. A47S1 is open on MARCH 1.D. A47E1 is open on MARCH 1.T. A47E2 is open on MARCH
+1.A6. A47E3 is open on MARCH 1.L.
