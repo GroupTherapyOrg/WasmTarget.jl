@@ -2,56 +2,607 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-DynamicDispatchers's dart fields: `translator`, `callingModule`, `_dispatchers`.
+Unique dynamic call dispatchers per-module.
+
+A dynamic call will use a dynamic call dispatcher in the same module. The dispatcher will be
+specialized to the shape of the caller.
+
+Julia's trim verifier, whose subset WasmTarget compiles (ledger D32), rejects every call it cannot
+resolve statically, so no NIR statement is a dynamic call and no dispatcher is ever asked for: the
+dispatchers are empty by Julia's answer. If the subset ever admitted a dynamic call, the same code
+would make them.
 """
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:18 DynamicDispatchers" @unported struct DynamicDispatchers end
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:18 DynamicDispatchers" struct DynamicDispatchers
+    translator::KernelNodes
+    calling_module::WasmBuilder.ModuleBuilder
+    _dispatchers::LinkedHashMap{CallShape,CallTarget}
+    # the struct's one constructor, tagged; dart's constructor at :24 is its outer function
+    DynamicDispatchers(::Val{:_}, translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder) =
+        new(translator, calling_module, LinkedHashMap{CallShape,CallTarget}())
+end
+
+"""The call target of a dynamic call dispatcher: its function, defined and queued on first read."""
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:35 _DynamicDispatcherCallTarget" struct _DynamicDispatcherCallTarget <: CallTarget
+    signature::WasmBuilder.IR.FunctionType
+    translator::KernelNodes
+    call_shape::CallShape
+    calling_module::WasmBuilder.ModuleBuilder
+    function_::Late{WasmBuilder.IR.BaseFunction}
+    # the struct's one constructor, tagged, with dart's late initializer; dart's constructor at :40
+    # is its outer function
+    function _DynamicDispatcherCallTarget(::Val{:_}, signature::WasmBuilder.IR.FunctionType, translator::KernelNodes,
+            call_shape::CallShape, calling_module::WasmBuilder.ModuleBuilder)
+        local self
+        self = new(signature, translator, call_shape, calling_module,
+            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/dynamic_dispatchers.dart:53 _DynamicDispatcherCallTarget.function", function ()
+                local function_ = WasmBuilder.define(self.calling_module.functions[], self.signature, name(self))
+                local dispatcher = _DynamicDispatcherCodeGenerator(self.translator, self.call_shape, function_)
+                add(self.translator.compilation_queue[], CompilationTask(function_, dispatcher))
+                return function_
+            end))
+        return self
+    end
+end
+
+"""Generates dispatching code to call the right dynamic function."""
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:66 _DynamicDispatcherCodeGenerator" struct _DynamicDispatcherCodeGenerator <: CodeGenerator
+    translator::KernelNodes
+    caller_shape::CallShape
+    function_::WasmBuilder.FunctionBuilder
+    # the struct's one constructor, tagged; dart's constructor at :71 is its outer function
+    _DynamicDispatcherCodeGenerator(::Val{:_}, translator::KernelNodes, caller_shape::CallShape, function_::WasmBuilder.FunctionBuilder) =
+        new(translator, caller_shape, function_)
+end
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:24 DynamicDispatchers" DynamicDispatchers(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::DynamicDispatchers =
+    DynamicDispatchers(Val(:_), translator, calling_module)
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:26 DynamicDispatchers.getDispatcher" function get_dispatcher(self::DynamicDispatchers, shape::CallShape)::CallTarget
+    local d = get(self._dispatchers, shape, nothing)
+    d === nothing || return d
+    return self._dispatchers[shape] = _DynamicDispatcherCallTarget(self.translator, shape, self.calling_module)
+end
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:40 _DynamicDispatcherCallTarget" _DynamicDispatcherCallTarget(translator::KernelNodes, call_shape::CallShape, calling_module::WasmBuilder.ModuleBuilder)::_DynamicDispatcherCallTarget =
+    _DynamicDispatcherCallTarget(Val(:_), make_dynamic_dispatcher_signature(translator, call_shape), translator, call_shape, calling_module)
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:47 _DynamicDispatcherCallTarget.name" name(self::_DynamicDispatcherCallTarget)::String = "Dynamic dispatcher for $(self.call_shape)"
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:50 _DynamicDispatcherCallTarget.supportsInlining" supports_inlining(self::_DynamicDispatcherCallTarget)::Bool = false
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:71 _DynamicDispatcherCodeGenerator" _DynamicDispatcherCodeGenerator(translator::KernelNodes, caller_shape::CallShape, function_::WasmBuilder.FunctionBuilder)::_DynamicDispatcherCodeGenerator =
+    _DynamicDispatcherCodeGenerator(Val(:_), translator, caller_shape, function_)
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:78 _DynamicDispatcherCodeGenerator.generate" function generate(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
+    return_label === nothing ||
+        reject!(Internal("dart2wasm/lib/dynamic_dispatchers.dart:83 _DynamicDispatcherCodeGenerator.generate: no inlining support atm."), "_DynamicDispatcherCodeGenerator.generate")
+    local translator = self.translator::Translator
+    @exhaustive self.caller_shape::CallShape begin
+        GetterCallShape => _generate_getter_code(self, translator)
+        SetterCallShape => _generate_setter_code(self, translator)
+        MethodCallShape => _generate_method_code(self, translator)
+    end
+    return nothing
+end
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:99 _DynamicDispatcherCodeGenerator._generateGetterCode" function _generate_getter_code(self::_DynamicDispatcherCodeGenerator, translator::Translator)::Nothing
+    local W = WasmBuilder
+    local nullable_receiver_local = W.locals(self.function_)[1]
+    local b = W.body(self.function_)
+
+    local no_such_method_block = W.block(b)
+
+    # Check for `null`.
+    local receiver_local = W.add_local(b, translator.top_type_non_nullable[])
+    W.local_get(b, nullable_receiver_local)
+    W.br_on_null(b, no_such_method_block)
+    W.local_set(b, receiver_local)
+
+    local class_id_local = W.add_local(b, W.IR.NumType_i32)
+    W.local_get(b, receiver_local)
+    load_class_id(b, translator, receiver_local.type)
+    W.local_set(b, class_id_local)
+
+    _emit_dynamic_dispatch_table_call(self, b, self.caller_shape, class_id_local, receiver_local, (_::WasmBuilder.InstructionsBuilder) -> nothing, no_such_method_block)
+
+    W.var"end"(b)  # noSuchMethodBlock
+
+    W.local_get(b, nullable_receiver_local)
+    create_getter_invocation_object(translator, b, self.caller_shape.name)
+    call_reference(translator, translator.invoke_no_such_method[], b)
+    W.return_(b)
+    W.var"end"(b)
+    return nothing
+end
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:134 _DynamicDispatcherCodeGenerator._generateSetterCode" function _generate_setter_code(self::_DynamicDispatcherCodeGenerator, translator::Translator)::Nothing
+    local W = WasmBuilder
+    local nullable_receiver_local = W.locals(self.function_)[1]
+    local positional_arg_local = W.locals(self.function_)[2]
+
+    local b = W.body(self.function_)
+
+    local no_such_method_block = W.block(b)
+
+    # Check for `null`.
+    local receiver_local = W.add_local(b, translator.top_type_non_nullable[])
+    W.local_get(b, nullable_receiver_local)
+    W.br_on_null(b, no_such_method_block)
+    W.local_set(b, receiver_local)
+
+    local class_id_local = W.add_local(b, W.IR.NumType_i32)
+    W.local_get(b, receiver_local)
+    load_class_id(b, translator, receiver_local.type)
+    W.local_set(b, class_id_local)
+
+    _emit_dynamic_dispatch_table_call(self, b, self.caller_shape, class_id_local, receiver_local,
+        (ib::WasmBuilder.InstructionsBuilder) -> W.local_get(ib, positional_arg_local), no_such_method_block)
+
+    W.var"end"(b)  # noSuchMethodBlock
+    W.local_get(b, nullable_receiver_local)
+    create_setter_invocation_object(translator, b, self.caller_shape.name, positional_arg_local)
+    call_reference(translator, translator.invoke_no_such_method[], b)
+
+    W.drop(b)  # drop noSuchMethod return value
+    W.local_get(b, positional_arg_local)
+    W.return_(b)
+    W.var"end"(b)
+    return nothing
+end
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:178 _DynamicDispatcherCodeGenerator._generateMethodCode" function _generate_method_code(self::_DynamicDispatcherCodeGenerator, translator::Translator)::Nothing
+    local W = WasmBuilder
+    local caller_shape = self.caller_shape::MethodCallShape
+    local b = W.body(self.function_)
+    local locals = W.locals(self.function_)
+
+    local nullable_receiver_local = locals[1]  # ref #Top
+
+    local no_such_method_block = W.block(b)
+
+    # Check for `null`.
+    local receiver_local = W.add_local(b, translator.top_type_non_nullable[])
+    W.local_get(b, nullable_receiver_local)
+    W.br_on_null(b, no_such_method_block)
+    W.local_set(b, receiver_local)
+
+    local class_id_local = W.add_local(b, W.IR.NumType_i32)
+    W.local_get(b, receiver_local)
+    load_class_id(b, translator, receiver_local.type)
+    W.local_set(b, class_id_local)
+
+    # Try calling the method.
+    _emit_dynamic_dispatch_table_call(self, b, caller_shape, class_id_local, receiver_local, function (ib::WasmBuilder.InstructionsBuilder)
+        for i in 0:total_argument_count(caller_shape) - 1
+            W.local_get(ib, locals[2 + i])
+        end
+    end, no_such_method_block)
+
+    # Try calling via field.
+    _emit_dynamic_dispatch_table_call_via_field(self, b, caller_shape, class_id_local, nullable_receiver_local, receiver_local, no_such_method_block)
+
+    W.var"end"(b)  # noSuchMethodBlock
+
+    # Unable to find a matching member, call `noSuchMethod`
+    W.local_get(b, nullable_receiver_local)
+    for i in 0:total_argument_count(caller_shape) - 1
+        W.local_get(b, locals[2 + i])
+    end
+    call_function(translator, get_invocation_creator_stub(translator.functions[], caller_shape), b)
+    call_reference(translator, translator.invoke_no_such_method[], b)
+    W.return_(b)
+    W.var"end"(b)
+    return nothing
+end
 
 """
-_DynamicDispatcherCallTarget's dart fields: `translator`, `callShape`, `callingModule`, `function`.
+Emits code that tries to invoke the target via the dynamic table. It may find the target, call it
+and return; explicitly jump to NSM; or continue execution after this call (the caller may continue
+trying call-via-field, or run NSM).
 """
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:35 _DynamicDispatcherCallTarget" @unported struct _DynamicDispatcherCallTarget <: CallTarget end
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:241 _DynamicDispatcherCodeGenerator._emitDynamicDispatchTableCall" function _emit_dynamic_dispatch_table_call(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, caller_shape::CallShape,
+        class_id_local::WasmBuilder.IR.Local, receiver_local::WasmBuilder.IR.Local, push_arguments::Function, no_such_method_block::WasmBuilder.Label)::Nothing
+    local W = WasmBuilder
+    local translator = self.translator::Translator
+    W.comment(b, "_emitDynamicDispatchTableCall($caller_shape)")
+    local table = translator.dynamic_dispatch_table[]
+    local selector = get(table.dynamic_selectors, caller_shape, nothing)
+    local offset = selector === nothing ? nothing : selector.offset
+    (selector === nothing || offset === nothing) && return nothing
+
+    local unsuccessful = W.block(b)
+    local class_ids_table = get_class_ids_table(table, b.module_builder)
+    local index_local = W.add_local(b, W.IR.NumType_i32)
+    W.local_get(b, class_id_local)
+    if offset != 0
+        W.i32_const(b, offset)
+        W.i32_add(b)
+    end
+    W.local_tee(b, index_local)
+    W.table_size(b, class_ids_table)
+    W.i32_ge_u(b)
+    W.br_if(b, unsuccessful)
+
+    W.local_get(b, index_local)
+    W.table_get(b, class_ids_table)
+    W.br_on_null(b, unsuccessful)
+    W.i31_get_u(b)
+    W.local_get(b, class_id_local)
+    W.i32_eq(b)
+
+    W.if_(b)  # classid match
+    W.local_get(b, receiver_local)
+    push_arguments(b)
+    W.local_get(b, index_local)
+    record_dynamic_selector_use(translator.functions[], selector)
+    W.table_get(b, get_targets_table(table, b.module_builder))
+
+    # We know that the target class has a method with the correct name, but it
+    # may not support the call shape we're using here. In this case the table
+    # will have correct class id (so we pass above test) but there's no
+    # function to call, as the shape doesn't match.
+    # => We have to NSM here and not continue to call-via-field as that's
+    #    incorrect.
+    W.br_on_null(b, no_such_method_block)
+
+    W.ref_cast(b, W.IR.RefType(selector.signature; nullable = false))
+    W.call_ref(b, selector.signature)
+    W.return_(b)
+    W.var"end"(b)  # if_ classid match
+
+    W.var"end"(b)  # fall through to unsuccessful
+    return nothing
+end
 
 """
-_DynamicDispatcherCodeGenerator's dart fields: `translator`, `callerShape`, `function`.
+Tries to perform a dynamic method invocation via calling through getter.
+
+The caller established that the receiver does not have the method, but it may have a getter with
+same name that returns a callable (closure or object with `.call` method).
 """
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:66 _DynamicDispatcherCodeGenerator" @unported struct _DynamicDispatcherCodeGenerator <: CodeGenerator end
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:305 _DynamicDispatcherCodeGenerator._emitDynamicDispatchTableCallViaField" function _emit_dynamic_dispatch_table_call_via_field(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, caller_shape::CallShape,
+        class_id_local::WasmBuilder.IR.Local, nullable_receiver_local::WasmBuilder.IR.Local, receiver_local::WasmBuilder.IR.Local, no_such_method_block::WasmBuilder.Label)::Nothing
+    local W = WasmBuilder
+    local translator = self.translator::Translator
+    W.comment(b, "_emitDynamicDispatchTableCallViaField")
+    local table = translator.dynamic_dispatch_table[]
+    local selector = get(table.dynamic_selectors, GetterCallShape(caller_shape.name), nothing)
+    local offset = selector === nothing ? nothing : selector.offset
+    (selector === nothing || offset === nothing) && return nothing
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:24 DynamicDispatchers" @unported function DynamicDispatchers(translator, calling_module) end
+    local class_ids_table = get_class_ids_table(table, b.module_builder)
+    local index_local = W.add_local(b, W.IR.NumType_i32)
+    W.local_get(b, class_id_local)
+    if offset != 0
+        W.i32_const(b, offset)
+        W.i32_add(b)
+    end
+    W.local_tee(b, index_local)
+    W.table_size(b, class_ids_table)
+    W.i32_ge_u(b)
+    W.br_if(b, no_such_method_block)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:26 DynamicDispatchers.getDispatcher" @unported function get_dispatcher(self::DynamicDispatchers, shape::CallShape) end
+    W.local_get(b, index_local)
+    W.table_get(b, class_ids_table)
+    W.br_on_null(b, no_such_method_block)
+    W.i31_get_u(b)
+    W.local_get(b, class_id_local)
+    W.i32_eq(b)
+    W.if_(b)
+    # Match! Load from targets table and call getter.
+    W.local_get(b, receiver_local)
+    W.local_get(b, index_local)
+    record_dynamic_selector_use(translator.functions[], selector)
+    W.call_indirect(b, selector.signature, get_targets_table(table, b.module_builder))
+    # This also updates the `noSuchMethod` receiver.
+    W.local_tee(b, nullable_receiver_local)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:40 _DynamicDispatcherCallTarget" @unported function _DynamicDispatcherCallTarget(translator, call_shape, calling_module) end
+    # Throw `NoSuchMethodError` if the value is null
+    W.br_on_null(b, no_such_method_block)
+    W.local_tee(b, receiver_local)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:47 _DynamicDispatcherCallTarget.name" @unported function name(self::_DynamicDispatcherCallTarget) end
+    _emit_call_with_receiver(self, b, receiver_local, no_such_method_block)
+    W.return_(b)
+    W.var"end"(b)
+    return nothing
+end
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:50 _DynamicDispatcherCallTarget.supportsInlining" @unported function supports_inlining(self::_DynamicDispatcherCallTarget) end
+"""
+Try to call a callable object (closure or object with `.call()` method).
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:71 _DynamicDispatcherCodeGenerator" @unported function _DynamicDispatcherCodeGenerator(translator, caller_shape, function_) end
+The caller established that the dynamic call receiver doesn't have a method, but it had a getter with
+same name. It called the getter which may have returned a callable object. This method tries to
+call it.
+"""
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:365 _DynamicDispatcherCodeGenerator._emitCallWithReceiver" function _emit_call_with_receiver(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, receiver_local::WasmBuilder.IR.Local, no_such_method_block::WasmBuilder.Label)::Nothing
+    local W = WasmBuilder
+    local translator = self.translator::Translator
+    local caller_shape = self.caller_shape::MethodCallShape
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:78 _DynamicDispatcherCodeGenerator.generate" @unported function generate(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
+    # Invoke "call" if the value is not a closure
+    load_class_id(b, translator, receiver_local.type)
+    W.i32_const(b, translator.closure_info[]._class_id)
+    W.i32_ne(b)
+    W.if_(b)
+    # Value is not a closure
+    local call_forwarder = var"function"(get_dispatcher(get_dynamic_dispatchers_for_module(translator, b.module_builder),
+        MethodCallShape(:call, caller_shape.type_count, caller_shape.positional_count, caller_shape.named)))
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:99 _DynamicDispatcherCodeGenerator._generateGetterCode" @unported function _generate_getter_code(self::_DynamicDispatcherCodeGenerator, translator::Translator) end
+    W.local_get(b, receiver_local)
+    local locals = W.locals(self.function_)
+    for i in 0:total_argument_count(caller_shape) - 1
+        W.local_get(b, locals[2 + i])
+    end
+    call_function(translator, call_forwarder, b)
+    W.return_(b)
+    W.var"end"(b)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:134 _DynamicDispatcherCodeGenerator._generateSetterCode" @unported function _generate_setter_code(self::_DynamicDispatcherCodeGenerator, translator::Translator) end
+    # Cast the closure to `#ClosureBase`
+    local closure_base_type = W.IR.RefType_def(translator.closure_layouter[].closure_base_struct[]; nullable = false)
+    local closure_local = W.add_local(b, closure_base_type)
+    W.local_get(b, receiver_local)
+    W.ref_cast(b, closure_base_type)
+    W.local_set(b, closure_local)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:178 _DynamicDispatcherCodeGenerator._generateMethodCode" @unported function _generate_method_code(self::_DynamicDispatcherCodeGenerator, translator::Translator) end
+    _emit_closure_call(self, b, closure_local, no_such_method_block)
+    return nothing
+end
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:241 _DynamicDispatcherCodeGenerator._emitDynamicDispatchTableCall" @unported function _emit_dynamic_dispatch_table_call(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, caller_shape::CallShape, class_id_local::WasmBuilder.IR.Local, receiver_local::WasmBuilder.IR.Local, push_arguments::Function, no_such_method_block::WasmBuilder.Label) end
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:411 _DynamicDispatcherCodeGenerator._emitClosureCall" function _emit_closure_call(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, no_such_method_block::WasmBuilder.Label)::Nothing
+    local W = WasmBuilder
+    local translator = self.translator::Translator
+    local type_args_local, positional_args_local, named_args_local = _create_argument_arrays(self, b)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:305 _DynamicDispatcherCodeGenerator._emitDynamicDispatchTableCallViaField" @unported function _emit_dynamic_dispatch_table_call_via_field(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, caller_shape::CallShape, class_id_local::WasmBuilder.IR.Local, nullable_receiver_local::WasmBuilder.IR.Local, receiver_local::WasmBuilder.IR.Local, no_such_method_block::WasmBuilder.Label) end
+    local caller_shape = self.caller_shape::MethodCallShape
+    generate_dynamic_closure_call_shape_and_type_check(translator, b, closure_local, type_args_local, positional_args_local, named_args_local, no_such_method_block)
+    local layouter = translator.closure_layouter[]
+    local locals = W.locals(self.function_)
+    local emit_call_for_type_count(type_count::Int) = begin
+        local representation = get_closure_representation(layouter, type_count, caller_shape.positional_count, caller_shape.named)
+        if representation === nothing
+            W.unreachable(b)
+            return nothing
+        end
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:365 _DynamicDispatcherCodeGenerator._emitCallWithReceiver" @unported function _emit_call_with_receiver(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, receiver_local::WasmBuilder.IR.Local, no_such_method_block::WasmBuilder.Label) end
+        W.local_get(b, closure_local)
+        W.struct_get(b, layouter.closure_base_struct[], FieldIndex_closure_context())
+        for i in 0:type_count - 1
+            W.local_get(b, type_args_local)
+            W.i32_const(b, i)
+            W.array_get(b, translator.type_array_type[])
+        end
+        for i in 0:caller_shape.positional_count - 1
+            W.local_get(b, locals[2 + caller_shape.type_count + i])
+        end
+        for i in 0:length(caller_shape.named) - 1
+            W.local_get(b, locals[2 + caller_shape.type_count + caller_shape.positional_count + i])
+        end
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:411 _DynamicDispatcherCodeGenerator._emitClosureCall" @unported function _emit_closure_call(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, no_such_method_block::WasmBuilder.Label) end
+        local vtable = representation.vtable_struct
+        local vtable_index = field_index_for_signature(representation, caller_shape.positional_count, caller_shape.named)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:500 _DynamicDispatcherCodeGenerator._createArgumentArrays" @unported function _create_argument_arrays(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder) end
+        W.local_get(b, closure_local)
+        W.struct_get(b, layouter.closure_base_struct[], FieldIndex_closure_vtable())
+        W.ref_cast(b, W.IR.RefType(vtable; nullable = false))
+        W.struct_get(b, vtable, vtable_index)
+        W.call_ref(b, get_vtable_entry_at(vtable, vtable_index))
+        return nothing
+    end
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:596 generateDynamicClosureCallShapeAndTypeCheck" @unported function generate_dynamic_closure_call_shape_and_type_check(translator::Translator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local, no_such_method_block::WasmBuilder.Label) end
+    if caller_shape.type_count == 0
+        local max_type_count = max_type_argument_count(layouter)
+        emit_dense_table_branch(b, W.IR.ValueType[translator.top_type[]], max_type_count,
+            () -> (W.local_get(b, type_args_local); W.array_len(b)),
+            (type_count::Int) -> emit_call_for_type_count(type_count),
+            () -> W.unreachable(b))
+    else
+        emit_call_for_type_count(caller_shape.type_count)
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:656 generateDynamicClosureCallViaDynamicEntry" @unported function generate_dynamic_closure_call_via_dynamic_entry(translator::Translator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local) end
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:500 _DynamicDispatcherCodeGenerator._createArgumentArrays" function _create_argument_arrays(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder)::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    local W = WasmBuilder
+    local translator = self.translator::Translator
+    local caller_shape = self.caller_shape::MethodCallShape
+    local locals = W.locals(self.function_)
+    local constants = translator.constants[]
+    # Load type parameter as WasmArray<_Type>
+    local type_args_local = W.add_local(b, translator.type_array_type_ref[])
+    if caller_shape.type_count == 0
+        local empty_array = make_array_of(constants, Type, NirConst[])
+        instantiate_constant(constants, b, empty_array, translator.type_array_type_ref[])
+    else
+        for i in 0:caller_shape.type_count - 1
+            W.local_get(b, locals[2 + i])
+        end
+        W.array_new_fixed(b, translator.type_array_type[], caller_shape.type_count)
+    end
+    W.local_set(b, type_args_local)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:687 generateDynamicClosureCallViaPositionalArgs" @unported function generate_dynamic_closure_call_via_positional_args(translator::Translator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local) end
+    # Load positional parameters as WasmArray<Object?>: Julia's Object? is Any
+    local positional_args_local = W.add_local(b, translator.nullable_object_array_type_ref[])
+    if caller_shape.positional_count == 0
+        local empty_array = make_array_of(constants, Any, NirConst[])
+        instantiate_constant(constants, b, empty_array, translator.nullable_object_array_type_ref[])
+    else
+        for i in 0:caller_shape.positional_count - 1
+            W.local_get(b, locals[2 + caller_shape.type_count + i])
+        end
+        W.array_new_fixed(b, translator.nullable_object_array_type[], caller_shape.positional_count)
+    end
+    W.local_set(b, positional_args_local)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:766 createGetterInvocationObject" @unported function create_getter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol) end
+    # Load named parameters as WasmArray<Object?>
+    local named_args_local = W.add_local(b, translator.nullable_object_array_type_ref[])
+    if isempty(caller_shape.named)
+        local empty_array = make_array_of(constants, Any, NirConst[])
+        instantiate_constant(constants, b, empty_array, translator.nullable_object_array_type_ref[])
+    else
+        for i in 0:length(caller_shape.named) - 1
+            instantiate_constant(constants, b, NirConst(Core.Const(symbol_for_named_parameter(translator.symbols[], caller_shape.named[i + 1]))), translator.top_type[])
+            W.local_get(b, locals[2 + caller_shape.type_count + caller_shape.positional_count + i])
+        end
+        W.array_new_fixed(b, translator.nullable_object_array_type[], length(caller_shape.named) * 2)
+    end
+    W.local_set(b, named_args_local)
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:780 createSetterInvocationObject" @unported function create_setter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol, positional_arg_local::WasmBuilder.IR.Local) end
+    return (type_args_local, positional_args_local, named_args_local)
+end
+
+"""
+Generate code that checks shape and type of the closure.
+
+`closure_local` should be a local of type `ref #ClosureBase` containing a closure value;
+`type_args_local` is a `WasmArray<_Type>`, `pos_args_local` a `WasmArray<Object?>`, and
+`named_args_local` a `WasmArray<Object?>` of (symbol, value) pairs. Will update `type_args_local`
+with default type arguments (if needed). `no_such_method_block` is used as the `br` target when the
+shape check fails.
+"""
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:596 generateDynamicClosureCallShapeAndTypeCheck" function generate_dynamic_closure_call_shape_and_type_check(translator::Translator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local,
+        type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local, no_such_method_block::WasmBuilder.Label)::Nothing
+    local W = WasmBuilder
+    local at = "generateDynamicClosureCallShapeAndTypeCheck"
+    type_args_local.type == translator.type_array_type_ref[] ||
+        reject!(Internal("dart2wasm/lib/dynamic_dispatchers.dart:605 $at: the type arguments local is a $(type_args_local.type)"), at)
+    pos_args_local.type == translator.nullable_object_array_type_ref[] ||
+        reject!(Internal("dart2wasm/lib/dynamic_dispatchers.dart:606 $at: the positional arguments local is a $(pos_args_local.type)"), at)
+    named_args_local.type == translator.nullable_object_array_type_ref[] ||
+        reject!(Internal("dart2wasm/lib/dynamic_dispatchers.dart:607 $at: the named arguments local is a $(named_args_local.type)"), at)
+    local layouter = translator.closure_layouter[]
+
+    # Read the `_FunctionType` field
+    local function_type_local = W.add_local(b, layouter.function_type_type[])
+    W.local_get(b, closure_local)
+    W.struct_get(b, layouter.closure_base_struct[], FieldIndex_closure_runtime_type())
+    W.local_tee(b, function_type_local)
+
+    # If no type arguments were supplied but the closure has type parameters, use
+    # the default values.
+    W.local_get(b, type_args_local)
+    W.array_len(b)
+    W.i32_eqz(b)
+    W.if_(b)
+    W.local_get(b, function_type_local)
+    W.struct_get(b, translator.class_info[translator.function_type_class[]].struct_,
+        translator.field_index[translator.function_type_type_parameter_defaults_field[]])
+    W.local_set(b, type_args_local)
+    W.var"end"(b)
+
+    # Check closure shape
+    # [functionTypeLocal] already on the stack.
+    W.local_get(b, type_args_local)
+    W.local_get(b, pos_args_local)
+    W.local_get(b, named_args_local)
+    call_reference(translator, translator.check_closure_shape[], b)
+    W.i32_eqz(b)
+    W.br_if(b, no_such_method_block)
+
+    # Shape check passed, check types
+    if !omit_implicit_type_checks(translator.options)
+        W.local_get(b, function_type_local)
+        W.local_get(b, type_args_local)
+        W.local_get(b, pos_args_local)
+        W.local_get(b, named_args_local)
+        call_reference(translator, translator.check_closure_type[], b)
+        W.drop(b)
+    end
+
+    # Type check passed \o/
+    return nothing
+end
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:656 generateDynamicClosureCallViaDynamicEntry" function generate_dynamic_closure_call_via_dynamic_entry(translator::Translator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local,
+        type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local)::Nothing
+    local W = WasmBuilder
+    local layouter = translator.closure_layouter[]
+    layouter.uses_function_apply_with_named_arguments[] ||
+        reject!(Internal("dart2wasm/lib/dynamic_dispatchers.dart:664 generateDynamicClosureCallViaDynamicEntry: no closure uses Function.apply with named arguments"), "generateDynamicClosureCallViaDynamicEntry")
+
+    # Type check passed, call vtable entry
+    W.local_get(b, closure_local)
+    W.local_get(b, type_args_local)
+    W.local_get(b, pos_args_local)
+    W.local_get(b, named_args_local)
+
+    # Get vtable
+    W.local_get(b, closure_local)
+    W.struct_get(b, layouter.closure_base_struct[], FieldIndex_closure_vtable())
+
+    # Get entry function
+    local index = layouter.vtable_dynamic_closure_call_entry_index[]
+    index === nothing &&
+        reject!(Internal("dart2wasm/lib/dynamic_dispatchers.dart:681 generateDynamicClosureCallViaDynamicEntry: the vtable has no dynamic call entry"), "generateDynamicClosureCallViaDynamicEntry")
+    W.struct_get(b, layouter.vtable_base_struct[], index)
+    W.call_ref(b, translator.dynamic_call_vtable_entry_function_type[])
+    return nothing
+end
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:687 generateDynamicClosureCallViaPositionalArgs" function generate_dynamic_closure_call_via_positional_args(translator::Translator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local,
+        type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local)::Nothing
+    local W = WasmBuilder
+    local layouter = translator.closure_layouter[]
+    !layouter.uses_function_apply_with_named_arguments[] ||
+        reject!(Internal("dart2wasm/lib/dynamic_dispatchers.dart:694 generateDynamicClosureCallViaPositionalArgs: closures use Function.apply with named arguments"), "generateDynamicClosureCallViaPositionalArgs")
+
+    local max_type_count = max_type_argument_count(layouter)
+    emit_dense_table_branch(b, W.IR.ValueType[translator.top_type[]], max_type_count,
+        () -> (W.local_get(b, type_args_local); W.array_len(b)),
+        function (type_count::Int)
+            local max_positional_count = max_positional_count_for(layouter, type_count)
+            emit_dense_table_branch(b, W.IR.ValueType[translator.top_type[]], max_positional_count,
+                () -> (W.local_get(b, pos_args_local); W.array_len(b)),
+                function (pos_count::Int)
+                    local representation = get_closure_representation(layouter, type_count, pos_count, String[])
+                    if representation === nothing
+                        # This is a call combination that the closure layouter determined
+                        # cannot occur in the program.
+                        W.unreachable(b)
+                        return nothing
+                    end
+
+                    W.local_get(b, closure_local)
+                    W.struct_get(b, layouter.closure_base_struct[], FieldIndex_closure_context())
+                    for i in 0:type_count - 1
+                        W.local_get(b, type_args_local)
+                        W.i32_const(b, i)
+                        W.array_get(b, translator.type_array_type[])
+                    end
+                    for i in 0:pos_count - 1
+                        W.local_get(b, pos_args_local)
+                        W.i32_const(b, i)
+                        W.array_get(b, translator.nullable_object_array_type[])
+                    end
+
+                    local vtable = representation.vtable_struct
+                    local vtable_index = field_index_for_signature(representation, pos_count, String[])
+
+                    W.local_get(b, closure_local)
+                    W.struct_get(b, layouter.closure_base_struct[], FieldIndex_closure_vtable())
+                    W.ref_cast(b, W.IR.RefType(vtable; nullable = false))
+                    W.struct_get(b, vtable, vtable_index)
+                    W.call_ref(b, get_vtable_entry_at(vtable, vtable_index))
+                    return nothing
+                end,
+                () -> W.unreachable(b))
+            return nothing
+        end,
+        () -> W.unreachable(b))
+    return nothing
+end
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:766 createGetterInvocationObject" function create_getter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol)::Nothing
+    instantiate_constant(translator.constants[], b, NirConst(Core.Const(getter_symbol_from_name(translator.symbols[], member_name))),
+        translator.class_info[Symbol].non_nullable_type)
+    call_reference(translator, translator.invocation_getter_factory[], b)
+    return nothing
+end
+
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:780 createSetterInvocationObject" function create_setter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol, positional_arg_local::WasmBuilder.IR.Local)::Nothing
+    instantiate_constant(translator.constants[], b, NirConst(Core.Const(setter_symbol_from_name(translator.symbols[], member_name))),
+        translator.class_info[Symbol].non_nullable_type)
+    local W = WasmBuilder
+    W.local_get(b, positional_arg_local)
+    call_reference(translator, translator.invocation_setter_factory[], b)
+    return nothing
+end
