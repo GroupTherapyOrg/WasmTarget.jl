@@ -59,8 +59,16 @@ export CHECK_RESERVED=1
 for try in 1 2 3; do
   git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
   if ! git merge-base --is-ancestor "origin/$MARCH" HEAD; then
-    echo "ship: another lane landed while this one checked; checking again under the landing lock"
-    checked_rebase || { echo "ship: a commit's check is red on the new base or the rebase conflicts; the branch is as it was. Fix it and ship again"; exit 1; }
+    # every commit already passed on its own tree before the lock; under it, the stack is rebased
+    # onto the new base and its tip checked once, as a merge queue checks the head it lands (bors,
+    # GitHub's merge queue), so the lock is held for one check, never one per commit
+    echo "ship: another lane landed while this one checked; checking the rebased tip under the landing lock"
+    if ! git rebase -q "origin/$MARCH"; then
+      if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then git rebase --abort; fi
+      echo "ship: the rebase onto the new base conflicts; the branch is as it was. Fix it and ship again"; exit 1
+    fi
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE CHECK_BASE="origin/$MARCH" bash dev/check.sh ||
+      { echo "ship: the rebased tip is red on the new base; the branch is as it was. Fix it and ship again"; exit 1; }
   fi
   git fetch -q origin "$MARCH" && git merge-base --is-ancestor "origin/$MARCH" HEAD && break
 done
