@@ -21,10 +21,10 @@ _rejection(f) = try; f(); nothing; catch x; x isa WasmTarget.RejectionError ? x.
     if sdk !== nothing
         local src = read(joinpath(sdk, "pkg", "dart2wasm", "lib", "js", "runtime_blob.dart"), String)
         local grab(start, stop) = (i = findfirst(start, src)[end] + 1; src[i:findnext(stop, src, i)[1] - 1])
-        local keep(tpl) = Dict(String(m[:varname]) => "<<$(m[:varname])>>" for m in eachmatch(D.Template__template_variable_reg_exp(), grab(tpl...)))
+        local keep(tpl) = Dict(String(m[:varname]) => "<<$(m[:varname])>>" for m in eachmatch(D.Template__template_variable_reg_exp[], grab(tpl...)))
         for (f, tpl) in ((D.js_runtime_blob_template, ("final jsRuntimeBlobTemplate = Template(r'''\n", "''');")),
                          (D.module_loading_helper_template, ("final moduleLoadingHelperTemplate = Template(r'''\n", "''');")))
-            @test D.instantiate(f(), keep(tpl)) == grab(tpl...)
+            @test D.instantiate(f[], keep(tpl)) == grab(tpl...)
         end
         @test D.js_poly_fill_methods() == grab("const String jsPolyFillMethods = r'''\n", "''';")
     end
