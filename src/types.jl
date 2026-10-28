@@ -36,8 +36,10 @@ dart's late fields read its runtime library's classes. Julia's counterparts:
 - `typeListExpectedType` (dart's `List<_Type>`) is `Core.SimpleVector`, Julia's list of types
   (`T.parameters`).
 - `namedParameterClassInfo`, `namedParametersExpectedType` and `recordTypeNamesFieldExpectedType`
-  belong to dart's function and record types. Julia has no function types, and its records are
-  `Tuple` and `NamedTuple` types, plain DataTypes, so reading any of the three rejects as `Internal`.
+  belong to dart's function and record types. A Julia function type is a method signature, a Tuple
+  type of positional parameters (keyword arguments are Core.kwcall's own method), and its records
+  are `Tuple` and `NamedTuple` types, plain DataTypes, so reading any of the three rejects as
+  `Internal`.
 
 `functionTypeParameterOffset` and `functionTypeParameterIndex` are keyed by Julia's binder of type
 parameters, a `UnionAll`, and its `TypeVar`. The translator is held as `KernelNodes`
@@ -72,7 +74,7 @@ parameters, a `UnionAll`, and its `TypeVar`. The translator is held as `KernelNo
             Late{ClassInfo}("dart2wasm/lib/types.dart:44 Types.typeClassInfo",
                 () -> info(supertype(DataType), "dart2wasm/lib/types.dart:44 Types.typeClassInfo")),
             Late{ClassInfo}("dart2wasm/lib/types.dart:48 Types.namedParameterClassInfo",
-                none("dart2wasm/lib/types.dart:48 Types.namedParameterClassInfo", "Julia has no function types, so no named parameter")),
+                none("dart2wasm/lib/types.dart:48 Types.namedParameterClassInfo", "a Julia function type is a method signature, a Tuple type of positional parameters; keyword arguments are Core.kwcall's own method, so no named parameter")),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/types.dart:52 Types.typeListExpectedType",
                 () -> info(Core.SimpleVector, "dart2wasm/lib/types.dart:52 Types.typeListExpectedType").non_nullable_type),
             Late{WasmBuilder.IR.ArrayType}("dart2wasm/lib/types.dart:56 Types.typeArrayArrayType",
@@ -80,7 +82,7 @@ parameters, a `UnionAll`, and its `TypeVar`. The translator is held as `KernelNo
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/types.dart:62 Types.typeArrayExpectedType",
                 () -> WasmBuilder.IR.RefType_def(self.type_array_array_type[]; nullable = false)),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/types.dart:68 Types.namedParametersExpectedType",
-                none("dart2wasm/lib/types.dart:68 Types.namedParametersExpectedType", "Julia has no function types, so no named parameters")),
+                none("dart2wasm/lib/types.dart:68 Types.namedParametersExpectedType", "a Julia function type is a method signature, a Tuple type of positional parameters; keyword arguments are Core.kwcall's own method, so no named parameters")),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/types.dart:74 Types.recordTypeNamesFieldExpectedType",
                 none("dart2wasm/lib/types.dart:74 Types.recordTypeNamesFieldExpectedType", "Julia's records are Tuple and NamedTuple types, DataTypes with no names field")),
             Late{RuntimeTypeInformation}("dart2wasm/lib/types.dart:79 Types.rtt", () -> RuntimeTypeInformation(self.translator)),
@@ -315,9 +317,10 @@ end
 """Wasm value type for non-nullable type values."""
 @parity "dart2wasm/lib/types.dart:111 Types.nonNullableTypeType" non_nullable_type_type(self::Types)::WasmBuilder.IR.RefType = self.type_class_info[].non_nullable_type
 
-# dart's `_NamedParameter` type, a part of its function types, which Julia does not have
+# dart's `_NamedParameter` type, a part of its function types; a Julia function type is a method
+# signature, a Tuple type of positional parameters (src/julia/kernel.jl), with no named one
 @parity "dart2wasm/lib/types.dart:113 Types.namedParameterType" named_parameter_type(self::Types)::Type =
-    reject!(Internal("dart2wasm/lib/types.dart:113 Types.namedParameterType: Julia has no function types, so no named parameter"), "Types.namedParameterType")
+    reject!(Internal("dart2wasm/lib/types.dart:113 Types.namedParameterType: a Julia function type is a method signature, a Tuple type of positional parameters; keyword arguments are Core.kwcall's own method, so no named parameter"), "Types.namedParameterType")
 
 """The type of a type value: dart's `_Type`, Julia's `Type`, which every type is an instance of."""
 @parity "dart2wasm/lib/types.dart:116 Types.typeType" type_type(self::Types)::Type = Type
@@ -396,11 +399,12 @@ flattened and ordered), and it has no `FutureOr`, so the type is already normal.
 
 # dart's FutureOr, which Julia does not have
 @parity "dart2wasm/lib/types.dart:275 Types._makeFutureOrType" _make_future_or_type(self::Types, code_gen::AstCodeGenerator, type_::Type)::Nothing =
-    reject!(Internal("dart2wasm/lib/types.dart:275 Types._makeFutureOrType: Julia has no FutureOr"), "Types._makeFutureOrType")
+    reject!(Internal("dart2wasm/lib/types.dart:275 Types._makeFutureOrType: Julia has no FutureOr; a task's result is a value of its own type, fetched"), "Types._makeFutureOrType")
 
-# dart's function types; a Julia function's type is a DataType (`typeof(f)`), made as any other
+# dart's function types; a Julia function type is a method signature, a Tuple type (src/julia/kernel.jl),
+# a DataType value made as any other
 @parity "dart2wasm/lib/types.dart:282 Types._makeFunctionType" _make_function_type(self::Types, code_gen::AstCodeGenerator, type_::Type)::Nothing =
-    reject!(Internal("dart2wasm/lib/types.dart:282 Types._makeFunctionType: Julia has no function types; typeof(f) is a DataType"), "Types._makeFunctionType")
+    reject!(Internal("dart2wasm/lib/types.dart:282 Types._makeFunctionType: a Julia function type is a method signature, a Tuple type, made as any DataType value by _makeInterfaceType"), "Types._makeFunctionType")
 
 """
 Makes a type value on the stack and returns its wasm type. A type with no free type variable is a
