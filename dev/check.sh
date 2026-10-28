@@ -7,6 +7,22 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 . dev/depot.sh; wt_depot_export "$(pwd)"
+# D31: the machine is shared (Dale's own jobs run beside the lanes), so at most three checks run at
+# once across every lane, each holding a slot in the repository's common dir; a slot whose holder
+# died is freed. The wait is reported and not counted in D14's band, which times the check itself.
+slots="$(git rev-parse --path-format=absolute --git-common-dir)/wt-check-slots"; mkdir -p "$slots"
+w0=$(date +%s); slot=""
+while [ -z "$slot" ]; do
+  for i in 1 2 3; do
+    if mkdir "$slots/$i" 2>/dev/null; then echo $$ > "$slots/$i/pid"; slot=$i; break; fi
+    holder=$(cat "$slots/$i/pid" 2>/dev/null || true)
+    [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null && rm -rf "$slots/$i"
+  done
+  [ -n "$slot" ] || sleep 2
+done
+trap 'rm -rf "$slots/$slot"' EXIT
+[ $(( $(date +%s) - w0 )) -gt 0 ] && echo "check: waited $(( $(date +%s) - w0 ))s for a slot"
+export JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2
 mkdir -p .wtd; s0=$(date +%s)
 base=${CHECK_BASE:-origin/wt2}
 julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1
