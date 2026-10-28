@@ -145,29 +145,3 @@ end
     local e2 = try; l.function_type_type[]; nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Internal && occursin("function type's class", e2.rejection.site)
 end
-
-@testset "closures.dart: the capture finder and context collector at depth 0" begin
-    local W = WasmTarget
-    local t = D.Translator(W.check_subset(ClosuresCases.mk, (Int,), "closures"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
-    local body = t.component.bodies[1]
-    local mi = body.ci.def
-    local c = D.Closures(t, mi; find_captures = false)
-    local f = D._CaptureFinder(c, mi)
-    @test D.depth(f) == 0 && f._current_source === mi.def.file && D.translator(f) === t
-    # the member's own body at depth 0: its uses of values, arguments, `this` and static parameters
-    # are no captures, as dart's rule answers there
-    D.visit_function_node(f, body)
-    D.default_variable(f, W.NirSSA(1)); D.visit_variable_get(f, W.NirSSA(1)); D.visit_variable_get(f, W.NirArgument(2))
-    D.visit_type_parameter_type(f, TypeVar(:T)); D.visit_this_expression(f, W.NirArgument(1))
-    @test isempty(c.captures) && isempty(c.lambdas) && !c._is_this_captured && isempty(f.variable_depth)
-    # one level deeper, a variable declared outside is a capture, which Julia never leaves in the NIR
-    push!(f.function_is_sync_star_or_async, false)
-    local e = try; D.visit_variable_get(f, W.NirSSA(1)); nothing; catch x; x; end
-    @test e isa W.RejectionError && e.rejection isa W.Internal
-    D._visit_this(f)
-    @test c._is_this_captured
-    # the context collector: a member's one scope is its own context, the outermost holding `this`
-    local cc = D._ContextCollector(c, false)
-    collect(cc, mi)
-    @test haskey(c.contexts, mi) && c.contexts[mi].contains_this && c.contexts[mi].parent === nothing && cc.current_context === nothing
-end

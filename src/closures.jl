@@ -81,7 +81,8 @@ and the instantiation contexts, each defined on first use.
 dart counts the signatures of every function that may become a closure value and every call of
 one. Julia's verifier admits no call of a function value it cannot resolve to a method
 (src/julia/subset.jl), so every call is resolved and no closure is ever called through a vtable
-(see `collect`). dart's `procedureAttributeMetadata` is TFA's, whose Julia counterpart is the
+(see `collect`); the visitors that walk for them are out of scope (dev/skeleton_scope.toml).
+dart's `procedureAttributeMetadata` is TFA's, whose Julia counterpart is the
 inference the NIR holds. `visitedConstants` serves the walk over Kernel's constant trees, which the
 NIR does not have. `functionTypeType` is the class of a function type's value: a Julia function type
 is a method signature, a Tuple type (src/julia/kernel.jl), whose value is a `DataType`.
@@ -211,8 +212,9 @@ A local function or function expression: dart's FunctionNode, its source, the me
 that member's closures, its index in a pre-order walk of the member's body, and its call target.
 
 Its `enclosingMemberClosures` is held as `AbstractClosures` (src/julia/forward.jl), because Lambda
-and Closures name each other. Julia's counterpart is a closure type's call method. Julia's lowering makes it a method of its own
-(on `typeof(f)`, whose fields are the captures), so `functionNode` is that `Method`, its source the
+and Closures name each other. Julia's counterpart is a closure type's call method, which Julia's
+lowering makes a method of its own (on `typeof(f)`, whose fields are the captures), so
+`functionNode` is its body, a `NirBody` (src/julia/kernel.jl's FunctionNode), its source the
 method's file, and the enclosing member the `MethodInstance` that allocates the closure. The
 closed world reaches the method as any other, so `Closures` creates no Lambda (see
 `Closures._findCaptures`).
@@ -302,45 +304,6 @@ a closure object, so `closurizedFunctions` holds methods.
     Closures(::Val{:_}, translator::KernelNodes, _member::Core.MethodInstance) =
         new(translator, IdDict{NirBody,Lambda}(), Dict{Union{ClassField,TypeVar},Capture}(), IdDict{Core.MethodInstance,Context}(),
             Set{Method}(), _member, false, nothing)
-end
-
-"""
-Finds the variables, type parameters and `this` a member's nested functions capture: each variable's
-and type parameter's depth (the number of nested functions it is declared in), whether each nested
-function is a sync* or async one (a capture of such a function is written), and the source of the
-nodes visited.
-
-In the NIR (src/julia/kernel.jl) a variable is a statement's value or an argument, a type parameter a
-`TypeVar`, and `this` the function object, argument 1. Julia's lowering leaves no nested function in
-a member's body: a closure is a struct of its own, its method compiled as a member. So the walk stays
-at depth 0, where dart's own rule records no capture.
-"""
-@parity "dart2wasm/lib/closures.dart:1594 _CaptureFinder" mutable struct _CaptureFinder
-    const closures::Closures
-    const member::Core.MethodInstance
-    is_in_initializer::Bool
-    const variable_depth::Dict{Union{NirSSA,NirArgument,TypeVar},Int}
-    const function_is_sync_star_or_async::Vector{Bool}
-    _current_source::Symbol
-    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
-    # :1607 is its outer function
-    _CaptureFinder(::Val{:_}, closures::Closures, member::Core.MethodInstance, _current_source::Symbol) =
-        new(closures, member, false, Dict{Union{NirSSA,NirArgument,TypeVar},Int}(), Bool[false], _current_source)
-end
-
-"""
-Collects the contexts of a member with captures: one per function and loop scope, each holding the
-captures declared in it. A Julia member has no capture (see `Closures._findCaptures`), so
-`Closures._collectContexts` never builds one; a context's owner is the member (see `Context`).
-"""
-@parity "dart2wasm/lib/closures.dart:1778 _ContextCollector" mutable struct _ContextCollector
-    const closures::Closures
-    current_context::Union{Context,Nothing}
-    const enable_asserts::Bool
-    is_in_initializer::Bool
-    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
-    # :1784 is its outer function
-    _ContextCollector(::Val{:_}, closures::Closures, enable_asserts::Bool) = new(closures, nothing, enable_asserts, false)
 end
 
 @parity "dart2wasm/lib/closures.dart:19 closureContextFieldType" closure_context_field_type()::WasmBuilder.IR.ValueType = WasmBuilder.IR.RefType_struct(; nullable = false)
@@ -627,47 +590,6 @@ parameters are its keyword arguments.
     return nothing
 end
 
-# dart registers a call's shape for the closure vtables; Julia's verifier admits no call it cannot
-# resolve, so a call of a function value is an invoke of its method and needs no vtable entry
-@parity "dart2wasm/lib/closures.dart:1137 ClosureLayouter._visitFunctionInvocation" _visit_function_invocation(self::ClosureLayouter, arguments::Vector{NirValue})::Nothing = nothing
-
-# a closure's allocation, Expr(:new) of its struct; its method is a member of its own, called by invoke
-@parity "dart2wasm/lib/closures.dart:1146 ClosureLayouter.visitFunctionExpression" visit_function_expression(self::ClosureLayouter, node::NirNew)::Nothing = nothing
-
-# a local function's allocation, Expr(:new) of its struct; its method is called by invoke
-@parity "dart2wasm/lib/closures.dart:1155 ClosureLayouter.visitFunctionDeclaration" visit_function_declaration(self::ClosureLayouter, node::NirNew)::Nothing = nothing
-
-# dart registers a procedure that may be torn off; a Julia function value is an object of its own
-# class, called by invoke, so no member needs a vtable signature
-@parity "dart2wasm/lib/closures.dart:1164 ClosureLayouter.visitProcedure" visit_procedure(self::ClosureLayouter, node::Core.MethodInstance)::Nothing = nothing
-
-# a constructor's body; no member needs a vtable signature
-@parity "dart2wasm/lib/closures.dart:1178 ClosureLayouter.visitConstructor" visit_constructor(self::ClosureLayouter, node::Core.MethodInstance)::Nothing = nothing
-
-# dart records Function.apply with named arguments; Julia's call is an invoke Julia resolved
-@parity "dart2wasm/lib/closures.dart:1185 ClosureLayouter.visitStaticInvocation" visit_static_invocation(self::ClosureLayouter, node::NirInvoke)::Nothing = nothing
-
-# a function's binding as an operand is its singleton object, called by invoke
-@parity "dart2wasm/lib/closures.dart:1196 ClosureLayouter.visitStaticTearOff" visit_static_tear_off(self::ClosureLayouter, node::NirGlobal)::Nothing = nothing
-
-# a function constant is its singleton object, called by invoke
-@parity "dart2wasm/lib/closures.dart:1201 ClosureLayouter.visitStaticTearOffConstantReference" visit_static_tear_off_constant_reference(self::ClosureLayouter, constant::Function)::Nothing = nothing
-
-# a constructor constant is its type's object, called by invoke
-@parity "dart2wasm/lib/closures.dart:1209 ClosureLayouter.visitConstructorTearOffConstantReference" visit_constructor_tear_off_constant_reference(self::ClosureLayouter, constant::Function)::Nothing = nothing
-
-# a factory constant is its type's object, called by invoke
-@parity "dart2wasm/lib/closures.dart:1216 ClosureLayouter.visitRedirectingFactoryTearOffConstantReference" visit_redirecting_factory_tear_off_constant_reference(self::ClosureLayouter, constant::Function)::Nothing = nothing
-
-# dart walks a constant's tree for tear-offs; a NirConst is Julia's value, holding no call
-@parity "dart2wasm/lib/closures.dart:1223 ClosureLayouter.defaultConstantReference" default_constant_reference(self::ClosureLayouter, constant::NirConst)::Nothing = nothing
-
-# a call of a function value Julia resolved to its method, Expr(:invoke): no vtable entry
-@parity "dart2wasm/lib/closures.dart:1230 ClosureLayouter.visitFunctionInvocation" visit_function_invocation(self::ClosureLayouter, node::NirInvoke)::Nothing = nothing
-
-# a dynamic invocation has no Julia counterpart (src/julia/kernel.jl): no value of its node exists
-@parity "dart2wasm/lib/closures.dart:1236 ClosureLayouter.visitDynamicInvocation" visit_dynamic_invocation(self::ClosureLayouter, node::NoCounterpart)::Nothing = nothing
-
 """
 Registers the named parameters of a function, Julia's keyword arguments of the method
 (`Base.kwarg_decl`), in their declared order: each name gets an id, and the names of one function
@@ -798,9 +720,12 @@ holds no nested function and shares no variable with one, and there is no captur
 """
 @parity "dart2wasm/lib/closures.dart:1502 Closures._findCaptures" _find_captures(self::Closures)::Nothing = nothing
 
+# dart collects contexts when the member captures anything; Julia lowering's closure conversion leaves
+# a member no capture (see `_findCaptures`), so the context collector is out of scope
+# (dev/skeleton_scope.toml), and a capture here would be WasmTarget's own defect
 @parity "dart2wasm/lib/closures.dart:1524 Closures._collectContexts" function _collect_contexts(self::Closures)::Nothing
     if !isempty(self.captures) || self._is_this_captured
-        collect(_ContextCollector(self, self.translator.options.enable_asserts), self._member)
+        reject!(Internal("dart2wasm/lib/closures.dart:1524 Closures._collectContexts: a capture in a member, which Julia's closure conversion leaves none of"), "Closures._collectContexts")
     end
     return nothing
 end
@@ -846,178 +771,6 @@ a constructor's or a scope's location; a Julia context's owner is its member.
     end
     return nothing
 end
-
-@parity "dart2wasm/lib/closures.dart:1605 _CaptureFinder.depth" depth(self::_CaptureFinder)::Int = length(self.function_is_sync_star_or_async) - 1
-
-# dart's source of the member's file; a Julia source is the file its method's debuginfo names
-@parity "dart2wasm/lib/closures.dart:1607 _CaptureFinder" _CaptureFinder(closures::Closures, member::Core.MethodInstance)::_CaptureFinder =
-    _CaptureFinder(Val(:_), closures, member, member.def isa Method ? member.def.file : :none)
-
-@parity "dart2wasm/lib/closures.dart:1610 _CaptureFinder.translator" translator(self::_CaptureFinder)::KernelNodes = self.closures.translator
-
-# a file-URI expression has no Julia counterpart (src/julia/kernel.jl)
-@parity "dart2wasm/lib/closures.dart:1615 _CaptureFinder.visitFileUriExpression" visit_file_uri_expression(self::_CaptureFinder, node::NoCounterpart)::Nothing = nothing
-
-"""
-Visits the member's own body at depth 0. A Julia function is neither sync* nor async, and its NIR
-holds no nested function, so visiting its statements at depth 0 records nothing (dart's rule in
-`_visitVariableUse`).
-"""
-@parity "dart2wasm/lib/closures.dart:1621 _CaptureFinder.visitFunctionNode" function visit_function_node(self::_CaptureFinder, node::NirBody)::Nothing
-    local at = "dart2wasm/lib/closures.dart:1621 _CaptureFinder.visitFunctionNode"
-    depth(self) == 0 || reject!(Internal("$at: a nested function node, which _visitLambda skips"), at)
-    self.function_is_sync_star_or_async[1] = false
-    return nothing
-end
-
-# an assert has no Julia counterpart (src/julia/kernel.jl)
-@parity "dart2wasm/lib/closures.dart:1632 _CaptureFinder.visitAssertStatement" visit_assert_statement(self::_CaptureFinder, node::NoCounterpart)::Nothing = nothing
-
-# an assert block has no Julia counterpart (src/julia/kernel.jl)
-@parity "dart2wasm/lib/closures.dart:1639 _CaptureFinder.visitAssertBlock" visit_assert_block(self::_CaptureFinder, node::NoCounterpart)::Nothing = nothing
-
-@parity "dart2wasm/lib/closures.dart:1646 _CaptureFinder.defaultVariable" function default_variable(self::_CaptureFinder, node::Union{NirSSA,NirArgument})::Nothing
-    depth(self) > 0 && (self.variable_depth[node] = depth(self))
-    return nothing
-end
-
-# dart records a generic function's type parameter; a Julia method's static parameter is a TypeVar
-@parity "dart2wasm/lib/closures.dart:1654 _CaptureFinder.visitTypeParameter" function visit_type_parameter(self::_CaptureFinder, node::TypeVar)::Nothing
-    depth(self) > 0 && (self.variable_depth[node] = depth(self))
-    return nothing
-end
-
-"""
-A use of a variable or type parameter: captured when declared outside the current nested function or
-in a sync* or async one. In Julia the walk stays at depth 0 and no function is sync* or async, so no
-use is a capture; one that were would be a NIR value, which Julia's lowering never captures (its
-captures are a closure object's fields), and it rejects as `Internal`. dart's closurized local
-function has no Julia counterpart: a local function used as a value is already a closure object.
-"""
-@parity "dart2wasm/lib/closures.dart:1663 _CaptureFinder._visitVariableUse" function _visit_variable_use(self::_CaptureFinder, variable::Union{NirSSA,NirArgument,TypeVar})::Nothing
-    local at = "dart2wasm/lib/closures.dart:1663 _CaptureFinder._visitVariableUse"
-    local decl_depth = get(self.variable_depth, variable, 0)
-    decl_depth <= depth(self) || reject!(Internal("$at: a variable declared deeper than its use"), at)
-    if decl_depth < depth(self) || self.function_is_sync_star_or_async[decl_depth + 1]
-        reject!(Internal("$at: a capture of $variable, where Julia's lowering makes every capture a closure object's field"), at)
-    end
-    return nothing
-end
-
-@parity "dart2wasm/lib/closures.dart:1680 _CaptureFinder.visitVariableGet" visit_variable_get(self::_CaptureFinder, node::Union{NirSSA,NirArgument})::Nothing = _visit_variable_use(self, node)
-
-# a variable's assignment has no Julia counterpart (src/julia/kernel.jl): the NIR is in SSA form
-@parity "dart2wasm/lib/closures.dart:1686 _CaptureFinder.visitVariableSet" visit_variable_set(self::_CaptureFinder, node::NoCounterpart)::Nothing = nothing
-
-@parity "dart2wasm/lib/closures.dart:1691 _CaptureFinder._visitThis" function _visit_this(self::_CaptureFinder)::Nothing
-    (depth(self) > 0 || self.function_is_sync_star_or_async[1]) && (self.closures._is_this_captured = true)
-    return nothing
-end
-
-# `this` is the function object, argument 1 (src/julia/kernel.jl)
-@parity "dart2wasm/lib/closures.dart:1698 _CaptureFinder.visitThisExpression" visit_this_expression(self::_CaptureFinder, node::NirArgument)::Nothing = _visit_this(self)
-
-@parity "dart2wasm/lib/closures.dart:1703 _CaptureFinder.visitSuperMethodInvocation" visit_super_method_invocation(self::_CaptureFinder, node::NirInvoke)::Nothing = _visit_this(self)
-
-@parity "dart2wasm/lib/closures.dart:1709 _CaptureFinder.visitSuperPropertyGet" visit_super_property_get(self::_CaptureFinder, node::NirInvoke)::Nothing = _visit_this(self)
-
-@parity "dart2wasm/lib/closures.dart:1715 _CaptureFinder.visitSuperPropertySet" visit_super_property_set(self::_CaptureFinder, node::NirInvoke)::Nothing = _visit_this(self)
-
-# a Julia class has no type parameter (its parameters are bound), so a TypeVar in a type is a method's
-# static parameter, dart's generic function's
-@parity "dart2wasm/lib/closures.dart:1721 _CaptureFinder.visitTypeParameterType" visit_type_parameter_type(self::_CaptureFinder, node::TypeVar)::Nothing = _visit_variable_use(self, node)
-
-"""
-A nested function: its Lambda, call target and body visited one level deeper. Julia's NIR holds no
-nested function (a closure's method is a member of its own), so no node reaches here; one that did
-would need its Lambda's call target from the function collector.
-"""
-@parity "dart2wasm/lib/closures.dart:1742 _CaptureFinder._visitLambda" function _visit_lambda(self::_CaptureFinder, node::NirBody)::Nothing
-    local lambda = Lambda__(node, self._current_source, self.member, self.closures, length(self.closures.lambdas))
-    local functions = translator(self).functions[]
-    lambda.call_target[] = LambdaCallTarget(get_lambda_function_type(functions, lambda), translator(self), lambda)
-    self.closures.lambdas[node] = lambda
-    # a Julia function is neither sync* nor async
-    push!(self.function_is_sync_star_or_async, false)
-    pop!(self.function_is_sync_star_or_async)
-    return nothing
-end
-
-# a closure's allocation, Expr(:new) of its struct of captures: no nested function in the member
-@parity "dart2wasm/lib/closures.dart:1766 _CaptureFinder.visitFunctionExpression" visit_function_expression(self::_CaptureFinder, node::NirNew)::Nothing = nothing
-
-# a local function's allocation, Expr(:new) of its struct of captures: no nested function in the member
-@parity "dart2wasm/lib/closures.dart:1771 _CaptureFinder.visitFunctionDeclaration" visit_function_declaration(self::_CaptureFinder, node::NirNew)::Nothing = nothing
-
-@parity "dart2wasm/lib/closures.dart:1784 _ContextCollector" _ContextCollector(closures::Closures, enable_asserts::Bool)::_ContextCollector = _ContextCollector(Val(:_), closures, enable_asserts)
-
-"""
-Collects the member's contexts, then skips each empty parent. dart visits the member's scopes; a
-Julia member's one scope is the member itself (its NIR has no nested function, and its loops are
-jumps), so it gets one context.
-"""
-@parity "dart2wasm/lib/closures.dart:1786 _ContextCollector.collect" function Base.collect(self::_ContextCollector, member::Core.MethodInstance)::Nothing
-    _new_context(self, member)
-    for context in values(self.closures.contexts)
-        while context.parent !== nothing && is_empty(context.parent)
-            context.parent = context.parent.parent
-        end
-    end
-    return nothing
-end
-
-# an assert has no Julia counterpart (src/julia/kernel.jl)
-@parity "dart2wasm/lib/closures.dart:1797 _ContextCollector.visitAssertStatement" visit_assert_statement(self::_ContextCollector, node::NoCounterpart)::Nothing = nothing
-
-# an assert block has no Julia counterpart (src/julia/kernel.jl)
-@parity "dart2wasm/lib/closures.dart:1804 _ContextCollector.visitAssertBlock" visit_assert_block(self::_ContextCollector, node::NoCounterpart)::Nothing = nothing
-
-"""
-A new context for a scope, nested in the current one; the outermost holds `this` when it is captured.
-A Julia scope is a member (see `Context`), which has no constructor initializer.
-"""
-@parity "dart2wasm/lib/closures.dart:1810 _ContextCollector._newContext" function _new_context(self::_ContextCollector, node::Core.MethodInstance)::Nothing
-    local outer_most = self.current_context === nothing
-    local old_context = self.current_context
-    local contains_this = self.closures._is_this_captured && outer_most
-    local context = Context(node, old_context, contains_this)
-    self.current_context = context
-    self.closures.contexts[node] = context
-    self.current_context = old_context
-    return nothing
-end
-
-# a Julia constructor is a method like any other, with no initializer list: one context, its own
-@parity "dart2wasm/lib/closures.dart:1823 _ContextCollector.visitConstructor" visit_constructor(self::_ContextCollector, node::Core.MethodInstance)::Nothing = _new_context(self, node)
-
-# a function's context is its member's (see `Context`)
-@parity "dart2wasm/lib/closures.dart:1862 _ContextCollector.visitFunctionNode" visit_function_node(self::_ContextCollector, node::NirBody)::Nothing = _new_context(self, node.ci.def)
-
-# a while loop has no Julia counterpart (src/julia/kernel.jl): the NIR's loops are jumps
-@parity "dart2wasm/lib/closures.dart:1867 _ContextCollector.visitWhileStatement" visit_while_statement(self::_ContextCollector, node::NoCounterpart)::Nothing = nothing
-
-# a do loop has no Julia counterpart (src/julia/kernel.jl)
-@parity "dart2wasm/lib/closures.dart:1872 _ContextCollector.visitDoStatement" visit_do_statement(self::_ContextCollector, node::NoCounterpart)::Nothing = nothing
-
-# a for loop has no Julia counterpart (src/julia/kernel.jl)
-@parity "dart2wasm/lib/closures.dart:1877 _ContextCollector.visitForStatement" visit_for_statement(self::_ContextCollector, node::NoCounterpart)::Nothing = nothing
-
-# a NIR value is never a capture (Capture's variable is a closure object's field); none joins a context
-@parity "dart2wasm/lib/closures.dart:1882 _ContextCollector.defaultVariable" default_variable(self::_ContextCollector, node::Union{NirSSA,NirArgument})::Nothing = nothing
-
-@parity "dart2wasm/lib/closures.dart:1894 _ContextCollector.visitTypeParameter" function visit_type_parameter(self::_ContextCollector, node::TypeVar)::Nothing
-    local capture = get(self.closures.captures, node, nothing)
-    if capture !== nothing && self.is_in_initializer == capture.is_in_initializer
-        local current = self.current_context
-        current === nothing && reject!(Internal("dart2wasm/lib/closures.dart:1894 _ContextCollector.visitTypeParameter: a type parameter outside every context"), "_ContextCollector.visitTypeParameter")
-        push!(current.type_parameters, node)
-        capture.context[] = current
-    end
-    return nothing
-end
-
-# a variable's assignment has no Julia counterpart (src/julia/kernel.jl): the NIR is in SSA form
-@parity "dart2wasm/lib/closures.dart:1906 _ContextCollector.visitVariableSet" visit_variable_set(self::_ContextCollector, node::NoCounterpart)::Nothing = nothing
 
 # dart's casts, which throw on another type; here located rejections
 @parity "dart2wasm/lib/closures.dart:1913 StructVtableExtension.getVtableEntryAt" function get_vtable_entry_at(self::WasmBuilder.IR.StructType, index::Int64)::WasmBuilder.IR.FunctionType
