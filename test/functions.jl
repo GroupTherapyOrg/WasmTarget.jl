@@ -52,4 +52,36 @@ nir_body(f, at) = only(b for b in WT.build_nir(WT.check_subset(f, at, "functions
     @test !W.matches_target(W.MethodCallShape(:rest, 0, 0, Symbol[]), rest)
 end
 
+module Members
+f(x::Int) = x + 1
+end
+
+@testset "FunctionCollector: names, selector uses, translated procedures" begin
+    local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
+    local t = W.Translator(WT.check_subset(Members.f, (Int,), "functions"), data, W.TranslatorOptions())
+    W._init_modules(t, nothing)
+    collect(W.ClassInfoCollector(t))
+    local fc = t.functions[]
+    local mi = only(b.ci.def for b in t.component if b.ci.def.def.name === :f)
+    local shape = W.MethodCallShape(:f, 0, 1, Symbol[])
+    @test W.get_dynamic_forwarder_name(fc, mi, shape) == W.get_function_name(fc, mi) * " (MethodCallShape(f pos:1))"
+    @test W.get_invocation_creator_stub_name(fc, shape) == "Invocation creator (MethodCallShape(f pos:1))"
+    @test !W.has_dynamic_selector_call(fc, shape)
+    push!(fc._called_dynamic_selectors, shape)
+    @test W.has_dynamic_selector_call(fc, shape)
+    @test isempty(W.translated_procedures(fc))
+    # a selector whose targets cover class ids 3..4 for `mi`: neither class is allocated, so the
+    # member waits for each; the class's allocation then makes its function, once
+    local s = W.SelectorInfo__(t.dispatch_table[], 0, "f", 1; is_setter = false, is_index_setter = false)
+    s.use_multiple_entry_points[] = false
+    s._normal = W.SelectorTargets([(range = W.Range(3, 4), target = mi)], [(range = W.Range(3, 4), target = mi)], NamedTuple{(:range, :target),Tuple{W.Range,Core.MethodInstance}}[])
+    W.record_selector_use(fc, s, false)
+    @test 0 in fc._called_selectors && fc._pending_allocation[3] == [mi] && fc._pending_allocation[4] == [mi]
+    @test W.get_existing_function(fc, mi) === nothing
+    W.record_selector_use(fc, s, false)                     # a selector already used: nothing again
+    @test fc._pending_allocation[3] == [mi]
+    W.record_class_allocation(fc, 3)
+    @test W.get_existing_function(fc, mi) !== nothing && W.translated_procedures(fc) == [mi]
+end
+
 end # module FunctionsTest

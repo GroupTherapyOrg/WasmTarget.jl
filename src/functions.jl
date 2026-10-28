@@ -150,7 +150,7 @@ prefer-inline pragmas).
     return function_
 end
 
-@parity "dart2wasm/lib/functions.dart:192 FunctionCollector.hasDynamicSelectorCall" @unported function has_dynamic_selector_call(self::FunctionCollector, shape::CallShape) end
+@parity "dart2wasm/lib/functions.dart:192 FunctionCollector.hasDynamicSelectorCall" has_dynamic_selector_call(self::FunctionCollector, shape::CallShape)::Bool = shape in self._called_dynamic_selectors
 
 @parity "dart2wasm/lib/functions.dart:195 FunctionCollector.getExistingDynamicForwarder" @unported function get_existing_dynamic_forwarder(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape) end
 
@@ -197,11 +197,24 @@ end
 
 @parity "dart2wasm/lib/functions.dart:377 FunctionCollector.getLambdaFunctionName" @unported function get_lambda_function_name(self::FunctionCollector, lambda::Lambda) end
 
-@parity "dart2wasm/lib/functions.dart:389 FunctionCollector.getDynamicForwarderName" @unported function get_dynamic_forwarder_name(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape) end
+# dart's `'$memberName ($shape)'`, the member's name as getFunctionName writes it
+@parity "dart2wasm/lib/functions.dart:389 FunctionCollector.getDynamicForwarderName" get_dynamic_forwarder_name(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape)::String =
+    string(get_function_name(self, target), " (", sprint(show, shape), ")")
 
-@parity "dart2wasm/lib/functions.dart:395 FunctionCollector.getInvocationCreatorStubName" @unported function get_invocation_creator_stub_name(self::FunctionCollector, shape::CallShape) end
+@parity "dart2wasm/lib/functions.dart:395 FunctionCollector.getInvocationCreatorStubName" get_invocation_creator_stub_name(self::FunctionCollector, shape::CallShape)::String = string("Invocation creator (", sprint(show, shape), ")")
 
-@parity "dart2wasm/lib/functions.dart:399 FunctionCollector.recordSelectorUse" @unported function record_selector_use(self::FunctionCollector, selector::SelectorInfo, use_unchecked_entry::Bool) end
+@parity "dart2wasm/lib/functions.dart:399 FunctionCollector.recordSelectorUse" function record_selector_use(self::FunctionCollector, selector::SelectorInfo, use_unchecked_entry::Bool)::Nothing
+    local set = use_unchecked_entry ? self._called_unchecked_selectors : self._called_selectors
+    # dart's `set.add(selector.id)`, true when the id is new
+    selector.id in set && return nothing
+    push!(set, selector.id)
+    for (range, target) in targets(selector; unchecked = use_unchecked_entry).all_target_ranges
+        for class_id in range.start:range.end_
+            record_class_target_use(self, class_id, target)
+        end
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/functions.dart:413 FunctionCollector.recordClassTargetUse" function record_class_target_use(self::FunctionCollector, class_id::Int64, target::Core.MethodInstance)::Nothing
     if class_id in self._allocated_classes
@@ -229,7 +242,8 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/functions.dart:461 FunctionCollector.translatedProcedures" @unported function translated_procedures(self::FunctionCollector) end
+# dart's procedures among the translated members; every Julia member is a method, dart's Procedure
+@parity "dart2wasm/lib/functions.dart:461 FunctionCollector.translatedProcedures" translated_procedures(self::FunctionCollector)::Vector{Core.MethodInstance} = collect(keys(self._functions))
 
 @parity "dart2wasm/lib/functions.dart:470 _FunctionTypeGenerator" _FunctionTypeGenerator(translator::KernelNodes, synthesize_null_return_value::Bool, synthesize_no_return::Bool)::_FunctionTypeGenerator =
     _FunctionTypeGenerator(Val(:_), translator, synthesize_null_return_value, synthesize_no_return)
