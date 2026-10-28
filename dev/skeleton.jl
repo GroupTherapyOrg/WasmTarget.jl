@@ -146,15 +146,17 @@ end
 isidstart(c::Char)::Bool = isletter(c) || c == '_' || c == '$'
 isidchar(c::Char)::Bool = isletter(c) || isdigit(c) || c == '_' || c == '$'
 
-# the next token, pushed; nothing for a string (pushed as :string)
+# the next token, pushed; a string's text is its source, quotes and any `r` prefix kept
 function next_tok!(L::Lexer)
     local line, col, c = L.line, L.col, peekc(L)
     if (c == 'r' || c == 'R') && (peekc(L, 1) == '\'' || peekc(L, 1) == '"')
+        local j = L.i
         adv!(L); skip_string!(L, true)
-        push!(L.toks, Tok(:string, "", line, col)); return L.toks[end]
+        push!(L.toks, Tok(:string, String(L.s[j:L.i-1]), line, col)); return L.toks[end]
     elseif c == '\'' || c == '"'
+        local j = L.i
         skip_string!(L, false)
-        push!(L.toks, Tok(:string, "", line, col)); return L.toks[end]
+        push!(L.toks, Tok(:string, String(L.s[j:L.i-1]), line, col)); return L.toks[end]
     elseif isidstart(c)
         local j = L.i
         while L.i <= length(L.s) && isidchar(peekc(L))
@@ -1059,6 +1061,7 @@ struct Param
     dart::String
     section::Symbol
     required::Bool
+    default::Vector{Tok}   # the tokens after `=` (or the old `:`), none when dart gives no default
 end
 
 function params(ps::Vector{Tok}, S::Scope, from::AbstractString)::Vector{Param}
@@ -1081,9 +1084,10 @@ function params(ps::Vector{Tok}, S::Scope, from::AbstractString)::Vector{Param}
                 local nm = head[idx].text
                 local tys = head[1:idx-1]
                 local req = any(t -> t.text == "required", tys)
+                local dflt = length(head) < length(cur) ? cur[length(head)+2:end] : Tok[]
                 # a field or super initializer (`this.x`, `super.x`) takes its field's type: unannotated
                 local jt = any(t -> t.text in ("this", "super"), tys) ? "" : julia_type(tys, S, from)
-                push!(out, Param(nm, jt, join((t.text for t in cur), " "), section, req))
+                push!(out, Param(nm, jt, join((t.text for t in cur), " "), section, req, dflt))
             end
         end
         empty!(cur)
@@ -1123,10 +1127,40 @@ function signature(d::Decl, owner::AbstractString, S::Scope, from::AbstractStrin
     local named = [p for p in ps if p.section == :named]
     local s = join(parts, ", ")
     if !isempty(named)
-        s *= "; " * join((p.required ? (isempty(p.jtype) ? jname(p.name) : "$(jname(p.name))::$(p.jtype)") :
-                                       "$(jname(p.name)) = nothing" for p in named), ", ")
+        s *= "; " * join((named_param(p) for p in named), ", ")
     end
     return s
+end
+
+# a named parameter as a Julia keyword: typed where dart's type translates, with dart's default where
+# it translates (a literal, an empty collection of the parameter's type), `nothing` where dart's is
+# its implicit null (a nullable or untyped parameter with none), and no default otherwise (required)
+function named_param(p::Param)::String
+    local n = isempty(p.jtype) ? jname(p.name) : "$(jname(p.name))::$(p.jtype)"
+    p.required && return n
+    local nullable = isempty(p.jtype) || startswith(p.jtype, "Union{Nothing,")
+    isempty(p.default) && return nullable ? "$n = nothing" : n
+    local v = julia_default(p.default, p.jtype)
+    return v === nothing ? n : "$n = $v"
+end
+
+# a dart default value's Julia spelling, or nothing where it does not translate
+function julia_default(ts::Vector{Tok}, jtype::AbstractString)::Union{Nothing,String}
+    local xs = [t.text for t in ts if !(t.kind == :ident && t.text == "const")]
+    length(xs) == 2 && xs[1] == "-" && ts[end].kind == :number && return "-" * xs[2]
+    length(xs) == 1 || return (xs in (["[", "]"], ["{", "}"]) && occursin(r"^(Vector|Dict|Set)\{", jtype)) ? "$jtype()" : nothing
+    local x, t = xs[1], ts[end]
+    x in ("true", "false") && return x
+    x == "null" && return "nothing"
+    t.kind == :number && return occursin(r"^(0x[0-9a-fA-F]+|\d+(\.\d+)?([eE][+-]?\d+)?)$", x) ? x : nothing
+    if t.kind == :string
+        # a plain single-line literal: no interpolation, no escape but a quote's
+        local m = match(r"^(['\"])((?:[^'\"\\$]|\\['\"])*)\1$", x)
+        m === nothing && return nothing
+        local body = replace(m[2], "\\'" => "'", "\\\"" => "\"")
+        return repr(body)
+    end
+    return nothing
 end
 
 # the Julia name of a dart symbol under A3's rule, and whether the member takes `self`

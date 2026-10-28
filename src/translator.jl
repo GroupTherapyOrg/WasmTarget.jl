@@ -373,7 +373,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:452 Translator.isMainModule" is_main_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::Bool = self._builder_to_output[module_].is_main
 
-@parity "dart2wasm/lib/translator.dart:459 Translator.getClosures" @unported function get_closures(self::Translator, member::Core.MethodInstance; find_captures = nothing) end
+@parity "dart2wasm/lib/translator.dart:459 Translator.getClosures" @unported function get_closures(self::Translator, member::Core.MethodInstance; find_captures::Bool = true) end
 
 @parity "dart2wasm/lib/translator.dart:467 Translator.getConstructorInfo" @unported function get_constructor_info(self::Translator, node::Core.MethodInstance) end
 
@@ -481,7 +481,7 @@ so every function is the one module's and another module's is a located rejectio
     reject!(Internal("dart2wasm/lib/translator.dart:875 Translator.callFunction: a call across modules, which one module never makes"), "Translator.callFunction")
 end
 
-@parity "dart2wasm/lib/translator.dart:911 Translator.callDispatchTable" @unported function call_dispatch_table(self::Translator, b::WasmBuilder.InstructionsBuilder, selector::SelectorInfo; interface_target = nothing, use_unchecked_entry::Bool) end
+@parity "dart2wasm/lib/translator.dart:911 Translator.callDispatchTable" @unported function call_dispatch_table(self::Translator, b::WasmBuilder.InstructionsBuilder, selector::SelectorInfo; interface_target::Union{Nothing,Core.MethodInstance} = nothing, use_unchecked_entry::Bool) end
 
 @parity "dart2wasm/lib/translator.dart:936 Translator.classForType" @unported function class_for_type(self::Translator, type_::Type) end
 
@@ -577,7 +577,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:1205 Translator.arrayTypeForDartType" @unported function array_type_for_dart_type(self::Translator, type_::Type; mutable_::Bool) end
 
-@parity "dart2wasm/lib/translator.dart:1218 Translator.wasmArrayType" @unported function wasm_array_type(self::Translator, type_::WasmBuilder.IR.StorageType, name::String; mutable_ = nothing) end
+@parity "dart2wasm/lib/translator.dart:1218 Translator.wasmArrayType" @unported function wasm_array_type(self::Translator, type_::WasmBuilder.IR.StorageType, name::String; mutable_::Bool = true) end
 
 @parity "dart2wasm/lib/translator.dart:1239 Translator.translateExternalType" @unported function translate_external_type(self::Translator, type_::Type) end
 
@@ -687,7 +687,7 @@ end
 @parity "dart2wasm/lib/translator.dart:1896 Translator.paramInfoForDirectCall" param_info_for_direct_call(self::Translator, target::Core.MethodInstance)::ParameterInfo =
     get!(() -> ParameterInfo_from_member(target, false), self.static_param_info, target)
 
-@parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" @unported function precise_this_for(self::Translator, member::Core.MethodInstance; nullable = nothing) end
+@parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" @unported function precise_this_for(self::Translator, member::Core.MethodInstance; nullable::Bool = false) end
 
 @parity "dart2wasm/lib/translator.dart:1930 Translator.getTable" @unported function get_table(self::Translator, module_::WasmBuilder.ModuleBuilder, field::ClassField) end
 

@@ -274,7 +274,7 @@ end
 
 @parity "dart2wasm/lib/constants.dart:245 Constants.makeNamedParametersArray" @unported function make_named_parameters_array(self::Constants, type_::Type) end
 
-@parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" @unported function make_array_of(self::Constants, element_type::Type, entries::Vector{NirConst}; mutable_ = nothing) end
+@parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" @unported function make_array_of(self::Constants, element_type::Type, entries::Vector{NirConst}; mutable_::Bool = true) end
 
 @parity "dart2wasm/lib/constants.dart:268 Constants.dummyStructConstant" dummy_struct_constant(self::Constants)::DummyValueConstant =
     _get_dummy_value_constant(self, WasmBuilder.IR.HeapType_struct; name = "#DummyStruct")

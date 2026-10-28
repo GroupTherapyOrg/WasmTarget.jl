@@ -48,16 +48,20 @@ import ..WasmBuilder
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
 import ...@parity, ...@unported, ...@closed, ...@exhaustive
 import ...reject!, ...Internal, ...Unported
-# a Kernel type Julia has no counterpart for, as stubs name it (src/julia/kernel.jl)
-import ...NoCounterpart
+# the Julia types the Kernel table names, as stubs name them (src/julia/kernel.jl)
+import ...NoCounterpart, ...NirWorld, ...NirBody, ...ClassField, ...NirValue, ...NirSSA, ...NirArgument,
+       ...NirGlobal, ...NirConst, ...NirStmt, ...NirInvoke, ...NirCall, ...NirNew, ...NirGlobalRead,
+       ...NirGotoIfNot, ...NirReturn, ...NirGoto, ...NirEnter
 import ...WasmBuilder
 import ..Dart2Wasm
 end
 @quarantine "dart2wasm's compile imports js/runtime_generator.dart under the prefix js; a prefix is a module in Julia" Core.Module module JS
 import ...@parity, ...@unported, ...@closed, ...@exhaustive
 import ...reject!, ...Internal, ...Unported
-# a Kernel type Julia has no counterpart for, as stubs name it (src/julia/kernel.jl)
-import ...NoCounterpart
+# the Julia types the Kernel table names, as stubs name them (src/julia/kernel.jl)
+import ...NoCounterpart, ...NirWorld, ...NirBody, ...ClassField, ...NirValue, ...NirSSA, ...NirArgument,
+       ...NirGlobal, ...NirConst, ...NirStmt, ...NirInvoke, ...NirCall, ...NirNew, ...NirGlobalRead,
+       ...NirGotoIfNot, ...NirReturn, ...NirGoto, ...NirEnter
 import ...WasmBuilder
 import ..Dart2Wasm
 end

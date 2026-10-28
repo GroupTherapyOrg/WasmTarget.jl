@@ -42,7 +42,7 @@ end
 
 @parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" @unported function add_wasm_entry_point_pragma(node, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/util.dart:157 addPragma" @unported function add_pragma(node, pragma_name::String, core_types::NoCounterpart; value = nothing) end
+@parity "dart2wasm/lib/util.dart:157 addPragma" @unported function add_pragma(node, pragma_name::String, core_types::NoCounterpart; value::Union{Nothing,NirConst} = nothing) end
 
 # dart's `>>>=` is the unsigned shift, Julia's `>>>`
 @parity "dart2wasm/lib/util.dart:172 _intToLittleEndianBytes" function _int_to_little_endian_bytes(i::Int64)::Vector{UInt8}

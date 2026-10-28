@@ -40,7 +40,7 @@ end
 
 @parity "dart2wasm/lib/dispatch_table.dart:118 SelectorInfo._computeSignature" @unported function _compute_signature(self::SelectorInfo) end
 
-@parity "dart2wasm/lib/dispatch_table.dart:239 SelectorInfo._upperBound" @unported function _upper_bound(self::SelectorInfo, types::Set{WasmBuilder.IR.ValueType}; ensure_boxed::Bool, is_receiver = nothing) end
+@parity "dart2wasm/lib/dispatch_table.dart:239 SelectorInfo._upperBound" @unported function _upper_bound(self::SelectorInfo, types::Set{WasmBuilder.IR.ValueType}; ensure_boxed::Bool, is_receiver::Bool = false) end
 
 @parity "dart2wasm/lib/dispatch_table.dart:291 SelectorInfo.containsTarget" @unported function contains_target(self::SelectorInfo, target::Core.MethodInstance) end
 

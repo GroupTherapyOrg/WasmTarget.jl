@@ -331,7 +331,7 @@ end
     return 0
 end
 
-@parity "dart2wasm/lib/code_generator.dart:538 AstCodeGenerator._initializeContextLocals" @unported function _initialize_context_locals(self::AstCodeGenerator, node::NirStmt; context_param_index = nothing) end
+@parity "dart2wasm/lib/code_generator.dart:538 AstCodeGenerator._initializeContextLocals" @unported function _initialize_context_locals(self::AstCodeGenerator, node::NirStmt; context_param_index::Int64 = 0) end
 
 @parity "dart2wasm/lib/code_generator.dart:594 AstCodeGenerator._implicitReturn" function _implicit_return(self::AstCodeGenerator)::Nothing
     local outs = outputs(self)
@@ -1003,7 +1003,7 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:4202 ConstructorCodeGeneratorBase._getConstructorArgumentLocals" @unported function _get_constructor_argument_locals(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}) end
 
-@parity "dart2wasm/lib/code_generator.dart:4219 ConstructorCodeGeneratorBase._setupConstructorParameters" @unported function _setup_constructor_parameters(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}, parameter_offset::Int64; is_forwarder = nothing) end
+@parity "dart2wasm/lib/code_generator.dart:4219 ConstructorCodeGeneratorBase._setupConstructorParameters" @unported function _setup_constructor_parameters(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}, parameter_offset::Int64; is_forwarder::Bool = false) end
 
 @parity "dart2wasm/lib/code_generator.dart:4252 ConstructorInitializerCodeGenerator" @unported function ConstructorInitializerCodeGenerator(translator, function_type, member) end
 
@@ -1119,7 +1119,7 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5573 MacroAssembler.emitDenseTableBranch" @unported function emit_dense_table_branch(self::WasmBuilder.InstructionsBuilder, outputs::Vector{WasmBuilder.IR.ValueType}, n::Int64, push_branch_expression::Function, handle_case::Function, handle_default::Function) end
 
-@parity "dart2wasm/lib/code_generator.dart:5600 MacroAssembler.incrementingLoop" @unported function incrementing_loop(self::WasmBuilder.InstructionsBuilder; push_start::Function, push_limit::Function, gen_body::Function, step = nothing) end
+@parity "dart2wasm/lib/code_generator.dart:5600 MacroAssembler.incrementingLoop" @unported function incrementing_loop(self::WasmBuilder.InstructionsBuilder; push_start::Function, push_limit::Function, gen_body::Function, step::Int64 = 1) end
 
 @parity "dart2wasm/lib/code_generator.dart:5636 MacroAssembler.concatenateWasmArrays" @unported function concatenate_wasm_arrays(self::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType; push_default_element::Function) end
 
@@ -1141,13 +1141,13 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5922 MacroAssembler.emitGetClosureVtable" @unported function emit_get_closure_vtable(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
 
-@parity "dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext" @unported function restore_suspend_state_context(self::WasmBuilder.InstructionsBuilder, suspend_state_local::WasmBuilder.IR.Local, suspend_state_struct::WasmBuilder.IR.StructType, suspend_state_context_field::Int64, closures::Closures, context::Union{Nothing,Context}, this_local::Union{Nothing,WasmBuilder.IR.Local}; clone_context_for = nothing) end
+@parity "dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext" @unported function restore_suspend_state_context(self::WasmBuilder.InstructionsBuilder, suspend_state_local::WasmBuilder.IR.Local, suspend_state_struct::WasmBuilder.IR.StructType, suspend_state_context_field::Int64, closures::Closures, context::Union{Nothing,Context}, this_local::Union{Nothing,WasmBuilder.IR.Local}; clone_context_for::Union{Nothing,NirBody} = nothing) end
 
 @parity "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain" @unported function restore_this_and_context_chain(self::WasmBuilder.InstructionsBuilder, innermost_context::Context, this_local::Union{Nothing,WasmBuilder.IR.Local}) end
 
 @parity "dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext" @unported function clone_function_level_context(self::WasmBuilder.InstructionsBuilder, closures::Closures, context::Context, function_node::NirBody) end
 
-@parity "dart2wasm/lib/code_generator.dart:6035 MacroAssembler.invoke" @unported function MacroAssembler_invoke(self::WasmBuilder.InstructionsBuilder, target::CallTarget; force_inline = nothing) end
+@parity "dart2wasm/lib/code_generator.dart:6035 MacroAssembler.invoke" @unported function MacroAssembler_invoke(self::WasmBuilder.InstructionsBuilder, target::CallTarget; force_inline::Bool = false) end
 
 @parity "dart2wasm/lib/code_generator.dart:6054 MacroAssembler.inlineCallTo" @unported function inline_call_to(self::WasmBuilder.InstructionsBuilder, target::CallTarget) end
 

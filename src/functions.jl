@@ -177,7 +177,7 @@ end
 
 @parity "dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType" @unported function _get_constructor_body_type(self::_FunctionTypeGenerator, node::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" @unported function _get_constructor_input_types(translator::Translator, member::Core.MethodInstance, type_parameters::Vector{TypeVar}, parameters::Vector{NirArgument}, translate_type::Function; is_body_parameter = nothing) end
+@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" @unported function _get_constructor_input_types(translator::Translator, member::Core.MethodInstance, type_parameters::Vector{TypeVar}, parameters::Vector{NirArgument}, translate_type::Function; is_body_parameter::Bool = false) end
 
 # a Julia member has no type parameters (its MethodInstance binds them) and no named parameters; its
 # parameters are the arguments after the callee, each of the type it is specialized on
