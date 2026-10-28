@@ -959,4 +959,8 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/types.dart:1535 InstanceConstantInterfaceType.interfaceType" @unported function interface_type(self) end
+"""
+The type of an instance constant. dart rebuilds its interface type from the class and the type
+arguments. A Julia object's type is its class, which fixes its parameters: `typeof` of its value.
+"""
+@parity "dart2wasm/lib/types.dart:1535 InstanceConstantInterfaceType.interfaceType" interface_type(self::InstanceConstant)::DataType = typeof(self.c.val)

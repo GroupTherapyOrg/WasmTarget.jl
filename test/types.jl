@@ -111,3 +111,8 @@ end
     @test D._is_identity_substitution(rtt, Union{Type,TypeVar}[])
     @test !D._is_identity_substitution(rtt, Union{Type,TypeVar}[Int])
 end
+
+@testset "types.dart: an instance constant's type is its class" begin
+    local W = WasmTarget
+    @test D.interface_type(W.InstanceConstant(Core.Const(1 // 2))) === Rational{Int}
+end

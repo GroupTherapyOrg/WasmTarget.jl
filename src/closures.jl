@@ -554,7 +554,13 @@ end
         instantiation_context_struct::WasmBuilder.IR.StructType)::WasmBuilder.IR.BaseFunction =
     reject!(Internal("dart2wasm/lib/closures.dart:853 ClosureLayouter._createInstantiationDynamicCallEntry: a Julia function takes no type arguments, so no closure is instantiated"), "ClosureLayouter._createInstantiationDynamicCallEntry")
 
-@parity "dart2wasm/lib/closures.dart:919 ClosureLayouter._createInstantiationFunction" @unported function _create_instantiation_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, type_count::Int64, instantiated_representation::ClosureRepresentation, instantiation_trampolines::Vector{WasmBuilder.IR.BaseFunction}, function_type::WasmBuilder.IR.FunctionType, context_struct::WasmBuilder.IR.StructType, generic_closure_struct::WasmBuilder.IR.StructType, name::String) end
+# the function that instantiates a generic closure (dart's `f<int>`); a Julia function takes no type
+# arguments, so no closure is instantiated
+@parity "dart2wasm/lib/closures.dart:919 ClosureLayouter._createInstantiationFunction" _create_instantiation_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, type_count::Int64,
+        instantiated_representation::ClosureRepresentation, instantiation_trampolines::Vector{WasmBuilder.IR.BaseFunction},
+        function_type::WasmBuilder.IR.FunctionType, context_struct::WasmBuilder.IR.StructType,
+        generic_closure_struct::WasmBuilder.IR.StructType, name::String)::WasmBuilder.IR.BaseFunction =
+    reject!(Internal("dart2wasm/lib/closures.dart:919 ClosureLayouter._createInstantiationFunction: a Julia function takes no type arguments, so no closure is instantiated"), "ClosureLayouter._createInstantiationFunction")
 
 # the equality of two instantiations of a generic closure; a Julia function takes no type arguments
 @parity "dart2wasm/lib/closures.dart:1010 ClosureLayouter._createInstantiationTypeComparisonFunction" _create_instantiation_type_comparison_function(self::ClosureLayouter, module_::WasmBuilder.ModuleBuilder, num_types::Int64)::WasmBuilder.IR.BaseFunction =
