@@ -82,6 +82,22 @@ end
     @test fc._pending_allocation[3] == [mi]
     W.record_class_allocation(fc, 3)
     @test W.get_existing_function(fc, mi) !== nothing && W.translated_procedures(fc) == [mi]
+
+    # a dynamic call's signature by its shape: the top type throughout, the receiver nullable for a
+    # dispatcher, no result for a setter or an index set
+    local top = t.top_type[]
+    local nn = W.WasmBuilder.with_nullability(top, false)
+    local g = W.make_dynamic_dispatcher_signature(t, W.GetterCallShape(:x))
+    @test g.inputs == [top] && g.outputs == [top]
+    @test W.make_dynamic_forwarder_signature(t, W.GetterCallShape(:x)).inputs == [nn]
+    local st = W.make_dynamic_forwarder_signature(t, W.SetterCallShape(:x))
+    @test st.inputs == [nn, top] && isempty(st.outputs)
+    local mt = W.make_dynamic_dispatcher_signature(t, W.MethodCallShape(:f, 0, 2, [:k]))
+    @test mt.inputs == [top, top, top, top] && mt.outputs == [top]
+    # a type argument is a Type, which this program's classes lack: a located rejection
+    @test_throws WT.RejectionError W.make_dynamic_dispatcher_signature(t, W.MethodCallShape(:f, 1, 0, Symbol[]))
+    @test isempty(W.make_dynamic_dispatcher_signature(t, W.MethodCallShape(:setindex!, 0, 2, Symbol[])).outputs)
+    @test W.make_dynamic_dispatcher_signature(t, W.GetterCallShape(:y)) === g     # one type per signature
 end
 
 end # module FunctionsTest

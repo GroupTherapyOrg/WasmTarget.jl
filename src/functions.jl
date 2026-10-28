@@ -290,11 +290,30 @@ end
 
 @parity "dart2wasm/lib/functions.dart:787 makeFunctionTypeForBody" @unported function make_function_type_for_body(translator::Translator, member::Core.MethodInstance, synthesize_null_return_value::Bool, synthesize_no_return::Bool) end
 
-@parity "dart2wasm/lib/functions.dart:821 makeDynamicDispatcherSignature" @unported function make_dynamic_dispatcher_signature(translator::Translator, shape::CallShape) end
+@parity "dart2wasm/lib/functions.dart:821 makeDynamicDispatcherSignature" make_dynamic_dispatcher_signature(translator::Translator, shape::CallShape)::WasmBuilder.IR.FunctionType = _make_dynamic_signature(translator, shape, true)
 
-@parity "dart2wasm/lib/functions.dart:826 makeDynamicForwarderSignature" @unported function make_dynamic_forwarder_signature(translator::Translator, shape::CallShape) end
+@parity "dart2wasm/lib/functions.dart:826 makeDynamicForwarderSignature" make_dynamic_forwarder_signature(translator::Translator, shape::CallShape)::WasmBuilder.IR.FunctionType = _make_dynamic_signature(translator, shape, false)
 
-@parity "dart2wasm/lib/functions.dart:831 _makeDynamicSignature" @unported function _make_dynamic_signature(translator::Translator, shape::CallShape, nullable_receiver::Bool) end
+"""
+A dynamic call's signature by its shape: the receiver (the top type, nullable for a dispatcher), a
+type argument for each the shape passes (Julia's Type, dart's typeType), and the top type for each
+other argument and for the result, none for a setter or an index set. dart's topTypeNonNullable is
+the top type without its null (translator.dart:281), a field to come of the translator.
+"""
+@parity "dart2wasm/lib/functions.dart:831 _makeDynamicSignature" function _make_dynamic_signature(translator::Translator, shape::CallShape, nullable_receiver::Bool)::WasmBuilder.IR.FunctionType
+    local top = translator.top_type[]
+    local receiver = nullable_receiver ? top : WasmBuilder.with_nullability(top, false)
+    return @exhaustive shape::CallShape begin
+        GetterCallShape => WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[receiver], WasmBuilder.IR.ValueType[top])
+        SetterCallShape => WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[receiver, top], WasmBuilder.IR.ValueType[])
+        (m::MethodCallShape) => WasmBuilder.define_function(types_builder(translator),
+            WasmBuilder.IR.ValueType[receiver;
+                                     WasmBuilder.IR.ValueType[translate_type(translator, type_type(translator.types[])) for _ in 1:m.type_count];   # dart's loop: none translated for none
+                                     fill(top, m.positional_count);
+                                     fill(top, length(m.named))],
+            is_index_set(m) ? WasmBuilder.IR.ValueType[] : WasmBuilder.IR.ValueType[top])
+    end
+end
 
 @parity "dart2wasm/lib/functions.dart:860 makeTearOffFunctionType" @unported function make_tear_off_function_type(translator::Translator, function_::NirBody, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}) end
 
