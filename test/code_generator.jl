@@ -347,3 +347,14 @@ end
     @test has(b32, UInt8[0xfc, 0x03]) && !has(b32, UInt8[0xab])      # i32.trunc_sat_f64_u, not i32.trunc_f64_u
     @test unsafe_trunc(Int64, 1e30) == typemax(Int64) || Sys.ARCH !== :aarch64
 end
+
+@testset "code_generator.dart: a PiNode is the unchecked as" begin
+    local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    # the narrowing translates its operand at the expected type: here the argument's local, which no
+    # parameter setup has made, so the read rejects where it stands
+    local e = rejection(() -> D.translate_expression(g, W.NirPi(W.NirArgument(2), Int32), IR.NumType_i32))
+    @test e.rejection isa W.Internal && occursin("undefined variable", e.rejection.site)
+    # an unused narrowing is an expression statement at the void marker, no longer a 1.D rejection
+    local e2 = rejection(() -> D.translate_statement(g, W.NirPi(W.NirArgument(2), Int32), nothing))
+    @test !(e2.rejection isa W.Unquarantined)
+end

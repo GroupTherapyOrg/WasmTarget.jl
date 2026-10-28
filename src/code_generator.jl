@@ -466,7 +466,7 @@ source-map offset is set from the node; the NIR's line table takes that place wi
         (s::NirGotoIfNot) => reject!(Unquarantined("dev/MARCH.md 1.D: a conditional jump of the flat IR, structured by the stackifier"), at)
         (s::NirUnreachable) => reject!(Unquarantined("dev/MARCH.md 1.D: code Julia proved unreachable"), at)
         (s::NirPhi) => reject!(Unquarantined("dev/MARCH.md 1.D: an SSA merge, a local the stackifier assigns on each edge"), at)
-        (s::NirPi) => reject!(Unquarantined("dev/MARCH.md 1.D: a value narrowed on one path"), at)
+        (s::NirPi) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirEnter) => reject!(Unquarantined("dev/MARCH.md 1.D: entering a try region, structured by the stackifier"), at)
         (s::NirUpsilon) => reject!(Unquarantined("dev/MARCH.md 1.D: an exception-edge value, structured by the stackifier"), at)
         (s::NirPhiC) => reject!(Unquarantined("dev/MARCH.md 1.D: an exception-edge merge, structured by the stackifier"), at)
@@ -882,6 +882,12 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:3159 AstCodeGenerator.visitIsExpression" @unported function visit_is_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
+# Julia's PiNode is a narrowing its inference proved on this path, dart's unchecked AsExpression:
+# the operand at the expected type, the conversion a downcast where the wasm types differ; the
+# checked form, Julia's typeassert, is the stub below until the translator's topTypeNonNullable
+@parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" function visit_as_expression(self::AstCodeGenerator, node::NirPi, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    return translate_expression(self, node.val, expected_type)
+end
 @parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" @unported function visit_as_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:3194 AstCodeGenerator.visitLoadLibrary" @unported function visit_load_library(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
