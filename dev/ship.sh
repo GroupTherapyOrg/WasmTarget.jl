@@ -20,16 +20,27 @@ common="$(git rev-parse --path-format=absolute --git-common-dir)"
 # compile into the lane's depot.
 start=$(git rev-parse HEAD)
 scratch="$common/wt-ship/$(basename "$lane")"
+# one landing per lane at a time: a second ship from this worktree would remove the first's scratch
+mkdir -p "$common/wt-ship"
+lanelock="$scratch.lock"
+if ! mkdir "$lanelock" 2>/dev/null; then
+  holder=$(cat "$lanelock/pid" 2>/dev/null || true)
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    echo "ship: a landing of this lane is already running (pid $holder); wait for it, then ship again"; exit 2
+  fi
+  rm -rf "$lanelock"; mkdir "$lanelock" || { echo "ship: cannot take this lane's landing slot"; exit 2; }
+fi
+echo $$ > "$lanelock/pid"
 git worktree remove --force "$scratch" 2>/dev/null; rm -rf "$scratch"
 git worktree add -q --detach "$scratch" "$start" || { echo "ship: cannot make the scratch worktree"; exit 1; }
 for f in Manifest.toml LocalPreferences.toml; do [ -f "$lane/$f" ] && cp "$lane/$f" "$scratch/$f"; done
 export WT_DEPOT_DIR="$lane"
-cleanup_scratch() { cd "$lane" && git worktree remove --force "$scratch" 2>/dev/null; }
+cleanup_scratch() { cd "$lane" && git worktree remove --force "$scratch" 2>/dev/null; rm -rf "$lanelock"; }
 cd "$scratch"
 log="$common/wt-landings.tsv"   # one log for every lane: D13's band
 lock="$common/wt-landing-lock"
-# every commit is checked on its own tree, against its parent (the rule bors and git rebase --exec
-# keep: each landed commit passes), with git's own rebase variables cleared: the ratchet's plants
+# before the lock every commit is checked on its own tree, against its parent; under the lock only
+# the rebased tip is checked again (audit 47, A47E3), with git's own rebase variables cleared: the ratchet's plants
 # make scratch repositories, and an inherited GIT_DIR or GIT_INDEX_FILE would point them at this one
 checked_rebase() {
   if ! git rebase -q "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh'; then
