@@ -46,20 +46,35 @@ subtype is checked by reflection when the package loads.
 """
     check_forward(forward, sole, mod) -> Int
 
-A forward declaration's check: `sole` subtypes `forward`, and no other type that `mod` or a
-submodule of it defines does. Throws a `ConstructionViolation` naming the first other subtype.
+A forward declaration's check: `sole` subtypes `forward`, and no other type does among those bound
+in every module loaded when the package loads, Main and `mod` (the package, while it loads), with
+their submodules; a parametric type is read through its UnionAll, so `X{T}` cannot
+escape. Throws a `ConstructionViolation` naming the first other subtype.
+
+precedent(julia: InteractiveUtils.subtypes, which reads every loaded module's bindings the same
+way). Julia's differs from a forward-declared struct: an abstract type stays open to any module, so
+the check reads them all where the package loads (A45S3).
 """
-@quarantine "the forward declaration's one subtype, found by reflection over the package's bindings" Base.names function check_forward(forward::DataType, sole::DataType, mod::Module)::Int
+@quarantine "the forward declaration's one subtype, found by reflection over every loaded module's bindings" Base.loaded_modules_array function check_forward(forward::DataType, sole::DataType, mod::Module)::Int
+    local roots = Module[Base.loaded_modules_array(); Main; mod]
     sole <: forward || throw(ConstructionViolation(string(nameof(forward)), "$sole does not subtype it"))
-    for n in names(mod; all = true)
-        isdefined(mod, n) || continue
-        local b = getglobal(mod, n)
-        if b isa Module
-            b !== mod && parentmodule(b) === mod && check_forward(forward, sole, b)
-        elseif b isa DataType && b <: forward && b !== forward && b !== sole
-            throw(ConstructionViolation(string(nameof(forward)), "$mod.$n subtypes it, where $sole is its one subtype"))
+    local seen = Base.IdSet{Module}()
+    local walk(m::Module) = begin
+        m in seen && return
+        push!(seen, m)
+        for n in names(m; all = true)
+            isdefined(m, n) || continue
+            local b = getglobal(m, n)
+            if b isa Module
+                parentmodule(b) === m && b !== m && walk(b)
+            else
+                local t = b isa UnionAll ? Base.unwrap_unionall(b) : b
+                t isa DataType && t !== forward && t.name !== sole.name && t <: forward &&
+                    throw(ConstructionViolation(string(nameof(forward)), "$m.$n subtypes it, where $sole is its one subtype"))
+            end
         end
     end
+    foreach(walk, roots)
     return 0
 end
 

@@ -3,6 +3,12 @@
 
 @parity "wasm_builder/lib/src/serialize/serializer.dart:11 Serializable" abstract type Serializable end
 
+"""
+The binary writer: the bytes serialized so far, and the source mappings they carry.
+
+Fields to come (1, with its serializer.dart line): `_traces` :26, the watch points' traces
+(Serializer.debugTrace, unported).
+"""
 @parity "wasm_builder/lib/src/serialize/serializer.dart:17 Serializer" mutable struct Serializer
     # The prefix of `_data` up to `_index` holds the data serialized so far.
     _data::Vector{UInt8}

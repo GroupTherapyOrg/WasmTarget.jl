@@ -143,6 +143,11 @@ end
 @parity "wasm_builder/lib/src/builder/elements.dart:138 ActiveExpressionSegmentBuilder.setExpressionAt" function set_expression_at(b::ActiveExpressionSegmentBuilder, index::Int, init::InstructionsBuilder)::Nothing
     # beyond dart's checks (D10): the spec's element segments: an element's expression is a constant expression
     init.constant_expression || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:138 ActiveExpressionSegmentBuilder.setExpressionAt: the expression is not a constant expression"), "set_expression_at")
+    # the spec's element segments: an element's expression yields one value of a subtype of the
+    # table's element type: its result, the outputs of the expression's own block while it is open,
+    # what its final end left on the stack once complete
+    local results = is_complete(init) ? init._stack_types : first(init._label_stack).outputs
+    (length(results) == 1 && is_subtype_of(only(results), b.table.type)) || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:138 ActiveExpressionSegmentBuilder.setExpressionAt: the expression yields [$(join(results, ", "))], not one $(b.table.type)"), "set_expression_at")
     init.module_builder.module_ === b.table.enclosing_module || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:139 ActiveExpressionSegmentBuilder.setExpressionAt: the expression belongs to another module than the table"), "set_expression_at")
     max = b.table.max_size
     (max === nothing || index < max) || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:140 ActiveExpressionSegmentBuilder.setExpressionAt: index $index greater than max table size $max"), "set_expression_at")

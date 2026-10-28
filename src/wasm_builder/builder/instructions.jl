@@ -724,6 +724,9 @@ end
 
 """Emit a `throw_ref` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:836 InstructionsBuilder.throw_ref" function throw_ref(b::InstructionsBuilder)::Nothing
+    # beyond dart's checks (D10, A45S1): dart pops nothing and checks nothing (instructions.dart:836);
+    # the spec's throw_ref takes an exnref
+    _verify_types(b, IR.ValueType[IR.RefType_exn(nullable = true)], IR.ValueType[]; trace = ("throw_ref",), reachable_after = false)
     _add(b, IR.ThrowRef())
     b._reachable = false
     nothing

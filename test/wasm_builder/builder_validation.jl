@@ -6,9 +6,8 @@
 # validate stays the alarm on the golden modules (test/wasm_builder/builder_modules.jl).
 #
 # The inventory, by the spec's Validation chapter. "dart" is dart's check, ported; "spec" is a check
-# the port adds, citing the rule; "construction" is a rule the builder's API cannot break. 21 rules
-# had no check before this file's commit (the rows marked "was missing", and the partial last row);
-# 20 are refused now and 1 is partial (the last row).
+# the port adds, citing the rule; "construction" is a rule the builder's API cannot break. 22 rules
+# had no check before (the rows marked "was missing"); every one is refused now.
 #
 #   Instructions
 #   - operand typing of every instruction ........... dart  _verify_types / _check_stack_types
@@ -33,6 +32,7 @@
 #   - array.copy: dest mutable, source element <: ... spec  array_copy                     (was missing: 2)
 #   - casts: target within the input's hierarchy .... dart  _verify_cast
 #   - throw, catch: the tag's types ................. dart  throw_, catch_legacy, try_table
+#   - throw_ref takes an exnref ..................... spec  throw_ref (dart checks nothing, A45S1) (was missing)
 #   - lane immediates below the shape's lanes ....... spec  each *_extract_lane, *_replace_lane (was missing)
 #   - i8x16.shuffle: 16 lanes, each below 32 ........ spec  i8x16_shuffle (count: port; index: was missing)
 #   - v128.const: 16 bytes .......................... spec  v128_const (added with the refusal cases)
@@ -60,10 +60,10 @@
 #   - data segments: offset in range, memory with offset ...... dart  DataSegmentsBuilder.define
 #   - active function segments: a funcref table, index below max ... dart  ElementsBuilder, setFunctionAt
 #   - element expressions are constant expressions .. spec  setExpressionAt (flag)         (was missing)
-#   - element expressions have the table's type ..... PARTIAL: the expression's own end checks the result
-#                                                     type its builder was made with, not the table's
+#   - element expressions have the table's type ..... spec  setExpressionAt (its result <: the table's)
+#                                                                                        (was missing)
 #
-# Count: 21 rules missing before; after, 0 missing and 1 partial.
+# Count: 22 rules missing before; 0 after.
 
 module BuilderValidationTest
 
@@ -212,6 +212,44 @@ module_bytes(mb) = (s = W.Serializer(); W.serialize(s, W.build(mb)); W.data(s))
         @test occursin("is not valid UTF-8", refusal(() -> W.var"export"(mb.exports, bad, f)))
         @test accepts(() -> W.var"export"(mb.exports, "f", f))
     end
+
+    @testset "throw_ref takes an exnref" begin
+        local b, _ = body_of(new_module())
+        @test occursin("Underflowing base stack", refusal(() -> W.throw_ref(b)))
+        local b2, _ = body_of(new_module())
+        W.i32_const(b2, 0)
+        @test occursin("Expected [exnref]", refusal(() -> W.throw_ref(b2)))
+        local ok, _ = body_of(new_module())
+        local e = W.add_local(ok, I.RefType_exn(nullable = true))
+        @test accepts(() -> (W.local_get(ok, e); W.throw_ref(ok); W.var"end"(ok)))
+    end
+
+    @testset "an element expression yields the table's element type" begin
+        local mb = new_module()
+        local tab = W.define(mb.tables[], I.RefType_func(nullable = true), 2)
+        local seg = W.active_expression_segment_builder_for(mb.elements[], tab)
+        local wrong = W.InstructionsBuilder(mb, I.ValueType[], I.ValueType[I.RefType_i31(nullable = true)]; constant_expression = true)
+        @test occursin("yields [i31ref], not one funcref", refusal(() -> W.set_expression_at(seg, 0, wrong)))   # still open
+        W.ref_null(wrong, I.HeapType_none); W.var"end"(wrong)
+        @test occursin("yields [i31ref], not one funcref", refusal(() -> W.set_expression_at(seg, 0, wrong)))   # complete
+        local right = W.InstructionsBuilder(mb, I.ValueType[], I.ValueType[I.RefType_func(nullable = true)]; constant_expression = true)
+        W.ref_null(right, I.HeapType_nofunc); W.var"end"(right)
+        @test accepts(() -> W.set_expression_at(seg, 1, right))
+    end
+end
+
+# A45S3: a forward declaration's one subtype, a parametric subtype elsewhere included
+module ForwardEscape
+using WasmTarget
+struct Elsewhere{T} <: WasmTarget.AbstractModuleBuilder end
+end
+@testset "a forward declaration's one subtype, read in every loaded module" begin
+    local why = try
+        WasmTarget.check_forward(WasmTarget.AbstractModuleBuilder, W.ModuleBuilder, WasmTarget); ""
+    catch e
+        e isa WasmTarget.ConstructionViolation ? e.what : rethrow()
+    end
+    @test occursin("Elsewhere subtypes it", why)
 end
 
 end # module BuilderValidationTest
