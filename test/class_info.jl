@@ -88,6 +88,11 @@ end
               [(k, c) for k in cov.dfs_order for c in cconc])
     @test any(r -> contains(r, cov.class_ids[Tuple{Int}]), D.get_concrete_class_id_range(cov, Tuple{Any}))
     @test D.get_concrete_class_id_range(cov, Type{Union{}}) == [D.Range(cov.class_ids[Core.TypeofBottom], cov.class_ids[Core.TypeofBottom])]
+    # a singleton type as a value: its member Int isa Type{Int}, yet no class is <: it, so the range
+    # query rejects, located (audit A41S3)
+    @test Int isa Type{Int} && !(DataType <: Type{Int})
+    local e3 = try; D.get_concrete_class_id_range(cov, Type{Int}); nothing; catch x; x; end
+    @test e3 isa W.RejectionError && e3.rejection isa W.Unquarantined
     # a covariant Tuple class is abstract: no value has it exactly
     @test W.class_is_abstract(Tuple{Any}) && !W.class_is_abstract(Tuple{Int})
     # the translator's late classIdNumbering, read before ClassInfoCollector.collect assigns it

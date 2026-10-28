@@ -519,8 +519,18 @@ end
     return self._transitive_implementors[klass] = transitive_implementors
 end
 
-"""The ranges of the concrete class ids that extend or implement `klass`, directly or transitively."""
+"""
+The ranges of the concrete class ids that extend or implement `klass`, directly or transitively:
+the classes Julia's `<:` puts under it. A value's membership is `isa`, which agrees with `<:` of its
+class for every class but a type as a value: `Int isa Type{Int}` though `DataType <: Type{Int}` is
+false. So a singleton type `Type{X}` whose member's class is not under it rejects here, located,
+until type values are tested by their own runtime type (types.dart); `Type{Union{}}`, whose one
+member's class `Core.TypeofBottom` is under it, and the open `Type{T}`, which every kind is under,
+answer as any class.
+"""
 @parity "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" function get_concrete_class_id_range(self::ClassIdNumbering, klass::DataType)::Vector{Range}
+    Base.isType(klass) && !(klass.parameters[1] isa TypeVar) && !(typeof(klass.parameters[1]) <: klass) &&
+        reject!(Unquarantined("src/class_info.jl getConcreteClassIdRange: $klass, whose members are types, not the instances of a class"), "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange")
     local cached = get(self._concrete_class_id_ranges, klass, nothing)
     cached === nothing || return cached
     local ranges = Range[]
