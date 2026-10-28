@@ -70,7 +70,12 @@ Julia module, never dart:_wasm, so the map is empty (StaticIntrinsic.fromProcedu
 # operand types are each wasm number type. Each answers as Julia's codegen does (src/intrinsics.cpp):
 # integer arithmetic wraps, a division, remainder or comparison is signed or unsigned by the
 # intrinsic's own name, and a float operation is IEEE's (a fast-math one, a single operation, is the
-# same IEEE operation)
+# same IEEE operation). A raw division or remainder lowers to wasm's div or rem, which trap at a zero
+# divisor and at typemin ÷ -1: Julia's codegen lowers sdiv_int, udiv_int, srem_int and urem_int to
+# LLVM's sdiv, udiv, srem and urem (src/intrinsics.cpp), undefined behavior there, and Julia reaches
+# them only behind its own checks (its `div` and `rem` call checked_sdiv_int and kin, which raise
+# DivideError and have no arm until throwing is ported), so the trap is Julia's answer (ledger D3),
+# as wasm-opt's --traps-never-happen assumes
 @parity "dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap" const Intrinsifier__binary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}}("dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(
     WasmBuilder.IR.NumType_i32 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.add_int => c -> WasmBuilder.i32_add(c.b[]),
