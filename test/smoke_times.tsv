@@ -132,6 +132,12 @@
 1.1	1.1	xfail undef_host_reference
 3.0	4.6	xfail union_nothing_containers
 0.3	0.4	xfail wide_primitive
-3.2	3.2	dart_web_wasm
-3.0	3.0	dart_language
-2.8	2.8	dart_structural
+3.7	6.5	dart_web_wasm
+0.5	0.2	dart_language
+0.3	0.1	dart_structural
+3.9	0.9	dart_nnbd
+1.4	0.5	dart_patterns
+2.9	0.8	dart_function_type
+0.6	0.2	dart_super
+0.5	0.2	dart_switch
+1.2	0.4	dart_const
