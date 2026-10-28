@@ -116,3 +116,38 @@ end
     local W = WasmTarget
     @test D.interface_type(W.InstanceConstant(Core.Const(1 // 2))) === Rational{Int}
 end
+
+module RttCases
+abstract type S end
+struct A <: S; x::Int; end
+struct B <: S; y::Float64; end
+f(n::Int) = n > 0 ? A(n) : B(1.0)
+end
+
+@testset "types.dart: RuntimeTypeInformation's tables over a closed world, against Julia's <:" begin
+    local W = WasmTarget
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(RttCases.f, (Int,), "types"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    local rtt = t.types[].rtt[]
+    local ids = t.class_id_numbering[].class_ids
+    local super_to_sub = rtt._substitution_superclass_to_subclass[]
+    local val(c) = c.c.val
+    local table = [val(e) for e in val(rtt.type_row_displacement_table[]).entries]
+    local offsets = [val(e) for e in val(rtt.type_row_displacement_offsets[]).entries]
+    for (s, sid) in ids, (c, cid) in ids
+        (s === Any || Base.has_free_typevars(s) || Base.has_free_typevars(c)) && continue
+        # a rule exactly where Julia says the class is a proper subtype of the superclass
+        local has_rule = haskey(super_to_sub, sid) && haskey(super_to_sub[sid], cid)
+        @test has_rule == (c !== s && c <: s)
+        # and the displaced row finds it: the superclass's offset plus the class id holds the superclass
+        has_rule && @test table[offsets[sid + 1] + cid + 1] == sid
+    end
+    # every substitution is the identity: a Julia class's parameters are bound
+    @test all(m -> all(==(D.RuntimeTypeInformation_no_substitution_index()), values(m)), values(super_to_sub))
+    @test !D.requires_type_argument_substitution(rtt, RttCases.S)
+    local names = [val(e) for e in val(rtt.type_names[]).entries]
+    @test names[ids[RttCases.A] + 1] == string(RttCases.A) && names[1] == ""
+end
