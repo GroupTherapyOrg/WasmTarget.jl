@@ -133,9 +133,11 @@ with the per-clause status. A clause is never closed by argument.
   by its rule.
 - **C10 · Fast, precise feedback.** Fast is first, strict is final (Dale, 2026-10-20): a
   landing is `bash dev/ship.sh` on this machine, which rebases onto the march branch, runs
-  `bash dev/check.sh`, its evidence, about a minute of wall (WasmTarget loads, so every
-  construction checks itself; the ratchet holds, but for the locks test/ratchet_open.txt lists;
-  every test of ported code passes), and pushes fast-forward; the full CI matrix runs at clause
+  `bash dev/check.sh` on every commit it lands, its evidence, about a minute of wall (a 60-s
+  target, red past 120 s: WasmTarget loads, so every construction checks itself; the ratchet
+  passes; every test of ported code passes; TLC checks every model the change touches), and
+  pushes fast-forward, logging each landing's seconds from its first commit to landed, the median
+  of the last five inside its band (a 300-s target, red past 600 s: Dale 2026-10-21); the full CI matrix runs at clause
   closure and never holds a landing (its red is the next batch's first item), and once, blocking,
   on PR #128's merge head; a failure names its site. Checks: `L153` (the full matrix runs every
   test family CI runs, at clause closure, non-blocking; a landing pushes the march branch alone)
