@@ -379,7 +379,12 @@ end
         end) : (@exhaustive node::NirStmt begin
             # a call of a builtin that is a Kernel node of its own: a field read, a field write, a type
             # test, a throw, a tuple (dart's record); every other builtin a static invocation
-            (c::NirCall) => let f = nir_callee(c)
+            (c::NirCall) => let f = nir_callee(c),
+                    # a tuple's field by its position, a NamedTuple's by its name: Kernel's record gets
+                    record_get(R::Type, K::Type) = f === Core.getfield && length(c.args) >= 3 && c.args[3] isa NirConst &&
+                        c.args[3].c.val isa K && (let t = dart_type_of(self, c.args[2]); t isa DataType && isconcretetype(t) && t <: R end)
+                record_get(Tuple, Int) ? visit_record_index_get(self, c, expected_type) :
+                record_get(NamedTuple, Symbol) ? visit_record_name_get(self, c, expected_type) :
                 f === Core.getfield ? visit_instance_get(self, c, expected_type) :
                 f === Core.setfield! ? visit_instance_set(self, c, expected_type) :
                 f === Core.isa ? visit_is_expression(self, c, expected_type) :
@@ -1057,11 +1062,81 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter" @unported function instantiate_type_parameter(self::AstCodeGenerator, parameter::TypeVar) end
 
-@parity "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral" @unported function visit_record_literal(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+"""
+Julia's `tuple(x...)`, Kernel's RecordLiteral: a tuple allocated with its fields. dart allocates its
+record shape's class with every field boxed to the top type. A Julia tuple is an instance of its own
+class, the tuple type of its fields' types, Julia's answer (`Core.Compiler.tuple_tfunc` of the
+operands' inferred types, widened: `tuple(Int, 1)` is a `Tuple{DataType, Int64}`), laid out as any
+class with Julia's field types (src/class_info.jl), so each operand is translated to its field's own
+wasm type. An operand whose class Julia leaves open makes a tuple whose class only run time knows,
+and it rejects, located.
+"""
+@parity "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral" function visit_record_literal(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral"
+    local args = node.args[2:end]
+    local record_type = Core.Compiler.widenconst(Core.Compiler.tuple_tfunc(Core.Compiler.fallback_lattice, Any[dart_type_of(self, a) for a in args]))
+    record_type isa DataType && isconcretetype(record_type) ||
+        reject!(Unquarantined("src/code_generator.jl visitRecordLiteral: a tuple of type $record_type, whose class only run time knows"), "$(self.enclosing_member)")
+    local record_class_info = get(self.translator.class_info, record_type, nothing)
+    record_class_info === nothing && reject!(Internal("$at: no class info for $record_type"), "$(self.enclosing_member)")
+    record_class_allocation(self.translator.functions[], class_id(record_class_info))
+    local b = self.b[]
+    push_object_header_fields(b, self.translator, record_class_info)
+    local fields = class_instance_fields(record_type, at)
+    length(fields) == length(args) || reject!(Internal("$at: $(length(args)) operands for the $(length(fields)) fields of $record_type"), "$(self.enclosing_member)")
+    for (k, field) in enumerate(fields)
+        local field_index = self.translator.field_index[field]
+        translate_expression(self, args[k], WasmBuilder.unpacked(record_class_info.struct_.fields[field_index + 1].type))
+    end
+    WasmBuilder.struct_new(b, record_class_info.struct_)
+    return record_class_info.non_nullable_type
+end
 
-@parity "dart2wasm/lib/code_generator.dart:3258 AstCodeGenerator.visitRecordIndexGet" @unported function visit_record_index_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+"""
+Julia's `getfield(t, i)` on a tuple, Kernel's RecordIndexGet: the field at the shape's positional
+index (`RecordShape.getPositionalIndex`). dart reads it from the top type, casting to the record
+class and getting a boxed field. A Julia tuple's static type is its class, so the receiver needs no
+cast, and the field holds Julia's own field type, read as any field is (`_directGet`, an 8- or
+16-bit one extended by its sign). The shape's index is the class layout's (src/class_info.jl),
+checked: a disagreement rejects as `Internal`.
+"""
+@parity "dart2wasm/lib/code_generator.dart:3258 AstCodeGenerator.visitRecordIndexGet" function visit_record_index_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/code_generator.dart:3258 AstCodeGenerator.visitRecordIndexGet"
+    local receiver = node.args[2]
+    local receiver_type = dart_type_of(self, receiver)
+    local index = node.args[3]
+    index isa NirConst && index.c.val isa Int ||
+        reject!(Unquarantined("src/julia: a field of the tuple $receiver_type indexed at run time"), "$(self.enclosing_member)")
+    local record_shape = RecordShape_from_type(receiver_type)
+    local fields = class_instance_fields(receiver_type, at)
+    local i = index.c.val
+    1 <= i <= length(fields) || reject!(Internal("$at: the field $i of $receiver_type, which has $(length(fields))"), "$(self.enclosing_member)")
+    self.translator.field_index[fields[i]] == get_positional_index(record_shape, i - 1) ||
+        reject!(Internal("$at: the shape's index of field $i of $receiver_type disagrees with its class layout"), "$(self.enclosing_member)")
+    return _direct_get(self, fields[i], receiver)
+end
 
-@parity "dart2wasm/lib/code_generator.dart:3278 AstCodeGenerator.visitRecordNameGet" @unported function visit_record_name_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+"""
+Julia's `getfield(nt, :name)` on a NamedTuple, Kernel's RecordNameGet: the field at the shape's
+index for the name (`RecordShape.getNameIndex`, the name's place in Julia's declared order). As for
+an index, the receiver's static type is its class and the field Julia's own type, and the shape's
+index is checked against the class layout's.
+"""
+@parity "dart2wasm/lib/code_generator.dart:3278 AstCodeGenerator.visitRecordNameGet" function visit_record_name_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/code_generator.dart:3278 AstCodeGenerator.visitRecordNameGet"
+    local receiver = node.args[2]
+    local receiver_type = dart_type_of(self, receiver)
+    local name = node.args[3]
+    name isa NirConst && name.c.val isa Symbol ||
+        reject!(Unquarantined("src/julia: a field of the NamedTuple $receiver_type named at run time"), "$(self.enclosing_member)")
+    local record_shape = RecordShape_from_type(receiver_type)
+    local fields = class_instance_fields(receiver_type, at)
+    local k = findfirst(f -> f.name == string(name.c.val), fields)
+    k === nothing && reject!(Internal("$at: no field $(name.c.val) in $receiver_type"), "$(self.enclosing_member)")
+    self.translator.field_index[fields[k]] == get_name_index(record_shape, string(name.c.val)) ||
+        reject!(Internal("$at: the shape's index of field $(name.c.val) of $receiver_type disagrees with its class layout"), "$(self.enclosing_member)")
+    return _direct_get(self, fields[k], receiver)
+end
 
 @parity "dart2wasm/lib/code_generator.dart:3292 AstCodeGenerator.visitFileUriExpression" @unported function visit_file_uri_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 

@@ -59,3 +59,61 @@ end
     @test D._field_names_constant(g, D.RecordShape(1, ["b", "a"])).c.val == ("a", "b")
     @test D.default_constant_reference(D._RecordVisitor(g), WasmTarget.NirConst(Core.Const((1, 2)))) === nothing
 end
+
+module RecordCodegenCases
+mk(x::Int64, y::Float64) = (x, y)
+sa(nt::NamedTuple{(:b, :a), Tuple{Int64, Int64}}) = nt.a - nt.b
+fst(t::Tuple{Int64, Float64}) = t[1] * Int64(2)
+end
+
+# the module of one body, `f` at `argtypes`, built as the code generator builds a member
+function records_compile_one(f, argtypes)
+    local W = WasmTarget; local D = W.Dart2Wasm; local B = W.WasmBuilder; local IR = B.IR
+    local t = D.Translator(W.check_subset(f, argtypes, "records"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    local mb = D.main_module(t)
+    local nb = only(t.component)
+    local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
+    local fb = B.define(mb.functions[], sig, "f")
+    D.generate(D.get_member_code_generator(t, fb, nb.ci.def), B.body(fb), B.locals(fb), nothing)
+    B.var"export"(mb.exports, "f", fb)
+    local s = B.Serializer(); B.serialize(s, B.build(mb))
+    return t, B.data(s)
+end
+
+@testset "code_generator.dart: a tuple's literal and its fields, Julia's tuple layout" begin
+    local W = WasmTarget; local D = W.Dart2Wasm; local IR = W.WasmBuilder.IR
+    # tuple(x, y) allocates its own class, Tuple{Int64, Float64}, each field Julia's own type, and the
+    # builder accepts the module instruction by instruction
+    local t, bytes = records_compile_one(RecordCodegenCases.mk, (Int64, Float64))
+    @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    local info = t.class_info[Tuple{Int64, Float64}]
+    local fs = info.struct_.fields
+    @test fs[D.get_positional_index(D.RecordShape_from_type(Tuple{Int64, Float64}), 0) + 1].type == IR.NumType_i64
+    @test fs[D.get_positional_index(D.RecordShape_from_type(Tuple{Int64, Float64}), 1) + 1].type == IR.NumType_f64
+    @test typeof(RecordCodegenCases.mk(1, 2.0)) === Tuple{Int64, Float64}
+    # a NamedTuple's field by name reads the field at the name's place in Julia's declared order
+    local t2, bytes2 = records_compile_one(RecordCodegenCases.sa, (NamedTuple{(:b, :a), Tuple{Int64, Int64}},))
+    @test bytes2[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    @test RecordCodegenCases.sa((b = 2, a = 7)) == 5
+    # a tuple's field by position: Julia's IR reads it behind its bounds-check flag, a statement the
+    # code generator does not translate yet, a located rejection there
+    local e = try; records_compile_one(RecordCodegenCases.fst, (Tuple{Int64, Float64},)); nothing; catch x; x; end
+    @test e isa W.RejectionError && occursin("bounds-check", sprint(show, e.rejection))
+    # the visit itself: the shape's positional index agrees with the class layout, then the receiver
+    # is read (an argument no parameter setup has made here, a located rejection after the checks)
+    local t3 = D.Translator(W.check_subset(RecordCodegenCases.fst, (Tuple{Int64, Float64},), "records"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    D._init_modules(t3, nothing)
+    collect(D.ClassInfoCollector(t3))
+    local nb = only(t3.component)
+    local g = D.get_inlinable_member_code_generator(t3, IR.FunctionType(IR.ValueType[D.translate_type(t3, Tuple{Int64, Float64})], IR.ValueType[IR.NumType_i64]), nb.ci.def)
+    local get1 = nb.stmts[findfirst(st -> st isa W.NirCall && W.nir_callee(st) === Core.getfield, nb.stmts)]
+    local e2 = try; D.visit_record_index_get(g, get1, IR.NumType_i64); nothing; catch x; x; end
+    @test e2 isa W.RejectionError && occursin("undefined variable", sprint(show, e2.rejection))
+    # an index past the tuple's fields rejects at its own check
+    local past = W.NirCall(W.NirValue[get1.args[1], get1.args[2], W.NirConst(Core.Const(3))])
+    local e3 = try; D.visit_record_index_get(g, past, IR.NumType_i64); nothing; catch x; x; end
+    @test e3 isa W.RejectionError && e3.rejection isa W.Internal && occursin("which has 2", e3.rejection.site)
+end
