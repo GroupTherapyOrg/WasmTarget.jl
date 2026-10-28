@@ -479,6 +479,8 @@ DART_FILES, `include` takes any path, so the second oracle's file map is a table
 """
 @quarantine "Julia's include takes any path; the LLVM pin table is the file map of the second oracle's ports" Core.String const LLVM_FILES::Tuple{Vararg{String}} = (
     "llvm/include/llvm/Support/GenericLoopInfo", "llvm/include/llvm/Support/GenericLoopInfoImpl",
+    "llvm/lib/CodeGen/MachineBasicBlock", "llvm/lib/Target/WebAssembly/WebAssemblyInstrInfo",
+    "llvm/lib/Target/WebAssembly/WebAssemblySortRegion", "llvm/lib/Target/WebAssembly/WebAssemblyCFGSort",
 )
 
 """

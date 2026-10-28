@@ -96,7 +96,8 @@ end
 """
     machine_function(stmts, at) -> MachineFunction
 
-The machine code of a body whose statements are `stmts`: Julia's CFG of them
+The machine code of a body whose statements are `stmts`, an optimized CodeInfo's, each jump naming
+the statement it goes to: Julia's CFG of them
 (compute_basic_blocks), with a top block before Julia's first, as Julia's codegen emits its `top`
 block before the first block of Julia's IR (src/codegen.cpp, emit_function), since Julia's first
 block may have predecessors (`while true end`) and LLVM's entry block has none; and Julia's
@@ -131,10 +132,12 @@ placeTryTableMarker is ported.
                                                 "$at: statement $(last(r)), a try region")
             local branch = last_ isa Union{Core.GotoNode, Core.GotoIfNot}
             push!(instrs, MachineInstr(STMTS, MachineOperand[MOImm(first(r)), MOImm(branch ? last(r) - 1 : last(r))], b))
+            # a jump of the CodeInfo names a statement, the first of its block (block_for_inst)
             if last_ isa Core.GotoNode
-                push!(instrs, MachineInstr(BR, MachineOperand[MOBlock(last_.label + 1)], b))
-            elseif last_ isa Core.GotoIfNot && last_.dest + 1 != b + 1
-                push!(instrs, MachineInstr(BR_UNLESS, MachineOperand[MOBlock(last_.dest + 1), MOImm(last(r))], b))
+                push!(instrs, MachineInstr(BR, MachineOperand[MOBlock(Core.Compiler.block_for_inst(jcfg, last_.label) + 1)], b))
+            elseif last_ isa Core.GotoIfNot
+                local dest = Core.Compiler.block_for_inst(jcfg, last_.dest) + 1
+                dest == b + 1 || push!(instrs, MachineInstr(BR_UNLESS, MachineOperand[MOBlock(dest), MOImm(last(r))], b))
             end
         end
         push!(blocks, MachineBasicBlock(b, unique(Int[p for p in bb.preds if reachable(p)]), unique(bb.succs), instrs, false))
@@ -176,6 +179,16 @@ Whether an instruction ends its block's straight-line code (LLVM's MachineInstr:
 isTerminator flag WebAssemblyInstrControl.td sets on BR, BR_IF and BR_UNLESS)."""
 @quarantine "LLVM's MCInstrDesc isTerminator flag, TableGen's, for the branches" Base.in is_terminator(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_IF, BR_UNLESS)
 
+"""    terminators(mf, b) -> Vector{MachineInstr}
+
+The block's instructions from its first terminator to its end (LLVM's
+MachineBasicBlock::terminators)."""
+@quarantine "LLVM's MachineBasicBlock::terminators, the instructions from the first terminator on" Base.findfirst function terminators(mf::MachineFunction, b::Int)::Vector{MachineInstr}
+    local instrs = mf.blocks[b].instrs
+    local i = findfirst(is_terminator, instrs)
+    return i === nothing ? MachineInstr[] : instrs[i:end]
+end
+
 """    post_order(mf, entry) -> Vector{Int}
 
 The blocks reachable from `entry` in a depth-first postorder over successors (LLVM's po_iterator,
@@ -197,4 +210,47 @@ llvm/ADT/PostOrderIterator.h)."""
         end
     end
     return out
+end
+
+"""
+    PriorityQueue()
+
+Blocks by priority (LLVM's PriorityQueue, llvm/ADT/PriorityQueue.h, a std::priority_queue): `pq_top`
+is the block no other block outranks under the queue's comparator `less`, as a max-heap's top.
+"""
+@quarantine "LLVM's PriorityQueue over std::priority_queue; Julia's Base has no heap" Base.Vector struct PriorityQueue
+    items::Vector{Int}
+    PriorityQueue() = new(Int[])
+end
+
+"""    pq_push!(q, b) -> Nothing"""
+@quarantine "std::priority_queue::push" Base.push! function pq_push!(q::PriorityQueue, b::Int)::Nothing
+    push!(q.items, b)
+    return nothing
+end
+
+"""    pq_pop!(q, less) -> Int
+
+Removes and returns the top: the block `b` with `less(b, c)` for no other `c` (std::priority_queue's
+top then pop, its comparator a strict weak order)."""
+@quarantine "std::priority_queue::top and pop, the greatest under the comparator" Base.deleteat! function pq_pop!(q::PriorityQueue, less::Function)::Int
+    isempty(q.items) && reject!(Internal("src/julia/machine.jl pq_pop!: top of an empty queue"), "PriorityQueue.top")
+    local t = 1
+    for i in 2:length(q.items)
+        less(q.items[t], q.items[i]) && (t = i)
+    end
+    local b = q.items[t]
+    deleteat!(q.items, t)
+    return b
+end
+
+"""    pq_empty(q) -> Bool"""
+@quarantine "std::priority_queue::empty" Base.isempty pq_empty(q::PriorityQueue)::Bool = isempty(q.items)
+
+"""    get_block_numbered(mf, n) -> Union{Int,Nothing}
+
+The block numbered `n`, nothing past the last (LLVM's MachineFunction::getBlockNumbered)."""
+@quarantine "LLVM's MachineFunction::getBlockNumbered over the layout's numbers" Base.findfirst function get_block_numbered(mf::MachineFunction, n::Int)::Union{Int,Nothing}
+    local i = findfirst(b -> mf.blocks[b].number == n, mf.layout)
+    return i === nothing ? nothing : mf.layout[i]
 end
