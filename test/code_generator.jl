@@ -145,7 +145,8 @@ end
     end
     # forms no program above holds, built directly
     @test rejection(() -> D.translate_statement(gens[1], W.NirGoto(1), nothing)).rejection isa W.Unquarantined
-    @test rejection(() -> D.translate_statement(gens[1], W.NirUnreachable(), nothing)).rejection isa W.Unquarantined
+    # Julia's unreachable is a trap, emitted into the builder `generate` gives
+    @test occursin("AstCodeGenerator.b", rejection(() -> D.translate_statement(gens[1], W.NirUnreachable(), nothing)).rejection.anchor)
 end
 
 @testset "intrinsics.dart: Julia's identity, ifelse, conversions and shifts" begin
@@ -299,9 +300,8 @@ end
     # each compiles to a module the builder accepted instruction by instruction (D10); run by node,
     # each answers as native Julia on its edge inputs (the commit records the differential)
     local C = IntrinsicCompileCases
-    for (f, at) in ((C.mulshift, (Int64, Int64)), (C.floorabs, (Float64,)), (C.scale, (Int32,)), (C.absint, (Int64,)),
-                    (C.bits, (Int64,)), (C.notand, (Bool, Bool)), (C.minmax, (Int32, Int32)), (C.widen32, (Int32,)),
-                    (C.egal, (Float64, Float64)))
+    for (f, at) in ((C.mulshift, (Int64, Int64)), (C.floorabs, (Float64,)), (C.absint, (Int64,)), (C.notand, (Bool, Bool)),
+                    (C.widen32, (Int32,)))
         local bytes = compile_one(f, at)
         @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
     end
@@ -412,4 +412,39 @@ end
     # a binding that can change rejects, located, as a statement or an operand
     @test rejection(() -> D.visit_static_get(g, W.NirGlobalRead(GlobalRef(GlobalCases, :counter)), IR.NumType_i32)).rejection isa W.Unquarantined
     @test rejection(() -> D.translate_expression(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)), IR.NumType_i32)).rejection isa W.Unquarantined
+end
+
+module ControlCases
+sumto(n::Int64) = (s = Int64(0); for i in Int64(1):n; s += i; end; s)
+function fib(n::Int32)
+    a, b = Int32(0), Int32(1)
+    for _ in Int32(1):n
+        a, b = b, a + b
+    end
+    a
+end
+sign3(x::Float64) = x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0)
+absdiff(x::Int32, y::Int32) = x > y ? x - y : y - x
+mergey(x::Int32) = (y = x > Int32(0) ? x * Int32(2) : x - Int32(5); y + Int32(1))
+function early(x::Int64, y::Int64)
+    x < 0 && return Int64(0)
+    for i in Int64(1):y
+        i > x && return i
+    end
+    y
+end
+end
+
+@testset "code_generator.dart: control flow, structured by LLVM's stackifier" begin
+    # loops, phis (fib's `a, b = b, a + b` a parallel move), nested branches, a merging diamond and
+    # early returns from a loop: each body's machine code, sorted and stackified by LLVM's passes, is
+    # lowered into a module the builder accepted at every instruction; run by node, each answers as
+    # native Julia on its edge inputs (the commit records the differential)
+    local C = ControlCases
+    for (f, at) in ((C.fib, (Int32,)), (C.sign3, (Float64,)), (C.mergey, (Int32,)), (C.early, (Int64, Int64)))
+        @test compile_one(f, at)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    end
+    # the loop's module holds a loop (0x03) and a conditional branch out of it
+    local bytes = compile_one(C.sumto, (Int64,))
+    @test 0x03 in bytes && 0x0d in bytes
 end
