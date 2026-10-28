@@ -121,8 +121,10 @@ end
         elseif st isa Union{W.NirCall, W.NirInvoke, W.NirNew, W.NirGlobalRead}
             # a used value is a local declared with its initializer; an unused one an expression statement
             @test r.rejection isa W.Unported && occursin("translateTypeOfLocalVariable", r.rejection.anchor)
+            # the unused one is translated at the void marker: its expression's own visitor, which
+            # stops at the first piece not yet given here (a constant, a parameter, an allocation)
             local r2 = rejection(() -> D.translate_statement(g, st, nothing))
-            @test r2.rejection isa W.Unported && occursin("voidMarker", r2.rejection.anchor)
+            @test r2 isa W.RejectionError && !occursin("voidMarker", string(r2.rejection))
         elseif st isa Union{W.NirForeignCall, W.NirCFunction}
             @test r.rejection isa W.Unquarantined && occursin("1.F", r.rejection.row)
         else
@@ -133,4 +135,36 @@ end
     # forms no program above holds, built directly
     @test rejection(() -> D.translate_statement(gens[1], W.NirGoto(1), nothing)).rejection isa W.Unquarantined
     @test rejection(() -> D.translate_statement(gens[1], W.NirUnreachable(), nothing)).rejection isa W.Unquarantined
+end
+
+@testset "intrinsics.dart: Julia's identity, ifelse, conversions and shifts" begin
+    local I = Core.Intrinsics
+    local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    local p = codegen_of(CodegenCases.f_poly, (Float64, Float64), [IR.NumType_f64, IR.NumType_f64], [IR.NumType_f64])
+    local n = codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
+    local lit(v) = W.NirConst(Core.Const(v))
+    local x = W.NirArgument(2)
+    local call(f, args...) = W.NirCall(W.NirValue[lit(f), args...])
+    # an arm found translates its operands first, reading the argument's local, which no parameter
+    # setup has made here; no arm is nothing, the call then rejecting where it stands
+    local found(gen, c) = (r = rejection(() -> D.generate_static_intrinsic(gen.intrinsifier[], c));
+                           r !== nothing && r.rejection isa W.Internal && occursin("undefined variable", r.rejection.site))
+    local absent(gen, c) = D.generate_static_intrinsic(gen.intrinsifier[], c) === nothing
+    # Julia's === compares bits, so a float is compared as its bits' integer: native Julia's answers
+    @test (NaN === NaN) && !(0.0 === -0.0) && reinterpret(Int64, NaN) == reinterpret(Int64, NaN)
+    @test found(g, call(Core.:(===), x, lit(Int32(3)))) && found(p, call(Core.:(===), x, W.NirArgument(3)))
+    @test absent(g, call(Core.:(===), x, lit(Int64(3))))   # different types: no value comparison
+    @test found(g, call(Core.ifelse, lit(true), x, x)) && absent(g, call(Core.ifelse, lit(true), x, lit(1.0)))
+    # conversions between full-width types; a narrow one has no arm
+    @test found(g, call(I.sext_int, lit(Int64), x)) && found(g, call(I.zext_int, lit(UInt64), x))
+    @test found(g, call(I.sitofp, lit(Float64), x)) && found(g, call(I.bitcast, lit(Float32), x)) && found(g, call(I.bitcast, lit(UInt32), x))
+    @test found(p, call(I.fptosi, lit(Int64), x)) && found(p, call(I.fptrunc, lit(Float32), x)) && found(p, call(I.bitcast, lit(Int64), x))
+    @test absent(g, call(I.trunc_int, lit(Int8), x)) && absent(n, call(I.sext_int, lit(Int32), x)) && absent(g, call(I.fpext, lit(Float64), x))
+    # Julia's shifts saturate, the count unsigned: native Julia's answers, which the select ports
+    @test I.shl_int(Int32(1), UInt64(40)) == 0 && I.lshr_int(Int32(-1), UInt8(32)) == 0
+    @test I.ashr_int(Int32(-8), UInt64(100)) == -1 && I.ashr_int(Int32(8), UInt64(100)) == 0 && I.shl_int(Int64(3), Int32(-1)) == 0
+    # a shift's arm takes a local for the count first, from the builder `generate` has not given yet
+    local e = rejection(() -> D.generate_static_intrinsic(g.intrinsifier[], call(I.shl_int, x, lit(Int64(3)))))
+    @test e.rejection isa W.Unported && occursin("AstCodeGenerator.b", e.rejection.anchor)
+    @test absent(n, call(I.shl_int, x, lit(Int64(3))))
 end

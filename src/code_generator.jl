@@ -157,7 +157,7 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:118 AstCodeGenerator.options" options(self::AstCodeGenerator)::TranslatorOptions = self.translator.options
 
-@parity "dart2wasm/lib/code_generator.dart:120 AstCodeGenerator.voidMarker" @unported function void_marker(self::AstCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:120 AstCodeGenerator.voidMarker" void_marker(self::AstCodeGenerator)::WasmBuilder.IR.ValueType = self.translator.void_marker[]
 
 @parity "dart2wasm/lib/code_generator.dart:122 AstCodeGenerator.types" @unported function types(self::AstCodeGenerator) end
 
