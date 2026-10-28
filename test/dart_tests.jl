@@ -1,9 +1,15 @@
 # dart2wasm's tests at the pin, ported with Julia as the ground truth (test/dart_tests.toml, dev/LEDGER.md
 # D41): every case of test/smoke_corpus.jl's `dart_*` groups. Native Julia computes the answer recorded
-# here (D3, never dart's value). Until WasmTarget compiles a case, its compile rejects with exactly the
-# rejection recorded here, the first definition its path reaches unported; a port that moves the path
-# on, or a compile that returns a module, fails the case until it is recorded again, so no case passes
-# silently (the module is judged against native once the rebuild has its runner, dev/MARCH.md 1.B).
+# here (D3, never dart's value): one value, or the facts the dart test asserts as a tuple or a vector, each
+# fact its own element so a wrong one names itself. Until WasmTarget compiles a case, its compile rejects
+# with exactly the rejection recorded here, the first definition its path reaches unported; a port that
+# moves the path on, or a compile that returns a module, fails the case until it is recorded again, so no
+# case passes silently (the module is judged against native once the rebuild has its runner, dev/MARCH.md
+# 1.B). Every case's compile runs here. Native Julia's answer does not depend on WasmTarget's code, so it
+# runs for each case whose group text or record the change adds or edits against CHECK_BASE (dev/check.sh's
+# base, origin/wt2 by default; HEAD~1 under dev/ship.sh), proving a new or edited answer native when it is
+# written (the lead's ruling, 2026-10-28). A base that holds no corpus, the empty tree among them, runs
+# every native answer, as the closure matrix does for Julia's version drift.
 using Test, WasmTarget
 
 # the corpus's `dart_*` groups, read in a module of their own as test/smoke.jl reads the whole corpus
@@ -14,11 +20,53 @@ const DART_GROUPS = let m = Module(:DartCorpus), groups = Pair{String,Vector{Any
     filter(g -> startswith(first(g), "dart_"), groups)
 end
 
+# the text the change is measured against: the file at CHECK_BASE, or "" where the base holds none
+const _DART_BASE = get(ENV, "CHECK_BASE", "origin/wt2")
+_dart_at_base(path::String)::String = try
+    read(pipeline(`git -C $(dirname(@__DIR__)) show $(_DART_BASE):$path`; stderr = devnull), String)
+catch
+    ""
+end
+
+# each dart group's text in the corpus: its definitions since the group before and its case list, every
+# block of a group joined (a group may stand twice)
+function _dart_group_texts(text::String)::Dict{String,String}
+    local out = Dict{String,String}()
+    local start = findfirst("# ---- dart2wasm's tests at the pin, tests/web/wasm", text)
+    start === nothing && return out
+    local block = IOBuffer()
+    local group = ""
+    for l in eachline(IOBuffer(SubString(text, first(start))))
+        println(block, l)
+        local m = match(r"^_g\(\"(dart_[^\"]+)\"", l)
+        m === nothing || (group = m[1])
+        if l == "])" && !isempty(group)
+            out[group] = get(out, group, "") * String(take!(block))
+            group = ""
+        end
+    end
+    return out
+end
+
+# each record's line in this file's table, by its case
+_dart_record_lines(text::String)::Dict{String,String} =
+    Dict(String(m[1]) => String(m[2]) for m in eachmatch(r"^\s*\"(dart_[^\"]+)\" => (.*)$"m, text))
+
+# the cases whose native answer the change can affect: its group's text or its record differs from the base's
+const DART_NATIVE_DUE = let base_c = _dart_group_texts(_dart_at_base("test/smoke_corpus.jl")),
+                            head_c = _dart_group_texts(read(joinpath(@__DIR__, "smoke_corpus.jl"), String)),
+                            base_r = _dart_record_lines(_dart_at_base("test/dart_tests.jl")),
+                            head_r = _dart_record_lines(read(joinpath(@__DIR__, "dart_tests.jl"), String))
+    Set{String}(key for (key, rec) in head_r
+                if get(base_r, key, nothing) != rec || get(base_c, first(split(key, '/')), nothing) != get(head_c, first(split(key, '/')), ""))
+end
+
 # the definitions a dart case's compile reaches first today
 const _COMPILE = WasmTarget.Unported(WasmTarget.anchor_of(WasmTarget.Dart2Wasm.compile))
 
-# a case outside the strict subset (D32): Julia's verifier's text, recorded by its first line, the
-# unresolved statement, which names no line of the corpus
+# a case outside the strict subset (D32): Julia's verifier's verdict, recorded by its first line up to the
+# unresolved statement's callee, which names no line of the corpus (the operands' printed types vary
+# with what inference cached before, `n::Int64` after a native run and `n::Any` before one)
 _outside(statement::String) = WasmTarget.OutsideSubset(statement)
 
 # each case: native Julia's answer and the rejection its compile gives today
@@ -168,7 +216,7 @@ const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
     "dart_nnbd/late_instance_field_initializers" => (15990591, _COMPILE),
     "dart_nnbd/never_never_null_assignability_strong" => (6524760354615724947, _COMPILE),
     "dart_nnbd/normalization_type_object_normalization" => (8191, _COMPILE),
-    "dart_nnbd/required_named_parameters_missing_required_argument_dynamic" => (1759218604287, _outside("Verifier error #1: unresolved call to function from statement Core._apply_iterate(Base.iterate, Base.afoldl, Core.svec(Base.:+, Base.add_int(Base.add_int(1, 2)::Int64, 3)::Int64)::Core.SimpleVector, Core.svec(4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, Base.mul_int(36, n::Any)::Int64)::Core.SimpleVector)::Int64")),
+    "dart_nnbd/required_named_parameters_missing_required_argument_dynamic" => (1759218604287, _outside("Verifier error #1: unresolved call to function from statement Core._apply_iterate")),
     "dart_nnbd/required_named_parameters_required_named_args_strong" => (4454, _COMPILE),
     "dart_nnbd/required_named_parameters_required_named_args" => (7788, _COMPILE),
     "dart_nnbd/resolution_issue41479" => (1, _COMPILE),
@@ -195,8 +243,8 @@ const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
     "dart_nnbd/syntax_nullable_type" => (170, _COMPILE),
     "dart_nnbd/syntax_required_modifier" => (309, _COMPILE),
     "dart_nnbd/syntax_required_modifier_dynamic_error" => (34406, _COMPILE),
-    "dart_nnbd/type_equality_function_type_equality" => (65328, _outside("Verifier error #1: unresolved call from statement Base.issubset(kwnames::Any, %new()::Vector{Symbol})::Bool")),
-    "dart_nnbd/type_equality_generic_function_type_equality" => (8094, _outside("Verifier error #1: unresolved call from statement Base.issubset(kwnames::Any, %new()::Vector{Symbol})::Bool")),
+    "dart_nnbd/type_equality_function_type_equality" => (65328, _outside("Verifier error #1: unresolved call from statement Base.issubset")),
+    "dart_nnbd/type_equality_generic_function_type_equality" => (8094, _outside("Verifier error #1: unresolved call from statement Base.issubset")),
     "dart_nnbd/type_equality_regress42246" => (61, _COMPILE),
     "dart_nnbd/type_object_equality" => (111033, _COMPILE),
     # tests/language/patterns/
@@ -226,7 +274,7 @@ const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
     "dart_patterns/issue_52439" => (3, _COMPILE),
     "dart_patterns/issue52409" => (0, _COMPILE),
     "dart_patterns/issue54559" => (1, _COMPILE),
-    "dart_patterns/non_interface_object_pattern" => (11207329847, _outside("Verifier error #1: unresolved call from statement (Core._hasmethod)(Base.signature_type(f::Any, t::Any)::Any)::Bool")),
+    "dart_patterns/non_interface_object_pattern" => (11207329847, _outside("Verifier error #1: unresolved call from statement (Core._hasmethod)")),
     "dart_patterns/nullable_object_pattern" => (8388607, _COMPILE),
     "dart_patterns/object_pattern_inference" => (131071, _COMPILE),
     "dart_patterns/primitive_switch" => (176372798425452425, _COMPILE),
@@ -234,7 +282,7 @@ const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
     "dart_patterns/regress_59613" => (135, _COMPILE),
     "dart_patterns/relational_pattern_expression_precedence" => (-9223231325136683011, _COMPILE),
     "dart_patterns/schema" => (262143, _COMPILE),
-    "dart_patterns/shared_case_variable" => (262143, _outside("Verifier error #1: unresolved call from statement Base.setindex!(%new()::Dict{String, Union{Bool, Int64}}, Base.getfield(φ ()::Pair, :second)::Any, Base.getfield(φ ()::Pair, :first)::Any)::Any")),
+    "dart_patterns/shared_case_variable" => (262143, _outside("Verifier error #1: unresolved call from statement Base.setindex!")),
     "dart_patterns/switch_case_scope" => (15, _COMPILE),
     "dart_patterns/type_question_before_when" => (255, _COMPILE),
     "dart_patterns/version_2_29_changes" => (7, _COMPILE),
@@ -392,7 +440,7 @@ const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
     "dart_switch/case_runtime" => (15, _COMPILE),
     "dart_switch/case_static_const" => (123, _COMPILE),
     "dart_switch/enum_compare" => (18, _COMPILE),
-    "dart_switch/equality_side_effect" => (7, _outside("Verifier error #1: unresolved call to function from statement Core._apply_iterate(Base.iterate, f::Any, Core.svec(%new()::IOBuffer)::Core.SimpleVector, args::Any)::Any")),
+    "dart_switch/equality_side_effect" => (7, _outside("Verifier error #1: unresolved call to function from statement Core._apply_iterate")),
     "dart_switch/infinite_switch_label" => (3, _COMPILE),
     "dart_switch/issue_60375" => (63, _COMPILE),
     "dart_switch/label" => (8191, _COMPILE),
@@ -431,7 +479,7 @@ const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
     "dart_const/constructor3" => (2.0, _COMPILE),
     "dart_const/ct_const" => (8388607, _COMPILE),
     "dart_const/double_in_int_op" => (36, _COMPILE),
-    "dart_const/dynamic_type_literal" => (3, _outside("Verifier error #1: unresolved call from statement Base.setindex!(%new()::Dict{DataType, Int64}, Base.getfield(φ ()::Pair{DataType, Int64}, :second)::Int64, Base.getfield(φ ()::Pair{DataType, Int64}, :first)::DataType)::Any")),
+    "dart_const/dynamic_type_literal" => (3, _outside("Verifier error #1: unresolved call from statement Base.setindex!")),
     "dart_const/escape_frog" => (1, _COMPILE),
     "dart_const/evaluation" => (4094, _COMPILE),
     "dart_const/factory_member" => (63, _COMPILE),
@@ -637,6 +685,9 @@ const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
     "dart_generic/typedef" => (63, _COMPILE),
 )
 
+# a case's answer is native's: of its type, and isequal (a NaN equal to itself, -0.0 apart from 0.0)
+_dart_same(got, native) = typeof(got) == typeof(native) && isequal(got, native)
+
 # what a compile gives: its rejection (an OutsideSubset by its first line), or :compiled
 _dart_outcome(f, args) = try
     WasmTarget.compile(f, Tuple(map(typeof, args)))
@@ -644,7 +695,10 @@ _dart_outcome(f, args) = try
 catch e
     e isa WasmTarget.RejectionError || rethrow()
     local r = e.rejection
-    r isa WasmTarget.OutsideSubset ? _outside(String(first(split(r.reason, '\n')))) : r
+    r isa WasmTarget.OutsideSubset || return r
+    local line = String(first(split(r.reason, '\n')))
+    local m = match(r"^(.*? from statement \(?[^(]+)", line)
+    return _outside(m === nothing ? line : String(m[1]))
 end
 
 @testset "dart2wasm's tests, Julia the ground truth" begin
@@ -657,7 +711,7 @@ end
             if haskey(DART_CASES, key)
                 local native, today = DART_CASES[key]
                 local f, args = case[2], case[3:end]
-                @test f(args...) === native
+                key in DART_NATIVE_DUE && @test _dart_same(f(args...), native)
                 @test _dart_outcome(f, args) == today
             end
         end
@@ -665,3 +719,5 @@ end
     # every recorded case is a case of the corpus
     @test sort!(collect(setdiff(keys(DART_CASES), seen))) == String[]
 end
+println("dart tests: $(length(DART_CASES)) compiles checked; native answers proven for the $(length(DART_NATIVE_DUE)) the change ",
+        "adds or edits against $(_DART_BASE)")
