@@ -41,13 +41,35 @@ end
 @parity "dart2wasm/lib/functions.dart:949 CallShape" @closed const CallShape = Union{MethodCallShape, GetterCallShape, SetterCallShape}
 
 """
-MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
+The shape of a dynamic call of a method: its name, how many type arguments, how many positional
+arguments, and the names of its named ones. dart's Name is the Julia function's name, a Symbol, and a
+named argument's name is a keyword's, a Symbol where dart writes a String.
 """
-@parity "dart2wasm/lib/functions.dart:958 MethodCallShape" @unported struct MethodCallShape end
+@parity "dart2wasm/lib/functions.dart:958 MethodCallShape" struct MethodCallShape
+    # CallShape's field, then the kind's own
+    name::Symbol
+    type_count::Int
+    positional_count::Int
+    named::Vector{Symbol}
+    # dart's constructor (line 963), the struct's one inner constructor
+    MethodCallShape(name::Symbol, type_count::Int, positional_count::Int, named::Vector{Symbol}) = new(name, type_count, positional_count, named)
+end
 
-@parity "dart2wasm/lib/functions.dart:1035 GetterCallShape" @unported struct GetterCallShape end
+"""The shape of a dynamic getter call: its name."""
+@parity "dart2wasm/lib/functions.dart:1035 GetterCallShape" struct GetterCallShape
+    # CallShape's field
+    name::Symbol
+    # dart's constructor (line 1036), the struct's one inner constructor
+    GetterCallShape(name::Symbol) = new(name)
+end
 
-@parity "dart2wasm/lib/functions.dart:1061 SetterCallShape" @unported struct SetterCallShape end
+"""The shape of a dynamic setter call: its name."""
+@parity "dart2wasm/lib/functions.dart:1061 SetterCallShape" struct SetterCallShape
+    # CallShape's field
+    name::Symbol
+    # dart's constructor (line 1062), the struct's one inner constructor
+    SetterCallShape(name::Symbol) = new(name)
+end
 
 @parity "dart2wasm/lib/functions.dart:44 FunctionCollector" FunctionCollector(translator::KernelNodes)::FunctionCollector = FunctionCollector(Val(:_), translator)
 
@@ -282,60 +304,113 @@ end
     return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
 end
 
-@parity "dart2wasm/lib/functions.dart:951 CallShape" @unported function CallShape(name) end
+# dart's sealed class is abstract: its constructor runs only as a kind's super constructor, whose
+# struct holds its field; called on its own it is dart's compile error
+@parity "dart2wasm/lib/functions.dart:951 CallShape" function CallShape(name::Symbol)::Union{}
+    reject!(Internal("dart2wasm/lib/functions.dart:951 CallShape: the sealed class is constructed only through a kind"), "CallShape")
+end
 
-@parity "dart2wasm/lib/functions.dart:953 CallShape.isGetter" @unported function is_getter(self::CallShape) end
+# dart's abstract member: each kind of the sealed sum defines its own; reaching this is a kind lacking it
+@parity "dart2wasm/lib/functions.dart:953 CallShape.isGetter" is_getter(self::CallShape)::Bool = reject!(Internal("dart2wasm/lib/functions.dart:953 CallShape.isGetter: abstract in $(typeof(self))"), "is_getter")
 
-@parity "dart2wasm/lib/functions.dart:954 CallShape.isSetter" @unported function is_setter(self::CallShape) end
+# dart's abstract member: each kind of the sealed sum defines its own; reaching this is a kind lacking it
+@parity "dart2wasm/lib/functions.dart:954 CallShape.isSetter" is_setter(self::CallShape)::Bool = reject!(Internal("dart2wasm/lib/functions.dart:954 CallShape.isSetter: abstract in $(typeof(self))"), "is_setter")
 
-@parity "dart2wasm/lib/functions.dart:955 CallShape.isMethod" @unported function is_method(self::CallShape) end
+# dart's abstract member: each kind of the sealed sum defines its own; reaching this is a kind lacking it
+@parity "dart2wasm/lib/functions.dart:955 CallShape.isMethod" is_method(self::CallShape)::Bool = reject!(Internal("dart2wasm/lib/functions.dart:955 CallShape.isMethod: abstract in $(typeof(self))"), "is_method")
 
-@parity "dart2wasm/lib/functions.dart:963 MethodCallShape" @unported function MethodCallShape(name, type_count, positional_count, named) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "dart2wasm/lib/functions.dart:963 MethodCallShape" function MethodCallShape end
 
-@parity "dart2wasm/lib/functions.dart:965 MethodCallShape.isIndexSet" @unported function is_index_set(self::MethodCallShape) end
+# dart's indexSetName, the operator []=, is Julia's setindex!
+@parity "dart2wasm/lib/functions.dart:965 MethodCallShape.isIndexSet" is_index_set(self::MethodCallShape)::Bool = self.name === :setindex!
 
-@parity "dart2wasm/lib/functions.dart:968 MethodCallShape.isGetter" @unported function is_getter(self::MethodCallShape) end
+@parity "dart2wasm/lib/functions.dart:968 MethodCallShape.isGetter" is_getter(self::MethodCallShape)::Bool = false
 
-@parity "dart2wasm/lib/functions.dart:970 MethodCallShape.isSetter" @unported function is_setter(self::MethodCallShape) end
+@parity "dart2wasm/lib/functions.dart:970 MethodCallShape.isSetter" is_setter(self::MethodCallShape)::Bool = false
 
-@parity "dart2wasm/lib/functions.dart:972 MethodCallShape.isMethod" @unported function is_method(self::MethodCallShape) end
+@parity "dart2wasm/lib/functions.dart:972 MethodCallShape.isMethod" is_method(self::MethodCallShape)::Bool = true
 
-@parity "dart2wasm/lib/functions.dart:974 MethodCallShape.totalArgumentCount" @unported function total_argument_count(self::MethodCallShape) end
+@parity "dart2wasm/lib/functions.dart:974 MethodCallShape.totalArgumentCount" total_argument_count(self::MethodCallShape)::Int = self.type_count + self.positional_count + length(self.named)
 
-@parity "dart2wasm/lib/functions.dart:976 MethodCallShape.matchesTarget" @unported function matches_target(self::MethodCallShape, target::NirBody) end
+"""
+Whether a call of this shape can call `target`. A Julia method's FunctionNode: no type parameters a
+call passes (its MethodInstance binds them, so a shape's type count is 0 or none), its positional
+parameters the arguments after the callee, all required but a trailing vararg (any number, none
+required), and no named parameters (keywords lower to a method of their own, Core.kwcall's).
+"""
+@parity "dart2wasm/lib/functions.dart:976 MethodCallShape.matchesTarget" function matches_target(self::MethodCallShape, target::NirBody)::Bool
+    local method = target.ci.def.def::Method
+    # Julia's type parameters are never passed: the target has none
+    self.type_count != 0 && return false
+    local positional = method.nargs - 1
+    local required = method.isva ? positional - 1 : positional
+    (self.positional_count < required || (!method.isva && self.positional_count > positional)) && return false
+    # no named parameter is required, and a named argument names none of the target's
+    isempty(self.named) || return false
+    return true
+end
 
-@parity "dart2wasm/lib/functions.dart:998 MethodCallShape.copyWithName" @unported function copy_with_name(self::MethodCallShape, new_name::Symbol) end
+@parity "dart2wasm/lib/functions.dart:998 MethodCallShape.copyWithName" copy_with_name(self::MethodCallShape, new_name::Symbol)::MethodCallShape = MethodCallShape(new_name, self.type_count, self.positional_count, self.named)
 
-@parity "dart2wasm/lib/functions.dart:1002 MethodCallShape.hashCode" @unported function Base.hash(self::MethodCallShape, h::UInt) end
+# dart's Object.hash of the name, the counts and the names; Julia's hash takes the seed it mixes in
+@parity "dart2wasm/lib/functions.dart:1002 MethodCallShape.hashCode" Base.hash(self::MethodCallShape, h::UInt)::UInt = hash((self.name, self.type_count, self.positional_count, self.named), h)
 
-@parity "dart2wasm/lib/functions.dart:1006 MethodCallShape.==" @unported function Base.:(==)(self::MethodCallShape, other) end
+# dart's `other is! MethodCallShape` arm is Julia's `==` of two different types, false
+@parity "dart2wasm/lib/functions.dart:1006 MethodCallShape.==" function Base.:(==)(self::MethodCallShape, other::MethodCallShape)::Bool
+    self.name == other.name || return false
+    self.type_count == other.type_count || return false
+    self.positional_count == other.positional_count || return false
+    length(self.named) == length(other.named) || return false
+    for i in eachindex(self.named)
+        self.named[i] == other.named[i] || return false
+    end
+    return true
+end
 
-@parity "dart2wasm/lib/functions.dart:1019 MethodCallShape.toString" @unported function Base.show(io::IO, self::MethodCallShape) end
+@parity "dart2wasm/lib/functions.dart:1019 MethodCallShape.toString" function Base.show(io::IO, self::MethodCallShape)::Nothing
+    local sb = IOBuffer()
+    print(sb, self.name)
+    self.type_count != 0 && print(sb, " types:", self.type_count)
+    self.positional_count != 0 && print(sb, " pos:", self.positional_count)
+    isempty(self.named) || print(sb, " names:", join(self.named, '-'))
+    print(io, "MethodCallShape(", String(take!(sb)), ")")
+    return nothing
+end
 
-@parity "dart2wasm/lib/functions.dart:1036 GetterCallShape" @unported function GetterCallShape(name) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "dart2wasm/lib/functions.dart:1036 GetterCallShape" function GetterCallShape end
 
-@parity "dart2wasm/lib/functions.dart:1039 GetterCallShape.isGetter" @unported function is_getter(self::GetterCallShape) end
+@parity "dart2wasm/lib/functions.dart:1039 GetterCallShape.isGetter" is_getter(self::GetterCallShape)::Bool = true
 
-@parity "dart2wasm/lib/functions.dart:1041 GetterCallShape.isSetter" @unported function is_setter(self::GetterCallShape) end
+@parity "dart2wasm/lib/functions.dart:1041 GetterCallShape.isSetter" is_setter(self::GetterCallShape)::Bool = false
 
-@parity "dart2wasm/lib/functions.dart:1043 GetterCallShape.isMethod" @unported function is_method(self::GetterCallShape) end
+@parity "dart2wasm/lib/functions.dart:1043 GetterCallShape.isMethod" is_method(self::GetterCallShape)::Bool = false
 
-@parity "dart2wasm/lib/functions.dart:1046 GetterCallShape.hashCode" @unported function Base.hash(self::GetterCallShape, h::UInt) end
+# dart's `name.hashCode`; Julia's hash takes the seed it mixes in
+@parity "dart2wasm/lib/functions.dart:1046 GetterCallShape.hashCode" Base.hash(self::GetterCallShape, h::UInt)::UInt = hash(self.name, hash(GetterCallShape, h))
 
-@parity "dart2wasm/lib/functions.dart:1049 GetterCallShape.==" @unported function Base.:(==)(self::GetterCallShape, other) end
+# dart's `other is! GetterCallShape` arm is Julia's `==` of two different types, false
+@parity "dart2wasm/lib/functions.dart:1049 GetterCallShape.==" Base.:(==)(self::GetterCallShape, other::GetterCallShape)::Bool = self.name == other.name
 
-@parity "dart2wasm/lib/functions.dart:1056 GetterCallShape.toString" @unported function Base.show(io::IO, self::GetterCallShape) end
+@parity "dart2wasm/lib/functions.dart:1056 GetterCallShape.toString" Base.show(io::IO, self::GetterCallShape)::Nothing = print(io, "GetterCallShape(", self.name, ")")
 
-@parity "dart2wasm/lib/functions.dart:1062 SetterCallShape" @unported function SetterCallShape(name) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "dart2wasm/lib/functions.dart:1062 SetterCallShape" function SetterCallShape end
 
-@parity "dart2wasm/lib/functions.dart:1065 SetterCallShape.isGetter" @unported function is_getter(self::SetterCallShape) end
+@parity "dart2wasm/lib/functions.dart:1065 SetterCallShape.isGetter" is_getter(self::SetterCallShape)::Bool = false
 
-@parity "dart2wasm/lib/functions.dart:1067 SetterCallShape.isSetter" @unported function is_setter(self::SetterCallShape) end
+@parity "dart2wasm/lib/functions.dart:1067 SetterCallShape.isSetter" is_setter(self::SetterCallShape)::Bool = true
 
-@parity "dart2wasm/lib/functions.dart:1069 SetterCallShape.isMethod" @unported function is_method(self::SetterCallShape) end
+@parity "dart2wasm/lib/functions.dart:1069 SetterCallShape.isMethod" is_method(self::SetterCallShape)::Bool = false
 
-@parity "dart2wasm/lib/functions.dart:1072 SetterCallShape.hashCode" @unported function Base.hash(self::SetterCallShape, h::UInt) end
+# dart's `name.hashCode`; Julia's hash takes the seed it mixes in
+@parity "dart2wasm/lib/functions.dart:1072 SetterCallShape.hashCode" Base.hash(self::SetterCallShape, h::UInt)::UInt = hash(self.name, hash(SetterCallShape, h))
 
-@parity "dart2wasm/lib/functions.dart:1075 SetterCallShape.==" @unported function Base.:(==)(self::SetterCallShape, other) end
+# dart's `other is! SetterCallShape` arm is Julia's `==` of two different types, false
+@parity "dart2wasm/lib/functions.dart:1075 SetterCallShape.==" Base.:(==)(self::SetterCallShape, other::SetterCallShape)::Bool = self.name == other.name
 
-@parity "dart2wasm/lib/functions.dart:1082 SetterCallShape.toString" @unported function Base.show(io::IO, self::SetterCallShape) end
+@parity "dart2wasm/lib/functions.dart:1082 SetterCallShape.toString" Base.show(io::IO, self::SetterCallShape)::Nothing = print(io, "SetterCallShape(", self.name, ")")
