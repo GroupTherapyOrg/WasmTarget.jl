@@ -1,0 +1,71 @@
+# dart2wasm's tests at the pin, ported with Julia as the ground truth (test/dart_tests.toml, dev/LEDGER.md
+# D41): every case of test/smoke_corpus.jl's `dart_*` groups. Native Julia computes the answer recorded
+# here (D3, never dart's value). Until WasmTarget compiles a case, its compile rejects with exactly the
+# rejection recorded here, the first definition its path reaches unported; a port that moves the path
+# on, or a compile that returns a module, fails the case until it is recorded again, so no case passes
+# silently (the module is judged against native once the rebuild has its runner, dev/MARCH.md 1.B).
+using Test, WasmTarget
+
+# the corpus's `dart_*` groups, read in a module of their own as test/smoke.jl reads the whole corpus
+const DART_GROUPS = let m = Module(:DartCorpus), groups = Pair{String,Vector{Any}}[]
+    Core.eval(m, :(_g(name, cases) = push!($groups, name => cases)))
+    Core.eval(m, :(_xf(name, cases) = push!($groups, name => cases)))
+    Base.include(m, joinpath(@__DIR__, "smoke_corpus.jl"))
+    filter(g -> startswith(first(g), "dart_"), groups)
+end
+
+# the definitions a dart case's compile reaches first today
+const _COMPILE = WasmTarget.Unported(WasmTarget.anchor_of(WasmTarget.Dart2Wasm.compile))
+
+# each case: native Julia's answer and the rejection its compile gives today
+const DART_CASES = Dict{String,Tuple{Any,WasmTarget.Rejection}}(
+    # tests/web/wasm
+    "dart_web_wasm/assertion_failure_message" => (1, _COMPILE),
+    "dart_web_wasm/boxed_value_tearoff" => (4, _COMPILE),
+    "dart_web_wasm/closure_hash_code" => (31, _COMPILE),
+    "dart_web_wasm/constructor_tearoff" => (255, _COMPILE),
+    "dart_web_wasm/constructor" => (255, _COMPILE),
+    "dart_web_wasm/flutter_regress_152029" => (1, _COMPILE),
+    "dart_web_wasm/inlining" => (1005, _COMPILE),
+    "dart_web_wasm/issue_54926" => (7, _COMPILE),
+    "dart_web_wasm/issue_56234" => (-1, _COMPILE),
+    "dart_web_wasm/lazy_const_record" => (20011, _COMPILE),
+    "dart_web_wasm/lazy_static_number_initializer_regression" => (7, _COMPILE),
+    "dart_web_wasm/no_omit_error_details" => (-1, _COMPILE),
+    "dart_web_wasm/regress_54794" => (504, _COMPILE),
+    "dart_web_wasm/regress_59782" => (3, _COMPILE),
+    "dart_web_wasm/regress_59840" => (2.0, _COMPILE),
+    "dart_web_wasm/regress_62273" => (3, _COMPILE),
+    "dart_web_wasm/regress_63454" => (3, _COMPILE),
+    "dart_web_wasm/regress_63747" => (16, _COMPILE),
+    "dart_web_wasm/static_dispatch_pragma" => (12, _COMPILE),
+    "dart_web_wasm/unreachable_selector_implementation" => (20, _COMPILE),
+    "dart_web_wasm/function_apply" => (31, _COMPILE),
+)
+
+# what a compile gives: its rejection, or :compiled
+_dart_outcome(f, args) = try
+    WasmTarget.compile(f, Tuple(map(typeof, args)))
+    :compiled
+catch e
+    e isa WasmTarget.RejectionError ? e.rejection : rethrow()
+end
+
+@testset "dart2wasm's tests, Julia the ground truth" begin
+    local seen = Set{String}()
+    for (group, cases) in DART_GROUPS, case in cases
+        local key = "$group/$(case[1])"
+        push!(seen, key)
+        @testset "$key" begin
+            @test haskey(DART_CASES, key)
+            if haskey(DART_CASES, key)
+                local native, today = DART_CASES[key]
+                local f, args = case[2], case[3:end]
+                @test f(args...) === native
+                @test _dart_outcome(f, args) == today
+            end
+        end
+    end
+    # every recorded case is a case of the corpus
+    @test sort!(collect(setdiff(keys(DART_CASES), seen))) == String[]
+end

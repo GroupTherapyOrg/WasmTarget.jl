@@ -313,7 +313,7 @@ reason = "dart:ffi and JS interop; native libraries and JS interop are outside W
 ["tests/web/wasm/assertion_failure_message_test.dart"]
 kind = "behavior"
 what = "a failed assert with a message throws an AssertionError carrying the message"
-cases = []
+cases = ["dart_web_wasm/assertion_failure_message"]
 
 ["tests/web/wasm/async_switch_no_await_test.dart"]
 kind = "not_portable"
@@ -328,7 +328,7 @@ reason = "async* streams; dev/PARITY_MASTER.md scopes out async and tasks"
 ["tests/web/wasm/boxed_value_tearoff_test.dart"]
 kind = "behavior"
 what = "a method torn off a boxed int receiver, (-4).abs, then called"
-cases = []
+cases = ["dart_web_wasm/boxed_value_tearoff"]
 
 ["tests/web/wasm/callback_test.dart"]
 kind = "not_portable"
@@ -343,7 +343,7 @@ reason = "async and sync* functions (dev/PARITY_MASTER.md scopes out async and t
 ["tests/web/wasm/closure_hash_code_test.dart"]
 kind = "behavior"
 what = "equality, hash code and identity of closures, static tear-offs, generic instantiations and member tear-offs"
-cases = []
+cases = ["dart_web_wasm/closure_hash_code"]
 
 ["tests/web/wasm/constant_environment_test.dart"]
 kind = "not_portable"
@@ -353,12 +353,12 @@ reason = "dart's compile-time environment constants; Julia has none"
 ["tests/web/wasm/constructor_tearoff_test.dart"]
 kind = "behavior"
 what = "constructors, redirecting and factory constructors called directly and torn off, typed and dynamic, with named defaults"
-cases = []
+cases = ["dart_web_wasm/constructor_tearoff"]
 
 ["tests/web/wasm/constructor_test.dart"]
 kind = "behavior"
 what = "constructor parameters captured, modified and stored in initializers and bodies; generic inheritance; optional and named parameters; redirecting and factory constructors"
-cases = []
+cases = ["dart_web_wasm/constructor"]
 
 ["tests/web/wasm/data_loader_helper.dart"]
 kind = "helper"
@@ -523,7 +523,7 @@ reason = "a dart2wasm multi-module mode over a dart program; WT emits one module
 ["tests/web/wasm/flutter_regress_152029_test.dart"]
 kind = "behavior"
 what = "a generic class's nullable field written and read through a receiver of a mixed list, under --omit-implicit-checks"
-cases = []
+cases = ["dart_web_wasm/flutter_regress_152029"]
 
 ["tests/web/wasm/forwarding_stubs_regress_62662_test.dart"]
 kind = "not_portable"
@@ -538,7 +538,7 @@ reason = "a dart2wasm option and dart's runtime Symbol maps of named arguments, 
 ["tests/web/wasm/inlining_test.dart"]
 kind = "behavior"
 what = "recursive functions and constructors marked prefer-inline are not inlined into themselves and answer correctly"
-cases = []
+cases = ["dart_web_wasm/inlining"]
 
 ["tests/web/wasm/issue_54406_test.dart"]
 kind = "not_portable"
@@ -548,12 +548,12 @@ reason = "async functions; dev/PARITY_MASTER.md scopes out async and tasks"
 ["tests/web/wasm/issue_54926_test.dart"]
 kind = "behavior"
 what = "two instantiations of a generic method tear-off at the same type are equal and not identical"
-cases = []
+cases = ["dart_web_wasm/issue_54926"]
 
 ["tests/web/wasm/issue_56234_test.dart"]
 kind = "behavior"
 what = "a cast of a double to int fails at runtime even under --omit-explicit-checks (a multitest expecting a runtime error)"
-cases = []
+cases = ["dart_web_wasm/issue_56234"]
 
 ["tests/web/wasm/issue_59901_test.dart"]
 kind = "not_portable"
@@ -584,12 +584,12 @@ cases = []
 ["tests/web/wasm/lazy_const_record_test.dart"]
 kind = "behavior"
 what = "a const record holding a const list of 10,001 ints, used once"
-cases = []
+cases = ["dart_web_wasm/lazy_const_record"]
 
 ["tests/web/wasm/lazy_static_number_initializer_regression_test.dart"]
 kind = "behavior"
 what = "a lazily initialized num global chosen by a type test, used by a function rounding a dynamic number"
-cases = []
+cases = ["dart_web_wasm/lazy_static_number_initializer_regression"]
 
 ["tests/web/wasm/location_href_test.dart"]
 kind = "not_portable"
@@ -615,7 +615,7 @@ reason = "dart:_wasm exposes wasm types to user code; linear memory is outside W
 ["tests/web/wasm/no_omit_error_details_test.dart"]
 kind = "behavior"
 what = "an index past a list's end throws an IndexError naming the index and the length"
-cases = []
+cases = ["dart_web_wasm/no_omit_error_details"]
 
 ["tests/web/wasm/omit_error_details_test.dart"]
 kind = "not_portable"
@@ -625,7 +625,7 @@ reason = "a dart2wasm option; Julia's BoundsError is Julia's (no_omit_error_deta
 ["tests/web/wasm/regress_54794_test.dart"]
 kind = "behavior"
 what = "is-tests of a generic class against a supertype instantiated with record types"
-cases = []
+cases = ["dart_web_wasm/regress_54794"]
 
 ["tests/web/wasm/regress_56372_test.dart"]
 kind = "not_portable"
@@ -650,17 +650,17 @@ reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-
 ["tests/web/wasm/regress_59782_test.dart"]
 kind = "behavior"
 what = "a switch on a dynamic int against string cases takes the default, or none"
-cases = []
+cases = ["dart_web_wasm/regress_59782"]
 
 ["tests/web/wasm/regress_59840_test.dart"]
 kind = "behavior"
 what = "two optional named nullable doubles, an assert relating them and a null check on one"
-cases = []
+cases = ["dart_web_wasm/regress_59840"]
 
 ["tests/web/wasm/regress_62273_test.dart"]
 kind = "behavior"
 what = "an override with its own named default value, reached through a function returning the base type"
-cases = []
+cases = ["dart_web_wasm/regress_62273"]
 
 ["tests/web/wasm/regress_63264_test.dart"]
 kind = "not_portable"
@@ -670,7 +670,7 @@ reason = "sync* generators; Julia has no resumable functions in WT's scope (dev/
 ["tests/web/wasm/regress_63454_test.dart"]
 kind = "behavior"
 what = "a loop over an empty map's entries whose body writes a field of the key"
-cases = []
+cases = ["dart_web_wasm/regress_63454"]
 
 ["tests/web/wasm/regress_63735_test.dart"]
 kind = "not_portable"
@@ -680,7 +680,7 @@ reason = "JS interop and dynamic calls outside Julia's strict subset (D32)"
 ["tests/web/wasm/regress_63747_test.dart"]
 kind = "behavior"
 what = "a constructor parameter reassigned in the body and in an initializer before setRange copies it"
-cases = []
+cases = ["dart_web_wasm/regress_63747"]
 
 ["tests/web/wasm/regression_179853_test.dart"]
 kind = "not_portable"
@@ -721,7 +721,7 @@ what = "reads a source map file through d8's readbuffer"
 ["tests/web/wasm/static_dispatch_pragma_test.dart"]
 kind = "behavior"
 what = "a polymorphic call over two subclasses, one override marked wasm:static-dispatch"
-cases = []
+cases = ["dart_web_wasm/static_dispatch_pragma"]
 
 ["tests/web/wasm/static_interop_test.dart"]
 kind = "not_portable"
@@ -761,7 +761,7 @@ reason = "JS interop; WT's host contract is its own import set (1.F)"
 ["tests/web/wasm/unreachable_selector_implementation_test.dart"]
 kind = "behavior"
 what = "a call over two subclasses while a third, never allocated, keeps an entry-point override with an optional named parameter"
-cases = []
+cases = ["dart_web_wasm/unreachable_selector_implementation"]
 
 ["tests/web/wasm/uri_base_test.dart"]
 kind = "not_portable"
@@ -791,7 +791,7 @@ reason = "dynamic calls are outside Julia's strict subset (D32)"
 ["tests/web/wasm/closures/function_apply_test.dart"]
 kind = "behavior"
 what = "functions with an optional positional default applied to 1 and 2 arguments, and one argument too many raising"
-cases = []
+cases = ["dart_web_wasm/function_apply"]
 
 ["tests/web/wasm/closures/large_name_combination_test.dart"]
 kind = "not_portable"

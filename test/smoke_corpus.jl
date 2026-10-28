@@ -2480,3 +2480,210 @@ _g("entered_paths", Any[
     ("lpad_rpad_zero_width", (n::Int64) -> (try; ncodeunits(lpad(string(n), 6, "\u0301")) * 100 + ncodeunits(rpad("x", n, '\u0301')); catch; -1; end), Int64(4)),
     ("operator_embedded_nul", (x::Int64) -> (try; Int64(Base._isoperator(string(Char(x), Char(0)))); catch; -1; end), Int64(0x2b)),
 ])
+
+# ---- dart2wasm's tests at the pin, tests/web/wasm (test/dart_tests.toml, dev/LEDGER.md D41) -------
+# Each case is the dart test's construct written in Julia, named by the dart file less `_test`; the
+# expected value is what native Julia computes, never dart's (D3). A case whose dart test asserts
+# several facts returns them as bits, the first fact the highest, so a wrong one names itself.
+_dw_bits(bs::Bool...) = foldl((a, b) -> 2a + Int64(b), bs; init = Int64(0))
+# boxed_value_tearoff: a method bound to a boxed receiver, then called
+_dw_tearoff(x::Int64) = () -> abs(x)
+# closure_hash_code: closures, a function value and a closure over a mutable receiver compared by
+# ==, hash and ===
+_dw_static() = nothing
+mutable struct _DwC
+    x::Int64
+end
+_dw_member(o::_DwC) = () -> o.x
+_dw_same(a, b) = _dw_bits(a == b, hash(a) == hash(b), a === b)
+# constructor_tearoff: a parametric struct with a keyword default, its constructor, a redirecting
+# outer constructor, a factory and a constructor that forwards, each called and passed as a value
+struct _DwFoo{T}
+    pos::T
+    named::String
+    _DwFoo{T}(pos::T; named::String = "Foo named") where {T} = new{T}(pos, named)
+end
+_DwFoo(pos::T; named::String = "Foo named") where {T} = _DwFoo{T}(pos; named = named)
+_dw_foo_redirect(pos; named::String = "Foo.redirect named") = _DwFoo(pos; named = named)
+_dw_foo_factory(pos; named::String = "Foo.factory named") = _DwFoo(pos; named = named)
+_dw_foo_forward(pos; kw...) = _DwFoo(pos; kw...)
+_dw_foo_is(f::_DwFoo, pos, named::String) = f.pos == pos && f.named == named
+# constructor_test: constructors whose arguments are captured, modified and stored
+struct _DwBase{T,U}
+    t::T
+    u::U
+end
+struct _DwDerived{V}
+    base::_DwBase{V,Int64}
+    v::V
+    _DwDerived{V}(v_in::V, i::Int64) where {V} = new{V}(_DwBase{V,Int64}(v_in, i), v_in)
+end
+_dw_init_capture(p::Int64) = (g = () -> p; (g, p))
+function _dw_init_capture_modify(p0::Int64)
+    local p::Int64 = p0
+    local getP = () -> (p = p + 1; p)
+    local pAfter = (p = p + 2)
+    return (getP, pAfter)
+end
+function _dw_body_capture_modify(p0::Int64)
+    local p::Int64 = p0
+    p = p + 10
+    local pInBody = p
+    local getP = () -> (p = p + 1; p)
+    return (getP, pInBody)
+end
+function _dw_double_capture(p0::Int64)
+    local p::Int64 = p0
+    local initClosure = () -> p
+    p = p + 5
+    local bodyClosure = () -> p
+    p = p + 5
+    return (initClosure, bodyClosure)
+end
+struct _DwMixed
+    a::Int64
+    b::Int64
+    c::Int64
+    _DwMixed(a::Int64, b::Int64 = Int64(2), c::Int64 = Int64(3)) = new(a, b, c)
+end
+struct _DwNamed
+    a::Int64
+    b::Int64
+end
+_DwNamed(; a::Int64, b::Int64 = 20) = _DwNamed(a, b)
+struct _DwFactory
+    x::Int64
+    _DwFactory(x::Int64) = new(x + 100)
+end
+# flutter_regress_152029: a parametric struct's nullable field written through a receiver read
+# from a mixed list
+mutable struct _DwA{T}
+    value::Union{Nothing,T}
+end
+# inlining: a recursive constructor and a recursive function
+struct _DwWidget
+    children::Vector{_DwWidget}
+end
+_DwWidget(n::Int64) = _DwWidget([_DwWidget(Int64(0)) for _ in 1:n])
+_dw_fib(n::Int64)::Int64 = n == 0 ? 0 : n == 1 ? 1 : _dw_fib(n - 1) + _dw_fib(n - 2)
+# issue_54926: two values of one method bound to one receiver
+struct _DwC2 end
+_dw_f(::_DwC2, t) = t
+# issue_56234: a Float64 asserted to be an Int64 at run time
+struct _DwX
+    x::Float64
+end
+_dw_getx(c::_DwX) = c.x
+# lazy_const_record: a constant tuple holding a constant list of 10,001 integers
+const _DW_LIST = collect(Int64(0):Int64(10000))
+const _DW_RECORD = (_DW_LIST, Int64(10))
+# lazy_static_number_initializer_regression: a constant chosen by a type test, used by a function
+# rounding either number
+const _DW_MAXINT = 1 isa Float64 ? 2.0^52 : floor(1.0e300)
+_dw_round(n::Union{Int64,Float64}) = n isa Float64 && isinf(n) ? _DW_MAXINT : round(n)
+# no_omit_error_details: an index past a list's end
+const _DW_L = Int64[0, 1, 2, 3, 4]
+# regress_54794: isa against a supertype parameterized by a tuple type
+abstract type _DwBaseT{T} end
+struct _DwSub{A,B} <: _DwBaseT{Tuple{A,B}} end
+# regress_59782: a value of a union compared with string cases
+_dw_switch(x::Union{Int64,String}) = x == "a" ? "a" : x == "b" ? "b" : "default"
+_dw_switch_none(x::Union{Int64,String}) = x == "a" ? "a" : x == "b" ? "b" : nothing
+# regress_59840: two optional nullable keyword Float64s, an assertion relating them and a check
+function _dw_opt(; something::Union{Nothing,Float64} = nothing, other::Union{Nothing,Float64} = nothing)
+    @assert (something === nothing && other === nothing) || (something !== nothing && other !== nothing)
+    something === nothing && return 0.0
+    return something + Base.something(other)
+end
+# regress_62273: a method with its own keyword default, reached through a function returning the
+# abstract type
+abstract type _DwA62 end
+struct _DwB62 <: _DwA62 end
+_dw_foo(::_DwA62; s::String = "hi") = s
+_dw_foo(::_DwB62; s::String = "there") = s
+_dw_geta(x::Int64)::_DwA62 = x < 10 ? _DwB62() : throw(ArgumentError("here"))
+# regress_63454: a loop over an empty Dict's pairs whose body writes a field of the key
+mutable struct _DwUnused
+    foo::Any
+end
+# regress_63747: a constructor argument rebound before copyto! copies it
+struct _DwBytes
+    field::Vector{UInt8}
+end
+function _dw_bytes_foo(arg::Vector{Int64})
+    local field = zeros(UInt8, 64)
+    local a::Union{Vector{Int64},Vector{UInt8}} = arg
+    length(a) > 64 && (a = zeros(UInt8, 16))
+    copyto!(field, 1, a, 1, length(a))
+    return _DwBytes(field)
+end
+function _dw_bytes_bar(arg::Vector{Int64})
+    local field = zeros(UInt8, 64)
+    local a = zeros(UInt8, 16)
+    local initialLength = length(a)
+    copyto!(field, 1, a, 1, length(a))
+    return (_DwBytes(field), initialLength)
+end
+# static_dispatch_pragma: a call over a list of two subtypes of one abstract type
+abstract type _DwDoit end
+struct _DwA1 <: _DwDoit end
+struct _DwA2 <: _DwDoit end
+_dw_doit(::_DwA1) = Int64(1)
+_dw_doit(::_DwA2) = Int64(2)
+# unreachable_selector_implementation: a call over two subtypes while a third, never made, has a
+# method with a keyword default
+abstract type _DwSel end
+struct _DwSub1 <: _DwSel end
+struct _DwSub2 <: _DwSel end
+struct _DwSub3 <: _DwSel end
+_dw_sel(::_DwSub1) = "Sub1.foo()"
+_dw_sel(::_DwSub2) = "Sub2.foo()"
+_dw_sel(::_DwSub3; a::Int64 = 4) = "Sub3.foo($a)"
+# closures/function_apply: functions with an optional positional default applied to one and two
+# arguments, and to one argument too many
+_dw_static1(a, b = "missing-b") = "static1: $a $b"
+_dw_static2(a, b = "missing-b") = "static2: $a $b"
+_dw_apply(f, args::Tuple) = f(args...)
+_g("dart_web_wasm", Any[
+    ("assertion_failure_message", (x::Bool) -> (try; @assert x "failure message"; 0; catch e; e isa AssertionError && occursin("failure message", e.msg) ? 1 : 2; end), false),
+    ("boxed_value_tearoff", (x::Int64) -> (t = _dw_tearoff(x); t()), Int64(-4)),
+    ("closure_hash_code", (n::Int64) -> (f = () -> n; o1 = _DwC(n); o2 = _DwC(n);
+        _dw_bits(_dw_same(f, f) == 7, _dw_same(() -> nothing, () -> nothing) == 0, _dw_same(_dw_static, _dw_static) == 7,
+                 _dw_same(_dw_member(o1), _dw_member(o1)) == 7, _dw_same(_dw_member(o1), _dw_member(o2)) == 0)), Int64(1)),
+    ("constructor_tearoff", (x::Float64) -> (n = Int64(round(x));
+        cs = (_DwFoo, _dw_foo_redirect, _dw_foo_factory, _dw_foo_forward);
+        _dw_bits(_dw_foo_is(_DwFoo(n), n, "Foo named"), _dw_foo_is(_dw_foo_redirect(n), n, "Foo.redirect named"),
+                 _dw_foo_is(_dw_foo_factory(n), n, "Foo.factory named"), _dw_foo_is(_dw_foo_forward(n), n, "Foo named"),
+                 _dw_foo_is(cs[1](x), x, "Foo named"), _dw_foo_is(cs[2](x; named = "2"), x, "2"),
+                 _dw_foo_is(cs[3](x), x, "Foo.factory named"), _dw_foo_is(cs[4](x; named = "4"), x, "4"))), 1.0),
+    ("constructor", (one::Int64) -> (d = _DwDerived{String}("hello", 42 * one);
+        (gi, vi) = _dw_init_capture(10 * one); (gm, pa) = _dw_init_capture_modify(30 * one); (gb, pb) = _dw_body_capture_modify(40 * one);
+        (ci, cb) = _dw_double_capture(300 * one); m1 = _DwMixed(one); m2 = _DwMixed(one, 10 * one); k1 = _DwNamed(a = 5 * one);
+        k2 = _DwNamed(b = 30 * one, a = 7 * one);
+        _dw_bits(d.base.t == "hello" && d.base.u == 42 && d.v == "hello", gi() == 10 && vi == 10, pa == 32 && gm() == 33 && gm() == 34,
+                 pb == 50 && gb() == 51 && gb() == 52, ci() == 310 && cb() == 310, (m1.a, m1.b, m1.c) == (1, 2, 3) && (m2.a, m2.b, m2.c) == (1, 10, 3),
+                 (k1.a, k1.b) == (5, 20) && (k2.a, k2.b) == (7, 30), _DwFactory(50 * one).x == 150)), Int64(1)),
+    ("flutter_regress_152029", (i::Int64) -> (list = Union{_DwA{String},Int64}[_DwA{String}(nothing), Int64(1)]; a = list[i];
+        a isa _DwA && i == 1 && (a.value = "42"); a isa _DwA && a.value == "42" ? 1 : 0), Int64(1)),
+    ("inlining", (n::Int64) -> length(_DwWidget(n).children) * 100 + _dw_fib(Int64(5)), Int64(10)),
+    ("issue_54926", (n::Int64) -> (c = _DwC2(); f1 = Base.Fix1(_dw_f, c); f2 = Base.Fix1(_dw_f, c); _dw_bits(f1 === f2, f1 == f2, f1(n) == n)), Int64(3)),
+    ("issue_56234", (x::Float64) -> (try; v = _dw_getx(_DwX(x))::Int64; v; catch e; e isa TypeError ? Int64(-1) : Int64(-2); end), 0.0),
+    ("lazy_const_record", (i::Int64) -> _DW_RECORD[1][i] + _DW_RECORD[2] + length(_DW_RECORD[1]), Int64(10001)),
+    ("lazy_static_number_initializer_regression", (x::Float64) -> _dw_bits(_dw_round(x) == 1, _dw_round(Int64(1)) == 1, _dw_round(Inf) == _DW_MAXINT), 1.0),
+    ("no_omit_error_details", (i::Int64) -> (try; _DW_L[i]; catch e; e isa BoundsError ? Int64(-1) : Int64(-2); end), Int64(6)),
+    ("regress_54794", (i::Int64) -> (o = i == 1 ? _DwSub{Int64,String}() : i;
+        _dw_bits(o isa _DwBaseT, o isa _DwBaseT{<:Tuple}, o isa _DwBaseT{<:Tuple{Any,Any}}, o isa _DwBaseT{<:Tuple{Int64,Any}},
+                 o isa _DwBaseT{<:Tuple{Any,String}}, o isa _DwBaseT{Tuple{Int64,String}}, o isa _DwBaseT{<:Tuple{String,Any}},
+                 o isa _DwBaseT{<:Tuple{Any,Int64}}, o isa _DwBaseT{Tuple{Any,Any}})), Int64(1)),
+    ("regress_59782", (n::Int64) -> _dw_bits(_dw_switch(n) == "default", _dw_switch_none(n) === nothing), Int64(42)),
+    ("regress_59840", (x::Float64) -> _dw_opt(something = x, other = x) + _dw_opt(), 1.0),
+    ("regress_62273", (x::Int64) -> _dw_bits(_dw_foo(_dw_geta(x)) == "there", _dw_foo(_dw_geta(x - 1); s = "wow") == "wow"), Int64(9)),
+    ("regress_63454", (n::Int64) -> (value = Ref(n); d = Dict{_DwUnused,Int64}(); k = 0; for (key, _) in d; key.foo = value; k += 1; end; k + n), Int64(3)),
+    ("regress_63747", (n::Int64) -> (f = _dw_bytes_foo(fill(n, 80)); (b, l) = _dw_bytes_bar(fill(n, 80)); Int64(sum(f.field)) + Int64(sum(b.field)) + l), Int64(0)),
+    ("static_dispatch_pragma", (n::Int64) -> (list = Union{_DwA1,_DwA2}[_DwA1(), _DwA2()]; s = Int64(0); for e in list; s = 10s + _dw_doit(e); end; s + n), Int64(0)),
+    ("unreachable_selector_implementation", (n::Int64) -> (l = Union{_DwSub1,_DwSub2}[_DwSub1(), _DwSub2()]; s = Int64(0); for x in l; s += ncodeunits(_dw_sel(x)); end; s + n), Int64(0)),
+    ("function_apply", (n::Int64) -> (fs = (_dw_static1, _dw_static2);
+        _dw_bits(_dw_apply(fs[1], (n,)) == "static1: $n missing-b", _dw_apply(fs[1], (n, 2)) == "static1: $n 2",
+                 _dw_apply(fs[2], (n,)) == "static2: $n missing-b", _dw_apply(fs[2], (n, 2)) == "static2: $n 2",
+                 (try; _dw_apply(fs[1], (n, 2, "extra2")); false; catch e; e isa MethodError; end))), Int64(1)),
+])
