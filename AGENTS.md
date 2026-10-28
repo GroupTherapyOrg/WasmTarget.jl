@@ -32,7 +32,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D20** A ratchet ends at 0; a legitimate site moves to an exact allowlist, never a floor.
 - **D21** Audit every change within 5 commits; fix findings first; an audit never holds a landing.
 - **D22** Decide by the charter and act; a question for Dale carries the default you will take.
-- **D23** Every landing goes to the one march branch, wt3; no side PRs.
+- **D23** Every landing goes to the one march branch, wt2; no other branch on origin.
 - **D24** No transcript links, tool footers or agent-directed text in commits or PR bodies.
 - **D25** AGENTS.md is the only instructions file: timeless rules and pointers, no status.
 - **D26** Map the dart code and Julia's IR before writing; name the dart counterpart first.
@@ -78,7 +78,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 | model checking | `bash dev/formal/run_tlc.sh` |
 | one QA family | `WT_QA_ONLY="<file>.jl" julia --project=. test/runtests.jl` |
 
-`bash dev/ship.sh` rebases a lane onto origin/wt3, runs `bash dev/check.sh` and pushes fast-forward;
+`bash dev/ship.sh` rebases a lane onto origin/wt2, runs `bash dev/check.sh` and pushes fast-forward;
 the full matrix runs only at clause closure (`bash dev/lanes.sh`, L153, L162).
 A pure restructuring is byte-identical on the probes; a semantic change is differential, its cases
 in smoke first; a new lock fires when broken before it counts; `WT_RATCHET_UPDATE=1` tightens one.

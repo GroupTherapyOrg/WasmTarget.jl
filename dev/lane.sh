@@ -2,7 +2,7 @@
 # dev/lane.sh — the one way a lane makes and removes its worktree; every lane develops in a live
 # Kaimon session, the loop's speed rests on (dev/kaimon_session.sh).
 #
-#   bash dev/lane.sh start <name>   # ../.worktrees/<name> on a new branch <name> from origin/wt3, the
+#   bash dev/lane.sh start <name>   # ../.worktrees/<name> on a new branch <name> from origin/wt2, the
 #       main tree's Manifest.toml copied in and resolved for the lane's project when it names other
 #       extensions (dev/manifest_check.sh), a git-excluded LocalPreferences.toml turning WasmTarget's
 #       precompile workload off (a src edit reloads in seconds), the worktree added to Kaimon's projects
@@ -15,7 +15,7 @@ set -euo pipefail
 cmd=${1:?usage: dev/lane.sh start|stop|depot <name>}
 name=${2:?usage: dev/lane.sh start|stop|depot <name>}
 case "$name" in */* | .* | "") echo "lane: a lane's name is one path component: $name — refusing"; exit 1 ;; esac
-MARCH=${WT_MARCH_BRANCH:-wt3}
+MARCH=${WT_MARCH_BRANCH:-wt2}
 # the main tree: the repository whose .git every worktree shares
 MAIN=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 WT="$(dirname "$MAIN")/.worktrees/$name"

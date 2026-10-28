@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The landing check on wt3 (dev/ship.sh runs it): WasmTarget loads, so every construction checks
+# The landing check (dev/ship.sh runs it): WasmTarget loads, so every construction checks
 # itself at load; the ratchet holds, every lock but those test/ratchet_open.txt lists; and every test
 # of ported code passes (test/src_tests.jl). About a minute, one Julia at a time.
 set -uo pipefail
