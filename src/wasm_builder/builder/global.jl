@@ -16,7 +16,7 @@
     # dart's constructor (line 13), the struct's one inner constructor
     function GlobalBuilder(module_builder::AbstractModuleBuilder, index::IR.Finalizable{Int}, type::IR.GlobalType, global_name::Union{String,Nothing}=nothing)
         initializer = InstructionsBuilder(module_builder, IR.ValueType[], IR.ValueType[type.type]; constant_expression=true)
-        new(index, type, module_builder.module_, global_name, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (IR.Indexable__global_id[] += 1) - 1), module_builder, initializer, nothing)
+        new(index, type, module_builder.module_, global_name, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> IR.Indexable__global_id(module_builder.module_)), module_builder, initializer, nothing)
     end
 end
 

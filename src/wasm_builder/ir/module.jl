@@ -5,6 +5,9 @@
 @parity "wasm_builder/lib/src/ir/module.dart:12 Module" mutable struct Module <: AbstractModule
     # Created uninitialized, then initialized once with its constituents, which point back at it.
     _initialized::Bool
+    # Indexable's `static int _globalId` (indexable.dart:8), held by the module whose parts it
+    # numbers (Indexable__global_id, A42S4)
+    _global_id::Int
     const _module_name::Late{Union{String,Nothing}}
     const _functions::Late{Functions}
     const _start::Late{Union{BaseFunction,Nothing}}
@@ -23,7 +26,7 @@
     const source_map_url::Late{Union{String,Nothing}}
     const _extra_custom_sections::Late{Vector{WasmBuilder.ExtraCustomSection}}
     # dart's Module.uninitialized (line 42), the struct's one inner constructor
-    Module(::Val{:uninitialized}) = new(false,
+    Module(::Val{:uninitialized}) = new(false, 0,
             Late{Union{String,Nothing}}("wasm_builder/lib/src/ir/module.dart:25 Module._moduleName"),
             Late{Functions}("wasm_builder/lib/src/ir/module.dart:26 Module._functions"),
             Late{Union{BaseFunction,Nothing}}("wasm_builder/lib/src/ir/module.dart:27 Module._start"),

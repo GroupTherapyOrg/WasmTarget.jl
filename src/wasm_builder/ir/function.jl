@@ -30,7 +30,7 @@ end
     # the struct's one constructor, its body unassigned: dart's DefinedFunction and
     # DefinedFunction.withoutBody are the anchored functions below, each making the value through it
     DefinedFunction(::Val{:withoutBody}, enclosing_module::AbstractModule, finalizable_index::Finalizable{Int}, type::FunctionType, function_name::Union{String,Nothing}) =
-        new(finalizable_index, type, function_name, enclosing_module, false, false, nothing, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Instructions}("wasm_builder/lib/src/ir/function.dart:78 DefinedFunction.body"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+        new(finalizable_index, type, function_name, enclosing_module, false, false, nothing, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Instructions}("wasm_builder/lib/src/ir/function.dart:78 DefinedFunction.body"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
 end
 
 """An imported function."""
@@ -49,7 +49,7 @@ end
     const _id::Late{Int}
     # dart's constructor (line 189), the struct's one inner constructor
     ImportedFunction(enclosing_module::AbstractModule, module_::String, name::String, finalizable_index::Finalizable{Int}, type::FunctionType, function_name::Union{String,Nothing}=nothing) =
-        new(finalizable_index, type, function_name, enclosing_module, false, false, nothing, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+        new(finalizable_index, type, function_name, enclosing_module, false, false, nothing, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
 end
 
 @parity "wasm_builder/lib/src/ir/function.dart:225 FunctionExport" struct FunctionExport <: Export

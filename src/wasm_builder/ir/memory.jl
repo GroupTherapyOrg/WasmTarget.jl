@@ -17,7 +17,7 @@
     function DefinedMemory(enclosing_module::AbstractModule, finalizable_index::Finalizable{Int}, shared::Bool, min_size::Int, max_size::Union{Int,Nothing})
         # Memory's constructor asserts a shared memory's maximum size (memory.dart:26)
         shared && max_size === nothing && reject!(Internal("wasm_builder/lib/src/ir/memory.dart:27 Memory: shared memory must specify a maximum size"), "DefinedMemory")
-        new(finalizable_index, shared, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+        new(finalizable_index, shared, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
     end
 end
 
@@ -37,7 +37,7 @@ end
     function ImportedMemory(enclosing_module::AbstractModule, module_::String, name::String, finalizable_index::Finalizable{Int}, shared::Bool, min_size::Int, max_size::Union{Int,Nothing})
         # Memory's constructor asserts a shared memory's maximum size (memory.dart:26)
         shared && max_size === nothing && reject!(Internal("wasm_builder/lib/src/ir/memory.dart:27 Memory: shared memory must specify a maximum size"), "ImportedMemory")
-        new(finalizable_index, shared, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+        new(finalizable_index, shared, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
     end
 end
 

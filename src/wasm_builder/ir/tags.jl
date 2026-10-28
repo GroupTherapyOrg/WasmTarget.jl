@@ -21,7 +21,7 @@ end
     _id::Late{Int}
     # dart's constructor (line 46), the struct's one inner constructor
     DefinedTag(enclosing_module::AbstractModule, finalizable_index::Finalizable{Int}, type::FunctionType) =
-        new(finalizable_index, type, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+        new(finalizable_index, type, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
 end
 
 """A tag imported from another module."""
@@ -36,7 +36,7 @@ end
     _id::Late{Int}
     # dart's constructor (line 73), the struct's one inner constructor
     ImportedTag(enclosing_module::AbstractModule, module_::String, name::String, finalizable_index::Finalizable{Int}, type::FunctionType) =
-        new(finalizable_index, type, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+        new(finalizable_index, type, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
 end
 
 # dart declares `defined` before `imported` and constructs Tags(imported, defined); the fields are in

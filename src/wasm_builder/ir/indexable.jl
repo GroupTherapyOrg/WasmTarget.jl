@@ -3,8 +3,15 @@
 
 @parity "wasm_builder/lib/src/ir/indexable.dart:7 Indexable" abstract type Indexable end
 
-# dart's static counter that numbers the parts (each part's `_id`, assigned on its first read)
-@parity "wasm_builder/lib/src/ir/indexable.dart:8 Indexable._globalId" const Indexable__global_id = Ref{Int}(0)
+# dart's static counter that numbers the parts, read and incremented by each part's `_id` on its
+# first read (`_globalId++`). dart's is one per isolate; here it is the enclosing module's, so a
+# compile numbers its own parts, and no process state (or a package image saved after a workload)
+# carries a count from one compile to the next (A42S4).
+@parity "wasm_builder/lib/src/ir/indexable.dart:8 Indexable._globalId" function Indexable__global_id(m::AbstractModule)::Int
+    local id = m._global_id
+    m._global_id = id + 1
+    return id
+end
 
 # The classes that mix in Indexable (BaseFunction, Global, Table, Memory, Tag) cannot also subtype
 # it in Julia, so its members take their Union.

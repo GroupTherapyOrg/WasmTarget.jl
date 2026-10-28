@@ -461,6 +461,31 @@ const IMMEDIATE = [
         #     global.get 0  i32.add  i32.const 8  i32.load offset=4 align=4  i32.add))
         @test bytes2hex(bytes_of(m)) == "0061736d0100000001110360027f7f017f60017e005f027f017c00020b0103656e76036c6f670001030201000404017000040504010101020606017f01412a0b070d02036164640001036d656d02000a1a011801017e200020016a42792202100023006a41082802046a0b0013046e616d650002016d0408010205506f696e74"
     end
+    # a part's debugging name numbers it within its module, from 0 on its first read (Indexable's
+    # `_id = _globalId++`, the counter the enclosing module holds, A42S4)
+    @testset "each module numbers its own parts" begin
+        local ms = (I.Module_uninitialized(), I.Module_uninitialized())
+        local names = [W.name(I.DefinedTable(m, fidx(k), I.RefType_func(nullable = true), 1, nothing)) for m in ms for k in 0:1]
+        @test names == ["0", "1", "0", "1"]
+    end
+    # Serializer.write takes each class dart's Serializable names (A42S5): the load checks it, and a
+    # write that takes Serializable's subtypes alone misses the implementors Julia cannot place there
+    @testset "Serializer.write takes every Serializable implementor" begin
+        local sdk = WasmTarget._pin_sdk()
+        @test sdk !== nothing
+        if sdk !== nothing
+            @test WasmTarget.check_serializable_writable(W.serialize, Base.write, W.Serializer, sdk) == 0
+            narrow(s::W.Serializer, o::W.Serializable) = nothing
+            local why = try
+                WasmTarget.check_serializable_writable(W.serialize, narrow, W.Serializer, sdk); ""
+            catch e
+                e isa WasmTarget.ConstructionViolation ? e.what : rethrow()
+            end
+            @test occursin("DefinedFunction implements Serializable", why)
+            @test occursin("ActiveFunctionElementSegment implements Serializable", why)
+            @test !occursin("Catch", why)      # dart's TryTableCatch serializes but is not Serializable
+        end
+    end
 end
 
 end # module IRModulesTest

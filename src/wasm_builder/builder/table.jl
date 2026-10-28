@@ -15,7 +15,7 @@
     _built::Union{IR.DefinedTable,Nothing}
     # dart's constructor (line 12), the struct's one inner constructor
     function TableBuilder(module_builder::AbstractModuleBuilder, index::IR.Finalizable{Int}, type::IR.RefType, min_size::Int, max_size::Union{Int,Nothing})
-        new(index, type, min_size, max_size, module_builder.module_, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (IR.Indexable__global_id[] += 1) - 1), module_builder, nothing)
+        new(index, type, min_size, max_size, module_builder.module_, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> IR.Indexable__global_id(module_builder.module_)), module_builder, nothing)
     end
 end
 

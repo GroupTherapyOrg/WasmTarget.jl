@@ -15,7 +15,7 @@
     const _id::Late{Int}
     # dart's constructor (line 43), the struct's one inner constructor
     DefinedGlobal(enclosing_module::AbstractModule, initializer::Instructions, finalizable_index::Finalizable{Int}, type::GlobalType, global_name::Union{String,Nothing}=nothing) =
-        new(finalizable_index, type, enclosing_module, global_name, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), initializer, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+        new(finalizable_index, type, enclosing_module, global_name, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), initializer, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
 end
 
 """An imported global variable."""
@@ -31,7 +31,7 @@ end
     const _id::Late{Int}
     # dart's constructor (line 95), the struct's one inner constructor
     ImportedGlobal(enclosing_module::AbstractModule, module_::String, name::String, finalizable_index::Finalizable{Int}, type::GlobalType, global_name::Union{String,Nothing}=nothing) =
-        new(finalizable_index, type, enclosing_module, global_name, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> (Indexable__global_id[] += 1) - 1))
+        new(finalizable_index, type, enclosing_module, global_name, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
 end
 
 @parity "wasm_builder/lib/src/ir/global.dart:124 GlobalExport" struct GlobalExport <: Export
