@@ -360,12 +360,12 @@ Julia may be values as well as types. The array is a constant when every element
 @parity "dart2wasm/lib/types.dart:192 Types._makeTypeArray" function _make_type_array(self::Types, code_gen::AstCodeGenerator, types::Vector{Type})::Nothing
     if all(t -> is_type_constant(self, t), types)
         local constants = self.translator.constants[]
-        instantiate_constant(constants, code_gen.b, make_type_array(constants, types), self.type_array_expected_type[])
+        instantiate_constant(constants, code_gen.b[], make_type_array(constants, types), self.type_array_expected_type[])
     else
         for type_ in types
             make_type(self, code_gen, type_)
         end
-        WasmBuilder.array_new_fixed(code_gen.b, self.type_array_array_type[], length(types))
+        WasmBuilder.array_new_fixed(code_gen.b[], self.type_array_array_type[], length(types))
     end
     return nothing
 end
@@ -377,7 +377,7 @@ because a Julia class is an instance and its id already fixes its parameters. A 
 class of the closed world has no id, and it rejects, located.
 """
 @parity "dart2wasm/lib/types.dart:207 Types._makeInterfaceType" function _make_interface_type(self::Types, code_gen::AstCodeGenerator, type_::DataType)::Nothing
-    local b = code_gen.b
+    local b = code_gen.b[]
     local info = get(self.translator.class_info, type_, nothing)
     info === nothing && reject!(Unquarantined("src/types.jl _makeInterfaceType: the type value $type_ denotes no class of the closed world"), "Types._makeInterfaceType")
     WasmBuilder.i32_const(b, encoded_nullability(type_))
@@ -416,7 +416,7 @@ located, until such methods compile.
 @parity "dart2wasm/lib/types.dart:349 Types.makeType" function make_type(self::Types, code_gen::AstCodeGenerator, type_::Type)::WasmBuilder.IR.ValueType
     # Always ensure type is normalized before making a type.
     type_ = normalize(self, type_)
-    local b = code_gen.b
+    local b = code_gen.b[]
     if is_type_constant(self, type_)
         instantiate_constant(self.translator.constants[], b, NirConst(Core.Const(type_)), non_nullable_type_type(self))
         return non_nullable_type_type(self)
@@ -454,7 +454,7 @@ counterpart yet, and it rejects, located.
 @parity "dart2wasm/lib/types.dart:434 Types.emitIsTest" function emit_is_test(self::Types, code_gen::AstCodeGenerator, tested_against_type::Type, operand_type::Type;
         location::Union{String,Nothing} = nothing)::Nothing
     local at = "dart2wasm/lib/types.dart:434 Types.emitIsTest"
-    local b = code_gen.b
+    local b = code_gen.b[]
     WasmBuilder.comment(b, "type check against $tested_against_type")
     self.translator.options.verify_type_checks &&
         reject!(Unquarantined("src/types.jl emitIsTest: verifyTypeChecks calls the runtime's verifyOptimizedTypeCheck, which has no Julia counterpart"), at)
@@ -488,7 +488,7 @@ checker of the type when Julia tells its values by their class. dart otherwise c
 @parity "dart2wasm/lib/types.dart:527 Types.emitAsCheck" function emit_as_check(self::Types, code_gen::AstCodeGenerator, tested_against_type::Type, operand_type::Type,
         boxed_operand_type::WasmBuilder.IR.RefType; location::Union{String,Nothing} = nothing)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/types.dart:527 Types.emitAsCheck"
-    local b = code_gen.b
+    local b = code_gen.b[]
     local check_only_null_assignability = _requires_only_null_assignability_check(self, operand_type, tested_against_type)
     local as_checkers = as_checkers_for_module(self, b.module_builder)
     local (type_to_check, check_arguments) = can_use_type_check_helper(as_checkers, tested_against_type, operand_type)

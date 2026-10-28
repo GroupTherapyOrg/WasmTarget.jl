@@ -448,3 +448,23 @@ end
     local bytes = compile_one(C.sumto, (Int64,))
     @test 0x03 in bytes && 0x0d in bytes
 end
+
+@testset "types.dart's type tests read the code generator's late builder" begin
+    # emitIsTest and emitAsCheck emit into AstCodeGenerator.b, dart's `late w.InstructionsBuilder b`,
+    # a Late cell: read through it, a type test reaches its own rules (a located answer or rejection),
+    # never a MethodError on the cell
+    local B = W.WasmBuilder
+    local t = translator_of(CodegenCases.f_add, (Int32,))
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    local mi = only(nb.ci.def for nb in t.component)
+    local fb = B.define(D.main_module(t).functions[], B.define_function(D.main_module(t).types[], IR.ValueType[], IR.ValueType[]), "probe")
+    local g = D.get_inlinable_member_code_generator(t, fb.type, mi)
+    g.b[] = B.body(fb)
+    for f in (() -> D.emit_is_test(t.types[], g, Int64, Any),
+              () -> D.emit_as_check(t.types[], g, Int64, Any, t.top_type[]))
+        local r = try; f(); nothing; catch e; e; end
+        @test r === nothing || r isa W.RejectionError
+    end
+end
