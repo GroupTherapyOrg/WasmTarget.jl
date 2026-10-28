@@ -82,3 +82,13 @@ end
     local e2 = try; translator(ClassInfoCases.f_shapes, (Int,)).class_id_numbering[]; nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Unported && occursin("Translator.classIdNumbering", e2.rejection.anchor)
 end
+
+@testset "class_info.dart: FieldIndex and the top-level constants" begin
+    # the object header: the class id first, then the identity hash, then the class's own fields
+    @test D.FieldIndex_class_id() == 0 && D.FieldIndex_identity_hash() == 1 && D.FieldIndex_object_field_base() == 2
+    @test D.FieldIndex_box_value() == 1 && D.FieldIndex_record_field_base() == 2
+    @test D.FieldIndex_closure_context() == 2 && D.FieldIndex_closure_vtable() == 3 && D.FieldIndex_closure_runtime_type() == 4
+    @test D.FieldIndex_function_type_named_parameters() == 9 && D.FieldIndex_ffi_pointer_address() == 3
+    @test D.initial_identity_hash() == 0 && D.anonymous_mixin_class_id() == -1
+    @test D.FieldIndex() isa D.FieldIndex
+end
