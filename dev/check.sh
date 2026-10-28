@@ -29,10 +29,22 @@ done
 trap 'rm -rf "$slots/$slot"' EXIT
 [ $(( $(date +%s) - w0 )) -gt 0 ] && echo "check: waited $(( $(date +%s) - w0 ))s for a slot"
 export JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2
+# the landing compiles a fixed core of the dart corpus, never a set that grows with the port; the whole
+# corpus runs beside the landings on wt2's head (test/dart_tests.jl)
+export WT_LANDING_CORE=1
 mkdir -p .wtd; s0=$(date +%s)
 base=${CHECK_BASE:-origin/wt2}
 # the ratchet and the tests of ported code run side by side (two processes, one thread each): the
 # landing-lock holder's re-check is the loop's one serial step, so its wall is the slower of the two
+# a dependency the project names but the (gitignored) Manifest lacks is resolved first, once: a
+# change adding a [deps] entry (Binaryen_jll for the opt phase) would otherwise fail every lane's load
+missing_deps=$(sed -n '/^\[deps\]/,/^\[/p' Project.toml | sed -nE 's/^([A-Za-z0-9_]+) *=.*/\1/p' |
+  while read -r d; do grep -q "^\[\[deps\.$d\]\]" Manifest.toml 2>/dev/null || echo "$d"; done)
+if [ -n "$missing_deps" ]; then
+  echo "check: resolving the Manifest for $(echo $missing_deps | tr '\n' ' ')"
+  julia --project=. --startup-file=no -e 'using Pkg; Pkg.resolve(); Pkg.instantiate()' > .wtd/resolve.out 2>&1 ||
+    { echo "check: the Manifest does not resolve"; tail -20 .wtd/resolve.out; exit 1; }
+fi
 julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
 # test file and case it was running (WT_PROGRESS), never an hour of a pinned core (2026-10-28: a
