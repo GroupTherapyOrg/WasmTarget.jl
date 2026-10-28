@@ -10,10 +10,10 @@
 #
 # Until legacy/ exists, src/ is still WT1's (1.A2c moves it), so the rebuild's src counts none and
 # every landing since the rebuild began (REBUILD_START) is a src-less one. An anchored definition is
-# a dart definition an @parity entry names (several Julia definitions may name one: a struct and its
-# constructor), a ported one a definition some entry fills, no @unported stub; dev/skeleton.jl
-# anchors every in-scope definition of each dart file src loads (its `diff`), so the anchored count
-# is those files' total.
+# a dart definition dev/skeleton.jl counts in scope (several Julia definitions may name one: a struct
+# and its constructor; an enum's values and a field's accessors are parts of theirs), a ported one a
+# counted definition src fills with no @unported stub left at its anchor; the generator anchors every
+# in-scope definition (its `diff`), so the anchored count is its total.
 # Intent: a status leads with src progress, so setup never passes for building. Band: from the
 # NOTE_AFTER-th consecutive landing that changes nothing under src/, a note, never a failure.
 set -euo pipefail
@@ -29,9 +29,16 @@ else
         # replace mid-run; and every entry of the package's modules (WasmBuilder, Dart2Wasm and theirs),
         # not the root module's alone, where no port lives
         . dev/depot.sh; wt_depot_export "$PWD"
+        # the anchored count is the generator's in-scope total, each definition dev/skeleton.jl counts
+        # (an enum's values and a field's accessors are parts of their definition, not more); a ported
+        # one is a counted anchor src fills, no @unported entry left at it
         counts=$(julia --project=. --startup-file=no -e 'using WasmTarget
-            e = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]
-            println(length(unique(x.anchor for x in e)), " ", length(unique(x.anchor for x in e if x.ported)))') ||
+            include("dev/skeleton.jl")
+            S = Skeleton.read_scope()
+            counted = Set(Skeleton.anchor(f, d) for f in Skeleton.scope() for d in S.decls[f] if Skeleton.counted(d))
+            e = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget) && x.anchor in counted]
+            stubbed = Set(x.anchor for x in e if !x.ported)
+            println(length(counted), " ", length(setdiff(Set(x.anchor for x in e), stubbed)))') ||
             { echo "src: WasmTarget did not load, so its @parity registry gives no count"; exit 1; }
         read -r anchored ported <<< "$counts"
         last=$(git log -1 --format=%H -- src)
