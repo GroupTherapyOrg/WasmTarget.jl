@@ -85,7 +85,7 @@ the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8
 integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
 every other primitive class have none).
 
-Fields to come (64, each with its translator.dart line): `symbols` :100, `libraries` :104,
+Fields to come (63, each with its translator.dart line): `symbols` :100, `libraries` :104,
 `coreTypes` :106, `typeEnvironment` :107, `hierarchy` :108, `subtypes` :109, `directCallMetadata`
 :115, `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123, `inferredReturnTypeMetadata`
 :127, `unboxingInfoMetadata` :131, `procedureAttributeMetadata` :136, `unreachableMetadata` :140,
@@ -95,7 +95,7 @@ Fields to come (64, each with its translator.dart line): `symbols` :100, `librar
 `constructorClosures` :204, `constructorInfo` :205, `_memories` :210, `_ffiMemoryImports` :213,
 `recordClasses` :228, `immutableArrayTypeCache` :231, `mutableArrayTypeCache` :232,
 `functionRefCache` :233, `tearOffFunctionCache` :235, `closureImplementations` :238, `objectInfo`
-:241, `closureInfo` :242, `stackTraceInfo` :243, `recordInfo` :244, `typeArrayType` :245,
+:241, `stackTraceInfo` :243, `recordInfo` :244, `typeArrayType` :245,
 `listArrayType` :249, `nullableObjectArrayType` :254, `typeArrayTypeRef` :258,
 `nullableObjectArrayTypeRef` :262, `boxedIntType` :267, `boxedDoubleType` :271, `topTypeNonNullable`
 :282, `stackTraceType` :285, `stackTraceTypeNullable` :289, `runtimeTypeType` :294,
@@ -134,6 +134,7 @@ the translator holds each collaborator.
     static_param_info::IdDict{Core.MethodInstance,ParameterInfo}
     members_being_generated::Base.IdSet{Core.MethodInstance}
     void_marker::Late{WasmBuilder.IR.ValueType}
+    closure_info::Late{ClassInfo}
     top_type::Late{WasmBuilder.IR.RefType}
     builtin_types::Late{IdDict{DataType,WasmBuilder.IR.StorageType}}
     _module_output_data::ModuleOutputData
@@ -170,6 +171,13 @@ the translator holds each collaborator.
             IdDict{Core.MethodInstance,ParameterInfo}(), Base.IdSet{Core.MethodInstance}(),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/translator.dart:206 Translator.voidMarker",
                 () -> WasmBuilder.IR.RefType_def(WasmBuilder.IR.StructType("void"); nullable = true)),
+            # dart's `_Closure`, the class every closure extends: Julia's `Function`, every function
+            # object's supertype, a closure's among them
+            Late{ClassInfo}("dart2wasm/lib/translator.dart:242 Translator.closureInfo", function ()
+                local info = get(self.class_info, Function, nothing)
+                info === nothing && reject!(Internal("dart2wasm/lib/translator.dart:242 Translator.closureInfo: Function is no class of the closed world"), "Translator.closureInfo")
+                return info
+            end),
             # The wasm type used to hold values of Dart top types (e.g. `Object?`, `dynamic`)
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:278 Translator.topType", () -> self.classes[][1].nullable_type),
             Late{IdDict{DataType,WasmBuilder.IR.StorageType}}("dart2wasm/lib/translator.dart:344 Translator.builtinTypes", () -> IdDict{DataType,WasmBuilder.IR.StorageType}(
