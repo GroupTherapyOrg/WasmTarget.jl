@@ -2,16 +2,61 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-ExceptionTags's dart fields: `translator`, `_definedDartTag`, `_importedJsTag`, `_importedTags`.
+The exception tags: the one tag that throws and catches every Julia exception, defined in the main
+module and imported where another module uses it, and the JS tag catching a JS exception.
+
+The lead's ruling (2026-10-28): the tag's payload is the exception object, the top type without its
+null. dart's tag also carries the exception's StackTrace (translator.dart:285's stackTraceType);
+Julia's backtrace has no port yet, so WasmTarget's tag holds the exception alone and the stack trace
+is a located gap where it is read (a catch binding it), never a stand-in value.
 """
-@parity "dart2wasm/lib/tags.dart:9 ExceptionTags" @unported struct ExceptionTags end
+@parity "dart2wasm/lib/tags.dart:9 ExceptionTags" struct ExceptionTags
+    translator::KernelNodes
+    # dart's `late final` fields, each made on its first read by its initializer
+    _defined_dart_tag::Late{WasmBuilder.IR.Tag}
+    _imported_js_tag::Late{WasmBuilder.IR.Tag}
+    _imported_tags::WasmTagImporter
+    # dart's constructor (line 18), the struct's one inner constructor: the late fields' initializers
+    # read the value being made, so they reach it through a reference set once it exists
+    function ExceptionTags(translator::KernelNodes)
+        local self = Ref{ExceptionTags}()
+        local tags = new(translator,
+            Late{WasmBuilder.IR.Tag}("dart2wasm/lib/tags.dart:11 ExceptionTags._definedDartTag", () -> _define_dart_exception_tag(self[])),
+            Late{WasmBuilder.IR.Tag}("dart2wasm/lib/tags.dart:12 ExceptionTags._importedJsTag", () -> _import_js_exception_tag(self[])),
+            WasmTagImporter(translator, "exception"))
+        self[] = tags
+        return tags
+    end
+end
 
-@parity "dart2wasm/lib/tags.dart:18 ExceptionTags" @unported function ExceptionTags(translator) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "dart2wasm/lib/tags.dart:18 ExceptionTags" function ExceptionTags end
 
-@parity "dart2wasm/lib/tags.dart:24 ExceptionTags.getDartExceptionTag" @unported function get_dart_exception_tag(self::ExceptionTags, module_::WasmBuilder.ModuleBuilder) end
+"""The exception tag for `module_`: the main module's own, imported into any other module."""
+@parity "dart2wasm/lib/tags.dart:24 ExceptionTags.getDartExceptionTag" get_dart_exception_tag(self::ExceptionTags, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Tag =
+    get(self._imported_tags, self._defined_dart_tag[], module_)
 
-@parity "dart2wasm/lib/tags.dart:30 ExceptionTags.getJsExceptionTag" @unported function get_js_exception_tag(self::ExceptionTags, module_::WasmBuilder.ModuleBuilder) end
+"""The JS exception tag for `module_`, imported into any module that catches a JS exception."""
+@parity "dart2wasm/lib/tags.dart:30 ExceptionTags.getJsExceptionTag" get_js_exception_tag(self::ExceptionTags, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Tag =
+    get(self._imported_tags, self._imported_js_tag[], module_)
 
-@parity "dart2wasm/lib/tags.dart:37 ExceptionTags._defineDartExceptionTag" @unported function _define_dart_exception_tag(self::ExceptionTags) end
+"""
+The tag every Julia exception is thrown and caught with: a void function type taking the exception
+object, the top type without its null, defined in the main module. dart's second parameter, the
+StackTrace, waits for Julia's backtrace's port (the type's docstring).
+"""
+@parity "dart2wasm/lib/tags.dart:37 ExceptionTags._defineDartExceptionTag" function _define_dart_exception_tag(self::ExceptionTags)::WasmBuilder.IR.Tag
+    local translator = self.translator
+    local tag_type = WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[translator.top_type_non_nullable[]], WasmBuilder.IR.ValueType[])
+    return WasmBuilder.define(main_module(translator).tags[], tag_type)
+end
 
-@parity "dart2wasm/lib/tags.dart:45 ExceptionTags._importJsExceptionTag" @unported function _import_js_exception_tag(self::ExceptionTags) end
+"""The JS exception tag, WebAssembly.JSTag, its payload a nullable externref; a JS host's alone."""
+@parity "dart2wasm/lib/tags.dart:45 ExceptionTags._importJsExceptionTag" function _import_js_exception_tag(self::ExceptionTags)::WasmBuilder.IR.Tag
+    local translator = self.translator
+    # dart asserts a JS host: a standalone module imports nothing from JS
+    is_standalone(translator) && reject!(Internal("dart2wasm/lib/tags.dart:46 ExceptionTags._importJsExceptionTag: a standalone module imports no JS tag"), "_import_js_exception_tag")
+    local tag_type = WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[WasmBuilder.IR.RefType_extern(; nullable = true)], WasmBuilder.IR.ValueType[])
+    return WasmBuilder.var"import"(main_module(translator).tags[], "WebAssembly", "JSTag", tag_type)
+end
