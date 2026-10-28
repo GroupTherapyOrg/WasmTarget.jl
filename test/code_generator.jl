@@ -306,3 +306,27 @@ end
         @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
     end
 end
+
+module CallTargetCases
+@noinline h(x::Int64) = x * x + Int64(3)
+g(x::Int64) = h(x) + h(x + Int64(1))
+end
+
+@testset "code_generator.dart: CallTarget and AstCallTarget" begin
+    local t = translator_of(CallTargetCases.g, (Int64,))
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === :h)
+    local target = D.direct_call_target(t, mi)
+    @test target isa D.AstCallTarget && target._reference === mi && target.signature === D.signature_for_direct_call(t, mi)
+    # the target names and gives the member's function, made once in the main module
+    @test D.name(target) == D.get_function_name(t.functions[], mi)
+    @test D.var"function"(target) === D.get_function(t.functions[], mi)
+    # the inlinable generator of the member, over the same signature
+    local cg = D.inlining_code_gen(target)
+    @test cg isa D.SynchronousProcedureCodeGenerator && cg.member === mi && cg.function_type === target.signature
+    # the base class's answers, which a call target without its own takes
+    @test !invoke(D.synthesize_null_return_value, Tuple{D.CallTarget}, target) && !invoke(D.synthesize_no_return, Tuple{D.CallTarget}, target)
+    @test !invoke(D.supports_inlining, Tuple{D.CallTarget}, target) && !invoke(D.should_inline, Tuple{D.CallTarget}, target).should_inline
+    @test rejection(() -> invoke(D.name, Tuple{D.CallTarget}, target)).rejection isa W.Internal
+end

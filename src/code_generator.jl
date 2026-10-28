@@ -137,17 +137,22 @@ SwitchInfo's dart fields: `nullableType`, `nonNullableType`, `dynamicTypeGuard`,
 @parity "dart2wasm/lib/code_generator.dart:6146 CallTarget" abstract type CallTarget end
 
 """
-AstCallTarget's dart fields: `_translator`, `_reference`.
+The call target of a member (dart's Reference, Julia's MethodInstance): `signature` its wasm
+function type (CallTarget's field), called or inlined.
 """
-@parity "dart2wasm/lib/code_generator.dart:6182 AstCallTarget" @unported struct AstCallTarget <: CallTarget end
+@parity "dart2wasm/lib/code_generator.dart:6182 AstCallTarget" struct AstCallTarget <: CallTarget
+    signature::WasmBuilder.IR.FunctionType
+    _translator::Translator
+    _reference::Core.MethodInstance
+    # the struct's one constructor, tagged; dart's constructor at :6186 is its outer function
+    AstCallTarget(::Val{:_}, signature::WasmBuilder.IR.FunctionType, _translator::Translator, _reference::Core.MethodInstance) =
+        new(signature, _translator, _reference)
+end
 
 """
 LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 """
 @parity "dart2wasm/lib/code_generator.dart:6217 LambdaCallTarget" @unported struct LambdaCallTarget <: CallTarget end
-
-# the interface's one method, which each code generator defines (dart's abstract `generate`)
-@parity "dart2wasm/lib/code_generator.dart:38 CodeGenerator.generate" function generate end
 
 @parity "dart2wasm/lib/code_generator.dart:112 AstCodeGenerator" @unported function AstCodeGenerator(translator, function_type, enclosing_member) end
 
@@ -1158,37 +1163,50 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:6097 MacroAssembler.fillTableRangeWithIncreasingIntegers" @unported function fill_table_range_with_increasing_integers(self::WasmBuilder.InstructionsBuilder, table::WasmBuilder.IR.AbstractTable, start::Int64, stride_width::Int64, start_value::Int64) end
 
-@parity "dart2wasm/lib/code_generator.dart:6150 CallTarget" @unported function CallTarget(signature) end
+# dart's constructor of the abstract class, which each call target's constructor makes with its
+# signature; this line declares it and adds no method
+@parity "dart2wasm/lib/code_generator.dart:6150 CallTarget" function CallTarget end
 
-@parity "dart2wasm/lib/code_generator.dart:6153 CallTarget.synthesizeNullReturnValue" @unported function synthesize_null_return_value(self::CallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6153 CallTarget.synthesizeNullReturnValue" synthesize_null_return_value(self::CallTarget)::Bool = false
 
-@parity "dart2wasm/lib/code_generator.dart:6156 CallTarget.synthesizeNoReturn" @unported function synthesize_no_return(self::CallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6156 CallTarget.synthesizeNoReturn" synthesize_no_return(self::CallTarget)::Bool = false
 
-@parity "dart2wasm/lib/code_generator.dart:6159 CallTarget.supportsInlining" @unported function supports_inlining(self::CallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6159 CallTarget.supportsInlining" supports_inlining(self::CallTarget)::Bool = false
 
-@parity "dart2wasm/lib/code_generator.dart:6164 CallTarget.shouldInline" @unported function should_inline(self::CallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6164 CallTarget.shouldInline" should_inline(self::CallTarget)::InliningDecision = InliningDecision(false, "no CallTarget support")
 
-@parity "dart2wasm/lib/code_generator.dart:6168 CallTarget.inliningCodeGen" @unported function inlining_code_gen(self::CallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6168 CallTarget.inliningCodeGen" inlining_code_gen(self::CallTarget)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:6168 CallTarget.inliningCodeGen: no inlining support for $(typeof(self))"), "CallTarget.inliningCodeGen")
 
-@parity "dart2wasm/lib/code_generator.dart:6173 CallTarget.name" @unported function name(self::CallTarget) end
+# abstract in dart: each call target names itself
+@parity "dart2wasm/lib/code_generator.dart:6173 CallTarget.name" name(self::CallTarget)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:6173 CallTarget.name: abstract in $(typeof(self))"), "CallTarget.name")
 
-@parity "dart2wasm/lib/code_generator.dart:6179 CallTarget.function" @unported function var"function"(self::CallTarget) end
+# abstract in dart: each call target gives its function
+@parity "dart2wasm/lib/code_generator.dart:6179 CallTarget.function" var"function"(self::CallTarget)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:6179 CallTarget.function: abstract in $(typeof(self))"), "CallTarget.function")
 
-@parity "dart2wasm/lib/code_generator.dart:6186 AstCallTarget" @unported function AstCallTarget(signature, _translator, _reference) end
+@parity "dart2wasm/lib/code_generator.dart:6186 AstCallTarget" AstCallTarget(signature::WasmBuilder.IR.FunctionType, _translator::Translator, _reference::Core.MethodInstance)::AstCallTarget =
+    AstCallTarget(Val(:_), signature, _translator, _reference)
 
-@parity "dart2wasm/lib/code_generator.dart:6189 AstCallTarget.synthesizeNullReturnValue" @unported function synthesize_null_return_value(self::AstCallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6189 AstCallTarget.synthesizeNullReturnValue" synthesize_null_return_value(self::AstCallTarget)::Bool = synthesize_null_return_value(self._translator, self._reference)
 
-@parity "dart2wasm/lib/code_generator.dart:6193 AstCallTarget.synthesizeNoReturn" @unported function synthesize_no_return(self::AstCallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6193 AstCallTarget.synthesizeNoReturn" synthesize_no_return(self::AstCallTarget)::Bool = synthesize_no_return(self._translator, self._reference)
 
-@parity "dart2wasm/lib/code_generator.dart:6196 AstCallTarget.name" @unported function name(self::AstCallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6196 AstCallTarget.name" name(self::AstCallTarget)::String = get_function_name(self._translator.functions[], self._reference)
 
-@parity "dart2wasm/lib/code_generator.dart:6199 AstCallTarget.supportsInlining" @unported function supports_inlining(self::AstCallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6199 AstCallTarget.supportsInlining" supports_inlining(self::AstCallTarget)::Bool = supports_inlining(self._translator, self._reference)
 
-@parity "dart2wasm/lib/code_generator.dart:6202 AstCallTarget.shouldInline" @unported function should_inline(self::AstCallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6202 AstCallTarget.shouldInline" should_inline(self::AstCallTarget)::InliningDecision = should_inline(self._translator, self._reference, self.signature)
 
-@parity "dart2wasm/lib/code_generator.dart:6206 AstCallTarget.inliningCodeGen" @unported function inlining_code_gen(self::AstCallTarget) end
+# a Julia method is synchronous, so the async marker dart passes is no parameter
+@parity "dart2wasm/lib/code_generator.dart:6206 AstCallTarget.inliningCodeGen" function inlining_code_gen(self::AstCallTarget)::CodeGenerator
+    local code_gen = get_inlinable_member_code_generator(self._translator, self.signature, self._reference)
+    code_gen === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:6206 AstCallTarget.inliningCodeGen: $(self._reference) is not inlinable"), "AstCallTarget.inliningCodeGen")
+    return code_gen
+end
 
-@parity "dart2wasm/lib/code_generator.dart:6214 AstCallTarget.function" @unported function var"function"(self::AstCallTarget) end
+@parity "dart2wasm/lib/code_generator.dart:6214 AstCallTarget.function" var"function"(self::AstCallTarget)::WasmBuilder.IR.BaseFunction = get_function(self._translator.functions[], self._reference)
 
 @parity "dart2wasm/lib/code_generator.dart:6221 LambdaCallTarget" @unported function LambdaCallTarget(signature, _translator, _lambda) end
 
