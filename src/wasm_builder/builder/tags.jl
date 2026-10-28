@@ -29,6 +29,8 @@ end
 
 """Defines a new tag in the module."""
 @parity "wasm_builder/lib/src/builder/tags.dart:27 TagsBuilder.define" function define(b::TagsBuilder, type::IR.FunctionType)::IR.Tag
+    # beyond dart's checks (D10): the spec's tag types: an exception tag's function type has no results
+    isempty(type.outputs) || reject!(InvalidModule("wasm_builder/lib/src/builder/tags.dart:27: a tag of $type, whose results are not empty"), "define")
     tag = IR.DefinedTag(b._module, IR.Finalizable{Int}(), type)
     push!(b._defined, tag)
     tag
@@ -36,6 +38,10 @@ end
 
 """Imports a tag into the module."""
 @parity "wasm_builder/lib/src/builder/tags.dart:34 TagsBuilder.import" function var"import"(b::TagsBuilder, module_::String, name::String, type::IR.FunctionType)::IR.Tag
+    # beyond dart's checks (D10): the spec's names are valid UTF-8
+    (isvalid(module_) && isvalid(name)) || reject!(InvalidModule("wasm_builder/lib/src/builder/tags.dart:34: the import name $(repr(module_)) $(repr(name)) is not valid UTF-8"), "import")
+    # beyond dart's checks (D10): the spec's tag types: an exception tag's function type has no results
+    isempty(type.outputs) || reject!(InvalidModule("wasm_builder/lib/src/builder/tags.dart:34: a tag of $type, whose results are not empty"), "import")
     tag = IR.ImportedTag(b._module, module_, name, IR.Finalizable{Int}(), type)
     push!(b._imported, tag)
     tag

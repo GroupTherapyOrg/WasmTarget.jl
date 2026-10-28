@@ -18,6 +18,8 @@ end
 
 """Add a new memory to the module."""
 @parity "wasm_builder/lib/src/builder/memories.dart:18 MemoriesBuilder.define" function define(b::MemoriesBuilder, shared::Bool, min_size::Int, max_size::Union{Int,Nothing}=nothing)::IR.DefinedMemory
+    # beyond dart's checks (D10): the spec's memory types: limits with min <= max <= 65536 pages
+    (0 <= min_size <= 65536 && (max_size === nothing || min_size <= max_size <= 65536)) || reject!(InvalidModule("wasm_builder/lib/src/builder/memories.dart:18: memory limits $min_size..$max_size pages"), "define")
     memory = IR.DefinedMemory(b._module, IR.Finalizable{Int}(), shared, min_size, max_size)
     push!(b._defined_memories, memory)
     memory
@@ -25,6 +27,10 @@ end
 
 """Imports a memory into this module."""
 @parity "wasm_builder/lib/src/builder/memories.dart:31 MemoriesBuilder.import" function var"import"(b::MemoriesBuilder, module_::String, name::String, shared::Bool, min_size::Int, max_size::Union{Int,Nothing}=nothing)::IR.ImportedMemory
+    # beyond dart's checks (D10): the spec's names are valid UTF-8
+    (isvalid(module_) && isvalid(name)) || reject!(InvalidModule("wasm_builder/lib/src/builder/memories.dart:31: the import name $(repr(module_)) $(repr(name)) is not valid UTF-8"), "import")
+    # beyond dart's checks (D10): the spec's memory types: limits with min <= max <= 65536 pages
+    (0 <= min_size <= 65536 && (max_size === nothing || min_size <= max_size <= 65536)) || reject!(InvalidModule("wasm_builder/lib/src/builder/memories.dart:31: memory limits $min_size..$max_size pages"), "import")
     memory = IR.ImportedMemory(b._module, module_, name, IR.Finalizable{Int}(), shared, min_size, max_size)
     push!(b._imported_memories, memory)
     memory

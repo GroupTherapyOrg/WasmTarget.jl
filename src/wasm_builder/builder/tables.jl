@@ -19,6 +19,10 @@ end
 
 """Defines a new table in this module."""
 @parity "wasm_builder/lib/src/builder/tables.dart:18 TablesBuilder.define" function define(b::TablesBuilder, type::IR.RefType, min_size::Int, max_size::Union{Int,Nothing}=nothing)::TableBuilder
+    # beyond dart's checks (D10): the spec's table types: limits with min <= max, and an element type a table
+    # without an initializer can hold (defaultable: nullable)
+    (0 <= min_size && (max_size === nothing || min_size <= max_size)) || reject!(InvalidModule("wasm_builder/lib/src/builder/tables.dart:18: table limits $min_size..$max_size"), "define")
+    type.nullable || reject!(InvalidModule("wasm_builder/lib/src/builder/tables.dart:18: a table of the non-defaultable $type with no initializer"), "define")
     table = TableBuilder(b._module_builder, IR.Finalizable{Int}(), type, min_size, max_size)
     push!(b._table_builders, table)
     table
@@ -26,6 +30,12 @@ end
 
 """Imports a table into this module."""
 @parity "wasm_builder/lib/src/builder/tables.dart:31 TablesBuilder.import" function var"import"(b::TablesBuilder, module_::String, name::String, type::IR.RefType, min_size::Int, max_size::Union{Int,Nothing}=nothing)::IR.ImportedTable
+    # beyond dart's checks (D10): the spec's names are valid UTF-8
+    (isvalid(module_) && isvalid(name)) || reject!(InvalidModule("wasm_builder/lib/src/builder/tables.dart:31: the import name $(repr(module_)) $(repr(name)) is not valid UTF-8"), "import")
+    # beyond dart's checks (D10): the spec's table types: limits with min <= max, and an element type a table
+    # without an initializer can hold (defaultable: nullable)
+    (0 <= min_size && (max_size === nothing || min_size <= max_size)) || reject!(InvalidModule("wasm_builder/lib/src/builder/tables.dart:31: table limits $min_size..$max_size"), "import")
+    type.nullable || reject!(InvalidModule("wasm_builder/lib/src/builder/tables.dart:31: a table of the non-defaultable $type with no initializer"), "import")
     table = IR.ImportedTable(b._module_builder.module_, module_, name, IR.Finalizable{Int}(), type, min_size, max_size)
     push!(b._imported_tables, table)
     table

@@ -81,6 +81,35 @@ end
     final_globals = build(b.globals[])
     final_tags = build(b.tags[])
     imports = IR.Imports(final_functions.imported, final_tags.imported, final_globals.imported, final_tables.imported, final_memories.imported)
-    initialize(b.module_, b.module_name, final_functions, start, final_tables, final_elements, final_tags, final_memories, build(b.exports), final_globals, build(b.types[]), build(b.data_segments), imports, b.watch_points, b.source_map_url, b._extra_custom_sections)
+    final_exports = build(b.exports)
+    final_data_segments = build(b.data_segments)
+    # beyond dart's checks (D10): the spec's module validation, whose context C.refs holds the
+    # functions the module references outside function bodies (its exports, element segments and
+    # global initializers): a function body's ref.func names one of them; and an array.new_data's
+    # segment is one of this module's data segments
+    local refs = Base.IdSet{IR.BaseFunction}()
+    for e in final_exports.exported
+        e isa IR.FunctionExport && push!(refs, e.function_)
+    end
+    for seg in final_elements.segments
+        if seg isa IR.ActiveFunctionElementSegment || seg isa IR.DeclarativeElementSegment
+            foreach(f -> push!(refs, f), seg.entries)
+        else
+            for expr in seg.expressions, i in expr
+                i isa IR.RefFunc && push!(refs, i.function_)
+            end
+        end
+    end
+    for g in final_globals.defined, i in g.initializer.instructions
+        i isa IR.RefFunc && push!(refs, i.function_)
+    end
+    local own_segments = Base.IdSet{IR.BaseDataSegment}(b.data_segments._data_segment_builders)
+    for f in final_functions.defined, i in f.body[].instructions
+        i isa IR.RefFunc && !(i.function_ in refs) &&
+            reject!(InvalidModule("wasm_builder/lib/src/builder/module.dart:85 ModuleBuilder.forceBuild: 'ref.func' of $(i.function_) in $f, which no export, element segment or global initializer declares"), "force_build")
+        i isa IR.ArrayNewData && !(i.data in own_segments) &&
+            reject!(InvalidModule("wasm_builder/lib/src/builder/module.dart:85 ModuleBuilder.forceBuild: 'array.new_data' in $f of a data segment of another module"), "force_build")
+    end
+    initialize(b.module_, b.module_name, final_functions, start, final_tables, final_elements, final_tags, final_memories, final_exports, final_globals, build(b.types[]), final_data_segments, imports, b.watch_points, b.source_map_url, b._extra_custom_sections)
     b.module_
 end

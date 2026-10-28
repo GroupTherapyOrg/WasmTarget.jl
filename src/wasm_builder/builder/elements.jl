@@ -141,6 +141,8 @@ end
 @parity "wasm_builder/lib/src/builder/elements.dart:136 ActiveExpressionSegmentBuilder" function ActiveExpressionSegmentBuilder end
 
 @parity "wasm_builder/lib/src/builder/elements.dart:138 ActiveExpressionSegmentBuilder.setExpressionAt" function set_expression_at(b::ActiveExpressionSegmentBuilder, index::Int, init::InstructionsBuilder)::Nothing
+    # beyond dart's checks (D10): the spec's element segments: an element's expression is a constant expression
+    init.constant_expression || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:138 ActiveExpressionSegmentBuilder.setExpressionAt: the expression is not a constant expression"), "set_expression_at")
     init.module_builder.module_ === b.table.enclosing_module || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:139 ActiveExpressionSegmentBuilder.setExpressionAt: the expression belongs to another module than the table"), "set_expression_at")
     max = b.table.max_size
     (max === nothing || index < max) || reject!(InvalidModule("wasm_builder/lib/src/builder/elements.dart:140 ActiveExpressionSegmentBuilder.setExpressionAt: index $index greater than max table size $max"), "set_expression_at")

@@ -331,6 +331,8 @@ end
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:276 InstructionsBuilder.forceBuild" function force_build(b::InstructionsBuilder)::IR.Instructions
+    # beyond dart's checks (D10): the spec's function bodies and constant expressions end with their `end`
+    is_complete(b) || _report_error(b, "the instructions are built before their final 'end'")
     if isempty(b._patch_points)
         return IR.Instructions(b.locals, b.local_names, b._instructions, b._stack_traces, b._trace_lines, b._source_mappings)
     end
@@ -763,6 +765,8 @@ end
 
 """Emit a `br_table` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:887 InstructionsBuilder.br_table" function br_table(b::InstructionsBuilder, labels::Vector{Label}, default_label::Label)::Nothing
+# beyond dart's checks (D10): the spec's br_table validation: every target label takes the same number of values
+    allequal(length(target_types(l)) for l in (labels..., default_label)) || _report_error(b, "'br_table' to labels of different arities")
     _verify_types(b, IR.ValueType[IR.NumType_i32], IR.ValueType[]; trace=("br_table", labels..., default_label), reachable_after=false)
     for label in labels
         _verify_branch_types(b, label)
@@ -802,6 +806,13 @@ end
 
 """Emit a `call_indirect` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:960 InstructionsBuilder.call_indirect" function call_indirect(b::InstructionsBuilder, type::IR.FunctionType, table::Union{IR.AbstractTable,Nothing}=nothing)::Nothing
+    # beyond dart's checks (D10): the spec's call_indirect validation: the table (table 0 when none is
+    # named) exists and holds function references
+    local tables_builder = b.module_builder.tables[]
+    local tab = table !== nothing ? table : !isempty(tables_builder._imported_tables) ? tables_builder._imported_tables[1] :
+                !isempty(tables_builder._table_builders) ? tables_builder._table_builders[1] : nothing
+    tab === nothing && _report_error(b, "'call_indirect' through table 0 of a module with no table")
+    is_subtype_of(tab.type, IR.RefType_func(nullable = true)) || _report_error(b, "'call_indirect' through the table of $(tab.type), which holds no function references")
     trace = table === nothing ? ("call_indirect", type) : ("call_indirect", type, name(table))
     _verify_types(b, IR.ValueType[type.inputs..., IR.NumType_i32], type.outputs; trace)
     (table === nothing || table.enclosing_module === var"module"(b)) || _report_error(b, "Table of another module in 'call_indirect'")
@@ -864,6 +875,8 @@ end
 
 """Emit a `global.get` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1063 InstructionsBuilder.global_get" function global_get(b::InstructionsBuilder, global_::IR.Global)::Nothing
+    # beyond dart's checks (D10): the spec's constant expressions: a global.get in one reads an immutable global
+    (b.constant_expression && global_.type.mutable) && _report_error(b, "'global.get' of the mutable global $global_ in a constant expression")
     _verify_types(b, IR.ValueType[], IR.ValueType[global_.type.type]; trace=("global.get", global_))
     global_.enclosing_module === var"module"(b) || reject!(InvalidModule("wasm_builder/lib/src/builder/instructions.dart:1064 global_ of another module"), "global_get")
     _add(b, IR.GlobalGet(global_))
@@ -913,6 +926,8 @@ end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:1136 InstructionsBuilder._addMemoryInstruction" function _add_memory_instruction(b::InstructionsBuilder, create::Type{T}, memory::IR.Memory; offset::Int, align::Int)::Nothing where {T<:IR.MemoryInstruction}
     memory.enclosing_module === var"module"(b) || _report_error(b, "Memory of another module in a memory instruction")
+    # beyond dart's checks (D10): the spec's memarg: a 32-bit memory's offset is a u32
+    0 <= offset < 2^32 || _report_error(b, "memory offset $offset outside 0..2^32-1")
     _add(b, create(IR.MemoryOffsetAlign(memory; offset, align)))
 end
 
@@ -1210,6 +1225,8 @@ end
 @parity "wasm_builder/lib/src/builder/instructions.dart:1696 InstructionsBuilder.struct_set" function struct_set(b::InstructionsBuilder, struct_type::IR.StructType, field_index::Int)::Nothing
     # dart indexes `structType.fields[fieldIndex]`, its RangeError past the fields refused here, located
     0 <= field_index < length(struct_type.fields) || _report_error(b, "'struct.set' of the field $field_index, not one of the $(length(struct_type.fields)) fields of $struct_type")
+    # beyond dart's checks (D10): the spec's struct.set validation: the field is mutable
+    struct_type.fields[field_index+1].mutable || _report_error(b, "'struct.set' of the immutable field $field_index of $struct_type")
     _verify_types(b, IR.ValueType[IR.RefType_def(struct_type; nullable=true), unpacked(struct_type.fields[field_index+1].type)], IR.ValueType[]; trace=("struct.set", struct_type, field_index))
     _add(b, IR.StructSet(struct_type, field_index))
     nothing
@@ -1255,6 +1272,8 @@ end
 
 """Emit an `array.set` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1774 InstructionsBuilder.array_set" function array_set(b::InstructionsBuilder, array_type::IR.ArrayType)::Nothing
+    # beyond dart's checks (D10): the spec's array.set validation: the element is mutable
+    array_type.element_type[].mutable || _report_error(b, "'array.set' of the immutable array $array_type")
     _verify_types(b, IR.ValueType[IR.RefType_def(array_type; nullable=true), IR.NumType_i32, unpacked(array_type.element_type[].type)], IR.ValueType[]; trace=("array.set", array_type))
     _add(b, IR.ArraySet(array_type))
     nothing
@@ -1299,6 +1318,10 @@ end
 
 """Emit an `array.copy` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1852 InstructionsBuilder.array_copy" function array_copy(b::InstructionsBuilder, dest_array_type::IR.ArrayType, source_array_type::IR.ArrayType)::Nothing
+    # beyond dart's checks (D10): the spec's array.copy validation: the destination's element is mutable and the source's
+    # storage type a subtype of the destination's
+    dest_array_type.element_type[].mutable || _report_error(b, "'array.copy' into the immutable array $dest_array_type")
+    is_subtype_of(source_array_type.element_type[].type, dest_array_type.element_type[].type) || _report_error(b, "'array.copy' from $source_array_type, whose element is no subtype of $dest_array_type's")
     _verify_types(b, IR.ValueType[
             IR.RefType_def(dest_array_type; nullable=true), # dest
             IR.NumType_i32, # dest_offset
@@ -1306,12 +1329,14 @@ end
             IR.NumType_i32, # source_offset
             IR.NumType_i32, # size
         ], IR.ValueType[]; trace=("array.copy", dest_array_type, source_array_type))
-    _add(b, IR.ArrayCopy(dest_array_type, source_array_type))
+    _add(b, IR.ArrayCopy(; dest_array_type, source_array_type))
     nothing
 end
 
 """Emit an `array.fill` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1875 InstructionsBuilder.array_fill" function array_fill(b::InstructionsBuilder, array_type::IR.ArrayType)::Nothing
+    # beyond dart's checks (D10): the spec's array.fill validation: the element is mutable
+    array_type.element_type[].mutable || _report_error(b, "'array.fill' of the immutable array $array_type")
     _verify_types(b, IR.ValueType[IR.RefType_def(array_type; nullable=true), IR.NumType_i32, unpacked(array_type.element_type[].type), IR.NumType_i32], IR.ValueType[]; trace=("array.copy", array_type))
     _add(b, IR.ArrayFill(array_type))
     nothing
@@ -2758,84 +2783,112 @@ end
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4435 InstructionsBuilder.i8x16_extract_lane_s" function i8x16_extract_lane_s(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 16 lanes
+    0 <= lane < 16 || _report_error(b, "'i8x16.extract_lane_s' of the lane $lane, not one of 16")
     _verify_types(b, IR.ValueType[IR.NumType_v128], IR.ValueType[IR.NumType_i32]; trace=("i8x16.extract_lane_s",))
     _add(b, IR.I8x16ExtractLaneS(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4446 InstructionsBuilder.i8x16_extract_lane_u" function i8x16_extract_lane_u(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 16 lanes
+    0 <= lane < 16 || _report_error(b, "'i8x16.extract_lane_u' of the lane $lane, not one of 16")
     _verify_types(b, IR.ValueType[IR.NumType_v128], IR.ValueType[IR.NumType_i32]; trace=("i8x16.extract_lane_u",))
     _add(b, IR.I8x16ExtractLaneU(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4457 InstructionsBuilder.i16x8_extract_lane_s" function i16x8_extract_lane_s(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 8 lanes
+    0 <= lane < 8 || _report_error(b, "'i16x8.extract_lane_s' of the lane $lane, not one of 8")
     _verify_types(b, IR.ValueType[IR.NumType_v128], IR.ValueType[IR.NumType_i32]; trace=("i16x8.extract_lane_s",))
     _add(b, IR.I16x8ExtractLaneS(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4468 InstructionsBuilder.i16x8_extract_lane_u" function i16x8_extract_lane_u(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 8 lanes
+    0 <= lane < 8 || _report_error(b, "'i16x8.extract_lane_u' of the lane $lane, not one of 8")
     _verify_types(b, IR.ValueType[IR.NumType_v128], IR.ValueType[IR.NumType_i32]; trace=("i16x8.extract_lane_u",))
     _add(b, IR.I16x8ExtractLaneU(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4479 InstructionsBuilder.i32x4_extract_lane" function i32x4_extract_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 4 lanes
+    0 <= lane < 4 || _report_error(b, "'i32x4.extract_lane' of the lane $lane, not one of 4")
     _verify_types(b, IR.ValueType[IR.NumType_v128], IR.ValueType[IR.NumType_i32]; trace=("i32x4.extract_lane",))
     _add(b, IR.I32x4ExtractLane(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4490 InstructionsBuilder.i64x2_extract_lane" function i64x2_extract_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 2 lanes
+    0 <= lane < 2 || _report_error(b, "'i64x2.extract_lane' of the lane $lane, not one of 2")
     _verify_types(b, IR.ValueType[IR.NumType_v128], IR.ValueType[IR.NumType_i64]; trace=("i64x2.extract_lane",))
     _add(b, IR.I64x2ExtractLane(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4501 InstructionsBuilder.f32x4_extract_lane" function f32x4_extract_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 4 lanes
+    0 <= lane < 4 || _report_error(b, "'f32x4.extract_lane' of the lane $lane, not one of 4")
     _verify_types(b, IR.ValueType[IR.NumType_v128], IR.ValueType[IR.NumType_f32]; trace=("f32x4.extract_lane",))
     _add(b, IR.F32x4ExtractLane(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4512 InstructionsBuilder.f64x2_extract_lane" function f64x2_extract_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 2 lanes
+    0 <= lane < 2 || _report_error(b, "'f64x2.extract_lane' of the lane $lane, not one of 2")
     _verify_types(b, IR.ValueType[IR.NumType_v128], IR.ValueType[IR.NumType_f64]; trace=("f64x2.extract_lane",))
     _add(b, IR.F64x2ExtractLane(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4523 InstructionsBuilder.i8x16_replace_lane" function i8x16_replace_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 16 lanes
+    0 <= lane < 16 || _report_error(b, "'i8x16.replace_lane' of the lane $lane, not one of 16")
     _verify_types(b, IR.ValueType[IR.NumType_v128, IR.NumType_i32], IR.ValueType[IR.NumType_v128]; trace=("i8x16.replace_lane",))
     _add(b, IR.I8x16ReplaceLane(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4534 InstructionsBuilder.i16x8_replace_lane" function i16x8_replace_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 8 lanes
+    0 <= lane < 8 || _report_error(b, "'i16x8.replace_lane' of the lane $lane, not one of 8")
     _verify_types(b, IR.ValueType[IR.NumType_v128, IR.NumType_i32], IR.ValueType[IR.NumType_v128]; trace=("i16x8.replace_lane",))
     _add(b, IR.I16x8ReplaceLane(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4545 InstructionsBuilder.i32x4_replace_lane" function i32x4_replace_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 4 lanes
+    0 <= lane < 4 || _report_error(b, "'i32x4.replace_lane' of the lane $lane, not one of 4")
     _verify_types(b, IR.ValueType[IR.NumType_v128, IR.NumType_i32], IR.ValueType[IR.NumType_v128]; trace=("i32x4.replace_lane",))
     _add(b, IR.I32x4ReplaceLane(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4556 InstructionsBuilder.i64x2_replace_lane" function i64x2_replace_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 2 lanes
+    0 <= lane < 2 || _report_error(b, "'i64x2.replace_lane' of the lane $lane, not one of 2")
     _verify_types(b, IR.ValueType[IR.NumType_v128, IR.NumType_i64], IR.ValueType[IR.NumType_v128]; trace=("i64x2.replace_lane",))
     _add(b, IR.I64x2ReplaceLane(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4567 InstructionsBuilder.f32x4_replace_lane" function f32x4_replace_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 4 lanes
+    0 <= lane < 4 || _report_error(b, "'f32x4.replace_lane' of the lane $lane, not one of 4")
     _verify_types(b, IR.ValueType[IR.NumType_v128, IR.NumType_f32], IR.ValueType[IR.NumType_v128]; trace=("f32x4.replace_lane",))
     _add(b, IR.F32x4ReplaceLane(lane))
     nothing
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:4578 InstructionsBuilder.f64x2_replace_lane" function f64x2_replace_lane(b::InstructionsBuilder, lane::Int)::Nothing
+    # beyond dart's checks (D10): the spec's lane immediates: a lane index below the shape's 2 lanes
+    0 <= lane < 2 || _report_error(b, "'f64x2.replace_lane' of the lane $lane, not one of 2")
     _verify_types(b, IR.ValueType[IR.NumType_v128, IR.NumType_f64], IR.ValueType[IR.NumType_v128]; trace=("f64x2.replace_lane",))
     _add(b, IR.F64x2ReplaceLane(lane))
     nothing
@@ -3054,6 +3107,8 @@ end
 @parity "wasm_builder/lib/src/builder/instructions.dart:4974 InstructionsBuilder.i8x16_shuffle" function i8x16_shuffle(b::InstructionsBuilder, lanes::Vector{Int})::Nothing
     _verify_types(b, IR.ValueType[IR.NumType_v128, IR.NumType_v128], IR.ValueType[IR.NumType_v128]; trace=("i8x16.shuffle",))
     length(lanes) == 16 || _report_error(b, "i8x16.shuffle with $(length(lanes)) lanes, not 16")
+    # beyond dart's checks (D10): the spec's i8x16.shuffle validation: each lane index selects one of the two vectors' 32 bytes
+    all(l -> 0 <= l < 32, lanes) || _report_error(b, "i8x16.shuffle with a lane index outside 0..31")
     _add(b, IR.I8x16Shuffle(lanes))
     nothing
 end

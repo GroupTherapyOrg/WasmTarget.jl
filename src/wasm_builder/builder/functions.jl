@@ -39,6 +39,8 @@ end
 
 """Imports a function into this module."""
 @parity "wasm_builder/lib/src/builder/functions.dart:43 FunctionsBuilder.import" function var"import"(b::FunctionsBuilder, module_::String, name::String, type::IR.FunctionType, function_name::Union{String,Nothing}=nothing)::IR.ImportedFunction
+    # beyond dart's checks (D10): the spec's names are valid UTF-8
+    (isvalid(module_) && isvalid(name)) || reject!(InvalidModule("wasm_builder/lib/src/builder/functions.dart:43: the import name $(repr(module_)) $(repr(name)) is not valid UTF-8"), "import")
     function_ = IR.ImportedFunction(b._module_builder.module_, module_, name, IR.Finalizable{Int}(), type, function_name)
     push!(b._imported_functions, function_)
     function_

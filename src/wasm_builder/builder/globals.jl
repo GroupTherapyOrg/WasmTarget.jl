@@ -38,6 +38,8 @@ end
 
 """Imports a global variable into this module."""
 @parity "wasm_builder/lib/src/builder/globals.dart:41 GlobalsBuilder.import" function var"import"(b::GlobalsBuilder, module_::String, name::String, type::IR.GlobalType)::IR.ImportedGlobal
+    # beyond dart's checks (D10): the spec's names are valid UTF-8
+    (isvalid(module_) && isvalid(name)) || reject!(InvalidModule("wasm_builder/lib/src/builder/globals.dart:41: the import name $(repr(module_)) $(repr(name)) is not valid UTF-8"), "import")
     global_ = IR.ImportedGlobal(b._module_builder.module_, module_, name, IR.Finalizable{Int}(), type)
     push!(b._imported_globals, global_)
     global_

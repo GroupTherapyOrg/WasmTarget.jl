@@ -17,6 +17,8 @@ end
 
 """Exports `exportable` under `name`, which must be unique (`export` is a Julia keyword)."""
 @parity "wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export" function var"export"(b::ExportsBuilder, name::String, exportable::Union{IR.BaseFunction,IR.Global,IR.AbstractTable,IR.Memory,IR.Tag})::Nothing
+    # beyond dart's checks (D10): the spec's names are valid UTF-8
+    isvalid(name) || reject!(InvalidModule("wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export: the export name $(repr(name)) is not valid UTF-8"), "export")
     any(e -> e.name == name, b._exports) && reject!(InvalidModule("wasm_builder/lib/src/builder/exports.dart:15 ExportsBuilder.export: a second export named '$name'"), "export_")
     push!(b._exports, var"export"(exportable, name))
     nothing
