@@ -143,4 +143,36 @@ end
     @test_throws WT.RejectionError W.make_function_type_for_body(t, use, false, false)
 end
 
+module Lambdas
+@noinline apply(f, x::Int) = f(x)
+function use(k::Int, x::Int)
+    @noinline inner(y) = y * k
+    return apply(inner, x) + apply(@noinline(y -> y + k), x)
+end
+end
+
+@testset "a closure's function type and name; a tear-off's type" begin
+    local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
+    local t = W.Translator(WT.check_subset(Lambdas.use, (Int, Int), "functions"), data, W.TranslatorOptions())
+    W._init_modules(t, nothing)
+    collect(W.ClassInfoCollector(t))
+    local fc = t.functions[]
+    local use = only(b.ci.def for b in t.component if b.ci.def.def.name === :use)
+    local c = W.Closures(t, use; find_captures = true)
+    local bodies = [b for b in t.component if (Base.unwrap_unionall(b.ci.def.specTypes).parameters[1]) <: Function && !Base.issingletontype(Base.unwrap_unionall(b.ci.def.specTypes).parameters[1])]
+    local named = only(b for b in bodies if occursin("inner", string(nameof(Base.unwrap_unionall(b.ci.def.specTypes).parameters[1]))))
+    local anon = only(b for b in bodies if b !== named)
+    local lam = W.Lambda__(named, :functions, use, c, 0)
+    local ft = W.get_lambda_function_type(fc, lam)
+    @test ft.inputs == [W.closure_context_field_type(), W.translate_type(t, Int)] && ft.outputs == [W.translate_type(t, Int)]
+    local where_ = string(named.ci.def.def.file, ":", named.ci.def.def.line)
+    @test W.get_lambda_function_name(fc, lam) == W.get_function_name(fc, use) * " closure inner at " * where_
+    @test W.get_lambda_function_name(fc, W.Lambda__(anon, :functions, use, c, 1)) == W.get_function_name(fc, use) * " closure at " * string(anon.ci.def.def.file, ":", anon.ci.def.def.line)
+    # a tear-off returns the closure's value, the type of its callee
+    local callee = Base.unwrap_unionall(named.ci.def.specTypes).parameters[1]
+    local tt = W.make_tear_off_function_type(t, named, nothing)
+    @test isempty(tt.inputs) && tt.outputs == [W.translate_type(t, callee)]
+    @test W.make_tear_off_function_type(t, named, t.top_type[]).inputs == [t.top_type[]]
+end
+
 end # module FunctionsTest

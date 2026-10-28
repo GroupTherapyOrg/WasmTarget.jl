@@ -213,7 +213,21 @@ end
     return _get_function_type(self, target)
 end
 
-@parity "dart2wasm/lib/functions.dart:262 FunctionCollector.getLambdaFunctionType" @unported function get_lambda_function_type(self::FunctionCollector, lambda::Lambda) end
+"""
+A closure's function type: its context (closureContextFieldType), then its parameters after the
+closure itself, each its specialization's type, then the type Julia inferred it returns. A Julia
+closure has no type parameters and no named ones.
+"""
+@parity "dart2wasm/lib/functions.dart:262 FunctionCollector.getLambdaFunctionType" function get_lambda_function_type(self::FunctionCollector, lambda::Lambda)::WasmBuilder.IR.FunctionType
+    local translator = self.translator
+    local ci = lambda.function_node.ci
+    local params = (Base.unwrap_unionall(ci.def.specTypes)::DataType).parameters
+    local inputs = WasmBuilder.IR.ValueType[closure_context_field_type()]
+    for p in params[2:end]
+        push!(inputs, translate_type(translator, p))
+    end
+    return WasmBuilder.define_function(types_builder(translator), inputs, WasmBuilder.IR.ValueType[translate_type(translator, ci.rettype)])
+end
 
 # dart's `member.accept1(visitor, target)`: a Julia member is a method, the visitor's Procedure arm
 @parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" function _get_function_type(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType
@@ -241,7 +255,22 @@ end
     return "$(method.module).$(method.name)($(join(("::$p" for p in params[2:end]), ", ")))"
 end
 
-@parity "dart2wasm/lib/functions.dart:377 FunctionCollector.getLambdaFunctionName" @unported function get_lambda_function_name(self::FunctionCollector, lambda::Lambda) end
+"""
+A closure's function name: its enclosing member's, `closure`, the local function's name when it has
+one (dart's FunctionDeclaration, a closure type Julia names after the local function), and its
+location, the method's file and line.
+"""
+@parity "dart2wasm/lib/functions.dart:377 FunctionCollector.getLambdaFunctionName" function get_lambda_function_name(self::FunctionCollector, lambda::Lambda)::String
+    local method = lambda.function_node.ci.def.def::Method
+    local location = string(method.file, ":", method.line)
+    local member = get_function_name(self, lambda.enclosing_member)
+    local callee = (Base.unwrap_unionall(lambda.function_node.ci.def.specTypes)::DataType).parameters[1]
+    # a local function's closure type is `#name#…` (Julia 1.12: `#inner#use##0`); an anonymous one's
+    # is `#n#m` or, in 1.12, `#use##1#use##2`, its first part a number or followed by `##`
+    local m = match(r"^#([^#]+)#(?!#)", string(nameof(callee)))
+    m !== nothing && all(isdigit, m[1]) && (m = nothing)
+    return m === nothing ? "$member closure at $location" : "$member closure $(m[1]) at $location"
+end
 
 # dart's `'$memberName ($shape)'`, the member's name as getFunctionName writes it
 @parity "dart2wasm/lib/functions.dart:389 FunctionCollector.getDynamicForwarderName" get_dynamic_forwarder_name(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape)::String =
@@ -395,7 +424,13 @@ the top type without its null (translator.dart:281), a field to come of the tran
     end
 end
 
-@parity "dart2wasm/lib/functions.dart:860 makeTearOffFunctionType" @unported function make_tear_off_function_type(translator::Translator, function_::NirBody, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}) end
+# a tear-off returns the function as a value: dart's computeFunctionType; a Julia method's value is its
+# callee, of the type its specialization's first parameter is
+@parity "dart2wasm/lib/functions.dart:860 makeTearOffFunctionType" function make_tear_off_function_type(translator::Translator, function_::NirBody, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType})::WasmBuilder.IR.FunctionType
+    local callee = (Base.unwrap_unionall(function_.ci.def.specTypes)::DataType).parameters[1]
+    return WasmBuilder.define_function(types_builder(translator), receiver_type === nothing ? WasmBuilder.IR.ValueType[] : WasmBuilder.IR.ValueType[receiver_type],
+                                       WasmBuilder.IR.ValueType[translate_type(translator, callee)])
+end
 
 # dart's signature returns an Invocation, noSuchMethod's argument record (translator.dart:309's
 # invocationType). A Julia program has no noSuchMethod: a call with no method is a MethodError,
