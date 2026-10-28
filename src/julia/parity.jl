@@ -712,8 +712,10 @@ end
     return Symbol[Symbol(snake(m)), Symbol(x, "_", snake(m)), Symbol("set_", snake(m), "!")]
 end
 
-# the stub @unported stands for: a function whose body rejects with its anchor, or a struct with no
-# fields whose only constructor does
+# the stub @unported stands for: a function whose body rejects with its anchor, or a struct written
+# with no fields (its dart fields come with its port) whose only constructor does. The struct holds one
+# field of type Union{}, which no value has, so no value of it exists: a fieldless struct would be a
+# singleton, its `instance` a value no constructor made
 @quarantine "an unported definition must stop the compile at itself, Rust's todo!()" Base.Meta.isexpr function _unported(anchor::String, def, source::LineNumberNode)
     local reject = GlobalRef(@__MODULE__, :reject!)
     local unported = GlobalRef(@__MODULE__, :Unported)
@@ -730,7 +732,7 @@ end
         x isa Symbol || refuse("an unported struct has no type parameters")
         all(a -> a isa LineNumberNode, def.args[3].args) || refuse("an unported struct has no fields: its only constructor is the rejection")
         local ctor = Expr(:(=), Expr(:call, x, Expr(:..., :args)), Expr(:block, source, Expr(:call, reject, Expr(:call, unported, anchor), "$x(...)")))
-        return Expr(:struct, def.args[1], t, Expr(:block, source, ctor))
+        return Expr(:struct, def.args[1], t, Expr(:block, source, Expr(:(::), :_unported, :(Union{})), ctor))
     end
     refuse("@unported stands for a function or a struct")
 end
