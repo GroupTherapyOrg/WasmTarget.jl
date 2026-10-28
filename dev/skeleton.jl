@@ -9,7 +9,9 @@
 #   julia dev/skeleton.jl count      the in-scope dart definitions, per file and in all
 #   julia dev/skeleton.jl check      the two readers agree on every in-scope file (no output: agree)
 #   julia dev/skeleton.jl write      write every in-scope file's skeleton, merged with what src holds
-#   julia dev/skeleton.jl diff       the no-diff check: src holds exactly what `write` would write
+#   julia dev/skeleton.jl diff       the no-diff check: src holds exactly what `write` would write, no
+#                                    Kernel row is stale, and every filled struct keeps its dart
+#                                    class's instance fields or lists them to come
 #   julia dev/skeleton.jl merge <tree> <dart file>...   take another tree's filled definitions of
 #                                    those dart files, each in place of its stub
 #
@@ -210,8 +212,10 @@ struct Decl
     params::Vector{Tok}   # the parameter list's tokens, without the outer parentheses
     rettype::Vector{Tok}  # the tokens before the name (return or field type); a typedef's aliased type
     implements::Vector{String}  # a class's `implements` targets, each with its prefix
+    mixins::Vector{String}      # a class's `with` targets, each with its prefix
 end
-Decl(kind, symbol, line, modifiers, extends, params, rettype) = Decl(kind, symbol, line, modifiers, extends, params, rettype, String[])
+Decl(kind, symbol, line, modifiers, extends, params, rettype) = Decl(kind, symbol, line, modifiers, extends, params, rettype, String[], String[])
+Decl(kind, symbol, line, modifiers, extends, params, rettype, impls) = Decl(kind, symbol, line, modifiers, extends, params, rettype, impls, String[])
 
 const MODIFIERS = Set(["abstract", "sealed", "base", "final", "interface", "static", "external", "const",
                        "late", "var", "covariant", "factory", "augment"])
@@ -327,7 +331,7 @@ function declarations(toks::Vector{Tok}, a::Int, b::Int, container::String, file
         if !isempty(on)
             for k in n0+1:length(out)
                 local d = out[k]
-                out[k] = Decl(d.kind, d.symbol, d.line, d.modifiers, on, d.params, d.rettype, d.implements)
+                out[k] = Decl(d.kind, d.symbol, d.line, d.modifiers, on, d.params, d.rettype, d.implements, d.mixins)
             end
         end
         i = e
@@ -369,27 +373,32 @@ function classify!(toks::Vector{Tok}, i::Int, e::Int, container::String, file, o
                 break
             end
         end
-        # the `implements` targets: the identifiers (with a prefix) before the body, each at depth 0 of
-        # the type arguments
-        local impls = String[]
+        # the `implements` and `with` targets: the identifiers (with a prefix) after the keyword and
+        # before the body or the next clause, each at depth 0 of the type arguments
         local lb0 = findnext(t -> t.text == "{", toks, k)
-        local ki = findnext(t -> t.text == "implements", toks, k)
-        if ki !== nothing && lb0 !== nothing && ki < lb0
-            local depth, m = 0, ki + 1
-            while m < lb0
-                local t = toks[m].text
-                t == "<" ? (depth += 1) : t == ">" ? (depth -= 1) : t == ">>" ? (depth -= 2) :
-                (depth == 0 && toks[m].kind == :ident && (m == ki + 1 || toks[m-1].text == ",")) &&
-                    push!(impls, (m + 2 < lb0 && toks[m+1].text == "." && toks[m+2].kind == :ident) ? t * "." * toks[m+2].text : t)
-                m += 1
+        local targets(kw) = begin
+            local out = String[]
+            local ki = findnext(t -> t.text == kw, toks, k)
+            if ki !== nothing && lb0 !== nothing && ki < lb0
+                local depth, m = 0, ki + 1
+                while m < lb0 && !(depth == 0 && toks[m].text in ("implements", "with", "on"))
+                    local t = toks[m].text
+                    t == "<" ? (depth += 1) : t == ">" ? (depth -= 1) : t == ">>" ? (depth -= 2) :
+                    (depth == 0 && toks[m].kind == :ident && (m == ki + 1 || toks[m-1].text == ",")) &&
+                        push!(out, (m + 2 < lb0 && toks[m+1].text == "." && toks[m+2].kind == :ident) ? t * "." * toks[m+2].text : t)
+                    m += 1
+                end
             end
+            out
         end
+        local impls = targets("implements")
+        local mixins = kind == :enum ? String[] : targets("with")
         local unnamed = kind == :extension && !(toks[k].kind == :ident && toks[k].text != "on")
         local name = unnamed ? ext : toks[k].text
         # a typedef's aliased type: its tokens after the `=`, without the `;`
         local eq = kind == :typedef ? findnext(t -> t.text == "=", toks, k) : nothing
         local rhs = eq === nothing || eq >= e ? Tok[] : toks[eq+1:e-2]
-        push!(out, Decl(kind, name, toks[k].line, mods, ext, Tok[], rhs, impls))
+        push!(out, Decl(kind, name, toks[k].line, mods, ext, Tok[], rhs, impls, mixins))
         if kind != :typedef
             local lb = findnext(t -> t.text == "{", toks, k)
             (lb === nothing || lb >= e) && error("skeleton: $file:$(toks[k].line): $kw $name has no body")
@@ -1367,7 +1376,7 @@ end
 
 # the Julia file of a pin-table key: src/julia/parity.jl's `_jl_rel`, its pattern read from there
 function jl_file(key::String)::String
-    local m = match(r"function _jl_rel\(dart::String\)::String\n\s*local m = match\(r\"(.+?)\", dart\)", read(PARITY, String))
+    local m = match(r"function _jl_rel\(dart::String\)::String\n(?s:.*?)\n\s*local m = match\(r\"(.+?)\", dart\)", read(PARITY, String))
     m === nothing && error("skeleton: src/julia/parity.jl holds no _jl_rel")
     local k = match(Regex(m[1]), key)
     k === nothing && error("skeleton: $key is no path _jl_rel maps")
@@ -1561,7 +1570,91 @@ function diff_main()::Int
     for r in unused_kernel_rows(S)
         bad += 1; println("✗ KERNEL_TYPES row $r: no in-scope file names it")
     end
+    for x in field_faults(S)
+        bad += 1; println("✗ ", x)
+    end
     return bad
+end
+
+# ---- the fields: a ported struct keeps every dart instance field ------------------------------------
+# A filled struct anchored at a dart class holds that class's instance fields, each by the one rule's
+# name (snake, a Julia keyword with a trailing `_`): its own, its `extends` chain's and its mixins'
+# (Julia has no inheritance, so a subclass's struct holds its superclass's fields), or src fills a
+# definition anchored at the field's declaration (an accessor: a superclass's constant field each
+# subclass answers, the builder's SingleByteInstruction.byte), but those its
+# docstring lists after "Fields to come", each backticked by its dart name (wt3-translator's form:
+# `Fields to come (N, ...): \`a\` :100, \`b\` :104.`, line tokens and the parenthetical ignored). A
+# field missing, or listed to come while the struct holds it, is a fault.
+
+# the dart instance fields of class `x` in file `key`, each its dart name and its declaration's anchor:
+# its own, then its extends chain's and its mixins', each in scope
+function dart_instance_fields(S::Scope, key::AbstractString, x::AbstractString, seen = Set{String}())::Vector{Tuple{String,String}}
+    "$key|$x" in seen && return Tuple{String,String}[]
+    push!(seen, "$key|$x")
+    local ds = S.decls[key]
+    local i = findfirst(d -> d.symbol == x && d.kind in (:class, :abstract, :mixin), ds)
+    i === nothing && return Tuple{String,String}[]
+    local d = ds[i]
+    local out = [(f.symbol[length(x)+2:end], anchor(key, f)) for f in ds if f.kind == :field && !("static" in f.modifiers) && startswith(f.symbol, x * ".")]
+    for sup in vcat(isempty(d.extends) ? String[] : [d.extends], d.mixins)
+        local p, n = split_prefix(sup)
+        local k = declaring(n, p, key)
+        k === nothing || append!(out, dart_instance_fields(S, k, n, seen))
+    end
+    return out
+end
+
+# the dart names a docstring lists after "Fields to come", up to the period that ends the list
+function fields_to_come(text::AbstractString)::Vector{String}
+    local m = match(r"Fields to come[^:]*:((?:[^.`]|`[^`]*`)*)\."s, text)
+    m === nothing && return String[]
+    return String[x[1] for x in eachmatch(r"`([^`]+)`", m[1])]
+end
+
+# the field names of the struct a definition's parsed form declares, or nothing
+function struct_fields(ex)::Union{Nothing,Vector{Symbol}}
+    Meta.isexpr(ex, :macrocall) && return struct_fields(ex.args[end])
+    Meta.isexpr(ex, :struct) || return nothing
+    local out = Symbol[]
+    for f in ex.args[3].args
+        Meta.isexpr(f, :const) && (f = f.args[1])
+        f isa Symbol ? push!(out, f) : Meta.isexpr(f, :(::)) && f.args[1] isa Symbol ? push!(out, f.args[1]) : nothing
+    end
+    return out
+end
+
+# every filled struct's field faults
+function field_faults(S::Scope)::Vector{String}
+    local out = String[]
+    local keys = Set(scope())
+    local bykey = by_anchor(S)
+    local filled = Set(a for (a, (_, stub)) in src_anchors() if !stub)
+    for f in scope()
+        local path = jl_file(f)
+        isfile(path) || continue
+        for s in last(segments(read(path, String), path))
+            generated(s) && continue
+            local a = canonical_anchor(s.anchor, keys)
+            haskey(bykey, a) || continue
+            local key, d = bykey[a]
+            d.kind in (:class, :abstract, :mixin) || continue
+            local ex = try Meta.parse(s.text) catch; nothing end
+            local have = struct_fields(ex)
+            have === nothing && continue
+            local want = unique(dart_instance_fields(S, key, d.symbol))
+            local come = fields_to_come(s.text)
+            local at = "$(relpath(path, ROOT)):$(s.first) $(d.symbol)"
+            for (n, fa) in want
+                # the rule's name, or jname's, which also suffixes Julia's contextual words (type, mutable)
+                local held = Symbol(snake(n)) in have || Symbol(jname(n)) in have || fa in filled
+                held != (n in come) || push!(out, held ? "$at holds `$n`, listed to come" : "$at lacks dart's field `$n` and does not list it to come")
+            end
+            for n in come
+                any(w -> w[1] == n, want) || push!(out, "$at lists `$n` to come, which is no instance field of the dart class")
+            end
+        end
+    end
+    return out
 end
 
 # ---- merging another lane's port --------------------------------------------------------------

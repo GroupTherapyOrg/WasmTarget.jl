@@ -818,7 +818,6 @@ nullable, its read checking for Julia's UndefRefError.
     return wasm_type
 end
 
-
 # the type Julia inferred for the local (the code generator passes it); a cyclic class's locals are
 # never assigned, so they take the top type, whose dummy initialization is a ref.null
 @parity "dart2wasm/lib/translator.dart:2100 Translator.translateTypeOfLocalVariable" function translate_type_of_local_variable(self::Translator, type_::Type)::WasmBuilder.IR.ValueType

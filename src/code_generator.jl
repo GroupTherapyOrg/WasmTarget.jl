@@ -154,6 +154,8 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 """
 @parity "dart2wasm/lib/code_generator.dart:6217 LambdaCallTarget" @unported struct LambdaCallTarget <: CallTarget end
 
+@parity "dart2wasm/lib/code_generator.dart:38 CodeGenerator.generate" @unported function generate(self::CodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
+
 @parity "dart2wasm/lib/code_generator.dart:112 AstCodeGenerator" @unported function AstCodeGenerator(translator, function_type, enclosing_member) end
 
 @parity "dart2wasm/lib/code_generator.dart:114 AstCodeGenerator.outputs" outputs(self::AstCodeGenerator)::Vector{WasmBuilder.IR.ValueType} = self.function_type.outputs
