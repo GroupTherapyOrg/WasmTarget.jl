@@ -83,6 +83,15 @@ for try in 1 2 3; do
   fi
   git fetch -q origin "$MARCH" && git merge-base --is-ancestor "origin/$MARCH" HEAD && break
 done
+# never claim a landing the push doesn't carry: HEAD must hold every commit this lane brought, by
+# subject (a rebase that lost them, leaving HEAD at origin's tip, would push nothing and print
+# "landed"; wt3-tests saw exactly that)
+want=$(git log --format=%s "origin/$MARCH..$start" | sort -u)
+have=$( { git log --format=%s "origin/$MARCH..HEAD"; git log -400 --format=%s "origin/$MARCH"; } | sort -u)
+missing=$(comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$have") | sed '/^$/d')
+if [ "$(git rev-list --count "origin/$MARCH..HEAD")" -eq 0 ] || [ -n "$missing" ]; then
+  echo "ship: REFUSED — the rebased HEAD doesn't carry this lane's commits (missing: ${missing:-all}); nothing pushed"; exit 1
+fi
 if git push -q origin HEAD:$MARCH; then
   release; trap cleanup_scratch EXIT
   secs=$(( $(date +%s) - first ))

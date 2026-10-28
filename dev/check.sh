@@ -37,7 +37,7 @@ julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 |
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
 # test file and case it was running (WT_PROGRESS), never an hour of a pinned core (2026-10-28: a
 # shared-DAG constant hashed in 2^40 steps and held a landing for 50 minutes)
-WT_HARD_LIMIT=${WT_HARD_LIMIT:-480}
+WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: today's slowest loaded check is ~170 s
 export WT_PROGRESS="$PWD/.wtd/progress"; : > "$WT_PROGRESS"
 julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
 julia --project=. --startup-file=no test/src_tests.jl > .wtd/src_tests.out 2>&1 & tpid=$!
