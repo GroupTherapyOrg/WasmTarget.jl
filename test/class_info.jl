@@ -25,3 +25,60 @@ const D = WasmTarget.Dart2Wasm
     @test norm([R(4, 6), R(1, 2)]) == [R(1, 2), R(4, 6)]
     @test norm([R(3, 1), R(2, 2)]) == [R(2, 2)]
 end
+
+module ClassInfoCases
+abstract type Shape end
+struct Circle <: Shape; r::Float64; end
+struct Square <: Shape; s::Float64; end
+f_shapes(n::Int) = n > 0 ? Circle(1.0) : Square(2.0)
+f_vector(v::Vector{Int}) = sum(v)
+struct Holder; t::Tuple{Any}; end
+f_holder(h::Holder) = 1
+f_int32(n::Int) = Int32(n)
+end
+
+@testset "class_info.dart: ClassIdNumbering on the closed world" begin
+    local W = WasmTarget
+    local translator(f, at) = D.Translator(W.check_subset(f, at, "class_info"), D.TranslatorOptions())
+    local number(f, at, masq = Base.IdSet{DataType}()) = D.ClassIdNumbering__number(translator(f, at), masq)
+    for (f, at) in ((ClassInfoCases.f_shapes, (Int,)), (ClassInfoCases.f_vector, (Vector{Int},)))
+        local t = translator(f, at)
+        local n = D.ClassIdNumbering__number(t, Base.IdSet{DataType}())
+        local world = W.closed_world_classes(t.component, "class_info")
+        # the walk meets every class of the closed world once, Any first, each class after its supertype
+        @test length(n.dfs_order) == length(world) && Base.IdSet{DataType}(n.dfs_order) == Base.IdSet{DataType}(world)
+        @test n.dfs_order[1] === Any
+        @test all(c -> c === Any || findfirst(x -> x === supertype(c), n.dfs_order) < findfirst(x -> x === c, n.dfs_order), n.dfs_order)
+        # the concrete classes hold 1..C, the abstract ones the ids after, one each (the model's
+        # ConcreteDense and AbstractAfter), Julia deciding which class is concrete
+        local conc = filter(isconcretetype, n.dfs_order)
+        local abst = filter(!isconcretetype, n.dfs_order)
+        @test sort([n.class_ids[c] for c in conc]) == collect(1:length(conc)) == collect(1:n.max_concrete_class_id)
+        @test sort([n.class_ids[a] for a in abst]) == collect(length(conc)+1:n.max_class_id)
+        # a class's ranges hold a concrete class's id exactly when Julia's <: says it is a subtype
+        # (the model's RangeIsa)
+        @test all(((k, c),) -> (c <: k) == any(r -> contains(r, n.class_ids[c]), D.get_concrete_class_id_range(n, k)),
+                  [(k, c) for k in n.dfs_order for c in conc])
+        @test D.get_concrete_class_id_range(n, Any) == [D.Range(1, length(conc))]
+        @test D.get_concrete_subclass_ranges(n, Any) == [D.Range(1, length(conc))]
+        # no masquerades: the first interface class id is 1
+        @test n.first_non_masqueraded_interface_class_cid[] == 1
+    end
+    # the abstract Shape's concrete subclasses, Circle and Square, are one range; with Shape
+    # masqueraded the first interface class id follows it
+    local n = number(ClassInfoCases.f_shapes, (Int,), Base.IdSet{DataType}([ClassInfoCases.Shape]))
+    local ids = sort([n.class_ids[ClassInfoCases.Circle], n.class_ids[ClassInfoCases.Square]])
+    @test ids[2] == ids[1] + 1 && D.get_concrete_class_id_range(n, ClassInfoCases.Shape) == [D.Range(ids[1], ids[2])]
+    @test n.first_non_masqueraded_interface_class_cid[] == ids[2] + 1
+    # Julia's TypeofBottom and Type{Union{}} are equal types and two classes, numbered apart
+    # (Int32(n)'s throw_inexacterror takes a type as a value, which brings every kind)
+    local v = number(ClassInfoCases.f_int32, (Int,))
+    @test v.class_ids[Core.TypeofBottom] != v.class_ids[Type{Union{}}]
+    @test D.get_concrete_class_id_range(v, Type{Union{}}) == [D.Range(v.class_ids[Core.TypeofBottom], v.class_ids[Core.TypeofBottom])]
+    # a covariant Tuple class, whose subtypes the supertype tree does not hold, rejects, located
+    local e = try; number(ClassInfoCases.f_holder, (ClassInfoCases.Holder,)); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("Tuple{Any}", e.rejection.row)
+    # the translator's late classIdNumbering, read before ClassInfoCollector.collect assigns it
+    local e2 = try; translator(ClassInfoCases.f_shapes, (Int,)).class_id_numbering[]; nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Unported && occursin("Translator.classIdNumbering", e2.rejection.anchor)
+end

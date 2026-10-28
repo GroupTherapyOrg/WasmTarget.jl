@@ -67,3 +67,29 @@ end
     end
     return nothing
 end
+
+# A class's place in the hierarchy, Julia's answers (ledger D3) where dart reads a Kernel Class:
+# `cls.superclass`, `cls.isAbstract`. Julia has single inheritance and no interfaces or mixins, so a
+# class implements nothing (`cls.implementedTypes` is empty) and none is an anonymous mixin.
+
+"""
+    class_superclass(c) -> Union{DataType,Nothing}
+
+dart's `cls.superclass`: Julia's `supertype`, `nothing` for `Any`, the root (Julia's own
+`supertype(Any)` is `Any`).
+"""
+@quarantine "a class's parent is Julia's supertype; Any, the root, has none" Base.supertype class_superclass(c::DataType)::Union{DataType,Nothing} = c === Any ? nothing : supertype(c)
+
+"""
+    class_is_abstract(c, at) -> Bool
+
+dart's `cls.isAbstract`, a class no value has exactly: Julia's `!isconcretetype`. A class neither
+concrete nor abstract (`isabstracttype`) is a covariant Tuple (`Tuple{Any}`, `Tuple{Vararg{Int}}`):
+its subtypes (`Tuple{Int}`) are not under it in the supertype tree, so no subtree range holds them,
+and it rejects, located, until the classes implement it (dart's `implementedTypes`).
+"""
+@quarantine "a class is abstract when no value has it exactly: Julia's isconcretetype; a covariant Tuple is neither" Base.isconcretetype function class_is_abstract(c::DataType, at::String)::Bool
+    isconcretetype(c) && return false
+    isabstracttype(c) && return true
+    reject!(Unquarantined("src/julia/classes.jl class_is_abstract: the covariant Tuple class $c, whose subtypes Julia's supertype tree does not hold"), at)
+end

@@ -68,9 +68,30 @@
 end
 
 """
-Translator's dart fields: `options`, `symbols`, `component`, `libraries`, `coreTypes`, `typeEnvironment`, `hierarchy`, `subtypes`, `directCallMetadata`, `inferredTypeMetadata`, `inferredArgTypeMetadata`, `inferredReturnTypeMetadata`, `unboxingInfoMetadata`, `procedureAttributeMetadata`, `unreachableMetadata`, `index`, `closureLayouter`, `classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`, `dispatchTable`, `dynamicDispatchTable`, `globals`, `dartGlobals`, `constants`, `types`, `_exceptionTags`, `compilationQueue`, `functions`, `loadingMap`, `exportNamer`, `interopMemberNamer`, `classes`, `classesSupersFirst`, `classIdNumbering`, `classInfo`, `internalizedStringsForJSRuntime`, `_internalizedStringGlobals`, `classForHeapType`, `fieldIndex`, `typeParameterIndex`, `staticParamInfo`, `_declaredFieldTables`, `_importedFieldTables`, `membersContainingInnerFunctions`, `membersBeingGenerated`, `constructorClosures`, `constructorInfo`, `voidMarker`, `_memories`, `_ffiMemoryImports`, `recordClasses`, `immutableArrayTypeCache`, `mutableArrayTypeCache`, `functionRefCache`, `tearOffFunctionCache`, `closureImplementations`, `objectInfo`, `closureInfo`, `stackTraceInfo`, `recordInfo`, `typeArrayType`, `listArrayType`, `nullableObjectArrayType`, `typeArrayTypeRef`, `nullableObjectArrayTypeRef`, `boxedIntType`, `boxedDoubleType`, `topType`, `topTypeNonNullable`, `stackTraceType`, `stackTraceTypeNullable`, `runtimeTypeType`, `runtimeTypeTypeNullable`, `stringType`, `stringTypeNullable`, `invocationType`, `_partialInstantiators`, `_polymorphicDispatchers`, `_dynamicDispatchers`, `_dummyValueCollectors`, `builtinTypes`, `boxedClasses`, `boxClasses`, `valueClasses`, `dynamicCallVtableEntryFunctionType`, `_moduleOutputData`, `_outputToBuilder`, `_builderToOutput`, `moduleToBuilder`, `_memberClosures`, `linkingActions`, `_importedMemories`, `_closureArgumentsDispatchers`, `_needToCheck`.
+The translation from the program to wasm, and the hub of the compiler's global state.
+
+Its fields arrive with the pieces that read them: `options`; `component`, the program, the NIR of
+the closed world Julia's trim verifier accepted (dart's Kernel `Component`); `classIdNumbering`.
+dart's fields still to come: `symbols`, `libraries`, `coreTypes`, `typeEnvironment`, `hierarchy`,
+`subtypes`, the TFA metadata maps (Julia's inference, held by the NIR), `index`, `closureLayouter`,
+`classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`, `dispatchTable`,
+`dynamicDispatchTable`, `globals`, `dartGlobals`, `constants`, `types`, `_exceptionTags`,
+`compilationQueue`, `functions`, `loadingMap`, `exportNamer`, `interopMemberNamer`, `classes`,
+`classesSupersFirst`, `classInfo` and the maps and caches after it (translator.dart:181 on).
+
+A collaborator holds its translator as `KernelNodes`, the mixin Translator alone applies (dart's
+`class Translator with KernelNodes`): Julia cannot declare two structs that name each other, and
+the translator holds each collaborator.
 """
-@parity "dart2wasm/lib/translator.dart:96 Translator" @unported struct Translator end
+@parity "dart2wasm/lib/translator.dart:96 Translator" struct Translator <: KernelNodes
+    options::TranslatorOptions
+    component::Vector{NirBody}
+    class_id_numbering::Late{ClassIdNumbering}
+    # dart's field initializers and the constructor's initializer list; a late field is assigned by
+    # the code that builds it (ClassInfoCollector.collect)
+    Translator(component::Vector{NirBody}, options::TranslatorOptions) =
+        new(options, component, Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"))
+end
 
 """
 CompilationQueue's dart fields: `translator`, `_pending`.
@@ -197,7 +218,11 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 
 @parity "dart2wasm/lib/translator.dart:467 Translator.getConstructorInfo" @unported function get_constructor_info(self::Translator, node) end
 
-@parity "dart2wasm/lib/translator.dart:470 Translator" @unported function Translator(component, core_types, index, record_classes, loading_map, _module_output_data, options) end
+# dart's constructor takes the Kernel component and its core types, index, record classes, loading
+# map and module output data; WasmTarget's program is the closed world Julia's trim verifier
+# accepted, read once as the NIR, and the rest arrive with the pieces that read them
+@parity "dart2wasm/lib/translator.dart:470 Translator" Translator(world::ClosedWorld, options::TranslatorOptions)::Translator =
+    Translator(build_nir(world, "dart2wasm/lib/translator.dart:470 Translator"), options)
 
 @parity "dart2wasm/lib/translator.dart:499 Translator._initModules" @unported function _init_modules(self::Translator, source_map_url_generator) end
 

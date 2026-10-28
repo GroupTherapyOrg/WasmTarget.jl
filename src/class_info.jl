@@ -14,9 +14,48 @@ ClassInfoCollector's dart fields: `translator`, `topInfo`, `_recordStructs`, `ma
 @parity "dart2wasm/lib/class_info.dart:346 ClassInfoCollector" @unported struct ClassInfoCollector end
 
 """
-ClassIdNumbering's dart fields: `translator`, `_subclasses`, `_implementors`, `_concreteSubclassIdRange`, `_masqueraded`, `dfsOrder`, `classIds`, `maxConcreteClassId`, `maxClassId`, `_transitiveImplementors`, `_concreteClassIdRanges`, `firstNonMasqueradedInterfaceClassCid`.
+The closed world's class ids: one depth-first pre-order walk of the class tree from `Any`, each
+concrete class the next concrete id from 1 (0 is the artificial top class), each abstract class an
+id after the last concrete one, and each class the ranges of the concrete ids under it (its model,
+dev/formal/ClassIdNumbering.tla). A class is a Julia `DataType`, keyed by identity: Julia calls
+`Core.TypeofBottom` and its supertype `Type{Union{}}` equal types, two classes all the same.
+
+The translator is held as `KernelNodes`, the mixin Translator alone applies (src/translator.jl).
 """
-@parity "dart2wasm/lib/class_info.dart:780 ClassIdNumbering" @unported struct ClassIdNumbering end
+@parity "dart2wasm/lib/class_info.dart:780 ClassIdNumbering" struct ClassIdNumbering
+    translator::KernelNodes
+    _subclasses::IdDict{DataType,Vector{DataType}}
+    _implementors::IdDict{DataType,Vector{DataType}}
+    _concrete_subclass_id_range::IdDict{DataType,Vector{Range}}
+    _masqueraded::Base.IdSet{DataType}
+    dfs_order::Vector{DataType}
+    class_ids::IdDict{DataType,Int}
+    max_concrete_class_id::Int
+    max_class_id::Int
+    _transitive_implementors::IdDict{DataType,Base.IdSet{DataType}}
+    _concrete_class_id_ranges::IdDict{DataType,Vector{Range}}
+    first_non_masqueraded_interface_class_cid::Late{Int}
+    # dart's constructor `ClassIdNumbering._` with its field initializers, the struct's one
+    # constructor tagged by the dart name; the late field's initializer reads the numbering itself
+    function ClassIdNumbering(::Val{:_}, translator::KernelNodes, _subclasses::IdDict{DataType,Vector{DataType}},
+            _implementors::IdDict{DataType,Vector{DataType}}, _concrete_subclass_id_range::IdDict{DataType,Vector{Range}},
+            _masqueraded::Base.IdSet{DataType}, dfs_order::Vector{DataType}, class_ids::IdDict{DataType,Int},
+            max_concrete_class_id::Int, max_class_id::Int)
+        local self
+        local cid = Late{Int}("dart2wasm/lib/class_info.dart:853 ClassIdNumbering.firstNonMasqueradedInterfaceClassCid", function ()
+            local last_masqueraded_class_id = 0
+            for cls in self._masqueraded
+                local ranges = get_concrete_class_id_range(self, cls)
+                isempty(ranges) || (last_masqueraded_class_id = max(last_masqueraded_class_id, ranges[end].end_))
+            end
+            return last_masqueraded_class_id + 1
+        end)
+        self = new(translator, _subclasses, _implementors, _concrete_subclass_id_range, _masqueraded, dfs_order,
+                         class_ids, max_concrete_class_id, max_class_id, IdDict{DataType,Base.IdSet{DataType}}(),
+                         IdDict{DataType,Vector{Range}}(), cid)
+        return self
+    end
+end
 
 """A range of class ids, both ends inclusive."""
 @parity "dart2wasm/lib/class_info.dart:1059 Range" struct Range
@@ -148,15 +187,142 @@ end
 
 @parity "dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect" @unported function Base.collect(self::ClassInfoCollector) end
 
-@parity "dart2wasm/lib/class_info.dart:792 ClassIdNumbering._" @unported function ClassIdNumbering__(translator, _subclasses, _implementors, _concrete_subclass_id_range, _masqueraded, dfs_order, class_ids, max_concrete_class_id, max_class_id) end
+@parity "dart2wasm/lib/class_info.dart:792 ClassIdNumbering._" ClassIdNumbering__(translator::KernelNodes, _subclasses::IdDict{DataType,Vector{DataType}},
+        _implementors::IdDict{DataType,Vector{DataType}}, _concrete_subclass_id_range::IdDict{DataType,Vector{Range}},
+        _masqueraded::Base.IdSet{DataType}, dfs_order::Vector{DataType}, class_ids::IdDict{DataType,Int},
+        max_concrete_class_id::Int, max_class_id::Int)::ClassIdNumbering =
+    ClassIdNumbering(Val(:_), translator, _subclasses, _implementors, _concrete_subclass_id_range, _masqueraded, dfs_order,
+                     class_ids, max_concrete_class_id, max_class_id)
 
-@parity "dart2wasm/lib/class_info.dart:805 ClassIdNumbering._getTransitiveImplementors" @unported function _get_transitive_implementors(self::ClassIdNumbering, klass) end
+@parity "dart2wasm/lib/class_info.dart:805 ClassIdNumbering._getTransitiveImplementors" function _get_transitive_implementors(self::ClassIdNumbering, klass::DataType)::Base.IdSet{DataType}
+    local cached = get(self._transitive_implementors, klass, nothing)
+    cached === nothing || return cached
+    local transitive_implementors = Base.IdSet{DataType}()
+    local classes = get(self._subclasses, klass, nothing)
+    if classes !== nothing
+        for cls in classes
+            union!(transitive_implementors, _get_transitive_implementors(self, cls))
+        end
+    end
+    classes = get(self._implementors, klass, nothing)
+    if classes !== nothing
+        for cls in classes
+            push!(transitive_implementors, cls)
+            union!(transitive_implementors, _get_transitive_implementors(self, cls))
+        end
+    end
+    return self._transitive_implementors[klass] = transitive_implementors
+end
 
-@parity "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" @unported function get_concrete_class_id_range(self::ClassIdNumbering, klass) end
+"""The ranges of the concrete class ids that extend or implement `klass`, directly or transitively."""
+@parity "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" function get_concrete_class_id_range(self::ClassIdNumbering, klass::DataType)::Vector{Range}
+    local cached = get(self._concrete_class_id_ranges, klass, nothing)
+    cached === nothing || return cached
+    local ranges = Range[]
+    local transitive_implementors = _get_transitive_implementors(self, klass)
+    append!(ranges, get(self._concrete_subclass_id_range, klass, Range[]))
+    for implementor in transitive_implementors
+        append!(ranges, get(self._concrete_subclass_id_range, implementor, Range[]))
+    end
+    normalize(ranges)
+    return self._concrete_class_id_ranges[klass] = ranges
+end
 
-@parity "dart2wasm/lib/class_info.dart:864 ClassIdNumbering._number" @unported function ClassIdNumbering__number(translator::Translator, masqueraded::Set{Any}) end
+"""
+Number the classes of `translator`'s program: the closed world's classes (src/julia/classes.jl), in
+the order its walk first meets them, where dart walks its component's libraries' classes.
 
-@parity "dart2wasm/lib/class_info.dart:1054 ClassIdNumbering.getConcreteSubclassRanges" @unported function get_concrete_subclass_ranges(self::ClassIdNumbering, klass) end
+Julia's differs: a class's superclass is Julia's `supertype` and `Any` the root; Julia has no
+interfaces or mixins, so `implementors` stays empty and no class is an anonymous mixin; and the
+root's children keep program order, where dart sorts them by a fixed preference for its core
+classes and libraries (`order`), which a Julia program does not have.
+"""
+@parity "dart2wasm/lib/class_info.dart:864 ClassIdNumbering._number" function ClassIdNumbering__number(translator::Translator, masqueraded::Base.IdSet{DataType})::ClassIdNumbering
+    local at = "dart2wasm/lib/class_info.dart:864 ClassIdNumbering._number"
+    # Make graph from class to its subclasses.
+    local root::Union{DataType,Nothing} = nothing
+    local subclasses = IdDict{DataType,Vector{DataType}}()
+    local implementors = IdDict{DataType,Vector{DataType}}()
+    local class_ids = IdDict{DataType,Int}()
+
+    local concrete_class_count = 0
+    local abstract_class_count = 0
+    local already_assigned_count = 0
+    for cls in closed_world_classes(translator.component, at)
+        if !haskey(class_ids, cls)
+            if class_is_abstract(cls, at)
+                abstract_class_count += 1
+            else
+                concrete_class_count += 1
+            end
+        else
+            already_assigned_count += 1
+        end
+        local super_class = class_superclass(cls)
+        if super_class === nothing
+            root = cls
+        else
+            push!(get!(() -> DataType[], subclasses, super_class), cls)
+        end
+    end
+    root === nothing && reject!(Internal("$at: the closed world has no root class, Any"), at)
+
+    # Traverse class inheritence graph in depth-first pre-order.
+    local dfs
+    dfs = function (root::DataType, pre::Function, post::Function)
+        local class_id = pre(root)::Int
+        local children = get(subclasses, root, nothing)
+        if children !== nothing
+            for sub in children
+                dfs(sub, pre, post)
+            end
+        end
+        post(root, class_id)
+        return nothing
+    end
+
+    # Make a list of the depth-first pre-order traversal.
+    local dfs_order = DataType[]
+    local in_dfs_order = Base.IdSet{DataType}(dfs_order)
+
+    # Maps any class to a dense range of concrete class ids that are subclasses
+    # of that class.
+    local concrete_subclass_ranges = IdDict{DataType,Vector{Range}}()
+
+    # `0` is occupied by artificial non-Dart top class.
+    local next_concrete_class_id = 1
+    local next_abstract_class_id = next_concrete_class_id + concrete_class_count
+
+    # dart's saved class ids (class_info.dart:968) are read only when `classIds` is not empty, which
+    # the fresh map above never is; the block has no counterpart
+
+    dfs(root,
+        function (cls::DataType)
+            cls in in_dfs_order || push!(dfs_order, cls)
+            haskey(class_ids, cls) && return next_concrete_class_id
+            if class_is_abstract(cls, at)
+                haskey(class_ids, cls) || (class_ids[cls] = (next_abstract_class_id += 1) - 1)
+                return next_concrete_class_id
+            end
+            haskey(class_ids, cls) && reject!(Internal("$at: the concrete class $cls is numbered twice"), at)
+            class_ids[cls] = (next_concrete_class_id += 1) - 1
+            return next_concrete_class_id - 1
+        end,
+        function (cls::DataType, first_class_id::Int)
+            local range = Range(first_class_id, next_concrete_class_id - 1)
+            is_empty(range) || push!(get!(() -> Range[], concrete_subclass_ranges, cls), range)
+            return nothing
+        end)
+
+    length(dfs_order) == concrete_class_count + abstract_class_count + already_assigned_count ||
+        reject!(Internal("$at: the walk met $(length(dfs_order)) classes of the closed world's $(concrete_class_count + abstract_class_count + already_assigned_count)"), at)
+
+    return ClassIdNumbering__(translator, subclasses, implementors, concrete_subclass_ranges, masqueraded, dfs_order,
+                              class_ids, next_concrete_class_id - 1, next_abstract_class_id - 1)
+end
+
+@parity "dart2wasm/lib/class_info.dart:1054 ClassIdNumbering.getConcreteSubclassRanges" get_concrete_subclass_ranges(self::ClassIdNumbering, klass::DataType)::Vector{Range} =
+    get(self._concrete_subclass_id_range, klass, Range[])
 
 @parity "dart2wasm/lib/class_info.dart:1063 Range._" function Range__(start::Int, end_::Int)::Range
     start <= end_ || reject!(Internal("dart2wasm/lib/class_info.dart:1063 Range._: start $start past end $end_"), "Range._")
