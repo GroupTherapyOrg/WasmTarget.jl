@@ -26,7 +26,7 @@ struct TypesCasesChecker <: WasmTarget.Dart2Wasm._TypeCheckers end
     local e = try; D.lookup(env, TypeVar(:T)); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
 
-    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.TranslatorOptions())
+    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local types = D.Types(t)
     @test D.type_type(types) === Type && all(T -> T isa D.type_type(types), (Int, Union{Int,Nothing}, Vector, Union{}))
     # a type value's class is its kind, Julia's typeof
@@ -77,7 +77,7 @@ end
 
 @testset "types.dart: the type parameter offsets of nested binders" begin
     local W = WasmTarget
-    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.TranslatorOptions())
+    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local types = D.Types(t)
     # T's binder holds S's, which refers to T: T's range starts above S's
     local A = Tuple{T, Vector{S}} where S where T

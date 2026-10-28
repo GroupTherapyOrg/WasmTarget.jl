@@ -23,7 +23,7 @@ end
 
 # the code generator of the entry body of `f` at `argtypes`, its wasm signature `ins -> outs`
 function codegen_of(f, argtypes, ins, outs)
-    local t = D.Translator(W.check_subset(f, argtypes, "code_generator"), D.TranslatorOptions())
+    local t = D.Translator(W.check_subset(f, argtypes, "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === nameof(f))
     return D.get_inlinable_member_code_generator(t, IR.FunctionType(IR.ValueType[ins...], IR.ValueType[outs...]), mi)
 end
@@ -105,8 +105,8 @@ end
 end
 
 @testset "code_generator.dart: translateStatement over the NIR" begin
-    local t = D.Translator(W.check_subset(CodegenCases.shapes, (Int,), "code_generator"), D.TranslatorOptions())
-    local t2 = D.Translator(W.check_subset(CodegenCases.loop, (Int,), "code_generator"), D.TranslatorOptions())
+    local t = D.Translator(W.check_subset(CodegenCases.shapes, (Int,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t2 = D.Translator(W.check_subset(CodegenCases.loop, (Int,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local gens = [D.SynchronousProcedureCodeGenerator(Val(:_), tt, IR.FunctionType(IR.ValueType[], IR.ValueType[]), b.ci.def, b)
                   for tt in (t, t2) for b in tt.component]
     local forms = Set(W.stmt_form(st) for g in gens for st in g.body.stmts)
@@ -178,7 +178,7 @@ mkn(x::Int8) = N(x, 0x01)
 end
 
 @testset "code_generator.dart: a field read and an allocation" begin
-    local t = D.Translator(W.check_subset(FieldGenCases.getb, (FieldGenCases.P,), "code_generator"), D.TranslatorOptions())
+    local t = D.Translator(W.check_subset(FieldGenCases.getb, (FieldGenCases.P,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local body = only(t.component)
     local g = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
     # getfield(p, :b) is the field read, routed to visitInstanceGet; it reaches the class table, which
@@ -191,7 +191,7 @@ end
     local dyn = W.NirCall(W.NirValue[gf.args[1], gf.args[2], W.NirArgument(2)])
     @test rejection(() -> D.visit_instance_get(g, dyn, IR.NumType_f64)).rejection isa W.Unquarantined
     # Expr(:new): the allocation, its class the type operand's value
-    local t2 = D.Translator(W.check_subset(FieldGenCases.mk, (Int32,), "code_generator"), D.TranslatorOptions())
+    local t2 = D.Translator(W.check_subset(FieldGenCases.mk, (Int32,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local b2 = only(t2.component)
     local g2 = D.SynchronousProcedureCodeGenerator(Val(:_), t2, IR.FunctionType(IR.ValueType[], IR.ValueType[]), b2.ci.def, b2)
     local nw = b2.stmts[findfirst(s -> s isa W.NirNew, b2.stmts)]::W.NirNew

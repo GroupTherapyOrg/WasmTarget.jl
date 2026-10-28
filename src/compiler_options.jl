@@ -4,37 +4,87 @@
 @parity "dart2wasm/lib/compiler_options.dart:21 CompilerPhase" @enum CompilerPhase CompilerPhase_cfe CompilerPhase_tfa CompilerPhase_codegen CompilerPhase_opt
 
 """
-WasmCompilerOptions's dart fields: `translatorOptions`, `platformPath`, `librariesSpecPath`, `packagesPath`, `mainUri`, `outputFile`, `depFile`, `deferredMapUri`, `useLoadIds`, `programSplitConstraintsUri`, `environment`, `feExperimentalFlags`, `multiRootScheme`, `multiRoots`, `deleteToStringPackageUri`, `dumpKernelAfterCfe`, `dumpKernelBeforeTfa`, `dumpKernelAfterTfa`, `dryRun`, `wasmOptPath`, `stripToolchainAnnotations`, `maxActiveWasmOptProcesses`, `saveUnopt`, `moduleIdsToOptimize`, `stripWasm`, `recordedUsesFile`, `phases`.
+The options of a compile, each field at dart's initial value unless a keyword sets it. dart's `Uri`
+fields are strings (a path or a URL; Julia has no URI type).
+
+Fields to come (1, each with its compiler_options.dart line): `feExperimentalFlags` :49 (the
+front end's experiment flags; Julia's front end is Julia itself, so no flag reaches WasmTarget).
 """
-@parity "dart2wasm/lib/compiler_options.dart:35 WasmCompilerOptions" @unported struct WasmCompilerOptions end
+@parity "dart2wasm/lib/compiler_options.dart:35 WasmCompilerOptions" mutable struct WasmCompilerOptions
+    const translator_options::TranslatorOptions
+    platform_path::Union{String,Nothing}
+    libraries_spec_path::Union{String,Nothing}
+    packages_path::Union{String,Nothing}
+    main_uri::String
+    output_file::String
+    dep_file::Union{String,Nothing}
+    deferred_map_uri::Union{String,Nothing}
+    use_load_ids::Bool
+    program_split_constraints_uri::Union{String,Nothing}
+    environment::Dict{String,String}
+    multi_root_scheme::Union{String,Nothing}
+    multi_roots::Vector{String}
+    delete_to_string_package_uri::Vector{String}
+    dump_kernel_after_cfe::Union{String,Nothing}
+    dump_kernel_before_tfa::Union{String,Nothing}
+    dump_kernel_after_tfa::Union{String,Nothing}
+    dry_run::Bool
+    wasm_opt_path::Union{String,Nothing}
+    strip_toolchain_annotations::Bool
+    max_active_wasm_opt_processes::Int
+    save_unopt::Bool
+    module_ids_to_optimize::Set{Int}
+    strip_wasm::Bool
+    recorded_uses_file::Union{String,Nothing}
+    phases::Vector{CompilerPhase}
+    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at :73
+    # is its outer function
+    WasmCompilerOptions(::Val{:_}, main_uri::String, output_file::String) =
+        new(TranslatorOptions(), nothing, nothing, nothing, main_uri, output_file, nothing, nothing, false, nothing,
+            Dict{String,String}(), nothing, String[], String[], nothing, nothing, nothing, false, nothing, true,
+            WasmCompilerOptions__default_max_active_wasm_opt_processes(), false, Set{Int}(), true, nothing,
+            CompilerPhase[CompilerPhase_cfe, CompilerPhase_tfa, CompilerPhase_codegen])
+end
 
 @parity "dart2wasm/lib/compiler_options.dart:27 CompilerPhase.parse" @unported function CompilerPhase_parse(name::String) end
 
-@parity "dart2wasm/lib/compiler_options.dart:36 WasmCompilerOptions.mainModuleId" @unported function WasmCompilerOptions_main_module_id() end
+@parity "dart2wasm/lib/compiler_options.dart:36 WasmCompilerOptions.mainModuleId" WasmCompilerOptions_main_module_id()::Int = 0
 
-@parity "dart2wasm/lib/compiler_options.dart:70 WasmCompilerOptions.defaultOptions" @unported function WasmCompilerOptions_default_options() end
+@parity "dart2wasm/lib/compiler_options.dart:70 WasmCompilerOptions.defaultOptions" WasmCompilerOptions_default_options()::WasmCompilerOptions = WasmCompilerOptions(; main_uri = "", output_file = "")
 
-@parity "dart2wasm/lib/compiler_options.dart:73 WasmCompilerOptions" @unported function WasmCompilerOptions(; main_uri, output_file) end
+@parity "dart2wasm/lib/compiler_options.dart:73 WasmCompilerOptions" WasmCompilerOptions(; main_uri::String, output_file::String)::WasmCompilerOptions = WasmCompilerOptions(Val(:_), main_uri, output_file)
 
-@parity "dart2wasm/lib/compiler_options.dart:75 WasmCompilerOptions.useMultiModuleOpt" @unported function use_multi_module_opt(self::WasmCompilerOptions) end
+@parity "dart2wasm/lib/compiler_options.dart:75 WasmCompilerOptions.useMultiModuleOpt" use_multi_module_opt(self::WasmCompilerOptions)::Bool =
+    self.translator_options.enable_deferred_loading || self.translator_options.enable_multi_module_stress_test_mode
 
-@parity "dart2wasm/lib/compiler_options.dart:79 WasmCompilerOptions.moduleNameForId" @unported function WasmCompilerOptions_module_name_for_id(file_path::String, id::Int64; emit_as_main = nothing) end
+# dart's path.basename: the last component of a POSIX path, Julia's basename
+@parity "dart2wasm/lib/compiler_options.dart:79 WasmCompilerOptions.moduleNameForId" function WasmCompilerOptions_module_name_for_id(file_path::String, id::Int64; emit_as_main::Bool = false)::String
+    local base = basename(file_path)
+    (emit_as_main || id == WasmCompilerOptions_main_module_id()) && return base
+    return "$(WasmCompilerOptions_deferred_module_filename_prefix(base))$id.wasm"
+end
 
 @parity "dart2wasm/lib/compiler_options.dart:91 WasmCompilerOptions.idForModuleName" @unported function WasmCompilerOptions_id_for_module_name(main_wasm_filename::String, module_filename::String) end
 
 @parity "dart2wasm/lib/compiler_options.dart:110 WasmCompilerOptions.idFromDeferredModuleFilename" @unported function WasmCompilerOptions_id_from_deferred_module_filename(module_name::String) end
 
-@parity "dart2wasm/lib/compiler_options.dart:123 WasmCompilerOptions.deferredModuleFilenamePrefix" @unported function WasmCompilerOptions_deferred_module_filename_prefix(main_module_filename::String) end
+# dart's path.setExtension(p, "_module"): the path without its extension, then the new one (Julia's
+# splitext), and its basename
+@parity "dart2wasm/lib/compiler_options.dart:123 WasmCompilerOptions.deferredModuleFilenamePrefix" WasmCompilerOptions_deferred_module_filename_prefix(main_module_filename::String)::String =
+    basename(first(splitext(main_module_filename)) * "_module")
 
-@parity "dart2wasm/lib/compiler_options.dart:126 WasmCompilerOptions._defaultMaxActiveWasmOptProcesses" @unported function WasmCompilerOptions__default_max_active_wasm_opt_processes() end
+# dart's Platform.numberOfProcessors, Julia's Sys.CPU_THREADS (always known, so dart's fallback of 8
+# for a web context has no counterpart)
+@parity "dart2wasm/lib/compiler_options.dart:126 WasmCompilerOptions._defaultMaxActiveWasmOptProcesses" WasmCompilerOptions__default_max_active_wasm_opt_processes()::Int = Sys.CPU_THREADS
 
-@parity "dart2wasm/lib/compiler_options.dart:136 WasmCompilerOptions.emitCfe" @unported function emit_cfe(self::WasmCompilerOptions) end
+@parity "dart2wasm/lib/compiler_options.dart:136 WasmCompilerOptions.emitCfe" emit_cfe(self::WasmCompilerOptions)::Bool = self.phases[end] == CompilerPhase_cfe
 
-@parity "dart2wasm/lib/compiler_options.dart:137 WasmCompilerOptions.emitTfa" @unported function emit_tfa(self::WasmCompilerOptions) end
+@parity "dart2wasm/lib/compiler_options.dart:137 WasmCompilerOptions.emitTfa" emit_tfa(self::WasmCompilerOptions)::Bool = self.phases[end] == CompilerPhase_tfa
 
-@parity "dart2wasm/lib/compiler_options.dart:138 WasmCompilerOptions.emitCodegen" @unported function emit_codegen(self::WasmCompilerOptions) end
+# dart compares with tfa here, as written at the pin, ported as it stands
+@parity "dart2wasm/lib/compiler_options.dart:138 WasmCompilerOptions.emitCodegen" emit_codegen(self::WasmCompilerOptions)::Bool = self.phases[end] == CompilerPhase_tfa
 
-@parity "dart2wasm/lib/compiler_options.dart:139 WasmCompilerOptions.readCodegen" @unported function read_codegen(self::WasmCompilerOptions) end
+@parity "dart2wasm/lib/compiler_options.dart:139 WasmCompilerOptions.readCodegen" read_codegen(self::WasmCompilerOptions)::Bool = self.phases[1] == CompilerPhase_codegen
 
 @parity "dart2wasm/lib/compiler_options.dart:141 WasmCompilerOptions.validate" @unported function validate(self::WasmCompilerOptions) end
 

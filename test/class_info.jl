@@ -40,7 +40,7 @@ end
 
 @testset "class_info.dart: ClassIdNumbering on the closed world" begin
     local W = WasmTarget
-    local translator(f, at) = D.Translator(W.check_subset(f, at, "class_info"), D.TranslatorOptions())
+    local translator(f, at) = D.Translator(W.check_subset(f, at, "class_info"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local number(f, at, masq = Base.IdSet{DataType}()) = D.ClassIdNumbering__number(translator(f, at), masq)
     for (f, at) in ((ClassInfoCases.f_shapes, (Int,)), (ClassInfoCases.f_vector, (Vector{Int},)))
         local t = translator(f, at)
@@ -142,7 +142,7 @@ end
     end
     # the collector over a translator: no class masquerades in Julia; typeType, read only for a
     # class's type parameters, which Julia's classes do not have, stays unassigned
-    local t = D.Translator(W.check_subset(ClassInfoCases.f_shapes, (Int,), at), D.TranslatorOptions(optimization_level = 2))
+    local t = D.Translator(W.check_subset(ClassInfoCases.f_shapes, (Int,), at), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(optimization_level = 2))
     local c = D.ClassInfoCollector(t)
     @test c.translator === t && D.options(c) === t.options && isempty(c.masqueraded[])
     local e = try; c.type_type[]; nothing; catch x; x; end
@@ -200,7 +200,7 @@ end
     @test e2 isa W.RejectionError && e2.rejection isa W.Internal
     # cyclicness: a struct holding a non-nullable reference to its own class's struct is cyclic; one
     # holding a nullable reference is not
-    local t = D.Translator(W.check_subset(S.f_shapes, (Int,), "class_info"), D.TranslatorOptions())
+    local t = D.Translator(W.check_subset(S.f_shapes, (Int,), "class_info"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     for info in (circle, square)
         info._repr = info.non_nullable_type
         t.class_for_heap_type[info.struct_] = info

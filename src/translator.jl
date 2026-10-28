@@ -74,7 +74,9 @@ Its fields arrive with the pieces that read them, in dart's order: `options`; `c
 program, the NIR of the closed world Julia's trim verifier accepted (dart's Kernel `Component`);
 `tableBasedGlobals`, `globals`, `dartGlobals`, `constants`, `compilationQueue`, `functions` (each
 late, assigned where dart assigns it once its class is ported); `membersBeingGenerated` (a member
-a Core.MethodInstance); `voidMarker`; `moduleToBuilder`;
+a Core.MethodInstance); `voidMarker`; `_moduleOutputData`, `_outputToBuilder`, `_builderToOutput`,
+`moduleToBuilder` (one
+module: deferred loading is out of scope);
 `classes`, `classesSupersFirst`, `classIdNumbering`, `classInfo` (a class is a Julia DataType, keyed
 by identity), `classForHeapType`, `fieldIndex` (a field a ClassField, src/julia/classes.jl),
 `topType`, `builtinTypes` (Julia's primitive classes with a wasm representation: `Bool`, `Char` and
@@ -82,7 +84,7 @@ the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8
 integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
 every other primitive class have none).
 
-Fields to come (76, each with its translator.dart line): `symbols` :100, `libraries` :104,
+Fields to come (73, each with its translator.dart line): `symbols` :100, `libraries` :104,
 `coreTypes` :106, `typeEnvironment` :107, `hierarchy` :108, `subtypes` :109, `directCallMetadata`
 :115, `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123, `inferredReturnTypeMetadata`
 :127, `unboxingInfoMetadata` :131, `procedureAttributeMetadata` :136, `unreachableMetadata` :140,
@@ -101,8 +103,7 @@ Fields to come (76, each with its translator.dart line): `symbols` :100, `librar
 `runtimeTypeTypeNullable` :298, `stringType` :302, `stringTypeNullable` :306, `invocationType` :309,
 `_partialInstantiators` :315, `_polymorphicDispatchers` :320, `_dynamicDispatchers` :331,
 `_dummyValueCollectors` :336, `boxedClasses` :374, `boxClasses` :380, `valueClasses` :389,
-`dynamicCallVtableEntryFunctionType` :398, `_moduleOutputData` :417, `_outputToBuilder` :422,
-`_builderToOutput` :423, `_memberClosures` :455, `linkingActions` :457, `_importedMemories` :866,
+`dynamicCallVtableEntryFunctionType` :398, `_memberClosures` :455, `linkingActions` :457, `_importedMemories` :866,
 `_closureArgumentsDispatchers` :1328, `_needToCheck` :1682.
 
 A collaborator holds its translator as `KernelNodes`, the mixin Translator alone applies (dart's
@@ -128,13 +129,16 @@ the translator holds each collaborator.
     void_marker::Late{WasmBuilder.IR.ValueType}
     top_type::Late{WasmBuilder.IR.RefType}
     builtin_types::Late{IdDict{DataType,WasmBuilder.IR.StorageType}}
+    _module_output_data::ModuleOutputData
+    _output_to_builder::LinkedHashMap{ModuleMetadata,WasmBuilder.ModuleBuilder}
+    _builder_to_output::LinkedHashMap{WasmBuilder.ModuleBuilder,ModuleMetadata}
     module_to_builder::Dict{WasmBuilder.IR.Module,WasmBuilder.ModuleBuilder}
     # the struct's one constructor, tagged: dart's field initializers and the constructor's
     # initializer list, the component read from the ClosedWorld alone, so no translator is made from
     # NIR bodies a program Julia's trim verifier did not accept; a late field is assigned by the code
     # that builds it (the constructor's body at :470, ClassInfoCollector.collect), and a late field
     # with an initializer reads the translator itself
-    function Translator(::Val{:_}, world::ClosedWorld, options::TranslatorOptions)
+    function Translator(::Val{:_}, world::ClosedWorld, _module_output_data::ModuleOutputData, options::TranslatorOptions)
         local self
         self = new(options, build_nir(world, "dart2wasm/lib/translator.dart:470 Translator"),
             Late{TableBasedGlobals}("dart2wasm/lib/translator.dart:150 Translator.tableBasedGlobals"),
@@ -159,7 +163,8 @@ the translator holds each collaborator.
                 Int32 => WasmBuilder.IR.NumType_i32, UInt32 => WasmBuilder.IR.NumType_i32, Char => WasmBuilder.IR.NumType_i32,
                 Int64 => WasmBuilder.IR.NumType_i64, UInt64 => WasmBuilder.IR.NumType_i64,
                 Float32 => WasmBuilder.IR.NumType_f32, Float64 => WasmBuilder.IR.NumType_f64)),
-            Dict{WasmBuilder.IR.Module,WasmBuilder.ModuleBuilder}())
+            _module_output_data, LinkedHashMap{ModuleMetadata,WasmBuilder.ModuleBuilder}(),
+            LinkedHashMap{WasmBuilder.ModuleBuilder,ModuleMetadata}(), Dict{WasmBuilder.IR.Module,WasmBuilder.ModuleBuilder}())
         return self
     end
 end
@@ -270,39 +275,59 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 
 @parity "dart2wasm/lib/translator.dart:337 Translator.getDummyValuesCollectorForModule" @unported function get_dummy_values_collector_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:418 Translator.modules" @unported function modules(self::Translator) end
+@parity "dart2wasm/lib/translator.dart:418 Translator.modules" modules(self::Translator)::Vector{WasmBuilder.ModuleBuilder} = collect(keys(self._builder_to_output))
 
-@parity "dart2wasm/lib/translator.dart:419 Translator.mainModule" @unported function main_module(self::Translator) end
+@parity "dart2wasm/lib/translator.dart:419 Translator.mainModule" function main_module(self::Translator)::WasmBuilder.ModuleBuilder
+    local m = get(self._output_to_builder, main_module(self._module_output_data), nothing)
+    m === nothing && reject!(Internal("dart2wasm/lib/translator.dart:419 Translator.mainModule: read before _initModules builds it"), "Translator.mainModule")
+    return m
+end
 
-@parity "dart2wasm/lib/translator.dart:421 Translator.typesBuilder" @unported function types_builder(self::Translator) end
+@parity "dart2wasm/lib/translator.dart:421 Translator.typesBuilder" types_builder(self::Translator)::WasmBuilder.TypesBuilder = main_module(self).types[]
 
-@parity "dart2wasm/lib/translator.dart:425 Translator.hasMultipleModules" @unported function has_multiple_modules(self::Translator) end
+@parity "dart2wasm/lib/translator.dart:425 Translator.hasMultipleModules" has_multiple_modules(self::Translator)::Bool = has_multiple_modules(self._module_output_data)
 
-@parity "dart2wasm/lib/translator.dart:427 Translator.moduleForReference" @unported function module_for_reference(self::Translator, reference) end
+@parity "dart2wasm/lib/translator.dart:427 Translator.moduleForReference" module_for_reference(self::Translator, reference::Core.MethodInstance)::WasmBuilder.ModuleBuilder =
+    self._output_to_builder[module_for_reference(self._module_output_data, reference)]
 
 @parity "dart2wasm/lib/translator.dart:436 Translator.moduleForConstant" @unported function module_for_constant(self::Translator, constant) end
 
 @parity "dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId" @unported function modules_for_load_id(self::Translator, enclosing_library, load_id::Int64) end
 
-@parity "dart2wasm/lib/translator.dart:449 Translator.nameForModule" @unported function name_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:449 Translator.nameForModule" name_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::String = self._builder_to_output[module_].module_import_name
 
-@parity "dart2wasm/lib/translator.dart:452 Translator.isMainModule" @unported function is_main_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:452 Translator.isMainModule" is_main_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::Bool = self._builder_to_output[module_].is_main
 
 @parity "dart2wasm/lib/translator.dart:459 Translator.getClosures" @unported function get_closures(self::Translator, member; find_captures = nothing) end
 
 @parity "dart2wasm/lib/translator.dart:467 Translator.getConstructorInfo" @unported function get_constructor_info(self::Translator, node) end
 
 # dart's constructor takes the Kernel component and its core types, index, record classes, loading
-# map and module output data; WasmTarget's program is the closed world Julia's trim verifier
-# accepted, read once as the NIR, and the rest arrive with the pieces that read them
-@parity "dart2wasm/lib/translator.dart:470 Translator" function Translator(world::ClosedWorld, options::TranslatorOptions)::Translator
-    local self = Translator(Val(:_), world, options)
+# map, module output data and options; WasmTarget's program is the closed world Julia's trim
+# verifier accepted, read once as the NIR, and the rest arrive with the pieces that read them
+@parity "dart2wasm/lib/translator.dart:470 Translator" function Translator(world::ClosedWorld, _module_output_data::ModuleOutputData, options::TranslatorOptions)::Translator
+    local self = Translator(Val(:_), world, _module_output_data, options)
     # the constructor's body: each collaborator built over the translator, as its piece is ported
     self.compilation_queue[] = CompilationQueue(self)
     return self
 end
 
-@parity "dart2wasm/lib/translator.dart:499 Translator._initModules" @unported function _init_modules(self::Translator, source_map_url_generator::Union{Nothing,Function}) end
+# dart's source map URL is a Uri, a string here
+@parity "dart2wasm/lib/translator.dart:499 Translator._initModules" function _init_modules(self::Translator, source_map_url_generator::Union{Nothing,Function})::Nothing
+    for output_module in self._module_output_data.modules
+        # `moduleName` is the suffix appended to the filename which is the empty
+        # string for the main module. `moduleImportName` provides a non-empty
+        # name for every module. We provide the former to generate source map
+        # uris and the latter to fill the NameSection of the module.
+        local builder = WasmBuilder.ModuleBuilder(output_module.module_import_name,
+            source_map_url_generator === nothing ? nothing : source_map_url_generator(output_module.module_name)::String;
+            parent = output_module.is_main ? nothing : main_module(self), watch_points = self.options.watch_points)
+        self._output_to_builder[output_module] = builder
+        self._builder_to_output[builder] = output_module
+        self.module_to_builder[builder.module_] = builder
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/translator.dart:517 Translator.drainCompletionQueue" function drain_completion_queue(self::Translator)::Nothing
     local queue = self.compilation_queue[]

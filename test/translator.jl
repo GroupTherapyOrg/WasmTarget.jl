@@ -28,10 +28,10 @@ end
 
 @testset "translator.dart: the Translator, its queue and writeULEB128" begin
     local W = WasmTarget
-    local t = D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.TranslatorOptions(standalone = true))
+    local t = D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(standalone = true))
     # the program is the closed world's NIR, the entry's body among it
     @test t.component isa Vector{W.NirBody} && !isempty(t.component)
-    @test D.is_standalone(t) && !D.is_standalone(D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.TranslatorOptions()))
+    @test D.is_standalone(t) && !D.is_standalone(D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions()))
     # a translator comes from a ClosedWorld alone, never from loose NIR bodies (audit M2)
     @test all(m -> any(p -> p === W.ClosedWorld, Base.unwrap_unionall(m.sig).parameters), methods(D.Translator))
     # the constructor's body builds the queue over the translator; drained empty, it does nothing
@@ -55,7 +55,7 @@ end
 
 @testset "translator.dart: translateStorageType's located rejections" begin
     local W = WasmTarget
-    local t = D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.TranslatorOptions())
+    local t = D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     # a UnionAll and a type as a value of a type Julia left open are no class: located rejections,
     # before any wasm type is made
     for ty in (Vector, Type{T} where T, AbstractVector{<:Integer})
@@ -79,7 +79,7 @@ end
 @testset "translator.dart: translateType over a class table" begin
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
-    local t = D.Translator(W.check_subset(TypeCases.f_shapes, (Int,), "translator"), D.TranslatorOptions())
+    local t = D.Translator(W.check_subset(TypeCases.f_shapes, (Int,), "translator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     # the builtin types: Julia's primitive classes with a wasm representation
     for (T, w) in ((Bool, IR.NumType_i32), (Int32, IR.NumType_i32), (UInt32, IR.NumType_i32), (Char, IR.NumType_i32),
                    (Int64, IR.NumType_i64), (UInt64, IR.NumType_i64), (Float32, IR.NumType_f32), (Float64, IR.NumType_f64))
@@ -134,7 +134,7 @@ end
 @testset "translator.dart: translateType keeps a Union's values exact" begin
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
-    local t = D.Translator(W.check_subset(TypeCases.f_shapes, (Int,), "translator"), D.TranslatorOptions())
+    local t = D.Translator(W.check_subset(TypeCases.f_shapes, (Int,), "translator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local top = D.ClassInfo(nothing, 0, 0, IR.StructType("#Top"), nothing)
     local anyi = D.ClassInfo(Any, 6, 1, IR.StructType("Any"; super_type = top.struct_), top)
     local real = D.ClassInfo(Real, 5, 3, anyi.struct_, anyi)
@@ -166,4 +166,56 @@ end
     for T in (Bool, Int8, UInt8, Int16, UInt16)
         @test D.translate_type(t, T) == IR.NumType_i32
     end
+end
+
+module ModuleCases
+abstract type Shape end
+struct Circle <: Shape; r::Float64; end
+struct Square <: Shape; s::Float64; n::Int32; end
+shapes(n::Int) = n > 0 ? Circle(Float64(n)) : Square(2.0, Int32(7))
+end
+
+@testset "translator.dart, modules.dart: one module, then collect over a real program" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    # the monolithic output data: one main module, named by its id and the output file
+    local opts = D.WasmCompilerOptions(; main_uri = "", output_file = "out/prog.wasm")
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(opts))
+    @test length(data.modules) == 1 && D.main_module(data).is_main && !D.has_multiple_modules(data)
+    @test D.main_module(data).module_import_name == "M" && D.main_module(data).module_name == "prog.wasm"
+    @test sprint(show, D.main_module(data)) == "M"
+    @test D.WasmCompilerOptions_module_name_for_id("out/prog.wasm", 3) == "prog_module3.wasm"
+    local t = D.Translator(W.check_subset(ModuleCases.shapes, (Int,), "translator"), data, D.TranslatorOptions())
+    local e = try; D.main_module(t); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+    D._init_modules(t, nothing)
+    local m = D.main_module(t)
+    @test D.modules(t) == [m] && D.is_main_module(t, m) && D.name_for_module(t, m) == "M" && !D.has_multiple_modules(t)
+    @test D.types_builder(t) === m.types[] && t.module_to_builder[m.module_] === m
+    # collect: every class of the closed world gets its info, the structs below #Top
+    local c = D.ClassInfoCollector(t)
+    collect(c)
+    local numbering = t.class_id_numbering[]
+    @test all(cls -> haskey(t.class_info, cls), numbering.dfs_order)
+    @test t.classes[][1] === c.top_info[] && t.classes_supers_first[][1] === c.top_info[]
+    # Any is dart's Object: the class id, then the identity hash; a struct's own fields follow, each
+    # its Julia field's wasm type, immutable as Julia's struct is
+    local anyi = t.class_info[Any]
+    @test [f.type for f in anyi.struct_.fields] == [IR.NumType_i32, IR.NumType_i32]
+    local sq = t.class_info[ModuleCases.Square]
+    @test [f.type for f in sq.struct_.fields] == [IR.NumType_i32, IR.NumType_i32, IR.NumType_f64, IR.NumType_i32]
+    @test sq.struct_.field_names[2] == "s" && sq.struct_.field_names[3] == "n" && !sq.struct_.fields[3].mutable
+    @test t.field_index[W.class_instance_fields(ModuleCases.Square, "t")[2]] == 3
+    # the abstract Shape shares Any's struct; its representation is the upper bound of Circle and
+    # Square, both below Any
+    local shape = t.class_info[ModuleCases.Shape]
+    @test shape.struct_ === anyi.struct_ && D.repr(shape) == anyi.non_nullable_type
+    # a primitive class sits below the top struct: the class id and its value
+    local int32 = t.class_info[Int32]
+    @test int32.super_info === c.top_info[] && [f.type for f in int32.struct_.fields] == [IR.NumType_i32, IR.NumType_i32]
+    # every class's ranges and representations are set, none cyclic
+    @test all(info -> !D.is_cyclic(info), t.classes_supers_first[])
+    # translateType now reads the class table collect filled
+    @test D.translate_type(t, ModuleCases.Shape) == anyi.non_nullable_type
+    @test D.translate_type(t, Union{Nothing,Int32}) == int32.nullable_type
 end
