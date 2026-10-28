@@ -3,12 +3,15 @@
 
 @parity "dart2wasm/lib/wasm_annotations.dart:10 ExternType" @enum ExternType ExternType_memory
 
-"""
-MemoryLimits's dart fields: `minSize`, `maxSize`.
-"""
-@parity "dart2wasm/lib/wasm_annotations.dart:12 MemoryLimits" @unported struct MemoryLimits end
+"""A wasm memory's limits, in pages: its minimum size and its maximum, when it has one."""
+@parity "dart2wasm/lib/wasm_annotations.dart:12 MemoryLimits" struct MemoryLimits
+    min_size::Int
+    max_size::Union{Int,Nothing}
+    # the struct's one constructor, tagged; dart's constructor at :16 is its outer function
+    MemoryLimits(::Val{:_}, min_size::Int, max_size::Union{Int,Nothing}) = new(min_size, max_size)
+end
 
-@parity "dart2wasm/lib/wasm_annotations.dart:16 MemoryLimits" @unported function MemoryLimits(; min_size, max_size = nothing) end
+@parity "dart2wasm/lib/wasm_annotations.dart:16 MemoryLimits" MemoryLimits(; min_size::Int, max_size::Union{Int,Nothing} = nothing)::MemoryLimits = MemoryLimits(Val(:_), min_size, max_size)
 
 @parity "dart2wasm/lib/wasm_annotations.dart:19 MemoryLimits.readAnnotation" @unported function MemoryLimits_read_annotation(nodes::KernelNodes, member) end
 

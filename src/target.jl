@@ -3,7 +3,15 @@
 
 @parity "dart2wasm/lib/target.dart:47 Mode" @enum Mode Mode_regular Mode_jsCompatibility Mode_standalone
 
-@parity "dart2wasm/lib/target.dart:49 Dart2WasmConstantsBackend" @unported struct Dart2WasmConstantsBackend end
+"""
+dart's constants backend for the front end: no locals kept, unevaluated constants supported. Julia's
+inference is WasmTarget's constant evaluator, so nothing reads it.
+"""
+@parity "dart2wasm/lib/target.dart:49 Dart2WasmConstantsBackend" struct Dart2WasmConstantsBackend
+    keep_locals::Bool
+    # the struct's one constructor, tagged; dart's const constructor at :50 is its outer function
+    Dart2WasmConstantsBackend(::Val{:_}, keep_locals::Bool) = new(keep_locals)
+end
 
 """
 ConstantResolver's dart fields: `evaluator`, `_context`.
@@ -11,15 +19,43 @@ ConstantResolver's dart fields: `evaluator`, `_context`.
 @parity "dart2wasm/lib/target.dart:56 ConstantResolver" @unported struct ConstantResolver end
 
 """
-WasmTarget's dart fields: `removeAsserts`, `mode`, `enableExperimentalFfi`, `enableExperimentalWasmInterop`, `_growableList`, `_immutableList`, `_wasmDefaultMap`, `_wasmDefaultSet`, `_wasmImmutableMap`, `_wasmImmutableSet`, `_stringImpl`, `_symbol`, `_closure`, `_boxedInt`, `_boxedDouble`, `_nativeClasses`, `recordClasses`.
+dart's front-end target: the compile's mode and flags, and the classes it answers the front end's
+literal and record questions with, each cached on its first lookup. A class is a Julia `DataType`.
 """
-@parity "dart2wasm/lib/target.dart:101 WasmTarget" @unported struct WasmTarget end
+@parity "dart2wasm/lib/target.dart:101 WasmTarget" mutable struct WasmTarget
+    const remove_asserts::Bool
+    const mode::Mode
+    const enable_experimental_ffi::Bool
+    const enable_experimental_wasm_interop::Bool
+    _growable_list::Union{DataType,Nothing}
+    _immutable_list::Union{DataType,Nothing}
+    _wasm_default_map::Union{DataType,Nothing}
+    _wasm_default_set::Union{DataType,Nothing}
+    _wasm_immutable_map::Union{DataType,Nothing}
+    _wasm_immutable_set::Union{DataType,Nothing}
+    _string_impl::Union{DataType,Nothing}
+    _symbol::Union{DataType,Nothing}
+    _closure::Union{DataType,Nothing}
+    _boxed_int::Union{DataType,Nothing}
+    _boxed_double::Union{DataType,Nothing}
+    _native_classes::Union{Dict{String,DataType},Nothing}
+    const record_classes::Late{Dict{RecordShape,DataType}}
+    # the struct's one constructor, tagged; dart's constructor at :102 is its outer function
+    WasmTarget(::Val{:_}, remove_asserts::Bool, mode::Mode, enable_experimental_ffi::Bool, enable_experimental_wasm_interop::Bool) =
+        new(remove_asserts, mode, enable_experimental_ffi, enable_experimental_wasm_interop,
+            nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,
+            Late{Dict{RecordShape,DataType}}("dart2wasm/lib/target.dart:640 WasmTarget.recordClasses"))
+end
 
-@parity "dart2wasm/lib/target.dart:666 WasmVerification" @unported struct WasmVerification end
+"""dart's verification of the front end's output, Kernel's; nothing reads it in WasmTarget."""
+@parity "dart2wasm/lib/target.dart:666 WasmVerification" struct WasmVerification
+    # the struct's one constructor, tagged; dart's const constructor at :667 is its outer function
+    WasmVerification(::Val{:_}) = new()
+end
 
-@parity "dart2wasm/lib/target.dart:50 Dart2WasmConstantsBackend" @unported function Dart2WasmConstantsBackend() end
+@parity "dart2wasm/lib/target.dart:50 Dart2WasmConstantsBackend" Dart2WasmConstantsBackend()::Dart2WasmConstantsBackend = Dart2WasmConstantsBackend(Val(:_), false)
 
-@parity "dart2wasm/lib/target.dart:53 Dart2WasmConstantsBackend.supportsUnevaluatedConstants" @unported function supports_unevaluated_constants(self::Dart2WasmConstantsBackend) end
+@parity "dart2wasm/lib/target.dart:53 Dart2WasmConstantsBackend.supportsUnevaluatedConstants" supports_unevaluated_constants(self::Dart2WasmConstantsBackend)::Bool = true
 
 @parity "dart2wasm/lib/target.dart:57 ConstantResolver" @unported function ConstantResolver(evaluator) end
 
@@ -29,23 +65,48 @@ WasmTarget's dart fields: `removeAsserts`, `mode`, `enableExperimentalFfi`, `ena
 
 @parity "dart2wasm/lib/target.dart:85 ConstantResolver.visitConstantExpression" @unported function visit_constant_expression(self::ConstantResolver, node) end
 
-@parity "dart2wasm/lib/target.dart:102 WasmTarget" @unported function WasmTarget(; enable_experimental_ffi = nothing, enable_experimental_wasm_interop = nothing, remove_asserts = nothing, mode = nothing) end
+@parity "dart2wasm/lib/target.dart:102 WasmTarget" WasmTarget(; enable_experimental_ffi::Bool = true, enable_experimental_wasm_interop::Bool = true,
+        remove_asserts::Bool = false, mode::Mode = Mode_regular)::WasmTarget =
+    WasmTarget(Val(:_), remove_asserts, mode, enable_experimental_ffi, enable_experimental_wasm_interop)
 
-@parity "dart2wasm/lib/target.dart:127 WasmTarget.enableNoSuchMethodForwarders" @unported function enable_no_such_method_forwarders(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:127 WasmTarget.enableNoSuchMethodForwarders" enable_no_such_method_forwarders(self::WasmTarget)::Bool = true
 
-@parity "dart2wasm/lib/target.dart:130 WasmTarget.constantsBackend" @unported function constants_backend(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:130 WasmTarget.constantsBackend" constants_backend(self::WasmTarget)::Dart2WasmConstantsBackend = Dart2WasmConstantsBackend()
 
-@parity "dart2wasm/lib/target.dart:133 WasmTarget.verification" @unported function verification(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:133 WasmTarget.verification" verification(self::WasmTarget)::WasmVerification = WasmVerification()
 
-@parity "dart2wasm/lib/target.dart:136 WasmTarget.name" @unported function name(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:136 WasmTarget.name" function name(self::WasmTarget)::String
+    self.mode == Mode_regular && return "wasm"
+    self.mode == Mode_jsCompatibility && return "wasm_js_compatibility"
+    self.mode == Mode_standalone && return "wasm_standalone"
+    reject!(Internal("dart2wasm/lib/target.dart:137 WasmTarget.name: the mode $(self.mode)"), "WasmTarget.name")
+end
 
-@parity "dart2wasm/lib/target.dart:144 WasmTarget.platformFile" @unported function platform_file(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:144 WasmTarget.platformFile" function platform_file(self::WasmTarget)::String
+    self.mode == Mode_regular && return "dart2wasm_platform.dill"
+    self.mode == Mode_jsCompatibility && return "dart2wasm_js_compatibility_platform.dill"
+    self.mode == Mode_standalone && return "dart2wasm_standalone_platform.dill"
+    reject!(Internal("dart2wasm/lib/target.dart:145 WasmTarget.platformFile: the mode $(self.mode)"), "WasmTarget.platformFile")
+end
 
 @parity "dart2wasm/lib/target.dart:153 WasmTarget.flags" @unported function flags(self::WasmTarget) end
 
-@parity "dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries" @unported function extra_required_libraries(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries" function extra_required_libraries(self::WasmTarget)::Vector{String}
+    return String[
+        "dart:_boxed_bool", "dart:_boxed_double", "dart:_boxed_int", "dart:_compact_hash", "dart:_http",
+        "dart:_internal", "dart:_list", "dart:_string", "dart:_wasm", "dart:async", "dart:developer",
+        "dart:ffi", "dart:io", "dart:nativewrappers", "dart:typed_data",
+        (self.mode == Mode_standalone ? String["dart:_embedder"] :
+            String["dart:_js_helper", "dart:_js_types", "dart:js_interop", "dart:js_interop_unsafe"])...]
+end
 
-@parity "dart2wasm/lib/target.dart:183 WasmTarget.extraIndexedLibraries" @unported function extra_indexed_libraries(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:183 WasmTarget.extraIndexedLibraries" function extra_indexed_libraries(self::WasmTarget)::Vector{String}
+    return String[
+        "dart:_boxed_bool", "dart:_boxed_double", "dart:_boxed_int", "dart:_compact_hash", "dart:_error_utils",
+        "dart:_list", "dart:_string", "dart:_wasm", "dart:collection", "dart:typed_data",
+        (self.mode == Mode_standalone ? String["dart:_embedder"] :
+            String["dart:_js_helper", "dart:_js_types", "dart:js_interop", "dart:js_interop_unsafe"])...]
+end
 
 @parity "dart2wasm/lib/target.dart:205 WasmTarget.mayDefineRestrictedType" @unported function may_define_restricted_type(self::WasmTarget, uri) end
 
@@ -65,19 +126,19 @@ WasmTarget's dart fields: `removeAsserts`, `mode`, `enableExperimentalFfi`, `ena
 
 @parity "dart2wasm/lib/target.dart:537 WasmTarget.instantiateInvocation" @unported function instantiate_invocation(self::WasmTarget, core_types, receiver, name::String, arguments, offset::Int64, is_super::Bool) end
 
-@parity "dart2wasm/lib/target.dart:549 WasmTarget.supportsSetLiterals" @unported function supports_set_literals(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:549 WasmTarget.supportsSetLiterals" supports_set_literals(self::WasmTarget)::Bool = true
 
-@parity "dart2wasm/lib/target.dart:552 WasmTarget.supportsFileUriExpression" @unported function supports_file_uri_expression(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:552 WasmTarget.supportsFileUriExpression" supports_file_uri_expression(self::WasmTarget)::Bool = true
 
 @parity "dart2wasm/lib/target.dart:555 WasmTarget.enabledLateLowerings" @unported function enabled_late_lowerings(self::WasmTarget) end
 
 @parity "dart2wasm/lib/target.dart:558 WasmTarget.enabledConstructorTearOffLowerings" @unported function enabled_constructor_tear_off_lowerings(self::WasmTarget) end
 
-@parity "dart2wasm/lib/target.dart:562 WasmTarget.supportsExplicitGetterCalls" @unported function supports_explicit_getter_calls(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:562 WasmTarget.supportsExplicitGetterCalls" supports_explicit_getter_calls(self::WasmTarget)::Bool = true
 
-@parity "dart2wasm/lib/target.dart:565 WasmTarget.supportsLateLoweringSentinel" @unported function supports_late_lowering_sentinel(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:565 WasmTarget.supportsLateLoweringSentinel" supports_late_lowering_sentinel(self::WasmTarget)::Bool = false
 
-@parity "dart2wasm/lib/target.dart:568 WasmTarget.useStaticFieldLowering" @unported function use_static_field_lowering(self::WasmTarget) end
+@parity "dart2wasm/lib/target.dart:568 WasmTarget.useStaticFieldLowering" use_static_field_lowering(self::WasmTarget)::Bool = false
 
 @parity "dart2wasm/lib/target.dart:571 WasmTarget.concreteListLiteralClass" @unported function concrete_list_literal_class(self::WasmTarget, core_types) end
 
@@ -97,7 +158,8 @@ WasmTarget's dart fields: `removeAsserts`, `mode`, `enableExperimentalFfi`, `ena
 
 @parity "dart2wasm/lib/target.dart:632 WasmTarget.concreteClosureClass" @unported function concrete_closure_class(self::WasmTarget, core_types) end
 
-@parity "dart2wasm/lib/target.dart:637 WasmTarget.isSupportedPragma" @unported function is_supported_pragma(self::WasmTarget, pragma_name::String) end
+@parity "dart2wasm/lib/target.dart:637 WasmTarget.isSupportedPragma" is_supported_pragma(self::WasmTarget, pragma_name::String)::Bool =
+    startswith(pragma_name, "wasm:") || startswith(pragma_name, "dyn-module:")
 
 @parity "dart2wasm/lib/target.dart:643 WasmTarget.getRecordImplementationClass" @unported function get_record_implementation_class(self::WasmTarget, core_types, num_positional_fields::Int64, named_fields::Vector{String}) end
 
@@ -107,11 +169,19 @@ WasmTarget's dart fields: `removeAsserts`, `mode`, `enableExperimentalFfi`, `ena
 
 @parity "dart2wasm/lib/target.dart:661 WasmTarget.dartLibrarySupport" @unported function dart_library_support(self::WasmTarget) end
 
-@parity "dart2wasm/lib/target.dart:667 WasmVerification" @unported function WasmVerification() end
+@parity "dart2wasm/lib/target.dart:667 WasmVerification" WasmVerification()::WasmVerification = WasmVerification(Val(:_))
 
 @parity "dart2wasm/lib/target.dart:670 WasmVerification.allowNoFileOffset" @unported function allow_no_file_offset(self::WasmVerification, stage, node) end
 
-@parity "dart2wasm/lib/target.dart:687 _dartFfiAndPragmaAllowlist" @unported function _dart_ffi_and_pragma_allowlist() end
+@parity "dart2wasm/lib/target.dart:687 _dartFfiAndPragmaAllowlist" function _dart_ffi_and_pragma_allowlist()::Vector{String}
+    return String[
+        # Flutter/benchmarks.
+        "flutter", "engine", "ui",
+        # Non-SDK packages that have been migrated for the Wasm experiment but
+        # still have references to older interop libraries.
+        "package_info_plus", "test", "url_launcher_web",
+    ]
+end
 
 @parity "dart2wasm/lib/target.dart:701 allowedToImportDartFfiOrUsePragmas" @unported function allowed_to_import_dart_ffi_or_use_pragmas(import_uri) end
 
