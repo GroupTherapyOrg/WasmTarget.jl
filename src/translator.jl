@@ -290,17 +290,17 @@ end
 @parity "dart2wasm/lib/translator.dart:427 Translator.moduleForReference" module_for_reference(self::Translator, reference::Core.MethodInstance)::WasmBuilder.ModuleBuilder =
     self._output_to_builder[module_for_reference(self._module_output_data, reference)]
 
-@parity "dart2wasm/lib/translator.dart:436 Translator.moduleForConstant" @unported function module_for_constant(self::Translator, constant) end
+@parity "dart2wasm/lib/translator.dart:436 Translator.moduleForConstant" @unported function module_for_constant(self::Translator, constant::NirConst) end
 
-@parity "dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId" @unported function modules_for_load_id(self::Translator, enclosing_library, load_id::Int64) end
+@parity "dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId" @unported function modules_for_load_id(self::Translator, enclosing_library::Module, load_id::Int64) end
 
 @parity "dart2wasm/lib/translator.dart:449 Translator.nameForModule" name_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::String = self._builder_to_output[module_].module_import_name
 
 @parity "dart2wasm/lib/translator.dart:452 Translator.isMainModule" is_main_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::Bool = self._builder_to_output[module_].is_main
 
-@parity "dart2wasm/lib/translator.dart:459 Translator.getClosures" @unported function get_closures(self::Translator, member; find_captures = nothing) end
+@parity "dart2wasm/lib/translator.dart:459 Translator.getClosures" @unported function get_closures(self::Translator, member::Core.MethodInstance; find_captures = nothing) end
 
-@parity "dart2wasm/lib/translator.dart:467 Translator.getConstructorInfo" @unported function get_constructor_info(self::Translator, node) end
+@parity "dart2wasm/lib/translator.dart:467 Translator.getConstructorInfo" @unported function get_constructor_info(self::Translator, node::Core.MethodInstance) end
 
 # dart's constructor takes the Kernel component and its core types, index, record classes, loading
 # map, module output data and options; WasmTarget's program is the closed world Julia's trim
@@ -352,7 +352,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:815 Translator._printFunction" @unported function _print_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, name::Any) end
 
-@parity "dart2wasm/lib/translator.dart:830 Translator.callReference" @unported function call_reference(self::Translator, reference, b::WasmBuilder.InstructionsBuilder) end
+@parity "dart2wasm/lib/translator.dart:830 Translator.callReference" @unported function call_reference(self::Translator, reference::Core.MethodInstance, b::WasmBuilder.InstructionsBuilder) end
 
 @parity "dart2wasm/lib/translator.dart:835 Translator.callTarget" @unported function call_target(self::Translator, call_target::CallTarget, b::WasmBuilder.InstructionsBuilder, optional...) end
 
@@ -360,11 +360,11 @@ end
 
 @parity "dart2wasm/lib/translator.dart:911 Translator.callDispatchTable" @unported function call_dispatch_table(self::Translator, b::WasmBuilder.InstructionsBuilder, selector::SelectorInfo; interface_target = nothing, use_unchecked_entry::Bool) end
 
-@parity "dart2wasm/lib/translator.dart:936 Translator.classForType" @unported function class_for_type(self::Translator, type_) end
+@parity "dart2wasm/lib/translator.dart:936 Translator.classForType" @unported function class_for_type(self::Translator, type_::Type) end
 
-@parity "dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType" @unported function to_most_specific_interface_type(self::Translator, original_type) end
+@parity "dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType" @unported function to_most_specific_interface_type(self::Translator, original_type::Type) end
 
-@parity "dart2wasm/lib/translator.dart:974 Translator.getTearOffType" @unported function get_tear_off_type(self::Translator, method) end
+@parity "dart2wasm/lib/translator.dart:974 Translator.getTearOffType" @unported function get_tear_off_type(self::Translator, method::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/translator.dart:1028 Translator.getDartExceptionTag" @unported function get_dart_exception_tag(self::Translator, module_::WasmBuilder.ModuleBuilder) end
 
@@ -388,9 +388,9 @@ read as the zero-extended i32 (dart's WasmI8 and WasmI16; Julia's 8- and 16-bit 
     reject!(Internal("dart2wasm/lib/translator.dart:1044 Translator.translateType: Cannot translate $type_ to wasm type."), "Translator.translateType")
 end
 
-@parity "dart2wasm/lib/translator.dart:1056 Translator._hasSuperclass" @unported function _has_superclass(self::Translator, cls, superclass) end
+@parity "dart2wasm/lib/translator.dart:1056 Translator._hasSuperclass" @unported function _has_superclass(self::Translator, cls::DataType, superclass::DataType) end
 
-@parity "dart2wasm/lib/translator.dart:1064 Translator.isWasmType" @unported function is_wasm_type(self::Translator, cls) end
+@parity "dart2wasm/lib/translator.dart:1064 Translator.isWasmType" @unported function is_wasm_type(self::Translator, cls::DataType) end
 
 """
 The wasm storage type of a value of the Julia type `type_`, Julia's answers where dart reads a
@@ -445,21 +445,21 @@ re-derived; `nothing` is the null of the nullable representation, both ways.
     return WasmBuilder.with_nullability(repr(info), nullable)
 end
 
-@parity "dart2wasm/lib/translator.dart:1205 Translator.arrayTypeForDartType" @unported function array_type_for_dart_type(self::Translator, type_; mutable_::Bool) end
+@parity "dart2wasm/lib/translator.dart:1205 Translator.arrayTypeForDartType" @unported function array_type_for_dart_type(self::Translator, type_::Type; mutable_::Bool) end
 
 @parity "dart2wasm/lib/translator.dart:1218 Translator.wasmArrayType" @unported function wasm_array_type(self::Translator, type_::WasmBuilder.IR.StorageType, name::String; mutable_ = nothing) end
 
-@parity "dart2wasm/lib/translator.dart:1239 Translator.translateExternalType" @unported function translate_external_type(self::Translator, type_) end
+@parity "dart2wasm/lib/translator.dart:1239 Translator.translateExternalType" @unported function translate_external_type(self::Translator, type_::Type) end
 
-@parity "dart2wasm/lib/translator.dart:1273 Translator.translateExternalStorageType" @unported function translate_external_storage_type(self::Translator, type_) end
+@parity "dart2wasm/lib/translator.dart:1273 Translator.translateExternalStorageType" @unported function translate_external_storage_type(self::Translator, type_::Type) end
 
 @parity "dart2wasm/lib/translator.dart:1290 Translator.makeFunctionRef" @unported function make_function_ref(self::Translator, f::WasmBuilder.IR.BaseFunction) end
 
-@parity "dart2wasm/lib/translator.dart:1302 Translator.getTearOffClosure" @unported function get_tear_off_closure(self::Translator, member, closure_module::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:1302 Translator.getTearOffClosure" @unported function get_tear_off_closure(self::Translator, member::Core.MethodInstance, closure_module::WasmBuilder.ModuleBuilder) end
 
 @parity "dart2wasm/lib/translator.dart:1330 Translator.getClosureArgumentsDispatcher" @unported function get_closure_arguments_dispatcher(self::Translator, module_::WasmBuilder.ModuleBuilder, r::ClosureRepresentation) end
 
-@parity "dart2wasm/lib/translator.dart:1360 Translator.getClosure" @unported function get_closure(self::Translator, function_node, target::CallTarget, closure_module::WasmBuilder.ModuleBuilder, param_info::ParameterInfo, name::String) end
+@parity "dart2wasm/lib/translator.dart:1360 Translator.getClosure" @unported function get_closure(self::Translator, function_node::NirBody, target::CallTarget, closure_module::WasmBuilder.ModuleBuilder, param_info::ParameterInfo, name::String) end
 
 @parity "dart2wasm/lib/translator.dart:1589 Translator.outputOrVoid" function output_or_void(self::Translator, outputs::Vector{WasmBuilder.IR.ValueType})::WasmBuilder.IR.ValueType
     isempty(outputs) && return self.void_marker[]
@@ -514,7 +514,7 @@ here it rejects, located, as a conversion between two non-reference types does.
     return nothing
 end
 
-@parity "dart2wasm/lib/translator.dart:1663 Translator.getFunctionEntry" @unported function get_function_entry(self::Translator, target; unchecked_entry::Bool) end
+@parity "dart2wasm/lib/translator.dart:1663 Translator.getFunctionEntry" @unported function get_function_entry(self::Translator, target::Core.MethodInstance; unchecked_entry::Bool) end
 
 """
 Whether a call to `member` must check its arguments' types on entry. dart checks the covariant
@@ -523,52 +523,52 @@ type and the MethodInstance is specialized on the types it is called with, so no
 """
 @parity "dart2wasm/lib/translator.dart:1683 Translator.needToCheckTypesFor" need_to_check_types_for(self::Translator, member::Core.MethodInstance)::Bool = false
 
-@parity "dart2wasm/lib/translator.dart:1692 Translator._needToCheckTypesFor" @unported function _need_to_check_types_for(self::Translator, member) end
+@parity "dart2wasm/lib/translator.dart:1692 Translator._needToCheckTypesFor" @unported function _need_to_check_types_for(self::Translator, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:1738 Translator.needToCheckImplicitSetterValue" @unported function need_to_check_implicit_setter_value(self::Translator, field; unchecked_entry::Bool) end
+@parity "dart2wasm/lib/translator.dart:1738 Translator.needToCheckImplicitSetterValue" @unported function need_to_check_implicit_setter_value(self::Translator, field::ClassField; unchecked_entry::Bool) end
 
-@parity "dart2wasm/lib/translator.dart:1748 Translator.needToCheckTypeParameter" @unported function need_to_check_type_parameter(self::Translator, type_parameter) end
+@parity "dart2wasm/lib/translator.dart:1748 Translator.needToCheckTypeParameter" @unported function need_to_check_type_parameter(self::Translator, type_parameter::TypeVar) end
 
-@parity "dart2wasm/lib/translator.dart:1754 Translator.needToCheckParameter" @unported function need_to_check_parameter(self::Translator, parameter; unchecked_entry::Bool) end
+@parity "dart2wasm/lib/translator.dart:1754 Translator.needToCheckParameter" @unported function need_to_check_parameter(self::Translator, parameter::Union{NirSSA,NirArgument}; unchecked_entry::Bool) end
 
-@parity "dart2wasm/lib/translator.dart:1773 Translator.getParametersToCheck" @unported function get_parameters_to_check(self::Translator, member) end
+@parity "dart2wasm/lib/translator.dart:1773 Translator.getParametersToCheck" @unported function get_parameters_to_check(self::Translator, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:1823 Translator._typesFromTypeParameterBounds" @unported function _types_from_type_parameter_bounds(self::Translator, type_parameters::Vector{Any}) end
+@parity "dart2wasm/lib/translator.dart:1823 Translator._typesFromTypeParameterBounds" @unported function _types_from_type_parameter_bounds(self::Translator, type_parameters::Vector{TypeVar}) end
 
-@parity "dart2wasm/lib/translator.dart:1830 Translator._typesFromPositionalParameters" @unported function _types_from_positional_parameters(self::Translator, type_parameters::Vector{Any}) end
+@parity "dart2wasm/lib/translator.dart:1830 Translator._typesFromPositionalParameters" @unported function _types_from_positional_parameters(self::Translator, type_parameters::Vector{Union{NirSSA,NirArgument}}) end
 
-@parity "dart2wasm/lib/translator.dart:1835 Translator._typeFromNamedParameters" @unported function _type_from_named_parameters(self::Translator, named_order::Vector{Any}, named_type::Vector{Any}) end
+@parity "dart2wasm/lib/translator.dart:1835 Translator._typeFromNamedParameters" @unported function _type_from_named_parameters(self::Translator, named_order::Vector{NirArgument}, named_type::Vector{NirArgument}) end
 
-@parity "dart2wasm/lib/translator.dart:1857 Translator.directCallTarget" @unported function direct_call_target(self::Translator, target) end
+@parity "dart2wasm/lib/translator.dart:1857 Translator.directCallTarget" @unported function direct_call_target(self::Translator, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall" @unported function signature_for_direct_call(self::Translator, target) end
+@parity "dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall" @unported function signature_for_direct_call(self::Translator, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:1872 Translator.synthesizeNullReturnValue" @unported function synthesize_null_return_value(self::Translator, target) end
+@parity "dart2wasm/lib/translator.dart:1872 Translator.synthesizeNullReturnValue" @unported function synthesize_null_return_value(self::Translator, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:1884 Translator.synthesizeNoReturn" @unported function synthesize_no_return(self::Translator, target) end
+@parity "dart2wasm/lib/translator.dart:1884 Translator.synthesizeNoReturn" @unported function synthesize_no_return(self::Translator, target::Core.MethodInstance) end
 
 # a Julia member calls through no selector (src/dispatch_table.jl: the trim verifier leaves no
 # dynamic call), so its info is the static one, made once per member
 @parity "dart2wasm/lib/translator.dart:1896 Translator.paramInfoForDirectCall" param_info_for_direct_call(self::Translator, target::Core.MethodInstance)::ParameterInfo =
     get!(() -> ParameterInfo_from_member(target, false), self.static_param_info, target)
 
-@parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" @unported function precise_this_for(self::Translator, member; nullable = nothing) end
+@parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" @unported function precise_this_for(self::Translator, member::Core.MethodInstance; nullable = nothing) end
 
-@parity "dart2wasm/lib/translator.dart:1930 Translator.getTable" @unported function get_table(self::Translator, module_::WasmBuilder.ModuleBuilder, field) end
+@parity "dart2wasm/lib/translator.dart:1930 Translator.getTable" @unported function get_table(self::Translator, module_::WasmBuilder.ModuleBuilder, field::ClassField) end
 
-@parity "dart2wasm/lib/translator.dart:1954 Translator.singleTarget" @unported function single_target(self::Translator, node) end
+@parity "dart2wasm/lib/translator.dart:1954 Translator.singleTarget" @unported function single_target(self::Translator, node::NirStmt) end
 
-@parity "dart2wasm/lib/translator.dart:1960 Translator.singleClosureTarget" @unported function single_closure_target(self::Translator, node, representation::ClosureRepresentation, type_context) end
+@parity "dart2wasm/lib/translator.dart:1960 Translator.singleClosureTarget" @unported function single_closure_target(self::Translator, node::NirInvoke, representation::ClosureRepresentation, type_context::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:2033 Translator.canSkipImplicitCheck" @unported function can_skip_implicit_check(self::Translator, node) end
+@parity "dart2wasm/lib/translator.dart:2033 Translator.canSkipImplicitCheck" @unported function can_skip_implicit_check(self::Translator, node::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/translator.dart:2037 Translator.canUseUncheckedEntry" @unported function can_use_unchecked_entry(self::Translator, receiver, node) end
+@parity "dart2wasm/lib/translator.dart:2037 Translator.canUseUncheckedEntry" @unported function can_use_unchecked_entry(self::Translator, receiver::NirValue, node::NirValue) end
 
-@parity "dart2wasm/lib/translator.dart:2043 Translator.typeOfParameterVariable" @unported function type_of_parameter_variable(self::Translator, node, is_required::Bool) end
+@parity "dart2wasm/lib/translator.dart:2043 Translator.typeOfParameterVariable" @unported function type_of_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}, is_required::Bool) end
 
-@parity "dart2wasm/lib/translator.dart:2072 Translator.typeOfCheckedParameterVariable" @unported function type_of_checked_parameter_variable(self::Translator, node) end
+@parity "dart2wasm/lib/translator.dart:2072 Translator.typeOfCheckedParameterVariable" @unported function type_of_checked_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue" @unported function type_of_return_value(self::Translator, member) end
+@parity "dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue" @unported function type_of_return_value(self::Translator, member::Core.MethodInstance) end
 
 # dart narrows a field's declared type by TFA's inferred type; Julia's inference does not narrow a
 # field, so its type is its declared one
@@ -591,29 +591,29 @@ type and the MethodInstance is specialized on the types it is called with, so no
     return translate_type(self, type_)
 end
 
-@parity "dart2wasm/lib/translator.dart:2115 Translator._inferredTypeOfParameterVariable" @unported function _inferred_type_of_parameter_variable(self::Translator, node) end
+@parity "dart2wasm/lib/translator.dart:2115 Translator._inferredTypeOfParameterVariable" @unported function _inferred_type_of_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/translator.dart:2119 Translator._inferredTypeOfReturnValue" @unported function _inferred_type_of_return_value(self::Translator, node) end
+@parity "dart2wasm/lib/translator.dart:2119 Translator._inferredTypeOfReturnValue" @unported function _inferred_type_of_return_value(self::Translator, node::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:2126 Translator._inferredTypeOfField" @unported function _inferred_type_of_field(self::Translator, node) end
+@parity "dart2wasm/lib/translator.dart:2126 Translator._inferredTypeOfField" @unported function _inferred_type_of_field(self::Translator, node::ClassField) end
 
-@parity "dart2wasm/lib/translator.dart:2130 Translator._inferredTypeOfLocalVariable" @unported function _inferred_type_of_local_variable(self::Translator, variable) end
+@parity "dart2wasm/lib/translator.dart:2130 Translator._inferredTypeOfLocalVariable" @unported function _inferred_type_of_local_variable(self::Translator, variable::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/translator.dart:2148 Translator._filterInferredType" @unported function _filter_inferred_type(self::Translator, default_type, inferred_type) end
+@parity "dart2wasm/lib/translator.dart:2148 Translator._filterInferredType" @unported function _filter_inferred_type(self::Translator, default_type::Type, inferred_type::Union{Nothing,Type}) end
 
-@parity "dart2wasm/lib/translator.dart:2195 Translator.shouldInline" @unported function should_inline(self::Translator, target, signature::WasmBuilder.IR.FunctionType) end
+@parity "dart2wasm/lib/translator.dart:2195 Translator.shouldInline" @unported function should_inline(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType) end
 
-@parity "dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor" @unported function _should_inline_field_accessor(self::Translator, target, field) end
+@parity "dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor" @unported function _should_inline_field_accessor(self::Translator, target::Core.MethodInstance, field::ClassField) end
 
-@parity "dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer" @unported function never_inline_static_field_initializer(self::Translator, field) end
+@parity "dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer" @unported function never_inline_static_field_initializer(self::Translator, field::ClassField) end
 
-@parity "dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall" @unported function _should_inline_constructor_call(self::Translator, target, signature::WasmBuilder.IR.FunctionType, constructor) end
+@parity "dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall" @unported function _should_inline_constructor_call(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType, constructor::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:2331 Translator._shouldInlineProcedureCall" @unported function _should_inline_procedure_call(self::Translator, target, signature::WasmBuilder.IR.FunctionType, member) end
+@parity "dart2wasm/lib/translator.dart:2331 Translator._shouldInlineProcedureCall" @unported function _should_inline_procedure_call(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:2400 Translator.supportsInlining" @unported function supports_inlining(self::Translator, target) end
+@parity "dart2wasm/lib/translator.dart:2400 Translator.supportsInlining" @unported function supports_inlining(self::Translator, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" @unported function get_pragma(self::Translator, node, name::String, optional...) end
+@parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" @unported function get_pragma(self::Translator, node::NoCounterpart, name::String, optional...) end
 
 @parity "dart2wasm/lib/translator.dart:2427 Translator.makeArray" @unported function make_array(self::Translator, b::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item::Function) end
 
@@ -623,15 +623,15 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2479 Translator.getListBaseArray" @unported function get_list_base_array(self::Translator, b::WasmBuilder.InstructionsBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:2484 Translator.getRecordClassInfo" @unported function get_record_class_info(self::Translator, record_type) end
+@parity "dart2wasm/lib/translator.dart:2484 Translator.getRecordClassInfo" @unported function get_record_class_info(self::Translator, record_type::Type) end
 
 @parity "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal" @unported function get_internalized_string_global(self::Translator, module_::WasmBuilder.ModuleBuilder, s::String) end
 
 @parity "dart2wasm/lib/translator.dart:2534 Translator.pushStandaloneStringConstant" @unported function push_standalone_string_constant(self::Translator, instructions::WasmBuilder.InstructionsBuilder, data::WasmBuilder.DataSegmentBuilder, s::String) end
 
-@parity "dart2wasm/lib/translator.dart:2575 Translator.findMemory" @unported function find_memory(self::Translator, top_level_external_memory_getter, module_builder::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:2575 Translator.findMemory" @unported function find_memory(self::Translator, top_level_external_memory_getter::Core.MethodInstance, module_builder::WasmBuilder.ModuleBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:2587 Translator._findMemoryForMainModule" @unported function _find_memory_for_main_module(self::Translator, top_level_external_memory_getter) end
+@parity "dart2wasm/lib/translator.dart:2587 Translator._findMemoryForMainModule" @unported function _find_memory_for_main_module(self::Translator, top_level_external_memory_getter::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/translator.dart:2625 Translator.instantiateDummyValueHeapType" @unported function instantiate_dummy_value_heap_type(self::Translator, b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.HeapType, name::String, instantiate_heap_type::Function) end
 
@@ -680,59 +680,59 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3420 NodeCounter" @unported function NodeCounter(translator) end
 
-@parity "dart2wasm/lib/translator.dart:3429 NodeCounter.defaultTreeNode" @unported function default_tree_node(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3429 NodeCounter.defaultTreeNode" @unported function default_tree_node(self::NodeCounter, node::NirStmt) end
 
-@parity "dart2wasm/lib/translator.dart:3436 NodeCounter.visitFieldInitializer" @unported function visit_field_initializer(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3436 NodeCounter.visitFieldInitializer" @unported function visit_field_initializer(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3441 NodeCounter.visitLocalInitializer" @unported function visit_local_initializer(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3441 NodeCounter.visitLocalInitializer" @unported function visit_local_initializer(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3446 NodeCounter.visitSuperInitializer" @unported function visit_super_initializer(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3446 NodeCounter.visitSuperInitializer" @unported function visit_super_initializer(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3451 NodeCounter.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3451 NodeCounter.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue" @unported function handle_field_initializer_value(self::NodeCounter, value) end
+@parity "dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue" @unported function handle_field_initializer_value(self::NodeCounter, value::Union{Nothing,NirValue}) end
 
-@parity "dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock" @unported function visit_block(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock" @unported function visit_block(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement" @unported function visit_empty_statement(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement" @unported function visit_empty_statement(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3478 NodeCounter.visitReturnStatement" @unported function visit_return_statement(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3478 NodeCounter.visitReturnStatement" @unported function visit_return_statement(self::NodeCounter, node::NirReturn) end
 
-@parity "dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement" @unported function visit_labeled_statement(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement" @unported function visit_labeled_statement(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3494 NodeCounter.visitBlockExpression" @unported function visit_block_expression(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3494 NodeCounter.visitBlockExpression" @unported function visit_block_expression(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement" @unported function visit_expression_statement(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement" @unported function visit_expression_statement(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3504 NodeCounter.visitLet" @unported function visit_let(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3504 NodeCounter.visitLet" @unported function visit_let(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3509 NodeCounter.visitArguments" @unported function visit_arguments(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3509 NodeCounter.visitArguments" @unported function visit_arguments(self::NodeCounter, node::Vector{NirValue}) end
 
-@parity "dart2wasm/lib/translator.dart:3515 NodeCounter.visitNamedExpression" @unported function visit_named_expression(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3515 NodeCounter.visitNamedExpression" @unported function visit_named_expression(self::NodeCounter, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:3520 NodeCounter.visitIsExpression" @unported function visit_is_expression(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3520 NodeCounter.visitIsExpression" @unported function visit_is_expression(self::NodeCounter, node::NirCall) end
 
-@parity "dart2wasm/lib/translator.dart:3526 NodeCounter.visitAsExpression" @unported function visit_as_expression(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3526 NodeCounter.visitAsExpression" @unported function visit_as_expression(self::NodeCounter, node::NirCall) end
 
-@parity "dart2wasm/lib/translator.dart:3532 NodeCounter.defaultDartType" @unported function default_dart_type(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3532 NodeCounter.defaultDartType" @unported function default_dart_type(self::NodeCounter, node::Type) end
 
-@parity "dart2wasm/lib/translator.dart:3540 NodeCounter.visitInstanceGet" @unported function visit_instance_get(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3540 NodeCounter.visitInstanceGet" @unported function visit_instance_get(self::NodeCounter, node::NirCall) end
 
-@parity "dart2wasm/lib/translator.dart:3546 NodeCounter.visitInstanceSet" @unported function visit_instance_set(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3546 NodeCounter.visitInstanceSet" @unported function visit_instance_set(self::NodeCounter, node::NirCall) end
 
-@parity "dart2wasm/lib/translator.dart:3552 NodeCounter.visitInstanceInvocation" @unported function visit_instance_invocation(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3552 NodeCounter.visitInstanceInvocation" @unported function visit_instance_invocation(self::NodeCounter, node::NirInvoke) end
 
-@parity "dart2wasm/lib/translator.dart:3558 NodeCounter.visitEqualsCall" @unported function visit_equals_call(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3558 NodeCounter.visitEqualsCall" @unported function visit_equals_call(self::NodeCounter, node::NirInvoke) end
 
-@parity "dart2wasm/lib/translator.dart:3563 NodeCounter._countInstanceCallCost" @unported function _count_instance_call_cost(self::NodeCounter, node) end
+@parity "dart2wasm/lib/translator.dart:3563 NodeCounter._countInstanceCallCost" @unported function _count_instance_call_cost(self::NodeCounter, node::NirStmt) end
 
 @parity "dart2wasm/lib/translator.dart:3576 InliningDecision" @unported function InliningDecision(should_inline, reason) end
 
 @parity "dart2wasm/lib/translator.dart:3610 PartialInstantiator" @unported function PartialInstantiator(translator, calling_module) end
 
-@parity "dart2wasm/lib/translator.dart:3612 PartialInstantiator.getOneTypeArgumentForwarder" @unported function get_one_type_argument_forwarder(self::PartialInstantiator, target, type_, name::String) end
+@parity "dart2wasm/lib/translator.dart:3612 PartialInstantiator.getOneTypeArgumentForwarder" @unported function get_one_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type_::Type, name::String) end
 
-@parity "dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder" @unported function get_two_type_argument_forwarder(self::PartialInstantiator, target, type1, type2, name::String) end
+@parity "dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder" @unported function get_two_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type1::Type, type2::Type, name::String) end
 
 @parity "dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers" @unported function PolymorphicDispatchers(translator, calling_module) end
 

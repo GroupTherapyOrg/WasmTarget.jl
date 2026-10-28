@@ -104,4 +104,4 @@ A record shape's fields, `\$1`, `\$2`, ... then the names. A Julia tuple's field
     return nothing
 end
 
-@parity "dart2wasm/lib/record_class_generator.dart:773 _RecordVisitor.defaultConstantReference" @unported function default_constant_reference(self::_RecordVisitor, node) end
+@parity "dart2wasm/lib/record_class_generator.dart:773 _RecordVisitor.defaultConstantReference" @unported function default_constant_reference(self::_RecordVisitor, node::NirConst) end

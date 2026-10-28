@@ -368,7 +368,7 @@ counterpart: Julia's classes are instances, their parameters bound, and implemen
     return nothing
 end
 
-@parity "dart2wasm/lib/class_info.dart:510 ClassInfoCollector._createStructForRecordClass" @unported function _create_struct_for_record_class(self::ClassInfoCollector, class_ids::Dict{Any,Int64}, cls) end
+@parity "dart2wasm/lib/class_info.dart:510 ClassInfoCollector._createStructForRecordClass" @unported function _create_struct_for_record_class(self::ClassInfoCollector, class_ids::Dict{DataType,Int64}, cls::DataType) end
 
 @parity "dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields" function _generate_fields(self::ClassInfoCollector, info::ClassInfo)::Nothing
     local at = "dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields"

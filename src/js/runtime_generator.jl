@@ -6,7 +6,7 @@ RuntimeFinalizer's dart fields: `_coreTypes`, `_interopMemberNamer`.
 """
 @parity "dart2wasm/lib/js/runtime_generator.dart:53 RuntimeFinalizer" @unported struct RuntimeFinalizer end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:20 _performJSInteropTransformations" @unported function _perform_js_interop_transformations(core_types, class_hierarchy, interop_dependent_libraries::Set{Any}) end
+@parity "dart2wasm/lib/js/runtime_generator.dart:20 _performJSInteropTransformations" @unported function _perform_js_interop_transformations(core_types::NoCounterpart, class_hierarchy::NoCounterpart, interop_dependent_libraries::Set{Module}) end
 
 """
 dart's `json.encode(s)` of a string (dart:convert's `_JsonStringifier.writeStringContent`): the
@@ -78,7 +78,7 @@ end
 
 @parity "dart2wasm/lib/js/runtime_generator.dart:58 RuntimeFinalizer" @unported function RuntimeFinalizer(_core_types, _interop_member_namer) end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:60 RuntimeFinalizer.generateJsMethods" @unported function Dart2Wasm.generate_js_methods(self::RuntimeFinalizer, translated_procedures) end
+@parity "dart2wasm/lib/js/runtime_generator.dart:60 RuntimeFinalizer.generateJsMethods" @unported function Dart2Wasm.generate_js_methods(self::RuntimeFinalizer, translated_procedures::AbstractVector{Core.MethodInstance}) end
 
 @parity "dart2wasm/lib/js/runtime_generator.dart:106 RuntimeFinalizer._generateInternalizedStrings" function Dart2Wasm._generate_internalized_strings(self::RuntimeFinalizer, require_js_builtin::Bool, constant_strings::Vector{String})::String
     local sb = IOBuffer()
@@ -97,9 +97,9 @@ end
     return String(take!(sb))
 end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate" @unported function Dart2Wasm.generate(self::RuntimeFinalizer, main_module_name::String, translated_procedures, constant_strings::Vector{String}, require_js_builtin::Bool, supports_additional_module_loading::Bool) end
+@parity "dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate" @unported function Dart2Wasm.generate(self::RuntimeFinalizer, main_module_name::String, translated_procedures::AbstractVector{Core.MethodInstance}, constant_strings::Vector{String}, require_js_builtin::Bool, supports_additional_module_loading::Bool) end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:179 performJSInteropTransformations" @unported function perform_js_interop_transformations(libraries::Vector{Any}, core_types, class_hierarchy) end
+@parity "dart2wasm/lib/js/runtime_generator.dart:179 performJSInteropTransformations" @unported function perform_js_interop_transformations(libraries::Vector{Module}, core_types::NoCounterpart, class_hierarchy::NoCounterpart) end
 
 # Removes indentation common among all lines of [block] (except for first one)
 @parity "dart2wasm/lib/js/runtime_generator.dart:203 _unindentJsCode" function _unindent_js_code(block::String)::Vector{String}

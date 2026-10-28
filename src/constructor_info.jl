@@ -15,22 +15,22 @@ _UsageCollector's dart fields: `translator`, `closures`, `variablesRead`, `varia
 
 @parity "dart2wasm/lib/constructor_info.dart:117 _UsageCollector" @unported function _UsageCollector(translator, closures) end
 
-@parity "dart2wasm/lib/constructor_info.dart:119 _UsageCollector.collectInitializerUsages" @unported function collect_initializer_usages(self::_UsageCollector, constructor) end
+@parity "dart2wasm/lib/constructor_info.dart:119 _UsageCollector.collectInitializerUsages" @unported function collect_initializer_usages(self::_UsageCollector, constructor::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/constructor_info.dart:133 _UsageCollector.collectBodyUsages" @unported function collect_body_usages(self::_UsageCollector, constructor) end
+@parity "dart2wasm/lib/constructor_info.dart:133 _UsageCollector.collectBodyUsages" @unported function collect_body_usages(self::_UsageCollector, constructor::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/constructor_info.dart:138 _UsageCollector.visitFieldInitializer" @unported function visit_field_initializer(self::_UsageCollector, node) end
+@parity "dart2wasm/lib/constructor_info.dart:138 _UsageCollector.visitFieldInitializer" @unported function visit_field_initializer(self::_UsageCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/constructor_info.dart:147 _UsageCollector.visitSuperInitializer" @unported function visit_super_initializer(self::_UsageCollector, node) end
+@parity "dart2wasm/lib/constructor_info.dart:147 _UsageCollector.visitSuperInitializer" @unported function visit_super_initializer(self::_UsageCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/constructor_info.dart:153 _UsageCollector.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::_UsageCollector, node) end
+@parity "dart2wasm/lib/constructor_info.dart:153 _UsageCollector.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::_UsageCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/constructor_info.dart:158 _UsageCollector._findVariablesStoredInFields" @unported function _find_variables_stored_in_fields(self::_UsageCollector, target, arguments) end
+@parity "dart2wasm/lib/constructor_info.dart:158 _UsageCollector._findVariablesStoredInFields" @unported function _find_variables_stored_in_fields(self::_UsageCollector, target::Core.MethodInstance, arguments::Vector{NirValue}) end
 
-@parity "dart2wasm/lib/constructor_info.dart:186 _UsageCollector.visitVariableGet" @unported function visit_variable_get(self::_UsageCollector, node) end
+@parity "dart2wasm/lib/constructor_info.dart:186 _UsageCollector.visitVariableGet" @unported function visit_variable_get(self::_UsageCollector, node::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/constructor_info.dart:191 _UsageCollector.visitVariableSet" @unported function visit_variable_set(self::_UsageCollector, node) end
+@parity "dart2wasm/lib/constructor_info.dart:191 _UsageCollector.visitVariableSet" @unported function visit_variable_set(self::_UsageCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/constructor_info.dart:197 _UsageCollector.visitTypeParameterType" @unported function visit_type_parameter_type(self::_UsageCollector, node) end
+@parity "dart2wasm/lib/constructor_info.dart:197 _UsageCollector.visitTypeParameterType" @unported function visit_type_parameter_type(self::_UsageCollector, node::TypeVar) end
 
-@parity "dart2wasm/lib/constructor_info.dart:202 _UsageCollector.visitClassTypeParameterType" @unported function visit_class_type_parameter_type(self::_UsageCollector, node) end
+@parity "dart2wasm/lib/constructor_info.dart:202 _UsageCollector.visitClassTypeParameterType" @unported function visit_class_type_parameter_type(self::_UsageCollector, node::TypeVar) end

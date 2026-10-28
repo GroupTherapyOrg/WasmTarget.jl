@@ -52,6 +52,6 @@ _DynamicDispatcherCodeGenerator's dart fields: `translator`, `callerShape`, `fun
 
 @parity "dart2wasm/lib/dynamic_dispatchers.dart:687 generateDynamicClosureCallViaPositionalArgs" @unported function generate_dynamic_closure_call_via_positional_args(translator::Translator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local) end
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:766 createGetterInvocationObject" @unported function create_getter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name) end
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:766 createGetterInvocationObject" @unported function create_getter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol) end
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:780 createSetterInvocationObject" @unported function create_setter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name, positional_arg_local::WasmBuilder.IR.Local) end
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:780 createSetterInvocationObject" @unported function create_setter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol, positional_arg_local::WasmBuilder.IR.Local) end

@@ -816,11 +816,27 @@ end
 
 # a possibly prefixed type name's Julia spelling in file `from`, or "" (external: unannotated). A
 # typedef is its aliased type's, a function type's `Function`; a record typedef is its struct's
+# A type no in-scope file declares is the Kernel table's (src/julia/kernel.jl) or, from a platform
+# library, DART_TYPES'; one with neither refuses, as does a name that resolves nowhere and is no type
+# parameter of its file, which stays unannotated (Julia's `where` is the port's)
 function type_ref(S::Scope, s::AbstractString, from::AbstractString; at::AbstractString = from)::String
     isempty(s) && return ""
     local p, n = split_prefix(s)
-    local k = declaring(n, p, from)
-    k === nothing && return ""
+    local r = resolve(n, p, from)
+    if r === nothing
+        p == "" && haskey(DART_TYPES, n) && return DART_TYPES[n]
+        p == "" && n in type_params(from) && return ""
+        error("skeleton: $from: the type `$s` resolves to no library dart2wasm imports, and is no type parameter")
+    elseif startswith(r, "dart:")
+        haskey(DART_TYPES, n) || error("skeleton: $from: the platform type $n ($r) has no row in DART_TYPES")
+        return DART_TYPES[n]
+    elseif !(r in scope_set())
+        local row = get(kernel_types(), (r, n), nothing)
+        row === nothing && error("skeleton: $from: the type $n ($r) has no row in KERNEL_TYPES (src/julia/kernel.jl)")
+        push!(KERNEL_USED, (r, n))
+        return row
+    end
+    local k = r
     local td = findfirst(d -> d.kind == :typedef && d.symbol == n, S.decls[k])
     if td !== nothing
         local tk = typedef_kind(S.decls[k][td])
@@ -828,6 +844,13 @@ function type_ref(S::Scope, s::AbstractString, from::AbstractString; at::Abstrac
         tk == :alias && return julia_type(S.decls[k][td].rettype, S, k; at = at)
     end
     return spell(n, k, at)
+end
+
+# a class's Julia supertype, its dart supertype's: none where the Kernel table says Julia has no
+# counterpart (a Kernel visitor), or where it is a type Julia's hierarchy cannot extend
+function super_ref(S::Scope, s::AbstractString, from::AbstractString)::String
+    local r = type_ref(S, s, from)
+    return r == "NoCounterpart" ? "" : r
 end
 
 # a typedef's kind: :function, a function type, which Julia spells `Function` (Julia has no arrow
@@ -903,9 +926,50 @@ end
 
 # a dart type's tokens, as file `from` resolves them, as a Julia type spelled in file `at`, or ""
 # (unannotated) where no row of the table covers it
+# the platform's types (dart:core, dart:typed_data, dart:_internal) and the language's own (void,
+# dynamic, Never), each with its Julia type; DART_GENERIC's take their arguments
 const DART_TYPES = Dict("int" => "Int64", "double" => "Float64", "bool" => "Bool", "String" => "String",
                         "num" => "Real", "void" => "Nothing", "Object" => "Any", "dynamic" => "Any",
-                        "Function" => "Function")
+                        "Function" => "Function", "Null" => "Nothing", "Never" => "Union{}", "Type" => "Type",
+                        "Uri" => "String", "StringSink" => "IO", "StringBuffer" => "IOBuffer",
+                        "Uint8List" => "Vector{UInt8}", "BytesBuilder" => "IOBuffer",
+                        "List" => "Vector", "Set" => "Set", "Map" => "Dict", "Iterable" => "AbstractVector")
+const DART_GENERIC = Set(["List", "Set", "Map", "Iterable"])
+
+# the Kernel table, src/julia/kernel.jl's KERNEL_TYPES: (library, name) => Julia type
+const KERNEL = Dict{Tuple{String,String},String}()
+const KERNEL_USED = Set{Tuple{String,String}}()
+function kernel_types()::Dict{Tuple{String,String},String}
+    isempty(KERNEL) || return KERNEL
+    local m = match(r"(?s)const KERNEL_TYPES = (\(\n.*?\n\))", read(joinpath(ROOT, "src", "julia", "kernel.jl"), String))
+    m === nothing && error("skeleton: src/julia/kernel.jl holds no KERNEL_TYPES")
+    for p in Meta.parse(m[1]).args
+        KERNEL[(p.args[2].args[1], p.args[2].args[2])] = p.args[3].args[1]
+    end
+    return KERNEL
+end
+# the rows no definition's stub names (each in-scope definition stubbed, filled or not): a row is a type
+# an in-scope file names, so a row nothing names is stale
+function unused_kernel_rows(S)::Vector{String}
+    for f in scope(), d in S.decls[f]
+        counted(d) && stub(f, d, S, Decl[])
+    end
+    return sort(["$(k[1]) $(k[2])" for k in keys(kernel_types()) if !(k in KERNEL_USED)])
+end
+
+# the names a dart file declares as type parameters (each identifier opening or continuing a `<...>`
+# list): a type that resolves nowhere is one only if it is among them
+const TPARAMS = Dict{String,Set{String}}()
+function type_params(key::AbstractString)::Set{String}
+    haskey(TPARAMS, key) && return TPARAMS[key]
+    local toks = lex(read(dart_source(key), String), key)
+    local out = Set{String}()
+    for i in 2:length(toks)
+        toks[i].kind == :ident && toks[i-1].text in ("<", ",") && i + 1 <= length(toks) &&
+            toks[i+1].text in (",", ">", "extends") && push!(out, toks[i].text)
+    end
+    return TPARAMS[key] = out
+end
 function julia_type(toks::AbstractVector{Tok}, S::Scope, from::AbstractString; at::AbstractString = from, exact::Bool = false)::String
     isempty(toks) && return ""
     local ts = [t.text for t in toks if !(t.kind == :ident && t.text in ("final", "const", "covariant", "required", "late", "var"))]
@@ -920,34 +984,59 @@ end
 # parameter's annotation names the class, its arguments dropped, as a stub cannot be parametric
 function julia_type_strs(ts::Vector{String}, S::Scope, from::AbstractString, at::AbstractString = from, exact::Bool = false)::String
     isempty(ts) && return ""
+    if ts[end] == "?"
+        local j = julia_type_strs(ts[1:end-1], S, from, at, exact)
+        return isempty(j) ? "" : "Union{Nothing,$j}"
+    end
     # a prefixed type, `w.X` / `ir.X` / `kernel.X`
     local prefix = ""
     if length(ts) >= 3 && ts[2] == "." && occursin(r"^[A-Za-z_$][\w$]*$", ts[1])
         prefix = ts[1]; ts = ts[3:end]
     end
     is_function_type(ts) && return "Function"
+    ts[1] == "(" && ts[end] == ")" && return record_type(ts[2:end-1], S, from, at)
     local head = ts[1]
     if length(ts) == 1
-        prefix == "" && haskey(DART_TYPES, head) && return DART_TYPES[head]
         return type_ref(S, isempty(prefix) ? head : "$prefix.$head", from; at = at)
     end
     if ts[2] == "<" && ts[end] == ">"
         local args = split_args(ts[3:end-1])
         local jargs = [julia_type_strs(a, S, from, at) for a in args]
-        any(isempty, jargs) && (jargs = [isempty(a) ? "Any" : a for a in jargs])
-        prefix == "" && head == "List" && length(jargs) == 1 && return "Vector{$(jargs[1])}"
-        prefix == "" && head == "Set" && length(jargs) == 1 && return "Set{$(jargs[1])}"
-        prefix == "" && head == "Map" && length(jargs) == 2 && return "Dict{$(jargs[1]),$(jargs[2])}"
         local r = type_ref(S, isempty(prefix) ? head : "$prefix.$head", from; at = at)
-        return exact && !isempty(r) ? "$r{$(join(jargs, ','))}" : r
+        local lib = resolve(head, prefix, from)
+        # a platform collection takes its arguments; one a type parameter leaves unannotated is the
+        # collection of any element, its UnionAll
+        if lib !== nothing && startswith(lib, "dart:") && head in DART_GENERIC
+            return any(isempty, jargs) ? r : "$r{$(join(jargs, ','))}"
+        end
+        return exact && !isempty(r) && !any(isempty, jargs) ? "$r{$(join(jargs, ','))}" : r
     end
-    return ""
+    error("skeleton: $from: the dart type `$(join(ts, ' '))` has no Julia translation")
 end
+# a dart record type's fields, as a Julia Tuple type (positional) or NamedTuple type (named); a field
+# a type parameter leaves unannotated makes the record any Tuple or NamedTuple of its names
+function record_type(ts::Vector{String}, S::Scope, from::AbstractString, at::AbstractString)::String
+    local field(f) = (local nl = f[end] == "?"; local g = nl ? f[1:end-1] : f;
+                      local j = julia_type_strs(g, S, from, at); isempty(j) ? "" : nl ? "Union{Nothing,$j}" : j)
+    # a field's type, past its name: the last identifier, unless the field is the type alone
+    local typeof_(f) = length(f) > 1 && occursin(r"^[A-Za-z_$][\w$]*$", f[end]) && !(f[end-1] in (".", "<", ",")) ? f[1:end-1] : f
+    if !isempty(ts) && ts[1] == "{" && ts[end] == "}"
+        local fs = filter(!isempty, split_args(ts[2:end-1]))
+        local names = [jname(f[end]) for f in fs]
+        local types = [field(f[1:end-1]) for f in fs]
+        local tup = "(" * join((":" * n for n in names), ", ") * (length(names) == 1 ? ",)" : ")")
+        return any(isempty, types) ? "NamedTuple{$tup}" : "NamedTuple{$tup, Tuple{$(join(types, ", "))}}"
+    end
+    "{" in ts && error("skeleton: $from: a record type with positional and named fields `($(join(ts, ' ')))` has no Julia type")
+    local types = [field(typeof_(f)) for f in filter(!isempty, split_args(ts))]
+    return any(isempty, types) ? "Tuple" : "Tuple{$(join(types, ", "))}"
+end
+
 function split_args(ts::Vector{String})::Vector{Vector{String}}
     local out, cur, depth = Vector{String}[], String[], 0
     for t in ts
-        t == "<" && (depth += 1)
-        t == ">" && (depth -= 1)
+        t in ("<", "(", "[", "{") && (depth += 1)
+        t in (">", ")", "]", "}") && (depth -= 1)
         if t == "," && depth == 0
             push!(out, cur); cur = String[]
         else
@@ -987,7 +1076,8 @@ function params(ps::Vector{Tok}, S::Scope, from::AbstractString)::Vector{Param}
                 local nm = head[idx].text
                 local tys = head[1:idx-1]
                 local req = any(t -> t.text == "required", tys)
-                local jt = startswith(nm, "this") ? "" : julia_type(tys, S, from)
+                # a field or super initializer (`this.x`, `super.x`) takes its field's type: unannotated
+                local jt = any(t -> t.text in ("this", "super"), tys) ? "" : julia_type(tys, S, from)
                 push!(out, Param(nm, jt, join((t.text for t in cur), " "), section, req))
             end
         end
@@ -1084,7 +1174,7 @@ function stub(file::String, d::Decl, S::Scope, fields::Vector{Decl})::String
     end
     if d.kind in (:class, :abstract, :mixin)
         local sup = dart_super(d, file)
-        local sp = type_ref(S, sup, file)
+        local sp = super_ref(S, sup, file)
         # a sealed class's kind subtypes nothing: the sum names it
         local p, n = split_prefix(sup)
         local sk = isempty(sup) ? nothing : declaring(n, p, file)
@@ -1381,6 +1471,8 @@ function write_main()::Int
         n += 1
     end
     println("skeleton: $n file(s) written")
+    local stale = unused_kernel_rows(S)
+    isempty(stale) || error("skeleton: KERNEL_TYPES rows no in-scope file names: $(join(stale, ", "))")
     return 0
 end
 
@@ -1400,6 +1492,9 @@ function diff_main()::Int
         elseif read(path, String) != text
             bad += 1; println("✗ $(relpath(path, ROOT)) differs from what dev/skeleton.jl writes")
         end
+    end
+    for r in unused_kernel_rows(S)
+        bad += 1; println("✗ KERNEL_TYPES row $r: no in-scope file names it")
     end
     return bad
 end
@@ -1566,7 +1661,7 @@ function merge_main(tree::AbstractString, darts::Vector{String}; forwards::Set{S
             local sup = dart_super(d, key)
             local p, n = split_prefix(sup)
             local sk = isempty(sup) ? nothing : declaring(n, p, key)
-            local sp = sk !== nothing && haskey(S.sealed, "$sk|$n") ? "" : type_ref(S, sup, key)
+            local sp = sk !== nothing && haskey(S.sealed, "$sk|$n") ? "" : super_ref(S, sup, key)
             text = fix_super(text, sp, forwards)
         end
         push!(get!(incoming, a, String[]), text)

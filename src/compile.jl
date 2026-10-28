@@ -68,32 +68,32 @@ _RecordClassesRepository's dart fields: `mapping`.
 
 @parity "dart2wasm/lib/compile.dart:185 _binaryenFlagsMultiModule" @unported function _binaryen_flags_multi_module() end
 
-@parity "dart2wasm/lib/compile.dart:216 compile" @unported function compile(options::WasmCompilerOptions, io_manager, handle_diagnostic_message::Function) end
+@parity "dart2wasm/lib/compile.dart:216 compile" @unported function compile(options::WasmCompilerOptions, io_manager::NoCounterpart, handle_diagnostic_message::Function) end
 
-@parity "dart2wasm/lib/compile.dart:289 _loadCfeResult" @unported function _load_cfe_result(options::WasmCompilerOptions, io_manager) end
+@parity "dart2wasm/lib/compile.dart:289 _loadCfeResult" @unported function _load_cfe_result(options::WasmCompilerOptions, io_manager::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:299 _runCfePhase" @unported function _run_cfe_phase(options::WasmCompilerOptions, target::WasmTarget, file_system, io_manager, handle_diagnostic_message::Function) end
+@parity "dart2wasm/lib/compile.dart:299 _runCfePhase" @unported function _run_cfe_phase(options::WasmCompilerOptions, target::WasmTarget, file_system::NoCounterpart, io_manager::NoCounterpart, handle_diagnostic_message::Function) end
 
-@parity "dart2wasm/lib/compile.dart:375 _loadTfaResult" @unported function _load_tfa_result(options::WasmCompilerOptions, target::WasmTarget, io_manager) end
+@parity "dart2wasm/lib/compile.dart:375 _loadTfaResult" @unported function _load_tfa_result(options::WasmCompilerOptions, target::WasmTarget, io_manager::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:413 _runTfaPhase" @unported function _run_tfa_phase(cfe_result::CfeResult, options::WasmCompilerOptions, target::WasmTarget, io_manager) end
+@parity "dart2wasm/lib/compile.dart:413 _runTfaPhase" @unported function _run_tfa_phase(cfe_result::CfeResult, options::WasmCompilerOptions, target::WasmTarget, io_manager::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:564 _loadCodegenResult" @unported function _load_codegen_result(options::WasmCompilerOptions, io_manager) end
+@parity "dart2wasm/lib/compile.dart:564 _loadCodegenResult" @unported function _load_codegen_result(options::WasmCompilerOptions, io_manager::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:572 _runCodegenPhase" @unported function _run_codegen_phase(tfa_success::TfaResult, options::WasmCompilerOptions, io_manager) end
+@parity "dart2wasm/lib/compile.dart:572 _runCodegenPhase" @unported function _run_codegen_phase(tfa_success::TfaResult, options::WasmCompilerOptions, io_manager::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:711 _runOptPhase" @unported function _run_opt_phase(codegen_result::CodegenResult, options::WasmCompilerOptions, io_manager) end
+@parity "dart2wasm/lib/compile.dart:711 _runOptPhase" @unported function _run_opt_phase(codegen_result::CodegenResult, options::WasmCompilerOptions, io_manager::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:747 _createModuleStrategy" @unported function _create_module_strategy(options::WasmCompilerOptions, io_manager, component, core_types, target::WasmTarget, class_hierarchy) end
+@parity "dart2wasm/lib/compile.dart:747 _createModuleStrategy" @unported function _create_module_strategy(options::WasmCompilerOptions, io_manager::NoCounterpart, component::NirWorld, core_types::NoCounterpart, target::WasmTarget, class_hierarchy::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:776 _patchMainTearOffs" @unported function _patch_main_tear_offs(core_types, component) end
+@parity "dart2wasm/lib/compile.dart:776 _patchMainTearOffs" @unported function _patch_main_tear_offs(core_types::NoCounterpart, component::NirWorld) end
 
 @parity "dart2wasm/lib/compile.dart:826 _RecordClassesRepository._tag" @unported function _RecordClassesRepository__tag() end
 
-@parity "dart2wasm/lib/compile.dart:831 _RecordClassesRepository.readFromBinary" @unported function read_from_binary(self::_RecordClassesRepository, node, source) end
+@parity "dart2wasm/lib/compile.dart:831 _RecordClassesRepository.readFromBinary" @unported function read_from_binary(self::_RecordClassesRepository, node::NirStmt, source::NoCounterpart) end
 
 @parity "dart2wasm/lib/compile.dart:842 _RecordClassesRepository.tag" @unported function tag(self::_RecordClassesRepository) end
 
-@parity "dart2wasm/lib/compile.dart:845 _RecordClassesRepository.writeToBinary" @unported function write_to_binary(self::_RecordClassesRepository, metadata::RecordShape, node, sink) end
+@parity "dart2wasm/lib/compile.dart:845 _RecordClassesRepository.writeToBinary" @unported function write_to_binary(self::_RecordClassesRepository, metadata::RecordShape, node::NirStmt, sink::NoCounterpart) end
 
 @parity "dart2wasm/lib/compile.dart:854 _generateSupportJs" @unported function _generate_support_js(options::TranslatorOptions) end

@@ -54,14 +54,14 @@ DynamicCallSiteCollector's dart fields: `_callerShapes`.
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:358 DynamicCallSiteCollector._" @unported function DynamicCallSiteCollector__() end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:360 DynamicCallSiteCollector.collect" @unported function DynamicCallSiteCollector_collect(component) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:360 DynamicCallSiteCollector.collect" @unported function DynamicCallSiteCollector_collect(component::NirWorld) end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:367 DynamicCallSiteCollector.visitFunctionInvocation" @unported function visit_function_invocation(self::DynamicCallSiteCollector, node) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:367 DynamicCallSiteCollector.visitFunctionInvocation" @unported function visit_function_invocation(self::DynamicCallSiteCollector, node::NirInvoke) end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:377 DynamicCallSiteCollector.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::DynamicCallSiteCollector, node) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:377 DynamicCallSiteCollector.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::DynamicCallSiteCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:394 DynamicCallSiteCollector.visitDynamicGet" @unported function visit_dynamic_get(self::DynamicCallSiteCollector, node) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:394 DynamicCallSiteCollector.visitDynamicGet" @unported function visit_dynamic_get(self::DynamicCallSiteCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:400 DynamicCallSiteCollector.visitDynamicSet" @unported function visit_dynamic_set(self::DynamicCallSiteCollector, node) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:400 DynamicCallSiteCollector.visitDynamicSet" @unported function visit_dynamic_set(self::DynamicCallSiteCollector, node::NoCounterpart) end
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:408 buildIntegerExpression" @unported function build_integer_expression(module_::WasmBuilder.ModuleBuilder, value::Int64) end

@@ -594,31 +594,31 @@ parameters are its keyword arguments.
     return nothing
 end
 
-@parity "dart2wasm/lib/closures.dart:1137 ClosureLayouter._visitFunctionInvocation" @unported function _visit_function_invocation(self::ClosureLayouter, arguments) end
+@parity "dart2wasm/lib/closures.dart:1137 ClosureLayouter._visitFunctionInvocation" @unported function _visit_function_invocation(self::ClosureLayouter, arguments::Vector{NirValue}) end
 
-@parity "dart2wasm/lib/closures.dart:1146 ClosureLayouter.visitFunctionExpression" @unported function visit_function_expression(self::ClosureLayouter, node) end
+@parity "dart2wasm/lib/closures.dart:1146 ClosureLayouter.visitFunctionExpression" @unported function visit_function_expression(self::ClosureLayouter, node::NirNew) end
 
-@parity "dart2wasm/lib/closures.dart:1155 ClosureLayouter.visitFunctionDeclaration" @unported function visit_function_declaration(self::ClosureLayouter, node) end
+@parity "dart2wasm/lib/closures.dart:1155 ClosureLayouter.visitFunctionDeclaration" @unported function visit_function_declaration(self::ClosureLayouter, node::NirNew) end
 
-@parity "dart2wasm/lib/closures.dart:1164 ClosureLayouter.visitProcedure" @unported function visit_procedure(self::ClosureLayouter, node) end
+@parity "dart2wasm/lib/closures.dart:1164 ClosureLayouter.visitProcedure" @unported function visit_procedure(self::ClosureLayouter, node::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/closures.dart:1178 ClosureLayouter.visitConstructor" @unported function visit_constructor(self::ClosureLayouter, node) end
+@parity "dart2wasm/lib/closures.dart:1178 ClosureLayouter.visitConstructor" @unported function visit_constructor(self::ClosureLayouter, node::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/closures.dart:1185 ClosureLayouter.visitStaticInvocation" @unported function visit_static_invocation(self::ClosureLayouter, node) end
+@parity "dart2wasm/lib/closures.dart:1185 ClosureLayouter.visitStaticInvocation" @unported function visit_static_invocation(self::ClosureLayouter, node::NirInvoke) end
 
-@parity "dart2wasm/lib/closures.dart:1196 ClosureLayouter.visitStaticTearOff" @unported function visit_static_tear_off(self::ClosureLayouter, node) end
+@parity "dart2wasm/lib/closures.dart:1196 ClosureLayouter.visitStaticTearOff" @unported function visit_static_tear_off(self::ClosureLayouter, node::NirGlobal) end
 
-@parity "dart2wasm/lib/closures.dart:1201 ClosureLayouter.visitStaticTearOffConstantReference" @unported function visit_static_tear_off_constant_reference(self::ClosureLayouter, constant) end
+@parity "dart2wasm/lib/closures.dart:1201 ClosureLayouter.visitStaticTearOffConstantReference" @unported function visit_static_tear_off_constant_reference(self::ClosureLayouter, constant::Function) end
 
-@parity "dart2wasm/lib/closures.dart:1209 ClosureLayouter.visitConstructorTearOffConstantReference" @unported function visit_constructor_tear_off_constant_reference(self::ClosureLayouter, constant) end
+@parity "dart2wasm/lib/closures.dart:1209 ClosureLayouter.visitConstructorTearOffConstantReference" @unported function visit_constructor_tear_off_constant_reference(self::ClosureLayouter, constant::Function) end
 
-@parity "dart2wasm/lib/closures.dart:1216 ClosureLayouter.visitRedirectingFactoryTearOffConstantReference" @unported function visit_redirecting_factory_tear_off_constant_reference(self::ClosureLayouter, constant) end
+@parity "dart2wasm/lib/closures.dart:1216 ClosureLayouter.visitRedirectingFactoryTearOffConstantReference" @unported function visit_redirecting_factory_tear_off_constant_reference(self::ClosureLayouter, constant::Function) end
 
-@parity "dart2wasm/lib/closures.dart:1223 ClosureLayouter.defaultConstantReference" @unported function default_constant_reference(self::ClosureLayouter, constant) end
+@parity "dart2wasm/lib/closures.dart:1223 ClosureLayouter.defaultConstantReference" @unported function default_constant_reference(self::ClosureLayouter, constant::NirConst) end
 
-@parity "dart2wasm/lib/closures.dart:1230 ClosureLayouter.visitFunctionInvocation" @unported function visit_function_invocation(self::ClosureLayouter, node) end
+@parity "dart2wasm/lib/closures.dart:1230 ClosureLayouter.visitFunctionInvocation" @unported function visit_function_invocation(self::ClosureLayouter, node::NirInvoke) end
 
-@parity "dart2wasm/lib/closures.dart:1236 ClosureLayouter.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::ClosureLayouter, node) end
+@parity "dart2wasm/lib/closures.dart:1236 ClosureLayouter.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::ClosureLayouter, node::NoCounterpart) end
 
 """
 Registers the named parameters of a function, Julia's keyword arguments of the method
@@ -805,67 +805,67 @@ end
 
 @parity "dart2wasm/lib/closures.dart:1610 _CaptureFinder.translator" @unported function translator(self::_CaptureFinder) end
 
-@parity "dart2wasm/lib/closures.dart:1615 _CaptureFinder.visitFileUriExpression" @unported function visit_file_uri_expression(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1615 _CaptureFinder.visitFileUriExpression" @unported function visit_file_uri_expression(self::_CaptureFinder, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/closures.dart:1621 _CaptureFinder.visitFunctionNode" @unported function visit_function_node(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1621 _CaptureFinder.visitFunctionNode" @unported function visit_function_node(self::_CaptureFinder, node::NirBody) end
 
-@parity "dart2wasm/lib/closures.dart:1632 _CaptureFinder.visitAssertStatement" @unported function visit_assert_statement(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1632 _CaptureFinder.visitAssertStatement" @unported function visit_assert_statement(self::_CaptureFinder, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/closures.dart:1639 _CaptureFinder.visitAssertBlock" @unported function visit_assert_block(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1639 _CaptureFinder.visitAssertBlock" @unported function visit_assert_block(self::_CaptureFinder, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/closures.dart:1646 _CaptureFinder.defaultVariable" @unported function default_variable(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1646 _CaptureFinder.defaultVariable" @unported function default_variable(self::_CaptureFinder, node::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/closures.dart:1654 _CaptureFinder.visitTypeParameter" @unported function visit_type_parameter(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1654 _CaptureFinder.visitTypeParameter" @unported function visit_type_parameter(self::_CaptureFinder, node::TypeVar) end
 
-@parity "dart2wasm/lib/closures.dart:1663 _CaptureFinder._visitVariableUse" @unported function _visit_variable_use(self::_CaptureFinder, variable) end
+@parity "dart2wasm/lib/closures.dart:1663 _CaptureFinder._visitVariableUse" @unported function _visit_variable_use(self::_CaptureFinder, variable::NirStmt) end
 
-@parity "dart2wasm/lib/closures.dart:1680 _CaptureFinder.visitVariableGet" @unported function visit_variable_get(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1680 _CaptureFinder.visitVariableGet" @unported function visit_variable_get(self::_CaptureFinder, node::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/closures.dart:1686 _CaptureFinder.visitVariableSet" @unported function visit_variable_set(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1686 _CaptureFinder.visitVariableSet" @unported function visit_variable_set(self::_CaptureFinder, node::NoCounterpart) end
 
 @parity "dart2wasm/lib/closures.dart:1691 _CaptureFinder._visitThis" @unported function _visit_this(self::_CaptureFinder) end
 
-@parity "dart2wasm/lib/closures.dart:1698 _CaptureFinder.visitThisExpression" @unported function visit_this_expression(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1698 _CaptureFinder.visitThisExpression" @unported function visit_this_expression(self::_CaptureFinder, node::NirArgument) end
 
-@parity "dart2wasm/lib/closures.dart:1703 _CaptureFinder.visitSuperMethodInvocation" @unported function visit_super_method_invocation(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1703 _CaptureFinder.visitSuperMethodInvocation" @unported function visit_super_method_invocation(self::_CaptureFinder, node::NirInvoke) end
 
-@parity "dart2wasm/lib/closures.dart:1709 _CaptureFinder.visitSuperPropertyGet" @unported function visit_super_property_get(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1709 _CaptureFinder.visitSuperPropertyGet" @unported function visit_super_property_get(self::_CaptureFinder, node::NirInvoke) end
 
-@parity "dart2wasm/lib/closures.dart:1715 _CaptureFinder.visitSuperPropertySet" @unported function visit_super_property_set(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1715 _CaptureFinder.visitSuperPropertySet" @unported function visit_super_property_set(self::_CaptureFinder, node::NirInvoke) end
 
-@parity "dart2wasm/lib/closures.dart:1721 _CaptureFinder.visitTypeParameterType" @unported function visit_type_parameter_type(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1721 _CaptureFinder.visitTypeParameterType" @unported function visit_type_parameter_type(self::_CaptureFinder, node::TypeVar) end
 
-@parity "dart2wasm/lib/closures.dart:1742 _CaptureFinder._visitLambda" @unported function _visit_lambda(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1742 _CaptureFinder._visitLambda" @unported function _visit_lambda(self::_CaptureFinder, node::NirBody) end
 
-@parity "dart2wasm/lib/closures.dart:1766 _CaptureFinder.visitFunctionExpression" @unported function visit_function_expression(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1766 _CaptureFinder.visitFunctionExpression" @unported function visit_function_expression(self::_CaptureFinder, node::NirNew) end
 
-@parity "dart2wasm/lib/closures.dart:1771 _CaptureFinder.visitFunctionDeclaration" @unported function visit_function_declaration(self::_CaptureFinder, node) end
+@parity "dart2wasm/lib/closures.dart:1771 _CaptureFinder.visitFunctionDeclaration" @unported function visit_function_declaration(self::_CaptureFinder, node::NirNew) end
 
 @parity "dart2wasm/lib/closures.dart:1784 _ContextCollector" @unported function _ContextCollector(closures, enable_asserts) end
 
-@parity "dart2wasm/lib/closures.dart:1786 _ContextCollector.collect" @unported function Base.collect(self::_ContextCollector, member) end
+@parity "dart2wasm/lib/closures.dart:1786 _ContextCollector.collect" @unported function Base.collect(self::_ContextCollector, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/closures.dart:1797 _ContextCollector.visitAssertStatement" @unported function visit_assert_statement(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1797 _ContextCollector.visitAssertStatement" @unported function visit_assert_statement(self::_ContextCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/closures.dart:1804 _ContextCollector.visitAssertBlock" @unported function visit_assert_block(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1804 _ContextCollector.visitAssertBlock" @unported function visit_assert_block(self::_ContextCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/closures.dart:1810 _ContextCollector._newContext" @unported function _new_context(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1810 _ContextCollector._newContext" @unported function _new_context(self::_ContextCollector, node::NirStmt) end
 
-@parity "dart2wasm/lib/closures.dart:1823 _ContextCollector.visitConstructor" @unported function visit_constructor(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1823 _ContextCollector.visitConstructor" @unported function visit_constructor(self::_ContextCollector, node::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/closures.dart:1862 _ContextCollector.visitFunctionNode" @unported function visit_function_node(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1862 _ContextCollector.visitFunctionNode" @unported function visit_function_node(self::_ContextCollector, node::NirBody) end
 
-@parity "dart2wasm/lib/closures.dart:1867 _ContextCollector.visitWhileStatement" @unported function visit_while_statement(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1867 _ContextCollector.visitWhileStatement" @unported function visit_while_statement(self::_ContextCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/closures.dart:1872 _ContextCollector.visitDoStatement" @unported function visit_do_statement(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1872 _ContextCollector.visitDoStatement" @unported function visit_do_statement(self::_ContextCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/closures.dart:1877 _ContextCollector.visitForStatement" @unported function visit_for_statement(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1877 _ContextCollector.visitForStatement" @unported function visit_for_statement(self::_ContextCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/closures.dart:1882 _ContextCollector.defaultVariable" @unported function default_variable(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1882 _ContextCollector.defaultVariable" @unported function default_variable(self::_ContextCollector, node::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/closures.dart:1894 _ContextCollector.visitTypeParameter" @unported function visit_type_parameter(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1894 _ContextCollector.visitTypeParameter" @unported function visit_type_parameter(self::_ContextCollector, node::TypeVar) end
 
-@parity "dart2wasm/lib/closures.dart:1906 _ContextCollector.visitVariableSet" @unported function visit_variable_set(self::_ContextCollector, node) end
+@parity "dart2wasm/lib/closures.dart:1906 _ContextCollector.visitVariableSet" @unported function visit_variable_set(self::_ContextCollector, node::NoCounterpart) end
 
 # dart's casts, which throw on another type; here located rejections
 @parity "dart2wasm/lib/closures.dart:1913 StructVtableExtension.getVtableEntryAt" function get_vtable_entry_at(self::WasmBuilder.IR.StructType, index::Int64)::WasmBuilder.IR.FunctionType

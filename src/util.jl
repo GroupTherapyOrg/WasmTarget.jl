@@ -13,36 +13,36 @@ end
 # (src/julia/reject.jl), checked in every run, so a port's asserts are always enabled
 @parity "dart2wasm/lib/util.dart:21 compilerAssertsEnabled" compiler_asserts_enabled()::Bool = true
 
-@parity "dart2wasm/lib/util.dart:27 hasPragma" @unported function has_pragma(core_types, node, name::String) end
+@parity "dart2wasm/lib/util.dart:27 hasPragma" @unported function has_pragma(core_types::NoCounterpart, node::NoCounterpart, name::String) end
 
-@parity "dart2wasm/lib/util.dart:31 getPragma" @unported function get_pragma(core_types, node, name::String; default_value = nothing) end
+@parity "dart2wasm/lib/util.dart:31 getPragma" @unported function get_pragma(core_types::NoCounterpart, node::NoCounterpart, name::String; default_value = nothing) end
 
-@parity "dart2wasm/lib/util.dart:68 hasWasmImportPragma" @unported function has_wasm_import_pragma(core_types, member) end
+@parity "dart2wasm/lib/util.dart:68 hasWasmImportPragma" @unported function has_wasm_import_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/util.dart:72 getWasmImportPragma" @unported function get_wasm_import_pragma(core_types, member) end
+@parity "dart2wasm/lib/util.dart:72 getWasmImportPragma" @unported function get_wasm_import_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/util.dart:91 ImportName" ImportName(module_name::String, item_name::String)::ImportName = ImportName(Val(:_), module_name, item_name)
 
 # dart's toString; Julia's show writes to the stream it is given
 @parity "dart2wasm/lib/util.dart:94 ImportName.toString" Base.show(io::IO, self::ImportName)::Nothing = print(io, self.module_name, '.', self.item_name)
 
-@parity "dart2wasm/lib/util.dart:99 hasWasmExportPragma" @unported function has_wasm_export_pragma(core_types, member) end
+@parity "dart2wasm/lib/util.dart:99 hasWasmExportPragma" @unported function has_wasm_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/util.dart:103 hasWasmWeakExportPragma" @unported function has_wasm_weak_export_pragma(core_types, member) end
+@parity "dart2wasm/lib/util.dart:103 hasWasmWeakExportPragma" @unported function has_wasm_weak_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/util.dart:107 getWasmPreferInlinePragma" @unported function get_wasm_prefer_inline_pragma(core_types, member) end
+@parity "dart2wasm/lib/util.dart:107 getWasmPreferInlinePragma" @unported function get_wasm_prefer_inline_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/util.dart:116 getWasmNeverInlinePragma" @unported function get_wasm_never_inline_pragma(core_types, member) end
+@parity "dart2wasm/lib/util.dart:116 getWasmNeverInlinePragma" @unported function get_wasm_never_inline_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/util.dart:125 getWasmExportPragma" @unported function get_wasm_export_pragma(core_types, member) end
+@parity "dart2wasm/lib/util.dart:125 getWasmExportPragma" @unported function get_wasm_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/util.dart:134 getWasmWeakExportPragma" @unported function get_wasm_weak_export_pragma(core_types, member) end
+@parity "dart2wasm/lib/util.dart:134 getWasmWeakExportPragma" @unported function get_wasm_weak_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma" @unported function has_wasm_pure_function_pragma(core_types, member) end
+@parity "dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma" @unported function has_wasm_pure_function_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" @unported function add_wasm_entry_point_pragma(node, core_types) end
+@parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" @unported function add_wasm_entry_point_pragma(node, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/util.dart:157 addPragma" @unported function add_pragma(node, pragma_name::String, core_types; value = nothing) end
+@parity "dart2wasm/lib/util.dart:157 addPragma" @unported function add_pragma(node, pragma_name::String, core_types::NoCounterpart; value = nothing) end
 
 # dart's `>>>=` is the unsigned shift, Julia's `>>>`
 @parity "dart2wasm/lib/util.dart:172 _intToLittleEndianBytes" function _int_to_little_endian_bytes(i::Int64)::Vector{UInt8}

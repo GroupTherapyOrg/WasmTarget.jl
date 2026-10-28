@@ -28,51 +28,51 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:48 FunctionCollector._collectImportsAndExports" @unported function _collect_imports_and_exports(self::FunctionCollector) end
 
-@parity "dart2wasm/lib/functions.dart:57 FunctionCollector._handleExports" @unported function _handle_exports(self::FunctionCollector, member) end
+@parity "dart2wasm/lib/functions.dart:57 FunctionCollector._handleExports" @unported function _handle_exports(self::FunctionCollector, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" @unported function get_export_name(self::FunctionCollector, target) end
+@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" @unported function get_export_name(self::FunctionCollector, target::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/functions.dart:71 FunctionCollector.initialize" @unported function initialize(self::FunctionCollector) end
 
-@parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" @unported function get_existing_function(self::FunctionCollector, target) end
+@parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" @unported function get_existing_function(self::FunctionCollector, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" @unported function get_function(self::FunctionCollector, target) end
+@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" @unported function get_function(self::FunctionCollector, target::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/functions.dart:192 FunctionCollector.hasDynamicSelectorCall" @unported function has_dynamic_selector_call(self::FunctionCollector, shape::CallShape) end
 
-@parity "dart2wasm/lib/functions.dart:195 FunctionCollector.getExistingDynamicForwarder" @unported function get_existing_dynamic_forwarder(self::FunctionCollector, target, shape::CallShape) end
+@parity "dart2wasm/lib/functions.dart:195 FunctionCollector.getExistingDynamicForwarder" @unported function get_existing_dynamic_forwarder(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape) end
 
-@parity "dart2wasm/lib/functions.dart:202 FunctionCollector.getDynamicForwarder" @unported function get_dynamic_forwarder(self::FunctionCollector, target, shape::CallShape) end
+@parity "dart2wasm/lib/functions.dart:202 FunctionCollector.getDynamicForwarder" @unported function get_dynamic_forwarder(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape) end
 
 @parity "dart2wasm/lib/functions.dart:221 FunctionCollector.getInvocationCreatorStub" @unported function get_invocation_creator_stub(self::FunctionCollector, shape::MethodCallShape) end
 
 @parity "dart2wasm/lib/functions.dart:233 FunctionCollector.getLambdaFunction" @unported function get_lambda_function(self::FunctionCollector, lambda::Lambda) end
 
-@parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" @unported function get_function_type(self::FunctionCollector, target) end
+@parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" @unported function get_function_type(self::FunctionCollector, target::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/functions.dart:262 FunctionCollector.getLambdaFunctionType" @unported function get_lambda_function_type(self::FunctionCollector, lambda::Lambda) end
 
-@parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" @unported function _get_function_type(self::FunctionCollector, target) end
+@parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" @unported function _get_function_type(self::FunctionCollector, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:306 FunctionCollector.synthesizeNullReturnValue" @unported function synthesize_null_return_value(self::FunctionCollector, target) end
+@parity "dart2wasm/lib/functions.dart:306 FunctionCollector.synthesizeNullReturnValue" @unported function synthesize_null_return_value(self::FunctionCollector, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:319 FunctionCollector.synthesizeNoReturn" @unported function synthesize_no_return(self::FunctionCollector, target) end
+@parity "dart2wasm/lib/functions.dart:319 FunctionCollector.synthesizeNoReturn" @unported function synthesize_no_return(self::FunctionCollector, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName" @unported function get_function_name(self::FunctionCollector, target) end
+@parity "dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName" @unported function get_function_name(self::FunctionCollector, target::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/functions.dart:377 FunctionCollector.getLambdaFunctionName" @unported function get_lambda_function_name(self::FunctionCollector, lambda::Lambda) end
 
-@parity "dart2wasm/lib/functions.dart:389 FunctionCollector.getDynamicForwarderName" @unported function get_dynamic_forwarder_name(self::FunctionCollector, target, shape::CallShape) end
+@parity "dart2wasm/lib/functions.dart:389 FunctionCollector.getDynamicForwarderName" @unported function get_dynamic_forwarder_name(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape) end
 
 @parity "dart2wasm/lib/functions.dart:395 FunctionCollector.getInvocationCreatorStubName" @unported function get_invocation_creator_stub_name(self::FunctionCollector, shape::CallShape) end
 
 @parity "dart2wasm/lib/functions.dart:399 FunctionCollector.recordSelectorUse" @unported function record_selector_use(self::FunctionCollector, selector::SelectorInfo, use_unchecked_entry::Bool) end
 
-@parity "dart2wasm/lib/functions.dart:413 FunctionCollector.recordClassTargetUse" @unported function record_class_target_use(self::FunctionCollector, class_id::Int64, target) end
+@parity "dart2wasm/lib/functions.dart:413 FunctionCollector.recordClassTargetUse" @unported function record_class_target_use(self::FunctionCollector, class_id::Int64, target::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/functions.dart:423 FunctionCollector.recordDynamicSelectorUse" @unported function record_dynamic_selector_use(self::FunctionCollector, selector::DynamicSelector) end
 
-@parity "dart2wasm/lib/functions.dart:431 FunctionCollector.recordClassDynamicTargetUse" @unported function record_class_dynamic_target_use(self::FunctionCollector, class_id::Int64, shape::CallShape, target) end
+@parity "dart2wasm/lib/functions.dart:431 FunctionCollector.recordClassDynamicTargetUse" @unported function record_class_dynamic_target_use(self::FunctionCollector, class_id::Int64, shape::CallShape, target::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/functions.dart:446 FunctionCollector.recordClassAllocation" @unported function record_class_allocation(self::FunctionCollector, class_id::Int64) end
 
@@ -80,23 +80,23 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:470 _FunctionTypeGenerator" @unported function _FunctionTypeGenerator(translator, synthesize_null_return_value, synthesize_no_return) end
 
-@parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" @unported function visit_field(self::_FunctionTypeGenerator, node, target) end
+@parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" @unported function visit_field(self::_FunctionTypeGenerator, node::ClassField, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:511 _FunctionTypeGenerator.visitProcedure" @unported function visit_procedure(self::_FunctionTypeGenerator, node, target) end
+@parity "dart2wasm/lib/functions.dart:511 _FunctionTypeGenerator.visitProcedure" @unported function visit_procedure(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:550 _FunctionTypeGenerator.visitConstructor" @unported function visit_constructor(self::_FunctionTypeGenerator, node, target) end
+@parity "dart2wasm/lib/functions.dart:550 _FunctionTypeGenerator.visitConstructor" @unported function visit_constructor(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:570 _FunctionTypeGenerator._getConstructorAllocatorType" @unported function _get_constructor_allocator_type(self::_FunctionTypeGenerator, node) end
+@parity "dart2wasm/lib/functions.dart:570 _FunctionTypeGenerator._getConstructorAllocatorType" @unported function _get_constructor_allocator_type(self::_FunctionTypeGenerator, node::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:584 _FunctionTypeGenerator._getInitializerType" @unported function _get_initializer_type(self::_FunctionTypeGenerator, node, target) end
+@parity "dart2wasm/lib/functions.dart:584 _FunctionTypeGenerator._getInitializerType" @unported function _get_initializer_type(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType" @unported function _get_constructor_body_type(self::_FunctionTypeGenerator, node) end
+@parity "dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType" @unported function _get_constructor_body_type(self::_FunctionTypeGenerator, node::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" @unported function _get_constructor_input_types(translator::Translator, member, type_parameters::Vector{Any}, parameters::Vector{Any}, translate_type::Function; is_body_parameter = nothing) end
+@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" @unported function _get_constructor_input_types(translator::Translator, member::Core.MethodInstance, type_parameters::Vector{TypeVar}, parameters::Vector{NirArgument}, translate_type::Function; is_body_parameter = nothing) end
 
-@parity "dart2wasm/lib/functions.dart:731 _getInputTypes" @unported function _get_input_types(translator::Translator, target, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}, is_import_or_export::Bool, translate_type::Function) end
+@parity "dart2wasm/lib/functions.dart:731 _getInputTypes" @unported function _get_input_types(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}, is_import_or_export::Bool, translate_type::Function) end
 
-@parity "dart2wasm/lib/functions.dart:787 makeFunctionTypeForBody" @unported function make_function_type_for_body(translator::Translator, member, synthesize_null_return_value::Bool, synthesize_no_return::Bool) end
+@parity "dart2wasm/lib/functions.dart:787 makeFunctionTypeForBody" @unported function make_function_type_for_body(translator::Translator, member::Core.MethodInstance, synthesize_null_return_value::Bool, synthesize_no_return::Bool) end
 
 @parity "dart2wasm/lib/functions.dart:821 makeDynamicDispatcherSignature" @unported function make_dynamic_dispatcher_signature(translator::Translator, shape::CallShape) end
 
@@ -104,11 +104,11 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:831 _makeDynamicSignature" @unported function _make_dynamic_signature(translator::Translator, shape::CallShape, nullable_receiver::Bool) end
 
-@parity "dart2wasm/lib/functions.dart:860 makeTearOffFunctionType" @unported function make_tear_off_function_type(translator::Translator, function_, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}) end
+@parity "dart2wasm/lib/functions.dart:860 makeTearOffFunctionType" @unported function make_tear_off_function_type(translator::Translator, function_::NirBody, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}) end
 
 @parity "dart2wasm/lib/functions.dart:875 makeInvocationCreatorSignature" @unported function make_invocation_creator_signature(translator::Translator, shape::MethodCallShape) end
 
-@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" @unported function _make_function_type(translator::Translator, target, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}; synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export = nothing) end
+@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" @unported function _make_function_type(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}; synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export = nothing) end
 
 @parity "dart2wasm/lib/functions.dart:951 CallShape" @unported function CallShape(name) end
 
@@ -130,9 +130,9 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:974 MethodCallShape.totalArgumentCount" @unported function total_argument_count(self::MethodCallShape) end
 
-@parity "dart2wasm/lib/functions.dart:976 MethodCallShape.matchesTarget" @unported function matches_target(self::MethodCallShape, target) end
+@parity "dart2wasm/lib/functions.dart:976 MethodCallShape.matchesTarget" @unported function matches_target(self::MethodCallShape, target::NirBody) end
 
-@parity "dart2wasm/lib/functions.dart:998 MethodCallShape.copyWithName" @unported function copy_with_name(self::MethodCallShape, new_name) end
+@parity "dart2wasm/lib/functions.dart:998 MethodCallShape.copyWithName" @unported function copy_with_name(self::MethodCallShape, new_name::Symbol) end
 
 @parity "dart2wasm/lib/functions.dart:1002 MethodCallShape.hashCode" @unported function Base.hash(self::MethodCallShape, h::UInt) end
 

@@ -11,6 +11,6 @@
 
 @parity "dart2wasm/lib/kernel_nodes.dart:20 KernelNodes._stringImplClassName" @unported function _string_impl_class_name(self::KernelNodes) end
 
-@parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" @unported function _get_lane_references(self::KernelNodes, class_node) end
+@parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" @unported function _get_lane_references(self::KernelNodes, class_node::DataType) end
 
-@parity "dart2wasm/lib/kernel_nodes.dart:859 KernelNodes.extensionOfMember" @unported function extension_of_member(self::KernelNodes, member) end
+@parity "dart2wasm/lib/kernel_nodes.dart:859 KernelNodes.extensionOfMember" @unported function extension_of_member(self::KernelNodes, member::Core.MethodInstance) end

@@ -191,7 +191,7 @@ end
     unimplemented(self, node, string(typeof(node)), expected_type == void_marker(self) ? WasmBuilder.IR.ValueType[] : WasmBuilder.IR.ValueType[expected_type])
 end
 
-@parity "dart2wasm/lib/code_generator.dart:176 AstCodeGenerator.setSourceMapSource" @unported function set_source_map_source(self::AstCodeGenerator, source) end
+@parity "dart2wasm/lib/code_generator.dart:176 AstCodeGenerator.setSourceMapSource" @unported function set_source_map_source(self::AstCodeGenerator, source::Union{Nothing,Symbol}) end
 
 # a NIR statement carries no file offset yet, each passing dart's TreeNode.noOffset, which stops the
 # mapping; Julia's statement positions (its debuginfo) are the offsets still to read
@@ -211,7 +211,7 @@ end
     reject!(Unquarantined("src/julia/nir.jl: a NIR statement's source position, Julia's debuginfo"), "dart2wasm/lib/code_generator.dart:190 AstCodeGenerator.setSourceMapFileOffset")
 end
 
-@parity "dart2wasm/lib/code_generator.dart:217 AstCodeGenerator.setSourceMapSourceAndFileOffset" @unported function set_source_map_source_and_file_offset(self::AstCodeGenerator, source, file_offset::Int64) end
+@parity "dart2wasm/lib/code_generator.dart:217 AstCodeGenerator.setSourceMapSourceAndFileOffset" @unported function set_source_map_source_and_file_offset(self::AstCodeGenerator, source::Union{Nothing,Symbol}, file_offset::Int64) end
 
 @parity "dart2wasm/lib/code_generator.dart:228 AstCodeGenerator.generate" function generate(self::AstCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
     self.b[] = b
@@ -283,9 +283,9 @@ end
     setup_parameters(self, member; can_safely_omit_implicit_checks = !need_to_check_types_for(self.translator, member))
 end
 
-@parity "dart2wasm/lib/code_generator.dart:443 AstCodeGenerator.setupParametersForCheckedEntry" @unported function setup_parameters_for_checked_entry(self::AstCodeGenerator, member) end
+@parity "dart2wasm/lib/code_generator.dart:443 AstCodeGenerator.setupParametersForCheckedEntry" @unported function setup_parameters_for_checked_entry(self::AstCodeGenerator, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/code_generator.dart:452 AstCodeGenerator.setupParametersForUncheckedEntry" @unported function setup_parameters_for_unchecked_entry(self::AstCodeGenerator, member) end
+@parity "dart2wasm/lib/code_generator.dart:452 AstCodeGenerator.setupParametersForUncheckedEntry" @unported function setup_parameters_for_unchecked_entry(self::AstCodeGenerator, member::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/code_generator.dart:461 AstCodeGenerator.setupContexts" function setup_contexts(self::AstCodeGenerator, member::Core.MethodInstance)::Nothing
     allocate_context(self, self.body)
@@ -326,7 +326,7 @@ end
     return 0
 end
 
-@parity "dart2wasm/lib/code_generator.dart:538 AstCodeGenerator._initializeContextLocals" @unported function _initialize_context_locals(self::AstCodeGenerator, node; context_param_index = nothing) end
+@parity "dart2wasm/lib/code_generator.dart:538 AstCodeGenerator._initializeContextLocals" @unported function _initialize_context_locals(self::AstCodeGenerator, node::NirStmt; context_param_index = nothing) end
 
 @parity "dart2wasm/lib/code_generator.dart:594 AstCodeGenerator._implicitReturn" function _implicit_return(self::AstCodeGenerator)::Nothing
     local outs = outputs(self)
@@ -420,7 +420,7 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:702 AstCodeGenerator.translateVariable" @unported function translate_variable(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:702 AstCodeGenerator.translateVariable" @unported function translate_variable(self::AstCodeGenerator, node::Union{NirSSA,NirArgument}) end
 
 """
 Generate the code of one statement of the function's NIR body. dart's `node.accept(this)` is the
@@ -476,17 +476,17 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:733 AstCodeGenerator.call" call(self::AstCodeGenerator, target::Core.MethodInstance)::Vector{WasmBuilder.IR.ValueType} = call_reference(self.translator, target, self.b[])
 
-@parity "dart2wasm/lib/code_generator.dart:738 AstCodeGenerator.visitInvalidInitializer" @unported function visit_invalid_initializer(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:738 AstCodeGenerator.visitInvalidInitializer" @unported function visit_invalid_initializer(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:743 AstCodeGenerator.visitAssertInitializer" @unported function visit_assert_initializer(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:743 AstCodeGenerator.visitAssertInitializer" @unported function visit_assert_initializer(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:748 AstCodeGenerator.visitLocalInitializer" @unported function visit_local_initializer(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:748 AstCodeGenerator.visitLocalInitializer" @unported function visit_local_initializer(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:753 AstCodeGenerator.visitFieldInitializer" @unported function visit_field_initializer(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:753 AstCodeGenerator.visitFieldInitializer" @unported function visit_field_initializer(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:758 AstCodeGenerator.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:758 AstCodeGenerator.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:763 AstCodeGenerator.visitSuperInitializer" @unported function visit_super_initializer(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:763 AstCodeGenerator.visitSuperInitializer" @unported function visit_super_initializer(self::AstCodeGenerator, node::NoCounterpart) end
 
 # a body is a block: its statements in Julia's order
 @parity "dart2wasm/lib/code_generator.dart:768 AstCodeGenerator.visitBlock" function visit_block(self::AstCodeGenerator, node::NirBody)::Nothing
@@ -496,9 +496,9 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:775 AstCodeGenerator.visitLabeledStatement" @unported function visit_labeled_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:775 AstCodeGenerator.visitLabeledStatement" @unported function visit_labeled_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:784 AstCodeGenerator.visitBreakStatement" @unported function visit_break_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:784 AstCodeGenerator.visitBreakStatement" @unported function visit_break_statement(self::AstCodeGenerator, node::NirGoto) end
 
 # a NIR variable is never captured (allocateContext) and always has its initializer, the statement
 # whose value it names
@@ -511,40 +511,40 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:842 AstCodeGenerator.initializeVariable" @unported function initialize_variable(self::AstCodeGenerator, node, push_initial_value::Function) end
+@parity "dart2wasm/lib/code_generator.dart:842 AstCodeGenerator.initializeVariable" @unported function initialize_variable(self::AstCodeGenerator, node::Union{NirSSA,NirArgument}, push_initial_value::Function) end
 
 @parity "dart2wasm/lib/code_generator.dart:867 AstCodeGenerator.visitEmptyStatement" visit_empty_statement(self::AstCodeGenerator, node::NirNothing)::Nothing = nothing
 
-@parity "dart2wasm/lib/code_generator.dart:870 AstCodeGenerator.visitAssertStatement" @unported function visit_assert_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:870 AstCodeGenerator.visitAssertStatement" @unported function visit_assert_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:916 AstCodeGenerator.visitAssertBlock" @unported function visit_assert_block(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:916 AstCodeGenerator.visitAssertBlock" @unported function visit_assert_block(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:925 AstCodeGenerator.visitTryCatch" @unported function visit_try_catch(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:925 AstCodeGenerator.visitTryCatch" @unported function visit_try_catch(self::AstCodeGenerator, node::NirEnter) end
 
-@parity "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally" @unported function visit_try_finally(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally" @unported function visit_try_finally(self::AstCodeGenerator, node::NirEnter) end
 
 @parity "dart2wasm/lib/code_generator.dart:1197 AstCodeGenerator.visitExpressionStatement" function visit_expression_statement(self::AstCodeGenerator, node::NirStmt)::Nothing
     translate_expression(self, node, void_marker(self))
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1201 AstCodeGenerator._hasLogicalOperator" @unported function _has_logical_operator(self::AstCodeGenerator, condition) end
+@parity "dart2wasm/lib/code_generator.dart:1201 AstCodeGenerator._hasLogicalOperator" @unported function _has_logical_operator(self::AstCodeGenerator, condition::NirValue) end
 
-@parity "dart2wasm/lib/code_generator.dart:1208 AstCodeGenerator.branchIf" @unported function branch_if(self::AstCodeGenerator, condition, target::WasmBuilder.Label; negated::Bool) end
+@parity "dart2wasm/lib/code_generator.dart:1208 AstCodeGenerator.branchIf" @unported function branch_if(self::AstCodeGenerator, condition::Union{Nothing,NirValue}, target::WasmBuilder.Label; negated::Bool) end
 
-@parity "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional" @unported function _conditional(self::AstCodeGenerator, condition, then::Function, otherwise::Union{Nothing,Function}, result::Vector{WasmBuilder.IR.ValueType}) end
+@parity "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional" @unported function _conditional(self::AstCodeGenerator, condition::NirValue, then::Function, otherwise::Union{Nothing,Function}, result::Vector{WasmBuilder.IR.ValueType}) end
 
-@parity "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement" @unported function visit_if_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement" @unported function visit_if_statement(self::AstCodeGenerator, node::NirGotoIfNot) end
 
-@parity "dart2wasm/lib/code_generator.dart:1287 AstCodeGenerator.visitDoStatement" @unported function visit_do_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1287 AstCodeGenerator.visitDoStatement" @unported function visit_do_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:1296 AstCodeGenerator.visitWhileStatement" @unported function visit_while_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1296 AstCodeGenerator.visitWhileStatement" @unported function visit_while_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:1308 AstCodeGenerator.visitForStatement" @unported function visit_for_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1308 AstCodeGenerator.visitForStatement" @unported function visit_for_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:1325 AstCodeGenerator.emitForStatementUpdate" @unported function emit_for_statement_update(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1325 AstCodeGenerator.emitForStatementUpdate" @unported function emit_for_statement_update(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:1356 AstCodeGenerator.visitForInStatement" @unported function visit_for_in_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1356 AstCodeGenerator.visitForInStatement" @unported function visit_for_in_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
 @parity "dart2wasm/lib/code_generator.dart:1363 AstCodeGenerator._returnFromFunction" function _return_from_function(self::AstCodeGenerator)::Nothing
     local return_label = self.return_label[]
@@ -569,17 +569,17 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1405 AstCodeGenerator.visitSwitchStatement" @unported function visit_switch_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1405 AstCodeGenerator.visitSwitchStatement" @unported function visit_switch_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:1554 AstCodeGenerator.visitContinueSwitchStatement" @unported function visit_continue_switch_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1554 AstCodeGenerator.visitContinueSwitchStatement" @unported function visit_continue_switch_statement(self::AstCodeGenerator, node::NirGoto) end
 
-@parity "dart2wasm/lib/code_generator.dart:1581 AstCodeGenerator.visitYieldStatement" @unported function visit_yield_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1581 AstCodeGenerator.visitYieldStatement" @unported function visit_yield_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:1586 AstCodeGenerator.visitAwaitExpression" @unported function visit_await_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:1586 AstCodeGenerator.visitAwaitExpression" @unported function visit_await_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:1594 AstCodeGenerator.visitBlockExpression" @unported function visit_block_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:1594 AstCodeGenerator.visitBlockExpression" @unported function visit_block_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:1603 AstCodeGenerator.visitLet" @unported function visit_let(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:1603 AstCodeGenerator.visitLet" @unported function visit_let(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
 # Julia's `this`, the callee `Argument(1)` when it carries fields (_initializeThis)
 @parity "dart2wasm/lib/code_generator.dart:1609 AstCodeGenerator.visitThisExpression" visit_this_expression(self::AstCodeGenerator, node::NirArgument, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType = visit_this(self, expected_type)
@@ -656,6 +656,7 @@ end
     _visit_arguments(self, node, signature_for_direct_call(self.translator, target), param_info_for_direct_call(self.translator, target), 0)
     return output_or_void(self.translator, call(self, target))
 end
+
 # a call of a builtin or an intrinsic, the one call Julia's verifier leaves unresolved: Julia's own
 # operations, which the intrinsifier emits; one it has no arm for rejects at the call, located
 @parity "dart2wasm/lib/code_generator.dart:1668 AstCodeGenerator.visitStaticInvocation" function visit_static_invocation(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
@@ -665,21 +666,21 @@ end
         "$(self.enclosing_member): Julia's $(nir_callee(node)) on $(join((dart_type_of(self, a) for a in node.args[2:end]), ", "))")
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1688 AstCodeGenerator._lookupSuperTarget" @unported function _lookup_super_target(self::AstCodeGenerator, interface_target; setter::Bool) end
+@parity "dart2wasm/lib/code_generator.dart:1688 AstCodeGenerator._lookupSuperTarget" @unported function _lookup_super_target(self::AstCodeGenerator, interface_target::Core.MethodInstance; setter::Bool) end
 
-@parity "dart2wasm/lib/code_generator.dart:1697 AstCodeGenerator.visitSuperMethodInvocation" @unported function visit_super_method_invocation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:1697 AstCodeGenerator.visitSuperMethodInvocation" @unported function visit_super_method_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:1755 AstCodeGenerator.visitInstanceInvocation" @unported function visit_instance_invocation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:1755 AstCodeGenerator.visitInstanceInvocation" @unported function visit_instance_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:1861 AstCodeGenerator.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:1861 AstCodeGenerator.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:1868 AstCodeGenerator._handleDynamicInvocation" @unported function _handle_dynamic_invocation(self::AstCodeGenerator, receiver, arguments, member_name) end
+@parity "dart2wasm/lib/code_generator.dart:1868 AstCodeGenerator._handleDynamicInvocation" @unported function _handle_dynamic_invocation(self::AstCodeGenerator, receiver::NirValue, arguments::Vector{NirValue}, member_name::Symbol) end
 
-@parity "dart2wasm/lib/code_generator.dart:1926 AstCodeGenerator.visitEqualsCall" @unported function visit_equals_call(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:1926 AstCodeGenerator.visitEqualsCall" @unported function visit_equals_call(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2022 AstCodeGenerator.visitEqualsNull" @unported function visit_equals_null(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2022 AstCodeGenerator.visitEqualsNull" @unported function visit_equals_null(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall" @unported function _virtual_call(self::AstCodeGenerator, node, interface_target, kind::_VirtualCallKind, push_receiver::Function, push_arguments::Function; use_unchecked_entry::Bool) end
+@parity "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall" @unported function _virtual_call(self::AstCodeGenerator, node::NirStmt, interface_target::Core.MethodInstance, kind::_VirtualCallKind, push_receiver::Function, push_arguments::Function; use_unchecked_entry::Bool) end
 
 # a NIR variable is never captured (allocateContext): its local holds it
 @parity "dart2wasm/lib/code_generator.dart:2127 AstCodeGenerator.visitVariableGet" function visit_variable_get(self::AstCodeGenerator, node::Union{NirSSA,NirArgument}, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
@@ -689,17 +690,17 @@ end
     return local_.type
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2149 AstCodeGenerator.visitVariableSet" @unported function visit_variable_set(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2149 AstCodeGenerator.visitVariableSet" @unported function visit_variable_set(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2183 AstCodeGenerator.visitStaticGet" @unported function visit_static_get(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2183 AstCodeGenerator.visitStaticGet" @unported function visit_static_get(self::AstCodeGenerator, node::NirGlobalRead, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2193 AstCodeGenerator.visitStaticTearOff" @unported function visit_static_tear_off(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2193 AstCodeGenerator.visitStaticTearOff" @unported function visit_static_tear_off(self::AstCodeGenerator, node::NirGlobal, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2199 AstCodeGenerator.visitStaticSet" @unported function visit_static_set(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2199 AstCodeGenerator.visitStaticSet" @unported function visit_static_set(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2225 AstCodeGenerator.visitSuperPropertyGet" @unported function visit_super_property_get(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2225 AstCodeGenerator.visitSuperPropertyGet" @unported function visit_super_property_get(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2243 AstCodeGenerator.visitSuperPropertySet" @unported function visit_super_property_set(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2243 AstCodeGenerator.visitSuperPropertySet" @unported function visit_super_property_set(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
 # Julia's getfield(x, f[, boundscheck]) is Kernel's InstanceGet: a receiver whose class Julia inferred
 # concrete has the field as its single target (dart's _directGet); one Julia leaves abstract is a
@@ -722,9 +723,9 @@ end
     return _direct_get(self, fields[k], receiver)
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2317 AstCodeGenerator.visitDynamicGet" @unported function visit_dynamic_get(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2317 AstCodeGenerator.visitDynamicGet" @unported function visit_dynamic_get(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2335 AstCodeGenerator.visitDynamicSet" @unported function visit_dynamic_set(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2335 AstCodeGenerator.visitDynamicSet" @unported function visit_dynamic_set(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
 # a Julia field is always a struct field (dart's Field arm; a Julia class has no getter procedures);
 # an 8- or 16-bit field is stored packed, which wasm reads sign- or zero-extended (struct.get_s for a
@@ -745,7 +746,7 @@ end
     return field_type
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2374 AstCodeGenerator.visitInstanceTearOff" @unported function visit_instance_tear_off(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2374 AstCodeGenerator.visitInstanceTearOff" @unported function visit_instance_tear_off(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
 # Julia's setfield!(x, f, v[, order]) is Kernel's InstanceSet, its value the expression's: a receiver
 # Julia inferred concrete has the field as its single target (dart's _directSet); one Julia leaves
@@ -795,33 +796,33 @@ end
     return void_marker(self)
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2512 AstCodeGenerator.visitFunctionDeclaration" @unported function visit_function_declaration(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:2512 AstCodeGenerator.visitFunctionDeclaration" @unported function visit_function_declaration(self::AstCodeGenerator, node::NirNew) end
 
-@parity "dart2wasm/lib/code_generator.dart:2536 AstCodeGenerator.visitFunctionExpression" @unported function visit_function_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2536 AstCodeGenerator.visitFunctionExpression" @unported function visit_function_expression(self::AstCodeGenerator, node::NirNew, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2544 AstCodeGenerator._instantiateClosure" @unported function _instantiate_closure(self::AstCodeGenerator, function_node) end
+@parity "dart2wasm/lib/code_generator.dart:2544 AstCodeGenerator._instantiateClosure" @unported function _instantiate_closure(self::AstCodeGenerator, function_node::NirBody) end
 
-@parity "dart2wasm/lib/code_generator.dart:2560 AstCodeGenerator._pushClosure" @unported function _push_closure(self::AstCodeGenerator, closure::ClosureImplementation, function_type, push_context::Function) end
+@parity "dart2wasm/lib/code_generator.dart:2560 AstCodeGenerator._pushClosure" @unported function _push_closure(self::AstCodeGenerator, closure::ClosureImplementation, function_type::Type, push_context::Function) end
 
-@parity "dart2wasm/lib/code_generator.dart:2579 AstCodeGenerator._pushContext" @unported function _push_context(self::AstCodeGenerator, function_node) end
+@parity "dart2wasm/lib/code_generator.dart:2579 AstCodeGenerator._pushContext" @unported function _push_context(self::AstCodeGenerator, function_node::NirBody) end
 
-@parity "dart2wasm/lib/code_generator.dart:2598 AstCodeGenerator.visitFunctionInvocation" @unported function visit_function_invocation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2598 AstCodeGenerator.visitFunctionInvocation" @unported function visit_function_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2641 AstCodeGenerator._generateDirectClosureCall" @unported function _generate_direct_closure_call(self::AstCodeGenerator, node, representation::ClosureRepresentation, closure_target::SingleClosureTarget) end
+@parity "dart2wasm/lib/code_generator.dart:2641 AstCodeGenerator._generateDirectClosureCall" @unported function _generate_direct_closure_call(self::AstCodeGenerator, node::NirInvoke, representation::ClosureRepresentation, closure_target::SingleClosureTarget) end
 
-@parity "dart2wasm/lib/code_generator.dart:2673 AstCodeGenerator._generateClosureInvocation" @unported function _generate_closure_invocation(self::AstCodeGenerator, node, representation::ClosureRepresentation) end
+@parity "dart2wasm/lib/code_generator.dart:2673 AstCodeGenerator._generateClosureInvocation" @unported function _generate_closure_invocation(self::AstCodeGenerator, node::NirInvoke, representation::ClosureRepresentation) end
 
-@parity "dart2wasm/lib/code_generator.dart:2728 AstCodeGenerator.visitLocalFunctionInvocation" @unported function visit_local_function_invocation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2728 AstCodeGenerator.visitLocalFunctionInvocation" @unported function visit_local_function_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2747 AstCodeGenerator.visitInstantiation" @unported function visit_instantiation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2747 AstCodeGenerator.visitInstantiation" @unported function visit_instantiation(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2792 AstCodeGenerator.visitLogicalExpression" @unported function visit_logical_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2792 AstCodeGenerator.visitLogicalExpression" @unported function visit_logical_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2803 AstCodeGenerator.visitNot" @unported function visit_not(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2803 AstCodeGenerator.visitNot" @unported function visit_not(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2810 AstCodeGenerator.visitConditionalExpression" @unported function visit_conditional_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2810 AstCodeGenerator.visitConditionalExpression" @unported function visit_conditional_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2824 AstCodeGenerator.visitNullCheck" @unported function visit_null_check(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2824 AstCodeGenerator.visitNullCheck" @unported function visit_null_check(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
 # a Julia call's arguments are its operands after the callee (`args[1]`), all positional: Julia has
 # no type arguments at run time, lowering passes keywords positionally, and an optional argument
@@ -838,76 +839,76 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation" @unported function visit_string_concatenation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation" @unported function visit_string_concatenation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow" @unported function visit_throw(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow" @unported function visit_throw(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" @unported function visit_rethrow(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" @unported function visit_rethrow(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:2975 AstCodeGenerator.visitConstantExpression" function visit_constant_expression(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     instantiate_constant(self, node.c, expected_type)
     return expected_type
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2984 AstCodeGenerator.visitNullLiteral" @unported function visit_null_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2984 AstCodeGenerator.visitNullLiteral" @unported function visit_null_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2990 AstCodeGenerator.visitStringLiteral" @unported function visit_string_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2990 AstCodeGenerator.visitStringLiteral" @unported function visit_string_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2996 AstCodeGenerator.visitBoolLiteral" @unported function visit_bool_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2996 AstCodeGenerator.visitBoolLiteral" @unported function visit_bool_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3002 AstCodeGenerator.visitIntLiteral" @unported function visit_int_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3002 AstCodeGenerator.visitIntLiteral" @unported function visit_int_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3008 AstCodeGenerator.visitDoubleLiteral" @unported function visit_double_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3008 AstCodeGenerator.visitDoubleLiteral" @unported function visit_double_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3014 AstCodeGenerator.visitListLiteral" @unported function visit_list_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3014 AstCodeGenerator.visitListLiteral" @unported function visit_list_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3049 AstCodeGenerator.makeArrayFromExpressions" @unported function make_array_from_expressions(self::AstCodeGenerator, expressions::Vector{Any}, element_type) end
+@parity "dart2wasm/lib/code_generator.dart:3049 AstCodeGenerator.makeArrayFromExpressions" @unported function make_array_from_expressions(self::AstCodeGenerator, expressions::Vector{NirValue}, element_type::Type) end
 
 @parity "dart2wasm/lib/code_generator.dart:3062 AstCodeGenerator.makeArray" @unported function make_array(self::AstCodeGenerator, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item::Function) end
 
-@parity "dart2wasm/lib/code_generator.dart:3071 AstCodeGenerator.visitMapLiteral" @unported function visit_map_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3071 AstCodeGenerator.visitMapLiteral" @unported function visit_map_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3119 AstCodeGenerator.visitSetLiteral" @unported function visit_set_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3119 AstCodeGenerator.visitSetLiteral" @unported function visit_set_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3154 AstCodeGenerator.visitTypeLiteral" @unported function visit_type_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3154 AstCodeGenerator.visitTypeLiteral" @unported function visit_type_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3159 AstCodeGenerator.visitIsExpression" @unported function visit_is_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3159 AstCodeGenerator.visitIsExpression" @unported function visit_is_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" @unported function visit_as_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" @unported function visit_as_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3194 AstCodeGenerator.visitLoadLibrary" @unported function visit_load_library(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3194 AstCodeGenerator.visitLoadLibrary" @unported function visit_load_library(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3201 AstCodeGenerator.visitCheckLibraryIsLoaded" @unported function visit_check_library_is_loaded(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3201 AstCodeGenerator.visitCheckLibraryIsLoaded" @unported function visit_check_library_is_loaded(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter" @unported function instantiate_type_parameter(self::AstCodeGenerator, parameter) end
+@parity "dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter" @unported function instantiate_type_parameter(self::AstCodeGenerator, parameter::TypeVar) end
 
-@parity "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral" @unported function visit_record_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral" @unported function visit_record_literal(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3258 AstCodeGenerator.visitRecordIndexGet" @unported function visit_record_index_get(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3258 AstCodeGenerator.visitRecordIndexGet" @unported function visit_record_index_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3278 AstCodeGenerator.visitRecordNameGet" @unported function visit_record_name_get(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3278 AstCodeGenerator.visitRecordNameGet" @unported function visit_record_name_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3292 AstCodeGenerator.visitFileUriExpression" @unported function visit_file_uri_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3292 AstCodeGenerator.visitFileUriExpression" @unported function visit_file_uri_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3306 AstCodeGenerator._generateArgumentTypeCheck" @unported function _generate_argument_type_check(self::AstCodeGenerator, arg_name::String, argument_type::WasmBuilder.IR.RefType, tested_against_type) end
+@parity "dart2wasm/lib/code_generator.dart:3306 AstCodeGenerator._generateArgumentTypeCheck" @unported function _generate_argument_type_check(self::AstCodeGenerator, arg_name::String, argument_type::WasmBuilder.IR.RefType, tested_against_type::Type) end
 
-@parity "dart2wasm/lib/code_generator.dart:3341 AstCodeGenerator._generateTypeArgumentBoundCheck" @unported function _generate_type_argument_bound_check(self::AstCodeGenerator, arg_name::String, type_local::WasmBuilder.IR.Local, bound) end
+@parity "dart2wasm/lib/code_generator.dart:3341 AstCodeGenerator._generateTypeArgumentBoundCheck" @unported function _generate_type_argument_bound_check(self::AstCodeGenerator, arg_name::String, type_local::WasmBuilder.IR.Local, bound::Type) end
 
 @parity "dart2wasm/lib/code_generator.dart:3364 AstCodeGenerator._emitString" @unported function _emit_string(self::AstCodeGenerator, str::String) end
 
-@parity "dart2wasm/lib/code_generator.dart:3370 AstCodeGenerator.visitPatternSwitchStatement" @unported function visit_pattern_switch_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:3370 AstCodeGenerator.visitPatternSwitchStatement" @unported function visit_pattern_switch_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:3377 AstCodeGenerator.visitPatternVariableDeclaration" @unported function visit_pattern_variable_declaration(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:3377 AstCodeGenerator.visitPatternVariableDeclaration" @unported function visit_pattern_variable_declaration(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:3384 AstCodeGenerator.visitIfCaseStatement" @unported function visit_if_case_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:3384 AstCodeGenerator.visitIfCaseStatement" @unported function visit_if_case_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
 @parity "dart2wasm/lib/code_generator.dart:3390 AstCodeGenerator.debugRuntimePrint" @unported function debug_runtime_print(self::AstCodeGenerator, s::String) end
 
-@parity "dart2wasm/lib/code_generator.dart:3402 AstCodeGenerator.visitAuxiliaryStatement" @unported function visit_auxiliary_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:3402 AstCodeGenerator.visitAuxiliaryStatement" @unported function visit_auxiliary_statement(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:3409 AstCodeGenerator.visitAuxiliaryInitializer" @unported function visit_auxiliary_initializer(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:3409 AstCodeGenerator.visitAuxiliaryInitializer" @unported function visit_auxiliary_initializer(self::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:3415 AstCodeGenerator.emitUnimplementedExternalError" @unported function emit_unimplemented_external_error(self::AstCodeGenerator, member) end
+@parity "dart2wasm/lib/code_generator.dart:3415 AstCodeGenerator.emitUnimplementedExternalError" @unported function emit_unimplemented_external_error(self::AstCodeGenerator, member::Core.MethodInstance) end
 
 # dart's Constant is Julia's Const lattice element; deferred loading is out of scope
 # (dev/skeleton_scope.toml), so no constant has a deferred module to guard
@@ -916,7 +917,7 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:3450 AstCodeGenerator.instantiateConstantBackendUse" @unported function instantiate_constant_backend_use(self::AstCodeGenerator, constant, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3450 AstCodeGenerator.instantiateConstantBackendUse" @unported function instantiate_constant_backend_use(self::AstCodeGenerator, constant::NirConst, expected_type::WasmBuilder.IR.ValueType) end
 
 # a Julia method is synchronous (tasks are out of scope, rejected by Julia's verifier) and never a
 # constructor, field or tear-off (a struct's constructor is Expr(:new) in a body, a field read a
@@ -990,13 +991,13 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:4106 InvocationCreationStubGenerator.generate" @unported function generate(self::InvocationCreationStubGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
 
-@parity "dart2wasm/lib/code_generator.dart:4167 createInvocationObject" @unported function create_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name, type_args_local::WasmBuilder.IR.Local, positional_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local) end
+@parity "dart2wasm/lib/code_generator.dart:4167 createInvocationObject" @unported function create_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol, type_args_local::WasmBuilder.IR.Local, positional_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local) end
 
 @parity "dart2wasm/lib/code_generator.dart:4196 ConstructorCodeGeneratorBase" @unported function ConstructorCodeGeneratorBase(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member) end
 
-@parity "dart2wasm/lib/code_generator.dart:4202 ConstructorCodeGeneratorBase._getConstructorArgumentLocals" @unported function _get_constructor_argument_locals(self::ConstructorCodeGeneratorBase, type_parameters::Vector{Any}, parameters::Vector{Any}) end
+@parity "dart2wasm/lib/code_generator.dart:4202 ConstructorCodeGeneratorBase._getConstructorArgumentLocals" @unported function _get_constructor_argument_locals(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}) end
 
-@parity "dart2wasm/lib/code_generator.dart:4219 ConstructorCodeGeneratorBase._setupConstructorParameters" @unported function _setup_constructor_parameters(self::ConstructorCodeGeneratorBase, type_parameters::Vector{Any}, parameters::Vector{Any}, parameter_offset::Int64; is_forwarder = nothing) end
+@parity "dart2wasm/lib/code_generator.dart:4219 ConstructorCodeGeneratorBase._setupConstructorParameters" @unported function _setup_constructor_parameters(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}, parameter_offset::Int64; is_forwarder = nothing) end
 
 @parity "dart2wasm/lib/code_generator.dart:4252 ConstructorInitializerCodeGenerator" @unported function ConstructorInitializerCodeGenerator(translator, function_type, member) end
 
@@ -1008,25 +1009,25 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:4434 ConstructorInitializerCodeGenerator._setupInitializerListParametersAndContexts" @unported function _setup_initializer_list_parameters_and_contexts(self::ConstructorInitializerCodeGenerator) end
 
-@parity "dart2wasm/lib/code_generator.dart:4448 ConstructorInitializerCodeGenerator.getTypeFields" @unported function get_type_fields(self::ConstructorInitializerCodeGenerator, cls, info::ClassInfo) end
+@parity "dart2wasm/lib/code_generator.dart:4448 ConstructorInitializerCodeGenerator.getTypeFields" @unported function get_type_fields(self::ConstructorInitializerCodeGenerator, cls::DataType, info::ClassInfo) end
 
 @parity "dart2wasm/lib/code_generator.dart:4460 ConstructorInitializerCodeGenerator._setupDefaultFieldValues" @unported function _setup_default_field_values(self::ConstructorInitializerCodeGenerator, info::ClassInfo) end
 
-@parity "dart2wasm/lib/code_generator.dart:4487 ConstructorInitializerCodeGenerator.visitInvalidInitializer" @unported function visit_invalid_initializer(self::ConstructorInitializerCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:4487 ConstructorInitializerCodeGenerator.visitInvalidInitializer" @unported function visit_invalid_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:4490 ConstructorInitializerCodeGenerator.visitAssertInitializer" @unported function visit_assert_initializer(self::ConstructorInitializerCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:4490 ConstructorInitializerCodeGenerator.visitAssertInitializer" @unported function visit_assert_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:4495 ConstructorInitializerCodeGenerator.visitLocalInitializer" @unported function visit_local_initializer(self::ConstructorInitializerCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:4495 ConstructorInitializerCodeGenerator.visitLocalInitializer" @unported function visit_local_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:4500 ConstructorInitializerCodeGenerator.visitFieldInitializer" @unported function visit_field_initializer(self::ConstructorInitializerCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:4500 ConstructorInitializerCodeGenerator.visitFieldInitializer" @unported function visit_field_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:4516 ConstructorInitializerCodeGenerator.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::ConstructorInitializerCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:4516 ConstructorInitializerCodeGenerator.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:4540 ConstructorInitializerCodeGenerator.visitSuperInitializer" @unported function visit_super_initializer(self::ConstructorInitializerCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:4540 ConstructorInitializerCodeGenerator.visitSuperInitializer" @unported function visit_super_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:4566 ConstructorInitializerCodeGenerator.visitVariableGet" @unported function visit_variable_get(self::ConstructorInitializerCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:4566 ConstructorInitializerCodeGenerator.visitVariableGet" @unported function visit_variable_get(self::ConstructorInitializerCodeGenerator, node::Union{NirSSA,NirArgument}, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:4589 ConstructorInitializerCodeGenerator.visitVariableSet" @unported function visit_variable_set(self::ConstructorInitializerCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:4589 ConstructorInitializerCodeGenerator.visitVariableSet" @unported function visit_variable_set(self::ConstructorInitializerCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:4617 ConstructorAllocatorCodeGenerator" @unported function ConstructorAllocatorCodeGenerator(translator, function_type, member) end
 
@@ -1082,17 +1083,17 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5157 BrTableInfo._" @unported function BrTableInfo__(min_value, max_value, case_map, _br_table_expr) end
 
-@parity "dart2wasm/lib/code_generator.dart:5162 BrTableInfo.build" @unported function BrTableInfo_build(case_map::Dict{Int64,Any}, br_table_expr::Function; min_value::Int64, max_value::Int64) end
+@parity "dart2wasm/lib/code_generator.dart:5162 BrTableInfo.build" @unported function BrTableInfo_build(case_map::Dict{Int64,NoCounterpart}, br_table_expr::Function; min_value::Int64, max_value::Int64) end
 
-@parity "dart2wasm/lib/code_generator.dart:5174 BrTableInfo._isTooSparse" @unported function BrTableInfo__is_too_sparse(min::Int64, max::Int64, case_map::Dict{Int64,Any}) end
+@parity "dart2wasm/lib/code_generator.dart:5174 BrTableInfo._isTooSparse" @unported function BrTableInfo__is_too_sparse(min::Int64, max::Int64, case_map::Dict{Int64,NoCounterpart}) end
 
 @parity "dart2wasm/lib/code_generator.dart:5180 BrTableInfo._rangeSize" @unported function BrTableInfo__range_size(min::Int64, max::Int64) end
 
 @parity "dart2wasm/lib/code_generator.dart:5182 BrTableInfo.emitBrTableExpr" @unported function emit_br_table_expr(self::BrTableInfo, b::WasmBuilder.InstructionsBuilder, switch_expr_local::WasmBuilder.IR.Local) end
 
-@parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" @unported function SwitchInfo(code_gen::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" @unported function SwitchInfo(code_gen::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases" @unported function _initialize_special_cases(self::SwitchInfo, node) end
+@parity "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases" @unported function _initialize_special_cases(self::SwitchInfo, node::NoCounterpart) end
 
 @parity "dart2wasm/lib/code_generator.dart:5534 _VirtualCallKind.toString" @unported function Base.show(io::IO, self::_VirtualCallKind) end
 
@@ -1118,11 +1119,11 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5684 MacroAssembler.emitClassIdRangeCheck" @unported function emit_class_id_range_check(self::WasmBuilder.InstructionsBuilder, ranges::Vector{Range}) end
 
-@parity "dart2wasm/lib/code_generator.dart:5709 MacroAssembler.classIdSearch" @unported function class_id_search(self::WasmBuilder.InstructionsBuilder, ranges, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
+@parity "dart2wasm/lib/code_generator.dart:5709 MacroAssembler.classIdSearch" @unported function class_id_search(self::WasmBuilder.InstructionsBuilder, ranges::Vector{NamedTuple{(:range, :value)}}, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
 
-@parity "dart2wasm/lib/code_generator.dart:5729 MacroAssembler._binaryClassIdSearch" @unported function _binary_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
+@parity "dart2wasm/lib/code_generator.dart:5729 MacroAssembler._binaryClassIdSearch" @unported function _binary_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges::Vector{NamedTuple{(:range, :value)}}, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
 
-@parity "dart2wasm/lib/code_generator.dart:5805 MacroAssembler._linearClassIdSearch" @unported function _linear_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
+@parity "dart2wasm/lib/code_generator.dart:5805 MacroAssembler._linearClassIdSearch" @unported function _linear_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges::Vector{NamedTuple{(:range, :value)}}, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
 
 @parity "dart2wasm/lib/code_generator.dart:5849 MacroAssembler.emitInstantiationClosureCheck" @unported function emit_instantiation_closure_check(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
 
@@ -1134,11 +1135,11 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5922 MacroAssembler.emitGetClosureVtable" @unported function emit_get_closure_vtable(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
 
-@parity "dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext" @unported function restore_suspend_state_context(self::WasmBuilder.InstructionsBuilder, suspend_state_local::WasmBuilder.IR.Local, suspend_state_struct::WasmBuilder.IR.StructType, suspend_state_context_field::Int64, closures::Closures, context::Union{Nothing,Context}, this_local; clone_context_for = nothing) end
+@parity "dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext" @unported function restore_suspend_state_context(self::WasmBuilder.InstructionsBuilder, suspend_state_local::WasmBuilder.IR.Local, suspend_state_struct::WasmBuilder.IR.StructType, suspend_state_context_field::Int64, closures::Closures, context::Union{Nothing,Context}, this_local::Union{Nothing,WasmBuilder.IR.Local}; clone_context_for = nothing) end
 
-@parity "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain" @unported function restore_this_and_context_chain(self::WasmBuilder.InstructionsBuilder, innermost_context::Context, this_local) end
+@parity "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain" @unported function restore_this_and_context_chain(self::WasmBuilder.InstructionsBuilder, innermost_context::Context, this_local::Union{Nothing,WasmBuilder.IR.Local}) end
 
-@parity "dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext" @unported function clone_function_level_context(self::WasmBuilder.InstructionsBuilder, closures::Closures, context::Context, function_node) end
+@parity "dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext" @unported function clone_function_level_context(self::WasmBuilder.InstructionsBuilder, closures::Closures, context::Context, function_node::NirBody) end
 
 @parity "dart2wasm/lib/code_generator.dart:6035 MacroAssembler.invoke" @unported function MacroAssembler_invoke(self::WasmBuilder.InstructionsBuilder, target::CallTarget; force_inline = nothing) end
 
@@ -1190,4 +1191,4 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:6221 LambdaCallTarget" @unported function LambdaCallTarget(signature, _translator, _lambda) end
 
-@parity "dart2wasm/lib/code_generator.dart:6239 guardCanMatchJSException" @unported function guard_can_match_js_exception(translator::Translator, guard) end
+@parity "dart2wasm/lib/code_generator.dart:6239 guardCanMatchJSException" @unported function guard_can_match_js_exception(translator::Translator, guard::Type) end

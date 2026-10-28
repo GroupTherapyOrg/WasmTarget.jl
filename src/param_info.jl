@@ -35,7 +35,7 @@ end
 
 @parity "dart2wasm/lib/param_info.dart:39 ParameterInfo.paramCount" param_count(self::ParameterInfo)::Int = length(self.positional) + length(self.named)
 
-@parity "dart2wasm/lib/param_info.dart:41 ParameterInfo._defaultValue" @unported function ParameterInfo__default_value(param) end
+@parity "dart2wasm/lib/param_info.dart:41 ParameterInfo._defaultValue" @unported function ParameterInfo__default_value(param::NirArgument) end
 
 @parity "dart2wasm/lib/param_info.dart:52 ParameterInfo._" ParameterInfo__(takes_context_or_receiver::Bool, type_param_count::Int, positional::Vector{Union{Nothing,Constant}},
         named::LinkedHashMap{String,Union{Nothing,Constant}})::ParameterInfo =
@@ -56,6 +56,6 @@ rejects, located. `use_default_value_sentinel` has nothing to mark: no parameter
     return ParameterInfo__(!Base.issingletontype(params[1]), 0, positional, LinkedHashMap{String,Union{Nothing,Constant}}())
 end
 
-@parity "dart2wasm/lib/param_info.dart:115 ParameterInfo.fromLocalFunction" @unported function ParameterInfo_from_local_function(function_) end
+@parity "dart2wasm/lib/param_info.dart:115 ParameterInfo.fromLocalFunction" @unported function ParameterInfo_from_local_function(function_::NirBody) end
 
 @parity "dart2wasm/lib/param_info.dart:129 ParameterInfo.merge" @unported function Base.merge(self::ParameterInfo, other::ParameterInfo) end

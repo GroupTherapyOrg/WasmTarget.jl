@@ -64,22 +64,22 @@ end
 
 @parity "dart2wasm/lib/namer.dart:74 _ExternalMemberNamer" @unported function _ExternalMemberNamer(core_types, _export_namer) end
 
-@parity "dart2wasm/lib/namer.dart:75 _ExternalMemberNamer.getImportName" @unported function get_import_name(self::_ExternalMemberNamer, member) end
+@parity "dart2wasm/lib/namer.dart:75 _ExternalMemberNamer.getImportName" @unported function get_import_name(self::_ExternalMemberNamer, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/namer.dart:79 _ExternalMemberNamer.getExportName" @unported function get_export_name(self::_ExternalMemberNamer, member) end
+@parity "dart2wasm/lib/namer.dart:79 _ExternalMemberNamer.getExportName" @unported function get_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/namer.dart:86 _ExternalMemberNamer.registerExportName" @unported function register_export_name(self::_ExternalMemberNamer, member) end
+@parity "dart2wasm/lib/namer.dart:86 _ExternalMemberNamer.registerExportName" @unported function register_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/namer.dart:111 _InteropHelperMemberNamer" @unported function _InteropHelperMemberNamer(core_types, options::TranslatorOptions) end
 
-@parity "dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName" @unported function get_import_name(self::_InteropHelperMemberNamer, member) end
+@parity "dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName" @unported function get_import_name(self::_InteropHelperMemberNamer, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/namer.dart:142 InteropMemberNamer" @unported function InteropMemberNamer(core_types, export_namer::Namer, options::TranslatorOptions) end
+@parity "dart2wasm/lib/namer.dart:142 InteropMemberNamer" @unported function InteropMemberNamer(core_types::NoCounterpart, export_namer::Namer, options::TranslatorOptions) end
 
 @parity "dart2wasm/lib/namer.dart:149 InteropMemberNamer.interopHelperModuleName" @unported function interop_helper_module_name(self::InteropMemberNamer) end
 
-@parity "dart2wasm/lib/namer.dart:156 InteropMemberNamer.getImportName" @unported function get_import_name(self::InteropMemberNamer, member) end
+@parity "dart2wasm/lib/namer.dart:156 InteropMemberNamer.getImportName" @unported function get_import_name(self::InteropMemberNamer, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/namer.dart:165 InteropMemberNamer.getExportName" @unported function get_export_name(self::InteropMemberNamer, member) end
+@parity "dart2wasm/lib/namer.dart:165 InteropMemberNamer.getExportName" @unported function get_export_name(self::InteropMemberNamer, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/namer.dart:172 InteropMemberNamer.registerExternalExportName" @unported function register_external_export_name(self::InteropMemberNamer, member) end
+@parity "dart2wasm/lib/namer.dart:172 InteropMemberNamer.registerExternalExportName" @unported function register_external_export_name(self::InteropMemberNamer, member::Core.MethodInstance) end

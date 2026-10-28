@@ -134,7 +134,7 @@ A binding with no value has no initializer; a read of it is Julia's UndefVarErro
     return NirConst(Core.Const(getglobal(variable.mod, variable.name)))
 end
 
-@parity "dart2wasm/lib/globals.dart:126 DartGlobals.getDefinitionForStaticField" @unported function get_definition_for_static_field(self::DartGlobals, field) end
+@parity "dart2wasm/lib/globals.dart:126 DartGlobals.getDefinitionForStaticField" @unported function get_definition_for_static_field(self::DartGlobals, field::ClassField) end
 
 @parity "dart2wasm/lib/globals.dart:225 DartGlobals._defineInitializerFlag" function _define_initializer_flag(self::DartGlobals, field::GlobalRef, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.GlobalBuilder
     local member_name = _member_name(self, field)

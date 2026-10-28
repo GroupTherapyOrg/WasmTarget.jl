@@ -6,8 +6,8 @@ ConstantEvaluator's dart fields: `_checkBounds`, `_minify`, `_omitErrorDetails`,
 """
 @parity "dart2wasm/lib/constant_evaluator.dart:16 ConstantEvaluator" @unported struct ConstantEvaluator end
 
-@parity "dart2wasm/lib/constant_evaluator.dart:30 ConstantEvaluator" @unported function ConstantEvaluator(options::WasmCompilerOptions, target::WasmTarget, component, core_types, class_hierarchy, library_index) end
+@parity "dart2wasm/lib/constant_evaluator.dart:30 ConstantEvaluator" @unported function ConstantEvaluator(options::WasmCompilerOptions, target::WasmTarget, component::NirWorld, core_types::NoCounterpart, class_hierarchy::NoCounterpart, library_index::NoCounterpart) end
 
-@parity "dart2wasm/lib/constant_evaluator.dart:83 ConstantEvaluator.visitStaticGet" @unported function visit_static_get(self::ConstantEvaluator, node) end
+@parity "dart2wasm/lib/constant_evaluator.dart:83 ConstantEvaluator.visitStaticGet" @unported function visit_static_get(self::ConstantEvaluator, node::NirGlobalRead) end
 
-@parity "dart2wasm/lib/constant_evaluator.dart:108 ConstantEvaluator.shouldEvaluateMember" @unported function should_evaluate_member(self::ConstantEvaluator, node) end
+@parity "dart2wasm/lib/constant_evaluator.dart:108 ConstantEvaluator.shouldEvaluateMember" @unported function should_evaluate_member(self::ConstantEvaluator, node::Core.MethodInstance) end

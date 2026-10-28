@@ -59,11 +59,11 @@ end
 
 @parity "dart2wasm/lib/target.dart:57 ConstantResolver" @unported function ConstantResolver(evaluator) end
 
-@parity "dart2wasm/lib/target.dart:64 ConstantResolver.visitLibrary" @unported function visit_library(self::ConstantResolver, library) end
+@parity "dart2wasm/lib/target.dart:64 ConstantResolver.visitLibrary" @unported function visit_library(self::ConstantResolver, library::Module) end
 
-@parity "dart2wasm/lib/target.dart:76 ConstantResolver.defaultMember" @unported function default_member(self::ConstantResolver, member) end
+@parity "dart2wasm/lib/target.dart:76 ConstantResolver.defaultMember" @unported function default_member(self::ConstantResolver, member::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/target.dart:85 ConstantResolver.visitConstantExpression" @unported function visit_constant_expression(self::ConstantResolver, node) end
+@parity "dart2wasm/lib/target.dart:85 ConstantResolver.visitConstantExpression" @unported function visit_constant_expression(self::ConstantResolver, node::NirConst) end
 
 @parity "dart2wasm/lib/target.dart:102 WasmTarget" WasmTarget(; enable_experimental_ffi::Bool = true, enable_experimental_wasm_interop::Bool = true,
         remove_asserts::Bool = false, mode::Mode = Mode_regular)::WasmTarget =
@@ -108,23 +108,23 @@ end
             String["dart:_js_helper", "dart:_js_types", "dart:js_interop", "dart:js_interop_unsafe"])...]
 end
 
-@parity "dart2wasm/lib/target.dart:205 WasmTarget.mayDefineRestrictedType" @unported function may_define_restricted_type(self::WasmTarget, uri) end
+@parity "dart2wasm/lib/target.dart:205 WasmTarget.mayDefineRestrictedType" @unported function may_define_restricted_type(self::WasmTarget, uri::String) end
 
-@parity "dart2wasm/lib/target.dart:208 WasmTarget.allowPlatformPrivateLibraryAccess" @unported function allow_platform_private_library_access(self::WasmTarget, importer, imported) end
+@parity "dart2wasm/lib/target.dart:208 WasmTarget.allowPlatformPrivateLibraryAccess" @unported function allow_platform_private_library_access(self::WasmTarget, importer::String, imported::String) end
 
-@parity "dart2wasm/lib/target.dart:232 WasmTarget._patchHostEndian" @unported function _patch_host_endian(self::WasmTarget, core_types) end
+@parity "dart2wasm/lib/target.dart:232 WasmTarget._patchHostEndian" @unported function _patch_host_endian(self::WasmTarget, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:253 WasmTarget._performJSInteropTransformations" @unported function _perform_js_interop_transformations(self::WasmTarget, component, core_types, hierarchy, interop_dependent_libraries::Set{Any}, diagnostic_reporter, reference_from_index) end
+@parity "dart2wasm/lib/target.dart:253 WasmTarget._performJSInteropTransformations" @unported function _perform_js_interop_transformations(self::WasmTarget, component::NirWorld, core_types::NoCounterpart, hierarchy::NoCounterpart, interop_dependent_libraries::Set{Module}, diagnostic_reporter::NoCounterpart, reference_from_index::Union{Nothing,NoCounterpart}) end
 
-@parity "dart2wasm/lib/target.dart:288 WasmTarget.performPreConstantEvaluationTransformations" @unported function perform_pre_constant_evaluation_transformations(self::WasmTarget, component, core_types, libraries::Vector{Any}, diagnostic_reporter; logger = nothing, changed_structure_notifier = nothing) end
+@parity "dart2wasm/lib/target.dart:288 WasmTarget.performPreConstantEvaluationTransformations" @unported function perform_pre_constant_evaluation_transformations(self::WasmTarget, component::NirWorld, core_types::NoCounterpart, libraries::Vector{Module}, diagnostic_reporter::NoCounterpart; logger = nothing, changed_structure_notifier = nothing) end
 
-@parity "dart2wasm/lib/target.dart:300 WasmTarget.performModularTransformationsOnLibraries" @unported function perform_modular_transformations_on_libraries(self::WasmTarget, component, core_types, hierarchy, libraries::Vector{Any}, environment_defines::Union{Nothing,Dict{String,String}}, diagnostic_reporter, reference_from_index; logger = nothing, changed_structure_notifier = nothing) end
+@parity "dart2wasm/lib/target.dart:300 WasmTarget.performModularTransformationsOnLibraries" @unported function perform_modular_transformations_on_libraries(self::WasmTarget, component::NirWorld, core_types::NoCounterpart, hierarchy::NoCounterpart, libraries::Vector{Module}, environment_defines::Union{Nothing,Dict{String,String}}, diagnostic_reporter::NoCounterpart, reference_from_index::Union{Nothing,NoCounterpart}; logger = nothing, changed_structure_notifier = nothing) end
 
-@parity "dart2wasm/lib/target.dart:464 WasmTarget.performTransformationsOnProcedure" @unported function perform_transformations_on_procedure(self::WasmTarget, core_types, hierarchy, procedure, environment_defines::Union{Nothing,Dict{String,String}}; logger = nothing, diagnostic_reporter) end
+@parity "dart2wasm/lib/target.dart:464 WasmTarget.performTransformationsOnProcedure" @unported function perform_transformations_on_procedure(self::WasmTarget, core_types::NoCounterpart, hierarchy::NoCounterpart, procedure::Core.MethodInstance, environment_defines::Union{Nothing,Dict{String,String}}; logger = nothing, diagnostic_reporter::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:475 WasmTarget._instantiateInvocation" @unported function _instantiate_invocation(self::WasmTarget, core_types, name::String, arguments) end
+@parity "dart2wasm/lib/target.dart:475 WasmTarget._instantiateInvocation" @unported function _instantiate_invocation(self::WasmTarget, core_types::NoCounterpart, name::String, arguments::Vector{NirValue}) end
 
-@parity "dart2wasm/lib/target.dart:537 WasmTarget.instantiateInvocation" @unported function instantiate_invocation(self::WasmTarget, core_types, receiver, name::String, arguments, offset::Int64, is_super::Bool) end
+@parity "dart2wasm/lib/target.dart:537 WasmTarget.instantiateInvocation" @unported function instantiate_invocation(self::WasmTarget, core_types::NoCounterpart, receiver::NirValue, name::String, arguments::Vector{NirValue}, offset::Int64, is_super::Bool) end
 
 @parity "dart2wasm/lib/target.dart:549 WasmTarget.supportsSetLiterals" supports_set_literals(self::WasmTarget)::Bool = true
 
@@ -140,38 +140,38 @@ end
 
 @parity "dart2wasm/lib/target.dart:568 WasmTarget.useStaticFieldLowering" use_static_field_lowering(self::WasmTarget)::Bool = false
 
-@parity "dart2wasm/lib/target.dart:571 WasmTarget.concreteListLiteralClass" @unported function concrete_list_literal_class(self::WasmTarget, core_types) end
+@parity "dart2wasm/lib/target.dart:571 WasmTarget.concreteListLiteralClass" @unported function concrete_list_literal_class(self::WasmTarget, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:579 WasmTarget.concreteConstListLiteralClass" @unported function concrete_const_list_literal_class(self::WasmTarget, core_types) end
+@parity "dart2wasm/lib/target.dart:579 WasmTarget.concreteConstListLiteralClass" @unported function concrete_const_list_literal_class(self::WasmTarget, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:587 WasmTarget.concreteMapLiteralClass" @unported function concrete_map_literal_class(self::WasmTarget, core_types) end
+@parity "dart2wasm/lib/target.dart:587 WasmTarget.concreteMapLiteralClass" @unported function concrete_map_literal_class(self::WasmTarget, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:595 WasmTarget.concreteConstMapLiteralClass" @unported function concrete_const_map_literal_class(self::WasmTarget, core_types) end
+@parity "dart2wasm/lib/target.dart:595 WasmTarget.concreteConstMapLiteralClass" @unported function concrete_const_map_literal_class(self::WasmTarget, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:603 WasmTarget.concreteSetLiteralClass" @unported function concrete_set_literal_class(self::WasmTarget, core_types) end
+@parity "dart2wasm/lib/target.dart:603 WasmTarget.concreteSetLiteralClass" @unported function concrete_set_literal_class(self::WasmTarget, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:611 WasmTarget.concreteConstSetLiteralClass" @unported function concrete_const_set_literal_class(self::WasmTarget, core_types) end
+@parity "dart2wasm/lib/target.dart:611 WasmTarget.concreteConstSetLiteralClass" @unported function concrete_const_set_literal_class(self::WasmTarget, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:619 WasmTarget.concreteConstSymbolLiteralClass" @unported function concrete_const_symbol_literal_class(self::WasmTarget, core_types) end
+@parity "dart2wasm/lib/target.dart:619 WasmTarget.concreteConstSymbolLiteralClass" @unported function concrete_const_symbol_literal_class(self::WasmTarget, core_types::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:624 WasmTarget.concreteStringLiteralClass" @unported function concrete_string_literal_class(self::WasmTarget, core_types, value::String) end
+@parity "dart2wasm/lib/target.dart:624 WasmTarget.concreteStringLiteralClass" @unported function concrete_string_literal_class(self::WasmTarget, core_types::NoCounterpart, value::String) end
 
-@parity "dart2wasm/lib/target.dart:632 WasmTarget.concreteClosureClass" @unported function concrete_closure_class(self::WasmTarget, core_types) end
+@parity "dart2wasm/lib/target.dart:632 WasmTarget.concreteClosureClass" @unported function concrete_closure_class(self::WasmTarget, core_types::NoCounterpart) end
 
 @parity "dart2wasm/lib/target.dart:637 WasmTarget.isSupportedPragma" is_supported_pragma(self::WasmTarget, pragma_name::String)::Bool =
     startswith(pragma_name, "wasm:") || startswith(pragma_name, "dyn-module:")
 
-@parity "dart2wasm/lib/target.dart:643 WasmTarget.getRecordImplementationClass" @unported function get_record_implementation_class(self::WasmTarget, core_types, num_positional_fields::Int64, named_fields::Vector{String}) end
+@parity "dart2wasm/lib/target.dart:643 WasmTarget.getRecordImplementationClass" @unported function get_record_implementation_class(self::WasmTarget, core_types::NoCounterpart, num_positional_fields::Int64, named_fields::Vector{String}) end
 
-@parity "dart2wasm/lib/target.dart:650 WasmTarget.concreteIntLiteralClass" @unported function concrete_int_literal_class(self::WasmTarget, core_types, value::Int64) end
+@parity "dart2wasm/lib/target.dart:650 WasmTarget.concreteIntLiteralClass" @unported function concrete_int_literal_class(self::WasmTarget, core_types::NoCounterpart, value::Int64) end
 
-@parity "dart2wasm/lib/target.dart:654 WasmTarget.concreteDoubleLiteralClass" @unported function concrete_double_literal_class(self::WasmTarget, core_types, value::Float64) end
+@parity "dart2wasm/lib/target.dart:654 WasmTarget.concreteDoubleLiteralClass" @unported function concrete_double_literal_class(self::WasmTarget, core_types::NoCounterpart, value::Float64) end
 
 @parity "dart2wasm/lib/target.dart:661 WasmTarget.dartLibrarySupport" @unported function dart_library_support(self::WasmTarget) end
 
 @parity "dart2wasm/lib/target.dart:667 WasmVerification" WasmVerification()::WasmVerification = WasmVerification(Val(:_))
 
-@parity "dart2wasm/lib/target.dart:670 WasmVerification.allowNoFileOffset" @unported function allow_no_file_offset(self::WasmVerification, stage, node) end
+@parity "dart2wasm/lib/target.dart:670 WasmVerification.allowNoFileOffset" @unported function allow_no_file_offset(self::WasmVerification, stage::NoCounterpart, node::NirStmt) end
 
 @parity "dart2wasm/lib/target.dart:687 _dartFfiAndPragmaAllowlist" function _dart_ffi_and_pragma_allowlist()::Vector{String}
     return String[
@@ -183,8 +183,8 @@ end
     ]
 end
 
-@parity "dart2wasm/lib/target.dart:701 allowedToImportDartFfiOrUsePragmas" @unported function allowed_to_import_dart_ffi_or_use_pragmas(import_uri) end
+@parity "dart2wasm/lib/target.dart:701 allowedToImportDartFfiOrUsePragmas" @unported function allowed_to_import_dart_ffi_or_use_pragmas(import_uri::String) end
 
-@parity "dart2wasm/lib/target.dart:710 _checkDisallowedDartFfiUsage" @unported function _check_disallowed_dart_ffi_usage(library, diagnostic_reporter) end
+@parity "dart2wasm/lib/target.dart:710 _checkDisallowedDartFfiUsage" @unported function _check_disallowed_dart_ffi_usage(library::Module, diagnostic_reporter::NoCounterpart) end
 
-@parity "dart2wasm/lib/target.dart:734 _checkWasmImportExportPragmas" @unported function _check_wasm_import_export_pragmas(library, core_types, diagnostic_reporter) end
+@parity "dart2wasm/lib/target.dart:734 _checkWasmImportExportPragmas" @unported function _check_wasm_import_export_pragmas(library::Module, core_types::NoCounterpart, diagnostic_reporter::NoCounterpart) end

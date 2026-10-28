@@ -55,7 +55,7 @@ end
 
 @parity "dart2wasm/lib/modules.dart:219 ModuleStrategy" abstract type ModuleStrategy end
 
-@parity "dart2wasm/lib/modules.dart:14 _enclosingLibraryForReference" @unported function _enclosing_library_for_reference(reference) end
+@parity "dart2wasm/lib/modules.dart:14 _enclosingLibraryForReference" @unported function _enclosing_library_for_reference(reference::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/modules.dart:29 ModuleMetadataBuilder" ModuleMetadataBuilder(options::WasmCompilerOptions)::ModuleMetadataBuilder = ModuleMetadataBuilder(Val(:_), options)
 
@@ -98,7 +98,7 @@ default module.
     return m
 end
 
-@parity "dart2wasm/lib/modules.dart:176 ModuleOutputData.moduleForConstant" @unported function module_for_constant(self::ModuleOutputData, constant) end
+@parity "dart2wasm/lib/modules.dart:176 ModuleOutputData.moduleForConstant" @unported function module_for_constant(self::ModuleOutputData, constant::NirConst) end
 
 @parity "dart2wasm/lib/modules.dart:187 DefaultModuleStrategy" DefaultModuleStrategy(options::WasmCompilerOptions)::DefaultModuleStrategy = DefaultModuleStrategy(Val(:_), options)
 

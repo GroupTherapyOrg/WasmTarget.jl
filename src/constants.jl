@@ -268,13 +268,13 @@ end
 
 @parity "dart2wasm/lib/constants.dart:211 Constants.makeWasmI32" @unported function make_wasm_i32(self::Constants, value::Int64) end
 
-@parity "dart2wasm/lib/constants.dart:218 Constants.makeTypeArray" @unported function make_type_array(self::Constants, types) end
+@parity "dart2wasm/lib/constants.dart:218 Constants.makeTypeArray" @unported function make_type_array(self::Constants, types::AbstractVector{Type}) end
 
-@parity "dart2wasm/lib/constants.dart:226 Constants.makeNamedParameterConstant" @unported function make_named_parameter_constant(self::Constants, n) end
+@parity "dart2wasm/lib/constants.dart:226 Constants.makeNamedParameterConstant" @unported function make_named_parameter_constant(self::Constants, n::Pair{Symbol,Type}) end
 
-@parity "dart2wasm/lib/constants.dart:245 Constants.makeNamedParametersArray" @unported function make_named_parameters_array(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:245 Constants.makeNamedParametersArray" @unported function make_named_parameters_array(self::Constants, type_::Type) end
 
-@parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" @unported function make_array_of(self::Constants, element_type, entries::Vector{Any}; mutable_ = nothing) end
+@parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" @unported function make_array_of(self::Constants, element_type::Type, entries::Vector{NirConst}; mutable_ = nothing) end
 
 @parity "dart2wasm/lib/constants.dart:268 Constants.dummyStructConstant" dummy_struct_constant(self::Constants)::DummyValueConstant =
     _get_dummy_value_constant(self, WasmBuilder.IR.HeapType_struct; name = "#DummyStruct")
@@ -372,9 +372,9 @@ type of, its own kind's instance.
     reject!(Internal("dart2wasm/lib/constants.dart:387 Constants._lowerTypeConstantImpl: Unexpected DartType: $type_"), "Constants._lowerTypeConstantImpl")
 end
 
-@parity "dart2wasm/lib/constants.dart:399 Constants._makeTypeParameterTypeConstant" @unported function _make_type_parameter_type_constant(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:399 Constants._makeTypeParameterTypeConstant" @unported function _make_type_parameter_type_constant(self::Constants, type_::TypeVar) end
 
-@parity "dart2wasm/lib/constants.dart:416 Constants._makeStructuralParameterTypeConstant" @unported function _make_structural_parameter_type_constant(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:416 Constants._makeStructuralParameterTypeConstant" @unported function _make_structural_parameter_type_constant(self::Constants, type_::TypeVar) end
 
 """
 A class's type object: the instance of `DataType` whose class id is the class's, numbered by the
@@ -387,24 +387,24 @@ type arguments, its parameters bound.
     return NirConst(Core.Const(type_))
 end
 
-@parity "dart2wasm/lib/constants.dart:441 Constants._makeFutureOrTypeConstant" @unported function _make_future_or_type_constant(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:441 Constants._makeFutureOrTypeConstant" @unported function _make_future_or_type_constant(self::Constants, type_::NoCounterpart) end
 
-@parity "dart2wasm/lib/constants.dart:448 Constants._makeRecordTypeConstant" @unported function _make_record_type_constant(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:448 Constants._makeRecordTypeConstant" @unported function _make_record_type_constant(self::Constants, type_::Type) end
 
-@parity "dart2wasm/lib/constants.dart:464 Constants._makeFunctionTypeConstant" @unported function _make_function_type_constant(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:464 Constants._makeFunctionTypeConstant" @unported function _make_function_type_constant(self::Constants, type_::Type) end
 
-@parity "dart2wasm/lib/constants.dart:499 Constants._makeTopTypeConstant" @unported function _make_top_type_constant(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:499 Constants._makeTopTypeConstant" @unported function _make_top_type_constant(self::Constants, type_::Type) end
 
-@parity "dart2wasm/lib/constants.dart:512 Constants._makeAbstractFunctionTypeConstant" @unported function _make_abstract_function_type_constant(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:512 Constants._makeAbstractFunctionTypeConstant" @unported function _make_abstract_function_type_constant(self::Constants, type_::Type) end
 
-@parity "dart2wasm/lib/constants.dart:521 Constants._makeAbstractRecordTypeConstant" @unported function _make_abstract_record_type_constant(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:521 Constants._makeAbstractRecordTypeConstant" @unported function _make_abstract_record_type_constant(self::Constants, type_::Type) end
 
 @parity "dart2wasm/lib/constants.dart:530 Constants._makeBottomTypeConstant" function _make_bottom_type_constant(self::Constants, type_::Type)::NirConst
     type_ === Union{} || reject!(Internal("dart2wasm/lib/constants.dart:531 Constants._makeBottomTypeConstant: $type_ is no bottom type"), "Constants._makeBottomTypeConstant")
     return NirConst(Core.Const(type_))
 end
 
-@parity "dart2wasm/lib/constants.dart:539 Constants._makeTypeConstant" @unported function _make_type_constant(self::Constants, class_node, nullability, field_values::Dict{Any,Any}) end
+@parity "dart2wasm/lib/constants.dart:539 Constants._makeTypeConstant" @unported function _make_type_constant(self::Constants, class_node::DataType, nullability::NoCounterpart, field_values::Dict{Core.MethodInstance,NirConst}) end
 
 @parity "dart2wasm/lib/constants.dart:559 ConstantInstantiator" ConstantInstantiator(constants::Constants, b::WasmBuilder.InstructionsBuilder, expected_type::WasmBuilder.IR.ValueType,
         deferred_module_guard::Union{WasmBuilder.ModuleBuilder,Nothing})::ConstantInstantiator =
@@ -449,7 +449,7 @@ end
 @parity "dart2wasm/lib/constants.dart:587 ConstantInstantiator.defaultConstant" default_constant(self::ConstantInstantiator, constant::Union{NirConst,DummyValueConstant})::WasmBuilder.IR.ValueType =
     load_constant(self.constants._constant_accessor[], self.b, constant, self.deferred_module_guard)
 
-@parity "dart2wasm/lib/constants.dart:596 ConstantInstantiator.visitUnevaluatedConstant" @unported function visit_unevaluated_constant(self::ConstantInstantiator, constant) end
+@parity "dart2wasm/lib/constants.dart:596 ConstantInstantiator.visitUnevaluatedConstant" @unported function visit_unevaluated_constant(self::ConstantInstantiator, constant::NoCounterpart) end
 
 @parity "dart2wasm/lib/constants.dart:605 ConstantInstantiator.visitNullConstant" function visit_null_constant(self::ConstantInstantiator, node::Nothing)::WasmBuilder.IR.ValueType
     local expected_type = self.expected_type
@@ -720,28 +720,28 @@ A field Julia holds no value in (`#undef`) rejects, located.
     end; can_be_eager = true)
 end
 
-@parity "dart2wasm/lib/constants.dart:984 ConstantCreator._makeWasmArrayLiteral" @unported function _make_wasm_array_literal(self::ConstantCreator, constant; mutable_::Bool) end
+@parity "dart2wasm/lib/constants.dart:984 ConstantCreator._makeWasmArrayLiteral" @unported function _make_wasm_array_literal(self::ConstantCreator, constant::NirConst; mutable_::Bool) end
 
-@parity "dart2wasm/lib/constants.dart:1128 ConstantCreator.visitListConstant" @unported function visit_list_constant(self::ConstantCreator, constant) end
+@parity "dart2wasm/lib/constants.dart:1128 ConstantCreator.visitListConstant" @unported function visit_list_constant(self::ConstantCreator, constant::NirConst) end
 
-@parity "dart2wasm/lib/constants.dart:1152 ConstantCreator.visitMapConstant" @unported function visit_map_constant(self::ConstantCreator, constant) end
+@parity "dart2wasm/lib/constants.dart:1152 ConstantCreator.visitMapConstant" @unported function visit_map_constant(self::ConstantCreator, constant::NoCounterpart) end
 
-@parity "dart2wasm/lib/constants.dart:1195 ConstantCreator.visitSetConstant" @unported function visit_set_constant(self::ConstantCreator, constant) end
+@parity "dart2wasm/lib/constants.dart:1195 ConstantCreator.visitSetConstant" @unported function visit_set_constant(self::ConstantCreator, constant::NoCounterpart) end
 
-@parity "dart2wasm/lib/constants.dart:1233 ConstantCreator.visitStaticTearOffConstant" @unported function visit_static_tear_off_constant(self::ConstantCreator, constant) end
+@parity "dart2wasm/lib/constants.dart:1233 ConstantCreator.visitStaticTearOffConstant" @unported function visit_static_tear_off_constant(self::ConstantCreator, constant::Function) end
 
-@parity "dart2wasm/lib/constants.dart:1237 ConstantCreator.visitConstructorTearOffConstant" @unported function visit_constructor_tear_off_constant(self::ConstantCreator, constant) end
+@parity "dart2wasm/lib/constants.dart:1237 ConstantCreator.visitConstructorTearOffConstant" @unported function visit_constructor_tear_off_constant(self::ConstantCreator, constant::Function) end
 
-@parity "dart2wasm/lib/constants.dart:1242 ConstantCreator.visitRedirectingFactoryTearOffConstant" @unported function visit_redirecting_factory_tear_off_constant(self::ConstantCreator, constant) end
+@parity "dart2wasm/lib/constants.dart:1242 ConstantCreator.visitRedirectingFactoryTearOffConstant" @unported function visit_redirecting_factory_tear_off_constant(self::ConstantCreator, constant::Function) end
 
-@parity "dart2wasm/lib/constants.dart:1246 ConstantCreator.handleTearOffConstant" @unported function handle_tear_off_constant(self::ConstantCreator, constant) end
+@parity "dart2wasm/lib/constants.dart:1246 ConstantCreator.handleTearOffConstant" @unported function handle_tear_off_constant(self::ConstantCreator, constant::Function) end
 
-@parity "dart2wasm/lib/constants.dart:1319 ConstantCreator.visitInstantiationConstant" @unported function visit_instantiation_constant(self::ConstantCreator, constant) end
+@parity "dart2wasm/lib/constants.dart:1319 ConstantCreator.visitInstantiationConstant" @unported function visit_instantiation_constant(self::ConstantCreator, constant::NoCounterpart) end
 
 @parity "dart2wasm/lib/constants.dart:1551 ConstantCreator.visitTypeLiteralConstant" visit_type_literal_constant(self::ConstantCreator, constant::Type)::Union{ConstantInfo,Nothing} =
     reject!(Internal("dart2wasm/lib/constants.dart:1552 ConstantCreator.visitTypeLiteralConstant: Unreachable - should have been lowered"), "ConstantCreator.visitTypeLiteralConstant")
 
-@parity "dart2wasm/lib/constants.dart:1556 ConstantCreator.visitSymbolConstant" @unported function visit_symbol_constant(self::ConstantCreator, constant) end
+@parity "dart2wasm/lib/constants.dart:1556 ConstantCreator.visitSymbolConstant" @unported function visit_symbol_constant(self::ConstantCreator, constant::Symbol) end
 
 """
 A tuple: the struct of its record class, the object header, then each field as the top type. A
@@ -802,7 +802,7 @@ end
 
 @parity "dart2wasm/lib/constants.dart:1664 DummyValueConstant" DummyValueConstant(type_::WasmBuilder.IR.HeapType, name::String)::DummyValueConstant = DummyValueConstant(Val(:_), type_, name)
 
-@parity "dart2wasm/lib/constants.dart:1667 DummyValueConstant.getType" @unported function get_type(self::DummyValueConstant, context) end
+@parity "dart2wasm/lib/constants.dart:1667 DummyValueConstant.getType" @unported function get_type(self::DummyValueConstant, context::NoCounterpart) end
 
 # Kernel's AstPrinter is the text stream the constant is written to, Julia's IO
 @parity "dart2wasm/lib/constants.dart:1672 DummyValueConstant.toTextInternal" function to_text_internal(self::DummyValueConstant, printer::IO)::Nothing
@@ -810,7 +810,7 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/constants.dart:1677 DummyValueConstant.visitChildren" @unported function visit_children(self::DummyValueConstant, v) end
+@parity "dart2wasm/lib/constants.dart:1677 DummyValueConstant.visitChildren" @unported function visit_children(self::DummyValueConstant, v::NoCounterpart) end
 
 @parity "dart2wasm/lib/constants.dart:1680 DummyValueConstant.hashCode" Base.hash(self::DummyValueConstant, h::UInt)::UInt = hash(self.type, h)
 
@@ -831,11 +831,11 @@ end
 
 @parity "dart2wasm/lib/constants.dart:1714 TypeOfConstantVisitor.visitStringConstant" visit_string_constant(self::TypeOfConstantVisitor, constant::String)::WasmBuilder.IR.RefType = _type_of_class(self, String)
 
-@parity "dart2wasm/lib/constants.dart:1719 TypeOfConstantVisitor.visitListConstant" @unported function visit_list_constant(self::TypeOfConstantVisitor, constant) end
+@parity "dart2wasm/lib/constants.dart:1719 TypeOfConstantVisitor.visitListConstant" @unported function visit_list_constant(self::TypeOfConstantVisitor, constant::NirConst) end
 
-@parity "dart2wasm/lib/constants.dart:1724 TypeOfConstantVisitor.visitMapConstant" @unported function visit_map_constant(self::TypeOfConstantVisitor, constant) end
+@parity "dart2wasm/lib/constants.dart:1724 TypeOfConstantVisitor.visitMapConstant" @unported function visit_map_constant(self::TypeOfConstantVisitor, constant::NoCounterpart) end
 
-@parity "dart2wasm/lib/constants.dart:1729 TypeOfConstantVisitor.visitSetConstant" @unported function visit_set_constant(self::TypeOfConstantVisitor, constant) end
+@parity "dart2wasm/lib/constants.dart:1729 TypeOfConstantVisitor.visitSetConstant" @unported function visit_set_constant(self::TypeOfConstantVisitor, constant::NoCounterpart) end
 
 @parity "dart2wasm/lib/constants.dart:1734 TypeOfConstantVisitor.visitTypeLiteralConstant" visit_type_literal_constant(self::TypeOfConstantVisitor, constant::Type)::WasmBuilder.IR.RefType =
     reject!(Internal("dart2wasm/lib/constants.dart:1735 TypeOfConstantVisitor.visitTypeLiteralConstant: Type literal constants should've been lowered already."), "TypeOfConstantVisitor.visitTypeLiteralConstant")
@@ -854,15 +854,15 @@ end
 @parity "dart2wasm/lib/constants.dart:1757 TypeOfConstantVisitor.visitInstanceConstant" visit_instance_constant(self::TypeOfConstantVisitor, constant::NirConst)::WasmBuilder.IR.RefType =
     _type_of_class(self, typeof(constant.c.val))
 
-@parity "dart2wasm/lib/constants.dart:1780 TypeOfConstantVisitor.visitStaticTearOffConstant" @unported function visit_static_tear_off_constant(self::TypeOfConstantVisitor, constant) end
+@parity "dart2wasm/lib/constants.dart:1780 TypeOfConstantVisitor.visitStaticTearOffConstant" @unported function visit_static_tear_off_constant(self::TypeOfConstantVisitor, constant::Function) end
 
-@parity "dart2wasm/lib/constants.dart:1784 TypeOfConstantVisitor.visitConstructorTearOffConstant" @unported function visit_constructor_tear_off_constant(self::TypeOfConstantVisitor, constant) end
+@parity "dart2wasm/lib/constants.dart:1784 TypeOfConstantVisitor.visitConstructorTearOffConstant" @unported function visit_constructor_tear_off_constant(self::TypeOfConstantVisitor, constant::Function) end
 
-@parity "dart2wasm/lib/constants.dart:1789 TypeOfConstantVisitor.visitRedirectingFactoryTearOffConstant" @unported function visit_redirecting_factory_tear_off_constant(self::TypeOfConstantVisitor, constant) end
+@parity "dart2wasm/lib/constants.dart:1789 TypeOfConstantVisitor.visitRedirectingFactoryTearOffConstant" @unported function visit_redirecting_factory_tear_off_constant(self::TypeOfConstantVisitor, constant::Function) end
 
-@parity "dart2wasm/lib/constants.dart:1793 TypeOfConstantVisitor.handleTearOffConstant" @unported function handle_tear_off_constant(self::TypeOfConstantVisitor, constant) end
+@parity "dart2wasm/lib/constants.dart:1793 TypeOfConstantVisitor.handleTearOffConstant" @unported function handle_tear_off_constant(self::TypeOfConstantVisitor, constant::Function) end
 
-@parity "dart2wasm/lib/constants.dart:1807 TypeOfConstantVisitor.visitInstantiationConstant" @unported function visit_instantiation_constant(self::TypeOfConstantVisitor, constant) end
+@parity "dart2wasm/lib/constants.dart:1807 TypeOfConstantVisitor.visitInstantiationConstant" @unported function visit_instantiation_constant(self::TypeOfConstantVisitor, constant::NoCounterpart) end
 
 @parity "dart2wasm/lib/constants.dart:1818 TypeOfConstantVisitor._typeOfClass" function _type_of_class(self::TypeOfConstantVisitor, klass::DataType)::WasmBuilder.IR.RefType
     local info = get(self.translator.class_info, klass, nothing)

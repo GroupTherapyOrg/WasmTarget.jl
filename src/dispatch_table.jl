@@ -41,7 +41,7 @@ end
 
 @parity "dart2wasm/lib/dispatch_table.dart:239 SelectorInfo._upperBound" @unported function _upper_bound(self::SelectorInfo, types::Set{WasmBuilder.IR.ValueType}; ensure_boxed::Bool, is_receiver = nothing) end
 
-@parity "dart2wasm/lib/dispatch_table.dart:291 SelectorInfo.containsTarget" @unported function contains_target(self::SelectorInfo, target) end
+@parity "dart2wasm/lib/dispatch_table.dart:291 SelectorInfo.containsTarget" @unported function contains_target(self::SelectorInfo, target::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/dispatch_table.dart:360 SelectorTargets" @unported function SelectorTargets(all_target_ranges, _dispatch_table_ranges, static_dispatch_ranges) end
 
@@ -51,11 +51,11 @@ end
 
 @parity "dart2wasm/lib/dispatch_table.dart:427 DispatchTable" @unported function DispatchTable(translator) end
 
-@parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" @unported function selector_for_target(self::DispatchTable, target) end
+@parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" @unported function selector_for_target(self::DispatchTable, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/dispatch_table.dart:451 DispatchTable.indexForTarget" @unported function index_for_target(self::DispatchTable, target) end
+@parity "dart2wasm/lib/dispatch_table.dart:451 DispatchTable.indexForTarget" @unported function index_for_target(self::DispatchTable, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/dispatch_table.dart:453 DispatchTable._createSelectorForTarget" @unported function _create_selector_for_target(self::DispatchTable, target) end
+@parity "dart2wasm/lib/dispatch_table.dart:453 DispatchTable._createSelectorForTarget" @unported function _create_selector_for_target(self::DispatchTable, target::Core.MethodInstance) end
 
 @parity "dart2wasm/lib/dispatch_table.dart:489 DispatchTable._initializeWasmTable" @unported function _initialize_wasm_table(self::DispatchTable) end
 
@@ -65,7 +65,7 @@ end
 
 @parity "dart2wasm/lib/dispatch_table.dart:919 _isUsedViaDispatchTableCall" @unported function _is_used_via_dispatch_table_call(selector::SelectorInfo) end
 
-@parity "dart2wasm/lib/dispatch_table.dart:926 _parameterInfoFromReferences" @unported function _parameter_info_from_references(unreachable_metadata, references::Vector{Any}, use_default_value_sentinel::Bool) end
+@parity "dart2wasm/lib/dispatch_table.dart:926 _parameterInfoFromReferences" @unported function _parameter_info_from_references(unreachable_metadata::NoCounterpart, references::Vector{Core.MethodInstance}, use_default_value_sentinel::Bool) end
 
 """
 Build a row-displacement table by fitting `rows`: each row at the first offset, from the first free

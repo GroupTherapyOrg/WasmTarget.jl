@@ -153,15 +153,15 @@ end
 
 @parity "dart2wasm/lib/intrinsics.dart:603 Intrinsifier" Intrinsifier(code_gen::AstCodeGenerator)::Intrinsifier = Intrinsifier(Val(:_), code_gen)
 
-@parity "dart2wasm/lib/intrinsics.dart:607 Intrinsifier.generateInstanceGetterIntrinsic" @unported function generate_instance_getter_intrinsic(self::Intrinsifier, node) end
+@parity "dart2wasm/lib/intrinsics.dart:607 Intrinsifier.generateInstanceGetterIntrinsic" @unported function generate_instance_getter_intrinsic(self::Intrinsifier, node::NirCall) end
 
-@parity "dart2wasm/lib/intrinsics.dart:685 Intrinsifier.generateInstanceIntrinsic" @unported function generate_instance_intrinsic(self::Intrinsifier, node) end
+@parity "dart2wasm/lib/intrinsics.dart:685 Intrinsifier.generateInstanceIntrinsic" @unported function generate_instance_intrinsic(self::Intrinsifier, node::NirInvoke) end
 
-@parity "dart2wasm/lib/intrinsics.dart:1018 Intrinsifier.generateEqualsIntrinsic" @unported function generate_equals_intrinsic(self::Intrinsifier, node) end
+@parity "dart2wasm/lib/intrinsics.dart:1018 Intrinsifier.generateEqualsIntrinsic" @unported function generate_equals_intrinsic(self::Intrinsifier, node::NirInvoke) end
 
-@parity "dart2wasm/lib/intrinsics.dart:1059 Intrinsifier.generateStaticGetterIntrinsic" @unported function generate_static_getter_intrinsic(self::Intrinsifier, node) end
+@parity "dart2wasm/lib/intrinsics.dart:1059 Intrinsifier.generateStaticGetterIntrinsic" @unported function generate_static_getter_intrinsic(self::Intrinsifier, node::NirGlobalRead) end
 
-@parity "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex" @unported function _get_simd_lane_index(self::Intrinsifier, argument, num_lanes::Int64, node) end
+@parity "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex" @unported function _get_simd_lane_index(self::Intrinsifier, argument::NirValue, num_lanes::Int64, node::NirStmt) end
 
 # A call Julia resolved names a method, never one of dart:_wasm's intrinsics; a call of a builtin is
 # Julia's own operation: `===` dart's identical, `ifelse` a select, a conversion or a shift its case of
@@ -349,7 +349,7 @@ end
 # struct is one, so no allocation is intrinsified
 @parity "dart2wasm/lib/intrinsics.dart:2836 Intrinsifier.generateConstructorIntrinsic" generate_constructor_intrinsic(self::Intrinsifier, node::NirNew)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
-@parity "dart2wasm/lib/intrinsics.dart:2875 Intrinsifier.generateFunctionCallIntrinsic" @unported function generate_function_call_intrinsic(self::Intrinsifier, node) end
+@parity "dart2wasm/lib/intrinsics.dart:2875 Intrinsifier.generateFunctionCallIntrinsic" @unported function generate_function_call_intrinsic(self::Intrinsifier, node::NirInvoke) end
 
 # no Julia method is a member intrinsic (MemberIntrinsic.fromProcedure), so its function is its body
 @parity "dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic" function generate_member_intrinsic(self::Intrinsifier, target::Core.MethodInstance, function_type::WasmBuilder.IR.FunctionType, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Bool
@@ -358,14 +358,14 @@ end
     reject!(Unported("dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic"), "the member intrinsic $intrinsic of $target")
 end
 
-@parity "dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray" @unported function read_int_array(self::Intrinsifier, node; unsigned::Bool) end
+@parity "dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray" @unported function read_int_array(self::Intrinsifier, node::NirInvoke; unsigned::Bool) end
 
-@parity "dart2wasm/lib/intrinsics.dart:3536 Intrinsifier._extractMemoryFromCall" @unported function _extract_memory_from_call(self::Intrinsifier, expr, builder::WasmBuilder.InstructionsBuilder) end
+@parity "dart2wasm/lib/intrinsics.dart:3536 Intrinsifier._extractMemoryFromCall" @unported function _extract_memory_from_call(self::Intrinsifier, expr::NirValue, builder::WasmBuilder.InstructionsBuilder) end
 
-@parity "dart2wasm/lib/intrinsics.dart:3549 Intrinsifier._extractMemoryOperands" @unported function _extract_memory_operands(self::Intrinsifier, call, builder::WasmBuilder.InstructionsBuilder) end
+@parity "dart2wasm/lib/intrinsics.dart:3549 Intrinsifier._extractMemoryOperands" @unported function _extract_memory_operands(self::Intrinsifier, call::NirInvoke, builder::WasmBuilder.InstructionsBuilder) end
 
-@parity "dart2wasm/lib/intrinsics.dart:3573 extractIntValue" @unported function extract_int_value(expr) end
+@parity "dart2wasm/lib/intrinsics.dart:3573 extractIntValue" @unported function extract_int_value(expr::NirValue) end
 
-@parity "dart2wasm/lib/intrinsics.dart:3588 _extractLaneIndices" @unported function _extract_lane_indices(expr) end
+@parity "dart2wasm/lib/intrinsics.dart:3588 _extractLaneIndices" @unported function _extract_lane_indices(expr::NirValue) end
 
-@parity "dart2wasm/lib/intrinsics.dart:3606 _extractDoubleValue" @unported function _extract_double_value(expr) end
+@parity "dart2wasm/lib/intrinsics.dart:3606 _extractDoubleValue" @unported function _extract_double_value(expr::NirValue) end
