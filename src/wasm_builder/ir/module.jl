@@ -99,7 +99,7 @@ end
 """Serialize a module to its binary representation."""
 @parity "wasm_builder/lib/src/ir/module.dart:98 Module.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, m::Module)::Nothing
     wp = WasmBuilder.watch_points(m)
-    isempty(wp) || reject!(Unported("wasm_builder/lib/src/ir/module.dart:105 Module.serialize: watch points"), "serialize")
+    isempty(wp) || reject!(Unported("wasm_builder/lib/src/ir/module.dart:98 Module.serialize"), "serialize")
     # Wasm module preamble: magic number, version 1.
     WasmBuilder.write_bytes(s, UInt8[0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00])
     WasmBuilder.serialize(s, WasmBuilder.TypeSection(WasmBuilder.types(m), wp))

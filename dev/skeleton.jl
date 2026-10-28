@@ -584,13 +584,13 @@ function next_nonblank(lines, n::Int)
 end
 
 # ---- the emission --------------------------------------------------------------------------------
-# A3's one naming rule (src/julia/parity.jl `snake`): camelCase to snake_case, an acronym run kept, a
-# leading `_` kept
-function snake(s::AbstractString)::String
-    local m = match(r"^(_*)(.*)$"s, s)
-    local body = replace(m[2], r"([A-Z]+)([A-Z][a-z])" => s"\1_\2")
-    body = replace(body, r"([a-z0-9])([A-Z])" => s"\1_\2")
-    return m[1] * lowercase(body)
+# A3's one naming rule, src/julia/parity.jl's `snake` (its one source): its definition read from there
+# and evaluated here when the generator loads, so the generator and the loader name every definition
+# alike
+let m = match(r"(?s)\bfunction snake(\(s::AbstractString\)::String\n.*?\nend)\n",
+              read(joinpath(ROOT, "src", "julia", "parity.jl"), String))
+    m === nothing && error("skeleton: src/julia/parity.jl holds no snake")
+    Core.eval(@__MODULE__, Meta.parse("function snake" * m[1]))
 end
 
 # the one rule's table of dart operators and Object members that are Base functions, read from

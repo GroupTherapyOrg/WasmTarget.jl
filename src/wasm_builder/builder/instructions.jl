@@ -398,7 +398,7 @@ end
     (!b.constant_expression || is_constant(i)) || _report_error(b, "Non-constant instruction $(name(i)) added to constant expression")
     b._reachable || return nothing
     push!(b._instructions, i)
-    isempty(b.module_builder.watch_points) || reject!(Unported("wasm_builder/lib/src/builder/instructions.dart:331 InstructionsBuilder._add: watch-point stack traces"), "_add")
+    isempty(b.module_builder.watch_points) || reject!(Unported("wasm_builder/lib/src/builder/instructions.dart:363 InstructionsBuilder._add"), "_add")
     nothing
 end
 

@@ -24,7 +24,7 @@ end
 @parity "wasm_builder/lib/src/ir/instructions.dart:37 Instructions" function Instructions end
 
 @parity "wasm_builder/lib/src/ir/instructions.dart:47 Instructions.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, ins::Instructions)::Nothing
-    ins._stack_traces === nothing || reject!(Unported("wasm_builder/lib/src/ir/instructions.dart:56 Instructions.serialize: watch-point stack traces"), "serialize")
+    ins._stack_traces === nothing || reject!(Unported("wasm_builder/lib/src/ir/instructions.dart:47 Instructions.serialize"), "serialize")
     source_mappings = ins._source_mappings
     # 0-based as dart's: the index of the mapping and of the instruction.
     source_mapping_idx = 0

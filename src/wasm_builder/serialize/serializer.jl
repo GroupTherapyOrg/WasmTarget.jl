@@ -129,7 +129,7 @@ end
 end
 
 @parity "wasm_builder/lib/src/serialize/serializer.dart:120 Serializer.writeData" function write_data(s::Serializer, chunk::Serializer, watch_points::Vector{Int}=Int[])::Nothing
-    isempty(watch_points) || reject!(Unported("wasm_builder/lib/src/serialize/serializer.dart:121 Serializer.writeData watch points"), "write_data")
+    isempty(watch_points) || reject!(Unported("wasm_builder/lib/src/serialize/serializer.dart:120 Serializer.writeData"), "write_data")
     write_bytes(s, data(chunk))
 end
 
