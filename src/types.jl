@@ -403,7 +403,7 @@ flattened and ordered), and it has no `FutureOr`, so the type is already normal.
 @parity "dart2wasm/lib/types.dart:236 Types.normalize" normalize(self::Types, type_::Type)::Type = type_
 
 # dart's FutureOr, which Julia does not have
-@parity "dart2wasm/lib/types.dart:275 Types._makeFutureOrType" _make_future_or_type(self::Types, code_gen::AstCodeGenerator, type_::Type)::Nothing =
+@parity "dart2wasm/lib/types.dart:275 Types._makeFutureOrType" _make_future_or_type(self::Types, code_gen::AstCodeGenerator, type_::NoCounterpart)::Nothing =
     reject!(Internal("dart2wasm/lib/types.dart:275 Types._makeFutureOrType: Julia has no FutureOr; a task's result is a value of its own type, fetched"), "Types._makeFutureOrType")
 
 # dart's function types; a Julia function type is a method signature, a Tuple type (src/julia/kernel.jl),
