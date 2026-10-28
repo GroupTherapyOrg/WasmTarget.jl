@@ -8,7 +8,6 @@
 #
 #   bash dev/lanes.sh            # every lane on the default `julia`, which must be 1.12
 #   JULIA="julia +1.13" bash dev/lanes.sh   # not a gate: a JULIA= run fails the gate
-#   bash dev/lanes.sh --fast     # ratchet + smoke only: the inner loop, never a push
 #
 # The default run is the full matrix's set of lanes (AGENTS.md, L153), which dev/gate.sh runs on
 # CI's runners: it adds the byte probes, the models, smoke on Julia 1.13, the Pkg.test suite
@@ -28,10 +27,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 JULIA="${JULIA:-julia}"
-fast=0; export TLC_FAST=1; only=""; part=""
+export TLC_FAST=1; only=""; part=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --fast) fast=1 ;;
     --all) export TLC_FAST=0 ;;
     --lane) only="${2:-}"; shift ;;
     --part) part="${2:-}"; shift ;;
@@ -43,7 +41,6 @@ if [ -n "$only" ]; then
   case " ratchet formal smoke-1.13 smoke probes suite legacy legacy-1.13 " in
     *" $only "*) ;; *) echo "lanes.sh: no lane $only" >&2; exit 2 ;;
   esac
-  [ $fast -eq 0 ] || { echo "lanes.sh: --lane runs one lane of the default run, not of --fast" >&2; exit 2; }
 fi
 if [ -n "$part" ]; then
   pi=${part%/*}; pn=${part#*/}
@@ -118,45 +115,41 @@ join_bg() {  # wait for every bg lane, print each verdict in order, fail the gat
 stop
 lane ratchet  $JULIA --project=. test/parity_ratchet.jl
 stop
-if [ $fast -eq 0 ]; then
-  if ! want formal; then :
-  elif java -version >/dev/null 2>&1; then bg "$d/formal" lane formal bash dev/formal/run_tlc.sh
-  else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi
-  # smoke on Julia 1.13 (CI's second version) beside smoke on 1.12
-  if ! want smoke-1.13; then :
-  elif [ "$JULIA" != "julia" ]; then
-    printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' "$JULIA"; fail=1
-  elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then
-    bg "$d/s113" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl
-  else
-    printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1
-  fi
+if ! want formal; then :
+elif java -version >/dev/null 2>&1; then bg "$d/formal" lane formal bash dev/formal/run_tlc.sh
+else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi
+# smoke on Julia 1.13 (CI's second version) beside smoke on 1.12
+if ! want smoke-1.13; then :
+elif [ "$JULIA" != "julia" ]; then
+  printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' "$JULIA"; fail=1
+elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then
+  bg "$d/s113" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl
+else
+  printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1
 fi
 lane smoke    $JULIA --project=. test/smoke.jl
 join_bg "$d/s113" "$d/formal"; rm -rf dev/formal/states
 stop
-if [ $fast -eq 0 ]; then
-  if ! want probes && ! want suite; then :
-  elif $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then
-    lane probes $JULIA --project=. test/probe_bytes.jl
-  else
-    printf '  FAIL probes         (the default julia is not 1.12: the probes and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1
-  fi
-  stop
-  # every test family CI runs: two concurrent shards (suite() above)
-  lane suite suite
-  stop
-  # WT1, the agreement oracle: its smoke over the one corpus on both versions, side by side
-  # (dev/MARCH.md 1.G; legacy/'s deletion rule reads its PASS set beside the rebuild's, 1.F)
-  if ! want legacy && ! want legacy-1.13; then :
-  elif [ "$JULIA" != "julia" ]; then
-    printf '  FAIL legacy         (the gate runs on the default julia, not %s)\n' "$JULIA"; fail=1
-  elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then
-    bg "$d/l113" lane legacy-1.13 julia +1.13 --project=legacy legacy/test/smoke.jl
-    lane legacy julia --project=legacy legacy/test/smoke.jl
-    join_bg "$d/l113"
-  else
-    printf '  FAIL legacy-1.13    (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1
-  fi
+if ! want probes && ! want suite; then :
+elif $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then
+  lane probes $JULIA --project=. test/probe_bytes.jl
+else
+  printf '  FAIL probes         (the default julia is not 1.12: the probes and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1
+fi
+stop
+# every test family CI runs: two concurrent shards (suite() above)
+lane suite suite
+stop
+# WT1, the agreement oracle: its smoke over the one corpus on both versions, side by side
+# (dev/MARCH.md 1.G; legacy/'s deletion rule reads its PASS set beside the rebuild's, 1.F)
+if ! want legacy && ! want legacy-1.13; then :
+elif [ "$JULIA" != "julia" ]; then
+  printf '  FAIL legacy         (the gate runs on the default julia, not %s)\n' "$JULIA"; fail=1
+elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then
+  bg "$d/l113" lane legacy-1.13 julia +1.13 --project=legacy legacy/test/smoke.jl
+  lane legacy julia --project=legacy legacy/test/smoke.jl
+  join_bg "$d/l113"
+else
+  printf '  FAIL legacy-1.13    (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1
 fi
 [ $fail -eq 0 ] && echo "LANES green" || { echo "LANES red"; exit 1; }

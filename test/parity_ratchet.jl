@@ -1811,14 +1811,12 @@ const LOCKS = [
         () -> (v = vcat(agents_md_violations(), agents_size_negatives_missed()); foreach(x -> println("    ✗ ", x), v); length(v))),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README (dev/CHARTER.md C9)",
         () -> length(unconsumed_files_outside_src())),
-    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a push of the march branch, wt2, whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg refuses unless the ratchet reads C<n> CLOSED; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; a landing's evidence is `bash dev/check.sh`, run by `bash dev/ship.sh`): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), smoke on Julia 1.13, and WT1's smoke over the one corpus on both versions (legacy/test/smoke.jl, the agreement oracle legacy/'s deletion rule reads, dev/MARCH.md 1.G). No lane of that run is skipped green: it runs the probes and the suite only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N, `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a push of the march branch (dev/ship.sh's MARCH, wt2) or workflow_dispatch, the one branch on origin (Dale 2026-10-28): `dev/ship.sh` pushes the march branch and no other ref, a landing's one push (so a landed head whose commit carries `Closes: C<n>` gets the run, in its head's own concurrency group in each workflow, which a later landing's push never cancels; no march/<branch> per landing, Dale 2026-10-21), and `bash dev/gate.sh` pushes nothing: it finds the Gate run of a wt2 commit and prints its verdict (the final full gate before PR #128 merges, on the merge head landed with `Closes: C<n>`), and no gate-fast workflow exists; ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a wt2 push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so, its table a row of its own; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups (smoke.jl's and those of the files it includes), each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, dev/AUDIT.md A17P9). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
+    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a push of the march branch, wt2, whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg refuses unless the ratchet reads C<n> CLOSED; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; a landing's evidence is `bash dev/check.sh`, run by `bash dev/ship.sh`): dev/lanes.sh's default run (its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), smoke on Julia 1.13, and WT1's smoke over the one corpus on both versions (legacy/test/smoke.jl, the agreement oracle legacy/'s deletion rule reads, dev/MARCH.md 1.G). No lane of that run is skipped green: it runs the probes and the suite only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N, `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a push of the march branch (dev/ship.sh's MARCH, wt2) or workflow_dispatch, the one branch on origin (Dale 2026-10-28): `dev/ship.sh` pushes the march branch and no other ref, a landing's one push (so a landed head whose commit carries `Closes: C<n>` gets the run, in its head's own concurrency group in each workflow, which a later landing's push never cancels; no march/<branch> per landing, Dale 2026-10-21), and `bash dev/gate.sh` pushes nothing: it finds the Gate run of a wt2 commit and prints its verdict (the final full gate before PR #128 merges, on the merge head landed with `Closes: C<n>`), and no gate-fast workflow exists; ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a wt2 push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so, its table a row of its own; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups (smoke.jl's and those of the files it includes), each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, dev/AUDIT.md A17P9). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
         () -> begin
             _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
             # the script's code, its comment lines dropped (a commented-out lane runs nothing)
             local lanes = _code(joinpath(ROOT, "dev", "lanes.sh"))
-            local i = findfirst("if [ \$fast -eq 0 ]; then", lanes)
-            i === nothing && return 3
-            local gated = lanes[last(i):end]
+            local gated = lanes
             local agents = read(joinpath(ROOT, "AGENTS.md"), String)
             local wf = joinpath(ROOT, ".github", "workflows")
             local gate = isfile(joinpath(wf, "gate.yml")) ? _code(joinpath(wf, "gate.yml")) : ""
@@ -1873,33 +1871,33 @@ const LOCKS = [
                       occursin(raw"stop() { [ $fail -eq 0 ] || { echo \"LANES red\"; exit 1; }; }", lanes),
                       occursin(join([raw"lane ratchet  $JULIA --project=. test/parity_ratchet.jl", "stop"], '\n'), lanes),
                       occursin(join([raw"join_bg \"$d/s113\" \"$d/formal\"; rm -rf dev/formal/states", "stop"], '\n'), lanes),
-                      occursin(join([raw"  stop", raw"  lane suite suite"], '\n'), gated),
+                      occursin(join([raw"stop", raw"lane suite suite"], '\n'), gated),
                       # --lane runs one lane of the same run: every other lane is a no-op
                       occursin(raw"want() { [ -z \"$only\" ] || [ \"$only\" = \"$1\" ]; }", lanes),
                       occursin(join([raw"  local name=$1; shift", raw"  want \"$name\" || return 0"], '\n'), lanes),
                       # each skip fails the gate (A12P6): a default julia that is not 1.12 ...
                       occursin(join([
-                          raw"  if ! want probes && ! want suite; then :",
-                          raw"  elif $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then",
-                          raw"    lane probes $JULIA --project=. test/probe_bytes.jl",
-                          raw"  else",
-                          raw"    printf '  FAIL probes         (the default julia is not 1.12: the probes and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1",
-                          raw"  fi"], '\n'), gated),
+                          raw"if ! want probes && ! want suite; then :",
+                          raw"elif $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then",
+                          raw"  lane probes $JULIA --project=. test/probe_bytes.jl",
+                          raw"else",
+                          raw"  printf '  FAIL probes         (the default julia is not 1.12: the probes and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1",
+                          raw"fi"], '\n'), gated),
                       # ... no working java ...
                       occursin(join([
-                          raw"  if ! want formal; then :",
-                          raw"  elif java -version >/dev/null 2>&1; then bg \"$d/formal\" lane formal bash dev/formal/run_tlc.sh",
-                          raw"  else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi"], '\n'), gated),
+                          raw"if ! want formal; then :",
+                          raw"elif java -version >/dev/null 2>&1; then bg \"$d/formal\" lane formal bash dev/formal/run_tlc.sh",
+                          raw"else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi"], '\n'), gated),
                       # ... and a JULIA= override or no julia +1.13
                       occursin(join([
-                          raw"  if ! want smoke-1.13; then :",
-                          raw"  elif [ \"$JULIA\" != \"julia\" ]; then",
-                          raw"    printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' \"$JULIA\"; fail=1",
-                          raw"  elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then",
-                          raw"    bg \"$d/s113\" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl",
-                          raw"  else",
-                          raw"    printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1",
-                          raw"  fi"], '\n'), gated),
+                          raw"if ! want smoke-1.13; then :",
+                          raw"elif [ \"$JULIA\" != \"julia\" ]; then",
+                          raw"  printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' \"$JULIA\"; fail=1",
+                          raw"elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then",
+                          raw"  bg \"$d/s113\" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl",
+                          raw"else",
+                          raw"  printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1",
+                          raw"fi"], '\n'), gated),
                       # the wasm engine is CI's: ci.yml's node-version, a Node of another major fails
                       occursin(join([
                           raw"NODE_MAJOR=$(sed -n \"s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p\" .github/workflows/ci.yml | head -1)",
@@ -1921,9 +1919,9 @@ const LOCKS = [
                           count(raw"          channel 1.12 && \"$J\" default 1.12" * "\n", gate) == count("      - name: Julia (juliaup)\n", gate),
                       occursin(raw"          if [ \"${{ matrix.lane }}\" = smoke-1.13 ] || [ \"${{ matrix.lane }}\" = legacy-1.13 ]; then channel 1.13; fi", gate),
                       # ... and WT1's smoke, the agreement oracle legacy/'s deletion rule reads, on both versions
-                      occursin(join([raw"    bg \"$d/l113\" lane legacy-1.13 julia +1.13 --project=legacy legacy/test/smoke.jl",
-                                     raw"    lane legacy julia --project=legacy legacy/test/smoke.jl",
-                                     raw"    join_bg \"$d/l113\""], '\n'), gated),
+                      occursin(join([raw"  bg \"$d/l113\" lane legacy-1.13 julia +1.13 --project=legacy legacy/test/smoke.jl",
+                                     raw"  lane legacy julia --project=legacy legacy/test/smoke.jl",
+                                     raw"  join_bg \"$d/l113\""], '\n'), gated),
                       # ... CI's Node major, read from ci.yml's node-version ...
                       # (every job's: a job of its own Node passed while another kept the line)
                       let majors = count("      - name: CI's Node major\n", gate),
