@@ -483,7 +483,10 @@ end
         foreach(walk, ex.args)
     end
     if Meta.isexpr(def, :struct)
-        Meta.isexpr(def.args[2], :(<:)) && walk(def.args[2].args[2])
+        local head = def.args[2]
+        Meta.isexpr(head, :(<:)) && (walk(head.args[2]); head = head.args[1])
+        # a type parameter's bound (`Row{V<:Union{A,B}}`) names the declarations it must follow too
+        Meta.isexpr(head, :curly) && foreach(p -> Meta.isexpr(p, :(<:)) && walk(p.args[2]), head.args[2:end])
         for f in def.args[3].args
             Meta.isexpr(f, :const) && (f = f.args[1])   # a mutable struct's `const f::T`
             Meta.isexpr(f, :(::)) && length(f.args) == 2 && walk(f.args[2])

@@ -17,9 +17,17 @@ DispatchTable's dart fields: `procedureAttributeMetadata`, `translator`, `_selec
 @parity "dart2wasm/lib/dispatch_table.dart:396 DispatchTable" @unported struct DispatchTable end
 
 """
-Row's dart fields: `values`, `offset`.
+A row of a row-displacement table: its values sparsely, `(index, value)` sorted by index, and the
+offset the table gives it. dart's `V extends Object` is the two kinds of entry a table holds here, a
+dispatch table's target (a member, a Core.MethodInstance) and a dynamic dispatch table's TableEntry.
 """
-@parity "dart2wasm/lib/dispatch_table.dart:1040 Row" @unported struct Row end
+@parity "dart2wasm/lib/dispatch_table.dart:1040 Row" struct Row{V<:Union{Core.MethodInstance,TableEntry}}
+    values::Vector{NamedTuple{(:index, :value),Tuple{Int,V}}}
+    offset::Late{Int}
+    # the struct's one constructor, tagged; dart's constructor at :1045 is its outer function
+    Row{V}(::Val{:_}, values::Vector{NamedTuple{(:index, :value),Tuple{Int,V}}}) where {V<:Union{Core.MethodInstance,TableEntry}} =
+        new{V}(values, Late{Int}("dart2wasm/lib/dispatch_table.dart:1058 Row.offset"))
+end
 
 @parity "dart2wasm/lib/dispatch_table.dart:33 SelectorInfo.translator" @unported function translator(self::SelectorInfo) end
 
@@ -59,18 +67,83 @@ Row's dart fields: `values`, `offset`.
 
 @parity "dart2wasm/lib/dispatch_table.dart:926 _parameterInfoFromReferences" @unported function _parameter_info_from_references(unreachable_metadata, references::Vector{Any}, use_default_value_sentinel::Bool) end
 
-@parity "dart2wasm/lib/dispatch_table.dart:965 buildRowDisplacementTable" @unported function build_row_displacement_table(rows::Vector{Row}; first_available = nothing, unique_offsets = nothing) end
+"""
+Build a row-displacement table by fitting `rows`: each row at the first offset, from the first free
+slot, where none of its values lands on a taken slot (and, with `unique_offsets`, no other row's
+offset); `nothing` is unused space. Each row's offset is set. A slot is a wasm table index, from 0.
+"""
+@parity "dart2wasm/lib/dispatch_table.dart:965 buildRowDisplacementTable" function build_row_displacement_table(rows::Vector{Row{V}};
+        first_available::Int = 0, unique_offsets::Bool = false)::Vector{Union{V,Nothing}} where {V<:Union{Core.MethodInstance,TableEntry}}
+    local offsets_taken = Set{Int}()
+    local table = Union{V,Nothing}[]
+    for row in rows
+        local values = row.values
+        local offset = first_available - values[1].index
+        local fits::Bool
+        while true
+            fits = true
+            if unique_offsets
+                while offset in offsets_taken
+                    offset += 1
+                end
+            end
+            for value in values
+                local entry = offset + value.index
+                # Fits
+                entry >= length(table) && break
+                if table[entry + 1] !== nothing
+                    fits = false
+                    break
+                end
+            end
+            fits && break
+            offset += 1
+        end
+        row.offset[] = offset
+        unique_offsets && push!(offsets_taken, offset)
+        for (index, value) in values
+            local table_index = offset + index
+            while length(table) <= table_index
+                push!(table, nothing)
+            end
+            table[table_index + 1] === nothing ||
+                reject!(Internal("dart2wasm/lib/dispatch_table.dart:965 buildRowDisplacementTable: slot $table_index taken twice"), "buildRowDisplacementTable")
+            table[table_index + 1] = value
+        end
+        while first_available < length(table) && table[first_available + 1] !== nothing
+            first_available += 1
+        end
+    end
+    return table
+end
 
-@parity "dart2wasm/lib/dispatch_table.dart:1018 calculateStrideWith" @unported function calculate_stride_with(start::Int64, start_entry, table::Vector{Any}, matches::Function) end
+"""The number of entries from `start` that `matches` accepts in a row, the first included."""
+@parity "dart2wasm/lib/dispatch_table.dart:1018 calculateStrideWith" function calculate_stride_with(start::Int64, start_entry::V, table::Vector{Union{V,Nothing}},
+        matches::Function)::Int where {V<:Union{Core.MethodInstance,TableEntry}}
+    local end_ = start + 1
+    while end_ < length(table)
+        matches(table[end_ + 1])::Bool || break
+        end_ += 1
+    end
+    return end_ - start
+end
 
-@parity "dart2wasm/lib/dispatch_table.dart:1038 strideElementTableLimit" @unported function stride_element_table_limit() end
+"""Past this stride a table range is filled by `table.fill` in the start function, not the element section."""
+@parity "dart2wasm/lib/dispatch_table.dart:1038 strideElementTableLimit" stride_element_table_limit()::Int = 100
 
-@parity "dart2wasm/lib/dispatch_table.dart:1045 Row" @unported function Row(values) end
+# dart asserts the values are not empty and sorted by index: located rejections here
+@parity "dart2wasm/lib/dispatch_table.dart:1045 Row" function Row(values::Vector{NamedTuple{(:index, :value),Tuple{Int,V}}})::Row{V} where {V<:Union{Core.MethodInstance,TableEntry}}
+    isempty(values) && reject!(Internal("dart2wasm/lib/dispatch_table.dart:1045 Row: no values"), "Row")
+    for k in 2:length(values)
+        values[k].index <= values[k-1].index && reject!(Internal("dart2wasm/lib/dispatch_table.dart:1045 Row: values not sorted by index"), "Row")
+    end
+    return Row{V}(Val(:_), values)
+end
 
-@parity "dart2wasm/lib/dispatch_table.dart:1060 Row.width" @unported function width(self::Row) end
+@parity "dart2wasm/lib/dispatch_table.dart:1060 Row.width" width(self::Row)::Int = self.values[end].index - self.values[1].index + 1
 
-@parity "dart2wasm/lib/dispatch_table.dart:1061 Row.holes" @unported function holes(self::Row) end
+@parity "dart2wasm/lib/dispatch_table.dart:1061 Row.holes" holes(self::Row)::Int = width(self) - length(self.values)
 
-@parity "dart2wasm/lib/dispatch_table.dart:1062 Row.density" @unported function density(self::Row) end
+@parity "dart2wasm/lib/dispatch_table.dart:1062 Row.density" density(self::Row)::Int = (100 * length(self.values)) ÷ width(self)
 
-@parity "dart2wasm/lib/dispatch_table.dart:1063 Row.sparsity" @unported function sparsity(self::Row) end
+@parity "dart2wasm/lib/dispatch_table.dart:1063 Row.sparsity" sparsity(self::Row)::Int = 100 - density(self)
