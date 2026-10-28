@@ -1,9 +1,9 @@
 # The WebAssembly (3.0, with GC) validation rules and the builder check that refuses each where the
 # invalid thing is emitted or defined (dev/LEDGER.md D10). dart's builder checks the operand stack and
 # the labels, inside asserts, and leaves the rest to the engine. The port makes dart's checks on every
-# emission (test/wasm_builder/builder_refusals.jl has one case per dart check) and adds the spec's
+# emission (test/src/wasm_builder/builder_refusals.jl has one case per dart check) and adds the spec's
 # other rules here, each a located InvalidModule rejection, each with one case below. wasm-tools
-# validate stays the alarm on the golden modules (test/wasm_builder/builder_modules.jl).
+# validate stays the alarm on the golden modules (test/src/wasm_builder/builder_modules.jl).
 #
 # The inventory, by the spec's Validation chapter. "dart" is dart's check, ported; "spec" is a check
 # the port adds, citing the rule; "construction" is a rule the builder's API cannot break. 22 rules

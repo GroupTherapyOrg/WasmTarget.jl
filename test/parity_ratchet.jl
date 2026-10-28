@@ -110,9 +110,10 @@ function unconsumed_files_outside_src()::Vector{String}
         ".release-please-manifest.json", "docs/Project.toml", "docs/input.css"])
     # directories a loader walks, each with the files that loader consumes: run_tlc.sh (the
     # models and their instances), the docs site's file routing, Pkg's [extensions], GitHub Actions,
+    # test/src_tests.jl (every test of ported code),
     # and Pkg's loading of legacy/, WT1 as its own package (its module file, its [extensions]). Anything else in them is consumed by nothing.
     walked = ("dev/formal/" => r"\.(tla|cfg)$", "docs/src/" => r"", "ext/" => r"\.jl$", ".github/workflows/" => r"\.ya?ml$",
-              "legacy/" => r"")
+              "test/src/" => r"\.jl$", "legacy/" => r"")
     not_consumers = Set(["dev/MARCH.md", "dev/HISTORY.md", "CHANGELOG.md"])
     files = String.(split(readchomp(Cmd(`git ls-files`; dir=ROOT)), '\n'))
     texts = Dict(f => _text(joinpath(ROOT, f)) for f in files
@@ -1907,7 +1908,9 @@ function removals_unnamed(root::AbstractString, base::AbstractString)::Vector{St
         return ["the change's base $base names no commit: its removals cannot be read (CHECK_BASE)"]
     local mb = git("merge-base", base, "HEAD")
     local msg = git("log", "--format=%B", "$mb..HEAD")
-    local deleted = String.(split(git("diff", "--name-only", "--no-renames", "--diff-filter=D", mb, "HEAD", "--", "test"), '\n'; keepempty = false))
+    # a file git finds moved with at most a tenth of it changed is kept, not removed (a move of the
+    # src tests into test/src/); a rewrite past that reads as a deletion and must be named
+    local deleted = String.(split(git("diff", "--name-only", "--find-renames=90%", "--diff-filter=D", mb, "HEAD", "--", "test"), '\n'; keepempty = false))
     local cases = Dict{String,Set{String}}(); local emptied = Set{String}()
     for c in REMOVAL_CORPORA
         has(mb, c) || continue
@@ -1947,6 +1950,13 @@ function removals_negatives_missed()::Vector{String}
         isempty(removals_unnamed(t, c0)) || push!(out, "negative missed: the same removals, named")
         isempty(removals_unnamed(t, "HEAD")) || push!(out, "negative missed: a change with no removal")
         length(removals_unnamed(t, "nosuchref")) == 1 || push!(out, "negative missed: a base that names no commit")
+        # a moved test file is kept; the same move with its body replaced is a removal
+        write(joinpath(t, "test", "kept.jl"), join(("@test $i == $i" for i in 1:40), "\n")); g("add", "test"); g("commit", "-qm", "k")
+        local c1 = readchomp(`git -C $t rev-parse HEAD`)
+        mkpath(joinpath(t, "test", "src")); g("mv", "test/kept.jl", "test/src/kept.jl"); g("commit", "-qm", "move")
+        isempty(removals_unnamed(t, c1)) || push!(out, "negative missed: a test file moved, not removed")
+        write(joinpath(t, "test", "src", "kept.jl"), "@test true\n"); g("commit", "-qam", "gut")
+        length(removals_unnamed(t, c1)) == 1 || push!(out, "negative missed: a test file moved and its body replaced")
     end
     return out
 end

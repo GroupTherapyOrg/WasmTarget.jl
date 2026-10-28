@@ -1,48 +1,16 @@
-# Every test of ported code: the constructions' own tests and each ported dart test (dev/check.sh).
-# A file here is a test of src; a new test file of ported code joins this list in the commit that
-# adds it, one file per line in sorted order, so lanes adding tests at once touch different lines.
+# Every test of ported code: each file under test/src/, found by walking the directory (dev/check.sh).
+# A lane adds a test by adding its file there; no list is shared between lanes to conflict on.
 using Test, WasmTarget
-const SRC_TESTS = [
-    "class_info.jl",
-    "classes.jl",
-    "closures.jl",
-    "code_generator.jl",
-    "compile.jl",
-    "constants.jl",
-    "dart_tests.jl",
-    "dispatch_table.jl",
-    "functions.jl",
-    "globals.jl",
-    "intrinsics.jl",
-    "js_runtime.jl",
-    "late.jl",
-    "llvm_cfg_sort.jl",
-    "llvm_cfg_stackify.jl",
-    "llvm_loop_info.jl",
-    "namer.jl",
-    "param_info.jl",
-    "parity.jl",
-    "records.jl",
-    "source_map_utils.jl",
-    "subset.jl",
-    "target.jl",
-    "translator.jl",
-    "types.jl",
-    "util.jl",
-    "wasm_builder/barrel_exports.jl",
-    "wasm_builder/builder_modules.jl",
-    "wasm_builder/builder_refusals.jl",
-    "wasm_builder/builder_validation.jl",
-    "wasm_builder/ir_modules.jl",
-    "wasm_builder/serializer.jl",
-]
-# the list's own form, checked, so a conflict resolution that collapses it fails here
-let entries = filter(l -> occursin(r"^    \"[^\"]+\",$", l), readlines(@__FILE__))
-    length(entries) == length(SRC_TESTS) && issorted(SRC_TESTS) ||
-        error("test/src_tests.jl: SRC_TESTS holds one file per line, in sorted order")
-end
+const SRC_TEST_DIR = joinpath(@__DIR__, "src")
+const SRC_TESTS = sort!([relpath(joinpath(d, f), SRC_TEST_DIR)
+                         for (d, _, fs) in walkdir(SRC_TEST_DIR) for f in fs if endswith(f, ".jl")])
+isempty(SRC_TESTS) && error("test/src/ holds no test file: the walk found nothing")
+# the file and case running now, for dev/check.sh's hard limit to name (WT_PROGRESS)
+const _WT_PROGRESS = get(ENV, "WT_PROGRESS", "")
+wt_progress(s::AbstractString) = isempty(_WT_PROGRESS) || write(_WT_PROGRESS, s)
 @testset "src" begin
     for f in SRC_TESTS
-        @testset "$f" begin include(joinpath(@__DIR__, f)) end
+        wt_progress(f)
+        @testset "$f" begin include(joinpath(SRC_TEST_DIR, f)) end
     end
 end

@@ -22,16 +22,26 @@ using Test, WasmTarget
 const DART_GROUPS = let m = Module(:DartCorpus), groups = Pair{String,Vector{Any}}[]
     Core.eval(m, :(_g(name, cases) = push!($groups, name => cases)))
     Core.eval(m, :(_xf(name, cases) = push!($groups, name => cases)))
-    Base.include(m, joinpath(@__DIR__, "smoke_corpus.jl"))
+    Base.include(m, joinpath(@__DIR__, "..", "smoke_corpus.jl"))
     filter(g -> startswith(first(g), "dart_"), groups)
 end
 
-# the text the change is measured against: the file at CHECK_BASE, or "" where the base holds none
+# the text the change is measured against: the file at CHECK_BASE, followed across a rename by git's
+# own rename detection (a move leaves its records unchanged), or "" where the base holds none
 const _DART_BASE = get(ENV, "CHECK_BASE", "origin/wt2")
-_dart_at_base(path::String)::String = try
-    read(pipeline(`git -C $(dirname(@__DIR__)) show $(_DART_BASE):$path`; stderr = devnull), String)
-catch
-    ""
+function _dart_at_base(path::String)::String
+    local was = try
+        local renames = read(pipeline(`git -C $(@__DIR__) diff -M --name-status $(_DART_BASE)`; stderr = devnull), String)
+        local m = match(Regex("^R\\d*\\t(\\S+)\\t\\Q$(path)\\E\$", "m"), renames)
+        m === nothing ? path : String(m[1])
+    catch
+        path
+    end
+    return try
+        read(pipeline(`git -C $(@__DIR__) show $(_DART_BASE):$was`; stderr = devnull), String)
+    catch
+        ""
+    end
 end
 
 # each dart group's text in the corpus: its definitions since the group before and its case list, every
@@ -60,8 +70,8 @@ _dart_record_lines(text::String)::Dict{String,String} =
 
 # the cases whose native answer the change can affect: its group's text or its record differs from the base's
 const DART_NATIVE_DUE = let base_c = _dart_group_texts(_dart_at_base("test/smoke_corpus.jl")),
-                            head_c = _dart_group_texts(read(joinpath(@__DIR__, "smoke_corpus.jl"), String)),
-                            base_r = _dart_record_lines(_dart_at_base("test/dart_tests.jl")),
+                            head_c = _dart_group_texts(read(joinpath(@__DIR__, "..", "smoke_corpus.jl"), String)),
+                            base_r = _dart_record_lines(_dart_at_base("test/src/dart_tests.jl")),
                             head_r = _dart_record_lines(read(joinpath(@__DIR__, "dart_tests.jl"), String))
     Set{String}(key for (key, rec) in head_r
                 if get(base_r, key, nothing) != rec || get(base_c, first(split(key, '/')), nothing) != get(head_c, first(split(key, '/')), ""))
