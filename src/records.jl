@@ -50,18 +50,22 @@ end
 @parity "dart2wasm/lib/records.dart:40 RecordShape.toString" Base.show(io::IO, self::RecordShape)::Nothing =
     print(io, "Record(positionals: ", self.positionals, ", names: {", join(("$(k): $(v)" for (k, v) in self._names), ", "), "})")
 
-# dart's `other is! RecordShape` arm: an `other` of another type takes Julia's fallback `==`, false
+# dart's `other is! RecordShape` arm: an `other` of another type takes Julia's fallback `==`, false.
+# dart compares the names alone: a Dart record's named fields are sorted, so a name's index follows
+# from the names. A Julia NamedTuple keeps its declared order, `(b=1, a=2)` holding `b` first, so a
+# shape is its names with their indices, and two orders are two shapes (A42S3, A45S2)
 @parity "dart2wasm/lib/records.dart:43 RecordShape.==" function Base.:(==)(self::RecordShape, other::RecordShape)::Bool
     self.positionals != other.positionals && return false
     length(self._names) != length(other._names) && return false
     for (a, b) in zip(self._names, other._names)
-        first(a) != first(b) && return false
+        a != b && return false
     end
     return true
 end
 
-# dart's Object.hash(positionals, Object.hashAll(names)); Julia's hash takes the seed it mixes into
-@parity "dart2wasm/lib/records.dart:69 RecordShape.hashCode" Base.hash(self::RecordShape, h::UInt)::UInt = hash(names(self), hash(self.positionals, h))
+# dart's Object.hash(positionals, Object.hashAll(names)), each name with its index as `==` compares;
+# Julia's hash takes the seed it mixes into
+@parity "dart2wasm/lib/records.dart:69 RecordShape.hashCode" Base.hash(self::RecordShape, h::UInt)::UInt = hash(self._names, hash(self.positionals, h))
 
 """Struct index of a positional field."""
 @parity "dart2wasm/lib/records.dart:72 RecordShape.getPositionalIndex" get_positional_index(self::RecordShape, position::Int64)::Int = FieldIndex_record_field_base() + position

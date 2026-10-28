@@ -12,8 +12,13 @@ const DR = WasmTarget.Dart2Wasm
     @test DR.get_name_index(s, "a") == DR.FieldIndex_record_field_base() + 3
     @test DR.get_positional_index(s, 1) == DR.FieldIndex_record_field_base() + 1
     @test sprint(show, s) == "Record(positionals: 2, names: {a: 3, b: 2})"
-    # equal by positionals and names, whatever the names' given order; hashed alike
-    @test s == DR.RecordShape(2, ["a", "b"]) && hash(s) == hash(DR.RecordShape(2, ["a", "b"]))
+    # equal by positionals and names with their indices, hashed alike; another order of the names is
+    # another shape, its fields at other indices, as Julia's NamedTuple orders are other types
+    @test s == DR.RecordShape(2, ["b", "a"]) && hash(s) == hash(DR.RecordShape(2, ["b", "a"]))
+    @test s != DR.RecordShape(2, ["a", "b"])
+    local ba = DR.RecordShape_from_type(typeof((b = 1, a = 2))); local ab = DR.RecordShape_from_type(typeof((a = 2, b = 1)))
+    @test ba != ab && DR.get_name_index(ba, "a") != DR.get_name_index(ab, "a")
+    @test typeof((b = 1, a = 2)) != typeof((a = 2, b = 1))
     @test s != DR.RecordShape(1, ["a", "b"]) && s != DR.RecordShape(2, ["a"]) && s != DR.RecordShape(2, ["a", "c"])
     @test s != 2
     @test DR.num_fields(DR.RecordShape(3, String[])) == 3 && isempty(names(DR.RecordShape(3, String[])))
