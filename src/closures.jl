@@ -161,7 +161,7 @@ is a method signature, a Tuple type (src/julia/kernel.jl), whose value is a `Dat
                 () -> _define_struct(self, "#ClosureBase"; named_fields = [
                         "vtable" => fixed(ref(self._vtable_base_struct_uninitialized[])),
                         "functionType" => fixed(self.function_type_type[])],
-                    super_type = self.translator.closure_info.struct_)),
+                    super_type = self.translator.closure_info[].struct_)),
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/closures.dart:379 ClosureLayouter.functionTypeType",
                 function ()
                     local info = get(self.translator.class_info, DataType, nothing)
