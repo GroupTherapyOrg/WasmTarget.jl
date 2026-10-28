@@ -215,9 +215,13 @@ end
 What dart2wasm's `w.` reaches, from the names wasm_builder.dart makes `visible` (each `(declaring
 key, dart name)`): each name's Julia bindings in its module, and every binding and method of a
 definition anchored at one of its members (a static or constructor `X_m`, a member function, a
-package generic `WasmBuilder.m`); of any other class, its instance members' package generics (an
-object of a class `w.` cannot name still answers its members); a private member (`X._m`) never; and
-the module IR itself.
+package generic `WasmBuilder.m`); of any other class, its instance members' package generics; a
+private member (`X._m`) never; and the module IR itself.
+
+The lead's ruling (2026-10-28): dart's export governs names, not members, so an instance member of a
+class `w.` cannot name stays reachable through a value of it; dart2wasm calls setFunctionAt on the
+ActiveFunctionSegmentBuilder that `elements.activeFunctionSegmentBuilderFor` returns, a class
+builder.dart does not export.
 """
 @quarantine "a dart name's Julia bindings are its definitions' registry entries and their methods' functions" Base.parentmodule function wasm_builder_reach(visible::Set{Tuple{String,Symbol}})::Set{Tuple{Module,Symbol}}
     local reach = Set{Tuple{Module,Symbol}}([(WasmBuilder, :IR)])
