@@ -51,7 +51,9 @@ against the sum's kinds where it is written and expands into a chain of isa test
     local refuse(why) = throw(ConstructionViolation("@exhaustive", "$(_at(__source__)): $why"))
     Meta.isexpr(subject, :(::), 2) && subject.args[2] isa Symbol || refuse("the subject reads `value::Sum`")
     local sum = subject.args[2]
-    (__module__, sum) in CLOSED_SUMS || refuse("$sum is not a @closed sum defined above the match")
+    # the sum where it is declared: this module's own or one it imports (a port matching the NIR)
+    isdefined(__module__, sum) && (Base.binding_module(__module__, sum), sum) in CLOSED_SUMS ||
+        refuse("$sum is not a @closed sum defined above the match")
     local kinds = Symbol[nameof(T) for T in Base.uniontypes(getglobal(__module__, sum))]
     local as = _arms(arms, __source__)
     local named = Symbol[k for (k, _, _) in as]

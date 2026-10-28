@@ -165,7 +165,50 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:702 AstCodeGenerator.translateVariable" @unported function translate_variable(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement" @unported function translate_statement(self::AstCodeGenerator, node) end
+"""
+Generate the code of one statement of the function's NIR body. dart's `node.accept(this)` is the
+visitor's double dispatch over Kernel's statement classes; here one `@exhaustive` arm per NIR form,
+no wildcard. `used` is whether a later statement reads the statement's SSA value, the one fact
+Julia's flat IR keeps apart from the statement (Kernel nests a used expression in its parent): a
+used value is Kernel's `VariableDeclaration` with its initializer, a local
+(translateVariableDeclaration), an unused one an `ExpressionStatement` (visitExpressionStatement,
+the void marker expected); a return is a `ReturnStatement`, an emptied statement an
+`EmptyStatement`. Every Julia-only form (the flat IR's jumps and merges, try regions, GC
+preservation, loop hints, the bounds-check flag) rejects, located, until the stackifier
+(dev/MARCH.md 1.D), and a foreign call or C function pointer until the host imports (1.F). dart's
+source-map offset is set from the node; the NIR's line table takes that place with the source map.
+"""
+@parity "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement" function translate_statement(self::AstCodeGenerator, node::NirStmt, used::Bool)::Nothing
+    local at = "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement"
+    @exhaustive node::NirStmt begin
+        (s::NirCall) => used ? translate_variable_declaration(self, s) : visit_expression_statement(self, s)
+        (s::NirInvoke) => used ? translate_variable_declaration(self, s) : visit_expression_statement(self, s)
+        (s::NirNew) => used ? translate_variable_declaration(self, s) : visit_expression_statement(self, s)
+        (s::NirGlobalRead) => used ? translate_variable_declaration(self, s) : visit_expression_statement(self, s)
+        (s::NirReturn) => visit_return_statement(self, s)
+        (s::NirNothing) => visit_empty_statement(self, s)
+        (s::NirForeignCall) => reject!(Unquarantined("dev/MARCH.md 1.F: a foreign call, a host import"), at)
+        (s::NirCFunction) => reject!(Unquarantined("dev/MARCH.md 1.F: a C function pointer, a host import"), at)
+        (s::NirBoundscheck) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's bounds-check flag"), at)
+        (s::NirGCPreserveBegin) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's GC preservation region"), at)
+        (s::NirGCPreserveEnd) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's GC preservation region"), at)
+        (s::NirLeave) => reject!(Unquarantined("dev/MARCH.md 1.D: leaving a try region, structured by the stackifier"), at)
+        (s::NirPopException) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's exception stack"), at)
+        (s::NirTheException) => reject!(Unquarantined("dev/MARCH.md 1.D: the caught exception of a try region"), at)
+        (s::NirLoopInfo) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's loop hints"), at)
+        (s::NirThrowUndefIfNot) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's undefined-variable check"), at)
+        (s::NirInvokeModify) => reject!(Unquarantined("dev/MARCH.md 1.D: an atomic field modify"), at)
+        (s::NirGoto) => reject!(Unquarantined("dev/MARCH.md 1.D: a jump of the flat IR, structured by the stackifier"), at)
+        (s::NirGotoIfNot) => reject!(Unquarantined("dev/MARCH.md 1.D: a conditional jump of the flat IR, structured by the stackifier"), at)
+        (s::NirUnreachable) => reject!(Unquarantined("dev/MARCH.md 1.D: code Julia proved unreachable"), at)
+        (s::NirPhi) => reject!(Unquarantined("dev/MARCH.md 1.D: an SSA merge, a local the stackifier assigns on each edge"), at)
+        (s::NirPi) => reject!(Unquarantined("dev/MARCH.md 1.D: a value narrowed on one path"), at)
+        (s::NirEnter) => reject!(Unquarantined("dev/MARCH.md 1.D: entering a try region, structured by the stackifier"), at)
+        (s::NirUpsilon) => reject!(Unquarantined("dev/MARCH.md 1.D: an exception-edge value, structured by the stackifier"), at)
+        (s::NirPhiC) => reject!(Unquarantined("dev/MARCH.md 1.D: an exception-edge merge, structured by the stackifier"), at)
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:726 AstCodeGenerator._printLocation" @unported function _print_location(self::AstCodeGenerator, node) end
 

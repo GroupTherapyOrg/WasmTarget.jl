@@ -25,7 +25,11 @@ import ..reject!, ..Internal, ..Unported, ..Unquarantined, ..Late
 # the program, as Julia's trim verifier accepts it and the NIR reads it (src/julia/subset.jl, nir.jl),
 # and its classes, Julia's answers where dart reads a Kernel Class (src/julia/classes.jl)
 import ..ClosedWorld, ..NirBody, ..build_nir, ..closed_world_classes, ..class_superclass, ..class_is_abstract,
-       ..class_implemented_types, ..ClassField, ..class_instance_fields
+       ..class_implemented_types, ..ClassField, ..class_instance_fields,
+       ..NirStmt, ..NirCall, ..NirInvoke, ..NirNew, ..NirForeignCall, ..NirBoundscheck, ..NirGCPreserveBegin,
+       ..NirGCPreserveEnd, ..NirLeave, ..NirPopException, ..NirTheException, ..NirLoopInfo, ..NirThrowUndefIfNot,
+       ..NirCFunction, ..NirInvokeModify, ..NirGoto, ..NirGotoIfNot, ..NirReturn, ..NirUnreachable, ..NirPhi, ..NirPi,
+       ..NirEnter, ..NirUpsilon, ..NirPhiC, ..NirNothing, ..NirGlobalRead
 import ..WasmBuilder
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
 import ...@parity, ...@unported, ...@closed, ...@exhaustive
