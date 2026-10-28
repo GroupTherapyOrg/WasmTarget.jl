@@ -98,6 +98,19 @@ end
     @test_throws WT.RejectionError W.make_dynamic_dispatcher_signature(t, W.MethodCallShape(:f, 1, 0, Symbol[]))
     @test isempty(W.make_dynamic_dispatcher_signature(t, W.MethodCallShape(:setindex!, 0, 2, Symbol[])).outputs)
     @test W.make_dynamic_dispatcher_signature(t, W.GetterCallShape(:y)) === g     # one type per signature
+
+    # a dynamic selector's targets wait for their classes; an allocated class makes the forwarder,
+    # whose code generator (code_generator.dart's, unported) is reached and rejects, located
+    local dshape = W.GetterCallShape(:f)                   # a shape no call has used yet
+    local ds = W.DynamicSelector(Val(:_), dshape, W.make_dynamic_forwarder_signature(t, dshape))
+    ds.targets[] = W.LinkedHashMap{Int,Core.MethodInstance}()
+    ds.targets[][7] = mi
+    W.record_dynamic_selector_use(fc, ds)
+    @test fc._pending_allocation_dynamic[7] == [(dshape, mi)] && W.get_existing_dynamic_forwarder(fc, mi, dshape) === nothing
+    W.record_dynamic_selector_use(fc, ds)                   # the shape already called: nothing again
+    @test length(fc._pending_allocation_dynamic[7]) == 1
+    local e = try; W.record_class_allocation(fc, 7); nothing; catch x; x; end
+    @test e isa WT.RejectionError && e.rejection isa WT.Unported && occursin("DynamicForwarderCodeGenerator", e.rejection.anchor)
 end
 
 end # module FunctionsTest

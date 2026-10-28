@@ -4,24 +4,30 @@
 """
 Creates the wasm function of each member the program reaches, queueing its code for generation,
 and manages the compilation queue that achieves tree shaking. A member is a Core.MethodInstance.
-
-Fields to come (4, each with its functions.dart line, the dynamic calls' and closures' maps, which
-no program Julia's trim verifier accepts reaches yet): `_dynamicForwarderFunctions` :27,
-`_invocationCreatorStubs` :30, `_lambdas` :32, `_pendingAllocationDynamic` :42.
 """
 @parity "dart2wasm/lib/functions.dart:21 FunctionCollector" struct FunctionCollector
     translator::KernelNodes
     _functions::LinkedHashMap{Core.MethodInstance,WasmBuilder.IR.BaseFunction}
+    # each member's function for each caller shape (dart's dynamic forwarders)
+    _dynamic_forwarder_functions::LinkedHashMap{Core.MethodInstance,LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}}
+    # the function creating an Invocation for each call shape
+    _invocation_creator_stubs::LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}
+    # each closure's function
+    _lambdas::LinkedHashMap{Lambda,WasmBuilder.IR.BaseFunction}
     _called_selectors::Set{Int}
     _called_unchecked_selectors::Set{Int}
     _called_dynamic_selectors::Set{CallShape}
     _allocated_classes::Set{Int}
     _pending_allocation::Dict{Int,Vector{Core.MethodInstance}}
+    _pending_allocation_dynamic::Dict{Int,Vector{Tuple{CallShape,Core.MethodInstance}}}
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at :44
     # is its outer function
     FunctionCollector(::Val{:_}, translator::KernelNodes) =
-        new(translator, LinkedHashMap{Core.MethodInstance,WasmBuilder.IR.BaseFunction}(), Set{Int}(), Set{Int}(),
-            Set{CallShape}(), Set{Int}(), Dict{Int,Vector{Core.MethodInstance}}())
+        new(translator, LinkedHashMap{Core.MethodInstance,WasmBuilder.IR.BaseFunction}(),
+            LinkedHashMap{Core.MethodInstance,LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}}(),
+            LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}(), LinkedHashMap{Lambda,WasmBuilder.IR.BaseFunction}(),
+            Set{Int}(), Set{Int}(), Set{CallShape}(), Set{Int}(), Dict{Int,Vector{Core.MethodInstance}}(),
+            Dict{Int,Vector{Tuple{CallShape,Core.MethodInstance}}}())
 end
 
 """
@@ -152,13 +158,53 @@ end
 
 @parity "dart2wasm/lib/functions.dart:192 FunctionCollector.hasDynamicSelectorCall" has_dynamic_selector_call(self::FunctionCollector, shape::CallShape)::Bool = shape in self._called_dynamic_selectors
 
-@parity "dart2wasm/lib/functions.dart:195 FunctionCollector.getExistingDynamicForwarder" @unported function get_existing_dynamic_forwarder(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape) end
+@parity "dart2wasm/lib/functions.dart:195 FunctionCollector.getExistingDynamicForwarder" function get_existing_dynamic_forwarder(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape)::Union{WasmBuilder.IR.BaseFunction,Nothing}
+    local forwarders = get(self._dynamic_forwarder_functions, target, nothing)
+    return forwarders === nothing ? nothing : get(forwarders, shape, nothing)
+end
 
-@parity "dart2wasm/lib/functions.dart:202 FunctionCollector.getDynamicForwarder" @unported function get_dynamic_forwarder(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape) end
+"""The function forwarding a dynamic call of `shape` to `target`, made on first request and queued."""
+@parity "dart2wasm/lib/functions.dart:202 FunctionCollector.getDynamicForwarder" function get_dynamic_forwarder(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape)::WasmBuilder.IR.BaseFunction
+    local forwarders = get!(() -> LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}(), self._dynamic_forwarder_functions, target)
+    local existing = get(forwarders, shape, nothing)
+    existing === nothing || return existing
+    local translator = self.translator
+    local module_ = module_for_reference(translator, target)
+    local ftype = make_dynamic_forwarder_signature(translator, shape)
+    local name = get_dynamic_forwarder_name(self, target, shape)
+    local function_ = WasmBuilder.define(module_.functions[], ftype, name)
+    local codegen = DynamicForwarderCodeGenerator(translator, ftype, target, shape)
+    add(translator.compilation_queue[], AstCompilationTask(function_, codegen, target))
+    forwarders[shape] = function_
+    return function_
+end
 
-@parity "dart2wasm/lib/functions.dart:221 FunctionCollector.getInvocationCreatorStub" @unported function get_invocation_creator_stub(self::FunctionCollector, shape::MethodCallShape) end
+"""The function creating an Invocation for a call of `shape`, made on first request in the main module."""
+@parity "dart2wasm/lib/functions.dart:221 FunctionCollector.getInvocationCreatorStub" function get_invocation_creator_stub(self::FunctionCollector, shape::MethodCallShape)::WasmBuilder.IR.BaseFunction
+    local existing = get(self._invocation_creator_stubs, shape, nothing)
+    existing === nothing || return existing
+    local translator = self.translator
+    local module_ = main_module(translator)
+    local ftype = make_invocation_creator_signature(translator, shape)
+    local name = get_invocation_creator_stub_name(self, shape)
+    local function_ = WasmBuilder.define(module_.functions[], ftype, name)
+    local codegen = InvocationCreationStubGenerator(translator, shape)
+    add(translator.compilation_queue[], CompilationTask(function_, codegen))
+    self._invocation_creator_stubs[shape] = function_
+    return function_
+end
 
-@parity "dart2wasm/lib/functions.dart:233 FunctionCollector.getLambdaFunction" @unported function get_lambda_function(self::FunctionCollector, lambda::Lambda) end
+"""A closure's function, made on first request in its enclosing member's module and queued."""
+@parity "dart2wasm/lib/functions.dart:233 FunctionCollector.getLambdaFunction" function get_lambda_function(self::FunctionCollector, lambda::Lambda)::WasmBuilder.IR.BaseFunction
+    local existing = get(self._lambdas, lambda, nothing)
+    existing === nothing || return existing
+    local translator = self.translator
+    local module_ = module_for_reference(translator, lambda.enclosing_member)
+    local function_ = WasmBuilder.define(module_.functions[], get_lambda_function_type(self, lambda), get_lambda_function_name(self, lambda))
+    add(translator.compilation_queue[], CompilationTask(function_, get_lambda_code_generator(translator, lambda)))
+    self._lambdas[lambda] = function_
+    return function_
+end
 
 @parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" function get_function_type(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType
     # We first try to get the function type by seeing if we already compiled the target function.
@@ -227,17 +273,34 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/functions.dart:423 FunctionCollector.recordDynamicSelectorUse" @unported function record_dynamic_selector_use(self::FunctionCollector, selector::DynamicSelector) end
+@parity "dart2wasm/lib/functions.dart:423 FunctionCollector.recordDynamicSelectorUse" function record_dynamic_selector_use(self::FunctionCollector, selector::DynamicSelector)::Nothing
+    # dart's `_calledDynamicSelectors.add(selector.shape)`, true when the shape is new
+    selector.shape in self._called_dynamic_selectors && return nothing
+    push!(self._called_dynamic_selectors, selector.shape)
+    for (class_id, target) in selector.targets[]
+        record_class_dynamic_target_use(self, class_id, selector.shape, target)
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/functions.dart:431 FunctionCollector.recordClassDynamicTargetUse" @unported function record_class_dynamic_target_use(self::FunctionCollector, class_id::Int64, shape::CallShape, target::Core.MethodInstance) end
+@parity "dart2wasm/lib/functions.dart:431 FunctionCollector.recordClassDynamicTargetUse" function record_class_dynamic_target_use(self::FunctionCollector, class_id::Int64, shape::CallShape, target::Core.MethodInstance)::Nothing
+    if class_id in self._allocated_classes
+        get_dynamic_forwarder(self, target, shape)
+    else
+        push!(get!(() -> Tuple{CallShape,Core.MethodInstance}[], self._pending_allocation_dynamic, class_id), (shape, target))
+    end
+    return nothing
+end
 
-# dart also schedules the dynamic forwarders pending the class; a Julia program has none (D32)
 @parity "dart2wasm/lib/functions.dart:446 FunctionCollector.recordClassAllocation" function record_class_allocation(self::FunctionCollector, class_id::Int64)::Nothing
     class_id in self._allocated_classes && return nothing
     push!(self._allocated_classes, class_id)
     # Schedule all members that were pending allocation of this class.
     for target in get(self._pending_allocation, class_id, Core.MethodInstance[])
         get_function(self, target)
+    end
+    for (shape, target) in get(self._pending_allocation_dynamic, class_id, Tuple{CallShape,Core.MethodInstance}[])
+        get_dynamic_forwarder(self, target, shape)
     end
     return nothing
 end
