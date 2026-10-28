@@ -37,9 +37,21 @@ each collected shape, of which a Julia program has none.
 end
 
 """
-DynamicSelector's dart fields: `shape`, `signature`, `targets`, `offset`.
+A dynamic selector: a call shape a dynamic call site has, its wasm signature, its targets by class id
+and its offset in the tables once placed. Julia's trim verifier leaves no dynamic call (ledger D32),
+so DynamicDispatchTable.build makes none in a Julia program. Equal by shape, as dart's is.
 """
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:330 DynamicSelector" @unported struct DynamicSelector end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:330 DynamicSelector" struct DynamicSelector
+    shape::CallShape
+    signature::WasmBuilder.IR.FunctionType
+    targets::Late{LinkedHashMap{Int,Core.MethodInstance}}
+    offset::Late{Union{Int,Nothing}}
+    # the struct's one constructor, tagged; dart's constructor at :337 is its outer function, and the
+    # late targets and offset are assigned by build
+    DynamicSelector(::Val{:_}, shape::CallShape, signature::WasmBuilder.IR.FunctionType) =
+        new(shape, signature, Late{LinkedHashMap{Int,Core.MethodInstance}}("dart2wasm/lib/dynamic_dispatch_table.dart:333 DynamicSelector.targets"),
+            Late{Union{Int,Nothing}}("dart2wasm/lib/dynamic_dispatch_table.dart:335 DynamicSelector.offset"))
+end
 
 """The call shapes of the program's dynamic call sites, dart's recursive visitor over the component."""
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:355 DynamicCallSiteCollector" struct DynamicCallSiteCollector
@@ -83,7 +95,21 @@ unique offsets; define the targets and class ids tables. A Julia program has no 
     return nothing
 end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:141 DynamicDispatchTable._lookupTarget" @unported function _lookup_target(self::DynamicDispatchTable, selector::DynamicSelector, class_id::Int64) end
+"""
+The member a class's instance answers a dynamic selector with, or `nothing`. The top type and wasm
+types answer none. dart asks its class hierarchy for the class's member by the selector's name; a
+Julia method belongs to its generic function and is chosen by every argument's type, not by the
+receiver's class and a name, so the lookup has no answer from a call shape alone, and it rejects,
+located (no Julia program reaches it: the verified subset has no dynamic call).
+"""
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:141 DynamicDispatchTable._lookupTarget" function _lookup_target(self::DynamicDispatchTable, selector::DynamicSelector, class_id::Int64)::Union{Core.MethodInstance,Nothing}
+    local translator = self.translator
+    local cls = translator.classes[][class_id + 1].cls
+    cls === nothing && return nothing
+    # We do not dyanmically dispatch on wasm objects, they are not Dart objects
+    is_wasm_type(translator, cls) && return nothing
+    reject!(Unquarantined("src/dynamic_dispatch_table.jl _lookupTarget: the method $cls answers $(sprint(show, selector)) with, which Julia chooses by every argument's type"), "DynamicDispatchTable._lookupTarget")
+end
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:194 DynamicDispatchTable.output" function output(self::DynamicDispatchTable)::Nothing
     output_target_table(self)
@@ -103,23 +129,42 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:311 DynamicDispatchTable._findNextEntry" @unported function _find_next_entry(self::DynamicDispatchTable, start::Int64) end
+"""The next slot from `start` whose shape has a compiled dynamic call, and its entry (`nothing` past the end)."""
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:311 DynamicDispatchTable._findNextEntry" function _find_next_entry(self::DynamicDispatchTable, start::Int64)::NamedTuple{(:start, :entry),Tuple{Int,Union{TableEntry,Nothing}}}
+    local table = self._table[]
+    while start < length(table)
+        local entry = table[start + 1]
+        if entry === nothing
+            start += 1
+            continue
+        end
+        if !has_dynamic_selector_call(self.translator.functions[], entry.shape)
+            # The dynamic call was never compiled (e.g. due to being unreachable).
+            start += 1
+            continue
+        end
+        return (start = start, entry = entry)
+    end
+    return (start = start, entry = nothing)
+end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:337 DynamicSelector" @unported function DynamicSelector(shape, signature) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:337 DynamicSelector" DynamicSelector(shape::CallShape, signature::WasmBuilder.IR.FunctionType)::DynamicSelector = DynamicSelector(Val(:_), shape, signature)
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:339 DynamicSelector.name" @unported function name(self::DynamicSelector) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:339 DynamicSelector.name" name(self::DynamicSelector) = self.shape.name
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:340 DynamicSelector.isSetter" @unported function is_setter(self::DynamicSelector) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:340 DynamicSelector.isSetter" is_setter(self::DynamicSelector)::Bool = self.shape isa SetterCallShape
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:341 DynamicSelector.isGetter" @unported function is_getter(self::DynamicSelector) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:341 DynamicSelector.isGetter" is_getter(self::DynamicSelector)::Bool = self.shape isa GetterCallShape
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:342 DynamicSelector.isMethod" @unported function is_method(self::DynamicSelector) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:342 DynamicSelector.isMethod" is_method(self::DynamicSelector)::Bool = self.shape isa MethodCallShape
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:345 DynamicSelector.==" @unported function Base.:(==)(self::DynamicSelector, other::Any) end
+# dart's `other is DynamicSelector` arm: an `other` of another type takes Julia's fallback `==`, false
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:345 DynamicSelector.==" Base.:(==)(self::DynamicSelector, other::DynamicSelector)::Bool = self.shape == other.shape
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:349 DynamicSelector.hashCode" @unported function Base.hash(self::DynamicSelector, h::UInt) end
+# dart's shape.hashCode; Julia's hash takes the seed it mixes into
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:349 DynamicSelector.hashCode" Base.hash(self::DynamicSelector, h::UInt)::UInt = hash(self.shape, h)
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:352 DynamicSelector.toString" @unported function Base.show(io::IO, self::DynamicSelector) end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:352 DynamicSelector.toString" Base.show(io::IO, self::DynamicSelector)::Nothing = print(io, "DynamicSelector ", self.shape, " ", self.signature)
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:358 DynamicCallSiteCollector._" DynamicCallSiteCollector__()::DynamicCallSiteCollector = DynamicCallSiteCollector(Val(:_))
 
@@ -141,10 +186,15 @@ end
 # Julia invoke names the MethodInstance it calls, a closure's among them, so no shape
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:367 DynamicCallSiteCollector.visitFunctionInvocation" visit_function_invocation(self::DynamicCallSiteCollector, node::NirInvoke)::Nothing = nothing
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:377 DynamicCallSiteCollector.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::DynamicCallSiteCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:394 DynamicCallSiteCollector.visitDynamicGet" @unported function visit_dynamic_get(self::DynamicCallSiteCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:400 DynamicCallSiteCollector.visitDynamicSet" @unported function visit_dynamic_set(self::DynamicCallSiteCollector, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:408 buildIntegerExpression" @unported function build_integer_expression(module_::WasmBuilder.ModuleBuilder, value::Int64) end
+"""A constant expression of the i31 reference holding `value`: an entry of the class ids table."""
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:408 buildIntegerExpression" function build_integer_expression(module_::WasmBuilder.ModuleBuilder, value::Int64)::WasmBuilder.InstructionsBuilder
+    local b = WasmBuilder.InstructionsBuilder(module_, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[WasmBuilder.IR.RefType_i31(; nullable = false)];
+                                              constant_expression = true)
+    WasmBuilder.i32_const(b, value)
+    WasmBuilder.i31_new(b)
+    WasmBuilder.var"end"(b)
+    return b
+end

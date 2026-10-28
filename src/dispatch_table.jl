@@ -2,9 +2,60 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-SelectorInfo's dart fields: `dispatchTable`, `id`, `callCount`, `paramInfo`, `isSetter`, `isIndexSetter`, `useMultipleEntryPoints`, `_useSentinelForOptionalParameters`, `signature`, `synthesizeNullReturnValue`, `synthesizeNoReturn`, `name`, `_checked`, `_unchecked`, `_normal`, `_references`, `_targetSet`.
+A selector: the members one call site may reach, by name and kind. Its fields: the dispatch table
+(held as `AbstractDispatchTable`, src/julia/forward.jl, because the table maps ids to selectors), a
+unique id, its call count, the upper bound of its targets' parameter infos, whether it is a setter
+or an index setter, whether it has checked and unchecked entry points, whether its optional
+parameters take sentinels, its wasm signature (read after every target is added), whether callers
+synthesize a null return or emit unreachable, its member's name, its targets (checked, unchecked
+or normal), the references its parameter info is computed from, and its target set.
+
+A Julia member is a MethodInstance (src/julia/kernel.jl). Julia's trim verifier leaves no call
+unresolved (ledger D32), so DispatchTable.build makes no selector, and the table is empty by Julia's
+answer. If the subset ever admitted dynamic calls, the same code would fill it.
 """
-@parity "dart2wasm/lib/dispatch_table.dart:30 SelectorInfo" @unported struct SelectorInfo end
+@parity "dart2wasm/lib/dispatch_table.dart:30 SelectorInfo" mutable struct SelectorInfo
+    const dispatch_table::AbstractDispatchTable
+    const id::Int
+    const call_count::Int
+    const param_info::Late{ParameterInfo}
+    const is_setter::Bool
+    const is_index_setter::Bool
+    const use_multiple_entry_points::Late{Bool}
+    const _use_sentinel_for_optional_parameters::Late{Bool}
+    const signature::Late{WasmBuilder.IR.FunctionType}
+    const synthesize_null_return_value::Late{Bool}
+    const synthesize_no_return::Late{Bool}
+    const name::String
+    _checked::Union{SelectorTargets,Nothing}
+    _unchecked::Union{SelectorTargets,Nothing}
+    _normal::Union{SelectorTargets,Nothing}
+    const _references::Vector{Core.MethodInstance}
+    const _target_set::Late{Base.IdSet{Core.MethodInstance}}
+    # dart's constructor `SelectorInfo._` with its field initializers, the struct's one constructor
+    # tagged by the dart name; each late initializer reads the selector itself
+    function SelectorInfo(::Val{:_}, dispatch_table::AbstractDispatchTable, id::Int, name::String, call_count::Int,
+            is_setter::Bool, is_index_setter::Bool)
+        local self
+        self = new(dispatch_table, id, call_count,
+            Late{ParameterInfo}("dart2wasm/lib/dispatch_table.dart:41 SelectorInfo.paramInfo"),
+            is_setter, is_index_setter,
+            Late{Bool}("dart2wasm/lib/dispatch_table.dart:53 SelectorInfo.useMultipleEntryPoints"),
+            Late{Bool}("dart2wasm/lib/dispatch_table.dart:57 SelectorInfo._useSentinelForOptionalParameters"),
+            Late{WasmBuilder.IR.FunctionType}("dart2wasm/lib/dispatch_table.dart:62 SelectorInfo.signature", () -> _compute_signature(self)),
+            Late{Bool}("dart2wasm/lib/dispatch_table.dart:67 SelectorInfo.synthesizeNullReturnValue"),
+            Late{Bool}("dart2wasm/lib/dispatch_table.dart:73 SelectorInfo.synthesizeNoReturn"),
+            name, nothing, nothing, nothing, Core.MethodInstance[],
+            Late{Base.IdSet{Core.MethodInstance}}("dart2wasm/lib/dispatch_table.dart:287 SelectorInfo._targetSet", function ()
+                # dart's `!` reads, located rejections
+                local present(t::Union{SelectorTargets,Nothing})::SelectorTargets = t === nothing ?
+                    reject!(Internal("dart2wasm/lib/dispatch_table.dart:287 SelectorInfo._targetSet: $(self.name)'s targets are not set"), "SelectorInfo._targetSet") : t
+                self.use_multiple_entry_points[] && return union(present(self._checked)._target_set[], present(self._unchecked)._target_set[])
+                return present(self._normal)._target_set[]
+            end))
+        return self
+    end
+end
 
 """
 The targets of a selector by class id ranges: all of them, the ones called through the dispatch
@@ -40,7 +91,7 @@ empty by Julia's answer. If the subset ever admitted a dynamic call, the same co
 Fields to come (2, each with its dispatch_table.dart line, TFA's selector metadata, which a Julia
 member never reads): `procedureAttributeMetadata` :399, `_selectorMetadata` :403.
 """
-@parity "dart2wasm/lib/dispatch_table.dart:396 DispatchTable" struct DispatchTable
+@parity "dart2wasm/lib/dispatch_table.dart:396 DispatchTable" struct DispatchTable <: AbstractDispatchTable
     translator::KernelNodes
     _selector_info::LinkedHashMap{Int,SelectorInfo}
     _table::Late{Vector{Union{Core.MethodInstance,Nothing}}}
@@ -75,19 +126,143 @@ and the runtime type table's (superclass id, substitution index) pair (types.dar
         new{V}(values, Late{Int}("dart2wasm/lib/dispatch_table.dart:1058 Row.offset"))
 end
 
-@parity "dart2wasm/lib/dispatch_table.dart:33 SelectorInfo.translator" @unported function translator(self::SelectorInfo) end
+@parity "dart2wasm/lib/dispatch_table.dart:33 SelectorInfo.translator" translator(self::SelectorInfo)::KernelNodes = self.dispatch_table.translator
 
-@parity "dart2wasm/lib/dispatch_table.dart:86 SelectorInfo.targets" @unported function targets(self::SelectorInfo; unchecked::Bool) end
+# dart's asserts and `!` reads are located rejections
+@parity "dart2wasm/lib/dispatch_table.dart:86 SelectorInfo.targets" function targets(self::SelectorInfo; unchecked::Bool)::SelectorTargets
+    local at = "dart2wasm/lib/dispatch_table.dart:86 SelectorInfo.targets"
+    local present(t::Union{SelectorTargets,Nothing})::SelectorTargets = t === nothing ?
+        reject!(Internal("$at: $(self.name)'s targets are not set"), at) : t
+    if self.use_multiple_entry_points[]
+        local checked = present(self._checked); local unchecked_ = present(self._unchecked)
+        length(checked.all_target_ranges) == length(unchecked_.all_target_ranges) ||
+            reject!(Internal("$at: the checked and unchecked targets of $(self.name) differ in their ranges"), at)
+        return unchecked ? unchecked_ : checked
+    end
+    (self._checked === nothing && self._unchecked === nothing) ||
+        reject!(Internal("$at: $(self.name) has one entry point but checked or unchecked targets"), at)
+    return present(self._normal)
+end
 
-@parity "dart2wasm/lib/dispatch_table.dart:97 SelectorInfo._" @unported function SelectorInfo__(dispatch_table, id, name, call_count; is_setter, is_index_setter) end
+@parity "dart2wasm/lib/dispatch_table.dart:97 SelectorInfo._" SelectorInfo__(dispatch_table::AbstractDispatchTable, id::Int, name::String, call_count::Int;
+        is_setter::Bool, is_index_setter::Bool)::SelectorInfo =
+    SelectorInfo(Val(:_), dispatch_table, id, name, call_count, is_setter, is_index_setter)
 
-@parity "dart2wasm/lib/dispatch_table.dart:106 SelectorInfo.entryPointName" @unported function entry_point_name(self::SelectorInfo, unchecked::Bool) end
+@parity "dart2wasm/lib/dispatch_table.dart:106 SelectorInfo.entryPointName" entry_point_name(self::SelectorInfo, unchecked::Bool)::String =
+    self.use_multiple_entry_points[] ? "$(self.name) ($(unchecked ? "unchecked" : "checked"))" : self.name
 
-@parity "dart2wasm/lib/dispatch_table.dart:118 SelectorInfo._computeSignature" @unported function _compute_signature(self::SelectorInfo) end
+"""
+The signature of the functions implementing the selector's targets: each parameter's and the
+return's upper bound across the targets, so every target fits it.
 
-@parity "dart2wasm/lib/dispatch_table.dart:239 SelectorInfo._upperBound" @unported function _upper_bound(self::SelectorInfo, types::Set{WasmBuilder.IR.ValueType}; ensure_boxed::Bool, is_receiver::Bool = false) end
+A Julia target is a MethodInstance (src/julia/kernel.jl): its receiver is its function object (the
+first parameter of its specialization signature), its positional parameters the rest, and it has
+no named parameter (Julia's keyword arguments are a method of their own, Core.kwcall's). A Julia
+member is neither a field getter nor a tear-off. Its return is Julia's inferred return type
+(`typeOfReturnValue`). No Julia parameter is optional, so none takes the default-value sentinel.
+"""
+@parity "dart2wasm/lib/dispatch_table.dart:118 SelectorInfo._computeSignature" function _compute_signature(self::SelectorInfo)::WasmBuilder.IR.FunctionType
+    local translator_ = translator(self)
+    local param_info = self.param_info[]
+    local name_index = param_info.name_index[]
+    local is_setter_or_index_setter = self.is_setter || self.is_index_setter
+    local return_count = is_setter_or_index_setter ? 0 : 1
+    local n_inputs = 1 + param_count(param_info)
+    local input_sets = [Set{WasmBuilder.IR.ValueType}() for _ in 1:n_inputs]
+    local output_sets = [Set{WasmBuilder.IR.ValueType}() for _ in 1:return_count]
+    local ensure_boxed = fill(false, n_inputs)
+    local is_sentinel(c::Union{Nothing,Constant})::Bool = c !== nothing && c === ParameterInfo_default_value_sentinel()
+    for (_, target) in targets(self; unchecked = false).all_target_ranges
+        local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
+        local receiver = params[1]
+        local positional = Type[params[i] for i in 2:length(params)]
+        local named = LinkedHashMap{String,Type}()
+        local returns = return_count == 0 ? Type[] : Type[type_of_return_value(translator_, target)]
+        length(returns) <= length(output_sets) ||
+            reject!(Internal("dart2wasm/lib/dispatch_table.dart:118 SelectorInfo._computeSignature: more returns than the selector has"), "SelectorInfo._computeSignature")
+        push!(input_sets[1], translate_type(translator_, receiver))
+        for i in 1:length(positional)
+            push!(input_sets[1 + i], translate_type(translator_, positional[i]))
+            ensure_boxed[1 + i] |= is_sentinel(param_info.positional[i])
+        end
+        for (name_, type_) in named
+            local i = name_index[name_]
+            push!(input_sets[1 + i + 1], translate_type(translator_, type_))
+            ensure_boxed[1 + i + 1] |= is_sentinel(param_info.named[name_])
+        end
+        for i in 1:return_count
+            push!(output_sets[i], i <= length(returns) ? translate_return_type(translator_, returns[i]) : translator_.top_type[])
+        end
+    end
+    local type_parameters = fill(non_nullable_type_type(translator_.types[]), param_info.type_param_count)
+    local inputs = WasmBuilder.IR.ValueType[_upper_bound(self, input_sets[i]; ensure_boxed = ensure_boxed[i], is_receiver = i == 1) for i in 1:n_inputs]
+    if self.name == "=="
+        # == can't be called with null
+        inputs[2] = WasmBuilder.with_nullability(inputs[2], false)
+    end
+    local outputs = WasmBuilder.IR.ValueType[_upper_bound(self, output_sets[i]; ensure_boxed = false) for i in 1:return_count]
+    if length(outputs) == 1 && outputs[1] isa WasmBuilder.IR.RefType && outputs[1].heap_type === WasmBuilder.IR.HeapType_none
+        # All functions are guaranteed to return null or are unreachable. => Prune signature to not
+        # return anything => Tell callers to synthesize `null` or emit `unreachable`.
+        local nullable = outputs[1].nullable
+        empty!(outputs)
+        self.synthesize_null_return_value[] = nullable
+        self.synthesize_no_return[] = !nullable
+    else
+        self.synthesize_null_return_value[] = is_setter_or_index_setter
+        self.synthesize_no_return[] = false
+    end
+    return WasmBuilder.define_function(types_builder(translator_), WasmBuilder.IR.ValueType[inputs[1]; type_parameters; inputs[2:end]], outputs)
+end
 
-@parity "dart2wasm/lib/dispatch_table.dart:291 SelectorInfo.containsTarget" @unported function contains_target(self::SelectorInfo, target::Core.MethodInstance) end
+"""
+The least upper bound of the wasm types of one parameter or return across the targets: the top type
+for none, an unboxed primitive for one primitive, else the nearest common struct by depth. dart
+boxes a primitive in its boxed class (`boxedClasses`); a Julia wasm primitive is the builtin type of
+several classes (i32 is `Int32`, `UInt32`, `Bool` and `Char`), so its box needs the Julia type, which
+the wasm type no longer holds, and a primitive to box rejects, located.
+"""
+@parity "dart2wasm/lib/dispatch_table.dart:239 SelectorInfo._upperBound" function _upper_bound(self::SelectorInfo, types::Set{WasmBuilder.IR.ValueType}; ensure_boxed::Bool, is_receiver::Bool = false)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/dispatch_table.dart:239 SelectorInfo._upperBound"
+    local translator_ = translator(self)
+    # A selector with no targets: its call sites are unreachable, but still evaluate their operands,
+    # which needs a signature, so a dummy one with top types.
+    isempty(types) && return translator_.top_type[]
+    # Unboxed primitive.
+    !ensure_boxed && length(types) == 1 && WasmBuilder.is_primitive(only(types)) && return only(types)
+    local nullable = any(t -> t isa WasmBuilder.IR.RefType && t.nullable, types)
+    local min_depth = 999999999
+    local heap_types = Set{WasmBuilder.IR.DefType}()
+    for t in types
+        (t isa WasmBuilder.IR.RefType && !(t.heap_type isa WasmBuilder.IR.DefType)) && continue
+        t isa WasmBuilder.IR.RefType ||
+            reject!(Unquarantined("src/dispatch_table.jl _upperBound: the primitive $t to box, the builtin type of several Julia classes"), at)
+        local def = t.heap_type::WasmBuilder.IR.DefType
+        min_depth = min(min_depth, def.depth)
+        push!(heap_types, def)
+    end
+    if isempty(heap_types)
+        # Only abstract heap types.
+        local abstract_heap_types = Set{WasmBuilder.IR.HeapType}(t.heap_type for t in types)
+        length(abstract_heap_types) == 1 || reject!(Internal("$at: several abstract heap types $abstract_heap_types"), at)
+        return WasmBuilder.IR.RefType(only(abstract_heap_types); nullable = nullable)
+    end
+    local target_depth = min_depth
+    while length(heap_types) > 1
+        local next = Set{WasmBuilder.IR.DefType}()
+        for s in heap_types
+            while s.depth > target_depth
+                s = s.super_type
+            end
+            push!(next, s)
+        end
+        heap_types = next
+        target_depth -= 1
+    end
+    return WasmBuilder.IR.RefType_def(only(heap_types); nullable = nullable)
+end
+
+@parity "dart2wasm/lib/dispatch_table.dart:291 SelectorInfo.containsTarget" contains_target(self::SelectorInfo, target::Core.MethodInstance)::Bool = target in self._target_set[]
 
 # dart asserts the dispatched and static ranges split all of them, in order: a located rejection
 @parity "dart2wasm/lib/dispatch_table.dart:360 SelectorTargets" function SelectorTargets(all_target_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}}, _dispatch_table_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Core.MethodInstance}}},
@@ -205,7 +380,19 @@ end
 @parity "dart2wasm/lib/dispatch_table.dart:919 _isUsedViaDispatchTableCall" _is_used_via_dispatch_table_call(selector::SelectorInfo)::Bool =
     reject!(Internal("dart2wasm/lib/dispatch_table.dart:919 _isUsedViaDispatchTableCall: a selector, which no Julia member makes"), "_isUsedViaDispatchTableCall")
 
-@parity "dart2wasm/lib/dispatch_table.dart:926 _parameterInfoFromReferences" @unported function _parameter_info_from_references(unreachable_metadata::NoCounterpart, references::Vector{Core.MethodInstance}, use_default_value_sentinel::Bool) end
+"""
+The upper bound of the parameter infos of the selector's targets. dart passes TFA's unreachable
+nodes, which the Kernel table gives no counterpart (no call can reach this with one), and marks a
+target's optionals for the sentinel when it is abstract or unreachable; a Julia target is a
+MethodInstance, compiled code of a concrete method, neither.
+"""
+@parity "dart2wasm/lib/dispatch_table.dart:926 _parameterInfoFromReferences" function _parameter_info_from_references(unreachable_metadata::NoCounterpart, references::Vector{Core.MethodInstance}, use_default_value_sentinel::Bool)::ParameterInfo
+    local param_info = ParameterInfo_from_member(first(references), use_default_value_sentinel)
+    for target in references[2:end]
+        merge(param_info, ParameterInfo_from_member(target, use_default_value_sentinel))
+    end
+    return param_info
+end
 
 """
 Build a row-displacement table by fitting `rows`: each row at the first offset, from the first free

@@ -29,7 +29,7 @@ import ..reject!, ..Internal, ..Unported, ..Unquarantined, ..Late, ..LinkedHashM
 # vm's UnionFind, which closures.dart imports (src/julia/union_find.jl)
 import ..UnionFind, ..uf_add!, ..uf_find!, ..uf_union!
 # the forward declaration of Closures, which Lambda points back to (src/julia/forward.jl)
-import ..AbstractClosures
+import ..AbstractClosures, ..AbstractDispatchTable
 # the program, as Julia's trim verifier accepts it and the NIR reads it (src/julia/subset.jl, nir.jl),
 # and its classes, Julia's answers where dart reads a Kernel Class (src/julia/classes.jl)
 import ..ClosedWorld, ..NirBody, ..NirWorld, ..NoCounterpart, ..build_nir, .._KINDS, ..closed_world_classes, ..class_superclass, ..class_is_abstract,

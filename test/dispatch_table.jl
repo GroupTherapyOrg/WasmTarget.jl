@@ -84,3 +84,40 @@ end
     local e = try; DD.selector_for_target(dt, first(b.ci.def for b in t.component)); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
 end
+
+@testset "dispatch_table.dart: SelectorInfo over Julia members; dynamic_dispatch_table.dart's integer expression" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
+    local t = DD.Translator(W.check_subset(DispatchCases.f, (Int,), "dispatch_table"), data, DD.TranslatorOptions())
+    DD._init_modules(t, nothing)
+    collect(DD.ClassInfoCollector(t))
+    local dt = t.dispatch_table[]
+    local s = DD.SelectorInfo__(dt, 0, "f", 1; is_setter = false, is_index_setter = false)
+    @test DD.translator(s) === t
+    # one entry point: the name alone; checked and unchecked ones each say which
+    s.use_multiple_entry_points[] = false
+    @test DD.entry_point_name(s, true) == "f"
+    local mi = _mi(DispatchCases.f, (Int,))
+    s._normal = DD.SelectorTargets([(range = DD.Range(1, 1), target = mi)], [(range = DD.Range(1, 1), target = mi)], NamedTuple{(:range, :target),Tuple{DD.Range,Core.MethodInstance}}[])
+    @test DD.targets(s; unchecked = false) === s._normal && DD.contains_target(s, mi) && !DD.contains_target(s, _mi(DispatchCases.g, (Float64,)))
+    local s2 = DD.SelectorInfo__(dt, 1, "g", 0; is_setter = false, is_index_setter = false)
+    s2.use_multiple_entry_points[] = true
+    @test DD.entry_point_name(s2, true) == "g (unchecked)" && DD.entry_point_name(s2, false) == "g (checked)"
+    local e = try; DD.targets(s2; unchecked = true); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+    # the upper bound: an unboxed primitive alone; else the nearest common struct, nullable if any is
+    @test DD._upper_bound(s, Set{IR.ValueType}([IR.NumType_i64]); ensure_boxed = false) === IR.NumType_i64
+    local a = IR.StructType("A"); local b = IR.StructType("B"; super_type = a); local c = IR.StructType("C"; super_type = a)
+    local d = IR.StructType("D"; super_type = b)
+    local ub = DD._upper_bound(s, Set{IR.ValueType}([IR.RefType_def(d; nullable = false), IR.RefType_def(c; nullable = true)]); ensure_boxed = false)
+    @test ub.heap_type === a && ub.nullable
+    @test DD._upper_bound(s, Set{IR.ValueType}([IR.RefType_def(b; nullable = false), IR.RefType_def(d; nullable = false)]); ensure_boxed = false).heap_type === b
+    @test DD._upper_bound(s, Set{IR.ValueType}(); ensure_boxed = false) == t.top_type[]
+    # a primitive to box: several Julia classes share its wasm type, a located rejection
+    local e2 = try; DD._upper_bound(s, Set{IR.ValueType}([IR.NumType_i32]); ensure_boxed = true); nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Unquarantined
+    # an entry of the class ids table: the constant i31 reference of the class id
+    local ce = DD.build_integer_expression(DD.main_module(t), 7)
+    @test ce isa W.WasmBuilder.InstructionsBuilder
+end

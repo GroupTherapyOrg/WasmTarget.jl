@@ -59,6 +59,9 @@
 "dart2wasm/lib/closures.dart ClosureLayouter.defaultConstantReference" = "the closure vtable's signatures and call shapes: Julia's trim verifier admits no call it cannot resolve to a method, so a function value is called by an invoke of its method and no vtable signature or call shape is registered"
 "dart2wasm/lib/closures.dart ClosureLayouter.visitFunctionInvocation" = "the closure vtable's signatures and call shapes: Julia's trim verifier admits no call it cannot resolve to a method, so a function value is called by an invoke of its method and no vtable signature or call shape is registered"
 "dart2wasm/lib/closures.dart ClosureLayouter.visitDynamicInvocation" = "the closure vtable's signatures and call shapes: Julia's trim verifier admits no call it cannot resolve to a method, so a function value is called by an invoke of its method and no vtable signature or call shape is registered"
+"dart2wasm/lib/dynamic_dispatch_table.dart DynamicCallSiteCollector.visitDynamicInvocation" = "a dynamic invocation: Julia's trim verifier admits no call it cannot resolve (ledger D32), so the NIR holds no such statement and the Kernel table gives it no counterpart"
+"dart2wasm/lib/dynamic_dispatch_table.dart DynamicCallSiteCollector.visitDynamicGet" = "a dynamic get: Julia's trim verifier admits no call it cannot resolve (ledger D32), so the NIR holds no such statement and the Kernel table gives it no counterpart"
+"dart2wasm/lib/dynamic_dispatch_table.dart DynamicCallSiteCollector.visitDynamicSet" = "a dynamic set: Julia's trim verifier admits no call it cannot resolve (ledger D32), so the NIR holds no such statement and the Kernel table gives it no counterpart"
 
 [out_types]
 "wasm_builder/lib/src/serialize/deserializer.dart Deserializer" = "wasm-tools reads and prints modules: the disagreement alarm (C7)"
