@@ -144,3 +144,18 @@ end
 end
 
 end
+
+# a constant whose fields share heap objects keys the caches in linear time: objectid walks every path
+# (2^40 here), so NirConst's hash takes the value's type, agreeing with ===
+struct _DagHashNode; a::Any; b::Any; end
+@testset "a shared-DAG constant hashes in linear time" begin
+    local n = _DagHashNode(nothing, nothing)
+    for _ in 1:40; n = _DagHashNode(n, n); end
+    local k = WasmTarget.NirConst(Core.Const(n))
+    @test (@elapsed hash(k)) < 1.0
+    @test k == WasmTarget.NirConst(Core.Const(n))
+    local d = Dict(k => 1)
+    @test d[WasmTarget.NirConst(Core.Const(n))] == 1
+    @test hash(WasmTarget.NirConst(Core.Const(Int32(3)))) == hash(WasmTarget.NirConst(Core.Const(Int32(3))))
+    @test WasmTarget.NirConst(Core.Const(Int32(3))) != WasmTarget.NirConst(Core.Const(Int64(3)))
+end

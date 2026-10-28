@@ -64,9 +64,25 @@ end
     return "$(WasmCompilerOptions_deferred_module_filename_prefix(base))$id.wasm"
 end
 
-@parity "dart2wasm/lib/compiler_options.dart:91 WasmCompilerOptions.idForModuleName" @unported function WasmCompilerOptions_id_for_module_name(main_wasm_filename::String, module_filename::String) end
+# dart asserts the main file name ends in .wasm with no path separator: a located rejection
+@parity "dart2wasm/lib/compiler_options.dart:91 WasmCompilerOptions.idForModuleName" function WasmCompilerOptions_id_for_module_name(main_wasm_filename::String, module_filename::String)::Union{Int,Nothing}
+    (endswith(main_wasm_filename, ".wasm") && !occursin('/', main_wasm_filename)) ||
+        reject!(Internal("dart2wasm/lib/compiler_options.dart:91 WasmCompilerOptions.idForModuleName: the main file $main_wasm_filename"), "WasmCompilerOptions.idForModuleName")
+    main_wasm_filename == module_filename && return WasmCompilerOptions_main_module_id()
+    local prefix = "$(first(splitext(main_wasm_filename)))_module"
+    (startswith(module_filename, prefix) && endswith(module_filename, ".wasm")) || return nothing
+    return WasmCompilerOptions_id_from_deferred_module_filename(module_filename)
+end
 
-@parity "dart2wasm/lib/compiler_options.dart:110 WasmCompilerOptions.idFromDeferredModuleFilename" @unported function WasmCompilerOptions_id_from_deferred_module_filename(module_name::String) end
+"""The module id of a deferred module's file name, `<id>` of `test_module<id>.wasm`."""
+@parity "dart2wasm/lib/compiler_options.dart:110 WasmCompilerOptions.idFromDeferredModuleFilename" function WasmCompilerOptions_id_from_deferred_module_filename(module_name::String)::Int
+    (endswith(module_name, ".wasm") && occursin("_module", module_name)) ||
+        reject!(Internal("dart2wasm/lib/compiler_options.dart:110 WasmCompilerOptions.idFromDeferredModuleFilename: $module_name"), "WasmCompilerOptions.idFromDeferredModuleFilename")
+    local offset = last(findlast("_module", module_name))
+    local id = tryparse(Int, module_name[offset+1:end-length(".wasm")])
+    id === nothing && reject!(Internal("dart2wasm/lib/compiler_options.dart:110 WasmCompilerOptions.idFromDeferredModuleFilename: no id in $module_name"), "WasmCompilerOptions.idFromDeferredModuleFilename")
+    return id
+end
 
 # dart's path.setExtension(p, "_module"): the path without its extension, then the new one (Julia's
 # splitext), and its basename

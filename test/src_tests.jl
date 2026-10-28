@@ -7,6 +7,7 @@ const SRC_TESTS = [
     "classes.jl",
     "closures.jl",
     "code_generator.jl",
+    "compile.jl",
     "constants.jl",
     "dart_tests.jl",
     "dispatch_table.jl",

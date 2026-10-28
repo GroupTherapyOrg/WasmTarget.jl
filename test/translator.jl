@@ -395,7 +395,7 @@ end
     local m = only(values(mods))
     @test m isa IR.Module
     # the entry exported under its function's name, its type the external (i32) -> (i32)
-    local mi = first(t.component).ci.def
+    local mi = t.component.entry
     local fn = D.get_existing_function(t.functions[], mi)
     @test fn !== nothing && fn.is_js_called && fn.type.inputs == [IR.NumType_i32] && fn.type.outputs == [IR.NumType_i32]
     @test D.get_export_name(t.functions[], mi) == "f"
@@ -403,4 +403,70 @@ end
     @test D.is_empty(t.compilation_queue[]) && isempty(t.dispatch_table[]._table[])
     local s = B.Serializer(); B.serialize(s, m)
     @test length(B.data(s)) > 8 && B.data(s)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+end
+
+@testset "translator.dart: array types and dummy values" begin
+    local W = WasmTarget
+    local B = W.WasmBuilder
+    local IR = B.IR
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(ModuleCases.shapes, (Int,), "translator"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    # one array type per element storage type and mutability, its element the storage type
+    local a = D.wasm_array_type(t, IR.NumType_i64, "Int64")
+    @test D.wasm_array_type(t, IR.NumType_i64, "Int64") === a && a.element_type[].type == IR.NumType_i64 && a.element_type[].mutable
+    @test D.wasm_array_type(t, IR.NumType_i64, "Int64"; mutable_ = false) !== a
+    # an array of a primitive class holds its boxes, not its numbers
+    @test D.array_type_for_dart_type(t, Int32; mutable_ = true).element_type[].type == t.class_info[Int32].non_nullable_type
+    # dummy values: zero, null, a heap type's global; one trapping function per signature
+    local m = D.main_module(t)
+    local dv = D.get_dummy_values_collector_for_module(t, m)
+    @test D.get_dummy_values_collector_for_module(t, m) === dv
+    local sq = t.class_info[ModuleCases.Square]
+    local b = B.InstructionsBuilder(m, IR.ValueType[], IR.ValueType[IR.NumType_i32, sq.nullable_type, sq.non_nullable_type])
+    D.instantiate_local_dummy_value(dv, b, IR.NumType_i32)
+    D.instantiate_local_dummy_value(dv, b, sq.nullable_type)
+    D.instantiate_local_dummy_value(dv, b, sq.non_nullable_type)
+    @test length(dv._dummy_values) == 1 && haskey(dv._dummy_values, sq.struct_)
+    B.var"end"(b)                                  # the builder accepts the three values as its outputs
+    local ft = B.define_function(m.types[], IR.ValueType[IR.NumType_i32], IR.ValueType[])
+    local df = D.get_dummy_function(dv, ft)
+    @test D.get_dummy_function(dv, ft) === df && D.is_dummy_function(dv, df)
+end
+
+@testset "subset.jl, nir.jl: the closed world carries its entry" begin
+    local W = WasmTarget
+    local w = W.check_subset(FirstCases.f, (Int32,), "translator")
+    local nir = W.build_nir(w, "translator")
+    # the entry is the MethodInstance Julia's trim inference was asked for, carried, not positional
+    @test w.entry === nir.entry && nir.entry.def === which(FirstCases.f, (Int32,))
+    @test any(b -> b.ci.def === nir.entry, nir)
+end
+
+module InlineCases
+@noinline h(x::Int) = x * 3
+g(x::Int) = h(x) + h(x + 1)
+@inline k(x::Int) = x + 1
+end
+
+@testset "translator.dart: the inlining decision, Julia's" begin
+    local W = WasmTarget
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(InlineCases.g, (Int,), "translator"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local mi(f, T) = Core.Compiler.specialize_method(Base._which(Base.signature_type(f, T)))
+    local h = mi(InlineCases.h, (Int,))
+    local sig = D.get_function_type(t.functions[], t.component.entry)
+    # @noinline never; @inline its preference; any other call Julia's inliner left stays a call
+    @test !D.should_inline(t, h, sig).should_inline && D.should_inline(t, h, sig).reason == "@noinline"
+    @test D.should_inline(t, mi(InlineCases.k, (Int,)), sig).should_inline
+    @test !D.should_inline(t, t.component.entry, sig).should_inline
+    @test !D.should_inline(D.Translator(W.check_subset(InlineCases.g, (Int,), "t"), data, D.TranslatorOptions(inlining_override = false)), h, sig).should_inline
+    # a member being generated is not inlined into itself
+    @test D.supports_inlining(t, h)
+    push!(t.members_being_generated, h)
+    @test !D.supports_inlining(t, h)
+    @test !D.synthesize_null_return_value(t, t.component.entry) && !D.synthesize_no_return(t, t.component.entry)
 end

@@ -84,9 +84,9 @@ end
 """
 Register the program's exported members and queue the strong ones. dart walks its libraries'
 procedures for their export pragmas and exports main; a Julia program exports its entry (dart's main,
-juliac's root: the closed world's first body, the MethodInstance Julia's trim inference was asked
-for) and every member of the closed world whose method `Base.@ccallable` declared (its `ccallable`,
-dart's `wasm:export`).
+juliac's root: NirWorld.entry, the MethodInstance Julia's trim inference was asked for) and every
+member of the closed world whose method `Base.@ccallable` declared (its `ccallable`, dart's
+`wasm:export`).
 """
 @parity "dart2wasm/lib/functions.dart:48 FunctionCollector._collectImportsAndExports" function _collect_imports_and_exports(self::FunctionCollector)::Nothing
     for b in self.translator.component
@@ -119,7 +119,7 @@ end
 @parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" function get_export_name(self::FunctionCollector, target::Core.MethodInstance)::Union{String,Nothing}
     local method = target.def::Method
     isdefined(method, :ccallable) && return string(method.name)
-    target === first(self.translator.component).ci.def || return nothing
+    target === self.translator.component.entry || return nothing
     return string(method.name)
 end
 

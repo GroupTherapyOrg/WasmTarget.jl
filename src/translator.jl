@@ -75,7 +75,7 @@ program, the NIR of the closed world Julia's trim verifier accepted (dart's Kern
 `closureLayouter`, `classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`, `dispatchTable`, `dynamicDispatchTable`,
 `globals`, `dartGlobals`, `constants`, `types`, `compilationQueue`, `functions` (each
 late, assigned where dart assigns it once its class is ported); `membersBeingGenerated` (a member
-a Core.MethodInstance); `voidMarker`; `_moduleOutputData`, `_outputToBuilder`, `_builderToOutput`,
+a Core.MethodInstance); `voidMarker`; `immutableArrayTypeCache`, `mutableArrayTypeCache`; `_dummyValueCollectors`; `_moduleOutputData`, `_outputToBuilder`, `_builderToOutput`,
 `staticParamInfo`; `exportNamer`; `linkingActions`; `moduleToBuilder` (one
 module: deferred loading is out of scope);
 `classes`, `classesSupersFirst`, `classIdNumbering`, `classInfo` (a class is a Julia DataType, keyed
@@ -85,7 +85,7 @@ the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8
 integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
 every other primitive class have none).
 
-Fields to come (60, each with its translator.dart line): `symbols` :100, `libraries` :104,
+Fields to come (55, each with its translator.dart line): `symbols` :100, `libraries` :104,
 `coreTypes` :106, `typeEnvironment` :107, `hierarchy` :108, `subtypes` :109, `directCallMetadata`
 :115, `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123, `inferredReturnTypeMetadata`
 :127, `unboxingInfoMetadata` :131, `procedureAttributeMetadata` :136, `unreachableMetadata` :140,
@@ -100,7 +100,7 @@ Fields to come (60, each with its translator.dart line): `symbols` :100, `librar
 `nullableObjectArrayTypeRef` :262, `boxedIntType` :267, `boxedDoubleType` :271, `stackTraceType` :285, `stackTraceTypeNullable` :289, `runtimeTypeType` :294,
 `runtimeTypeTypeNullable` :298, `stringType` :302, `stringTypeNullable` :306, `invocationType` :309,
 `_partialInstantiators` :315, `_polymorphicDispatchers` :320, `_dynamicDispatchers` :331,
-`_dummyValueCollectors` :336, `boxedClasses` :374, `boxClasses` :380, `valueClasses` :389,
+`boxedClasses` :374, `boxClasses` :380, `valueClasses` :389,
 `dynamicCallVtableEntryFunctionType` :398, `_memberClosures` :455, `_importedMemories` :866,
 `_closureArgumentsDispatchers` :1328, `_needToCheck` :1682.
 
@@ -138,6 +138,7 @@ the translator holds each collaborator.
     closure_info::Late{ClassInfo}
     top_type::Late{WasmBuilder.IR.RefType}
     top_type_non_nullable::Late{WasmBuilder.IR.RefType}
+    _dummy_value_collectors::LinkedHashMap{WasmBuilder.ModuleBuilder,DummyValuesCollector}
     builtin_types::Late{IdDict{DataType,WasmBuilder.IR.StorageType}}
     _module_output_data::ModuleOutputData
     _output_to_builder::LinkedHashMap{ModuleMetadata,WasmBuilder.ModuleBuilder}
@@ -185,6 +186,7 @@ the translator holds each collaborator.
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:278 Translator.topType", () -> self.classes[][1].nullable_type),
             # The wasm type used to hold values of Dart top types excluding null (e.g. `Object`)
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:282 Translator.topTypeNonNullable", () -> WasmBuilder.with_nullability(self.top_type[], false)),
+            LinkedHashMap{WasmBuilder.ModuleBuilder,DummyValuesCollector}(),
             Late{IdDict{DataType,WasmBuilder.IR.StorageType}}("dart2wasm/lib/translator.dart:344 Translator.builtinTypes", () -> IdDict{DataType,WasmBuilder.IR.StorageType}(
                 Bool => WasmBuilder.IR.NumType_i32,
                 Int8 => WasmBuilder.IR.PackedType_i8, UInt8 => WasmBuilder.IR.PackedType_i8,
@@ -277,9 +279,21 @@ PolymorphicDispatcherCodeGenerator's dart fields: `translator`, `selector`, `use
 @parity "dart2wasm/lib/translator.dart:3764 PolymorphicDispatcherCodeGenerator" @unported struct PolymorphicDispatcherCodeGenerator <: CodeGenerator end
 
 """
-DummyValuesCollector's dart fields: `module`, `translator`, `_dummyFunctions`, `_dummyValues`, `dummyStructGlobal`.
+The dummy values of a module: a global per heap type holding a value of it, and a function per
+signature that traps, for locals and vtable entries a value must fill before any is assigned.
+
+Fields to come (1, its translator.dart line): `dummyStructGlobal` :3842, which dart's closures read.
 """
-@parity "dart2wasm/lib/translator.dart:3831 DummyValuesCollector" @unported struct DummyValuesCollector end
+@parity "dart2wasm/lib/translator.dart:3831 DummyValuesCollector" struct DummyValuesCollector
+    module_::WasmBuilder.ModuleBuilder
+    translator::KernelNodes
+    _dummy_functions::LinkedHashMap{WasmBuilder.IR.FunctionType,WasmBuilder.IR.BaseFunction}
+    _dummy_values::LinkedHashMap{WasmBuilder.IR.HeapType,WasmBuilder.IR.Global}
+    # the struct's one constructor, tagged; dart's constructor at :3843 is its outer function
+    DummyValuesCollector(::Val{:_}, translator::KernelNodes, module_::WasmBuilder.ModuleBuilder) =
+        new(module_, translator, LinkedHashMap{WasmBuilder.IR.FunctionType,WasmBuilder.IR.BaseFunction}(),
+            LinkedHashMap{WasmBuilder.IR.HeapType,WasmBuilder.IR.Global}())
+end
 
 @parity "dart2wasm/lib/translator.dart:3925 _WasmImporter" abstract type _WasmImporter end
 
@@ -365,7 +379,8 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 
 @parity "dart2wasm/lib/translator.dart:332 Translator.getDynamicDispatchersForModule" @unported function get_dynamic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:337 Translator.getDummyValuesCollectorForModule" @unported function get_dummy_values_collector_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:337 Translator.getDummyValuesCollectorForModule" get_dummy_values_collector_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::DummyValuesCollector =
+    get!(() -> DummyValuesCollector(self, module_), self._dummy_value_collectors, module_)
 
 @parity "dart2wasm/lib/translator.dart:418 Translator.modules" modules(self::Translator)::Vector{WasmBuilder.ModuleBuilder} = collect(keys(self._builder_to_output))
 
@@ -457,7 +472,7 @@ Fields to come read here: `constructorClosures` :204, cleared after the code is 
     collect(self.class_info_collector[])
 
     self.globals[] = Globals(self)
-    self.dart_globals[] = DartGlobals(Val(:_), self)
+    self.dart_globals[] = DartGlobals(self)
     self.constants[] = Constants(self)
 
     build(self.dispatch_table[])
@@ -793,16 +808,25 @@ end
 @parity "dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall" signature_for_direct_call(self::Translator, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType =
     get_function_type(self.functions[], target)
 
-@parity "dart2wasm/lib/translator.dart:1872 Translator.synthesizeNullReturnValue" @unported function synthesize_null_return_value(self::Translator, target::Core.MethodInstance) end
+# a Julia member calls through no selector (src/dispatch_table.jl): the function collector answers
+@parity "dart2wasm/lib/translator.dart:1872 Translator.synthesizeNullReturnValue" synthesize_null_return_value(self::Translator, target::Core.MethodInstance)::Bool =
+    synthesize_null_return_value(self.functions[], target)
 
-@parity "dart2wasm/lib/translator.dart:1884 Translator.synthesizeNoReturn" @unported function synthesize_no_return(self::Translator, target::Core.MethodInstance) end
+@parity "dart2wasm/lib/translator.dart:1884 Translator.synthesizeNoReturn" synthesize_no_return(self::Translator, target::Core.MethodInstance)::Bool =
+    synthesize_no_return(self.functions[], target)
 
 # a Julia member calls through no selector (src/dispatch_table.jl: the trim verifier leaves no
 # dynamic call), so its info is the static one, made once per member
 @parity "dart2wasm/lib/translator.dart:1896 Translator.paramInfoForDirectCall" param_info_for_direct_call(self::Translator, target::Core.MethodInstance)::ParameterInfo =
     get!(() -> ParameterInfo_from_member(target, false), self.static_param_info, target)
 
-@parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" @unported function precise_this_for(self::Translator, member::Core.MethodInstance; nullable::Bool = false) end
+"""
+The precise type of `this` in an instance member or constructor. dart asserts `member` is one; a
+Julia member is neither (a method belongs to its generic function, and a constructor is a method
+of the type's own function, whose result `new` allocates), so a request is a located rejection.
+"""
+@parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" precise_this_for(self::Translator, member::Core.MethodInstance; nullable::Bool = false)::WasmBuilder.IR.ValueType =
+    reject!(Internal("dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor: $member, no instance member or constructor, has no `this`"), "Translator.preciseThisFor")
 
 @parity "dart2wasm/lib/translator.dart:1930 Translator.getTable" @unported function get_table(self::Translator, module_::WasmBuilder.ModuleBuilder, field::ClassField) end
 
@@ -880,7 +904,17 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2148 Translator._filterInferredType" @unported function _filter_inferred_type(self::Translator, default_type::Type, inferred_type::Union{Nothing,Type}) end
 
-@parity "dart2wasm/lib/translator.dart:2195 Translator.shouldInline" @unported function should_inline(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType) end
+"""
+Whether a direct call to `target` is inlined. dart's pragmas are Julia's declarations: `@noinline`
+never, `@inline` its preference; a Julia member is a method, dart's procedure arm.
+"""
+@parity "dart2wasm/lib/translator.dart:2195 Translator.shouldInline" function should_inline(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType)::InliningDecision
+    inlining(self.options) || return InliningDecision(false, "inlining disabled")
+    local method = target.def::Method
+    Core.Compiler.is_declared_noinline(method) && return InliningDecision(false, "@noinline")
+    Core.Compiler.is_declared_inline(method) && return InliningDecision(true, "@inline")
+    return _should_inline_procedure_call(self, target, signature)
+end
 
 @parity "dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor" @unported function _should_inline_field_accessor(self::Translator, target::Core.MethodInstance, field::ClassField) end
 
@@ -888,9 +922,25 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall" @unported function _should_inline_constructor_call(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType, constructor::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:2331 Translator._shouldInlineProcedureCall" @unported function _should_inline_procedure_call(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType, member::Core.MethodInstance) end
+"""
+dart's size estimate of a procedure's body against the call's overhead. Julia's optimizer has run its
+own inliner over every body of the closed world, by its own cost model, so a call left in the NIR is
+one Julia judged not worth inlining: its answer, ported. A member Julia inferred never returns is
+dart's throwing function.
+"""
+@parity "dart2wasm/lib/translator.dart:2331 Translator._shouldInlineProcedureCall" function _should_inline_procedure_call(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType)::InliningDecision
+    # Procedure always throws.
+    type_of_return_value(self, target) === Union{} && return InliningDecision(false, "Throwing function")
+    return InliningDecision(false, "left by Julia's inliner")
+end
 
-@parity "dart2wasm/lib/translator.dart:2400 Translator.supportsInlining" @unported function supports_inlining(self::Translator, target::Core.MethodInstance) end
+# dart refuses a member with inner functions (a Julia closure is a method of its own), one being
+# generated (recursive inlining), and an asynchronous one (tasks are outside the subset)
+@parity "dart2wasm/lib/translator.dart:2400 Translator.supportsInlining" function supports_inlining(self::Translator, target::Core.MethodInstance)::Bool
+    # Guard against recursive inlining.
+    target in self.members_being_generated && return false
+    return true
+end
 
 @parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" @unported function get_pragma(self::Translator, node::NoCounterpart, name::String, optional...) end
 
@@ -912,7 +962,30 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2587 Translator._findMemoryForMainModule" @unported function _find_memory_for_main_module(self::Translator, top_level_external_memory_getter::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:2625 Translator.instantiateDummyValueHeapType" @unported function instantiate_dummy_value_heap_type(self::Translator, b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.HeapType, name::String, instantiate_heap_type::Function) end
+# dart's struct heap type: an empty struct of its own; a defined struct its fields' dummies, an array
+# empty, a function type its trapping dummy function; another heap type, which dart leaves without a
+# value, rejects, located
+@parity "dart2wasm/lib/translator.dart:2625 Translator.instantiateDummyValueHeapType" function instantiate_dummy_value_heap_type(self::Translator, b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.HeapType,
+        name::String, instantiate_heap_type::Function)::Nothing
+    if type_ === WasmBuilder.IR.HeapType_struct
+        local struct_type = WasmBuilder.define_struct(types_builder(self), name; brand = unique_types(self.options))
+        WasmBuilder.struct_new(b, struct_type)
+        return nothing
+    elseif type_ isa WasmBuilder.IR.StructType
+        for field in type_.fields
+            instantiate_dummy_value(b, WasmBuilder.unpacked(field.type), instantiate_heap_type)
+        end
+        WasmBuilder.struct_new(b, type_)
+        return nothing
+    elseif type_ isa WasmBuilder.IR.ArrayType
+        WasmBuilder.array_new_fixed(b, type_, 0)
+        return nothing
+    elseif type_ isa WasmBuilder.IR.FunctionType
+        WasmBuilder.ref_func(b, get_dummy_function(get_dummy_values_collector_for_module(self, b.module_builder), type_))
+        return nothing
+    end
+    reject!(Internal("dart2wasm/lib/translator.dart:2625 Translator.instantiateDummyValueHeapType: no dummy value of $type_"), "Translator.instantiateDummyValueHeapType")
+end
 
 @parity "dart2wasm/lib/translator.dart:2665 CompilationQueue" CompilationQueue(translator::KernelNodes)::CompilationQueue = CompilationQueue(Val(:_), translator)
 
@@ -1056,15 +1129,66 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3776 PolymorphicDispatcherCodeGenerator.generate" @unported function generate(self::PolymorphicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
 
-@parity "dart2wasm/lib/translator.dart:3843 DummyValuesCollector" @unported function DummyValuesCollector(translator, module_) end
+@parity "dart2wasm/lib/translator.dart:3843 DummyValuesCollector" DummyValuesCollector(translator::KernelNodes, module_::WasmBuilder.ModuleBuilder)::DummyValuesCollector = DummyValuesCollector(Val(:_), translator, module_)
 
-@parity "dart2wasm/lib/translator.dart:3845 DummyValuesCollector.instantiateLocalDummyValue" @unported function instantiate_local_dummy_value(self::DummyValuesCollector, b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/translator.dart:3845 DummyValuesCollector.instantiateLocalDummyValue" function instantiate_local_dummy_value(self::DummyValuesCollector, b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.ValueType)::Nothing
+    local initialize_heap_type
+    initialize_heap_type = function (ib::WasmBuilder.InstructionsBuilder, heap_type::WasmBuilder.IR.HeapType)
+        local module_builder = b.module_builder
+        local global_ = get(self._dummy_values, heap_type, nothing)
+        if global_ === nothing
+            global_ = WasmBuilder.define(module_builder.globals[], WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType(heap_type; nullable = false); mutable = false))
+            local init = global_.initializer
+            instantiate_dummy_value_heap_type(self.translator, init, heap_type, "dummy $heap_type", initialize_heap_type)
+            WasmBuilder.var"end"(init)
+            self._dummy_values[heap_type] = global_
+        end
+        WasmBuilder.global_get(ib, global_)
+        return nothing
+    end
+    instantiate_dummy_value(b, type_, initialize_heap_type)
+    return nothing
+end
 
-@parity "dart2wasm/lib/translator.dart:3870 DummyValuesCollector.getDummyFunction" @unported function get_dummy_function(self::DummyValuesCollector, type_::WasmBuilder.IR.FunctionType) end
+"""A function of `type_` that traps: an empty vtable entry's, or a dummy function reference's."""
+@parity "dart2wasm/lib/translator.dart:3870 DummyValuesCollector.getDummyFunction" function get_dummy_function(self::DummyValuesCollector, type_::WasmBuilder.IR.FunctionType)::WasmBuilder.IR.BaseFunction
+    local existing = get(self._dummy_functions, type_, nothing)
+    existing === nothing || return existing
+    local function_ = WasmBuilder.define(self.module_.functions[], type_, "#dummy function $type_")
+    local b = WasmBuilder.body(function_)
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    return self._dummy_functions[type_] = function_
+end
 
-@parity "dart2wasm/lib/translator.dart:3881 DummyValuesCollector.isDummyFunction" @unported function is_dummy_function(self::DummyValuesCollector, function_::WasmBuilder.IR.BaseFunction) end
+@parity "dart2wasm/lib/translator.dart:3881 DummyValuesCollector.isDummyFunction" is_dummy_function(self::DummyValuesCollector, function_::WasmBuilder.IR.BaseFunction)::Bool =
+    get(self._dummy_functions, function_.type, nothing) === function_
 
-@parity "dart2wasm/lib/translator.dart:3886 instantiateDummyValue" @unported function instantiate_dummy_value(b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.ValueType, instantiate_heap_type::Function) end
+"""
+Push a value of wasm type `type_` on `b`: zero for a number, null for a nullable reference, and the
+heap type's dummy for a non-nullable one; any other type rejects, located, where dart throws.
+"""
+@parity "dart2wasm/lib/translator.dart:3886 instantiateDummyValue" function instantiate_dummy_value(b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.ValueType, instantiate_heap_type::Function)::Nothing
+    if type_ === WasmBuilder.IR.NumType_i32
+        WasmBuilder.i32_const(b, 0)
+    elseif type_ === WasmBuilder.IR.NumType_i64
+        WasmBuilder.i64_const(b, 0)
+    elseif type_ === WasmBuilder.IR.NumType_f32
+        WasmBuilder.f32_const(b, 0.0)
+    elseif type_ === WasmBuilder.IR.NumType_f64
+        WasmBuilder.f64_const(b, 0.0)
+    elseif type_ isa WasmBuilder.IR.RefType
+        local heap_type = type_.heap_type
+        if type_.nullable
+            WasmBuilder.ref_null(b, WasmBuilder.bottom_type(heap_type))
+        else
+            instantiate_heap_type(b, heap_type)
+        end
+    else
+        reject!(Internal("dart2wasm/lib/translator.dart:3886 instantiateDummyValue: Unsupported global type $type_"), "instantiateDummyValue")
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/translator.dart:3930 _WasmImporter" @unported function _WasmImporter(_translator, _export_prefix) end
 

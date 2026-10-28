@@ -12,19 +12,49 @@
 @parity "dart2wasm/lib/compile.dart:63 CompilationSuccess" @closed const CompilationSuccess = Union{CfeResult, TfaResult, CodegenResult, OptResult}
 
 """
-CfeResult's dart fields: `component`, `coreTypes`.
+The front end's result: the program, the ClosedWorld Julia's lowering, inference and trim verifier
+accepted (dart's CFE and its compile-time errors, which check_subset rejects with Julia's text).
+
+Fields to come (1, its compile.dart line): `coreTypes` :67, Kernel's core classes, which a Julia
+program reads from Core and Base.
 """
-@parity "dart2wasm/lib/compile.dart:65 CfeResult" @unported struct CfeResult end
+@parity "dart2wasm/lib/compile.dart:65 CfeResult" struct CfeResult
+    component::ClosedWorld
+    # the struct's one constructor, tagged; dart's constructor at :69 is its outer function
+    CfeResult(::Val{:_}, component::ClosedWorld) = new(component)
+end
 
 """
-TfaResult's dart fields: `component`, `coreTypes`, `libraryIndex`, `moduleStrategy`, `recordClasses`.
+The global transformations' result: the ClosedWorld, whose inference Julia's trim mode has done
+(dart's TFA), the module strategy and the record classes.
+
+Fields to come (2, each with its compile.dart line): `coreTypes` :74, `libraryIndex` :75.
 """
-@parity "dart2wasm/lib/compile.dart:72 TfaResult" @unported struct TfaResult end
+@parity "dart2wasm/lib/compile.dart:72 TfaResult" struct TfaResult
+    component::ClosedWorld
+    module_strategy::ModuleStrategy
+    record_classes::Dict{RecordShape,DataType}
+    # the struct's one constructor, tagged; dart's constructor at :79 is its outer function
+    TfaResult(::Val{:_}, component::ClosedWorld, module_strategy::ModuleStrategy, record_classes::Dict{RecordShape,DataType}) =
+        new(component, module_strategy, record_classes)
+end
 
 """
-CodegenResult's dart fields: `mainWasmFile`, `moduleIds`.
+The code generator's result: the main wasm module and the ids of every module emitted.
+
+WasmTarget is a library, with no driver or file manager (the Kernel table's NoCounterpart for
+CompilerPhaseInputOutputManager), so where dart writes each module to a file, the result holds the
+bytes: `main_wasm_file` keeps dart's name as the main module's file name, `wasm_files` maps each
+emitted module's file name to its bytes. That is the one departure from dart's compile.
 """
-@parity "dart2wasm/lib/compile.dart:88 CodegenResult" @unported struct CodegenResult end
+@parity "dart2wasm/lib/compile.dart:88 CodegenResult" struct CodegenResult
+    main_wasm_file::String
+    module_ids::Set{Int}
+    wasm_files::LinkedHashMap{String,Vector{UInt8}}
+    # the struct's one constructor, tagged; dart's constructor at :96 is its outer function
+    CodegenResult(::Val{:_}, main_wasm_file::String, module_ids::Set{Int}, wasm_files::LinkedHashMap{String,Vector{UInt8}}) =
+        new(main_wasm_file, module_ids, wasm_files)
+end
 
 """
 OptResult's dart fields: `mainWasmFile`, `numModules`.
@@ -48,11 +78,17 @@ _RecordClassesRepository's dart fields: `mapping`.
 """
 @parity "dart2wasm/lib/compile.dart:825 _RecordClassesRepository" @unported struct _RecordClassesRepository end
 
-@parity "dart2wasm/lib/compile.dart:69 CfeResult" @unported function CfeResult(component, core_types) end
+@parity "dart2wasm/lib/compile.dart:69 CfeResult" CfeResult(component::ClosedWorld)::CfeResult = CfeResult(Val(:_), component)
 
-@parity "dart2wasm/lib/compile.dart:79 TfaResult" @unported function TfaResult(component, core_types, library_index, module_strategy, record_classes) end
+@parity "dart2wasm/lib/compile.dart:79 TfaResult" TfaResult(component::ClosedWorld, module_strategy::ModuleStrategy, record_classes::Dict{RecordShape,DataType})::TfaResult =
+    TfaResult(Val(:_), component, module_strategy, record_classes)
 
-@parity "dart2wasm/lib/compile.dart:96 CodegenResult" @unported function CodegenResult(main_wasm_file, module_ids) end
+# dart asserts the main module's id is among the emitted ones: a located rejection
+@parity "dart2wasm/lib/compile.dart:96 CodegenResult" function CodegenResult(main_wasm_file::String, module_ids::Set{Int}, wasm_files::LinkedHashMap{String,Vector{UInt8}})::CodegenResult
+    WasmCompilerOptions_main_module_id() in module_ids ||
+        reject!(Internal("dart2wasm/lib/compile.dart:96 CodegenResult: the main module is not emitted"), "CodegenResult")
+    return CodegenResult(Val(:_), main_wasm_file, module_ids, wasm_files)
+end
 
 @parity "dart2wasm/lib/compile.dart:105 OptResult" @unported function OptResult(main_wasm_file, num_modules) end
 
@@ -68,7 +104,41 @@ _RecordClassesRepository's dart fields: `mapping`.
 
 @parity "dart2wasm/lib/compile.dart:185 _binaryenFlagsMultiModule" @unported function _binaryen_flags_multi_module() end
 
-@parity "dart2wasm/lib/compile.dart:216 compile" @unported function compile(options::WasmCompilerOptions, io_manager::NoCounterpart, handle_diagnostic_message::Function) end
+"""
+Compile the program `world`, Julia's trim verifier having accepted it, running `options.phases`:
+cfe and tfa are the world as given (Julia's front end and its trim inference, CfeResult and
+TfaResult), codegen translates it to its modules (CodegenResult). The opt phase (wasm-opt) comes with
+the next commit; asked for now, it rejects, located.
+
+dart's compile reads the program from its main URI and writes each phase's output through its file
+manager; a Julia program is the ClosedWorld check_subset made, and the result holds the bytes
+(CodegenResult). dart's target (WasmTarget: the mode, the experiments, the asserts) is the options
+the phases read.
+"""
+@parity "dart2wasm/lib/compile.dart:216 compile" function compile(options::WasmCompilerOptions, world::ClosedWorld)::CompilationResult
+    local at = "dart2wasm/lib/compile.dart:216 compile"
+    local cfe_result::Union{CfeResult,Nothing} = nothing
+    local tfa_result::Union{TfaResult,Nothing} = nothing
+    local last_result::Union{CompilationResult,Nothing} = nothing
+    for phase in options.phases
+        if phase == CompilerPhase_cfe
+            cfe_result = CfeResult(world)
+            last_result = cfe_result
+        elseif phase == CompilerPhase_tfa
+            tfa_result = _run_tfa_phase(something(cfe_result, CfeResult(world)), options)
+            last_result = tfa_result
+        elseif phase == CompilerPhase_codegen
+            local tfa = tfa_result === nothing ? _run_tfa_phase(something(cfe_result, CfeResult(world)), options) : tfa_result
+            last_result = _run_codegen_phase(tfa, options)
+        elseif phase == CompilerPhase_opt
+            reject!(Unported("dart2wasm/lib/compile.dart:711 _runOptPhase"), at)
+        else
+            reject!(Internal("$at: the phase $phase"), at)
+        end
+    end
+    last_result === nothing && reject!(Internal("$at: no phase ran"), at)
+    return last_result
+end
 
 @parity "dart2wasm/lib/compile.dart:289 _loadCfeResult" @unported function _load_cfe_result(options::WasmCompilerOptions, io_manager::NoCounterpart) end
 
@@ -76,15 +146,63 @@ _RecordClassesRepository's dart fields: `mapping`.
 
 @parity "dart2wasm/lib/compile.dart:375 _loadTfaResult" @unported function _load_tfa_result(options::WasmCompilerOptions, target::WasmTarget, io_manager::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:413 _runTfaPhase" @unported function _run_tfa_phase(cfe_result::CfeResult, options::WasmCompilerOptions, target::WasmTarget, io_manager::NoCounterpart) end
+"""
+dart's global transformations over Kernel: the class hierarchy and library index, the JS interop,
+unreachable code and mixin rewrites, and the type flow analysis that tree-shakes the component.
+Julia's lowering and its trim inference are those passes (the closed world holds only what the
+entry reaches, inferred), so the phase makes the module strategy and the record classes, as dart's
+does, and the component passes as it is.
+"""
+@parity "dart2wasm/lib/compile.dart:413 _runTfaPhase" function _run_tfa_phase(cfe_result::CfeResult, options::WasmCompilerOptions)::TfaResult
+    local component = cfe_result.component
+    local record_classes = generate_record_classes(build_nir(component, "dart2wasm/lib/compile.dart:413 _runTfaPhase"))
+    local module_strategy = _create_module_strategy(options, component)
+    add_entry_points(module_strategy)
+    prepare_component(module_strategy)
+    return TfaResult(component, module_strategy, record_classes)
+end
 
 @parity "dart2wasm/lib/compile.dart:564 _loadCodegenResult" @unported function _load_codegen_result(options::WasmCompilerOptions, io_manager::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:572 _runCodegenPhase" @unported function _run_codegen_phase(tfa_success::TfaResult, options::WasmCompilerOptions, io_manager::NoCounterpart) end
+"""
+Translate the program to its modules and serialize each, its bytes in the result where dart writes
+a file (CodegenResult). A compile that is not standalone generates the JS runtime that loads the
+module (js/runtime_generator.dart), not yet ported: it rejects, located.
+"""
+@parity "dart2wasm/lib/compile.dart:572 _runCodegenPhase" function _run_codegen_phase(tfa_success::TfaResult, options::WasmCompilerOptions)::CodegenResult
+    local at = "dart2wasm/lib/compile.dart:572 _runCodegenPhase"
+    # dart writes each module's source map beside it, its URL from the file manager's generator; a
+    # library compile has no file to name, so source maps wait for a caller that asks for them
+    options.translator_options.generate_source_maps &&
+        reject!(Unquarantined("src/compile.jl _runCodegenPhase: source maps, whose URL a library compile has no file to give"), at)
+    local module_output_data = build_module_output_data(tfa_success.module_strategy)
+    local translator = Translator(tfa_success.component, module_output_data, options.translator_options)
+    local modules = translate(translator, nothing)
+    local wasm_files = LinkedHashMap{String,Vector{UInt8}}()
+    for (module_metadata, module_) in modules
+        module_metadata.skip_emit && continue
+        local serializer = WasmBuilder.Serializer()
+        WasmBuilder.serialize(serializer, module_)
+        wasm_files[module_metadata.module_name] = WasmBuilder.data(serializer)
+    end
+    options.translator_options.standalone ||
+        reject!(Unported("dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate"), at)
+    local wasm_output_filename = basename(options.output_file)
+    local module_ids = Set{Int}(something(WasmCompilerOptions_id_for_module_name(wasm_output_filename, m.module_name),
+                                          WasmCompilerOptions_main_module_id()) for m in keys(modules))
+    return CodegenResult(options.output_file, module_ids, wasm_files)
+end
 
 @parity "dart2wasm/lib/compile.dart:711 _runOptPhase" @unported function _run_opt_phase(codegen_result::CodegenResult, options::WasmCompilerOptions, io_manager::NoCounterpart) end
 
-@parity "dart2wasm/lib/compile.dart:747 _createModuleStrategy" @unported function _create_module_strategy(options::WasmCompilerOptions, io_manager::NoCounterpart, component::NirWorld, core_types::NoCounterpart, target::WasmTarget, class_hierarchy::NoCounterpart) end
+# deferred loading is out of scope (dev/PARITY_MASTER.md): its strategy and the multi-module stress
+# test's reject, located; every other compile takes the default strategy, one module
+@parity "dart2wasm/lib/compile.dart:747 _createModuleStrategy" function _create_module_strategy(options::WasmCompilerOptions, component::ClosedWorld)::ModuleStrategy
+    local at = "dart2wasm/lib/compile.dart:747 _createModuleStrategy"
+    options.translator_options.enable_deferred_loading && reject!(Unquarantined("src/compile.jl: deferred loading, out of scope (dev/PARITY_MASTER.md)"), at)
+    options.translator_options.enable_multi_module_stress_test_mode && reject!(Unquarantined("src/compile.jl: the multi-module stress test, out of scope (dev/PARITY_MASTER.md)"), at)
+    return DefaultModuleStrategy(options)
+end
 
 @parity "dart2wasm/lib/compile.dart:776 _patchMainTearOffs" @unported function _patch_main_tear_offs(core_types::NoCounterpart, component::NirWorld) end
 

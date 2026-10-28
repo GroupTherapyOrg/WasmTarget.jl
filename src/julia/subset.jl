@@ -18,11 +18,13 @@ end
 """
     ClosedWorld
 
-The program a compile has once Julia's trim verifier accepts it: `codeinfos`, what
-`typeinf_ext_toplevel` returned, a `Core.CodeInstance` followed by its `Core.CodeInfo` for every
-function the entry reaches, inferred once; `notes`, the verifier's warnings, each a `TrimError`; and
-`parents`, the verifier's map from each CodeInstance to the caller and statement that first reached
-it, from which TrimVerifier.verify_create_stackframes locates any statement of the world.
+The program a compile has once Julia's trim verifier accepts it: `entry`, the MethodInstance the
+trim inference was asked for (dart's Component.mainMethod; Julia's compile-hint specialization of the
+call); `codeinfos`, what `typeinf_ext_toplevel` returned, a `Core.CodeInstance` followed by its
+`Core.CodeInfo` for every function the entry reaches, inferred once; `notes`, the verifier's warnings,
+each a `TrimError`; and `parents`, the verifier's map from each CodeInstance to the caller and
+statement that first reached it, from which TrimVerifier.verify_create_stackframes locates any
+statement of the world.
 
 A typestate by construction: its one constructor takes the token `_SubsetToken`, which only this
 file holds, and `check_subset` is its only caller, so every stage after the subset check takes a
@@ -33,11 +35,12 @@ Julia's differs: it has no private constructors, so the sole constructor and the
 by reflection when the package loads (check_sole_constructor).
 """
 @quarantine "Julia's trim inference returns the closed world as an untyped list of CodeInstance and CodeInfo pairs" Core.Any struct ClosedWorld
+    entry::Core.MethodInstance
     codeinfos::Vector{Any}
     notes::Vector{TrimError}
     parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}
-    ClosedWorld(::_SubsetToken, codeinfos::Vector{Any}, notes::Vector{TrimError},
-                parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}) = new(codeinfos, notes, parents)
+    ClosedWorld(::_SubsetToken, entry::Core.MethodInstance, codeinfos::Vector{Any}, notes::Vector{TrimError},
+                parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}) = new(entry, codeinfos, notes, parents)
 end
 
 # Julia's closed-world inference for trimming, from the entry's MethodInstance at `world`. Julia 1.13
@@ -124,14 +127,15 @@ holding Julia's own record, its statement and its stack frames.
         reject!(OutsideSubset([TrimError(no_compileable_specialization, nothing, 0, Base.StackTraces.StackFrame[],
                                          "$sig: Julia gives the call no compileable specialization")]), at)
     end
-    local codeinfos = _trim_infer(mi, world)
+    local entry = mi
+    local codeinfos = _trim_infer(entry, world)
     local errors, parents = Core.Compiler.TrimVerifier.get_verify_typeinf_trim(codeinfos)
     local fatal = TrimError[]; local notes = TrimError[]
     for (warn, cause) in errors
         push!(warn ? notes : fatal, _trim_error(cause, parents, at))
     end
     isempty(fatal) || reject!(OutsideSubset(fatal), at)
-    return ClosedWorld(_SubsetToken(), codeinfos, notes, parents)
+    return ClosedWorld(_SubsetToken(), entry, codeinfos, notes, parents)
 end
 
 # the typestate's assertion, run when the package loads: ClosedWorld and its token each have one

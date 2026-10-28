@@ -16,10 +16,14 @@ a `RejectionError` naming it; nothing returns a module that was not built (dev/C
     return compile_world(check_subset(f, argtypes, at), at)
 end
 
-# the stages after the subset check take the ClosedWorld check_subset alone makes; dart's compile,
-# which runs them, is not ported yet: the rejection names its generated stub's anchor
+# the stages after the subset check take the ClosedWorld check_subset alone makes: dart's compile
+# (dart2wasm/lib/compile.dart:216) runs them, standalone (the JS runtime that loads a module is not
+# yet ported), and the main module's bytes are the result
 @quarantine "the compile's stages take the ClosedWorld Julia's verifier accepted, a typestate dart's driver has no need of" Core.String function compile_world(world::ClosedWorld, at::String)::Vector{UInt8}
-    local nir = build_nir(world, at)
-    local classes = closed_world_classes(nir, at)
-    reject!(Unported(anchor_of(Dart2Wasm.compile)), at)
+    local options = Dart2Wasm.WasmCompilerOptions(; main_uri = "", output_file = "main.wasm")
+    options.translator_options.standalone = true
+    options.translator_options.generate_source_maps = false
+    local result = Dart2Wasm.compile(options, world)
+    result isa Dart2Wasm.CodegenResult || reject!(Internal("src/julia/entry.jl: the compile ended at $(typeof(result)), not its code"), at)
+    return result.wasm_files[basename(result.main_wasm_file)]
 end

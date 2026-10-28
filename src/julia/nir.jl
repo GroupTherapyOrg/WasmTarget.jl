@@ -28,6 +28,18 @@ end
     c::Core.Const
 end
 
+# A literal keys the constant caches (constants.jl's constantInfo, dart's canonicalization by
+# identity), so its hash must cost what === costs. Julia's objectid of an immutable value walks
+# every path through its fields, which is exponential on a constant whose fields share heap objects:
+# a 40-level DAG is 2^40 paths. === stops at a shared heap object, so it is linear there. Equal
+# literals have one type, so hashing a structured immutable by its type alone agrees with ===, and
+# the colliding entries are told apart by ===. A value Julia stores flat (isbits), a String, Symbol
+# or Type, or a mutable object (hashed by its address) keeps its own hash.
+@quarantine "a literal's hash agrees with === at ===' own cost: Julia's objectid recurses through every path of an immutable value, === stops at a shared heap object" Base.hash function Base.hash(c::NirConst, h::UInt)::UInt
+    local v = c.c.val
+    return (isbits(v) || v isa Union{String,Symbol,Type} || ismutable(v)) ? hash(v, h) : hash(typeof(v), h)
+end
+
 """
     NirValue
 
@@ -329,8 +341,9 @@ end
 """
     NirWorld
 
-The closed world in NIR, dart's Kernel `Component`: `bodies`, every function of the ClosedWorld Julia's
-trim verifier accepted, in Julia's order. Read as a list (iterate, index, length), never built as one.
+The closed world in NIR, dart's Kernel `Component`: `entry`, the ClosedWorld's entry MethodInstance
+(dart's Component.mainMethod), and `bodies`, every function of the ClosedWorld Julia's trim verifier
+accepted, in Julia's order. Read as a list (iterate, index, length), never built as one.
 
 A typestate by construction: its one constructor takes the token `_NirToken`, which only this file
 holds, and `build_nir`, which takes a `ClosedWorld`, is its only caller, so a stage that takes a
@@ -343,8 +356,9 @@ by reflection when the package loads (check_sole_constructor), with ClosedWorld'
 same typestate (construction_check(::Val{:ClosedWorld}), src/julia/subset.jl; L220).
 """
 @quarantine "Julia has no private constructors; the NIR of a closed world is a typestate a token guards" Base.Vector struct NirWorld
+    entry::Core.MethodInstance
     bodies::Vector{NirBody}
-    NirWorld(::_NirToken, bodies::Vector{NirBody}) = new(bodies)
+    NirWorld(::_NirToken, entry::Core.MethodInstance, bodies::Vector{NirBody}) = new(entry, bodies)
 end
 
 # the bodies read as a list: iterated, indexed and counted in Julia's order
@@ -370,7 +384,9 @@ census rejects with `Unquarantined`, located at the compile `at` names.
             reject!(Internal("src/julia/nir.jl: the closed world's entry $k is a $(typeof(ci)) and $(typeof(src)), not a CodeInstance and its CodeInfo"), at)
         push!(bodies, NirBody(ci, NirStmt[_nir_stmt(st, at) for st in src.code], _nir_types(ci, src, at)))
     end
-    return NirWorld(_NirToken(), bodies)
+    any(b -> b.ci.def === world.entry, bodies) ||
+        reject!(Internal("src/julia/nir.jl: the closed world's entry $(world.entry) has no body"), at)
+    return NirWorld(_NirToken(), world.entry, bodies)
 end
 
 # the two closed sums' assertions, run when the package loads
