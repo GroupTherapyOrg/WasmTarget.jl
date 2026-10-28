@@ -111,6 +111,14 @@ end
     @test length(fc._pending_allocation_dynamic[7]) == 1
     local e = try; W.record_class_allocation(fc, 7); nothing; catch x; x; end
     @test e isa WT.RejectionError && e.rejection isa WT.Unported && occursin("DynamicForwarderCodeGenerator", e.rejection.anchor)
+
+    # dart's Constructor and Field arms of its member visitor: no Julia member reaches them
+    local gen = W._FunctionTypeGenerator(t, false, false)
+    local internal(f) = try; f(); false; catch x; x isa WT.RejectionError && x.rejection isa WT.Internal; end
+    @test internal(() -> W.visit_constructor(gen, mi, mi))
+    @test internal(() -> W._get_constructor_body_type(gen, mi))
+    @test internal(() -> W._get_constructor_allocator_type(gen, mi))
+    @test internal(() -> W._get_initializer_type(gen, mi, mi))
 end
 
 end # module FunctionsTest

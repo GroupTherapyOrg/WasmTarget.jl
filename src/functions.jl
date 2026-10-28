@@ -311,7 +311,13 @@ end
 @parity "dart2wasm/lib/functions.dart:470 _FunctionTypeGenerator" _FunctionTypeGenerator(translator::KernelNodes, synthesize_null_return_value::Bool, synthesize_no_return::Bool)::_FunctionTypeGenerator =
     _FunctionTypeGenerator(Val(:_), translator, synthesize_null_return_value, synthesize_no_return)
 
-@parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" @unported function visit_field(self::_FunctionTypeGenerator, node::ClassField, target::Core.MethodInstance) end
+# Julia has no Kernel Constructor or Field member: a constructor is a method (`_getFunctionType` visits
+# it as dart's Procedure) and a struct field has no implicit accessor (getfield is the code
+# generator's), so this arm of dart's member visitor is reached by no Julia member; reaching it is
+# WasmTarget's own fault, refused where it stands
+@parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" function visit_field(self::_FunctionTypeGenerator, node::ClassField, target::Core.MethodInstance)::Union{}
+    reject!(Internal("dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField: a Julia member is a method, never a Kernel Constructor or Field"), "visit_field")
+end
 
 """
 A method's function type: its parameters' and return's wasm types, after its callee's when the
@@ -325,15 +331,45 @@ callee is a context (a closure's captured struct), dart's receiver of an instanc
                                synthesize_no_return = self.synthesize_no_return)
 end
 
-@parity "dart2wasm/lib/functions.dart:550 _FunctionTypeGenerator.visitConstructor" @unported function visit_constructor(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance) end
+# Julia has no Kernel Constructor or Field member: a constructor is a method (`_getFunctionType` visits
+# it as dart's Procedure) and a struct field has no implicit accessor (getfield is the code
+# generator's), so this arm of dart's member visitor is reached by no Julia member; reaching it is
+# WasmTarget's own fault, refused where it stands
+@parity "dart2wasm/lib/functions.dart:550 _FunctionTypeGenerator.visitConstructor" function visit_constructor(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance)::Union{}
+    reject!(Internal("dart2wasm/lib/functions.dart:550 _FunctionTypeGenerator.visitConstructor: a Julia member is a method, never a Kernel Constructor or Field"), "visit_constructor")
+end
 
-@parity "dart2wasm/lib/functions.dart:570 _FunctionTypeGenerator._getConstructorAllocatorType" @unported function _get_constructor_allocator_type(self::_FunctionTypeGenerator, node::Core.MethodInstance) end
+# Julia has no Kernel Constructor or Field member: a constructor is a method (`_getFunctionType` visits
+# it as dart's Procedure) and a struct field has no implicit accessor (getfield is the code
+# generator's), so this arm of dart's member visitor is reached by no Julia member; reaching it is
+# WasmTarget's own fault, refused where it stands
+@parity "dart2wasm/lib/functions.dart:570 _FunctionTypeGenerator._getConstructorAllocatorType" function _get_constructor_allocator_type(self::_FunctionTypeGenerator, node::Core.MethodInstance)::Union{}
+    reject!(Internal("dart2wasm/lib/functions.dart:570 _FunctionTypeGenerator._getConstructorAllocatorType: a Julia member is a method, never a Kernel Constructor or Field"), "_get_constructor_allocator_type")
+end
 
-@parity "dart2wasm/lib/functions.dart:584 _FunctionTypeGenerator._getInitializerType" @unported function _get_initializer_type(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance) end
+# Julia has no Kernel Constructor or Field member: a constructor is a method (`_getFunctionType` visits
+# it as dart's Procedure) and a struct field has no implicit accessor (getfield is the code
+# generator's), so this arm of dart's member visitor is reached by no Julia member; reaching it is
+# WasmTarget's own fault, refused where it stands
+@parity "dart2wasm/lib/functions.dart:584 _FunctionTypeGenerator._getInitializerType" function _get_initializer_type(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance)::Union{}
+    reject!(Internal("dart2wasm/lib/functions.dart:584 _FunctionTypeGenerator._getInitializerType: a Julia member is a method, never a Kernel Constructor or Field"), "_get_initializer_type")
+end
 
-@parity "dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType" @unported function _get_constructor_body_type(self::_FunctionTypeGenerator, node::Core.MethodInstance) end
+# Julia has no Kernel Constructor or Field member: a constructor is a method (`_getFunctionType` visits
+# it as dart's Procedure) and a struct field has no implicit accessor (getfield is the code
+# generator's), so this arm of dart's member visitor is reached by no Julia member; reaching it is
+# WasmTarget's own fault, refused where it stands
+@parity "dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType" function _get_constructor_body_type(self::_FunctionTypeGenerator, node::Core.MethodInstance)::Union{}
+    reject!(Internal("dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType: a Julia member is a method, never a Kernel Constructor or Field"), "_get_constructor_body_type")
+end
 
-@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" @unported function _get_constructor_input_types(translator::Translator, member::Core.MethodInstance, type_parameters::Vector{TypeVar}, parameters::Vector{NirArgument}, translate_type::Function; is_body_parameter::Bool = false) end
+# Julia has no Kernel Constructor or Field member: a constructor is a method (`_getFunctionType` visits
+# it as dart's Procedure) and a struct field has no implicit accessor (getfield is the code
+# generator's), so this arm of dart's member visitor is reached by no Julia member; reaching it is
+# WasmTarget's own fault, refused where it stands
+@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" function _get_constructor_input_types(translator::Translator, member::Core.MethodInstance, type_parameters::Vector{TypeVar}, parameters::Vector{NirArgument}, translate_type::Function; is_body_parameter::Bool = false)::Union{}
+    reject!(Internal("dart2wasm/lib/functions.dart:697 _getConstructorInputTypes: a Julia member is a method, never a Kernel Constructor or Field"), "_get_constructor_input_types")
+end
 
 # a Julia member has no type parameters (its MethodInstance binds them) and no named parameters; its
 # parameters are the arguments after the callee, each of the type it is specialized on
