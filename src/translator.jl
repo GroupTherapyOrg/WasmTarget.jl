@@ -85,7 +85,7 @@ the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8
 integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
 every other primitive class have none).
 
-Fields to come (62, each with its translator.dart line): `symbols` :100, `libraries` :104,
+Fields to come (60, each with its translator.dart line): `symbols` :100, `libraries` :104,
 `coreTypes` :106, `typeEnvironment` :107, `hierarchy` :108, `subtypes` :109, `directCallMetadata`
 :115, `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123, `inferredReturnTypeMetadata`
 :127, `unboxingInfoMetadata` :131, `procedureAttributeMetadata` :136, `unreachableMetadata` :140,
@@ -93,7 +93,7 @@ Fields to come (62, each with its translator.dart line): `symbols` :100, `librar
 :161, `interopMemberNamer` :164, `internalizedStringsForJSRuntime` :189,
 `_internalizedStringGlobals` :190, `typeParameterIndex` :195, `_declaredFieldTables` :197, `_importedFieldTables` :198, `membersContainingInnerFunctions` :202,
 `constructorClosures` :204, `constructorInfo` :205, `_memories` :210, `_ffiMemoryImports` :213,
-`recordClasses` :228, `immutableArrayTypeCache` :231, `mutableArrayTypeCache` :232,
+`recordClasses` :228,
 `functionRefCache` :233, `tearOffFunctionCache` :235, `closureImplementations` :238, `objectInfo`
 :241, `stackTraceInfo` :243, `recordInfo` :244, `typeArrayType` :245,
 `listArrayType` :249, `nullableObjectArrayType` :254, `typeArrayTypeRef` :258,
@@ -133,6 +133,8 @@ the translator holds each collaborator.
     static_param_info::IdDict{Core.MethodInstance,ParameterInfo}
     members_being_generated::Base.IdSet{Core.MethodInstance}
     void_marker::Late{WasmBuilder.IR.ValueType}
+    immutable_array_type_cache::Dict{WasmBuilder.IR.StorageType,WasmBuilder.IR.ArrayType}
+    mutable_array_type_cache::Dict{WasmBuilder.IR.StorageType,WasmBuilder.IR.ArrayType}
     closure_info::Late{ClassInfo}
     top_type::Late{WasmBuilder.IR.RefType}
     top_type_non_nullable::Late{WasmBuilder.IR.RefType}
@@ -171,6 +173,7 @@ the translator holds each collaborator.
             IdDict{Core.MethodInstance,ParameterInfo}(), Base.IdSet{Core.MethodInstance}(),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/translator.dart:206 Translator.voidMarker",
                 () -> WasmBuilder.IR.RefType_def(WasmBuilder.IR.StructType("void"); nullable = true)),
+            Dict{WasmBuilder.IR.StorageType,WasmBuilder.IR.ArrayType}(), Dict{WasmBuilder.IR.StorageType,WasmBuilder.IR.ArrayType}(),
             # dart's `_Closure`, the class every closure extends: Julia's `Function`, every function
             # object's supertype, a closure's among them
             Late{ClassInfo}("dart2wasm/lib/translator.dart:242 Translator.closureInfo", function ()
@@ -635,6 +638,10 @@ the representation here is a reference to the join's struct, each value boxed in
     (cls === Type || (cls isa DataType && Base.isType(cls) && cls.parameters[1] isa TypeVar)) && (cls = supertype(DataType))
     cls isa DataType && Base.isType(cls) && !(cls.parameters[1] isa TypeVar) && (cls = typeof(cls.parameters[1]))
     cls isa DataType || reject!(Unquarantined("src/translator.jl translateStorageType: $type_, no class but a $(typeof(cls))"), at)
+    # Wasm array? dart:_wasm's WasmArray<T> and ImmutableWasmArray<T> (src/julia/wasm_array.jl), the
+    # type of a field holding a wasm array of T
+    cls <: WasmArray && return WasmBuilder.IR.RefType_def(array_type_for_dart_type(self, cls.parameters[1]; mutable_ = true); nullable = nullable)
+    cls <: ImmutableWasmArray && return WasmBuilder.IR.RefType_def(array_type_for_dart_type(self, cls.parameters[1]; mutable_ = false); nullable = nullable)
     if isprimitivetype(cls)
         # Built-in type? Its box is the primitive class itself
         local builtin = unbox ? get(self.builtin_types[], cls, nothing) : nothing
@@ -652,9 +659,27 @@ the representation here is a reference to the join's struct, each value boxed in
     return WasmBuilder.with_nullability(repr(info), nullable)
 end
 
-@parity "dart2wasm/lib/translator.dart:1205 Translator.arrayTypeForDartType" @unported function array_type_for_dart_type(self::Translator, type_::Type; mutable_::Bool) end
+"""
+The wasm array type whose elements hold values of the Julia type `type_`, boxed (dart: a
+`WasmArray<BoxedInt>` is an array of boxed integers, not of WasmI64): `translateStorageType` of the
+type with `unbox` off. dart walks a type parameter to its bound; a Julia element type here is a
+type with no free variable (a static parameter Julia's specialization bound), and one with a free
+variable rejects, located.
+"""
+@parity "dart2wasm/lib/translator.dart:1205 Translator.arrayTypeForDartType" function array_type_for_dart_type(self::Translator, type_::Type; mutable_::Bool)::WasmBuilder.IR.ArrayType
+    Base.has_free_typevars(type_) &&
+        reject!(Unquarantined("src/translator.jl arrayTypeForDartType: the element type $type_, whose free type variables an unspecialized method leaves open"), "Translator.arrayTypeForDartType")
+    return wasm_array_type(self, translate_storage_type(self, type_; unbox = false), string(type_); mutable_ = mutable_)
+end
 
-@parity "dart2wasm/lib/translator.dart:1218 Translator.wasmArrayType" @unported function wasm_array_type(self::Translator, type_::WasmBuilder.IR.StorageType, name::String; mutable_::Bool = true) end
+"""The wasm array type of `type_` elements, mutable or not, defined once per element type and kept."""
+@parity "dart2wasm/lib/translator.dart:1218 Translator.wasmArrayType" function wasm_array_type(self::Translator, type_::WasmBuilder.IR.StorageType, name::String; mutable_::Bool = true)::WasmBuilder.IR.ArrayType
+    local cache = mutable_ ? self.mutable_array_type_cache : self.immutable_array_type_cache
+    return get!(cache, type_) do
+        WasmBuilder.define_array(types_builder(self), "$(mutable_ ? "" : "Immutable")Array<$name>";
+                                 element_type = WasmBuilder.IR.FieldType(type_; mutable = mutable_))
+    end
+end
 
 """
 The wasm type of a Julia type on the interop boundary, an import's or export's parameter or

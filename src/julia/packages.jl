@@ -55,7 +55,7 @@ import ..ClosedWorld, ..NirBody, ..NirWorld, ..NoCounterpart, ..build_nir, .._KI
 # Kernel's constants by the Kernel table's rows (src/julia/kernel.jl)
 import ..Constant, ..InstanceConstant
 # dart:_wasm's array literal, the runtime type tables' constants (src/julia/wasm_array.jl)
-import ..WasmArrayLiteral
+import ..WasmArrayLiteral, ..WasmArray, ..ImmutableWasmArray
 # LLVM's machine code over a body's CFG, which the code generator lowers (src/julia/machine.jl), and
 # the backend's passes that structure it (src/llvm/target_machine.jl)
 import ..LLVM
