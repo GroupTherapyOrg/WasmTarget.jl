@@ -4278,3 +4278,68 @@ Landing times: entry 47 landed with the median of five shown by ship; a5621640 a
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A47S1 is fixed by 02ae4bf2; A45S4
 by 025b30cc; A45S1 and A45S3 by f42f5f39; A47E3 by a5621640; A41S9 by cfafd72e for `diff`; A46S2's two totals by
 81103f31. A48S1 is open on MARCH 1.A4. A48E1 is open on MARCH 1.A6.
+
+## 2026-10-28 — audited through 9a5c5a21 (34065d0e..9a5c5a21: entry 48, MacroAssembler's class-id search, FixIrreducibleControlFlow, CallShape, StaticGet, the selector use; and the LLVM sub-audit of entry 48's stackifier)
+
+The forty-ninth audit, beside the work, covers 85013a47 (entry 48; its author's), 13807930 (MacroAssembler's class-id
+range check and searches, loops, tables, invoke, inlineCallTo, loadClassId), 514aa322 (WebAssemblyFixIrreducibleControlFlow
+ported over Julia's CFG), bdb79816 (CallShape, a @closed sum of its three kinds), 82c7360c (a binding's read as
+StaticGet) and 9a5c5a21 (FunctionCollector's selector use and stub names). It records the sub-audit of entry 48's LLVM
+ports (b8b8d61f, 517aac7a, b166efb6, ee829408), read against the llvm pin 7a941dfb, each finding resting on the command
+its report quotes. Standing items: no commit changes dev/skeleton_scope.toml (`git log 34065d0e..9a5c5a21 --
+dev/skeleton_scope.toml` is empty), so the total stays 3446; compile() has not landed, so the test-integrity entry waits
+on it; traps below. Findings A49S1, A49S2 and A49S3.
+
+Area: builder — empty by diff for src/wasm_builder/. The stackifier's ports (src/llvm/, src/julia/machine.jl) are read
+here, as the code generator's input. The sub-audit found sortBlocks (cfg_sort.jl:72–181) LLVM's step for step (back edges
+skipped in the predecessor counts, the Preferred and Ready queues, the deferral where the region header does not dominate,
+the loop-rotation test, maybeUpdateTerminator at both places, NDEBUG asserts as located rejections), placeBlockMarker and
+placeLoopMarker with the ScopeTops walk-out, getEarliestInsertPos and getLatestInsertPos, getBranchDepth and the depth
+rewrite, and LoopInfoBase::analyze over Julia's DomTree, and the CFG and dominator tree Julia's own
+(`compute_basic_blocks`, `construct_domtree`, `dominates`, `nearest_common_dominator`); try regions reject at
+machine.jl:141, located. Its tests check properties (WellNested, BranchTargetsEnclosingLabel, DepthCorrect, PathsPreserved
+by interpreting the structured program against compute_basic_blocks, test/llvm_cfg_stackify.jl:134–184), not recorded
+answers. Its F1, an irreducible-CFG check of WT's own (`irreducible_entries`, machine.jl:274), is gone with 514aa322's port
+of LLVM's ReachabilityGraph (`git show origin/wt2:src/julia/machine.jl | grep -c irreducible_entries` gives 0), and its
+F6 (FixIrreducible.tla naming a file that did not exist) with the same commit. (A49S1, low) Three LLVM steps the port
+drops without a word or a rejection: CFGStackify's balanced-marker assertion for a BLOCK's end (cfg_stackify.jl:280–282
+checks only a non-empty stack, where LLVM asserts `ScopeTops[Stack.back().first->getNumber()]->getNumber() <=
+MBB.getNumber()`, WebAssemblyCFGStackify.cpp:2647–2650), and runOnMachineFunction's appendEndToFunction and
+cleanupFunctionData (cfg_stackify.jl:332–337 against LLVM 2701–2735), with fix_ends_at_end_of_function writing the
+stand-in `BLOCK_TYPE_RESULTS = 0xffff` for every block type where LLVM writes the result's value type for a single
+result; each dropped step is a located rejection or a ported line (D42: no algorithm of our own, none left out silently).
+(A49S2, low) CFGStackify.tla checks maybeUpdateTerminator's outcome on the final layout (`TermToks`, lines 279–298) and
+loops from `BodyOf` (130–135), so the port's per-move terminator rewrites (the FBB rewrite, the reversed condition) and
+analyze's own steps are not model-checked (D11: the model is of the algorithm as ported).
+
+Area: collection and planning — bdb79816's CallShape is a @closed sum with dart's predicates, equality and hash, a Julia
+method read as dart's FunctionNode (no type parameters a call passes, positional parameters after the callee, a trailing
+vararg, keywords as Core.kwcall's own method); sound. 9a5c5a21's recordSelectorUse records each target for every class id
+of its ranges; sound.
+
+stopgap in disguise: none new; the stackifier's checks are LLVM's assertions as located rejections.
+precedent: the stackifier, LLVM's WebAssembly backend at its pin (D42); CallShape, dart's sealed class.
+
+Area: emission and diagnostics — 13807930's sequences are dart's over the ported builder; its two `unreachable`
+instructions (`git show 13807930 -- src | grep '^+' | grep -n 'unreachable('` gives lines 171 and 206) end an empty
+search that has no miss branch, where dart's own sequence is unreachable, never a Julia error. (A49S3, medium) Two rules
+for one fact, whether a binding's value is a compile-time constant (D5). visit_static_get (src/code_generator.jl:706–712)
+instantiates any `isconst` binding's current value as a constant: `isconst(node.ref.mod, node.ref.name) || reject!(…)`
+then `instantiate_constant(self, NirConst(Core.Const(getglobal(…))), …)`. 025b30cc's get_constant_initializer
+(src/globals.jl:178–188) admits a const binding only when its value is free of mutation, `Base.ismutationfree(typeof(value))
+|| return nothing`, because a module's `__init__` runs again at load and can fill a const Ref or array. So `const R =
+Ref(0)` with `__init__() = (R[] = …)` is a lazy global by the one and a compile-time snapshot by the other; the read
+should ask the globals' rule, one function both call.
+
+Area: enforcement and prose — the test hunks of 13807930, 514aa322, bdb79816, 82c7360c and 9a5c5a21, and the sub-audit's
+reading of the stackifier tests. 13807930's and 514aa322's node runs ("every answer equals Julia's any(r -> contains(r, id),
+ranges)") are again in their messages alone; A46E1's runner is wt3-tests'. The sub-audit's F2 holds: nothing in src
+calls the stackifier yet (`git grep -n "run_on_machine_function\|sort_blocks(" origin/wt2 -- src test` lists
+target_machine.jl and the tests alone), so no stackified function runs against native, and no test holds LLVM's own
+output (an llc oracle) beside the port's; the property tests stand in. Requirements: D42 (A49S1); D11 (A49S2); D5 (A49S3);
+no lock fired inside its band.
+
+Landing times: entry 48 landed by dev/ship.sh with its median printed.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A49S1 and A49S2 are open on MARCH 1.D.
+A49S3 is open on MARCH 1.C.
