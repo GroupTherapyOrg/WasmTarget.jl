@@ -70,39 +70,53 @@ end
 """
 The translation from the program to wasm, and the hub of the compiler's global state.
 
-Its fields arrive with the pieces that read them, in dart's order: `options`; `component`, the
-program, the NIR of the closed world Julia's trim verifier accepted (dart's Kernel `Component`);
-`closureLayouter`, `classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`, `dispatchTable`, `dynamicDispatchTable`,
-`globals`, `dartGlobals`, `constants`, `types`, `compilationQueue`, `functions` (each
-late, assigned where dart assigns it once its class is ported); `membersBeingGenerated` (a member
-a Core.MethodInstance); `voidMarker`; `immutableArrayTypeCache`, `mutableArrayTypeCache`; `_dummyValueCollectors`; `_moduleOutputData`, `_outputToBuilder`, `_builderToOutput`,
-`staticParamInfo`; `exportNamer`; `linkingActions`; `moduleToBuilder` (one
-module: deferred loading is out of scope);
+Its fields are dart's, in dart's order: `options`; `symbols`, the names of members (src/symbols.jl);
+`component`, the program, the NIR of the closed world Julia's trim verifier accepted (dart's Kernel
+`Component`); `closureLayouter`, `classInfoCollector`, `crossModuleFunctionTable`,
+`tableBasedGlobals`, `dispatchTable`, `dynamicDispatchTable`, `globals`, `dartGlobals`, `constants`,
+`types`, `_exceptionTags`, `compilationQueue`, `functions` (each late, assigned where dart assigns
+it once its class is ported); `exportNamer`; `interopMemberNamer` (late, as the others);
 `classes`, `classesSupersFirst`, `classIdNumbering`, `classInfo` (a class is a Julia DataType, keyed
-by identity), `classForHeapType`, `fieldIndex` (a field a ClassField, src/julia/classes.jl),
-`topType`, `builtinTypes` (Julia's primitive classes with a wasm representation: `Bool`, `Char` and
-the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8- and 16-bit
-integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
-every other primitive class have none).
+by identity), `internalizedStringsForJSRuntime`, `_internalizedStringGlobals`, `classForHeapType`,
+`fieldIndex` (a field a ClassField, src/julia/classes.jl), `typeParameterIndex` (a type parameter a
+TypeVar), `staticParamInfo`, `_declaredFieldTables`, `_importedFieldTables`,
+`membersContainingInnerFunctions`, `membersBeingGenerated`, `constructorClosures`, `constructorInfo`
+(a member or reference a Core.MethodInstance); `voidMarker`; `_memories`, `_ffiMemoryImports`;
+`immutableArrayTypeCache`, `mutableArrayTypeCache`, `functionRefCache`, `tearOffFunctionCache`,
+`closureImplementations` (a function node a NirBody); `objectInfo`, `closureInfo`,
+`stackTraceInfo`, `recordInfo`, `typeArrayType`, `listArrayType`, `nullableObjectArrayType`,
+`typeArrayTypeRef`, `nullableObjectArrayTypeRef`, `boxedIntType`, `boxedDoubleType`, `topType`,
+`topTypeNonNullable`, `stackTraceType`, `stackTraceTypeNullable`, `runtimeTypeType`,
+`runtimeTypeTypeNullable`, `stringType`, `stringTypeNullable`, `invocationType` (each late with
+dart's initializer, the class it reads Julia's answer where src states one: dart's `Object` and
+`Object?` are `Any`, its `Type` and `_Type` Julia's `Type`, its `String` `String`, its `_Closure`
+`Function`; a late field whose class is not ported yet, `StackTrace`, `Record`, the list base, the
+boxed classes, `Invocation`, is assigned when its class is); `_partialInstantiators`,
+`_polymorphicDispatchers`, `_dynamicDispatchers`, `_dummyValueCollectors`; `builtinTypes`
+(Julia's primitive classes with a wasm representation: `Bool`, `Char` and the 32-bit integers i32,
+the 64-bit i64, `Float32` f32, `Float64` f64, and the 8- and 16-bit integers packed i8 and i16, as
+dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and every other primitive class have
+none); `boxedClasses`, `boxClasses`, `valueClasses` (late, assigned when the boxed classes are
+ported); `dynamicCallVtableEntryFunctionType`; `_moduleOutputData`, `_outputToBuilder`,
+`_builderToOutput`, `moduleToBuilder` (one module: deferred loading is out of scope);
+`_memberClosures`; `linkingActions`; and the three dart declares among its methods,
+`_importedMemories` :866, `_closureArgumentsDispatchers` :1328 and `_needToCheck` :1682.
 
-Fields to come (55, each with its translator.dart line): `symbols` :100, `libraries` :104,
-`coreTypes` :106, `typeEnvironment` :107, `hierarchy` :108, `subtypes` :109, `directCallMetadata`
-:115, `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123, `inferredReturnTypeMetadata`
-:127, `unboxingInfoMetadata` :131, `procedureAttributeMetadata` :136, `unreachableMetadata` :140,
-`index` :146, `_exceptionTags` :157, `loadingMap`
-:161, `interopMemberNamer` :164, `internalizedStringsForJSRuntime` :189,
-`_internalizedStringGlobals` :190, `typeParameterIndex` :195, `_declaredFieldTables` :197, `_importedFieldTables` :198, `membersContainingInnerFunctions` :202,
-`constructorClosures` :204, `constructorInfo` :205, `_memories` :210, `_ffiMemoryImports` :213,
-`recordClasses` :228,
-`functionRefCache` :233, `tearOffFunctionCache` :235, `closureImplementations` :238, `objectInfo`
-:241, `stackTraceInfo` :243, `recordInfo` :244, `typeArrayType` :245,
-`listArrayType` :249, `nullableObjectArrayType` :254, `typeArrayTypeRef` :258,
-`nullableObjectArrayTypeRef` :262, `boxedIntType` :267, `boxedDoubleType` :271, `stackTraceType` :285, `stackTraceTypeNullable` :289, `runtimeTypeType` :294,
-`runtimeTypeTypeNullable` :298, `stringType` :302, `stringTypeNullable` :306, `invocationType` :309,
-`_partialInstantiators` :315, `_polymorphicDispatchers` :320, `_dynamicDispatchers` :331,
-`boxedClasses` :374, `boxClasses` :380, `valueClasses` :389,
-`dynamicCallVtableEntryFunctionType` :398, `_memberClosures` :455, `_importedMemories` :866,
-`_closureArgumentsDispatchers` :1328, `_needToCheck` :1682.
+Julia's answers, not stored (each with its translator.dart line; ledger D3): the Kernel front end's
+`libraries` :104 (the closed world's classes are the types its NIR carries, src/julia/classes.jl),
+`coreTypes` :106 and `index` :146 (a port names Julia's types and functions directly, the Kernel
+table's CoreTypes row), `typeEnvironment` :107, `hierarchy` :108 and `subtypes` :109 (Julia's
+`supertype` and its subtyping, the Kernel table's ClassHierarchy row), and `recordClasses` :228 (a
+record's class is its own `Tuple` or `NamedTuple` type, so generateRecordClasses maps no shape,
+src/record_class_generator.jl); and TFA's metadata, whose Julia counterpart is the inference the NIR
+holds: `directCallMetadata` :115 (a call Julia resolved is an invoke of its MethodInstance),
+`inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123 and `inferredReturnTypeMetadata` :127
+(a MethodInstance's specialization and its CodeInstance's return type, typeOfCheckedParameterVariable
+and typeOfReturnValue), `unboxingInfoMetadata` :131 (a specialization's types give its function's
+wasm type, FunctionCollector.getFunctionType), `procedureAttributeMetadata` :136, and
+`unreachableMetadata` :140 (Julia's IR marks unreachable code itself, NirUnreachable).
+
+Out of scope: `loadingMap` :161, deferred loading's map (dev/PARITY_MASTER.md).
 
 A collaborator holds its translator as `KernelNodes`, the mixin Translator alone applies (dart's
 `class Translator with KernelNodes`): Julia cannot declare two structs that name each other, and
@@ -110,6 +124,7 @@ the translator holds each collaborator.
 """
 @parity "dart2wasm/lib/translator.dart:96 Translator" struct Translator <: KernelNodes
     options::TranslatorOptions
+    symbols::Symbols
     component::NirWorld
     closure_layouter::Late{ClosureLayouter}
     class_info_collector::Late{ClassInfoCollector}
@@ -121,30 +136,73 @@ the translator holds each collaborator.
     dart_globals::Late{DartGlobals}
     constants::Late{Constants}
     types::Late{Types}
+    _exception_tags::Late{ExceptionTags}
     compilation_queue::Late{CompilationQueue}
     functions::Late{FunctionCollector}
     export_namer::Namer
+    interop_member_namer::Late{InteropMemberNamer}
     classes::Late{Vector{ClassInfo}}
     classes_supers_first::Late{Vector{ClassInfo}}
     class_id_numbering::Late{ClassIdNumbering}
     class_info::IdDict{DataType,ClassInfo}
+    internalized_strings_for_js_runtime::Vector{String}
+    _internalized_string_globals::Dict{Tuple{WasmBuilder.ModuleBuilder,String},WasmBuilder.IR.Global}
     class_for_heap_type::Dict{WasmBuilder.IR.HeapType,ClassInfo}
     field_index::Dict{ClassField,Int}
+    type_parameter_index::IdDict{TypeVar,Int}
     static_param_info::IdDict{Core.MethodInstance,ParameterInfo}
+    _declared_field_tables::Dict{ClassField,WasmBuilder.IR.AbstractTable}
+    _imported_field_tables::Late{WasmTableImporter}
+    members_containing_inner_functions::Base.IdSet{Core.MethodInstance}
     members_being_generated::Base.IdSet{Core.MethodInstance}
+    constructor_closures::IdDict{Core.MethodInstance,Closures}
+    constructor_info::IdDict{Core.MethodInstance,ConstructorInfo}
     void_marker::Late{WasmBuilder.IR.ValueType}
+    _memories::IdDict{Core.MethodInstance,WasmBuilder.IR.Memory}
+    _ffi_memory_imports::IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Memory}
     immutable_array_type_cache::Dict{WasmBuilder.IR.StorageType,WasmBuilder.IR.ArrayType}
     mutable_array_type_cache::Dict{WasmBuilder.IR.StorageType,WasmBuilder.IR.ArrayType}
+    function_ref_cache::IdDict{WasmBuilder.IR.BaseFunction,WasmBuilder.IR.Global}
+    tear_off_function_cache::IdDict{Core.MethodInstance,IdDict{WasmBuilder.ModuleBuilder,ClosureImplementation}}
+    closure_implementations::IdDict{NirBody,IdDict{WasmBuilder.ModuleBuilder,ClosureImplementation}}
+    object_info::Late{ClassInfo}
     closure_info::Late{ClassInfo}
+    stack_trace_info::Late{ClassInfo}
+    record_info::Late{ClassInfo}
+    type_array_type::Late{WasmBuilder.IR.ArrayType}
+    list_array_type::Late{WasmBuilder.IR.ArrayType}
+    nullable_object_array_type::Late{WasmBuilder.IR.ArrayType}
+    type_array_type_ref::Late{WasmBuilder.IR.RefType}
+    nullable_object_array_type_ref::Late{WasmBuilder.IR.RefType}
+    boxed_int_type::Late{Type}
+    boxed_double_type::Late{Type}
     top_type::Late{WasmBuilder.IR.RefType}
     top_type_non_nullable::Late{WasmBuilder.IR.RefType}
+    stack_trace_type::Late{WasmBuilder.IR.RefType}
+    stack_trace_type_nullable::Late{WasmBuilder.IR.RefType}
+    runtime_type_type::Late{WasmBuilder.IR.RefType}
+    runtime_type_type_nullable::Late{WasmBuilder.IR.RefType}
+    string_type::Late{WasmBuilder.IR.RefType}
+    string_type_nullable::Late{WasmBuilder.IR.RefType}
+    invocation_type::Late{WasmBuilder.IR.RefType}
+    _partial_instantiators::IdDict{WasmBuilder.ModuleBuilder,PartialInstantiator}
+    _polymorphic_dispatchers::IdDict{WasmBuilder.ModuleBuilder,PolymorphicDispatchers}
+    _dynamic_dispatchers::IdDict{WasmBuilder.ModuleBuilder,DynamicDispatchers}
     _dummy_value_collectors::LinkedHashMap{WasmBuilder.ModuleBuilder,DummyValuesCollector}
     builtin_types::Late{IdDict{DataType,WasmBuilder.IR.StorageType}}
+    boxed_classes::Late{Dict{WasmBuilder.IR.ValueType,DataType}}
+    box_classes::Late{Base.IdSet{DataType}}
+    value_classes::Late{IdDict{DataType,DataType}}
+    dynamic_call_vtable_entry_function_type::Late{WasmBuilder.IR.FunctionType}
     _module_output_data::ModuleOutputData
     _output_to_builder::LinkedHashMap{ModuleMetadata,WasmBuilder.ModuleBuilder}
     _builder_to_output::LinkedHashMap{WasmBuilder.ModuleBuilder,ModuleMetadata}
     module_to_builder::Dict{WasmBuilder.IR.Module,WasmBuilder.ModuleBuilder}
+    _member_closures::IdDict{Core.MethodInstance,Closures}
     linking_actions::Vector{Function}
+    _imported_memories::Late{WasmMemoryImporter}
+    _closure_arguments_dispatchers::IdDict{WasmBuilder.ModuleBuilder,IdDict{ClosureRepresentation,WasmBuilder.IR.BaseFunction}}
+    _need_to_check::IdDict{Core.MethodInstance,Bool}
     # the struct's one constructor, tagged: dart's field initializers and the constructor's
     # initializer list, the component read from the ClosedWorld alone, so no translator is made from
     # NIR bodies a program Julia's trim verifier did not accept; a late field is assigned by the code
@@ -152,7 +210,11 @@ the translator holds each collaborator.
     # with an initializer reads the translator itself
     function Translator(::Val{:_}, world::ClosedWorld, _module_output_data::ModuleOutputData, options::TranslatorOptions)
         local self
-        self = new(options, build_nir(world, "dart2wasm/lib/translator.dart:470 Translator"),
+        local ref(t::WasmBuilder.IR.DefType) = WasmBuilder.IR.RefType_def(t; nullable = false)
+        self = new(options,
+            # the constructor's initializer list
+            Symbols(minify(options)),
+            build_nir(world, "dart2wasm/lib/translator.dart:470 Translator"),
             Late{ClosureLayouter}("dart2wasm/lib/translator.dart:147 Translator.closureLayouter"),
             Late{ClassInfoCollector}("dart2wasm/lib/translator.dart:148 Translator.classInfoCollector"),
             Late{CrossModuleFunctionTable}("dart2wasm/lib/translator.dart:149 Translator.crossModuleFunctionTable"),
@@ -163,18 +225,39 @@ the translator holds each collaborator.
             Late{DartGlobals}("dart2wasm/lib/translator.dart:154 Translator.dartGlobals"),
             Late{Constants}("dart2wasm/lib/translator.dart:155 Translator.constants"),
             Late{Types}("dart2wasm/lib/translator.dart:156 Translator.types"),
+            Late{ExceptionTags}("dart2wasm/lib/translator.dart:157 Translator._exceptionTags"),
             Late{CompilationQueue}("dart2wasm/lib/translator.dart:158 Translator.compilationQueue"),
             Late{FunctionCollector}("dart2wasm/lib/translator.dart:159 Translator.functions"),
             # the constructor's initializer list
             Namer(; minify = minify(options)),
+            Late{InteropMemberNamer}("dart2wasm/lib/translator.dart:164 Translator.interopMemberNamer"),
             Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:174 Translator.classes"),
             Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:180 Translator.classesSupersFirst"),
             Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"),
-            IdDict{DataType,ClassInfo}(), Dict{WasmBuilder.IR.HeapType,ClassInfo}(), Dict{ClassField,Int}(),
-            IdDict{Core.MethodInstance,ParameterInfo}(), Base.IdSet{Core.MethodInstance}(),
+            IdDict{DataType,ClassInfo}(), String[], Dict{Tuple{WasmBuilder.ModuleBuilder,String},WasmBuilder.IR.Global}(),
+            Dict{WasmBuilder.IR.HeapType,ClassInfo}(), Dict{ClassField,Int}(), IdDict{TypeVar,Int}(),
+            IdDict{Core.MethodInstance,ParameterInfo}(), Dict{ClassField,WasmBuilder.IR.AbstractTable}(),
+            Late{WasmTableImporter}("dart2wasm/lib/translator.dart:198 Translator._importedFieldTables",
+                () -> WasmTableImporter(self, "fieldTable")),
+            Base.IdSet{Core.MethodInstance}(), Base.IdSet{Core.MethodInstance}(),
+            IdDict{Core.MethodInstance,Closures}(), IdDict{Core.MethodInstance,ConstructorInfo}(),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/translator.dart:206 Translator.voidMarker",
                 () -> WasmBuilder.IR.RefType_def(WasmBuilder.IR.StructType("void"); nullable = true)),
+            IdDict{Core.MethodInstance,WasmBuilder.IR.Memory}(),
+            # Lazily import FFI memory if used.
+            IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Memory}(),
+            # Caches for when identical source constructs need a common representation.
             Dict{WasmBuilder.IR.StorageType,WasmBuilder.IR.ArrayType}(), Dict{WasmBuilder.IR.StorageType,WasmBuilder.IR.ArrayType}(),
+            IdDict{WasmBuilder.IR.BaseFunction,WasmBuilder.IR.Global}(),
+            IdDict{Core.MethodInstance,IdDict{WasmBuilder.ModuleBuilder,ClosureImplementation}}(),
+            IdDict{NirBody,IdDict{WasmBuilder.ModuleBuilder,ClosureImplementation}}(),
+            # Some convenience accessors for commonly used values.
+            # dart's `Object`, the class every class extends: Julia's `Any`, ClassInfoCollector's Object
+            Late{ClassInfo}("dart2wasm/lib/translator.dart:241 Translator.objectInfo", function ()
+                local info = get(self.class_info, Any, nothing)
+                info === nothing && reject!(Internal("dart2wasm/lib/translator.dart:241 Translator.objectInfo: Any is no class of the closed world"), "Translator.objectInfo")
+                return info
+            end),
             # dart's `_Closure`, the class every closure extends: Julia's `Function`, every function
             # object's supertype, a closure's among them
             Late{ClassInfo}("dart2wasm/lib/translator.dart:242 Translator.closureInfo", function ()
@@ -182,11 +265,39 @@ the translator holds each collaborator.
                 info === nothing && reject!(Internal("dart2wasm/lib/translator.dart:242 Translator.closureInfo: Function is no class of the closed world"), "Translator.closureInfo")
                 return info
             end),
+            Late{ClassInfo}("dart2wasm/lib/translator.dart:243 Translator.stackTraceInfo"),
+            Late{ClassInfo}("dart2wasm/lib/translator.dart:244 Translator.recordInfo"),
+            # dart's `_Type`, a type as a value: Julia's `Type` (translateStorageType)
+            Late{WasmBuilder.IR.ArrayType}("dart2wasm/lib/translator.dart:245 Translator.typeArrayType",
+                () -> array_type_for_dart_type(self, Type; mutable_ = true)),
+            Late{WasmBuilder.IR.ArrayType}("dart2wasm/lib/translator.dart:249 Translator.listArrayType"),
+            # dart's `Object?`, Julia's `Any`, which holds `nothing`
+            Late{WasmBuilder.IR.ArrayType}("dart2wasm/lib/translator.dart:254 Translator.nullableObjectArrayType",
+                () -> array_type_for_dart_type(self, Any; mutable_ = true)),
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:258 Translator.typeArrayTypeRef", () -> ref(self.type_array_type[])),
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:262 Translator.nullableObjectArrayTypeRef", () -> ref(self.nullable_object_array_type[])),
+            Late{Type}("dart2wasm/lib/translator.dart:267 Translator.boxedIntType"),
+            Late{Type}("dart2wasm/lib/translator.dart:271 Translator.boxedDoubleType"),
             # The wasm type used to hold values of Dart top types (e.g. `Object?`, `dynamic`)
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:278 Translator.topType", () -> self.classes[][1].nullable_type),
             # The wasm type used to hold values of Dart top types excluding null (e.g. `Object`)
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:282 Translator.topTypeNonNullable", () -> WasmBuilder.with_nullability(self.top_type[], false)),
-            LinkedHashMap{WasmBuilder.ModuleBuilder,DummyValuesCollector}(),
+            # The wasm type used to hold values of `StackTrace`
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:285 Translator.stackTraceType"),
+            # The wasm type used to hold values of `StackTrace?`
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:289 Translator.stackTraceTypeNullable", () -> WasmBuilder.with_nullability(self.stack_trace_type[], true)),
+            # The wasm type used to hold values of `Type`
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:294 Translator.runtimeTypeType", () -> translate_type(self, Type)::WasmBuilder.IR.RefType),
+            # The wasm type used to hold values of `Type?`
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:298 Translator.runtimeTypeTypeNullable", () -> WasmBuilder.with_nullability(self.runtime_type_type[], true)),
+            # The wasm type used to hold values of `String`
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:302 Translator.stringType", () -> translate_type(self, String)::WasmBuilder.IR.RefType),
+            # The wasm type used to hold values of `String?`
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:306 Translator.stringTypeNullable", () -> WasmBuilder.with_nullability(self.string_type[], true)),
+            # The wasm type used to hold values of `Invocation`
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:309 Translator.invocationType"),
+            IdDict{WasmBuilder.ModuleBuilder,PartialInstantiator}(), IdDict{WasmBuilder.ModuleBuilder,PolymorphicDispatchers}(),
+            IdDict{WasmBuilder.ModuleBuilder,DynamicDispatchers}(), LinkedHashMap{WasmBuilder.ModuleBuilder,DummyValuesCollector}(),
             Late{IdDict{DataType,WasmBuilder.IR.StorageType}}("dart2wasm/lib/translator.dart:344 Translator.builtinTypes", () -> IdDict{DataType,WasmBuilder.IR.StorageType}(
                 Bool => WasmBuilder.IR.NumType_i32,
                 Int8 => WasmBuilder.IR.PackedType_i8, UInt8 => WasmBuilder.IR.PackedType_i8,
@@ -194,9 +305,29 @@ the translator holds each collaborator.
                 Int32 => WasmBuilder.IR.NumType_i32, UInt32 => WasmBuilder.IR.NumType_i32, Char => WasmBuilder.IR.NumType_i32,
                 Int64 => WasmBuilder.IR.NumType_i64, UInt64 => WasmBuilder.IR.NumType_i64,
                 Float32 => WasmBuilder.IR.NumType_f32, Float64 => WasmBuilder.IR.NumType_f64)),
+            Late{Dict{WasmBuilder.IR.ValueType,DataType}}("dart2wasm/lib/translator.dart:374 Translator.boxedClasses"),
+            Late{Base.IdSet{DataType}}("dart2wasm/lib/translator.dart:380 Translator.boxClasses"),
+            Late{IdDict{DataType,DataType}}("dart2wasm/lib/translator.dart:389 Translator.valueClasses"),
+            # Type for vtable entries for dynamic calls. These entries are used in
+            # dynamic invocations and `Function.apply`.
+            Late{WasmBuilder.IR.FunctionType}("dart2wasm/lib/translator.dart:398 Translator.dynamicCallVtableEntryFunctionType",
+                () -> WasmBuilder.define_function(types_builder(self), WasmBuilder.IR.ValueType[
+                        # Closure
+                        ref(self.closure_layouter[].closure_base_struct[]),
+                        # Type arguments
+                        self.type_array_type_ref[],
+                        # Positional arguments
+                        self.nullable_object_array_type_ref[],
+                        # Named arguments, represented as array of symbol and object pairs
+                        self.nullable_object_array_type_ref[]],
+                    WasmBuilder.IR.ValueType[self.top_type[]])),
             _module_output_data, LinkedHashMap{ModuleMetadata,WasmBuilder.ModuleBuilder}(),
             LinkedHashMap{WasmBuilder.ModuleBuilder,ModuleMetadata}(), Dict{WasmBuilder.IR.Module,WasmBuilder.ModuleBuilder}(),
-            Function[])
+            IdDict{Core.MethodInstance,Closures}(), Function[],
+            Late{WasmMemoryImporter}("dart2wasm/lib/translator.dart:866 Translator._importedMemories",
+                () -> WasmMemoryImporter(self, "memory")),
+            IdDict{WasmBuilder.ModuleBuilder,IdDict{ClosureRepresentation,WasmBuilder.IR.BaseFunction}}(),
+            IdDict{Core.MethodInstance,Bool}())
         return self
     end
 end
@@ -281,18 +412,20 @@ PolymorphicDispatcherCodeGenerator's dart fields: `translator`, `selector`, `use
 """
 The dummy values of a module: a global per heap type holding a value of it, and a function per
 signature that traps, for locals and vtable entries a value must fill before any is assigned.
-
-Fields to come (1, its translator.dart line): `dummyStructGlobal` :3842, which dart's closures read.
+`dummyStructGlobal`, a global of an empty struct a context's dummy value can be, is late: dart
+declares it and, at the pin, neither assigns nor reads it.
 """
 @parity "dart2wasm/lib/translator.dart:3831 DummyValuesCollector" struct DummyValuesCollector
     module_::WasmBuilder.ModuleBuilder
     translator::KernelNodes
     _dummy_functions::LinkedHashMap{WasmBuilder.IR.FunctionType,WasmBuilder.IR.BaseFunction}
     _dummy_values::LinkedHashMap{WasmBuilder.IR.HeapType,WasmBuilder.IR.Global}
+    dummy_struct_global::Late{WasmBuilder.IR.Global}
     # the struct's one constructor, tagged; dart's constructor at :3843 is its outer function
     DummyValuesCollector(::Val{:_}, translator::KernelNodes, module_::WasmBuilder.ModuleBuilder) =
         new(module_, translator, LinkedHashMap{WasmBuilder.IR.FunctionType,WasmBuilder.IR.BaseFunction}(),
-            LinkedHashMap{WasmBuilder.IR.HeapType,WasmBuilder.IR.Global}())
+            LinkedHashMap{WasmBuilder.IR.HeapType,WasmBuilder.IR.Global}(),
+            Late{WasmBuilder.IR.Global}("dart2wasm/lib/translator.dart:3841 DummyValuesCollector.dummyStructGlobal"))
 end
 
 @parity "dart2wasm/lib/translator.dart:3925 _WasmImporter" abstract type _WasmImporter end
@@ -424,6 +557,7 @@ end
     self.compilation_queue[] = CompilationQueue(self)
     self.functions[] = FunctionCollector(self)
     self.types[] = Types(self)
+    self._exception_tags[] = ExceptionTags(self)
     return self
 end
 
@@ -460,8 +594,6 @@ exports, their code, the linking actions, and the tables' contents; then build e
 
 Deferred loading is out of scope: one main module, no loading map to prune or patch (dart's
 neededForLoadList, the empty modules' removal and the loading map getters).
-
-Fields to come read here: `constructorClosures` :204, cleared after the code is generated.
 """
 @parity "dart2wasm/lib/translator.dart:524 Translator.translate" function translate(self::Translator, source_map_url_generator::Union{Nothing,Function})::LinkedHashMap{ModuleMetadata,WasmBuilder.IR.Module}
     local at = "dart2wasm/lib/translator.dart:524 Translator.translate"
@@ -487,6 +619,7 @@ Fields to come read here: `constructorClosures` :204, cleared after the code is 
     end
     is_empty(self.compilation_queue[]) || reject!(Internal("$at: a linking action queued code"), at)
 
+    empty!(self.constructor_closures)
     output(self.dispatch_table[])
     output(self.dynamic_dispatch_table[])
     output(self.cross_module_function_table[])

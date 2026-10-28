@@ -435,6 +435,47 @@ end
     @test D.get_dummy_function(dv, ft) === df && D.is_dummy_function(dv, df)
 end
 
+@testset "translator.dart: the Translator holds every field dart declares" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    # dart's Translator declares 95 instance fields (translator.dart:98 to :1682); 14 are Julia's
+    # answers (libraries, coreTypes, typeEnvironment, hierarchy, subtypes, index, recordClasses and
+    # TFA's 7 metadata maps) and 1 is out of scope (loadingMap, deferred loading): 95 - 14 - 1 = 80
+    @test fieldcount(D.Translator) == 80
+    # DummyValuesCollector declares 5 (translator.dart:3832 to :3841), each held
+    @test fieldcount(D.DummyValuesCollector) == 5
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(ModuleCases.shapes, (Int,), "translator"), data, D.TranslatorOptions(optimization_level = 2))
+    @test all(i -> isdefined(t, i), 1:fieldcount(D.Translator))
+    # the initializer list: the symbols minified as the options say
+    @test t.symbols isa D.Symbols && t.symbols.minify == D.minify(t.options) == true
+    # the constructor's body builds the exception tags over the translator, as dart's does
+    @test t._exception_tags[].translator === t
+    # a late field whose class is not ported yet is read before its assignment: Unported, at its line
+    for (f, line) in ((:interop_member_namer, 164), (:stack_trace_info, 243), (:record_info, 244),
+                      (:list_array_type, 249), (:boxed_int_type, 267), (:boxed_double_type, 271), (:stack_trace_type, 285),
+                      (:stack_trace_type_nullable, 285), (:invocation_type, 309), (:boxed_classes, 374), (:box_classes, 380),
+                      (:value_classes, 389))
+        local e = try; getfield(t, f)[]; nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("translator.dart:$line ", e.rejection.anchor)
+    end
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local m = D.main_module(t)
+    # dart's Object is Any; Object? Any, the nullable object array's element the top type
+    @test t.object_info[] === t.class_info[Any]
+    local oa = t.nullable_object_array_type[]
+    @test oa.element_type[].type == t.top_type[] && oa.element_type[].mutable && oa === D.array_type_for_dart_type(t, Any; mutable_ = true)
+    @test t.nullable_object_array_type_ref[] == IR.RefType_def(oa; nullable = false)
+    # the importers, each over the translator with dart's prefix
+    @test t._imported_field_tables[]._translator === t && t._imported_field_tables[]._export_prefix == "fieldTable"
+    @test t._imported_memories[]._translator === t && t._imported_memories[]._export_prefix == "memory"
+    # the caches start empty; the dummy struct global is late, never assigned at the pin
+    @test isempty(t.function_ref_cache) && isempty(t.constructor_closures) && isempty(t._member_closures) && isempty(t._need_to_check)
+    local e = try; D.get_dummy_values_collector_for_module(t, m).dummy_struct_global[]; nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("translator.dart:3841 ", e.rejection.anchor)
+end
+
 @testset "subset.jl, nir.jl: the closed world carries its entry" begin
     local W = WasmTarget
     local w = W.check_subset(FirstCases.f, (Int32,), "translator")
