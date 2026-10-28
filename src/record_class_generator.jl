@@ -2,53 +2,106 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-_RecordClassGenerator's dart fields: `coreTypes`, `classes`, `library`, `typeRuntimetypeTypeClass`, `recordRuntimeTypeClass`, `recordRuntimeTypeConstructor`, `objectHashProcedure`, `objectHashAllProcedure`, `objectToStringProcedure`, `identical`, `objectEqualsProcedure`, `integerEqualsFunctionType`, `stringPlusProcedure`, `isSubtype`, `wasmArrayClass`, `immutableWasmArrayClass`, `wasmArrayRefLength`, `wasmArrayIndex`, `wasmArrayLiteralConstructor`, `wasmArrayValueField`, `immutableWasmArrayValueField`, `wasmArrayOfType`, `immutableWasmArrayOfString`, `runtimeTypeType`, `nonNullableTypeType`, `getActualRuntimeTypeNullable`, `getMasqueradedRuntimeTypeNullableProcedure`.
+Generates a class for each record shape: its fields, constructor, `hashCode`, `toString`, `==`, its
+type check and its runtime type, built as Kernel members from the core library's procedures.
+
+Julia's records are its tuples. A `Tuple` holds positional fields and a `NamedTuple` named ones, and
+each tuple type is a class of its own (`Tuple{Int,Float64}`), whose `==`, `hash` and `show` are
+Base's methods, compiled like any other. So no class is generated for a shape, `classes` stays
+empty, and the Kernel classes and procedures dart reads (`_Type`, `_RecordType`, `Object.hash`, ...)
+have no use and no field here.
 """
-@parity "dart2wasm/lib/record_class_generator.dart:100 _RecordClassGenerator" @unported struct _RecordClassGenerator end
+@parity "dart2wasm/lib/record_class_generator.dart:100 _RecordClassGenerator" struct _RecordClassGenerator
+    classes::Dict{RecordShape,DataType}
+    # the struct's one constructor, tagged; dart's constructor at :238 is its outer function
+    _RecordClassGenerator(::Val{:_}, classes::Dict{RecordShape,DataType}) = new(classes)
+end
 
 """
-_RecordVisitor's dart fields: `classGenerator`, `constantCache`.
+Visits the program's record types, generating a class for each. dart's `constantCache` serves the
+walk over Kernel's constant trees, which the NIR does not have.
 """
-@parity "dart2wasm/lib/record_class_generator.dart:760 _RecordVisitor" @unported struct _RecordVisitor end
+@parity "dart2wasm/lib/record_class_generator.dart:760 _RecordVisitor" struct _RecordVisitor
+    class_generator::_RecordClassGenerator
+    # the struct's one constructor, tagged; dart's constructor at :764 is its outer function
+    _RecordVisitor(::Val{:_}, class_generator::_RecordClassGenerator) = new(class_generator)
+end
 
-@parity "dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" @unported function generate_record_classes(component, core_types) end
+"""
+The class of each record shape of the program. A Julia record value is an instance of its own
+`Tuple` or `NamedTuple` class, which the closed world holds like any class (src/julia/classes.jl),
+with Base's `==`, `hash` and `show`. No class belongs to a shape, so the map is empty.
+"""
+@parity "dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" generate_record_classes(component::Vector{NirBody})::Dict{RecordShape,DataType} = Dict{RecordShape,DataType}()
 
-@parity "dart2wasm/lib/record_class_generator.dart:230 _RecordClassGenerator.nullableObjectType" @unported function nullable_object_type(self::_RecordClassGenerator) end
+"""dart's `Object?`, Julia's `Any`, which holds `nothing`."""
+@parity "dart2wasm/lib/record_class_generator.dart:230 _RecordClassGenerator.nullableObjectType" nullable_object_type(self::_RecordClassGenerator)::Type = Any
 
-@parity "dart2wasm/lib/record_class_generator.dart:232 _RecordClassGenerator.nonNullableStringType" @unported function non_nullable_string_type(self::_RecordClassGenerator) end
+@parity "dart2wasm/lib/record_class_generator.dart:232 _RecordClassGenerator.nonNullableStringType" non_nullable_string_type(self::_RecordClassGenerator)::Type = String
 
-@parity "dart2wasm/lib/record_class_generator.dart:234 _RecordClassGenerator.boolType" @unported function bool_type(self::_RecordClassGenerator) end
+@parity "dart2wasm/lib/record_class_generator.dart:234 _RecordClassGenerator.boolType" bool_type(self::_RecordClassGenerator)::Type = Bool
 
-@parity "dart2wasm/lib/record_class_generator.dart:236 _RecordClassGenerator.intType" @unported function int_type(self::_RecordClassGenerator) end
+"""dart's `int`, a 64-bit integer, Julia's `Int64`."""
+@parity "dart2wasm/lib/record_class_generator.dart:236 _RecordClassGenerator.intType" int_type(self::_RecordClassGenerator)::Type = Int64
 
-@parity "dart2wasm/lib/record_class_generator.dart:238 _RecordClassGenerator" @unported function _RecordClassGenerator(classes, library, core_types) end
+@parity "dart2wasm/lib/record_class_generator.dart:238 _RecordClassGenerator" _RecordClassGenerator(classes::Dict{RecordShape,DataType})::_RecordClassGenerator = _RecordClassGenerator(Val(:_), classes)
 
-@parity "dart2wasm/lib/record_class_generator.dart:240 _RecordClassGenerator.generateClassForRecordType" @unported function generate_class_for_record_type(self::_RecordClassGenerator, record_type) end
+# a Julia record type is a class of its own, which Base declares with its methods; none is generated
+@parity "dart2wasm/lib/record_class_generator.dart:240 _RecordClassGenerator.generateClassForRecordType" generate_class_for_record_type(self::_RecordClassGenerator, record_type::DataType)::Nothing =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:240 _RecordClassGenerator.generateClassForRecordType: the record type $record_type is a class of its own, which Base declares"), "_RecordClassGenerator.generateClassForRecordType")
 
-@parity "dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass" @unported function _generate_class(self::_RecordClassGenerator, shape::RecordShape, id::Int64) end
+# a record shape's class; Julia's tuple types are Base's classes
+@parity "dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass" _generate_class(self::_RecordClassGenerator, shape::RecordShape, id::Int64)::DataType =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass: Julia's tuple types are Base's classes; no class is generated for $(sprint(show, shape))"), "_RecordClassGenerator._generateClass")
 
-@parity "dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields" @unported function _generate_fields(self::_RecordClassGenerator, shape::RecordShape) end
+"""
+A record shape's fields, `\$1`, `\$2`, ... then the names. A Julia tuple's fields are its type's own
+(`fieldnames(Tuple{Int,Int}) == (1, 2)`, a NamedTuple's its names), so none is generated.
+"""
+@parity "dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields" _generate_fields(self::_RecordClassGenerator, shape::RecordShape)::Vector{ClassField} =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields: a Julia tuple's fields are its type's own"), "_RecordClassGenerator._generateFields")
 
-@parity "dart2wasm/lib/record_class_generator.dart:314 _RecordClassGenerator._generateConstructor" @unported function _generate_constructor(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{Any}) end
+# a record class's constructor; a Julia tuple is made by Core.tuple or Expr(:new) of its type
+@parity "dart2wasm/lib/record_class_generator.dart:314 _RecordClassGenerator._generateConstructor" _generate_constructor(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Method =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:314 _RecordClassGenerator._generateConstructor: a Julia tuple is made by Core.tuple or by Expr(:new) of its type"), "_RecordClassGenerator._generateConstructor")
 
-@parity "dart2wasm/lib/record_class_generator.dart:343 _RecordClassGenerator._generateHashCode" @unported function _generate_hash_code(self::_RecordClassGenerator, fields::Vector{Any}, shape_id::Int64) end
+# a record class's hashCode; a Julia tuple's is Base's hash(::Tuple)
+@parity "dart2wasm/lib/record_class_generator.dart:343 _RecordClassGenerator._generateHashCode" _generate_hash_code(self::_RecordClassGenerator, fields::Vector{ClassField}, shape_id::Int64)::Method =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:343 _RecordClassGenerator._generateHashCode: a Julia tuple's hash is Base's hash(::Tuple)"), "_RecordClassGenerator._generateHashCode")
 
-@parity "dart2wasm/lib/record_class_generator.dart:389 _RecordClassGenerator._generateToString" @unported function _generate_to_string(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{Any}) end
+# a record class's toString; a Julia tuple's is Base's show(::IO, ::Tuple)
+@parity "dart2wasm/lib/record_class_generator.dart:389 _RecordClassGenerator._generateToString" _generate_to_string(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Method =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:389 _RecordClassGenerator._generateToString: a Julia tuple's text is Base's show(::IO, ::Tuple)"), "_RecordClassGenerator._generateToString")
 
-@parity "dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals" @unported function _generate_equals(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{Any}, cls, get_rti) end
+# a record class's ==; a Julia tuple's is Base's ==(::Tuple, ::Tuple)
+@parity "dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals" _generate_equals(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField}, cls::DataType, get_rti::Method)::Method =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals: a Julia tuple's equality is Base's ==(::Tuple, ::Tuple)"), "_RecordClassGenerator._generateEquals")
 
-@parity "dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType" @unported function _generate_check_record_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{Any}) end
+# a record class's check against a record type's field types; a Julia tuple is checked by isa, its
+# class the tuple type itself
+@parity "dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType" _generate_check_record_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Method =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType: a Julia tuple's class is its type, checked by isa"), "_RecordClassGenerator._generateCheckRecordType")
 
-@parity "dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType" @unported function _generate_record_runtime_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{Any}) end
+# a record's runtime type, built from its fields' runtime types; a Julia tuple's is typeof, its class
+@parity "dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType" _generate_record_runtime_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Method =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType: a Julia tuple's runtime type is its class, typeof"), "_RecordClassGenerator._generateRecordRuntimeType")
 
-@parity "dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType" @unported function _generate_masqueraded_record_runtime_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{Any}) end
+# a record's masqueraded runtime type; no Julia class masquerades (src/class_info.jl)
+@parity "dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType" _generate_masqueraded_record_runtime_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Method =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType: no Julia class masquerades"), "_RecordClassGenerator._generateMasqueradedRecordRuntimeType")
 
-@parity "dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper" @unported function _generate_record_runtime_type_helper(self::_RecordClassGenerator, name::String, target, shape::RecordShape, fields::Vector{Any}) end
+# the runtime-type getter both runtime types build; a Julia tuple's runtime type is its class
+@parity "dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper" _generate_record_runtime_type_helper(self::_RecordClassGenerator, name::String, target::Method, shape::RecordShape, fields::Vector{ClassField})::Method =
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper: a Julia tuple's runtime type is its class, typeof"), "_RecordClassGenerator._generateRecordRuntimeTypeHelper")
 
 @parity "dart2wasm/lib/record_class_generator.dart:746 _RecordClassGenerator._fieldNamesConstant" @unported function _field_names_constant(self::_RecordClassGenerator, shape::RecordShape) end
 
-@parity "dart2wasm/lib/record_class_generator.dart:764 _RecordVisitor" @unported function _RecordVisitor(class_generator) end
+@parity "dart2wasm/lib/record_class_generator.dart:764 _RecordVisitor" _RecordVisitor(class_generator::_RecordClassGenerator)::_RecordVisitor = _RecordVisitor(Val(:_), class_generator)
 
-@parity "dart2wasm/lib/record_class_generator.dart:767 _RecordVisitor.visitRecordType" @unported function visit_record_type(self::_RecordVisitor, node) end
+# dart then visits the record type's parts; generating its class rejects first in Julia
+@parity "dart2wasm/lib/record_class_generator.dart:767 _RecordVisitor.visitRecordType" function visit_record_type(self::_RecordVisitor, node::DataType)::Nothing
+    generate_class_for_record_type(self.class_generator, node)
+    return nothing
+end
 
 @parity "dart2wasm/lib/record_class_generator.dart:773 _RecordVisitor.defaultConstantReference" @unported function default_constant_reference(self::_RecordVisitor, node) end

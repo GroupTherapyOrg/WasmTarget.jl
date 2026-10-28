@@ -30,7 +30,21 @@ end
     return RecordShape(Val(:_), positionals, sort!(collect(index); by = first))
 end
 
-@parity "dart2wasm/lib/records.dart:36 RecordShape.fromType" @unported function RecordShape_from_type(record_type) end
+"""
+The shape of a record type. Julia's records are its tuples: a `Tuple` type has positional fields
+only, one per parameter, and a `NamedTuple` type has named ones only, its names in declared order.
+RecordShape sorts the names and keeps each one's index, so a name's index is its field's place. A
+tuple type whose length or names Julia leaves open (`Tuple{Vararg{Int}}`, `NamedTuple{N,T} where N`)
+has no shape, and it rejects, located.
+"""
+@parity "dart2wasm/lib/records.dart:36 RecordShape.fromType" function RecordShape_from_type(record_type::Type)::RecordShape
+    if record_type isa DataType && record_type <: NamedTuple && record_type.parameters[1] isa Tuple{Vararg{Symbol}}
+        return RecordShape(0, String[string(n) for n in record_type.parameters[1]])
+    elseif record_type isa DataType && record_type <: Tuple && !Base.isvatuple(record_type)
+        return RecordShape(length(record_type.parameters), String[])
+    end
+    reject!(Unquarantined("src/records.jl RecordShape.fromType: $record_type, no tuple type of a known shape"), "RecordShape.fromType")
+end
 
 # dart's toString, a Map printing as `{k: v, ...}`; Julia's show writes to the stream it is given
 @parity "dart2wasm/lib/records.dart:40 RecordShape.toString" Base.show(io::IO, self::RecordShape)::Nothing =

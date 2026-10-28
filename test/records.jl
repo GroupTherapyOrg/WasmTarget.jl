@@ -20,3 +20,30 @@ const DR = WasmTarget.Dart2Wasm
     local e = try; DR.get_name_index(s, "z"); nothing; catch x; x; end
     @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal && occursin("name z not in record", e.rejection.site)
 end
+
+@testset "records.dart: a tuple type's shape, record_class_generator.dart" begin
+    local W = WasmTarget
+    local D = W.Dart2Wasm
+    # a Tuple's fields are positional, a NamedTuple's named; a name's index is its field's place
+    @test D.RecordShape_from_type(Tuple{Int,Float64}) == D.RecordShape(2, String[])
+    @test D.RecordShape_from_type(Tuple{}) == D.RecordShape(0, String[])
+    local NT = NamedTuple{(:b, :a), Tuple{Int,Float64}}
+    local s = D.RecordShape_from_type(NT)
+    @test names(s) == ["a", "b"] && D.num_fields(s) == fieldcount(NT)
+    for n in (:a, :b)
+        @test D.get_name_index(s, string(n)) - D.FieldIndex_record_field_base() == Base.fieldindex(NT, n) - 1
+    end
+    # a tuple type of open length or names has no shape
+    for T in (Tuple{Vararg{Int}}, NamedTuple{(:a,)}, Vector{Int})
+        local e = try; D.RecordShape_from_type(T); nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Unquarantined
+    end
+    # a Julia tuple type is a class of its own, Base's: no class is generated per shape
+    local t = D.Translator(W.check_subset(x -> (x, x + 1), (Int,), "records"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    @test isempty(D.generate_record_classes(t.component))
+    local g = D._RecordClassGenerator(Dict{D.RecordShape,DataType}())
+    @test D.nullable_object_type(g) === Any && D.non_nullable_string_type(g) === String
+    @test D.bool_type(g) === Bool && D.int_type(g) === Int64
+    local e = try; D.visit_record_type(D._RecordVisitor(g), Tuple{Int,Int}); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+end
