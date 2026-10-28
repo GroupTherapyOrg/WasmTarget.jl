@@ -66,3 +66,60 @@ end
     local e2 = try; t.top_type[]; nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Unported && occursin("Translator.classes", e2.rejection.anchor)
 end
+
+module TypeCases
+abstract type Shape end
+struct Circle <: Shape; r::Float64; end
+struct Square <: Shape; s::Float64; end
+f_shapes(n::Int) = n > 0 ? Circle(1.0) : Square(2.0)
+end
+
+@testset "translator.dart: translateType over a class table" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    local t = D.Translator(W.check_subset(TypeCases.f_shapes, (Int,), "translator"), D.TranslatorOptions())
+    # the builtin types: Julia's primitive classes with a wasm representation
+    for (T, w) in ((Bool, IR.NumType_i32), (Int32, IR.NumType_i32), (UInt32, IR.NumType_i32), (Char, IR.NumType_i32),
+                   (Int64, IR.NumType_i64), (UInt64, IR.NumType_i64), (Float32, IR.NumType_f32), (Float64, IR.NumType_f64))
+        @test D.translate_storage_type(t, T) == w && D.translate_type(t, T) == w
+    end
+    # the 8- and 16-bit integers stored packed, read as the zero-extended i32
+    for (T, w) in ((Int8, IR.PackedType_i8), (UInt8, IR.PackedType_i8), (Int16, IR.PackedType_i16), (UInt16, IR.PackedType_i16))
+        @test D.translate_storage_type(t, T) == w && D.translate_type(t, T) == IR.NumType_i32
+    end
+    # a primitive class with no wasm representation rejects, located
+    for T in (Int128, Float16, Ptr{Nothing})
+        local e = try; D.translate_type(t, T); nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Unquarantined
+    end
+    # Union{} and Nothing are the nullable none reference; Union{} returned, the non-nullable one
+    @test D.translate_type(t, Nothing) == IR.RefType_none(; nullable = true) == D.translate_type(t, Union{})
+    @test D.translate_return_type(t, Union{}) == IR.RefType_none(; nullable = false)
+    # a hand-made class table, as collect fills it: Any, the top type's place, Shape represented by
+    # its own struct, and Int64's box
+    local top = D.ClassInfo(nothing, 0, 0, IR.StructType("#Top"), nothing)
+    local anyi = D.ClassInfo(Any, 5, 1, IR.StructType("Any"; super_type = top.struct_), top)
+    local shape = D.ClassInfo(TypeCases.Shape, 4, 2, anyi.struct_, anyi)
+    local int = D.ClassInfo(Int64, 3, 1, IR.StructType("Int64"; super_type = top.struct_), top)
+    t.classes[] = [top]
+    for info in (top, anyi, shape, int)
+        info._repr = info.non_nullable_type
+        info.cls === nothing || (t.class_info[info.cls] = info)
+    end
+    # Any is dart's Object?, the top type
+    @test D.translate_type(t, Any) == top.nullable_type
+    # a class is its representation; a Union of classes Julia's typejoin of its members
+    @test D.translate_type(t, TypeCases.Shape) == shape.non_nullable_type
+    @test typejoin(TypeCases.Circle, TypeCases.Square) === TypeCases.Shape
+    @test D.translate_type(t, Union{TypeCases.Circle, TypeCases.Square}) == shape.non_nullable_type
+    @test D.translate_type(t, Union{Nothing, TypeCases.Circle, TypeCases.Square}) == shape.nullable_type
+    # a nullable primitive is its own class's box, nullable; unboxed it is the class's representation
+    @test D.translate_type(t, Union{Nothing, Int64}) == int.nullable_type
+    @test D.translate_storage_type(t, Int64; unbox = false) == int.non_nullable_type
+    # a class with no class info is collect's gap: a located rejection
+    local e = try; D.translate_type(t, TypeCases.Circle); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+    # a field's type is its declared one
+    local f = W.class_instance_fields(TypeCases.Circle, "translator")[1]
+    @test D.type_of_field(t, f) === Float64 && D.translate_type_of_field(t, f) == IR.NumType_f64
+end

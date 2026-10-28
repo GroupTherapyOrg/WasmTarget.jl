@@ -133,3 +133,59 @@ end
     local e2 = try; t.classes[]; nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Unported && occursin("Translator.classes", e2.rejection.anchor)
 end
+
+@testset "class_info.dart: ClassInfo, _upperBound and cyclicness on wasm structs" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    local S = ClassInfoCases
+    # a hand-built hierarchy as collect makes it: the top struct, Any below it, the abstract Shape
+    # sharing Any's struct, Circle and Square below Shape
+    local top = D.ClassInfo(nothing, 0, 0, IR.StructType("#Top"), nothing)
+    local anyi = D.ClassInfo(Any, 4, 1, IR.StructType("Any"; super_type = top.struct_), top)
+    local shape = D.ClassInfo(S.Shape, 3, 2, anyi.struct_, anyi)
+    local circle = D.ClassInfo(S.Circle, 1, 3, IR.StructType("Circle"; super_type = anyi.struct_), shape)
+    local square = D.ClassInfo(S.Square, 2, 3, IR.StructType("Square"; super_type = anyi.struct_), shape)
+    # the two reference types to the class's struct
+    @test D.type_with_nullability(circle, true) == IR.RefType_def(circle.struct_; nullable = true)
+    @test D.type_with_nullability(circle, false) == circle.non_nullable_type && !circle.non_nullable_type.nullable
+    @test D.class_id(square) == 2 && isempty(circle.type_parameter_match)
+    # the nearest class info above both, by depth then by super info
+    @test D._upper_bound(circle, square) === shape && D._upper_bound(square, circle) === shape
+    @test D._upper_bound(circle, circle) === circle && D._upper_bound(circle, anyi) === anyi && D._upper_bound(top, square) === top
+    # repr and cyclicness are filled by collect; read before, located rejections
+    for f in (D.repr, D.is_cyclic)
+        local e = try; f(circle); nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Internal
+    end
+    local mixin = D.ClassInfo(S.Shape, D.anonymous_mixin_class_id(), 2, anyi.struct_, anyi)
+    local e = try; D.class_id(mixin); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+    # the fields: the class id at 0, the identity hash at 1, the class's own from 2
+    D._add_field(top, IR.FieldType(IR.NumType_i32; mutable = false); expected_index = D.FieldIndex_class_id())
+    for (i, ft) in enumerate(top.struct_.fields)
+        D._add_field(anyi, ft; field_name = get(top.struct_.field_names, i - 1, nothing))
+    end
+    D._add_field(anyi, IR.FieldType(IR.NumType_i32); expected_index = D.FieldIndex_identity_hash())
+    for ft in anyi.struct_.fields
+        D._add_field(circle, ft)
+    end
+    D._add_field(circle, IR.FieldType(IR.NumType_f64; mutable = false); field_name = "r")
+    @test circle.struct_.field_names[2] == "r" && length(circle.struct_.fields) == 3
+    @test D.get_class_field_types(circle) == [IR.NumType_f64]
+    local seen = Tuple{Int,IR.FieldType}[]
+    D.for_each_class_field_index(circle, (i, ft) -> push!(seen, (i, ft)))
+    @test seen == [(2, circle.struct_.fields[3])]
+    local e2 = try; D._add_field(circle, IR.FieldType(IR.NumType_i64); expected_index = 7); nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Internal
+    # cyclicness: a struct holding a non-nullable reference to its own class's struct is cyclic; one
+    # holding a nullable reference is not
+    local t = D.Translator(W.check_subset(S.f_shapes, (Int,), "class_info"), D.TranslatorOptions())
+    for info in (circle, square)
+        info._repr = info.non_nullable_type
+        t.class_for_heap_type[info.struct_] = info
+    end
+    push!(circle.struct_.fields, IR.FieldType(circle.non_nullable_type; mutable = false))
+    push!(square.struct_.fields, IR.FieldType(square.nullable_type; mutable = false))
+    @test D._calculate_cyclicness(circle, t) && D.is_cyclic(circle)
+    @test !D._calculate_cyclicness(square, t) && !D.is_cyclic(square)
+end
