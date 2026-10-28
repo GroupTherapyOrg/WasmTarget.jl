@@ -308,9 +308,8 @@ end
 # Julia's own operation: `===` dart's identical, `ifelse` a select, a conversion or a shift its case of
 # dart's switch, and any other intrinsic the operator dart intrinsifies on an int, double or bool receiver (dart's
 # generateInstanceIntrinsic, :985): a binary one through the binary operator map, a unary one through
-# the unary map. An operand narrower than its wasm number type (an 8- or 16-bit integer in an i32)
-# has no arm: Julia's operation wraps at its own width, the instruction at the wasm type's, except
-# Bool's bitwise operations and equality, whose 0 and 1 no width changes. No arm is null, as dart's.
+# the unary map. An 8- or 16-bit integer, an i32 in its type's form, is read in its operation's
+# view and its result put back in that form; Bool's bitwise operations and equality need neither. No arm is null, as dart's.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::Union{NirCall,NirInvoke})::Union{WasmBuilder.IR.ValueType,Nothing}
     if node isa NirInvoke
         local intrinsic = StaticIntrinsic_from_procedure(nir_invoke_target(node))
@@ -378,6 +377,18 @@ end
 
     f isa Core.IntrinsicFunction || return nothing
 
+    # An 8- or 16-bit integer is an i32 held as Julia's ABI holds it (Translator.translateType):
+    # sign-extended for a signed type, zero-extended for an unsigned one. An operation reads the
+    # operand in the view it needs (a signed comparison, division or arithmetic shift the
+    # sign-extended bits, an unsigned one the zero-extended bits) and puts a result back in its type's
+    # form, as Julia's codegen computes at the type's own width (an i8 or i16 in LLVM).
+    local narrow(t::Type) = t isa DataType && t <: Base.BitInteger && sizeof(t) < 4
+    local put_form(t::Type) = sizeof(t) == 1 ?
+        (t <: Signed ? WasmBuilder.i32_extend8_s(b[]) : (WasmBuilder.i32_const(b[], 255); WasmBuilder.i32_and(b[]))) :
+        (t <: Signed ? WasmBuilder.i32_extend16_s(b[]) : (WasmBuilder.i32_const(b[], 65535); WasmBuilder.i32_and(b[])))
+    local signed_view(t::Type) = t <: Unsigned && (sizeof(t) == 1 ? WasmBuilder.i32_extend8_s(b[]) : WasmBuilder.i32_extend16_s(b[]))
+    local unsigned_view(t::Type) = t <: Signed && (WasmBuilder.i32_const(b[], sizeof(t) == 1 ? 255 : 65535); WasmBuilder.i32_and(b[]))
+
     # Julia's conversions, `(T, x)`: the type converted to, then the value (dart's wasmI32FromInt,
     # wasmF32FromDouble and their kin), each as Julia's codegen answers: trunc_int wraps, sext_int and
     # zext_int extend by their own sign (a Bool zero-extends its 0 or 1), sitofp and uitofp round to
@@ -420,6 +431,27 @@ end
             emit = from_w == to_w ? (_ -> nothing) :
                    to_w == f64 ? WasmBuilder.f64_reinterpret_i64 : to_w == i64 ? WasmBuilder.i64_reinterpret_f64 :
                    to_w == f32 ? WasmBuilder.f32_reinterpret_i32 : WasmBuilder.i32_reinterpret_f32
+        end
+        if emit === nothing && (narrow(from) || narrow(to)) && from isa DataType && from <: Base.BitInteger && to isa DataType
+            # a conversion with an 8- or 16-bit side: the source read in the view the conversion
+            # needs, the instruction between widths, and the result put in its type's form
+            local view = (f === Core.Intrinsics.sext_int || f === Core.Intrinsics.sitofp) ? signed_view :
+                         (f === Core.Intrinsics.zext_int || f === Core.Intrinsics.uitofp) ? unsigned_view : (_::Type -> nothing)
+            local between = nothing
+            if (f === Core.Intrinsics.trunc_int || f === Core.Intrinsics.bitcast) && to <: Base.BitInteger && sizeof(to) <= sizeof(from)
+                between = from_w == i64 ? WasmBuilder.i32_wrap_i64 : (_ -> nothing)
+            elseif (f === Core.Intrinsics.sext_int || f === Core.Intrinsics.zext_int) && to <: Base.BitInteger && sizeof(to) >= sizeof(from)
+                between = to_w == i64 ? (f === Core.Intrinsics.sext_int ? WasmBuilder.i64_extend_i32_s : WasmBuilder.i64_extend_i32_u) : (_ -> nothing)
+            elseif (f === Core.Intrinsics.sitofp || f === Core.Intrinsics.uitofp) && full(to, to_w) && (to_w == f32 || to_w == f64)
+                local s_ = f === Core.Intrinsics.sitofp
+                between = to_w == f64 ? (s_ ? WasmBuilder.f64_convert_i32_s : WasmBuilder.f64_convert_i32_u) : (s_ ? WasmBuilder.f32_convert_i32_s : WasmBuilder.f32_convert_i32_u)
+            end
+            between === nothing && return nothing
+            translate_expression(code_gen, x, from_w)
+            narrow(from) && view(from)
+            between(b[])
+            narrow(to) && put_form(to)
+            return to_w
         end
         emit === nothing && return nothing
         translate_expression(code_gen, x, from_w)
@@ -464,8 +496,12 @@ end
         local y = args[2]
         local xw = type_of_exp(self, x)
         local yw = type_of_exp(self, y)
-        (full(dart_type_of(self, x), xw) && full(dart_type_of(self, y), yw) && (xw == i32 || xw == i64) && (yw == i32 || yw == i64)) || return nothing
-        local width = 8 * WasmBuilder.byte_size(xw)
+        local xt = dart_type_of(self, x)
+        local yt = dart_type_of(self, y)
+        local int_operand(t::Type, w::WasmBuilder.IR.ValueType) = (full(t, w) || narrow(t)) && (w == i32 || w == i64)
+        (int_operand(xt, xw) && int_operand(yt, yw)) || return nothing
+        # the width is the value's own, an 8- or 16-bit integer's its type's
+        local width = 8 * sizeof(xt)
         local count = add_local(code_gen, yw)
         local xconst(v::Int) = xw == i64 ? WasmBuilder.i64_const(b[], v) : WasmBuilder.i32_const(b[], v)
         local push_count() = begin
@@ -480,6 +516,7 @@ end
         end
         if f === Core.Intrinsics.ashr_int
             translate_expression(code_gen, x, xw)
+            narrow(xt) && signed_view(xt)
             xconst(width - 1)
             push_count()
             push_out_of_range()
@@ -488,6 +525,7 @@ end
         else
             xconst(0)
             translate_expression(code_gen, x, xw)
+            narrow(xt) && f === Core.Intrinsics.lshr_int && unsigned_view(xt)
             push_count()
             if f === Core.Intrinsics.shl_int
                 xw == i64 ? WasmBuilder.i64_shl(b[]) : WasmBuilder.i32_shl(b[])
@@ -497,7 +535,36 @@ end
             push_out_of_range()
             WasmBuilder.select(b[], xw)
         end
+        narrow(xt) && put_form(xt)
         return xw
+    end
+
+    # an 8- or 16-bit integer's arithmetic, comparison and bitwise operations, its operands of one
+    # type: each in the view its operation reads, the i32 instruction, the result in its type's form
+    if all(a -> narrow(dart_type_of(self, a)), args) && allequal(dart_type_of(self, a) for a in args) && 1 <= length(args) <= 2
+        local t = dart_type_of(self, args[1])
+        local I = Core.Intrinsics
+        local signed_ops = (I.sdiv_int, I.srem_int, I.slt_int, I.sle_int)
+        local unsigned_ops = (I.udiv_int, I.urem_int, I.ult_int, I.ule_int)
+        local plain_ops = (I.add_int, I.sub_int, I.mul_int, I.and_int, I.or_int, I.xor_int, I.eq_int, I.ne_int)
+        if length(args) == 2 && (f in signed_ops || f in unsigned_ops || f in plain_ops)
+            local code = Intrinsifier__binary_operator_map[][i32][i32][f]
+            for a in args
+                translate_expression(code_gen, a, i32)
+                f in signed_ops && signed_view(t)
+                f in unsigned_ops && unsigned_view(t)
+            end
+            code(code_gen)
+            Intrinsifier_is_comparison(f) && return i32
+            put_form(t)
+            return i32
+        elseif length(args) == 1 && (f === I.neg_int || f === I.not_int)
+            translate_expression(code_gen, args[1], i32)
+            Intrinsifier__unary_operator_map[][i32][f](code_gen)
+            put_form(t)
+            return i32
+        end
+        return nothing
     end
     # whether Julia's operation on an operand of type `t`, held in the wasm number type `w`, is the
     # instruction's: the operand is as wide as `w`, or a Bool under a bitwise operation or equality

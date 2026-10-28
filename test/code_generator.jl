@@ -104,9 +104,10 @@ end
     # an 8-bit add wraps at 8 bits in Julia, at 32 in an i32: no arm, and the call rejects, located
     local n = codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
     local ncall = n.body.stmts[findfirst(s -> s isa W.NirCall, n.body.stmts)]::W.NirCall
-    @test D.generate_static_intrinsic(n.intrinsifier[], ncall) === nothing
-    local e2 = rejection(() -> D.visit_static_invocation(n, ncall, IR.NumType_i32))
-    @test e2.rejection isa W.Unported && occursin("generateStaticIntrinsic", e2.rejection.anchor) && occursin("Int8", e2.at)
+    # an 8-bit add has its arm now (the operand's form put back after the i32 add): it reaches the
+    # argument's local, which no parameter setup has made here
+    local e2 = rejection(() -> D.generate_static_intrinsic(n.intrinsifier[], ncall))
+    @test e2.rejection isa W.Internal && occursin("undefined variable", e2.rejection.site)
 end
 
 @testset "code_generator.dart: translateStatement over the NIR" begin
@@ -171,14 +172,15 @@ end
     @test found(g, call(I.sext_int, lit(Int64), x)) && found(g, call(I.zext_int, lit(UInt64), x))
     @test found(g, call(I.sitofp, lit(Float64), x)) && found(g, call(I.bitcast, lit(Float32), x)) && found(g, call(I.bitcast, lit(UInt32), x))
     @test found(p, call(I.fptosi, lit(Int64), x)) && found(p, call(I.fptrunc, lit(Float32), x)) && found(p, call(I.bitcast, lit(Int64), x))
-    @test absent(g, call(I.trunc_int, lit(Int8), x)) && absent(n, call(I.sext_int, lit(Int32), x)) && absent(g, call(I.fpext, lit(Float64), x))
+    @test found(g, call(I.trunc_int, lit(Int8), x)) && found(n, call(I.sext_int, lit(Int32), x)) && absent(g, call(I.fpext, lit(Float64), x))
     # Julia's shifts saturate, the count unsigned: native Julia's answers, which the select ports
     @test I.shl_int(Int32(1), UInt64(40)) == 0 && I.lshr_int(Int32(-1), UInt8(32)) == 0
     @test I.ashr_int(Int32(-8), UInt64(100)) == -1 && I.ashr_int(Int32(8), UInt64(100)) == 0 && I.shl_int(Int64(3), Int32(-1)) == 0
     # a shift's arm takes a local for the count first, from the builder `generate` has not given yet
     local e = rejection(() -> D.generate_static_intrinsic(g.intrinsifier[], call(I.shl_int, x, lit(Int64(3)))))
     @test e.rejection isa W.Unported && occursin("AstCodeGenerator.b", e.rejection.anchor)
-    @test absent(n, call(I.shl_int, x, lit(Int64(3))))
+    # an 8-bit shift has its arm: its count's local comes first, from the builder not given here
+    @test occursin("AstCodeGenerator.b", rejection(() -> D.generate_static_intrinsic(n.intrinsifier[], call(I.shl_int, x, lit(Int64(3))))).rejection.anchor)
 end
 
 module FieldGenCases
@@ -490,4 +492,24 @@ end
     local gf = body.stmts[findfirst(s -> s isa W.NirCall, body.stmts)]::W.NirCall
     local nofield = W.NirCall(W.NirValue[gf.args[1], gf.args[2], W.NirConst(Core.Const(:nope))])
     @test rejection(() -> D.visit_instance_get(gb, nofield, IR.NumType_f64)).rejection isa W.Unquarantined
+end
+
+module NarrowCases
+add8(x::Int8, y::Int8) = x + y
+lt8u(x::UInt8, y::UInt8) = x < y
+neg8(x::Int8) = -x
+widen8(x::Int8) = Int64(x) + Int64(1)
+lshr8(x::Int8) = Core.Intrinsics.lshr_int(x, 0x03)
+end
+
+@testset "intrinsics.dart: 8- and 16-bit integers, in their type's form" begin
+    # each compiles, our builder accepting every instruction; run by node over every pair of edge
+    # values (-128, -1, 0, 1, 100, 127 and 0, 1, 100, 200, 255), each answers as native Julia (the
+    # commit records the differential)
+    local C = NarrowCases
+    for (f, at) in ((C.add8, (Int8, Int8)), (C.lt8u, (UInt8, UInt8)), (C.neg8, (Int8,)), (C.widen8, (Int8,)), (C.lshr8, (Int8,)))
+        @test compile_one(f, at)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    end
+    # the add of two Int8s puts its result back sign-extended (i32.extend8_s, 0xc0)
+    @test 0xc0 in compile_one(C.add8, (Int8, Int8))
 end
