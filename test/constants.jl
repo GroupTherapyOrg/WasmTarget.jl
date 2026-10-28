@@ -112,6 +112,12 @@ end
     @test D._constant_name(acc, ds) == "C$(n0 + 5)  #Dummy($(I.HeapType_struct))"
     @test D._constant_name(D._ConstantAccessor(ConstantsNodes(D.TranslatorOptions(unique_constant_names = false))), kind(:s)) == ":s"
     @test D._name_type(acc, Vector{Tuple{Int,String}}) == "Array<Tuple<Int64, String>, 1>"
+    # a type as a value lowers to its kind's instance, once per type (Julia's types are canonical)
+    local u = D._lower_type_to_constant(cs, Union{Int,String})
+    @test u === WasmTarget.InstanceConstant(Core.Const(Union{String,Int})) && D._lower_type_to_constant(cs, Union{String,Int}) === u
+    @test D._lower_type_to_constant(cs, Union{}) === WasmTarget.InstanceConstant(Core.Const(Union{}))
+    @test D._lower_type_to_constant(cs, Vector) === WasmTarget.InstanceConstant(Core.Const(Vector))
+    @test _rejection(() -> D._make_bottom_type_constant(cs, Int)) isa WasmTarget.Internal
 end
 
 @testset "constants.dart: emitting into a module" begin

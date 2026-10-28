@@ -351,15 +351,43 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/constants.dart:361 Constants._lowerTypeToConstant" @unported function _lower_type_to_constant(self::Constants, type_) end
+"""
+A type as a value, lowered to the constant of its runtime type object, once per type: in Julia the
+type itself, an instance of its kind (`typeof(T)`), whose fields classes.jl lays out
+(`_kind_instance_fields`). Keyed by Julia's identity, Julia's types being canonical.
+"""
+@parity "dart2wasm/lib/constants.dart:361 Constants._lowerTypeToConstant" function _lower_type_to_constant(self::Constants, type_::Type)::InstanceConstant
+    local c = get(self._lowered_type_constants, type_, nothing)
+    c === nothing || return c
+    return self._lowered_type_constants[type_] = _lower_type_constant_impl(self, type_)
+end
 
-@parity "dart2wasm/lib/constants.dart:365 Constants._lowerTypeConstantImpl" @unported function _lower_type_constant_impl(self::Constants, type_) end
+"""
+dart's switch over Kernel's type kinds, over Julia's: a `DataType` is dart's InterfaceType (`Any`
+among them, dart's `Object?`), `Union{}` dart's Never, and a `Union` or `UnionAll`, which dart has no
+type of, its own kind's instance.
+"""
+@parity "dart2wasm/lib/constants.dart:365 Constants._lowerTypeConstantImpl" function _lower_type_constant_impl(self::Constants, type_::Type)::InstanceConstant
+    type_ isa DataType && return _make_interface_type_constant(self, type_)
+    type_ === Union{} && return _make_bottom_type_constant(self, type_)
+    type_ isa Union{Union,UnionAll} && return InstanceConstant(Core.Const(type_))
+    reject!(Internal("dart2wasm/lib/constants.dart:387 Constants._lowerTypeConstantImpl: Unexpected DartType: $type_"), "Constants._lowerTypeConstantImpl")
+end
 
 @parity "dart2wasm/lib/constants.dart:399 Constants._makeTypeParameterTypeConstant" @unported function _make_type_parameter_type_constant(self::Constants, type_) end
 
 @parity "dart2wasm/lib/constants.dart:416 Constants._makeStructuralParameterTypeConstant" @unported function _make_structural_parameter_type_constant(self::Constants, type_) end
 
-@parity "dart2wasm/lib/constants.dart:430 Constants._makeInterfaceTypeConstant" @unported function _make_interface_type_constant(self::Constants, type_) end
+"""
+A class's type object: the instance of `DataType` whose class id is the class's, numbered by the
+closed world (a class the closed world does not number rejects, located); a Julia class holds no
+type arguments, its parameters bound.
+"""
+@parity "dart2wasm/lib/constants.dart:430 Constants._makeInterfaceTypeConstant" function _make_interface_type_constant(self::Constants, type_::DataType)::InstanceConstant
+    haskey(self.translator.class_id_numbering[].class_ids, type_) ||
+        reject!(Unquarantined("src/constants.jl _makeInterfaceTypeConstant: the type $type_ as a value, a class the closed world does not number"), "Constants._makeInterfaceTypeConstant")
+    return InstanceConstant(Core.Const(type_))
+end
 
 @parity "dart2wasm/lib/constants.dart:441 Constants._makeFutureOrTypeConstant" @unported function _make_future_or_type_constant(self::Constants, type_) end
 
@@ -373,7 +401,10 @@ end
 
 @parity "dart2wasm/lib/constants.dart:521 Constants._makeAbstractRecordTypeConstant" @unported function _make_abstract_record_type_constant(self::Constants, type_) end
 
-@parity "dart2wasm/lib/constants.dart:530 Constants._makeBottomTypeConstant" @unported function _make_bottom_type_constant(self::Constants, type_) end
+@parity "dart2wasm/lib/constants.dart:530 Constants._makeBottomTypeConstant" function _make_bottom_type_constant(self::Constants, type_::Type)::InstanceConstant
+    type_ === Union{} || reject!(Internal("dart2wasm/lib/constants.dart:531 Constants._makeBottomTypeConstant: $type_ is no bottom type"), "Constants._makeBottomTypeConstant")
+    return InstanceConstant(Core.Const(type_))
+end
 
 @parity "dart2wasm/lib/constants.dart:539 Constants._makeTypeConstant" @unported function _make_type_constant(self::Constants, class_node, nullability, field_values::Dict{Any,Any}) end
 
@@ -633,7 +664,7 @@ end
 
 """
 An object: the struct of its class, `typeof` its value, the object header, then each field's value
-as a sub-constant. dart's wasm array and wasm value classes have no Julia counterpart; a Julia class
+as a sub-constant; a type as a value, lowered (`_lowerTypeToConstant`), is its kind's instance. dart's wasm array and wasm value classes have no Julia counterpart; a Julia class
 stores no type arguments (its parameters are bound), so the type-argument slots dart fills are none.
 A field Julia holds no value in (`#undef`) rejects, located.
 """
@@ -655,8 +686,20 @@ A field Julia holds no value in (`#undef`) rejects, located.
     for field in class_instance_fields(cls, at)
         local index = translator.field_index[field]
         sub_constants[index + 1] === nothing || reject!(Internal("$at: the field index $index of $cls is given twice"), at)
-        isdefined(v, field.index) || reject!(Unquarantined("src/constants.jl visitInstanceConstant: the field $(field.name) of the constant $cls holds no value (#undef)"), at)
-        local sub_constant = julia_constant(Core.Const(getfield(v, field.index)), at)
+        local field_value = if field.index == 0
+            # a kind's fields that are not Julia's own (src/julia/classes.jl _kind_instance_fields):
+            # dart's _Type.isDeclaredNullable, Julia's `Nothing <: T`, and _InterfaceType.classId, the
+            # id of the class T denotes, as dart's _makeTypeConstant and _makeInterfaceTypeConstant
+            # fill them
+            Base.iskindtype(cls) || reject!(Internal("$at: the field $(field.name) of $cls, no kind, has no index"), at)
+            field.name == "isDeclaredNullable" ? (Nothing <: v) :
+            field.name == "classId" ? Int32(translator.class_id_numbering[].class_ids[v]) :
+            reject!(Internal("$at: the kind $cls's field $(field.name), not one of classes.jl's"), at)
+        else
+            isdefined(v, field.index) || reject!(Unquarantined("src/constants.jl visitInstanceConstant: the field $(field.name) of the constant $cls holds no value (#undef)"), at)
+            getfield(v, field.index)
+        end
+        local sub_constant = julia_constant(Core.Const(field_value), at)
         sub_constants[index + 1] = sub_constant
         local sub_info = ensure_constant(self, sub_constant)
         sub_info === nothing || push!(child_constants, sub_info)
