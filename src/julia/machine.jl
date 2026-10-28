@@ -29,6 +29,16 @@ statements, which LLVM holds as the block's other instructions.
 """
 @quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS STMTS
 
+"""    BLOCK_TYPE_VOID
+
+A BLOCK's or LOOP's type with no params or results (WebAssembly::BlockType::Void)."""
+@quarantine "LLVM's WebAssembly::BlockType::Void, the binary format's empty block type" Core.Int const BLOCK_TYPE_VOID::Int = 0x40
+"""    BLOCK_TYPE_RESULTS
+
+A BLOCK's or LOOP's type that is the function's results, filled where the instructions are lowered
+(WebAssembly::BlockType::Multivalue, which MCInstLower fills from the function's signature)."""
+@quarantine "LLVM's WebAssembly::BlockType::Multivalue, the function's results filled at lowering" Core.Int const BLOCK_TYPE_RESULTS::Int = 0xffff
+
 """A block operand: the block's number in the machine CFG (LLVM's MachineOperand::isMBB)."""
 @quarantine "LLVM's MachineOperand of kind MO_MachineBasicBlock; a block is its number, Julia's BBNumber" Core.Int struct MOBlock
     mbb::Int
@@ -253,4 +263,34 @@ The block numbered `n`, nothing past the last (LLVM's MachineFunction::getBlockN
 @quarantine "LLVM's MachineFunction::getBlockNumbered over the layout's numbers" Base.findfirst function get_block_numbered(mf::MachineFunction, n::Int)::Union{Int,Nothing}
     local i = findfirst(b -> mf.blocks[b].number == n, mf.layout)
     return i === nothing ? nothing : mf.layout[i]
+end
+
+"""    irreducible_entries(mf) -> Set{Int}
+
+The blocks a retreating edge of a depth-first walk enters without dominating its source: each the
+second entry of a loop, an irreducible CFG, which LLVM's FixIrreducibleControlFlow makes reducible
+before CFGSort (a reducible CFG's every retreating edge is a back edge, its target dominating its
+source; Julia's dominator tree answers which)."""
+@quarantine "FixIrreducibleControlFlow's precondition, read from Julia's dominator tree until the pass is ported" Core.Compiler.dominates function irreducible_entries(mf::MachineFunction)::Set{Int}
+    local out = Set{Int}()
+    local on_stack = Set{Int}([mf.layout[1]])
+    local seen = Set{Int}([mf.layout[1]])
+    local stack = Tuple{Int,Int}[(mf.layout[1], 1)]
+    while !isempty(stack)
+        local b, i = stack[end]
+        local succs = mf.blocks[b].succs
+        if i <= length(succs)
+            stack[end] = (b, i + 1)
+            local s = succs[i]
+            if s in on_stack
+                Core.Compiler.dominates(mf.domtree, s, b) || push!(out, s)
+            elseif !(s in seen)
+                push!(seen, s); push!(on_stack, s); push!(stack, (s, 1))
+            end
+        else
+            pop!(stack)
+            delete!(on_stack, b)
+        end
+    end
+    return out
 end

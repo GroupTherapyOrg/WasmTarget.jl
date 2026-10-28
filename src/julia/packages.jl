@@ -78,5 +78,5 @@ import ..reject!, ..Internal, ..Unported
 import ..MachineFunction, ..MachineBasicBlock, ..MachineInstr, ..MachineOperand, ..MOBlock, ..MOImm, ..Opcode,
        ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF, ..BR_UNLESS, ..STMTS,
        ..renumber_blocks!, ..create_machine_basic_block!, ..get_prev_node, ..is_terminator, ..terminators, ..post_order,
-       ..PriorityQueue, ..pq_push!, ..pq_pop!, ..pq_empty, ..get_block_numbered
+       ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..PriorityQueue, ..pq_push!, ..pq_pop!, ..pq_empty, ..get_block_numbered, ..machine_function, ..irreducible_entries
 end

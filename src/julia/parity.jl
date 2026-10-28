@@ -481,6 +481,7 @@ DART_FILES, `include` takes any path, so the second oracle's file map is a table
     "llvm/include/llvm/Support/GenericLoopInfo", "llvm/include/llvm/Support/GenericLoopInfoImpl",
     "llvm/lib/CodeGen/MachineBasicBlock", "llvm/lib/Target/WebAssembly/WebAssemblyInstrInfo",
     "llvm/lib/Target/WebAssembly/WebAssemblySortRegion", "llvm/lib/Target/WebAssembly/WebAssemblyCFGSort",
+    "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify", "llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine",
 )
 
 """
