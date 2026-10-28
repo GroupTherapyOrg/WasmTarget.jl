@@ -1,0 +1,93 @@
+# dart2wasm's types.dart, ported (src/types.jl): Julia's types as values and the is and as checks,
+# Julia's subtyping the ground truth for every answer.
+using Test
+using WasmTarget
+
+const D = WasmTarget.Dart2Wasm
+
+module TypesCases
+f_int32(n::Int) = Int32(n)
+end
+
+# a checker for the checkers' shared helpers, which read nothing of their checker
+struct TypesCasesChecker <: WasmTarget.Dart2Wasm._TypeCheckers end
+
+@testset "types.dart: the type values' helpers" begin
+    local W = WasmTarget
+    @test (D.TopTypeKind_object_kind(), D.TopTypeKind_dynamic_kind(), D.TopTypeKind_void_kind()) == (0, 1, 2)
+    @test D.encoded_bool(true) == 1 && D.encoded_bool(false) == 0
+    # a type admits null exactly when it admits nothing, Julia's null
+    for T in (Any, Nothing, Union{Nothing,Int}, Int, Union{}, Union{Int,Float64}, Vector{Int}, Type)
+        @test D.encoded_nullability(T) == (isa(nothing, T) ? 1 : 0)
+    end
+    # no class has a type parameter, so the environment indexes none
+    local env = D.InterfaceTypeEnvironment()
+    @test D._add(env, Vector{Int}) === nothing
+    local e = try; D.lookup(env, TypeVar(:T)); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+
+    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.TranslatorOptions())
+    local types = D.Types(t)
+    @test D.type_type(types) === Type && all(T -> T isa D.type_type(types), (Int, Union{Int,Nothing}, Vector, Union{}))
+    # a type value's class is its kind, Julia's typeof
+    for T in (Int, Union{Int,Float64}, Vector, Union{}, Type{Int}, Any)
+        @test D.class_for_type(types, T) === typeof(T)
+    end
+    @test !D.is_specialized_class(types, Any) && !D.is_specialized_class(types, Function)
+    @test D.top_type_kind(types, Any) == D.TopTypeKind_object_kind()
+    @test D.normalize(types, Union{Nothing,Union{}}) === Nothing
+    # a constant type has no free type variable: a static parameter left unbound is one
+    local tv = TypeVar(:T)
+    @test D.is_type_constant(types, Vector{Int}) && D.is_type_constant(types, Vector) && D.is_type_constant(types, Union{})
+    @test !D.is_type_constant(types, Vector{tv}) && !D.is_type_constant(types, Base.unwrap_unionall(Vector))
+    # the parts of dart's function and record types reject, Julia having neither
+    for read in (() -> types.named_parameter_class_info[], () -> types.named_parameters_expected_type[],
+                 () -> types.record_type_names_field_expected_type[], () -> D.named_parameter_type(types))
+        local e2 = try; read(); nothing; catch x; x; end
+        @test e2 isa W.RejectionError && e2.rejection isa W.Internal
+    end
+    # only the null case needs checking when every non-null operand value is of the tested type
+    @test D._requires_only_null_assignability_check(types, Union{Nothing,Int}, Int)
+    @test D._requires_only_null_assignability_check(types, Int, Integer)
+    @test !D._requires_only_null_assignability_check(types, Any, Int)
+    @test !D._requires_only_null_assignability_check(types, Union{Int,Float64}, Int)
+end
+
+@testset "types.dart: canUseTypeCheckHelper, against Julia's isa" begin
+    local c = TypesCasesChecker()
+    # a checker serves exactly the constant types whose values their class tells
+    local values = Any[1, Int32(2), 1.5, "s", nothing, [1, 2], (1, 2.0), Int, Union{Int,Nothing}, Vector, Union{}, :x, 'c']
+    local served = (Int, Integer, Union{Int,Nothing}, Nothing, Any, AbstractVector{<:Integer}, Tuple{Int,Float64},
+                    Tuple{Any,Any}, DataType, Type, Union{DataType,Int}, Union{})
+    for T in served
+        @test D.can_use_type_check_helper(c, T, Any) == (T, false)
+        # the class alone answers: a value is a T exactly when its class is under T
+        @test all(x -> isa(x, T) == (typeof(x) <: T), values)
+    end
+    # a type that splits a kind's instances needs the value, and a type with a free variable is no
+    # constant: neither has a checker
+    local tv = TypeVar(:T)
+    for T in (Type{Int}, Type{<:Integer}, Union{Type{Int},Int}, Vector{tv})
+        @test D.can_use_type_check_helper(c, T, Any) == (nothing, false)
+    end
+    @test any(x -> isa(x, Type{Int}) != (typeof(x) <: Type{Int}), values)
+    @test D._has_only_default_type_arguments(c, Vector{Int}) && D._get_type_with_defaults_to_bounds(c, Vector{Int}) === Vector{Int}
+    @test !D._static_types_ensure_type_arguments_match(c, Vector{Int}, AbstractVector{Int})
+end
+
+@testset "types.dart: the type parameter offsets of nested binders" begin
+    local W = WasmTarget
+    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.TranslatorOptions())
+    local types = D.Types(t)
+    # T's binder holds S's, which refers to T: T's range starts above S's
+    local A = Tuple{T, Vector{S}} where S where T
+    @test D.compute_function_type_parameter_offset(types, A) == 1
+    @test D.get_function_type_parameter_index(types, A.var) == 1 && D.get_function_type_parameter_index(types, A.body.var) == 0
+    @test D.compute_function_type_parameter_offset(types, A) == 1   # cached
+    # a nested binder that does not refer to the outer parameter leaves the outer range at 0
+    local B = Tuple{Vector{S} where S, T} where T
+    @test D.compute_function_type_parameter_offset(types, B) == 0
+    @test D.compute_function_type_parameter_offset(types, Vector) == 0
+    local e = try; D.get_function_type_parameter_index(types, TypeVar(:U)); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+end
