@@ -3750,3 +3750,88 @@ wall, its check 35 s.
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41S2 is fixed by 653fbfc1, and A41E2
 and A41E4 by 4bf77429. A42S1, A42S2 and A42S3 are open on MARCH 1.C. A42S4 and A42S5 are open on MARCH 1.B. A42E1 is
 open on MARCH 1.L.
+
+## 2026-10-28 — audited through 11688e8b (1fabf0c0..11688e8b: the typejoin ruling, dev/gate.sh pushing nothing, the check's exit status and bands, check slots, entry 42, translateStatement)
+
+The forty-third audit, beside the work, covers e2fe09d7 (translateStorageType's ruling: a Union's typejoin its
+representation only, values exact), 114b30a4 (dev/gate.sh pushes nothing, gate-fast.yml and L163 deleted, the workflows
+on wt2 alone; `Charter-change: C10 authorised by Dale 2026-10-28`), 8bbf527d (dev/check.sh's exit status decides, dev/ship.sh
+checks every commit with `git rebase --exec`, TLC on touched models, D13's and D14's bands; C10 restates them), de199a9e (at
+most three checks at once, one Julia thread each), 60a55268 (entry 42; its author's) and 11688e8b (translateStatement, an
+@exhaustive arm per NIR form). No wrong answer: WasmTarget compiles nothing yet. Every finding rests on one exact command,
+quoted. A41E1 is fixed by 8bbf527d, and A41E3 by 8bbf527d for D14 and for checking every commit. Findings A43S1 to A43S4
+and A43E1 to A43E4.
+
+Area: builder — empty by diff: no commit of the range changes src/wasm_builder/.
+
+Area: collection and planning — e2fe09d7 is a docstring and its cases: a value of a Union keeps its exact class, the
+join is its representation only, `nothing` the null of the nullable one; test/translator.jl checks, by native runs, that
+each box is a wasm subtype of the join's struct and not of the other's. Sound as a ruling. (A43S1, low) Its precedent names
+a case other than the one it rules. "julia: codegen boxes a value of a non-isbits Union behind jl_value_t" governs
+Union{Int64,Float64} in its own test, an isbits Union, which Julia's codegen holds unboxed with a selector byte:
+`julia --startup-file=no -e 'println(Base.isbitsunion(Union{Int64,Float64}))'` gives true. Boxing is a sound choice,
+but the precedent for it is dart's (an upper bound's struct), and the ruling should say that Julia's own representation
+of an isbits Union differs (D7). Its "a value or local of an 8- or 16-bit integer or a Bool is i32 … as dart's are"
+leaves A42S1 open: dart's WasmI8 and WasmI16 are never values with operations (translator.dart:1048–1051), and the
+extension of a signed one is not stated.
+
+(A43S2, medium) No table maps Kernel's types to their Julia answers, and no plan row asks for one, so the answers are
+made one port at a time. 1fabf0c0 leaves a Kernel-typed stub parameter untyped "until the Kernel table types it", and
+`grep -n -i 'kernel table\|kernel_table' dev/skeleton.jl src/julia/*.jl dev/MARCH.md` finds nothing. Today, Class is
+DataType (classes.jl), Field is ClassField, Component is `Vector{NirBody}`, and Statement is NirStmt with a `used` flag
+(A43S3), each chosen where it was first needed. WT2-DESIGN gives the whole mapping in one line, "typed IR, not Kernel …
+NIR is its closed-sum projection". That is how 1:1 becomes nominal: every port that reads a Kernel node decides again
+what the node is in Julia (D5: one fact at its one source; D26: map Julia's IR before writing). The fix is one quarantined
+table, src/julia/kernel.jl, listing each Kernel class a pinned file reads, with its Julia counterpart and the Julia API
+that answers it. dev/skeleton.jl types the stubs from that table, and a MARCH row plans the classes the table lacks.
+
+Area: emission and diagnostics — 11688e8b's translate_statement. Each Julia-only form rejects in its own arm and names
+its MARCH row, and no arm is a wildcard (@exhaustive over NirStmt; construction.jl now accepts an imported sum, checked
+at its declaring module by `Base.binding_module`). Sound as a construction. (A43S3, medium) The anchor names a dart
+function whose body this is not. dart's translateStatement (`sed -n 714,724p code_generator.dart`) is ten lines: set the
+source-map offset, `node.accept(this)`, print the node's location if it throws, restore the offset. The port under that
+anchor holds a different decision, the projection of a flat SSA statement onto Kernel's statement classes: a used
+value is a VariableDeclaration, an unused one an ExpressionStatement, and twenty Julia-only forms each reject. That
+projection is forced by Julia (Kernel nests a used expression in its parent; Julia's IR names it by SSA), so it belongs
+in a @quarantine definition beside NIR, `accept`'s counterpart. translateStatement then keeps dart's ten lines, and its
+anchor names what its body does (D1, D7). (A43S4, medium) A rejection names the dart anchor and the plan row, not the
+statement of the user's program. `reject!(r, at) = throw(RejectionError(r, at))` (src/julia/reject.jl:79), and here
+`at` is "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement". dart's own catch prints
+"Exception in ${node.runtimeType} at ${node.location}" (code_generator.dart:728), and the port drops it. C6 asks
+for a located rejection. A rejection from a NIR statement should name its function (the CodeInstance's MethodInstance)
+and its statement index and line from the body's line table, as Julia's own errors do. This comes before the
+JuliaLowering provenance the plan defers.
+
+stopgap in disguise: the @exhaustive match is a construction; the check slots are a mutex by mkdir, a mechanism, not a
+claimed construction; D13's band is a printed line (A43E1).
+precedent: the slots, a counting semaphore by atomic mkdir (make's jobserver bounds jobs the same way); every commit
+checked, bors's not-rocket-science rule; the typejoin box, dart's upper-bound struct.
+
+Area: enforcement and prose — every hunk of 114b30a4 (dev/gate.sh, the workflows, dev/CHARTER.md, test/parity_ratchet.jl,
+test/smoke.jl, test/smoke_times.tsv, dev/parity_baseline.toml), 8bbf527d, de199a9e and 11688e8b's test hunks. 8bbf527d is
+sound on A41E1: `julia … test/parity_ratchet.jl …; rc=$?` and `[ $rc -ne 0 ]` decide (dev/check.sh). `git rebase --exec`
+runs its command on a branch already on top of its upstream, measured on a scratch repository (`git rebase -q up --exec
+'echo EXEC-RAN …'` printed "EXEC-RAN on mine", git 2.52.0), so a one-commit landing is checked too. 114b30a4 is sound:
+`grep -c 'git push' dev/gate.sh` gives 0. (A43E1, low) D13's band is printed, never judged: ship.sh echoes "ship: RED — the
+median of the last five landings is …s, past D13's band" after its push and exits 0 (dev/ship.sh), so a red median
+changes nothing. The 600-s edge needs a consequence: the next ship refuses until a landing under the band, or the
+orchestrator is told, as L197 failed the next gate. (A43E2, medium) A41E5 is named in 8bbf527d's subject but not fixed:
+`grep -n charter dev/check.sh dev/ship.sh` gives only check.sh:33, the ratchet's `── charter` marker. In the range,
+two commits change dev/CHARTER.md under lines no program reads. 114b30a4's `authorised by Dale 2026-10-28` has no line of
+that date in the main tree's dev/.block/charter_authorised (`grep -c 2026-10-28` gives 0). 8bbf527d's is a
+self-certification, "no requirement loosened", and it adds TLC on touched models to C10, new charter content (D19:
+propose charter edits only). (A43E3, low) D14's band has no machine calibration. My first ship of entry 42 went red on
+time alone, "check: RED — 125s, past D14's band", src tests 1m27.7s, with `uptime` load averages 63.11 34.63 18.98 on 10
+cores. The retry on the same content passed in 76 s. de199a9e bounds the checks to three at a time, one thread each, and
+times the check without its wait, but `uptime` at 11:00 still read 46.64 44.59 32.01 (D31). A check red on a loaded
+machine fails a sound landing, which the retired gate marked unjudged (D17). (A43E4, low) A check slot can stay held
+forever: dev/check.sh makes the slot with `mkdir` and writes its pid on the next line, and a holder that dies between the
+two leaves an empty pid, which `[ -n "$holder" ] && ! kill -0 …` never frees. Write the pid first, into a temporary directory renamed into the slot. Requirements: D1 and D7 (A43S3, A43S1); D5 and D26 (A43S2); C6 (A43S4); D13 (A43E1); D19
+(A43E2); D17 and D31 (A43E3); no lock fired inside its band.
+
+Landing times: dev/ship.sh now logs them in the common dir's wt-landings.tsv; entry 42 landed 462 s from its first commit,
+the median of five 244 s (ship's own line).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41E1 is fixed by 8bbf527d; A41E3 by
+8bbf527d for D14 and every commit checked, its D13 half carried as A43E1. A43S1, A43S2, A43S3 and A43S4 are open on MARCH
+1.C. A43E1, A43E2, A43E3 and A43E4 are open on MARCH 1.L.
