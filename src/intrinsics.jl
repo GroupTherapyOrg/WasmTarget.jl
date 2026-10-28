@@ -46,7 +46,8 @@ end
 # each a function of its own (Core.Intrinsics), so the key is that function (ledger D4) and the
 # operand types are each wasm number type. Each answers as Julia's codegen does (src/intrinsics.cpp):
 # integer arithmetic wraps, a division, remainder or comparison is signed or unsigned by the
-# intrinsic's own name, and a float operation is IEEE's
+# intrinsic's own name, and a float operation is IEEE's (a fast-math one, a single operation, is the
+# same IEEE operation)
 @parity "dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap" const Intrinsifier__binary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}}("dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(
     WasmBuilder.IR.NumType_i32 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.add_int => c -> WasmBuilder.i32_add(c.b[]),
@@ -91,7 +92,11 @@ end
         Core.Intrinsics.ne_float => c -> WasmBuilder.f32_ne(c.b[]),
         Core.Intrinsics.lt_float => c -> WasmBuilder.f32_lt(c.b[]),
         Core.Intrinsics.le_float => c -> WasmBuilder.f32_le(c.b[]),
-        Core.Intrinsics.copysign_float => c -> WasmBuilder.f32_copysign(c.b[]))),
+        Core.Intrinsics.copysign_float => c -> WasmBuilder.f32_copysign(c.b[]),
+        Core.Intrinsics.add_float_fast => c -> WasmBuilder.f32_add(c.b[]),
+        Core.Intrinsics.sub_float_fast => c -> WasmBuilder.f32_sub(c.b[]),
+        Core.Intrinsics.mul_float_fast => c -> WasmBuilder.f32_mul(c.b[]),
+        Core.Intrinsics.div_float_fast => c -> WasmBuilder.f32_div(c.b[]))),
     WasmBuilder.IR.NumType_f64 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_f64 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.add_float => c -> WasmBuilder.f64_add(c.b[]),
         Core.Intrinsics.sub_float => c -> WasmBuilder.f64_sub(c.b[]),
@@ -101,18 +106,29 @@ end
         Core.Intrinsics.ne_float => c -> WasmBuilder.f64_ne(c.b[]),
         Core.Intrinsics.lt_float => c -> WasmBuilder.f64_lt(c.b[]),
         Core.Intrinsics.le_float => c -> WasmBuilder.f64_le(c.b[]),
-        Core.Intrinsics.copysign_float => c -> WasmBuilder.f64_copysign(c.b[])))))
+        Core.Intrinsics.copysign_float => c -> WasmBuilder.f64_copysign(c.b[]),
+        Core.Intrinsics.add_float_fast => c -> WasmBuilder.f64_add(c.b[]),
+        Core.Intrinsics.sub_float_fast => c -> WasmBuilder.f64_sub(c.b[]),
+        Core.Intrinsics.mul_float_fast => c -> WasmBuilder.f64_mul(c.b[]),
+        Core.Intrinsics.div_float_fast => c -> WasmBuilder.f64_div(c.b[])))))
 
 # a static final, lazily initialized as dart's is (Late); Julia's unary intrinsics by operand type, as Julia's codegen answers them: an integer's negation and
 # complement wrap (dart's `unary-` and `~`, the same instructions), a float's negation, magnitude,
-# square root and rounding are IEEE's (rint_llvm rounds to nearest even, wasm's nearest)
+# square root and rounding are IEEE's (rint_llvm rounds to nearest even, wasm's nearest); an integer's
+# leading and trailing zeros and its population count, the width for zero as Julia's
 @parity "dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap" const Intrinsifier__unary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}("dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(
     WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.neg_int => c -> (WasmBuilder.i32_const(c.b[], -1); WasmBuilder.i32_mul(c.b[])),
-        Core.Intrinsics.not_int => c -> (WasmBuilder.i32_const(c.b[], -1); WasmBuilder.i32_xor(c.b[]))),
+        Core.Intrinsics.not_int => c -> (WasmBuilder.i32_const(c.b[], -1); WasmBuilder.i32_xor(c.b[])),
+        Core.Intrinsics.ctlz_int => c -> WasmBuilder.i32_clz(c.b[]),
+        Core.Intrinsics.cttz_int => c -> WasmBuilder.i32_ctz(c.b[]),
+        Core.Intrinsics.ctpop_int => c -> WasmBuilder.i32_popcnt(c.b[])),
     WasmBuilder.IR.NumType_i64 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.neg_int => c -> (WasmBuilder.i64_const(c.b[], -1); WasmBuilder.i64_mul(c.b[])),
-        Core.Intrinsics.not_int => c -> (WasmBuilder.i64_const(c.b[], -1); WasmBuilder.i64_xor(c.b[]))),
+        Core.Intrinsics.not_int => c -> (WasmBuilder.i64_const(c.b[], -1); WasmBuilder.i64_xor(c.b[])),
+        Core.Intrinsics.ctlz_int => c -> WasmBuilder.i64_clz(c.b[]),
+        Core.Intrinsics.cttz_int => c -> WasmBuilder.i64_ctz(c.b[]),
+        Core.Intrinsics.ctpop_int => c -> WasmBuilder.i64_popcnt(c.b[])),
     WasmBuilder.IR.NumType_f32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.neg_float => c -> WasmBuilder.f32_neg(c.b[]),
         Core.Intrinsics.abs_float => c -> WasmBuilder.f32_abs(c.b[]),
@@ -227,8 +243,10 @@ end
     # zext_int extend by their own sign (a Bool zero-extends its 0 or 1), sitofp and uitofp round to
     # nearest, fptosi and fptoui trap where Julia leaves the value undefined (out of range or NaN),
     # fpext and fptrunc are IEEE's, bitcast reinterprets bits of one width
-    if length(args) == 2 && args[1] isa NirConst && args[1].c.val isa Type
-        local to = args[1].c.val
+    # the type operand a literal or a constant binding, its static type Type{T}
+    local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
+    if type_operand isa DataType && type_operand <: Type && length(type_operand.parameters) == 1 && type_operand.parameters[1] isa Type
+        local to = type_operand.parameters[1]
         local x = args[2]
         local from = dart_type_of(self, x)
         local from_w = type_of_exp(self, x)
@@ -265,6 +283,35 @@ end
         translate_expression(code_gen, x, from_w)
         emit(b[])
         return to_w
+    end
+
+    # Julia's not_int on a Bool flips its one bit (Julia's Bool is an i1 in its codegen), where an
+    # integer's complements every bit (the unary map)
+    if f === Core.Intrinsics.not_int && length(args) == 1 && dart_type_of(self, args[1]) === Bool
+        translate_expression(code_gen, args[1], i32)
+        WasmBuilder.i32_const(b[], 1)
+        WasmBuilder.i32_xor(b[])
+        return i32
+    end
+
+    # Julia's flipsign_int(x, y): x where y is not negative, else its wrapping negation (Julia's
+    # codegen: a select over y >= 0); x and y of one full-width integer type
+    if f === Core.Intrinsics.flipsign_int && length(args) == 2
+        local x = args[1]
+        local w = type_of_exp(self, x)
+        (w == i32 || w == i64) && full(dart_type_of(self, x), w) && dart_type_of(self, args[2]) === dart_type_of(self, x) || return nothing
+        local tmp = add_local(code_gen, w)
+        local zero() = w == i64 ? WasmBuilder.i64_const(b[], 0) : WasmBuilder.i32_const(b[], 0)
+        translate_expression(code_gen, x, w)
+        WasmBuilder.local_tee(b[], tmp)
+        zero()
+        WasmBuilder.local_get(b[], tmp)
+        w == i64 ? WasmBuilder.i64_sub(b[]) : WasmBuilder.i32_sub(b[])
+        translate_expression(code_gen, args[2], w)
+        zero()
+        w == i64 ? WasmBuilder.i64_ge_s(b[]) : WasmBuilder.i32_ge_s(b[])
+        WasmBuilder.select(b[], w)
+        return w
     end
 
     # Julia's shifts, as its codegen answers them: the count is unsigned, and a count of the width or

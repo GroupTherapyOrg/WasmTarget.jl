@@ -265,3 +265,44 @@ end
         0x01, 0x04, 0x01, 0x00, 0x01, 0x66, 0x02, 0x06, 0x01, 0x00, 0x01, 0x00, 0x01, 0x78]
     @test CodegenCases.f_add(typemax(Int32)) == typemin(Int32)
 end
+
+# the module of one function: translate()'s steps before code, the body generated, `f` exported
+function compile_one(f, argtypes)
+    local B = W.WasmBuilder
+    local t = translator_of(f, argtypes)
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    local mb = D.main_module(t)
+    local nb = only(t.component)
+    local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
+    local fb = B.define(mb.functions[], sig, "f")
+    D.generate(D.get_member_code_generator(t, fb, nb.ci.def), B.body(fb), B.locals(fb), nothing)
+    B.var"export"(mb.exports, "f", fb)
+    local s = B.Serializer(); B.serialize(s, B.build(mb))
+    return B.data(s)
+end
+
+module IntrinsicCompileCases
+mulshift(x::Int64, y::Int64) = x * y - (x >> 3)
+floorabs(x::Float64) = floor(x) + abs(x)
+scale(x::Int32) = Float64(x) * 2.5
+absint(x::Int64) = abs(x)
+bits(x::Int64) = leading_zeros(x) + trailing_zeros(x) + count_ones(x)
+notand(a::Bool, b::Bool) = !a & b
+minmax(x::Int32, y::Int32) = min(x, y) + max(x, y)
+widen32(x::Int32) = UInt64(reinterpret(UInt32, x)) + 1
+egal(x::Float64, y::Float64) = x === y
+end
+
+@testset "intrinsics.dart: whole functions of Julia's intrinsics compile" begin
+    # each compiles to a module the builder accepted instruction by instruction (D10); run by node,
+    # each answers as native Julia on its edge inputs (the commit records the differential)
+    local C = IntrinsicCompileCases
+    for (f, at) in ((C.mulshift, (Int64, Int64)), (C.floorabs, (Float64,)), (C.scale, (Int32,)), (C.absint, (Int64,)),
+                    (C.bits, (Int64,)), (C.notand, (Bool, Bool)), (C.minmax, (Int32, Int32)), (C.widen32, (Int32,)),
+                    (C.egal, (Float64, Float64)))
+        local bytes = compile_one(f, at)
+        @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
+    end
+end
