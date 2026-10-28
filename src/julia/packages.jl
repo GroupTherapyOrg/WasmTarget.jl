@@ -9,8 +9,11 @@ import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 # ported code rejects where dart throws (src/julia/reject.jl)
 import ..reject!, ..Internal, ..Unported, ..InvalidModule
 # dart's `late final` fields (src/julia/late.jl); dart's insertion-ordered Map and Set
-# (src/julia/linked_hash_map.jl); the forward declaration of IR.Module (src/julia/forward.jl)
-import ..Late, ..LinkedHashMap, ..LinkedHashSet, ..AbstractModule
+# (src/julia/linked_hash_map.jl); package:collection's stronglyConnectedComponents
+# (src/julia/collection.jl); the forward declarations of IR.Module, ModuleBuilder and
+# InstructionsBuilder (src/julia/forward.jl)
+import ..Late, ..LinkedHashMap, ..LinkedHashSet, ..strongly_connected_components
+import ..AbstractModule, ..AbstractModuleBuilder, ..AbstractInstructionsBuilder
 @quarantine "dart's builder and serializer import ir under the prefix ir; a prefix is a module in Julia" Core.Module module IR
 import ...@parity, ...@unported, ...@closed, ...@exhaustive
 import ...reject!, ...Internal, ...Unported, ...InvalidModule, ...Late, ...LinkedHashMap, ...LinkedHashSet, ...AbstractModule

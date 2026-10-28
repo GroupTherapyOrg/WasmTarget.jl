@@ -5,10 +5,27 @@
 
 @parity "wasm_builder/lib/src/builder/builder.dart:41 IndexableBuilder" abstract type IndexableBuilder <: Builder end
 
-@parity "wasm_builder/lib/src/builder/builder.dart:35 Builder.build" @unported function build(self::Builder) end
+# The classes that mix in Builder (the module's and its parts' builders, the instructions builder)
+# or IndexableBuilder (the function, global and table builders, which extend their ir class) cannot
+# also subtype it in Julia, so the mixins' members take their Unions; each class holds `_built`.
+"""The value this builder builds, built once: dart's `_built ??= forceBuild()`."""
+@parity "wasm_builder/lib/src/builder/builder.dart:35 Builder.build" function build(b::Union{InstructionsBuilder,DataSegmentBuilder,DataSegmentsBuilder,DeclarativeSegmentBuilder,ActiveFunctionSegmentBuilder,ActiveExpressionSegmentBuilder,ElementsBuilder,ExportsBuilder,FunctionsBuilder,GlobalsBuilder,MemoriesBuilder,TablesBuilder,TagsBuilder,TypesBuilder,ModuleBuilder})
+    local built = b._built
+    built === nothing || return built
+    return b._built = force_build(b)
+end
 
-@parity "wasm_builder/lib/src/builder/builder.dart:37 Builder.forceBuild" @unported function force_build(self::Builder) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/builder/builder.dart:37 Builder.forceBuild" force_build(self::Union{InstructionsBuilder,DataSegmentBuilder,DataSegmentsBuilder,DeclarativeSegmentBuilder,ActiveFunctionSegmentBuilder,ActiveExpressionSegmentBuilder,ElementsBuilder,ExportsBuilder,FunctionsBuilder,GlobalsBuilder,MemoriesBuilder,TablesBuilder,TagsBuilder,TypesBuilder,ModuleBuilder}) =
+    reject!(Internal("wasm_builder/lib/src/builder/builder.dart:37 Builder.forceBuild: abstract in $(typeof(self))"), "force_build")
 
-@parity "wasm_builder/lib/src/builder/builder.dart:46 IndexableBuilder.build" @unported function build(self::IndexableBuilder) end
+"""The value this builder builds, built once: dart's `_built ??= forceBuild()`."""
+@parity "wasm_builder/lib/src/builder/builder.dart:46 IndexableBuilder.build" function build(b::Union{FunctionBuilder,GlobalBuilder,TableBuilder})
+    local built = b._built
+    built === nothing || return built
+    return b._built = force_build(b)
+end
 
-@parity "wasm_builder/lib/src/builder/builder.dart:49 IndexableBuilder.forceBuild" @unported function force_build(self::IndexableBuilder) end
+# dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
+@parity "wasm_builder/lib/src/builder/builder.dart:49 IndexableBuilder.forceBuild" force_build(self::Union{FunctionBuilder,GlobalBuilder,TableBuilder}) =
+    reject!(Internal("wasm_builder/lib/src/builder/builder.dart:49 IndexableBuilder.forceBuild: abstract in $(typeof(self))"), "force_build")

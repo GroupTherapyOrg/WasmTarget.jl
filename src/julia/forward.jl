@@ -1,7 +1,10 @@
 # The forward declarations the ported wasm_builder needs where its parts point back at their owner
 # through concrete classes only: IR.Module, which every function, global, table, memory and tag
-# names as its `enclosingModule` (module.dart:12, "the data structures are cyclic"). A cycle through
-# a dart abstract class needs none: that class is the abstract type (BaseFunction, Global, DefType, …).
+# names as its `enclosingModule` (module.dart:12, "the data structures are cyclic"); ModuleBuilder,
+# which every part builder names (builder/module.dart:20, "cyclic dependencies"); and
+# InstructionsBuilder, whose patch points name the builder of their patch (instructions.dart:4996).
+# A cycle through a dart abstract class needs none: that class is the abstract type (BaseFunction,
+# Global, DefType, …).
 
 """
     AbstractModule
@@ -15,6 +18,30 @@ implementation). Julia's differs: it has no forward declaration, so an abstract 
 struct and its one subtype is checked by reflection when the package loads.
 """
 @quarantine "Julia has no forward struct declaration; the IR's back-pointers to their Module name this abstract type" Core.DataType abstract type AbstractModule end
+
+"""
+    AbstractModuleBuilder
+
+The forward declaration of `WasmBuilder.ModuleBuilder`, its one subtype, as `AbstractModule` is
+IR.Module's: the type of a part builder's `moduleBuilder` field.
+
+precedent(c: a forward-declared struct; ocaml: a signature before its implementation). Julia's
+differs: it has no forward declaration, so an abstract type stands for the struct and its one
+subtype is checked by reflection when the package loads.
+"""
+@quarantine "Julia has no forward struct declaration; the builders' back-pointers to their ModuleBuilder name this abstract type" Core.DataType abstract type AbstractModuleBuilder end
+
+"""
+    AbstractInstructionsBuilder
+
+The forward declaration of `WasmBuilder.InstructionsBuilder`, its one subtype, as `AbstractModule` is
+IR.Module's: the type of a patchable region's `patchBuilder`, which the builder's patch points hold.
+
+precedent(c: a forward-declared struct; ocaml: a signature before its implementation). Julia's
+differs: it has no forward declaration, so an abstract type stands for the struct and its one
+subtype is checked by reflection when the package loads.
+"""
+@quarantine "Julia has no forward struct declaration; a patchable region's builder names this abstract type" Core.DataType abstract type AbstractInstructionsBuilder end
 
 """
     check_forward(forward, sole, mod) -> Int
@@ -38,3 +65,5 @@ end
 
 # checked when every definition exists (src/WasmTarget.jl calls it after include_dart)
 @quarantine "AbstractModule's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractModule})::Int = check_forward(AbstractModule, WasmBuilder.IR.Module, @__MODULE__)
+@quarantine "AbstractModuleBuilder's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractModuleBuilder})::Int = check_forward(AbstractModuleBuilder, WasmBuilder.ModuleBuilder, @__MODULE__)
+@quarantine "AbstractInstructionsBuilder's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractInstructionsBuilder})::Int = check_forward(AbstractInstructionsBuilder, WasmBuilder.InstructionsBuilder, @__MODULE__)

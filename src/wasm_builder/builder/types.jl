@@ -2,63 +2,381 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-_RecGroupBuilder's dart fields: `_allRecursiveGroups`, `_allDefinedTypes`, `_brandedStructs`.
+Creates minimally sized rec groups from the types added to the builder: each rec group a strongly
+connected component of the type graph, branded where groups would otherwise be equivalent.
 """
-@parity "wasm_builder/lib/src/builder/types.dart:76 _RecGroupBuilder" @unported struct _RecGroupBuilder end
+@parity "wasm_builder/lib/src/builder/types.dart:76 _RecGroupBuilder" mutable struct _RecGroupBuilder
+    # dart's `late final _allRecursiveGroups = _createAllRecursiveGroups()`: computed on the first
+    # read, after every type is added
+    const _all_recursive_groups::Late{Vector{Vector{IR.DefType}}}
+    const _all_defined_types::Vector{IR.DefType}
+    const _branded_structs::LinkedHashSet{IR.StructType}
+    # dart's constructor (line 82), the struct's one inner constructor; the late field's initializer
+    # reads the value being made, so it reaches it through a reference set once the value exists
+    function _RecGroupBuilder()
+        local self = Ref{_RecGroupBuilder}()
+        local b = new(Late{Vector{Vector{IR.DefType}}}("wasm_builder/lib/src/builder/types.dart:77 _RecGroupBuilder._allRecursiveGroups", () -> _create_all_recursive_groups(self[])),
+                      IR.DefType[], LinkedHashSet{IR.StructType}())
+        self[] = b
+        return b
+    end
+end
+
+@parity "wasm_builder/lib/src/builder/types.dart:313 TypesBuilder" mutable struct TypesBuilder
+    const _module::AbstractModuleBuilder
+    const _function_type_map::LinkedHashMap{_FunctionTypeKey,IR.FunctionType}
+    const _rec_group_builder::_RecGroupBuilder
+    _built::Union{IR.Types,Nothing}
+    # dart's constructor (line 319), the struct's one inner constructor
+    function TypesBuilder(module_::AbstractModuleBuilder; parent::Union{TypesBuilder,Nothing}=nothing)
+        new(module_, LinkedHashMap{_FunctionTypeKey,IR.FunctionType}(), parent === nothing ? _RecGroupBuilder() : parent._rec_group_builder, nothing)
+    end
+end
+
+@parity "wasm_builder/lib/src/builder/types.dart:399 _FunctionTypeKey" struct _FunctionTypeKey
+    inputs::Vector{IR.ValueType}
+    outputs::Vector{IR.ValueType}
+    # dart's constructor (line 403), the struct's one inner constructor
+    _FunctionTypeKey(inputs::Vector{IR.ValueType}, outputs::Vector{IR.ValueType}) = new(inputs, outputs)
+end
+
+@parity "wasm_builder/lib/src/builder/types.dart:433 _RecursionGroupKey" struct _RecursionGroupKey
+    group_length::Int
+    length_of_first_struct::Int
+    types::Vector{IR.DefType}
+    # dart's constructor (line 438), the struct's one inner constructor
+    _RecursionGroupKey(group_length::Int, length_of_first_struct::Int, types::Vector{IR.DefType}) = new(group_length, length_of_first_struct, types)
+end
+
+# The field values brand types are built from. dart's top-level const list; its values are IR
+# constants, which load after the builder's files (include_dart loads DART_FILES in order), so the
+# list is a cell built on its first read, the value dart's const has.
+@parity "wasm_builder/lib/src/builder/types.dart:10 _brandTypeFieldValues" const _brandTypeFieldValues = Late{Vector{IR.StorageType}}("wasm_builder/lib/src/builder/types.dart:10 _brandTypeFieldValues", () -> IR.StorageType[
+    IR.NumType_i32,
+    IR.NumType_i64,
+    IR.NumType_f32,
+    IR.NumType_f64,
+    IR.NumType_v128,
+    IR.PackedType_i8,
+    IR.PackedType_i16,
+    IR.RefType_i31(nullable=false),
+    IR.RefType_i31(nullable=true),
+    IR.RefType_struct(nullable=false),
+    IR.RefType_struct(nullable=true),
+    IR.RefType_array(nullable=false),
+    IR.RefType_array(nullable=true),
+    IR.RefType_extern(nullable=false),
+    IR.RefType_extern(nullable=true),
+    IR.RefType_any(nullable=false),
+    IR.RefType_any(nullable=true),
+    IR.RefType_func(nullable=false),
+    IR.RefType_func(nullable=true),
+    IR.RefType_none(nullable=false),
+    IR.RefType_none(nullable=true),
+    IR.RefType_noextern(nullable=false),
+    IR.RefType_noextern(nullable=true),
+    IR.RefType_nofunc(nullable=false),
+    IR.RefType_nofunc(nullable=true),
+])
 
 """
-TypesBuilder's dart fields: `_module`, `_functionTypeMap`, `_recGroupBuilder`.
+Encodes `index` as a StructType that is a subtype of no other index's: added to a rec group that
+the wasm type system would otherwise consider equal to another, it breaks the equivalence.
 """
-@parity "wasm_builder/lib/src/builder/types.dart:313 TypesBuilder" @unported struct TypesBuilder end
+@parity "wasm_builder/lib/src/builder/types.dart:44 _getBrandType" function _get_brand_type(index::Int)::IR.StructType
+    brand_name = "brand$index"
+    fields = IR.FieldType[]
+    num_digits = length(_brandTypeFieldValues[])
+    while index > 0
+        use_mutable = index & 1 == 1
+        digit_index = (index >> 1) % num_digits
+        push!(fields, IR.FieldType(_brandTypeFieldValues[][digit_index+1]; mutable=use_mutable))
+        index = div(index, num_digits * 2)
+    end
+    IR.StructType(brand_name; fields)
+end
+
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/builder/types.dart:82 _RecGroupBuilder" function _RecGroupBuilder end
+
+"""The out-edges of `type` in the wasm type graph."""
+@parity "wasm_builder/lib/src/builder/types.dart:85 _RecGroupBuilder._edgesforType" function _RecGroupBuilder__edgesfor_type(type::IR.DefType)::LinkedHashSet{IR.DefType}
+    edges = LinkedHashSet{IR.DefType}()
+    for constituent_type in constituent_types(type)
+        if constituent_type isa IR.RefType
+            heap_type = constituent_type.heap_type
+            if heap_type isa IR.DefType
+                push!(edges, heap_type)
+            end
+        end
+    end
+    super_type = type.super_type
+    if super_type !== nothing
+        push!(edges, super_type)
+    end
+    edges
+end
 
 """
-_FunctionTypeKey's dart fields: `inputs`, `outputs`.
+Whether two groups of the same size hold structurally equivalent struct types in the same order.
 """
-@parity "wasm_builder/lib/src/builder/types.dart:399 _FunctionTypeKey" @unported struct _FunctionTypeKey end
+@parity "wasm_builder/lib/src/builder/types.dart:106 _RecGroupBuilder._areGroupsStructurallyEqual" function _RecGroupBuilder__are_groups_structurally_equal(group1::Vector{IR.DefType}, group2::Vector{IR.DefType})::Bool
+    for i in eachindex(group1)
+        type1 = group1[i]
+        type2 = group2[i]
+        if !(type1 isa IR.StructType)
+            type2 isa IR.StructType && return false
+            return is_structural_subtype_of(type1, type2) && is_structural_subtype_of(type2, type1)
+        end
+        type2 isa IR.StructType || return false
+        is_structurally_equal_to(type1, type2) || return false
+    end
+    true
+end
 
 """
-_RecursionGroupKey's dart fields: `groupLength`, `lengthOfFirstStruct`, `types`.
+Assigns brand types to structurally equivalent rec groups: a group in an equivalence class with
+others gets an index encoded as a brand type, so the wasm type system tells the groups apart.
 """
-@parity "wasm_builder/lib/src/builder/types.dart:433 _RecursionGroupKey" @unported struct _RecursionGroupKey end
+@parity "wasm_builder/lib/src/builder/types.dart:129 _RecGroupBuilder._assignBrandTypes" function _assign_brand_types(b::_RecGroupBuilder, groups::Vector{Vector{IR.DefType}})::Nothing
+    # Rec groups joined over (1) group length, (2) length of the first struct, (3) structural
+    # equality of the groups.
+    equivalence_groups = LinkedHashMap{_RecursionGroupKey,Vector{Vector{IR.DefType}}}()
+    for group in groups
+        struct_index = findfirst(g -> g isa IR.StructType, group)
+        # Skip groups with no struct types.
+        struct_index === nothing && continue
+        struct_type = group[struct_index]::IR.StructType
+        key = _RecursionGroupKey(length(group), length(struct_type.fields), group)
+        push!(get!(Vector{Vector{IR.DefType}}, equivalence_groups, key), group)
+    end
 
-@parity "wasm_builder/lib/src/builder/types.dart:10 _brandTypeFieldValues" @unported function _brand_type_field_values() end
+    for (_, equal_groups) in equivalence_groups
+        # Every group in `equal_groups` is structurally equivalent to the others.
+        to_brand = Vector{IR.DefType}[]
+        no_brand = Vector{IR.DefType}[]
 
-@parity "wasm_builder/lib/src/builder/types.dart:44 _getBrandType" @unported function _get_brand_type(index::Int64) end
+        for group in equal_groups
+            has_branded_struct = any(t -> t isa IR.StructType && t in b._branded_structs, group)
+            push!(has_branded_struct ? to_brand : no_brand, group)
+        end
 
-@parity "wasm_builder/lib/src/builder/types.dart:82 _RecGroupBuilder" @unported function _RecGroupBuilder() end
+        start_idx = isempty(no_brand) ? 1 : 0
+        for i in start_idx:length(to_brand)-1
+            brand_type_index = i - start_idx
+            brand_type = _get_brand_type(brand_type_index)
+            pushfirst!(to_brand[i+1], brand_type)
+        end
 
-@parity "wasm_builder/lib/src/builder/types.dart:85 _RecGroupBuilder._edgesforType" @unported function _RecGroupBuilder__edgesfor_type(type_::IR.DefType) end
+        # Rename the types and fields of the wasm structs that get no brand with a union name.
+        if length(no_brand) > 1
+            group_count = length(no_brand)
+            dot_dot_dot_limit = 10
+            types_count = length(no_brand[1])
 
-@parity "wasm_builder/lib/src/builder/types.dart:106 _RecGroupBuilder._areGroupsStructurallyEqual" @unported function _RecGroupBuilder__are_groups_structurally_equal(group1::Vector{IR.DefType}, group2::Vector{IR.DefType}) end
+            # Equivalent groups have the same length.
+            all(types -> length(types) == types_count, no_brand) || reject!(Internal("wasm_builder/lib/src/builder/types.dart:175 _RecGroupBuilder._assignBrandTypes: equivalent rec groups of different lengths"), "_assign_brand_types")
 
-@parity "wasm_builder/lib/src/builder/types.dart:129 _RecGroupBuilder._assignBrandTypes" @unported function _assign_brand_types(self::_RecGroupBuilder, groups::Vector{Vector{IR.DefType}}) end
+            for type_index in 0:types_count-1
+                struct_type = no_brand[1][type_index+1]
+                struct_type isa IR.StructType || continue
 
-@parity "wasm_builder/lib/src/builder/types.dart:240 _RecGroupBuilder._createAllRecursiveGroups" @unported function _create_all_recursive_groups(self::_RecGroupBuilder) end
+                # The new struct name and field names join the ones of the individual groups
+                # with '|', adding a trailing '|...' past `dot_dot_dot_limit` groups.
+                struct_name_builder = IOBuffer()
+                field_name_builder = Union{IOBuffer,Nothing}[nothing for _ in struct_type.fields]
+                for group in 0:group_count-1
+                    if group == dot_dot_dot_limit
+                        Base.write(struct_name_builder, "|...")
+                        for buffer in field_name_builder
+                            buffer === nothing || Base.write(buffer, "|...")
+                        end
+                        break
+                    end
 
-@parity "wasm_builder/lib/src/builder/types.dart:273 _RecGroupBuilder.addDefinedType" @unported function add_defined_type(self::_RecGroupBuilder, type_::IR.DefType) end
+                    st = no_brand[group+1][type_index+1]::IR.StructType
+                    name = st.name
+                    if name !== nothing
+                        position(struct_name_builder) > 0 && Base.write(struct_name_builder, '|')
+                        Base.write(struct_name_builder, name)
+                    end
+                    for (field_index, field_name) in st.field_names
+                        buffer = field_name_builder[field_index+1]
+                        if buffer === nothing
+                            buffer = IOBuffer()
+                            field_name_builder[field_index+1] = buffer
+                        end
+                        position(buffer) > 0 && Base.write(buffer, '|')
+                        Base.write(buffer, something(st.name, ""))
+                        Base.write(buffer, '.')
+                        Base.write(buffer, field_name)
+                    end
+                end
+                new_struct_name = String(take!(struct_name_builder))
+                new_field_names = Union{String,Nothing}[buffer === nothing ? nothing : String(take!(buffer)) for buffer in field_name_builder]
+                for group in 0:group_count-1
+                    st = no_brand[group+1][type_index+1]::IR.StructType
+                    st.name = new_struct_name
+                    for field in eachindex(st.fields)
+                        name = new_field_names[field]
+                        if name !== nothing
+                            st.field_names[field-1] = name
+                        end
+                    end
+                end
+            end
+        end
+    end
+    nothing
+end
 
-@parity "wasm_builder/lib/src/builder/types.dart:286 _RecGroupBuilder.createGroupsForModule" @unported function create_groups_for_module(self::_RecGroupBuilder, directly_used_types::Set{IR.DefType}) end
+"""
+Creates the minimal recursive groups, adding brand types where similar struct types would
+otherwise be equivalent. Some groups may hold only unused types; callers drop those.
+"""
+@parity "wasm_builder/lib/src/builder/types.dart:240 _RecGroupBuilder._createAllRecursiveGroups" function _create_all_recursive_groups(b::_RecGroupBuilder)::Vector{Vector{IR.DefType}}
+    type_graph = LinkedHashMap{IR.DefType,LinkedHashSet{IR.DefType}}()
+    for type in b._all_defined_types
+        type_graph[type] = _RecGroupBuilder__edgesfor_type(type)
+    end
 
-@parity "wasm_builder/lib/src/builder/types.dart:319 TypesBuilder" @unported function TypesBuilder(_module; parent = nothing) end
+    components = strongly_connected_components(type_graph)
+    groups = Vector{IR.DefType}[]
+    # The components come leaves first; reversed, the root first.
+    for component in Iterators.reverse(components)
+        group = IR.DefType[]
+        added = IdDict{IR.DefType,Nothing}()
+        function add_to_group(type::IR.DefType)
+            haskey(added, type) && return
+            added[type] = nothing
+            sup = type.super_type
+            if sup !== nothing && sup in component
+                # Supertypes are added before their subtypes.
+                add_to_group(sup)
+            end
+            push!(group, type)
+        end
 
-@parity "wasm_builder/lib/src/builder/types.dart:331 TypesBuilder.defineFunction" @unported function define_function(self::TypesBuilder, inputs, outputs; super_type = nothing) end
+        for type in component
+            add_to_group(type)
+        end
+        push!(groups, group)
+    end
 
-@parity "wasm_builder/lib/src/builder/types.dart:350 TypesBuilder.defineStruct" @unported function define_struct(self::TypesBuilder, name::String; fields = nothing, super_type = nothing, brand::Bool) end
+    _assign_brand_types(b, groups)
 
-@parity "wasm_builder/lib/src/builder/types.dart:368 TypesBuilder.defineArray" @unported function define_array(self::TypesBuilder, name::String; element_type = nothing, super_type = nothing) end
+    groups
+end
 
-@parity "wasm_builder/lib/src/builder/types.dart:382 TypesBuilder._collectUsedTypes" @unported function _collect_used_types(self::TypesBuilder) end
+@parity "wasm_builder/lib/src/builder/types.dart:273 _RecGroupBuilder.addDefinedType" function add_defined_type(b::_RecGroupBuilder, type::IR.DefType)::Nothing
+    push!(b._all_defined_types, type)
+    nothing
+end
 
-@parity "wasm_builder/lib/src/builder/types.dart:392 TypesBuilder.forceBuild" @unported function force_build(self::TypesBuilder) end
+"""
+The rec groups, in type hierarchy order, that hold a type of `directly_used_types` (the types the
+module's code, functions and globals name) or a type one of those reaches.
+"""
+@parity "wasm_builder/lib/src/builder/types.dart:286 _RecGroupBuilder.createGroupsForModule" function create_groups_for_module(b::_RecGroupBuilder, directly_used_types::LinkedHashSet{IR.DefType})::Vector{Vector{IR.DefType}}
+    all_used_types = LinkedHashSet{IR.DefType}()
+    for t in directly_used_types
+        push!(all_used_types, t)
+    end
 
-@parity "wasm_builder/lib/src/builder/types.dart:403 _FunctionTypeKey" @unported function _FunctionTypeKey(inputs, outputs) end
+    function add_used_type(type::IR.DefType)
+        # Visit every child of the type and include it as well.
+        for edge in _RecGroupBuilder__edgesfor_type(type)
+            edge in all_used_types && continue
+            push!(all_used_types, edge)
+            add_used_type(edge)
+        end
+    end
 
-@parity "wasm_builder/lib/src/builder/types.dart:406 _FunctionTypeKey.==" @unported function Base.:(==)(self::_FunctionTypeKey, other::Any) end
+    for type in directly_used_types
+        add_used_type(type)
+    end
 
-@parity "wasm_builder/lib/src/builder/types.dart:420 _FunctionTypeKey.hashCode" @unported function Base.hash(self::_FunctionTypeKey, h::UInt) end
+    used_groups = Vector{IR.DefType}[]
+    for group in b._all_recursive_groups[]
+        if any(t -> t in all_used_types, group)
+            push!(used_groups, group)
+        end
+    end
+    used_groups
+end
 
-@parity "wasm_builder/lib/src/builder/types.dart:438 _RecursionGroupKey" @unported function _RecursionGroupKey(group_length, length_of_first_struct, types) end
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/builder/types.dart:319 TypesBuilder" function TypesBuilder end
 
-@parity "wasm_builder/lib/src/builder/types.dart:441 _RecursionGroupKey.hashCode" @unported function Base.hash(self::_RecursionGroupKey, h::UInt) end
+"""
+Adds a function type to the module, canonicalized: identical types (by the nominal identity of
+their inputs and outputs) are one type definition. Inputs and outputs cannot change after the type
+is created, so recursive function types (with no non-function type on the recursion path) are not
+supported.
+"""
+@parity "wasm_builder/lib/src/builder/types.dart:331 TypesBuilder.defineFunction" function define_function(b::TypesBuilder, inputs::AbstractVector, outputs::AbstractVector; super_type::Union{IR.DefType,Nothing}=nothing)::IR.FunctionType
+    input_list = IR.ValueType[inputs...]
+    output_list = IR.ValueType[outputs...]
+    key = _FunctionTypeKey(input_list, output_list)
+    get!(b._function_type_map, key) do
+        type = IR.FunctionType(input_list, output_list; super_type)
+        add_defined_type(b._rec_group_builder, type)
+        type
+    end
+end
 
-@parity "wasm_builder/lib/src/builder/types.dart:444 _RecursionGroupKey.==" @unported function Base.:(==)(self::_RecursionGroupKey, other::Any) end
+"""Adds a struct type to the module; fields can be added later, so struct types can be recursive."""
+@parity "wasm_builder/lib/src/builder/types.dart:350 TypesBuilder.defineStruct" function define_struct(b::TypesBuilder, name::String; fields::Union{Vector{IR.FieldType},Nothing}=nothing, super_type::Union{IR.DefType,Nothing}=nothing, brand::Bool)::IR.StructType
+    type = IR.StructType(name; fields, super_type)
+    add_defined_type(b._rec_group_builder, type)
+    if brand
+        push!(b._rec_group_builder._branded_structs, type)
+    end
+    type
+end
+
+"""Adds an array type to the module; the element type can be given later, so array types can be recursive."""
+@parity "wasm_builder/lib/src/builder/types.dart:368 TypesBuilder.defineArray" function define_array(b::TypesBuilder, name::String; element_type::Union{IR.FieldType,Nothing}=nothing, super_type::Union{IR.DefType,Nothing}=nothing)::IR.ArrayType
+    type = IR.ArrayType(name; element_type, super_type)
+    add_defined_type(b._rec_group_builder, type)
+    type
+end
+
+@parity "wasm_builder/lib/src/builder/types.dart:382 TypesBuilder._collectUsedTypes" function _collect_used_types(b::TypesBuilder)::LinkedHashSet{IR.DefType}
+    used_types = LinkedHashSet{IR.DefType}()
+    collect_used_types(b._module.tables[], used_types)
+    collect_used_types(b._module.functions[], used_types)
+    collect_used_types(b._module.globals[], used_types)
+    collect_used_types(b._module.tags[], used_types)
+    used_types
+end
+
+@parity "wasm_builder/lib/src/builder/types.dart:392 TypesBuilder.forceBuild" function force_build(b::TypesBuilder)::IR.Types
+    used_types = _collect_used_types(b)
+    types = create_groups_for_module(b._rec_group_builder, used_types)
+    IR.Types(types)
+end
+
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/builder/types.dart:403 _FunctionTypeKey" function _FunctionTypeKey end
+
+@parity "wasm_builder/lib/src/builder/types.dart:406 _FunctionTypeKey.==" function Base.:(==)(a::_FunctionTypeKey, b::_FunctionTypeKey)::Bool
+    a.inputs == b.inputs && a.outputs == b.outputs
+end
+
+@parity "wasm_builder/lib/src/builder/types.dart:420 _FunctionTypeKey.hashCode" Base.hash(k::_FunctionTypeKey, h::UInt)::UInt = hash(k.outputs, hash(k.inputs, h))
+
+# dart's constructor is the struct's one inner constructor, which its definition makes;
+# this line declares it and adds no method
+@parity "wasm_builder/lib/src/builder/types.dart:438 _RecursionGroupKey" function _RecursionGroupKey end
+
+@parity "wasm_builder/lib/src/builder/types.dart:441 _RecursionGroupKey.hashCode" Base.hash(k::_RecursionGroupKey, h::UInt)::UInt = hash(k.length_of_first_struct, hash(k.group_length, h))
+
+@parity "wasm_builder/lib/src/builder/types.dart:444 _RecursionGroupKey.==" function Base.:(==)(a::_RecursionGroupKey, b::_RecursionGroupKey)::Bool
+    a.group_length == b.group_length || return false
+    a.length_of_first_struct == b.length_of_first_struct || return false
+    _RecGroupBuilder__are_groups_structurally_equal(a.types, b.types)
+end

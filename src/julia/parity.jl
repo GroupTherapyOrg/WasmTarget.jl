@@ -1254,15 +1254,18 @@ end
     isfile(path) || return "the pin has no pkg/$(a[1])"
     local lines = get!(() -> readlines(path), _PIN_LINES, path)
     local pkgdir = a[1][1:findfirst('/', a[1])]
-    # a class of the anchor's package, by name: its file's lines and declaration line, or nothing
+    # a class or mixin of the anchor's package, by name (a mixin's fields are its holders'): its
+    # file's lines and declaration line, or nothing
+    local decl_line(ls, name) = something(findfirst(l -> (local d = match(DART_DECL_RX, l); d !== nothing && d[1] == name &&
+                                                         occursin(r"\b(?:class|mixin)\b", l)), ls), 0)
     local find(name) = begin
-        local i = _class_line(lines, name)
+        local i = decl_line(lines, name)
         i == 0 || return (lines, i)
         for d in DART_FILES
             startswith(d, pkgdir) || continue
             local p = joinpath(sdk, "pkg", d)
             local ls = get!(() -> readlines(p), _PIN_LINES, p)
-            local k = _class_line(ls, name)
+            local k = decl_line(ls, name)
             k == 0 || return (ls, k)
         end
         nothing
