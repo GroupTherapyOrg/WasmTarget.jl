@@ -83,26 +83,44 @@ end
 
 """
 Register the program's exported members and queue the strong ones. dart walks its libraries'
-procedures for the export pragmas; a Julia program exports its entry, dart's main: the closed
-world's first body, the MethodInstance Julia's trim inference was asked for, which
-typeinf_ext_toplevel returns first.
+procedures for their export pragmas and exports main; a Julia program exports its entry (dart's main,
+juliac's root: the closed world's first body, the MethodInstance Julia's trim inference was asked
+for) and every member of the closed world whose method `Base.@ccallable` declared (its `ccallable`,
+dart's `wasm:export`).
 """
 @parity "dart2wasm/lib/functions.dart:48 FunctionCollector._collectImportsAndExports" function _collect_imports_and_exports(self::FunctionCollector)::Nothing
-    _handle_exports(self, first(self.translator.component).ci.def)
+    for b in self.translator.component
+        _handle_exports(self, b.ci.def)
+    end
     return nothing
 end
 
-# the entry is a strong export: queued for compilation
+"""
+Register an exported member and queue it: every export of a Julia program is strong. A `@ccallable`
+member's declared signature and return, `svec(rettype, signature)`, must be the specialization
+Julia inferred, its inferred return within the declared one, or Julia's trim verifier refuses the
+program (CCallableMissing, the ccallable with no matching compiled specialization); refused here
+the same way, located.
+"""
 @parity "dart2wasm/lib/functions.dart:57 FunctionCollector._handleExports" function _handle_exports(self::FunctionCollector, member::Core.MethodInstance)::Nothing
+    local method = member.def::Method
+    if isdefined(method, :ccallable)
+        local rettype, sig = method.ccallable[1], method.ccallable[2]
+        local body = first(b for b in self.translator.component if b.ci.def === member)
+        (member.specTypes == sig && body.ci.rettype <: rettype) ||
+            reject!(OutsideSubset("CCallableMissing: the @ccallable $(method.name) declares $sig returning $rettype, but Julia compiled $(member.specTypes) returning $(body.ci.rettype)"), get_function_name(self, member))
+    end
     get_export_name(self, member) === nothing || get_function(self, member)
     return nothing
 end
 
-# the export name of the program's entry, its function's name (dart's wasm:export pragma value); no
-# other member is exported
+# the export name: a `@ccallable` member's, its function's name (dart's wasm:export pragma value); the
+# entry's, its function's name too (dart exports main); no other member is exported
 @parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" function get_export_name(self::FunctionCollector, target::Core.MethodInstance)::Union{String,Nothing}
+    local method = target.def::Method
+    isdefined(method, :ccallable) && return string(method.name)
     target === first(self.translator.component).ci.def || return nothing
-    return string((target.def::Method).name)
+    return string(method.name)
 end
 
 """
@@ -406,12 +424,11 @@ end
 """
 A dynamic call's signature by its shape: the receiver (the top type, nullable for a dispatcher), a
 type argument for each the shape passes (Julia's Type, dart's typeType), and the top type for each
-other argument and for the result, none for a setter or an index set. dart's topTypeNonNullable is
-the top type without its null (translator.dart:281), a field to come of the translator.
+other argument and for the result, none for a setter or an index set.
 """
 @parity "dart2wasm/lib/functions.dart:831 _makeDynamicSignature" function _make_dynamic_signature(translator::Translator, shape::CallShape, nullable_receiver::Bool)::WasmBuilder.IR.FunctionType
     local top = translator.top_type[]
-    local receiver = nullable_receiver ? top : WasmBuilder.with_nullability(top, false)
+    local receiver = nullable_receiver ? top : translator.top_type_non_nullable[]
     return @exhaustive shape::CallShape begin
         GetterCallShape => WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[receiver], WasmBuilder.IR.ValueType[top])
         SetterCallShape => WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[receiver, top], WasmBuilder.IR.ValueType[])

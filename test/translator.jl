@@ -267,6 +267,37 @@ f(x::Int32) = x + Int32(1)
 nothing_or(n::Int) = n > 0 ? n : nothing
 end
 
+# dart's wasm:export is Julia's @ccallable: a declared member of the closed world is exported beside
+# the entry
+module CCallableCases
+Base.@ccallable function twice(x::Int32)::Int32
+    @noinline
+    return x * Int32(2)
+end
+entry(x::Int32) = twice(x) + Int32(1)
+end
+
+@testset "functions.dart: the exports, the entry and every @ccallable member" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(CCallableCases.entry, (Int32,), "translator"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local fc = t.functions[]
+    local entry = only(b.ci.def for b in t.component if b.ci.def.def.name === :entry)
+    local twice = only(b.ci.def for b in t.component if b.ci.def.def.name === :twice)
+    @test D.get_export_name(fc, entry) == "entry" && D.get_export_name(fc, twice) == "twice"
+    D._collect_imports_and_exports(fc)
+    # both strong exports: each a function now, exported under its name, called from the host
+    for (mi, name) in ((entry, "entry"), (twice, "twice"))
+        local fn = D.get_existing_function(fc, mi)
+        @test fn !== nothing && fn.is_js_called && fn.exported_name[] == name
+    end
+    # the ccallable's declared signature is the specialization Julia compiled, its return within it
+    @test only(methods(CCallableCases.twice)).ccallable[2] == twice.specTypes
+end
+
 @testset "functions.dart: a member's function, its type and its queued code" begin
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
