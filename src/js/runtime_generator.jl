@@ -8,18 +8,131 @@ RuntimeFinalizer's dart fields: `_coreTypes`, `_interopMemberNamer`.
 
 @parity "dart2wasm/lib/js/runtime_generator.dart:20 _performJSInteropTransformations" @unported function _perform_js_interop_transformations(core_types, class_hierarchy, interop_dependent_libraries::Set{Any}) end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:54 RuntimeFinalizer.escape" @unported function RuntimeFinalizer_escape(s::String) end
+"""
+dart's `json.encode(s)` of a string (dart:convert's `_JsonStringifier.writeStringContent`): the
+string quoted, `"` and `\\` escaped, a control character below 32 as `\\b`, `\\t`, `\\n`, `\\f`,
+`\\r` or `\\u00xx`, and a lone surrogate as `\\udxxx`, the hex digits lowercase. dart reads the
+string's UTF-16 code units; a Julia string is read as the same units (a character above U+FFFF two,
+a surrogate code point one), and a byte sequence that is no character rejects, located.
+"""
+@parity "dart2wasm/lib/js/runtime_generator.dart:54 RuntimeFinalizer.escape" function RuntimeFinalizer_escape(s::String)::String
+    local units = UInt16[]
+    for c in s
+        Base.ismalformed(c) && reject!(Internal("dart2wasm/lib/js/runtime_generator.dart:54 RuntimeFinalizer.escape: the string $(repr(s)) holds a malformed character"), "RuntimeFinalizer.escape")
+        local cp = UInt32(c)
+        if cp > 0xffff
+            cp -= 0x10000
+            push!(units, UInt16(0xd800 | (cp >> 10)), UInt16(0xdc00 | (cp & 0x3ff)))
+        else
+            push!(units, UInt16(cp))
+        end
+    end
+    local hex(x::Integer) = Char(x < 10 ? 48 + x : 87 + x)
+    local out = IOBuffer()
+    local slice(a::Int, b::Int) = a < b && write(out, transcode(String, units[a + 1:b]))
+    write(out, '"')
+    local offset = 0
+    local n = length(units)
+    for i in 0:n - 1
+        local char_code = units[i + 1]
+        if char_code > 0x5c   # backslash
+            if char_code >= 0xd800
+                # Possible surrogate. Check if it is unpaired.
+                if ((char_code & 0xfc00) == 0xd800 && !(i + 1 < n && (units[i + 2] & 0xfc00) == 0xdc00)) ||
+                   ((char_code & 0xfc00) == 0xdc00 && !(i - 1 >= 0 && (units[i] & 0xfc00) == 0xd800))
+                    # Lone surrogate.
+                    slice(offset, i)
+                    offset = i + 1
+                    write(out, '\\', 'u', 'd', hex((char_code >> 8) & 0xf), hex((char_code >> 4) & 0xf), hex(char_code & 0xf))
+                end
+            end
+            continue
+        end
+        if char_code < 32
+            slice(offset, i)
+            offset = i + 1
+            write(out, '\\')
+            if char_code == 0x08
+                write(out, 'b')
+            elseif char_code == 0x09
+                write(out, 't')
+            elseif char_code == 0x0a
+                write(out, 'n')
+            elseif char_code == 0x0c
+                write(out, 'f')
+            elseif char_code == 0x0d
+                write(out, 'r')
+            else
+                write(out, 'u', '0', '0', hex((char_code >> 4) & 0xf), hex(char_code & 0xf))
+            end
+        elseif char_code == 0x22 || char_code == 0x5c   # quote, backslash
+            slice(offset, i)
+            offset = i + 1
+            write(out, '\\', Char(char_code))
+        end
+    end
+    slice(offset, n)
+    write(out, '"')
+    return String(take!(out))
+end
 
 @parity "dart2wasm/lib/js/runtime_generator.dart:58 RuntimeFinalizer" @unported function RuntimeFinalizer(_core_types, _interop_member_namer) end
 
 @parity "dart2wasm/lib/js/runtime_generator.dart:60 RuntimeFinalizer.generateJsMethods" @unported function Dart2Wasm.generate_js_methods(self::RuntimeFinalizer, translated_procedures) end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:106 RuntimeFinalizer._generateInternalizedStrings" @unported function Dart2Wasm._generate_internalized_strings(self::RuntimeFinalizer, require_js_builtin::Bool, constant_strings::Vector{String}) end
+@parity "dart2wasm/lib/js/runtime_generator.dart:106 RuntimeFinalizer._generateInternalizedStrings" function Dart2Wasm._generate_internalized_strings(self::RuntimeFinalizer, require_js_builtin::Bool, constant_strings::Vector{String})::String
+    local sb = IOBuffer()
+    local indent = ""
+    if !isempty(constant_strings)
+        println(sb, "s: [")
+        indent = "      "
+        for c in constant_strings
+            println(sb, "$indent  $(RuntimeFinalizer_escape(c)),")
+        end
+        println(sb, "$indent],")
+    end
+    if !require_js_builtin
+        println(sb, "$indent\"\": new Proxy({}, { get(_, prop) { return prop; } }),")
+    end
+    return String(take!(sb))
+end
 
 @parity "dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate" @unported function Dart2Wasm.generate(self::RuntimeFinalizer, main_module_name::String, translated_procedures, constant_strings::Vector{String}, require_js_builtin::Bool, supports_additional_module_loading::Bool) end
 
 @parity "dart2wasm/lib/js/runtime_generator.dart:179 performJSInteropTransformations" @unported function perform_js_interop_transformations(libraries::Vector{Any}, core_types, class_hierarchy) end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:203 _unindentJsCode" @unported function _unindent_js_code(block::String) end
+# Removes indentation common among all lines of [block] (except for first one)
+@parity "dart2wasm/lib/js/runtime_generator.dart:203 _unindentJsCode" function _unindent_js_code(block::String)::Vector{String}
+    # dart's String.trim: Julia's isspace characters and U+2028, U+2029 and U+FEFF, which dart also trims
+    block = String(strip(c -> isspace(c) || c in ('\u2028', '\u2029', '\ufeff'), block))
+    local lines = String[String(l) for l in split(block, '\n')]
+    length(lines) == 1 && return lines
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:231 _countLeadingSpaces" @unported function _count_leading_spaces(line::String) end
+    local min_spaces = -1
+    for i in 2:length(lines)
+        local line = lines[i]
+        local current_spaces = _count_leading_spaces(line)
+        current_spaces == ncodeunits(line) && continue   # empty line
+        if min_spaces == -1 || current_spaces < min_spaces
+            min_spaces = current_spaces
+        end
+    end
+
+    if min_spaces > 0
+        for i in 2:length(lines)
+            local line = lines[i]
+            # the leading spaces are one byte each, so a byte offset past them is dart's code-unit one
+            lines[i] = ncodeunits(line) <= min_spaces ? "" : line[min_spaces + 1:end]
+        end
+    end
+    return lines
+end
+
+@parity "dart2wasm/lib/js/runtime_generator.dart:231 _countLeadingSpaces" function _count_leading_spaces(line::String)::Int
+    local spaces = 0
+    for c in line
+        c == ' ' || break
+        spaces += 1
+    end
+    return spaces
+end
