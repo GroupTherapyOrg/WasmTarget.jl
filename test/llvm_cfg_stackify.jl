@@ -65,7 +65,20 @@ function labeled(n::Int)
     end
     s
 end
-# a loop entered at two blocks: irreducible
+# loops entered at two blocks: irreducible
+function irreducible2(x::Int, y::Int)
+    y > 0 && @goto c
+    x > 0 && @goto b
+    @label a
+    x += 1
+    @label b
+    x -= 2
+    @label c
+    y -= 1
+    x > 5 && @goto a
+    y > 3 && @goto b
+    return x + y
+end
 function irreducible(x::Int)
     x > 0 && @goto b
     @label a
@@ -83,7 +96,7 @@ stmts_of(f, types) = Base.code_typed(f, types; optimize = true)[1][1].code
 function stackified(f, types)
     local stmts = stmts_of(f, types)
     local mf = W.machine_function(stmts, "llvm_cfg_stackify")
-    isempty(W.irreducible_entries(mf)) || error("irreducible")
+    L.run_on_machine_function(L.WebAssemblyFixIrreducibleControlFlow(), mf)
     local li = L.LoopInfoBase()
     L.analyze(li, mf)
     L.sort_blocks(mf, li)
@@ -106,14 +119,45 @@ function open_at(prog, k)
     return stk
 end
 
-# the Julia block (its machine number) whose statements come first from instruction j on, markers
-# skipped; nothing past the end or at a branch
+# the block whose code comes first from instruction j on, markers skipped; nothing past the end or at
+# a branch
 function next_body(prog, j)
     while j <= length(prog)
         local mi = prog[j][2]
-        mi.opcode == W.STMTS && return prog[j][1]
+        mi.opcode in (W.STMTS, W.CONST_I32, W.BR_TABLE) && return prog[j][1]
         mi.opcode in (W.BLOCK, W.LOOP, W.END_BLOCK, W.END_LOOP) || return nothing
         j += 1
+    end
+    return nothing
+end
+
+# the Julia block control reaches from block b on, FixIrreducibleControlFlow's blocks run by their
+# label registers: a routing block's CONST_I32 sets its register and its BR or fallthrough goes on,
+# a dispatch's BR_TABLE jumps to the register's target; nothing for a register read unset
+function run_to_julia(prog, pass, b, regs = Dict{Int,Int}(), steps = 64)
+    while steps > 0
+        b === nothing && return nothing
+        local ks = [k for k in eachindex(prog) if prog[k][1] == b]
+        local first_ = prog[ks[findfirst(k -> prog[k][2].opcode in (W.STMTS, W.CONST_I32, W.BR_TABLE), ks)]][2]
+        first_.opcode == W.STMTS && return b
+        local next = nothing
+        for k in ks
+            local mi = prog[k][2]
+            if mi.opcode == W.CONST_I32
+                regs[(mi.operands[1]::W.MOImm).imm] = (mi.operands[2]::W.MOImm).imm
+            elseif mi.opcode == W.BR
+                next = branch_land(prog, pass, k, (mi.operands[1]::W.MOImm).imm)
+                break
+            elseif mi.opcode == W.BR_TABLE
+                local r = get(regs, (mi.operands[1]::W.MOImm).imm, nothing)
+                r === nothing && return nothing
+                next = branch_land(prog, pass, k, (mi.operands[2 + r]::W.MOImm).imm)
+                break
+            end
+        end
+        # no branch: on to the next block in the layout (a BR to it CFGSort made a fallthrough)
+        b = next === nothing ? next_body(prog, maximum(ks) + 1) : next
+        steps -= 1
     end
     return nothing
 end
@@ -147,7 +191,7 @@ function check_stackify(f, types)
     end
     @test nested && isempty(stk)
     # the entry: Julia's first block's statements come first
-    @test next_body(prog, 1) == 2
+    @test run_to_julia(prog, pass, next_body(prog, 1)) == 2
     # every outcome of every Julia terminator: Julia's block k is machine block k + 1
     local jcfg = Core.Compiler.compute_basic_blocks(stmts)
     for b in mf.layout
@@ -168,15 +212,16 @@ function check_stackify(f, types)
                 local d = (mi.operands[1]::W.MOImm).imm
                 local taken = mi.opcode == W.BR || (mi.opcode == W.BR_IF && o == :true) || (mi.opcode == W.BR_UNLESS && o == :false)
                 if taken
-                    # BranchTargetsEnclosingLabel and DepthCorrect
+                    # BranchTargetsEnclosingLabel and DepthCorrect: the label names the branch's
+                    # target, the routing block FixIrreducibleControlFlow put on the way, if any
                     local open = open_at(prog, k)
-                    @test d < length(open) && label_block(pass, open[end - d]) == want
-                    land = branch_land(prog, pass, k, d)
+                    @test d < length(open) && run_to_julia(prog, pass, label_block(pass, open[end - d])) == want
+                    land = run_to_julia(prog, pass, branch_land(prog, pass, k, d))
                     done = true
                     break
                 end
             end
-            done || (land = next_body(prog, lastk + 1))
+            done || (land = run_to_julia(prog, pass, next_body(prog, lastk + 1)))
             @test land == want
         end
     end
@@ -187,15 +232,20 @@ end
     for (f, types) in [(StackifyCases.straight, (Int,)), (StackifyCases.branch, (Int,)), (StackifyCases.whileloop, (Int,)),
                        (StackifyCases.nested, (Int,)), (StackifyCases.breaks, (Int,)), (StackifyCases.forever, ()),
                        (StackifyCases.gotos, (Int,)), (StackifyCases.early, (Int, Int)), (StackifyCases.diamonds, (Int, Int)),
-                       (StackifyCases.labeled, (Int,))]
+                       (StackifyCases.labeled, (Int,)), (StackifyCases.irreducible, (Int,)), (StackifyCases.irreducible2, (Int, Int))]
         @testset "$f" begin check_stackify(f, types) end
     end
 end
 
-@testset "addPreEmitPass's order; an irreducible loop rejects until FixIrreducibleControlFlow" begin
+@testset "addPreEmitPass's order; FixIrreducibleControlFlow" begin
     local mf = L.add_pre_emit_pass(stmts_of(StackifyCases.whileloop, (Int,)), "whileloop", true)
     @test count(i -> i.opcode == W.LOOP, (i for b in mf.layout for i in mf.blocks[b].instrs)) == 1
-    local err = try; L.add_pre_emit_pass(stmts_of(StackifyCases.irreducible, (Int,)), "irreducible", true); nothing; catch e; e; end
-    @test err isa W.RejectionError && err.rejection isa W.Unported && occursin("FixIrreducibleControlFlow", err.rejection.anchor)
-    @test isempty(W.irreducible_entries(W.machine_function(stmts_of(StackifyCases.gotos, (Int,)), "gotos")))
+    @test !mf.implicit_defs
+    # an @goto-made loop with two entries gets a dispatch block, a BR_TABLE over its entries
+    local mfi = L.add_pre_emit_pass(stmts_of(StackifyCases.irreducible, (Int,)), "irreducible", true)
+    @test mfi.implicit_defs && mfi.label_registers == 1
+    @test count(i -> i.opcode == W.BR_TABLE, (i for b in mfi.layout for i in mfi.blocks[b].instrs)) == 1
+    # a reducible CFG is left as it was
+    local mfg = W.machine_function(stmts_of(StackifyCases.gotos, (Int,)), "gotos")
+    @test !L.run_on_machine_function(L.WebAssemblyFixIrreducibleControlFlow(), mfg)
 end

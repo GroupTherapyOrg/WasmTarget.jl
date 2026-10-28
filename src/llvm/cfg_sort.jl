@@ -13,7 +13,7 @@ the sort the block numbered next, as every branch the machine code holds is anal
     local any_barrier = false
     local all_analyzable = true
     for term in terminators(mf, mbb)
-        any_barrier |= term.opcode == BR
+        any_barrier |= is_barrier(term)
         all_analyzable &= term.opcode in (BR, BR_IF, BR_UNLESS)
     end
     any_barrier || all_analyzable ||

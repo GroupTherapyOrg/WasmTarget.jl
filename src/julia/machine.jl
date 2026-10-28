@@ -24,10 +24,11 @@
     Opcode
 
 The WebAssembly instructions the stackifier reads and writes (WebAssemblyInstrControl.td: BLOCK,
-LOOP, END_BLOCK, END_LOOP, BR, BR_IF, BR_UNLESS) and STMTS, the place of the block's Julia
+LOOP, END_BLOCK, END_LOOP, BR, BR_IF, BR_UNLESS, BR_TABLE; WebAssemblyInstrInfo.td: CONST_I32, which
+FixIrreducibleControlFlow writes a label register with) and STMTS, the place of the block's Julia
 statements, which LLVM holds as the block's other instructions.
 """
-@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS STMTS
+@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 STMTS
 
 """    BLOCK_TYPE_VOID
 
@@ -65,7 +66,8 @@ of concrete types, its matches checked `@exhaustive` when the package loads.
 An instruction: its Opcode, its operands and `parent`, its block's number (LLVM's getParent).
 BLOCK and LOOP take their block type (MOImm, 0x40 for none); BR a target block; BR_IF and BR_UNLESS
 a target block and the statement index of Julia's GotoIfNot whose condition they test; STMTS the
-first and last index of the block's Julia statements.
+first and last index of the block's Julia statements; BR_TABLE a label register then its target
+blocks, the last the default; CONST_I32 a label register and the value it sets.
 """
 @quarantine "LLVM's MachineInstr: an opcode with operands, its parent block a number in Julia's CFG" Base.Vector mutable struct MachineInstr
     opcode::Opcode
@@ -94,13 +96,17 @@ end
 One body's machine code over Julia's CFG with codegen's top block as block 1 (Julia's block k is
 block k + 1): `domtree`, Julia's dominator tree of it, `stmts`, the statements the CFG was computed
 from, `blocks`, each block's state by its number in the CFG (a block a pass adds, after them), and
-`layout`, the blocks in order.
+`layout`, the blocks in order. `label_registers` counts the i32 registers FixIrreducibleControlFlow
+made (LLVM's virtual registers of its dispatch blocks), numbered from 1; `implicit_defs` says every
+value needs a definition at entry (its addImplicitDefs).
 """
 @quarantine "LLVM's MachineFunction, its CFG and dominator tree Julia's own" Core.Compiler.DomTree mutable struct MachineFunction
     domtree::Core.Compiler.DomTree
     stmts::Vector{Any}
     blocks::Vector{MachineBasicBlock}
     layout::Vector{Int}
+    label_registers::Int
+    implicit_defs::Bool
 end
 
 """
@@ -152,7 +158,7 @@ placeTryTableMarker is ported.
         end
         push!(blocks, MachineBasicBlock(b, unique(Int[p for p in bb.preds if reachable(p)]), unique(bb.succs), instrs, false))
     end
-    return MachineFunction(domtree, stmts, blocks, Int[b for b in 1:n if reachable(b)])
+    return MachineFunction(domtree, stmts, blocks, Int[b for b in 1:n if reachable(b)], 0, false)
 end
 
 """    renumber_blocks!(mf) -> Nothing
@@ -187,7 +193,30 @@ end
 
 Whether an instruction ends its block's straight-line code (LLVM's MachineInstr::isTerminator, the
 isTerminator flag WebAssemblyInstrControl.td sets on BR, BR_IF and BR_UNLESS)."""
-@quarantine "LLVM's MCInstrDesc isTerminator flag, TableGen's, for the branches" Base.in is_terminator(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_IF, BR_UNLESS)
+@quarantine "LLVM's MCInstrDesc isTerminator flag, TableGen's, for the branches" Base.in is_terminator(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_IF, BR_UNLESS, BR_TABLE)
+
+"""    is_barrier(mi) -> Bool
+
+Whether control never falls through an instruction (LLVM's MachineInstr::isBarrier, the isBarrier
+flag WebAssemblyInstrControl.td sets on BR and BR_TABLE)."""
+@quarantine "LLVM's MCInstrDesc isBarrier flag, TableGen's" Base.in is_barrier(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_TABLE)
+
+"""    create_label_register!(mf) -> Int
+
+A new i32 register (LLVM's MachineRegisterInfo::createVirtualRegister of I32RegClass)."""
+@quarantine "LLVM's MachineRegisterInfo::createVirtualRegister, an i32 label register its code generator gives a local" Core.Int function create_label_register!(mf::MachineFunction)::Int
+    mf.label_registers += 1
+    return mf.label_registers
+end
+
+"""    recompute_domtree!(mf) -> Nothing
+
+Julia's dominator tree of the CFG as the passes have changed it (construct_domtree)."""
+@quarantine "Julia's construct_domtree over the machine CFG a pass changed" Core.Compiler.construct_domtree function recompute_domtree!(mf::MachineFunction)::Nothing
+    mf.domtree = Core.Compiler.construct_domtree(Core.Compiler.BasicBlock[
+        Core.Compiler.BasicBlock(Core.Compiler.StmtRange(0, -1), copy(b.preds), copy(b.succs)) for b in mf.blocks])
+    return nothing
+end
 
 """    terminators(mf, b) -> Vector{MachineInstr}
 
@@ -263,34 +292,4 @@ The block numbered `n`, nothing past the last (LLVM's MachineFunction::getBlockN
 @quarantine "LLVM's MachineFunction::getBlockNumbered over the layout's numbers" Base.findfirst function get_block_numbered(mf::MachineFunction, n::Int)::Union{Int,Nothing}
     local i = findfirst(b -> mf.blocks[b].number == n, mf.layout)
     return i === nothing ? nothing : mf.layout[i]
-end
-
-"""    irreducible_entries(mf) -> Set{Int}
-
-The blocks a retreating edge of a depth-first walk enters without dominating its source: each the
-second entry of a loop, an irreducible CFG, which LLVM's FixIrreducibleControlFlow makes reducible
-before CFGSort (a reducible CFG's every retreating edge is a back edge, its target dominating its
-source; Julia's dominator tree answers which)."""
-@quarantine "FixIrreducibleControlFlow's precondition, read from Julia's dominator tree until the pass is ported" Core.Compiler.dominates function irreducible_entries(mf::MachineFunction)::Set{Int}
-    local out = Set{Int}()
-    local on_stack = Set{Int}([mf.layout[1]])
-    local seen = Set{Int}([mf.layout[1]])
-    local stack = Tuple{Int,Int}[(mf.layout[1], 1)]
-    while !isempty(stack)
-        local b, i = stack[end]
-        local succs = mf.blocks[b].succs
-        if i <= length(succs)
-            stack[end] = (b, i + 1)
-            local s = succs[i]
-            if s in on_stack
-                Core.Compiler.dominates(mf.domtree, s, b) || push!(out, s)
-            elseif !(s in seen)
-                push!(seen, s); push!(on_stack, s); push!(stack, (s, 1))
-            end
-        else
-            pop!(stack)
-            delete!(on_stack, b)
-        end
-    end
-    return out
 end

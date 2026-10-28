@@ -76,7 +76,8 @@ import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 import ..reject!, ..Internal, ..Unported
 # LLVM's machine code over Julia's CFG (src/julia/machine.jl)
 import ..MachineFunction, ..MachineBasicBlock, ..MachineInstr, ..MachineOperand, ..MOBlock, ..MOImm, ..Opcode,
-       ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF, ..BR_UNLESS, ..STMTS,
-       ..renumber_blocks!, ..create_machine_basic_block!, ..get_prev_node, ..is_terminator, ..terminators, ..post_order,
-       ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..PriorityQueue, ..pq_push!, ..pq_pop!, ..pq_empty, ..get_block_numbered, ..machine_function, ..irreducible_entries
+       ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF, ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..STMTS,
+       ..renumber_blocks!, ..create_machine_basic_block!, ..get_prev_node, ..is_terminator, ..is_barrier, ..create_label_register!, ..recompute_domtree!, ..terminators, ..post_order,
+       ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..PriorityQueue, ..pq_push!, ..pq_pop!, ..pq_empty, ..get_block_numbered, ..machine_function,
+       ..LinkedHashMap, ..LinkedHashSet, ..strongly_connected_components
 end

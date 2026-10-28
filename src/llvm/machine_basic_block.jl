@@ -81,6 +81,38 @@ when that block no longer follows it.
     return nothing
 end
 
+"""    add_successor(mf, b, succ) -> Nothing
+
+Adds `succ` to the block's successors and the block to its predecessors (branch probabilities, which
+Julia's IR does not carry, aside)."""
+@parity "llvm/lib/CodeGen/MachineBasicBlock.cpp:825 MachineBasicBlock::addSuccessor" function add_successor(mf::MachineFunction, b::Int, succ::Int)::Nothing
+    push!(mf.blocks[b].succs, succ)
+    push!(mf.blocks[succ].preds, b)
+    return nothing
+end
+
+"""
+    replace_successor(mf, b, old, new) -> Nothing
+
+`new` takes `old`'s place among the block's successors, or, already a successor, `old` is removed;
+the predecessor lists follow.
+"""
+@parity "llvm/lib/CodeGen/MachineBasicBlock.cpp:886 MachineBasicBlock::replaceSuccessor" function replace_successor(mf::MachineFunction, b::Int, old::Int, new::Int)::Nothing
+    old == new && return nothing
+    local succs = mf.blocks[b].succs
+    local old_i = findfirst(==(old), succs)
+    old_i === nothing && reject!(Internal("src/llvm/machine_basic_block.jl replace_successor: block $old is no successor of $b"), "MachineBasicBlock.replaceSuccessor")
+    local pi = findfirst(==(b), mf.blocks[old].preds)
+    pi === nothing || deleteat!(mf.blocks[old].preds, pi)
+    if !(new in succs)
+        push!(mf.blocks[new].preds, b)
+        succs[old_i] = new
+        return nothing
+    end
+    deleteat!(succs, old_i)
+    return nothing
+end
+
 """    is_successor(mf, b, s) -> Bool"""
 @parity "llvm/lib/CodeGen/MachineBasicBlock.cpp:990 MachineBasicBlock::isSuccessor" is_successor(mf::MachineFunction, b::Int, s::Int)::Bool = s in mf.blocks[b].succs
 
