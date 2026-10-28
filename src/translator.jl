@@ -791,7 +791,14 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2043 Translator.typeOfParameterVariable" @unported function type_of_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}, is_required::Bool) end
 
-@parity "dart2wasm/lib/translator.dart:2072 Translator.typeOfCheckedParameterVariable" @unported function type_of_checked_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}) end
+# dart reads TFA's inferred type of the checked parameter, else its declared type; a Julia
+# MethodInstance's specialization is exact, Julia's answer: the parameter's type in it, `index`
+# counting the callee as 1, so a parameter is 2 to n
+@parity "dart2wasm/lib/translator.dart:2072 Translator.typeOfCheckedParameterVariable" function type_of_checked_parameter_variable(self::Translator, member::Core.MethodInstance, index::Int)::Type
+    local params = (Base.unwrap_unionall(member.specTypes)::DataType).parameters
+    2 <= index <= length(params) || reject!(Internal("dart2wasm/lib/translator.dart:2072 Translator.typeOfCheckedParameterVariable: $member has no parameter $index"), "type_of_checked_parameter_variable")
+    return params[index]
+end
 
 # dart reads TFA's inferred return type, else the declared one; a Julia member's is the return type
 # Julia inferred for it, its CodeInstance's rettype in the closed world

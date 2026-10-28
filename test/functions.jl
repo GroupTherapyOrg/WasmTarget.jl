@@ -112,13 +112,35 @@ end
     local e = try; W.record_class_allocation(fc, 7); nothing; catch x; x; end
     @test e isa WT.RejectionError && e.rejection isa WT.Unported && occursin("DynamicForwarderCodeGenerator", e.rejection.anchor)
 
-    # dart's Constructor and Field arms of its member visitor: no Julia member reaches them
-    local gen = W._FunctionTypeGenerator(t, false, false)
-    local internal(f) = try; f(); false; catch x; x isa WT.RejectionError && x.rejection isa WT.Internal; end
-    @test internal(() -> W.visit_constructor(gen, mi, mi))
-    @test internal(() -> W._get_constructor_body_type(gen, mi))
-    @test internal(() -> W._get_constructor_allocator_type(gen, mi))
-    @test internal(() -> W._get_initializer_type(gen, mi, mi))
+    # an Invocation is noSuchMethod's, which Julia lacks: the invocation creator's path rejects
+    local e2 = try; W.get_invocation_creator_stub(fc, shape); nothing; catch x; x; end
+    @test e2 isa WT.RejectionError && e2.rejection isa WT.Unquarantined && occursin("noSuchMethod", e2.rejection.row)
+end
+
+module Callables
+struct Adder
+    k::Int
+end
+@noinline (a::Adder)(x::Int32) = a.k + Int(x)
+use(k::Int, x::Int32) = Adder(k)(x)
+end
+
+@testset "makeFunctionTypeForBody and typeOfCheckedParameterVariable" begin
+    local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
+    local t = W.Translator(WT.check_subset(Callables.use, (Int, Int32), "functions"), data, W.TranslatorOptions())
+    W._init_modules(t, nothing)
+    collect(W.ClassInfoCollector(t))
+    local call = only(b.ci.def for b in t.component if b.ci.def.specTypes <: Tuple{Callables.Adder,Vararg})
+    local use = only(b.ci.def for b in t.component if b.ci.def.def.name === :use)
+    # a parameter's checked type is the specialization's, counting the callee as 1
+    @test W.type_of_checked_parameter_variable(t, call, 2) === Int32
+    @test_throws WT.RejectionError W.type_of_checked_parameter_variable(t, call, 3)
+    # the body's signature: the receiver (the callable's value), then the parameters, then the return
+    local ft = W.make_function_type_for_body(t, call, false, false)
+    @test ft.inputs == [W.translate_type(t, Callables.Adder), W.translate_type(t, Int32)] && ft.outputs == [W.translate_return_type(t, Int)]
+    @test isempty(W.make_function_type_for_body(t, call, true, false).outputs)
+    # a member whose callee is a singleton function has no receiver: dart's assert, located
+    @test_throws WT.RejectionError W.make_function_type_for_body(t, use, false, false)
 end
 
 end # module FunctionsTest
