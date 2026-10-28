@@ -18,14 +18,15 @@ DispatchTable's dart fields: `procedureAttributeMetadata`, `translator`, `_selec
 
 """
 A row of a row-displacement table: its values sparsely, `(index, value)` sorted by index, and the
-offset the table gives it. dart's `V extends Object` is the two kinds of entry a table holds here, a
-dispatch table's target (a member, a Core.MethodInstance) and a dynamic dispatch table's TableEntry.
+offset the table gives it. dart's `V extends Object` is the three kinds of entry a table holds here,
+a dispatch table's target (a member, a Core.MethodInstance), a dynamic dispatch table's TableEntry
+and the runtime type table's (superclass id, substitution index) pair (types.dart _setupRtt).
 """
-@parity "dart2wasm/lib/dispatch_table.dart:1040 Row" struct Row{V<:Union{Core.MethodInstance,TableEntry}}
+@parity "dart2wasm/lib/dispatch_table.dart:1040 Row" struct Row{V<:Union{Core.MethodInstance,TableEntry,Tuple{Int,Int}}}
     values::Vector{NamedTuple{(:index, :value),Tuple{Int,V}}}
     offset::Late{Int}
     # the struct's one constructor, tagged; dart's constructor at :1045 is its outer function
-    Row{V}(::Val{:_}, values::Vector{NamedTuple{(:index, :value),Tuple{Int,V}}}) where {V<:Union{Core.MethodInstance,TableEntry}} =
+    Row{V}(::Val{:_}, values::Vector{NamedTuple{(:index, :value),Tuple{Int,V}}}) where {V<:Union{Core.MethodInstance,TableEntry,Tuple{Int,Int}}} =
         new{V}(values, Late{Int}("dart2wasm/lib/dispatch_table.dart:1058 Row.offset"))
 end
 
@@ -73,7 +74,7 @@ slot, where none of its values lands on a taken slot (and, with `unique_offsets`
 offset); `nothing` is unused space. Each row's offset is set. A slot is a wasm table index, from 0.
 """
 @parity "dart2wasm/lib/dispatch_table.dart:965 buildRowDisplacementTable" function build_row_displacement_table(rows::Vector{Row{V}};
-        first_available::Int = 0, unique_offsets::Bool = false)::Vector{Union{V,Nothing}} where {V<:Union{Core.MethodInstance,TableEntry}}
+        first_available::Int = 0, unique_offsets::Bool = false)::Vector{Union{V,Nothing}} where {V<:Union{Core.MethodInstance,TableEntry,Tuple{Int,Int}}}
     local offsets_taken = Set{Int}()
     local table = Union{V,Nothing}[]
     for row in rows
@@ -119,7 +120,7 @@ end
 
 """The number of entries from `start` that `matches` accepts in a row, the first included."""
 @parity "dart2wasm/lib/dispatch_table.dart:1018 calculateStrideWith" function calculate_stride_with(start::Int64, start_entry::V, table::Vector{Union{V,Nothing}},
-        matches::Function)::Int where {V<:Union{Core.MethodInstance,TableEntry}}
+        matches::Function)::Int where {V<:Union{Core.MethodInstance,TableEntry,Tuple{Int,Int}}}
     local end_ = start + 1
     while end_ < length(table)
         matches(table[end_ + 1])::Bool || break
@@ -132,7 +133,7 @@ end
 @parity "dart2wasm/lib/dispatch_table.dart:1038 strideElementTableLimit" stride_element_table_limit()::Int = 100
 
 # dart asserts the values are not empty and sorted by index: located rejections here
-@parity "dart2wasm/lib/dispatch_table.dart:1045 Row" function Row(values::Vector{NamedTuple{(:index, :value),Tuple{Int,V}}})::Row{V} where {V<:Union{Core.MethodInstance,TableEntry}}
+@parity "dart2wasm/lib/dispatch_table.dart:1045 Row" function Row(values::Vector{NamedTuple{(:index, :value),Tuple{Int,V}}})::Row{V} where {V<:Union{Core.MethodInstance,TableEntry,Tuple{Int,Int}}}
     isempty(values) && reject!(Internal("dart2wasm/lib/dispatch_table.dart:1045 Row: no values"), "Row")
     for k in 2:length(values)
         values[k].index <= values[k-1].index && reject!(Internal("dart2wasm/lib/dispatch_table.dart:1045 Row: values not sorted by index"), "Row")

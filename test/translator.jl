@@ -297,3 +297,30 @@ end
     @test D.get_function_type(t2.functions[], mi2).outputs == [t2.class_info[Int64].nullable_type]
     @test D.InliningDecision(true, "small").should_inline
 end
+
+module GlobalCases
+typed_global::Int32 = Int32(3)
+untyped_global = 4
+end
+
+@testset "translator.dart: the collaborators, the importers and a static field's type" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(FirstCases.f, (Int32,), "translator"), data, D.TranslatorOptions())
+    # the constructor's body builds each ported collaborator over the translator
+    @test t.class_info_collector[].translator === t && t.types[] isa D.Types && t.closure_layouter[] isa D.ClosureLayouter
+    @test t.cross_module_function_table[].translator === t && t.table_based_globals[] isa D.TableBasedGlobals
+    @test t.export_namer.minify == D.minify(t.options) && isempty(t.linking_actions)
+    D._init_modules(t, nothing)
+    local m = D.main_module(t)
+    # one module: an importer answers a definition with itself, exporting nothing
+    local table = t.cross_module_function_table[]
+    local wt = D.get_wasm_table(table, m)
+    @test wt === table._defined_wasm_table[] && wt.enclosing_module === m.module_ && !D.has(table._imported_wasm_tables, wt)
+    @test isempty(D.imports(table._imported_wasm_tables))
+    # a static field is a global binding, its type the binding's declared one
+    @test D.type_of_field(t, GlobalRef(GlobalCases, :typed_global)) === Int32 === Core.get_binding_type(GlobalCases, :typed_global)
+    @test D.translate_type_of_field(t, GlobalRef(GlobalCases, :typed_global)) == IR.NumType_i32
+    @test D.type_of_field(t, GlobalRef(GlobalCases, :untyped_global)) === Any
+end

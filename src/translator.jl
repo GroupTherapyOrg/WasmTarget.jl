@@ -72,10 +72,11 @@ The translation from the program to wasm, and the hub of the compiler's global s
 
 Its fields arrive with the pieces that read them, in dart's order: `options`; `component`, the
 program, the NIR of the closed world Julia's trim verifier accepted (dart's Kernel `Component`);
-`tableBasedGlobals`, `globals`, `dartGlobals`, `constants`, `compilationQueue`, `functions` (each
+`closureLayouter`, `classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`,
+`globals`, `dartGlobals`, `constants`, `types`, `compilationQueue`, `functions` (each
 late, assigned where dart assigns it once its class is ported); `membersBeingGenerated` (a member
 a Core.MethodInstance); `voidMarker`; `_moduleOutputData`, `_outputToBuilder`, `_builderToOutput`,
-`staticParamInfo`; `moduleToBuilder` (one
+`staticParamInfo`; `exportNamer`; `linkingActions`; `moduleToBuilder` (one
 module: deferred loading is out of scope);
 `classes`, `classesSupersFirst`, `classIdNumbering`, `classInfo` (a class is a Julia DataType, keyed
 by identity), `classForHeapType`, `fieldIndex` (a field a ClassField, src/julia/classes.jl),
@@ -84,13 +85,12 @@ the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8
 integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
 every other primitive class have none).
 
-Fields to come (72, each with its translator.dart line): `symbols` :100, `libraries` :104,
+Fields to come (66, each with its translator.dart line): `symbols` :100, `libraries` :104,
 `coreTypes` :106, `typeEnvironment` :107, `hierarchy` :108, `subtypes` :109, `directCallMetadata`
 :115, `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123, `inferredReturnTypeMetadata`
 :127, `unboxingInfoMetadata` :131, `procedureAttributeMetadata` :136, `unreachableMetadata` :140,
-`index` :146, `closureLayouter` :147, `classInfoCollector` :148, `crossModuleFunctionTable` :149,
-`dispatchTable` :151, `dynamicDispatchTable` :152, `types` :156, `_exceptionTags` :157, `loadingMap`
-:161, `exportNamer` :163, `interopMemberNamer` :164, `internalizedStringsForJSRuntime` :189,
+`index` :146, `dispatchTable` :151, `dynamicDispatchTable` :152, `_exceptionTags` :157, `loadingMap`
+:161, `interopMemberNamer` :164, `internalizedStringsForJSRuntime` :189,
 `_internalizedStringGlobals` :190, `typeParameterIndex` :195, `_declaredFieldTables` :197, `_importedFieldTables` :198, `membersContainingInnerFunctions` :202,
 `constructorClosures` :204, `constructorInfo` :205, `_memories` :210, `_ffiMemoryImports` :213,
 `recordClasses` :228, `immutableArrayTypeCache` :231, `mutableArrayTypeCache` :232,
@@ -102,7 +102,7 @@ Fields to come (72, each with its translator.dart line): `symbols` :100, `librar
 `runtimeTypeTypeNullable` :298, `stringType` :302, `stringTypeNullable` :306, `invocationType` :309,
 `_partialInstantiators` :315, `_polymorphicDispatchers` :320, `_dynamicDispatchers` :331,
 `_dummyValueCollectors` :336, `boxedClasses` :374, `boxClasses` :380, `valueClasses` :389,
-`dynamicCallVtableEntryFunctionType` :398, `_memberClosures` :455, `linkingActions` :457, `_importedMemories` :866,
+`dynamicCallVtableEntryFunctionType` :398, `_memberClosures` :455, `_importedMemories` :866,
 `_closureArgumentsDispatchers` :1328, `_needToCheck` :1682.
 
 A collaborator holds its translator as `KernelNodes`, the mixin Translator alone applies (dart's
@@ -112,12 +112,17 @@ the translator holds each collaborator.
 @parity "dart2wasm/lib/translator.dart:96 Translator" struct Translator <: KernelNodes
     options::TranslatorOptions
     component::NirWorld
+    closure_layouter::Late{ClosureLayouter}
+    class_info_collector::Late{ClassInfoCollector}
+    cross_module_function_table::Late{CrossModuleFunctionTable}
     table_based_globals::Late{TableBasedGlobals}
     globals::Late{Globals}
     dart_globals::Late{DartGlobals}
     constants::Late{Constants}
+    types::Late{Types}
     compilation_queue::Late{CompilationQueue}
     functions::Late{FunctionCollector}
+    export_namer::Namer
     classes::Late{Vector{ClassInfo}}
     classes_supers_first::Late{Vector{ClassInfo}}
     class_id_numbering::Late{ClassIdNumbering}
@@ -133,6 +138,7 @@ the translator holds each collaborator.
     _output_to_builder::LinkedHashMap{ModuleMetadata,WasmBuilder.ModuleBuilder}
     _builder_to_output::LinkedHashMap{WasmBuilder.ModuleBuilder,ModuleMetadata}
     module_to_builder::Dict{WasmBuilder.IR.Module,WasmBuilder.ModuleBuilder}
+    linking_actions::Vector{Function}
     # the struct's one constructor, tagged: dart's field initializers and the constructor's
     # initializer list, the component read from the ClosedWorld alone, so no translator is made from
     # NIR bodies a program Julia's trim verifier did not accept; a late field is assigned by the code
@@ -141,12 +147,18 @@ the translator holds each collaborator.
     function Translator(::Val{:_}, world::ClosedWorld, _module_output_data::ModuleOutputData, options::TranslatorOptions)
         local self
         self = new(options, build_nir(world, "dart2wasm/lib/translator.dart:470 Translator"),
+            Late{ClosureLayouter}("dart2wasm/lib/translator.dart:147 Translator.closureLayouter"),
+            Late{ClassInfoCollector}("dart2wasm/lib/translator.dart:148 Translator.classInfoCollector"),
+            Late{CrossModuleFunctionTable}("dart2wasm/lib/translator.dart:149 Translator.crossModuleFunctionTable"),
             Late{TableBasedGlobals}("dart2wasm/lib/translator.dart:150 Translator.tableBasedGlobals"),
             Late{Globals}("dart2wasm/lib/translator.dart:153 Translator.globals"),
             Late{DartGlobals}("dart2wasm/lib/translator.dart:154 Translator.dartGlobals"),
             Late{Constants}("dart2wasm/lib/translator.dart:155 Translator.constants"),
+            Late{Types}("dart2wasm/lib/translator.dart:156 Translator.types"),
             Late{CompilationQueue}("dart2wasm/lib/translator.dart:158 Translator.compilationQueue"),
             Late{FunctionCollector}("dart2wasm/lib/translator.dart:159 Translator.functions"),
+            # the constructor's initializer list
+            Namer(; minify = minify(options)),
             Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:174 Translator.classes"),
             Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:180 Translator.classesSupersFirst"),
             Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"),
@@ -164,7 +176,8 @@ the translator holds each collaborator.
                 Int64 => WasmBuilder.IR.NumType_i64, UInt64 => WasmBuilder.IR.NumType_i64,
                 Float32 => WasmBuilder.IR.NumType_f32, Float64 => WasmBuilder.IR.NumType_f64)),
             _module_output_data, LinkedHashMap{ModuleMetadata,WasmBuilder.ModuleBuilder}(),
-            LinkedHashMap{WasmBuilder.ModuleBuilder,ModuleMetadata}(), Dict{WasmBuilder.IR.Module,WasmBuilder.ModuleBuilder}())
+            LinkedHashMap{WasmBuilder.ModuleBuilder,ModuleMetadata}(), Dict{WasmBuilder.IR.Module,WasmBuilder.ModuleBuilder}(),
+            Function[])
         return self
     end
 end
@@ -250,15 +263,60 @@ DummyValuesCollector's dart fields: `module`, `translator`, `_dummyFunctions`, `
 
 @parity "dart2wasm/lib/translator.dart:3925 _WasmImporter" abstract type _WasmImporter end
 
-@parity "dart2wasm/lib/translator.dart:3967 WasmFunctionImporter" @unported struct WasmFunctionImporter <: _WasmImporter end
+"""Imports a module's function definitions into the modules that use them."""
+@parity "dart2wasm/lib/translator.dart:3967 WasmFunctionImporter" struct WasmFunctionImporter <: _WasmImporter
+    # _WasmImporter's fields
+    _translator::KernelNodes
+    _export_prefix::String
+    _map::LinkedHashMap{WasmBuilder.IR.BaseFunction,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}}
+    # the struct's one constructor, tagged; dart's constructor at :3968 is its outer function
+    WasmFunctionImporter(::Val{:_}, _translator::KernelNodes, _export_prefix::String) =
+        new(_translator, _export_prefix, LinkedHashMap{WasmBuilder.IR.BaseFunction,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}}())
+end
 
-@parity "dart2wasm/lib/translator.dart:3988 WasmGlobalImporter" @unported struct WasmGlobalImporter <: _WasmImporter end
+"""Imports a module's global definitions into the modules that use them."""
+@parity "dart2wasm/lib/translator.dart:3988 WasmGlobalImporter" struct WasmGlobalImporter <: _WasmImporter
+    # _WasmImporter's fields
+    _translator::KernelNodes
+    _export_prefix::String
+    _map::LinkedHashMap{WasmBuilder.IR.Global,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}
+    # the struct's one constructor, tagged; dart's constructor at :3989 is its outer function
+    WasmGlobalImporter(::Val{:_}, _translator::KernelNodes, _export_prefix::String) =
+        new(_translator, _export_prefix, LinkedHashMap{WasmBuilder.IR.Global,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}())
+end
 
-@parity "dart2wasm/lib/translator.dart:4008 WasmMemoryImporter" @unported struct WasmMemoryImporter <: _WasmImporter end
+"""Imports a module's memory definitions into the modules that use them."""
+@parity "dart2wasm/lib/translator.dart:4008 WasmMemoryImporter" struct WasmMemoryImporter <: _WasmImporter
+    # _WasmImporter's fields
+    _translator::KernelNodes
+    _export_prefix::String
+    _map::LinkedHashMap{WasmBuilder.IR.Memory,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Memory}}
+    # the struct's one constructor, tagged; dart's constructor at :4009 is its outer function
+    WasmMemoryImporter(::Val{:_}, _translator::KernelNodes, _export_prefix::String) =
+        new(_translator, _export_prefix, LinkedHashMap{WasmBuilder.IR.Memory,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Memory}}())
+end
 
-@parity "dart2wasm/lib/translator.dart:4028 WasmTableImporter" @unported struct WasmTableImporter <: _WasmImporter end
+"""Imports a module's table definitions into the modules that use them."""
+@parity "dart2wasm/lib/translator.dart:4028 WasmTableImporter" struct WasmTableImporter <: _WasmImporter
+    # _WasmImporter's fields
+    _translator::KernelNodes
+    _export_prefix::String
+    _map::LinkedHashMap{WasmBuilder.IR.AbstractTable,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.AbstractTable}}
+    # the struct's one constructor, tagged; dart's constructor at :4029 is its outer function
+    WasmTableImporter(::Val{:_}, _translator::KernelNodes, _export_prefix::String) =
+        new(_translator, _export_prefix, LinkedHashMap{WasmBuilder.IR.AbstractTable,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.AbstractTable}}())
+end
 
-@parity "dart2wasm/lib/translator.dart:4048 WasmTagImporter" @unported struct WasmTagImporter <: _WasmImporter end
+"""Imports a module's tag definitions into the modules that use them."""
+@parity "dart2wasm/lib/translator.dart:4048 WasmTagImporter" struct WasmTagImporter <: _WasmImporter
+    # _WasmImporter's fields
+    _translator::KernelNodes
+    _export_prefix::String
+    _map::LinkedHashMap{WasmBuilder.IR.Tag,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Tag}}
+    # the struct's one constructor, tagged; dart's constructor at :4049 is its outer function
+    WasmTagImporter(::Val{:_}, _translator::KernelNodes, _export_prefix::String) =
+        new(_translator, _export_prefix, LinkedHashMap{WasmBuilder.IR.Tag,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Tag}}())
+end
 
 """
 SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
@@ -322,8 +380,13 @@ end
 @parity "dart2wasm/lib/translator.dart:470 Translator" function Translator(world::ClosedWorld, _module_output_data::ModuleOutputData, options::TranslatorOptions)::Translator
     local self = Translator(Val(:_), world, _module_output_data, options)
     # the constructor's body: each collaborator built over the translator, as its piece is ported
+    self.closure_layouter[] = ClosureLayouter(self)
+    self.class_info_collector[] = ClassInfoCollector(self)
+    self.cross_module_function_table[] = CrossModuleFunctionTable(self)
+    self.table_based_globals[] = TableBasedGlobals(self)
     self.compilation_queue[] = CompilationQueue(self)
     self.functions[] = FunctionCollector(self)
+    self.types[] = Types(self)
     return self
 end
 
@@ -640,15 +703,19 @@ end
 end
 
 # dart narrows a field's declared type by TFA's inferred type; Julia's inference does not narrow a
-# field, so its type is its declared one
-@parity "dart2wasm/lib/translator.dart:2087 Translator.typeOfField" type_of_field(self::Translator, node::ClassField)::Type = node.type
+# field, so its type is its declared one: an instance field's (a ClassField), and a static field's,
+# dart's static Field being a Julia global binding, the binding's declared type
+# (`Core.get_binding_type`, `Any` when untyped)
+@parity "dart2wasm/lib/translator.dart:2087 Translator.typeOfField" type_of_field(self::Translator, node::Union{ClassField,GlobalRef})::Type =
+    node isa ClassField ? node.type : Core.get_binding_type(node.mod, node.name)
 
 # dart reads the parameter's TFA-inferred type, else its declared one; the code generator passes the
 # type Julia inferred for the argument (its MethodInstance's signature)
 @parity "dart2wasm/lib/translator.dart:2092 Translator.translateTypeOfParameter" translate_type_of_parameter(self::Translator, type_::Type, is_required::Bool)::WasmBuilder.IR.ValueType =
     translate_type(self, type_)
 
-@parity "dart2wasm/lib/translator.dart:2096 Translator.translateTypeOfField" translate_type_of_field(self::Translator, node::ClassField)::WasmBuilder.IR.ValueType = translate_type(self, type_of_field(self, node))
+@parity "dart2wasm/lib/translator.dart:2096 Translator.translateTypeOfField" translate_type_of_field(self::Translator, node::Union{ClassField,GlobalRef})::WasmBuilder.IR.ValueType = translate_type(self, type_of_field(self, node))
+
 
 # the type Julia inferred for the local (the code generator passes it); a cyclic class's locals are
 # never assigned, so they take the top type, whose dummy initialization is a ref.null
@@ -860,31 +927,67 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3932 _WasmImporter.import" @unported function var"import"(self::_WasmImporter, importing_module::WasmBuilder.ModuleBuilder, definition, module_name::String, import_name::String) end
 
-@parity "dart2wasm/lib/translator.dart:3939 _WasmImporter.imports" @unported function imports(self::_WasmImporter) end
+@parity "dart2wasm/lib/translator.dart:3939 _WasmImporter.imports" imports(self::_WasmImporter)::Vector =
+    [v for inner in values(self._map) for v in values(inner)]
 
-@parity "dart2wasm/lib/translator.dart:3941 _WasmImporter.get" @unported function Base.get(self::_WasmImporter, key, module_::WasmBuilder.ModuleBuilder) end
+"""
+`key` as `module_` reaches it: itself in its own module; else exported once from its module, under a
+name the export namer makes from the prefix, and imported once into `module_`.
+"""
+@parity "dart2wasm/lib/translator.dart:3941 _WasmImporter.get" function Base.get(self::_WasmImporter, key::Union{WasmBuilder.IR.BaseFunction,WasmBuilder.IR.Global,WasmBuilder.IR.Memory,WasmBuilder.IR.AbstractTable,WasmBuilder.IR.Tag},
+        module_::WasmBuilder.ModuleBuilder)
+    local translator = self._translator
+    local key_module_builder = translator.module_to_builder[key.enclosing_module]
+    key_module_builder === module_ && return key
+    local inner_map = get(self._map, key, nothing)
+    if inner_map === nothing
+        local name = get_name(translator.export_namer, "$(self._export_prefix)$(length(self._map))")
+        WasmBuilder.var"export"(key_module_builder.exports, name, key)
+        inner_map = self._map[key] = valtype(self._map)()
+    end
+    local imported = get(inner_map, module_, nothing)
+    imported === nothing || return imported
+    return inner_map[module_] = var"import"(self, module_, key, name_for_module(translator, key_module_builder), key.exported_name[])
+end
 
-@parity "dart2wasm/lib/translator.dart:3962 _WasmImporter.has" @unported function has(self::_WasmImporter, key) end
+@parity "dart2wasm/lib/translator.dart:3962 _WasmImporter.has" has(self::_WasmImporter, key::Union{WasmBuilder.IR.BaseFunction,WasmBuilder.IR.Global,WasmBuilder.IR.Memory,WasmBuilder.IR.AbstractTable,WasmBuilder.IR.Tag})::Bool =
+    haskey(self._map, key)
 
-@parity "dart2wasm/lib/translator.dart:3968 WasmFunctionImporter" @unported function WasmFunctionImporter(_translator, _export_prefix) end
+@parity "dart2wasm/lib/translator.dart:3968 WasmFunctionImporter" WasmFunctionImporter(_translator::KernelNodes, _export_prefix::String)::WasmFunctionImporter = WasmFunctionImporter(Val(:_), _translator, _export_prefix)
 
-@parity "dart2wasm/lib/translator.dart:3971 WasmFunctionImporter.import" @unported function var"import"(self::WasmFunctionImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.BaseFunction, module_name::String, import_name::String) end
+@parity "dart2wasm/lib/translator.dart:3971 WasmFunctionImporter.import" function var"import"(self::WasmFunctionImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.BaseFunction,
+        module_name::String, import_name::String)::WasmBuilder.IR.BaseFunction
+    local function_ = WasmBuilder.var"import"(importing_module.functions[], module_name, import_name, definition.type, definition.function_name)
+    function_.function_name = definition.function_name
+    return function_
+end
 
-@parity "dart2wasm/lib/translator.dart:3989 WasmGlobalImporter" @unported function WasmGlobalImporter(_translator, _export_prefix) end
+@parity "dart2wasm/lib/translator.dart:3989 WasmGlobalImporter" WasmGlobalImporter(_translator::KernelNodes, _export_prefix::String)::WasmGlobalImporter = WasmGlobalImporter(Val(:_), _translator, _export_prefix)
 
-@parity "dart2wasm/lib/translator.dart:3992 WasmGlobalImporter.import" @unported function var"import"(self::WasmGlobalImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.Global, module_name::String, import_name::String) end
+@parity "dart2wasm/lib/translator.dart:3992 WasmGlobalImporter.import" function var"import"(self::WasmGlobalImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.Global,
+        module_name::String, import_name::String)::WasmBuilder.IR.Global
+    local global_ = WasmBuilder.var"import"(importing_module.globals[], module_name, import_name, definition.type)
+    global_.global_name = definition.global_name
+    return global_
+end
 
-@parity "dart2wasm/lib/translator.dart:4009 WasmMemoryImporter" @unported function WasmMemoryImporter(_translator, _export_prefix) end
+@parity "dart2wasm/lib/translator.dart:4009 WasmMemoryImporter" WasmMemoryImporter(_translator::KernelNodes, _export_prefix::String)::WasmMemoryImporter = WasmMemoryImporter(Val(:_), _translator, _export_prefix)
 
-@parity "dart2wasm/lib/translator.dart:4012 WasmMemoryImporter.import" @unported function var"import"(self::WasmMemoryImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.Memory, module_name::String, import_name::String) end
+@parity "dart2wasm/lib/translator.dart:4012 WasmMemoryImporter.import" var"import"(self::WasmMemoryImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.Memory,
+        module_name::String, import_name::String)::WasmBuilder.IR.Memory =
+    WasmBuilder.var"import"(importing_module.memories[], module_name, import_name, definition.shared, definition.min_size, definition.max_size)
 
-@parity "dart2wasm/lib/translator.dart:4029 WasmTableImporter" @unported function WasmTableImporter(_translator, _export_prefix) end
+@parity "dart2wasm/lib/translator.dart:4029 WasmTableImporter" WasmTableImporter(_translator::KernelNodes, _export_prefix::String)::WasmTableImporter = WasmTableImporter(Val(:_), _translator, _export_prefix)
 
-@parity "dart2wasm/lib/translator.dart:4032 WasmTableImporter.import" @unported function var"import"(self::WasmTableImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.AbstractTable, module_name::String, import_name::String) end
+@parity "dart2wasm/lib/translator.dart:4032 WasmTableImporter.import" var"import"(self::WasmTableImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.AbstractTable,
+        module_name::String, import_name::String)::WasmBuilder.IR.AbstractTable =
+    WasmBuilder.var"import"(importing_module.tables[], module_name, import_name, definition.type, definition.min_size, definition.max_size)
 
-@parity "dart2wasm/lib/translator.dart:4049 WasmTagImporter" @unported function WasmTagImporter(_translator, _export_prefix) end
+@parity "dart2wasm/lib/translator.dart:4049 WasmTagImporter" WasmTagImporter(_translator::KernelNodes, _export_prefix::String)::WasmTagImporter = WasmTagImporter(Val(:_), _translator, _export_prefix)
 
-@parity "dart2wasm/lib/translator.dart:4052 WasmTagImporter.import" @unported function var"import"(self::WasmTagImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.Tag, module_name::String, import_name::String) end
+@parity "dart2wasm/lib/translator.dart:4052 WasmTagImporter.import" var"import"(self::WasmTagImporter, importing_module::WasmBuilder.ModuleBuilder, definition::WasmBuilder.IR.Tag,
+        module_name::String, import_name::String)::WasmBuilder.IR.Tag =
+    WasmBuilder.var"import"(importing_module.tags[], module_name, import_name, definition.type)
 
 @parity "dart2wasm/lib/translator.dart:4069 SingleClosureTarget._" @unported function SingleClosureTarget__(call_target, param_info) end
 

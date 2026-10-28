@@ -2,16 +2,55 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-CrossModuleFunctionTable's dart fields: `translator`, `_table`, `_definedWasmTable`, `_importedWasmTables`.
+A table of functions called across modules. Deferred loading is out of scope, so a compile has one
+module and no call crosses into another: the table stays empty (output defines it, size 0, as dart's
+does).
 """
-@parity "dart2wasm/lib/static_dispatch_table.dart:10 CrossModuleFunctionTable" @unported struct CrossModuleFunctionTable end
+@parity "dart2wasm/lib/static_dispatch_table.dart:10 CrossModuleFunctionTable" struct CrossModuleFunctionTable
+    translator::KernelNodes
+    _table::LinkedHashMap{WasmBuilder.IR.BaseFunction,Int}
+    _defined_wasm_table::Late{WasmBuilder.TableBuilder}
+    _imported_wasm_tables::WasmTableImporter
+    # the struct's one constructor, tagged, with dart's initializers (the late table defined in the
+    # main module on its first read); dart's constructor at :22 is its outer function
+    function CrossModuleFunctionTable(::Val{:_}, translator::KernelNodes)
+        local self
+        self = new(translator, LinkedHashMap{WasmBuilder.IR.BaseFunction,Int}(),
+            Late{WasmBuilder.TableBuilder}("dart2wasm/lib/static_dispatch_table.dart:18 CrossModuleFunctionTable._definedWasmTable",
+                () -> WasmBuilder.define(main_module(self.translator).tables[],
+                                         WasmBuilder.IR.RefType(CrossModuleFunctionTable__table_heap_type(); nullable = true), length(self._table))),
+            WasmTableImporter(translator, "cross-module-funcs-"))
+        return self
+    end
+end
 
-@parity "dart2wasm/lib/static_dispatch_table.dart:11 CrossModuleFunctionTable._tableHeapType" @unported function CrossModuleFunctionTable__table_heap_type() end
+@parity "dart2wasm/lib/static_dispatch_table.dart:11 CrossModuleFunctionTable._tableHeapType" CrossModuleFunctionTable__table_heap_type()::WasmBuilder.IR.HeapType = WasmBuilder.IR.HeapType_func
 
-@parity "dart2wasm/lib/static_dispatch_table.dart:22 CrossModuleFunctionTable" @unported function CrossModuleFunctionTable(translator) end
+@parity "dart2wasm/lib/static_dispatch_table.dart:22 CrossModuleFunctionTable" CrossModuleFunctionTable(translator::KernelNodes)::CrossModuleFunctionTable = CrossModuleFunctionTable(Val(:_), translator)
 
-@parity "dart2wasm/lib/static_dispatch_table.dart:32 CrossModuleFunctionTable.getWasmTable" @unported function get_wasm_table(self::CrossModuleFunctionTable, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/static_dispatch_table.dart:32 CrossModuleFunctionTable.getWasmTable" get_wasm_table(self::CrossModuleFunctionTable, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.AbstractTable =
+    get(self._imported_wasm_tables, self._defined_wasm_table[], module_)
 
-@parity "dart2wasm/lib/static_dispatch_table.dart:37 CrossModuleFunctionTable.indexForFunction" @unported function index_for_function(self::CrossModuleFunctionTable, function_::WasmBuilder.IR.BaseFunction) end
+@parity "dart2wasm/lib/static_dispatch_table.dart:37 CrossModuleFunctionTable.indexForFunction" function index_for_function(self::CrossModuleFunctionTable, function_::WasmBuilder.IR.BaseFunction)::Int
+    WasmBuilder.is_structural_subtype_of(function_.type, CrossModuleFunctionTable__table_heap_type()) ||
+        reject!(Internal("dart2wasm/lib/static_dispatch_table.dart:37 CrossModuleFunctionTable.indexForFunction: $(function_.type) is no function type"), "CrossModuleFunctionTable.indexForFunction")
+    return get!(self._table, function_, length(self._table))
+end
 
-@parity "dart2wasm/lib/static_dispatch_table.dart:42 CrossModuleFunctionTable.output" @unported function output(self::CrossModuleFunctionTable) end
+@parity "dart2wasm/lib/static_dispatch_table.dart:42 CrossModuleFunctionTable.output" function output(self::CrossModuleFunctionTable)::Nothing
+    local translator = self.translator
+    for (fun, index) in self._table
+        local target_module = translator.module_to_builder[fun.enclosing_module]
+        if is_main_module(translator, target_module)
+            local defined = self._defined_wasm_table[]
+            WasmBuilder.set_function_at(WasmBuilder.active_function_segment_builder_for(defined.module_builder.elements[], defined), index, fun)
+        else
+            reject!(Internal("dart2wasm/lib/static_dispatch_table.dart:42 CrossModuleFunctionTable.output: a function of another module, which one module never has"), "CrossModuleFunctionTable.output")
+        end
+    end
+    self._defined_wasm_table[].min_size = length(self._table)
+    for table in imports(self._imported_wasm_tables)
+        table.min_size = length(self._table)
+    end
+    return nothing
+end
