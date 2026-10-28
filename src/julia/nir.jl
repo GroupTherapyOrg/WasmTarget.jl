@@ -221,12 +221,15 @@ end
     NirBody
 
 One function of the closed world in NIR: `ci`, the CodeInstance Julia inferred; `stmts`, its statements
-in Julia's order; `types`, the type Julia inferred for each statement.
+in Julia's order; `types`, the type Julia inferred for each statement; `code`, the optimized
+CodeInfo's statements themselves, which Julia's compute_basic_blocks and the stackifier read
+(src/julia/machine.jl).
 """
 @quarantine "a function of the closed world is a CodeInstance and its optimized CodeInfo, Julia's own" Core.CodeInstance struct NirBody
     ci::Core.CodeInstance
     stmts::Vector{NirStmt}
     types::Vector{Type}
+    code::Vector{Any}
 end
 
 # ---- building --------------------------------------------------------------------------------------
@@ -382,7 +385,7 @@ census rejects with `Unquarantined`, located at the compile `at` names.
         local ci = xs[k]; local src = xs[k + 1]
         ci isa Core.CodeInstance && src isa Core.CodeInfo ||
             reject!(Internal("src/julia/nir.jl: the closed world's entry $k is a $(typeof(ci)) and $(typeof(src)), not a CodeInstance and its CodeInfo"), at)
-        push!(bodies, NirBody(ci, NirStmt[_nir_stmt(st, at) for st in src.code], _nir_types(ci, src, at)))
+        push!(bodies, NirBody(ci, NirStmt[_nir_stmt(st, at) for st in src.code], _nir_types(ci, src, at), src.code))
     end
     any(b -> b.ci.def === world.entry, bodies) ||
         reject!(Internal("src/julia/nir.jl: the closed world's entry $(world.entry) has no body"), at)
@@ -501,22 +504,3 @@ run time rejects, located.
     reject!(Unquarantined("src/julia/nir.jl: a call whose callee $(f) is computed at run time"), "nir_callee")
 end
 
-"""
-    nir_control_statements(body) -> Vector{Any}
-
-`body`'s statements as the control forms Julia's compute_basic_blocks reads (a GotoNode, a
-GotoIfNot, a ReturnNode, an EnterNode, each with Julia's own targets), every other statement
-`nothing`: the input of the machine function (src/julia/machine.jl), whose blocks are those Julia's
-compute_basic_blocks makes of the body.
-"""
-@quarantine "Julia's compute_basic_blocks reads a body's jumps, returns and try regions from its statements" Core.GotoNode function nir_control_statements(body::NirBody)::Vector{Any}
-    local code = Any[nothing for _ in body.stmts]
-    for (k, st) in enumerate(body.stmts)
-        st isa NirGoto && (code[k] = Core.GotoNode(st.label))
-        st isa NirGotoIfNot && (code[k] = Core.GotoIfNot(true, st.dest))
-        st isa NirReturn && (code[k] = Core.ReturnNode(nothing))
-        st isa NirUnreachable && (code[k] = Core.ReturnNode())
-        st isa NirEnter && (code[k] = Core.EnterNode(st.catch_dest))
-    end
-    return code
-end

@@ -4,6 +4,17 @@
 # and JS for `util.dart as util` and `js/runtime_generator.dart as js`. A name dart spells `p.X` is
 # `P.X` where P is bound: each module binds the macros, its package and the package modules it uses.
 
+@quarantine "Julia has no per-file namespace; LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), is a module" Core.Module module LLVM
+import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
+import ..reject!, ..Internal, ..Unported
+# LLVM's machine code over Julia's CFG (src/julia/machine.jl)
+import ..MachineFunction, ..MachineBasicBlock, ..MachineInstr, ..MachineOperand, ..MOBlock, ..MOImm, ..Opcode,
+       ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF, ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS,
+       ..renumber_blocks!, ..create_machine_basic_block!, ..get_prev_node, ..is_terminator, ..is_barrier, ..create_label_register!, ..recompute_domtree!, ..terminators, ..post_order,
+       ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..PriorityQueue, ..pq_push!, ..pq_pop!, ..pq_empty, ..get_block_numbered, ..machine_function,
+       ..LinkedHashMap, ..LinkedHashSet, ..strongly_connected_components
+end
+
 @quarantine "Julia has no per-file namespace; dart's wasm_builder package is a module" Core.Module module WasmBuilder
 import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 # dart's export directives (src/julia/exports.jl)
@@ -21,17 +32,6 @@ import ...@parity, ...@unported, ...@closed, ...@exhaustive, ...@dart_export
 import ...reject!, ...Internal, ...Unported, ...InvalidModule, ...Late, ...LinkedHashMap, ...LinkedHashSet, ...AbstractModule
 import ..WasmBuilder
 end
-end
-
-@quarantine "Julia has no per-file namespace; LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), is a module" Core.Module module LLVM
-import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
-import ..reject!, ..Internal, ..Unported
-# LLVM's machine code over Julia's CFG (src/julia/machine.jl)
-import ..MachineFunction, ..MachineBasicBlock, ..MachineInstr, ..MachineOperand, ..MOBlock, ..MOImm, ..Opcode,
-       ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF, ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..STMTS,
-       ..renumber_blocks!, ..create_machine_basic_block!, ..get_prev_node, ..is_terminator, ..is_barrier, ..create_label_register!, ..recompute_domtree!, ..terminators, ..post_order,
-       ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..PriorityQueue, ..pq_push!, ..pq_pop!, ..pq_empty, ..get_block_numbered, ..machine_function,
-       ..LinkedHashMap, ..LinkedHashSet, ..strongly_connected_components
 end
 
 @quarantine "Julia has no per-file namespace; dart's dart2wasm package is a module" Core.Module module Dart2Wasm
@@ -60,9 +60,9 @@ import ..WasmArrayLiteral, ..WasmArray, ..ImmutableWasmArray
 # the backend's passes that structure it (src/llvm/target_machine.jl)
 import ..LLVM
 import ..MachineFunction, ..MachineInstr, ..MOBlock, ..MOImm, ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF,
-       ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..STMTS, ..BLOCK_TYPE_RESULTS, ..is_barrier
+       ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..BLOCK_TYPE_RESULTS, ..is_barrier
 # what the code generator reads from a body (src/julia/nir.jl)
-import ..TreeNode_no_offset, ..nir_control_statements, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
+import ..TreeNode_no_offset, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
        ..nir_invoke_target, ..nir_callee
 import ..WasmBuilder
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util

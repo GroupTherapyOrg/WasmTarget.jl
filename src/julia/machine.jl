@@ -25,10 +25,11 @@
 
 The WebAssembly instructions the stackifier reads and writes (WebAssemblyInstrControl.td: BLOCK,
 LOOP, END_BLOCK, END_LOOP, BR, BR_IF, BR_UNLESS, BR_TABLE; WebAssemblyInstrInfo.td: CONST_I32, which
-FixIrreducibleControlFlow writes a label register with) and STMTS, the place of the block's Julia
+FixIrreducibleControlFlow writes a label register with; TargetOpcode's COPY, which PHIElimination
+writes a PHI's incoming value with) and STMTS, the place of the block's Julia
 statements, which LLVM holds as the block's other instructions.
 """
-@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 STMTS
+@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 COPY STMTS
 
 """    BLOCK_TYPE_VOID
 
@@ -67,7 +68,8 @@ An instruction: its Opcode, its operands and `parent`, its block's number (LLVM'
 BLOCK and LOOP take their block type (MOImm, 0x40 for none); BR a target block; BR_IF and BR_UNLESS
 a target block and the statement index of Julia's GotoIfNot whose condition they test; STMTS the
 first and last index of the block's Julia statements; BR_TABLE a label register then its target
-blocks, the last the default; CONST_I32 a label register and the value it sets.
+blocks, the last the default; CONST_I32 a label register and the value it sets; COPY the statement
+index of a PhiNode and the index of its edge whose value goes into the PHI's incoming register.
 """
 @quarantine "LLVM's MachineInstr: an opcode with operands, its parent block a number in Julia's CFG" Base.Vector mutable struct MachineInstr
     opcode::Opcode

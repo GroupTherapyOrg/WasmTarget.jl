@@ -139,13 +139,16 @@ end
             @test r2 isa W.RejectionError && !occursin("voidMarker", string(r2.rejection))
         elseif st isa Union{W.NirForeignCall, W.NirCFunction}
             @test r.rejection isa W.Unquarantined && occursin("1.F", r.rejection.row)
+        elseif st isa Union{W.NirGoto, W.NirGotoIfNot, W.NirPhi}
+            # a jump and a merge are the stackifier's (visit_block), never a statement of their own
+            @test r.rejection isa W.Internal && occursin("visit_block", r.rejection.site)
         else
             # every Julia-only form rejects in its own arm, naming the stackifier's row
             @test r.rejection isa W.Unquarantined && occursin("1.D", r.rejection.row)
         end
     end
     # forms no program above holds, built directly
-    @test rejection(() -> D.translate_statement(gens[1], W.NirGoto(1), nothing)).rejection isa W.Unquarantined
+    @test rejection(() -> D.translate_statement(gens[1], W.NirGoto(1), nothing)).rejection isa W.Internal
     # Julia's unreachable is a trap, emitted into the builder `generate` gives
     @test occursin("AstCodeGenerator.b", rejection(() -> D.translate_statement(gens[1], W.NirUnreachable(), nothing)).rejection.anchor)
 end

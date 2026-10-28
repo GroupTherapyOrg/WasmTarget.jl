@@ -471,11 +471,11 @@ source-map offset is set from the node; the NIR's line table takes that place wi
         (s::NirLoopInfo) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's loop hints"), at)
         (s::NirThrowUndefIfNot) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's undefined-variable check"), at)
         (s::NirInvokeModify) => reject!(Unquarantined("dev/MARCH.md 1.D: an atomic field modify"), at)
-        (s::NirGoto) => reject!(Unquarantined("dev/MARCH.md 1.D: a jump of the flat IR, structured by the stackifier"), at)
-        (s::NirGotoIfNot) => reject!(Unquarantined("dev/MARCH.md 1.D: a conditional jump of the flat IR, structured by the stackifier"), at)
+        (s::NirGoto) => reject!(Internal("$at: a jump of the flat IR, which the stackifier's BR carries (visit_block), as a statement"), at)
+        (s::NirGotoIfNot) => reject!(Internal("$at: a conditional jump of the flat IR, which the stackifier's BR_IF or BR_UNLESS carries (visit_block), as a statement"), at)
         # Julia's codegen emits a trap where Julia proved the code unreachable
         (s::NirUnreachable) => WasmBuilder.unreachable(self.b[])
-        (s::NirPhi) => reject!(Unquarantined("dev/MARCH.md 1.D: an SSA merge, a local the stackifier assigns on each edge"), at)
+        (s::NirPhi) => reject!(Internal("$at: an SSA merge, which visit_block reads from its incoming register, as a statement"), at)
         (s::NirPi) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirEnter) => reject!(Unquarantined("dev/MARCH.md 1.D: entering a try region, structured by the stackifier"), at)
         (s::NirUpsilon) => reject!(Unquarantined("dev/MARCH.md 1.D: an exception-edge value, structured by the stackifier"), at)
@@ -505,121 +505,74 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:763 AstCodeGenerator.visitSuperInitializer" @unported function visit_super_initializer(self::AstCodeGenerator, node::NoCounterpart) end
 
-# A body is a block of Julia's basic blocks, structured by LLVM's WebAssembly backend
-# (src/llvm/target_machine.jl's addPreEmitPass: FixIrreducibleControlFlow, CFGSort, CFGStackify, over
-# Julia's own CFG and dominator tree; dev/LEDGER.md D42), its machine code lowered in layout order as
-# LLVM's MCInstLower does: BLOCK and LOOP the wasm block and loop (a scope ending the body typed by
-# the function's results), their ENDs `end`, BR `br`, BR_IF and BR_UNLESS branchIf on the condition
-# (negated for BR_UNLESS), and STMTS the block's Julia statements through translateStatement. A phi
-# is a local assigned on each edge into its block, as LLVM's PHI elimination copies in each
-# predecessor: before an unconditional branch or a fallthrough, and inside an `if` around a
-# conditional branch whose edge has moves (the edge split), every incoming value pushed before any is
-# set, so a phi another of the block's phis reads gives the value it had on the edge; a phi Julia
-# leaves undefined along an edge is not assigned on it. FixIrreducibleControlFlow's dispatch (a label
-# register set and switched on) rejects, located, until its registers have locals.
+# a body is a block: its statements in the structured control flow LLVM's WebAssembly backend gives
+# Julia's CFG (WasmTarget.LLVM.add_pre_emit_pass, dev/LEDGER.md D42), each machine instruction
+# emitted as LLVM's MCInstLower lowers it: BLOCK and LOOP open a label (a block type the function's
+# results where it ends the body), END_BLOCK and END_LOOP close it, a branch's depth names an open
+# label, BR_IF and BR_UNLESS are branchIf on the condition, negated for BR_UNLESS
+# (WebAssemblyLowerBrUnless's i32.eqz), STMTS translates Julia's
+# statements, a PhiNode reading its incoming register, which each predecessor's COPY wrote
+# (PHIElimination), and BR_TABLE and CONST_I32 read and write FixIrreducibleControlFlow's label
+# registers
 @parity "dart2wasm/lib/code_generator.dart:768 AstCodeGenerator.visitBlock" function visit_block(self::AstCodeGenerator, node::NirBody)::Nothing
-    local mf = LLVM.add_pre_emit_pass(nir_control_statements(node), "$(self.enclosing_member)", !isempty(outputs(self)))
+    local at = "$(self.enclosing_member)"
+    local mf = LLVM.add_pre_emit_pass(node.code, at, !isempty(outputs(self)))
+    mf.implicit_defs && reject!(Unported("llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow.cpp:521 addImplicitDefs"),
+                                "$at: a value defined at entry for every path an irreducible loop's dispatch adds")
     local b = self.b[]
-    # the machine block of a statement: Julia's block k is machine block k + 1, its statements from
-    # its STMTS instruction's first on
-    local firsts = Tuple{Int,Int}[]
-    for (mb, blk) in enumerate(mf.blocks), mi in blk.instrs
-        mi.opcode == STMTS && push!(firsts, ((mi.operands[1]::MOImm).imm, mb))
-    end
-    sort!(firsts)
-    local block_of_stmt(k::Int) = firsts[searchsortedlast(firsts, (k, typemax(Int)))][2]
-    # each phi a defaultable local (visitVariable), read after the blocks that assign it close
-    for k in eachindex(node.stmts)
-        node.stmts[k] isa NirPhi || continue
-        local type_ = translate_type_of_local_variable(self.translator, node.types[k])
-        self.locals[NirSSA(k)] = add_local(self, WasmBuilder.with_nullability(type_, true))
-    end
-    # the phi moves of the edge from machine block `from` into `to`, the values pushed, then set
-    local moves(from::Int, to::Int) = begin
-        local ms = Tuple{WasmBuilder.IR.Local,NirValue}[]
-        for blk_instr in mf.blocks[to].instrs
-            blk_instr.opcode == STMTS || continue
-            for k in (blk_instr.operands[1]::MOImm).imm:(blk_instr.operands[2]::MOImm).imm
-                local phi = node.stmts[k]
-                phi isa NirPhi || continue
-                local i = findfirst(e -> block_of_stmt(Int(e)) == from, phi.edges)
-                i === nothing && continue
-                local v = phi.values[i]
-                v === nothing || push!(ms, (self.locals[NirSSA(k)], v))
-            end
-        end
-        ms
-    end
-    local emit_moves(ms::Vector{Tuple{WasmBuilder.IR.Local,NirValue}}) = begin
-        for (l, v) in ms
-            translate_expression(self, v, l.type)
-        end
-        for (l, _) in Iterators.reverse(ms)
-            WasmBuilder.local_set(b, l)
-        end
-    end
-    # every BLOCK's target, the block its END_BLOCK begins; a LOOP's, its own block (the header)
-    local flat = Tuple{Int,MachineInstr}[(mb, mi) for mb in mf.layout for mi in mf.blocks[mb].instrs]
-    local target_of = IdDict{MachineInstr,Int}()
-    local open_ = MachineInstr[]
-    for (mb, mi) in flat
-        mi.opcode in (BLOCK, LOOP) && push!(open_, mi)
-        if mi.opcode in (END_BLOCK, END_LOOP)
-            local o = pop!(open_)
-            target_of[o] = o.opcode == LOOP ? o.parent : mb
-        end
-    end
-    local labels = Tuple{MachineInstr,WasmBuilder.Label}[]
-    local block_type(mi::MachineInstr) = (mi.operands[1]::MOImm).imm == BLOCK_TYPE_RESULTS ? outputs(self) : WasmBuilder.IR.ValueType[]
-    local target_at(depth::Int) = (labels[end - depth][1], target_of[labels[end - depth][1]])
-    for (pos, (mb, mi)) in enumerate(flat)
-        if mi.opcode == BLOCK
-            push!(labels, (mi, WasmBuilder.block(b, WasmBuilder.IR.ValueType[], block_type(mi))))
-        elseif mi.opcode == LOOP
-            push!(labels, (mi, WasmBuilder.loop(b, WasmBuilder.IR.ValueType[], block_type(mi))))
-        elseif mi.opcode in (END_BLOCK, END_LOOP)
-            pop!(labels)
+    local labels = WasmBuilder.Label[]
+    local incoming = Dict{Int,WasmBuilder.IR.Local}()
+    local registers = Dict{Int,WasmBuilder.IR.Local}()
+    # a phi's registers are defaultable: a use may follow the end of the wasm block holding its copy
+    local incoming_reg(p::Int) = get!(() -> add_local(self, WasmBuilder.with_nullability(translate_type_of_local_variable(self.translator, node.types[p]), true)), incoming, p)
+    local label_reg(r::Int) = get!(() -> add_local(self, WasmBuilder.IR.NumType_i32), registers, r)
+    local imm(mi::MachineInstr, k::Int) = (mi.operands[k]::MOImm).imm
+    local label_at(d::Int) = (d < length(labels) || reject!(Internal("src/code_generator.jl visit_block: depth $d past the open labels"), at); labels[end - d])
+    local block_outputs(mi::MachineInstr) = imm(mi, 1) == BLOCK_TYPE_RESULTS ? outputs(self) : WasmBuilder.IR.ValueType[]
+    for mbb in mf.layout, mi in mf.blocks[mbb].instrs
+        local op = mi.opcode
+        if op == BLOCK
+            push!(labels, WasmBuilder.block(b, WasmBuilder.IR.ValueType[], block_outputs(mi)))
+        elseif op == LOOP
+            push!(labels, WasmBuilder.loop(b, WasmBuilder.IR.ValueType[], block_outputs(mi)))
+        elseif op == END_BLOCK || op == END_LOOP
             WasmBuilder.var"end"(b)
-        elseif mi.opcode == STMTS
-            for k in (mi.operands[1]::MOImm).imm:(mi.operands[2]::MOImm).imm
+            pop!(labels)
+        elseif op == STMTS
+            for k in imm(mi, 1):imm(mi, 2)
                 local st = node.stmts[k]
-                st isa NirPhi && continue
-                translate_statement(self, st, k in self.used ? NirSSA(k) : nothing)
+                if st isa NirPhi
+                    # the PHI's destination, a copy of its incoming register
+                    local dest = add_local(self, incoming_reg(k).type)
+                    self.locals[NirSSA(k)] = dest
+                    WasmBuilder.local_get(b, incoming_reg(k))
+                    WasmBuilder.local_set(b, dest)
+                else
+                    translate_statement(self, st, k in self.used ? NirSSA(k) : nothing)
+                end
             end
-        elseif mi.opcode == BR
-            local depth = (mi.operands[1]::MOImm).imm
-            emit_moves(moves(mb, target_at(depth)[2]))
-            WasmBuilder.br(b, labels[end - depth][2])
-        elseif mi.opcode in (BR_IF, BR_UNLESS)
-            local depth = (mi.operands[1]::MOImm).imm
-            local cond = (node.stmts[(mi.operands[2]::MOImm).imm]::NirGotoIfNot).cond
-            local ms = moves(mb, target_at(depth)[2])
-            if isempty(ms)
-                branch_if(self, cond, labels[end - depth][2]; negated = mi.opcode == BR_UNLESS)
-            elseif mi.opcode == BR_IF
-                # the edge split: its moves only where the branch is taken, inside the if (one label deeper)
-                _conditional(self, cond, () -> (emit_moves(ms); WasmBuilder.br(b, labels[end - depth][2])), nothing, WasmBuilder.IR.ValueType[])
-            else
-                translate_expression(self, cond, WasmBuilder.IR.NumType_i32)
-                WasmBuilder.i32_eqz(b)
-                WasmBuilder.if_(b)
-                emit_moves(ms)
-                WasmBuilder.br(b, labels[end - depth][2])
-                WasmBuilder.var"end"(b)
-            end
-        elseif mi.opcode in (BR_TABLE, CONST_I32)
-            reject!(Unquarantined("src/llvm/fix_irreducible_control_flow.jl: an irreducible graph's dispatch, its label register given no local"), "$(self.enclosing_member)")
-        end
-        # a block's last instruction that is no barrier falls through to the next block in the layout,
-        # its successor: that edge's moves
-        local is_last = pos == length(flat) || flat[pos + 1][1] != mb
-        if is_last && !is_barrier(mi)
-            local i = findfirst(==(mb), mf.layout)
-            if i < length(mf.layout) && mf.layout[i + 1] in mf.blocks[mb].succs
-                emit_moves(moves(mb, mf.layout[i + 1]))
-            end
+        elseif op == COPY
+            local p = imm(mi, 1)
+            local value = (node.stmts[p]::NirPhi).values[imm(mi, 2)]
+            value === nothing && reject!(Internal("src/code_generator.jl visit_block: a COPY of an undefined incoming value"), at)
+            translate_expression(self, something(value), incoming_reg(p).type)
+            WasmBuilder.local_set(b, incoming_reg(p))
+        elseif op == BR
+            WasmBuilder.br(b, label_at(imm(mi, 1)))
+        elseif op == BR_IF || op == BR_UNLESS
+            branch_if(self, (node.stmts[imm(mi, 2)]::NirGotoIfNot).cond, label_at(imm(mi, 1)); negated = op == BR_UNLESS)
+        elseif op == BR_TABLE
+            WasmBuilder.local_get(b, label_reg(imm(mi, 1)))
+            local targets = WasmBuilder.Label[label_at(imm(mi, k)) for k in 2:length(mi.operands)-1]
+            WasmBuilder.br_table(b, targets, label_at(imm(mi, length(mi.operands))))
+        elseif op == CONST_I32
+            WasmBuilder.i32_const(b, imm(mi, 2))
+            WasmBuilder.local_set(b, label_reg(imm(mi, 1)))
+        else
+            reject!(Internal("src/code_generator.jl visit_block: machine opcode $op"), at)
         end
     end
+    isempty(labels) || reject!(Internal("src/code_generator.jl visit_block: $(length(labels)) labels left open"), at)
     return nothing
 end
 
