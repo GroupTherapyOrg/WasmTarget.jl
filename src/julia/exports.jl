@@ -72,9 +72,9 @@ end
     local out = Symbol[]
     for e in REGISTRY
         e isa ParityEntry && e.mod === mod || continue
-        local a = match(ANCHOR_RX, e.anchor)
-        a === nothing && continue   # an LLVM unit's anchor (LLVM_ANCHOR_RX) names no dart file
-        a[1] == tkey && !occursin('.', a[3]) && !startswith(a[3], '_') && !startswith(lines[parse(Int, a[2])], ' ') || continue
+        local a = something(parse_anchor(e.anchor))
+        a.pin === :dart || continue   # an LLVM unit's anchor names no dart file
+        a.unit == tkey && !occursin('.', a.symbol) && !startswith(a.symbol, '_') && !startswith(lines[a.line], ' ') || continue
         append!(out, n for n in e.names if isdefined(mod, n))
     end
     return unique(out)
@@ -153,9 +153,9 @@ it; then no method of Dart2Wasm refers to a WasmBuilder name wasm_builder.dart d
     end
     for e in REGISTRY
         e isa ParityEntry || continue
-        local a = match(ANCHOR_RX, e.anchor)
-        a === nothing && continue   # an LLVM unit's anchor (LLVM_ANCHOR_RX) names no dart file
-        (a[1], Symbol(a[3])) in vis || continue
+        local a = something(parse_anchor(e.anchor))
+        a.pin === :dart || continue   # an LLVM unit's anchor names no dart file
+        (a.unit, Symbol(a.symbol)) in vis || continue
         for n in e.names
             isdefined(e.mod, n) && !Base.ispublic(e.mod, n) && push!(out, "$(join(fullname(e.mod), ".")).$n is visible by dart's directives ($(e.anchor)) but not public")
         end
@@ -198,11 +198,11 @@ pin so an unnamed extension's member, declared at column 2, is left out).
             local lines = readlines(joinpath(sdk, "pkg", key))
             for e in REGISTRY
                 e isa ParityEntry || continue
-                local a = match(ANCHOR_RX, e.anchor)
-                a === nothing && continue   # an LLVM unit's anchor (LLVM_ANCHOR_RX) names no dart file
-                a[1] == key && !occursin('.', a[3]) && !startswith(a[3], '_') || continue
-                startswith(lines[parse(Int, a[2])], ' ') && continue
-                push!(s, (key, Symbol(a[3])))
+                local a = something(parse_anchor(e.anchor))
+                a.pin === :dart || continue   # an LLVM unit's anchor names no dart file
+                a.unit == key && !occursin('.', a.symbol) && !startswith(a.symbol, '_') || continue
+                startswith(lines[a.line], ' ') && continue
+                push!(s, (key, Symbol(a.symbol)))
             end
         end
         s
@@ -227,11 +227,11 @@ builder.dart does not export.
     local reach = Set{Tuple{Module,Symbol}}([(WasmBuilder, :IR)])
     for e in REGISTRY
         e isa ParityEntry || continue
-        local a = match(ANCHOR_RX, e.anchor)
-        a === nothing && continue   # an LLVM unit's anchor (LLVM_ANCHOR_RX) names no dart file
-        local parts = split(a[3], '.'; limit = 2)
+        local a = something(parse_anchor(e.anchor))
+        a.pin === :dart || continue   # an LLVM unit's anchor names no dart file
+        local parts = split(a.symbol, '.'; limit = 2)
         length(parts) == 2 && startswith(parts[2], '_') && continue
-        if !((a[1], Symbol(parts[1])) in visible)
+        if !((a.unit, Symbol(parts[1])) in visible)
             # an instance member of a class `w.` cannot name is still called on its instances (dart's
             # export governs names, not members): its package generic, never its statics
             length(parts) == 2 || continue

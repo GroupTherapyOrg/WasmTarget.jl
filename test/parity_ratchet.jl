@@ -702,6 +702,17 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         rm(llvm; recursive = true)
         refused_load("@parity \"llvm/lib/Target/WebAssembly/WebAssemblyNoSuchPass.cpp:1 noSuchPass\" no_such_pass(x::Int) = x", "/plant/src/x.jl") ||
             push!(out, "negative missed: an LLVM anchor outside the LLVM pin table loads")
+        # one parser for both pins: each form's parts, and a symbol of the other pin's form refused
+        local parse(x) = Base.invokelatest(getfield(wt, :parse_anchor), x)
+        local pa = parse("llvm/lib/Target/WebAssembly/WebAssemblyCFGSort.cpp:183 WebAssemblyCFGStackify::placeMarkers")
+        (pa !== nothing && pa.pin === :llvm && pa.unit == "llvm/lib/Target/WebAssembly/WebAssemblyCFGSort" && pa.line == 183 &&
+         pa.symbol == "WebAssemblyCFGStackify.placeMarkers" && pa.file == "llvm/lib/Target/WebAssembly/WebAssemblyCFGSort.cpp") ||
+            push!(out, "negative missed: an LLVM anchor's parts misread")
+        local pd = parse("dart2wasm/lib/translator.dart:4 Translator.translateType")
+        (pd !== nothing && pd.pin === :dart && pd.unit == "dart2wasm/lib/translator.dart" && pd.file == "pkg/dart2wasm/lib/translator.dart") ||
+            push!(out, "negative missed: a dart anchor's parts misread")
+        parse("dart2wasm/lib/translator.dart:4 Translator::translateType") === nothing || push!(out, "negative missed: a dart anchor with a C++ member reads")
+        parse("llvm/lib/Target/WebAssembly/WebAssemblyCFGSort.cpp:183 X.m") === nothing || push!(out, "negative missed: an LLVM anchor with a dart member reads")
         occursin(getfield(wt, :LLVM_PIN), _text(joinpath(ROOT, "dev", "PARITY_MASTER.md"))) ||
             push!(out, "src/julia/parity.jl's LLVM_PIN is not the commit dev/PARITY_MASTER.md pins for llvm-project")
     else
