@@ -192,10 +192,13 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2675 CompilationTask" abstract type AbstractCompilationTask end
 
-"""
-CompilationTask's dart fields: `function`, `_codeGenerator`.
-"""
-@parity "dart2wasm/lib/translator.dart:2675 CompilationTask" @unported struct CompilationTask <: AbstractCompilationTask end
+"""A synthetic function whose code is to be generated, by its code generator."""
+@parity "dart2wasm/lib/translator.dart:2675 CompilationTask" struct CompilationTask <: AbstractCompilationTask
+    function_::WasmBuilder.FunctionBuilder
+    _code_generator::CodeGenerator
+    # the struct's one constructor, tagged; dart's constructor at :2679 is its outer function
+    CompilationTask(::Val{:_}, function_::WasmBuilder.FunctionBuilder, _code_generator::CodeGenerator) = new(function_, _code_generator)
+end
 
 """A member's function whose code is to be generated, by its code generator."""
 @parity "dart2wasm/lib/translator.dart:2694 AstCompilationTask" struct AstCompilationTask <: AbstractCompilationTask
@@ -805,7 +808,7 @@ end
     return pop!(self._pending)
 end
 
-@parity "dart2wasm/lib/translator.dart:2679 CompilationTask" @unported function CompilationTask(function_, _code_generator) end
+@parity "dart2wasm/lib/translator.dart:2679 CompilationTask" CompilationTask(function_::WasmBuilder.FunctionBuilder, _code_generator::CodeGenerator)::CompilationTask = CompilationTask(Val(:_), function_, _code_generator)
 
 @parity "dart2wasm/lib/translator.dart:2681 CompilationTask.run" function Base.run(self::AbstractCompilationTask, translator::Translator, print_kernel::Bool, print_wasm::Bool)::Nothing
     if print_wasm
