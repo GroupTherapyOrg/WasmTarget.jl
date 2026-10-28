@@ -3956,3 +3956,89 @@ losing races to other lanes' landings (the lead's d246bb34, a landing lock with 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41S1, A41S8 are fixed by 215a8e6e;
 A41S3 by cedcd905; A42S4 and A42S5 by f93c38b2; A43E3 by fbb5e5da; A43E1 is ruled by design. A44S1 and A44S2 are open on
 MARCH 1.C. A44E1 is open on MARCH 1.L.
+
+## 2026-10-28 — audited through cf5f6a0c (f93c38b2..cf5f6a0c: constants, one main module, the target, the landing lock, stubs with no value, tuple shapes, four check slots, entry 44, every builder check refusing, type constants, RuntimeTypeInformation, D42 and the llvm pin, NirWorld, landing from a scratch worktree)
+
+The forty-fifth audit, beside the work, covers d26fb815 (constants.dart's definitions, ConstantInfo, the instantiator
+and creator; src/julia/constant.jl), bfcaceee (modules.dart's monolithic path, WasmCompilerOptions, the Translator's
+module data), 49f5c043 (target.dart, MemoryLimits), 143876a4 (dev/ship.sh checks outside a landing lock and lands under
+it; the `Charter-change: … — Dale <date>: "<words>"` rule; stale slots freed), 22fd99e6 (an @unported struct holds one
+`Union{}` field, so it has no value), b369cfab (RecordShape.fromType over Tuple and NamedTuple types; no class per
+shape), 3b07fee9 (four check slots and the holder's; the load read on Linux), ebf9678a (`dev/lanes.sh --fast`
+deleted), 0b81c2ac (entry 44; its author's), ab6d985e (a type value lowers to its kind's instance), 20897b5e (one
+refusal case per builder check), 34dbefff (RuntimeTypeInformation), 150c3dae (ledger D42; the llvm pin and
+dev/fetch_llvm.sh), a6e83015 (the code generator's translator helpers, ParameterInfo), 53333011 (NirWorld, a typestate
+only build_nir makes from a ClosedWorld) and cf5f6a0c (dev/ship.sh lands from a scratch worktree of the lane's HEAD). It
+also records the builder sub-audit's report on entry 44's 2ff69bf8, 8c65e07c, fabc7847 and e30ac311, each finding
+resting on the command its report quotes, the highest one re-measured here. No wrong answer measured: no program has
+run on wasm against native. Findings A45S1 to A45S5 and A45E1.
+
+Area: builder — 20897b5e: one case per InstructionsBuilder check and per module-part check, each asserting the
+InvalidModule rejection and its text beside the valid sequence the same check accepts, and four of dart's RangeErrors
+the port hit as BoundsErrors now refused, located; sound, D10. The sub-audit counted the emitting builders of 2ff69bf8:
+307 of 309 run a check, dart's 306 of 309. (A45S1, low) `throw_ref` (src/wasm_builder/builder/instructions.jl:724–728,
+`_add(b, IR.ThrowRef()); b._reachable = false`) pops no exnref and checks nothing, as dart's instructions.dart:836–839;
+D10 asks the builder to refuse invalid wasm at the emitting line, so dart's gap is a defect to fix at its source with a
+case, as the memarg order was, not to carry. The goldens of test/wasm_builder/builder_modules.jl are wasm-tools' bytes,
+with broad_module's data count section patched in by dart's serializer rule (sections.dart:663), as its comment says.
+
+Area: collection and planning — 53333011 completes A41S2: NirWorld's one constructor takes nir.jl's token, build_nir
+from a ClosedWorld is its maker, and ClosedWorld's construction check asserts both states (L220). 22fd99e6 fixes A41S15:
+a stub struct's `_unported::Union{}` field leaves it no value and no singleton instance, its plant in L211. d26fb815's
+constants are Julia values as Core.Const holds them, one @closed kind per form, canonicalized by egal; an 8- or 16-bit
+integer constant is pushed by its value (Int8(-1) as -1, UInt8(255) as 255: constants.jl, "an 8- or 16-bit one by its
+value"), which with cf92e5d3's struct.get_s and get_u gives the signed classes Julia's sign extension (A42S1, in
+practice; translate_type's docstring still says zero-extended). (A45S2, medium) A42S3 stands after b369cfab: fromType
+gives a NamedTuple's names their declared indices, but RecordShape sorts the pairs and `==` and `hash` compare names
+only. Measured with this tree's depot, `julia --project=. -e 'using WasmTarget; R = WasmTarget.Dart2Wasm; a =
+R.RecordShape_from_type(typeof((b=1,a=2))); b = R.RecordShape_from_type(typeof((a=2,b=1))); println((a == b, hash(a) ==
+hash(b), R.get_name_index(a, "a"), R.get_name_index(b, "a")))'` prints "(true, true, 3, 2)": two shapes equal and
+hashed alike whose field `a` sits at different indices, so a map keyed by shape gives one of the two types the other's
+layout. The shape's equality must include each name's index (Julia's field order), and test/records.jl:15's "equal …
+whatever the names' given order" go. (A45S3, medium) `check_forward` (src/julia/forward.jl:59, `elseif b isa DataType &&
+b <: forward && b !== forward && b !== sole`), now guarding AbstractModuleBuilder and AbstractInstructionsBuilder as
+well, is a scan of the package's bound names: a parametric `struct X{T} <: AbstractModuleBuilder` is bound to a UnionAll
+and passes, as does a subtype defined in a module outside the package's tree. Julia answers the question whole: InteractiveUtils.subtypes(AbstractModuleBuilder) reads every loaded module's
+types, UnionAll-bound ones included; better, the back-pointer's owner takes the builder as a type parameter, and no
+forward declaration or check is needed (D6).
+
+stopgap in disguise: NirWorld and the stub's `Union{}` field are constructions; check_forward is a scan (A45S3); the
+Charter-change trailer rule is a stopgap, as 143876a4 says, its claim read here.
+precedent: NirWorld, Rust's private-field construction; the empty field, Rust's `!` (the never type) as a field making a
+struct uninhabited; the landing lock, bors's optimistic check then serialized merge.
+
+Area: emission and diagnostics — the sub-audit's fabc7847 finding, re-measured. (A45S4, medium)
+`_initialize_at_startup` answers the opposite of the dart it names: src/globals.jl:180, `… DartGlobals._initializeAtStartup"
+_initialize_at_startup(self::DartGlobals, node::GlobalRef)::Bool = true`, its docstring "whose default is `true`: Julia
+declares no pragmas, so every binding takes the default". dart's globals.dart:292–293 is `util.getPragma<bool>(…,
+'wasm:initialize-at-startup', defaultValue: true) ?? false`, and getPragma returns `defaultValue` only when the pragma is
+present with no value (`sed -n 47,48p util.dart`: `if (value == null || value is NullConstant) { return
+defaultValue; }`) and `null` when it is absent (util.dart:64, `return null;`), so a field with no pragma answers false
+and is initialized lazily; test/globals.jl:29 asserts the true. If eager initialization is Julia's answer (a top-level
+binding's value is computed when its module loads, and juliac's image holds it), that is a departure to state with its
+precedent; as written, the anchor claims dart's answer and gives its opposite. bfcaceee's (A45S5, low) `emit_codegen`
+(src/compiler_options.jl:85) compares `phases[end]` with `CompilerPhase_tfa`, dart's own defect at compiler_options.dart:138
+(`bool get emitCodegen => phases.last == CompilerPhase.tfa;`, beside emitTfa's identical line 137), copied without a
+word, where 2ff69bf8's memarg order fixed dart's defect at its source; one rule for both: a dart defect is fixed with a
+case and named (D12).
+
+Area: enforcement and prose — every hunk of 143876a4, 3b07fee9, ebf9678a, cf5f6a0c, 150c3dae and the test hunks of the
+range. 143876a4 answers the starvation entry 43 measured: the check runs first, outside any lock, and under the landing
+lock a lane re-checks only when another landed meanwhile; a slot or the lock whose holder died before writing its pid is
+freed after 10 minutes (A43E4). 3b07fee9 fixes A44E1: `{ sysctl -n vm.loadavg || cat /proc/loadavg; }` and `sysctl -n
+hw.ncpu || nproc` (dev/check.sh:67–68). cf5f6a0c lands from `$common/wt-ship/<lane>`, a detached worktree of the lane's
+HEAD, and rebases the lane's branch afterwards only if it is clean with HEAD unmoved; sound, and it removes the
+lost-edits hazard. No commit of the range changes dev/CHARTER.md (`git log f93c38b2..cf5f6a0c -- dev/CHARTER.md` is
+empty). D42's words are Dale's of 2026-10-28 as the ledger row quotes them, and its precedent, LLVM's WebAssembly
+backend at a pinned commit, is the production compiler the words ask for. (A45E1, low) D42's checks column cites
+`dev/fetch_llvm.sh`, a script that makes a checkout and enforces nothing (D18: each requirement with its check); its
+check is L213's counterpart for anchors at the llvm pin, planned on 1.D, which the row should cite alone until it
+exists. Requirements: D10 (A45S1); D3 (A45S2, A45S4); D6 (A45S3); D12 (A45S5); D18 (A45E1); no lock fired inside its
+band.
+
+Landing times: entry 44 landed 330 s from its first commit; ship printed the median of five at 636 s, past D13's band,
+before 143876a4 and cf5f6a0c landed (the lead reports 246 s since).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41S2 is completed by 53333011, A41S15
+fixed by 22fd99e6, A43E4 by 143876a4 and A44E1 by 3b07fee9. A45S1 is open on MARCH 1.B. A45S2, A45S4 and A45S5 are open
+on MARCH 1.C. A45S3 is open on MARCH 1.S. A45E1 is open on MARCH 1.R.
