@@ -738,7 +738,9 @@ end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:856 InstructionsBuilder._labelIndex" function _label_index(b::InstructionsBuilder, label::Label)::Int
     index = length(b._label_stack) - label.depth[] - 1
-    b._label_stack[label.depth[]+1] === label || _report_error(b, "Label $label is not on the label stack")
+    # dart's `_labelStack[label.depth] == label`, whose index past the stack's top is dart's RangeError;
+    # either way the label is not on the stack, refused here
+    (label.depth[] < length(b._label_stack) && b._label_stack[label.depth[]+1] === label) || _report_error(b, "Label $label is not on the label stack")
     index
 end
 
@@ -835,7 +837,7 @@ end
 
 """Emit a `local.get` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get" function local_get(b::InstructionsBuilder, local_::IR.Local)::Nothing
-    b.locals[local_.index+1] == local_ || _report_error(b, "Local $(local_.index) is not this function's")
+    (local_.index < length(b.locals) && b.locals[local_.index+1] == local_) || _report_error(b, "Local $(local_.index) is not this function's")
     _verify_types(b, IR.ValueType[], IR.ValueType[local_.type]; trace=("local.get", _local_trace_string(b, local_)))
     _local_is_initialized(b, local_) || _report_error(b, "Uninitialized local with non-defaultable type")
     _add(b, IR.LocalGet(local_))
@@ -844,7 +846,7 @@ end
 
 """Emit a `local.set` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1035 InstructionsBuilder.local_set" function local_set(b::InstructionsBuilder, local_::IR.Local)::Nothing
-    b.locals[local_.index+1] == local_ || _report_error(b, "Local $(local_.index) is not this function's")
+    (local_.index < length(b.locals) && b.locals[local_.index+1] == local_) || _report_error(b, "Local $(local_.index) is not this function's")
     _verify_types(b, IR.ValueType[local_.type], IR.ValueType[]; trace=("local.set", _local_trace_string(b, local_)))
     _initialize_local(b, local_)
     _add(b, IR.LocalSet(local_))
@@ -853,7 +855,7 @@ end
 
 """Emit a `local.tee` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1049 InstructionsBuilder.local_tee" function local_tee(b::InstructionsBuilder, local_::IR.Local)::Nothing
-    b.locals[local_.index+1] == local_ || _report_error(b, "Local $(local_.index) is not this function's")
+    (local_.index < length(b.locals) && b.locals[local_.index+1] == local_) || _report_error(b, "Local $(local_.index) is not this function's")
     _verify_types(b, IR.ValueType[local_.type], IR.ValueType[local_.type]; trace=("local.tee", _local_trace_string(b, local_)))
     _initialize_local(b, local_)
     _add(b, IR.LocalTee(local_))
@@ -1176,6 +1178,8 @@ end
 
 """Emit a `struct.get` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1657 InstructionsBuilder.struct_get" function struct_get(b::InstructionsBuilder, struct_type::IR.StructType, field_index::Int)::Nothing
+    # dart indexes `structType.fields[fieldIndex]`, its RangeError past the fields refused here, located
+    0 <= field_index < length(struct_type.fields) || _report_error(b, "'struct.get' of the field $field_index, not one of the $(length(struct_type.fields)) fields of $struct_type")
     struct_type.fields[field_index+1].type isa IR.ValueType || _report_error(b, "'struct.get' of the packed field $field_index of $struct_type")
     _verify_types(b, IR.ValueType[IR.RefType_def(struct_type; nullable=true)], IR.ValueType[unpacked(struct_type.fields[field_index+1].type)]; trace=("struct.get", struct_type, field_index))
     _add(b, IR.StructGet(struct_type, field_index))
@@ -1184,6 +1188,8 @@ end
 
 """Emit a `struct.get_s` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1670 InstructionsBuilder.struct_get_s" function struct_get_s(b::InstructionsBuilder, struct_type::IR.StructType, field_index::Int)::Nothing
+    # dart indexes `structType.fields[fieldIndex]`, its RangeError past the fields refused here, located
+    0 <= field_index < length(struct_type.fields) || _report_error(b, "'struct.get_s' of the field $field_index, not one of the $(length(struct_type.fields)) fields of $struct_type")
     struct_type.fields[field_index+1].type isa IR.PackedType || _report_error(b, "'struct.get_s' of the unpacked field $field_index of $struct_type")
     _verify_types(b, IR.ValueType[IR.RefType_def(struct_type; nullable=true)], IR.ValueType[unpacked(struct_type.fields[field_index+1].type)]; trace=("struct.get_s", struct_type, field_index))
     _add(b, IR.StructGetS(struct_type, field_index))
@@ -1192,6 +1198,8 @@ end
 
 """Emit a `struct.get_u` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1683 InstructionsBuilder.struct_get_u" function struct_get_u(b::InstructionsBuilder, struct_type::IR.StructType, field_index::Int)::Nothing
+    # dart indexes `structType.fields[fieldIndex]`, its RangeError past the fields refused here, located
+    0 <= field_index < length(struct_type.fields) || _report_error(b, "'struct.get_u' of the field $field_index, not one of the $(length(struct_type.fields)) fields of $struct_type")
     struct_type.fields[field_index+1].type isa IR.PackedType || _report_error(b, "'struct.get_u' of the unpacked field $field_index of $struct_type")
     _verify_types(b, IR.ValueType[IR.RefType_def(struct_type; nullable=true)], IR.ValueType[unpacked(struct_type.fields[field_index+1].type)]; trace=("struct.get_u", struct_type, field_index))
     _add(b, IR.StructGetU(struct_type, field_index))
@@ -1200,6 +1208,8 @@ end
 
 """Emit a `struct.set` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:1696 InstructionsBuilder.struct_set" function struct_set(b::InstructionsBuilder, struct_type::IR.StructType, field_index::Int)::Nothing
+    # dart indexes `structType.fields[fieldIndex]`, its RangeError past the fields refused here, located
+    0 <= field_index < length(struct_type.fields) || _report_error(b, "'struct.set' of the field $field_index, not one of the $(length(struct_type.fields)) fields of $struct_type")
     _verify_types(b, IR.ValueType[IR.RefType_def(struct_type; nullable=true), unpacked(struct_type.fields[field_index+1].type)], IR.ValueType[]; trace=("struct.set", struct_type, field_index))
     _add(b, IR.StructSet(struct_type, field_index))
     nothing
@@ -1412,6 +1422,8 @@ end
 end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:2102 InstructionsBuilder.v128_const" function v128_const(b::InstructionsBuilder, bytes::Vector{UInt8})::Nothing
+    # a v128 constant is 16 bytes; dart writes any list it is given, which no engine reads (D10)
+    length(bytes) == 16 || _report_error(b, "v128.const with $(length(bytes)) bytes, not 16")
     _verify_types(b, IR.ValueType[], IR.ValueType[IR.NumType_v128]; trace=("v128.const", bytes))
     _add(b, IR.V128Const(bytes))
     nothing
