@@ -241,8 +241,10 @@ end
     # Julia's conversions, `(T, x)`: the type converted to, then the value (dart's wasmI32FromInt,
     # wasmF32FromDouble and their kin), each as Julia's codegen answers: trunc_int wraps, sext_int and
     # zext_int extend by their own sign (a Bool zero-extends its 0 or 1), sitofp and uitofp round to
-    # nearest, fptosi and fptoui trap where Julia leaves the value undefined (out of range or NaN),
-    # fpext and fptrunc are IEEE's, bitcast reinterprets bits of one width
+    # nearest, fpext and fptrunc are IEEE's, bitcast reinterprets bits of one width. fptosi and fptoui
+    # of a value the integer cannot hold give "an arbitrary value" (unsafe_trunc, the bare intrinsic),
+    # never an error, and natively (aarch64's fcvtzs) the value saturates and NaN is 0, which wasm's
+    # saturating truncation computes: no trap, which no Julia program does there (A47S1)
     # the type operand a literal or a constant binding, its static type Type{T}
     local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
     if type_operand isa DataType && type_operand <: Type && length(type_operand.parameters) == 1 && type_operand.parameters[1] isa Type
@@ -268,8 +270,8 @@ end
                                  (from_w == i64 ? (s ? WasmBuilder.f32_convert_i64_s : WasmBuilder.f32_convert_i64_u) : (s ? WasmBuilder.f32_convert_i32_s : WasmBuilder.f32_convert_i32_u))
         elseif (f === Core.Intrinsics.fptosi || f === Core.Intrinsics.fptoui) && full(from, from_w) && full(to, to_w) && flt(from_w) && int(to_w)
             local s = f === Core.Intrinsics.fptosi
-            emit = to_w == i64 ? (from_w == f64 ? (s ? WasmBuilder.i64_trunc_f64_s : WasmBuilder.i64_trunc_f64_u) : (s ? WasmBuilder.i64_trunc_f32_s : WasmBuilder.i64_trunc_f32_u)) :
-                                 (from_w == f64 ? (s ? WasmBuilder.i32_trunc_f64_s : WasmBuilder.i32_trunc_f64_u) : (s ? WasmBuilder.i32_trunc_f32_s : WasmBuilder.i32_trunc_f32_u))
+            emit = to_w == i64 ? (from_w == f64 ? (s ? WasmBuilder.i64_trunc_sat_f64_s : WasmBuilder.i64_trunc_sat_f64_u) : (s ? WasmBuilder.i64_trunc_sat_f32_s : WasmBuilder.i64_trunc_sat_f32_u)) :
+                                 (from_w == f64 ? (s ? WasmBuilder.i32_trunc_sat_f64_s : WasmBuilder.i32_trunc_sat_f64_u) : (s ? WasmBuilder.i32_trunc_sat_f32_s : WasmBuilder.i32_trunc_sat_f32_u))
         elseif f === Core.Intrinsics.fpext && full(from, from_w) && full(to, to_w) && from_w == f32 && to_w == f64
             emit = WasmBuilder.f64_promote_f32
         elseif f === Core.Intrinsics.fptrunc && full(from, from_w) && full(to, to_w) && from_w == f64 && to_w == f32

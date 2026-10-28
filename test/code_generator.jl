@@ -330,3 +330,20 @@ end
     @test !invoke(D.supports_inlining, Tuple{D.CallTarget}, target) && !invoke(D.should_inline, Tuple{D.CallTarget}, target).should_inline
     @test rejection(() -> invoke(D.name, Tuple{D.CallTarget}, target)).rejection isa W.Internal
 end
+
+module TruncCases
+tr64(x::Float64) = unsafe_trunc(Int64, x)
+tru32(x::Float64) = unsafe_trunc(UInt32, x)
+end
+
+@testset "intrinsics.dart: fptosi and fptoui never trap" begin
+    # Julia's unsafe_trunc is the bare intrinsic, its unrepresentable value arbitrary: natively it
+    # saturates, NaN 0 (aarch64), which wasm's saturating truncation (0xfc prefix) gives; the trapping
+    # truncation (0xb0, 0xab) is no Julia behavior
+    local b64 = compile_one(TruncCases.tr64, (Float64,))
+    local b32 = compile_one(TruncCases.tru32, (Float64,))
+    local has(bytes, seq) = any(i -> bytes[i:i+length(seq)-1] == seq, 1:length(bytes)-length(seq)+1)
+    @test has(b64, UInt8[0xfc, 0x06]) && !has(b64, UInt8[0xb0])      # i64.trunc_sat_f64_s, not i64.trunc_f64_s
+    @test has(b32, UInt8[0xfc, 0x03]) && !has(b32, UInt8[0xab])      # i32.trunc_sat_f64_u, not i32.trunc_f64_u
+    @test unsafe_trunc(Int64, 1e30) == typemax(Int64) || Sys.ARCH !== :aarch64
+end
