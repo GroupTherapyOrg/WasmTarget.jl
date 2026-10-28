@@ -32,7 +32,7 @@ anchor in `src/` has a row.)
 
 | Component | Functions | Model |
 |---|---|---|
-| Stackifier | `generate_stackified_flow!`, `generate_stackified_flow`, `_thread_backward_trampolines!`, `cfg_dominators`, `emit_duplicated_terminal!` (stackified.jl), reading the one CFG (`nir_cfg`, its input) | Stackifier |
+| Stackifier, LLVM's (dev/LEDGER.md D42) | `sort_blocks` (src/llvm/cfg_sort.jl), `place_markers`, `place_loop_marker`, `place_block_marker`, `rewrite_depth_immediates` (src/llvm/cfg_stackify.jl), over Core.Compiler's CFG and dominator tree | CFGStackify |
 | ClassId numbering | `assign_type_ids!` (types.jl) | ClassIdDispatch |
 | Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |
 | Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis` (every edge's reason recorded, ReasonsComplete; each retarget recomputed every round from Julia's MethodInstance, RetargetsSound), `_dynamic_dispatch_candidate_mis`, `_closed_world_edge`, `_called_function` (an invoke_in_world no one method covers is a dynamic site, WorldSites), `_prune_external_leaf_subgraphs`, `plan_closed_world` (reads the world, writes none of it) (trimcollect.jl) | ClosedWorld |
@@ -80,12 +80,11 @@ anchor in `src/` has a row.)
 - A new protocol or algorithm is modeled spec-first; the code is checked against the model.
 - A TLC counterexample against the real algorithm is a finding: reproduce it in Julia, fix the
   algorithm, keep the invariant. Never weaken an invariant to make TLC pass. (ConsultChain → L113;
-  ClassIdDispatch → the dispatch guards; Stackifier's Broken instances are the `b9f4d229` miscompile
-  and the `8424acd3` dropped phi store.)
+  ClassIdDispatch → the dispatch guards.)
 - Keep instances small enough for CI (seconds to a couple of minutes). If exhaustive enumeration at
   the size that contains a witness is intractable, the Broken instance uses a fixed witness CFG and
-  the positive instance stays exhaustive at the tractable size (Stackifier: N=4 exhaustive; N=5 is
-  not CI-tractable).
+  the positive instance stays exhaustive at the tractable size (CFGStackify: N=4 in the gate, every
+  Broken instance at N=4 too).
 - Commit messages for algorithmic fixes narrate the protocol: the exact shape that breaks, the
   invariant, and why the fix restores it.
 
@@ -93,7 +92,7 @@ anchor in `src/` has a row.)
 
 `formal.yml` also runs on a schedule with `TLC_NIGHTLY=1` and a 5-hour budget: the harness then
 adds `dev/formal/nightly/MC*.cfg` — instances too large for the 20-minute gate, checked against
-the same model modules (a `nightly/MCStackifierN5.cfg` would check `MCStackifier.tla` at N=5).
+the same model modules (a `nightly/MCCFGStackifyN5.cfg` would check its own `MCCFGStackifyN5.tla` at N=5).
 Nothing lives there yet: every current instance fits the gate. Add one only when it terminates
 in the budget on a 2-core runner — a job that never finishes proves nothing either.
 
@@ -102,5 +101,5 @@ in the budget on a 2-core runner — a job that never finishes proves nothing ei
 ```
 bash dev/formal/run_tlc.sh            # every instance
 TLC_WORKERS=auto bash dev/formal/run_tlc.sh
-java -cp ~/.cache/wasmtarget/tla2tools.jar tlc2.TLC -workers auto -config MCStackifier.cfg MCStackifier.tla
+java -cp ~/.cache/wasmtarget/tla2tools.jar tlc2.TLC -workers auto -config MCCFGStackify.cfg MCCFGStackify.tla
 ```
