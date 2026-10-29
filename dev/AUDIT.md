@@ -4555,7 +4555,7 @@ native" where test/src/compile.jl checks the header and byte equality. Fix: run 
 node_answers, or delete the claims; the 0xc0 check read at its instruction. Extends A46E1. (A51E7, medium) 7de69761, a
 feature commit, loosened D14's judgement to land itself: `git log -S'"$cores" ]; then echo' 9f479d76..ff20d5d8 --
 dev/check.sh` names 7de69761, whose hunk turns `-gt "$cores"` into `-ge "$cores"` because "this landing went red twice at
-load 10 on 10 cores" (D14, D17). Landing this entry measured why: `bash dev/ship.sh` printed `src | 3181 3181 2m59.1s` and `check: RED — 181s, past D14's band (a 60-s target, red past 120 s) at load 8 on 10 cores`, twice, with every test green: the check's own cost is past its band, and it passes now only on a saturated machine, where the loosened test leaves it unjudged. Fix: the src tests back inside the band (the slowest files found and cut at their cause), then the judgement in its own commit with its intent, or reverted. (A51E8, low) L227's
+load 10 on 10 cores" (D14, D17). Landing this entry first printed `check: RED — 181s, past D14's band (a 60-s target, red past 120 s) at load 8 on 10 cores`, every test green; 8bfde7ff measures the same check at 57 s on idle performance cores against 136–166 s on efficiency cores, so that time was the machine's, not the check's. Fix: the judgement in its own commit with its intent. (A51E8, low) L227's
 `--find-renames=90%` (parity_ratchet.jl:1913) keeps a test that stops running: in a scratch repository, `git mv
 test/src/kept.jl test/src/kept.jl.off` then L227's own query prints `deleted by L227's query: []` and
 `R100 test/src/kept.jl test/src/kept.jl.off`; a move out of test/src/ or off `.jl` leaves src_tests.jl's walk
@@ -4570,15 +4570,18 @@ Landing times: wt-landings.tsv gives 435 s for 6be635af and 6501 s for the stack
 landed, a lane's wait included).
 
 Resolution: this entry lands alone, prose only, and fixes nothing. A51S1 is fixed by 321cabff, landed after ff20d5d8
-(the three getters and the translator's types read through its Late, with a test compiling a called is checker and as
-checker, and a @test_broken waiting on the class walk); A50S2 is fixed by ff20d5d8. A51S2 and A51E2 are what the range
-broke beside A51S1, the next fixes of their lanes before new work. By owner: the translator lane holds A51S2 (the String
+(the three getters and the translator's types read through its Late at three sites, with a test compiling a called is
+checker and as checker, and a @test_broken waiting on the class walk); A50S2 is fixed by ff20d5d8. A51E7 is fixed by
+8bfde7ff, the judgement in its own commit with its intent: a load read against the four performance cores, the band and
+the hard limit unchanged. A51S3 is ruled by the lead: wasm-opt stays on by default, dartdev's default, judged by
+wt3-tests' runner, which compares the 121 compiled cases against native on 709 facts, optimized and not; the finding
+stays open until that runner lands with a `Fixes:` line naming it. A51S2 and A51E2 are what the range broke beside
+A51S1, the next fixes of their lanes before new work. By owner: the translator lane holds A51S2 (the String
 OutsideSubset and the ccallable re-derivation), A51S4, A51S5, A51S6, A51S9, A51S10, A51S13, A51S15 and A51S16; the
 codegen lane holds A51S8, A51S11, A51S12, A51S14 and A51E5, with A51E6's code_generator tests; the tests lane holds
-A51E1, A51E2, A51E4's assertion, A51E9, and A51S3, the opt default, with its runner; the lead holds A51E3, A51E4's lock,
-A51E7 and A51E8, and owes the ruling A51S7 asks (whether a must-throw generic call is a dynamic dispatcher or Julia's
-MethodError throw); 8bfde7ff and f969a257, landed after ff20d5d8, touch A51E7's band and A51E3's core and are the next
-entry's to read. A51S11, A51S12, A51S14 and A51E5 are open on MARCH 1.D. A51S3 is open on MARCH 1.B, with A51E6. A51S2,
-A51S6 and A51S15 are open on MARCH 1.F. A51S4, A51S5, A51S8, A51S9, A51S10, A51S13 and A51S16 are open on MARCH 1.C.
-A51S7 is open on MARCH 1.E, the lead's ruling. A51E1 and A51E9 are open on MARCH 1.T. A51E4 is open on MARCH 1.Q. A51E2,
-A51E3, A51E7 and A51E8 are open on MARCH 1.L.
+A51E1, A51E4's assertion, A51E9, and A51S3's runner; the lead holds A51E2, A51E3, A51E4's lock and A51E8, and owes the
+ruling A51S7 asks (whether a must-throw generic call is a dynamic dispatcher or Julia's MethodError throw); f969a257,
+landed after ff20d5d8, touches A51E3's core and is the next entry's to read. A51S11, A51S12, A51S14 and A51E5 are open
+on MARCH 1.D. A51S3 is open on MARCH 1.B, with A51E6. A51S2, A51S6 and A51S15 are open on MARCH 1.F. A51S4, A51S5,
+A51S8, A51S9, A51S10, A51S13 and A51S16 are open on MARCH 1.C. A51S7 is open on MARCH 1.E, the lead's ruling. A51E1 and
+A51E9 are open on MARCH 1.T. A51E4 is open on MARCH 1.Q. A51E2, A51E3 and A51E8 are open on MARCH 1.L.
