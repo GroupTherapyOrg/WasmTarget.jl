@@ -377,6 +377,8 @@ Julia may be values as well as types. The array is a constant when every element
     return nothing
 end
 
+# the Kernel table types dart's InterfaceType as Type; this takes the DataType it is in Julia, the one
+# kind whose value holds a class id (a Union's and a UnionAll's layout hold their members instead)
 """
 Pushes the fields of a `DataType` value after its object header: its nullability, the class id of
 the class it denotes, and dart's `typeArguments`, Julia's `parameters` (src/julia/classes.jl, the
@@ -435,6 +437,8 @@ located, until such methods compile.
     reject!(Unquarantined("src/types.jl makeType: the type $type_, whose free type variables an unspecialized method leaves to run time"), "Types.makeType")
 end
 
+# the Kernel table types dart's FunctionType as Type; this takes the UnionAll, Julia's one binder of
+# type parameters, whose offset the collector computes (a DataType binds none)
 """
 The lower end of the type parameter index range of the binder `type_`, computed with every binder
 nested in it (see `_FunctionTypeParameterOffsetCollector`).
@@ -932,6 +936,7 @@ end
 @parity "dart2wasm/lib/types.dart:1492 _FunctionTypeParameterOffsetCollector" _FunctionTypeParameterOffsetCollector(types::Types)::_FunctionTypeParameterOffsetCollector =
     _FunctionTypeParameterOffsetCollector(Val(:_), types)
 
+# as computeFunctionTypeParameterOffset: the UnionAll, Julia's one binder of type parameters
 """
 Visits a binder: its parameter's bounds and its body, as dart's RecursiveVisitor visits a function
 type's parts, then its offset, the least that clears every binder nested in it that refers to its
