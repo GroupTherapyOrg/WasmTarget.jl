@@ -90,19 +90,20 @@ function irreducible(x::Int)
 end
 end
 
-stmts_of(f, types) = Base.code_typed(f, types; optimize = true)[1][1].code
+# the body's statements Julia's optimizer leaves, in NIR, and Julia's CFG of them (nir_code)
+nir_of(f, types) = W.nir_code(Base.code_typed(f, types; optimize = true)[1][1].code, "llvm_cfg_stackify")
 
 # the machine code of `f`, analyzed, sorted and stackified (addPreEmitPass's order)
 function stackified(f, types)
-    local stmts = stmts_of(f, types)
-    local mf = W.machine_function(stmts, "llvm_cfg_stackify")
+    local stmts, jcfg = nir_of(f, types)
+    local mf = W.machine_function(stmts, jcfg, "llvm_cfg_stackify")
     L.run_on_machine_function(L.WebAssemblyFixIrreducibleControlFlow(), mf)
     local li = L.LoopInfoBase()
     L.analyze(li, mf)
     L.sort_blocks(mf, li)
     local pass = L.WebAssemblyCFGStackify()
     L.run_on_machine_function(pass, mf, li, true)
-    return stmts, mf, pass
+    return stmts, jcfg, mf, pass
 end
 
 # the program: each instruction with its block, in layout order
@@ -176,7 +177,7 @@ end
 label_block(pass, label) = label.opcode == W.BLOCK ? pass.begin_to_end[label].parent : label.parent
 
 function check_stackify(f, types)
-    local stmts, mf, pass = stackified(f, types)
+    local stmts, jcfg, mf, pass = stackified(f, types)
     local prog = flat(mf)
     # WellNested
     local stk = W.MachineInstr[]
@@ -193,15 +194,14 @@ function check_stackify(f, types)
     # the entry: Julia's first block's statements come first
     @test run_to_julia(prog, pass, next_body(prog, 1)) == 2
     # every outcome of every Julia terminator: Julia's block k is machine block k + 1
-    local jcfg = Core.Compiler.compute_basic_blocks(stmts)
     for b in mf.layout
         (b == 1 || b > length(jcfg.blocks) + 1) && continue
         local jterm = stmts[last(jcfg.blocks[b - 1].stmts)]
         # Julia's outcomes, each with the machine block it reaches; a return has none
         local blk(stmt) = Core.Compiler.block_for_inst(jcfg, stmt) + 1
-        local outcomes = jterm isa Core.GotoNode ? [(:always, blk(jterm.label))] :
-            jterm isa Core.GotoIfNot ? [(:false, blk(jterm.dest)), (:true, b + 1)] :
-            jterm isa Core.ReturnNode ? Tuple{Symbol,Int}[] : [(:always, b + 1)]
+        local outcomes = jterm isa W.NirGoto ? [(:always, blk(jterm.label))] :
+            jterm isa W.NirGotoIfNot ? [(:false, blk(jterm.dest)), (:true, b + 1)] :
+            jterm isa Union{W.NirReturn, W.NirUnreachable} ? Tuple{Symbol,Int}[] : [(:always, b + 1)]
         local ks = [k for k in eachindex(prog) if prog[k][1] == b && W.is_terminator(prog[k][2])]
         local lastk = maximum(k for k in eachindex(prog) if prog[k][1] == b)
         for (o, want) in outcomes
@@ -238,14 +238,14 @@ end
 end
 
 @testset "addPreEmitPass's order; FixIrreducibleControlFlow" begin
-    local mf = L.add_pre_emit_pass(stmts_of(StackifyCases.whileloop, (Int,)), "whileloop", true)
+    local mf = L.add_pre_emit_pass(nir_of(StackifyCases.whileloop, (Int,))..., "whileloop", true)
     @test count(i -> i.opcode == W.LOOP, (i for b in mf.layout for i in mf.blocks[b].instrs)) == 1
     @test !mf.implicit_defs
     # an @goto-made loop with two entries gets a dispatch block, a BR_TABLE over its entries
-    local mfi = L.add_pre_emit_pass(stmts_of(StackifyCases.irreducible, (Int,)), "irreducible", true)
+    local mfi = L.add_pre_emit_pass(nir_of(StackifyCases.irreducible, (Int,))..., "irreducible", true)
     @test mfi.implicit_defs && mfi.label_registers == 1
     @test count(i -> i.opcode == W.BR_TABLE, (i for b in mfi.layout for i in mfi.blocks[b].instrs)) == 1
     # a reducible CFG is left as it was
-    local mfg = W.machine_function(stmts_of(StackifyCases.gotos, (Int,)), "gotos")
+    local mfg = W.machine_function(nir_of(StackifyCases.gotos, (Int,))..., "gotos")
     @test !L.run_on_machine_function(L.WebAssemblyFixIrreducibleControlFlow(), mfg)
 end

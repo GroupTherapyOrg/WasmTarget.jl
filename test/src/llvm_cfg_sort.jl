@@ -52,7 +52,8 @@ function diamonds(a::Int, b::Int)
 end
 end
 
-stmts_of(f, types) = Base.code_typed(f, types; optimize = true)[1][1].code
+# the body's statements Julia's optimizer leaves, in NIR, and Julia's CFG of them (nir_code)
+nir_of(f, types) = W.nir_code(Base.code_typed(f, types; optimize = true)[1][1].code, "llvm_cfg_sort")
 
 # the block every outcome of b's branches reaches: its BR, BR_IF and BR_UNLESS targets, and the next
 # block in the layout when its last instruction is no BR
@@ -72,7 +73,7 @@ function reached(mf, b)
 end
 
 function check_sort(f, types)
-    local mf = W.machine_function(stmts_of(f, types), "llvm_cfg_sort")
+    local mf = W.machine_function(nir_of(f, types)..., "llvm_cfg_sort")
     local reachable = sort(copy(mf.layout))
     local li = L.LoopInfoBase()
     L.analyze(li, mf)
@@ -113,7 +114,7 @@ end
 end
 
 @testset "updateTerminator, WebAssemblyInstrInfo's branch analysis" begin
-    local mf = W.machine_function(stmts_of(SortCases.branch, (Int,)), "branch")
+    local mf = W.machine_function(nir_of(SortCases.branch, (Int,))..., "branch")
     local b = only(b for b in mf.layout if any(i -> i.opcode == W.BR_UNLESS, mf.blocks[b].instrs))
     local failed, tbb, fbb, cond = L.analyze_branch(mf, b)
     @test !failed && tbb !== nothing && fbb === nothing && (cond[1]::W.MOImm).imm == 0

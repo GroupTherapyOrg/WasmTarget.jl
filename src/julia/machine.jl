@@ -104,7 +104,7 @@ value needs a definition at entry (its addImplicitDefs).
 """
 @quarantine "LLVM's MachineFunction, its CFG and dominator tree Julia's own" Core.Compiler.DomTree mutable struct MachineFunction
     domtree::Core.Compiler.DomTree
-    stmts::Vector{Any}
+    stmts::Vector{NirStmt}
     blocks::Vector{MachineBasicBlock}
     layout::Vector{Int}
     label_registers::Int
@@ -112,11 +112,11 @@ value needs a definition at entry (its addImplicitDefs).
 end
 
 """
-    machine_function(stmts, at) -> MachineFunction
+    machine_function(stmts, jcfg, at) -> MachineFunction
 
-The machine code of a body whose statements are `stmts`, an optimized CodeInfo's, each jump naming
-the statement it goes to: Julia's CFG of them
-(compute_basic_blocks), with a top block before Julia's first, as Julia's codegen emits its `top`
+The machine code of a body whose statements are `stmts`, in NIR (nir_code), each jump naming the
+statement it goes to: `jcfg`, Julia's CFG of them (compute_basic_blocks), with a top block before
+Julia's first, as Julia's codegen emits its `top`
 block before the first block of Julia's IR (src/codegen.cpp, emit_function), since Julia's first
 block may have predecessors (`while true end`) and LLVM's entry block has none; and Julia's
 dominator tree of it (construct_domtree). A block no path reaches leaves the layout and its edges
@@ -126,8 +126,7 @@ GotoNode and BR_UNLESS for a GotoIfNot (taken when the condition is false), and 
 that returns or falls through to the next. A try region (EnterNode) rejects at `at` until
 placeTryTableMarker is ported.
 """
-@quarantine "Julia's IR is a CFG compute_basic_blocks reads from the statements; codegen puts a top block before it" Core.Compiler.compute_basic_blocks function machine_function(stmts::Vector{Any}, at::String)::MachineFunction
-    local jcfg = Core.Compiler.compute_basic_blocks(stmts)
+@quarantine "Julia's IR is a CFG of its statements; codegen puts a top block before it" Core.Compiler.construct_domtree function machine_function(stmts::Vector{NirStmt}, jcfg::Core.Compiler.CFG, at::String)::MachineFunction
     local jb = jcfg.blocks
     local n = length(jb) + 1
     # block 1 is codegen's top, its one successor Julia's first block; Julia's block k is k + 1
@@ -146,14 +145,14 @@ placeTryTableMarker is ported.
         if b > 1
             local r = bb.stmts
             local last_ = stmts[last(r)]
-            last_ isa Core.EnterNode && reject!(Unported("llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:695 WebAssemblyCFGStackify::placeTryTableMarker"),
+            last_ isa NirEnter && reject!(Unported("llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:695 WebAssemblyCFGStackify::placeTryTableMarker"),
                                                 "$at: statement $(last(r)), a try region")
-            local branch = last_ isa Union{Core.GotoNode, Core.GotoIfNot}
+            local branch = last_ isa Union{NirGoto, NirGotoIfNot}
             push!(instrs, MachineInstr(STMTS, MachineOperand[MOImm(first(r)), MOImm(branch ? last(r) - 1 : last(r))], b))
             # a jump of the CodeInfo names a statement, the first of its block (block_for_inst)
-            if last_ isa Core.GotoNode
+            if last_ isa NirGoto
                 push!(instrs, MachineInstr(BR, MachineOperand[MOBlock(Core.Compiler.block_for_inst(jcfg, last_.label) + 1)], b))
-            elseif last_ isa Core.GotoIfNot
+            elseif last_ isa NirGotoIfNot
                 local dest = Core.Compiler.block_for_inst(jcfg, last_.dest) + 1
                 dest == b + 1 || push!(instrs, MachineInstr(BR_UNLESS, MachineOperand[MOBlock(dest), MOImm(last(r))], b))
             end

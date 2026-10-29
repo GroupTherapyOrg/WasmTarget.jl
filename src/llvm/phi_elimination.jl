@@ -19,7 +19,7 @@ CFG of the statements; whether there were any.
         local first_ = (instrs[i].operands[1]::MOImm).imm
         local last_ = (instrs[i].operands[2]::MOImm).imm
         for k in first_:last_
-            mf.stmts[k] isa Core.PhiNode || break
+            mf.stmts[k] isa NirPhi || break
             lower_phi_node(mf, jcfg, mbb, k)
             changed = true
         end
@@ -38,9 +38,9 @@ from a block no path reaches is skipped, UnreachableMachineBlockElim's removal; 
 other block that is no predecessor rejects as WasmTarget's own defect, located.
 """
 @parity "llvm/lib/CodeGen/PHIElimination.cpp:365 PHIEliminationImpl::LowerPHINode" function lower_phi_node(mf::MachineFunction, jcfg::Core.Compiler.CFG, mbb::Int, phi::Int)::Nothing
-    local p = mf.stmts[phi]::Core.PhiNode
+    local p = mf.stmts[phi]::NirPhi
     for i in eachindex(p.edges)
-        isassigned(p.values, i) || continue
+        p.values[i] === nothing && continue
         # an edge names its predecessor's last statement; Julia's block k is machine block k + 1
         local pred = Core.Compiler.block_for_inst(jcfg, Int(p.edges[i])) + 1
         # an edge from a block no path reaches is gone, as LLVM's UnreachableMachineBlockElim removes a

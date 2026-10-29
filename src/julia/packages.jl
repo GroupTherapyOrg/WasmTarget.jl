@@ -13,6 +13,8 @@ import ..MachineFunction, ..MachineBasicBlock, ..MachineInstr, ..MachineOperand,
        ..renumber_blocks!, ..create_machine_basic_block!, ..get_prev_node, ..is_terminator, ..is_barrier, ..create_label_register!, ..recompute_domtree!, ..terminators, ..post_order,
        ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..PriorityQueue, ..pq_push!, ..pq_pop!, ..pq_empty, ..get_block_numbered, ..machine_function,
        ..LinkedHashMap, ..LinkedHashSet, ..strongly_connected_components
+# the NIR whose statements the machine code reads (src/julia/nir.jl)
+import ..NirStmt, ..NirPhi
 end
 
 @quarantine "Julia has no per-file namespace; dart's wasm_builder package is a module" Core.Module module WasmBuilder

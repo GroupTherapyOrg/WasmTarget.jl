@@ -40,8 +40,9 @@ function gotos(x::Int)
 end
 end
 
-# the body's statements Julia's optimizer leaves, the input machine_function reads
-stmts_of(f, types) = Base.code_typed(f, types; optimize = true)[1][1].code
+# the body's statements Julia's optimizer leaves, in NIR, and Julia's CFG of them (nir_code), the
+# input machine_function reads
+nir_of(f, types) = W.nir_code(Base.code_typed(f, types; optimize = true)[1][1].code, "llvm_loop_info")
 
 # the natural loop of `h` (CFGStackify.tla's BodyOf): h and the blocks reaching a predecessor h
 # dominates without passing h
@@ -60,7 +61,7 @@ function natural_loop(mf, h)
 end
 
 function check_loops(f, types)
-    local mf = W.machine_function(stmts_of(f, types), "llvm_loop_info")
+    local mf = W.machine_function(nir_of(f, types)..., "llvm_loop_info")
     local li = L.LoopInfoBase()
     L.analyze(li, mf)
     local all_loops = L.LoopBase[]
@@ -88,15 +89,15 @@ function check_loops(f, types)
 end
 
 @testset "machine code over Julia's CFG" begin
-    local mf = W.machine_function(stmts_of(LoopCases.forever, ()), "forever")
+    local mf = W.machine_function(nir_of(LoopCases.forever, ())..., "forever")
     # codegen's top block before Julia's first, which has a predecessor here
     @test mf.blocks[1].succs == [2] && 1 in mf.blocks[2].preds && length(mf.blocks[2].preds) == 2
     @test mf.layout[1] == 1
-    local mfb = W.machine_function(stmts_of(LoopCases.branch, (Int,)), "branch")
+    local mfb = W.machine_function(nir_of(LoopCases.branch, (Int,))..., "branch")
     local brs = [i for b in mfb.layout for i in mfb.blocks[b].instrs if i.opcode == W.BR_UNLESS]
     @test length(brs) == 1
     local enter = Any[Core.EnterNode(2), Core.ReturnNode(nothing)]
-    @test_throws W.RejectionError W.machine_function(enter, "try")
+    @test_throws W.RejectionError W.machine_function(W.nir_code(enter, "try")..., "try")
 end
 
 @testset "natural loops, LoopInfoBase::analyze" begin

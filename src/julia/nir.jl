@@ -221,18 +221,28 @@ end
     NirBody
 
 One function of the closed world in NIR: `ci`, the CodeInstance Julia inferred; `stmts`, its statements
-in Julia's order; `types`, the type Julia inferred for each statement; `code`, the optimized
-CodeInfo's statements themselves, which Julia's compute_basic_blocks and the stackifier read
-(src/julia/machine.jl).
+in Julia's order; `types`, the type Julia inferred for each statement; `cfg`, Julia's CFG of the
+statements (compute_basic_blocks), which the stackifier reads beside them (src/julia/machine.jl).
 """
 @quarantine "a function of the closed world is a CodeInstance and its optimized CodeInfo, Julia's own" Core.CodeInstance struct NirBody
     ci::Core.CodeInstance
     stmts::Vector{NirStmt}
     types::Vector{Type}
-    code::Vector{Any}
+    cfg::Core.Compiler.CFG
 end
 
 # ---- building --------------------------------------------------------------------------------------
+"""
+    nir_code(code, at) -> (Vector{NirStmt}, Core.Compiler.CFG)
+
+The statements of an optimized CodeInfo's `code` in NIR, and Julia's CFG of them (compute_basic_blocks,
+whose blocks and edges name statements by their position, the same in both): the one reader of a
+body's raw statements, so every later stage, the stackifier's included, reads the closed sums.
+"""
+@quarantine "Julia's IR is a CFG compute_basic_blocks reads from its optimized statements, read here once" Core.Compiler.compute_basic_blocks function nir_code(code::Vector{Any}, at::String)::Tuple{Vector{NirStmt},Core.Compiler.CFG}
+    return NirStmt[_nir_stmt(st, at) for st in code], Core.Compiler.compute_basic_blocks(code)
+end
+
 # an operand of Julia's optimized IR as a NirValue; an IR node where a value belongs rejects, located
 @quarantine "Julia's optimized IR operands: SSAValue, Argument, GlobalRef, or a literal Julia quotes or not" Core.SSAValue function _nir_operand(x, at::String)::NirValue
     x isa Core.SSAValue && return NirSSA(x.id)
@@ -391,7 +401,8 @@ census rejects with `Unquarantined`, located at the compile `at` names.
             reject!(Internal("src/julia/nir.jl: the closed world's entry $k is a $(typeof(ci)) and $(typeof(src)), not a CodeInstance and its CodeInfo"), at)
         ci in seen && continue
         push!(seen, ci)
-        push!(bodies, NirBody(ci, NirStmt[_nir_stmt(st, at) for st in src.code], _nir_types(ci, src, at), src.code))
+        local stmts, cfg = nir_code(src.code, at)
+        push!(bodies, NirBody(ci, stmts, _nir_types(ci, src, at), cfg))
     end
     any(b -> b.ci.def === world.entry, bodies) ||
         reject!(Internal("src/julia/nir.jl: the closed world's entry $(world.entry) has no body"), at)
