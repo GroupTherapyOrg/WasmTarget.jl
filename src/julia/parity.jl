@@ -1294,7 +1294,101 @@ end
     local sdk = _pin_sdk()
     sdk === nothing && throw(ConstructionViolation("check_anchors_resolve",
         "no checkout of dart-lang/sdk at $PIN at ~/.cache/wasmtarget/dart-sdk: bash dev/fetch_dart_sdk.sh"))
-    return check_anchors_resolve(@__MODULE__, sdk)
+    return check_anchors_resolve(@__MODULE__, sdk) +
+           check_quarantine_pinned(@__MODULE__, SRC, sdk, _quarantine_debt(joinpath(dirname(SRC), "dev", "quarantine_unpinned.txt")))
+end
+
+# ---- each @quarantine ports a pinned source (dev/LEDGER.md D45, L213) --------------------------------
+# A src/julia definition ports what Julia forces from a pinned near 1:1 match, never a bespoke build:
+# its @quarantine reason carries a pinned anchor that resolves at its pin (a dart file of the sdk, an
+# LLVM unit, a unit of JULIA_FILES or a runtime file) or a `precedent(<ecosystem>: <file:line>)`.
+# The definitions that do not yet are an exact debt list, dev/quarantine_unpinned.txt, one line per
+# definition, `<its file under src> <its names>`: a definition unpinned and unlisted refuses the load,
+# and so does a line naming a definition now pinned or gone, so the list only shrinks (D20).
+
+# the anchors a reason cites, each form of the pins'
+@quarantine "an anchor in prose is found by its pins' forms, read with a regex" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|(?:llvm|julia)/[\w/]+\.(?:cpp|c|h):[1-9]\d* [A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)"
+@quarantine "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$#][\w$.]*))?"
+@quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\([\w+#.-]+: [^\s():]+:[1-9]\d*"
+
+# why a quarantine's reason pins no source, or nothing when it does: a precedent, or an anchor that
+# resolves at its pin's checkout (an anchor whose checkout is missing does not)
+@quarantine "a reason's anchors are read against the pinned files, as @parity's are" Base.eachmatch function _reason_unpinned(reason::AbstractString, sdk::Union{String,Nothing})::Union{String,Nothing}
+    occursin(REASON_PRECEDENT_RX, reason) && return nothing
+    local why = "no pinned anchor and no precedent(<ecosystem>: <file:line>)"
+    for m in eachmatch(REASON_ANCHOR_RX, reason)
+        local a = parse_anchor(m.captures[1])
+        a === nothing && continue
+        local dir = a.pin === :dart ? sdk : _c_pin_checkout(a.pin)
+        dir === nothing && (why = "$(m.captures[1]): " * (a.pin === :dart ? "no dart-lang/sdk checkout" : _c_pin_missing(a.pin)); continue)
+        local f = _anchor_fault(dir, String(m.captures[1]))
+        f === nothing && return nothing
+        why = "$(m.captures[1]) does not resolve: $f"
+    end
+    # a file of the dart checkout cited by its path (pkg/front_end/..., sdk/lib/...): the line exists and
+    # is code, a declaration or a statement, and holds the symbol where the citation names one
+    for m in eachmatch(REASON_PATH_RX, reason)
+        sdk === nothing && (why = "$(m.captures[1]): no dart-lang/sdk checkout"; continue)
+        local path = joinpath(sdk, m.captures[1])
+        isfile(path) || (why = "the dart pin has no $(m.captures[1])"; continue)
+        local lines = get!(() -> readlines(path), _PIN_LINES, path)
+        local ln = parse(Int, m.captures[2])
+        ln <= length(lines) || (why = "$(m.captures[1]):$ln is past the file's end"; continue)
+        local l = strip(lines[ln])
+        (isempty(l) || startswith(l, "//") || startswith(l, "/*") || startswith(l, "*") || l in ("}", ");", ")")) &&
+            (why = "$(m.captures[1]):$ln is no declaration or statement"; continue)
+        local sym = m.captures[3]
+        (sym === nothing || occursin(sym, l)) && return nothing
+        why = "$(m.captures[1]):$ln does not hold $sym"
+    end
+    return why
+end
+
+# a quarantined definition's key in the debt list: its file under `src` and its names, or, for a method
+# of a function it does not bind (an extension of Base's), the API it names in brackets
+@quarantine "a definition is named by its file and the bindings it defines, Julia's own record of it" Base.relpath _quarantine_key(e, src::String)::String =
+    replace(relpath(string(e.file), src), '\\' => '/') * " " * (isempty(e.names) ? "[" * e.api * "]" : join(string.(e.names), ","))
+
+# the debt list's lines: one key each, comments and blank lines aside
+@quarantine "the debt list is a text file beside the check, read when the package loads" Base.readlines function _quarantine_debt(path::String)::Vector{String}
+    isfile(path) || return String[]
+    return String[strip(l) for l in readlines(path) if !isempty(strip(l)) && !startswith(strip(l), "#")]
+end
+
+"""
+    check_quarantine_pinned(mod, src, sdk, debt) -> Int
+
+D45's check inside L213: every `@quarantine` definition of `mod` (its file under `src`) carries in its
+reason a pinned anchor that resolves, or a `precedent(<ecosystem>: <file:line>)`, unless the debt list
+`debt` names it; a debt line naming a definition now pinned or gone refuses too, so the list only
+shrinks. Throws a `ConstructionViolation` listing each.
+
+precedent(rust: unsafe with clippy's undocumented_unsafe_blocks, every block's SAFETY comment).
+Julia's differs: no keyword marks Julia-only code, so the reason is read where the load checks it.
+"""
+@quarantine "Julia marks no Julia-only definition with its source; the load reads each reason" Base.empty! function check_quarantine_pinned(mod::Module, src::String, sdk::Union{String,Nothing}, debt::Vector{String})::Int
+    local unpinned = Dict{String,Int}()
+    local why = Dict{String,String}()
+    for e in REGISTRY
+        e isa QuarantineEntry && _within(e.mod, mod) && _inside(string(e.file), src) || continue
+        local w = _reason_unpinned(e.necessity, sdk)
+        w === nothing && continue
+        local k = _quarantine_key(e, src)
+        unpinned[k] = get(unpinned, k, 0) + 1
+        why[k] = w
+    end
+    local listed = Dict{String,Int}()
+    foreach(k -> listed[k] = get(listed, k, 0) + 1, debt)
+    local out = String[]
+    for (k, n) in unpinned
+        n > get(listed, k, 0) && push!(out, "$k: its @quarantine pins no source ($(why[k])), and dev/quarantine_unpinned.txt does not list it")
+    end
+    for (k, n) in listed
+        n > get(unpinned, k, 0) && push!(out, "dev/quarantine_unpinned.txt lists $k, which is now pinned or gone: delete the line")
+    end
+    empty!(_PIN_LINES)
+    isempty(out) || throw(ConstructionViolation("check_quarantine_pinned", join(sort!(out), "; ")))
+    return 0
 end
 
 # how many inner constructors a struct's body defines: the function definitions in it named for the
