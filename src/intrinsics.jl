@@ -318,245 +318,302 @@ end
     end
     local f = nir_callee(node)
     local args = node.args[2:end]
+    # each family of arms is its own method, compiled only when a program reaches it
+    f === Core.:(===) && length(args) == 2 && return generate_static_intrinsic(self, Val(:identical), f, args)
+    f === Core._svec_len && length(args) == 1 && return generate_static_intrinsic(self, Val(:svec_len), f, args)
+    f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
+    f isa Core.IntrinsicFunction || return nothing
+    local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
+    type_operand isa DataType && type_operand <: Type && length(type_operand.parameters) == 1 && type_operand.parameters[1] isa Type &&
+        return generate_static_intrinsic(self, Val(:conversion), f, args)
+    f === Core.Intrinsics.flipsign_int && length(args) == 2 && return generate_static_intrinsic(self, Val(:flipsign), f, args)
+    length(args) == 2 && (f === Core.Intrinsics.shl_int || f === Core.Intrinsics.lshr_int || f === Core.Intrinsics.ashr_int) &&
+        return generate_static_intrinsic(self, Val(:shift), f, args)
+    local narrow(t::Type) = generate_static_intrinsic(Val(:narrow), t)
+    all(a -> narrow(dart_type_of(self, a)), args) && allequal(dart_type_of(self, a) for a in args) && 1 <= length(args) <= 2 &&
+        return generate_static_intrinsic(self, Val(:narrow_operator), f, args)
+    return generate_static_intrinsic(self, Val(:operator), f, args)
+end
+
+# Julia's integer forms, which the arms share: a type held in its wasm number type at its own width
+# (Int32 and UInt32 in an i32, Int64 and UInt64 in an i64, Float32 in an f32, Float64 in an f64)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:full}, t::Type, w::WasmBuilder.IR.ValueType)::Bool =
+    t isa DataType && isprimitivetype(t) && w isa WasmBuilder.IR.NumType && 8 * sizeof(t) == 8 * WasmBuilder.byte_size(w)
+
+# An 8- or 16-bit integer is an i32 held as Julia's ABI holds it (Translator.translateType):
+# sign-extended for a signed type, zero-extended for an unsigned one. An operation reads the
+# operand in the view it needs (a signed comparison, division or arithmetic shift the
+# sign-extended bits, an unsigned one the zero-extended bits) and puts a result back in its type's
+# form, as Julia's codegen computes at the type's own width (an i8 or i16 in LLVM).
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:narrow}, t::Type)::Bool = t isa DataType && t <: Base.BitInteger && sizeof(t) < 4
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:put_form}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing = (sizeof(t) == 1 ?
+    (t <: Signed ? WasmBuilder.i32_extend8_s(b) : (WasmBuilder.i32_const(b, 255); WasmBuilder.i32_and(b))) :
+    (t <: Signed ? WasmBuilder.i32_extend16_s(b) : (WasmBuilder.i32_const(b, 65535); WasmBuilder.i32_and(b))); nothing)
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:signed_view}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing =
+    (t <: Unsigned && (sizeof(t) == 1 ? WasmBuilder.i32_extend8_s(b) : WasmBuilder.i32_extend16_s(b)); nothing)
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:unsigned_view}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing =
+    (t <: Signed && (WasmBuilder.i32_const(b, sizeof(t) == 1 ? 255 : 65535); WasmBuilder.i32_and(b)); nothing)
+
+# identical: Julia's `===`, which compares a primitive value's bits (NaN === NaN, and 0.0 !== -0.0),
+# so a float is compared as the integer of its bits, where dart compares a double by value
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:identical}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
     local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
-    # a Julia type held in its wasm number type at its own width: Int32 and UInt32 in an i32, Int64
-    # and UInt64 in an i64, Float32 in an f32, Float64 in an f64
-    local full(t::Type, w::WasmBuilder.IR.ValueType) = t isa DataType && isprimitivetype(t) && w isa WasmBuilder.IR.NumType &&
-        8 * sizeof(t) == 8 * WasmBuilder.byte_size(w)
-
-    # identical: Julia's `===`, which compares a primitive value's bits (NaN === NaN, and 0.0 !== -0.0),
-    # so a float is compared as the integer of its bits, where dart compares a double by value
-    if f === Core.:(===) && length(args) == 2
-        local first = args[1]
-        local second = args[2]
-        local first_type = dart_type_of(self, first)
-        local second_type = dart_type_of(self, second)
-        local w = type_of_exp(self, first)
-        if first_type === second_type && (full(first_type, w) || first_type === Bool)
-            translate_expression(code_gen, first, w)
-            w == f64 && WasmBuilder.i64_reinterpret_f64(b[])
-            w == f32 && WasmBuilder.i32_reinterpret_f32(b[])
-            translate_expression(code_gen, second, w)
-            w == f64 && WasmBuilder.i64_reinterpret_f64(b[])
-            w == f32 && WasmBuilder.i32_reinterpret_f32(b[])
-            (w == i64 || w == f64) ? WasmBuilder.i64_eq(b[]) : WasmBuilder.i32_eq(b[])
-            return i32
-        end
-        return nothing
+    local full(t::Type, w::WasmBuilder.IR.ValueType) = generate_static_intrinsic(Val(:full), t, w)
+    local first = args[1]
+    local second = args[2]
+    local first_type = dart_type_of(self, first)
+    local second_type = dart_type_of(self, second)
+    local w = type_of_exp(self, first)
+    if first_type === second_type && (full(first_type, w) || first_type === Bool)
+        translate_expression(code_gen, first, w)
+        w == f64 && WasmBuilder.i64_reinterpret_f64(b[])
+        w == f32 && WasmBuilder.i32_reinterpret_f32(b[])
+        translate_expression(code_gen, second, w)
+        w == f64 && WasmBuilder.i64_reinterpret_f64(b[])
+        w == f32 && WasmBuilder.i32_reinterpret_f32(b[])
+        (w == i64 || w == f64) ? WasmBuilder.i64_eq(b[]) : WasmBuilder.i32_eq(b[])
+        return i32
     end
+    return nothing
+end
 
-    # Julia's `_svec_len`: a SimpleVector's length, jl_svec_t's own, which its wasm array carries
-    # (src/julia/classes.jl, `_svec_instance_fields`): the data field's array.len, a Julia Int.
-    # `_svec_ref` has no arm: an index out of range throws Julia's BoundsError, a catchable error
-    # no trapping array.get may stand for, and throwing waits for visitThrow
-    if f === Core._svec_len && length(args) == 1 && dart_type_of(self, args[1]) === Core.SimpleVector
-        local sv_info = get(translator(self).class_info, Core.SimpleVector, nothing)
-        sv_info === nothing && reject!(Internal("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic: Core.SimpleVector has no class info"), "Intrinsifier.generateStaticIntrinsic")
-        local data = only(class_instance_fields(Core.SimpleVector, "Intrinsifier.generateStaticIntrinsic"))
-        translate_expression(code_gen, args[1], WasmBuilder.with_nullability(repr(sv_info), false))
-        WasmBuilder.struct_get(b[], sv_info.struct_, translator(self).field_index[data])
-        WasmBuilder.array_len(b[])
-        WasmBuilder.i64_extend_i32_u(b[])
-        return i64
-    end
+# Julia's `_svec_len`: a SimpleVector's length, jl_svec_t's own, which its wasm array carries
+# (src/julia/classes.jl, `_svec_instance_fields`): the data field's array.len, a Julia Int.
+# `_svec_ref` has no arm: an index out of range throws Julia's BoundsError, a catchable error
+# no trapping array.get may stand for, and throwing waits for visitThrow
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec_len}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local b = self.code_gen.b
+    local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
+    dart_type_of(self, args[1]) === Core.SimpleVector || return nothing
+    local sv_info = get(translator(self).class_info, Core.SimpleVector, nothing)
+    sv_info === nothing && reject!(Internal("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic: Core.SimpleVector has no class info"), "Intrinsifier.generateStaticIntrinsic")
+    local data = only(class_instance_fields(Core.SimpleVector, "Intrinsifier.generateStaticIntrinsic"))
+    translate_expression(code_gen, args[1], WasmBuilder.with_nullability(repr(sv_info), false))
+    WasmBuilder.struct_get(b[], sv_info.struct_, translator(self).field_index[data])
+    WasmBuilder.array_len(b[])
+    WasmBuilder.i64_extend_i32_u(b[])
+    return i64
+end
 
-    # Julia's `ifelse`: both values computed, one chosen by the Bool, wasm's typed select
-    if f === Core.ifelse && length(args) == 3
-        local w = type_of_exp(self, args[2])
-        if dart_type_of(self, args[1]) === Bool && w isa WasmBuilder.IR.NumType && type_of_exp(self, args[3]) == w
-            translate_expression(code_gen, args[2], w)
-            translate_expression(code_gen, args[3], w)
-            translate_expression(code_gen, args[1], i32)
-            WasmBuilder.select(b[], w)
-            return w
-        end
-        return nothing
-    end
-
-    f isa Core.IntrinsicFunction || return nothing
-
-    # An 8- or 16-bit integer is an i32 held as Julia's ABI holds it (Translator.translateType):
-    # sign-extended for a signed type, zero-extended for an unsigned one. An operation reads the
-    # operand in the view it needs (a signed comparison, division or arithmetic shift the
-    # sign-extended bits, an unsigned one the zero-extended bits) and puts a result back in its type's
-    # form, as Julia's codegen computes at the type's own width (an i8 or i16 in LLVM).
-    local narrow(t::Type) = t isa DataType && t <: Base.BitInteger && sizeof(t) < 4
-    local put_form(t::Type) = sizeof(t) == 1 ?
-        (t <: Signed ? WasmBuilder.i32_extend8_s(b[]) : (WasmBuilder.i32_const(b[], 255); WasmBuilder.i32_and(b[]))) :
-        (t <: Signed ? WasmBuilder.i32_extend16_s(b[]) : (WasmBuilder.i32_const(b[], 65535); WasmBuilder.i32_and(b[])))
-    local signed_view(t::Type) = t <: Unsigned && (sizeof(t) == 1 ? WasmBuilder.i32_extend8_s(b[]) : WasmBuilder.i32_extend16_s(b[]))
-    local unsigned_view(t::Type) = t <: Signed && (WasmBuilder.i32_const(b[], sizeof(t) == 1 ? 255 : 65535); WasmBuilder.i32_and(b[]))
-
-    # Julia's conversions, `(T, x)`: the type converted to, then the value (dart's wasmI32FromInt,
-    # wasmF32FromDouble and their kin), each as Julia's codegen answers: trunc_int wraps, sext_int and
-    # zext_int extend by their own sign (a Bool zero-extends its 0 or 1), sitofp and uitofp round to
-    # nearest, fpext and fptrunc are IEEE's, bitcast reinterprets bits of one width. fptosi and fptoui
-    # of a value the integer cannot hold give "an arbitrary value" (unsafe_trunc, the bare intrinsic),
-    # never an error, and natively (aarch64's fcvtzs) the value saturates and NaN is 0, which wasm's
-    # saturating truncation computes: no trap, which no Julia program does there (A47S1)
-    # the type operand a literal or a constant binding, its static type Type{T}
-    local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
-    if type_operand isa DataType && type_operand <: Type && length(type_operand.parameters) == 1 && type_operand.parameters[1] isa Type
-        local to = type_operand.parameters[1]
-        local x = args[2]
-        local from = dart_type_of(self, x)
-        local from_w = type_of_exp(self, x)
-        local to_w = translate_type(translator(self), to)
-        local int(w::WasmBuilder.IR.ValueType) = w == i32 || w == i64
-        local flt(w::WasmBuilder.IR.ValueType) = w == f32 || w == f64
-        local emit::Union{Function,Nothing} = nothing
-        if f === Core.Intrinsics.trunc_int && full(from, from_w) && full(to, to_w) && from_w == i64 && to_w == i32
-            emit = WasmBuilder.i32_wrap_i64
-        elseif f === Core.Intrinsics.sext_int && full(from, from_w) && full(to, to_w) && from_w == i32 && to_w == i64
-            emit = WasmBuilder.i64_extend_i32_s
-        elseif f === Core.Intrinsics.zext_int && (full(from, from_w) || from === Bool) && full(to, to_w) && from_w == i32 && to_w == i64
-            emit = WasmBuilder.i64_extend_i32_u
-        elseif f === Core.Intrinsics.zext_int && from === Bool && full(to, to_w) && to_w == i32
-            emit = _ -> nothing
-        elseif (f === Core.Intrinsics.sitofp || f === Core.Intrinsics.uitofp) && full(from, from_w) && full(to, to_w) && int(from_w) && flt(to_w)
-            local s = f === Core.Intrinsics.sitofp
-            emit = to_w == f64 ? (from_w == i64 ? (s ? WasmBuilder.f64_convert_i64_s : WasmBuilder.f64_convert_i64_u) : (s ? WasmBuilder.f64_convert_i32_s : WasmBuilder.f64_convert_i32_u)) :
-                                 (from_w == i64 ? (s ? WasmBuilder.f32_convert_i64_s : WasmBuilder.f32_convert_i64_u) : (s ? WasmBuilder.f32_convert_i32_s : WasmBuilder.f32_convert_i32_u))
-        elseif (f === Core.Intrinsics.fptosi || f === Core.Intrinsics.fptoui) && full(from, from_w) && full(to, to_w) && flt(from_w) && int(to_w)
-            local s = f === Core.Intrinsics.fptosi
-            emit = to_w == i64 ? (from_w == f64 ? (s ? WasmBuilder.i64_trunc_sat_f64_s : WasmBuilder.i64_trunc_sat_f64_u) : (s ? WasmBuilder.i64_trunc_sat_f32_s : WasmBuilder.i64_trunc_sat_f32_u)) :
-                                 (from_w == f64 ? (s ? WasmBuilder.i32_trunc_sat_f64_s : WasmBuilder.i32_trunc_sat_f64_u) : (s ? WasmBuilder.i32_trunc_sat_f32_s : WasmBuilder.i32_trunc_sat_f32_u))
-        elseif f === Core.Intrinsics.fpext && full(from, from_w) && full(to, to_w) && from_w == f32 && to_w == f64
-            emit = WasmBuilder.f64_promote_f32
-        elseif f === Core.Intrinsics.fptrunc && full(from, from_w) && full(to, to_w) && from_w == f64 && to_w == f32
-            emit = WasmBuilder.f32_demote_f64
-        elseif f === Core.Intrinsics.bitcast && full(from, from_w) && full(to, to_w) && sizeof(from) == sizeof(to)
-            emit = from_w == to_w ? (_ -> nothing) :
-                   to_w == f64 ? WasmBuilder.f64_reinterpret_i64 : to_w == i64 ? WasmBuilder.i64_reinterpret_f64 :
-                   to_w == f32 ? WasmBuilder.f32_reinterpret_i32 : WasmBuilder.i32_reinterpret_f32
-        end
-        if emit === nothing && (narrow(from) || narrow(to)) && from isa DataType && from <: Base.BitInteger && to isa DataType
-            # a conversion with an 8- or 16-bit side: the source read in the view the conversion
-            # needs, the instruction between widths, and the result put in its type's form
-            local view = (f === Core.Intrinsics.sext_int || f === Core.Intrinsics.sitofp) ? signed_view :
-                         (f === Core.Intrinsics.zext_int || f === Core.Intrinsics.uitofp) ? unsigned_view : (_::Type -> nothing)
-            local between = nothing
-            if (f === Core.Intrinsics.trunc_int || f === Core.Intrinsics.bitcast) && to <: Base.BitInteger && sizeof(to) <= sizeof(from)
-                between = from_w == i64 ? WasmBuilder.i32_wrap_i64 : (_ -> nothing)
-            elseif (f === Core.Intrinsics.sext_int || f === Core.Intrinsics.zext_int) && to <: Base.BitInteger && sizeof(to) >= sizeof(from)
-                between = to_w == i64 ? (f === Core.Intrinsics.sext_int ? WasmBuilder.i64_extend_i32_s : WasmBuilder.i64_extend_i32_u) : (_ -> nothing)
-            elseif (f === Core.Intrinsics.sitofp || f === Core.Intrinsics.uitofp) && full(to, to_w) && (to_w == f32 || to_w == f64)
-                local s_ = f === Core.Intrinsics.sitofp
-                between = to_w == f64 ? (s_ ? WasmBuilder.f64_convert_i32_s : WasmBuilder.f64_convert_i32_u) : (s_ ? WasmBuilder.f32_convert_i32_s : WasmBuilder.f32_convert_i32_u)
-            end
-            between === nothing && return nothing
-            translate_expression(code_gen, x, from_w)
-            narrow(from) && view(from)
-            between(b[])
-            narrow(to) && put_form(to)
-            return to_w
-        end
-        emit === nothing && return nothing
-        translate_expression(code_gen, x, from_w)
-        emit(b[])
-        return to_w
-    end
-
-    # Julia's flipsign_int(x, y): x where y is not negative, else its wrapping negation (Julia's
-    # codegen: a select over y >= 0); x and y of one full-width integer type
-    if f === Core.Intrinsics.flipsign_int && length(args) == 2
-        local x = args[1]
-        local w = type_of_exp(self, x)
-        (w == i32 || w == i64) && full(dart_type_of(self, x), w) && dart_type_of(self, args[2]) === dart_type_of(self, x) || return nothing
-        local tmp = add_local(code_gen, w)
-        local zero() = w == i64 ? WasmBuilder.i64_const(b[], 0) : WasmBuilder.i32_const(b[], 0)
-        translate_expression(code_gen, x, w)
-        WasmBuilder.local_tee(b[], tmp)
-        zero()
-        WasmBuilder.local_get(b[], tmp)
-        w == i64 ? WasmBuilder.i64_sub(b[]) : WasmBuilder.i32_sub(b[])
+# Julia's `ifelse`: both values computed, one chosen by the Bool, wasm's typed select
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:ifelse}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local b = self.code_gen.b
+    local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
+    local w = type_of_exp(self, args[2])
+    if dart_type_of(self, args[1]) === Bool && w isa WasmBuilder.IR.NumType && type_of_exp(self, args[3]) == w
         translate_expression(code_gen, args[2], w)
-        zero()
-        w == i64 ? WasmBuilder.i64_ge_s(b[]) : WasmBuilder.i32_ge_s(b[])
+        translate_expression(code_gen, args[3], w)
+        translate_expression(code_gen, args[1], i32)
         WasmBuilder.select(b[], w)
         return w
     end
+    return nothing
+end
 
-    # Julia's shifts, as its codegen answers them: the count is unsigned, and a count of the width or
-    # more shifts every bit out (0 for shl_int and lshr_int, the sign for ashr_int), where wasm's
-    # shift counts modulo the width; the count is converted to the value's type for the instruction
-    if length(args) == 2 && (f === Core.Intrinsics.shl_int || f === Core.Intrinsics.lshr_int || f === Core.Intrinsics.ashr_int)
-        local x = args[1]
-        local y = args[2]
-        local xw = type_of_exp(self, x)
-        local yw = type_of_exp(self, y)
-        local xt = dart_type_of(self, x)
-        local yt = dart_type_of(self, y)
-        local int_operand(t::Type, w::WasmBuilder.IR.ValueType) = (full(t, w) || narrow(t)) && (w == i32 || w == i64)
-        (int_operand(xt, xw) && int_operand(yt, yw)) || return nothing
-        # the width is the value's own, an 8- or 16-bit integer's its type's
-        local width = 8 * sizeof(xt)
-        local count = add_local(code_gen, yw)
-        local xconst(v::Int) = xw == i64 ? WasmBuilder.i64_const(b[], v) : WasmBuilder.i32_const(b[], v)
-        local push_count() = begin
-            translate_expression(code_gen, y, yw)
-            WasmBuilder.local_tee(b[], count)
-            yw == xw || (xw == i32 ? WasmBuilder.i32_wrap_i64(b[]) : WasmBuilder.i64_extend_i32_u(b[]))
+# Julia's conversions, `(T, x)`: the type converted to, then the value (dart's wasmI32FromInt,
+# wasmF32FromDouble and their kin), each as Julia's codegen answers: trunc_int wraps, sext_int and
+# zext_int extend by their own sign (a Bool zero-extends its 0 or 1), sitofp and uitofp round to
+# nearest, fpext and fptrunc are IEEE's, bitcast reinterprets bits of one width. fptosi and fptoui
+# of a value the integer cannot hold give "an arbitrary value" (unsafe_trunc, the bare intrinsic),
+# never an error, and natively (aarch64's fcvtzs) the value saturates and NaN is 0, which wasm's
+# saturating truncation computes: no trap, which no Julia program does there (A47S1)
+# the type operand a literal or a constant binding, its static type Type{T}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:conversion}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local b = self.code_gen.b
+    local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
+    local full(t::Type, w::WasmBuilder.IR.ValueType) = generate_static_intrinsic(Val(:full), t, w)
+    local narrow(t::Type) = generate_static_intrinsic(Val(:narrow), t)
+    local put_form(t::Type) = generate_static_intrinsic(Val(:put_form), b[], t)
+    local signed_view(t::Type) = generate_static_intrinsic(Val(:signed_view), b[], t)
+    local unsigned_view(t::Type) = generate_static_intrinsic(Val(:unsigned_view), b[], t)
+    local type_operand = dart_type_of(self, args[1])
+    local to = type_operand.parameters[1]
+    local x = args[2]
+    local from = dart_type_of(self, x)
+    local from_w = type_of_exp(self, x)
+    local to_w = translate_type(translator(self), to)
+    local int(w::WasmBuilder.IR.ValueType) = w == i32 || w == i64
+    local flt(w::WasmBuilder.IR.ValueType) = w == f32 || w == f64
+    local emit::Union{Function,Nothing} = nothing
+    if f === Core.Intrinsics.trunc_int && full(from, from_w) && full(to, to_w) && from_w == i64 && to_w == i32
+        emit = WasmBuilder.i32_wrap_i64
+    elseif f === Core.Intrinsics.sext_int && full(from, from_w) && full(to, to_w) && from_w == i32 && to_w == i64
+        emit = WasmBuilder.i64_extend_i32_s
+    elseif f === Core.Intrinsics.zext_int && (full(from, from_w) || from === Bool) && full(to, to_w) && from_w == i32 && to_w == i64
+        emit = WasmBuilder.i64_extend_i32_u
+    elseif f === Core.Intrinsics.zext_int && from === Bool && full(to, to_w) && to_w == i32
+        emit = _ -> nothing
+    elseif (f === Core.Intrinsics.sitofp || f === Core.Intrinsics.uitofp) && full(from, from_w) && full(to, to_w) && int(from_w) && flt(to_w)
+        local s = f === Core.Intrinsics.sitofp
+        emit = to_w == f64 ? (from_w == i64 ? (s ? WasmBuilder.f64_convert_i64_s : WasmBuilder.f64_convert_i64_u) : (s ? WasmBuilder.f64_convert_i32_s : WasmBuilder.f64_convert_i32_u)) :
+                             (from_w == i64 ? (s ? WasmBuilder.f32_convert_i64_s : WasmBuilder.f32_convert_i64_u) : (s ? WasmBuilder.f32_convert_i32_s : WasmBuilder.f32_convert_i32_u))
+    elseif (f === Core.Intrinsics.fptosi || f === Core.Intrinsics.fptoui) && full(from, from_w) && full(to, to_w) && flt(from_w) && int(to_w)
+        local s = f === Core.Intrinsics.fptosi
+        emit = to_w == i64 ? (from_w == f64 ? (s ? WasmBuilder.i64_trunc_sat_f64_s : WasmBuilder.i64_trunc_sat_f64_u) : (s ? WasmBuilder.i64_trunc_sat_f32_s : WasmBuilder.i64_trunc_sat_f32_u)) :
+                             (from_w == f64 ? (s ? WasmBuilder.i32_trunc_sat_f64_s : WasmBuilder.i32_trunc_sat_f64_u) : (s ? WasmBuilder.i32_trunc_sat_f32_s : WasmBuilder.i32_trunc_sat_f32_u))
+    elseif f === Core.Intrinsics.fpext && full(from, from_w) && full(to, to_w) && from_w == f32 && to_w == f64
+        emit = WasmBuilder.f64_promote_f32
+    elseif f === Core.Intrinsics.fptrunc && full(from, from_w) && full(to, to_w) && from_w == f64 && to_w == f32
+        emit = WasmBuilder.f32_demote_f64
+    elseif f === Core.Intrinsics.bitcast && full(from, from_w) && full(to, to_w) && sizeof(from) == sizeof(to)
+        emit = from_w == to_w ? (_ -> nothing) :
+               to_w == f64 ? WasmBuilder.f64_reinterpret_i64 : to_w == i64 ? WasmBuilder.i64_reinterpret_f64 :
+               to_w == f32 ? WasmBuilder.f32_reinterpret_i32 : WasmBuilder.i32_reinterpret_f32
+    end
+    if emit === nothing && (narrow(from) || narrow(to)) && from isa DataType && from <: Base.BitInteger && to isa DataType
+        # a conversion with an 8- or 16-bit side: the source read in the view the conversion
+        # needs, the instruction between widths, and the result put in its type's form
+        local view = (f === Core.Intrinsics.sext_int || f === Core.Intrinsics.sitofp) ? signed_view :
+                     (f === Core.Intrinsics.zext_int || f === Core.Intrinsics.uitofp) ? unsigned_view : (_::Type -> nothing)
+        local between = nothing
+        if (f === Core.Intrinsics.trunc_int || f === Core.Intrinsics.bitcast) && to <: Base.BitInteger && sizeof(to) <= sizeof(from)
+            between = from_w == i64 ? WasmBuilder.i32_wrap_i64 : (_ -> nothing)
+        elseif (f === Core.Intrinsics.sext_int || f === Core.Intrinsics.zext_int) && to <: Base.BitInteger && sizeof(to) >= sizeof(from)
+            between = to_w == i64 ? (f === Core.Intrinsics.sext_int ? WasmBuilder.i64_extend_i32_s : WasmBuilder.i64_extend_i32_u) : (_ -> nothing)
+        elseif (f === Core.Intrinsics.sitofp || f === Core.Intrinsics.uitofp) && full(to, to_w) && (to_w == f32 || to_w == f64)
+            local s_ = f === Core.Intrinsics.sitofp
+            between = to_w == f64 ? (s_ ? WasmBuilder.f64_convert_i32_s : WasmBuilder.f64_convert_i32_u) : (s_ ? WasmBuilder.f32_convert_i32_s : WasmBuilder.f32_convert_i32_u)
         end
-        local push_out_of_range() = begin
-            WasmBuilder.local_get(b[], count)
-            yw == i64 ? WasmBuilder.i64_const(b[], width) : WasmBuilder.i32_const(b[], width)
-            yw == i64 ? WasmBuilder.i64_ge_u(b[]) : WasmBuilder.i32_ge_u(b[])
-        end
-        if f === Core.Intrinsics.ashr_int
-            translate_expression(code_gen, x, xw)
-            narrow(xt) && signed_view(xt)
-            xconst(width - 1)
-            push_count()
-            push_out_of_range()
-            WasmBuilder.select(b[], xw)
-            xw == i64 ? WasmBuilder.i64_shr_s(b[]) : WasmBuilder.i32_shr_s(b[])
+        between === nothing && return nothing
+        translate_expression(code_gen, x, from_w)
+        narrow(from) && view(from)
+        between(b[])
+        narrow(to) && put_form(to)
+        return to_w
+    end
+    emit === nothing && return nothing
+    translate_expression(code_gen, x, from_w)
+    emit(b[])
+    return to_w
+end
+
+# Julia's flipsign_int(x, y): x where y is not negative, else its wrapping negation (Julia's
+# codegen: a select over y >= 0); x and y of one full-width integer type
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:flipsign}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local b = self.code_gen.b
+    local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
+    local full(t::Type, w::WasmBuilder.IR.ValueType) = generate_static_intrinsic(Val(:full), t, w)
+    local x = args[1]
+    local w = type_of_exp(self, x)
+    (w == i32 || w == i64) && full(dart_type_of(self, x), w) && dart_type_of(self, args[2]) === dart_type_of(self, x) || return nothing
+    local tmp = add_local(code_gen, w)
+    local zero() = w == i64 ? WasmBuilder.i64_const(b[], 0) : WasmBuilder.i32_const(b[], 0)
+    translate_expression(code_gen, x, w)
+    WasmBuilder.local_tee(b[], tmp)
+    zero()
+    WasmBuilder.local_get(b[], tmp)
+    w == i64 ? WasmBuilder.i64_sub(b[]) : WasmBuilder.i32_sub(b[])
+    translate_expression(code_gen, args[2], w)
+    zero()
+    w == i64 ? WasmBuilder.i64_ge_s(b[]) : WasmBuilder.i32_ge_s(b[])
+    WasmBuilder.select(b[], w)
+    return w
+end
+
+# Julia's shifts, as its codegen answers them: the count is unsigned, and a count of the width or
+# more shifts every bit out (0 for shl_int and lshr_int, the sign for ashr_int), where wasm's
+# shift counts modulo the width; the count is converted to the value's type for the instruction
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:shift}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local b = self.code_gen.b
+    local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
+    local full(t::Type, w::WasmBuilder.IR.ValueType) = generate_static_intrinsic(Val(:full), t, w)
+    local narrow(t::Type) = generate_static_intrinsic(Val(:narrow), t)
+    local put_form(t::Type) = generate_static_intrinsic(Val(:put_form), b[], t)
+    local signed_view(t::Type) = generate_static_intrinsic(Val(:signed_view), b[], t)
+    local unsigned_view(t::Type) = generate_static_intrinsic(Val(:unsigned_view), b[], t)
+    local x = args[1]
+    local y = args[2]
+    local xw = type_of_exp(self, x)
+    local yw = type_of_exp(self, y)
+    local xt = dart_type_of(self, x)
+    local yt = dart_type_of(self, y)
+    local int_operand(t::Type, w::WasmBuilder.IR.ValueType) = (full(t, w) || narrow(t)) && (w == i32 || w == i64)
+    (int_operand(xt, xw) && int_operand(yt, yw)) || return nothing
+    # the width is the value's own, an 8- or 16-bit integer's its type's
+    local width = 8 * sizeof(xt)
+    local count = add_local(code_gen, yw)
+    local xconst(v::Int) = xw == i64 ? WasmBuilder.i64_const(b[], v) : WasmBuilder.i32_const(b[], v)
+    local push_count() = begin
+        translate_expression(code_gen, y, yw)
+        WasmBuilder.local_tee(b[], count)
+        yw == xw || (xw == i32 ? WasmBuilder.i32_wrap_i64(b[]) : WasmBuilder.i64_extend_i32_u(b[]))
+    end
+    local push_out_of_range() = begin
+        WasmBuilder.local_get(b[], count)
+        yw == i64 ? WasmBuilder.i64_const(b[], width) : WasmBuilder.i32_const(b[], width)
+        yw == i64 ? WasmBuilder.i64_ge_u(b[]) : WasmBuilder.i32_ge_u(b[])
+    end
+    if f === Core.Intrinsics.ashr_int
+        translate_expression(code_gen, x, xw)
+        narrow(xt) && signed_view(xt)
+        xconst(width - 1)
+        push_count()
+        push_out_of_range()
+        WasmBuilder.select(b[], xw)
+        xw == i64 ? WasmBuilder.i64_shr_s(b[]) : WasmBuilder.i32_shr_s(b[])
+    else
+        xconst(0)
+        translate_expression(code_gen, x, xw)
+        narrow(xt) && f === Core.Intrinsics.lshr_int && unsigned_view(xt)
+        push_count()
+        if f === Core.Intrinsics.shl_int
+            xw == i64 ? WasmBuilder.i64_shl(b[]) : WasmBuilder.i32_shl(b[])
         else
-            xconst(0)
-            translate_expression(code_gen, x, xw)
-            narrow(xt) && f === Core.Intrinsics.lshr_int && unsigned_view(xt)
-            push_count()
-            if f === Core.Intrinsics.shl_int
-                xw == i64 ? WasmBuilder.i64_shl(b[]) : WasmBuilder.i32_shl(b[])
-            else
-                xw == i64 ? WasmBuilder.i64_shr_u(b[]) : WasmBuilder.i32_shr_u(b[])
-            end
-            push_out_of_range()
-            WasmBuilder.select(b[], xw)
+            xw == i64 ? WasmBuilder.i64_shr_u(b[]) : WasmBuilder.i32_shr_u(b[])
         end
-        narrow(xt) && put_form(xt)
-        return xw
+        push_out_of_range()
+        WasmBuilder.select(b[], xw)
     end
+    narrow(xt) && put_form(xt)
+    return xw
+end
 
-    # an 8- or 16-bit integer's arithmetic, comparison and bitwise operations, its operands of one
-    # type: each in the view its operation reads, the i32 instruction, the result in its type's form
-    if all(a -> narrow(dart_type_of(self, a)), args) && allequal(dart_type_of(self, a) for a in args) && 1 <= length(args) <= 2
-        local t = dart_type_of(self, args[1])
-        local I = Core.Intrinsics
-        local signed_ops = (I.sdiv_int, I.srem_int, I.slt_int, I.sle_int)
-        local unsigned_ops = (I.udiv_int, I.urem_int, I.ult_int, I.ule_int)
-        local plain_ops = (I.add_int, I.sub_int, I.mul_int, I.and_int, I.or_int, I.xor_int, I.eq_int, I.ne_int)
-        if length(args) == 2 && (f in signed_ops || f in unsigned_ops || f in plain_ops)
-            local code = Intrinsifier__binary_operator_map[][i32][i32][f]
-            for a in args
-                translate_expression(code_gen, a, i32)
-                f in signed_ops && signed_view(t)
-                f in unsigned_ops && unsigned_view(t)
-            end
-            code(code_gen)
-            Intrinsifier_is_comparison(f) && return i32
-            put_form(t)
-            return i32
-        elseif length(args) == 1 && (f === I.neg_int || f === I.not_int)
-            translate_expression(code_gen, args[1], i32)
-            Intrinsifier__unary_operator_map[][i32][f](code_gen)
-            put_form(t)
-            return i32
+# an 8- or 16-bit integer's arithmetic, comparison and bitwise operations, its operands of one
+# type: each in the view its operation reads, the i32 instruction, the result in its type's form
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:narrow_operator}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local b = self.code_gen.b
+    local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
+    local put_form(t::Type) = generate_static_intrinsic(Val(:put_form), b[], t)
+    local signed_view(t::Type) = generate_static_intrinsic(Val(:signed_view), b[], t)
+    local unsigned_view(t::Type) = generate_static_intrinsic(Val(:unsigned_view), b[], t)
+    local t = dart_type_of(self, args[1])
+    local I = Core.Intrinsics
+    local signed_ops = (I.sdiv_int, I.srem_int, I.slt_int, I.sle_int)
+    local unsigned_ops = (I.udiv_int, I.urem_int, I.ult_int, I.ule_int)
+    local plain_ops = (I.add_int, I.sub_int, I.mul_int, I.and_int, I.or_int, I.xor_int, I.eq_int, I.ne_int)
+    if length(args) == 2 && (f in signed_ops || f in unsigned_ops || f in plain_ops)
+        local code = Intrinsifier__binary_operator_map[][i32][i32][f]
+        for a in args
+            translate_expression(code_gen, a, i32)
+            f in signed_ops && signed_view(t)
+            f in unsigned_ops && unsigned_view(t)
         end
-        return nothing
+        code(code_gen)
+        Intrinsifier_is_comparison(f) && return i32
+        put_form(t)
+        return i32
+    elseif length(args) == 1 && (f === I.neg_int || f === I.not_int)
+        translate_expression(code_gen, args[1], i32)
+        Intrinsifier__unary_operator_map[][i32][f](code_gen)
+        put_form(t)
+        return i32
     end
+    return nothing
+end
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:operator}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
     # whether Julia's operation on an operand of type `t`, held in the wasm number type `w`, is the
     # instruction's: the operand is as wide as `w`, or a Bool under a bitwise operation or equality
     local same_width(t::Type, w::WasmBuilder.IR.ValueType) = t isa DataType && isprimitivetype(t) &&
