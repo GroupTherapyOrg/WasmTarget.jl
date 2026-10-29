@@ -13,36 +13,49 @@ end
 # (src/julia/reject.jl), checked in every run, so a port's asserts are always enabled
 @parity "dart2wasm/lib/util.dart:21 compilerAssertsEnabled" compiler_asserts_enabled()::Bool = true
 
-@parity "dart2wasm/lib/util.dart:27 hasPragma" @unported function has_pragma(core_types::NoCounterpart, node::NoCounterpart, name::String) end
+@parity "dart2wasm/lib/util.dart:27 hasPragma" has_pragma(core_types::NoCounterpart, node::NoCounterpart, name::String)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:27 hasPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "has_pragma")
 
-@parity "dart2wasm/lib/util.dart:31 getPragma" @unported function get_pragma(core_types::NoCounterpart, node::NoCounterpart, name::String; default_value = nothing) end
+@parity "dart2wasm/lib/util.dart:31 getPragma" get_pragma(core_types::NoCounterpart, node::NoCounterpart, name::String; default_value::Any = nothing)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:31 getPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "get_pragma")
 
-@parity "dart2wasm/lib/util.dart:68 hasWasmImportPragma" @unported function has_wasm_import_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/util.dart:68 hasWasmImportPragma" has_wasm_import_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:68 hasWasmImportPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "has_wasm_import_pragma")
 
-@parity "dart2wasm/lib/util.dart:72 getWasmImportPragma" @unported function get_wasm_import_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/util.dart:72 getWasmImportPragma" get_wasm_import_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:72 getWasmImportPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "get_wasm_import_pragma")
 
 @parity "dart2wasm/lib/util.dart:91 ImportName" ImportName(module_name::String, item_name::String)::ImportName = ImportName(Val(:_), module_name, item_name)
 
 # dart's toString; Julia's show writes to the stream it is given
 @parity "dart2wasm/lib/util.dart:94 ImportName.toString" Base.show(io::IO, self::ImportName)::Nothing = print(io, self.module_name, '.', self.item_name)
 
-@parity "dart2wasm/lib/util.dart:99 hasWasmExportPragma" @unported function has_wasm_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/util.dart:99 hasWasmExportPragma" has_wasm_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:99 hasWasmExportPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "has_wasm_export_pragma")
 
-@parity "dart2wasm/lib/util.dart:103 hasWasmWeakExportPragma" @unported function has_wasm_weak_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/util.dart:103 hasWasmWeakExportPragma" has_wasm_weak_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:103 hasWasmWeakExportPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "has_wasm_weak_export_pragma")
 
-@parity "dart2wasm/lib/util.dart:107 getWasmPreferInlinePragma" @unported function get_wasm_prefer_inline_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/util.dart:107 getWasmPreferInlinePragma" get_wasm_prefer_inline_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:107 getWasmPreferInlinePragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "get_wasm_prefer_inline_pragma")
 
-@parity "dart2wasm/lib/util.dart:116 getWasmNeverInlinePragma" @unported function get_wasm_never_inline_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/util.dart:116 getWasmNeverInlinePragma" get_wasm_never_inline_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:116 getWasmNeverInlinePragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "get_wasm_never_inline_pragma")
 
-@parity "dart2wasm/lib/util.dart:125 getWasmExportPragma" @unported function get_wasm_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/util.dart:125 getWasmExportPragma" get_wasm_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:125 getWasmExportPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "get_wasm_export_pragma")
 
-@parity "dart2wasm/lib/util.dart:134 getWasmWeakExportPragma" @unported function get_wasm_weak_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/util.dart:134 getWasmWeakExportPragma" get_wasm_weak_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:134 getWasmWeakExportPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "get_wasm_weak_export_pragma")
 
-@parity "dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma" @unported function has_wasm_pure_function_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma" has_wasm_pure_function_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "has_wasm_pure_function_pragma")
 
-@parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" @unported function add_wasm_entry_point_pragma(node, core_types::NoCounterpart) end
+@parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" add_wasm_entry_point_pragma(node::NoCounterpart, core_types::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:154 addWasmEntryPointPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "add_wasm_entry_point_pragma")
 
-@parity "dart2wasm/lib/util.dart:157 addPragma" @unported function add_pragma(node, pragma_name::String, core_types::NoCounterpart; value::Union{Nothing,NirConst} = nothing) end
+@parity "dart2wasm/lib/util.dart:157 addPragma" add_pragma(node::NoCounterpart, pragma_name::String, core_types::NoCounterpart; value::Union{Nothing,NirConst} = nothing)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:157 addPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "add_pragma")
 
 # dart's `>>>=` is the unsigned shift, Julia's `>>>`
 @parity "dart2wasm/lib/util.dart:172 _intToLittleEndianBytes" function _int_to_little_endian_bytes(i::Int64)::Vector{UInt8}
@@ -120,4 +133,8 @@ end
     return String(code_units)
 end
 
-@parity "dart2wasm/lib/util.dart:250 createEmptyComponent" @unported function create_empty_component() end
+# dart's empty Kernel component with TFA's metadata repositories, which a codegen phase reads a .dill into;
+# Julia's program is the closed world build_nir alone makes, its inference results the metadata (the
+# Kernel table's Component and MetadataRepository rows)
+@parity "dart2wasm/lib/util.dart:250 createEmptyComponent" create_empty_component()::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/util.dart:250 createEmptyComponent: a Kernel component read from a .dill; Julia's program is the closed world build_nir makes, its inference results the metadata"), "create_empty_component")
