@@ -44,6 +44,7 @@ anchor in `src/` has a row.)
 | Fatal/trap resolution | `record_unsupported!` (diagnostics.jl) | Diagnostics |
 | Closed-world classes | `closed_world_classes`, `_meet_value!`, `_meet_class!` (classes.jl: every class a value can have, once, its supertype and its fields' classes with it), read by class_info.jl's numbering | ValueClasses |
 | Record layout | `RecordShape`, `RecordShape_from_type`, `==`, `get_name_index`, `get_positional_index` (records.jl: a name's index its declared place, == exactly when the indices agree, an open tuple type rejected) | RecordLayout |
+| Lazy static field | `get_definition_for_static_field`'s lazy arm (globals.jl: the flag or nullable global, the GlobalRef-keyed initializer), read through dart's getter and setter (a read checks the flag before the global, the setter sets it, the initializer runs once and reads no field) | StaticFieldInit |
 | Late final cells | `Late{T}`, `_late_get`, `_late_set!` (late.jl: assigned once or initialized on the first read, a cycle and a misuse rejected, an unassigned read Unported) | LateCell |
 | Constant cache keys | `_bounded_hash`, `Base.hash(::NirConst)` (nir.jl) | ConstantHash |
 | Box contents join | `box_contents_type` (box_capture.jl) | BoxJoin |
