@@ -34,7 +34,7 @@ end
 # ---- the src/julia names WasmBuilder's files use, written by dev/skeleton.jl write ----
 import ..@dart_export, ..@parity, ..@quarantine, ..AbstractInstructionsBuilder, ..AbstractModule,
        ..AbstractModuleBuilder, ..Internal, ..InvalidModule, ..Late, ..LinkedHashMap,
-       ..LinkedHashSet, ..Unported, ..reject!, ..strongly_connected_components
+       ..LinkedHashSet, ..Unported, ..field_name, ..reject!, ..strongly_connected_components
 # ---- end of WasmBuilder's src/julia names ----
 # a method serving every subtype alike is inferred once, not once per caller's type (a compile's first-use cost)
 import Base: @nospecializeinfer
@@ -68,15 +68,16 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..@unported, ..Abstra
        ..WasmExternRef, ..WasmF32, ..WasmF64, ..WasmI16, ..WasmI32, ..WasmI64, ..WasmI8, .._KINDS,
        ..build_nir, ..class_implemented_types, ..class_instance_fields, ..class_is_abstract,
        ..class_is_set_field, ..class_superclass, ..closed_world_classes, ..egal_by_identity,
-       ..field_may_be_null, ..holds_reference, ..nir_argument_type, ..nir_binding_is_constant,
-       ..nir_binding_value, ..nir_body_of, ..nir_callee, ..nir_carries_data, ..nir_const_type,
-       ..nir_foreign_import, ..nir_foreign_operands, ..nir_invoke_target, ..nir_method_nargs,
-       ..nir_operands, ..nir_runtime_member, ..nir_tuple_type, ..nir_used_statements,
-       ..nir_value_type, ..no_counterpart_rejection, ..reject!, ..run_wasm_opt,
-       ..throw_bounds_error, ..throw_divide_error, ..throw_invalid_memory_size,
-       ..throw_out_of_memory, ..throw_undef_ref_error, ..uf_add!, ..uf_find!, ..uf_union!,
-       ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!, ..wasm_string_alloc,
-       ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length
+       ..field_may_be_null, ..field_name, ..field_selector_calls, ..holds_reference,
+       ..nir_argument_type, ..nir_binding_is_constant, ..nir_binding_value, ..nir_body_of,
+       ..nir_callee, ..nir_carries_data, ..nir_const_type, ..nir_foreign_import,
+       ..nir_foreign_operands, ..nir_invoke_target, ..nir_method_nargs, ..nir_operands,
+       ..nir_runtime_member, ..nir_tuple_type, ..nir_used_statements, ..nir_value_type,
+       ..no_counterpart_rejection, ..reject!, ..run_wasm_opt, ..throw_bounds_error,
+       ..throw_divide_error, ..throw_invalid_memory_size, ..throw_out_of_memory,
+       ..throw_undef_ref_error, ..uf_add!, ..uf_find!, ..uf_union!, ..wasm_array_length,
+       ..wasm_array_new, ..wasm_array_write!, ..wasm_string_alloc, ..wasm_string_codeunit,
+       ..wasm_string_copy!, ..wasm_string_length
 # ---- end of Dart2Wasm's src/julia names ----
 # a dispatcher over every NIR kind is inferred once, not once per kind of node (a compile's first-use cost)
 import Base: @nospecializeinfer

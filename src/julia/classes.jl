@@ -546,3 +546,48 @@ context), so it is a class, its layout Julia's own leading field.
     c === Module || reject!(Internal("src/julia/classes.jl _module_instance_fields: $c, no Module"), at)
     return ClassField[ClassField(c, 0, "name", Symbol, false)]
 end
+
+# a field's name, its Julia name as text: a struct's field's, or a module binding's
+@quarantine "a Julia field is named by its fieldname, a Symbol or a tuple's position, and a binding by its Symbol, as kernel names a member by its Name's text (pkg/kernel/lib/src/ast/names.dart:25 text)" Core.GlobalRef field_name(field::Union{ClassField,GlobalRef})::String =
+    field isa ClassField ? field.name : string(field.name)
+
+# a field selector's calls: its field's name, whether it is the setter, its call count and the classes
+# its receivers' types admit
+@quarantine "a field selector's calls, Julia's field accesses on receivers its inference left abstract, as TFA counts a selector's calls in its TableSelectorInfo (pkg/vm/lib/metadata/table_selector.dart:10 TableSelectorInfo)" Core.DataType mutable struct FieldSelectorCalls
+    const name::String
+    const is_setter::Bool
+    call_count::Int
+    const classes::Vector{DataType}
+end
+
+"""
+Julia's answer where dart reads TFA's selector metadata: the calls of each field selector. A
+`Core.getfield(x, f)` or `Core.setfield!(x, f, v)` whose receiver's type Julia's inference left
+abstract (no concrete type, or a Union) and whose field `f` is a constant (a name or a position) is a
+dynamic call of the getter or setter selector named by `f`, dart's instance field access through the
+dispatch table. Each selector, a `FieldSelectorCalls` of its name and kind, in the order the closed world first meets it,
+maps to its call count and the classes its receivers' types admit, each class of `concrete` (the
+program's concrete classes) Julia's `<:` puts under one. DispatchTable.build (src/dispatch_table.jl)
+reads it where dart reads TFA's selector ids. A receiver of a concrete type is a direct access, no call of a selector.
+"""
+@quarantine "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, concrete::Vector{DataType})::Vector{FieldSelectorCalls}
+    local out = FieldSelectorCalls[]
+    for b in world, st in b.stmts
+        st isa NirCall || continue
+        local f = nir_callee(st)
+        (f === Core.getfield || f === Core.setfield!) || continue
+        length(st.args) >= 3 || continue
+        local receiver = nir_value_type(b, st.args[2])
+        isconcretetype(receiver) && continue
+        local name_op = st.args[3]
+        name_op isa NirConst && (name_op.c.val isa Symbol || name_op.c.val isa Int) || continue
+        local name = string(name_op.c.val); local is_setter = f === Core.setfield!
+        local k = findfirst(e -> e.name == name && e.is_setter == is_setter, out)
+        k === nothing && (push!(out, FieldSelectorCalls(name, is_setter, 0, DataType[])); k = length(out))
+        out[k].call_count += 1
+        for c in concrete
+            c <: receiver && !(c in out[k].classes) && push!(out[k].classes, c)
+        end
+    end
+    return out
+end

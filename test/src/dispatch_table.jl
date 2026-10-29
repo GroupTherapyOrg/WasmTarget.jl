@@ -102,7 +102,8 @@ end
     s.use_multiple_entry_points[] = false
     @test DD.entry_point_name(s, true) == "f"
     local mi = _mi(DispatchCases.f, (Int,))
-    s._normal = DD.SelectorTargets([(range = DD.Range(1, 1), target = mi)], [(range = DD.Range(1, 1), target = mi)], NamedTuple{(:range, :target),Tuple{DD.Range,Core.MethodInstance}}[])
+    local RT = NamedTuple{(:range, :target),Tuple{DD.Range,W.Reference}}
+    s._normal = DD.SelectorTargets(RT[(range = DD.Range(1, 1), target = mi)], RT[(range = DD.Range(1, 1), target = mi)], RT[])
     @test DD.targets(s; unchecked = false) === s._normal && DD.contains_target(s, mi) && !DD.contains_target(s, _mi(DispatchCases.g, (Float64,)))
     local s2 = DD.SelectorInfo__(dt, 1, "g", 0; is_setter = false, is_index_setter = false)
     s2.use_multiple_entry_points[] = true
@@ -123,4 +124,61 @@ end
     # an entry of the class ids table: the constant i31 reference of the class id
     local ce = DD.build_integer_expression(DD.main_module(t), 7)
     @test ce isa W.WasmBuilder.InstructionsBuilder
+end
+
+module FieldSelectorCases
+abstract type S end
+struct A <: S; side::Int; tag::Int; end
+struct B <: S; side::Int; tag::Int; end
+struct C <: S; tag::Int; end
+struct Holder; s::S; end
+# a field read on a receiver Julia left abstract (S): a call of the field's getter selector
+@noinline read_side(h::Holder) = h.s.side
+@noinline read_tag(h::Holder) = h.s.tag
+two(n::Int) = (read_side(Holder(n > 0 ? A(n, 1) : B(n, 2))), read_tag(Holder(n > 1 ? A(n, 3) : B(n, 4))))
+# C, which a read of `side` on an S may reach, has no field `side`: Julia's FieldError
+missing_side(n::Int) = read_side(Holder(n > 0 ? A(n, 1) : C(n)))
+end
+
+@testset "dispatch_table.dart: field selectors, each class's accessor by class id (dev/formal/FieldSelectorTable.tla)" begin
+    local W = WasmTarget
+    local F = FieldSelectorCases
+    local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
+    local t = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
+    DD._init_modules(t, nothing)
+    collect(DD.ClassInfoCollector(t))
+    # Julia's IR reads both fields on an S, each one call of its getter selector
+    local calls = W.field_selector_calls(t.component, DataType[F.A, F.B, F.Holder])
+    @test Set((c.name, c.is_setter, c.call_count, Set(c.classes)) for c in calls) == Set([("side", false, 1, Set([F.A, F.B])), ("tag", false, 1, Set([F.A, F.B]))])
+    local dt = t.dispatch_table[]
+    DD.build(dt)
+    local ids = t.class_id_numbering[].class_ids
+    local getter(cls, name) = W.FieldReference(only(f for f in W.class_instance_fields(cls, "test") if f.name == name), W.FieldReferenceKind_getter)
+    local seen_slots = Set{Int}()
+    for name in ("side", "tag")
+        local s = DD.selector_for_target(dt, getter(F.A, name))
+        @test s.name == name && !s.is_setter && s.call_count == 1
+        local tg = DD.targets(s; unchecked = false)
+        # two classes, two accessors: two ranges, called through the table
+        @test length(tg.all_target_ranges) == 2 && isempty(tg.static_dispatch_ranges) && tg.offset !== nothing
+        for cls in (F.A, F.B)
+            # DispatchExact: the slot at the class id plus the selector's offset is the class's own accessor
+            local slot = ids[cls] + tg.offset
+            @test dt._table[][slot + 1] === getter(cls, name)
+            # SlotUnique: no slot serves two selectors
+            @test !(slot in seen_slots)
+            push!(seen_slots, slot)
+        end
+    end
+    @test count(!isnothing, dt._table[]) == 4
+    # a method is no instance member: no selector
+    local e = try; DD.selector_for_target(dt, t.component.entry); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+    # MissingFieldTraps: a class the receiver admits without the field reaches Julia's FieldError, a
+    # target not yet written, so the build rejects there, located, never leaving the slot empty
+    local t2 = DD.Translator(W.build_nir(W.check_subset(F.missing_side, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
+    DD._init_modules(t2, nothing)
+    collect(DD.ClassInfoCollector(t2))
+    local e2 = try; DD.build(t2.dispatch_table[]); nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Unquarantined && occursin("FieldError", e2.rejection.row)
 end

@@ -74,7 +74,8 @@ end
     # member waits for each; the class's allocation then makes its function, once
     local s = W.SelectorInfo__(t.dispatch_table[], 0, "f", 1; is_setter = false, is_index_setter = false)
     s.use_multiple_entry_points[] = false
-    s._normal = W.SelectorTargets([(range = W.Range(3, 4), target = mi)], [(range = W.Range(3, 4), target = mi)], NamedTuple{(:range, :target),Tuple{W.Range,Core.MethodInstance}}[])
+    local RT = NamedTuple{(:range, :target),Tuple{W.Range,WasmTarget.Reference}}
+    s._normal = W.SelectorTargets(RT[(range = W.Range(3, 4), target = mi)], RT[(range = W.Range(3, 4), target = mi)], RT[])
     W.record_selector_use(fc, s, false)
     @test 0 in fc._called_selectors && fc._pending_allocation[3] == [mi] && fc._pending_allocation[4] == [mi]
     @test W.get_existing_function(fc, mi) === nothing
