@@ -11,6 +11,15 @@ cd "$(dirname "$0")/.."
 # checks and held three ships behind it (march-monitor-a, 2026-10-28 21:45); to try a change before
 # shipping, run its test file at background QoS (taskpolicy -b) with a hard limit
 [ "${CHECK_LANDING:-}" = 1 ] || { echo "check: REFUSED — dev/check.sh runs only inside dev/ship.sh, which holds the landing lock; to try a change, run its test file under taskpolicy -b with a hard limit"; exit 2; }
+# a line stop: while the common dir's wt-line-stop exists, holding one lane's name, every other lane's check
+# refuses at once, so a base that reds every check spends no landing on a certain red, and the named lane
+# lands the stop's own fix. check.sh runs from the scratch rebased onto origin/wt2, so a stop binds every
+# lane's ship as soon as this lands, whatever autoship.sh its loop runs (a stop by message leaked six loops
+# into four certain D14 reds, march-corrector 2026-10-29 13:20)
+stop="$(git rev-parse --path-format=absolute --git-common-dir)/wt-line-stop"
+if [ -f "$stop" ] && [ "$(head -1 "$stop")" != "$(basename "${WT_DEPOT_DIR:-$(pwd)}")" ]; then
+  echo "check: REFUSED — line stop: only $(head -1 "$stop") lands until $stop is removed"; exit 2
+fi
 # the depot of the lane being checked: dev/ship.sh checks in a scratch worktree of the lane and
 # names the lane in WT_DEPOT_DIR, so its compiled images are the lane's, never a cold depot
 . dev/depot.sh; wt_depot_export "${WT_DEPOT_DIR:-$(pwd)}"
