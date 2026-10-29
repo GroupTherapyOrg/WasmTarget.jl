@@ -138,8 +138,10 @@ end
     local kind = get(TRIM_ERROR_KINDS, string(cause.desc), nothing)
     kind === nothing && reject!(Internal("src/julia/subset.jl TRIM_ERROR_KINDS: Julia $VERSION's trim verifier reports \"$(cause.desc)\", a description it has no kind for"), at)
     cause isa Core.Compiler.TrimVerifier.CCallableMissing && return TrimError(kind, nothing, 0, Base.StackTraces.StackFrame[], TrimCCallableMissing(cause))
+    cause isa Core.Compiler.TrimVerifier.CallMissing ||
+        reject!(Internal("src/julia/subset.jl _trim_error: Julia $VERSION's trim verifier reports a $(typeof(cause)), a record it has no kind for (TrimCause)"), at)
     return TrimError(kind, cause.codeinst, cause.stmtidx, Core.Compiler.TrimVerifier.verify_create_stackframes(cause.codeinst, cause.stmtidx, parents),
-                     TrimCallMissing(cause::Core.Compiler.TrimVerifier.CallMissing))
+                     TrimCallMissing(cause))
 end
 
 """

@@ -110,8 +110,14 @@ end
 
 # the errors' text, each the verifier reports numbered as juliac numbers them; an entry with nothing to
 # verify, Julia's own text alone
-@quarantine "the verifier's errors numbered as juliac prints them" Base.join _trim_texts(errors::Vector{TrimError})::String =
-    rstrip(join(((e.cause isa TrimEntryText ? "" : "Verifier error #$i: ") * _trim_text(e) for (i, e) in enumerate(errors)), "\n\n"))
+@quarantine "the verifier's errors numbered as juliac prints them" Base.join function _trim_texts(errors::Vector{TrimError})::String
+    local numbered(i, e) = @exhaustive e.cause::TrimCause begin
+        TrimCallMissing => "Verifier error #$i: "
+        TrimCCallableMissing => "Verifier error #$i: "
+        TrimEntryText => ""
+    end
+    return rstrip(join((numbered(i, e) * _trim_text(e) for (i, e) in enumerate(errors)), "\n\n"))
+end
 
 """The module WasmTarget built is not valid wasm; `site` names where it was found."""
 @quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct InvalidModule
