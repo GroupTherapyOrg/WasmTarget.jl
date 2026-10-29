@@ -386,7 +386,8 @@ end
     local fn = D.get_function(fc, mi)
     @test D.get_function(fc, mi) === fn && D.get_existing_function(fc, mi) === fn
     @test fn.type === ft && fn.function_name == "$(parentmodule(FirstCases.f)).f(::Int32)"
-    @test fn.inline_hint === nothing && !fn.is_pure
+    # no inlining declared; a wrapping add Julia proves removable if unused, wasm:pure-function's answer
+    @test fn.inline_hint === nothing && fn.is_pure
     # defined in the main module and queued once for its code generator
     @test fn.enclosing_module === D.main_module(t).module_
     local q = t.compilation_queue[]

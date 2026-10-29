@@ -49,6 +49,7 @@ entry(x::Int) = (@noinline g(x)) + h(x)
 @inline h(x::Int) = x - 1
 k(x::Int) = x
 Base.@ccallable ext(x::Int)::Int = x + 3
+t(x::Int) = x > 0 ? x : throw(ArgumentError("negative"))
 @testset "util.dart: the pragma readers answer Julia's declarations" begin
     local world = WasmTarget.build_nir(WasmTarget.check_subset(entry, (Int,), "util"), "util")
     g(1); h(1); k(1); ext(1)
@@ -62,5 +63,13 @@ Base.@ccallable ext(x::Int)::Int = x + 3
     @test D.Util.get_wasm_export_pragma(mi(ext); component = world) == "ext" && !D.Util.has_wasm_export_pragma(mi(g); component = world)
     @test D.Util.get_wasm_import_pragma(mi(g)) === nothing && !D.Util.has_wasm_import_pragma(mi(g))
     @test D.Util.get_wasm_weak_export_pragma(world.entry) === nothing && !D.Util.has_wasm_weak_export_pragma(world.entry)
+    # wasm:pure-function is Julia's proof that a call is removable if unused: g's product is, a call
+    # that may throw is not
+    @test D.Util.has_wasm_pure_function_pragma(mi(g); component = world)
+    local tworld = WasmTarget.build_nir(WasmTarget.check_subset(t, (Int,), "util"), "util")
+    @test !D.Util.has_wasm_pure_function_pragma(tworld.entry; component = tworld)
+    # and the compiled module gives wasm-opt the annotation, binaryen.removable.if.unused
+    local bytes = WasmTarget.compile(entry, (Int,); optimize = false)
+    @test occursin("binaryen.removable.if.unused", String(copy(bytes)))
 end
 end

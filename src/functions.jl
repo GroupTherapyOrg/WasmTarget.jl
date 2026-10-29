@@ -136,8 +136,8 @@ The wasm function of `target`, made on first request in its module and queued fo
 A Julia member carries none of dart's pragmas; util.dart's readers answer Julia's declarations in
 their place: no member is an import (a foreign call is a host import, dev/MARCH.md 1.F), the exports
 are the entry and the `@ccallable` methods (getExportName), and the inlining hint is `@noinline` 0 and
-`@inline` 127 (getWasmNeverInlinePragma, getWasmPreferInlinePragma). Purity is Julia's effects, not
-read yet (hasWasmPureFunctionPragma, Unported): no function is marked removable.
+`@inline` 127 (getWasmNeverInlinePragma, getWasmPreferInlinePragma), and a function is removable if
+unused where Julia's effects prove it (hasWasmPureFunctionPragma).
 """
 @parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.BaseFunction
     local existing = get(self._functions, target, nothing)
@@ -153,7 +153,7 @@ read yet (hasWasmPureFunctionPragma, Unported): no function is marked removable.
         _make_function_type(translator, target, nothing; is_import_or_export = true, synthesize_null_return_value = false, synthesize_no_return = false) :
         signature_for_direct_call(translator, target)
     local function_ = WasmBuilder.define(module_.functions[], ftype, get_function_name(self, target))
-    function_.is_pure = false
+    function_.is_pure = Util.has_wasm_pure_function_pragma(target; component = translator.component)
     function_.inline_hint = inline_hint
     if export_name !== nothing
         function_.is_js_called = true

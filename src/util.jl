@@ -57,7 +57,13 @@ end
 
 @parity "dart2wasm/lib/util.dart:134 getWasmWeakExportPragma" get_wasm_weak_export_pragma(member::Core.MethodInstance)::Nothing = nothing
 
-@parity "dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma" @unported function has_wasm_pure_function_pragma(core_types::NoCounterpart, member::Core.MethodInstance) end
+# dart's `wasm:pure-function` pragma, which dart2wasm gives wasm-opt as binaryen.removable.if.unused:
+# Julia proves it of a method, its CodeInstance's interprocedural effects removable if unused (effect
+# free, nothrow and terminating; Base.@assume_effects declares the same), Julia's own judgement of the
+# body the closed world compiles. coreTypes is dropped (the Kernel table's CoreTypes row), and the
+# closed world, whose CodeInstance it reads, is Julia's own keyword
+@parity "dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma" has_wasm_pure_function_pragma(member::Core.MethodInstance; component::NirWorld)::Bool =
+    Core.Compiler.is_removable_if_unused(Core.Compiler.decode_effects(nir_body_of(component, member).ci.ipo_purity_bits))
 
 @parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" add_wasm_entry_point_pragma(node::NoCounterpart, core_types::NoCounterpart)::Union{} =
     reject!(Internal("dart2wasm/lib/util.dart:154 addWasmEntryPointPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "add_wasm_entry_point_pragma")

@@ -78,6 +78,8 @@ import ..WasmBuilder
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
 import ...@parity, ...@unported, ...@closed, ...@exhaustive
 import ...reject!, ...Internal, ...Unported
+# a member's body, the CodeInstance Julia inferred for it (src/julia/nir.jl)
+import ...nir_body_of
 # the Julia types the Kernel table names, as stubs name them (src/julia/kernel.jl)
 import ...NoCounterpart, ...NirWorld, ...NirBody, ...ClassField, ...NirValue, ...NirSSA, ...NirArgument,
        ...NirGlobal, ...NirConst, ...NirStmt, ...NirInvoke, ...NirCall, ...NirNew, ...NirGlobalRead,
