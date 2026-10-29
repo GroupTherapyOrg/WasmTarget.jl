@@ -1659,7 +1659,7 @@ end
     local operand_type = dart_type_of(self, operand)
     local tested_static = dart_type_of(self, node.args[3])
     tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type ||
-        reject!(Unported("dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter"), "$(self.enclosing_member): a type test against a type computed at run time ($tested_static), which makeType makes through it")
+        reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype"), "$(self.enclosing_member): a type test against a type computed at run time ($tested_static), a value only the runtime's subtype check takes")
     local tested = tested_static.parameters[1]
     local boxed_operand_type = Nothing <: operand_type ? self.translator.top_type[] : self.translator.top_type_non_nullable[]
     translate_expression(self, operand, boxed_operand_type)
@@ -1682,7 +1682,7 @@ end
     local operand_type = dart_type_of(self, operand)
     local tested_static = dart_type_of(self, node.args[3])
     tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type ||
-        reject!(Unported("dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter"), "$(self.enclosing_member): a type test against a type computed at run time ($tested_static), which makeType makes through it")
+        reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype"), "$(self.enclosing_member): a type test against a type computed at run time ($tested_static), a value only the runtime's subtype check takes")
     local tested = tested_static.parameters[1]
     local boxed_operand_type = Nothing <: operand_type ? self.translator.top_type[] : self.translator.top_type_non_nullable[]
     translate_expression(self, operand, boxed_operand_type)
@@ -1695,7 +1695,14 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3201 AstCodeGenerator.visitCheckLibraryIsLoaded" visit_check_library_is_loaded(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     no_counterpart_rejection("CheckLibraryIsLoaded", "dart2wasm/lib/code_generator.dart:3201 AstCodeGenerator.visitCheckLibraryIsLoaded", "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter" @unported function instantiate_type_parameter(self::AstCodeGenerator, parameter::TypeVar) end
+# dart pushes a type parameter's value from one of three places: its type local, a context's captured
+# field, or `this`'s type field. Julia's type parameter is a static parameter of the MethodInstance,
+# which inference makes a constant in every specialized method (makeType makes it as a constant type).
+# One left free is Expr(:static_parameter), which src/julia/nir.jl rejects before code. Julia's
+# lowering captures no type parameter (Closures makes no context), and a struct's parameters are its
+# type, not its fields. So no type parameter reaches here.
+@parity "dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter" instantiate_type_parameter(self::AstCodeGenerator, parameter::TypeVar)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter: the type parameter $parameter; Julia's is a static parameter of the MethodInstance, a constant in a specialized method, and one left free is Expr(:static_parameter), which src/julia/nir.jl rejects before code"), "$(self.enclosing_member)")
 
 """
 Julia's `tuple(x...)`, Kernel's RecordLiteral: a tuple allocated with its fields. dart allocates its

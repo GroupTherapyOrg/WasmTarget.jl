@@ -852,11 +852,16 @@ end
     local e = rejection(() -> generated_instructions(TypeTestCases.as_int, (R,)))
     @test e.rejection isa W.Unported && e.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype" &&
           startswith(e.at, "dart2wasm/lib/types.dart:527 Types.emitAsCheck")
-    # a type computed at run time is no type test's constant: makeType makes it through
-    # instantiateTypeParameter, not ported
+    # a type computed at run time is no type test's constant: a value, which only the runtime's
+    # subtype check takes, not ported
     local d = rejection(() -> generated_instructions(TypeTestCases.dyn, (R, DataType)))
-    @test d.rejection isa W.Unported && occursin("AstCodeGenerator.instantiateTypeParameter", d.rejection.anchor) &&
+    @test d.rejection isa W.Unported && d.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype" &&
           occursin("TypeTestCases.dyn", d.at)
+    # Julia's type parameter is a static parameter of the MethodInstance, never a type local, a
+    # capture or a field: no NIR reaches instantiateTypeParameter, an Internal naming nir.jl's rejection
+    local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    local p = rejection(() -> D.instantiate_type_parameter(g, TypeVar(:T)))
+    @test p.rejection isa W.Internal && occursin("Expr(:static_parameter)", p.rejection.site)
 end
 
 # a variable a closure captures before it is assigned: Julia's closure conversion allocates Core.Box() with
