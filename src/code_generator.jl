@@ -368,7 +368,10 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:466 AstCodeGenerator.setupLambdaParametersAndContexts" @unported function setup_lambda_parameters_and_contexts(self::AstCodeGenerator, lambda::Lambda) end
+# Julia's lowering makes a closure a struct and its call method, a method like any other, so Closures
+# creates no Lambda (closures.jl, Closures._findCaptures): no lambda's parameters are set up here
+@parity "dart2wasm/lib/code_generator.dart:466 AstCodeGenerator.setupLambdaParametersAndContexts" setup_lambda_parameters_and_contexts(self::AstCodeGenerator, lambda::Lambda)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:466 AstCodeGenerator.setupLambdaParametersAndContexts: Closures creates no Lambda; a Julia closure's call method is a method like any other"), "$(self.enclosing_member)")
 
 # Julia's optimized IR never assigns an argument (it is in SSA form), so every parameter is dart's
 # final variable, whose local is never written: the local the callers' values arrive in is the one
@@ -401,7 +404,9 @@ end
     return 0
 end
 
-@parity "dart2wasm/lib/code_generator.dart:538 AstCodeGenerator._initializeContextLocals" @unported function _initialize_context_locals(self::AstCodeGenerator, node::NirStmt; context_param_index::Int64 = 0) end
+# a Julia body has no context (allocateContext): lowering made each capture a field of its closure's
+# struct, so the context parameter dart reads here is none, and dart does nothing when there is none
+@parity "dart2wasm/lib/code_generator.dart:538 AstCodeGenerator._initializeContextLocals" _initialize_context_locals(self::AstCodeGenerator, node::NirStmt; context_param_index::Int64 = 0)::Nothing = nothing
 
 @parity "dart2wasm/lib/code_generator.dart:594 AstCodeGenerator._implicitReturn" function _implicit_return(self::AstCodeGenerator)::Nothing
     local outs = outputs(self)

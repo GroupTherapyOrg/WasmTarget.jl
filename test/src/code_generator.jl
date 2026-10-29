@@ -508,6 +508,8 @@ end
     @test rejection(() -> D.AstCodeGenerator(g.translator, g.function_type, g.member)).rejection isa W.Internal
     local call = g.body.stmts[1]::W.NirCall
     @test occursin("visitAsExpression", rejection(() -> D.visit_null_check(g, call, IR.NumType_i32)).rejection.site)
+    # no context: nothing to initialize, nothing emitted
+    @test emitted_by(() -> D._initialize_context_locals(g, call), g) == String[]
 end
 
 @testset "code_generator.dart: a PiNode is the unchecked as" begin
