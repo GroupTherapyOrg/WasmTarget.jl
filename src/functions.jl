@@ -274,12 +274,9 @@ location, the method's file and line.
     local method = lambda.function_node.ci.def.def::Method
     local location = string(method.file, ":", method.line)
     local member = get_function_name(self, lambda.enclosing_member)
-    local callee = (Base.unwrap_unionall(lambda.function_node.ci.def.specTypes)::DataType).parameters[1]
-    # a local function's closure type is `#name#…` (Julia 1.12: `#inner#use##0`); an anonymous one's
-    # is `#n#m` or, in 1.12, `#use##1#use##2`, its first part a number or followed by `##`
-    local m = match(r"^#([^#]+)#(?!#)", string(nameof(callee)))
-    m !== nothing && all(isdigit, m[1]) && (m = nothing)
-    return m === nothing ? "$member closure at $location" : "$member closure $(m[1]) at $location"
+    # a local function's call method is named after it (`inner`); an anonymous one's name is a gensym
+    # Julia's lowering made (`#use##1`), which Base.isgensym answers
+    return Base.isgensym(method.name) ? "$member closure at $location" : "$member closure $(method.name) at $location"
 end
 
 # dart's `'$memberName ($shape)'`, the member's name as getFunctionName writes it
