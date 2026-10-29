@@ -939,9 +939,11 @@ dart makes a closure of the torn-off member and its vtable.
 @parity "dart2wasm/lib/constants.dart:1556 ConstantCreator.visitSymbolConstant" @unported function visit_symbol_constant(self::ConstantCreator, constant::Symbol) end
 
 """
-A tuple: the struct of its record class, the object header, then each field as the top type. A
-`Tuple`'s fields are positional; a `NamedTuple`'s are named, taken in the order of their names, as
-Kernel's RecordConstant holds them.
+A tuple: the struct of its record class, the object header, then each field at its field's own wasm
+type, in the class's field order. A Julia record's class is its own Tuple or NamedTuple type
+(getRecordClassInfo), laid out as any class with Julia's field types (class_info.jl), as the code
+generator's record literal builds it (visitRecordLiteral), where dart's record class holds every field
+as the top type; a NamedTuple's fields are in Julia's declared order, its class's.
 """
 @parity "dart2wasm/lib/constants.dart:1583 ConstantCreator.visitRecordConstant" function visit_record_constant(self::ConstantCreator, constant::Union{Tuple,NamedTuple})::Union{ConstantInfo,Nothing}
     local at = "dart2wasm/lib/constants.dart:1583 ConstantCreator.visitRecordConstant"
@@ -950,8 +952,9 @@ Kernel's RecordConstant holds them.
     local record_class_info = get_record_class_info(translator, typeof(v))
     record_class_allocation(translator.functions[], record_class_info._class_id)
 
-    local values = v isa NamedTuple ? Any[v[k] for k in sort!(collect(keys(v)))] : Any[x for x in v]
-    local arguments = NirConst[NirConst(Core.Const(x)) for x in values]
+    local fields = class_instance_fields(typeof(v), at)
+    local arguments = NirConst[NirConst(Core.Const(getfield(v, f.index))) for f in fields]
+    local field_types = WasmBuilder.IR.StorageType[record_class_info.struct_.fields[translator.field_index[f] + 1].type for f in fields]
 
     local child_constants = ConstantInfo[]
     for argument in arguments
@@ -961,8 +964,8 @@ Kernel's RecordConstant holds them.
 
     return create_constant(self, NirConst(Core.Const(v)), child_constants, record_class_info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
         push_object_header_fields(b, translator, record_class_info)
-        for argument in arguments
-            instantiate_constant(self.constants, b, argument, translator.top_type[])
+        for (argument, field_type) in zip(arguments, field_types)
+            instantiate_constant(self.constants, b, argument, WasmBuilder.unpacked(field_type))
         end
         WasmBuilder.struct_new(b, record_class_info.struct_)
     end; can_be_eager = true)
