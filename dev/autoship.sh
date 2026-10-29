@@ -41,7 +41,8 @@ while :; do
   holder=$(cat "$common/wt-ship/$(basename "$lane").lock/pid" 2>/dev/null || true)
   [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null && busy=1
   # the commits origin/wt2 lacks as patches: one another ship already carried under a new hash is not ahead
-  ahead=$(git cherry "origin/$MARCH" HEAD 2>/dev/null | grep -c '^+')
+  # (an empty commit carries nothing: a lane's duplicate landed as one, 0cf4f0ea, 08:43)
+  ahead=$(git log --diff-filter=ACDMRT --format=%H "origin/$MARCH..HEAD" 2>/dev/null | grep -cxFf <(git cherry "origin/$MARCH" HEAD 2>/dev/null | sed -n 's/^+ //p'))
   if [ "$busy" = 0 ] && [ "$ahead" -gt 0 ] && [ "$head" != "$failed" ] && [ $(( $(date +%s) - since )) -ge "$SETTLE" ]; then
     echo "autoship: $(date -u +%FT%TZ) shipping $ahead commit(s) at $(git rev-parse --short HEAD)"
     bash dev/ship.sh > .wtd/autoship.out 2>&1

@@ -63,7 +63,7 @@ checked_rebase() {
   # and a red commit keeps the green ones before it (march-corrector, 21:51: a ten-commit stack held the
   # port count flat for 25 minutes, pushing only once all ten were green)
   mkdir -p .wtd
-  if ! { git rebase -q "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh && git push -q origin HEAD:'"$MARCH"' && echo "ship: pushed $(git log -1 --format="%h %s" | cut -c1-90)"' 2>&1 | tee .wtd/rebase.out; [ "${PIPESTATUS[0]}" -eq 0 ]; }; then
+  if ! { git rebase -q --no-keep-empty --empty=drop "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh && git push -q origin HEAD:'"$MARCH"' && echo "ship: pushed $(git log -1 --format="%h %s" | cut -c1-90)"' 2>&1 | tee .wtd/rebase.out; [ "${PIPESTATUS[0]}" -eq 0 ]; }; then
     record_failure
     if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then git rebase --abort; fi
     return 1
@@ -115,7 +115,8 @@ git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 
 # a lane whose commits another ship already carried (the same patch under a new hash) has nothing to land,
 # never a red: the rebase would drop them all and the carry check below would refuse "missing: all"
 # (wt3-codegen and wt3-tests, 07:52: each landed commit marked red, its lane told to fix nothing)
-git cherry "origin/$MARCH" HEAD | grep -q '^+' ||
+# (and an empty commit carries nothing either: the rebase drops it, --no-keep-empty)
+git log --diff-filter=ACDMRT --format=%H "origin/$MARCH..HEAD" | grep -qxFf <(git cherry "origin/$MARCH" HEAD | sed -n 's/^+ //p') ||
   { echo "ship: every commit of this lane is on origin/$MARCH already, as the same patch; nothing to land (git reset --hard origin/$MARCH)"; exit 0; }
 first=$(git log --reverse --format=%at "origin/$MARCH..HEAD" | head -1)
 base=$(git rev-parse "origin/$MARCH")
@@ -126,7 +127,7 @@ git fetch -q origin "$MARCH" && git merge-base --is-ancestor "origin/$MARCH" HEA
 # never claim a landing the push doesn't carry: HEAD must hold every commit this lane brought, by
 # subject (a rebase that lost them, leaving HEAD at origin's tip, would push nothing and print
 # "landed"; wt3-tests saw exactly that)
-want=$(git log --format=%s "$base..$start" | sort -u)
+want=$(git log --diff-filter=ACDMRT --format=%s "$base..$start" | sort -u)
 have=$( { git log --format=%s "$base..HEAD"; git log -400 --format=%s "$base"; } | sort -u)
 missing=$(comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$have") | sed '/^$/d')
 if [ "$(git rev-list --count "$base..HEAD")" -eq 0 ] || [ -n "$missing" ]; then
