@@ -92,6 +92,9 @@ end
     if Base.iskindtype(t)
         # a kind's instance takes dart's runtime type layout, its fields' classes met as Julia's are
         foreach(f -> _meet_value!(out, seen, f.type, at), _kind_instance_fields(t, at))
+    elseif t === Symbol
+        # a symbol holds its name, a String, outside Julia's fields (_symbol_instance_fields)
+        foreach(f -> _meet_value!(out, seen, f.type, at), _symbol_instance_fields(t, at))
     elseif isconcretetype(t)
         foreach(f -> _meet_value!(out, seen, f, at), fieldtypes(t))
     end
@@ -165,9 +168,9 @@ class's own); a primitive class (`Int64`, `Bool`, `Float64`, ...) has its one `v
 boxed classes do (`_BoxedInt.value`); a struct has its `fieldnames` and `fieldtypes`; a singleton
 none; a kind (a type as a value) dart's runtime type layout (`_kind_instance_fields`); a
 `Core.SimpleVector` its elements as one immutable wasm array (`_svec_instance_fields`); a `String`
-its UTF-8 code units as one immutable i8 wasm array (`_string_instance_fields`). Any other class
-whose data Julia holds outside its fields (`Symbol`) rejects, located, until its representation is
-written.
+its UTF-8 code units as one immutable i8 wasm array (`_string_instance_fields`); a `Symbol` its name,
+one String (`_symbol_instance_fields`). Any other class whose data Julia holds outside its fields
+rejects, located, until its representation is written.
 """
 @quarantine "a class's fields are Julia's fieldnames, fieldtypes and isconst; a primitive type holds one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
     class_is_abstract(c) && return ClassField[]
@@ -177,6 +180,7 @@ written.
         Base.issingletontype(c) && return ClassField[]
         c === Core.SimpleVector && return _svec_instance_fields(c, at)
         c === String && return _string_instance_fields(c, at)
+        c === Symbol && return _symbol_instance_fields(c, at)
         reject!(Unquarantined("src/julia/classes.jl class_instance_fields: $c, whose data Julia holds outside its fields"), at)
     end
     return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
@@ -288,4 +292,24 @@ references.
 @quarantine "a String's data lies outside its fields (Julia's jl_string_len, jl_string_data), its UTF-8 bytes in place of dart's host externref, since Base indexes the bytes; immutable once made by Julia's convention, not by the wasm type" Core.String function _string_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c === String || reject!(Internal("src/julia/classes.jl _string_instance_fields: $c, no String"), at)
     return ClassField[ClassField(c, 0, "_data", WasmArray{WasmI8}, false)]
+end
+
+"""
+    _symbol_instance_fields(c, at) -> Vector{ClassField}
+
+The fields of a `Symbol`, whose data Julia holds outside its fields: one field, `_name`, of type
+`String`, the symbol's name, immutable. Julia's layout (julia.h `jl_sym_t`, `jl_symbol_name`): a
+symbol is its interned name, which `String(::Symbol)` and printing read; dart's class
+(sdk/lib/internal/symbol.dart:16 Symbol, its one field `final String _name` :18): the object header
+and then the name, as constants.dart's visitSymbolConstant builds one. A String's representation is
+the ruling's (`_string_instance_fields`), so a symbol's name is one. The field is not one of Julia's
+(a Symbol has none), so it takes index 0, like a String's `_data`.
+
+precedent(dart: dart:_internal's Symbol class, a name String held by an object; Julia's jl_sym_t, a
+name held by the interned symbol). Julia's differs: its symbols are interned and compared by identity,
+which an object per constant symbol keeps (each symbol constant one instance).
+"""
+@quarantine "a Symbol's data lies outside its fields (Julia's jl_sym_t, jl_symbol_name), its name one String as dart's Symbol._name" Core.Symbol function _symbol_instance_fields(c::DataType, at::String)::Vector{ClassField}
+    c === Symbol || reject!(Internal("src/julia/classes.jl _symbol_instance_fields: $c, no Symbol"), at)
+    return ClassField[ClassField(c, 0, "_name", String, false)]
 end

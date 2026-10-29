@@ -137,8 +137,10 @@ end
     @test [f.name for f in fields(Union)] == ["isDeclaredNullable", "a", "b"]
     # a String: its UTF-8 code units as one immutable array of dart:_wasm's WasmI8 (the String ruling)
     @test [(f.name, f.type, f.index) for f in fields(String)] == [("_data", W.WasmArray{W.WasmI8}, 0)]
+    # a Symbol: its name, one String (dart's Symbol._name)
+    @test [(f.name, f.type, f.index) for f in fields(Symbol)] == [("_name", String, 0)]
     # a class whose data Julia holds outside its fields, its representation unwritten, rejects, located
-    for c in (Symbol,)
+    for c in (Module,)
         local e = try; fields(c); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end

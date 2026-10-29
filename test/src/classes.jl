@@ -123,3 +123,15 @@ end
     local e = try; W.nir_value_type(first(nw), W.NirGlobal(GlobalRef(ClassesConstantCases, :changing))); nothing; catch y; y; end
     @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("_generateGetter", e.rejection.anchor)
 end
+
+module SymbolCases
+sym(x::Int) = x > 0 ? :pos : :neg
+end
+
+@testset "a Symbol is dart's Symbol class: its name, one String" begin
+    # Julia holds a symbol's name outside its fields; its class's one field is the name, a String at
+    # index 0, as dart's Symbol._name, and a closed world meeting Symbol meets String with it
+    @test W.class_instance_fields(Symbol, "classes") == [W.ClassField(Symbol, 0, "_name", String, false)]
+    local cs = _classes(SymbolCases.sym, (Int,))
+    @test Symbol in cs && String in cs
+end
