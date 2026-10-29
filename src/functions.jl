@@ -392,13 +392,11 @@ end
     _FunctionTypeGenerator(Val(:_), translator, synthesize_null_return_value, synthesize_no_return)
 
 # a field's accessor: a static field's initializer, implicit getter or setter, typed by _makeFunctionType's
-# static field arm; an instance field's, whose receiver is its class, comes with the dispatch table's
-# field selectors (_virtualCall)
+# static field arm; an instance field's takes its class's non-nullable reference, dart's `this`
 @parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" function visit_field(self::_FunctionTypeGenerator, node::Union{ClassField,GlobalRef}, target::FieldReference)::WasmBuilder.IR.FunctionType
-    node isa GlobalRef ||
-        reject!(Unported("dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField"), "an instance field's accessor, $(node.cls).$(node.name), dispatched through the dispatch table's field selectors")
     # Static field initializer function or implicit getter/setter.
-    return _make_function_type(self.translator, target, nothing;
+    local receiver_type = node isa GlobalRef ? nothing : translate_type(self.translator, node.cls)
+    return _make_function_type(self.translator, target, receiver_type;
                                synthesize_null_return_value = self.synthesize_null_return_value,
                                synthesize_no_return = self.synthesize_no_return)
 end
@@ -528,13 +526,21 @@ end
     return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
 end
 
-# dart's static field arm: a static field's implicit getter returns the field's type (nothing when its
-# null is synthesized), its initializer returns it, and its implicit setter takes it
+# a field's accessor: dart's static field arm, a static field's implicit getter returning the field's
+# type (nothing when its null is synthesized), its initializer returning it and its implicit setter
+# taking it; an instance field's accessor is the general path, the receiver then the setter's value
+# (_getInputTypes' Field arm), returning the field's type unless its null is synthesized
 @parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" function _make_function_type(translator::Translator, target::FieldReference, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType};
         synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export::Bool = false)::WasmBuilder.IR.FunctionType
     local member = target.field
-    member isa GlobalRef ||
-        reject!(Unported("dart2wasm/lib/functions.dart:890 _makeFunctionType"), "an instance field's accessor, $(member.cls).$(member.name), dispatched through the dispatch table's field selectors")
+    if member isa ClassField
+        local inputs = WasmBuilder.IR.ValueType[]
+        receiver_type === nothing || push!(inputs, receiver_type)
+        target.kind === FieldReferenceKind_setter && push!(inputs, translate_type(translator, member.type))
+        local outputs = synthesize_null_return_value || synthesize_no_return ? WasmBuilder.IR.ValueType[] :
+            WasmBuilder.IR.ValueType[translate_return_type(translator, member.type)]
+        return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
+    end
     local field_type = translate_type_of_field(translator, member)
     local none = WasmBuilder.IR.ValueType[]
     target.kind === FieldReferenceKind_getter &&

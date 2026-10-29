@@ -154,7 +154,7 @@ the translator holds each collaborator.
     _declared_field_tables::Dict{ClassField,WasmBuilder.IR.AbstractTable}
     _imported_field_tables::Late{WasmTableImporter}
     members_containing_inner_functions::Base.IdSet{Core.MethodInstance}
-    members_being_generated::Base.IdSet{Union{Core.MethodInstance,GlobalRef}}
+    members_being_generated::Base.IdSet{Union{Core.MethodInstance,ClassField,GlobalRef}}
     constructor_closures::IdDict{Core.MethodInstance,Closures}
     constructor_info::IdDict{Core.MethodInstance,ConstructorInfo}
     void_marker::Late{WasmBuilder.IR.ValueType}
@@ -240,7 +240,7 @@ the translator holds each collaborator.
             IdDict{Core.MethodInstance,ParameterInfo}(), Dict{ClassField,WasmBuilder.IR.AbstractTable}(),
             Late{WasmTableImporter}("dart2wasm/lib/translator.dart:198 Translator._importedFieldTables",
                 () -> WasmTableImporter(self, "fieldTable")),
-            Base.IdSet{Core.MethodInstance}(), Base.IdSet{Union{Core.MethodInstance,GlobalRef}}(),
+            Base.IdSet{Core.MethodInstance}(), Base.IdSet{Union{Core.MethodInstance,ClassField,GlobalRef}}(),
             IdDict{Core.MethodInstance,Closures}(), IdDict{Core.MethodInstance,ConstructorInfo}(),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/translator.dart:206 Translator.voidMarker",
                 () -> WasmBuilder.IR.RefType_def(WasmBuilder.IR.StructType("void"); nullable = true)),

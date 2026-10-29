@@ -105,13 +105,14 @@ end
                         (() -> D.ConstructorInitializerCodeGenerator(t, ft, mi), "%new"),
                         (() -> D.ConstructorAllocatorCodeGenerator(t, ft, mi), "%new"),
                         (() -> D.ConstructorBodyCodeGenerator(t, ft, mi), "%new"),
-                        (() -> D.ImplicitFieldAccessorCodeGenerator(t, ft, field, true, false), "getfield"),
                         (() -> D.SynchronousLambdaCodeGenerator(t, lambda), "Closures makes no Lambda"),
                         (() -> D.get_lambda_code_generator(t, lambda), "Closures makes no Lambda"),
                         (() -> D.UnreachableCodeGenerator(t, ft, mi), "cyclic"))
         local e = rejection(ctor)
         @test e !== nothing && e.rejection isa W.Internal && occursin(why, e.rejection.site)
     end
+    # an instance field's accessor is a field selector's target (_virtualCall), a generator of its own
+    @test D.ImplicitFieldAccessorCodeGenerator(t, ft, field, true, false) isa D.ImplicitFieldAccessorCodeGenerator
 end
 
 

@@ -452,7 +452,7 @@ end
     # as dart's constructor, its outer function, does
     for (G, own) in ((D.TearOffCodeGenerator, (:member,)), (D.DynamicForwarderCodeGenerator, (:reference, :call_shape)),
                      (D.ConstructorInitializerCodeGenerator, (:member, :field_locals)), (D.ConstructorAllocatorCodeGenerator, (:member,)),
-                     (D.ConstructorBodyCodeGenerator, (:member,)), (D.ImplicitFieldAccessorCodeGenerator, (:field, :is_implicit_getter, :use_unchecked_entry)),
+                     (D.ConstructorBodyCodeGenerator, (:member,)),
                      (D.SynchronousLambdaCodeGenerator, (:lambda,)), (D.UnreachableCodeGenerator, ()))
         @test G <: D.AstCodeGenerator
         @test fieldnames(G) == (fieldnames(D.SynchronousProcedureCodeGenerator)[1:18]..., own...)
@@ -618,8 +618,37 @@ end
     @test gg isa D.StaticFieldImplicitAccessorCodeGenerator && gg.is_implicit_getter
     local gs = D.get_member_code_generator(t, B.define(mb.functions[], D.get_function_type(fc, setter), "s"), setter)
     @test gs isa D.StaticFieldImplicitAccessorCodeGenerator && !gs.is_implicit_getter
-    # an instance field's accessor is typed with the dispatch table's field selectors, not yet: located
-    @test rejection(() -> D.get_function_type(fc, D.FieldReference(cf, D.FieldReferenceKind_getter))).rejection isa W.Unported
+end
+
+@testset "code_generator.dart: an instance field's implicit getter and setter, a field selector's target" begin
+    local B = W.WasmBuilder
+    local t = translator_of(SetGenCases.seta, (SetGenCases.M, Int32))
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local fc = t.functions[]
+    local mb = D.main_module(t)
+    local cf = W.class_instance_fields(SetGenCases.M, "test")[1]
+    @test cf.name == "a" && cf.type === Int32
+    local getter = D.FieldReference(cf, D.FieldReferenceKind_getter)
+    local setter = D.FieldReference(cf, D.FieldReferenceKind_setter)
+    local this_type = D.translate_type(t, SetGenCases.M)
+    # the getter takes its class's reference and returns the field; the setter takes the value too
+    local fg = D.get_function_type(fc, getter); local fs = D.get_function_type(fc, setter)
+    @test fg.inputs == [this_type] && fg.outputs == [IR.NumType_i32]
+    @test fs.inputs == [this_type, IR.NumType_i32] && isempty(fs.outputs)
+    @test D.get_function_name(fc, getter) == "$(SetGenCases.M).a implicit getter"
+    local acc(r, ftype) = begin
+        local fb = B.define(mb.functions[], ftype, "acc")
+        local g = D.get_member_code_generator(t, fb, r)
+        g.b[] = B.body(fb); g.param_locals[] = B.locals(fb); g.return_label[] = nothing
+        g
+    end
+    local gg = acc(getter, fg)
+    @test gg isa D.ImplicitFieldAccessorCodeGenerator && gg.is_implicit_getter && !gg.use_unchecked_entry && gg.enclosing_member === cf
+    @test emitted_by(() -> D.generate_internal(gg), gg) == ["local.get", "struct.get", "end"]
+    local gs = acc(setter, fs)
+    @test emitted_by(() -> D.generate_internal(gs), gs) == ["local.get", "local.get", "struct.set", "end"]
+    @test gs.this_local === gs.param_locals[][1]
 end
 
 @testset "code_generator.dart: guardCanMatchJSException" begin

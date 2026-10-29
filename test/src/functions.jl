@@ -124,11 +124,10 @@ end
         local r = try; f(); nothing; catch x; x; end
         @test r isa WT.RejectionError && r.rejection isa WT.Internal && occursin(row, r.rejection.site)
     end
-    # an instance field's accessor is typed with the dispatch table's field selectors, not yet ported:
-    # located at visitField
+    # an instance field's getter takes its class's reference and returns the field's type
     local cf = WT.ClassField(Int, 1, "x", Int, false)
-    local rf = try; W.visit_field(ftg, cf, WT.FieldReference(cf, WT.FieldReferenceKind_getter)); nothing; catch x; x; end
-    @test rf isa WT.RejectionError && rf.rejection isa WT.Unported && occursin("visitField", rf.rejection.anchor)
+    local ft = W.visit_field(ftg, cf, WT.FieldReference(cf, WT.FieldReferenceKind_getter))
+    @test length(ft.inputs) == 1 && length(ft.outputs) == 1
 end
 
 module Callables

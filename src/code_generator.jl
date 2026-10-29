@@ -376,17 +376,18 @@ SynchronousProcedureCodeGenerator does, the enclosing member a MethodInstance or
 end
 
 """
-The code generator dart makes for a field's implicit getter or setter. It holds AstCodeGenerator's
-fields as SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers
-instead of storing), and dart's own `field`, `is_implicit_getter`, `use_unchecked_entry`. No value
-of it exists: Julia reads and writes a field with the getfield and setfield! intrinsics, never an
-accessor member; dart's constructor (:4986), its outer function, rejects Internal, and so does its
-one inner constructor.
+The code generator of an instance field's implicit getter or setter: `field`, the class's field,
+`is_implicit_getter`, and `use_unchecked_entry`, always false (Julia checks no covariant value). It
+holds AstCodeGenerator's fields as SynchronousProcedureCodeGenerator does (whose docstring names the
+ones Julia answers instead of storing), the enclosing member the field, as dart passes it. Julia
+reads and writes a field with getfield and setfield!, which the code generator lowers in place when
+Julia inferred the receiver's class; this accessor is the target of a field selector, through which
+a field access on a receiver Julia left abstract is dispatched (_virtualCall).
 """
 @parity "dart2wasm/lib/code_generator.dart:4981 ImplicitFieldAccessorCodeGenerator" mutable struct ImplicitFieldAccessorCodeGenerator <: AstCodeGenerator
     const translator::Translator
     const function_type::WasmBuilder.IR.FunctionType
-    const enclosing_member::Core.MethodInstance
+    const enclosing_member::ClassField
     const b::Late{WasmBuilder.InstructionsBuilder}
     const param_locals::Late{Vector{WasmBuilder.IR.Local}}
     const return_label::Late{Union{Nothing,WasmBuilder.Label}}
@@ -405,8 +406,22 @@ one inner constructor.
     const field::ClassField
     const is_implicit_getter::Bool
     const use_unchecked_entry::Bool
-    # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
-    ImplicitFieldAccessorCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:4981 ImplicitFieldAccessorCodeGenerator: no value; Julia reads and writes a field with the getfield and setfield! intrinsics, never an accessor member"), "ImplicitFieldAccessorCodeGenerator")
+    # the struct's one constructor, tagged, with AstCodeGenerator's field initializers
+    # (code_generator.dart:67 to :160); dart's constructor at :4986 is its outer function
+    function ImplicitFieldAccessorCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::ClassField, is_implicit_getter::Bool, use_unchecked_entry::Bool)
+        local self
+        self = new(translator, function_type, field,
+            Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
+            Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
+            Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
+            Late{Intrinsifier}("dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
+            Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
+            false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
+            Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
+            NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
+            nothing, TreeNode_no_offset, field, is_implicit_getter, use_unchecked_entry)
+        return self
+    end
 end
 
 """
@@ -2257,12 +2272,57 @@ end
     return nothing
 end
 
-# Julia's answer (D3): a field access is an intrinsic call the body's generator visits, never a member
-@parity "dart2wasm/lib/code_generator.dart:4986 ImplicitFieldAccessorCodeGenerator" ImplicitFieldAccessorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::ClassField, is_implicit_getter::Bool, use_unchecked_entry::Bool)::Union{} =
-    reject!(Internal("dart2wasm/lib/code_generator.dart:4986 ImplicitFieldAccessorCodeGenerator: an accessor of $(field.name); Julia reads and writes a field with the getfield and setfield! intrinsics, never an accessor member"), "ImplicitFieldAccessorCodeGenerator")
+@parity "dart2wasm/lib/code_generator.dart:4986 ImplicitFieldAccessorCodeGenerator" ImplicitFieldAccessorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::ClassField, is_implicit_getter::Bool, use_unchecked_entry::Bool)::ImplicitFieldAccessorCodeGenerator =
+    ImplicitFieldAccessorCodeGenerator(Val(:_), translator, function_type, field, is_implicit_getter, use_unchecked_entry)
 
-@parity "dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal" generate_internal(self::ImplicitFieldAccessorCodeGenerator)::Union{} =
-    reject!(Internal("dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal: a field accessor's code; Julia reads and writes a field with the getfield and setfield! intrinsics, never an accessor member"), "generate_internal")
+"""
+The accessor's body: `this` the first parameter, cast to the field's class; the getter reads the
+field (a packed field by its Julia type's signedness) and converts it to the return type; the setter
+writes the second parameter, converted to the field's type. A field accessor has no code of its own,
+so it captures nothing and `closures` stays unassigned, and a Julia field carries no source position.
+Julia checks no covariant value, so no setter type-checks its argument (needToCheckTypesFor).
+"""
+@parity "dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal" function generate_internal(self::ImplicitFieldAccessorCodeGenerator)::Nothing
+    local translator = self.translator
+    local b = self.b[]
+    local param_locals = self.param_locals[]
+    self.this_local = self.precise_this_local = param_locals[1]
+    local field = self.field
+    # Implicit getter or setter
+    local info = get(translator.class_info, field.cls, nothing)
+    info === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal: no class info for $(field.cls)"), "$(self.enclosing_member)")
+    local struct_ = info.struct_
+    local struct_type = WasmBuilder.IR.RefType_def(struct_; nullable = false)
+    local field_index = translator.field_index[field]
+    local storage = struct_.fields[field_index + 1].type
+    local field_type = WasmBuilder.unpacked(storage)
+    local get_this() = begin
+        local this_local = param_locals[1]
+        WasmBuilder.local_get(b, this_local)
+        convert_type(translator, b, this_local.type, struct_type)
+    end
+    if self.is_implicit_getter
+        # Implicit getter
+        get_this()
+        if storage isa WasmBuilder.IR.PackedType
+            field.type <: Signed ? WasmBuilder.struct_get_s(b, struct_, field_index) : WasmBuilder.struct_get_u(b, struct_, field_index)
+        else
+            WasmBuilder.struct_get(b, struct_, field_index)
+        end
+        convert_type(translator, b, field_type, return_type(self))
+    else
+        # Implicit setter
+        local value_local = param_locals[2]
+        get_this()
+        WasmBuilder.local_get(b, value_local)
+        convert_type(translator, b, value_local.type, field_type)
+        WasmBuilder.struct_set(b, struct_, field_index)
+        isempty(self.function_type.outputs) ||
+            reject!(Internal("dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal: a setter of $(field.name) with outputs"), "$(self.enclosing_member)")
+    end
+    WasmBuilder.var"end"(b)
+    return nothing
+end
 
 # Julia's answer (D3): a closure is a method compiled as any member (Closures._findCaptures)
 @parity "dart2wasm/lib/code_generator.dart:5065 SynchronousLambdaCodeGenerator" SynchronousLambdaCodeGenerator(translator::Translator, lambda::Lambda)::Union{} =
