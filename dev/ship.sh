@@ -63,7 +63,11 @@ checked_rebase() {
   # and a red commit keeps the green ones before it (march-corrector, 21:51: a ten-commit stack held the
   # port count flat for 25 minutes, pushing only once all ten were green)
   mkdir -p .wtd
-  if ! { git rebase -q --no-keep-empty --empty=drop "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh && git push -q origin HEAD:'"$MARCH"' && echo "ship: pushed $(git log -1 --format="%h %s" | cut -c1-90)"' 2>&1 | tee .wtd/rebase.out; [ "${PIPESTATUS[0]}" -eq 0 ]; }; then
+  # each pushed commit is one row of the landings log, its seconds from its own first commit (author time, kept
+  # through the rebase) to its push: a stack that lands some commits and then goes red still records the ones
+  # it landed (march-monitor-a, 15:03: three landings missing from the log, each a stack's green head before a red)
+  export WT_LANDINGS_LOG="$log"
+  if ! { git rebase -q --no-keep-empty --empty=drop "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh && git push -q origin HEAD:'"$MARCH"' && echo "ship: pushed $(git log -1 --format="%h %s" | cut -c1-90)" && printf "%s\t%s\t%s\n" "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$(( $(date +%s) - $(git log -1 --format=%at HEAD) ))" >> "$WT_LANDINGS_LOG"' 2>&1 | tee .wtd/rebase.out; [ "${PIPESTATUS[0]}" -eq 0 ]; }; then
     record_failure
     if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then git rebase --abort; fi
     return 1
@@ -170,7 +174,6 @@ fi
 if git push -q origin HEAD:$MARCH; then
   release; trap cleanup_scratch EXIT
   secs=$(( $(date +%s) - first ))
-  printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$secs" >> "$log"
   med=$(tail -5 "$log" | cut -f3 | sort -n | awk '{ a[NR] = $1 } END { print a[int((NR + 1) / 2)] }')
   echo "ship: landed $(git rev-parse --short HEAD) on $MARCH, ${secs}s from its first commit to landed"
   # D13's band judges the loop, not this change: past it, the slowest step is the finding to fix
