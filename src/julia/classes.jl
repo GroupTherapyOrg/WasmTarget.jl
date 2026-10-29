@@ -253,7 +253,8 @@ The fields of a `String`, whose data Julia holds outside its fields: one field, 
 `WasmArray{WasmI8}` (src/julia/wasm_array.jl), the string's UTF-8 code units as one i8 wasm array,
 the field immutable and the array's elements writable, as Julia's runtime fills a fresh String
 (`jl_alloc_string`, then Base's `_string` copies the bytes in) and dart2wasm's earlier OneByteString's
-`WasmArray<WasmI8>` was; a String is immutable once made, by Julia's convention. The ruling (Dale's choice B, 2026-10-29), from its sources:
+`WasmArray<WasmI8>` was; a String is immutable once made by Julia's convention, not by the wasm
+type, whose elements a fresh String's maker writes. The ruling (Dale's choice B, 2026-10-29), from its sources:
 
 - Julia's layout (julia.h, `jl_string_len` and `jl_string_data`): a String is its length in bytes
   followed by its UTF-8 code units, immutable; `ncodeunits`, `codeunit`, `sizeof` and iteration
@@ -284,7 +285,7 @@ OneByteString, an i8 wasm array of code units; rust: `String`, a UTF-8 byte buff
 its String stores the bytes inline after the length, where wasm's array is an object the struct
 references.
 """
-@quarantine "a String's data lies outside its fields (Julia's jl_string_len, jl_string_data), its UTF-8 bytes in place of dart's host externref, since Base indexes the bytes" Core.String function _string_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine "a String's data lies outside its fields (Julia's jl_string_len, jl_string_data), its UTF-8 bytes in place of dart's host externref, since Base indexes the bytes; immutable once made by Julia's convention, not by the wasm type" Core.String function _string_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c === String || reject!(Internal("src/julia/classes.jl _string_instance_fields: $c, no String"), at)
     return ClassField[ClassField(c, 0, "_data", WasmArray{WasmI8}, false)]
 end
