@@ -148,7 +148,8 @@ end
 end
 
 # Two members of the closed world exporting one name: a program juliac's image would export as one
-# symbol, the user's to rename, rejected naming both methods, located at `at`
+# symbol, the user's to rename, a ProgramError naming both methods, located at `at` (WasmTarget's
+# judgment, not Julia's verifier's)
 @quarantine "a C name names one symbol of juliac's image; two methods sharing one are the program's error" Core.MethodInstance function _check_export_names(entry::Core.MethodInstance, codeinfos::Vector{Any}, at::String)::Nothing
     local by_name = Dict{String,Core.MethodInstance}()
     for x in codeinfos
@@ -158,8 +159,7 @@ end
         name === nothing && continue
         local other = get!(by_name, name, mi)
         other === mi && continue
-        reject!(OutsideSubset([TrimError(shared_export_name, nothing, 0, Base.StackTraces.StackFrame[],
-                                         TrimEntryText("$(other.def) and $(mi.def) both export the name \"$name\": one symbol for two methods; give one a name of its own (Base.@ccallable \"name\" f(...))"))]), at)
+        reject!(ProgramError("$(other.def) and $(mi.def) both export the name \"$name\": one symbol for two methods; give one a name of its own (Base.@ccallable \"name\" f(...))"), at)
     end
     return nothing
 end

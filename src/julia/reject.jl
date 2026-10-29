@@ -18,9 +18,8 @@ end
     TrimErrorKind
 
 What Julia's trim verifier found at a statement: one member per description its `CallMissing` and
-`CCallableMissing` carry (Compiler/src/verifytrim.jl, Julia 1.12 and 1.13), the two ways an
-entry has nothing to verify, no unique method or no compileable specialization, and two exports of
-the program sharing one name, which juliac's image would export as one symbol (shared_export_name).
+`CCallableMissing` carry (Compiler/src/verifytrim.jl, Julia 1.12 and 1.13), and the two ways an
+entry has nothing to verify, no unique method or no compileable specialization.
 
 precedent(rust: a fieldless enum; dart: enum). Julia's differs: an @enum is closed by its type, and
 the verifier states each kind only as text, which `TRIM_ERROR_KINDS` (src/julia/subset.jl) reads
@@ -49,7 +48,6 @@ into a member; a text with no member is an Internal rejection, never a guess.
     ccallable_return_mismatch
     no_unique_method
     no_compileable_specialization
-    shared_export_name
 end
 
 """A verifier error at a statement: Julia's own `CallMissing` record, its CodeInstance, CodeInfo and
@@ -121,6 +119,19 @@ end
     return rstrip(join((numbered(i, e) * _trim_text(e) for (i, e) in enumerate(errors)), "\n\n"))
 end
 
+"""
+The program is Julia's, and Julia's verifier accepts it, but it cannot be built as written: a
+judgment of WasmTarget's about the program, never Julia's verifier's, the user's to fix. `text` says
+what and how (two exports sharing one name: rename one).
+
+precedent(c: a linker refusing two definitions of one symbol, the program's error, not the
+compiler's). Julia's differs: Julia accepts both definitions, and only the image they are compiled
+into holds one name once.
+"""
+@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct ProgramError
+    text::String
+end
+
 """The module WasmTarget built is not valid wasm; `site` names where it was found."""
 @quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct InvalidModule
     site::String
@@ -136,18 +147,19 @@ end
 
 Why a compile stops: `Unported` and `Unquarantined` (a path that reaches a definition not yet
 written: the dart definition it mirrors, or the Julia-only row it implements), `OutsideSubset`
-(Julia's own trim verifier rejects the program), `InvalidModule` and `Internal` (a defect of
-WasmTarget itself).
+(Julia's own trim verifier rejects the program), `ProgramError` (WasmTarget's judgment that the
+program, which Julia accepts, cannot be built as written, the user's to fix), `InvalidModule` and
+`Internal` (a defect of WasmTarget itself).
 
-A closed sum by construction: a `@closed` `Union` of five concrete structs that subtype nothing,
-so no other module can add a kind; a sixth kind is an edit of this line, and every `@exhaustive`
-match over it, `_reason` first, then refuses the load until it has the sixth arm.
+A closed sum by construction: a `@closed` `Union` of six concrete structs that subtype nothing,
+so no other module can add a kind; a seventh kind is an edit of this line, and every `@exhaustive`
+match over it, `_reason` first, then refuses the load until it has the seventh arm.
 
 precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch). Julia's differs:
 a `Union` of concrete types where Rust declares an enum and dart a sealed hierarchy, and its
 exhaustiveness checked when the package loads, since Julia checks no match at compile time.
 """
-@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Rejection = Union{Unported, Unquarantined, OutsideSubset, InvalidModule, Internal}
+@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Rejection = Union{Unported, Unquarantined, OutsideSubset, ProgramError, InvalidModule, Internal}
 
 """
     RejectionError(rejection, at)
@@ -166,6 +178,7 @@ end
         (u::Unported) => "unported: the dart definition $(u.anchor)"
         (q::Unquarantined) => "unported: the Julia-only definition $(q.row)"
         (o::OutsideSubset) => "outside the strict subset: $(_trim_texts(o.errors))"
+        (p::ProgramError) => "the program's error: $(p.text)"
         (i::InvalidModule) => "invalid module at $(i.site)"
         (n::Internal) => "internal error at $(n.site)"
     end

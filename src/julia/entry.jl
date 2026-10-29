@@ -8,7 +8,8 @@
 
 Compile `f` called with arguments of `argtypes` to a wasm module. The program is first inferred
 once and judged by Julia's own trim verifier (`check_subset`): one outside the strict subset rejects
-with `OutsideSubset`, Julia's text. Every path that reaches a definition not yet ported rejects with
+with `OutsideSubset`, Julia's text; one Julia accepts that cannot be built as written (two exports of
+one name) rejects with `ProgramError`, the user's to fix. Every path that reaches a definition not yet ported rejects with
 a `RejectionError` naming it; nothing returns a module that was not built (dev/CHARTER.md C6).
 """
 @quarantine "a Julia program is a callable and its argument types, where dart's is a Kernel component" Core.Tuple function compile(@nospecialize(f), argtypes::Tuple; optimize::Bool = true)::Vector{UInt8}

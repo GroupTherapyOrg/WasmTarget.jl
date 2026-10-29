@@ -78,7 +78,7 @@ end
     # every description has one kind, and every kind but the entry's two has one description
     local described = collect(values(W.TRIM_ERROR_KINDS))
     @test allunique(described)
-    @test Set(described) == Set(k for k in instances(W.TrimErrorKind) if !(k in (W.no_unique_method, W.no_compileable_specialization, W.shared_export_name)))
+    @test Set(described) == Set(k for k in instances(W.TrimErrorKind) if !(k in (W.no_unique_method, W.no_compileable_specialization)))
     # an accepted world keeps the verifier's parents, from which any statement is located
     @test WasmTarget.check_subset(SubsetCases.g, (Int,), "subset").parents isa IdDict
 end
@@ -126,9 +126,8 @@ end
     catch e
         e isa WasmTarget.RejectionError ? e : rethrow()
     end
-    @test r isa WasmTarget.RejectionError && r.rejection isa WasmTarget.OutsideSubset && r.at == "subset"
-    local err = only(r.rejection.errors)
-    @test err.kind == WasmTarget.shared_export_name
+    # WasmTarget's judgment of the program, the user's to fix, never Julia's verifier's (OutsideSubset)
+    @test r isa WasmTarget.RejectionError && r.rejection isa WasmTarget.ProgramError && r.at == "subset"
     local text = sprint(showerror, r)
     @test occursin("\"shared\"", text) && occursin("Int32", text) && occursin("Float64", text)
     # a C name given to @ccallable is the export name, so the two export apart
