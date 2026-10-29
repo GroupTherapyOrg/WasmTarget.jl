@@ -69,6 +69,22 @@ rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(
     @test h.used == BitSet([1, 2, 3])
 end
 
+@testset "code_generator.dart: the code generator holds every field dart declares" begin
+    # dart's AstCodeGenerator declares 22 instance fields (code_generator.dart:67 to :160) and
+    # SynchronousProcedureCodeGenerator 3 (:3606 to :3608); 5 are Julia's answers (typeContext,
+    # breakFinalizers, switchLabels, switchBackwardJumpInfos, kind), and Julia's SSA form forces 2
+    # (body, used): 22 + 3 - 5 + 2 = 22
+    @test fieldcount(D.SynchronousProcedureCodeGenerator) == 22
+    local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    @test all(i -> isdefined(g, i), 1:fieldcount(D.SynchronousProcedureCodeGenerator))
+    # dart's initial values: the maps and lists empty, no source yet
+    @test isempty(g.type_locals) && isempty(g.try_block_locals) && g._source_map_source === nothing
+    # the late closures, which generateInternal assigns from Translator.getClosures, reject when read
+    # first: Unported, at the field's line
+    local e = rejection(() -> g.closures[])
+    @test e.rejection isa W.Unported && occursin("code_generator.dart:82 AstCodeGenerator.closures", e.rejection.anchor)
+end
+
 @testset "intrinsics.dart: Julia's intrinsics, by the instructions Julia's codegen answers" begin
     local B = D.Intrinsifier__binary_operator_map[]
     local U = D.Intrinsifier__unary_operator_map[]

@@ -15,15 +15,27 @@ one callable, where dart's Reference names a procedure's getter, tear-off and en
 
 dart's AstCodeGenerator fields it holds (code_generator.dart:67): `translator`, `functionType`,
 `enclosingMember`, the late `b`, `paramLocals` and `returnLabel` that `generate` assigns,
-`intrinsifier`, `exceptionLocationPrinted`, `locals` (a variable is a NIR argument or a used SSA
-statement, Julia's own names for a value), `thisLocal`, `preciseThisLocal`, `returnValueLocal`,
-`returnFinalizers` and `_sourceMapFileOffset`. dart's `kind`, an EntryPoint of
-reference_extensions.dart (out of scope), is always `EntryPoint.normal`: Julia checks no covariant
-parameter, so a method has one entry, and the field arrives only if another entry does.
+`intrinsifier`, the late `closures` :82 (assigned by generateInternal :3643 from
+Translator.getClosures, as dart's is), `exceptionLocationPrinted`, `locals` (a variable is a NIR
+argument or a used SSA statement, Julia's own names for a value), `thisLocal`, `preciseThisLocal`,
+`returnValueLocal`, `typeLocals` :90 (a type parameter a TypeVar, the Kernel table's row; Julia's
+answer leaves it empty, a static parameter being part of the MethodInstance and no parameter of its
+function), `returnFinalizers`, `tryBlockLocals` :101 (dart's record a NamedTuple of the two locals),
+`_sourceMapSource` :159 (a source the file Julia's debuginfo names, the Kernel table's row) and
+`_sourceMapFileOffset`; and SynchronousProcedureCodeGenerator's `member` and `reference`.
 
-Fields to come: `kind` :3608, `typeContext` :77, `closures` :82, `typeLocals` :90, `breakFinalizers`
-:98, `tryBlockLocals` :101, `switchLabels` :104, `switchBackwardJumpInfos` :108, `_sourceMapSource`
-:159, each with the piece that reads it.
+Julia's answers, not stored (each with its code_generator.dart line; ledger D3): `typeContext` :77
+(Kernel's StaticTypeContext has no counterpart, the Kernel table's row: Julia's inference typed every
+statement, and dartTypeOf reads the NIR's inferred types); `breakFinalizers` :98 (Julia's lowering
+compiles a `finally` into the flat IR, one shared block whose exits dispatch on a destination tag, so
+a break is a jump the stackifier's BR carries to an open label of visitBlock and runs no finalizer of
+its own); `switchLabels` :104 and `switchBackwardJumpInfos` :108 (Kernel's SwitchCase has no
+counterpart, the Kernel table's row: Julia's IR has no switch, each case test a GotoIfNot and a jump
+back to an earlier case a back edge, which the stackifier's LOOP or FixIrreducibleControlFlow's
+dispatch carries; the jump infos are read only by visitContinueSwitchStatement, whose target is a
+SwitchCase); and `kind` :3608 (an EntryPoint of reference_extensions.dart, which Julia replaces,
+dev/skeleton_scope.toml: a MethodInstance names one callable, and Julia checks no covariant
+parameter, so a method has one entry, always `EntryPoint.normal`).
 
 `used`, the statements whose value an operand reads, is what
 Julia's SSA form forces: dart's Kernel nests an expression in its one use, NIR names it by
@@ -37,28 +49,36 @@ SSAValue, so a used statement is a variable declaration and an unused one an exp
     const param_locals::Late{Vector{WasmBuilder.IR.Local}}
     const return_label::Late{Union{Nothing,WasmBuilder.Label}}
     const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
     exception_location_printed::Bool
     const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
     this_local::Union{Nothing,WasmBuilder.IR.Local}
     precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const member::Core.MethodInstance
     const reference::Core.MethodInstance
     const body::NirBody
     const used::BitSet
-    # dart's field initializers and the constructor's initializer list (code_generator.dart:112,
-    # :3610); `intrinsifier` reads the code generator itself, as dart's late initializer does
+    # dart's field initializers in its order and the constructor's initializer list
+    # (code_generator.dart:67 to :160, :3610); `intrinsifier` reads the code generator itself, as
+    # dart's late initializer does
     function SynchronousProcedureCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance, body::NirBody)
         local self
         self = new(translator, function_type, member,
-            Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.b"),
-            Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.paramLocals"),
-            Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:75 AstCodeGenerator.returnLabel"),
-            Late{Intrinsifier}("dart2wasm/lib/code_generator.dart:77 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
+            Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
+            Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
+            Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
+            Late{Intrinsifier}("dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
+            Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
-            TryBlockFinalizer[], TreeNode_no_offset, member, member, body, nir_used_statements(body))
+            Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
+            NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
+            nothing, TreeNode_no_offset, member, member, body, nir_used_statements(body))
         return self
     end
 end
