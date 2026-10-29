@@ -221,3 +221,12 @@ k(x) = WasmTarget.NirConst(Core.Const(x))
     W.var"end"(b)
 end
 end
+
+# a record constant, Julia's Tuple: each field is instantiated at its struct field's own type (an Int64 an
+# i64, a Bool an i32), never as the boxed constant's global, which the builder refuses at struct.new (b54115e0)
+module RecordConstantCases
+records(n::Int64) = ((42, 42, 42), ((42,), true), n)
+end
+@testset "a record constant's fields at their own types" begin
+    @test WasmTarget.compile(RecordConstantCases.records, (Int64,); optimize = false) isa Vector{UInt8}
+end
