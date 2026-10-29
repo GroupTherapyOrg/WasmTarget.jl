@@ -17,8 +17,9 @@ a `RejectionError` naming it; nothing returns a module that was not built (dev/C
 end
 
 # the stages after the subset check take the ClosedWorld check_subset alone makes: dart's compile
-# (dart2wasm/lib/compile.dart:216) runs them, standalone (the JS runtime that loads a module is not
-# yet ported), and the main module's bytes are the result. The phases are the user-facing default,
+# (dart2wasm/lib/compile.dart:216) runs them, standalone, and the main module's bytes are the result:
+# a module that imports the JS runtime needs that runtime file beside it (compile's RuntimeFinalizer),
+# which this entry, returning bytes alone, does not hand its caller. The phases are the user-facing default,
 # dartdev's `dart compile wasm` (pkg/dartdev/lib/src/commands/compile.dart:874-875): cfe, tfa,
 # codegen and opt; `optimize = false` leaves opt out, as dartdev's optimization level 0 does
 # (:1002-1010), the library's default phases (compiler_options.dart:64)
