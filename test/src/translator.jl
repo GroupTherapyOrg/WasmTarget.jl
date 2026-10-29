@@ -642,6 +642,17 @@ end
 module ClosureThisCases
 make(x::Int) = () -> (@noinline; x + 1)
 entry(x::Int) = make(x)()
+# a parametric constructor and a plain one, each a method of the type it makes
+struct Box{T}
+    n::Int
+    Box{T}(n::Int) where {T} = (@noinline; new{T}(n + 1))
+end
+# mutable, so Julia allocates it at run time rather than folding the call
+mutable struct Plain
+    n::Int
+    Plain() = (@noinline; new(0))
+end
+make_objs(x::Int) = Box{String}(x).n + Plain().n
 end
 
 @testset "translator.dart: preciseThisFor, a closure's `this` its struct" begin
@@ -658,4 +669,18 @@ end
     # a function's method has no `this`: dart's assertion, Internal
     local e = try; D.precise_this_for(t, t.component.entry); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
+end
+
+@testset "translator.dart: preciseThisFor, a constructor's `this` the instance it allocates" begin
+    local W = WasmTarget
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.make_objs, (Int,), "translator"), "test"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    # Box{String}(::Int64) and Plain(): the callee is the type, `this` the constructed class's
+    for (C, sig) in ((ClosureThisCases.Box{String}, Tuple{Type{ClosureThisCases.Box{String}}, Int}),
+                     (ClosureThisCases.Plain, Tuple{Type{ClosureThisCases.Plain}}))
+        local mi = only(b.ci.def for b in t.component if b.ci.def.specTypes == sig)
+        @test D.precise_this_for(t, mi) == W.WasmBuilder.with_nullability(D.repr(t.class_info[C]), false)
+    end
 end
