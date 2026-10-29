@@ -1438,7 +1438,9 @@ end
 """Emit an `f32.const` instruction."""
 @parity "wasm_builder/lib/src/builder/instructions.dart:2079 InstructionsBuilder.f32_const" function f32_const(b::InstructionsBuilder, value::Float64)::Nothing
     _verify_types(b, IR.ValueType[], IR.ValueType[IR.NumType_f32]; trace=("f32.const", value))
-    _add(b, IR.F32Const(value))
+    # dart's double narrows to the f32 where the serializer writes it (serializer.dart's writeF32,
+    # round to nearest); IR.F32Const holds the Float32 itself, so its caller narrows, here
+    _add(b, IR.F32Const(Float32(value)))
     nothing
 end
 

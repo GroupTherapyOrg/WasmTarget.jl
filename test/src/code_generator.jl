@@ -528,6 +528,20 @@ end
     @test 0xc0 in compile_one(C.add8, (Int8, Int8))
 end
 
+module Float32Cases
+addf(x::Float32) = x + 1.5f0
+end
+
+@testset "constants.dart: a Float32 literal is an f32.const of its value" begin
+    # visitDoubleConstant pushes the literal through the builder's f32_const, dart's double narrowed
+    # to the f32 the instruction holds: f32.const 1.5 (0x43, then 1.5f0's little-endian bytes)
+    local bytes = compile_one(Float32Cases.addf, (Float32,))
+    @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    local f32 = UInt8[0x43, reinterpret(UInt8, [1.5f0])...]
+    @test any(i -> bytes[i:i+4] == f32, 1:length(bytes)-4)
+    @test Float32Cases.addf(1.0f0) === 2.5f0
+end
+
 module TypeTestCases
 # the entry's signature is concrete (Julia compiles no specialization for a Union signature); the
 # operand under test is the field read, whose inferred type is the Union
