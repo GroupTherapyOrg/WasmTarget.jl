@@ -12,11 +12,16 @@ const W = WasmTarget
 const D = WasmTarget.Dart2Wasm
 
 module Cases
+import WasmTarget as W
 # a call of JS's Math.sin, one of the host's modules, and of a C library's sin, none of them
 @noinline host_sin(x::Float64) = ccall((:sin, "Math"), Float64, (Float64,), x)
 @noinline libm_sin(x::Float64) = ccall((:sin, "libm"), Float64, (Float64,), x)
 host(x::Float64) = host_sin(x) + 1.0
 libm(x::Float64) = libm_sin(x) + 1.0
+# a host reference made by one host import and passed to another: JS's Array.of() and Array.isArray
+@noinline js_array_of() = ccall((:of, "Array"), W.WasmExternRef, ())
+@noinline js_is_array(a::W.WasmExternRef) = ccall((:isArray, "Array"), Int32, (W.WasmExternRef,), a)
+is_array() = Int64(js_is_array(js_array_of()))
 # a host module's function taking a value with no wasm boundary type
 struct Pair2; a::Int; b::Int; end
 @noinline host_pair(p::Pair2) = ccall((:max, "Math"), Float64, (Pair2,), p)
@@ -43,6 +48,20 @@ rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(
     local imports = readchomp(`node -e "const m = new WebAssembly.Module(require('fs').readFileSync(process.argv[1])); console.log(WebAssembly.Module.imports(m).map(i => i.module + '.' + i.name + ':' + i.kind).join(','))" $path`)
     rm(path)
     @test imports == "Math.sin:function"
+end
+
+@testset "host import: a host reference crosses as wasm's externref" begin
+    # Array.of() makes a JS array the module holds as an externref and passes to Array.isArray: the
+    # module, given JS's Array as the host's, answers JS's true, 1
+    local bytes = W.compile(Cases.is_array, ())
+    local path = tempname() * ".wasm"
+    write(path, bytes)
+    local script = "const m = new WebAssembly.Module(require('fs').readFileSync(process.argv[1])); " *
+        "const i = new WebAssembly.Instance(m, {Array: Array}); " *
+        "console.log(WebAssembly.Module.imports(m).map(x => x.module + '.' + x.name).join(',') + ' ' + i.exports.is_array())"
+    local out = readchomp(`node -e $script $path`)
+    rm(path)
+    @test out == "Array.of,Array.isArray 1"
 end
 
 @testset "host import: a foreign call to any other library rejects, located" begin

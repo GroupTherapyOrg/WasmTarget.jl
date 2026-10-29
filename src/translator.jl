@@ -306,8 +306,9 @@ the translator holds each collaborator.
                 Int32 => WasmBuilder.IR.NumType_i32, UInt32 => WasmBuilder.IR.NumType_i32, Char => WasmBuilder.IR.NumType_i32,
                 Int64 => WasmBuilder.IR.NumType_i64, UInt64 => WasmBuilder.IR.NumType_i64,
                 Float32 => WasmBuilder.IR.NumType_f32, Float64 => WasmBuilder.IR.NumType_f64,
-                WasmI8 => WasmBuilder.IR.PackedType_i8, WasmI32 => WasmBuilder.IR.NumType_i32, WasmI64 => WasmBuilder.IR.NumType_i64,
-                WasmF32 => WasmBuilder.IR.NumType_f32, WasmF64 => WasmBuilder.IR.NumType_f64)),
+                WasmI8 => WasmBuilder.IR.PackedType_i8, WasmI16 => WasmBuilder.IR.PackedType_i16, WasmI32 => WasmBuilder.IR.NumType_i32, WasmI64 => WasmBuilder.IR.NumType_i64,
+                WasmF32 => WasmBuilder.IR.NumType_f32, WasmF64 => WasmBuilder.IR.NumType_f64,
+                WasmExternRef => WasmBuilder.IR.RefType_extern(; nullable = false))),
             Late{Dict{WasmBuilder.IR.ValueType,DataType}}("dart2wasm/lib/translator.dart:374 Translator.boxedClasses"),
             Late{Base.IdSet{DataType}}("dart2wasm/lib/translator.dart:380 Translator.boxClasses"),
             Late{IdDict{DataType,DataType}}("dart2wasm/lib/translator.dart:389 Translator.valueClasses"),
@@ -911,9 +912,10 @@ end
 end
 
 # dart's classes of dart:_wasm, those under its wasm types' base class; Julia's runtime has none of them
-# but the wasm arrays a field's type names (src/julia/wasm_array.jl's WasmArray and ImmutableWasmArray)
+# but the wasm arrays a field's type names (src/julia/wasm_array.jl's WasmArray and ImmutableWasmArray),
+# their element types (WASM_STORAGE_TYPES) and the host reference a host import passes (WasmExternRef)
 @parity "dart2wasm/lib/translator.dart:1064 Translator.isWasmType" is_wasm_type(self::Translator, cls::DataType)::Bool =
-    cls <: WasmArray || cls <: ImmutableWasmArray
+    cls <: WasmArray || cls <: ImmutableWasmArray || any(w -> cls === w, WASM_STORAGE_TYPES) || cls === WasmExternRef
 
 """
 The wasm storage type of a value of the Julia type `type_`, Julia's answers where dart reads a
@@ -954,11 +956,14 @@ the representation here is a reference to the join's struct, each value boxed in
     # type of a field holding a wasm array of T
     cls <: WasmArray && return WasmBuilder.IR.RefType_def(array_type_for_dart_type(self, cls.parameters[1]; mutable_ = true); nullable = nullable)
     cls <: ImmutableWasmArray && return WasmBuilder.IR.RefType_def(array_type_for_dart_type(self, cls.parameters[1]; mutable_ = false); nullable = nullable)
-    # A wasm type (dart:_wasm's storage classes, src/julia/wasm_array.jl) is never boxed: its builtin
-    # type even where unbox is false (dart's `!boxClasses.contains(cls)`); a nullable one is dart's throw
-    if any(w -> cls === w, WASM_STORAGE_TYPES)
-        nullable && reject!(Internal("$at: Wasm numeric types can't be nullable"), at)
-        return self.builtin_types[][cls]
+    # A wasm type (dart:_wasm's storage classes and WasmExternRef, src/julia/wasm_array.jl) is never
+    # boxed: its builtin type even where unbox is false (dart's `!boxClasses.contains(cls)`); a nullable
+    # numeric one is dart's throw, a nullable reference its nullable builtin
+    if any(w -> cls === w, WASM_STORAGE_TYPES) || cls === WasmExternRef
+        local wasm_builtin = self.builtin_types[][cls]
+        nullable || return wasm_builtin
+        WasmBuilder.is_primitive(wasm_builtin) && reject!(Internal("$at: Wasm numeric types can't be nullable"), at)
+        return WasmBuilder.with_nullability(wasm_builtin::WasmBuilder.IR.RefType, nullable)
     end
     if isprimitivetype(cls)
         # Built-in type? Its box is the primitive class itself
@@ -1001,16 +1006,18 @@ end
 
 """
 The wasm type of a Julia type on the interop boundary, an import's or export's parameter or
-return: a wasm array (`WasmArray{T}`, one of the wasm types is_wasm_type names) the array of its
-elements' boundary storage type, nullable with `nothing`; a non-nullable primitive class its builtin
-type, when that is a number type; anything else the nullable anyref, as dart coerces every reference
-to an abstract one (Binaryen's closed world). dart's funcref, function and externref classes have no
-Julia counterpart, and dart's arm takes its mutable WasmArray alone, an ImmutableWasmArray taking the
+return: a host reference (`WasmExternRef`) wasm's externref, nullable with `nothing`; a wasm array
+(`WasmArray{T}`, one of the wasm types is_wasm_type names) the array of its elements' boundary storage
+type, nullable with `nothing`; a non-nullable primitive class its builtin type, when that is a number
+type; anything else the nullable anyref, as dart coerces every reference to an abstract one
+(Binaryen's closed world). dart's funcref and function classes have no Julia counterpart, and dart's
+arm takes its mutable WasmArray alone, an ImmutableWasmArray taking the
 anyref. Callable before the class info is built.
 """
 @parity "dart2wasm/lib/translator.dart:1239 Translator.translateExternalType" function translate_external_type(self::Translator, type_::Type)::WasmBuilder.IR.ValueType
     local is_potentially_nullable = Nothing <: type_
     local cls = is_potentially_nullable && type_ isa Union ? Base.nonnothingtype(type_) : type_
+    cls === WasmExternRef && return WasmBuilder.IR.RefType_extern(; nullable = is_potentially_nullable)
     if cls isa DataType && cls <: WasmArray
         local element_type = translate_external_storage_type(self, cls.parameters[1])
         return WasmBuilder.IR.RefType_def(wasm_array_type(self, element_type, string(element_type); mutable_ = true); nullable = is_potentially_nullable)

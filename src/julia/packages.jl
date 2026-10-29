@@ -10,7 +10,8 @@
 # Julia methods compiled into every closed world (src/julia/subset.jl RUNTIME_ENTRY_POINTS)
 @quarantine "Julia has no per-file namespace; dart's patch libraries, the program's runtime, are a module" Core.Module module Runtime
 # ---- the src/julia names Runtime's files use, written by dev/skeleton.jl write ----
-import ..@parity
+import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..wasm_array_new, ..wasm_array_write!,
+       ..wasm_string_codeunit
 # ---- end of Runtime's src/julia names ----
 end
 
@@ -64,15 +65,16 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..@unported, ..Abstra
        ..NoCounterpart, ..Reference, ..STMTS, ..THROW_REF, ..TRY_TABLE, ..TreeNode_no_offset,
        ..UNREACHABLE, ..UnionFind, ..Unported, ..Unquarantined, ..WASM_OPCODE_CATCH,
        ..WASM_OPCODE_CATCH_ALL_REF, ..WASM_STORAGE_TYPES, ..WasmArray, ..WasmArrayLiteral,
-       ..WasmF32, ..WasmF64, ..WasmI32, ..WasmI64, ..WasmI8, .._KINDS, ..build_nir,
-       ..class_implemented_types, ..class_instance_fields, ..class_is_abstract, ..class_superclass,
-       ..closed_world_classes, ..egal_by_identity, ..nir_argument_type, ..nir_binding_is_constant,
-       ..nir_binding_value, ..nir_body_of, ..nir_callee, ..nir_carries_data, ..nir_const_type,
-       ..nir_invoke_target, ..nir_method_nargs, ..nir_operands, ..nir_runtime_member,
-       ..nir_tuple_type, ..nir_used_statements, ..nir_value_type, ..no_counterpart_rejection,
-       ..reject!, ..run_wasm_opt, ..throw_bounds_error, ..throw_divide_error,
-       ..throw_undef_ref_error, ..uf_add!, ..uf_find!, ..uf_union!, ..wasm_string_alloc,
-       ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length
+       ..WasmExternRef, ..WasmF32, ..WasmF64, ..WasmI16, ..WasmI32, ..WasmI64, ..WasmI8, .._KINDS,
+       ..build_nir, ..class_implemented_types, ..class_instance_fields, ..class_is_abstract,
+       ..class_superclass, ..closed_world_classes, ..egal_by_identity, ..nir_argument_type,
+       ..nir_binding_is_constant, ..nir_binding_value, ..nir_body_of, ..nir_callee,
+       ..nir_carries_data, ..nir_const_type, ..nir_invoke_target, ..nir_method_nargs,
+       ..nir_operands, ..nir_runtime_member, ..nir_tuple_type, ..nir_used_statements,
+       ..nir_value_type, ..no_counterpart_rejection, ..reject!, ..run_wasm_opt,
+       ..throw_bounds_error, ..throw_divide_error, ..throw_undef_ref_error, ..uf_add!, ..uf_find!,
+       ..uf_union!, ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!,
+       ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length
 # ---- end of Dart2Wasm's src/julia names ----
 # a dispatcher over every NIR kind is inferred once, not once per kind of node (a compile's first-use cost)
 import Base: @nospecializeinfer
@@ -91,7 +93,7 @@ import ..Dart2Wasm
 end
 @quarantine "dart2wasm's compile imports js/runtime_generator.dart under the prefix js; a prefix is a module in Julia" Core.Module module JS
 # ---- the src/julia names JS's files use, written by dev/skeleton.jl write ----
-import ...@parity, ...Internal, ...reject!
+import ...@parity, ...Internal, ...JS_STRING_BUILTINS_MODULE, ...reject!
 # ---- end of JS's src/julia names ----
 import ...WasmBuilder
 import ..Dart2Wasm

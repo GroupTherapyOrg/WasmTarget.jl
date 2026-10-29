@@ -433,7 +433,8 @@ end
 Whether `mi` is a member the code generator's intrinsifier lowers at its call (src/intrinsics.jl,
 read from the intrinsifier's own decision, generateStaticIntrinsic's): dart's `external` member,
 whose call the intrinsifier meets and which has no body of its own. Julia's native body of one (a
-String's data operations read and write its bytes through pointers, src/julia/wasm_array.jl) is
+String's data operations read and write its bytes through pointers, a wasm array's operations raise,
+src/julia/wasm_array.jl) is
 Julia's evaluation of it, not the program's, so the closed world's NIR never collects it; a call the
 intrinsifier then declines finds no body and rejects, located (nir_body_of).
 
@@ -442,7 +443,8 @@ intrinsic declaration, a call with no definition). Julia's differs: every callee
 body, so the one the intrinsifier lowers is left out here.
 """
 @quarantine "an intrinsified member has no body of its own, as dart's external member: its call is recorded, its body never collected" Core.MethodInstance nir_intrinsified(mi::Core.MethodInstance)::Bool =
-    Dart2Wasm.generate_static_intrinsic(Val(:string_data_op), mi) !== nothing
+    Dart2Wasm.generate_static_intrinsic(Val(:string_data_op), mi) !== nothing ||
+    Dart2Wasm.generate_static_intrinsic(Val(:wasm_array_op), mi) !== nothing
 
 """
     build_nir(world::ClosedWorld, at::String) -> NirWorld

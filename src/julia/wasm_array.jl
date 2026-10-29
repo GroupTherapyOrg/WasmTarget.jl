@@ -29,17 +29,19 @@ dart's translateStorageType (translator.dart:1085, :1094) translates to a refere
 `arrayTypeForDartType(T, mutable: …)`. dart's runtime type objects hold their type arguments in
 one (sdk/lib/_internal/wasm/common/type.dart:277, `final WasmArray<_Type> typeArguments;`), and a
 Julia object whose data lies outside its fields does too (src/julia/classes.jl, a
-`Core.SimpleVector`'s elements). No Julia value has either type: the wasm array is the value, and
-Julia never holds it, so each is a struct of one field of type `Union{}`, uninhabited.
+`Core.SimpleVector`'s elements). A mutable one is also a value Julia code holds, as dart's runtime
+does (js_string.dart's `WasmArray<WasmI16>(length)`, written element by element and passed to a host
+import): Julia's inference must see it flow through a body, so `WasmArray{T}` is inhabited, a
+primitive type of a pointer's width whose bits Julia never reads, made and used only through
+dart:_wasm's operations below (wasm_array_new, wasm_array_write!, wasm_array_length), which the
+code generator lowers to wasm's array instructions. No Julia value has the immutable one, a struct of
+one field of type `Union{}`, uninhabited.
 
 precedent(dart: dart:_wasm's WasmArray and ImmutableWasmArray; rust: `[T]`, a type only behind a
-reference). Julia's differs: its runtime has no wasm array, so the type names the representation a
-field takes and no value is made of it.
+reference). Julia's differs: its runtime has no wasm array, so the type names the representation and
+no Julia operation reads it.
 """
-@quarantine "dart:_wasm's WasmArray is a class of dart's runtime; Julia's runtime has no wasm array, so a field's type names it" Core.Union struct WasmArray{T}
-    _never::Union{}
-    WasmArray{T}(args...) where {T} = reject!(Internal("src/julia/wasm_array.jl: WasmArray has no Julia value; a field of its type holds the wasm array itself"), "WasmArray")
-end
+@quarantine "dart:_wasm's WasmArray is a class of dart's runtime; Julia's runtime has no wasm array, so a value's type names it" Core.Any primitive type WasmArray{T} <: Any 64 end
 @quarantine "dart:_wasm's ImmutableWasmArray is a class of dart's runtime; Julia's runtime has no wasm array, so a field's type names it" Core.Union struct ImmutableWasmArray{T}
     _never::Union{}
     ImmutableWasmArray{T}(args...) where {T} = reject!(Internal("src/julia/wasm_array.jl: ImmutableWasmArray has no Julia value; a field of its type holds the wasm array itself"), "ImmutableWasmArray")
@@ -131,8 +133,78 @@ storage type is named apart from them.
     WasmF64(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmF64 has no Julia value; it names an array's element type"), "WasmF64")
 end
 
+"""
+    WasmI16
+
+dart:_wasm's 16-bit wasm integer (sdk/lib/_wasm/wasm_types.dart, `class WasmI16`), the element type of
+a packed i16 wasm array, a JS string's UTF-16 code units (js_string.dart's `WasmArray<WasmI16>`): a
+wasm type, never boxed, so translateStorageType gives its builtin type, the packed i16. An element is
+written as a `UInt16`. No Julia value has the type: a struct of one field of type `Union{}`,
+uninhabited.
+
+precedent(dart: dart:_wasm's WasmI16, a storage type of packed arrays only; rust: `u16` in a
+`[u16]`). Julia's differs: its UInt16 is a class of its own, boxed where it flows into `Any`, so the
+packed storage type is named apart from it.
+"""
+@quarantine "dart:_wasm's WasmI16 (sdk/lib/_wasm/wasm_types.dart:151 WasmI16) is a storage type of dart's runtime; Julia's UInt16 is a boxable class, so an array's element type names the packed i16" Core.Union struct WasmI16
+    _never::Union{}
+    WasmI16(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI16 has no Julia value; it names a packed array's element type"), "WasmI16")
+end
+
 # dart:_wasm's storage classes this file defines, each never boxed (translateStorageType)
-@quarantine "dart:_wasm's storage classes are the wasm types translateStorageType never boxes" Core.Tuple const WASM_STORAGE_TYPES::Tuple{Vararg{DataType}} = (WasmI8, WasmI32, WasmI64, WasmF32, WasmF64)
+@quarantine "dart:_wasm's storage classes are the wasm types translateStorageType never boxes" Core.Tuple const WASM_STORAGE_TYPES::Tuple{Vararg{DataType}} = (WasmI8, WasmI16, WasmI32, WasmI64, WasmF32, WasmF64)
+
+# a dart:_wasm operation's native body: no wasm array exists natively, so the body raises, loud, and
+# its value is hidden from inference (compilerbarrier) so Julia never folds a wasm array's operation;
+# inlined, so it lies in the operation's body, which the closed world never collects
+@quarantine "dart declares a wasm array operation external, its body the compiler's (sdk/lib/_wasm/wasm_types.dart:737 WasmArray); no wasm array exists natively, so its native body raises, its value hidden from Julia's inference" Base.compilerbarrier @inline function _wasm_only(::Type{R})::R where {R}
+    local r = Base.compilerbarrier(:type, nothing)
+    r === nothing && error("src/julia/wasm_array.jl: a wasm array operation, run natively; only the compiled module holds a wasm array")
+    return r::R
+end
+
+"""
+    wasm_array_new(WasmArray{T}, n) -> WasmArray{T}
+
+A new mutable wasm array of `n` elements of `T`, each the default: dart's `WasmArray<T>(length)`
+constructor (sdk/lib/_wasm/wasm_types.dart), `array.new_default`. Never inlined, so the code
+generator meets the call and lowers it (src/intrinsics.jl).
+"""
+@quarantine "dart:_wasm's WasmArray constructor (sdk/lib/_wasm/wasm_types.dart:737 WasmArray) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_new(::Type{WasmArray{T}}, n::Int) where {T} =
+    _wasm_only(WasmArray{T})
+
+"""
+    wasm_array_write!(a, i, v) -> Nothing
+
+Writes `v` at offset `i` (from 0) of `a`, unchecked: dart's `WasmArray<T>.write`, `array.set`, a packed
+element truncated as wasm's array.set truncates.
+"""
+@quarantine "dart:_wasm's WasmArray write (sdk/lib/_wasm/wasm_types.dart:748 operator) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_write!(a::WasmArray{T}, i::Int, v::Union{UInt16,Int32,Int64,Float64}) where {T} =
+    (_wasm_only(Int); nothing)
+
+"""
+    wasm_array_length(a) -> Int
+
+The number of elements of `a`: dart's `WasmArrayRef.length`, `array.len`.
+"""
+@quarantine "dart:_wasm's WasmArray length (sdk/lib/_wasm/wasm_types.dart:142 length) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_length(a::WasmArray) =
+    _wasm_only(Int)
+
+"""
+    WasmExternRef
+
+dart:_wasm's host reference (sdk/lib/_wasm/wasm_types.dart:59, `class WasmExternRef extends
+_WasmBase`), wasm's `externref`: a value the host made and the module only holds and passes back, the
+type of a host import's argument or result (src/julia/runtime/rtutils.jl nir_host_import), never
+boxed, nullable as `Union{Nothing,WasmExternRef}` (dart's `WasmExternRef?`). Julia's inference must
+see its values flow through a body, so the type is inhabited, a primitive type of a pointer's width,
+whose bits Julia never reads: only a host import makes one.
+
+precedent(dart: dart:_wasm's WasmExternRef; rust: wasm-bindgen's `JsValue`, an index into the host's
+table). Julia's differs: its runtime has no host reference, so the type names the representation and
+no Julia operation reads it.
+"""
+@quarantine "dart:_wasm's WasmExternRef (sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef) is a class of dart's runtime; Julia's runtime has no host reference, so a value's type names it" Core.Any primitive type WasmExternRef <: Any 64 end
 
 # ---- a String's data, read and written as dart:_wasm reads and writes a WasmArray --------------------
 # A String is its class's struct, the header and then `_data`, a wasm array of its UTF-8 code units

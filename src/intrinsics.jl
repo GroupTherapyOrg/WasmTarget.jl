@@ -321,6 +321,8 @@ end
         local target = nir_invoke_target(node)
         local string_op = generate_static_intrinsic(Val(:string_data_op), target)
         string_op === nothing || return generate_static_intrinsic(self, Val(:string_data), string_op, node.args[2:end])
+        local array_op = generate_static_intrinsic(Val(:wasm_array_op), target)
+        array_op === nothing || return generate_static_intrinsic(self, Val(:wasm_array), array_op, target, node.args[2:end])
         local intrinsic = StaticIntrinsic_from_procedure(target)
         intrinsic === nothing && return nothing
         reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "the static intrinsic $intrinsic")
@@ -448,6 +450,50 @@ end
     return WasmBuilder.with_nullability(repr(sv_info), false)
 end
 
+# dart:_wasm's operations on a mutable wasm array Julia code holds (src/julia/wasm_array.jl): the
+# WasmArray constructor (intrinsics.dart:1959, array.new_default), WasmArray.write (:1290, array.set,
+# a packed element truncated) and WasmArrayRef.length (:626, array.len), each one instruction as
+# dart's intrinsifier emits it. The array type is the element type's (arrayTypeForDartType, mutable);
+# an Int offset or length is wrapped to the i32 a wasm array takes, as dart wraps its int.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:wasm_array_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
+    target.def in methods(wasm_array_new) ? :new : target.def in methods(wasm_array_write!) ? :write :
+    target.def in methods(wasm_array_length) ? :length : nothing
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:wasm_array}, op::Symbol, target::Core.MethodInstance, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
+    local at = "$(code_gen.enclosing_member): a wasm array"
+    local params = Base.unwrap_unionall(target.specTypes).parameters
+    # the array's type: WasmArray{T}, the constructor's type argument or the receiver's type
+    local array_class = op === :new ? params[2].parameters[1] : params[2]
+    array_class isa DataType && array_class <: WasmArray && array_class.parameters[1] isa Type ||
+        reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a wasm array operation on $(array_class)"), at)
+    local array_type = array_type_for_dart_type(t, array_class.parameters[1]; mutable_ = true)
+    local array_ref = WasmBuilder.IR.RefType_def(array_type; nullable = false)
+    local offset(v::NirValue) = (translate_expression(code_gen, v, i64); WasmBuilder.i32_wrap_i64(b))
+    if op === :new
+        offset(args[2])
+        WasmBuilder.array_new_default(b, array_type)
+        return array_ref
+    elseif op === :write
+        translate_expression(code_gen, args[1], array_ref)
+        offset(args[2])
+        translate_expression(code_gen, args[3], WasmBuilder.unpacked(array_type.element_type[].type))
+        WasmBuilder.array_set(b, array_type)
+        # dart's void intrinsics leave the null of the top type (WasmArrayExt.[]=), Julia's nothing
+        WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+        return t.top_type[]
+    elseif op === :length
+        translate_expression(code_gen, args[1], array_ref)
+        WasmBuilder.array_len(b)
+        WasmBuilder.i64_extend_i32_u(b)
+        return i64
+    end
+    reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a wasm array operation $op"), at)
+end
+
 # Julia's `_svec_ref(v, i)`: the `i`th element (from 1) of a SimpleVector's data array, dart's
 # ImmutableWasmArrayExt.[] (intrinsics.dart:1223, array.get at the index wrapped to i32) behind the
 # check Julia's codegen emits (emit_bounds_check over jl_svec_len, as builtins.c's jl_f__svec_ref
@@ -509,7 +555,10 @@ end
     local first_type = dart_type_of(self, first)
     local second_type = dart_type_of(self, second)
     local w = type_of_exp(self, first)
-    if first_type === second_type && (full(first_type, w) || first_type === Bool)
+    # an 8- or 16-bit integer is held in its type's one form (sign- or zero-extended, Julia's ABI), so
+    # two of a type are egal exactly when their i32s are equal, as jl_egal compares their bytes
+    local held_small = first_type isa DataType && first_type <: Union{Int8,UInt8,Int16,UInt16} && w == i32
+    if first_type === second_type && (full(first_type, w) || first_type === Bool || held_small)
         translate_expression(code_gen, first, w)
         w == f64 && WasmBuilder.i64_reinterpret_f64(b[])
         w == f32 && WasmBuilder.i32_reinterpret_f32(b[])

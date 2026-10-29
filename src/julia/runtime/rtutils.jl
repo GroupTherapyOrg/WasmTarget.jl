@@ -39,13 +39,19 @@ end
 # program names, a Julia identifier holding none
 @quarantine "dart exports no tag for its host; a Julia program's host matches its exceptions by the exported tag" Core.String const EXCEPTION_TAG_EXPORT::Core.String = "\$exceptionTag"
 
+# the module of the JS string builtins (`builtins: ['js-string']`, the JS String Builtins proposal's
+# `wasm:js-string`), which the engine supplies or the JS runtime's polyfill stands in for
+# (src/js/runtime_generator.jl's JS_POLYFILL_IMPORT): one name for both
+@quarantine "dart's runtime names the JS string builtins' module in its polyfill import (pkg/dart2wasm/lib/js/runtime_generator.dart:150 jsStringPolyfill); WasmTarget's host imports read the same name" Core.String const JS_STRING_BUILTINS_MODULE::Core.String = "wasm:js-string"
+
 """
     host_modules() -> Vector{String}
 
 The modules a WasmTarget host supplies to a module's imports: the keys of the JS runtime's
 `baseImports` object (src/js/runtime_blob.jl, dart's runtime_blob.dart), read from its template, so
-the host's import object is their one source. A key the template fills in (`<<...>>`) is the
-runtime's own, never a program's host library.
+the host's import object is their one source, and the JS string builtins' module, which the engine
+or the runtime's polyfill supplies (JS_STRING_BUILTINS_MODULE). A key the template fills in (`<<...>>`)
+is the runtime's own, never a program's host library.
 """
 @quarantine "Julia's foreign call names a library; the host's libraries are the keys of the JS runtime's import object" Base.match function host_modules()::Vector{String}
     local parts = Dart2Wasm.js_runtime_blob_template[]._parts
@@ -59,6 +65,7 @@ runtime's own, never a program's host library.
         depth == 0 && key !== nothing && push!(out, String(key[1]))
         depth += count(==('{'), line) - count(==('}'), line)
     end
+    push!(out, JS_STRING_BUILTINS_MODULE)
     return out
 end
 
@@ -69,7 +76,8 @@ The host import a method is, `(module, name)`, the quarantined host import of a 
 (dev/MARCH.md 1.F), dart's `@pragma("wasm:import", "<module>.<name>")`, read from the method's
 inferred body in the closed world, its one source: a body that is one foreign call of a literal
 `(name, library)` whose library is a host module (`host_modules`), its declared argument types the
-method's own and its arguments the method's, in order, its result returned. Any other method, a
+method's own (a nullable parameter declared Any, Julia's ccall having no C type for a Union) and its
+arguments the method's, in order, its result returned. Any other method, a
 foreign call to another library among them (libjulia's `jl_uv_puts`, a C library), is no import:
 its body is compiled, and the code generator rejects its foreign call, located.
 
@@ -80,17 +88,28 @@ stands for the declaration.
 """
 @quarantine "Julia's foreign call is a statement; the method whose whole body it is stands for dart's wasm:import declaration" Core.SimpleVector function nir_host_import(world::NirWorld, mi::Core.MethodInstance)::Union{Tuple{String,String},Nothing}
     local body = nir_body_of(world, mi)
-    length(body.stmts) == 2 || return nothing
-    local call, ret = body.stmts[1], body.stmts[2]
+    # the statements but those Julia's optimizer emptied
+    local stmts = [st for st in body.stmts if !(st isa NirNothing)]
+    length(stmts) == 2 || return nothing
+    local call, ret = stmts[1], stmts[2]
     call isa NirForeignCall && ret isa NirReturn || return nothing
     local name = call.args[1]
     name isa NirConst && name.c.val isa Tuple{Symbol,String} || return nothing
     local item, lib = name.c.val
     lib in host_modules() || return nothing
     local rt, ats = call.args[2], call.args[3]
-    local params = Any[Base.unwrap_unionall(mi.specTypes).parameters[2:end]...]
+    # the declaration's parameter types, the method's signature, as dart reads the member's (a call
+    # may specialize the method on narrower arguments)
+    local sig = mi.def isa Method ? mi.def.sig : nothing
+    sig isa DataType || return nothing
+    local params = Any[sig.parameters[2:end]...]
+    all(p -> p isa Type && !(p isa Core.TypeofVararg), params) || return nothing
     rt isa NirConst && ats isa NirConst && ats.c.val isa Core.SimpleVector || return nothing
-    Any[ats.c.val...] == params || return nothing
+    # each declared type is the parameter's own, or Any for a nullable one: Julia's ccall has no C type
+    # for a Union, its Any passing the value as it is (a jl_value_t*)
+    local declared = Any[ats.c.val...]
+    length(declared) == length(params) || return nothing
+    all(i -> declared[i] === params[i] || declared[i] === Any && params[i] isa Union && Nothing <: params[i], eachindex(params)) || return nothing
     all(i -> call.args[5 + i] == NirArgument(i + 1), eachindex(params)) || return nothing
     ret.val == NirSSA(1) || rt.c.val === Nothing && ret.val == NirConst(Core.Const(nothing)) || return nothing
     return (lib, String(item))

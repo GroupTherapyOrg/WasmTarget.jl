@@ -1473,9 +1473,11 @@ parameters, a dummy value's heap type, or the constant's text.
         local value = v::String
         local newline = findfirst('\n', value)
         newline === nothing || (value = value[1:prevind(value, newline)])
-        # dart's length and substring count UTF-16 code units
+        # dart's length and substring count UTF-16 code units, and its name is text of those units: a
+        # Julia String's invalid UTF-8 bytes are the code units Base.transcode makes of them, so the
+        # name is valid UTF-8 as the name section requires
         local units = transcode(UInt16, value)
-        length(units) > 30 && (value = transcode(String, units[1:30]) * "<...>")
+        value = length(units) > 30 ? transcode(String, units[1:30]) * "<...>" : transcode(String, units)
         return "$prefix\"$value\""
     end
     v isa Union{Bool,Base.BitInteger64,Char,Float32,Float64} && return "$prefix$v"

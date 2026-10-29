@@ -119,7 +119,7 @@ end
     local internalized_strings = Dart2Wasm._generate_internalized_strings(self, require_js_builtin, constant_strings)
 
     local js_string_builtin_polyfill_import_vars = Dict{String,String}(
-        "JS_POLYFILL_IMPORT" => require_js_builtin ? "" : "\"wasm:js-string\": jsStringPolyfill,")
+        "JS_POLYFILL_IMPORT" => require_js_builtin ? "" : "\"$(JS_STRING_BUILTINS_MODULE)\": jsStringPolyfill,")
     local module_loading_import_vars = Dict{String,String}(
         "MODULE_LOADING_IMPORT" => supports_additional_module_loading ? "\"moduleLoadingHelper\": moduleLoadingHelper," : "")
 

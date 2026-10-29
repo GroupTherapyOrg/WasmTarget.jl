@@ -168,15 +168,19 @@ unused where Julia's effects prove it (hasWasmPureFunctionPragma).
     local import_name = target isa MethodInstance ? get_import_name(interop_namer(self), target) : nothing
     if import_name !== nothing
         local m = target::MethodInstance
-        # beyond dart's (which trusts its dart: libraries): each argument and the result crosses the
-        # boundary by a type of its own (translateExternalType's number, array or reference arm), never
-        # the anyref every other Julia value would be coerced to
-        for t in (Base.unwrap_unionall(m.specTypes).parameters[2:end]..., type_of_return_value(translator, m))
-            t === Nothing && continue
-            translate_external_type(translator, t) == WasmBuilder.IR.RefType_any(; nullable = true) &&
-                reject!(Unquarantined("src/functions.jl getFunction: the host import $(sprint(show, import_name)) passes $t, which has no wasm boundary type"), "$m")
-        end
-        local ftype = _make_function_type(translator, m, nothing; is_import_or_export = true, synthesize_null_return_value = false, synthesize_no_return = false)
+        # dart's _makeFunctionType of the member, its declared types: Julia's are the method's signature
+        # (getPragma read the import from a method with no type variable), never a call's narrower
+        # specialization; beyond dart's (which trusts its dart: libraries), each argument and the result
+        # crosses the boundary by a type of its own (translateExternalType's number, array or reference
+        # arm), never the anyref every other Julia value would be coerced to
+        local declared = Type[(m.def::Method).sig.parameters[2:end]...]
+        local result = type_of_return_value(translator, m)
+        local boundary(t::Type) = (local w = translate_external_type(translator, t);
+            w == WasmBuilder.IR.RefType_any(; nullable = true) &&
+                reject!(Unquarantined("src/functions.jl getFunction: the host import $(sprint(show, import_name)) passes $t, which has no wasm boundary type"), "$m");
+            w)
+        local ftype = WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[boundary(t) for t in declared],
+            result === Nothing ? WasmBuilder.IR.ValueType[] : WasmBuilder.IR.ValueType[boundary(result)])
         local imported = WasmBuilder.var"import"(module_for_reference(translator, m).functions[], import_name.module_name, import_name.item_name, ftype,
             "$(sprint(show, import_name)) (import)")
         imported.is_pure = is_pure
