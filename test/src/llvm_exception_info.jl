@@ -86,9 +86,11 @@ end
     local mf = W.machine_function(stmts, cfg, handlers, "tc")
     local pad = only(b for b in mf.layout if mf.blocks[b].ehpad)
     local caller = Core.Compiler.block_for_inst(cfg, call) + 1
-    # the catch block is entered from the try's block (Julia's edge) and unwound to from the call's
+    # the catch block is reached only by unwinding, from the call's block, as an LLVM EH pad is: the
+    # EnterNode's own CFG edge to it goes; it begins with the CATCH that receives the exception
     @test pad == Core.Compiler.block_for_inst(cfg, (stmts[1]::W.NirEnter).catch_dest) + 1
-    @test caller in mf.blocks[pad].preds && pad in mf.blocks[caller].succs && 2 in mf.blocks[pad].preds && !(1 in mf.blocks[pad].preds)
+    @test mf.blocks[pad].preds == [caller] && pad in mf.blocks[caller].succs && !(pad in mf.blocks[2].succs)
+    @test mf.blocks[pad].instrs[1].opcode == W.CATCH && mf.blocks[pad].instrs[2].opcode == W.STMTS
     # its exception is the catch block alone, and the stackifier rejects the region at placeTryTableMarker
     local wei = L.WebAssemblyExceptionInfo()
     L.run_on_machine_function(wei, mf)

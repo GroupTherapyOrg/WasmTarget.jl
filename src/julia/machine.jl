@@ -26,10 +26,12 @@
 The WebAssembly instructions the stackifier reads and writes (WebAssemblyInstrControl.td: BLOCK,
 LOOP, END_BLOCK, END_LOOP, BR, BR_IF, BR_UNLESS, BR_TABLE; WebAssemblyInstrInfo.td: CONST_I32, which
 FixIrreducibleControlFlow writes a label register with; TargetOpcode's COPY, which PHIElimination
-writes a PHI's incoming value with) and STMTS, the place of the block's Julia
-statements, which LLVM holds as the block's other instructions.
+writes a PHI's incoming value with; WebAssemblyInstrControl.td's TRY_TABLE and END_TRY_TABLE, which
+CFGStackify places for an EH pad, and CATCH, the pseudo-instruction an EH pad begins with, which
+receives the caught exception) and STMTS, the place of the block's Julia statements, which LLVM holds
+as the block's other instructions.
 """
-@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 COPY STMTS
+@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 COPY STMTS TRY_TABLE END_TRY_TABLE CATCH
 
 """    BLOCK_TYPE_VOID
 
@@ -126,11 +128,14 @@ GotoNode and BR_UNLESS for a GotoIfNot (taken when the condition is false), and 
 that returns, falls through to the next, or enters a try region (an EnterNode, its CFG successors
 the next block and the catch block).
 
-A try region's catch block is an EH pad, and a block holding a statement that may throw (`handlers`,
-Julia's answers) under a handler has that handler's catch block as a successor: LLVM's unwind edge
-from an invoke to its landing pad, here read from Julia's own facts. Julia's CFG marks a catch block
-and the entry with a predecessor 0, which names no block and is dropped; the top block is the entry's
-one predecessor.
+A try region's catch block is an EH pad, begun by a CATCH of WasmTarget's one exception tag (the
+role LLVM's instruction selection and LateEHPrepare play, a Julia catch catching every exception),
+and its predecessors are exactly the blocks that unwind to it, as an LLVM EH pad's are: a block
+holding a statement that may throw (`handlers`, Julia's answers) under a handler has that handler's
+catch block as a successor, LLVM's unwind edge from an invoke to its landing pad, here read from
+Julia's own facts, and Julia's CFG edge from the EnterNode's block to its catch block, which no
+statement throws along, is dropped. Julia's CFG marks a catch block and the entry with a predecessor
+0, which names no block and is dropped; the top block is the entry's one predecessor.
 """
 @quarantine "Julia's IR is a CFG of its statements; codegen puts a top block before it" Core.Compiler.construct_domtree function machine_function(stmts::Vector{NirStmt}, jcfg::Core.Compiler.CFG, handlers::NirHandlers, at::String)::MachineFunction
     local jb = jcfg.blocks
@@ -150,6 +155,16 @@ one predecessor.
         Core.Compiler.block_for_inst(jcfg, e.catch_dest) + 1
     end
     local eh_pads = Set{Int}(catch_block(i) for i in eachindex(stmts) if stmts[i] isa NirEnter)
+    # the EnterNode's own edge to its catch block goes: an EH pad is reached only by unwinding
+    for b in 2:n
+        local r = bbs[b].stmts
+        isempty(r) && continue
+        local last_ = stmts[last(r)]
+        last_ isa NirEnter || continue
+        local pad = catch_block(last(r))
+        filter!(!=(pad), bbs[b].succs)
+        filter!(!=(b), bbs[pad].preds)
+    end
     # the unwind edges: a block with a statement that may throw under a handler reaches its catch block
     for b in 2:n
         for i in bbs[b].stmts
@@ -170,6 +185,8 @@ one predecessor.
             local r = bb.stmts
             local last_ = stmts[last(r)]
             local branch = last_ isa Union{NirGoto, NirGotoIfNot}
+            # an EH pad begins with the CATCH that receives the exception
+            b in eh_pads && push!(instrs, MachineInstr(CATCH, MachineOperand[], b))
             push!(instrs, MachineInstr(STMTS, MachineOperand[MOImm(first(r)), MOImm(branch ? last(r) - 1 : last(r))], b))
             # a jump of the CodeInfo names a statement, the first of its block (block_for_inst)
             if last_ isa NirGoto
