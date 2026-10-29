@@ -2235,4 +2235,4 @@ end
 # dart's `late final w.BaseFunction function` overrides CallTarget's getter: the field, defined on first read
 @parity "dart2wasm/lib/code_generator.dart:6227 LambdaCallTarget.function" var"function"(self::LambdaCallTarget)::WasmBuilder.IR.BaseFunction = self.function_[]
 
-@parity "dart2wasm/lib/code_generator.dart:6239 guardCanMatchJSException" @unported function guard_can_match_js_exception(translator::Translator, guard::Type) end
+@parity "dart2wasm/lib/code_generator.dart:6239 guardCanMatchJSException" @unported function guard_can_match_js_exception(translator::Translator, guard::Union{Type,TypeVar}) end

@@ -13,15 +13,15 @@ positional and required. Its context is its callee, argument 1, when the callee 
 """
 @parity "dart2wasm/lib/param_info.dart:11 ParameterInfo" struct ParameterInfo
     type_param_count::Int
-    positional::Vector{Union{Nothing,Constant}}
-    named::LinkedHashMap{String,Union{Nothing,Constant}}
+    positional::Vector{Union{Nothing,NirConst}}
+    named::LinkedHashMap{String,Union{Nothing,NirConst}}
     takes_context_or_receiver::Bool
     names::Late{Vector{String}}
     name_index::Late{Dict{String,Int}}
     # the struct's one constructor, tagged, with dart's late initializers (read only when the info is
     # complete); dart's constructor `_` at :52 is its outer function
     function ParameterInfo(::Val{:_}, takes_context_or_receiver::Bool, type_param_count::Int,
-            positional::Vector{Union{Nothing,Constant}}, named::LinkedHashMap{String,Union{Nothing,Constant}})
+            positional::Vector{Union{Nothing,NirConst}}, named::LinkedHashMap{String,Union{Nothing,NirConst}})
         local self
         self = new(type_param_count, positional, named, takes_context_or_receiver,
                    Late{Vector{String}}("dart2wasm/lib/param_info.dart:26 ParameterInfo.names", () -> sort!(collect(keys(self.named)))),
@@ -43,8 +43,8 @@ first read.
 
 @parity "dart2wasm/lib/param_info.dart:39 ParameterInfo.paramCount" param_count(self::ParameterInfo)::Int = length(self.positional) + length(self.named)
 
-@parity "dart2wasm/lib/param_info.dart:52 ParameterInfo._" ParameterInfo__(takes_context_or_receiver::Bool, type_param_count::Int, positional::Vector{Union{Nothing,Constant}},
-        named::LinkedHashMap{String,Union{Nothing,Constant}})::ParameterInfo =
+@parity "dart2wasm/lib/param_info.dart:52 ParameterInfo._" ParameterInfo__(takes_context_or_receiver::Bool, type_param_count::Int, positional::Vector{Union{Nothing,NirConst}},
+        named::LinkedHashMap{String,Union{Nothing,NirConst}})::ParameterInfo =
     ParameterInfo(Val(:_), takes_context_or_receiver, type_param_count, positional, named)
 
 """
@@ -58,8 +58,8 @@ rejects, located. `use_default_value_sentinel` has nothing to mark: no parameter
     local params = sig.parameters
     any(p -> p isa Core.TypeofVararg, params) &&
         reject!(Unquarantined("src/param_info.jl fromMember: the Vararg signature $(target.specTypes), whose argument count Julia left open"), "dart2wasm/lib/param_info.dart:59 ParameterInfo.fromMember")
-    local positional = Union{Nothing,Constant}[nothing for _ in 2:length(params)]
-    return ParameterInfo__(!Base.issingletontype(params[1]), 0, positional, LinkedHashMap{String,Union{Nothing,Constant}}())
+    local positional = Union{Nothing,NirConst}[nothing for _ in 2:length(params)]
+    return ParameterInfo__(!Base.issingletontype(params[1]), 0, positional, LinkedHashMap{String,Union{Nothing,NirConst}}())
 end
 
 """
@@ -74,8 +74,8 @@ takes its context, the closure itself.
     local params = sig.parameters
     any(p -> p isa Core.TypeofVararg, params) &&
         reject!(Unquarantined("src/param_info.jl fromLocalFunction: the Vararg signature $(mi.specTypes), whose argument count Julia left open"), "dart2wasm/lib/param_info.dart:115 ParameterInfo.fromLocalFunction")
-    local positional = Union{Nothing,Constant}[nothing for _ in 2:length(params)]
-    return ParameterInfo__(true, 0, positional, LinkedHashMap{String,Union{Nothing,Constant}}())
+    local positional = Union{Nothing,NirConst}[nothing for _ in 2:length(params)]
+    return ParameterInfo__(true, 0, positional, LinkedHashMap{String,Union{Nothing,NirConst}}())
 end
 
 @parity "dart2wasm/lib/param_info.dart:129 ParameterInfo.merge" function Base.merge(self::ParameterInfo, other::ParameterInfo)::Nothing

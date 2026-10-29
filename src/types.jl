@@ -250,11 +250,11 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
     _substitution_superclass_to_subclass::Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}
     _substitution_table::Late{Dict{InstanceConstant,Int}}
     _substitution_table_by_index::Late{Vector{InstanceConstant}}
-    type_row_displacement_offsets::Late{Constant}
-    type_row_displacement_table::Late{Constant}
-    type_row_displacement_subst_table::Late{Constant}
-    canonical_substitution_table::Late{Constant}
-    type_names::Late{Constant}
+    type_row_displacement_offsets::Late{NirConst}
+    type_row_displacement_table::Late{NirConst}
+    type_row_displacement_subst_table::Late{NirConst}
+    canonical_substitution_table::Late{NirConst}
+    type_names::Late{NirConst}
     _requires_substitution_for_subclasses::Dict{Int,Bool}
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
     # :1217, which builds the rules and the tables, is its outer function
@@ -264,11 +264,11 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
             Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}("dart2wasm/lib/types.dart:1201 RuntimeTypeInformation._substitutionSuperclassToSubclass"),
             Late{Dict{InstanceConstant,Int}}("dart2wasm/lib/types.dart:1202 RuntimeTypeInformation._substitutionTable"),
             Late{Vector{InstanceConstant}}("dart2wasm/lib/types.dart:1203 RuntimeTypeInformation._substitutionTableByIndex"),
-            Late{Constant}("dart2wasm/lib/types.dart:1205 RuntimeTypeInformation.typeRowDisplacementOffsets"),
-            Late{Constant}("dart2wasm/lib/types.dart:1206 RuntimeTypeInformation.typeRowDisplacementTable"),
-            Late{Constant}("dart2wasm/lib/types.dart:1207 RuntimeTypeInformation.typeRowDisplacementSubstTable"),
-            Late{Constant}("dart2wasm/lib/types.dart:1208 RuntimeTypeInformation.canonicalSubstitutionTable"),
-            Late{Constant}("dart2wasm/lib/types.dart:1209 RuntimeTypeInformation.typeNames"),
+            Late{NirConst}("dart2wasm/lib/types.dart:1205 RuntimeTypeInformation.typeRowDisplacementOffsets"),
+            Late{NirConst}("dart2wasm/lib/types.dart:1206 RuntimeTypeInformation.typeRowDisplacementTable"),
+            Late{NirConst}("dart2wasm/lib/types.dart:1207 RuntimeTypeInformation.typeRowDisplacementSubstTable"),
+            Late{NirConst}("dart2wasm/lib/types.dart:1208 RuntimeTypeInformation.canonicalSubstitutionTable"),
+            Late{NirConst}("dart2wasm/lib/types.dart:1209 RuntimeTypeInformation.typeNames"),
             Dict{Int,Bool}())
 end
 
@@ -891,23 +891,23 @@ beside it, the canonical substitutions, each class's row offset (-1 for none) an
     sort!(rows; by = weight, rev = true)
     local table = build_row_displacement_table(rows; first_available = 1)
     local invalid_class_id = 0
-    local entry_constants(f::Function) = Constant[make_wasm_i32(constants, f(entry)) for entry in table]
+    local entry_constants(f::Function) = NirConst[make_wasm_i32(constants, f(entry)) for entry in table]
     self.type_row_displacement_table[] = make_array_of(constants, Int32,
         entry_constants(e -> e === nothing ? invalid_class_id : e[1]))
     # dart stores the substitution indices as WasmI16, each made as a WasmI32 constant
     self.type_row_displacement_subst_table[] = make_array_of(constants, Int16,
         entry_constants(e -> e === nothing ? RuntimeTypeInformation_no_substitution_index() : e[2]))
     self.canonical_substitution_table[] = make_array_of(constants, Vector{Type},
-        Constant[substitution for substitution in self._substitution_table_by_index[]])
+        NirConst[substitution for substitution in self._substitution_table_by_index[]])
     self.type_row_displacement_offsets[] = make_array_of(constants, Int32,
-        Constant[make_wasm_i32(constants, (r = row_for_superclass[class_id + 1]) === nothing ? -1 : r.offset[]) for class_id in 0:n_classes-1])
+        NirConst[make_wasm_i32(constants, (r = row_for_superclass[class_id + 1]) === nothing ? -1 : r.offset[]) for class_id in 0:n_classes-1])
     self.type_names[] = minify(translator.options) ? NirConst(Core.Const(nothing)) : _get_type_names(self)
     return nothing
 end
 
 """Each class's name, the top type's empty: a Julia class's name is its type's text."""
-@parity "dart2wasm/lib/types.dart:1424 RuntimeTypeInformation._getTypeNames" function _get_type_names(self::RuntimeTypeInformation)::Constant
-    local name_constants = Constant[NirConst(Core.Const(info.cls === nothing ? "" : string(info.cls)))
+@parity "dart2wasm/lib/types.dart:1424 RuntimeTypeInformation._getTypeNames" function _get_type_names(self::RuntimeTypeInformation)::NirConst
+    local name_constants = NirConst[NirConst(Core.Const(info.cls === nothing ? "" : string(info.cls)))
                                     for info in self.translator.classes[]]
     return make_array_of(self.translator.constants[], String, name_constants)
 end

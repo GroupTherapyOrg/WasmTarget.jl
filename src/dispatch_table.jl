@@ -172,7 +172,7 @@ member is neither a field getter nor a tear-off. Its return is Julia's inferred 
     local input_sets = [Set{WasmBuilder.IR.ValueType}() for _ in 1:n_inputs]
     local output_sets = [Set{WasmBuilder.IR.ValueType}() for _ in 1:return_count]
     local ensure_boxed = fill(false, n_inputs)
-    local is_sentinel(c::Union{Nothing,Constant})::Bool = c !== nothing && c === ParameterInfo_default_value_sentinel()
+    local is_sentinel(c::Union{Nothing,NirConst})::Bool = c !== nothing && c === ParameterInfo_default_value_sentinel()
     for (_, target) in targets(self; unchecked = false).all_target_ranges
         local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
         local receiver = params[1]

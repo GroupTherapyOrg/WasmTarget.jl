@@ -38,7 +38,7 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "Procedure") => ("Core.MethodInstance", "Julia compiles one function per specialization, the MethodInstance, where dart compiles one per member"),
     ("kernel/lib/ast.dart", "Constructor") => ("Core.MethodInstance", "Julia compiles one function per specialization, the MethodInstance, where dart compiles one per member"),
     ("kernel/lib/canonical_name.dart", "Reference") => ("Core.MethodInstance", "a MethodInstance names one callable, where dart's Reference names a member or its getter, setter or tear-off"),
-    ("kernel/lib/ast.dart", "Field") => ("ClassField", "a field is a struct's field, Julia's fieldname and fieldtype (src/julia/classes.jl); a static field is a Julia global, read by GlobalRef"),
+    ("kernel/lib/ast.dart", "Field") => ("Union{ClassField,GlobalRef}", "a field is a struct's field (src/julia/classes.jl's ClassField) or, static, a module binding Julia reads by GlobalRef"),
     ("kernel/lib/ast.dart", "FunctionNode") => ("NirBody", "a function's parameters and body are its CodeInstance and optimized IR"),
     ("kernel/lib/ast.dart", "Name") => ("Symbol", "a member's name is a Julia Symbol"),
     ("kernel/lib/ast.dart", "TypeParameter") => ("TypeVar", "a type parameter is Julia's TypeVar"),
@@ -55,7 +55,7 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "Node") => ("NirStmt", "a node a location hangs on is a statement of Julia's optimized IR"),
     ("kernel/lib/ast.dart", "Statement") => ("NirStmt", "a node a location hangs on is a statement of Julia's optimized IR"),
     ("kernel/lib/ast.dart", "Expression") => ("NirValue", "an expression is an operand of Julia's optimized IR (a value statement is reached by its NirSSA)"),
-    ("kernel/lib/ast.dart", "Annotatable") => ("NoCounterpart", "no counterpart: a Julia method carries no pragma annotations"),
+    ("kernel/lib/ast.dart", "Annotatable") => ("Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}", "what dart reads pragmas from, a member, a field, a static field, a class or a library, each its Julia counterpart (revised from no counterpart, the lead's ruling)"),
     ("kernel/lib/ast.dart", "Nullability") => ("NoCounterpart", "no counterpart: a Julia type has no nullability; T? is Union{Nothing,T}"),
     ("kernel/lib/ast.dart", "MetadataRepository") => ("NoCounterpart", "no counterpart: Kernel's serialization and side tables; Julia's inference results are the program"),
     ("kernel/lib/ast.dart", "BinarySink") => ("NoCounterpart", "no counterpart: Kernel's serialization and side tables; Julia's inference results are the program"),
@@ -66,25 +66,25 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "FutureOrType") => ("NoCounterpart", "no counterpart: tasks are out of scope, Julia's verifier rejects them (1.F)"),
     ("kernel/lib/ast.dart", "LoadLibrary") => ("NoCounterpart", "no counterpart: deferred loading is out of scope (dev/PARITY_MASTER.md)"),
     ("kernel/lib/ast.dart", "CheckLibraryIsLoaded") => ("NoCounterpart", "no counterpart: deferred loading is out of scope (dev/PARITY_MASTER.md)"),
-    ("kernel/lib/ast.dart", "DartType") => ("Type", "a dart type is a Julia type (the lead's ruling)"),
-    ("kernel/lib/ast.dart", "InterfaceType") => ("Type", "a dart type is a Julia type (the lead's ruling)"),
+    ("kernel/lib/ast.dart", "DartType") => ("Union{Type,TypeVar}", "a dart type is a Julia type, or a type parameter's TypeVar (revised: TypeParameterType is TypeVar, the lead's ruling)"),
+    ("kernel/lib/ast.dart", "InterfaceType") => ("DataType", "an interface type with its arguments is a concrete Julia class, a DataType (revised from Type: the ports answer DataType, the lead's ruling)"),
     ("kernel/lib/ast.dart", "FunctionType") => ("Type", "a function type is a method signature, a Julia Tuple type"),
     ("kernel/lib/ast.dart", "RecordType") => ("Type", "a record type is a Julia Tuple or NamedTuple type"),
     ("kernel/lib/ast.dart", "TypeParameterType") => ("TypeVar", "a type parameter's use is Julia's TypeVar"),
     ("kernel/lib/ast.dart", "StructuralParameterType") => ("TypeVar", "a type parameter's use is Julia's TypeVar"),
     ("kernel/lib/ast.dart", "ClassTypeParameterType") => ("TypeVar", "a type parameter's use is Julia's TypeVar"),
     ("kernel/lib/ast.dart", "NamedType") => ("Pair{Symbol,Type}", "a record's named field type is a NamedTuple type's name and field type"),
-    ("kernel/lib/ast.dart", "Constant") => ("NirConst", "a constant is Julia's Core.Const of the value, which NirConst holds (the lead's ruling)"),
+    ("kernel/lib/ast.dart", "Constant") => ("Union{NirConst,DummyValueConstant}", "a constant is Julia's Core.Const of the value, which NirConst holds, or dart2wasm's own DummyValueConstant, an AuxiliaryConstant that flows through the same functions (revised, the lead's ruling: dart's structure, D1)"),
     ("kernel/lib/ast.dart", "InstanceConstant") => ("NirConst", "a constant is Julia's Core.Const of the value, which NirConst holds (the lead's ruling)"),
     ("kernel/lib/ast.dart", "ListConstant") => ("NirConst", "a constant is Julia's Core.Const of the value, which NirConst holds (the lead's ruling)"),
-    ("kernel/lib/ast.dart", "IntConstant") => ("Int64", "the constant is the Julia value itself, dispatched on its type"),
-    ("kernel/lib/ast.dart", "DoubleConstant") => ("Float64", "the constant is the Julia value itself, dispatched on its type"),
+    ("kernel/lib/ast.dart", "IntConstant") => ("Union{Base.BitInteger64,Char}", "an integer constant is the Julia value itself, of one of the integer types with a wasm representation"),
+    ("kernel/lib/ast.dart", "DoubleConstant") => ("Union{Float32,Float64}", "a float constant is the Julia value itself, Float32 or Float64"),
     ("kernel/lib/ast.dart", "BoolConstant") => ("Bool", "the constant is the Julia value itself, dispatched on its type"),
     ("kernel/lib/ast.dart", "StringConstant") => ("String", "the constant is the Julia value itself, dispatched on its type"),
     ("kernel/lib/ast.dart", "NullConstant") => ("Nothing", "the constant is the Julia value itself, dispatched on its type"),
     ("kernel/lib/ast.dart", "SymbolConstant") => ("Symbol", "the constant is the Julia value itself, dispatched on its type"),
     ("kernel/lib/ast.dart", "TypeLiteralConstant") => ("Type", "a type as a value is the Julia type itself"),
-    ("kernel/lib/ast.dart", "RecordConstant") => ("Tuple", "a record value is a Julia Tuple or NamedTuple"),
+    ("kernel/lib/ast.dart", "RecordConstant") => ("Union{Tuple,NamedTuple}", "a record value is a Julia Tuple (positional) or NamedTuple (named)"),
     ("kernel/lib/ast.dart", "TearOffConstant") => ("Function", "a function as a value is Julia's function singleton"),
     ("kernel/lib/ast.dart", "StaticTearOffConstant") => ("Function", "a function as a value is Julia's function singleton"),
     ("kernel/lib/ast.dart", "ConstructorTearOffConstant") => ("Function", "a function as a value is Julia's function singleton"),
@@ -94,7 +94,7 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "InstantiationConstant") => ("NoCounterpart", "no counterpart: Julia instantiates no generic function value; a specialization is a MethodInstance"),
     ("kernel/lib/ast.dart", "Instantiation") => ("NoCounterpart", "no counterpart: Julia instantiates no generic function value; a specialization is a MethodInstance"),
     ("kernel/lib/ast.dart", "UnevaluatedConstant") => ("NoCounterpart", "no counterpart: Julia's inference evaluates every constant it folds"),
-    ("kernel/lib/ast.dart", "AuxiliaryConstant") => ("NoCounterpart", "no counterpart: Julia's inference evaluates every constant it folds"),
+    ("kernel/lib/ast.dart", "AuxiliaryConstant") => ("DummyValueConstant", "Kernel's backend-own constant is dart2wasm's DummyValueConstant (constants.dart), the one the backend defines"),
     ("kernel/lib/ast.dart", "StaticInvocation") => ("NirInvoke", "a call Julia's inference resolved to its MethodInstance, Expr(:invoke)"),
     ("kernel/lib/ast.dart", "InstanceInvocation") => ("NirInvoke", "a call Julia's inference resolved to its MethodInstance, Expr(:invoke)"),
     ("kernel/lib/ast.dart", "FunctionInvocation") => ("NirInvoke", "a call Julia's inference resolved to its MethodInstance, Expr(:invoke)"),
@@ -179,7 +179,7 @@ a NIR kind, or none.
     ("kernel/lib/target/targets.dart", "Target") => ("NoCounterpart", "no counterpart: the front end's plumbing; WT is a library and rejects with reject!"),
     ("kernel/lib/target/targets.dart", "ConstantsBackend") => ("NoCounterpart", "no counterpart: the front end's plumbing; WT is a library and rejects with reject!"),
     ("kernel/lib/verifier.dart", "Verification") => ("NoCounterpart", "no counterpart: Julia's trim verifier is the verifier (src/julia/subset.jl)"),
-    ("kernel/lib/src/printer.dart", "AstPrinter") => ("NoCounterpart", "no counterpart: Kernel's printer"),
+    ("kernel/lib/src/printer.dart", "AstPrinter") => ("IO", "Kernel's text printer prints to a Julia IO (revised from no counterpart, the lead's ruling)"),
     ("kernel/lib/visitor.dart", "Visitor") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
     ("kernel/lib/visitor.dart", "VisitorDefault") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
     ("kernel/lib/visitor.dart", "RecursiveVisitor") => ("NoCounterpart", "no counterpart: Julia dispatches on the node's type, so a visitor is a function's methods and a supertype of none"),
@@ -209,11 +209,8 @@ that text.
     reject!(Internal("$anchor: the Kernel table's $name row, $why"), at)
 end
 
-# Two rows a port spells by their Kernel names (param_info.dart's default values, types.dart's
-# substitution tables), bound here, the table's file, so the table is the one place they are named.
-
-"""Kernel's `Constant`: the NIR's literal, `NirConst` (KERNEL_TYPES' row)."""
-@quarantine "Kernel's Constant is the NIR's literal; the Kernel table's row, by its Kernel name" WasmTarget.NirConst const Constant = NirConst
+# A row a port spells by its Kernel name (types.dart's substitution tables), bound here, the table's
+# file, so the table is the one place it is named.
 
 """Kernel's `InstanceConstant`: a `NirConst` of an object that is no other kind's value (KERNEL_TYPES' row)."""
 @quarantine "Kernel's InstanceConstant is the NIR's literal of an object; the Kernel table's row, by its Kernel name" WasmTarget.NirConst const InstanceConstant = NirConst
