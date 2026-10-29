@@ -29,10 +29,7 @@
 @parity "dart2wasm/lib/kernel_nodes.dart:73 KernelNodes.immutableListClass" immutable_list_class(self::KernelNodes)::Union{} =
     reject!(Unported("sdk/lib/_internal/wasm/common/list.dart:290 ImmutableList"), "KernelNodes.immutableListClass: the class of a constant list")
 
-# the lane fields of dart:_wasm's SIMD implementation classes (_WasmI8x16Impl and its siblings); Julia's
-# SIMD value is an NTuple{N,VecElement{T}}, whose lowering WasmTarget has not decided: a gap
-@parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" _get_lane_references(self::KernelNodes, class_node::DataType)::Union{} =
-    reject!(Unported("dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences"), "KernelNodes._getLaneReferences: the lanes of $class_node, a SIMD value, whose lowering from Julia's VecElement tuple is not decided")
+@parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" @unported function _get_lane_references(self::KernelNodes, class_node::DataType) end
 
 # dart:core's StackTrace.current, as the target's patch defines it (standalone or JS), a getter of
 # dart's runtime library at the pin, not ported: Unported there
