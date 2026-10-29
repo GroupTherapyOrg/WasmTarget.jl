@@ -147,7 +147,7 @@ cases = ["dart_structural/constant_string_ops"]
 ["pkg/dart2wasm/test/ir_tests/pure_function.dart"]
 kind = "not_portable"
 what = "a function marked wasm:pure-function has its unused calls removed by wasm-opt"
-reason = "a dart pragma for binaryen's optimizer; WT runs no wasm-opt and Julia's effect analysis is its own, ported where Julia answers it"
+reason = "a dart pragma for binaryen's optimizer; Julia declares no pragmas, and its effect analysis is its own, ported where Julia answers it"
 
 ["pkg/dart2wasm/test/ir_tests/external_effect.dart"]
 kind = "not_portable"
@@ -756,7 +756,7 @@ what = "the functions f and g whose stack the source-map tests read"
 ["tests/web/wasm/source_map_simple_optimized_test.dart"]
 kind = "not_portable"
 what = "source maps after wasm-opt at -O4"
-reason = "binaryen's optimizer; WT runs no wasm-opt"
+reason = "source maps, which a library compile has no file to give (compile.jl's _runCodegenPhase rejects them, located)"
 
 ["tests/web/wasm/source_map_simple_optimized_deferred_test.dart"]
 kind = "not_portable"

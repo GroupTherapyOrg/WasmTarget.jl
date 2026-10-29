@@ -260,8 +260,8 @@ end
 
 """
 Run wasm-opt over each module to optimize (the options' ids, else every emitted module's), with
-dart's flags, toolchain annotations stripped as asked and module names emitted, and `-g` unless the
-names are stripped (io_util.dart's runWasmOpt). dart runs the modules in a pool of processes; here
+dart's flags, toolchain annotations stripped as asked, and `-g` unless the names are stripped
+(io_util.dart's runWasmOpt); dart also emits module names, a flag wasm-opt 130 lacks (below). dart runs the modules in a pool of processes; here
 one after the other. dart's saveUnopt copies the unoptimized file aside; the CodegenResult a caller
 holds is that module's bytes. A failure of wasm-opt rejects, located (src/julia/wasm_opt.jl).
 """

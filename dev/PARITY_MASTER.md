@@ -48,7 +48,7 @@ differential runner checks the optimized module against native Julia beside the 
 ## Scope
 
 A reachable construct outside the supported surface rejects loudly and located
-(`record_unsupported!`); an exclusion never permits a stub that returns a value.
+(`reject!`, src/julia/reject.jl); an exclusion never permits a stub that returns a value.
 
 - **One frozen, closed-world module.** Reflection, `eval`, world-age mutation and runtime
   method definition are not part of it; neither are async, tasks, threads, atomics or
