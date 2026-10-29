@@ -1732,7 +1732,9 @@ function call_args(ex)
         c = c.args[1]
     end
     Meta.isexpr(c, :call) || return nothing
-    local ann(a) = Meta.isexpr(a, :kw) ? ann(a.args[1]) : Meta.isexpr(a, :(::)) ? (length(a.args) == 2 ? (string(a.args[1]), string(a.args[2])) : ("", string(a.args[1]))) : (string(a), "")
+    # a parameter under @nospecialize or @specialize is the parameter it wraps
+    local ann(a) = Meta.isexpr(a, :macrocall) && a.args[1] in (Symbol("@nospecialize"), Symbol("@specialize")) ? ann(a.args[end]) :
+        Meta.isexpr(a, :kw) ? ann(a.args[1]) : Meta.isexpr(a, :(::)) ? (length(a.args) == 2 ? (string(a.args[1]), string(a.args[2])) : ("", string(a.args[1]))) : (string(a), "")
     local pos = Tuple{String,String}[]
     local kw = Dict{String,String}()
     for a in c.args[2:end]
