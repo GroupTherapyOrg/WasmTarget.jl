@@ -204,17 +204,18 @@ the translator holds each collaborator.
     _closure_arguments_dispatchers::IdDict{WasmBuilder.ModuleBuilder,IdDict{ClosureRepresentation,WasmBuilder.IR.BaseFunction}}
     _need_to_check::IdDict{Core.MethodInstance,Bool}
     # the struct's one constructor, tagged: dart's field initializers and the constructor's
-    # initializer list, the component read from the ClosedWorld alone, so no translator is made from
-    # NIR bodies a program Julia's trim verifier did not accept; a late field is assigned by the code
+    # initializer list, the component the NIR of the closed world (a NirWorld, which build_nir alone
+    # makes from a ClosedWorld), so no translator is made from NIR bodies a program Julia's trim
+    # verifier did not accept; a late field is assigned by the code
     # that builds it (the constructor's body at :470, ClassInfoCollector.collect), and a late field
     # with an initializer reads the translator itself
-    function Translator(::Val{:_}, world::ClosedWorld, _module_output_data::ModuleOutputData, options::TranslatorOptions)
+    function Translator(::Val{:_}, component::NirWorld, _module_output_data::ModuleOutputData, options::TranslatorOptions)
         local self
         local ref(t::WasmBuilder.IR.DefType) = WasmBuilder.IR.RefType_def(t; nullable = false)
         self = new(options,
             # the constructor's initializer list
             Symbols(minify(options)),
-            build_nir(world, "dart2wasm/lib/translator.dart:470 Translator"),
+            component,
             Late{ClosureLayouter}("dart2wasm/lib/translator.dart:147 Translator.closureLayouter"),
             Late{ClassInfoCollector}("dart2wasm/lib/translator.dart:148 Translator.classInfoCollector"),
             Late{CrossModuleFunctionTable}("dart2wasm/lib/translator.dart:149 Translator.crossModuleFunctionTable"),
@@ -543,10 +544,11 @@ end
 @parity "dart2wasm/lib/translator.dart:467 Translator.getConstructorInfo" @unported function get_constructor_info(self::Translator, node::Core.MethodInstance) end
 
 # dart's constructor takes the Kernel component and its core types, index, record classes, loading
-# map, module output data and options; WasmTarget's program is the closed world Julia's trim
-# verifier accepted, read once as the NIR, and the rest arrive with the pieces that read them
-@parity "dart2wasm/lib/translator.dart:470 Translator" function Translator(world::ClosedWorld, _module_output_data::ModuleOutputData, options::TranslatorOptions)::Translator
-    local self = Translator(Val(:_), world, _module_output_data, options)
+# map, module output data and options; WasmTarget's component is the closed world's NIR, read once
+# at the TFA phase (compile.dart's _runTfaPhase), and the rest are Julia's answers (the type's
+# docstring)
+@parity "dart2wasm/lib/translator.dart:470 Translator" function Translator(component::NirWorld, _module_output_data::ModuleOutputData, options::TranslatorOptions)::Translator
+    local self = Translator(Val(:_), component, _module_output_data, options)
     # the constructor's body: each collaborator built over the translator, as its piece is ported
     self.closure_layouter[] = ClosureLayouter(self)
     self.class_info_collector[] = ClassInfoCollector(self)

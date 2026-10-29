@@ -25,17 +25,18 @@ program reads from Core and Base.
 end
 
 """
-The global transformations' result: the ClosedWorld, whose inference Julia's trim mode has done
-(dart's TFA), the module strategy and the record classes.
+The global transformations' result: the program as the code generator reads it, the closed world's
+NIR (Julia's trim inference is dart's TFA, the NIR read once here), the module strategy and the
+record classes.
 
 Fields to come (2, each with its compile.dart line): `coreTypes` :74, `libraryIndex` :75.
 """
 @parity "dart2wasm/lib/compile.dart:72 TfaResult" struct TfaResult
-    component::ClosedWorld
+    component::NirWorld
     module_strategy::ModuleStrategy
     record_classes::Dict{RecordShape,DataType}
     # the struct's one constructor, tagged; dart's constructor at :79 is its outer function
-    TfaResult(::Val{:_}, component::ClosedWorld, module_strategy::ModuleStrategy, record_classes::Dict{RecordShape,DataType}) =
+    TfaResult(::Val{:_}, component::NirWorld, module_strategy::ModuleStrategy, record_classes::Dict{RecordShape,DataType}) =
         new(component, module_strategy, record_classes)
 end
 
@@ -89,7 +90,7 @@ _RecordClassesRepository's dart fields: `mapping`.
 
 @parity "dart2wasm/lib/compile.dart:69 CfeResult" CfeResult(component::ClosedWorld)::CfeResult = CfeResult(Val(:_), component)
 
-@parity "dart2wasm/lib/compile.dart:79 TfaResult" TfaResult(component::ClosedWorld, module_strategy::ModuleStrategy, record_classes::Dict{RecordShape,DataType})::TfaResult =
+@parity "dart2wasm/lib/compile.dart:79 TfaResult" TfaResult(component::NirWorld, module_strategy::ModuleStrategy, record_classes::Dict{RecordShape,DataType})::TfaResult =
     TfaResult(Val(:_), component, module_strategy, record_classes)
 
 # dart asserts the main module's id is among the emitted ones: a located rejection
@@ -209,12 +210,12 @@ end
 dart's global transformations over Kernel: the class hierarchy and library index, the JS interop,
 unreachable code and mixin rewrites, and the type flow analysis that tree-shakes the component.
 Julia's lowering and its trim inference are those passes (the closed world holds only what the
-entry reaches, inferred), so the phase makes the module strategy and the record classes, as dart's
-does, and the component passes as it is.
+entry reaches, inferred), so the phase reads the closed world once as its NIR, the component every
+later phase takes, and makes the module strategy and the record classes over it, as dart's does.
 """
 @parity "dart2wasm/lib/compile.dart:413 _runTfaPhase" function _run_tfa_phase(cfe_result::CfeResult, options::WasmCompilerOptions)::TfaResult
-    local component = cfe_result.component
-    local record_classes = generate_record_classes(build_nir(component, "dart2wasm/lib/compile.dart:413 _runTfaPhase"))
+    local component = build_nir(cfe_result.component, "dart2wasm/lib/compile.dart:413 _runTfaPhase")
+    local record_classes = generate_record_classes(component)
     local module_strategy = _create_module_strategy(options, component)
     add_entry_points(module_strategy)
     prepare_component(module_strategy)
@@ -282,7 +283,7 @@ end
 
 # deferred loading is out of scope (dev/PARITY_MASTER.md): its strategy and the multi-module stress
 # test's reject, located; every other compile takes the default strategy, one module
-@parity "dart2wasm/lib/compile.dart:747 _createModuleStrategy" function _create_module_strategy(options::WasmCompilerOptions, component::ClosedWorld)::ModuleStrategy
+@parity "dart2wasm/lib/compile.dart:747 _createModuleStrategy" function _create_module_strategy(options::WasmCompilerOptions, component::NirWorld)::ModuleStrategy
     local at = "dart2wasm/lib/compile.dart:747 _createModuleStrategy"
     options.translator_options.enable_deferred_loading && reject!(Unquarantined("src/compile.jl: deferred loading, out of scope (dev/PARITY_MASTER.md)"), at)
     options.translator_options.enable_multi_module_stress_test_mode && reject!(Unquarantined("src/compile.jl: the multi-module stress test, out of scope (dev/PARITY_MASTER.md)"), at)

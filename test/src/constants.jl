@@ -196,7 +196,7 @@ is_int(r::Base.RefValue{Any}) = r[] isa Int64
 k(x) = WasmTarget.NirConst(Core.Const(x))
 @testset "constants.dart: a type literal is its lowered type object, an instance constant" begin
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.check_subset(is_int, (Base.RefValue{Any},), "constants"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(is_int, (Base.RefValue{Any},), "constants"), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(t.closure_layouter[]); collect(t.class_info_collector[])
     t.globals[] = D.Globals(t); t.dart_globals[] = D.DartGlobals(t); t.constants[] = D.Constants(t)

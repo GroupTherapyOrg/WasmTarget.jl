@@ -66,7 +66,7 @@ end
 
 # the module of one function, `f` exported (as test/code_generator.jl's compile_one)
 function compile_one(f, argtypes)
-    local t = D.Translator(W.check_subset(f, argtypes, "llvm_control_flow"),
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "llvm_control_flow"), "test"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))

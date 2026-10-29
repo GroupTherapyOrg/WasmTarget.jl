@@ -62,7 +62,7 @@ is_int(r::Base.RefValue{Any}) = r[] isa Int64
 # its translator as translate() leaves it before code: modules, closures and classes collected, the
 # globals and constants made; built once for the file's cases
 const TRANSLATOR = Ref{Any}()
-let t = D.Translator(W.check_subset(is_int, (Base.RefValue{Any},), "code_generator_sub"),
+let t = D.Translator(WasmTarget.build_nir(W.check_subset(is_int, (Base.RefValue{Any},), "code_generator_sub"), "test"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(t.closure_layouter[]); collect(t.class_info_collector[])

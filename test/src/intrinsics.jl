@@ -12,7 +12,7 @@ eq64(x::Int64) = x + 1
 eqf(x::Float64) = x * 2.0
 end
 
-intr_translator_of(f, argtypes) = DI.Translator(WI.check_subset(f, argtypes, "intrinsics"),
+intr_translator_of(f, argtypes) = DI.Translator(WasmTarget.build_nir(WI.check_subset(f, argtypes, "intrinsics"), "test"),
     DI.build_module_output_data(DI.DefaultModuleStrategy(DI.WasmCompilerOptions_default_options())), DI.TranslatorOptions())
 function intr_codegen_of(f, argtypes, ins, outs)
     local t = intr_translator_of(f, argtypes)

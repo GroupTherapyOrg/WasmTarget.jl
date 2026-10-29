@@ -58,7 +58,7 @@ end
 
 @testset "FunctionCollector: names, selector uses, translated procedures" begin
     local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
-    local t = W.Translator(WT.check_subset(Members.f, (Int,), "functions"), data, W.TranslatorOptions())
+    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Members.f, (Int,), "functions"), "test"), data, W.TranslatorOptions())
     W._init_modules(t, nothing)
     collect(W.ClassInfoCollector(t))
     local fc = t.functions[]
@@ -128,7 +128,7 @@ end
 
 @testset "makeFunctionTypeForBody and typeOfCheckedParameterVariable" begin
     local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
-    local t = W.Translator(WT.check_subset(Callables.use, (Int, Int32), "functions"), data, W.TranslatorOptions())
+    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Callables.use, (Int, Int32), "functions"), "test"), data, W.TranslatorOptions())
     W._init_modules(t, nothing)
     collect(W.ClassInfoCollector(t))
     local call = only(b.ci.def for b in t.component if b.ci.def.specTypes <: Tuple{Callables.Adder,Vararg})
@@ -154,7 +154,7 @@ end
 
 @testset "a closure's function type and name; a tear-off's type" begin
     local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
-    local t = W.Translator(WT.check_subset(Lambdas.use, (Int, Int), "functions"), data, W.TranslatorOptions())
+    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Lambdas.use, (Int, Int), "functions"), "test"), data, W.TranslatorOptions())
     W._init_modules(t, nothing)
     collect(W.ClassInfoCollector(t))
     local fc = t.functions[]

@@ -25,7 +25,7 @@ end
     @test DCm.compile(o1, world) isa DCm.CfeResult
     local o2 = opts(); o2.phases = [DCm.CompilerPhase_cfe, DCm.CompilerPhase_tfa]
     local tfa = DCm.compile(o2, world)
-    @test tfa isa DCm.TfaResult && tfa.component === world && tfa.module_strategy isa DCm.DefaultModuleStrategy
+    @test tfa isa DCm.TfaResult && tfa.component isa W.NirWorld && tfa.component.entry === world.entry && tfa.module_strategy isa DCm.DefaultModuleStrategy
     # a compile that is not standalone needs the JS runtime, not yet ported: a located rejection
     local ns = DCm.WasmCompilerOptions(; main_uri = "", output_file = "p.wasm"); ns.translator_options.generate_source_maps = false
     local e = try; DCm.compile(ns, world); nothing; catch x; x; end

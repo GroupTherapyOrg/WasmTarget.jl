@@ -69,7 +69,7 @@ end
     local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
     # an abstract receiver: Julia union-splits the call into isa tests and invokes, so no NIR
     # statement is a dynamic call
-    local t = DD.Translator(W.check_subset(EmptyTableCases.k, (EmptyTableCases.Holder,), "dispatch_table"), data, DD.TranslatorOptions())
+    local t = DD.Translator(WasmTarget.build_nir(W.check_subset(EmptyTableCases.k, (EmptyTableCases.Holder,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
     DD._init_modules(t, nothing)
     collect(DD.ClassInfoCollector(t))
     @test isempty(DD.DynamicCallSiteCollector_collect(t.component))
@@ -92,7 +92,7 @@ end
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
     local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
-    local t = DD.Translator(W.check_subset(DispatchCases.f, (Int,), "dispatch_table"), data, DD.TranslatorOptions())
+    local t = DD.Translator(WasmTarget.build_nir(W.check_subset(DispatchCases.f, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
     DD._init_modules(t, nothing)
     collect(DD.ClassInfoCollector(t))
     local dt = t.dispatch_table[]

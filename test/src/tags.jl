@@ -15,7 +15,7 @@ module Cases
 f(x::Int) = x + 1
 end
 
-translator(standalone) = D.Translator(WT.check_subset(Cases.f, (Int,), "tags"),
+translator(standalone) = D.Translator(WasmTarget.build_nir(WT.check_subset(Cases.f, (Int,), "tags"), "test"),
     D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(; standalone))
 
 @testset "ExceptionTags" begin

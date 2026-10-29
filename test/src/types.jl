@@ -26,7 +26,7 @@ struct TypesCasesChecker <: WasmTarget.Dart2Wasm._TypeCheckers end
     local e = try; D.lookup(env, TypeVar(:T)); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
 
-    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TypesCases.f_int32, (Int,), "types"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local types = D.Types(t)
     @test D.type_type(types) === Type && all(T -> T isa D.type_type(types), (Int, Union{Int,Nothing}, Vector, Union{}))
     # a type value's class is its kind, Julia's typeof
@@ -77,7 +77,7 @@ end
 
 @testset "types.dart: the type parameter offsets of nested binders" begin
     local W = WasmTarget
-    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TypesCases.f_int32, (Int,), "types"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local types = D.Types(t)
     # T's binder holds S's, which refers to T: T's range starts above S's
     local A = Tuple{T, Vector{S}} where S where T
@@ -94,7 +94,7 @@ end
 
 @testset "types.dart: RuntimeTypeInformation's ranges and substitutions" begin
     local W = WasmTarget
-    local t = D.Translator(W.check_subset(TypesCases.f_int32, (Int,), "types"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TypesCases.f_int32, (Int,), "types"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local rtt = D.RuntimeTypeInformation(Val(:_), t)
     @test D.RuntimeTypeInformation_no_substitution_index() == 0
     # consecutive class ids with one value join into a range, in id order
@@ -127,7 +127,7 @@ end
 @testset "types.dart: RuntimeTypeInformation's tables over a closed world, against Julia's <:" begin
     local W = WasmTarget
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(W.check_subset(RttCases.f, (Int,), "types"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(RttCases.f, (Int,), "types"), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)
@@ -165,7 +165,7 @@ end
     @test sort([n for n in names(Core; all = true) if occursin("svec", lowercase(string(n))) && !startswith(string(n), "#")]) == [:_svec_len, :_svec_ref, :svec]
     @test fieldtype(DataType, :parameters) === Core.SimpleVector
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(W.check_subset(SvecCases.nparams, (DataType, Int), "types"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(SvecCases.nparams, (DataType, Int), "types"), "test"), data, D.TranslatorOptions())
     # a type value's parameters read as Julia's IR has it: getfield(::DataType, :parameters), a SimpleVector
     @test any(b -> any(T -> T === Core.SimpleVector, b.types), t.component.bodies)
     D._init_modules(t, nothing)

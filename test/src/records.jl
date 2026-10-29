@@ -44,7 +44,7 @@ end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end
     # a Julia tuple type is a class of its own, Base's: no class is generated per shape
-    local t = D.Translator(W.check_subset(x -> (x, x + 1), (Int,), "records"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(x -> (x, x + 1), (Int,), "records"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     @test isempty(D.generate_record_classes(t.component))
     local g = D._RecordClassGenerator(Dict{D.RecordShape,DataType}())
     @test D.nullable_object_type(g) === Any && D.non_nullable_string_type(g) === String
@@ -69,7 +69,7 @@ end
 # the module of one body, `f` at `argtypes`, built as the code generator builds a member
 function records_compile_one(f, argtypes)
     local W = WasmTarget; local D = W.Dart2Wasm; local B = W.WasmBuilder; local IR = B.IR
-    local t = D.Translator(W.check_subset(f, argtypes, "records"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "records"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)
@@ -104,7 +104,7 @@ end
     @test e isa W.RejectionError && occursin("bounds-check", sprint(show, e.rejection))
     # the visit itself: the shape's positional index agrees with the class layout, then the receiver
     # is read and its field
-    local t3 = D.Translator(W.check_subset(RecordCodegenCases.fst, (Tuple{Int64, Float64},), "records"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t3 = D.Translator(WasmTarget.build_nir(W.check_subset(RecordCodegenCases.fst, (Tuple{Int64, Float64},), "records"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t3, nothing)
     collect(D.ClassInfoCollector(t3))
     local nb = only(t3.component)

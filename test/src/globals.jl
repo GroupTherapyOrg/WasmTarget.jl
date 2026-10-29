@@ -52,7 +52,7 @@ read_counter(x::Int) = counter + x + round(Int, scale)
 end
 
 @testset "globals.dart: a program's static fields" begin
-    local t = D.Translator(WasmTarget.check_subset(GlobalsProgram.read_counter, (Int,), "globals"),
+    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(GlobalsProgram.read_counter, (Int,), "globals"), "test"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local g = D.DartGlobals(t)
     # the bindings the closed world reads, each counted once by its wasm type; the functions it

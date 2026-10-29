@@ -22,7 +22,7 @@ loop(n::Int) = (s = 0; for i in 1:n; s += i; end; s)
 end
 
 # the translator of the closed world of `f` at `argtypes`, one main module
-translator_of(f, argtypes) = D.Translator(W.check_subset(f, argtypes, "code_generator"),
+translator_of(f, argtypes) = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "code_generator"), "test"),
     D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
 
 # the code generator of the entry body of `f` at `argtypes`, its wasm signature `ins -> outs`

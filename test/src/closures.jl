@@ -7,7 +7,7 @@ const D = WasmTarget.Dart2Wasm
 const IR = WasmTarget.WasmBuilder.IR
 
 # a method's body as the closed world holds it, its NirBody
-body_of(f, at) = WasmTarget.Dart2Wasm.Translator(WasmTarget.check_subset(f, at, "closures"),
+body_of(f, at) = WasmTarget.Dart2Wasm.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f, at, "closures"), "test"),
     WasmTarget.Dart2Wasm.build_module_output_data(WasmTarget.Dart2Wasm.DefaultModuleStrategy(WasmTarget.Dart2Wasm.WasmCompilerOptions_default_options())),
     WasmTarget.Dart2Wasm.TranslatorOptions()).component.bodies[1]
 
@@ -62,7 +62,7 @@ end
 
     # the representation's vtable index of a call: positional entries first, then one per combination
     local vt = IR.StructType("vtable"); local cl = IR.StructType("closure")
-    local t = D.Translator(W.check_subset(ClosuresCases.kg, (Int,), "closures"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ClosuresCases.kg, (Int,), "closures"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local rep = D.ClosureRepresentation(t, 2, 0, 3, vt, cl, abd.index_of_combination, nothing)
     @test D.has_named(rep) && !D.is_generic(rep)
     @test D.field_index_for_signature(rep, 1, String[]) == 3
@@ -82,7 +82,7 @@ end
 
 @testset "closures.dart: a member's closures, Julia's lowering the answer" begin
     local W = WasmTarget
-    local t = D.Translator(W.check_subset(ClosuresCases.mk, (Int,), "closures"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ClosuresCases.mk, (Int,), "closures"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local mi = t.component[1].ci.def
     # Julia's lowering made the closure a type of its own, its fields the captures: the member's NIR
     # allocates it and holds no nested function, so no lambda, capture or context is left to find
@@ -93,7 +93,7 @@ end
     local closure_type = typeof(ClosuresCases.mk(1))
     @test closure_type <: Function && fieldnames(closure_type) == (:a,) && fieldtypes(closure_type) == (Int,)
     # a captured variable that is assigned is a Core.Box, Julia's written capture
-    local tb = D.Translator(W.check_subset(ClosuresCases.mbox, (Int,), "closures"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local tb = D.Translator(WasmTarget.build_nir(W.check_subset(ClosuresCases.mbox, (Int,), "closures"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local b1 = tb.component[1]
     @test any(k -> b1.stmts[k] isa W.NirNew && b1.types[k] === Core.Box, eachindex(b1.stmts))
     @test fieldtypes(typeof(ClosuresCases.mbox(1))) == (Core.Box,)
@@ -118,7 +118,7 @@ end
 
 @testset "closures.dart: ClosureLayouter's counts, no closure called through a vtable" begin
     local W = WasmTarget
-    local t = D.Translator(W.check_subset(ClosuresCases.mk, (Int,), "closures"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ClosuresCases.mk, (Int,), "closures"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local l = D.ClosureLayouter(t)
     # Julia's verifier admits no unresolved call: the walk registers nothing
     collect(l)

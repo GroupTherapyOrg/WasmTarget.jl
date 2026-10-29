@@ -18,7 +18,7 @@ make(x::Int) = Pt(x, 2x, 0)
 end
 
 @testset "constructor_info.dart" begin
-    local t = D.Translator(WasmTarget.check_subset(Cases.make, (Int,), "constructor_info"),
+    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(Cases.make, (Int,), "constructor_info"), "test"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local body = only(b for b in t.component if b.ci.def.def isa Method && b.ci.def.def.name === :Pt)
     local mi = body.ci.def
