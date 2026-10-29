@@ -40,10 +40,12 @@ const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.c
         WTR.RunCase("both modules agree", _RUN_ADD1, (Int32(41),), Int32(42); optimized = _RUN_ADD1),
         WTR.RunCase("the optimizer miscompiles", _RUN_ADD1, (Int32(41),), Int32(42); optimized = _run_one_function(_RUN_I32)),
         WTR.RunCase("i32 add, its module instantiated once", _RUN_ADD1, (Int32(1),), Int32(2)),
+        WTR.RunCase("UInt32 past typemax(Int32)", _RUN_ADD1, (typemax(UInt32) - UInt32(1),), typemax(UInt32)),
+        WTR.RunCase("UInt64 past typemax(Int64)", _run_one_function(_RUN_I64), (typemax(UInt64),), typemax(UInt64)),
     ]
     local r = WTR.run_cases(cases)
     @test length(r) == length(cases) && [x.label for x in r] == [c.label for c in cases]
-    @test all(x -> x.ok, r[1:7]) && r[14].ok && r[16].ok
+    @test all(x -> x.ok, r[1:7]) && r[14].ok && r[16].ok && r[17].ok && r[18].ok
     @test !r[8].ok && occursin("answers 2", r[8].why) && occursin("native Julia 1", r[8].why)
     @test !r[9].ok && occursin("answers -0.0", r[9].why)
     @test !r[10].ok && occursin("marshals no Tuple{Int32}", r[10].why)

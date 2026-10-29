@@ -2,9 +2,10 @@
 # every module a test gets from WasmTarget, which the builder already accepted (D10), runs in node, the
 # major .github/workflows/ci.yml names, its entry called with the case's arguments, and its answer is
 # compared with native Julia's, === at the answer's type. One node process runs every case of a batch.
-# Marshalled: Int32, Int64, Float32, Float64 and Bool, arguments and answer; any other type, a module
-# that imports anything, an entry not found, a trap or a throw is a located failure of its case, never
-# a skip. A float crosses as its bit pattern, so NaN payloads and -0.0 keep their bits.
+# Marshalled: Int32, UInt32, Int64, UInt64, Float32, Float64 and Bool, arguments and answer; any other
+# type, a module that imports anything, an entry not found, a trap or a throw is a located failure of its
+# case, never a skip. An unsigned integer crosses as the signed one of its bits, a float as its bit
+# pattern, so NaN payloads and -0.0 keep their bits.
 # A case carries both modules of its program: compile's own (dartdev's default phases, ending with
 # dart's opt phase, wasm-opt) and compile's `optimize = false` (codegen's module). Both run in the same
 # node process, each answer against native's and the two against each other, a difference its own
@@ -126,7 +127,9 @@ end
 function _wire(x)::Union{Tuple{String,String},Nothing}
     x isa Bool && return ("i32", x ? "1" : "0")
     x isa Int32 && return ("i32", string(x))
+    x isa UInt32 && return ("i32", string(reinterpret(Int32, x)))
     x isa Int64 && return ("i64", string(x))
+    x isa UInt64 && return ("i64", string(reinterpret(Int64, x)))
     x isa Float32 && return ("f32", string(reinterpret(UInt32, x); base = 16))
     x isa Float64 && return ("f64", string(reinterpret(UInt64, x); base = 16))
     return nothing
@@ -136,7 +139,9 @@ end
 function _unwire(::Type{T}, s::AbstractString) where {T}
     T === Bool && return s == "1" ? true : s == "0" ? false : nothing
     T === Int32 && return parse(Int32, s)
+    T === UInt32 && return reinterpret(UInt32, parse(Int32, s))
     T === Int64 && return parse(Int64, s)
+    T === UInt64 && return reinterpret(UInt64, parse(Int64, s))
     T === Float32 && return reinterpret(Float32, parse(UInt32, s; base = 16))
     T === Float64 && return reinterpret(Float64, parse(UInt64, s; base = 16))
     return nothing
