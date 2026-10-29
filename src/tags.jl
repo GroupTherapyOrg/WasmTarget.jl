@@ -45,11 +45,20 @@ end
 The tag every Julia exception is thrown and caught with: a void function type taking the exception
 object, the top type without its null, defined in the main module. dart's second parameter, the
 StackTrace, waits for Julia's backtrace's port (the type's docstring).
+
+The main module exports the tag as `\$exceptionTag` (EXCEPTION_TAG_EXPORT), so a host tells a Julia exception from
+any other (`e.is(tag)` in JS) and reads its object. precedent(emscripten: the C++ exception tag,
+exported as `__cpp_exception` under -fwasm-exceptions, which its JS runtime matches with `e.is`).
+dart's differs: its JS runtime never matches a Dart exception by its tag, so dart exports it only
+where another module imports it (WasmTagImporter); a Julia program's exception escapes to its
+host, which must know it as the program's.
 """
 @parity "dart2wasm/lib/tags.dart:37 ExceptionTags._defineDartExceptionTag" function _define_dart_exception_tag(self::ExceptionTags)::WasmBuilder.IR.Tag
     local translator = self.translator
     local tag_type = WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[translator.top_type_non_nullable[]], WasmBuilder.IR.ValueType[])
-    return WasmBuilder.define(main_module(translator).tags[], tag_type)
+    local tag = WasmBuilder.define(main_module(translator).tags[], tag_type)
+    WasmBuilder.var"export"(main_module(translator).exports, EXCEPTION_TAG_EXPORT, tag)
+    return tag
 end
 
 """The JS exception tag, WebAssembly.JSTag, its payload a nullable externref; a JS host's alone."""

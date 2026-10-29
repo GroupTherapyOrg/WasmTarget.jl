@@ -33,3 +33,8 @@ defect.
     length(hits) == 1 || reject!(Internal("src/julia/runtime/rtutils.jl nir_runtime_member: $f has $(length(hits)) specializations in the closed world, not one"), at)
     return only(hits)
 end
+
+# the exception tag's export name (src/tags.jl _define_dart_exception_tag): a host matches a Julia
+# exception by the tag the main module exports under it. `$` keeps it apart from every export a
+# program names, a Julia identifier holding none
+@quarantine "dart exports no tag for its host; a Julia program's host matches its exceptions by the exported tag" Core.String const EXCEPTION_TAG_EXPORT::Core.String = "\$exceptionTag"
