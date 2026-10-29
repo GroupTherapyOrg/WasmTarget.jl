@@ -19,17 +19,28 @@ end
     get_pragma(node, name; default_value = "") !== nothing
 
 # the value of the pragma `name` on `node`: dart's annotation, Julia's declaration standing for it, or
-# nothing where `node` has none. A Julia declaration carries no value, so a declared one answers
-# `default_value`, as dart's pragma written without a value does: `@inline` is wasm:prefer-inline and
-# `@noinline` wasm:never-inline, on a method; no other pragma has a Julia declaration, and a field, a
-# binding, a class or a module declares none (the Kernel table's Annotatable row). The export and purity
-# pragmas carry what Julia records elsewhere and are read by their own readers (getWasmExportPragma,
-# hasWasmPureFunctionPragma). coreTypes is dropped (the CoreTypes row)
-@parity "dart2wasm/lib/util.dart:31 getPragma" function get_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}, name::String; default_value::Union{String,Bool,Nothing} = nothing)::Union{String,Bool,Nothing}
+# nothing where `node` has none (the Kernel table's Annotatable row: a field, a binding, a class or a
+# module declares none). On a method: `@inline` is wasm:prefer-inline and `@noinline`
+# wasm:never-inline, each valueless, so a declared one answers `default_value` as dart's valueless
+# pragma does; wasm:export is the name Julia records for an export (program_export_name: a @ccallable's
+# C name or its function's, or the entry's function's name, dart's main), a name `default_value` stands
+# for where dart's pragma has none; and wasm:pure-function is Julia's proof that the method is
+# removable if unused (its CodeInstance's interprocedural effects), answering `default_value`. The two
+# Julia records sit in the closed world, Julia's own keyword `component`. No method is a wasm:import (a
+# foreign call is a host import, dev/MARCH.md 1.F), a wasm:weak-export (Julia's exports are all strong)
+# or a wasm:entry-point (the runtime's roots are RUNTIME_ENTRY_POINTS, src/julia/subset.jl), and no
+# other pragma has a Julia declaration. coreTypes is dropped (the CoreTypes row)
+@parity "dart2wasm/lib/util.dart:31 getPragma" function get_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}, name::String; default_value::Union{String,Bool,Nothing} = nothing,
+        component::Union{NirWorld,Nothing} = nothing)::Union{String,Bool,Nothing}
     node isa Core.MethodInstance || return nothing
     local method = node.def::Method
     name == "wasm:prefer-inline" && return Core.Compiler.is_declared_inline(method) ? default_value : nothing
     name == "wasm:never-inline" && return Core.Compiler.is_declared_noinline(method) ? default_value : nothing
+    if name == "wasm:export" || name == "wasm:pure-function"
+        component === nothing && reject!(Internal("dart2wasm/lib/util.dart:31 getPragma: $name of $node, which Julia records in the closed world, asked with none"), "get_pragma")
+        name == "wasm:export" && return program_export_name(node, component.entry)
+        return Core.Compiler.is_removable_if_unused(Core.Compiler.decode_effects(nir_body_of(component, node).ci.ipo_purity_bits)) ? default_value : nothing
+    end
     return nothing
 end
 
@@ -37,7 +48,9 @@ end
 # (dev/MARCH.md 1.F); coreTypes, Kernel's (the Kernel table's CoreTypes row), is dropped
 @parity "dart2wasm/lib/util.dart:68 hasWasmImportPragma" has_wasm_import_pragma(member::Core.MethodInstance)::Bool = get_wasm_import_pragma(member) !== nothing
 
-@parity "dart2wasm/lib/util.dart:72 getWasmImportPragma" get_wasm_import_pragma(member::Core.MethodInstance)::Nothing = nothing
+# dart parses the pragma's value into an ImportName; getPragma answers none for every Julia method
+@parity "dart2wasm/lib/util.dart:72 getWasmImportPragma" get_wasm_import_pragma(member::Core.MethodInstance)::Nothing =
+    get_pragma(member, "wasm:import")
 
 @parity "dart2wasm/lib/util.dart:91 ImportName" ImportName(module_name::String, item_name::String)::ImportName = ImportName(Val(:_), module_name, item_name)
 
@@ -64,9 +77,10 @@ end
 # the one statement of the rule). coreTypes is dropped (the Kernel table's CoreTypes row), and the closed
 # world, whose entry it names, is Julia's own keyword
 @parity "dart2wasm/lib/util.dart:125 getWasmExportPragma" get_wasm_export_pragma(member::Core.MethodInstance; component::NirWorld)::Union{String,Nothing} =
-    program_export_name(member, component.entry)
+    get_pragma(member, "wasm:export"; default_value = string((member.def::Method).name), component = component)
 
-@parity "dart2wasm/lib/util.dart:134 getWasmWeakExportPragma" get_wasm_weak_export_pragma(member::Core.MethodInstance)::Nothing = nothing
+@parity "dart2wasm/lib/util.dart:134 getWasmWeakExportPragma" get_wasm_weak_export_pragma(member::Core.MethodInstance)::Nothing =
+    get_pragma(member, "wasm:weak-export"; default_value = string((member.def::Method).name))
 
 # dart's `wasm:pure-function` pragma, which dart2wasm gives wasm-opt as binaryen.removable.if.unused:
 # Julia proves it of a method, its CodeInstance's interprocedural effects removable if unused (effect
@@ -74,7 +88,7 @@ end
 # body the closed world compiles. coreTypes is dropped (the Kernel table's CoreTypes row), and the
 # closed world, whose CodeInstance it reads, is Julia's own keyword
 @parity "dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma" has_wasm_pure_function_pragma(member::Core.MethodInstance; component::NirWorld)::Bool =
-    Core.Compiler.is_removable_if_unused(Core.Compiler.decode_effects(nir_body_of(component, member).ci.ipo_purity_bits))
+    get_pragma(member, "wasm:pure-function"; default_value = true, component = component) == true
 
 # dart adds an annotation to a Kernel node in its transforms; a Julia method's declarations are fixed
 # by its source, and a runtime root is kept by RUNTIME_ENTRY_POINTS (src/julia/subset.jl), so no

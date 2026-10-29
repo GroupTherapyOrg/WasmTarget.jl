@@ -68,6 +68,16 @@ t(x::Int) = x > 0 ? x : throw(ArgumentError("negative"))
     @test D.Util.has_wasm_pure_function_pragma(mi(g); component = world)
     local tworld = WasmTarget.build_nir(WasmTarget.check_subset(t, (Int,), "util"), "util")
     @test !D.Util.has_wasm_pure_function_pragma(tworld.entry; component = tworld)
+    # getPragma is the one source the readers read through: each pragma name answers Julia's record
+    @test D.Util.get_pragma(mi(g), "wasm:never-inline"; default_value = true) === true
+    @test D.Util.get_pragma(world.entry, "wasm:export"; default_value = "x", component = world) == "entry"
+    @test D.Util.get_pragma(mi(g), "wasm:pure-function"; default_value = true, component = world) === true
+    @test D.Util.get_pragma(mi(g), "wasm:import") === nothing && D.Util.get_pragma(mi(g), "wasm:entry-point") === nothing
+    @test D.Util.has_pragma(mi(g), "wasm:never-inline") && !D.Util.has_pragma(mi(k), "wasm:never-inline")
+    # a field, a binding, a class or a module declares no pragma; the closed world's records need the world
+    @test D.Util.get_pragma(Int, "wasm:export") === nothing
+    local e = try; D.Util.get_pragma(mi(g), "wasm:pure-function"); nothing; catch x; x; end
+    @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal
     # and the compiled module gives wasm-opt the annotation, binaryen.removable.if.unused
     local bytes = WasmTarget.compile(entry, (Int,); optimize = false)
     @test occursin("binaryen.removable.if.unused", String(copy(bytes)))
