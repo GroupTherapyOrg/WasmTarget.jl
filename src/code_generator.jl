@@ -449,7 +449,14 @@ end
         local result_type = node isa NirValue ? (@exhaustive node::NirValue begin
             (s::NirSSA) => visit_variable_get(self, s, expected_type)
             (a::NirArgument) => a.n == 1 ? visit_this_expression(self, a, expected_type) : visit_variable_get(self, a, expected_type)
-            (c::NirConst) => visit_constant_expression(self, c, expected_type)
+            (c::NirConst) => let v = c.c.val
+                v === nothing ? visit_null_literal(self, c, expected_type) :
+                v isa String ? visit_string_literal(self, c, expected_type) :
+                v isa Bool ? visit_bool_literal(self, c, expected_type) :
+                v isa Int64 ? visit_int_literal(self, c, expected_type) :
+                v isa Float64 ? visit_double_literal(self, c, expected_type) :
+                visit_constant_expression(self, c, expected_type)
+            end
             (g::NirGlobal) => dart_type_of(self, g) <: Function ? visit_static_tear_off(self, g, expected_type) : visit_static_get(self, g, expected_type)
         end) : (@exhaustive node::NirStmt begin
             # a call of a builtin that is a Kernel node of its own: a field read, a field write, a type
@@ -1117,15 +1124,33 @@ end
     return expected_type
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2984 AstCodeGenerator.visitNullLiteral" @unported function visit_null_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
+# NIR has one literal form, NirConst; translateExpression routes it by its value's type to dart's
+# literal visitors (nothing, a String, a Bool, an Int64, a Float64), each the constant of its value as
+# dart's is, and any other value to visitConstantExpression
+@parity "dart2wasm/lib/code_generator.dart:2984 AstCodeGenerator.visitNullLiteral" function visit_null_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    instantiate_constant(self, node, expected_type)
+    return expected_type
+end
 
-@parity "dart2wasm/lib/code_generator.dart:2990 AstCodeGenerator.visitStringLiteral" @unported function visit_string_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2990 AstCodeGenerator.visitStringLiteral" function visit_string_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    instantiate_constant(self, node, expected_type)
+    return expected_type
+end
 
-@parity "dart2wasm/lib/code_generator.dart:2996 AstCodeGenerator.visitBoolLiteral" @unported function visit_bool_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2996 AstCodeGenerator.visitBoolLiteral" function visit_bool_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    instantiate_constant(self, node, expected_type)
+    return expected_type
+end
 
-@parity "dart2wasm/lib/code_generator.dart:3002 AstCodeGenerator.visitIntLiteral" @unported function visit_int_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3002 AstCodeGenerator.visitIntLiteral" function visit_int_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    instantiate_constant(self, node, expected_type)
+    return expected_type
+end
 
-@parity "dart2wasm/lib/code_generator.dart:3008 AstCodeGenerator.visitDoubleLiteral" @unported function visit_double_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3008 AstCodeGenerator.visitDoubleLiteral" function visit_double_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    instantiate_constant(self, node, expected_type)
+    return expected_type
+end
 
 @parity "dart2wasm/lib/code_generator.dart:3014 AstCodeGenerator.visitListLiteral" @unported function visit_list_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 

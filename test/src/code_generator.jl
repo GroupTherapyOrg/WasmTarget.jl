@@ -429,6 +429,18 @@ end
     @test unsafe_trunc(Int64, 1e30) == typemax(Int64) || Sys.ARCH !== :aarch64
 end
 
+@testset "code_generator.dart: a literal is its value's constant, as dart's literal visitors" begin
+    # translateExpression routes a NirConst by its value's type to dart's literal visitors, each the
+    # same constant visitConstantExpression instantiates
+    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    for (v, w, visitor) in ((true, IR.NumType_i32, D.visit_bool_literal), (Int64(5), IR.NumType_i64, D.visit_int_literal),
+                            (2.5, IR.NumType_f64, D.visit_double_literal))
+        local c = W.NirConst(Core.Const(v))
+        local routed = emitted_by(() -> D.translate_expression(g, c, w), g)
+        @test !isempty(routed) && emitted_by(() -> visitor(g, c, w), g) == routed == emitted_by(() -> D.visit_constant_expression(g, c, w), g)
+    end
+end
+
 @testset "code_generator.dart: a PiNode is the unchecked as" begin
     local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
     # the narrowing translates its operand at the expected type: the argument's local, read
