@@ -21,57 +21,106 @@ machine_of(code, at) = W.machine_function(W.nir_code(code, zeros(UInt32, length(
     @test collect(L.find(df, 3)) == [4] && isempty(L.find(df, 2)) && isempty(L.find(df, 4))
 end
 
-@testset "WebAssemblyExceptionInfo.cpp: an EH pad's exception, the blocks it dominates" begin
-    # %1 branches to %3 or returns at %2; %3 jumps to %4, which returns: the pad %3 (machine block 4)
-    # dominates %4 (machine block 5)
-    local chain = Any[Core.GotoIfNot(Core.Argument(2), 3), Core.ReturnNode(1), Core.GotoNode(4), Core.ReturnNode(2)]
-    local mf = machine_of(chain, "chain")
-    mf.blocks[4].ehpad = true
-    local wei = L.WebAssemblyExceptionInfo()
-    L.run_on_machine_function(wei, mf)
-    local we = L.get_exception_for(wei, 4)
-    @test we !== nothing && L.get_eh_pad(we) == 4 && L.get_blocks(we) == [4, 5] && L.get_exception_depth(we) == 1
-    @test L.get_exception_for(wei, 5) === we && L.get_exception_for(wei, 2) === nothing && L.get_exception_for(wei, 3) === nothing
-    @test wei.top_level_exceptions == [we] && L.contains(we, 5) && !L.contains(we, 3)
-    # a pad nested in it: %4 a pad of its own, a subexception of %3's
-    local mf2 = machine_of(chain, "nested")
-    mf2.blocks[4].ehpad = true
-    mf2.blocks[5].ehpad = true
-    local wei2 = L.WebAssemblyExceptionInfo()
-    L.run_on_machine_function(wei2, mf2)
-    local outer = L.get_exception_for(wei2, 4)
-    local inner = L.get_exception_for(wei2, 5)
-    @test L.get_parent_exception(inner) === outer && L.get_sub_exceptions(outer) == [inner] && L.get_exception_depth(inner) == 2
-    @test L.contains(outer, inner) && !L.contains(inner, outer) && L.get_blocks(outer) == [4, 5]
-    # a function with no EH pad has no exception
-    local wei3 = L.WebAssemblyExceptionInfo()
-    L.run_on_machine_function(wei3, machine_of(chain, "none"))
-    @test L.empty(wei3)
-end
-
-@testset "WebAssemblySortRegion.cpp: an exception is a sort region, its bottom its last block" begin
-    local chain = Any[Core.GotoIfNot(Core.Argument(2), 3), Core.ReturnNode(1), Core.GotoNode(4), Core.ReturnNode(2)]
-    local mf = machine_of(chain, "chain")
-    mf.blocks[4].ehpad = true
-    local wei = L.WebAssemblyExceptionInfo()
-    L.run_on_machine_function(wei, mf)
-    local li = L.LoopInfoBase()
-    L.analyze(li, mf)
-    # the pad's exception holds both its blocks; outside it, no region
-    local sri = L.SortRegionInfo(li, wei)
-    local r = L.get_region_for(sri, 5)
-    @test r !== nothing && !L.is_loop(r) && L.get_header(r) == 4 && L.get_region_for(sri, 4) === r && L.get_region_for(sri, 2) === nothing
-    @test L.get_bottom(sri, mf, r) == 5
-    # the sort keeps the exception's blocks contiguous below its pad, every check of LLVM's passing
-    L.sort_blocks(mf, li, wei)
-    local pos(b) = findfirst(==(b), mf.layout)
-    @test pos(5) == pos(4) + 1
+# a machine function of one of LLVM's MIR tests: `succs[n]` the successors of bb.(n-1), so bb.k is
+# block k + 1, its landing pads `pads` (LLVM's numbers); laid out in order, its dominator tree Julia's
+function mir_function(succs::Vector{Vector{Int}}, pads::Vector{Int})
+    local blocks = [W.MachineBasicBlock(n, Int[], [s + 1 for s in ss], W.MachineInstr[], (n - 1) in pads) for (n, ss) in enumerate(succs)]
+    for (n, b) in enumerate(blocks), s in b.succs
+        push!(blocks[s].preds, n)
+    end
+    local mf = machine_of(Any[Core.ReturnNode(1)], "mir")
+    mf.blocks = blocks
+    mf.layout = collect(eachindex(blocks))
+    W.recompute_domtree!(mf)
+    return mf
 end
 
 module TryCases
 struct E; v::Int64; end
 @noinline thr(x::Int64) = x < 0 ? throw(E(x)) : x
 tc(x::Int64) = try; thr(x) + 1; catch e; e isa E ? e.v * 2 : 0; end
+end
+
+module NestedTryCases
+@noinline thr(x::Int64) = x < 0 ? error("negative") : x
+tn(x::Int64) = try; thr(x); catch; try; thr(x + 2); catch; -1; end; end
+end
+
+@testset "WebAssemblyExceptionInfo.cpp: each EH pad's exception and the tree of them, LLVM's own tests" begin
+    local bb(k) = k + 1
+    # WebAssemblyExceptionInfoTest.cpp TEST0: bb2's exception holds bb3's, which holds bb8's, and bb9's,
+    # which bb6 reaches past bb3's frontier
+    local mf0 = mir_function([[1, 2], [7], [3, 9], [4, 6], [5, 8], [7], [10, 9], Int[], [9], Int[], Int[]], [2, 3, 8, 9])
+    local wei0 = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei0, mf0)
+    local we0 = L.get_exception_for(wei0, bb(2))
+    @test we0 !== nothing && L.get_eh_pad(we0) == bb(2) && L.get_parent_exception(we0) === nothing && L.get_exception_depth(we0) == 1
+    local we00 = L.get_exception_for(wei0, bb(3))
+    @test we00 !== nothing && L.get_eh_pad(we00) == bb(3) && L.get_parent_exception(we00) === we0 && L.get_exception_depth(we00) == 2
+    @test all(k -> L.get_eh_pad(L.get_exception_for(wei0, bb(k))) == bb(3), (4, 5, 6, 10))
+    local we000 = L.get_exception_for(wei0, bb(8))
+    @test L.get_eh_pad(we000) == bb(8) && L.get_parent_exception(we000) === we00 && L.get_exception_depth(we000) == 3
+    local we01 = L.get_exception_for(wei0, bb(9))
+    @test L.get_eh_pad(we01) == bb(9) && L.get_parent_exception(we01) === we0 && L.get_exception_depth(we01) == 2
+    # TEST1: bb1's exception holds bb3's, which holds bb10's, and bb11's
+    local mf1 = mir_function([[9, 1], [2, 8], [7, 3, 11], [4, 6], [5, 10], [7], [12, 11], [9], Int[], Int[], [11], Int[], Int[]], [1, 3, 10, 11])
+    local wei1 = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei1, mf1)
+    local we1 = L.get_exception_for(wei1, bb(1))
+    @test L.get_eh_pad(we1) == bb(1) && L.get_parent_exception(we1) === nothing && L.get_exception_depth(we1) == 1
+    @test all(k -> L.get_exception_for(wei1, bb(k)) === we1, (2, 7, 8))
+    local we10 = L.get_exception_for(wei1, bb(3))
+    @test L.get_eh_pad(we10) == bb(3) && L.get_parent_exception(we10) === we1 && L.get_exception_depth(we10) == 2
+    @test all(k -> L.get_eh_pad(L.get_exception_for(wei1, bb(k))) == bb(3), (4, 5, 6, 12))
+    local we100 = L.get_exception_for(wei1, bb(10))
+    @test L.get_eh_pad(we100) == bb(10) && L.get_parent_exception(we100) === we10 && L.get_exception_depth(we100) == 3
+    local we11 = L.get_exception_for(wei1, bb(11))
+    @test L.get_eh_pad(we11) == bb(11) && L.get_parent_exception(we11) === we1 && L.get_exception_depth(we11) == 2
+end
+
+@testset "WebAssemblyExceptionInfo.cpp: a try in a catch, Julia's IR, its exception the catch's subexception" begin
+    # tn's outer catch holds a try of its own: the inner catch block, which only the outer catch's
+    # blocks reach, is in the outer catch's exception and has its own below it; the pads are the
+    # catch destinations of Julia's two EnterNodes
+    local ci = Base.code_typed(NestedTryCases.tn, (Int64,); optimize = true)[1][1]
+    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, "tn")
+    local enters = [st::W.NirEnter for st in stmts if st isa W.NirEnter]
+    @test length(enters) == 2
+    local outer_pad, inner_pad = (Core.Compiler.block_for_inst(cfg, e.catch_dest) + 1 for e in enters)
+    local mf = W.machine_function(stmts, cfg, handlers, "tn")
+    local wei = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei, mf)
+    local outer = L.get_exception_for(wei, outer_pad)
+    local inner = L.get_exception_for(wei, inner_pad)
+    @test L.get_eh_pad(outer) == outer_pad && L.get_parent_exception(outer) === nothing && wei.top_level_exceptions == [outer]
+    @test L.get_eh_pad(inner) == inner_pad && L.get_parent_exception(inner) === outer && L.get_exception_depth(inner) == 2
+    @test L.contains(outer, inner) && all(b -> L.contains(outer, b), L.get_blocks(inner))
+    # a function with no try has no exception
+    local ci2 = Base.code_typed(NestedTryCases.thr, (Int64,); optimize = true)[1][1]
+    local wei2 = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei2, W.machine_function(W.nir_code(ci2.code, ci2.ssaflags, "thr")..., "thr"))
+    @test L.empty(wei2)
+end
+
+@testset "WebAssemblySortRegion.cpp: an exception is a sort region, its bottom its last block" begin
+    # tn's outer catch: its exception a region headed by its pad, the sort keeping its blocks contiguous
+    # below the pad, every check of LLVM's passing
+    local ci = Base.code_typed(NestedTryCases.tn, (Int64,); optimize = true)[1][1]
+    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, "tn")
+    local mf = W.machine_function(stmts, cfg, handlers, "tn")
+    local outer_pad = Core.Compiler.block_for_inst(cfg, (first(st for st in stmts if st isa W.NirEnter)::W.NirEnter).catch_dest) + 1
+    local wei = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei, mf)
+    local li = L.LoopInfoBase()
+    L.analyze(li, mf)
+    local sri = L.SortRegionInfo(li, wei)
+    local r = L.get_region_for(sri, outer_pad)
+    @test r !== nothing && !L.is_loop(r) && L.get_header(r) == outer_pad && L.get_region_for(sri, 2) === nothing
+    L.sort_blocks(mf, li, wei)
+    local pos(b) = findfirst(==(b), mf.layout)
+    local exc = L.get_blocks(L.get_exception_for(wei, outer_pad))
+    @test sort(pos.(exc)) == pos(outer_pad):pos(outer_pad) + length(exc) - 1
+    @test L.get_bottom(sri, mf, r) == mf.layout[pos(outer_pad) + length(exc) - 1]
 end
 
 @testset "machine code: a try region's catch block is an EH pad, reached by unwind edges" begin
