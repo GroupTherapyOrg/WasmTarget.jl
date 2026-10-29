@@ -1216,13 +1216,48 @@ function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{St
     return nothing
 end
 
-# WT_DART_SHARD="k/n" (dev/corpus.sh runs n shards side by side on the efficiency cores) takes the groups whose
-# index is k modulo n, and checks the records of those groups alone; without it, every group
+# each group block's name in the cost table: its name, and its occurrence when a name stands twice (dart_nnbd)
+const _DART_GROUP_KEYS = let seen = Dict{String,Int}()
+    [(seen[g] = get(seen, g, 0) + 1) == 1 ? g : "$g#$(seen[g])" for (g, _) in DART_GROUPS]
+end
+# each group block's cost: its seconds in the last green whole run (WT_DART_COSTS, the common dir's
+# wt-dart-costs.tsv dev/corpus.sh keeps), its compiles, its readers and its node run together; a block not yet
+# measured costs its case count at the measured blocks' seconds per case, and with nothing measured its case count
+# (by index, a split put 859 modules' node run in one of four shards and 337 in another, and that one hung at the
+# 1200-s limit, a5e89d25, 2026-10-29)
+const _DART_COST = let p = get(ENV, "WT_DART_COSTS", ""), c = Dict{String,Float64}()
+    if !isempty(p) && isfile(p)
+        for l in eachline(p)
+            local a = split(l, '\t')
+            length(a) == 2 && (local v = tryparse(Float64, a[2]); v === nothing || (c[String(a[1])] = v))
+        end
+    end
+    local n(i) = length(last(DART_GROUPS[i]))
+    local measured = [i for i in eachindex(DART_GROUPS) if haskey(c, _DART_GROUP_KEYS[i])]
+    local rate = isempty(measured) ? 1.0 : sum(c[_DART_GROUP_KEYS[i]] for i in measured) / max(1, sum(n(i) for i in measured))
+    [get(c, _DART_GROUP_KEYS[i], n(i) * rate) for i in eachindex(DART_GROUPS)]
+end
+# WT_DART_SHARD="k/n" (dev/corpus.sh runs n shards side by side on the efficiency cores) takes shard k of a
+# longest-first split by cost, so the shards finish together, and checks the records of its groups alone; without
+# it, every group
 const _DART_SHARD = let sh = get(ENV, "WT_DART_SHARD", "")
     isempty(sh) ? (1, 1) : Tuple(parse.(Int, split(sh, '/')))
 end
-_dart_in_shard(i::Int)::Bool = mod1(i, _DART_SHARD[2]) == _DART_SHARD[1]
-const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUPS) if _dart_in_shard(i))
+function _dart_split(cost::AbstractVector{<:Real}, k::Int, n::Int)::Set{Int}
+    local load = zeros(n)
+    local mine = Set{Int}()
+    for i in sort(collect(eachindex(cost)); by = i -> (-cost[i], i))
+        local j = argmin(load)
+        load[j] += cost[i]
+        j == k && push!(mine, i)
+    end
+    return mine
+end
+const _DART_SHARD_BLOCKS = _dart_split(_DART_COST, _DART_SHARD...)
+const _DART_SHARD_GROUPS = Set{String}(first(DART_GROUPS[i]) for i in _DART_SHARD_BLOCKS)
+# each block's seconds go to WT_DART_COSTS_OUT, for dev/corpus.sh to keep once the run is green; a process's first
+# block is not measured, its seconds holding the process's cold start (compiling WasmTarget's code)
+const _DART_COSTS_OUT = get(ENV, "WT_DART_COSTS_OUT", "")
 
 @testset "dart2wasm's tests, Julia the ground truth" begin
     local seen = Set{String}()
@@ -1230,33 +1265,46 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
     local unread = Pair{String,String}[]
     local gap_keys = Set{String}()   # the cases recorded :unread whose modules are read
     local nread = 0
-    for (group, cases) in DART_GROUPS, case in cases
-        group in _DART_SHARD_GROUPS || continue
-        local key = "$group/$(case[1])"
-        push!(seen, key)
-        @testset "$key" begin
-            @test haskey(DART_CASES, key)
-            if haskey(DART_CASES, key)
-                local native, today = DART_CASES[key]
-                local f, args = case[2], case[3:end]
-                (key in DART_NATIVE_DUE || !_DART_CORE_ONLY) && @test _dart_same(f(args...), native)
-                if !_DART_CORE_ONLY || key in DART_CORE
-                    local timed = @timed _dart_outcome(f, args, key)
-                    local (got, own), secs = timed.value, _dart_secs(timed)
-                    @test secs <= DART_COMPILE_BUDGET
-                    # the record's property; a failure prints why, the rejection's own text in it (A51E9)
-                    @test _dart_breaks(today, got) == ""
-                    # the modules run in the whole run, every module whatever its record, a wrong answer never
-                    # admitted (A53E2); the landing runs none, its cost fixed (the lead's ruling: a landing
-                    # sample comes later, its cost measured)
-                    if got === :compiled && !_DART_CORE_ONLY
-                        today === :unread && push!(gap_keys, key)
-                        _dart_read!(runs, unread, key, f, args, own)
-                        nread += 1
+    local results = Main.WTRunner.RunResult[]
+    local nblocks = 0
+    for (bi, (group, cases)) in enumerate(DART_GROUPS)
+        bi in _DART_SHARD_BLOCKS || continue
+        local t0 = time()
+        local first_run = length(runs) + 1
+        for case in cases
+            local key = "$group/$(case[1])"
+            push!(seen, key)
+            @testset "$key" begin
+                @test haskey(DART_CASES, key)
+                if haskey(DART_CASES, key)
+                    local native, today = DART_CASES[key]
+                    local f, args = case[2], case[3:end]
+                    (key in DART_NATIVE_DUE || !_DART_CORE_ONLY) && @test _dart_same(f(args...), native)
+                    if !_DART_CORE_ONLY || key in DART_CORE
+                        local timed = @timed _dart_outcome(f, args, key)
+                        local (got, own), secs = timed.value, _dart_secs(timed)
+                        @test secs <= DART_COMPILE_BUDGET
+                        # the record's property; a failure prints why, the rejection's own text in it (A51E9)
+                        @test _dart_breaks(today, got) == ""
+                        # the modules run in the whole run, every module whatever its record, a wrong answer never
+                        # admitted (A53E2); the landing runs none, its cost fixed (the lead's ruling: a landing
+                        # sample comes later, its cost measured)
+                        if got === :compiled && !_DART_CORE_ONLY
+                            today === :unread && push!(gap_keys, key)
+                            _dart_read!(runs, unread, key, f, args, own)
+                            nread += 1
+                        end
                     end
                 end
             end
         end
+        # the block's modules in node now, so its cost is its own and no shard's node run grows with the corpus
+        if first_run <= length(runs)
+            isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: running $group's $(length(runs) - first_run + 1) modules in node")
+            append!(results, Main.WTRunner.run_cases(runs[first_run:end]))
+        end
+        (nblocks += 1) > 1 && !isempty(_DART_COSTS_OUT) &&
+            open(io -> println(io, _DART_GROUP_KEYS[bi], '\t', round(time() - t0; digits = 1)), _DART_COSTS_OUT, "a")
     end
     # every recorded case is a case of the corpus
     @test sort!(collect(setdiff(Set(k for k in keys(DART_CASES) if first(split(k, '/')) in _DART_SHARD_GROUPS), seen))) == String[]
@@ -1264,10 +1312,8 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
     # cheap): a record of a group removed or misspelt falls in no shard's groups and would go unchecked (A57E2)
     local group_names = Set{String}(first(g) for g in DART_GROUPS)
     @test sort!([k for k in keys(DART_CASES) if !(first(split(k, '/')) in group_names)]) == String[]
-    # every module read, in one node process: each fact native's, in both modules, or the case fails naming
-    # the fact by its path and what the modules answered
-    isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: running $(length(runs)) modules in node")
-    local results = Main.WTRunner.run_cases(runs)
+    # every module read, a node process per group block above: each fact native's, in both modules, or the case
+    # fails naming the fact by its path and what the modules answered
     for (key, why) in unread
         @testset "$key runs as native Julia" begin
             @test why == ""
@@ -1321,4 +1367,15 @@ end
     @test time() - t0 < 30
     @test _dart_breaks(:rejects, first(cut)) == first(cut).why
     @test _dart_limited(() -> (:compiled, UInt8[1]), "dart_plant/quick"; limit = 5) == (:compiled, UInt8[1])
+end
+
+# the shards' split against its plants: every block in exactly one shard, and the loads within the largest block
+@testset "the shards split the group blocks longest-first by cost, each block in exactly one" begin
+    local cost = [859.0, 337, 506, 40, 30, 20, 10, 5]
+    local parts = [_dart_split(cost, k, 4) for k in 1:4]
+    @test sort!(reduce(vcat, collect.(parts))) == collect(eachindex(cost))
+    local loads = [sum(cost[i] for i in p; init = 0.0) for p in parts]
+    @test maximum(loads) - minimum(loads) <= maximum(cost)
+    @test parts[1] == Set([1])   # the costliest block stands alone
+    @test sort!(reduce(vcat, collect.(_dart_split(_DART_COST, k, 4) for k in 1:4))) == collect(eachindex(DART_GROUPS))
 end

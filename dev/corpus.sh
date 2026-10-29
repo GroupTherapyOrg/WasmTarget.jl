@@ -17,6 +17,7 @@ cd "$(dirname "$0")/.."
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 scratch="$common/wt-corpus"   # kept between runs: its private depot stays warm
 tsv="$common/wt-corpus.tsv"; out="$common/wt-corpus.out"
+costs="$common/wt-dart-costs.tsv"   # each dart group's seconds in the last green run: the shards' split
 # a hard limit no run may outlive (2026-10-28: hangs are never allowed): a literal, naming the case
 WT_CORPUS_LIMIT=1200
 lock="$common/wt-corpus.lock"
@@ -42,10 +43,12 @@ run_head() {
     # efficiency cores, so its wall time stays inside its limit as the ported dart tests grow (one run took
     # 346 s, then 733 s two hours later, 2026-10-28); four since 918 s on 2db99073 (2026-10-29), the six efficiency
     # cores holding four shards beside the lanes' background runs
-    CORPUS_SHARDS=4; jpids=""; rm -f "$scratch"/.wtd/shard.*.time
+    # the shards split by each group's measured seconds (wt-dart-costs.tsv, kept from the last green run), so their
+    # compiles and node runs end together (a split by index put 859 modules in one shard, which hung, a5e89d25)
+    CORPUS_SHARDS=4; jpids=""; rm -f "$scratch"/.wtd/shard.*.time "$scratch"/.wtd/dart_costs.*
     for k in $(seq 1 $CORPUS_SHARDS); do
       : > "$WT_PROGRESS.$k"
-      WT_PROGRESS="$WT_PROGRESS.$k" WT_DART_SHARD="$k/$CORPUS_SHARDS" taskpolicy -b /usr/bin/time -o "$scratch/.wtd/shard.$k.time" julia --project=. --startup-file=no -e '
+      WT_PROGRESS="$WT_PROGRESS.$k" WT_DART_SHARD="$k/$CORPUS_SHARDS" WT_DART_COSTS="$costs" WT_DART_COSTS_OUT="$scratch/.wtd/dart_costs.$k" taskpolicy -b /usr/bin/time -o "$scratch/.wtd/shard.$k.time" julia --project=. --startup-file=no -e '
         using Test
         wt_progress(s::AbstractString) = write(ENV["WT_PROGRESS"], s)
         @testset "corpus" begin include("test/src/dart_tests.jl") end' > "$out.$k" 2>&1 & jpids="$jpids $!"
@@ -65,6 +68,9 @@ run_head() {
     done
     rc=0; for p in $jpids; do wait $p || rc=1; done
     cat "$out".[0-9]* > "$out"
+    # a green run's measured group costs replace the kept ones, group by group, for the next run's split
+    [ $rc -eq 0 ] && cat "$scratch"/.wtd/dart_costs.* 2>/dev/null | awk -F'\t' 'NR == FNR { c[$1] = $2; next } { c[$1] = $2 } END { for (g in c) print g "\t" c[g] }' \
+      "$( [ -f "$costs" ] && echo "$costs" || echo /dev/null )" - | sort > "$costs.new" && mv "$costs.new" "$costs"
     exit $rc
   ); rc=$?
   t=$(( $(date +%s) - r0 ))
