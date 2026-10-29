@@ -724,6 +724,7 @@ end
                 v isa Bool ? visit_bool_literal(self, c, expected_type) :
                 v isa Int64 ? visit_int_literal(self, c, expected_type) :
                 v isa Float64 ? visit_double_literal(self, c, expected_type) :
+                v isa Type ? visit_type_literal(self, c, expected_type) :
                 visit_constant_expression(self, c, expected_type)
             end
             (g::NirGlobal) => dart_type_of(self, g) <: Function ? visit_static_tear_off(self, g, expected_type) : visit_static_get(self, g, expected_type)
@@ -1599,8 +1600,8 @@ end
 end
 
 # NIR has one literal form, NirConst; translateExpression routes it by its value's type to dart's
-# literal visitors (nothing, a String, a Bool, an Int64, a Float64), each the constant of its value as
-# dart's is, and any other value to visitConstantExpression
+# literal visitors (nothing, a String, a Bool, an Int64, a Float64, a type), each the constant of its
+# value as dart's is, and any other value to visitConstantExpression
 @parity "dart2wasm/lib/code_generator.dart:2984 AstCodeGenerator.visitNullLiteral" function visit_null_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     instantiate_constant(self, node, expected_type)
     return expected_type
@@ -1644,7 +1645,11 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3119 AstCodeGenerator.visitSetLiteral" visit_set_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:3119 AstCodeGenerator.visitSetLiteral: Julia builds a Set by calls of Base's methods, each an invoke, visitStaticInvocation's"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:3154 AstCodeGenerator.visitTypeLiteral" @unported function visit_type_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
+# a type as a value, Kernel's TypeLiteral: Julia's literal of the type (a NirConst whose value is a
+# Type, the Kernel table's row), made by types.dart's makeType as dart's is
+@parity "dart2wasm/lib/code_generator.dart:3154 AstCodeGenerator.visitTypeLiteral" function visit_type_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    return make_type(types(self), self, node.c.val::Type)
+end
 
 # Julia's isa(x, T), Kernel's IsExpression: the operand boxed in the top type (nullable where its type
 # admits `nothing`, the null of the nullable representation), the test types.dart's emitIsTest; the

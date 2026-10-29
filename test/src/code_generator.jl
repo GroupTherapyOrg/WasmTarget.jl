@@ -921,6 +921,22 @@ end
     end
 end
 
+module TypeLiteralCases
+struct Bx; t::DataType; n::Int; end
+# Julia keeps the type literal Int64 as the allocation's operand, the field the callee does not read
+@noinline getn(b::Bx) = b.n
+mkb(x::Int) = getn(Bx(Int64, x)) + 1
+end
+@testset "code_generator.dart: a type as a value is makeType's, Kernel's TypeLiteral" begin
+    local g = ready_codegen_of(TypeLiteralCases.mkb, (Int,), [IR.NumType_i64], [IR.NumType_i64])
+    g.translator.globals[] = D.Globals(g.translator); g.translator.dart_globals[] = D.DartGlobals(g.translator)
+    local tt = D.non_nullable_type_type(D.types(g))
+    # a type with no free type variable is a constant: its global read, the type's wasm type
+    @test emitted_by(() -> @test(D.translate_expression(g, W.NirConst(Core.Const(Int64)), tt) == tt), g) == ["global.get"]
+    # the allocation's type operand compiles, and the module answers as native Julia
+    queue_native!("mkb ", W.compile(TypeLiteralCases.mkb, (Int,); optimize = false), TypeLiteralCases.mkb, [(3,), (-1,)])
+end
+
 # Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)
 module EqualsCases
 struct Q; x::Int; end
