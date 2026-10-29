@@ -18,7 +18,9 @@ printf '%s\n' llvm/lib/Target/WebAssembly/ \
   llvm/include/llvm/CodeGen/MachineLoopInfo.h llvm/include/llvm/CodeGen/MachineDominators.h \
   llvm/include/llvm/Support/GenericLoopInfo.h llvm/include/llvm/Support/GenericLoopInfoImpl.h \
   llvm/include/llvm/Support/GenericDomTree.h llvm/lib/CodeGen/MachineBasicBlock.cpp \
-  llvm/lib/CodeGen/PHIElimination.cpp > .git/info/sparse-checkout
+  llvm/lib/CodeGen/PHIElimination.cpp llvm/include/llvm/Analysis/DominanceFrontier.h \
+  llvm/include/llvm/Analysis/DominanceFrontierImpl.h llvm/include/llvm/CodeGen/MachineDominanceFrontier.h \
+  > .git/info/sparse-checkout
 # a checkout already at the pin takes the sparse list as it stands now, a file a port added included
 if [ "$(git rev-parse HEAD 2>/dev/null)" = "$pin" ]; then
   git read-tree -mu HEAD
