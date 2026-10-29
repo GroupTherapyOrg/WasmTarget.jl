@@ -44,3 +44,21 @@ end
     _never::Union{}
     ImmutableWasmArray{T}(args...) where {T} = reject!(Internal("src/julia/wasm_array.jl: ImmutableWasmArray has no Julia value; a field of its type holds the wasm array itself"), "ImmutableWasmArray")
 end
+
+"""
+    WasmI8
+
+dart:_wasm's 8-bit wasm integer (sdk/lib/_wasm/wasm_types.dart, `class WasmI8`), the element type of a
+packed i8 wasm array: a wasm type, never boxed, so translateStorageType gives its builtin type, the
+packed i8, even where it boxes a Julia primitive class (dart's `!boxClasses.contains(cls)`). A
+String's code units are a `WasmArray` of it (src/julia/classes.jl `_string_instance_fields`). No
+Julia value has the type: a struct of one field of type `Union{}`, uninhabited.
+
+precedent(dart: dart:_wasm's WasmI8, a storage type of packed arrays only; rust: `u8` in a `[u8]`).
+Julia's differs: its UInt8 is a class of its own, boxed where it flows into `Any`, so the packed
+storage type is named apart from it.
+"""
+@quarantine "dart:_wasm's WasmI8 is a storage type of dart's runtime; Julia's UInt8 is a boxable class, so a field's element type names the packed i8" Core.Union struct WasmI8
+    _never::Union{}
+    WasmI8(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI8 has no Julia value; it names a packed array's element type"), "WasmI8")
+end

@@ -255,3 +255,36 @@ f(n::Int64) = sum3((42, 42, 42)) + n
     @test !isempty(results) && all(r -> r.ok, results)
 end
 end
+
+module StringConstants
+using Test, WasmTarget
+const D = WasmTarget.Dart2Wasm
+const I = WasmTarget.WasmBuilder.IR
+const BIG = repeat("é", 6000)     # 12000 UTF-8 code units, past maxArrayNewFixedLength
+lit(b::Bool) = b ? "héllo" : "ab"
+big(b::Bool) = b ? BIG : "x"
+translated(f) = (t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f, (Bool,), "constants"), "constants"),
+    D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions()); D.translate(t, nothing); t)
+@testset "constants.dart: a String literal, its UTF-8 code units as dart's literal path makes them" begin
+    local t = translated(lit)
+    # String's struct: the object header, then its code units as an immutable i8 array
+    local fields = t.class_info[String].struct_.fields
+    @test length(fields) == 3 && !fields[3].mutable && fields[3].type isa I.RefType
+    local arr = fields[3].type.heap_type
+    @test arr isa I.ArrayType && arr.element_type[].type === I.PackedType_i8 && !arr.element_type[].mutable
+    # each literal an eager global: header, array.new_fixed of Julia's codeunits, struct.new
+    for s in ("héllo", "ab")
+        local ci = t.constants[].constant_info[WasmTarget.NirConst(Core.Const(s))]
+        local ins = ci._definition.global_.initializer._instructions
+        local consts = [x.value for x in ins if x isa I.I32Const]
+        @test consts[3:end] == Int.(codeunits(s)) && !D.is_lazy(ci._definition)
+        @test any(x -> x isa I.ArrayNewFixed && x.length == ncodeunits(s), ins)
+    end
+    # past maxArrayNewFixedLength: the bytes in the passive data segment, array.new_data, a lazy constant
+    local tb = translated(big)
+    local cb = tb.constants[].constant_info[WasmTarget.NirConst(Core.Const(BIG))]
+    @test D.is_lazy(cb._definition)
+    local seg = only(values(tb.constants[]._byte_segments))
+    @test seg.content == Vector{UInt8}(codeunits(BIG))
+end
+end

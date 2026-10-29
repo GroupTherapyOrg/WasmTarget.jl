@@ -709,26 +709,46 @@ end
 @parity "dart2wasm/lib/constants.dart:867 ConstantCreator.visitDoubleConstant" visit_double_constant(self::ConstantCreator, constant::Union{Float32,Float64})::Union{ConstantInfo,Nothing} =
     reject!(Internal("dart2wasm/lib/constants.dart:868 ConstantCreator.visitDoubleConstant: Double constants should be handled at instantiation"), "ConstantCreator.visitDoubleConstant")
 
-"""A `String`: the struct of Julia's class `String` (dart's string implementation class)."""
+"""
+A `String`: the struct of Julia's class `String`, the object header and then `_data`, the string's
+UTF-8 code units as an immutable i8 wasm array (src/julia/classes.jl `_string_instance_fields`, the
+ruling on String's representation). The data is made as dart's standalone literal path makes it
+(translator.dart:2534 pushStandaloneStringConstant): past `maxArrayNewFixedLength` code units, the
+bytes go into the constants' passive data segment and `array.new_data` copies them, which is no
+constant expression, so the constant is lazy; up to it, `array.new_fixed` of the bytes, a constant
+expression, so the constant can be eager.
+
+A deliberate difference from dart: dart's data is a host string, made by a call to the embedder's
+import in the standalone build or read from a js-string import global otherwise; Julia's String is
+its bytes, which every Julia string operation indexes, so both builds hold the bytes and a host
+string is made only at the interop boundary.
+"""
 @parity "dart2wasm/lib/constants.dart:872 ConstantCreator.visitStringConstant" function visit_string_constant(self::ConstantCreator, constant::String)::Union{ConstantInfo,Nothing}
     local translator = self.constants.translator
     local info = get(translator.class_info, String, nothing)
     info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:873 ConstantCreator.visitStringConstant: the class String has no class info"), "ConstantCreator.visitStringConstant")
-    local standalone = translator.options.standalone
     local value = constant
+    local bytes = Vector{UInt8}(codeunits(value))
+    local array_type = array_type_for_dart_type(translator, WasmI8; mutable_ = false)
+    local too_large_for_array_new_fixed = length(bytes) > max_array_new_fixed_length()
 
-    # The standalone build doesn't use js-string imports, so we have to call
-    # an imported function to turn a character array into a string. That call
-    # is not a WebAssembly const expression, so the constant can't be eager.
     return create_constant(self, NirConst(Core.Const(value)), ConstantInfo[], info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
         push_object_header_fields(b, translator, info)
-        if standalone
-            push_standalone_string_constant(translator, b, byte_segment(self.constants, b.module_builder), value)
+        if too_large_for_array_new_fixed
+            local segment = byte_segment(self.constants, b.module_builder)
+            WasmBuilder.i32_const(b, length(segment))
+            WasmBuilder.i32_const(b, length(bytes))
+            WasmBuilder.array_new_data(b, array_type, segment)
+            WasmBuilder.append(segment, bytes)
         else
-            read_global(translator.globals[], b, get_internalized_string_global(translator, b.module_builder, value))
+            for byte in bytes
+                WasmBuilder.i32_const(b, Int(byte))
+            end
+            WasmBuilder.array_new_fixed(b, array_type, length(bytes))
         end
         WasmBuilder.struct_new(b, info.struct_)
-    end; can_be_eager = !standalone)
+        return nothing
+    end; can_be_eager = !too_large_for_array_new_fixed)
 end
 
 """

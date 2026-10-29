@@ -156,9 +156,10 @@ an abstract class has none (Julia's abstract types have no fields, so every fiel
 class's own); a primitive class (`Int64`, `Bool`, `Float64`, ...) has its one `value`, as dart's
 boxed classes do (`_BoxedInt.value`); a struct has its `fieldnames` and `fieldtypes`; a singleton
 none; a kind (a type as a value) dart's runtime type layout (`_kind_instance_fields`); a
-`Core.SimpleVector` its elements as one immutable wasm array (`_svec_instance_fields`). Any other
-class whose data Julia holds outside its fields (`String`, `Symbol`) rejects, located, until its
-representation is written.
+`Core.SimpleVector` its elements as one immutable wasm array (`_svec_instance_fields`); a `String`
+its UTF-8 code units as one immutable i8 wasm array (`_string_instance_fields`). Any other class
+whose data Julia holds outside its fields (`Symbol`) rejects, located, until its representation is
+written.
 """
 @quarantine "a class's fields are Julia's fieldnames, fieldtypes and isconst; a primitive type holds one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
     class_is_abstract(c) && return ClassField[]
@@ -167,6 +168,7 @@ representation is written.
     if fieldcount(c) == 0
         Base.issingletontype(c) && return ClassField[]
         c === Core.SimpleVector && return _svec_instance_fields(c, at)
+        c === String && return _string_instance_fields(c, at)
         reject!(Unquarantined("src/julia/classes.jl class_instance_fields: $c, whose data Julia holds outside its fields"), at)
     end
     return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
@@ -234,4 +236,45 @@ inline after the length, where wasm's array is an object of its own the struct r
 @quarantine "a SimpleVector's data lies outside its fields: Julia's jl_svec_t, an immutable pointer array" Core.SimpleVector function _svec_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c === Core.SimpleVector || reject!(Internal("src/julia/classes.jl _svec_instance_fields: $c, no SimpleVector"), at)
     return ClassField[ClassField(c, 0, "data", ImmutableWasmArray{eltype(c)}, false)]
+end
+
+"""
+    _string_instance_fields(c, at) -> Vector{ClassField}
+
+The fields of a `String`, whose data Julia holds outside its fields: one field, `_data`, of type
+`ImmutableWasmArray{WasmI8}` (src/julia/wasm_array.jl), the string's UTF-8 code units as one
+immutable i8 wasm array. The ruling (Dale's choice B, 2026-10-29), from its sources:
+
+- Julia's layout (julia.h, `jl_string_len` and `jl_string_data`): a String is its length in bytes
+  followed by its UTF-8 code units, immutable; `ncodeunits`, `codeunit`, `sizeof` and iteration
+  index those bytes, and `==` compares them. So the field holds exactly the code units, as many as
+  `ncodeunits`, the wasm array's own length (`array.len`) counting them as `jl_string_len` does.
+- dart's string class (sdk/lib/_internal/wasm/standalone/embedder_string.dart:32,
+  `EmbedderStringImpl`): an object of its own class, the object header and then its data, built
+  for a literal by translator.dart:2534 `pushStandaloneStringConstant`, which copies the literal's
+  code units into the constants' passive data segment and makes a wasm array of them
+  (`array.new_data`). At the pin dart's data is a host string reference; dart2wasm's earlier
+  `OneByteString` held an i8 wasm array of its code units (the precedent; the pinned checkout is
+  shallow, so no commit anchors it). The class shape and the literal path are dart's; the data is
+  Julia's, the bytes, so no Julia string operation is a host call. A host string is made only at
+  the interop boundary.
+
+Why Julia differs from dart's shape at the pin (a host string reference, `WasmExternRef? _ref`, whose
+length and code units are host calls): every String operation in Julia's Base indexes the bytes
+(`codeunit`, `ncodeunits`, `sizeof`, `nextind`, iteration, `==` through `memcmp`), so a host string
+would make each a host call transcoding between Julia's UTF-8 and the host's UTF-16, a change of
+behavior (indices and lengths count UTF-8 bytes in Julia, UTF-16 units in the host) and of
+performance alike.
+
+The field is not one of Julia's (a String has none), so it takes index 0, like a primitive class's
+`value`.
+
+precedent(dart: EmbedderStringImpl, the header and its data in a field; dart2wasm's earlier
+OneByteString, an i8 wasm array of code units; rust: `String`, a UTF-8 byte buffer). Julia's differs:
+its String stores the bytes inline after the length, where wasm's array is an object the struct
+references.
+"""
+@quarantine "a String's data lies outside its fields (Julia's jl_string_len, jl_string_data), its UTF-8 bytes in place of dart's host externref, since Base indexes the bytes" Core.String function _string_instance_fields(c::DataType, at::String)::Vector{ClassField}
+    c === String || reject!(Internal("src/julia/classes.jl _string_instance_fields: $c, no String"), at)
+    return ClassField[ClassField(c, 0, "_data", ImmutableWasmArray{WasmI8}, false)]
 end

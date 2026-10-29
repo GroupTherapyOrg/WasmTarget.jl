@@ -305,7 +305,8 @@ the translator holds each collaborator.
                 Int16 => WasmBuilder.IR.PackedType_i16, UInt16 => WasmBuilder.IR.PackedType_i16,
                 Int32 => WasmBuilder.IR.NumType_i32, UInt32 => WasmBuilder.IR.NumType_i32, Char => WasmBuilder.IR.NumType_i32,
                 Int64 => WasmBuilder.IR.NumType_i64, UInt64 => WasmBuilder.IR.NumType_i64,
-                Float32 => WasmBuilder.IR.NumType_f32, Float64 => WasmBuilder.IR.NumType_f64)),
+                Float32 => WasmBuilder.IR.NumType_f32, Float64 => WasmBuilder.IR.NumType_f64,
+                WasmI8 => WasmBuilder.IR.PackedType_i8)),
             Late{Dict{WasmBuilder.IR.ValueType,DataType}}("dart2wasm/lib/translator.dart:374 Translator.boxedClasses"),
             Late{Base.IdSet{DataType}}("dart2wasm/lib/translator.dart:380 Translator.boxClasses"),
             Late{IdDict{DataType,DataType}}("dart2wasm/lib/translator.dart:389 Translator.valueClasses"),
@@ -946,6 +947,12 @@ the representation here is a reference to the join's struct, each value boxed in
     # type of a field holding a wasm array of T
     cls <: WasmArray && return WasmBuilder.IR.RefType_def(array_type_for_dart_type(self, cls.parameters[1]; mutable_ = true); nullable = nullable)
     cls <: ImmutableWasmArray && return WasmBuilder.IR.RefType_def(array_type_for_dart_type(self, cls.parameters[1]; mutable_ = false); nullable = nullable)
+    # A wasm type (dart:_wasm's WasmI8, src/julia/wasm_array.jl) is never boxed: its builtin type even
+    # where unbox is false (dart's `!boxClasses.contains(cls)`); a nullable one is dart's throw
+    if cls === WasmI8
+        nullable && reject!(Internal("$at: Wasm numeric types can't be nullable"), at)
+        return self.builtin_types[][cls]
+    end
     if isprimitivetype(cls)
         # Built-in type? Its box is the primitive class itself
         local builtin = unbox ? get(self.builtin_types[], cls, nothing) : nothing
