@@ -9,6 +9,12 @@ The binary writer: the bytes serialized so far, the source mappings they carry, 
 points, dart's Object narrowed to the two kinds it holds. dart's `_traces`
 is a SplayTreeMap by position; a position is recorded only at `_index`, which only grows, so the
 traces in recording order are sorted and dart's `lastKeyBefore` is a binary search over them.
+
+The f32 and f64 scratch buffers (`_f32ByteData` :89 and `_f64ByteData` :96, each with its byte view)
+are dart's statics, one per isolate, which shares nothing with another. precedent(dart: a static
+lives in its isolate; rust: a `thread_local!` scratch buffer). Julia's differs: its threads share one
+process, so a process-global buffer would be written by two compiles at once; each serializer holds its
+own, the static's isolation kept.
 """
 @parity "wasm_builder/lib/src/serialize/serializer.dart:17 Serializer" mutable struct Serializer
     # The prefix of `_data` up to `_index` holds the data serialized so far.
@@ -16,8 +22,12 @@ traces in recording order are sorted and dart's `lastKeyBefore` is a binary sear
     _index::Int
     const _traces::Vector{Pair{Int,Union{Vector{Base.StackTraces.StackFrame},Serializer}}}
     source_map_serializer::SourceMapSerializer
+    # dart's static scratch buffers, one per serializer (the docstring)
+    const _f32_byte_data::Vector{UInt8}
+    const _f64_byte_data::Vector{UInt8}
     # dart's implicit constructor, the fields' initializers
-    Serializer() = new(zeros(UInt8, 24), 0, Pair{Int,Union{Vector{Base.StackTraces.StackFrame},Serializer}}[], SourceMapSerializer())
+    Serializer() = new(zeros(UInt8, 24), 0, Pair{Int,Union{Vector{Base.StackTraces.StackFrame},Serializer}}[], SourceMapSerializer(),
+        zeros(UInt8, 4), zeros(UInt8, 8))
 end
 
 """
@@ -25,7 +35,9 @@ The interface of everything that serializes to wasm bytes: a method of `serializ
 """
 @parity "wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize" function serialize end
 
-# dart's mutable static, set when a module with watch points serializes (module.dart:100)
+# dart's mutable static, set when a module with watch points serializes (module.dart:100). A dart
+# static lives in its isolate; Julia's threads share one process, so a compile with watch points turns
+# tracing on for any compile beside it: those record traces they never read, their bytes unchanged
 @parity "wasm_builder/lib/src/serialize/serializer.dart:18 Serializer.traceEnabled" const Serializer_trace_enabled = Ref(false)
 
 """The current offset in the serialized data."""
@@ -96,11 +108,11 @@ end
     count + 1
 end
 
-# dart's static scratch buffer and its byte view, one array here: a ByteData and the Uint8List over its
-# buffer share their storage, as one Vector{UInt8} does with itself
-@parity "wasm_builder/lib/src/serialize/serializer.dart:89 Serializer._f32ByteData" const Serializer__f32_byte_data = zeros(UInt8, 4)
+# dart's static scratch buffer and its byte view, the serializer's own (the struct's docstring), one
+# array: a ByteData and the Uint8List over its buffer share their storage, as one Vector{UInt8} does
+@parity "wasm_builder/lib/src/serialize/serializer.dart:89 Serializer._f32ByteData" Serializer__f32_byte_data(s::Serializer)::Vector{UInt8} = s._f32_byte_data
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:90 Serializer._f32Uint8List" const Serializer__f32_uint8_list = Serializer__f32_byte_data
+@parity "wasm_builder/lib/src/serialize/serializer.dart:90 Serializer._f32Uint8List" Serializer__f32_uint8_list(s::Serializer)::Vector{UInt8} = s._f32_byte_data
 
 # dart writes a double through a Float32 view (serializer.dart:92); a Julia caller states the
 # Float32 it means, so no rounding happens here. ByteData.setFloat32 little-endian: the value's bits,
@@ -108,22 +120,22 @@ end
 @parity "wasm_builder/lib/src/serialize/serializer.dart:91 Serializer.writeF32" function write_f32(s::Serializer, value::Float32)::Nothing
     local bits = reinterpret(UInt32, value)
     for i in 0:3
-        Serializer__f32_byte_data[i + 1] = (bits >> (8i)) % UInt8
+        Serializer__f32_byte_data(s)[i + 1] = (bits >> (8i)) % UInt8
     end
-    write_bytes(s, Serializer__f32_uint8_list)
+    write_bytes(s, Serializer__f32_uint8_list(s))
 end
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:96 Serializer._f64ByteData" const Serializer__f64_byte_data = zeros(UInt8, 8)
+@parity "wasm_builder/lib/src/serialize/serializer.dart:96 Serializer._f64ByteData" Serializer__f64_byte_data(s::Serializer)::Vector{UInt8} = s._f64_byte_data
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:97 Serializer._f64Uint8List" const Serializer__f64_uint8_list = Serializer__f64_byte_data
+@parity "wasm_builder/lib/src/serialize/serializer.dart:97 Serializer._f64Uint8List" Serializer__f64_uint8_list(s::Serializer)::Vector{UInt8} = s._f64_byte_data
 
 # ByteData.setFloat64 little-endian: the value's bits, low byte first
 @parity "wasm_builder/lib/src/serialize/serializer.dart:98 Serializer.writeF64" function write_f64(s::Serializer, value::Float64)::Nothing
     local bits = reinterpret(UInt64, value)
     for i in 0:7
-        Serializer__f64_byte_data[i + 1] = (bits >> (8i)) % UInt8
+        Serializer__f64_byte_data(s)[i + 1] = (bits >> (8i)) % UInt8
     end
-    write_bytes(s, Serializer__f64_uint8_list)
+    write_bytes(s, Serializer__f64_uint8_list(s))
 end
 
 @parity "wasm_builder/lib/src/serialize/serializer.dart:103 Serializer.writeName" function write_name(s::Serializer, name::String)::Nothing
