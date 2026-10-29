@@ -719,6 +719,14 @@ catch e
     return _outside((t.kind for t in r.errors)...)
 end
 
+# each compile's budget (D17): intent, a case compiles in well under a second (the core's slowest today 1.7 s,
+# an Unquarantined rejection), past a warm-up compile no case pays (a process's first compile spends ~30 s
+# compiling WasmTarget itself, the next new path ~20 s); band, past DART_COMPILE_BUDGET seconds it fails,
+# naming its case and seconds. A compile that never returns is cut by dev/check.sh's hard limit
+# (dev/corpus.sh's in the whole run), which names the case _dart_outcome wrote to WT_PROGRESS.
+const DART_COMPILE_BUDGET = 10.0
+WasmTarget.compile(x -> x + 1, (Int64,))
+
 # the landing's fixed core: the first 5 cases of each group plus every case the change adds or edits
 const _DART_CORE_ONLY = get(ENV, "WT_LANDING_CORE", "") == "1"
 const DART_CORE = Set{String}(vcat([["$(g)/$(c[1])" for c in cs[1:min(5, end)]] for (g, cs) in DART_GROUPS]...,
@@ -736,7 +744,9 @@ const DART_CORE = Set{String}(vcat([["$(g)/$(c[1])" for c in cs[1:min(5, end)]] 
                 local f, args = case[2], case[3:end]
                 key in DART_NATIVE_DUE && @test _dart_same(f(args...), native)
                 if !_DART_CORE_ONLY || key in DART_CORE
-                    local got = _dart_outcome(f, args)
+                    local got
+                    local secs = @elapsed (got = _dart_outcome(f, args))
+                    @test secs <= DART_COMPILE_BUDGET
                     if today === :compiled
                         @test got === :compiled          # a compiling case never loses ground
                     elseif today === :wt_bug
