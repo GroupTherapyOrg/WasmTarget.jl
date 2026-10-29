@@ -1531,6 +1531,12 @@ end
             local l = ls[j]
             startswith(l, "}") && break
             startswith(l, "  ") && !startswith(l, "   ") || continue
+            # dart-format breaks a field whose type is long before its name: the name alone on its line,
+            # the type ending on the line above (code_generator.dart:5208 SwitchInfo.dynamicTypeGuard)
+            local bare = match(r"^  ([A-Za-z_$][\w$]*)\s*(?:;|=(?![=>]))", l)
+            if bare !== nothing && snake(bare[1]) == string(field)
+                return endswith(rstrip(ls[j-1]), "?") ? nothing : "dart declares $(bare[1]) after $(strip(ls[j-1])), not nullable (line $j)"
+            end
             for d in eachmatch(r"([^\s(]+)\s+([A-Za-z_$][\w$]*)\s*(?:;|=(?![=>]))", l)
                 snake(d[2]) == string(field) || continue
                 return endswith(d[1], "?") ? nothing : "dart declares $(d[2]) as $(d[1]), not nullable (line $j)"
