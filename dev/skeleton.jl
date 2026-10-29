@@ -980,6 +980,17 @@ function kernel_types()::Dict{Tuple{String,String},String}
     end
     return KERNEL
 end
+# the @closed sums kernel.jl declares beside the table (`Reference = Union{MethodInstance,
+# FieldReference}`): name => its kinds, which a port may narrow to as to a Union row's members
+const KERNEL_SUMS = Dict{String,Set{String}}()
+function kernel_sums()::Dict{String,Set{String}}
+    isempty(KERNEL_SUMS) || return KERNEL_SUMS
+    for m in eachmatch(r"@closed const (\w+) = Union\{([^}]*)\}", read(joinpath(ROOT, "src", "julia", "kernel.jl"), String))
+        KERNEL_SUMS[m[1]] = Set(replace.(strip.(split(m[2], ',')), r"^Core\." => ""))
+    end
+    return KERNEL_SUMS
+end
+
 # the rows no definition's stub names (each in-scope definition stubbed, filled or not): a row is a type
 # an in-scope file names, so a row nothing names is stale
 function unused_kernel_rows(S)::Vector{String}
@@ -1751,10 +1762,14 @@ end
 # some of a Union row's members (a port that knows which: a static field's GlobalRef of Field's two),
 # or one of Julia's kinds where the row is Type
 function same_type(a::AbstractString, b::AbstractString)::Bool
+    # a member's spelling, Core's names bare (a closed sum in kernel.jl names Core.MethodInstance as
+    # MethodInstance); a name kernel.jl binds to a @closed sum is its kinds
+    local bare(x) = replace(replace(string(x), " " => ""), r"^Core\." => "")
     local members(x) = (local e = try Meta.parse(x) catch; x end;
-                        Meta.isexpr(e, :curly) && e.args[1] === :Union ? Set(replace.(string.(e.args[2:end]), " " => "")) : Set([replace(string(e), " " => "")]))
+                        Meta.isexpr(e, :curly) && e.args[1] === :Union ? Set(bare.(e.args[2:end])) :
+                        haskey(kernel_sums(), bare(e)) ? kernel_sums()[bare(e)] : Set([bare(e)]))
     # a member Julia's kinds narrow: a type as a value is one of Type's kinds (Base.iskindtype's four)
-    local kinds = Set(["DataType", "UnionAll", "Union", "Core.TypeofBottom"])
+    local kinds = Set(["DataType", "UnionAll", "Union", "TypeofBottom"])
     local wide = members(b)
     return all(x -> x in wide || x in kinds && "Type" in wide, members(a))
 end
