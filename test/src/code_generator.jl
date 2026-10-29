@@ -61,6 +61,16 @@ end
 # the rejection `f()` raises, or nothing
 rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(); end
 
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+
+# node runs the module `bytes` on each argument tuple (test/runner.jl, the third oracle): whether every
+# answer is native Julia's, === at its type; each one that differs prints, named
+function answers_native(label, bytes, f, argsets)
+    local results = WTRunner.run_cases([WTRunner.RunCase("$label$a", bytes, a, f(a...)) for a in argsets])
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    return all(r -> r.ok, results)
+end
+
 @testset "code_generator.dart: a body's code generator over the NIR" begin
     local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
     @test g isa D.SynchronousProcedureCodeGenerator && g.member === g.reference === g.enclosing_member
@@ -302,15 +312,31 @@ end
 
 @testset "code_generator.dart: the first compile, f(x::Int32) = x + Int32(1)" begin
     # WasmTarget.compile runs the whole pipeline (compile.dart's phases, translate): the module our
-    # builder accepted instruction by instruction; run by node it answers as native Julia (1 42 0
-    # -2147483648 -2147483647 for 0 41 -1 typemax typemin, the add wrapping)
+    # builder accepted instruction by instruction; run by node it answers as native Julia on 0, 41,
+    # -1, typemax and typemin, the add wrapping
     local bytes = W.compile(CodegenCases.f_add, (Int32,))
+    @test answers_native("f_add", bytes, CodegenCases.f_add, [(x,) for x in Int32[0, 41, -1, typemax(Int32), typemin(Int32)]])
     @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
     # the body: local.get 0, i32.const 1, i32.add
     @test any(i -> bytes[i:i+4] == UInt8[0x20, 0x00, 0x41, 0x01, 0x6a], 1:length(bytes)-4)
     # the entry exported under its function's name
     @test occursin("f_add", String(copy(bytes)))
-    @test CodegenCases.f_add(typemax(Int32)) == typemin(Int32)
+end
+
+# the instructions `generate` emits for the body of `f` at `argtypes`, compile_one's steps
+function generated_instructions(f, argtypes)
+    local B = W.WasmBuilder
+    local t = translator_of(f, argtypes)
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    local mb = D.main_module(t)
+    local nb = only(t.component)
+    local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
+    local fb = B.define(mb.functions[], sig, "f")
+    local b = B.body(fb)
+    D.generate(D.get_member_code_generator(t, fb, nb.ci.def), b, B.locals(fb), nothing)
+    return String[B.name(i) for i in b._instructions]
 end
 
 # the module of one function: translate()'s steps before code, the body generated, `f` exported
@@ -338,18 +364,23 @@ absint(x::Int64) = abs(x)
 bits(x::Int64) = leading_zeros(x) + trailing_zeros(x) + count_ones(x)
 notand(a::Bool, b::Bool) = !a & b
 minmax(x::Int32, y::Int32) = min(x, y) + max(x, y)
-widen32(x::Int32) = UInt64(reinterpret(UInt32, x)) + 1
+widen32(x::Int32) = Int64(reinterpret(UInt32, x)) + 1
 egal(x::Float64, y::Float64) = x === y
 end
 
 @testset "intrinsics.dart: whole functions of Julia's intrinsics compile" begin
     # each compiles to a module the builder accepted instruction by instruction (D10); run by node,
-    # each answers as native Julia on its edge inputs (the commit records the differential)
+    # each answers as native Julia on its edge inputs
     local C = IntrinsicCompileCases
-    for (f, at) in ((C.mulshift, (Int64, Int64)), (C.floorabs, (Float64,)), (C.absint, (Int64,)), (C.notand, (Bool, Bool)),
-                    (C.widen32, (Int32,)))
+    local i64s = Int64[0, 1, -1, 7, typemax(Int64), typemin(Int64)]
+    local i32s = Int32[0, 41, -1, typemax(Int32), typemin(Int32)]
+    local f64s = [0.0, -0.0, 1.5, -2.5, 1e300, -Inf, NaN]
+    for (f, at, argsets) in ((C.mulshift, (Int64, Int64), [(a, b) for a in i64s for b in i64s]), (C.floorabs, (Float64,), [(x,) for x in f64s]),
+                             (C.absint, (Int64,), [(x,) for x in i64s]), (C.notand, (Bool, Bool), [(a, b) for a in (false, true) for b in (false, true)]),
+                             (C.widen32, (Int32,), [(x,) for x in i32s]))
         local bytes = compile_one(f, at)
         @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
+        @test answers_native(string(nameof(f)), bytes, f, argsets)
     end
 end
 
@@ -413,14 +444,16 @@ end
         B.local_get(b, B.locals(fb)[1])
         D.emit_class_id_range_check(b, ranges)
         B.var"end"(b)
+        B.var"export"(mb.exports, "f", fb)
         local s = B.Serializer(); B.serialize(s, B.build(mb)); B.data(s)
     end
-    # run by node over class ids 0..45 each answers Julia's `any(r -> contains(r, id), ranges)` (the
-    # commit records the differential)
+    # run by node over class ids 0..45 each answers Julia's `any(r -> contains(r, id), ranges)`
     for ranges in ([D.Range(3, 3)], [D.Range(1, 2), D.Range(5, 9)],
                    [D.Range(0, 0), D.Range(2, 4), D.Range(7, 7), D.Range(10, 20), D.Range(30, 31)],
                    [D.Range(i, i + 1) for i in 0:4:40])
-        @test range_module(ranges)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+        local bytes = range_module(ranges)
+        @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+        @test answers_native("ranges $(length(ranges)) ", bytes, id -> Int32(any(r -> contains(r, Int64(id)), ranges)), [(Int32(id),) for id in 0:45])
     end
     # an empty search with no miss is WasmTarget's own defect
     local mb = B.ModuleBuilder("m", nothing)
@@ -489,10 +522,17 @@ end
     # loops, phis (fib's `a, b = b, a + b` a parallel move), nested branches, a merging diamond and
     # early returns from a loop: each body's machine code, sorted and stackified by LLVM's passes, is
     # lowered into a module the builder accepted at every instruction; run by node, each answers as
-    # native Julia on its edge inputs (the commit records the differential)
+    # native Julia on its edge inputs
     local C = ControlCases
-    for (f, at) in ((C.fib, (Int32,)), (C.sign3, (Float64,)), (C.mergey, (Int32,)), (C.early, (Int64, Int64)))
-        @test compile_one(f, at)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    local i32s = Int32[0, 41, -1, typemax(Int32), typemin(Int32)]
+    for (f, at, argsets) in ((C.fib, (Int32,), [(Int32(n),) for n in (0, 1, 2, 10, 46, 47)]),
+                             (C.sign3, (Float64,), [(x,) for x in [0.0, -0.0, 1.5, -2.5, 1e300, -Inf, NaN]]),
+                             (C.mergey, (Int32,), [(x,) for x in i32s]),
+                             (C.early, (Int64, Int64), [(Int64(-1), Int64(5)), (Int64(2), Int64(9)), (Int64(9), Int64(3)), (Int64(0), Int64(0))]),
+                             (C.sumto, (Int64,), [(Int64(n),) for n in (0, 1, 10, 1000)]))
+        local bytes = compile_one(f, at)
+        @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+        @test answers_native(string(nameof(f)), bytes, f, argsets)
     end
     # the loop's module holds a loop (0x03) and a conditional branch out of it
     local bytes = compile_one(C.sumto, (Int64,))
@@ -550,16 +590,36 @@ widen8(x::Int8) = Int64(x) + Int64(1)
 lshr8(x::Int8) = Core.Intrinsics.lshr_int(x, 0x03)
 end
 
+# each narrow case behind Int32 arguments and answers, the types the runner marshals: the 8-bit
+# operations run inside, the conversions at the edges
+module NarrowWires
+import ..NarrowCases as N
+add8(x::Int32, y::Int32) = Int32(N.add8(x % Int8, y % Int8))
+lt8u(x::Int32, y::Int32) = N.lt8u(x % UInt8, y % UInt8)
+neg8(x::Int32) = Int32(N.neg8(x % Int8))
+widen8(x::Int32) = N.widen8(x % Int8)
+lshr8(x::Int32) = Int32(N.lshr8(x % Int8))
+end
+
 @testset "intrinsics.dart: 8- and 16-bit integers, in their type's form" begin
-    # each compiles, our builder accepting every instruction; run by node over every pair of edge
-    # values (-128, -1, 0, 1, 100, 127 and 0, 1, 100, 200, 255), each answers as native Julia (the
-    # commit records the differential)
+    # each compiles, our builder accepting every instruction; behind Int32 arguments, run by node over
+    # every pair of edge values (-128, -1, 0, 1, 100, 127 and 0, 1, 100, 200, 255), each answers as
+    # native Julia
     local C = NarrowCases
     for (f, at) in ((C.add8, (Int8, Int8)), (C.lt8u, (UInt8, UInt8)), (C.neg8, (Int8,)), (C.widen8, (Int8,)), (C.lshr8, (Int8,)))
         @test compile_one(f, at)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     end
-    # the add of two Int8s puts its result back sign-extended (i32.extend8_s, 0xc0)
-    @test 0xc0 in compile_one(C.add8, (Int8, Int8))
+    local e8 = Int32[-128, -1, 0, 1, 100, 127]
+    local u8 = Int32[0, 1, 100, 200, 255]
+    local Wr = NarrowWires
+    for (f, argsets) in ((Wr.add8, [(a, b) for a in e8 for b in e8]), (Wr.lt8u, [(a, b) for a in u8 for b in u8]),
+                         (Wr.neg8, [(x,) for x in e8]), (Wr.widen8, [(x,) for x in e8]), (Wr.lshr8, [(x,) for x in e8]))
+        @test answers_native(string(nameof(f)), compile_one(f, map(typeof, first(argsets))), f, argsets)
+    end
+    # the add of two Int8s puts its result back sign-extended, i32.extend8_s right after the i32.add
+    local ins = generated_instructions(C.add8, (Int8, Int8))
+    local k = findfirst(==("i32.add"), ins)
+    @test k !== nothing && ins[k + 1] == "i32.extend8_s"
 end
 
 module Float32Cases
@@ -582,22 +642,6 @@ module TypeTestCases
 maybe(r::Base.RefValue{Union{Nothing,Int64}}) = r[] isa Int64
 as_int(r::Base.RefValue{Union{Nothing,Int64}}) = r[]::Int64
 dyn(r::Base.RefValue{Union{Nothing,Int64}}, T::DataType) = r[] isa T
-end
-
-# the instructions `generate` emits for the body of `f` at `argtypes`, compile_one's steps
-function generated_instructions(f, argtypes)
-    local B = W.WasmBuilder
-    local t = translator_of(f, argtypes)
-    D._init_modules(t, nothing)
-    collect(D.ClassInfoCollector(t))
-    t.constants[] = D.Constants(t)
-    local mb = D.main_module(t)
-    local nb = only(t.component)
-    local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
-    local fb = B.define(mb.functions[], sig, "f")
-    local b = B.body(fb)
-    D.generate(D.get_member_code_generator(t, fb, nb.ci.def), b, B.locals(fb), nothing)
-    return String[B.name(i) for i in b._instructions]
 end
 
 @testset "code_generator.dart: isa and typeassert through types.dart's tests" begin
