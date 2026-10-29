@@ -166,6 +166,11 @@ jobs:
         if: matrix.lane == 'ratchet' || matrix.lane == 'suite'
         run: bash dev/fetch_llvm.sh
 
+      # Julia's own C and C++ sources the src/julia ports cite, at the julia pin (dev/LEDGER.md D45)
+      - name: Pinned Julia sources
+        if: matrix.lane == 'ratchet' || matrix.lane == 'suite'
+        run: bash dev/fetch_julia.sh
+
       - name: dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}
         run: |
           # the job's stdout can be a non-blocking pipe, where one large write fails part-way

@@ -498,6 +498,24 @@ DART_FILES, `include` takes any path, so the second oracle's file map is a table
 )
 
 """
+    JULIA_FILES
+
+The Julia pin table (dev/LEDGER.md D45: nothing bespoke, a pinned near 1:1 match ported): each unit of
+Julia's own C and C++ sources at `JULIA_PIN`, the commit of the julia WasmTarget runs, that a
+src/julia definition ports, by its path under the julia repository prefixed `julia/` and without its
+extension, the unit its `.h`, `.c` and `.cpp` make together (`julia/src/genericmemory`). An anchor
+on one, `julia/src/genericmemory.c:<line> <X>`, resolves at that checkout under L213's rule
+(dev/fetch_julia.sh makes it at ~/.cache/wasmtarget/julia).
+
+precedent(llvm: LLVM_FILES, the second oracle's pin table). Julia's differs: its runtime is C, so the
+ports of what Julia forces are anchored at the C that defines it, as the stackifier's are at LLVM's.
+"""
+@quarantine "Julia's runtime is its own C and C++ sources, pinned at the julia WasmTarget runs, which src/julia ports" Core.String const JULIA_FILES::Tuple{Vararg{String}} = (
+    "julia/src/julia", "julia/src/genericmemory", "julia/src/builtins", "julia/src/cgutils",
+    "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv",
+)
+
+"""
     RUNTIME_FILES
 
 The runtime pin table: each file of dart's runtime library at the pin that WasmTarget's runtime
@@ -961,6 +979,32 @@ dev/LEDGER.md D42). An LLVM anchor's file is its path under that checkout.
     return _head_commit(dir) == LLVM_PIN ? dir : nothing
 end
 
+# A Julia anchor names a line of Julia's own sources at JULIA_PIN, ~/.cache/wasmtarget/julia
+# (dev/fetch_julia.sh makes it), its unit one of JULIA_FILES and its symbol a C function, struct,
+# typedef or macro, read as an LLVM anchor is: @parity refuses one that does not resolve where the
+# checkout exists, the load checks every one, and the ratchet's L213 requires the checkout.
+
+"""
+    JULIA_PIN
+
+The JuliaLang/julia commit every Julia anchor cites: the julia WasmTarget runs, 1.12.7's tag
+(Base.GIT_VERSION_INFO.commit). A Julia anchor's file is its path under that checkout.
+"""
+@quarantine "the julia WasmTarget runs is a commit of JuliaLang/julia, which Julia records in Base.GIT_VERSION_INFO" Core.String const JULIA_PIN::String = "6d172b025e4befc4d274d9fbc9339917a8a86b65"
+
+# the checkout of Julia's sources at JULIA_PIN, or nothing when there is none at the one path
+@quarantine "the julia checkout is the developer's, at one path under the home directory" Base.Filesystem.homedir function _pin_julia()::Union{String,Nothing}
+    local dir = joinpath(homedir(), ".cache", "wasmtarget", "julia")
+    return _head_commit(dir) == JULIA_PIN ? dir : nothing
+end
+
+# the checkout a C-family pin's anchors resolve at (LLVM's or Julia's), its pin table, and how to make it
+@quarantine "the C-family pins, LLVM's and Julia's, each a checkout at its commit and a pin table" Base.Symbol _c_pin_checkout(pin::Symbol)::Union{String,Nothing} = pin === :julia ? _pin_julia() : _pin_llvm()
+@quarantine "the C-family pins, LLVM's and Julia's, each a checkout at its commit and a pin table" Base.Symbol _c_pin_units(pin::Symbol)::Tuple{Vararg{String}} = pin === :julia ? JULIA_FILES : LLVM_FILES
+@quarantine "the C-family pins, LLVM's and Julia's, each a checkout at its commit and a pin table" Base.Symbol _c_pin_missing(pin::Symbol)::String = pin === :julia ?
+    "no checkout of JuliaLang/julia at $JULIA_PIN at ~/.cache/wasmtarget/julia: bash dev/fetch_julia.sh" :
+    "no checkout of llvm-project at $LLVM_PIN at ~/.cache/wasmtarget/llvm-project: bash dev/fetch_llvm.sh"
+
 # a C++ class or struct declared at column 0, a template's parameters before it, and its name
 @quarantine "C++'s class keys, read from LLVM's clang-formatted source" Base.var"@r_str" const CPP_DECL_RX = r"^(?:template\s*<[^>]*>\s*)?(?:class|struct)\s+([A-Za-z_]\w*)"
 
@@ -994,6 +1038,13 @@ end
         col == 0 || return "line $ln is at column $col, not a top-level declaration's 0"
         local d = match(CPP_DECL_RX, s)
         d !== nothing && return d[1] == x ? nothing : "line $ln declares $(d[1]), not $x"
+        # C's forms Julia's sources use: a struct's typedef closing its body (`} jl_genericmemory_t;`) or
+        # naming its tag (`typedef struct _jl_value_t jl_value_t;`), a macro, and a builtin's JL_CALLABLE
+        local c = match(r"^(?:\}\s*([A-Za-z_]\w*)\s*;|typedef\s+struct\s+\w+\s+\*?([A-Za-z_]\w*)\s*;|#\s*define\s+([A-Za-z_]\w*)|JL_CALLABLE\(([A-Za-z_]\w*)\))", s)
+        if c !== nothing
+            local n = something(c[1], c[2], c[3], c[4])
+            return n == x ? nothing : "line $ln declares $n, not $x"
+        end
         return occursin(Regex("(?<![\\w:~.>])\\Q" * x * "\\E\\s*\\("), s) ? nothing : "line $ln does not declare $x"
     end
     local x, m = parts
@@ -1009,15 +1060,16 @@ end
 
 # an anchor of either pin: a dart file under pkg/ (1), or an LLVM unit (2) and its extension (3); its
 # line (4); its symbol (5), dart's X or X.m, or C++'s X or X::m
-@quarantine "an anchor is a string, which Julia reads with a regex where dart's analyzer and clang have a name" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|(llvm/[\w/]+)\.(cpp|h)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)$"
+@quarantine "an anchor is a string, which Julia reads with a regex where dart's analyzer and clang have a name" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia)/[\w/]+)\.(cpp|c|h)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)$"
 
 """
     Anchor
 
-An anchor's parts (`parse_anchor`), the one reading every check uses: `pin`, `:dart` or `:llvm`;
+An anchor's parts (`parse_anchor`), the one reading every check uses: `pin`, `:dart`, `:llvm` or `:julia`;
 `unit`, its key in the pin table (a dart file under the sdk's pkg/, `DART_FILES`, or of its runtime
 library, sdk/lib/_internal/wasm/; an LLVM unit, its
-path without the extension, `LLVM_FILES`); `file`, its path under the pinned checkout; `line`;
+path without the extension, `LLVM_FILES`; a Julia unit, `julia/` and its path without the extension,
+`JULIA_FILES`); `file`, its path under the pinned checkout; `line`;
 `symbol`, as the naming rule reads it (dart's X or X.m; an LLVM member X::m read as X.m); and
 `written`, the symbol as the anchor writes it.
 """
@@ -1046,6 +1098,12 @@ The parts of `s`, an anchor of either pin; nothing when it reads as neither
         return Anchor(:dart, unit, startswith(unit, "sdk/") ? unit : joinpath("pkg", unit), parse(Int, m[4]), sym, sym)
     end
     occursin('.', sym) && return nothing
+    # Julia's units lie under its checkout's root, the unit less its `julia/` prefix; LLVM's (C++ alone)
+    # under llvm-project's
+    if startswith(m[2], "julia/")
+        return Anchor(:julia, String(m[2]), m[2][length("julia/")+1:end] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
+    end
+    m[3] == "c" && return nothing
     return Anchor(:llvm, String(m[2]), m[2] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
 end
 
@@ -1192,9 +1250,9 @@ end
 # anchor), or nothing when it does
 @quarantine "the pinned dart file is read where the anchor is checked" Base.readlines function _anchor_fault(sdk::String, anchor::String)::Union{String,Nothing}
     local a = parse_anchor(anchor)
-    if a !== nothing && a.pin === :llvm
+    if a !== nothing && a.pin in (:llvm, :julia)
         local file = joinpath(sdk, a.file)
-        isfile(file) || return "the llvm pin has no $(a.file)"
+        isfile(file) || return "the $(a.pin) pin has no $(a.file)"
         return _cpp_declares(get!(() -> readlines(file), _PIN_LINES, file), a.line, a.written)
     end
     a === nothing && return "$(repr(anchor)) is no anchor"
@@ -1220,10 +1278,10 @@ the load checks every anchor, both where the pinned checkout exists.
     local out = String[]
     for e in REGISTRY
         e isa ParityEntry && _within(e.mod, mod) || continue
-        local isllvm = something(parse_anchor(e.anchor), Anchor(:dart, "", "", 0, "", "")).pin === :llvm
-        local f = !isllvm ? _anchor_fault(sdk, e.anchor) :
-            llvm === nothing ? "no checkout of llvm-project at $LLVM_PIN at ~/.cache/wasmtarget/llvm-project: bash dev/fetch_llvm.sh" :
-            _anchor_fault(llvm, e.anchor)
+        local pin = something(parse_anchor(e.anchor), Anchor(:dart, "", "", 0, "", "")).pin
+        local cdir = pin === :llvm ? llvm : pin === :julia ? _pin_julia() : nothing
+        local f = pin === :dart ? _anchor_fault(sdk, e.anchor) :
+            cdir === nothing ? _c_pin_missing(pin) : _anchor_fault(cdir, e.anchor)
         f === nothing || push!(out, "$(basename(string(e.file))):$(e.first) $(e.anchor): $f")
     end
     empty!(_PIN_LINES)
@@ -1284,9 +1342,9 @@ end
     anchor isa String || refuse("the anchor is not a string literal")
     local a = parse_anchor(anchor)
     a === nothing &&
-        refuse("the anchor $(repr(anchor)) reads neither \"<file>.dart:<line> <Symbol>\" nor \"llvm/<unit>.<cpp|h>:<line> <X or X::m>\"")
+        refuse("the anchor $(repr(anchor)) reads neither \"<file>.dart:<line> <Symbol>\" nor \"llvm/<unit>.<cpp|h>:<line> <X or X::m>\" nor \"julia/<unit>.<c|cpp|h>:<line> <X>\"")
     a.pin === :dart ? (a.unit in DART_FILES || a.unit in RUNTIME_FILES || refuse("the anchor's file $(a.unit) is no file of the pin tables DART_FILES and RUNTIME_FILES")) :
-                      (a.unit in LLVM_FILES || refuse("the anchor's unit $(a.unit) is no unit of the LLVM pin table LLVM_FILES"))
+                      (a.unit in _c_pin_units(a.pin) || refuse("the anchor's unit $(a.unit) is no unit of the $(a.pin === :julia ? "Julia pin table JULIA_FILES" : "LLVM pin table LLVM_FILES")"))
     local file = string(something(source.file, :none))
     local own = _within(mod, @__MODULE__)
     _inside(file, joinpath(SRC, "julia")) && refuse("a definition in src/julia carries @quarantine, the Julia necessity that forces it")
@@ -1316,10 +1374,10 @@ end
     # WasmTarget's own anchors resolve at their pin where its checkout exists (L213): an LLVM anchor at
     # the llvm pin; a dart anchor at dart's, a dart class's mirror in its form, a sealed class a
     # @closed sum, any other class a struct or abstract type
-    if a.pin === :llvm
-        local llvm = own ? _pin_llvm() : nothing
-        local lfault = llvm === nothing ? nothing : _anchor_fault(llvm, anchor)
-        lfault === nothing || refuse("the anchor does not resolve at the llvm pin: $lfault")
+    if a.pin in (:llvm, :julia)
+        local cdir = own ? _c_pin_checkout(a.pin) : nothing
+        local lfault = cdir === nothing ? nothing : _anchor_fault(cdir, anchor)
+        lfault === nothing || refuse("the anchor does not resolve at the $(a.pin) pin: $lfault")
     else
         local sdk = own ? _pin_sdk() : nothing
         local fault = sdk === nothing ? nothing : _anchor_fault(sdk, anchor)
@@ -1807,8 +1865,9 @@ Any or nothing by its declared type alone, so the load reads each field type and
                 local f = fieldname(T, i)::Symbol
                 local F = fieldtype(T, i)
                 _mentions_any(F) && push!(out, "$n.$f holds Any ($F; $(e.anchor))")
-                local isllvm = something(parse_anchor(e.anchor)).pin === :llvm
-                local llvm = isllvm ? _pin_llvm() : nothing
+                local cpin = something(parse_anchor(e.anchor)).pin
+                local isllvm = cpin in (:llvm, :julia)
+                local llvm = isllvm ? _c_pin_checkout(cpin) : nothing
                 if F isa Union && Nothing <: F && (isllvm ? llvm !== nothing : sdk !== nothing)
                     local why = isllvm ? _cpp_nullable(something(llvm), e.anchor, f) : _dart_nullable(sdk, e.anchor, f)
                     why === nothing || push!(out, "$n.$f may hold nothing, but $why ($(e.anchor))")

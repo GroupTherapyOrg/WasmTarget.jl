@@ -33,6 +33,16 @@ MachineFunction's blocks and MachineDominatorTree. The formal statement the mode
 Norman Ramsey, "Beyond Relooper: recursive translation of unstructured control flow to structured
 control flow", ICFP 2022 (GHC's wasm backend, `GHC.Wasm.ControlFlow.FromCmm`).
 
+
+## The third pin: Julia's own C and C++ sources
+
+What Julia forces and dart lacks (src/julia: its representations, throwers and runtime helpers) is
+ported too, never built bespoke (dev/LEDGER.md D45): from Julia's own sources at the commit of the
+julia WasmTarget runs, JuliaLang/julia **`6d172b025e4befc4d274d9fbc9339917a8a86b65`** (v1.12.7),
+the units `JULIA_FILES` names (`src/julia.h`, `genericmemory.c`, `builtins.c`, `cgutils.cpp`,
+`codegen.cpp`, `rtutils.c`, `jl_uv.c`). `dev/fetch_julia.sh` makes the sparse checkout at
+`~/.cache/wasmtarget/julia`; an anchor `julia/src/<unit>.<c|cpp|h>:<line> <X>` resolves there under
+L213's rule.
 ## The optimizer: wasm-opt, dart's opt phase
 
 dart2wasm's opt phase (`compile.dart:711`, its flags `:159` and `:185` verbatim) runs Binaryen's

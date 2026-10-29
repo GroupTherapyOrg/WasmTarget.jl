@@ -124,6 +124,11 @@ jobs:
         shell: bash
         run: bash dev/fetch_llvm.sh
 
+      # Julia's own C and C++ sources the src/julia ports cite, at the julia pin (dev/LEDGER.md D45).
+      - name: Pinned Julia sources
+        shell: bash
+        run: bash dev/fetch_julia.sh
+
       # The inner-loop lanes, on both Julia versions: the differential smoke
       # corpus (the 1.13 reduce miscompile lived only here — Pkg.test never
       # saw it), the structural ratchet, and — on 1.12, whose typed IR the
