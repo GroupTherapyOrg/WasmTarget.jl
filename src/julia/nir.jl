@@ -425,9 +425,27 @@ end
 @quarantine "Julia's indexing reads a NirWorld's bodies by position" Base.getindex Base.getindex(w::NirWorld, i::Int)::NirBody = w.bodies[i]
 
 """
+    nir_intrinsified(mi) -> Bool
+
+Whether `mi` is a member the code generator's intrinsifier lowers at its call (src/intrinsics.jl,
+read from the intrinsifier's own decision, generateStaticIntrinsic's): dart's `external` member,
+whose call the intrinsifier meets and which has no body of its own. Julia's native body of one (a
+String's data operations read and write its bytes through pointers, src/julia/wasm_array.jl) is
+Julia's evaluation of it, not the program's, so the closed world's NIR never collects it; a call the
+intrinsifier then declines finds no body and rejects, located (nir_body_of).
+
+precedent(dart: an external member, which TFA records at its call and compiles no body for; LLVM: an
+intrinsic declaration, a call with no definition). Julia's differs: every callee Julia infers has a
+body, so the one the intrinsifier lowers is left out here.
+"""
+@quarantine "an intrinsified member has no body of its own, as dart's external member: its call is recorded, its body never collected" Core.MethodInstance nir_intrinsified(mi::Core.MethodInstance)::Bool =
+    Dart2Wasm.generate_static_intrinsic(Val(:string_data_op), mi) !== nothing
+
+"""
     build_nir(world::ClosedWorld, at::String) -> NirWorld
 
-Every function of the closed world Julia's trim verifier accepted, in NIR, in Julia's order: each
+Every function of the closed world Julia's trim verifier accepted, in NIR, in Julia's order, but a
+member the intrinsifier lowers at its call, whose body is never collected (nir_intrinsified): each
 statement its kind of `NirStmt`, each operand of `NirValue`, each type Julia's. A form outside the
 census rejects with `Unquarantined`, located at the compile `at` names.
 
@@ -453,6 +471,9 @@ formal(dev/formal/NirHandoff.tla): a record no body, one body per CodeInstance, 
             continue
         end
         seen[ci] = src
+        # an intrinsified member is dart's external member: its call stays in its caller's body, its own
+        # body is never collected (nir_intrinsified)
+        nir_intrinsified(ci.def) && ci.def !== world.entry && continue
         local stmts, cfg, handlers = nir_code(src.code, src.ssaflags, at)
         push!(bodies, NirBody(ci, stmts, _nir_types(ci, src, at), cfg, handlers))
     end
@@ -638,6 +659,8 @@ The body in `world` (the closed world's NIR) Julia inferred for `mi`: dart's mem
     for nb in world
         nb.ci.def === mi && return nb
     end
+    nir_intrinsified(mi) &&
+        reject!(Internal("src/julia/nir.jl nir_body_of: $mi, a member the intrinsifier lowers at its call, reached by a call it did not lower (its body is never collected, nir_intrinsified)"), "$mi")
     reject!(Internal("src/julia/nir.jl: the closed world holds no body for $mi"), "$mi")
 end
 

@@ -7,6 +7,7 @@
 (* and every build order explored. Claims: CcallablesJudged, QueuedReached,   *)
 (* OneBodyPerCI, Complete, RepeatAsserted, Aligned, RejectsOnlyGaps,          *)
 (* Terminates. Broken: MCNirHandoff{AbstractRecord,QueueAll,NoDedup,          *)
-(* UnreadRepeat,SkipOdd,RecordAsBody}Broken.cfg, each its header's claim.     *)
+(* UnreadRepeat,SkipOdd,RecordAsBody,KeepIntrinsic}Broken.cfg, each its      *)
+(* header's claim.                                                          *)
 EXTENDS NirHandoff
 =============================================================================

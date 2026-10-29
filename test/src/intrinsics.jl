@@ -172,20 +172,38 @@ end
 end
 
 module StringDataCases
-using WasmTarget: wasm_string_length, wasm_string_alloc
-# a String's length and a fresh String's (src/julia/wasm_array.jl), and === on two Strings, by `k`
-strops(k::Int64, b::Bool) = k == 0 ? wasm_string_length(b ? "héllo" : "日本") :
-                            k == 1 ? Int64((b ? "abc" : "abd") === "abc") :
-                            k == 2 ? Int64((b ? "abc" : "abcd") === "abc") : wasm_string_length(wasm_string_alloc(b ? 7 : 0))
+using WasmTarget: wasm_string_length, wasm_string_alloc, wasm_string_codeunit, wasm_string_copy!
+# a String's length and a fresh String's (src/julia/wasm_array.jl), === on two Strings, a code unit,
+# and a code unit of two Strings copied into a fresh one, by `k`
+function strops(k::Int64, b::Bool)
+    k == 0 && return wasm_string_length(b ? "héllo" : "日本")
+    k == 1 && return Int64((b ? "abc" : "abd") === "abc")
+    k == 2 && return Int64((b ? "abc" : "abcd") === "abc")
+    k == 3 && return wasm_string_length(wasm_string_alloc(b ? 7 : 0))
+    k == 4 && return Int64(wasm_string_codeunit("héllo", b ? 2 : 0))
+    local x = b ? "hé" : "x"
+    local y = "llo"
+    local s = wasm_string_alloc(wasm_string_length(x) + wasm_string_length(y))
+    wasm_string_copy!(s, 0, x, 0, wasm_string_length(x))
+    wasm_string_copy!(s, wasm_string_length(x), y, 0, wasm_string_length(y))
+    return Int64(wasm_string_codeunit(s, 3))
+end
 end
 
 @testset "intrinsics.dart: a String's data operations and Julia's egal on two Strings, against native" begin
     # wasm_string_length is `struct.get _data; array.len`, wasm_string_alloc a String struct over a
     # fresh array (WasmArrayRef.length, the WasmArray constructor); === compares lengths, then bytes,
     # as jl_egal does: non-ASCII text's bytes, equal and unequal contents of equal and unequal lengths
-    local args = [(Int64(k), b) for k in 0:3 for b in (true, false)]
+    local args = [(Int64(k), b) for k in 0:5 for b in (true, false)]
     local bytes = WI.compile(StringDataCases.strops, (Int64, Bool))
     for r in WTRunner.run_cases([WTRunner.RunCase("strops$a", bytes, a, StringDataCases.strops(a...)) for a in args])
         @test r.ok || (@info r.label r.why; false)
-    end
+    end    # each data operation is dart's external member: the closed world records its call and never
+    # collects its body (Julia's native evaluation through pointers); a call the intrinsifier declines
+    # (here, the body asked for directly) finds none and rejects, located
+    local t = intr_translator_of(StringDataCases.strops, (Int64, Bool))
+    local cu = Core.Compiler.specialize_method(only(methods(WI.wasm_string_codeunit)), Tuple{typeof(WI.wasm_string_codeunit),String,Int}, Core.svec())
+    @test WI.nir_intrinsified(cu) && !any(nb -> nb.ci.def === cu, t.component)
+    local r = intr_rejection(() -> WI.nir_body_of(t.component, cu))
+    @test r.rejection isa WI.Internal && occursin("a call it did not lower", r.rejection.site)
 end

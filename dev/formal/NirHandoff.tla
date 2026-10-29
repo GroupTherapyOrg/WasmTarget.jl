@@ -14,7 +14,9 @@
 (*     a second time) asserted equal to its first listing's code, else an    *)
 (*     Internal rejection; each statement its NirStmt at its own position    *)
 (*     (nir_code's comprehension over code), a form outside the census an    *)
-(*     Unquarantined rejection (_nir_stmt's last line).                      *)
+(*     Unquarantined rejection (_nir_stmt's last line); an intrinsified      *)
+(*     member's body (nir_intrinsified: a member the intrinsifier lowers at  *)
+(*     its call, dart's external member) skipped, never collected.           *)
 (* dart2wasm reads a Kernel component its front end hands it whole           *)
 (* (translator.dart's Translator(component, ...)); a Julia program's        *)
 (* component is the closed world Julia's own inference answers (D3), so the *)
@@ -50,9 +52,11 @@
 (*                     reaches (an executable's queue, not a library's)      *)
 (*   OneBodyPerCI      no CodeInstance has two bodies                        *)
 (*   Complete          a built NIR holds a body for every reached            *)
-(*                     specialization and for no other                       *)
+(*                     specialization but an intrinsified member, and for    *)
+(*                     no other                                              *)
 (*   RepeatAsserted    a built NIR's every listing of a CodeInstance agrees  *)
-(*                     with the code its body was built from                 *)
+(*                     with the code its body was built from (an             *)
+(*                     intrinsified member's, never read, aside)             *)
 (*   Aligned           a body's i-th NIR statement reads its code's i-th     *)
 (*   RejectsOnlyGaps   a rejection names a real gap: Internal only for a     *)
 (*                     differing repeat, Unquarantined only for an odd form  *)
@@ -61,7 +65,8 @@
 (* queue: QueuedReached), NoDedup (OneBodyPerCI), UnreadRepeat (a repeat     *)
 (* dropped unread: RepeatAsserted), SkipOdd (a form outside the census       *)
 (* dropped: Aligned), RecordAsBody (a record read as a pair's half: a sound  *)
-(* world rejects, RejectsOnlyGaps).                                          *)
+(* world rejects, RejectsOnlyGaps), KeepIntrinsic (an intrinsified member's *)
+(* body collected: Complete).                                                *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -71,17 +76,21 @@ CONSTANTS
     NoDedup,        \* Broken: a repeated CodeInstance builds a second body
     UnreadRepeat,   \* Broken: a repeated CodeInstance skipped without comparing its code
     SkipOdd,        \* Broken: a statement form outside the census dropped from the body
-    RecordAsBody    \* Broken: a queued record left among the pairs
+    RecordAsBody,   \* Broken: a queued record left among the pairs
+    KeepIntrinsic   \* Broken: an intrinsified member's body collected
 
 \* the universe: E the entry; A and B ccallables it reaches; C a plain callee; D a ccallable
-\* only Aany reaches, the specialization a record of A would infer were its signature abstract
-Specs    == {"E", "A", "B", "C", "Aany", "D"}
+\* only Aany reaches, the specialization a record of A would infer were its signature abstract; X a
+\* member the intrinsifier lowers at C's call (a String's data operation)
+Specs    == {"E", "A", "B", "C", "Aany", "D", "X"}
 Entry    == "E"
 Calls(s) == CASE s = "E"    -> {"A", "C"}
               [] s = "A"    -> {"B"}
               [] s = "Aany" -> {"D"}
+              [] s = "C"    -> {"X"}
               [] OTHER      -> {}
 CcSpecs  == {"A", "B", "D"}
+Intrinsified == {"X"}
 RecordSpec(s) == IF AbstractRecord /\ s = "A" THEN "Aany" ELSE s
 
 \* the forms nir_code reads (the census) and one outside it
@@ -90,9 +99,10 @@ Odd    == "weird"
 BaseCode(s) == CASE s = "E"    -> <<"invoke", "invoke", "return">>
                  [] s = "A"    -> <<"invoke", "return">>
                  [] s = "B"    -> <<"call", "return">>
-                 [] s = "C"    -> <<"new", "return">>
+                 [] s = "C"    -> <<"new", "invoke", "return">>
                  [] s = "Aany" -> <<"invoke", "return">>
                  [] s = "D"    -> <<"return">>
+                 [] s = "X"    -> <<"call", "return">>
 
 RepeatCand == CcSpecs     \* Julia lists a queued ccallable's CodeInstance again
 OddCand    == {"C"}
@@ -170,7 +180,10 @@ BuildItem == \E x \in todo :
        THEN Reject("Internal")     \* only RecordAsBody leaves one: the pairs misalign
        ELSE LET s == x.spec
                 c == CodeOf(s, x.copy)
-            IN IF seen[s] = None \/ NoDedup
+            IN IF s \in Intrinsified /\ ~KeepIntrinsic
+               THEN /\ todo' = todo \ {x}
+                    /\ UNCHANGED <<repeat, differ, odd, phase, rounds, queue, listing, seen, nir, count, verdict>>
+               ELSE IF seen[s] = None \/ NoDedup
                THEN IF ~SkipOdd /\ \E i \in 1..Len(c) : ~InCensus(c[i])
                     THEN Reject("Unquarantined")
                     ELSE /\ seen' = [seen EXCEPT ![s] = c]
@@ -200,9 +213,9 @@ Judged == phase \in {"build", "done"}
 CcallablesJudged == Judged => \A s \in Reach(queue) \cap CcSpecs : Rec(s) \in queue
 QueuedReached    == \A q \in queue : q.kind = "rec" => q.spec \in Reach(EntryQueue)
 OneBodyPerCI     == \A s \in Specs : count[s] <= 1
-Complete         == phase = "done" => {s \in Specs : nir[s] # None} = Reach(queue)
+Complete         == phase = "done" => {s \in Specs : nir[s] # None} = Reach(queue) \ Intrinsified
 RepeatAsserted   == phase = "done" =>
-                        \A x \in listing : x.kind = "ci" => CodeOf(x.spec, x.copy) = seen[x.spec]
+                        \A x \in listing : x.kind = "ci" /\ x.spec \notin Intrinsified => CodeOf(x.spec, x.copy) = seen[x.spec]
 Aligned          == \A s \in Specs : nir[s] # None =>
                         /\ Len(nir[s]) = Len(seen[s])
                         /\ \A i \in 1..Len(nir[s]) : nir[s][i] = seen[s][i]
