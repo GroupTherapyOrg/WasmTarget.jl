@@ -1022,7 +1022,7 @@ end
     local operand_type = dart_type_of(self, operand)
     local tested_static = dart_type_of(self, node.args[3])
     tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type ||
-        reject!(Unquarantined("src/julia: a type test against a type computed at run time ($tested_static)"), "$(self.enclosing_member)")
+        reject!(Unported("dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter"), "$(self.enclosing_member): a type test against a type computed at run time ($tested_static), which makeType makes through it")
     local tested = tested_static.parameters[1]
     local boxed_operand_type = Nothing <: operand_type ? self.translator.top_type[] : self.translator.top_type_non_nullable[]
     translate_expression(self, operand, boxed_operand_type)
@@ -1045,7 +1045,7 @@ end
     local operand_type = dart_type_of(self, operand)
     local tested_static = dart_type_of(self, node.args[3])
     tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type ||
-        reject!(Unquarantined("src/julia: a type test against a type computed at run time ($tested_static)"), "$(self.enclosing_member)")
+        reject!(Unported("dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter"), "$(self.enclosing_member): a type test against a type computed at run time ($tested_static), which makeType makes through it")
     local tested = tested_static.parameters[1]
     local boxed_operand_type = Nothing <: operand_type ? self.translator.top_type[] : self.translator.top_type_non_nullable[]
     translate_expression(self, operand, boxed_operand_type)

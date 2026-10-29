@@ -543,30 +543,42 @@ end
 end
 
 module TypeTestCases
-# the entry's signature is concrete (Julia compiles no specialization for a Union signature); the
+# each entry's signature is concrete (Julia compiles no specialization for a Union signature); the
 # operand under test is the field read, whose inferred type is the Union
 maybe(r::Base.RefValue{Union{Nothing,Int64}}) = r[] isa Int64
+as_int(r::Base.RefValue{Union{Nothing,Int64}}) = r[]::Int64
+dyn(r::Base.RefValue{Union{Nothing,Int64}}, T::DataType) = r[] isa T
 end
 
-@testset "code_generator.dart: isa and typeassert through types.dart's tests" begin
-    local t = translator_of(TypeTestCases.maybe, (Base.RefValue{Union{Nothing,Int64}},))
+# the instructions `generate` emits for the body of `f` at `argtypes`, compile_one's steps
+function generated_instructions(f, argtypes)
+    local B = W.WasmBuilder
+    local t = translator_of(f, argtypes)
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)
-    local body = only(t.component)
-    local g = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
     local mb = D.main_module(t)
-    g.b[] = W.WasmBuilder.body(W.WasmBuilder.define(mb.functions[], W.WasmBuilder.define_function(mb.types[], IR.ValueType[], IR.ValueType[]), "probe"))
-    local x = W.NirSSA(findfirst(==(Union{Nothing,Int64}), body.types))
-    local isa_call = W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.isa)), x, W.NirConst(Core.Const(Int64))])
-    local ta_call = W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.typeassert)), x, W.NirConst(Core.Const(Int64))])
-    # routed to visitIsExpression and visitAsExpression; each reaches its operand's local (the field
-    # read is never visited here), a located rejection, past the routing and the tested type
-    for c in (isa_call, ta_call)
-        local e = rejection(() -> D.translate_expression(g, c, IR.NumType_i32))
-        @test e.rejection isa W.Internal && occursin("undefined variable", e.rejection.site)
-    end
-    # a type computed at run time is no type test's constant
-    local dyn = W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.isa)), x, x])
-    @test rejection(() -> D.visit_is_expression(g, dyn, IR.NumType_i32)).rejection isa W.Unquarantined
+    local nb = only(t.component)
+    local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
+    local fb = B.define(mb.functions[], sig, "f")
+    local b = B.body(fb)
+    D.generate(D.get_member_code_generator(t, fb, nb.ci.def), b, B.locals(fb), nothing)
+    return String[B.name(i) for i in b._instructions]
+end
+
+@testset "code_generator.dart: isa and typeassert through types.dart's tests" begin
+    local R = Base.RefValue{Union{Nothing,Int64}}
+    # Julia's isa of the field read, visitIsExpression over the body's own statement: the Union of
+    # Nothing and Int64 is a nullable reference, so the test is emitIsTest's null check, negated
+    @test generated_instructions(TypeTestCases.maybe, (R,)) ==
+          ["local.get", "struct.get", "local.set", "local.get", "ref.is_null", "i32.eqz", "local.set", "local.get", "return", "end"]
+    # Julia's typeassert, the checked AsExpression: emitAsCheck needs the runtime's _asSubtype, a
+    # located rejection at its definition
+    local e = rejection(() -> generated_instructions(TypeTestCases.as_int, (R,)))
+    @test e.rejection isa W.Unquarantined && e.at == "dart2wasm/lib/types.dart:527 Types.emitAsCheck"
+    # a type computed at run time is no type test's constant: makeType makes it through
+    # instantiateTypeParameter, not ported
+    local d = rejection(() -> generated_instructions(TypeTestCases.dyn, (R, DataType)))
+    @test d.rejection isa W.Unported && occursin("AstCodeGenerator.instantiateTypeParameter", d.rejection.anchor) &&
+          occursin("TypeTestCases.dyn", d.at)
 end
