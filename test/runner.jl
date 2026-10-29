@@ -2,8 +2,8 @@
 # every module a test gets from WasmTarget, which the builder already accepted (D10), runs in node, the
 # major .github/workflows/ci.yml names, its entry called with the case's arguments, and its answer is
 # compared with native Julia's, === at the answer's type. One node process runs every case of a batch.
-# Marshalled: Int32, UInt32, Int64, UInt64, Float32, Float64 and Bool, arguments and answer; any other
-# type, a module that imports anything, an entry not found, a trap or a throw is a located failure of its
+# Marshalled: Int32, UInt32, Int64, UInt64, Float32, Float64 and Bool, arguments and answer, and an answer of a
+# singleton type (nothing), whose call must return and whose type is its value; any other type, a module that imports anything, an entry not found, a trap or a throw is a located failure of its
 # case, never a skip. An unsigned integer crosses as the signed one of its bits, a float as its bit
 # pattern, so NaN payloads and -0.0 keep their bits.
 # A case carries both modules of its program: compile's own (dartdev's default phases, ending with
@@ -93,7 +93,7 @@ function answer_cases(label::String, compile, f, args::Tuple, native; optimized:
     local out = RunCase[]
     for T in unique(map(p -> typeof(leaf(p)), paths))
         local ps = Tuple(filter(p -> typeof(leaf(p)) === T, paths))
-        local readable = length(args) <= 3 && _wire(leaf(first(ps))) !== nothing
+        local readable = length(args) <= 3 && _wire_answer(leaf(first(ps))) !== nothing
         local reader = readable ? compiled_case(label, compile, Leaves{f,ps}(), (args..., Int64(1)), nothing; optimized) : nothing
         for (k, p) in enumerate(ps)
             push!(out, RunCase("$label$p", readable ? reader.bytes : UInt8[], readable ? reader.optimized : UInt8[],
@@ -135,8 +135,13 @@ function _wire(x)::Union{Tuple{String,String},Nothing}
     return nothing
 end
 
+# an answer's wire form: a scalar's, or "void" for a value of a singleton type (nothing, a fieldless struct),
+# which carries no bits: its call must return, and its type is its value
+_wire_answer(x)::Union{Tuple{String,String},Nothing} = Base.issingletontype(typeof(x)) ? ("void", "-") : _wire(x)
+
 # the answer read back at native's type
 function _unwire(::Type{T}, s::AbstractString) where {T}
+    Base.issingletontype(T) && return s == "-" ? T.instance : nothing
     T === Bool && return s == "1" ? true : s == "0" ? false : nothing
     T === Int32 && return parse(Int32, s)
     T === UInt32 && return reinterpret(UInt32, parse(Int32, s))
@@ -161,6 +166,7 @@ const toWasm = (t, v) => {
   dv.setBigUint64(0, BigInt('0x' + v)); return dv.getFloat64(0);
 };
 const fromWasm = (t, x) => {
+  if (t === 'void') return '-';
   if (t === 'i32') return String(x | 0);
   if (t === 'i64') return BigInt.asIntN(64, x).toString();
   const dv = new DataView(new ArrayBuffer(8));
@@ -209,7 +215,7 @@ function run_cases(cases::AbstractVector{RunCase}; run_budget::Float64 = RUN_BUD
     local sent = Tuple{Int,Bool}[]   # each line's case and whether it is the wasm-opt'd module
     for (i, c) in enumerate(cases)
         local args = map(_wire, c.args)
-        local rt = _wire(c.native)
+        local rt = _wire_answer(c.native)
         if any(isnothing, args) || rt === nothing
             local bad = Any[typeof(a) for (a, w) in zip(c.args, args) if w === nothing]
             rt === nothing && push!(bad, typeof(c.native))

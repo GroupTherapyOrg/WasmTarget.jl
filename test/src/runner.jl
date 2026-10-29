@@ -94,6 +94,9 @@ _runner_facts(x::Int64) = (x + 1, (x > 0, x * 2), x < 0)
     @test [c.label for c in cs] == ["t(1,)", "t(2, 2)", "t(2, 1)", "t(3,)", "t(4,)"]
     @test [c.args for c in cs] == [(3, 1), (3, 2), (3, 1), (3, 1), (3, 1)]
     @test calls[] == 2 * 3   # Int64, Bool and Float64 each one reader, each both modules; no reader for String
+    # a leaf of a singleton type crosses as "void": its call returns, its type its value
+    local v = WTR.answer_cases("v", counted, _runner_facts, (Int64(3),), (4, nothing))
+    @test [c.label for c in v] == ["v(1,)", "v(2,)"] && WTR._wire_answer(nothing) == ("void", "-") && WTR._unwire(Nothing, "-") === nothing
     # a leaf of a type the runner does not marshal has no reader and fails, named
     @test isempty(cs[5].bytes) && occursin("marshals no String", WTR.run_cases(cs[5:5])[1].why)
 end
