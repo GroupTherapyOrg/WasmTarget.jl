@@ -146,12 +146,13 @@ function _wire(x)::Union{Tuple{String,String},Nothing}
 end
 
 # an answer's wire form: a scalar's, or "void" for a value of a singleton type (nothing, a fieldless struct),
-# which carries no bits: its call must return, and its type is its value
+# which carries no bits: its call must return no value (undefined or null in JS), and its type is its value; a
+# module returning a value there, a Union{Nothing,T} answer's T, differs from native (A56E1)
 _wire_answer(x)::Union{Tuple{String,String},Nothing} = Base.issingletontype(typeof(x)) ? ("void", "-") : _wire(x)
 
 # the answer read back at native's type
 function _unwire(::Type{T}, s::AbstractString) where {T}
-    Base.issingletontype(T) && return s == "-" ? T.instance : nothing
+    Base.issingletontype(T) && return s == "-" ? T.instance : String(s)   # a value where none is due: compared, it differs
     T === Bool && return s == "1" ? true : s == "0" ? false : nothing
     T === Int32 && return parse(Int32, s)
     T === UInt32 && return reinterpret(UInt32, parse(Int32, s))
@@ -176,7 +177,7 @@ const toWasm = (t, v) => {
   dv.setBigUint64(0, BigInt('0x' + v)); return dv.getFloat64(0);
 };
 const fromWasm = (t, x) => {
-  if (t === 'void') return '-';
+  if (t === 'void') return (x === undefined || x === null) ? '-' : 'a_value:' + typeof x;
   if (t === 'i32') return String(x | 0);
   if (t === 'i64') return BigInt.asIntN(64, x).toString();
   const dv = new DataView(new ArrayBuffer(8));

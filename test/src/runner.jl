@@ -42,6 +42,7 @@ const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.c
         WTR.RunCase("i32 add, its module instantiated once", _RUN_ADD1, (Int32(1),), Int32(2)),
         WTR.RunCase("UInt32 past typemax(Int32)", _RUN_ADD1, (typemax(UInt32) - UInt32(1),), typemax(UInt32)),
         WTR.RunCase("UInt64 past typemax(Int64)", _run_one_function(_RUN_I64), (typemax(UInt64),), typemax(UInt64)),
+        WTR.RunCase("a value where native answers nothing", _RUN_ADD1, (Int32(1),), nothing),
     ]
     local r = WTR.run_cases(cases)
     @test length(r) == length(cases) && [x.label for x in r] == [c.label for c in cases]
@@ -54,6 +55,7 @@ const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.c
     @test !r[13].ok && !isempty(r[13].why)
     @test !r[15].ok && occursin("the wasm-opt'd module answers 41", r[15].why) && occursin("differ: 42 against 41", r[15].why) &&
           !occursin("the module answers", r[15].why)
+    @test !r[19].ok && occursin("the module answers \"a_value:number\", native Julia nothing", r[19].why)   # A56E1
     @test WTR.run_cases(WTR.RunCase[]) == WTR.RunResult[]
 end
 
