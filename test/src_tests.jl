@@ -51,14 +51,17 @@ end
 # the file and case running now, for dev/check.sh's hard limit to name (WT_PROGRESS)
 const _WT_PROGRESS = get(ENV, "WT_PROGRESS", "")
 wt_progress(s::AbstractString) = isempty(_WT_PROGRESS) || write(_WT_PROGRESS, s)
-# each file's seconds go to WT_SRC_COSTS_OUT, for dev/check.sh to keep once the check is green; the first file of
-# a process is not measured, its seconds holding the process's own start (compiling WasmTarget's code from cold)
+# each file's seconds go to WT_SRC_COSTS_OUT, for dev/check.sh to keep once the check is green. A process's first
+# WasmTarget.compile pays about 49 CPU-s compiling WasmTarget's own pipeline (wt3-cgstubs, 12:59), which would land on
+# whichever file ran first and leave that file unmeasured or mismeasured; so a measured run compiles one small
+# function first, every shard paying that start alike, and every file's seconds are then its own
 const _WT_COSTS_OUT = get(ENV, "WT_SRC_COSTS_OUT", "")
+isempty(_WT_COSTS_OUT) || WasmTarget.compile(x::Int64 -> x + Int64(1), (Int64,))   # a failure here is a broken pipeline, red
 @testset verbose = true "src" begin
     for (i, f) in enumerate(SRC_SHARD)
         wt_progress(f)
         local t0 = time()
         @testset "$f" begin include(joinpath(SRC_TEST_DIR, f)) end
-        i > 1 && !isempty(_WT_COSTS_OUT) && open(io -> println(io, f, '\t', round(time() - t0; digits = 1)), _WT_COSTS_OUT, "a")
+        !isempty(_WT_COSTS_OUT) && open(io -> println(io, f, '\t', round(time() - t0; digits = 1)), _WT_COSTS_OUT, "a")
     end
 end
