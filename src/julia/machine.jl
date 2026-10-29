@@ -108,7 +108,8 @@ block k + 1): `domtree`, Julia's dominator tree of it, `stmts`, the statements t
 from, `blocks`, each block's state by its number in the CFG (a block a pass adds, after them), and
 `layout`, the blocks in order. `label_registers` counts the i32 registers FixIrreducibleControlFlow
 made (LLVM's virtual registers of its dispatch blocks), numbered from 1; `implicit_defs` says every
-value needs a definition at entry (its addImplicitDefs).
+value needs a definition at entry (its addImplicitDefs); `handlers`, Julia's try handler of each
+statement and whether it may throw, which WebAssembly::mayThrow reads.
 """
 @quarantine "LLVM's MachineFunction, its CFG and dominator tree Julia's own" Core.Compiler.DomTree mutable struct MachineFunction
     domtree::Core.Compiler.DomTree
@@ -117,6 +118,7 @@ value needs a definition at entry (its addImplicitDefs).
     layout::Vector{Int}
     label_registers::Int
     implicit_defs::Bool
+    handlers::NirHandlers
 end
 
 """
@@ -204,7 +206,7 @@ statement throws along, is dropped. Julia's CFG marks a catch block and the entr
         end
         push!(blocks, MachineBasicBlock(b, unique(Int[p for p in bb.preds if reachable(p)]), unique(bb.succs), instrs, b in eh_pads))
     end
-    return MachineFunction(domtree, stmts, blocks, Int[b for b in 1:n if reachable(b)], 0, false)
+    return MachineFunction(domtree, stmts, blocks, Int[b for b in 1:n if reachable(b)], 0, false, handlers)
 end
 
 """    renumber_blocks!(mf) -> Nothing

@@ -1,6 +1,10 @@
 # llvm/lib/CodeGen/MachineBasicBlock.cpp at the llvm pin (dev/LEDGER.md D42): the members of
 # MachineBasicBlock CFGSort calls, over the machine code of src/julia/machine.jl.
 
+"""    has_eh_pad_successor(mf, b) -> Bool"""
+@parity "llvm/lib/CodeGen/MachineBasicBlock.cpp:289 MachineBasicBlock::hasEHPadSuccessor" has_eh_pad_successor(mf::MachineFunction, b::Int)::Bool =
+    any(s -> mf.blocks[s].ehpad, mf.blocks[b].succs)
+
 """    move_after(mf, b, new_before) -> Nothing
 
 Moves block `b` to just after `new_before` in the layout."""

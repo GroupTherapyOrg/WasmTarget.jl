@@ -91,13 +91,41 @@ end
     @test pad == Core.Compiler.block_for_inst(cfg, (stmts[1]::W.NirEnter).catch_dest) + 1
     @test mf.blocks[pad].preds == [caller] && pad in mf.blocks[caller].succs && !(pad in mf.blocks[2].succs)
     @test mf.blocks[pad].instrs[1].opcode == W.CATCH && mf.blocks[pad].instrs[2].opcode == W.STMTS
-    # its exception is the catch block alone, and the stackifier places its try_table, rejecting at
-    # the unwind mismatch fixes
+    # its exception is the catch block alone; the stackifier places its try_table around the call,
+    # catching to a BLOCK of the catch block type that the CATCH follows, and finds no unwind mismatch
     local wei = L.WebAssemblyExceptionInfo()
     L.run_on_machine_function(wei, mf)
     @test L.get_blocks(L.get_exception_for(wei, pad)) == [pad]
-    local e = try; L.add_pre_emit_pass(stmts, cfg, handlers, "tc", true); nothing; catch x; x; end
-    @test e isa W.RejectionError && occursin("fixCatchUnwindMismatches", e.rejection.anchor)
+    local mfs = L.add_pre_emit_pass(stmts, cfg, handlers, "tc", true)
+    local mis = [mi for b in mfs.layout for mi in mfs.blocks[b].instrs]
+    local t = findfirst(mi -> mi.opcode == W.TRY_TABLE, mis)
+    @test mis[t - 1].opcode == W.BLOCK && mis[t - 1].operands[1] == W.MOImm(W.BLOCK_TYPE_CATCH) && mis[t + 1].opcode == W.STMTS
+    local et = findfirst(mi -> mi.opcode == W.END_TRY_TABLE, mis)
+    @test [mi.opcode for mi in mis[et:et+3]] == [W.END_TRY_TABLE, W.UNREACHABLE, W.END_BLOCK, W.CATCH]
+end
+
+@testset "CFGStackify.cpp: fixCallUnwindMismatches, a call the layout puts in a try_table it does not unwind to" begin
+    # %2 under %1's handler unwinds to the catch block %6; %4, after the :leave, unwinds to the caller.
+    # CFGSort lays the catch block (machine block 5) before %4's (4); laid after it, the try_table
+    # spans %4, whose call would be caught by a catch it does not unwind to: a mismatch, which a nested
+    # try_table rethrowing to the caller fixes (addNestedTryTable, the next port, rejects there)
+    local code = Any[Core.EnterNode(6), Expr(:call, GlobalRef(Base, :identity), 1), Expr(:leave, Core.SSAValue(1)),
+                     Expr(:call, GlobalRef(Base, :identity), 2), Core.ReturnNode(Core.SSAValue(4)), Core.ReturnNode(2)]
+    local mf = machine_of(code, "try")
+    local li = L.LoopInfoBase()
+    L.analyze(li, mf)
+    local wei = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei, mf)
+    L.sort_blocks(mf, li, wei)
+    local pad = only(b for b in mf.layout if mf.blocks[b].ehpad)
+    local k = findfirst(==(pad), mf.layout)
+    @test pad == 5 && mf.layout[k + 1] == 4 && isempty(mf.blocks[4].succs)
+    # as sorted, no mismatch
+    @test L.add_pre_emit_pass(W.nir_code(code, zeros(UInt32, length(code)), "try")..., "try", true) isa W.MachineFunction
+    mf.layout[k], mf.layout[k + 1] = mf.layout[k + 1], mf.layout[k]
+    W.renumber_blocks!(mf)
+    local e = try; L.run_on_machine_function(L.WebAssemblyCFGStackify(), mf, li, wei, true); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("addNestedTryTable", e.rejection.anchor)
 end
 
 @testset "CFGStackify.cpp: placeTryTableMarker, a try_table in a block its catch branches to" begin

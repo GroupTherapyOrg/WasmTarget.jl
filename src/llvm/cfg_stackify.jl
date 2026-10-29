@@ -1,8 +1,8 @@
 # llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp at the llvm pin (dev/LEDGER.md D42), modeled
 # by dev/formal/CFGStackify.tla: BLOCK, LOOP and TRY_TABLE markers placed over the layout CFGSort
-# made, and each branch's target block rewritten to its depth. The unwind mismatch fixes that make a
-# try_table's span match each call's unwind destination are the next port; until then a function
-# with an EH pad rejects there.
+# made, and each branch's target block rewritten to its depth. The unwind mismatches a try_table's
+# span makes are found; wrapping each in a nested try_table (addNestedTryTable) is the next port, and
+# until then a function with one rejects there.
 
 """
     WebAssemblyCFGStackify()
@@ -11,7 +11,8 @@ The pass's state over one function: `mdt`, the dominator tree; `scope_tops`, for
 number) whose label ends a scope, the block holding the scope's beginning, the farthest-spanning
 one; `begin_to_end` and `end_to_begin`, each marker's partner; `try_to_eh_pad` and `eh_pad_to_try`,
 each TRY_TABLE's EH pad and back; `appendix_bb`, the block added after the last when a loop's bottom
-is the function's last block.
+is the function's last block; `fake_caller_bb`, the block outside the layout that stands for the
+caller as an unwind destination.
 """
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:49 WebAssemblyCFGStackify" mutable struct WebAssemblyCFGStackify
     mdt::Union{Nothing,Core.Compiler.DomTree}
@@ -21,8 +22,9 @@ is the function's last block.
     try_to_eh_pad::Dict{MachineInstr,Int}
     eh_pad_to_try::Dict{Int,MachineInstr}
     appendix_bb::Union{Nothing,Int}
+    fake_caller_bb::Union{Nothing,Int}
     WebAssemblyCFGStackify() = new(nothing, Union{Nothing,Int}[], Dict{MachineInstr,MachineInstr}(), Dict{MachineInstr,MachineInstr}(),
-                                   Dict{MachineInstr,Int}(), Dict{Int,MachineInstr}(), nothing)
+                                   Dict{MachineInstr,Int}(), Dict{Int,MachineInstr}(), nothing, nothing)
 end
 
 """    update_scope_tops(pass, mf, begin_, end_) -> Nothing
@@ -52,6 +54,17 @@ last block; a predecessor of itself, so it is never a scope's target.
         pass.appendix_bb = a
     end
     return something(pass.appendix_bb)
+end
+
+"""
+    get_fake_caller_block(pass, mf) -> Int
+
+The block that stands for the caller as an unwind destination, made once and never in the layout: a
+try_table catching to it rethrows to the caller.
+"""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:158 WebAssemblyCFGStackify::getFakeCallerBlock" function get_fake_caller_block(pass::WebAssemblyCFGStackify, mf::MachineFunction)::Int
+    pass.fake_caller_bb === nothing && (pass.fake_caller_bb = create_machine_basic_block!(mf))
+    return something(pass.fake_caller_bb)
 end
 
 """    explicitly_branches_to(mf, pred, mbb) -> Bool
@@ -424,9 +437,173 @@ not leave, so wasm checks the body against a value it never has unless the end i
     return nothing
 end
 
-@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:2076 WebAssemblyCFGStackify::fixCatchUnwindMismatches" @unported function fix_catch_unwind_mismatches(pass::WebAssemblyCFGStackify, mf::MachineFunction) end
+# wrapping a range of instructions in a nested try_table that catches with catch_all_ref and throws to
+# the right destination through a trampoline block: the exnref machinery (CATCH_ALL_REF, THROW_REF,
+# the trampolines) is the next port
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:1383 WebAssemblyCFGStackify::addNestedTryTable" @unported function add_nested_try_table(pass::WebAssemblyCFGStackify, mf::MachineFunction, range_begin::MachineInstr, range_end::MachineInstr, unwind_dest::Int) end
 
-@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:1592 WebAssemblyCFGStackify::fixCallUnwindMismatches" @unported function fix_call_unwind_mismatches(pass::WebAssemblyCFGStackify, mf::MachineFunction) end
+"""
+    split_end_loop_bb(mf, end_try_table_bb) -> Nothing
+
+An END_LOOP before the END_TRY_TABLE in its block moves to a block of its own before it, so a branch
+to the try_table's end does not land inside the loop.
+"""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:1556 splitEndLoopBB" function split_end_loop_bb(mf::MachineFunction, end_try_table_bb::Int)::Nothing
+    local instrs = mf.blocks[end_try_table_bb].instrs
+    local end_try_table = nothing
+    local end_loop = nothing
+    for k in length(instrs):-1:1
+        local mi = instrs[k]
+        if mi.opcode == END_TRY_TABLE
+            end_try_table = k
+            continue
+        end
+        if end_try_table !== nothing && mi.opcode == END_LOOP
+            end_loop = k
+            break
+        end
+    end
+    end_loop === nothing && return nothing
+    local end_loop_bb = create_machine_basic_block!(mf)
+    insert!(mf.layout, findfirst(==(end_try_table_bb), mf.layout), end_loop_bb)
+    local moved = instrs[1:something(end_loop)]
+    deleteat!(instrs, 1:something(end_loop))
+    for mi in moved
+        mi.parent = end_loop_bb
+    end
+    append!(mf.blocks[end_loop_bb].instrs, moved)
+    push!(mf.blocks[end_loop_bb].succs, end_try_table_bb)
+    push!(mf.blocks[end_try_table_bb].preds, end_loop_bb)
+    return nothing
+end
+
+"""
+    fix_call_unwind_mismatches(pass, mf) -> Bool
+
+Each call (a block's throwing statements) whose innermost try_table, after the layout, catches into
+another EH pad than the one it unwinds to, or that should unwind to the caller but sits inside a
+try_table: each such range gets a nested try_table to its right destination (addNestedTryTable).
+Whether there were any.
+"""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:1592 WebAssemblyCFGStackify::fixCallUnwindMismatches" function fix_call_unwind_mismatches(pass::WebAssemblyCFGStackify, mf::MachineFunction)::Bool
+    # Linearizing the control flow by placing TRY_TABLE / END_TRY_TABLE markers can create mismatches
+    # in unwind destinations: a call's try_table, by its place, catches into a pad it does not unwind
+    # to. EHPadStack is the stack of the pads the open try_tables catch into, walked backward.
+    local eh_pad_stack = Int[]
+    # LLVM's MapVector: the destinations in the order first recorded, each with its ranges
+    local unwind_dests = Int[]
+    local unwind_dest_to_try_ranges = Dict{Int,Vector{Tuple{MachineInstr,MachineInstr}}}()
+    local record(dest::Int, r::Tuple{MachineInstr,MachineInstr}) = begin
+        haskey(unwind_dest_to_try_ranges, dest) || (push!(unwind_dests, dest); unwind_dest_to_try_ranges[dest] = Tuple{MachineInstr,MachineInstr}[])
+        push!(unwind_dest_to_try_ranges[dest], r)
+    end
+    # Calls that unwind to an EH pad
+    for mbb in Iterators.reverse(mf.layout)
+        local seen_throwable_inst_in_bb = false
+        for mi in Iterators.reverse(mf.blocks[mbb].instrs)
+            if mi.opcode == TRY_TABLE
+                pop!(eh_pad_stack)
+            elseif mi.opcode == END_TRY_TABLE
+                push!(eh_pad_stack, pass.try_to_eh_pad[pass.end_to_begin[mi]])
+            end
+            # Only the last throwing instruction of a block unwinds to the block's EH pad successor.
+            (seen_throwable_inst_in_bb || !has_eh_pad_successor(mf, mbb) || !may_throw(mf, mi)) && continue
+            seen_throwable_inst_in_bb = true
+            # The block's EH pad successor is the call's unwind destination.
+            local unwind_dest = first(s for s in mf.blocks[mbb].succs if mf.blocks[s].ehpad)
+            # If the EH pad on the stack top is where this instruction should unwind next, fine.
+            !isempty(eh_pad_stack) && eh_pad_stack[end] == unwind_dest && continue
+            # Otherwise this call's range needs a nested try_table to its destination (no EH_LABELs
+            # around it: Julia's IR has none).
+            record(unwind_dest, (mi, mi))
+        end
+    end
+    isempty(eh_pad_stack) || reject!(Internal("src/llvm/cfg_stackify.jl fix_call_unwind_mismatches: try_tables unbalanced"), "fixCallUnwindMismatches")
+    # Calls that should unwind to the caller but sit inside a try_table: a range of such instructions,
+    # cut at markers, wrapped in one nested try_table that rethrows to the caller.
+    local range_begin = nothing
+    local range_end = nothing
+    local record_caller_mismatch_range() = begin
+        record(get_fake_caller_block(pass, mf), (something(range_begin), something(range_end)))
+        range_begin = range_end = nothing
+    end
+    local is_marker(mi::MachineInstr) = mi.opcode in (BLOCK, LOOP, TRY_TABLE, END_BLOCK, END_LOOP, END_TRY_TABLE)
+    for mbb in Iterators.reverse(mf.layout)
+        local seen_throwable_inst_in_bb = false
+        for mi in Iterators.reverse(mf.blocks[mbb].instrs)
+            local mt = may_throw(mf, mi)
+            # A block's last throwing instruction unwinds to its EH pad successor, the first phase's.
+            if has_eh_pad_successor(mf, mbb) && mt && !seen_throwable_inst_in_bb
+                seen_throwable_inst_in_bb = true
+            # A marker ends the current caller-mismatch range.
+            elseif range_end !== nothing && is_marker(mi)
+                record_caller_mismatch_range()
+            # Outside every try_table, or not throwing: nothing to do.
+            elseif isempty(eh_pad_stack) || eh_pad_stack[end] == pass.fake_caller_bb || !mt
+            # A throwing instruction that should unwind to the caller, inside a try_table.
+            else
+                range_end === nothing ? (range_begin = range_end = mi) : (range_begin = mi)
+            end
+            if mi.opcode == TRY_TABLE
+                pop!(eh_pad_stack)
+            elseif mi.opcode == END_TRY_TABLE
+                push!(eh_pad_stack, pass.try_to_eh_pad[pass.end_to_begin[mi]])
+            end
+        end
+        range_end !== nothing && record_caller_mismatch_range()
+    end
+    isempty(eh_pad_stack) || reject!(Internal("src/llvm/cfg_stackify.jl fix_call_unwind_mismatches: try_tables unbalanced"), "fixCallUnwindMismatches")
+    # We don't have any unwind destination mismatches to resolve.
+    isempty(unwind_dests) && return false
+    # A branch to an END_TRY_TABLE's block that also holds an END_LOOP before it would land in the loop.
+    for unwind_dest in unwind_dests
+        local try_table = get(pass.eh_pad_to_try, unwind_dest, nothing)
+        try_table === nothing || split_end_loop_bb(mf, pass.begin_to_end[try_table].parent)
+    end
+    # Now fix the mismatches by wrapping each range in a nested try_table.
+    for unwind_dest in unwind_dests
+        for (range_begin_, range_end_) in unwind_dest_to_try_ranges[unwind_dest]
+            # The block's EH pad successor edge goes; the nested try_table carries the unwind.
+            local mbb = range_begin_.parent
+            if unwind_dest != get_fake_caller_block(pass, mf)
+                local eh_pad = findfirst(s -> mf.blocks[s].ehpad, mf.blocks[mbb].succs)
+                if eh_pad !== nothing
+                    local pad = mf.blocks[mbb].succs[eh_pad]
+                    deleteat!(mf.blocks[mbb].succs, eh_pad)
+                    filter!(!=(mbb), mf.blocks[pad].preds)
+                end
+            end
+            add_nested_try_table(pass, mf, range_begin_, range_end_, unwind_dest)
+        end
+    end
+    return true
+end
+
+"""
+    fix_catch_unwind_mismatches(pass, mf) -> Bool
+
+Each catch whose exceptions it does not catch, after the layout, would unwind into another EH pad
+than its own unwind destination gets a nested try_table around its try_table. A Julia catch catches
+every exception, a JS one too (dart's guardCanMatchJSException for a guard matching every object),
+so each CATCH is LLVM's catch-all, which passes no exception on: the walk finds no mismatch, and the
+arms for a catch that passes exceptions on have no Julia counterpart. Whether there were any.
+"""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:2076 WebAssemblyCFGStackify::fixCatchUnwindMismatches" function fix_catch_unwind_mismatches(pass::WebAssemblyCFGStackify, mf::MachineFunction)::Bool
+    local eh_pad_stack = Int[]
+    for mbb in Iterators.reverse(mf.layout)
+        for mi in Iterators.reverse(mf.blocks[mbb].instrs)
+            if mi.opcode == TRY_TABLE
+                pop!(eh_pad_stack)
+            elseif mi.opcode == CATCH
+                # isCatchAll: if the catch catches every exception, it has no exception to pass on,
+                # so it cannot have a mismatch
+                push!(eh_pad_stack, mbb)
+            end
+        end
+    end
+    isempty(eh_pad_stack) || reject!(Internal("src/llvm/cfg_stackify.jl fix_catch_unwind_mismatches: try_tables unbalanced"), "fixCatchUnwindMismatches")
+    return false
+end
 
 """
     recalculate_scope_tops(pass, mf) -> Nothing
