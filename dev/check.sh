@@ -9,14 +9,14 @@ cd "$(dirname "$0")/.."
 # the depot of the lane being checked: dev/ship.sh checks in a scratch worktree of the lane and
 # names the lane in WT_DEPOT_DIR, so its compiled images are the lane's, never a cold depot
 . dev/depot.sh; wt_depot_export "${WT_DEPOT_DIR:-$(pwd)}"
-# D31: the machine is shared (Dale's own jobs run beside the lanes) and has 4 performance cores, two
-# per check, so one optimistic check runs at a time across every lane, beside the landing-lock
-# holder's, each holding a slot in the repository's common dir; a slot whose holder died is freed. The wait is reported and not counted in D14's band, which times the check itself.
+# D31: the machine is shared (Dale's own jobs run beside the lanes) and has 4 performance cores; one
+# check runs at a time across every lane, its four processes (the ratchet and three shards of the src
+# tests) one per performance core, while every other Julia runs at background QoS on the efficiency
+# cores (audit #53, A53E1: two checks at once spilled onto efficiency cores at half speed). The check
+# holds the one slot in the repository's common dir; a slot whose holder died is freed. The wait is reported and not counted in D14's band, which times the check itself.
 slots="$(git rev-parse --path-format=absolute --git-common-dir)/wt-check-slots"; mkdir -p "$slots"
 w0=$(date +%s); slot=""
-# the landing-lock holder (dev/ship.sh sets CHECK_RESERVED) takes slot L alone, so it never waits
-# behind other lanes' optimistic checks
-ids="1"; [ "${CHECK_RESERVED:-}" = 1 ] && ids="L"
+ids="1"
 while [ -z "$slot" ]; do
   for i in $ids; do
     if mkdir "$slots/$i" 2>/dev/null; then echo $$ > "$slots/$i/pid"; slot=$i; break; fi
@@ -46,26 +46,34 @@ if [ -n "$missing_deps" ]; then
     { echo "check: the Manifest does not resolve"; tail -20 .wtd/resolve.out; exit 1; }
 fi
 # each stage's CPU seconds (user + sys) go to .wtd/<stage>.time for D14's band, below
-/usr/bin/time -p -o .wtd/load.time julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
+/usr/bin/time -l -o .wtd/load.time julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
 # test file and case it was running (WT_PROGRESS), never an hour of a pinned core (2026-10-28: a
 # shared-DAG constant hashed in 2^40 steps and held a landing for 50 minutes)
 WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: today's slowest loaded check is ~170 s
-export WT_PROGRESS="$PWD/.wtd/progress"; : > "$WT_PROGRESS"
-/usr/bin/time -p -o .wtd/ratchet.time julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
-/usr/bin/time -p -o .wtd/src_tests.time julia --project=. --startup-file=no test/src_tests.jl > .wtd/src_tests.out 2>&1 & tpid=$!
+/usr/bin/time -l -o .wtd/ratchet.time julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
+SHARDS=3; tpids=""
+for k in $(seq 1 $SHARDS); do
+  : > ".wtd/progress.$k"
+  WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" /usr/bin/time -l -o ".wtd/src_tests.$k.time" \
+    julia --project=. --startup-file=no test/src_tests.jl > ".wtd/src_tests.$k.out" 2>&1 & tpids="$tpids $!"
+done
+running() { kill -0 $rpid 2>/dev/null && return 0; for p in $tpids; do kill -0 $p 2>/dev/null && return 0; done; return 1; }
 hung=""
-while kill -0 $rpid 2>/dev/null || kill -0 $tpid 2>/dev/null; do
+while running; do
   if [ $(( $(date +%s) - s0 )) -gt "$WT_HARD_LIMIT" ]; then
     kill -0 $rpid 2>/dev/null && { hung="the ratchet"; pkill -P $rpid 2>/dev/null; kill $rpid 2>/dev/null; }
-    kill -0 $tpid 2>/dev/null && { hung="${hung:+$hung and }the src tests, at: $(cat "$WT_PROGRESS" 2>/dev/null)"; pkill -P $tpid 2>/dev/null; kill $tpid 2>/dev/null; }
+    k=0; for p in $tpids; do k=$((k + 1))
+      kill -0 $p 2>/dev/null && { hung="${hung:+$hung and }src tests shard $k, at: $(cat ".wtd/progress.$k" 2>/dev/null)"; pkill -P $p 2>/dev/null; kill $p 2>/dev/null; }
+    done
     break
   fi
   sleep 2
 done
 if [ -n "$hung" ]; then echo "check: RED — past the hard limit of ${WT_HARD_LIMIT}s, a hang or a blow-up: $hung"; exit 1; fi
 wait $rpid; rc=$?
-wait $tpid; trc=$?
+trc=0; for p in $tpids; do wait $p || trc=1; done
+cat .wtd/src_tests.[0-9]*.out > .wtd/src_tests.out
 if [ $rc -ne 0 ]; then
   echo "check: the ratchet fails (exit $rc)"
   grep -E '❌|FAIL|BROKEN|ERROR' .wtd/ratchet.out | cut -c1-300 | head -20
@@ -80,7 +88,7 @@ for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD" -- dev/CHARTER.md
   git log -1 --format=%B "$c" | grep -qE '^Charter-change: .*Dale [0-9]{4}-[0-9]{2}-[0-9]{2}: ".+"' ||
     { echo "check: $(git log -1 --format='%h %s' "$c" | cut -c1-80) changes dev/CHARTER.md with no Charter-change trailer quoting Dale (D19)"; exit 1; }
 done
-grep -E '^(Test Summary|src )' .wtd/src_tests.out | tail -2
+echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $SHARDS reported" 
 [ $trc -eq 0 ] || { echo "check: src tests red"; grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 1; }
 # the models the change touches: a changed dev/formal/<Name>.tla or MC<Name>*.{tla,cfg} selects
 # every instance MC<Name>*.cfg of that model
@@ -96,14 +104,18 @@ if [ -n "$cfgs" ]; then
 fi
 wall=$(( $(date +%s) - s0 ))
 # D14's band judges the check's own cost, never the machine's: the CPU seconds of its critical path,
-# the load stage then the slower of the two parallel stages. A process's CPU seconds do not grow while
+# the load stage then the slowest of the parallel stages. A process's CPU seconds do not grow while
 # it waits for a core, so another job's load cannot turn a landing red, and a check that grew can never
 # hide behind a loaded machine (A52E2: the wall-clock band read "UNJUDGED" at every load of 4 or more).
 # An efficiency core spends about twice the CPU seconds; background Julia runs at taskpolicy -b (corpus.sh)
 # so a check, at foreground QoS, keeps the performance cores
-cpu() { awk '/^(user|sys) /{ t += $2 } END { printf "%d", t }' ".wtd/$1.time"; }
-c_load=$(cpu load); c_ratchet=$(cpu ratchet); c_src=$(cpu src_tests)
-path=$(( c_load + (c_ratchet > c_src ? c_ratchet : c_src) ))
-echo "check: ${path} CPU-s on the critical path (load ${c_load}, ratchet ${c_ratchet}, src tests ${c_src}); ${wall}s wall"
+# /usr/bin/time -l: its first line holds real, user and sys; a later line the instructions retired, which
+# no core type or load moves (printed beside the band, the measure A53E1 proposes)
+cpu() { awk 'NR == 1 { printf "%d", $3 + $5 }' ".wtd/$1.time"; }
+gi() { awk '/instructions retired/ { printf "%d", $1 / 1e9 }' ".wtd/$1.time"; }
+c_load=$(cpu load); c_ratchet=$(cpu ratchet); path_par=$c_ratchet; shards=""
+for k in $(seq 1 $SHARDS); do c=$(cpu "src_tests.$k"); shards="$shards $c"; [ "$c" -gt "$path_par" ] && path_par=$c; done
+path=$(( c_load + path_par ))
+echo "check: ${path} CPU-s on the critical path (load ${c_load}, ratchet ${c_ratchet}, src shards${shards}); ${wall}s wall; G instructions: load $(gi load), ratchet $(gi ratchet), shards$(for k in $(seq 1 $SHARDS); do printf ' %s' "$(gi "src_tests.$k")"; done)"
 [ $path -gt 120 ] && { echo "check: RED — ${path} CPU-s, past D14's band (a 60-s target, red past 120 s)"; exit 1; }
 echo "check: green (${wall}s)"

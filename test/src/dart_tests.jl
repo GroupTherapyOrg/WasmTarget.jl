@@ -16,7 +16,7 @@
 # CHECK_BASE (dev/check.sh's base, origin/wt2 by default; HEAD~1 under dev/ship.sh), proving a new or edited
 # answer native when it is written. A base that holds no corpus runs every native answer.
 #
-# Under WT_LANDING_CORE=1 (dev/check.sh sets it) the landing compiles a fixed core, the first 5 cases of each
+# Under WT_LANDING_CORE=1 (dev/check.sh sets it) the landing compiles a fixed core, the first case of each
 # group plus every case the change adds or edits, and runs no module, so the landing's cost does not grow with
 # the port; the whole corpus, every module it compiles run in node, wasm-opt's beside codegen's, goes beside
 # the landings on wt2's head (without the variable, dev/corpus.sh), its red the next landing's first item.
@@ -733,7 +733,7 @@ WasmTarget.compile(x -> x + 1, (Int64,))
 
 # the landing's fixed core: the first 5 cases of each group plus every case the change adds or edits
 const _DART_CORE_ONLY = get(ENV, "WT_LANDING_CORE", "") == "1"
-const DART_CORE = Set{String}(vcat([["$(g)/$(c[1])" for c in cs[1:min(5, end)]] for (g, cs) in DART_GROUPS]...,
+const DART_CORE = Set{String}(vcat([["$(g)/$(c[1])" for c in cs[1:min(1, end)]] for (g, cs) in DART_GROUPS]...,
                                    collect(DART_NATIVE_DUE)))
 
 # a compiled case's modules, each fact of its answer read by test/runner.jl against native Julia's, computed
