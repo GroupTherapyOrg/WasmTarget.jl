@@ -5478,3 +5478,77 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A57S1 is fixe
 b54dbc1a, each leaving its row. A61S1 and A61S2 are open on MARCH 1.D. A61S4 is open on MARCH 1.C. A61S3 is open on
 MARCH 1.A6. A61E1 is open on MARCH 1.T. By owner: wt3-cgstubs holds A61S1 and A61S2; the EH model's owner,
 wt3-translator, holds A61S3; the lead holds A61S4 (dev/MODULE_INIT.md); the tests lane holds A61E1.
+
+## 2026-10-29 — audited through 98481e33 (e017e6c9..98481e33: the code generator's tests in three files, the new dependency's image outside the judged load, getPragma the one source, the parameter Any rule, WasmInterpreter a package of its own, src/patch, unimplemented never reached, String's internalized global, the hard limit per case, the Kernel table's Reference sum, the static field's getter and setter called, Error._throw on Any, the exception tag exported, StackifyTry, String's operations, convertType boxing by Julia's class, ProgramError, a Module's class, the landing lock and ticket priority, ClassIdNumbering, ImplicitFieldAccessorCodeGenerator, entry 61)
+
+The sixty-second audit, beside the work, covers the 41 commits of e017e6c9..98481e33 that are not entry 61 (aa3a47a2,
+its author's), read here, the lead's line stop between (autoship halted in this worktree, restarted on the lead's word).
+Every finding rests on one exact command, quoted; TLC ran the refactored models and ClassIdNumbering. Standing items.
+Timing (the lead's watch point): `sort -t$'\t' -k2 -rn "$(git rev-parse --git-common-dir)/wt-src-costs.tsv" | head`
+gives `dart_tests.jl 67.7`, `code_generator.jl 40.5`, `code_generator_control.jl 32.4`, `dart_core_1.jl 30.4`,
+`dart_core_2.jl 29.8`, `dart_core_3.jl 27.8`, `code_generator_intrinsics.jl 25.4`, `runner.jl 5.4`, of 322 s in all:
+dart_tests.jl, one 67.7-s file, is the whole of the line stop's red, and the code generator's three files (98 s) follow;
+the dart_core rows belong to a tree origin/wt2 does not hold (A62E1). Models: `TLC_ONLY=… taskpolicy -b bash
+dev/formal/run_tlc.sh` printed `ok MCCFGStackify.cfg … 2634`, `ok MCCFGStackifyEH.cfg … 623` over the extracted
+StackifyTry, and `ok MCClassIdNumbering.cfg … 1250` with `violation of Normalized`, `RangeIsa` twice and
+`ConcreteDense`, each its expect line's claim. Fixed in the range: A61S1 by e647f449 and 39e2739a (`grep -n
+'Unported("dart2wasm/lib/code_generator.dart:4937' src/code_generator.jl` prints nothing: a binding's read calls its
+getter), A61S2 by 39e2739a (the eager initializer rejects Internal, code_generator.jl:331, :2208), A61S3 by 00486801
+(`grep -n "EXTENDS" dev/formal/CFGStackify.tla dev/formal/CFGStackifyEH.tla` gives both `EXTENDS Integers, Sequences,
+FiniteSets, StackifyTry`, PlaceTry and PlaceTryTable each one call of PlaceTryTableMarker), A61S4 by f6a3608e, A60S1 by
+b9cceac0 (ProgramError, the sum's sixth kind, matched by construction). Partly: A61E1, the tag now exported as
+`$exceptionTag` (721238bf), but `grep -n "exceptionTag" test/runner.jl` prints nothing, the verdict still `instanceof
+WebAssembly.Exception`. Exemptions (the lead's order): `git diff e017e6c9..98481e33 -- src | grep -E
+'^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives one, e069a453's `boxed_class` ("dart's boxedClasses keys a
+box by the wasm type, which names no one Julia class", true: Int64 and UInt64 share i64); ten Reshaped notes leave with
+4c2aca97, the Reference sum taking their place (D5). Findings A62S1 and A62E1.
+
+Area: builder — empty by diff (`git diff --stat e017e6c9..98481e33 -- src/wasm_builder` prints nothing).
+
+Area: collection and planning — 4c2aca97 makes the Kernel table's Reference one `@closed` sum, `Union{MethodInstance,
+FieldReference}` (src/julia/kernel.jl:69), FieldReference(field, kind) refusing an instance field's initializer, every
+match over it @exhaustive; ad35d98a re-lands the interpreter as lib/WasmInterpreter, its image built apart (ef697a60,
+dd8b6586: outside the judged load only while the change leaves it untouched); c0e70e10 and d12ef978 load src/patch's
+overlays through include_patch, each under a @quarantine naming the Base function it replaces; 78a74ad5 reads every
+pragma through getPragma; f5e99514 types a parameter Any exactly where its pin says Object. (A62S1, medium, the lead's
+watch point) the field references are made by the constructor, but a field's generator and the translator keep a bare
+binding as a member beside the sum: `grep -rn "FieldReference(" src | grep -v src/julia/kernel.jl` gives globals.jl:219,
+code_generator.jl:1526, :1548 and :2221, each through the constructor, while `grep -rn
+"Union{Core.MethodInstance,GlobalRef}" src` gives code_generator.jl:266, :312 and :342 (`const
+enclosing_member::Union{Core.MethodInstance,GlobalRef}` in StaticFieldInitializerCodeGenerator,
+EagerStaticFieldInitializerCodeGenerator and StaticFieldImplicitAccessorCodeGenerator) and translator.jl:157 holds
+`members_being_generated::Base.IdSet{Union{Core.MethodInstance,ClassField,GlobalRef}}`: a member is a Reference in one
+place and a GlobalRef or a ClassField in another, so the next site that hands a generator's member to a Reference-typed
+parameter is the MethodError monitor-a saw, found again only when a test runs it (D5, D6). Fix: each generator's member
+is its FieldReference (the binding with its initializer, getter or setter kind), and members_being_generated an
+`IdSet{Reference}`, so no bare GlobalRef or ClassField names a member anywhere.
+
+stopgap in disguise: none new.
+precedent: the Reference sum, Kernel's Reference naming a member or a field's accessor (kernel/lib/canonical_name.dart);
+the overlays, dart's @patch libraries and GPUCompiler's method table.
+
+Area: emission and diagnostics — e647f449 calls a static field's implicit getter and setter as dart's visitStaticGet and
+visitStaticSet do; 98481e33 ports ImplicitFieldAccessorCodeGenerator, a field selector's target; 97e4e515 lowers a
+String's data operations and egal on two Strings; e069a453 boxes a number as its value's Julia class; 818669a0 answers
+unimplemented as never reached, every NIR form having its visitor; 721238bf exports the exception tag (emscripten's
+__cpp_exception the precedent). No finding.
+
+stopgap in disguise: none new.
+precedent: a field's accessor, dart's ImplicitFieldAccessorCodeGenerator and StaticFieldImplicitAccessorCodeGenerator;
+the exported tag, emscripten's __cpp_exception.
+
+Area: enforcement and prose — 89504c31 drops the separate check slot, a check waiting on the landing lock alone;
+6d540b66 queues a stack's ticket earlier by what it carries (an audit finding's fix 40 minutes, a ported stub 20);
+5fbea416 frees a pidless lock after 20 s; 3604ddea re-ships a red HEAD when origin/wt2 moves; 6f02bf6a gives each case's
+compile and read a hard limit; 0ad293d4 splits the corpus shards by each group's measured seconds. (A62E1, low) the
+measured costs the shards are split by mix trees: wt-src-costs.tsv holds `dart_core_1.jl`, `dart_core_2.jl` and
+`dart_core_3.jl` while `git ls-tree --name-only origin/wt2 test/src/ | grep -i dart` gives `test/src/dart_tests.jl`
+alone, so a green check of a lane's tree writes rows by file name alone, and the next check of another tree plans its
+shards from them (C10). Fix: the costs keyed by the head they were measured on, or each check reading only rows of files
+its tree holds and writing its own. Requirements: D5 and D6 (A62S1); C10 (A62E1); D9 (A61E1, still open); no lock fired
+inside its band.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A61S1 is fixed by e647f449 and 39e2739a, A61S2 by
+39e2739a, A61S3 by 00486801, A61S4 by f6a3608e and A60S1 by b9cceac0, each leaving its row. A62S1 is open on MARCH 1.D.
+A62E1 is open on MARCH 1.L. By owner: wt3-cgstubs holds A62S1 (code_generator.jl's generators, with translator.jl's
+set); the lead holds A62E1; the tests lane holds A61E1, its runner now to match `$exceptionTag`.
