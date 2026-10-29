@@ -72,6 +72,17 @@ isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runne
     local support = DCm._generate_support_js(DCm.TranslatorOptions())
     @test readchomp(`perl -e 'alarm 30; exec @ARGV' $node -e "console.log($support)"`) == "true"
     @test count("WebAssembly.validate", DCm._generate_support_js(DCm.TranslatorOptions(; require_js_string_builtin = true))) == 3
+    # a compile that is not standalone writes the JS runtime and the support JS beside the module, by
+    # dart's file names; node parses the runtime as an ES module
+    local ns = DCm.WasmCompilerOptions(; main_uri = "", output_file = "out/prog.wasm"); ns.translator_options.generate_source_maps = false
+    local r = DCm.compile(ns, WasmTarget.check_subset(CompileCases.f, (Int32,), "compile"))
+    @test r isa DCm.CodegenResult && collect(keys(r.js_files)) == ["out/prog.mjs", "out/prog.support.js"]
+    @test r.js_files["out/prog.support.js"] == support
+    mktempdir() do dir
+        local path = joinpath(dir, "prog.mjs")
+        write(path, r.js_files["out/prog.mjs"])
+        @test success(pipeline(`perl -e 'alarm 30; exec @ARGV' $node --check $path`; stderr = devnull))
+    end
     # a front end's crash prints dart's header, then its stack trace
     local crash = DCm.CFECrashError(ErrorException("boom"), stacktrace())
     @test startswith(sprint(show, crash), "CFECrashError(boom):\n")

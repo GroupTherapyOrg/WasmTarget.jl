@@ -79,7 +79,7 @@ end
 
 @parity "dart2wasm/lib/functions.dart:44 FunctionCollector" FunctionCollector(translator::KernelNodes)::FunctionCollector = FunctionCollector(Val(:_), translator)
 
-@parity "dart2wasm/lib/functions.dart:46 FunctionCollector.interopNamer" @unported function interop_namer(self::FunctionCollector) end
+@parity "dart2wasm/lib/functions.dart:46 FunctionCollector.interopNamer" interop_namer(self::FunctionCollector)::InteropMemberNamer = self.translator.interop_member_namer[]
 
 """
 Register the program's exported members and queue the strong ones. dart walks its libraries'
@@ -102,18 +102,16 @@ queued it for as juliac does (CCallableMissing), so a program that reaches here 
 correctly.
 """
 @parity "dart2wasm/lib/functions.dart:57 FunctionCollector._handleExports" function _handle_exports(self::FunctionCollector, member::Core.MethodInstance)::Nothing
-    get_export_name(self, member) === nothing || get_function(self, member)
+    # Register the names of any members that are exported from the program.
+    local is_strong_export = register_external_export_name(interop_namer(self), member)
+    # Ensure any strong exports are enqueued for compilation.
+    is_strong_export && get_function(self, member)
     return nothing
 end
 
-# the export name: a `@ccallable` member's, its function's name (dart's wasm:export pragma value); the
-# entry's, its function's name too (dart exports main); no other member is exported
-@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" function get_export_name(self::FunctionCollector, target::Core.MethodInstance)::Union{String,Nothing}
-    local method = target.def::Method
-    isdefined(method, :ccallable) && return string(method.name)
-    target === self.translator.component.entry || return nothing
-    return string(method.name)
-end
+# the export name, the interop namer's (src/namer.jl _ExternalMemberNamer.getExportName)
+@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" get_export_name(self::FunctionCollector, target::Core.MethodInstance)::Union{String,Nothing} =
+    get_export_name(interop_namer(self), target)
 
 """
 Collect the exports, and record the value classes as allocated. dart's boxed bool, int and double

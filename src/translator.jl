@@ -640,6 +640,8 @@ end
     self.functions[] = FunctionCollector(self)
     self.types[] = Types(self)
     self._exception_tags[] = ExceptionTags(self)
+    # the closed world stands where dart passes coreTypes (src/namer.jl _ExternalMemberNamer)
+    self.interop_member_namer[] = InteropMemberNamer(self.component, self.export_namer, self.options)
     return self
 end
 

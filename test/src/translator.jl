@@ -518,8 +518,10 @@ end
     @test t.symbols isa D.Symbols && t.symbols.minify == D.minify(t.options) == true
     # the constructor's body builds the exception tags over the translator, as dart's does
     @test t._exception_tags[].translator === t
+    # and the interop namer last, over the export namer
+    @test t.interop_member_namer[] isa D.InteropMemberNamer && t.interop_member_namer[]._external_member_namer._export_namer === t.export_namer
     # a late field whose class is not ported yet is read before its assignment: Unported, at its line
-    for (f, line) in ((:interop_member_namer, 164), (:stack_trace_info, 243), (:record_info, 244),
+    for (f, line) in ((:stack_trace_info, 243), (:record_info, 244),
                       (:list_array_type, 249), (:boxed_int_type, 267), (:boxed_double_type, 271), (:stack_trace_type, 285),
                       (:stack_trace_type_nullable, 285), (:invocation_type, 309), (:boxed_classes, 374), (:box_classes, 380),
                       (:value_classes, 389))
