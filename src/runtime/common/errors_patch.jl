@@ -8,19 +8,18 @@ Throws `object` (dart's `@pragma("wasm:intrinsic") external static Never _throw(
 StackTrace stackTrace)`): the intrinsifier lowers a call of it to wasm's `throw` of the program's
 exception tag (intrinsics.dart's MemberIntrinsic.errorThrow), its body never emitted; its Julia body,
 Julia's own throw, is what inference reads. WasmTarget's tag carries the thrown value alone
-(src/tags.jl), so dart's stack trace parameter is dropped. dart's Object is narrowed to Exception, the
-supertype of every error Julia's runtime raises; Julia's throw of any other value is the caller's to
-reject. Never inlined, so its call stays a call the intrinsifier finds.
+(src/tags.jl), so dart's stack trace parameter is dropped. dart's Object is Julia's Any: Julia throws
+any value, as dart does. Never inlined, so its call stays a call the intrinsifier finds.
 """
-@parity "sdk/lib/_internal/wasm/common/errors_patch.dart:40 Error._throw" @noinline Error__throw(@nospecialize(object::Exception))::Union{} = Core.throw(object)
+@parity "sdk/lib/_internal/wasm/common/errors_patch.dart:40 Error._throw" @noinline Error__throw(@nospecialize(object::Any))::Union{} = Core.throw(object)
 
 """
 Throws `object` with the current stack trace (dart's `@pragma('wasm:entry-point')
 @pragma('wasm:never-inline') static Never _throwWithCurrentStackTrace(Object object)`), the call
 dart2wasm's visitThrow makes: never inlined, as dart's pragma says (Julia's @noinline), and kept in
 every closed world, as dart's entry-point pragma keeps it (RUNTIME_ENTRY_POINTS), one specialization
-for every exception (@nospecialize, the compileable signature juliac takes for an entrypoint). The
+for every thrown value (@nospecialize, the compileable signature juliac takes for an entrypoint). The
 stack trace is dropped with _throw's parameter.
 """
-@parity "sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace" @noinline Error__throw_with_current_stack_trace(@nospecialize(object::Exception))::Union{} =
+@parity "sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace" @noinline Error__throw_with_current_stack_trace(@nospecialize(object::Any))::Union{} =
     Error__throw(object)
