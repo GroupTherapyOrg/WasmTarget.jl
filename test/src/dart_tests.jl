@@ -1077,8 +1077,12 @@ _dart_same(got, native) = typeof(got) == typeof(native) && isequal(got, native)
 # core stops at codegen, the compile this property judges: wasm-opt, an external tool, runs on every
 # case in dev/corpus.sh's whole run and in test/src/compile.jl, never once per case in the landing
 # The module's bytes come back beside it, so the whole run runs the case's own module without compiling it again.
-_dart_outcome(f, args)::Tuple{Any,Vector{UInt8}} = try
-    isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: compiling $(nameof(typeof(f))) $(typeof(args))")
+# Each compile runs under the case's hard limit, and WT_PROGRESS names the case, not only its method.
+_dart_outcome(f, args, key::String)::Tuple{Any,Vector{UInt8}} = _dart_limited("$key compiling $(nameof(typeof(f))) $(typeof(args))") do
+    _dart_compile(f, args, key)
+end
+_dart_compile(f, args, key::String)::Tuple{Any,Vector{UInt8}} = try
+    isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: $key compiling $(nameof(typeof(f))) $(typeof(args))")
     (:compiled, WasmTarget.compile(f, Tuple(map(typeof, args)); optimize = !_DART_CORE_ONLY))
 catch e
     e isa WasmTarget.RejectionError || rethrow()
@@ -1134,8 +1138,35 @@ end
 const DART_COMPILE_BUDGET = 10.0
 _dart_secs(t::NamedTuple)::Float64 = t.time - t.compile_time
 
+# each case's hard limit (no hang is allowed, Dale 2026-10-28; D17): intent, a case's compile, or the reading of
+# its answer, returns in seconds; band, past DART_CASE_LIMIT seconds of wall time, cold JIT on efficiency cores
+# within it (a process's first compile ~30 s there), a watchdog process interrupts it (SIGINT each second, taken at
+# Julia's next safepoint) and the case fails by name, "past its 120-s hard limit: <group>/<case> compiling <method>", the
+# process going on to the next case; before it a hang held a whole shard to dev/corpus.sh's 1200-s limit and named
+# only its method (355c70e5, 2026-10-29). A watchdog is one process per case, killed when the case returns.
+const DART_CASE_LIMIT = 120
+Base.exit_on_sigint(false)
+struct _DartPastLimit
+    why::String
+end
+function _dart_limited(f::Function, what::String; limit::Real = DART_CASE_LIMIT)
+    # SIGINT, then once a second: Julia takes it at its next safepoint, and a second one forces the exception on a
+    # thread that reaches none
+    local dog = run(pipeline(`perl -e "select(undef, undef, undef, $limit); while (1) { kill('INT', $(getpid())); sleep(1) }"`;
+                             stdout = devnull, stderr = devnull); wait = false)
+    try
+        return f()
+    catch e
+        e isa InterruptException || rethrow()
+        return (_DartPastLimit("past its $(limit)-s hard limit: $what"), UInt8[])
+    finally
+        process_running(dog) && kill(dog)
+    end
+end
+
 # why a case's outcome breaks its record's property, or "" when it holds
 function _dart_breaks(today::Symbol, got)::String
+    got isa _DartPastLimit && return got.why   # a hang, cut by the case's hard limit
     if today === :compiled
         # a compiling case never loses ground
         got === :compiled || return "recorded :compiled, now: $(_dart_said(got))"
@@ -1173,7 +1204,10 @@ function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{St
                      own::Vector{UInt8})
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: reading $key's answer")
     local secs = _dart_secs(@timed try
-        append!(runs, Main.WTRunner.answer_cases(key, WasmTarget.compile, f, args, f(args...); own))
+        local read = _dart_limited("$key reading its answer") do
+            (Main.WTRunner.answer_cases(key, WasmTarget.compile, f, args, f(args...); own), UInt8[])
+        end
+        first(read) isa _DartPastLimit ? push!(unread, key => first(read).why) : append!(runs, first(read))
     catch e
         e isa WasmTarget.RejectionError || rethrow()
         push!(unread, key => "the reader of its answer does not compile: $(sprint(showerror, e))")
@@ -1207,7 +1241,7 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
                 local f, args = case[2], case[3:end]
                 (key in DART_NATIVE_DUE || !_DART_CORE_ONLY) && @test _dart_same(f(args...), native)
                 if !_DART_CORE_ONLY || key in DART_CORE
-                    local timed = @timed _dart_outcome(f, args)
+                    local timed = @timed _dart_outcome(f, args, key)
                     local (got, own), secs = timed.value, _dart_secs(timed)
                     @test secs <= DART_COMPILE_BUDGET
                     # the record's property; a failure prints why, the rejection's own text in it (A51E9)
@@ -1271,4 +1305,20 @@ println("dart tests: $(_DART_CORE_ONLY ? length(DART_CORE) : length(DART_CASES))
     @test occursin("a directory names no definition", _dart_unlocated(E(WasmTarget.Unquarantined("src/julia: a foreigncall"))))
     @test occursin("opens with no file", _dart_unlocated(E(WasmTarget.Unquarantined("src/julia/nosuch.jl: x"))))
     @test occursin("no rejection a :rejects case admits", _dart_unlocated(E(WasmTarget.Internal("x"))))
+end
+
+# the case's hard limit against its plants: a computation that never returns is cut and named, the process goes on;
+# one that returns keeps its value and leaves no watchdog behind
+@testset "a case past its hard limit fails by name, and the run goes on" begin
+    local t0 = time()
+    local cut = _dart_limited("dart_plant/forever compiling f Tuple{Int64}"; limit = 1) do
+        local v = Int64[]
+        while true
+            push!(v, length(v)); length(v) > 10^6 && (v = Int64[])
+        end
+    end
+    @test first(cut) isa _DartPastLimit && first(cut).why == "past its 1-s hard limit: dart_plant/forever compiling f Tuple{Int64}"
+    @test time() - t0 < 30
+    @test _dart_breaks(:rejects, first(cut)) == first(cut).why
+    @test _dart_limited(() -> (:compiled, UInt8[1]), "dart_plant/quick"; limit = 5) == (:compiled, UInt8[1])
 end
