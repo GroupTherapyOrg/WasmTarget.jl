@@ -18,6 +18,15 @@ lane=$(pwd -P)
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 gitdir="$(git rev-parse --path-format=absolute --git-dir)"
 mkdir -p .wtd
+# one loop per lane: a second would see "no ship of this lane runs" at the same moment and queue the same
+# HEAD twice (march-monitor-a, 00:48: two loops found in one lane)
+alock="$common/wt-autoship/$(basename "$lane")"; mkdir -p "$common/wt-autoship"
+if ! mkdir "$alock" 2>/dev/null; then
+  holder=$(cat "$alock/pid" 2>/dev/null || true)
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then echo "autoship: already running for this lane (pid $holder)"; exit 2; fi
+  rm -rf "$alock"; mkdir "$alock" || { echo "autoship: cannot take this lane's loop lock"; exit 2; }
+fi
+echo $$ > "$alock/pid"; trap 'rm -rf "$alock"' EXIT
 last=""; since=$(date +%s)
 # a HEAD whose ship went red is not shipped again until HEAD moves: the lane fixes it, its new commit
 # settles and ships (march-monitor-a, 00:29: a red HEAD re-shipped each minute would take a queue turn and
