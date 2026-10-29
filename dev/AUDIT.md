@@ -5625,3 +5625,95 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A61E1 is fixe
 each leaving its row. A63S1 is open on MARCH 1.F. A63S2 is open on MARCH 1.C. A63S3 is open on MARCH 1.D. A63E1 is open
 on MARCH 1.L. By owner: codegen-b holds A63S1 with its vararg port; wt3-cgstubs holds A63S3 and A62S1; the translator
 lane holds A63S2; the lead holds A63E1.
+
+## 2026-10-29 — audited through 5a89f571 (84b02f8f..5a89f571: the corpus image shared, a foreign call as wasm:import, a binding read at its one source, a constant's object graph, dart:_wasm's storage classes, a field generator's member its FieldReference, Core.svec, one Vararg rejection, a shard's first-compile start, Memory and MemoryRef laid out, a tear-off's binding, entry 63; and Dale's two rules over src/julia)
+
+The sixty-fourth audit, beside the work, covers the 11 commits of 84b02f8f..5a89f571 that are not entry 63 (5d22a67c,
+its author's), read here, and from this entry on two sections for Dale's rules of 2026-10-29: R1, no piece bespoke, each
+a near 1-1 port of a named source at a pin; R2, no stub called complete. src/julia was swept for R1 by a read-only
+sub-auditor, each item below re-run here. Every finding rests on one exact command, quoted. Standing items. Fixed in the
+range: A62S1 by a4655a55 (`grep -rn
+"Union{Core.MethodInstance,GlobalRef}\|Union{Core.MethodInstance,ClassField,GlobalRef}\|enclosing_member::Union" src`
+prints nothing; `grep -n "members_being_generated::" src/translator.jl` gives `157:
+members_being_generated::Base.IdSet{Reference}`); A63S1 by 8c265eb8, one Vararg rejection at _getInputTypes beside
+param_info's two (`grep -rn "Vararg\|vararg" src/functions.jl src/param_info.jl | grep -c reject` gives 3:
+functions.jl's one and param_info.jl:60, :76, each its own file's row). The corpus image (28ca38f0) is sound against
+judged cost: `sed -n 61,81p dev/check.sh` shows unjudged_build returning before any build when the change touches
+`test/smoke_corpus.jl` or `test/DartCorpus` (`git diff --quiet "${CHECK_BASE:-HEAD~1}" HEAD -- "${paths[@]}" || return
+0`), so a change to the corpus pays its image inside the judged stage and only a change that leaves it untouched builds
+it unjudged, its cost printed; the dart tests' load fell from 32.2 s to 3.0 s at its source. The line stop in use: `grep
+"T14:1" "$(git rev-parse --git-common-dir)/wt-ship-failures.tsv"` shows six refusals between 14:15Z and 14:18Z, each
+`check: REFUSED — line stop: only wt3-tests lands until …/wt-line-stop is removed`, entry 63's among them, which landed
+when the stop lifted: located, and binding every lane's ship. The hang (A64E1). Exemptions: 9acfe5b4's two,
+classes.jl:386 `T` (an inline union of bits stored boxed, genericmemory.c's jl_genericmemory_typetagdata) and :438
+`ptr_or_offset` (the index form, Julia's own, genericmemory.c's jl_memoryrefoffset): each concrete, true and cited.
+Findings A64E1, A64E2 and the R1 items A64R1 to A64R6.
+
+Area: builder — empty by diff (`git diff --stat 84b02f8f..5a89f571 -- src/wasm_builder` prints nothing).
+
+Area: collection and planning — 9acfe5b4 lays out a Memory as dart's WasmListBase over Julia's jl_genericmemory_t
+(`data` one wasm array, Julia's const `length`, `ptr` left out), a MemoryRef as its index and its memory, each
+difference cited to genericmemory.c; memoryrefget has no arm yet, so no element is read; when it comes, an undefined
+reference element must raise UndefRefError and an element type admitting `nothing` must not share the null, as 4602f109
+rules for fields. 31a4ddfa walks a constant's object graph for its classes (ValueClasses modeled first); fda31616 reads
+a binding at its one source. No finding beyond R1's.
+
+stopgap in disguise: none new.
+precedent: Memory, dart's WasmListBase (list.dart:15) over julia.h's jl_genericmemory_t; a binding's value,
+nir_binding_value under dev/MODULE_INIT.md.
+
+Area: emission and diagnostics — 9e406a4a builds a SimpleVector at run time as dart's WasmArray.literal; 5a89f571 makes
+Julia's egal by identity one rule and reads a tear-off's binding at its source. No finding beyond R1's.
+
+stopgap in disguise: none new.
+precedent: Core.svec, dart's WasmArray.literal under its struct.
+
+Area: enforcement and prose — 28ca38f0 shares the corpus image across lanes (above); b09c322c charges a measured shard's
+first-compile start before its first file. (A64E1, medium) a hang outlived its case's watchdog: `grep "T14:1"
+…/wt-ship-failures.tsv` gives `2026-10-29T14:12:09Z wt3-constants 05571622 … check: RED — past the hard limit of 480s, a
+hang or a blow-up: src tests shard 1, at: dart_tests.jl: dart_is/function compiling #8011#8012 Tuple{Int64}`, while
+test/src/dart_tests.jl's _dart_limited (`sed -n 1148,1172p`) interrupts a case past 120 s with SIGINT once a second from
+a perl watchdog, caught as InterruptException: so either no SIGINT reached a safepoint in 360 s, or an interrupt was
+taken and the case went on; the 480-s stage limit, not the case's, named it (D17, Dale's no-hang rule). Fix: the case's
+limit a process boundary (the case compiled in a child under its own hard limit) or a cause found for the missed
+interrupt, with a plant that hangs in the same place. (A64E2, high, R2) the progress line calls stubs ported: `sed -n
+63p dev/src_progress.sh` prints `src: $ported of $anchored anchored dart definitions ported …`, `ported` every counted
+anchor with no @unported stub (:40–:41), the 288 bodies that are one Internal rejection and the 1 gap counted inside it
+and only listed after (`of the ported, $replaced are one Internal rejection …`), so the landing printed `src: 3403 of
+3404 anchored dart definitions ported` with 289 of them rejections; MARCH 1.U's exit, `dev/src_progress.sh's ported
+count equals its anchored total`, would read that complete; and a rejection-only body is recognized only when its whole
+body is a single `reject!` (parity.jl's _rejection_only_kind), so a guard and then a rejection counts as a body (R2,
+D43). Fix: `ported` counts bodies alone; the line prints ported, replaced (each named by a skeleton scope rule or a port
+to do, the lead's triage), gaps and stubs apart, and 1.U's exit reads the first against the in-scope total.
+Requirements: D17 (A64E1); R2 and D43 (A64E2); no lock fired inside its band.
+
+R1, no piece bespoke (Dale, 2026-10-29), swept over src/julia, src/julia/runtime and src/runtime. Ported with a named
+source: 9acfe5b4's Memory (dart's WasmListBase over genericmemory.c), 4602f109's undefined field (Julia's NULL and
+jl_undefref_exception), the stackifier and exception tree (LLVM at its pin), the closed world (Julia's trim inference).
+Bespoke, each to port: (A64R1, high) RUNTIME_DEMANDS' predicates decide which runtime roots join the closed world by
+scanning raw CodeInfo (`grep -n "Meta.isexpr(st, :call)\|Meta.isexpr(st, :new)" src/julia/subset.jl`), an invented rule
+computing again what the code generator decides (A63S2): port GPUCompiler's rtlib (link the runtime functions the
+emitted code calls) or dart's wasm:entry-point (the roots always kept). (A64R2, high) nir_host_import calls a method an
+import only when its whole body is one foreign call and a return (`grep -n "length(body.stmts) == 2"
+src/julia/runtime/rtutils.jl` gives `83: length(body.stmts) == 2 || return nothing`), a shape test no source has: port
+Julia's ccall lowering (ccall.cpp emit_ccall, each (symbol, library) call site its import) as emscripten imports each
+called symbol. (A64R3, high, a ruling's) nir_binding_value bakes the values every `__init__` computed into the module,
+where juliac runs the init list at startup (dev/MODULE_INIT.md's ruling, its deviation named): the source to port is
+juliac's own, staticdata.c's restored init list run by init.c at the start function. (A64R4, medium) host_modules finds
+the host's libraries by a regex over the JS template (`grep -n "baseImports" src/julia/runtime/rtutils.jl` gives `53:
+local block = match(r"const baseImports = \{\n(.*?)\n\s*\};"s, text)`): port dart's js/runtime_generator.dart's import
+object as data, or emscripten's --js-library. (A64R5, medium) the closed world's class rules and a kind's layout
+(classes.jl's closed_world_classes, :27 citing only class_info.dart:864's list; _kind_instance_fields keeping Julia's
+Union and UnionAll fields beside dart's _Type) mix two layouts by hand: port julia.h's jl_datatype_t, jl_uniontype_t and
+jl_unionall_t throughout, or dart's type.dart throughout. (A64R6, low) `BLOCK_TYPE_CATCH::Int = -2` (`grep -n
+BLOCK_TYPE_CATCH src/julia/machine.jl` gives `46: … const BLOCK_TYPE_CATCH::Int = -2`), an invented sentinel: LLVM's
+CFGStackify types the catch destination from the caught value's register class. Not yet written, to port when they are:
+the varargs convention (codegen.cpp's va handling, today rejected at _getInputTypes) and a Memory's element reads
+(genericmemory.c's memoryref get and its undefined-reference check).
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A62S1 is fixed by a4655a55 and A63S1 by 8c265eb8,
+each leaving its row; A63S2 is carried by A64R1. A64E1 is open on MARCH 1.T. A64E2 is open on MARCH 1.U. A64R1, A64R3
+and A64R5 are open on MARCH 1.C. A64R2 and A64R4 are open on MARCH 1.F. A64R6 is open on MARCH 1.D. By owner: the tests
+lane holds A64E1; the lead holds A64E2 and A64R3 (the ruling); the translator lane holds A64R1 and A64R5; the 1.F lane
+holds A64R2 and A64R4; the EH model's owner holds A64R6. The lead's R2 triage of the 288 Internal-only definitions goes
+to the lead as its own table.
