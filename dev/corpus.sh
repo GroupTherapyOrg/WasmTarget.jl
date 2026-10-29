@@ -40,8 +40,9 @@ run_head() {
     : > "$WT_PROGRESS"
     # the corpus in CORPUS_SHARDS shards side by side (test/src/dart_tests.jl's WT_DART_SHARD), each on the
     # efficiency cores, so its wall time stays inside its limit as the ported dart tests grow (one run took
-    # 346 s, then 733 s two hours later, 2026-10-28)
-    CORPUS_SHARDS=3; jpids=""
+    # 346 s, then 733 s two hours later, 2026-10-28); four since 918 s on 2db99073 (2026-10-29), the six efficiency
+    # cores holding four shards beside the lanes' background runs
+    CORPUS_SHARDS=4; jpids=""
     for k in $(seq 1 $CORPUS_SHARDS); do
       : > "$WT_PROGRESS.$k"
       WT_PROGRESS="$WT_PROGRESS.$k" WT_DART_SHARD="$k/$CORPUS_SHARDS" taskpolicy -b julia --project=. --startup-file=no -e '
