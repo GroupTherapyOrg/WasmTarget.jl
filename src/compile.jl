@@ -5,9 +5,17 @@
 
 @parity "dart2wasm/lib/compile.dart:57 CompilationDryRunResult" @closed const CompilationDryRunResult = Union{CompilationDryRunError, CompilationDryRunSuccess}
 
-@parity "dart2wasm/lib/compile.dart:59 CompilationDryRunError" @unported struct CompilationDryRunError end
+"""A dry run found the program does not compile to wasm; dart's class holds nothing."""
+@parity "dart2wasm/lib/compile.dart:59 CompilationDryRunError" struct CompilationDryRunError
+    # dart's implicit constructor
+    CompilationDryRunError() = new()
+end
 
-@parity "dart2wasm/lib/compile.dart:61 CompilationDryRunSuccess" @unported struct CompilationDryRunSuccess end
+"""A dry run found the program compiles to wasm; dart's class holds nothing."""
+@parity "dart2wasm/lib/compile.dart:61 CompilationDryRunSuccess" struct CompilationDryRunSuccess
+    # dart's implicit constructor
+    CompilationDryRunSuccess() = new()
+end
 
 @parity "dart2wasm/lib/compile.dart:63 CompilationSuccess" @closed const CompilationSuccess = Union{CfeResult, TfaResult, CodegenResult, OptResult}
 
@@ -46,15 +54,18 @@ The code generator's result: the main wasm module and the ids of every module em
 WasmTarget is a library, with no driver or file manager (the Kernel table's NoCounterpart for
 CompilerPhaseInputOutputManager), so where dart writes each module to a file, the result holds the
 bytes: `main_wasm_file` keeps dart's name as the main module's file name, `wasm_files` maps each
-emitted module's file name to its bytes. That is the one departure from dart's compile.
+emitted module's file name to its bytes, and `js_files` the JS runtime's and the support JS's file
+names (io_util.dart:118 and :124, the output file with `.mjs` and `.support.js`) to their text, empty
+for a standalone compile. That is the one departure from dart's compile.
 """
 @parity "dart2wasm/lib/compile.dart:88 CodegenResult" struct CodegenResult
     main_wasm_file::String
     module_ids::Set{Int}
     wasm_files::LinkedHashMap{String,Vector{UInt8}}
+    js_files::LinkedHashMap{String,String}
     # the struct's one constructor, tagged; dart's constructor at :96 is its outer function
-    CodegenResult(::Val{:_}, main_wasm_file::String, module_ids::Set{Int}, wasm_files::LinkedHashMap{String,Vector{UInt8}}) =
-        new(main_wasm_file, module_ids, wasm_files)
+    CodegenResult(::Val{:_}, main_wasm_file::String, module_ids::Set{Int}, wasm_files::LinkedHashMap{String,Vector{UInt8}}, js_files::LinkedHashMap{String,String}) =
+        new(main_wasm_file, module_ids, wasm_files, js_files)
 end
 
 """
@@ -74,19 +85,37 @@ end
 @parity "dart2wasm/lib/compile.dart:108 CompilationError" @closed const CompilationError = Union{CFECrashError, CFECompileTimeErrors}
 
 """
-CFECrashError's dart fields: `error`, `stackTrace`.
+The front end crashed with an exception: its `error` and the stack trace it was thrown at, dart's
+Object narrowed to Julia's Exception.
 """
-@parity "dart2wasm/lib/compile.dart:113 CFECrashError" @unported struct CFECrashError end
+@parity "dart2wasm/lib/compile.dart:113 CFECrashError" struct CFECrashError
+    error::Exception
+    stack_trace::Vector{Base.StackTraces.StackFrame}
+    # the struct's one constructor, tagged; dart's constructor at :117 is its outer function
+    CFECrashError(::Val{:_}, error::Exception, stack_trace::Vector{Base.StackTraces.StackFrame}) = new(error, stack_trace)
+end
 
 """
-CFECompileTimeErrors's dart fields: `component`.
+The program has compile-time errors, already reported; `component` what the front end built, if
+anything. A Julia program's are Julia's own, which check_subset rejects (OutsideSubset) before a compile
+starts, so no compile returns one.
 """
-@parity "dart2wasm/lib/compile.dart:132 CFECompileTimeErrors" @unported struct CFECompileTimeErrors end
+@parity "dart2wasm/lib/compile.dart:132 CFECompileTimeErrors" struct CFECompileTimeErrors
+    component::Union{NirWorld,Nothing}
+    # the struct's one constructor, tagged; dart's constructor at :135 is its outer function
+    CFECompileTimeErrors(::Val{:_}, component::Union{NirWorld,Nothing}) = new(component)
+end
 
 """
-_RecordClassesRepository's dart fields: `mapping`.
+The record classes as Kernel metadata, which dart writes into and reads from a .dill between phases:
+each record class's shape. A library compile writes no .dill, so its binary form rejects (the Kernel
+table's MetadataRepository row).
 """
-@parity "dart2wasm/lib/compile.dart:825 _RecordClassesRepository" @unported struct _RecordClassesRepository end
+@parity "dart2wasm/lib/compile.dart:825 _RecordClassesRepository" struct _RecordClassesRepository
+    mapping::Dict{DataType,RecordShape}
+    # dart's implicit constructor, its field initializer
+    _RecordClassesRepository() = new(Dict{DataType,RecordShape}())
+end
 
 @parity "dart2wasm/lib/compile.dart:69 CfeResult" CfeResult(component::ClosedWorld)::CfeResult = CfeResult(Val(:_), component)
 
@@ -94,22 +123,35 @@ _RecordClassesRepository's dart fields: `mapping`.
     TfaResult(Val(:_), component, module_strategy, record_classes)
 
 # dart asserts the main module's id is among the emitted ones: a located rejection
-@parity "dart2wasm/lib/compile.dart:96 CodegenResult" function CodegenResult(main_wasm_file::String, module_ids::Set{Int}, wasm_files::LinkedHashMap{String,Vector{UInt8}})::CodegenResult
+@parity "dart2wasm/lib/compile.dart:96 CodegenResult" function CodegenResult(main_wasm_file::String, module_ids::Set{Int}, wasm_files::LinkedHashMap{String,Vector{UInt8}}, js_files::LinkedHashMap{String,String})::CodegenResult
     WasmCompilerOptions_main_module_id() in module_ids ||
         reject!(Internal("dart2wasm/lib/compile.dart:96 CodegenResult: the main module is not emitted"), "CodegenResult")
-    return CodegenResult(Val(:_), main_wasm_file, module_ids, wasm_files)
+    return CodegenResult(Val(:_), main_wasm_file, module_ids, wasm_files, js_files)
 end
 
 @parity "dart2wasm/lib/compile.dart:105 OptResult" OptResult(main_wasm_file::String, num_modules::Int, wasm_files::LinkedHashMap{String,Vector{UInt8}})::OptResult =
     OptResult(Val(:_), main_wasm_file, num_modules, wasm_files)
 
-@parity "dart2wasm/lib/compile.dart:117 CFECrashError" @unported function CFECrashError(error, stack_trace) end
+@parity "dart2wasm/lib/compile.dart:117 CFECrashError" CFECrashError(error::Exception, stack_trace::Vector{Base.StackTraces.StackFrame})::CFECrashError =
+    CFECrashError(Val(:_), error, stack_trace)
 
-@parity "dart2wasm/lib/compile.dart:120 CFECrashError.toString" @unported function Base.show(io::IO, self::CFECrashError) end
+# dart's toString; Julia's show writes to the stream it is given
+@parity "dart2wasm/lib/compile.dart:120 CFECrashError.toString" function Base.show(io::IO, self::CFECrashError)::Nothing
+    # dart's `$error` is the error's toString, Julia's showerror
+    print(io, "CFECrashError(")
+    showerror(io, self.error)
+    print(io, "):\n")
+    Base.show_backtrace(io, self.stack_trace)
+    return nothing
+end
 
-@parity "dart2wasm/lib/compile.dart:135 CFECompileTimeErrors" @unported function CFECompileTimeErrors(component) end
+@parity "dart2wasm/lib/compile.dart:135 CFECompileTimeErrors" CFECompileTimeErrors(component::Union{NirWorld,Nothing})::CFECompileTimeErrors =
+    CFECompileTimeErrors(Val(:_), component)
 
-@parity "dart2wasm/lib/compile.dart:138 librariesToIndex" @unported function libraries_to_index(mode::Mode) end
+# the dart libraries Kernel's LibraryIndex covers; a port names Julia's types and functions directly
+# (the Kernel table's CoreTypes row), so no index is built
+@parity "dart2wasm/lib/compile.dart:138 librariesToIndex" libraries_to_index(mode::Mode)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/compile.dart:138 librariesToIndex: the libraries of Kernel's library index for $mode; a port names Julia's types and functions directly"), "libraries_to_index")
 
 """wasm-opt's flags for one module, dart's, verbatim (compile.dart:159-183)."""
 @parity "dart2wasm/lib/compile.dart:159 _binaryenFlags" _binaryen_flags()::Vector{String} = String[
@@ -178,8 +220,9 @@ the phases read.
     local last_result::Union{CompilationResult,Nothing} = nothing
     for phase in options.phases
         if phase == CompilerPhase_cfe
-            cfe_result = CfeResult(world)
-            last_result = cfe_result
+            last_result = _run_cfe_phase(options, world)
+            last_result isa CfeResult || return last_result
+            cfe_result = last_result
         elseif phase == CompilerPhase_tfa
             tfa_result = _run_tfa_phase(something(cfe_result, CfeResult(world)), options)
             last_result = tfa_result
@@ -200,11 +243,29 @@ the phases read.
     return last_result
 end
 
-@parity "dart2wasm/lib/compile.dart:289 _loadCfeResult" @unported function _load_cfe_result(options::WasmCompilerOptions, io_manager::NoCounterpart) end
+# a phase's input read from the file the previous phase wrote; a library compile writes none (the
+# Kernel table's CompilerPhaseInputOutputManager row), its program the ClosedWorld it is given
+@parity "dart2wasm/lib/compile.dart:289 _loadCfeResult" _load_cfe_result(options::WasmCompilerOptions, io_manager::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/compile.dart:289 _loadCfeResult: a .dill read from a file; a library compile's program is the ClosedWorld it is given"), "_load_cfe_result")
 
-@parity "dart2wasm/lib/compile.dart:299 _runCfePhase" @unported function _run_cfe_phase(options::WasmCompilerOptions, target::WasmTarget, file_system::NoCounterpart, io_manager::NoCounterpart, handle_diagnostic_message::Function) end
+"""
+The front end over the program: Julia's lowering, inference and trim verifier, which check_subset ran
+before the compile, so the ClosedWorld it is given has no compile-time error and its front end did not
+crash (CFECompileTimeErrors and CFECrashError are never returned). A dry run (dart's DryRunSummarizer,
+which looks for what does not compile to wasm) is the verifier's own judgement, already made: it
+succeeds. dart's Kernel dump has no counterpart (Julia's program is its IR): asked for, it rejects; and
+dart writes the component when cfe is the last phase, where a library compile returns it.
+"""
+@parity "dart2wasm/lib/compile.dart:299 _runCfePhase" function _run_cfe_phase(options::WasmCompilerOptions, world::ClosedWorld)::Union{CfeResult,CompilationDryRunSuccess}
+    local at = "dart2wasm/lib/compile.dart:299 _runCfePhase"
+    options.dry_run && return CompilationDryRunSuccess()
+    options.dump_kernel_after_cfe === nothing ||
+        reject!(Unquarantined("src/compile.jl _runCfePhase: a Kernel dump to $(options.dump_kernel_after_cfe); Julia's program is its IR"), at)
+    return CfeResult(world)
+end
 
-@parity "dart2wasm/lib/compile.dart:375 _loadTfaResult" @unported function _load_tfa_result(options::WasmCompilerOptions, target::WasmTarget, io_manager::NoCounterpart) end
+@parity "dart2wasm/lib/compile.dart:375 _loadTfaResult" _load_tfa_result(options::WasmCompilerOptions, target::WasmTarget, io_manager::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/compile.dart:375 _loadTfaResult: a .dill read from a file; a library compile's program is the ClosedWorld it is given"), "_load_tfa_result")
 
 """
 dart's global transformations over Kernel: the class hierarchy and library index, the JS interop,
@@ -222,12 +283,14 @@ later phase takes, and makes the module strategy and the record classes over it,
     return TfaResult(component, module_strategy, record_classes)
 end
 
-@parity "dart2wasm/lib/compile.dart:564 _loadCodegenResult" @unported function _load_codegen_result(options::WasmCompilerOptions, io_manager::NoCounterpart) end
+@parity "dart2wasm/lib/compile.dart:564 _loadCodegenResult" _load_codegen_result(options::WasmCompilerOptions, io_manager::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/compile.dart:564 _loadCodegenResult: modules read from files; a library compile holds the codegen phase's modules"), "_load_codegen_result")
 
 """
 Translate the program to its modules and serialize each, its bytes in the result where dart writes
-a file (CodegenResult). A compile that is not standalone generates the JS runtime that loads the
-module (js/runtime_generator.dart), not yet ported: it rejects, located.
+a file (CodegenResult). A compile that is not standalone also generates the JS runtime that loads
+the modules (js/runtime_generator.dart) and the support JS that tests the engine's features, each
+held by the file name dart writes it to (io_util.dart's writeJsRuntime and writeSupportJs).
 """
 @parity "dart2wasm/lib/compile.dart:572 _runCodegenPhase" function _run_codegen_phase(tfa_success::TfaResult, options::WasmCompilerOptions)::CodegenResult
     local at = "dart2wasm/lib/compile.dart:572 _runCodegenPhase"
@@ -245,8 +308,21 @@ module (js/runtime_generator.dart), not yet ported: it rejects, located.
         WasmBuilder.serialize(serializer, module_)
         wasm_files[module_metadata.module_name] = WasmBuilder.data(serializer)
     end
-    options.translator_options.standalone ||
-        reject!(Unported("dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate"), at)
+    local js_files = LinkedHashMap{String,String}()
+    if !options.translator_options.standalone
+        local js_runtime_finalizer = JS.RuntimeFinalizer(translator.interop_member_namer[])
+        local js_runtime = generate(js_runtime_finalizer,
+            main_module(module_output_data).module_import_name,
+            translated_procedures(translator.functions[]),
+            translator.internalized_strings_for_js_runtime,
+            translator.options.require_js_string_builtin,
+            translator.options.enable_deferred_loading || translator.options.enable_multi_module_stress_test_mode)
+        local support_js = _generate_support_js(options.translator_options)
+        # dart's path.setExtension: the output file without its extension, then the new one
+        local stem = first(splitext(options.output_file))
+        js_files["$stem.mjs"] = js_runtime
+        js_files["$stem.support.js"] = support_js
+    end
     local wasm_output_filename = basename(options.output_file)
     # dart asserts each module's name has an id (`idForModuleName(...)!`): a name with none rejects, located
     local module_ids = Set{Int}()
@@ -255,7 +331,7 @@ module (js/runtime_generator.dart), not yet ported: it rejects, located.
         id === nothing && reject!(Internal("$at: the module name $(m.module_name) has no id beside $wasm_output_filename"), at)
         push!(module_ids, id)
     end
-    return CodegenResult(options.output_file, module_ids, wasm_files)
+    return CodegenResult(options.output_file, module_ids, wasm_files, js_files)
 end
 
 """
@@ -295,14 +371,29 @@ end
     return DefaultModuleStrategy(options)
 end
 
-@parity "dart2wasm/lib/compile.dart:776 _patchMainTearOffs" @unported function _patch_main_tear_offs(core_types::NoCounterpart, component::NirWorld) end
+# dart patches dart:_internal's `_invokeMainInternal` to call main by its arity; a Julia program's
+# entry is the MethodInstance Julia inferred, exported and called as it is (functions.jl)
+@parity "dart2wasm/lib/compile.dart:776 _patchMainTearOffs" _patch_main_tear_offs(core_types::NoCounterpart, component::NirWorld)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/compile.dart:776 _patchMainTearOffs: dart's main invoker; a Julia program's entry is called as Julia inferred it"), "_patch_main_tear_offs")
 
-@parity "dart2wasm/lib/compile.dart:826 _RecordClassesRepository._tag" @unported function _RecordClassesRepository__tag() end
+@parity "dart2wasm/lib/compile.dart:826 _RecordClassesRepository._tag" _RecordClassesRepository__tag()::String = "dart2wasm.recordClasses"
 
-@parity "dart2wasm/lib/compile.dart:831 _RecordClassesRepository.readFromBinary" @unported function read_from_binary(self::_RecordClassesRepository, node::NirStmt, source::NoCounterpart) end
+@parity "dart2wasm/lib/compile.dart:831 _RecordClassesRepository.readFromBinary" read_from_binary(self::_RecordClassesRepository, node::NirStmt, source::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/compile.dart:831 _RecordClassesRepository.readFromBinary: a record shape read from a .dill; a library compile writes none"), "_RecordClassesRepository.readFromBinary")
 
-@parity "dart2wasm/lib/compile.dart:842 _RecordClassesRepository.tag" @unported function tag(self::_RecordClassesRepository) end
+@parity "dart2wasm/lib/compile.dart:842 _RecordClassesRepository.tag" tag(self::_RecordClassesRepository)::String = _RecordClassesRepository__tag()
 
-@parity "dart2wasm/lib/compile.dart:845 _RecordClassesRepository.writeToBinary" @unported function write_to_binary(self::_RecordClassesRepository, metadata::RecordShape, node::NirStmt, sink::NoCounterpart) end
+@parity "dart2wasm/lib/compile.dart:845 _RecordClassesRepository.writeToBinary" write_to_binary(self::_RecordClassesRepository, metadata::RecordShape, node::NirStmt, sink::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/compile.dart:845 _RecordClassesRepository.writeToBinary: a record shape written to a .dill; a library compile writes none"), "_RecordClassesRepository.writeToBinary")
 
-@parity "dart2wasm/lib/compile.dart:854 _generateSupportJs" @unported function _generate_support_js(options::TranslatorOptions) end
+# the engine features the program needs, each tested by validating a module that uses it
+# (wasm-feature-detect's detectors, as dart copies them): WasmGC, full SIMD, and the js-string builtins
+# when they are required
+@parity "dart2wasm/lib/compile.dart:854 _generateSupportJs" function _generate_support_js(options::TranslatorOptions)::String
+    local supports_wasm_gc = "WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,95,1,120,0]))"
+    local supports_wasm_simd = "WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11]))"
+    local supports_js_string_builtins = "!WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,2,23,1,14,119,97,115,109,58,106,115,45,115,116,114,105,110,103,4,99,97,115,116,0,0]),{\"builtins\":[\"js-string\"]})"
+    local required_features = String[supports_wasm_gc, supports_wasm_simd]
+    options.require_js_string_builtin && push!(required_features, supports_js_string_builtins)
+    return "(" * join(required_features, "&&") * ")"
+end

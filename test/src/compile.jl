@@ -26,10 +26,12 @@ end
     local o2 = opts(); o2.phases = [DCm.CompilerPhase_cfe, DCm.CompilerPhase_tfa]
     local tfa = DCm.compile(o2, world)
     @test tfa isa DCm.TfaResult && tfa.component isa W.NirWorld && tfa.component.entry === world.entry && tfa.module_strategy isa DCm.DefaultModuleStrategy
-    # a compile that is not standalone needs the JS runtime, not yet ported: a located rejection
-    local ns = DCm.WasmCompilerOptions(; main_uri = "", output_file = "p.wasm"); ns.translator_options.generate_source_maps = false
-    local e = try; DCm.compile(ns, world); nothing; catch x; x; end
-    @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("RuntimeFinalizer", e.rejection.anchor)
+    # a dry run is the verifier's judgement, already made: it succeeds; a Kernel dump rejects
+    local dr = opts(); dr.dry_run = true
+    @test DCm.compile(dr, world) isa DCm.CompilationDryRunSuccess
+    local dk = opts(); dk.dump_kernel_after_cfe = "k.txt"
+    local ek = try; DCm.compile(dk, world); nothing; catch x; x; end
+    @test ek isa W.RejectionError && ek.rejection isa W.Unquarantined
     # source maps wait for a caller that names their file: a located rejection
     local sm = opts(); sm.translator_options.generate_source_maps = true
     local e2 = try; DCm.compile(sm, world); nothing; catch x; x; end
@@ -59,4 +61,19 @@ end
     # a module wasm-opt refuses rejects, located, never passes
     local e4 = try; W.run_wasm_opt(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0xff], DCm._binaryen_flags(), "compile"); nothing; catch x; x; end
     @test e4 isa W.RejectionError && e4.rejection isa W.InvalidModule
+end
+
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+
+@testset "compile.dart: the support JS tests the engine's features; the crash and the repository" begin
+    # node, an engine with WasmGC and full SIMD, answers the feature test true
+    local node = Main.WTRunner.node_binary()
+    @test node !== nothing
+    local support = DCm._generate_support_js(DCm.TranslatorOptions())
+    @test readchomp(`perl -e 'alarm 30; exec @ARGV' $node -e "console.log($support)"`) == "true"
+    @test count("WebAssembly.validate", DCm._generate_support_js(DCm.TranslatorOptions(; require_js_string_builtin = true))) == 3
+    # a front end's crash prints dart's header, then its stack trace
+    local crash = DCm.CFECrashError(ErrorException("boom"), stacktrace())
+    @test startswith(sprint(show, crash), "CFECrashError(boom):\n")
+    @test DCm.tag(DCm._RecordClassesRepository()) == "dart2wasm.recordClasses"
 end
