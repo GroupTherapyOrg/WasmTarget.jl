@@ -51,6 +51,17 @@ the tag `v1.12.7`.
    logger. Each is a located rejection naming "Base.__init__ (the runtime's)". A const value free of
    mutation, such as `Sys.WORD_SIZE`, is Julia's own value and is read as any other.
 
+## The heap a compile reads, and the oracle's order
+
+A compile reads every binding's value as it stands when the compile runs, as juliac's image is its
+build process's heap at output (`src/precompile.c:111`, `jl_write_compiler_output`): whatever ran
+before is in the starting state. That includes a native run of the same program in the session. A
+native call that mutates a global (`counter::Int64 = 0; bump(x) = (global counter += x; counter)`)
+leaves the program's later compile starting from the mutated value (audit #61, A61S4). This is
+juliac's semantics, but it is a hazard for the differential oracle. A native answer computed before
+the compile starts one step behind the compiled program. A native answer computed after the compile
+starts from the heap the compile read, as the module's own first call does.
+
 ## Known deviation from juliac
 
 A value an `__init__` derived from the host is fixed at compile time, where juliac computes it at
