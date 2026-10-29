@@ -59,6 +59,27 @@ const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.c
     @test WTR.run_cases(WTR.RunCase[]) == WTR.RunResult[]
 end
 
+# a module whose `f` (i32 -> i32) raises a wasm exception: one tag of type () -> (), and `throw 0`
+const _RUN_THROWS = UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+                          0x01, 0x09, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x00,   # types: i32 -> i32, () -> ()
+                          0x03, 0x02, 0x01, 0x00,                                             # f has type 0
+                          0x0d, 0x03, 0x01, 0x00, 0x01,                                       # one tag, of type 1
+                          0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00,                           # export f
+                          0x0a, 0x06, 0x01, 0x04, 0x00, 0x08, 0x00, 0x0b]                     # f: throw 0
+const _RUN_TRAPS = _run_one_function(_RUN_I32, UInt8[0x00])   # local.get 0, unreachable
+
+@testset "a native throw wants a wasm exception: neither a trap nor a return" begin
+    local r = WTR.run_cases([WTR.RunCase("throws as native does", _RUN_THROWS, (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("traps where native throws", _RUN_TRAPS, (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("returns where native throws", _RUN_ADD1, (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("throws where native returns", _RUN_THROWS, (Int32(1),), Int32(2)),
+                             WTR.RunCase("both modules throw", _RUN_THROWS, (Int32(1),), WTR.Throws(DivideError); optimized = _RUN_THROWS)])
+    @test r[1].ok && r[5].ok
+    @test !r[2].ok && occursin("trap: ", r[2].why) && occursin("where native Julia throws DivideError", r[2].why)
+    @test !r[3].ok && occursin("returns, where native Julia throws DivideError", r[3].why)
+    @test !r[4].ok && occursin("throws a wasm exception", r[4].why) && occursin("native Julia answers 2", r[4].why)
+end
+
 @testset "a compiled case: codegen's module and compile's wasm-opt'd one, both run" begin
     local comp(f, ts; optimize::Bool = true) = optimize ? _run_one_function(_RUN_I32) : _RUN_ADD1
     local c = WTR.compiled_case("two modules", comp, identity, (Int32(1),), Int32(2))

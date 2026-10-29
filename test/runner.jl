@@ -2,8 +2,9 @@
 # every module a test gets from WasmTarget, which the builder already accepted (D10), runs in node, the
 # major .github/workflows/ci.yml names, its entry called with the case's arguments, and its answer is
 # compared with native Julia's, === at the answer's type. One node process runs every case of a batch.
-# Marshalled: Int32, UInt32, Int64, UInt64, Float32, Float64 and Bool, arguments and answer, and an answer of a
-# singleton type (nothing), whose call must return and whose type is its value; any other type, a module that imports anything, an entry not found, a trap or a throw is a located failure of its
+# Marshalled: Int32, UInt32, Int64, UInt64, Float32, Float64 and Bool, arguments and answer, an answer of a
+# singleton type (nothing), whose call must return and whose type is its value, and Throws(T), a native call that
+# throws, whose module must raise a wasm exception, neither trap nor return; any other type, a module that imports anything, an entry not found, a trap or a throw is a located failure of its
 # case, never a skip. An unsigned integer crosses as the signed one of its bits, a float as its bit
 # pattern, so NaN payloads and -0.0 keep their bits.
 # A case carries both modules of its program: compile's own (dartdev's default phases, ending with
@@ -113,6 +114,18 @@ function answer_cases(label::String, compile, f, args::Tuple, native; optimized:
     return out
 end
 
+"""
+    Throws(T)
+
+The answer of a case whose native call throws an exception of type `T`: its module must raise a wasm exception
+(WasmTarget's exception tag, a `WebAssembly.Exception` in JS), never trap (a `WebAssembly.RuntimeError`:
+unreachable, an integer divided by zero) and never return. The exception's type is not read yet: its class id
+needs an exported reader the runtime has not ported.
+"""
+struct Throws
+    type::Type
+end
+
 """A case's verdict: `ok` when the module answered native's value; `why` says what differs, located."""
 struct RunResult
     label::String
@@ -148,7 +161,8 @@ end
 # an answer's wire form: a scalar's, or "void" for a value of a singleton type (nothing, a fieldless struct),
 # which carries no bits: its call must return no value (undefined or null in JS), and its type is its value; a
 # module returning a value there, a Union{Nothing,T} answer's T, differs from native (A56E1)
-_wire_answer(x)::Union{Tuple{String,String},Nothing} = Base.issingletontype(typeof(x)) ? ("void", "-") : _wire(x)
+_wire_answer(x)::Union{Tuple{String,String},Nothing} =
+    x isa Throws ? ("throws", "-") : Base.issingletontype(typeof(x)) ? ("void", "-") : _wire(x)
 
 # the answer read back at native's type
 function _unwire(::Type{T}, s::AbstractString) where {T}
@@ -178,6 +192,7 @@ const toWasm = (t, v) => {
 };
 const fromWasm = (t, x) => {
   if (t === 'void') return (x === undefined || x === null) ? '-' : 'a_value:' + typeof x;
+  if (t === 'throws') return 'returned';
   if (t === 'i32') return String(x | 0);
   if (t === 'i64') return BigInt.asIntN(64, x).toString();
   const dv = new DataView(new ArrayBuffer(8));
@@ -207,7 +222,9 @@ const instances = new Map();
       const ms = performance.now() - t0;
       process.stdout.write('ok ' + fromWasm(rtype, r) + ' ' + ms.toFixed(1) + '\n');
     } catch (e) {
-      process.stdout.write('err ' + String(e && e.message || e).replace(/\s+/g, ' ') + '\n');
+      const why = String(e && e.message || e).replace(/\s+/g, ' ');
+      // a wasm exception (the module's throw) apart from a trap (unreachable, an integer divided by zero)
+      process.stdout.write((e instanceof WebAssembly.Exception ? 'exc ' : e instanceof WebAssembly.RuntimeError ? 'err trap: ' : 'err ') + why + '\n');
     }
   }
 })();
@@ -272,7 +289,13 @@ function run_cases(cases::AbstractVector{RunCase}; run_budget::Float64 = RUN_BUD
                 local a = k <= length(answers) ? answers[k] :
                     killed[] ? "err no answer within $(limit) s, node killed: a hang or a blow-up" : "err node gave no answer: $stderr_text"
                 if startswith(a, "err ")
-                    verdicts[(i, opt)] = (false, nothing, String(a[5:end]))
+                    verdicts[(i, opt)] = (false, nothing, String(a[5:end]) * (c.native isa Throws ? ", where native Julia throws $(c.native.type)" : ""))
+                elseif startswith(a, "exc ")
+                    # a wasm exception: native's answer when native throws, else the module's fault
+                    verdicts[(i, opt)] = c.native isa Throws ? (true, c.native, "") :
+                        (false, nothing, "throws a wasm exception ($(a[5:end])), where native Julia answers $(repr(c.native))")
+                elseif c.native isa Throws
+                    verdicts[(i, opt)] = (false, nothing, "returns, where native Julia throws $(c.native.type)")
                 else
                     local ans, ms = split(a[4:end], ' ')
                     local secs = parse(Float64, ms) / 1000
