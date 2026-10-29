@@ -2,11 +2,11 @@
 # Land this worktree's commits on the march branch: rebase onto it, run dev/check.sh on every
 # commit, push fast-forward. Never a merge commit, never a force push.
 #
-# The check runs first outside any lock, so lanes check side by side. Then the lane takes the
-# landing lock (one lane at a time, held for a fetch and a push, and for a re-check only when
-# another lane landed meanwhile), so a landing is checked again at most once and never starves:
-# the optimistic-then-serialized landing of a merge queue (bors, GitHub's merge queue), its
-# serialized part kept short.
+# The lane takes the landing lock first, then rebases onto the march branch and checks each commit,
+# so every commit is checked exactly once and never again: a serialized merge queue (bors's
+# one-at-a-time mode). The machine runs one check at a time (dev/check.sh, D31), so lanes checking
+# side by side only queued for the one slot and then re-checked under the lock when another lane
+# landed meanwhile, two checks a landing; waiting lanes keep working in their own trees.
 set -uo pipefail
 # the one march branch on origin (D23): every lane lands here; worktrees and their branches stay local
 MARCH=wt2
@@ -45,9 +45,9 @@ cleanup_scratch() { cd "$lane" && git worktree remove --force "$scratch" 2>/dev/
 cd "$scratch"
 log="$common/wt-landings.tsv"   # one log for every lane: D13's band
 lock="$common/wt-landing-lock"
-# before the lock every commit is checked on its own tree, against its parent; under the lock only
-# the rebased tip is checked again (audit 47, A47E3), with git's own rebase variables cleared: the ratchet's plants
-# make scratch repositories, and an inherited GIT_DIR or GIT_INDEX_FILE would point them at this one
+# under the lock every commit is checked on its own tree, against its parent, with git's own rebase
+# variables cleared: the ratchet's plants make scratch repositories, and an inherited GIT_DIR or
+# GIT_INDEX_FILE would point them at this one
 checked_rebase() {
   if ! git rebase -q "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh'; then
     if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then git rebase --abort; fi
@@ -56,12 +56,9 @@ checked_rebase() {
 }
 release() { rm -rf "$lock"; }
 trap cleanup_scratch EXIT
-git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
-[ "$(git rev-list --count "origin/$MARCH..HEAD")" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
-first=$(git log --reverse --format=%at "origin/$MARCH..HEAD" | head -1)
-checked_rebase || { echo "ship: a commit's check is red or the rebase conflicts; the branch is as it was. Fix it and ship again"; exit 1; }
 # the landing lock: a directory holding its holder's pid; a holder that died frees it, and so does
 # a lock older than 10 minutes with no pid written (its holder died before writing it)
+w0=$(date +%s)
 while ! mkdir "$lock" 2>/dev/null; do
   holder=$(cat "$lock/pid" 2>/dev/null || true)
   if [ -n "$holder" ]; then kill -0 "$holder" 2>/dev/null || rm -rf "$lock"
@@ -69,26 +66,14 @@ while ! mkdir "$lock" 2>/dev/null; do
   sleep 2
 done
 echo $$ > "$lock/pid"; trap 'release; cleanup_scratch' EXIT
-# under the lock the re-check takes the reserved slot (dev/check.sh's slot L), so the holder never
-# waits behind other lanes' optimistic checks; a push a lane on an older dev/ship.sh beat (one that
-# takes no lock) is fetched and re-checked again, at most three times
-export CHECK_RESERVED=1
-for try in 1 2 3; do
-  git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
-  if ! git merge-base --is-ancestor "origin/$MARCH" HEAD; then
-    # every commit already passed on its own tree before the lock; under it, the stack is rebased
-    # onto the new base and its tip checked once, as a merge queue checks the head it lands (bors,
-    # GitHub's merge queue), so the lock is held for one check, never one per commit
-    echo "ship: another lane landed while this one checked; checking the rebased tip under the landing lock"
-    if ! git rebase -q "origin/$MARCH"; then
-      if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then git rebase --abort; fi
-      echo "ship: the rebase onto the new base conflicts; the branch is as it was. Fix it and ship again"; exit 1
-    fi
-    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE CHECK_BASE="origin/$MARCH" bash dev/check.sh ||
-      { echo "ship: the rebased tip is red on the new base; the branch is as it was. Fix it and ship again"; exit 1; }
-  fi
-  git fetch -q origin "$MARCH" && git merge-base --is-ancestor "origin/$MARCH" HEAD && break
-done
+[ $(( $(date +%s) - w0 )) -gt 0 ] && echo "ship: waited $(( $(date +%s) - w0 ))s for the landing lock"
+git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
+[ "$(git rev-list --count "origin/$MARCH..HEAD")" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
+first=$(git log --reverse --format=%at "origin/$MARCH..HEAD" | head -1)
+checked_rebase || { echo "ship: a commit's check is red or the rebase conflicts; the branch is as it was. Fix it and ship again"; exit 1; }
+# a push that took no lock (a lane on an older dev/ship.sh) moved the base: refuse, never land unchecked
+git fetch -q origin "$MARCH" && git merge-base --is-ancestor "origin/$MARCH" HEAD ||
+  { echo "ship: origin/$MARCH moved under the landing lock (a lane on an older dev/ship.sh); ship again"; exit 1; }
 # never claim a landing the push doesn't carry: HEAD must hold every commit this lane brought, by
 # subject (a rebase that lost them, leaving HEAD at origin's tip, would push nothing and print
 # "landed"; wt3-tests saw exactly that)
