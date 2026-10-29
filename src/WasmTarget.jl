@@ -6,10 +6,12 @@
 # the path through it is a located rejection, never a value.
 module WasmTarget
 
+# the interpreter the closed world is inferred with, a package of its own (lib/WasmInterpreter)
+import WasmInterpreter
+
 include("julia/parity.jl")
 include("julia/construction.jl")
 include("julia/reject.jl")
-include("julia/interpreter.jl")
 include("julia/subset.jl")
 include("julia/nir.jl")
 include("julia/classes.jl")

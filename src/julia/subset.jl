@@ -3,8 +3,9 @@
 # rejection. It is strictly smaller than what `juliac --trim=safe` compiles: juliac verifies after
 # patching Base and the stdlibs (juliac/juliac-trim-base.jl, juliac-trim-stdlib.jl: depwarn, stdio and
 # the active project stubbed out), which WasmTarget does not do. A compile
-# infers its program once, here, as trimming does: Core.Compiler's typeinf_ext_toplevel in TRIM_UNSAFE
-# mode over the closed world one entry reaches. Julia's TrimVerifier then judges what it inferred: an
+# infers its program once, here, as trimming does: Core.Compiler's trim entry (typeinf_ext_toplevel,
+# TRIM_UNSAFE) over the closed world one entry reaches, run with WasmTarget's interpreter, which reads
+# its overlay method table (lib/WasmInterpreter). Julia's TrimVerifier then judges what it inferred: an
 # error rejects the program as OutsideSubset, keeping Julia's own record of it with its statement and
 # stack frames (shown in Julia's text); a warning is a note, as juliac treats it ("errors are fatal, warnings are not",
 # verify_typeinf_trim). Nothing else in src infers or asks Julia for typed code.
@@ -47,15 +48,71 @@ end
 # Julia's closed-world inference for trimming at `world`, of its queue: the entry's MethodInstance and
 # each @ccallable as `svec(rettype, signature)`, the item juliac queues for one
 # (juliac-buildscript.jl's jl_add_ccallable_entrypoints), whose specialization the inference compiles
-# and whose record it keeps for the verifier. Julia 1.13 adds external_linkage: false, so every body
-# the queue reaches is inferred and none is taken as already compiled into a package image
-# (WasmTarget compiles every body to wasm).
-@quarantine "the closed world is inferred by Julia's trim mode, whose entry point changed arity in 1.13" Core.Compiler.typeinf_ext_toplevel function _trim_infer(queue::Vector{Any}, world::UInt)::Vector{Any}
-    @static if VERSION >= v"1.13-"
-        return Core.Compiler.typeinf_ext_toplevel(queue, UInt[world], Core.Compiler.TRIM_UNSAFE, false)
-    else
-        return Core.Compiler.typeinf_ext_toplevel(queue, UInt[world], Core.Compiler.TRIM_UNSAFE)
+# and whose record it keeps for the verifier. It is typeinf_ext_toplevel's trim entry over
+# WasmInterpreter (lib/WasmInterpreter), so the closed world is inferred over WasmTarget's overlays,
+# walked by Julia's own Compiler.compile!; the walk lives in that package, whose image holds its
+# compiled code apart from WasmTarget's.
+@quarantine "the closed world is inferred by Julia's trim entry over WasmTarget's interpreter, a package of its own" WasmInterpreter.infer_closed_world _trim_infer(queue::Vector{Any}, world::UInt)::Vector{Any} =
+    WasmInterpreter.infer_closed_world(queue, world)
+
+# Julia's trim verifier over the closed world: TrimVerifier.get_verify_typeinf_trim (Julia's
+# Compiler/src/verifytrim.jl) with one change. Julia's takes as a resolved callee only a native
+# CodeInstance (owner nothing), where every one the closed world holds is WasmTarget's
+# (`WasmInterpreter.WasmCacheOwner`); each body is judged by Julia's own verify_codeinstance!, and each queued
+# ccallable's svec by Julia's check of its declared return against inference (CCallableMissing), as
+# 1.12 and 1.13 write it.
+@quarantine "Julia's trim verifier resolves a callee among native CodeInstances alone; the closed world's are WasmTarget's" Core.Compiler.TrimVerifier.verify_codeinstance! function _verify_trim(codeinfos::Vector{Any}, at::String)
+    local this_world = Base.get_world_counter()
+    local interp = Core.Compiler.NativeInterpreter(this_world)
+    local inspected = Base.IdSet{Core.CodeInstance}()
+    local caches = IdDict{Core.MethodInstance,Core.CodeInstance}()
+    local errors = Core.Compiler.TrimVerifier.ErrorList()
+    local parents = Core.Compiler.TrimVerifier.ParentMap()
+    for item in codeinfos
+        item isa Core.CodeInstance || continue
+        push!(inspected, item)
+        if item.owner === WasmInterpreter.WasmCacheOwner() && item.min_world <= this_world <= item.max_world
+            local mi = Core.Compiler.get_ci_mi(item)
+            mi === item.def && (caches[mi] = item)
+        end
     end
+    for i in 1:length(codeinfos)
+        local item = codeinfos[i]
+        if item isa Core.CodeInstance
+            local src = codeinfos[i + 1]
+            src isa Core.CodeInfo ||
+                reject!(Internal("src/julia/subset.jl: the closed world's CodeInstance at $i is followed by a $(typeof(src)), not its CodeInfo"), at)
+            Core.Compiler.TrimVerifier.verify_codeinstance!(interp, item, src, inspected, caches, parents, errors)
+        elseif item isa Core.SimpleVector
+            local rt = item[1]::Type
+            local sig = item[2]::Type
+            local asrt = Any
+            local valid = @static if VERSION >= v"1.13-"
+                local mi = ccall(:jl_get_specialization1, Any, (Any, Csize_t, Cint), sig, this_world, 0)
+                if mi isa Core.MethodInstance && sig <: (mi.def::Method).sig
+                    local ci = get(caches, mi, nothing)
+                    ci isa Core.CodeInstance ? (asrt = ci.rettype; true) : false
+                else
+                    false
+                end
+            else
+                local ptr = ccall(:jl_get_specialization1, Ptr{Cvoid}, (Any, Csize_t, Cint), sig, this_world, 0)
+                if ptr !== C_NULL
+                    local mi = unsafe_pointer_to_objref(ptr)::Core.MethodInstance
+                    local ci = get(caches, mi, nothing)
+                    ci isa Core.CodeInstance ? (asrt = ci.rettype; true) : false
+                else
+                    false
+                end
+            end
+            if !valid
+                push!(errors, false => Core.Compiler.TrimVerifier.CCallableMissing(rt, sig, "unresolved ccallable"))
+            elseif !(asrt <: rt)
+                push!(errors, Core.Compiler.hasintersect(asrt, rt) => Core.Compiler.TrimVerifier.CCallableMissing(asrt, sig, "ccallable declared return type does not match inference"))
+            end
+        end
+    end
+    return (errors, parents)
 end
 
 # The program's @ccallable members among an inferred closed world, each as juliac queues it,
@@ -198,9 +255,9 @@ end
 
 # The closed world Julia infers for `queue` and its verifier's verdict: the inferred items, the
 # warnings and the parents; an error rejects as OutsideSubset, located at `at`
-@quarantine "the verifier judges what Julia's trim inference returned, errors fatal and warnings notes, as juliac" Core.Compiler.TrimVerifier.get_verify_typeinf_trim function _infer_verified(queue::Vector{Any}, world::UInt, at::String)
+@quarantine "the verifier judges what Julia's trim inference returned, errors fatal and warnings notes, as juliac" Base.push! function _infer_verified(queue::Vector{Any}, world::UInt, at::String)
     local codeinfos = _trim_infer(queue, world)
-    local errors, parents = Core.Compiler.TrimVerifier.get_verify_typeinf_trim(codeinfos)
+    local errors, parents = _verify_trim(codeinfos, at)
     local fatal = TrimError[]; local notes = TrimError[]
     for (warn, cause) in errors
         push!(warn ? notes : fatal, _trim_error(cause, parents, at))
