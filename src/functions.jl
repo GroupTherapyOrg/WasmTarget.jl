@@ -112,9 +112,13 @@ correctly.
     return nothing
 end
 
-# the export name, the interop namer's (src/namer.jl _ExternalMemberNamer.getExportName)
-@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" get_export_name(self::FunctionCollector, target::Core.MethodInstance)::Union{String,Nothing} =
-    get_export_name(interop_namer(self), target)
+"""
+The export name of `target`, the interop namer's (src/namer.jl _ExternalMemberNamer.getExportName); a binding's initializer carries no export pragma.
+
+Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+"""
+@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" get_export_name(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::Union{String,Nothing} =
+    target isa GlobalRef ? nothing : get_export_name(interop_namer(self), target)
 
 """
 Collect the exports, and record the value classes as allocated. dart's boxed bool, int and double
@@ -153,14 +157,13 @@ Reshaped: `target` — a Reference is a member's MethodInstance or, for a static
     local existing = get(self._functions, target, nothing)
     existing === nothing || return existing
     local translator = self.translator
-    # a static field's initializer (dart's `member is Field` arm): the value a Julia binding starts
-    # the program with is its image value only once every module's __init__ has run at load (juliac
-    # runs Base.__init__ and each module's in order), which the start function does not run yet, so
-    # the initializer has no value to compute: a located rejection, the one gap of the lazy arm, until
-    # the start function runs them as dev/MODULE_INIT.md rules
-    target isa GlobalRef && reject!(Unquarantined("src/functions.jl getFunction: the initializer of the binding $target, whose starting value waits for the modules' __init__ (Base.__init__ and the closed world's) to run at load"), "FunctionCollector.getFunction")
-    local never_inline = something(Util.get_wasm_never_inline_pragma(target), false)
-    local always_inline = something(Util.get_wasm_prefer_inline_pragma(target), false)
+    # a static field's initializer, dart's `member is Field` arm: never inlined by its initializer's
+    # size (Translator.neverInlineStaticFieldInitializer); a Julia binding carries no pragma, so no
+    # prefer-inline or pure one
+    local is_field = target isa GlobalRef
+    local never_inline = is_field ? never_inline_static_field_initializer(translator, target) :
+        something(Util.get_wasm_never_inline_pragma(target), false)
+    local always_inline = is_field ? false : something(Util.get_wasm_prefer_inline_pragma(target), false)
     local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
     local module_ = module_for_reference(translator, target)
     # an exported member's function type is the external one
@@ -169,7 +172,7 @@ Reshaped: `target` — a Reference is a member's MethodInstance or, for a static
         _make_function_type(translator, target, nothing; is_import_or_export = true, synthesize_null_return_value = false, synthesize_no_return = false) :
         signature_for_direct_call(translator, target)
     local function_ = WasmBuilder.define(module_.functions[], ftype, get_function_name(self, target))
-    function_.is_pure = Util.has_wasm_pure_function_pragma(target; component = translator.component)
+    function_.is_pure = !is_field && Util.has_wasm_pure_function_pragma(target; component = translator.component)
     function_.inline_hint = inline_hint
     if export_name !== nothing
         function_.is_js_called = true

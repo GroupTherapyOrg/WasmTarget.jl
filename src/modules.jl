@@ -89,12 +89,14 @@ end
 @parity "dart2wasm/lib/modules.dart:126 ModuleOutputData.hasMultipleModules" has_multiple_modules(self::ModuleOutputData)::Bool = length(self.modules) > 1
 
 """
-The module that holds `reference`, a member (Core.MethodInstance). dart first turns its artificial
-references (getters, setters, tear-offs, checked entries) into the member's own; a MethodInstance
-names one callable, so there is nothing to turn. With no split map (the monolithic data), the
-default module.
+The module that holds `reference`, a member (Core.MethodInstance) or a binding's initializer (its
+GlobalRef). dart first turns its artificial references (getters, setters, tear-offs, checked entries)
+into the member's own; a MethodInstance names one callable, so there is nothing to turn. With no split
+map (the monolithic data), the default module.
+
+Reshaped: `reference` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
 """
-@parity "dart2wasm/lib/modules.dart:129 ModuleOutputData.moduleForReference" function module_for_reference(self::ModuleOutputData, reference::Core.MethodInstance)::ModuleMetadata
+@parity "dart2wasm/lib/modules.dart:129 ModuleOutputData.moduleForReference" function module_for_reference(self::ModuleOutputData, reference::Union{Core.MethodInstance,GlobalRef})::ModuleMetadata
     # We put the entire application into the same wasm module.
     local m = self.default_module
     m === nothing && reject!(Internal("dart2wasm/lib/modules.dart:129 ModuleOutputData.moduleForReference: no default module"), "ModuleOutputData.moduleForReference")

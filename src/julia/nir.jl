@@ -543,6 +543,41 @@ type (nir_value_type), the callee's value and globals.dart's constant initialize
     isdefinedglobal(ref.mod, ref.name) && isconst(ref.mod, ref.name)
 
 """
+    runtime_module(m) -> Bool
+
+Whether the module `m` is the runtime's: its parentmodule chain reaches Core or Base, whose
+`__init__` set up the host process (stdio, the depot and load paths, the logger; base/Base.jl:368 at
+Julia v1.12.7), the setup dart's embedder does outside the compiled program (dev/MODULE_INIT.md).
+"""
+@quarantine "Core's and Base's __init__ are the host's setup, as dart's runtime is set up by its embedder" Base.parentmodule function runtime_module(m::Module)::Bool
+    while !(m === Core || m === Base)
+        local p = parentmodule(m)
+        p === m && return false
+        m = p
+    end
+    return true
+end
+
+"""
+    nir_binding_value(ref, at) -> NirConst
+
+The value a binding starts the program with, the one source: its value in this session, which has
+run every module's `__init__` (src/toplevel.c:215-240 when a definition finishes, base/loading.jl:1443
+when a package loads, at Julia v1.12.7), juliac's heap after its startup has run them, so WasmTarget
+compiles no `__init__` (dev/MODULE_INIT.md). A binding of a runtime module (`runtime_module`) that is
+not const, or holds a mutable value, is host state Base's `__init__` set (stdout, DEPOT_PATH, the
+logger): a located rejection naming it.
+"""
+@quarantine "a binding starts at its session value, past every __init__; a value an __init__ derived from the host (a dlopen handle, a time, Random's seed) is baked at compile time, where juliac computes it at startup (dev/MODULE_INIT.md)" Core.getglobal function nir_binding_value(ref::GlobalRef, at::String)::NirConst
+    isdefinedglobal(ref.mod, ref.name) ||
+        reject!(Unquarantined("src/julia/nir.jl nir_binding_value: the binding $ref has no value, whose read Julia answers with an UndefVarError"), at)
+    local value = getglobal(ref.mod, ref.name)
+    runtime_module(ref.mod) && !(isconst(ref.mod, ref.name) && Base.ismutationfree(typeof(value))) &&
+        reject!(Unquarantined("src/julia/nir.jl nir_binding_value: the binding $ref, host state set by Base.__init__ (the runtime's)"), at)
+    return NirConst(Core.Const(value))
+end
+
+"""
     nir_value_type(body, v) -> Type
 
 The type Julia inferred for the operand `v` of `body`: a statement's its `ssavaluetypes` entry, an

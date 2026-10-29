@@ -352,14 +352,17 @@ end
     CompilationTask(::Val{:_}, function_::WasmBuilder.FunctionBuilder, _code_generator::CodeGenerator) = new(function_, _code_generator)
 end
 
-"""A member's function whose code is to be generated, by its code generator."""
+"""
+A member's function whose code is to be generated, by its code generator: the reference is a
+member's MethodInstance or a binding's initializer, its GlobalRef (FunctionCollector's key).
+"""
 @parity "dart2wasm/lib/translator.dart:2694 AstCompilationTask" struct AstCompilationTask <: AbstractCompilationTask
     # CompilationTask's fields, then the class's own
     function_::WasmBuilder.FunctionBuilder
     _code_generator::CodeGenerator
-    reference::Core.MethodInstance
+    reference::Union{Core.MethodInstance,GlobalRef}
     # the struct's one constructor, tagged; dart's constructor at :2697 is its outer function
-    AstCompilationTask(::Val{:_}, function_::WasmBuilder.FunctionBuilder, _code_generator::CodeGenerator, reference::Core.MethodInstance) =
+    AstCompilationTask(::Val{:_}, function_::WasmBuilder.FunctionBuilder, _code_generator::CodeGenerator, reference::Union{Core.MethodInstance,GlobalRef}) =
         new(function_, _code_generator, reference)
 end
 
@@ -633,7 +636,12 @@ end
 
 @parity "dart2wasm/lib/translator.dart:425 Translator.hasMultipleModules" has_multiple_modules(self::Translator)::Bool = has_multiple_modules(self._module_output_data)
 
-@parity "dart2wasm/lib/translator.dart:427 Translator.moduleForReference" module_for_reference(self::Translator, reference::Core.MethodInstance)::WasmBuilder.ModuleBuilder =
+"""
+The module builder of the module `reference` is placed in.
+
+Reshaped: `reference` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+"""
+@parity "dart2wasm/lib/translator.dart:427 Translator.moduleForReference" module_for_reference(self::Translator, reference::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.ModuleBuilder =
     self._output_to_builder[module_for_reference(self._module_output_data, reference)]
 
 @parity "dart2wasm/lib/translator.dart:436 Translator.moduleForConstant" module_for_constant(self::Translator, constant::NirConst)::Union{} =
@@ -1183,8 +1191,12 @@ end
     return AstCallTarget(signature, self, target)
 end
 
-# a Julia member calls through no selector (src/dispatch_table.jl): its own function type
-@parity "dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall" signature_for_direct_call(self::Translator, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType =
+"""
+The function type of a direct call of `target`: a Julia member calls through no selector (src/dispatch_table.jl), so the function collector answers.
+
+Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+"""
+@parity "dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall" signature_for_direct_call(self::Translator, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.FunctionType =
     get_function_type(self.functions[], target)
 
 # a Julia member calls through no selector (src/dispatch_table.jl): the function collector answers
@@ -1356,8 +1368,13 @@ end
 @parity "dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor" _should_inline_field_accessor(self::Translator, target::Core.MethodInstance, field::ClassField)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor: a field accessor's inlining; a Julia member is a method, never a field's implicit getter or setter, and Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost)"), "Translator._shouldInlineFieldAccessor")
 
-@parity "dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer" never_inline_static_field_initializer(self::Translator, field::ClassField)::Union{} =
-    reject!(Internal("dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer: a static field initializer's inlining by its node count; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), and a binding's value is globals.dart's constant initializer or none"), "Translator.neverInlineStaticFieldInitializer")
+"""
+Whether a static field's initializer function is kept from inlining: dart's answer is no when the
+initializer is a constant, and otherwise yes when its expression counts more than 10 nodes. A Julia
+binding's initializer is its session value (nir_binding_value), one literal, whose count never passes
+10, so the answer is no.
+"""
+@parity "dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer" never_inline_static_field_initializer(self::Translator, field::GlobalRef)::Bool = false
 
 @parity "dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall" _should_inline_constructor_call(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType, constructor::Core.MethodInstance)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall: a constructor's inlining by its initializers' size; a Julia constructor is a method, and Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost)"), "Translator._shouldInlineConstructorCall")
@@ -1534,11 +1551,16 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/translator.dart:2697 AstCompilationTask" AstCompilationTask(function_::WasmBuilder.FunctionBuilder, _create_code_generator::CodeGenerator, reference::Core.MethodInstance)::AstCompilationTask =
+"""
+A compilation task of `reference`'s function and its code generator.
+
+Reshaped: `reference` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+"""
+@parity "dart2wasm/lib/translator.dart:2697 AstCompilationTask" AstCompilationTask(function_::WasmBuilder.FunctionBuilder, _create_code_generator::CodeGenerator, reference::Union{Core.MethodInstance,GlobalRef})::AstCompilationTask =
     AstCompilationTask(Val(:_), function_, _create_code_generator, reference)
 
 # dart prints the member's Kernel (its initializers and body) with printKernel; a Julia member's is
-# the optimized IR Julia inferred, its body's CodeInfo
+# the optimized IR Julia inferred, its body's CodeInfo, and a binding's initializer has none
 @parity "dart2wasm/lib/translator.dart:2701 AstCompilationTask.run" function Base.run(self::AstCompilationTask, translator::Translator, print_kernel::Bool, print_wasm::Bool)::Nothing
     if print_kernel || print_wasm
         local names = _get_names(self, translator)
@@ -1547,9 +1569,9 @@ end
         println(header)
         println(self.function_.type)
         # dart's member's function type; a Julia member's is its specialization's signature
-        println(self.reference.specTypes)
+        self.reference isa Core.MethodInstance && println(self.reference.specTypes)
     end
-    if print_kernel
+    if print_kernel && self.reference isa Core.MethodInstance
         # the member's optimized statements as the closed world holds them, never inferred again
         for (i, st) in enumerate(nir_body_of(translator.component, self.reference).stmts)
             println("  %$i = $st")

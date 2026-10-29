@@ -148,21 +148,19 @@ end
 
 """
 dart's literal initializer of a static field, its constant. A Julia global binding has no
-initializer expression: a juliac image is the heap after the top level ran, but every module's
-`__init__` runs again at load (Julia 1.13 Compiler/src/precompile.jl:352-366), so a value set or
-mutated at load is no build-time constant. A binding's value is its constant initializer only when no
-load can change it: the binding is `const` and its value is free of mutation (`Base.ismutationfree`
-of its type), the NIR's literal of it, compared by `===`. Every other binding (a non-const one, one
-`__init__` assigns, a const one holding a mutable object, one with no value) has none and takes
-dart's lazy path.
+initializer expression: its starting value is its value in the session, past every module's
+`__init__` (nir_binding_value, dev/MODULE_INIT.md). That value is its constant initializer only when
+the program cannot change it: the binding is `const` and its value is free of mutation
+(`Base.ismutationfree` of its type), the NIR's literal of it, compared by `===`. Every other binding
+(a non-const one, a const one holding a mutable object, one with no value) has none and takes dart's
+lazy path.
 
 A deliberate difference from dart, whose initializer is the field's literal expression.
 """
 @parity "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer" function get_constant_initializer(self::DartGlobals, variable::GlobalRef)::Union{NirConst,Nothing}
     nir_binding_is_constant(variable) || return nothing
-    local value = getglobal(variable.mod, variable.name)
-    Base.ismutationfree(typeof(value)) || return nothing
-    return NirConst(Core.Const(value))
+    Base.ismutationfree(typeof(getglobal(variable.mod, variable.name))) || return nothing
+    return nir_binding_value(variable, "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer")
 end
 
 """
@@ -173,8 +171,8 @@ the start-function path (dart's `field.initializer != null`) is taken only by th
 binding carries; and the lazy path is dart's: the initializer function, keyed by the binding
 (FunctionCollector), then a nullable global (null signals uninitialized) or an explicit flag, the
 global or a table slot (dev/formal/StaticFieldInit.tla models the guard). The initializer's value is
-the binding's starting value, its image value once every module's `__init__` has run at load, which
-the start function does not run yet: getFunction rejects there, located, the one gap of the arm.
+the binding's starting value, its session value past every module's `__init__` (nir_binding_value,
+dev/MODULE_INIT.md).
 """
 @parity "dart2wasm/lib/globals.dart:126 DartGlobals.getDefinitionForStaticField" function get_definition_for_static_field(self::DartGlobals, field::GlobalRef)::DartGlobalDefinition
     local existing = get(self._definitions, field, nothing)
@@ -217,7 +215,7 @@ the start function does not run yet: getFunction rejects there, located, the one
     end
 
     # Add initializer function to the compilation queue (keyed by the binding, FunctionCollector's
-    # docstring; its value waits for the modules' __init__ at load, a located rejection there).
+    # docstring).
     get_function(translator.functions[], field)
 
     # We will have to initialize the global lazily, meaning each access will check if it's initialized

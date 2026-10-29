@@ -976,19 +976,12 @@ end
     local mb = D.main_module(t)
     local gm = D.get_member_code_generator(t, W.WasmBuilder.define(mb.functions[], ftype, "init"), counter)
     @test gm isa D.StaticFieldInitializerCodeGenerator && gm.field === counter && gm.enclosing_member === counter
-    # the lazy arm's definition is made through FunctionCollector.getFunction, whose located rejection
-    # (the modules' __init__ at load) the body lets through, never a value in its place
+    # the lazy arm's definition (a mutable global and its flag, made through FunctionCollector.getFunction):
+    # the body writes the binding's session value, tees it, sets the flag and returns the value
     local g = static_field_codegen(D.StaticFieldInitializerCodeGenerator, t, ftype)
-    local e = rejection(() -> D.generate_internal(g))
-    @test e.rejection isa W.Unquarantined && occursin("src/functions.jl getFunction", e.rejection.row)
-    # with the definition the lazy arm makes after it (a mutable global and its flag), the body writes
-    # the binding's image value, tees it, sets the flag and returns the value
-    local dg = t.dart_globals[]
-    local flag = D._define_initializer_flag(dg, counter, mb)
-    dg._definitions[counter] = D._define_global_based_field(dg, counter, D.translate_type_of_field(t, counter), mb, true, nothing, flag)
-    local g2 = static_field_codegen(D.StaticFieldInitializerCodeGenerator, t, ftype)
-    @test emitted_by(() -> D.generate_internal(g2), g2) ==
+    @test emitted_by(() -> D.generate_internal(g), g) ==
           ["i64.const 7", "local.tee", "global.set", "local.get", "i32.const 1", "global.set", "end"]
+    @test D.get_existing_function(t.functions[], counter) !== nothing
 end
 
 @testset "code_generator.dart: a static field's eager initializer in the start function" begin
@@ -1020,11 +1013,16 @@ end
         g.b[] = B.body(fb); g.param_locals[] = B.locals(fb); g.return_label[] = nothing
         g
     end
-    # the lazy arm's definition is made through getFunction, whose located rejection the accessor lets
-    # through
     local g0 = acc(counter, getter, true)
     @test g0.enclosing_member === counter && g0.is_implicit_getter
-    @test rejection(() -> D.generate_internal(g0)).rejection isa W.Unquarantined
+    # the lazy arm's definition, made through getFunction in a translator of its own: an explicit flag
+    # picks the global or the initializer's call
+    let t0 = static_field_translator(), fb = B.define(D.main_module(t0).functions[], getter, "acc0"),
+        g = D.StaticFieldImplicitAccessorCodeGenerator(t0, getter, counter, true)
+        g.b[] = B.body(fb); g.param_locals[] = B.locals(fb); g.return_label[] = nothing
+        @test emitted_by(() -> D.generate_internal(g), g) == ["global.get", "if", "global.get", "else", "call", "end", "end"]
+        @test D.get_existing_function(t0.functions[], counter) !== nothing
+    end
     # a field with no initializer function is read and returned
     dg._definitions[counter] = D._define_global_based_field(dg, counter, ty, mb, true, nothing, nothing)
     local g1 = acc(counter, getter, true)
