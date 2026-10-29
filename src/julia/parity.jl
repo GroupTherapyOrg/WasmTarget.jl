@@ -1505,12 +1505,15 @@ end
 The typed signatures' check: every method of a ported `@parity` definition of `mod` (not an
 `@unported` stub) declares each parameter, none untyped (`Any`), an unbounded type variable or a
 bare `Vararg` (a ported struct's one inner constructor among them, @parity refusing Julia's default
-constructors where it is written); throws a `ConstructionViolation` listing the rest.
+constructors where it is written); throws a `ConstructionViolation` listing the rest. A parameter
+is `Any` exactly where dart types it with its top type, `Object` or `Object?`, read by name from the
+anchor's declaration in `sdk`, the pinned checkout, when there is one (`_dart_params`): Julia's top
+type is the faithful port of dart's (the lead's ruling, 2026-10-29).
 
 precedent(typescript: noImplicitAny; dart: the always_specify_types lint). Julia's differs: an
 untyped parameter is `Any`, which Julia accepts, so the load reads each method's signature.
 """
-@quarantine "Julia accepts an untyped parameter as Any; the load reads every ported signature" Base.unwrap_unionall function check_typed_signatures(mod::Module)::Int
+@quarantine "Julia accepts an untyped parameter as Any; the load reads every ported signature" Base.unwrap_unionall function check_typed_signatures(mod::Module, sdk::Union{String,Nothing})::Int
     local out = String[]
     _attribute!(mod)
     for e in REGISTRY
@@ -1518,19 +1521,61 @@ untyped parameter is `Any`, which Julia accepts, so the load reads each method's
         for m in e.methods
             (!startswith(string(m.name), '#') && m.name !== :kwcall) || continue
             local ps = Base.unwrap_unionall(m.sig).parameters
+            local names = Base.method_argnames(m)
             for i in 2:length(ps)
                 local p = ps[i]
-                local why = p === Any ? "is untyped (Any)" :
+                # without the pin (a user's load) the dart type is unread and Any passes, as a nullable
+                # field does in check_typed_fields; the landing gate loads with the pin
+                local top = p === Any && (sdk === nothing || i <= length(names) &&
+                    get(something(_dart_params(sdk, e.anchor), Dict{String,String}()), string(names[i]), "") in ("Object", "Object?"))
+                local why = top ? nothing : p === Any ? "is untyped (Any)" :
                     p isa TypeVar && p.ub === Any ? "is an unbounded type variable" :
                     p isa Core.TypeofVararg && (!isdefined(p, :T) || p.T === Any) ? "is a bare Vararg" : nothing
                 why === nothing || push!(out, "$(basename(string(m.file))):$(m.line) $(m.name)'s parameter $(i - 1) $why ($(e.anchor))")
             end
         end
     end
+    empty!(_PIN_LINES)
     isempty(out) || throw(ConstructionViolation("check_typed_signatures", join(out, "; ")))
     return 0
 end
-@quarantine "the typed signatures' assertion, run when the package loads" Base.Val construction_check(::Val{:check_typed_signatures})::Int = check_typed_signatures(@__MODULE__)
+@quarantine "the typed signatures' assertion, run when the package loads" Base.Val construction_check(::Val{:check_typed_signatures})::Int = check_typed_signatures(@__MODULE__, _pin_sdk())
+
+# the parameters of the dart declaration at `anchor`, each Julia's snake name => dart's type as
+# written, read from the pinned source: the list that opens after the member's name on the anchor's
+# line, split at its top-level commas (a named or optional section's brackets, a default and a
+# modifier dropped); nothing for an anchor of no dart declaration with a parameter list
+@quarantine "dart's analyzer types each parameter; Julia reads the pinned declaration's text" Base.readlines function _dart_params(sdk::String, anchor::String)::Union{Dict{String,String},Nothing}
+    local a = parse_anchor(anchor)
+    a === nothing || a.pin === :dart || return nothing
+    local path = joinpath(sdk, a.file)
+    isfile(path) || return nothing
+    local lines = get!(() -> readlines(path), _PIN_LINES, path)
+    1 <= a.line <= length(lines) || return nothing
+    local name = last(split(a.symbol, '.'))
+    local paren = findfirst(Regex("\\b\\Q$(name)\\E\\s*(?:<[^()]*>)?\\("), lines[a.line])
+    paren === nothing && return nothing
+    local text = join(lines[a.line:min(a.line + 40, length(lines))], "\n")[last(paren)+1:end]
+    local out = Dict{String,String}()
+    local depth = 0
+    local start = 1
+    local add(piece) = begin
+        local ts = filter(t -> !(t in ("required", "covariant", "final", "const")), split(first(split(piece, '=')), r"[\s{}\[\]]+"; keepempty = false))
+        length(ts) >= 2 && (out[snake(ts[end])] = join(ts[1:end-1], " "))
+    end
+    for (i, c) in pairs(text)
+        if c in ('(', '<', '[', '{')
+            depth += 1
+        elseif c in (')', '>', ']', '}')
+            depth == 0 && c == ')' && (add(text[start:prevind(text, i)]); return out)
+            depth -= 1
+        elseif c == ',' && depth == 0
+            add(text[start:prevind(text, i)])
+            start = nextind(text, i)
+        end
+    end
+    return nothing
+end
 
 # why the dart class at `anchor` does not declare `field` (a Julia field name) nullable, or nothing
 # when it does: a member at column 2 of the class's body, or of a class it extends or mixes in (a

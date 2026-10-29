@@ -819,7 +819,11 @@ function sum_negatives_missed(wt::Module, definition::Symbol, refuses::Function,
         refuses(() -> getfield(wt, :check_closed)(stale)) || push!(out, "negative missed: a recorded match short of its sum's kinds passes")
     elseif definition === :check_typed_signatures
         local f = "/plant/src/translator.jl"
-        local check = getfield(wt, :check_typed_signatures)
+        local sdk = mktempdir()
+        mkpath(joinpath(sdk, "pkg", "dart2wasm", "lib"))
+        write(joinpath(sdk, "pkg", "dart2wasm", "lib", "translator.dart"),
+              "class Translator {\n  void throwAs(Object? operand, Type? type) {}\n  void cast(Object value, int count) {}\n}\n")
+        local check(m) = getfield(wt, :check_typed_signatures)(m, sdk)
         local typed = plant("@parity \"dart2wasm/lib/translator.dart:10 Translator.translateType\" translate_type(t::Int, v::Vector{Int}) = t\n" *
                             "@parity \"dart2wasm/lib/translator.dart:20 Translator.isStruct\" @unported function is_struct(t) end\n", f)
         passes(() -> check(typed)) || push!(out, "negative missed: a ported method with every parameter typed fails")
@@ -837,6 +841,16 @@ function sum_negatives_missed(wt::Module, definition::Symbol, refuses::Function,
             push!(out, "negative missed: an unbounded type variable passes")
         refuses(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:10 Translator.translateType\" translate_type(t::Int, rest...) = t\n", f))) ||
             push!(out, "negative missed: a bare Vararg passes")
+        # Any is dart's top type's port, admitted exactly where the pinned dart parameter is Object or Object?
+        passes(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:2 Translator.throwAs\" throw_as(operand, type::Type) = operand\n", f))) ||
+            push!(out, "negative missed: Any where the pinned dart parameter is Object? fails")
+        passes(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:3 Translator.cast\" cast(value, count::Int) = count\n", f))) ||
+            push!(out, "negative missed: Any where the pinned dart parameter is Object fails")
+        refuses(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:2 Translator.throwAs\" throw_as(operand, type) = operand\n", f))) ||
+            push!(out, "negative missed: Any where the pinned dart parameter is Type? passes")
+        refuses(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:3 Translator.cast\" cast(value::Any, n) = value\n", f))) ||
+            push!(out, "negative missed: Any on a parameter the pinned dart declaration does not name passes")
+        rm(sdk; recursive = true)
     else
         local check = getfield(wt, :check_typed_fields)
         local f = "/plant/src/translator.jl"
@@ -2401,7 +2415,7 @@ const LOCKS = [
         ConstructionLock(:check_mirrors)),
     "L217_closed_sums_matched_exhaustively" => ("every Union WasmTarget binds is a @closed sum and every match over one is @exhaustive (Dale: \"we don't allow certain broken wasm patterns\", closed sums and an exhaustive match, dev/LEDGER.md D8): `@closed const X = Union{...}` refuses, where it is written, a sum of fewer than two kinds or a kind that is not a concrete type defined above it subtyping nothing; `@exhaustive v::X begin (k::K) => ... end` refuses a sum not @closed above it and a missing, extra, repeated, wildcard `_` or untyped-binder arm, and expands into an isa chain over the asserted subject; when WasmTarget loads construction_check(::Val{:closed}) refuses a Union binding no @closed declares and re-checks every recorded match against its sum (check_closed), and this lock only calls it, with its plants (an unclosed Union binding, a stale match record and each refused arm form; an exhaustive match taking each kind's arm) (dev/CHARTER.md C5)",
         ConstructionLock(:closed)),
-    "L214_typed_signatures" => ("every method of a ported @parity definition declares each parameter (Dale: strict means the wrong choice cannot be written, dev/LEDGER.md D6): none untyped (Any), an unbounded type variable or a bare Vararg, read from each method's signature in the method table when WasmTarget loads; an @unported stub and a quarantined definition (a Julia API's own types, the charter's named seam) are exempt; construction_check(::Val{:check_typed_signatures}) asserts it, and this lock only calls it, with its plants (an untyped parameter, an unbounded type variable and a bare Vararg each refused; a typed method and an untyped stub passed) (dev/CHARTER.md C4)",
+    "L214_typed_signatures" => ("every method of a ported @parity definition declares each parameter (Dale: strict means the wrong choice cannot be written, dev/LEDGER.md D6): none untyped (Any), an unbounded type variable or a bare Vararg, read from each method's signature in the method table when WasmTarget loads, Any admitted exactly where the parameter's pinned dart type, read by name from the anchor's declaration, is dart's top type Object or Object? (the lead's ruling, 2026-10-29); an @unported stub and a quarantined definition (a Julia API's own types, the charter's named seam) are exempt; construction_check(::Val{:check_typed_signatures}) asserts it, and this lock only calls it, with its plants (an untyped parameter, an unbounded type variable and a bare Vararg each refused; a typed method and an untyped stub passed; Any where dart has Object or Object? passed, Any where dart has a narrower type or names no such parameter refused) (dev/CHARTER.md C4)",
         ConstructionLock(:check_typed_signatures)),
     "L215_typed_fields" => ("no field of a ported @parity struct holds Any, and a field holds nothing only where the dart class declares it T? (Dale: one source of truth, the field's type dart's, dev/LEDGER.md D5): read from each struct's field types when WasmTarget loads, the nullable fields against the pinned dart class where the checkout exists; a quarantined struct carries a Julia API's types, the charter's named seam; construction_check(::Val{:check_typed_fields}) asserts it, and this lock only calls it, with its plants (a field of Any, one of Vector{Any}, a nullable field dart declares non-nullable and one dart does not declare each refused; typed fields with dart's T? passed) (dev/CHARTER.md C4)",
         ConstructionLock(:check_typed_fields)),
