@@ -1358,21 +1358,27 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3751 TearOffCodeGenerator" TearOffCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/code_generator.dart:3751 TearOffCodeGenerator: a tear-off of $member; a Julia function is already a value, the singleton instance of its type, and calling it calls its method, so no closure is made for it"), "TearOffCodeGenerator")
 
-@parity "dart2wasm/lib/code_generator.dart:3758 TearOffCodeGenerator.generateInternal" @unported function generate_internal(self::TearOffCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:3758 TearOffCodeGenerator.generateInternal" generate_internal(self::TearOffCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:3758 TearOffCodeGenerator.generateInternal: a tear-off's code; a Julia function is already a value, the singleton instance of its type, so TearOffCodeGenerator is never made"), "generate_internal")
 
 # Julia's answer (D3): the trim verifier admits no dynamic call, so no forwarder is asked for
 @parity "dart2wasm/lib/code_generator.dart:3808 DynamicForwarderCodeGenerator" DynamicForwarderCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, reference::Core.MethodInstance, call_shape::CallShape)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/code_generator.dart:3808 DynamicForwarderCodeGenerator: a dynamic forwarder of $reference for $(sprint(show, call_shape)); Julia's trim verifier rejects every call it cannot resolve statically, so no call is dynamic"), "DynamicForwarderCodeGenerator")
 
-@parity "dart2wasm/lib/code_generator.dart:3816 DynamicForwarderCodeGenerator.generateInternal" @unported function generate_internal(self::DynamicForwarderCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:3816 DynamicForwarderCodeGenerator.generateInternal" generate_internal(self::DynamicForwarderCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:3816 DynamicForwarderCodeGenerator.generateInternal: a dynamic forwarder's code; Julia's trim verifier rejects every call it cannot resolve statically, so DynamicForwarderCodeGenerator is never made"), "generate_internal")
 
-@parity "dart2wasm/lib/code_generator.dart:3835 DynamicForwarderCodeGenerator._generateDynamicTearOffForwarder" @unported function _generate_dynamic_tear_off_forwarder(self::DynamicForwarderCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:3835 DynamicForwarderCodeGenerator._generateDynamicTearOffForwarder" _generate_dynamic_tear_off_forwarder(self::DynamicForwarderCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:3835 DynamicForwarderCodeGenerator._generateDynamicTearOffForwarder: a dynamic forwarder's code; Julia's trim verifier rejects every call it cannot resolve statically, so DynamicForwarderCodeGenerator is never made"), "_generate_dynamic_tear_off_forwarder")
 
-@parity "dart2wasm/lib/code_generator.dart:3856 DynamicForwarderCodeGenerator._generateDynamicMethodForwarder" @unported function _generate_dynamic_method_forwarder(self::DynamicForwarderCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:3856 DynamicForwarderCodeGenerator._generateDynamicMethodForwarder" _generate_dynamic_method_forwarder(self::DynamicForwarderCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:3856 DynamicForwarderCodeGenerator._generateDynamicMethodForwarder: a dynamic forwarder's code; Julia's trim verifier rejects every call it cannot resolve statically, so DynamicForwarderCodeGenerator is never made"), "_generate_dynamic_method_forwarder")
 
-@parity "dart2wasm/lib/code_generator.dart:4010 DynamicForwarderCodeGenerator._generateDynamicGetterForwarder" @unported function _generate_dynamic_getter_forwarder(self::DynamicForwarderCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4010 DynamicForwarderCodeGenerator._generateDynamicGetterForwarder" _generate_dynamic_getter_forwarder(self::DynamicForwarderCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4010 DynamicForwarderCodeGenerator._generateDynamicGetterForwarder: a dynamic forwarder's code; Julia's trim verifier rejects every call it cannot resolve statically, so DynamicForwarderCodeGenerator is never made"), "_generate_dynamic_getter_forwarder")
 
-@parity "dart2wasm/lib/code_generator.dart:4043 DynamicForwarderCodeGenerator._generateDynamicSetterForwarder" @unported function _generate_dynamic_setter_forwarder(self::DynamicForwarderCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4043 DynamicForwarderCodeGenerator._generateDynamicSetterForwarder" _generate_dynamic_setter_forwarder(self::DynamicForwarderCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4043 DynamicForwarderCodeGenerator._generateDynamicSetterForwarder: a dynamic forwarder's code; Julia's trim verifier rejects every call it cannot resolve statically, so DynamicForwarderCodeGenerator is never made"), "_generate_dynamic_setter_forwarder")
 
 @parity "dart2wasm/lib/code_generator.dart:4103 InvocationCreationStubGenerator" InvocationCreationStubGenerator(translator::Translator, call_shape::MethodCallShape)::InvocationCreationStubGenerator =
     InvocationCreationStubGenerator(Val(:_), translator, call_shape)
@@ -1424,59 +1430,80 @@ end
 @parity "dart2wasm/lib/code_generator.dart:4196 ConstructorCodeGeneratorBase" ConstructorCodeGeneratorBase(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4196 ConstructorCodeGeneratorBase: $member is a constructor in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorCodeGeneratorBase")
 
-@parity "dart2wasm/lib/code_generator.dart:4202 ConstructorCodeGeneratorBase._getConstructorArgumentLocals" @unported function _get_constructor_argument_locals(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}) end
+@parity "dart2wasm/lib/code_generator.dart:4202 ConstructorCodeGeneratorBase._getConstructorArgumentLocals" _get_constructor_argument_locals(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}})::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4202 ConstructorCodeGeneratorBase._getConstructorArgumentLocals: a constructor's code in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "_get_constructor_argument_locals")
 
-@parity "dart2wasm/lib/code_generator.dart:4219 ConstructorCodeGeneratorBase._setupConstructorParameters" @unported function _setup_constructor_parameters(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}, parameter_offset::Int64; is_forwarder::Bool = false) end
+@parity "dart2wasm/lib/code_generator.dart:4219 ConstructorCodeGeneratorBase._setupConstructorParameters" _setup_constructor_parameters(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}, parameter_offset::Int64; is_forwarder::Bool = false)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4219 ConstructorCodeGeneratorBase._setupConstructorParameters: a constructor's code in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "_setup_constructor_parameters")
 
 # Julia's answer (D3): a constructor is a method, its allocation a %new statement the body's generator visits
 @parity "dart2wasm/lib/code_generator.dart:4252 ConstructorInitializerCodeGenerator" ConstructorInitializerCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4252 ConstructorInitializerCodeGenerator: $member is a constructor in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorInitializerCodeGenerator")
 
-@parity "dart2wasm/lib/code_generator.dart:4259 ConstructorInitializerCodeGenerator.generateInternal" @unported function generate_internal(self::ConstructorInitializerCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4259 ConstructorInitializerCodeGenerator.generateInternal" generate_internal(self::ConstructorInitializerCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4259 ConstructorInitializerCodeGenerator.generateInternal: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "generate_internal")
 
-@parity "dart2wasm/lib/code_generator.dart:4279 ConstructorInitializerCodeGenerator.generateRedirectingInitializerList" @unported function generate_redirecting_initializer_list(self::ConstructorInitializerCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4279 ConstructorInitializerCodeGenerator.generateRedirectingInitializerList" generate_redirecting_initializer_list(self::ConstructorInitializerCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4279 ConstructorInitializerCodeGenerator.generateRedirectingInitializerList: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "generate_redirecting_initializer_list")
 
-@parity "dart2wasm/lib/code_generator.dart:4321 ConstructorInitializerCodeGenerator.generateInitializerList" @unported function generate_initializer_list(self::ConstructorInitializerCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4321 ConstructorInitializerCodeGenerator.generateInitializerList" generate_initializer_list(self::ConstructorInitializerCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4321 ConstructorInitializerCodeGenerator.generateInitializerList: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "generate_initializer_list")
 
-@parity "dart2wasm/lib/code_generator.dart:4434 ConstructorInitializerCodeGenerator._setupInitializerListParametersAndContexts" @unported function _setup_initializer_list_parameters_and_contexts(self::ConstructorInitializerCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4434 ConstructorInitializerCodeGenerator._setupInitializerListParametersAndContexts" _setup_initializer_list_parameters_and_contexts(self::ConstructorInitializerCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4434 ConstructorInitializerCodeGenerator._setupInitializerListParametersAndContexts: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "_setup_initializer_list_parameters_and_contexts")
 
-@parity "dart2wasm/lib/code_generator.dart:4448 ConstructorInitializerCodeGenerator.getTypeFields" @unported function get_type_fields(self::ConstructorInitializerCodeGenerator, cls::DataType, info::ClassInfo) end
+@parity "dart2wasm/lib/code_generator.dart:4448 ConstructorInitializerCodeGenerator.getTypeFields" get_type_fields(self::ConstructorInitializerCodeGenerator, cls::DataType, info::ClassInfo)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4448 ConstructorInitializerCodeGenerator.getTypeFields: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "get_type_fields")
 
-@parity "dart2wasm/lib/code_generator.dart:4460 ConstructorInitializerCodeGenerator._setupDefaultFieldValues" @unported function _setup_default_field_values(self::ConstructorInitializerCodeGenerator, info::ClassInfo) end
+@parity "dart2wasm/lib/code_generator.dart:4460 ConstructorInitializerCodeGenerator._setupDefaultFieldValues" _setup_default_field_values(self::ConstructorInitializerCodeGenerator, info::ClassInfo)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4460 ConstructorInitializerCodeGenerator._setupDefaultFieldValues: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "_setup_default_field_values")
 
-@parity "dart2wasm/lib/code_generator.dart:4487 ConstructorInitializerCodeGenerator.visitInvalidInitializer" @unported function visit_invalid_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:4487 ConstructorInitializerCodeGenerator.visitInvalidInitializer" visit_invalid_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4487 ConstructorInitializerCodeGenerator.visitInvalidInitializer: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "visit_invalid_initializer")
 
-@parity "dart2wasm/lib/code_generator.dart:4490 ConstructorInitializerCodeGenerator.visitAssertInitializer" @unported function visit_assert_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:4490 ConstructorInitializerCodeGenerator.visitAssertInitializer" visit_assert_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4490 ConstructorInitializerCodeGenerator.visitAssertInitializer: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "visit_assert_initializer")
 
-@parity "dart2wasm/lib/code_generator.dart:4495 ConstructorInitializerCodeGenerator.visitLocalInitializer" @unported function visit_local_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:4495 ConstructorInitializerCodeGenerator.visitLocalInitializer" visit_local_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4495 ConstructorInitializerCodeGenerator.visitLocalInitializer: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "visit_local_initializer")
 
-@parity "dart2wasm/lib/code_generator.dart:4500 ConstructorInitializerCodeGenerator.visitFieldInitializer" @unported function visit_field_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:4500 ConstructorInitializerCodeGenerator.visitFieldInitializer" visit_field_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4500 ConstructorInitializerCodeGenerator.visitFieldInitializer: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "visit_field_initializer")
 
-@parity "dart2wasm/lib/code_generator.dart:4516 ConstructorInitializerCodeGenerator.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:4516 ConstructorInitializerCodeGenerator.visitRedirectingInitializer" visit_redirecting_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4516 ConstructorInitializerCodeGenerator.visitRedirectingInitializer: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "visit_redirecting_initializer")
 
-@parity "dart2wasm/lib/code_generator.dart:4540 ConstructorInitializerCodeGenerator.visitSuperInitializer" @unported function visit_super_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:4540 ConstructorInitializerCodeGenerator.visitSuperInitializer" visit_super_initializer(self::ConstructorInitializerCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4540 ConstructorInitializerCodeGenerator.visitSuperInitializer: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "visit_super_initializer")
 
-@parity "dart2wasm/lib/code_generator.dart:4566 ConstructorInitializerCodeGenerator.visitVariableGet" @unported function visit_variable_get(self::ConstructorInitializerCodeGenerator, node::Union{NirSSA,NirArgument}, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:4566 ConstructorInitializerCodeGenerator.visitVariableGet" visit_variable_get(self::ConstructorInitializerCodeGenerator, node::Union{NirSSA,NirArgument}, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4566 ConstructorInitializerCodeGenerator.visitVariableGet: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "visit_variable_get")
 
-@parity "dart2wasm/lib/code_generator.dart:4589 ConstructorInitializerCodeGenerator.visitVariableSet" @unported function visit_variable_set(self::ConstructorInitializerCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:4589 ConstructorInitializerCodeGenerator.visitVariableSet" visit_variable_set(self::ConstructorInitializerCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4589 ConstructorInitializerCodeGenerator.visitVariableSet: a constructor's initializer list; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "visit_variable_set")
 
 # Julia's answer (D3): a constructor is a method, its allocation a %new statement the body's generator visits
 @parity "dart2wasm/lib/code_generator.dart:4617 ConstructorAllocatorCodeGenerator" ConstructorAllocatorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4617 ConstructorAllocatorCodeGenerator: $member is a constructor in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorAllocatorCodeGenerator")
 
-@parity "dart2wasm/lib/code_generator.dart:4624 ConstructorAllocatorCodeGenerator.generateInternal" @unported function generate_internal(self::ConstructorAllocatorCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4624 ConstructorAllocatorCodeGenerator.generateInternal" generate_internal(self::ConstructorAllocatorCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4624 ConstructorAllocatorCodeGenerator.generateInternal: a constructor's allocator; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement"), "generate_internal")
 
-@parity "dart2wasm/lib/code_generator.dart:4637 ConstructorAllocatorCodeGenerator.generateConstructorAllocator" @unported function generate_constructor_allocator(self::ConstructorAllocatorCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4637 ConstructorAllocatorCodeGenerator.generateConstructorAllocator" generate_constructor_allocator(self::ConstructorAllocatorCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4637 ConstructorAllocatorCodeGenerator.generateConstructorAllocator: a constructor's allocator; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement"), "generate_constructor_allocator")
 
 # Julia's answer (D3): a constructor is a method, its allocation a %new statement the body's generator visits
 @parity "dart2wasm/lib/code_generator.dart:4729 ConstructorBodyCodeGenerator" ConstructorBodyCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4729 ConstructorBodyCodeGenerator: $member is a constructor in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorBodyCodeGenerator")
 
-@parity "dart2wasm/lib/code_generator.dart:4736 ConstructorBodyCodeGenerator.generateInternal" @unported function generate_internal(self::ConstructorBodyCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4736 ConstructorBodyCodeGenerator.generateInternal" generate_internal(self::ConstructorBodyCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4736 ConstructorBodyCodeGenerator.generateInternal: a constructor's body in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement"), "generate_internal")
 
-@parity "dart2wasm/lib/code_generator.dart:4757 ConstructorBodyCodeGenerator.generateConstructorBody" @unported function generate_constructor_body(self::ConstructorBodyCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4757 ConstructorBodyCodeGenerator.generateConstructorBody" generate_constructor_body(self::ConstructorBodyCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4757 ConstructorBodyCodeGenerator.generateConstructorBody: a constructor's body in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement"), "generate_constructor_body")
 
-@parity "dart2wasm/lib/code_generator.dart:4787 ConstructorBodyCodeGenerator._setupConstructorBodyParametersAndContexts" @unported function _setup_constructor_body_parameters_and_contexts(self::ConstructorBodyCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4787 ConstructorBodyCodeGenerator._setupConstructorBodyParametersAndContexts" _setup_constructor_body_parameters_and_contexts(self::ConstructorBodyCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4787 ConstructorBodyCodeGenerator._setupConstructorBodyParametersAndContexts: a constructor's body in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement"), "_setup_constructor_body_parameters_and_contexts")
 
 @parity "dart2wasm/lib/code_generator.dart:4854 StaticFieldInitializerCodeGenerator" @unported function StaticFieldInitializerCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field) end
 
@@ -1498,19 +1525,22 @@ end
 @parity "dart2wasm/lib/code_generator.dart:4986 ImplicitFieldAccessorCodeGenerator" ImplicitFieldAccessorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::ClassField, is_implicit_getter::Bool, use_unchecked_entry::Bool)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4986 ImplicitFieldAccessorCodeGenerator: an accessor of $(field.name); Julia reads and writes a field with the getfield and setfield! intrinsics, never an accessor member"), "ImplicitFieldAccessorCodeGenerator")
 
-@parity "dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal" @unported function generate_internal(self::ImplicitFieldAccessorCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal" generate_internal(self::ImplicitFieldAccessorCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal: a field accessor's code; Julia reads and writes a field with the getfield and setfield! intrinsics, never an accessor member"), "generate_internal")
 
 # Julia's answer (D3): a closure is a method compiled as any member (Closures._findCaptures)
 @parity "dart2wasm/lib/code_generator.dart:5065 SynchronousLambdaCodeGenerator" SynchronousLambdaCodeGenerator(translator::Translator, lambda::Lambda)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5065 SynchronousLambdaCodeGenerator: a lambda in $(lambda.enclosing_member); a Julia closure's call is a method of its own, on its closure type, compiled as a member, so Closures makes no Lambda"), "SynchronousLambdaCodeGenerator")
 
-@parity "dart2wasm/lib/code_generator.dart:5069 SynchronousLambdaCodeGenerator.generateInternal" @unported function generate_internal(self::SynchronousLambdaCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:5069 SynchronousLambdaCodeGenerator.generateInternal" generate_internal(self::SynchronousLambdaCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5069 SynchronousLambdaCodeGenerator.generateInternal: a lambda's code; a Julia closure's call is a method of its own, compiled as a member, so Closures makes no Lambda"), "generate_internal")
 
 # Julia's answer (D3): no class is cyclic (getInlinableMemberCodeGenerator), so no member is unreachable for it
 @parity "dart2wasm/lib/code_generator.dart:5085 UnreachableCodeGenerator" UnreachableCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5085 UnreachableCodeGenerator: a member of a cyclic class, $member; no class of a Julia method is cyclic, a struct holding no instance of itself inline"), "UnreachableCodeGenerator")
 
-@parity "dart2wasm/lib/code_generator.dart:5088 UnreachableCodeGenerator.generateInternal" @unported function generate_internal(self::UnreachableCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:5088 UnreachableCodeGenerator.generateInternal" generate_internal(self::UnreachableCodeGenerator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5088 UnreachableCodeGenerator.generateInternal: a cyclic class's member; no class of a Julia method is cyclic, so UnreachableCodeGenerator is never made"), "generate_internal")
 
 @parity "dart2wasm/lib/code_generator.dart:5103 TryBlockFinalizer" TryBlockFinalizer(label::WasmBuilder.Label)::TryBlockFinalizer = TryBlockFinalizer(Val(:_), label)
 
