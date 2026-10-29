@@ -3,6 +3,16 @@
 # statements, field reads, writes and allocations, calls, literals, constants, the definitions Julia
 # never reaches, and the static-field generators. Its intrinsics and control flow are
 # code_generator_intrinsics.jl's and code_generator_control.jl's, each a file the shards balance apart.
+# a binding an __init__ set: this session ran the module's __init__ once, when its definition finished
+# (a top-level module: a module nested in the test's own runs its __init__ only when the test's
+# finishes), so the binding starts at that value and no __init__ is compiled (dev/MODULE_INIT.md;
+# audit A61S1)
+module CodegenInitOnceCases
+const seen = Ref(0)
+__init__() = (seen[] += 1; nothing)
+read_seen(x::Int) = seen[] + x
+end
+
 module CodeGeneratorTest
 
 using Test
@@ -341,6 +351,9 @@ end
     # the session value, before any native write below changes it
     queue_native!("peek ", pb, LazyGlobalCases.peek, [(1,), (-7,)])
     queue_native!("setpeek ", sb, LazyGlobalCases.setpeek, [(2,), (-4,)])
+    # a const binding of a mutable Ref is read through its getter, its value the session's
+    @test Main.CodegenInitOnceCases.seen[] == 1
+    queue_native!("read_seen ", W.compile(Main.CodegenInitOnceCases.read_seen, (Int,); optimize = false), Main.CodegenInitOnceCases.read_seen, [(1,), (-3,)])
 end
 
 module ThrowCases
@@ -519,17 +532,16 @@ end
     @test D.get_existing_function(t.functions[], init_ref) !== nothing
 end
 
-@testset "code_generator.dart: a static field's eager initializer in the start function" begin
+@testset "code_generator.dart: a static field's eager initializer, a type of no value" begin
+    # dart makes it only for a field the startup pragma marks, which no Julia binding carries
+    # (DartGlobals._initializeAtStartup answers no): the constructor and the struct reject Internal
     local t = static_field_translator()
     local counter = GlobalRef(StaticFieldCases, :counter)
-    local mb = D.main_module(t)
-    local gl = W.WasmBuilder.define(mb.globals[], IR.GlobalType(D.translate_type_of_field(t, counter); mutable = true), "counter")
-    # its function type takes and returns nothing, its enclosing member the binding
-    local g0 = D.EagerStaticFieldInitializerCodeGenerator(t, counter, gl)
-    @test isempty(g0.function_type.inputs) && isempty(g0.function_type.outputs) && g0.enclosing_member === counter
-    # the binding's image value written to its global
-    local g = static_field_codegen((t, ft, f) -> D.EagerStaticFieldInitializerCodeGenerator(t, f, gl), t, g0.function_type)
-    @test emitted_by(() -> D.generate_internal(g), g) == ["i64.const 7", "global.set"]
+    local gl = W.WasmBuilder.define(D.main_module(t).globals[], IR.GlobalType(D.translate_type_of_field(t, counter); mutable = true), "counter")
+    @test !D._initialize_at_startup(t.dart_globals[], counter)
+    local e = rejection(() -> D.EagerStaticFieldInitializerCodeGenerator(t, counter, gl))
+    @test e.rejection isa W.Internal && occursin("startup pragma", e.rejection.site)
+    @test rejection(() -> D.EagerStaticFieldInitializerCodeGenerator(Val(:_))).rejection isa W.Internal
 end
 
 @testset "code_generator.dart: a static field's implicit getter and setter" begin
