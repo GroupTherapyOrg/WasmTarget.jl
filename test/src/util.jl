@@ -61,7 +61,8 @@ t(x::Int) = x > 0 ? x : throw(ArgumentError("negative"))
     @test D.Util.get_wasm_export_pragma(world.entry; component = world) == "entry" && D.Util.has_wasm_export_pragma(world.entry; component = world)
     ext(1)
     @test D.Util.get_wasm_export_pragma(mi(ext); component = world) == "ext" && !D.Util.has_wasm_export_pragma(mi(g); component = world)
-    @test D.Util.get_wasm_import_pragma(mi(g)) === nothing && !D.Util.has_wasm_import_pragma(mi(g))
+    # a method whose body is no foreign call to a host module is no import (test/src/host_import.jl)
+    @test D.Util.get_wasm_import_pragma(world.entry; component = world) === nothing && !D.Util.has_wasm_import_pragma(world.entry; component = world)
     @test D.Util.get_wasm_weak_export_pragma(world.entry) === nothing && !D.Util.has_wasm_weak_export_pragma(world.entry)
     # wasm:pure-function is Julia's proof that a call is removable if unused: g's product is, a call
     # that may throw is not
@@ -72,7 +73,7 @@ t(x::Int) = x > 0 ? x : throw(ArgumentError("negative"))
     @test D.Util.get_pragma(mi(g), "wasm:never-inline"; default_value = true) === true
     @test D.Util.get_pragma(world.entry, "wasm:export"; default_value = "x", component = world) == "entry"
     @test D.Util.get_pragma(mi(g), "wasm:pure-function"; default_value = true, component = world) === true
-    @test D.Util.get_pragma(mi(g), "wasm:import") === nothing && D.Util.get_pragma(mi(g), "wasm:entry-point") === nothing
+    @test D.Util.get_pragma(mi(g), "wasm:import"; component = world) === nothing && D.Util.get_pragma(mi(g), "wasm:entry-point") === nothing
     @test D.Util.has_pragma(mi(g), "wasm:never-inline") && !D.Util.has_pragma(mi(k), "wasm:never-inline")
     # a field, a binding, a class or a module declares no pragma; the closed world's records need the world
     @test D.Util.get_pragma(Int, "wasm:export") === nothing

@@ -163,6 +163,26 @@ unused where Julia's effects prove it (hasWasmPureFunctionPragma).
         (r::FieldReference) => (r.kind === FieldReferenceKind_initializer && never_inline_static_field_initializer(translator, r.field::GlobalRef), false, false)
     end
     local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
+    # If this function is a `@pragma('wasm:import', '<module>.<name>')` we import the function and
+    # return it: Julia's, a method whose whole body is a foreign call to a host module (getPragma)
+    local import_name = target isa MethodInstance ? get_import_name(interop_namer(self), target) : nothing
+    if import_name !== nothing
+        local m = target::MethodInstance
+        # beyond dart's (which trusts its dart: libraries): each argument and the result crosses the
+        # boundary by a type of its own (translateExternalType's number, array or reference arm), never
+        # the anyref every other Julia value would be coerced to
+        for t in (Base.unwrap_unionall(m.specTypes).parameters[2:end]..., type_of_return_value(translator, m))
+            t === Nothing && continue
+            translate_external_type(translator, t) == WasmBuilder.IR.RefType_any(; nullable = true) &&
+                reject!(Unquarantined("src/functions.jl getFunction: the host import $(sprint(show, import_name)) passes $t, which has no wasm boundary type"), "$m")
+        end
+        local ftype = _make_function_type(translator, m, nothing; is_import_or_export = true, synthesize_null_return_value = false, synthesize_no_return = false)
+        local imported = WasmBuilder.var"import"(module_for_reference(translator, m).functions[], import_name.module_name, import_name.item_name, ftype,
+            "$(sprint(show, import_name)) (import)")
+        imported.is_pure = is_pure
+        imported.inline_hint = inline_hint
+        return self._functions[target] = imported
+    end
     local module_ = module_for_reference(translator, target)
     # an exported member's function type is the external one
     local export_name = get_export_name(self, target)

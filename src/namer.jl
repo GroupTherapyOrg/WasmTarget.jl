@@ -104,8 +104,8 @@ end
 @parity "dart2wasm/lib/namer.dart:74 _ExternalMemberNamer" _ExternalMemberNamer(component::NirWorld, _export_namer::Namer)::_ExternalMemberNamer =
     _ExternalMemberNamer(Val(:_), component, _export_namer)
 
-@parity "dart2wasm/lib/namer.dart:75 _ExternalMemberNamer.getImportName" get_import_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Nothing =
-    Util.get_wasm_import_pragma(member)
+@parity "dart2wasm/lib/namer.dart:75 _ExternalMemberNamer.getImportName" get_import_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Union{Util.ImportName,Nothing} =
+    Util.get_wasm_import_pragma(member; component = self.component)
 
 # External export names should be registered already so we don't have to reserve them with the namer here.
 @parity "dart2wasm/lib/namer.dart:79 _ExternalMemberNamer.getExportName" get_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Union{String,Nothing} =

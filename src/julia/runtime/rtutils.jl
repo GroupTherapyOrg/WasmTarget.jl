@@ -38,3 +38,60 @@ end
 # exception by the tag the main module exports under it. `$` keeps it apart from every export a
 # program names, a Julia identifier holding none
 @quarantine "dart exports no tag for its host; a Julia program's host matches its exceptions by the exported tag" Core.String const EXCEPTION_TAG_EXPORT::Core.String = "\$exceptionTag"
+
+"""
+    host_modules() -> Vector{String}
+
+The modules a WasmTarget host supplies to a module's imports: the keys of the JS runtime's
+`baseImports` object (src/js/runtime_blob.jl, dart's runtime_blob.dart), read from its template, so
+the host's import object is their one source. A key the template fills in (`<<...>>`) is the
+runtime's own, never a program's host library.
+"""
+@quarantine "Julia's foreign call names a library; the host's libraries are the keys of the JS runtime's import object" Base.match function host_modules()::Vector{String}
+    local parts = Dart2Wasm.js_runtime_blob_template[]._parts
+    local text = join(p isa Dart2Wasm._TemplateStringPart ? p.string : "<<>>" for p in parts)
+    local block = match(r"const baseImports = \{\n(.*?)\n\s*\};"s, text)
+    block === nothing && reject!(Internal("src/julia/runtime/rtutils.jl host_modules: the JS runtime's template holds no baseImports object"), "host_modules")
+    local out = String[]
+    local depth = 0
+    for line in split(block[1], '\n')
+        local key = match(r"^\s*([A-Za-z_$][\w$]*)\s*:", line)
+        depth == 0 && key !== nothing && push!(out, String(key[1]))
+        depth += count(==('{'), line) - count(==('}'), line)
+    end
+    return out
+end
+
+"""
+    nir_host_import(world, mi) -> Union{Tuple{String,String},Nothing}
+
+The host import a method is, `(module, name)`, the quarantined host import of a Julia foreign call
+(dev/MARCH.md 1.F), dart's `@pragma("wasm:import", "<module>.<name>")`, read from the method's
+inferred body in the closed world, its one source: a body that is one foreign call of a literal
+`(name, library)` whose library is a host module (`host_modules`), its declared argument types the
+method's own and its arguments the method's, in order, its result returned. Any other method, a
+foreign call to another library among them (libjulia's `jl_uv_puts`, a C library), is no import:
+its body is compiled, and the code generator rejects its foreign call, located.
+
+precedent(clang: `__attribute__((import_module("m"), import_name("n")))` on a wasm function
+declaration; dart: the ffi transformer's `wasm:import` for an `@Native`). Julia's differs: a foreign
+call is a statement of a method's body, not a declaration, so the method whose whole body it is
+stands for the declaration.
+"""
+@quarantine "Julia's foreign call is a statement; the method whose whole body it is stands for dart's wasm:import declaration" Core.SimpleVector function nir_host_import(world::NirWorld, mi::Core.MethodInstance)::Union{Tuple{String,String},Nothing}
+    local body = nir_body_of(world, mi)
+    length(body.stmts) == 2 || return nothing
+    local call, ret = body.stmts[1], body.stmts[2]
+    call isa NirForeignCall && ret isa NirReturn || return nothing
+    local name = call.args[1]
+    name isa NirConst && name.c.val isa Tuple{Symbol,String} || return nothing
+    local item, lib = name.c.val
+    lib in host_modules() || return nothing
+    local rt, ats = call.args[2], call.args[3]
+    local params = Any[Base.unwrap_unionall(mi.specTypes).parameters[2:end]...]
+    rt isa NirConst && ats isa NirConst && ats.c.val isa Core.SimpleVector || return nothing
+    Any[ats.c.val...] == params || return nothing
+    all(i -> call.args[5 + i] == NirArgument(i + 1), eachindex(params)) || return nothing
+    ret.val == NirSSA(1) || rt.c.val === Nothing && ret.val == NirConst(Core.Const(nothing)) || return nothing
+    return (lib, String(item))
+end

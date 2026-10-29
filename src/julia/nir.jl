@@ -300,11 +300,14 @@ end
 end
 
 # a foreigncall's name operand: Julia 1.13 writes a constant name tuple as tuple syntax,
-# Expr(:tuple, :memmove) for (:memmove,), which Julia's own codegen reads as that tuple; a literal
-# otherwise (1.12), and a name computed at run time rejects, located
-@quarantine "Julia 1.13 writes a foreigncall's constant name as tuple syntax, which its codegen reads as the tuple" Core.Expr function _nir_ccall_name(x, at::String)::NirValue
-    x isa Expr && x.head === :tuple || return _nir_operand(x, at)
-    local vals = Any[a isa QuoteNode ? a.value : a for a in x.args]
+# Expr(:tuple, :memmove) for (:memmove,), and Julia 1.12 a `(name, library)` tuple as a call of
+# Core.tuple, Expr(:call, Core.tuple, :sin, "Math"), each of which Julia's own codegen reads as that
+# tuple (ccall.cpp's static_eval); a literal otherwise, and a name computed at run time rejects, located
+@quarantine "Julia writes a foreigncall's constant name as tuple syntax or a call of Core.tuple, which its codegen reads as the tuple" Core.Expr function _nir_ccall_name(x, at::String)::NirValue
+    local elems = x isa Expr && x.head === :tuple ? x.args :
+        x isa Expr && x.head === :call && x.args[1] == GlobalRef(Core, :tuple) ? x.args[2:end] : nothing
+    elems === nothing && return _nir_operand(x, at)
+    local vals = Any[a isa QuoteNode ? a.value : a for a in elems]
     any(v -> v isa Union{Expr, Core.SSAValue, Core.Argument, GlobalRef, Core.SlotNumber}, vals) &&
         reject!(Unquarantined("src/julia/nir.jl: a foreigncall whose name is computed at run time"), at)
     return NirConst(Core.Const(Tuple(vals)))

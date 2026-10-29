@@ -25,32 +25,44 @@ end
 # pragma does; wasm:export is the name Julia records for an export (program_export_name: a @ccallable's
 # C name or its function's, or the entry's function's name, dart's main), a name `default_value` stands
 # for where dart's pragma has none; and wasm:pure-function is Julia's proof that the method is
-# removable if unused (its CodeInstance's interprocedural effects), answering `default_value`. The two
-# Julia records sit in the closed world, Julia's own keyword `component`. No method is a wasm:import (a
-# foreign call is a host import, dev/MARCH.md 1.F), a wasm:weak-export (Julia's exports are all strong)
-# or a wasm:entry-point (the runtime's roots are RUNTIME_ENTRY_POINTS, src/julia/subset.jl), and no
-# other pragma has a Julia declaration. coreTypes is dropped (the CoreTypes row)
+# removable if unused (its CodeInstance's interprocedural effects), answering `default_value`;
+# wasm:import is `<module>.<name>` for a method whose whole body is a foreign call to a host module (a
+# foreign call is the quarantined host import, dev/MARCH.md 1.F; nir_host_import). The three Julia
+# records sit in the closed world, Julia's own keyword `component`. No method is a wasm:weak-export
+# (Julia's exports are all strong) or a wasm:entry-point (the runtime's roots are
+# RUNTIME_ENTRY_POINTS, src/julia/subset.jl), and no other pragma has a Julia declaration. coreTypes is
+# dropped (the CoreTypes row)
 @parity "dart2wasm/lib/util.dart:31 getPragma" function get_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}, name::String; default_value::Union{String,Bool,Nothing} = nothing,
         component::Union{NirWorld,Nothing} = nothing)::Union{String,Bool,Nothing}
     node isa Core.MethodInstance || return nothing
     local method = node.def::Method
     name == "wasm:prefer-inline" && return Core.Compiler.is_declared_inline(method) ? default_value : nothing
     name == "wasm:never-inline" && return Core.Compiler.is_declared_noinline(method) ? default_value : nothing
-    if name == "wasm:export" || name == "wasm:pure-function"
+    if name == "wasm:export" || name == "wasm:pure-function" || name == "wasm:import"
         component === nothing && reject!(Internal("dart2wasm/lib/util.dart:31 getPragma: $name of $node, which Julia records in the closed world, asked with none"), "get_pragma")
         name == "wasm:export" && return program_export_name(node, component.entry)
+        if name == "wasm:import"
+            local host = nir_host_import(component, node)
+            return host === nothing ? nothing : "$(host[1]).$(host[2])"
+        end
         return Core.Compiler.is_removable_if_unused(Core.Compiler.decode_effects(nir_body_of(component, node).ci.ipo_purity_bits)) ? default_value : nothing
     end
     return nothing
 end
 
-# dart's `wasm:import` pragma: no Julia method is an import, a foreign call being a host import
-# (dev/MARCH.md 1.F); coreTypes, Kernel's (the Kernel table's CoreTypes row), is dropped
-@parity "dart2wasm/lib/util.dart:68 hasWasmImportPragma" has_wasm_import_pragma(member::Core.MethodInstance)::Bool = get_wasm_import_pragma(member) !== nothing
+# dart's `wasm:import` pragma, a method whose whole body is a foreign call to a host module (getPragma,
+# nir_host_import); coreTypes, Kernel's (the Kernel table's CoreTypes row), is dropped
+@parity "dart2wasm/lib/util.dart:68 hasWasmImportPragma" has_wasm_import_pragma(member::Core.MethodInstance; component::NirWorld)::Bool =
+    get_wasm_import_pragma(member; component = component) !== nothing
 
-# dart parses the pragma's value into an ImportName; getPragma answers none for every Julia method
-@parity "dart2wasm/lib/util.dart:72 getWasmImportPragma" get_wasm_import_pragma(member::Core.MethodInstance)::Nothing =
-    get_pragma(member, "wasm:import")
+# dart parses the pragma's value, `<module>.<name>`, at its first dot into an ImportName
+@parity "dart2wasm/lib/util.dart:72 getWasmImportPragma" function get_wasm_import_pragma(member::Core.MethodInstance; component::NirWorld)::Union{ImportName,Nothing}
+    local import_name = get_pragma(member, "wasm:import"; component = component)
+    import_name isa String || return nothing
+    local dot = findfirst('.', import_name)
+    dot === nothing && return nothing
+    return ImportName(import_name[1:prevind(import_name, dot)], import_name[nextind(import_name, dot):end])
+end
 
 @parity "dart2wasm/lib/util.dart:91 ImportName" ImportName(module_name::String, item_name::String)::ImportName = ImportName(Val(:_), module_name, item_name)
 

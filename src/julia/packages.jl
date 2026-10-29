@@ -98,6 +98,8 @@ import ...reject!, ...Internal, ...Unported
 import ...nir_body_of
 # a member's export name, Julia's @ccallable or the entry (src/julia/subset.jl)
 import ...program_export_name
+# a member's import, a foreign call to a host module (src/julia/runtime/rtutils.jl)
+import ...nir_host_import
 # the Julia types the Kernel table names, as stubs name them (src/julia/kernel.jl)
 import ...NoCounterpart, ...NirWorld, ...NirBody, ...ClassField, ...NirValue, ...NirSSA, ...NirArgument,
        ...NirGlobal, ...NirConst, ...NirStmt, ...NirInvoke, ...NirCall, ...NirNew, ...NirGlobalRead,
