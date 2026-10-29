@@ -638,3 +638,24 @@ end
     local ec = try; D._should_inline_constructor_call(t, h, sig, h); nothing; catch x; x; end
     @test ec isa WasmTarget.RejectionError && ec.rejection isa WasmTarget.Internal && occursin("ssa_inlining_pass", ec.rejection.site)
 end
+
+module ClosureThisCases
+make(x::Int) = () -> (@noinline; x + 1)
+entry(x::Int) = make(x)()
+end
+
+@testset "translator.dart: preciseThisFor, a closure's `this` its struct" begin
+    local W = WasmTarget
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.entry, (Int,), "translator"), "test"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    # the closure's method: its callee, Argument(1), is the closure, of Julia's typeof(closure)
+    local T = typeof(ClosureThisCases.make(1))
+    local mi = only(b.ci.def for b in t.component if b.ci.def.specTypes == Tuple{T})
+    @test D.precise_this_for(t, mi) == W.WasmBuilder.with_nullability(D.repr(t.class_info[T]), false)
+    @test D.precise_this_for(t, mi; nullable = true) == W.WasmBuilder.with_nullability(D.repr(t.class_info[T]), true)
+    # a function's method has no `this`: dart's assertion, Internal
+    local e = try; D.precise_this_for(t, t.component.entry); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+end

@@ -1200,12 +1200,30 @@ end
     get!(() -> ParameterInfo_from_member(target, false), self.static_param_info, target)
 
 """
-The precise type of `this` in an instance member or constructor. dart asserts `member` is one; a
-Julia member is neither (a method belongs to its generic function, and a constructor is a method
-of the type's own function, whose result `new` allocates), so a request is a located rejection.
+The precise type of `this` in an instance member. A Julia method's `this` is its callee,
+`Argument(1)`, when the callee carries fields: a closure's struct (dart's closure context) or a
+callable struct, its class the specialization's first parameter (nir_argument_type). A function's
+method, whose callee is a singleton, has none: dart asserts an instance member, so it rejects
+Internal, located. dart's unboxed `this` follows: a class with a builtin type whose box class
+`boxedClasses` names is its builtin type, or, nullable, its box.
 """
-@parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" precise_this_for(self::Translator, member::Core.MethodInstance; nullable::Bool = false)::WasmBuilder.IR.ValueType =
-    reject!(Internal("dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor: $member, no instance member or constructor, has no `this`"), "Translator.preciseThisFor")
+@parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" function precise_this_for(self::Translator, member::Core.MethodInstance; nullable::Bool = false)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor"
+    local cls = nir_argument_type(member, NirArgument(1))
+    (cls isa DataType && !Base.issingletontype(cls)) ||
+        reject!(Internal("$at: $member, a method of a function, has no `this`"), at)
+    local builtin = get(self.builtin_types[], cls, nothing)
+    local box_class = builtin === nothing ? nothing : get(self.boxed_classes[], builtin, nothing)
+    if box_class !== nothing
+        # We represent `this` as an unboxed type.
+        nullable || return builtin::WasmBuilder.IR.ValueType
+        # Otherwise we use the box class to represent `this`.
+        cls = box_class
+    end
+    local info = get(self.class_info, cls, nothing)
+    info === nothing && reject!(Internal("$at: the class $cls of $member's `this` has no class info"), at)
+    return WasmBuilder.with_nullability(repr(info), nullable)
+end
 
 # dart gives a static field of dart:_wasm's WasmTable class its own wasm table; Julia has no such class
 # (src/julia/wasm_array.jl holds dart's arrays alone), so no field is a table: dart's first return
