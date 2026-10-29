@@ -119,9 +119,12 @@ for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD" -- dev/CHARTER.md
 done
 echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $SHARDS reported" 
 [ $trc -eq 0 ] || { echo "check: src tests red"; grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 1; }
-# a green check's measured file costs replace the kept ones, file by file, for the next check's split
+# a green check's measured file costs replace the kept ones, file by file, for the next check's split; a row
+# for a file this tree, origin/wt2 rebased under the lane, does not hold is dropped, so one lane's unlanded file
+# never steers another tree's split (A62E1: a shelved split's dart_core_1..3.jl rows stood in the table)
 cat .wtd/src_costs.* 2>/dev/null | awk -F'\t' 'NR == FNR { c[$1] = $2; next } { c[$1] = $2 } END { for (f in c) print f "\t" c[f] }' \
-  "$( [ -f "$costs" ] && echo "$costs" || echo /dev/null )" - | sort > "$costs.new" && mv "$costs.new" "$costs"
+  "$( [ -f "$costs" ] && echo "$costs" || echo /dev/null )" - | sort |
+  while IFS="$(printf '\t')" read -r f s; do [ -f "test/src/$f" ] && printf '%s\t%s\n' "$f" "$s"; done > "$costs.new" && mv "$costs.new" "$costs"
 # the models the change touches: a changed dev/formal/<Name>.tla or MC<Name>*.{tla,cfg} selects
 # every instance MC<Name>*.cfg of that model
 models=$(git diff --name-only "$base" HEAD -- dev/formal | sed -nE 's#^dev/formal/(MC)?([A-Z][A-Za-z0-9]*)\.(tla|cfg)$#\2#p' | sort -u)
