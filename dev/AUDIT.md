@@ -5078,3 +5078,104 @@ the range broke, the next fixes of the codegen lane. A56S1, A56S2 and A56S5 are 
 A56S7 and A56S8 are open on MARCH 1.C. A56E1 is open on MARCH 1.T. A56E2 and A56E3 are open on MARCH 1.L. By owner: the
 codegen lane holds A56S1, A56S2 and A56S5; the translator lane holds A56S3 to A56S8 (A56S3 under the lead's rule,
 A55S14); the tests lane holds A56E1; the lead holds A56E2, A56E3 and A51E3.
+
+## 2026-10-29 — audited through 0a14e3a2 (f7345c7b..0a14e3a2: TFA's readers, moduleForConstant, the external storage types, the parameters to check, the corpus's red output kept, the Kernel-row rejections, the runtime's named definitions, DominanceFrontier and WebAssemblyExceptionInfo, the landing queue, the two unreached ports collapsed, the serializer's buffers, one Internal kind, the progress line's gaps, classForType, printKernel, the audit-55 S fixes, the exception sort regions, the interop namer, functions' replaced constructs, four language directories, the corpus in shards, EH pads, visitSymbolConstant, the egal fix, entry 56, PARITY_MASTER's dispatch line)
+
+The fifty-seventh audit, beside the work, covers the 38 commits of f7345c7b..0a14e3a2 that are not entry 56 (88a6568d,
+its author's), through the head the lead named. The LLVM exception pieces (532caafb, 8c0b4cd0, 568b5ccc) and the
+translator and codegen commits were read by two read-only sub-auditors, each finding below re-run here; the enforcement
+commits here. Standing items. Corpus: `tail -5 wt-corpus.tsv` gives `b54115e0`, `c6d48af5`, `8ebfc984` and `67a77afe`
+red, each on `dart_closure/self_reference`, then `bd0b473a green` (a later head); each red run's kept output (c6d48af5's
+wt-corpus-red-<head>.out) holds one failure, `its Unquarantined row "src/julia: an allocation of Core.Box leaving 1 of
+its fields undefined" opens with no file of the repository or the pin` (A57E1). Fixed in the range, each re-read: A56S1
+by 5c5407d6 (a sub-auditor's probe: the immutable pair now rejects at the identical intrinsic, two mutables and a
+mutable against an immutable answer native's 0 in both modules), A56S4 by 9a2a58a8 (one get_export_name, names
+reserved), A56E2 by 188dd968, A55S1 by 84edc2cb, A55S2 by f867fc62, A55S3 by 8550637d, A55S4 by c6da6a12, A55S5 by
+28f81079, A55S6 by a33d791d, A55S8 by 6f597971, A55S9 by cc05321a, A55S12, A55S16 and A55S17 by 400a7cf0 (every replaced
+definition's rejection generated from its Kernel row, all 45 names in KERNEL_TYPES), A55S14 by 14eeb665; carried: A56S3
+by A57S6, A56S5 by A57S10. Still open: A56S2 (`grep -n issingletontype src/code_generator.jl` gives `486: (i::NirInvoke)
+=> !Base.issingletontype(dart_type_of(self, i.args[1])) ? visit_instance_invocation(…)`), A56S6, A56S7, A56S8. Findings
+A57S1 to A57S11, A57E1 and A57E2.
+
+Area: builder — cc05321a gives each serializer its own f32 and f64 scratch buffers (A55S9). No finding.
+
+Area: collection and planning — 9a2a58a8 makes the interop namer on every compile and names exports through it; a33d791d
+decides a binding's constancy once (nir_binding_is_constant); 28f81079 hashes a mutable leaf by objectid, as === tells
+it. (A57S5, medium) two facts computed twice beside their uncalled ports: `for f in type_of_parameter_variable
+get_parameters_to_check; do grep -rn "$f(" src | grep -v '@parity' | wc -l; done` gives 0 and 0, while dart's
+_setupLocalParameters calls getParametersToCheck (code_generator.dart:262) and translateTypeOfParameter calls
+typeOfParameterVariable (translator.dart:2093); the ported callers compute inline (code_generator.jl:305's positional
+list; translator.jl:1257 `translate_type_of_parameter(...) = translate_type(self, type_)`, is_required ignored) (D5,
+C2). Fix: the callers through the ports, the inline copies deleted. (A57S6, medium) more bodies no compile runs, counted
+as ported, carrying A56S3: the same grep gives 0 for index_list, get_list_length and translate_external_storage_type
+(93bbcf05, 4734da5c), beside make_array_from_expressions, instantiate_constant_backend_use and
+_initialize_context_locals; and RuntimeFinalizer is reached by a test alone, entry.jl:27 forcing standalone (C2). Fix:
+reached, or Internal by the lead's rule. (A57S7, low) translate_external_type's docstring says dart's wasm classes "have
+no Julia counterpart" while 4734da5c's is_wasm_type (translator.jl:903) names WasmArray, and dart's
+translateExternalType gives a wasm array RefType.def over translateExternalStorageType (translator.dart:1252–1253) (C2,
+C9). (A57S8, low) constants.jl:728 reads get_internalized_string_global for every non-standalone String constant, which
+rejects Internal (translator.jl:1413, "no constant imports one"), a JS string import being a gap, not Julia's answer
+(C6). (A57S9, low) kernel_nodes.jl:26, a comment line 4366f98a left running into the next (C9). (A57S11, low) two
+@ccallable methods of one function share an export name (namer.jl:106 `string(method.name)`), and reserving it twice
+rejects Internal (namer.jl:69), a user's error reported as WT's (C6).
+
+stopgap in disguise: A57S6's bodies, which cannot run and count toward src progress.
+precedent: an export's name, dart's interop namer (functions.dart:68); a mutable constant's identity, objectid.
+
+Area: emission and diagnostics — 5c5407d6 compiles Base's fallback `==` to ref.eq only for two mutable operands, else
+the method Julia resolved, its `===` at the identical intrinsic (A56S1, measured above); 400a7cf0 generates each
+replaced definition's Internal from its Kernel row and states a Union{} call as verifytrim does. The exception pieces
+are faithful at the pin: 532caafb's frontier is DominanceFrontierBase::analyze (DominanceFrontierImpl.h:77–159) and
+recalculate, discoverAndMapException and getOutermostException match WebAssemblyExceptionInfo.cpp:53–171, LLVM's asserts
+located rejections; 8c0b4cd0's getRegionFor, getBottom, isLoop and sortBlocks' checks match
+WebAssemblySortRegion.cpp:17–80 and WebAssemblyCFGSort.cpp:303–378; 568b5ccc takes each handler from Julia's
+compute_trycatch and may-throw from the absence of IR_FLAG_NOTHROW. (A57S1, high) the exception algorithms have no
+model: `grep -n -i "pad\|exception" dev/formal/CFGStackify.tla` gives `76:(* No EH pads: try_table placement extends the
+model when it is ported. *)`, and `git log --oneline f7345c7b..0a14e3a2 -- dev/formal` prints nothing, while the three
+commits change the modeled sort and add DominanceFrontier and the exception tree (C8, D11: model first, with a Broken
+variant). Fix: CFGStackify.tla with EH pads, exception discovery and exception sort regions, and a Broken variant TLC
+rejects (a subexception followed by its successors instead of its frontier), before the next EH port. (A57S2, medium) a
+`:leave` gets an unwind edge Julia never gives it: `git show 0a14e3a2:src/julia/machine.jl | grep -n
+"handler_at\|nothrow"` gives `156: local h = handlers.handler_at[i]` and `157: (h == 0 || handlers.nothrow[i]) &&
+continue`, so any statement without the nothrow flag unwinds, while inference treats `:leave` as control flow
+(Compiler/src/abstractinterpretation.jl:4255–4257, `elseif isexpr(stmt, :leave) … @goto fallthrough`, never reaching
+:4365's propagate_to_error_handler!) and stmt_effect_flags gives it no nothrow (optimize.jl:374); a block whose one
+flagless statement is a `:leave` gains a spurious edge, changing dominators, frontiers and the exception (C3, D3; read,
+not measured). Fix: inference's rule at its one source, control-flow statements excluded, with a case of a `:leave`
+alone in its block. (A57S3, medium) at 0a14e3a2 an EH pad keeps Julia's virtual EnterNode edge, which LLVM's verifier
+forbids: `git -C <llvm> show 7a941dfb:llvm/lib/IR/Verifier.cpp | sed -n 4837p` gives `Check(false, "EH pad must be
+jumped to via an unwind edge", ToPad, TI);` and test/src/llvm_exception_info.jl:91 asserts `2 in mf.blocks[pad].preds`;
+9be2abca, landed after this range ("an EH pad is reached only by unwinding"), reads as its fix, for the next entry to
+confirm (C2). (A57S4, medium) the exception tests are hand-labelled synthetic pads: `git show
+0a14e3a2:test/src/llvm_exception_info.jl | grep -n "ehpad = true"` gives :29, :38, :39, :55, pads reached by normal
+edges, a shape LLVM never builds, their expected values hand labels, and the nested case's inner pad has an empty
+frontier, so exception_info.jl:230's frontier-follow never runs (C2, D12). Fix: a case from LLVM's own exception tests
+with a non-empty subexception frontier, and cases from real Julia try/catch IR. (A57S10, low) A56S5 now beside its fix:
+code_generator.jl:441 and :1436 still name `js_common/` literals while 47e8946f's stack_trace_current and
+print_to_console choose by target (D5). Fix: call them.
+
+stopgap in disguise: none new.
+precedent: the frontier and exception tree, LLVM's DominanceFrontierBase and WebAssemblyExceptionInfo at the pin; the
+handler of a statement, Julia's compute_trycatch.
+
+Area: enforcement and prose — d97450d0 queues lanes for the landing lock by ticket, oldest live first; c6d48af5 keeps a
+red run's whole output; 8a7ecd5f runs the corpus in three shards, each checking its own groups' records; 0a14e3a2 states
+no call is dispatched at run time, measured. (A57E1, medium) a `src/julia:` row reads unlocated: `grep -n
+'isfile(joinpath(_DART_ROOT, file))' test/src/dart_tests.jl` gives :1033, and `isfile` of the directory `src/julia` is
+false, so each of the 14 `Unquarantined("src/julia: …")` rows (`grep -rn 'Unquarantined("src/julia:' src | wc -l`) fails
+a `:rejects` case that reaches it; the corpus was red four heads on exactly that line (above), and bd0b473a cleared the
+one case by changing the code, not the check (C6). Fix: every Unquarantined row names its file (src/julia/<file>.jl),
+the check then exact; or a directory of the repository admitted, with a plant. (A57E2, low) the coverage check no longer
+covers a record whose group is gone: dart_tests.jl:1135 keeps only `keys(DART_CASES) if first(split(k, '/')) in
+_DART_SHARD_GROUPS`, a set of the groups the corpus defines (:1100), so a record of a removed or misspelt group is
+checked by no shard, and not by the landing either, where the old `setdiff(keys(DART_CASES), seen)` failed it (C9). Fix:
+the unsharded run (the landing) checks every record against every group. Requirements: C8 and D11 (A57S1); C3 and D3
+(A57S2); C2 (A57S3, A57S4, A57S6); D5 (A57S5, A57S10); C6 (A57E1, A57S8, A57S11); no lock fired inside its band.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A56S1 is fixed by 5c5407d6, A56S4 by 9a2a58a8, A56E2
+by 188dd968, A55S1 by 84edc2cb, A55S2 by f867fc62, A55S3 by 8550637d, A55S4 by c6da6a12, A55S5 by 28f81079, A55S6 by
+a33d791d, A55S8 by 6f597971, A55S9 by cc05321a, A55S12, A55S16 and A55S17 by 400a7cf0, A55S14 by 14eeb665; A56S3 and
+A56S5 are carried by A57S6 and A57S10; each leaves its row. A57S1, A57S2, A57S3, A57S4 and A57S10 are open on MARCH 1.D.
+A57S5, A57S6, A57S7, A57S8, A57S9 and A57S11 are open on MARCH 1.C. A57E1 and A57E2 are open on MARCH 1.T. By owner: the
+stackify lane holds A57S1 to A57S4; the codegen lane holds A57S10 and A56S2; the translator lane holds A57S5 to A57S9
+and A57S11; the tests lane holds A57E1 and A57E2.
