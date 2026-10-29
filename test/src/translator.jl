@@ -237,6 +237,9 @@ end
     @test !D.need_to_check_types_for(t, mi) && !D._need_to_check_types_for(t, mi)
     @test !D.need_to_check_parameter(t, W.NirArgument(2); unchecked_entry = false) && D.can_skip_implicit_check(t, W.NirArgument(2))
     @test !D.need_to_check_type_parameter(t, TypeVar(:T))
+    # a superclass is on Julia's supertype chain, never the class itself
+    @test D._has_superclass(t, ModuleCases.Square, ModuleCases.Shape) && D._has_superclass(t, ModuleCases.Square, Any)
+    @test !D._has_superclass(t, ModuleCases.Shape, ModuleCases.Shape) && !D._has_superclass(t, Any, Any)
     @test !D.need_to_check_implicit_setter_value(t, W.class_instance_fields(ModuleCases.Square, "t")[1]; unchecked_entry = false)
     # one entry, the member's own, and no entry check; a call's single target is the MethodInstance
     # Julia resolved it to, none for a call it left to a builtin

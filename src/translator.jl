@@ -715,7 +715,33 @@ so every function is the one module's and another module's is a located rejectio
     reject!(Internal("dart2wasm/lib/translator.dart:875 Translator.callFunction: a call across modules, which one module never makes"), "Translator.callFunction")
 end
 
-@parity "dart2wasm/lib/translator.dart:911 Translator.callDispatchTable" @unported function call_dispatch_table(self::Translator, b::WasmBuilder.InstructionsBuilder, selector::SelectorInfo; interface_target::Union{Nothing,Core.MethodInstance} = nothing, use_unchecked_entry::Bool) end
+"""
+Call `selector`'s implementation for the receiver on `b`'s stack through the dispatch table: the
+receiver's class id plus the selector's offset indexes the table; a selector with no offset (no
+target) is unreachable. A Julia member calls through no selector (src/dispatch_table.jl), so the
+dispatch table is empty and no call reaches here until the subset admits a dynamic call.
+"""
+@parity "dart2wasm/lib/translator.dart:911 Translator.callDispatchTable" function call_dispatch_table(self::Translator, b::WasmBuilder.InstructionsBuilder, selector::SelectorInfo;
+        interface_target::Union{Nothing,Core.MethodInstance} = nothing, use_unchecked_entry::Bool)::Nothing
+    record_selector_use(self.functions[], selector, use_unchecked_entry)
+
+    local offset = targets(selector; unchecked = use_unchecked_entry).offset
+    if offset === nothing
+        WasmBuilder.unreachable(b)
+        return nothing
+    end
+
+    local signature = selector.signature[]
+    local receiver_type = signature.inputs[1]
+    load_class_id(b, self, receiver_type)
+    if offset != 0
+        WasmBuilder.i32_const(b, offset)
+        WasmBuilder.i32_add(b)
+    end
+    WasmBuilder.call_indirect(b, signature, get_wasm_table(self.dispatch_table[], b.module_builder))
+    emit_unreachable_if_no_result(b, signature.outputs)
+    return nothing
+end
 
 @parity "dart2wasm/lib/translator.dart:936 Translator.classForType" @unported function class_for_type(self::Translator, type_::Type) end
 
@@ -747,7 +773,15 @@ read as the zero-extended i32 (dart's WasmI8 and WasmI16; Julia's 8- and 16-bit 
     reject!(Internal("dart2wasm/lib/translator.dart:1044 Translator.translateType: Cannot translate $type_ to wasm type."), "Translator.translateType")
 end
 
-@parity "dart2wasm/lib/translator.dart:1056 Translator._hasSuperclass" @unported function _has_superclass(self::Translator, cls::DataType, superclass::DataType) end
+# a class's superclasses are Julia's supertype chain, Any its root (class_superclass)
+@parity "dart2wasm/lib/translator.dart:1056 Translator._hasSuperclass" function _has_superclass(self::Translator, cls::DataType, superclass::DataType)::Bool
+    local c = class_superclass(cls)
+    while c !== nothing
+        c === superclass && return true
+        c = class_superclass(c)
+    end
+    return false
+end
 
 @parity "dart2wasm/lib/translator.dart:1064 Translator.isWasmType" @unported function is_wasm_type(self::Translator, cls::DataType) end
 
