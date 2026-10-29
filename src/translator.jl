@@ -1125,13 +1125,38 @@ type and the MethodInstance is specialized on the types it is called with, so no
 # argument's type, so the specialization called proves it)
 @parity "dart2wasm/lib/translator.dart:1754 Translator.needToCheckParameter" need_to_check_parameter(self::Translator, parameter::Union{NirSSA,NirArgument}; unchecked_entry::Bool)::Bool = false
 
-@parity "dart2wasm/lib/translator.dart:1773 Translator.getParametersToCheck" @unported function get_parameters_to_check(self::Translator, member::Core.MethodInstance) end
+"""
+A member's parameters and the types an entry check would test them against: its type parameters and
+their bounds, its positional parameters and their types, its named ones and theirs. A Julia
+specialization binds every type variable, so it has no type parameters; its positional parameters are
+its arguments after the callee, each of the type its MethodInstance is specialized on
+(nir_argument_type, where dart reads each parameter's declared type); and Julia's keyword body takes
+its keywords positionally, so it has no named ones. A Julia member is no forwarding stub.
 
-@parity "dart2wasm/lib/translator.dart:1823 Translator._typesFromTypeParameterBounds" @unported function _types_from_type_parameter_bounds(self::Translator, type_parameters::Vector{TypeVar}) end
+Reshaped: the positional types come from the specialization, where dart passes the parameters to _typesFromPositionalParameters: a NIR argument carries no type.
+"""
+@parity "dart2wasm/lib/translator.dart:1773 Translator.getParametersToCheck" function get_parameters_to_check(self::Translator, member::Core.MethodInstance)
+    local positional = NirArgument[NirArgument(i) for i in 2:nir_method_nargs(member)]
+    return (type_parameters = TypeVar[], type_parameters_to_type_check = _types_from_type_parameter_bounds(self, TypeVar[]),
+            positional = positional, positional_to_type_check = Type[nir_argument_type(member, a) for a in positional],
+            named = NirArgument[], named_to_type_check = Type[])
+end
 
-@parity "dart2wasm/lib/translator.dart:1830 Translator._typesFromPositionalParameters" @unported function _types_from_positional_parameters(self::Translator, type_parameters::Vector{Union{NirSSA,NirArgument}}) end
+# a type parameter's bound is Julia's TypeVar's upper bound
+@parity "dart2wasm/lib/translator.dart:1823 Translator._typesFromTypeParameterBounds" _types_from_type_parameter_bounds(self::Translator, type_parameters::Vector{TypeVar})::Vector{Type} =
+    Type[tv.ub for tv in type_parameters]
 
-@parity "dart2wasm/lib/translator.dart:1835 Translator._typeFromNamedParameters" @unported function _type_from_named_parameters(self::Translator, named_order::Vector{NirArgument}, named_type::Vector{NirArgument}) end
+# dart reads each parameter's declared type; a NIR argument carries no type, its type the
+# specialization's, which getParametersToCheck reads (nir_argument_type)
+@parity "dart2wasm/lib/translator.dart:1830 Translator._typesFromPositionalParameters" _types_from_positional_parameters(self::Translator, type_parameters::Vector{Union{NirSSA,NirArgument}})::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:1830 Translator._typesFromPositionalParameters: a parameter's declared type; a NIR argument carries none, its type the specialization's (getParametersToCheck reads nir_argument_type)"), "Translator._typesFromPositionalParameters")
+
+# Julia's keyword body takes its keywords positionally (the Kernel table's NamedParameter row), so a
+# member has no named parameters: dart's first return
+@parity "dart2wasm/lib/translator.dart:1835 Translator._typeFromNamedParameters" function _type_from_named_parameters(self::Translator, named_order::Vector{NirArgument}, named_type::Vector{NirArgument})::Vector{Type}
+    isempty(named_order) || reject!(Internal("dart2wasm/lib/translator.dart:1835 Translator._typeFromNamedParameters: named parameters $named_order, which a Julia member has none of"), "Translator._typeFromNamedParameters")
+    return Type[]
+end
 
 @parity "dart2wasm/lib/translator.dart:1857 Translator.directCallTarget" function direct_call_target(self::Translator, target::Core.MethodInstance)::AstCallTarget
     local signature = signature_for_direct_call(self, target)

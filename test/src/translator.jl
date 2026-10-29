@@ -252,6 +252,10 @@ end
     @test D.translate_external_storage_type(t, Any) == IR.RefType_any(; nullable = true)
     local ex = try; D.translate_external_storage_type(t, Int64); nothing; catch x; x; end
     @test ex isa W.RejectionError && ex.rejection isa W.Internal
+    # the parameters an entry check would test: the arguments after the callee, of the specialization's types
+    local pc = D.get_parameters_to_check(t, mi)
+    @test pc.positional == [W.NirArgument(2)] && pc.positional_to_type_check == Type[Int] && isempty(pc.type_parameters) && isempty(pc.named)
+    @test D._types_from_type_parameter_bounds(t, [TypeVar(:T, Integer)]) == Type[Integer]
     # a single closure target holds its call target and parameter info
     local sct = D.SingleClosureTarget__(D.direct_call_target(t, mi), D.param_info_for_direct_call(t, mi))
     @test sct.call_target isa D.AstCallTarget && sct.param_info === D.param_info_for_direct_call(t, mi)
