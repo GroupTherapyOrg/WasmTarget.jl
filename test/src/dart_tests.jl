@@ -1109,8 +1109,9 @@ _dart_defect(got)::Bool = got isa WasmTarget.RejectionError &&
 
 # why a rejection is not located, or "" (A51E1): it names its compile (`at`), and the definition it reached
 # stands in the pin table: an Unported's anchor parses by parse_anchor to a file of DART_FILES or LLVM_FILES,
-# an Unquarantined's row opens with a file of this repository or of DART_FILES: a file, never a directory, so a
-# row opening `src/julia: …` names no definition and is unlocated until its owner names the file (A57E1). Where
+# an Unquarantined's row opens with a file of src/ or of DART_FILES: a file, never a directory, so a row opening
+# `src/julia: …` names no definition and is unlocated until its owner names the file (A57E1), nor a plan, so a row
+# opening `dev/MARCH.md` is unlocated too (self-audit (b); 84b02f8f gave the last eleven such rows their files). Where
 # the anchor points is never pinned: one lane's progress moves it (the snapshot that oscillated, 2026-10-28).
 const _DART_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 function _dart_unlocated(e::WasmTarget.RejectionError)::String
@@ -1127,9 +1128,9 @@ function _dart_unlocated(e::WasmTarget.RejectionError)::String
     elseif r isa WasmTarget.Unquarantined
         local m = match(r"^([\w./-]+?)(?::\d+)?(?::|\s|$)", r.row)
         local file = m === nothing ? "" : String(m[1])
-        (isfile(joinpath(_DART_ROOT, file)) || file in WasmTarget.DART_FILES) ||
-            return "its Unquarantined row $(repr(first(r.row, 120))) opens with no file of the repository or the pin " *
-                   "(a directory names no definition)"
+        ((startswith(file, "src/") && isfile(joinpath(_DART_ROOT, file))) || file in WasmTarget.DART_FILES) ||
+            return "its Unquarantined row $(repr(first(r.row, 120))) opens with no file of src/ or the pin " *
+                   "(a directory, or a plan like dev/MARCH.md, names no definition)"
     else
         return "a $(nameof(typeof(r))) is no rejection a :rejects case admits"
     end
@@ -1378,7 +1379,8 @@ println("dart tests: $(_DART_CORE_ONLY ? length(DART_CORE) : length(_DART_RECORD
     @test occursin("names no compile", _dart_unlocated(E(WasmTarget.Unported("dart2wasm/lib/abi.dart:1 X"), "")))
     @test occursin("is no anchor", _dart_unlocated(E(WasmTarget.Unported("somewhere"))))
     @test occursin("in no pin table", _dart_unlocated(E(WasmTarget.Unported("other/lib/x.dart:3 Y"))))
-    @test occursin("a directory names no definition", _dart_unlocated(E(WasmTarget.Unquarantined("src/julia: a foreigncall"))))
+    @test occursin("names no definition", _dart_unlocated(E(WasmTarget.Unquarantined("src/julia: a foreigncall"))))
+    @test occursin("names no definition", _dart_unlocated(E(WasmTarget.Unquarantined("dev/MARCH.md 1.D  Julia's loop hints"))))
     @test occursin("opens with no file", _dart_unlocated(E(WasmTarget.Unquarantined("src/julia/nosuch.jl: x"))))
     @test occursin("no rejection a :rejects case admits", _dart_unlocated(E(WasmTarget.Internal("x"))))
 end
