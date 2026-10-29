@@ -271,6 +271,12 @@ end
     @test el2 isa W.RejectionError && el2.rejection isa W.Unported && occursin("list.dart", el2.rejection.anchor)
     local es = try; D.push_standalone_string_constant(t, bl, W.WasmBuilder.DataSegmentBuilder(0, UInt8[], nothing, nothing), "hi"); nothing; catch x; x; end
     @test es isa W.RejectionError && es.rejection isa W.Internal
+    # Julia makes no closure object: a tear-off's closure rejects, Internal; and the importers' abstract
+    # base makes no value
+    local ec2 = try; D.get_tear_off_closure(t, mi, D.main_module(t)); nothing; catch x; x; end
+    @test ec2 isa W.RejectionError && ec2.rejection isa W.Internal
+    local ew = try; D._WasmImporter(t, "x"); nothing; catch x; x; end
+    @test ew isa W.RejectionError && ew.rejection isa W.Internal
     # a single closure target holds its call target and parameter info
     local sct = D.SingleClosureTarget__(D.direct_call_target(t, mi), D.param_info_for_direct_call(t, mi))
     @test sct.call_target isa D.AstCallTarget && sct.param_info === D.param_info_for_direct_call(t, mi)

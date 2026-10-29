@@ -363,19 +363,53 @@ end
 end
 
 """
-_ClosureTrampolineGenerator's dart fields: `translator`, `trampoline`, `target`, `typeCount`, `posArgCount`, `argNames`, `paramInfo`.
+The code of a closure's trampoline, from its vtable entry to its target. Julia makes no closure object
+(src/closures.jl: every call of a closure is an invoke of its method), so no trampoline is generated:
+its constructor and generate reject, Internal, naming Julia's closure conversion.
 """
-@parity "dart2wasm/lib/translator.dart:2767 _ClosureTrampolineGenerator" @unported struct _ClosureTrampolineGenerator <: CodeGenerator end
+@parity "dart2wasm/lib/translator.dart:2767 _ClosureTrampolineGenerator" struct _ClosureTrampolineGenerator <: CodeGenerator
+    translator::KernelNodes
+    trampoline::WasmBuilder.FunctionBuilder
+    target::CallTarget
+    type_count::Int
+    pos_arg_count::Int
+    arg_names::Vector{String}
+    param_info::ParameterInfo
+    # the struct's one constructor, tagged; dart's constructor at :2776 is its outer function, which rejects
+    _ClosureTrampolineGenerator(::Val{:_}, translator::KernelNodes, trampoline::WasmBuilder.FunctionBuilder, target::CallTarget, type_count::Int,
+            pos_arg_count::Int, arg_names::Vector{String}, param_info::ParameterInfo) =
+        new(translator, trampoline, target, type_count, pos_arg_count, arg_names, param_info)
+end
 
 """
-_ClosureDynamicEntryGenerator's dart fields: `translator`, `functionNode`, `target`, `paramInfo`, `name`, `function`.
+The code of a closure's dynamic call entry. Julia makes no closure object (src/closures.jl), so none is
+generated: its constructor and generate reject, Internal, naming Julia's closure conversion.
 """
-@parity "dart2wasm/lib/translator.dart:2864 _ClosureDynamicEntryGenerator" @unported struct _ClosureDynamicEntryGenerator <: CodeGenerator end
+@parity "dart2wasm/lib/translator.dart:2864 _ClosureDynamicEntryGenerator" struct _ClosureDynamicEntryGenerator <: CodeGenerator
+    translator::KernelNodes
+    function_node::NirBody
+    target::CallTarget
+    param_info::ParameterInfo
+    name::String
+    function_::WasmBuilder.FunctionBuilder
+    # the struct's one constructor, tagged; dart's constructor at :2872 is its outer function, which rejects
+    _ClosureDynamicEntryGenerator(::Val{:_}, translator::KernelNodes, function_node::NirBody, target::CallTarget, param_info::ParameterInfo,
+            name::String, function_::WasmBuilder.FunctionBuilder) = new(translator, function_node, target, param_info, name, function_)
+end
 
 """
-_ClosureArgumentsToVtableEntryDispatcherGenerator's dart fields: `translator`, `representation`, `function`.
+The code dispatching a closure call's argument arrays to its vtable entries. Julia makes no closure
+object and admits no dynamic closure call (src/closures.jl), so none is generated: its constructor and
+methods reject, Internal, naming Julia's closure conversion.
 """
-@parity "dart2wasm/lib/translator.dart:3060 _ClosureArgumentsToVtableEntryDispatcherGenerator" @unported struct _ClosureArgumentsToVtableEntryDispatcherGenerator <: CodeGenerator end
+@parity "dart2wasm/lib/translator.dart:3060 _ClosureArgumentsToVtableEntryDispatcherGenerator" struct _ClosureArgumentsToVtableEntryDispatcherGenerator <: CodeGenerator
+    translator::KernelNodes
+    representation::ClosureRepresentation
+    function_::WasmBuilder.FunctionBuilder
+    # the struct's one constructor, tagged; dart's constructor at :3066 is its outer function, which rejects
+    _ClosureArgumentsToVtableEntryDispatcherGenerator(::Val{:_}, translator::KernelNodes, representation::ClosureRepresentation,
+            function_::WasmBuilder.FunctionBuilder) = new(translator, representation, function_)
+end
 
 """
 dart's size estimate of a procedure's body, the node count its inlining decision weighs against a
@@ -996,11 +1030,14 @@ end
     end
 end
 
-@parity "dart2wasm/lib/translator.dart:1302 Translator.getTearOffClosure" @unported function get_tear_off_closure(self::Translator, member::Core.MethodInstance, closure_module::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:1302 Translator.getTearOffClosure" get_tear_off_closure(self::Translator, member::Core.MethodInstance, closure_module::WasmBuilder.ModuleBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:1302 Translator.getTearOffClosure: a tear-off's closure object; a Julia function is already a value, the singleton instance of its type, and no closure object is made (src/closures.jl)"), "Translator.getTearOffClosure")
 
-@parity "dart2wasm/lib/translator.dart:1330 Translator.getClosureArgumentsDispatcher" @unported function get_closure_arguments_dispatcher(self::Translator, module_::WasmBuilder.ModuleBuilder, r::ClosureRepresentation) end
+@parity "dart2wasm/lib/translator.dart:1330 Translator.getClosureArgumentsDispatcher" get_closure_arguments_dispatcher(self::Translator, module_::WasmBuilder.ModuleBuilder, r::ClosureRepresentation)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:1330 Translator.getClosureArgumentsDispatcher: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "Translator.getClosureArgumentsDispatcher")
 
-@parity "dart2wasm/lib/translator.dart:1360 Translator.getClosure" @unported function get_closure(self::Translator, function_node::NirBody, target::CallTarget, closure_module::WasmBuilder.ModuleBuilder, param_info::ParameterInfo, name::String) end
+@parity "dart2wasm/lib/translator.dart:1360 Translator.getClosure" get_closure(self::Translator, function_node::NirBody, target::CallTarget, closure_module::WasmBuilder.ModuleBuilder, param_info::ParameterInfo, name::String)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:1360 Translator.getClosure: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "Translator.getClosure")
 
 @parity "dart2wasm/lib/translator.dart:1589 Translator.outputOrVoid" function output_or_void(self::Translator, outputs::Vector{WasmBuilder.IR.ValueType})::WasmBuilder.IR.ValueType
     isempty(outputs) && return self.void_marker[]
@@ -1159,7 +1196,8 @@ of the type's own function, whose result `new` allocates), so a request is a loc
 @parity "dart2wasm/lib/translator.dart:1954 Translator.singleTarget" single_target(self::Translator, node::NirStmt)::Union{Core.MethodInstance,Nothing} =
     node isa NirInvoke ? nir_invoke_target(node) : nothing
 
-@parity "dart2wasm/lib/translator.dart:1960 Translator.singleClosureTarget" @unported function single_closure_target(self::Translator, node::NirInvoke, representation::ClosureRepresentation, type_context::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:1960 Translator.singleClosureTarget" single_closure_target(self::Translator, node::NirInvoke, representation::ClosureRepresentation, type_context::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:1960 Translator.singleClosureTarget: TFA's direct closure call; Julia's inference resolved each call of a closure to an invoke of its method (singleTarget)"), "Translator.singleClosureTarget")
 
 # dart skips a parameter's check when TFA proved its argument's type (skipCheck); Julia's inference
 # proved every argument against the specialization called (canUseUncheckedEntry)
@@ -1495,23 +1533,32 @@ end
 @parity "dart2wasm/lib/translator.dart:2744 AstCompilationTask._getNames" _get_names(self::AstCompilationTask, translator::Translator)::NamedTuple{(:name, :export_name),Tuple{String,Union{String,Nothing}}} =
     (name = get_function_name(translator.functions[], self.reference), export_name = get_export_name(translator.functions[], self.reference))
 
-@parity "dart2wasm/lib/translator.dart:2776 _ClosureTrampolineGenerator" @unported function _ClosureTrampolineGenerator(translator, trampoline, target, type_count, pos_arg_count, arg_names, param_info) end
+@parity "dart2wasm/lib/translator.dart:2776 _ClosureTrampolineGenerator" _ClosureTrampolineGenerator(translator::KernelNodes, trampoline::WasmBuilder.FunctionBuilder, target::CallTarget, type_count::Int, pos_arg_count::Int, arg_names::Vector{String}, param_info::ParameterInfo)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:2776 _ClosureTrampolineGenerator: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "_ClosureTrampolineGenerator")
 
-@parity "dart2wasm/lib/translator.dart:2787 _ClosureTrampolineGenerator.generate" @unported function generate(self::_ClosureTrampolineGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
+@parity "dart2wasm/lib/translator.dart:2787 _ClosureTrampolineGenerator.generate" generate(self::_ClosureTrampolineGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:2787 _ClosureTrampolineGenerator.generate: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "_ClosureTrampolineGenerator.generate")
 
-@parity "dart2wasm/lib/translator.dart:2872 _ClosureDynamicEntryGenerator" @unported function _ClosureDynamicEntryGenerator(translator, function_node, target, param_info, name, function_) end
+@parity "dart2wasm/lib/translator.dart:2872 _ClosureDynamicEntryGenerator" _ClosureDynamicEntryGenerator(translator::KernelNodes, function_node::NirBody, target::CallTarget, param_info::ParameterInfo, name::String, function_::WasmBuilder.FunctionBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:2872 _ClosureDynamicEntryGenerator: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "_ClosureDynamicEntryGenerator")
 
-@parity "dart2wasm/lib/translator.dart:2882 _ClosureDynamicEntryGenerator.generate" @unported function generate(self::_ClosureDynamicEntryGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
+@parity "dart2wasm/lib/translator.dart:2882 _ClosureDynamicEntryGenerator.generate" generate(self::_ClosureDynamicEntryGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:2882 _ClosureDynamicEntryGenerator.generate: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "_ClosureDynamicEntryGenerator.generate")
 
-@parity "dart2wasm/lib/translator.dart:3066 _ClosureArgumentsToVtableEntryDispatcherGenerator" @unported function _ClosureArgumentsToVtableEntryDispatcherGenerator(translator, representation, function_) end
+@parity "dart2wasm/lib/translator.dart:3066 _ClosureArgumentsToVtableEntryDispatcherGenerator" _ClosureArgumentsToVtableEntryDispatcherGenerator(translator::KernelNodes, representation::ClosureRepresentation, function_::WasmBuilder.FunctionBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3066 _ClosureArgumentsToVtableEntryDispatcherGenerator: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "_ClosureArgumentsToVtableEntryDispatcherGenerator")
 
-@parity "dart2wasm/lib/translator.dart:3073 _ClosureArgumentsToVtableEntryDispatcherGenerator.generate" @unported function generate(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
+@parity "dart2wasm/lib/translator.dart:3073 _ClosureArgumentsToVtableEntryDispatcherGenerator.generate" generate(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3073 _ClosureArgumentsToVtableEntryDispatcherGenerator.generate: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "_ClosureArgumentsToVtableEntryDispatcherGenerator.generate")
 
-@parity "dart2wasm/lib/translator.dart:3157 _ClosureArgumentsToVtableEntryDispatcherGenerator._handleOptionalPositionalCase" @unported function _handle_optional_positional_case(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local, vtable_var::WasmBuilder.IR.Local, vtable_struct::WasmBuilder.IR.StructType, type_stack::Vector{WasmBuilder.IR.ValueType}) end
+@parity "dart2wasm/lib/translator.dart:3157 _ClosureArgumentsToVtableEntryDispatcherGenerator._handleOptionalPositionalCase" _handle_optional_positional_case(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local, vtable_var::WasmBuilder.IR.Local, vtable_struct::WasmBuilder.IR.StructType, type_stack::Vector{WasmBuilder.IR.ValueType})::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3157 _ClosureArgumentsToVtableEntryDispatcherGenerator._handleOptionalPositionalCase: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "_ClosureArgumentsToVtableEntryDispatcherGenerator._handleOptionalPositionalCase")
 
-@parity "dart2wasm/lib/translator.dart:3199 _ClosureArgumentsToVtableEntryDispatcherGenerator._handleOptionalNamedCase" @unported function _handle_optional_named_case(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local, vtable_var::WasmBuilder.IR.Local, vtable_struct::WasmBuilder.IR.StructType, type_stack::Vector{WasmBuilder.IR.ValueType}) end
+@parity "dart2wasm/lib/translator.dart:3199 _ClosureArgumentsToVtableEntryDispatcherGenerator._handleOptionalNamedCase" _handle_optional_named_case(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local, vtable_var::WasmBuilder.IR.Local, vtable_struct::WasmBuilder.IR.StructType, type_stack::Vector{WasmBuilder.IR.ValueType})::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3199 _ClosureArgumentsToVtableEntryDispatcherGenerator._handleOptionalNamedCase: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "_ClosureArgumentsToVtableEntryDispatcherGenerator._handleOptionalNamedCase")
 
-@parity "dart2wasm/lib/translator.dart:3365 _ClosureArgumentsToVtableEntryDispatcherGenerator._verifyAssumptions" @unported function _verify_assumptions(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local) end
+@parity "dart2wasm/lib/translator.dart:3365 _ClosureArgumentsToVtableEntryDispatcherGenerator._verifyAssumptions" _verify_assumptions(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3365 _ClosureArgumentsToVtableEntryDispatcherGenerator._verifyAssumptions: a closure object's code; a Julia closure is an instance of its own struct type (Julia lowering's closure conversion: its captures the struct's fields) and every call of one Julia's inference resolved to an invoke of its method (src/closures.jl), so no closure object, trampoline or vtable entry is made"), "_ClosureArgumentsToVtableEntryDispatcherGenerator._verifyAssumptions")
 
 @parity "dart2wasm/lib/translator.dart:3420 NodeCounter" NodeCounter(translator::KernelNodes)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:3420 NodeCounter: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter")
@@ -1688,7 +1735,10 @@ heap type's dummy for a non-nullable one; any other type rejects, located, where
     return nothing
 end
 
-@parity "dart2wasm/lib/translator.dart:3930 _WasmImporter" @unported function _WasmImporter(_translator, _export_prefix) end
+# dart's abstract class's constructor, which each importer's own sets the fields of; Julia's abstract type
+# holds no fields and makes no value, each concrete importer's tagged constructor its own
+@parity "dart2wasm/lib/translator.dart:3930 _WasmImporter" _WasmImporter(_translator::KernelNodes, _export_prefix::String)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3930 _WasmImporter: abstract; each importer (WasmFunctionImporter to WasmTagImporter) constructs its own"), "_WasmImporter")
 
 # abstract in dart: each importer imports its kind of definition (the methods below)
 @parity "dart2wasm/lib/translator.dart:3932 _WasmImporter.import" var"import"(self::_WasmImporter, importing_module::WasmBuilder.ModuleBuilder,
