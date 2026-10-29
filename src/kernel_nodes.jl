@@ -19,9 +19,14 @@
 @parity "dart2wasm/lib/kernel_nodes.dart:20 KernelNodes._stringImplClassName" _string_impl_class_name(self::KernelNodes)::String =
     is_standalone(self) ? "EmbedderStringImpl" : "JSStringImpl"
 
-# dart:_list's WasmListBase, a class of dart's runtime library at the pin, not ported: Unported there (the lead's ruling on runtime definitions)
+# dart:_list's WasmListBase (list.dart:15, `int _length` beside `WasmArray<Object?> _data`) is Julia's
+# Array{T,1}, laid out by its own fields over its Memory (src/julia/classes.jl `_memory_instance_fields`),
+# one class per element type, so no one class answers; its methods are Base's (getindex, length,
+# copyto!), compiled as they are (D3). Its one reader, getListBaseArray, is called only from dart's
+# Function.apply intrinsic (intrinsics.dart:3381), which no Julia call is, and class_info.dart:126's
+# field checks are answered by Array's own fields: no compile reaches it, Internal (A55S14's rule)
 @parity "dart2wasm/lib/kernel_nodes.dart:57 KernelNodes.listBaseClass" list_base_class(self::KernelNodes)::Union{} =
-    reject!(Unported("sdk/lib/_internal/wasm/common/list.dart:15 WasmListBase"), "KernelNodes.listBaseClass: the list class of dart:_list")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:57 KernelNodes.listBaseClass: dart:_list's WasmListBase is Julia's Array{T,1}, a class per element type laid out by its own fields, and its one reader, getListBaseArray, is dart's Function.apply intrinsic, which no Julia call is"), "KernelNodes.listBaseClass")
 
 # dart:_list's ImmutableList, the class of a constant list, of dart's runtime library at the pin, not
 # ported: Unported there

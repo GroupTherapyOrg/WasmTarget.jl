@@ -286,7 +286,7 @@ end
     local ei = try; D.index_list(t, bl, b -> nothing); nothing; catch x; x; end
     @test ei isa W.RejectionError && ei.rejection isa W.Internal
     local eb = try; D.get_list_base_array(t, bl); nothing; catch x; x; end
-    @test eb isa W.RejectionError && eb.rejection isa W.Unported && occursin("list.dart", eb.rejection.anchor)
+    @test eb isa W.RejectionError && eb.rejection isa W.Internal && occursin("Array{T,1}", eb.rejection.site)
     local es = try; D.push_standalone_string_constant(t, bl, W.WasmBuilder.DataSegmentBuilder(0, UInt8[], nothing, nothing), "hi"); nothing; catch x; x; end
     @test es isa W.RejectionError && es.rejection isa W.Internal
     # a tear-off's runtime type is the specialization's signature after the callee

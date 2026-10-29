@@ -18,7 +18,10 @@ f(x::Int) = x + 1
     local js = D.Translator(world, data(), D.TranslatorOptions())
     local standalone = D.Translator(world, data(), D.TranslatorOptions(; standalone = true))
     local anchor(f, t) = (e = try; f(t); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Unported ? e.rejection.anchor : e)
-    @test anchor(D.list_base_class, js) == "sdk/lib/_internal/wasm/common/list.dart:15 WasmListBase"
+    # dart:_list's WasmListBase is Julia's Array{T,1}, a class per element type: no compile reaches the
+    # one-class lookup, Internal naming why
+    local lb = try; D.list_base_class(js); nothing; catch x; x; end
+    @test lb isa W.RejectionError && lb.rejection isa W.Internal && occursin("Array{T,1}", lb.rejection.site)
     @test anchor(D.immutable_list_class, js) == "sdk/lib/_internal/wasm/common/list.dart:290 ImmutableList"
     @test anchor(D.throw_wasm_ref_error, js) == "sdk/lib/_internal/wasm/common/errors_patch.dart:87 _TypeError._throwWasmRefError"
     @test anchor(D.embedder_string_from_char_code_array, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:62 stringFromCharCodeArray"
@@ -32,7 +35,7 @@ f(x::Int) = x + 1
     # each anchor names a line of the pinned sdk that declares it
     local sdk = W._pin_sdk()
     if sdk !== nothing
-        for (fn, t) in ((D.list_base_class, js), (D.immutable_list_class, js), (D.throw_wasm_ref_error, js), (D.embedder_string_from_char_code_array, standalone),
+        for (fn, t) in ((D.immutable_list_class, js), (D.throw_wasm_ref_error, js), (D.embedder_string_from_char_code_array, standalone),
                         (D.embedder_string_from_ascii_bytes, standalone), (D.stack_trace_current, js), (D.stack_trace_current, standalone),
                         (D.print_to_console, js), (D.print_to_console, standalone))
             local a = anchor(fn, t)
