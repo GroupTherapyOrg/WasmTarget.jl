@@ -331,6 +331,7 @@ end
     f === Core.:(===) && length(args) == 2 && return generate_static_intrinsic(self, Val(:identical), f, args)
     f === Core._svec_len && length(args) == 1 && return generate_static_intrinsic(self, Val(:svec_len), f, args)
     f === Core._svec_ref && length(args) == 2 && return generate_static_intrinsic(self, Val(:svec_ref), f, args)
+    f === Core.svec && return generate_static_intrinsic(self, Val(:svec), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f isa Core.IntrinsicFunction || return nothing
     local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
@@ -421,6 +422,30 @@ end
         return t.top_type[]
     end
     reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String data operation $op"), at)
+end
+
+# Julia's `svec(xs...)`: a new SimpleVector of its operands, jl_svec's, built as dart builds an
+# ImmutableWasmArray from its elements (WasmArray.literal, intrinsics.dart:2839: each element
+# translated to the array's element type, then array.new_fixed of their count), the array then the
+# data field of the SimpleVector's struct below its header (src/julia/classes.jl
+# `_svec_instance_fields`), as visitStringConstant wraps a String's bytes
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local at = "$(code_gen.enclosing_member): a SimpleVector made"
+    local sv_info = get(t.class_info, Core.SimpleVector, nothing)
+    sv_info === nothing && reject!(Internal("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic: Core.SimpleVector has no class info"), at)
+    local data = only(class_instance_fields(Core.SimpleVector, at))
+    local array_type = (translate_type_of_field(t, data)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+    local element_type = WasmBuilder.unpacked(array_type.element_type[].type)
+    local b = code_gen.b[]
+    push_object_header_fields(b, t, sv_info)
+    for element in args
+        translate_expression(code_gen, element, element_type)
+    end
+    WasmBuilder.array_new_fixed(b, array_type, length(args))
+    WasmBuilder.struct_new(b, sv_info.struct_)
+    return WasmBuilder.with_nullability(repr(sv_info), false)
 end
 
 # Julia's `_svec_ref(v, i)`: the `i`th element (from 1) of a SimpleVector's data array, dart's

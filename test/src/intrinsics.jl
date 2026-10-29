@@ -224,3 +224,25 @@ end
         @test r.ok || (@info r.label r.why; false)
     end
 end
+
+module SvecNewCases
+# a SimpleVector made at run time of an Int, a String and an Int, its element by index; its length
+made(i::Int64, k::Int64) = (v = Core.svec(i, "x", i + 1); x = v[k]; x isa Int64 ? Int64(1) : x isa String ? Int64(2) : Int64(3))
+made_len(b::Bool) = Core._svec_len(b ? Core.svec("a", "b", "c") : Core.svec("z"))
+end
+
+@testset "intrinsics.dart: a SimpleVector made at run time, WasmArray.literal's array.new_fixed in its struct" begin
+    # Core.svec builds its data array from its operands, each boxed to the element type, as dart's
+    # WasmArray.literal does, under the SimpleVector's header; read back by index and by length, and
+    # past its length raising BoundsError
+    local native(f, a) = try; f(a...); catch e; WTRunner.Throws(typeof(e)); end
+    local cases = WTRunner.RunCase[]
+    for (f, argsets) in ((SvecNewCases.made, [(Int64(5), Int64(k)) for k in 0:4]), (SvecNewCases.made_len, [(true,), (false,)]))
+        local bytes = WI.compile(f, map(typeof, first(argsets)))
+        append!(cases, [WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, native(f, a)) for a in argsets])
+    end
+    @test count(c -> c.native isa WTRunner.Throws, cases) == 2
+    for r in WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
