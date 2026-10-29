@@ -585,4 +585,7 @@ end
     push!(t.members_being_generated, h)
     @test !D.supports_inlining(t, h)
     @test !D.synthesize_null_return_value(t, t.component.entry) && !D.synthesize_no_return(t, t.component.entry)
+    # dart's node count is Julia's inliner's decision: the counter is never made, located
+    local en = try; D.NodeCounter(t); nothing; catch x; x; end
+    @test en isa WasmTarget.RejectionError && en.rejection isa WasmTarget.Unquarantined && occursin("ssa_inlining_pass", en.rejection.row)
 end

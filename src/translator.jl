@@ -378,9 +378,21 @@ _ClosureArgumentsToVtableEntryDispatcherGenerator's dart fields: `translator`, `
 @parity "dart2wasm/lib/translator.dart:3060 _ClosureArgumentsToVtableEntryDispatcherGenerator" @unported struct _ClosureArgumentsToVtableEntryDispatcherGenerator <: CodeGenerator end
 
 """
-NodeCounter's dart fields: `translator`, `hadReturn`, `count`.
+dart's size estimate of a procedure's body, the node count its inlining decision weighs against a
+call's overhead (_shouldInlineProcedureCall). Julia's answer (ledger D3): Julia's own inliner decides
+what is inlined, by its own cost model, before the closed world reaches WasmTarget (Compiler's
+ssa_inlining_pass, which weighs each callee by inline_cost against the inlining threshold), so a call
+left in the NIR is one Julia judged not worth inlining and _shouldInlineProcedureCall answers it. No
+node is counted: the counter's construction and each visitor reject, located, naming Julia's inliner.
 """
-@parity "dart2wasm/lib/translator.dart:3417 NodeCounter" @unported struct NodeCounter end
+@parity "dart2wasm/lib/translator.dart:3417 NodeCounter" mutable struct NodeCounter
+    const translator::KernelNodes
+    had_return::Bool
+    count::Int
+    # the struct's one constructor, tagged; dart's constructor at :3420 is its outer function, which
+    # rejects (the type's docstring)
+    NodeCounter(::Val{:_}, translator::KernelNodes) = new(translator, false, 0)
+end
 
 """Whether a call is inlined, and why."""
 @parity "dart2wasm/lib/translator.dart:3573 InliningDecision" struct InliningDecision
@@ -1444,53 +1456,77 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3365 _ClosureArgumentsToVtableEntryDispatcherGenerator._verifyAssumptions" @unported function _verify_assumptions(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local) end
 
-@parity "dart2wasm/lib/translator.dart:3420 NodeCounter" @unported function NodeCounter(translator) end
+@parity "dart2wasm/lib/translator.dart:3420 NodeCounter" NodeCounter(translator::KernelNodes)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3420 NodeCounter: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter")
 
-@parity "dart2wasm/lib/translator.dart:3429 NodeCounter.defaultTreeNode" @unported function default_tree_node(self::NodeCounter, node::NirStmt) end
+@parity "dart2wasm/lib/translator.dart:3429 NodeCounter.defaultTreeNode" default_tree_node(self::NodeCounter, node::NirStmt)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3429 NodeCounter.defaultTreeNode: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.defaultTreeNode")
 
-@parity "dart2wasm/lib/translator.dart:3436 NodeCounter.visitFieldInitializer" @unported function visit_field_initializer(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3436 NodeCounter.visitFieldInitializer" visit_field_initializer(self::NodeCounter, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3436 NodeCounter.visitFieldInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitFieldInitializer")
 
-@parity "dart2wasm/lib/translator.dart:3441 NodeCounter.visitLocalInitializer" @unported function visit_local_initializer(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3441 NodeCounter.visitLocalInitializer" visit_local_initializer(self::NodeCounter, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3441 NodeCounter.visitLocalInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitLocalInitializer")
 
-@parity "dart2wasm/lib/translator.dart:3446 NodeCounter.visitSuperInitializer" @unported function visit_super_initializer(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3446 NodeCounter.visitSuperInitializer" visit_super_initializer(self::NodeCounter, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3446 NodeCounter.visitSuperInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitSuperInitializer")
 
-@parity "dart2wasm/lib/translator.dart:3451 NodeCounter.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3451 NodeCounter.visitRedirectingInitializer" visit_redirecting_initializer(self::NodeCounter, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3451 NodeCounter.visitRedirectingInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitRedirectingInitializer")
 
-@parity "dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue" @unported function handle_field_initializer_value(self::NodeCounter, value::Union{Nothing,NirValue}) end
+@parity "dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue" handle_field_initializer_value(self::NodeCounter, value::Union{Nothing,NirValue})::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.handleFieldInitializerValue")
 
-@parity "dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock" @unported function visit_block(self::NodeCounter, node::NirBody) end
+@parity "dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock" visit_block(self::NodeCounter, node::NirBody)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitBlock")
 
-@parity "dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement" @unported function visit_empty_statement(self::NodeCounter, node::NirNothing) end
+@parity "dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement" visit_empty_statement(self::NodeCounter, node::NirNothing)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitEmptyStatement")
 
-@parity "dart2wasm/lib/translator.dart:3478 NodeCounter.visitReturnStatement" @unported function visit_return_statement(self::NodeCounter, node::NirReturn) end
+@parity "dart2wasm/lib/translator.dart:3478 NodeCounter.visitReturnStatement" visit_return_statement(self::NodeCounter, node::NirReturn)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3478 NodeCounter.visitReturnStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitReturnStatement")
 
-@parity "dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement" @unported function visit_labeled_statement(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement" visit_labeled_statement(self::NodeCounter, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitLabeledStatement")
 
-@parity "dart2wasm/lib/translator.dart:3494 NodeCounter.visitBlockExpression" @unported function visit_block_expression(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3494 NodeCounter.visitBlockExpression" visit_block_expression(self::NodeCounter, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3494 NodeCounter.visitBlockExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitBlockExpression")
 
-@parity "dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement" @unported function visit_expression_statement(self::NodeCounter, node::NirStmt) end
+@parity "dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement" visit_expression_statement(self::NodeCounter, node::NirStmt)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitExpressionStatement")
 
-@parity "dart2wasm/lib/translator.dart:3504 NodeCounter.visitLet" @unported function visit_let(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3504 NodeCounter.visitLet" visit_let(self::NodeCounter, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3504 NodeCounter.visitLet: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitLet")
 
-@parity "dart2wasm/lib/translator.dart:3509 NodeCounter.visitArguments" @unported function visit_arguments(self::NodeCounter, node::Vector{NirValue}) end
+@parity "dart2wasm/lib/translator.dart:3509 NodeCounter.visitArguments" visit_arguments(self::NodeCounter, node::Vector{NirValue})::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3509 NodeCounter.visitArguments: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitArguments")
 
-@parity "dart2wasm/lib/translator.dart:3515 NodeCounter.visitNamedExpression" @unported function visit_named_expression(self::NodeCounter, node::NoCounterpart) end
+@parity "dart2wasm/lib/translator.dart:3515 NodeCounter.visitNamedExpression" visit_named_expression(self::NodeCounter, node::NoCounterpart)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3515 NodeCounter.visitNamedExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitNamedExpression")
 
-@parity "dart2wasm/lib/translator.dart:3520 NodeCounter.visitIsExpression" @unported function visit_is_expression(self::NodeCounter, node::NirCall) end
+@parity "dart2wasm/lib/translator.dart:3520 NodeCounter.visitIsExpression" visit_is_expression(self::NodeCounter, node::NirCall)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3520 NodeCounter.visitIsExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitIsExpression")
 
-@parity "dart2wasm/lib/translator.dart:3526 NodeCounter.visitAsExpression" @unported function visit_as_expression(self::NodeCounter, node::NirCall) end
+@parity "dart2wasm/lib/translator.dart:3526 NodeCounter.visitAsExpression" visit_as_expression(self::NodeCounter, node::NirCall)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3526 NodeCounter.visitAsExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitAsExpression")
 
-@parity "dart2wasm/lib/translator.dart:3532 NodeCounter.defaultDartType" @unported function default_dart_type(self::NodeCounter, node::Type) end
+@parity "dart2wasm/lib/translator.dart:3532 NodeCounter.defaultDartType" default_dart_type(self::NodeCounter, node::Type)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3532 NodeCounter.defaultDartType: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.defaultDartType")
 
-@parity "dart2wasm/lib/translator.dart:3540 NodeCounter.visitInstanceGet" @unported function visit_instance_get(self::NodeCounter, node::NirCall) end
+@parity "dart2wasm/lib/translator.dart:3540 NodeCounter.visitInstanceGet" visit_instance_get(self::NodeCounter, node::NirCall)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3540 NodeCounter.visitInstanceGet: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitInstanceGet")
 
-@parity "dart2wasm/lib/translator.dart:3546 NodeCounter.visitInstanceSet" @unported function visit_instance_set(self::NodeCounter, node::NirCall) end
+@parity "dart2wasm/lib/translator.dart:3546 NodeCounter.visitInstanceSet" visit_instance_set(self::NodeCounter, node::NirCall)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3546 NodeCounter.visitInstanceSet: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitInstanceSet")
 
-@parity "dart2wasm/lib/translator.dart:3552 NodeCounter.visitInstanceInvocation" @unported function visit_instance_invocation(self::NodeCounter, node::NirInvoke) end
+@parity "dart2wasm/lib/translator.dart:3552 NodeCounter.visitInstanceInvocation" visit_instance_invocation(self::NodeCounter, node::NirInvoke)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3552 NodeCounter.visitInstanceInvocation: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitInstanceInvocation")
 
-@parity "dart2wasm/lib/translator.dart:3558 NodeCounter.visitEqualsCall" @unported function visit_equals_call(self::NodeCounter, node::NirInvoke) end
+@parity "dart2wasm/lib/translator.dart:3558 NodeCounter.visitEqualsCall" visit_equals_call(self::NodeCounter, node::NirInvoke)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3558 NodeCounter.visitEqualsCall: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitEqualsCall")
 
-@parity "dart2wasm/lib/translator.dart:3563 NodeCounter._countInstanceCallCost" @unported function _count_instance_call_cost(self::NodeCounter, node::NirStmt) end
+@parity "dart2wasm/lib/translator.dart:3563 NodeCounter._countInstanceCallCost" _count_instance_call_cost(self::NodeCounter, node::NirStmt)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:3563 NodeCounter._countInstanceCallCost: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter._countInstanceCallCost")
 
 @parity "dart2wasm/lib/translator.dart:3576 InliningDecision" InliningDecision(should_inline::Bool, reason::Union{String,Nothing})::InliningDecision = InliningDecision(Val(:_), should_inline, reason)
 
