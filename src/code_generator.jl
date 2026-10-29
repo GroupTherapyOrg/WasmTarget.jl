@@ -562,15 +562,15 @@ end
 @parity "dart2wasm/lib/code_generator.dart:6146 CallTarget" abstract type CallTarget end
 
 """
-The call target of a member (dart's Reference, Julia's MethodInstance): `signature` its wasm
-function type (CallTarget's field), called or inlined.
+The call target of a Reference (the Kernel table's sum, a member's MethodInstance or a field's
+accessor): `signature` its wasm function type (CallTarget's field), called or inlined.
 """
 @parity "dart2wasm/lib/code_generator.dart:6182 AstCallTarget" struct AstCallTarget <: CallTarget
     signature::WasmBuilder.IR.FunctionType
     _translator::Translator
-    _reference::Core.MethodInstance
+    _reference::Reference
     # the struct's one constructor, tagged; dart's constructor at :6186 is its outer function
-    AstCallTarget(::Val{:_}, signature::WasmBuilder.IR.FunctionType, _translator::Translator, _reference::Core.MethodInstance) =
+    AstCallTarget(::Val{:_}, signature::WasmBuilder.IR.FunctionType, _translator::Translator, _reference::Reference) =
         new(signature, _translator, _reference)
 end
 
@@ -1005,7 +1005,7 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:733 AstCodeGenerator.call" call(self::AstCodeGenerator, target::Core.MethodInstance)::Vector{WasmBuilder.IR.ValueType} = call_reference(self.translator, target, self.b[])
+@parity "dart2wasm/lib/code_generator.dart:733 AstCodeGenerator.call" call(self::AstCodeGenerator, target::Reference)::Vector{WasmBuilder.IR.ValueType} = call_reference(self.translator, target, self.b[])
 
 @parity "dart2wasm/lib/code_generator.dart:738 AstCodeGenerator.visitInvalidInitializer" visit_invalid_initializer(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     no_counterpart_rejection("InvalidInitializer", "dart2wasm/lib/code_generator.dart:738 AstCodeGenerator.visitInvalidInitializer", "$(self.enclosing_member)")
@@ -1511,15 +1511,13 @@ end
 
 # Julia's read of a module binding (a GlobalRef statement or operand) is Kernel's StaticGet. dart calls
 # the static field's getter; a binding whose value no load can change (globals.dart's one rule,
-# DartGlobals.getConstantInitializer: const and free of mutation) is that compile-time constant, and
-# any other reaches the getter, which rejects, located, until the static field accessor is ported
+# DartGlobals.getConstantInitializer: const and free of mutation) is that compile-time constant, read
+# in place, and any other calls its implicit getter reference, as dart's does
 @parity "dart2wasm/lib/code_generator.dart:2183 AstCodeGenerator.visitStaticGet" function visit_static_get(self::AstCodeGenerator, node::Union{NirGlobalRead,NirGlobal}, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local intrinsic_result = generate_static_getter_intrinsic(self.intrinsifier[], node)
     intrinsic_result === nothing || return intrinsic_result
     local constant = get_constant_initializer(self.translator.dart_globals[], node.ref)
-    constant === nothing &&
-        reject!(Unported("dart2wasm/lib/code_generator.dart:4937 StaticFieldImplicitAccessorCodeGenerator._generateGetter"),
-            "$(self.enclosing_member): a read of the binding $(node.ref), which a load can change (its getter)")
+    constant === nothing && return output_or_void(self.translator, call(self, FieldReference(node.ref, FieldReferenceKind_getter)))
     instantiate_constant(self, constant, expected_type)
     return expected_type
 end
@@ -1531,12 +1529,31 @@ end
     return expected_type
 end
 
-# Julia's setglobal!(mod, name, value), Kernel's StaticSet: dart calls the static field's implicit
-# setter, whose signature types the value; that setter (StaticFieldImplicitAccessorCodeGenerator) is not
-# ported, so the write rejects there, located, before anything is pushed
-@parity "dart2wasm/lib/code_generator.dart:2199 AstCodeGenerator.visitStaticSet" visit_static_set(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::Union{} =
-    reject!(Unported("dart2wasm/lib/code_generator.dart:4969 StaticFieldImplicitAccessorCodeGenerator._generateSetter"),
-        "$(self.enclosing_member): a write of the binding $(node.args[2]).$(node.args[3]) (its setter)")
+# Julia's setglobal!(mod, name, value), Kernel's StaticSet, its value the expression's: dart translates
+# the value at its implicit setter's parameter type and calls the setter, dropping the null the call
+# synthesizes, keeping the value in a local when the expression's value is used. A binding named at run
+# time (a module or name no literal) is no static field, located
+@parity "dart2wasm/lib/code_generator.dart:2199 AstCodeGenerator.visitStaticSet" function visit_static_set(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local mod, name = node.args[2], node.args[3]
+    mod isa NirConst && mod.c.val isa Module && name isa NirConst && name.c.val isa Symbol ||
+        reject!(Unquarantined("src/julia: a setglobal! of a binding named at run time ($mod, $name)"), "$(self.enclosing_member)")
+    local b = self.b[]
+    local preserved = expected_type != void_marker(self)
+    local reference = FieldReference(GlobalRef(mod.c.val, name.c.val), FieldReferenceKind_setter)
+    local param_type = only(signature_for_direct_call(self.translator, reference).inputs)
+    translate_expression(self, node.args[4], param_type)
+    if !preserved
+        call(self, reference)
+        WasmBuilder.drop(b) # Drop `null` from setter call.
+        return void_marker(self)
+    end
+    local temp = add_local(self, param_type)
+    WasmBuilder.local_tee(b, temp)
+    call(self, reference)
+    WasmBuilder.drop(b) # Drop `null` from setter call.
+    WasmBuilder.local_get(b, temp)
+    return temp.type
+end
 
 @parity "dart2wasm/lib/code_generator.dart:2225 AstCodeGenerator.visitSuperPropertyGet" visit_super_property_get(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:2225 AstCodeGenerator.visitSuperPropertyGet: Julia has no super call: its counterpart, Core.invoke of a supertype's method, is a builtin Julia's trim verifier rejects (unimplemented_invoke), so no NIR reaches it"), "$(self.enclosing_member)")
@@ -2729,7 +2746,7 @@ end
 @parity "dart2wasm/lib/code_generator.dart:6179 CallTarget.function" var"function"(self::CallTarget)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:6179 CallTarget.function: abstract in $(typeof(self))"), "CallTarget.function")
 
-@parity "dart2wasm/lib/code_generator.dart:6186 AstCallTarget" AstCallTarget(signature::WasmBuilder.IR.FunctionType, _translator::Translator, _reference::Core.MethodInstance)::AstCallTarget =
+@parity "dart2wasm/lib/code_generator.dart:6186 AstCallTarget" AstCallTarget(signature::WasmBuilder.IR.FunctionType, _translator::Translator, _reference::Reference)::AstCallTarget =
     AstCallTarget(Val(:_), signature, _translator, _reference)
 
 @parity "dart2wasm/lib/code_generator.dart:6189 AstCallTarget.synthesizeNullReturnValue" synthesize_null_return_value(self::AstCallTarget)::Bool = synthesize_null_return_value(self._translator, self._reference)

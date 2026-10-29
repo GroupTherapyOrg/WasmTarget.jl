@@ -787,11 +787,11 @@ end
 end
 
 """Call `reference` directly on `b`, inlining it where allowed and beneficial; the call's outputs."""
-@parity "dart2wasm/lib/translator.dart:830 Translator.callReference" call_reference(self::Translator, reference::Core.MethodInstance, b::WasmBuilder.InstructionsBuilder)::Vector{WasmBuilder.IR.ValueType} =
+@parity "dart2wasm/lib/translator.dart:830 Translator.callReference" call_reference(self::Translator, reference::Reference, b::WasmBuilder.InstructionsBuilder)::Vector{WasmBuilder.IR.ValueType} =
     call_target(self, direct_call_target(self, reference), b, reference)
 
 @parity "dart2wasm/lib/translator.dart:835 Translator.callTarget" function call_target(self::Translator, call_target::CallTarget, b::WasmBuilder.InstructionsBuilder,
-        reference::Union{Core.MethodInstance,Nothing} = nothing)::Vector{WasmBuilder.IR.ValueType}
+        reference::Union{Reference,Nothing} = nothing)::Vector{WasmBuilder.IR.ValueType}
     local outputs::Vector{WasmBuilder.IR.ValueType}
     if supports_inlining(call_target)
         local decision = should_inline(call_target)::InliningDecision
@@ -824,7 +824,7 @@ of another module through the dispatch or the cross-module table; deferred loadi
 so every function is the one module's and another module's is a located rejection.
 """
 @parity "dart2wasm/lib/translator.dart:875 Translator.callFunction" function call_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, b::WasmBuilder.InstructionsBuilder,
-        target::Union{Core.MethodInstance,Nothing} = nothing)::Vector{WasmBuilder.IR.ValueType}
+        target::Union{Reference,Nothing} = nothing)::Vector{WasmBuilder.IR.ValueType}
     # If the target function is defined in the same module as the caller, just invoke it.
     local target_module_builder = self.module_to_builder[function_.enclosing_module]
     if target_module_builder === b.module_builder
@@ -1184,7 +1184,7 @@ end
     return Type[]
 end
 
-@parity "dart2wasm/lib/translator.dart:1857 Translator.directCallTarget" function direct_call_target(self::Translator, target::Core.MethodInstance)::AstCallTarget
+@parity "dart2wasm/lib/translator.dart:1857 Translator.directCallTarget" function direct_call_target(self::Translator, target::Reference)::AstCallTarget
     local signature = signature_for_direct_call(self, target)
     return AstCallTarget(signature, self, target)
 end
@@ -1196,10 +1196,10 @@ The function type of a direct call of `target`: a Julia member calls through no 
     get_function_type(self.functions[], target)
 
 # a Julia member calls through no selector (src/dispatch_table.jl): the function collector answers
-@parity "dart2wasm/lib/translator.dart:1872 Translator.synthesizeNullReturnValue" synthesize_null_return_value(self::Translator, target::Core.MethodInstance)::Bool =
+@parity "dart2wasm/lib/translator.dart:1872 Translator.synthesizeNullReturnValue" synthesize_null_return_value(self::Translator, target::Reference)::Bool =
     synthesize_null_return_value(self.functions[], target)
 
-@parity "dart2wasm/lib/translator.dart:1884 Translator.synthesizeNoReturn" synthesize_no_return(self::Translator, target::Core.MethodInstance)::Bool =
+@parity "dart2wasm/lib/translator.dart:1884 Translator.synthesizeNoReturn" synthesize_no_return(self::Translator, target::Reference)::Bool =
     synthesize_no_return(self.functions[], target)
 
 # a Julia member calls through no selector (src/dispatch_table.jl: the trim verifier leaves no
@@ -1351,18 +1351,42 @@ end
 
 """
 Whether a direct call to `target` is inlined. dart's pragmas are Julia's declarations: `@noinline`
-never, `@inline` its preference; a Julia member is a method, dart's procedure arm.
+never, `@inline` its preference; a Julia member is a method, dart's procedure arm, and a field's
+accessor dart's field arm (a Julia field carries no pragma).
 """
-@parity "dart2wasm/lib/translator.dart:2195 Translator.shouldInline" function should_inline(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType)::InliningDecision
+@parity "dart2wasm/lib/translator.dart:2195 Translator.shouldInline" function should_inline(self::Translator, target::Reference, signature::WasmBuilder.IR.FunctionType)::InliningDecision
     inlining(self.options) || return InliningDecision(false, "inlining disabled")
-    local method = target.def::Method
-    Core.Compiler.is_declared_noinline(method) && return InliningDecision(false, "@noinline")
-    Core.Compiler.is_declared_inline(method) && return InliningDecision(true, "@inline")
-    return _should_inline_procedure_call(self, target, signature)
+    return @exhaustive target::Reference begin
+        (m::MethodInstance) => let method = m.def::Method
+            Core.Compiler.is_declared_noinline(method) ? InliningDecision(false, "@noinline") :
+            Core.Compiler.is_declared_inline(method) ? InliningDecision(true, "@inline") :
+            _should_inline_procedure_call(self, m, signature)
+        end
+        (r::FieldReference) => _should_inline_field_accessor(self, r, r.field)
+    end
 end
 
-@parity "dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor" _should_inline_field_accessor(self::Translator, target::Core.MethodInstance, field::ClassField)::Union{} =
-    reject!(Internal("dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor: a field accessor's inlining; a Julia member is a method, never a field's implicit getter or setter, and Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost)"), "Translator._shouldInlineFieldAccessor")
+# an instance field's accessor is a load or a store (Julia checks no covariant value, so no setter
+# has a checked entry); a static field's setter is a store, and its getter one when its global is
+# initialized eagerly (DartGlobals.getConstantInitializer), else it may run the lazy initializer. A
+# field's initializer reference is no accessor any caller inlines (dart's UnimplementedError)
+@parity "dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor" function _should_inline_field_accessor(self::Translator, target::FieldReference, field::Union{ClassField,GlobalRef})::InliningDecision
+    if field isa ClassField
+        # Implicit instance getters are just loads.
+        target.kind === FieldReferenceKind_getter && return InliningDecision(true, "Implicit getter.")
+        # Implicit instance setters are just stores, except if the value needs to be type checked.
+        return InliningDecision(true, "Implicit setter without type check.")
+    end
+    # Implicit setter for static fields are just stores.
+    target.kind === FieldReferenceKind_setter && return InliningDecision(true, "Implicit static setter")
+    if target.kind === FieldReferenceKind_getter
+        # Implicit getter for static fields may invoke lazy static initializer.
+        get_constant_initializer(self.dart_globals[], field) !== nothing &&
+            return InliningDecision(true, "Implicit static getter without initializer")
+        return InliningDecision(false, "static getter with initializer")
+    end
+    reject!(Internal("dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor: the initializer reference of $field, no accessor a call inlines"), "Translator._shouldInlineFieldAccessor")
+end
 
 """
 Whether a static field's initializer function is kept from inlining: dart's answer is no when the
@@ -1388,10 +1412,15 @@ dart's throwing function.
 end
 
 # dart refuses a member with inner functions (a Julia closure is a method of its own), one being
-# generated (recursive inlining), and an asynchronous one (tasks are outside the subset)
-@parity "dart2wasm/lib/translator.dart:2400 Translator.supportsInlining" function supports_inlining(self::Translator, target::Core.MethodInstance)::Bool
+# generated (recursive inlining), and an asynchronous one (tasks are outside the subset); a field's
+# accessor is its field's, a member as dart's Field is
+@parity "dart2wasm/lib/translator.dart:2400 Translator.supportsInlining" function supports_inlining(self::Translator, target::Reference)::Bool
+    local member = @exhaustive target::Reference begin
+        (m::MethodInstance) => m
+        (r::FieldReference) => r.field
+    end
     # Guard against recursive inlining.
-    target in self.members_being_generated && return false
+    member in self.members_being_generated && return false
     return true
 end
 

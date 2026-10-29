@@ -303,7 +303,6 @@ const SCALE = Int32(7)
 counter = 0
 const BOX = Ref(0)
 scaled(x::Int32) = x * SCALE
-setcounter(x::Int) = (global counter = x; nothing)
 @noinline callf(f, x) = f(x)
 tear(x::Int32) = callf(abs, x)
 end
@@ -317,26 +316,31 @@ end
     g.translator.dart_globals[] = D.DartGlobals(g.translator)
     local e = rejection(() -> D.translate_expression(g, W.NirGlobal(GlobalRef(GlobalCases, :SCALE)), IR.NumType_i32))
     @test e.rejection isa W.Unported && occursin("Translator.constants", e.rejection.anchor)
-    # a binding a load can change (non-const, or const holding a mutable object, globals.dart's one
-    # rule) reaches the getter, which rejects, located, as a statement or an operand
-    for name in (:counter, :BOX)
-        @test occursin("_generateGetter", rejection(() -> D.visit_static_get(g, W.NirGlobalRead(GlobalRef(GlobalCases, name)), IR.NumType_i32)).rejection.anchor)
-    end
-    @test rejection(() -> D.visit_static_get(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)), IR.NumType_i32)).rejection isa W.Unported
-    # its static type rejects at the same getter, one kind at both sites; a constant binding's type is
-    # its value's, mutable or not
+    # a binding's operand whose value an assignment can change has a static type only its getter knows,
+    # located at the getter; a constant binding's type is its value's, mutable or not
     @test occursin("_generateGetter", rejection(() -> D.dart_type_of(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)))).rejection.anchor)
     @test D.dart_type_of(g, W.NirGlobal(GlobalRef(GlobalCases, :BOX))) === Base.RefValue{Int64}
     # a function's binding as an operand, `abs` passed to callf, is Kernel's StaticTearOff, the
     # function's singleton constant: run by node against native
     local tb = W.compile(GlobalCases.tear, (Int32,); optimize = false)
     queue_native!("tear", tb, GlobalCases.tear, [(x,) for x in Int32[-3, 0, 5, typemin(Int32)]])
-    # a write of a binding, Kernel's StaticSet (the body's own setglobal!), calls its setter, not
-    # ported: Unported there
-    local sg = codegen_of(GlobalCases.setcounter, (Int,), [IR.NumType_i64], IR.ValueType[])
-    local set = only(st for st in sg.body.stmts if st isa W.NirCall && W.nir_callee(st) === Core.setglobal!)
-    local w = rejection(() -> D.translate_expression(sg, set, D.void_marker(sg)))
-    @test w.rejection isa W.Unported && occursin("StaticFieldImplicitAccessorCodeGenerator._generateSetter", w.rejection.anchor)
+end
+
+# a binding a load can change (globals.dart's lazy arm): a read calls its implicit getter, which runs
+# its initializer, the binding's session value, on the first read; a write calls its implicit setter.
+# Each module starts from the value compiled in, so every native answer is computed from that value
+module LazyGlobalCases
+global total::Int = 5
+peek(x::Int) = total + x
+@noinline put!(x::Int) = (global total = x; nothing)
+setpeek(x::Int) = (put!(x * 3); total + 1)
+end
+@testset "code_generator.dart: a lazy static field, read through its getter and written through its setter" begin
+    local pb = W.compile(LazyGlobalCases.peek, (Int,); optimize = false)
+    local sb = W.compile(LazyGlobalCases.setpeek, (Int,); optimize = false)
+    # the session value, before any native write below changes it
+    queue_native!("peek ", pb, LazyGlobalCases.peek, [(1,), (-7,)])
+    queue_native!("setpeek ", sb, LazyGlobalCases.setpeek, [(2,), (-4,)])
 end
 
 module ThrowCases
