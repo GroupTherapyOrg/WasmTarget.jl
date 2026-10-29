@@ -107,6 +107,95 @@ end
     return nothing
 end
 
+"""
+    RUNTIME_ENTRY_POINTS
+
+The runtime's entry points, each `(module path, name, argument types, demand)`: a method the code
+generator calls where Julia raises, kept in the closed world beside the program whenever the program
+holds the IR form `demand` names (`_demanded`): `:throw`, a call of Julia's throw (dart2wasm's
+visitThrow calls errors_patch.dart's `_throwWithCurrentStackTrace`), and `:checked_division`, a
+checked integer division or remainder, which raises DivideError at a zero divisor. Each demanded one
+is queued for Julia's one trim inference beside the entry (`check_subset`), so its CodeInstance is in
+the closed world and its NirBody in the NIR.
+
+precedent(dart: `@pragma("wasm:entry-point")`, which TFA keeps; juliac: the ccallables the entry
+reaches, queued as roots beside main, as check_subset queues them, `_reached_ccallables`). Julia's
+differs: a method carries no pragma, so the roots are listed with the form that demands each, each
+checked to name one method when the package loads (check_runtime_entry_points).
+"""
+@quarantine "a method carries no entry-point pragma; the runtime's roots of Julia's trim inference are listed with their argument types" Core.Type const RUNTIME_ENTRY_POINTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol,Tuple{Vararg{Type}},Symbol}}} = (
+    ((:Runtime,), :Error__throw_with_current_stack_trace, (Exception,), :throw),
+    ((), :throw_divide_error, (), :checked_division),
+)
+
+# the IR forms a root's demand names, each a builtin or intrinsic a statement calls
+@quarantine "a runtime root is demanded by the Julia builtin or intrinsic whose raise it lowers" Core.Intrinsics.checked_sdiv_int const RUNTIME_DEMANDS = Dict{Symbol,Tuple{Vararg{Core.Builtin}}}(
+    :throw => (Core.throw,),
+    :checked_division => (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
+                          Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int),
+)
+
+# whether an inferred body of `codeinfos` calls one of `fs`: a statement `Expr(:call, f, ...)` whose
+# callee is one of them, a GlobalRef or the value itself, as Julia's optimized IR writes a builtin call
+@quarantine "a builtin call is read from the inferred CodeInfo's statements, as Julia writes them" Core.CodeInfo function _demanded(codeinfos::Vector{Any}, fs::Tuple{Vararg{Core.Builtin}})::Bool
+    for x in codeinfos
+        x isa Core.CodeInfo || continue
+        for st in x.code
+            Meta.isexpr(st, :call) && !isempty(st.args) || continue
+            local c = st.args[1]
+            local v = c isa GlobalRef ? (isdefined(c.mod, c.name) ? getglobal(c.mod, c.name) : nothing) : c
+            any(f -> v === f, fs) && return true
+        end
+    end
+    return false
+end
+
+# an entry point's function, resolved in `mod` along its module path, or nothing
+@quarantine "an entry point names its function by module path and name, resolved where the package loaded" Core.getglobal function _runtime_entry_function(mod::Module, path::Tuple{Vararg{Symbol}}, name::Symbol)::Union{Function,Nothing}
+    local m = mod
+    for n in path
+        isdefined(m, n) || return nothing
+        m = getglobal(m, n)
+        m isa Module || return nothing
+    end
+    isdefined(m, name) || return nothing
+    local f = getglobal(m, name)
+    return f isa Function ? f : nothing
+end
+
+"""
+    check_runtime_entry_points(mod, entries) -> Int
+
+The runtime roots' check: each of `entries` (RUNTIME_ENTRY_POINTS' form) names a function of `mod`
+with exactly one method for its argument types, so `check_subset` can queue it; throws a
+`ConstructionViolation` naming the first that does not.
+
+precedent(juliac: an entrypoint with no matching method fails the build, jl_add_ccallable_entrypoints
+and Base.Experimental.entrypoint). Julia's differs: the list is data, so the load resolves it.
+"""
+@quarantine "the runtime roots are resolved when the package loads, by Julia's method table" Base.methods function check_runtime_entry_points(mod::Module, entries)::Int
+    for (path, name, argtypes, demand) in entries
+        haskey(RUNTIME_DEMANDS, demand) || throw(ConstructionViolation("RUNTIME_ENTRY_POINTS", "$(join((path..., name), '.')) is demanded by $demand, no form RUNTIME_DEMANDS names"))
+        local f = _runtime_entry_function(mod, path, name)
+        f === nothing && throw(ConstructionViolation("RUNTIME_ENTRY_POINTS", "$(join((path..., name), '.')) names no function"))
+        local n = length(methods(f, Tuple{argtypes...}))
+        n == 1 || throw(ConstructionViolation("RUNTIME_ENTRY_POINTS", "$(join((path..., name), '.'))$argtypes matches $n methods, not one"))
+    end
+    return 0
+end
+
+# the MethodInstance of each runtime entry point `codeinfos` demands at `world`, its compileable
+# specialization, as the entry's
+@quarantine "a runtime root is the specialization Julia compiles for it, as juliac's entrypoint takes it" Core.Typeof function _runtime_roots(codeinfos::Vector{Any}, world::UInt)::Vector{Any}
+    local out = Any[]
+    for (path, name, argtypes, demand) in RUNTIME_ENTRY_POINTS
+        _demanded(codeinfos, RUNTIME_DEMANDS[demand]) || continue
+        local f = something(_runtime_entry_function(@__MODULE__, path, name))
+        push!(out, something(_entry_specialization(Tuple{Core.Typeof(f), argtypes...}, world)))
+    end
+    return out
+end
+
 # The closed world Julia infers for `queue` and its verifier's verdict: the inferred items, the
 # warnings and the parents; an error rejects as OutsideSubset, located at `at`
 @quarantine "the verifier judges what Julia's trim inference returned, errors fatal and warnings notes, as juliac" Core.Compiler.TrimVerifier.get_verify_typeinf_trim function _infer_verified(queue::Vector{Any}, world::UInt, at::String)
@@ -199,12 +288,29 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
                                          TrimEntryText("$sig: Julia gives the call no compileable specialization"))]), at)
     end
     local entry = mi
+    local roots = Any[]
     local codeinfos, notes, parents = _infer_verified(Any[entry], world, at)
+    # the runtime's entry points the program demands, queued beside the entry, until a root's own body
+    # demands no other (a thrower throws: each pass adds roots, of which there are finitely many)
+    while true
+        local demanded = _runtime_roots(codeinfos, world)
+        length(demanded) == length(roots) && break
+        roots = demanded
+        # the roots queued before the entry, so Julia's inference returns the program's bodies first and
+        # the closed world keeps program order (its classes met from the entry's callable on)
+        (codeinfos, notes, parents) = _infer_verified(Any[roots; entry], world, at)
+    end
     # the ccallables the entry reaches, queued beside it as juliac queues each, so the verifier judges
     # each declared signature and return (CCallableMissing); the inference's cache answers the rest
     local ccallables = _reached_ccallables(codeinfos)
-    isempty(ccallables) || ((codeinfos, notes, parents) = _infer_verified(Any[entry; ccallables], world, at))
+    isempty(ccallables) || ((codeinfos, notes, parents) = _infer_verified(Any[roots; entry; ccallables], world, at))
     _check_export_names(entry, codeinfos, at)
+    # each root queued is inferred into the closed world, Julia's answer for a queued item; one missing is
+    # WasmTarget's own defect
+    for r in roots
+        any(x -> x isa Core.CodeInstance && x.def === r, codeinfos) ||
+            reject!(Internal("src/julia/subset.jl check_subset: the runtime entry point $r is not in the closed world"), at)
+    end
     return ClosedWorld(_SubsetToken(), entry, codeinfos, notes, parents)
 end
 
@@ -213,7 +319,9 @@ end
 # its next state, src/julia/nir.jl's NirWorld, which build_nir makes from a ClosedWorld, the same
 @quarantine "the typestate's assertion, run when the package loads" Base.Val construction_check(::Val{:ClosedWorld})::Int =
     check_sole_constructor(ClosedWorld, _SubsetToken, @__FILE__) +
-    check_sole_constructor(NirWorld, _NirToken, joinpath(@__DIR__, "nir.jl"))
+    check_sole_constructor(NirWorld, _NirToken, joinpath(@__DIR__, "nir.jl")) +
+    # a ClosedWorld holds the runtime roots its program demands: each one names one method
+    check_runtime_entry_points(@__MODULE__, RUNTIME_ENTRY_POINTS)
 
 # no method of WasmTarget but check_subset names the token or makes either: read in every method's
 # lowered code when the package loads. A stopgap, not a construction (L224): Julia has no module

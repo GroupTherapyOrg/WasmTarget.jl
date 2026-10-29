@@ -498,6 +498,23 @@ DART_FILES, `include` takes any path, so the second oracle's file map is a table
 )
 
 """
+    RUNTIME_FILES
+
+The runtime pin table: each file of dart's runtime library at the pin that WasmTarget's runtime
+mirrors, by its path under the sdk (`sdk/lib/_internal/wasm/common/errors_patch.dart`), its port
+`src/runtime/<its path under sdk/lib/_internal/wasm>.jl`, loaded into the module Runtime. dart2wasm
+compiles a program together with these @patch libraries; WasmTarget compiles a Julia program together
+with their ports, Julia methods each @parity-anchored to the dart definition it ports.
+
+precedent(dart: the sdk's @patch libraries, each `part` of its library, as DART_FILES; GPUCompiler:
+a runtime library of Julia methods compiled with every kernel). Julia's differs: `include` takes any
+path, so the runtime's file map is a table too.
+"""
+@quarantine "Julia's include takes any path; the runtime pin table is the file map of dart's patch libraries' ports" Core.String const RUNTIME_FILES::Tuple{Vararg{String}} = (
+    "sdk/lib/_internal/wasm/common/errors_patch.dart",
+)
+
+"""
     DART_MODULES
 
 The module each dart file loads into, by the first prefix of its key that matches: one module per
@@ -524,9 +541,15 @@ Julia's differs: it has no per-file namespace, so a prefix is a module, and a fi
     "llvm/" => (:LLVM,),
 )
 
+# the module a runtime file loads into: dart's patch libraries patch dart:core and its siblings, one
+# runtime the program is compiled with, WasmTarget's module Runtime
+@quarantine "Julia has no per-file namespace; the runtime's ports share one module, the program's runtime" Base.Pair const RUNTIME_MODULES = (
+    "sdk/lib/_internal/wasm/" => (:Runtime,),
+)
+
 # the module a file of the pin tables loads into
 @quarantine "a dart file's namespace is its package's or prefixed library's module" Core.getglobal function _module_of(dart::String)::Module
-    for (prefix, path) in (DART_MODULES..., LLVM_MODULES...)
+    for (prefix, path) in (DART_MODULES..., LLVM_MODULES..., RUNTIME_MODULES...)
         startswith(dart, prefix) || continue
         local m = @__MODULE__
         for n in path
@@ -629,11 +652,12 @@ the directory and the loader orders the passes.
 @quarantine "Julia's include loads any path in its text's order; include_dart admits the pin table's files and records each it loads" Base.push! function include_dart(darts::String...)::Nothing
     isempty(INCLUDED) || throw(ConstructionViolation("include_dart", "include_dart is called once, with every port"))
     for d in darts
-        d in DART_FILES || d in LLVM_FILES || throw(ConstructionViolation("include_dart", "$d is no file of the pin tables DART_FILES and LLVM_FILES"))
+        d in DART_FILES || d in LLVM_FILES || d in RUNTIME_FILES ||
+            throw(ConstructionViolation("include_dart", "$d is no file of the pin tables DART_FILES, LLVM_FILES and RUNTIME_FILES"))
         d in INCLUDED && throw(ConstructionViolation("include_dart", "$d is included twice"))
         push!(INCLUDED, d)
     end
-    local order = String[d for d in (DART_FILES..., LLVM_FILES...) if d in INCLUDED]
+    local order = String[d for d in (DART_FILES..., LLVM_FILES..., RUNTIME_FILES...) if d in INCLUDED]
     _load_two_pass!(Tuple{Module,String}[(_module_of(d), _jl_path(d)) for d in order])
     return nothing
 end
@@ -710,6 +734,9 @@ end
     # an LLVM unit's port is src/llvm/<its name, WebAssembly's prefix dropped, snake_case>.jl
     local u = match(r"^llvm/(?:[\w]+/)*(?:WebAssembly)?(\w+)$", dart)
     u === nothing || return "llvm/" * snake(u[1]) * ".jl"
+    # a runtime file's port is src/runtime/<its path under sdk/lib/_internal/wasm>.jl
+    local r = match(r"^sdk/lib/_internal/wasm/([\w/]+)\.dart$", dart)
+    r === nothing || return "runtime/" * r[1] * ".jl"
     local m = match(r"^(?:dart2wasm/lib/|(wasm_builder/)lib/(?:src/)?)([\w/]+)\.dart$", dart)
     m === nothing && throw(ConstructionViolation("include_dart", "$dart is no path under dart2wasm/lib or wasm_builder/lib"))
     return something(m[1], "") * m[2] * ".jl"
@@ -1164,7 +1191,7 @@ end
     local a = parse_anchor(anchor)
     a === nothing &&
         refuse("the anchor $(repr(anchor)) reads neither \"<file>.dart:<line> <Symbol>\" nor \"llvm/<unit>.<cpp|h>:<line> <X or X::m>\"")
-    a.pin === :dart ? (a.unit in DART_FILES || refuse("the anchor's file $(a.unit) is no file of the pin table DART_FILES")) :
+    a.pin === :dart ? (a.unit in DART_FILES || a.unit in RUNTIME_FILES || refuse("the anchor's file $(a.unit) is no file of the pin tables DART_FILES and RUNTIME_FILES")) :
                       (a.unit in LLVM_FILES || refuse("the anchor's unit $(a.unit) is no unit of the LLVM pin table LLVM_FILES"))
     local file = string(something(source.file, :none))
     local own = _within(mod, @__MODULE__)

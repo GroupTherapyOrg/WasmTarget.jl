@@ -4,6 +4,13 @@
 # and JS for `util.dart as util` and `js/runtime_generator.dart as js`. A name dart spells `p.X` is
 # `P.X` where P is bound: each module binds the macros, its package and the package modules it uses.
 
+# dart's runtime library, the @patch libraries a program is compiled with (RUNTIME_FILES), its ports
+# Julia methods compiled into every closed world (src/julia/subset.jl RUNTIME_ENTRY_POINTS)
+@quarantine "Julia has no per-file namespace; dart's patch libraries, the program's runtime, are a module" Core.Module module Runtime
+import ..@parity, ..@unported, ..@closed, ..@exhaustive
+import ..reject!, ..Internal, ..Unported
+end
+
 @quarantine "Julia has no per-file namespace; LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), is a module" Core.Module module LLVM
 import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 import ..reject!, ..Internal, ..Unported
@@ -74,6 +81,8 @@ import ..LLVM
 import ..MachineFunction, ..MachineInstr, ..MOBlock, ..MOImm, ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF,
        ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..TRY_TABLE, ..END_TRY_TABLE, ..CATCH, ..UNREACHABLE, ..CATCH_ALL_REF, ..THROW_REF, ..BLOCK_TYPE_EXNREF, ..WASM_OPCODE_CATCH, ..WASM_OPCODE_CATCH_ALL_REF, ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..BLOCK_TYPE_CATCH, ..is_barrier
 # what the code generator reads from a body (src/julia/nir.jl)
+# the runtime's methods in the closed world (src/julia/runtime/rtutils.jl), and the runtime itself
+import ..nir_runtime_member, ..Runtime
 import ..TreeNode_no_offset, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
        ..nir_invoke_target, ..nir_callee, ..nir_value_type, ..nir_binding_is_constant
 import ..WasmBuilder
