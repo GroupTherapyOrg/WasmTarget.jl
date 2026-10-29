@@ -448,6 +448,10 @@ end
         push!(inputs, receiver_type)
     end
     for p in params[2:end]
+        # a vararg method's trailing parameters, which Julia's calling convention passes as one packed
+        # tuple, have no representation yet: a located gap, never a MethodError
+        p isa Core.TypeofVararg &&
+            reject!(Unquarantined("src/functions.jl _getInputTypes: the vararg parameter $p of $target, which Julia passes packed"), "_getInputTypes")
         push!(inputs, translate_type(p)::WasmBuilder.IR.ValueType)
     end
     return inputs
