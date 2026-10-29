@@ -267,11 +267,11 @@ translated(f) = (t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f
     D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions()); D.translate(t, nothing); t)
 @testset "constants.dart: a String literal, its UTF-8 code units as dart's literal path makes them" begin
     local t = translated(lit)
-    # String's struct: the object header, then its code units as an immutable i8 array
+    # String's struct: the object header, then its code units as an i8 array, the field immutable
     local fields = t.class_info[String].struct_.fields
     @test length(fields) == 3 && !fields[3].mutable && fields[3].type isa I.RefType
     local arr = fields[3].type.heap_type
-    @test arr isa I.ArrayType && arr.element_type[].type === I.PackedType_i8 && !arr.element_type[].mutable
+    @test arr isa I.ArrayType && arr.element_type[].type === I.PackedType_i8 && arr.element_type[].mutable
     # each literal an eager global: header, array.new_fixed of Julia's codeunits, struct.new
     for s in ("héllo", "ab")
         local ci = t.constants[].constant_info[WasmTarget.NirConst(Core.Const(s))]

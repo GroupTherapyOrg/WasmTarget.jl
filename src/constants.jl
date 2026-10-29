@@ -711,7 +711,7 @@ end
 
 """
 A `String`: the struct of Julia's class `String`, the object header and then `_data`, the string's
-UTF-8 code units as an immutable i8 wasm array (src/julia/classes.jl `_string_instance_fields`, the
+UTF-8 code units as an i8 wasm array (src/julia/classes.jl `_string_instance_fields`, the
 ruling on String's representation). The data is made as dart's standalone literal path makes it
 (translator.dart:2534 pushStandaloneStringConstant): past `maxArrayNewFixedLength` code units, the
 bytes go into the constants' passive data segment and `array.new_data` copies them, which is no
@@ -729,7 +729,7 @@ string is made only at the interop boundary.
     info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:873 ConstantCreator.visitStringConstant: the class String has no class info"), "ConstantCreator.visitStringConstant")
     local value = constant
     local bytes = Vector{UInt8}(codeunits(value))
-    local array_type = array_type_for_dart_type(translator, WasmI8; mutable_ = false)
+    local array_type = array_type_for_dart_type(translator, WasmI8; mutable_ = true)
     local too_large_for_array_new_fixed = length(bytes) > max_array_new_fixed_length()
 
     return create_constant(self, NirConst(Core.Const(value)), ConstantInfo[], info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
