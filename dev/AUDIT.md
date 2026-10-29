@@ -4585,3 +4585,100 @@ landed after ff20d5d8, touches A51E3's core and is the next entry's to read. A51
 on MARCH 1.D. A51S3 is open on MARCH 1.B, with A51E6. A51S2, A51S6 and A51S15 are open on MARCH 1.F. A51S4, A51S5,
 A51S8, A51S9, A51S10, A51S13 and A51S16 are open on MARCH 1.C. A51S7 is open on MARCH 1.E, the lead's ruling. A51E1 and
 A51E9 are open on MARCH 1.T. A51E4 is open on MARCH 1.Q. A51E2, A51E3 and A51E8 are open on MARCH 1.L.
+
+## 2026-10-28 — audited through 8e926b8b (ff20d5d8..8e926b8b: D14's judge on the performance cores, the checker getters, the src tests' times and the codegen-only core, the full matrix through src_tests.jl, entry 51 and its resolution, f32_const's narrowing, one optimistic check and the corpus on efficiency cores, the differential runner, constants met by the class walk, the code generator's fields, type tests over whole bodies)
+
+The fifty-second audit, beside the work, covers the ten commits of ff20d5d8..8e926b8b that are not entry 51 (85ce23e7
+and a844658a, its author's): 8bfde7ff, 321cabff, f969a257, fd2dd0ba, ec12d4e2, d6aab352, fd193c22, f64334a6, 7abfc7e2
+and 8e926b8b. Every finding rests on one exact command, quoted; the one Julia run (typed IR, A52S2) ran under
+`taskpolicy -b` with a 120-s alarm. Standing items. Fixed in the range: A51S1 by 321cabff (recorded in entry 51), A51E2
+by ec12d4e2 (test/runtests.jl includes test/src_tests.jl, the walk a landing runs), A51S14 by 8e926b8b (both type-test
+sites reject Unported at code_generator.dart:3212 instantiateTypeParameter), A51E7 by 8bfde7ff (recorded). Claimed and
+not whole: A51E5 (8e926b8b's subject names it; `grep -rn "undefined variable" test/src` still gives seven asserts of an
+Internal, code_generator.jl:119, :126, :183, :365, intrinsics.jl:62, :95 and records.jl:114, three of them audit 51's
+range, :126 by 1f7e7276, :95 by df9c1f14, :114 by fe84bcfa: one of eight fixed) and A51S8 (moved into the class walk,
+read below). The known
+Internals: 7abfc7e2 re-records eight `:wt_bug` cases `:rejects`, each in that landing's core (its records changed) and
+judged by the property there; `grep -c ":wt_bug)," test/src/dart_tests.jl` gives 2 left (identity_equality_tearoff,
+no_such_method_dispatcher), still on no row (A51E4). Traps and invalid modules: none written. Recursion: the class
+walk's new operand loop (src/julia/classes.jl:38) is one pass over each body's statements, linear. Test integrity:
+A52E1, A52E3, A52S1's pinned kind, and A51E5 above. Findings A52S1, A52S2, A52E1, A52E2 and A52E3.
+
+Area: builder — d6aab352: f32_const narrows dart's double with Float32, round to nearest, where dart's serializer
+narrows at writeF32; IR.F32Const holds the Float32 itself, so the narrowing moved to its one caller and every f32.const
+no longer raises a MethodError. A Float32 literal widens to Float64 exactly and narrows back to itself; sound. No
+finding.
+
+Area: collection and planning — 7abfc7e2: closed_world_classes meets each literal's and constant binding's type its
+statements read as values, nir_value_type the one source of an operand's type (dartTypeOf's copy deleted), so a `const`
+Ref or a compared String has its class, where dart's ClassInfoCollector has every class of the component. (A52S2,
+medium) nir_value_operands drops every Symbol operand of a builtin call on a claim about Julia that is false: `grep -n
+"builtins take no Symbol" src/julia/nir.jl` gives `576:order: Julia's builtins take no Symbol as data)`, and `perl -e
+'alarm 120; exec @ARGV' taskpolicy -b julia --startup-file=no -e 'f(x::Symbol) = x === :a; g(x::Int) = Core.tuple(:k,
+x); display(code_typed(f,(Symbol,))[1]); display(code_typed(g,(Int,))[1])'` prints `%1 = builtin (x === :a)::Bool` and
+`%1 = builtin (tuple)(:k, x)::Tuple{Symbol, Int64}`: a Symbol compared or stored is data, and the walk leaves it unmet
+(C3, D3). Fix: drop a Symbol only at the operand positions that name a field or an ordering (getfield, setfield!,
+isdefined, the memoryref orderings), from Julia's builtin signatures, and say so. A51S8 stays open and grows: `grep -n
+'reject!(Unquarantined("src/julia: a read of the non-constant' src/julia/nir.jl` gives :470 in nir_value_type, which the
+class walk now calls on every constant or binding operand (`grep -n "for st in b.stmts, v in nir_value_operands"
+src/julia/classes.jl` gives :38), so a read of a changing binding rejects Unquarantined in the class walk before
+visit_static_get's Unported getter is reached: two kinds for one cause, the earlier one the wrong one.
+
+stopgap in disguise: none new.
+precedent: the class walk, dart's ClassInfoCollector over every class the component holds; an operand's type, Julia's
+inferred ssavaluetypes and specTypes.
+
+Area: emission and diagnostics — 321cabff: the three call targets read their `late final function` (types.dart:877,
+:1047, dynamic_dispatchers.dart:53) and types' Late is read at three sites. fd2dd0ba: the code generator holds each of
+dart's 25 fields or states Julia's answer; `git show 898a1e4b:pkg/dart2wasm/lib/code_generator.dart | sed -n "<n>p"` for
+72, 73, 74, 76, 77, 82, 90, 98, 101, 104, 108 and 159 gives each field the anchor names (`late w.InstructionsBuilder b;`
+… `Source? _sourceMapSource;`). 8e926b8b: a run-time tested type rejects Unported at instantiateTypeParameter, and isa
+and typeassert are tested over whole generated bodies. (A52S1, medium) emitIsTest and emitAsCheck reject a missing dart
+runtime function as a Julia-only gap, and 8e926b8b's test pins it: `grep -n "Unquarantined(" src/types.jl` gives :471,
+:489, :511 (`emitAsCheck: … needs the runtime's _asSubtype, which has no Julia counterpart`) and :749, all 111ec9c5's,
+and test/src/code_generator.jl:578 asserts `e.rejection isa W.Unquarantined && e.at == "dart2wasm/lib/types.dart:527
+Types.emitAsCheck"`; `git -C ~/.cache/wasmtarget/dart-sdk grep -n "_asSubtype" -- '*.dart'` gives
+`sdk/lib/_internal/wasm/common/type.dart:1561:void _asSubtype(…)`, a dart definition. The kind A51S14 fixed at the call
+sites stands here (C6). Fix: Unported at the runtime's anchor, or the lead's ruling on how the runtime library
+(sdk/lib/_internal/wasm) is anchored, and the test pinning the corrected kind.
+
+stopgap in disguise: none new.
+precedent: the getters, dart's `late final` field overriding CallTarget's abstract getter; the type tests, types.dart's
+emitIsTest null check (`ref.is_null`, negated).
+
+Area: enforcement and prose — every hunk of dev/check.sh, dev/corpus.sh, test/runtests.jl, test/src_tests.jl,
+test/runner.jl and the range's test files. fd193c22 holds one optimistic check beside the landing-lock holder's, and the
+corpus at background QoS with no slot; f969a257 prints each src file's time and compiles the landing core to codegen
+(`optimize = !_DART_CORE_ONLY`), wasm-opt left to the corpus run, where `:rejects` still admits InvalidModule (A51E1),
+so a wasm-opt refusal of a `:rejects` case passes in both runs. The runner (f64334a6) is sound as written: each
+marshalled type crosses as its bits, `===` at native's type, both modules compared with native and with each other, an
+unmarshalled type, an import, a missing entry, a trap and a hang each a located failure, never a skip; its selftest
+plants a wrong answer, a miscompile and a loop. (A52E1, high) the runner judges no case of the corpus: `grep -rln
+"WTRunner\|answer_cases\|run_cases" test dev src` gives test/runner.jl and test/src/runner.jl alone, and
+test/src/dart_tests.jl:88–89 still says a `:compiled` case's run is "checked against native once the runner lands";
+f64334a6's message says "Every compiled case now runs the module wasm-opt returns beside codegen's own" and "This is the
+fix for audit #51's A51S3", and entry 51's resolution records the lead's ruling as judged by a runner comparing 121
+compiled cases on 709 facts, a run no tracked file makes. A46E1 and A51S3 stay open (no `Fixes:` line names them: `git
+log --format=%B ff20d5d8..8e926b8b | grep -n "^Fixes:"` prints nothing). Fix: dart_tests.jl's `:compiled` branch builds
+answer_cases and runs run_cases, each fact its own @test (the core with `optimized = false`, the corpus run both
+modules), and that commit's `Fixes: A46E1, A51S3`. (A52E2, medium) D14's band is judged almost never: dev/check.sh
+leaves it unjudged when the load average reaches `hw.perflevel0.physicalcpu`, 4 here, and the load average counts the
+landing's own two checks (four processes) and the corpus's efficiency-core work; landing entry 51 and its resolution,
+`bash dev/ship.sh` printed `check: 191s, past D14's band but UNJUDGED: load 6 on 4 cores` and `check: 212s, past D14's
+band but UNJUDGED: load 10 on 4 cores`. A band no landing is judged by is no band (D14, D17). Fix: judge a
+load-independent measure, the check processes' CPU seconds (user plus system), with its band, so a check slow by its own
+cost is red at any load and one slow by the machine is not. (A52E3, low) two new asserts judge nothing of WT:
+test/src/code_generator.jl:574 pins WT's own instruction names for `maybe` (`["local.get", "struct.get", "local.set", …,
+"ref.is_null", "i32.eqz", …]`), a self-golden, correct by reading but never run, and :542 asserts
+`Float32Cases.addf(1.0f0) === 2.5f0`, native Julia (A51E6's pattern). Fix: run both through the runner (an entry of
+Int64 that builds the Ref inside, until a RefValue argument is marshalled), the Julia-only assert deleted. Requirements:
+the third oracle (A52E1); D14 and D17 (A52E2); C3 and D3 (A52S2); C6 (A52S1); no lock fired inside its band.
+
+Landing times: wt-landings.tsv's last landings include entry 51 (3136 s from its first commit, a lane's wait included)
+and its resolution (452 s); `bash dev/ship.sh` printed the median of the last five at 598 s, under D13's 600-s edge.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A51E2 is fixed by ec12d4e2 and A51S14 by 8e926b8b,
+each leaving its row. A51E5 and A51S8 stay open on their rows, A51S8 now reaching the class walk. A52E1 is open on MARCH
+1.B, with A46E1 and A51S3. A52S1 is open on MARCH 1.D. A52S2 is open on MARCH 1.C. A52E2 is open on MARCH 1.L. A52E3 is
+open on MARCH 1.B. By owner: the tests lane holds A52E1 and A52E3; the codegen lane holds A52S1 and A51E5; the
+translator lane holds A52S2 and A51S8; the lead holds A52E2 and the ruling A52S1 may need.
