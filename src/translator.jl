@@ -537,10 +537,13 @@ end
         new(_translator, _export_prefix, LinkedHashMap{WasmBuilder.IR.Tag,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Tag}}())
 end
 
-"""
-SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
-"""
-@parity "dart2wasm/lib/translator.dart:4062 SingleClosureTarget" @unported struct SingleClosureTarget end
+"""The one target a closure call reaches and the parameter info its arguments are compiled by."""
+@parity "dart2wasm/lib/translator.dart:4062 SingleClosureTarget" struct SingleClosureTarget
+    call_target::CallTarget
+    param_info::ParameterInfo
+    # the struct's one constructor, tagged; dart's private constructor `_` at :4069 is its outer function
+    SingleClosureTarget(::Val{:_}, call_target::CallTarget, param_info::ParameterInfo) = new(call_target, param_info)
+end
 
 @parity "dart2wasm/lib/translator.dart:80 TranslatorOptions.inlining" inlining(self::TranslatorOptions)::Bool = something(self.inlining_override, self.optimization_level >= 1)
 
@@ -1669,7 +1672,10 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3930 _WasmImporter" @unported function _WasmImporter(_translator, _export_prefix) end
 
-@parity "dart2wasm/lib/translator.dart:3932 _WasmImporter.import" @unported function var"import"(self::_WasmImporter, importing_module::WasmBuilder.ModuleBuilder, definition, module_name::String, import_name::String) end
+# abstract in dart: each importer imports its kind of definition (the methods below)
+@parity "dart2wasm/lib/translator.dart:3932 _WasmImporter.import" var"import"(self::_WasmImporter, importing_module::WasmBuilder.ModuleBuilder,
+        definition::Union{WasmBuilder.IR.BaseFunction,WasmBuilder.IR.Global,WasmBuilder.IR.Memory,WasmBuilder.IR.AbstractTable,WasmBuilder.IR.Tag}, module_name::String, import_name::String)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3932 _WasmImporter.import: abstract in $(typeof(self))"), "_WasmImporter.import")
 
 @parity "dart2wasm/lib/translator.dart:3939 _WasmImporter.imports" imports(self::_WasmImporter)::Vector =
     [v for inner in values(self._map) for v in values(inner)]
@@ -1733,7 +1739,8 @@ end
         module_name::String, import_name::String)::WasmBuilder.IR.Tag =
     WasmBuilder.var"import"(importing_module.tags[], module_name, import_name, definition.type)
 
-@parity "dart2wasm/lib/translator.dart:4069 SingleClosureTarget._" @unported function SingleClosureTarget__(call_target, param_info) end
+@parity "dart2wasm/lib/translator.dart:4069 SingleClosureTarget._" SingleClosureTarget__(call_target::CallTarget, param_info::ParameterInfo)::SingleClosureTarget =
+    SingleClosureTarget(Val(:_), call_target, param_info)
 
 # dart's extension on BytesBuilder, its bytes appended to an IOBuffer, Julia's byte builder; dart's
 # assert on a negative value a located rejection

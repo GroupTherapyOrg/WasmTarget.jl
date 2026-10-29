@@ -247,6 +247,9 @@ end
     local inv = W.NirInvoke(mi, W.NirValue[W.NirConst(Core.Const(ModuleCases.shapes)), W.NirArgument(2)])
     @test D.can_use_unchecked_entry(t, W.NirArgument(2), inv)
     @test D.single_target(t, inv) === mi && D.single_target(t, W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.tuple))])) === nothing
+    # a single closure target holds its call target and parameter info
+    local sct = D.SingleClosureTarget__(D.direct_call_target(t, mi), D.param_info_for_direct_call(t, mi))
+    @test sct.call_target isa D.AstCallTarget && sct.param_info === D.param_info_for_direct_call(t, mi)
     # a member's return type is its body's, looked up by nir_body_of: a member with none rejects, located
     @test D.type_of_return_value(t, mi) === Union{ModuleCases.Circle, ModuleCases.Square}
     local other = Core.Compiler.specialize_method(Base._which(Base.signature_type(sin, (Float64,))))
