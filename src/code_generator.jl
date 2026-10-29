@@ -397,7 +397,9 @@ end
 
 # dart sets the source map's file offset from the node; a NIR node has none, Julia's line table taking
 # that place with the source map (translateStatement)
-@parity "dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression" function translate_expression(self::AstCodeGenerator, node::Union{NirValue,NirStmt}, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+# one compiled body for every kind of node (@nospecialize, inferred once): the @exhaustive match below
+# dispatches on the kind, so a body per kind of caller's node would only repeat it
+@parity "dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression" @nospecializeinfer function translate_expression(self::AstCodeGenerator, @nospecialize(node::Union{NirValue,NirStmt}), expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     try
         # dart's `node.accept1(this, expectedType)`: the visitor of the node's kind
         local result_type = node isa NirValue ? (@exhaustive node::NirValue begin
@@ -487,7 +489,7 @@ preservation, loop hints, the bounds-check flag) rejects, located, until the sta
 (dev/MARCH.md 1.D), and a foreign call or C function pointer until the host imports (1.F). dart's
 source-map offset is set from the node; the NIR's line table takes that place with the source map.
 """
-@parity "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement" function translate_statement(self::AstCodeGenerator, node::NirStmt, variable::Union{NirSSA,Nothing})::Nothing
+@parity "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement" @nospecializeinfer function translate_statement(self::AstCodeGenerator, @nospecialize(node::NirStmt), variable::Union{NirSSA,Nothing})::Nothing
     local at = "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement"
     @exhaustive node::NirStmt begin
         (s::NirCall) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
@@ -522,7 +524,7 @@ end
 
 # dart prints where an exception arose once; a rejection carries its location, and an exception
 # that is no rejection is WasmTarget's own defect, which Julia's stack trace locates
-@parity "dart2wasm/lib/code_generator.dart:726 AstCodeGenerator._printLocation" function _print_location(self::AstCodeGenerator, node::Union{NirValue,NirStmt})::Nothing
+@parity "dart2wasm/lib/code_generator.dart:726 AstCodeGenerator._printLocation" @nospecializeinfer function _print_location(self::AstCodeGenerator, @nospecialize(node::Union{NirValue,NirStmt}))::Nothing
     self.exception_location_printed = true
     return nothing
 end
