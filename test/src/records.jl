@@ -103,15 +103,23 @@ end
     local e = try; records_compile_one(RecordCodegenCases.fst, (Tuple{Int64, Float64},)); nothing; catch x; x; end
     @test e isa W.RejectionError && occursin("bounds-check", sprint(show, e.rejection))
     # the visit itself: the shape's positional index agrees with the class layout, then the receiver
-    # is read (an argument no parameter setup has made here, a located rejection after the checks)
+    # is read and its field
     local t3 = D.Translator(W.check_subset(RecordCodegenCases.fst, (Tuple{Int64, Float64},), "records"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t3, nothing)
     collect(D.ClassInfoCollector(t3))
     local nb = only(t3.component)
     local g = D.get_inlinable_member_code_generator(t3, IR.FunctionType(IR.ValueType[D.translate_type(t3, Tuple{Int64, Float64})], IR.ValueType[IR.NumType_i64]), nb.ci.def)
     local get1 = nb.stmts[findfirst(st -> st isa W.NirCall && W.nir_callee(st) === Core.getfield, nb.stmts)]
-    local e2 = try; D.visit_record_index_get(g, get1, IR.NumType_i64); nothing; catch x; x; end
-    @test e2 isa W.RejectionError && occursin("undefined variable", sprint(show, e2.rejection))
+    local B = W.WasmBuilder
+    local mb = D.main_module(t3)
+    t3.constants[] = D.Constants(t3)
+    local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[D.translate_type(t3, Tuple{Int64, Float64})], IR.ValueType[IR.NumType_i64]), "f")
+    g.b[] = B.body(fb)
+    g.param_locals[] = B.locals(fb)
+    g.return_label[] = nothing
+    D.setup_parameters_for_normal_entry(g, g.member)
+    @test D.visit_record_index_get(g, get1, IR.NumType_i64) == IR.NumType_i64
+    @test String[B.name(i) for i in g.b[]._instructions] == ["local.get", "struct.get"]
     # an index past the tuple's fields rejects at its own check
     local past = W.NirCall(W.NirValue[get1.args[1], get1.args[2], W.NirConst(Core.Const(3))])
     local e3 = try; D.visit_record_index_get(g, past, IR.NumType_i64); nothing; catch x; x; end

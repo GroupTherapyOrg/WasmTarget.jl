@@ -21,6 +21,33 @@ function intr_codegen_of(f, argtypes, ins, outs)
 end
 intr_rejection(f) = try; f(); nothing; catch e; e isa WI.RejectionError ? e : rethrow(); end
 
+# the code generator of `f` ready to emit, as `generate` leaves it before the body: translate()'s
+# steps before code, its builder a function of `f`'s parameter types and the results `outs`, its
+# parameters set up
+function intr_ready_codegen_of(f, argtypes, outs)
+    local B = WI.WasmBuilder
+    local t = intr_translator_of(f, argtypes)
+    DI._init_modules(t, nothing)
+    collect(DI.ClassInfoCollector(t))
+    t.constants[] = DI.Constants(t)
+    local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === nameof(f))
+    local mb = DI.main_module(t)
+    local fb = B.define(mb.functions[], B.define_function(mb.types[], IRI.ValueType[DI.translate_type(t, T) for T in argtypes], IRI.ValueType[outs...]), "f")
+    local g = DI.get_inlinable_member_code_generator(t, fb.type, mi)
+    g.b[] = B.body(fb)
+    g.param_locals[] = B.locals(fb)
+    g.return_label[] = nothing
+    DI.setup_parameters_for_normal_entry(g, g.member)
+    return g
+end
+
+# the instructions `thunk` emits into the builder of `g`, by name
+function intr_emitted_by(thunk, g)
+    local n0 = length(g.b[]._instructions)
+    thunk()
+    return String[WI.WasmBuilder.name(i) for i in g.b[]._instructions[n0+1:end]]
+end
+
 @testset "intrinsics.dart: literals, lanes and lookups" begin
     local lit(v) = WI.NirConst(Core.Const(v))
     # an integer literal is dart's int, Julia's Int64; a float literal Float64; anything else none
@@ -55,11 +82,12 @@ end
     local x = WI.NirArgument(2)
     local mi(f, T) = Core.Compiler.specialize_method(Base._which(Base.signature_type(f, T)))
     local inv(m, args...) = WI.NirInvoke(m, WI.NirValue[lit(m.def.name === :(==) ? (==) : (+)), args...])
-    # Base's == on two Int64s is their bit equality, which i64.eq computes: the arm translates its
-    # operands first, which needs the builder `generate` gives; Julia's own answer stands beside it
+    # Base's == on two Int64s is their bit equality, which i64.eq computes: the operands, then i64.eq;
+    # Julia's own answer stands beside it
     @test (typemin(Int64) == typemin(Int64)) && !(1 == 2) && !(NaN == NaN) && (0.0 == -0.0)
-    local e = intr_rejection(() -> DI.generate_equals_intrinsic(ii, inv(mi(==, (Int64, Int64)), x, lit(3))))
-    @test e !== nothing && e.rejection isa WI.Internal && occursin("undefined variable", e.rejection.site)
+    local r = intr_ready_codegen_of(IntrinsicCases.eq64, (Int64,), [IRI.NumType_i64])
+    @test intr_emitted_by(() -> DI.generate_equals_intrinsic(r.intrinsifier[], inv(mi(==, (Int64, Int64)), x, lit(3))), r) ==
+          ["local.get", "i64.const 3", "i64.eq"]
     # two types, or another method, is no equality intrinsic
     @test DI.generate_equals_intrinsic(ii, inv(mi(==, (Int64, Float64)), x, lit(3.0))) === nothing
     @test DI.generate_equals_intrinsic(ii, inv(mi(+, (Int64, Int64)), x, lit(3))) === nothing
@@ -86,13 +114,17 @@ end
     local ii = g.intrinsifier[]
     # Julia's answer the arm computes: the parameters' count
     @test Core._svec_len(Tuple{Int,Float64,Bool}.parameters) == 3
-    # the NIR's statement: the arm takes it, translating its operand first (a statement's value
-    # the code generator has not produced here, a located rejection)
+    # the NIR's statement: the arm takes it, its operand the field read before it (translated first,
+    # its local set), then the vector's array and its length, widened to Int
     local body = only(nb for nb in t.component if nb.ci.def === mi)
     local k = findfirst(st -> st isa WI.NirCall && WI.nir_callee(st) === Core._svec_len, body.stmts)
     @test k !== nothing
-    local e = intr_rejection(() -> DI.generate_static_intrinsic(ii, body.stmts[k]))
-    @test e !== nothing && e.rejection isa WI.Internal && occursin("undefined variable", e.rejection.site)
+    local r = intr_ready_codegen_of(SvecLenCases.nparams, (DataType, Int), [IRI.NumType_i64])
+    for j in 1:k-1
+        DI.translate_statement(r, r.body.stmts[j], j in r.used ? WI.NirSSA(j) : nothing)
+    end
+    @test intr_emitted_by(() -> DI.generate_static_intrinsic(r.intrinsifier[], r.body.stmts[k]), r) ==
+          ["local.get", "struct.get", "array.len", "i64.extend_i32_u"]
     # _svec_ref has no arm: its BoundsError waits for throwing
     @test DI.generate_static_intrinsic(ii, WI.NirCall(WI.NirValue[lit(Core._svec_ref), body.stmts[k].args[2], lit(1)])) === nothing
 end

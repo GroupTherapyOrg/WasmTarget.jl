@@ -32,6 +32,32 @@ function codegen_of(f, argtypes, ins, outs)
     return D.get_inlinable_member_code_generator(t, IR.FunctionType(IR.ValueType[ins...], IR.ValueType[outs...]), mi)
 end
 
+# the code generator of `f` ready to emit, as `generate` leaves it before the body: translate()'s
+# steps before code, its builder a function of signature `ins -> outs`, its parameters set up
+function ready_codegen_of(f, argtypes, ins, outs)
+    local B = W.WasmBuilder
+    local t = translator_of(f, argtypes)
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === nameof(f))
+    local mb = D.main_module(t)
+    local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[ins...], IR.ValueType[outs...]), "f")
+    local g = D.get_inlinable_member_code_generator(t, fb.type, mi)
+    g.b[] = B.body(fb)
+    g.param_locals[] = B.locals(fb)
+    g.return_label[] = nothing
+    D.setup_parameters_for_normal_entry(g, g.member)
+    return g
+end
+
+# the instructions `thunk` emits into the builder of `g`, by name
+function emitted_by(thunk, g)
+    local n0 = length(g.b[]._instructions)
+    thunk()
+    return String[W.WasmBuilder.name(i) for i in g.b[]._instructions[n0+1:end]]
+end
+
 # the rejection `f()` raises, or nothing
 rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(); end
 
@@ -113,17 +139,16 @@ end
     # no Julia method is an intrinsic of dart's: a call Julia resolved is the method's own body
     local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
     @test D.MemberIntrinsic_from_procedure(g.member) === nothing && D.StaticIntrinsic_from_procedure(g.member) === nothing
-    # Int32's add_int has its arm: it translates its operands, so it reads the argument's local, which
-    # no parameter setup has made here
-    local e = rejection(() -> D.generate_static_intrinsic(g.intrinsifier[], g.body.stmts[1]::W.NirCall))
-    @test e.rejection isa W.Internal && occursin("undefined variable", e.rejection.site)
-    # an 8-bit add wraps at 8 bits in Julia, at 32 in an i32: no arm, and the call rejects, located
-    local n = codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
+    # Int32's add_int has its arm: its operands, then the add
+    local ga = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    @test emitted_by(() -> D.generate_static_intrinsic(ga.intrinsifier[], ga.body.stmts[1]::W.NirCall), ga) ==
+          ["local.get", "i32.const 1", "i32.add"]
+    # an 8-bit add wraps at 8 bits in Julia, at 32 in an i32: the i32 add, then the operand's form put
+    # back (i32.extend8_s)
+    local n = ready_codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
     local ncall = n.body.stmts[findfirst(s -> s isa W.NirCall, n.body.stmts)]::W.NirCall
-    # an 8-bit add has its arm now (the operand's form put back after the i32 add): it reaches the
-    # argument's local, which no parameter setup has made here
-    local e2 = rejection(() -> D.generate_static_intrinsic(n.intrinsifier[], ncall))
-    @test e2.rejection isa W.Internal && occursin("undefined variable", e2.rejection.site)
+    @test emitted_by(() -> D.generate_static_intrinsic(n.intrinsifier[], ncall), n) ==
+          ["local.get", "i32.const 1", "i32.add", "i32.extend8_s"]
 end
 
 @testset "code_generator.dart: translateStatement over the NIR" begin
@@ -171,35 +196,47 @@ end
 
 @testset "intrinsics.dart: Julia's identity, ifelse, conversions and shifts" begin
     local I = Core.Intrinsics
-    local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    local p = codegen_of(CodegenCases.f_poly, (Float64, Float64), [IR.NumType_f64, IR.NumType_f64], [IR.NumType_f64])
-    local n = codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
+    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    local p = ready_codegen_of(CodegenCases.f_poly, (Float64, Float64), [IR.NumType_f64, IR.NumType_f64], [IR.NumType_f64])
+    local n = ready_codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
     local lit(v) = W.NirConst(Core.Const(v))
     local x = W.NirArgument(2)
     local call(f, args...) = W.NirCall(W.NirValue[lit(f), args...])
-    # an arm found translates its operands first, reading the argument's local, which no parameter
-    # setup has made here; no arm is nothing, the call then rejecting where it stands
-    local found(gen, c) = (r = rejection(() -> D.generate_static_intrinsic(gen.intrinsifier[], c));
-                           r !== nothing && r.rejection isa W.Internal && occursin("undefined variable", r.rejection.site))
+    # an arm found emits its operands, then its instructions; no arm is nothing, emitting nothing, the
+    # call then rejecting where it stands
+    local emits(gen, c) = emitted_by(() -> D.generate_static_intrinsic(gen.intrinsifier[], c), gen)
     local absent(gen, c) = D.generate_static_intrinsic(gen.intrinsifier[], c) === nothing
     # Julia's === compares bits, so a float is compared as its bits' integer: native Julia's answers
     @test (NaN === NaN) && !(0.0 === -0.0) && reinterpret(Int64, NaN) == reinterpret(Int64, NaN)
-    @test found(g, call(Core.:(===), x, lit(Int32(3)))) && found(p, call(Core.:(===), x, W.NirArgument(3)))
+    @test emits(g, call(Core.:(===), x, lit(Int32(3)))) == ["local.get", "i32.const 3", "i32.eq"]
+    @test emits(p, call(Core.:(===), x, W.NirArgument(3))) == ["local.get", "i64.reinterpret_f64", "local.get", "i64.reinterpret_f64", "i64.eq"]
     @test absent(g, call(Core.:(===), x, lit(Int64(3))))   # different types: no value comparison
-    @test found(g, call(Core.ifelse, lit(true), x, x)) && absent(g, call(Core.ifelse, lit(true), x, lit(1.0)))
-    # conversions between full-width types; a narrow one has no arm
-    @test found(g, call(I.sext_int, lit(Int64), x)) && found(g, call(I.zext_int, lit(UInt64), x))
-    @test found(g, call(I.sitofp, lit(Float64), x)) && found(g, call(I.bitcast, lit(Float32), x)) && found(g, call(I.bitcast, lit(UInt32), x))
-    @test found(p, call(I.fptosi, lit(Int64), x)) && found(p, call(I.fptrunc, lit(Float32), x)) && found(p, call(I.bitcast, lit(Int64), x))
-    @test found(g, call(I.trunc_int, lit(Int8), x)) && found(n, call(I.sext_int, lit(Int32), x)) && absent(g, call(I.fpext, lit(Float64), x))
+    @test emits(g, call(Core.ifelse, lit(true), x, x)) == ["local.get", "local.get", "i32.const 1", "select"]
+    @test absent(g, call(Core.ifelse, lit(true), x, lit(1.0)))
+    # conversions between full-width types, each its one instruction (a bitcast between two integers of
+    # one width none); a narrow one puts the operand's form back; fpext has no arm
+    @test emits(g, call(I.sext_int, lit(Int64), x)) == ["local.get", "i64.extend_i32_s"]
+    @test emits(g, call(I.zext_int, lit(UInt64), x)) == ["local.get", "i64.extend_i32_u"]
+    @test emits(g, call(I.sitofp, lit(Float64), x)) == ["local.get", "f64.convert_i32_s"]
+    @test emits(g, call(I.bitcast, lit(Float32), x)) == ["local.get", "f32.reinterpret_i32"]
+    @test emits(g, call(I.bitcast, lit(UInt32), x)) == ["local.get"]
+    @test emits(p, call(I.fptosi, lit(Int64), x)) == ["local.get", "i64.trunc_sat_f64_s"]
+    @test emits(p, call(I.fptrunc, lit(Float32), x)) == ["local.get", "f32.demote_f64"]
+    @test emits(p, call(I.bitcast, lit(Int64), x)) == ["local.get", "i64.reinterpret_f64"]
+    @test emits(g, call(I.trunc_int, lit(Int8), x)) == ["local.get", "i32.extend8_s"]
+    @test emits(n, call(I.sext_int, lit(Int32), x)) == ["local.get"]
+    @test absent(g, call(I.fpext, lit(Float64), x))
     # Julia's shifts saturate, the count unsigned: native Julia's answers, which the select ports
     @test I.shl_int(Int32(1), UInt64(40)) == 0 && I.lshr_int(Int32(-1), UInt8(32)) == 0
     @test I.ashr_int(Int32(-8), UInt64(100)) == -1 && I.ashr_int(Int32(8), UInt64(100)) == 0 && I.shl_int(Int64(3), Int32(-1)) == 0
-    # a shift's arm takes a local for the count first, from the builder `generate` has not given yet
-    local e = rejection(() -> D.generate_static_intrinsic(g.intrinsifier[], call(I.shl_int, x, lit(Int64(3)))))
+    # a shift's arm takes a local for the count first, from the builder `generate` gives: before it,
+    # the late builder rejects, located
+    local gu = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    local nu = codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
+    local e = rejection(() -> D.generate_static_intrinsic(gu.intrinsifier[], call(I.shl_int, x, lit(Int64(3)))))
     @test e.rejection isa W.Unported && occursin("AstCodeGenerator.b", e.rejection.anchor)
     # an 8-bit shift has its arm: its count's local comes first, from the builder not given here
-    @test occursin("AstCodeGenerator.b", rejection(() -> D.generate_static_intrinsic(n.intrinsifier[], call(I.shl_int, x, lit(Int64(3))))).rejection.anchor)
+    @test occursin("AstCodeGenerator.b", rejection(() -> D.generate_static_intrinsic(nu.intrinsifier[], call(I.shl_int, x, lit(Int64(3))))).rejection.anchor)
 end
 
 module FieldGenCases
@@ -358,14 +395,11 @@ end
 end
 
 @testset "code_generator.dart: a PiNode is the unchecked as" begin
-    local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    # the narrowing translates its operand at the expected type: here the argument's local, which no
-    # parameter setup has made, so the read rejects where it stands
-    local e = rejection(() -> D.translate_expression(g, W.NirPi(W.NirArgument(2), Int32), IR.NumType_i32))
-    @test e.rejection isa W.Internal && occursin("undefined variable", e.rejection.site)
-    # an unused narrowing is an expression statement at the void marker, no longer a 1.D rejection
-    local e2 = rejection(() -> D.translate_statement(g, W.NirPi(W.NirArgument(2), Int32), nothing))
-    @test !(e2.rejection isa W.Unquarantined)
+    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    # the narrowing translates its operand at the expected type: the argument's local, read
+    @test emitted_by(() -> D.translate_expression(g, W.NirPi(W.NirArgument(2), Int32), IR.NumType_i32), g) == ["local.get"]
+    # an unused narrowing is an expression statement at the void marker: its operand read and dropped
+    @test emitted_by(() -> D.translate_statement(g, W.NirPi(W.NirArgument(2), Int32), nothing), g) == ["local.get", "drop"]
 end
 
 @testset "code_generator.dart: MacroAssembler's class-id search, loops and tables" begin
