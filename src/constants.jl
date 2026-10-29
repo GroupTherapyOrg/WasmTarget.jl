@@ -613,9 +613,10 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
 @parity "dart2wasm/lib/constants.dart:787 ConstantCreator.types" types(self::ConstantCreator)::Types = self.constants.translator.types[]
 
 # dart's compact hash maps and sets keep this index constant for their const literals; Julia has no
-# constant map or set (a Dict or Set is a mutable object its lowering builds by calls)
-@parity "dart2wasm/lib/constants.dart:789 ConstantCreator._uninitializedHashBaseIndexConstant" _uninitialized_hash_base_index_constant(self::ConstantCreator)::NirConst =
-    reject!(Unquarantined("src/constants.jl _uninitializedHashBaseIndexConstant: Julia has no constant map or set"), "ConstantCreator._uninitializedHashBaseIndexConstant")
+# constant map or set (a Dict or Set is a mutable object its lowering builds by calls), so only
+# visitMapConstant and visitSetConstant, which no constant reaches, would read it
+@parity "dart2wasm/lib/constants.dart:789 ConstantCreator._uninitializedHashBaseIndexConstant" _uninitialized_hash_base_index_constant(self::ConstantCreator)::Union{} =
+    reject!(Internal("dart2wasm/lib/constants.dart:789 ConstantCreator._uninitializedHashBaseIndexConstant: the index of a constant map or set; Julia has no constant Dict or Set, one is built by calls (the Kernel table's MapConstant row)"), "ConstantCreator._uninitializedHashBaseIndexConstant")
 
 # `constant.accept(this)`, one arm per kind as Kernel's visitor dispatches, and the type of the
 # created constant checked against TypeOfConstantVisitor's (dart's assert)
@@ -905,10 +906,11 @@ end
     end; can_be_eager = !too_large_for_array_new_fixed)
 end
 
-# a Kernel const list: Julia's constant vector is a mutable Array (no immutable list class exists),
-# whose representation is not written; the accept chain reaches it as an object's value
-@parity "dart2wasm/lib/constants.dart:1128 ConstantCreator.visitListConstant" visit_list_constant(self::ConstantCreator, constant::NirConst)::Union{ConstantInfo,Nothing} =
-    reject!(Unquarantined("src/constants.jl visitListConstant: the constant array $(typeof(constant.c.val)), whose representation is not written"), "ConstantCreator.visitListConstant")
+# a constant list: dart makes it an instance constant of dart:_list's ImmutableList, its length and its
+# entries' wasm array; that class is of dart's runtime library, not ported, so naming it rejects there
+# (KernelNodes.immutableListClass), the accept chain reaching an Array or Memory as an object's value
+@parity "dart2wasm/lib/constants.dart:1128 ConstantCreator.visitListConstant" visit_list_constant(self::ConstantCreator, constant::NirConst)::Union{} =
+    immutable_list_class(translator(self))
 
 @parity "dart2wasm/lib/constants.dart:1152 ConstantCreator.visitMapConstant" visit_map_constant(self::ConstantCreator, constant::NoCounterpart)::Union{ConstantInfo,Nothing} =
     reject!(Internal("dart2wasm/lib/constants.dart:1152 ConstantCreator.visitMapConstant: Julia has no constant map"), "ConstantCreator.visitMapConstant")
@@ -936,7 +938,29 @@ dart makes a closure of the torn-off member and its vtable.
 @parity "dart2wasm/lib/constants.dart:1551 ConstantCreator.visitTypeLiteralConstant" visit_type_literal_constant(self::ConstantCreator, constant::Type)::Union{ConstantInfo,Nothing} =
     reject!(Internal("dart2wasm/lib/constants.dart:1552 ConstantCreator.visitTypeLiteralConstant: Unreachable - should have been lowered"), "ConstantCreator.visitTypeLiteralConstant")
 
-@parity "dart2wasm/lib/constants.dart:1556 ConstantCreator.visitSymbolConstant" @unported function visit_symbol_constant(self::ConstantCreator, constant::Symbol) end
+"""
+A symbol: the struct of dart's Symbol class, Julia's `Symbol` (TypeOfConstantVisitor.visitSymbolConstant),
+the object header, then its mangled name as a string constant. A Julia symbol holds its name outside
+its fields (src/julia/classes.jl class_instance_fields), so its class is laid out only once that
+representation is written; until then the class's collection rejects before any symbol constant.
+"""
+@parity "dart2wasm/lib/constants.dart:1556 ConstantCreator.visitSymbolConstant" function visit_symbol_constant(self::ConstantCreator, constant::Symbol)::Union{ConstantInfo,Nothing}
+    local translator = self.constants.translator
+    local info = get(translator.class_info, Symbol, nothing)
+    info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:1557 ConstantCreator.visitSymbolConstant: the class Symbol has no class info"), "ConstantCreator.visitSymbolConstant")
+    record_class_allocation(translator.functions[], class_id(info))
+    local string_type = translator.string_type[]
+    local name_constant = NirConst(Core.Const(get_mangled_symbol_name(translator.symbols, constant)))
+    local name_info = ensure_constant(self, name_constant)
+    local child_constants = ConstantInfo[]
+    name_info === nothing || push!(child_constants, name_info)
+    return create_constant(self, NirConst(Core.Const(constant)), child_constants, info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
+        push_object_header_fields(b, translator, info)
+        instantiate_constant(self.constants, b, name_constant, string_type)
+        WasmBuilder.struct_new(b, info.struct_)
+        return nothing
+    end; can_be_eager = true)
+end
 
 """
 A tuple: the struct of its record class, the object header, then each field at its field's own wasm
@@ -1031,8 +1055,10 @@ end
 
 @parity "dart2wasm/lib/constants.dart:1714 TypeOfConstantVisitor.visitStringConstant" visit_string_constant(self::TypeOfConstantVisitor, constant::String)::WasmBuilder.IR.RefType = _type_of_class(self, String)
 
-@parity "dart2wasm/lib/constants.dart:1719 TypeOfConstantVisitor.visitListConstant" visit_list_constant(self::TypeOfConstantVisitor, constant::NirConst)::WasmBuilder.IR.RefType =
-    reject!(Unquarantined("src/constants.jl visitListConstant: the constant array $(typeof(constant.c.val)), whose representation is not written"), "TypeOfConstantVisitor.visitListConstant")
+# dart's `_typeOfClass(translator.immutableListClass)`: the class is of dart's runtime library, not
+# ported, so naming it rejects there
+@parity "dart2wasm/lib/constants.dart:1719 TypeOfConstantVisitor.visitListConstant" visit_list_constant(self::TypeOfConstantVisitor, constant::NirConst)::Union{} =
+    immutable_list_class(self.translator)
 
 @parity "dart2wasm/lib/constants.dart:1724 TypeOfConstantVisitor.visitMapConstant" visit_map_constant(self::TypeOfConstantVisitor, constant::NoCounterpart)::WasmBuilder.IR.RefType =
     reject!(Internal("dart2wasm/lib/constants.dart:1724 TypeOfConstantVisitor.visitMapConstant: Julia has no constant map"), "TypeOfConstantVisitor.visitMapConstant")

@@ -24,6 +24,11 @@
     reject!(Unported("sdk/lib/_internal/wasm/common/list.dart:15 WasmListBase"), "KernelNodes.listBaseClass: the list class of dart:_list")
 
 # the lane fields of dart:_wasm's SIMD implementation classes (_WasmI8x16Impl and its siblings), which
+# dart:_list's ImmutableList, the class of a constant list, of dart's runtime library at the pin, not
+# ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:73 KernelNodes.immutableListClass" immutable_list_class(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/common/list.dart:290 ImmutableList"), "KernelNodes.immutableListClass: the class of a constant list")
+
 # no Julia type is: a Julia program reaches no class of dart:_wasm
 @parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" _get_lane_references(self::KernelNodes, class_node::DataType)::Union{} =
     reject!(Internal("dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences: the lanes of $class_node, read as one of dart:_wasm's SIMD classes, which no Julia type is (the Kernel table's Class row)"), "KernelNodes._getLaneReferences")

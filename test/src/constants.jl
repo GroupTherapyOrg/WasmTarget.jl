@@ -185,9 +185,12 @@ rej(f) = try; f(); nothing; catch x; x isa WasmTarget.RejectionError ? x.rejecti
     @test D.make_named_parameters_array(cs, typeof(sin)).c.val.entries === ()
     @test D.make_named_parameter_constant(cs, Pair{Symbol,Type}(:x, Int)) === k(Pair{Symbol,Type}(:x, Int))
     @test rej(() -> D._make_top_type_constant(cs, Union{Int,String})) isa WasmTarget.Internal
-    # Julia has no constant map, set or list form; a constant array rejects, located
-    @test rej(() -> D._uninitialized_hash_base_index_constant(cr)) isa WasmTarget.Unquarantined
-    @test rej(() -> D.ensure_constant(cs, k([1, 2]))) isa WasmTarget.Unquarantined
+    # Julia has no constant map or set: the hash index rejects, Internal, naming the MapConstant row; a
+    # constant array is dart's ImmutableList, a runtime class not ported, which rejects there, Unported
+    local hi = rej(() -> D._uninitialized_hash_base_index_constant(cr))
+    @test hi isa WasmTarget.Internal && occursin("MapConstant row", hi.site)
+    local la = rej(() -> D.ensure_constant(cs, k([1, 2])))
+    @test la isa WasmTarget.Unported && la.anchor == "sdk/lib/_internal/wasm/common/list.dart:290 ImmutableList"
     @test rej(() -> D.core_types(cs)) isa WasmTarget.Internal
 end
 end
