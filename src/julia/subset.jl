@@ -52,13 +52,13 @@ end
 # WasmInterpreter (lib/WasmInterpreter), so the closed world is inferred over WasmTarget's overlays,
 # walked by Julia's own Compiler.compile!; the walk lives in that package, whose image holds its
 # compiled code apart from WasmTarget's.
-@quarantine "the closed world is inferred by Julia's trim entry over WasmTarget's interpreter, a package of its own" WasmInterpreter.infer_closed_world _trim_infer(queue::Vector{Any}, world::UInt)::Vector{Any} =
-    WasmInterpreter.infer_closed_world(queue, world)
+@quarantine "the closed world is inferred by Julia's trim entry over WasmTarget's interpreter, a package of its own" WasmTarget.infer_closed_world _trim_infer(queue::Vector{Any}, world::UInt)::Vector{Any} =
+    infer_closed_world(queue, world)
 
 # Julia's trim verifier over the closed world: TrimVerifier.get_verify_typeinf_trim (Julia's
 # Compiler/src/verifytrim.jl) with one change. Julia's takes as a resolved callee only a native
 # CodeInstance (owner nothing), where every one the closed world holds is WasmTarget's
-# (`WasmInterpreter.WasmCacheOwner`); each body is judged by Julia's own verify_codeinstance!, and each queued
+# (`WasmCacheOwner`, src/julia/interpreter.jl); each body is judged by Julia's own verify_codeinstance!, and each queued
 # ccallable's svec by Julia's check of its declared return against inference (CCallableMissing), as
 # 1.12 and 1.13 write it.
 @quarantine "Julia's trim verifier resolves a callee among native CodeInstances alone; the closed world's are WasmTarget's" Core.Compiler.TrimVerifier.verify_codeinstance! function _verify_trim(codeinfos::Vector{Any}, at::String)
@@ -71,7 +71,7 @@ end
     for item in codeinfos
         item isa Core.CodeInstance || continue
         push!(inspected, item)
-        if item.owner === WasmInterpreter.WasmCacheOwner() && item.min_world <= this_world <= item.max_world
+        if item.owner === WasmCacheOwner() && item.min_world <= this_world <= item.max_world
             local mi = Core.Compiler.get_ci_mi(item)
             mi === item.def && (caches[mi] = item)
         end

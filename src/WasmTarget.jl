@@ -6,14 +6,16 @@
 # the path through it is a located rejection, never a value.
 module WasmTarget
 
-# the interpreter the closed world is inferred with, a package of its own (lib/WasmInterpreter), and
-# Julia's consistent overlay, the form of each overlay of src/patch/
-import WasmInterpreter
+# the interpreter the closed world is inferred with, a package of its own (lib/WasmInterpreter), each
+# of its definitions declared in src/julia/interpreter.jl, and Julia's consistent overlay, the form of
+# each overlay of src/patch/
+import WasmInterpreter as WasmInterpreterPackage
 using Base.Experimental: @consistent_overlay
 
 include("julia/parity.jl")
 include("julia/construction.jl")
 include("julia/reject.jl")
+include("julia/interpreter.jl")
 include("julia/subset.jl")
 include("julia/nir.jl")
 include("julia/classes.jl")

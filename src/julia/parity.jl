@@ -414,7 +414,7 @@ under src/ rebuilds the image and meets the check, rather than loading the image
         include_dependency(dir; track_content = true)
     end
     return check_include_dart(SRC, INCLUDED) + check_include_patch(SRC, PATCHED) +
-           check_patch(WasmInterpreter.METHOD_TABLE, joinpath(SRC, "patch"))
+           check_patch(METHOD_TABLE, joinpath(SRC, "patch"))
 end
 
 """
@@ -1575,7 +1575,46 @@ checked where it was written: a qualified name that resolves and that the defini
     isempty(out) || throw(ConstructionViolation("quarantine", join(out, "; ")))
     return 0
 end
-@quarantine "the quarantine's assertion, run when the package loads" Base.Val construction_check(::Val{:quarantine})::Int = check_quarantine(@__MODULE__, SRC)
+"""
+    check_package_declared(pkg, mod) -> Int
+
+The interpreter package's check: the definitions `pkg` holds (each binding it owns, but Julia's
+eval and include, its binding of itself and a name beginning `_`, the package's own helper) are exactly those `mod`
+declares, each a `@quarantine` binding of `mod` whose API is the package's binding and whose value
+is it (src/julia/interpreter.jl). Throws a `ConstructionViolation` naming a definition undeclared, a
+declaration of no definition, and a declared binding holding another value.
+
+precedent(gpucompiler: CUDA.jl names each GPUCompiler definition it takes). Julia's differs: a
+package's bindings reach WasmTarget through `import` unmarked, so each is declared and the load
+compares the two lists.
+"""
+@quarantine "a package's definitions reach WasmTarget through import unmarked; the load compares them to the declared ones" Base.names function check_package_declared(pkg::Module, mod::Module)::Int
+    local out = String[]
+    local defined = Set{Symbol}(n for n in names(pkg; all = true) if !startswith(string(n), '#') && !startswith(string(n), '_') &&
+                                n ∉ (:eval, :include) && isdefined(pkg, n) && which(pkg, n) === pkg && getglobal(pkg, n) !== pkg)
+    local declared = Set{Symbol}()
+    for e in REGISTRY
+        e isa QuarantineEntry && e.mod === mod || continue
+        local api = Meta.parse(e.api)
+        Meta.isexpr(api, :., 2) || continue
+        local owner = _resolve_name(mod, api.args[1])
+        (owner !== nothing && something(owner) === pkg) || continue
+        local n = api.args[2].value
+        n in defined || push!(out, "$(e.file):$(e.first) declares $pkg.$n, no definition of the package")
+        for b in e.names
+            push!(declared, b)
+            isdefined(mod, b) && isdefined(pkg, n) && getglobal(mod, b) === getglobal(pkg, n) ||
+                push!(out, "$(e.file):$(e.first) binds $mod.$b, which does not hold $pkg.$n")
+        end
+    end
+    for n in sort!(collect(setdiff(defined, declared)))
+        push!(out, "$pkg.$n is a definition of the package WasmTarget does not declare")
+    end
+    isempty(out) || throw(ConstructionViolation("quarantine", join(out, "; ")))
+    return 0
+end
+@quarantine "the quarantine's assertion, run when the package loads" Base.Val construction_check(::Val{:quarantine})::Int =
+    check_quarantine(@__MODULE__, SRC) + check_package_declared(WasmInterpreterPackage, @__MODULE__)
 
 # ---- typed signatures and fields (L214, L215) -----------------------------------------------------
 # A ported dart definition is typed as dart types it: every parameter of its methods declared, no

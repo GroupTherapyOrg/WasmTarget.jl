@@ -8,7 +8,7 @@ using Test
 using WasmTarget
 
 const W = WasmTarget
-const WI = WasmTarget.WasmInterpreter
+const WI = WasmTarget.WasmInterpreterPackage
 
 f_sum(n::Int64) = (s = 0; for i in 1:n; s += i * i; end; s)
 
