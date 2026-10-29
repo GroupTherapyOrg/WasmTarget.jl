@@ -38,6 +38,11 @@
     reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:87 _TypeError._throwWasmRefError"), "KernelNodes.throwWasmRefError: the thrower of a failed reference downcast")
 
 # dart:_internal's printToConsole, as the target's patch defines it (standalone or JS), of dart's
+# dart:core's Error._throwWithCurrentStackTrace, of dart's runtime library at the pin, not ported:
+# Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:681 KernelNodes.errorThrowWithCurrentStackTrace" error_throw_with_current_stack_trace(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace"), "KernelNodes.errorThrowWithCurrentStackTrace: the thrower of an error with the current stack trace")
+
 # runtime library at the pin, not ported: Unported there
 @parity "dart2wasm/lib/kernel_nodes.dart:845 KernelNodes.printToConsole" print_to_console(self::KernelNodes)::Union{} =
     reject!(Unported(is_standalone(self) ? "sdk/lib/_internal/wasm/standalone/print_patch.dart:9 printToConsole" : "sdk/lib/_internal/wasm/js_common/print_patch.dart:8 printToConsole"), "KernelNodes.printToConsole")
