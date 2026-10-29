@@ -318,7 +318,10 @@ end
 # view and its result put back in that form; Bool's bitwise operations and equality need neither. No arm is null, as dart's.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::Union{NirCall,NirInvoke})::Union{WasmBuilder.IR.ValueType,Nothing}
     if node isa NirInvoke
-        local intrinsic = StaticIntrinsic_from_procedure(nir_invoke_target(node))
+        local target = nir_invoke_target(node)
+        local string_op = generate_static_intrinsic(Val(:string_data_op), target)
+        string_op === nothing || return generate_static_intrinsic(self, Val(:string_data), string_op, node.args[2:end])
+        local intrinsic = StaticIntrinsic_from_procedure(target)
         intrinsic === nothing && return nothing
         reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "the static intrinsic $intrinsic")
     end
@@ -366,6 +369,59 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:unsigned_view}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing =
     (t <: Signed && (WasmBuilder.i32_const(b, sizeof(t) == 1 ? 255 : 65535); WasmBuilder.i32_and(b)); nothing)
 
+# a String's data operations (src/julia/wasm_array.jl), the calls dart's String patches make on a
+# String's `_data`: each reads the field (an InstanceGet of the String class's `_data`, its
+# ClassField) and applies the WasmArray operation, one instruction as dart's intrinsifier emits it:
+# WasmArrayRef.length (intrinsics.dart:626, array.len), I8ArrayExt.readUnsigned (:1351, array.get_u),
+# the WasmArray constructor (:1959, array.new_default, here inside the String's struct, its header
+# first) and WasmArrayExt.copy (:1254, array.copy). An Int offset or length is wrapped to the i32 a
+# wasm array takes, as dart wraps its int.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:string_data_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
+    target.def in methods(wasm_string_length) ? :length : target.def in methods(wasm_string_codeunit) ? :codeunit :
+    target.def in methods(wasm_string_alloc) ? :alloc : target.def in methods(wasm_string_copy!) ? :copy : nothing
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:string_data}, op::Symbol, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
+    local at = "$(code_gen.enclosing_member): a String's data"
+    local info = get(t.class_info, String, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String's data operation where String has no class info"), at)
+    local data_index = t.field_index[only(class_instance_fields(String, at))]
+    local array_type = array_type_for_dart_type(t, WasmI8; mutable_ = true)
+    local data_of(s::NirValue) = (translate_expression(code_gen, s, info.non_nullable_type); WasmBuilder.struct_get(b, info.struct_, data_index))
+    local offset(v::NirValue) = (translate_expression(code_gen, v, i64); WasmBuilder.i32_wrap_i64(b))
+    if op === :length
+        data_of(args[1])
+        WasmBuilder.array_len(b)
+        WasmBuilder.i64_extend_i32_u(b)
+        return i64
+    elseif op === :codeunit
+        data_of(args[1])
+        offset(args[2])
+        WasmBuilder.array_get_u(b, array_type)
+        return i32
+    elseif op === :alloc
+        push_object_header_fields(b, t, info)
+        offset(args[1])
+        WasmBuilder.array_new_default(b, array_type)
+        WasmBuilder.struct_new(b, info.struct_)
+        return info.non_nullable_type
+    elseif op === :copy
+        data_of(args[1])
+        offset(args[2])
+        data_of(args[3])
+        offset(args[4])
+        offset(args[5])
+        WasmBuilder.array_copy(b, array_type, array_type)
+        # dart's void intrinsics leave the null of the top type (WasmArrayExt.[]=), Julia's nothing
+        WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+        return t.top_type[]
+    end
+    reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String data operation $op"), at)
+end
+
 # identical: Julia's `===`, which compares a primitive value's bits (NaN === NaN, and 0.0 !== -0.0),
 # so a float is compared as the integer of its bits, where dart compares a double by value
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:identical}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
@@ -388,7 +444,77 @@ end
         (w == i64 || w == f64) ? WasmBuilder.i64_eq(b[]) : WasmBuilder.i32_eq(b[])
         return i32
     end
+    first_type === String && second_type === String && return generate_static_intrinsic(self, Val(:string_egal), first, second)
     return nothing
+end
+
+# Julia's `===` on two Strings, jl_egal's: equal when their lengths are and their bytes (memcmp over
+# jl_string_data), compared code unit by code unit over the two `_data` arrays (src/julia/classes.jl);
+# dart compares its strings in dart code (String.==), Julia in its runtime, so the loop is Julia's
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:string_egal}, first::NirValue, second::NirValue)::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i32 = WasmBuilder.IR.NumType_i32
+    local at = "$(code_gen.enclosing_member): === on two Strings"
+    local info = get(t.class_info, String, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: === on Strings where String has no class info"), at)
+    local data_index = t.field_index[only(class_instance_fields(String, at))]
+    local array_type = array_type_for_dart_type(t, WasmI8; mutable_ = true)
+    local data_ref = WasmBuilder.IR.RefType_def(array_type; nullable = false)
+    local x = add_local(code_gen, data_ref)
+    local y = add_local(code_gen, data_ref)
+    local n = add_local(code_gen, i32)
+    local i = add_local(code_gen, i32)
+    translate_expression(code_gen, first, info.non_nullable_type)
+    WasmBuilder.struct_get(b, info.struct_, data_index)
+    WasmBuilder.local_set(b, x)
+    translate_expression(code_gen, second, info.non_nullable_type)
+    WasmBuilder.struct_get(b, info.struct_, data_index)
+    WasmBuilder.local_set(b, y)
+    local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
+    # the lengths
+    WasmBuilder.local_get(b, x)
+    WasmBuilder.array_len(b)
+    WasmBuilder.local_tee(b, n)
+    WasmBuilder.local_get(b, y)
+    WasmBuilder.array_len(b)
+    WasmBuilder.i32_ne(b)
+    WasmBuilder.if_(b)
+    WasmBuilder.i32_const(b, 0)
+    WasmBuilder.br(b, done)
+    WasmBuilder.var"end"(b)
+    # the bytes, from the first
+    WasmBuilder.i32_const(b, 0)
+    WasmBuilder.local_set(b, i)
+    local again = WasmBuilder.loop(b)
+    WasmBuilder.local_get(b, i)
+    WasmBuilder.local_get(b, n)
+    WasmBuilder.i32_ge_u(b)
+    WasmBuilder.if_(b)
+    WasmBuilder.i32_const(b, 1)
+    WasmBuilder.br(b, done)
+    WasmBuilder.var"end"(b)
+    WasmBuilder.local_get(b, x)
+    WasmBuilder.local_get(b, i)
+    WasmBuilder.array_get_u(b, array_type)
+    WasmBuilder.local_get(b, y)
+    WasmBuilder.local_get(b, i)
+    WasmBuilder.array_get_u(b, array_type)
+    WasmBuilder.i32_ne(b)
+    WasmBuilder.if_(b)
+    WasmBuilder.i32_const(b, 0)
+    WasmBuilder.br(b, done)
+    WasmBuilder.var"end"(b)
+    WasmBuilder.local_get(b, i)
+    WasmBuilder.i32_const(b, 1)
+    WasmBuilder.i32_add(b)
+    WasmBuilder.local_set(b, i)
+    WasmBuilder.br(b, again)
+    WasmBuilder.var"end"(b)
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    return i32
 end
 
 # Julia's `_svec_len`: a SimpleVector's length, jl_svec_t's own, which its wasm array carries

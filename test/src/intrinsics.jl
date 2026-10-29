@@ -170,3 +170,22 @@ end
         @test r.ok || (@info r.label r.why; false)
     end
 end
+
+module StringDataCases
+using WasmTarget: wasm_string_length, wasm_string_alloc
+# a String's length and a fresh String's (src/julia/wasm_array.jl), and === on two Strings, by `k`
+strops(k::Int64, b::Bool) = k == 0 ? wasm_string_length(b ? "héllo" : "日本") :
+                            k == 1 ? Int64((b ? "abc" : "abd") === "abc") :
+                            k == 2 ? Int64((b ? "abc" : "abcd") === "abc") : wasm_string_length(wasm_string_alloc(b ? 7 : 0))
+end
+
+@testset "intrinsics.dart: a String's data operations and Julia's egal on two Strings, against native" begin
+    # wasm_string_length is `struct.get _data; array.len`, wasm_string_alloc a String struct over a
+    # fresh array (WasmArrayRef.length, the WasmArray constructor); === compares lengths, then bytes,
+    # as jl_egal does: non-ASCII text's bytes, equal and unequal contents of equal and unequal lengths
+    local args = [(Int64(k), b) for k in 0:3 for b in (true, false)]
+    local bytes = WI.compile(StringDataCases.strops, (Int64, Bool))
+    for r in WTRunner.run_cases([WTRunner.RunCase("strops$a", bytes, a, StringDataCases.strops(a...)) for a in args])
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
