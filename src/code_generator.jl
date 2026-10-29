@@ -1558,7 +1558,10 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases" @unported function _initialize_special_cases(self::SwitchInfo, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:5534 _VirtualCallKind.toString" @unported function Base.show(io::IO, self::_VirtualCallKind) end
+# dart's switch names each kind in lower case, its own name: Julia's @enum value prints with its
+# type's prefix, which is dropped, so every kind has its name and no arm can be missing
+@parity "dart2wasm/lib/code_generator.dart:5534 _VirtualCallKind.toString" Base.show(io::IO, self::_VirtualCallKind)::Nothing =
+    print(io, lowercase(chopprefix(string(Symbol(self)), "_VirtualCallKind_")))
 
 @parity "dart2wasm/lib/code_generator.dart:5542 _VirtualCallKind.isGetter" is_getter(self::_VirtualCallKind)::Bool = self == _VirtualCallKind_Get
 

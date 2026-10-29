@@ -161,4 +161,11 @@ end
     @test rejection(() -> D.restore_this_and_context_chain(b, outer, nothing)).rejection isa W.Internal
 end
 
+
+@testset "code_generator.dart: _VirtualCallKind" begin
+    @test [sprint(show, k) for k in instances(D._VirtualCallKind)] == ["get", "set", "call"]
+    @test D.is_getter(D._VirtualCallKind_Get) && !D.is_getter(D._VirtualCallKind_Call)
+    @test D.is_setter(D._VirtualCallKind_Set) && !D.is_setter(D._VirtualCallKind_Get)
+end
+
 end
