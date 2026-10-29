@@ -63,7 +63,7 @@ import ..UnionFind, ..uf_add!, ..uf_find!, ..uf_union!
 import ..AbstractClosures, ..AbstractLambda, ..AbstractDispatchTable
 # the program, as Julia's trim verifier accepts it and the NIR reads it (src/julia/subset.jl, nir.jl),
 # and its classes, Julia's answers where dart reads a Kernel Class (src/julia/classes.jl)
-import ..ClosedWorld, ..NirBody, ..NirWorld, ..NoCounterpart, ..build_nir, .._KINDS, ..closed_world_classes, ..class_superclass, ..class_is_abstract,
+import ..ClosedWorld, ..NirBody, ..NirWorld, ..NoCounterpart, ..build_nir, .._KINDS, ..closed_world_classes, ..class_superclass, ..class_is_abstract, ..egal_by_identity,
        ..class_implemented_types, ..ClassField, ..class_instance_fields,
        ..NirStmt, ..NirCall, ..NirInvoke, ..NirNew, ..NirForeignCall, ..NirBoundscheck, ..NirGCPreserveBegin,
        ..NirGCPreserveEnd, ..NirLeave, ..NirPopException, ..NirTheException, ..NirLoopInfo, ..NirThrowUndefIfNot,

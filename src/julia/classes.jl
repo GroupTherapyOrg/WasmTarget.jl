@@ -147,6 +147,18 @@ end
 # and what dart's interfaces give, a subtype off the superclass tree, is Julia's covariant Tuple.
 
 """
+    egal_by_identity(T) -> Bool
+
+Whether Julia's egal (`===`) compares two values of class `T` by identity: a mutable class's, but the
+three mutable classes jl_egal compares by content, String (its bytes), SimpleVector (its elements)
+and DataType (the type it is), Julia's src/builtins.c jl_egal__unboxed_. The one source of that
+rule, read by the code generator's `==` fallback and the intrinsifier's `===`.
+"""
+@quarantine "Julia's egal compares a mutable object by identity, except the String, SimpleVector and DataType it compares by content (builtins.c)" Base.ismutabletype function egal_by_identity(T::Type)::Bool
+    return T isa DataType && ismutabletype(T) && !(T === String || T === Core.SimpleVector || T === DataType)
+end
+
+"""
     class_superclass(c) -> Union{DataType,Nothing}
 
 dart's `cls.superclass`: Julia's `supertype`, `nothing` for `Any`, the root (Julia's own

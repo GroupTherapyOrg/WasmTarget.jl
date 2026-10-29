@@ -200,6 +200,41 @@ end
     @test DataType in ps && Core.SimpleVector in ps && Int8 in ps && String in ps
 end
 
+module EgalCases
+mutable struct Box; x::Int; end
+struct Pair2; a::Int; end
+# a field of a type as a value: the receiver Julia types Type{X}, its class X's kind (DataType)
+nparams(n::Int64) = Core._svec_len(Tuple{Int64,Float64,Bool}.parameters) + n
+end
+
+@testset "egal_by_identity: Julia's egal by identity for a mutable class, by content for String, SimpleVector and DataType" begin
+    # Julia's own answer: two equal-content Strings are distinct objects yet egal, so String is compared
+    # by content though mutable; so are a SimpleVector and a DataType (builtins.c jl_egal__unboxed_)
+    local a = string(1, 2); local b = string(1, 2)
+    @test a === b && pointer(a) != pointer(b)
+    @test !W.egal_by_identity(String) && !W.egal_by_identity(Core.SimpleVector) && !W.egal_by_identity(DataType)
+    @test W.egal_by_identity(EgalCases.Box) && !W.egal_by_identity(EgalCases.Pair2) && !W.egal_by_identity(Int)
+    @test EgalCases.Box(1) !== EgalCases.Box(1) && EgalCases.Pair2(1) === EgalCases.Pair2(1)
+end
+
+@testset "a binding's value at compile time is nir_binding_value's, a tear-off's too; a type as a value reads its kind's layout" begin
+    local D = W.Dart2Wasm
+    local IR = W.WasmBuilder.IR
+    local t = D.Translator(W.build_nir(W.check_subset(EmptyMutableCases.made, (Int,), "classes"), "classes"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === :made)
+    local g = D.get_inlinable_member_code_generator(t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), mi)
+    # Base's stdout is host state Base.__init__ set: the tear-off's read of it rejects there, located
+    local e = try; D.visit_static_tear_off(g, W.NirGlobal(GlobalRef(Base, :stdout)), IR.NumType_i32); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("Base.__init__", e.rejection.row)
+    # Tuple{...}.parameters: a getfield of a type constant, its class DataType, run against native
+    local f = EgalCases.nparams
+    local bytes = W.compile(f, (Int64,); optimize = false)
+    for r in WTRunner.run_cases([WTRunner.RunCase("nparams$(a)", bytes, a, f(a...)) for a in [(0,), (4,), (-3,)]])
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
+
 module MemoryCases
 alloc(n::Int) = Vector{Int}(undef, n)
 names(n::Int) = Vector{String}(undef, n)

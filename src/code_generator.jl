@@ -1479,11 +1479,12 @@ end
     local left_type = translate_type(self, dart_type_of(self, left))
     local single_target_ = single_target(self.translator, node)
     local b = self.b[]
-    # Base's fallback is `x === y`, Julia's egal: reference identity only when both operands are mutable
-    # objects; two immutable values are equal by content (jl_egal), so the fallback is then called as the
-    # method Julia resolved, its === lowered as === is, answering or rejecting located, never ref.eq
-    # (audit #56: Q(a) == Q(a) of an immutable struct answered false)
-    local identity_only(T::Type)::Bool = T isa DataType && ismutabletype(T)
+    # Base's fallback is `x === y`, Julia's egal: reference identity only when both operands' classes are
+    # ones egal compares by identity (egal_by_identity: mutable, but not String, SimpleVector or
+    # DataType, compared by content); otherwise the fallback is called as the method Julia resolved, its
+    # === lowered as === is, answering or rejecting located, never ref.eq (audit #56: Q(a) == Q(a) of an
+    # immutable struct answered false; monitor-b: two equal Strings would have)
+    local identity_only(T::Type)::Bool = egal_by_identity(T)
     local fallback = single_target_ !== nothing && single_target_.def === which(==, Tuple{Any,Any})
     if fallback && identity_only(dart_type_of(self, left)) && identity_only(dart_type_of(self, right)) ||
             (left_type isa WasmBuilder.IR.RefType && !WasmBuilder.is_subtype_of(left_type, self.translator.top_type[]))
@@ -1542,7 +1543,7 @@ end
 # a function's binding as an operand, Kernel's StaticTearOff (translateExpression routes a NirGlobal
 # whose value is a function here): Julia's function as a value is its singleton, the constant
 @parity "dart2wasm/lib/code_generator.dart:2193 AstCodeGenerator.visitStaticTearOff" function visit_static_tear_off(self::AstCodeGenerator, node::NirGlobal, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
-    instantiate_constant(self, NirConst(Core.Const(getglobal(node.ref.mod, node.ref.name))), expected_type)
+    instantiate_constant(self, nir_binding_value(node.ref, "$(self.enclosing_member): the tear-off of $(node.ref)"), expected_type)
     return expected_type
 end
 
@@ -1587,6 +1588,9 @@ end
     length(node.args) in (3, 4) || reject!(Internal("$at: getfield with $(length(node.args) - 1) operands"), "$(self.enclosing_member)")
     local receiver = node.args[2]
     local cls = dart_type_of(self, receiver)
+    # a type as a value Julia types Type{X} (Core.Typeof); its class is X's kind, typeof(X), whose
+    # layout holds the field, as Julia's codegen reads the value's own type (jl_typeof)
+    Base.isType(cls) && !Base.has_free_typevars(cls.parameters[1]) && (cls = typeof(cls.parameters[1]))
     cls isa DataType && isconcretetype(cls) ||
         reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): a field of $cls, no concrete class")
     local name = node.args[3]
