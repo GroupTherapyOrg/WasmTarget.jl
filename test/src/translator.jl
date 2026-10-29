@@ -588,4 +588,6 @@ end
     # dart's node count is Julia's inliner's decision: the counter is never made, located
     local en = try; D.NodeCounter(t); nothing; catch x; x; end
     @test en isa WasmTarget.RejectionError && en.rejection isa WasmTarget.Unquarantined && occursin("ssa_inlining_pass", en.rejection.row)
+    local ec = try; D._should_inline_constructor_call(t, h, sig, h); nothing; catch x; x; end
+    @test ec isa WasmTarget.RejectionError && ec.rejection isa WasmTarget.Unquarantined && occursin("ssa_inlining_pass", ec.rejection.row)
 end

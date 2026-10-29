@@ -1236,11 +1236,14 @@ never, `@inline` its preference; a Julia member is a method, dart's procedure ar
     return _should_inline_procedure_call(self, target, signature)
 end
 
-@parity "dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor" @unported function _should_inline_field_accessor(self::Translator, target::Core.MethodInstance, field::ClassField) end
+@parity "dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor" _should_inline_field_accessor(self::Translator, target::Core.MethodInstance, field::ClassField)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor: a field accessor's inlining; a Julia member is a method, never a field's implicit getter or setter, and Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost)"), "Translator._shouldInlineFieldAccessor")
 
-@parity "dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer" @unported function never_inline_static_field_initializer(self::Translator, field::ClassField) end
+@parity "dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer" never_inline_static_field_initializer(self::Translator, field::ClassField)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer: a static field initializer's inlining by its node count; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), and a binding's value is globals.dart's constant initializer or none"), "Translator.neverInlineStaticFieldInitializer")
 
-@parity "dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall" @unported function _should_inline_constructor_call(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType, constructor::Core.MethodInstance) end
+@parity "dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall" _should_inline_constructor_call(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType, constructor::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall: a constructor's inlining by its initializers' size; a Julia constructor is a method, and Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost)"), "Translator._shouldInlineConstructorCall")
 
 """
 dart's size estimate of a procedure's body against the call's overhead. Julia's optimizer has run its
