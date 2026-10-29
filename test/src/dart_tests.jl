@@ -14,7 +14,9 @@
 # list only shrinks. Native Julia's answer does not depend on
 # WasmTarget's code, so it runs for each case whose group text or record the change adds or edits against
 # CHECK_BASE (dev/check.sh's base, origin/wt2 by default; HEAD~1 under dev/ship.sh), proving a new or edited
-# answer native when it is written. A base that holds no corpus runs every native answer.
+# answer native when it is written. A base that holds no corpus runs every native answer, and so does the
+# whole run beside the landings: a change to a definition several groups share (a helper, a struct) edits
+# other groups' answers while its group text alone differs, and the whole run proves them all.
 #
 # Under WT_LANDING_CORE=1 (dev/check.sh sets it) the landing compiles a fixed core, the first case of each
 # group plus every case the change adds or edits, and runs no module, so the landing's cost does not grow with
@@ -764,7 +766,7 @@ end
             if haskey(DART_CASES, key)
                 local native, today = DART_CASES[key]
                 local f, args = case[2], case[3:end]
-                key in DART_NATIVE_DUE && @test _dart_same(f(args...), native)
+                (key in DART_NATIVE_DUE || !_DART_CORE_ONLY) && @test _dart_same(f(args...), native)
                 if !_DART_CORE_ONLY || key in DART_CORE
                     local got
                     local secs = @elapsed (got = _dart_outcome(f, args))
@@ -808,5 +810,5 @@ end
     end
     global DART_RUN_COUNTS = (nread, length(results), count(r -> r.ok, results))
 end
-println("dart tests: $(_DART_CORE_ONLY ? length(DART_CORE) : length(DART_CASES)) compiles checked$(_DART_CORE_ONLY ? " (the landing core)" : ""); native answers proven for the $(length(DART_NATIVE_DUE)) the change ",
-        "adds or edits against $(_DART_BASE); $(DART_RUN_COUNTS[1]) compiled cases run in node, $(DART_RUN_COUNTS[3]) of their $(DART_RUN_COUNTS[2]) facts native's")
+println("dart tests: $(_DART_CORE_ONLY ? length(DART_CORE) : length(DART_CASES)) compiles checked$(_DART_CORE_ONLY ? " (the landing core)" : ""); native answers proven for ",
+        _DART_CORE_ONLY ? "the $(length(DART_NATIVE_DUE)) the change adds or edits against $(_DART_BASE)" : "every case", "; $(DART_RUN_COUNTS[1]) compiled cases run in node, $(DART_RUN_COUNTS[3]) of their $(DART_RUN_COUNTS[2]) facts native's")

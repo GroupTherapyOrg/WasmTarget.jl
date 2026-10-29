@@ -5,12 +5,15 @@
 #   loud, unported   the compile rejects with Unported or Unquarantined: the path reaches a
 #                    definition not yet written (green)
 #   loud, outside    Julia's trim verifier rejects the program, OutsideSubset (green)
-#   passed           the module is compiled and its answer equals native's (green)
+#   passed           the module is compiled and its answer in node equals native's, in both
+#                    modules, codegen's and wasm-opt's (green)
 #   wrong / errored  the module answers otherwise, or the compile raises anything else, an
 #                    InvalidModule or Internal rejection among them (red)
 # A case is loud only through a stub or Julia's own verdict; there is no xfail table for the
-# rebuild (the _xf groups are corpus groups like any other). Until the rebuild has its runner (the
-# JS/Node host, 1.B and 1.F), a compiled case cannot be judged and is red.
+# rebuild (the _xf groups are corpus groups like any other). A compiled case runs through
+# test/runner.jl, the differential runner: every compiled case of the run in one node process, each
+# fact of its answer compared with native Julia's (===); a type the runner does not marshal yet, a
+# trap or a missing entry is wrong, never a pass.
 #
 # Run:   julia --project=. test/smoke.jl [group ...]   # only matching groups
 # Exit:  0 = no case wrong or errored, 1 otherwise.
@@ -21,6 +24,7 @@
 # ============================================================================
 const SMOKE_T_START = time()
 using WasmTarget
+isdefined(Main, :WTRunner) || include(joinpath(@__DIR__, "runner.jl"))
 
 const FILTER = lowercase.(ARGS)
 const EXACT = get(ENV, "WT_SMOKE_EXACT", "") == "1"
@@ -106,8 +110,9 @@ function _smoke_error_text(e)::String
 end
 
 # A case's outcome, derived from its compile (the ladder above): :unported, :outside or :errored,
-# with the text that says why
-function _ladder(f, args)::Tuple{Symbol,String}
+# with the text that says why, or :compiled with the cases that read its answer in node (a reader
+# that does not compile is :errored: the case compiled, and its answer goes unjudged)
+function _ladder(f, args)::Tuple{Symbol,Union{String,Vector{WTRunner.RunCase}}}
     try
         WasmTarget.compile(f, Tuple(map(typeof, args)))
     catch e
@@ -117,7 +122,12 @@ function _ladder(f, args)::Tuple{Symbol,String}
         r isa WasmTarget.OutsideSubset && return (:outside, sprint(showerror, e))
         return (:errored, sprint(showerror, e))
     end
-    return (:errored, "the module compiled, and the rebuild has no runner to judge it against native yet (dev/MARCH.md 1.B)")
+    local native = try; f(args...); catch e; e; end
+    return try
+        (:compiled, WTRunner.answer_cases("", WasmTarget.compile, f, Tuple(args), native))
+    catch e
+        (:errored, "the module compiled, and the reader of its answer does not: " * _smoke_error_text(e))
+    end
 end
 
 const SMOKE_TIMES = get(ENV, "WT_SMOKE_TIMES", "") == "1"
@@ -136,6 +146,7 @@ function main()
     local case_secs = Float64[]
     local count = Dict(:passed => 0, :unported => 0, :outside => 0, :wrong => 0, :errored => 0)
     local failures = String[]
+    local runs = Tuple{String,Vector{WTRunner.RunCase}}[]
     local ngroups = 0
     for (group, cases) in vcat(_selected(_smoke_part(GROUPS)), _selected(_smoke_part(XFAIL)))
         ngroups += 1
@@ -144,11 +155,28 @@ function main()
             local name, f, args = case[1], case[2], case[3:end]
             local tc = time()
             local outcome, why = _ladder(f, args)
-            count[outcome] += 1
-            outcome === :errored && push!(failures, "ERROR $group/$name  $why")
+            if outcome === :compiled
+                push!(runs, ("$group/$name", why))
+            else
+                count[outcome] += 1
+                outcome === :errored && push!(failures, "ERROR $group/$name  $why")
+            end
             push!(case_secs, time() - tc)
         end
         _smoke_time("group $group", tg)
+    end
+    # every compiled case's modules in one node process: passed when each fact is native's, else wrong
+    local results = WTRunner.run_cases(reduce(vcat, last.(runs); init = WTRunner.RunCase[]))
+    local k = 0
+    for (label, cs) in runs
+        local rs = results[k+1:k+length(cs)]
+        k += length(cs)
+        if all(r -> r.ok, rs)
+            count[:passed] += 1
+        else
+            count[:wrong] += 1
+            push!(failures, "WRONG $label  " * join(("$(r.label) $(r.why)" for r in rs if !r.ok), "; "))
+        end
     end
     # the median case's wall
     SMOKE_TIMES && !isempty(case_secs) &&
