@@ -589,10 +589,12 @@ end
     local f = D.get_dummy_function(D.get_dummy_values_collector_for_module(t, m), W.WasmBuilder.define_function(m.types[], IR.ValueType[], IR.ValueType[]))
     local g = D.make_function_ref(t, f)
     @test g === D.make_function_ref(t, f) && g.type == IR.GlobalType(IR.RefType_def(f.type; nullable = false); mutable = false)
-    # a JS string's imported global, reached by a string constant outside standalone mode: not yet
-    # ported, Unported at its dart definition
+    # a JS string's imported global: a String constant is its bytes in both builds (visitStringConstant)
+    # and deferred loading's names are out of scope, so nothing asks for one; reaching it is
+    # WasmTarget's defect, Internal, and no string is internalized
     local ej = try; D.get_internalized_string_global(t, m, "hi"); nothing; catch x; x; end
-    @test ej isa W.RejectionError && ej.rejection isa W.Unported && occursin("getInternalizedStringGlobal", ej.rejection.anchor)
+    @test ej isa W.RejectionError && ej.rejection isa W.Internal && occursin("visitStringConstant", ej.rejection.site)
+    @test isempty(t.internalized_strings_for_js_runtime) && isempty(t._internalized_string_globals)
     # a record's class is its own tuple type's, a class of the closed world; one the world lacks rejects
     local er = try; D.get_record_class_info(t, Tuple{Int8,Int8}); nothing; catch x; x; end
     @test er isa W.RejectionError && er.rejection isa W.Internal

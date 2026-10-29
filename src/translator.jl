@@ -1459,10 +1459,13 @@ end
     return info
 end
 
-# a string constant outside standalone mode is a JS string imported as a global (constants.jl's string
-# constant reaches it), the JS string imports not yet ported: a gap, Unported
+# dart imports a JS string as a global for a string constant outside standalone mode
+# (constants.dart:895) and for the loading map's names (:719, :768). WasmTarget's String constant is
+# its UTF-8 bytes in both builds, a host string made only at the interop boundary (constants.jl's
+# visitStringConstant, its deliberate difference), and deferred loading is out of scope
+# (dev/PARITY_MASTER.md), so no string is internalized and `internalizedStringsForJSRuntime` stays empty
 @parity "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal" get_internalized_string_global(self::Translator, module_::WasmBuilder.ModuleBuilder, s::String)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal"), "a string constant $(Base.repr(s)) outside standalone mode, a JS string's imported global, not yet ported")
+    reject!(Internal("dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal: a JS string global for $(Base.repr(s)); a String constant is its bytes in both builds (constants.jl's visitStringConstant) and deferred loading's names are out of scope, so no string is internalized"), "Translator.getInternalizedStringGlobal")
 
 """
 Push a string constant in standalone mode: its bytes appended to `data` and an array made from them
