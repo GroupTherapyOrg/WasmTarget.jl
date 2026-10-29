@@ -1029,7 +1029,9 @@ of the type's own function, whose result `new` allocates), so a request is a loc
 @parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" precise_this_for(self::Translator, member::Core.MethodInstance; nullable::Bool = false)::WasmBuilder.IR.ValueType =
     reject!(Internal("dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor: $member, no instance member or constructor, has no `this`"), "Translator.preciseThisFor")
 
-@parity "dart2wasm/lib/translator.dart:1930 Translator.getTable" @unported function get_table(self::Translator, module_::WasmBuilder.ModuleBuilder, field::ClassField) end
+# dart gives a static field of dart:_wasm's WasmTable class its own wasm table; Julia has no such class
+# (src/julia/wasm_array.jl holds dart's arrays alone), so no field is a table: dart's first return
+@parity "dart2wasm/lib/translator.dart:1930 Translator.getTable" get_table(self::Translator, module_::WasmBuilder.ModuleBuilder, field::ClassField)::Nothing = nothing
 
 # dart reads TFA's direct-call metadata, the one member a call reaches; Julia's inference resolved
 # each call it could to its MethodInstance, an invoke's target, and a call it left unresolved has none
@@ -1163,7 +1165,38 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" @unported function get_pragma(self::Translator, node::NoCounterpart, name::String, optional...) end
 
-@parity "dart2wasm/lib/translator.dart:2427 Translator.makeArray" @unported function make_array(self::Translator, b::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item::Function) end
+"""
+Push a new array of `array_type` holding `length` items, each pushed by `generate_item(element_type,
+i)`: by `array.new_fixed`, or past its limit as a default array whose elements are set one by one.
+"""
+@parity "dart2wasm/lib/translator.dart:2427 Translator.makeArray" function make_array(self::Translator, b::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item::Function)::WasmBuilder.IR.ValueType
+    local element_type = WasmBuilder.unpacked(array_type.element_type[].type)
+    local array_type_ref = WasmBuilder.IR.RefType_def(array_type; nullable = false)
+
+    if length > max_array_new_fixed_length()
+        array_type.element_type[].mutable || reject!(Internal("dart2wasm/lib/translator.dart:2427 Translator.makeArray: $length items past array.new_fixed's limit in the immutable $array_type"), "Translator.makeArray")
+        # Too long for `array.new_fixed`. Set elements individually.
+        WasmBuilder.i32_const(b, length)
+        WasmBuilder.array_new_default(b, array_type)
+        if length > 0
+            local array_local = WasmBuilder.add_local(b, array_type_ref)
+            WasmBuilder.local_set(b, array_local)
+            for i in 0:length - 1
+                WasmBuilder.local_get(b, array_local)
+                WasmBuilder.i32_const(b, i)
+                generate_item(element_type, i)
+                WasmBuilder.array_set(b, array_type)
+            end
+            WasmBuilder.local_get(b, array_local)
+        end
+    else
+        for i in 0:length - 1
+            generate_item(element_type, i)
+        end
+        WasmBuilder.array_new_fixed(b, array_type, length)
+    end
+    return array_type_ref
+end
 
 @parity "dart2wasm/lib/translator.dart:2462 Translator.indexList" @unported function index_list(self::Translator, b::WasmBuilder.InstructionsBuilder, push_index::Function) end
 
