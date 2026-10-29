@@ -47,6 +47,13 @@ else
             println(length(counted), " ", length(ported), " ", replaced, " ", gaps)') ||
             { echo "src: WasmTarget did not load, so its @parity registry gives no count"; exit 1; }
         read -r anchored ported replaced gaps <<< "$counts"
+        # the runtime's gaps: the Unported rejections anchored in the wasm runtime library of the same dart-lang/sdk
+        # pin (sdk/lib/_internal/wasm/, A52S1), each a call a module would make into a runtime src/runtime/ has not
+        # ported yet; counted as the sites rejecting and the distinct runtime definitions they name (the measure
+        # both march monitors read, one source here)
+        # (a line rejecting Unported, each runtime anchor on it: `Unported(standalone ? "<a>" : "<b>")` names two)
+        rt=$(grep -rh 'Unported(' src | grep -oE '"sdk/lib/_internal/wasm/[^"]+"' || true)
+        rt_sites=$(printf '%s' "$rt" | grep -c . || true); rt_defs=$(printf '%s' "$rt" | sort -u | grep -c . || true)
         last=$(git log -1 --format=%H -- src)
     else
         anchored=0; ported=0; last=$REBUILD_START; started=0
@@ -57,6 +64,7 @@ line="src: $ported of $anchored anchored dart definitions ported (every definiti
 # A55S13: a ported definition whose whole body is one rejection is no port with a body: an Internal one is
 # Julia's answer replacing a construct Julia never produces, an Unported or Unquarantined one a gap
 [ -n "${replaced:-}" ] && line="$line; of the ported, $replaced are one Internal rejection where Julia's answer replaces dart's construct and $gaps one Unported or Unquarantined rejection, a gap still to fill"
+[ -n "${rt_sites:-}" ] && line="$line; the runtime library: $rt_sites rejecting site(s) name $rt_defs definition(s) of sdk/lib/_internal/wasm/ still to port"
 [ $started -eq 1 ] || line="$line (the rebuild's src/ not started: WT1 holds src/ until 1.A2c)"
 echo "$line"
 if [ "$since" -ge "$NOTE_AFTER" ]; then
