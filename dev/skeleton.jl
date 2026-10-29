@@ -852,7 +852,10 @@ function type_ref(S::Scope, s::AbstractString, from::AbstractString; at::Abstrac
         row === nothing && error("skeleton: $from: the type $n ($r) has no row in KERNEL_TYPES (src/julia/kernel.jl)")
         push!(KERNEL_USED, (r, n))
         # a row whose types are planned (`planned: <row>`): the parameter stays unannotated until then
-        return startswith(row, "planned: ") ? "" : row
+        startswith(row, "planned: ") && return ""
+        # a row naming a dart2wasm class (AuxiliaryConstant's DummyValueConstant) spells it as file
+        # `at` reaches it, through Dart2Wasm from a library module
+        return replace(row, r"\b[A-Z]\w*\b" => w -> (local k = dart2wasm_class(S, w); k === nothing ? w : spell(w, k, at)))
     end
     local k = r
     local td = findfirst(d -> d.kind == :typedef && d.symbol == n, S.decls[k])
@@ -871,6 +874,15 @@ end
 function super_ref(S::Scope, s::AbstractString, from::AbstractString)::String
     local r = type_ref(S, s, from)
     return r == "NoCounterpart" ? "" : r
+end
+
+# the dart2wasm file declaring class `name`, or nothing
+function dart2wasm_class(S::Scope, name::AbstractString)::Union{Nothing,String}
+    for f in scope()
+        startswith(f, "dart2wasm/") || continue
+        any(d -> d.symbol == name && d.kind in (:class, :abstract, :mixin), S.decls[f]) && return f
+    end
+    return nothing
 end
 
 # a typedef's kind: :function, a function type, which Julia spells `Function` (Julia has no arrow
@@ -1683,7 +1695,16 @@ end
 # The Kernel table types every Kernel-typed parameter, filled or stubbed (the lead's ruling, A46S1): a
 # filled definition's parameter whose dart type is a Kernel type is annotated with the table's row, as
 # the stub was. Parameters are matched by position (the receiver aside) and keywords by name; a
-# definition whose positional count differs from dart's is not matched (a port that reshaped it).
+# definition whose positional count differs from dart's is not matched (a port that reshaped it), and
+# a parameter its docstring lists after "Reshaped:" (backticked dart names, then why) is exempt: a
+# deliberate reshaping, visible to the audit, the definition still a port.
+
+# the dart parameter names a docstring lists after "Reshaped:", up to the period that ends the list
+function reshaped(text::AbstractString)::Vector{String}
+    local m = match(r"Reshaped:((?:[^.`]|`[^`]*`)*)\."s, text)
+    m === nothing && return String[]
+    return String[x[1] for x in eachmatch(r"`([^`]+)`", m[1])]
+end
 
 # whether a dart parameter's type names a Kernel table row (its head type, past `?` and arguments)
 function kernel_typed(p::Param, S::Scope, from::AbstractString)::Bool
@@ -1719,11 +1740,16 @@ function call_args(ex)
     return (pos, kw)
 end
 
-# two annotations name one type: equal text, a Union's members in any order
+# whether annotation `a` names the row's type `b`: the same type (a Union's members in any order), or
+# some of a Union row's members (a port that knows which: a static field's GlobalRef of Field's two),
+# or one of Julia's kinds where the row is Type
 function same_type(a::AbstractString, b::AbstractString)::Bool
-    local norm(x) = (local e = try Meta.parse(x) catch; x end;
-                     Meta.isexpr(e, :curly) && e.args[1] === :Union ? Set(string.(e.args[2:end])) : replace(string(e), " " => ""))
-    return norm(a) == norm(b)
+    local members(x) = (local e = try Meta.parse(x) catch; x end;
+                        Meta.isexpr(e, :curly) && e.args[1] === :Union ? Set(replace.(string.(e.args[2:end]), " " => "")) : Set([replace(string(e), " " => "")]))
+    # a member Julia's kinds narrow: a type as a value is one of Type's kinds (Base.iskindtype's four)
+    local kinds = Set(["DataType", "UnionAll", "Union", "Core.TypeofBottom"])
+    local wide = members(b)
+    return all(x -> x in wide || x in kinds && "Type" in wide, members(a))
 end
 
 function kernel_param_faults(S::Scope)::Vector{String}
@@ -1748,7 +1774,9 @@ function kernel_param_faults(S::Scope)::Vector{String}
             local self = last(julia_name(d)) && !(occursin('.', d.symbol) && split(d.symbol, '.')[2] in ("toString", "hashCode"))
             local jpos = self ? pos[2:end] : pos
             local at = "$(relpath(path, ROOT)):$(s.first) $(d.symbol)"
+            local exempt = reshaped(s.text)
             local check(p, got) = begin
+                p.name in exempt && return
                 kernel_typed(p, S, key) || return
                 isempty(p.jtype) && return   # a planned row: unannotated until its types exist
                 same_type(got, p.jtype) ||
