@@ -1617,8 +1617,9 @@ end
 # definition anchored at the field's declaration (an accessor: a superclass's constant field each
 # subclass answers, the builder's SingleByteInstruction.byte), but those its
 # docstring lists after "Fields to come", each backticked by its dart name (wt3-translator's form:
-# `Fields to come (N, ...): \`a\` :100, \`b\` :104.`, line tokens and the parenthetical ignored). A
-# field missing, or listed to come while the struct holds it, is a fault.
+# `Fields to come (N, ...): \`a\` :100, \`b\` :104.`, line tokens and the parenthetical ignored), or
+# after "Fields with no Julia counterpart" (the same form, a field Julia never holds, its why in the
+# docstring). A field missing, or listed while the struct holds it, is a fault.
 
 # the dart instance fields of class `x` in file `key`, each its dart name and its declaration's anchor:
 # its own, then its extends chain's and its mixins', each in scope
@@ -1638,12 +1639,15 @@ function dart_instance_fields(S::Scope, key::AbstractString, x::AbstractString, 
     return out
 end
 
-# the dart names a docstring lists after "Fields to come", up to the period that ends the list
-function fields_to_come(text::AbstractString)::Vector{String}
-    local m = match(r"Fields to come[^:]*:((?:[^.`]|`[^`]*`)*)\."s, text)
+# the dart names a docstring lists after `label`, up to the period that ends the list: "Fields to
+# come", or "Fields with no Julia counterpart" (a field Julia never holds, its why in the docstring)
+function listed(text::AbstractString, label::AbstractString)::Vector{String}
+    local m = match(Regex("\\Q$(label)\\E[^:]*:((?:[^.`]|`[^`]*`)*)\\.", "s"), text)
     m === nothing && return String[]
     return String[x[1] for x in eachmatch(r"`([^`]+)`", m[1])]
 end
+fields_to_come(text::AbstractString)::Vector{String} =
+    vcat(listed(text, "Fields to come"), listed(text, "Fields with no Julia counterpart"))
 
 # the field names of the struct a definition's parsed form declares, or nothing
 function struct_fields(ex)::Union{Nothing,Vector{Symbol}}
