@@ -103,19 +103,20 @@ if [ -n "$cfgs" ]; then
   echo "check: TLC green on $cfgs"
 fi
 wall=$(( $(date +%s) - s0 ))
-# D14's band judges the check's own cost, never the machine's: the CPU seconds of its critical path,
-# the load stage then the slowest of the parallel stages. A process's CPU seconds do not grow while
-# it waits for a core, so another job's load cannot turn a landing red, and a check that grew can never
-# hide behind a loaded machine (A52E2: the wall-clock band read "UNJUDGED" at every load of 4 or more).
-# An efficiency core spends about twice the CPU seconds; background Julia runs at taskpolicy -b (corpus.sh)
-# so a check, at foreground QoS, keeps the performance cores
-# /usr/bin/time -l: its first line holds real, user and sys; a later line the instructions retired, which
-# no core type or load moves (printed beside the band, the measure A53E1 proposes)
+# D14's band judges the check's own cost, never the machine's (A53E1): each stage's instructions retired
+# (/usr/bin/time -l), which neither the core it ran on nor another job's load moves, read as seconds of a
+# performance core at that stage's rate, measured on a995ed8a's green check with the performance cores
+# its own (ratchet 155 G in 65 CPU-s, the src shards 1195 G in 226: one CPU-s per RATE_* G). The CPU
+# seconds a stolen or efficiency core inflates (a probe held a performance core an hour, 2026-10-28:
+# the same 417 G read 77 CPU-s, then 101) print beside, unjudged. The load stage's precompile runs in a
+# child process whose instructions rusage does not report, so it is judged by its CPU seconds.
+RATE_RATCHET=2.4; RATE_SRC=5.3
 cpu() { awk 'NR == 1 { printf "%d", $3 + $5 }' ".wtd/$1.time"; }
 gi() { awk '/instructions retired/ { printf "%d", $1 / 1e9 }' ".wtd/$1.time"; }
-c_load=$(cpu load); c_ratchet=$(cpu ratchet); path_par=$c_ratchet; shards=""
-for k in $(seq 1 $SHARDS); do c=$(cpu "src_tests.$k"); shards="$shards $c"; [ "$c" -gt "$path_par" ] && path_par=$c; done
+ps_of() { awk -v r="$2" '/instructions retired/ { printf "%d", $1 / 1e9 / r }' ".wtd/$1.time"; }
+c_load=$(cpu load); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
+for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
-echo "check: ${path} CPU-s on the critical path (load ${c_load}, ratchet ${c_ratchet}, src shards${shards}); ${wall}s wall; G instructions: load $(gi load), ratchet $(gi ratchet), shards$(for k in $(seq 1 $SHARDS); do printf ' %s' "$(gi "src_tests.$k")"; done)"
-[ $path -gt 120 ] && { echo "check: RED — ${path} CPU-s, past D14's band (a 60-s target, red past 120 s)"; exit 1; }
+echo "check: ${path} s on the critical path (load ${c_load} CPU-s, ratchet ${p_ratchet}, src shards${shards}, from G instructions $(gi ratchet)$(for k in $(seq 1 $SHARDS); do printf ' %s' "$(gi "src_tests.$k")"; done)); ${wall}s wall; CPU-s, unjudged: ${cpus}"
+[ $path -gt 120 ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past 120 s)"; exit 1; }
 echo "check: green (${wall}s)"
