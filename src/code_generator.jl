@@ -335,10 +335,12 @@ own, on its closure type, compiled as a member, so Closures makes no Lambda; dar
 end
 
 """
-The code generator dart makes for a member of a cyclic class. It holds AstCodeGenerator's fields as
-SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers instead of
-storing). No value of it exists: no class of a Julia method is cyclic, a struct holding no instance
-of itself inline; dart's constructor (:5085), its outer function, rejects Internal, and so does its
+The code generator dart makes for a member whose enclosing class is cyclic, its struct reaching
+itself through non-nullable references (class_info.dart:242 isCyclic), so never instantiated. It
+holds AstCodeGenerator's fields as SynchronousProcedureCodeGenerator does (whose docstring names the
+ones Julia answers instead of storing). No value of it exists: a Julia method is a method of its
+generic function, enclosed by no class, so dart's test of the member's enclosing class (:3479, :3504,
+:3534) never holds; dart's constructor (:5085), its outer function, rejects Internal, and so does its
 one inner constructor.
 """
 @parity "dart2wasm/lib/code_generator.dart:5084 UnreachableCodeGenerator" mutable struct UnreachableCodeGenerator <: AstCodeGenerator
@@ -361,7 +363,7 @@ one inner constructor.
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
-    UnreachableCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:5084 UnreachableCodeGenerator: no value; no class of a Julia method is cyclic, a struct holding no instance of itself inline"), "UnreachableCodeGenerator")
+    UnreachableCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:5084 UnreachableCodeGenerator: no value; a Julia method is a method of its generic function, enclosed by no class, so dart's test of the member's enclosing class never holds"), "UnreachableCodeGenerator")
 end
 
 """
@@ -1841,15 +1843,16 @@ end
     return code_gen
 end
 
-# a lambda's enclosing member is a Julia method, which no class encloses (getInlinableMemberCodeGenerator:
-# no class of a Julia method is cyclic), and tasks are out of scope, Julia's verifier rejecting them
+# a lambda's enclosing member is a Julia method, which no class encloses, so dart's cyclic-class test
+# never holds (getInlinableMemberCodeGenerator), and tasks are out of scope, Julia's verifier rejecting them
 # (the Kernel table's AsyncMarker row), so every lambda is synchronous
 @parity "dart2wasm/lib/code_generator.dart:3502 getLambdaCodeGenerator" get_lambda_code_generator(translator::Translator, lambda::Lambda)::CodeGenerator =
     SynchronousLambdaCodeGenerator(translator, lambda)
 
 # a Julia method is dart's synchronous Procedure: no constructor, field or tear-off reference reaches
-# here (getMemberCodeGenerator), and no class of a Julia method is cyclic (a struct's fields cannot
-# contain the struct inline); its body is the NIR of the CodeInstance Julia inferred for it
+# here (getMemberCodeGenerator), and no class encloses a Julia method, so dart's test of the
+# member's enclosing class for cyclicness never holds; its body is the NIR of the CodeInstance Julia
+# inferred for it
 @parity "dart2wasm/lib/code_generator.dart:3528 getInlinableMemberCodeGenerator" function get_inlinable_member_code_generator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, reference::Core.MethodInstance)::Union{CodeGenerator,Nothing}
     return SynchronousProcedureCodeGenerator(translator, function_type, reference, reference)
 end
@@ -2038,12 +2041,12 @@ end
 @parity "dart2wasm/lib/code_generator.dart:5069 SynchronousLambdaCodeGenerator.generateInternal" generate_internal(self::SynchronousLambdaCodeGenerator)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:5069 SynchronousLambdaCodeGenerator.generateInternal: a lambda's code; a Julia closure's call is a method of its own, compiled as a member, so Closures makes no Lambda"), "generate_internal")
 
-# Julia's answer (D3): no class is cyclic (getInlinableMemberCodeGenerator), so no member is unreachable for it
+# Julia's answer (D3): no class encloses a Julia method (getInlinableMemberCodeGenerator), so none is a cyclic class's member
 @parity "dart2wasm/lib/code_generator.dart:5085 UnreachableCodeGenerator" UnreachableCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
-    reject!(Internal("dart2wasm/lib/code_generator.dart:5085 UnreachableCodeGenerator: a member of a cyclic class, $member; no class of a Julia method is cyclic, a struct holding no instance of itself inline"), "UnreachableCodeGenerator")
+    reject!(Internal("dart2wasm/lib/code_generator.dart:5085 UnreachableCodeGenerator: a member of a cyclic class, $member; a Julia method is a method of its generic function, enclosed by no class, so dart's test of the member's enclosing class never holds"), "UnreachableCodeGenerator")
 
 @parity "dart2wasm/lib/code_generator.dart:5088 UnreachableCodeGenerator.generateInternal" generate_internal(self::UnreachableCodeGenerator)::Union{} =
-    reject!(Internal("dart2wasm/lib/code_generator.dart:5088 UnreachableCodeGenerator.generateInternal: a cyclic class's member; no class of a Julia method is cyclic, so UnreachableCodeGenerator is never made"), "generate_internal")
+    reject!(Internal("dart2wasm/lib/code_generator.dart:5088 UnreachableCodeGenerator.generateInternal: a cyclic class's member; a Julia method is enclosed by no class, so UnreachableCodeGenerator is never made"), "generate_internal")
 
 @parity "dart2wasm/lib/code_generator.dart:5103 TryBlockFinalizer" TryBlockFinalizer(label::WasmBuilder.Label)::TryBlockFinalizer = TryBlockFinalizer(Val(:_), label)
 
