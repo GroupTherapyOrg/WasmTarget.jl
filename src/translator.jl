@@ -1214,15 +1214,20 @@ Reshaped: `node` — the variable's type is the NIR body's, which the code gener
     return translate_type(self, type_)
 end
 
-@parity "dart2wasm/lib/translator.dart:2115 Translator._inferredTypeOfParameterVariable" @unported function _inferred_type_of_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}) end
+@parity "dart2wasm/lib/translator.dart:2115 Translator._inferredTypeOfParameterVariable" _inferred_type_of_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument})::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:2115 Translator._inferredTypeOfParameterVariable: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfParameterVariable")
 
-@parity "dart2wasm/lib/translator.dart:2119 Translator._inferredTypeOfReturnValue" @unported function _inferred_type_of_return_value(self::Translator, node::Core.MethodInstance) end
+@parity "dart2wasm/lib/translator.dart:2119 Translator._inferredTypeOfReturnValue" _inferred_type_of_return_value(self::Translator, node::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:2119 Translator._inferredTypeOfReturnValue: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfReturnValue")
 
-@parity "dart2wasm/lib/translator.dart:2126 Translator._inferredTypeOfField" @unported function _inferred_type_of_field(self::Translator, node::ClassField) end
+@parity "dart2wasm/lib/translator.dart:2126 Translator._inferredTypeOfField" _inferred_type_of_field(self::Translator, node::ClassField)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:2126 Translator._inferredTypeOfField: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfField")
 
-@parity "dart2wasm/lib/translator.dart:2130 Translator._inferredTypeOfLocalVariable" @unported function _inferred_type_of_local_variable(self::Translator, variable::Union{NirSSA,NirArgument}) end
+@parity "dart2wasm/lib/translator.dart:2130 Translator._inferredTypeOfLocalVariable" _inferred_type_of_local_variable(self::Translator, variable::Union{NirSSA,NirArgument})::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:2130 Translator._inferredTypeOfLocalVariable: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfLocalVariable")
 
-@parity "dart2wasm/lib/translator.dart:2148 Translator._filterInferredType" @unported function _filter_inferred_type(self::Translator, default_type::Type, inferred_type::Union{Nothing,Type}) end
+@parity "dart2wasm/lib/translator.dart:2148 Translator._filterInferredType" _filter_inferred_type(self::Translator, default_type::Type, inferred_type::Union{Nothing,Type})::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:2148 Translator._filterInferredType: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._filterInferredType")
 
 """
 Whether a direct call to `target` is inlined. dart's pragmas are Julia's declarations: `@noinline`

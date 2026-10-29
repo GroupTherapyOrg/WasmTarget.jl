@@ -250,6 +250,9 @@ end
     # a single closure target holds its call target and parameter info
     local sct = D.SingleClosureTarget__(D.direct_call_target(t, mi), D.param_info_for_direct_call(t, mi))
     @test sct.call_target isa D.AstCallTarget && sct.param_info === D.param_info_for_direct_call(t, mi)
+    # TFA's inferred-type readers: Julia's inference typed every value, so none is read, located
+    local et = try; D._inferred_type_of_return_value(t, mi); nothing; catch x; x; end
+    @test et isa W.RejectionError && et.rejection isa W.Unquarantined
     # a member's return type is its body's, looked up by nir_body_of: a member with none rejects, located
     @test D.type_of_return_value(t, mi) === Union{ModuleCases.Circle, ModuleCases.Square}
     local other = Core.Compiler.specialize_method(Base._which(Base.signature_type(sin, (Float64,))))
