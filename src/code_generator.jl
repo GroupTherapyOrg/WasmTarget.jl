@@ -255,9 +255,48 @@ constructor (:4729), its outer function, rejects Internal, and so does its one i
 end
 
 """
-StaticFieldInitializerCodeGenerator's dart fields: `field`.
+The code generator of a static field's initializer function: `field`, a Julia binding (its
+GlobalRef, the Kernel table's static field), which dart's AstCodeGenerator takes as the enclosing
+member. It holds AstCodeGenerator's fields as SynchronousProcedureCodeGenerator does (whose docstring
+names the ones Julia answers instead of storing), the enclosing member a MethodInstance or a binding.
 """
-@parity "dart2wasm/lib/code_generator.dart:4851 StaticFieldInitializerCodeGenerator" @unported struct StaticFieldInitializerCodeGenerator <: AstCodeGenerator end
+@parity "dart2wasm/lib/code_generator.dart:4851 StaticFieldInitializerCodeGenerator" mutable struct StaticFieldInitializerCodeGenerator <: AstCodeGenerator
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Union{Core.MethodInstance,GlobalRef}
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    const field::GlobalRef
+    # the struct's one constructor, tagged, with AstCodeGenerator's field initializers
+    # (code_generator.dart:67 to :160); dart's constructor is its outer function
+    function StaticFieldInitializerCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::GlobalRef)
+        local self
+        self = new(translator, function_type, field,
+            Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
+            Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
+            Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
+            Late{Intrinsifier}("dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
+            Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
+            false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
+            Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
+            NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
+            nothing, TreeNode_no_offset, field)
+        return self
+    end
+end
 
 """
 EagerStaticFieldInitializerCodeGenerator's dart fields: `field`, `global`.
@@ -1835,9 +1874,10 @@ end
 end
 
 # a Julia method is synchronous (tasks are out of scope, rejected by Julia's verifier) and never a
-# constructor, field or tear-off (a struct's constructor is Expr(:new) in a body, a field read a
-# getfield), so the inlinable generator is always found
-@parity "dart2wasm/lib/code_generator.dart:3463 getMemberCodeGenerator" function get_member_code_generator(translator::Translator, function_builder::WasmBuilder.FunctionBuilder, member_reference::Core.MethodInstance)::CodeGenerator
+# constructor, instance field or tear-off (a struct's constructor is Expr(:new) in a body, a field read
+# a getfield), and a binding's reference is its static field's, so the inlinable generator is always
+# found
+@parity "dart2wasm/lib/code_generator.dart:3463 getMemberCodeGenerator" function get_member_code_generator(translator::Translator, function_builder::WasmBuilder.FunctionBuilder, member_reference::Union{Core.MethodInstance,GlobalRef})::CodeGenerator
     local code_gen = get_inlinable_member_code_generator(translator, function_builder.type, member_reference)
     code_gen === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:3463 getMemberCodeGenerator: no generator for $member_reference"), "getMemberCodeGenerator")
     return code_gen
@@ -1856,6 +1896,12 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3528 getInlinableMemberCodeGenerator" function get_inlinable_member_code_generator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, reference::Core.MethodInstance)::Union{CodeGenerator,Nothing}
     return SynchronousProcedureCodeGenerator(translator, function_type, reference, reference)
 end
+
+# a static field's reference, Julia's binding (dart's `member is Field && member.isStatic` arm): the
+# function FunctionCollector keys by the binding's GlobalRef is its initializer, dart's
+# staticFieldInitializer reference
+@parity "dart2wasm/lib/code_generator.dart:3528 getInlinableMemberCodeGenerator" get_inlinable_member_code_generator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, reference::GlobalRef)::CodeGenerator =
+    StaticFieldInitializerCodeGenerator(translator, function_type, reference)
 
 # dart's `kind` is always EntryPoint.normal (the struct's docstring), so it is no parameter
 @parity "dart2wasm/lib/code_generator.dart:3610 SynchronousProcedureCodeGenerator" function SynchronousProcedureCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance, reference::Core.MethodInstance)::SynchronousProcedureCodeGenerator
@@ -2011,9 +2057,41 @@ end
 @parity "dart2wasm/lib/code_generator.dart:4787 ConstructorBodyCodeGenerator._setupConstructorBodyParametersAndContexts" _setup_constructor_body_parameters_and_contexts(self::ConstructorBodyCodeGenerator)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:4787 ConstructorBodyCodeGenerator._setupConstructorBodyParametersAndContexts: a constructor's body in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement"), "_setup_constructor_body_parameters_and_contexts")
 
-@parity "dart2wasm/lib/code_generator.dart:4854 StaticFieldInitializerCodeGenerator" @unported function StaticFieldInitializerCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field) end
+@parity "dart2wasm/lib/code_generator.dart:4854 StaticFieldInitializerCodeGenerator" StaticFieldInitializerCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::GlobalRef)::StaticFieldInitializerCodeGenerator =
+    StaticFieldInitializerCodeGenerator(Val(:_), translator, function_type, field)
 
-@parity "dart2wasm/lib/code_generator.dart:4861 StaticFieldInitializerCodeGenerator.generateInternal" @unported function generate_internal(self::StaticFieldInitializerCodeGenerator) end
+"""
+The body of a binding's initializer function: compute the field's initial value, write it to the
+field's global (or table slot), set its initialized flag where it has one, and return the value.
+dart translates the field's initializer expression. A Julia binding has none: its initial value is
+its image value, the NIR's literal of it (`field.initializer`, globals.dart's getConstantInitializer
+reads the same value), instantiated as a constant, which keeps Julia's identity (constants are
+canonical by `===`). A binding carries no source position in Julia's debuginfo, so the source map
+keeps the function's; it has no code, so it has no closure and `closures` stays unassigned. Whether
+that value is the one the program starts with, the modules' `__init__` having run at load, is
+FunctionCollector.getFunction's question, which rejects, located, before this body is queued.
+"""
+@parity "dart2wasm/lib/code_generator.dart:4861 StaticFieldInitializerCodeGenerator.generateInternal" function generate_internal(self::StaticFieldInitializerCodeGenerator)::Nothing
+    local translator = self.translator
+    local field = self.field
+    local b = self.b[]
+    local global_definition = get_definition_for_static_field(translator.dart_globals[], field)
+    local flag = global_definition.initialized_flag
+    local local_ = WasmBuilder.add_local(b, type(global_definition))
+    write(global_definition, translator, b, function (b::WasmBuilder.InstructionsBuilder)
+        translate_expression(self, NirConst(Core.Const(getglobal(field.mod, field.name))), local_.type)
+        WasmBuilder.local_tee(b, local_)
+        return nothing
+    end)
+    WasmBuilder.local_get(b, local_)
+    convert_type(translator, b, local_.type, only(outputs(self)))
+    if flag !== nothing
+        WasmBuilder.i32_const(b, 1)
+        write_global(translator.globals[], b, flag)
+    end
+    WasmBuilder.var"end"(b)
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:4894 EagerStaticFieldInitializerCodeGenerator" @unported function EagerStaticFieldInitializerCodeGenerator(translator::Translator, field, global_) end
 

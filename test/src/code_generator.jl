@@ -942,6 +942,54 @@ end
     queue_native!("mkb ", W.compile(TypeLiteralCases.mkb, (Int,); optimize = false), TypeLiteralCases.mkb, [(3,), (-1,)])
 end
 
+module StaticFieldCases
+global counter::Int = 7
+bump(x::Int) = counter + x
+end
+# the translator of StaticFieldCases.bump as translate() leaves it before code, its DartGlobals assigned
+function static_field_translator()
+    local t = translator_of(StaticFieldCases.bump, (Int,))
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    t.globals[] = D.Globals(t)
+    t.dart_globals[] = D.DartGlobals(t)
+    return t
+end
+# a code generator of the binding, `G(t, type, binding, extra...)`, its builder a function of `type`
+function static_field_codegen(G, t, ftype, extra...)
+    local B = W.WasmBuilder
+    local fb = B.define(D.main_module(t).functions[], ftype, "f")
+    local g = G(t, ftype, GlobalRef(StaticFieldCases, :counter), extra...)
+    g.b[] = B.body(fb)
+    g.param_locals[] = B.locals(fb)
+    g.return_label[] = nothing
+    return g
+end
+
+@testset "code_generator.dart: a static field's initializer function" begin
+    local t = static_field_translator()
+    local counter = GlobalRef(StaticFieldCases, :counter)
+    local ftype = D.get_function_type(t.functions[], counter)
+    # the binding's reference is its initializer's: getMemberCodeGenerator gives its generator
+    local mb = D.main_module(t)
+    local gm = D.get_member_code_generator(t, W.WasmBuilder.define(mb.functions[], ftype, "init"), counter)
+    @test gm isa D.StaticFieldInitializerCodeGenerator && gm.field === counter && gm.enclosing_member === counter
+    # the lazy arm's definition is made through FunctionCollector.getFunction, whose located rejection
+    # (the modules' __init__ at load) the body lets through, never a value in its place
+    local g = static_field_codegen(D.StaticFieldInitializerCodeGenerator, t, ftype)
+    local e = rejection(() -> D.generate_internal(g))
+    @test e.rejection isa W.Unquarantined && occursin("src/functions.jl getFunction", e.rejection.row)
+    # with the definition the lazy arm makes after it (a mutable global and its flag), the body writes
+    # the binding's image value, tees it, sets the flag and returns the value
+    local dg = t.dart_globals[]
+    local flag = D._define_initializer_flag(dg, counter, mb)
+    dg._definitions[counter] = D._define_global_based_field(dg, counter, D.translate_type_of_field(t, counter), mb, true, nothing, flag)
+    local g2 = static_field_codegen(D.StaticFieldInitializerCodeGenerator, t, ftype)
+    @test emitted_by(() -> D.generate_internal(g2), g2) ==
+          ["i64.const 7", "local.tee", "global.set", "local.get", "i32.const 1", "global.set", "end"]
+end
+
 # Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)
 module EqualsCases
 struct Q; x::Int; end
