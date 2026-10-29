@@ -419,9 +419,14 @@ end
 @parity "wasm_builder/lib/src/serialize/sections.dart:852 NameSection" function NameSection end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:861 NameSection.serializeContents" function serialize_contents(s::Serializer, n::NameSection)::Nothing
+    # beyond dart's checks (D10): the spec's names are valid UTF-8. A name of this section is recorded at
+    # many sites (each builder's define, add_local, Dart2Wasm's writes of field and function names), and
+    # every one is written here, so each is refused here, naming what it names
+    checked(name::String, what::String)::String = isvalid(name) ? name :
+        reject!(InvalidModule("wasm_builder/lib/src/serialize/sections.dart:861 NameSection.serializeContents: the name $(repr(name)) of $what is not valid UTF-8"), "NameSection")
     module_name_subsection = Serializer()
     if n.module_name !== nothing
-        write_name(module_name_subsection, n.module_name)
+        write_name(module_name_subsection, checked(n.module_name, "the module"))
     end
 
     function_name_count = 0
@@ -430,7 +435,7 @@ end
         function_name = n.functions[i].function_name
         if function_name !== nothing
             write_unsigned(function_names, i)
-            write_name(function_names, function_name)
+            write_name(function_names, checked(function_name, "function $i"))
             function_name_count += 1
         end
     end
@@ -446,14 +451,14 @@ end
                 name = def_type.name
                 if name !== nothing
                     write_unsigned(type_names, type_index)
-                    write_name(type_names, name)
+                    write_name(type_names, checked(name, "type $type_index"))
                     type_name_count += 1
                     if def_type isa IR.StructType && !isempty(def_type.field_names)
                         write_unsigned(field_names, type_index)
                         write_unsigned(field_names, length(def_type.field_names))
                         for (key, value) in def_type.field_names
                             write_unsigned(field_names, key)
-                            write_name(field_names, value)
+                            write_name(field_names, checked(value, "field $key of type $type_index"))
                         end
                         types_with_named_fields_count += 1
                     end
@@ -469,7 +474,7 @@ end
         global_name = n.globals[i].global_name
         if global_name !== nothing
             write_unsigned(global_names, i)
-            write_name(global_names, global_name)
+            write_name(global_names, checked(global_name, "global $i"))
             global_name_count += 1
         end
     end
@@ -485,7 +490,7 @@ end
                 write_unsigned(local_names_s, length(names))
                 for (key, value) in names
                     write_unsigned(local_names_s, key)
-                    write_name(local_names_s, value)
+                    write_name(local_names_s, checked(value, "local $key of function $i"))
                 end
                 functions_with_local_names_count += 1
             end

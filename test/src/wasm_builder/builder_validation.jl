@@ -6,7 +6,7 @@
 # validate stays the alarm on the golden modules (test/src/wasm_builder/builder_modules.jl).
 #
 # The inventory, by the spec's Validation chapter. "dart" is dart's check, ported; "spec" is a check
-# the port adds, citing the rule; "construction" is a rule the builder's API cannot break. 22 rules
+# the port adds, citing the rule; "construction" is a rule the builder's API cannot break. 23 rules
 # had no check before (the rows marked "was missing"); every one is refused now.
 #
 #   Instructions
@@ -54,6 +54,7 @@
 #   Module
 #   - export names are unique ....................... dart  ExportsBuilder.export
 #   - import and export names are UTF-8 ............. spec  each import, ExportsBuilder.export (was missing)
+#   - the name section's names are UTF-8 ............ spec  NameSection.serializeContents  (was missing)
 #   - the start function is [] -> [] ................ construction  ModuleBuilder.startFunction defines it so
 #   - import and export kinds ....................... construction  one builder per kind
 #   - a data count section when data is indexed ..... construction  dart writes one with any data segment
@@ -63,7 +64,7 @@
 #   - element expressions have the table's type ..... spec  setExpressionAt (its result <: the table's)
 #                                                                                        (was missing)
 #
-# Count: 22 rules missing before; 0 after.
+# Count: 23 rules missing before; 0 after.
 
 module BuilderValidationTest
 
@@ -211,6 +212,30 @@ module_bytes(mb) = (s = W.Serializer(); W.serialize(s, W.build(mb)); W.data(s))
         local _, f = body_of(mb)
         @test occursin("is not valid UTF-8", refusal(() -> W.var"export"(mb.exports, bad, f)))
         @test accepts(() -> W.var"export"(mb.exports, "f", f))
+    end
+
+    @testset "the name section's names are UTF-8" begin
+        local bad = String(UInt8[0x66, 0xff])
+        # one module per name, each otherwise valid: a function, a local, a type, a field, a global and the module
+        function named(; func = "f", local_ = "x", type = "S", field = "a", global_ = "g", module_ = "m")
+            local mb = W.ModuleBuilder(module_, nothing)
+            local s = W.define_struct(mb.types[], type; fields = [I.FieldType(i32)], brand = false)
+            s.field_names[0] = field
+            local f = W.define(mb.functions[], W.define_function(mb.types[], I.ValueType[], I.ValueType[]), func)
+            local b = W.body(f)
+            W.add_local(b, I.RefType(s; nullable = true); name = local_)
+            W.var"end"(b)
+            local g = W.define(mb.globals[], I.GlobalType(i32; mutable = false), global_)
+            W.i32_const(g.initializer, 0); W.var"end"(g.initializer)
+            return mb
+        end
+        @test !isempty(module_bytes(named()))
+        @test occursin("of function 0 is not valid UTF-8", refusal(() -> module_bytes(named(func = bad))))
+        @test occursin("of local 0 of function 0 is not valid UTF-8", refusal(() -> module_bytes(named(local_ = bad))))
+        @test occursin("of type 0 is not valid UTF-8", refusal(() -> module_bytes(named(type = bad))))
+        @test occursin("of field 0 of type 0 is not valid UTF-8", refusal(() -> module_bytes(named(field = bad))))
+        @test occursin("of global 0 is not valid UTF-8", refusal(() -> module_bytes(named(global_ = bad))))
+        @test occursin("of the module is not valid UTF-8", refusal(() -> module_bytes(named(module_ = bad))))
     end
 
     @testset "throw_ref takes an exnref" begin
