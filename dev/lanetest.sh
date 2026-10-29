@@ -16,6 +16,9 @@ LANE_LIMIT=900    # seconds, a literal naming the file when it is passed
 [ $# -ge 1 ] || { echo "lanetest: name a test file"; exit 2; }
 case "$1" in */src_tests.jl) echo "lanetest: the whole suite is the landing check's run, never a lane's"; exit 2;; esac
 cd "$(git rev-parse --show-toplevel)"
+# the lane's own depot, as dev/check.sh and dev/corpus.sh use (dev/depot.sh): a run on the shared one missed
+# a package the lane's depot holds ("Missing source file for Binaryen_jll", wt3-codegen-b, 09:49)
+. dev/depot.sh; wt_depot_export "$PWD"
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 slots="$common/wt-lanetest"; mkdir -p "$slots"
 prefix="taskpolicy -b"; mine=""
