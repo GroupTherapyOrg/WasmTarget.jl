@@ -1837,11 +1837,44 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext" @unported function restore_suspend_state_context(self::WasmBuilder.InstructionsBuilder, suspend_state_local::WasmBuilder.IR.Local, suspend_state_struct::WasmBuilder.IR.StructType, suspend_state_context_field::Int64, closures::Closures, context::Union{Nothing,Context}, this_local::Union{Nothing,WasmBuilder.IR.Local}; clone_context_for::Union{Nothing,NirBody} = nothing) end
+# a suspend state is an async or sync* function's (async.dart, sync_star.dart, its only callers), and
+# tasks are out of scope, Julia's verifier rejecting them (the Kernel table's AsyncMarker row)
+@parity "dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext" restore_suspend_state_context(self::WasmBuilder.InstructionsBuilder, suspend_state_local::WasmBuilder.IR.Local, suspend_state_struct::WasmBuilder.IR.StructType, suspend_state_context_field::Int64, closures::Closures, context::Union{Nothing,Context}, this_local::Union{Nothing,WasmBuilder.IR.Local}; clone_context_for::Union{Nothing,NirBody} = nothing)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext: a suspend state's context; tasks are out of scope, Julia's verifier rejecting them"), "restore_suspend_state_context")
 
-@parity "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain" @unported function restore_this_and_context_chain(self::WasmBuilder.InstructionsBuilder, innermost_context::Context, this_local::Union{Nothing,WasmBuilder.IR.Local}) end
+# the parent chain and `this` (when captured) restored from the innermost context, which is loaded;
+# dart's asserts are located rejections
+@parity "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain" function restore_this_and_context_chain(self::WasmBuilder.InstructionsBuilder, innermost_context::Context, this_local::Union{Nothing,WasmBuilder.IR.Local})::Nothing
+    local at = "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain"
+    local restored_this = false
+    local context = innermost_context
+    while context !== nothing
+        if context.contains_this
+            restored_this && reject!(Internal("$at: two contexts hold `this`"), at)
+            this_local === nothing && reject!(Internal("$at: a context holds `this`, but the function has no `this` local"), at)
+            WasmBuilder.local_get(self, context.current_local)
+            WasmBuilder.struct_get(self, context.struct_[], this_field_index(context))
+            WasmBuilder.ref_as_non_null(self)
+            WasmBuilder.local_set(self, this_local)
+            restored_this = true
+        end
+        local parent = context.parent
+        if parent !== nothing
+            is_empty(parent) && reject!(Internal("$at: the parent context is empty"), at)
+            WasmBuilder.local_get(self, context.current_local)
+            WasmBuilder.struct_get(self, context.struct_[], parent_field_index(context))
+            WasmBuilder.ref_as_non_null(self)
+            WasmBuilder.local_set(self, parent.current_local)
+        end
+        context = parent
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext" @unported function clone_function_level_context(self::WasmBuilder.InstructionsBuilder, closures::Closures, context::Context, function_node::NirBody) end
+# called only while restoring a suspend state (restoreSuspendStateContext), which tasks being out of
+# scope never reaches
+@parity "dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext" clone_function_level_context(self::WasmBuilder.InstructionsBuilder, closures::Closures, context::Context, function_node::NirBody)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext: a context cloned for a suspend state; tasks are out of scope, Julia's verifier rejecting them"), "clone_function_level_context")
 
 @parity "dart2wasm/lib/code_generator.dart:6035 MacroAssembler.invoke" function MacroAssembler_invoke(self::WasmBuilder.InstructionsBuilder, target::CallTarget; force_inline::Bool = false)::Vector{WasmBuilder.IR.ValueType}
     if supports_inlining(target)

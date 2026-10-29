@@ -133,4 +133,32 @@ end
     end
 end
 
+
+@testset "code_generator.dart: restoreThisAndContextChain reads `this` and the parents from the innermost context" begin
+    local mi = only(nb for nb in TRANSLATOR[].component if nb.ci.def.def.name === :is_int).ci.def
+    # an object holding an i32, the outer context holding it as `this`, the inner context its parent
+    local mb = B.ModuleBuilder("m", nothing)
+    local obj = B.define_struct(mb.types[], "obj"; fields = [IR.FieldType(IR.NumType_i32; mutable = false)], brand = false)
+    local outer = D.Context(mi, nothing, true)
+    local inner = D.Context(mi, outer, false)
+    outer.struct_[] = B.define_struct(mb.types[], "outer"; fields = [IR.FieldType(IR.RefType_def(obj; nullable = true))], brand = false)
+    inner.struct_[] = B.define_struct(mb.types[], "inner"; fields = [IR.FieldType(IR.RefType_def(outer.struct_[]; nullable = true))], brand = false)
+    local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[IR.NumType_i32], IR.ValueType[IR.NumType_i32]), "f")
+    local b = B.body(fb)
+    inner.current_local = B.add_local(b, IR.RefType_def(inner.struct_[]; nullable = true))
+    outer.current_local = B.add_local(b, IR.RefType_def(outer.struct_[]; nullable = true))
+    local this = B.add_local(b, IR.RefType_def(obj; nullable = false))
+    # inner = inner(outer(obj(x))), then the chain restored from inner alone, and this.x returned
+    B.local_get(b, B.locals(fb)[1]); B.struct_new(b, obj); B.struct_new(b, outer.struct_[]); B.struct_new(b, inner.struct_[])
+    B.local_set(b, inner.current_local)
+    D.restore_this_and_context_chain(b, inner, this)
+    B.local_get(b, this); B.struct_get(b, obj, 0)
+    B.var"end"(b)
+    B.var"export"(mb.exports, "f", fb)
+    local s = B.Serializer(); B.serialize(s, B.build(mb))
+    @test answers_native([WTRunner.RunCase("restore ($x)", B.data(s), (x,), x) for x in Int32[0, 7, -3]])
+    # `this` in a context of a function with no `this` local is WasmTarget's own defect
+    @test rejection(() -> D.restore_this_and_context_chain(b, outer, nothing)).rejection isa W.Internal
+end
+
 end
