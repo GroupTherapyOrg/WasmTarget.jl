@@ -135,7 +135,14 @@ _runner_facts(x::Int64) = (x + 1, (x > 0, x * 2), x < 0)
         throw(WasmTarget.RejectionError(WasmTarget.Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "codeunit")) : _RUN_ADD1
     local su = WTR.answer_cases("s", refused, _runner_facts, (Int64(3),), (4, "ab"))
     @test [c.label for c in su] == ["s(1,)", "s(2,)"] && su[2].native == "ab" && isempty(su[2].bytes)
-    @test occursin("marshals no String", WTR.run_cases(su[2:2])[1].why)
+    @test occursin("the runner does not read it yet, its reader is rejected", WTR.run_cases(su[2:2])[1].why)
+    # any reader rejected as Unported leaves its facts unread, named; an Internal propagates
+    local boxed(f, ts; optimize::Bool = true) = f isa WTR.Leaves && Int64 in map(p -> typeof(foldl(WTR._step, p; init = (4, true))), collect(typeof(f).parameters[2])) ?
+        throw(WasmTarget.RejectionError(WasmTarget.Unported("dart2wasm/lib/translator.dart:1597 Translator.convertType"), "boxing")) : _RUN_ADD1
+    local bx = WTR.answer_cases("b", boxed, _runner_facts, (Int64(3),), (4, true))
+    @test [c.label for c in bx] == ["b(1,)", "b(2,)"] && occursin("convertType", WTR.run_cases(bx[1:1])[1].why) && isempty(bx[2].unread)
+    local broken(f, ts; optimize::Bool = true) = throw(WasmTarget.RejectionError(WasmTarget.Internal("x"), "y"))
+    @test_throws WasmTarget.RejectionError WTR.answer_cases("i", broken, _runner_facts, (Int64(3),), (4, true))
     @test WTR._unwire(UInt8, "255") === 0xff && WTR._unwire(UInt8, "-1") isa String
     # a leaf of a type the runner does not marshal has no reader and fails, named
     @test isempty(cs[5].bytes) && occursin("marshals no Symbol", WTR.run_cases(cs[5:5])[1].why)

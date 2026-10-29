@@ -35,9 +35,11 @@ struct RunCase
     args::Tuple
     native::Any
     entry::String   # "" for the module's one exported function
+    unread::String  # why the runner cannot read this fact yet ("" when it can): its reader is rejected, unported
 end
+RunCase(label, bytes, optimized, args, native, entry) = RunCase(label, bytes, optimized, args, native, entry, "")
 RunCase(label, bytes, args, native; optimized::Vector{UInt8} = UInt8[], entry::String = "") =
-    RunCase(label, bytes, optimized, args, native, entry)
+    RunCase(label, bytes, optimized, args, native, entry, "")
 
 """
     compiled_case(label, compile, f, args, native; optimized = true) -> RunCase
@@ -109,28 +111,29 @@ function answer_cases(label::String, compile, f, args::Tuple, native; optimized:
     local paths = _leaves(native)
     local leaf(p) = foldl(_step, p; init = native)
     local out = RunCase[]
-    # one reader per leaf type, a String's leaves apart from the rest: until WasmTarget compiles ncodeunits and
-    # codeunit, a String reader is rejected (Unported or Unquarantined), and each String of the answer is then one
-    # case the runner does not read, "marshals no String" as before, never a failure of WT's
+    # one reader per leaf type, a String's leaves apart from the rest. A reader WasmTarget rejects as Unported or
+    # Unquarantined (a String's codeunit before its lowering, a boxed leaf before convertType's boxing) leaves its
+    # facts unread, each a case naming the rejection: the runner's gap, which only a :unread record admits; a
+    # String is then one such case, not its codeunits. Any other rejection is WT's and propagates.
+    local rejected(e) = nameof(typeof(e)) === :RejectionError && nameof(typeof(e.rejection)) in (:Unported, :Unquarantined)
     for (T, on_string) in unique(map(p -> (typeof(leaf(p)), _on_string(p)), paths))
         local ps = Tuple(filter(p -> typeof(leaf(p)) === T && _on_string(p) == on_string, paths))
         local readable = length(args) <= 3 && _wire_answer(leaf(first(ps))) !== nothing
-        local reader = nothing
-        if readable && on_string
-            reader = try
-                compiled_case(label, compile, Leaves{f,ps}(), (args..., Int64(1)), nothing; optimized)
+        local reader, why = nothing, ""
+        if readable
+            try
+                reader = compiled_case(label, compile, Leaves{f,ps}(), (args..., Int64(1)), nothing; optimized)
             catch e
-                (nameof(typeof(e)) === :RejectionError && nameof(typeof(e.rejection)) in (:Unported, :Unquarantined)) || rethrow()
-                nothing
+                rejected(e) || rethrow()
+                why = first(sprint(showerror, e), 300)
             end
-            if reader === nothing   # the Strings, each one unread case
-                for sp in unique(map(_string_of, ps))
-                    any(c -> c.label == "$label$sp", out) || push!(out, RunCase("$label$sp", UInt8[], UInt8[], (args..., Int64(1)), leaf(sp), ""))
-                end
-                continue
+        end
+        if !isempty(why)
+            for p in unique(on_string ? map(_string_of, ps) : collect(ps))
+                any(c -> c.label == "$label$p", out) ||
+                    push!(out, RunCase("$label$p", UInt8[], UInt8[], (args..., Int64(1)), leaf(p), "", "its reader is rejected: $why"))
             end
-        elseif readable
-            reader = compiled_case(label, compile, Leaves{f,ps}(), (args..., Int64(1)), nothing; optimized)
+            continue
         end
         for (k, p) in enumerate(ps)
             push!(out, RunCase("$label$p", readable ? reader.bytes : UInt8[], readable ? reader.optimized : UInt8[],
@@ -270,6 +273,10 @@ function run_cases(cases::AbstractVector{RunCase}; run_budget::Float64 = RUN_BUD
     local lines = String[]
     local sent = Tuple{Int,Bool}[]   # each line's case and whether it is the wasm-opt'd module
     for (i, c) in enumerate(cases)
+        if !isempty(c.unread)
+            results[i] = RunResult(c.label, false, "the runner does not read it yet, $(c.unread)")
+            continue
+        end
         local args = map(_wire, c.args)
         local rt = _wire_answer(c.native)
         if any(isnothing, args) || rt === nothing

@@ -16,9 +16,9 @@
 # stays green while its owner fixes it, and it must stay one (A51E4): once fixed it fails until re-recorded; the
 # list only shrinks, and grows only by a `Lowers-record:` line (L227). A :wt_bug never covers a module's
 # answer: a module that answers otherwise than native always fails (A53E2, D9's why). A case recorded :unread
-# compiles, and every fact of its answer the runner reads equals native's; a fact of a type test/runner.jl does
-# not marshal yet (a String, until its reader lands) is the runner's own gap, named, never WT's; once every fact
-# reads it fails until re-recorded :compiled. A case recorded :outside stands outside the strict subset by
+# compiles, and every fact of its answer the runner reads equals native's; a fact the runner cannot read yet (a
+# type test/runner.jl does not marshal, or a reader WasmTarget rejects as Unported or Unquarantined) is the
+# runner's own gap, named, never WT's; once every fact reads it fails until re-recorded :compiled. A case recorded :outside stands outside the strict subset by
 # Julia's verifier (D32), and must keep rejecting as OutsideSubset. A failing case prints its outcome, the
 # rejection's own text among it (A51E9). Native Julia's answer does not depend on
 # WasmTarget's code, so it runs for each case whose group text or record the change adds or edits against
@@ -1049,7 +1049,8 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_setter/checked3" => ((true, true, true), :outside),
     "dart_setter/checked_setter" => ((true,), :outside),
     "dart_setter/no_getter_call_runtime" => ((4, 6), :outside),
-    "dart_setter/override2" => ((42, 42, 42), :compiled),
+    # runner gap: its reader is rejected, "translator.dart:1597 Translator.convertType: unported … boxing a i64"
+    "dart_setter/override2" => ((42, 42, 42), :unread),
     "dart_setter/override3" => ((42, 21), :compiled),
     "dart_setter/override" => ((42,), :rejects),
     "dart_setter/setter0" => ((10, 30, 20, 20), :rejects),
@@ -1238,7 +1239,7 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
         end
     end
     # a case recorded :unread keeps a runner gap, a fact the runner does not marshal yet, and only that is admitted
-    local runner_gap(r) = startswith(r.why, "the runner marshals no ")
+    local runner_gap(r) = startswith(r.why, "the runner marshals no ") || startswith(r.why, "the runner does not read it yet")
     local gap_key_of = Dict(c.label => k for k in gap_keys for c in runs if c.label == k || startswith(c.label, k * "("))
     for k in sort!(collect(gap_keys))
         @testset "$k, recorded :unread, still holds a fact the runner does not read" begin
