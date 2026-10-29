@@ -26715,3 +26715,855 @@ _g("dart_assert", Any[
     ("with_message", (n::Int64) -> _at_with_message_main(n), Int64(1)),
     ("with_type_test_or_cast", (n::Int64) -> _at_with_type_test_or_cast(n), Int64(1)),
 ])
+
+# ---- tests/language/final: final fields and variables, their initialization order, an inherited setter past a final field, and final top-level declarations ----
+# dart's final local is a Julia local assigned once, an uninitialized one `local x`; a final top-level variable is
+# a const global; a final instance field is an immutable struct's field, or a `const` field of a mutable struct
+# beside dart's var fields. Julia has no field initializers and no superclass constructor: a constructor
+# function evaluates, in the order dart's specification gives, the class's own field initializers, then its
+# initializer list, then the superclass's field initializers, and Julia cannot subtype a concrete type, so a
+# subclass is its own struct. A getter or setter is a function of the receiver, a superclass's one a method on
+# the abstract type both share. dart's StringBuffer is an IOBuffer and substring(1, 2) the range 2:2.
+
+# field_initialization_order: each Mark writes its value and a dot to Mark.buffer, a static late StringBuffer
+global _fnl_fio_buffer::IOBuffer
+struct _FnlFioMark
+    value::String
+    function _FnlFioMark(value::String)
+        print(_fnl_fio_buffer, value, '.')
+        return new(value)
+    end
+end
+# OneField's field initializer, which a subclass reaches through its implicit super()
+_fnl_fio_one_field_init() = _FnlFioMark("a")
+struct _FnlFioOneField
+    a::_FnlFioMark
+end
+_FnlFioOneField() = _FnlFioOneField(_fnl_fio_one_field_init())
+struct _FnlFioTwoFields
+    a::_FnlFioMark
+    b::_FnlFioMark
+end
+function _FnlFioTwoFields()
+    a = _FnlFioMark("a")
+    b = _FnlFioMark("b")
+    return _FnlFioTwoFields(a, b)
+end
+struct _FnlFioInheritOneField
+    a::_FnlFioMark
+    b::_FnlFioMark
+end
+function _FnlFioInheritOneField()
+    b = _FnlFioMark("b")
+    a = _fnl_fio_one_field_init()
+    return _FnlFioInheritOneField(a, b)
+end
+mutable struct _FnlFioMixedFields
+    const a::_FnlFioMark
+    const b::_FnlFioMark
+    c::_FnlFioMark
+    const d::_FnlFioMark
+end
+# MixedFields(), MixedFields.c0() and MixedFields.c1(): b, c, d, then c's initializer-list value when there is
+# one, then super's a
+function _fnl_fio_mixed_fields(c_init::Bool)
+    b = _FnlFioMark("b")
+    c = _FnlFioMark("c")
+    d = _FnlFioMark("d")
+    c_init && (c = _FnlFioMark("cc"))
+    a = _fnl_fio_one_field_init()
+    return _FnlFioMixedFields(a, b, c, d)
+end
+# run: a fresh buffer, the constructor called n times, the buffer's text
+function _fnl_fio_run(callback, n::Int64)
+    global _fnl_fio_buffer = IOBuffer()
+    for _ in 1:n
+        callback()
+    end
+    return String(take!(_fnl_fio_buffer))
+end
+
+# field_override: A's getter and setter x over the field _x; B's final field x overrides the getter only, so
+# b.x = 21 reaches A's setter, and B's getter y reads _x
+abstract type _FnlFoA end
+mutable struct _FnlFoB <: _FnlFoA
+    _x::Int64
+    const x::Int64
+end
+_fnl_fo_x(a::_FnlFoA) = a._x
+_fnl_fo_x!(a::_FnlFoA, val::Int64) = (a._x = val; nothing)
+_fnl_fo_x(b::_FnlFoB) = b.x
+_fnl_fo_y(b::_FnlFoB) = b._x
+function _fnl_fo_main(n::Int64)
+    b = _FnlFoB(42n, 3n)
+    r1 = _fnl_fo_x(b)
+    _fnl_fo_x!(b, 21n)
+    return _dw_facts(r1, _fnl_fo_x(b), _fnl_fo_y(b))
+end
+
+# syntax: final top-level variables, a const Point whose + answers x, a cyclic-free chain A0, A1, a static final
+# C0.X holding a C1 whose final x is null, and B2 interpolating B1 and B0
+const _FNL_SY_F0 = 42
+const _FNL_SY_F2 = Int64(87)
+struct _FnlSyPoint
+    x::Any
+    y::Any
+end
+Base.:+(p::_FnlSyPoint, other::Int64) = p.x
+const _FNL_SY_P0 = _FnlSyPoint(0, 0)
+const _FNL_SY_P1 = _FnlSyPoint(0, 0) + 1
+const _FNL_SY_P2 = _FnlSyPoint(0, 0)
+const _FNL_SY_P3 = _FnlSyPoint(0, 0) + 1
+const _FNL_SY_A0 = 42
+const _FNL_SY_A1 = _FNL_SY_A0 + 1
+struct _FnlSyC1
+    x::Any
+end
+_FnlSyC1() = _FnlSyC1(nothing)
+const _FNL_SY_C0_X = _FnlSyC1()
+const _FNL_SY_B0 = 42
+const _FNL_SY_B1 = "Hello"
+const _FNL_SY_B2 = "$(_FNL_SY_B1) $(_FNL_SY_B0)"
+function _fnl_sy_main(n::Int64)
+    f0 = 42n
+    local f1
+    f2::Int64 = 87n
+    local f3::Int64
+    ps = (_FNL_SY_P0, _FNL_SY_P1, _FNL_SY_P2, _FNL_SY_P3, nothing)
+    as = (_FNL_SY_A0, _FNL_SY_A1, nothing)
+    cs = (_FNL_SY_C0_X, nothing)
+    return _dw_facts(f0, f2, _FNL_SY_F0 == 42n, _FNL_SY_F2 == 87n,
+                     ps[n] isa _FnlSyPoint, ps[n + 1] isa Int64, ps[n + 2] isa _FnlSyPoint, ps[n + 3] isa Int64,
+                     as[n] isa Int64, as[n + 1] isa Int64, cs[n] isa _FnlSyC1, _FNL_SY_B2 == "Hello $(42n)")
+end
+
+# used_in_try: a final local read inside a try whose catch rethrows, in a loop left by break
+function _fnl_ut_main(n::Int64)
+    r = false
+    while true
+        a = "fff"[(n + 1):(n + 1)]
+        try
+            r = a == "f"
+        catch e
+            rethrow()
+        end
+        break
+    end
+    return _dw_facts(r)
+end
+
+_g("dart_final", Any[
+    ("field_initialization_order", (n::Int64) -> _dw_facts(_fnl_fio_run(() -> _FnlFioOneField(), n),
+        _fnl_fio_run(() -> _FnlFioTwoFields(), n), _fnl_fio_run(() -> _FnlFioInheritOneField(), n),
+        _fnl_fio_run(() -> _fnl_fio_mixed_fields(false), n), _fnl_fio_run(() -> _fnl_fio_mixed_fields(true), n),
+        _fnl_fio_run(() -> _fnl_fio_mixed_fields(true), n)), Int64(1)),
+    ("field_override", (n::Int64) -> _fnl_fo_main(n), Int64(1)),
+    ("syntax", (n::Int64) -> _fnl_sy_main(n), Int64(1)),
+    ("used_in_try", (n::Int64) -> _fnl_ut_main(n), Int64(1)),
+])
+
+# ---- tests/language/abstract: abstract members resolved in subclasses, an abstract == left to Object's, and an abstract override adding an optional argument ----
+# dart's abstract class is a Julia abstract type, and a class that has subclasses is one too, since Julia cannot
+# subtype a concrete type; the instantiated class is a struct below it. A getter, setter or method is a function
+# whose first argument is the receiver: a concrete member is a method on the type that declares it, and an
+# abstract member is no method at all, so a call reaches the subclass's method by dispatch. `super.m()` is invoke
+# of the superclass's method. An abstract operator == leaves Base's ==, which falls back to ===, and a mixin's
+# members are methods on an abstract type both of its users subtype. A cascade is a block yielding its receiver.
+
+# getter2: A's getter x answers 100; abstract B declares the getter x and a setter storing _x; C's getter is super.x.
+# GetterConcrete's getters and setters foo and bar, whose abstract re-declarations in the two subclasses add
+# nothing
+abstract type _AbtG2A end
+abstract type _AbtG2B <: _AbtG2A end
+mutable struct _AbtG2C <: _AbtG2B
+    _x::Int64
+end
+_abt_g2_x(a::_AbtG2A) = 100
+_abt_g2_x!(b::_AbtG2B, v::Int64) = (b._x = v; nothing)
+_abt_g2_x(c::_AbtG2C) = invoke(_abt_g2_x, Tuple{_AbtG2A}, c)
+abstract type _AbtG2GetterConcrete end
+mutable struct _AbtG2AbstractGetterOverride1 <: _AbtG2GetterConcrete
+    _foo::Any
+    _bar::Any
+end
+mutable struct _AbtG2AbstractGetterOverride2 <: _AbtG2GetterConcrete
+    _foo::Any
+    _bar::Any
+end
+_abt_g2_foo(g::_AbtG2GetterConcrete) = g._foo
+_abt_g2_foo!(g::_AbtG2GetterConcrete, x) = (g._foo = x)
+_abt_g2_bar(g::_AbtG2GetterConcrete) = g._bar
+_abt_g2_bar!(g::_AbtG2GetterConcrete, x) = (g._bar = x)
+function _abt_g2_main(n::Int64)
+    b::_AbtG2B = _AbtG2C(0)
+    _abt_g2_x!(b, 42n)
+    bf = _dw_facts(b._x, _abt_g2_x(b))
+    c1 = (t = _AbtG2AbstractGetterOverride1(nothing, nothing); _abt_g2_foo!(t, 123n); _abt_g2_bar!(t, 456n); t)
+    c2 = (t = _AbtG2AbstractGetterOverride2(nothing, nothing); _abt_g2_foo!(t, 123n); _abt_g2_bar!(t, 456n); t)
+    return (bf, _dw_facts(_abt_g2_foo(c1), _abt_g2_bar(c1)), _dw_facts(_abt_g2_foo(c2), _abt_g2_bar(c2)))
+end
+
+# method: the top-level getter length, setter height and function width throw; A's useLength, setHeight and
+# useWidth reach A1's field length, field height and method width, each a method of one more argument than the
+# top-level one
+_abt_mt_length() = error("error: top-level getter called")
+_abt_mt_height!(x) = error("error: top-level setter called")
+_abt_mt_width() = error("error: top-level function called")
+abstract type _AbtMtA end
+_abt_mt_use_length(a::_AbtMtA) = _abt_mt_length(a)
+_abt_mt_set_height(a::_AbtMtA, x) = _abt_mt_height!(a, x)
+_abt_mt_use_width(a::_AbtMtA) = _abt_mt_width(a)
+mutable struct _AbtMtA1 <: _AbtMtA
+    length::Int64
+    height::Union{Nothing,Int64}
+end
+_AbtMtA1(length::Int64) = _AbtMtA1(length, nothing)
+_abt_mt_length(a::_AbtMtA1) = a.length
+_abt_mt_height!(a::_AbtMtA1, x) = (a.height = x)
+_abt_mt_width(a::_AbtMtA1) = 345
+function _abt_mt_main(n::Int64)
+    a = _AbtMtA1(123n)
+    r1 = _abt_mt_use_length(a)
+    _abt_mt_set_height(a, 234n)
+    return _dw_facts(r1, a.height, _abt_mt_use_width(a))
+end
+
+# object_method: B's abstract operator == leaves C with Base's ==, identity, so A's noSuchMethod is never reached
+abstract type _AbtOmA end
+abstract type _AbtOmB <: _AbtOmA end
+mutable struct _AbtOmC <: _AbtOmB end
+function _abt_om_main(n::Int64)
+    a = _AbtOmC[_AbtOmC()]
+    c::_AbtOmC = a[n]
+    push!(a, c)
+    return _dw_facts(c == a[n + 1])
+end
+
+# override_adds_optional_args: abstract B re-declares A's foo() as foo([x]); C's foo([x]) calls super.foo(), A's
+abstract type _AbtOaA end
+abstract type _AbtOaB <: _AbtOaA end
+struct _AbtOaC <: _AbtOaB end
+_abt_oa_foo(a::_AbtOaA) = nothing
+_abt_oa_foo(c::_AbtOaC, x = nothing) = invoke(_abt_oa_foo, Tuple{_AbtOaA}, c)
+_abt_oa_f(b::_AbtOaB, n::Int64) = _abt_oa_foo(b, 42n)
+
+_g("dart_abstract", Any[
+    ("getter2", (n::Int64) -> _abt_g2_main(n), Int64(1)),
+    ("method", (n::Int64) -> _abt_mt_main(n), Int64(1)),
+    ("object_method", (n::Int64) -> _abt_om_main(n), Int64(1)),
+    ("override_adds_optional_args", (n::Int64) -> _dw_facts(_abt_oa_f(_AbtOaC(), n)), Int64(1)),
+])
+
+# ---- tests/language/null: null as a receiver, in == and is, as a cast operand, and its toString and runtimeType ----
+# dart's null is Julia's `nothing`, of type Nothing. A dynamic call on null that dart answers with
+# NoSuchMethodError throws Julia's MethodError, and a failing `as` is a typeassert `x::T` that throws TypeError.
+# dart's Object, Object? and dynamic are all Julia's Any, which nothing belongs to, so `null is Object` is true in
+# Julia where dart's is false, and `null as Object` succeeds; num is Real, List AbstractVector, a type argument T
+# a struct's type parameter. Julia's == dispatches on its left operand, so a user == method runs for `x == nothing`
+# where dart's `== null` never calls it. string(nothing) is "nothing" and the type's name "Nothing", where dart
+# answers "null" and "Null". dart has no bound method in Julia: a tear-off is a closure. dart's confuse(x), which
+# throws [x] and catches it to hide x from the optimizer, is kept, and its clock check is n.
+_nl_throws(f) = try; f(); false; catch; true; end
+_nl_throws_method_error(f) = try; f(); false; catch e; e isa MethodError; end
+_nl_throws_type_error(f) = try; f(); false; catch e; e isa TypeError; end
+_nl_confuse(x) = try; throw(Any[x]); catch e; e[1]; end
+
+# access_error: variable++ on a null dynamic local, and a helper returning parameter++, throw NoSuchMethodError
+function _nl_ae_test_null_variable(n::Int64)
+    variable::Any = n == 1 ? nothing : n
+    exception_caught = false
+    wrong_exception_caught = false
+    try
+        variable = variable + 1
+    catch ex
+        if ex isa MethodError
+            exception_caught = true
+        else
+            wrong_exception_caught = true
+        end
+    end
+    return _dw_facts(exception_caught, wrong_exception_caught)
+end
+_nl_ae_helper_function(parameter) = (t = parameter; parameter = t + 1; t)
+function _nl_ae_test_null_function_call(n::Int64)
+    variable::Any = n == 1 ? nothing : n
+    exception_caught = false
+    wrong_exception_caught = false
+    try
+        variable = _nl_ae_helper_function(variable)
+    catch ex
+        if ex isa MethodError
+            exception_caught = true
+        else
+            wrong_exception_caught = true
+        end
+    end
+    return _dw_facts(exception_caught, wrong_exception_caught)
+end
+
+# inline: foo() on the null global throws; once the global holds an A, foo() answers it
+mutable struct _NlInA end
+_nl_in_foo(a::_NlInA) = a
+global _nl_in_global::Any = nothing
+function _nl_in_main(n::Int64)
+    global _nl_in_global = n == 1 ? nothing : _NlInA()
+    r1 = _nl_throws(() -> _nl_in_foo(_nl_in_global))
+    global _nl_in_global = _NlInA()
+    return _dw_facts(r1, _nl_in_global == _nl_in_foo(_nl_in_global))
+end
+
+# is2: Test<T>.foo(a) is a is T, for T Object, Object?, dynamic and int, and null is List<Object>
+struct _NlIs2Test{T} end
+_nl_is2_foo(::_NlIs2Test{T}, a) where {T} = a isa T
+function _nl_is2_main(n::Int64)
+    a = n == 1 ? nothing : n
+    return _dw_facts(_nl_is2_foo(_NlIs2Test{Any}(), a), _nl_is2_foo(_NlIs2Test{Union{Nothing,Any}}(), a),
+                     _nl_is2_foo(_NlIs2Test{Any}(), a), _nl_is2_foo(_NlIs2Test{Int64}(), a), a isa Vector{Any})
+end
+
+# is: null is each type, written with the literal and through test's argument, and other values are not Null
+struct _NlIsExpect end
+mutable struct _NlIsObject end
+_nl_is_test(x) = _dw_facts(x isa Any, x isa Union{Nothing,Any}, x isa Nothing, x isa Int64, x isa Bool, x isa Real,
+                           x isa String, x isa AbstractVector, x isa _NlIsExpect)
+_nl_is_test_negative(x) = x isa Nothing
+function _nl_is_main(n::Int64)
+    literal = _dw_facts(nothing isa Any, nothing isa Union{Nothing,Any}, nothing isa Nothing, nothing isa Int64,
+                        nothing isa Bool, nothing isa Real, nothing isa String, nothing isa AbstractVector,
+                        nothing isa _NlIsExpect)
+    test = _nl_is_test(n == 1 ? nothing : n)
+    others = _dw_facts(n isa Nothing, string(n) isa Nothing, (n == 1) isa Nothing, (n != 1) isa Nothing,
+                       _NlIsObject() isa Nothing)
+    negative = _dw_facts(_nl_is_test_negative(n), _nl_is_test_negative(string(n)), _nl_is_test_negative(n == 1),
+                         _nl_is_test_negative(n != 1), _nl_is_test_negative(_NlIsObject()))
+    return (literal, test, others, negative)
+end
+
+# method: C.foo(s) answers s.hashCode, for a String and for null
+struct _NlMtC end
+_nl_mt_foo(c::_NlMtC, s) = hash(s)
+function _nl_mt_main(n::Int64)
+    c = _NlMtC()
+    return _dw_facts(_nl_mt_foo(c, "foo"^n) !== nothing, _nl_mt_foo(c, n == 1 ? nothing : n) !== nothing)
+end
+
+# null2: the runtime type's name of null, as a literal and through confuse
+_nl_n2_main(n::Int64) = _dw_facts(string(typeof(nothing)), string(typeof(_nl_confuse(n == 1 ? nothing : n))))
+
+# null: == and identical with null, an == that must not be called, is and is!, a generic is and as, as casts,
+# toString and interpolation, runtimeType, comparisons through local functions, hashCode and a toString tear-off,
+# run 100 times
+struct _NlNtEqualsNotCalled end
+Base.hash(::_NlNtEqualsNotCalled, h::UInt) = error("And don't warn!")
+Base.:(==)(::_NlNtEqualsNotCalled, other) = error("SHOULD NOT GET HERE")
+struct _NlNtGeneric{T} end
+_nl_nt_test(::_NlNtGeneric{T}, o) where {T} = o isa T
+_nl_nt_cast(::_NlNtGeneric{T}, o) where {T} = o::T
+_nl_nt_type(::_NlNtGeneric{T}) where {T} = T
+struct _NlNtGeneric2{T,S} end
+_nl_nt_test(::_NlNtGeneric2{T,S}, o) where {T,S} = _nl_nt_test(_NlNtGeneric{T}(), o)
+_nl_nt_cast(::_NlNtGeneric2{T,S}, o) where {T,S} = _nl_nt_cast(_NlNtGeneric{T}(), o)
+_nl_nt_type(::_NlNtGeneric2{T,S}) where {T,S} = _nl_nt_type(_NlNtGeneric{T}())
+function _nl_nt_not_declared end
+function _nl_nt_test_once(n::Int64)
+    foo(obj) = obj == nothing
+    compare_to_null(value) = nothing == value
+    compare_with_null(value) = value == nothing
+    val = n
+    obj = _nl_confuse(n == 1 ? nothing : n)
+    eq = _dw_facts(obj === nothing, nothing == nothing, nothing == obj, obj == nothing, obj == obj)
+    enc = _dw_facts(_nl_throws(() -> _NlNtEqualsNotCalled() == nothing), nothing == _NlNtEqualsNotCalled(),
+                    _nl_throws(() -> _NlNtEqualsNotCalled() == obj), obj == _NlNtEqualsNotCalled())
+    lits = _dw_facts(nothing == false, nothing == 0, nothing == "", nothing == Any[], nothing == 0.0, nothing == -0.0,
+                     nothing == NaN)
+    objs = _dw_facts(obj == false, obj == 0, obj == "", obj == Any[], obj == 0.0, obj == -0.0, obj == NaN)
+    t1 = nothing == nothing
+    t2 = nothing == 0
+    t3 = false == nothing
+    consts = _dw_facts(t1, t2, t3)
+    foos = _dw_facts(foo(obj), foo(nothing), obj !== nothing ? foo(nothing) : foo(obj))
+    is = _dw_facts(nothing isa Nothing, obj isa Nothing, nothing isa Any, obj isa Any, nothing isa Union{Nothing,Any},
+                   obj isa Union{Nothing,Any}, nothing isa Any, obj isa Any, nothing isa String, obj isa String,
+                   0 isa Nothing, !(nothing isa Nothing), !(obj isa Nothing), !(nothing isa Any), !(obj isa Any),
+                   !(nothing isa Union{Nothing,Any}), !(obj isa Union{Nothing,Any}), !(nothing isa Any), !(obj isa Any),
+                   !(nothing isa String), !(obj isa String), !(0 isa Nothing))
+    generic = _dw_facts(_nl_nt_test(_NlNtGeneric{Nothing}(), nothing), _nl_nt_test(_NlNtGeneric{Nothing}(), 42n),
+                        _nl_nt_test(_NlNtGeneric2{Nothing,Int64}(), nothing), _nl_nt_test(_NlNtGeneric2{Nothing,Int64}(), 42n))
+    casts = _dw_facts(nothing::Nothing, _nl_throws_type_error(() -> nothing::Any), nothing::Union{Nothing,Any},
+                      _nl_throws_type_error(() -> nothing::Int64), nothing::Union{Nothing,Int64},
+                      _nl_throws_type_error(() -> (42n)::Nothing), _nl_nt_cast(_NlNtGeneric{Nothing}(), nothing),
+                      _nl_nt_cast(_NlNtGeneric{Any}(), nothing), _nl_nt_cast(_NlNtGeneric{Union{Nothing,Int64}}(), nothing))
+    obj_casts = _dw_facts(obj::Nothing, _nl_throws_type_error(() -> obj::Any), obj::Union{Nothing,Any},
+                          _nl_throws_type_error(() -> obj::Int64), obj::Union{Nothing,Int64},
+                          _nl_nt_cast(_NlNtGeneric{Nothing}(), obj), _nl_nt_cast(_NlNtGeneric{Any}(), obj),
+                          _nl_nt_cast(_NlNtGeneric{Union{Nothing,Int64}}(), obj))
+    strings = _dw_facts(string(nothing), "$(nothing)", string(obj), "$(obj)")
+    types = _dw_facts(typeof(nothing) === Nothing, typeof(obj) === Nothing, _nl_nt_type(_NlNtGeneric{Nothing}()) === Nothing,
+                      _nl_nt_type(_NlNtGeneric2{Nothing,Int64}()) === Nothing)
+    compares = _dw_facts(compare_to_null(val), compare_to_null(obj), compare_with_null(val), compare_with_null(obj))
+    obj = _nl_confuse(n == 1 ? nothing : n)
+    to_string = () -> string(nothing)
+    extraction = _dw_facts(hash(nothing) == hash(obj), to_string(), to_string(()...),
+                           _nl_throws(() -> _nl_nt_not_declared(obj)))
+    return (eq, enc, lits, objs, consts, foos, is, generic, casts, obj_casts, strings, types, compares, extraction)
+end
+function _nl_nt_main(n::Int64)
+    r = _nl_nt_test_once(n)
+    for i in 1:99
+        r = _nl_nt_test_once(n)
+    end
+    return r
+end
+
+# to_string2 and to_string: toString() of a null receiver is a String, and its tear-off is not null
+struct _NlTs2A end
+_nl_ts2_foo(n::Int64)::Union{Nothing,_NlTs2A} = n == 1 ? nothing : _NlTs2A()
+function _nl_ts2_main(n::Int64)
+    null_obj = _nl_ts2_foo(n)
+    x = string(null_obj)
+    y = () -> string(null_obj)
+    return _dw_facts(x isa String, y !== nothing)
+end
+function _nl_ts_main(n::Int64)
+    null_obj::Any = n == 1 ? nothing : n
+    x = string(null_obj)
+    y = () -> string(null_obj)
+    return _dw_facts(x isa String, y !== nothing)
+end
+
+_g("dart_null", Any[
+    ("access_error", (n::Int64) -> (_nl_ae_test_null_variable(n), _nl_ae_test_null_function_call(n)), Int64(1)),
+    ("inline", (n::Int64) -> _nl_in_main(n), Int64(1)),
+    ("is2", (n::Int64) -> _nl_is2_main(n), Int64(1)),
+    ("is", (n::Int64) -> _nl_is_main(n), Int64(1)),
+    ("method", (n::Int64) -> _nl_mt_main(n), Int64(1)),
+    ("no_such_method", (n::Int64) -> _dw_facts(_nl_throws_method_error(() -> -(n == 1 ? nothing : n))), Int64(1)),
+    ("null2", (n::Int64) -> _nl_n2_main(n), Int64(1)),
+    ("null", (n::Int64) -> _nl_nt_main(n), Int64(1)),
+    ("to_string2", (n::Int64) -> _nl_ts2_main(n), Int64(1)),
+    ("to_string", (n::Int64) -> _nl_ts_main(n), Int64(1)),
+])
+
+# ---- tests/language/null_aware: ?. reads, assignments, compound assignments, increments and calls, ?[] and null shortening ----
+# dart's `e1?.m` is written as dart's specification states it, `((x) => x == null ? null : x.m)(e1)`: e1 is read
+# once into a local, and when it is nothing the whole selector chain after ?. (null shortening) is skipped and the
+# value is nothing. `?[]` is the same with getindex. A class's static variable is a typed global and `C?.v` is
+# C.v, since a type is never null; a late static is a typed global declared without a value. A getter, setter or
+# method is a function of the receiver, operator + and [] are Base.:+ and Base.getindex. Julia has no ++ or --:
+# `x.v++` reads v, stores v + 1 and yields the old value, `++x.v` is x.v += 1. dart's `e!` is Base's something(e),
+# `??` is @something with Some(e2) last where the result may be null, and `??=` is written as dart's specification
+# states it. A class with subclasses is an abstract type, and an interface a second supertype has no Julia form, so
+# F and H, used only in static types, are left out. The statements whose static-type checks are compile-time
+# errors are dropped, as are expectStaticType checks, which have no run-time effect. The prefix h is the helper
+# library conditional_access_helper.
+_nwa_bad() = error("Should not be executed")
+
+# conditional_access_helper (imported as h): topLevelVar, topLevelFunction, C's statics, nullC, D.staticE, and E
+# whose + and - answer an I
+global _nwa_h_top_level_var::Any = nothing
+_nwa_h_top_level_function() = nothing
+struct _NwaHC end
+global _nwa_h_c_static_int::Int64
+global _nwa_h_c_static_nullable::Union{Nothing,Int64} = nothing
+_nwa_h_c_static_f(callback) = callback()
+_nwa_h_c_static_g(callback)::Union{Nothing,Int64} = callback()
+_nwa_h_null_c()::Union{Nothing,_NwaHC} = nothing
+abstract type _NwaHEAbs end
+abstract type _NwaHGAbs <: _NwaHEAbs end
+mutable struct _NwaHE <: _NwaHEAbs end
+mutable struct _NwaHG <: _NwaHGAbs end
+mutable struct _NwaHI <: _NwaHGAbs end
+Base.:+(::_NwaHEAbs, i::Int64)::_NwaHGAbs = _NwaHI()
+Base.:-(::_NwaHEAbs, i::Int64)::_NwaHGAbs = _NwaHI()
+global _nwa_h_d_static_e::_NwaHEAbs
+
+# access: e1?.v on null and on a C, C?.staticInt, h.C?.staticInt, the same stored into int? locals, and
+# (C.staticInt?.floor())!
+abstract type _NwaAcB end
+mutable struct _NwaAcC <: _NwaAcB
+    v::Union{Nothing,Int64}
+end
+global _nwa_ac_c_static_int::Union{Nothing,Int64} = nothing
+_nwa_ac_null_c()::Union{Nothing,_NwaAcC} = nothing
+function _nwa_ac_main(n::Int64)
+    global _nwa_ac_c_static_int, _nwa_h_c_static_int
+    (x = _nwa_ac_null_c(); x === nothing ? nothing : x.v)
+    r1 = (x = _nwa_ac_null_c(); x === nothing ? nothing : x.v)
+    r2 = (x = _NwaAcC(n); x === nothing ? nothing : x.v)
+    _nwa_ac_c_static_int = n
+    r3 = _nwa_ac_c_static_int
+    _nwa_h_c_static_int = n
+    r4 = _nwa_h_c_static_int
+    i1::Union{Nothing,Int64} = (x = _NwaAcC(n); x === nothing ? nothing : x.v)
+    _nwa_ac_c_static_int = n
+    i2::Union{Nothing,Int64} = _nwa_ac_c_static_int
+    _nwa_h_c_static_int = n
+    i3::Union{Nothing,Int64} = _nwa_h_c_static_int
+    y::Int64 = something((s = _nwa_ac_c_static_int; s === nothing ? nothing : floor(s)))
+    return _dw_facts(r1, r2, r3, r4, i1, i2, i3, y)
+end
+
+# assignment: e1?.v = e2 and e1?.v op= e2 on null, on a C and on a D whose v is an E, and the same on statics
+abstract type _NwaAsB end
+mutable struct _NwaAsC <: _NwaAsB
+    v::Int64
+end
+global _nwa_as_c_static_int::Int64
+abstract type _NwaAsEAbs end
+abstract type _NwaAsGAbs <: _NwaAsEAbs end
+mutable struct _NwaAsE <: _NwaAsEAbs end
+mutable struct _NwaAsG <: _NwaAsGAbs end
+mutable struct _NwaAsI <: _NwaAsGAbs end
+Base.:+(::_NwaAsEAbs, i::Int64)::_NwaAsGAbs = _NwaAsI()
+mutable struct _NwaAsD
+    v::_NwaAsEAbs
+end
+global _nwa_as_d_static_e::_NwaAsEAbs
+_nwa_as_null_c()::Union{Nothing,_NwaAsC} = nothing
+function _nwa_as_main(n::Int64)
+    global _nwa_as_c_static_int, _nwa_h_c_static_int, _nwa_as_d_static_e, _nwa_h_d_static_e
+    (x = _nwa_as_null_c(); x === nothing ? nothing : (x.v = n))
+    r1 = (x = _nwa_as_null_c(); x === nothing ? nothing : (x.v = _nwa_bad()))
+    c = _NwaAsC(n)
+    r2 = _dw_facts((x = c; x === nothing ? nothing : (x.v = 2n)), c.v)
+    _nwa_as_c_static_int = n
+    v3 = (_nwa_as_c_static_int = 2n)
+    r3 = _dw_facts(v3, _nwa_as_c_static_int)
+    _nwa_h_c_static_int = n
+    v4 = (_nwa_h_c_static_int = 2n)
+    r4 = _dw_facts(v4, _nwa_h_c_static_int)
+    d::Union{Nothing,_NwaAsD} = _NwaAsD(_NwaAsE())
+    g = _NwaAsG()
+    f1 = (x = d; x === nothing ? nothing : (x.v = g))
+    _nwa_as_d_static_e = _NwaAsE()
+    g2 = _NwaAsG()
+    f2 = (_nwa_as_d_static_e = g2)
+    _nwa_h_d_static_e = _NwaHE()
+    g3 = _NwaHG()
+    f3 = (_nwa_h_d_static_e = g3)
+    r5 = _dw_facts(f1 === g, f2 === g2, f3 === g3)
+    r6 = (x = _nwa_as_null_c(); x === nothing ? nothing : (x.v += _nwa_bad()))
+    c = _NwaAsC(n)
+    r7 = _dw_facts((x = c; x === nothing ? nothing : (x.v += 2n)), c.v)
+    _nwa_as_c_static_int = n
+    r8 = _dw_facts((_nwa_as_c_static_int += 2n), _nwa_as_c_static_int)
+    d2 = _NwaAsD(_NwaAsE())
+    f4 = (x = d2; x === nothing ? nothing : (x.v += 1))
+    _nwa_as_d_static_e = _NwaAsE()
+    f5 = (_nwa_as_d_static_e += 1)
+    _nwa_h_d_static_e = _NwaHE()
+    f6 = (_nwa_h_d_static_e += 1)
+    r9 = _dw_facts(d2.v === f4, _nwa_as_d_static_e === f5, _nwa_h_d_static_e === f6)
+    return (r1, r2, r3, r4, r5, r6, r7, r8, r9)
+end
+
+# dynamic: l?.first?.abs() on a null dynamic, on a list whose first element is null, and on one whose first is -1
+function _nwa_dy_main(n::Int64)
+    l::Any = nothing
+    v1 = l === nothing ? nothing : (f = first(l); f === nothing ? nothing : abs(f))
+    l = Any[nothing, -2n, -3n]
+    v2 = l === nothing ? nothing : (f = first(l); f === nothing ? nothing : abs(f))
+    l = Any[-n, -2n, -3n]
+    v3 = l === nothing ? nothing : (f = first(l); f === nothing ? nothing : abs(f))
+    return _dw_facts(v1, v2, v3)
+end
+
+# increment_decrement: e1?.v++, e1?.v--, ++e1?.v and --e1?.v on null, on a C and on a D whose v is an E, and the
+# same on C's and D's statics and h's
+mutable struct _NwaIdC
+    v::Int64
+end
+global _nwa_id_c_static_int::Int64
+abstract type _NwaIdEAbs end
+abstract type _NwaIdGAbs <: _NwaIdEAbs end
+mutable struct _NwaIdE <: _NwaIdEAbs end
+mutable struct _NwaIdG <: _NwaIdGAbs end
+mutable struct _NwaIdI <: _NwaIdGAbs end
+Base.:+(::_NwaIdEAbs, i::Int64)::_NwaIdGAbs = _NwaIdI()
+Base.:-(::_NwaIdEAbs, i::Int64)::_NwaIdGAbs = _NwaIdI()
+mutable struct _NwaIdD
+    v::_NwaIdEAbs
+end
+global _nwa_id_d_static_e::_NwaIdEAbs
+_nwa_id_null_c()::Union{Nothing,_NwaIdC} = nothing
+# e1?.v++, e1?.v--, ++e1?.v and --e1?.v, each with e1 read once into x
+_nwa_id_post_inc(x) = x === nothing ? nothing : (t = x.v; x.v = t + 1; t)
+_nwa_id_post_dec(x) = x === nothing ? nothing : (t = x.v; x.v = t - 1; t)
+_nwa_id_pre_inc(x) = x === nothing ? nothing : (x.v += 1)
+_nwa_id_pre_dec(x) = x === nothing ? nothing : (x.v -= 1)
+function _nwa_id_postfix(n::Int64)
+    global _nwa_id_c_static_int, _nwa_h_c_static_int, _nwa_id_d_static_e, _nwa_h_d_static_e
+    x = _nwa_id_null_c(); x === nothing ? nothing : (x.v = n)
+    r1 = _nwa_id_post_inc(_nwa_id_null_c())
+    c::Union{Nothing,_NwaIdC} = _NwaIdC(n)
+    r2 = _dw_facts(_nwa_id_post_inc(c), something(c).v)
+    _nwa_id_c_static_int = n
+    r3 = _dw_facts((t = _nwa_id_c_static_int; _nwa_id_c_static_int = t + 1; t), _nwa_id_c_static_int)
+    _nwa_h_c_static_int = n
+    r4 = _dw_facts((t = _nwa_h_c_static_int; _nwa_h_c_static_int = t + 1; t), _nwa_h_c_static_int)
+    e1 = _NwaIdE()
+    d::Union{Nothing,_NwaIdD} = _NwaIdD(e1)
+    e2 = _nwa_id_post_inc(d)
+    e3 = _NwaIdE()
+    _nwa_id_d_static_e = e3
+    e4 = (t = _nwa_id_d_static_e; _nwa_id_d_static_e = t + 1; t)
+    e5 = _NwaHE()
+    _nwa_h_d_static_e = e5
+    e6 = (t = _nwa_h_d_static_e; _nwa_h_d_static_e = t + 1; t)
+    r5 = _dw_facts(e1 === e2, e3 === e4, e5 === e6)
+    r6 = _nwa_id_post_dec(_nwa_id_null_c())
+    c = _NwaIdC(n)
+    r7 = _dw_facts(_nwa_id_post_dec(c), something(c).v)
+    _nwa_id_c_static_int = n
+    r8 = _dw_facts((t = _nwa_id_c_static_int; _nwa_id_c_static_int = t - 1; t), _nwa_id_c_static_int)
+    _nwa_h_c_static_int = n
+    r9 = _dw_facts((t = _nwa_h_c_static_int; _nwa_h_c_static_int = t - 1; t), _nwa_h_c_static_int)
+    e1 = _NwaIdE()
+    d = _NwaIdD(e1)
+    e2 = _nwa_id_post_dec(d)
+    e3 = _NwaIdE()
+    _nwa_id_d_static_e = e3
+    e4 = (t = _nwa_id_d_static_e; _nwa_id_d_static_e = t - 1; t)
+    e5 = _NwaHE()
+    _nwa_h_d_static_e = e5
+    e6 = (t = _nwa_h_d_static_e; _nwa_h_d_static_e = t - 1; t)
+    r10 = _dw_facts(e1 === e2, e3 === e4, e5 === e6)
+    return (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10)
+end
+function _nwa_id_prefix(n::Int64)
+    global _nwa_id_c_static_int, _nwa_h_c_static_int, _nwa_id_d_static_e, _nwa_h_d_static_e
+    r1 = _nwa_id_pre_inc(_nwa_id_null_c())
+    c::Union{Nothing,_NwaIdC} = _NwaIdC(n)
+    r2 = _dw_facts(_nwa_id_pre_inc(c), something(c).v)
+    _nwa_id_c_static_int = n
+    r3 = _dw_facts((_nwa_id_c_static_int += 1), _nwa_id_c_static_int)
+    _nwa_h_c_static_int = n
+    r4 = _dw_facts((_nwa_h_c_static_int += 1), _nwa_h_c_static_int)
+    d::Union{Nothing,_NwaIdD} = _NwaIdD(_NwaIdE())
+    f1 = _nwa_id_pre_inc(d)
+    _nwa_id_d_static_e = _NwaIdE()
+    f2 = (_nwa_id_d_static_e += 1)
+    _nwa_h_d_static_e = _NwaHE()
+    f3 = (_nwa_h_d_static_e += 1)
+    r5 = _dw_facts(something(d).v === f1, _nwa_id_d_static_e === f2, _nwa_h_d_static_e === f3)
+    r6 = _nwa_id_pre_dec(_nwa_id_null_c())
+    c = _NwaIdC(n)
+    r7 = _dw_facts(_nwa_id_pre_dec(c), something(c).v)
+    _nwa_id_c_static_int = n
+    r8 = _dw_facts((_nwa_id_c_static_int -= 1), _nwa_id_c_static_int)
+    _nwa_h_c_static_int = n
+    r9 = _dw_facts((_nwa_h_c_static_int -= 1), _nwa_h_c_static_int)
+    d = _NwaIdD(_NwaIdE())
+    f4 = _nwa_id_pre_dec(d)
+    _nwa_id_d_static_e = _NwaIdE()
+    f5 = (_nwa_id_d_static_e -= 1)
+    _nwa_h_d_static_e = _NwaHE()
+    f6 = (_nwa_h_d_static_e -= 1)
+    r10 = _dw_facts(something(d).v === f4, _nwa_id_d_static_e === f5, _nwa_h_d_static_e === f6)
+    return (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10)
+end
+
+# invocation: o?.f(...) and o?.g(...) on null, whose arguments are never evaluated, and on a C, and C?.staticF,
+# h.C?.staticF, C?.staticG and h.C?.staticG
+abstract type _NwaIvB end
+struct _NwaIvC <: _NwaIvB end
+_nwa_iv_f(c::_NwaIvC, callback) = something(callback)()
+_nwa_iv_g(c::_NwaIvC, callback)::Union{Nothing,Int64} = callback()
+_nwa_iv_static_f(callback) = callback()
+_nwa_iv_static_g(callback)::Union{Nothing,Int64} = callback()
+_nwa_iv_null_c()::Union{Nothing,_NwaIvC} = nothing
+function _nwa_iv_main(n::Int64)
+    c::Union{Nothing,_NwaIvC} = _NwaIvC()
+    (x = _nwa_iv_null_c(); x === nothing ? nothing : _nwa_iv_f(x, nothing))
+    r1 = (x = _nwa_iv_null_c(); x === nothing ? nothing : _nwa_iv_f(x, _nwa_bad()))
+    r2 = (x = c; x === nothing ? nothing : _nwa_iv_f(x, () -> n))
+    r3 = _nwa_iv_static_f(() -> n)
+    r4 = _nwa_h_c_static_f(() -> n)
+    i1::Union{Nothing,Int64} = (x = _nwa_iv_null_c(); x === nothing ? nothing : _nwa_iv_g(x, _nwa_bad()))
+    i2::Union{Nothing,Int64} = (x = c; x === nothing ? nothing : _nwa_iv_g(x, () -> n))
+    i3::Union{Nothing,Int64} = _nwa_iv_static_g(() -> n)
+    i4::Union{Nothing,Int64} = _nwa_h_c_static_g(() -> n)
+    return _dw_facts(r1, r2, r3, r4, i1, i2, i3, i4)
+end
+
+# null_aware_index_on_null: null?[0]
+function _nwa_ix_main(n::Int64)
+    x::Union{Nothing,Vector{Int64}} = n == 1 ? nothing : [n]
+    return _dw_facts(x === nothing ? nothing : x[1])
+end
+
+# null_shortening_invocation: on a null A, a?.getFn1()(arg), a?.getFn2()(arg) and a?[0](arg) never evaluate arg
+struct _NwaNsiA end
+_nwa_nsi_unreachable() = error("Unreachable")
+_nwa_nsi_get_fn1(a::_NwaNsiA) = (x) -> (error("Should never be called"); 0)
+_nwa_nsi_get_fn2(a::_NwaNsiA) = () -> ((x) -> (error("Should never be called"); 0))
+Base.getindex(a::_NwaNsiA, i::Int64) = (x) -> (error("Should never be called"); 0)
+function _nwa_nsi_main(n::Int64)
+    a::Union{Nothing,_NwaNsiA} = n == 1 ? nothing : _NwaNsiA()
+    r1 = a === nothing ? nothing : _nwa_nsi_get_fn1(a)(_nwa_nsi_unreachable())
+    r2 = a === nothing ? nothing : _nwa_nsi_get_fn2(a)()(_nwa_nsi_unreachable())
+    r3 = a === nothing ? nothing : a[0](_nwa_nsi_unreachable())
+    return _dw_facts(r1, r2, r3)
+end
+
+# null_shortening: every selector after ?. on null is skipped, a binary or prefix operator applied to a ?. chain
+# is not, ++ and -- are; C1's getters, setters, methods and [] that throw are never reached. The extension<T> id
+# is a function of any value, the extension on C1 a method on C1, and the extension on C1? answers its receiver
+# for + and ~; only its C1 half is a method, since one on Nothing would define nothing + x for every caller, and
+# the extension operators on C1, which dart never selects, are left out, since Julia would dispatch to them by the
+# run-time type
+mutable struct _NwaNsC1
+    n::Int64
+end
+_nwa_ns_unreachable() = error("Unreachable")
+_nwa_ns_c(c::_NwaNsC1)::_NwaNsC1 = c
+_nwa_ns_cq(c::_NwaNsC1)::Union{Nothing,_NwaNsC1} = c
+_nwa_ns_cn(c::_NwaNsC1)::Union{Nothing,_NwaNsC1} = nothing
+_nwa_ns_getter_throws(c::_NwaNsC1)::_NwaNsC1 = _nwa_ns_unreachable()
+_nwa_ns_method(c::_NwaNsC1, v) = nothing
+_nwa_ns_method_throws(c::_NwaNsC1) = _nwa_ns_unreachable()
+_nwa_ns_setter!(c::_NwaNsC1, v) = nothing
+_nwa_ns_setter_throws!(c::_NwaNsC1, v) = (_nwa_ns_unreachable(); nothing)
+Base.getindex(c::_NwaNsC1, _) = c
+Base.setindex!(c::_NwaNsC1, _, __) = c
+_nwa_ns_id(x) = x
+_nwa_ns_ext_throws(c::_NwaNsC1)::_NwaNsC1 = _nwa_ns_unreachable()
+Base.:+(c::_NwaNsC1, other) = c
+Base.:~(c::_NwaNsC1) = c
+# the nine selectors after r?., after r?.c and after r?.cn!, on a null receiver r
+function _nwa_ns_shorten_all(r::Union{Nothing,_NwaNsC1})
+    r === nothing ? nothing : _nwa_ns_getter_throws(r)
+    r === nothing ? nothing : _nwa_ns_setter_throws!(r, 0)
+    r === nothing ? nothing : _nwa_ns_setter!(r, _nwa_ns_unreachable())
+    r === nothing ? nothing : _nwa_ns_method(r, _nwa_ns_unreachable())
+    r === nothing ? nothing : _nwa_ns_method_throws(r)
+    r === nothing ? nothing : r[_nwa_ns_unreachable()]
+    r === nothing ? nothing : (r[_nwa_ns_unreachable()] = 0)
+    r === nothing ? nothing : (r[0] = _nwa_ns_unreachable())
+    r === nothing ? nothing : _nwa_ns_ext_throws(r)
+    r === nothing ? nothing : _nwa_ns_getter_throws(_nwa_ns_c(r))
+    r === nothing ? nothing : _nwa_ns_setter_throws!(_nwa_ns_c(r), 0)
+    r === nothing ? nothing : _nwa_ns_setter!(_nwa_ns_c(r), _nwa_ns_unreachable())
+    r === nothing ? nothing : _nwa_ns_method(_nwa_ns_c(r), _nwa_ns_unreachable())
+    r === nothing ? nothing : _nwa_ns_method_throws(_nwa_ns_c(r))
+    r === nothing ? nothing : _nwa_ns_c(r)[_nwa_ns_unreachable()]
+    r === nothing ? nothing : (_nwa_ns_c(r)[_nwa_ns_unreachable()] = 0)
+    r === nothing ? nothing : (_nwa_ns_c(r)[0] = _nwa_ns_unreachable())
+    r === nothing ? nothing : _nwa_ns_ext_throws(_nwa_ns_c(r))
+    r === nothing ? nothing : something(_nwa_ns_cn(r))
+    r === nothing ? nothing : _nwa_ns_getter_throws(something(_nwa_ns_cn(r)))
+    r === nothing ? nothing : _nwa_ns_setter_throws!(something(_nwa_ns_cn(r)), 0)
+    r === nothing ? nothing : _nwa_ns_setter!(something(_nwa_ns_cn(r)), _nwa_ns_unreachable())
+    r === nothing ? nothing : _nwa_ns_method(something(_nwa_ns_cn(r)), _nwa_ns_unreachable())
+    r === nothing ? nothing : _nwa_ns_method_throws(something(_nwa_ns_cn(r)))
+    r === nothing ? nothing : something(_nwa_ns_cn(r))[_nwa_ns_unreachable()]
+    r === nothing ? nothing : (something(_nwa_ns_cn(r))[_nwa_ns_unreachable()] = 0)
+    r === nothing ? nothing : (something(_nwa_ns_cn(r))[0] = _nwa_ns_unreachable())
+    r === nothing ? nothing : _nwa_ns_ext_throws(something(_nwa_ns_cn(r)))
+    return nothing
+end
+function _nwa_ns_main(n::Int64)
+    c1 = _NwaNsC1(0)
+    c1q::Union{Nothing,_NwaNsC1} = c1
+    c1n::Union{Nothing,_NwaNsC1} = n == 1 ? nothing : c1
+    _nwa_ns_shorten_all(c1n)
+    i = n - 1
+    (c1q === nothing ? nothing : _nwa_ns_c(c1q)) + (t = i; i += 1; t)
+    ~(c1q === nothing ? nothing : _nwa_ns_c(c1q))
+    c1q === nothing ? nothing : (t = c1q.n; c1q.n = t + 1; t)
+    c1q === nothing ? nothing : (c1q.n += 1)
+    c1n === nothing ? nothing : (t = c1n.n; c1n.n = t + 1; t)
+    c1n === nothing ? nothing : (c1n.n += 1)
+    (t = (c1q === nothing ? nothing : _nwa_ns_c(c1q)); _nwa_ns_id(t); t)
+    (t = (c1q === nothing ? nothing : _nwa_ns_c(c1q)); t === nothing ? nothing : (_nwa_ns_id(t); t))
+    (_nwa_ns_shorten_all(_nwa_ns_cn(c1)); c1)
+    return _dw_facts(i)
+end
+
+# opt: ?. calls, reads and stores on null and on a C, ??, ??= and ?.f++ in a loop past the optimizer's threshold,
+# and a constructor initializer reading _bar?.s
+mutable struct _NwaOpC
+    f::Any
+end
+_nwa_op_m(c::_NwaOpC, a) = a
+_nwa_op_bomb() = error("Should not be executed")
+_nwa_op_get_null() = nothing
+function _nwa_op_anything end
+function _nwa_op_test(n::Int64)
+    c::Any = nothing
+    d::Union{Nothing,_NwaOpC} = _NwaOpC(5n)
+    r1 = c === nothing ? nothing : _nwa_op_m(c, _nwa_op_bomb())
+    r2 = (g = _nwa_op_get_null(); g === nothing ? nothing : _nwa_op_anything(g, _nwa_op_bomb()))
+    r3 = d === nothing ? nothing : _nwa_op_m(d, n)
+    c2::Union{Nothing,_NwaOpC} = _NwaOpC(n)
+    r4 = c2 === nothing ? nothing : c2.f
+    r5 = c === nothing ? nothing : c.v
+    r6 = @something(c, 10n)
+    r7 = @something(d, _nwa_op_bomb()) === d
+    list::Union{Nothing,Vector{Vector{Int64}}} = [[3n]]
+    r8 = list === nothing ? nothing : collect(Iterators.flatmap(i -> i, list))[1]
+    nd::Any = nothing
+    r9 = nd === nothing ? nothing : (t = Iterators.flatmap(i -> i, nd); t === nothing ? nothing : collect(t))
+    e::Any = nothing
+    d === nothing ? (d = (e === nothing ? (e = _NwaOpC(100n)) : e)) : d
+    r10 = e
+    e === nothing ? (e = _NwaOpC(100n)) : e
+    r11 = e === nothing ? nothing : e.f
+    e === nothing ? nothing : (e.f === nothing ? (e.f = 200n) : e.f)
+    r12 = e === nothing ? nothing : e.f
+    e.f = nothing
+    e === nothing ? nothing : (e.f === nothing ? (e.f = 200n) : e.f)
+    r13 = e === nothing ? nothing : e.f
+    c === nothing ? nothing : (c.f === nothing ? (c.f = 400n) : c.f)
+    r14 = c === nothing ? nothing : c.f
+    r15 = c === nothing ? nothing : (t = c.f; c.f = t + 1; t)
+    e === nothing ? nothing : (t = e.f; e.f = t + 1; t)
+    r16 = e.f
+    five::Union{Nothing,Int64} = 5n
+    x = @something(five, _nwa_op_bomb())
+    return _dw_facts(r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, r16)
+end
+function _nwa_op_test2(n::Int64)
+    c::Any = nothing
+    c === nothing ? nothing : c.v
+    c === nothing ? nothing : _nwa_op_m(c, _nwa_op_bomb())
+    return nothing
+end
+mutable struct _NwaOpBar
+    s::Union{Nothing,String}
+end
+struct _NwaOpFoo
+    _bar::Union{Nothing,_NwaOpBar}
+    str::Union{Nothing,String}
+end
+_NwaOpFoo(bar::Union{Nothing,_NwaOpBar}) = _NwaOpFoo(bar, bar === nothing ? nothing : bar.s)
+function _nwa_op_test3(n::Int64)
+    nl::Union{Nothing,Vector{Any}} = n == 1 ? nothing : Any[]
+    func = nl === nothing ? nothing : (x -> push!(nl, x))
+    result = @something(func, n)
+    x::Union{Nothing,String} = n == 1 ? nothing : string(n)
+    return _dw_facts(result, @something((x === nothing ? nothing : split(x, ',')), "hello") == "hello")
+end
+function _nwa_op_main(n::Int64)
+    r = _nwa_op_test(n)
+    r3 = _nwa_op_test3(n)
+    for i in 0:9
+        r = _nwa_op_test(n)
+        _nwa_op_test2(n)
+        r3 = _nwa_op_test3(n)
+    end
+    return (r, r3, _NwaOpFoo(_NwaOpBar(n == 1 ? nothing : string(n))).str)
+end
+
+_g("dart_null_aware", Any[
+    ("access", (n::Int64) -> _nwa_ac_main(n), Int64(1)),
+    ("assignment", (n::Int64) -> _nwa_as_main(n), Int64(1)),
+    ("dynamic", (n::Int64) -> _nwa_dy_main(n), Int64(1)),
+    ("increment_decrement_postfix", (n::Int64) -> _nwa_id_postfix(n), Int64(1)),
+    ("increment_decrement_prefix", (n::Int64) -> _nwa_id_prefix(n), Int64(1)),
+    ("invocation", (n::Int64) -> _nwa_iv_main(n), Int64(1)),
+    ("null_aware_index_on_null", (n::Int64) -> _nwa_ix_main(n), Int64(1)),
+    ("null_shortening_invocation", (n::Int64) -> _nwa_nsi_main(n), Int64(1)),
+    ("null_shortening", (n::Int64) -> _nwa_ns_main(n), Int64(1)),
+    ("opt", (n::Int64) -> _nwa_op_main(n), Int64(1)),
+])

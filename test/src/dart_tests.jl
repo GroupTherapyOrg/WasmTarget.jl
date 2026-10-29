@@ -983,6 +983,38 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_assert/trailing_comma" => ((nothing, nothing), :rejects),
     "dart_assert/with_message" => ((true, true, true, false, false, "dang", (true, true, false, "toString!", true)), :outside),
     "dart_assert/with_type_test_or_cast" => ((nothing, nothing, nothing, nothing), :rejects),
+    # tests/language/final/
+    "dart_final/field_initialization_order" => (("a.", "a.b.", "b.a.", "b.c.d.a.", "b.c.d.cc.a.", "b.c.d.cc.a."), :rejects),
+    "dart_final/field_override" => ((3, 3, 21), :compiled),
+    "dart_final/syntax" => ((42, 87, true, true, true, true, true, true, true, true, true, true), :rejects),
+    "dart_final/used_in_try" => ((true,), :rejects),
+    # tests/language/abstract/
+    "dart_abstract/getter2" => (((42, 100), (123, 456), (123, 456)), :rejects),
+    "dart_abstract/method" => ((123, 234, 345), :rejects),
+    "dart_abstract/object_method" => ((true,), :rejects),
+    "dart_abstract/override_adds_optional_args" => ((nothing,), :compiled),
+    # tests/language/null/
+    "dart_null/access_error" => (((true, false), (true, false)), :rejects),
+    "dart_null/inline" => ((true, true), :outside),
+    "dart_null/is2" => ((true, true, true, false, false), :compiled),
+    "dart_null/is" => (((true, true, true, false, false, false, false, false, false), (true, true, true, false, false, false, false, false, false), (false, false, false, false, false), (false, false, false, false, false)), :rejects),
+    "dart_null/method" => ((true, true), :outside),
+    "dart_null/no_such_method" => ((true,), :rejects),
+    "dart_null/null2" => (("Nothing", "Nothing"), :outside),
+    "dart_null/null" => (((true, true, true, true, true), (true, false, true, false), (false, false, false, false, false, false, false), (false, false, false, false, false, false, false), (true, false, false), (true, true, true), (true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, true, true, true), (true, false, true, false), (nothing, false, nothing, true, nothing, true, nothing, nothing, nothing), (nothing, false, nothing, true, nothing, nothing, nothing, nothing), ("nothing", "nothing", "nothing", "nothing"), (true, true, true, true), (false, true, false, true), (true, "nothing", "nothing", true)), :outside),
+    "dart_null/to_string2" => ((true, true), :outside),
+    "dart_null/to_string" => ((true, true), :rejects),
+    # tests/language/null_aware/
+    "dart_null_aware/access" => ((nothing, 1, 1, 1, 1, 1, 1, 1), :rejects),
+    "dart_null_aware/assignment" => ((nothing, (2, 2), (2, 2), (2, 2), (true, true, true), nothing, (3, 3), (3, 3), (true, true, true)), :rejects),
+    "dart_null_aware/dynamic" => ((nothing, nothing, 1), :outside),
+    "dart_null_aware/increment_decrement_postfix" => ((nothing, (1, 2), (1, 2), (1, 2), (true, true, true), nothing, (1, 0), (1, 0), (1, 0), (true, true, true)), :rejects),
+    "dart_null_aware/increment_decrement_prefix" => ((nothing, (2, 2), (2, 2), (2, 2), (true, true, true), nothing, (0, 0), (0, 0), (0, 0), (true, true, true)), :rejects),
+    "dart_null_aware/invocation" => ((nothing, 1, 1, 1, nothing, 1, 1, 1), :compiled),
+    "dart_null_aware/null_aware_index_on_null" => ((nothing,), :rejects),
+    "dart_null_aware/null_shortening_invocation" => ((nothing, nothing, nothing), :rejects),
+    "dart_null_aware/null_shortening" => ((1,), :rejects),
+    "dart_null_aware/opt" => (((nothing, nothing, 1, 1, nothing, 10, true, 3, nothing, nothing, 100, 100, 200, nothing, nothing, 201), (1, true), nothing), :outside),
 )
 
 # a case's answer is native's: of its type, and isequal (a NaN equal to itself, -0.0 apart from 0.0)
