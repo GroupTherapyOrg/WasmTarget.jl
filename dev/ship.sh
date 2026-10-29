@@ -25,6 +25,15 @@ done
 # when ship rebased its own tree). Its untracked Manifest and preferences come along, and its checks
 # compile into the lane's depot.
 start=$(git rev-parse HEAD)
+# one landing carries at most SHIP_MAX commits, the lane's oldest; the rest wait for its next ship, so the
+# landing lock passes between lanes (march-monitor-a, 22:40: an eighteen-commit landing held the lock
+# twenty minutes while two lanes' ports waited behind it)
+SHIP_MAX=6   # a literal, never set from a lane's shell
+git fetch -q origin "$MARCH" 2>/dev/null
+if [ "$(git rev-list --count "origin/$MARCH..HEAD" 2>/dev/null || echo 0)" -gt "$SHIP_MAX" ]; then
+  start=$(git rev-list --reverse "origin/$MARCH..HEAD" | sed -n "${SHIP_MAX}p")
+  echo "ship: this landing carries the oldest $SHIP_MAX of $(git rev-list --count "origin/$MARCH..HEAD") commits; ship again for the rest"
+fi
 scratch="$common/wt-ship/$(basename "$lane")"
 # one landing per lane at a time: a second ship from this worktree would remove the first's scratch
 mkdir -p "$common/wt-ship"
@@ -66,7 +75,7 @@ checked_rebase() {
 record_failure() {
   local at red
   at=$(git log -1 --format='%h %s' 2>/dev/null | cut -c1-100 | tr '\t' ' ')
-  red=$(grep -m1 -E 'RED|REFUSED|fails|red|Test Failed|Error During|CONFLICT|could not apply' .wtd/rebase.out 2>/dev/null | cut -c1-240 | tr '\t' ' ')
+  red=$(grep -m1 -E '^check: .*(RED|red|fails|REFUSED|does not)|CONFLICT|could not apply' .wtd/rebase.out 2>/dev/null | cut -c1-240 | tr '\t' ' ')
   printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(basename "$lane")" "$at" "$red" >> "$common/wt-ship-failures.tsv"
   rm -rf "$common/wt-ship-failed/$(basename "$lane")"; mkdir -p "$common/wt-ship-failed/$(basename "$lane")"
   cp .wtd/*.out "$common/wt-ship-failed/$(basename "$lane")/" 2>/dev/null
