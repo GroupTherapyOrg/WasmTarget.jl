@@ -359,6 +359,10 @@ end
 module ThrowCases
 struct E; v::Int64; end
 thr(x::Int64) = x < 0 ? throw(E(x)) : x
+# Julia throws any value, an Int too
+thr_int(x::Int64) = x < 0 ? throw(x) : x
+# Base's conversion throws InexactError through Base's own throw_inexacterror, a Core.throw
+to_u8(x::Int64) = Int64(UInt8(x))
 end
 
 @testset "code_generator.dart: an unresolved call and a field outside the layout reject at their rows" begin
@@ -367,17 +371,26 @@ end
     # MethodError throw, never dart's dynamic invocation: rejected at the throw's port, not at the
     # intrinsifier's
     local e = rejection(() -> D.visit_static_invocation(g, W.NirCall(W.NirValue[W.NirConst(Core.Const(sin)), W.NirArgument(2)]), IR.NumType_f64))
-    @test e.rejection isa W.Unported && occursin("Error._throwWithCurrentStackTrace", e.rejection.anchor) && occursin("proved throws", e.at)
+    @test e.rejection isa W.Unquarantined && occursin("src/julia/runtime/rtutils.jl", e.rejection.row) && occursin("proved throws", e.at)
     # a definition only a node Julia has no counterpart for reaches rejects by its Kernel row: Internal at
     # the definition, naming the row and its reason, the one source of that text
     local k = rejection(() -> W.no_counterpart_rejection("Let", "dart2wasm/lib/code_generator.dart:1603 AstCodeGenerator.visitLet", "at"))
     @test k.rejection isa W.Internal && occursin("AstCodeGenerator.visitLet: the Kernel table's Let row, no counterpart", k.rejection.site) &&
           occursin("visit_block", k.rejection.site)
     @test rejection(() -> W.no_counterpart_rejection("ReturnStatement", "a", "b")).rejection isa W.Internal
-    # Julia's throw(x), Kernel's Throw: the exception, then the runtime's throw, not ported: Unported there
-    local t = rejection(() -> W.compile(ThrowCases.thr, (Int64,); optimize = false))
-    @test t.rejection isa W.Unported && t.rejection.anchor == "sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace" &&
-          occursin("ThrowCases.E", t.at)
+    # Julia's throw(x), Kernel's Throw: the exception, then the runtime's thrower, which throws it with
+    # the program's tag: a wasm exception, never a trap, and native's answer where nothing is thrown
+    for (f, x, T) in ((ThrowCases.thr, -1, ThrowCases.E), (ThrowCases.thr_int, -2, Int))
+        @test (try; f(x); nothing; catch err; err; end) isa T
+        local bytes = W.compile(f, (Int64,); optimize = false)
+        push!(NATIVE_RUNS, WTRunner.RunCase("$(nameof(f))($x) throws ", bytes, (x,), WTRunner.Throws(T)))
+        queue_native!("$(nameof(f)) ", bytes, f, [(7,)])
+    end
+    # Base's InexactError is built by its varargs constructor, InexactError(f, args...), whose trailing
+    # Vararg has no argument count yet: a located rejection at the function type, never a MethodError
+    @test (try; ThrowCases.to_u8(300); nothing; catch err; err; end) isa InexactError
+    local iv = rejection(() -> W.compile(ThrowCases.to_u8, (Int64,); optimize = false))
+    @test iv.rejection isa W.Unquarantined && occursin("Vararg signature", iv.rejection.row)
     # dart's dynamic invocation has no Julia input: the verifier resolves every call it admits but a
     # must-throw one, so reaching it is WasmTarget's own defect, naming Julia's replacement
     local d = rejection(() -> D._handle_dynamic_invocation(g, W.NirArgument(2), W.NirValue[], :f))

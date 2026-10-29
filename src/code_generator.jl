@@ -1414,7 +1414,7 @@ end
 @parity "dart2wasm/lib/code_generator.dart:1668 AstCodeGenerator.visitStaticInvocation" function visit_static_invocation(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local f = nir_callee(node)
     f isa Core.Builtin ||
-        reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace"),
+        reject!(Unquarantined("src/julia/runtime/rtutils.jl: the exception of a call Julia proved throws (its MethodError where no method matches, else the matched method's own), which the runtime's thrower would throw"),
             "$(self.enclosing_member): a call of $f Julia left unresolved, its result Union{} (the trim verifier's must-throw warning), a call Julia proved throws")
     local intrinsic_result = generate_static_intrinsic(self.intrinsifier[], node)
     intrinsic_result === nothing || return intrinsic_result
@@ -1727,14 +1727,15 @@ end
 @parity "dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation" visit_string_concatenation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation: Julia builds a string by calls of Base's methods, each an invoke, visitStaticInvocation's"), "$(self.enclosing_member)")
 
-# Julia's throw(x), Kernel's Throw: the exception as the top type without null, then dart's runtime
-# Error._throwWithCurrentStackTrace (kernel_nodes.dart:681), which takes the current stack trace and
-# throws the exception tag. The runtime library is not ported, so the throw rejects there, Unported at
-# the runtime's own definition (A52S1's ruling for a runtime function)
-@parity "dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow" function visit_throw(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::Union{}
+# Julia's throw(x), Kernel's Throw: the exception as the top type without null, then the runtime's
+# Error._throwWithCurrentStackTrace (KernelNodes.errorThrowWithCurrentStackTrace, its port taking
+# Julia's Any, as dart's takes Object), which throws it with the program's exception tag and never
+# returns
+@parity "dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow" function visit_throw(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     translate_expression(self, node.args[2], self.translator.top_type_non_nullable[])
-    reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace"),
-        "$(self.enclosing_member): a throw of $(dart_type_of(self, node.args[2]))")
+    call(self, error_throw_with_current_stack_trace(self.translator))
+    WasmBuilder.unreachable(self.b[])
+    return expected_type
 end
 
 @parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" visit_rethrow(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =

@@ -438,6 +438,10 @@ end
 @parity "dart2wasm/lib/functions.dart:731 _getInputTypes" function _get_input_types(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType},
         is_import_or_export::Bool, translate_type::Function)::Vector{WasmBuilder.IR.ValueType}
     local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
+    # a varargs specialization's trailing Vararg has no argument count to type (as ParameterInfo.fromMember
+    # rejects it), located, never a MethodError past the gap
+    any(p -> p isa Core.TypeofVararg, params) &&
+        reject!(Unquarantined("src/param_info.jl fromMember: the Vararg signature $(target.specTypes), whose argument count Julia left open"), "dart2wasm/lib/functions.dart:731 _getInputTypes")
     local inputs = WasmBuilder.IR.ValueType[]
     if receiver_type !== nothing
         is_import_or_export && reject!(Internal("dart2wasm/lib/functions.dart:731 _getInputTypes: an import or export with a receiver"), "_getInputTypes")
