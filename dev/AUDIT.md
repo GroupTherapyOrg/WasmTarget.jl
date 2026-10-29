@@ -4909,40 +4909,41 @@ the structured statements' replacement; 41ab48cb (EqualsNull, dart :2022), 30554
 cases are InvalidModule, the builder refusing a constant's struct.new (the corpus line above: `i32.const 6`, `i32.const
 0`, then the fields' `global.get … ref Int64`), new between 977d5959 and cb4ef2b4 (`git log --oneline
 977d5959..cb4ef2b4` gives aa8aa069, 22fd8a4f, 3cb7f7c6, 03ab4430, c4c37345, 60092888, d92bd5ee, 4414459f, a5f55918,
-cb4ef2b4); read, not measured: 22fd8a4f routes each NirConst to its literal visitor by its value's type, the likeliest,
-and the header with an identity hash is the form 2d4cd956 found the builder refusing for the boxes (C7, D10, D12). Fix:
-at its source, the failing constants' struct layout and header agreeing, with one of the 45 as its case. (A55S11,
-medium) the runtime's anchors are outside every pin table, so 9d719901's located check refuses 7d8f3e62's rejections:
-the corpus's implicit_closure line reads `its Unported anchor names sdk/lib/_internal/wasm/common/errors_patch.dart, in
-no pin table`, and `grep -c "sdk/lib" src/julia/parity.jl` gives 0, so those Unported never enter the anchored total
-either (D43, C9). The anchors themselves are right at the pin (type.dart:1561 `void _asSubtype(…`). Fix: the runtime
-files in the pin table and the skeleton's scope, or the lead's ruling that names their kind. (A55S12, medium) one fact,
-two kinds: `grep -o 'reject!([A-Za-z]*' src/code_generator.jl | sort | uniq -c` gives `88 reject!(Internal`, `13
-reject!(Unported`, `87 reject!(Unquarantined`; the replaced generators' methods (6fa334e7's 30, 76426b48, dbaa98ed,
-3cb7f7c6) reject Unquarantined, which reject.jl:12 defines as a Julia-only definition not yet written, where the
-visitors of the same kind of gap reject Internal (tasks: visit_yield_statement Internal, dbaa98ed's suspend-state
-helpers Unquarantined) (C6, D5). Fix: Internal everywhere, the tests re-pinned (code_generator_sub.jl:42, :93, :120).
-(A55S13, medium) a rejecting stub counts as ported: dev/src_progress.sh:40 `stubbed = Set(x.anchor for x in e if
-!x.ported)`, and `grep -n 'local ported = ' src/julia/parity.jl` gives `1135: local ported = !_is_macro(def,
-Symbol("@unported"))`, so the 110 bodies that only reject (45 Internal, 65 Unquarantined) count as filled, as does
-305549d5's visit_static_set, a body that only rejects Unported at the setter where dart's :2199 translates the value and
-calls it (D40, D43). Fix: a third registry state for a replaced definition, printed apart from ported and unported, its
-rejection generated from the Kernel row. (A55S14, medium) two rulings in one range for a port Julia never reaches:
-3cb7f7c6 replaced BrTableInfo's working port with rejections because nothing reaches it, while dbaa98ed ported
-restore_this_and_context_chain (`grep -rn "restore_this_and_context_chain(" src | grep -v @parity` prints nothing; its
-one dart caller, restoreSuspendStateContext, rejects here) and 76426b48 InvocationCreationStubGenerator.generate
-(reached only past make_invocation_creator_signature, which rejects), and dev/skeleton_scope.toml says codegen
-structures "are never out, even where Julia's answer leaves them empty: they are ported" (C2, D5). Fix: the lead's one
-rule, applied to all three and to A55S2. (A55S15, medium) 7573876b's speed fields hold Any: `sed -n 28p
-src/julia/late.jl` gives `value::Any # T once assigned; held untyped so one compiled body serves every T`,
-LinkedHashMap's `_slots::Dict{Any,Int}`, and `_late_get` has no return annotation; behavior is sound (reads typeassert),
-but C4 names Any only at heterogeneous seams, and L215 reads ported structs alone. Fix: each an exact allowlisted seam
-(D20) with `_late_get` annotated, or the typed form back. (A55S16, low) the 45 rejections name neither their Kernel row
-nor visitBlock's anchor, and copies disagree (kernel.jl:146 FileUriExpression against code_generator.jl:1264) (D5, C9).
-(A55S17, low) 0a69fbb6's "a must-throw call is Julia's MethodError throw" is wider than Julia's rule:
-verifytrim.jl:254–256 downgrades any Union{}-typed unresolved call (`if extyp === Union{} warn = true`), which may throw
-the matched method's own exception (C3, D3). Fix: the text as verifytrim states it; the payload from Julia's method
-table when visitThrow is ported.
+cb4ef2b4); the lead's bisection names d92bd5ee, translator's getRecordClassInfo port, which exposed visitRecordConstant
+instantiating each field at the top type where its struct holds the field's own type (C7, D10, D12); fixed by b54115e0
+(`fix(constants): a record constant's fields at its class's own field types, as the record literal builds it`), its case
+in 3a039a43; this entry first named 22fd8a4f, read and not measured, wrongly. Fix: at its source, the failing constants'
+struct layout and header agreeing, with one of the 45 as its case. (A55S11, medium) the runtime's anchors are outside
+every pin table, so 9d719901's located check refuses 7d8f3e62's rejections: the corpus's implicit_closure line reads
+`its Unported anchor names sdk/lib/_internal/wasm/common/errors_patch.dart, in no pin table`, and `grep -c "sdk/lib"
+src/julia/parity.jl` gives 0, so those Unported never enter the anchored total either (D43, C9). The anchors themselves
+are right at the pin (type.dart:1561 `void _asSubtype(…`). Fix: the runtime files in the pin table and the skeleton's
+scope, or the lead's ruling that names their kind. (A55S12, medium) one fact, two kinds: `grep -o 'reject!([A-Za-z]*'
+src/code_generator.jl | sort | uniq -c` gives `88 reject!(Internal`, `13 reject!(Unported`, `87 reject!(Unquarantined`;
+the replaced generators' methods (6fa334e7's 30, 76426b48, dbaa98ed, 3cb7f7c6) reject Unquarantined, which reject.jl:12
+defines as a Julia-only definition not yet written, where the visitors of the same kind of gap reject Internal (tasks:
+visit_yield_statement Internal, dbaa98ed's suspend-state helpers Unquarantined) (C6, D5). Fix: Internal everywhere, the
+tests re-pinned (code_generator_sub.jl:42, :93, :120). (A55S13, medium) a rejecting stub counts as ported:
+dev/src_progress.sh:40 `stubbed = Set(x.anchor for x in e if !x.ported)`, and `grep -n 'local ported = '
+src/julia/parity.jl` gives `1135: local ported = !_is_macro(def, Symbol("@unported"))`, so the 110 bodies that only
+reject (45 Internal, 65 Unquarantined) count as filled, as does 305549d5's visit_static_set, a body that only rejects
+Unported at the setter where dart's :2199 translates the value and calls it (D40, D43). Fix: a third registry state for
+a replaced definition, printed apart from ported and unported, its rejection generated from the Kernel row. (A55S14,
+medium) two rulings in one range for a port Julia never reaches: 3cb7f7c6 replaced BrTableInfo's working port with
+rejections because nothing reaches it, while dbaa98ed ported restore_this_and_context_chain (`grep -rn
+"restore_this_and_context_chain(" src | grep -v @parity` prints nothing; its one dart caller,
+restoreSuspendStateContext, rejects here) and 76426b48 InvocationCreationStubGenerator.generate (reached only past
+make_invocation_creator_signature, which rejects), and dev/skeleton_scope.toml says codegen structures "are never out,
+even where Julia's answer leaves them empty: they are ported" (C2, D5). Fix: the lead's one rule, applied to all three
+and to A55S2. (A55S15, medium) 7573876b's speed fields hold Any: `sed -n 28p src/julia/late.jl` gives `value::Any # T
+once assigned; held untyped so one compiled body serves every T`, LinkedHashMap's `_slots::Dict{Any,Int}`, and
+`_late_get` has no return annotation; behavior is sound (reads typeassert), but C4 names Any only at heterogeneous
+seams, and L215 reads ported structs alone. Fix: each an exact allowlisted seam (D20) with `_late_get` annotated, or the
+typed form back. (A55S16, low) the 45 rejections name neither their Kernel row nor visitBlock's anchor, and copies
+disagree (kernel.jl:146 FileUriExpression against code_generator.jl:1264) (D5, C9). (A55S17, low) 0a69fbb6's "a
+must-throw call is Julia's MethodError throw" is wider than Julia's rule: verifytrim.jl:254–256 downgrades any
+Union{}-typed unresolved call (`if extyp === Union{} warn = true`), which may throw the matched method's own exception
+(C3, D3). Fix: the text as verifytrim states it; the payload from Julia's method table when visitThrow is ported.
 
 stopgap in disguise: the hand-written rejection bodies, counted as ported until A55S13's state generates them from the
 Kernel row.
@@ -4968,9 +4969,11 @@ Landing times: entry 54 landed at 2352 s from its first commit, its wait behind 
 Resolution: this entry lands alone, prose only, and fixes nothing. A51E1, A51E4, A51E9, A53E2 and A53E3 are fixed by
 9d719901; A51S4 by 977d5959; A51S5 by 129c5acf; A51S6 by 76341323; A51S10 by 1e9d7839; A51S11 by 762d5514; A51S15 by
 6904535d; A51S16 by b412b1f4; A52S1 and A52E3 by 7d8f3e62; A54S3 by 3cb7f7c6; A51S7 is ruled by 0a69fbb6; A51S8, A51S9,
-A51S13 and A54S1 are carried by A55S6, A55S8, A55S5 and A55S3; each leaves its row. A55S1 and A55S10 are what the range
-broke, the next fixes of their lanes. A55S10, A55S12, A55S16 and A55S17 are open on MARCH 1.D. A55S1, A55S2, A55S3,
-A55S4, A55S5, A55S6, A55S7 and A55S8 are open on MARCH 1.C. A55S9 is open on MARCH 1.B. A55S11, A55S13 and A55S14 are
-open on MARCH 1.A6. A55S15 is open on MARCH 1.L. A55E1 is open on MARCH 1.T. By owner: the codegen lane holds A55S10,
-A55S12, A55S16 and A55S17; the translator lane holds A55S1 to A55S8; the lead holds A51E3 first, then A55S11, A55S13,
-A55S14 and A55S15; the tests lane holds A55E1; A55S9 the builder's owner.
+A51S13 and A54S1 are carried by A55S6, A55S8, A55S5 and A55S3; each leaves its row. A55S10 is fixed by b54115e0
+(translator's, the cause d92bd5ee) and A55S11's located half by ebc68afe (the runtime library's anchors admitted),
+dev/corpus.sh's run on b54115e0 to confirm both. A55S1 is what the range broke beside A55S10, the next fix of its lane.
+A55S12, A55S16 and A55S17 are open on MARCH 1.D. A55S1, A55S2, A55S3, A55S4, A55S5, A55S6, A55S7 and A55S8 are open on
+MARCH 1.C. A55S9 is open on MARCH 1.B. A55S11, its anchored-total half, A55S13 and A55S14 are open on MARCH 1.A6. A55S15
+is open on MARCH 1.L. A55E1 is open on MARCH 1.T. By owner: the codegen lane holds A55S12, A55S16 and A55S17; the
+translator lane holds A55S1 to A55S8; the lead holds A51E3 first, then A55S11's anchored total, A55S13, A55S14 and
+A55S15; the tests lane holds A55E1; A55S9 the builder's owner.
