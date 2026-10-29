@@ -816,6 +816,28 @@ end
           occursin("TypeTestCases.dyn", d.at)
 end
 
+# Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)
+module EqualsCases
+struct Q; x::Int; end
+mutable struct M; x::Int; end
+@noinline same_q(a::Int) = Q(a) == Q(a)
+@noinline same_m(a::Int) = M(a) == M(a)
+@noinline self_m(a::Int) = (m = M(a); m == m)
+end
+@testset "Base's fallback == over immutable and mutable operands, never a wrong answer" begin
+    for f in (EqualsCases.same_q, EqualsCases.same_m, EqualsCases.self_m)
+        local bytes = try
+            W.compile(f, (Int,); optimize = false)
+        catch e
+            e isa W.RejectionError || rethrow()
+            # a rejection is admitted, located; a compiled module must answer as native does
+            @test !isempty(e.at)
+            nothing
+        end
+        bytes === nothing || queue_native!("$(nameof(f)) ", bytes, f, [(3,), (-1,)])
+    end
+end
+
 @testset "the third oracle: every module queued above answers as native Julia" begin
     for r in WTRunner.run_cases(NATIVE_RUNS)
         r.ok || println(r.label, ": ", r.why)

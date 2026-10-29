@@ -962,7 +962,13 @@ end
     local left_type = translate_type(self, dart_type_of(self, left))
     local single_target_ = single_target(self.translator, node)
     local b = self.b[]
-    if single_target_ !== nothing && single_target_.def === which(==, Tuple{Any,Any}) ||
+    # Base's fallback is `x === y`, Julia's egal: reference identity only when both operands are mutable
+    # objects; two immutable values are equal by content (jl_egal), so the fallback is then called as the
+    # method Julia resolved, its === lowered as === is, answering or rejecting located, never ref.eq
+    # (audit #56: Q(a) == Q(a) of an immutable struct answered false)
+    local identity_only(T::Type)::Bool = T isa DataType && ismutabletype(T)
+    local fallback = single_target_ !== nothing && single_target_.def === which(==, Tuple{Any,Any})
+    if fallback && identity_only(dart_type_of(self, left)) && identity_only(dart_type_of(self, right)) ||
             (left_type isa WasmBuilder.IR.RefType && !WasmBuilder.is_subtype_of(left_type, self.translator.top_type[]))
         # Plain reference comparison
         translate_expression(self, left, WasmBuilder.IR.RefType_eq(; nullable = true))
