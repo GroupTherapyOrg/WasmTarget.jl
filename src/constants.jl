@@ -532,7 +532,7 @@ one integer class, boxed by `_BoxedInt`; each Julia integer type is its own clas
 class directly below the top type (class_info's _createStructForClass), whose struct holds the class
 id and the value, no identity hash: dart's box, `i32.const classId`, then the value.
 """
-@parity "dart2wasm/lib/constants.dart:622 ConstantInstantiator.visitIntConstant" function visit_int_constant(self::ConstantInstantiator, constant::Union{Base.BitInteger64,Char})::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/constants.dart:622 ConstantInstantiator.visitIntConstant" function visit_int_constant(self::ConstantInstantiator, @nospecialize(constant::Union{Base.BitInteger64,Char}))::WasmBuilder.IR.ValueType
     local translator = self.constants.translator
     local b = self.b
     local v = constant

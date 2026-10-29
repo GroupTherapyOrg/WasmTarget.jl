@@ -14,8 +14,11 @@ Assigning an existing key keeps its position; deleting a key removes it from the
 @quarantine "dart's default Map is insertion-ordered and its order reaches the bytes; Julia's Dict iterates in hash order" Base.AbstractDict struct LinkedHashMap{K,V} <: AbstractDict{K,V}
     _keys::Vector{K}
     _values::Vector{V}
-    _slots::Dict{K,Int}
-    LinkedHashMap{K,V}() where {K,V} = new{K,V}(K[], V[], Dict{K,Int}())
+    # each key's position, one Dict type for every K: Base's Dict{Any,Int} is compiled once (in Julia's
+    # system image), where a Dict{K,Int} per key type compiles its hashing and probing again; keys
+    # compare by isequal and hash as in any Dict, and are converted to K before they are stored
+    _slots::Dict{Any,Int}
+    LinkedHashMap{K,V}() where {K,V} = new{K,V}(K[], V[], Dict{Any,Int}())
 end
 
 @quarantine "the map's size, Julia's length" Base.length Base.length(m::LinkedHashMap)::Int = length(m._keys)
@@ -32,6 +35,7 @@ end
 end
 
 @quarantine "the map's operator []=, an existing key keeping its place" Base.setindex! function Base.setindex!(m::LinkedHashMap{K,V}, v, k)::LinkedHashMap{K,V} where {K,V}
+    k = convert(K, k)
     slot = get(m._slots, k, 0)
     if slot == 0
         push!(m._keys, k)

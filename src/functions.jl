@@ -174,7 +174,7 @@ end
 end
 
 """The function forwarding a dynamic call of `shape` to `target`, made on first request and queued."""
-@parity "dart2wasm/lib/functions.dart:202 FunctionCollector.getDynamicForwarder" function get_dynamic_forwarder(self::FunctionCollector, target::Core.MethodInstance, shape::CallShape)::WasmBuilder.IR.BaseFunction
+@parity "dart2wasm/lib/functions.dart:202 FunctionCollector.getDynamicForwarder" function get_dynamic_forwarder(self::FunctionCollector, target::Core.MethodInstance, @nospecialize(shape::CallShape))::WasmBuilder.IR.BaseFunction
     local forwarders = get!(() -> LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}(), self._dynamic_forwarder_functions, target)
     local existing = get(forwarders, shape, nothing)
     existing === nothing || return existing

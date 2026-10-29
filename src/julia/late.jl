@@ -25,7 +25,7 @@ this cell and the cell checks its one assignment, runs its initializer on first 
 the field's dart anchor when it is read unassigned.
 """
 @quarantine "dart's `late final` field, which Julia's structs lack: a cell set once or initialized on first read" Core.Function mutable struct Late{T}
-    value::Union{T,Nothing}
+    value::Any                       # T once assigned; held untyped so one compiled body serves every T
     state::UInt8                     # 0 unassigned, 1 its initializer running, 2 assigned
     anchor::String
     init::Union{Function,Nothing}
@@ -33,8 +33,13 @@ the field's dart anchor when it is read unassigned.
     Late{T}(anchor::String, init::Function) where {T} = new{T}(nothing, 0x00, anchor, init)
 end
 
-@quarantine "the late field's read, Julia's dereference syntax c[]" Base.getindex function Base.getindex(c::Late{T})::T where {T}
-    c.state == 0x02 && return c.value::T
+# the read and the assignment are each one compiled body over every Late, `T` passed as a value
+# (@nospecialize), the typed accessors below a typeassert and a convert per T: a cell is read in
+# every collaborator, so a body per T multiplies its compile across the port's field types
+@quarantine "the late field's read, Julia's dereference syntax c[]" Base.getindex Base.getindex(c::Late{T}) where {T} = _late_get(c, T)::T
+
+@quarantine "the late field's read, one body for every T" Base.convert function _late_get(@nospecialize(c::Late), @nospecialize(T::Type))
+    c.state == 0x02 && return c.value
     c.state == 0x01 && reject!(Internal("$(c.anchor): the late field's initializer read the field itself"), "Late")
     c.init === nothing && reject!(Unported(c.anchor), "the late field $(c.anchor), read before its assignment")
     c.state = 0x01
@@ -50,9 +55,14 @@ end
 end
 
 @quarantine "the late field's one assignment, Julia's c[] = v" Base.setindex! function Base.setindex!(c::Late{T}, v)::Nothing where {T}
+    _late_set!(c, convert(T, v))
+    return nothing
+end
+
+@quarantine "the late field's one assignment, one body for every T" Core.setfield! function _late_set!(@nospecialize(c::Late), @nospecialize(v))::Nothing
     c.init === nothing || reject!(Internal("$(c.anchor): a late final field with an initializer is assigned"), "Late")
     c.state == 0x02 && reject!(Internal("$(c.anchor): the late final field is assigned twice"), "Late")
-    c.value = convert(T, v)
+    setfield!(c, :value, v)
     c.state = 0x02
     return nothing
 end
