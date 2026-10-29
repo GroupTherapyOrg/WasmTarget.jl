@@ -167,7 +167,7 @@ dart's `cls.fields.where((f) => f.isInstanceMember)`, a class's own instance fie
 an abstract class has none (Julia's abstract types have no fields, so every field is a concrete
 class's own); a primitive class (`Int64`, `Bool`, `Float64`, ...) has its one `value`, as dart's
 boxed classes do (`_BoxedInt.value`); a struct has its `fieldnames` and `fieldtypes`; a singleton
-none; a kind (a type as a value) dart's runtime type layout (`_kind_instance_fields`); a
+none, and so does a mutable struct declared with no fields, each instance an object of its own; a kind (a type as a value) dart's runtime type layout (`_kind_instance_fields`); a
 `Core.SimpleVector` its elements as one immutable wasm array (`_svec_instance_fields`); a `String`
 its UTF-8 code units as one immutable i8 wasm array (`_string_instance_fields`); a `Symbol` its name,
 one String (`_symbol_instance_fields`); a `Module` its name, one Symbol (`_module_instance_fields`). Any
@@ -184,6 +184,10 @@ written.
         c === String && return _string_instance_fields(c, at)
         c === Symbol && return _symbol_instance_fields(c, at)
         c === Module && return _module_instance_fields(c, at)
+        # a mutable struct declared with no fields holds nothing: Julia's layout has no field
+        # (fieldcount 0, nothing outside it), its identity the object's own; Julia's own types above,
+        # mutable by Julia's account too, hold theirs outside their fields
+        ismutabletype(c) && return ClassField[]
         reject!(Unquarantined("src/julia/classes.jl class_instance_fields: $c, whose data Julia holds outside its fields"), at)
     end
     return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]

@@ -159,3 +159,23 @@ end
     local mod_info = t.class_info[Module]
     @test t.field_index[only(W.class_instance_fields(Module, "classes"))] == length(mod_info.struct_.fields) - 1
 end
+
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+
+module EmptyMutableCases
+mutable struct Token end
+@noinline make(x::Int) = x > 0 ? Token() : nothing
+made(x::Int) = make(x) isa Token
+end
+
+@testset "a mutable struct with no fields holds nothing, each instance its own object" begin
+    # Julia's layout: no field and nothing outside one; identity is the object's (=== tells two apart)
+    @test fieldcount(EmptyMutableCases.Token) == 0 && !Base.issingletontype(EmptyMutableCases.Token)
+    @test W.class_instance_fields(EmptyMutableCases.Token, "classes") == W.ClassField[]
+    @test EmptyMutableCases.Token in _classes(EmptyMutableCases.made, (Int,))
+    local f = EmptyMutableCases.made
+    local bytes = W.compile(f, (Int,))
+    for r in WTRunner.run_cases([WTRunner.RunCase("made$(a)", bytes, a, f(a...)) for a in [(1,), (0,), (-2,)]])
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
