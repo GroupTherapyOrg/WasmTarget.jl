@@ -281,6 +281,18 @@ end
     @test e2.rejection isa W.Internal && occursin("no class info for $(FieldGenCases.P)", e2.rejection.site)
 end
 
+@testset "code_generator.dart: an allocation Julia's IR never produces is an Internal (A59S1)" begin
+    local g = ready_codegen_of(FieldGenCases.mk, (Int32,), [IR.NumType_i32], IR.ValueType[])
+    local nw = g.body.stmts[findfirst(s -> s isa W.NirNew, g.body.stmts)]::W.NirNew
+    @test length(nw.args) == 3 && Core.Compiler.datatype_min_ninitialized(FieldGenCases.P) == 2
+    # more values than fields, and fewer than the fields Julia's type requires initialized: neither is an
+    # allocation Julia's IR produces, so each is WasmTarget's own defect, before the runtime's gap
+    local over = rejection(() -> D.visit_constructor_invocation(g, W.NirNew(W.NirValue[nw.args..., nw.args[2]]), IR.NumType_i32))
+    @test over.rejection isa W.Internal && occursin("passing 3 values to its 2 fields", over.rejection.site)
+    local under = rejection(() -> D.visit_constructor_invocation(g, W.NirNew(nw.args[1:2]), IR.NumType_i32))
+    @test under.rejection isa W.Internal && occursin("requires 2 initialized", under.rejection.site)
+end
+
 module SetGenCases
 mutable struct M; a::Int32; const c::Int32; end
 seta(m::M, v::Int32) = (m.a = v; nothing)
@@ -876,6 +888,23 @@ end
         end
         bytes === nothing || queue_native!("$(nameof(f)) ", bytes, f, [(3,), (0,)])
     end
+end
+
+@testset "code_generator.dart: the switch statement's info, whose constructors no NIR reaches" begin
+    # dart's fields, each by the one rule's name: the backward jump's local and labels, the jump table's
+    # range, value pusher and cases, and the switch's types, comparisons, special cases and table
+    @test fieldnames(D.SwitchBackwardJumpInfo) == (:switch_value_local, :loop_label, :default_loop_label)
+    @test fieldnames(D.BrTableInfo) == (:min_value, :max_value, :_br_table_expr, :case_map)
+    @test fieldnames(D.SwitchInfo) == (:nullable_type, :non_nullable_type, :dynamic_type_guard, :compare, :default_case, :null_case, :br_table)
+    # a late field read before dart's constructor assigns it names the field
+    local si = D.SwitchInfo(Val(:_))
+    @test si.br_table === nothing && si.dynamic_type_guard === nothing
+    @test occursin("SwitchInfo.compare", rejection(() -> si.compare[]).rejection.anchor)
+    # Julia's IR has no switch statement: SwitchInfo's constructor and its special cases take the Kernel
+    # table's NoCounterpart, which no value inhabits, so no NIR reaches either
+    @test only(m for m in methods(D.SwitchInfo) if length(m.sig.parameters) == 3).sig.parameters[3] === W.NoCounterpart
+    @test only(methods(D._initialize_special_cases)).sig.parameters[3] === W.NoCounterpart
+    @test rejection(() -> W.NoCounterpart()).rejection isa W.Internal
 end
 
 # Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)

@@ -156,19 +156,64 @@ is unused).
 end
 
 """
-SwitchBackwardJumpInfo's dart fields: `switchValueLocal`, `loopLabel`, `defaultLoopLabel`.
+A switch statement's backward jump target: `switch_value_local`, the local of the switched value a
+jump updates, `loop_label`, the `loop` it branches to, and `default_loop_label`, the `loop` of the
+default case's body while it is compiled. Julia's IR has no switch statement (the Kernel table's
+SwitchStatement row): a backward case jump is a back edge of its CFG, so dart's constructor (:5130),
+the one that makes this, rejects Internal.
 """
-@parity "dart2wasm/lib/code_generator.dart:5108 SwitchBackwardJumpInfo" @unported struct SwitchBackwardJumpInfo end
+@parity "dart2wasm/lib/code_generator.dart:5108 SwitchBackwardJumpInfo" mutable struct SwitchBackwardJumpInfo
+    const switch_value_local::WasmBuilder.IR.Local
+    const loop_label::WasmBuilder.Label
+    default_loop_label::Union{Nothing,WasmBuilder.Label}
+    # the struct's one constructor, tagged, with dart's initializer list; dart's constructor at :5130
+    # is its outer function
+    SwitchBackwardJumpInfo(::Val{:_}, switch_value_local::WasmBuilder.IR.Local, loop_label::WasmBuilder.Label) =
+        new(switch_value_local, loop_label, nothing)
+end
 
 """
-BrTableInfo's dart fields: `minValue`, `maxValue`, `_brTableExpr`, `caseMap`.
+A switch statement's `br_table`: the case values' range `min_value` to `max_value`, `_br_table_expr`
+pushing the switched value, and `case_map`, each value's case. Julia's IR has no switch statement (the
+Kernel table's SwitchStatement and SwitchCase rows), so dart's constructors (:5157, :5162), the ones
+that make this, reject Internal; the one `br_table` WasmTarget emits is the stackifier's.
 """
-@parity "dart2wasm/lib/code_generator.dart:5143 BrTableInfo" @unported struct BrTableInfo end
+@parity "dart2wasm/lib/code_generator.dart:5143 BrTableInfo" struct BrTableInfo
+    min_value::Int64
+    max_value::Int64
+    _br_table_expr::Function
+    case_map::Dict{Int64,NoCounterpart}
+    # the struct's one constructor, tagged; dart's private constructor at :5157 is its outer function
+    BrTableInfo(::Val{:_}, min_value::Int64, max_value::Int64, case_map::Dict{Int64,NoCounterpart}, _br_table_expr::Function) =
+        new(min_value, max_value, _br_table_expr, case_map)
+end
 
 """
-SwitchInfo's dart fields: `nullableType`, `nonNullableType`, `dynamicTypeGuard`, `compare`, `defaultCase`, `nullCase`, `brTable`.
+How a switch statement compares its cases: the switched value's wasm types `nullable_type` and
+`non_nullable_type`, `dynamic_type_guard` and `compare`, emitting the type check and a case's
+comparison, the `default_case` and `null_case`, and `br_table`, its jump table if it takes one. Julia's
+IR has no switch statement (the Kernel table's SwitchStatement row), so dart's constructor (:5229), the
+one that makes this, rejects Internal.
 """
-@parity "dart2wasm/lib/code_generator.dart:5194 SwitchInfo" @unported struct SwitchInfo end
+@parity "dart2wasm/lib/code_generator.dart:5194 SwitchInfo" mutable struct SwitchInfo
+    const nullable_type::Late{WasmBuilder.IR.ValueType}
+    const non_nullable_type::Late{WasmBuilder.IR.ValueType}
+    dynamic_type_guard::Union{Nothing,Function}
+    const compare::Late{Function}
+    const default_case::Late{Union{Nothing,NoCounterpart}}
+    const null_case::Late{Union{Nothing,NoCounterpart}}
+    br_table::Union{Nothing,BrTableInfo}
+    # the struct's one constructor, tagged, its late fields unassigned and its nullable fields null, as
+    # dart's are before its constructor body (:5229, the outer function) runs
+    SwitchInfo(::Val{:_}) = new(
+        Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/code_generator.dart:5197 SwitchInfo.nullableType"),
+        Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/code_generator.dart:5201 SwitchInfo.nonNullableType"),
+        nothing,
+        Late{Function}("dart2wasm/lib/code_generator.dart:5211 SwitchInfo.compare"),
+        Late{Union{Nothing,NoCounterpart}}("dart2wasm/lib/code_generator.dart:5219 SwitchInfo.defaultCase"),
+        Late{Union{Nothing,NoCounterpart}}("dart2wasm/lib/code_generator.dart:5222 SwitchInfo.nullCase"),
+        nothing)
+end
 
 @parity "dart2wasm/lib/code_generator.dart:5528 _VirtualCallKind" @enum _VirtualCallKind _VirtualCallKind_Get _VirtualCallKind_Set _VirtualCallKind_Call
 
@@ -967,16 +1012,24 @@ end
         return expected_type
     end
     local fields = class_instance_fields(cls, at)
-    # Julia's `new` may pass fewer values than the struct has fields: Julia's closure conversion allocates
-    # Core.Box() for a variable a closure captures before it is assigned, and a read before the assignment
-    # is Julia's UndefRefError, dart's late local read before its initializer (_throwLateErrorLocalNI).
-    # Until the runtime's throw is ported, such an allocation rejects there, located: a null in the field
-    # would read as `nothing` (the null of a type that admits it), a plausible value past the gap (D9;
-    # march-monitor-a, 00:41, on bd0b473a)
+    # Julia's `new` may pass fewer values than the struct has fields, never more, and never fewer than
+    # the fields its type requires initialized (Core.Compiler.datatype_min_ninitialized): an allocation
+    # outside those bounds is none Julia's IR produces, an Internal. Within them, Julia's closure
+    # conversion allocates Core.Box() for a variable a closure captures before it is assigned; lowering
+    # guards that variable's read with isdefined, so a read before the assignment is Julia's
+    # UndefVarError, and an ordinary struct's field read while undefined is Julia's UndefRefError, each
+    # dart's late local read before its initializer (_throwLateErrorLocalNI). Until the runtime's throw is
+    # ported, such an allocation rejects there, located: a null in the field would read as `nothing` (the
+    # null of a type that admits it), a plausible value past the gap (D9; march-monitor-a, 00:41, on
+    # bd0b473a; audit A59S1)
     local given = length(node.args) - 1
+    given <= length(fields) ||
+        reject!(Internal("$at: an allocation of $cls passing $given values to its $(length(fields)) fields, which Julia's IR never produces"), "$(self.enclosing_member)")
+    given >= Core.Compiler.datatype_min_ninitialized(cls) ||
+        reject!(Internal("$at: an allocation of $cls passing $given values where its type requires $(Core.Compiler.datatype_min_ninitialized(cls)) initialized, which Julia's IR never produces"), "$(self.enclosing_member)")
     given == length(fields) ||
         reject!(Unported("sdk/lib/_internal/wasm/common/error_utils.dart:188 _throwLateErrorLocalNI"),
-            "$(self.enclosing_member): an allocation of $cls leaving $(length(fields) - given) of its fields undefined, whose read before assignment is Julia's UndefRefError")
+            "$(self.enclosing_member): an allocation of $cls leaving $(length(fields) - given) of its fields undefined, whose read before assignment is Julia's UndefVarError for a Core.Box and UndefRefError for another struct's field")
     WasmBuilder.comment(b, "Allocate wasm struct optimized")
     push_object_header_fields(b, self.translator, info)
     for (k, field) in enumerate(fields)
@@ -1789,9 +1842,11 @@ end
 @parity "dart2wasm/lib/code_generator.dart:5182 BrTableInfo.emitBrTableExpr" emit_br_table_expr(self::BrTableInfo, b::WasmBuilder.InstructionsBuilder, switch_expr_local::WasmBuilder.IR.Local)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:5182 BrTableInfo.emitBrTableExpr: a switch statement's jump table; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "emit_br_table_expr")
 
-@parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" @unported function SwitchInfo(code_gen::AstCodeGenerator, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" SwitchInfo(code_gen::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    no_counterpart_rejection("SwitchStatement", "dart2wasm/lib/code_generator.dart:5229 SwitchInfo", "$(code_gen.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases" @unported function _initialize_special_cases(self::SwitchInfo, node::NoCounterpart) end
+@parity "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases" _initialize_special_cases(self::SwitchInfo, node::NoCounterpart)::Union{} =
+    no_counterpart_rejection("SwitchStatement", "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases", "SwitchInfo")
 
 # dart's switch names each kind in lower case, its own name: Julia's @enum value prints with its
 # type's prefix, which is dropped, so every kind has its name and no arm can be missing
