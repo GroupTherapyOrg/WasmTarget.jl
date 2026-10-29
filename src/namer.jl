@@ -15,19 +15,51 @@ until unused.
 end
 
 """
-_ExternalMemberNamer's dart fields: `_exportNamer`, `coreTypes`.
+The names of the members visible from outside the program, never minified, and reserved so no other
+name collides with them. dart reads a member's `wasm:import`, `wasm:export` and `wasm:weak-export`
+pragmas through `coreTypes`; a Julia method declares none (the Kernel table's Annotatable row), and
+Julia's answers stand in their place: no member is an import (a foreign call is a host import,
+dev/MARCH.md 1.F), and the exports are the program's entry (dart's main, juliac's root) and every
+method `Base.@ccallable` declared, each a strong export named by its function. So the namer holds the
+closed world, whose entry it names, where dart holds `coreTypes`.
 """
-@parity "dart2wasm/lib/namer.dart:70 _ExternalMemberNamer" @unported struct _ExternalMemberNamer end
+@parity "dart2wasm/lib/namer.dart:70 _ExternalMemberNamer" struct _ExternalMemberNamer
+    _export_namer::Namer
+    component::NirWorld
+    # the struct's one constructor, tagged; dart's constructor at :74 is its outer function
+    _ExternalMemberNamer(::Val{:_}, component::NirWorld, _export_namer::Namer) = new(_export_namer, component)
+end
 
 """
-_InteropHelperMemberNamer's dart fields: `_interopHelperNamer`, `coreTypes`, `interopModuleName`, `interopMemberNames`.
+The names of the internal interop helpers, which import from the support JS module and can be
+minified: the module they import from, `_` minified and `dart2wasm` otherwise, and the name given each
+member. dart's helpers are the members `JsInteropMemberData.fromMember` reads JS interop annotations
+from (`coreTypes`, dropped: the Kernel table's Annotatable row); a Julia method carries none, so no
+member is a helper and no name is given.
 """
-@parity "dart2wasm/lib/namer.dart:105 _InteropHelperMemberNamer" @unported struct _InteropHelperMemberNamer end
+@parity "dart2wasm/lib/namer.dart:105 _InteropHelperMemberNamer" struct _InteropHelperMemberNamer
+    _interop_helper_namer::Namer
+    interop_module_name::String
+    interop_member_names::Dict{Core.MethodInstance,String}
+    # the struct's one constructor, tagged, with dart's initializer list; dart's constructor at :111 is
+    # its outer function
+    _InteropHelperMemberNamer(::Val{:_}, options::TranslatorOptions) =
+        new(Namer(; minify = minify(options) || options.minify_interop_names), minify(options) ? "_" : "dart2wasm",
+            Dict{Core.MethodInstance,String}())
+end
 
 """
-InteropMemberNamer's dart fields: `_externalMemberNamer`, `_interopHelperMemberNamer`.
+The names of the members associated with JS interop: the external members, visible from JS outside the
+program and never minified, and the interop helpers, used only by the runtime and minifiable.
 """
-@parity "dart2wasm/lib/namer.dart:138 InteropMemberNamer" @unported struct InteropMemberNamer end
+@parity "dart2wasm/lib/namer.dart:138 InteropMemberNamer" struct InteropMemberNamer
+    _external_member_namer::_ExternalMemberNamer
+    _interop_helper_member_namer::_InteropHelperMemberNamer
+    # the struct's one constructor, tagged, with dart's initializer list; dart's constructor at :142 is
+    # its outer function
+    InteropMemberNamer(::Val{:_}, component::NirWorld, export_namer::Namer, options::TranslatorOptions) =
+        new(_ExternalMemberNamer(component, export_namer), _InteropHelperMemberNamer(options))
+end
 
 @parity "dart2wasm/lib/namer.dart:28 Namer" Namer(; minify::Bool = false)::Namer = Namer(Val(:_), minify)
 
@@ -62,24 +94,52 @@ end
     return name
 end
 
-@parity "dart2wasm/lib/namer.dart:74 _ExternalMemberNamer" @unported function _ExternalMemberNamer(core_types, _export_namer) end
+# the closed world stands where dart passes coreTypes (the struct's docstring)
+@parity "dart2wasm/lib/namer.dart:74 _ExternalMemberNamer" _ExternalMemberNamer(component::NirWorld, _export_namer::Namer)::_ExternalMemberNamer =
+    _ExternalMemberNamer(Val(:_), component, _export_namer)
 
-@parity "dart2wasm/lib/namer.dart:75 _ExternalMemberNamer.getImportName" @unported function get_import_name(self::_ExternalMemberNamer, member::Core.MethodInstance) end
+# dart's wasm:import pragma: no Julia member is an import, a foreign call being a host import
+@parity "dart2wasm/lib/namer.dart:75 _ExternalMemberNamer.getImportName" get_import_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Nothing = nothing
 
-@parity "dart2wasm/lib/namer.dart:79 _ExternalMemberNamer.getExportName" @unported function get_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance) end
+# dart's wasm:export pragma: a `@ccallable` method's, its function's name; the entry's, its function's
+# name too (dart exports main); no Julia member is a weak export
+@parity "dart2wasm/lib/namer.dart:79 _ExternalMemberNamer.getExportName" function get_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Union{String,Nothing}
+    local method = member.def::Method
+    isdefined(method, :ccallable) && return string(method.name)
+    member === self.component.entry || return nothing
+    return string(method.name)
+end
 
-@parity "dart2wasm/lib/namer.dart:86 _ExternalMemberNamer.registerExportName" @unported function register_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance) end
+# an export name is reserved in the export namer; every Julia export is strong
+@parity "dart2wasm/lib/namer.dart:86 _ExternalMemberNamer.registerExportName" function register_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Bool
+    local name = get_export_name(self, member)
+    name === nothing && return false
+    reserve_name(self._export_namer, name)
+    return true
+end
 
-@parity "dart2wasm/lib/namer.dart:111 _InteropHelperMemberNamer" @unported function _InteropHelperMemberNamer(core_types, options::TranslatorOptions) end
+# coreTypes dropped (the struct's docstring)
+@parity "dart2wasm/lib/namer.dart:111 _InteropHelperMemberNamer" _InteropHelperMemberNamer(options::TranslatorOptions)::_InteropHelperMemberNamer =
+    _InteropHelperMemberNamer(Val(:_), options)
 
-@parity "dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName" @unported function get_import_name(self::_InteropHelperMemberNamer, member::Core.MethodInstance) end
+# dart's JsInteropMemberData.fromMember: a Julia method carries no JS interop annotation, so no member
+# is a helper import
+@parity "dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName" get_import_name(self::_InteropHelperMemberNamer, member::Core.MethodInstance)::Nothing = nothing
 
-@parity "dart2wasm/lib/namer.dart:142 InteropMemberNamer" @unported function InteropMemberNamer(core_types::NoCounterpart, export_namer::Namer, options::TranslatorOptions) end
+# the closed world stands where dart passes coreTypes (_ExternalMemberNamer's docstring)
+@parity "dart2wasm/lib/namer.dart:142 InteropMemberNamer" InteropMemberNamer(component::NirWorld, export_namer::Namer, options::TranslatorOptions)::InteropMemberNamer =
+    InteropMemberNamer(Val(:_), component, export_namer, options)
 
-@parity "dart2wasm/lib/namer.dart:149 InteropMemberNamer.interopHelperModuleName" @unported function interop_helper_module_name(self::InteropMemberNamer) end
+@parity "dart2wasm/lib/namer.dart:149 InteropMemberNamer.interopHelperModuleName" interop_helper_module_name(self::InteropMemberNamer)::String =
+    self._interop_helper_member_namer.interop_module_name
 
-@parity "dart2wasm/lib/namer.dart:156 InteropMemberNamer.getImportName" @unported function get_import_name(self::InteropMemberNamer, member::Core.MethodInstance) end
+# the import name of an external member or an interop helper, or nothing for a member that is neither
+@parity "dart2wasm/lib/namer.dart:156 InteropMemberNamer.getImportName" get_import_name(self::InteropMemberNamer, member::Core.MethodInstance)::Union{Util.ImportName,Nothing} =
+    something(get_import_name(self._external_member_namer, member), get_import_name(self._interop_helper_member_namer, member), Some(nothing))
 
-@parity "dart2wasm/lib/namer.dart:165 InteropMemberNamer.getExportName" @unported function get_export_name(self::InteropMemberNamer, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/namer.dart:165 InteropMemberNamer.getExportName" get_export_name(self::InteropMemberNamer, member::Core.MethodInstance)::Union{String,Nothing} =
+    get_export_name(self._external_member_namer, member)
 
-@parity "dart2wasm/lib/namer.dart:172 InteropMemberNamer.registerExternalExportName" @unported function register_external_export_name(self::InteropMemberNamer, member::Core.MethodInstance) end
+# whether the member is a strong external export, its name reserved
+@parity "dart2wasm/lib/namer.dart:172 InteropMemberNamer.registerExternalExportName" register_external_export_name(self::InteropMemberNamer, member::Core.MethodInstance)::Bool =
+    register_export_name(self._external_member_namer, member)
