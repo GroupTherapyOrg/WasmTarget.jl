@@ -85,14 +85,27 @@ release() { rm -rf "$lock"; }
 trap cleanup_scratch EXIT
 # the landing lock: a directory holding its holder's pid; a holder that died frees it, and so does
 # a lock older than 10 minutes with no pid written (its holder died before writing it)
+# lanes take the lock in the order they queued (a ticket, its name <seconds>-<pid>, in the common dir's
+# wt-landing-queue): a ship waits until its ticket is the oldest of a live ship, so a lane that queued
+# first is never skipped by one that polled first (march-monitor-a, 23:41: codegen-b's five commits were
+# passed over twice)
+queue="$common/wt-landing-queue"; mkdir -p "$queue"
+ticket="$queue/$(date +%s)-$$"; : > "$ticket"
+trap 'rm -f "$ticket"; cleanup_scratch' EXIT
 w0=$(date +%s)
-while ! mkdir "$lock" 2>/dev/null; do
+while :; do
+  for t in "$queue"/*; do
+    [ -e "$t" ] || continue
+    kill -0 "${t##*-}" 2>/dev/null || rm -f "$t"
+  done
+  first=$(ls "$queue" | sort -t- -k1,1n -k2,2n | head -1)
+  if [ "$queue/$first" = "$ticket" ] && mkdir "$lock" 2>/dev/null; then break; fi
   holder=$(cat "$lock/pid" 2>/dev/null || true)
   if [ -n "$holder" ]; then kill -0 "$holder" 2>/dev/null || rm -rf "$lock"
-  elif [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rm -rf "$lock"; fi
+  elif [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rm -rf "$lock"; fi
   sleep 2
 done
-echo $$ > "$lock/pid"; trap 'release; cleanup_scratch' EXIT
+echo $$ > "$lock/pid"; rm -f "$ticket"; trap 'release; cleanup_scratch' EXIT
 [ $(( $(date +%s) - w0 )) -gt 0 ] && echo "ship: waited $(( $(date +%s) - w0 ))s for the landing lock"
 # dev/check.sh runs only under the landing lock, which this marks
 export CHECK_LANDING=1
