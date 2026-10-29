@@ -33,6 +33,7 @@ anchor in `src/` has a row.)
 | Component | Functions | Model |
 |---|---|---|
 | Stackifier, LLVM's (dev/LEDGER.md D42) | `sort_blocks` (src/llvm/cfg_sort.jl), `place_markers`, `place_loop_marker`, `place_block_marker`, `rewrite_depth_immediates` (src/llvm/cfg_stackify.jl), over Core.Compiler's CFG and dominator tree | CFGStackify |
+| Exception tree, LLVM's (dev/LEDGER.md D42) | `recalculate`, `discover_and_map_exception`, `get_outermost_exception` (src/llvm/exception_info.jl), over Core.Compiler's dominator tree and the dominance frontier (src/llvm/dominance_frontier_impl.jl) | ExceptionInfo |
 | FixIrreducibleControlFlow, LLVM's (dev/LEDGER.md D42) | `process_region`, `make_single_entry_loop`, `calculate` (src/llvm/fix_irreducible_control_flow.jl), before CFGSort | FixIrreducible |
 | ClassId numbering | `assign_type_ids!` (types.jl) | ClassIdDispatch |
 | Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |

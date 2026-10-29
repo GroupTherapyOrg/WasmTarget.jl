@@ -149,6 +149,7 @@ it; a function with no EH pad has none (LLVM's check of the personality function
 end
 
 # the postorder of Julia's dominator tree from block 1, LLVM's post_order(&MDT)
+# formal(dev/formal/ExceptionInfo.tla): each exception is the blocks its pad dominates, each block in its innermost
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyExceptionInfo.cpp:53 WebAssemblyExceptionInfo::recalculate" function recalculate(wei::WebAssemblyExceptionInfo, mf::MachineFunction, mdf::DominanceFrontierBase)::Nothing
     local mdt = mf.domtree
     local postorder = Int[]
