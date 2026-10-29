@@ -1,74 +1,14 @@
-# dart2wasm's code_generator.dart and intrinsics.dart, ported (src/code_generator.jl,
-# src/intrinsics.jl, dev/MARCH.md 1.D): the code generator of a body built over the closed world's
-# NIR, its variables and static types Julia's, and Julia's intrinsics matched to the instructions
-# Julia's codegen answers with. Until InstructionsBuilder lands (1.B), emitting is a located rejection.
+# dart2wasm's code_generator.dart, ported (src/code_generator.jl, dev/MARCH.md 1.D): the code generator
+# of a body built over the closed world's NIR, its variables and static types Julia's: its fields, its
+# statements, field reads, writes and allocations, calls, literals, constants, the definitions Julia
+# never reaches, and the static-field generators. Its intrinsics and control flow are
+# code_generator_intrinsics.jl's and code_generator_control.jl's, each a file the shards balance apart.
+module CodeGeneratorTest
+
 using Test
 using WasmTarget
 
-const D = WasmTarget.Dart2Wasm
-const W = WasmTarget
-const IR = W.WasmBuilder.IR
-
-module CodegenCases
-f_add(x::Int32) = x + Int32(1)
-f_poly(x::Float64, y::Float64) = x * y - 1.0
-f_narrow(x::Int8) = x + Int8(1)
-f_twice(x::Int64) = f_add(x % Int32) === Int32(3)
-abstract type Shape end
-struct Circle <: Shape; r::Float64; end
-struct Square <: Shape; s::Float64; end
-shapes(n::Int) = n > 0 ? Circle(Float64(n)) : Square(2.0)
-loop(n::Int) = (s = 0; for i in 1:n; s += i; end; s)
-end
-
-# the translator of the closed world of `f` at `argtypes`, one main module
-translator_of(f, argtypes) = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "code_generator"), "test"),
-    D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
-
-# the code generator of the entry body of `f` at `argtypes`, its wasm signature `ins -> outs`
-function codegen_of(f, argtypes, ins, outs)
-    local t = translator_of(f, argtypes)
-    local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === nameof(f))
-    return D.get_inlinable_member_code_generator(t, IR.FunctionType(IR.ValueType[ins...], IR.ValueType[outs...]), mi)
-end
-
-# the code generator of `f` ready to emit, as `generate` leaves it before the body: translate()'s
-# steps before code, its builder a function of signature `ins -> outs`, its parameters set up
-function ready_codegen_of(f, argtypes, ins, outs)
-    local B = W.WasmBuilder
-    local t = translator_of(f, argtypes)
-    D._init_modules(t, nothing)
-    collect(D.ClassInfoCollector(t))
-    t.constants[] = D.Constants(t)
-    local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === nameof(f))
-    local mb = D.main_module(t)
-    local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[ins...], IR.ValueType[outs...]), "f")
-    local g = D.get_inlinable_member_code_generator(t, fb.type, mi)
-    g.b[] = B.body(fb)
-    g.param_locals[] = B.locals(fb)
-    g.return_label[] = nothing
-    D.setup_parameters_for_normal_entry(g, g.member)
-    return g
-end
-
-# the instructions `thunk` emits into the builder of `g`, by name
-function emitted_by(thunk, g)
-    local n0 = length(g.b[]._instructions)
-    thunk()
-    return String[W.WasmBuilder.name(i) for i in g.b[]._instructions[n0+1:end]]
-end
-
-# the rejection `f()` raises, or nothing
-rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(); end
-
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-
-# the modules the file's cases compiled, each with its argument tuples and native Julia's answers,
-# queued for one node process at the file's end (test/runner.jl, the third oracle): a node start per
-# module would cost more than the cases
-const NATIVE_RUNS = WTRunner.RunCase[]
-queue_native!(label, bytes, f, argsets) =
-    append!(NATIVE_RUNS, [WTRunner.RunCase("$label$a", bytes, a, f(a...)) for a in argsets])
+include(joinpath(@__DIR__, "..", "codegen_helpers.jl"))
 
 @testset "code_generator.dart: a body's code generator over the NIR" begin
     local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
@@ -122,46 +62,6 @@ end
     @test e.rejection isa W.Unported && occursin("code_generator.dart:82 AstCodeGenerator.closures", e.rejection.anchor)
 end
 
-@testset "intrinsics.dart: Julia's intrinsics, by the instructions Julia's codegen answers" begin
-    local B = D.Intrinsifier__binary_operator_map[]
-    local U = D.Intrinsifier__unary_operator_map[]
-    local i32, i64, f32, f64 = IR.NumType_i32, IR.NumType_i64, IR.NumType_f32, IR.NumType_f64
-    # dart's static constants
-    @test D.Intrinsifier_bool_type() == i32 && D.Intrinsifier_int_type() == i64 && D.Intrinsifier_double_type() == f64
-    # integer arithmetic wraps in both widths, as Julia's; the sign is the intrinsic's own
-    for w in (i32, i64)
-        @test issubset((Core.Intrinsics.add_int, Core.Intrinsics.sub_int, Core.Intrinsics.mul_int, Core.Intrinsics.slt_int,
-                        Core.Intrinsics.ult_int, Core.Intrinsics.sdiv_int, Core.Intrinsics.urem_int), keys(B[w][w]))
-        @test !haskey(B[w][w], Core.Intrinsics.add_float) && issubset((Core.Intrinsics.neg_int, Core.Intrinsics.not_int), keys(U[w]))
-    end
-    for w in (f32, f64)
-        @test issubset((Core.Intrinsics.add_float, Core.Intrinsics.div_float, Core.Intrinsics.lt_float), keys(B[w][w]))
-        @test issubset((Core.Intrinsics.neg_float, Core.Intrinsics.sqrt_llvm, Core.Intrinsics.rint_llvm), keys(U[w]))
-    end
-    # no arm mixes operand types, which Julia's intrinsics never do
-    @test !haskey(B[i32], i64) && !haskey(B[f64], f32)
-    # dart's negation and complement are Julia's: -x == x * -1, ~x == x ⊻ -1 at every width
-    for x in Int32[0, 1, -7, typemax(Int32), typemin(Int32)]
-        @test Core.Intrinsics.neg_int(x) == x * Int32(-1) && Core.Intrinsics.not_int(x) == x ⊻ Int32(-1)
-    end
-    # comparisons give a Bool, an i32
-    @test D.Intrinsifier_is_comparison(Core.Intrinsics.ule_int) && D.Intrinsifier_is_comparison(Core.Intrinsics.ne_float)
-    @test !D.Intrinsifier_is_comparison(Core.Intrinsics.add_int)
-    # no Julia method is an intrinsic of dart's: a call Julia resolved is the method's own body
-    local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    @test D.MemberIntrinsic_from_procedure(g.member) === nothing && D.StaticIntrinsic_from_procedure(g.member) === nothing
-    # Int32's add_int has its arm: its operands, then the add
-    local ga = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    @test emitted_by(() -> D.generate_static_intrinsic(ga.intrinsifier[], ga.body.stmts[1]::W.NirCall), ga) ==
-          ["local.get", "i32.const 1", "i32.add"]
-    # an 8-bit add wraps at 8 bits in Julia, at 32 in an i32: the i32 add, then the operand's form put
-    # back (i32.extend8_s)
-    local n = ready_codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
-    local ncall = n.body.stmts[findfirst(s -> s isa W.NirCall, n.body.stmts)]::W.NirCall
-    @test emitted_by(() -> D.generate_static_intrinsic(n.intrinsifier[], ncall), n) ==
-          ["local.get", "i32.const 1", "i32.add", "i32.extend8_s"]
-end
-
 @testset "code_generator.dart: translateStatement over the NIR" begin
     local t = translator_of(CodegenCases.shapes, (Int,))
     local t2 = translator_of(CodegenCases.loop, (Int,))
@@ -203,51 +103,6 @@ end
     @test rejection(() -> D.translate_statement(gens[1], W.NirGoto(1), nothing)).rejection isa W.Internal
     # Julia's unreachable is a trap, emitted into the builder `generate` gives
     @test occursin("AstCodeGenerator.b", rejection(() -> D.translate_statement(gens[1], W.NirUnreachable(), nothing)).rejection.anchor)
-end
-
-@testset "intrinsics.dart: Julia's identity, ifelse, conversions and shifts" begin
-    local I = Core.Intrinsics
-    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    local p = ready_codegen_of(CodegenCases.f_poly, (Float64, Float64), [IR.NumType_f64, IR.NumType_f64], [IR.NumType_f64])
-    local n = ready_codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
-    local lit(v) = W.NirConst(Core.Const(v))
-    local x = W.NirArgument(2)
-    local call(f, args...) = W.NirCall(W.NirValue[lit(f), args...])
-    # an arm found emits its operands, then its instructions; no arm is nothing, emitting nothing, the
-    # call then rejecting where it stands
-    local emits(gen, c) = emitted_by(() -> D.generate_static_intrinsic(gen.intrinsifier[], c), gen)
-    local absent(gen, c) = D.generate_static_intrinsic(gen.intrinsifier[], c) === nothing
-    # Julia's === compares bits, so a float is compared as its bits' integer: native Julia's answers
-    @test (NaN === NaN) && !(0.0 === -0.0) && reinterpret(Int64, NaN) == reinterpret(Int64, NaN)
-    @test emits(g, call(Core.:(===), x, lit(Int32(3)))) == ["local.get", "i32.const 3", "i32.eq"]
-    @test emits(p, call(Core.:(===), x, W.NirArgument(3))) == ["local.get", "i64.reinterpret_f64", "local.get", "i64.reinterpret_f64", "i64.eq"]
-    @test absent(g, call(Core.:(===), x, lit(Int64(3))))   # different types: no value comparison
-    @test emits(g, call(Core.ifelse, lit(true), x, x)) == ["local.get", "local.get", "i32.const 1", "select"]
-    @test absent(g, call(Core.ifelse, lit(true), x, lit(1.0)))
-    # conversions between full-width types, each its one instruction (a bitcast between two integers of
-    # one width none); a narrow one puts the operand's form back; fpext has no arm
-    @test emits(g, call(I.sext_int, lit(Int64), x)) == ["local.get", "i64.extend_i32_s"]
-    @test emits(g, call(I.zext_int, lit(UInt64), x)) == ["local.get", "i64.extend_i32_u"]
-    @test emits(g, call(I.sitofp, lit(Float64), x)) == ["local.get", "f64.convert_i32_s"]
-    @test emits(g, call(I.bitcast, lit(Float32), x)) == ["local.get", "f32.reinterpret_i32"]
-    @test emits(g, call(I.bitcast, lit(UInt32), x)) == ["local.get"]
-    @test emits(p, call(I.fptosi, lit(Int64), x)) == ["local.get", "i64.trunc_sat_f64_s"]
-    @test emits(p, call(I.fptrunc, lit(Float32), x)) == ["local.get", "f32.demote_f64"]
-    @test emits(p, call(I.bitcast, lit(Int64), x)) == ["local.get", "i64.reinterpret_f64"]
-    @test emits(g, call(I.trunc_int, lit(Int8), x)) == ["local.get", "i32.extend8_s"]
-    @test emits(n, call(I.sext_int, lit(Int32), x)) == ["local.get"]
-    @test absent(g, call(I.fpext, lit(Float64), x))
-    # Julia's shifts saturate, the count unsigned: native Julia's answers, which the select ports
-    @test I.shl_int(Int32(1), UInt64(40)) == 0 && I.lshr_int(Int32(-1), UInt8(32)) == 0
-    @test I.ashr_int(Int32(-8), UInt64(100)) == -1 && I.ashr_int(Int32(8), UInt64(100)) == 0 && I.shl_int(Int64(3), Int32(-1)) == 0
-    # a shift's arm takes a local for the count first, from the builder `generate` gives: before it,
-    # the late builder rejects, located
-    local gu = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    local nu = codegen_of(CodegenCases.f_narrow, (Int8,), [IR.NumType_i32], [IR.NumType_i32])
-    local e = rejection(() -> D.generate_static_intrinsic(gu.intrinsifier[], call(I.shl_int, x, lit(Int64(3)))))
-    @test e.rejection isa W.Unported && occursin("AstCodeGenerator.b", e.rejection.anchor)
-    # an 8-bit shift has its arm: its count's local comes first, from the builder not given here
-    @test occursin("AstCodeGenerator.b", rejection(() -> D.generate_static_intrinsic(nu.intrinsifier[], call(I.shl_int, x, lit(Int64(3))))).rejection.anchor)
 end
 
 module FieldGenCases
@@ -323,86 +178,6 @@ end
     @test m.symbol_ordinals == Dict(:a => 0, :b => 1, :c => 2)
 end
 
-@testset "code_generator.dart: the first compile, f(x::Int32) = x + Int32(1)" begin
-    # WasmTarget.compile runs the whole pipeline (compile.dart's phases, translate): the module our
-    # builder accepted instruction by instruction; run by node it answers as native Julia on 0, 41,
-    # -1, typemax and typemin, the add wrapping
-    local bytes = W.compile(CodegenCases.f_add, (Int32,); optimize = false)
-    queue_native!("f_add", bytes, CodegenCases.f_add, [(x,) for x in Int32[0, 41, -1, typemax(Int32), typemin(Int32)]])
-    @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
-    # the body: local.get 0, i32.const 1, i32.add
-    @test any(i -> bytes[i:i+4] == UInt8[0x20, 0x00, 0x41, 0x01, 0x6a], 1:length(bytes)-4)
-    # the entry exported under its function's name
-    @test occursin("f_add", String(copy(bytes)))
-end
-
-# the instructions `generate` emits for the body of `f` at `argtypes`, compile_one's steps, the
-# bodies of the functions it calls not generated
-function generated_instructions(f, argtypes)
-    local B = W.WasmBuilder
-    local t = translator_of(f, argtypes)
-    D._init_modules(t, nothing)
-    collect(D.ClassInfoCollector(t))
-    t.constants[] = D.Constants(t)
-    local mb = D.main_module(t)
-    local nb = only(nb for nb in t.component if nb.ci.def.def.name === nameof(f))
-    local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
-    local fb = B.define(mb.functions[], sig, "f")
-    local b = B.body(fb)
-    D.generate(D.get_member_code_generator(t, fb, nb.ci.def), b, B.locals(fb), nothing)
-    return String[B.name(i) for i in b._instructions]
-end
-
-# the module of one function: translate()'s steps before code, the body generated, `f` exported
-function compile_one(f, argtypes)
-    local B = W.WasmBuilder
-    local t = translator_of(f, argtypes)
-    D._init_modules(t, nothing)
-    collect(D.ClassInfoCollector(t))
-    t.constants[] = D.Constants(t)
-    local mb = D.main_module(t)
-    local nb = only(t.component)
-    local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
-    local fb = B.define(mb.functions[], sig, "f")
-    D.generate(D.get_member_code_generator(t, fb, nb.ci.def), B.body(fb), B.locals(fb), nothing)
-    B.var"export"(mb.exports, "f", fb)
-    local s = B.Serializer(); B.serialize(s, B.build(mb))
-    return B.data(s)
-end
-
-module IntrinsicCompileCases
-mulshift(x::Int64, y::Int64) = x * y - (x >> 3)
-floorabs(x::Float64) = floor(x) + abs(x)
-scale(x::Int32) = Float64(x) * 2.5
-absint(x::Int64) = abs(x)
-bits(x::Int64) = leading_zeros(x) + trailing_zeros(x) + count_ones(x)
-notand(a::Bool, b::Bool) = !a & b
-notb(a::Bool) = !a
-minmax(x::Int32, y::Int32) = min(x, y) + max(x, y)
-widen32(x::Int32) = Int64(reinterpret(UInt32, x)) + 1
-egal(x::Float64, y::Float64) = x === y
-end
-
-@testset "intrinsics.dart: whole functions of Julia's intrinsics compile" begin
-    # each compiles to a module the builder accepted instruction by instruction (D10); run by node,
-    # each answers as native Julia on its edge inputs
-    local C = IntrinsicCompileCases
-    local i64s = Int64[0, 1, -1, 7, typemax(Int64), typemin(Int64)]
-    local i32s = Int32[0, 41, -1, typemax(Int32), typemin(Int32)]
-    local f64s = [0.0, -0.0, 1.5, -2.5, 1e300, -Inf, NaN]
-    for (f, at, argsets) in ((C.mulshift, (Int64, Int64), [(a, b) for a in i64s for b in i64s]), (C.floorabs, (Float64,), [(x,) for x in f64s]),
-                             (C.absint, (Int64,), [(x,) for x in i64s]), (C.notand, (Bool, Bool), [(a, b) for a in (false, true) for b in (false, true)]),
-                             (C.notb, (Bool,), [(false,), (true,)]),
-                             (C.widen32, (Int32,), [(x,) for x in i32s]))
-        local bytes = compile_one(f, at)
-        @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
-        queue_native!(string(nameof(f)), bytes, f, argsets)
-    end
-    # Bool's not_int is Kernel's Not, visitNot's alone: the intrinsifier has no arm for it
-    local nb = ready_codegen_of(C.notb, (Bool,), [IR.NumType_i32], [IR.NumType_i32])
-    @test D.generate_static_intrinsic(nb.intrinsifier[], W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.Intrinsics.not_int)), W.NirArgument(2)])) === nothing
-end
-
 module InstanceCases
 # `c(y)` inside callc: a call whose callee, the closure, carries its capture x, Kernel's
 # InstanceInvocation, the closure the receiver
@@ -470,23 +245,6 @@ end
     @test rejection(() -> invoke(D.name, Tuple{D.CallTarget}, target)).rejection isa W.Internal
 end
 
-module TruncCases
-tr64(x::Float64) = unsafe_trunc(Int64, x)
-tru32(x::Float64) = unsafe_trunc(UInt32, x)
-end
-
-@testset "intrinsics.dart: fptosi and fptoui never trap" begin
-    # Julia's unsafe_trunc is the bare intrinsic, its unrepresentable value arbitrary: natively it
-    # saturates, NaN 0 (aarch64), which wasm's saturating truncation (0xfc prefix) gives; the trapping
-    # truncation (0xb0, 0xab) is no Julia behavior
-    local b64 = compile_one(TruncCases.tr64, (Float64,))
-    local b32 = compile_one(TruncCases.tru32, (Float64,))
-    local has(bytes, seq) = any(i -> bytes[i:i+length(seq)-1] == seq, 1:length(bytes)-length(seq)+1)
-    @test has(b64, UInt8[0xfc, 0x06]) && !has(b64, UInt8[0xb0])      # i64.trunc_sat_f64_s, not i64.trunc_f64_s
-    @test has(b32, UInt8[0xfc, 0x03]) && !has(b32, UInt8[0xab])      # i32.trunc_sat_f64_u, not i32.trunc_f64_u
-    @test unsafe_trunc(Int64, 1e30) == typemax(Int64) || Sys.ARCH !== :aarch64
-end
-
 @testset "code_generator.dart: a literal is its value's constant, as dart's literal visitors" begin
     # translateExpression routes a NirConst by its value's type to dart's literal visitors, each the
     # same constant visitConstantExpression instantiates
@@ -540,46 +298,6 @@ end
     @test emitted_by(() -> D.translate_statement(g, W.NirPi(W.NirArgument(2), Int32), nothing), g) == ["local.get", "drop"]
 end
 
-@testset "code_generator.dart: MacroAssembler's class-id search, loops and tables" begin
-    local B = W.WasmBuilder
-    # f(classId) = whether it lies in `ranges`, through emitClassIdRangeCheck: a linear search for three
-    # ranges or fewer, a bisection beyond; each module accepted by the builder at every instruction
-    local range_module(ranges) = begin
-        local mb = B.ModuleBuilder("m", nothing)
-        local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[IR.NumType_i32], IR.ValueType[IR.NumType_i32]), "f")
-        local b = B.body(fb)
-        B.local_get(b, B.locals(fb)[1])
-        D.emit_class_id_range_check(b, ranges)
-        B.var"end"(b)
-        B.var"export"(mb.exports, "f", fb)
-        local s = B.Serializer(); B.serialize(s, B.build(mb)); B.data(s)
-    end
-    # run by node over class ids 0..45 each answers Julia's `any(r -> contains(r, id), ranges)`
-    for ranges in ([D.Range(3, 3)], [D.Range(1, 2), D.Range(5, 9)],
-                   [D.Range(0, 0), D.Range(2, 4), D.Range(7, 7), D.Range(10, 20), D.Range(30, 31)],
-                   [D.Range(i, i + 1) for i in 0:4:40])
-        local bytes = range_module(ranges)
-        @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-        queue_native!("ranges $(length(ranges)) ", bytes, id -> Int32(any(r -> contains(r, Int64(id)), ranges)), [(Int32(id),) for id in 0:45])
-    end
-    # an empty search with no miss is WasmTarget's own defect
-    local mb = B.ModuleBuilder("m", nothing)
-    local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[IR.NumType_i32], IR.ValueType[IR.NumType_i32]), "f")
-    @test rejection(() -> D._linear_class_id_search(B.body(fb), NamedTuple{(:range, :value), Tuple{D.Range, Nothing}}[], IR.ValueType[], _ -> nothing, nothing)).rejection isa W.Internal
-    # incrementingLoop and emitDenseTableBranch build valid control: a sum of 0..n-1 and a three-way table
-    local mb2 = B.ModuleBuilder("m", nothing)
-    local fb2 = B.define(mb2.functions[], B.define_function(mb2.types[], IR.ValueType[IR.NumType_i32], IR.ValueType[IR.NumType_i32]), "g")
-    local b2 = B.body(fb2)
-    local acc = B.add_local(b2, IR.NumType_i32)
-    D.incrementing_loop(b2; push_start = () -> B.i32_const(b2, 0), push_limit = () -> B.local_get(b2, B.locals(fb2)[1]),
-        gen_body = v -> (B.local_get(b2, acc); B.local_get(b2, v); B.i32_add(b2); B.local_set(b2, acc)))
-    D.emit_dense_table_branch(b2, IR.ValueType[IR.NumType_i32], 3, () -> B.local_get(b2, acc),
-        i -> B.i32_const(b2, 10 * (i + 1)), () -> B.i32_const(b2, -1))
-    B.var"end"(b2)
-    local s2 = B.Serializer(); B.serialize(s2, B.build(mb2))
-    @test B.data(s2)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-end
-
 module GlobalCases
 const SCALE = Int32(7)
 counter = 0
@@ -619,109 +337,6 @@ end
     local set = only(st for st in sg.body.stmts if st isa W.NirCall && W.nir_callee(st) === Core.setglobal!)
     local w = rejection(() -> D.translate_expression(sg, set, D.void_marker(sg)))
     @test w.rejection isa W.Unported && occursin("StaticFieldImplicitAccessorCodeGenerator._generateSetter", w.rejection.anchor)
-end
-
-module ControlCases
-sumto(n::Int64) = (s = Int64(0); for i in Int64(1):n; s += i; end; s)
-function fib(n::Int32)
-    a, b = Int32(0), Int32(1)
-    for _ in Int32(1):n
-        a, b = b, a + b
-    end
-    a
-end
-sign3(x::Float64) = x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0)
-absdiff(x::Int32, y::Int32) = x > y ? x - y : y - x
-mergey(x::Int32) = (y = x > Int32(0) ? x * Int32(2) : x - Int32(5); y + Int32(1))
-function early(x::Int64, y::Int64)
-    x < 0 && return Int64(0)
-    for i in Int64(1):y
-        i > x && return i
-    end
-    y
-end
-end
-
-@testset "code_generator.dart: control flow, structured by LLVM's stackifier" begin
-    # loops, phis (fib's `a, b = b, a + b` a parallel move), nested branches, a merging diamond and
-    # early returns from a loop: each body's machine code, sorted and stackified by LLVM's passes, is
-    # lowered into a module the builder accepted at every instruction; run by node, each answers as
-    # native Julia on its edge inputs
-    local C = ControlCases
-    local i32s = Int32[0, 41, -1, typemax(Int32), typemin(Int32)]
-    for (f, at, argsets) in ((C.fib, (Int32,), [(Int32(n),) for n in (0, 1, 2, 10, 46, 47)]),
-                             (C.sign3, (Float64,), [(x,) for x in [0.0, -0.0, 1.5, -2.5, 1e300, -Inf, NaN]]),
-                             (C.mergey, (Int32,), [(x,) for x in i32s]),
-                             (C.early, (Int64, Int64), [(Int64(-1), Int64(5)), (Int64(2), Int64(9)), (Int64(9), Int64(3)), (Int64(0), Int64(0))]),
-                             (C.sumto, (Int64,), [(Int64(n),) for n in (0, 1, 10, 1000)]))
-        local bytes = compile_one(f, at)
-        @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-        queue_native!(string(nameof(f)), bytes, f, argsets)
-    end
-    # the loop's module holds a loop (0x03) and a conditional branch out of it
-    local bytes = compile_one(C.sumto, (Int64,))
-    @test 0x03 in bytes && 0x0d in bytes
-end
-
-module TryGenCases
-struct E; v::Int64; end
-@noinline thr(x::Int64) = x < 0 ? throw(E(x)) : x
-tc(x::Int64) = try; thr(x) + 1; catch e; e isa E ? e.v * 2 : 0; end
-tn(x::Int64) = try; (try; thr(x); catch; -1; end) + thr(x + 1); catch; -2; end
-end
-
-@testset "code_generator.dart: a try/catch, the stackifier's try_table around the call that unwinds to the catch" begin
-    # tc's body alone (thr's, whose throw is not ported, is not generated), each instruction accepted
-    # by the builder (D10): a BLOCK typed by the exception tag's payload, the try_table catching the tag
-    # into it around the call, an unreachable after the try_table's end; after the block's end the
-    # caught exception stashed (dart's visitTryCatch) and Julia's the_exception, narrowed to E, cast
-    local names = generated_instructions(TryGenCases.tc, (Int64,))
-    local t = findfirst(==("try_table"), names)
-    @test names[t-2:t] == ["block", "block", "try_table"] && names[t+1:t+2] == ["local.get", "call"]
-    local u = findfirst(==("unreachable"), names)
-    @test names[u-1:u+5] == ["end", "unreachable", "end", "local.set", "local.get", "ref.cast", "local.set"]
-    # nested try regions: the value the inner catch receives, x, through its Upsilon into the PhiC's
-    # register, which the catch block reads
-    local nn = generated_instructions(TryGenCases.tn, (Int64,))
-    @test count(==("try_table"), nn) == 2 && count(==("unreachable"), nn) == 2
-    # a try region's entry, exit and pop are the stackifier's structure and emit nothing; its catch's
-    # exception and exception-edge values are read where visit_block translates them, never as statements
-    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    for st in (W.NirEnter(2, nothing), W.NirLeave(W.NirValue[W.NirSSA(1)]), W.NirPopException(W.NirValue[W.NirSSA(1)]))
-        @test isempty(emitted_by(() -> D.translate_statement(g, st, nothing), g))
-    end
-    for st in (W.NirTheException(W.NirValue[]), W.NirUpsilon(W.NirArgument(2)), W.NirPhiC(W.NirValue[W.NirSSA(1)]))
-        local r = rejection(() -> D.translate_statement(g, st, W.NirSSA(3)))
-        @test r.rejection isa W.Internal && occursin("visit_block", r.rejection.site)
-    end
-end
-
-@testset "types.dart's type tests read the code generator's late builder" begin
-    # emitIsTest and emitAsCheck emit into AstCodeGenerator.b, dart's `late w.InstructionsBuilder b`,
-    # a Late cell: read through it, a type test reaches its own rules (a located answer or rejection),
-    # never a MethodError on the cell
-    local B = W.WasmBuilder
-    local t = translator_of(CodegenCases.f_add, (Int32,))
-    D._init_modules(t, nothing)
-    collect(D.ClassInfoCollector(t))
-    t.constants[] = D.Constants(t)
-    local mi = only(nb.ci.def for nb in t.component)
-    local fb = B.define(D.main_module(t).functions[], B.define_function(D.main_module(t).types[], IR.ValueType[], IR.ValueType[]), "probe")
-    local g = D.get_inlinable_member_code_generator(t, fb.type, mi)
-    g.b[] = B.body(fb)
-    for f in (() -> D.emit_is_test(t.types[], g, Int64, Any),
-              () -> D.emit_as_check(t.types[], g, Int64, Any, t.top_type[]))
-        local r = try; f(); nothing; catch e; e; end
-        @test r === nothing || r isa W.RejectionError
-    end
-end
-
-@testset "translator.dart: topTypeNonNullable" begin
-    local t = translator_of(CodegenCases.f_add, (Int32,))
-    D._init_modules(t, nothing)
-    collect(D.ClassInfoCollector(t))
-    # dart's topType without null, read once from the top type
-    @test t.top_type_non_nullable[] == W.WasmBuilder.with_nullability(t.top_type[], false) && !t.top_type_non_nullable[].nullable
 end
 
 module ThrowCases
@@ -765,103 +380,6 @@ end
     local gf = body.stmts[findfirst(s -> s isa W.NirCall, body.stmts)]::W.NirCall
     local nofield = W.NirCall(W.NirValue[gf.args[1], gf.args[2], W.NirConst(Core.Const(:nope))])
     @test rejection(() -> D.visit_instance_get(gb, nofield, IR.NumType_f64)).rejection isa W.Unquarantined
-end
-
-module NarrowCases
-add8(x::Int8, y::Int8) = x + y
-lt8u(x::UInt8, y::UInt8) = x < y
-neg8(x::Int8) = -x
-widen8(x::Int8) = Int64(x) + Int64(1)
-lshr8(x::Int8) = Core.Intrinsics.lshr_int(x, 0x03)
-end
-
-# each narrow case behind Int32 arguments and answers, the types the runner marshals: the 8-bit
-# operations run inside, the conversions at the edges
-module NarrowWires
-import ..NarrowCases as N
-add8(x::Int32, y::Int32) = Int32(N.add8(x % Int8, y % Int8))
-lt8u(x::Int32, y::Int32) = N.lt8u(x % UInt8, y % UInt8)
-neg8(x::Int32) = Int32(N.neg8(x % Int8))
-widen8(x::Int32) = N.widen8(x % Int8)
-lshr8(x::Int32) = Int32(N.lshr8(x % Int8))
-end
-
-@testset "intrinsics.dart: 8- and 16-bit integers, in their type's form" begin
-    # each compiles, our builder accepting every instruction; behind Int32 arguments, run by node over
-    # every pair of edge values (-128, -1, 0, 1, 100, 127 and 0, 1, 100, 200, 255), each answers as
-    # native Julia
-    local C = NarrowCases
-    for (f, at) in ((C.add8, (Int8, Int8)), (C.lt8u, (UInt8, UInt8)), (C.neg8, (Int8,)), (C.widen8, (Int8,)), (C.lshr8, (Int8,)))
-        @test compile_one(f, at)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-    end
-    local e8 = Int32[-128, -1, 0, 1, 100, 127]
-    local u8 = Int32[0, 1, 100, 200, 255]
-    local Wr = NarrowWires
-    for (f, argsets) in ((Wr.add8, [(a, b) for a in e8 for b in e8]), (Wr.lt8u, [(a, b) for a in u8 for b in u8]),
-                         (Wr.neg8, [(x,) for x in e8]), (Wr.widen8, [(x,) for x in e8]), (Wr.lshr8, [(x,) for x in e8]))
-        queue_native!(string(nameof(f)), compile_one(f, map(typeof, first(argsets))), f, argsets)
-    end
-    # the add of two Int8s puts its result back sign-extended, i32.extend8_s right after the i32.add
-    local ins = generated_instructions(C.add8, (Int8, Int8))
-    local k = findfirst(==("i32.add"), ins)
-    @test k !== nothing && ins[k + 1] == "i32.extend8_s"
-end
-
-module Float32Cases
-addf(x::Float32) = x + 1.5f0
-end
-
-@testset "constants.dart: a Float32 literal is an f32.const of its value" begin
-    # visitDoubleConstant pushes the literal through the builder's f32_const, dart's double narrowed
-    # to the f32 the instruction holds: f32.const 1.5 (0x43, then 1.5f0's little-endian bytes)
-    local bytes = compile_one(Float32Cases.addf, (Float32,))
-    @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-    local f32 = UInt8[0x43, reinterpret(UInt8, [1.5f0])...]
-    @test any(i -> bytes[i:i+4] == f32, 1:length(bytes)-4)
-    # run by node, it answers as native Julia, the f32 crossing as its bits
-    queue_native!("addf", bytes, Float32Cases.addf, [(x,) for x in Float32[0, -0.0, 1, -1.5, 3.0f38, Inf, NaN]])
-end
-
-module TypeTestCases
-# each entry's signature is concrete (Julia compiles no specialization for a Union signature); the
-# operand under test is the field read, whose inferred type is the Union
-maybe(r::Base.RefValue{Union{Nothing,Int64}}) = r[] isa Int64
-# the same isa over a reference the runner can build from an Int64 (an Int64 in the Union needs its
-# box, not ported): the Ref built inside, nothing for a negative argument
-mutable struct Cell; x::Int64; end
-maybe_cell(r::Base.RefValue{Union{Nothing,Cell}}) = r[] isa Cell
-maybe_of(x::Int64) = maybe_cell(Ref{Union{Nothing,Cell}}(x < 0 ? nothing : Cell(x)))
-# Julia's `x === nothing` over the same field read, Kernel's EqualsNull
-null_of(x::Int64) = Ref{Union{Nothing,Cell}}(x < 0 ? nothing : Cell(x))[] === nothing
-as_int(r::Base.RefValue{Union{Nothing,Int64}}) = r[]::Int64
-dyn(r::Base.RefValue{Union{Nothing,Int64}}, T::DataType) = r[] isa T
-end
-
-@testset "code_generator.dart: isa and typeassert through types.dart's tests" begin
-    local R = Base.RefValue{Union{Nothing,Int64}}
-    # Julia's isa of the field read, visitIsExpression over the body's own statement (the Union of
-    # Nothing and Int64 a nullable reference, emitIsTest's null check): run by node it answers as
-    # native Julia, nothing and every Int64
-    local bytes = W.compile(TypeTestCases.maybe_of, (Int64,); optimize = false)
-    queue_native!("maybe_of", bytes, TypeTestCases.maybe_of, [(x,) for x in Int64[-1, 0, 1, typemax(Int64), typemin(Int64)]])
-    # `x === nothing`, visitEqualsNull: the field read's null check, run by node against native
-    local nbytes = W.compile(TypeTestCases.null_of, (Int64,); optimize = false)
-    queue_native!("null_of", nbytes, TypeTestCases.null_of, [(x,) for x in Int64[-1, 0, 5]])
-    # Julia's typeassert, the checked AsExpression: emitAsCheck needs the runtime's _asSubtype, not
-    # ported, a located rejection at the runtime library's definition
-    local e = rejection(() -> generated_instructions(TypeTestCases.as_int, (R,)))
-    @test e.rejection isa W.Unported && e.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype" &&
-          startswith(e.at, "dart2wasm/lib/types.dart:527 Types.emitAsCheck")
-    # a type computed at run time is no type test's constant: a value, which only the runtime's
-    # subtype check takes, not ported
-    local d = rejection(() -> generated_instructions(TypeTestCases.dyn, (R, DataType)))
-    @test d.rejection isa W.Unported && d.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype" &&
-          occursin("TypeTestCases.dyn", d.at)
-    # Julia's type parameter is a static parameter of the MethodInstance, never a type local, a
-    # capture or a field: no NIR reaches instantiateTypeParameter, an Internal naming nir.jl's rejection
-    local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    local p = rejection(() -> D.instantiate_type_parameter(g, TypeVar(:T)))
-    @test p.rejection isa W.Internal && occursin("Expr(:static_parameter)", p.rejection.site)
 end
 
 # a variable a closure captures before it is assigned: Julia's closure conversion allocates Core.Box() with
@@ -1060,7 +578,7 @@ end
 end
 
 # Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)
-module EqualsCases
+module FallbackEqualsCases
 struct Q; x::Int; end
 mutable struct M; x::Int; end
 @noinline same_q(a::Int) = Q(a) == Q(a)
@@ -1068,7 +586,7 @@ mutable struct M; x::Int; end
 @noinline self_m(a::Int) = (m = M(a); m == m)
 end
 @testset "Base's fallback == over immutable and mutable operands, never a wrong answer" begin
-    for f in (EqualsCases.same_q, EqualsCases.same_m, EqualsCases.self_m)
+    for f in (FallbackEqualsCases.same_q, FallbackEqualsCases.same_m, FallbackEqualsCases.self_m)
         local bytes = try
             W.compile(f, (Int,); optimize = false)
         catch e
@@ -1078,13 +596,6 @@ end
             nothing
         end
         bytes === nothing || queue_native!("$(nameof(f)) ", bytes, f, [(3,), (-1,)])
-    end
-end
-
-@testset "the third oracle: every module queued above answers as native Julia" begin
-    for r in WTRunner.run_cases(NATIVE_RUNS)
-        r.ok || println(r.label, ": ", r.why)
-        @test r.ok
     end
 end
 
@@ -1100,4 +611,13 @@ end
     @test !WasmTarget.nir_carries_data(typeof(sin))
     @test WasmTarget.nir_carries_data(CtorThisCases.Plain)
     @test WasmTarget.nir_carries_data(Type)   # an unknown type object is a value at run time
+end
+
+@testset "the third oracle: every module queued above answers as native Julia" begin
+    for r in WTRunner.run_cases(NATIVE_RUNS)
+        r.ok || println(r.label, ": ", r.why)
+        @test r.ok
+    end
+end
+
 end
