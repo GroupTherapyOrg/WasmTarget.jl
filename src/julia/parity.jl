@@ -1118,9 +1118,10 @@ end
     return n
 end
 
-# a ported definition whose whole body is one rejection, by the rejection's kind (A55S13): Internal or
-# Unquarantined is a dart definition Julia's answer replaces (a construct Julia never produces), Unported
-# a gap behind a definition that is written (a runtime function not ported), read from the definition's
+# a ported definition whose whole body is one rejection, by the rejection's kind (A55S13): Internal is a
+# dart definition Julia's answer replaces (a construct Julia never produces); Unported (a dart definition
+# not ported, a runtime function among them) and Unquarantined (a Julia-only definition not yet written,
+# src/julia/reject.jl) are gaps behind a definition that is written; read from the definition's
 # parsed body when @parity checks it, so the src progress count tells them from a port with a body
 @quarantine "Julia keeps no record of a definition's parsed body; the macro reads it once, as it checks it" Base.Dict const REJECTION_ONLY = Dict{String,Symbol}()
 
