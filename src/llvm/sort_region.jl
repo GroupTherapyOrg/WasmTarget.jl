@@ -51,7 +51,9 @@ end
 The smallest region holding `mbb`, a loop or an exception, nothing for a block in none. An
 exception holds the blocks of all its subregions, a loop not always (a block with no path back to
 the header is outside it though its header dominates it), so the loop is the smaller when the
-exception holds the loop's header."""
+exception holds the loop's header.
+
+formal(dev/formal/CFGStackify.tla): the sort keeps the pad's exception contiguous from the pad"""
 @parity "llvm/lib/Target/WebAssembly/WebAssemblySortRegion.cpp:17 SortRegionInfo::getRegionFor" function get_region_for(sri::SortRegionInfo, mbb::Int)::Union{ConcreteSortRegion,Nothing}
     local ml = get_loop_for(sri.mli, mbb)
     local we = get_exception_for(sri.wei, mbb)

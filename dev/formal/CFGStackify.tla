@@ -6,7 +6,13 @@
 (* .cpp's placeLoopMarker (434), placeBlockMarker (283), updateScopeTops   *)
 (* (67) and rewriteDepthImmediates (2615) with getBranchDepth (2551), over *)
 (* the natural loops GenericLoopInfoImpl.h's LoopInfoBase::analyze (578)   *)
-(* builds from the dominator tree. dart2wasm has no counterpart: Kernel is *)
+(* builds from the dominator tree; with EH, an EH pad's exception a sort   *)
+(* region (WebAssemblySortRegion.cpp's getRegionFor, 17, and getBottom, 52 *)
+(* and 72), placeTryTableMarker (695), addUnreachableAfterTryTables (2487) *)
+(* and fixCallUnwindMismatches's finding of the mismatches (1592). The     *)
+(* exception tree is its specification, the blocks a pad dominates, which  *)
+(* ExceptionInfo.tla checks WebAssemblyExceptionInfo computes.             *)
+(* dart2wasm has no counterpart: Kernel is *)
 (* already structured. The inputs are Julia's own (D3): Core.Compiler's    *)
 (* CFG and its dominator tree stand where LLVM reads the MachineFunction's *)
 (* blocks and its MachineDominatorTree.                                    *)
@@ -63,7 +69,21 @@
 (*                    (Bug "endloopatend": END_LOOP pushes its own block); *)
 (*   PathsPreserved   Ramsey's statement above (Bug "noupdate": Julia's    *)
 (*                    terminators kept, their fallthrough to the original  *)
-(*                    next block).                                         *)
+(*                    next block);                                         *)
+(* and with EH:                                                            *)
+(*   ExceptionsContiguous  the pad's exception is laid out contiguously    *)
+(*                    from the pad (Bug "noexcregion": the exception no    *)
+(*                    sort region);                                        *)
+(*   CatchDepthCorrect  the try_table's catch clause's depth names the     *)
+(*                    label of the BLOCK ending at the pad (Bug            *)
+(*                    "catchbelow": the depth counted with the try_table's *)
+(*                    own label);                                          *)
+(*   UnwindExact      a throwing block is found a mismatch exactly when    *)
+(*                    the innermost try_table open at its body, by wasm's  *)
+(*                    semantics, catches to another destination than its  *)
+(*                    unwind edge's, the caller when it has none (Bug      *)
+(*                    "nocaller": the second walk, of throws to the        *)
+(*                    caller, skipped).                                    *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Every CFG of N blocks whose terminators are  *)
 (* Julia's: return, goto t, a fallthrough to the next block, and goto t if *)
@@ -73,7 +93,14 @@
 (* Julia's first block), and reducible (FixIrreducibleControlFlow makes    *)
 (* it so; its own model is separate). A block's body is one instruction    *)
 (* that is not a stackified child, so no expression tree moves a marker.   *)
-(* No EH pads here: CFGStackifyEH.tla extends the model to them.          *)
+(* With EH, one EH pad, a catch block: no terminator reaches it, the       *)
+(* blocks whose statements may throw under its try reach it by an unwind   *)
+(* edge, each before it (Julia lowers a catch block after its try body),   *)
+(* and a block but the entry may throw to the caller instead; a block's    *)
+(* body is its one throwing instruction. The fix of a mismatch            *)
+(* (addNestedTryTable) is CFGStackifyEH.tla's, over Julia's own try/catch  *)
+(* CFGs: here the claim is that the mismatches found are exactly the       *)
+(* blocks whose exception the placed try_tables would send astray.         *)
 (* Block types (fixEndsAtEndOfFunction) are not control flow.              *)
 (*                                                                         *)
 (* formal(src/llvm/cfg_sort.jl sort_blocks, src/llvm/cfg_stackify.jl       *)
@@ -82,11 +109,11 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS N, Bug
+CONSTANTS N, Bug, EH
 
 Bugs == {"none", "backedges", "nosort", "nodefer", "nowalk", "singlepred",
-         "endloopatend", "noupdate"}
-ASSUME N \in Nat /\ N >= 2 /\ Bug \in Bugs
+         "endloopatend", "noupdate", "noexcregion", "catchbelow", "nocaller"}
+ASSUME N \in Nat /\ N >= 2 /\ Bug \in Bugs /\ EH \in BOOLEAN
 
 Blocks == 1..N
 Entry == 1
@@ -113,6 +140,10 @@ Succ(c, b) == CASE c[b].k = "ret"  -> {}
               []   c[b].k = "goto" -> {c[b].t}
               []   c[b].k = "ft"   -> {b + 1}
               []   c[b].k = "cond" -> {c[b].t, b + 1}
+(* a block's successors, its unwind edge to the pad among them (LLVM's      *)
+(* MachineBasicBlock successors); u[b] the pad, -1 a throw to the caller, 0 *)
+(* no throw                                                                 *)
+USucc(c, u, b) == Succ(c, b) \cup (IF u[b] > 0 THEN {u[b]} ELSE {})
 Preds(c, b) == {p \in Blocks : b \in Succ(c, p)}
 
 (* the blocks reachable from S over F's edges, never entering `avoid` *)
@@ -123,31 +154,45 @@ Closure(F(_), S, avoid) ==
 
 (* a dominates b: every path from the entry to b passes a (GenericDomTree's  *)
 (* relation; Julia's construct_domtree computes it)                         *)
-DomOf(c) == [a \in Blocks |->
-               LET r == Closure(LAMBDA x : Succ(c, x), {Entry} \ {a}, a)
+DomOf(c, u) == [a \in Blocks |->
+               LET r == Closure(LAMBDA x : USucc(c, u, x), {Entry} \ {a}, a)
                IN {b \in Blocks : b = a \/ b \notin r}]
 
 (* the natural loop of header h: h and every block reaching a back edge's   *)
 (* source without passing h, LoopInfoBase::analyze's discoverAndMapSubloop  *)
 (* (GenericLoopInfoImpl.h:459); {} when h heads no loop                     *)
-BodyOf(c, d, h) ==
-    LET latches == {p \in Preds(c, h) : p \in d[h]}
+BodyOf(c, u, d, h) ==
+    LET UPreds(x) == {p \in Blocks : x \in USucc(c, u, p)}
+        latches == {p \in UPreds(h) : p \in d[h]}
     IN IF latches = {} THEN {}
-       ELSE {h} \cup Closure(LAMBDA x : Preds(c, x), latches \ {h}, h)
+       ELSE {h} \cup Closure(LAMBDA x : UPreds(x), latches \ {h}, h)
 
 (* reducible: the CFG without its back edges (an edge whose target          *)
 (* dominates its source) is acyclic                                         *)
-Reducible(c, d) ==
-    LET Fwd(x) == {s \in Succ(c, x) : x \notin d[s]}
+Reducible(c, u, d) ==
+    LET Fwd(x) == {s \in USucc(c, u, x) : x \notin d[s]}
     IN \A x \in Blocks : x \notin Closure(LAMBDA y : Fwd(y), Fwd(x), 0)
 
-AllReach(c) == Closure(LAMBDA x : Succ(c, x), {Entry}, 0) = Blocks
+AllReach(c, u) == Closure(LAMBDA x : USucc(c, u, x), {Entry}, 0) = Blocks
 CandidateCFGs == {c \in [Blocks -> AllTerms] : \A b \in Blocks : c[b] \in TermChoices(b)}
+(* no terminator reaches the pad p: a catch block is reached by unwinding   *)
+NoTermTo(c, p) == \A b \in Blocks : p \notin Succ(c, b)
+(* the unwind edges: with EH, blocks under the try reach the pad p, each   *)
+(* before it (Julia's lowering places a catch block after its try body);   *)
+(* any block but the entry may throw to the caller instead, the pad too;   *)
+(* the entry, Julia codegen's top block, holds no statement and throws     *)
+(* nothing; one block at least unwinds to the pad                          *)
+UnwindChoices(p, b) == IF b = Entry THEN {0} ELSE {0, -1} \cup (IF b < p THEN {p} ELSE {})
+RECURSIVE UnwindFns(_, _)
+UnwindFns(p, k) == IF k = 0 THEN {<< >>} ELSE {f \o <<x>> : f \in UnwindFns(p, k - 1), x \in UnwindChoices(p, k)}
+Unwinds(p) == IF p = 0 THEN {[b \in Blocks |-> 0]}
+              ELSE {u \in UnwindFns(p, N) : \E b \in Blocks : u[b] = p}
+Pads == IF EH THEN 2..N ELSE {0}
 
-VARIABLES cfg, dom, body,                         \* the CFG and Julia's analyses
+VARIABLES cfg, uw, pad, dom, body,               \* the CFG and Julia's analyses
           placed, cur, npl, pref, ready, entries,   \* sortBlocks's state
           phase, flat, scopes                       \* the structured program
-vars == <<cfg, dom, body, placed, cur, npl, pref, ready, entries, phase, flat, scopes>>
+vars == <<cfg, uw, pad, dom, body, placed, cur, npl, pref, ready, entries, phase, flat, scopes>>
 
 Dominates(a, b) == b \in dom[a]
 IsHeader(h) == body[h] # {}
@@ -157,7 +202,20 @@ LoopFor(b) ==
     LET hs == {h \in Headers : b \in body[h]}
     IN IF hs = {} THEN 0
        ELSE CHOOSE h \in hs : \A h2 \in hs : body[h] \subseteq body[h2]
-BackEdge(p, s) == s \in Succ(cfg, p) /\ IsHeader(s) /\ p \in body[s]
+BackEdge(p, s) == s \in USucc(cfg, uw, p) /\ IsHeader(s) /\ p \in body[s]
+UPredsOf(b) == {p \in Blocks : b \in USucc(cfg, uw, p)}
+IsPad(b) == pad # 0 /\ b = pad
+(* the pad's exception: the blocks it dominates (ExceptionInfo.tla)         *)
+ExcBlocks == IF pad = 0 THEN {} ELSE dom[pad]
+(* SortRegionInfo::getRegionFor (WebAssemblySortRegion.cpp:17): the loop    *)
+(* holding b when its exception, if any, holds the loop's header, else the  *)
+(* exception; a region is its header and its blocks                         *)
+RegionFor(b) ==
+    LET L == LoopFor(b)
+        inexc == pad # 0 /\ b \in ExcBlocks /\ Bug # "noexcregion"
+    IN IF L # 0 /\ (~inexc \/ L \in ExcBlocks) THEN [h |-> L, bs |-> body[L]]
+       ELSE IF inexc THEN [h |-> pad, bs |-> ExcBlocks]
+       ELSE [h |-> 0, bs |-> {}]
 
 TypeOK ==
     /\ phase \in {"sort", "stackify", "done", "failed"}
@@ -165,18 +223,21 @@ TypeOK ==
     /\ pref \subseteq Blocks /\ ready \subseteq Blocks
 
 Init ==
-    \E c \in CandidateCFGs :
-        /\ AllReach(c)
-        /\ Preds(c, Entry) = {}
-        /\ LET d == DomOf(c)
-               bd == [h \in Blocks |-> BodyOf(c, d, h)]
-           IN /\ Reducible(c, d)
-              /\ cfg = c /\ dom = d /\ body = bd
+    \E p \in Pads, c \in CandidateCFGs :
+      /\ p = 0 \/ NoTermTo(c, p)
+      /\ Preds(c, Entry) = {}
+      /\ \E u \in Unwinds(p) :
+        /\ AllReach(c, u)
+        /\ LET d == DomOf(c, u)
+               bd == [h \in Blocks |-> BodyOf(c, u, d, h)]
+               UP(b) == {x \in Blocks : b \in USucc(c, u, x)}
+           IN /\ Reducible(c, u, d)
+              /\ cfg = c /\ uw = u /\ pad = p /\ dom = d /\ body = bd
               \* sortBlocks: each block's predecessors, a header's back edges uncounted
               /\ npl = [b \in Blocks |->
-                          Cardinality(Preds(c, b))
+                          Cardinality(UP(b))
                           - (IF bd[b] # {} /\ Bug # "backedges"
-                             THEN Cardinality(Preds(c, b) \cap bd[b]) ELSE 0)]
+                             THEN Cardinality(UP(b) \cap bd[b]) ELSE 0)]
         /\ placed = <<Entry>> /\ cur = Entry
         /\ pref = {} /\ ready = {} /\ entries = << >>
         /\ phase = "sort" /\ flat = << >> /\ scopes = << >>
@@ -192,7 +253,7 @@ PickPref(seq, es, R, rd, df) ==
     IF seq = << >> THEN [nx |-> 0, rd |-> rd, df |-> df, rest |-> {}]
     ELSE LET x == Head(seq) IN
          IF Defers(es, x) THEN PickPref(Tail(seq), es, R, rd, df \cup {x})
-         ELSE IF x < cur /\ (R = 0 \/ x \notin body[R] \/ R < x)
+         ELSE IF x < cur /\ ~IsPad(x) /\ (R.h = 0 \/ x \notin R.bs \/ R.h < x)
               THEN PickPref(Tail(seq), es, R, rd \cup {x}, df)
               ELSE [nx |-> x, rd |-> rd, df |-> df,
                     rest |-> {Tail(seq)[i] : i \in 1..Len(Tail(seq))}]
@@ -213,17 +274,17 @@ IsPerm(s) == Len(s) = N /\ {s[i] : i \in 1..Len(s)} = Blocks
 
 SortStep ==
     /\ phase = "sort" /\ Bug # "nosort"
-    /\ LET R == LoopFor(cur)
-           e1 == IF R # 0 /\ R = cur
-                 THEN Append(entries, [h |-> R, left |-> Cardinality(body[R]), d |-> {}])
+    /\ LET R == RegionFor(cur)
+           e1 == IF R.h # 0 /\ R.h = cur
+                 THEN Append(entries, [h |-> R.h, bs |-> R.bs, left |-> Cardinality(R.bs), d |-> {}])
                  ELSE entries
            e2 == [i \in 1..Len(e1) |->
-                    IF R # 0 /\ cur \in body[e1[i].h]
+                    IF R.h # 0 /\ cur \in e1[i].bs
                     THEN [e1[i] EXCEPT !.left = @ - 1] ELSE e1[i]]
            readied == UNION {e2[i].d : i \in {j \in 1..Len(e2) :
-                                R # 0 /\ cur \in body[e2[j].h] /\ e2[j].left = 0}}
+                                R.h # 0 /\ cur \in e2[j].bs /\ e2[j].left = 0}}
            es == PopDone(e2)
-           fs == {s \in Succ(cfg, cur) : ~BackEdge(cur, s)}
+           fs == {s \in USucc(cfg, uw, cur) : ~BackEdge(cur, s)}
            npl1 == [b \in Blocks |-> IF b \in fs THEN npl[b] - 1 ELSE npl[b]]
            pref1 == pref \cup {s \in fs : npl1[s] = 0}
            p == PickPref(SortAsc(pref1), es, R, ready \cup readied, {})
@@ -242,12 +303,12 @@ SortStep ==
                   /\ UNCHANGED <<placed, cur>>
              ELSE /\ placed' = Append(placed, nx) /\ cur' = nx
                   /\ UNCHANGED phase
-    /\ UNCHANGED <<cfg, dom, body, flat, scopes>>
+    /\ UNCHANGED <<cfg, uw, pad, dom, body, flat, scopes>>
 
 NoSort ==
     /\ phase = "sort" /\ Bug = "nosort"
     /\ placed' = [i \in Blocks |-> i] /\ phase' = "stackify"
-    /\ UNCHANGED <<cfg, dom, body, cur, npl, pref, ready, entries, flat, scopes>>
+    /\ UNCHANGED <<cfg, uw, pad, dom, body, cur, npl, pref, ready, entries, flat, scopes>>
 
 (* ---- the layout's positions: after MF.RenumberBlocks a block's number is   *)
 (* its position                                                              *)
@@ -257,11 +318,17 @@ PPreds(i) == {Pos[p] : p \in Preds(cfg, PB(i))}
 PDom(i, j) == Dominates(PB(i), PB(j))
 PIsHeader(i) == IsHeader(PB(i))
 PBody(i) == {Pos[x] : x \in body[PB(i)]}
+PExc == {Pos[x] : x \in ExcBlocks}
+(* SortRegionInfo::getBottom: an exception's bottom its last block; a       *)
+(* loop's its last block, extended to the bottom of an exception whose pad  *)
+(* it holds (WebAssemblySortRegion.cpp:52 and 72)                           *)
+PExcBottom == Max(PExc)
+PLoopBottom(i) == Max(PBody(i) \cup (IF pad # 0 /\ pad \in body[PB(i)] THEN PExc ELSE {}))
 
 (* a token: k its kind, t a target position (a body's own), o the outcome a  *)
 (* branch takes, s a marker's scope                                          *)
 Tok(k, t, o, s) == [k |-> k, t |-> t, o |-> o, s |-> s]
-Markers == {"BLOCK", "LOOP", "END_BLOCK", "END_LOOP"}
+Markers == {"BLOCK", "LOOP", "END_BLOCK", "END_LOOP", "TRY_TABLE", "END_TRY_TABLE"}
 Terminators == {"br", "brif", "ret"}
 
 (* the outcomes of block i's terminator and the position each reaches; -1   *)
@@ -315,7 +382,7 @@ UpdateTop(tops, b, e) == IF tops[e] = 0 \/ tops[e] > b THEN [tops EXCEPT ![e] = 
 (* placeLoopMarker (434) *)
 PlaceLoop(st, i) ==
     IF ~PIsHeader(i) THEN st
-    ELSE LET after == Max(PBody(i)) + 1
+    ELSE LET after == PLoopBottom(i) + 1
              sid == Len(st.scopes) + 1
              ins1 == [st.ins EXCEPT ![i] =
                         InsertAt(@, EarliestPos(@, LAMBDA x : x.k = "END_LOOP"), Tok("LOOP", 0, "", sid))]
@@ -349,7 +416,7 @@ PlaceBlock(st, i) ==
                 h == IF Bug = "nowalk" THEN h0 ELSE Walk(st.tops, i - 1, h0)
                 sid == Len(st.scopes) + 1
                 After(x) == \/ x.k = "LOOP" /\ st.scopes[x.s].e - 1 < i
-                            \/ x.k = "BLOCK" /\ st.scopes[x.s].e <= i
+                            \/ x.k \in {"BLOCK", "TRY_TABLE"} /\ st.scopes[x.s].e <= i
                             \/ x.k \in Terminators
                 Before(x) == x.k = "END_LOOP" /\ st.scopes[x.s].b >= h
                 ins1 == [st.ins EXCEPT ![h] = InsertAt(@, LatestPos(@, After), Tok("BLOCK", 0, "", sid))]
@@ -358,15 +425,61 @@ PlaceBlock(st, i) ==
                 scopes |-> Append(st.scopes, [kind |-> "block", b |-> h, e |-> i]),
                 tops |-> UpdateTop(st.tops, h, i)]
 
-(* placeMarkers (2509): every LOOP first, then every BLOCK, in layout order *)
+(* placeTryTableMarker (695) for the pad at position i: at the nearest       *)
+(* common dominator of its unwind predecessors walked out from the          *)
+(* exception's bottom past every scope between, a BLOCK and the TRY_TABLE   *)
+(* catching to it, after the LOOPs of loops ending above the pad, the       *)
+(* markers it encloses, the terminators and, when the header itself unwinds *)
+(* to the pad, its body; END_TRY_TABLE and END_BLOCK at the pad's start,    *)
+(* after the END_LOOPs of loops beginning inside; the scope tops at the pad *)
+(* and at the block after the exception's bottom (the last block when the   *)
+(* bottom is)                                                               *)
+PlaceTry(st, i) ==
+    LET fp == {p \in {Pos[x] : x \in UPredsOf(PB(i))} : p < i}
+    IN IF fp = {} THEN st
+       ELSE LET h0 == NCD(fp)
+                bottom == PExcBottom
+                cont == IF bottom + 1 <= N THEN bottom + 1 ELSE N
+                h == Walk(st.tops, bottom, h0)
+                bid == Len(st.scopes) + 1
+                tid == Len(st.scopes) + 2
+                After(x) == \/ x.k = "LOOP" /\ i > st.scopes[x.s].e - 1
+                            \/ x.k \in {"BLOCK", "TRY_TABLE"}
+                            \/ x.k \in Terminators
+                            \/ x.k = "body" /\ h \in {Pos[y] : y \in UPredsOf(PB(i))}
+                Before(x) == x.k = "END_LOOP" /\ st.scopes[x.s].b >= h
+                ins1 == [st.ins EXCEPT ![h] = LET j == LatestPos(@, After)
+                                              IN InsertAt(InsertAt(@, j, Tok("BLOCK", 0, "", bid)), j + 1, Tok("TRY_TABLE", i, "", tid))]
+                ins2 == [ins1 EXCEPT ![i] = LET j == EarliestPos(@, Before)
+                                            IN InsertAt(InsertAt(@, j, Tok("END_TRY_TABLE", 0, "", tid)), j + 1, Tok("END_BLOCK", 0, "", bid))]
+            IN [ins |-> ins2,
+                scopes |-> st.scopes \o <<[kind |-> "block", b |-> h, e |-> i], [kind |-> "try", b |-> h, e |-> i]>>,
+                tops |-> UpdateTop(UpdateTop(st.tops, h, i), h, cont)]
+
+(* addUnreachableAfterTryTables (2487): an UNREACHABLE after the            *)
+(* END_TRY_TABLE, so the catch BLOCK's body type checks; no marker          *)
+AddUnreachable(st) ==
+    [ins |-> [i \in DOMAIN st.ins |->
+                IF \E j \in 1..Len(st.ins[i]) : st.ins[i][j].k = "END_TRY_TABLE"
+                THEN LET j == CHOOSE j \in 1..Len(st.ins[i]) : st.ins[i][j].k = "END_TRY_TABLE"
+                     IN InsertAt(st.ins[i], j + 1, Tok("unreachable", 0, "", 0))
+                ELSE st.ins[i]],
+     scopes |-> st.scopes, tops |-> st.tops]
+
+(* placeMarkers (2509): every LOOP first, then, in layout order, the        *)
+(* TRY_TABLE of the pad and the BLOCK of every other block                  *)
 RECURSIVE FoldLoops(_, _)
 FoldLoops(st, i) == IF i > N THEN st ELSE FoldLoops(PlaceLoop(st, i), i + 1)
 RECURSIVE FoldBlocks(_, _)
-FoldBlocks(st, i) == IF i > N THEN st ELSE FoldBlocks(PlaceBlock(st, i), i + 1)
+FoldBlocks(st, i) == IF i > N THEN st
+                     ELSE FoldBlocks(IF IsPad(PB(i)) THEN PlaceTry(st, i) ELSE PlaceBlock(st, i), i + 1)
 
 Start == [ins |-> [i \in 1..N + 1 |-> IF i <= N THEN <<Tok("body", i, "", 0)>> \o TermToks(i) ELSE << >>],
           scopes |-> << >>,
           tops |-> [i \in 1..N + 1 |-> 0]]
+
+PlaceAll == LET st == FoldBlocks(FoldLoops(Start, 1), 1)
+            IN IF pad # 0 THEN AddUnreachable(st) ELSE st
 
 (* the function body, each instruction with its block (at) and, a branch,  *)
 (* its depth (d)                                                             *)
@@ -382,8 +495,11 @@ Walkback(fl, sc, j, k, stk) ==
     IF j <= k THEN stk
     ELSE LET x == fl[j] IN
          Walkback(fl, sc, j - 1, k,
-             CASE x.k \in {"BLOCK", "LOOP"} -> Pop(stk)
+             CASE x.k \in {"BLOCK", "LOOP", "TRY_TABLE"} -> Pop(stk)
              []   x.k = "END_BLOCK"         -> Append(stk, x.at)
+             (* an END_TRY_TABLE's own block, split off before the pad          *)
+             (* (addUnreachableAfterTryTables), -at here                         *)
+             []   x.k = "END_TRY_TABLE"     -> Append(stk, -x.at)
              []   x.k = "END_LOOP"          -> Append(stk, IF Bug = "endloopatend" THEN x.at ELSE sc[x.s].b)
              []   OTHER                     -> stk)
 (* getBranchDepth (2551): scopes counted from the top until the target's;   *)
@@ -394,15 +510,21 @@ DepthIn(stk, t, d) == IF d >= Len(stk) THEN Len(stk)
 
 StackifyStep ==
     /\ phase = "stackify"
-    /\ LET st == FoldBlocks(FoldLoops(Start, 1), 1)
+    /\ LET st == PlaceAll
            fl == Cat(st.ins, 1)
+           (* a TRY_TABLE's catch clause: its depth counted once the try_table's *)
+           (* own label is popped (rewriteDepthImmediates)                       *)
+           CatchStack(k) == LET w == Walkback(fl, st.scopes, Len(fl), k, << >>)
+                            IN IF Bug = "catchbelow" THEN w ELSE Pop(w)
        IN /\ flat' = [k \in 1..Len(fl) |->
                         IF fl[k].k \in {"br", "brif"}
                         THEN At(fl[k], fl[k].at, DepthIn(Walkback(fl, st.scopes, Len(fl), k, << >>), fl[k].t, 0))
+                        ELSE IF fl[k].k = "TRY_TABLE"
+                        THEN At(fl[k], fl[k].at, DepthIn(CatchStack(k), fl[k].t, 0))
                         ELSE fl[k]]
           /\ scopes' = st.scopes
     /\ phase' = "done"
-    /\ UNCHANGED <<cfg, dom, body, placed, cur, npl, pref, ready, entries>>
+    /\ UNCHANGED <<cfg, uw, pad, dom, body, placed, cur, npl, pref, ready, entries>>
 
 Terminal == phase \in {"done", "failed"} /\ UNCHANGED vars
 
@@ -415,12 +537,12 @@ RECURSIVE OpenFrom(_, _, _)
 OpenFrom(j, k, stk) ==
     IF j >= k THEN stk
     ELSE OpenFrom(j + 1, k,
-             CASE flat[j].k \in {"BLOCK", "LOOP"}         -> Append(stk, flat[j].s)
-             []   flat[j].k \in {"END_BLOCK", "END_LOOP"} -> IF stk = << >> THEN stk ELSE Pop(stk)
+             CASE flat[j].k \in {"BLOCK", "LOOP", "TRY_TABLE"}         -> Append(stk, flat[j].s)
+             []   flat[j].k \in {"END_BLOCK", "END_LOOP", "END_TRY_TABLE"} -> IF stk = << >> THEN stk ELSE Pop(stk)
              []   OTHER                                   -> stk)
 OpenAt(k) == OpenFrom(1, k, << >>)
 (* the block a label names: a BLOCK's end block, a LOOP's header *)
-LabelBlock(sid) == IF scopes[sid].kind = "block" THEN scopes[sid].e ELSE scopes[sid].b
+LabelBlock(sid) == IF scopes[sid].kind \in {"block", "try"} THEN scopes[sid].e ELSE scopes[sid].b
 (* where a branch to label sid resumes: after a BLOCK's END, after its LOOP *)
 Resume(sid) ==
     LET mk == IF scopes[sid].kind = "block" THEN "END_BLOCK" ELSE "LOOP"
@@ -452,17 +574,17 @@ EveryBlockOnce == phase \in {"stackify", "done", "failed"} => IsPerm(placed)
 
 Topological ==
     phase = "done" =>
-        \A b \in Blocks : \A p \in Preds(cfg, b) : ~BackEdge(p, b) => Pos[p] < Pos[b]
+        \A b \in Blocks : \A p \in UPredsOf(b) : ~BackEdge(p, b) => Pos[p] < Pos[b]
 
 LoopsContiguous ==
     phase = "done" =>
-        \A h \in Headers : \A j \in Pos[h]..Max(PBody(Pos[h])) : Dominates(h, placed[j])
+        \A h \in Headers : \A j \in Pos[h]..PLoopBottom(Pos[h]) : Dominates(h, placed[j])
 
 RECURSIVE Nested(_, _)
 Nested(j, stk) ==
     IF j > Len(flat) THEN stk = << >>
-    ELSE CASE flat[j].k \in {"BLOCK", "LOOP"} -> Nested(j + 1, Append(stk, flat[j].s))
-         []   flat[j].k \in {"END_BLOCK", "END_LOOP"} ->
+    ELSE CASE flat[j].k \in {"BLOCK", "LOOP", "TRY_TABLE"} -> Nested(j + 1, Append(stk, flat[j].s))
+         []   flat[j].k \in {"END_BLOCK", "END_LOOP", "END_TRY_TABLE"} ->
                   stk # << >> /\ Last(stk) = flat[j].s /\ Nested(j + 1, Pop(stk))
          []   OTHER -> Nested(j + 1, stk)
 WellNested == phase = "done" => Nested(1, << >>)
@@ -481,4 +603,45 @@ PathsPreserved ==
     phase = "done" =>
         /\ NextBody(1) = Pos[Entry]
         /\ \A i \in Blocks : \A o \in Outcomes(i) : LandFrom(i, TermIdx(i), o) = Dest(i, o)
+
+ExceptionsContiguous ==
+    phase = "done" /\ pad # 0 => PExc = Pos[pad]..(Pos[pad] + Cardinality(PExc) - 1)
+
+TryTables == {k \in 1..Len(flat) : flat[k].k = "TRY_TABLE"}
+CatchDepthCorrect ==
+    phase = "done" =>
+        \A k \in TryTables :
+            LET stk == OpenAt(k) IN
+            flat[k].d < Len(stk) /\ scopes[stk[Len(stk) - flat[k].d]].kind = "block"
+            /\ LabelBlock(stk[Len(stk) - flat[k].d]) = flat[k].t
+
+(* fixCallUnwindMismatches's walks (1592): backward with the stack of the  *)
+(* pads the open try_tables catch to (TRY_TABLE pops, END_TRY_TABLE pushes  *)
+(* its pad), a block unwinding to the pad a mismatch when the stack's top   *)
+(* is not the pad; a block throwing to the caller a mismatch when the stack *)
+(* is not empty. Here each block's body is its one throwing instruction.    *)
+RECURSIVE PadStackAt(_, _, _)
+PadStackAt(j, k, stk) ==
+    IF j <= k THEN stk
+    ELSE PadStackAt(j - 1, k,
+             CASE flat[j].k = "TRY_TABLE"     -> Pop(stk)
+             []   flat[j].k = "END_TRY_TABLE" -> Append(stk, scopes[flat[j].s].e)
+             []   OTHER                       -> stk)
+BodyIdx(i) == CHOOSE k \in 1..Len(flat) : flat[k].k = "body" /\ flat[k].t = i
+Found(i) ==
+    LET stk == PadStackAt(Len(flat), BodyIdx(i), << >>)
+        u == uw[PB(i)]
+    IN CASE u > 0  -> stk = << >> \/ Last(stk) # Pos[u]
+       []   u = -1 -> Bug # "nocaller" /\ stk # << >>
+       []   OTHER  -> FALSE
+(* wasm's semantics: the innermost try_table open at the throw catches it  *)
+(* and sends it to its pad; with none open it goes to the caller (-1)       *)
+Caught(i) ==
+    LET stk == OpenAt(BodyIdx(i))
+        tries == {m \in 1..Len(stk) : scopes[stk[m]].kind = "try"}
+    IN IF tries = {} THEN -1 ELSE scopes[stk[Max(tries)]].e
+UnwindExact ==
+    phase = "done" =>
+        \A i \in Blocks : uw[PB(i)] # 0 =>
+            (Found(i) <=> Caught(i) # (IF uw[PB(i)] > 0 THEN Pos[uw[PB(i)]] ELSE -1))
 =============================================================================

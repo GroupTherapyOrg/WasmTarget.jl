@@ -32,7 +32,7 @@ anchor in `src/` has a row.)
 
 | Component | Functions | Model |
 |---|---|---|
-| Stackifier, LLVM's (dev/LEDGER.md D42) | `sort_blocks` (src/llvm/cfg_sort.jl), `place_markers`, `place_loop_marker`, `place_block_marker`, `rewrite_depth_immediates` (src/llvm/cfg_stackify.jl), over Core.Compiler's CFG and dominator tree | CFGStackify |
+| Stackifier, LLVM's (dev/LEDGER.md D42) | `sort_blocks` (src/llvm/cfg_sort.jl), `get_region_for` (src/llvm/sort_region.jl: an exception a sort region), `place_markers`, `place_loop_marker`, `place_block_marker`, `place_try_table_marker`, `add_unreachable_after_try_tables`, `fix_call_unwind_mismatches`'s finding, `rewrite_depth_immediates` (src/llvm/cfg_stackify.jl), over Core.Compiler's CFG and dominator tree | CFGStackify |
 | Exception tree, LLVM's (dev/LEDGER.md D42) | `recalculate`, `discover_and_map_exception`, `get_outermost_exception` (src/llvm/exception_info.jl), over Core.Compiler's dominator tree and the dominance frontier (src/llvm/dominance_frontier_impl.jl) | ExceptionInfo |
 | Stackifier over EH pads, LLVM's (dev/LEDGER.md D42) | `place_try_table_marker`, `add_unreachable_after_try_tables`, `fix_catch_unwind_mismatches`, `fix_call_unwind_mismatches`, `split_end_loop_bb`, `get_trampoline_block`, `add_nested_try_table` (src/llvm/cfg_stackify.jl), the pads and unwind edges of `machine_function` (src/julia/machine.jl), each statement's nothrow by inference's rule (`nir_code`, src/julia/nir.jl) | CFGStackifyEH |
 | FixIrreducibleControlFlow, LLVM's (dev/LEDGER.md D42) | `process_region`, `make_single_entry_loop`, `calculate` (src/llvm/fix_irreducible_control_flow.jl), before CFGSort | FixIrreducible |

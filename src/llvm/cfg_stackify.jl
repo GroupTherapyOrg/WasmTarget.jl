@@ -313,6 +313,8 @@ unwinds to `mbb`, the header's statements (STMTS, where LLVM holds the throwing 
 END_TRY_TABLE and the BLOCK's END_BLOCK at the start of `mbb`, after the END_LOOPs of loops beginning
 inside it and before the CATCH. The scope tops are those of the try_table ending at `mbb` and of the
 conceptual catch block ending after the exception's bottom.
+
+formal(dev/formal/CFGStackify.tla): the markers stay well nested and the catch clause's depth names the BLOCK ending at the pad
 """
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:695 WebAssemblyCFGStackify::placeTryTableMarker" function place_try_table_marker(pass::WebAssemblyCFGStackify, mf::MachineFunction, mli::LoopInfoBase, wei::WebAssemblyExceptionInfo, mbb::Int)::Nothing
     mf.blocks[mbb].ehpad || reject!(Internal("src/llvm/cfg_stackify.jl place_try_table_marker: block $mbb is no EH pad"), "placeTryTableMarker")
@@ -631,6 +633,8 @@ Each call (a block's throwing statements) whose innermost try_table, after the l
 another EH pad than the one it unwinds to, or that should unwind to the caller but sits inside a
 try_table: each such range gets a nested try_table to its right destination (addNestedTryTable).
 Whether there were any.
+
+formal(dev/formal/CFGStackify.tla): a throwing block is found exactly when the innermost open try_table catches it astray
 """
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:1592 WebAssemblyCFGStackify::fixCallUnwindMismatches" function fix_call_unwind_mismatches(pass::WebAssemblyCFGStackify, mf::MachineFunction)::Bool
     # Linearizing the control flow by placing TRY_TABLE / END_TRY_TABLE markers can create mismatches
