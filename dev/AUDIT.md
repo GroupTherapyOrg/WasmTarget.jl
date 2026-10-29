@@ -4977,3 +4977,104 @@ MARCH 1.C. A55S9 is open on MARCH 1.B. A55S11, its anchored-total half, A55S13 a
 is open on MARCH 1.L. A55E1 is open on MARCH 1.T. By owner: the codegen lane holds A55S12, A55S16 and A55S17; the
 translator lane holds A55S1 to A55S8; the lead holds A51E3 first, then A55S11's anchored total, A55S13, A55S14 and
 A55S15; the tests lane holds A55E1; A55S9 the builder's owner.
+
+## 2026-10-28 — audited through f7345c7b (f77d8b39..f7345c7b: the reached ccallables named and a repeated CodeInstance compared, the closure target and importer, the interop namer, modules, KernelNodes' getters, the JS runtime finalizer, the serializer's watch points, the cfe phase and dry run, Table, the record layout's rejections, makeArray, InstanceInvocation, EqualsCall, the closure visitors, the code generator's types and source map, no context, entry 55 and its correction, record constants at their fields' types, the runtime's anchors admitted, the void answer, four language directories, Throw, translateVariable, children at half their CPU, a six-commit landing, the progress line's replaced and gaps, NodeCounter, the inlining questions)
+
+The fifty-sixth audit, beside the work, covers the 31 commits of f77d8b39..f7345c7b that are not entries 55 (ae190d59
+and its correction 6927759d, its author's). The lead's named commits (9640ad5f, a8144598, 16ee0e2f, b54115e0, 517826a5,
+fdd1567d, 502ca9ea, 963d9975) were read here; the other twenty by one read-only sub-auditor, each finding below re-run
+here. Two Julia runs, each a probe under `taskpolicy -b` with an alarm, compiled a program and ran it through
+test/runner.jl beside native (scratchpad eqprobe2.jl and eqprobe3.jl). Standing items. Corpus: `tail -1 wt-corpus.tsv`
+gives `b54115e0 red 561 dart_closure/self_reference: Test Failed`, the fifth red head in a row, its first failure no
+longer record_literal (A55S10's 45 no longer lead it); the landings beside it all went green, A51E3 (open on 1.L)
+unchanged. Fixed in the range: A55S10 by b54115e0 (recorded), A55S13 by 16ee0e2f (`Fixes: A55S13`; A56E2 on what it
+calls Julia's answer), A54E1 by 9640ad5f (`Fixes: A54E1`; children at half weight, A56E3), A54S2 by c4482fa7 (why the
+reached ccallables, juliac's library precedent) and a64d7751 (a repeated CodeInstance with other code an Internal;
+A56S6). A54S4 grows: 16ee0e2f writes the transparent macros a fourth time (`grep -n 'Symbol("@inline"),
+Symbol("@noinline")' src/julia/parity.jl | wc -l` gives 4). Findings A56S1 to A56S8 and A56E1 to A56E3.
+
+Area: builder — 9208ee42 ports dart's Table (table.dart:9) and _WithMutability (type.dart:1289) as the concrete classes
+they are; 1ee696ba ports the serializer's watch points, reached only by tests (src/wasm_builder/ir/module.jl:101 still
+rejects Unported at Module.serialize when one is set): sound as ports, the reachability A56S3's.
+
+Area: collection and planning — b54115e0 instantiates a record constant's fields at its class's own field types (the
+layout visitRecordLiteral builds, Julia's where dart's record class holds the top type), its case run beside native in
+517826a5. (A56S3, medium) ports no call reaches, counted as ported, A55S2's defect again: `grep -rn
+"interop_member_namer" src | grep -v "@parity"` gives the field (`translator.jl:143
+interop_member_namer::Late{InteropMemberNamer}`), never an assignment, and one read, `compile.jl:313 local
+js_runtime_finalizer = JS.RuntimeFinalizer(translator.interop_member_namer[])`, behind `!standalone`, while `grep -n
+"standalone" src/julia/entry.jl` gives `27: options.translator_options.standalone = true`; so RuntimeFinalizer and its
+generate (f2fa6c7f), InteropMemberNamer and its namers (5898a0d1), the cfe phase's error results and
+CompilationDryRunError (61fd216b), SingleClosureTarget (9e31fe7e), make_array_from_expressions (b96aa762),
+module_for_constant (9bc6e7bf), instantiate_constant_backend_use (df496774) and _initialize_context_locals (ef0161a4, a
+silent `nothing`) are bodies no compile runs (C2). Fix: the lead's one rule (A55S14), each answered as Julia's or
+reached. (A56S4, medium) 5898a0d1 leaves the export name computed twice: `grep -n "function get_export_name"
+src/namer.jl src/functions.jl` gives namer.jl:106 and functions.jl:111, the same body, where dart's
+FunctionCollector.getExportName delegates to the namer (functions.dart:68–69), and the port's _handle_exports reserves
+no name (D5). Fix: delegate, delete the copy. (A56S6, low) a64d7751 compares `src.code == first_src.code` (`grep -n
+"code == first" src/julia/nir.jl` gives :414), Vector{Any} `==`, where `isequal` is the identity of code (a NaN literal
+rejects spuriously, a `missing` throws a TypeError), and no case reaches it (D12). (A56S7, low) `sed -n 261p
+src/compile.jl` gives `options.dry_run && return CompilationDryRunSuccess()`: the dry run reports success without
+running the stages, where dart's summarizer decides (C6). (A56S8, low) src/julia/entry.jl:20 says standalone because
+"the JS runtime that loads a module is not yet ported", which f2fa6c7f ported (C9).
+
+stopgap in disguise: A56S3's bodies, which cannot run and count toward src progress.
+precedent: the record layout, Julia's own field types (class_info.jl); the reached ccallables, juliac's library build.
+
+Area: emission and diagnostics — fdd1567d: visitThrow translates the exception as topTypeNonNullable and rejects at the
+runtime's Error._throwWithCurrentStackTrace (`git show 898a1e4b:sdk/lib/_internal/wasm/common/errors_patch.dart | sed -n
+19p` gives `static Never _throwWithCurrentStackTrace(Object object) =>`), dart's :2955 line for line; 502ca9ea's
+translateVariable and initializeVariable match :702 and :842; 963d9975 answers NodeCounter by Julia's inliner (D3);
+915f6b63 and 49155ae2 route a callee that carries fields and the closure visitors. (A56S1, high) a call Julia left to
+Base's fallback `==` compiles to a reference comparison, a wrong answer: src/code_generator.jl:965 `if single_target_
+!== nothing && single_target_.def === which(==, Tuple{Any,Any}) || …` emits `ref_eq` (146a516e), where the fallback is
+`x === y`, Julia's egal, true for two immutable structs of equal fields; measured, `perl -e 'alarm 300; exec @ARGV'
+taskpolicy -b julia --project=. --startup-file=no
+/private/tmp/claude-501/-Users-daleblack-Documents-dev-GroupTherapyOrg-WasmTarget-jl/d67060e8-8b95-4213-b288-76d0f68067d8/scratchpad/eqprobe3.jl`
+(struct Q; x::Int64; `q1 = Q(a); q2 = Q(a); (@noinline q1 == q2) ? 1 : 0`, its typed IR `invoke
+Main.P.:(==)(%1::Main.P.Q, %2::Main.P.Q)::Bool`) printed `native: 1 runner: … "the module answers 0, native Julia 1; the
+wasm-opt'd module answers 0, native Julia 1"` (C3, D9: the worst outcome, a module returning the wrong value). Fix: the
+fallback goes through ==='s own lowering (the identical intrinsic, which rejects located for a type it does not cover)
+until egal is ported, and the probe joins the corpus. (A56S2, medium) 915f6b63 routes an invoke of a constructor to
+visitInstanceInvocation, an Internal: its arm reads `Base.issingletontype(dart_type_of(self, i.args[1])) ?
+visit_static_invocation(…) : visit_instance_invocation(…)`, and a constructor's callee `Q` is a `Type{Q}`, no singleton
+type, so the same probe with the constructors left as calls
+(`/private/tmp/claude-501/-Users-daleblack-Documents-dev-GroupTherapyOrg-WasmTarget-jl/d67060e8-8b95-4213-b288-76d0f68067d8/scratchpad/eqprobe2.jl`,
+`invoke Main.P.Q(a::Int64)::Main.P.Q`) printed `WasmTarget.Internal("dart2wasm/lib/translator.dart:1909
+Translator.preciseThisFor: MethodInstance for Main.P.Q(::Int64), no instance member or constructor, has no `this`")`, an
+Internal for a plain program (C6, D12). Fix: the callee's kind decides by what it is (a Type value is a constructor
+call, Kernel's ConstructorInvocation or a static call), with this probe its case. (A56S5, low) 502ca9ea anchors the JS
+embedding's runtime for a standalone compile: its rejections name
+`sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13` and `js_common/print_patch.dart:8`, while `git ls-tree -r
+--name-only 898a1e4b sdk/lib/_internal/ | grep -iE "wasm.*(stack_trace|print)_patch"` lists
+`wasm/standalone/print_patch.dart` and `wasm/standalone/stack_trace_patch.dart` (printToConsole at :9,
+StackTrace.current at :15), the library a standalone compile links (C2). Fix: the standalone anchors.
+
+stopgap in disguise: none new.
+precedent: Throw, dart's visitThrow calling its runtime; NodeCounter, Julia's inliner (ssa_inlining_pass) deciding.
+
+Area: enforcement and prose — a8144598 caps a landing at six commits, its oldest (the scratch worktree made at the
+sixth), and narrows the failure record to the check's own red lines; sound. 032d5066's 220 cases are native answers,
+none routing around Base. (A56E1, medium) the runner's void answer reads no wasm value: `grep -n "if (t === 'void')"
+test/runner.jl` gives `169: if (t === 'void') return '-';`, the kind taken from native's answer's type, so an answer
+inferred `Union{Nothing,T}` passes whenever native returns nothing, whatever the module returned (8988a847). Fix: '-'
+only for undefined or null, any other value a failing answer. (A56E2, medium) 16ee0e2f calls an Unquarantined-only body
+Julia's answer: its line counts `get(WasmTarget.REJECTION_ONLY, a, :body) in (:Internal, :Unquarantined)` as "one
+rejection where Julia's answer replaces dart's construct", while `sed -n 12p src/julia/reject.jl` gives `A path reached
+a Julia-only definition (src/julia/) not yet written`, a gap; and the range adds such bodies outside the code generator
+(`git show 963d9975 -- src | grep '^+' | grep -o "reject!([A-Za-z]*" | sort | uniq -c` gives `24 reject!(Unquarantined`,
+f7345c7b 3 more), A55S12's split now in translator.jl. Fix: the replaced count reads Internal alone once A55S12's one
+kind lands everywhere, an Unquarantined counted a gap. (A56E3, low) 9640ad5f judges a stage at the larger of its
+instructions at the rate and half its CPU seconds, so a child's work on a performance core counts half; the lead's
+RUSAGE_CHILDREN follow-up (each test process printing its children's CPU at full weight) closes it. Requirements: C3 and
+D9 (A56S1); C6 and D12 (A56S2, A56S6); C2 (A56S3, A56S5); D5 (A56S4); D40 and D43 (A56E2); D14 (A56E3); no lock fired
+inside its band.
+
+Landing times: entry 55 at 311 s and its correction inside D13's band (ship's median of the last five, 103 s).
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A55S13 is fixed by 16ee0e2f, A54E1 by 9640ad5f
+(carried by A56E3), A54S2 by c4482fa7 and a64d7751 (carried by A56S6), each leaving its row. A56S1 and A56S2 are what
+the range broke, the next fixes of the codegen lane. A56S1, A56S2 and A56S5 are open on MARCH 1.D. A56S3, A56S4, A56S6,
+A56S7 and A56S8 are open on MARCH 1.C. A56E1 is open on MARCH 1.T. A56E2 and A56E3 are open on MARCH 1.L. By owner: the
+codegen lane holds A56S1, A56S2 and A56S5; the translator lane holds A56S3 to A56S8 (A56S3 under the lead's rule,
+A55S14); the tests lane holds A56E1; the lead holds A56E2, A56E3 and A51E3.
