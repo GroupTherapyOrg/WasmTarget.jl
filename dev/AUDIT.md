@@ -4841,3 +4841,136 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A53E1 is fixe
 1a53f370 and 6eb9d85f, A51S2 by 0c40c27e and A53S1 by cdbb712c, each leaving its row. A54S1 and A54S2 are open on MARCH
 1.C. A54S3 is open on MARCH 1.D. A54S4 is open on MARCH 1.A6. A54E1 is open on MARCH 1.L. By owner: the translator lane
 holds A54S1 and A54S2; the codegen lane holds A54S3; the lead holds A54E1, A54S4 (src/julia/parity.jl) and A51E3.
+
+## 2026-10-28 — audited through f77d8b39 (6eb9d85f..f77d8b39: perf of Late and the maps, the runtime's anchors, the must-throw call, the 45 visitors Julia never reaches, EqualsNull, StaticTearOff and StaticSet, Not, the structured statements as NoCounterpart, the compile-once dispatchers, the intrinsics' families, the generators Julia replaces, entry 54, a check only inside a landing and each green commit pushed, smoke against native, UInt crossing, six language directories and the strict records, the audit-51 S fixes, the literal visitors, the switch family, the serializer's buffers, CompilerPhase, the pragma readers, fourteen translator ports, the builtin names)
+
+The fifty-fifth audit, beside the work, covers the 47 commits of 6eb9d85f..f77d8b39 that are not entry 54 (2c036a90, its
+author's). The collection and emission areas were read by two read-only sub-auditors, each finding below re-run here by
+the command quoted; the builder's one commit, the enforcement area and the tests were read here. Standing items. Corpus:
+`tail wt-corpus.tsv` gives `9d0cba81 green` then `82fcef17 red … dart_closure/implicit_closure`, `977d5959 red …
+implicit_closure`, `cb4ef2b4 red … dart_language/record_literal` (its run: `corpus | 4621 45 4666`, the failures `a
+WasmTarget defect: WasmTarget rejects InstructionsBuilder: invalid module at i32.const 6 / i32.const 0 / global.get C1
+42 …` in ten groups) and `9e31fe7e red`, while every landing after 82fcef17 went green: A51E3 (open on 1.L; `grep -n
+"corpus" dev/ship.sh` prints nothing) is no longer a risk but the state of the branch, its corpus red for four heads and
+counting. Fixed in the range (each checked): A51E1, A51E4, A51E9, A53E2 and A53E3 by 9d719901 (`:rejects` admits a
+compile, an OutsideSubset, or an Unported whose anchor parses into a pin table or an Unquarantined whose row opens with
+a file, never InvalidModule or Internal; `:wt_bug` asserts the defect still stands and never covers a module; a failure
+prints `_dart_breaks`'s reason; the budget is `@timed` less `compile_time`; a `:compiled` record lowered or a `:wt_bug`
+added is named `Lowers-record:`, L227's second half, with ten plants); A51S5 by 129c5acf, A51S6 by 76341323, A51S10 by
+1e9d7839 (A55S1 its breakage), A51S11 by 762d5514, A51S15 by 6904535d, A51S16 by b412b1f4, A51S4 by 977d5959 (on 1.13,
+over every `_g`/`_xf` entry), A52S1 and A52E3 by 7d8f3e62 (A55S11 its scope), A54S3 by 3cb7f7c6, A51S7 ruled by 0a69fbb6
+(A55S17 its claim); partly: A51S8 by 35642ae7 (A55S6), A51S9 by 439a1606 (A55S8), A51S13 by 484f3351 (A55S5), A54S1 by
+f77d8b39 (A55S3). Findings A55S1 to A55S17 and A55E1.
+
+Area: builder — 03ab4430: writeF32 and writeF64 write through serializer.dart's scratch buffers, the bytes unchanged.
+(A55S9, low) the buffers are process-global `const`s (serializer.jl:92, :107) where dart's static lives in one isolate;
+two compiles on two threads would share them, a difference no text names (D7). Fix: one buffer per Serializer, or the
+difference named.
+
+Area: collection and planning — 762d5514 computes the CFG once at NIR build (nir.jl:252), which machine_function,
+eliminate_phi_nodes and visit_block's copies all read; 129c5acf reads the world as NIR once, at the TFA phase. (A55S1,
+medium) 1e9d7839 reads a field 762d5514 removed: `sed -n 236,241p src/julia/nir.jl` gives NirBody's fields `ci`,
+`stmts`, `types`, `cfg`, and `grep -n "nir_body_of(translator.component, self.reference)" src/translator.jl` gives
+`1410: for (i, st) in enumerate(nir_body_of(translator.component, self.reference).code)`: a compile with print_kernel
+set raises a FieldError naming no site, and no case sets it (C6, D12). Fix: `.stmts`, and a case with print_kernel.
+(A55S2, medium) ports Julia never reaches, counted as ported, A54S3's defect again: `for f in ffi_memory find_memory
+get_polymorphic_dispatchers_for_module get_partial_instantiator_for_module _lazy_initialize_global; do grep -rn "$f("
+src | grep -v "@parity" | wc -l; done` gives 0 for each; their own docstrings say so (translator.jl:414 "no module makes
+one until the subset admits a dynamic call", :397 "so no program makes one", :806 "no call reaches here"), and ffiMemory
+and getInternalizedStringGlobal serve a JS host every standalone compile lacks (52e5fccf, 79e5b94a, a5f55918, 8c4e9de8,
+900d5810, 1e56b146, f1f5ad72) (C2). Fix: each rejects naming Julia's answer and leaves the ported count, as 6fa334e7 and
+3cb7f7c6 do, under the one rule A55S14 asks. (A55S3, medium) f77d8b39 added the wrong rows: `sed -n 605,615p
+src/julia/nir.jl` gives `f === Base.getproperty && return (2,)` and `f === Base.setproperty! && return (2,)`, while
+`perl -e 'alarm 100; exec @ARGV' taskpolicy -b julia --startup-file=no -e 'println(Core.getproperty === Core.getfield, "
+", Core.setproperty! === Core.setfield!); …'` prints `true true`: Core's builtins are getfield and setfield!, already in
+the table, and Base's generic getproperty is a function call whose Symbol, left unresolved, is a real argument; and
+`grep -n "_builtin_name_operands(callee)" src/julia/nir.jl` gives :664 with the `callee isa Core.Builtin` guard gone
+(C3, D3). A54S1's premise was half wrong, its get_binding_type row sound. Fix: drop the two Base rows, restore the
+guard. (A55S4, medium) c4c37345's validate and _validate_phases have no caller but each other (`grep -rn
+"validate(\|_validate_phases(" src | grep -v "@parity"` gives `src/compiler_options.jl:133: _validate_phases(self)`);
+called, the default cfe phase requires a `.dart` input (:154) and rejects every Julia compile, and dart's exhaustive
+`switch (phases.first)` is an if/elseif chain (C2, C3, D8). Fix: Julia's answer for the input or a rejection naming it,
+and an exhaustive phase match. (A55S5, low) 484f3351 hashes a mutable leaf by content (nir.jl:43) where its comment says
+address: Julia's `hash` of a self-containing vector overflows the stack and a mutated one changes hash (C6, C9). Fix:
+`hash(objectid(v), h)` for mutables. (A55S6, low) the rebindable test is decided twice: nir.jl:496 `isconst(g.ref.mod,
+g.ref.name)` and globals.jl:162 `isdefinedglobal && isconst` (D5). (A55S7, low) translator.jl:1338 rejects "a Julia
+binding declares no pragmas" Internal where 60092888's pragma readers reject the same fact Unquarantined (C6). (A55S8,
+low) reject.jl:114 tests `e.cause isa TrimEntryText` outside the @exhaustive match, and subset.jl:137's CallMissing
+typeassert would raise a TypeError naming no site on a third record (D8, C6).
+
+stopgap in disguise: A55S2's full bodies, which cannot run and count toward src progress.
+precedent: the CFG, Julia's compute_basic_blocks; a builtin's name operands, its tfunc signature (builtins only); a
+mutable constant's identity, objectid.
+
+Area: emission and diagnostics — the lead's rulings hold in substance: 86605f08 and cedaa61f type the 45 visitors of
+constructs Julia never produces by the uninhabited NoCounterpart and reject Internal, visit_block (CFGStackify's port)
+the structured statements' replacement; 41ab48cb (EqualsNull, dart :2022), 305549d5's tear-off (:2193), b3ce967c (Not,
+:2803, the intrinsifier's copy deleted) and 22fd8a4f (:2984–:3008) match dart at their lines. (A55S10, high) 45 corpus
+cases are InvalidModule, the builder refusing a constant's struct.new (the corpus line above: `i32.const 6`, `i32.const
+0`, then the fields' `global.get … ref Int64`), new between 977d5959 and cb4ef2b4 (`git log --oneline
+977d5959..cb4ef2b4` gives aa8aa069, 22fd8a4f, 3cb7f7c6, 03ab4430, c4c37345, 60092888, d92bd5ee, 4414459f, a5f55918,
+cb4ef2b4); read, not measured: 22fd8a4f routes each NirConst to its literal visitor by its value's type, the likeliest,
+and the header with an identity hash is the form 2d4cd956 found the builder refusing for the boxes (C7, D10, D12). Fix:
+at its source, the failing constants' struct layout and header agreeing, with one of the 45 as its case. (A55S11,
+medium) the runtime's anchors are outside every pin table, so 9d719901's located check refuses 7d8f3e62's rejections:
+the corpus's implicit_closure line reads `its Unported anchor names sdk/lib/_internal/wasm/common/errors_patch.dart, in
+no pin table`, and `grep -c "sdk/lib" src/julia/parity.jl` gives 0, so those Unported never enter the anchored total
+either (D43, C9). The anchors themselves are right at the pin (type.dart:1561 `void _asSubtype(…`). Fix: the runtime
+files in the pin table and the skeleton's scope, or the lead's ruling that names their kind. (A55S12, medium) one fact,
+two kinds: `grep -o 'reject!([A-Za-z]*' src/code_generator.jl | sort | uniq -c` gives `88 reject!(Internal`, `13
+reject!(Unported`, `87 reject!(Unquarantined`; the replaced generators' methods (6fa334e7's 30, 76426b48, dbaa98ed,
+3cb7f7c6) reject Unquarantined, which reject.jl:12 defines as a Julia-only definition not yet written, where the
+visitors of the same kind of gap reject Internal (tasks: visit_yield_statement Internal, dbaa98ed's suspend-state
+helpers Unquarantined) (C6, D5). Fix: Internal everywhere, the tests re-pinned (code_generator_sub.jl:42, :93, :120).
+(A55S13, medium) a rejecting stub counts as ported: dev/src_progress.sh:40 `stubbed = Set(x.anchor for x in e if
+!x.ported)`, and `grep -n 'local ported = ' src/julia/parity.jl` gives `1135: local ported = !_is_macro(def,
+Symbol("@unported"))`, so the 110 bodies that only reject (45 Internal, 65 Unquarantined) count as filled, as does
+305549d5's visit_static_set, a body that only rejects Unported at the setter where dart's :2199 translates the value and
+calls it (D40, D43). Fix: a third registry state for a replaced definition, printed apart from ported and unported, its
+rejection generated from the Kernel row. (A55S14, medium) two rulings in one range for a port Julia never reaches:
+3cb7f7c6 replaced BrTableInfo's working port with rejections because nothing reaches it, while dbaa98ed ported
+restore_this_and_context_chain (`grep -rn "restore_this_and_context_chain(" src | grep -v @parity` prints nothing; its
+one dart caller, restoreSuspendStateContext, rejects here) and 76426b48 InvocationCreationStubGenerator.generate
+(reached only past make_invocation_creator_signature, which rejects), and dev/skeleton_scope.toml says codegen
+structures "are never out, even where Julia's answer leaves them empty: they are ported" (C2, D5). Fix: the lead's one
+rule, applied to all three and to A55S2. (A55S15, medium) 7573876b's speed fields hold Any: `sed -n 28p
+src/julia/late.jl` gives `value::Any # T once assigned; held untyped so one compiled body serves every T`,
+LinkedHashMap's `_slots::Dict{Any,Int}`, and `_late_get` has no return annotation; behavior is sound (reads typeassert),
+but C4 names Any only at heterogeneous seams, and L215 reads ported structs alone. Fix: each an exact allowlisted seam
+(D20) with `_late_get` annotated, or the typed form back. (A55S16, low) the 45 rejections name neither their Kernel row
+nor visitBlock's anchor, and copies disagree (kernel.jl:146 FileUriExpression against code_generator.jl:1264) (D5, C9).
+(A55S17, low) 0a69fbb6's "a must-throw call is Julia's MethodError throw" is wider than Julia's rule:
+verifytrim.jl:254–256 downgrades any Union{}-typed unresolved call (`if extyp === Union{} warn = true`), which may throw
+the matched method's own exception (C3, D3). Fix: the text as verifytrim states it; the payload from Julia's method
+table when visitThrow is ported.
+
+stopgap in disguise: the hand-written rejection bodies, counted as ported until A55S13's state generates them from the
+Kernel row.
+precedent: the unreachable visitors, NoCounterpart's uninhabited type (no value reaches them by construction);
+EqualsNull, dart's visitEqualsNull.
+
+Area: enforcement and prose — 9d0cba81: dev/check.sh refuses outside a landing (`CHECK_LANDING=1`, set by ship under the
+lock; a mark any shell can set, a stopgap against the accident it names), each green commit is pushed inside the
+rebase's exec, and a red landing appends to wt-ship-failures.tsv with its outputs copied; sound. 70e23474 runs smoke's
+compiled cases in node; c838733a crosses UInt32 and UInt64 as their bits' signed integer. 9d719901 is read above (its
+fixes) and below. (A55E1, low) L227's lowering half leaves two doors: `unnamed_lowerings` flags only a new `:wt_bug` or
+a lowered `:compiled` (parity_ratchet.jl:1979), so `:outside` relaxed to `:rejects` (from "must reject as Julia's
+verifier says" to "anything located") needs no line; and dart_record_kinds reads a record only on one line (`grep -cE
+'^\s*"dart_[^"]+" => \(' test/src/dart_tests.jl` and the full one-line pattern both give 820 today), so a record written
+across lines leaves both sides' readings silently. Fix: `:outside` to anything but `:compiled` named, and the record
+form checked (every `"dart_…" =>` line the pattern reads). The landing core stays the first case of each group, new
+cases now compiled only by dev/corpus.sh: 9d719901 added 68 `:compiled` records no landing compiles. Requirements: C6
+and D12 (A55S1, A55S10); C2 (A55S2, A55S14); C3 (A55S3, A55S17); C4 (A55S15); D40 and D43 (A55S13, A55S11); D5 (A55S6,
+A55S12, A55S16); no lock fired inside its band.
+
+Landing times: entry 54 landed at 2352 s from its first commit, its wait behind two port stacks included.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A51E1, A51E4, A51E9, A53E2 and A53E3 are fixed by
+9d719901; A51S4 by 977d5959; A51S5 by 129c5acf; A51S6 by 76341323; A51S10 by 1e9d7839; A51S11 by 762d5514; A51S15 by
+6904535d; A51S16 by b412b1f4; A52S1 and A52E3 by 7d8f3e62; A54S3 by 3cb7f7c6; A51S7 is ruled by 0a69fbb6; A51S8, A51S9,
+A51S13 and A54S1 are carried by A55S6, A55S8, A55S5 and A55S3; each leaves its row. A55S1 and A55S10 are what the range
+broke, the next fixes of their lanes. A55S10, A55S12, A55S16 and A55S17 are open on MARCH 1.D. A55S1, A55S2, A55S3,
+A55S4, A55S5, A55S6, A55S7 and A55S8 are open on MARCH 1.C. A55S9 is open on MARCH 1.B. A55S11, A55S13 and A55S14 are
+open on MARCH 1.A6. A55S15 is open on MARCH 1.L. A55E1 is open on MARCH 1.T. By owner: the codegen lane holds A55S10,
+A55S12, A55S16 and A55S17; the translator lane holds A55S1 to A55S8; the lead holds A51E3 first, then A55S11, A55S13,
+A55S14 and A55S15; the tests lane holds A55E1; A55S9 the builder's owner.
