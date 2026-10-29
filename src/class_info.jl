@@ -196,7 +196,11 @@ end
 
 @parity "dart2wasm/lib/class_info.dart:56 FieldIndex.ffiPointerAddress" FieldIndex_ffi_pointer_address()::Int = 3
 
-@parity "dart2wasm/lib/class_info.dart:58 FieldIndex.validate" @unported function FieldIndex_validate(translator::Translator) end
+# dart's assert-time check of its runtime classes' field indices (_Closure, _Type, Record and the
+# others the FieldIndex constants name); a Julia program declares none of those classes, its classes
+# laid out from Julia's own fields (ClassInfoCollector.collect)
+@parity "dart2wasm/lib/class_info.dart:58 FieldIndex.validate" FieldIndex_validate(translator::Translator)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/class_info.dart:58 FieldIndex.validate: the field indices of dart's runtime classes, which a Julia program declares none of"), "FieldIndex.validate")
 
 @parity "dart2wasm/lib/class_info.dart:193 initialIdentityHash" initial_identity_hash()::Int = 0
 
@@ -371,7 +375,10 @@ counterpart: Julia's classes are instances, their parameters bound, and implemen
     return nothing
 end
 
-@parity "dart2wasm/lib/class_info.dart:510 ClassInfoCollector._createStructForRecordClass" @unported function _create_struct_for_record_class(self::ClassInfoCollector, class_ids::Dict{DataType,Int64}, cls::DataType) end
+# a record class is one dart generates per record shape; a Julia record's class is its own Tuple or
+# NamedTuple type, laid out as any class (generateRecordClasses maps no shape, src/record_class_generator.jl)
+@parity "dart2wasm/lib/class_info.dart:510 ClassInfoCollector._createStructForRecordClass" _create_struct_for_record_class(self::ClassInfoCollector, class_ids::Dict{DataType,Int64}, cls::DataType)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/class_info.dart:510 ClassInfoCollector._createStructForRecordClass: $cls as a generated record class; a Julia record's class is its own Tuple or NamedTuple type"), "ClassInfoCollector._createStructForRecordClass")
 
 @parity "dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields" function _generate_fields(self::ClassInfoCollector, info::ClassInfo)::Nothing
     local at = "dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields"
@@ -422,7 +429,10 @@ end
     return !isempty(class_instance_fields(cls, at))
 end
 
-@parity "dart2wasm/lib/class_info.dart:633 ClassInfoCollector._generateRecordFields" @unported function _generate_record_fields(self::ClassInfoCollector, info::ClassInfo) end
+# a generated record class's fields; a Julia record's class is its own Tuple or NamedTuple type, whose
+# fields are laid out as any class's (_createStructForRecordClass)
+@parity "dart2wasm/lib/class_info.dart:633 ClassInfoCollector._generateRecordFields" _generate_record_fields(self::ClassInfoCollector, info::ClassInfo)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/class_info.dart:633 ClassInfoCollector._generateRecordFields: the fields of $(info.cls) as a generated record class; a Julia record's class is its own Tuple or NamedTuple type"), "ClassInfoCollector._generateRecordFields")
 
 """
 Create the class info and Wasm struct of every class of the closed world.
