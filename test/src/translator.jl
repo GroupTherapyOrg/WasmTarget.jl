@@ -234,6 +234,12 @@ end
     local mi = Core.Compiler.specialize_method(Base._which(Base.signature_type(ModuleCases.shapes, (Int,))))
     # Julia checks no parameter on entry; a member's parameter info is made once
     @test !D.need_to_check_types_for(t, mi)
+    # one entry, the member's own, and no entry check; a call's single target is the MethodInstance
+    # Julia resolved it to, none for a call it left to a builtin
+    @test D.get_function_entry(t, mi; unchecked_entry = true) === mi === D.get_function_entry(t, mi; unchecked_entry = false)
+    @test D.can_use_unchecked_entry(t, W.NirArgument(2), W.NirSSA(1))
+    local inv = W.NirInvoke(mi, W.NirValue[W.NirConst(Core.Const(ModuleCases.shapes)), W.NirArgument(2)])
+    @test D.single_target(t, inv) === mi && D.single_target(t, W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.tuple))])) === nothing
     local p = D.param_info_for_direct_call(t, mi)
     @test p === D.param_info_for_direct_call(t, mi) && p.positional == [nothing]
     # a parameter or local takes the wasm type of the Julia type inferred for it

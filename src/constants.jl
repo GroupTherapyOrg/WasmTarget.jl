@@ -528,12 +528,9 @@ end
 An integer constant: unboxed, its value's own wasm type (Julia's integer types each have one:
 translator.builtinTypes, the 8- and 16-bit ones held in an i32), the constant its bits; where a
 reference is expected, the box of its class, one global per module, `valueTypeConstants`. dart has
-one integer class, boxed by `_BoxedInt`; each Julia integer type is its own class, whose struct
-holds the object header and the value.
-
-A deliberate difference from dart: dart's box is `i32.const classId`, then the value; this box is
-the class's struct as class_info lays out every class below `Any`, its object header
-(pushObjectHeaderFields: the class id and the identity hash), then the value.
+one integer class, boxed by `_BoxedInt`; each Julia integer type is its own class, a primitive
+class directly below the top type (class_info's _createStructForClass), whose struct holds the class
+id and the value, no identity hash: dart's box, `i32.const classId`, then the value.
 """
 @parity "dart2wasm/lib/constants.dart:622 ConstantInstantiator.visitIntConstant" function visit_int_constant(self::ConstantInstantiator, constant::Union{Base.BitInteger64,Char})::WasmBuilder.IR.ValueType
     local translator = self.constants.translator
@@ -572,8 +569,7 @@ end
 """
 A float constant: unboxed, its value's own wasm type (`Float32` f32, `Float64` f64); where a
 reference is expected, the box of its class, one global per module. dart has one double class;
-each Julia float type is its own class. A deliberate difference from dart: the box carries class_info's object header
-(pushObjectHeaderFields), not dart's class id alone.
+each Julia float type is its own class, its box the class id and the value as dart's.
 """
 @parity "dart2wasm/lib/constants.dart:658 ConstantInstantiator.visitDoubleConstant" function visit_double_constant(self::ConstantInstantiator, constant::Union{Float32,Float64})::WasmBuilder.IR.ValueType
     local translator = self.constants.translator
@@ -693,9 +689,8 @@ end
 @parity "dart2wasm/lib/constants.dart:843 ConstantCreator.defaultConstant" default_constant(self::ConstantCreator, constant::Union{NirConst,DummyValueConstant})::Nothing = nothing
 
 """
-A boxed `Bool`, the struct of Julia's class `Bool` (dart's `_BoxedBool`): the object header, then the
-value. Its header is the class's own, as class_info lays out every class below `Any`. A deliberate
-difference from dart, whose `_BoxedBool` takes `i32.const classId` alone.
+A boxed `Bool`, the struct of Julia's class `Bool` (dart's `_BoxedBool`): a primitive class directly
+below the top type, its class id then its value, no identity hash, as dart's.
 """
 @parity "dart2wasm/lib/constants.dart:846 ConstantCreator.visitBoolConstant" function visit_bool_constant(self::ConstantCreator, constant::Bool)::Union{ConstantInfo,Nothing}
     local translator = self.constants.translator

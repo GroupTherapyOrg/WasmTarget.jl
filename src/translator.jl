@@ -907,7 +907,15 @@ here it rejects, located, as a conversion between two non-reference types does.
     return nothing
 end
 
-@parity "dart2wasm/lib/translator.dart:1663 Translator.getFunctionEntry" @unported function get_function_entry(self::Translator, target::Core.MethodInstance; unchecked_entry::Bool) end
+"""
+The entry of `target` a call takes: dart's checked or unchecked entry of an instance member whose
+parameters need checks, else the member itself. A Julia member is never an instance member (a method
+belongs to its generic function), so it has one entry, its own.
+"""
+@parity "dart2wasm/lib/translator.dart:1663 Translator.getFunctionEntry" function get_function_entry(self::Translator, target::Core.MethodInstance; unchecked_entry::Bool)::Core.MethodInstance
+    # Julia's member is no instance member (preciseThisFor), dart's first return
+    return target
+end
 
 """
 Whether a call to `member` must check its arguments' types on entry. dart checks the covariant
@@ -963,13 +971,19 @@ of the type's own function, whose result `new` allocates), so a request is a loc
 
 @parity "dart2wasm/lib/translator.dart:1930 Translator.getTable" @unported function get_table(self::Translator, module_::WasmBuilder.ModuleBuilder, field::ClassField) end
 
-@parity "dart2wasm/lib/translator.dart:1954 Translator.singleTarget" @unported function single_target(self::Translator, node::NirStmt) end
+# dart reads TFA's direct-call metadata, the one member a call reaches; Julia's inference resolved
+# each call it could to its MethodInstance, an invoke's target, and a call it left unresolved has none
+@parity "dart2wasm/lib/translator.dart:1954 Translator.singleTarget" single_target(self::Translator, node::NirStmt)::Union{Core.MethodInstance,Nothing} =
+    node isa NirInvoke ? nir_invoke_target(node) : nothing
 
 @parity "dart2wasm/lib/translator.dart:1960 Translator.singleClosureTarget" @unported function single_closure_target(self::Translator, node::NirInvoke, representation::ClosureRepresentation, type_context::NoCounterpart) end
 
 @parity "dart2wasm/lib/translator.dart:2033 Translator.canSkipImplicitCheck" @unported function can_skip_implicit_check(self::Translator, node::Union{NirSSA,NirArgument}) end
 
-@parity "dart2wasm/lib/translator.dart:2037 Translator.canUseUncheckedEntry" @unported function can_use_unchecked_entry(self::Translator, receiver::NirValue, node::NirValue) end
+# dart skips a call's entry checks when TFA proved its arguments' types (skipCheck); Julia's inference
+# proved every argument of a call it resolved against the specialization it calls, so a call needs no
+# entry check, and a Julia member has its one entry either way (getFunctionEntry)
+@parity "dart2wasm/lib/translator.dart:2037 Translator.canUseUncheckedEntry" can_use_unchecked_entry(self::Translator, receiver::NirValue, node::NirValue)::Bool = true
 
 @parity "dart2wasm/lib/translator.dart:2043 Translator.typeOfParameterVariable" @unported function type_of_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}, is_required::Bool) end
 
