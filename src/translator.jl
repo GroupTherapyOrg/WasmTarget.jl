@@ -1077,12 +1077,20 @@ end
 """
 Emit the conversion of a value of wasm type `from` on `b`'s stack to `to`: nothing when they are
 the same, a drop or an unreachable across the void marker, a null check or a downcast between
-references. dart boxes and unboxes by the wasm type alone (its one boxed class per i32, i64, f64);
-a Julia wasm type is many classes (`Int32`, `UInt32`, `Char` and `Bool` are each i32), so a box is
-made or read where the value's Julia class is known, by the code generator (dev/MARCH.md 1.D), and
-here it rejects, located, as a conversion between two non-reference types does.
+references, a box for a value of a wasm number type going to a reference. dart boxes by the wasm
+type alone (`boxedClasses[from]`, its one boxed class per i32, i64, f64); a Julia wasm type is many
+classes (`Int64` and `UInt64` are each i64; `Int32`, `UInt32`, `Char` and `Bool` each i32), so the
+box is the value's own Julia class, `boxed_class`, which the code generator knows and passes: a
+primitive class's struct holds its class id and its value (class_info.jl), allocated as dart
+allocates its boxed int. A box with no class given, and an unbox (the class the consumer reads,
+which no value's type names), reject, located, as a conversion between two non-reference types
+does. Julia's `===` compares two Bools by their bits, so a Bool is boxed like any primitive, where
+dart takes its canonical true or false constant (its `identical`).
+
+Reshaped: `boxed_class` — dart's boxedClasses keys a box by the wasm type, which names no one Julia class.
 """
-@parity "dart2wasm/lib/translator.dart:1597 Translator.convertType" function convert_type(self::Translator, b::WasmBuilder.InstructionsBuilder, from::WasmBuilder.IR.ValueType, to::WasmBuilder.IR.ValueType)::Nothing
+@parity "dart2wasm/lib/translator.dart:1597 Translator.convertType" function convert_type(self::Translator, b::WasmBuilder.InstructionsBuilder, from::WasmBuilder.IR.ValueType, to::WasmBuilder.IR.ValueType;
+        boxed_class::Union{Nothing,DataType} = nothing)::Nothing
     local at = "dart2wasm/lib/translator.dart:1597 Translator.convertType"
     from === to && return nothing
     local void = self.void_marker[]
@@ -1108,7 +1116,20 @@ here it rejects, located, as a conversion between two non-reference types does.
                 WasmBuilder.ref_cast(b, to)
             end
         elseif to isa WasmBuilder.IR.RefType
-            reject!(Unquarantined("dart2wasm/lib/translator.dart:1597 convertType: boxing a $from, whose Julia class the code generator knows (dev/MARCH.md 1.D)"), at)
+            # Boxing
+            boxed_class === nothing &&
+                reject!(Unquarantined("dart2wasm/lib/translator.dart:1597 convertType: boxing a $from, whose Julia class the code generator knows (dev/MARCH.md 1.D)"), at)
+            local cls = something(boxed_class)
+            local info = get(self.class_info, cls, nothing)
+            (info !== nothing && isprimitivetype(cls)) ||
+                reject!(Internal("$at: boxing a $from as $cls, no primitive class with class info"), at)
+            WasmBuilder.is_subtype_of(WasmBuilder.IR.RefType_def(info.struct_; nullable = false), to) ||
+                reject!(Internal("$at: the box of $cls is not a subtype of $to"), at)
+            local temp = WasmBuilder.add_local(b, from)
+            WasmBuilder.local_set(b, temp)
+            WasmBuilder.i32_const(b, class_id(info))
+            WasmBuilder.local_get(b, temp)
+            WasmBuilder.struct_new(b, info.struct_)
         elseif from isa WasmBuilder.IR.RefType
             reject!(Unquarantined("dart2wasm/lib/translator.dart:1597 convertType: unboxing to a $to, whose Julia class the code generator knows (dev/MARCH.md 1.D)"), at)
         else

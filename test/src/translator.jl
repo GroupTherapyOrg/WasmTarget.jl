@@ -688,3 +688,23 @@ end
         @test e isa W.RejectionError && e.rejection isa W.Internal
     end
 end
+
+# convertType boxes an i64 as its Julia class: n stored in a field of type Any is Int64's box, whose
+# class the answer tests, against native Julia (test/runner.jl)
+module BoxCases
+mutable struct Cell
+    v::Any
+end
+@noinline put_value!(c::Cell, v::Int64) = (c.v = v; nothing)
+@noinline get_value(c::Cell) = c.v
+boxed_is_int(n::Int64) = (c = Cell(nothing); put_value!(c, n); get_value(c) isa Int64)
+end
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+
+@testset "translator.dart: convertType boxes a value as its Julia class" begin
+    local f = BoxCases.boxed_is_int
+    local results = Main.WTRunner.run_cases(Main.WTRunner.answer_cases("boxed_is_int", WasmTarget.compile, f, (Int64(5),), f(5)))
+    for r in results
+        @test r.ok || (println(r); false)
+    end
+end

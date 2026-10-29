@@ -587,11 +587,14 @@ static field's getter, not ported: it rejects there, Unported, the kind and site
 rejects the read itself at (globals.dart's getConstantInitializer decides that read). The one source of an operand's type: the code generator's static type of an
 expression (dartTypeOf) and the closed world's classes (closed_world_classes) both read it.
 """
+# a literal's type is its value's own, read with no body (a static field's initializer, a constant)
+@quarantine "a Julia literal's type is its value's type, Core.Typeof" Core.Typeof nir_const_type(c::NirConst)::Type = Core.Typeof(c.c.val)
+
 @quarantine "a Julia operand's type is its statement's inferred type, its argument's specialization or its value's type" Core.Typeof function nir_value_type(body::NirBody, v::NirValue)::Type
     @exhaustive v::NirValue begin
         (s::NirSSA) => body.types[s.id]
         (a::NirArgument) => nir_argument_type(body.ci.def, a)
-        (c::NirConst) => Core.Typeof(c.c.val)
+        (c::NirConst) => nir_const_type(c)
         (g::NirGlobal) => nir_binding_is_constant(g.ref) ? Core.Typeof(getglobal(g.ref.mod, g.ref.name)) :
             reject!(Unported("dart2wasm/lib/code_generator.dart:4937 StaticFieldImplicitAccessorCodeGenerator._generateGetter"),
                     "src/julia/nir.jl nir_value_type: a read of the binding $(g.ref), which an assignment can rebind (its getter)")

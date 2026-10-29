@@ -913,7 +913,10 @@ end
             NirUnreachable => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's unreachable ReturnNode as a value"), "$(self.enclosing_member)")
             NirNothing => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: an emptied statement as a value"), "$(self.enclosing_member)")
         end)
-        convert_type(self.translator, self.b[], result_type, expected_type)
+        # a box is the value's own Julia class, which the NIR types (convertType's boxed_class): a
+        # literal's its value's, read with no body (a static field's initializer has none)
+        local value_type = node isa NirConst ? nir_const_type(node) : node isa NirValue ? dart_type_of(self, node) : nothing
+        convert_type(self.translator, self.b[], result_type, expected_type; boxed_class = value_type isa DataType ? value_type : nothing)
         return expected_type
     catch
         _print_location(self, node)
