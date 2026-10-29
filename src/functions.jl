@@ -4,13 +4,13 @@
 """
 Creates the wasm function of each member the program reaches, queueing its code for generation,
 and manages the compilation queue that achieves tree shaking. A member is a Core.MethodInstance. A
-function is keyed by its Reference: a member's MethodInstance, or, for a static field's initializer
-(dart's `field.staticFieldInitializer`), the binding's GlobalRef, which the Kernel table gives no
-Reference row (a binding is no method), so the key is the closed union of the two.
+function is keyed by its Reference, the Kernel table's sum: a member's MethodInstance or a field's
+accessor (a `FieldReference`: a static field's initializer, dart's `field.staticFieldInitializer`, or
+a field's implicit getter or setter).
 """
 @parity "dart2wasm/lib/functions.dart:21 FunctionCollector" struct FunctionCollector
     translator::KernelNodes
-    _functions::LinkedHashMap{Union{Core.MethodInstance,GlobalRef},WasmBuilder.IR.BaseFunction}
+    _functions::LinkedHashMap{Reference,WasmBuilder.IR.BaseFunction}
     # each member's function for each caller shape (dart's dynamic forwarders)
     _dynamic_forwarder_functions::LinkedHashMap{Core.MethodInstance,LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}}
     # the function creating an Invocation for each call shape
@@ -26,7 +26,7 @@ Reference row (a binding is no method), so the key is the closed union of the tw
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at :44
     # is its outer function
     FunctionCollector(::Val{:_}, translator::KernelNodes) =
-        new(translator, LinkedHashMap{Union{Core.MethodInstance,GlobalRef},WasmBuilder.IR.BaseFunction}(),
+        new(translator, LinkedHashMap{Reference,WasmBuilder.IR.BaseFunction}(),
             LinkedHashMap{Core.MethodInstance,LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}}(),
             LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}(), LinkedHashMap{Lambda,WasmBuilder.IR.BaseFunction}(),
             Set{Int}(), Set{Int}(), Set{CallShape}(), Set{Int}(), Dict{Int,Vector{Core.MethodInstance}}(),
@@ -113,12 +113,13 @@ correctly.
 end
 
 """
-The export name of `target`, the interop namer's (src/namer.jl _ExternalMemberNamer.getExportName); a binding's initializer carries no export pragma.
-
-Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+The export name of `target`, the interop namer's (src/namer.jl _ExternalMemberNamer.getExportName); a field's accessor carries no export pragma.
 """
-@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" get_export_name(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::Union{String,Nothing} =
-    target isa GlobalRef ? nothing : get_export_name(interop_namer(self), target)
+@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" get_export_name(self::FunctionCollector, target::Reference)::Union{String,Nothing} =
+    @exhaustive target::Reference begin
+        (m::MethodInstance) => get_export_name(interop_namer(self), m)
+        FieldReference => nothing
+    end
 
 """
 Collect the exports, and record the value classes as allocated. dart's boxed bool, int and double
@@ -137,10 +138,8 @@ end
 
 """
 The wasm function of `target` if one was made.
-
-Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
 """
-@parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" get_existing_function(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::Union{WasmBuilder.IR.BaseFunction,Nothing} = get(self._functions, target, nothing)
+@parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" get_existing_function(self::FunctionCollector, target::Reference)::Union{WasmBuilder.IR.BaseFunction,Nothing} = get(self._functions, target, nothing)
 
 """
 The wasm function of `target`, made on first request in its module and queued for its code.
@@ -150,20 +149,19 @@ their place: no member is an import (a foreign call is a host import, dev/MARCH.
 are the entry and the `@ccallable` methods (getExportName), and the inlining hint is `@noinline` 0 and
 `@inline` 127 (getWasmNeverInlinePragma, getWasmPreferInlinePragma), and a function is removable if
 unused where Julia's effects prove it (hasWasmPureFunctionPragma).
-
-Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
 """
-@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.BaseFunction
+@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::Reference)::WasmBuilder.IR.BaseFunction
     local existing = get(self._functions, target, nothing)
     existing === nothing || return existing
     local translator = self.translator
-    # a static field's initializer, dart's `member is Field` arm: never inlined by its initializer's
-    # size (Translator.neverInlineStaticFieldInitializer); a Julia binding carries no pragma, so no
-    # prefer-inline or pure one
-    local is_field = target isa GlobalRef
-    local never_inline = is_field ? never_inline_static_field_initializer(translator, target) :
-        something(Util.get_wasm_never_inline_pragma(target), false)
-    local always_inline = is_field ? false : something(Util.get_wasm_prefer_inline_pragma(target), false)
+    # a field's accessor, dart's `member is Field` arm: only a static field's initializer is kept from
+    # inlining, by its initializer's size (Translator.neverInlineStaticFieldInitializer); a Julia field
+    # carries no pragma, so no prefer-inline or pure one
+    local never_inline, always_inline, is_pure = @exhaustive target::Reference begin
+        (m::MethodInstance) => (something(Util.get_wasm_never_inline_pragma(m), false), something(Util.get_wasm_prefer_inline_pragma(m), false),
+                                Util.has_wasm_pure_function_pragma(m; component = translator.component))
+        (r::FieldReference) => (r.kind === FieldReferenceKind_initializer && never_inline_static_field_initializer(translator, r.field::GlobalRef), false, false)
+    end
     local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
     local module_ = module_for_reference(translator, target)
     # an exported member's function type is the external one
@@ -172,7 +170,7 @@ Reshaped: `target` — a Reference is a member's MethodInstance or, for a static
         _make_function_type(translator, target, nothing; is_import_or_export = true, synthesize_null_return_value = false, synthesize_no_return = false) :
         signature_for_direct_call(translator, target)
     local function_ = WasmBuilder.define(module_.functions[], ftype, get_function_name(self, target))
-    function_.is_pure = !is_field && Util.has_wasm_pure_function_pragma(target; component = translator.component)
+    function_.is_pure = is_pure
     function_.inline_hint = inline_hint
     if export_name !== nothing
         function_.is_js_called = true
@@ -235,10 +233,8 @@ end
 
 """
 The wasm function type of `target`.
-
-Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
 """
-@parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" function get_function_type(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.FunctionType
+@parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" function get_function_type(self::FunctionCollector, target::Reference)::WasmBuilder.IR.FunctionType
     # We first try to get the function type by seeing if we already compiled the target function.
     local existing_function = get_existing_function(self, target)
     existing_function === nothing || return existing_function.type
@@ -263,43 +259,52 @@ end
 
 """
 dart's `member.accept1(visitor, target)`: a Julia member is a method, the visitor's Procedure arm,
-and a binding's initializer takes nothing and returns the field's type.
-
-Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+and a field's accessor the visitor's Field arm.
 """
-@parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" function _get_function_type(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.FunctionType
-    # a static field's initializer takes nothing and returns the field's value (_FunctionTypeGenerator's
-    # static Field arm, functions.dart:908)
-    target isa GlobalRef && return WasmBuilder.define_function(types_builder(self.translator), WasmBuilder.IR.ValueType[],
-                                                               WasmBuilder.IR.ValueType[translate_type_of_field(self.translator, target)])
+@parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" function _get_function_type(self::FunctionCollector, target::Reference)::WasmBuilder.IR.FunctionType
     local generator = _FunctionTypeGenerator(self.translator, synthesize_null_return_value(self, target), synthesize_no_return(self, target))
-    return visit_procedure(generator, target, target)
+    return @exhaustive target::Reference begin
+        (m::MethodInstance) => visit_procedure(generator, m, m)
+        (r::FieldReference) => visit_field(generator, r.field, r)
+    end
 end
 
-# a member returning only `nothing` (dart's null) returns nothing in wasm; its caller makes the null
-@parity "dart2wasm/lib/functions.dart:306 FunctionCollector.synthesizeNullReturnValue" function synthesize_null_return_value(self::FunctionCollector, target::Core.MethodInstance)::Bool
-    local wasm_type = translate_return_type(self.translator, type_of_return_value(self.translator, target))
-    return wasm_type isa WasmBuilder.IR.RefType && wasm_type.heap_type === WasmBuilder.IR.HeapType_none && wasm_type.nullable
+# a member returning only `nothing` (dart's null) returns nothing in wasm; its caller makes the null;
+# a setter always (its caller drops the null), a getter by its field's type, dart's return type
+@parity "dart2wasm/lib/functions.dart:306 FunctionCollector.synthesizeNullReturnValue" function synthesize_null_return_value(self::FunctionCollector, target::Reference)::Bool
+    local returns_null(t::Type) = (local w = translate_return_type(self.translator, t);
+        w isa WasmBuilder.IR.RefType && w.heap_type === WasmBuilder.IR.HeapType_none && w.nullable)
+    return @exhaustive target::Reference begin
+        (m::MethodInstance) => returns_null(type_of_return_value(self.translator, m))
+        (r::FieldReference) => r.kind === FieldReferenceKind_setter || returns_null(type_of_field(self.translator, r.field))
+    end
 end
 
-# a member Julia inferred never returns (Union{}) returns nothing in wasm; its caller emits unreachable
-@parity "dart2wasm/lib/functions.dart:319 FunctionCollector.synthesizeNoReturn" function synthesize_no_return(self::FunctionCollector, target::Core.MethodInstance)::Bool
-    local wasm_type = translate_return_type(self.translator, type_of_return_value(self.translator, target))
-    return wasm_type isa WasmBuilder.IR.RefType && wasm_type.heap_type === WasmBuilder.IR.HeapType_none && !wasm_type.nullable
+# a member Julia inferred never returns (Union{}) returns nothing in wasm; its caller emits unreachable;
+# a field's accessor is no Procedure, so it returns
+@parity "dart2wasm/lib/functions.dart:319 FunctionCollector.synthesizeNoReturn" function synthesize_no_return(self::FunctionCollector, target::Reference)::Bool
+    return @exhaustive target::Reference begin
+        (m::MethodInstance) => (local w = translate_return_type(self.translator, type_of_return_value(self.translator, m));
+            w isa WasmBuilder.IR.RefType && w.heap_type === WasmBuilder.IR.HeapType_none && !w.nullable)
+        FieldReference => false
+    end
 end
 
 """
 dart's `member.toString()`, a member's qualified name; a Julia member's is its function's name and
-the argument types it is specialized on.
-
-Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+the argument types it is specialized on, a field's its binding's or its class and name, then dart's
+suffix of the accessor's kind.
 """
-@parity "dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName" function get_function_name(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::String
-    # a static field's initializer, `<member> field initializer`
-    target isa GlobalRef && return "$target field initializer"
-    local method = target.def::Method
-    local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
-    return "$(method.module).$(method.name)($(join(("::$p" for p in params[2:end]), ", ")))"
+@parity "dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName" function get_function_name(self::FunctionCollector, target::Reference)::String
+    return @exhaustive target::Reference begin
+        (m::MethodInstance) => (local method = m.def::Method;
+            local params = (Base.unwrap_unionall(m.specTypes)::DataType).parameters;
+            "$(method.module).$(method.name)($(join(("::$p" for p in params[2:end]), ", ")))")
+        (r::FieldReference) => (local f = r.field;
+            local member_name = f isa GlobalRef ? string(f) : "$(f.cls).$(f.name)";
+            r.kind === FieldReferenceKind_setter ? "$member_name= implicit setter" :
+            r.kind === FieldReferenceKind_initializer ? "$member_name field initializer" : "$member_name implicit getter")
+    end
 end
 
 """
@@ -379,16 +384,24 @@ end
 end
 
 # dart's procedures among the translated members: the methods, every Julia member a method, dart's
-# Procedure (a static field's initializer, keyed by its binding, is none)
+# Procedure (a field's accessor is none)
 @parity "dart2wasm/lib/functions.dart:461 FunctionCollector.translatedProcedures" translated_procedures(self::FunctionCollector)::Vector{Core.MethodInstance} =
     Core.MethodInstance[k for k in keys(self._functions) if k isa Core.MethodInstance]
 
 @parity "dart2wasm/lib/functions.dart:470 _FunctionTypeGenerator" _FunctionTypeGenerator(translator::KernelNodes, synthesize_null_return_value::Bool, synthesize_no_return::Bool)::_FunctionTypeGenerator =
     _FunctionTypeGenerator(Val(:_), translator, synthesize_null_return_value, synthesize_no_return)
 
-# a field's implicit getter or setter; Julia's field access is an intrinsic call, never a member
-@parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" visit_field(self::_FunctionTypeGenerator, node::ClassField, target::Core.MethodInstance)::Union{} =
-    reject!(Internal("dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField: the function type of $(node.name)'s implicit accessor; Julia reads and writes a field with the getfield and setfield! intrinsics, never an accessor member (the Kernel table's Field row)"), "_FunctionTypeGenerator.visitField")
+# a field's accessor: a static field's initializer, implicit getter or setter, typed by _makeFunctionType's
+# static field arm; an instance field's, whose receiver is its class, comes with the dispatch table's
+# field selectors (_virtualCall)
+@parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" function visit_field(self::_FunctionTypeGenerator, node::Union{ClassField,GlobalRef}, target::FieldReference)::WasmBuilder.IR.FunctionType
+    node isa GlobalRef ||
+        reject!(Unported("dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField"), "an instance field's accessor, $(node.cls).$(node.name), dispatched through the dispatch table's field selectors")
+    # Static field initializer function or implicit getter/setter.
+    return _make_function_type(self.translator, target, nothing;
+                               synthesize_null_return_value = self.synthesize_null_return_value,
+                               synthesize_no_return = self.synthesize_no_return)
+end
 
 """
 A method's function type: its parameters' and return's wasm types, after its callee's when the
@@ -513,6 +526,22 @@ end
         is_void_type(return_type) || push!(outputs, trt(return_type))
     end
     return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
+end
+
+# dart's static field arm: a static field's implicit getter returns the field's type (nothing when its
+# null is synthesized), its initializer returns it, and its implicit setter takes it
+@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" function _make_function_type(translator::Translator, target::FieldReference, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType};
+        synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export::Bool = false)::WasmBuilder.IR.FunctionType
+    local member = target.field
+    member isa GlobalRef ||
+        reject!(Unported("dart2wasm/lib/functions.dart:890 _makeFunctionType"), "an instance field's accessor, $(member.cls).$(member.name), dispatched through the dispatch table's field selectors")
+    local field_type = translate_type_of_field(translator, member)
+    local none = WasmBuilder.IR.ValueType[]
+    target.kind === FieldReferenceKind_getter &&
+        return WasmBuilder.define_function(types_builder(translator), none, synthesize_null_return_value ? none : WasmBuilder.IR.ValueType[field_type])
+    target.kind === FieldReferenceKind_initializer &&
+        return WasmBuilder.define_function(types_builder(translator), none, WasmBuilder.IR.ValueType[field_type])
+    return WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[field_type], none)
 end
 
 # dart's sealed class is abstract: its constructor runs only as a kind's super constructor, whose

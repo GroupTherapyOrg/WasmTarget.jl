@@ -117,15 +117,18 @@ end
     local e2 = try; W.get_invocation_creator_stub(fc, shape); nothing; catch x; x; end
     @test e2 isa WT.RejectionError && e2.rejection isa WT.Internal && occursin("noSuchMethod", e2.rejection.site) && occursin("DynamicInvocation row", e2.rejection.site)
 
-    # a constructor and a field accessor are no members of a Julia program: their types reject,
-    # Internal, naming their Kernel rows
+    # a constructor is no member of a Julia program: its types reject, Internal, naming its Kernel row
     local ftg = W._FunctionTypeGenerator(t, false, false)
     for (f, row) in ((() -> W.visit_constructor(ftg, mi, mi), "Constructor row"), (() -> W._get_constructor_allocator_type(ftg, mi), "Constructor row"),
-                     (() -> W._get_initializer_type(ftg, mi, mi), "Constructor row"), (() -> W._get_constructor_body_type(ftg, mi), "Constructor row"),
-                     (() -> W.visit_field(ftg, WT.ClassField(Int, 1, "x", Int, false), mi), "Field row"))
+                     (() -> W._get_initializer_type(ftg, mi, mi), "Constructor row"), (() -> W._get_constructor_body_type(ftg, mi), "Constructor row"))
         local r = try; f(); nothing; catch x; x; end
         @test r isa WT.RejectionError && r.rejection isa WT.Internal && occursin(row, r.rejection.site)
     end
+    # an instance field's accessor is typed with the dispatch table's field selectors, not yet ported:
+    # located at visitField
+    local cf = WT.ClassField(Int, 1, "x", Int, false)
+    local rf = try; W.visit_field(ftg, cf, WT.FieldReference(cf, WT.FieldReferenceKind_getter)); nothing; catch x; x; end
+    @test rf isa WT.RejectionError && rf.rejection isa WT.Unported && occursin("visitField", rf.rejection.anchor)
 end
 
 module Callables

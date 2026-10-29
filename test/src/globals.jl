@@ -80,17 +80,18 @@ end
     local g = D.DartGlobals(t)
     local counter = GlobalRef(GlobalsLazy, :counter)
     local fc = t.functions[]
-    # the initializer's key is the binding: its type takes nothing and returns the field's value,
-    # its name the binding's
-    local ft = D.get_function_type(fc, counter)
+    # the initializer's key is the field's initializer reference: its type takes nothing and returns
+    # the field's value, its name the binding's
+    local init_ref = D.FieldReference(counter, D.FieldReferenceKind_initializer)
+    local ft = D.get_function_type(fc, init_ref)
     @test isempty(ft.inputs) && ft.outputs == [D.translate_type_of_field(t, counter)]
-    @test D.get_function_name(fc, counter) == "$counter field initializer"
-    @test D.get_existing_function(fc, counter) === nothing
+    @test D.get_function_name(fc, init_ref) == "$counter field initializer"
+    @test D.get_existing_function(fc, init_ref) === nothing
     # a non-const binding takes the lazy arm: a mutable global with its initialized flag (an Int64 is
     # no reference, so null cannot signal it), and the initializer function, made and queued
     local def = D.get_definition_for_static_field(g, counter)
     @test def isa D.WasmGlobalDartGlobal && def.initialized_flag !== nothing
-    local init = D.get_existing_function(fc, counter)
+    local init = D.get_existing_function(fc, init_ref)
     @test init !== nothing && init.type == ft && init.function_name == "$counter field initializer"
     @test D.translated_procedures(fc) isa Vector{Core.MethodInstance}
 end

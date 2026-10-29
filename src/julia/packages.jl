@@ -72,6 +72,11 @@ import ..ClosedWorld, ..NirBody, ..NirWorld, ..NoCounterpart, ..build_nir, .._KI
        ..NirValue, ..NirSSA, ..NirArgument, ..NirGlobal, ..NirConst
 # Kernel's constants by the Kernel table's rows (src/julia/kernel.jl)
 import ..InstanceConstant, ..nir_operands
+# the Kernel table's Reference, a member's MethodInstance or a field's accessor (src/julia/kernel.jl); a
+# match over it names the MethodInstance kind by its name
+import ..Reference, ..FieldReference, ..FieldReferenceKind, ..FieldReferenceKind_getter, ..FieldReferenceKind_setter,
+       ..FieldReferenceKind_initializer
+import Core: MethodInstance
 # dart:_wasm's array literal, the runtime type tables' constants (src/julia/wasm_array.jl)
 import ..WasmArrayLiteral, ..WasmArray, ..ImmutableWasmArray, ..WasmI8,
        ..wasm_string_length, ..wasm_string_codeunit, ..wasm_string_alloc, ..wasm_string_copy!
@@ -97,6 +102,7 @@ import ...program_export_name
 import ...NoCounterpart, ...NirWorld, ...NirBody, ...ClassField, ...NirValue, ...NirSSA, ...NirArgument,
        ...NirGlobal, ...NirConst, ...NirStmt, ...NirInvoke, ...NirCall, ...NirNew, ...NirGlobalRead,
        ...NirGotoIfNot, ...NirReturn, ...NirGoto, ...NirEnter
+import ...Reference, ...FieldReference
 import ...WasmBuilder
 import ..Dart2Wasm
 end
@@ -107,6 +113,7 @@ import ...reject!, ...Internal, ...Unported
 import ...NoCounterpart, ...NirWorld, ...NirBody, ...ClassField, ...NirValue, ...NirSSA, ...NirArgument,
        ...NirGlobal, ...NirConst, ...NirStmt, ...NirInvoke, ...NirCall, ...NirNew, ...NirGlobalRead,
        ...NirGotoIfNot, ...NirReturn, ...NirGoto, ...NirEnter
+import ...Reference, ...FieldReference
 import ...WasmBuilder
 import ..Dart2Wasm
 end

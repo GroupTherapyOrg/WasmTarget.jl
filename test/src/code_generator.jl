@@ -461,6 +461,7 @@ end
 end
 
 module StaticFieldCases
+struct BoxCell; x::Int; end
 global counter::Int = 7
 global box::Base.RefValue{Int} = Ref(1)
 bump(x::Int) = counter + box[] + x
@@ -489,7 +490,7 @@ end
 @testset "code_generator.dart: unimplemented is never reached, every NIR form has its visitor" begin
     local t = static_field_translator()
     local counter = GlobalRef(StaticFieldCases, :counter)
-    local g = static_field_codegen(D.StaticFieldInitializerCodeGenerator, t, D.get_function_type(t.functions[], counter))
+    local g = static_field_codegen(D.StaticFieldInitializerCodeGenerator, t, D.get_function_type(t.functions[], D.FieldReference(counter, D.FieldReferenceKind_initializer)))
     # the closed NIR sums are matched @exhaustive by the code generator, so no form falls to a default
     @test any(m -> m[1] === D && m[2] === :NirValue, WasmTarget.MATCHES) && any(m -> m[1] === D && m[2] === :NirStmt, WasmTarget.MATCHES)
     # reaching dart's default is WasmTarget's defect, Internal and located, never a trap in the module
@@ -500,17 +501,18 @@ end
 @testset "code_generator.dart: a static field's initializer function" begin
     local t = static_field_translator()
     local counter = GlobalRef(StaticFieldCases, :counter)
-    local ftype = D.get_function_type(t.functions[], counter)
-    # the binding's reference is its initializer's: getMemberCodeGenerator gives its generator
+    local init_ref = D.FieldReference(counter, D.FieldReferenceKind_initializer)
+    local ftype = D.get_function_type(t.functions[], init_ref)
+    # the field's initializer reference: getMemberCodeGenerator gives its generator
     local mb = D.main_module(t)
-    local gm = D.get_member_code_generator(t, W.WasmBuilder.define(mb.functions[], ftype, "init"), counter)
+    local gm = D.get_member_code_generator(t, W.WasmBuilder.define(mb.functions[], ftype, "init"), init_ref)
     @test gm isa D.StaticFieldInitializerCodeGenerator && gm.field === counter && gm.enclosing_member === counter
     # the lazy arm's definition (a mutable global and its flag, made through FunctionCollector.getFunction):
     # the body writes the binding's session value, tees it, sets the flag and returns the value
     local g = static_field_codegen(D.StaticFieldInitializerCodeGenerator, t, ftype)
     @test emitted_by(() -> D.generate_internal(g), g) ==
           ["i64.const 7", "local.tee", "global.set", "local.get", "i32.const 1", "global.set", "end"]
-    @test D.get_existing_function(t.functions[], counter) !== nothing
+    @test D.get_existing_function(t.functions[], init_ref) !== nothing
 end
 
 @testset "code_generator.dart: a static field's eager initializer in the start function" begin
@@ -550,7 +552,7 @@ end
         g = D.StaticFieldImplicitAccessorCodeGenerator(t0, getter, counter, true)
         g.b[] = B.body(fb); g.param_locals[] = B.locals(fb); g.return_label[] = nothing
         @test emitted_by(() -> D.generate_internal(g), g) == ["global.get", "if", "global.get", "else", "call", "end", "end"]
-        @test D.get_existing_function(t0.functions[], counter) !== nothing
+        @test D.get_existing_function(t0.functions[], D.FieldReference(counter, D.FieldReferenceKind_initializer)) !== nothing
     end
     # a field with no initializer function is read and returned
     dg._definitions[counter] = D._define_global_based_field(dg, counter, ty, mb, true, nothing, nothing)
@@ -559,7 +561,7 @@ end
     # with its initializer function and an explicit flag: the flag picks the global or the initializer
     local flag = D._define_initializer_flag(dg, counter, mb)
     dg._definitions[counter] = D._define_global_based_field(dg, counter, ty, mb, true, nothing, flag)
-    fc._functions[counter] = B.define(mb.functions[], getter, "counter field initializer")
+    fc._functions[D.FieldReference(counter, D.FieldReferenceKind_initializer)] = B.define(mb.functions[], getter, "counter field initializer")
     local g2 = acc(counter, getter, true)
     @test emitted_by(() -> D.generate_internal(g2), g2) == ["global.get", "if", "global.get", "else", "call", "end", "end"]
     # the setter writes its parameter and sets the flag
@@ -571,9 +573,37 @@ end
     @test rty isa IR.RefType && !rty.nullable
     dg._definitions[box] = D._define_global_based_field(dg, box, B.with_nullability(rty, true), mb, true, nothing, nothing)
     local rgetter = IR.FunctionType(IR.ValueType[], IR.ValueType[rty])
-    fc._functions[box] = B.define(mb.functions[], rgetter, "box field initializer")
+    fc._functions[D.FieldReference(box, D.FieldReferenceKind_initializer)] = B.define(mb.functions[], rgetter, "box field initializer")
     local g4 = acc(box, rgetter, true)
     @test emitted_by(() -> D.generate_internal(g4), g4) == ["block", "global.get", "br_on_non_null", "call", "end", "end"]
+end
+
+@testset "the Kernel table's Reference: a member's MethodInstance or a field's accessor" begin
+    local B = W.WasmBuilder
+    local t = static_field_translator()
+    local fc = t.functions[]
+    local counter = GlobalRef(StaticFieldCases, :counter)
+    local ty = D.translate_type_of_field(t, counter)
+    local getter = D.FieldReference(counter, D.FieldReferenceKind_getter)
+    local setter = D.FieldReference(counter, D.FieldReferenceKind_setter)
+    # a field's reference compares by its field and kind, as dart's Reference by identity
+    @test getter == D.FieldReference(counter, D.FieldReferenceKind_getter) && getter != setter
+    # an instance field has no initializer reference: the pair cannot be made
+    local cf = W.ClassField(StaticFieldCases.BoxCell, 0, "x", Int, false)
+    @test rejection(() -> D.FieldReference(cf, D.FieldReferenceKind_initializer)).rejection isa W.Internal
+    # a static field's getter takes nothing and returns the field; its setter takes it and returns nothing
+    local fg = D.get_function_type(fc, getter); local fs = D.get_function_type(fc, setter)
+    @test isempty(fg.inputs) && fg.outputs == [ty] && fs.inputs == [ty] && isempty(fs.outputs)
+    @test D.get_function_name(fc, getter) == "$counter implicit getter" && D.get_function_name(fc, setter) == "$counter= implicit setter"
+    @test D.synthesize_null_return_value(fc, setter) && !D.synthesize_null_return_value(fc, getter) && !D.synthesize_no_return(fc, getter)
+    # getMemberCodeGenerator gives each accessor its generator
+    local mb = D.main_module(t)
+    local gg = D.get_member_code_generator(t, B.define(mb.functions[], D.get_function_type(fc, getter), "g"), getter)
+    @test gg isa D.StaticFieldImplicitAccessorCodeGenerator && gg.is_implicit_getter
+    local gs = D.get_member_code_generator(t, B.define(mb.functions[], D.get_function_type(fc, setter), "s"), setter)
+    @test gs isa D.StaticFieldImplicitAccessorCodeGenerator && !gs.is_implicit_getter
+    # an instance field's accessor is typed with the dispatch table's field selectors, not yet: located
+    @test rejection(() -> D.get_function_type(fc, D.FieldReference(cf, D.FieldReferenceKind_getter))).rejection isa W.Unported
 end
 
 @testset "code_generator.dart: guardCanMatchJSException" begin

@@ -21,6 +21,54 @@ called. Julia refuses `Union{}` itself as a parameter's type, so this type stand
 end
 
 """
+    FieldReferenceKind
+
+Which reference of a field a `FieldReference` names, kernel/lib/ast.dart's Field: its implicit
+getter (`getterReference`), its implicit setter (`setterReference`), or a static field's initializer
+(`staticFieldInitializer`).
+"""
+@quarantine "Kernel names a field's getter, setter and initializer as three References of the field; an @enum closes the set of kinds" Base.var"@enum" @enum FieldReferenceKind FieldReferenceKind_getter FieldReferenceKind_setter FieldReferenceKind_initializer
+
+"""
+    FieldReference(field, kind)
+
+dart's Reference of a field's accessor: `field` an instance field (`ClassField`) or a static field,
+a Julia binding (its `GlobalRef`), and `kind` its getter, setter or initializer. A Julia program
+reads and writes a field with getfield and setfield! and a binding with a GlobalRef and setglobal!,
+calls of no member, so a field's accessor is a function the code generator makes and calls: the
+initializer and accessors of a lazy static field (globals.dart), and a field's getter and setter
+dispatched through the dispatch table when Julia leaves the receiver abstract (_virtualCall).
+
+precedent(dart: kernel/lib/ast.dart's Field.getterReference, setterReference and
+staticFieldInitializer, each a Reference of its own). Julia's differs: a field has no Reference of
+its own, so this names one by the field and its kind, compared by value.
+"""
+@quarantine "Kernel gives a field's getter, setter and initializer a Reference each; Julia's field has none, so the field and the kind name it" Core.GlobalRef struct FieldReference
+    field::Union{ClassField,GlobalRef}
+    kind::FieldReferenceKind
+    # an instance field has no initializer reference (Kernel's staticFieldInitializer is a static
+    # field's), so that pair cannot be made
+    FieldReference(field::Union{ClassField,GlobalRef}, kind::FieldReferenceKind) =
+        field isa ClassField && kind === FieldReferenceKind_initializer ?
+            reject!(Internal("src/julia/kernel.jl FieldReference: the instance field $(field.cls).$(field.name) has no initializer reference, a static field's"), "FieldReference") :
+            new(field, kind)
+end
+
+"""
+    Reference
+
+The Kernel table's Reference: a member's MethodInstance (Julia compiles one function per
+specialization, and a MethodInstance names one callable) or a field's accessor, a `FieldReference`.
+
+precedent(dart: kernel/lib/canonical_name.dart's Reference, which names a member or its getter,
+setter, initializer or tear-off). Julia's differs: a method has no tear-off (a Julia function is a
+value already), so the sum is a method's specialization or a field's accessor.
+"""
+# the sum's kinds are named in the module that declares it (@closed), Julia's MethodInstance among them
+import Core: MethodInstance
+@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Reference = Union{MethodInstance, FieldReference}
+
+"""
     KERNEL_TYPES
 
 `(library, name) => (Julia type, why)`: the dart type `name` the library (a path under the sdk's
@@ -37,7 +85,7 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "Member") => ("Core.MethodInstance", "Julia compiles one function per specialization, the MethodInstance, where dart compiles one per member"),
     ("kernel/lib/ast.dart", "Procedure") => ("Core.MethodInstance", "Julia compiles one function per specialization, the MethodInstance, where dart compiles one per member"),
     ("kernel/lib/ast.dart", "Constructor") => ("Core.MethodInstance", "Julia compiles one function per specialization, the MethodInstance, where dart compiles one per member"),
-    ("kernel/lib/canonical_name.dart", "Reference") => ("Core.MethodInstance", "a MethodInstance names one callable, where dart's Reference names a member or its getter, setter or tear-off"),
+    ("kernel/lib/canonical_name.dart", "Reference") => ("Reference", "a member's MethodInstance or a field's accessor (the sum Reference, src/julia/kernel.jl); a Julia function is a value already, so no tear-off"),
     ("kernel/lib/ast.dart", "Field") => ("Union{ClassField,GlobalRef}", "a field is a struct's field (src/julia/classes.jl's ClassField) or, static, a module binding Julia reads by GlobalRef"),
     ("kernel/lib/ast.dart", "FunctionNode") => ("NirBody", "a function's parameters and body are its CodeInstance and optimized IR"),
     ("kernel/lib/ast.dart", "Name") => ("Symbol", "a member's name is a Julia Symbol"),

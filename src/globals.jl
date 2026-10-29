@@ -168,7 +168,7 @@ Return (and if needed create) the Wasm global corresponding to a static field, a
 binding. Julia has no late static fields; a binding's module is the main module (deferred loading is
 out of scope); a binding is final when it is `const`. A binding has no initializer expression, so
 the start-function path (dart's `field.initializer != null`) is taken only by the pragma, which no
-binding carries; and the lazy path is dart's: the initializer function, keyed by the binding
+binding carries; and the lazy path is dart's: the initializer function, keyed by its FieldReference
 (FunctionCollector), then a nullable global (null signals uninitialized) or an explicit flag, the
 global or a table slot (dev/formal/StaticFieldInit.tla models the guard). The initializer's value is
 the binding's starting value, its session value past every module's `__init__` (nir_binding_value,
@@ -214,9 +214,9 @@ dev/MODULE_INIT.md).
         return self._definitions[field] = definition
     end
 
-    # Add initializer function to the compilation queue (keyed by the binding, FunctionCollector's
-    # docstring).
-    get_function(translator.functions[], field)
+    # Add initializer function to the compilation queue (the field's initializer reference,
+    # FunctionCollector's docstring).
+    get_function(translator.functions[], FieldReference(field, FieldReferenceKind_initializer))
 
     # We will have to initialize the global lazily, meaning each access will check if it's initialized
     # and if not, cause initialization (dev/formal/StaticFieldInit.tla).

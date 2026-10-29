@@ -154,7 +154,7 @@ the translator holds each collaborator.
     _declared_field_tables::Dict{ClassField,WasmBuilder.IR.AbstractTable}
     _imported_field_tables::Late{WasmTableImporter}
     members_containing_inner_functions::Base.IdSet{Core.MethodInstance}
-    members_being_generated::Base.IdSet{Core.MethodInstance}
+    members_being_generated::Base.IdSet{Union{Core.MethodInstance,GlobalRef}}
     constructor_closures::IdDict{Core.MethodInstance,Closures}
     constructor_info::IdDict{Core.MethodInstance,ConstructorInfo}
     void_marker::Late{WasmBuilder.IR.ValueType}
@@ -240,7 +240,7 @@ the translator holds each collaborator.
             IdDict{Core.MethodInstance,ParameterInfo}(), Dict{ClassField,WasmBuilder.IR.AbstractTable}(),
             Late{WasmTableImporter}("dart2wasm/lib/translator.dart:198 Translator._importedFieldTables",
                 () -> WasmTableImporter(self, "fieldTable")),
-            Base.IdSet{Core.MethodInstance}(), Base.IdSet{Core.MethodInstance}(),
+            Base.IdSet{Core.MethodInstance}(), Base.IdSet{Union{Core.MethodInstance,GlobalRef}}(),
             IdDict{Core.MethodInstance,Closures}(), IdDict{Core.MethodInstance,ConstructorInfo}(),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/translator.dart:206 Translator.voidMarker",
                 () -> WasmBuilder.IR.RefType_def(WasmBuilder.IR.StructType("void"); nullable = true)),
@@ -353,16 +353,16 @@ end
 end
 
 """
-A member's function whose code is to be generated, by its code generator: the reference is a
-member's MethodInstance or a binding's initializer, its GlobalRef (FunctionCollector's key).
+A member's function whose code is to be generated, by its code generator: the reference is the
+Kernel table's Reference (FunctionCollector's key), a member's MethodInstance or a field's accessor.
 """
 @parity "dart2wasm/lib/translator.dart:2694 AstCompilationTask" struct AstCompilationTask <: AbstractCompilationTask
     # CompilationTask's fields, then the class's own
     function_::WasmBuilder.FunctionBuilder
     _code_generator::CodeGenerator
-    reference::Union{Core.MethodInstance,GlobalRef}
+    reference::Reference
     # the struct's one constructor, tagged; dart's constructor at :2697 is its outer function
-    AstCompilationTask(::Val{:_}, function_::WasmBuilder.FunctionBuilder, _code_generator::CodeGenerator, reference::Union{Core.MethodInstance,GlobalRef}) =
+    AstCompilationTask(::Val{:_}, function_::WasmBuilder.FunctionBuilder, _code_generator::CodeGenerator, reference::Reference) =
         new(function_, _code_generator, reference)
 end
 
@@ -638,10 +638,8 @@ end
 
 """
 The module builder of the module `reference` is placed in.
-
-Reshaped: `reference` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
 """
-@parity "dart2wasm/lib/translator.dart:427 Translator.moduleForReference" module_for_reference(self::Translator, reference::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.ModuleBuilder =
+@parity "dart2wasm/lib/translator.dart:427 Translator.moduleForReference" module_for_reference(self::Translator, reference::Reference)::WasmBuilder.ModuleBuilder =
     self._output_to_builder[module_for_reference(self._module_output_data, reference)]
 
 @parity "dart2wasm/lib/translator.dart:436 Translator.moduleForConstant" module_for_constant(self::Translator, constant::NirConst)::Union{} =
@@ -1193,10 +1191,8 @@ end
 
 """
 The function type of a direct call of `target`: a Julia member calls through no selector (src/dispatch_table.jl), so the function collector answers.
-
-Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
 """
-@parity "dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall" signature_for_direct_call(self::Translator, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.FunctionType =
+@parity "dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall" signature_for_direct_call(self::Translator, target::Reference)::WasmBuilder.IR.FunctionType =
     get_function_type(self.functions[], target)
 
 # a Julia member calls through no selector (src/dispatch_table.jl): the function collector answers
@@ -1556,10 +1552,8 @@ end
 
 """
 A compilation task of `reference`'s function and its code generator.
-
-Reshaped: `reference` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
 """
-@parity "dart2wasm/lib/translator.dart:2697 AstCompilationTask" AstCompilationTask(function_::WasmBuilder.FunctionBuilder, _create_code_generator::CodeGenerator, reference::Union{Core.MethodInstance,GlobalRef})::AstCompilationTask =
+@parity "dart2wasm/lib/translator.dart:2697 AstCompilationTask" AstCompilationTask(function_::WasmBuilder.FunctionBuilder, _create_code_generator::CodeGenerator, reference::Reference)::AstCompilationTask =
     AstCompilationTask(Val(:_), function_, _create_code_generator, reference)
 
 # dart prints the member's Kernel (its initializers and body) with printKernel; a Julia member's is

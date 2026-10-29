@@ -1957,10 +1957,9 @@ end
 end
 
 # a Julia method is synchronous (tasks are out of scope, rejected by Julia's verifier) and never a
-# constructor, instance field or tear-off (a struct's constructor is Expr(:new) in a body, a field read
-# a getfield), and a binding's reference is its static field's, so the inlinable generator is always
-# found
-@parity "dart2wasm/lib/code_generator.dart:3463 getMemberCodeGenerator" function get_member_code_generator(translator::Translator, function_builder::WasmBuilder.FunctionBuilder, member_reference::Union{Core.MethodInstance,GlobalRef})::CodeGenerator
+# constructor or tear-off (a struct's constructor is Expr(:new) in a body, a function a value), and a
+# field's accessor has its generator, so the inlinable generator is always found
+@parity "dart2wasm/lib/code_generator.dart:3463 getMemberCodeGenerator" function get_member_code_generator(translator::Translator, function_builder::WasmBuilder.FunctionBuilder, member_reference::Reference)::CodeGenerator
     local code_gen = get_inlinable_member_code_generator(translator, function_builder.type, member_reference)
     code_gen === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:3463 getMemberCodeGenerator: no generator for $member_reference"), "getMemberCodeGenerator")
     return code_gen
@@ -1972,19 +1971,25 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3502 getLambdaCodeGenerator" get_lambda_code_generator(translator::Translator, lambda::Lambda)::CodeGenerator =
     SynchronousLambdaCodeGenerator(translator, lambda)
 
-# a Julia method is dart's synchronous Procedure: no constructor, field or tear-off reference reaches
-# here (getMemberCodeGenerator), and no class encloses a Julia method, so dart's test of the
-# member's enclosing class for cyclicness never holds; its body is the NIR of the CodeInstance Julia
-# inferred for it
-@parity "dart2wasm/lib/code_generator.dart:3528 getInlinableMemberCodeGenerator" function get_inlinable_member_code_generator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, reference::Core.MethodInstance)::Union{CodeGenerator,Nothing}
-    return SynchronousProcedureCodeGenerator(translator, function_type, reference, reference)
+# a Julia method is dart's synchronous Procedure: no constructor or tear-off reference reaches here
+# (getMemberCodeGenerator), and no class encloses a Julia method, so dart's test of the member's
+# enclosing class for cyclicness never holds; its body is the NIR of the CodeInstance Julia inferred
+# for it. A field's accessor is dart's `member is Field` arm: a static field's (a binding's) implicit
+# getter or setter or its initializer, an instance field's implicit getter or setter, with no
+# unchecked entry (Julia checks no covariant value)
+@parity "dart2wasm/lib/code_generator.dart:3528 getInlinableMemberCodeGenerator" function get_inlinable_member_code_generator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, reference::Reference)::Union{CodeGenerator,Nothing}
+    return @exhaustive reference::Reference begin
+        (m::MethodInstance) => SynchronousProcedureCodeGenerator(translator, function_type, m, m)
+        (r::FieldReference) => let field = r.field
+            if field isa GlobalRef
+                r.kind === FieldReferenceKind_initializer ? StaticFieldInitializerCodeGenerator(translator, function_type, field) :
+                    StaticFieldImplicitAccessorCodeGenerator(translator, function_type, field, r.kind === FieldReferenceKind_getter)
+            else
+                ImplicitFieldAccessorCodeGenerator(translator, function_type, field, r.kind === FieldReferenceKind_getter, false)
+            end
+        end
+    end
 end
-
-# a static field's reference, Julia's binding (dart's `member is Field && member.isStatic` arm): the
-# function FunctionCollector keys by the binding's GlobalRef is its initializer, dart's
-# staticFieldInitializer reference
-@parity "dart2wasm/lib/code_generator.dart:3528 getInlinableMemberCodeGenerator" get_inlinable_member_code_generator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, reference::GlobalRef)::CodeGenerator =
-    StaticFieldInitializerCodeGenerator(translator, function_type, reference)
 
 # dart's `kind` is always EntryPoint.normal (the struct's docstring), so it is no parameter
 @parity "dart2wasm/lib/code_generator.dart:3610 SynchronousProcedureCodeGenerator" function SynchronousProcedureCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance, reference::Core.MethodInstance)::SynchronousProcedureCodeGenerator
@@ -2200,8 +2205,8 @@ end
     local translator = self.translator
     local global_definition = get_definition_for_static_field(translator.dart_globals[], self.field)
     if self.is_implicit_getter
-        # the initializer function is keyed by the binding itself (FunctionCollector's docstring)
-        local init_function = get_existing_function(translator.functions[], self.field)
+        # the field's initializer reference (FunctionCollector's key)
+        local init_function = get_existing_function(translator.functions[], FieldReference(self.field, FieldReferenceKind_initializer))
         _generate_getter(self, global_definition, init_function)
     else
         _generate_setter(self, global_definition)
