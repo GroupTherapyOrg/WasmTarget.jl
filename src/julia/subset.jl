@@ -152,6 +152,8 @@ compiles for that call (`_entry_specialization`), and let Julia's trim verifier 
 closed world it accepts; rejects with `OutsideSubset` when the entry has no unique method (Julia's
 `which` text) or no compileable specialization, or the verifier reports errors, each a `TrimError`
 holding Julia's own record, its statement and its stack frames.
+
+formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and judged, none the entry never reaches
 """
 @quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed" Base.signature_type function check_subset(@nospecialize(f), argtypes::Tuple, at::String)::ClosedWorld
     local sig = Base.signature_type(f, argtypes)

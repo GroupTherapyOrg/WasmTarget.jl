@@ -36,6 +36,7 @@ end
 # whatever the sharing, and same-type literals that differ in their first values hash apart (a hash
 # by the type alone made N of them collide, the cache quadratic, A51S13). A value Julia stores flat
 # (isbits), a String, Symbol or Type is hashed itself, and a mutable object by its address (objectid).
+# formal(dev/formal/ConstantHash.tla): the hash agrees with ===, its walk bounded, a key's hash stable
 @quarantine "a literal's hash agrees with === at a bounded cost: Julia's objectid recurses through every path of an immutable value" Base.hash Base.hash(c::NirConst, h::UInt)::UInt = _bounded_hash(c.c.val, h, Ref(64))
 
 @quarantine "an immutable value's hash over its first values, depth first, at most a fixed count of them" Base.hash function _bounded_hash(@nospecialize(v), h::UInt, budget::Base.RefValue{Int})::UInt
@@ -420,6 +421,8 @@ end
 Every function of the closed world Julia's trim verifier accepted, in NIR, in Julia's order: each
 statement its kind of `NirStmt`, each operand of `NirValue`, each type Julia's. A form outside the
 census rejects with `Unquarantined`, located at the compile `at` names.
+
+formal(dev/formal/NirHandoff.tla): a record no body, one body per CodeInstance, a repeat asserted, each statement at its position
 """
 @quarantine "the closed world Julia inferred comes as CodeInstance and CodeInfo pairs, read once" Core.CodeInfo function build_nir(world::ClosedWorld, at::String)::NirWorld
     # a queued ccallable's svec(rettype, signature) is the verifier's record, no body: its
