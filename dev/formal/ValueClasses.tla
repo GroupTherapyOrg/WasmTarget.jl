@@ -6,7 +6,10 @@
 (* walk of the component's classes).                                         *)
 (*   closed_world_classes: each body's argument types, statement types, the *)
 (*     types of the literals and constant bindings it reads, and its return  *)
-(*     type, each met as a value's type.                                     *)
+(*     type, each met as a value's type; and each constant's object graph:   *)
+(*     a literal's or a binding's value, then every value it holds (a        *)
+(*     field's, an svec's element), each object walked once (_meet_constant!)*)
+(*     and its class met, since constants.jl instantiates each one.          *)
 (*   _meet_value!: Union{} brings nothing; a Union its members; a Vararg its *)
 (*     element; Type{X} its kind, typeof(X), and the classes X denotes (X, or *)
 (*     each member of a Union X); Type{T} with T unknown, or a UnionAll under *)
@@ -39,7 +42,9 @@
 (*   Terminates       the walk ends                                          *)
 (* Broken variants: NoSeenGuard (Once), KindOnly (Type{X} brings its kind    *)
 (* alone: ValuesCovered), NoSupertype (SupertypeClosed), NoFields            *)
-(* (FieldsClosed), KindsAlways (Type{X} brings every kind: NothingExtra).    *)
+(* (FieldsClosed), KindsAlways (Type{X} brings every kind: NothingExtra),    *)
+(* NoContents (a constant brings its own class alone: ValuesCovered, a Float *)
+(* held in a field declared Any never numbered).                             *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -48,11 +53,12 @@ CONSTANTS
     KindOnly,     \* Broken: Type{X} brings its kind alone, not the classes X denotes
     NoSupertype,  \* Broken: a class brings no supertype
     NoFields,     \* Broken: a concrete class brings no field types
-    KindsAlways   \* Broken: Type{X} with X known brings every kind
+    KindsAlways,  \* Broken: Type{X} with X known brings every kind
+    NoContents    \* Broken: a constant brings its own class, not the values it holds
 
 \* the universe of classes, Julia's answers
 Classes == {"Any", "Number", "Int", "Float", "Node", "Nothing", "Pair", "Str", "TypeT",
-            "DataType", "UnionKind"}
+            "DataType", "UnionKind", "Box"}
 Kinds   == <<"DataType", "UnionKind">>
 KindSet == {Kinds[i] : i \in 1..Len(Kinds)}
 Supertype(t) == CASE t \in {"Int", "Float"}  -> "Number"
@@ -73,11 +79,22 @@ Bottom     == [k |-> "bottom", t |-> "", s |-> <<>>]
 
 FieldTypes(t) == CASE t = "Node" -> <<U(<<"Node", "Nothing">>)>>
                    [] t = "Pair" -> <<DT("Int"), DT("Float")>>
+                   [] t = "Box"  -> <<DT("Any")>>
                    [] OTHER      -> <<>>
+
+\* constant objects, Julia's values: each its class and the objects it holds. A Box whose field,
+\* declared Any, holds a Float; a Node whose next is itself (a cycle the object guard ends)
+Objects == {"box", "f", "cyc"}
+ClassOf(o) == CASE o = "box" -> "Box" [] o = "f" -> "Float" [] o = "cyc" -> "Node"
+Contents(o) == CASE o = "box" -> <<"f">> [] o = "cyc" -> <<"cyc">> [] OTHER -> <<>>
+Cst(o) == [k |-> "const", t |-> o, s |-> <<>>]
+RECURSIVE Reach(_)
+Reach(S) == LET N == S \cup UNION {{Contents(o)[i] : i \in 1..Len(Contents(o))} : o \in S}
+            IN IF N = S THEN S ELSE Reach(N)
 KindFields(k) == IF k = "DataType" THEN <<DT("Str")>> ELSE <<>>
 
 Forms == {DT("Int"), DT("Pair"), DT("Node"), DT("Str"), U(<<"Int", "Nothing">>), Va("Float"),
-          TyDT("Int"), TyU(<<"Int", "Float">>), TyTV, TyAll, Bottom}
+          TyDT("Int"), TyU(<<"Int", "Float">>), TyTV, TyAll, Bottom, Cst("box"), Cst("cyc")}
 Programs == {<<f>> : f \in Forms} \cup {<<f, g>> : f, g \in Forms}
 
 Range(q) == {q[i] : i \in 1..Len(q)}
@@ -92,6 +109,7 @@ ValueClassesOf(f) ==
       [] f.k = "typetv"    -> KindSet
       [] f.k = "typeall"   -> KindSet
       [] f.k = "bottom"    -> {}
+      [] f.k = "const"     -> {ClassOf(o) : o \in Reach({f.t})}
 
 FieldClasses(t) ==
     IF t \in KindSet THEN UNION {ValueClassesOf(f) : f \in Range(KindFields(t))}
@@ -102,11 +120,12 @@ RECURSIVE Closure(_)
 Closure(S) == LET N == S \cup {Supertype(t) : t \in S} \cup UNION {FieldClasses(t) : t \in S}
               IN IF N = S THEN S ELSE Closure(N)
 
-VARIABLES program, stack, out, seen
-vars == <<program, stack, out, seen>>
+VARIABLES program, stack, out, seen, seenObj
+vars == <<program, stack, out, seen, seenObj>>
 
 Value(f) == [task |-> "value", f |-> f, t |-> ""]
 Class(t) == [task |-> "class", f |-> Bottom, t |-> t]
+Obj(o)   == [task |-> "object", f |-> Bottom, t |-> o]
 Values(fs) == [i \in 1..Len(fs) |-> Value(fs[i])]
 ClassesTasks(ts) == [i \in 1..Len(ts) |-> Class(ts[i])]
 
@@ -116,12 +135,14 @@ TypeOK ==
     /\ program \in Programs
     /\ Range(out) \subseteq Classes
     /\ seen \subseteq Classes
+    /\ seenObj \subseteq Objects
 
 Init ==
     /\ program \in Programs
     /\ stack = Values(program)
     /\ out = <<>>
     /\ seen = {}
+    /\ seenObj = {}
 
 \* _meet_value!: what a value's type brings
 MeetValue(f) ==
@@ -136,6 +157,12 @@ MeetValue(f) ==
       [] f.k = "typetv"    -> ClassesTasks(Kinds)
       [] f.k = "typeall"   -> ClassesTasks(Kinds)
       [] f.k = "bottom"    -> <<>>
+      [] f.k = "const"     -> <<Obj(f.t)>>
+
+\* _meet_constant!: an object walked once, its class met, then each object it holds
+MeetObject(o) ==
+    <<Class(ClassOf(o))>> \o
+    (IF NoContents THEN <<>> ELSE [i \in 1..Len(Contents(o)) |-> Obj(Contents(o)[i])])
 
 \* _meet_class!: the class listed once, then its supertype, then its fields
 MeetClass(t) ==
@@ -149,14 +176,21 @@ Step ==
     /\ LET x == Head(stack) IN
        IF x.task = "value"
        THEN /\ stack' = MeetValue(x.f) \o Tail(stack)
-            /\ UNCHANGED <<program, out, seen>>
+            /\ UNCHANGED <<program, out, seen, seenObj>>
+       ELSE IF x.task = "object"
+       THEN IF x.t \in seenObj
+            THEN /\ stack' = Tail(stack)
+                 /\ UNCHANGED <<program, out, seen, seenObj>>
+            ELSE /\ seenObj' = seenObj \cup {x.t}
+                 /\ stack' = MeetObject(x.t) \o Tail(stack)
+                 /\ UNCHANGED <<program, out, seen>>
        ELSE IF x.t \in seen /\ ~NoSeenGuard
        THEN /\ stack' = Tail(stack)
-            /\ UNCHANGED <<program, out, seen>>
+            /\ UNCHANGED <<program, out, seen, seenObj>>
        ELSE /\ seen' = seen \cup {x.t}
             /\ out' = Append(out, x.t)
             /\ stack' = MeetClass(x.t) \o Tail(stack)
-            /\ UNCHANGED program
+            /\ UNCHANGED <<program, seenObj>>
 
 Done == stack = <<>>
 Terminal == Done /\ UNCHANGED vars

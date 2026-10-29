@@ -34,12 +34,17 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
 @quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values" Base.unwrap_unionall function closed_world_classes(world::NirWorld, at::String)::Vector{DataType}
     local out = DataType[]
     local seen = Base.IdSet{DataType}()
+    local objs = Base.IdSet{Any}()
     for b in world
         foreach(t -> _meet_value!(out, seen, t, at), Base.unwrap_unionall(b.ci.def.specTypes).parameters)
         foreach(t -> _meet_value!(out, seen, t, at), b.types)
         for st in b.stmts
             for v in nir_value_operands(st)
-                v isa Union{NirConst,NirGlobal} && _meet_value!(out, seen, nir_value_type(b, v), at)
+                # a literal, or a constant binding's value, is a constant constants.jl instantiates:
+                # its object graph (_meet_constant!)
+                v isa NirConst && _meet_constant!(out, seen, objs, v.c.val, at)
+                v isa NirGlobal && (_meet_value!(out, seen, nir_value_type(b, v), at);
+                                    _meet_constant!(out, seen, objs, nir_binding_value(v.ref, at).c.val, at))
             end
             # a tuple's class is its operands' (nir_tuple_type), which the statement's widened type
             # may hide; a tuple whose class only run time knows brings none
@@ -51,6 +56,31 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
         _meet_value!(out, seen, b.ci.rettype, at)
     end
     return out
+end
+
+# A constant's object graph met by the walk (dev/formal/ValueClasses.tla's MeetObject): the value's
+# class, then every value it holds that constants.jl instantiates in its place, a field's value, an
+# svec's element, a type value's own fields (its kind's layout, _kind_instance_fields), each mutable
+# object walked once. A field declared abstract (Any) holds a value whose class only the value tells.
+@quarantine "a constant is Julia's object graph, each value's class its typeof" Base.isdefined function _meet_constant!(out::Vector{DataType}, seen::Base.IdSet{DataType}, objs::Base.IdSet{Any}, @nospecialize(v), at::String)::Nothing
+    if ismutable(v)
+        v in objs && return nothing
+        push!(objs, v)
+    end
+    local t = typeof(v)
+    _meet_value!(out, seen, Core.Typeof(v), at)
+    if t === Core.SimpleVector
+        foreach(x -> _meet_constant!(out, seen, objs, x, at), v)
+    elseif Base.iskindtype(t)
+        for f in _kind_instance_fields(t, at)
+            f.index > 0 && isdefined(v, f.index) && _meet_constant!(out, seen, objs, getfield(v, f.index), at)
+        end
+    elseif !isprimitivetype(t)
+        for i in 1:fieldcount(t)
+            isdefined(v, i) && _meet_constant!(out, seen, objs, getfield(v, i), at)
+        end
+    end
+    return nothing
 end
 
 # a value's type met by the walk, by Julia's inferred form

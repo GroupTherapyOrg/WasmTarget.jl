@@ -45,7 +45,7 @@ anchor in `src/` has a row.)
 | Call consult chain | `compile_call!` (calls.jl) | ConsultChain |
 | Fatal/trap resolution | `record_unsupported!` (diagnostics.jl) | Diagnostics |
 | Class ids and their ranges | `ClassIdNumbering__number`, `_get_transitive_implementors`, `get_concrete_class_id_range`, `normalize` (class_info.jl), `class_implemented_types` (classes.jl: Julia's covariant Tuples, dart's implementors) | ClassIdNumbering |
-| Closed-world classes | `closed_world_classes`, `_meet_value!`, `_meet_class!` (classes.jl: every class a value can have, once, its supertype and its fields' classes with it), read by class_info.jl's numbering | ValueClasses |
+| Closed-world classes | `closed_world_classes`, `_meet_value!`, `_meet_class!` (classes.jl: every class a value can have, once, its supertype and its fields' classes with it, and each constant's object graph, `_meet_constant!`), read by class_info.jl's numbering | ValueClasses |
 | Record layout | `RecordShape`, `RecordShape_from_type`, `==`, `get_name_index`, `get_positional_index` (records.jl: a name's index its declared place, == exactly when the indices agree, an open tuple type rejected) | RecordLayout |
 | Lazy static field | `get_definition_for_static_field`'s lazy arm (globals.jl: the flag or nullable global, the GlobalRef-keyed initializer), read through dart's getter and setter (a read checks the flag before the global, the setter sets it, the initializer runs once and reads no field) | StaticFieldInit |
 | Late final cells | `Late{T}`, `_late_get`, `_late_set!` (late.jl: assigned once or initialized on the first read, a cycle and a misuse rejected, an unassigned read Unported) | LateCell |

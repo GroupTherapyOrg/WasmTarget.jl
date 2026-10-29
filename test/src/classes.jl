@@ -179,3 +179,23 @@ end
         @test r.ok || (@info r.label r.why; false)
     end
 end
+
+module ConstantGraphCases
+# a constant whose field, declared Any, holds a Float64: the Float64 only the value tells
+mutable struct Box; v::Any; end
+const B = Box(2.5)
+boxed(x::Int) = x > 0 ? B : nothing
+# a type as a value, its parameters' classes held by its layout
+params() = Tuple{Int8,String}
+end
+
+@testset "a constant's object graph brings its values' classes (dev/formal/ValueClasses.tla)" begin
+    # Julia's answer: each value a constant holds has its own class, typeof, which its declared field
+    # type (Any) does not tell; constants.jl instantiates each, so the closed world numbers each
+    local cs = _classes(ConstantGraphCases.boxed, (Int,))
+    @test ConstantGraphCases.Box in cs && Float64 in cs
+    @test W.compile(ConstantGraphCases.boxed, (Int,))[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    # a type value's own fields: DataType's parameters, an svec of the classes the type names
+    local ps = _classes(ConstantGraphCases.params, ())
+    @test DataType in ps && Core.SimpleVector in ps && Int8 in ps && String in ps
+end
