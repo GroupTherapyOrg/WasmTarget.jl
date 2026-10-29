@@ -7,7 +7,8 @@
 #   bash dev/corpus.sh --once   the current head, once
 #
 # Each run appends <utc>\t<head>\t<green|red|hung>\t<seconds>\t<first failure> to the common dir's
-# wt-corpus.tsv and leaves its output in wt-corpus.out; a red head is the next lane's first fix.
+# wt-corpus.tsv and leaves its output in wt-corpus.out (a red run's also in wt-corpus-red-<head>.out); a red
+# head is the next lane's first fix.
 # It runs at background QoS (taskpolicy -b: efficiency cores only), taking no check slot, so it never takes
 # a performance core a landing's check needs (D31).
 set -uo pipefail
@@ -55,6 +56,13 @@ run_head() {
   case $rc in 0) result=green;; 124) result=hung;; *) result=red;; esac
   first=$(grep -m1 -E 'Test Failed|Error During Test|past the hard limit|LoadError' "$out" | tr '\t' ' ' | cut -c1-200)
   printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short "$head")" "$result" "$t" "$first" >> "$tsv"
+  # a red run's whole output outlives the next run, which truncates wt-corpus.out at its start: kept as
+  # wt-corpus-red-<head>.out, the latest three (a red's cases were read from a file the next run had
+  # already emptied, twice on 2026-10-28)
+  if [ "$result" != green ]; then
+    cp "$out" "$common/wt-corpus-red-$(git rev-parse --short "$head").out"
+    ls -t "$common"/wt-corpus-red-*.out 2>/dev/null | tail -n +4 | xargs rm -f 2>/dev/null
+  fi
   echo "corpus: $(git rev-parse --short "$head") $result in ${t}s${first:+ — $first}"
 }
 
