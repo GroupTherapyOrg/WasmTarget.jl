@@ -104,6 +104,21 @@ end
     @test [mi.opcode for mi in mis[et:et+3]] == [W.END_TRY_TABLE, W.UNREACHABLE, W.END_BLOCK, W.CATCH]
 end
 
+@testset "machine code: a :leave and a return send nothing to the handler, as inference decides" begin
+    # %2 calls under %1's handler; %3 jumps to %4, a :leave alone in its block; %5 returns; %6 catches.
+    # No statement carries a flag, yet inference never sends a :leave's or a return's exception to a
+    # handler (typeinf_local): only the call's block unwinds to the catch block
+    local code = Any[Core.EnterNode(6), Expr(:call, GlobalRef(Base, :identity), 1), Core.GotoNode(4),
+                     Expr(:leave, Core.SSAValue(1)), Core.ReturnNode(Core.SSAValue(2)), Core.ReturnNode(2)]
+    local stmts, cfg, handlers = W.nir_code(code, zeros(UInt32, length(code)), "leave")
+    @test handlers.handler_at[4] == 1 && handlers.nothrow[4] && handlers.nothrow[5] && !handlers.nothrow[2]
+    local mf = W.machine_function(stmts, cfg, handlers, "leave")
+    # Julia's blocks %1, %2..%3, %4, %5, %6: machine blocks 2 to 6; the :leave's block 4 no predecessor
+    # of the pad 6
+    @test Core.Compiler.block_for_inst(cfg, 4) + 1 == 4 && length(cfg.blocks[3].stmts) == 1
+    @test mf.blocks[6].ehpad && mf.blocks[6].preds == [3] && !(6 in mf.blocks[4].succs)
+end
+
 @testset "CFGStackify.cpp: fixCallUnwindMismatches and addNestedTryTable, a call the layout puts in a try_table it does not unwind to" begin
     # %2 under %1's handler unwinds to the catch block %6; %4, after the :leave, unwinds to the caller.
     # CFGSort lays the catch block (machine block 5) before %4's (4); laid after it, the try_table

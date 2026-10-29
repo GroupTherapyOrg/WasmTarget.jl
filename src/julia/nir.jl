@@ -235,8 +235,9 @@ end
 
 A body's try regions as Julia's compiler answers them: `handler_at[i]`, the statement of the
 EnterNode whose catch handles statement `i`, 0 where none does (compute_trycatch's catch handler),
-and `nothrow[i]`, whether Julia proved statement `i` throws nothing (its IR_FLAG_NOTHROW). The
-stackifier reads them as LLVM reads an invoke's unwind edge (src/julia/machine.jl).
+and `nothrow[i]`, whether statement `i` sends no exception to its handler as Julia's inference
+decides it: a return or a :leave never does, every other statement unless it carries IR_FLAG_NOTHROW.
+The stackifier reads them as LLVM reads an invoke's unwind edge (src/julia/machine.jl).
 """
 @quarantine "Julia's compiler answers each statement's try handler and whether it can throw; the stackifier reads both" Base.BitVector struct NirHandlers
     handler_at::Vector{Int}
@@ -266,15 +267,23 @@ end
 The statements of an optimized CodeInfo's `code` in NIR, Julia's CFG of them (compute_basic_blocks,
 whose blocks and edges name statements by their position, the same in both), and its try regions:
 each statement's catch handler (compute_trycatch, over the CodeInfo's statements, whose catch
-destinations are statements) and whether `ssaflags` proves it throws nothing. The one reader of a
+destinations are statements) and whether it sends no exception to that handler. The one reader of a
 body's raw statements, so every later stage, the stackifier's included, reads the closed sums.
+
+Whether a statement sends an exception to its handler is inference's rule (typeinf_local,
+Compiler/src/abstractinterpretation.jl): a block's GotoNode, GotoIfNot and EnterNode carry
+IR_FLAG_NOTHROW where they cannot throw; a ReturnNode and a :leave end their block without reaching
+propagate_to_error_handler!, so neither throws whatever its flag (the optimizer's stmt_effect_flags
+flags a :leave as it does any unknown head, not nothrow); every other statement throws unless
+flagged.
 """
 @quarantine "Julia's IR is a CFG compute_basic_blocks reads from its optimized statements, read here once" Core.Compiler.compute_basic_blocks function nir_code(code::Vector{Any}, ssaflags::Vector{UInt32}, at::String)::Tuple{Vector{NirStmt},Core.Compiler.CFG,NirHandlers}
     length(ssaflags) == length(code) || reject!(Internal("src/julia/nir.jl nir_code: $(length(ssaflags)) flags for $(length(code)) statements"), at)
     local info = Core.Compiler.compute_trycatch(code)
     local handler_at = info === nothing ? zeros(Int, length(code)) :
         Int[h == 0 ? 0 : info.handlers[h].enter_idx for (h, _) in info.handler_at]
-    local nothrow = BitVector([f & Core.Compiler.IR_FLAG_NOTHROW != 0 for f in ssaflags])
+    local nothrow = BitVector([code[i] isa Core.ReturnNode || Meta.isexpr(code[i], :leave) || ssaflags[i] & Core.Compiler.IR_FLAG_NOTHROW != 0
+                               for i in eachindex(code)])
     return NirStmt[_nir_stmt(st, at) for st in code], Core.Compiler.compute_basic_blocks(code), NirHandlers(handler_at, nothrow)
 end
 
