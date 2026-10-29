@@ -709,7 +709,7 @@ isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runne
 
 @testset "translator.dart: convertType boxes a value as its Julia class" begin
     local f = BoxCases.boxed_is_int
-    local results = Main.WTRunner.run_cases(Main.WTRunner.answer_cases("boxed_is_int", WasmTarget.compile, f, (Int64(5),), f(5)))
+    local results = Main.WTRunner.run_cases(first(Main.WTRunner.answer_cases("boxed_is_int", WasmTarget.compile, f, (Int64(5),))))
     for r in results
         @test r.ok || (println(r); false)
     end

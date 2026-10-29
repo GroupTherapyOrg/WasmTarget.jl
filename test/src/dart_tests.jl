@@ -1210,17 +1210,23 @@ const DART_CORE = Set{String}("$(g)/$(c[1])" for (g, cs) in DART_GROUPS for c in
 function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{String,String}}, key::String, f, args::Tuple,
                      own::Vector{UInt8})
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: reading $key's answer")
+    local native = nothing
     local secs = _dart_secs(@timed try
-        local read = _dart_limited("$key reading its answer") do
-            (Main.WTRunner.answer_cases(key, WasmTarget.compile, f, args, f(args...); own), UInt8[])
+        local read = first(_dart_limited("$key reading its answer") do
+            (Main.WTRunner.answer_cases(key, WasmTarget.compile, f, args; own), UInt8[])
+        end)
+        if read isa _DartPastLimit
+            push!(unread, key => read.why)
+        else
+            append!(runs, first(read))
+            native = Some(last(read))
         end
-        first(read) isa _DartPastLimit ? push!(unread, key => first(read).why) : append!(runs, first(read))
     catch e
         e isa WasmTarget.RejectionError || rethrow()
         push!(unread, key => "the reader of its answer does not compile: $(sprint(showerror, e))")
     end)
     secs <= DART_COMPILE_BUDGET || push!(unread, key => "reading its answer took $(round(secs; digits = 1)) s, past its $(DART_COMPILE_BUDGET) s budget")
-    return nothing
+    return native   # Some(the runner's native answer, computed after the case's compiles), or nothing when none was read
 end
 
 # each group block's name in the cost table: its name, and its occurrence when a name stands twice (dart_nnbd)
@@ -1286,7 +1292,8 @@ const _DART_COSTS_OUT = get(ENV, "WT_DART_COSTS_OUT", "")
                 if haskey(_DART_RECORDS, key)
                     local today = _dart_kind(key)
                     local f, args = case[2], case[3:end]
-                    (key in DART_NATIVE_DUE || !_DART_CORE_ONLY) && @test _dart_same(f(args...), _dart_native(key))
+                    # the landing proves a due case's native answer before its compile: no module of it runs
+                    _DART_CORE_ONLY && key in DART_NATIVE_DUE && @test _dart_same(f(args...), _dart_native(key))
                     if !_DART_CORE_ONLY || key in DART_CORE
                         local timed = @timed _dart_outcome(f, args, key)
                         local (got, own), secs = timed.value, _dart_secs(timed)
@@ -1296,10 +1303,15 @@ const _DART_COSTS_OUT = get(ENV, "WT_DART_COSTS_OUT", "")
                         # the modules run in the whole run, every module whatever its record, a wrong answer never
                         # admitted (A53E2); the landing runs none, its cost fixed (the lead's ruling: a landing
                         # sample comes later, its cost measured)
+                        # the whole run proves the native answer after the compiles, the runner's own value
+                        # when the modules were read (A61S4: a compile reads the session's heap as it stands)
                         if got === :compiled && !_DART_CORE_ONLY
                             today === :unread && push!(gap_keys, key)
-                            _dart_read!(runs, unread, key, f, args, own)
+                            local native = _dart_read!(runs, unread, key, f, args, own)
                             nread += 1
+                            @test _dart_same(native === nothing ? Main.WTRunner.native_answer(f, args) : something(native), _dart_native(key))
+                        elseif !_DART_CORE_ONLY
+                            @test _dart_same(Main.WTRunner.native_answer(f, args), _dart_native(key))
                         end
                     end
                 end

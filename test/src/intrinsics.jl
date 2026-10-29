@@ -149,7 +149,6 @@ end
     # typemin ÷ -1 too, its type's own typemin for a 32- or 8-bit operand: the module raises a wasm
     # exception where native Julia throws (Error._throw's tag), never a trap, and answers as native
     # elsewhere
-    local native(f, a) = try; f(a...); catch e; WTRunner.Throws(typeof(e)); end
     local C = DivCases
     local s(a, b, k) = (Int64(a), Int64(b), Int64(k))
     local u(a, b, k) = (UInt64(a), UInt64(b), Int64(k))
@@ -161,7 +160,7 @@ end
                          (C.uops, [u(7, 2, 0), u(7, 0, 0), u(typemax(UInt64), 3, 0), u(7, 2, 1), u(7, 0, 1),
                                    u(typemax(UInt32), 3, 2), u(7, 0, 2), u(65535, 7, 3), u(70000, 0, 3), u(9, 65540, 3)]))
         local bytes = WI.compile(f, map(typeof, first(argsets)))
-        append!(cases, [WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, native(f, a)) for a in argsets])
+        append!(cases, [WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, WTRunner.native_answer(f, a)) for a in argsets])
     end
     @test count(c -> c.native isa WTRunner.Throws, cases) == 11
     for r in WTRunner.run_cases(cases)
@@ -215,10 +214,9 @@ end
 @testset "intrinsics.dart: a SimpleVector's element, Julia's bounds check raising BoundsError" begin
     # _svec_ref reads the data array at i - 1 behind Julia's check: an index outside 1..length
     # raises BoundsError through the runtime's thrower, a wasm exception, never a trap
-    local native(f, a) = try; f(a...); catch e; WTRunner.Throws(typeof(e)); end
     local args = [(Int64(k),) for k in (-1, 0, 1, 2, 3, 4)]
     local bytes = WI.compile(SvecRefCases.sref, (Int64,))
-    local cases = [WTRunner.RunCase("sref$a", bytes, a, native(SvecRefCases.sref, a)) for a in args]
+    local cases = [WTRunner.RunCase("sref$a", bytes, a, WTRunner.native_answer(SvecRefCases.sref, a)) for a in args]
     @test count(c -> c.native isa WTRunner.Throws, cases) == 3
     for r in WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)

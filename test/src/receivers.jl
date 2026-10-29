@@ -19,7 +19,7 @@ end
     @test !WasmTarget.nir_carries_data(typeof(sin))
     @test WasmTarget.nir_carries_data(ReceiverCases.Plain)
     # wt3-translator's probe: the constructor compiles with no receiver and the module answers native's value
-    local cases = [Main.WTRunner.compiled_case("plain", WasmTarget.compile, ReceiverCases.f, (5,), ReceiverCases.f(5); optimized = false)]
+    local cases = [Main.WTRunner.compiled_case("plain", WasmTarget.compile, ReceiverCases.f, (5,); optimized = false)]
     for r in Main.WTRunner.run_cases(cases)
         @test r.ok
     end

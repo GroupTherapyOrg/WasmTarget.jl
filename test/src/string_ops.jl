@@ -25,7 +25,7 @@ const STRING_OP_CASES = (
     for (name, f, args) in STRING_OP_CASES
         local label = "string_ops/$name$args"
         local cases = try
-            Main.WTRunner.answer_cases(label, WasmTarget.compile, f, args, f(args...))
+            first(Main.WTRunner.answer_cases(label, WasmTarget.compile, f, args))
         catch e
             e isa WasmTarget.RejectionError || rethrow()
             # not yet compiling: a located rejection at a definition not yet written

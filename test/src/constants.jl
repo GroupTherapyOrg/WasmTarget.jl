@@ -250,7 +250,7 @@ f(n::Int64) = sum3((42, 42, 42)) + n
 @testset "constants.dart: a tuple constant's fields at their own types, run against native" begin
     # the optimized IR passes the tuple itself, a literal, to the call
     @test any(st -> Meta.isexpr(st, :invoke) && (42, 42, 42) in st.args, Base.code_typed(f, (Int64,))[1][1].code)
-    local results = WTRunner.run_cases(WTRunner.answer_cases("tuple constant", WasmTarget.compile, f, (Int64(1),), f(1)))
+    local results = WTRunner.run_cases(first(WTRunner.answer_cases("tuple constant", WasmTarget.compile, f, (Int64(1),))))
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test !isempty(results) && all(r -> r.ok, results)
 end

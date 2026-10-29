@@ -149,7 +149,7 @@ mk(x::Int64, y::Float64) = (x, y)
     @test plain(1) == 101 && inb(1) == 1 && Base.JLOptions().check_bounds == 0
     local cases = WTRunner.RunCase[]
     for (f, args) in ((plain, (Int64(1),)), (inb, (Int64(1),)), (idx, (Int64(7),)), (idxin, (Int64(7),)), (named, (Int64(3),)), (mk, (Int64(4), 1.5)))
-        append!(cases, WTRunner.answer_cases(string(nameof(f)), WasmTarget.compile, f, args, f(args...)))
+        append!(cases, first(WTRunner.answer_cases(string(nameof(f)), WasmTarget.compile, f, args)))
     end
     local results = WTRunner.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
@@ -177,7 +177,7 @@ sumfacts(n::Int64) = (t = widened(n); t isa Tuple{Int64, Int64} ? t[1] + t[2] : 
     local world = WasmTarget.build_nir(WasmTarget.check_subset(widened, (Int64,), "records"), "records")
     @test Tuple{Int64, Int64} in WasmTarget.closed_world_classes(world, "records")
     @test WasmTarget.compile(widened, (Int64,))[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-    local results = WTRunner.run_cases(WTRunner.answer_cases("sumfacts", WasmTarget.compile, sumfacts, (Int64(1),), sumfacts(1)))
+    local results = WTRunner.run_cases(first(WTRunner.answer_cases("sumfacts", WasmTarget.compile, sumfacts, (Int64(1),))))
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test !isempty(results) && all(r -> r.ok, results)
 end

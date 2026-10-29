@@ -122,9 +122,9 @@ function _ladder(f, args)::Tuple{Symbol,Union{String,Vector{WTRunner.RunCase}}}
         r isa WasmTarget.OutsideSubset && return (:outside, sprint(showerror, e))
         return (:errored, sprint(showerror, e))
     end
-    local native = try; f(args...); catch e; WTRunner.Throws(typeof(e)); end   # a native throw wants a wasm exception
     return try
-        (:compiled, WTRunner.answer_cases("", WasmTarget.compile, f, Tuple(args), native))
+        # its native answer computed by the runner, after the compiles (a native throw wants a wasm exception)
+        (:compiled, first(WTRunner.answer_cases("", WasmTarget.compile, f, Tuple(args))))
     catch e
         (:errored, "the module compiled, and the reader of its answer does not: " * _smoke_error_text(e))
     end

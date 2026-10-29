@@ -42,19 +42,39 @@ RunCase(label, bytes, optimized, args, native, entry) = RunCase(label, bytes, op
 RunCase(label, bytes, args, native; optimized::Vector{UInt8} = UInt8[], entry::String = "") =
     RunCase(label, bytes, optimized, args, native, entry, "")
 
-"""
-    compiled_case(label, compile, f, args, native; optimized = true) -> RunCase
-
-The case of a program `compile` compiles: `compile(f, T; optimize = false)`, codegen's module, as the
-case's own, and `compile(f, T)`, which dartdev's default phases end with opt (wasm-opt), as the
-optimized one; one module when the two are the same bytes, or when `optimized` is false (a run that
-leaves wasm-opt, an external tool, to another run).
-"""
-function compiled_case(label::String, compile, f, args::Tuple, native; optimized::Bool = true)::RunCase
+# a program's modules: `compile(f, T; optimize = false)`, codegen's, and `compile(f, T)`, which dartdev's default
+# phases end with opt (wasm-opt), or `own` when the caller holds that compile already; none when `optimized` is false
+# (a run that leaves wasm-opt, an external tool, to another run)
+function _modules(compile, f, args::Tuple; optimized::Bool = true, own::Vector{UInt8} = UInt8[])::Tuple{Vector{UInt8},Vector{UInt8}}
     local argtypes = Tuple(map(typeof, args))
     local plain = compile(f, argtypes; optimize = false)
-    local opt = optimized ? compile(f, argtypes) : plain
-    return RunCase(label, plain, args, native; optimized = plain == opt ? UInt8[] : opt)
+    local opt = !optimized ? UInt8[] : isempty(own) ? compile(f, argtypes) : own
+    return (plain, isempty(opt) || opt == plain ? UInt8[] : opt)
+end
+
+"""
+    native_answer(f, args)
+
+Native Julia's answer to `f(args...)`, or `Throws(typeof(e))` when the call throws. The runner computes it itself,
+once, after the compiles it is compared against (A61S4): a compile reads the session's heap as it stands, so a
+native call made before it would hand the compile a heap one step on.
+"""
+native_answer(f, args::Tuple) = try
+    f(args...)
+catch e
+    Throws(typeof(e))
+end
+
+"""
+    compiled_case(label, compile, f, args; optimized = true) -> RunCase
+
+The case of a program `compile` compiles: codegen's module as the case's own, and the wasm-opt'd one beside it
+(one module when the two are the same bytes, or when `optimized` is false), its native answer native_answer's,
+computed after both compiles.
+"""
+function compiled_case(label::String, compile, f, args::Tuple; optimized::Bool = true)::RunCase
+    local plain, opt = _modules(compile, f, args; optimized)
+    return RunCase(label, plain, args, native_answer(f, args); optimized = opt)
 end
 
 # A tuple answer leaves the module as a reference to a wasm struct, which JS cannot read (and wasm-opt,
@@ -101,25 +121,29 @@ _leaves(x, p::Tuple = ())::Vector{Tuple} =
     Tuple[p]
 
 """
-    answer_cases(label, compile, f, args, native; optimized = true) -> Vector{RunCase}
+    answer_cases(label, compile, f, args; optimized = true, own = UInt8[]) -> (cases, native)
 
-The cases that read `f(args...)`'s answer from wasm: `f`'s own modules when the answer is one value;
-for a tuple or a vector, one reader per leaf type, each leaf a case of its reader labelled by its path. A leaf no
-reader can read (a type the runner does not marshal, or a case of more than 3 arguments) is a case
-with no module, which run_cases fails, naming why.
+The cases that read `f(args...)`'s answer from wasm, and the native answer they are read against. `f`'s own modules
+are compiled first, then native_answer runs once (A61S4), and its value is returned beside the cases so a caller
+proving a recorded answer reads the same one. For one value the cases are `f`'s own modules; for a tuple, a vector
+or a String, `f`'s own modules (a non-null reference, returned without a trap) and one reader per leaf type, each
+leaf a case of its reader labelled by its path. A leaf no reader can read (a type the runner does not marshal, or a
+case of more than 3 arguments) is a case with no module, which run_cases fails, naming why. A known limit: a reader's
+shape comes from the native value (a vector's length, a String's code units), so a reader is compiled after the
+native run; for a program that changes global state the reader starts a step on and the case fails, a false
+failure, never a false pass.
 """
-function answer_cases(label::String, compile, f, args::Tuple, native; optimized::Bool = true,
-                      own::Vector{UInt8} = UInt8[])::Vector{RunCase}
+function answer_cases(label::String, compile, f, args::Tuple; optimized::Bool = true,
+                      own::Vector{UInt8} = UInt8[])::Tuple{Vector{RunCase},Any}
+    # the case's own modules first, `own` the compile the caller already holds (compile's default, wasm-opt'd)
+    local plain, opt = _modules(compile, f, args; optimized, own)
+    local native = native_answer(f, args)
     (native isa Tuple && !isempty(native)) || native isa Vector || native isa String ||
-        return [compiled_case(label, compile, f, args, native; optimized)]
+        return (RunCase[RunCase(label, plain, args, native; optimized = opt)], native)
     local paths = _leaves(native)
     local leaf(p) = foldl(_step, p; init = native)
-    # the case's own modules run too: a non-null reference, returned without a trap; `own` is the compile the
-    # caller already holds (compile's default, wasm-opt'd), so only codegen's module is compiled here
-    local argtypes = Tuple(map(typeof, args))
-    local plain = compile(f, argtypes; optimize = false)
-    local opt = !optimized ? UInt8[] : isempty(own) ? compile(f, argtypes) : own
-    local out = RunCase[RunCase("$label(own module)", plain, args, ReturnsRef(); optimized = plain == opt ? UInt8[] : opt)]
+    # the own modules run too, a read answer's: a non-null reference, returned without a trap
+    local out = RunCase[RunCase("$label(own module)", plain, args, ReturnsRef(); optimized = opt)]
     # one reader per leaf type, a String's leaves apart from the rest. A reader WasmTarget rejects as Unported or
     # Unquarantined (a String's codeunit before its lowering, a boxed leaf before convertType's boxing) leaves its
     # facts unread, each a case naming the rejection: the runner's gap, which only a :unread record admits; a
@@ -131,7 +155,8 @@ function answer_cases(label::String, compile, f, args::Tuple, native; optimized:
         local reader, why = nothing, ""
         if readable
             try
-                reader = compiled_case(label, compile, Leaves{f,ps,T}(), (args..., Int64(1)), nothing; optimized)
+                local rp, ro = _modules(compile, Leaves{f,ps,T}(), (args..., Int64(1)); optimized)
+                reader = (bytes = rp, optimized = ro)
             catch e
                 rejected(e) || rethrow()
                 why = first(sprint(showerror, e), 300)
@@ -149,7 +174,7 @@ function answer_cases(label::String, compile, f, args::Tuple, native; optimized:
                                (args..., Int64(k)), leaf(p), ""))
         end
     end
-    return out
+    return (out, native)
 end
 
 """
