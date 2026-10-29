@@ -234,7 +234,10 @@ end
     collect(D.ClassInfoCollector(t))
     local mi = Core.Compiler.specialize_method(Base._which(Base.signature_type(ModuleCases.shapes, (Int,))))
     # Julia checks no parameter on entry; a member's parameter info is made once
-    @test !D.need_to_check_types_for(t, mi)
+    @test !D.need_to_check_types_for(t, mi) && !D._need_to_check_types_for(t, mi)
+    @test !D.need_to_check_parameter(t, W.NirArgument(2); unchecked_entry = false) && D.can_skip_implicit_check(t, W.NirArgument(2))
+    @test !D.need_to_check_type_parameter(t, TypeVar(:T))
+    @test !D.need_to_check_implicit_setter_value(t, W.class_instance_fields(ModuleCases.Square, "t")[1]; unchecked_entry = false)
     # one entry, the member's own, and no entry check; a call's single target is the MethodInstance
     # Julia resolved it to, none for a call it left to a builtin
     @test D.get_function_entry(t, mi; unchecked_entry = true) === mi === D.get_function_entry(t, mi; unchecked_entry = false)

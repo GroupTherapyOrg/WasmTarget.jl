@@ -942,13 +942,21 @@ type and the MethodInstance is specialized on the types it is called with, so no
 """
 @parity "dart2wasm/lib/translator.dart:1683 Translator.needToCheckTypesFor" need_to_check_types_for(self::Translator, member::Core.MethodInstance)::Bool = false
 
-@parity "dart2wasm/lib/translator.dart:1692 Translator._needToCheckTypesFor" @unported function _need_to_check_types_for(self::Translator, member::Core.MethodInstance) end
+# dart checks a member's covariant type parameters and parameters (needToCheckTypeParameter,
+# needToCheckParameter below); a Julia method has neither, so none needs a check
+@parity "dart2wasm/lib/translator.dart:1692 Translator._needToCheckTypesFor" _need_to_check_types_for(self::Translator, member::Core.MethodInstance)::Bool = false
 
-@parity "dart2wasm/lib/translator.dart:1738 Translator.needToCheckImplicitSetterValue" @unported function need_to_check_implicit_setter_value(self::Translator, field::ClassField; unchecked_entry::Bool) end
+# dart checks a field's value when the field is covariant by declaration or by class; a Julia field is
+# neither (setfield! converts to the field's declared type, Julia's own check, in the callee)
+@parity "dart2wasm/lib/translator.dart:1738 Translator.needToCheckImplicitSetterValue" need_to_check_implicit_setter_value(self::Translator, field::ClassField; unchecked_entry::Bool)::Bool = false
 
-@parity "dart2wasm/lib/translator.dart:1748 Translator.needToCheckTypeParameter" @unported function need_to_check_type_parameter(self::Translator, type_parameter::TypeVar) end
+# dart checks a class's covariant type parameter; a Julia type variable is bound in every
+# specialization a compile holds, so none is covariant
+@parity "dart2wasm/lib/translator.dart:1748 Translator.needToCheckTypeParameter" need_to_check_type_parameter(self::Translator, type_parameter::TypeVar)::Bool = false
 
-@parity "dart2wasm/lib/translator.dart:1754 Translator.needToCheckParameter" @unported function need_to_check_parameter(self::Translator, parameter::Union{NirSSA,NirArgument}; unchecked_entry::Bool) end
+# dart checks a covariant parameter; a Julia parameter is never covariant (Julia dispatches on every
+# argument's type, so the specialization called proves it)
+@parity "dart2wasm/lib/translator.dart:1754 Translator.needToCheckParameter" need_to_check_parameter(self::Translator, parameter::Union{NirSSA,NirArgument}; unchecked_entry::Bool)::Bool = false
 
 @parity "dart2wasm/lib/translator.dart:1773 Translator.getParametersToCheck" @unported function get_parameters_to_check(self::Translator, member::Core.MethodInstance) end
 
@@ -996,7 +1004,9 @@ of the type's own function, whose result `new` allocates), so a request is a loc
 
 @parity "dart2wasm/lib/translator.dart:1960 Translator.singleClosureTarget" @unported function single_closure_target(self::Translator, node::NirInvoke, representation::ClosureRepresentation, type_context::NoCounterpart) end
 
-@parity "dart2wasm/lib/translator.dart:2033 Translator.canSkipImplicitCheck" @unported function can_skip_implicit_check(self::Translator, node::Union{NirSSA,NirArgument}) end
+# dart skips a parameter's check when TFA proved its argument's type (skipCheck); Julia's inference
+# proved every argument against the specialization called (canUseUncheckedEntry)
+@parity "dart2wasm/lib/translator.dart:2033 Translator.canSkipImplicitCheck" can_skip_implicit_check(self::Translator, node::Union{NirSSA,NirArgument})::Bool = true
 
 """
 Whether a call may take its target's unchecked entry. dart skips the entry checks when TFA proved
