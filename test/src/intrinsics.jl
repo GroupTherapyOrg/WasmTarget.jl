@@ -135,3 +135,38 @@ end
     # _svec_ref has no arm: its BoundsError waits for throwing
     @test DI.generate_static_intrinsic(ii, WI.NirCall(WI.NirValue[lit(Core._svec_ref), body.stmts[k].args[2], lit(1)])) === nothing
 end
+
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+
+module DivCases
+# each checked division at each width, by `k`: one module per signedness
+sops(a::Int64, b::Int64, k::Int64) = k == 0 ? div(a, b) : k == 1 ? rem(a, b) :
+                                     k == 2 ? Int64(div(a % Int32, b % Int32)) : Int64(div(a % Int8, b % Int8))
+uops(a::UInt64, b::UInt64, k::Int64) = k == 0 ? div(a, b) : k == 1 ? rem(a, b) :
+                                       k == 2 ? UInt64(div(a % UInt32, b % UInt32)) : UInt64(rem(a % UInt16, b % UInt16))
+end
+
+@testset "intrinsics.cpp: a checked division raises DivideError through the runtime's thrower, as Julia's does" begin
+    # Julia's checked_sdiv_int and kin raise DivideError at a zero divisor, and checked_sdiv_int at
+    # typemin ÷ -1 too, its type's own typemin for a 32- or 8-bit operand: the module raises a wasm
+    # exception where native Julia throws (Error._throw's tag), never a trap, and answers as native
+    # elsewhere
+    local native(f, a) = try; f(a...); catch e; WTRunner.Throws(typeof(e)); end
+    local C = DivCases
+    local s(a, b, k) = (Int64(a), Int64(b), Int64(k))
+    local u(a, b, k) = (UInt64(a), UInt64(b), Int64(k))
+    local cases = WTRunner.RunCase[]
+    for (f, argsets) in ((C.sops, [s(7, 2, 0), s(7, 0, 0), (typemin(Int64), Int64(-1), Int64(0)), s(-7, 2, 0),
+                                   s(7, 2, 1), s(7, 0, 1), (typemin(Int64), Int64(-1), Int64(1)),
+                                   s(typemin(Int32), -1, 2), s(9, -2, 2), s(9, 0, 2),
+                                   s(-128, -1, 3), s(5, 0, 3), s(-7, 2, 3), s(200, 3, 3)]),
+                         (C.uops, [u(7, 2, 0), u(7, 0, 0), u(typemax(UInt64), 3, 0), u(7, 2, 1), u(7, 0, 1),
+                                   u(typemax(UInt32), 3, 2), u(7, 0, 2), u(65535, 7, 3), u(70000, 0, 3), u(9, 65540, 3)]))
+        local bytes = WI.compile(f, map(typeof, first(argsets)))
+        append!(cases, [WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, native(f, a)) for a in argsets])
+    end
+    @test count(c -> c.native isa WTRunner.Throws, cases) == 11
+    for r in WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+end

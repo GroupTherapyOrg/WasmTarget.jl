@@ -80,9 +80,8 @@ Julia module, never dart:_wasm, so the map is empty (StaticIntrinsic.fromProcedu
 # same IEEE operation). A raw division or remainder lowers to wasm's div or rem, which trap at a zero
 # divisor and at typemin ÷ -1: Julia's codegen lowers sdiv_int, udiv_int, srem_int and urem_int to
 # LLVM's sdiv, udiv, srem and urem (src/intrinsics.cpp), undefined behavior there, and Julia reaches
-# them only behind its own checks (its `div` and `rem` call checked_sdiv_int and kin, which raise
-# DivideError and have no arm until throwing is ported), so the trap is Julia's answer (ledger D3),
-# as wasm-opt's --traps-never-happen assumes
+# them only behind its own checks (its `div` and `rem` call checked_sdiv_int and kin, whose arm below
+# raises DivideError first), so the trap is unreachable, as wasm-opt's --traps-never-happen assumes
 @parity "dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap" const Intrinsifier__binary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}}("dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(
     WasmBuilder.IR.NumType_i32 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.add_int => c -> WasmBuilder.i32_add(c.b[]),
@@ -336,6 +335,9 @@ end
     f === Core.Intrinsics.flipsign_int && length(args) == 2 && return generate_static_intrinsic(self, Val(:flipsign), f, args)
     length(args) == 2 && (f === Core.Intrinsics.shl_int || f === Core.Intrinsics.lshr_int || f === Core.Intrinsics.ashr_int) &&
         return generate_static_intrinsic(self, Val(:shift), f, args)
+    length(args) == 2 && (f === Core.Intrinsics.checked_sdiv_int || f === Core.Intrinsics.checked_srem_int ||
+                          f === Core.Intrinsics.checked_udiv_int || f === Core.Intrinsics.checked_urem_int) &&
+        return generate_static_intrinsic(self, Val(:checked_division), f, args)
     local narrow(t::Type) = generate_static_intrinsic(Val(:narrow), t)
     all(a -> narrow(dart_type_of(self, a)), args) && allequal(dart_type_of(self, a) for a in args) && 1 <= length(args) <= 2 &&
         return generate_static_intrinsic(self, Val(:narrow_operator), f, args)
@@ -587,6 +589,60 @@ end
 
 # an 8- or 16-bit integer's arithmetic, comparison and bitwise operations, its operands of one
 # type: each in the view its operation reads, the i32 instruction, the result in its type's form
+# a checked division or remainder, as Julia's codegen emits it (src/intrinsics.cpp): DivideError raised,
+# by the runtime's thrower (src/julia/runtime/rtutils.jl throw_divide_error, jl_diverror_exception),
+# at a zero divisor, and for checked_sdiv_int at typemin ÷ -1 too, its type's own typemin; else the
+# raw operation, which then never traps (wasm's rem_s answers 0 at typemin rem -1, as
+# emit_checked_srem_int's own -1 case does). An 8- or 16-bit operand is read in its operation's view
+# and the result put back in its type's form. dart raises its division error in dart code
+# (boxed_int.dart's `~/`), Julia in its codegen, so the arm is Julia's.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:checked_division}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local b = code_gen.b[]
+    local I = Core.Intrinsics
+    local t = dart_type_of(self, args[1])
+    (t isa DataType && t <: Base.BitInteger && sizeof(t) <= 8 && dart_type_of(self, args[2]) === t) || return nothing
+    local w = sizeof(t) == 8 ? WasmBuilder.IR.NumType_i64 : WasmBuilder.IR.NumType_i32
+    local narrow = sizeof(t) < 4
+    local signed = f === I.checked_sdiv_int || f === I.checked_srem_int
+    local raw = f === I.checked_sdiv_int ? I.sdiv_int : f === I.checked_srem_int ? I.srem_int :
+                f === I.checked_udiv_int ? I.udiv_int : I.urem_int
+    local operand(a::NirValue) = begin
+        local l = add_local(code_gen, w)
+        translate_expression(code_gen, a, w)
+        narrow && (signed ? generate_static_intrinsic(Val(:signed_view), b, t) : generate_static_intrinsic(Val(:unsigned_view), b, t))
+        WasmBuilder.local_set(b, l)
+        l
+    end
+    local x = operand(args[1])
+    local y = operand(args[2])
+    local konst(v::Integer) = w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_const(b, Int64(v)) : WasmBuilder.i32_const(b, Int64(Int32(v)))
+    local eqz() = w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_eqz(b) : WasmBuilder.i32_eqz(b)
+    local eq() = w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_eq(b) : WasmBuilder.i32_eq(b)
+    # the condition Julia raises on: y == 0, or, signed division, y == -1 and x == typemin
+    WasmBuilder.local_get(b, y)
+    eqz()
+    if f === I.checked_sdiv_int
+        WasmBuilder.local_get(b, y)
+        konst(-1)
+        eq()
+        WasmBuilder.local_get(b, x)
+        konst(typemin(t))
+        eq()
+        WasmBuilder.i32_and(b)
+        WasmBuilder.i32_or(b)
+    end
+    WasmBuilder.if_(b)
+    call(code_gen, nir_runtime_member(translator(self).component, throw_divide_error, "$(code_gen.enclosing_member): a checked division"))
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    WasmBuilder.local_get(b, x)
+    WasmBuilder.local_get(b, y)
+    Intrinsifier__binary_operator_map[][w][w][raw](code_gen)
+    narrow && generate_static_intrinsic(Val(:put_form), b, t)
+    return w
+end
+
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:narrow_operator}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
