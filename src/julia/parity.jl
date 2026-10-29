@@ -882,7 +882,8 @@ end
     Anchor
 
 An anchor's parts (`parse_anchor`), the one reading every check uses: `pin`, `:dart` or `:llvm`;
-`unit`, its key in the pin table (a dart file under the sdk's pkg/, `DART_FILES`; an LLVM unit, its
+`unit`, its key in the pin table (a dart file under the sdk's pkg/, `DART_FILES`, or of its runtime
+library, sdk/lib/_internal/wasm/; an LLVM unit, its
 path without the extension, `LLVM_FILES`); `file`, its path under the pinned checkout; `line`;
 `symbol`, as the naming rule reads it (dart's X or X.m; an LLVM member X::m read as X.m); and
 `written`, the symbol as the anchor writes it.
@@ -906,7 +907,10 @@ The parts of `s`, an anchor of either pin; nothing when it reads as neither
     local sym = String(m[5])
     if m[1] !== nothing
         occursin("::", sym) && return nothing
-        return Anchor(:dart, String(m[1]), joinpath("pkg", m[1]), parse(Int, m[4]), sym, sym)
+        # dart2wasm's units lie under the checkout's pkg/; the wasm runtime library's (sdk/lib/_internal/wasm/,
+        # A52S1) under its sdk/, the unit itself
+        local unit = String(m[1])
+        return Anchor(:dart, unit, startswith(unit, "sdk/") ? unit : joinpath("pkg", unit), parse(Int, m[4]), sym, sym)
     end
     occursin('.', sym) && return nothing
     return Anchor(:llvm, String(m[2]), m[2] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
