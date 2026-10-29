@@ -79,22 +79,15 @@ end
 end
 
 
-@testset "code_generator.dart: an invocation stub gathers its arguments, then rejects: Julia has no noSuchMethod" begin
+@testset "code_generator.dart: an invocation stub rejects, Internal: Julia has no noSuchMethod" begin
     local t = TRANSLATOR[]
     local mb = D.main_module(t)
-    # the stub of `f(x)` and of `f(x; k)`, each argument a top-type value
-    local stub(shape) = begin
-        local inputs = IR.ValueType[t.top_type[] for _ in 1:(shape.positional_count + length(shape.named))]
-        local fb = B.define(mb.functions[], B.define_function(mb.types[], inputs, IR.ValueType[t.top_type[]]), "stub")
-        (D.InvocationCreationStubGenerator(t, shape), fb)
-    end
-    local (g, fb) = stub(D.MethodCallShape(:f, 0, 1, Symbol[]))
-    local e = rejection(() -> D.generate(g, B.body(fb), B.locals(fb), nothing))
-    @test e.rejection isa W.Internal && occursin("createInvocationObject", e.rejection.site)
-    # a named argument's name is a Symbol constant, whose creation is not ported yet
-    local (g2, fb2) = stub(D.MethodCallShape(:f, 0, 1, [:k]))
-    local e2 = rejection(() -> D.generate(g2, B.body(fb2), B.locals(fb2), nothing))
-    @test e2.rejection isa W.Unported && occursin("visitSymbolConstant", e2.rejection.anchor)
+    local shape = D.MethodCallShape(:f, 0, 1, Symbol[])
+    local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[t.top_type[]], IR.ValueType[t.top_type[]]), "stub")
+    local e = rejection(() -> D.generate(D.InvocationCreationStubGenerator(t, shape), B.body(fb), B.locals(fb), nothing))
+    @test e.rejection isa W.Internal && occursin("noSuchMethod", e.rejection.site) && occursin("DynamicInvocation row", e.rejection.site)
+    local e2 = rejection(() -> D.create_invocation_object(t, B.body(fb), :f, B.locals(fb)[1], B.locals(fb)[1], B.locals(fb)[1]))
+    @test e2.rejection isa W.Internal && occursin("createInvocationObject", e2.rejection.site)
 end
 
 
@@ -122,31 +115,12 @@ end
 end
 
 
-@testset "code_generator.dart: restoreThisAndContextChain reads `this` and the parents from the innermost context" begin
+@testset "code_generator.dart: the suspend-state helpers reject, Internal: tasks are out of scope" begin
     local mi = only(nb for nb in TRANSLATOR[].component if nb.ci.def.def.name === :is_int).ci.def
-    # an object holding an i32, the outer context holding it as `this`, the inner context its parent
     local mb = B.ModuleBuilder("m", nothing)
-    local obj = B.define_struct(mb.types[], "obj"; fields = [IR.FieldType(IR.NumType_i32; mutable = false)], brand = false)
-    local outer = D.Context(mi, nothing, true)
-    local inner = D.Context(mi, outer, false)
-    outer.struct_[] = B.define_struct(mb.types[], "outer"; fields = [IR.FieldType(IR.RefType_def(obj; nullable = true))], brand = false)
-    inner.struct_[] = B.define_struct(mb.types[], "inner"; fields = [IR.FieldType(IR.RefType_def(outer.struct_[]; nullable = true))], brand = false)
-    local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[IR.NumType_i32], IR.ValueType[IR.NumType_i32]), "f")
-    local b = B.body(fb)
-    inner.current_local = B.add_local(b, IR.RefType_def(inner.struct_[]; nullable = true))
-    outer.current_local = B.add_local(b, IR.RefType_def(outer.struct_[]; nullable = true))
-    local this = B.add_local(b, IR.RefType_def(obj; nullable = false))
-    # inner = inner(outer(obj(x))), then the chain restored from inner alone, and this.x returned
-    B.local_get(b, B.locals(fb)[1]); B.struct_new(b, obj); B.struct_new(b, outer.struct_[]); B.struct_new(b, inner.struct_[])
-    B.local_set(b, inner.current_local)
-    D.restore_this_and_context_chain(b, inner, this)
-    B.local_get(b, this); B.struct_get(b, obj, 0)
-    B.var"end"(b)
-    B.var"export"(mb.exports, "f", fb)
-    local s = B.Serializer(); B.serialize(s, B.build(mb))
-    @test answers_native([WTRunner.RunCase("restore ($x)", B.data(s), (x,), x) for x in Int32[0, 7, -3]])
-    # `this` in a context of a function with no `this` local is WasmTarget's own defect
-    @test rejection(() -> D.restore_this_and_context_chain(b, outer, nothing)).rejection isa W.Internal
+    local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[], IR.ValueType[]), "f")
+    local e = rejection(() -> D.restore_this_and_context_chain(B.body(fb), D.Context(mi, nothing, true), nothing))
+    @test e.rejection isa W.Internal && occursin("AsyncMarker row", e.rejection.site)
 end
 
 

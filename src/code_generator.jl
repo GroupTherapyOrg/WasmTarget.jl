@@ -1524,42 +1524,11 @@ end
 @parity "dart2wasm/lib/code_generator.dart:4103 InvocationCreationStubGenerator" InvocationCreationStubGenerator(translator::Translator, call_shape::MethodCallShape)::InvocationCreationStubGenerator =
     InvocationCreationStubGenerator(Val(:_), translator, call_shape)
 
-# the arguments gathered into a type array, a positional array and a named array of name-value pairs,
-# then the Invocation made of them returned
-@parity "dart2wasm/lib/code_generator.dart:4106 InvocationCreationStubGenerator.generate" function generate(self::InvocationCreationStubGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
-    local at = "dart2wasm/lib/code_generator.dart:4106 InvocationCreationStubGenerator.generate"
-    return_label === nothing || reject!(Internal("$at: a return label, which a stub's generate never takes"), at)
-    local translator = self.translator
-    local call_shape = self.call_shape
-    local argument_iterator = 0
-
-    local type_args = WasmBuilder.add_local(b, WasmBuilder.IR.RefType(translator.type_array_type[]; nullable = false))
-    for _ in 1:call_shape.type_count
-        WasmBuilder.local_get(b, param_locals[argument_iterator += 1])
-    end
-    WasmBuilder.array_new_fixed(b, translator.type_array_type[], call_shape.type_count)
-    WasmBuilder.local_set(b, type_args)
-
-    local pos_args = WasmBuilder.add_local(b, WasmBuilder.IR.RefType(translator.nullable_object_array_type[]; nullable = false))
-    for _ in 1:call_shape.positional_count
-        WasmBuilder.local_get(b, param_locals[argument_iterator += 1])
-    end
-    WasmBuilder.array_new_fixed(b, translator.nullable_object_array_type[], call_shape.positional_count)
-    WasmBuilder.local_set(b, pos_args)
-
-    local named_args = WasmBuilder.add_local(b, WasmBuilder.IR.RefType(translator.nullable_object_array_type[]; nullable = false))
-    for name in call_shape.named
-        instantiate_constant(translator.constants[], b, NirConst(Core.Const(symbol_for_named_parameter(translator.symbols, string(name)))), translator.top_type[])
-        WasmBuilder.local_get(b, param_locals[argument_iterator += 1])
-    end
-    WasmBuilder.array_new_fixed(b, translator.nullable_object_array_type[], length(call_shape.named) * 2)
-    WasmBuilder.local_set(b, named_args)
-
-    create_invocation_object(translator, b, call_shape.name, type_args, pos_args, named_args)
-    WasmBuilder.return_(b)
-    WasmBuilder.var"end"(b)
-    return nothing
-end
+# reached only past makeInvocationCreatorSignature, which rejects: an Invocation is noSuchMethod's
+# argument, and a Julia call with no method is a MethodError the trim verifier refuses (the Kernel
+# table's DynamicInvocation row)
+@parity "dart2wasm/lib/code_generator.dart:4106 InvocationCreationStubGenerator.generate" generate(self::InvocationCreationStubGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:4106 InvocationCreationStubGenerator.generate: the Invocation of a call of $(sprint(show, self.call_shape)); Julia has no noSuchMethod, a call with no method being a MethodError the trim verifier refuses (the Kernel table's DynamicInvocation row)"), "InvocationCreationStubGenerator.generate")
 
 # an Invocation is noSuchMethod's argument, and a Julia program has no noSuchMethod: a call with no
 # method is a MethodError, which Julia's trim verifier refuses (makeInvocationCreatorSignature's
@@ -2005,34 +1974,10 @@ end
 @parity "dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext" restore_suspend_state_context(self::WasmBuilder.InstructionsBuilder, suspend_state_local::WasmBuilder.IR.Local, suspend_state_struct::WasmBuilder.IR.StructType, suspend_state_context_field::Int64, closures::Closures, context::Union{Nothing,Context}, this_local::Union{Nothing,WasmBuilder.IR.Local}; clone_context_for::Union{Nothing,NirBody} = nothing)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext: a suspend state's context; tasks are out of scope, Julia's verifier rejecting them"), "restore_suspend_state_context")
 
-# the parent chain and `this` (when captured) restored from the innermost context, which is loaded;
-# dart's asserts are located rejections
-@parity "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain" function restore_this_and_context_chain(self::WasmBuilder.InstructionsBuilder, innermost_context::Context, this_local::Union{Nothing,WasmBuilder.IR.Local})::Nothing
-    local at = "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain"
-    local restored_this = false
-    local context = innermost_context
-    while context !== nothing
-        if context.contains_this
-            restored_this && reject!(Internal("$at: two contexts hold `this`"), at)
-            this_local === nothing && reject!(Internal("$at: a context holds `this`, but the function has no `this` local"), at)
-            WasmBuilder.local_get(self, context.current_local)
-            WasmBuilder.struct_get(self, context.struct_[], this_field_index(context))
-            WasmBuilder.ref_as_non_null(self)
-            WasmBuilder.local_set(self, this_local)
-            restored_this = true
-        end
-        local parent = context.parent
-        if parent !== nothing
-            is_empty(parent) && reject!(Internal("$at: the parent context is empty"), at)
-            WasmBuilder.local_get(self, context.current_local)
-            WasmBuilder.struct_get(self, context.struct_[], parent_field_index(context))
-            WasmBuilder.ref_as_non_null(self)
-            WasmBuilder.local_set(self, parent.current_local)
-        end
-        context = parent
-    end
-    return nothing
-end
+# its one caller, restoreSuspendStateContext, restores an async or sync* function's suspend state,
+# which tasks being out of scope never reaches (the Kernel table's AsyncMarker row): no src caller
+@parity "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain" restore_this_and_context_chain(self::WasmBuilder.InstructionsBuilder, innermost_context::Context, this_local::Union{Nothing,WasmBuilder.IR.Local})::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain: a context chain restored for a suspend state; tasks are out of scope, Julia's verifier rejecting them (the Kernel table's AsyncMarker row)"), "restore_this_and_context_chain")
 
 # called only while restoring a suspend state (restoreSuspendStateContext), which tasks being out of
 # scope never reaches
