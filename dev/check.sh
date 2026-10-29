@@ -57,7 +57,9 @@ if [ -n "$missing_deps" ]; then
   # Its cost is printed, unjudged, so the audit sees each one (march-monitor-a, 11:08)
   WT_NEW_DEPS="$missing_deps" /usr/bin/time -o .wtd/newdeps.time julia --project=. --startup-file=no -e 'using Pkg; Pkg.precompile(split(ENV["WT_NEW_DEPS"]))' >> .wtd/resolve.out 2>&1 ||
     { echo "check: a new dependency does not precompile"; tail -20 .wtd/resolve.out; exit 1; }
-  echo "check: built the image of new dependency $(echo $missing_deps | tr '\n' ' ')unjudged, $(awk '{ printf "%d", $3 + $5 }' .wtd/newdeps.time) CPU-s"
+  # a few CPU-s is Pkg finding the image already built (a no-op), which is no build to count
+  c=$(awk '{ printf "%d", $3 + $5 }' .wtd/newdeps.time)
+  [ "$c" -ge 5 ] && echo "check: built the image of new dependency $(echo $missing_deps | tr '\n' ' ')unjudged, $c CPU-s"
 fi
 # an in-repo dependency (lib/<name>, a path source) this change leaves untouched is built here too, unjudged: a
 # lane whose Manifest already named lib/WasmInterpreter still built its image inside the judged load the first
