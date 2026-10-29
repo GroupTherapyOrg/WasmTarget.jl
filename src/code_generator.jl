@@ -1827,8 +1827,8 @@ end
 """
 Julia's `tuple(x...)`, Kernel's RecordLiteral: a tuple allocated with its fields. dart allocates its
 record shape's class with every field boxed to the top type. A Julia tuple is an instance of its own
-class, the tuple type of its fields' types, Julia's answer (`Core.Compiler.tuple_tfunc` of the
-operands' inferred types, widened: `tuple(Int, 1)` is a `Tuple{DataType, Int64}`), laid out as any
+class, the tuple type of its fields' types, Julia's answer (`nir_tuple_type`, the one source the
+closed world's classes also read: `tuple(Int, 1)` is a `Tuple{DataType, Int64}`), laid out as any
 class with Julia's field types (src/class_info.jl), so each operand is translated to its field's own
 wasm type. An operand whose class Julia leaves open makes a tuple whose class only run time knows,
 and it rejects, located.
@@ -1836,7 +1836,7 @@ and it rejects, located.
 @parity "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral" function visit_record_literal(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral"
     local args = node.args[2:end]
-    local record_type = Core.Compiler.widenconst(Core.Compiler.tuple_tfunc(Core.Compiler.fallback_lattice, Any[dart_type_of(self, a) for a in args]))
+    local record_type = nir_tuple_type(self.body, node)
     record_type isa DataType && isconcretetype(record_type) ||
         reject!(Unquarantined("src/code_generator.jl visitRecordLiteral: a tuple of type $record_type, whose class only run time knows"), "$(self.enclosing_member)")
     local record_class_info = get(self.translator.class_info, record_type, nothing)
