@@ -27567,3 +27567,944 @@ _g("dart_null_aware", Any[
     ("null_shortening", (n::Int64) -> _nwa_ns_main(n), Int64(1)),
     ("opt", (n::Int64) -> _nwa_op_main(n), Int64(1)),
 ])
+
+# ---- tests/language/double: double identity, int and double addition, % and != on doubles, and double formatting ----
+# dart's double is Julia's Float64 and its int Int64; identical is ===, which compares a Float64's bits, so -0.0 and
+# 0.0 differ and NaN is NaN as on dart's native numbers. dart's `%` is mod, whose result takes the divisor's sign
+# where dart's is never negative. toString is string, which prints Julia's shortest form (Inf, 1.0e-7, 1.0e20);
+# toStringAsFixed(p) is Base.Ryu.writefixed(x, p) and toStringAsExponential(p) Base.Ryu.writeexp(x, p), the
+# bodies of Printf's %.pf and %.pe, whose exponent has two digits and whose infinity is Inf. Julia has no
+# toStringAsPrecision: a double to p significant digits is round(x; sigdigits=p), a Float64. Each literal is
+# scaled by n (n == 1), so nothing folds.
+_dbl_throws(f) = try; f(); false; catch; true; end
+
+# identical: identical on equal doubles, on -0.0, 0.0 and a large double, on 0.0 against -0.0 and on NaN
+function _dbl_id_main(n::Int64)
+    x = float(n)
+    return _dw_facts(42.0x === 42.0x, -0.0x === -0.0x, 0.0x === 0.0x, 1.234e9 * x === 1.234e9 * x, 0.0x === -0.0x,
+                     NaN * x === NaN * x)
+end
+
+# int_addition: an untyped add, run 20 times on doubles, still answers an Int64 for two Int64 operands
+_dbl_ia_add_op(a, b) = a + b
+function _dbl_ia_main(n::Int64)
+    for i in 1:(20n)
+        _dbl_ia_add_op(1.1n, 2.1)
+    end
+    return _dw_facts(_dbl_ia_add_op(1.1n, 2.1) isa Float64, _dbl_ia_add_op(n, 2) isa Int64)
+end
+
+# int_to_string: toString of integral doubles
+_dbl_its_main(n::Int64) = _dw_facts(string(0.0n), string(9.0n), string(90.0n), string(111111111111111111111.0n),
+                                    string(-9.0n), string(-90.0n), string(-111111111111111111111.0n),
+                                    string(1000.0n), string(1000000000000000128.0n))
+
+# modulo: a % 1.0 and a % -1.0 of a negative double, compared with their first answer in a loop of 20
+_dbl_mo_do_mod(a, b) = mod(a, b)
+function _dbl_mo_main(n::Int64)
+    k = -0.33333n
+    first_res_pos = _dbl_mo_do_mod(k, 1.0)
+    first_res_neg = _dbl_mo_do_mod(k, -1.0)
+    same = (true, true)
+    for i in 1:(20n)
+        same = (first_res_pos == _dbl_mo_do_mod(k, 1.0), first_res_neg == _dbl_mo_do_mod(k, -1.0))
+    end
+    return _dw_facts(first_res_pos, first_res_neg, same)
+end
+
+# nan_comparison: a != NaN as an expression, in a conditional and in a branch, before and after a loop of 20
+_dbl_nc_test_expr(a, b) = a != b
+_dbl_nc_test_conditional(a, b) = a != b ? true : false
+function _dbl_nc_test_branch(a, b)
+    if a != b
+        return true
+    end
+    return false
+end
+function _dbl_nc_main(n::Int64)
+    a = 0.5n
+    e1 = _dbl_nc_test_expr(a, NaN)
+    for i in 1:(20n); _dbl_nc_test_expr(a, NaN); end
+    e2 = _dbl_nc_test_expr(a, NaN)
+    c1 = _dbl_nc_test_conditional(a, NaN)
+    for i in 1:(20n); _dbl_nc_test_conditional(a, NaN); end
+    c2 = _dbl_nc_test_conditional(a, NaN)
+    b1 = _dbl_nc_test_branch(a, NaN)
+    for i in 1:(20n); _dbl_nc_test_branch(a, NaN); end
+    b2 = _dbl_nc_test_branch(a, NaN)
+    return _dw_facts(e1, e2, c1, c2, b1, b2)
+end
+
+# to_string_as_exponential2: toStringAsExponential(-1) and (21) throw RangeError in dart
+_dbl_e2_main(n::Int64) = (v = 1.0n;
+    _dw_facts(_dbl_throws(() -> Base.Ryu.writeexp(v, -n)), _dbl_throws(() -> Base.Ryu.writeexp(v, 21n))))
+
+# to_string_as_exponential3: 20 fraction digits of 1.0 and 0.1, and the 21-digit literal equal to 0.1
+_dbl_e3_main(n::Int64) = _dw_facts(Base.Ryu.writeexp(1.0n, 20), Base.Ryu.writeexp(0.1n, 20),
+                                   1.00000000000000005551e-1 * n == 0.1n)
+
+# to_string_as_exponential: 0 to 3 fraction digits of positive and negative doubles, NaN, the infinities and zero
+_dbl_ex_row(x::Float64) = _dw_facts(Base.Ryu.writeexp(x, 0), Base.Ryu.writeexp(x, 1), Base.Ryu.writeexp(x, 2),
+                                    Base.Ryu.writeexp(x, 3))
+function _dbl_ex_main(n::Int64)
+    pos = (_dbl_ex_row(1.0n), _dbl_ex_row(11.0n), _dbl_ex_row(112.0n),
+           _dbl_ex_row(0.1n), _dbl_ex_row(0.11n), _dbl_ex_row(0.112n))
+    neg = (_dbl_ex_row(-1.0n), _dbl_ex_row(-11.0n), _dbl_ex_row(-112.0n),
+           _dbl_ex_row(-0.1n), _dbl_ex_row(-0.11n), _dbl_ex_row(-0.112n))
+    special = _dw_facts(Base.Ryu.writeexp(NaN * n, 2), Base.Ryu.writeexp(Inf * n, 2), Base.Ryu.writeexp(-Inf * n, 2),
+                        Base.Ryu.writeexp(1.0n, 0), Base.Ryu.writeexp(0.0n, 2), Base.Ryu.writeexp(11.2356n, 0),
+                        Base.Ryu.writeexp(11.2356n, 4), Base.Ryu.writeexp(0.000112356n, 4),
+                        Base.Ryu.writeexp(-0.000112356n, 4))
+    return (pos, neg, special)
+end
+
+# to_string_as_fixed: fixed fraction digits of positive and negative doubles, NaN, the infinities, a double past
+# 1e21, large integral doubles, and halves that round up
+function _dbl_fx_test_main(n::Int64)
+    fx(x, p) = Base.Ryu.writefixed(x * n, p)
+    pos = _dw_facts(fx(2.0, 3), fx(2.1, 3), fx(2.12, 3), fx(2.123, 3), fx(2.1239, 3), fx(0.0 / 0.0, 3), fx(1.0 / 0.0, 3),
+                    fx(-1.0 / 0.0, 3), fx(1111111111111111111111.0, 8), fx(0.1, 1), fx(0.1, 2), fx(0.1, 3), fx(0.01, 2),
+                    fx(0.01, 3), fx(0.01, 4), fx(0.001, 2), fx(0.001, 3), fx(0.001, 4), fx(1.0, 4), fx(1.0, 1),
+                    fx(1.0, 0), fx(12.0, 0), fx(1.1, 0), fx(12.1, 0), fx(1.12, 0), fx(12.12, 0), fx(0.0000006, 7),
+                    fx(0.00000006, 8), fx(0.00000006, 9), fx(0.00000006, 10), fx(0.0, 0), fx(0.0, 1), fx(0.0, 2))
+    neg = _dw_facts(fx(-0.1, 1), fx(-0.1, 2), fx(-0.1, 3), fx(-0.01, 2), fx(-0.01, 3), fx(-0.01, 4), fx(-0.001, 2),
+                    fx(-0.001, 3), fx(-0.001, 4), fx(-1.0, 4), fx(-1.0, 1), fx(-1.0, 0), fx(-1.1, 0), fx(-12.1, 0),
+                    fx(-1.12, 0), fx(-12.12, 0), fx(-0.0000006, 7), fx(-0.00000006, 8), fx(-0.00000006, 9),
+                    fx(-0.00000006, 10), fx(-0.0, 0), fx(-0.0, 1), fx(-0.0, 2))
+    large = _dw_facts(fx(1000.0, 0), fx(0.00001, 0), fx(0.00001, 5), fx(0.0000000000000000001, 20), fx(0.00001, 17),
+                      fx(1.0, 17), fx(1000000000000000128.0, 0), fx(100000000000000128.0, 1),
+                      fx(10000000000000128.0, 2), fx(10000000000000128.0, 20), fx(0.0, 0), fx(-42.0, 3),
+                      fx(-1000000000000000128.0, 0), fx(-0.0000000000000000001, 20), fx(0.123123123123123, 20))
+    halves = _dw_facts(fx(0.5, 0), fx(-0.5, 0), fx(1.25, 1), fx(234.20405, 4), fx(234.2040506, 4))
+    return (pos, neg, large, halves)
+end
+
+# to_string_as_precision3: 21 significant digits of 0.000555 and 0.000000555, and their 24-digit literals
+function _dbl_p3_main(n::Int64)
+    return _dw_facts(round(0.000555n; sigdigits = 21), 0.000555000000000000046248n == 0.000555n,
+                     round(0.000000555n; sigdigits = 21), 5.54999999999999980179e-7 * n == 0.000000555n,
+                     round(-0.000000555n; sigdigits = 21), -5.54999999999999980179e-7 * n == -0.000000555n)
+end
+
+# to_string_as_precision: p significant digits of NaN, the infinities, small and large doubles, -0.0, and halves
+function _dbl_pr_main(n::Int64)
+    pr(x, p) = round(x * n; sigdigits = p)
+    return _dw_facts(pr(NaN, 1), pr(Inf, 2), pr(-Inf, 2), pr(0.000555, 15), pr(0.000000555, 15), pr(-0.000000555, 15),
+                     pr(123456789.0, 1), pr(123456789.0, 9), pr(123456789.0, 8), pr(123456789.0, 7),
+                     pr(-123456789.0, 7), pr(-.0000000012345, 2), pr(-.000000012345, 2), pr(-.00000012345, 2),
+                     pr(-.0000012345, 2), pr(-.000012345, 2), pr(-.00012345, 2), pr(-.0012345, 2), pr(-.012345, 2),
+                     pr(-.12345, 2), pr(-1.2345, 2), pr(-12.345, 2), pr(-123.45, 2), pr(-1234.5, 2), pr(-12345.0, 2),
+                     pr(-12345.67, 4), pr(-12344.67, 4), pr(-0.0, 2), pr(-0.0, 1), pr(1.25, 2), pr(1.35, 2))
+end
+
+# to_string: toString of NaN, the infinities, short and long doubles, and doubles near the exponent switch
+function _dbl_ts_main(n::Int64)
+    ts(x) = string(x * n)
+    pos = _dw_facts(ts(NaN), ts(1 / 0), ts(-1 / 0), ts(90.12), ts(0.1), ts(0.01), ts(0.0123), ts(1111111111111111111111.0),
+                    ts(11111111111111111111111.0), ts(0.00001), ts(0.000001), ts(0.0000001), ts(0.00000012),
+                    ts(0.000000123), ts(0.00000001), ts(0.000000012), ts(0.0000000123))
+    neg = _dw_facts(ts(-0.0), ts(-90.12), ts(-0.1), ts(-0.01), ts(-0.0123), ts(-1111111111111111111111.0),
+                    ts(-11111111111111111111111.0), ts(-0.00001), ts(-0.000001), ts(-0.0000001), ts(-0.00000012),
+                    ts(-0.000000123), ts(-0.00000001), ts(-0.000000012), ts(-0.0000000123))
+    edge = _dw_facts(ts(0.00001), ts(1000000000000000012800.0), ts(-1000000000000000012800.0), ts(0.0000001),
+                     ts(-0.0000001), ts(1000000000000000128000.0), ts(0.000001), ts(0.0000001))
+    return (pos, neg, edge)
+end
+
+_g("dart_double", Any[
+    ("identical", (n::Int64) -> _dbl_id_main(n), Int64(1)),
+    ("int_addition", (n::Int64) -> _dbl_ia_main(n), Int64(1)),
+    ("int_to_string", (n::Int64) -> _dbl_its_main(n), Int64(1)),
+    ("modulo", (n::Int64) -> _dbl_mo_main(n), Int64(1)),
+    ("nan_comparison", (n::Int64) -> _dbl_nc_main(n), Int64(1)),
+    ("to_string_as_exponential2", (n::Int64) -> _dbl_e2_main(n), Int64(1)),
+    ("to_string_as_exponential3", (n::Int64) -> _dbl_e3_main(n), Int64(1)),
+    ("to_string_as_exponential", (n::Int64) -> _dbl_ex_main(n), Int64(1)),
+    ("to_string_as_fixed", (n::Int64) -> _dbl_fx_test_main(n), Int64(1)),
+    ("to_string_as_precision3", (n::Int64) -> _dbl_p3_main(n), Int64(1)),
+    ("to_string_as_precision", (n::Int64) -> _dbl_pr_main(n), Int64(1)),
+    ("to_string", (n::Int64) -> _dbl_ts_main(n), Int64(1)),
+])
+
+# ---- tests/language/number: hex and large int literals, int and double identity, int arithmetic, num type tests, digit separators and number syntax ----
+# dart's int is Julia's Int64 and double Float64; num is Real and Object Any; identical is ===. dart's `~/` is div,
+# `%` mod (whose result takes the divisor's sign, where dart's is never negative) and remainder rem. Int64
+# arithmetic wraps as dart's native ints do. A Julia hex literal is unsigned, of the narrowest width its digits
+# need (0xf is a UInt8, 0x8000000000000000 a UInt64 and seventeen digits a UInt128), so it never wraps to a
+# negative Int64 as dart's does; reinterpreting it is `x % Int64`. A decimal literal past Int64 is an Int128 and
+# past Int128 a BigInt. Julia's digit separator is one `_` between digits and is not allowed in an exponent, and a
+# float literal that overflows is a parse error. dart's ByteData round trip is reinterpret. Each literal is scaled
+# by n (n == 1) or indexed by it, so nothing folds.
+
+# constant_folding1: hex literals of large magnitude added to and multiplied without truncation
+_nmb_cf_high_digit_truncation_test(n::Int64) =
+    _dw_facts(0x12345678A == 0x123456789 + n, 0x1f0000000 * n > 0, 0xf0 == 0xf * 16n, 0xff0 == 0xff * 16n,
+              0xfff0 == 0xfff * 16n, 0xffff0 == 0xffff * 16n, 0xfffff0 == 0xfffff * 16n, 0xffffff0 == 0xffffff * 16n,
+              0xfffffff0 == 0xfffffff * 16n, 0xffffffff0 == 0xffffffff * 16n, 0xfffffffff0 == 0xfffffffff * 16n,
+              0xffffffffff0 == 0xffffffffff * 16n)
+
+# identity2: NaN + 0.0 is identical to NaN, two NaNs with different payloads are not, nor NaN and infinity
+_nmb_i2_uint64_to_double(i::Int64) = reinterpret(Float64, i)
+function _nmb_i2_test_number_identity(n::Int64)
+    a = NaN * n
+    b = a + 0.0
+    f1 = a === b
+    a = _nmb_i2_uint64_to_double((n << 64) - 1)
+    b = _nmb_i2_uint64_to_double((n << 64) - 2)
+    f2 = a === b
+    a = 0.0n / 0.0
+    b = 1.0n / 0.0
+    f3 = a === b
+    return _dw_facts(f1, f2, f3)
+end
+function _nmb_i2_main(n::Int64)
+    r = _nmb_i2_test_number_identity(n)
+    for i in 2:(20n)
+        r = _nmb_i2_test_number_identity(n)
+    end
+    return r
+end
+
+# identity: a small int, a 63-bit int and a double are each identical to themselves plus zero and not to each other
+function _nmb_id_test_number_identity(n::Int64)
+    smi = 8n
+    mint = 9223372036854775806 * n
+    dbl = 8.0n
+    a = smi
+    b = a + 0
+    f1 = (a === b, b === mint)
+    a = mint
+    b = a + 0
+    f2 = (a === b, b === smi, b === dbl)
+    a2 = dbl
+    b2 = a2 + 0.0
+    f3 = (a2 === b2, b2 === mint)
+    return _dw_facts(f1, f2, f3)
+end
+function _nmb_id_main(n::Int64)
+    r = _nmb_id_test_number_identity(n)
+    for i in 2:(20n)
+        r = _nmb_id_test_number_identity(n)
+    end
+    return r
+end
+
+# infinity: the infinities read from a num list are doubles and not ints
+function _nmb_in_main(n::Int64)
+    things = Real[0, Inf, -Inf]
+    first = things[n + 1]
+    second = things[n + 2]
+    return _dw_facts(first isa Int64, second isa Int64, first isa Float64, second isa Float64)
+end
+
+# int2: an int past the 31-bit range read from a dynamic list, added to and masked
+function _nmb_i2b_main(n::Int64)
+    b = Any[nothing, 9223372036854774784]
+    42 + b[n + 1]
+    c = b[n + 1] & 1
+    return _dw_facts(c)
+end
+
+# int64_literal: the extremes of Int64 written as products, differences, decimal and hex literals, and their
+# wrapping neighbours, printed by interpolation
+function _nmb_il_main(n::Int64)
+    i21 = 2097152n
+    min_int64_value = -1 * i21 * i21 * i21
+    min_int64_value = -9223372036854775807 - n
+    min_int64_value = -9223372036854775808 * n
+    min_int64_value = -(0x8000000000000000) % Int64
+    min_int64_value = 0x8000000000000000 % Int64
+    min_int64_value = -0x8000000000000000 % Int64
+    mins = _dw_facts("$min_int64_value", "$(min_int64_value - n)")
+    max_int64_value = 1 * i21 * i21 * i21 - 1
+    max_int64_value = 9223372036854775807 * n
+    max_int64_value = -9223372036854775808 - n
+    max_int64_value = 0x8000000000000000 % Int64 - n
+    max_int64_value = -0x8000000000000000 % Int64 - n
+    max_int64_value = -(0x8000000000000001) % Int64
+    maxs = _dw_facts("$max_int64_value", "$(max_int64_value + n)")
+    return (mins, maxs)
+end
+
+# int: + - * ~/ % and remainder on small ints, each equal and identical to its expected literal
+_nmb_it_test(literal, number) = _dw_facts(number, literal === number)
+function _nmb_it_main(n::Int64)
+    add = (_nmb_it_test(0, 0n + 0), _nmb_it_test(1, 1n + 0), _nmb_it_test(2, 1n + 1), _nmb_it_test(3, -1n + 4),
+           _nmb_it_test(3, 4n + -1))
+    neg = (_nmb_it_test(-0, -(0n)), _nmb_it_test(-3, -(3n)))
+    sub = (_nmb_it_test(1, 1n - 0), _nmb_it_test(0, 1n - 1), _nmb_it_test(1, 2n - 1), _nmb_it_test(2, 4n - 2),
+           _nmb_it_test(-2, 2n - 4))
+    mul = (_nmb_it_test(0, 3n * 0), _nmb_it_test(0, 0 * 3n), _nmb_it_test(1, 1n * 1), _nmb_it_test(5, 5n * 1),
+           _nmb_it_test(15, 3n * 5), _nmb_it_test(-1, 1n * -1), _nmb_it_test(-15, -5n * 3), _nmb_it_test(15, -5n * -3))
+    tdiv = (_nmb_it_test(1, div(2n, 2)), _nmb_it_test(2, div(2n, 1)), _nmb_it_test(2, div(4n, 2)),
+            _nmb_it_test(2, div(5n, 2)), _nmb_it_test(-2, div(-5n, 2)), _nmb_it_test(-2, div(-4n, 2)),
+            _nmb_it_test(-2, div(5n, -2)), _nmb_it_test(-2, div(4n, -2)))
+    modulo = (_nmb_it_test(3, mod(7n, 4)), _nmb_it_test(2, mod(9n, 7)), _nmb_it_test(2, mod(-7n, 9)),
+              _nmb_it_test(7, mod(7n, -9)), _nmb_it_test(7, mod(7n, 9)), _nmb_it_test(2, mod(-7n, -9)))
+    remainder = (_nmb_it_test(3, rem(7n, 4)), _nmb_it_test(2, rem(9n, 7)), _nmb_it_test(-7, rem(-7n, 9)),
+                 _nmb_it_test(7, rem(7n, -9)), _nmb_it_test(7, rem(7n, 9)), _nmb_it_test(-7, rem(-7n, -9)))
+    return (add, neg, sub, mul, tdiv, modulo, remainder)
+end
+
+# numbers: an int, a double and their sum tested against Object, num, int and double, and the sum's value
+function _nmb_nu_test_main(n::Int64)
+    one = n
+    f1 = _dw_facts(one isa Any, one isa Real, one isa Int64, one isa Float64)
+    two = 2.0n
+    f2 = _dw_facts(two isa Any, two isa Real, two isa Int64, two isa Float64)
+    result = one + two
+    f3 = _dw_facts(result isa Any, result isa Real, result isa Int64, result isa Float64)
+    return (f1, f2, f3, result)
+end
+
+# separators: digit-separated int, hex and double literals, Int64's extremes, the largest finite double written
+# with every digit, an int literal in a double context, and digit-separated constants
+_nmb_sp_as_double(x::Float64) = x
+const _NMB_SP_MIN_NATIVE_INT = -1 * 65536 * 65536 * 65536 * 32768
+const _NMB_SP_MAX_NATIVE_INT = (65536 * 65536 * 65536 * 32 - 1) * 1024
+function _nmb_sp_main(n::Int64)
+    ints = _dw_facts(1_000_000_000n, 555_867_5309n, -1_000_000n, 00_1_00n, -00_99n, 0_0_0_0_0n)
+    native = _dw_facts(_NMB_SP_MAX_NATIVE_INT * n == 0_9_2_2_3_3_7_2_0_3_6_8_5_4_7_7_4_7_8_4 * n,
+                       _NMB_SP_MAX_NATIVE_INT * n == 0x0_7_F_F_F_F_F_F_F_F_F_F_F_F_C_0_0 * n,
+                       _NMB_SP_MIN_NATIVE_INT * n == -0_9_2_2_3_3_7_2_0_3_6_8_5_4_7_7_5_8_0_8 * n,
+                       _NMB_SP_MIN_NATIVE_INT * n == -0x0_8_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0 * n,
+                       _NMB_SP_MIN_NATIVE_INT * n == 0x0_8_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0 * n)
+    doubles = _dw_facts(3.141_592_653n, 1_9.7_3_9n, -1.6_1_8n, _nmb_sp_as_double(Float64(0_0n)),
+                        _nmb_sp_as_double(Float64(-0_0n)))
+    exponents = _dw_facts(1e30 * n, 1_2e3 * n, 1_2.3_4e1 * n, 0_0.0_0n, 0_0e00 * n, 0_0.0_0e00 * n)
+    max_double = _dw_facts(0_1_7_9_7_6_9_3_1_3_4_8_6_2_3_1_5_7_0_8_1_4_5_2_7_4_2_3_7_3_1_7_0_4_3_5_6_7_9_8_0_7_0_5_6_7_5_2_5_8_4_4_9_9_6_5_9_8_9_1_7_4_7_6_8_0_3_1_5_7_2_6_0_7_8_0_0_2_8_5_3_8_7_6_0_5_8_9_5_5_8_6_3_2_7_6_6_8_7_8_1_7_1_5_4_0_4_5_8_9_5_3_5_1_4_3_8_2_4_6_4_2_3_4_3_2_1_3_2_6_8_8_9_4_6_4_1_8_2_7_6_8_4_6_7_5_4_6_7_0_3_5_3_7_5_1_6_9_8_6_0_4_9_9_1_0_5_7_6_5_5_1_2_8_2_0_7_6_2_4_5_4_9_0_0_9_0_3_8_9_3_2_8_9_4_4_0_7_5_8_6_8_5_0_8_4_5_5_1_3_3_9_4_2_3_0_4_5_8_3_2_3_6_9_0_3_2_2_2_9_4_8_1_6_5_8_0_8_5_5_9_3_3_2_1_2_3_3_4_8_2_7_4_7_9_7_8_2_6_2_0_4_1_4_4_7_2_3_1_6_8_7_3_8_1_7_7_1_8_0_9_1_9_2_9_9_8_8_1_2_5_0_4_0_4_0_2_6_1_8_4_1_2_4_8_5_8_3_6_8.0_0 * n,
+                           0_1_7_9_7_6_9_3_1_3_4_8_6_2_3_1_5_7_0_8_1_4_5_2_7_4_2_3_7_3_1_7_0_4_3_5_6_7_9_8_0_7_0_5_6_7_5_2_5_8_4_4_9_9_6_5_9_8_9_1_7_4_7_6_8_0_3_1_5_7_2_6_0_7_8_0_0_2_8_5_3_8_7_6_0_5_8_9_5_5_8_6_3_2_7_6_6_8_7_8_1_7_1_5_4_0_4_5_8_9_5_3_5_1_4_3_8_2_4_6_4_2_3_4_3_2_1_3_2_6_8_8_9_4_6_4_1_8_2_7_6_8_4_6_7_5_4_6_7_0_3_5_3_7_5_1_6_9_8_6_0_4_9_9_1_0_5_7_6_5_5_1_2_8_2_0_7_6_2_4_5_4_9_0_0_9_0_3_8_9_3_2_8_9_4_4_0_7_5_8_6_8_5_0_8_4_5_5_1_3_3_9_4_2_3_0_4_5_8_3_2_3_6_9_0_3_2_2_2_9_4_8_1_6_5_8_0_8_5_5_9_3_3_2_1_2_3_3_4_8_2_7_4_7_9_7_8_2_6_2_0_4_1_4_4_7_2_3_1_6_8_7_3_8_1_7_7_1_8_0_9_1_9_2_9_9_8_8_1_2_5_0_4_0_4_0_2_6_1_8_4_1_2_4_8_5_8_3_6_8e00 * n,
+                           0_1_7_9_7_6_9_3_1_3_4_8_6_2_3_1_5_7_0_8_1_4_5_2_7_4_2_3_7_3_1_7_0_4_3_5_6_7_9_8_0_7_0_5_6_7_5_2_5_8_4_4_9_9_6_5_9_8_9_1_7_4_7_6_8_0_3_1_5_7_2_6_0_7_8_0_0_2_8_5_3_8_7_6_0_5_8_9_5_5_8_6_3_2_7_6_6_8_7_8_1_7_1_5_4_0_4_5_8_9_5_3_5_1_4_3_8_2_4_6_4_2_3_4_3_2_1_3_2_6_8_8_9_4_6_4_1_8_2_7_6_8_4_6_7_5_4_6_7_0_3_5_3_7_5_1_6_9_8_6_0_4_9_9_1_0_5_7_6_5_5_1_2_8_2_0_7_6_2_4_5_4_9_0_0_9_0_3_8_9_3_2_8_9_4_4_0_7_5_8_6_8_5_0_8_4_5_5_1_3_3_9_4_2_3_0_4_5_8_3_2_3_6_9_0_3_2_2_2_9_4_8_1_6_5_8_0_8_5_5_9_3_3.2_1_2_3_3_4_8_2_7_4_7_9_7_8_2_6_2_0_4_1_4_4_7_2_3_1_6_8_7_3_8_1_7_7_1_8_0_9_1_9_2_9_9_8_8_1_2_5_0_4_0_4_0_2_6_1_8_4_1_2_4_8_5_8_3_6_8e067 * n,
+                           0_1_7_9_7_6_9_3_1_3_4_8_6_2_3_1_5_7_0_8_1_4_5_2_7_4_2_3_7_3_1_7_0_4_3_5_6_7_9_8_0_7_0_5_6_7_5_2_5_8_4_4_9_9_6_5_9_8_9_1_7_4_7_6_8_0_3_1_5_7_2_6_0_7_8_0_0_2_8_5_3_8_7_6_0_5_8_9_5_5_8_6_3_2_7_6_6_8_7_8_1_7_1_5_4_0_4_5_8_9_5_3_5_1_4_3_8_2_4_6_4_2_3_4_3_2_1_3_2_6_8_8_9_4_6_4_1_8_2_7_6_8_4_6_7_5_4_6_7_0_3_5_3_7_5_1_6_9_8_6_0_4_9_9_1_0_5_7_6_5_5_1_2_8_2_0_7_6_2_4_5_4_9_0_0_9_0_3_8_9_3_2_8_9_4_4_0_7_5_8_6_8_5_0_8_4_5_5_1_3_3_9_4_2_3_0_4_5_8_3_2_3_6_9_0_3_2_2_2_9_4_8_1_6_5_8_0_8_5_5_9_3_3_2_1_2_3_3_4_8_2_7_4_7_9_7_8_2_6_2_0_4_1_4_4_7_2_3_1_6_8_7_3_8_1_7_7_1_8_0_9_1_9_2_9_9_8_8_1_2_5_0_4_0_4_0_2_6_1_8_4_1_2_4_8_5_8_3_6_8_0_0_0_0_0_0_0_0_0_0_0_0e-012 * n)
+    local a::Float64 = 1_000n
+    b = 2_000
+    c = 3_000.3_000
+    local d::Float64 = 4_000
+    constants = _dw_facts(a, b * n, c * n, d * n)
+    return (ints, native, doubles, exponents, max_double, constants)
+end
+
+# separators, the largest finite double written as a digit-separated int literal in a double context
+_nmb_sp_bigint_main(n::Int64) = _dw_facts(_nmb_sp_as_double(Float64(0_1_7_9_7_6_9_3_1_3_4_8_6_2_3_1_5_7_0_8_1_4_5_2_7_4_2_3_7_3_1_7_0_4_3_5_6_7_9_8_0_7_0_5_6_7_5_2_5_8_4_4_9_9_6_5_9_8_9_1_7_4_7_6_8_0_3_1_5_7_2_6_0_7_8_0_0_2_8_5_3_8_7_6_0_5_8_9_5_5_8_6_3_2_7_6_6_8_7_8_1_7_1_5_4_0_4_5_8_9_5_3_5_1_4_3_8_2_4_6_4_2_3_4_3_2_1_3_2_6_8_8_9_4_6_4_1_8_2_7_6_8_4_6_7_5_4_6_7_0_3_5_3_7_5_1_6_9_8_6_0_4_9_9_1_0_5_7_6_5_5_1_2_8_2_0_7_6_2_4_5_4_9_0_0_9_0_3_8_9_3_2_8_9_4_4_0_7_5_8_6_8_5_0_8_4_5_5_1_3_3_9_4_2_3_0_4_5_8_3_2_3_6_9_0_3_2_2_2_9_4_8_1_6_5_8_0_8_5_5_9_3_3_2_1_2_3_3_4_8_2_7_4_7_9_7_8_2_6_2_0_4_1_4_4_7_2_3_1_6_8_7_3_8_1_7_7_1_8_0_9_1_9_2_9_9_8_8_1_2_5_0_4_0_4_0_2_6_1_8_4_1_2_4_8_5_8_3_6_8 * n)))
+
+# syntax: doubles written without a leading digit, and toString called on int, double and exponent literals; dart
+# writes each toString check three times alike, and once here
+function _nmb_sy_test_main(n::Int64)
+    short = _dw_facts(.0n, .5n, .1234n)
+    ints = _dw_facts(string(0n), string(1n), string(123n))
+    doubles = _dw_facts(string(0.0n), string(.1n), string(1.1n), string(123.4n))
+    exponents = _dw_facts(string(0e0 * n), string(1e+1 * n), string(2.1e-34 * n))
+    return (short, ints, doubles, exponents)
+end
+
+_g("dart_number", Any[
+    ("constant_folding1", (n::Int64) -> _nmb_cf_high_digit_truncation_test(n), Int64(1)),
+    ("identity2", (n::Int64) -> _nmb_i2_main(n), Int64(1)),
+    ("identity", (n::Int64) -> _nmb_id_main(n), Int64(1)),
+    ("infinity", (n::Int64) -> _nmb_in_main(n), Int64(1)),
+    ("int2", (n::Int64) -> _nmb_i2b_main(n), Int64(1)),
+    ("int64_literal", (n::Int64) -> _nmb_il_main(n), Int64(1)),
+    ("int", (n::Int64) -> _nmb_it_main(n), Int64(1)),
+    ("numbers", (n::Int64) -> _nmb_nu_test_main(n), Int64(1)),
+    ("separators", (n::Int64) -> _nmb_sp_main(n), Int64(1)),
+    ("separators_bigint", (n::Int64) -> _nmb_sp_bigint_main(n), Int64(1)),
+    ("syntax", (n::Int64) -> _nmb_sy_test_main(n), Int64(1)),
+])
+
+# ---- tests/language/setter: implicit setters' type checks, explicit getters and setters on instances, statics and top level, and setters overriding inherited members ----
+# dart's implicit setter of a typed field is Julia's field assignment, setproperty!, which converts the value to
+# the field's declared type: a value no convert method takes throws Julia's MethodError where dart throws
+# TypeError. A `late` field is a field the constructor leaves undefined (new()). An explicit getter or setter is a
+# function whose first argument is the receiver, the setter named with a !; a static or top-level one takes no
+# receiver and reads or writes a typed global. A class with subclasses is an abstract type and the instantiated
+# class a struct below it, so a subclass's setter is a method on the subclass that dispatch prefers over the
+# inherited one. Each value is scaled by n (n == 1), or a list is indexed by it, so nothing folds.
+_stt_throws_method_error(f) = try; f(); false; catch e; e isa MethodError; end
+
+# checked2: a late C<int> field, assigned through a dynamic list's B element, rejects a C<bool>
+abstract type _SttCk2A end
+mutable struct _SttCk2C{T} end
+mutable struct _SttCk2B <: _SttCk2A
+    c::_SttCk2C{Int64}
+    _SttCk2B() = new()
+end
+function _stt_ck2_main(n::Int64)
+    array = Any[_SttCk2B()]
+    array[n].c = _SttCk2C{Int64}()
+    return _dw_facts(_stt_throws_method_error(() -> array[n].c = _SttCk2C{Bool}()))
+end
+
+# checked3: a late T field of A<String> accepts a dynamic String and rejects a dynamic int; B<T>'s field
+# initialized with 42 as dynamic rejects T = String at construction, and B<int>'s rejects a String
+mutable struct _SttCk3A{T}
+    field::T
+    _SttCk3A{T}() where {T} = new{T}()
+end
+mutable struct _SttCk3B{T}
+    field::T
+    _SttCk3B{T}() where {T} = new{T}(42)
+end
+function _stt_ck3_main(n::Int64)
+    a = _SttCk3A{String}()
+    s::Any = "string"^n
+    a.field = s
+    i::Any = 42n
+    f1 = _stt_throws_method_error(() -> a.field = i)
+    f2 = _stt_throws_method_error(() -> _SttCk3B{String}())
+    b = _SttCk3B{Int64}()
+    f3 = _stt_throws_method_error(() -> b.field = s)
+    return _dw_facts(f1, f2, f3)
+end
+
+# checked_setter: a late C field, assigned through a dynamic list's B element, rejects a B
+abstract type _SttCsA end
+mutable struct _SttCsC end
+mutable struct _SttCsB <: _SttCsA
+    c::_SttCsC
+    _SttCsB() = new()
+end
+function _stt_cs_main(n::Int64)
+    array = Any[_SttCsB()]
+    array[n].c = _SttCsC()
+    return _dw_facts(_stt_throws_method_error(() -> array[n].c = _SttCsB()))
+end
+
+# no_getter_call_runtime: a top-level getter answers a closure global, called with an argument; the top-level
+# setter beside it does nothing
+global _stt_ngr_top_level_closure::Any = nothing
+_stt_ngr_top_level() = _stt_ngr_top_level_closure
+_stt_ngr_top_level!(value) = nothing
+_stt_ngr_initialize() = (global _stt_ngr_top_level_closure = (x) -> x * 2; nothing)
+function _stt_ngr_main(n::Int64)
+    _stt_ngr_initialize()
+    x = _stt_ngr_top_level_closure(2n)
+    f1 = x
+    x = _stt_ngr_top_level()(3n)
+    return _dw_facts(f1, x)
+end
+
+# override2: B's setter foo stores into foo_, declared over an inherited field foo (section 00), getter foo
+# (section 01) and setter foo (section 03)
+abstract type _SttO2A00 end
+mutable struct _SttO2B00 <: _SttO2A00
+    foo::Any
+    foo_::Any
+end
+_stt_o2_foo!(a::_SttO2A00, value) = (a.foo = value; nothing)
+_stt_o2_foo!(b::_SttO2B00, value) = (b.foo_ = value; nothing)
+abstract type _SttO2A01 end
+mutable struct _SttO2B01 <: _SttO2A01
+    foo_::Any
+end
+_stt_o2_foo(a::_SttO2A01) = 42
+_stt_o2_foo!(b::_SttO2B01, value) = (b.foo_ = value; nothing)
+abstract type _SttO2A03 end
+mutable struct _SttO2B03 <: _SttO2A03
+    foo_::Any
+end
+_stt_o2_foo!(a::_SttO2A03, value) = nothing
+_stt_o2_foo!(b::_SttO2B03, value) = (b.foo_ = value; nothing)
+function _stt_o2_main(n::Int64)
+    b00 = _SttO2B00(42, nothing)
+    _stt_o2_foo!(b00, 42n)
+    b01 = _SttO2B01(nothing)
+    _stt_o2_foo!(b01, 42n)
+    b03 = _SttO2B03(nothing)
+    _stt_o2_foo!(b03, 42n)
+    return _dw_facts(b00.foo_, b01.foo_, b03.foo_)
+end
+
+# override3: B's setter x does not shadow A's getter x, which reads the field the setter writes
+abstract type _SttO3A end
+mutable struct _SttO3B <: _SttO3A
+    _x::Int64
+    _SttO3B() = new(42)
+end
+_stt_o3_x(a::_SttO3A) = a._x
+_stt_o3_x!(b::_SttO3B, val::Int64) = (b._x = val; nothing)
+function _stt_o3_main(n::Int64)
+    b = _SttO3B()
+    f1 = _stt_o3_x(b)
+    _stt_o3_x!(b, 21n)
+    return _dw_facts(f1, _stt_o3_x(b))
+end
+
+# override: B's static setter foo stores into the static foo_ (every section of A is a compile-time error)
+global _stt_ov_b_foo_::Any = nothing
+_stt_ov_b_foo!(value) = (global _stt_ov_b_foo_ = value; nothing)
+function _stt_ov_main(n::Int64)
+    _stt_ov_b_foo!(42n)
+    return _dw_facts(_stt_ov_b_foo_)
+end
+
+# setter0: Second's instance setter adds to the field First declares, its getter reads it; Second's static
+# setter writes the static c that its static getter reads
+abstract type _SttS0First end
+mutable struct _SttS0Second <: _SttS0First
+    a_::Int64
+end
+global _stt_s0_second_c::Int64 = -1
+_stt_s0_instance_a!(s::_SttS0Second, value::Int64) = (s.a_ = s.a_ + value; nothing)
+_stt_s0_instance_a(s::_SttS0Second) = s.a_
+_stt_s0_static_a!(value::Int64) = (global _stt_s0_second_c = value; nothing)
+_stt_s0_static_d() = _stt_s0_second_c
+function _stt_s0_test_static_method(n::Int64)
+    _stt_s0_static_a!(20n)
+    i = _stt_s0_second_c
+    return nothing
+end
+function _stt_s0_test_main(n::Int64)
+    global _stt_s0_second_c = -1
+    obj = _SttS0Second(10n)
+    f1 = _stt_s0_instance_a(obj)
+    _stt_s0_instance_a!(obj, 20n)
+    f2 = _stt_s0_instance_a(obj)
+    _stt_s0_test_static_method(n)
+    return _dw_facts(f1, f2, _stt_s0_second_c, _stt_s0_static_d())
+end
+
+# setter1: instance getter and setter a, set from a method, and static getter and setter b, set from a static
+# method, on First; the same on Second, whose static setter b writes the static c read by the static getter d
+mutable struct _SttS1First
+    a_::Int64
+end
+global _stt_s1_first_b_::Int64 = -1
+_stt_s1_first_a(f::_SttS1First) = f.a_
+_stt_s1_first_a!(f::_SttS1First, val::Int64) = (f.a_ = f.a_ + val; nothing)
+_stt_s1_first_test_method(f::_SttS1First, n::Int64) = _stt_s1_first_a!(f, 20n)
+_stt_s1_first_b() = _stt_s1_first_b_
+_stt_s1_first_b!(val::Int64) = (global _stt_s1_first_b_ = val; nothing)
+_stt_s1_first_test_static_method(n::Int64) = _stt_s1_first_b!(20n)
+mutable struct _SttS1Second
+    a_::Int64
+end
+global _stt_s1_second_c::Int64 = -1
+_stt_s1_second_a(s::_SttS1Second) = s.a_
+_stt_s1_second_a!(s::_SttS1Second, value::Int64) = (s.a_ = s.a_ + value; nothing)
+_stt_s1_second_test_method(s::_SttS1Second, n::Int64) = _stt_s1_second_a!(s, 20n)
+_stt_s1_second_b!(value::Int64) = (global _stt_s1_second_c = value; nothing)
+_stt_s1_second_d() = _stt_s1_second_c
+function _stt_s1_second_test_static_method(n::Int64)
+    _stt_s1_second_b!(20n)
+    i = _stt_s1_second_d()
+    return nothing
+end
+function _stt_s1_test_main(n::Int64)
+    global _stt_s1_first_b_ = -1
+    global _stt_s1_second_c = -1
+    obj1 = _SttS1First(10n)
+    f1 = _stt_s1_first_a(obj1)
+    _stt_s1_first_test_method(obj1, n)
+    f2 = _stt_s1_first_a(obj1)
+    _stt_s1_first_b!(10n)
+    f3 = _stt_s1_first_b()
+    _stt_s1_first_test_static_method(n)
+    f4 = _stt_s1_first_b()
+    obj = _SttS1Second(10n)
+    f5 = _stt_s1_second_a(obj)
+    _stt_s1_second_test_method(obj, n)
+    f6 = _stt_s1_second_a(obj)
+    _stt_s1_second_test_static_method(n)
+    return _dw_facts(f1, f2, f3, f4, f5, f6, _stt_s1_second_c, _stt_s1_second_d())
+end
+
+# setter2: a method assigning its own field, a static Nested's field through Nested.foo(this.a), and this.a
+mutable struct _SttS2Nested
+    a::Int64
+end
+_stt_s2_foo(::_SttS2Nested, i::Int64) = i
+mutable struct _SttS2Second
+    a::Int64
+    _SttS2Second(val::Int64) = new(-1)
+end
+global _stt_s2_second_obj::_SttS2Nested = _SttS2Nested(-1)
+function _stt_s2_bar(s::_SttS2Second, value::Int64)
+    s.a = value
+    _stt_s2_second_obj.a = _stt_s2_foo(_stt_s2_second_obj, s.a)
+    s.a = 100
+    return s.a
+end
+function _stt_s2_test_main(n::Int64)
+    obj = _SttS2Second(10n)
+    global _stt_s2_second_obj = _SttS2Nested(10n)
+    _stt_s2_second_obj.a = 10n
+    f1 = _stt_s2_second_obj.a
+    f2 = _stt_s2_foo(_stt_s2_second_obj, 10n)
+    f3 = _stt_s2_bar(obj, 20n)
+    return _dw_facts(f1, f2, f3, _stt_s2_second_obj.a)
+end
+
+_g("dart_setter", Any[
+    ("checked2", (n::Int64) -> _stt_ck2_main(n), Int64(1)),
+    ("checked3", (n::Int64) -> _stt_ck3_main(n), Int64(1)),
+    ("checked_setter", (n::Int64) -> _stt_cs_main(n), Int64(1)),
+    ("no_getter_call_runtime", (n::Int64) -> _stt_ngr_main(n), Int64(1)),
+    ("override2", (n::Int64) -> _stt_o2_main(n), Int64(1)),
+    ("override3", (n::Int64) -> _stt_o3_main(n), Int64(1)),
+    ("override", (n::Int64) -> _stt_ov_main(n), Int64(1)),
+    ("setter0", (n::Int64) -> _stt_s0_test_main(n), Int64(1)),
+    ("setter1", (n::Int64) -> _stt_s1_test_main(n), Int64(1)),
+    ("setter2", (n::Int64) -> _stt_s2_test_main(n), Int64(1)),
+])
+
+# ---- tests/language/is: is and is! against classes, interfaces, generic lists and type parameters, Function, Object and primitive types ----
+# dart's `x is T` is Julia's `x isa T` and `x is! T` is `!(x isa T)`. int is Int64, double Float64, bool Bool,
+# num Real, String String, Function Function, and Object, Object? and dynamic all Any, which nothing belongs to,
+# so `null is Object` is true in Julia where dart's is false. dart's null is nothing. A class with subclasses is
+# an abstract type and the instantiated class a struct below it; a class that implements an interface subtypes
+# it, and where a class has two supertypes, which Julia's single inheritance cannot give, the interface it shares
+# with an unrelated class is a Union of the two. dart's generics are covariant, so `is List<T>` is
+# `isa Vector{<:T}`. A getter called on a dynamic receiver is a function the receiver's type has a method of;
+# with none, Julia throws MethodError where dart throws NoSuchMethodError. Values derive from n (n == 1).
+
+# function: closures, a static method, a closure field, a method tear-off and local closures are Functions,
+# whether the parameter is untyped or typed as a function, and a null field is not
+global _ist_fn_static_closure::Any = nothing
+_ist_fn_static_method() = 42
+mutable struct _IstFnB
+    instance_closure::Any
+    null_field::Any
+end
+_ist_fn_instance_method(::_IstFnB) = 43
+_ist_fn_check_untyped(closure) = closure isa Function
+_ist_fn_check_typed(closure::Function) = closure isa Function
+_ist_fn_check_typed_null(closure::Union{Nothing,Function}) = closure isa Function
+_ist_fn_check_untyped_null(closure) = closure isa Function
+function _ist_fn_main(n::Int64)
+    global _ist_fn_static_closure = () -> 44n
+    b = _IstFnB(nothing, nothing)
+    b.instance_closure = () -> 45n
+    closure_statement() = 46n
+    closure_expression = () -> 47n
+    instance_method = () -> _ist_fn_instance_method(b)
+    return _dw_facts(_ist_fn_check_untyped(_ist_fn_static_closure), _ist_fn_check_typed(_ist_fn_static_closure),
+                     _ist_fn_check_untyped(_ist_fn_static_method), _ist_fn_check_typed(_ist_fn_static_method),
+                     _ist_fn_check_untyped(b.instance_closure), _ist_fn_check_typed(b.instance_closure),
+                     _ist_fn_check_untyped(instance_method), _ist_fn_check_typed(instance_method),
+                     _ist_fn_check_untyped(closure_statement), _ist_fn_check_typed(closure_statement),
+                     _ist_fn_check_untyped(closure_expression), _ist_fn_check_typed(closure_expression),
+                     _ist_fn_check_typed_null(b.null_field), _ist_fn_check_untyped_null(b.null_field))
+end
+
+# instanceof: basic types, interfaces with parents (C implements I and K, K implements J, D extends C), lists and
+# null, and that every is answers a bool, run 5 times; testnum, which dart's main leaves commented out, is not run
+abstract type _IstIoJ end
+abstract type _IstIoK <: _IstIoJ end
+abstract type _IstIoCClass <: _IstIoK end
+struct _IstIoA end
+struct _IstIoB end
+struct _IstIoC <: _IstIoCClass end
+struct _IstIoD <: _IstIoCClass end
+const _IstIoI = Union{_IstIoA,_IstIoCClass}
+function _ist_io_test_basic_types(n::Int64)
+    zero = n - 1
+    one = n
+    t = n == 1
+    f = n != 1
+    a = "a"^n
+    e = "a"^(n - 1)
+    return _dw_facts(zero isa Int64, zero isa Bool, zero isa String, one isa Int64, one isa Bool, one isa String,
+                     t isa Int64, t isa Bool, t isa String, f isa Int64, f isa Bool, f isa String,
+                     a isa Int64, a isa Bool, a isa String, e isa Int64, e isa Bool, e isa String)
+end
+function _ist_io_test_interfaces(n::Int64)
+    a = _IstIoA()
+    simple = _dw_facts(a isa _IstIoI, a isa _IstIoA, a isa String, a isa Int64, a isa Bool, a isa _IstIoB,
+                       a isa _IstIoJ)
+    c = _IstIoC()
+    d = _IstIoD()
+    parents = _dw_facts(c isa _IstIoI, c isa _IstIoJ, c isa _IstIoK, d isa _IstIoI, d isa _IstIoJ, d isa _IstIoK)
+    nul = n == 1 ? nothing : n
+    lists = _dw_facts(Any[] isa AbstractVector, [1, 2, 3n] isa AbstractVector, d isa AbstractVector,
+                      nul isa AbstractVector, nul isa _IstIoD)
+    return (simple, parents, lists)
+end
+_ist_io_row(x) = _dw_facts((x isa Int64) isa Bool, (x isa Bool) isa Bool, (x isa String) isa Bool,
+                           (x isa _IstIoA) isa Bool, (x isa _IstIoB) isa Bool, (x isa _IstIoI) isa Bool,
+                           (x isa _IstIoJ) isa Bool)
+function _ist_io_test_type_of_instance_of(n::Int64)
+    a = _IstIoA()
+    c = _IstIoC()
+    d = _IstIoD()
+    return (_ist_io_row(n == 1 ? nothing : n), _ist_io_row(n - 1), _ist_io_row(n), _ist_io_row(n == 1),
+            _ist_io_row(n != 1), _ist_io_row("a"^n), _ist_io_row("a"^(n - 1)), _ist_io_row(a), _ist_io_row(c),
+            _ist_io_row(d))
+end
+_ist_io_test_main(n::Int64) =
+    (_ist_io_test_basic_types(n), _ist_io_test_interfaces(n), _ist_io_test_type_of_instance_of(n))
+function _ist_io_main(n::Int64)
+    r = _ist_io_test_main(n)
+    for i in 2:(5n)
+        r = _ist_io_test_main(n)
+    end
+    return r
+end
+
+# interfaces2: B extends A, C extends B, D implements C; elements picked from a list by inscrutable indices
+abstract type _IstIf2A end
+abstract type _IstIf2B <: _IstIf2A end
+abstract type _IstIf2C <: _IstIf2B end
+struct _IstIf2AObj <: _IstIf2A end
+struct _IstIf2BObj <: _IstIf2B end
+struct _IstIf2CObj <: _IstIf2C end
+struct _IstIf2D <: _IstIf2C end
+_ist_if2_inscrutable(x::Int64)::Int64 = x == 0 ? 0 : (x | _ist_if2_inscrutable(x & (x - 1)))
+_ist_if2_row(x) = _dw_facts(x isa _IstIf2A, x isa _IstIf2B, x isa _IstIf2C, x isa _IstIf2D)
+function _ist_if2_main(n::Int64)
+    things = Any[_IstIf2AObj(), _IstIf2BObj(), _IstIf2CObj(), _IstIf2D()]
+    a = things[_ist_if2_inscrutable(0n) + 1]
+    b = things[_ist_if2_inscrutable(1n) + 1]
+    c = things[_ist_if2_inscrutable(2n) + 1]
+    d = things[_ist_if2_inscrutable(3n) + 1]
+    return (_ist_if2_row(a), _ist_if2_row(b), _ist_if2_row(c), _ist_if2_row(d))
+end
+
+# interfaces: B extends A, C implements B; elements picked from a list by inscrutable indices
+abstract type _IstIfA end
+abstract type _IstIfB <: _IstIfA end
+struct _IstIfAObj <: _IstIfA end
+struct _IstIfBObj <: _IstIfB end
+struct _IstIfC <: _IstIfB end
+_ist_if_inscrutable(x::Int64)::Int64 = x == 0 ? 0 : x | _ist_if_inscrutable(x & (x - 1))
+_ist_if_row(x) = _dw_facts(x isa _IstIfA, x isa _IstIfB, x isa _IstIfC)
+function _ist_if_main(n::Int64)
+    things = Any[_IstIfAObj(), _IstIfBObj(), _IstIfC()]
+    a = things[_ist_if_inscrutable(0n) + 1]
+    b = things[_ist_if_inscrutable(1n) + 1]
+    c = things[_ist_if_inscrutable(2n) + 1]
+    return (_ist_if_row(a), _ist_if_row(b), _ist_if_row(c))
+end
+
+# is2: A implements AI implements I, B implements I, C extends A; null against each; lists of dynamic, Object,
+# int, num and String against List and List of each, run 5 times
+abstract type _IstIs2I end
+abstract type _IstIs2AI <: _IstIs2I end
+abstract type _IstIs2AClass <: _IstIs2AI end
+struct _IstIs2A <: _IstIs2AClass end
+struct _IstIs2B <: _IstIs2I end
+struct _IstIs2C <: _IstIs2AClass end
+_ist_is2_lists(a) = _dw_facts(a isa AbstractVector, a isa Vector{<:Any}, a isa Vector{<:Any}, a isa Vector{<:Int64},
+                              a isa Vector{<:Real}, a isa Vector{<:String})
+function _ist_is2_test_main(n::Int64)
+    a = _IstIs2A()
+    b = _IstIs2B()
+    c = _IstIs2C()
+    nul = n == 1 ? nothing : n
+    classes = _dw_facts(a isa _IstIs2AClass, b isa _IstIs2B, c isa _IstIs2C, c isa _IstIs2AClass)
+    interfaces = _dw_facts(a isa _IstIs2AI, a isa _IstIs2I, b isa _IstIs2AI, b isa _IstIs2I, c isa _IstIs2AI,
+                           c isa _IstIs2I, nul isa _IstIs2AI, nul isa _IstIs2I)
+    others = _dw_facts(a isa _IstIs2B, a isa _IstIs2C, b isa _IstIs2AClass, b isa _IstIs2C, c isa _IstIs2B,
+                       nul isa _IstIs2AClass)
+    nulls = _dw_facts(nothing isa _IstIs2AClass, nothing isa _IstIs2B, nothing isa _IstIs2C, nothing isa _IstIs2AI,
+                      nothing isa _IstIs2I)
+    lists = (_ist_is2_lists(Any[]), _ist_is2_lists(fill!(Vector{Any}(undef, 5n), -1)),
+             _ist_is2_lists(fill(-1, 5n)), _ist_is2_lists(fill!(Vector{Real}(undef, 5n), -1)),
+             _ist_is2_lists(fill("s", 5n)))
+    return (classes, interfaces, others, nulls, lists)
+end
+function _ist_is2_main(n::Int64)
+    r = _ist_is2_test_main(n)
+    for i in 2:(5n)
+        r = _ist_is2_test_main(n)
+    end
+    return r
+end
+
+# is4: Foo<T>'s methods test a String, an int list literal and a List<int> against T and List<T>, for T String
+# and int, before and after a loop of 20 calls (the ok multitest section 01 included)
+struct _IstIs4Foo{T} end
+_ist_is4_is_t(::_IstIs4Foo{T}) where {T} = "a string" isa T
+_ist_is4_is_not_t(::_IstIs4Foo{T}) where {T} = !("a string" isa T)
+_ist_is4_is_list_t(::_IstIs4Foo{T}) where {T} = [0, 1, 2] isa Vector{<:T}
+_ist_is4_is_not_list_t(::_IstIs4Foo{T}) where {T} = !([0, 1, 2] isa Vector{<:T})
+_ist_is4_is_also_list_t(::_IstIs4Foo{T}) where {T} = Int64[0, 1, 2] isa Vector{<:T}
+_ist_is4_is_neither_list_t(::_IstIs4Foo{T}) where {T} = !(Int64[0, 1, 2] isa Vector{<:T})
+_ist_is4_all(o) = _dw_facts(_ist_is4_is_t(o), _ist_is4_is_not_t(o), _ist_is4_is_list_t(o), _ist_is4_is_not_list_t(o),
+                            _ist_is4_is_also_list_t(o), _ist_is4_is_neither_list_t(o))
+function _ist_is4_test(o, n::Int64)
+    before = _ist_is4_all(o)
+    for i in 1:(20n)
+        _ist_is4_is_t(o)
+        _ist_is4_is_not_t(o)
+        _ist_is4_is_list_t(o)
+        _ist_is4_is_not_list_t(o)
+        _ist_is4_is_also_list_t(o)
+        _ist_is4_is_neither_list_t(o)
+    end
+    return (before, _ist_is4_all(o))
+end
+_ist_is4_main(n::Int64) = (_ist_is4_test(_IstIs4Foo{n == 1 ? String : Int64}(), n),
+                           _ist_is4_test(_IstIs4Foo{n == 1 ? Int64 : String}(), n))
+
+# nan: a dynamic isNaN getter answers true for NaN and false for an A whose getter says so, and a String has none
+struct _IstNnA end
+Base.isnan(::_IstNnA) = false
+_ist_nn_foo(a) = isnan(a)
+_ist_nn_main(n::Int64) = _dw_facts(_ist_nn_foo(NaN * n), _ist_nn_foo(_IstNnA()),
+                                   try; _ist_nn_foo("bar"^n); false; catch e; e isa MethodError; end)
+
+# object: an int, a String and a bool are Objects, null is Object? (and Object in Julia), the operand of is is
+# evaluated once, and thrown values of each kind are caught as Object
+function _ist_ob_test_try_catch(x)
+    try
+        throw(x)
+    catch obj
+        return obj == x
+    end
+end
+function _ist_ob_main(n::Int64)
+    eval_count = 0
+    test_eval(x) = (eval_count += 1; x)
+    x = n
+    x2 = "hi"^n
+    x3 = n == 1
+    x4 = n == 1 ? nothing : n
+    y = n == 1 ? nothing : n
+    prims = _dw_facts(x isa Any, x2 isa Any, x3 isa Any, x4 isa Any, x4 isa Union{Nothing,Any}, y isa Any,
+                      y isa Union{Nothing,Any})
+    e1 = test_eval(123n) isa Any
+    c1 = eval_count
+    e2 = test_eval("world"^n) isa Any
+    c2 = eval_count
+    e3 = test_eval(n != 1) isa Any
+    c3 = eval_count
+    e4 = test_eval(n == 1 ? nothing : n) isa Any
+    c4 = eval_count
+    e5 = test_eval(n == 1 ? nothing : n) isa Union{Nothing,Any}
+    c5 = eval_count
+    evals = _dw_facts(e1, c1, e2, c2, e3, c3, e4, c4, e5, c5)
+    catches = _dw_facts(_ist_ob_test_try_catch(444n), _ist_ob_test_try_catch("abc"^n), _ist_ob_test_try_catch(n == 1))
+    return (prims, evals, catches)
+end
+
+# operator_clash: C implements $B extends A, with fields named like dart2js's is-check properties
+abstract type _IstOcA end
+abstract type _IstOcB <: _IstOcA end
+struct _IstOcAObj <: _IstOcA end
+struct _IstOcBObj <: _IstOcB end
+mutable struct _IstOcC <: _IstOcB
+    isB::Bool
+    var"$isB"::Bool
+    var"is$B"::Bool
+    var"is$$B"::Bool
+    var"$is$B"::Bool
+    isA::Bool
+    var"$isA"::Bool
+    var"is$A"::Bool
+    var"is$$A"::Bool
+    var"$is$A"::Bool
+    _IstOcC() = new(false, false, false, false, false, false, false, false, false, false)
+end
+_ist_oc_inscrutable(x::Int64)::Int64 = x == 0 ? 0 : x | _ist_oc_inscrutable(x & (x - 1))
+_ist_oc_row(x) = _dw_facts(x isa _IstOcA, x isa _IstOcB, x isa _IstOcC)
+function _ist_oc_main(n::Int64)
+    things = Any[_IstOcAObj(), _IstOcBObj(), _IstOcC()]
+    a = things[_ist_oc_inscrutable(0n) + 1]
+    b = things[_ist_oc_inscrutable(1n) + 1]
+    c = things[_ist_oc_inscrutable(2n) + 1]
+    return (_ist_oc_row(a), _ist_oc_row(b), _ist_oc_row(c))
+end
+
+# operator: is and is! for A implements AI implements I, B implements I, C extends A, and null
+abstract type _IstOpI end
+abstract type _IstOpAI <: _IstOpI end
+abstract type _IstOpAClass <: _IstOpAI end
+struct _IstOpA <: _IstOpAClass end
+struct _IstOpB <: _IstOpI end
+struct _IstOpC <: _IstOpAClass end
+_ist_op_pair(x, ::Type{T}) where {T} = (x isa T, !(x isa T))
+function _ist_op_test_main(n::Int64)
+    a = _IstOpA()
+    b = _IstOpB()
+    c = _IstOpC()
+    nul = n == 1 ? nothing : n
+    classes = _dw_facts(_ist_op_pair(a, _IstOpAClass), _ist_op_pair(b, _IstOpB), _ist_op_pair(c, _IstOpC),
+                        _ist_op_pair(c, _IstOpAClass))
+    interfaces = _dw_facts(_ist_op_pair(a, _IstOpAI), _ist_op_pair(a, _IstOpI), _ist_op_pair(b, _IstOpAI),
+                           _ist_op_pair(b, _IstOpI), _ist_op_pair(c, _IstOpAI), _ist_op_pair(c, _IstOpI),
+                           _ist_op_pair(nul, _IstOpAI), _ist_op_pair(nul, _IstOpI))
+    others = _dw_facts(_ist_op_pair(a, _IstOpB), _ist_op_pair(a, _IstOpC), _ist_op_pair(b, _IstOpAClass),
+                       _ist_op_pair(b, _IstOpC), _ist_op_pair(c, _IstOpB), _ist_op_pair(nul, _IstOpAClass))
+    nulls = _dw_facts(nothing isa _IstOpAClass, nothing isa _IstOpB, nothing isa _IstOpC, nothing isa _IstOpAI,
+                      nothing isa _IstOpI)
+    not_nulls = _dw_facts(!(nothing isa _IstOpAClass), !(nothing isa _IstOpB), !(nothing isa _IstOpC),
+                          !(nothing isa _IstOpAI), !(nothing isa _IstOpI))
+    return (classes, interfaces, others, nulls, not_nulls)
+end
+
+# optimized: is int and is String, as Bools, in if and is! branches and in a conditional, on doubles, ints,
+# Strings, bools and null, in loops of 20 around the calls that change the argument types seen
+_ist_op2_is_int(x) = x isa Int64
+_ist_op2_is_int_res(x) = x isa Int64 ? 1 : 0
+function _ist_op2_is_not_int_res(x)
+    if !(x isa Int64)
+        return 1
+    else
+        return 0
+    end
+end
+_ist_op2_is_if_then_else_int_res(x) = x isa Int64 ? 1 : 0
+_ist_op2_is_string(x) = x isa String
+function _ist_op2_is_string_res(x)
+    if x isa String
+        return 1
+    else
+        return 0
+    end
+end
+function _ist_op2_is_not_string_res(x)
+    if !(x isa String)
+        return 1
+    else
+        return 0
+    end
+end
+function _ist_op2_main(n::Int64)
+    d = 3.2n
+    nul = n == 1 ? nothing : n
+    l1 = ()
+    for i in 1:(20n)
+        l1 = _dw_facts(_ist_op2_is_int(d), _ist_op2_is_int(3n), _ist_op2_is_int(17179869184n), _ist_op2_is_string(2.0n),
+                       _ist_op2_is_string("Morgan"^n))
+    end
+    s1 = _ist_op2_is_string(n == 1)
+    l2 = ()
+    for i in 1:(20n)
+        l2 = _dw_facts(_ist_op2_is_int(d), _ist_op2_is_int(3n), _ist_op2_is_int(17179869184n), _ist_op2_is_int("hu"^n),
+                       _ist_op2_is_string(2.0n), _ist_op2_is_string("Morgan"^n), _ist_op2_is_string(n == 1))
+    end
+    l3 = ()
+    for i in 1:(20n)
+        l3 = _dw_facts(_ist_op2_is_int_res(d), _ist_op2_is_int_res(3n), _ist_op2_is_int_res("hi"^n),
+                       _ist_op2_is_not_int_res(d), _ist_op2_is_not_int_res(3n), _ist_op2_is_not_int_res("hi"^n),
+                       _ist_op2_is_if_then_else_int_res(d), _ist_op2_is_if_then_else_int_res(3n),
+                       _ist_op2_is_if_then_else_int_res("hi"^n))
+    end
+    l4 = ()
+    for i in 1:(20n)
+        l4 = _dw_facts(_ist_op2_is_string_res(d), _ist_op2_is_string_res("Lotus"^n), _ist_op2_is_not_string_res(d),
+                       _ist_op2_is_not_string_res("Lotus"^n))
+    end
+    deopt = _dw_facts(_ist_op2_is_string_res(nul), _ist_op2_is_not_int_res(nul))
+    l5 = ()
+    for i in 1:(20n)
+        l5 = _dw_facts(_ist_op2_is_string_res(d), _ist_op2_is_string_res("Lotus"^n), _ist_op2_is_string_res(nul),
+                       _ist_op2_is_not_string_res(d), _ist_op2_is_not_string_res("Lotus"^n),
+                       _ist_op2_is_not_string_res(nul))
+    end
+    return (l1, s1, l2, l3, l4, deopt, l5)
+end
+
+_g("dart_is", Any[
+    ("function", (n::Int64) -> _ist_fn_main(n), Int64(1)),
+    ("instanceof", (n::Int64) -> _ist_io_main(n), Int64(1)),
+    ("interfaces2", (n::Int64) -> _ist_if2_main(n), Int64(1)),
+    ("interfaces", (n::Int64) -> _ist_if_main(n), Int64(1)),
+    ("is2", (n::Int64) -> _ist_is2_main(n), Int64(1)),
+    ("is4", (n::Int64) -> _ist_is4_main(n), Int64(1)),
+    ("nan", (n::Int64) -> _ist_nn_main(n), Int64(1)),
+    ("object", (n::Int64) -> _ist_ob_main(n), Int64(1)),
+    ("operator_clash", (n::Int64) -> _ist_oc_main(n), Int64(1)),
+    ("operator", (n::Int64) -> _ist_op_test_main(n), Int64(1)),
+    ("optimized", (n::Int64) -> _ist_op2_main(n), Int64(1)),
+])

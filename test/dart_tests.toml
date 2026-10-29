@@ -2505,10 +2505,75 @@ kind = "behavior"
 what = "dot-shorthand syntax (.name for a context type's member)"
 cases = []
 
-["tests/language/double/"]
+["tests/language/double/comparison_test.dart"]
+kind = "not_portable"
+what = "a VM regression for negated double comparisons: four for loops counting a double up and down past 0.0 and 1100.0"
+reason = "main runs loop twice, whose four loops have empty bodies, and asserts nothing"
+
+["tests/language/double/identical_test.dart"]
 kind = "behavior"
-what = "double arithmetic, rounding, parsing and printing"
-cases = []
+what = "identical on equal doubles, on -0.0, 0.0 and 1.234E9, and the native-number answers that 0.0 and -0.0 are not identical and NaN is identical to NaN; identical is ===, which compares a Float64's bits, so Julia answers as dart's native numbers do and unlike its web numbers, which the test's jsNumbers branch expects"
+cases = ["dart_double/identical"]
+
+["tests/language/double/int_addition_test.dart"]
+kind = "behavior"
+what = "an untyped a + b, run 20 times on two doubles, answers a double for 1.1 + 2.1 and an int for 1 + 2; the add is a function of untyped arguments, and its Float64 and Int64 results are checked with isa"
+cases = ["dart_double/int_addition"]
+
+["tests/language/double/int_to_string_test.dart"]
+kind = "behavior"
+what = "toString of integral doubles: 0.0, 9.0, 90.0, 111111111111111111111.0, their negations, 1000.0 and 1000000000000000128.0; toString is string, which prints 1.1111111111111111e20 and 1.0000000000000001e18 where dart prints 111111111111111110000.0 and 1000000000000000100.0, and the small ones as dart does"
+cases = ["dart_double/int_to_string"]
+
+["tests/language/double/invalid_test.dart"]
+kind = "not_portable"
+what = "a double literal 3457e with no exponent digits"
+reason = "static error test: 3457e is a SYNTACTIC_ERROR.MISSING_DIGIT and the only statement of main"
+
+["tests/language/double/modulo_test.dart"]
+kind = "behavior"
+what = "an untyped a % b of -0.33333 by 1.0 and by -1.0 answers the same value in each of 20 iterations; dart's % is mod, whose result takes the divisor's sign, so k % -1.0 is -0.33333 in Julia where dart's is 0.66667, and the port returns both first answers and the last iteration's comparisons"
+cases = ["dart_double/modulo"]
+
+["tests/language/double/nan_comparison_test.dart"]
+kind = "behavior"
+what = "0.5 != NaN is true as an expression, in a conditional and in an if, before and after a loop of 20 calls; != on Float64 is IEEE, true for NaN, as in dart"
+cases = ["dart_double/nan_comparison"]
+
+["tests/language/double/to_string_as_exponential2_test.dart"]
+kind = "behavior"
+what = "toStringAsExponential(-1) and toStringAsExponential(21) throw RangeError, once the three ARGUMENT_TYPE_NOT_ASSIGNABLE calls with 1.5 and strings are removed; toStringAsExponential(p) is Base.Ryu.writeexp(x, p), which takes any precision and throws for neither, so Julia answers false for both where dart answers true"
+cases = ["dart_double/to_string_as_exponential2"]
+
+["tests/language/double/to_string_as_exponential3_test.dart"]
+kind = "behavior"
+what = "toStringAsExponential(20) of 1.0 and 0.1, and the 21-digit literal 1.00000000000000005551e-1 equal to 0.1; toStringAsExponential(p) is Base.Ryu.writeexp(x, p), Printf's %.pe, which writes the exponent with two digits, so Julia answers 1.00000000000000000000e+00 where dart answers 1.00000000000000000000e+0"
+cases = ["dart_double/to_string_as_exponential3"]
+
+["tests/language/double/to_string_as_exponential_test.dart"]
+kind = "behavior"
+what = "toStringAsExponential with 0 to 3 fraction digits of 1.0, 11.0, 112.0, 0.1, 0.11, 0.112 and their negations, of NaN and the infinities, of 0.0, 11.2356 and 0.000112356; toStringAsExponential(p) is Base.Ryu.writeexp(x, p), Printf's %.pe, which writes a two-digit exponent (1e+00 where dart writes 1e+0) and Inf where dart writes Infinity; Julia has no shortest-digits exponential form, so the calls with no argument and with null are not ported"
+cases = ["dart_double/to_string_as_exponential"]
+
+["tests/language/double/to_string_as_fixed_test.dart"]
+kind = "behavior"
+what = "toStringAsFixed of positive and negative doubles with 0 to 20 fraction digits, NaN, the infinities, -0.0, a double past 1e21, large integral doubles and halves that dart rounds up; toStringAsFixed(p) is Base.Ryu.writefixed(x, p), Printf's %.pf, which writes Inf where dart writes Infinity, keeps fixed notation past 1e21 (1111111111111111081984.00000000 where dart answers 1.1111111111111111e+21), and rounds an exact half to even, so 0.5, -0.5 and 1.25 give 0, -0 and 1.2 where dart gives 1, -1 and 1.3"
+cases = ["dart_double/to_string_as_fixed"]
+
+["tests/language/double/to_string_as_precision3_test.dart"]
+kind = "behavior"
+what = "toStringAsPrecision(21) of 0.000555, 0.000000555 and -0.000000555, each equal to its 24-digit literal; Julia has no toStringAsPrecision, so a double to p significant digits is round(x; sigdigits=p), a Float64 equal to the double itself here, where dart answers the 21 digits of its exact decimal expansion as text"
+cases = ["dart_double/to_string_as_precision3"]
+
+["tests/language/double/to_string_as_precision_test.dart"]
+kind = "behavior"
+what = "toStringAsPrecision of NaN, the infinities, 0.000555, 123456789.0 with 1, 7, 8 and 9 digits, negative doubles from 1e-9 to 1e4 with 2 and 4 digits, -0.0, and the halves 1.25 and 1.35; Julia has no toStringAsPrecision, so a double to p significant digits is round(x; sigdigits=p), a Float64 where dart answers text, and round takes an exact half to even, so 1.25 gives 1.2 where dart gives 1.3"
+cases = ["dart_double/to_string_as_precision"]
+
+["tests/language/double/to_string_test.dart"]
+kind = "behavior"
+what = "toString of NaN, the infinities, short doubles, doubles from 1e-8 to 1e22 and their negations, and doubles at the switch to exponential notation; toString is string, which prints Julia's shortest form, Inf where dart prints Infinity, exponents without a plus sign and with a fraction digit (1.0e-7, 1.0e21), and switches to exponential notation from 1e-5 down where dart switches below 1e-6"
+cases = ["dart_double/to_string"]
 
 ["tests/language/double_literals/double_literal_coercion_error_test.dart"]
 kind = "not_portable"
@@ -4170,10 +4235,90 @@ kind = "behavior"
 what = "invalid return statements"
 cases = []
 
-["tests/language/is/"]
+["tests/language/is/function_test.dart"]
 kind = "behavior"
-what = "type tests with is and is! (Julia's isa)"
-cases = []
+what = "a static closure, a static method, an instance closure field, an instance method tear-off and local closures are Functions, passed untyped and typed as int Function(), and a null field is not, untyped or typed as a nullable function; is Function is isa Function, which holds for Julia's functions and closures, the tear-off is a closure over the receiver, and the typed parameters are ::Function and ::Union{Nothing,Function}"
+cases = ["dart_is/function"]
+
+["tests/language/is/instanceof_test.dart"]
+kind = "behavior"
+what = "is on ints, bools and Strings against int, bool and String; on classes with interfaces, A implementing I and C implementing I and K where K implements J and D extends C; on lists and null; and that every is answers a bool, run 5 times; C's two supertypes need two parents, which Julia's single inheritance cannot give, so C and D sit below K below J and I is the Union of A and C's class; List is AbstractVector and null nothing; testnum, commented out of dart's testMain, is not run"
+cases = ["dart_is/instanceof"]
+
+["tests/language/is/interfaces2_test.dart"]
+kind = "behavior"
+what = "B extends A, C extends B and D implements C, each element picked from a list by an inscrutable index and tested against A, B, C and D; A, B and C have subclasses, so each is an abstract type with a struct for its instances, and D is a struct below C, so an instance of A, B or C is a struct of its own class"
+cases = ["dart_is/interfaces2"]
+
+["tests/language/is/interfaces_test.dart"]
+kind = "behavior"
+what = "B extends A and C implements B, each element picked from a list by an inscrutable index and tested against A, B and C; A and B have subtypes, so each is an abstract type with a struct for its instances, and C is a struct below B"
+cases = ["dart_is/interfaces"]
+
+["tests/language/is/is2_test.dart"]
+kind = "behavior"
+what = "is for A implementing AI implementing I, B implementing I and C extending A, and null against each, then lists made by List.empty and List<Object>, List<int>, List<num> and List<String>.filled against List, List<Object?>, List<Object>, List<int>, List<num> and List<String>, run 5 times; A has a subclass, so it is an abstract type with a struct for its instances; dart's covariant generics make is List<T> isa Vector{<:T}, and Object and Object? are both Any, so List.empty (a Vector{Any}) is List<Object> in Julia where dart answers false"
+cases = ["dart_is/is2"]
+
+["tests/language/is/is4_test.dart"]
+kind = "behavior"
+what = "Foo<T>'s methods test a String, an int list literal and a List<int> literal against T and List<T> with is and is!, for T String and int, before and after a loop of 20 calls, the ok multitest section 01 included; T is a struct's type parameter, dart's covariant is List<T> is isa Vector{<:T}, and [0, 1, 2] is a Vector{Int64} in Julia as dart infers List<int>"
+cases = ["dart_is/is4"]
+
+["tests/language/is/is_never_does_not_promote_error_test.dart"]
+kind = "not_portable"
+what = "an int tested with is Never, then isEven, abs() and an undefined method called on it inside the branch"
+reason = "static error test: i.bogus() is an UNDEFINED_METHOD compile-time error inside the function main calls"
+
+["tests/language/is/isnot_malformed_type_test.dart"]
+kind = "not_portable"
+what = "is! against an undefined type name"
+reason = "static error test: obj is! Baz is a TYPE_TEST_WITH_UNDEFINED_NAME compile-time error and the only statement of the function main calls"
+
+["tests/language/is/malformed_type_test.dart"]
+kind = "not_portable"
+what = "is and as against an undefined type name, alone, before && and on a function call's result"
+reason = "static error test: each of the six functions main calls has a TYPE_TEST_WITH_UNDEFINED_NAME or CAST_TO_NON_TYPE compile-time error in its only statement"
+
+["tests/language/is/nan_test.dart"]
+kind = "behavior"
+what = "a dynamic isNaN getter answers true for NaN and false for an A whose getter says false, and a String has none and throws NoSuchMethodError; the getter is Base.isnan, which A extends with a method, and isnan of a String throws Julia's MethodError, the exception the port checks for"
+cases = ["dart_is/nan"]
+
+["tests/language/is/not_class1_test.dart"]
+kind = "not_portable"
+what = "a String literal after is in place of a type"
+reason = "static error test: a is 'A' is a SYNTACTIC_ERROR.EXPECTED_TYPE_NAME and EXPECTED_TOKEN error in main's only test"
+
+["tests/language/is/not_class2_test.dart"]
+kind = "not_portable"
+what = "a local variable after is in place of a type"
+reason = "static error test: a is aa is a TYPE_TEST_WITH_NON_TYPE compile-time error in the method main calls"
+
+["tests/language/is/not_class4_test.dart"]
+kind = "not_portable"
+what = "one is expression following another, a is A is A"
+reason = "static error test: the second is is a SYNTACTIC_ERROR.UNEXPECTED_TOKEN in main's only test"
+
+["tests/language/is/object_test.dart"]
+kind = "behavior"
+what = "an int, a String and a bool are Objects, null (as a literal value and an uninitialized local) is Object? and not Object, the operand of is is evaluated once each time, and an int, a String and a bool thrown are caught on Object and equal to what was thrown; Object and Object? are both Any, and nothing isa Any, so Julia answers true for null is Object where dart answers false; the uninitialized local is nothing, and the evaluation count is a local the closure captures"
+cases = ["dart_is/object"]
+
+["tests/language/is/operator_clash_test.dart"]
+kind = "behavior"
+what = "C implements $B, which extends A, and declares fields named like dart2js's is-check properties (isB, $isB, is$B and so on), each element picked from a list by an inscrutable index and tested against A, $B and C; A and $B are abstract types with a struct for their instances, C a struct below $B, and the fields keep their names as var'$isB' identifiers, which do not clash with isa in Julia"
+cases = ["dart_is/operator_clash"]
+
+["tests/language/is/operator_test.dart"]
+kind = "behavior"
+what = "is and is! for A implementing AI implementing I, B implementing I, C extending A, and null against each; is! is !(x isa T), A has a subclass, so it is an abstract type with a struct for its instances, and nothing belongs to none of the types, as in dart"
+cases = ["dart_is/operator"]
+
+["tests/language/is/optimized_test.dart"]
+kind = "behavior"
+what = "is int and is String as Bools, in if and is! branches and in a conditional, on doubles, ints including 17179869184, Strings, bools and null, in loops of 20 around the calls that change the argument types seen; the port returns each loop's last answers and the answers between the loops"
+cases = ["dart_is/optimized"]
 
 ["tests/language/label/label3_test.dart"]
 kind = "not_portable"
@@ -5405,10 +5550,75 @@ kind = "behavior"
 what = "null-aware collection elements"
 cases = []
 
-["tests/language/number/"]
+["tests/language/number/constant_folding1_test.dart"]
 kind = "behavior"
-what = "int and double arithmetic, overflow, division and conversions (number/separators_test and number/web_int_literals_test are SkipByDesign in language_dart2wasm.status)"
-cases = []
+what = "hex literals of large magnitude: 0x123456789 + 1, 0x1f0000000 > 0, and 0xf through 0xffffffffff times 16 each equal to the literal with a trailing 0; a Julia hex literal is unsigned, of the narrowest width its digits need, so 0xf is a UInt8 and 0x123456789 a UInt64 that the Int64 operand promotes, and the comparisons are exact across the widths"
+cases = ["dart_number/constant_folding1"]
+
+["tests/language/number/identifier_test.dart"]
+kind = "not_portable"
+what = "number literals followed by identifier characters: 0x10as, 0x, 1d, 1D, 1.1d, 1.1D, 1e and 1x"
+reason = "static error test: each literal statement is a SYNTACTIC_ERROR.EXPECTED_TOKEN with UNDEFINED_IDENTIFIER or a MISSING_HEX_DIGIT or MISSING_DIGIT error, and the remaining statement declares a bool local and asserts nothing"
+
+["tests/language/number/identity2_test.dart"]
+kind = "behavior"
+what = "NaN + 0.0 is identical to NaN, the doubles of the bit patterns (1 << 64) - 1 and (1 << 64) - 2 are not identical, nor are 0.0 / 0.0 and 1.0 / 0.0, run 20 times; the ByteData round trip is reinterpret(Float64, i), Julia's << by 64 gives 0 as dart's native shift does, and === compares bits, so two NaNs with different payloads differ as in dart"
+cases = ["dart_number/identity2"]
+
+["tests/language/number/identity_test.dart"]
+kind = "behavior"
+what = "8, 9223372036854775806 and 8.0 are each identical to themselves plus zero and not to one another, run 20 times; identical is ===, and an Int64 is never === a Float64, as in dart"
+cases = ["dart_number/identity"]
+
+["tests/language/number/infinity_test.dart"]
+kind = "behavior"
+what = "double.infinity and double.negativeInfinity read from a list beside 0 are doubles and not ints; the list is a Real vector, num being Real, so its elements keep their own types, and the unused inscrutable is left out"
+cases = ["dart_number/infinity"]
+
+["tests/language/number/int2_test.dart"]
+kind = "behavior"
+what = "9223372036854774784 read twice from a dynamic list beside null, added to 42 and masked with & 1, gives 0; the list is a Vector{Any}"
+cases = ["dart_number/int2"]
+
+["tests/language/number/int64_literal_test.dart"]
+kind = "behavior"
+what = "Int64's extremes written as products of 2097152, as differences, as decimal and hex literals, and their wrapping neighbours, printed by interpolation, once the four INTEGER_LITERAL_OUT_OF_RANGE assignments are removed; Int64 arithmetic wraps as dart's native ints do, and a Julia hex literal is a UInt64 that never wraps to a negative Int64, so each hex assignment reinterprets it with % Int64, where dart reads 0x8000000000000000 as -9223372036854775808 directly"
+cases = ["dart_number/int64_literal"]
+
+["tests/language/number/int_test.dart"]
+kind = "behavior"
+what = "+, -, unary -, *, ~/, % and remainder on small ints, each equal and identical to its expected literal; ~/ is div and remainder rem, as in dart, and % is mod, whose result takes the divisor's sign, so 7 % -9 is -2 and -7 % -9 is -7 in Julia where dart's are 7 and 2; the port returns each result and whether it is === to dart's literal"
+cases = ["dart_number/int"]
+
+["tests/language/number/numbers_test.dart"]
+kind = "behavior"
+what = "1, 2.0 and their sum tested against Object, num, int and double, and the sum equal to 3.0; Object is Any and num Real, and an Int64 is never a Float64 nor a Float64 an Int64, which is the native answer the test's jsNumbers branch takes for dart2wasm"
+cases = ["dart_number/numbers"]
+
+["tests/language/number/separators_error_no_experiment_test.dart"]
+kind = "not_portable"
+what = "digit-separated int, hex, double and exponent literals at language version 3.4, before digit separators"
+reason = "static error test: every literal is a SYNTACTIC_ERROR.EXPERIMENT_NOT_ENABLED or UNEXPECTED_SEPARATOR_IN_NUMBER error, or an UNDEFINED_GETTER for 3._14 and 1._0e-1, and main assigns them and asserts nothing"
+
+["tests/language/number/separators_error_test.dart"]
+kind = "not_portable"
+what = "digit separators leading, trailing or beside the x, the point and the exponent sign of int, hex, double and exponent literals"
+reason = "static error test: every literal is a SYNTACTIC_ERROR.UNEXPECTED_SEPARATOR_IN_NUMBER or MISSING_DIGIT error, or an UNDEFINED_GETTER for 3._14, 3.___14 and 1._0e-1, and main assigns them and asserts nothing"
+
+["tests/language/number/separators_test.dart"]
+kind = "behavior"
+what = "digit-separated int, hex and double literals, Int64's extremes written digit by digit, the largest finite double written with every digit in five forms, an int literal in a double context, and digit-separated constants; Julia's separator is one _ between digits, so dart's runs of __ are written as one, and Julia allows none in an exponent, so 1e3__0, 0__0e0__0 and the max-double exponents are written without; a seventeen-digit hex literal is a UInt128, which never wraps negative, so -0x0__8000000000000000 and the unsigned 0x0__8000000000000000 are not equal to Int64's minimum in Julia where dart's native ints are; dart's int literal in a double context is Float64(x), so asDouble(-0__0) is 0.0 where dart's is -0.0; the three literals past the largest double (2e3__0__8 and its kin) are parse errors in Julia, where dart reads infinity, and are not ported; the max double written as an int literal is a BigInt in Julia, ported as its own case"
+cases = ["dart_number/separators", "dart_number/separators_bigint"]
+
+["tests/language/number/syntax_test.dart"]
+kind = "behavior"
+what = "doubles written without a leading digit (.0, .5, .1234), and toString called on int, double and exponent literals; Julia also reads .5 as 0.5, toString is string, and dart's checks, written three times alike, compare two spellings that are one expression in Julia, so the port returns each string once"
+cases = ["dart_number/syntax"]
+
+["tests/language/number/web_int_literals_test.dart"]
+kind = "not_portable"
+what = "int literals that lose precision as JavaScript doubles, and 9223372036854775808, which no 64-bit int holds"
+reason = "static error test: check(9223372036854775808) is an INTEGER_LITERAL_OUT_OF_RANGE compile-time error, and every other statement passes a literal to check, whose body is empty, so main asserts nothing"
 
 ["tests/language/operator/and_operation_on_non_integer_operand_test.dart"]
 kind = "behavior"
@@ -6580,10 +6790,85 @@ kind = "behavior"
 what = "set literals empty and not, untyped and typed, in set and iterable contexts, with duplicates, of elements with their own == and hashCode joined by toString, evaluated left to right, nested, holding a map, mixed and with trailing commas; each check returns Julia's iteration order; Julia takes the element type from the elements, not the context, so the trailing-comma set is a Set{Int64} where dart's is a Set<Object>, the FutureOr contexts are dropped, and of equal elements Julia's Set keeps the last where dart's keeps the first, so es joins to 2:a,1:b where dart's joins to 1:a,2:b"
 cases = ["dart_set_literals/set_literal"]
 
-["tests/language/setter/"]
+["tests/language/setter/checked2_test.dart"]
 kind = "behavior"
-what = "setters"
-cases = []
+what = "a late C<int> field declared on A, assigned through a dynamic list's B element, accepts a C<int> and rejects a C<bool>; the implicit setter is setproperty!, which converts to the field's type C{Int64}, and no convert method takes a C{Bool}, so Julia throws MethodError where dart throws TypeError, the exception the port checks for"
+cases = ["dart_setter/checked2"]
+
+["tests/language/setter/checked3_test.dart"]
+kind = "behavior"
+what = "A<String>'s late T field accepts a dynamic String and rejects a dynamic int, B<String>'s T field initialized with 42 as dynamic fails at construction, and B<int>'s field rejects a String; the field assignment and the constructor's new both convert to T, and no convert method takes an Int64 to String or a String to Int64, so Julia throws MethodError where dart throws TypeError, the exception the port checks for"
+cases = ["dart_setter/checked3"]
+
+["tests/language/setter/checked_setter_test.dart"]
+kind = "behavior"
+what = "a late C field declared on A, assigned through a dynamic list's B element, accepts a C and rejects a B; the implicit setter is setproperty!, which converts to C, and no convert method takes a B, so Julia throws MethodError where dart throws TypeError, the exception the port checks for"
+cases = ["dart_setter/checked_setter"]
+
+["tests/language/setter/declaration_test.dart"]
+kind = "not_portable"
+what = "setters with no or two parameters and with non-void return types, at top level, static and on instances, beside getters whose types are not subtypes of their setters'"
+reason = "static error test: tooFew and tooMany are WRONG_NUMBER_OF_PARAMETERS_FOR_SETTER and the nine wrongReturnType setters NON_VOID_RETURN_FOR_SETTER compile-time errors, each assigned by main"
+
+["tests/language/setter/no_getter_call_runtime_test.dart"]
+kind = "behavior"
+what = "a closure stored in a top-level variable is called directly and through a top-level getter that answers it, beside a top-level setter that does nothing; the getter and setter are functions of no receiver over a typed global, and initialize's print is left out"
+cases = ["dart_setter/no_getter_call_runtime"]
+
+["tests/language/setter/no_getter_call_test.dart"]
+kind = "not_portable"
+what = "calling a top-level name that has a setter and no getter"
+reason = "static error test: topLevel(3) is an UNDEFINED_FUNCTION compile-time error, and the Expect.equals(6, x) after it checks that statement's value"
+
+["tests/language/setter/no_getter_test.dart"]
+kind = "not_portable"
+what = "postfix ++ on a top-level setter and an instance setter that have no getter"
+reason = "static error test: topLevel++ is an UNDEFINED_IDENTIFIER and ex.foo++ an UNDEFINED_GETTER compile-time error, the two statements main prints"
+
+["tests/language/setter/override2_test.dart"]
+kind = "behavior"
+what = "the ok multitest sections 00, 01 and 03: B's setter foo, storing into foo_, declared over an inherited field foo, getter foo or setter foo, and b.foo = 42 reaching B's setter; the compile-time-error section 02, a method foo, is dropped; each section is its own abstract A with a struct B below it, the setter a set function, and the inherited field's implicit setter a method on A that B's method overrides by dispatch"
+cases = ["dart_setter/override2"]
+
+["tests/language/setter/override3_test.dart"]
+kind = "behavior"
+what = "B's setter x does not shadow A's getter x, which reads the field B's setter writes, 42 and then 21; A is an abstract type and B a struct below it, the getter a method on A and the setter a method on B"
+cases = ["dart_setter/override3"]
+
+["tests/language/setter/override_test.dart"]
+kind = "behavior"
+what = "B's static setter foo stores into the static foo_, with A empty once its compile-time-error sections 00 to 03 (an inherited field, getter, method or setter foo) are removed; the static setter is a set function over a typed global"
+cases = ["dart_setter/override"]
+
+["tests/language/setter/setter0_test.dart"]
+kind = "behavior"
+what = "Second's instance getter and setter instance_a read and add to the field First declares, and its static setter static_a, called from a static method, writes the static c that its static getter static_d reads; First is an abstract type and Second a struct below it, the getters and setters functions, the static field a typed global"
+cases = ["dart_setter/setter0"]
+
+["tests/language/setter/setter1_test.dart"]
+kind = "behavior"
+what = "instance getter and setter a, adding to a_ and set from a method, and static getter and setter b, set from a static method, on First, and the same on Second, whose static setter b writes the static c read by the static getter d; the getters and setters are functions, the static fields typed globals"
+cases = ["dart_setter/setter1"]
+
+["tests/language/setter/setter2_test.dart"]
+kind = "behavior"
+what = "a method assigning its own field a, a static Nested's field through Nested.foo(this.a), and this.a again, after the static is replaced and set; this is the method's first argument, the static a typed global"
+cases = ["dart_setter/setter2"]
+
+["tests/language/setter/setter3_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of setter3_test: a class with an untyped and a void setter, constructed"
+reason = "main constructs an A and asserts nothing"
+
+["tests/language/setter/setter3_test.dart"]
+kind = "not_portable"
+what = "setters declared with dynamic and bool return types"
+reason = "static error test: set baz and set bob are NON_VOID_RETURN_FOR_SETTER compile-time errors in the class main constructs"
+
+["tests/language/setter/setter4_test.dart"]
+kind = "not_portable"
+what = "a setter a declared beside a method a in one class"
+reason = "static error test: set a is a DUPLICATE_DEFINITION compile-time error, and main is empty"
 
 ["tests/language/sound_flow_analysis/"]
 kind = "behavior"
