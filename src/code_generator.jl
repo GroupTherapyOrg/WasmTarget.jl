@@ -879,11 +879,11 @@ end
 # intrinsifier emits (one it has no arm for rejects at the call, located); or a generic call the trim
 # verifier admits only as a warning, its result Union{} (it must throw: verifytrim.jl). That call is
 # Julia's MethodError throw, Julia's answer (ledger D3), never dart's dynamic invocation: it rejects,
-# located, at the throw's port, visitThrow, until throwing is ported
+# located, where visitThrow does, at the runtime's throw, not ported
 @parity "dart2wasm/lib/code_generator.dart:1668 AstCodeGenerator.visitStaticInvocation" function visit_static_invocation(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local f = nir_callee(node)
     f isa Core.Builtin ||
-        reject!(Unported("dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow"),
+        reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace"),
             "$(self.enclosing_member): a call of $f Julia left unresolved, its result Union{} (the trim verifier's must-throw warning), Julia's MethodError throw")
     local intrinsic_result = generate_static_intrinsic(self.intrinsifier[], node)
     intrinsic_result === nothing || return intrinsic_result
@@ -1173,9 +1173,18 @@ end
 @parity "dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation" visit_string_concatenation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation: Julia builds a string by calls of Base's methods, each an invoke, visitStaticInvocation's"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow" @unported function visit_throw(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+# Julia's throw(x), Kernel's Throw: the exception as the top type without null, then dart's runtime
+# Error._throwWithCurrentStackTrace (kernel_nodes.dart:681), which takes the current stack trace and
+# throws the exception tag. The runtime library is not ported, so the throw rejects there, Unported at
+# the runtime's own definition (A52S1's ruling for a runtime function)
+@parity "dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow" function visit_throw(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::Union{}
+    translate_expression(self, node.args[2], self.translator.top_type_non_nullable[])
+    reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace"),
+        "$(self.enclosing_member): a throw of $(dart_type_of(self, node.args[2]))")
+end
 
-@parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" @unported function visit_rethrow(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" visit_rethrow(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow: Julia's rethrow() is a call of Base.rethrow, an invoke whose body is a foreign call (jl_rethrow), a host import (dev/MARCH.md 1.F)"), "$(self.enclosing_member)")
 
 @parity "dart2wasm/lib/code_generator.dart:2975 AstCodeGenerator.visitConstantExpression" function visit_constant_expression(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     # dart's ConstantExpression holds its Constant; NIR's literal is the constant itself

@@ -671,13 +671,22 @@ end
     @test t.top_type_non_nullable[] == W.WasmBuilder.with_nullability(t.top_type[], false) && !t.top_type_non_nullable[].nullable
 end
 
+module ThrowCases
+struct E; v::Int64; end
+thr(x::Int64) = x < 0 ? throw(E(x)) : x
+end
+
 @testset "code_generator.dart: an unresolved call and a field outside the layout reject at their rows" begin
     local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
     # a generic call Julia left unresolved (the trim verifier's must-throw warning) is Julia's
     # MethodError throw, never dart's dynamic invocation: rejected at the throw's port, not at the
     # intrinsifier's
     local e = rejection(() -> D.visit_static_invocation(g, W.NirCall(W.NirValue[W.NirConst(Core.Const(sin)), W.NirArgument(2)]), IR.NumType_f64))
-    @test e.rejection isa W.Unported && occursin("AstCodeGenerator.visitThrow", e.rejection.anchor) && occursin("MethodError", e.at)
+    @test e.rejection isa W.Unported && occursin("Error._throwWithCurrentStackTrace", e.rejection.anchor) && occursin("MethodError", e.at)
+    # Julia's throw(x), Kernel's Throw: the exception, then the runtime's throw, not ported: Unported there
+    local t = rejection(() -> W.compile(ThrowCases.thr, (Int64,); optimize = false))
+    @test t.rejection isa W.Unported && t.rejection.anchor == "sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace" &&
+          occursin("ThrowCases.E", t.at)
     # dart's dynamic invocation has no Julia input: the verifier resolves every call it admits but a
     # must-throw one, so reaching it is WasmTarget's own defect, naming Julia's replacement
     local d = rejection(() -> D._handle_dynamic_invocation(g, W.NirArgument(2), W.NirValue[], :f))
