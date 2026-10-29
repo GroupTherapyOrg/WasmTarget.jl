@@ -41,10 +41,16 @@
     reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:87 _TypeError._throwWasmRefError"), "KernelNodes.throwWasmRefError: the thrower of a failed reference downcast")
 
 # dart:_internal's printToConsole, as the target's patch defines it (standalone or JS), of dart's
-# dart:core's Error._throwWithCurrentStackTrace, of dart's runtime library at the pin, not ported:
-# Unported there
-@parity "dart2wasm/lib/kernel_nodes.dart:681 KernelNodes.errorThrowWithCurrentStackTrace" error_throw_with_current_stack_trace(self::KernelNodes)::Union{} =
-    reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace"), "KernelNodes.errorThrowWithCurrentStackTrace: the thrower of an error with the current stack trace")
+# dart:core's Error._throw, the runtime's thrower (src/runtime/common/errors_patch.jl), which the
+# intrinsifier lowers to wasm's throw: its method in the closed world, reached through
+# _throwWithCurrentStackTrace, an entry point
+@parity "dart2wasm/lib/kernel_nodes.dart:676 KernelNodes.errorThrow" error_throw(self::KernelNodes)::Core.MethodInstance =
+    nir_runtime_member(self.component, Runtime.Error__throw, "KernelNodes.errorThrow")
+
+# dart:core's Error._throwWithCurrentStackTrace, the call a throw makes (src/runtime/common/errors_patch.jl):
+# its method in the closed world, an entry point every closed world holds
+@parity "dart2wasm/lib/kernel_nodes.dart:681 KernelNodes.errorThrowWithCurrentStackTrace" error_throw_with_current_stack_trace(self::KernelNodes)::Core.MethodInstance =
+    nir_runtime_member(self.component, Runtime.Error__throw_with_current_stack_trace, "KernelNodes.errorThrowWithCurrentStackTrace")
 
 # runtime library at the pin, not ported: Unported there
 @parity "dart2wasm/lib/kernel_nodes.dart:845 KernelNodes.printToConsole" print_to_console(self::KernelNodes)::Union{} =

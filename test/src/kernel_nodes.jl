@@ -21,7 +21,6 @@ f(x::Int) = x + 1
     @test anchor(D.list_base_class, js) == "sdk/lib/_internal/wasm/common/list.dart:15 WasmListBase"
     @test anchor(D.immutable_list_class, js) == "sdk/lib/_internal/wasm/common/list.dart:290 ImmutableList"
     @test anchor(D.throw_wasm_ref_error, js) == "sdk/lib/_internal/wasm/common/errors_patch.dart:87 _TypeError._throwWasmRefError"
-    @test anchor(D.error_throw_with_current_stack_trace, js) == "sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace"
     @test anchor(D.embedder_string_from_char_code_array, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:62 stringFromCharCodeArray"
     @test anchor(D.embedder_string_from_ascii_bytes, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:71 stringFromAsciiBytes"
     # the target's patch: standalone or JS
@@ -33,7 +32,7 @@ f(x::Int) = x + 1
     # each anchor names a line of the pinned sdk that declares it
     local sdk = W._pin_sdk()
     if sdk !== nothing
-        for (fn, t) in ((D.list_base_class, js), (D.immutable_list_class, js), (D.throw_wasm_ref_error, js), (D.error_throw_with_current_stack_trace, js), (D.embedder_string_from_char_code_array, standalone),
+        for (fn, t) in ((D.list_base_class, js), (D.immutable_list_class, js), (D.throw_wasm_ref_error, js), (D.embedder_string_from_char_code_array, standalone),
                         (D.embedder_string_from_ascii_bytes, standalone), (D.stack_trace_current, js), (D.stack_trace_current, standalone),
                         (D.print_to_console, js), (D.print_to_console, standalone))
             local a = anchor(fn, t)

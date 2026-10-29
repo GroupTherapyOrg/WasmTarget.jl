@@ -1,5 +1,6 @@
 # WasmTarget's runtime (src/runtime/, the ports of dart's patch libraries, and src/julia/runtime/,
-# Julia's own runtime raises): a closed world holds each runtime entry point its program demands.
+# Julia's own runtime raises): a closed world holds each runtime entry point its program demands, and
+# KernelNodes names each runtime method as dart2wasm's index.getProcedure names a patch member.
 
 module RuntimeTest
 
@@ -29,7 +30,15 @@ world_of(p, at) = W.build_nir(W.check_subset(p, at, "runtime"), "runtime")
     # a checked division demands DivideError's raise, whose own throw demands the thrower
     local hw = world_of(h, (Int, Int))
     @test issubset((:h, :throw_divide_error, :Error__throw_with_current_stack_trace, :Error__throw), names_of(hw))
-
+    # KernelNodes resolves errorThrow and errorThrowWithCurrentStackTrace to their methods there
+    local t = D.Translator(gw, D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local twc = D.error_throw_with_current_stack_trace(t)
+    @test twc.def.module === W.Runtime && twc.def.name === :Error__throw_with_current_stack_trace
+    @test D.error_throw(t).def.name === :Error__throw
+    # a closed world with no throw holds neither: naming one is WasmTarget's own defect, located
+    local tf = D.Translator(world_of(f, (Int,)), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local e = try; D.error_throw(tf); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
 end
 
 end
