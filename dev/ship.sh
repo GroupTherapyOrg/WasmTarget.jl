@@ -101,7 +101,25 @@ trap cleanup_scratch EXIT
 # on an older dev/ship.sh ranks the same tickets the same way (a second ticket name, ranked differently by old
 # and new ships, deadlocked the queue at 09:53), and a ticket that has waited 20 minutes stands level with a
 # fresh one a class above it, so none starves (bors's p= priority, GitHub's merge queue).
+# every Julia file the stack changes parses before the stack takes a place in the queue: a conflict resolved into
+# a file that does not parse cost a whole check and two minutes of the lock (wt3-cgstubs, 14:43,
+# test/src/classes.jl:269, march-monitor-b); one julia with no project parses them all in about a second
 git fetch -q origin "$MARCH" 2>/dev/null
+changed_jl=$(git diff --name-only --diff-filter=AMR "origin/$MARCH...HEAD" -- '*.jl')
+if [ -n "$changed_jl" ]; then
+  if ! perr=$(printf '%s\n' $changed_jl | julia --startup-file=no -e '
+      bad = false
+      for f in eachline(stdin)
+          e = Meta.parseall(read(f, String); filename = f)
+          for a in e.args
+              a isa Expr && a.head in (:error, :incomplete) || continue
+              println(f, ": ", a.args[1]); global bad = true; break
+          end
+      end
+      exit(bad ? 1 : 0)' 2>&1); then
+    echo "ship: a changed Julia file does not parse; not queued:"; printf '%s\n' "$perr" | head -20; exit 1
+  fi
+fi
 early=0; why="other work"
 if git log --format=%B "origin/$MARCH..HEAD" | grep -qE '\bA[0-9]+[SE][0-9]+\b'; then early=2400; why="an audit finding's fix"
 elif [ $(( $(git diff "origin/$MARCH...HEAD" -- src | grep -cE '^-.*@parity "[^"]*" @unported') - $(git diff "origin/$MARCH...HEAD" -- src | grep -cE '^\+.*@parity "[^"]*" @unported') )) -gt 0 ]; then early=1200; why="a stub ported"; fi
