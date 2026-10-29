@@ -241,6 +241,11 @@ end
     @test D.can_use_unchecked_entry(t, W.NirArgument(2), W.NirSSA(1))
     local inv = W.NirInvoke(mi, W.NirValue[W.NirConst(Core.Const(ModuleCases.shapes)), W.NirArgument(2)])
     @test D.single_target(t, inv) === mi && D.single_target(t, W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.tuple))])) === nothing
+    # a member's return type is its body's, looked up by nir_body_of: a member with none rejects, located
+    @test D.type_of_return_value(t, mi) === Union{ModuleCases.Circle, ModuleCases.Square}
+    local other = Core.Compiler.specialize_method(Base._which(Base.signature_type(sin, (Float64,))))
+    local eo = try; D.type_of_return_value(t, other); nothing; catch x; x; end
+    @test eo isa W.RejectionError && eo.rejection isa W.Internal
     local p = D.param_info_for_direct_call(t, mi)
     @test p === D.param_info_for_direct_call(t, mi) && p.positional == [nothing]
     # a parameter or local takes the wasm type of the Julia type inferred for it

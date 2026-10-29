@@ -1000,12 +1000,8 @@ end
 
 # dart reads TFA's inferred return type, else the declared one; a Julia member's is the return type
 # Julia inferred for it, its CodeInstance's rettype in the closed world
-@parity "dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue" function type_of_return_value(self::Translator, member::Core.MethodInstance)::Type
-    for b in self.component
-        b.ci.def === member && return b.ci.rettype
-    end
-    reject!(Internal("dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue: $member is no body of the closed world"), "Translator.typeOfReturnValue")
-end
+@parity "dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue" type_of_return_value(self::Translator, member::Core.MethodInstance)::Type =
+    nir_body_of(self.component, member).ci.rettype
 
 # dart narrows a field's declared type by TFA's inferred type; Julia's inference does not narrow a
 # field, so its type is its declared one: an instance field's (a ClassField), and a static field's,
@@ -1183,8 +1179,9 @@ end
         println(self.function_.type)
     end
     if print_kernel
-        for b in translator.component
-            b.ci.def === self.reference && println(Base.code_typed_by_type(self.reference.specTypes; optimize = true)[1][1])
+        # the member's optimized statements as the closed world holds them, never inferred again
+        for (i, st) in enumerate(nir_body_of(translator.component, self.reference).code)
+            println("  %$i = $st")
         end
         print_wasm || println()
     end

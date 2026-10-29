@@ -125,12 +125,7 @@ end
 
 """The variables a constructor's body uses: every argument and statement value its NIR reads."""
 @parity "dart2wasm/lib/constructor_info.dart:133 _UsageCollector.collectBodyUsages" function collect_body_usages(self::_UsageCollector, constructor::Core.MethodInstance)::Nothing
-    local body = nothing
-    for b in (self.translator::Translator).component
-        b.ci.def === constructor && (body = b; break)
-    end
-    body === nothing &&
-        reject!(Internal("dart2wasm/lib/constructor_info.dart:134 _UsageCollector.collectBodyUsages: the constructor $constructor has no body in the closed world"), "_UsageCollector.collectBodyUsages")
+    local body = nir_body_of((self.translator::Translator).component, constructor)
     for st in body.stmts, v in nir_operands(st)
         v isa Union{NirSSA,NirArgument} && visit_variable_get(self, v)
     end
