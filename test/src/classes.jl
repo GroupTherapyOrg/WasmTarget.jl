@@ -113,7 +113,8 @@ end
     # an allocation's type is its target
     local x = W.NirConst(Core.Const(1))
     @test W.nir_value_operands(W.NirNew(W.NirValue[W.NirConst(Core.Const(Base.RefValue{Int})), x])) == [x]
-    # a read of a binding that can change has no type the subset reads: a located rejection
+    # a read of a binding that can change is its static field's getter, not ported: Unported there, the
+    # kind and site visitStaticGet rejects the read at
     local e = try; W.nir_value_type(first(nw), W.NirGlobal(GlobalRef(ClassesConstantCases, :changing))); nothing; catch y; y; end
-    @test e isa W.RejectionError && e.rejection isa W.Unquarantined
+    @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("_generateGetter", e.rejection.anchor)
 end

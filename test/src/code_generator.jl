@@ -494,6 +494,10 @@ end
         @test occursin("_generateGetter", rejection(() -> D.visit_static_get(g, W.NirGlobalRead(GlobalRef(GlobalCases, name)), IR.NumType_i32)).rejection.anchor)
     end
     @test rejection(() -> D.visit_static_get(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)), IR.NumType_i32)).rejection isa W.Unported
+    # its static type rejects at the same getter, one kind at both sites; a constant binding's type is
+    # its value's, mutable or not
+    @test occursin("_generateGetter", rejection(() -> D.dart_type_of(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)))).rejection.anchor)
+    @test D.dart_type_of(g, W.NirGlobal(GlobalRef(GlobalCases, :BOX))) === Base.RefValue{Int64}
 end
 
 module ControlCases
