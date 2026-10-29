@@ -6,17 +6,22 @@
 # WT's own bug; a raw exception fails). A case recorded :compiled must keep compiling, the ratchet that a
 # port never loses ground; a case recorded :rejects may stop anywhere, so one lane's progress never turns
 # another lane's landing red (the snapshot form did, 2026-10-28, the loop's oscillation). The ratchet grows
-# when the corpus owner records a newly compiling case. A case recorded :wt_bug is a known WT bug (it
-# rejects as Internal), listed so the landing stays green while its owner fixes it; the list only shrinks. Native Julia's answer does not depend on
+# when the corpus owner records a newly compiling case. A case whose compile gives a module runs it (the
+# differential, test/runner.jl): both modules, codegen's and wasm-opt's, each fact of the answer === native
+# Julia's, computed afresh; a module that answers otherwise is WT's bug, whatever the case's record. A case
+# recorded :wt_bug is a known WT bug (it rejects as Internal, or its module answers otherwise than native,
+# the difference named beside its record), listed so the landing stays green while its owner fixes it; the
+# list only shrinks. Native Julia's answer does not depend on
 # WasmTarget's code, so it runs for each case whose group text or record the change adds or edits against
 # CHECK_BASE (dev/check.sh's base, origin/wt2 by default; HEAD~1 under dev/ship.sh), proving a new or edited
 # answer native when it is written. A base that holds no corpus runs every native answer.
 #
 # Under WT_LANDING_CORE=1 (dev/check.sh sets it) the landing compiles a fixed core, the first 5 cases of each
-# group plus every case the change adds or edits, so the landing's cost does not grow with the port; the
-# whole corpus runs beside the landings on wt2's head (without the variable), its red the next landing's
-# first item.
+# group plus every case the change adds or edits, and runs no module, so the landing's cost does not grow with
+# the port; the whole corpus, every module it compiles run in node, wasm-opt's beside codegen's, goes beside
+# the landings on wt2's head (without the variable, dev/corpus.sh), its red the next landing's first item.
 using Test, WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
 
 # the corpus's `dart_*` groups, read in a module of their own as test/smoke.jl reads the whole corpus
 const DART_GROUPS = let m = Module(:DartCorpus), groups = Pair{String,Vector{Any}}[]
@@ -85,8 +90,7 @@ const _Outside = Tuple{Symbol,Vector{WasmTarget.TrimErrorKind}}
 _outside(kinds::WasmTarget.TrimErrorKind...) = (:outside, collect(kinds))
 
 # each case: native Julia's answer and the rejection its compile gives today
-# a case whose compile returns a module records :compiled (its run checked against native once the
-# runner lands)
+# a case whose compile returns a module records :compiled, its modules run against native
 const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     # tests/web/wasm
     "dart_web_wasm/assertion_failure_message" => (1, :rejects),
@@ -732,8 +736,26 @@ const _DART_CORE_ONLY = get(ENV, "WT_LANDING_CORE", "") == "1"
 const DART_CORE = Set{String}(vcat([["$(g)/$(c[1])" for c in cs[1:min(5, end)]] for (g, cs) in DART_GROUPS]...,
                                    collect(DART_NATIVE_DUE)))
 
+# a compiled case's modules, each fact of its answer read by test/runner.jl against native Julia's, computed
+# afresh (a stale record is not the module's fault); a reader that does not compile fails the case, named. The
+# reading has the compile's budget, per case. The whole run reads both modules, codegen's and wasm-opt's.
+function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{String,String}}, key::String, f, args::Tuple)
+    isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: reading $key's answer")
+    local secs = @elapsed try
+        append!(runs, Main.WTRunner.answer_cases(key, WasmTarget.compile, f, args, f(args...)))
+    catch e
+        e isa WasmTarget.RejectionError || rethrow()
+        push!(unread, key => "the reader of its answer does not compile: $(sprint(showerror, e))")
+    end
+    secs <= DART_COMPILE_BUDGET || push!(unread, key => "reading its answer took $(round(secs; digits = 1)) s, past its $(DART_COMPILE_BUDGET) s budget")
+    return nothing
+end
+
 @testset "dart2wasm's tests, Julia the ground truth" begin
     local seen = Set{String}()
+    local runs = Main.WTRunner.RunCase[]
+    local unread = Pair{String,String}[]
+    local nread = 0
     for (group, cases) in DART_GROUPS, case in cases
         local key = "$group/$(case[1])"
         push!(seen, key)
@@ -758,12 +780,33 @@ const DART_CORE = Set{String}(vcat([["$(g)/$(c[1])" for c in cs[1:min(5, end)]] 
                         @test got === :compiled || got isa _Outside ||
                               (got isa WasmTarget.Rejection && !(got isa WasmTarget.Internal))
                     end
+                    # the modules run in the whole run, every module whatever its record but :wt_bug; the
+                    # landing runs none, its cost fixed (the lead's ruling: a landing sample comes later, its
+                    # cost measured)
+                    if got === :compiled && today !== :wt_bug && !_DART_CORE_ONLY
+                        _dart_read!(runs, unread, key, f, args)
+                        nread += 1
+                    end
                 end
             end
         end
     end
     # every recorded case is a case of the corpus
     @test sort!(collect(setdiff(keys(DART_CASES), seen))) == String[]
+    # every module read, in one node process: each fact native's, in both modules, or the case fails naming
+    # the fact by its path and what the modules answered
+    isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: running $(length(runs)) modules in node")
+    local results = Main.WTRunner.run_cases(runs)
+    for (key, why) in unread
+        @testset "$key runs as native Julia" begin
+            @test why == ""
+        end
+    end
+    # one @test per fact: its label and why it differs, "" when it equals native's in every module
+    for r in results
+        @test (r.label => r.why) == (r.label => "")
+    end
+    global DART_RUN_COUNTS = (nread, length(results), count(r -> r.ok, results))
 end
 println("dart tests: $(_DART_CORE_ONLY ? length(DART_CORE) : length(DART_CASES)) compiles checked$(_DART_CORE_ONLY ? " (the landing core)" : ""); native answers proven for the $(length(DART_NATIVE_DUE)) the change ",
-        "adds or edits against $(_DART_BASE)")
+        "adds or edits against $(_DART_BASE); $(DART_RUN_COUNTS[1]) compiled cases run in node, $(DART_RUN_COUNTS[3]) of their $(DART_RUN_COUNTS[2]) facts native's")
