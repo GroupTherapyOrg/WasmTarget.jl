@@ -107,6 +107,9 @@ end
         W.NirConst(Core.Const(:not_atomic)), W.NirConst(Core.Const(false))])) == W.NirValue[r, W.NirConst(Core.Const(false))]
     @test W.nir_value_operands(W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.setfield!)), r, W.NirConst(Core.Const(:x)),
         W.NirConst(Core.Const(:v)), W.NirConst(Core.Const(:release))])) == W.NirValue[r, W.NirConst(Core.Const(:v))]
+    # a global builtin names its binding by the module and the name together: neither a value
+    @test W.nir_value_operands(W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.setglobal!)), W.NirConst(Core.Const(Main)),
+        W.NirConst(Core.Const(:counter)), r])) == W.NirValue[r]
     # an allocation's type is its target
     local x = W.NirConst(Core.Const(1))
     @test W.nir_value_operands(W.NirNew(W.NirValue[W.NirConst(Core.Const(Base.RefValue{Int})), x])) == [x]

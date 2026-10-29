@@ -573,7 +573,8 @@ end
     _builtin_name_operands(f) -> Tuple{Vararg{Int}}
 
 The positions, counted after the callee, at which the Core builtin `f` takes a name rather than data:
-a field's, a module binding's or a memory ordering's, each the parameter of that name in the
+a field's (its name or index), a module binding's (the module and the name together) or a memory
+ordering's, each the parameter of that name in the
 builtin's tfunc (Compiler/src/tfuncs.jl: `getfield_tfunc(𝕃, s00, name, order, boundscheck)`,
 `setfield!_tfunc(𝕃, o, f, v, order)`, `memoryrefget_tfunc(𝕃, mem, order, boundscheck)`,
 `atomic_pointerreplace_tfunc(𝕃, ptr, x, v, success_order, failure_order)`, ...; the global
@@ -589,13 +590,13 @@ takes data alone.
     f === Core.modifyfield! && return (2, 5)
     f === Core.replacefield! && return (2, 5, 6)
     f === Core.setfieldonce! && return (2, 4, 5)
-    f === Core.getglobal && return (2, 3)
-    f === Core.setglobal! && return (2, 4)
-    f === Core.isdefinedglobal && return (2, 4)
-    f === Core.swapglobal! && return (2, 4)
-    f === Core.modifyglobal! && return (2, 5)
-    f === Core.replaceglobal! && return (2, 5, 6)
-    f === Core.setglobalonce! && return (2, 4, 5)
+    f === Core.getglobal && return (1, 2, 3)
+    f === Core.setglobal! && return (1, 2, 4)
+    f === Core.isdefinedglobal && return (1, 2, 4)
+    f === Core.swapglobal! && return (1, 2, 4)
+    f === Core.modifyglobal! && return (1, 2, 5)
+    f === Core.replaceglobal! && return (1, 2, 5, 6)
+    f === Core.setglobalonce! && return (1, 2, 4, 5)
     f === Core.memoryrefget && return (2,)
     f === Core.memoryrefset! && return (3,)
     f === Core.memoryref_isassigned && return (2,)
@@ -620,10 +621,10 @@ The operands of a NIR statement that are values of the program, dart's expressio
 node's target rather than evaluating it. A call's callee and an invoke's are its target (dart's
 Member); an allocation's type is its class (a ConstructorInvocation's target); a foreigncall's name,
 return type, argument types, required count and calling convention precede its arguments, and a
-cfunction's operands are all such (Julia's Expr(:foreigncall) and Expr(:cfunction) forms); a Symbol a
+cfunction's operands are all such (Julia's Expr(:foreigncall) and Expr(:cfunction) forms); a literal a
 builtin takes where it names a field, a module binding or a memory ordering (_builtin_name_operands)
-is that name, as an InstanceGet names its Field, and a Symbol anywhere else is data (`x === :a`,
-`tuple(:k, x)`); an undefined
+is that name, as an InstanceGet names its Field and a StaticSet its static Field, and a literal
+anywhere else is data (`x === :a`, `tuple(:k, x)`); an undefined
 variable check names the variable before its condition; and a loop hint, a bounds-check flag, a try
 region's leave and an exception pop hold no value.
 """
@@ -633,7 +634,7 @@ region's leave and an exception pop hold no value.
         (x::NirCall) => let f = x.args[1],
                 callee = f isa NirConst ? f.c.val : f isa NirGlobal && isconst(f.ref.mod, f.ref.name) ? getglobal(f.ref.mod, f.ref.name) : nothing
             names = callee isa Core.Builtin ? _builtin_name_operands(callee) : ()
-            NirValue[ops[i] for i in 2:length(ops) if !(i - 1 in names && ops[i] isa NirConst && ops[i].c.val isa Symbol)]
+            NirValue[ops[i] for i in 2:length(ops) if !(i - 1 in names && ops[i] isa NirConst)]
         end
         NirInvoke => ops[2:end]
         NirNew => ops[2:end]
