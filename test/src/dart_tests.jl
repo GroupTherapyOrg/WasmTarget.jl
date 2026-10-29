@@ -1002,7 +1002,7 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_null/inline" => ((true, true), :outside),
     "dart_null/is2" => ((true, true, true, false, false), :compiled),
     "dart_null/is" => (((true, true, true, false, false, false, false, false, false), (true, true, true, false, false, false, false, false, false), (false, false, false, false, false), (false, false, false, false, false)), :rejects),
-    "dart_null/method" => ((true, true), :outside),
+    "dart_null/method" => ((true, true), :rejects),
     "dart_null/no_such_method" => ((true,), :rejects),
     "dart_null/null2" => (("Nothing", "Nothing"), :outside),
     "dart_null/null" => (((true, true, true, true, true), (true, false, true, false), (false, false, false, false, false, false, false), (false, false, false, false, false, false, false), (true, false, false), (true, true, true), (true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, true, true, true), (true, false, true, false), (nothing, false, nothing, true, nothing, true, nothing, nothing, nothing), (nothing, false, nothing, true, nothing, nothing, nothing, nothing), ("nothing", "nothing", "nothing", "nothing"), (true, true, true, true), (false, true, false, true), (true, "nothing", "nothing", true)), :outside),
@@ -1046,7 +1046,7 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_number/syntax" => (((0.0, 0.5, 0.1234), ("0", "1", "123"), ("0.0", "0.1", "1.1", "123.4"), ("0.0", "10.0", "2.1e-34")), :rejects),
     # tests/language/setter/
     "dart_setter/checked2" => ((true,), :outside),
-    "dart_setter/checked3" => ((true, true, true), :outside),
+    "dart_setter/checked3" => ((true, true, true), :rejects),
     "dart_setter/checked_setter" => ((true,), :outside),
     "dart_setter/no_getter_call_runtime" => ((4, 6), :outside),
     # runner gap: its reader is rejected, "translator.dart:1597 Translator.convertType: unported … boxing a i64"
@@ -1058,16 +1058,16 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_setter/setter2" => ((10, 10, 100, 20), :rejects),
     # tests/language/is/
     "dart_is/function" => ((true, true, true, true, true, true, true, true, true, true, true, true, false, false), :rejects),
-    "dart_is/instanceof" => (((true, false, false, true, false, false, false, true, false, false, true, false, false, false, true, false, false, true), ((true, true, false, false, false, false, false), (true, true, true, true, true, true), (true, true, false, false, false)), ((true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true))), :outside),
+    "dart_is/instanceof" => (((true, false, false, true, false, false, false, true, false, false, true, false, false, false, true, false, false, true), ((true, true, false, false, false, false, false), (true, true, true, true, true, true), (true, true, false, false, false)), ((true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true), (true, true, true, true, true, true, true))), :rejects),
     "dart_is/interfaces2" => (((true, false, false, false), (true, true, false, false), (true, true, true, false), (true, true, true, true)), :rejects),
     "dart_is/interfaces" => (((true, false, false), (true, true, false), (true, true, true)), :rejects),
     "dart_is/is2" => (((true, true, true, true), (true, true, false, true, true, true, false, false), (false, false, false, false, false, false), (false, false, false, false, false), ((true, true, true, false, false, false), (true, true, true, false, false, false), (true, true, true, true, true, false), (true, true, true, false, true, false), (true, true, true, false, false, true))), :rejects),
     "dart_is/is4" => ((((true, false, false, true, false, true), (true, false, false, true, false, true)), ((false, true, true, false, true, false), (false, true, true, false, true, false))), :rejects),
-    "dart_is/nan" => ((true, false, true), :outside),
+    "dart_is/nan" => ((true, false, true), :rejects),
     "dart_is/object" => (((true, true, true, true, true, true, true), (true, 1, true, 2, true, 3, true, 4, true, 5), (true, true, true)), :outside),
     "dart_is/operator_clash" => (((true, false, false), (true, true, false), (true, true, true)), :rejects),
     "dart_is/operator" => ((((true, false), (true, false), (true, false), (true, false)), ((true, false), (true, false), (false, true), (true, false), (true, false), (true, false), (false, true), (false, true)), ((false, true), (false, true), (false, true), (false, true), (false, true), (false, true)), (false, false, false, false, false), (true, true, true, true, true)), :compiled),
-    "dart_is/optimized" => (((false, true, true, false, true), false, (false, true, true, false, false, true, false), (0, 1, 0, 1, 0, 1, 0, 1, 0), (0, 1, 1, 0), (0, 1), (0, 1, 0, 1, 0, 1)), :outside),
+    "dart_is/optimized" => (((false, true, true, false, true), false, (false, true, true, false, false, true, false), (0, 1, 0, 1, 0, 1, 0, 1, 0), (0, 1, 1, 0), (0, 1), (0, 1, 0, 1, 0, 1)), :rejects),
 )
 
 # a case's answer is native's: of its type, and isequal (a NaN equal to itself, -0.0 apart from 0.0)
