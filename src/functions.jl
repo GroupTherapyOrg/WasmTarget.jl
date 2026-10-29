@@ -131,6 +131,11 @@ class of the closed world's class table.
     return nothing
 end
 
+"""
+The wasm function of `target` if one was made.
+
+Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+"""
 @parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" get_existing_function(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::Union{WasmBuilder.IR.BaseFunction,Nothing} = get(self._functions, target, nothing)
 
 """
@@ -141,6 +146,8 @@ their place: no member is an import (a foreign call is a host import, dev/MARCH.
 are the entry and the `@ccallable` methods (getExportName), and the inlining hint is `@noinline` 0 and
 `@inline` 127 (getWasmNeverInlinePragma, getWasmPreferInlinePragma), and a function is removable if
 unused where Julia's effects prove it (hasWasmPureFunctionPragma).
+
+Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
 """
 @parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.BaseFunction
     local existing = get(self._functions, target, nothing)
@@ -222,6 +229,11 @@ end
     return function_
 end
 
+"""
+The wasm function type of `target`.
+
+Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+"""
 @parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" function get_function_type(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.FunctionType
     # We first try to get the function type by seeing if we already compiled the target function.
     local existing_function = get_existing_function(self, target)
@@ -245,7 +257,12 @@ closure has no type parameters and no named ones.
     return WasmBuilder.define_function(types_builder(translator), inputs, WasmBuilder.IR.ValueType[translate_type(translator, ci.rettype)])
 end
 
-# dart's `member.accept1(visitor, target)`: a Julia member is a method, the visitor's Procedure arm
+"""
+dart's `member.accept1(visitor, target)`: a Julia member is a method, the visitor's Procedure arm,
+and a binding's initializer takes nothing and returns the field's type.
+
+Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+"""
 @parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" function _get_function_type(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.FunctionType
     # a static field's initializer takes nothing and returns the field's value (_FunctionTypeGenerator's
     # static Field arm, functions.dart:908)
@@ -267,8 +284,12 @@ end
     return wasm_type isa WasmBuilder.IR.RefType && wasm_type.heap_type === WasmBuilder.IR.HeapType_none && !wasm_type.nullable
 end
 
-# dart's `member.toString()`, a member's qualified name; a Julia member's is its function's name and
-# the argument types it is specialized on
+"""
+dart's `member.toString()`, a member's qualified name; a Julia member's is its function's name and
+the argument types it is specialized on.
+
+Reshaped: `target` — a Reference is a member's MethodInstance or, for a static field's initializer, the binding's GlobalRef, which the Kernel table gives no Reference row, so the key is the closed union of the two.
+"""
 @parity "dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName" function get_function_name(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::String
     # a static field's initializer, `<member> field initializer`
     target isa GlobalRef && return "$target field initializer"

@@ -86,6 +86,9 @@ dart's `procedureAttributeMetadata` is TFA's, whose Julia counterpart is the
 inference the NIR holds. `visitedConstants` serves the walk over Kernel's constant trees, which the
 NIR does not have. `functionTypeType` is the class of a function type's value: a Julia function type
 is a method signature, a Tuple type (src/julia/kernel.jl), whose value is a `DataType`.
+
+Fields with no Julia counterpart: `procedureAttributeMetadata` :211, `visitedConstants` :216 — TFA's
+metadata is Julia's inference, which the NIR holds, and the NIR has no constant trees to revisit.
 """
 @parity "dart2wasm/lib/closures.dart:209 ClosureLayouter" mutable struct ClosureLayouter
     const translator::KernelNodes
@@ -616,6 +619,10 @@ end
 """
 Registers the combination of named arguments a call passes. A Julia call passes its keyword
 arguments as a NamedTuple (`Core.kwcall(nt, f, args...)`), so the names are its type's `names`.
+
+Reshaped: `arguments` — dart reads only the named arguments' names; a Julia call's keyword names live
+in its NamedTuple operand's type, which a list of operands (the Kernel table's Vector{NirValue})
+does not carry, so the names arrive as Julia's own tuple of Symbols.
 """
 @parity "dart2wasm/lib/closures.dart:1277 ClosureRepresentationsForParameterCount.registerCall" function register_call(self::ClosureRepresentationsForParameterCount, arguments::Tuple{Vararg{Symbol}})::Nothing
     isempty(arguments) && return nothing

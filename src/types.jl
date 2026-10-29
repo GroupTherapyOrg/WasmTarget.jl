@@ -103,6 +103,9 @@ and each subtype holds it as `rtt`.
 """
 The is checkers of one module, one per tested type, by whether the operand may be null and whether
 the type's arguments are checked.
+
+Fields with no Julia counterpart: `typeEnvironment` :613 — Julia's subtyping is Base's subtype test, a
+function with no environment object.
 """
 @parity "dart2wasm/lib/types.dart:692 IsCheckers" struct IsCheckers <: _TypeCheckers
     rtt::RuntimeTypeInformation
@@ -121,6 +124,9 @@ end
 """
 The as checkers of one module, one per tested type, by whether the operand may be null and whether
 the type's arguments are checked.
+
+Fields with no Julia counterpart: `typeEnvironment` :613 — Julia's subtyping is Base's subtype test, a
+function with no environment object.
 """
 @parity "dart2wasm/lib/types.dart:750 AsCheckers" struct AsCheckers <: _TypeCheckers
     rtt::RuntimeTypeInformation
@@ -297,7 +303,7 @@ end
 
 # dart numbers `cls.typeParameters`; a Julia class is an instance, its parameters bound, so it has
 # none to number (ClassInfo.typeParameterMatch, src/class_info.jl)
-@parity "dart2wasm/lib/types.dart:28 InterfaceTypeEnvironment._add" _add(self::InterfaceTypeEnvironment, type_::Type)::Nothing = nothing
+@parity "dart2wasm/lib/types.dart:28 InterfaceTypeEnvironment._add" _add(self::InterfaceTypeEnvironment, type_::DataType)::Nothing = nothing
 
 # dart's `_typeOffsets[typeParameter]!`, which throws on a parameter never added
 @parity "dart2wasm/lib/types.dart:36 InterfaceTypeEnvironment.lookup" function lookup(self::InterfaceTypeEnvironment, type_parameter::TypeVar)::Int
@@ -377,8 +383,6 @@ Julia may be values as well as types. The array is a constant when every element
     return nothing
 end
 
-# the Kernel table types dart's InterfaceType as Type; this takes the DataType it is in Julia, the one
-# kind whose value holds a class id (a Union's and a UnionAll's layout hold their members instead)
 """
 Pushes the fields of a `DataType` value after its object header: its nullability, the class id of
 the class it denotes, and dart's `typeArguments`, Julia's `parameters` (src/julia/classes.jl, the
@@ -386,7 +390,7 @@ kinds' fields): a SimpleVector, which for a type with no free variable is a cons
 `_makeTypeArray` instantiates a constant array when every argument is one. A DataType that is no
 class of the closed world has no id, and it rejects, located.
 """
-@parity "dart2wasm/lib/types.dart:207 Types._makeInterfaceType" function _make_interface_type(self::Types, code_gen::AstCodeGenerator, type_::Type)::Nothing
+@parity "dart2wasm/lib/types.dart:207 Types._makeInterfaceType" function _make_interface_type(self::Types, code_gen::AstCodeGenerator, type_::DataType)::Nothing
     # dart's InterfaceType is the type of a class, a DataType in Julia (the Kernel row's Type narrowed);
     # any other type reaching here is WasmTarget's own defect
     type_ isa DataType || reject!(Internal("dart2wasm/lib/types.dart:207 Types._makeInterfaceType: $type_, no class's type"), "Types._makeInterfaceType")
@@ -553,21 +557,37 @@ the value itself. Julia's classes have no type arguments, so the type's argument
     reject!(Internal("dart2wasm/lib/types.dart:619 _TypeCheckers.canUseTypeCheckHelper: $tested_against_type has type arguments"), "_TypeCheckers.canUseTypeCheckHelper")
 end
 
-# dart's first test: an operand type with no type arguments tells nothing of the tested type's, and a
-# Julia class has none
+"""
+dart's first test: an operand type with no type arguments tells nothing of the tested type's, and a
+Julia class has none.
+
+Reshaped: `testedAgainstType`, `operandType` — a tested type is any constant Julia type whose values their class tells (a Union of classes such as Union{Nothing,T}, or a UnionAll), a class-id range check over the closed world as dart's interface type is, under the ruling R2, where the Kernel table types dart's InterfaceType as a DataType.
+"""
 @parity "dart2wasm/lib/types.dart:647 _TypeCheckers._staticTypesEnsureTypeArgumentsMatch" _static_types_ensure_type_arguments_match(self::_TypeCheckers, tested_against_type::Type, operand_type::Type)::Bool = false
 
-# a Julia class is an instance: its parameters are bound, none is a type argument left to default
+"""
+A Julia class is an instance: its parameters are bound, none is a type argument left to default.
+
+Reshaped: `testedAgainstType` — a tested type is any constant Julia type whose values their class tells (a Union of classes such as Union{Nothing,T}, or a UnionAll), a class-id range check over the closed world as dart's interface type is, under the ruling R2, where the Kernel table types dart's InterfaceType as a DataType.
+"""
 @parity "dart2wasm/lib/types.dart:669 _TypeCheckers._hasOnlyDefaultTypeArguments" _has_only_default_type_arguments(self::_TypeCheckers, tested_against_type::Type)::Bool = true
 
-# a Julia class has no type arguments to replace by their defaults
+"""
+A Julia class has no type arguments to replace by their defaults.
+
+Reshaped: `type` — a tested type is any constant Julia type whose values their class tells (a Union of classes such as Union{Nothing,T}, or a UnionAll), a class-id range check over the closed world as dart's interface type is, under the ruling R2, where the Kernel table types dart's InterfaceType as a DataType.
+"""
 @parity "dart2wasm/lib/types.dart:681 _TypeCheckers._getTypeWithDefaultsToBounds" _get_type_with_defaults_to_bounds(self::_TypeCheckers, type_::Type)::Type = type_
 
 @parity "dart2wasm/lib/types.dart:696 IsCheckers" IsCheckers(translator::KernelNodes, rtt::RuntimeTypeInformation, calling_module::WasmBuilder.ModuleBuilder)::IsCheckers =
     IsCheckers(Val(:_), translator, rtt, calling_module)
 
-# Currently the is-checker helper functions only check nullability and the concrete class (the
-# arguments do not have to be checked).
+"""
+The is checker of a tested type. Currently the is-checker helper functions only check nullability and
+the concrete class (the arguments do not have to be checked).
+
+Reshaped: `testedAgainstType` — a tested type is any constant Julia type whose values their class tells (a Union of classes such as Union{Nothing,T}, or a UnionAll), a class-id range check over the closed world as dart's interface type is, under the ruling R2, where the Kernel table types dart's InterfaceType as a DataType.
+"""
 @parity "dart2wasm/lib/types.dart:707 IsCheckers.generateIsChecker" function generate_is_checker(self::IsCheckers, tested_against_type::Type, check_arguments::Bool, operand_is_nullable::Bool)::CallTarget
     local argument_count::Int
     local cache::Dict{Type,IsCheckerCallTarget}
@@ -593,6 +613,11 @@ end
 @parity "dart2wasm/lib/types.dart:754 AsCheckers" AsCheckers(translator::KernelNodes, rtt::RuntimeTypeInformation, calling_module::WasmBuilder.ModuleBuilder)::AsCheckers =
     AsCheckers(Val(:_), translator, rtt, calling_module)
 
+"""
+The as checker of a tested type.
+
+Reshaped: `testedAgainstType` — a tested type is any constant Julia type whose values their class tells (a Union of classes such as Union{Nothing,T}, or a UnionAll), a class-id range check over the closed world as dart's interface type is, under the ruling R2, where the Kernel table types dart's InterfaceType as a DataType.
+"""
 @parity "dart2wasm/lib/types.dart:763 AsCheckers.generateAsChecker" function generate_as_checker(self::AsCheckers, tested_against_type::Type, check_arguments::Bool, operand_is_nullable::Bool)::CallTarget
     local argument_count::Int
     local cache::Dict{Type,AsCheckerCallTarget}

@@ -247,6 +247,11 @@ end
     return global_
 end
 
+"""
+A field held in a table slot of its reference type, filled at its definition from a starting value.
+
+Reshaped: `init` — a starting value is a NirConst, Julia's value of the binding; no Julia value stands for dart's DummyValueConstant, whose place an absent `init` (nothing) takes, filled by the module's dummy value.
+"""
 @parity "dart2wasm/lib/globals.dart:236 DartGlobals._defineTableBasedField" function _define_table_based_field(self::DartGlobals, field::GlobalRef, field_type::WasmBuilder.IR.RefType, module_::WasmBuilder.ModuleBuilder,
         init::Union{NirConst,Nothing}, initializer_flag::Union{Nothing,WasmBuilder.GlobalBuilder})::TableBasedDartGlobal
     local table = get_table_for_type(self.translator.table_based_globals[], field_type.heap_type)
@@ -260,6 +265,11 @@ end
     return TableBasedDartGlobal(table, index_for_object(table, field); initialized_flag = initializer_flag)
 end
 
+"""
+A field held in a wasm global, initialized from its starting value or the module's dummy value.
+
+Reshaped: `init` — a starting value is a NirConst, Julia's value of the binding; no Julia value stands for dart's DummyValueConstant, whose place an absent `init` (nothing) takes, filled by the module's dummy value.
+"""
 @parity "dart2wasm/lib/globals.dart:262 DartGlobals._defineGlobalBasedField" function _define_global_based_field(self::DartGlobals, field::GlobalRef, field_type::WasmBuilder.IR.ValueType, module_::WasmBuilder.ModuleBuilder,
         mutable_::Bool, init::Union{NirConst,Nothing}, initializer_flag::Union{Nothing,WasmBuilder.GlobalBuilder})::WasmGlobalDartGlobal
     local member_name = _member_name(self, field)

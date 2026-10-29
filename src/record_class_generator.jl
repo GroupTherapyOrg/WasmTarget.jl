@@ -10,6 +10,9 @@ each tuple type is a class of its own (`Tuple{Int,Float64}`), whose `==`, `hash`
 Base's methods, compiled like any other. So no class is generated for a shape, `classes` stays
 empty, and the Kernel classes and procedures dart reads (`_Type`, `_RecordType`, `Object.hash`, ...)
 have no use and no field here.
+
+Fields with no Julia counterpart: `coreTypes` :101, `library` :103, `typeRuntimetypeTypeClass` :105, `recordRuntimeTypeClass` :109, `recordRuntimeTypeConstructor` :114, `objectHashProcedure` :117, `objectHashAllProcedure` :123, `objectToStringProcedure` :129, `identical` :135, `objectEqualsProcedure` :140, `integerEqualsFunctionType` :142, `stringPlusProcedure` :148, `isSubtype` :154, `wasmArrayClass` :159, `immutableWasmArrayClass` :164, `wasmArrayRefLength` :169, `wasmArrayIndex` :175, `wasmArrayLiteralConstructor` :186, `wasmArrayValueField` :189, `immutableWasmArrayValueField` :195, `wasmArrayOfType` :201, `immutableWasmArrayOfString` :207, `runtimeTypeType` :213, `nonNullableTypeType` :218, `getActualRuntimeTypeNullable` :223, `getMasqueradedRuntimeTypeNullableProcedure` :226 — each a Kernel library, class, procedure or type the generated
+record class is built from, where Julia's tuple types are Base's classes with Base's methods.
 """
 @parity "dart2wasm/lib/record_class_generator.dart:100 _RecordClassGenerator" struct _RecordClassGenerator
     classes::Dict{RecordShape,DataType}
@@ -20,6 +23,9 @@ end
 """
 Visits the program's record types, generating a class for each. dart's `constantCache` serves the
 walk over Kernel's constant trees, which the NIR does not have.
+
+Fields with no Julia counterpart: `constantCache` :762 — a NirConst is Julia's value, holding no
+constant tree to revisit.
 """
 @parity "dart2wasm/lib/record_class_generator.dart:760 _RecordVisitor" struct _RecordVisitor
     class_generator::_RecordClassGenerator
