@@ -6,7 +6,7 @@
 # Kernel's LibraryIndex, which the mixin's late fields look classes and members up in; a port names
 # Julia's types and functions directly (the Kernel table's CoreTypes row, src/translator.jl), so no index exists
 @parity "dart2wasm/lib/kernel_nodes.dart:12 KernelNodes.index" index(self::KernelNodes)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/kernel_nodes.dart:12 KernelNodes.index: Kernel's library index; a port names Julia's types and functions directly"), "KernelNodes.index")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:12 KernelNodes.index: Kernel's library index; a port names Julia's types and functions directly (the Kernel table's CoreTypes row)"), "KernelNodes.index")
 
 # abstract in dart: the translator answers it (src/translator.jl Translator.isStandalone)
 @parity "dart2wasm/lib/kernel_nodes.dart:13 KernelNodes.isStandalone" is_standalone(self::KernelNodes)::Union{} =
@@ -14,7 +14,7 @@
 
 # Kernel's CoreTypes; a port names Julia's types directly (the Kernel table's CoreTypes row)
 @parity "dart2wasm/lib/kernel_nodes.dart:15 KernelNodes.coreTypes" core_types(self::KernelNodes)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/kernel_nodes.dart:15 KernelNodes.coreTypes: Kernel's core types; a port names Julia's types directly"), "KernelNodes.coreTypes")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:15 KernelNodes.coreTypes: Kernel's core types; a port names Julia's types directly (the Kernel table's CoreTypes row)"), "KernelNodes.coreTypes")
 
 @parity "dart2wasm/lib/kernel_nodes.dart:20 KernelNodes._stringImplClassName" _string_impl_class_name(self::KernelNodes)::String =
     is_standalone(self) ? "EmbedderStringImpl" : "JSStringImpl"
@@ -26,7 +26,7 @@
 # the lane fields of dart:_wasm's SIMD implementation classes (_WasmI8x16Impl and its siblings), which
 # no Julia type is: a Julia program reaches no class of dart:_wasm
 @parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" _get_lane_references(self::KernelNodes, class_node::DataType)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences: the lanes of $class_node, read as one of dart:_wasm's SIMD classes, which no Julia type is"), "KernelNodes._getLaneReferences")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences: the lanes of $class_node, read as one of dart:_wasm's SIMD classes, which no Julia type is (the Kernel table's Class row)"), "KernelNodes._getLaneReferences")
 
 # dart:core's StackTrace.current, as the target's patch defines it (standalone or JS), a getter of
 # dart's runtime library at the pin, not ported: Unported there
@@ -57,4 +57,4 @@
 
 # dart's extension members; Julia has none, every method being its function's, outside any type
 @parity "dart2wasm/lib/kernel_nodes.dart:859 KernelNodes.extensionOfMember" extension_of_member(self::KernelNodes, member::Core.MethodInstance)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/kernel_nodes.dart:859 KernelNodes.extensionOfMember: the extension of $member; Julia has no extension members, every method being its function's"), "KernelNodes.extensionOfMember")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:859 KernelNodes.extensionOfMember: the extension of $member; Julia has no extension members, every method being its function's (the Kernel table's Procedure row)"), "KernelNodes.extensionOfMember")

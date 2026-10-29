@@ -151,7 +151,7 @@ end
 # the dart libraries Kernel's LibraryIndex covers; a port names Julia's types and functions directly
 # (the Kernel table's CoreTypes row), so no index is built
 @parity "dart2wasm/lib/compile.dart:138 librariesToIndex" libraries_to_index(mode::Mode)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/compile.dart:138 librariesToIndex: the libraries of Kernel's library index for $mode; a port names Julia's types and functions directly"), "libraries_to_index")
+    reject!(Internal("dart2wasm/lib/compile.dart:138 librariesToIndex: the libraries of Kernel's library index for $mode; a port names Julia's types and functions directly (the Kernel table's CoreTypes row)"), "libraries_to_index")
 
 """wasm-opt's flags for one module, dart's, verbatim (compile.dart:159-183)."""
 @parity "dart2wasm/lib/compile.dart:159 _binaryenFlags" _binaryen_flags()::Vector{String} = String[
@@ -246,7 +246,7 @@ end
 # a phase's input read from the file the previous phase wrote; a library compile writes none (the
 # Kernel table's CompilerPhaseInputOutputManager row), its program the ClosedWorld it is given
 @parity "dart2wasm/lib/compile.dart:289 _loadCfeResult" _load_cfe_result(options::WasmCompilerOptions, io_manager::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/compile.dart:289 _loadCfeResult: a .dill read from a file; a library compile's program is the ClosedWorld it is given"), "_load_cfe_result")
+    reject!(Internal("dart2wasm/lib/compile.dart:289 _loadCfeResult: a .dill read from a file; a library compile's program is the ClosedWorld it is given (the Kernel table's CompilerPhaseInputOutputManager row)"), "_load_cfe_result")
 
 """
 The front end over the program: Julia's lowering, inference and trim verifier, which check_subset ran
@@ -265,7 +265,7 @@ dart writes the component when cfe is the last phase, where a library compile re
 end
 
 @parity "dart2wasm/lib/compile.dart:375 _loadTfaResult" _load_tfa_result(options::WasmCompilerOptions, target::WasmTarget, io_manager::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/compile.dart:375 _loadTfaResult: a .dill read from a file; a library compile's program is the ClosedWorld it is given"), "_load_tfa_result")
+    reject!(Internal("dart2wasm/lib/compile.dart:375 _loadTfaResult: a .dill read from a file; a library compile's program is the ClosedWorld it is given (the Kernel table's CompilerPhaseInputOutputManager row)"), "_load_tfa_result")
 
 """
 dart's global transformations over Kernel: the class hierarchy and library index, the JS interop,
@@ -284,7 +284,7 @@ later phase takes, and makes the module strategy and the record classes over it,
 end
 
 @parity "dart2wasm/lib/compile.dart:564 _loadCodegenResult" _load_codegen_result(options::WasmCompilerOptions, io_manager::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/compile.dart:564 _loadCodegenResult: modules read from files; a library compile holds the codegen phase's modules"), "_load_codegen_result")
+    reject!(Internal("dart2wasm/lib/compile.dart:564 _loadCodegenResult: modules read from files; a library compile holds the codegen phase's modules (the Kernel table's CompilerPhaseInputOutputManager row)"), "_load_codegen_result")
 
 """
 Translate the program to its modules and serialize each, its bytes in the result where dart writes
@@ -374,17 +374,17 @@ end
 # dart patches dart:_internal's `_invokeMainInternal` to call main by its arity; a Julia program's
 # entry is the MethodInstance Julia inferred, exported and called as it is (functions.jl)
 @parity "dart2wasm/lib/compile.dart:776 _patchMainTearOffs" _patch_main_tear_offs(core_types::NoCounterpart, component::NirWorld)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/compile.dart:776 _patchMainTearOffs: dart's main invoker; a Julia program's entry is called as Julia inferred it"), "_patch_main_tear_offs")
+    reject!(Internal("dart2wasm/lib/compile.dart:776 _patchMainTearOffs: dart's main invoker; a Julia program's entry is called as Julia inferred it (the Kernel table's Procedure row)"), "_patch_main_tear_offs")
 
 @parity "dart2wasm/lib/compile.dart:826 _RecordClassesRepository._tag" _RecordClassesRepository__tag()::String = "dart2wasm.recordClasses"
 
 @parity "dart2wasm/lib/compile.dart:831 _RecordClassesRepository.readFromBinary" read_from_binary(self::_RecordClassesRepository, node::NirStmt, source::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/compile.dart:831 _RecordClassesRepository.readFromBinary: a record shape read from a .dill; a library compile writes none"), "_RecordClassesRepository.readFromBinary")
+    reject!(Internal("dart2wasm/lib/compile.dart:831 _RecordClassesRepository.readFromBinary: a record shape read from a .dill; a library compile writes none (the Kernel table's MetadataRepository row)"), "_RecordClassesRepository.readFromBinary")
 
 @parity "dart2wasm/lib/compile.dart:842 _RecordClassesRepository.tag" tag(self::_RecordClassesRepository)::String = _RecordClassesRepository__tag()
 
 @parity "dart2wasm/lib/compile.dart:845 _RecordClassesRepository.writeToBinary" write_to_binary(self::_RecordClassesRepository, metadata::RecordShape, node::NirStmt, sink::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/compile.dart:845 _RecordClassesRepository.writeToBinary: a record shape written to a .dill; a library compile writes none"), "_RecordClassesRepository.writeToBinary")
+    reject!(Internal("dart2wasm/lib/compile.dart:845 _RecordClassesRepository.writeToBinary: a record shape written to a .dill; a library compile writes none (the Kernel table's MetadataRepository row)"), "_RecordClassesRepository.writeToBinary")
 
 # the engine features the program needs, each tested by validating a module that uses it
 # (wasm-feature-detect's detectors, as dart copies them): WasmGC, full SIMD, and the js-string builtins
