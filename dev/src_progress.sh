@@ -38,9 +38,13 @@ else
             counted = Set(Skeleton.anchor(f, d) for f in Skeleton.scope() for d in S.decls[f] if Skeleton.counted(d))
             e = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget) && x.anchor in counted]
             stubbed = Set(x.anchor for x in e if !x.ported)
-            println(length(counted), " ", length(setdiff(Set(x.anchor for x in e), stubbed)))') ||
+            ported = setdiff(Set(x.anchor for x in e), stubbed)
+            # A55S13: of the ported, those whose whole body is one rejection, by kind (REJECTION_ONLY)
+            replaced = count(a -> get(WasmTarget.REJECTION_ONLY, a, :body) in (:Internal, :Unquarantined), ported)
+            gaps = count(a -> get(WasmTarget.REJECTION_ONLY, a, :body) === :Unported, ported)
+            println(length(counted), " ", length(ported), " ", replaced, " ", gaps)') ||
             { echo "src: WasmTarget did not load, so its @parity registry gives no count"; exit 1; }
-        read -r anchored ported <<< "$counts"
+        read -r anchored ported replaced gaps <<< "$counts"
         last=$(git log -1 --format=%H -- src)
     else
         anchored=0; ported=0; last=$REBUILD_START; started=0
@@ -48,6 +52,9 @@ else
     since=$(git rev-list --count --no-merges "$last"..HEAD)
 fi
 line="src: $ported of $anchored anchored dart definitions ported (every definition of each dart file src loads, dev/skeleton.jl); $since landing(s) since src/ last changed"
+# A55S13: a ported definition whose whole body is one rejection is no port with a body: an Internal or
+# Unquarantined one is Julia's answer replacing a construct Julia never produces, an Unported one a gap
+[ -n "${replaced:-}" ] && line="$line; of the ported, $replaced are one rejection where Julia's answer replaces dart's construct and $gaps one Unported rejection, a gap still to fill"
 [ $started -eq 1 ] || line="$line (the rebuild's src/ not started: WT1 holds src/ until 1.A2c)"
 echo "$line"
 if [ "$since" -ge "$NOTE_AFTER" ]; then

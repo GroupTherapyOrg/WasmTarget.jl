@@ -1116,6 +1116,26 @@ end
     return n
 end
 
+# a ported definition whose whole body is one rejection, by the rejection's kind (A55S13): Internal or
+# Unquarantined is a dart definition Julia's answer replaces (a construct Julia never produces), Unported
+# a gap behind a definition that is written (a runtime function not ported), read from the definition's
+# parsed body when @parity checks it, so the src progress count tells them from a port with a body
+@quarantine "Julia keeps no record of a definition's parsed body; the macro reads it once, as it checks it" Base.Dict const REJECTION_ONLY = Dict{String,Symbol}()
+
+@quarantine "a definition's body read from its parsed form, as the macro sees it" Base.Meta.isexpr function _rejection_only_kind(def)::Union{Symbol,Nothing}
+    (Meta.isexpr(def, :function) || Meta.isexpr(def, :(=))) && length(def.args) == 2 || return nothing
+    local body = def.args[2]
+    local stmts = Meta.isexpr(body, :block) ? filter(x -> !(x isa LineNumberNode), body.args) : Any[body]
+    length(stmts) == 1 || return nothing
+    local st = only(stmts)
+    (Meta.isexpr(st, :call) && length(st.args) >= 2 && st.args[1] === :reject!) || return nothing
+    local r = st.args[2]
+    Meta.isexpr(r, :call) || return nothing
+    local k = r.args[1]
+    local kind = k isa Symbol ? k : k isa GlobalRef ? k.name : Meta.isexpr(k, :.) ? k.args[end].value : nothing
+    return kind in (:Internal, :Unquarantined, :Unported) ? kind : nothing
+end
+
 # the ParityEntry of one definition and the definition to evaluate (an @unported stub expanded), or
 # a refusal at its line: the anchor's form and file, the file outside src/julia (and loaded by
 # include_dart, in WasmTarget), the Julia name the rule admits, the anchor resolved at the pin
@@ -1133,6 +1153,16 @@ end
     (_inside(file, SRC) || own) && !any(d -> _jl_path(d) == normpath(file), INCLUDED) &&
         refuse("$file is not a file include_dart loaded")
     local ported = !_is_macro(def, Symbol("@unported"))
+    if ported
+        local inner = def
+        while Meta.isexpr(inner, :macrocall) && inner.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"))
+            inner = inner.args[end]
+        end
+        local kind = _rejection_only_kind(inner)
+        # an anchor several definitions name (a struct and its constructor, a method per signature) is a
+        # port with a body when any of them has one
+        get(REJECTION_ONLY, anchor, nothing) === :body || (REJECTION_ONLY[anchor] = something(kind, :body))
+    end
     ported || (def = _unported(anchor, def.args[end], source))
     local names, name = _defines(def, source)
     if ported && Meta.isexpr(def, :struct)
