@@ -87,28 +87,34 @@ end
     count + 1
 end
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:89 Serializer._f32ByteData" @unported function Serializer__f32_byte_data() end
+# dart's static scratch buffer and its byte view, one array here: a ByteData and the Uint8List over its
+# buffer share their storage, as one Vector{UInt8} does with itself
+@parity "wasm_builder/lib/src/serialize/serializer.dart:89 Serializer._f32ByteData" const Serializer__f32_byte_data = zeros(UInt8, 4)
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:90 Serializer._f32Uint8List" @unported function Serializer__f32_uint8_list() end
+@parity "wasm_builder/lib/src/serialize/serializer.dart:90 Serializer._f32Uint8List" const Serializer__f32_uint8_list = Serializer__f32_byte_data
 
 # dart writes a double through a Float32 view (serializer.dart:92); a Julia caller states the
-# Float32 it means, so no rounding happens here.
+# Float32 it means, so no rounding happens here. ByteData.setFloat32 little-endian: the value's bits,
+# low byte first
 @parity "wasm_builder/lib/src/serialize/serializer.dart:91 Serializer.writeF32" function write_f32(s::Serializer, value::Float32)::Nothing
-    bits = reinterpret(UInt32, value)
+    local bits = reinterpret(UInt32, value)
     for i in 0:3
-        write_byte(s, (bits >> (8i)) % UInt8)
+        Serializer__f32_byte_data[i + 1] = (bits >> (8i)) % UInt8
     end
+    write_bytes(s, Serializer__f32_uint8_list)
 end
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:96 Serializer._f64ByteData" @unported function Serializer__f64_byte_data() end
+@parity "wasm_builder/lib/src/serialize/serializer.dart:96 Serializer._f64ByteData" const Serializer__f64_byte_data = zeros(UInt8, 8)
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:97 Serializer._f64Uint8List" @unported function Serializer__f64_uint8_list() end
+@parity "wasm_builder/lib/src/serialize/serializer.dart:97 Serializer._f64Uint8List" const Serializer__f64_uint8_list = Serializer__f64_byte_data
 
+# ByteData.setFloat64 little-endian: the value's bits, low byte first
 @parity "wasm_builder/lib/src/serialize/serializer.dart:98 Serializer.writeF64" function write_f64(s::Serializer, value::Float64)::Nothing
-    bits = reinterpret(UInt64, value)
+    local bits = reinterpret(UInt64, value)
     for i in 0:7
-        write_byte(s, (bits >> (8i)) % UInt8)
+        Serializer__f64_byte_data[i + 1] = (bits >> (8i)) % UInt8
     end
+    write_bytes(s, Serializer__f64_uint8_list)
 end
 
 @parity "wasm_builder/lib/src/serialize/serializer.dart:103 Serializer.writeName" function write_name(s::Serializer, name::String)::Nothing
