@@ -255,6 +255,10 @@ end
     @test D.single_target(t, inv) === mi && D.single_target(t, W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.tuple))])) === nothing
     # a type's most specific class: a Union's join, nullable with `nothing`; a type value's kind
     @test D.to_most_specific_interface_type(t, Union{Nothing,ModuleCases.Circle,ModuleCases.Square}) == Union{Nothing,ModuleCases.Shape}
+    # two instances of one parametric closure type join to its UnionAll, no class: their nearest common
+    # superclass on Julia's supertype chain, Function (dart_generic/instantiate_tearoff)
+    local mkc(::Type{X}) where {X} = (x::X) -> x
+    @test D.to_most_specific_interface_type(t, Union{typeof(mkc(Any)),typeof(mkc(String))}) === Function
     @test D.class_for_type(t, Union{ModuleCases.Circle,ModuleCases.Square}) === ModuleCases.Shape && D.class_for_type(t, Type{Int64}) === DataType
     @test D.class_for_type(t, Nothing) === Any && D.class_for_type(t, Union{Int64,Nothing}) === Int64
     # Julia's wasm types are its wasm arrays; at the boundary a reference is translateExternalType's

@@ -871,7 +871,9 @@ end
 """
 The most specific class type of a Julia type, nullable where the type admits `nothing`: dart's Never,
 Null and dynamic are its Object, as Julia's `Union{}`, `Nothing` and `Any` are `Any`; a `Union` of
-classes is Julia's `typejoin` of its members (dart has no union types); a type as a value is its kind
+classes is Julia's `typejoin` of its members (dart has no union types), and where that join is no class
+(two instances of one parametric type, `F{Any}` and `F{String}`, join to the `UnionAll` `F`) their
+nearest common superclass by Julia's `supertype`, the chain the class walk numbers; a type as a value is its kind
 (`typeof(X)`), and of a type Julia left open (`Type`, `Type{T}`) the open `Type{T}` every kind is
 under. Any other `UnionAll` rejects, located: Julia's inference left its class open. Julia's types
 carry no free type variable here, so dart's walk to a type parameter's bound has nothing to walk.
@@ -880,7 +882,18 @@ carry no free type variable here, so dart's walk to a type parameter's bound has
     local at = "dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType"
     (original_type === Union{} || original_type === Nothing || original_type === Any) && return Any
     local cls = original_type isa Union ? Base.nonnothingtype(original_type) : original_type
-    cls isa Union && (cls = typejoin(Base.uniontypes(cls)...))
+    if cls isa Union
+        local members = Base.uniontypes(cls)
+        cls = typejoin(members...)
+        if cls isa UnionAll && all(m -> m isa DataType, members)
+            # no class: the nearest common superclass on Julia's supertype chain
+            local c = members[1]::DataType
+            while !all(m -> m <: c, members)
+                c = supertype(c)
+            end
+            cls = c
+        end
+    end
     # a type as a value: its kind, or, of a type Julia left open, the open Type{T} above every kind
     (cls === Type || (cls isa DataType && Base.isType(cls) && cls.parameters[1] isa TypeVar)) && (cls = supertype(DataType))
     cls isa DataType && Base.isType(cls) && !(cls.parameters[1] isa TypeVar) && (cls = typeof(cls.parameters[1]))
