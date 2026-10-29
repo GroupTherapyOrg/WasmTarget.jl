@@ -114,7 +114,7 @@
 (* machine_function; src/julia/nir.jl nir_code): every exception lands     *)
 (* where Julia's handler says.                                             *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets
+EXTENDS Integers, Sequences, FiniteSets, StackifyTry
 
 CONSTANTS Bug
 
@@ -123,17 +123,12 @@ Bugs == {"none", "keepenter", "leaveunwinds", "trampolineatend", "catchinside",
          "notrywalk", "endsafter"}
 ASSUME Bug \in Bugs
 
-Min(S) == CHOOSE x \in S : \A y \in S : x <= y
-Max(S) == CHOOSE x \in S : \A y \in S : y <= x
-Last(s) == s[Len(s)]
-Pop(s) == SubSeq(s, 1, Len(s) - 1)
 Range(s) == {s[i] : i \in 1..Len(s)}
 IndexOf(s, x) == CHOOSE i \in 1..Len(s) : s[i] = x
 RECURSIVE SortAsc(_)
 SortAsc(S) == IF S = {} THEN << >> ELSE <<Min(S)>> \o SortAsc(S \ {Min(S)})
 RECURSIVE SortDesc(_)
 SortDesc(S) == IF S = {} THEN << >> ELSE <<Max(S)>> \o SortDesc(S \ {Max(S)})
-InsertAt(s, j, x) == SubSeq(s, 1, j - 1) \o <<x>> \o SubSeq(s, j, Len(s))
 
 (* ---- Julia's CFGs: the optimized IR of ten try/catch functions ----------- *)
 (* a terminator: return, goto t, fallthrough, goto t if not (GotoIfNot: t on  *)
@@ -281,17 +276,8 @@ ExplicitlyBranchesTo(p, i) ==
     \E k \in 1..Len(TermToks(PB(p))) : TermToks(PB(p))[k].k \in {"br", "brif"} /\ TermToks(PB(p))[k].t = PB(i)
 
 (* ---- placement over positions 1..n and the appendix n + 1 ---------------- *)
-EarliestPos(s, Before(_)) ==
-    LET js == {j \in 1..Len(s) : Before(s[j])} IN IF js = {} THEN 1 ELSE Max(js) + 1
-LatestPos(s, After(_)) ==
-    LET js == {j \in 1..Len(s) : After(s[j])} IN IF js = {} THEN Len(s) + 1 ELSE Min(js)
-UpdateTop(tops, b, e) == IF tops[e] = 0 \/ tops[e] > b THEN [tops EXCEPT ![e] = b] ELSE tops
-RECURSIVE Walk(_, _, _)
-Walk(tops, I, Hd) ==
-    IF I <= Hd THEN Hd
-    ELSE IF tops[I] # 0
-         THEN IF tops[I] > Hd THEN Walk(tops, tops[I], Hd) ELSE tops[I]
-         ELSE Walk(tops, I - 1, Hd)
+(* getEarliestInsertPos, getLatestInsertPos, updateScopeTops and the walk   *)
+(* out are StackifyTry.tla's                                                 *)
 NCD(S) == LET cd == {d \in 1..n : \A p \in S : PDom(d, p)}
           IN CHOOSE d \in cd : \A d2 \in cd : PDom(d2, d)
 
@@ -327,37 +313,19 @@ PlaceBlock(st, i) ==
                           !.tops = UpdateTop(st.tops, h, i)]
 
 (* placeTryTableMarker (695) *)
+(* placeTryTableMarker (695), StackifyTry.tla's, with this model's tokens   *)
+(* and scopes: the TRY_TABLE's catch target the pad's block                  *)
 PlaceTryTable(st, i) ==
     LET p == PB(i)
-        preds == {Pos[q] : q \in MPreds(p)}
-        fp == {q \in preds : q < i}
-    IN IF fp = {} THEN st
-       ELSE LET bottom == Max({Pos[x] : x \in ExcOf(p)})
-                cont == IF bottom + 1 > App THEN App ELSE bottom + 1
-                h == IF Bug = "notrywalk" THEN NCD(fp) ELSE Walk(st.tops, bottom, NCD(fp))
-                bsid == Len(st.scopes) + 2      \* registerTryScope, then registerScope
-                tsid == Len(st.scopes) + 1
-                After(x) == \/ x.k = "LOOP" /\ st.scopes[x.s].e - 1 < i
-                            \/ x.k \in {"BLOCK", "TRY_TABLE"}
-                            \/ x.k \in Terminators
-                            \/ x.k = "body" /\ h \in preds
-                            \/ x.k \in Ends /\ Bug = "endsafter"
-                at == LatestPos(st.ins[h], After)
-                bad == \E j \in at..Len(st.ins[h]) :
-                         \/ st.ins[h][j].k \in Ends
-                         \/ st.ins[h][j].k = "LOOP" /\ ~(st.scopes[st.ins[h][j].s].e - 1 < i)
-                tt == [Tok("TRY_TABLE", p, "", tsid, 0) EXCEPT !.cl = "catch"]
-                ins1 == [st.ins EXCEPT ![h] = InsertAt(InsertAt(@, at, Tok("BLOCK", 0, "", bsid, 0)), at + 1, tt)]
-                Before2(x) == x.k = "END_LOOP" /\ st.scopes[x.s].b >= h
-                at2 == EarliestPos(ins1[i], Before2)
-                bad2 == \E j \in 1..(at2 - 1) : ins1[i][j].k \in {"LOOP", "CATCH"}
-                ins2 == [ins1 EXCEPT ![i] = InsertAt(InsertAt(@, at2, Tok("END_TRY_TABLE", 0, "", tsid, 0)),
-                                                     at2 + 1, Tok("END_BLOCK", 0, "", bsid, 0))]
-                tsc == [Scope("try", h, i) EXCEPT !.t = p, !.cl = "catch"]
-            IN [st EXCEPT !.ins = ins2,
-                          !.scopes = Append(Append(st.scopes, tsc), Scope("block", h, i)),
-                          !.tops = UpdateTop(UpdateTop(st.tops, h, i), h, cont),
-                          !.bad = st.bad \/ bad \/ bad2]
+    IN PlaceTryTableMarker(st, i, {Pos[q] : q \in MPreds(p)}, Max({Pos[x] : x \in ExcOf(p)}), App, NCD,
+                           Bug = "notrywalk",
+                           LAMBDA s : Tok("BLOCK", 0, "", s, 0),
+                           LAMBDA s : [Tok("TRY_TABLE", p, "", s, 0) EXCEPT !.cl = "catch"],
+                           LAMBDA s : Tok("END_TRY_TABLE", 0, "", s, 0),
+                           LAMBDA s : Tok("END_BLOCK", 0, "", s, 0),
+                           LAMBDA b, e : [Scope("try", b, e) EXCEPT !.t = p, !.cl = "catch"],
+                           LAMBDA b, e : Scope("block", b, e),
+                           LAMBDA x : x.k \in Ends /\ Bug = "endsafter")
 
 (* placeMarkers (2509): every LOOP, then in layout order a TRY_TABLE for a pad *)
 (* or a BLOCK for any other block                                              *)
@@ -427,10 +395,9 @@ OpenFromF(fl, j, k, stk) ==
              []   fl[j].k \in Ends   -> IF stk = << >> THEN stk ELSE Pop(stk)
              []   OTHER              -> stk)
 OpenAtF(fl, k) == OpenFromF(fl, 1, k, << >>)
-(* the pads the try_tables open at k catch to, innermost last (EHPadStack) *)
-TryTops(st, fl, k) == LET o == OpenAtF(fl, k)
-                          ts == SelectSeq(o, LAMBDA s : st.scopes[s].kind = "try")
-                      IN [j \in 1..Len(ts) |-> st.scopes[ts[j]].t]
+(* the pads the try_tables open at k catch to, innermost last: the backward *)
+(* walk's EHPadStack (StackifyTry.tla), a try scope's pad its target block  *)
+TryTops(st, fl, k) == EHPadStackAt(LAMBDA s : st.scopes[s].t, fl, Len(fl), k, << >>)
 
 (* fixCallUnwindMismatches (1592): the ranges, each one throwing body (a      *)
 (* block's STMTS is its one instruction), with its right destination: a       *)

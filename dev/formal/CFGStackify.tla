@@ -112,7 +112,7 @@
 (* place_markers, rewrite_depth_immediates): the structured program has    *)
 (* the CFG's paths.                                                        *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets
+EXTENDS Integers, Sequences, FiniteSets, StackifyTry
 
 CONSTANTS N, Bug, EH
 
@@ -123,10 +123,6 @@ ASSUME N \in Nat /\ N >= 2 /\ Bug \in Bugs /\ EH \in BOOLEAN
 Blocks == 1..N
 Entry == 1
 
-Min(S) == CHOOSE x \in S : \A y \in S : x <= y
-Max(S) == CHOOSE x \in S : \A y \in S : y <= x
-Last(s) == s[Len(s)]
-Pop(s) == SubSeq(s, 1, Len(s) - 1)
 RECURSIVE SortAsc(_)
 SortAsc(S) == IF S = {} THEN << >> ELSE <<Min(S)>> \o SortAsc(S \ {Min(S)})
 RECURSIVE SortDesc(_)
@@ -372,17 +368,8 @@ ExplicitlyBranchesTo(p, i) ==
     \E k \in 1..Len(TermToks(p)) : TermToks(p)[k].k \in {"br", "brif"} /\ TermToks(p)[k].t = i
 
 (* ---- CFGStackify's placement over positions 1..N and the appendix N + 1   *)
-InsertAt(s, j, x) == SubSeq(s, 1, j - 1) \o <<x>> \o SubSeq(s, j, Len(s))
-(* getEarliestInsertPos (WebAssemblyCFGStackify.cpp:210): after the last     *)
-(* instruction of the before set, else at the start                          *)
-EarliestPos(s, Before(_)) ==
-    LET js == {j \in 1..Len(s) : Before(s[j])} IN IF js = {} THEN 1 ELSE Max(js) + 1
-(* getLatestInsertPos (234): before the first instruction of the after set,  *)
-(* else at the end                                                           *)
-LatestPos(s, After(_)) ==
-    LET js == {j \in 1..Len(s) : After(s[j])} IN IF js = {} THEN Len(s) + 1 ELSE Min(js)
-(* updateScopeTops (67): the farthest-spanning scope ending at e            *)
-UpdateTop(tops, b, e) == IF tops[e] = 0 \/ tops[e] > b THEN [tops EXCEPT ![e] = b] ELSE tops
+(* getEarliestInsertPos, getLatestInsertPos and updateScopeTops are         *)
+(* StackifyTry.tla's                                                         *)
 
 (* placeLoopMarker (434) *)
 PlaceLoop(st, i) ==
@@ -395,17 +382,9 @@ PlaceLoop(st, i) ==
                         InsertAt(@, EarliestPos(@, LAMBDA x : FALSE), Tok("END_LOOP", 0, "", sid))]
          IN [ins |-> ins2,
              scopes |-> Append(st.scopes, [kind |-> "loop", b |-> i, e |-> after]),
-             tops |-> UpdateTop(st.tops, i, after)]
+             tops |-> UpdateTop(st.tops, i, after), bad |-> st.bad]
 
-(* placeBlockMarker's walk out (309-321): from the layout predecessor down   *)
-(* to the header, skipping a scope that lies between, stopping at one that   *)
-(* begins at or above the header                                             *)
-RECURSIVE Walk(_, _, _)
-Walk(tops, I, H) ==
-    IF I <= H THEN H
-    ELSE IF tops[I] # 0
-         THEN IF tops[I] > H THEN Walk(tops, tops[I], H) ELSE tops[I]
-         ELSE Walk(tops, I - 1, H)
+(* placeBlockMarker's walk out (309-321) is StackifyTry.tla's Walk         *)
 
 (* the nearest common dominator of S (MachineDominatorTree's                 *)
 (* findNearestCommonDominator)                                               *)
@@ -428,7 +407,7 @@ PlaceBlock(st, i) ==
                 ins2 == [ins1 EXCEPT ![i] = InsertAt(@, EarliestPos(@, Before), Tok("END_BLOCK", 0, "", sid))]
             IN [ins |-> ins2,
                 scopes |-> Append(st.scopes, [kind |-> "block", b |-> h, e |-> i]),
-                tops |-> UpdateTop(st.tops, h, i)]
+                tops |-> UpdateTop(st.tops, h, i), bad |-> st.bad]
 
 (* placeTryTableMarker (695) for the pad at position i: at the nearest       *)
 (* common dominator of its unwind predecessors walked out from the          *)
@@ -440,26 +419,14 @@ PlaceBlock(st, i) ==
 (* and at the block after the exception's bottom (the last block when the   *)
 (* bottom is)                                                               *)
 PlaceTry(st, i) ==
-    LET fp == {p \in {Pos[x] : x \in UPredsOf(PB(i))} : p < i}
-    IN IF fp = {} THEN st
-       ELSE LET h0 == NCD(fp)
-                bottom == PExcBottom
-                cont == IF bottom + 1 <= N THEN bottom + 1 ELSE N
-                h == Walk(st.tops, bottom, h0)
-                bid == Len(st.scopes) + 1
-                tid == Len(st.scopes) + 2
-                After(x) == \/ x.k = "LOOP" /\ i > st.scopes[x.s].e - 1
-                            \/ x.k \in {"BLOCK", "TRY_TABLE"}
-                            \/ x.k \in Terminators
-                            \/ x.k = "body" /\ h \in {Pos[y] : y \in UPredsOf(PB(i))}
-                Before(x) == x.k = "END_LOOP" /\ st.scopes[x.s].b >= h
-                ins1 == [st.ins EXCEPT ![h] = LET j == LatestPos(@, After)
-                                              IN InsertAt(InsertAt(@, j, Tok("BLOCK", 0, "", bid)), j + 1, Tok("TRY_TABLE", i, "", tid))]
-                ins2 == [ins1 EXCEPT ![i] = LET j == EarliestPos(@, Before)
-                                            IN InsertAt(InsertAt(@, j, Tok("END_TRY_TABLE", 0, "", tid)), j + 1, Tok("END_BLOCK", 0, "", bid))]
-            IN [ins |-> ins2,
-                scopes |-> st.scopes \o <<[kind |-> "block", b |-> h, e |-> i], [kind |-> "try", b |-> h, e |-> i]>>,
-                tops |-> UpdateTop(UpdateTop(st.tops, h, i), h, cont)]
+    PlaceTryTableMarker(st, i, {Pos[x] : x \in UPredsOf(PB(i))}, PExcBottom, N, NCD, FALSE,
+                        LAMBDA s : Tok("BLOCK", 0, "", s),
+                        LAMBDA s : Tok("TRY_TABLE", i, "", s),
+                        LAMBDA s : Tok("END_TRY_TABLE", 0, "", s),
+                        LAMBDA s : Tok("END_BLOCK", 0, "", s),
+                        LAMBDA b, e : [kind |-> "try", b |-> b, e |-> e],
+                        LAMBDA b, e : [kind |-> "block", b |-> b, e |-> e],
+                        LAMBDA x : FALSE)
 
 (* addUnreachableAfterTryTables (2487): an UNREACHABLE after the            *)
 (* END_TRY_TABLE, so the catch BLOCK's body type checks; no marker          *)
@@ -469,7 +436,7 @@ AddUnreachable(st) ==
                 THEN LET j == CHOOSE j \in 1..Len(st.ins[i]) : st.ins[i][j].k = "END_TRY_TABLE"
                      IN InsertAt(st.ins[i], j + 1, Tok("unreachable", 0, "", 0))
                 ELSE st.ins[i]],
-     scopes |-> st.scopes, tops |-> st.tops]
+     scopes |-> st.scopes, tops |-> st.tops, bad |-> st.bad]
 
 (* placeMarkers (2509): every LOOP first, then, in layout order, the        *)
 (* TRY_TABLE of the pad and the BLOCK of every other block                  *)
@@ -481,7 +448,7 @@ FoldBlocks(st, i) == IF i > N THEN st
 
 Start == [ins |-> [i \in 1..N + 1 |-> IF i <= N THEN <<Tok("body", i, "", 0)>> \o TermToks(i) ELSE << >>],
           scopes |-> << >>,
-          tops |-> [i \in 1..N + 1 |-> 0]]
+          tops |-> [i \in 1..N + 1 |-> 0], bad |-> FALSE]
 
 PlaceAll == LET st == FoldBlocks(FoldLoops(Start, 1), 1)
             IN IF pad # 0 THEN AddUnreachable(st) ELSE st
@@ -625,16 +592,10 @@ CatchDepthCorrect ==
 (* its pad), a block unwinding to the pad a mismatch when the stack's top   *)
 (* is not the pad; a block throwing to the caller a mismatch when the stack *)
 (* is not empty. Here each block's body is its one throwing instruction.    *)
-RECURSIVE PadStackAt(_, _, _)
-PadStackAt(j, k, stk) ==
-    IF j <= k THEN stk
-    ELSE PadStackAt(j - 1, k,
-             CASE flat[j].k = "TRY_TABLE"     -> Pop(stk)
-             []   flat[j].k = "END_TRY_TABLE" -> Append(stk, scopes[flat[j].s].e)
-             []   OTHER                       -> stk)
+(* The stack is StackifyTry.tla's EHPadStackAt, a try scope's pad its end. *)
 BodyIdx(i) == CHOOSE k \in 1..Len(flat) : flat[k].k = "body" /\ flat[k].t = i
 Found(i) ==
-    LET stk == PadStackAt(Len(flat), BodyIdx(i), << >>)
+    LET stk == EHPadStackAt(LAMBDA s : scopes[s].e, flat, Len(flat), BodyIdx(i), << >>)
         u == uw[PB(i)]
     IN CASE u > 0  -> stk = << >> \/ Last(stk) # Pos[u]
        []   u = -1 -> Bug # "nocaller" /\ stk # << >>
