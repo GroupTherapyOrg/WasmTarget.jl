@@ -118,7 +118,10 @@ wall=$(( $(date +%s) - s0 ))
 RATE_RATCHET=2.4; RATE_SRC=5.3
 cpu() { awk 'NR == 1 { printf "%d", $3 + $5 }' ".wtd/$1.time"; }
 gi() { awk '/instructions retired/ { printf "%d", $1 / 1e9 }' ".wtd/$1.time"; }
-ps_of() { awk -v r="$2" '/instructions retired/ { printf "%d", $1 / 1e9 / r }' ".wtd/$1.time"; }
+# rusage reports the instructions of the measured process alone, never its children (node, wasm-opt,
+# the ratchet's git: A54E1), while its CPU seconds hold them all; so a stage is judged at the larger of its
+# instructions at the measured rate and half its CPU seconds, an efficiency core's worst slowdown
+ps_of() { awk -v r="$2" '/instructions retired/ { g = $1 / 1e9 / r } NR == 1 { c = ($3 + $5) / 2 } END { printf "%d", (g > c ? g : c) }' ".wtd/$1.time"; }
 c_load=$(cpu load); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
 for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
