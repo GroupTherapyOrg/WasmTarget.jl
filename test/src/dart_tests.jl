@@ -978,7 +978,10 @@ function _dart_unlocated(e::WasmTarget.RejectionError)::String
     if r isa WasmTarget.Unported
         local a = WasmTarget.parse_anchor(r.anchor)
         a === nothing && return "its Unported anchor $(repr(r.anchor)) is no anchor"
-        a.unit in (a.pin === :dart ? WasmTarget.DART_FILES : WasmTarget.LLVM_FILES) ||
+        # dart2wasm's own files, or the wasm runtime library of the same dart-lang/sdk pin (sdk/lib/_internal/wasm/,
+        # whose definitions a module calls: A52S1's ruling anchors a missing one there), or LLVM's
+        (a.unit in (a.pin === :dart ? WasmTarget.DART_FILES : WasmTarget.LLVM_FILES) ||
+         a.pin === :dart && startswith(a.unit, "sdk/lib/_internal/wasm/")) ||
             return "its Unported anchor names $(a.unit), in no pin table"
     elseif r isa WasmTarget.Unquarantined
         local m = match(r"^([\w./-]+?)(?::\d+)?(?::|\s|$)", r.row)
