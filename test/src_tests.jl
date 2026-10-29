@@ -16,18 +16,33 @@ const SRC_TEST_DIR = joinpath(@__DIR__, "src")
 const SRC_TESTS = sort!([relpath(joinpath(d, f), SRC_TEST_DIR)
                          for (d, _, fs) in walkdir(SRC_TEST_DIR) for f in fs if endswith(f, ".jl")])
 isempty(SRC_TESTS) && error("test/src/ holds no test file: the walk found nothing")
-# WT_SRC_SHARD="k/n" (dev/check.sh runs n shards side by side, one per performance core) takes shard k of a
-# longest-first split by file size, so the shards finish together; without it, every file runs
+# each file's cost, its seconds in the last green landing check (WT_SRC_COSTS, the common dir's wt-src-costs.tsv
+# dev/check.sh keeps): the shards split by measured cost, never by file size alone (a size split put 91 s in one
+# of four shards and 72 s in another, 2026-10-29); a file not yet measured costs its size at the measured files'
+# seconds per byte, and with nothing measured every file costs its size
+const SRC_COST = let p = get(ENV, "WT_SRC_COSTS", ""), c = Dict{String,Float64}()
+    if !isempty(p) && isfile(p)
+        for l in eachline(p)
+            local a = split(l, '\t')
+            length(a) == 2 && (local v = tryparse(Float64, a[2]); v === nothing || (c[String(a[1])] = v))
+        end
+    end
+    local measured = [f for f in SRC_TESTS if haskey(c, f)]
+    local rate = isempty(measured) ? 1.0 : sum(c[f] for f in measured) / max(1, sum(filesize(joinpath(SRC_TEST_DIR, f)) for f in measured))
+    Dict(f => get(c, f, filesize(joinpath(SRC_TEST_DIR, f)) * rate) for f in SRC_TESTS)
+end
+# WT_SRC_SHARD="k/n" (dev/check.sh runs n shards side by side on the performance cores) takes shard k of a
+# longest-first split by cost, so the shards finish together; without it, every file runs
 const SRC_SHARD = let sh = get(ENV, "WT_SRC_SHARD", "")
     if isempty(sh)
         SRC_TESTS
     else
         local k, n = parse.(Int, split(sh, '/'))
-        local load = zeros(Int, n)
+        local load = zeros(n)
         local mine = String[]
-        for f in sort(SRC_TESTS; by = f -> (-filesize(joinpath(SRC_TEST_DIR, f)), f))
+        for f in sort(SRC_TESTS; by = f -> (-SRC_COST[f], f))
             local j = argmin(load)
-            load[j] += filesize(joinpath(SRC_TEST_DIR, f))
+            load[j] += SRC_COST[f]
             j == k && push!(mine, f)
         end
         sort!(mine)
@@ -36,9 +51,14 @@ end
 # the file and case running now, for dev/check.sh's hard limit to name (WT_PROGRESS)
 const _WT_PROGRESS = get(ENV, "WT_PROGRESS", "")
 wt_progress(s::AbstractString) = isempty(_WT_PROGRESS) || write(_WT_PROGRESS, s)
+# each file's seconds go to WT_SRC_COSTS_OUT, for dev/check.sh to keep once the check is green; the first file of
+# a process is not measured, its seconds holding the process's own start (compiling WasmTarget's code from cold)
+const _WT_COSTS_OUT = get(ENV, "WT_SRC_COSTS_OUT", "")
 @testset verbose = true "src" begin
-    for f in SRC_SHARD
+    for (i, f) in enumerate(SRC_SHARD)
         wt_progress(f)
+        local t0 = time()
         @testset "$f" begin include(joinpath(SRC_TEST_DIR, f)) end
+        i > 1 && !isempty(_WT_COSTS_OUT) && open(io -> println(io, f, '\t', round(time() - t0; digits = 1)), _WT_COSTS_OUT, "a")
     end
 end

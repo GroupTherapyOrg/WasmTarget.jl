@@ -15,8 +15,8 @@ cd "$(dirname "$0")/.."
 # names the lane in WT_DEPOT_DIR, so its compiled images are the lane's, never a cold depot
 . dev/depot.sh; wt_depot_export "${WT_DEPOT_DIR:-$(pwd)}"
 # D31: the machine is shared (Dale's own jobs run beside the lanes) and has 4 performance cores; one
-# check runs at a time across every lane, its four processes (the ratchet and three shards of the src
-# tests) one per performance core, while every other Julia runs at background QoS on the efficiency
+# check runs at a time across every lane, its five processes (the ratchet and four shards of the src
+# tests) on the performance cores, while every other Julia runs at background QoS on the efficiency
 # cores (audit #53, A53E1: two checks at once spilled onto efficiency cores at half speed). The check
 # holds the one slot in the repository's common dir; a slot whose holder died is freed. The wait is reported and not counted in D14's band, which times the check itself.
 slots="$(git rev-parse --path-format=absolute --git-common-dir)/wt-check-slots"; mkdir -p "$slots"
@@ -57,10 +57,14 @@ fi
 # shared-DAG constant hashed in 2^40 steps and held a landing for 50 minutes)
 WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: today's slowest loaded check is ~170 s
 /usr/bin/time -l -o .wtd/ratchet.time julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
-SHARDS=3; tpids=""
+# four shards beside the ratchet (five processes on the four performance cores): each shard's instructions, which
+# D14's band judges, fall by a quarter of the suite's, and the suite grows with every port (the judged path read
+# 105-113 s of its 120-s edge at three shards, 2026-10-29 09:09); the wall clock rises a little, the judged path falls
+SHARDS=4; tpids=""
+costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-costs.tsv"; rm -f .wtd/src_costs.*
 for k in $(seq 1 $SHARDS); do
   : > ".wtd/progress.$k"
-  WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" /usr/bin/time -l -o ".wtd/src_tests.$k.time" \
+  WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_COSTS="$costs" WT_SRC_COSTS_OUT="$PWD/.wtd/src_costs.$k" /usr/bin/time -l -o ".wtd/src_tests.$k.time" \
     julia --project=. --startup-file=no test/src_tests.jl > ".wtd/src_tests.$k.out" 2>&1 & tpids="$tpids $!"
 done
 running() { kill -0 $rpid 2>/dev/null && return 0; for p in $tpids; do kill -0 $p 2>/dev/null && return 0; done; return 1; }
@@ -95,6 +99,9 @@ for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD" -- dev/CHARTER.md
 done
 echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $SHARDS reported" 
 [ $trc -eq 0 ] || { echo "check: src tests red"; grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 1; }
+# a green check's measured file costs replace the kept ones, file by file, for the next check's split
+cat .wtd/src_costs.* 2>/dev/null | awk -F'\t' 'NR == FNR { c[$1] = $2; next } { c[$1] = $2 } END { for (f in c) print f "\t" c[f] }' \
+  "$( [ -f "$costs" ] && echo "$costs" || echo /dev/null )" - | sort > "$costs.new" && mv "$costs.new" "$costs"
 # the models the change touches: a changed dev/formal/<Name>.tla or MC<Name>*.{tla,cfg} selects
 # every instance MC<Name>*.cfg of that model
 models=$(git diff --name-only "$base" HEAD -- dev/formal | sed -nE 's#^dev/formal/(MC)?([A-Z][A-Za-z0-9]*)\.(tla|cfg)$#\2#p' | sort -u)
