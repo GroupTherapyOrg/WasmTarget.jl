@@ -13,11 +13,25 @@ end
 # (src/julia/reject.jl), checked in every run, so a port's asserts are always enabled
 @parity "dart2wasm/lib/util.dart:21 compilerAssertsEnabled" compiler_asserts_enabled()::Bool = true
 
-@parity "dart2wasm/lib/util.dart:27 hasPragma" has_pragma(core_types::NoCounterpart, node::NoCounterpart, name::String)::Union{} =
-    reject!(Internal("dart2wasm/lib/util.dart:27 hasPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "has_pragma")
+# whether `node` carries the pragma `name`, Julia's declaration standing for it (getPragma); coreTypes is
+# dropped (the Kernel table's CoreTypes row)
+@parity "dart2wasm/lib/util.dart:27 hasPragma" has_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}, name::String)::Bool =
+    get_pragma(node, name; default_value = "") !== nothing
 
-@parity "dart2wasm/lib/util.dart:31 getPragma" get_pragma(core_types::NoCounterpart, node::NoCounterpart, name::String; default_value::Any = nothing)::Union{} =
-    reject!(Internal("dart2wasm/lib/util.dart:31 getPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "get_pragma")
+# the value of the pragma `name` on `node`: dart's annotation, Julia's declaration standing for it, or
+# nothing where `node` has none. A Julia declaration carries no value, so a declared one answers
+# `default_value`, as dart's pragma written without a value does: `@inline` is wasm:prefer-inline and
+# `@noinline` wasm:never-inline, on a method; no other pragma has a Julia declaration, and a field, a
+# binding, a class or a module declares none (the Kernel table's Annotatable row). The export and purity
+# pragmas carry what Julia records elsewhere and are read by their own readers (getWasmExportPragma,
+# hasWasmPureFunctionPragma). coreTypes is dropped (the CoreTypes row)
+@parity "dart2wasm/lib/util.dart:31 getPragma" function get_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}, name::String; default_value::Union{String,Bool,Nothing} = nothing)::Union{String,Bool,Nothing}
+    node isa Core.MethodInstance || return nothing
+    local method = node.def::Method
+    name == "wasm:prefer-inline" && return Core.Compiler.is_declared_inline(method) ? default_value : nothing
+    name == "wasm:never-inline" && return Core.Compiler.is_declared_noinline(method) ? default_value : nothing
+    return nothing
+end
 
 # dart's `wasm:import` pragma: no Julia method is an import, a foreign call being a host import
 # (dev/MARCH.md 1.F); coreTypes, Kernel's (the Kernel table's CoreTypes row), is dropped
@@ -36,13 +50,13 @@ end
 # dart's `wasm:weak-export` pragma: Julia has no weak export, every export being strong
 @parity "dart2wasm/lib/util.dart:103 hasWasmWeakExportPragma" has_wasm_weak_export_pragma(member::Core.MethodInstance)::Bool = get_wasm_weak_export_pragma(member) !== nothing
 
-# dart's `wasm:prefer-inline` pragma, Julia's `@inline` declaration: true when declared, else none
+# dart's `wasm:prefer-inline` pragma, Julia's `@inline` declaration (getPragma): true when declared, else none
 @parity "dart2wasm/lib/util.dart:107 getWasmPreferInlinePragma" get_wasm_prefer_inline_pragma(member::Core.MethodInstance)::Union{Bool,Nothing} =
-    Core.Compiler.is_declared_inline(member.def::Method) ? true : nothing
+    get_pragma(member, "wasm:prefer-inline"; default_value = true)
 
-# dart's `wasm:never-inline` pragma, Julia's `@noinline` declaration: true when declared, else none
+# dart's `wasm:never-inline` pragma, Julia's `@noinline` declaration (getPragma): true when declared, else none
 @parity "dart2wasm/lib/util.dart:116 getWasmNeverInlinePragma" get_wasm_never_inline_pragma(member::Core.MethodInstance)::Union{Bool,Nothing} =
-    Core.Compiler.is_declared_noinline(member.def::Method) ? true : nothing
+    get_pragma(member, "wasm:never-inline"; default_value = true)
 
 # dart's `wasm:export` pragma, its value or the member's name: a `Base.@ccallable` method's, the C
 # name @ccallable records, else its function's name; the program's entry, its function's name, as
@@ -62,11 +76,14 @@ end
 @parity "dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma" has_wasm_pure_function_pragma(member::Core.MethodInstance; component::NirWorld)::Bool =
     Core.Compiler.is_removable_if_unused(Core.Compiler.decode_effects(nir_body_of(component, member).ci.ipo_purity_bits))
 
-@parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" add_wasm_entry_point_pragma(node::NoCounterpart, core_types::NoCounterpart)::Union{} =
-    reject!(Internal("dart2wasm/lib/util.dart:154 addWasmEntryPointPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "add_wasm_entry_point_pragma")
+# dart adds an annotation to a Kernel node in its transforms; a Julia method's declarations are fixed
+# by its source, and a runtime root is kept by RUNTIME_ENTRY_POINTS (src/julia/subset.jl), so no
+# transform adds one. coreTypes is dropped (the CoreTypes row)
+@parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" add_wasm_entry_point_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module})::Union{} =
+    reject!(Internal("dart2wasm/lib/util.dart:154 addWasmEntryPointPragma: an entry-point pragma added to $node; a Julia method's declarations are its source's, a runtime root kept by RUNTIME_ENTRY_POINTS"), "add_wasm_entry_point_pragma")
 
-@parity "dart2wasm/lib/util.dart:157 addPragma" add_pragma(node::NoCounterpart, pragma_name::String, core_types::NoCounterpart; value::Union{Nothing,NirConst} = nothing)::Union{} =
-    reject!(Internal("dart2wasm/lib/util.dart:157 addPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "add_pragma")
+@parity "dart2wasm/lib/util.dart:157 addPragma" add_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}, pragma_name::String; value::Union{Nothing,Union{NirConst,Dart2Wasm.DummyValueConstant}} = nothing)::Union{} =
+    reject!(Internal("dart2wasm/lib/util.dart:157 addPragma: the pragma $pragma_name added to $node; a Julia method's declarations are its source's, which no transform adds to"), "add_pragma")
 
 # dart's `>>>=` is the unsigned shift, Julia's `>>>`
 @parity "dart2wasm/lib/util.dart:172 _intToLittleEndianBytes" function _int_to_little_endian_bytes(i::Int64)::Vector{UInt8}

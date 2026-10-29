@@ -22,6 +22,9 @@ Julia's answers stand in their place: no member is an import (a foreign call is 
 dev/MARCH.md 1.F), and the exports are the program's entry (dart's main, juliac's root) and every
 method `Base.@ccallable` declared, each a strong export named by its function. So the namer holds the
 closed world, whose entry it names, where dart holds `coreTypes`.
+
+Fields with no Julia counterpart: `coreTypes` :72 — Kernel's core types (the Kernel table's CoreTypes
+row); the closed world stands in its place.
 """
 @parity "dart2wasm/lib/namer.dart:70 _ExternalMemberNamer" struct _ExternalMemberNamer
     _export_namer::Namer
@@ -36,6 +39,9 @@ minified: the module they import from, `_` minified and `dart2wasm` otherwise, a
 member. dart's helpers are the members `JsInteropMemberData.fromMember` reads JS interop annotations
 from (`coreTypes`, dropped: the Kernel table's Annotatable row); a Julia method carries none, so no
 member is a helper and no name is given.
+
+Fields with no Julia counterpart: `coreTypes` :107 — Kernel's core types (the Kernel table's CoreTypes
+row), read only by JsInteropMemberData.fromMember.
 """
 @parity "dart2wasm/lib/namer.dart:105 _InteropHelperMemberNamer" struct _InteropHelperMemberNamer
     _interop_helper_namer::Namer

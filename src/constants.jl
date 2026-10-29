@@ -446,13 +446,11 @@ end
 end
 
 """dart's AbstractFunctionType type constant: Julia's Function is an abstract DataType, its type object an interface type's."""
-@parity "dart2wasm/lib/constants.dart:512 Constants._makeAbstractFunctionTypeConstant" function _make_abstract_function_type_constant(self::Constants, type_::Type)::NirConst
-    type_ isa DataType || reject!(Internal("dart2wasm/lib/constants.dart:512 Constants._makeAbstractFunctionTypeConstant: $type_ is no DataType"), "Constants._makeAbstractFunctionTypeConstant")
-    return _make_interface_type_constant(self, type_)
-end
+@parity "dart2wasm/lib/constants.dart:512 Constants._makeAbstractFunctionTypeConstant" _make_abstract_function_type_constant(self::Constants, type_::DataType)::NirConst =
+    _make_interface_type_constant(self, type_)
 
 """dart's Record class type: Julia's `Tuple`, lowered as every type value is (`_lowerTypeConstantImpl`)."""
-@parity "dart2wasm/lib/constants.dart:521 Constants._makeAbstractRecordTypeConstant" _make_abstract_record_type_constant(self::Constants, type_::Type)::NirConst = _lower_type_constant_impl(self, type_)
+@parity "dart2wasm/lib/constants.dart:521 Constants._makeAbstractRecordTypeConstant" _make_abstract_record_type_constant(self::Constants, type_::DataType)::NirConst = _lower_type_constant_impl(self, type_)
 
 @parity "dart2wasm/lib/constants.dart:530 Constants._makeBottomTypeConstant" function _make_bottom_type_constant(self::Constants, type_::Type)::NirConst
     type_ === Union{} || reject!(Internal("dart2wasm/lib/constants.dart:531 Constants._makeBottomTypeConstant: $type_ is no bottom type"), "Constants._makeBottomTypeConstant")

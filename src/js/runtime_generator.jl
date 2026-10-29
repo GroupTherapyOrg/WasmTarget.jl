@@ -4,9 +4,10 @@
 """
 Writes the JS runtime that loads and instantiates the compiled modules: the runtime blob template
 filled with the program's JS methods, its internalized strings and the string builtins it needs.
-dart's `_coreTypes` serves only `JsInteropMemberData.fromMember`, which reads a member's JS interop
-annotations; a Julia method carries none (the Kernel table's Annotatable row, src/namer.jl), so it is
-dropped.
+
+Fields with no Julia counterpart: `_coreTypes` :55 — it serves only `JsInteropMemberData.fromMember`,
+which reads a member's JS interop annotations, and a Julia method carries none (the Kernel table's
+CoreTypes and Annotatable rows, src/namer.jl).
 """
 @parity "dart2wasm/lib/js/runtime_generator.dart:53 RuntimeFinalizer" struct RuntimeFinalizer
     _interop_member_namer::Dart2Wasm.InteropMemberNamer
