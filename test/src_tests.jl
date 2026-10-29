@@ -1,5 +1,16 @@
 # Every test of ported code: each file under test/src/, found by walking the directory (dev/check.sh).
 # A lane adds a test by adding its file there; no list is shared between lanes to conflict on.
+# the whole suite runs on the performance cores only as a landing's check (dev/check.sh, under the landing
+# lock, CHECK_LANDING=1); run by hand it refuses unless at background QoS (taskpolicy -b: efficiency cores), so a
+# lane's run cannot take the cores the landing check needs (wt3-constants, 08:07 and 08:12: two hand runs at
+# normal priority beside a check; told to stop once, it started again)
+# (the guard reads this Mac's scheduler priority: 4 at background QoS, 31 normal; it holds for the file run as a
+# program, never for test/runtests.jl's include, the full matrix at clause closure on CI's runners)
+if Sys.isapple() && abspath(PROGRAM_FILE) == (@__FILE__) && get(ENV, "CHECK_LANDING", "") != "1" &&
+   parse(Int, strip(read(`ps -o pri= -p $(getpid())`, String))) > 10
+    error("test/src_tests.jl runs on the performance cores only as a landing's check: run it under " *
+          "`taskpolicy -b`, run one file of test/src/, or commit and let dev/autoship.sh check it")
+end
 using Test, WasmTarget
 const SRC_TEST_DIR = joinpath(@__DIR__, "src")
 const SRC_TESTS = sort!([relpath(joinpath(d, f), SRC_TEST_DIR)
