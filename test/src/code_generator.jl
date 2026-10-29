@@ -432,15 +432,33 @@ end
             W.compile(f, (Int,); optimize = false)
         catch e
             e isa W.RejectionError || rethrow()
-            # located; an allocation leaving a field undefined rejects at the runtime's throw of a local read
-            # before its assignment, never compiling to a null a later read takes for `nothing` (D9)
+            # located; a Core.Box's contents::Any admits `nothing`, so its undefined state would share the
+            # null: the allocation rejects, never a null a later read takes for `nothing` (D9)
             @test !isempty(e.at)
             occursin("left undefined", sprint(showerror, e)) &&
-                @test e.rejection isa W.Unported && occursin("_throwLateErrorLocalNI", e.rejection.anchor)
+                @test e.rejection isa W.Unquarantined && occursin("share the null", e.rejection.row)
             nothing
         end
         bytes === nothing || queue_native!("$(nameof(f)) ", bytes, f, [(3,), (0,)])
     end
+end
+
+# a struct whose constructor leaves a reference field undefined: Julia's NULL, read as UndefRefError
+module UndefFieldCases
+mutable struct Node
+    v::Int
+    next::Node
+    Node(v::Int) = new(v)
+end
+linked(x::Int) = (n = Node(x); n.next = Node(x + 1); n.next.v)
+unlinked(x::Int) = Node(x).next.v
+end
+@testset "code_generator.dart: a field an allocation leaves undefined, null until set, its read Julia's UndefRefError" begin
+    @test Core.Compiler.datatype_min_ninitialized(UndefFieldCases.Node) == 1
+    # set before it is read: the value; read while undefined: UndefRefError, a wasm exception, never a trap
+    queue_native!("linked ", W.compile(UndefFieldCases.linked, (Int,); optimize = false), UndefFieldCases.linked, [(4,), (-1,)])
+    @test (try; UndefFieldCases.unlinked(4); nothing; catch err; err; end) isa UndefRefError
+    push!(NATIVE_RUNS, WTRunner.RunCase("unlinked(4) throws ", W.compile(UndefFieldCases.unlinked, (Int,); optimize = false), (4,), WTRunner.Throws(UndefRefError)))
 end
 
 @testset "code_generator.dart: the switch statement's info, whose constructors no NIR reaches" begin

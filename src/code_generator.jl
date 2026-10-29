@@ -1344,8 +1344,8 @@ end
 # the class's allocator, whose body (ConstructorAllocatorCodeGenerator.generateConstructorAllocator,
 # its path with no body arguments) pushes the object header and the field values and allocates; a
 # Julia struct has no initializer list or constructor body to call, so that body is the invocation:
-# each operand after the type the value of the field in Julia's order. An allocation leaving fields
-# undefined (fewer operands than fields) rejects, located.
+# each operand after the type the value of the field in Julia's order. A field an allocation leaves
+# undefined (fewer operands than fields) holds the null reference, which a read tests (_directGet).
 @parity "dart2wasm/lib/code_generator.dart:1637 AstCodeGenerator.visitConstructorInvocation" function visit_constructor_invocation(self::AstCodeGenerator, node::NirNew, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/code_generator.dart:1637 AstCodeGenerator.visitConstructorInvocation"
     local intrinsic_result = generate_constructor_intrinsic(self.intrinsifier[], node)
@@ -1367,27 +1367,36 @@ end
     local fields = class_instance_fields(cls, at)
     # Julia's `new` may pass fewer values than the struct has fields, never more, and never fewer than
     # the fields its type requires initialized (Core.Compiler.datatype_min_ninitialized): an allocation
-    # outside those bounds is none Julia's IR produces, an Internal. Within them, Julia's closure
-    # conversion allocates Core.Box() for a variable a closure captures before it is assigned; lowering
-    # guards that variable's read with isdefined, so a read before the assignment is Julia's
-    # UndefVarError, and an ordinary struct's field read while undefined is Julia's UndefRefError, each
-    # dart's late local read before its initializer (_throwLateErrorLocalNI). Until the runtime's throw is
-    # ported, such an allocation rejects there, located: a null in the field would read as `nothing` (the
-    # null of a type that admits it), a plausible value past the gap (D9; march-monitor-a, 00:41, on
-    # bd0b473a; audit A59S1)
+    # outside those bounds is none Julia's IR produces, an Internal. Within them, each field left
+    # undefined is a reference past that count, nullable by translateTypeOfField's rule, so it holds the
+    # null reference, Julia's NULL, and a read of it raises Julia's UndefRefError (_directGet; Julia's
+    # closure conversion guards a Core.Box variable's read with isdefined, its UndefVarError). A field
+    # whose type admits `nothing` would hold `nothing` as that same null, so an undefined one is no
+    # value a read can tell from `nothing`: it rejects, located, never a null a read takes for nothing
+    # (D9; audit A59S1). An isbits field left undefined holds bits Julia leaves arbitrary: no reference
+    # to leave null, located too
     local given = length(node.args) - 1
     given <= length(fields) ||
         reject!(Internal("$at: an allocation of $cls passing $given values to its $(length(fields)) fields, which Julia's IR never produces"), "$(self.enclosing_member)")
     given >= Core.Compiler.datatype_min_ninitialized(cls) ||
         reject!(Internal("$at: an allocation of $cls passing $given values where its type requires $(Core.Compiler.datatype_min_ninitialized(cls)) initialized, which Julia's IR never produces"), "$(self.enclosing_member)")
-    given == length(fields) ||
-        reject!(Unported("sdk/lib/_internal/wasm/common/error_utils.dart:188 _throwLateErrorLocalNI"),
-            "$(self.enclosing_member): an allocation of $cls leaving $(length(fields) - given) of its fields undefined, whose read before assignment is Julia's UndefVarError for a Core.Box and UndefRefError for another struct's field")
+    for field in fields[given+1:end]
+        local storage = WasmBuilder.unpacked(info.struct_.fields[self.translator.field_index[field] + 1].type)
+        storage isa WasmBuilder.IR.RefType && storage.nullable ||
+            reject!(Unquarantined("src/code_generator.jl visitConstructorInvocation: the isbits field $(field.name) of $cls left undefined, whose bits Julia leaves arbitrary"), "$(self.enclosing_member)")
+        Nothing <: field.type &&
+            reject!(Unquarantined("src/code_generator.jl visitConstructorInvocation: the field $(field.name)::$(field.type) of $cls left undefined, whose undefined state and `nothing` would share the null reference"), "$(self.enclosing_member)")
+    end
     WasmBuilder.comment(b, "Allocate wasm struct optimized")
     push_object_header_fields(b, self.translator, info)
     for (k, field) in enumerate(fields)
         local field_index = self.translator.field_index[field]
-        translate_expression(self, node.args[k + 1], WasmBuilder.unpacked(info.struct_.fields[field_index + 1].type))
+        local storage = WasmBuilder.unpacked(info.struct_.fields[field_index + 1].type)
+        if k <= given
+            translate_expression(self, node.args[k + 1], storage)
+        else
+            WasmBuilder.ref_null(b, (storage::WasmBuilder.IR.RefType).heap_type)
+        end
     end
     WasmBuilder.struct_new(b, info.struct_)
     # Mark the class as allocated now, which enqueues those methods of the class that could be
@@ -1604,6 +1613,23 @@ end
     local receiver_type = info.non_nullable_type
     local storage = info.struct_.fields[field_index + 1].type
     local field_type = WasmBuilder.unpacked(storage)
+    # a reference field past the count Julia's type requires initialized may be undefined, the null an
+    # allocation left (visitConstructorInvocation), unless its type admits `nothing`, whose null it is:
+    # the read raises Julia's UndefRefError there (jl_undefref_exception, the runtime's
+    # throw_undef_ref_error), and answers the non-nullable field otherwise
+    if target.index > Core.Compiler.datatype_min_ninitialized(target.cls) && field_type isa WasmBuilder.IR.RefType &&
+            field_type.nullable && !(Nothing <: target.type)
+        local b = self.b[]
+        local non_null = WasmBuilder.with_nullability(field_type, false)
+        local defined = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[non_null])
+        translate_expression(self, receiver, receiver_type)
+        WasmBuilder.struct_get(b, info.struct_, field_index)
+        WasmBuilder.br_on_non_null(b, defined)
+        call(self, nir_runtime_member(self.translator.component, throw_undef_ref_error, "$(self.enclosing_member): a read of $(target.cls).$(target.name)"))
+        WasmBuilder.unreachable(b)
+        WasmBuilder.var"end"(b)
+        return non_null
+    end
     translate_expression(self, receiver, receiver_type)
     if storage isa WasmBuilder.IR.PackedType
         target.type <: Signed ? WasmBuilder.struct_get_s(self.b[], info.struct_, field_index) : WasmBuilder.struct_get_u(self.b[], info.struct_, field_index)

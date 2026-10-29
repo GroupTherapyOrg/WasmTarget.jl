@@ -87,7 +87,7 @@ import ..MachineFunction, ..MachineInstr, ..MOBlock, ..MOImm, ..BLOCK, ..LOOP, .
        ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..TRY_TABLE, ..END_TRY_TABLE, ..CATCH, ..UNREACHABLE, ..CATCH_ALL_REF, ..THROW_REF, ..BLOCK_TYPE_EXNREF, ..WASM_OPCODE_CATCH, ..WASM_OPCODE_CATCH_ALL_REF, ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..BLOCK_TYPE_CATCH, ..is_barrier
 # what the code generator reads from a body (src/julia/nir.jl)
 # the runtime's methods in the closed world (src/julia/runtime/rtutils.jl), the runtime itself and the exception tag's export name
-import ..nir_runtime_member, ..Runtime, ..throw_divide_error, ..throw_bounds_error, ..EXCEPTION_TAG_EXPORT
+import ..nir_runtime_member, ..Runtime, ..throw_divide_error, ..throw_bounds_error, ..throw_undef_ref_error, ..EXCEPTION_TAG_EXPORT
 import ..TreeNode_no_offset, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
        ..nir_invoke_target, ..nir_callee, ..nir_value_type, ..nir_const_type, ..nir_tuple_type, ..nir_binding_is_constant, ..nir_carries_data, ..nir_binding_value
 import ..WasmBuilder

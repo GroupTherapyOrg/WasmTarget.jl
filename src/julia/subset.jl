@@ -170,10 +170,12 @@ end
 The runtime's entry points, each `(module path, name, argument types, demand)`: a method the code
 generator calls where Julia raises, kept in the closed world beside the program whenever the program
 holds the IR form `demand` names (`_demanded`): `:throw`, a call of Julia's throw (dart2wasm's
-visitThrow calls errors_patch.dart's `_throwWithCurrentStackTrace`), and `:checked_division`, a
-checked integer division or remainder, which raises DivideError at a zero divisor. Each demanded one
-is queued for Julia's one trim inference beside the entry (`check_subset`), so its CodeInstance is in
-the closed world and its NirBody in the NIR.
+visitThrow calls errors_patch.dart's `_throwWithCurrentStackTrace`), `:checked_division`, a
+checked integer division or remainder, which raises DivideError at a zero divisor, `:svec_ref`, a
+read of a SimpleVector's element, which raises BoundsError out of range, and `:undefined_field`, an
+allocation leaving a field undefined, whose read raises UndefRefError. Each demanded one is queued for
+Julia's one trim inference beside the entry (`check_subset`), so its CodeInstance is in the closed
+world and its NirBody in the NIR.
 
 precedent(dart: `@pragma("wasm:entry-point")`, which TFA keeps; juliac: the ccallables the entry
 reaches, queued as roots beside main, as check_subset queues them, `_reached_ccallables`). Julia's
@@ -184,27 +186,44 @@ checked to name one method when the package loads (check_runtime_entry_points).
     ((:Runtime,), :Error__throw_with_current_stack_trace, (Any,), :throw),
     ((), :throw_divide_error, (), :checked_division),
     ((), :throw_bounds_error, (Any, Int), :svec_ref),
+    ((), :throw_undef_ref_error, (), :undefined_field),
 )
 
-# the IR forms a root's demand names, each a builtin or intrinsic a statement calls
-@quarantine "a runtime root is demanded by the Julia builtin or intrinsic whose raise it lowers" Core.Intrinsics.checked_sdiv_int const RUNTIME_DEMANDS = Dict{Symbol,Tuple{Vararg{Core.Builtin}}}(
-    :throw => (Core.throw,),
-    :checked_division => (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
-                          Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int),
-    :svec_ref => (Core._svec_ref,),
+# a statement operand's value: a GlobalRef's binding (nothing when unbound) or the operand itself, as
+# Julia's optimized IR writes a builtin callee or an allocation's type
+@quarantine "Julia's optimized IR names a builtin or a type by its value or its GlobalRef" Core.GlobalRef _ir_value(x) =
+    x isa GlobalRef ? (isdefined(x.mod, x.name) ? getglobal(x.mod, x.name) : nothing) : x
+
+# whether a statement `Expr(:call, f, ...)` calls one of `fs`, a builtin or intrinsic
+@quarantine "a builtin call is read from the inferred CodeInfo's statements, as Julia writes them" Core.Builtin function _calls_builtin(st, fs::Tuple{Vararg{Core.Builtin}})::Bool
+    Meta.isexpr(st, :call) && !isempty(st.args) || return false
+    local v = _ir_value(st.args[1])
+    return any(f -> v === f, fs)
+end
+
+# whether a statement `Expr(:new, T, fields...)` passes fewer values than T has fields, leaving a field
+# undefined, whose read raises UndefRefError
+@quarantine "Julia's optimized IR allocates with Expr(:new), its operand count the fields it initializes" Base.fieldcount function _leaves_field_undefined(st)::Bool
+    Meta.isexpr(st, :new) && !isempty(st.args) || return false
+    local T = _ir_value(st.args[1])
+    return T isa DataType && isconcretetype(T) && length(st.args) - 1 < fieldcount(T)
+end
+
+# the IR forms a root's demand names, each a test of one statement: a call of a builtin or intrinsic
+# whose raise the root lowers, or an allocation leaving a field undefined
+@quarantine "a runtime root is demanded by the Julia builtin or intrinsic whose raise it lowers" Core.Intrinsics.checked_sdiv_int const RUNTIME_DEMANDS = Dict{Symbol,Function}(
+    :throw => st -> _calls_builtin(st, (Core.throw,)),
+    :checked_division => st -> _calls_builtin(st, (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
+                                                   Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int)),
+    :svec_ref => st -> _calls_builtin(st, (Core._svec_ref,)),
+    :undefined_field => _leaves_field_undefined,
 )
 
-# whether an inferred body of `codeinfos` calls one of `fs`: a statement `Expr(:call, f, ...)` whose
-# callee is one of them, a GlobalRef or the value itself, as Julia's optimized IR writes a builtin call
-@quarantine "a builtin call is read from the inferred CodeInfo's statements, as Julia writes them" Core.CodeInfo function _demanded(codeinfos::Vector{Any}, fs::Tuple{Vararg{Core.Builtin}})::Bool
+# whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts
+@quarantine "a demanded form is read from the inferred CodeInfo's statements, as Julia writes them" Core.CodeInfo function _demanded(codeinfos::Vector{Any}, holds::Function)::Bool
     for x in codeinfos
         x isa Core.CodeInfo || continue
-        for st in x.code
-            Meta.isexpr(st, :call) && !isempty(st.args) || continue
-            local c = st.args[1]
-            local v = c isa GlobalRef ? (isdefined(c.mod, c.name) ? getglobal(c.mod, c.name) : nothing) : c
-            any(f -> v === f, fs) && return true
-        end
+        any(holds, x.code) && return true
     end
     return false
 end
