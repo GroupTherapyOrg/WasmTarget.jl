@@ -94,6 +94,12 @@ end
     for (T, w) in ((Int8, IR.PackedType_i8), (UInt8, IR.PackedType_i8), (Int16, IR.PackedType_i16), (UInt16, IR.PackedType_i16))
         @test D.translate_storage_type(t, T) == w && D.translate_type(t, T) == IR.NumType_i32
     end
+    # dart:_wasm's storage classes, never boxed: their builtin types even with unbox off, the element
+    # type of an array of one (a Memory's data)
+    for (T, w) in ((W.WasmI8, IR.PackedType_i8), (W.WasmI32, IR.NumType_i32), (W.WasmI64, IR.NumType_i64),
+                   (W.WasmF32, IR.NumType_f32), (W.WasmF64, IR.NumType_f64))
+        @test D.translate_storage_type(t, T; unbox = false) == w
+    end
     # a primitive class with no wasm representation rejects, located
     for T in (Int128, Float16, Ptr{Nothing})
         local e = try; D.translate_type(t, T); nothing; catch x; x; end

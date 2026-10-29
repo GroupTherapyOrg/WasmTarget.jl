@@ -63,6 +63,77 @@ storage type is named apart from it.
     WasmI8(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI8 has no Julia value; it names a packed array's element type"), "WasmI8")
 end
 
+"""
+    WasmI32
+
+dart:_wasm's 32-bit wasm integer (sdk/lib/_wasm/wasm_types.dart, `class WasmI32`), the element type of a wasm array
+of the i32s, stored unboxed: a wasm type, never boxed, so translateStorageType gives its builtin type,
+the i32, even where it boxes a Julia primitive class. A `Memory` of Int32 and UInt32 holds its elements in a
+`WasmArray` of it (src/julia/classes.jl `_memory_element_storage`). No Julia value has the type.
+
+precedent(dart: dart:_wasm's WasmI32, a storage type of wasm arrays; rust: a primitive in a slice).
+Julia's differs: its Int32 and UInt32 are classes of their own, boxed where they flow into `Any`, so the unboxed
+storage type is named apart from them.
+"""
+@quarantine "dart:_wasm's WasmI32 is a storage type of dart's runtime; Julia's Int32 and UInt32 are boxable classes, so an array's element type names the unboxed i32" Core.Union struct WasmI32
+    _never::Union{}
+    WasmI32(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI32 has no Julia value; it names an array's element type"), "WasmI32")
+end
+
+"""
+    WasmI64
+
+dart:_wasm's 64-bit wasm integer (sdk/lib/_wasm/wasm_types.dart, `class WasmI64`), the element type of a wasm array
+of the i64s, stored unboxed: a wasm type, never boxed, so translateStorageType gives its builtin type,
+the i64, even where it boxes a Julia primitive class. A `Memory` of Int64 and UInt64 holds its elements in a
+`WasmArray` of it (src/julia/classes.jl `_memory_element_storage`). No Julia value has the type.
+
+precedent(dart: dart:_wasm's WasmI64, a storage type of wasm arrays; rust: a primitive in a slice).
+Julia's differs: its Int64 and UInt64 are classes of their own, boxed where they flow into `Any`, so the unboxed
+storage type is named apart from them.
+"""
+@quarantine "dart:_wasm's WasmI64 is a storage type of dart's runtime; Julia's Int64 and UInt64 are boxable classes, so an array's element type names the unboxed i64" Core.Union struct WasmI64
+    _never::Union{}
+    WasmI64(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI64 has no Julia value; it names an array's element type"), "WasmI64")
+end
+
+"""
+    WasmF32
+
+dart:_wasm's 32-bit wasm float (sdk/lib/_wasm/wasm_types.dart, `class WasmF32`), the element type of a wasm array
+of the f32s, stored unboxed: a wasm type, never boxed, so translateStorageType gives its builtin type,
+the f32, even where it boxes a Julia primitive class. A `Memory` of Float32 holds its elements in a
+`WasmArray` of it (src/julia/classes.jl `_memory_element_storage`). No Julia value has the type.
+
+precedent(dart: dart:_wasm's WasmF32, a storage type of wasm arrays; rust: a primitive in a slice).
+Julia's differs: its Float32 are classes of their own, boxed where they flow into `Any`, so the unboxed
+storage type is named apart from them.
+"""
+@quarantine "dart:_wasm's WasmF32 is a storage type of dart's runtime; Julia's Float32 are boxable classes, so an array's element type names the unboxed f32" Core.Union struct WasmF32
+    _never::Union{}
+    WasmF32(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmF32 has no Julia value; it names an array's element type"), "WasmF32")
+end
+
+"""
+    WasmF64
+
+dart:_wasm's 64-bit wasm float (sdk/lib/_wasm/wasm_types.dart, `class WasmF64`), the element type of a wasm array
+of the f64s, stored unboxed: a wasm type, never boxed, so translateStorageType gives its builtin type,
+the f64, even where it boxes a Julia primitive class. A `Memory` of Float64 holds its elements in a
+`WasmArray` of it (src/julia/classes.jl `_memory_element_storage`). No Julia value has the type.
+
+precedent(dart: dart:_wasm's WasmF64, a storage type of wasm arrays; rust: a primitive in a slice).
+Julia's differs: its Float64 are classes of their own, boxed where they flow into `Any`, so the unboxed
+storage type is named apart from them.
+"""
+@quarantine "dart:_wasm's WasmF64 is a storage type of dart's runtime; Julia's Float64 are boxable classes, so an array's element type names the unboxed f64" Core.Union struct WasmF64
+    _never::Union{}
+    WasmF64(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmF64 has no Julia value; it names an array's element type"), "WasmF64")
+end
+
+# dart:_wasm's storage classes this file defines, each never boxed (translateStorageType)
+@quarantine "dart:_wasm's storage classes are the wasm types translateStorageType never boxes" Core.Tuple const WASM_STORAGE_TYPES::Tuple{Vararg{DataType}} = (WasmI8, WasmI32, WasmI64, WasmF32, WasmF64)
+
 # ---- a String's data, read and written as dart:_wasm reads and writes a WasmArray --------------------
 # A String is its class's struct, the header and then `_data`, a wasm array of its UTF-8 code units
 # (src/julia/classes.jl _string_instance_fields). dart's string patches read and write their data
