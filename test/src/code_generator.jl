@@ -689,7 +689,13 @@ end
     # MethodError throw, never dart's dynamic invocation: rejected at the throw's port, not at the
     # intrinsifier's
     local e = rejection(() -> D.visit_static_invocation(g, W.NirCall(W.NirValue[W.NirConst(Core.Const(sin)), W.NirArgument(2)]), IR.NumType_f64))
-    @test e.rejection isa W.Unported && occursin("Error._throwWithCurrentStackTrace", e.rejection.anchor) && occursin("MethodError", e.at)
+    @test e.rejection isa W.Unported && occursin("Error._throwWithCurrentStackTrace", e.rejection.anchor) && occursin("proved throws", e.at)
+    # a definition only a node Julia has no counterpart for reaches rejects by its Kernel row: Internal at
+    # the definition, naming the row and its reason, the one source of that text
+    local k = rejection(() -> W.no_counterpart_rejection("Let", "dart2wasm/lib/code_generator.dart:1603 AstCodeGenerator.visitLet", "at"))
+    @test k.rejection isa W.Internal && occursin("AstCodeGenerator.visitLet: the Kernel table's Let row, no counterpart", k.rejection.site) &&
+          occursin("visit_block", k.rejection.site)
+    @test rejection(() -> W.no_counterpart_rejection("ReturnStatement", "a", "b")).rejection isa W.Internal
     # Julia's throw(x), Kernel's Throw: the exception, then the runtime's throw, not ported: Unported there
     local t = rejection(() -> W.compile(ThrowCases.thr, (Int64,); optimize = false))
     @test t.rejection isa W.Unported && t.rejection.anchor == "sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace" &&

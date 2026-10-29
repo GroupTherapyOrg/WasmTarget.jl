@@ -139,11 +139,11 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "DynamicSet") => ("NoCounterpart", "no counterpart: outside the strict subset, Julia's trim verifier rejects a dynamic call (D32)"),
     ("kernel/lib/ast.dart", "VariableSet") => ("NoCounterpart", "no counterpart: Julia's optimized IR is SSA, a variable is never assigned"),
     ("kernel/lib/ast.dart", "InstanceTearOff") => ("NoCounterpart", "no counterpart: a Julia method is bound to no instance"),
-    ("kernel/lib/ast.dart", "Let") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis"),
-    ("kernel/lib/ast.dart", "BlockExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis"),
-    ("kernel/lib/ast.dart", "LogicalExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis"),
-    ("kernel/lib/ast.dart", "ConditionalExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis"),
-    ("kernel/lib/ast.dart", "FileUriExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis"),
+    ("kernel/lib/ast.dart", "Let") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "BlockExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "LogicalExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "ConditionalExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "FileUriExpression") => ("NoCounterpart", "no counterpart: Julia's lowering flattens it into statements, branches and phis, which visit_block structures by LLVM's CFGStackify port"),
     ("kernel/lib/ast.dart", "IfStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"),
     ("kernel/lib/ast.dart", "ReturnStatement") => ("NirReturn", "a return is Julia's ReturnNode"),
     ("kernel/lib/ast.dart", "BreakStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"),
@@ -157,15 +157,15 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "WhileStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"),
     ("kernel/lib/ast.dart", "DoStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"),
     ("kernel/lib/ast.dart", "ForStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"),
-    ("kernel/lib/ast.dart", "ForInStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
+    ("kernel/lib/ast.dart", "ForInStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot, which visit_block structures by LLVM's CFGStackify port"),
     ("kernel/lib/ast.dart", "SwitchStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"),
-    ("kernel/lib/ast.dart", "SwitchCase") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "PatternSwitchStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "PatternVariableDeclaration") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "IfCaseStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "AssertStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "AssertBlock") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
-    ("kernel/lib/ast.dart", "AuxiliaryStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot"),
+    ("kernel/lib/ast.dart", "SwitchCase") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "PatternSwitchStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "PatternVariableDeclaration") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "IfCaseStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "AssertStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "AssertBlock") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot, which visit_block structures by LLVM's CFGStackify port"),
+    ("kernel/lib/ast.dart", "AuxiliaryStatement") => ("NoCounterpart", "no counterpart: Julia's IR is a flat statement list, structured control flow its GotoNode and GotoIfNot, which visit_block structures by LLVM's CFGStackify port"),
     ("kernel/lib/ast.dart", "FieldInitializer") => ("NoCounterpart", "no counterpart: a Julia inner constructor has no initializer list; its new() is NirNew"),
     ("kernel/lib/ast.dart", "SuperInitializer") => ("NoCounterpart", "no counterpart: a Julia inner constructor has no initializer list; its new() is NirNew"),
     ("kernel/lib/ast.dart", "RedirectingInitializer") => ("NoCounterpart", "no counterpart: a Julia inner constructor has no initializer list; its new() is NirNew"),
@@ -192,6 +192,22 @@ a NIR kind, or none.
     ("dart2wasm/lib/io_util.dart", "CompilerPhaseInputOutputManager") => ("NoCounterpart", "no counterpart: the command-line driver's files; WT is a library"),
 
 )
+
+"""
+    no_counterpart_rejection(name, anchor, at)
+
+The rejection of a dart definition that takes Kernel's `name` node, whose row in KERNEL_TYPES is
+NoCounterpart: no NIR value reaches it (NoCounterpart is uninhabited), so reaching it is WasmTarget's
+own defect, an Internal at the definition's `anchor`, naming the row and its reason, the one source of
+that text.
+"""
+@quarantine "a definition only a node Julia has no counterpart for reaches names its Kernel row, the one source of why" Base.findfirst function no_counterpart_rejection(name::String, anchor::String, at::String)::Union{}
+    local i = findfirst(p -> p.first[1] == "kernel/lib/ast.dart" && p.first[2] == name, KERNEL_TYPES)
+    i === nothing && reject!(Internal("src/julia/kernel.jl no_counterpart_rejection: no Kernel row for $name"), at)
+    local (counterpart, why) = KERNEL_TYPES[i].second
+    counterpart == "NoCounterpart" || reject!(Internal("src/julia/kernel.jl no_counterpart_rejection: the Kernel row for $name is $counterpart"), at)
+    reject!(Internal("$anchor: the Kernel table's $name row, $why"), at)
+end
 
 # Two rows a port spells by their Kernel names (param_info.dart's default values, types.dart's
 # substitution tables), bound here, the table's file, so the table is the one place they are named.

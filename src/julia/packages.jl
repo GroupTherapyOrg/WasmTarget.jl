@@ -45,6 +45,8 @@ import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 import ..reject!, ..Internal, ..Unported, ..Unquarantined, ..OutsideSubset, ..Late, ..LinkedHashMap, ..LinkedHashSet
 # a dispatcher over every NIR kind is inferred once, not once per kind of node (a compile's first-use cost)
 import Base: @nospecializeinfer
+# a definition only a node Julia has no counterpart for reaches rejects by its Kernel row (src/julia/kernel.jl)
+import ..no_counterpart_rejection
 # wasm-opt over a module's bytes, dart's runWasmOpt (src/julia/wasm_opt.jl)
 import ..run_wasm_opt
 # vm's UnionFind, which closures.dart imports (src/julia/union_find.jl)

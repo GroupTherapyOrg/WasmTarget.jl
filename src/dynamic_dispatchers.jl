@@ -9,8 +9,8 @@ specialized to the shape of the caller.
 
 Julia's trim verifier, whose subset WasmTarget compiles (ledger D32), rejects every call it cannot
 resolve statically but one whose result is Union{}, which it lets through as a warning
-(Compiler/src/verifytrim.jl: a must-throw call is downgraded); that call is Julia's MethodError
-throw, the code generator's to emit (visitStaticInvocation), never a dynamic call. So no NIR statement is a dynamic call and no
+(Compiler/src/verifytrim.jl:254-256 downgrades every unresolved call of that result); that call is
+a call Julia proved throws, Julia's MethodError where no method matches, else the matched method's own exception, the code generator's to emit (visitStaticInvocation), never a dynamic call. So no NIR statement is a dynamic call and no
 dispatcher is ever asked for: the dispatchers are empty by Julia's answer. If the subset ever admitted a dynamic call, the same code
 would make them.
 """

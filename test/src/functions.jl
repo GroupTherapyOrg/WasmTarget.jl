@@ -111,7 +111,7 @@ end
     @test length(fc._pending_allocation_dynamic[7]) == 1
     local e = try; W.record_class_allocation(fc, 7); nothing; catch x; x; end
     # a dynamic forwarder is unreachable by Julia's answer: the trim verifier admits no dynamic call
-    @test e isa WT.RejectionError && e.rejection isa WT.Unquarantined && occursin("DynamicForwarderCodeGenerator", e.rejection.row)
+    @test e isa WT.RejectionError && e.rejection isa WT.Internal && occursin("DynamicForwarderCodeGenerator", e.rejection.site)
 
     # an Invocation is noSuchMethod's, which Julia lacks: the invocation creator's path rejects
     local e2 = try; W.get_invocation_creator_stub(fc, shape); nothing; catch x; x; end

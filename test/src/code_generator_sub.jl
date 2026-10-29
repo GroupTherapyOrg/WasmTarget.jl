@@ -39,7 +39,7 @@ end
               () -> D.BrTableInfo__max_sparse_size(),
               () -> D.SwitchBackwardJumpInfo(B.locals(fb)[1], B.block(B.body(fb))))
         local e = rejection(f)
-        @test e !== nothing && e.rejection isa W.Unquarantined && occursin("stackifier", e.rejection.row)
+        @test e !== nothing && e.rejection isa W.Internal && occursin("stackifier", e.rejection.site)
     end
 end
 
@@ -90,7 +90,7 @@ end
     end
     local (g, fb) = stub(D.MethodCallShape(:f, 0, 1, Symbol[]))
     local e = rejection(() -> D.generate(g, B.body(fb), B.locals(fb), nothing))
-    @test e.rejection isa W.Unquarantined && occursin("createInvocationObject", e.rejection.row)
+    @test e.rejection isa W.Internal && occursin("createInvocationObject", e.rejection.site)
     # a named argument's name is a Symbol constant, whose creation is not ported yet
     local (g2, fb2) = stub(D.MethodCallShape(:f, 0, 1, [:k]))
     local e2 = rejection(() -> D.generate(g2, B.body(fb2), B.locals(fb2), nothing))
@@ -98,7 +98,7 @@ end
 end
 
 
-@testset "code_generator.dart: a generator of a construct Julia replaces rejects at its constructor, Unquarantined" begin
+@testset "code_generator.dart: a generator of a construct Julia replaces rejects at its constructor, Internal" begin
     local t = TRANSLATOR[]
     local mb = D.main_module(t)
     local ft = B.define_function(mb.types[], IR.ValueType[], IR.ValueType[])
@@ -117,7 +117,7 @@ end
                         (() -> D.get_lambda_code_generator(t, lambda), "Closures makes no Lambda"),
                         (() -> D.UnreachableCodeGenerator(t, ft, mi), "cyclic"))
         local e = rejection(ctor)
-        @test e !== nothing && e.rejection isa W.Unquarantined && occursin(why, e.rejection.row)
+        @test e !== nothing && e.rejection isa W.Internal && occursin(why, e.rejection.site)
     end
 end
 
