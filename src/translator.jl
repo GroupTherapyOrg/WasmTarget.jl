@@ -1445,7 +1445,7 @@ end
     return true
 end
 
-@parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" get_pragma(self::Translator, node::NoCounterpart, name::String, default_value::Union{Nothing,NirConst} = nothing)::Union{} =
+@parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" get_pragma(self::Translator, node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}, name::String, default_value::Union{Nothing,NirConst} = nothing)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:2423 Translator.getPragma: a pragma's value; a Julia method declares no pragmas (the Kernel table's Annotatable row), its inlining Julia's @inline and @noinline (shouldInline)"), "Translator.getPragma")
 
 """
