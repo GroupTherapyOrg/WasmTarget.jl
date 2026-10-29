@@ -511,7 +511,8 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 
 @parity "dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule" @unported function get_polymorphic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:332 Translator.getDynamicDispatchersForModule" @unported function get_dynamic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:332 Translator.getDynamicDispatchersForModule" get_dynamic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::DynamicDispatchers =
+    get!(() -> DynamicDispatchers(self, module_), self._dynamic_dispatchers, module_)
 
 @parity "dart2wasm/lib/translator.dart:337 Translator.getDummyValuesCollectorForModule" get_dummy_values_collector_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::DummyValuesCollector =
     get!(() -> DummyValuesCollector(self, module_), self._dummy_value_collectors, module_)
@@ -539,9 +540,12 @@ end
 
 @parity "dart2wasm/lib/translator.dart:452 Translator.isMainModule" is_main_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::Bool = self._builder_to_output[module_].is_main
 
-@parity "dart2wasm/lib/translator.dart:459 Translator.getClosures" @unported function get_closures(self::Translator, member::Core.MethodInstance; find_captures::Bool = true) end
+@parity "dart2wasm/lib/translator.dart:459 Translator.getClosures" get_closures(self::Translator, member::Core.MethodInstance; find_captures::Bool = true)::Closures =
+    find_captures ? get!(() -> Closures(self, member; find_captures = true), self._member_closures, member) :
+                    Closures(self, member; find_captures = false)
 
-@parity "dart2wasm/lib/translator.dart:467 Translator.getConstructorInfo" @unported function get_constructor_info(self::Translator, node::Core.MethodInstance) end
+@parity "dart2wasm/lib/translator.dart:467 Translator.getConstructorInfo" get_constructor_info(self::Translator, node::Core.MethodInstance)::ConstructorInfo =
+    get!(() -> ConstructorInfo(node, self), self.constructor_info, node)
 
 # dart's constructor takes the Kernel component and its core types, index, record classes, loading
 # map, module output data and options; WasmTarget's component is the closed world's NIR, read once
@@ -719,9 +723,11 @@ end
 
 @parity "dart2wasm/lib/translator.dart:974 Translator.getTearOffType" @unported function get_tear_off_type(self::Translator, method::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/translator.dart:1028 Translator.getDartExceptionTag" @unported function get_dart_exception_tag(self::Translator, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:1028 Translator.getDartExceptionTag" get_dart_exception_tag(self::Translator, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Tag =
+    get_dart_exception_tag(self._exception_tags[], module_)
 
-@parity "dart2wasm/lib/translator.dart:1034 Translator.getJsExceptionTag" @unported function get_js_exception_tag(self::Translator, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:1034 Translator.getJsExceptionTag" get_js_exception_tag(self::Translator, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Tag =
+    get_js_exception_tag(self._exception_tags[], module_)
 
 # dart's non-nullable Never is Julia's Union{}, the type of no value
 @parity "dart2wasm/lib/translator.dart:1037 Translator.translateReturnType" function translate_return_type(self::Translator, type_::Type)::WasmBuilder.IR.ValueType
@@ -848,7 +854,17 @@ end
 
 @parity "dart2wasm/lib/translator.dart:1273 Translator.translateExternalStorageType" @unported function translate_external_storage_type(self::Translator, type_::Type) end
 
-@parity "dart2wasm/lib/translator.dart:1290 Translator.makeFunctionRef" @unported function make_function_ref(self::Translator, f::WasmBuilder.IR.BaseFunction) end
+"""A global holding a reference to `f`, defined once in `f`'s module."""
+@parity "dart2wasm/lib/translator.dart:1290 Translator.makeFunctionRef" function make_function_ref(self::Translator, f::WasmBuilder.IR.BaseFunction)::WasmBuilder.IR.Global
+    local f_module_builder = self.module_to_builder[f.enclosing_module]
+    return get!(self.function_ref_cache, f) do
+        local global_ = WasmBuilder.define(f_module_builder.globals[],
+            WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType_def(f.type; nullable = false); mutable = false))
+        WasmBuilder.ref_func(global_.initializer, f)
+        WasmBuilder.var"end"(global_.initializer)
+        global_
+    end
+end
 
 @parity "dart2wasm/lib/translator.dart:1302 Translator.getTearOffClosure" @unported function get_tear_off_closure(self::Translator, member::Core.MethodInstance, closure_module::WasmBuilder.ModuleBuilder) end
 
@@ -1111,7 +1127,14 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2479 Translator.getListBaseArray" @unported function get_list_base_array(self::Translator, b::WasmBuilder.InstructionsBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:2484 Translator.getRecordClassInfo" @unported function get_record_class_info(self::Translator, record_type::Type) end
+# dart's record class of the type's shape (recordClasses, generated per shape); a Julia record's class is
+# its own Tuple or NamedTuple type (Julia's answer: generateRecordClasses maps no shape), a class of
+# the closed world like any other
+@parity "dart2wasm/lib/translator.dart:2484 Translator.getRecordClassInfo" function get_record_class_info(self::Translator, record_type::Type)::ClassInfo
+    local info = record_type isa DataType ? get(self.class_info, record_type, nothing) : nothing
+    info === nothing && reject!(Internal("dart2wasm/lib/translator.dart:2484 Translator.getRecordClassInfo: the record type $record_type has no class info"), "Translator.getRecordClassInfo")
+    return info
+end
 
 @parity "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal" @unported function get_internalized_string_global(self::Translator, module_::WasmBuilder.ModuleBuilder, s::String) end
 

@@ -495,6 +495,18 @@ end
     @test isempty(t.function_ref_cache) && isempty(t.constructor_closures) && isempty(t._member_closures) && isempty(t._need_to_check)
     local e = try; D.get_dummy_values_collector_for_module(t, m).dummy_struct_global[]; nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("translator.dart:3841 ", e.rejection.anchor)
+    # the per-module and per-member helpers, each made once: dynamic dispatchers, the exception tag, a
+    # member's closures, a function's reference global
+    @test D.get_dynamic_dispatchers_for_module(t, m) === D.get_dynamic_dispatchers_for_module(t, m)
+    @test D.get_dart_exception_tag(t, m) isa IR.Tag && D.get_dart_exception_tag(t, m) === D.get_dart_exception_tag(t, m)
+    local mi = t.component.entry
+    @test D.get_closures(t, mi) === D.get_closures(t, mi) && D.get_closures(t, mi; find_captures = false) !== D.get_closures(t, mi)
+    local f = D.get_dummy_function(D.get_dummy_values_collector_for_module(t, m), W.WasmBuilder.define_function(m.types[], IR.ValueType[], IR.ValueType[]))
+    local g = D.make_function_ref(t, f)
+    @test g === D.make_function_ref(t, f) && g.type == IR.GlobalType(IR.RefType_def(f.type; nullable = false); mutable = false)
+    # a record's class is its own tuple type's, a class of the closed world; one the world lacks rejects
+    local er = try; D.get_record_class_info(t, Tuple{Int8,Int8}); nothing; catch x; x; end
+    @test er isa W.RejectionError && er.rejection isa W.Internal
 end
 
 @testset "subset.jl, nir.jl: the closed world carries its entry" begin

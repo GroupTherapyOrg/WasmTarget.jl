@@ -33,9 +33,10 @@ end
     D.collect_initializer_usages(init_collector, mi)
     @test isempty(init_collector.variables_captured) && isempty(init_collector.variables_stored_in_fields)
     @test D.visit_type_parameter_type(init_collector, TypeVar(:T)) === nothing && length(init_collector.used_type_parameters) == 1
-    # ConstructorInfo reads the member's closures, not yet ported: a located rejection
-    local e = try; D.ConstructorInfo(mi, t); nothing; catch x; x; end
-    @test e isa WasmTarget.RejectionError
+    # ConstructorInfo reads the member's closures (the translator's getClosures), made once by
+    # getConstructorInfo
+    local info = D.get_constructor_info(t, mi)
+    @test info isa D.ConstructorInfo && info.constructor === mi && D.get_constructor_info(t, mi) === info
 end
 
 end
