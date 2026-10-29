@@ -1,8 +1,8 @@
 # llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp at the llvm pin (dev/LEDGER.md D42), modeled
 # by dev/formal/CFGStackify.tla: BLOCK, LOOP and TRY_TABLE markers placed over the layout CFGSort
-# made, and each branch's target block rewritten to its depth. The unwind mismatches a try_table's
-# span makes are found; wrapping each in a nested try_table (addNestedTryTable) is the next port, and
-# until then a function with one rejects there.
+# made, and each branch's target block rewritten to its depth. An unwind mismatch a try_table's span
+# makes is fixed with a nested try_table that catches to a trampoline, which rethrows the exception
+# to the right destination.
 
 """
     WebAssemblyCFGStackify()
@@ -10,9 +10,11 @@
 The pass's state over one function: `mdt`, the dominator tree; `scope_tops`, for each block (by
 number) whose label ends a scope, the block holding the scope's beginning, the farthest-spanning
 one; `begin_to_end` and `end_to_begin`, each marker's partner; `try_to_eh_pad` and `eh_pad_to_try`,
-each TRY_TABLE's EH pad and back; `appendix_bb`, the block added after the last when a loop's bottom
-is the function's last block; `fake_caller_bb`, the block outside the layout that stands for the
-caller as an unwind destination.
+each TRY_TABLE's EH pad and back; `unwind_dest_to_trampoline`, each unwind destination's trampoline
+block, which rethrows an exception a nested try_table caught to it; `appendix_bb`, the block added
+after the last when a loop's bottom is the function's last block; `caller_trampoline_bb`, the
+trampoline that rethrows to the caller, last in the layout; `fake_caller_bb`, the block outside the
+layout that stands for the caller as an unwind destination.
 """
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:49 WebAssemblyCFGStackify" mutable struct WebAssemblyCFGStackify
     mdt::Union{Nothing,Core.Compiler.DomTree}
@@ -21,10 +23,12 @@ caller as an unwind destination.
     end_to_begin::Dict{MachineInstr,MachineInstr}
     try_to_eh_pad::Dict{MachineInstr,Int}
     eh_pad_to_try::Dict{Int,MachineInstr}
+    unwind_dest_to_trampoline::Dict{Int,Int}
     appendix_bb::Union{Nothing,Int}
+    caller_trampoline_bb::Union{Nothing,Int}
     fake_caller_bb::Union{Nothing,Int}
     WebAssemblyCFGStackify() = new(nothing, Union{Nothing,Int}[], Dict{MachineInstr,MachineInstr}(), Dict{MachineInstr,MachineInstr}(),
-                                   Dict{MachineInstr,Int}(), Dict{Int,MachineInstr}(), nothing, nothing)
+                                   Dict{MachineInstr,Int}(), Dict{Int,MachineInstr}(), Dict{Int,Int}(), nothing, nothing, nothing)
 end
 
 """    update_scope_tops(pass, mf, begin_, end_) -> Nothing
@@ -42,18 +46,37 @@ end
     get_appendix_block(pass, mf) -> Int
 
 The block after the function's last, made once, to hold the END_LOOP of a loop whose bottom is the
-last block; a predecessor of itself, so it is never a scope's target.
+last block; a predecessor of itself, so it is never a scope's target. It goes before the caller
+trampoline, which stays last.
 """
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:125 WebAssemblyCFGStackify::getAppendixBlock" function get_appendix_block(pass::WebAssemblyCFGStackify, mf::MachineFunction)::Int
     if pass.appendix_bb === nothing
         local a = create_machine_basic_block!(mf)
-        push!(mf.blocks[a].succs, a)
-        push!(mf.blocks[a].preds, a)
-        push!(mf.layout, a)
+        add_successor(mf, a, a)
+        # If the caller trampoline BB exists, insert the appendix BB before it. Otherwise insert it
+        # at the end of the function.
+        if pass.caller_trampoline_bb === nothing
+            push!(mf.layout, a)
+        else
+            insert!(mf.layout, findfirst(==(pass.caller_trampoline_bb), mf.layout), a)
+        end
         mf.blocks[a].number = length(mf.layout)
         pass.appendix_bb = a
     end
     return something(pass.appendix_bb)
+end
+
+"""
+    get_caller_trampoline_block(pass, mf) -> Int
+
+The trampoline block that rethrows to the caller, made once, last in the layout.
+"""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:143 WebAssemblyCFGStackify::getCallerTrampolineBlock" function get_caller_trampoline_block(pass::WebAssemblyCFGStackify, mf::MachineFunction)::Int
+    if pass.caller_trampoline_bb === nothing
+        pass.caller_trampoline_bb = create_machine_basic_block!(mf)
+        push!(mf.layout, something(pass.caller_trampoline_bb))
+    end
+    return something(pass.caller_trampoline_bb)
 end
 
 """
@@ -376,7 +399,7 @@ conceptual catch block ending after the exception's bottom.
     local block = MachineInstr(BLOCK, MachineOperand[MOImm(BLOCK_TYPE_CATCH)], h)
     # the TRY_TABLE's operands: its block type, its catch clause count, the clause (wasm's catch, 0x00,
     # of the one tag) and the clause's destination
-    local try_table = MachineInstr(TRY_TABLE, MachineOperand[MOImm(BLOCK_TYPE_VOID), MOImm(1), MOImm(0x00), MOBlock(mbb)], h)
+    local try_table = MachineInstr(TRY_TABLE, MachineOperand[MOImm(BLOCK_TYPE_VOID), MOImm(1), MOImm(WASM_OPCODE_CATCH), MOBlock(mbb)], h)
     insert!(mf.blocks[h].instrs, insert_pos, block)
     insert!(mf.blocks[h].instrs, insert_pos + 1, try_table)
     # Decide where in MBB to put the END_TRY_TABLE, and the END_BLOCK for the CATCH destination.
@@ -437,10 +460,135 @@ not leave, so wasm checks the body against a value it never has unless the end i
     return nothing
 end
 
-# wrapping a range of instructions in a nested try_table that catches with catch_all_ref and throws to
-# the right destination through a trampoline block: the exnref machinery (CATCH_ALL_REF, THROW_REF,
-# the trampolines) is the next port
-@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:1383 WebAssemblyCFGStackify::addNestedTryTable" @unported function add_nested_try_table(pass::WebAssemblyCFGStackify, mf::MachineFunction, range_begin::MachineInstr, range_end::MachineInstr, unwind_dest::Int) end
+"""
+    get_trampoline_block(pass, mf, unwind_dest) -> Int
+
+The trampoline block for an unwind destination, made once: the END_BLOCK of a BLOCK of type exnref
+(the target of a nested try_table's catch_all_ref), then CATCH_ALL_REF, which takes the exnref, and
+THROW_REF, which rethrows it. For the caller the BLOCK opens the function and the trampoline is the
+caller trampoline, last; for an EH pad the BLOCK follows the pad's TRY_TABLE and the trampoline goes
+before the block holding its END_TRY_TABLE, so the rethrow lands in that try_table's catch. An
+UNREACHABLE ends the block before the trampoline, whose fallthrough has no exnref.
+"""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:1312 WebAssemblyCFGStackify::getTrampolineBlock" function get_trampoline_block(pass::WebAssemblyCFGStackify, mf::MachineFunction, unwind_dest::Int)::Int
+    # We need one trampoline BB per unwind destination, even though there are multiple try_tables
+    # target the same unwind destination.
+    haskey(pass.unwind_dest_to_trampoline, unwind_dest) && return pass.unwind_dest_to_trampoline[unwind_dest]
+    local block_, trampoline_bb
+    if unwind_dest == get_fake_caller_block(pass, mf)
+        # If the unwind destination is the caller, create a caller-dedicated trampoline BB at the end
+        # of the function and wrap the whole function with a block (no ARGUMENT instructions precede
+        # it: a parameter is a local).
+        local first_bb = mf.layout[1]
+        block_ = MachineInstr(BLOCK, MachineOperand[MOImm(BLOCK_TYPE_EXNREF)], first_bb)
+        pushfirst!(mf.blocks[first_bb].instrs, block_)
+        trampoline_bb = get_caller_trampoline_block(pass, mf)
+    else
+        # If the unwind destination is another EH pad, create a trampoline BB for the unwind dest and
+        # insert a block instruction right after the target try_table.
+        local target_begin_try = pass.eh_pad_to_try[unwind_dest]
+        local target_end_try = pass.begin_to_end[target_begin_try]
+        local target_begin_bb = target_begin_try.parent
+        local target_end_bb = target_end_try.parent
+        block_ = MachineInstr(BLOCK, MachineOperand[MOImm(BLOCK_TYPE_EXNREF)], target_begin_bb)
+        local instrs = mf.blocks[target_begin_bb].instrs
+        insert!(instrs, findfirst(mi -> mi === target_begin_try, instrs) + 1, block_)
+        trampoline_bb = create_machine_basic_block!(mf)
+        insert!(mf.layout, findfirst(==(target_end_bb), mf.layout), trampoline_bb)
+        add_successor(mf, trampoline_bb, unwind_dest)
+    end
+    # Insert an end_block, catch_all_ref (pseudo instruction), and throw_ref instructions in the
+    # trampoline BB.
+    local end_block = MachineInstr(END_BLOCK, MachineOperand[], trampoline_bb)
+    push!(mf.blocks[trampoline_bb].instrs, end_block)
+    push!(mf.blocks[trampoline_bb].instrs, MachineInstr(CATCH_ALL_REF, MachineOperand[], trampoline_bb))
+    push!(mf.blocks[trampoline_bb].instrs, MachineInstr(THROW_REF, MachineOperand[], trampoline_bb))
+    # The trampoline BB's return type is exnref because it is a target of catch_all_ref. But the body
+    # type of the block we just created is not. We add an 'unreachable' right before the 'end_block'
+    # to make the code valid.
+    local trampoline_layout_pred = something(get_prev_node(mf, trampoline_bb))
+    push!(mf.blocks[trampoline_layout_pred].instrs, MachineInstr(UNREACHABLE, MachineOperand[], trampoline_layout_pred))
+    register_scope(pass, block_, end_block)
+    pass.unwind_dest_to_trampoline[unwind_dest] = trampoline_bb
+    return trampoline_bb
+end
+
+"""
+    add_nested_try_table(pass, mf, range_begin, range_end, unwind_dest) -> Nothing
+
+Wraps the instructions from `range_begin` to `range_end`, one block's, in a TRY_TABLE whose one
+catch_all_ref clause branches to `unwind_dest`'s trampoline. The END_TRY_TABLE goes in a block of
+its own after the range: after the range's block where the range ends it, else between the two
+halves the block is split into, the EH pad keeping the half that holds its CATCH.
+"""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:1383 WebAssemblyCFGStackify::addNestedTryTable" function add_nested_try_table(pass::WebAssemblyCFGStackify, mf::MachineFunction, range_begin::MachineInstr, range_end::MachineInstr, unwind_dest::Int)::Nothing
+    local begin_bb = range_begin.parent
+    local end_bb = range_end.parent
+    # Get the trampoline BB that the new try_table will unwind to.
+    local trampoline_bb = get_trampoline_block(pass, mf, unwind_dest)
+    # Local expression tree before the first call of this range should go after the nested
+    # TRY_TABLE: no instruction is another's child (WebAssembly::isChild, a stackified register's
+    # definition), each value of Julia's statements being a local, so the set is the range's beginning.
+    local after_set = Set{MachineInstr}([range_begin])
+    # Create the nested try_table instruction.
+    local try_table_pos = get_latest_insert_pos(mf, begin_bb, Set{MachineInstr}(), after_set)
+    local try_table = MachineInstr(TRY_TABLE, MachineOperand[MOImm(BLOCK_TYPE_VOID), MOImm(1), MOImm(WASM_OPCODE_CATCH_ALL_REF), MOBlock(trampoline_bb)], begin_bb)
+    insert!(mf.blocks[begin_bb].instrs, try_table_pos, try_table)
+    # Create a BB to insert the 'end_try_table' instruction.
+    local end_try_table_bb = create_machine_basic_block!(mf)
+    add_successor(mf, end_try_table_bb, trampoline_bb)
+    local instrs = mf.blocks[end_bb].instrs
+    local split_pos = findfirst(mi -> mi === range_end, instrs) + 1
+    if split_pos == length(instrs) + 1
+        # If the range's end instruction is at the end of the BB, insert the new end_try_table BB
+        # after the current BB.
+        insert!(mf.layout, findfirst(==(end_bb), mf.layout) + 1, end_try_table_bb)
+        add_successor(mf, end_bb, end_try_table_bb)
+    else
+        # When the split pos is in the middle of a BB, we split the BB into two and put the
+        # 'end_try_table' BB in between; in case the BB is an EH pad and there is a 'catch' after
+        # split pos, the later part keeps the BB, an EH pad, where the 'catch' is.
+        local catch_after_split = mf.blocks[end_bb].ehpad && any(k -> instrs[k].opcode == CATCH, split_pos:length(instrs))
+        local pre_bb, post_bb
+        if !catch_after_split
+            pre_bb = end_bb
+            post_bb = create_machine_basic_block!(mf)
+            local at = findfirst(==(pre_bb), mf.layout)
+            insert!(mf.layout, at + 1, post_bb)
+            insert!(mf.layout, at + 1, end_try_table_bb)
+            local moved = instrs[split_pos:end]
+            deleteat!(instrs, split_pos:length(instrs))
+            for mi in moved
+                mi.parent = post_bb
+            end
+            append!(mf.blocks[post_bb].instrs, moved)
+            transfer_successors(mf, post_bb, pre_bb)
+        else
+            pre_bb = create_machine_basic_block!(mf)
+            post_bb = end_bb
+            local at = findfirst(==(post_bb), mf.layout)
+            insert!(mf.layout, at, end_try_table_bb)
+            insert!(mf.layout, at, pre_bb)
+            local moved = instrs[1:split_pos-1]
+            deleteat!(instrs, 1:split_pos-1)
+            for mi in moved
+                mi.parent = pre_bb
+            end
+            append!(mf.blocks[pre_bb].instrs, moved)
+            # We don't need to transfer predecessors of the EH pad to 'PreBB', because an EH pad's
+            # predecessors are all through unwind edges and they should still unwind to the EH pad.
+        end
+        # unstackifyVRegsUsedInSplitBB has nothing to do: no register is stackified, each value of
+        # Julia's statements being a local
+        add_successor(mf, pre_bb, end_try_table_bb)
+        add_successor(mf, pre_bb, post_bb)
+    end
+    # Add a 'end_try_table' instruction in the EndTryTable BB created above.
+    local end_try_table = MachineInstr(END_TRY_TABLE, MachineOperand[], end_try_table_bb)
+    push!(mf.blocks[end_try_table_bb].instrs, end_try_table)
+    register_try_scope(pass, try_table, end_try_table, trampoline_bb)
+    return nothing
+end
 
 """
     split_end_loop_bb(mf, end_try_table_bb) -> Nothing
@@ -472,8 +620,7 @@ to the try_table's end does not land inside the loop.
         mi.parent = end_loop_bb
     end
     append!(mf.blocks[end_loop_bb].instrs, moved)
-    push!(mf.blocks[end_loop_bb].succs, end_try_table_bb)
-    push!(mf.blocks[end_try_table_bb].preds, end_loop_bb)
+    add_successor(mf, end_loop_bb, end_try_table_bb)
     return nothing
 end
 
@@ -567,11 +714,7 @@ Whether there were any.
             local mbb = range_begin_.parent
             if unwind_dest != get_fake_caller_block(pass, mf)
                 local eh_pad = findfirst(s -> mf.blocks[s].ehpad, mf.blocks[mbb].succs)
-                if eh_pad !== nothing
-                    local pad = mf.blocks[mbb].succs[eh_pad]
-                    deleteat!(mf.blocks[mbb].succs, eh_pad)
-                    filter!(!=(mbb), mf.blocks[pad].preds)
-                end
+                eh_pad === nothing || remove_successor(mf, mbb, mf.blocks[mbb].succs[eh_pad])
             end
             add_nested_try_table(pass, mf, range_begin_, range_end_, unwind_dest)
         end
@@ -738,6 +881,18 @@ lowered, as LLVM's Multivalue), since wasm checks the type at an end the code ne
     return nothing
 end
 
+"""    cleanup_function_data(pass, mf) -> Nothing
+
+Forgets the blocks made for this function. The fake caller block, outside the layout and without
+edges, stays in the function's block list, where a block's number is its place."""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:2686 WebAssemblyCFGStackify::cleanupFunctionData" function cleanup_function_data(pass::WebAssemblyCFGStackify, mf::MachineFunction)::Nothing
+    local fake = pass.fake_caller_bb
+    fake === nothing || isempty(mf.blocks[fake].preds) && isempty(mf.blocks[fake].succs) && !(fake in mf.layout) ||
+        reject!(Internal("src/llvm/cfg_stackify.jl cleanup_function_data: the fake caller block $fake has edges or a place"), "cleanupFunctionData")
+    pass.appendix_bb = pass.fake_caller_bb = pass.caller_trampoline_bb = nothing
+    return nothing
+end
+
 """
     run_on_machine_function(pass, mf, mli, wei, has_results) -> Nothing
 
@@ -749,5 +904,6 @@ scopes ending the function.
     place_markers(pass, mf, mli, wei)
     rewrite_depth_immediates(pass, mf)
     fix_ends_at_end_of_function(pass, mf, has_results)
+    cleanup_function_data(pass, mf)
     return nothing
 end

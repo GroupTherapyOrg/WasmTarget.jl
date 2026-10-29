@@ -104,11 +104,11 @@ end
     @test [mi.opcode for mi in mis[et:et+3]] == [W.END_TRY_TABLE, W.UNREACHABLE, W.END_BLOCK, W.CATCH]
 end
 
-@testset "CFGStackify.cpp: fixCallUnwindMismatches, a call the layout puts in a try_table it does not unwind to" begin
+@testset "CFGStackify.cpp: fixCallUnwindMismatches and addNestedTryTable, a call the layout puts in a try_table it does not unwind to" begin
     # %2 under %1's handler unwinds to the catch block %6; %4, after the :leave, unwinds to the caller.
     # CFGSort lays the catch block (machine block 5) before %4's (4); laid after it, the try_table
     # spans %4, whose call would be caught by a catch it does not unwind to: a mismatch, which a nested
-    # try_table rethrowing to the caller fixes (addNestedTryTable, the next port, rejects there)
+    # try_table fixes, catching every exception to the caller trampoline, which rethrows it
     local code = Any[Core.EnterNode(6), Expr(:call, GlobalRef(Base, :identity), 1), Expr(:leave, Core.SSAValue(1)),
                      Expr(:call, GlobalRef(Base, :identity), 2), Core.ReturnNode(Core.SSAValue(4)), Core.ReturnNode(2)]
     local mf = machine_of(code, "try")
@@ -124,8 +124,18 @@ end
     @test L.add_pre_emit_pass(W.nir_code(code, zeros(UInt32, length(code)), "try")..., "try", true) isa W.MachineFunction
     mf.layout[k], mf.layout[k + 1] = mf.layout[k + 1], mf.layout[k]
     W.renumber_blocks!(mf)
-    local e = try; L.run_on_machine_function(L.WebAssemblyCFGStackify(), mf, li, wei, true); nothing; catch x; x; end
-    @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("addNestedTryTable", e.rejection.anchor)
+    L.run_on_machine_function(L.WebAssemblyCFGStackify(), mf, li, wei, true)
+    local mis = [mi for b in mf.layout for mi in mf.blocks[b].instrs]
+    # the function opens with the trampoline's BLOCK of type exnref and ends with the trampoline: its
+    # END_BLOCK, the exnref taken and rethrown
+    @test mis[1].opcode == W.BLOCK && mis[1].operands[1] == W.MOImm(W.BLOCK_TYPE_EXNREF)
+    @test [mi.opcode for mi in mf.blocks[mf.layout[end]].instrs] == [W.END_BLOCK, W.CATCH_ALL_REF, W.THROW_REF]
+    # the nested try_table holds %4's statements, its catch_all_ref to the trampoline's label: two
+    # labels out, past the try_table and the catch block's BLOCK; its END_TRY_TABLE in a block of its
+    # own, before the outer try_table's
+    local n = only(k for k in eachindex(mis) if mis[k].opcode == W.TRY_TABLE && mis[k].operands[3] == W.MOImm(W.WASM_OPCODE_CATCH_ALL_REF))
+    @test mis[n].operands[4] == W.MOImm(2) && mis[n+1].opcode == W.STMTS && mis[n+1].operands[1] == W.MOImm(4)
+    @test [mi.opcode for mi in mis[n+2:n+4]] == [W.END_TRY_TABLE, W.END_TRY_TABLE, W.UNREACHABLE]
 end
 
 @testset "CFGStackify.cpp: placeTryTableMarker, a try_table in a block its catch branches to" begin

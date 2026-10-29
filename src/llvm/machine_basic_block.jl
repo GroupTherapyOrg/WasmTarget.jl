@@ -95,6 +95,18 @@ Julia's IR does not carry, aside)."""
     return nothing
 end
 
+"""    remove_successor(mf, b, succ) -> Nothing
+
+Removes `succ` from the block's successors and the block from its predecessors."""
+@parity "llvm/lib/CodeGen/MachineBasicBlock.cpp:863 MachineBasicBlock::removeSuccessor" function remove_successor(mf::MachineFunction, b::Int, succ::Int)::Nothing
+    local i = findfirst(==(succ), mf.blocks[b].succs)
+    i === nothing && reject!(Internal("src/llvm/machine_basic_block.jl remove_successor: block $succ is no successor of $b"), "MachineBasicBlock.removeSuccessor")
+    local pi = findfirst(==(b), mf.blocks[succ].preds)
+    pi === nothing || deleteat!(mf.blocks[succ].preds, pi)
+    deleteat!(mf.blocks[b].succs, something(i))
+    return nothing
+end
+
 """
     replace_successor(mf, b, old, new) -> Nothing
 
@@ -114,6 +126,19 @@ the predecessor lists follow.
         return nothing
     end
     deleteat!(succs, old_i)
+    return nothing
+end
+
+"""    transfer_successors(mf, b, from) -> Nothing
+
+Each successor of `from` becomes the block's, in order, and is `from`'s no more."""
+@parity "llvm/lib/CodeGen/MachineBasicBlock.cpp:947 MachineBasicBlock::transferSuccessors" function transfer_successors(mf::MachineFunction, b::Int, from::Int)::Nothing
+    b == from && return nothing
+    while !isempty(mf.blocks[from].succs)
+        local succ = first(mf.blocks[from].succs)
+        add_successor(mf, b, succ)
+        remove_successor(mf, from, succ)
+    end
     return nothing
 end
 

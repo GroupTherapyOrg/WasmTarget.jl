@@ -28,10 +28,12 @@ LOOP, END_BLOCK, END_LOOP, BR, BR_IF, BR_UNLESS, BR_TABLE; WebAssemblyInstrInfo.
 FixIrreducibleControlFlow writes a label register with; TargetOpcode's COPY, which PHIElimination
 writes a PHI's incoming value with; WebAssemblyInstrControl.td's TRY_TABLE and END_TRY_TABLE, which
 CFGStackify places for an EH pad, and UNREACHABLE, which it adds after an END_TRY_TABLE; CATCH, the
-pseudo-instruction an EH pad begins with, which receives the caught exception) and STMTS, the place of the block's Julia statements, which LLVM holds
-as the block's other instructions.
+pseudo-instruction an EH pad begins with, which receives the caught exception; CATCH_ALL_REF and
+THROW_REF, the pseudo-instruction a trampoline block takes the caught exnref with and the rethrow of
+it, which CFGStackify adds to fix an unwind mismatch) and STMTS, the place of the block's Julia
+statements, which LLVM holds as the block's other instructions.
 """
-@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 COPY STMTS TRY_TABLE END_TRY_TABLE CATCH UNREACHABLE
+@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 COPY STMTS TRY_TABLE END_TRY_TABLE CATCH UNREACHABLE CATCH_ALL_REF THROW_REF
 
 """    BLOCK_TYPE_VOID
 
@@ -42,6 +44,21 @@ A BLOCK's or LOOP's type with no params or results (WebAssembly::BlockType::Void
 A BLOCK's type that is its catch clause's payload, the exception tag's parameters (LLVM's pointer
 type for CATCH), filled where the instructions are lowered."""
 @quarantine "LLVM's catch destination BLOCK takes the caught value's type; WasmTarget's tag holds the exception" Core.Int const BLOCK_TYPE_CATCH::Int = -2
+
+"""    BLOCK_TYPE_EXNREF
+
+A BLOCK's type whose result is an exnref, a trampoline's, which a catch_all_ref branches to
+(WebAssembly::BlockType::Exnref, wasm::ValType::EXNREF)."""
+@quarantine "LLVM's WebAssembly::BlockType::Exnref, the binary format's exnref value type" Core.Int const BLOCK_TYPE_EXNREF::Int = 0x69
+
+"""    WASM_OPCODE_CATCH
+
+A TRY_TABLE's catch clause of a tag, its payload to the label (BinaryFormat/Wasm.h)."""
+@quarantine "LLVM's wasm::WASM_OPCODE_CATCH, the binary format's catch clause kind" Core.Int const WASM_OPCODE_CATCH::Int = 0x00
+"""    WASM_OPCODE_CATCH_ALL_REF
+
+A TRY_TABLE's catch clause of every exception, its exnref to the label (BinaryFormat/Wasm.h)."""
+@quarantine "LLVM's wasm::WASM_OPCODE_CATCH_ALL_REF, the binary format's catch clause kind" Core.Int const WASM_OPCODE_CATCH_ALL_REF::Int = 0x03
 
 """    BLOCK_TYPE_RESULTS
 
@@ -241,13 +258,13 @@ end
 
 Whether an instruction ends its block's straight-line code (LLVM's MachineInstr::isTerminator, the
 isTerminator flag WebAssemblyInstrControl.td sets on BR, BR_IF, BR_UNLESS, BR_TABLE and UNREACHABLE)."""
-@quarantine "LLVM's MCInstrDesc isTerminator flag, TableGen's, for the branches and unreachable" Base.in is_terminator(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_IF, BR_UNLESS, BR_TABLE, UNREACHABLE)
+@quarantine "LLVM's MCInstrDesc isTerminator flag, TableGen's, for the branches and unreachable" Base.in is_terminator(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_IF, BR_UNLESS, BR_TABLE, UNREACHABLE, THROW_REF)
 
 """    is_barrier(mi) -> Bool
 
 Whether control never falls through an instruction (LLVM's MachineInstr::isBarrier, the isBarrier
 flag WebAssemblyInstrControl.td sets on BR and BR_TABLE)."""
-@quarantine "LLVM's MCInstrDesc isBarrier flag, TableGen's" Base.in is_barrier(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_TABLE, UNREACHABLE)
+@quarantine "LLVM's MCInstrDesc isBarrier flag, TableGen's" Base.in is_barrier(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_TABLE, UNREACHABLE, THROW_REF)
 
 """    create_label_register!(mf) -> Int
 

@@ -645,7 +645,9 @@ end
 # its exception tag (visitTryCatch), branches to a BLOCK typed by the values the tag carries; the CATCH
 # after that block's end stashes the caught exception in a local, as dart's visitTryCatch does after
 # its catch, and Julia's the_exception in the catch block reads it; an Upsilon writes the register of
-# each PhiC naming it, which the PhiC reads, as Julia's codegen does; UNREACHABLE is wasm's
+# each PhiC naming it, which the PhiC reads, as Julia's codegen does; UNREACHABLE is wasm's. A nested
+# try_table fixing an unwind mismatch catches every exception's exnref to a trampoline, a BLOCK of
+# type exnref, whose end THROW_REF follows
 @parity "dart2wasm/lib/code_generator.dart:768 AstCodeGenerator.visitBlock" function visit_block(self::AstCodeGenerator, node::NirBody)::Nothing
     local at = "$(self.enclosing_member)"
     local mf = LLVM.add_pre_emit_pass(node.stmts, node.cfg, node.handlers, at, !isempty(outputs(self)))
@@ -675,6 +677,8 @@ end
         # the values a catch of the tag delivers (Catch.caughtValues)
         imm(mi, 1) == BLOCK_TYPE_CATCH ? dart_tag().type.inputs :
         imm(mi, 1) == BLOCK_TYPE_VOID ? WasmBuilder.IR.ValueType[] :
+        # LLVM's exnref, wasm's (ref null exn)
+        imm(mi, 1) == BLOCK_TYPE_EXNREF ? WasmBuilder.IR.ValueType[WasmBuilder.IR.RefType_exn(; nullable = true)] :
         reject!(Internal("src/code_generator.jl visit_block: block type $(imm(mi, 1))"), at)
     # the caught exception of the catch block being emitted, its block's
     local thrown_exception = nothing
@@ -686,9 +690,14 @@ end
         elseif op == LOOP
             push!(labels, WasmBuilder.loop(b, WasmBuilder.IR.ValueType[], block_outputs(mi)))
         elseif op == TRY_TABLE
-            # one catch clause, of the exception tag, to the label at its depth outside the try_table
-            imm(mi, 2) == 1 && imm(mi, 3) == 0x00 || reject!(Internal("src/code_generator.jl visit_block: a TRY_TABLE's catch clauses"), at)
-            local catches = WasmBuilder.TryTableCatch[WasmBuilder.Catch(dart_tag(), label_at(imm(mi, 4)))]
+            # one catch clause to the label at its depth outside the try_table: of the exception tag,
+            # or, a nested try_table fixing an unwind mismatch, of every exception, its exnref to a
+            # trampoline
+            imm(mi, 2) == 1 || reject!(Internal("src/code_generator.jl visit_block: a TRY_TABLE with $(imm(mi, 2)) catch clauses"), at)
+            local catches = WasmBuilder.TryTableCatch[
+                imm(mi, 3) == WASM_OPCODE_CATCH ? WasmBuilder.Catch(dart_tag(), label_at(imm(mi, 4))) :
+                imm(mi, 3) == WASM_OPCODE_CATCH_ALL_REF ? WasmBuilder.CatchAllRef(label_at(imm(mi, 4))) :
+                reject!(Internal("src/code_generator.jl visit_block: a TRY_TABLE's catch clause kind $(imm(mi, 3))"), at)]
             push!(labels, WasmBuilder.try_table(b, catches, WasmBuilder.IR.ValueType[], block_outputs(mi)))
         elseif op == END_BLOCK || op == END_LOOP || op == END_TRY_TABLE
             WasmBuilder.var"end"(b)
@@ -700,6 +709,11 @@ end
             thrown_exception = (mbb, thrown)
         elseif op == UNREACHABLE
             WasmBuilder.unreachable(b)
+        elseif op == CATCH_ALL_REF
+            # the trampoline's exnref, on the stack from its block's end, where THROW_REF takes it (a
+            # pseudo-instruction, which MCInstLower drops)
+        elseif op == THROW_REF
+            WasmBuilder.throw_ref(b)
         elseif op == STMTS
             for k in imm(mi, 1):imm(mi, 2)
                 local st = node.stmts[k]
