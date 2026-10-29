@@ -49,6 +49,11 @@ if [ -n "$missing_deps" ]; then
   echo "check: resolving the Manifest for $(echo $missing_deps | tr '\n' ' ')"
   julia --project=. --startup-file=no -e 'using Pkg; Pkg.resolve(); Pkg.instantiate()' > .wtd/resolve.out 2>&1 ||
     { echo "check: the Manifest does not resolve"; tail -20 .wtd/resolve.out; exit 1; }
+  # a new dependency's own image is built here, once per lane, outside the judged load stage: the in-repo
+  # lib/WasmInterpreter (87b1bcc6) builds about 80 CPU-s of Compiler code, which would turn each lane's first
+  # landing after it red on D14 for a cost the lane's change did not add
+  WT_NEW_DEPS="$missing_deps" julia --project=. --startup-file=no -e 'using Pkg; Pkg.precompile(split(ENV["WT_NEW_DEPS"]))' >> .wtd/resolve.out 2>&1 ||
+    { echo "check: a new dependency does not precompile"; tail -20 .wtd/resolve.out; exit 1; }
 fi
 # each stage's CPU seconds (user + sys) go to .wtd/<stage>.time for D14's band, below
 /usr/bin/time -l -o .wtd/load.time julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
