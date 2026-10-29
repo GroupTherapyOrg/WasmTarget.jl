@@ -92,8 +92,21 @@ trap cleanup_scratch EXIT
 # wt-landing-queue): a ship waits until its ticket is the oldest of a live ship, so a lane that queued
 # first is never skipped by one that polled first (march-monitor-a, 23:41: codegen-b's five commits were
 # passed over twice)
+# a ticket's time carries its stack's class, read from the stack itself, never from a list of lanes
+# (march-corrector, 09:41: of fifteen queued commits only three ported a stub, and they waited behind twelve
+# checks): an audit finding's fix (a commit citing A<n>S<n> or A<n>E<n>, D21) queues 40 minutes early, a stack
+# porting more `@parity "…" @unported` stubs than it adds (a moved stub is no port, march-monitor-a, 09:45)
+# 20 minutes early, the rest at its time. The order stays every ship's one sort of <seconds>-<pid>, so a ship
+# on an older dev/ship.sh ranks the same tickets the same way (a second ticket name, ranked differently by old
+# and new ships, deadlocked the queue at 09:53), and a ticket that has waited 20 minutes stands level with a
+# fresh one a class above it, so none starves (bors's p= priority, GitHub's merge queue).
+git fetch -q origin "$MARCH" 2>/dev/null
+early=0; why="other work"
+if git log --format=%B "origin/$MARCH..HEAD" | grep -qE '\bA[0-9]+[SE][0-9]+\b'; then early=2400; why="an audit finding's fix"
+elif [ $(( $(git diff "origin/$MARCH...HEAD" -- src | grep -cE '^-.*@parity "[^"]*" @unported') - $(git diff "origin/$MARCH...HEAD" -- src | grep -cE '^\+.*@parity "[^"]*" @unported') )) -gt 0 ]; then early=1200; why="a stub ported"; fi
 queue="$common/wt-landing-queue"; mkdir -p "$queue"
-ticket="$queue/$(date +%s)-$$"; : > "$ticket"
+ticket="$queue/$(( $(date +%s) - early ))-$$"; : > "$ticket"
+echo "ship: queued $(( early / 60 )) minutes early ($why)"
 trap 'rm -f "$ticket"; cleanup_scratch' EXIT
 w0=$(date +%s)
 while :; do
