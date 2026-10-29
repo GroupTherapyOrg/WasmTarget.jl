@@ -5387,3 +5387,94 @@ A57S8 by 5cd16654, each leaving its row. A60E1 and A60E2 are open on MARCH 1.L. 
 (the lead's of this morning): the EH model's owner, wt3-translator, holds A57S1 and A57S2; wt3-cgstubs holds
 code_generator.jl's A56S2 and A57S4's tests; the translator lane holds A60S1; the lead holds A60E1 (with wt3-constants'
 re-land) and A60E2.
+
+## 2026-10-29 — audited through e017e6c9 (7c3b49e4..e017e6c9: located Unquarantined rows and whole-group coverage, a native throw wanting a wasm exception, measured shards, SIMD lanes, a tuple's class by inference, CFGStackifyEH, :leave and return sending no exception, the exception tree from LLVM's tests, a String immutable by convention, the static-field generators, the runtime's file map, module __init__ and session values, no interpreter workload, FieldSelectorTable, smoke's throws, the try_table's marker class, MemoryLimits, guardCanMatchJSException, errorThrow, nir_carries_data, Symbol, checked division, a constructor with no receiver, the corpus's hung shards, entry 60)
+
+The sixty-first audit, beside the work, covers the 44 commits of 7c3b49e4..e017e6c9 that are not entry 60 (75abac23, its
+author's), read here. Every finding rests on one exact command, quoted; three probes ran under `taskpolicy -b` with an
+alarm, and TLC ran the exception models. Standing items. Timing (the lead's watch point): each green check now keeps
+every src file's seconds (cd3f191b), and `sort -t$'\t' -k2 -rn "$(git rev-parse --git-common-dir)/wt-src-costs.tsv" |
+head` gives `code_generator.jl 40.9`, `code_generator_control.jl 36.2`, `code_generator_intrinsics.jl 33.3`, then
+`runner.jl 5.7`, `wasm_builder/ir_modules.jl 5.0`, `translator.jl 4.3`, `records.jl 4.3`, of 171 s in all (`awk …
+{s+=$2}`): the code generator's three files hold 110 s, nearly two thirds, and the largest of them alone is a 41-s shard
+of the four; code_generator.jl is also the fastest-growing by lines (+177 over audit 60's window). A one-by-one rerun at
+background QoS was stopped as the table answers the same question with the check's own measure. The exception models
+break as claimed: `TLC_ONLY=… taskpolicy -b bash dev/formal/run_tlc.sh` over MCCFGStackifyEH*.cfg and
+MCCFGStackifyPad*.cfg printed `ok MCCFGStackifyEH.cfg … 623 distinct states`, its twelve Broken instances each violating
+its expect line's claim (EveryBlockOnce, CatchDepthCorrect, DepthCorrect, NoAssertion, PadsOnlyUnwound,
+UnwindEdgesExact, UnwindPreserved three times, WellNested twice, PathsPreserved), `ok MCCFGStackifyPad.cfg … 9096` and
+`ok MCCFGStackifyPadWitness.cfg … 196` with its three. Fixed in the range: A57S1 by 1970ead7 and fe7ad6c6 (the models
+above, after the code, which C8 orders the other way), A57S2 by 89856afa (a `:leave` and a return send no exception,
+inference's rule), A57S4 by c7f93a0b (LLVM's own TEST0 and TEST1 at the pin and Julia's try/catch IR), A56S2 by e0e9a2c0
+(nir_carries_data, `!(Base.issingletontype(T) || Core.Compiler.isconstType(T))`, the one receiver test; `grep -rn
+issingletontype src` now gives classes.jl:180 and that line alone) with 0ac26385's case run against native, A60E1 by
+3df75cae, A57E1 and A57E2 by 05521f8b, A50S1 by a1fadf69 and b54dbc1a (MemoryLimits' readers in scope, answering no
+annotation). Exemptions (the lead's order): `git diff 7c3b49e4..e017e6c9 -- src | grep -E '^\+.*(Reshaped:|Fields with
+no Julia counterpart)'` lists ten: makeArrayOf's `elementType` (a UnionAll where dart's is an InterfaceType), the
+FunctionCollector and translator `target`s and `reference`s and modules.jl's `reference` (MethodInstance or the
+binding's GlobalRef, the Kernel table having no Reference row for a static initializer), the namer's `coreTypes` reshape
+and its two `coreTypes` fields (:72, :107: the closed world stands for Kernel's core types), and runtime_generator.jl's
+`_coreTypes` (:55: it serves only JS interop annotations, which a Julia method carries none of): each concrete and true,
+none a gap disguised. 2e9ead2f landed as `wip`, a subject naming nothing, superseded by e0e9a2c0; the hook refusing such
+a placeholder (92b1496f) is not on wt2 (`git log --oneline origin/wt2 | grep -c "^92b1496f"` gives 0). Findings A61S1 to
+A61S4 and A61E1.
+
+Area: builder — empty by diff (`git diff --stat 7c3b49e4..e017e6c9 -- src/wasm_builder` prints nothing).
+
+Area: collection and planning — e0e9a2c0 makes one test of whether a callee carries data, Julia's codegen's (a singleton
+type or a constant `Type{X}` passes no value), and removes 2e9ead2f's Type{C}-to-C receiver; acb9a9ed lays out a Symbol
+as dart's Symbol class, one `_name::String`; 9577e682 takes a tuple statement's class from Julia's tuple inference;
+b54dbc1a answers MemoryLimits' readers by util's get_pragma. 310a3a84 starts a binding at its session value under
+dev/MODULE_INIT.md's ruling (the session has run every `__init__`, juliac's heap after startup). (A61S4, low) the ruling
+equates the session's heap with juliac's after startup, which holds only until program code runs in the session:
+dart_tests.jl and the runner run each case natively before and after its compile, so a binding the program writes would
+start at the written value; today no such binding compiles, `perl -e 'alarm 400; exec @ARGV' taskpolicy -b julia
+--project=. --startup-file=no
+/private/tmp/claude-501/-Users-daleblack-Documents-dev-GroupTherapyOrg-WasmTarget-jl/d67060e8-8b95-4213-b288-76d0f68067d8/scratchpad/sessionprobe2.jl`
+(`counter::Int64 = 0; bump(x) = (global counter += x; counter)`, bumped natively once) printing
+`Unported("dart2wasm/lib/code_generator.dart:4937 StaticFieldImplicitAccessorCodeGenerator._generateGetter")`, but
+dev/MODULE_INIT.md's "Known deviation from juliac" names only values an `__init__` derived from the host (C3). Fix: the
+deviation named in the ruling, and a binding the program writes compiled from its post-`__init__` value or rejected,
+before the getter is wired.
+
+stopgap in disguise: none new.
+precedent: a callee with no value, Julia's codegen's ghost and constant-type arguments; a binding's start, juliac's heap
+after its startup's `__init__`s (dev/MODULE_INIT.md).
+
+Area: emission and diagnostics — 8eefd0d5 and 7301ac6c are the first runtime throws: checked division raises DivideError
+through the runtime's thrower, Error._throw an intrinsic throwing the program's tag (intrinsics.dart:3449), as Julia's
+codegen checks (src/intrinsics.cpp), never a trap; 18180f8d's guardCanMatchJSException is dart's standalone arm. (A61S1,
+medium) a binding's read rejects at a definition a5d3192e ported: `grep -n "4937
+StaticFieldImplicitAccessorCodeGenerator._generateGetter" src/code_generator.jl` gives `1517: reject!(Unported(…
+_generateGetter)` in visit_static_get and `2209: @parity "…:4937
+StaticFieldImplicitAccessorCodeGenerator._generateGetter" function _generate_getter(…)`, a5d3192e's port, which no read
+calls, so the probe above rejects as a gap at a definition that is written (C6, C9). Fix: visit_static_get calls the
+binding's getter as dart's visitStaticGet does, or names the real gap. (A61S2, low) 355c70e5 ports
+EagerStaticFieldInitializerCodeGenerator, whose own message says DartGlobals makes it "only for the pragma that
+initializes a field at startup, and no Julia binding carries it", a body no compile reaches, driven only by its test
+(C2, A55S14's rule). Fix: its Internal naming Julia's answer.
+
+stopgap in disguise: none new.
+precedent: a checked division's throw, Julia's emit_checked_srem_int and its siblings; the thrower, dart's Error._throw.
+
+Area: enforcement and prose — 05521f8b makes an Unquarantined row name a file and checks each record's group whole;
+eb85ab48 and 0fe7aed8 make a native throw want a wasm exception, a trap or a return each a named failure; cd3f191b
+splits the four src shards by measured cost; e017e6c9 kills a hung corpus run's shards. (A61E1, medium) the runner's
+throw verdict reads neither the tag nor the exception: `sed -n 156,159p test/runner.jl` gives `its module must raise a
+wasm exception (WasmTarget's exception tag, a WebAssembly.Exception in JS) … The exception's type is not read yet: its
+class id needs an exported reader the runtime has not ported`, and the script tests `e instanceof WebAssembly.Exception`
+(:275), so a module raising the wrong Julia exception, or one of another tag, passes where native threw DivideError (a
+weakened comparison, D9). Fix: the tag exported and matched (`e.is(tag)`), the class id read once the reader is ported,
+until then the gap on a row. (A61S3, medium) the two EH models write one algorithm twice: `grep -n "^PlaceTry"
+dev/formal/CFGStackify.tla dev/formal/CFGStackifyEH.tla` gives `CFGStackify.tla:442: PlaceTry(st, i) ==` and
+`CFGStackifyEH.tla:330: PlaceTryTable(st, i) ==`, and each carries fixCallUnwindMismatches's walk (`grep -n "Mismatch"`
+gives CFGStackify.tla:623 and CFGStackifyEH.tla:435), while 389bcd93 divides only their claims (contiguity and exactness
+here, placement and routing there): two specifications of the try placement and the mismatch walk can drift apart as two
+copies of code do (D5, C8). Fix: one module defining the placement and the walk, which both instances EXTEND.
+Requirements: C6 and C9 (A61S1); C2 (A61S2); D5 and C8 (A61S3); C3 (A61S4); D9 (A61E1); no lock fired inside its band.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A57S1 is fixed by 1970ead7 and fe7ad6c6, A57S2 by
+89856afa, A57S4 by c7f93a0b, A56S2 by e0e9a2c0, A60E1 by 3df75cae, A57E1 and A57E2 by 05521f8b, A50S1 by a1fadf69 and
+b54dbc1a, each leaving its row. A61S1 and A61S2 are open on MARCH 1.D. A61S4 is open on MARCH 1.C. A61S3 is open on
+MARCH 1.A6. A61E1 is open on MARCH 1.T. By owner: wt3-cgstubs holds A61S1 and A61S2; the EH model's owner,
+wt3-translator, holds A61S3; the lead holds A61S4 (dev/MODULE_INIT.md); the tests lane holds A61E1.
