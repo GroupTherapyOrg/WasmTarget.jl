@@ -875,13 +875,26 @@ end
         return expected_type
     end
     local fields = class_instance_fields(cls, at)
-    length(node.args) - 1 == length(fields) ||
-        reject!(Unquarantined("src/julia: an allocation of $cls leaving $(length(fields) - length(node.args) + 1) of its fields undefined"), "$(self.enclosing_member)")
+    # Julia's `new` may pass fewer values than the struct has fields, never fewer than Julia's own count
+    # of fields every instance initializes (datatype_min_ninitialized): Julia's closure conversion
+    # allocates Core.Box() for a variable captured before it is assigned. A field past that count is
+    # nullable by translateTypeOfField, so a field left out is its null reference
+    local given = length(node.args) - 1
+    given <= length(fields) || reject!(Internal("$at: an allocation of $cls with $given values for $(length(fields)) fields"), "$(self.enclosing_member)")
+    given >= Core.Compiler.datatype_min_ninitialized(cls) ||
+        reject!(Internal("$at: an allocation of $cls leaving a field undefined below Julia's initialized count $(Core.Compiler.datatype_min_ninitialized(cls))"), "$(self.enclosing_member)")
     WasmBuilder.comment(b, "Allocate wasm struct optimized")
     push_object_header_fields(b, self.translator, info)
     for (k, field) in enumerate(fields)
         local field_index = self.translator.field_index[field]
-        translate_expression(self, node.args[k + 1], WasmBuilder.unpacked(info.struct_.fields[field_index + 1].type))
+        local field_type = WasmBuilder.unpacked(info.struct_.fields[field_index + 1].type)
+        if k <= given
+            translate_expression(self, node.args[k + 1], field_type)
+        else
+            (field_type isa WasmBuilder.IR.RefType && field_type.nullable) ||
+                reject!(Internal("$at: the field $(field.name) of $cls left undefined is $field_type, no nullable reference"), "$(self.enclosing_member)")
+            WasmBuilder.ref_null(b, field_type.heap_type)
+        end
     end
     WasmBuilder.struct_new(b, info.struct_)
     # Mark the class as allocated now, which enqueues those methods of the class that could be

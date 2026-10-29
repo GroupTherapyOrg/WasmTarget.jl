@@ -816,6 +816,34 @@ end
           occursin("TypeTestCases.dyn", d.at)
 end
 
+# a variable a closure captures before it is assigned: Julia's closure conversion allocates Core.Box() with
+# its contents undefined, a field past Julia's initialized count, its null reference until assigned
+module BoxCases
+@noinline function counter(n::Int)
+    local f
+    f = () -> n + 1
+    return f()
+end
+@noinline function recur(n::Int)
+    local g
+    g = k -> k <= 0 ? 0 : k + g(k - 1)
+    return g(n)
+end
+end
+@testset "an allocation leaving a nullable field undefined: Core.Box of a variable captured before it is assigned" begin
+    for f in (BoxCases.counter, BoxCases.recur)
+        local bytes = try
+            W.compile(f, (Int,); optimize = false)
+        catch e
+            e isa W.RejectionError || rethrow()
+            # a rejection elsewhere in the program is admitted, located; never the undefined field's own
+            @test !isempty(e.at) && !occursin("left undefined", sprint(showerror, e))
+            nothing
+        end
+        bytes === nothing || queue_native!("$(nameof(f)) ", bytes, f, [(3,), (0,)])
+    end
+end
+
 # Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)
 module EqualsCases
 struct Q; x::Int; end
