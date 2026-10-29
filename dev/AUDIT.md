@@ -5552,3 +5552,76 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A61S1 is fixe
 39e2739a, A61S3 by 00486801, A61S4 by f6a3608e and A60S1 by b9cceac0, each leaving its row. A62S1 is open on MARCH 1.D.
 A62E1 is open on MARCH 1.L. By owner: wt3-cgstubs holds A62S1 (code_generator.jl's generators, with translator.jl's
 set); the lead holds A62E1; the tests lane holds A61E1, its runner now to match `$exceptionTag`.
+
+## 2026-10-29 — audited through 84b02f8f (98481e33..84b02f8f: visitThrow through the runtime, a placeholder subject refused, the line stop, the kept costs pruned, a vararg parameter rejected, intrinsified members external, _svec_ref's BoundsError, InstanceCheck, a fieldless mutable struct, a reader's typeasserted pick, the exception tag matched, a field left undefined holding its null, the rows that named dev/MARCH.md, entry 62)
+
+The sixty-third audit, beside the work, covers the 14 commits of 98481e33..84b02f8f that are not entry 62 (6d24a3ff, its
+author's), read here, with the lead's five watch points. Every finding rests on one exact command, quoted; TLC ran
+InstanceCheck: `TLC_ONLY=… taskpolicy -b bash dev/formal/run_tlc.sh` printed `ok MCInstanceCheck.cfg … 27720 distinct
+states` and `violation of CheckIsJuliaIsa` for each of its three Broken instances. Exemptions: `git diff
+98481e33..84b02f8f -- src | grep -cE '^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 0. Fixed in the range:
+A61E1 by 49350460 (a WebAssembly.Exception counts only under the module's one exported tag, matched with `e.is(tag)`;
+the exception's type is still unread, as test/runner.jl's Throws docstring says, until its class-id reader is ported),
+A62E1 by 5925d113 (a kept cost for a file the checked tree does not hold is dropped). 4602f109 answers an undefined
+field as Julia does where it can: the field holds its null and _directGet tests it, raising UndefRefError through the
+runtime's throw_undef_ref_error, while a field whose type admits `nothing` (whose null would read as `nothing`) or an
+isbits field still rejects, located (D9). Watch points. (1) The Reference sum after A62S1: not yet; `grep -rn
+"Union{Core.MethodInstance,GlobalRef}\|Union{Core.MethodInstance,ClassField,GlobalRef}" src` still gives
+translator.jl:157 and :243 and code_generator.jl:266, :312 and :342, A62S1 unchanged. (2) The Vararg rejections: three
+sites (A63S1). (3) RUNTIME_DEMANDS is one table of statement predicates keyed by the demand RUNTIME_ENTRY_POINTS names,
+each demand checked to have its predicate when the package loads (`haskey(RUNTIME_DEMANDS, demand) ||
+throw(ConstructionViolation(…))`, subset.jl:256); the `:bounds` rename has not landed; A63S2 on how the predicates read.
+(4) The line stop (01ebcfa6) refuses every other lane's check, naming the stop's file and lane (`check: REFUSED — line
+stop: only <lane> lands until <file> is removed`), a manual flag the text calls no construction; the cost pruning is
+A62E1's fix. (5) 84b02f8f's eleven rows each open with a file (`git show 84b02f8f -- src | grep '^+' | grep -c reject!`
+over src/functions.jl, src/code_generator.jl and src/julia/runtime/rtutils.jl, each present); its two Internals are
+right, a PhiNode or an EnterNode reaching translateExpression as a value being WasmTarget's own defect (visit_block
+reads a phi from its register; an EnterNode's token is read only by `:leave` and `:pop_exception`, which emit nothing);
+A63S3 on two of the other rows. Findings A63S1, A63S2, A63S3 and A63E1.
+
+Area: builder — empty by diff (`git diff --stat 98481e33..84b02f8f -- src/wasm_builder` prints nothing).
+
+Area: collection and planning — 00a0cfad records an intrinsified member's call without collecting its body, dart's
+external member; 4602f109 adds the undefined-field demand to the runtime's roots. (A63S1, low) the Vararg parameter
+rejects at three sites, one naming another file's definition: `grep -rn "Vararg\|vararg" src/functions.jl
+src/param_info.jl | grep reject` gives param_info.jl:60 and :76 (fromMember, fromLocalFunction), functions.jl:444
+`reject!(Unquarantined("src/param_info.jl fromMember: the Vararg signature …"), "dart2wasm/lib/functions.dart:731 …")`,
+param_info's row copied into functions.jl, and functions.jl:454 (cd7f0db9, `_getInputTypes: the vararg parameter …`):
+one gap, Julia's packed vararg convention, decided three times (D5; 8e4e0a15, which merges the functions.jl two, is not
+on wt2). Fix: one rejection at the one place the packed vararg first meets a port, its row its own file's, until
+codegen-b's port replaces it. (A63S2, low) the runtime's demands read Julia's raw IR beside the NIR: `grep -n
+"Meta.isexpr(st, :call)\|Meta.isexpr(st, :new)" src/julia/subset.jl` gives `199:` (`_calls_builtin`) and `207:`
+(`_leaves_field_undefined`), each matching over each CodeInfo's `code`, a second reader of Julia's statement forms
+beside build_nir's closed NirStmt sums (L221, L222), and the second decides "a field left undefined" apart from
+visit_constructor_invocation's own count (C1, D5); the necessity, that the demand is read before the NIR exists, is
+named nowhere. Fix: the necessity in each @quarantine, and one predicate of a leaving allocation that the NIR's NirNew
+and the demand both call.
+
+stopgap in disguise: none new.
+precedent: the runtime's roots, dart's wasm:entry-point pragmas kept by TFA; an intrinsified member, dart's external
+member recorded by its call.
+
+Area: emission and diagnostics — 633107e0 throws through the runtime's Error._throwWithCurrentStackTrace; aa25a7ce reads
+a SimpleVector's element behind Julia's bounds check, raising BoundsError; 2458b890 gives a fieldless mutable struct
+instances of their own. (A63S3, low) two of the rewritten rows reject a statement whose own text gives Julia's answer:
+`git show 84b02f8f -- src | grep '^+' | grep -n "GCPreserve\|LoopInfo"` gives `Unquarantined("src/code_generator.jl
+translateStatement: Julia's GC preservation region, which WasmGC's references keep alive …")` and `… Julia's loop hints,
+LLVM's loop metadata …"`: a GC preservation region keeps nothing alive that WasmGC's references do not, and a loop hint
+is metadata Julia's codegen may drop, so each is an expression statement with no effect, not a gap (C6: a gap rejects;
+an answered form compiles). Fix: each answered as the statement Julia's codegen gives no wasm effect, with its reason.
+
+stopgap in disguise: none new.
+precedent: an undefined field, Julia's NULL and jl_undefref_exception; the exception's match, emscripten's e.is on its
+exported tag.
+
+Area: enforcement and prose — 3d3e7672 refuses a placeholder subject in dev/hooks/commit-msg; 7e0bacf7 typeasserts a
+reader's pick to its leaves' native type. (A63E1, low) the subject rule binds only a client hook: `grep -n
+"wip\|placeholder" dev/check.sh dev/ship.sh test/parity_ratchet.jl .github/workflows/*.yml` prints nothing, so a commit
+made with `--no-verify`, or in a clone without the hook, lands its subject unread, as 2e9ead2f did (D6: the rule the
+code's, at the landing). Fix: dev/ship.sh's carry check reads each subject by the hook's own pattern. Requirements: D5
+(A63S1, A63S2); C1 (A63S2); C6 (A63S3); D6 (A63E1, A62S1 still open); no lock fired inside its band.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A61E1 is fixed by 49350460 and A62E1 by 5925d113,
+each leaving its row. A63S1 is open on MARCH 1.F. A63S2 is open on MARCH 1.C. A63S3 is open on MARCH 1.D. A63E1 is open
+on MARCH 1.L. By owner: codegen-b holds A63S1 with its vararg port; wt3-cgstubs holds A63S3 and A62S1; the translator
+lane holds A63S2; the lead holds A63E1.
