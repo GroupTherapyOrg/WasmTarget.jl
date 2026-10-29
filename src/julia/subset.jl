@@ -21,7 +21,8 @@ end
 The program a compile has once Julia's trim verifier accepts it: `entry`, the MethodInstance the
 trim inference was asked for (dart's Component.mainMethod; Julia's compile-hint specialization of the
 call); `codeinfos`, what `typeinf_ext_toplevel` returned, a `Core.CodeInstance` followed by its
-`Core.CodeInfo` for every function the entry reaches, inferred once; `notes`, the verifier's warnings,
+`Core.CodeInfo` for every function the entry reaches, inferred once, and the `svec(rettype, signature)`
+record of each ccallable queued beside it; `notes`, the verifier's warnings,
 each a `TrimError`; and `parents`, the verifier's map from each CodeInstance to the caller and
 statement that first reached it, from which TrimVerifier.verify_create_stackframes locates any
 statement of the world.
@@ -43,15 +44,47 @@ by reflection when the package loads (check_sole_constructor).
                 parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}) = new(entry, codeinfos, notes, parents)
 end
 
-# Julia's closed-world inference for trimming, from the entry's MethodInstance at `world`. Julia 1.13
-# adds external_linkage: false, so every body the entry reaches is inferred and none is taken as
-# already compiled into a package image (WasmTarget compiles every body to wasm).
-@quarantine "the closed world is inferred by Julia's trim mode, whose entry point changed arity in 1.13" Core.Compiler.typeinf_ext_toplevel function _trim_infer(mi::Core.MethodInstance, world::UInt)::Vector{Any}
+# Julia's closed-world inference for trimming at `world`, of its queue: the entry's MethodInstance and
+# each @ccallable as `svec(rettype, signature)`, the item juliac queues for one
+# (juliac-buildscript.jl's jl_add_ccallable_entrypoints), whose specialization the inference compiles
+# and whose record it keeps for the verifier. Julia 1.13 adds external_linkage: false, so every body
+# the queue reaches is inferred and none is taken as already compiled into a package image
+# (WasmTarget compiles every body to wasm).
+@quarantine "the closed world is inferred by Julia's trim mode, whose entry point changed arity in 1.13" Core.Compiler.typeinf_ext_toplevel function _trim_infer(queue::Vector{Any}, world::UInt)::Vector{Any}
     @static if VERSION >= v"1.13-"
-        return Core.Compiler.typeinf_ext_toplevel(Any[mi], UInt[world], Core.Compiler.TRIM_UNSAFE, false)
+        return Core.Compiler.typeinf_ext_toplevel(queue, UInt[world], Core.Compiler.TRIM_UNSAFE, false)
     else
-        return Core.Compiler.typeinf_ext_toplevel(Any[mi], UInt[world], Core.Compiler.TRIM_UNSAFE)
+        return Core.Compiler.typeinf_ext_toplevel(queue, UInt[world], Core.Compiler.TRIM_UNSAFE)
     end
+end
+
+# The program's @ccallable members among an inferred closed world, each as juliac queues it,
+# `svec(rettype, signature)` (Method.ccallable): a ccallable the entry reaches is exported
+# (functions.jl's getExportName), so Julia's verifier judges its declared signature and return
+@quarantine "a ccallable is queued for Julia's trim inference as its Method's svec(rettype, signature)" Core.Method function _reached_ccallables(codeinfos::Vector{Any})::Vector{Any}
+    local out = Any[]
+    local seen = Base.IdSet{Method}()
+    for x in codeinfos
+        x isa Core.CodeInstance && x.def isa Core.MethodInstance || continue
+        local m = x.def.def
+        m isa Method && isdefined(m, :ccallable) && !(m in seen) || continue
+        push!(seen, m)
+        push!(out, m.ccallable)
+    end
+    return out
+end
+
+# The closed world Julia infers for `queue` and its verifier's verdict: the inferred items, the
+# warnings and the parents; an error rejects as OutsideSubset, located at `at`
+@quarantine "the verifier judges what Julia's trim inference returned, errors fatal and warnings notes, as juliac" Core.Compiler.TrimVerifier.get_verify_typeinf_trim function _infer_verified(queue::Vector{Any}, world::UInt, at::String)
+    local codeinfos = _trim_infer(queue, world)
+    local errors, parents = Core.Compiler.TrimVerifier.get_verify_typeinf_trim(codeinfos)
+    local fatal = TrimError[]; local notes = TrimError[]
+    for (warn, cause) in errors
+        push!(warn ? notes : fatal, _trim_error(cause, parents, at))
+    end
+    isempty(fatal) || reject!(OutsideSubset(fatal), at)
+    return codeinfos, notes, parents
 end
 
 # The MethodInstance Julia compiles for the entry `sig` at `world`: its compileable specialization, the
@@ -112,7 +145,7 @@ closed world it accepts; rejects with `OutsideSubset` when the entry has no uniq
 `which` text) or no compileable specialization, or the verifier reports errors, each a `TrimError`
 holding Julia's own record, its statement and its stack frames.
 """
-@quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed" Core.Compiler.TrimVerifier.get_verify_typeinf_trim function check_subset(@nospecialize(f), argtypes::Tuple, at::String)::ClosedWorld
+@quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed" Base.signature_type function check_subset(@nospecialize(f), argtypes::Tuple, at::String)::ClosedWorld
     local sig = Base.signature_type(f, argtypes)
     local world = Base.get_world_counter()
     local mi = _entry_specialization(sig, world)
@@ -128,13 +161,11 @@ holding Julia's own record, its statement and its stack frames.
                                          "$sig: Julia gives the call no compileable specialization")]), at)
     end
     local entry = mi
-    local codeinfos = _trim_infer(entry, world)
-    local errors, parents = Core.Compiler.TrimVerifier.get_verify_typeinf_trim(codeinfos)
-    local fatal = TrimError[]; local notes = TrimError[]
-    for (warn, cause) in errors
-        push!(warn ? notes : fatal, _trim_error(cause, parents, at))
-    end
-    isempty(fatal) || reject!(OutsideSubset(fatal), at)
+    local codeinfos, notes, parents = _infer_verified(Any[entry], world, at)
+    # the ccallables the entry reaches, queued beside it as juliac queues each, so the verifier judges
+    # each declared signature and return (CCallableMissing); the inference's cache answers the rest
+    local ccallables = _reached_ccallables(codeinfos)
+    isempty(ccallables) || ((codeinfos, notes, parents) = _infer_verified(Any[entry; ccallables], world, at))
     return ClosedWorld(_SubsetToken(), entry, codeinfos, notes, parents)
 end
 

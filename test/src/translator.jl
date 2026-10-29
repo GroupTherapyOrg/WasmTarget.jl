@@ -287,7 +287,8 @@ end
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(W.check_subset(CCallableCases.entry, (Int32,), "translator"), data, D.TranslatorOptions())
+    local world = W.check_subset(CCallableCases.entry, (Int32,), "translator")
+    local t = D.Translator(world, data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     local fc = t.functions[]
@@ -302,6 +303,14 @@ end
     end
     # the ccallable's declared signature is the specialization Julia compiled, its return within it
     @test only(methods(CCallableCases.twice)).ccallable[2] == twice.specTypes
+    # the reached ccallable was queued beside the entry as juliac queues it, its record the verifier's
+    @test only(methods(CCallableCases.twice)).ccallable in world.codeinfos
+    # a declared return inference does not meet, queued through the same inference and verifier: a
+    # located OutsideSubset, the verifier's own error
+    local bad = Core.svec(UInt8, only(methods(CCallableCases.twice)).ccallable[2])
+    local e = try; W._infer_verified(Any[world.entry, bad], Base.get_world_counter(), "translator: bad ccallable"); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.OutsideSubset && e.at == "translator: bad ccallable"
+    @test only(e.rejection.errors).kind === W.ccallable_return_mismatch
 end
 
 @testset "functions.dart: a member's function, its type and its queued code" begin

@@ -97,19 +97,11 @@ end
 
 """
 Register an exported member and queue it: every export of a Julia program is strong. A `@ccallable`
-member's declared signature and return, `svec(rettype, signature)`, must be the specialization
-Julia inferred, its inferred return within the declared one, or Julia's trim verifier refuses the
-program (CCallableMissing, the ccallable with no matching compiled specialization); refused here
-the same way, located.
+member's declared signature and return were judged by Julia's trim verifier, which check_subset
+queued it for as juliac does (CCallableMissing), so a program that reaches here declares each
+correctly.
 """
 @parity "dart2wasm/lib/functions.dart:57 FunctionCollector._handleExports" function _handle_exports(self::FunctionCollector, member::Core.MethodInstance)::Nothing
-    local method = member.def::Method
-    if isdefined(method, :ccallable)
-        local rettype, sig = method.ccallable[1], method.ccallable[2]
-        local body = first(b for b in self.translator.component if b.ci.def === member)
-        (member.specTypes == sig && body.ci.rettype <: rettype) ||
-            reject!(OutsideSubset("CCallableMissing: the @ccallable $(method.name) declares $sig returning $rettype, but Julia compiled $(member.specTypes) returning $(body.ci.rettype)"), get_function_name(self, member))
-    end
     get_export_name(self, member) === nothing || get_function(self, member)
     return nothing
 end

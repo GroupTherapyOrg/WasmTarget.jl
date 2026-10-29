@@ -378,13 +378,19 @@ statement its kind of `NirStmt`, each operand of `NirValue`, each type Julia's. 
 census rejects with `Unquarantined`, located at the compile `at` names.
 """
 @quarantine "the closed world Julia inferred comes as CodeInstance and CodeInfo pairs, read once" Core.CodeInfo function build_nir(world::ClosedWorld, at::String)::NirWorld
-    local xs = world.codeinfos
+    # a queued ccallable's svec(rettype, signature) is the verifier's record, no body: its
+    # specialization is a CodeInstance of the world like any other, which Julia's inference lists a
+    # second time when its invokelatest queue compiles it (typeinfer.jl's compile!), one body here
+    local xs = Any[x for x in world.codeinfos if !(x isa Core.SimpleVector)]
     iseven(length(xs)) || reject!(Internal("src/julia/nir.jl: the closed world holds $(length(xs)) entries, not CodeInstance and CodeInfo pairs"), at)
     local bodies = NirBody[]
+    local seen = Base.IdSet{Core.CodeInstance}()
     for k in 1:2:length(xs)
         local ci = xs[k]; local src = xs[k + 1]
         ci isa Core.CodeInstance && src isa Core.CodeInfo ||
             reject!(Internal("src/julia/nir.jl: the closed world's entry $k is a $(typeof(ci)) and $(typeof(src)), not a CodeInstance and its CodeInfo"), at)
+        ci in seen && continue
+        push!(seen, ci)
         push!(bodies, NirBody(ci, NirStmt[_nir_stmt(st, at) for st in src.code], _nir_types(ci, src, at), src.code))
     end
     any(b -> b.ci.def === world.entry, bodies) ||
