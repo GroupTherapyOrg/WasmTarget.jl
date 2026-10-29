@@ -42,6 +42,7 @@ anchor in `src/` has a row.)
 | Constant interning | `ensure_constant_global!` (types.jl) | Constants |
 | Call consult chain | `compile_call!` (calls.jl) | ConsultChain |
 | Fatal/trap resolution | `record_unsupported!` (diagnostics.jl) | Diagnostics |
+| Closed-world classes | `closed_world_classes`, `_meet_value!`, `_meet_class!` (classes.jl: every class a value can have, once, its supertype and its fields' classes with it), read by class_info.jl's numbering | ValueClasses |
 | Constant cache keys | `_bounded_hash`, `Base.hash(::NirConst)` (nir.jl) | ConstantHash |
 | Box contents join | `box_contents_type` (box_capture.jl) | BoxJoin |
 | Box-derived value types | `f3_box_value_types` (box_capture.jl) | BoxValueTypes |

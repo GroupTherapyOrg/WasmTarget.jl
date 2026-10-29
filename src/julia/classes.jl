@@ -28,6 +28,8 @@ precedent(dart: a component's classes, the libraries' classes in order, class_in
 Julia's differs: a program declares no class list, so the list is the types Julia inferred for its
 values, each met once, and a parametric instance (`Vector{Int64}`) is a class of its own, as Julia's
 `supertype` gives it.
+
+formal(dev/formal/ValueClasses.tla): every class a value can have listed once, closed under supertype and fields, nothing extra
 """
 @quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values" Base.unwrap_unionall function closed_world_classes(world::NirWorld, at::String)::Vector{DataType}
     local out = DataType[]
