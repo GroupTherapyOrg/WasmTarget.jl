@@ -78,7 +78,7 @@ end
     # every description has one kind, and every kind but the entry's two has one description
     local described = collect(values(W.TRIM_ERROR_KINDS))
     @test allunique(described)
-    @test Set(described) == Set(k for k in instances(W.TrimErrorKind) if !(k in (W.no_unique_method, W.no_compileable_specialization)))
+    @test Set(described) == Set(k for k in instances(W.TrimErrorKind) if !(k in (W.no_unique_method, W.no_compileable_specialization, W.shared_export_name)))
     # an accepted world keeps the verifier's parents, from which any statement is located
     @test WasmTarget.check_subset(SubsetCases.g, (Int,), "subset").parents isa IdDict
 end
@@ -105,4 +105,35 @@ end
     end
     @test disagree == String[]
 end
+end
+
+module ExportNameCases
+# two @ccallable methods of one function, each exported by the function's name (@noinline, so the
+# entry reaches each as a body of its own)
+Base.@ccallable shared(x::Int32)::Int32 = (@noinline; x + Int32(1))
+Base.@ccallable shared(x::Float64)::Float64 = (@noinline; x + 1.0)
+both_shared(x::Int32, y::Float64) = (shared(x), shared(y))
+# the same, the second given a C name of its own
+Base.@ccallable named(x::Int32)::Int32 = (@noinline; x + Int32(1))
+Base.@ccallable "named_float" named(x::Float64)::Float64 = (@noinline; x + 1.0)
+both_named(x::Int32, y::Float64) = (named(x), named(y))
+end
+
+@testset "check_subset: two exports sharing a name are the program's error, naming both methods" begin
+    local E = ExportNameCases
+    local r = try
+        WasmTarget.check_subset(E.both_shared, (Int32, Float64), "subset"); nothing
+    catch e
+        e isa WasmTarget.RejectionError ? e : rethrow()
+    end
+    @test r isa WasmTarget.RejectionError && r.rejection isa WasmTarget.OutsideSubset && r.at == "subset"
+    local err = only(r.rejection.errors)
+    @test err.kind == WasmTarget.shared_export_name
+    local text = sprint(showerror, r)
+    @test occursin("\"shared\"", text) && occursin("Int32", text) && occursin("Float64", text)
+    # a C name given to @ccallable is the export name, so the two export apart
+    local w = WasmTarget.check_subset(E.both_named, (Int32, Float64), "subset")
+    local names = Set(n for x in w.codeinfos if x isa Core.CodeInstance
+                      for n in (WasmTarget.program_export_name(x.def, w.entry),) if n !== nothing)
+    @test names == Set(["named", "named_float", "both_named"])
 end

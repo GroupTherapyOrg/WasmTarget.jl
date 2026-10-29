@@ -44,16 +44,13 @@ end
 @parity "dart2wasm/lib/util.dart:116 getWasmNeverInlinePragma" get_wasm_never_inline_pragma(member::Core.MethodInstance)::Union{Bool,Nothing} =
     Core.Compiler.is_declared_noinline(member.def::Method) ? true : nothing
 
-# dart's `wasm:export` pragma, its value or the member's name: a `Base.@ccallable` method's, its
-# function's name; the program's entry, its function's name too, as dart's runtime exports its main
-# invoker; no other member. coreTypes is dropped (the Kernel table's CoreTypes row), and the closed
+# dart's `wasm:export` pragma, its value or the member's name: a `Base.@ccallable` method's, the C
+# name @ccallable records, else its function's name; the program's entry, its function's name, as
+# dart's runtime exports its main invoker; no other member (program_export_name, src/julia/subset.jl,
+# the one statement of the rule). coreTypes is dropped (the Kernel table's CoreTypes row), and the closed
 # world, whose entry it names, is Julia's own keyword
-@parity "dart2wasm/lib/util.dart:125 getWasmExportPragma" function get_wasm_export_pragma(member::Core.MethodInstance; component::NirWorld)::Union{String,Nothing}
-    local method = member.def::Method
-    isdefined(method, :ccallable) && return string(method.name)
-    member === component.entry || return nothing
-    return string(method.name)
-end
+@parity "dart2wasm/lib/util.dart:125 getWasmExportPragma" get_wasm_export_pragma(member::Core.MethodInstance; component::NirWorld)::Union{String,Nothing} =
+    program_export_name(member, component.entry)
 
 @parity "dart2wasm/lib/util.dart:134 getWasmWeakExportPragma" get_wasm_weak_export_pragma(member::Core.MethodInstance)::Nothing = nothing
 

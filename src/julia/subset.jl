@@ -79,6 +79,34 @@ end
     return out
 end
 
+# A member's export name, or nothing: a @ccallable method's C name, the one Base.@ccallable records
+# (Method.ccallable's third entry, `Base.@ccallable "name" f(...)`) else its function's name, as
+# juliac's image exports it; the entry's, its function's name (dart's main). The one statement of the
+# rule: util.jl's getWasmExportPragma reads it, and check_subset refuses two exports sharing a name
+@quarantine "a ccallable's C name is the one Base.@ccallable records in Method.ccallable, else its function's" Core.Method function program_export_name(member::Core.MethodInstance, entry::Core.MethodInstance)::Union{String,Nothing}
+    local method = member.def::Method
+    isdefined(method, :ccallable) && return length(method.ccallable) == 3 ? method.ccallable[3]::String : string(method.name)
+    member === entry || return nothing
+    return string(method.name)
+end
+
+# Two members of the closed world exporting one name: a program juliac's image would export as one
+# symbol, the user's to rename, rejected naming both methods, located at `at`
+@quarantine "a C name names one symbol of juliac's image; two methods sharing one are the program's error" Core.MethodInstance function _check_export_names(entry::Core.MethodInstance, codeinfos::Vector{Any}, at::String)::Nothing
+    local by_name = Dict{String,Core.MethodInstance}()
+    for x in codeinfos
+        x isa Core.CodeInstance && x.def isa Core.MethodInstance || continue
+        local mi = x.def
+        local name = program_export_name(mi, entry)
+        name === nothing && continue
+        local other = get!(by_name, name, mi)
+        other === mi && continue
+        reject!(OutsideSubset([TrimError(shared_export_name, nothing, 0, Base.StackTraces.StackFrame[],
+                                         TrimEntryText("$(other.def) and $(mi.def) both export the name \"$name\": one symbol for two methods; give one a name of its own (Base.@ccallable \"name\" f(...))"))]), at)
+    end
+    return nothing
+end
+
 # The closed world Julia infers for `queue` and its verifier's verdict: the inferred items, the
 # warnings and the parents; an error rejects as OutsideSubset, located at `at`
 @quarantine "the verifier judges what Julia's trim inference returned, errors fatal and warnings notes, as juliac" Core.Compiler.TrimVerifier.get_verify_typeinf_trim function _infer_verified(queue::Vector{Any}, world::UInt, at::String)
@@ -176,6 +204,7 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
     # each declared signature and return (CCallableMissing); the inference's cache answers the rest
     local ccallables = _reached_ccallables(codeinfos)
     isempty(ccallables) || ((codeinfos, notes, parents) = _infer_verified(Any[entry; ccallables], world, at))
+    _check_export_names(entry, codeinfos, at)
     return ClosedWorld(_SubsetToken(), entry, codeinfos, notes, parents)
 end
 

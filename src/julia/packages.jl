@@ -81,6 +81,8 @@ import ...@parity, ...@unported, ...@closed, ...@exhaustive
 import ...reject!, ...Internal, ...Unported
 # a member's body, the CodeInstance Julia inferred for it (src/julia/nir.jl)
 import ...nir_body_of
+# a member's export name, Julia's @ccallable or the entry (src/julia/subset.jl)
+import ...program_export_name
 # the Julia types the Kernel table names, as stubs name them (src/julia/kernel.jl)
 import ...NoCounterpart, ...NirWorld, ...NirBody, ...ClassField, ...NirValue, ...NirSSA, ...NirArgument,
        ...NirGlobal, ...NirConst, ...NirStmt, ...NirInvoke, ...NirCall, ...NirNew, ...NirGlobalRead,

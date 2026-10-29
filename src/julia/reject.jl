@@ -18,8 +18,9 @@ end
     TrimErrorKind
 
 What Julia's trim verifier found at a statement: one member per description its `CallMissing` and
-`CCallableMissing` carry (Compiler/src/verifytrim.jl, Julia 1.12 and 1.13), and the two ways an
-entry has nothing to verify, no unique method or no compileable specialization.
+`CCallableMissing` carry (Compiler/src/verifytrim.jl, Julia 1.12 and 1.13), the two ways an
+entry has nothing to verify, no unique method or no compileable specialization, and two exports of
+the program sharing one name, which juliac's image would export as one symbol (shared_export_name).
 
 precedent(rust: a fieldless enum; dart: enum). Julia's differs: an @enum is closed by its type, and
 the verifier states each kind only as text, which `TRIM_ERROR_KINDS` (src/julia/subset.jl) reads
@@ -48,6 +49,7 @@ into a member; a text with no member is an Internal rejection, never a guess.
     ccallable_return_mismatch
     no_unique_method
     no_compileable_specialization
+    shared_export_name
 end
 
 """A verifier error at a statement: Julia's own `CallMissing` record, its CodeInstance, CodeInfo and
