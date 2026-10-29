@@ -529,6 +529,7 @@ members by the CFE; gpucompiler: the method table a device's overlays of Base li
 differs: `include` takes any path, so the overlays' file map is a table too, beside RUNTIME_FILES.
 """
 @quarantine "Julia's include takes any path; the overlay table's file map is a table" Core.String const PATCH_FILES::Tuple{Vararg{String}} = (
+    "patch/string.jl",
 )
 
 # the patch files include_patch has loaded, in order

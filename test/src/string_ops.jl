@@ -38,3 +38,13 @@ const STRING_OP_CASES = (
         @test (r.label => r.why) == (r.label => "")
     end
 end
+
+# each String operation reaches dart:_wasm's array operations through src/patch/string.jl's overlays,
+# never Base's pointer forms: its closed world calls the operation on the String's data
+@testset "String's operations reach its data through the overlays" begin
+    local reached(f, T) = Set{Symbol}(Core.Compiler.get_ci_mi(x).def.name for x in WasmTarget.check_subset(f, T, "string_ops").codeinfos
+                                      if x isa Core.CodeInstance)
+    @test :wasm_string_codeunit in reached(StringOpCases.cu, (Int64,))
+    @test :wasm_string_length in reached(StringOpCases.lens, (Bool,))
+    @test [:wasm_string_alloc, :wasm_string_copy!] ⊆ reached(StringOpCases.cat3, (Bool,))
+end

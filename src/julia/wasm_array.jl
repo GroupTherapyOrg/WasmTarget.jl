@@ -68,7 +68,8 @@ end
 # (src/julia/classes.jl _string_instance_fields). dart's string patches read and write their data
 # through dart:_wasm's WasmArray operations (sdk/lib/_wasm/wasm_types.dart: `length`,
 # `readUnsigned`, the `WasmArray<WasmI8>(length)` constructor, `copy`), each one wasm instruction. These
-# are those operations on a String's data: the code generator lowers each call to its instruction, and
+# are those operations on a String's data: the code generator lowers each call to its instruction, so
+# each stays a call (`@noinline`, as dart's are `external` members the intrinsifier meets at the call), and
 # natively each computes Julia's own answer on a Julia String, so an overlay written with them answers
 # as native Julia does wherever Julia evaluates it at compile time. Offsets count from 0, as a wasm
 # array's do.
@@ -79,7 +80,7 @@ end
 The number of code units in `s`'s data: dart's `WasmArray.length`, `struct.get _data; array.len`
 (zero-extended). Natively Julia's `Core.sizeof(s)`, a String's byte length (jl_string_len).
 """
-@quarantine "a String's byte length is its wasm data array's length, Julia's Core.sizeof natively" Core.sizeof wasm_string_length(s::String)::Int = Core.sizeof(s)
+@quarantine "a String's byte length is its wasm data array's length, Julia's Core.sizeof natively" Core.sizeof @noinline wasm_string_length(s::String)::Int = Core.sizeof(s)
 
 """
     wasm_string_codeunit(s, i) -> UInt8
@@ -87,7 +88,7 @@ The number of code units in `s`'s data: dart's `WasmArray.length`, `struct.get _
 The code unit at offset `i` (from 0) of `s`'s data, unchecked: dart's `WasmArray<WasmI8>.readUnsigned`,
 `struct.get _data; array.get_u`. Natively Julia's byte of the String (jl_string_data), its `i + 1`th.
 """
-@quarantine "a String's byte at an offset is its wasm data array's element, Julia's byte natively" Base.unsafe_load function wasm_string_codeunit(s::String, i::Int)::UInt8
+@quarantine "a String's byte at an offset is its wasm data array's element, Julia's byte natively" Base.unsafe_load @noinline function wasm_string_codeunit(s::String, i::Int)::UInt8
     return GC.@preserve s unsafe_load(pointer(s), i + 1)
 end
 
@@ -96,9 +97,12 @@ end
 
 A new String of `n` code units, each 0, to be filled before it is read: dart's
 `WasmArray<WasmI8>(length)`, `array.new_default` wrapped in the String's struct. Natively Julia's
-`Base._string_n(n)` (jl_alloc_string), a fresh String whose bytes its caller writes.
+jl_alloc_string, called as `Base._string_n` calls it, a fresh String whose bytes its caller writes;
+never through `_string_n` itself, which src/patch/string.jl's overlay maps back here, so the closed
+world would infer the pair as a loop that never returns.
 """
-@quarantine "a new String of n bytes is a new wasm data array in its struct, Julia's jl_alloc_string natively" Base._string_n wasm_string_alloc(n::Int)::String = Base._string_n(n)
+@quarantine "a new String of n bytes is a new wasm data array in its struct, Julia's jl_alloc_string natively" Base.Csize_t @noinline wasm_string_alloc(n::Int)::String =
+    ccall(:jl_alloc_string, Ref{String}, (Csize_t,), n)
 
 """
     wasm_string_copy!(dst, dst_offset, src, src_offset, n) -> Nothing
@@ -107,7 +111,7 @@ Copies `n` code units of `src`'s data from `src_offset` into `dst`'s from `dst_o
 fresh String's (wasm_string_alloc): dart's `WasmArray.copy`, `array.copy`. Natively Julia's
 `unsafe_copyto!` of the bytes, as Base's `_string` fills a fresh String.
 """
-@quarantine "copying bytes into a fresh String is a wasm array.copy, Julia's unsafe_copyto! natively" Base.unsafe_copyto! function wasm_string_copy!(dst::String, dst_offset::Int, src::String, src_offset::Int, n::Int)::Nothing
+@quarantine "copying bytes into a fresh String is a wasm array.copy, Julia's unsafe_copyto! natively" Base.unsafe_copyto! @noinline function wasm_string_copy!(dst::String, dst_offset::Int, src::String, src_offset::Int, n::Int)::Nothing
     GC.@preserve dst src unsafe_copyto!(pointer(dst) + dst_offset, pointer(src) + src_offset, n)
     return nothing
 end
