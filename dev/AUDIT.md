@@ -5301,3 +5301,89 @@ fired inside its band.
 Resolution: this entry lands alone, prose only, and fixes nothing. A58S1 is fixed by e8bafd28, A54S4 by 4f6e871c, A56E1
 by a54bd0f6 and A57S7 by ff811421, each leaving its row. A59S1 is open on MARCH 1.D. By owner: the codegen lane holds
 A59S1 and A56S2; the stackify lane holds A57S1, A57S2 and A57S4.
+
+## 2026-10-29 — audited through 7c3b49e4 (ff811421..7c3b49e4: the bounds-check flag, try regions in wasm, the try statements' Kernel rows, the JS string global, a check only in a landing, String over UTF-8 code units, StaticFieldInit, the runtime's gaps counted, the lazy static field, addNestedTryTable, shared export names, four corpus shards, the Reshaped and field exemptions and their skeleton checks, String's data operations, the parameter ports, the switch structs, ExceptionInfo, an empty commit, four language directories, a closure's this, the replaced generators as structs, visitTypeLiteral, :unread, the overlay method table, lanetest, the runtime section, instantiateTypeParameter, the interpreter's inference and its revert)
+
+The sixtieth audit, beside the work, covers the 40 commits of ff811421..7c3b49e4 that are not entry 59 (aca8c7a7, its
+author's), read here. Every finding rests on one exact command, quoted; TLC ran the two new models; the per-file timing
+of the src tests the lead asked for did not finish (`perl -e 'alarm 1500; exec @ARGV' taskpolicy -b julia --project=.
+--startup-file=no test/src_tests.jl` ended at its alarm, exit 142, on the efficiency cores) and moves to entry 61; the
+range's growth by lines (`for f in $(git ls-files test/src | grep '\.jl$'); do …; done` against f77d8b39) is largest in
+test/src/code_generator.jl (+177), llvm_exception_info.jl (+162, new), dart_tests.jl (+88) and constants.jl (+67). The
+lead reports wt3-tests' harness self-audit, its findings a, b, c and e in hand; entry 61 reads their fixes. Standing
+items. The models break as claimed: `TLC_ONLY=… taskpolicy -b bash dev/formal/run_tlc.sh` printed `ok
+MCStaticFieldInit.cfg … 56 distinct states` with `violation of NoPlaceholderRead` and `ReadsTruth`, and `ok
+MCExceptionInfo.cfg … 47616 distinct states` with `violation of MapInnermost`, `ParentInnermost` and `BlocksDominated`,
+each its expect line's claim. Fixed in the range: A59S1 by 08546acd (`git show 7c3b49e4:src/code_generator.jl | grep -n
+"datatype_min_ninitialized"` gives :1251 `given >= Core.Compiler.datatype_min_ninitialized(cls) ||
+reject!(Internal(…))`, and the gap's text names UndefVarError for a Core.Box read), A57S5 by 52cce972
+(typeOfParameterVariable and getParametersToCheck each one caller now), A57S8 by 5cd16654; 5cd16654's subject also names
+A57S5 and A57S2, which it does not touch. Still open: A57S2 (`git show 7c3b49e4:src/julia/machine.jl | grep -n
+"handlers.nothrow\[i\]"` gives :197), A57S4 (four synthetic `ehpad = true`), A56S2 (`… | grep -n
+"issingletontype(dart_type_of"` gives :754). Findings A60S1, A60E1 and A60E2, and A57S1's state.
+
+The exemptions (the lead's order, from this entry on): `git diff ff811421..7c3b49e4 -- src | grep -E
+'^\+.*(Reshaped:|Fields with no Julia counterpart)'` lists six field exemptions and ten reshapes, each judged:
+closures.jl:90 `procedureAttributeMetadata`, `visitedConstants` (TFA's metadata is Julia's inference, the NIR no
+constant tree), record_class_generator.jl:14 the record class generator's `coreTypes` to `objectToStringProcedure` (no
+record class is generated, a tuple type being Base's), :27 `constantCache` (a NirConst holds no tree), types.jl:107 and
+:128 `typeEnvironment` (Julia's subtype test takes no environment): each concrete and true. Reshaped: the five
+FunctionCollector `target`s, MethodInstance or the binding's GlobalRef (4e8220b9: the Kernel table has no Reference row
+for a static initializer), the two `init`s (a NirConst, an absent one dart's DummyValueConstant), the closures'
+`arguments` (keyword names in the NamedTuple operand's type), the parameter `node` (member and position), and the five
+type tests' `testedAgainstType`/`type` (any constant Julia type a class-id range check covers, under the lead's ruling
+R2): each concrete and true, none a gap disguised.
+
+Area: builder — empty by diff (`git diff --stat ff811421..7c3b49e4 -- src/wasm_builder` prints nothing).
+
+Area: collection and planning — d87bdf22 and its two data-operation commits make a String dart's string class over
+Julia's UTF-8 code units (Dale's choice B), its precedent dart2wasm's earlier OneByteString, unanchored as the shallow
+pin allows; 4e8220b9 the lazy static field keyed by the binding, StaticFieldInit its model; 52cce972 routes the
+parameter facts through their ports; a230adc6 inferred the closed world over WasmTarget's interpreter with a copy of
+Julia's verifier changed in one place, reverted by 7c3b49e4 for its load cost. (A60E1, medium) the overlay table stays
+with no reader, and its precompile workload runs in every package image: `grep -rn
+"WasmInterpreter\|METHOD_TABLE\|WasmMethodTable" src | grep -v src/julia/interpreter.jl` finds no reader, while `grep
+-rn "precompile_interpreter" src` gives `src/WasmTarget.jl:66 precompile_interpreter()`, whose body
+(interpreter.jl:120–123) runs `check_subset(…)` while the image is written, so each src change's load stage pays an
+inference the reverted reader no longer needs (the lead measured the revert's check at 24 CPU-s of load against about 12
+before a230adc6) (D14, C9). Fix: the workload leaves with the reader and returns with it, made lazy as the re-land
+plans. (A60S1, low) 6cd77cec adds `shared_export_name` to TrimErrorKind (reject.jl:52), whose docstring says each member
+is a description Julia's verifier carries, and reports it as OutsideSubset, "Julia's trim verifier rejects the program":
+two exports of one name is WasmTarget's judgment of juliac's linking, not the verifier's (C3, C6). Fix: its own
+rejection naming the rule, or the verifier's kinds kept the verifier's.
+
+stopgap in disguise: none new.
+precedent: the overlay method table, GPUCompiler's GLOBAL_METHOD_TABLE and GPUInterpreter; String, dart's string class
+with its code units, Julia's layout.
+
+Area: emission and diagnostics — b107ca36 answers the bounds-check flag as Julia's codegen does (the process's
+--check-bounds, else the statement's argument, which Julia's adjust_boundscheck! fills on inlining:
+inlining.jl:351–358); 2db99073 lowers try_table, catch and the exception-edge values (Julia's emit_upsilonnode the
+precedent), no test throwing yet since throw is unported; c1038d02 and 08546acd answer the try statements and the switch
+structs by their Kernel rows. A57S1, high, now in part: 8a728e50 models WebAssemblyExceptionInfo (recalculate,
+discoverAndMapException, getOutermostException), but 4342aac4 lands addNestedTryTable, getTrampolineBlock,
+cleanupFunctionData and the successor edits (WebAssemblyCFGStackify.cpp:1383, :1312, :2686), with placeTryTableMarker
+(b16f76c5) and the unwind-mismatch finders (3156199a) before it, and `git log --oneline ff811421..7c3b49e4 --
+dev/formal` lists only fa9e9d72 and 8a728e50: the try placement, the mismatch fixes and the exception sort regions have
+no model, and 4342aac4 shipped after the order to model first (C8, D11). Fix: CFGStackify.tla extended over EH pads,
+try_table placement and the mismatch fixes, with Broken variants, before the next EH commit.
+
+stopgap in disguise: none new.
+precedent: the exception tree, WebAssemblyExceptionInfo at the pin, now modeled by ExceptionInfo; the nested try_table
+and its trampolines, LLVM's addNestedTryTable.
+
+Area: enforcement and prose — d7a38c1b refuses a hand run of the whole suite outside background QoS; 18208f07 runs the
+corpus in four shards (918 s against its 1200-s limit); 17113f35 lands no empty commit; 6e6db6ec adds `:unread` for a
+compiled case holding a fact the runner does not marshal; a1fadf69, b9a54031, ae7a98ab and a5e89d25 give the skeleton's
+checks the two exemption forms judged above. (A60E2, low) lanetest takes a performance-core slot by the landing's state
+at its start alone: `grep -n "busy" dev/lanetest.sh` shows the lock test before the slot is taken and none after, so a
+run started before a landing keeps its performance core through the landing's check for up to its 900-s limit, the
+check's four processes then sharing four cores with it (D31). Fix: a lane run yields its slot when a landing's check
+starts (re-niced to background QoS), or waits for none. Requirements: C8 and D11 (A57S1); D14 and C9 (A60E1); C3 and C6
+(A60S1); D31 (A60E2); no lock fired inside its band.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A59S1 is fixed by 08546acd, A57S5 by 52cce972 and
+A57S8 by 5cd16654, each leaving its row. A60E1 and A60E2 are open on MARCH 1.L. A60S1 is open on MARCH 1.C. By owner
+(the lead's of this morning): the EH model's owner, wt3-translator, holds A57S1 and A57S2; wt3-cgstubs holds
+code_generator.jl's A56S2 and A57S4's tests; the translator lane holds A60S1; the lead holds A60E1 (with wt3-constants'
+re-land) and A60E2.
