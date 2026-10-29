@@ -1098,8 +1098,9 @@ _dart_defect(got)::Bool = got isa WasmTarget.RejectionError &&
 
 # why a rejection is not located, or "" (A51E1): it names its compile (`at`), and the definition it reached
 # stands in the pin table: an Unported's anchor parses by parse_anchor to a file of DART_FILES or LLVM_FILES,
-# an Unquarantined's row opens with a file of this repository or of DART_FILES. Where the anchor points is
-# never pinned: one lane's progress moves it (the snapshot that oscillated, 2026-10-28).
+# an Unquarantined's row opens with a file of this repository or of DART_FILES: a file, never a directory, so a
+# row opening `src/julia: …` names no definition and is unlocated until its owner names the file (A57E1). Where
+# the anchor points is never pinned: one lane's progress moves it (the snapshot that oscillated, 2026-10-28).
 const _DART_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 function _dart_unlocated(e::WasmTarget.RejectionError)::String
     isempty(e.at) && return "its rejection names no compile (an empty `at`)"
@@ -1116,7 +1117,8 @@ function _dart_unlocated(e::WasmTarget.RejectionError)::String
         local m = match(r"^([\w./-]+?)(?::\d+)?(?::|\s|$)", r.row)
         local file = m === nothing ? "" : String(m[1])
         (isfile(joinpath(_DART_ROOT, file)) || file in WasmTarget.DART_FILES) ||
-            return "its Unquarantined row $(repr(first(r.row, 120))) opens with no file of the repository or the pin"
+            return "its Unquarantined row $(repr(first(r.row, 120))) opens with no file of the repository or the pin " *
+                   "(a directory names no definition)"
     else
         return "a $(nameof(typeof(r))) is no rejection a :rejects case admits"
     end
@@ -1223,6 +1225,10 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
     end
     # every recorded case is a case of the corpus
     @test sort!(collect(setdiff(Set(k for k in keys(DART_CASES) if first(split(k, '/')) in _DART_SHARD_GROUPS), seen))) == String[]
+    # every record names a group of the corpus, checked whole in every shard and in the landing (names alone, so
+    # cheap): a record of a group removed or misspelt falls in no shard's groups and would go unchecked (A57E2)
+    local group_names = Set{String}(first(g) for g in DART_GROUPS)
+    @test sort!([k for k in keys(DART_CASES) if !(first(split(k, '/')) in group_names)]) == String[]
     # every module read, in one node process: each fact native's, in both modules, or the case fails naming
     # the fact by its path and what the modules answered
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: running $(length(runs)) modules in node")
@@ -1249,3 +1255,19 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
 end
 println("dart tests: $(_DART_CORE_ONLY ? length(DART_CORE) : length(DART_CASES)) compiles checked$(_DART_CORE_ONLY ? " (the landing core)" : ""); native answers proven for ",
         _DART_CORE_ONLY ? "the $(length(DART_NATIVE_DUE)) the change adds or edits against $(_DART_BASE)" : "every case", "; $(DART_RUN_COUNTS[1]) compiled cases run in node, $(DART_RUN_COUNTS[3]) of their $(DART_RUN_COUNTS[2]) facts native's")
+
+# _dart_unlocated against its own plants (A51E1, A57E1): a located Unported and Unquarantined admitted, and each
+# way a rejection can fail to locate refused
+@testset "a :rejects case's rejection is located (_dart_unlocated's plants)" begin
+    local E(r, at = "f(::Int64)") = WasmTarget.RejectionError(r, at)
+    @test _dart_unlocated(E(WasmTarget.Unported("dart2wasm/lib/code_generator.dart:138 AstCodeGenerator.unimplemented"))) == ""
+    @test _dart_unlocated(E(WasmTarget.Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace"))) == ""
+    @test _dart_unlocated(E(WasmTarget.Unquarantined("src/julia/nir.jl: the varargs method f"))) == ""
+    @test _dart_unlocated(E(WasmTarget.Unquarantined("dart2wasm/lib/translator.dart:1597 convertType: boxing"))) == ""
+    @test occursin("names no compile", _dart_unlocated(E(WasmTarget.Unported("dart2wasm/lib/abi.dart:1 X"), "")))
+    @test occursin("is no anchor", _dart_unlocated(E(WasmTarget.Unported("somewhere"))))
+    @test occursin("in no pin table", _dart_unlocated(E(WasmTarget.Unported("other/lib/x.dart:3 Y"))))
+    @test occursin("a directory names no definition", _dart_unlocated(E(WasmTarget.Unquarantined("src/julia: a foreigncall"))))
+    @test occursin("opens with no file", _dart_unlocated(E(WasmTarget.Unquarantined("src/julia/nosuch.jl: x"))))
+    @test occursin("no rejection a :rejects case admits", _dart_unlocated(E(WasmTarget.Internal("x"))))
+end
