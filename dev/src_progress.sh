@@ -6,7 +6,7 @@
 #   bash dev/src_progress.sh                      this tree: the dart definitions src/ ports, read
 #                                                 from WasmTarget's @parity registry (A35S1), and the
 #                                                 landings (commits) since src/ last changed
-#   bash dev/src_progress.sh <anchored> <ported> <since>   the line for planted numbers (L208's negative)
+#   bash dev/src_progress.sh <anchored> <ported> <since> [<replaced> <gaps>]   the line for planted numbers (L208's negative)
 #
 # Until legacy/ exists, src/ is still WT1's (1.A2c moves it), so the rebuild's src counts none and
 # every landing since the rebuild began (REBUILD_START) is a src-less one. An anchored definition is
@@ -21,8 +21,9 @@ NOTE_AFTER=5
 REBUILD_START=e2371eca08605231256dd5f3ee97609d6fc019a4   # chore(land): the march branch is wt2
 cd "$(git rev-parse --show-toplevel)"
 started=1
-if [ $# -eq 3 ]; then
+if [ $# -eq 3 ] || [ $# -eq 5 ]; then
     anchored=$1; ported=$2; since=$3
+    [ $# -eq 5 ] && { replaced=$4; gaps=$5; }
 else
     if [ -d legacy ]; then
         # the worktree's private depot (dev/depot.sh), never the shared compiled cache another tree can
@@ -60,10 +61,12 @@ else
     fi
     since=$(git rev-list --count --no-merges "$last"..HEAD)
 fi
-line="src: $ported of $anchored anchored dart definitions ported (every definition of each dart file src loads, dev/skeleton.jl); $since landing(s) since src/ last changed"
-# A55S13: a ported definition whose whole body is one rejection is no port with a body: an Internal one is
-# Julia's answer replacing a construct Julia never produces, an Unported or Unquarantined one a gap
-[ -n "${replaced:-}" ] && line="$line; of the ported, $replaced are one Internal rejection where Julia's answer replaces dart's construct and $gaps one Unported or Unquarantined rejection, a gap still to fill"
+# A55S13, and Dale 2026-10-29, "DO NOT allow stubs to be clalled complete": a definition whose whole body is one
+# rejection is no port: an Internal one claims Julia never produces dart's construct, an Unported or Unquarantined
+# one is a gap. The headline counts only definitions with a body; the rejection-only ones stand beside it, never in it
+body=$(( ported - ${replaced:-0} - ${gaps:-0} ))
+line="src: $body of $anchored anchored dart definitions ported with a body (every definition of each dart file src loads, dev/skeleton.jl); $since landing(s) since src/ last changed"
+[ -n "${replaced:-}" ] && line="$line; not counted ported: $replaced whose body is one Internal rejection (Julia's answer replacing dart's construct, each to triage) and $gaps one Unported or Unquarantined rejection, a gap still to fill"
 [ -n "${rt_sites:-}" ] && line="$line; the runtime library: $rt_sites rejecting site(s) name $rt_defs definition(s) of sdk/lib/_internal/wasm/ still to port"
 [ $started -eq 1 ] || line="$line (the rebuild's src/ not started: WT1 holds src/ until 1.A2c)"
 echo "$line"

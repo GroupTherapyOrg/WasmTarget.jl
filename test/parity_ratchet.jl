@@ -1382,6 +1382,9 @@ function src_progress_negatives_missed()::Vector{String}
     occursin("note:", src_progress("10", "2", "4")) && push!(out, "negative missed: four src-less landings printed the note")
     occursin("note:", src_progress("10", "2", "5")) || push!(out, "negative missed: five src-less landings printed no note")
     startswith(src_progress("10", "2", "0"), "src: 2 of 10 anchored dart definitions ported") || push!(out, "negative missed: the line's form")
+    # a rejection-only body is never counted ported (Dale 2026-10-29: "DO NOT allow stubs to be clalled complete")
+    startswith(src_progress("10", "8", "0", "2", "1"), "src: 5 of 10 anchored dart definitions ported with a body") ||
+        push!(out, "negative missed: rejection-only bodies counted as ported")
     return out
 end
 
