@@ -158,6 +158,8 @@ struct _DagHashNode; a::Any; b::Any; end
     @test d[WasmTarget.NirConst(Core.Const(n))] == 1
     @test hash(WasmTarget.NirConst(Core.Const(Int32(3)))) == hash(WasmTarget.NirConst(Core.Const(Int32(3))))
     @test WasmTarget.NirConst(Core.Const(Int32(3))) != WasmTarget.NirConst(Core.Const(Int64(3)))
+    # same-type structured literals hash apart by their values, so a cache of N of them stays linear
+    @test length(Set(hash(WasmTarget.NirConst(Core.Const((i, "x")))) for i in 1:100)) == 100
 end
 
 module ConstantsRest

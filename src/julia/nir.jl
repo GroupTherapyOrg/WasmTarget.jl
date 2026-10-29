@@ -31,13 +31,22 @@ end
 # A literal keys the constant caches (constants.jl's constantInfo, dart's canonicalization by
 # identity), so its hash must cost what === costs. Julia's objectid of an immutable value walks
 # every path through its fields, which is exponential on a constant whose fields share heap objects:
-# a 40-level DAG is 2^40 paths. === stops at a shared heap object, so it is linear there. Equal
-# literals have one type, so hashing a structured immutable by its type alone agrees with ===, and
-# the colliding entries are told apart by ===. A value Julia stores flat (isbits), a String, Symbol
-# or Type, or a mutable object (hashed by its address) keeps its own hash.
-@quarantine "a literal's hash agrees with === at ===' own cost: Julia's objectid recurses through every path of an immutable value, === stops at a shared heap object" Base.hash function Base.hash(c::NirConst, h::UInt)::UInt
-    local v = c.c.val
-    return (isbits(v) || v isa Union{String,Symbol,Type} || ismutable(v)) ? hash(v, h) : hash(typeof(v), h)
+# a 40-level DAG is 2^40 paths. === stops at a shared heap object, so it is linear there. The hash
+# walks a structured immutable's fields depth first, in field order, over at most 64 values: equal (===) literals take the same walk, so the hash agrees with ===, its cost is bounded
+# whatever the sharing, and same-type literals that differ in their first values hash apart (a hash
+# by the type alone made N of them collide, the cache quadratic, A51S13). A value Julia stores flat
+# (isbits), a String, Symbol or Type, or a mutable object (hashed by its address) is hashed itself.
+@quarantine "a literal's hash agrees with === at a bounded cost: Julia's objectid recurses through every path of an immutable value" Base.hash Base.hash(c::NirConst, h::UInt)::UInt = _bounded_hash(c.c.val, h, Ref(64))
+
+@quarantine "an immutable value's hash over its first values, depth first, at most a fixed count of them" Base.hash function _bounded_hash(@nospecialize(v), h::UInt, budget::Base.RefValue{Int})::UInt
+    budget[] -= 1
+    (isbits(v) || v isa Union{String,Symbol,Type} || ismutable(v)) && return hash(v, h)
+    h = hash(typeof(v), h)
+    for i in 1:nfields(v)
+        budget[] <= 0 && break
+        h = isdefined(v, i) ? _bounded_hash(getfield(v, i), h, budget) : hash(i, h)
+    end
+    return h
 end
 
 """
