@@ -42,10 +42,10 @@ run_head() {
     # efficiency cores, so its wall time stays inside its limit as the ported dart tests grow (one run took
     # 346 s, then 733 s two hours later, 2026-10-28); four since 918 s on 2db99073 (2026-10-29), the six efficiency
     # cores holding four shards beside the lanes' background runs
-    CORPUS_SHARDS=4; jpids=""
+    CORPUS_SHARDS=4; jpids=""; rm -f "$scratch"/.wtd/shard.*.time
     for k in $(seq 1 $CORPUS_SHARDS); do
       : > "$WT_PROGRESS.$k"
-      WT_PROGRESS="$WT_PROGRESS.$k" WT_DART_SHARD="$k/$CORPUS_SHARDS" taskpolicy -b julia --project=. --startup-file=no -e '
+      WT_PROGRESS="$WT_PROGRESS.$k" WT_DART_SHARD="$k/$CORPUS_SHARDS" taskpolicy -b /usr/bin/time -o "$scratch/.wtd/shard.$k.time" julia --project=. --startup-file=no -e '
         using Test
         wt_progress(s::AbstractString) = write(ENV["WT_PROGRESS"], s)
         @testset "corpus" begin include("test/src/dart_tests.jl") end' > "$out.$k" 2>&1 & jpids="$jpids $!"
@@ -56,7 +56,10 @@ run_head() {
       if [ $(( $(date +%s) - s0 )) -gt "$WT_CORPUS_LIMIT" ]; then
         cat "$out".[0-9]* > "$out"
         echo "corpus: past the hard limit of ${WT_CORPUS_LIMIT}s at: $(cat "$WT_PROGRESS".[0-9]* | tr '\n' ' ')" >> "$out"
-        for p in $jpids; do pkill -P $p 2>/dev/null; kill $p 2>/dev/null; done; exit 124
+        # a julia deep in a compile may outlive SIGTERM: three hung runs left their shards running with no
+        # parent, holding swap for half an hour (march-corrector, 10:55); a shard still alive 10 s later is killed
+        for p in $jpids; do pkill -P $p 2>/dev/null; kill $p 2>/dev/null; done
+        sleep 10; for p in $jpids; do pkill -9 -P $p 2>/dev/null; kill -9 $p 2>/dev/null; done; exit 124
       fi
       sleep 5
     done
@@ -67,6 +70,10 @@ run_head() {
   t=$(( $(date +%s) - r0 ))
   case $rc in 0) result=green;; 124) result=hung;; *) result=red;; esac
   first=$(grep -m1 -E 'Test Failed|Error During Test|past the hard limit|LoadError' "$out" | tr '\t' ' ' | cut -c1-200)
+  # each shard's CPU seconds beside the run's wall: a starved run (CPU far below wall, the machine swapping or
+  # crowded) reads apart from a real per-case cost increase (march-corrector, 10:55)
+  cpu=$(for f in "$scratch"/.wtd/shard.[0-9]*.time; do awk '/user/ { printf "%d ", $3 + $5 }' "$f" 2>/dev/null; done)
+  first="${first}${cpu:+ [shard CPU-s: ${cpu% }]}"
   printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short "$head")" "$result" "$t" "$first" >> "$tsv"
   # a red run's whole output outlives the next run, which truncates wt-corpus.out at its start: kept as
   # wt-corpus-red-<head>.out, the latest three (a red's cases were read from a file the next run had
