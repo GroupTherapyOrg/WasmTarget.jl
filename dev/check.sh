@@ -45,14 +45,15 @@ if [ -n "$missing_deps" ]; then
   julia --project=. --startup-file=no -e 'using Pkg; Pkg.resolve(); Pkg.instantiate()' > .wtd/resolve.out 2>&1 ||
     { echo "check: the Manifest does not resolve"; tail -20 .wtd/resolve.out; exit 1; }
 fi
-julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
+# each stage's CPU seconds (user + sys) go to .wtd/<stage>.time for D14's band, below
+/usr/bin/time -p -o .wtd/load.time julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
 # test file and case it was running (WT_PROGRESS), never an hour of a pinned core (2026-10-28: a
 # shared-DAG constant hashed in 2^40 steps and held a landing for 50 minutes)
 WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: today's slowest loaded check is ~170 s
 export WT_PROGRESS="$PWD/.wtd/progress"; : > "$WT_PROGRESS"
-julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
-julia --project=. --startup-file=no test/src_tests.jl > .wtd/src_tests.out 2>&1 & tpid=$!
+/usr/bin/time -p -o .wtd/ratchet.time julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
+/usr/bin/time -p -o .wtd/src_tests.time julia --project=. --startup-file=no test/src_tests.jl > .wtd/src_tests.out 2>&1 & tpid=$!
 hung=""
 while kill -0 $rpid 2>/dev/null || kill -0 $tpid 2>/dev/null; do
   if [ $(( $(date +%s) - s0 )) -gt "$WT_HARD_LIMIT" ]; then
@@ -94,15 +95,15 @@ if [ -n "$cfgs" ]; then
   echo "check: TLC green on $cfgs"
 fi
 wall=$(( $(date +%s) - s0 ))
-# a machine loaded past its cores (Dale's own jobs share it) leaves the band unjudged, never a
-# scaled pass: the time is printed with the load, as the retired timing ratchet left a slow
-# machine's timing unjudged (L195)
-load=$( { sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg 2>/dev/null; } | tr -d '{}' | awk '{ print int($1) }')
-# the cores a check's speed rests on: an Apple chip's performance cores (4 of 10 on this machine; on its
-# efficiency cores a check runs at half speed, so a load past the performance cores is a loaded machine)
-cores=$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
-if [ $wall -gt 120 ]; then
-  if [ "${load:-0}" -ge "$cores" ]; then echo "check: ${wall}s, past D14's band but UNJUDGED: load ${load} on ${cores} cores"
-  else echo "check: RED — ${wall}s, past D14's band (a 60-s target, red past 120 s) at load ${load} on ${cores} cores"; exit 1; fi
-fi
+# D14's band judges the check's own cost, never the machine's: the CPU seconds of its critical path,
+# the load stage then the slower of the two parallel stages. A process's CPU seconds do not grow while
+# it waits for a core, so another job's load cannot turn a landing red, and a check that grew can never
+# hide behind a loaded machine (A52E2: the wall-clock band read "UNJUDGED" at every load of 4 or more).
+# An efficiency core spends about twice the CPU seconds; background Julia runs at taskpolicy -b (corpus.sh)
+# so a check, at foreground QoS, keeps the performance cores
+cpu() { awk '/^(user|sys) /{ t += $2 } END { printf "%d", t }' ".wtd/$1.time"; }
+c_load=$(cpu load); c_ratchet=$(cpu ratchet); c_src=$(cpu src_tests)
+path=$(( c_load + (c_ratchet > c_src ? c_ratchet : c_src) ))
+echo "check: ${path} CPU-s on the critical path (load ${c_load}, ratchet ${c_ratchet}, src tests ${c_src}); ${wall}s wall"
+[ $path -gt 120 ] && { echo "check: RED — ${path} CPU-s, past D14's band (a 60-s target, red past 120 s)"; exit 1; }
 echo "check: green (${wall}s)"
