@@ -48,8 +48,10 @@ end
 @parity "dart2wasm/lib/util.dart:134 getWasmWeakExportPragma" get_wasm_weak_export_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
     reject!(Internal("dart2wasm/lib/util.dart:134 getWasmWeakExportPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "get_wasm_weak_export_pragma")
 
+# Julia's counterpart of dart's wasm:pure is a method's effects (Base.@assume_effects, the
+# CodeInstance's inferred ipo_effects), which nothing in src reads yet: a gap, not a replacement
 @parity "dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma" has_wasm_pure_function_pragma(core_types::NoCounterpart, member::Core.MethodInstance)::Union{} =
-    reject!(Internal("dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "has_wasm_pure_function_pragma")
+    reject!(Unported("dart2wasm/lib/util.dart:143 hasWasmPureFunctionPragma"), "has_wasm_pure_function_pragma: whether $member is pure, Julia's effects of it, not read yet")
 
 @parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" add_wasm_entry_point_pragma(node::NoCounterpart, core_types::NoCounterpart)::Union{} =
     reject!(Internal("dart2wasm/lib/util.dart:154 addWasmEntryPointPragma: a Julia method declares none of dart's pragmas (the Kernel table's Annotatable row); each caller answers Julia's declaration in place (functions.jl's exports and inlining, globals.jl's startup initialization)"), "add_wasm_entry_point_pragma")
