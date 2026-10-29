@@ -852,9 +852,30 @@ dispatch table is empty and no call reaches here until the subset admits a dynam
     return nothing
 end
 
-@parity "dart2wasm/lib/translator.dart:936 Translator.classForType" @unported function class_for_type(self::Translator, type_::Type) end
+@parity "dart2wasm/lib/translator.dart:936 Translator.classForType" function class_for_type(self::Translator, type_::Type)::DataType
+    local t = to_most_specific_interface_type(self, type_)
+    return (t isa Union ? Base.nonnothingtype(t) : t)::DataType
+end
 
-@parity "dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType" @unported function to_most_specific_interface_type(self::Translator, original_type::Type) end
+"""
+The most specific class type of a Julia type, nullable where the type admits `nothing`: dart's Never,
+Null and dynamic are its Object, as Julia's `Union{}`, `Nothing` and `Any` are `Any`; a `Union` of
+classes is Julia's `typejoin` of its members (dart has no union types); a type as a value is its kind
+(`typeof(X)`), and of a type Julia left open (`Type`, `Type{T}`) the open `Type{T}` every kind is
+under. Any other `UnionAll` rejects, located: Julia's inference left its class open. Julia's types
+carry no free type variable here, so dart's walk to a type parameter's bound has nothing to walk.
+"""
+@parity "dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType" function to_most_specific_interface_type(self::Translator, original_type::Type)::Type
+    local at = "dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType"
+    (original_type === Union{} || original_type === Nothing || original_type === Any) && return Any
+    local cls = original_type isa Union ? Base.nonnothingtype(original_type) : original_type
+    cls isa Union && (cls = typejoin(Base.uniontypes(cls)...))
+    # a type as a value: its kind, or, of a type Julia left open, the open Type{T} above every kind
+    (cls === Type || (cls isa DataType && Base.isType(cls) && cls.parameters[1] isa TypeVar)) && (cls = supertype(DataType))
+    cls isa DataType && Base.isType(cls) && !(cls.parameters[1] isa TypeVar) && (cls = typeof(cls.parameters[1]))
+    cls isa DataType || reject!(Unquarantined("src/translator.jl toMostSpecificInterfaceType: $original_type, no class but a $(typeof(cls))"), at)
+    return Nothing <: original_type && cls !== Any ? Union{Nothing,cls} : cls
+end
 
 @parity "dart2wasm/lib/translator.dart:974 Translator.getTearOffType" @unported function get_tear_off_type(self::Translator, method::Core.MethodInstance) end
 
@@ -928,18 +949,10 @@ the representation here is a reference to the join's struct, each value boxed in
     type_ === Union{} && return WasmBuilder.IR.RefType_none(; nullable = true)
     type_ === Nothing && return WasmBuilder.IR.RefType_none(; nullable = true)
     type_ === Any && return self.top_type[]
-    local nullable = false
-    local cls = type_
-    if cls isa Union
-        nullable = Nothing <: cls
-        nullable && (cls = Base.nonnothingtype(cls))
-        cls isa Union && (cls = typejoin(Base.uniontypes(cls)...))
-        cls === Any && return WasmBuilder.with_nullability(self.top_type[], nullable)
-    end
-    # a type as a value: its kind, or, of a type Julia left open, the open Type{T} above every kind
-    (cls === Type || (cls isa DataType && Base.isType(cls) && cls.parameters[1] isa TypeVar)) && (cls = supertype(DataType))
-    cls isa DataType && Base.isType(cls) && !(cls.parameters[1] isa TypeVar) && (cls = typeof(cls.parameters[1]))
-    cls isa DataType || reject!(Unquarantined("src/translator.jl translateStorageType: $type_, no class but a $(typeof(cls))"), at)
+    local nullable = Nothing <: type_
+    # the class representing the type, classForType's one answer (a Union's join, a type value's kind)
+    local cls = class_for_type(self, type_)
+    cls === Any && return WasmBuilder.with_nullability(self.top_type[], nullable)
     # Wasm array? dart:_wasm's WasmArray<T> and ImmutableWasmArray<T> (src/julia/wasm_array.jl), the
     # type of a field holding a wasm array of T
     cls <: WasmArray && return WasmBuilder.IR.RefType_def(array_type_for_dart_type(self, cls.parameters[1]; mutable_ = true); nullable = nullable)

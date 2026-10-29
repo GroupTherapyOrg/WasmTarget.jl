@@ -247,6 +247,10 @@ end
     local inv = W.NirInvoke(mi, W.NirValue[W.NirConst(Core.Const(ModuleCases.shapes)), W.NirArgument(2)])
     @test D.can_use_unchecked_entry(t, W.NirArgument(2), inv)
     @test D.single_target(t, inv) === mi && D.single_target(t, W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.tuple))])) === nothing
+    # a type's most specific class: a Union's join, nullable with `nothing`; a type value's kind
+    @test D.to_most_specific_interface_type(t, Union{Nothing,ModuleCases.Circle,ModuleCases.Square}) == Union{Nothing,ModuleCases.Shape}
+    @test D.class_for_type(t, Union{ModuleCases.Circle,ModuleCases.Square}) === ModuleCases.Shape && D.class_for_type(t, Type{Int64}) === DataType
+    @test D.class_for_type(t, Nothing) === Any && D.class_for_type(t, Union{Int64,Nothing}) === Int64
     # Julia's wasm types are its wasm arrays; at the boundary a reference is translateExternalType's
     @test D.is_wasm_type(t, W.WasmArray{Int64}) && D.is_wasm_type(t, W.ImmutableWasmArray{Any}) && !D.is_wasm_type(t, Int64)
     @test D.translate_external_storage_type(t, Any) == IR.RefType_any(; nullable = true)
