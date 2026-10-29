@@ -770,7 +770,7 @@ end
 # callable struct, dart's instance member); a singleton callee (a function) carries none and is no
 # parameter
 @parity "dart2wasm/lib/code_generator.dart:514 AstCodeGenerator._initializeThis" function _initialize_this(self::AstCodeGenerator, reference::Core.MethodInstance)::Int
-    local has_this = !Base.issingletontype(nir_argument_type(reference, NirArgument(1)))
+    local has_this = nir_carries_data(nir_argument_type(reference, NirArgument(1)))
     if has_this
         local b = self.b[]
         local this_local = self.param_locals[][1]
@@ -871,7 +871,7 @@ end
                 equals_null() ? visit_equals_null(self, c, expected_type) :
                 visit_static_invocation(self, c, expected_type)
             end
-            (i::NirInvoke) => !Base.issingletontype(dart_type_of(self, i.args[1])) ? visit_instance_invocation(self, i, expected_type) :
+            (i::NirInvoke) => nir_carries_data(dart_type_of(self, i.args[1])) ? visit_instance_invocation(self, i, expected_type) :
                 # a call of Base's == with two operands: Kernel's EqualsCall
                 dart_type_of(self, i.args[1]) === typeof(==) && length(i.args) == 3 ? visit_equals_call(self, i, expected_type) :
                 visit_static_invocation(self, i, expected_type)

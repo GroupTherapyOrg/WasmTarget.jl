@@ -671,16 +671,18 @@ end
     @test e isa W.RejectionError && e.rejection isa W.Internal
 end
 
-@testset "translator.dart: preciseThisFor, a constructor's `this` the instance it allocates" begin
+@testset "translator.dart: preciseThisFor, a constructor has no `this`: its Type{C} callee is a constant Julia never passes" begin
     local W = WasmTarget
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
     local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.make_objs, (Int,), "translator"), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
-    # Box{String}(::Int64) and Plain(): the callee is the type, `this` the constructed class's
-    for (C, sig) in ((ClosureThisCases.Box{String}, Tuple{Type{ClosureThisCases.Box{String}}, Int}),
-                     (ClosureThisCases.Plain, Tuple{Type{ClosureThisCases.Plain}}))
+    # Box{String}(::Int64) and Plain(): the callee is the type object, which Julia's codegen passes as a
+    # constant (isconstType), so the method has no receiver and preciseThisFor rejects Internal
+    for sig in (Tuple{Type{ClosureThisCases.Box{String}}, Int}, Tuple{Type{ClosureThisCases.Plain}})
         local mi = only(b.ci.def for b in t.component if b.ci.def.specTypes == sig)
-        @test D.precise_this_for(t, mi) == W.WasmBuilder.with_nullability(D.repr(t.class_info[C]), false)
+        @test !W.nir_carries_data(W.nir_argument_type(mi, W.NirArgument(1)))
+        local e = try; D.precise_this_for(t, mi); nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Internal
     end
 end

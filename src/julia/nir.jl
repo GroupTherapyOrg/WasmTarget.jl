@@ -522,6 +522,17 @@ The type of argument `a` of `mi`: its MethodInstance's signature, the type Julia
 end
 
 """
+    nir_carries_data(T) -> Bool
+
+Whether a value of type `T` exists at run time, so a callee of that type is a parameter, dart's `this`:
+Julia's codegen passes no value for a singleton type (a function's type, `isdefined(T, :instance)`) nor for
+`Type{X}` with `X` free of type variables, the type of one type object (a constructor's callee), which it
+treats as a constant (`Core.Compiler.isconstType`). The one source every receiver test reads.
+"""
+@quarantine "Julia's codegen passes no value for a singleton type or a constant Type{X}, isconstType" Core.Compiler.isconstType nir_carries_data(@nospecialize(T))::Bool =
+    !(Base.issingletontype(T) || Core.Compiler.isconstType(T))
+
+"""
     nir_binding_is_constant(ref) -> Bool
 
 Whether the module binding `ref` names is defined and constant, so a read of it is its one value:

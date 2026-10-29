@@ -393,7 +393,7 @@ callee is a context (a closure's captured struct), dart's receiver of an instanc
 """
 @parity "dart2wasm/lib/functions.dart:511 _FunctionTypeGenerator.visitProcedure" function visit_procedure(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType
     local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
-    local receiver_type = Base.issingletontype(params[1]) ? nothing : translate_type(self.translator, params[1])
+    local receiver_type = !nir_carries_data(params[1]) ? nothing : translate_type(self.translator, params[1])
     return _make_function_type(self.translator, target, receiver_type;
                                synthesize_null_return_value = self.synthesize_null_return_value,
                                synthesize_no_return = self.synthesize_no_return)
@@ -444,7 +444,7 @@ ones.
 @parity "dart2wasm/lib/functions.dart:787 makeFunctionTypeForBody" function make_function_type_for_body(translator::Translator, member::Core.MethodInstance, synthesize_null_return_value::Bool, synthesize_no_return::Bool)::WasmBuilder.IR.FunctionType
     local params = (Base.unwrap_unionall(member.specTypes)::DataType).parameters
     # dart asserts an instance member: a Julia member whose callee is a value, no singleton function
-    Base.issingletontype(params[1]) && reject!(Internal("dart2wasm/lib/functions.dart:793 makeFunctionTypeForBody: $(member) has no receiver"), "make_function_type_for_body")
+    !nir_carries_data(params[1]) && reject!(Internal("dart2wasm/lib/functions.dart:793 makeFunctionTypeForBody: $(member) has no receiver"), "make_function_type_for_body")
     local inputs = WasmBuilder.IR.ValueType[translate_type(translator, params[1])]
     for i in 2:length(params)
         push!(inputs, translate_type(translator, type_of_checked_parameter_variable(translator, member, i)))

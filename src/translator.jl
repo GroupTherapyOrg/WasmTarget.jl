@@ -1200,23 +1200,20 @@ end
     get!(() -> ParameterInfo_from_member(target, false), self.static_param_info, target)
 
 """
-The precise type of `this` in an instance member or constructor. A Julia method's `this` is its
-callee, `Argument(1)`, when the callee carries fields: a closure's struct (dart's closure context) or
-a callable struct, its class the specialization's first parameter (nir_argument_type). A constructor
-is a method of the type it makes, its callee `Type{C}`: its `this` is the instance it allocates, of
-the class `C` (constructor_info.jl's constructor). A function's method, whose callee is a singleton,
-has none: dart asserts an instance member or constructor, so it rejects Internal, located. dart's unboxed `this` follows: a class with a builtin type whose box class
+The precise type of `this` in an instance member. A Julia method's `this` is its callee, `Argument(1)`,
+when the callee carries data (nir_carries_data): a closure's struct (dart's closure context) or a
+callable struct, its class the specialization's first parameter (nir_argument_type). A function's
+method (a singleton callee) and a constructor (its callee `Type{C}`, a constant Julia's codegen never
+passes, isconstType) have none: a Julia constructor compiles as a method of its type, its object made by
+its own `new`, never a dart constructor with a `this` (constructor_info.jl), so dart's assert of an
+instance member rejects Internal, located. dart's unboxed `this` follows: a class with a builtin type whose box class
 `boxedClasses` names is its builtin type, or, nullable, its box.
 """
 @parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" function precise_this_for(self::Translator, member::Core.MethodInstance; nullable::Bool = false)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor"
     local cls = nir_argument_type(member, NirArgument(1))
-    (cls isa DataType && !Base.issingletontype(cls)) ||
-        reject!(Internal("$at: $member, a method of a function, has no `this`"), at)
-    # a constructor, a method of the type it makes (its callee Type{C}): its `this` is the instance it
-    # allocates, of the constructed class C, dart's enclosing class
-    Base.isType(cls) && (cls = cls.parameters[1])
-    cls isa DataType || reject!(Internal("$at: $member constructs $cls, no class"), at)
+    (cls isa DataType && nir_carries_data(cls)) ||
+        reject!(Internal("$at: $member, a method of a function or a constructor, has no `this`"), at)
     local builtin = get(self.builtin_types[], cls, nothing)
     local box_class = builtin === nothing ? nothing : get(self.boxed_classes[], builtin, nothing)
     if box_class !== nothing

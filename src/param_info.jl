@@ -59,7 +59,7 @@ rejects, located. `use_default_value_sentinel` has nothing to mark: no parameter
     any(p -> p isa Core.TypeofVararg, params) &&
         reject!(Unquarantined("src/param_info.jl fromMember: the Vararg signature $(target.specTypes), whose argument count Julia left open"), "dart2wasm/lib/param_info.dart:59 ParameterInfo.fromMember")
     local positional = Union{Nothing,NirConst}[nothing for _ in 2:length(params)]
-    return ParameterInfo__(!Base.issingletontype(params[1]), 0, positional, LinkedHashMap{String,Union{Nothing,NirConst}}())
+    return ParameterInfo__(nir_carries_data(params[1]), 0, positional, LinkedHashMap{String,Union{Nothing,NirConst}}())
 end
 
 """

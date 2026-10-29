@@ -84,7 +84,7 @@ import ..MachineFunction, ..MachineInstr, ..MOBlock, ..MOImm, ..BLOCK, ..LOOP, .
 # the runtime's methods in the closed world (src/julia/runtime/rtutils.jl), and the runtime itself
 import ..nir_runtime_member, ..Runtime
 import ..TreeNode_no_offset, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
-       ..nir_invoke_target, ..nir_callee, ..nir_value_type, ..nir_tuple_type, ..nir_binding_is_constant
+       ..nir_invoke_target, ..nir_callee, ..nir_value_type, ..nir_tuple_type, ..nir_binding_is_constant, ..nir_carries_data
 import ..WasmBuilder
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
 import ...@parity, ...@unported, ...@closed, ...@exhaustive

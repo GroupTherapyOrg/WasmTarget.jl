@@ -1089,3 +1089,17 @@ end
         @test r.ok
     end
 end
+
+# a constructor's callee is a type object, Type{C}: Julia passes it as a constant (isconstType), so it is no
+# parameter and no `this` (src/julia/nir.jl nir_carries_data), as a function's singleton callee is none
+module CtorThisCases
+struct Plain; x::Int; end
+struct Para{T}; x::Int; end
+end
+@testset "a constructor's Type{C} callee carries no data" begin
+    @test !WasmTarget.nir_carries_data(Type{CtorThisCases.Plain})
+    @test !WasmTarget.nir_carries_data(Type{CtorThisCases.Para{String}})
+    @test !WasmTarget.nir_carries_data(typeof(sin))
+    @test WasmTarget.nir_carries_data(CtorThisCases.Plain)
+    @test WasmTarget.nir_carries_data(Type)   # an unknown type object is a value at run time
+end
