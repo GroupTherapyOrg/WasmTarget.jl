@@ -112,6 +112,11 @@ echo $$ > "$lock/pid"; rm -f "$ticket"; trap 'release; cleanup_scratch' EXIT
 export CHECK_LANDING=1
 git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
 [ "$(git rev-list --count "origin/$MARCH..HEAD")" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
+# a lane whose commits another ship already carried (the same patch under a new hash) has nothing to land,
+# never a red: the rebase would drop them all and the carry check below would refuse "missing: all"
+# (wt3-codegen and wt3-tests, 07:52: each landed commit marked red, its lane told to fix nothing)
+git cherry "origin/$MARCH" HEAD | grep -q '^+' ||
+  { echo "ship: every commit of this lane is on origin/$MARCH already, as the same patch; nothing to land (git reset --hard origin/$MARCH)"; exit 0; }
 first=$(git log --reverse --format=%at "origin/$MARCH..HEAD" | head -1)
 base=$(git rev-parse "origin/$MARCH")
 checked_rebase || { git fetch -q origin "$MARCH"; echo "ship: a commit's check is red or the rebase conflicts; $(git rev-list --count "$base..origin/$MARCH") commit(s) before it landed. Fix it, git rebase origin/$MARCH (the landed ones drop out) and ship again"; exit 1; }
