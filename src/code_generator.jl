@@ -1726,15 +1726,52 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:5849 MacroAssembler.emitInstantiationClosureCheck" @unported function emit_instantiation_closure_check(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
+# `[ref _Closure] -> [i32]`: whether the closure is an instantiation
+@parity "dart2wasm/lib/code_generator.dart:5849 MacroAssembler.emitInstantiationClosureCheck" function emit_instantiation_closure_check(self::WasmBuilder.InstructionsBuilder, translator::Translator)::Nothing
+    local layouter = translator.closure_layouter[]
+    WasmBuilder.ref_cast(self, WasmBuilder.IR.RefType(layouter.closure_base_struct[]; nullable = false))
+    WasmBuilder.struct_get(self, layouter.closure_base_struct[], FieldIndex_closure_context())
+    WasmBuilder.ref_test(self, WasmBuilder.IR.RefType(layouter.instantiation_context_base_struct[]; nullable = false))
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5868 MacroAssembler.emitGetInstantiatedClosure" @unported function emit_get_instantiated_closure(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
+# `[ref _Closure] -> [ref #ClosureBase]`: an instantiation closure's instantiated closure
+@parity "dart2wasm/lib/code_generator.dart:5868 MacroAssembler.emitGetInstantiatedClosure" function emit_get_instantiated_closure(self::WasmBuilder.InstructionsBuilder, translator::Translator)::Nothing
+    local layouter = translator.closure_layouter[]
+    # instantiation.context
+    WasmBuilder.ref_cast(self, WasmBuilder.IR.RefType(layouter.closure_base_struct[]; nullable = false))
+    WasmBuilder.struct_get(self, layouter.closure_base_struct[], FieldIndex_closure_context())
+    # instantiation.context.inner
+    WasmBuilder.ref_cast(self, WasmBuilder.IR.RefType(layouter.instantiation_context_base_struct[]; nullable = false))
+    WasmBuilder.struct_get(self, layouter.instantiation_context_base_struct[], FieldIndex_instantiation_context_inner())
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5894 MacroAssembler.emitTearOffCheck" @unported function emit_tear_off_check(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
+# `[ref _Closure] -> [i32]`: whether the closure is a tear-off
+@parity "dart2wasm/lib/code_generator.dart:5894 MacroAssembler.emitTearOffCheck" function emit_tear_off_check(self::WasmBuilder.InstructionsBuilder, translator::Translator)::Nothing
+    local layouter = translator.closure_layouter[]
+    WasmBuilder.ref_cast(self, WasmBuilder.IR.RefType(layouter.closure_base_struct[]; nullable = false))
+    WasmBuilder.struct_get(self, layouter.closure_base_struct[], FieldIndex_closure_context())
+    WasmBuilder.ref_test(self, translator.top_type_non_nullable[])
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5908 MacroAssembler.emitGetTearOffReceiver" @unported function emit_get_tear_off_receiver(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
+# `[ref _Closure] -> [ref #Top]`: the closure's receiver
+@parity "dart2wasm/lib/code_generator.dart:5908 MacroAssembler.emitGetTearOffReceiver" function emit_get_tear_off_receiver(self::WasmBuilder.InstructionsBuilder, translator::Translator)::Nothing
+    local layouter = translator.closure_layouter[]
+    WasmBuilder.ref_cast(self, WasmBuilder.IR.RefType(layouter.closure_base_struct[]; nullable = false))
+    WasmBuilder.struct_get(self, layouter.closure_base_struct[], FieldIndex_closure_context())
+    WasmBuilder.ref_cast(self, translator.top_type_non_nullable[])
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5922 MacroAssembler.emitGetClosureVtable" @unported function emit_get_closure_vtable(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
+# `[ref _Closure] -> [ref Any]`: the closure's vtable
+@parity "dart2wasm/lib/code_generator.dart:5922 MacroAssembler.emitGetClosureVtable" function emit_get_closure_vtable(self::WasmBuilder.InstructionsBuilder, translator::Translator)::Nothing
+    local layouter = translator.closure_layouter[]
+    WasmBuilder.ref_cast(self, WasmBuilder.IR.RefType(layouter.closure_base_struct[]; nullable = false))
+    WasmBuilder.struct_get(self, layouter.closure_base_struct[], FieldIndex_closure_vtable())
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext" @unported function restore_suspend_state_context(self::WasmBuilder.InstructionsBuilder, suspend_state_local::WasmBuilder.IR.Local, suspend_state_struct::WasmBuilder.IR.StructType, suspend_state_context_field::Int64, closures::Closures, context::Union{Nothing,Context}, this_local::Union{Nothing,WasmBuilder.IR.Local}; clone_context_for::Union{Nothing,NirBody} = nothing) end
 

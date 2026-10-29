@@ -55,4 +55,31 @@ end
     @test answers_native(cases)
 end
 
+
+# a program whose closed world holds DataType, the class of a closure's runtime type
+is_int(r::Base.RefValue{Any}) = r[] isa Int64
+
+@testset "code_generator.dart: MacroAssembler's closure accessors type as dart documents them" begin
+    local t = D.Translator(W.check_subset(is_int, (Base.RefValue{Any},), "code_generator_sub"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(t.closure_layouter[]); collect(t.class_info_collector[])
+    local layouter = t.closure_layouter[]
+    local closure = IR.RefType(layouter.closure_base_struct[]; nullable = false)
+    # each accessor's documented signature `[ref _Closure] -> [output]`: the builder, which refuses
+    # invalid wasm at the emitting instruction (D10), takes its result as the function's output
+    local mb = D.main_module(t)
+    for (emit, output) in ((D.emit_instantiation_closure_check, IR.NumType_i32),
+                           (D.emit_get_instantiated_closure, layouter.instantiation_context_base_struct[].fields[D.FieldIndex_instantiation_context_inner() + 1].type),
+                           (D.emit_tear_off_check, IR.NumType_i32),
+                           (D.emit_get_tear_off_receiver, t.top_type_non_nullable[]),
+                           (D.emit_get_closure_vtable, layouter.closure_base_struct[].fields[D.FieldIndex_closure_vtable() + 1].type))
+        local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[closure], IR.ValueType[B.unpacked(output)]), string(emit))
+        local b = B.body(fb)
+        B.local_get(b, B.locals(fb)[1])
+        emit(b, t)
+        @test B.var"end"(b) === nothing
+    end
+end
+
 end
