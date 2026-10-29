@@ -23,13 +23,24 @@
 @parity "dart2wasm/lib/kernel_nodes.dart:57 KernelNodes.listBaseClass" list_base_class(self::KernelNodes)::Union{} =
     reject!(Unported("sdk/lib/_internal/wasm/common/list.dart:15 WasmListBase"), "KernelNodes.listBaseClass: the list class of dart:_list")
 
-# the lane fields of dart:_wasm's SIMD implementation classes (_WasmI8x16Impl and its siblings), which
 # dart:_list's ImmutableList, the class of a constant list, of dart's runtime library at the pin, not
 # ported: Unported there
 @parity "dart2wasm/lib/kernel_nodes.dart:73 KernelNodes.immutableListClass" immutable_list_class(self::KernelNodes)::Union{} =
     reject!(Unported("sdk/lib/_internal/wasm/common/list.dart:290 ImmutableList"), "KernelNodes.immutableListClass: the class of a constant list")
 
-@parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" @unported function _get_lane_references(self::KernelNodes, class_node::DataType) end
+# the lanes of a SIMD vector class, in lane order: dart's _WasmI8x16Impl and its siblings hold them as
+# fields `_0`, `_1`, ..., which dart sorts by their number; Julia's SIMD vector is an NTuple of
+# VecElement, 16 bytes in all (LLVM's <16 x i8> and its siblings), whose fields are its lanes in
+# order, so Julia's field order is the answer and no sort is needed. A lane's reference is its field
+# (the Kernel table's Field row: an instance field is a ClassField). Any other class is no SIMD
+# vector, which dart's int.parse of a lane name would refuse: it rejects, located
+@parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" function _get_lane_references(self::KernelNodes, class_node::DataType)::Vector{ClassField}
+    local at = "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences"
+    local ts = fieldtypes(class_node)
+    local lanes = class_node <: Tuple && !isempty(ts) && allequal(ts) && ts[1] <: VecElement && sum(sizeof, ts) == 16
+    lanes || reject!(Internal("$at: $class_node is no SIMD vector, an NTuple of one VecElement 16 bytes wide"), at)
+    return class_instance_fields(class_node, at)
+end
 
 # dart:core's StackTrace.current, as the target's patch defines it (standalone or JS), a getter of
 # dart's runtime library at the pin, not ported: Unported there

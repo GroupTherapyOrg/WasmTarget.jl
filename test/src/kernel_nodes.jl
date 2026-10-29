@@ -44,4 +44,23 @@ f(x::Int) = x + 1
     end
 end
 
+
+@testset "kernel_nodes.dart:316 _getLaneReferences: a SIMD vector's lanes, in lane order" begin
+    local world = W.build_nir(W.check_subset(f, (Int,), "kernel_nodes"), "kernel_nodes")
+    local t = D.Translator(world, D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    # each of dart's six lane classes, as Julia's SIMD vector of the same lanes
+    for (T, n) in ((Int8, 16), (Int16, 8), (Int32, 4), (Int64, 2), (Float32, 4), (Float64, 2))
+        local lanes = D._get_lane_references(t, NTuple{n,VecElement{T}})
+        @test length(lanes) == n
+        @test [l.index for l in lanes] == collect(1:n)
+        @test all(l -> l.type === VecElement{T} && l.cls === NTuple{n,VecElement{T}}, lanes)
+    end
+    # no SIMD vector: a plain tuple, a vector of the wrong width, mixed lanes; each rejects, located
+    local why(C) = (e = try; D._get_lane_references(t, C); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Internal ? e.rejection : e)
+    for C in (NTuple{4,Int32}, NTuple{8,VecElement{Int32}}, Tuple{VecElement{Int64},VecElement{Float64}})
+        local r = why(C)
+        @test r isa W.Internal && occursin("kernel_nodes.dart:316", r.site) && occursin("no SIMD vector", r.site)
+    end
+end
+
 end
