@@ -17,22 +17,10 @@ cd "$(dirname "$0")/.."
 # D31: the machine is shared (Dale's own jobs run beside the lanes) and has 4 performance cores; one
 # check runs at a time across every lane, its five processes (the ratchet and four shards of the src
 # tests) on the performance cores, while every other Julia runs at background QoS on the efficiency
-# cores (audit #53, A53E1: two checks at once spilled onto efficiency cores at half speed). The check
-# holds the one slot in the repository's common dir; a slot whose holder died is freed. The wait is reported and not counted in D14's band, which times the check itself.
-slots="$(git rev-parse --path-format=absolute --git-common-dir)/wt-check-slots"; mkdir -p "$slots"
-w0=$(date +%s); slot=""
-ids="1"
-while [ -z "$slot" ]; do
-  for i in $ids; do
-    if mkdir "$slots/$i" 2>/dev/null; then echo $$ > "$slots/$i/pid"; slot=$i; break; fi
-    holder=$(cat "$slots/$i/pid" 2>/dev/null || true)
-    if [ -n "$holder" ]; then kill -0 "$holder" 2>/dev/null || rm -rf "$slots/$i"
-    elif [ -n "$(find "$slots/$i" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rm -rf "$slots/$i"; fi
-  done
-  [ -n "$slot" ] || sleep 2
-done
-trap 'rm -rf "$slots/$slot"' EXIT
-[ $(( $(date +%s) - w0 )) -gt 0 ] && echo "check: waited $(( $(date +%s) - w0 ))s for a slot"
+# cores (audit #53, A53E1: two checks at once spilled onto efficiency cores at half speed). One check at a
+# time is the landing lock's: a check runs only under it (CHECK_LANDING, above), so it waits on nothing else.
+# A separate check slot that anything could take was a second gate on the same thing, and an ad-hoc run
+# holding it stalled a landing's check and nine ships behind it for five minutes (2026-10-29 10:01).
 export JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2
 # the landing compiles a fixed core of the dart corpus, never a set that grows with the port; the whole
 # corpus runs beside the landings on wt2's head (dev/corpus.sh, test/src/dart_tests.jl)
