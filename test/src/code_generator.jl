@@ -907,6 +907,20 @@ end
     @test rejection(() -> W.NoCounterpart()).rejection isa W.Internal
 end
 
+@testset "code_generator.dart: the code generators of members Julia never has are types of no value" begin
+    # each holds AstCodeGenerator's fields and dart's own, and its one inner constructor rejects Internal,
+    # as dart's constructor, its outer function, does
+    for (G, own) in ((D.TearOffCodeGenerator, (:member,)), (D.DynamicForwarderCodeGenerator, (:reference, :call_shape)),
+                     (D.ConstructorInitializerCodeGenerator, (:member, :field_locals)), (D.ConstructorAllocatorCodeGenerator, (:member,)),
+                     (D.ConstructorBodyCodeGenerator, (:member,)), (D.ImplicitFieldAccessorCodeGenerator, (:field, :is_implicit_getter, :use_unchecked_entry)),
+                     (D.SynchronousLambdaCodeGenerator, (:lambda,)), (D.UnreachableCodeGenerator, ()))
+        @test G <: D.AstCodeGenerator
+        @test fieldnames(G) == (fieldnames(D.SynchronousProcedureCodeGenerator)[1:18]..., own...)
+        local e = rejection(() -> G(Val(:_)))
+        @test e.rejection isa W.Internal && occursin("$(nameof(G)): no value", e.rejection.site)
+    end
+end
+
 # Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)
 module EqualsCases
 struct Q; x::Int; end

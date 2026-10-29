@@ -84,14 +84,67 @@ SSAValue, so a used statement is a variable declaration and an unused one an exp
 end
 
 """
-TearOffCodeGenerator's dart fields: `member`.
+The code generator dart makes for a tear-off's closure. It holds AstCodeGenerator's fields as
+SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers instead of
+storing), and dart's own `member`. No value of it exists: a Julia function is already a value, the
+singleton instance of its type, so no closure is made for it; dart's constructor (:3751), its outer
+function, rejects Internal, and so does its one inner constructor.
 """
-@parity "dart2wasm/lib/code_generator.dart:3748 TearOffCodeGenerator" @unported struct TearOffCodeGenerator <: AstCodeGenerator end
+@parity "dart2wasm/lib/code_generator.dart:3748 TearOffCodeGenerator" mutable struct TearOffCodeGenerator <: AstCodeGenerator
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Core.MethodInstance
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    const member::Core.MethodInstance
+    # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
+    TearOffCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:3748 TearOffCodeGenerator: no value; a Julia function is already a value, the singleton instance of its type, so no closure is made for it"), "TearOffCodeGenerator")
+end
 
 """
-DynamicForwarderCodeGenerator's dart fields: `reference`, `callShape`.
+The code generator dart makes for a dynamic call's forwarder. It holds AstCodeGenerator's fields as
+SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers instead of
+storing), and dart's own `reference`, `call_shape`. No value of it exists: Julia's trim verifier
+rejects every call it cannot resolve statically, so no call is dynamic; dart's constructor (:3808),
+its outer function, rejects Internal, and so does its one inner constructor.
 """
-@parity "dart2wasm/lib/code_generator.dart:3804 DynamicForwarderCodeGenerator" @unported struct DynamicForwarderCodeGenerator <: AstCodeGenerator end
+@parity "dart2wasm/lib/code_generator.dart:3804 DynamicForwarderCodeGenerator" mutable struct DynamicForwarderCodeGenerator <: AstCodeGenerator
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Core.MethodInstance
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    const reference::Core.MethodInstance
+    const call_shape::CallShape
+    # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
+    DynamicForwarderCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:3804 DynamicForwarderCodeGenerator: no value; Julia's trim verifier rejects every call it cannot resolve statically, so no call is dynamic"), "DynamicForwarderCodeGenerator")
+end
 
 """
 Creates the Invocation object of a method call of `callShape`, whose function takes the call's type
@@ -107,13 +160,99 @@ end
 @parity "dart2wasm/lib/code_generator.dart:4193 ConstructorCodeGeneratorBase" abstract type ConstructorCodeGeneratorBase <: AstCodeGenerator end
 
 """
-ConstructorInitializerCodeGenerator's dart fields: `fieldLocals`.
+The code generator dart makes for a constructor's initializer list. It holds AstCodeGenerator's
+fields as SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers
+instead of storing), and dart's own `member`, `field_locals`. No value of it exists: Julia's
+constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no
+initializer list; dart's constructor (:4252), its outer function, rejects Internal, and so does its
+one inner constructor.
 """
-@parity "dart2wasm/lib/code_generator.dart:4247 ConstructorInitializerCodeGenerator" @unported struct ConstructorInitializerCodeGenerator <: ConstructorCodeGeneratorBase end
+@parity "dart2wasm/lib/code_generator.dart:4247 ConstructorInitializerCodeGenerator" mutable struct ConstructorInitializerCodeGenerator <: ConstructorCodeGeneratorBase
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Core.MethodInstance
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    const member::Core.MethodInstance
+    const field_locals::Dict{ClassField,WasmBuilder.IR.Local}
+    # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
+    ConstructorInitializerCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:4247 ConstructorInitializerCodeGenerator: no value; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorInitializerCodeGenerator")
+end
 
-@parity "dart2wasm/lib/code_generator.dart:4616 ConstructorAllocatorCodeGenerator" @unported struct ConstructorAllocatorCodeGenerator <: ConstructorCodeGeneratorBase end
+"""
+The code generator dart makes for a constructor's allocator. It holds AstCodeGenerator's fields as
+SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers instead of
+storing), and dart's own `member`. No value of it exists: Julia's constructor is an ordinary method,
+compiled as a member, its allocation the %new statement, with no initializer list; dart's
+constructor (:4617), its outer function, rejects Internal, and so does its one inner constructor.
+"""
+@parity "dart2wasm/lib/code_generator.dart:4616 ConstructorAllocatorCodeGenerator" mutable struct ConstructorAllocatorCodeGenerator <: ConstructorCodeGeneratorBase
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Core.MethodInstance
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    const member::Core.MethodInstance
+    # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
+    ConstructorAllocatorCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:4616 ConstructorAllocatorCodeGenerator: no value; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorAllocatorCodeGenerator")
+end
 
-@parity "dart2wasm/lib/code_generator.dart:4728 ConstructorBodyCodeGenerator" @unported struct ConstructorBodyCodeGenerator <: ConstructorCodeGeneratorBase end
+"""
+The code generator dart makes for a constructor's body. It holds AstCodeGenerator's fields as
+SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers instead of
+storing), and dart's own `member`. No value of it exists: Julia's constructor is an ordinary method,
+compiled as a member, its allocation the %new statement, with no initializer list; dart's
+constructor (:4729), its outer function, rejects Internal, and so does its one inner constructor.
+"""
+@parity "dart2wasm/lib/code_generator.dart:4728 ConstructorBodyCodeGenerator" mutable struct ConstructorBodyCodeGenerator <: ConstructorCodeGeneratorBase
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Core.MethodInstance
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    const member::Core.MethodInstance
+    # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
+    ConstructorBodyCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:4728 ConstructorBodyCodeGenerator: no value; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorBodyCodeGenerator")
+end
 
 """
 StaticFieldInitializerCodeGenerator's dart fields: `field`.
@@ -131,16 +270,99 @@ StaticFieldImplicitAccessorCodeGenerator's dart fields: `field`, `isImplicitGett
 @parity "dart2wasm/lib/code_generator.dart:4910 StaticFieldImplicitAccessorCodeGenerator" @unported struct StaticFieldImplicitAccessorCodeGenerator <: AstCodeGenerator end
 
 """
-ImplicitFieldAccessorCodeGenerator's dart fields: `field`, `isImplicitGetter`, `useUncheckedEntry`.
+The code generator dart makes for a field's implicit getter or setter. It holds AstCodeGenerator's
+fields as SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers
+instead of storing), and dart's own `field`, `is_implicit_getter`, `use_unchecked_entry`. No value
+of it exists: Julia reads and writes a field with the getfield and setfield! intrinsics, never an
+accessor member; dart's constructor (:4986), its outer function, rejects Internal, and so does its
+one inner constructor.
 """
-@parity "dart2wasm/lib/code_generator.dart:4981 ImplicitFieldAccessorCodeGenerator" @unported struct ImplicitFieldAccessorCodeGenerator <: AstCodeGenerator end
+@parity "dart2wasm/lib/code_generator.dart:4981 ImplicitFieldAccessorCodeGenerator" mutable struct ImplicitFieldAccessorCodeGenerator <: AstCodeGenerator
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Core.MethodInstance
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    const field::ClassField
+    const is_implicit_getter::Bool
+    const use_unchecked_entry::Bool
+    # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
+    ImplicitFieldAccessorCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:4981 ImplicitFieldAccessorCodeGenerator: no value; Julia reads and writes a field with the getfield and setfield! intrinsics, never an accessor member"), "ImplicitFieldAccessorCodeGenerator")
+end
 
 """
-SynchronousLambdaCodeGenerator's dart fields: `lambda`.
+The code generator dart makes for a lambda's body. It holds AstCodeGenerator's fields as
+SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers instead of
+storing), and dart's own `lambda`. No value of it exists: a Julia closure's call is a method of its
+own, on its closure type, compiled as a member, so Closures makes no Lambda; dart's constructor
+(:5065), its outer function, rejects Internal, and so does its one inner constructor.
 """
-@parity "dart2wasm/lib/code_generator.dart:5062 SynchronousLambdaCodeGenerator" @unported struct SynchronousLambdaCodeGenerator <: AstCodeGenerator end
+@parity "dart2wasm/lib/code_generator.dart:5062 SynchronousLambdaCodeGenerator" mutable struct SynchronousLambdaCodeGenerator <: AstCodeGenerator
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Core.MethodInstance
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    const lambda::Lambda
+    # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
+    SynchronousLambdaCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:5062 SynchronousLambdaCodeGenerator: no value; a Julia closure's call is a method of its own, on its closure type, compiled as a member, so Closures makes no Lambda"), "SynchronousLambdaCodeGenerator")
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5084 UnreachableCodeGenerator" @unported struct UnreachableCodeGenerator <: AstCodeGenerator end
+"""
+The code generator dart makes for a member of a cyclic class. It holds AstCodeGenerator's fields as
+SynchronousProcedureCodeGenerator does (whose docstring names the ones Julia answers instead of
+storing). No value of it exists: no class of a Julia method is cyclic, a struct holding no instance
+of itself inline; dart's constructor (:5085), its outer function, rejects Internal, and so does its
+one inner constructor.
+"""
+@parity "dart2wasm/lib/code_generator.dart:5084 UnreachableCodeGenerator" mutable struct UnreachableCodeGenerator <: AstCodeGenerator
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Core.MethodInstance
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
+    UnreachableCodeGenerator(::Val{:_}) = reject!(Internal("dart2wasm/lib/code_generator.dart:5084 UnreachableCodeGenerator: no value; no class of a Julia method is cyclic, a struct holding no instance of itself inline"), "UnreachableCodeGenerator")
+end
 
 """
 A finalizer of a `try`: `label`, the `br` target that runs it, and `mustHandleReturn`, whether the
