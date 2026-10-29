@@ -23,16 +23,21 @@ mkdir -p .wtd
 alock="$common/wt-autoship/$(basename "$lane")"; mkdir -p "$common/wt-autoship"
 if ! mkdir "$alock" 2>/dev/null; then
   holder=$(cat "$alock/pid" 2>/dev/null || true)
-  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then echo "autoship: already running for this lane (pid $holder)"; exit 2; fi
+  if [ -n "$holder" ] && [ "$holder" != $$ ] && kill -0 "$holder" 2>/dev/null; then echo "autoship: already running for this lane (pid $holder)"; exit 2; fi
   rm -rf "$alock"; mkdir "$alock" || { echo "autoship: cannot take this lane's loop lock"; exit 2; }
 fi
 echo $$ > "$alock/pid"; trap 'rm -rf "$alock"' EXIT
 last=""; since=$(date +%s)
 # a HEAD whose ship went red is not shipped again until HEAD moves: the lane fixes it, its new commit
 # settles and ships (march-monitor-a, 00:29: a red HEAD re-shipped each minute would take a queue turn and
-# a check every time)
-failed=""
+# a check every time); or until origin/wt2 moves, since a red can be the base's own (a230adc6 turned four
+# lanes' checks red at 122-126 s, 09:11-09:23, and its revert would have left them held)
+failed=""; failed_base=""
+# a running loop is the script it started as: when a rebase brings a new dev/autoship.sh (or dev/ship.sh), the
+# loop starts again as the new one, keeping its lock (2026-10-29: four lanes' loops ran three revisions old)
+me=$(cat dev/autoship.sh dev/ship.sh | cksum)
 while :; do
+  [ "$(cat dev/autoship.sh dev/ship.sh 2>/dev/null | cksum)" = "$me" ] || { echo "autoship: $(date -u +%FT%TZ) its script changed; starting again as the new one"; exec bash dev/autoship.sh; }
   git fetch -q origin "$MARCH" 2>/dev/null
   head=$(git rev-parse HEAD)
   [ "$head" = "$last" ] || { last=$head; since=$(date +%s); }
@@ -43,12 +48,12 @@ while :; do
   # the commits origin/wt2 lacks as patches: one another ship already carried under a new hash is not ahead
   # (an empty commit carries nothing: a lane's duplicate landed as one, 0cf4f0ea, 08:43)
   ahead=$(git log --diff-filter=ACDMRT --format=%H "origin/$MARCH..HEAD" 2>/dev/null | grep -cxFf <(git cherry "origin/$MARCH" HEAD 2>/dev/null | sed -n 's/^+ //p'))
-  if [ "$busy" = 0 ] && [ "$ahead" -gt 0 ] && [ "$head" != "$failed" ] && [ $(( $(date +%s) - since )) -ge "$SETTLE" ]; then
+  if [ "$busy" = 0 ] && [ "$ahead" -gt 0 ] && { [ "$head" != "$failed" ] || [ "$(git rev-parse "origin/$MARCH")" != "$failed_base" ]; } && [ $(( $(date +%s) - since )) -ge "$SETTLE" ]; then
     echo "autoship: $(date -u +%FT%TZ) shipping $ahead commit(s) at $(git rev-parse --short HEAD)"
     bash dev/ship.sh > .wtd/autoship.out 2>&1
     grep -E '^ship: (landed|pushed|a commit|REFUSED|recorded)' .wtd/autoship.out | tail -3
     if grep -qE '^ship: (a commit.s check is red|REFUSED|the rebase|origin/)' .wtd/autoship.out; then
-      failed=$head
+      failed=$head; failed_base=$(git rev-parse "origin/$MARCH")
       echo "autoship: $(git rev-parse --short "$head") went red; not shipped again until HEAD moves"
     fi
   fi
