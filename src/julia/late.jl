@@ -23,6 +23,8 @@ precedent(rust: std::cell::OnceCell, set once and read through `get`, and LazyCe
 computed on the first read). Julia's differs: its structs have no late fields, so the field holds
 this cell and the cell checks its one assignment, runs its initializer on first read and names
 the field's dart anchor when it is read unassigned.
+
+formal(dev/formal/LateCell.tla): a value kept once assigned, an init run to completion once, a cycle or misuse rejected
 """
 @quarantine "dart's `late final` field, which Julia's structs lack: a cell set once or initialized on first read" Core.Function mutable struct Late{T}
     value::Any                       # T once assigned; held untyped so one compiled body serves every T
