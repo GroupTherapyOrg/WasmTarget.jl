@@ -5241,3 +5241,63 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A57S3 is fixe
 by 535bf084, A56S8 by 63eec7b5 and A55E1 by a302f567, each leaving its row. A58S1 is what the range broke, the next fix
 of the codegen lane. A58S1 is open on MARCH 1.D. By owner: the codegen lane holds A58S1 and A56S2; the stackify lane
 holds A57S1, A57S2 and A57S4.
+
+## 2026-10-29 — audited through ff811421 (a302f567..ff811421: a partial allocation rejecting at the runtime's late-error throw, the unwind-mismatch finders, one autoship loop per lane, ValueClasses, RecordLayout and LateCell, purity from Julia's effects, the Kernel table's Type parameters, the runtime's anchors under sdk/, entry 58, the void answer read, ship and autoship by patch, one list of transparent macros, translateExternalType's wasm array)
+
+The fifty-ninth audit, beside the work, covers the 14 commits of a302f567..ff811421 that are not entry 58 (a0573e28, its
+author's), read here. Every finding rests on one exact command, quoted; one probe ran under `taskpolicy -b` with an
+alarm, and TLC ran the three new models. Standing items. The new models break as they claim: `TLC_ONLY=… taskpolicy -b
+bash dev/formal/run_tlc.sh` printed `ok MCRecordLayout.cfg … 441 distinct states` with `violation of EqualIsLayout`,
+`OpenRejects` and `IndexIsPlace`; `ok MCValueClasses.cfg … 1880 distinct states` with `violation of ValuesCovered`,
+`NothingExtra`, `FieldsClosed`, `Once` and `SupertypeClosed`; and `ok MCLateCell.cfg … 43 distinct states` with
+`violation of OneInitAtATime`, `NoDefaultRead`, `InitAtMostOnce`, `Stable` and `RejectsOnlyMisuse`, each its expect
+line's claim. Fixed in the range: A58S1 by e8bafd28, measured: `perl -e 'alarm 400; exec @ARGV' taskpolicy -b julia
+--project=. --startup-file=no
+/private/tmp/claude-501/-Users-daleblack-Documents-dev-GroupTherapyOrg-WasmTarget-jl/d67060e8-8b95-4213-b288-76d0f68067d8/scratchpad/undefprobe.jl`
+now prints `native: UndefRefError` and `wasm:
+WasmTarget.RejectionError(WasmTarget.Unported("sdk/lib/_internal/wasm/common/error_utils.dart:188
+_throwLateErrorLocalNI"), "… an allocation of Main.P.M leaving 1 of its fields undefined …")`, a located gap where it
+answered 3, its anchor right at the pin (`Never _throwLateErrorLocalNI(String fieldName) {`); A54S4 by 4f6e871c (`grep
+-n 'Symbol("@inline"), Symbol("@noinline")' src/julia/parity.jl | wc -l` gives 1, the const _TRANSPARENT_MACROS every
+reader reads); A56E1 by a54bd0f6 (a void answer must be undefined or null, any value a difference); A57S7 by ff811421.
+Still open and deeper: A57S1 (3156199a ports fixCallUnwindMismatches and fixCatchUnwindMismatches, and `git log
+--oneline a302f567..ff811421 -- dev/formal` lists only the three models above, none of exceptions) and A57S2 (`grep -n
+"nothrow" src/llvm/utilities.jl` gives `16: return any(i -> !mf.handlers.nothrow[i], first_:last_)`:
+WebAssembly::mayThrow reads the same flag rule, so a `:leave` may throw there too). A57S4 and A56S2 unchanged. Findings
+A59S1.
+
+Area: builder — empty by diff (`git diff --stat a302f567..ff811421 -- src/wasm_builder` prints nothing).
+
+Area: collection and planning — 264df44f names a runtime anchor's file under the checkout's sdk/ where parse_anchor had
+joined it under pkg/; 4f6e871c reads one list of the macros a definition stands under; 5f6f6656 answers
+hasWasmPureFunctionPragma by Julia's proof, `is_removable_if_unused` of the body's decoded `ipo_purity_bits` (D3);
+ec803969 and 89a209e7 take the Kernel table's Type and say why each narrows; ff811421 gives a wasm array its elements'
+boundary type, as is_wasm_type names. No finding.
+
+stopgap in disguise: none new.
+precedent: purity, Julia's effect analysis (is_removable_if_unused); the closed world's classes, a record's shape and a
+late cell, modeled by ValueClasses, RecordLayout and LateCell.
+
+Area: emission and diagnostics — 3156199a ports fixCallUnwindMismatches (WebAssemblyCFGStackify.cpp:1592),
+splitEndLoopBB (:1556) and fixCatchUnwindMismatches (:2076), mayThrow and findCatch (WebAssemblyUtilities.cpp:41, :149),
+each Julia catch LLVM's catch-all, addNestedTryTable (:1383) rejecting Unported until ported. (A59S1, low) e8bafd28
+folds two impossible allocations into the gap: `git show e8bafd28 -- src/code_generator.jl | grep '^-' | grep -n
+"Internal"` gives the deleted `given <= length(fields) || reject!(Internal(…))` and `given >=
+Core.Compiler.datatype_min_ninitialized(cls) || reject!(Internal(…))`, so a `new` with more values than fields, or fewer
+than Julia's own initialized count, neither of which Julia's IR produces, now rejects Unported at _throwLateErrorLocalNI
+as a gap; and its text calls a Core.Box read before assignment Julia's UndefRefError, where Julia's lowering guards that
+read with `isdefined` and throws UndefVarError (C6). Fix: the two Internal checks back before the gap's rejection, the
+text Julia's.
+
+stopgap in disguise: none new.
+precedent: the unwind mismatches, LLVM's fixCallUnwindMismatches and fixCatchUnwindMismatches at the pin; a read before
+assignment, dart's _throwLateErrorLocalNI.
+
+Area: enforcement and prose — e5507348 keeps one autoship loop per lane, its pid in the common dir's wt-autoship/<lane>;
+dabce89b counts a lane's work by `git cherry` (a commit another ship carried as the same patch is not ahead, and ship
+exits with nothing to land rather than red); sound. Requirements: C6 (A59S1); C8 and D11 (A57S1, still open); no lock
+fired inside its band.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A58S1 is fixed by e8bafd28, A54S4 by 4f6e871c, A56E1
+by a54bd0f6 and A57S7 by ff811421, each leaving its row. A59S1 is open on MARCH 1.D. By owner: the codegen lane holds
+A59S1 and A56S2; the stackify lane holds A57S1, A57S2 and A57S4.
