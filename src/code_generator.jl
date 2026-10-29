@@ -618,9 +618,11 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:775 AstCodeGenerator.visitLabeledStatement" @unported function visit_labeled_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:775 AstCodeGenerator.visitLabeledStatement" visit_labeled_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:775 AstCodeGenerator.visitLabeledStatement: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:784 AstCodeGenerator.visitBreakStatement" @unported function visit_break_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:784 AstCodeGenerator.visitBreakStatement" visit_break_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:784 AstCodeGenerator.visitBreakStatement: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"), "$(self.enclosing_member)")
 
 # a NIR variable is never captured (allocateContext) and always has its initializer, the statement
 # whose value it names
@@ -643,9 +645,9 @@ end
 @parity "dart2wasm/lib/code_generator.dart:916 AstCodeGenerator.visitAssertBlock" visit_assert_block(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:916 AstCodeGenerator.visitAssertBlock: Julia's @assert is a GotoIfNot and a throw in the flat IR, which visitBlock structures"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:925 AstCodeGenerator.visitTryCatch" @unported function visit_try_catch(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:925 AstCodeGenerator.visitTryCatch" @unported function visit_try_catch(self::AstCodeGenerator, node::NirEnter) end
 
-@parity "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally" @unported function visit_try_finally(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally" @unported function visit_try_finally(self::AstCodeGenerator, node::NirEnter) end
 
 @parity "dart2wasm/lib/code_generator.dart:1197 AstCodeGenerator.visitExpressionStatement" function visit_expression_statement(self::AstCodeGenerator, node::NirStmt)::Nothing
     translate_expression(self, node, void_marker(self))
@@ -686,15 +688,20 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement" @unported function visit_if_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement" visit_if_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1287 AstCodeGenerator.visitDoStatement" @unported function visit_do_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1287 AstCodeGenerator.visitDoStatement" visit_do_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:1287 AstCodeGenerator.visitDoStatement: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1296 AstCodeGenerator.visitWhileStatement" @unported function visit_while_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1296 AstCodeGenerator.visitWhileStatement" visit_while_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:1296 AstCodeGenerator.visitWhileStatement: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1308 AstCodeGenerator.visitForStatement" @unported function visit_for_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1308 AstCodeGenerator.visitForStatement" visit_for_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:1308 AstCodeGenerator.visitForStatement: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1325 AstCodeGenerator.emitForStatementUpdate" @unported function emit_for_statement_update(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1325 AstCodeGenerator.emitForStatementUpdate" emit_for_statement_update(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:1325 AstCodeGenerator.emitForStatementUpdate: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"), "$(self.enclosing_member)")
 
 @parity "dart2wasm/lib/code_generator.dart:1356 AstCodeGenerator.visitForInStatement" visit_for_in_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:1356 AstCodeGenerator.visitForInStatement: Julia lowers a for loop to iterate calls, GotoIfNot and GotoNode, which visitBlock structures by LLVM's stackifier"), "$(self.enclosing_member)")
@@ -722,9 +729,11 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1405 AstCodeGenerator.visitSwitchStatement" @unported function visit_switch_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1405 AstCodeGenerator.visitSwitchStatement" visit_switch_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:1405 AstCodeGenerator.visitSwitchStatement: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1554 AstCodeGenerator.visitContinueSwitchStatement" @unported function visit_continue_switch_statement(self::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:1554 AstCodeGenerator.visitContinueSwitchStatement" visit_continue_switch_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:1554 AstCodeGenerator.visitContinueSwitchStatement: Julia's IR is a CFG; LLVM's CFGStackify port structures it (visit_block)"), "$(self.enclosing_member)")
 
 @parity "dart2wasm/lib/code_generator.dart:1581 AstCodeGenerator.visitYieldStatement" visit_yield_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:1581 AstCodeGenerator.visitYieldStatement: tasks are out of scope: Julia's verifier rejects them (dev/MARCH.md 1.F)"), "$(self.enclosing_member)")
@@ -1436,9 +1445,9 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" @unported function SwitchInfo(code_gen::AstCodeGenerator, node) end
+@parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" @unported function SwitchInfo(code_gen::AstCodeGenerator, node::NoCounterpart) end
 
-@parity "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases" @unported function _initialize_special_cases(self::SwitchInfo, node) end
+@parity "dart2wasm/lib/code_generator.dart:5510 SwitchInfo._initializeSpecialCases" @unported function _initialize_special_cases(self::SwitchInfo, node::NoCounterpart) end
 
 @parity "dart2wasm/lib/code_generator.dart:5534 _VirtualCallKind.toString" @unported function Base.show(io::IO, self::_VirtualCallKind) end
 
