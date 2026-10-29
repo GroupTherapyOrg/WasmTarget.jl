@@ -65,3 +65,30 @@ end
     local e = try; D.get_definition_for_static_field(g, GlobalRef(GlobalsProgram, :counter)); nothing; catch x; x; end
     @test e isa WasmTarget.RejectionError
 end
+
+module GlobalsLazy
+global counter::Int = 0
+bump(x::Int) = counter + x
+end
+
+@testset "globals.dart: the lazy arm, its initializer keyed by the binding (dev/formal/StaticFieldInit.tla)" begin
+    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(GlobalsLazy.bump, (Int,), "globals"), "test"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    local g = D.DartGlobals(t)
+    local counter = GlobalRef(GlobalsLazy, :counter)
+    local fc = t.functions[]
+    # the initializer's key is the binding: its type takes nothing and returns the field's value,
+    # its name the binding's
+    local ft = D.get_function_type(fc, counter)
+    @test isempty(ft.inputs) && ft.outputs == [D.translate_type_of_field(t, counter)]
+    @test D.get_function_name(fc, counter) == "$counter field initializer"
+    @test D.get_existing_function(fc, counter) === nothing
+    # a non-const binding takes the lazy arm: its initializer's value, the binding's starting value,
+    # waits for the modules' __init__ at load, a located rejection naming that gap, never a value
+    local e = _rejection(() -> D.get_definition_for_static_field(g, counter))
+    @test e isa WasmTarget.Unquarantined && occursin("src/functions.jl getFunction", e.row) && occursin("__init__", e.row)
+    @test D.translated_procedures(fc) isa Vector{Core.MethodInstance}
+end

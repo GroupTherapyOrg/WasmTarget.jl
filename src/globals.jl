@@ -170,9 +170,11 @@ Return (and if needed create) the Wasm global corresponding to a static field, a
 binding. Julia has no late static fields; a binding's module is the main module (deferred loading is
 out of scope); a binding is final when it is `const`. A binding has no initializer expression, so
 the start-function path (dart's `field.initializer != null`) is taken only by the pragma, which no
-binding carries; and the lazy path, dart's static field initializer function, is the binding's
-module's top level or `__init__`, which the closed world does not compile: it rejects, located,
-until that path is ported.
+binding carries; and the lazy path is dart's: the initializer function, keyed by the binding
+(FunctionCollector), then a nullable global (null signals uninitialized) or an explicit flag, the
+global or a table slot (dev/formal/StaticFieldInit.tla models the guard). The initializer's value is
+the binding's starting value, its image value once every module's `__init__` has run at load, which
+the start function does not run yet: getFunction rejects there, located, the one gap of the arm.
 """
 @parity "dart2wasm/lib/globals.dart:126 DartGlobals.getDefinitionForStaticField" function get_definition_for_static_field(self::DartGlobals, field::GlobalRef)::DartGlobalDefinition
     local existing = get(self._definitions, field, nothing)
@@ -214,9 +216,27 @@ until that path is ported.
         return self._definitions[field] = definition
     end
 
-    # Add initializer function to the compilation queue: a binding's initializer is its module's top
-    # level or __init__, which the closed world does not compile.
-    reject!(Unquarantined("src/globals.jl getDefinitionForStaticField: the binding $field, with no build-time constant, whose initializer the closed world does not compile"), "DartGlobals.getDefinitionForStaticField")
+    # Add initializer function to the compilation queue (keyed by the binding, FunctionCollector's
+    # docstring; its value waits for the modules' __init__ at load, a located rejection there).
+    get_function(translator.functions[], field)
+
+    # We will have to initialize the global lazily, meaning each access will check if it's initialized
+    # and if not, cause initialization (dev/formal/StaticFieldInit.tla).
+    local new_field_type::WasmBuilder.IR.ValueType
+    local initializer_flag_global::Union{WasmBuilder.GlobalBuilder,Nothing}
+    if field_type isa WasmBuilder.IR.RefType && !field_type.nullable
+        # Null signals uninitialized
+        new_field_type = WasmBuilder.with_nullability(field_type, true)
+        initializer_flag_global = nothing
+    else
+        # Explicit initialization flag
+        new_field_type = field_type
+        initializer_flag_global = _define_initializer_flag(self, field, module_)
+    end
+    if use_table_slot && WasmBuilder.nullable(new_field_type)
+        return self._definitions[field] = _define_table_based_field(self, field, new_field_type::WasmBuilder.IR.RefType, module_, nothing, initializer_flag_global)
+    end
+    return self._definitions[field] = _define_global_based_field(self, field, new_field_type, module_, true, nothing, initializer_flag_global)
 end
 
 @parity "dart2wasm/lib/globals.dart:225 DartGlobals._defineInitializerFlag" function _define_initializer_flag(self::DartGlobals, field::GlobalRef, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.GlobalBuilder

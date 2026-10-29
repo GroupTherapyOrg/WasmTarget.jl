@@ -3,11 +3,14 @@
 
 """
 Creates the wasm function of each member the program reaches, queueing its code for generation,
-and manages the compilation queue that achieves tree shaking. A member is a Core.MethodInstance.
+and manages the compilation queue that achieves tree shaking. A member is a Core.MethodInstance. A
+function is keyed by its Reference: a member's MethodInstance, or, for a static field's initializer
+(dart's `field.staticFieldInitializer`), the binding's GlobalRef, which the Kernel table gives no
+Reference row (a binding is no method), so the key is the closed union of the two.
 """
 @parity "dart2wasm/lib/functions.dart:21 FunctionCollector" struct FunctionCollector
     translator::KernelNodes
-    _functions::LinkedHashMap{Core.MethodInstance,WasmBuilder.IR.BaseFunction}
+    _functions::LinkedHashMap{Union{Core.MethodInstance,GlobalRef},WasmBuilder.IR.BaseFunction}
     # each member's function for each caller shape (dart's dynamic forwarders)
     _dynamic_forwarder_functions::LinkedHashMap{Core.MethodInstance,LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}}
     # the function creating an Invocation for each call shape
@@ -23,7 +26,7 @@ and manages the compilation queue that achieves tree shaking. A member is a Core
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at :44
     # is its outer function
     FunctionCollector(::Val{:_}, translator::KernelNodes) =
-        new(translator, LinkedHashMap{Core.MethodInstance,WasmBuilder.IR.BaseFunction}(),
+        new(translator, LinkedHashMap{Union{Core.MethodInstance,GlobalRef},WasmBuilder.IR.BaseFunction}(),
             LinkedHashMap{Core.MethodInstance,LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}}(),
             LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}(), LinkedHashMap{Lambda,WasmBuilder.IR.BaseFunction}(),
             Set{Int}(), Set{Int}(), Set{CallShape}(), Set{Int}(), Dict{Int,Vector{Core.MethodInstance}}(),
@@ -128,7 +131,7 @@ class of the closed world's class table.
     return nothing
 end
 
-@parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" get_existing_function(self::FunctionCollector, target::Core.MethodInstance)::Union{WasmBuilder.IR.BaseFunction,Nothing} = get(self._functions, target, nothing)
+@parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" get_existing_function(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::Union{WasmBuilder.IR.BaseFunction,Nothing} = get(self._functions, target, nothing)
 
 """
 The wasm function of `target`, made on first request in its module and queued for its code.
@@ -139,10 +142,15 @@ are the entry and the `@ccallable` methods (getExportName), and the inlining hin
 `@inline` 127 (getWasmNeverInlinePragma, getWasmPreferInlinePragma), and a function is removable if
 unused where Julia's effects prove it (hasWasmPureFunctionPragma).
 """
-@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.BaseFunction
+@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.BaseFunction
     local existing = get(self._functions, target, nothing)
     existing === nothing || return existing
     local translator = self.translator
+    # a static field's initializer (dart's `member is Field` arm): the value a Julia binding starts
+    # the program with is its image value only once every module's __init__ has run at load (juliac
+    # runs Base.__init__ and each module's in order), which the start function does not run yet, so
+    # the initializer has no value to compute: a located rejection, the one gap of the lazy arm
+    target isa GlobalRef && reject!(Unquarantined("src/functions.jl getFunction: the initializer of the binding $target, whose starting value waits for the modules' __init__ (Base.__init__ and the closed world's) to run at load"), "FunctionCollector.getFunction")
     local never_inline = something(Util.get_wasm_never_inline_pragma(target), false)
     local always_inline = something(Util.get_wasm_prefer_inline_pragma(target), false)
     local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
@@ -214,7 +222,7 @@ end
     return function_
 end
 
-@parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" function get_function_type(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType
+@parity "dart2wasm/lib/functions.dart:249 FunctionCollector.getFunctionType" function get_function_type(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.FunctionType
     # We first try to get the function type by seeing if we already compiled the target function.
     local existing_function = get_existing_function(self, target)
     existing_function === nothing || return existing_function.type
@@ -238,7 +246,11 @@ closure has no type parameters and no named ones.
 end
 
 # dart's `member.accept1(visitor, target)`: a Julia member is a method, the visitor's Procedure arm
-@parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" function _get_function_type(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.FunctionType
+@parity "dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType" function _get_function_type(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::WasmBuilder.IR.FunctionType
+    # a static field's initializer takes nothing and returns the field's value (_FunctionTypeGenerator's
+    # static Field arm, functions.dart:908)
+    target isa GlobalRef && return WasmBuilder.define_function(types_builder(self.translator), WasmBuilder.IR.ValueType[],
+                                                               WasmBuilder.IR.ValueType[translate_type_of_field(self.translator, target)])
     local generator = _FunctionTypeGenerator(self.translator, synthesize_null_return_value(self, target), synthesize_no_return(self, target))
     return visit_procedure(generator, target, target)
 end
@@ -257,7 +269,9 @@ end
 
 # dart's `member.toString()`, a member's qualified name; a Julia member's is its function's name and
 # the argument types it is specialized on
-@parity "dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName" function get_function_name(self::FunctionCollector, target::Core.MethodInstance)::String
+@parity "dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName" function get_function_name(self::FunctionCollector, target::Union{Core.MethodInstance,GlobalRef})::String
+    # a static field's initializer, `<member> field initializer`
+    target isa GlobalRef && return "$target field initializer"
     local method = target.def::Method
     local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
     return "$(method.module).$(method.name)($(join(("::$p" for p in params[2:end]), ", ")))"
@@ -339,8 +353,10 @@ end
     return nothing
 end
 
-# dart's procedures among the translated members; every Julia member is a method, dart's Procedure
-@parity "dart2wasm/lib/functions.dart:461 FunctionCollector.translatedProcedures" translated_procedures(self::FunctionCollector)::Vector{Core.MethodInstance} = collect(keys(self._functions))
+# dart's procedures among the translated members: the methods, every Julia member a method, dart's
+# Procedure (a static field's initializer, keyed by its binding, is none)
+@parity "dart2wasm/lib/functions.dart:461 FunctionCollector.translatedProcedures" translated_procedures(self::FunctionCollector)::Vector{Core.MethodInstance} =
+    Core.MethodInstance[k for k in keys(self._functions) if k isa Core.MethodInstance]
 
 @parity "dart2wasm/lib/functions.dart:470 _FunctionTypeGenerator" _FunctionTypeGenerator(translator::KernelNodes, synthesize_null_return_value::Bool, synthesize_no_return::Bool)::_FunctionTypeGenerator =
     _FunctionTypeGenerator(Val(:_), translator, synthesize_null_return_value, synthesize_no_return)
