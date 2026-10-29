@@ -4,9 +4,23 @@
 @parity "wasm_builder/lib/src/ir/table.dart:10 Table" abstract type AbstractTable <: WasmBuilder.Serializable end
 
 """
-Table's dart fields: `finalizableIndex`, `type`, `minSize`, `maxSize`, `enclosingModule`.
+A table of dart's class itself, neither defined nor imported (AbstractTable is the class as the
+supertype of both; dart constructs none, each table being one of its two subclasses).
 """
-@parity "wasm_builder/lib/src/ir/table.dart:10 Table" @unported struct Table <: AbstractTable end
+@parity "wasm_builder/lib/src/ir/table.dart:10 Table" mutable struct Table <: AbstractTable
+    const finalizable_index::Finalizable{Int}
+    const type::RefType
+    # Mutable so that a table's size does not need to be known before the table is instantiated.
+    min_size::Int
+    const max_size::Union{Int,Nothing}
+    const enclosing_module::AbstractModule
+    const exported_name::Late{String}
+    # Indexable's `late final int _id = _globalId++`, numbered on its first read
+    const _id::Late{Int}
+    # dart's constructor (line 21), the struct's one inner constructor
+    Table(enclosing_module::AbstractModule, finalizable_index::Finalizable{Int}, type::RefType, min_size::Int, max_size::Union{Int,Nothing}) =
+        new(finalizable_index, type, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
+end
 
 """A table defined in a module."""
 @parity "wasm_builder/lib/src/ir/table.dart:48 DefinedTable" mutable struct DefinedTable <: AbstractTable
@@ -48,8 +62,8 @@ end
     TableExport(name::String, table::AbstractTable) = new(name, table)
 end
 
-# dart's constructor of the abstract class assigns its fields, which each subclass's struct holds; their
-# constructors do it, and this line declares the name and adds no method
+# dart's constructor is Table's one inner constructor, and each subclass's struct holds the fields it
+# assigns; this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/table.dart:21 Table" function Table end
 
 @parity "wasm_builder/lib/src/ir/table.dart:30 Table.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::AbstractTable)::Nothing

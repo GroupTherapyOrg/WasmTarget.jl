@@ -100,4 +100,11 @@ end
     @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal
 end
 
+@testset "type.dart: _WithMutability writes its type, then its mutability flag" begin
+    # the binary format's mut: the value type's byte (i32 0x7f, f64 0x7c), then 0x00 const or 0x01 var
+    @test bytes_of(s -> W.serialize(s, W.IR._WithMutability(W.IR.NumType_i32; mutable = true))) == [0x7f, 0x01]
+    @test bytes_of(s -> W.serialize(s, W.IR._WithMutability(W.IR.NumType_f64; mutable = false))) == [0x7c, 0x00]
+    @test sprint(show, W.IR._WithMutability(W.IR.NumType_i32; mutable = false)) == "const i32"
+end
+
 end # module SerializerTest

@@ -187,9 +187,15 @@ end
 @parity "wasm_builder/lib/src/ir/type.dart:1289 _WithMutability" abstract type Abstract_WithMutability <: WasmBuilder.Serializable end
 
 """
-_WithMutability's dart fields: `type`, `mutable`.
+A storage type with its mutability, of dart's class itself (Abstract_WithMutability is the class as
+the supertype of GlobalType and FieldType; dart constructs none of its own).
 """
-@parity "wasm_builder/lib/src/ir/type.dart:1289 _WithMutability" @unported struct _WithMutability <: Abstract_WithMutability end
+@parity "wasm_builder/lib/src/ir/type.dart:1289 _WithMutability" struct _WithMutability <: Abstract_WithMutability
+    type::StorageType
+    mutable::Bool
+    # dart's constructor (line 1293), the struct's one inner constructor
+    _WithMutability(type::StorageType; mutable::Bool) = new(type, mutable)
+end
 
 """
 A type for a global: a value type and a mutability.
@@ -839,8 +845,8 @@ end
     write(s, t.element_type[])
 end
 
-# dart's constructor of the abstract class, whose fields each subclass's struct holds and whose
-# subclasses' constructors do its work; this line declares the name and adds no method
+# dart's constructor is _WithMutability's one inner constructor, and each subclass's struct holds the
+# fields it assigns; this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/type.dart:1293 _WithMutability" function _WithMutability end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1296 _WithMutability.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, t::Abstract_WithMutability)::Nothing
