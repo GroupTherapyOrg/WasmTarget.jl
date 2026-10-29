@@ -4682,3 +4682,79 @@ each leaving its row. A51E5 and A51S8 stay open on their rows, A51S8 now reachin
 1.B, with A46E1 and A51S3. A52S1 is open on MARCH 1.D. A52S2 is open on MARCH 1.C. A52E2 is open on MARCH 1.L. A52E3 is
 open on MARCH 1.B. By owner: the tests lane holds A52E1 and A52E3; the codegen lane holds A52S1 and A51E5; the
 translator lane holds A52S2 and A51S8; the lead holds A52E2 and the ruling A52S1 may need.
+
+## 2026-10-28 — audited through 695f1985 (8e926b8b..695f1985: the Internal-asserting tests replaced, entry 52, the node claims run, PHIElimination's dead edge, D14's band in CPU seconds, a type literal as its type object, each case's compile budget, the corpus run against native)
+
+The fifty-third audit, beside the work, covers the seven commits of 8e926b8b..695f1985 that are not entry 52 (cfd3e8a7,
+its author's): ceab7ff0, 22696995, bb5ed475, 1ad6fb67, 2d4cd956, f5270a3d and 695f1985. Every finding rests on one exact
+command, quoted; the one Julia run is the landing check itself. Standing items. Fixed in the range: A51E5 by ceab7ff0
+(`grep -rn "undefined variable" test/src` prints nothing; the Internals the tests still assert are invariant guards, a
+misuse rejected, not a visitor run outside its stage), A51E6 by 22696995 (the five "run by node" sites call
+answers_native, test/runner.jl's run_cases, and `0xc0 in` is gone), A51S12 by bb5ed475, A52E2 by 1ad6fb67 (`Fixes:
+A52E2`), and A46E1, A51S3 and A52E1 by 695f1985 (`Fixes: A46E1, A51S3`): the whole run reads every compiled case's
+answer through the runner, both modules, fact by fact. The known Internals: 2d4cd956 re-records the last two `:wt_bug`
+cases `:rejects`; `grep -c ":wt_bug)," test/src/dart_tests.jl` gives 0. Corpus: `tail -4 wt-corpus.tsv` gives 7abfc7e2
+to 2d4cd956 green; dev/corpus.sh is running 695f1985 now (its progress `dart_tests.jl: compiling …`). Not on wt2: the
+lead's rulings since entry 52, codegen-b's unreachable sub-generators rejecting with Julia's replacement named and the
+control-flow visitors NoCounterpart beside visit_block: `grep -n "visit_while_statement\|visit_if_statement"
+src/code_generator.jl` still gives `@unported` stubs at :659 and :663, so the next entry reads them as they land; the
+rule for both, read now: reaching a sub-generator Julia's IR never produces breaks WT's own invariant, an Internal
+naming the replacement (never an Unported, which counts toward the port), and each NoCounterpart names its Kernel-table
+row and visit_block's LLVM anchor (D42). Test integrity: A53E2, A53E3, and A52E3 still open (code_generator.jl:636
+asserts `Float32Cases.addf(1.0f0) === 2.5f0`, :652 WT's own instruction names). Findings A53E1, A53E2, A53E3 and A53S1.
+
+Area: builder — empty by diff: `git diff --stat 8e926b8b..695f1985 -- src/wasm_builder` prints nothing.
+
+Area: collection and planning — empty by diff for src/compile.jl, src/translator.jl and src/julia/ (`git diff --stat
+8e926b8b..695f1985 -- src` names src/constants.jl and src/llvm/phi_elimination.jl alone). A52S1 and A52S2 stand open,
+nothing in the range touching them.
+
+Area: emission and diagnostics — bb5ed475: lower_phi_node skips an edge only from a block Julia's dominator tree names
+unreachable (mf.domtree is over the machine blocks, Julia's block k as k + 1, src/julia/machine.jl:131–140, so the index
+agrees), LLVM's UnreachableMachineBlockElim having removed that operand, and any other edge from no predecessor is an
+Internal at PHIEliminationImpl::LowerPHINode; its test plants a diamond, a dead edge and a stray edge. 2d4cd956: a
+lowered type literal goes to visitInstanceConstant, Julia's type object being an instance of its kind; a SimpleVector's
+one field is its elements as an immutable array (make_array_of); _makeWasmArrayLiteral reads the element type through
+its Late; and the int, double and Bool boxes take `i32.const classId` alone, as dart's do, the builder having refused
+the header-and-hash form (InvalidModule). That last is A51E1 measured: `git show -s --format=%B 2d4cd956 | grep -n
+"InvalidModule"` gives `the builder refused the struct.new (InvalidModule, D10)`, a WT defect every `:rejects` case that
+reached a box passed as a located rejection until another fix exposed it. (A53S1, low) the boxes' docstrings still give
+the difference 2d4cd956 removed: `grep -n "deliberate difference from dart" src/constants.jl` gives :534 ("this box is
+the class's struct … its object header (pushObjectHeaderFields: the class id and the identity hash)"), :575 ("the box
+carries class_info's object header … not dart's class id alone") and :697 ("A deliberate difference from dart, whose
+`_BoxedBool` takes `i32.const classId` alone") (C9). Fix: each says the box is dart's, the class id and the value.
+
+stopgap in disguise: none new.
+precedent: the dead edge, LLVM's UnreachableMachineBlockElim before PHIElimination; the boxes, dart's
+`_BoxedInt`/`_BoxedDouble`/`_BoxedBool` with `i32.const classId`.
+
+Area: enforcement and prose — every hunk of dev/check.sh, test/src/dart_tests.jl and the range's test files. 695f1985
+runs every module the whole run compiles, whatever its record, native's answer computed afresh, one @test per fact, a
+reader that does not compile a named failure; f5270a3d gives each compile a 10-s budget after a warm-up compile. The
+differential so lives only in dev/corpus.sh's run, which `grep -n "corpus" dev/ship.sh` shows no landing reads: a module
+answering otherwise than native lands green and is red minutes later on a run that holds nothing, so A51E3 (open on 1.L)
+now carries the third oracle itself. (A53E1, high) D14's CPU-second band depends on which cores the check gets:
+dev/check.sh:100 says "another job's load cannot turn a landing red", while :102 says "An efficiency core spends about
+twice the CPU seconds", and `sysctl -n hw.perflevel0.physicalcpu hw.perflevel1.physicalcpu vm.loadavg` gives `4`, `6`,
+`{ 6.10 6.17 6.36 }`. Run on 695f1985 unchanged, `CHECK_BASE=origin/wt2 bash dev/check.sh` printed `check: waited 100s
+for a slot`, `src | 3332 3332 1m51.5s`, `check: 131 CPU-s on the critical path (load 19, ratchet 32, src tests 112);
+129s wall` and `check: RED — 131 CPU-s, past D14's band`: a tree with no change is red when another check holds the
+performance cores (D14, D17); shipping this entry onto d77c8289 (a src change, so the lane's depot recompiled) then
+printed `check: 223 CPU-s on the critical path (load 36, ratchet 88, src tests 187); 248s wall` at load 7.39, the same
+prose-only change: the CPU seconds count the precompile a src change forces and the efficiency cores' slower work alike.
+Fix: a measure no core type moves, the instructions retired that macOS's `/usr/bin/time -l` reports (`/usr/bin/time -l
+true` prints `10138510 instructions retired`), its band re-stated from an idle run, or the check's processes held to the
+performance cores. (A53E2, medium) 695f1985 widens `:wt_bug` to silence a wrong answer: dart_tests.jl's header now says
+a `:wt_bug` record covers a case whose "module answers otherwise than native", and the run is skipped for it (`got ===
+:compiled && today !== :wt_bug && !_DART_CORE_ONLY`), while A51E4's lock does not exist (`grep -n "wt_bug"
+test/parity_ratchet.jl` prints nothing): one record edit turns the worst outcome, a module returning the wrong value
+(D9's why), green. Fix: `:wt_bug` never covers a module's answer (a wrong answer always fails), and A51E4's lock before
+any record uses it. (A53E3, low) the compile budget times JIT: f5270a3d's message measures a new path's first compile at
+"about 20 s" against the 10-s band, and the warm-up compiles one path (`WasmTarget.compile(x -> x + 1, (Int64,))`), so
+which case pays depends on corpus order. Fix: budget `@timed`'s time less its `compile_time`. Requirements: D14 and D17
+(A53E1); D9 (A53E2); C9 (A53S1); no lock fired inside its band but A53E1's.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A51E5 is fixed by ceab7ff0, A51E6 by 22696995, A51S12
+by bb5ed475, A52E2 by 1ad6fb67, and A46E1, A51S3 and A52E1 by 695f1985, each leaving its row. A53E1 is open on MARCH
+1.L. A53E2 is open on MARCH 1.Q, with A51E4. A53E3 is open on MARCH 1.T. A53S1 is open on MARCH 1.C. By owner: the lead
+holds A53E1 and A51E3; the tests lane holds A53E2, A53E3 and A52E3; the translator lane holds A53S1.
