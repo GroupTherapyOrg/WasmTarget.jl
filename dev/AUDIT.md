@@ -4758,3 +4758,86 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A51E5 is fixe
 by bb5ed475, A52E2 by 1ad6fb67, and A46E1, A51S3 and A52E1 by 695f1985, each leaving its row. A53E1 is open on MARCH
 1.L. A53E2 is open on MARCH 1.Q, with A51E4. A53E3 is open on MARCH 1.T. A53S1 is open on MARCH 1.C. By owner: the lead
 holds A53E1 and A51E3; the tests lane holds A53E2, A53E3 and A52E3; the translator lane holds A53S1.
+
+## 2026-10-28 — audited through 6eb9d85f (695f1985..6eb9d85f: BrTableInfo, one check holding the performance cores and three shards, a one-case dart core, entry 53, the landing lock first, D14 in instructions retired, @nospecializeinfer, a builtin's names by its tfunc, singleTarget and the entries, ccallables queued for the trim inference, a global builtin's module a name)
+
+The fifty-fourth audit, beside the work, covers the nine commits of 695f1985..6eb9d85f that are not entry 53 (66fbe3e0,
+its author's): d77c8289, a995ed8a, 4913600f, a5834b8d, 0fb51d68, 1a53f370, cdbb712c, 0c40c27e and 6eb9d85f. Every
+finding rests on one exact command, quoted; the one Julia run, listing Core's builtins, ran under `taskpolicy -b` with a
+100-s alarm. Standing items. Fixed in the range: A53E1 by a995ed8a and a5834b8d (`Fixes: A53E1`, the band in
+instructions retired, A54E1 below on what they omit), A52S2 by 1a53f370 and 6eb9d85f, A51S2 by 0c40c27e (the re-derived
+check and its String rejection deleted, the ccallables queued for Julia's verifier), A53S1 by cdbb712c. Not on wt2 yet:
+the tests lane's lowering-record rule folded into L227, read when it lands. Test integrity: the landing core is now the
+first case of each `_g` block (dart_tests.jl:736, `cs[1:min(1, end)]`); counted by script over the corpus and the
+records it holds `{'rejects': 12, 'compiled': 1} of 13`, against `{'rejects': 479, 'compiled': 121}` in all, so a
+landing compiles one of the 121 compiling cases and runs none, and A51E3 (open on 1.L: `grep -n "corpus" dev/ship.sh`
+still prints nothing) is the only thing that could hold a regression of the other 120 or a wrong answer; d77c8289's test
+judges br_table against the test's own formula (`lo <= v <= hi ? Int32(v - lo) : Int32(-1)`), not a Julia program's
+answer (A54S3). Findings A54S1, A54S2, A54S3, A54S4 and A54E1.
+
+Area: builder — 0fb51d68: InstructionsBuilder._add, _debugTrace and _verifyTypesFun take their argument @nospecialize
+under @nospecializeinfer, one inference and one body where _add held 91 specializations; the instruction is only pushed,
+`is_constant` and `name` now dispatched at run time, a compile-cost fix in src (D15), sound. (A54S4, low) the macros
+@parity looks through are listed three times, and the lists differ: `git show 0fb51d68 -- src/julia/parity.jl | grep
+'^+'` gives _identity's `(@inline, @noinline, @nospecializeinfer, @closed, @unported)`, _defines's `(@inline, @noinline,
+@nospecializeinfer, @closed)` and _generic_name's `(@inline, @noinline, @nospecializeinfer)`, each edited by hand in one
+commit (D5). Fix: one constant naming the transparent macros, each reader taking what it needs from it, the difference
+stated where a reader differs.
+
+Area: collection and planning — 1a53f370 and 6eb9d85f: a builtin's literal is dropped only at the positions its tfunc
+takes a name (getfield's name and order, the global builtins' module and name, the memoryref orderings, the atomic
+pointer orders), every position checked here against Compiler/src/tfuncs.jl's signatures. (A54S1, low) three builtins
+that take a binding's or a field's name are missing from the table: `perl -e 'alarm 100; exec @ARGV' taskpolicy -b julia
+--startup-file=no -e 'for n in names(Core; all=true); …; f isa Core.Builtin && println(n); end'` lists
+`get_binding_type`, `getproperty` and `setproperty!` among Core's builtins, and `grep -n "get_binding_type\|getproperty"
+src/julia/nir.jl` finds none in _builtin_name_operands, so `get_binding_type(M, :x)`, which a typed global's assignment
+lowers to, meets Symbol as a value and stops at Symbol's layout where it needs no Symbol (C3). Fix: the three rows.
+0c40c27e: check_subset infers again with each reached ccallable queued as `svec(rettype, signature)`, the verifier
+judging it. (A54S2, low) the set is not juliac's: juliac-buildscript.jl:69–70 runs `ccall(:jl_add_ccallable_entrypoints,
+Cvoid, ())` under `--compile-ccallable`, which juliac.jl:28 documents as "Include all methods marked `@ccallable` in
+output", while _reached_ccallables keeps only those the entry's inference reached; and build_nir's `ci in seen &&
+continue` drops a repeated CodeInstance's second CodeInfo unread. Fix: the selection named as WT's (one entry, no image)
+with its necessity, or the lead's ruling; the repeated pair asserted to be the same CodeInfo before one is dropped.
+cdbb712c: singleTarget is an invoke's MethodInstance, getFunctionEntry the member itself, canUseUncheckedEntry true,
+each Julia's answer where inference resolved the call; sound.
+
+stopgap in disguise: none new.
+precedent: a builtin's name operands, Julia's tfunc signatures (Compiler/src/tfuncs.jl); the ccallables, juliac's
+`svec(rettype, signature)` queue item.
+
+Area: emission and diagnostics — d77c8289 ports BrTableInfo: its thresholds, rangeSize, build, _isTooSparse and
+emitBrTableExpr. (A54S3, medium) it is a port Julia never reaches: case_map is `Dict{Int64,NoCounterpart}`, and `grep -n
+"struct NoCounterpart" src/julia/kernel.jl` gives `:18 … an uninhabited struct is the type of no value there`, so every
+table is empty; `grep -rn "BrTableInfo_build\|BrTableInfo__(" src | grep -v "@parity"` gives only build's own call; the
+test builds empty tables; and the definitions count toward src progress (ship's src line read 3012 ported at cfd3e8a7
+and 3021 at 66fbe3e0, d77c8289 among the src changes between). Julia's IR has no switch, the reason d77c8289 gives for
+SwitchInfo and the lead's ruling gives for the control-flow visitors (C2: a mechanism Julia never reaches is a defect
+even when its tests pass; A47E2's numerator). `_br_table_expr` is a `Function` field, an abstract type where dart's is
+`void Function(...)` (C4). Fix: the BrTableInfo family answered as Julia's (no switch statement, a jump table being
+LLVM's lowering if one ever comes), uncounted, or kept only with the caller that reaches it.
+
+stopgap in disguise: none new.
+precedent: BrTableInfo, dart's dense-switch lowering, unreachable from Julia's IR.
+
+Area: enforcement and prose — every hunk of dev/check.sh, dev/ship.sh, test/src_tests.jl and test/src/dart_tests.jl.
+a995ed8a holds one check slot, its ratchet and three src shards (a longest-first split by file size, WT_SRC_SHARD) one
+per performance core; 4913600f takes the landing lock first and checks each commit once on the rebased stack, a refused
+push when the base moved under the lock (bors's one-at-a-time mode). (A54E1, medium) the instructions retired that
+a5834b8d judges count the Julia process alone, never its children: `/usr/bin/time -l perl -e 'for(1..3e7){}'` prints
+`4605557532 instructions retired` with `0.42 user`, and `/usr/bin/time -l sh -c 'perl -e "for(1..3e7){}"; true'` prints
+`25220006 instructions retired` with the same `0.42 user`. The src shards run node (answers_native in code_generator.jl
+and code_generator_sub.jl, the runner's selftest, llvm_control_flow.jl) and wasm-opt (test/src/compile.jl), and the
+ratchet runs git for its history locks, so that work is in no judged number; the ratchet's rate (`RATE_RATCHET=2.4`
+against `RATE_SRC=5.3` G per CPU-s) is lower partly because its CPU seconds hold its git children's and its instructions
+do not. A check can grow by work in a subprocess and stay green (D14, D17). Fix: each stage's children measured too
+(each node, wasm-opt and git run under `/usr/bin/time -l`, its instructions summed into its stage), or the children's
+CPU seconds judged beside the band. Requirements: C2 (A54S3); D14 and D17 (A54E1); D5 (A54S4); C3 (A54S1); no lock fired
+inside its band.
+
+Landing times: entry 53 landed at 1378 s from its first commit, a lane's wait for the band's fix included; ship printed
+the median of the last five at 370 s, inside D13's band.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A53E1 is fixed by a995ed8a and a5834b8d, A52S2 by
+1a53f370 and 6eb9d85f, A51S2 by 0c40c27e and A53S1 by cdbb712c, each leaving its row. A54S1 and A54S2 are open on MARCH
+1.C. A54S3 is open on MARCH 1.D. A54S4 is open on MARCH 1.A6. A54E1 is open on MARCH 1.L. By owner: the translator lane
+holds A54S1 and A54S2; the codegen lane holds A54S3; the lead holds A54E1, A54S4 (src/julia/parity.jl) and A51E3.
