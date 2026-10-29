@@ -42,3 +42,25 @@ end
     local bad = [e for e in W.REGISTRY if isfile(string(e.file)) && !complete(text(e, e.first, e.last))]
     @test isempty(bad)
 end
+
+# a dart field whose type dart-format breaks from its name (code_generator.dart:5207 SwitchInfo's
+# dynamicTypeGuard): the name alone on its line, nullable by the type ending the line above
+@testset "check_typed_fields: a dart field split across lines reads its nullability from the line above" begin
+    mktempdir() do sdk
+        local file = joinpath(sdk, "pkg", "dart2wasm", "lib", "code_generator.dart")
+        mkpath(dirname(file))
+        write(file, """
+            class Planted {
+              void Function(int a, int b)?
+              splitNullable;
+              void Function(int a, int b)
+              splitPlain;
+              int? oneLine;
+            }
+            """)
+        local anchor = "dart2wasm/lib/code_generator.dart:1 Planted"
+        @test W._dart_nullable(sdk, anchor, :split_nullable) === nothing
+        @test occursin("not nullable", something(W._dart_nullable(sdk, anchor, :split_plain), ""))
+        @test W._dart_nullable(sdk, anchor, :one_line) === nothing
+    end
+end
