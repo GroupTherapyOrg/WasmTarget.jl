@@ -159,7 +159,7 @@ dart's lazy path.
 A deliberate difference from dart, whose initializer is the field's literal expression.
 """
 @parity "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer" function get_constant_initializer(self::DartGlobals, variable::GlobalRef)::Union{NirConst,Nothing}
-    isdefinedglobal(variable.mod, variable.name) && isconst(variable.mod, variable.name) || return nothing
+    nir_binding_is_constant(variable) || return nothing
     local value = getglobal(variable.mod, variable.name)
     Base.ismutationfree(typeof(value)) || return nothing
     return NirConst(Core.Const(value))
@@ -197,7 +197,7 @@ until that path is ported.
         if use_table_slot && WasmBuilder.nullable(field_type)
             return self._definitions[field] = _define_table_based_field(self, field, field_type::WasmBuilder.IR.RefType, module_, init, nothing)
         end
-        return self._definitions[field] = _define_global_based_field(self, field, field_type, module_, !isconst(field.mod, field.name), init, nothing)
+        return self._definitions[field] = _define_global_based_field(self, field, field_type, module_, !nir_binding_is_constant(field), init, nothing)
     end
 
     # Maybe we can emit the initialization in the start function. If so,

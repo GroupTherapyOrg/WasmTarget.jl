@@ -488,6 +488,16 @@ The type of argument `a` of `mi`: its MethodInstance's signature, the type Julia
 end
 
 """
+    nir_binding_is_constant(ref) -> Bool
+
+Whether the module binding `ref` names is defined and constant, so a read of it is its one value:
+Julia's `isdefinedglobal` and `isconst`. The one test of a binding's constancy, which the operand's
+type (nir_value_type), the callee's value and globals.dart's constant initializer each read.
+"""
+@quarantine "a binding is constant when Julia defines it const" Base.isconst nir_binding_is_constant(ref::GlobalRef)::Bool =
+    isdefinedglobal(ref.mod, ref.name) && isconst(ref.mod, ref.name)
+
+"""
     nir_value_type(body, v) -> Type
 
 The type Julia inferred for the operand `v` of `body`: a statement's its `ssavaluetypes` entry, an
@@ -502,7 +512,7 @@ expression (dartTypeOf) and the closed world's classes (closed_world_classes) bo
         (s::NirSSA) => body.types[s.id]
         (a::NirArgument) => nir_argument_type(body.ci.def, a)
         (c::NirConst) => Core.Typeof(c.c.val)
-        (g::NirGlobal) => isconst(g.ref.mod, g.ref.name) ? Core.Typeof(getglobal(g.ref.mod, g.ref.name)) :
+        (g::NirGlobal) => nir_binding_is_constant(g.ref) ? Core.Typeof(getglobal(g.ref.mod, g.ref.name)) :
             reject!(Unported("dart2wasm/lib/code_generator.dart:4937 StaticFieldImplicitAccessorCodeGenerator._generateGetter"),
                     "src/julia/nir.jl nir_value_type: a read of the binding $(g.ref), which an assignment can rebind (its getter)")
     end
@@ -556,7 +566,7 @@ run time rejects, located.
 @quarantine "a call's callee is Julia's value of its operand, a constant binding or a literal of any type" Core.getglobal function nir_callee(node::NirCall)
     local f = node.args[1]
     f isa NirConst && return f.c.val
-    f isa NirGlobal && isconst(f.ref.mod, f.ref.name) && return getglobal(f.ref.mod, f.ref.name)
+    f isa NirGlobal && nir_binding_is_constant(f.ref) && return getglobal(f.ref.mod, f.ref.name)
     reject!(Unquarantined("src/julia/nir.jl: a call whose callee $(f) is computed at run time"), "nir_callee")
 end
 
@@ -665,7 +675,7 @@ region's leave and an exception pop hold no value.
     local ops = nir_operands(st)
     @exhaustive st::NirStmt begin
         (x::NirCall) => let f = x.args[1],
-                callee = f isa NirConst ? f.c.val : f isa NirGlobal && isconst(f.ref.mod, f.ref.name) ? getglobal(f.ref.mod, f.ref.name) : nothing
+                callee = f isa NirConst ? f.c.val : f isa NirGlobal && nir_binding_is_constant(f.ref) ? getglobal(f.ref.mod, f.ref.name) : nothing
             names = callee isa Core.Builtin ? _builtin_name_operands(callee) : ()
             NirValue[ops[i] for i in 2:length(ops) if !(i - 1 in names && ops[i] isa NirConst)]
         end
