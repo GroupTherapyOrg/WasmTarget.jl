@@ -491,7 +491,17 @@ end
             (g::NirGlobalRead) => visit_static_get(self, g, expected_type)
             (p::NirPi) => visit_as_expression(self, p, expected_type)
             NirForeignCall => reject!(Unquarantined("src/julia: a foreigncall, a quarantined host import (dev/MARCH.md 1.F)"), "$(self.enclosing_member)")
-            NirBoundscheck => reject!(Unquarantined("src/julia: Julia's Expr(:boundscheck) as a value"), "$(self.enclosing_member)")
+            # Julia's bounds-check flag, a Bool constant as Julia's codegen answers it (codegen.cpp,
+            # bounds_check_enabled): true under --check-bounds=yes, false under =no (julia.h's
+            # JL_OPTIONS_CHECK_BOUNDS_ON 1 and _OFF 2, read from the compiling process), else the
+            # statement's own argument, false where the optimizer resolved an @inbounds region, true
+            # with none
+            (s::NirBoundscheck) => let opt = Base.JLOptions().check_bounds,
+                    arg = isempty(s.args) ? true : (s.args[1] isa NirConst && s.args[1].c.val isa Bool ? s.args[1].c.val :
+                        reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: a bounds-check flag of $(s.args[1])"), "$(self.enclosing_member)"))
+                WasmBuilder.i32_const(self.b[], (opt == 1 ? true : opt == 2 ? false : arg) ? 1 : 0)
+                WasmBuilder.IR.NumType_i32
+            end
             NirGCPreserveBegin => reject!(Unquarantined("src/julia: Julia's Expr(:gc_preserve_begin) as a value"), "$(self.enclosing_member)")
             NirGCPreserveEnd => reject!(Unquarantined("src/julia: Julia's Expr(:gc_preserve_end)"), "$(self.enclosing_member)")
             NirTheException => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's Expr(:the_exception), a catch region's exception"), "$(self.enclosing_member)")
@@ -552,7 +562,7 @@ parent), and `nothing` otherwise: a used value is Kernel's `VariableDeclaration`
 initializer, a local (translateVariableDeclaration), an unused one an `ExpressionStatement`
 (visitExpressionStatement, the void marker expected); a return is a `ReturnStatement`, an emptied
 statement an `EmptyStatement`. Every Julia-only form (the flat IR's jumps and merges, try regions, GC
-preservation, loop hints, the bounds-check flag) rejects, located, until the stackifier
+preservation, loop hints) rejects, located, until the stackifier
 (dev/MARCH.md 1.D), and a foreign call or C function pointer until the host imports (1.F). dart's
 source-map offset is set from the node; the NIR's line table takes that place with the source map.
 """
@@ -567,7 +577,7 @@ source-map offset is set from the node; the NIR's line table takes that place wi
         (s::NirNothing) => visit_empty_statement(self, s)
         (s::NirForeignCall) => reject!(Unquarantined("dev/MARCH.md 1.F: a foreign call, a host import"), at)
         (s::NirCFunction) => reject!(Unquarantined("dev/MARCH.md 1.F: a C function pointer, a host import"), at)
-        (s::NirBoundscheck) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's bounds-check flag"), at)
+        (s::NirBoundscheck) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirGCPreserveBegin) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's GC preservation region"), at)
         (s::NirGCPreserveEnd) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's GC preservation region"), at)
         (s::NirLeave) => reject!(Unquarantined("dev/MARCH.md 1.D: leaving a try region, structured by the stackifier"), at)
@@ -1065,7 +1075,7 @@ end
         reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): a field of $cls, no concrete class")
     local name = node.args[3]
     name isa NirConst && name.c.val isa Union{Symbol,Int} ||
-        reject!(Unquarantined("src/julia: a field of $cls named at run time"), "$(self.enclosing_member)")
+        reject!(Unquarantined("src/code_generator.jl visitInstanceGet: a field of $cls named at run time"), "$(self.enclosing_member)")
     local key = name.c.val
     local fields = class_instance_fields(cls, at)
     local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
@@ -1116,7 +1126,7 @@ end
         reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): a field of $cls, no concrete class")
     local name = node.args[3]
     name isa NirConst && name.c.val isa Union{Symbol,Int} ||
-        reject!(Unquarantined("src/julia: a field of $cls named at run time"), "$(self.enclosing_member)")
+        reject!(Unquarantined("src/code_generator.jl visitInstanceSet: a field of $cls named at run time"), "$(self.enclosing_member)")
     local key = name.c.val
     local fields = class_instance_fields(cls, at)
     local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
@@ -1369,7 +1379,7 @@ checked: a disagreement rejects as `Internal`.
     local receiver_type = dart_type_of(self, receiver)
     local index = node.args[3]
     index isa NirConst && index.c.val isa Int ||
-        reject!(Unquarantined("src/julia: a field of the tuple $receiver_type indexed at run time"), "$(self.enclosing_member)")
+        reject!(Unquarantined("src/code_generator.jl visitRecordIndexGet: a field of the tuple $receiver_type indexed at run time"), "$(self.enclosing_member)")
     local record_shape = RecordShape_from_type(receiver_type)
     local fields = class_instance_fields(receiver_type, at)
     local i = index.c.val
@@ -1391,7 +1401,7 @@ index is checked against the class layout's.
     local receiver_type = dart_type_of(self, receiver)
     local name = node.args[3]
     name isa NirConst && name.c.val isa Symbol ||
-        reject!(Unquarantined("src/julia: a field of the NamedTuple $receiver_type named at run time"), "$(self.enclosing_member)")
+        reject!(Unquarantined("src/code_generator.jl visitRecordNameGet: a field of the NamedTuple $receiver_type named at run time"), "$(self.enclosing_member)")
     local record_shape = RecordShape_from_type(receiver_type)
     local fields = class_instance_fields(receiver_type, at)
     local k = findfirst(f -> f.name == string(name.c.val), fields)

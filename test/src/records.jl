@@ -98,10 +98,9 @@ end
     local t2, bytes2 = records_compile_one(RecordCodegenCases.sa, (NamedTuple{(:b, :a), Tuple{Int64, Int64}},))
     @test bytes2[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     @test RecordCodegenCases.sa((b = 2, a = 7)) == 5
-    # a tuple's field by position: Julia's IR reads it behind its bounds-check flag, a statement the
-    # code generator does not translate yet, a located rejection there
-    local e = try; records_compile_one(RecordCodegenCases.fst, (Tuple{Int64, Float64},)); nothing; catch x; x; end
-    @test e isa W.RejectionError && occursin("bounds-check", sprint(show, e.rejection))
+    # a tuple's field by position, read behind Julia's bounds-check flag: the module builds
+    local _, bytes3 = records_compile_one(RecordCodegenCases.fst, (Tuple{Int64, Float64},))
+    @test bytes3[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     # the visit itself: the shape's positional index agrees with the class layout, then the receiver
     # is read and its field
     local t3 = D.Translator(WasmTarget.build_nir(W.check_subset(RecordCodegenCases.fst, (Tuple{Int64, Float64},), "records"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
@@ -124,4 +123,36 @@ end
     local past = W.NirCall(W.NirValue[get1.args[1], get1.args[2], W.NirConst(Core.Const(3))])
     local e3 = try; D.visit_record_index_get(g, past, IR.NumType_i64); nothing; catch x; x; end
     @test e3 isa W.RejectionError && e3.rejection isa W.Internal && occursin("which has 2", e3.rejection.site)
+end
+
+# tuples and Julia's bounds-check flag, each program run against native Julia (test/runner.jl)
+module RecordRunCases
+using Test, WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+const WTRunner = Main.WTRunner
+@inline function checked(x::Int64)
+    r = Int64(0)
+    @boundscheck r = Int64(100)
+    return r + x
+end
+plain(x::Int64) = checked(x)                  # the flag true: Julia's default --check-bounds
+inb(x::Int64) = @inbounds checked(x)          # the flag false: @inbounds, resolved by the optimizer
+@noinline Base.@constprop :none pick(t::Tuple{Int64, Float64}) = t[1] * Int64(2) + (t[2] > 2.0 ? Int64(1) : Int64(0))
+idx(x::Int64) = pick((x, 2.5))
+@noinline Base.@constprop :none pickin(t::Tuple{Int64, Float64}) = @inbounds t[1] - Int64(1)
+idxin(x::Int64) = pickin((x, 2.5))
+@noinline Base.@constprop :none nt(t::NamedTuple{(:b, :a), Tuple{Int64, Int64}}) = t.a - t.b
+named(x::Int64) = nt((b = x, a = Int64(10)))
+mk(x::Int64, y::Float64) = (x, y)
+@testset "code_generator.dart: tuples and Julia's bounds-check flag, run against native" begin
+    # Julia's answers: the flag is the @boundscheck block's guard, its value the compiling process's
+    @test plain(1) == 101 && inb(1) == 1 && Base.JLOptions().check_bounds == 0
+    local cases = WTRunner.RunCase[]
+    for (f, args) in ((plain, (Int64(1),)), (inb, (Int64(1),)), (idx, (Int64(7),)), (idxin, (Int64(7),)), (named, (Int64(3),)), (mk, (Int64(4), 1.5)))
+        append!(cases, WTRunner.answer_cases(string(nameof(f)), WasmTarget.compile, f, args, f(args...)))
+    end
+    local results = WTRunner.run_cases(cases)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    @test length(results) >= 7 && all(r -> r.ok, results)
+end
 end
