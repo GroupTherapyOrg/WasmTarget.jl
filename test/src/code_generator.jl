@@ -411,6 +411,20 @@ end
     end
 end
 
+module EqualsCases
+struct P; x::Int64; end
+@noinline Base.:(==)(a::P, b::P) = a.x == b.x
+eqp(x::Int64, y::Int64) = P(x) == P(y)
+end
+
+@testset "code_generator.dart: a call of == is Kernel's EqualsCall" begin
+    # == on two Int64s is the equality intrinsic; a method of == Julia resolved (P's) is called with
+    # both operands: each run by node against native
+    local bytes = W.compile(EqualsCases.eqp, (Int64,Int64); optimize = false)
+    @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    queue_native!("eqp", bytes, EqualsCases.eqp, [(Int64(1), Int64(1)), (Int64(1), Int64(2)), (typemin(Int64), typemin(Int64))])
+end
+
 module CallTargetCases
 @noinline h(x::Int64) = x * x + Int64(3)
 g(x::Int64) = h(x) + h(x + Int64(1))

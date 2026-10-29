@@ -459,8 +459,10 @@ end
                 equals_null() ? visit_equals_null(self, c, expected_type) :
                 visit_static_invocation(self, c, expected_type)
             end
-            (i::NirInvoke) => Base.issingletontype(dart_type_of(self, i.args[1])) ? visit_static_invocation(self, i, expected_type) :
-                visit_instance_invocation(self, i, expected_type)
+            (i::NirInvoke) => !Base.issingletontype(dart_type_of(self, i.args[1])) ? visit_instance_invocation(self, i, expected_type) :
+                # a call of Base's == with two operands: Kernel's EqualsCall
+                dart_type_of(self, i.args[1]) === typeof(==) && length(i.args) == 3 ? visit_equals_call(self, i, expected_type) :
+                visit_static_invocation(self, i, expected_type)
             (n::NirNew) => visit_constructor_invocation(self, n, expected_type)
             (g::NirGlobalRead) => visit_static_get(self, g, expected_type)
             (p::NirPi) => visit_as_expression(self, p, expected_type)
@@ -904,7 +906,36 @@ end
 @parity "dart2wasm/lib/code_generator.dart:1868 AstCodeGenerator._handleDynamicInvocation" _handle_dynamic_invocation(self::AstCodeGenerator, receiver::NirValue, arguments::Vector{NirValue}, member_name::Symbol)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:1868 AstCodeGenerator._handleDynamicInvocation: Julia's trim verifier rejects a call it cannot resolve (D32), except a must-throw one, Julia's MethodError throw (visitStaticInvocation)"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1926 AstCodeGenerator.visitEqualsCall" @unported function visit_equals_call(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+# a call of Base's ==, Kernel's EqualsCall (translateExpression routes an invoke of `==` with two
+# operands here): the equality intrinsic first; then Base's fallback `==(x, y) = x === y`, dart's
+# objectEquals, or an operand of no top type, compares references; else the method Julia resolved is
+# called with both operands. Julia's == has no implicit null case (dart's operandNull block): a
+# nullable operand reaches the method Julia dispatched to, whose own methods answer for nothing
+@parity "dart2wasm/lib/code_generator.dart:1926 AstCodeGenerator.visitEqualsCall" function visit_equals_call(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local intrinsic_result = generate_equals_intrinsic(self.intrinsifier[], node)
+    intrinsic_result === nothing || return intrinsic_result
+    local left = node.args[2]
+    local right = node.args[3]
+    local left_type = translate_type(self, dart_type_of(self, left))
+    local single_target_ = single_target(self.translator, node)
+    local b = self.b[]
+    if single_target_ !== nothing && single_target_.def === which(==, Tuple{Any,Any}) ||
+            (left_type isa WasmBuilder.IR.RefType && !WasmBuilder.is_subtype_of(left_type, self.translator.top_type[]))
+        # Plain reference comparison
+        translate_expression(self, left, WasmBuilder.IR.RefType_eq(; nullable = true))
+        translate_expression(self, right, WasmBuilder.IR.RefType_eq(; nullable = true))
+        WasmBuilder.ref_eq(b)
+        return WasmBuilder.IR.NumType_i32
+    end
+    single_target_ === nothing &&
+        reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): an == with no single target")
+    local use_unchecked_entry = can_use_unchecked_entry(self.translator, left, node)
+    local target = get_function_entry(self.translator, single_target_; unchecked_entry = use_unchecked_entry)
+    local signature = signature_for_direct_call(self.translator, target)
+    translate_expression(self, left, signature.inputs[1])
+    translate_expression(self, right, signature.inputs[2])
+    return output_or_void(self.translator, call(self, target))
+end
 
 # Julia's `x === nothing`, Kernel's EqualsNull: `nothing` is the null reference of a value whose type
 # admits it (translateExpression routes the === whose one operand is Nothing here), so the test is the
