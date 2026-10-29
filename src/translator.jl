@@ -1269,13 +1269,13 @@ end
     node isa ClassField ? node.type : Core.get_binding_type(node.mod, node.name)
 
 """
-The wasm type of a parameter. dart reads the parameter's TFA-inferred type, else its declared one;
-the code generator passes the type Julia inferred for the argument (its MethodInstance's signature).
+The wasm type of a parameter: translateType of typeOfParameterVariable, the type its MethodInstance
+is specialized on.
 
-Reshaped: `node` — the variable's type is the NIR body's, which the code generator reads; the translator takes the Julia type.
+Reshaped: `node` — a NIR argument carries no type; the member and the argument's position (the callee 1) name it, as typeOfParameterVariable takes them.
 """
-@parity "dart2wasm/lib/translator.dart:2092 Translator.translateTypeOfParameter" translate_type_of_parameter(self::Translator, type_::Type, is_required::Bool)::WasmBuilder.IR.ValueType =
-    translate_type(self, type_)
+@parity "dart2wasm/lib/translator.dart:2092 Translator.translateTypeOfParameter" translate_type_of_parameter(self::Translator, member::Core.MethodInstance, index::Int, is_required::Bool)::WasmBuilder.IR.ValueType =
+    translate_type(self, type_of_parameter_variable(self, member, index, is_required))
 
 """
 The wasm type of a field. dart asserts its field is not late; a Julia struct's reference field past

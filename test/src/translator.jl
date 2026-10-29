@@ -308,7 +308,9 @@ end
     local p = D.param_info_for_direct_call(t, mi)
     @test p === D.param_info_for_direct_call(t, mi) && p.positional == [nothing]
     # a parameter or local takes the wasm type of the Julia type inferred for it
-    @test D.translate_type_of_parameter(t, Int, true) == IR.NumType_i64
+    @test D.translate_type_of_parameter(t, mi, 2, true) == IR.NumType_i64
+    local eq = try; D.translate_type_of_parameter(t, mi, 2, false); nothing; catch x; x; end
+    @test eq isa W.RejectionError && eq.rejection isa W.Internal
     @test D.translate_type_of_local_variable(t, Int32) == IR.NumType_i32
     @test D.translate_type_of_local_variable(t, ModuleCases.Shape) == D.repr(t.class_info[ModuleCases.Shape])
     # no output is the void marker, one is itself

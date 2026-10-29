@@ -302,7 +302,7 @@ end
 # has a default (an optional argument makes a method of its own): its positional parameters are its
 # arguments after the callee itself, `Argument(2)` on, each required
 @parity "dart2wasm/lib/code_generator.dart:245 AstCodeGenerator._setupLocalParameters" function _setup_local_parameters(self::AstCodeGenerator, member::Core.MethodInstance, param_info::ParameterInfo, parameter_offset::Int, implicit_params::Int; is_forwarder::Bool = false, can_safely_omit_implicit_checks::Bool = false)::Nothing
-    local positional = NirArgument[NirArgument(n) for n in 2:nir_method_nargs(member)]
+    local positional = get_parameters_to_check(self.translator, member).positional
     local names = Base.method_argnames(member.def::Method)
     local may_need_to_check_types = need_to_check_types_for(self.translator, member)
     local b = self.b[]
@@ -313,7 +313,7 @@ end
         local variable_name = string(names[variable.n])
         isempty(variable_name) || (b.local_names[local_.index] = variable_name)
         if !is_forwarder
-            local incoming_argument_type = translate_type_of_parameter(self.translator, nir_argument_type(member, variable), is_required)
+            local incoming_argument_type = translate_type_of_parameter(self.translator, member, variable.n, is_required)
             if !WasmBuilder.is_subtype_of(local_.type, incoming_argument_type)
                 local new_local = add_local(self, incoming_argument_type)
                 WasmBuilder.local_get(b, local_)
