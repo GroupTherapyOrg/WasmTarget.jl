@@ -271,11 +271,16 @@ end
     @test D.type_of_parameter_variable(t, mi, 2, true) === Int
     local eo2 = try; D.type_of_parameter_variable(t, mi, 2, false); nothing; catch x; x; end
     @test eo2 isa W.RejectionError && eo2.rejection isa W.Internal
-    # the list helpers read the runtime's list class, not yet ported: Unported at its sdk definition;
-    # a standalone string constant outside standalone mode rejects
+    # indexList and getListLength, which dart2wasm calls nowhere, reject Internal; the base array read
+    # reads the runtime's list class, not yet ported: Unported at its sdk definition; a standalone
+    # string constant outside standalone mode rejects
     local bl = W.WasmBuilder.InstructionsBuilder(D.main_module(t), IR.ValueType[], IR.ValueType[])
     local el2 = try; D.get_list_length(t, bl); nothing; catch x; x; end
-    @test el2 isa W.RejectionError && el2.rejection isa W.Unported && occursin("list.dart", el2.rejection.anchor)
+    @test el2 isa W.RejectionError && el2.rejection isa W.Internal
+    local ei = try; D.index_list(t, bl, b -> nothing); nothing; catch x; x; end
+    @test ei isa W.RejectionError && ei.rejection isa W.Internal
+    local eb = try; D.get_list_base_array(t, bl); nothing; catch x; x; end
+    @test eb isa W.RejectionError && eb.rejection isa W.Unported && occursin("list.dart", eb.rejection.anchor)
     local es = try; D.push_standalone_string_constant(t, bl, W.WasmBuilder.DataSegmentBuilder(0, UInt8[], nothing, nothing), "hi"); nothing; catch x; x; end
     @test es isa W.RejectionError && es.rejection isa W.Internal
     # a tear-off's runtime type is the specialization's signature after the callee
@@ -582,8 +587,10 @@ end
     local f = D.get_dummy_function(D.get_dummy_values_collector_for_module(t, m), W.WasmBuilder.define_function(m.types[], IR.ValueType[], IR.ValueType[]))
     local g = D.make_function_ref(t, f)
     @test g === D.make_function_ref(t, f) && g.type == IR.GlobalType(IR.RefType_def(f.type; nullable = false); mutable = false)
-    # a JS string's imported global: a Julia String is no JS string, Internal
-    @test internal(() -> D.get_internalized_string_global(t, m, "hi"))
+    # a JS string's imported global, reached by a string constant outside standalone mode: not yet
+    # ported, Unported at its dart definition
+    local ej = try; D.get_internalized_string_global(t, m, "hi"); nothing; catch x; x; end
+    @test ej isa W.RejectionError && ej.rejection isa W.Unported && occursin("getInternalizedStringGlobal", ej.rejection.anchor)
     # a record's class is its own tuple type's, a class of the closed world; one the world lacks rejects
     local er = try; D.get_record_class_info(t, Tuple{Int8,Int8}); nothing; catch x; x; end
     @test er isa W.RejectionError && er.rejection isa W.Internal

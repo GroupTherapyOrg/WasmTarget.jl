@@ -1391,21 +1391,13 @@ i)`: by `array.new_fixed`, or past its limit as a default array whose elements a
     return array_type_ref
 end
 
-"""Index a list on the stack: its base array, the index `push_index` pushes, the element read."""
-@parity "dart2wasm/lib/translator.dart:2462 Translator.indexList" function index_list(self::Translator, b::WasmBuilder.InstructionsBuilder, push_index::Function)::Nothing
-    get_list_base_array(self, b)
-    push_index(b)
-    WasmBuilder.array_get(b, self.nullable_object_array_type[])
-    return nothing
-end
+# dart2wasm at the pin calls indexList and getListLength nowhere (getListBaseArray alone, from
+# intrinsics.dart), so no compile reaches either: Internal (A55S14's rule)
+@parity "dart2wasm/lib/translator.dart:2462 Translator.indexList" index_list(self::Translator, b::WasmBuilder.InstructionsBuilder, push_index::Function)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:2462 Translator.indexList: no caller in dart2wasm at the pin, so no compile reaches it"), "Translator.indexList")
 
-"""Push the length of the list on the stack as an i32: the runtime list class's length field, wrapped."""
-@parity "dart2wasm/lib/translator.dart:2472 Translator.getListLength" function get_list_length(self::Translator, b::WasmBuilder.InstructionsBuilder)::Nothing
-    local info = self.class_info[list_base_class(self)]
-    WasmBuilder.struct_get(b, info.struct_, FieldIndex_list_length())
-    WasmBuilder.i32_wrap_i64(b)
-    return nothing
-end
+@parity "dart2wasm/lib/translator.dart:2472 Translator.getListLength" get_list_length(self::Translator, b::WasmBuilder.InstructionsBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:2472 Translator.getListLength: no caller in dart2wasm at the pin, so no compile reaches it"), "Translator.getListLength")
 
 """Push the base array of the list on the stack: the runtime list class's data field."""
 @parity "dart2wasm/lib/translator.dart:2479 Translator.getListBaseArray" function get_list_base_array(self::Translator, b::WasmBuilder.InstructionsBuilder)::Nothing
@@ -1423,8 +1415,10 @@ end
     return info
 end
 
+# a string constant outside standalone mode is a JS string imported as a global (constants.jl's string
+# constant reaches it), the JS string imports not yet ported: a gap, Unported
 @parity "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal" get_internalized_string_global(self::Translator, module_::WasmBuilder.ModuleBuilder, s::String)::Union{} =
-    reject!(Internal("dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal: a JS string's imported global; a Julia String is no JS string: its representation is its class's (class_info.jl), and no constant imports one"), "Translator.getInternalizedStringGlobal")
+    reject!(Unported("dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal"), "a string constant $(Base.repr(s)) outside standalone mode, a JS string's imported global, not yet ported")
 
 """
 Push a string constant in standalone mode: its bytes appended to `data` and an array made from them
