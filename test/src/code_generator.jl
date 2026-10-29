@@ -409,6 +409,14 @@ end
         local e = rejection(() -> v(g, inv, IR.NumType_i32))
         @test e.rejection isa W.Internal && occursin("unimplemented_invoke", e.rejection.site)
     end
+    # a call of a function value is an invoke of its method: dart's closure calls name Julia's visitors
+    for v in (D.visit_function_invocation, D.visit_local_function_invocation)
+        local e = rejection(() -> v(g, inv, IR.NumType_i64))
+        @test e.rejection isa W.Internal && occursin("visitInstanceInvocation", e.rejection.site)
+    end
+    # a closure is a struct of its captures: its allocation is visitConstructorInvocation's
+    local f = rejection(() -> D._push_context(g, g.body))
+    @test f.rejection isa W.Internal && occursin("visitConstructorInvocation", f.rejection.site)
 end
 
 module EqualsCases

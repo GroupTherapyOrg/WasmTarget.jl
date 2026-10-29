@@ -1092,23 +1092,32 @@ end
     return void_marker(self)
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2512 AstCodeGenerator.visitFunctionDeclaration" @unported function visit_function_declaration(self::AstCodeGenerator, node::NirNew) end
+@parity "dart2wasm/lib/code_generator.dart:2512 AstCodeGenerator.visitFunctionDeclaration" visit_function_declaration(self::AstCodeGenerator, node::NirNew)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2512 AstCodeGenerator.visitFunctionDeclaration: Julia's lowering makes a closure a struct of its captures and its call method: its allocation is NirNew, visitConstructorInvocation's, and it has no context or vtable"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2536 AstCodeGenerator.visitFunctionExpression" @unported function visit_function_expression(self::AstCodeGenerator, node::NirNew, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2536 AstCodeGenerator.visitFunctionExpression" visit_function_expression(self::AstCodeGenerator, node::NirNew, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2536 AstCodeGenerator.visitFunctionExpression: Julia's lowering makes a closure a struct of its captures and its call method: its allocation is NirNew, visitConstructorInvocation's, and it has no context or vtable"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2544 AstCodeGenerator._instantiateClosure" @unported function _instantiate_closure(self::AstCodeGenerator, function_node::NirBody) end
+@parity "dart2wasm/lib/code_generator.dart:2544 AstCodeGenerator._instantiateClosure" _instantiate_closure(self::AstCodeGenerator, function_node::NirBody)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2544 AstCodeGenerator._instantiateClosure: Julia's lowering makes a closure a struct of its captures and its call method: its allocation is NirNew, visitConstructorInvocation's, and it has no context or vtable"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2560 AstCodeGenerator._pushClosure" @unported function _push_closure(self::AstCodeGenerator, closure::ClosureImplementation, function_type::Type, push_context::Function) end
+@parity "dart2wasm/lib/code_generator.dart:2560 AstCodeGenerator._pushClosure" _push_closure(self::AstCodeGenerator, closure::ClosureImplementation, function_type::Type, push_context::Function)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2560 AstCodeGenerator._pushClosure: Julia's lowering makes a closure a struct of its captures and its call method: its allocation is NirNew, visitConstructorInvocation's, and it has no context or vtable"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2579 AstCodeGenerator._pushContext" @unported function _push_context(self::AstCodeGenerator, function_node::NirBody) end
+@parity "dart2wasm/lib/code_generator.dart:2579 AstCodeGenerator._pushContext" _push_context(self::AstCodeGenerator, function_node::NirBody)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2579 AstCodeGenerator._pushContext: Julia's lowering makes a closure a struct of its captures and its call method: its allocation is NirNew, visitConstructorInvocation's, and it has no context or vtable"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2598 AstCodeGenerator.visitFunctionInvocation" @unported function visit_function_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2598 AstCodeGenerator.visitFunctionInvocation" visit_function_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2598 AstCodeGenerator.visitFunctionInvocation: a call of a Julia function value is an invoke of its method, which Julia resolved: visitStaticInvocation for a function, visitInstanceInvocation for a closure, whose captures are its struct's fields"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2641 AstCodeGenerator._generateDirectClosureCall" @unported function _generate_direct_closure_call(self::AstCodeGenerator, node::NirInvoke, representation::ClosureRepresentation, closure_target::SingleClosureTarget) end
+@parity "dart2wasm/lib/code_generator.dart:2641 AstCodeGenerator._generateDirectClosureCall" _generate_direct_closure_call(self::AstCodeGenerator, node::NirInvoke, representation::ClosureRepresentation, closure_target::SingleClosureTarget)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2641 AstCodeGenerator._generateDirectClosureCall: a call of a Julia function value is an invoke of its method, which Julia resolved: visitStaticInvocation for a function, visitInstanceInvocation for a closure, whose captures are its struct's fields"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2673 AstCodeGenerator._generateClosureInvocation" @unported function _generate_closure_invocation(self::AstCodeGenerator, node::NirInvoke, representation::ClosureRepresentation) end
+@parity "dart2wasm/lib/code_generator.dart:2673 AstCodeGenerator._generateClosureInvocation" _generate_closure_invocation(self::AstCodeGenerator, node::NirInvoke, representation::ClosureRepresentation)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2673 AstCodeGenerator._generateClosureInvocation: a call of a Julia function value is an invoke of its method, which Julia resolved: visitStaticInvocation for a function, visitInstanceInvocation for a closure, whose captures are its struct's fields"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2728 AstCodeGenerator.visitLocalFunctionInvocation" @unported function visit_local_function_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2728 AstCodeGenerator.visitLocalFunctionInvocation" visit_local_function_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2728 AstCodeGenerator.visitLocalFunctionInvocation: a call of a Julia function value is an invoke of its method, which Julia resolved: visitStaticInvocation for a function, visitInstanceInvocation for a closure, whose captures are its struct's fields"), "$(self.enclosing_member)")
 
 @parity "dart2wasm/lib/code_generator.dart:2747 AstCodeGenerator.visitInstantiation" visit_instantiation(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:2747 AstCodeGenerator.visitInstantiation: Julia instantiates no generic function value: a specialization is a MethodInstance"), "$(self.enclosing_member)")
