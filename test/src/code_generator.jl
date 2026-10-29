@@ -100,13 +100,15 @@ end
             local r2 = rejection(() -> D.translate_statement(g, st, nothing))
             @test r2 isa W.RejectionError && !occursin("voidMarker", string(r2.rejection))
         elseif st isa Union{W.NirForeignCall, W.NirCFunction}
-            @test r.rejection isa W.Unquarantined && occursin("1.F", r.rejection.row)
+            @test r.rejection isa W.Unquarantined && startswith(r.rejection.row, "src/functions.jl getFunction") && occursin("1.F", r.rejection.row)
         elseif st isa Union{W.NirGoto, W.NirGotoIfNot, W.NirPhi}
             # a jump and a merge are the stackifier's (visit_block), never a statement of their own
             @test r.rejection isa W.Internal && occursin("visit_block", r.rejection.site)
         else
-            # every Julia-only form rejects in its own arm, naming the stackifier's row
-            @test r.rejection isa W.Unquarantined && occursin("1.D", r.rejection.row)
+            # every Julia-only form rejects in its own arm, its row opening with the src file whose
+            # definition it waits for
+            local file = match(r"^([\w./-]+?)(?::\d+)?(?::|\s|$)", r.rejection.row)
+            @test r.rejection isa W.Unquarantined && file !== nothing && isfile(joinpath(pkgdir(WasmTarget), file[1]))
         end
     end
     # forms no program above holds, built directly

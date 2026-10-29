@@ -903,9 +903,9 @@ end
             NirThrowUndefIfNot => reject!(Unquarantined("src/julia: Julia's Expr(:throw_undef_if_not)"), "$(self.enclosing_member)")
             NirCFunction => reject!(Unquarantined("src/julia: Julia's Expr(:cfunction), a quarantined host import (dev/MARCH.md 1.F)"), "$(self.enclosing_member)")
             NirInvokeModify => reject!(Unquarantined("src/julia: Julia's Expr(:invoke_modify)"), "$(self.enclosing_member)")
-            NirPhi => reject!(Unquarantined("dev/MARCH.md 1.D: the stackifier, Julia's PhiNode as wasm's structured control"), "$(self.enclosing_member)")
+            NirPhi => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's PhiNode as a value, which visit_block reads from its incoming register"), "$(self.enclosing_member)")
             NirPhiC => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's PhiCNode, a statement visit_block translates, as a value"), "$(self.enclosing_member)")
-            NirEnter => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's EnterNode, a try region"), "$(self.enclosing_member)")
+            NirEnter => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's EnterNode, a try region visit_block opens as a try_table, as a value"), "$(self.enclosing_member)")
             NirLeave => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's Expr(:leave) as a value"), "$(self.enclosing_member)")
             NirPopException => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's Expr(:pop_exception) as a value"), "$(self.enclosing_member)")
             NirLoopInfo => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's Expr(:loopinfo) as a value"), "$(self.enclosing_member)")
@@ -975,11 +975,11 @@ map.
         (s::NirGlobalRead) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirReturn) => visit_return_statement(self, s)
         (s::NirNothing) => visit_empty_statement(self, s)
-        (s::NirForeignCall) => reject!(Unquarantined("dev/MARCH.md 1.F: a foreign call, a host import"), at)
-        (s::NirCFunction) => reject!(Unquarantined("dev/MARCH.md 1.F: a C function pointer, a host import"), at)
+        (s::NirForeignCall) => reject!(Unquarantined("src/functions.jl getFunction: a foreign call's host import, dart's wasm:import arm (dev/MARCH.md 1.F)"), at)
+        (s::NirCFunction) => reject!(Unquarantined("src/functions.jl getFunction: a C function pointer's host import, dart's wasm:import arm (dev/MARCH.md 1.F)"), at)
         (s::NirBoundscheck) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
-        (s::NirGCPreserveBegin) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's GC preservation region"), at)
-        (s::NirGCPreserveEnd) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's GC preservation region"), at)
+        (s::NirGCPreserveBegin) => reject!(Unquarantined("src/code_generator.jl translateStatement: Julia's GC preservation region, which WasmGC's references keep alive (dev/MARCH.md 1.D)"), at)
+        (s::NirGCPreserveEnd) => reject!(Unquarantined("src/code_generator.jl translateStatement: Julia's GC preservation region, which WasmGC's references keep alive (dev/MARCH.md 1.D)"), at)
         # control leaves a try region by the stackifier's branch out of its TRY_TABLE (visit_block)
         (s::NirLeave) => nothing
         # Julia's exception stack has no reader: the_exception reads its catch's CATCH local
@@ -987,9 +987,9 @@ map.
         # Base.current_exceptions is a foreign call
         (s::NirPopException) => nothing
         (s::NirTheException) => reject!(Internal("$at: the caught exception, which visit_block reads from its catch's CATCH local, as a statement"), at)
-        (s::NirLoopInfo) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's loop hints"), at)
-        (s::NirThrowUndefIfNot) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's undefined-variable check"), at)
-        (s::NirInvokeModify) => reject!(Unquarantined("dev/MARCH.md 1.D: an atomic field modify"), at)
+        (s::NirLoopInfo) => reject!(Unquarantined("src/code_generator.jl translateStatement: Julia's loop hints, LLVM's loop metadata (dev/MARCH.md 1.D)"), at)
+        (s::NirThrowUndefIfNot) => reject!(Unquarantined("src/julia/runtime/rtutils.jl: Julia's undefined-variable check, its UndefVarError raise (jl_undefined_var_error)"), at)
+        (s::NirInvokeModify) => reject!(Unquarantined("src/code_generator.jl visitInstanceSet: an atomic field modify (modifyfield!), its read, call and write"), at)
         (s::NirGoto) => reject!(Internal("$at: a jump of the flat IR, which the stackifier's BR carries (visit_block), as a statement"), at)
         (s::NirGotoIfNot) => reject!(Internal("$at: a conditional jump of the flat IR, which the stackifier's BR_IF or BR_UNLESS carries (visit_block), as a statement"), at)
         # Julia's codegen emits a trap where Julia proved the code unreachable
@@ -1125,7 +1125,7 @@ end
                     # Julia's codegen (emit_upsilonnode, src/codegen.cpp): the value stored in the
                     # register of each PhiC naming the Upsilon, which the catch block reads
                     st.val === nothing && haskey(upsilon_phics, k) &&
-                        reject!(Unquarantined("dev/MARCH.md 1.D: an Upsilon with no value, a variable undefined on the exception edge"), at)
+                        reject!(Unquarantined("src/code_generator.jl visit_block: an Upsilon with no value, a variable undefined on the exception edge"), at)
                     for p in get(upsilon_phics, k, Int[])
                         translate_expression(self, something(st.val), incoming_reg(p).type)
                         WasmBuilder.local_set(b, incoming_reg(p))
@@ -1139,7 +1139,7 @@ end
                 elseif st isa NirTheException
                     # Julia's the_exception in its catch block, the exception its CATCH stashed; Julia's
                     # inference may have narrowed its type (the try body's exception type)
-                    thrown_exception === nothing && reject!(Unquarantined("dev/MARCH.md 1.D: Julia's exception stack, the_exception outside the first block of its catch"), at)
+                    thrown_exception === nothing && reject!(Unquarantined("src/code_generator.jl visit_block: Julia's exception stack, the_exception outside the first block of its catch"), at)
                     local caught = thrown_exception[2]
                     local dest = add_local(self, translate_type_of_local_variable(self.translator, node.types[k]))
                     self.locals[NirSSA(k)] = dest
