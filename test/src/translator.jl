@@ -250,6 +250,9 @@ end
     # a single closure target holds its call target and parameter info
     local sct = D.SingleClosureTarget__(D.direct_call_target(t, mi), D.param_info_for_direct_call(t, mi))
     @test sct.call_target isa D.AstCallTarget && sct.param_info === D.param_info_for_direct_call(t, mi)
+    # deferred loading is out of scope, and a Julia method declares no pragmas: located rejections
+    local el = try; D.encode_load_list(t, D.ModuleMetadata[]); nothing; catch x; x; end
+    @test el isa W.RejectionError && el.rejection isa W.Unquarantined && occursin("deferred loading", el.rejection.row)
     # TFA's inferred-type readers: Julia's inference typed every value, so none is read, located
     local et = try; D._inferred_type_of_return_value(t, mi); nothing; catch x; x; end
     @test et isa W.RejectionError && et.rejection isa W.Unquarantined

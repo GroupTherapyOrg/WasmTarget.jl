@@ -604,9 +604,16 @@ end
 @parity "dart2wasm/lib/translator.dart:427 Translator.moduleForReference" module_for_reference(self::Translator, reference::Core.MethodInstance)::WasmBuilder.ModuleBuilder =
     self._output_to_builder[module_for_reference(self._module_output_data, reference)]
 
-@parity "dart2wasm/lib/translator.dart:436 Translator.moduleForConstant" @unported function module_for_constant(self::Translator, constant::NirConst) end
+# The module where `constant` should be placed; nothing for a constant the backend synthesizes, whose
+# place the backend decides
+@parity "dart2wasm/lib/translator.dart:436 Translator.moduleForConstant" function module_for_constant(self::Translator, constant::NirConst)::Union{WasmBuilder.ModuleBuilder,Nothing}
+    local module_ = module_for_constant(self._module_output_data, constant)
+    module_ === nothing && return nothing
+    return self._output_to_builder[module_]
+end
 
-@parity "dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId" @unported function modules_for_load_id(self::Translator, enclosing_library::Module, load_id::Int64) end
+@parity "dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId" modules_for_load_id(self::Translator, enclosing_library::Module, load_id::Int64)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator.modulesForLoadId")
 
 @parity "dart2wasm/lib/translator.dart:449 Translator.nameForModule" name_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::String = self._builder_to_output[module_].module_import_name
 
@@ -721,11 +728,14 @@ neededForLoadList, the empty modules' removal and the loading map getters).
     return result
 end
 
-@parity "dart2wasm/lib/translator.dart:649 Translator._patchLoadingMapGetter" @unported function _patch_loading_map_getter(self::Translator, function_::WasmBuilder.FunctionBuilder) end
+@parity "dart2wasm/lib/translator.dart:649 Translator._patchLoadingMapGetter" _patch_loading_map_getter(self::Translator, function_::WasmBuilder.FunctionBuilder)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:649 Translator._patchLoadingMapGetter: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator._patchLoadingMapGetter")
 
-@parity "dart2wasm/lib/translator.dart:723 Translator.encodeLoadList" @unported function encode_load_list(self::Translator, module_list::Vector{ModuleMetadata}) end
+@parity "dart2wasm/lib/translator.dart:723 Translator.encodeLoadList" encode_load_list(self::Translator, module_list::Vector{ModuleMetadata})::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:723 Translator.encodeLoadList: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator.encodeLoadList")
 
-@parity "dart2wasm/lib/translator.dart:748 Translator._patchLoadingMapNamesGetter" @unported function _patch_loading_map_names_getter(self::Translator, function_::WasmBuilder.FunctionBuilder) end
+@parity "dart2wasm/lib/translator.dart:748 Translator._patchLoadingMapNamesGetter" _patch_loading_map_names_getter(self::Translator, function_::WasmBuilder.FunctionBuilder)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:748 Translator._patchLoadingMapNamesGetter: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator._patchLoadingMapNamesGetter")
 
 """
 Replace `f`'s body with one returning a value of `type_` computed once by `gen` and cached in a new
@@ -1270,7 +1280,8 @@ end
     return true
 end
 
-@parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" @unported function get_pragma(self::Translator, node::NoCounterpart, name::String, optional...) end
+@parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" get_pragma(self::Translator, node::NoCounterpart, name::String, default_value::Union{Nothing,NirConst} = nothing)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/translator.dart:2423 Translator.getPragma: a pragma's value; a Julia method declares no pragmas (the Kernel table's Annotatable row), its inlining Julia's @inline and @noinline (shouldInline)"), "Translator.getPragma")
 
 """
 Push a new array of `array_type` holding `length` items, each pushed by `generate_item(element_type,
