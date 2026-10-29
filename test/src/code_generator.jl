@@ -577,6 +577,10 @@ end
     # intrinsifier's
     local e = rejection(() -> D.visit_static_invocation(g, W.NirCall(W.NirValue[W.NirConst(Core.Const(sin)), W.NirArgument(2)]), IR.NumType_f64))
     @test e.rejection isa W.Unported && occursin("AstCodeGenerator.visitThrow", e.rejection.anchor) && occursin("MethodError", e.at)
+    # dart's dynamic invocation has no Julia input: the verifier resolves every call it admits but a
+    # must-throw one, so reaching it is WasmTarget's own defect, naming Julia's replacement
+    local d = rejection(() -> D._handle_dynamic_invocation(g, W.NirArgument(2), W.NirValue[], :f))
+    @test d.rejection isa W.Internal && occursin("trim verifier", d.rejection.site) && occursin("visitStaticInvocation", d.rejection.site)
     # a field the class layout does not hold is a valid program outside the representation (A44S1)
     local t = translator_of(FieldGenCases.getb, (FieldGenCases.P,))
     local body = only(t.component)
