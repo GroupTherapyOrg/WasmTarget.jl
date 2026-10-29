@@ -404,7 +404,7 @@ end
             (s::NirSSA) => visit_variable_get(self, s, expected_type)
             (a::NirArgument) => a.n == 1 ? visit_this_expression(self, a, expected_type) : visit_variable_get(self, a, expected_type)
             (c::NirConst) => visit_constant_expression(self, c, expected_type)
-            (g::NirGlobal) => visit_static_get(self, g, expected_type)
+            (g::NirGlobal) => dart_type_of(self, g) <: Function ? visit_static_tear_off(self, g, expected_type) : visit_static_get(self, g, expected_type)
         end) : (@exhaustive node::NirStmt begin
             # a call of a builtin that is a Kernel node of its own: a field read, a field write, a type
             # test, a throw, a tuple (dart's record); every other builtin a static invocation
@@ -419,6 +419,7 @@ end
                 record_get(NamedTuple, Symbol) ? visit_record_name_get(self, c, expected_type) :
                 f === Core.getfield ? visit_instance_get(self, c, expected_type) :
                 f === Core.setfield! ? visit_instance_set(self, c, expected_type) :
+                f === Core.setglobal! ? visit_static_set(self, c, expected_type) :
                 f === Core.isa ? visit_is_expression(self, c, expected_type) :
                 f === Core.typeassert ? visit_as_expression(self, c, expected_type) :
                 f === Core.throw ? visit_throw(self, c, expected_type) :
@@ -880,9 +881,19 @@ end
     return expected_type
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2193 AstCodeGenerator.visitStaticTearOff" @unported function visit_static_tear_off(self::AstCodeGenerator, node::NirGlobal, expected_type::WasmBuilder.IR.ValueType) end
+# a function's binding as an operand, Kernel's StaticTearOff (translateExpression routes a NirGlobal
+# whose value is a function here): Julia's function as a value is its singleton, the constant
+@parity "dart2wasm/lib/code_generator.dart:2193 AstCodeGenerator.visitStaticTearOff" function visit_static_tear_off(self::AstCodeGenerator, node::NirGlobal, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    instantiate_constant(self, NirConst(Core.Const(getglobal(node.ref.mod, node.ref.name))), expected_type)
+    return expected_type
+end
 
-@parity "dart2wasm/lib/code_generator.dart:2199 AstCodeGenerator.visitStaticSet" @unported function visit_static_set(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+# Julia's setglobal!(mod, name, value), Kernel's StaticSet: dart calls the static field's implicit
+# setter, whose signature types the value; that setter (StaticFieldImplicitAccessorCodeGenerator) is not
+# ported, so the write rejects there, located, before anything is pushed
+@parity "dart2wasm/lib/code_generator.dart:2199 AstCodeGenerator.visitStaticSet" visit_static_set(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Unported("dart2wasm/lib/code_generator.dart:4969 StaticFieldImplicitAccessorCodeGenerator._generateSetter"),
+        "$(self.enclosing_member): a write of the binding $(node.args[2]).$(node.args[3]) (its setter)")
 
 @parity "dart2wasm/lib/code_generator.dart:2225 AstCodeGenerator.visitSuperPropertyGet" @unported function visit_super_property_get(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 

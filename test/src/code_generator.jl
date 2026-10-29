@@ -477,6 +477,9 @@ const SCALE = Int32(7)
 counter = 0
 const BOX = Ref(0)
 scaled(x::Int32) = x * SCALE
+setcounter(x::Int) = (global counter = x; nothing)
+@noinline callf(f, x) = f(x)
+tear(x::Int32) = callf(abs, x)
 end
 
 @testset "code_generator.dart: a constant binding's read is its value" begin
@@ -498,6 +501,16 @@ end
     # its value's, mutable or not
     @test occursin("_generateGetter", rejection(() -> D.dart_type_of(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)))).rejection.anchor)
     @test D.dart_type_of(g, W.NirGlobal(GlobalRef(GlobalCases, :BOX))) === Base.RefValue{Int64}
+    # a function's binding as an operand, `abs` passed to callf, is Kernel's StaticTearOff, the
+    # function's singleton constant: run by node against native
+    local tb = W.compile(GlobalCases.tear, (Int32,); optimize = false)
+    queue_native!("tear", tb, GlobalCases.tear, [(x,) for x in Int32[-3, 0, 5, typemin(Int32)]])
+    # a write of a binding, Kernel's StaticSet (the body's own setglobal!), calls its setter, not
+    # ported: Unported there
+    local sg = codegen_of(GlobalCases.setcounter, (Int,), [IR.NumType_i64], IR.ValueType[])
+    local set = only(st for st in sg.body.stmts if st isa W.NirCall && W.nir_callee(st) === Core.setglobal!)
+    local w = rejection(() -> D.translate_expression(sg, set, D.void_marker(sg)))
+    @test w.rejection isa W.Unported && occursin("StaticFieldImplicitAccessorCodeGenerator._generateSetter", w.rejection.anchor)
 end
 
 module ControlCases
