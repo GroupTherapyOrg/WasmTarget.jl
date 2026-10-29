@@ -725,3 +725,25 @@ isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runne
         @test r.ok || (println(r); false)
     end
 end
+
+# an entry's 8-bit parameters cross the boundary as i32, Julia's ABI (translateExternalType unpacks a
+# packed builtin type): the wrapping add answers as native Julia (test/runner.jl)
+module PackedEntryCases
+add8(a::UInt8, b::UInt8) = a + b
+neg8(a::Int8, b::Int8) = a - b
+end
+
+@testset "translator.dart: translateExternalType unpacks an 8-bit entry parameter to i32" begin
+    local IR = WasmTarget.WasmBuilder.IR
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(PackedEntryCases.add8, (UInt8, UInt8), "translator"), "test"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    @test D.translate_external_type(t, UInt8) == IR.NumType_i32 && D.translate_external_type(t, Int8) == IR.NumType_i32
+    # an Int8 entry compiles; the runner marshals UInt8, so the wrapping add runs against native
+    @test WasmTarget.compile(PackedEntryCases.neg8, (Int8, Int8); optimize = false) isa Vector{UInt8}
+    local f = PackedEntryCases.add8
+    local results = Main.WTRunner.run_cases(first(Main.WTRunner.answer_cases("add8", WasmTarget.compile, f, (0xc8, 0x64))))
+    for r in results
+        @test r.ok || (println(r); false)
+    end
+end

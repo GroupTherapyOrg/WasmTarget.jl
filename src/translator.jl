@@ -1047,7 +1047,9 @@ anyref. Callable before the class info is built.
     end
     if !is_potentially_nullable && cls isa DataType && isprimitivetype(cls)
         local builtin = get(self.builtin_types[], cls, nothing)
-        builtin !== nothing && WasmBuilder.is_primitive(builtin) && return builtin::WasmBuilder.IR.ValueType
+        # a packed storage type (an 8- or 16-bit integer, a Bool) crosses as its value type, i32, held as
+        # Julia's ABI holds it (translateStorageType's docstring)
+        builtin !== nothing && WasmBuilder.is_primitive(builtin) && return WasmBuilder.unpacked(builtin)
     end
     return WasmBuilder.IR.RefType_any(; nullable = true)
 end
