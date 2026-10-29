@@ -59,6 +59,18 @@ if [ -n "$missing_deps" ]; then
     { echo "check: a new dependency does not precompile"; tail -20 .wtd/resolve.out; exit 1; }
   echo "check: built the image of new dependency $(echo $missing_deps | tr '\n' ' ')unjudged, $(awk '{ printf "%d", $3 + $5 }' .wtd/newdeps.time) CPU-s"
 fi
+# an in-repo dependency (lib/<name>, a path source) this change leaves untouched is built here too, unjudged: a
+# lane whose Manifest already named lib/WasmInterpreter still built its image inside the judged load the first
+# time its depot met it (31 CPU-s, wt3-codegen, 11:36). A change that edits lib/<name> pays its rebuild inside
+# the judged load, as WasmTarget's own does; each unjudged build prints its cost for the audit
+for d in lib/*/; do
+  name=$(basename "$d"); grep -qE "^$name *=" Project.toml || continue
+  git diff --quiet "${CHECK_BASE:-HEAD~1}" HEAD -- "$d" 2>/dev/null || continue
+  /usr/bin/time -o ".wtd/dep.$name.time" julia --project=. --startup-file=no -e "using Pkg; Pkg.precompile(\"$name\")" >> .wtd/resolve.out 2>&1 ||
+    { echo "check: $name does not precompile"; tail -20 .wtd/resolve.out; exit 1; }
+  c=$(awk '{ printf "%d", $3 + $5 }' ".wtd/dep.$name.time")
+  [ "$c" -ge 5 ] && echo "check: built the image of in-repo dependency $name unjudged, $c CPU-s"
+done
 # each stage's CPU seconds (user + sys) go to .wtd/<stage>.time for D14's band, below
 /usr/bin/time -l -o .wtd/load.time julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
