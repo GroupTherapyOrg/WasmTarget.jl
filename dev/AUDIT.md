@@ -4406,3 +4406,179 @@ Landing times: entry 48 and entry 49 each landed by dev/ship.sh with the median 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A48E1 and A46S2 are fixed by 233fee7d;
 A45E1 by 1ba1c08c; A49S3 is carried as A50S2. A50S1 is open on MARCH 1.A4. A50S2 is open on MARCH 1.C. A50E1 is open on
 MARCH 1.L.
+
+## 2026-10-28 — audited through ff20d5d8 (9f479d76..ff20d5d8: compile() end to end, the entry as Julia's compileable specialization, the verifier's records, the opt phase and Binaryen_jll, constants, constructor_info, dynamic_dispatchers, tags, PHI elimination, records, 8- and 16-bit integers, the exports, the Translator's fields, isa and typeassert, module binding reads, D43 and D44, entry 50; and the tests themselves: dart cases judged by a property, the landing core, dev/corpus.sh, test/src/ walked)
+
+The fifty-first audit, beside the work, covers the 34 commits from edc2a995 to ff20d5d8 (26c21437 is entry 50, its
+author's). The builder area was read by diff alone; the collection and emission areas were read by two read-only
+sub-auditors, each finding below re-run here by the command quoted; the enforcement area and the fifth area Dale asked
+for, now that compile() runs tests end to end (the tests themselves, for hacks that mislead), were read here. Every
+finding rests on one exact command, quoted. Standing items. Corpus: `tail -2 "$(git rev-parse --git-common-dir)/wt-corpus.tsv"`
+gives `6be635af green 105` then `ff20d5d8 red 101 dart_nnbd/is_type_test_null_is: Test Failed at …/test/src/dart_tests.jl:746`;
+its Test Summary reads `1667 3 1670`, the three `:rejects` cases dart_nnbd/is_type_test_null_is,
+dart_patterns/exhaustiveness_restrictive_cast_pattern_3_2 and dart_closure/implicit_closure now rejecting as Internal,
+while the landing of c1df0ae6 and ff20d5d8 was green (A51S1, A51E3). Traps and invalid modules: none written in the
+range. Recursion: NirConst's hash (7de69761, src/julia/nir.jl:38–41) ends the 2^40 walk the lead reported; its
+same-type collisions are A51S13. Silent catches: `_dart_at_base` (test/src/dart_tests.jl:32–46) falls back to the
+whole base text or "" on a git failure, which runs more native answers, never fewer; not a finding. Test integrity:
+eleven findings, A51E1 to A51E9 and A51S1's and A51S3's test halves. Findings A51S1 to A51S16 and A51E1 to A51E9.
+
+Area: builder — empty by diff: `git diff --stat 9f479d76..ff20d5d8 -- src/wasm_builder` prints nothing.
+
+Area: collection and planning — 7de69761 runs compile.dart's phases end to end, the closed world carrying its entry;
+c4108b80 takes the entry as the specialization Julia compiles (sound on 1.13, A51S4 on 1.12); 2a20e4a4 keeps the
+verifier's records (TrimError), which broke one caller (A51S2); 2e891670 states WT's subset is the verifier over
+unmodified Base, confirmed by juliac-buildscript.jl's trim-base include; 3271a341 and f380dcf2 add dart's opt phase
+with dart's flags verbatim (dartdev's default phases, compile.dart:874–875 there, not the library's
+compiler_options.dart:64–68), Binaryen_jll pinned `=0.130.0` beside dart's binaryen rev 9926156a; 6be635af's
+sampled Translator anchors (translator.dart :100 :157 :198 :228 :294 :455 :866 :1328) each declare their field.
+(A51S2, high) src/functions.jl:111 builds an OutsideSubset from a String: `grep -rn "OutsideSubset(" src` gives
+`src/functions.jl:111: reject!(OutsideSubset("CCallableMissing: the @ccallable …` beside subset.jl:125/127/137, each
+`OutsideSubset([TrimError(…)])`; 2a20e4a4 made the field `errors::Vector{TrimError}` (src/julia/reject.jl:72), so a
+ccallable whose signature disagrees with inference raises a MethodError, not a rejection (C6, D9). The check itself
+re-derives the verifier's CCallableMissing (`member.specTypes == sig && body.ci.rettype <: rettype`, functions.jl:110),
+where juliac queues each ccallable `svec(rt, sig)` for the verifier (juliac-buildscript.jl:70) and _trim_infer queues
+only the entry (D3, D5). Fix: queue the ccallables as juliac does, delete functions.jl:107–112, and add the
+mismatching case. (A51S3, high) compile() returns wasm-opt's rewrite by default, judged by nothing:
+`grep -rn "differential runner" src dev/PARITY_MASTER.md` gives src/julia/wasm_opt.jl:21 and dev/PARITY_MASTER.md:46,
+"the differential runner checks the optimized module against native Julia beside the unoptimized one", while
+`grep -n "no runner" test/smoke.jl` gives `120: … the rebuild has no runner to judge it against native yet (dev/MARCH.md
+1.B)`. The default user path now returns bytes WT's builder never built (C7: nothing bypasses emitted bytes) and
+test/src/dart_tests.jl, test/smoke.jl and test/probe_bytes.jl all call that default. Fix: `optimize = false` the default
+until the runner exists (dart's library default), both texts saying what is true, and the probes pinned to the
+unoptimized module. (A51S4, medium) c4108b80's 1.12 arm is not juliac's answer by evidence:
+`nm -U …/julia-1.12.7…/lib/julia/libjulia-internal.1.12.7.dylib | grep -i "compile_hint_spec\|add_entrypoint"` gives
+`T _jl_add_entrypoint` and `t _jl_get_compile_hint_specialization` (local); base/experimental.jl:494–495's entrypoint
+calls jl_add_entrypoint, whose choice of MethodInstance no source here shows, and the arm calls
+compileable_specialization_for_call, the verifier's resolver for dynamic calls (typeinfer.jl:1286, verifytrim.jl:227).
+Fix: on 1.13, where both exist, a case asserting the two agree on every corpus entry, or the 1.12 arm ruled by the
+lead. (A51S5, medium) NIR is built twice per compile: `grep -n "build_nir(" src/translator.jl src/compile.jl` gives
+compile.jl:217 (`generate_record_classes(build_nir(component, …))`) and translator.jl:217, and
+record_class_generator.jl:35 ignores its argument (`= Dict{RecordShape,DataType}()`) (C1). Fix: build once, at the TFA
+phase, and hand it on. (A51S6, medium) src/compile.jl:250 answers an unrecognised module name with the main module's id
+(`something(WasmCompilerOptions_id_for_module_name(…), WasmCompilerOptions_main_module_id())`) where dart asserts
+non-null (compile.dart's `idForModuleName(…)!`) (D9). Fix: reject, located. (A51S9, medium) TrimError's
+`cause::Any` (src/julia/reject.jl:68) is matched with a fallthrough `print(io, c)` (:88) after two `isa` arms (C4, D8).
+Fix: a `@closed` Union of CallMissing, CCallableMissing and String, matched `@exhaustive`. (A51S10, low) the body
+lookup is written three more times beside nir_body_of (nir.jl:476): `grep -rn "b.ci.def === " src` gives
+translator.jl:989, constructor_info.jl:130 (942375ed) and functions.jl:109 (96737610), whose `first(…)` throws an
+unlocated ArgumentError (D5). (A51S13, low) NirConst hashes every structured immutable by its type alone
+(nir.jl:40), so N same-type constants make the constant cache quadratic, a slow walk where the rule is linear. (A51S16,
+low) stale prose: `grep -n "module names emitted" src/compile.jl` gives :257 where the flag list omits it;
+test/dart_tests.toml:150 and :759 say "WT runs no wasm-opt"; dev/PARITY_MASTER.md:51 cites `record_unsupported!`, of
+which `grep -rn record_unsupported src | wc -l` gives 0 (C9).
+
+stopgap in disguise: `optimize = true` citing dartdev's phases rests on a differential runner no file holds (A51S3).
+precedent: the entry, juliac's Base.Experimental.entrypoint (1.13's add_entrypoint ccall); the opt phase, dartdev's
+`--optimization-level` phases; PHI elimination, LLVM's PHIElimination.cpp at the llvm pin; the verifier's error kinds,
+an @enum read from verifytrim.jl's description text, an unknown text Internal.
+
+Area: emission and diagnostics — 516247f6's phis follow PHIElimination.cpp:317/:365, copies before each predecessor's
+terminator; e87d9c73's Internals sit only on paths with no Julia counterpart; 1f7e7276's conversions, shifts,
+compares and divides were each traced and are sound; 4942b4ae's dropped stack-trace payload is the lead's recorded
+ruling; ff20d5d8 fixes A50S2, visit_static_get now calling get_constant_initializer, globals.dart's one rule.
+(A51S1, high) isa and typeassert reach an Internal wherever a checker is called: `grep -rn 'var"function"(self::' src`
+gives only `code_generator.jl:1690 … CallTarget.function" var"function"(self::CallTarget)::Union{} =` (an Internal,
+"abstract in …") and `:1713 … AstCallTarget.function`, while IsCheckerCallTarget and AsCheckerCallTarget (types.jl:152,
+:196) and _DynamicDispatcherCallTarget (dynamic_dispatchers.jl:30) each hold a `function_::Late` that dart exposes as
+`late final w.BaseFunction function` (types.dart:877, :1047) and MacroAssembler_invoke calls `var"function"(target)`
+(code_generator.jl:1594). Behind it, `sed -n 740p src/types.jl` gives `is_checkers_for_module(self.translator.types, …)`,
+a `Late{Types}` (translator.jl:138) where the one method takes Types: a MethodError. Read, not measured: the three
+corpus cases each test a nullable operand or a typeassert, so each calls a checker, which is how c1df0ae6 turned their
+located stubs into Internals (C6, D12). Fix: the three getters, `self.translator.types[]`, and a nullable isa and a
+typeassert compiled end to end. (A51S7, medium) 6eeed056's "empty by Julia's answer" is contradicted in src:
+dynamic_dispatchers.jl:10–11 says the verifier "rejects every call it cannot resolve statically, so no NIR statement is a
+dynamic call", and code_generator.jl:770–771 (edc2a995) says the verifier admits "a generic call … only as a warning,
+its result Union{} … which is dart's dynamic invocation" (C3, C9). Fix: the docstring true, and the lead's ruling on
+whether a must-throw call is a dispatcher or Julia's MethodError throw. (A51S8, medium) ff20d5d8 leaves a second answer
+to the binding question: `sed -n 189,190p src/code_generator.jl` gives dart_type_of's `isconst(g.ref.mod, g.ref.name) ?
+… : reject!(Unquarantined(…))`, where visit_static_get rejects Unported (D5). Fix: dart_type_of through
+get_constant_initializer, one kind at both sites. (A51S11, medium) `sed -n 232p src/julia/nir.jl` gives `code::Vector{Any}`
+(516247f6), the raw statements LLVM.add_pre_emit_pass reads (code_generator.jl:520), a second IR reader beside L221 and
+L222's closed sums (C1, C5). (A51S12, low) `sed -n 44p src/llvm/phi_elimination.jl` gives `pred in mf.blocks[mbb].preds
+|| continue`, an edge skipped silently where a CFG-mapping bug belongs loud (C6). (A51S14, low) a type computed at run
+time rejects as `Unquarantined("src/julia: …")` (code_generator.jl:1012, :1035) where dart's counterpart is its
+unported makeType path, an Unported. (A51S15, low) functions.jl:288 parses Julia's gensym name with a regex, no Julia
+API (C3).
+
+stopgap in disguise: none new in src; the Internal-asserting tests are A51E5.
+precedent: the type tests, types.dart's emitIsTest and emitAsCheck; the phi copies, LLVM's per-predecessor copies.
+
+Area: enforcement and prose — every hunk of dev/check.sh, dev/ship.sh, dev/corpus.sh, test/parity_ratchet.jl,
+test/src_tests.jl, dev/MARCH.md and dev/LEDGER.md in the range, and the fifth area: test/src/dart_tests.jl whole,
+test/src/*.jl's new and changed tests, the landing core. D43 and D44 are rows with planned checks (1.U to 1.Z). The
+records' native answers are native Julia's, re-proven whenever a record or its group changes (`_dart_same`, type and
+isequal): no self-golden there. No corpus case was rewritten (`git diff --stat 9f479d76..ff20d5d8 --
+test/smoke_corpus.jl` prints nothing), so none routes around Base. (A51E1, high) the `:rejects` property admits WT's
+own defects: test/src/dart_tests.jl:746–747 passes `got isa WasmTarget.Rejection && !(got isa WasmTarget.Internal)`,
+and reject.jl's docstring names `InvalidModule` and `Internal` together "a defect of WasmTarget itself"; `grep -rn
+"InvalidModule(" src` gives the builder's own refusals (instructions.jl:473, a ValidationError) and wasm_opt.jl's
+"wasm-opt failed", so a case whose module the builder or wasm-opt refuses reads as a located rejection, D10's alarm
+muted. Nor is "located" checked: `_dart_outcome` drops `e.at`, and an Unported's anchor is any String. Pinning the
+anchor would bring back the snapshot that oscillated; the property should pin that it is located instead. Fix: `:rejects`
+admits Unported, Unquarantined and OutsideSubset alone; an Unported's anchor parses by parse_anchor to a definition
+at its pin, an Unquarantined's row exists, `at` is not empty. (A51E2, high) the full matrix cannot run:
+test/runtests.jl:54, :58 and :60 include `late.jl`, `classes.jl` and `wasm_builder/serializer.jl`, and `test -e` gives
+each `MISSING` since c4682adc moved them under test/src/; ci.yml and gate.yml run runtests.jl at clause closure, and
+it runs four families where test/src/ holds over thirty files. Fix: runtests.jl includes test/src_tests.jl in their
+place, and the ratchet checks every include path of test/*.jl exists. (A51E3, high) the landing core lets a regression
+land and nothing holds the next: the core is the first five cases of each `_g` block by position
+(dart_tests.jl:722); counted by script over the corpus and the records, it holds 65 of 600 cases and 15 of 121
+`:compiled` ones (`core {'rejects': 48, 'compiled': 15, 'wt_bug': 2}`, `outside core {'rejects': 421, 'compiled': 106,
+'wt_bug': 8}`), and the three cases above sit at positions 5, 8 and 24. dev/corpus.sh caught them about three
+minutes after the landing (wt-landings.tsv `00:00:07Z ff20d5d8`, wt-corpus.tsv `00:03:02Z ff20d5d8 red`), but
+`grep -rn "wt-corpus" dev/*.sh test/parity_ratchet.jl` names it in dev/corpus.sh alone: "its red the next landing's first
+item" binds no landing, a later regression hides behind the first recorded failure, and a stack's intermediate
+commits are never run whole. Fix: dev/ship.sh refuses a landing while the corpus's last row for origin/wt2's head is red,
+unless the stack changes a failing case's outcome; the core gains every case the last red run names (fixed in size,
+D14). (A51E4, high) `:wt_bug` asserts nothing and its list can grow: dart_tests.jl:743 passes `got === :compiled ||
+got isa _Outside || got isa WasmTarget.Rejection`, anything but a raw exception; `grep -rn "wt_bug" test dev src`
+outside the records gives only dart_tests.jl's comment and branch, so no check holds "the list only shrinks", nor a
+`:compiled` record against being lowered to `:rejects` (`grep -n "dart_tests\|:compiled\|DART_CASES"
+test/parity_ratchet.jl` reads only test/dart_tests.toml); and `grep -n "wt_bug\|no class info\|type-literal" dev/MARCH.md`
+prints nothing, so the ten known Internals are tracked by no row (C5: no known failure hides behind a passing test).
+Fix: `:wt_bug` asserts the case is still Internal (fixed, it fails and is re-recorded); a lock measured against
+CHECK_BASE that refuses a `:wt_bug` key added or a `:compiled` record lowered unless a message line names it, as L227
+names removals; each of the ten on its MARCH row. (A51E5, high) tests that pass on a WT Internal, a visitor run
+outside its stage: `grep -rn "undefined variable" test/src` gives eight asserts of `Internal` "undefined variable", four
+added in the range (code_generator.jl:110 by 1f7e7276, :537 by c1df0ae6, intrinsics.jl:95 by df9c1f14, records.jl:114 by
+fe84bcfa); c1df0ae6's builds an `isa` NirCall by hand, its operand's local never defined, so emit_is_test and
+emit_as_check ran in no test and A51S1 landed unseen. The RefValue{Union{Nothing,Int64}} entry is faithful (an entry
+with a Union argument has no compileable specialization, c4108b80) and routes around nothing; the hand-built call is
+the mimicry. Fix: each through compile() or a defined operand, asserting emitted code or an Unported/Unquarantined.
+(A51E6, medium) comments claim runs no test makes: test/src/code_generator.jl:252, :293, :368, :441 and :504 say "run by
+node … answers as native Julia", and `grep -n node test/src/code_generator.jl` finds only those comments (:252 by
+7de69761 and :504 by 1f7e7276 in the range); the checks are the magic header and `0xc0 in compile_one(…)`, a byte
+anywhere in the module; `@test CodegenCases.f_add(typemax(Int32)) == typemin(Int32)` and records.jl's `@test
+RecordCodegenCases.sa((b = 2, a = 7)) == 5` test Julia, not WT; and 7de69761's message says test/compile.jl runs "against
+native" where test/src/compile.jl checks the header and byte equality. Fix: run them with llvm_control_flow.jl's
+node_answers, or delete the claims; the 0xc0 check read at its instruction. Extends A46E1. (A51E7, medium) 7de69761, a
+feature commit, loosened D14's judgement to land itself: `git log -S'"$cores" ]; then echo' 9f479d76..ff20d5d8 --
+dev/check.sh` names 7de69761, whose hunk turns `-gt "$cores"` into `-ge "$cores"` because "this landing went red twice at
+load 10 on 10 cores" (D14, D17). Landing this entry measured why: `bash dev/ship.sh` printed `src | 3181 3181 2m59.1s` and `check: RED — 181s, past D14's band (a 60-s target, red past 120 s) at load 8 on 10 cores`, twice, with every test green: the check's own cost is past its band, and it passes now only on a saturated machine, where the loosened test leaves it unjudged. Fix: the src tests back inside the band (the slowest files found and cut at their cause), then the judgement in its own commit with its intent, or reverted. (A51E8, low) L227's
+`--find-renames=90%` (parity_ratchet.jl:1913) keeps a test that stops running: in a scratch repository, `git mv
+test/src/kept.jl test/src/kept.jl.off` then L227's own query prints `deleted by L227's query: []` and
+`R100 test/src/kept.jl test/src/kept.jl.off`; a move out of test/src/ or off `.jl` leaves src_tests.jl's walk
+silently. A deleted @testset inside a kept file was never L227's (unchanged). Fix: a rename whose destination the walk
+does not read counts as a removal. (A51E9, low) a failing case names no rejection: the corpus's three failures print
+only the expression (`grep -c "internal error\|Internal(" wt-corpus.out` gives 0). Fix: the reason in the failure.
+Requirements: C6 and D9 (A51S1, A51S2, A51S6, A51S12); C7 and D10 (A51S3, A51E1); C1 and D5 (A51S5, A51S8, A51S10,
+A51S11); D3 (A51S2, A51S4); C5 (A51E4, A51E5); D14 and D17 (A51E3, A51E7); C9 (A51S7, A51S16, A51E6); no lock fired
+inside its band.
+
+Landing times: wt-landings.tsv gives 435 s for 6be635af and 6501 s for the stack c1df0ae6 and ff20d5d8 (first commit to
+landed, a lane's wait included).
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A51S1 is fixed by 321cabff, landed after ff20d5d8
+(the three getters and the translator's types read through its Late, with a test compiling a called is checker and as
+checker, and a @test_broken waiting on the class walk); A50S2 is fixed by ff20d5d8. A51S2 and A51E2 are what the range
+broke beside A51S1, the next fixes of their lanes before new work. By owner: the translator lane holds A51S2 (the String
+OutsideSubset and the ccallable re-derivation), A51S4, A51S5, A51S6, A51S9, A51S10, A51S13, A51S15 and A51S16; the
+codegen lane holds A51S8, A51S11, A51S12, A51S14 and A51E5, with A51E6's code_generator tests; the tests lane holds
+A51E1, A51E2, A51E4's assertion, A51E9, and A51S3, the opt default, with its runner; the lead holds A51E3, A51E4's lock,
+A51E7 and A51E8, and owes the ruling A51S7 asks (whether a must-throw generic call is a dynamic dispatcher or Julia's
+MethodError throw); 8bfde7ff and f969a257, landed after ff20d5d8, touch A51E7's band and A51E3's core and are the next
+entry's to read. A51S11, A51S12, A51S14 and A51E5 are open on MARCH 1.D. A51S3 is open on MARCH 1.B, with A51E6. A51S2,
+A51S6 and A51S15 are open on MARCH 1.F. A51S4, A51S5, A51S8, A51S9, A51S10, A51S13 and A51S16 are open on MARCH 1.C.
+A51S7 is open on MARCH 1.E, the lead's ruling. A51E1 and A51E9 are open on MARCH 1.T. A51E4 is open on MARCH 1.Q. A51E2,
+A51E3, A51E7 and A51E8 are open on MARCH 1.L.
