@@ -19,6 +19,10 @@ common="$(git rev-parse --path-format=absolute --git-common-dir)"
 gitdir="$(git rev-parse --path-format=absolute --git-dir)"
 mkdir -p .wtd
 last=""; since=$(date +%s)
+# a HEAD whose ship went red is not shipped again until HEAD moves: the lane fixes it, its new commit
+# settles and ships (march-monitor-a, 00:29: a red HEAD re-shipped each minute would take a queue turn and
+# a check every time)
+failed=""
 while :; do
   git fetch -q origin "$MARCH" 2>/dev/null
   head=$(git rev-parse HEAD)
@@ -28,10 +32,14 @@ while :; do
   holder=$(cat "$common/wt-ship/$(basename "$lane").lock/pid" 2>/dev/null || true)
   [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null && busy=1
   ahead=$(git rev-list --count "origin/$MARCH..HEAD" 2>/dev/null || echo 0)
-  if [ "$busy" = 0 ] && [ "$ahead" -gt 0 ] && [ $(( $(date +%s) - since )) -ge "$SETTLE" ]; then
+  if [ "$busy" = 0 ] && [ "$ahead" -gt 0 ] && [ "$head" != "$failed" ] && [ $(( $(date +%s) - since )) -ge "$SETTLE" ]; then
     echo "autoship: $(date -u +%FT%TZ) shipping $ahead commit(s) at $(git rev-parse --short HEAD)"
     bash dev/ship.sh > .wtd/autoship.out 2>&1
     grep -E '^ship: (landed|pushed|a commit|REFUSED|recorded)' .wtd/autoship.out | tail -3
+    if grep -qE '^ship: (a commit.s check is red|REFUSED|the rebase|origin/)' .wtd/autoship.out; then
+      failed=$head
+      echo "autoship: $(git rev-parse --short "$head") went red; not shipped again until HEAD moves"
+    fi
   fi
   sleep 60
 done
