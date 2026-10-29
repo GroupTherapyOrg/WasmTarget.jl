@@ -424,6 +424,7 @@ end
                 f === Core.typeassert ? visit_as_expression(self, c, expected_type) :
                 f === Core.throw ? visit_throw(self, c, expected_type) :
                 f === Core.tuple ? visit_record_literal(self, c, expected_type) :
+                f === Core.Intrinsics.not_int && length(c.args) == 2 && dart_type_of(self, c.args[2]) === Bool ? visit_not(self, c, expected_type) :
                 equals_null() ? visit_equals_null(self, c, expected_type) :
                 visit_static_invocation(self, c, expected_type)
             end
@@ -1020,7 +1021,14 @@ end
 @parity "dart2wasm/lib/code_generator.dart:2792 AstCodeGenerator.visitLogicalExpression" visit_logical_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:2792 AstCodeGenerator.visitLogicalExpression: Julia's lowering flattens it into statements, branches and phis, which visitBlock structures by LLVM's stackifier"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2803 AstCodeGenerator.visitNot" @unported function visit_not(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+# Julia's not_int on a Bool, Kernel's Not (translateExpression routes it here; an integer's not_int
+# complements every bit, the intrinsifier's unary map): a Bool is 0 or 1 in an i32, so its negation is
+# i32.eqz
+@parity "dart2wasm/lib/code_generator.dart:2803 AstCodeGenerator.visitNot" function visit_not(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    translate_expression(self, node.args[2], WasmBuilder.IR.NumType_i32)
+    WasmBuilder.i32_eqz(self.b[])
+    return WasmBuilder.IR.NumType_i32
+end
 
 @parity "dart2wasm/lib/code_generator.dart:2810 AstCodeGenerator.visitConditionalExpression" visit_conditional_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:2810 AstCodeGenerator.visitConditionalExpression: Julia's lowering flattens it into statements, branches and phis, which visitBlock structures by LLVM's stackifier"), "$(self.enclosing_member)")

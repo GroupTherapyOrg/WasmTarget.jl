@@ -459,15 +459,6 @@ end
         return to_w
     end
 
-    # Julia's not_int on a Bool flips its one bit (Julia's Bool is an i1 in its codegen), where an
-    # integer's complements every bit (the unary map)
-    if f === Core.Intrinsics.not_int && length(args) == 1 && dart_type_of(self, args[1]) === Bool
-        translate_expression(code_gen, args[1], i32)
-        WasmBuilder.i32_const(b[], 1)
-        WasmBuilder.i32_xor(b[])
-        return i32
-    end
-
     # Julia's flipsign_int(x, y): x where y is not negative, else its wrapping negation (Julia's
     # codegen: a select over y >= 0); x and y of one full-width integer type
     if f === Core.Intrinsics.flipsign_int && length(args) == 2

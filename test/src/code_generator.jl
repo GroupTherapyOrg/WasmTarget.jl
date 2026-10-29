@@ -362,6 +362,7 @@ scale(x::Int32) = Float64(x) * 2.5
 absint(x::Int64) = abs(x)
 bits(x::Int64) = leading_zeros(x) + trailing_zeros(x) + count_ones(x)
 notand(a::Bool, b::Bool) = !a & b
+notb(a::Bool) = !a
 minmax(x::Int32, y::Int32) = min(x, y) + max(x, y)
 widen32(x::Int32) = Int64(reinterpret(UInt32, x)) + 1
 egal(x::Float64, y::Float64) = x === y
@@ -376,11 +377,15 @@ end
     local f64s = [0.0, -0.0, 1.5, -2.5, 1e300, -Inf, NaN]
     for (f, at, argsets) in ((C.mulshift, (Int64, Int64), [(a, b) for a in i64s for b in i64s]), (C.floorabs, (Float64,), [(x,) for x in f64s]),
                              (C.absint, (Int64,), [(x,) for x in i64s]), (C.notand, (Bool, Bool), [(a, b) for a in (false, true) for b in (false, true)]),
+                             (C.notb, (Bool,), [(false,), (true,)]),
                              (C.widen32, (Int32,), [(x,) for x in i32s]))
         local bytes = compile_one(f, at)
         @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
         queue_native!(string(nameof(f)), bytes, f, argsets)
     end
+    # Bool's not_int is Kernel's Not, visitNot's alone: the intrinsifier has no arm for it
+    local nb = ready_codegen_of(C.notb, (Bool,), [IR.NumType_i32], [IR.NumType_i32])
+    @test D.generate_static_intrinsic(nb.intrinsifier[], W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.Intrinsics.not_int)), W.NirArgument(2)])) === nothing
 end
 
 module CallTargetCases
