@@ -169,24 +169,27 @@ let defs = quote
     @quarantine "the registry grows as the package loads, Julia's top-level evaluation" Base.get_world_counter _register!(e::RegistryEntry, id::String)::Nothing = _register_range!(e, id, pop!(_WORLDS), Base.get_world_counter())
 
     # the macros a definition may stand under that leave it the definition it is: Julia's inlining and
-    # inference annotations and @closed (src/julia/exhaustive.jl); every reader of a marked definition
+    # inference annotations, @closed (src/julia/exhaustive.jl) and Julia's consistent overlay, which
+    # defines the method in an overlay table instead (src/patch/); every reader of a marked definition
     # looks through these, one list (A54S4: four copies had drifted apart)
-    @quarantine "Julia's annotation macros wrap a definition without changing what it defines" Core.Symbol const _TRANSPARENT_MACROS = (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"))
+    @quarantine "Julia's annotation macros wrap a definition without changing what it defines" Core.Symbol const _TRANSPARENT_MACROS = (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"), Symbol("@consistent_overlay"))
 
     # a definition's identity across its evaluations: its module and, for a function or a macro, its
-    # signature as written, every line number dropped (a method is its signature, as Julia's method
-    # table keys it, and a Revise of its file evaluates it again under the same one, wherever its
-    # lines moved); for any other form, the form and its names
-    @quarantine "a method is identified by its signature, Julia's method table key, never by its lines" Core.LineNumberNode function _identity(mod::Module, def, source::LineNumberNode)::String
+    # signature as written, every line number dropped, and an overlay's method table (a method is its
+    # table and signature, as Julia keys it, and a Revise of its file evaluates it again under the same
+    # one, wherever its lines moved); for any other form, the form and its names
+    @quarantine "a method is identified by its table and signature, Julia's method key, never by its lines" Core.LineNumberNode function _identity(mod::Module, def, source::LineNumberNode)::String
         local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
         local d = def
+        local table = ""
         while Meta.isexpr(d, :macrocall) && (d.args[1] in _TRANSPARENT_MACROS || d.args[1] === Symbol("@unported"))
+            d.args[1] === Symbol("@consistent_overlay") && (table = string(" in ", d.args[end-1]))
             d = d.args[end]
         end
         local form = Meta.isexpr(d, (:function, :(=), :macro)) && !(d.args[1] isa Symbol) ?
             string(d.head, " ", unlined(d.args[1])) :
             string(Meta.isexpr(d, :macrocall) ? d.args[1] : d.head, " ", join(first(_defines(d, source)), ","))
-        return join(fullname(mod), ".") * " " * form
+        return join(fullname(mod), ".") * " " * form * table
     end
 
     # whether `file` lies in the directory `dir` (both absolute)
@@ -330,8 +333,8 @@ let defs = quote
     end
 
     # the QuarantineEntry of one definition, or a refusal at its line: the necessity stated, the API a
-    # qualified name that resolves and that the definition references, the file in src/julia (a file
-    # under src/ elsewhere carries @parity)
+    # qualified name that resolves and that the definition references, the file in src/julia or src/patch
+    # (a file under src/ elsewhere carries @parity)
     @quarantine "the Julia-only definitions are checked where they are written, Rust's unsafe" Base.Meta.isexpr function _quarantine_entry(mod::Module, source::LineNumberNode, necessity, api, def)::QuarantineEntry
         refuse(why) = throw(ConstructionViolation("@quarantine", "$(_at(source)): $why"))
         necessity isa String && !isempty(strip(necessity)) || refuse("the necessity is not a non-empty string")
@@ -345,8 +348,8 @@ let defs = quote
         end
         local file = string(something(source.file, :none))
         local julia = joinpath(SRC, "julia")
-        (_inside(file, SRC) || _within(mod, @__MODULE__)) && !_inside(file, julia) &&
-            refuse("a definition outside src/julia carries @parity, the dart definition it copies")
+        (_inside(file, SRC) || _within(mod, @__MODULE__)) && !_inside(file, julia) && !_inside(file, joinpath(SRC, "patch")) &&
+            refuse("a definition outside src/julia and src/patch carries @parity, the dart definition it copies")
         local names, _ = _defines(def, source)
         return QuarantineEntry(mod, necessity, string(api), names, Symbol(file), source.line, _last_line(def, source),
                                UInt(0):UInt(0), Int32(0), Method[])
@@ -401,7 +404,8 @@ end
 
 The load-time check of the construction `definition` names, defined beside that definition; 0 when
 it holds, and it throws, refusing the load, when it does not. `ConstructionLock(definition)` in
-test/parity_ratchet.jl only calls it. This method is the file map's (`check_include_dart`); every
+test/parity_ratchet.jl only calls it. This method is the file map's (`check_include_dart`, and the
+overlay table's beside it, `check_include_patch` and `check_patch`); every
 directory of src/ is a dependency of the package image by its listing, so a file added anywhere
 under src/ rebuilds the image and meets the check, rather than loading the image built before it.
 """
@@ -409,7 +413,8 @@ under src/ rebuilds the image and meets the check, rather than loading the image
     for (dir, _, _) in walkdir(SRC)
         include_dependency(dir; track_content = true)
     end
-    return check_include_dart(SRC, INCLUDED)
+    return check_include_dart(SRC, INCLUDED) + check_include_patch(SRC, PATCHED) +
+           check_patch(WasmInterpreter.METHOD_TABLE, joinpath(SRC, "patch"))
 end
 
 """
@@ -508,6 +513,98 @@ path, so the runtime's file map is a table too.
 @quarantine "Julia's include takes any path; the runtime pin table is the file map of dart's patch libraries' ports" Core.String const RUNTIME_FILES::Tuple{Vararg{String}} = (
     "sdk/lib/_internal/wasm/common/errors_patch.dart",
 )
+
+"""
+    PATCH_FILES
+
+The overlay table's file map: each file of src/patch/, by its path under src (`patch/string.jl`),
+loaded into WasmTarget by `include_patch` after every other file, each a set of overlays of Base
+methods in WasmInterpreter's METHOD_TABLE (lib/WasmInterpreter), each overlay a `@quarantine`
+definition naming the Base method it replaces. When the package has loaded, the files it loaded are
+exactly src/patch/'s (`check_include_patch`), and every method of METHOD_TABLE lies in one of them,
+under the @quarantine naming its function (`check_patch`).
+
+precedent(dart: the wasm target's @patch libraries, sdk/lib/_internal/wasm, merged over the platform's
+members by the CFE; gpucompiler: the method table a device's overlays of Base live in). Julia's
+differs: `include` takes any path, so the overlays' file map is a table too, beside RUNTIME_FILES.
+"""
+@quarantine "Julia's include takes any path; the overlay table's file map is a table" Core.String const PATCH_FILES::Tuple{Vararg{String}} = (
+)
+
+# the patch files include_patch has loaded, in order
+@quarantine "Julia records no include set a module can reflect on; include_patch keeps it" Core.String const PATCHED = String[]
+
+"""
+    include_patch("patch/<file>.jl", ...)
+
+Loads the overlay files, each a key of `PATCH_FILES`, into WasmTarget, in their order: the only way a
+file of src/patch/ loads, called once with every one.
+"""
+@quarantine "Julia's include loads any path; include_patch admits the overlay table's files and records each" Base.include function include_patch(files::String...)::Nothing
+    isempty(PATCHED) || throw(ConstructionViolation("include_patch", "include_patch is called once, with every overlay file"))
+    for f in files
+        f in PATCH_FILES || throw(ConstructionViolation("include_patch", "$f is no file of the overlay table PATCH_FILES"))
+        f in PATCHED && throw(ConstructionViolation("include_patch", "$f is included twice"))
+        push!(PATCHED, f)
+        Base.include(@__MODULE__, joinpath(SRC, f))
+    end
+    return nothing
+end
+
+"""
+    check_include_patch(src, patched) -> Int
+
+The overlay file map's check: the .jl files under `src/patch` are exactly `patched`. Throws a
+`ConstructionViolation` naming a file loaded otherwise or a listed file with no source.
+"""
+@quarantine "the directory listing is the overlay file map's other side, Julia's filesystem API" Base.Filesystem.walkdir function check_include_patch(src::String, patched::Vector{String})::Int
+    # a tree with no src/patch directory holds no overlay file
+    local listed = String[]
+    local root = joinpath(src, "patch")
+    for (dir, _, files) in (isdir(root) ? walkdir(root) : ()), f in files
+        endswith(f, ".jl") && push!(listed, replace(relpath(joinpath(dir, f), src), '\\' => '/'))
+    end
+    for f in listed
+        f in patched || throw(ConstructionViolation("include_patch", "src/$f is a file include_patch did not load from the overlay table"))
+    end
+    for f in patched
+        f in listed || throw(ConstructionViolation("include_patch", "$f is included but src has no file of it"))
+    end
+    return 0
+end
+
+"""
+    check_patch(table, patchdir) -> Int
+
+The overlays' check: every method of the overlay method table `table` is defined in a file under
+`patchdir`, inside a `@quarantine` definition whose Julia API is the function the overlay replaces
+(the method's own function). Throws a `ConstructionViolation` listing each method that is not.
+
+precedent(dart: `@patch`, each member of a patch library naming the member it patches by its own
+name; gpucompiler: a device's overlays of Base, each a method of its overlay table). Julia's differs:
+an overlay names nothing but its method's signature, so the load reads each overlay's file and the
+@quarantine its line lies in.
+"""
+@quarantine "Julia's overlay methods name only their signature; the load reads each one's file and its @quarantine" Base.visit function check_patch(table::Core.MethodTable, patchdir::String)::Int
+    local out = String[]
+    Base.visit(table) do m
+        local file = string(m.file)
+        if !_inside(file, patchdir)
+            push!(out, "the overlay $m lies outside $patchdir")
+            return
+        end
+        local f = Base.unwrap_unionall(m.sig).parameters[1]
+        local named = false
+        for e in REGISTRY
+            e isa QuarantineEntry && string(e.file) == file && e.first <= m.line <= e.last || continue
+            local api = _resolve_name(e.mod, Meta.parse(e.api))
+            named |= api !== nothing && typeof(something(api)) === f
+        end
+        named || push!(out, "the overlay $m at $(file):$(m.line) is under no @quarantine naming the function it replaces")
+    end
+    isempty(out) || throw(ConstructionViolation("patch", join(out, "; ")))
+    return 0
+end
 
 """
     DART_MODULES
@@ -757,7 +854,8 @@ Throws a `ConstructionViolation` naming a file loaded otherwise or a dart file w
     local listed = String[]
     for (dir, _, files) in walkdir(src), f in files
         local path = joinpath(dir, f)
-        (endswith(f, ".jl") && !_inside(path, joinpath(src, "julia")) && path != joinpath(src, "WasmTarget.jl")) || continue
+        (endswith(f, ".jl") && !_inside(path, joinpath(src, "julia")) && !_inside(path, joinpath(src, "patch")) &&
+         path != joinpath(src, "WasmTarget.jl")) || continue
         push!(listed, replace(relpath(path, src), '\\' => '/'))
     end
     local loaded = String[_jl_rel(d) for d in included]

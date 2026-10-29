@@ -501,6 +501,50 @@ end
 # the file map's, the anchors' and the quarantine's plants (src/julia/parity.jl): fixed source each
 # check or macro must refuse or pass, loaded into fresh modules under /plant/src (outside WT's src, so
 # only the plants' own rules apply) or, for the location rules, under WT's own src/julia and src/
+# the overlay table's plants (PATCH_FILES, src/julia/parity.jl): its file map as RUNTIME_FILES's, a
+# file outside the table refused by include_patch, a listed file with no source and an unlisted source
+# each failing check_include_patch; each overlay of a planted table refused outside the patch directory
+# and under no @quarantine naming the function it replaces, one under its @quarantine passed, and
+# WasmTarget's own overlays passed
+function patch_negatives_missed(wt::Module, refuses::Function, passes::Function)::Vector{String}
+    local out = String[]
+    local check_files = getfield(wt, :check_include_patch)
+    local check = getfield(wt, :check_patch)
+    refuses(() -> getfield(wt, :include_patch)("patch/no_such_file.jl")) || push!(out, "negative missed: an overlay file outside PATCH_FILES includes")
+    local dir = mktempdir()
+    mkpath(joinpath(dir, "patch"))
+    passes(() -> check_files(dir, String[])) || push!(out, "negative missed: an empty overlay directory fails")
+    refuses(() -> check_files(dir, ["patch/string.jl"])) || push!(out, "negative missed: an included overlay file with no source passes")
+    write(joinpath(dir, "patch", "string.jl"), "\n")
+    refuses(() -> check_files(dir, String[])) || push!(out, "negative missed: an overlay source no include loaded passes")
+    passes(() -> check_files(dir, ["patch/string.jl"])) || push!(out, "negative missed: an overlay source its include loaded fails")
+    # planted overlay tables, each overlay in its own file: one under the @quarantine naming its
+    # function, one under a @quarantine naming another, one under none, one outside the patch directory
+    local host = Core.eval(Main, :(module PatchPlant
+        import WasmTarget: @quarantine
+        using Base.Experimental: @consistent_overlay
+        Base.Experimental.@MethodTable Named
+        Base.Experimental.@MethodTable Other
+        Base.Experimental.@MethodTable Bare
+        Base.Experimental.@MethodTable Outside
+        struct P; v::Vector{Int}; end
+    end))
+    local P = joinpath(dir, "patch")
+    local overlay(name, code) = (local p = joinpath(P, name); write(p, code); Base.include(host, p))
+    overlay("named.jl", "@quarantine \"a planted overlay\" Base.sizeof @consistent_overlay Named Base.sizeof(p::P) = 8\n")
+    overlay("other.jl", "@quarantine \"a planted overlay\" Base.length @consistent_overlay Other Base.sizeof(p::P) = Base.length(p.v)\n")
+    overlay("bare.jl", "@consistent_overlay Bare Base.sizeof(p::P) = 8\n")
+    Core.eval(host, :(@consistent_overlay Outside Base.sizeof(p::P) = 8))
+    passes(() -> check(host.Named, P)) || push!(out, "negative missed: an overlay under the @quarantine naming its function fails")
+    refuses(() -> check(host.Other, P)) || push!(out, "negative missed: an overlay under a @quarantine naming another function passes")
+    refuses(() -> check(host.Bare, P)) || push!(out, "negative missed: an overlay under no @quarantine passes")
+    refuses(() -> check(host.Outside, P)) || push!(out, "negative missed: an overlay outside the patch directory passes")
+    rm(dir; recursive = true)
+    passes(() -> check(getfield(wt, :WasmInterpreter).METHOD_TABLE, joinpath(getfield(wt, :SRC), "patch"))) ||
+        push!(out, "negative missed: WasmTarget's own overlays fail")
+    return out
+end
+
 function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Function, passes::Function)::Vector{String}
     local out = String[]
     local V = getfield(wt, :ConstructionViolation)
@@ -539,6 +583,7 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         refuses(() -> check(dir, ["dart2wasm/lib/translator.dart", "wasm_builder/lib/src/ir/type.dart"])) || push!(out, "negative missed: a runtime source no include loaded passes")
         passes(() -> check(dir, ["dart2wasm/lib/translator.dart", "wasm_builder/lib/src/ir/type.dart", rt])) || push!(out, "negative missed: a runtime source its include loaded fails")
         rm(dir; recursive = true)
+        append!(out, patch_negatives_missed(wt, refuses, passes))
         # two passes: a method naming a type a later file declares loads; two declarations that need
         # each other refuse; one name in two modules (dart's import prefixes) loads in both
         local two = getfield(wt, :_load_two_pass!)
@@ -2403,7 +2448,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L210_file_map" => ("a file of src/ outside src/julia loads only through `include_dart(\"<file>.dart\", ...)` (Dale: dart2wasm 1:1 file for file, dev/LEDGER.md D1): each path a key of the pin table DART_FILES, its path under the pinned sdk's pkg/ (or of LLVM_FILES, a port under src/llvm, or of RUNTIME_FILES, dart's patch libraries under the sdk's sdk/lib/_internal/wasm, a port under src/runtime loaded into Runtime, with plants: a runtime file outside the table refused, a listed one with no source and an unlisted source each failing), loaded into its module (DART_MODULES: one per dart package, Dart2Wasm and WasmBuilder, and one per library dart imports under a prefix, WasmBuilder.IR, Dart2Wasm.Util and Dart2Wasm.JS, declared in src/julia/packages.jl), in two passes, every file's type declarations first, each after those its supertype and field types name, two declarations that need each other refused, then the rest; when WasmTarget has loaded the files it loaded are exactly the .jl files under src/ outside src/julia, src/WasmTarget.jl aside, read from the directory listing, never from text, every directory an include dependency by its listing; construction_check(::Val{:include_dart}) asserts it when WasmTarget loads (check_include_dart), and this lock only calls it, with its plants (a file loaded otherwise and an included file with no source each refused, a dart file outside the pin table refused by include_dart, a directory whose every file is included passed; a method naming a type a later file declares loaded, two declarations that need each other refused, one name in a package and its prefixed library's module loaded in both, each key's module). The map made exact (the lead's ruling, A46S2): dev/skeleton.jl, run in this lock, finds its two dart readers agreeing on every in-scope file, every in-scope src file exactly what it writes from the pin (each stub regenerated in place, each filled definition kept) and no KERNEL_TYPES row stale; its plants on the first in-scope file holding a stub and a filled definition: a hand-edited stub, a deleted stub and a stale row each refused, an edited filled definition passed (dev/CHARTER.md C2)",
+    "L210_file_map" => ("a file of src/ outside src/julia loads only through `include_dart(\"<file>.dart\", ...)` (Dale: dart2wasm 1:1 file for file, dev/LEDGER.md D1): each path a key of the pin table DART_FILES, its path under the pinned sdk's pkg/ (or of LLVM_FILES, a port under src/llvm, or of RUNTIME_FILES, dart's patch libraries under the sdk's sdk/lib/_internal/wasm, a port under src/runtime loaded into Runtime, with plants: a runtime file outside the table refused, a listed one with no source and an unlisted source each failing), loaded into its module (DART_MODULES: one per dart package, Dart2Wasm and WasmBuilder, and one per library dart imports under a prefix, WasmBuilder.IR, Dart2Wasm.Util and Dart2Wasm.JS, declared in src/julia/packages.jl), in two passes, every file's type declarations first, each after those its supertype and field types name, two declarations that need each other refused, then the rest; when WasmTarget has loaded the files it loaded are exactly the .jl files under src/ outside src/julia, src/WasmTarget.jl aside, read from the directory listing, never from text, every directory an include dependency by its listing; construction_check(::Val{:include_dart}) asserts it when WasmTarget loads (check_include_dart), and this lock only calls it, with its plants (a file loaded otherwise and an included file with no source each refused, a dart file outside the pin table refused by include_dart, a directory whose every file is included passed; a method naming a type a later file declares loaded, two declarations that need each other refused, one name in a package and its prefixed library's module loaded in both, each key's module). The map made exact (the lead's ruling, A46S2): dev/skeleton.jl, run in this lock, finds its two dart readers agreeing on every in-scope file, every in-scope src file exactly what it writes from the pin (each stub regenerated in place, each filled definition kept) and no KERNEL_TYPES row stale; its plants on the first in-scope file holding a stub and a filled definition: a hand-edited stub, a deleted stub and a stale row each refused, an edited filled definition passed. The overlay table beside it (PATCH_FILES, dart's @patch libraries and GPUCompiler's overlay method table its precedent): a file of src/patch loads only through `include_patch`, after every other file, each a key of PATCH_FILES, and the files it loaded are exactly the .jl files under src/patch (check_include_patch); every method of WasmInterpreter's METHOD_TABLE lies in a file under src/patch, inside a `@quarantine` definition whose API is the Base function the overlay replaces (check_patch); construction_check(::Val{:include_dart}) asserts both, with their plants (patch_negatives_missed: an overlay file outside the table refused by include_patch, a listed one with no source and an unlisted source each failing; an overlay outside the patch directory, one under a @quarantine naming another function and one under none each refused; one under its @quarantine and WasmTarget's own overlays passed) (dev/CHARTER.md C2)",
         ConstructionLock(:include_dart)),
     "L211_anchor" => ("every definition outside src/julia carries `@parity \"<file>.dart:<line> <Symbol>\"`, the dart definition it copies at the pin (Dale: dart2wasm 1:1 through and through, dev/LEDGER.md D1): the macro refuses, at the definition's line, an anchor not of that form or whose file is no key of DART_FILES, a file in src/julia or one include_dart did not load, and a Julia name other than the one rule's (snake; a dart operator, toString or hashCode the Base function DART_BASE names alone; a Julia keyword name written var\"<name>\"), and expands `@unported` into a body rejecting with the anchor; when WasmTarget has loaded, every method it or a module under it defines is matched by identity to the definition whose evaluation made it (the world its evaluation spanned), and lies in that definition (its file, a body Julia gives no location, or the methods Julia's @enum writes for the enum it declares), and every binding is a marked definition's, by reflection over the method table and the bindings; construction_check(::Val{:parity}) asserts it (check_parity), and this lock only calls it, with its plants (an unmarked method, an unmarked binding, a Base method on a marked definition's line, an unregistered @enum, an anchor outside the pin table or with no line, a name not the rule's, a keyword name with a trailing _, toString as to_string, @parity in src/julia or in a file include_dart did not load, @unported outside @parity or with a body each refused; marked definitions, a registered @enum, var\"export\" and Base.show and Base.hash for toString and hashCode passed, an @unported stub rejecting with its anchor, and an @unported struct with no value, neither a singleton instance nor a constructor that returns; the snake rule; anchor_of reading a definition's anchor by the object it binds and refusing an unmarked one) (dev/CHARTER.md C2)",
         ConstructionLock(:parity)),
