@@ -1049,6 +1049,18 @@ end
     @test emitted_by(() -> D.generate_internal(g4), g4) == ["block", "global.get", "br_on_non_null", "call", "end", "end"]
 end
 
+@testset "code_generator.dart: guardCanMatchJSException" begin
+    # outside standalone mode a guard catches JS exceptions only when every value passes it, Julia's Any
+    local t = translator_of(CodegenCases.f_add, (Int32,))
+    @test !t.options.standalone
+    @test D.guard_can_match_js_exception(t, Any)
+    @test !D.guard_can_match_js_exception(t, Exception) && !D.guard_can_match_js_exception(t, TypeVar(:T))
+    # standalone mode has no JS exceptions: no guard catches one
+    local ts = D.Translator(WasmTarget.build_nir(W.check_subset(CodegenCases.f_add, (Int32,), "code_generator"), "test"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(; standalone = true))
+    @test !D.guard_can_match_js_exception(ts, Any)
+end
+
 # Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)
 module EqualsCases
 struct Q; x::Int; end

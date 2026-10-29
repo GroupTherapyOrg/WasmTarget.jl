@@ -2751,4 +2751,18 @@ end
 # dart's `late final w.BaseFunction function` overrides CallTarget's getter: the field, defined on first read
 @parity "dart2wasm/lib/code_generator.dart:6227 LambdaCallTarget.function" var"function"(self::LambdaCallTarget)::WasmBuilder.IR.BaseFunction = self.function_[]
 
-@parity "dart2wasm/lib/code_generator.dart:6239 guardCanMatchJSException" @unported function guard_can_match_js_exception(translator::Translator, guard::Union{Type,TypeVar}) end
+"""
+Whether a `catch` guard has the right type to catch JS exceptions. Standalone mode runs in no
+JavaScript context and has no JS exceptions, so none (dart's own arm, the mode WasmTarget.compile
+takes). Otherwise dart asks whether JSValue is a subtype of the guard. No Julia type stands for a
+JS value, so the one guard every JS value passes is Julia's top type, `Any`, the guard of every
+Julia catch, which catches whatever is thrown; a type parameter's guard holds no JS value, as
+dart's subtype test answers for one.
+"""
+@parity "dart2wasm/lib/code_generator.dart:6239 guardCanMatchJSException" function guard_can_match_js_exception(translator::Translator, guard::Union{Type,TypeVar})::Bool
+    if translator.options.standalone
+        # Standalone mode doesn't run in a JavaScript context and doesn't have JS exceptions.
+        return false
+    end
+    return guard === Any
+end
