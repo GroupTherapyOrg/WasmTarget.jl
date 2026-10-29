@@ -399,17 +399,23 @@ census rejects with `Unquarantined`, located at the compile `at` names.
 @quarantine "the closed world Julia inferred comes as CodeInstance and CodeInfo pairs, read once" Core.CodeInfo function build_nir(world::ClosedWorld, at::String)::NirWorld
     # a queued ccallable's svec(rettype, signature) is the verifier's record, no body: its
     # specialization is a CodeInstance of the world like any other, which Julia's inference lists a
-    # second time when its invokelatest queue compiles it (typeinfer.jl's compile!), one body here
+    # second time when its invokelatest queue compiles it (typeinfer.jl's compile!): one body here, the
+    # repeat's CodeInfo asserted the first's (its statements and their types), never dropped unread
     local xs = Any[x for x in world.codeinfos if !(x isa Core.SimpleVector)]
     iseven(length(xs)) || reject!(Internal("src/julia/nir.jl: the closed world holds $(length(xs)) entries, not CodeInstance and CodeInfo pairs"), at)
     local bodies = NirBody[]
-    local seen = Base.IdSet{Core.CodeInstance}()
+    local seen = IdDict{Core.CodeInstance,Core.CodeInfo}()
     for k in 1:2:length(xs)
         local ci = xs[k]; local src = xs[k + 1]
         ci isa Core.CodeInstance && src isa Core.CodeInfo ||
             reject!(Internal("src/julia/nir.jl: the closed world's entry $k is a $(typeof(ci)) and $(typeof(src)), not a CodeInstance and its CodeInfo"), at)
-        ci in seen && continue
-        push!(seen, ci)
+        local first_src = get(seen, ci, nothing)
+        if first_src !== nothing
+            (src.code == first_src.code && src.ssavaluetypes == first_src.ssavaluetypes) ||
+                reject!(Internal("src/julia/nir.jl: the closed world lists $(ci.def) twice with different code"), at)
+            continue
+        end
+        seen[ci] = src
         local stmts, cfg = nir_code(src.code, at)
         push!(bodies, NirBody(ci, stmts, _nir_types(ci, src, at), cfg))
     end
