@@ -23,21 +23,28 @@ end
 
 """
 The member intrinsics by library, class and name, built on first read (dart's static, populated by
-`_populateLookup`). A Julia method's library is a Julia module, never one of dart's libraries, so
-the map is empty (MemberIntrinsic.fromProcedure answers nothing).
+`_populateLookup`). The Julia methods that are dart library members are the runtime's ports of them
+(src/runtime/), so the map files the intrinsics whose member the runtime ports, each under its dart
+library, class and name.
 """
 @parity "dart2wasm/lib/intrinsics.dart:75 MemberIntrinsic._lookup" const MemberIntrinsic__lookup = Late{Dict{String,Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}}}(
     "dart2wasm/lib/intrinsics.dart:75 MemberIntrinsic._lookup", () -> MemberIntrinsic__populate_lookup())
 
-# dart files each intrinsic under its member's library, class and name; no Julia method is a dart:core
-# member, so none is filed
+# dart files each intrinsic under its member's library, class and name; the members the runtime ports
+# are the ones a Julia method can be: Error._throw (errors_patch.dart:40, src/runtime/common)
 @parity "dart2wasm/lib/intrinsics.dart:78 MemberIntrinsic._populateLookup" MemberIntrinsic__populate_lookup()::Dict{String,Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}} =
-    Dict{String,Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}}()
+    Dict{String,Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}}(
+        "dart:core" => Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}("Error" => Dict{String,MemberIntrinsic}("_throw" => MemberIntrinsic_errorThrow)))
 
-# a Julia method is never an intrinsic: Julia's intrinsics and builtins are functions of their own
-# (Core.IntrinsicFunction, Core.Builtin) that a call names directly, so no method stands for one, and
-# dart's `_typeArguments` pragma has no Julia counterpart
-@parity "dart2wasm/lib/intrinsics.dart:88 MemberIntrinsic.fromProcedure" MemberIntrinsic_from_procedure(member::Core.MethodInstance)::Union{MemberIntrinsic,Nothing} = nothing
+# a Julia method is a dart library member when it is the runtime's port of one, Runtime.Error__throw
+# of dart:core's Error._throw (KernelNodes.errorThrow's), looked up by that member's library, class and
+# name as dart looks it up; Julia's intrinsics and builtins are functions of their own
+# (Core.IntrinsicFunction, Core.Builtin) that a call names directly, and dart's `_typeArguments` pragma
+# has no Julia counterpart
+@parity "dart2wasm/lib/intrinsics.dart:88 MemberIntrinsic.fromProcedure" function MemberIntrinsic_from_procedure(member::Core.MethodInstance)::Union{MemberIntrinsic,Nothing}
+    member.def in methods(Runtime.Error__throw) || return nothing
+    return get(get(get(MemberIntrinsic__lookup[], "dart:core", Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}()), "Error", Dict{String,MemberIntrinsic}()), "_throw", nothing)
+end
 
 # dart's enhanced-enum constructor gives each intrinsic the dart:_wasm member it stands for; Julia's own
 # operations are its builtins, which generateStaticIntrinsic matches by the callee
@@ -660,11 +667,25 @@ method, Julia having resolved it, so no call is one.
 """
 @parity "dart2wasm/lib/intrinsics.dart:2875 Intrinsifier.generateFunctionCallIntrinsic" generate_function_call_intrinsic(self::Intrinsifier, node::NirInvoke)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
-# no Julia method is a member intrinsic (MemberIntrinsic.fromProcedure), so its function is its body
+# the body of a member intrinsic's function (MemberIntrinsic.fromProcedure), the runtime's port of its
+# dart member; any other method's function is its body
 @parity "dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic" function generate_member_intrinsic(self::Intrinsifier, target::Core.MethodInstance, function_type::WasmBuilder.IR.FunctionType, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Bool
     local intrinsic = MemberIntrinsic_from_procedure(target)
     intrinsic === nothing && return false
-    reject!(Unported("dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic"), "the member intrinsic $intrinsic of $target")
+    local b = self.code_gen.b[]
+    # Error._throw: the object thrown with the program's exception tag. dart first stores the stack
+    # trace in an Error's _stackTrace field and throws it beside the object; WasmTarget's tag carries
+    # the object alone (src/tags.jl) and Julia's exceptions have no such field, so the object is all.
+    # Every other intrinsic's dart member has no runtime port (MemberIntrinsic.fromProcedure), so none
+    # reaches here
+    intrinsic === MemberIntrinsic_errorThrow ||
+        reject!(Internal("dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic: the member intrinsic $intrinsic, whose dart member the runtime does not port"), "$target")
+    local object_local = param_locals[1]
+    local tag = get_dart_exception_tag(translator(self), b.module_builder)
+    WasmBuilder.local_get(b, object_local)
+    convert_type(translator(self), b, object_local.type, only(tag.type.inputs))
+    WasmBuilder.throw_(b, tag)
+    return true
 end
 
 # the read of dart:_wasm's typed WasmArray, one of its static intrinsics, which no Julia call is

@@ -55,8 +55,15 @@ end
     @test DI._extract_double_value(lit(2.5)) == 2.5 && DI._extract_double_value(lit(2.5f0)) === nothing
     @test DI._extract_lane_indices(lit((1, 2, 3))) == [1, 2, 3] && DI._extract_lane_indices(lit((1, 2.0))) === nothing
     @test DI._extract_lane_indices(lit(1)) === nothing
-    # no Julia method is one of dart's library members: the lookups are empty, a triple names none
-    @test isempty(DI.MemberIntrinsic__lookup[]) && isempty(DI.StaticIntrinsic__lookup[])
+    # the Julia methods that are dart library members are the runtime's ports: Runtime.Error__throw is
+    # dart:core's Error._throw, the errorThrow intrinsic, filed under it; no method is a dart:_wasm member
+    @test DI.MemberIntrinsic__lookup[] == Dict("dart:core" => Dict("Error" => Dict("_throw" => DI.MemberIntrinsic_errorThrow))) &&
+          isempty(DI.StaticIntrinsic__lookup[])
+    local throw_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime.Error__throw)), Tuple{typeof(WI.Runtime.Error__throw),Exception}, Core.svec())
+    @test DI.MemberIntrinsic_from_procedure(throw_mi) === DI.MemberIntrinsic_errorThrow
+    local other_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime.Error__throw_with_current_stack_trace)),
+                                                     Tuple{typeof(WI.Runtime.Error__throw_with_current_stack_trace),Exception}, Core.svec())
+    @test DI.MemberIntrinsic_from_procedure(other_mi) === nothing
     local e = intr_rejection(() -> DI.MemberIntrinsic("dart:core", "Object", "=="))
     @test e.rejection isa WI.Internal
     local g = intr_codegen_of(IntrinsicCases.eq64, (Int64,), [IRI.NumType_i64], [IRI.NumType_i64])
