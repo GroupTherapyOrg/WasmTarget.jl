@@ -5179,3 +5179,65 @@ A56S5 are carried by A57S6 and A57S10; each leaves its row. A57S1, A57S2, A57S3,
 A57S5, A57S6, A57S7, A57S8, A57S9 and A57S11 are open on MARCH 1.C. A57E1 and A57E2 are open on MARCH 1.T. By owner: the
 stackify lane holds A57S1 to A57S4; the codegen lane holds A57S10 and A56S2; the translator lane holds A57S5 to A57S9
 and A57S11; the tests lane holds A57E1 and A57E2.
+
+## 2026-10-29 — audited through a302f567 (0a14e3a2..a302f567: a partial allocation's null fields, EH pads reached by unwinding, autoship, placeTryTableMarker, getTearOffType, isequal for a repeated CodeInstance, entry 57, why standalone, ConstantHash, the vector reader, four language directories, the pragma readers, the dry run rejecting, the generator's stubs, NirHandoff retiring ClosedWorld and NirBuild, L227 reading records by Julia's parser)
+
+The fifty-eighth audit, beside the work, covers the 17 commits of 0a14e3a2..a302f567 that are not entry 57 (a86583e4,
+its author's), read here. Every finding rests on one exact command, quoted; one probe ran under `taskpolicy -b` with an
+alarm
+(/private/tmp/claude-501/-Users-daleblack-Documents-dev-GroupTherapyOrg-WasmTarget-jl/d67060e8-8b95-4213-b288-76d0f68067d8/scratchpad/undefprobe.jl),
+and TLC ran both new models. Standing items. The new models break as they claim: `TLC_ONLY=… perl -e 'alarm 500; exec
+@ARGV' taskpolicy -b bash dev/formal/run_tlc.sh` over MCConstantHash*.cfg and MCNirHandoff*.cfg printed `ok
+MCConstantHash.cfg … 16 distinct states`, `violation of StableKeys`, `violation of FirstValuesTell`, `violation of
+Bounded` for its three Broken instances, and `ok MCNirHandoff.cfg … 2640 distinct states` with `violation of
+CcallablesJudged`, `OneBodyPerCI`, `QueuedReached`, `RejectsOnlyGaps`, `Aligned` and `RepeatAsserted` for its six, each
+the claim its `\* expect:` line names, which run_tlc.sh requires. Fixed in the range: A57S3 by 9be2abca (an EH pad
+reached only by unwinding; the test's `2 in mf.blocks[pad].preds` is gone), A56S6 by 1b7df1f2 (isequal), A56S7 by
+535bf084 (the dry run rejects Internal), A56S8 by 63eec7b5, A55E1 by a302f567 (records read by Julia's parser, kinds
+ranked, so `:outside` to `:rejects` and a multi-line record count), and part of A56S3 (carried by A57S6) by dd4d1a30.
+Still open: A57S1, which the range deepens (b16f76c5 ports placeTryTableMarker and `git log --oneline 0a14e3a2..a302f567
+-- dev/formal` lists only 28b3e541 and e756e711, neither an exception model); A57S2 (`grep -n "handler_at\|nothrow"
+src/julia/machine.jl` gives `177: local h = handlers.handler_at[i]` and `178: (h == 0 || handlers.nothrow[i]) &&
+continue`); A57S4 (the tests' `ehpad = true` at :29, :38, :39, :55); A56S2. Findings A58S1.
+
+Area: builder — empty by diff for src/wasm_builder in the range's src (b16f76c5's try_table opcodes come with 9be2abca,
+read below).
+
+Area: collection and planning — 1b7df1f2 compares a repeated CodeInstance's code by isequal; dd4d1a30 answers
+getTearOffType and rejects SingleClosureTarget._ and moduleForConstant Internal; b39a28ab reads `@inline`, `@noinline`
+and a ccallable's or the entry's name as dart's pragma readers answer, the namer's own copy of the export rule deleted
+(D5); e756e711 retires WT1's ClosedWorld and NirBuild models with their code. No finding.
+
+stopgap in disguise: none new.
+precedent: the closed world's handoff, Julia's trim inference and compute_basic_blocks, modeled by NirHandoff; the
+constant key's hash, ===, modeled by ConstantHash.
+
+Area: emission and diagnostics — 9be2abca makes an EH pad reachable only by unwinding and starts it with a CATCH;
+b16f76c5 places each try_table at the nearest common dominator of its pad's unwind predecessors, inside the block its
+catch clause branches to (WebAssemblyCFGStackify.cpp:695). (A58S1, high) bd0b473a makes an undefined field read as
+`nothing`: an allocation that leaves fields past Julia's initialized count now pushes their null references, and
+WasmTarget's `nothing` is the null reference, while _direct_get reads the field with no check (`struct_get`,
+code_generator.jl's _directGet); measured, `perl -e 'alarm 400; exec @ARGV' taskpolicy -b julia --project=.
+--startup-file=no
+/private/tmp/claude-501/-Users-daleblack-Documents-dev-GroupTherapyOrg-WasmTarget-jl/d67060e8-8b95-4213-b288-76d0f68067d8/scratchpad/undefprobe.jl`
+(`mutable struct M; x::Any; M() = new(); end; f(a) = (m = M(); y = m.x; y === nothing ? a : a + 100)`, typed IR `%1 =
+%new(Main.P.M)`, `%2 = builtin Base.getfield(%1, :x)::Any`) printed `native: UndefRefError` and `wasm: … "the module
+answers 3"`: where Julia throws, the module answers as though the field held nothing (D9: a plausible value past a gap;
+C6). Core.Box, the case bd0b473a fixed, is guarded by Julia's own `isdefined` before each read; a struct whose inner
+constructor leaves a field undefined is not. Fix: a read of a field past Julia's initialized count checks it, as Julia's
+getfield does (`ref.is_null` then the UndefRefError throw, rejecting at the runtime's throw until it is ported), or the
+partial allocation rejects until that check exists; the probe joins the corpus.
+
+stopgap in disguise: none new.
+precedent: a field past the initialized count, Julia's datatype_min_ninitialized; the try_table, LLVM's
+placeTryTableMarker at the pin.
+
+Area: enforcement and prose — 9cf4d2eb and 5b3439da land a lane's settled commits through dev/ship.sh's queue, a red
+HEAD not shipped again until it moves; a302f567 closes A55E1 by Julia's parser; 7801e028 reads a vector leaf by leaf;
+28b3e541 and e756e711 add two models whose Broken instances each violate their named claim (above). No finding.
+Requirements: D9 and C6 (A58S1); C8 and D11 (A57S1, still open); no lock fired inside its band.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A57S3 is fixed by 9be2abca, A56S6 by 1b7df1f2, A56S7
+by 535bf084, A56S8 by 63eec7b5 and A55E1 by a302f567, each leaving its row. A58S1 is what the range broke, the next fix
+of the codegen lane. A58S1 is open on MARCH 1.D. By owner: the codegen lane holds A58S1 and A56S2; the stackify lane
+holds A57S1, A57S2 and A57S4.
