@@ -15,9 +15,12 @@
 # recorded :wt_bug is a known WT bug, a compile that rejects as Internal or InvalidModule, listed so the landing
 # stays green while its owner fixes it, and it must stay one (A51E4): once fixed it fails until re-recorded; the
 # list only shrinks, and grows only by a `Lowers-record:` line (L227). A :wt_bug never covers a module's
-# answer: a module that answers otherwise than native always fails (A53E2, D9's why). A case recorded :outside stands outside the strict subset by Julia's verifier (D32), and
-# must keep rejecting as OutsideSubset. A failing case prints its outcome, the rejection's own text among it
-# (A51E9). Native Julia's answer does not depend on
+# answer: a module that answers otherwise than native always fails (A53E2, D9's why). A case recorded :unread
+# compiles, and every fact of its answer the runner reads equals native's; a fact of a type test/runner.jl does
+# not marshal yet (a String, until its reader lands) is the runner's own gap, named, never WT's; once every fact
+# reads it fails until re-recorded :compiled. A case recorded :outside stands outside the strict subset by
+# Julia's verifier (D32), and must keep rejecting as OutsideSubset. A failing case prints its outcome, the
+# rejection's own text among it (A51E9). Native Julia's answer does not depend on
 # WasmTarget's code, so it runs for each case whose group text or record the change adds or edits against
 # CHECK_BASE (dev/check.sh's base, origin/wt2 by default; HEAD~1 under dev/ship.sh), proving a new or edited
 # answer native when it is written. A base that holds no corpus runs every native answer, and so does the
@@ -752,7 +755,8 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_operator/operator2" => ((10, 30, true, 23, 123), :rejects),
     "dart_operator/operator3" => ((true, 1), :compiled),
     "dart_operator/operator4" => (499, :rejects),
-    "dart_operator/operator5" => ((1, true, 499, "foo", 42), :rejects),
+    # runner gap: its "foo" fact is a String, which test/runner.jl marshals once codegen lowers ncodeunits and codeunit
+    "dart_operator/operator5" => ((1, true, 499, "foo", 42), :unread),
     "dart_operator/operator6" => ((-2, -2), :compiled),
     "dart_operator/positive_bit_operations" => (((2147483648, 2147483649, 2147483648, 4294967295, 2147483648, 2147483648, 2147483648, 2147483648, 2147483648, 4294967295, 4294967295, 4026531840, 2147483648, 4294967280, 2147483647, 4294967292), (2147483648, 2147483649, 4294967295, 2147483648, 2147483648, 4294967295, 4026531840, 2147483648, 4294967280, 2147483647, 4294967292), (2147483648, 2147483649, 2147483648, 2147483648, 2147483648, 4294967295, 4294967295, 2147483648, 2147483647, 4294967292), (2147483648, 2147483648, 2147483648, 2147483648)), :rejects),
     "dart_operator/precedence" => (((true, true, (false, 4), (false, 5)), [7, 4, 2, 5, 8, 4, -1, 3, 7, 4, -2, 5, 8, 4, 1, 3], [6, 4, 1, 5, 9, 4, 0, 3, 6, 4, -1, 5, 9, 4, 0, 3], true, [3, 2, 4, 2, 5, 2, 4, 2, 3], [7, 4, 2, 5, 8, 4, -1, 3, 7, 4, -2, 5, 8, 4, 1, 3], [6, 4, 1, 5, 9, 4, 0, 3, 6, 4, -1, 5, 9, 4, 0, 3], [12.0, 4.0, 1.0, 5.0, 12.0, 4.0, 0.75, 3.0, 12.0, 4.0, 1.0, 5.0, 12.0, 4.0, 2.0, 3.0], [9.0, 4.0, 1.0, 5.0, 15.0, 4.0, 1.0, 3.0, 9.0, 4.0, 0.75, 5.0, 20.0, 4.0, 1.0, 3.0]), :rejects),
@@ -1133,6 +1137,9 @@ function _dart_breaks(today::Symbol, got)::String
     if today === :compiled
         # a compiling case never loses ground
         got === :compiled || return "recorded :compiled, now: $(_dart_said(got))"
+    elseif today === :unread
+        # compiles; its facts are judged after the runs, a runner gap admitted only here
+        got === :compiled || return "recorded :unread, now: $(_dart_said(got))"
     elseif today === :outside
         # Julia's verifier's verdict (D32): the program stands outside the strict subset, a fact of the
         # program and of Julia, never of a lane's progress
@@ -1184,6 +1191,7 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
     local seen = Set{String}()
     local runs = Main.WTRunner.RunCase[]
     local unread = Pair{String,String}[]
+    local gap_keys = Set{String}()   # the cases recorded :unread whose modules are read
     local nread = 0
     for (group, cases) in DART_GROUPS, case in cases
         group in _DART_SHARD_GROUPS || continue
@@ -1205,6 +1213,7 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
                     # admitted (A53E2); the landing runs none, its cost fixed (the lead's ruling: a landing
                     # sample comes later, its cost measured)
                     if got === :compiled && !_DART_CORE_ONLY
+                        today === :unread && push!(gap_keys, key)
                         _dart_read!(runs, unread, key, f, args)
                         nread += 1
                     end
@@ -1223,8 +1232,17 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
             @test why == ""
         end
     end
+    # a case recorded :unread keeps a runner gap, a fact the runner does not marshal yet, and only that is admitted
+    local runner_gap(r) = startswith(r.why, "the runner marshals no ")
+    local gap_key_of = Dict(c.label => k for k in gap_keys for c in runs if c.label == k || startswith(c.label, k * "("))
+    for k in sort!(collect(gap_keys))
+        @testset "$k, recorded :unread, still holds a fact the runner does not read" begin
+            @test any(r -> runner_gap(r) && get(gap_key_of, r.label, "") == k, results)
+        end
+    end
     # one @test per fact: its label and why it differs, "" when it equals native's in every module
     for r in results
+        haskey(gap_key_of, r.label) && runner_gap(r) && continue
         @test (r.label => r.why) == (r.label => "")
     end
     global DART_RUN_COUNTS = (nread, length(results), count(r -> r.ok, results))

@@ -1987,9 +1987,10 @@ function dart_record_kinds(text::AbstractString)::Dict{String,Symbol}
     return out
 end
 
-# a kind's strength: what its property asserts of the compile. :compiled asserts the most, :outside that the
+# a kind's strength: what its property asserts of the compile. :compiled asserts the most, :unread a compile whose
+# facts the runner reads all but its own gap, :outside that the
 # program stays outside the subset, :rejects only that a rejection is located, :wt_bug a known defect
-const DART_RECORD_RANK = Dict(:compiled => 3, :outside => 2, :rejects => 1, :wt_bug => 0)
+const DART_RECORD_RANK = Dict(:compiled => 4, :unread => 3, :outside => 2, :rejects => 1, :wt_bug => 0)
 
 # the records a message does not name that the change lowers: a case recorded :wt_bug that was not (a known
 # WT bug the landing then admits), or a record turned to a weaker kind (DART_RECORD_RANK: :compiled to anything
