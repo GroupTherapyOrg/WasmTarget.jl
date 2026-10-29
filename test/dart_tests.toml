@@ -895,20 +895,60 @@ kind = "behavior"
 what = "anonymous methods, an experimental dart syntax"
 cases = []
 
-["tests/language/argument/"]
+["tests/language/argument/assignability_function_typed_error_test.dart"]
+kind = "not_portable"
+what = "function values whose parameter or return type is unrelated to or narrower than a num Function(num) parameter's, passed to it, beside four assignable ones"
+reason = "static error test: five calls are ARGUMENT_TYPE_NOT_ASSIGNABLE compile-time errors and f's body is empty, so the four legal calls check nothing at run time"
+
+["tests/language/argument/named_argument_test.dart"]
 kind = "behavior"
-what = "argument-count and argument-type errors at calls"
-cases = []
+what = "closures with two named parameters declared in either order, each called with the named arguments in either order; the closures take Julia keyword arguments"
+cases = ["dart_argument/named_argument"]
+
+["tests/language/argument/named_in_const_creation_test.dart"]
+kind = "behavior"
+what = "a const constructor with a positional and a named argument, its instance held by a static const, read field by field; the named argument is a keyword of an outer constructor method"
+cases = ["dart_argument/named_in_const_creation"]
+
+["tests/language/argument/not_enough_positional_arguments_error_test.dart"]
+kind = "not_portable"
+what = "calls and super-initializers that pass only a named argument where a positional one is required, a missing superclass constructor and an implicit super call missing its argument"
+reason = "static error test: every call in main and every initializer is a NOT_ENOUGH_POSITIONAL_ARGUMENTS, UNDEFINED_NAMED_PARAMETER, UNDEFINED_CONSTRUCTOR_IN_INITIALIZER, NO_DEFAULT_SUPER_CONSTRUCTOR or IMPLICIT_SUPER_INITIALIZER_MISSING_ARGUMENTS compile-time error; no runtime check remains"
+
+["tests/language/argument/strangely_named_arguments_test.dart"]
+kind = "behavior"
+what = "named parameters called arguments, constructor, hasOwnProperty, isPrototypeOf, propertyIsEnumerable, toLocaleString, toString and valueOf, defaulted or passed, on a top-level function, a method and an override whose nullable parameters are filled by ??=; Julia keywords carry these names with no clash, and the override's ??= is something(p, default)"
+cases = ["dart_argument/strangely_named_arguments"]
 
 ["tests/language/assert/"]
 kind = "behavior"
 what = "assert statements, their messages and evaluation"
 cases = []
 
-["tests/language/assign/"]
+["tests/language/assign/instance_method_test.dart"]
 kind = "behavior"
-what = "assignments to finals, getters and undefined names"
-cases = []
+what = "assigning a closure to an instance's method through a dynamic receiver throws, and the method still answers 0; in Julia the method is a function, not a field, so the assignment is a setproperty! of a field the struct lacks, which throws (Julia's FieldError, dart's NoSuchMethodError; the port checks only that it throws)"
+cases = ["dart_assign/instance_method"]
+
+["tests/language/assign/op_test.dart"]
+kind = "behavior"
+what = "+=, *=, -=, ~/= and /= on a local, an untyped static field reached bare and qualified, and an untyped instance field; >>=, <<=, |=, &= and ^= on a local; compound right-hand sides; |= on a list element; testMain run 20 times (dart's optimization-counter threshold); Julia spells ~/= as ÷= and dart's xor ^= as ⊻= (Julia's ^ is a power), the static field is a typed global and the list is indexed from 1"
+cases = ["dart_assign/op"]
+
+["tests/language/assign/static_type_error_test.dart"]
+kind = "not_portable"
+what = "a String initializing an int top-level variable, static const, final field, field, local and optional parameter default"
+reason = "static error test: each of the six initializers is an INVALID_ASSIGNMENT compile-time error and main is empty"
+
+["tests/language/assign/to_type_error_test.dart"]
+kind = "not_portable"
+what = "assignment to a type parameter, a class, an enum and a typedef"
+reason = "static error test: each of the four assignments is an ASSIGNMENT_TO_TYPE compile-time error; no runtime check remains"
+
+["tests/language/assign/top_method_error_test.dart"]
+kind = "not_portable"
+what = "assignment of a closure to a top-level function's name"
+reason = "static error test: main's one statement is an ASSIGNMENT_TO_FUNCTION compile-time error; no runtime check remains"
 
 ["tests/language/async/"]
 kind = "not_portable"
@@ -3820,10 +3860,40 @@ kind = "behavior"
 what = "a list rebound in a branch never taken, then appended to in a loop"
 cases = ["dart_language/if_nested_if"]
 
-["tests/language/if_null/"]
+["tests/language/if_null/assignment_behavior_test.dart"]
 kind = "behavior"
-what = "the if-null operator ?? and ??="
-cases = []
+what = "v ??= e on an instance getter, through super, on top-level and prefixed getters, a local, static and prefixed static getters, C?.x, e1.v, e1[e2] and e1?.v, each checked for its value and the order of the getter, operand and setter calls logged; Julia has no ??=, so each is written as dart's specification states it (read once, evaluate and store e only when the value is nothing), super.v is invoke of C's getter and setter, and the ASSIGNMENT_TO_FINAL, ASSIGNMENT_TO_FINAL_LOCAL, ASSIGNMENT_TO_TYPE, PREFIX_IDENTIFIER_NOT_FOLLOWED_BY_DOT, UNDEFINED_SETTER and UNDEFINED_PREFIXED_NAME statements are dropped"
+cases = ["dart_if_null/assignment_behavior_instance", "dart_if_null/assignment_behavior_static", "dart_if_null/assignment_behavior_receiver"]
+
+["tests/language/if_null/assignment_helper.dart"]
+kind = "helper"
+what = "the operations log, a top-level getter and setter x and a class C with a static getter and setter x, imported with the prefix h"
+of = ["tests/language/if_null/assignment_behavior_test.dart"]
+
+["tests/language/if_null/assignment_static_test.dart"]
+kind = "behavior"
+what = "the ok multitest sections: v ??= theA and v ??= theB on null-answering top-level, static, instance, super and list-element targets and through c?.v with !, each yielding the right operand, whose a is then read; the static type of each result (the least upper bound the compile-time-error sections check) has no Julia counterpart, since Julia checks a field read when it runs, so the port returns each result's identity and its a"
+cases = ["dart_if_null/assignment_static"]
+
+["tests/language/if_null/behavior_test.dart"]
+kind = "behavior"
+what = "e1 ?? e2 on ints and null, and on B and C values whose fields a, b and c are read dynamically, a missing field throwing; e1 ?? e2 is @something(e1, e2), with Some(e2) last where dart's result may be null since @something throws when every argument is nothing, and a missing field throws Julia's FieldError where dart throws NoSuchMethodError (the port checks only that it throws)"
+cases = ["dart_if_null/behavior"]
+
+["tests/language/if_null/evaluation_order_test.dart"]
+kind = "behavior"
+what = "e1 ?? e2 evaluates e1 first and e2 only when e1 is null: a throwing e2 is skipped, and the second operand sees the first one's side effect; written with @something, which evaluates its arguments lazily in order"
+cases = ["dart_if_null/evaluation_order"]
+
+["tests/language/if_null/if_null_with_dynamic_context_test.dart"]
+kind = "not_portable"
+what = "the right operand of ?? in a dynamic context takes its context type from the left operand's static type"
+reason = "static type test: its one check is expectStaticType<Exactly<List<int>>>, resolved at compile time, and main asserts nothing at run time"
+
+["tests/language/if_null/precedence_test.dart"]
+kind = "behavior"
+what = "a ?? b ?? c yields the first non-null value, and a ?? b ? c : d parses as (a ?? b) ? c : d; the NON_BOOL_OPERAND sections, which show ?? binds less tightly than ||, are dropped; in Julia the chain is @something(a, b, c), a call form, so there is no precedence to check, and Julia's || accepts a non-Bool last operand, so false || nothing is nothing"
+cases = ["dart_if_null/precedence"]
 
 ["tests/language/implicit_creation/"]
 kind = "behavior"
@@ -3905,10 +3975,30 @@ kind = "behavior"
 what = "type tests with is and is! (Julia's isa)"
 cases = []
 
-["tests/language/label/"]
+["tests/language/label/label3_test.dart"]
+kind = "not_portable"
+what = "a continue to a loop label after the labeled loop has ended"
+reason = "static error test: the continue L outside its loop is a CONTINUE_OUTSIDE_OF_LOOP and LABEL_UNDEFINED compile-time error; no runtime check remains"
+
+["tests/language/label/label5_test.dart"]
+kind = "not_portable"
+what = "a break naming a local variable instead of a label"
+reason = "static error test: break L to the variable L is a LABEL_UNDEFINED compile-time error; no runtime check remains"
+
+["tests/language/label/label6_test.dart"]
+kind = "not_portable"
+what = "a break inside a local function naming a label of the enclosing function's loop"
+reason = "static error test: the inner function's break L is a LABEL_IN_OUTER_SCOPE compile-time error; no runtime check remains"
+
+["tests/language/label/label8_test.dart"]
+kind = "not_portable"
+what = "a label on a switch statement's body block"
+reason = "static error test: the labeled switch body is an EXPECTED_BODY syntax error, with UNDEFINED_IDENTIFIER, EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD, EXPECTED_TOKEN, MISSING_STATEMENT, MISSING_IDENTIFIER and UNEXPECTED_TOKEN after it; no runtime check remains"
+
+["tests/language/label/label_test.dart"]
 kind = "behavior"
-what = "labelled statements with break and continue"
-cases = []
+what = "unlabeled and labeled break and continue out of while, for, for-in, do-while, nested loops, a labeled block, if, switch and try, a label beside a variable of the same name, unused labels, break L as a label's own statement, and labels on the block that is a compound statement's body; Julia has no labeled statements, so break L is @goto to an @label past the statement and an unused label is left out, and Julia forbids @goto out of a try/finally, so the labeled try's break L is the inner loop's break and a flag that skips the rest of the try body; for-in over the existing i is for outer i"
+cases = ["dart_label/label"]
 
 ["tests/language/lazy/"]
 kind = "behavior"
@@ -7229,7 +7319,7 @@ what = "checks of a value's dynamic type"
 
 ["tests/language/static_type_helper.dart"]
 kind = "helper"
-of = ["tests/language/anonymous_methods/", "tests/language/async/", "tests/language/async_star/", "tests/language/await/", "tests/language/call/implicit_tearoff_assignment_test.dart", "tests/language/call/implicit_tearoff_error_test.dart", "tests/language/call/implicit_tearoff_exceptions_test.dart", "tests/language/call/implicit_tearoff_local_assignment_test.dart", "tests/language/call/implicit_tearoff_test.dart", "tests/language/call/implicit_tearoff_type_variable_error_test.dart", "tests/language/call/implicit_tearoff_type_variable_test.dart", "tests/language/closure/parameter_default_type_inference_test.dart", "tests/language/constructor/tear_off_test.dart", "tests/language/extension_methods/", "tests/language/extension_type/", "tests/language/generic/generic_function_type_argument_test.dart", "tests/language/generic_methods/", "tests/language/if_null/", "tests/language/inference/", "tests/language/inference_update_1/", "tests/language/inference_update_2/", "tests/language/inference_update_3/", "tests/language/inference_update_4/", "tests/language/inference_using_bounds/", "tests/language/least_upper_bound/", "tests/language/mixin/", "tests/language/nnbd/flow_analysis/boolean_parameter_test.dart", "tests/language/nnbd/flow_analysis/demotion_and_type_of_interest_promotion_test.dart", "tests/language/nnbd/flow_analysis/expr_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/identical_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_compound_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_capture_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_does_not_detect_aliases_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_expression_types_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_new_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_join_equivalent_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_logical_op_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_null_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_on_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_try_finally_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_undefeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_cascade_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_conditional_test.dart", "tests/language/nnbd/flow_analysis/postfix_increment_decrement_test.dart", "tests/language/nnbd/flow_analysis/this_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/this_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_expr_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_never_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_variable_property_test.dart", "tests/language/nnbd/flow_analysis/variable_property_not_promoted_test.dart", "tests/language/nnbd/inference/late_variable_type_for_promotion_test.dart", "tests/language/nnbd/inference/variable_initialization_promotion_test.dart", "tests/language/nonfunction_type_aliases/", "tests/language/null_aware/", "tests/language/null_aware_elements/", "tests/language/operator/number_operator_context_test.dart", "tests/language/operator/number_operator_error_test.dart", "tests/language/operator/number_operator_typing_test.dart", "tests/language/patterns/empty_switch_expression_test.dart", "tests/language/patterns/flow_analysis/boolean_condition_test.dart", "tests/language/patterns/flow_analysis/cast_pattern_error_test.dart", "tests/language/patterns/flow_analysis/constant_pattern_error_test.dart", "tests/language/patterns/flow_analysis/for_in_collection_element_error_test.dart", "tests/language/patterns/flow_analysis/for_in_statement_error_test.dart", "tests/language/patterns/flow_analysis/if_case_element_error_test.dart", "tests/language/patterns/flow_analysis/if_case_statement_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_with_nullable_list_scrutinee_test.dart", "tests/language/patterns/flow_analysis/logical_and_pattern_error_test.dart", "tests/language/patterns/flow_analysis/logical_or_pattern_error_test.dart", "tests/language/patterns/flow_analysis/map_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_assert_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_check_in_guard_test.dart", "tests/language/patterns/flow_analysis/null_check_pattern_error_test.dart", "tests/language/patterns/flow_analysis/object_pattern_error_test.dart", "tests/language/patterns/flow_analysis/pattern_assignment_error_test.dart", "tests/language/patterns/flow_analysis/pattern_inside_guard_error_test.dart", "tests/language/patterns/flow_analysis/pattern_variable_declaration_error_test.dart", "tests/language/patterns/flow_analysis/record_pattern_error_test.dart", "tests/language/patterns/flow_analysis/relational_pattern_error_test.dart", "tests/language/patterns/flow_analysis/split_point_test.dart", "tests/language/patterns/flow_analysis/switch_expression_error_test.dart", "tests/language/patterns/flow_analysis/switch_statement_error_test.dart", "tests/language/patterns/flow_analysis/variable_pattern_error_test.dart", "tests/language/patterns/flow_analysis/wildcard_pattern_error_test.dart", "tests/language/patterns/issue52409_test.dart", "tests/language/patterns/object_pattern_inference_test.dart", "tests/language/patterns/schema_test.dart", "tests/language/patterns/switch_trivial_exhaustiveness_error_test.dart", "tests/language/patterns/type_question_before_when_test.dart", "tests/language/primary_constructors/", "tests/language/private_named_parameters/", "tests/language/records/", "tests/language/regress/", "tests/language/sound_flow_analysis/", "tests/language/spread_collections/", "tests/language/switch/case_null_legacy_flow_analysis_test.dart", "tests/language/sync_star/", "tests/language/this_promotion/", "tests/language/type_object/", "tests/language/type_promotion/", "tests/language/typedef/"]
+of = ["tests/language/anonymous_methods/", "tests/language/async/", "tests/language/async_star/", "tests/language/await/", "tests/language/call/implicit_tearoff_assignment_test.dart", "tests/language/call/implicit_tearoff_error_test.dart", "tests/language/call/implicit_tearoff_exceptions_test.dart", "tests/language/call/implicit_tearoff_local_assignment_test.dart", "tests/language/call/implicit_tearoff_test.dart", "tests/language/call/implicit_tearoff_type_variable_error_test.dart", "tests/language/call/implicit_tearoff_type_variable_test.dart", "tests/language/closure/parameter_default_type_inference_test.dart", "tests/language/constructor/tear_off_test.dart", "tests/language/extension_methods/", "tests/language/extension_type/", "tests/language/generic/generic_function_type_argument_test.dart", "tests/language/generic_methods/", "tests/language/if_null/if_null_with_dynamic_context_test.dart", "tests/language/inference/", "tests/language/inference_update_1/", "tests/language/inference_update_2/", "tests/language/inference_update_3/", "tests/language/inference_update_4/", "tests/language/inference_using_bounds/", "tests/language/least_upper_bound/", "tests/language/mixin/", "tests/language/nnbd/flow_analysis/boolean_parameter_test.dart", "tests/language/nnbd/flow_analysis/demotion_and_type_of_interest_promotion_test.dart", "tests/language/nnbd/flow_analysis/expr_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/identical_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_compound_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_capture_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_does_not_detect_aliases_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_expression_types_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_new_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_join_equivalent_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_logical_op_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_null_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_on_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_try_finally_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_undefeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_cascade_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_conditional_test.dart", "tests/language/nnbd/flow_analysis/postfix_increment_decrement_test.dart", "tests/language/nnbd/flow_analysis/this_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/this_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_expr_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_never_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_variable_property_test.dart", "tests/language/nnbd/flow_analysis/variable_property_not_promoted_test.dart", "tests/language/nnbd/inference/late_variable_type_for_promotion_test.dart", "tests/language/nnbd/inference/variable_initialization_promotion_test.dart", "tests/language/nonfunction_type_aliases/", "tests/language/null_aware/", "tests/language/null_aware_elements/", "tests/language/operator/number_operator_context_test.dart", "tests/language/operator/number_operator_error_test.dart", "tests/language/operator/number_operator_typing_test.dart", "tests/language/patterns/empty_switch_expression_test.dart", "tests/language/patterns/flow_analysis/boolean_condition_test.dart", "tests/language/patterns/flow_analysis/cast_pattern_error_test.dart", "tests/language/patterns/flow_analysis/constant_pattern_error_test.dart", "tests/language/patterns/flow_analysis/for_in_collection_element_error_test.dart", "tests/language/patterns/flow_analysis/for_in_statement_error_test.dart", "tests/language/patterns/flow_analysis/if_case_element_error_test.dart", "tests/language/patterns/flow_analysis/if_case_statement_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_with_nullable_list_scrutinee_test.dart", "tests/language/patterns/flow_analysis/logical_and_pattern_error_test.dart", "tests/language/patterns/flow_analysis/logical_or_pattern_error_test.dart", "tests/language/patterns/flow_analysis/map_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_assert_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_check_in_guard_test.dart", "tests/language/patterns/flow_analysis/null_check_pattern_error_test.dart", "tests/language/patterns/flow_analysis/object_pattern_error_test.dart", "tests/language/patterns/flow_analysis/pattern_assignment_error_test.dart", "tests/language/patterns/flow_analysis/pattern_inside_guard_error_test.dart", "tests/language/patterns/flow_analysis/pattern_variable_declaration_error_test.dart", "tests/language/patterns/flow_analysis/record_pattern_error_test.dart", "tests/language/patterns/flow_analysis/relational_pattern_error_test.dart", "tests/language/patterns/flow_analysis/split_point_test.dart", "tests/language/patterns/flow_analysis/switch_expression_error_test.dart", "tests/language/patterns/flow_analysis/switch_statement_error_test.dart", "tests/language/patterns/flow_analysis/variable_pattern_error_test.dart", "tests/language/patterns/flow_analysis/wildcard_pattern_error_test.dart", "tests/language/patterns/issue52409_test.dart", "tests/language/patterns/object_pattern_inference_test.dart", "tests/language/patterns/schema_test.dart", "tests/language/patterns/switch_trivial_exhaustiveness_error_test.dart", "tests/language/patterns/type_question_before_when_test.dart", "tests/language/primary_constructors/", "tests/language/private_named_parameters/", "tests/language/records/", "tests/language/regress/", "tests/language/sound_flow_analysis/", "tests/language/spread_collections/", "tests/language/switch/case_null_legacy_flow_analysis_test.dart", "tests/language/sync_star/", "tests/language/this_promotion/", "tests/language/type_object/", "tests/language/type_promotion/", "tests/language/typedef/"]
 what = "checks of an expression's static type"
 
 ["tests/language/syntax_helper.dart"]

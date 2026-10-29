@@ -939,6 +939,23 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_constructor/tear_off" => ((((true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true)), ((true, true), (true, true), (true, true), (true, true), (true, true), (true, true), (true, true), (true, true)), ((true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true)), (true, true, true, true, true, true, true, true), (0, 0, 1, 0, 0, 1), (true, true, true, true, true, true)), :rejects),
     "dart_constructor/unnamed_new" => (((1, 1, 1, 1, 1, 1, 1, 1, 1, 1), (0, 0, 1, 1, 0, 1), (1, 1, 1, 1, 1, 1, 1, 1, 1, 1), (0, 0, 1, 1, 0, 1), 1, 1, true, true), :compiled),
     "dart_constructor/with_mixin" => ((1, 1, 17, 13), :rejects),
+    # tests/language/argument/
+    "dart_argument/named_argument" => ((true, true, true, true), :rejects),
+    "dart_argument/named_in_const_creation" => ((1, 2), :compiled),
+    "dart_argument/strangely_named_arguments" => (((true, true, true, true, true, true, true, true, true, true), (true, true, true, true, true, true, true, true, true, true), (true, true, true, true, true, true, true, true, true, true), true), :rejects),
+    # tests/language/assign/
+    "dart_assign/instance_method" => ((true, 0, 1), :rejects),
+    "dart_assign/op" => (((1, 5, 4, 2), (1, 5, 4, 2, 0.5), (1, 5, 4, 2, 0.5), (1, 5, 4, 2, 0.5), (31, 248, 4088, 240, 225), (108, 324, 323, 335), 13), :rejects),
+    # tests/language/label/
+    "dart_label/label" => ((111, 111, 111, 111, 111, 111, 111, 111, 111, ([111, 111, 111, 111, 111, 111, 111, 111], 111), 111, ([111, 111, 111, 111, 111, 111], 2, 2, 111)), :rejects),
+    # tests/language/if_null/
+    "dart_if_null/assignment_behavior_instance" => ((((1, true), (1, true)), ((1, true), (1, true))), :rejects),
+    "dart_if_null/assignment_behavior_static" => (((1, true), (1, true), (1, true), (1, true), (1, true), (1, true), true, (1, true), (1, true), (1, true), (1, true), (1, true), (1, true), (1, true)), :rejects),
+    "dart_if_null/assignment_behavior_receiver" => (((1, true), (1, true), (1, true), (1, true), (2, true), (2, true), (nothing, true), (1, true), (1, true)), :outside),
+    "dart_if_null/assignment_static" => ((((true, nothing), (true, nothing)), (true, nothing), (true, nothing), (true, nothing), (true, nothing), (true, nothing), (true, nothing), (true, nothing), (true, nothing), (true, nothing), (true, nothing)), :rejects),
+    "dart_if_null/behavior" => (((1, 1, 2, nothing), (true, true, true), (true, true, true), (true, true, true), (true, true, true)), :rejects),
+    "dart_if_null/evaluation_order" => ((1, 2, true), :rejects),
+    "dart_if_null/precedence" => ((1, 2, 3, nothing, 2), :compiled),
 )
 
 # a case's answer is native's: of its type, and isequal (a NaN equal to itself, -0.0 apart from 0.0)

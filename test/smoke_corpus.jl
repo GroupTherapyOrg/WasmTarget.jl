@@ -21925,3 +21925,772 @@ _g("dart_constructor", Any[
     ("with_mixin", (n::Int64) -> (_ct_wm_a_count[] = 0; _ct_wm_b_count[] = 0; b = _ct_wm_b(17n);
         (_ct_wm_a_count[], _ct_wm_b_count[], b.x, b.y)), Int64(1)),
 ])
+
+# ---- tests/language/argument: named arguments in any order, in a const creation, and named like JS object properties ----
+# dart's named parameters are Julia's keyword arguments, on a closure, a constructor method or a function; a
+# named parameter's null default is `nothing`. A virtual method overridden in a subclass is one function with a
+# method per concrete type of an abstract type, and dart's `p ??= d` on a nullable parameter is p = something(p, d).
+
+# named_in_const_creation: a const constructor whose second argument is named, its instance a static const
+struct _ArgtNcA
+    x::Int64
+    y::Union{Nothing,Int64}
+end
+_ArgtNcA(a::Int64; b::Union{Nothing,Int64} = nothing) = _ArgtNcA(a, b)
+const _ARGT_NC_TEST = _ArgtNcA(Int64(1); b = Int64(2))
+
+# strangely_named_arguments: named parameters called arguments, constructor, hasOwnProperty, isPrototypeOf,
+# propertyIsEnumerable, toLocaleString, toString and valueOf, with defaults, on a top-level function and on a
+# method; CheckMethod2 overrides the method with nullable parameters filled by ??=
+_argt_sn_join(a, c, h, i, p, l, s, v) = "$a,$c,$h,$i,$p,$l,$s,$v"
+_argt_sn_static(; arguments::String = "a", constructor::String = "c", hasOwnProperty::String = "h",
+               isPrototypeOf::String = "i", propertyIsEnumerable::String = "p", toLocaleString::String = "L",
+               toString::String = "S", valueOf::String = "v") =
+    _argt_sn_join(arguments, constructor, hasOwnProperty, isPrototypeOf, propertyIsEnumerable, toLocaleString, toString, valueOf)
+abstract type _ArgtSnAbs end
+struct _ArgtSnCheckMethod <: _ArgtSnAbs end
+struct _ArgtSnCheckMethod2 <: _ArgtSnAbs end
+_argt_sn_method(::_ArgtSnCheckMethod; arguments::String = "a", constructor::String = "c", hasOwnProperty::String = "h",
+               isPrototypeOf::String = "i", propertyIsEnumerable::String = "p", toLocaleString::String = "L",
+               toString::String = "S", valueOf::String = "v") =
+    _argt_sn_join(arguments, constructor, hasOwnProperty, isPrototypeOf, propertyIsEnumerable, toLocaleString, toString, valueOf)
+function _argt_sn_method(::_ArgtSnCheckMethod2; arguments::Union{Nothing,String} = nothing,
+                        constructor::Union{Nothing,String} = nothing, hasOwnProperty::Union{Nothing,String} = nothing,
+                        isPrototypeOf::Union{Nothing,String} = nothing, propertyIsEnumerable::Union{Nothing,String} = nothing,
+                        toLocaleString::Union{Nothing,String} = nothing, toString::Union{Nothing,String} = nothing,
+                        valueOf::Union{Nothing,String} = nothing)
+    arguments = something(arguments, "a")
+    constructor = something(constructor, "c")
+    hasOwnProperty = something(hasOwnProperty, "h")
+    isPrototypeOf = something(isPrototypeOf, "i")
+    propertyIsEnumerable = something(propertyIsEnumerable, "p")
+    toLocaleString = something(toLocaleString, "L")
+    toString = something(toString, "S")
+    valueOf = something(valueOf, "v")
+    return _argt_sn_join(arguments, constructor, hasOwnProperty, isPrototypeOf, propertyIsEnumerable, toLocaleString, toString, valueOf)
+end
+# main's ten checkStatic calls and CheckMethod.check's ten method calls, each against dart's expected string
+function _argt_sn_main_static(n::Int64)
+    x = n == 1 ? "X" : "Z"
+    y = n == 1 ? "Y" : "W"
+    f = _argt_sn_static
+    return _dw_facts(f() == "a,c,h,i,p,L,S,v", f(; arguments = x) == "X,c,h,i,p,L,S,v",
+                     f(; constructor = x) == "a,X,h,i,p,L,S,v", f(; hasOwnProperty = x) == "a,c,X,i,p,L,S,v",
+                     f(; isPrototypeOf = x) == "a,c,h,X,p,L,S,v", f(; propertyIsEnumerable = x) == "a,c,h,i,X,L,S,v",
+                     f(; toLocaleString = x) == "a,c,h,i,p,X,S,v", f(; toString = x) == "a,c,h,i,p,L,X,v",
+                     f(; valueOf = x) == "a,c,h,i,p,L,S,X", f(; valueOf = x, toString = y) == "a,c,h,i,p,L,Y,X")
+end
+function _argt_sn_check(o::_ArgtSnAbs, n::Int64)
+    x = n == 1 ? "X" : "Z"
+    y = n == 1 ? "Y" : "W"
+    m = _argt_sn_method
+    return _dw_facts(m(o) == "a,c,h,i,p,L,S,v", m(o; arguments = x) == "X,c,h,i,p,L,S,v",
+                     m(o; constructor = x) == "a,X,h,i,p,L,S,v", m(o; hasOwnProperty = x) == "a,c,X,i,p,L,S,v",
+                     m(o; isPrototypeOf = x) == "a,c,h,X,p,L,S,v", m(o; propertyIsEnumerable = x) == "a,c,h,i,X,L,S,v",
+                     m(o; toLocaleString = x) == "a,c,h,i,p,X,S,v", m(o; toString = x) == "a,c,h,i,p,L,X,v",
+                     m(o; valueOf = x) == "a,c,h,i,p,L,S,X", m(o; valueOf = x, toString = y) == "a,c,h,i,p,L,Y,X")
+end
+
+_g("dart_argument", Any[
+    ("named_argument", (n::Int64) -> (c1 = ((; b = nothing, a = nothing) -> "a: $a b: $b");
+        c2 = ((; a = nothing, b = nothing) -> "a: $a b: $b");
+        _dw_facts(c1(b = n, a = 2n) == "a: 2 b: 1", c1(a = n, b = 2n) == "a: 1 b: 2",
+                  c2(b = n, a = 2n) == "a: 2 b: 1", c2(a = n, b = 2n) == "a: 1 b: 2")), Int64(1)),
+    ("named_in_const_creation", (n::Int64) -> (a = n == 1 ? _ARGT_NC_TEST : _ArgtNcA(n; b = 2n); _dw_facts(a.x, a.y)), Int64(1)),
+    ("strangely_named_arguments", (n::Int64) -> (_argt_sn_main_static(n), _argt_sn_check(_ArgtSnCheckMethod(), n),
+        _argt_sn_check(_ArgtSnCheckMethod2(), n), _argt_sn_method(_ArgtSnCheckMethod2()) == "a,c,h,i,p,L,S,v"), Int64(1)),
+])
+
+# ---- tests/language/assign: compound assignment operators on locals, statics, fields and list elements; assigning to a method ----
+# dart's `x op= e` is Julia's updating operator: ~/= is ÷=, ^= (xor) is ⊻= since Julia's ^ is a power, and the
+# others keep their spelling. dart's untyped static field is a typed global, its untyped instance field a field of a
+# Union type; a list index is 1-based. A method is a function, not a field, so assigning to it on an instance is a
+# setproperty! of a field the struct does not have, which throws.
+
+# instance_method: a class with one method and no fields
+mutable struct _AsgImA end
+_asg_im_imethod(::_AsgImA) = Int64(0)
+
+# op: every compound operator on a local, the class's static field (dart reaches it bare, then qualified as
+# AssignOpTest.f: both are the one global, so its section runs twice), an instance field and a list element
+global _asg_op_f::Union{Nothing,Int64,Float64} = nothing
+mutable struct _AsgOpT
+    instf::Union{Nothing,Int64,Float64}
+end
+function _asg_op_test_main(n::Int64)
+    b = n - 1
+    b += 1; b1 = b
+    b *= 5; b2 = b
+    b -= 1; b3 = b
+    b ÷= 2; b4 = b
+
+    global _asg_op_f = n - 1
+    _asg_op_f += 1; f1 = _asg_op_f
+    _asg_op_f *= 5; f2 = _asg_op_f
+    _asg_op_f -= 1; f3 = _asg_op_f
+    _asg_op_f ÷= 2; f4 = _asg_op_f
+    _asg_op_f /= 4; f5 = _asg_op_f
+
+    global _asg_op_f = n - 1
+    _asg_op_f += 1; q1 = _asg_op_f
+    _asg_op_f *= 5; q2 = _asg_op_f
+    _asg_op_f -= 1; q3 = _asg_op_f
+    _asg_op_f ÷= 2; q4 = _asg_op_f
+    _asg_op_f /= 4; q5 = _asg_op_f
+
+    o = _AsgOpT(nothing)
+    o.instf = n - 1
+    o.instf += 1; i1 = o.instf
+    o.instf *= 5; i2 = o.instf
+    o.instf -= 1; i3 = o.instf
+    o.instf ÷= 2; i4 = o.instf
+    o.instf /= 4; i5 = o.instf
+
+    x = Int64(0xFF) * n
+    x >>= 3; x1 = x
+    x <<= 3; x2 = x
+    x |= 0xF00; x3 = x
+    x &= 0xF0; x4 = x
+    x ⊻= 0x11; x5 = x
+
+    y = 100n
+    y += 1 << 3; y1 = y
+    y *= 2 + 1; y2 = y
+    y -= 3 - 2; y3 = y
+    y += 3 * 4; y4 = y
+
+    a = Int64[n, 2n, 3n]
+    ix = n
+    a[ix] |= 12
+    return (_dw_facts(b1, b2, b3, b4), _dw_facts(f1, f2, f3, f4, f5), _dw_facts(q1, q2, q3, q4, q5),
+            _dw_facts(i1, i2, i3, i4, i5),
+            _dw_facts(x1, x2, x3, x4, x5), _dw_facts(y1, y2, y3, y4), a[ix])
+end
+
+_g("dart_assign", Any[
+    ("instance_method", (n::Int64) -> (a = _AsgImA(); g = () -> n;
+        threw = try; a.imethod = g; false; catch; true; end;
+        _dw_facts(threw, _asg_im_imethod(a), g())), Int64(1)),
+    ("op", (n::Int64) -> (r = _asg_op_test_main(n); for _ in 2:(20n); r = _asg_op_test_main(n); end; r), Int64(1)),
+])
+
+# ---- tests/language/label: labeled break and continue out of loops, blocks, if, switch, do-while and try ----
+# Julia has no labeled statement: dart's `break L` past a labeled statement is `@goto` to an `@label` just after it,
+# a `continue L` of an outer loop an `@goto` to the end of its body, and an unlabeled break or continue is Julia's.
+# A label nothing jumps to has no Julia form and is left out. dart's do-while is a `while true` loop that breaks when
+# its condition fails, a C-style for a while loop, a switch an if-chain, and `for (i in xs)` over an existing local
+# i is `for outer i in xs`. Helper.doAgain's tick counter is a Ref the twelve tests share; past 300 ticks it fails.
+_lbl_again(t::Base.RefValue{Int64}) = (t[] += 1; t[] > 300 && error("doAgain: more than 300 ticks"); true)
+function _lbl_test1(t::Base.RefValue{Int64}, n::Int64)
+    i = n
+    while _lbl_again(t)
+        i > 0 && break
+        return Int64(0)
+    end
+    return 110 + n
+end
+# test2's label L on the loop is never jumped to: the same body as test1
+function _lbl_test2(t::Base.RefValue{Int64}, n::Int64)
+    i = n
+    while _lbl_again(t)
+        i > 0 && break
+        return Int64(0)
+    end
+    return 110 + n
+end
+function _lbl_test3(t::Base.RefValue{Int64}, n::Int64)
+    i = n
+    while _lbl_again(t)
+        while _lbl_again(t)
+            i > 0 && @goto L
+            return Int64(0)
+        end
+        return Int64(1)
+    end
+    @label L
+    return 110 + n
+end
+function _lbl_test4(t::Base.RefValue{Int64}, n::Int64)
+    i = 100n
+    while _lbl_again(t)
+        while _lbl_again(t)
+            i > 0 && break
+            return Int64(0)
+        end
+        return 110 + n
+    end
+    return Int64(1)
+end
+function _lbl_test5(t::Base.RefValue{Int64}, n::Int64)
+    i = 10n
+    while i > 0
+        i -= 1
+        if true
+            continue
+        end
+        return Int64(0)
+    end
+    return 110 + n
+end
+function _lbl_test6(t::Base.RefValue{Int64}, n::Int64)
+    for i in (10n):-1:1
+        if true
+            continue
+        end
+        return Int64(0)
+    end
+    k = 20n
+    while _lbl_again(t)
+        while _lbl_again(t)
+            @goto L
+        end
+        return Int64(1)
+    end
+    @label L
+    return 110 + n
+end
+function _lbl_test7(t::Base.RefValue{Int64}, n::Int64)
+    i = 10n
+    while true
+        while _lbl_again(t)
+            if true
+                break
+            end
+            continue
+        end
+        i = 0
+        @goto continue_outer
+        @label continue_outer
+        (i == 10n && _lbl_again(t)) || break
+    end
+    return 110 + n
+end
+function _lbl_test8(t::Base.RefValue{Int64}, n::Int64)
+    while n == 0
+        L = 33
+        if true
+            break
+        end
+    end
+    return 110 + n
+end
+function _lbl_test9(t::Base.RefValue{Int64}, n::Int64)
+    i = 110 + n
+    if i == 0
+        return Int64(0)
+    end
+    while i == 0
+        return Int64(0)
+    end
+    return i
+end
+# test10: a labeled block, if, for, for-in over the existing i, for-in over a new j, switch, do-while and
+# try-finally, each left by a break L from an inner loop before its i -= 1; Julia forbids @goto out of a
+# try/finally, so the try's break L is the inner loop's break and a flag that skips the rest of the try body
+function _lbl_test10(t::Base.RefValue{Int64}, n::Int64)
+    i = 110 + n
+    seen = Int64[]
+    while _lbl_again(t)
+        while _lbl_again(t)
+            @goto block_end
+        end
+        i -= 1
+        @label block_end
+        break
+    end
+    push!(seen, i)
+
+    while _lbl_again(t)
+        if _lbl_again(t)
+            while _lbl_again(t)
+                @goto if_end
+            end
+            i -= 1
+        end
+        @label if_end
+        break
+    end
+    push!(seen, i)
+
+    while _lbl_again(t)
+        while _lbl_again(t)
+            while _lbl_again(t)
+                @goto for_end
+            end
+            i -= 1
+        end
+        @label for_end
+        break
+    end
+    push!(seen, i)
+
+    for outer i in Int64[110 + n]
+        while _lbl_again(t)
+            @goto for_in_end
+        end
+        i -= 1
+        break
+    end
+    @label for_in_end
+    push!(seen, i)
+
+    for j in Int64[110 + n]
+        while _lbl_again(t)
+            @goto for_var_end
+        end
+        i -= 1
+        break
+    end
+    @label for_var_end
+    push!(seen, i)
+
+    while _lbl_again(t)
+        if i == 111
+            while _lbl_again(t)
+                @goto switch_end
+            end
+            i -= 1
+        else
+            i -= 1
+        end
+        @label switch_end
+        break
+    end
+    push!(seen, i)
+
+    while _lbl_again(t)
+        while true
+            while _lbl_again(t)
+                @goto do_end
+            end
+            i -= 1
+            _lbl_again(t) || break
+        end
+        @label do_end
+        break
+    end
+    push!(seen, i)
+
+    while _lbl_again(t)
+        try
+            left = false
+            while _lbl_again(t)
+                left = true
+                break
+            end
+            left || (i -= 1)
+        finally
+        end
+        break
+    end
+    push!(seen, i)
+    return (seen, i)
+end
+function _lbl_test11(t::Base.RefValue{Int64}, n::Int64)
+    @goto L
+    @label L
+    return 110 + n
+end
+# test12: a label on the block that is the whole body of an if, a for, a for-in over the existing i, a for-in
+# over a new j, an else and a while; the break L leaves the block and the loop goes on
+function _lbl_test12(t::Base.RefValue{Int64}, n::Int64)
+    i = 110 + n
+    seen = Int64[]
+    if true
+        while _lbl_again(t)
+            @goto if_block_end
+        end
+        i -= 1
+        @label if_block_end
+    end
+    push!(seen, i)
+
+    forCount = 0
+    while forCount < 2
+        while _lbl_again(t)
+            @goto for_block_end
+        end
+        i -= 1
+        break
+        @label for_block_end
+        forCount += 1
+    end
+    push!(seen, i)
+
+    for outer i in Int64[110 + n]
+        while _lbl_again(t)
+            @goto for_in_block_end
+        end
+        i -= 1
+        break
+        @label for_in_block_end
+    end
+    push!(seen, i)
+
+    for j in Int64[110 + n]
+        while _lbl_again(t)
+            @goto for_var_block_end
+        end
+        i -= 1
+        break
+        @label for_var_block_end
+    end
+    push!(seen, i)
+
+    if n == 0
+    else
+        while _lbl_again(t)
+            @goto else_block_end
+        end
+        i -= 1
+        @label else_block_end
+    end
+    push!(seen, i)
+
+    whileCount = 0
+    while whileCount < 2
+        whileCount += 1
+        while _lbl_again(t)
+            @goto while_block_end
+        end
+        i -= 1
+        break
+        @label while_block_end
+    end
+    push!(seen, i)
+    return (seen, forCount, whileCount, i)
+end
+
+_g("dart_label", Any[
+    ("label", (n::Int64) -> (t = Ref(Int64(0));
+        (_lbl_test1(t, n), _lbl_test2(t, n), _lbl_test3(t, n), _lbl_test4(t, n), _lbl_test5(t, n), _lbl_test6(t, n),
+         _lbl_test7(t, n), _lbl_test8(t, n), _lbl_test9(t, n), _lbl_test10(t, n), _lbl_test11(t, n), _lbl_test12(t, n))), Int64(1)),
+])
+
+# ---- tests/language/if_null: the if-null operator ?? and its assignment ??=, their evaluation order and precedence ----
+# dart's `e1 ?? e2` is Base's `@something(e1, e2)`: e1 first, e2 only when e1 is nothing. @something throws when
+# every argument is nothing, so where dart's ?? may yield null the last argument is `Some(e2)`. Julia has no ??=:
+# `v ??= e` is written as dart's specification states it, `((x) => x == null ? v = e : x)(v)`: read v once, and
+# only when it is nothing evaluate e, store it and yield it. A dart getter or setter is a function, a static or
+# top-level variable a typed global, operator [] and []= are Base.getindex and Base.setindex!, `super.m` is
+# invoke of the superclass's method, and dart's `as dynamic` has no Julia form: every field read is checked when
+# it runs. A field missing at run time throws Julia's FieldError where dart throws NoSuchMethodError.
+_ifn_throws(f) = try; f(); false; catch; true; end
+
+# assignment_helper (the library assignment_behavior imports as h): the operations log, a top-level getter and
+# setter x and a class C with a static getter and setter x
+const _ifn_h_operations = String[]
+global _ifn_h_xget::Union{Nothing,Int64} = nothing
+function _ifn_h_x()
+    push!(_ifn_h_operations, "h.x")
+    tmp = _ifn_h_xget
+    global _ifn_h_xget = nothing
+    return tmp
+end
+_ifn_h_x!(value) = (push!(_ifn_h_operations, "h.x=$value"); nothing)
+global _ifn_h_cxget::Union{Nothing,Int64} = nothing
+function _ifn_h_cx()
+    push!(_ifn_h_operations, "h.C.x")
+    tmp = _ifn_h_cxget
+    global _ifn_h_cxget = nothing
+    return tmp
+end
+_ifn_h_cx!(value) = (push!(_ifn_h_operations, "h.C.x=$value"); nothing)
+
+# assignment_behavior: getters that log their name and answer their GetValue once, setters that log the value;
+# C's instance getter v and operator [] log the receiver's name s; D overrides v with bad() and reaches C's
+# through super
+_ifn_ab_bad() = error("Should not be executed")
+abstract type _IfnAbAbs end
+mutable struct _IfnAbC <: _IfnAbAbs
+    s::String
+    vget::Union{Nothing,Int64}
+    indexget::Union{Nothing,Int64}
+end
+_IfnAbC(s::String) = _IfnAbC(s, nothing, nothing)
+mutable struct _IfnAbD <: _IfnAbAbs
+    s::String
+    vget::Union{Nothing,Int64}
+    indexget::Union{Nothing,Int64}
+end
+_IfnAbD(s::String) = _IfnAbD(s, nothing, nothing)
+function _ifn_ab_v(c::_IfnAbAbs)
+    push!(_ifn_h_operations, "$(c.s).v")
+    tmp = c.vget
+    c.vget = nothing
+    return tmp
+end
+_ifn_ab_v!(c::_IfnAbAbs, value) = (push!(_ifn_h_operations, "$(c.s).v=$value"); nothing)
+_ifn_ab_v(d::_IfnAbD) = _ifn_ab_bad()
+_ifn_ab_v!(d::_IfnAbD, value) = (_ifn_ab_bad(); nothing)
+function Base.getindex(c::_IfnAbAbs, index)
+    push!(_ifn_h_operations, "$(c.s)[$index]")
+    tmp = c.indexget
+    c.indexget = nothing
+    return tmp
+end
+Base.setindex!(c::_IfnAbAbs, value, index) = (push!(_ifn_h_operations, "$(c.s)[$index]=$value"); c)
+global _ifn_ab_xget::Union{Nothing,Int64,_IfnAbC} = nothing
+global _ifn_ab_yget::Union{Nothing,Int64} = nothing
+global _ifn_ab_zget::Union{Nothing,Int64} = nothing
+global _ifn_ab_fvalue::Union{Nothing,_IfnAbC} = nothing
+global _ifn_ab_cxget::Union{Nothing,Int64} = nothing
+function _ifn_ab_x()
+    push!(_ifn_h_operations, "x")
+    tmp = _ifn_ab_xget
+    global _ifn_ab_xget = nothing
+    return tmp
+end
+_ifn_ab_x!(value) = (push!(_ifn_h_operations, "x=$value"); nothing)
+function _ifn_ab_y()
+    push!(_ifn_h_operations, "y")
+    tmp = _ifn_ab_yget
+    global _ifn_ab_yget = nothing
+    return tmp
+end
+function _ifn_ab_z()
+    push!(_ifn_h_operations, "z")
+    tmp = _ifn_ab_zget
+    global _ifn_ab_zget = nothing
+    return tmp
+end
+function _ifn_ab_f()
+    push!(_ifn_h_operations, "f()")
+    tmp = _ifn_ab_fvalue
+    global _ifn_ab_fvalue = nothing
+    return tmp
+end
+function _ifn_ab_cx()
+    push!(_ifn_h_operations, "C.x")
+    tmp = _ifn_ab_cxget
+    global _ifn_ab_cxget = nothing
+    return tmp
+end
+_ifn_ab_cx!(value) = (push!(_ifn_h_operations, "C.x=$value"); nothing)
+# check: the value the closure yields, and whether the log equals the expected operations; the log is then cleared
+function _ifn_ab_check(f, expected_operations::Vector{String})
+    r = f()
+    logged = _ifn_h_operations == expected_operations
+    empty!(_ifn_h_operations)
+    return _dw_facts(r, logged)
+end
+# C.instanceTest: v ??= e on the receiver's own getter and setter
+function _ifn_ab_instance_test(c::_IfnAbC, n::Int64)
+    s = c.s
+    c.vget = n
+    r1 = _ifn_ab_check(() -> (t = _ifn_ab_v(c); t === nothing ? (e = _ifn_ab_bad(); _ifn_ab_v!(c, e); e) : t), ["$s.v"])
+    global _ifn_ab_yget = n
+    r2 = _ifn_ab_check(() -> (t = _ifn_ab_v(c); t === nothing ? (e = _ifn_ab_y(); _ifn_ab_v!(c, e); e) : t),
+                       ["$s.v", "y", "$s.v=1"])
+    return (r1, r2)
+end
+# D.derivedInstanceTest: super.v ??= e reaches C's getter and setter past D's overrides
+function _ifn_ab_derived_instance_test(d::_IfnAbD, n::Int64)
+    s = d.s
+    d.vget = n
+    super_v(o) = invoke(_ifn_ab_v, Tuple{_IfnAbAbs}, o)
+    super_v!(o, value) = invoke(_ifn_ab_v!, Tuple{_IfnAbAbs,Any}, o, value)
+    r1 = _ifn_ab_check(() -> (t = super_v(d); t === nothing ? (e = _ifn_ab_bad(); super_v!(d, e); e) : t), ["$s.v"])
+    global _ifn_ab_yget = n
+    r2 = _ifn_ab_check(() -> (t = super_v(d); t === nothing ? (e = _ifn_ab_y(); super_v!(d, e); e) : t),
+                       ["$s.v", "y", "$s.v=1"])
+    return (r1, r2)
+end
+# main's top-level, prefixed, local and static targets: x, h.x, a local l, C.x, h.C.x, and C?.x, h.C?.x (a type is
+# never null, so C?.x is C.x)
+function _ifn_ab_main_static(n::Int64)
+    empty!(_ifn_h_operations)
+    global _ifn_ab_xget = n
+    r1 = _ifn_ab_check(() -> (t = _ifn_ab_x(); t === nothing ? (e = _ifn_ab_bad(); _ifn_ab_x!(e); e) : t), ["x"])
+    global _ifn_ab_yget = n
+    r2 = _ifn_ab_check(() -> (t = _ifn_ab_x(); t === nothing ? (e = _ifn_ab_y(); _ifn_ab_x!(e); e) : t), ["x", "y", "x=1"])
+    global _ifn_h_xget = n
+    r3 = _ifn_ab_check(() -> (t = _ifn_h_x(); t === nothing ? (e = _ifn_ab_bad(); _ifn_h_x!(e); e) : t), ["h.x"])
+    global _ifn_ab_yget = n
+    r4 = _ifn_ab_check(() -> (t = _ifn_h_x(); t === nothing ? (e = _ifn_ab_y(); _ifn_h_x!(e); e) : t), ["h.x", "y", "h.x=1"])
+    l1::Union{Nothing,Int64} = n
+    r5 = _ifn_ab_check(() -> (l1 === nothing ? (l1 = _ifn_ab_bad()) : l1), String[])
+    l2::Union{Nothing,Int64} = nothing
+    global _ifn_ab_yget = n
+    r6 = _ifn_ab_check(() -> (l2 === nothing ? (l2 = _ifn_ab_y()) : l2), ["y"])
+    r6l = l2 == 1
+    global _ifn_ab_cxget = n
+    r7 = _ifn_ab_check(() -> (t = _ifn_ab_cx(); t === nothing ? (e = _ifn_ab_bad(); _ifn_ab_cx!(e); e) : t), ["C.x"])
+    global _ifn_ab_yget = n
+    r8 = _ifn_ab_check(() -> (t = _ifn_ab_cx(); t === nothing ? (e = _ifn_ab_y(); _ifn_ab_cx!(e); e) : t), ["C.x", "y", "C.x=1"])
+    global _ifn_h_cxget = n
+    r9 = _ifn_ab_check(() -> (t = _ifn_h_cx(); t === nothing ? (e = _ifn_ab_bad(); _ifn_h_cx!(e); e) : t), ["h.C.x"])
+    global _ifn_ab_yget = n
+    r10 = _ifn_ab_check(() -> (t = _ifn_h_cx(); t === nothing ? (e = _ifn_ab_y(); _ifn_h_cx!(e); e) : t), ["h.C.x", "y", "h.C.x=1"])
+    global _ifn_ab_cxget = n
+    r11 = _ifn_ab_check(() -> (t = _ifn_ab_cx(); t === nothing ? (e = _ifn_ab_bad(); _ifn_ab_cx!(e); e) : t), ["C.x"])
+    global _ifn_ab_yget = n
+    r12 = _ifn_ab_check(() -> (t = _ifn_ab_cx(); t === nothing ? (e = _ifn_ab_y(); _ifn_ab_cx!(e); e) : t), ["C.x", "y", "C.x=1"])
+    global _ifn_ab_yget = n
+    r13 = _ifn_ab_check(() -> (t = _ifn_h_cx(); t === nothing ? (e = _ifn_ab_y(); _ifn_h_cx!(e); e) : t), ["h.C.x", "y", "h.C.x=1"])
+    return (r1, r2, r3, r4, r5, r6, r6l, r7, r8, r9, r10, r11, r12, r13)
+end
+# main's receivers: e1.v ??= e2 with e1 = x and f(), e1[e2] ??= e3, and e1?.v ??= e2 with e1 null and not
+function _ifn_ab_main_receiver(n::Int64)
+    empty!(_ifn_h_operations)
+    c = _IfnAbC("x"); c.vget = n; global _ifn_ab_xget = c
+    r1 = _ifn_ab_check(() -> (o = _ifn_ab_x(); t = _ifn_ab_v(o); t === nothing ? (e = _ifn_ab_bad(); _ifn_ab_v!(o, e); e) : t),
+                       ["x", "x.v"])
+    global _ifn_ab_xget = _IfnAbC("x")
+    global _ifn_ab_yget = n
+    r2 = _ifn_ab_check(() -> (o = _ifn_ab_x(); t = _ifn_ab_v(o); t === nothing ? (e = _ifn_ab_y(); _ifn_ab_v!(o, e); e) : t),
+                       ["x", "x.v", "y", "x.v=1"])
+    c = _IfnAbC("f()"); c.vget = n; global _ifn_ab_fvalue = c
+    r3 = _ifn_ab_check(() -> (o = _ifn_ab_f(); t = _ifn_ab_v(o); t === nothing ? (e = _ifn_ab_bad(); _ifn_ab_v!(o, e); e) : t),
+                       ["f()", "f().v"])
+    global _ifn_ab_fvalue = _IfnAbC("f()")
+    global _ifn_ab_yget = n
+    r4 = _ifn_ab_check(() -> (o = _ifn_ab_f(); t = _ifn_ab_v(o); t === nothing ? (e = _ifn_ab_y(); _ifn_ab_v!(o, e); e) : t),
+                       ["f()", "f().v", "y", "f().v=1"])
+    c = _IfnAbC("x"); c.indexget = 2n; global _ifn_ab_xget = c
+    global _ifn_ab_yget = n
+    r5 = _ifn_ab_check(() -> (a = _ifn_ab_x(); i = _ifn_ab_y(); t = a[i]; t === nothing ? (a[i] = _ifn_ab_bad()) : t),
+                       ["x", "y", "x[1]"])
+    global _ifn_ab_xget = _IfnAbC("x")
+    global _ifn_ab_yget = n
+    global _ifn_ab_zget = 2n
+    r6 = _ifn_ab_check(() -> (a = _ifn_ab_x(); i = _ifn_ab_y(); t = a[i]; t === nothing ? (a[i] = _ifn_ab_z()) : t),
+                       ["x", "y", "x[1]", "z", "x[1]=2"])
+    r7 = _ifn_ab_check(() -> (o = _ifn_ab_x(); o === nothing ? nothing :
+                              (t = _ifn_ab_v(o); t === nothing ? (e = _ifn_ab_bad(); _ifn_ab_v!(o, e); e) : t)), ["x"])
+    c = _IfnAbC("x"); c.vget = n; global _ifn_ab_xget = c
+    r8 = _ifn_ab_check(() -> (o = _ifn_ab_x(); o === nothing ? nothing :
+                              (t = _ifn_ab_v(o); t === nothing ? (e = _ifn_ab_bad(); _ifn_ab_v!(o, e); e) : t)), ["x", "x.v"])
+    global _ifn_ab_xget = _IfnAbC("x")
+    global _ifn_ab_yget = n
+    r9 = _ifn_ab_check(() -> (o = _ifn_ab_x(); o === nothing ? nothing :
+                              (t = _ifn_ab_v(o); t === nothing ? (e = _ifn_ab_y(); _ifn_ab_v!(o, e); e) : t)),
+                       ["x", "x.v", "y", "x.v=1"])
+    return (r1, r2, r3, r4, r5, r6, r7, r8, r9)
+end
+
+# assignment_static: getters of A? that answer null and setters that drop the value, top-level, static, on an
+# instance and through super; theA is a B, so reading .a off it succeeds; only the ok multitest sections run
+abstract type _IfnAsA end
+mutable struct _IfnAsB <: _IfnAsA
+    a::Union{Nothing,String}
+    b::Union{Nothing,String}
+end
+global _ifn_as_the_a::_IfnAsA = _IfnAsB(nothing, nothing)
+global _ifn_as_the_b::_IfnAsB = _IfnAsB(nothing, nothing)
+_ifn_as_bad() = error("Should not be executed")
+_ifn_as_a()::Union{Nothing,_IfnAsA} = nothing
+_ifn_as_a!(value::Union{Nothing,_IfnAsA}) = nothing
+_ifn_as_static_a()::Union{Nothing,_IfnAsA} = nothing
+_ifn_as_static_a!(value::Union{Nothing,_IfnAsA}) = nothing
+abstract type _IfnAsGettersAbs end
+struct _IfnAsInstanceGetters <: _IfnAsGettersAbs end
+struct _IfnAsDerived <: _IfnAsGettersAbs end
+_ifn_as_get_a(::_IfnAsGettersAbs)::Union{Nothing,_IfnAsA} = nothing
+_ifn_as_set_a!(::_IfnAsGettersAbs, value::Union{Nothing,_IfnAsA}) = nothing
+_ifn_as_get_a(::_IfnAsDerived)::Union{Nothing,_IfnAsA} = _ifn_as_bad()
+_ifn_as_set_a!(::_IfnAsDerived, value::Union{Nothing,_IfnAsA}) = (_ifn_as_bad(); nothing)
+# one ok section: the value of the ??= and the .a read off it
+_ifn_as_read(r, expected) = _dw_facts(r === expected, r.a)
+function _ifn_as_derived_test(d::_IfnAsDerived)
+    super_a(o) = invoke(_ifn_as_get_a, Tuple{_IfnAsGettersAbs}, o)
+    super_a!(o, value) = invoke(_ifn_as_set_a!, Tuple{_IfnAsGettersAbs,Union{Nothing,_IfnAsA}}, o, value)
+    s01 = (t = super_a(d); t === nothing ? (e = _ifn_as_the_a; super_a!(d, e); e) : t)
+    s03 = (t = super_a(d); t === nothing ? (e = _ifn_as_the_b; super_a!(d, e); e) : t)
+    return (_ifn_as_read(s01, _ifn_as_the_a), _ifn_as_read(s03, _ifn_as_the_b))
+end
+function _ifn_as_main(n::Int64)
+    the_a = _ifn_as_the_a
+    the_b = _ifn_as_the_b
+    s0103 = _ifn_as_derived_test(_IfnAsDerived())
+    s08 = (t = _ifn_as_a(); t === nothing ? (e = the_a; _ifn_as_a!(e); e) : t)
+    s10 = (t = _ifn_as_a(); t === nothing ? (e = the_b; _ifn_as_a!(e); e) : t)
+    s15 = (t = _ifn_as_static_a(); t === nothing ? (e = the_a; _ifn_as_static_a!(e); e) : t)
+    s17 = (t = _ifn_as_static_a(); t === nothing ? (e = the_b; _ifn_as_static_a!(e); e) : t)
+    o22 = _IfnAsInstanceGetters()
+    s22 = (t = _ifn_as_get_a(o22); t === nothing ? (e = the_a; _ifn_as_set_a!(o22, e); e) : t)
+    o24 = _IfnAsInstanceGetters()
+    s24 = (t = _ifn_as_get_a(o24); t === nothing ? (e = the_b; _ifn_as_set_a!(o24, e); e) : t)
+    l29 = Union{Nothing,_IfnAsA}[nothing]
+    s29 = (t = l29[n]; t === nothing ? (l29[n] = the_a) : t)
+    l31 = Union{Nothing,_IfnAsA}[nothing]
+    s31 = (t = l31[n]; t === nothing ? (l31[n] = the_b) : t)
+    c::Union{Nothing,_IfnAsInstanceGetters} = n == 1 ? _IfnAsInstanceGetters() : nothing
+    s36 = c === nothing ? nothing : (t = _ifn_as_get_a(c); t === nothing ? (e = the_a; _ifn_as_set_a!(c, e); e) : t)
+    s38 = c === nothing ? nothing : (t = _ifn_as_get_a(c); t === nothing ? (e = the_b; _ifn_as_set_a!(c, e); e) : t)
+    return (s0103, _ifn_as_read(s08, the_a), _ifn_as_read(s10, the_b), _ifn_as_read(s15, the_a), _ifn_as_read(s17, the_b),
+            _ifn_as_read(s22, the_a), _ifn_as_read(s24, the_b), _ifn_as_read(s29, the_a), _ifn_as_read(s31, the_b),
+            _ifn_as_read(s36::_IfnAsA, the_a), _ifn_as_read(s38::_IfnAsA, the_b))
+end
+
+# behavior: ?? on ints and nulls, and on B and C values whose fields are read past the static type
+abstract type _IfnBhA end
+struct _IfnBhB <: _IfnBhA
+    a::String
+    b::String
+end
+_IfnBhB(v::String) = _IfnBhB(v, v)
+struct _IfnBhC <: _IfnBhA
+    a::String
+    c::String
+end
+_IfnBhC(v::String) = _IfnBhC(v, v)
+_ifn_bh_null_b()::Union{Nothing,_IfnBhB} = nothing
+_ifn_bh_null_c()::Union{Nothing,_IfnBhC} = nothing
+function _ifn_bh_main(n::Int64)
+    one::Union{Nothing,Int64} = n
+    b::Union{Nothing,_IfnBhB} = n == 1 ? _IfnBhB("B") : nothing
+    ints = _dw_facts(@something(one, 2n), @something(one, Some(nothing)), @something(nothing, 2n),
+                     @something(nothing, Some(nothing)))
+    bc = _dw_facts(@something(b, _IfnBhC("C")).a == "B", @something(b, _IfnBhC("C")).b == "B",
+                   _ifn_throws(() -> @something(b, _IfnBhC("C")).c))
+    bnc = _dw_facts((r = @something(b, Some(_ifn_bh_null_c())); r === nothing ? nothing : r.a) == "B",
+                    @something(b, Some(_ifn_bh_null_c())).b == "B", _ifn_throws(() -> @something(b, Some(_ifn_bh_null_c())).c))
+    nbc = _dw_facts(@something(_ifn_bh_null_b(), _IfnBhC("C")).a == "C", _ifn_throws(() -> @something(_ifn_bh_null_b(), _IfnBhC("C")).b),
+                    @something(_ifn_bh_null_b(), _IfnBhC("C")).c == "C")
+    nbnc = _dw_facts(_ifn_throws(() -> @something(_ifn_bh_null_b(), Some(_ifn_bh_null_c())).a),
+                     _ifn_throws(() -> @something(_ifn_bh_null_b(), Some(_ifn_bh_null_c())).b),
+                     _ifn_throws(() -> @something(_ifn_bh_null_b(), Some(_ifn_bh_null_c())).c))
+    return (ints, bc, bnc, nbc, nbnc)
+end
+
+# evaluation_order: e1 is evaluated first, and e2 only when e1 is nothing
+global _ifn_eo_first_executed::Bool = false
+global _ifn_eo_first_seen_by_second::Bool = false
+_ifn_eo_bad() = throw(ErrorException("bad"))
+function _ifn_eo_first()
+    global _ifn_eo_first_executed = true
+    return nothing
+end
+function _ifn_eo_second(n::Int64)
+    global _ifn_eo_first_seen_by_second = _ifn_eo_first_executed
+    return 2n
+end
+function _ifn_eo_main(n::Int64)
+    global _ifn_eo_first_executed = false
+    global _ifn_eo_first_seen_by_second = false
+    one::Union{Nothing,Int64} = n
+    r1 = @something(one, _ifn_eo_bad())
+    r2 = @something(_ifn_eo_first(), _ifn_eo_second(n))
+    return _dw_facts(r1, r2, _ifn_eo_first_seen_by_second)
+end
+
+# precedence: a ?? b ?? c yields the first non-null value; (a ?? b) ? c : d
+function _ifn_pr_main(n::Int64)
+    truth::Any = n == 1
+    one::Any = n
+    two::Any = 2n
+    return _dw_facts(@something(one, two, 3n), @something(nothing, two, 3n), @something(nothing, nothing, 3n),
+                     @something(nothing, nothing, Some(nothing)), @something(truth, 1) ? 2n : 3n)
+end
+
+_g("dart_if_null", Any[
+    ("assignment_behavior_instance", (n::Int64) -> (empty!(_ifn_h_operations);
+        (_ifn_ab_instance_test(_IfnAbC("c"), n), _ifn_ab_derived_instance_test(_IfnAbD("d"), n))), Int64(1)),
+    ("assignment_behavior_static", (n::Int64) -> _ifn_ab_main_static(n), Int64(1)),
+    ("assignment_behavior_receiver", (n::Int64) -> _ifn_ab_main_receiver(n), Int64(1)),
+    ("assignment_static", (n::Int64) -> _ifn_as_main(n), Int64(1)),
+    ("behavior", (n::Int64) -> _ifn_bh_main(n), Int64(1)),
+    ("evaluation_order", (n::Int64) -> _ifn_eo_main(n), Int64(1)),
+    ("precedence", (n::Int64) -> _ifn_pr_main(n), Int64(1)),
+])
