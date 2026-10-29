@@ -97,6 +97,8 @@ queue_native!(label, bytes, f, argsets) =
     # a Julia method has one entry: the multiple-entry paths are WasmTarget's own defect if reached
     @test rejection(() -> D._make_multiple_entry_point(g, true)).rejection isa W.Internal
     @test rejection(() -> D._make_multiple_entry_point_shared_body(g)).rejection isa W.Internal
+    @test rejection(() -> D.setup_parameters_for_checked_entry(g, g.member)).rejection isa W.Internal
+    @test rejection(() -> D.setup_parameters_for_unchecked_entry(g, g.member)).rejection isa W.Internal
     # a function's callee is a singleton: no `this` (dart's static member)
     @test g.this_local === nothing && rejection(() -> D.visit_this(g, IR.NumType_i32)).rejection isa W.Internal
     # the multi-function body: f_add inlined into f_twice, its statements read by SSA
@@ -439,6 +441,16 @@ end
         local routed = emitted_by(() -> D.translate_expression(g, c, w), g)
         @test !isempty(routed) && emitted_by(() -> visitor(g, c, w), g) == routed == emitted_by(() -> D.visit_constant_expression(g, c, w), g)
     end
+end
+
+@testset "code_generator.dart: makeArray over the translator's" begin
+    # an array of expressions takes the translator's mutable array type of its element and its makeArray:
+    # each item translated at the element type (here a boxed Int32's constant), in order, then the array
+    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    local items = W.NirValue[W.NirConst(Core.Const(Int32(1))), W.NirConst(Core.Const(Int32(2)))]
+    local result = nothing
+    local ins = emitted_by(() -> (result = D.make_array_from_expressions(g, items, Int32)), g)
+    @test result isa IR.RefType && length(ins) == 3 && startswith(ins[end], "array.new_fixed")
 end
 
 @testset "code_generator.dart: a PiNode is the unchecked as" begin

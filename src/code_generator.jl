@@ -341,9 +341,13 @@ end
     setup_parameters(self, member; can_safely_omit_implicit_checks = !need_to_check_types_for(self.translator, member))
 end
 
-@parity "dart2wasm/lib/code_generator.dart:443 AstCodeGenerator.setupParametersForCheckedEntry" @unported function setup_parameters_for_checked_entry(self::AstCodeGenerator, member::Core.MethodInstance) end
+# a Julia method has one entry, the normal one (the struct's `kind`): reaching a checked or unchecked
+# entry is WasmTarget's own defect
+@parity "dart2wasm/lib/code_generator.dart:443 AstCodeGenerator.setupParametersForCheckedEntry" setup_parameters_for_checked_entry(self::AstCodeGenerator, member::Core.MethodInstance)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:443 AstCodeGenerator.setupParametersForCheckedEntry: a Julia method has one entry, the normal one"), "$(member)")
 
-@parity "dart2wasm/lib/code_generator.dart:452 AstCodeGenerator.setupParametersForUncheckedEntry" @unported function setup_parameters_for_unchecked_entry(self::AstCodeGenerator, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/code_generator.dart:452 AstCodeGenerator.setupParametersForUncheckedEntry" setup_parameters_for_unchecked_entry(self::AstCodeGenerator, member::Core.MethodInstance)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:452 AstCodeGenerator.setupParametersForUncheckedEntry: a Julia method has one entry, the normal one"), "$(member)")
 
 @parity "dart2wasm/lib/code_generator.dart:461 AstCodeGenerator.setupContexts" function setup_contexts(self::AstCodeGenerator, member::Core.MethodInstance)::Nothing
     allocate_context(self, self.body)
@@ -1128,9 +1132,14 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:3014 AstCodeGenerator.visitListLiteral" @unported function visit_list_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3049 AstCodeGenerator.makeArrayFromExpressions" @unported function make_array_from_expressions(self::AstCodeGenerator, expressions::Vector{NirValue}, element_type::Type) end
+# dart's item index counts from 0, as Translator.makeArray passes it
+@parity "dart2wasm/lib/code_generator.dart:3049 AstCodeGenerator.makeArrayFromExpressions" function make_array_from_expressions(self::AstCodeGenerator, expressions::Vector{NirValue}, element_type::Type)::WasmBuilder.IR.ValueType
+    return make_array(self, array_type_for_dart_type(self.translator, element_type; mutable_ = true), length(expressions),
+        (type_::WasmBuilder.IR.ValueType, i::Int) -> (translate_expression(self, expressions[i + 1], type_); nothing))
+end
 
-@parity "dart2wasm/lib/code_generator.dart:3062 AstCodeGenerator.makeArray" @unported function make_array(self::AstCodeGenerator, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item::Function) end
+@parity "dart2wasm/lib/code_generator.dart:3062 AstCodeGenerator.makeArray" make_array(self::AstCodeGenerator, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item::Function)::WasmBuilder.IR.ValueType =
+    make_array(self.translator, self.b[], array_type, length, generate_item)
 
 @parity "dart2wasm/lib/code_generator.dart:3071 AstCodeGenerator.visitMapLiteral" @unported function visit_map_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
