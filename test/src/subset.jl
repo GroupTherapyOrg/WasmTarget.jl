@@ -82,3 +82,27 @@ end
     # an accepted world keeps the verifier's parents, from which any statement is located
     @test WasmTarget.check_subset(SubsetCases.g, (Int,), "subset").parents isa IdDict
 end
+
+# The entry's specialization (subset.jl's _entry_specialization) is juliac's on 1.13, the compile-hint
+# specialization Base.Experimental.entrypoint takes (jl_get_compile_hint_specialization), and on 1.12
+# compileable_specialization_for_call, the resolver Julia's trim inference and verifier use. Where both
+# exist, 1.13, the two agree on every entry of the corpus, the evidence for the 1.12 arm (A51S4).
+@static if VERSION >= v"1.13-"
+@testset "check_subset: 1.12's entry resolver agrees with juliac's on every corpus entry" begin
+    local groups = let m = Module(:SubsetCorpus), gs = Pair{String,Vector{Any}}[]
+        Core.eval(m, :(_g(name, cases) = push!($gs, name => cases)))
+        Core.eval(m, :(_xf(name, cases) = push!($gs, name => cases)))
+        Base.include(m, joinpath(@__DIR__, "..", "smoke_corpus.jl"))
+        gs
+    end
+    local world = Base.get_world_counter()
+    local disagree = String[]
+    for (g, cs) in groups, c in cs
+        local sig = Base.signature_type(c[2], Tuple(map(typeof, c[3:end])))
+        local hint = ccall(:jl_get_compile_hint_specialization, Any, (Any, Csize_t, Cint), sig, world, 1)
+        local call = Core.Compiler.compileable_specialization_for_call(Core.Compiler.NativeInterpreter(world), sig)
+        hint === call || push!(disagree, "$g/$(c[1])")
+    end
+    @test disagree == String[]
+end
+end
