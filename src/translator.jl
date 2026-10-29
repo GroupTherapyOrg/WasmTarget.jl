@@ -1217,7 +1217,31 @@ end
     return info
 end
 
-@parity "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal" @unported function get_internalized_string_global(self::Translator, module_::WasmBuilder.ModuleBuilder, s::String) end
+"""
+The imported global holding the JS string `s` in `module_`, one per module and string: named by the
+string itself, or, for a string UTF-8 cannot carry, by its index among the strings handed to the JS
+runtime. dart's test is an unpaired UTF-16 surrogate; Julia's String is UTF-8 bytes, which carry
+every code point but may hold bytes that are no UTF-8 (`isvalid`, which also refuses an encoded
+surrogate), the strings UTF-8 cannot carry here.
+"""
+@parity "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal" function get_internalized_string_global(self::Translator, module_::WasmBuilder.ModuleBuilder, s::String)::WasmBuilder.IR.Global
+    local at = "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal"
+    self.options.standalone && reject!(Internal("$at: Standalone mode doesn't have string globals"), at)
+    local existing = get(self._internalized_string_globals, (module_, s), nothing)
+    existing === nothing || return existing
+    local type_ = WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType_extern(; nullable = false); mutable = false)
+    local internalized_string
+    if !isvalid(s)
+        # Bytes UTF-8 cannot carry are imported from the JS runtime.
+        local i = length(self.internalized_strings_for_js_runtime)
+        internalized_string = WasmBuilder.var"import"(module_.globals[], "s", string(i), type_)
+        push!(self.internalized_strings_for_js_runtime, s)
+    else
+        internalized_string = WasmBuilder.var"import"(module_.globals[], "", s, type_)
+    end
+    self._internalized_string_globals[(module_, s)] = internalized_string
+    return internalized_string
+end
 
 @parity "dart2wasm/lib/translator.dart:2534 Translator.pushStandaloneStringConstant" @unported function push_standalone_string_constant(self::Translator, instructions::WasmBuilder.InstructionsBuilder, data::WasmBuilder.DataSegmentBuilder, s::String) end
 

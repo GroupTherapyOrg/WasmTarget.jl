@@ -523,6 +523,13 @@ end
     local f = D.get_dummy_function(D.get_dummy_values_collector_for_module(t, m), W.WasmBuilder.define_function(m.types[], IR.ValueType[], IR.ValueType[]))
     local g = D.make_function_ref(t, f)
     @test g === D.make_function_ref(t, f) && g.type == IR.GlobalType(IR.RefType_def(f.type; nullable = false); mutable = false)
+    # a JS string's global, imported once per module: by the string, or, holding bytes UTF-8 cannot
+    # carry, by its index among the strings handed to the JS runtime
+    local sg = D.get_internalized_string_global(t, m, "hi")
+    @test sg === D.get_internalized_string_global(t, m, "hi") && sg.module_ == "" && sg.name == "hi"
+    local bad = String(UInt8[0xff])
+    local bg = D.get_internalized_string_global(t, m, bad)
+    @test bg.module_ == "s" && bg.name == "0" && t.internalized_strings_for_js_runtime == [bad]
     # a record's class is its own tuple type's, a class of the closed world; one the world lacks rejects
     local er = try; D.get_record_class_info(t, Tuple{Int8,Int8}); nothing; catch x; x; end
     @test er isa W.RejectionError && er.rejection isa W.Internal
