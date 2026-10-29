@@ -892,7 +892,10 @@ end
     return false
 end
 
-@parity "dart2wasm/lib/translator.dart:1064 Translator.isWasmType" @unported function is_wasm_type(self::Translator, cls::DataType) end
+# dart's classes of dart:_wasm, those under its wasm types' base class; Julia's runtime has none of them
+# but the wasm arrays a field's type names (src/julia/wasm_array.jl's WasmArray and ImmutableWasmArray)
+@parity "dart2wasm/lib/translator.dart:1064 Translator.isWasmType" is_wasm_type(self::Translator, cls::DataType)::Bool =
+    cls <: WasmArray || cls <: ImmutableWasmArray
 
 """
 The wasm storage type of a value of the Julia type `type_`, Julia's answers where dart reads a
@@ -995,7 +998,28 @@ info is built.
     return WasmBuilder.IR.RefType_any(; nullable = true)
 end
 
-@parity "dart2wasm/lib/translator.dart:1273 Translator.translateExternalStorageType" @unported function translate_external_storage_type(self::Translator, type_::Type) end
+"""
+The storage type of a Julia type on the interop boundary: a wasm type's builtin representation where it
+has one (a nullable numeric one rejects, located: dart's "Wasm numeric types can't be nullable"),
+else the reference translateExternalType gives. Julia's wasm types, its wasm arrays, have no builtin
+type, so every type takes translateExternalType's, which must be a reference here.
+"""
+@parity "dart2wasm/lib/translator.dart:1273 Translator.translateExternalStorageType" function translate_external_storage_type(self::Translator, type_::Type)::WasmBuilder.IR.StorageType
+    local at = "dart2wasm/lib/translator.dart:1273 Translator.translateExternalStorageType"
+    local is_nullable = Nothing <: type_
+    local cls = is_nullable && type_ isa Union ? Base.nonnothingtype(type_) : type_
+    if cls isa DataType && is_wasm_type(self, cls)
+        local builtin = get(self.builtin_types[], cls, nothing)
+        if builtin !== nothing
+            is_nullable || return builtin
+            WasmBuilder.is_primitive(builtin) && reject!(Internal("$at: Wasm numeric types can't be nullable"), at)
+            return WasmBuilder.with_nullability(builtin::WasmBuilder.IR.RefType, is_nullable)
+        end
+    end
+    local external = translate_external_type(self, type_)
+    external isa WasmBuilder.IR.RefType || reject!(Internal("$at: $type_ crosses the boundary as $external, no reference"), at)
+    return external
+end
 
 """A global holding a reference to `f`, defined once in `f`'s module."""
 @parity "dart2wasm/lib/translator.dart:1290 Translator.makeFunctionRef" function make_function_ref(self::Translator, f::WasmBuilder.IR.BaseFunction)::WasmBuilder.IR.Global

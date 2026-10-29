@@ -247,6 +247,11 @@ end
     local inv = W.NirInvoke(mi, W.NirValue[W.NirConst(Core.Const(ModuleCases.shapes)), W.NirArgument(2)])
     @test D.can_use_unchecked_entry(t, W.NirArgument(2), inv)
     @test D.single_target(t, inv) === mi && D.single_target(t, W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.tuple))])) === nothing
+    # Julia's wasm types are its wasm arrays; at the boundary a reference is translateExternalType's
+    @test D.is_wasm_type(t, W.WasmArray{Int64}) && D.is_wasm_type(t, W.ImmutableWasmArray{Any}) && !D.is_wasm_type(t, Int64)
+    @test D.translate_external_storage_type(t, Any) == IR.RefType_any(; nullable = true)
+    local ex = try; D.translate_external_storage_type(t, Int64); nothing; catch x; x; end
+    @test ex isa W.RejectionError && ex.rejection isa W.Internal
     # a single closure target holds its call target and parameter info
     local sct = D.SingleClosureTarget__(D.direct_call_target(t, mi), D.param_info_for_direct_call(t, mi))
     @test sct.call_target isa D.AstCallTarget && sct.param_info === D.param_info_for_direct_call(t, mi)
