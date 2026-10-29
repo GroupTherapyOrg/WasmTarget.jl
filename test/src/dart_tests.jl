@@ -1049,8 +1049,7 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_setter/checked3" => ((true, true, true), :rejects),
     "dart_setter/checked_setter" => ((true,), :outside),
     "dart_setter/no_getter_call_runtime" => ((4, 6), :outside),
-    # runner gap: its reader is rejected, "translator.dart:1597 Translator.convertType: unported … boxing a i64"
-    "dart_setter/override2" => ((42, 42, 42), :unread),
+    "dart_setter/override2" => ((42, 42, 42), :compiled),
     "dart_setter/override3" => ((42, 21), :compiled),
     "dart_setter/override" => ((42,), :rejects),
     "dart_setter/setter0" => ((10, 30, 20, 20), :rejects),

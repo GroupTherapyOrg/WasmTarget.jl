@@ -76,9 +76,11 @@ _step_ex(e, s::Symbol) = s === :ncu ? :(Int64(ncodeunits($e))) : :(Int64(length(
 _string_step(s) = s === :ncu || (s isa Tuple && s[1] === :cu)
 _on_string(p::Tuple) = any(_string_step, p)
 _string_of(p::Tuple) = p[1:findfirst(_string_step, p)-1]   # the path of the String a leaf reads
-struct Leaves{F,P} <: Function end
-@generated function _pick(x, ::Val{P}, k::Int64) where {P}
-    local at(p) = foldl(_step_ex, p; init = :x)
+# a reader's pick is typeasserted to its leaves' type, native's, so its export returns that type even where the
+# answer holds the leaf as Any (a record of Any fields): an anyref holding a box JS cannot read otherwise
+struct Leaves{F,P,T} <: Function end
+@generated function _pick(x, ::Val{P}, ::Type{T}, k::Int64) where {P,T}
+    local at(p) = :($(foldl(_step_ex, p; init = :x))::$T)
     local ex = at(P[end])
     for i in length(P)-1:-1:1
         ex = :(k == $i ? $(at(P[i])) : $ex)
@@ -86,10 +88,10 @@ struct Leaves{F,P} <: Function end
     return ex
 end
 # fixed arities: compile has no varargs method yet (src/julia/nir.jl rejects one, unported)
-(::Leaves{F,P})(k::Int64) where {F,P} = _pick(F(), Val(P), k)
-(::Leaves{F,P})(a, k::Int64) where {F,P} = _pick(F(a), Val(P), k)
-(::Leaves{F,P})(a, b, k::Int64) where {F,P} = _pick(F(a, b), Val(P), k)
-(::Leaves{F,P})(a, b, c, k::Int64) where {F,P} = _pick(F(a, b, c), Val(P), k)
+(::Leaves{F,P,T})(k::Int64) where {F,P,T} = _pick(F(), Val(P), T, k)
+(::Leaves{F,P,T})(a, k::Int64) where {F,P,T} = _pick(F(a), Val(P), T, k)
+(::Leaves{F,P,T})(a, b, k::Int64) where {F,P,T} = _pick(F(a, b), Val(P), T, k)
+(::Leaves{F,P,T})(a, b, c, k::Int64) where {F,P,T} = _pick(F(a, b, c), Val(P), T, k)
 
 # each leaf's path in a nest of tuples, vectors and Strings, in order
 _leaves(x, p::Tuple = ())::Vector{Tuple} =
@@ -129,7 +131,7 @@ function answer_cases(label::String, compile, f, args::Tuple, native; optimized:
         local reader, why = nothing, ""
         if readable
             try
-                reader = compiled_case(label, compile, Leaves{f,ps}(), (args..., Int64(1)), nothing; optimized)
+                reader = compiled_case(label, compile, Leaves{f,ps,T}(), (args..., Int64(1)), nothing; optimized)
             catch e
                 rejected(e) || rethrow()
                 why = first(sprint(showerror, e), 300)

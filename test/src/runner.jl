@@ -130,8 +130,11 @@ _runner_facts(x::Int64) = (x + 1, (x > 0, x * 2), x < 0)
     local vec = WTR.answer_cases("w", counted, _runner_facts, (Int64(3),), (4, [true, false]))
     @test [c.label for c in vec[2:end]] == ["w(1,)", "w(2, :len)", "w(2, (:ix, 1))", "w(2, (:ix, 2))"]
     @test [c.native for c in vec[2:end]] == Any[4, 2, true, false]
-    @test WTR._pick((4, [true, false]), Val(((2, (:ix, 2)), (2, :len))), Int64(1)) === false &&
-          WTR._pick((4, [true, false]), Val(((2, (:ix, 2)), (2, :len))), Int64(2)) === Int64(2)
+    @test WTR._pick((4, [true, false]), Val(((2, (:ix, 2)),)), Bool, Int64(1)) === false &&
+          WTR._pick((4, [true, false]), Val(((2, :len),)), Int64, Int64(1)) === Int64(2)
+    # the pick is typeasserted to the leaves' type: a leaf held as Any comes back at native's type
+    @test WTR._pick(Any[Int64(5), true], Val((((:ix, 1),),)), Int64, Int64(1)) === Int64(5)
+    @test_throws TypeError WTR._pick(Any[true], Val((((:ix, 1),),)), Int64, Int64(1))
     # a String is read as its ncodeunits and each codeunit; while its reader is rejected (Unported), the String
     # is one case the runner does not read, "marshals no String", never a failure of WT's
     local sc = WTR.answer_cases("s", counted, _runner_facts, (Int64(3),), (4, "ab"))
