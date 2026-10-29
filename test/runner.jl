@@ -59,9 +59,17 @@ end
 # leaf type, its index chain over the leaves' paths spelt out by Julia's own @generated. The facts are
 # then compared one by one in Julia, so a wrong one names itself. The precedent is dart's own test:
 # its main reads the facts it asserts inside the program (Expect), dart2wasm's JS host reading none.
+# A vector inside the answer is read the same way: its length a leaf, each element a leaf (or a nest).
+# A path's steps: an Int, a tuple's field; (:ix, i), a vector's element; :len, a vector's length.
+_step(x, i::Int) = getfield(x, i)
+_step(x, s::Tuple{Symbol,Int}) = x[s[2]]
+_step(x, ::Symbol) = Int64(length(x))
+_step_ex(e, i::Int) = :(getfield($e, $i))
+_step_ex(e, s::Tuple{Symbol,Int}) = :(getindex($e, $(s[2])))
+_step_ex(e, ::Symbol) = :(Int64(length($e)))
 struct Leaves{F,P} <: Function end
 @generated function _pick(x, ::Val{P}, k::Int64) where {P}
-    local at(p) = foldl((e, i) -> :(getfield($e, $i)), p; init = :x)
+    local at(p) = foldl(_step_ex, p; init = :x)
     local ex = at(P[end])
     for i in length(P)-1:-1:1
         ex = :(k == $i ? $(at(P[i])) : $ex)
@@ -74,22 +82,24 @@ end
 (::Leaves{F,P})(a, b, k::Int64) where {F,P} = _pick(F(a, b), Val(P), k)
 (::Leaves{F,P})(a, b, c, k::Int64) where {F,P} = _pick(F(a, b, c), Val(P), k)
 
-# each leaf's path in a nest of tuples, in order
+# each leaf's path in a nest of tuples and vectors, in order
 _leaves(x, p::Tuple = ())::Vector{Tuple} =
-    x isa Tuple ? reduce(vcat, (_leaves(y, (p..., i)) for (i, y) in enumerate(x)); init = Tuple[]) : Tuple[p]
+    x isa Tuple ? reduce(vcat, (_leaves(y, (p..., i)) for (i, y) in enumerate(x)); init = Tuple[]) :
+    x isa Vector ? reduce(vcat, (_leaves(y, (p..., (:ix, i))) for (i, y) in enumerate(x)); init = Tuple[(p..., :len)]) :
+    Tuple[p]
 
 """
     answer_cases(label, compile, f, args, native; optimized = true) -> Vector{RunCase}
 
 The cases that read `f(args...)`'s answer from wasm: `f`'s own modules when the answer is one value;
-for a tuple, one reader per leaf type, each leaf a case of its reader labelled by its path. A leaf no
+for a tuple or a vector, one reader per leaf type, each leaf a case of its reader labelled by its path. A leaf no
 reader can read (a type the runner does not marshal, or a case of more than 3 arguments) is a case
 with no module, which run_cases fails, naming why.
 """
 function answer_cases(label::String, compile, f, args::Tuple, native; optimized::Bool = true)::Vector{RunCase}
-    native isa Tuple && !isempty(native) || return [compiled_case(label, compile, f, args, native; optimized)]
+    (native isa Tuple && !isempty(native)) || native isa Vector || return [compiled_case(label, compile, f, args, native; optimized)]
     local paths = _leaves(native)
-    local leaf(p) = foldl(getfield, p; init = native)
+    local leaf(p) = foldl(_step, p; init = native)
     local out = RunCase[]
     for T in unique(map(p -> typeof(leaf(p)), paths))
         local ps = Tuple(filter(p -> typeof(leaf(p)) === T, paths))

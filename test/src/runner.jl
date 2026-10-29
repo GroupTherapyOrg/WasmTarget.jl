@@ -97,6 +97,12 @@ _runner_facts(x::Int64) = (x + 1, (x > 0, x * 2), x < 0)
     # a leaf of a singleton type crosses as "void": its call returns, its type its value
     local v = WTR.answer_cases("v", counted, _runner_facts, (Int64(3),), (4, nothing))
     @test [c.label for c in v] == ["v(1,)", "v(2,)"] && WTR._wire_answer(nothing) == ("void", "-") && WTR._unwire(Nothing, "-") === nothing
+    # a vector inside the answer: its length a leaf, each element a leaf, read by getindex
+    local vec = WTR.answer_cases("w", counted, _runner_facts, (Int64(3),), (4, [true, false]))
+    @test [c.label for c in vec] == ["w(1,)", "w(2, :len)", "w(2, (:ix, 1))", "w(2, (:ix, 2))"]
+    @test [c.native for c in vec] == Any[4, 2, true, false]
+    @test WTR._pick((4, [true, false]), Val(((2, (:ix, 2)), (2, :len))), Int64(1)) === false &&
+          WTR._pick((4, [true, false]), Val(((2, (:ix, 2)), (2, :len))), Int64(2)) === Int64(2)
     # a leaf of a type the runner does not marshal has no reader and fails, named
     @test isempty(cs[5].bytes) && occursin("marshals no String", WTR.run_cases(cs[5:5])[1].why)
 end
