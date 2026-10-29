@@ -73,7 +73,7 @@
 (* Julia's first block), and reducible (FixIrreducibleControlFlow makes    *)
 (* it so; its own model is separate). A block's body is one instruction    *)
 (* that is not a stackified child, so no expression tree moves a marker.   *)
-(* No EH pads: try_table placement extends the model when it is ported.    *)
+(* No EH pads here: CFGStackifyEH.tla extends the model to them.          *)
 (* Block types (fixEndsAtEndOfFunction) are not control flow.              *)
 (*                                                                         *)
 (* formal(src/llvm/cfg_sort.jl sort_blocks, src/llvm/cfg_stackify.jl       *)
