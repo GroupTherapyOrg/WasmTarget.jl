@@ -36,6 +36,8 @@ only, one per parameter, and a `NamedTuple` type has named ones only, its names 
 RecordShape sorts the names and keeps each one's index, so a name's index is its field's place. A
 tuple type whose length or names Julia leaves open (`Tuple{Vararg{Int}}`, `NamedTuple{N,T} where N`)
 has no shape, and it rejects, located.
+
+formal(dev/formal/RecordLayout.tla): a name's index is its declared place, == exactly when the indices agree, an open type rejected
 """
 @parity "dart2wasm/lib/records.dart:36 RecordShape.fromType" function RecordShape_from_type(record_type::Type)::RecordShape
     if record_type isa DataType && record_type <: NamedTuple && record_type.parameters[1] isa Tuple{Vararg{Symbol}}
