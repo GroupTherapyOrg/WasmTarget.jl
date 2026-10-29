@@ -160,6 +160,11 @@ struct _DagHashNode; a::Any; b::Any; end
     @test WasmTarget.NirConst(Core.Const(Int32(3))) != WasmTarget.NirConst(Core.Const(Int64(3)))
     # same-type structured literals hash apart by their values, so a cache of N of them stays linear
     @test length(Set(hash(WasmTarget.NirConst(Core.Const((i, "x")))) for i in 1:100)) == 100
+    # a mutable leaf hashes by its address: a vector holding itself hashes, and mutating it keeps its hash
+    local selfref = Any[1]; push!(selfref, selfref)
+    local ks = WasmTarget.NirConst(Core.Const((selfref, 1)))
+    local h0 = hash(ks); push!(selfref, 2)
+    @test hash(ks) == h0
 end
 
 module ConstantsRest

@@ -35,12 +35,15 @@ end
 # walks a structured immutable's fields depth first, in field order, over at most 64 values: equal (===) literals take the same walk, so the hash agrees with ===, its cost is bounded
 # whatever the sharing, and same-type literals that differ in their first values hash apart (a hash
 # by the type alone made N of them collide, the cache quadratic, A51S13). A value Julia stores flat
-# (isbits), a String, Symbol or Type, or a mutable object (hashed by its address) is hashed itself.
+# (isbits), a String, Symbol or Type is hashed itself, and a mutable object by its address (objectid).
 @quarantine "a literal's hash agrees with === at a bounded cost: Julia's objectid recurses through every path of an immutable value" Base.hash Base.hash(c::NirConst, h::UInt)::UInt = _bounded_hash(c.c.val, h, Ref(64))
 
 @quarantine "an immutable value's hash over its first values, depth first, at most a fixed count of them" Base.hash function _bounded_hash(@nospecialize(v), h::UInt, budget::Base.RefValue{Int})::UInt
     budget[] -= 1
-    (isbits(v) || v isa Union{String,Symbol,Type} || ismutable(v)) && return hash(v, h)
+    (isbits(v) || v isa Union{String,Symbol,Type}) && return hash(v, h)
+    # a mutable object is told by its address, as === tells it, never its contents (which change, and
+    # may contain the object itself)
+    ismutable(v) && return hash(objectid(v), h)
     h = hash(typeof(v), h)
     for i in 1:nfields(v)
         budget[] <= 0 && break
