@@ -126,6 +126,15 @@ end
         # a symbol holds its name, a String, and a module its name, a Symbol, outside Julia's fields
         # (_symbol_instance_fields, _module_instance_fields)
         foreach(f -> _meet_value!(out, seen, f.type, at), class_instance_fields(t, at))
+    elseif t <: Core.GenericMemory
+        # a memory holds its length and its elements, each a value of its element type when the
+        # elements are boxed (_memory_instance_fields)
+        _meet_value!(out, seen, Int, at)
+        local e = _memory_element_storage(t.parameters[2], at)
+        e isa Union && _meet_value!(out, seen, e, at)
+    elseif t <: Core.GenericMemoryRef
+        # a memory reference holds its offset and its memory (_memoryref_instance_fields)
+        foreach(f -> _meet_value!(out, seen, f.type, at), class_instance_fields(t, at))
     elseif isconcretetype(t)
         foreach(f -> _meet_value!(out, seen, f, at), fieldtypes(t))
     end
@@ -220,6 +229,8 @@ written.
         ismutabletype(c) && return ClassField[]
         reject!(Unquarantined("src/julia/classes.jl class_instance_fields: $c, whose data Julia holds outside its fields"), at)
     end
+    c <: Core.GenericMemory && return _memory_instance_fields(c, at)
+    c <: Core.GenericMemoryRef && return _memoryref_instance_fields(c, at)
     return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
 end
 
@@ -349,6 +360,80 @@ which an object per constant symbol keeps (each symbol constant one instance).
 @quarantine "a Symbol's data lies outside its fields (Julia's jl_sym_t, jl_symbol_name), its name one String as dart's Symbol._name" Core.Symbol function _symbol_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c === Symbol || reject!(Internal("src/julia/classes.jl _symbol_instance_fields: $c, no Symbol"), at)
     return ClassField[ClassField(c, 0, "_name", String, false)]
+end
+
+"""
+    _memory_element_storage(T, at) -> Type
+
+The element type of the wasm array a `Memory{T}` holds its elements in, by Julia's layout of `T`
+(`Base.allocatedinline`, `sizeof`): a primitive element is stored unboxed, dart:_wasm's storage
+class of its size (src/julia/wasm_array.jl), a float as WasmF32 or WasmF64 and any other as WasmI8,
+WasmI32 or WasmI64 (a 16-bit element waits for dart's WasmI16, rejected, located, until it is defined); every other element is stored boxed, `Union{T,Nothing}`, a nullable
+reference to its class (the top type for `Any`), null an element no write has set (#undef).
+
+Reshaped: `T` — an element type Julia stores inline as a union of bits types (`Union{Nothing,Int}`,
+allocatedinline, its selector bytes after the data, genericmemory.c `jl_genericmemory_typetagdata`)
+is stored boxed, its answers the same, as is an inline struct of bits, whose class a box holds.
+"""
+@quarantine "a Memory's element storage is Julia's layout of its element type: inline bits by size, else a reference" Base.isprimitivetype function _memory_element_storage(@nospecialize(T), at::String)::Type
+    if T isa DataType && isprimitivetype(T)
+        local n = sizeof(T)
+        T <: AbstractFloat && n == 4 && return WasmF32
+        T <: AbstractFloat && n == 8 && return WasmF64
+        !(T <: AbstractFloat) && n == 1 && return WasmI8
+        !(T <: AbstractFloat) && n == 4 && return WasmI32
+        !(T <: AbstractFloat) && n == 8 && return WasmI64
+        reject!(Unquarantined("src/julia/classes.jl _memory_element_storage: the primitive element type $T, $n bytes, with no wasm storage class"), at)
+    end
+    return Union{T,Nothing}
+end
+
+"""
+    _memory_instance_fields(c, at) -> Vector{ClassField}
+
+The fields of a `Memory{T}` (`GenericMemory{:not_atomic,T,Core.CPU}`), whose elements Julia holds
+outside its fields: `data`, the elements as one mutable wasm array (`WasmArray` of
+`_memory_element_storage(T)`), at index 0, and Julia's own `length`, an `Int`, at its index 1, both
+immutable. Julia's layout (julia.h `jl_genericmemory_t` at v1.12.7): `length`, then `ptr`, the
+address of the elements stored inline after it. `ptr` is left out: a host address, read only through
+`pointer` and `unsafe_load`, foreigncalls the strict subset rejects; the elements are the array.
+Only `memorynew` writes `data` and `length`, `length` the array's length, and no setter exists for
+either, so the two cannot diverge (D6). Julia leaves an undefined bits element's contents
+unspecified, so the zero a new wasm array holds is one of Julia's own values, never a default past
+a gap (D9). An atomic memory (`AtomicMemory`) or another address space rejects, located: threads lie
+outside the strict subset.
+
+precedent(dart: list.dart:15 WasmListBase, its `WasmArray<Object?> _data` beside `int _length`;
+Julia's jl_genericmemory_t, its length beside its inline data). Julia's differs: a Memory is an
+object of its own class (it flows into `Any`), so the array sits in a field of its struct, as a
+SimpleVector's does (`_svec_instance_fields`).
+"""
+@quarantine "a Memory's elements lie outside its fields: Julia's jl_genericmemory_t, its length beside its inline data" Core.GenericMemory function _memory_instance_fields(c::DataType, at::String)::Vector{ClassField}
+    c <: Core.GenericMemory || reject!(Internal("src/julia/classes.jl _memory_instance_fields: $c, no GenericMemory"), at)
+    c.parameters[1] === :not_atomic && c.parameters[3] === Core.CPU ||
+        reject!(Unquarantined("src/julia/classes.jl _memory_instance_fields: $c, an atomic memory or one of another address space"), at)
+    return ClassField[ClassField(c, 0, "data", WasmArray{_memory_element_storage(c.parameters[2], at)}, false),
+                      ClassField(c, Base.fieldindex(c, :length), "length", fieldtype(c, :length), false)]
+end
+
+"""
+    _memoryref_instance_fields(c, at) -> Vector{ClassField}
+
+The fields of a `MemoryRef{T}` (`GenericMemoryRef{:not_atomic,T,Core.CPU}`), immutable: Julia's own
+`ptr_or_offset` and `mem`, at Julia's indices 1 and 2, the offset an `Int`, the element's index in
+`mem` from 0, and `mem` its `Memory{T}`.
+
+Reshaped: `ptr_or_offset` — Julia's field is a `Ptr{Nothing}`, the element's address, or, for a
+memory of union or zero-size elements, its index from 0 (genericmemory.c, `jl_memoryrefoffset`
+answering `ptr_or_offset + 1`); a wasm array has no addresses, so the index form, Julia's own, is
+the only one.
+"""
+@quarantine "a MemoryRef is Julia's element address or index beside its memory; a wasm array has no addresses, so the index" Core.GenericMemoryRef function _memoryref_instance_fields(c::DataType, at::String)::Vector{ClassField}
+    c <: Core.GenericMemoryRef || reject!(Internal("src/julia/classes.jl _memoryref_instance_fields: $c, no GenericMemoryRef"), at)
+    c.parameters[1] === :not_atomic && c.parameters[3] === Core.CPU ||
+        reject!(Unquarantined("src/julia/classes.jl _memoryref_instance_fields: $c, an atomic memory reference or one of another address space"), at)
+    return ClassField[ClassField(c, Base.fieldindex(c, :ptr_or_offset), "ptr_or_offset", Int, false),
+                      ClassField(c, Base.fieldindex(c, :mem), "mem", fieldtype(c, :mem), false)]
 end
 
 """

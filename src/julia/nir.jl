@@ -737,8 +737,9 @@ end
     _builtin_name_operands(f) -> Tuple{Vararg{Int}}
 
 The positions, counted after the callee, at which the Core builtin `f` takes a name rather than data:
-a field's (its name or index), a module binding's (the module and the name together) or a memory
-ordering's, each the parameter of that name in the
+a field's (its name or index), a module binding's (the module and the name together), a memory
+ordering's, or the class an allocation makes (memorynew's memory type, as `%new`'s type is its class,
+never a value: `memorynew_tfunc(𝕃, memtype, m)`), each the parameter of that name in the
 builtin's tfunc (Compiler/src/tfuncs.jl: `getfield_tfunc(𝕃, s00, name, order, boundscheck)`,
 `setfield!_tfunc(𝕃, o, f, v, order)`, `memoryrefget_tfunc(𝕃, mem, order, boundscheck)`,
 `atomic_pointerreplace_tfunc(𝕃, ptr, x, v, success_order, failure_order)`, ...; the global
@@ -763,6 +764,7 @@ function (Base's getproperty among them, left unresolved) passes each argument a
     f === Core.replaceglobal! && return (1, 2, 5, 6)
     f === Core.setglobalonce! && return (1, 2, 4, 5)
     f === Core.get_binding_type && return (1, 2)
+    f === Core.memorynew && return (1,)
     f === Core.memoryrefget && return (2,)
     f === Core.memoryrefset! && return (3,)
     f === Core.memoryref_isassigned && return (2,)

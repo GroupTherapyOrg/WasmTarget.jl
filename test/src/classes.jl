@@ -199,3 +199,37 @@ end
     local ps = _classes(ConstantGraphCases.params, ())
     @test DataType in ps && Core.SimpleVector in ps && Int8 in ps && String in ps
 end
+
+module MemoryCases
+alloc(n::Int) = Vector{Int}(undef, n)
+names(n::Int) = Vector{String}(undef, n)
+end
+
+@testset "a Memory is its elements in one wasm array and Julia's length; a MemoryRef its index and memory" begin
+    local M, R = Memory{Int}, Core.MemoryRef{Int}
+    # Julia's layout: length and ptr, the elements inline after them; ptr_or_offset and mem
+    @test fieldnames(M) == (:length, :ptr) && fieldnames(R) == (:ptr_or_offset, :mem)
+    # the elements one array of their storage class (an Int64 unboxed, a String a nullable reference),
+    # Julia's own length beside it, ptr left out; the reference's offset an index, then its memory
+    @test W.class_instance_fields(M, "classes") == [W.ClassField(M, 0, "data", W.WasmArray{W.WasmI64}, false), W.ClassField(M, 1, "length", Int, false)]
+    @test W.class_instance_fields(Memory{String}, "classes")[1].type === W.WasmArray{Union{String,Nothing}}
+    @test W.class_instance_fields(Memory{Float64}, "classes")[1].type === W.WasmArray{W.WasmF64}
+    @test W.class_instance_fields(Memory{Bool}, "classes")[1].type === W.WasmArray{W.WasmI8}
+    @test W.class_instance_fields(R, "classes") == [W.ClassField(R, 1, "ptr_or_offset", Int, false), W.ClassField(R, 2, "mem", M, false)]
+    # an atomic memory, a primitive with no storage class: located rejections
+    local e = try; W.class_instance_fields(AtomicMemory{Int}, "classes"); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unquarantined
+    local e2 = try; W.class_instance_fields(Memory{Int128}, "classes"); nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Unquarantined
+    # a Vector's own fields, its MemoryRef and its size, bring the memory and the reference
+    local cs = _classes(MemoryCases.alloc, (Int,))
+    @test Vector{Int} in cs && R in cs && M in cs && !(Ptr{Nothing} in cs)
+    @test String in _classes(MemoryCases.names, (Int,))
+    # class_info.dart's collector lays each out: the memory's struct, the header, then data and length
+    local D = W.Dart2Wasm
+    local t = D.Translator(W.build_nir(W.check_subset(MemoryCases.alloc, (Int,), "classes"), "classes"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    @test haskey(t.class_info, M) && haskey(t.class_info, R) && haskey(t.class_info, Vector{Int})
+end
