@@ -258,12 +258,13 @@ end
 The code generator of a static field's initializer function: `field`, a Julia binding (its
 GlobalRef, the Kernel table's static field), which dart's AstCodeGenerator takes as the enclosing
 member. It holds AstCodeGenerator's fields as SynchronousProcedureCodeGenerator does (whose docstring
-names the ones Julia answers instead of storing), the enclosing member a MethodInstance or a binding.
+names the ones Julia answers instead of storing), the enclosing member the field's initializer reference, a
+FieldReference (A62S1).
 """
 @parity "dart2wasm/lib/code_generator.dart:4851 StaticFieldInitializerCodeGenerator" mutable struct StaticFieldInitializerCodeGenerator <: AstCodeGenerator
     const translator::Translator
     const function_type::WasmBuilder.IR.FunctionType
-    const enclosing_member::Union{Core.MethodInstance,GlobalRef}
+    const enclosing_member::FieldReference
     const b::Late{WasmBuilder.InstructionsBuilder}
     const param_locals::Late{Vector{WasmBuilder.IR.Local}}
     const return_label::Late{Union{Nothing,WasmBuilder.Label}}
@@ -284,7 +285,7 @@ names the ones Julia answers instead of storing), the enclosing member a MethodI
     # (code_generator.dart:67 to :160); dart's constructor is its outer function
     function StaticFieldInitializerCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::GlobalRef)
         local self
-        self = new(translator, function_type, field,
+        self = new(translator, function_type, FieldReference(field, FieldReferenceKind_initializer),
             Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
             Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
             Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
@@ -301,15 +302,15 @@ end
 """
 The code generator that initializes a static field eagerly in the module's start function:
 `field`, a Julia binding (its GlobalRef), and `global_`, the wasm global it writes. It holds
-AstCodeGenerator's fields as SynchronousProcedureCodeGenerator does, the enclosing member a
-MethodInstance or a binding. No value of it exists: dart makes it only for a field the startup
+AstCodeGenerator's fields as SynchronousProcedureCodeGenerator does, the enclosing member the
+field's initializer reference (A62S1). No value of it exists: dart makes it only for a field the startup
 pragma marks (DartGlobals._initializeAtStartup), which no Julia binding carries; its constructor
 (:4894), its outer function, rejects Internal, and so does its one inner constructor.
 """
 @parity "dart2wasm/lib/code_generator.dart:4890 EagerStaticFieldInitializerCodeGenerator" mutable struct EagerStaticFieldInitializerCodeGenerator <: AstCodeGenerator
     const translator::Translator
     const function_type::WasmBuilder.IR.FunctionType
-    const enclosing_member::Union{Core.MethodInstance,GlobalRef}
+    const enclosing_member::FieldReference
     const b::Late{WasmBuilder.InstructionsBuilder}
     const param_locals::Late{Vector{WasmBuilder.IR.Local}}
     const return_label::Late{Union{Nothing,WasmBuilder.Label}}
@@ -334,12 +335,12 @@ end
 """
 The code generator of a static field's implicit getter or setter: `field`, a Julia binding (its
 GlobalRef), and `is_implicit_getter`. It holds AstCodeGenerator's fields as
-SynchronousProcedureCodeGenerator does, the enclosing member a MethodInstance or a binding.
+SynchronousProcedureCodeGenerator does, the enclosing member the accessor's FieldReference (A62S1).
 """
 @parity "dart2wasm/lib/code_generator.dart:4910 StaticFieldImplicitAccessorCodeGenerator" mutable struct StaticFieldImplicitAccessorCodeGenerator <: AstCodeGenerator
     const translator::Translator
     const function_type::WasmBuilder.IR.FunctionType
-    const enclosing_member::Union{Core.MethodInstance,GlobalRef}
+    const enclosing_member::FieldReference
     const b::Late{WasmBuilder.InstructionsBuilder}
     const param_locals::Late{Vector{WasmBuilder.IR.Local}}
     const return_label::Late{Union{Nothing,WasmBuilder.Label}}
@@ -361,7 +362,7 @@ SynchronousProcedureCodeGenerator does, the enclosing member a MethodInstance or
     # (code_generator.dart:67 to :160); dart's constructor is its outer function
     function StaticFieldImplicitAccessorCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::GlobalRef, is_implicit_getter::Bool)
         local self
-        self = new(translator, function_type, field,
+        self = new(translator, function_type, FieldReference(field, is_implicit_getter ? FieldReferenceKind_getter : FieldReferenceKind_setter),
             Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
             Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
             Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
@@ -379,7 +380,8 @@ end
 The code generator of an instance field's implicit getter or setter: `field`, the class's field,
 `is_implicit_getter`, and `use_unchecked_entry`, always false (Julia checks no covariant value). It
 holds AstCodeGenerator's fields as SynchronousProcedureCodeGenerator does (whose docstring names the
-ones Julia answers instead of storing), the enclosing member the field, as dart passes it. Julia
+ones Julia answers instead of storing), the enclosing member the accessor's FieldReference, the
+Kernel Reference of the field dart passes (A62S1). Julia
 reads and writes a field with getfield and setfield!, which the code generator lowers in place when
 Julia inferred the receiver's class; this accessor is the target of a field selector, through which
 a field access on a receiver Julia left abstract is dispatched (_virtualCall).
@@ -387,7 +389,7 @@ a field access on a receiver Julia left abstract is dispatched (_virtualCall).
 @parity "dart2wasm/lib/code_generator.dart:4981 ImplicitFieldAccessorCodeGenerator" mutable struct ImplicitFieldAccessorCodeGenerator <: AstCodeGenerator
     const translator::Translator
     const function_type::WasmBuilder.IR.FunctionType
-    const enclosing_member::ClassField
+    const enclosing_member::FieldReference
     const b::Late{WasmBuilder.InstructionsBuilder}
     const param_locals::Late{Vector{WasmBuilder.IR.Local}}
     const return_label::Late{Union{Nothing,WasmBuilder.Label}}
@@ -410,7 +412,7 @@ a field access on a receiver Julia left abstract is dispatched (_virtualCall).
     # (code_generator.dart:67 to :160); dart's constructor at :4986 is its outer function
     function ImplicitFieldAccessorCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::ClassField, is_implicit_getter::Bool, use_unchecked_entry::Bool)
         local self
-        self = new(translator, function_type, field,
+        self = new(translator, function_type, FieldReference(field, is_implicit_getter ? FieldReferenceKind_getter : FieldReferenceKind_setter),
             Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
             Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
             Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),

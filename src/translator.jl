@@ -154,7 +154,7 @@ the translator holds each collaborator.
     _declared_field_tables::Dict{ClassField,WasmBuilder.IR.AbstractTable}
     _imported_field_tables::Late{WasmTableImporter}
     members_containing_inner_functions::Base.IdSet{Core.MethodInstance}
-    members_being_generated::Base.IdSet{Union{Core.MethodInstance,ClassField,GlobalRef}}
+    members_being_generated::Base.IdSet{Reference}
     constructor_closures::IdDict{Core.MethodInstance,Closures}
     constructor_info::IdDict{Core.MethodInstance,ConstructorInfo}
     void_marker::Late{WasmBuilder.IR.ValueType}
@@ -240,7 +240,7 @@ the translator holds each collaborator.
             IdDict{Core.MethodInstance,ParameterInfo}(), Dict{ClassField,WasmBuilder.IR.AbstractTable}(),
             Late{WasmTableImporter}("dart2wasm/lib/translator.dart:198 Translator._importedFieldTables",
                 () -> WasmTableImporter(self, "fieldTable")),
-            Base.IdSet{Core.MethodInstance}(), Base.IdSet{Union{Core.MethodInstance,ClassField,GlobalRef}}(),
+            Base.IdSet{Core.MethodInstance}(), Base.IdSet{Reference}(),
             IdDict{Core.MethodInstance,Closures}(), IdDict{Core.MethodInstance,ConstructorInfo}(),
             Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/translator.dart:206 Translator.voidMarker",
                 () -> WasmBuilder.IR.RefType_def(WasmBuilder.IR.StructType("void"); nullable = true)),
@@ -1434,15 +1434,11 @@ dart's throwing function.
 end
 
 # dart refuses a member with inner functions (a Julia closure is a method of its own), one being
-# generated (recursive inlining), and an asynchronous one (tasks are outside the subset); a field's
-# accessor is its field's, a member as dart's Field is
+# generated (recursive inlining), and an asynchronous one (tasks are outside the subset); a code
+# generator's member is its Reference, a field's accessor its FieldReference (A62S1)
 @parity "dart2wasm/lib/translator.dart:2400 Translator.supportsInlining" function supports_inlining(self::Translator, target::Reference)::Bool
-    local member = @exhaustive target::Reference begin
-        (m::MethodInstance) => m
-        (r::FieldReference) => r.field
-    end
     # Guard against recursive inlining.
-    member in self.members_being_generated && return false
+    target in self.members_being_generated && return false
     return true
 end
 

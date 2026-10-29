@@ -556,7 +556,7 @@ end
     # the field's initializer reference: getMemberCodeGenerator gives its generator
     local mb = D.main_module(t)
     local gm = D.get_member_code_generator(t, W.WasmBuilder.define(mb.functions[], ftype, "init"), init_ref)
-    @test gm isa D.StaticFieldInitializerCodeGenerator && gm.field === counter && gm.enclosing_member === counter
+    @test gm isa D.StaticFieldInitializerCodeGenerator && gm.field === counter && gm.enclosing_member === init_ref
     # the lazy arm's definition (a mutable global and its flag, made through FunctionCollector.getFunction):
     # the body writes the binding's session value, tees it, sets the flag and returns the value
     local g = static_field_codegen(D.StaticFieldInitializerCodeGenerator, t, ftype)
@@ -594,7 +594,7 @@ end
         g
     end
     local g0 = acc(counter, getter, true)
-    @test g0.enclosing_member === counter && g0.is_implicit_getter
+    @test g0.enclosing_member === D.FieldReference(counter, D.FieldReferenceKind_getter) && g0.is_implicit_getter
     # the lazy arm's definition, made through getFunction in a translator of its own: an explicit flag
     # picks the global or the initializer's call
     let t0 = static_field_translator(), fb = B.define(D.main_module(t0).functions[], getter, "acc0"),
@@ -677,7 +677,7 @@ end
         g
     end
     local gg = acc(getter, fg)
-    @test gg isa D.ImplicitFieldAccessorCodeGenerator && gg.is_implicit_getter && !gg.use_unchecked_entry && gg.enclosing_member === cf
+    @test gg isa D.ImplicitFieldAccessorCodeGenerator && gg.is_implicit_getter && !gg.use_unchecked_entry && gg.enclosing_member === getter
     @test emitted_by(() -> D.generate_internal(gg), gg) == ["local.get", "struct.get", "end"]
     local gs = acc(setter, fs)
     @test emitted_by(() -> D.generate_internal(gs), gs) == ["local.get", "local.get", "struct.set", "end"]
