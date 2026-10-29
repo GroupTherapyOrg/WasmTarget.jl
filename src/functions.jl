@@ -21,7 +21,7 @@ a field's implicit getter or setter).
     _called_unchecked_selectors::Set{Int}
     _called_dynamic_selectors::Set{CallShape}
     _allocated_classes::Set{Int}
-    _pending_allocation::Dict{Int,Vector{Core.MethodInstance}}
+    _pending_allocation::Dict{Int,Vector{Reference}}
     _pending_allocation_dynamic::Dict{Int,Vector{Tuple{CallShape,Core.MethodInstance}}}
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at :44
     # is its outer function
@@ -29,7 +29,7 @@ a field's implicit getter or setter).
         new(translator, LinkedHashMap{Reference,WasmBuilder.IR.BaseFunction}(),
             LinkedHashMap{Core.MethodInstance,LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}}(),
             LinkedHashMap{CallShape,WasmBuilder.IR.BaseFunction}(), LinkedHashMap{Lambda,WasmBuilder.IR.BaseFunction}(),
-            Set{Int}(), Set{Int}(), Set{CallShape}(), Set{Int}(), Dict{Int,Vector{Core.MethodInstance}}(),
+            Set{Int}(), Set{Int}(), Set{CallShape}(), Set{Int}(), Dict{Int,Vector{Reference}}(),
             Dict{Int,Vector{Tuple{CallShape,Core.MethodInstance}}}())
 end
 
@@ -371,13 +371,13 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/functions.dart:413 FunctionCollector.recordClassTargetUse" function record_class_target_use(self::FunctionCollector, class_id::Int64, target::Core.MethodInstance)::Nothing
+@parity "dart2wasm/lib/functions.dart:413 FunctionCollector.recordClassTargetUse" function record_class_target_use(self::FunctionCollector, class_id::Int64, target::Reference)::Nothing
     if class_id in self._allocated_classes
         # Class declaring or inheriting member is allocated somewhere.
         get_function(self, target)
     else
         # Remember the member in case an allocation is encountered later.
-        push!(get!(() -> Core.MethodInstance[], self._pending_allocation, class_id), target)
+        push!(get!(() -> Reference[], self._pending_allocation, class_id), target)
     end
     return nothing
 end
@@ -405,7 +405,7 @@ end
     class_id in self._allocated_classes && return nothing
     push!(self._allocated_classes, class_id)
     # Schedule all members that were pending allocation of this class.
-    for target in get(self._pending_allocation, class_id, Core.MethodInstance[])
+    for target in get(self._pending_allocation, class_id, Reference[])
         get_function(self, target)
     end
     for (shape, target) in get(self._pending_allocation_dynamic, class_id, Tuple{CallShape,Core.MethodInstance}[])

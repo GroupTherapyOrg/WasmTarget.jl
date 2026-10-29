@@ -146,7 +146,7 @@ end
     local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
     local t = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
     DD._init_modules(t, nothing)
-    collect(DD.ClassInfoCollector(t))
+    collect(t.closure_layouter[]); collect(t.class_info_collector[])
     # Julia's IR reads both fields on an S, each one call of its getter selector
     local calls = W.field_selector_calls(t.component, DataType[F.A, F.B, F.Holder])
     @test Set((c.name, c.is_setter, c.call_count, Set(c.classes)) for c in calls) == Set([("side", false, 1, Set([F.A, F.B])), ("tag", false, 1, Set([F.A, F.B]))])
@@ -171,6 +171,17 @@ end
         end
     end
     @test count(!isnothing, dt._table[]) == 4
+    # callDispatchTable: the receiver's class id plus the offset indexes the table, its entry called
+    # at the selector's signature; a direct call of an accessor the selector holds takes that signature
+    local side = DD.selector_for_target(dt, getter(F.A, "side"))
+    local sig = side.signature[]
+    @test DD.signature_for_direct_call(t, getter(F.B, "side")) === sig
+    local b = W.WasmBuilder.InstructionsBuilder(DD.main_module(t), sig.inputs, sig.outputs)
+    # the call's receiver, then the receiver again, whose class id loadClassId reads
+    W.WasmBuilder.local_get(b, b.locals[1]); W.WasmBuilder.local_get(b, b.locals[1])
+    @test DD.call_dispatch_table(t, b, side; use_unchecked_entry = false) === nothing
+    local ops = [nameof(typeof(i)) for i in b._instructions]
+    @test :CallIndirect in ops
     # a method is no instance member: no selector
     local e = try; DD.selector_for_target(dt, t.component.entry); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal

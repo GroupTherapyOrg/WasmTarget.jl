@@ -62,10 +62,12 @@ A reachable construct outside the supported surface rejects loudly and located
 
 - **One frozen, closed-world module.** Reflection, `eval`, world-age mutation and runtime
   method definition are not part of it; neither are async, tasks, threads, atomics or
-  deferred loading. No call is dispatched at run time: a call inference splits over its
-  matching methods compiles as the `isa` tests Julia emitted, and one it leaves unresolved
+  deferred loading. No method call is dispatched at run time: a call inference splits over
+  its matching methods compiles as the `isa` tests Julia emitted, and one it leaves unresolved
   is outside the strict subset, rejected by Julia's trim verifier (OutsideSubset,
-  `unresolved_call`; D32).
+  `unresolved_call`; D32). A field access on a receiver Julia left abstract (`getfield`, a
+  builtin the verifier admits) does dispatch at run time, through dart's dispatch table of
+  field selectors (src/dispatch_table.jl; dev/formal/FieldSelectorTable.tla).
 - **Native and host capabilities.** Arbitrary `ccall`, `dlopen`, `Ptr`-based libraries,
   BLAS/LAPACK/SuiteSparse binaries, the filesystem, sockets, host entropy and time do not
   become browser-safe because their Julia call sites are visible. Each needs an explicit host

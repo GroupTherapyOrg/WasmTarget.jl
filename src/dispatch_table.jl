@@ -209,7 +209,9 @@ takes the default-value sentinel.
             push!(output_sets[i], i <= length(returns) ? translate_return_type(translator_, returns[i]) : translator_.top_type[])
         end
     end
-    local type_parameters = fill(non_nullable_type_type(translator_.types[]), param_info.type_param_count)
+    # read only when there are type parameters: a Julia program's Type{T} class exists only when it holds a type value
+    local type_parameters = param_info.type_param_count == 0 ? WasmBuilder.IR.ValueType[] :
+        fill(non_nullable_type_type(translator_.types[]), param_info.type_param_count)
     local inputs = WasmBuilder.IR.ValueType[_upper_bound(self, input_sets[i]; ensure_boxed = ensure_boxed[i], is_receiver = i == 1) for i in 1:n_inputs]
     if self.name == "=="
         # == can't be called with null
