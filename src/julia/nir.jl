@@ -594,17 +594,22 @@ end
 """
     _builtin_name_operands(f) -> Tuple{Vararg{Int}}
 
-The positions, counted after the callee, at which the Core builtin `f` takes a name rather than data:
+The positions, counted after the callee, at which `f`, a Core builtin or Base's property functions,
+takes a name rather than data:
 a field's (its name or index), a module binding's (the module and the name together) or a memory
 ordering's, each the parameter of that name in the
 builtin's tfunc (Compiler/src/tfuncs.jl: `getfield_tfunc(𝕃, s00, name, order, boundscheck)`,
 `setfield!_tfunc(𝕃, o, f, v, order)`, `memoryrefget_tfunc(𝕃, mem, order, boundscheck)`,
 `atomic_pointerreplace_tfunc(𝕃, ptr, x, v, success_order, failure_order)`, ...; the global
-builtins' arities at its add_tfunc calls, `getglobal(module, name, order)`). Every other builtin
-takes data alone.
+builtins' arities at its add_tfunc calls, `getglobal(module, name, order)`, and
+`get_binding_type(module, name)`); Base's getproperty and setproperty! take the property's name
+second, as getfield and setfield! do (a call of either the optimizer left unresolved). Every other
+callee takes data alone.
 """
 @quarantine "Julia's builtins take a field's, a binding's or an ordering's name as an operand, each at its tfunc's parameter" Core.getfield function _builtin_name_operands(@nospecialize(f))::Tuple{Vararg{Int}}
     f === Core.getfield && return (2, 3)
+    f === Base.getproperty && return (2,)
+    f === Base.setproperty! && return (2,)
     f === Core.setfield! && return (2, 4)
     f === Core.isdefined && return (2, 3)
     f === Core.fieldtype && return (2,)
@@ -619,6 +624,7 @@ takes data alone.
     f === Core.modifyglobal! && return (1, 2, 5)
     f === Core.replaceglobal! && return (1, 2, 5, 6)
     f === Core.setglobalonce! && return (1, 2, 4, 5)
+    f === Core.get_binding_type && return (1, 2)
     f === Core.memoryrefget && return (2,)
     f === Core.memoryrefset! && return (3,)
     f === Core.memoryref_isassigned && return (2,)
@@ -650,12 +656,12 @@ anywhere else is data (`x === :a`, `tuple(:k, x)`); an undefined
 variable check names the variable before its condition; and a loop hint, a bounds-check flag, a try
 region's leave and an exception pop hold no value.
 """
-@quarantine "Julia's IR passes a call's target, a builtin's names and a statement's annotations as operands; dart's Kernel names them in the node" Core.Builtin function nir_value_operands(st::NirStmt)::Vector{NirValue}
+@quarantine "Julia's IR passes a call's target, a builtin's names and a statement's annotations as operands; dart's Kernel names them in the node" Core.getglobal function nir_value_operands(st::NirStmt)::Vector{NirValue}
     local ops = nir_operands(st)
     @exhaustive st::NirStmt begin
         (x::NirCall) => let f = x.args[1],
                 callee = f isa NirConst ? f.c.val : f isa NirGlobal && isconst(f.ref.mod, f.ref.name) ? getglobal(f.ref.mod, f.ref.name) : nothing
-            names = callee isa Core.Builtin ? _builtin_name_operands(callee) : ()
+            names = _builtin_name_operands(callee)
             NirValue[ops[i] for i in 2:length(ops) if !(i - 1 in names && ops[i] isa NirConst)]
         end
         NirInvoke => ops[2:end]

@@ -110,6 +110,11 @@ end
     # a global builtin names its binding by the module and the name together: neither a value
     @test W.nir_value_operands(W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.setglobal!)), W.NirConst(Core.Const(Main)),
         W.NirConst(Core.Const(:counter)), r])) == W.NirValue[r]
+    # get_binding_type names a binding by module and name; getproperty and setproperty! name the property
+    local cv(x) = W.NirConst(Core.Const(x))
+    @test W.nir_value_operands(W.NirCall(W.NirValue[cv(Core.get_binding_type), cv(Main), cv(:counter)])) == W.NirValue[]
+    @test W.nir_value_operands(W.NirCall(W.NirValue[cv(Base.getproperty), r, cv(:f)])) == W.NirValue[r]
+    @test W.nir_value_operands(W.NirCall(W.NirValue[cv(Base.setproperty!), r, cv(:f), cv(:v)])) == W.NirValue[r, cv(:v)]
     # an allocation's type is its target
     local x = W.NirConst(Core.Const(1))
     @test W.nir_value_operands(W.NirNew(W.NirValue[W.NirConst(Core.Const(Base.RefValue{Int})), x])) == [x]
