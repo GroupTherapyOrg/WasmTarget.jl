@@ -113,12 +113,3 @@ end
     codegen[code] = inf
     return true
 end
-
-# Julia's Compiler is compiled into the system image for NativeInterpreter alone, and compiling it for
-# WasmInterpreter takes the first closed world tens of seconds; inferring one program while the package
-# image is written keeps that code in the image, as a package's precompile workload does
-@quarantine "Julia keeps code compiled while a package image is written, its precompile workload" Base.generating_output function precompile_interpreter()::Nothing
-    Base.generating_output() || return nothing
-    check_subset(n::Int64 -> (v = Int64[]; for i in 1:n; push!(v, i * i); end; sum(v)), (Int64,), "precompile_interpreter")
-    return nothing
-end
