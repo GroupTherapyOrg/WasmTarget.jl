@@ -944,7 +944,8 @@ end
 
 module StaticFieldCases
 global counter::Int = 7
-bump(x::Int) = counter + x
+global box::Base.RefValue{Int} = Ref(1)
+bump(x::Int) = counter + box[] + x
 end
 # the translator of StaticFieldCases.bump as translate() leaves it before code, its DartGlobals assigned
 function static_field_translator()
@@ -1001,6 +1002,51 @@ end
     # the binding's image value written to its global
     local g = static_field_codegen((t, ft, f) -> D.EagerStaticFieldInitializerCodeGenerator(t, f, gl), t, g0.function_type)
     @test emitted_by(() -> D.generate_internal(g), g) == ["i64.const 7", "global.set"]
+end
+
+@testset "code_generator.dart: a static field's implicit getter and setter" begin
+    local B = W.WasmBuilder
+    local t = static_field_translator()
+    local mb = D.main_module(t)
+    local dg = t.dart_globals[]
+    local fc = t.functions[]
+    local counter = GlobalRef(StaticFieldCases, :counter)
+    local box = GlobalRef(StaticFieldCases, :box)
+    local ty = D.translate_type_of_field(t, counter)
+    local getter = IR.FunctionType(IR.ValueType[], IR.ValueType[ty])
+    local acc(f, ftype, is_getter) = begin
+        local fb = B.define(mb.functions[], ftype, "acc")
+        local g = D.StaticFieldImplicitAccessorCodeGenerator(t, ftype, f, is_getter)
+        g.b[] = B.body(fb); g.param_locals[] = B.locals(fb); g.return_label[] = nothing
+        g
+    end
+    # the lazy arm's definition is made through getFunction, whose located rejection the accessor lets
+    # through
+    local g0 = acc(counter, getter, true)
+    @test g0.enclosing_member === counter && g0.is_implicit_getter
+    @test rejection(() -> D.generate_internal(g0)).rejection isa W.Unquarantined
+    # a field with no initializer function is read and returned
+    dg._definitions[counter] = D._define_global_based_field(dg, counter, ty, mb, true, nothing, nothing)
+    local g1 = acc(counter, getter, true)
+    @test emitted_by(() -> D.generate_internal(g1), g1) == ["global.get", "end"]
+    # with its initializer function and an explicit flag: the flag picks the global or the initializer
+    local flag = D._define_initializer_flag(dg, counter, mb)
+    dg._definitions[counter] = D._define_global_based_field(dg, counter, ty, mb, true, nothing, flag)
+    fc._functions[counter] = B.define(mb.functions[], getter, "counter field initializer")
+    local g2 = acc(counter, getter, true)
+    @test emitted_by(() -> D.generate_internal(g2), g2) == ["global.get", "if", "global.get", "else", "call", "end", "end"]
+    # the setter writes its parameter and sets the flag
+    local g3 = acc(counter, IR.FunctionType(IR.ValueType[ty], IR.ValueType[]), false)
+    @test emitted_by(() -> D.generate_internal(g3), g3) == ["local.get", "global.set", "i32.const 1", "global.set", "end"]
+    # a reference field null when uninitialized: the read, branched past the initializer's call when
+    # non-null
+    local rty = D.translate_type_of_field(t, box)
+    @test rty isa IR.RefType && !rty.nullable
+    dg._definitions[box] = D._define_global_based_field(dg, box, B.with_nullability(rty, true), mb, true, nothing, nothing)
+    local rgetter = IR.FunctionType(IR.ValueType[], IR.ValueType[rty])
+    fc._functions[box] = B.define(mb.functions[], rgetter, "box field initializer")
+    local g4 = acc(box, rgetter, true)
+    @test emitted_by(() -> D.generate_internal(g4), g4) == ["block", "global.get", "br_on_non_null", "call", "end", "end"]
 end
 
 # Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)

@@ -344,9 +344,48 @@ MethodInstance or a binding.
 end
 
 """
-StaticFieldImplicitAccessorCodeGenerator's dart fields: `field`, `isImplicitGetter`.
+The code generator of a static field's implicit getter or setter: `field`, a Julia binding (its
+GlobalRef), and `is_implicit_getter`. It holds AstCodeGenerator's fields as
+SynchronousProcedureCodeGenerator does, the enclosing member a MethodInstance or a binding.
 """
-@parity "dart2wasm/lib/code_generator.dart:4910 StaticFieldImplicitAccessorCodeGenerator" @unported struct StaticFieldImplicitAccessorCodeGenerator <: AstCodeGenerator end
+@parity "dart2wasm/lib/code_generator.dart:4910 StaticFieldImplicitAccessorCodeGenerator" mutable struct StaticFieldImplicitAccessorCodeGenerator <: AstCodeGenerator
+    const translator::Translator
+    const function_type::WasmBuilder.IR.FunctionType
+    const enclosing_member::Union{Core.MethodInstance,GlobalRef}
+    const b::Late{WasmBuilder.InstructionsBuilder}
+    const param_locals::Late{Vector{WasmBuilder.IR.Local}}
+    const return_label::Late{Union{Nothing,WasmBuilder.Label}}
+    const intrinsifier::Late{Intrinsifier}
+    const closures::Late{Closures}
+    exception_location_printed::Bool
+    const locals::Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}
+    this_local::Union{Nothing,WasmBuilder.IR.Local}
+    precise_this_local::Union{Nothing,WasmBuilder.IR.Local}
+    return_value_local::Union{Nothing,WasmBuilder.IR.Local}
+    const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
+    const return_finalizers::Vector{TryBlockFinalizer}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
+    _source_map_source::Union{Nothing,Symbol}
+    _source_map_file_offset::Int
+    const field::GlobalRef
+    const is_implicit_getter::Bool
+    # the struct's one constructor, tagged, with AstCodeGenerator's field initializers
+    # (code_generator.dart:67 to :160); dart's constructor is its outer function
+    function StaticFieldImplicitAccessorCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::GlobalRef, is_implicit_getter::Bool)
+        local self
+        self = new(translator, function_type, field,
+            Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
+            Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
+            Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
+            Late{Intrinsifier}("dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
+            Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
+            false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
+            Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
+            NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
+            nothing, TreeNode_no_offset, field, is_implicit_getter)
+        return self
+    end
+end
 
 """
 The code generator dart makes for a field's implicit getter or setter. It holds AstCodeGenerator's
@@ -2150,13 +2189,67 @@ function's. Only the pragma that initializes a field at startup reaches here
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:4914 StaticFieldImplicitAccessorCodeGenerator" @unported function StaticFieldImplicitAccessorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field, is_implicit_getter) end
+@parity "dart2wasm/lib/code_generator.dart:4914 StaticFieldImplicitAccessorCodeGenerator" StaticFieldImplicitAccessorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::GlobalRef, is_implicit_getter::Bool)::StaticFieldImplicitAccessorCodeGenerator =
+    StaticFieldImplicitAccessorCodeGenerator(Val(:_), translator, function_type, field, is_implicit_getter)
 
-@parity "dart2wasm/lib/code_generator.dart:4922 StaticFieldImplicitAccessorCodeGenerator.generateInternal" @unported function generate_internal(self::StaticFieldImplicitAccessorCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:4922 StaticFieldImplicitAccessorCodeGenerator.generateInternal" function generate_internal(self::StaticFieldImplicitAccessorCodeGenerator)::Nothing
+    local translator = self.translator
+    local global_definition = get_definition_for_static_field(translator.dart_globals[], self.field)
+    if self.is_implicit_getter
+        # the initializer function is keyed by the binding itself (FunctionCollector's docstring)
+        local init_function = get_existing_function(translator.functions[], self.field)
+        _generate_getter(self, global_definition, init_function)
+    else
+        _generate_setter(self, global_definition)
+    end
+    WasmBuilder.var"end"(self.b[])
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:4937 StaticFieldImplicitAccessorCodeGenerator._generateGetter" @unported function _generate_getter(self::StaticFieldImplicitAccessorCodeGenerator, definition::DartGlobalDefinition, init_function::Union{Nothing,WasmBuilder.IR.BaseFunction}) end
+@parity "dart2wasm/lib/code_generator.dart:4937 StaticFieldImplicitAccessorCodeGenerator._generateGetter" function _generate_getter(self::StaticFieldImplicitAccessorCodeGenerator, definition::DartGlobalDefinition, init_function::Union{Nothing,WasmBuilder.IR.BaseFunction})::Nothing
+    local translator = self.translator
+    local b = self.b[]
+    local flag = definition.initialized_flag
+    if init_function === nothing
+        # Statically initialized
+        read(definition, translator, b)
+        convert_type(translator, b, type(definition), return_type(self))
+    elseif flag !== nothing
+        # Explicit initialization flag
+        read_global(translator.globals[], b, flag)
+        WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[type(definition)])
+        read(definition, translator, b)
+        WasmBuilder.else_(b)
+        call_function(translator, init_function, b)
+        WasmBuilder.var"end"(b)
+        convert_type(translator, b, type(definition), return_type(self))
+    else
+        # Null signals uninitialized
+        local init_output = only(init_function.type.outputs)
+        local block = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[init_output])
+        read(definition, translator, b)
+        WasmBuilder.br_on_non_null(b, block)
+        call_function(translator, init_function, b)
+        WasmBuilder.var"end"(b)
+        convert_type(translator, b, init_output, return_type(self))
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/code_generator.dart:4969 StaticFieldImplicitAccessorCodeGenerator._generateSetter" @unported function _generate_setter(self::StaticFieldImplicitAccessorCodeGenerator, definition::DartGlobalDefinition) end
+@parity "dart2wasm/lib/code_generator.dart:4969 StaticFieldImplicitAccessorCodeGenerator._generateSetter" function _generate_setter(self::StaticFieldImplicitAccessorCodeGenerator, definition::DartGlobalDefinition)::Nothing
+    local translator = self.translator
+    local b = self.b[]
+    write(definition, translator, b, function (b::WasmBuilder.InstructionsBuilder)
+        WasmBuilder.local_get(b, only(self.param_locals[]))
+        return nothing
+    end)
+    local flag = definition.initialized_flag
+    if flag !== nothing
+        WasmBuilder.i32_const(b, 1) # true
+        write_global(translator.globals[], b, flag)
+    end
+    return nothing
+end
 
 # Julia's answer (D3): a field access is an intrinsic call the body's generator visits, never a member
 @parity "dart2wasm/lib/code_generator.dart:4986 ImplicitFieldAccessorCodeGenerator" ImplicitFieldAccessorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::ClassField, is_implicit_getter::Bool, use_unchecked_entry::Bool)::Union{} =
