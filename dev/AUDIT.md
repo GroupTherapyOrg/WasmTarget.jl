@@ -5684,36 +5684,64 @@ and only listed after (`of the ported, $replaced are one Internal rejection …`
 count equals its anchored total`, would read that complete; and a rejection-only body is recognized only when its whole
 body is a single `reject!` (parity.jl's _rejection_only_kind), so a guard and then a rejection counts as a body (R2,
 D43). Fix: `ported` counts bodies alone; the line prints ported, replaced (each named by a skeleton scope rule or a port
-to do, the lead's triage), gaps and stubs apart, and 1.U's exit reads the first against the in-scope total.
-Requirements: D17 (A64E1); R2 and D43 (A64E2); no lock fired inside its band.
+to do, the lead's triage), gaps and stubs apart, and 1.U's exit reads the first against the in-scope total. (A64E3,
+medium, the lead's, D17) the landing check runs at 106–120 s against its 60-s target, its floor the first compile each
+shard pays, about 49 s (the lead's trace: the code generator 47%, Base 29%, wasm_builder 3%); `sort -t$'\t' -k2 -rn
+"$(git rev-parse --git-common-dir)/wt-src-costs.tsv" | head` puts the code generator's three files at the top (audit
+62). The fix is a real cut to WasmTarget's first-compile latency, placed after the port (D44), brought forward at once
+if D14's reds exceed one check in three over any hour (wt-ship-failures.tsv against wt-landings.tsv). Requirements: D17
+(A64E1, A64E3); R2 and D43 (A64E2); no lock fired inside its band.
 
 R1, no piece bespoke (Dale, 2026-10-29), swept over src/julia, src/julia/runtime and src/runtime. Ported with a named
 source: 9acfe5b4's Memory (dart's WasmListBase over genericmemory.c), 4602f109's undefined field (Julia's NULL and
 jl_undefref_exception), the stackifier and exception tree (LLVM at its pin), the closed world (Julia's trim inference).
-Bespoke, each to port: (A64R1, high) RUNTIME_DEMANDS' predicates decide which runtime roots join the closed world by
-scanning raw CodeInfo (`grep -n "Meta.isexpr(st, :call)\|Meta.isexpr(st, :new)" src/julia/subset.jl`), an invented rule
-computing again what the code generator decides (A63S2): port GPUCompiler's rtlib (link the runtime functions the
-emitted code calls) or dart's wasm:entry-point (the roots always kept). (A64R2, high) nir_host_import calls a method an
-import only when its whole body is one foreign call and a return (`grep -n "length(body.stmts) == 2"
-src/julia/runtime/rtutils.jl` gives `83: length(body.stmts) == 2 || return nothing`), a shape test no source has: port
-Julia's ccall lowering (ccall.cpp emit_ccall, each (symbol, library) call site its import) as emscripten imports each
-called symbol. (A64R3, high, a ruling's) nir_binding_value bakes the values every `__init__` computed into the module,
-where juliac runs the init list at startup (dev/MODULE_INIT.md's ruling, its deviation named): the source to port is
-juliac's own, staticdata.c's restored init list run by init.c at the start function. (A64R4, medium) host_modules finds
-the host's libraries by a regex over the JS template (`grep -n "baseImports" src/julia/runtime/rtutils.jl` gives `53:
-local block = match(r"const baseImports = \{\n(.*?)\n\s*\};"s, text)`): port dart's js/runtime_generator.dart's import
-object as data, or emscripten's --js-library. (A64R5, medium) the closed world's class rules and a kind's layout
-(classes.jl's closed_world_classes, :27 citing only class_info.dart:864's list; _kind_instance_fields keeping Julia's
-Union and UnionAll fields beside dart's _Type) mix two layouts by hand: port julia.h's jl_datatype_t, jl_uniontype_t and
-jl_unionall_t throughout, or dart's type.dart throughout. (A64R6, low) `BLOCK_TYPE_CATCH::Int = -2` (`grep -n
-BLOCK_TYPE_CATCH src/julia/machine.jl` gives `46: … const BLOCK_TYPE_CATCH::Int = -2`), an invented sentinel: LLVM's
-CFGStackify types the catch destination from the caught value's register class. Not yet written, to port when they are:
-the varargs convention (codegen.cpp's va handling, today rejected at _getInputTypes) and a Memory's element reads
-(genericmemory.c's memoryref get and its undefined-reference check).
+Bespoke, each to port: (A64R1, high, translator, beside A63S2) RUNTIME_DEMANDS' predicates (subset.jl:214) decide which
+runtime roots join the closed world by scanning raw CodeInfo (`grep -n "Meta.isexpr(st, :call)\|Meta.isexpr(st, :new)"
+src/julia/subset.jl`), an invented rule computing again what the code generator decides (code_generator.jl's
+throw_undef_ref_error rule, D5): port GPUCompiler's rtlib (link the runtime functions the emitted code calls) or dart's
+wasm:entry-point (the roots always kept). (A64R2, high, codegen-b) nir_host_import calls a method an import only when
+its whole body is one foreign call and a return (`grep -n "length(body.stmts) == 2" src/julia/runtime/rtutils.jl` gives
+`83: length(body.stmts) == 2 || return nothing`), a shape test no source has: port Julia's ccall lowering (ccall.cpp
+emit_ccall, each (symbol, library) call site its import) as emscripten imports each called symbol. (A64R3, high, the
+lead's: it crosses dev/MODULE_INIT.md) nir_binding_value (nir.jl:595) bakes the values every `__init__` computed into
+the module, where juliac runs the init list at startup (dev/MODULE_INIT.md's ruling, its deviation named): the source to
+port is juliac's own, staticdata.c's restored init list and jl_init_restored_modules run at the start function. (A64R4,
+medium) host_modules finds the host's libraries by a regex over the JS template (`grep -n "baseImports"
+src/julia/runtime/rtutils.jl` gives `53: local block = match(r"const baseImports = \{\n(.*?)\n\s*\};"s, text)`): port
+dart's js/runtime_generator.dart's import object as data, or emscripten's --js-library. (A64R5, medium) the closed
+world's class rules and a kind's layout (classes.jl's closed_world_classes, :27 citing only class_info.dart:864's list;
+_kind_instance_fields keeping Julia's Union and UnionAll fields beside dart's _Type) mix two layouts by hand: port
+julia.h's jl_datatype_t, jl_uniontype_t and jl_unionall_t throughout, or dart's type.dart throughout. (A64R6, low)
+`BLOCK_TYPE_CATCH::Int = -2` (`grep -n BLOCK_TYPE_CATCH src/julia/machine.jl` gives `46: … const BLOCK_TYPE_CATCH::Int =
+-2`), an invented sentinel: LLVM's CFGStackify types the catch destination from the caught value's register class. Not
+yet written, to port when they are: the varargs convention (codegen.cpp's va handling, today rejected at _getInputTypes)
+and a Memory's element reads (genericmemory.c's memoryref get and its undefined-reference check).
+
+R2's triage (the lead's request, by a read-only sub-auditor; its raw hits kept in the session's scratchpad): of the
+@parity definitions whose body is one `reject!(Internal(…))` or `no_counterpart_rejection(…)`, 331 at 06d23373 (49
+through no_counterpart_rejection, all in code_generator.jl), 265 are (a), no counterpart in Julia's IR: the structured
+statements (If, Do, While, For, Labeled, Break, Assert, Switch, the logical and conditional expressions, BrTableInfo and
+SwitchInfo, TryCatch and TryFinally, 0c711af9's NoCounterpart rows among them), Julia's IR being a CFG the CFGStackify
+port structures; the initializer lists and constructor generators (a constructor is a method and `%new`); super calls;
+dynamic invocations, dispatchers and forwarders (D32); closures' contexts, trampolines and instantiation (a closure is a
+struct and its call method); TFA's readers and NodeCounter (Julia's inference and inliner); the literal visitors Julia's
+lowering turns into calls; tasks, deferred loading and the front end (scope rules); 63 are (p), dart's own body throwing
+or abstract at the pin, faithful ports; 1 is (b), visitRethrow (code_generator.jl:1767), a port to do from dart's body
+over rtutils.c's jl_rethrow; 2 are (c): translator.jl:613 ffiMemory (Julia's pointerref and pointerset would need it,
+Ptr's scope undecided) and intrinsics.jl:923 readIntArray (its signed and unsigned packed reads are what memoryrefget on
+a Memory{Int8} needs, intrinsics.jl emitting array_get_u alone). visit_block's try_table covers dart's visitTryCatch and
+visitTryFinally only in part: the try region, the catch of the tag and the finally on normal, return and break exits are
+covered; the rethrow on an exception exit (every finally's, every unmatched catch's), the JS-tag catch arm and the stack
+trace are not. The lead's rulings: nothing leaves the denominator (dev/skeleton_scope.toml's "codegen and runtime
+structures are never out" stands), the (a) rows shown as "no Julia counterpart (triaged)", never ported, as 96fbcdf7's
+headline counts them; the (p) rows told apart in the registry so they count as bodies (wt3-skeleton); visitRethrow, the
+JS-exception arm and the stack trace to wt3-cgstubs, readIntArray to wt3-codegen; ffiMemory a located gap, never done,
+until 1.F decides Ptr's scope.
 
 Resolution: this entry lands alone, prose only, and fixes nothing. A62S1 is fixed by a4655a55 and A63S1 by 8c265eb8,
-each leaving its row; A63S2 is carried by A64R1. A64E1 is open on MARCH 1.T. A64E2 is open on MARCH 1.U. A64R1, A64R3
-and A64R5 are open on MARCH 1.C. A64R2 and A64R4 are open on MARCH 1.F. A64R6 is open on MARCH 1.D. By owner: the tests
-lane holds A64E1; the lead holds A64E2 and A64R3 (the ruling); the translator lane holds A64R1 and A64R5; the 1.F lane
-holds A64R2 and A64R4; the EH model's owner holds A64R6. The lead's R2 triage of the 288 Internal-only definitions goes
-to the lead as its own table.
+each leaving its row; A63S2 is carried by A64R1. A64E1 is open on MARCH 1.T. A64E2 is open on MARCH 1.U. A64E3 is open
+on MARCH 1.L. A64R1, A64R3 and A64R5 are open on MARCH 1.C. A64R2 and A64R4 are open on MARCH 1.F. A64R6 is open on
+MARCH 1.D. By owner: the tests lane holds A64E1; the lead holds A64E2, A64E3 and A64R3 (dev/MODULE_INIT.md's ruling);
+the translator lane holds A64R1 and A64R5; codegen-b holds A64R2; the 1.F lane holds A64R4; the EH model's owner holds
+A64R6; the triage's (b) and try/catch gaps go to wt3-cgstubs, its readIntArray to wt3-codegen, its (p) registry state to
+wt3-skeleton.
