@@ -9,7 +9,7 @@
 if Sys.isapple() && abspath(PROGRAM_FILE) == (@__FILE__) && get(ENV, "CHECK_LANDING", "") != "1" &&
    parse(Int, strip(read(`ps -o pri= -p $(getpid())`, String))) > 10
     error("test/src_tests.jl runs on the performance cores only as a landing's check: run it under " *
-          "`taskpolicy -b`, run one file of test/src/, or commit and let dev/autoship.sh check it")
+          "`taskpolicy -b`, run one file of test/src/ with `bash dev/lanetest.sh test/src/<file>.jl`, or commit and let dev/autoship.sh check it")
 end
 using Test, WasmTarget
 const SRC_TEST_DIR = joinpath(@__DIR__, "src")
