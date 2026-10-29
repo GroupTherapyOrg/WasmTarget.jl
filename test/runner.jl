@@ -2,7 +2,7 @@
 # every module a test gets from WasmTarget, which the builder already accepted (D10), runs in node, the
 # major .github/workflows/ci.yml names, its entry called with the case's arguments, and its answer is
 # compared with native Julia's, === at the answer's type. One node process runs every case of a batch.
-# Marshalled: Int32, UInt32, Int64, UInt64, Float32, Float64 and Bool, arguments and answer, an answer of a
+# Marshalled: Int32, UInt32, Int64, UInt64, UInt8, Float32, Float64 and Bool, arguments and answer, an answer of a
 # singleton type (nothing), whose call must return and whose type is its value, and Throws(T), a native call that
 # throws, whose module must raise a wasm exception, neither trap nor return; any other type, a module that imports anything, an entry not found, a trap or a throw is a located failure of its
 # case, never a skip. An unsigned integer crosses as the signed one of its bits, a float as its bit
@@ -60,14 +60,19 @@ end
 # leaf type, its index chain over the leaves' paths spelt out by Julia's own @generated. The facts are
 # then compared one by one in Julia, so a wrong one names itself. The precedent is dart's own test:
 # its main reads the facts it asserts inside the program (Expect), dart2wasm's JS host reading none.
-# A vector inside the answer is read the same way: its length a leaf, each element a leaf (or a nest).
-# A path's steps: an Int, a tuple's field; (:ix, i), a vector's element; :len, a vector's length.
+# A vector inside the answer is read the same way: its length a leaf, each element a leaf (or a nest); so is a
+# String: its ncodeunits a leaf, each codeunit (a UInt8) a leaf, Base's own reading of a String's bytes.
+# A path's steps: an Int, a tuple's field; (:ix, i), a vector's element; :len, a vector's length; (:cu, i), a
+# String's codeunit; :ncu, its ncodeunits.
 _step(x, i::Int) = getfield(x, i)
-_step(x, s::Tuple{Symbol,Int}) = x[s[2]]
-_step(x, ::Symbol) = Int64(length(x))
+_step(x, s::Tuple{Symbol,Int}) = s[1] === :cu ? codeunit(x, s[2]) : x[s[2]]
+_step(x, s::Symbol) = s === :ncu ? Int64(ncodeunits(x)) : Int64(length(x))
 _step_ex(e, i::Int) = :(getfield($e, $i))
-_step_ex(e, s::Tuple{Symbol,Int}) = :(getindex($e, $(s[2])))
-_step_ex(e, ::Symbol) = :(Int64(length($e)))
+_step_ex(e, s::Tuple{Symbol,Int}) = s[1] === :cu ? :(codeunit($e, $(s[2]))) : :(getindex($e, $(s[2])))
+_step_ex(e, s::Symbol) = s === :ncu ? :(Int64(ncodeunits($e))) : :(Int64(length($e)))
+_string_step(s) = s === :ncu || (s isa Tuple && s[1] === :cu)
+_on_string(p::Tuple) = any(_string_step, p)
+_string_of(p::Tuple) = p[1:findfirst(_string_step, p)-1]   # the path of the String a leaf reads
 struct Leaves{F,P} <: Function end
 @generated function _pick(x, ::Val{P}, k::Int64) where {P}
     local at(p) = foldl(_step_ex, p; init = :x)
@@ -83,10 +88,11 @@ end
 (::Leaves{F,P})(a, b, k::Int64) where {F,P} = _pick(F(a, b), Val(P), k)
 (::Leaves{F,P})(a, b, c, k::Int64) where {F,P} = _pick(F(a, b, c), Val(P), k)
 
-# each leaf's path in a nest of tuples and vectors, in order
+# each leaf's path in a nest of tuples, vectors and Strings, in order
 _leaves(x, p::Tuple = ())::Vector{Tuple} =
     x isa Tuple ? reduce(vcat, (_leaves(y, (p..., i)) for (i, y) in enumerate(x)); init = Tuple[]) :
     x isa Vector ? reduce(vcat, (_leaves(y, (p..., (:ix, i))) for (i, y) in enumerate(x)); init = Tuple[(p..., :len)]) :
+    x isa String ? Tuple[(p..., :ncu); [(p..., (:cu, i)) for i in 1:ncodeunits(x)]] :
     Tuple[p]
 
 """
@@ -98,14 +104,34 @@ reader can read (a type the runner does not marshal, or a case of more than 3 ar
 with no module, which run_cases fails, naming why.
 """
 function answer_cases(label::String, compile, f, args::Tuple, native; optimized::Bool = true)::Vector{RunCase}
-    (native isa Tuple && !isempty(native)) || native isa Vector || return [compiled_case(label, compile, f, args, native; optimized)]
+    (native isa Tuple && !isempty(native)) || native isa Vector || native isa String ||
+        return [compiled_case(label, compile, f, args, native; optimized)]
     local paths = _leaves(native)
     local leaf(p) = foldl(_step, p; init = native)
     local out = RunCase[]
-    for T in unique(map(p -> typeof(leaf(p)), paths))
-        local ps = Tuple(filter(p -> typeof(leaf(p)) === T, paths))
+    # one reader per leaf type, a String's leaves apart from the rest: until WasmTarget compiles ncodeunits and
+    # codeunit, a String reader is rejected (Unported or Unquarantined), and each String of the answer is then one
+    # case the runner does not read, "marshals no String" as before, never a failure of WT's
+    for (T, on_string) in unique(map(p -> (typeof(leaf(p)), _on_string(p)), paths))
+        local ps = Tuple(filter(p -> typeof(leaf(p)) === T && _on_string(p) == on_string, paths))
         local readable = length(args) <= 3 && _wire_answer(leaf(first(ps))) !== nothing
-        local reader = readable ? compiled_case(label, compile, Leaves{f,ps}(), (args..., Int64(1)), nothing; optimized) : nothing
+        local reader = nothing
+        if readable && on_string
+            reader = try
+                compiled_case(label, compile, Leaves{f,ps}(), (args..., Int64(1)), nothing; optimized)
+            catch e
+                (nameof(typeof(e)) === :RejectionError && nameof(typeof(e.rejection)) in (:Unported, :Unquarantined)) || rethrow()
+                nothing
+            end
+            if reader === nothing   # the Strings, each one unread case
+                for sp in unique(map(_string_of, ps))
+                    any(c -> c.label == "$label$sp", out) || push!(out, RunCase("$label$sp", UInt8[], UInt8[], (args..., Int64(1)), leaf(sp), ""))
+                end
+                continue
+            end
+        elseif readable
+            reader = compiled_case(label, compile, Leaves{f,ps}(), (args..., Int64(1)), nothing; optimized)
+        end
         for (k, p) in enumerate(ps)
             push!(out, RunCase("$label$p", readable ? reader.bytes : UInt8[], readable ? reader.optimized : UInt8[],
                                (args..., Int64(k)), leaf(p), ""))
@@ -151,6 +177,7 @@ function _wire(x)::Union{Tuple{String,String},Nothing}
     x isa Bool && return ("i32", x ? "1" : "0")
     x isa Int32 && return ("i32", string(x))
     x isa UInt32 && return ("i32", string(reinterpret(Int32, x)))
+    x isa UInt8 && return ("i32", string(x))
     x isa Int64 && return ("i64", string(x))
     x isa UInt64 && return ("i64", string(reinterpret(Int64, x)))
     x isa Float32 && return ("f32", string(reinterpret(UInt32, x); base = 16))
@@ -170,6 +197,7 @@ function _unwire(::Type{T}, s::AbstractString) where {T}
     T === Bool && return s == "1" ? true : s == "0" ? false : nothing
     T === Int32 && return parse(Int32, s)
     T === UInt32 && return reinterpret(UInt32, parse(Int32, s))
+    T === UInt8 && return (v = parse(Int32, s); 0 <= v <= 255 ? UInt8(v) : "the i32 $v, no UInt8")   # never truncated to fit
     T === Int64 && return parse(Int64, s)
     T === UInt64 && return reinterpret(UInt64, parse(Int64, s))
     T === Float32 && return reinterpret(Float32, parse(UInt32, s; base = 16))

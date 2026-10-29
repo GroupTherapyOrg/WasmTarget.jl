@@ -113,10 +113,10 @@ _runner_facts(x::Int64) = (x + 1, (x > 0, x * 2), x < 0)
     # the readers as answer_cases builds them, with a compile that only counts its calls
     local calls = Ref(0)
     local counted(f, ts; optimize::Bool = true) = (calls[] += 1; _RUN_ADD1)
-    local cs = WTR.answer_cases("t", counted, _runner_facts, (Int64(3),), (4, (true, 6), 0.5, "x"))
+    local cs = WTR.answer_cases("t", counted, _runner_facts, (Int64(3),), (4, (true, 6), 0.5, :x))
     @test [c.label for c in cs] == ["t(1,)", "t(2, 2)", "t(2, 1)", "t(3,)", "t(4,)"]
     @test [c.args for c in cs] == [(3, 1), (3, 2), (3, 1), (3, 1), (3, 1)]
-    @test calls[] == 2 * 3   # Int64, Bool and Float64 each one reader, each both modules; no reader for String
+    @test calls[] == 2 * 3   # Int64, Bool and Float64 each one reader, each both modules; no reader for Symbol
     # a leaf of a singleton type crosses as "void": its call returns, its type its value
     local v = WTR.answer_cases("v", counted, _runner_facts, (Int64(3),), (4, nothing))
     @test [c.label for c in v] == ["v(1,)", "v(2,)"] && WTR._wire_answer(nothing) == ("void", "-") && WTR._unwire(Nothing, "-") === nothing
@@ -126,8 +126,19 @@ _runner_facts(x::Int64) = (x + 1, (x > 0, x * 2), x < 0)
     @test [c.native for c in vec] == Any[4, 2, true, false]
     @test WTR._pick((4, [true, false]), Val(((2, (:ix, 2)), (2, :len))), Int64(1)) === false &&
           WTR._pick((4, [true, false]), Val(((2, (:ix, 2)), (2, :len))), Int64(2)) === Int64(2)
+    # a String is read as its ncodeunits and each codeunit; while its reader is rejected (Unported), the String
+    # is one case the runner does not read, "marshals no String", never a failure of WT's
+    local sc = WTR.answer_cases("s", counted, _runner_facts, (Int64(3),), (4, "ab"))
+    @test [c.label for c in sc] == ["s(1,)", "s(2, :ncu)", "s(2, (:cu, 1))", "s(2, (:cu, 2))"]
+    @test [c.native for c in sc] == Any[4, 2, 0x61, 0x62]
+    local refused(f, ts; optimize::Bool = true) = f isa WTR.Leaves && any(p -> WTR._on_string(p), typeof(f).parameters[2]) ?
+        throw(WasmTarget.RejectionError(WasmTarget.Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "codeunit")) : _RUN_ADD1
+    local su = WTR.answer_cases("s", refused, _runner_facts, (Int64(3),), (4, "ab"))
+    @test [c.label for c in su] == ["s(1,)", "s(2,)"] && su[2].native == "ab" && isempty(su[2].bytes)
+    @test occursin("marshals no String", WTR.run_cases(su[2:2])[1].why)
+    @test WTR._unwire(UInt8, "255") === 0xff && WTR._unwire(UInt8, "-1") isa String
     # a leaf of a type the runner does not marshal has no reader and fails, named
-    @test isempty(cs[5].bytes) && occursin("marshals no String", WTR.run_cases(cs[5:5])[1].why)
+    @test isempty(cs[5].bytes) && occursin("marshals no Symbol", WTR.run_cases(cs[5:5])[1].why)
 end
 
 @testset "a tuple answer read leaf by leaf from WasmTarget's modules" begin
