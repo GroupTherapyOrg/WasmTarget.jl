@@ -60,7 +60,12 @@ end
 
 # The program's @ccallable members among an inferred closed world, each as juliac queues it,
 # `svec(rettype, signature)` (Method.ccallable): a ccallable the entry reaches is exported
-# (functions.jl's getExportName), so Julia's verifier judges its declared signature and return
+# (functions.jl's getExportName), so Julia's verifier judges its declared signature and return. juliac
+# queues every ccallable of its image only when it builds a library (--compile-ccallable,
+# juliac-buildscript.jl's jl_add_ccallable_entrypoints); an executable's one entry, main, queues none.
+# WasmTarget compiles one entry as an executable does, and exports the ccallables that entry reaches,
+# dart2wasm's precedent: TFA keeps a wasm:export member the program's libraries declare, and the
+# program here is what the entry reaches (A54S2)
 @quarantine "a ccallable is queued for Julia's trim inference as its Method's svec(rettype, signature)" Core.Method function _reached_ccallables(codeinfos::Vector{Any})::Vector{Any}
     local out = Any[]
     local seen = Base.IdSet{Method}()
