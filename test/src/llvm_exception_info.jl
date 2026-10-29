@@ -91,10 +91,44 @@ end
     @test pad == Core.Compiler.block_for_inst(cfg, (stmts[1]::W.NirEnter).catch_dest) + 1
     @test mf.blocks[pad].preds == [caller] && pad in mf.blocks[caller].succs && !(pad in mf.blocks[2].succs)
     @test mf.blocks[pad].instrs[1].opcode == W.CATCH && mf.blocks[pad].instrs[2].opcode == W.STMTS
-    # its exception is the catch block alone, and the stackifier rejects the region at placeTryTableMarker
+    # its exception is the catch block alone, and the stackifier places its try_table, rejecting at
+    # the unwind mismatch fixes
     local wei = L.WebAssemblyExceptionInfo()
     L.run_on_machine_function(wei, mf)
     @test L.get_blocks(L.get_exception_for(wei, pad)) == [pad]
     local e = try; L.add_pre_emit_pass(stmts, cfg, handlers, "tc", true); nothing; catch x; x; end
-    @test e isa W.RejectionError && occursin("placeTryTableMarker", e.rejection.anchor)
+    @test e isa W.RejectionError && occursin("fixCatchUnwindMismatches", e.rejection.anchor)
+end
+
+@testset "CFGStackify.cpp: placeTryTableMarker, a try_table in a block its catch branches to" begin
+    local ci = Base.code_typed(TryCases.tc, (Int64,); optimize = true)[1][1]
+    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, "tc")
+    local mf = W.machine_function(stmts, cfg, handlers, "tc")
+    L.eliminate_phi_nodes(mf, cfg)
+    L.run_on_machine_function(L.WebAssemblyFixIrreducibleControlFlow(), mf)
+    local li = L.LoopInfoBase()
+    L.analyze(li, mf)
+    local wei = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei, mf)
+    L.sort_blocks(mf, li, wei)
+    local pass = L.WebAssemblyCFGStackify()
+    pass.mdt = mf.domtree
+    pass.scope_tops = Union{Nothing,Int}[nothing for _ in 1:length(mf.layout)+1]
+    local pad = only(b for b in mf.layout if mf.blocks[b].ehpad)
+    L.place_try_table_marker(pass, mf, li, wei, pad)
+    local ops(b) = [mi.opcode for mi in mf.blocks[b].instrs]
+    # the catch block begins with the END_TRY_TABLE, the catch destination's END_BLOCK, then its CATCH
+    @test ops(pad)[1:3] == [W.END_TRY_TABLE, W.END_BLOCK, W.CATCH]
+    local tt = pass.eh_pad_to_try[pad]
+    @test tt.opcode == W.TRY_TABLE && pass.try_to_eh_pad[tt] == pad && (tt.operands[end]::W.MOBlock).mbb == pad
+    # the header, the block whose call unwinds to the pad, holds the BLOCK then the TRY_TABLE, before
+    # its statements, so the try_table holds the throwing call
+    local hdr = tt.parent
+    local k = findfirst(mi -> mi === tt, mf.blocks[hdr].instrs)
+    @test hdr in mf.blocks[pad].preds && mf.blocks[hdr].instrs[k - 1].opcode == W.BLOCK &&
+          any(mi -> mi.opcode == W.STMTS, mf.blocks[hdr].instrs[k+1:end])
+    # an UNREACHABLE after the END_TRY_TABLE, in a block split off before the pad
+    L.add_unreachable_after_try_tables(mf)
+    local split = mf.layout[findfirst(==(pad), mf.layout) - 1]
+    @test ops(split) == [W.END_TRY_TABLE, W.UNREACHABLE] && ops(pad)[1:2] == [W.END_BLOCK, W.CATCH] && pad in mf.blocks[split].succs
 end

@@ -27,16 +27,22 @@ The WebAssembly instructions the stackifier reads and writes (WebAssemblyInstrCo
 LOOP, END_BLOCK, END_LOOP, BR, BR_IF, BR_UNLESS, BR_TABLE; WebAssemblyInstrInfo.td: CONST_I32, which
 FixIrreducibleControlFlow writes a label register with; TargetOpcode's COPY, which PHIElimination
 writes a PHI's incoming value with; WebAssemblyInstrControl.td's TRY_TABLE and END_TRY_TABLE, which
-CFGStackify places for an EH pad, and CATCH, the pseudo-instruction an EH pad begins with, which
-receives the caught exception) and STMTS, the place of the block's Julia statements, which LLVM holds
+CFGStackify places for an EH pad, and UNREACHABLE, which it adds after an END_TRY_TABLE; CATCH, the
+pseudo-instruction an EH pad begins with, which receives the caught exception) and STMTS, the place of the block's Julia statements, which LLVM holds
 as the block's other instructions.
 """
-@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 COPY STMTS TRY_TABLE END_TRY_TABLE CATCH
+@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 COPY STMTS TRY_TABLE END_TRY_TABLE CATCH UNREACHABLE
 
 """    BLOCK_TYPE_VOID
 
 A BLOCK's or LOOP's type with no params or results (WebAssembly::BlockType::Void)."""
 @quarantine "LLVM's WebAssembly::BlockType::Void, the binary format's empty block type" Core.Int const BLOCK_TYPE_VOID::Int = 0x40
+"""    BLOCK_TYPE_CATCH
+
+A BLOCK's type that is its catch clause's payload, the exception tag's parameters (LLVM's pointer
+type for CATCH), filled where the instructions are lowered."""
+@quarantine "LLVM's catch destination BLOCK takes the caught value's type; WasmTarget's tag holds the exception" Core.Int const BLOCK_TYPE_CATCH::Int = -2
+
 """    BLOCK_TYPE_RESULTS
 
 A BLOCK's or LOOP's type that is the function's results, filled where the instructions are lowered
@@ -232,14 +238,14 @@ end
 """    is_terminator(mi) -> Bool
 
 Whether an instruction ends its block's straight-line code (LLVM's MachineInstr::isTerminator, the
-isTerminator flag WebAssemblyInstrControl.td sets on BR, BR_IF and BR_UNLESS)."""
-@quarantine "LLVM's MCInstrDesc isTerminator flag, TableGen's, for the branches" Base.in is_terminator(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_IF, BR_UNLESS, BR_TABLE)
+isTerminator flag WebAssemblyInstrControl.td sets on BR, BR_IF, BR_UNLESS, BR_TABLE and UNREACHABLE)."""
+@quarantine "LLVM's MCInstrDesc isTerminator flag, TableGen's, for the branches and unreachable" Base.in is_terminator(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_IF, BR_UNLESS, BR_TABLE, UNREACHABLE)
 
 """    is_barrier(mi) -> Bool
 
 Whether control never falls through an instruction (LLVM's MachineInstr::isBarrier, the isBarrier
 flag WebAssemblyInstrControl.td sets on BR and BR_TABLE)."""
-@quarantine "LLVM's MCInstrDesc isBarrier flag, TableGen's" Base.in is_barrier(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_TABLE)
+@quarantine "LLVM's MCInstrDesc isBarrier flag, TableGen's" Base.in is_barrier(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_TABLE, UNREACHABLE)
 
 """    create_label_register!(mf) -> Int
 

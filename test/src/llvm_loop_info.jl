@@ -97,14 +97,14 @@ end
     local brs = [i for b in mfb.layout for i in mfb.blocks[b].instrs if i.opcode == W.BR_UNLESS]
     @test length(brs) == 1
     # a try region: the call %2, under %1's handler, may throw (no flag proves otherwise here), so the
-    # catch block %5 is an EH pad its block unwinds to; the stackifier rejects the region until it
-    # places a try_table
+    # catch block %5 is an EH pad its block unwinds to; the stackifier places its try_table and rejects at
+    # the unwind mismatch fixes, the next port
     local enter = Any[Core.EnterNode(5), Expr(:call, GlobalRef(Base, :identity), 1), Expr(:leave, Core.SSAValue(1)),
                       Core.ReturnNode(1), Core.ReturnNode(2)]
     local mft = W.machine_function(W.nir_code(enter, zeros(UInt32, length(enter)), "try")..., "try")
     @test mft.blocks[5].ehpad && mft.blocks[5].preds == [3] && !mft.blocks[2].ehpad && mft.blocks[5].instrs[1].opcode == W.CATCH
     local e = try; L.add_pre_emit_pass(W.nir_code(enter, zeros(UInt32, length(enter)), "try")..., "try", true); nothing; catch x; x; end
-    @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("placeTryTableMarker", e.rejection.anchor)
+    @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("fixCatchUnwindMismatches", e.rejection.anchor)
 end
 
 @testset "natural loops, LoopInfoBase::analyze" begin

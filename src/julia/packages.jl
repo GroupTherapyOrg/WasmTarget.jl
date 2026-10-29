@@ -9,9 +9,9 @@ import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 import ..reject!, ..Internal, ..Unported
 # LLVM's machine code over Julia's CFG (src/julia/machine.jl)
 import ..MachineFunction, ..MachineBasicBlock, ..MachineInstr, ..MachineOperand, ..MOBlock, ..MOImm, ..Opcode,
-       ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF, ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..TRY_TABLE, ..END_TRY_TABLE, ..CATCH,
+       ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF, ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..TRY_TABLE, ..END_TRY_TABLE, ..CATCH, ..UNREACHABLE,
        ..renumber_blocks!, ..create_machine_basic_block!, ..get_prev_node, ..is_terminator, ..is_barrier, ..create_label_register!, ..recompute_domtree!, ..terminators, ..post_order,
-       ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..PriorityQueue, ..pq_push!, ..pq_pop!, ..pq_empty, ..get_block_numbered, ..machine_function,
+       ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..BLOCK_TYPE_CATCH, ..PriorityQueue, ..pq_push!, ..pq_pop!, ..pq_empty, ..get_block_numbered, ..machine_function,
        ..LinkedHashMap, ..LinkedHashSet, ..strongly_connected_components
 # the NIR whose statements and try regions the machine code reads (src/julia/nir.jl)
 import ..NirStmt, ..NirPhi, ..NirHandlers
@@ -70,7 +70,7 @@ import ..WasmArrayLiteral, ..WasmArray, ..ImmutableWasmArray
 # the backend's passes that structure it (src/llvm/target_machine.jl)
 import ..LLVM
 import ..MachineFunction, ..MachineInstr, ..MOBlock, ..MOImm, ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF,
-       ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..TRY_TABLE, ..END_TRY_TABLE, ..CATCH, ..BLOCK_TYPE_RESULTS, ..is_barrier
+       ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..TRY_TABLE, ..END_TRY_TABLE, ..CATCH, ..UNREACHABLE, ..BLOCK_TYPE_RESULTS, ..BLOCK_TYPE_CATCH, ..is_barrier
 # what the code generator reads from a body (src/julia/nir.jl)
 import ..TreeNode_no_offset, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
        ..nir_invoke_target, ..nir_callee, ..nir_value_type, ..nir_binding_is_constant
