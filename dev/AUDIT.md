@@ -5745,3 +5745,65 @@ MARCH 1.D. By owner: the tests lane holds A64E1; the lead holds A64E2, A64E3 and
 the translator lane holds A64R1 and A64R5; codegen-b holds A64R2; the 1.F lane holds A64R4; the EH model's owner holds
 A64R6; the triage's (b) and try/catch gaps go to wt3-cgstubs, its readIntArray to wt3-codegen, its (p) registry state to
 wt3-skeleton.
+
+## 2026-10-29 — audited through 327dfc5b (5a89f571..327dfc5b: generated imports of src/julia, the runner's native answer after its compiles, the watchdog's kill, an Unquarantined row located only by src or the pin, the honest headline, the parse check before queuing, the line stop read again, entry 64 and its follow-up)
+
+The sixty-fifth audit, beside the work, covers the 7 commits of 5a89f571..327dfc5b that are not entry 64 or its
+follow-up (614f9cbe, a0df288f, its author's), read here, under Dale's R1 and R2 as standing sections and the lead's four
+points. Every finding rests on one exact command, quoted. Standing items. src changes by one generated file alone (`git
+diff --stat 5a89f571..327dfc5b -- src` gives `src/julia/packages.jl | 149`); no exemption lands (`… | grep -cE
+'^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 0). Fixed in the range: A64E1 by c08dd653 (the watchdog, past
+DART_CASE_LIMIT and then DART_CASE_GRACE = 5 s unanswered, prints the case to stderr and kills the process, a plant over
+an allocation-free loop in a child julia proving it), the cause of the 14:12Z hang still open with wt3-tests; A64E2's
+headline half by fa1d5dad (`src: $body of $anchored anchored dart definitions ported with a body`, `body = ported -
+replaced - gaps`, the rejection-only ones beside it, never in it). The lead's points. (1) 570f8269's generated imports
+are refused by L210 when hand-edited, and the plants are real: test/parity_ratchet.jl:491–502 plants a Dart2Wasm block
+missing a name and a hand-added `import ..planted_by_hand` in a block, each required to differ from what
+`dev/skeleton.jl` writes, and reports "the tree's … packages.jl differs … its plants cannot run" when the real file
+does. (2) fa1d5dad is the honest headline above; 545ef8ca parses every changed .jl with `Meta.parseall` before the stack
+queues, naming the file and its error; 327dfc5b reads the line stop again as the check's last step. (3) c08dd653 is
+A64E1's fix, A64E4 its cost; 3f907d24 computes the native answer once, after the compiles it is compared against
+(A61S4's order), its docstring naming the remaining limit (a reader compiled after the native run starts a step on, a
+false failure, never a false pass), A65E1 a site left out. (4) The #undef port has not landed: `grep
+"efbc62d3\|4a024512" …/wt-ship-failures.tsv` gives both red at 15:08Z and 15:12Z, `check: src tests red`, their outputs
+naming `visitConstructorInvocation: the isbits field x#isSet of … left undefined` and `… a#isSet of BoundsError left
+undefined`: the layout's isSet fields arrived before the allocation that fills them, and the landing refused it, as the
+rule asks. Findings A65E1 and A64E4.
+
+Area: builder — empty by diff (`git diff --stat 5a89f571..327dfc5b -- src/wasm_builder` prints nothing).
+
+Area: collection and planning — 570f8269 writes each module's imports of src/julia from the names its files use, the
+module bindings and the Base and Core imports hand-written; computed once, refused when edited by hand (D5, D6). No
+finding.
+
+stopgap in disguise: none new.
+precedent: the generated imports, the generator's own output, as dev/skeleton.jl writes every stub.
+
+Area: emission and diagnostics — empty by diff for src/ outside the generated imports. No finding.
+
+stopgap in disguise: none new.
+precedent: none new.
+
+Area: enforcement and prose — f45cefaf locates an Unquarantined row only by a file of src/ or of the pin, never a plan
+document. (A65E1, low) the landing's core still runs a case's native answer before its compile: `grep -n
+"_dart_same(f(args...)" test/src/dart_tests.jl` gives `1308: _DART_CORE_ONLY && key in DART_NATIVE_DUE && @test
+_dart_same(f(args...), _dart_native(key))`, before the compile at :1310, so a core case the change edits compiles from
+the heap its native run moved, 3f907d24's order left out at that one site (A61S4's rule, C3). Fix: the proof of a
+recorded answer reads the native after the compile, as the runner's native_answer does. (A64E4, low, the watchdog's
+cost) the kill ends the whole process: c08dd653's watchdog kills the test process when a case takes no interrupt, so
+every later case of that shard goes unrun and the shard's red names only the hung case; loud and located (D17), but the
+cases after it are neither passed nor failed until the hang's cause, still open, is fixed. Fix: the hang's cause found,
+with a plant that hangs after the earlier file that leaves the state behind. Requirements: C3 (A65E1); D17 (A64E4); no
+lock fired inside its band.
+
+R1 and R2. R1: the range ports no src definition; 570f8269 generates a file, not a design. R2: fa1d5dad stops the
+headline counting a rejection-only body as ported. Still open under R2: the lead's ruling 2, the (p) rows (dart's own
+body throws or is abstract) told apart in the registry so they count as bodies, not yet landed (wt3-skeleton), so today
+they stand among the "not counted ported"; and parity.jl's _rejection_only_kind still recognizes a rejection-only body
+only when it is one `reject!` statement, a guard and then a rejection counting as a body (A64E2's second half,
+wt3-skeleton).
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A64E1 is fixed by c08dd653, leaving its row, its cost
+carried by A64E4; A64E2's headline half is fixed by fa1d5dad, its registry half open on its row. A65E1 is open on MARCH
+1.T. A64E4 is open on MARCH 1.T. By owner: the tests lane holds A65E1 and A64E4 (with the hang's cause); wt3-skeleton
+holds A64E2's registry half and the (p) state.
