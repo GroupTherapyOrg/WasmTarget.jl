@@ -98,7 +98,9 @@ wall=$(( $(date +%s) - s0 ))
 # scaled pass: the time is printed with the load, as the retired timing ratchet left a slow
 # machine's timing unjudged (L195)
 load=$( { sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg 2>/dev/null; } | tr -d '{}' | awk '{ print int($1) }')
-cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
+# the cores a check's speed rests on: an Apple chip's performance cores (4 of 10 on this machine; on its
+# efficiency cores a check runs at half speed, so a load past the performance cores is a loaded machine)
+cores=$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
 if [ $wall -gt 120 ]; then
   if [ "${load:-0}" -ge "$cores" ]; then echo "check: ${wall}s, past D14's band but UNJUDGED: load ${load} on ${cores} cores"
   else echo "check: RED — ${wall}s, past D14's band (a 60-s target, red past 120 s) at load ${load} on ${cores} cores"; exit 1; fi
