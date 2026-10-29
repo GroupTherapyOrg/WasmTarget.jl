@@ -5,16 +5,21 @@
 
 @parity "dart2wasm/lib/compile.dart:57 CompilationDryRunResult" @closed const CompilationDryRunResult = Union{CompilationDryRunError, CompilationDryRunSuccess}
 
-"""A dry run found the program does not compile to wasm; dart's class holds nothing."""
+"""
+A dry run found the program does not compile to wasm; dart's class holds nothing. A dry run is dart's
+DryRunSummarizer over the front end's component; WasmTarget's is check_subset, Julia's trim verifier,
+which judges the program before a compile starts, so no compile makes a dry run's result: the
+constructor rejects, Internal.
+"""
 @parity "dart2wasm/lib/compile.dart:59 CompilationDryRunError" struct CompilationDryRunError
-    # dart's implicit constructor
-    CompilationDryRunError() = new()
+    # dart's implicit constructor, which no compile reaches
+    CompilationDryRunError() = reject!(Internal("dart2wasm/lib/compile.dart:59 CompilationDryRunError: a dry run's result; WasmTarget's dry run is check_subset, Julia's trim verifier, run before a compile"), "CompilationDryRunError")
 end
 
-"""A dry run found the program compiles to wasm; dart's class holds nothing."""
+"""A dry run found the program compiles to wasm; dart's class holds nothing. As CompilationDryRunError, no compile makes one."""
 @parity "dart2wasm/lib/compile.dart:61 CompilationDryRunSuccess" struct CompilationDryRunSuccess
-    # dart's implicit constructor
-    CompilationDryRunSuccess() = new()
+    # dart's implicit constructor, which no compile reaches
+    CompilationDryRunSuccess() = reject!(Internal("dart2wasm/lib/compile.dart:61 CompilationDryRunSuccess: a dry run's result; WasmTarget's dry run is check_subset, Julia's trim verifier, run before a compile"), "CompilationDryRunSuccess")
 end
 
 @parity "dart2wasm/lib/compile.dart:63 CompilationSuccess" @closed const CompilationSuccess = Union{CfeResult, TfaResult, CodegenResult, OptResult}
@@ -86,7 +91,8 @@ end
 
 """
 The front end crashed with an exception: its `error` and the stack trace it was thrown at, dart's
-Object narrowed to Julia's Exception.
+Object narrowed to Julia's Exception. Julia's front end (lowering, inference, the trim verifier) runs
+in check_subset before a compile, so no compile returns one: the constructor rejects, Internal.
 """
 @parity "dart2wasm/lib/compile.dart:113 CFECrashError" struct CFECrashError
     error::Exception
@@ -98,7 +104,7 @@ end
 """
 The program has compile-time errors, already reported; `component` what the front end built, if
 anything. A Julia program's are Julia's own, which check_subset rejects (OutsideSubset) before a compile
-starts, so no compile returns one.
+starts, so no compile returns one: the constructor rejects, Internal.
 """
 @parity "dart2wasm/lib/compile.dart:132 CFECompileTimeErrors" struct CFECompileTimeErrors
     component::Union{NirWorld,Nothing}
@@ -132,21 +138,14 @@ end
 @parity "dart2wasm/lib/compile.dart:105 OptResult" OptResult(main_wasm_file::String, num_modules::Int, wasm_files::LinkedHashMap{String,Vector{UInt8}})::OptResult =
     OptResult(Val(:_), main_wasm_file, num_modules, wasm_files)
 
-@parity "dart2wasm/lib/compile.dart:117 CFECrashError" CFECrashError(error::Exception, stack_trace::Vector{Base.StackTraces.StackFrame})::CFECrashError =
-    CFECrashError(Val(:_), error, stack_trace)
+@parity "dart2wasm/lib/compile.dart:117 CFECrashError" CFECrashError(error::Exception, stack_trace::Vector{Base.StackTraces.StackFrame})::Union{} =
+    reject!(Internal("dart2wasm/lib/compile.dart:117 CFECrashError: the front end's crash on $error; Julia's front end runs in check_subset, before a compile"), "CFECrashError")
 
-# dart's toString; Julia's show writes to the stream it is given
-@parity "dart2wasm/lib/compile.dart:120 CFECrashError.toString" function Base.show(io::IO, self::CFECrashError)::Nothing
-    # dart's `$error` is the error's toString, Julia's showerror
-    print(io, "CFECrashError(")
-    showerror(io, self.error)
-    print(io, "):\n")
-    Base.show_backtrace(io, self.stack_trace)
-    return nothing
-end
+@parity "dart2wasm/lib/compile.dart:120 CFECrashError.toString" Base.show(io::IO, self::CFECrashError)::Union{} =
+    reject!(Internal("dart2wasm/lib/compile.dart:120 CFECrashError.toString: a front end crash, which no compile returns"), "CFECrashError.toString")
 
-@parity "dart2wasm/lib/compile.dart:135 CFECompileTimeErrors" CFECompileTimeErrors(component::Union{NirWorld,Nothing})::CFECompileTimeErrors =
-    CFECompileTimeErrors(Val(:_), component)
+@parity "dart2wasm/lib/compile.dart:135 CFECompileTimeErrors" CFECompileTimeErrors(component::Union{NirWorld,Nothing})::Union{} =
+    reject!(Internal("dart2wasm/lib/compile.dart:135 CFECompileTimeErrors: compile-time errors; Julia's are its trim verifier's, which check_subset rejects before a compile (OutsideSubset)"), "CFECompileTimeErrors")
 
 # the dart libraries Kernel's LibraryIndex covers; a port names Julia's types and functions directly
 # (the Kernel table's CoreTypes row), so no index is built
@@ -251,14 +250,15 @@ end
 """
 The front end over the program: Julia's lowering, inference and trim verifier, which check_subset ran
 before the compile, so the ClosedWorld it is given has no compile-time error and its front end did not
-crash (CFECompileTimeErrors and CFECrashError are never returned). A dry run (dart's DryRunSummarizer,
-which looks for what does not compile to wasm) is the verifier's own judgement, already made: it
-succeeds. dart's Kernel dump has no counterpart (Julia's program is its IR): asked for, it rejects; and
+crash (CFECompileTimeErrors and CFECrashError are never returned). A dry run is dart's DryRunSummarizer,
+which looks for what does not compile to wasm; WasmTarget's is check_subset itself, run before the
+compile, so a compile asked for one is WasmTarget's own defect and rejects, Internal, never answering
+success unjudged. dart's Kernel dump has no counterpart (Julia's program is its IR): asked for, it rejects; and
 dart writes the component when cfe is the last phase, where a library compile returns it.
 """
-@parity "dart2wasm/lib/compile.dart:299 _runCfePhase" function _run_cfe_phase(options::WasmCompilerOptions, world::ClosedWorld)::Union{CfeResult,CompilationDryRunSuccess}
+@parity "dart2wasm/lib/compile.dart:299 _runCfePhase" function _run_cfe_phase(options::WasmCompilerOptions, world::ClosedWorld)::CfeResult
     local at = "dart2wasm/lib/compile.dart:299 _runCfePhase"
-    options.dry_run && return CompilationDryRunSuccess()
+    options.dry_run && reject!(Internal("$at: a dry run; WasmTarget's is check_subset, Julia's trim verifier, run before a compile"), at)
     options.dump_kernel_after_cfe === nothing ||
         reject!(Unquarantined("src/compile.jl _runCfePhase: a Kernel dump to $(options.dump_kernel_after_cfe); Julia's program is its IR"), at)
     return CfeResult(world)

@@ -26,9 +26,11 @@ end
     local o2 = opts(); o2.phases = [DCm.CompilerPhase_cfe, DCm.CompilerPhase_tfa]
     local tfa = DCm.compile(o2, world)
     @test tfa isa DCm.TfaResult && tfa.component isa W.NirWorld && tfa.component.entry === world.entry && tfa.module_strategy isa DCm.DefaultModuleStrategy
-    # a dry run is the verifier's judgement, already made: it succeeds; a Kernel dump rejects
+    # a dry run is check_subset, run before the compile: asking compile for one rejects, Internal, never
+    # success unjudged; a Kernel dump rejects
     local dr = opts(); dr.dry_run = true
-    @test DCm.compile(dr, world) isa DCm.CompilationDryRunSuccess
+    local ed = try; DCm.compile(dr, world); nothing; catch x; x; end
+    @test ed isa W.RejectionError && ed.rejection isa W.Internal && occursin("check_subset", ed.rejection.site)
     local dk = opts(); dk.dump_kernel_after_cfe = "k.txt"
     local ek = try; DCm.compile(dk, world); nothing; catch x; x; end
     @test ek isa W.RejectionError && ek.rejection isa W.Unquarantined
@@ -83,8 +85,11 @@ isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runne
         write(path, r.js_files["out/prog.mjs"])
         @test success(pipeline(`perl -e 'alarm 30; exec @ARGV' $node --check $path`; stderr = devnull))
     end
-    # a front end's crash prints dart's header, then its stack trace
-    local crash = DCm.CFECrashError(ErrorException("boom"), stacktrace())
-    @test startswith(sprint(show, crash), "CFECrashError(boom):\n")
+    # the front end's results Julia's check_subset answers before a compile: no compile makes one
+    for f in (() -> DCm.CFECrashError(ErrorException("boom"), stacktrace()), () -> DCm.CFECompileTimeErrors(nothing),
+              () -> DCm.CompilationDryRunError(), () -> DCm.CompilationDryRunSuccess())
+        local e = try; f(); nothing; catch x; x; end
+        @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal
+    end
     @test DCm.tag(DCm._RecordClassesRepository()) == "dart2wasm.recordClasses"
 end
