@@ -35,13 +35,9 @@
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
 
-# the corpus's `dart_*` groups, read in a module of their own as test/smoke.jl reads the whole corpus
-const DART_GROUPS = let m = Module(:DartCorpus), groups = Pair{String,Vector{Any}}[]
-    Core.eval(m, :(_g(name, cases) = push!($groups, name => cases)))
-    Core.eval(m, :(_xf(name, cases) = push!($groups, name => cases)))
-    Base.include(m, joinpath(@__DIR__, "..", "smoke_corpus.jl"))
-    filter(g -> startswith(first(g), "dart_"), groups)
-end
+# the corpus's `dart_*` groups, from test/DartCorpus's precompiled image (test/DartCorpus/load.jl)
+include(joinpath(@__DIR__, "..", "DartCorpus", "load.jl"))
+const DART_GROUPS = filter(g -> startswith(first(g), "dart_"), DartCorpus.GROUPS)
 
 # the text the change is measured against: the file at CHECK_BASE, followed across a rename by git's
 # own rename detection (a move leaves its records unchanged), or "" where the base holds none
@@ -103,6 +99,12 @@ _outside(kinds::WasmTarget.TrimErrorKind...) = (:outside, collect(kinds))
 
 # each case: native Julia's answer and the rejection its compile gives today
 # a case whose compile returns a module records :compiled, its modules run against native
+# The records are data: the lines below, read by _dart_record_lines into _DART_RECORDS, each case's kind read from
+# its text and its native answer evaluated when it is due, alone. Evaluated whole, the literal was one top-level
+# expression of some nine hundred nested tuples, and lowering and inferring it took 12 to 19 s of the dart tests'
+# load at background QoS (2026-10-29). It stays a Dict literal so L227 reads the records with Julia's parser, and
+# @static drops it before lowering.
+@static if false
 const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     # tests/web/wasm
     "dart_web_wasm/assertion_failure_message" => (1, :rejects),
@@ -1068,6 +1070,12 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_is/operator" => ((((true, false), (true, false), (true, false), (true, false)), ((true, false), (true, false), (false, true), (true, false), (true, false), (true, false), (false, true), (false, true)), ((false, true), (false, true), (false, true), (false, true), (false, true), (false, true)), (false, false, false, false, false), (true, true, true, true, true)), :compiled),
     "dart_is/optimized" => (((false, true, true, false, true), false, (false, true, true, false, false, true, false), (0, 1, 0, 1, 0, 1, 0, 1, 0), (0, 1, 1, 0), (0, 1), (0, 1, 0, 1, 0, 1)), :rejects),
 )
+end
+
+# each case's record line, its kind read from the text, its native answer evaluated on demand
+const _DART_RECORDS = _dart_record_lines(read(@__FILE__, String))
+_dart_kind(key::String)::Symbol = Symbol(something(match(r", :(\w+)\),\s*$", _DART_RECORDS[key]))[1])
+_dart_native(key::String) = first(Core.eval(@__MODULE__, Meta.parse(rstrip(strip(_DART_RECORDS[key]), ','))))
 
 # a case's answer is native's: of its type, and isequal (a NaN equal to itself, -0.0 apart from 0.0)
 _dart_same(got, native) = typeof(got) == typeof(native) && isequal(got, native)
@@ -1274,11 +1282,11 @@ const _DART_COSTS_OUT = get(ENV, "WT_DART_COSTS_OUT", "")
             local key = "$group/$(case[1])"
             push!(seen, key)
             @testset "$key" begin
-                @test haskey(DART_CASES, key)
-                if haskey(DART_CASES, key)
-                    local native, today = DART_CASES[key]
+                @test haskey(_DART_RECORDS, key)
+                if haskey(_DART_RECORDS, key)
+                    local today = _dart_kind(key)
                     local f, args = case[2], case[3:end]
-                    (key in DART_NATIVE_DUE || !_DART_CORE_ONLY) && @test _dart_same(f(args...), native)
+                    (key in DART_NATIVE_DUE || !_DART_CORE_ONLY) && @test _dart_same(f(args...), _dart_native(key))
                     if !_DART_CORE_ONLY || key in DART_CORE
                         local timed = @timed _dart_outcome(f, args, key)
                         local (got, own), secs = timed.value, _dart_secs(timed)
@@ -1306,11 +1314,11 @@ const _DART_COSTS_OUT = get(ENV, "WT_DART_COSTS_OUT", "")
             open(io -> println(io, _DART_GROUP_KEYS[bi], '\t', round(time() - t0; digits = 1)), _DART_COSTS_OUT, "a")
     end
     # every recorded case is a case of the corpus
-    @test sort!(collect(setdiff(Set(k for k in keys(DART_CASES) if first(split(k, '/')) in _DART_SHARD_GROUPS), seen))) == String[]
+    @test sort!(collect(setdiff(Set(k for k in keys(_DART_RECORDS) if first(split(k, '/')) in _DART_SHARD_GROUPS), seen))) == String[]
     # every record names a group of the corpus, checked whole in every shard and in the landing (names alone, so
     # cheap): a record of a group removed or misspelt falls in no shard's groups and would go unchecked (A57E2)
     local group_names = Set{String}(first(g) for g in DART_GROUPS)
-    @test sort!([k for k in keys(DART_CASES) if !(first(split(k, '/')) in group_names)]) == String[]
+    @test sort!([k for k in keys(_DART_RECORDS) if !(first(split(k, '/')) in group_names)]) == String[]
     # every module read, a node process per group block above: each fact native's, in both modules, or the case
     # fails naming the fact by its path and what the modules answered
     for (key, why) in unread
@@ -1333,7 +1341,7 @@ const _DART_COSTS_OUT = get(ENV, "WT_DART_COSTS_OUT", "")
     end
     global DART_RUN_COUNTS = (nread, length(results), count(r -> r.ok, results))
 end
-println("dart tests: $(_DART_CORE_ONLY ? length(DART_CORE) : length(DART_CASES)) compiles checked$(_DART_CORE_ONLY ? " (the landing core)" : ""); native answers proven for ",
+println("dart tests: $(_DART_CORE_ONLY ? length(DART_CORE) : length(_DART_RECORDS)) compiles checked$(_DART_CORE_ONLY ? " (the landing core)" : ""); native answers proven for ",
         _DART_CORE_ONLY ? "the $(length(DART_NATIVE_DUE)) the change adds or edits against $(_DART_BASE)" : "every case", "; $(DART_RUN_COUNTS[1]) compiled cases run in node, $(DART_RUN_COUNTS[3]) of their $(DART_RUN_COUNTS[2]) facts native's")
 
 # _dart_unlocated against its own plants (A51E1, A57E1): a located Unported and Unquarantined admitted, and each
