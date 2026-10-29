@@ -40,9 +40,9 @@ end
     @test bytes_of(s -> foreach(i -> W.write_byte(s, UInt8(i)), 0:99)) == UInt8.(0:99)
     # a nested chunk is copied in
     @test bytes_of(s -> (c = W.Serializer(); W.write_name(c, "ab"); W.write_data(s, c))) == [0x02, 0x61, 0x62]
-    # a negative unsigned value rejects at the write; watch points reject until ported
+    # a negative unsigned value rejects at the write; a watch point outside the chunk writes it as is
     @test rejects(() -> bytes_of(s -> W.write_unsigned(s, -1)))
-    @test rejects(() -> bytes_of(s -> W.write_data(s, W.Serializer(), [1])))
+    @test bytes_of(s -> W.write_data(s, W.Serializer(), [1])) == UInt8[]
 end
 
 @testset "the source map encodes its mappings as base64 VLQ deltas" begin
@@ -69,6 +69,35 @@ end
     @test W.SourceInfo("a.jl", 1, 2, "g") == W.SourceInfo("a" * ".jl", 1, 2, "g")
     @test W.SourceInfo("a.jl", 1, 2, "g") != W.SourceInfo("a.jl", 1, 3, "g")
     @test hash(W.SourceInfo("a.jl", 1, 2, "g")) == hash(W.SourceInfo("a" * ".jl", 1, 2, "g"))
+end
+
+@testset "serializer.dart: a watch point prints its byte and the trace that wrote it" begin
+    local chunk = W.Serializer()
+    local s = W.Serializer()
+    W.Serializer_trace_enabled[] = true
+    local out = try
+        W.write_byte(chunk, 0x0a); W.write_byte(chunk, 0xbc)
+        W.write_byte(s, 0x01)
+        # the chunk lands at offset 1: watch point 2 is its second byte, 0xbc; 9 is past it
+        mktemp() do path, io
+            redirect_stdout(io) do
+                W.write_data(s, chunk, [2, 9])
+            end
+            close(io)
+            read(path, String)
+        end
+    finally
+        W.Serializer_trace_enabled[] = false
+    end
+    @test W.data(s) == UInt8[0x01, 0x0a, 0xbc]
+    @test startswith(out, "Watch 2: 0xbc\n") && count("Watch", out) == 1
+    # the trace of byte 2 is followed into the chunk, whose byte 1 a write_byte call wrote
+    @test occursin("write_byte", out)
+    # the first trace at a position is kept
+    @test first.(s._traces) == [0, 1] && s._traces[2].second === chunk
+    # with no trace recorded, a watch point has nothing to follow: WasmTarget's own defect
+    local e = try; W.write_data(W.Serializer(), chunk, [0]); nothing; catch x; x; end
+    @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal
 end
 
 end # module SerializerTest

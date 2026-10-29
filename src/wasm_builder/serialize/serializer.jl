@@ -4,18 +4,20 @@
 @parity "wasm_builder/lib/src/serialize/serializer.dart:11 Serializable" abstract type Serializable end
 
 """
-The binary writer: the bytes serialized so far, and the source mappings they carry.
-
-Fields to come (1, with its serializer.dart line): `_traces` :26, the watch points' traces
-(Serializer.debugTrace, unported).
+The binary writer: the bytes serialized so far, the source mappings they carry, and the traces
+(a stack trace, or the serializer of a chunk written there) attached to byte positions for the watch
+points, dart's Object narrowed to the two kinds it holds. dart's `_traces`
+is a SplayTreeMap by position; a position is recorded only at `_index`, which only grows, so the
+traces in recording order are sorted and dart's `lastKeyBefore` is a binary search over them.
 """
 @parity "wasm_builder/lib/src/serialize/serializer.dart:17 Serializer" mutable struct Serializer
     # The prefix of `_data` up to `_index` holds the data serialized so far.
     _data::Vector{UInt8}
     _index::Int
+    const _traces::Vector{Pair{Int,Union{Vector{Base.StackTraces.StackFrame},Serializer}}}
     source_map_serializer::SourceMapSerializer
     # dart's implicit constructor, the fields' initializers
-    Serializer() = new(zeros(UInt8, 24), 0, SourceMapSerializer())
+    Serializer() = new(zeros(UInt8, 24), 0, Pair{Int,Union{Vector{Base.StackTraces.StackFrame},Serializer}}[], SourceMapSerializer())
 end
 
 """
@@ -23,7 +25,8 @@ The interface of everything that serializes to wasm bytes: a method of `serializ
 """
 @parity "wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize" function serialize end
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:18 Serializer.traceEnabled" @unported function Serializer_trace_enabled() end
+# dart's mutable static, set when a module with watch points serializes (module.dart:100)
+@parity "wasm_builder/lib/src/serialize/serializer.dart:18 Serializer.traceEnabled" const Serializer_trace_enabled = Ref(false)
 
 """The current offset in the serialized data."""
 @parity "wasm_builder/lib/src/serialize/serializer.dart:29 Serializer.offset" offset(s::Serializer)::Int = s._index
@@ -40,11 +43,16 @@ The interface of everything that serializes to wasm bytes: a method of `serializ
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/serializer.dart:44 Serializer.debugTrace" @unported function debug_trace(self::Serializer, data::Any) end
+# dart's `_traces[_index] ??= data`: the first trace at a position is kept
+@parity "wasm_builder/lib/src/serialize/serializer.dart:44 Serializer.debugTrace" function debug_trace(self::Serializer, data::Union{Vector{Base.StackTraces.StackFrame},Serializer})::Nothing
+    (isempty(self._traces) || self._traces[end].first != self._index) && push!(self._traces, self._index => data)
+    return nothing
+end
 
 # dart asserts `byte == byte & 0xFF` (serializer.dart:50); the argument's type makes any other
 # byte unwritable.
 @parity "wasm_builder/lib/src/serialize/serializer.dart:48 Serializer.writeByte" function write_byte(s::Serializer, byte::UInt8)::Nothing
+    Serializer_trace_enabled[] && debug_trace(s, stacktrace())
     _ensure(s, 1)
     s._index += 1
     @inbounds s._data[s._index] = byte
@@ -52,6 +60,7 @@ end
 end
 
 @parity "wasm_builder/lib/src/serialize/serializer.dart:55 Serializer.writeBytes" function write_bytes(s::Serializer, bytes::AbstractVector{UInt8})::Nothing
+    Serializer_trace_enabled[] && debug_trace(s, stacktrace())
     n = length(bytes)
     _ensure(s, n)
     copyto!(s._data, s._index + 1, bytes, firstindex(bytes), n)
@@ -140,9 +149,29 @@ end
     nothing
 end
 
+# a watch point inside the chunk prints its byte and the trace that wrote it, followed through the
+# serializers each chunk was written by; a position with no trace at or before it is WasmTarget's own
+# defect (dart's `lastKeyBefore(offset)!`)
 @parity "wasm_builder/lib/src/serialize/serializer.dart:120 Serializer.writeData" function write_data(s::Serializer, chunk::Serializer, watch_points::Vector{Int}=Int[])::Nothing
-    isempty(watch_points) || reject!(Unported("wasm_builder/lib/src/serialize/serializer.dart:120 Serializer.writeData"), "write_data")
-    write_bytes(s, data(chunk))
+    Serializer_trace_enabled[] && debug_trace(s, chunk)
+    local chunk_data = data(chunk)
+    for watch_point in watch_points
+        if s._index <= watch_point < s._index + length(chunk_data)
+            local byte_value = chunk_data[watch_point - s._index + 1]
+            local trace::Union{Vector{Base.StackTraces.StackFrame},Serializer} = s
+            local offset = watch_point
+            while trace isa Serializer
+                # dart's `containsKey(offset) ? offset : lastKeyBefore(offset)`: the last position at or before it
+                local i = searchsortedlast(first.(trace._traces), offset)
+                i == 0 && reject!(Internal("wasm_builder/lib/src/serialize/serializer.dart:120 Serializer.writeData: no trace at or before $offset for the watch point $watch_point"), "write_data")
+                local key_offset = trace._traces[i].first
+                trace = trace._traces[i].second
+                offset -= key_offset
+            end
+            println("Watch $watch_point: 0x$(string(byte_value; base = 16, pad = 2))\n$trace")
+        end
+    end
+    write_bytes(s, chunk_data)
 end
 
 @parity "wasm_builder/lib/src/serialize/serializer.dart:141 Serializer.data" data(s::Serializer)::Vector{UInt8} = s._data[1:s._index]
