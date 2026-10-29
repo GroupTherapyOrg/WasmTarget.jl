@@ -496,6 +496,20 @@ end
     @test result isa IR.RefType && length(ins) == 3 && startswith(ins[end], "array.new_fixed")
 end
 
+@testset "code_generator.dart: the source map's source, types, and what a Julia method never needs" begin
+    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    @test D.types(g) === g.translator.types[]
+    # the source swaps in and the old one comes back, with the file offset beside it
+    @test D.set_source_map_source(g, :file) === nothing && D.set_source_map_source(g, nothing) === :file
+    @test D.set_source_map_source_and_file_offset(g, :file, D.TreeNode_no_offset) == (nothing, D.TreeNode_no_offset)
+    # a Julia method is never external, checks no covariant parameter and has no type argument at run
+    # time; an abstract code generator has no instance: each an Internal, located
+    @test rejection(() -> D.emit_unimplemented_external_error(g, g.member)).rejection isa W.Internal
+    @test rejection(() -> D.AstCodeGenerator(g.translator, g.function_type, g.member)).rejection isa W.Internal
+    local call = g.body.stmts[1]::W.NirCall
+    @test occursin("visitAsExpression", rejection(() -> D.visit_null_check(g, call, IR.NumType_i32)).rejection.site)
+end
+
 @testset "code_generator.dart: a PiNode is the unchecked as" begin
     local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
     # the narrowing translates its operand at the expected type: the argument's local, read

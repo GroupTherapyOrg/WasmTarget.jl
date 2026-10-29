@@ -212,9 +212,14 @@ translator's function collector holds each Lambda.
     end
 end
 
-@parity "dart2wasm/lib/code_generator.dart:38 CodeGenerator.generate" @unported function generate(self::CodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
+# dart's abstract interface method: each concrete code generator defines its own
+@parity "dart2wasm/lib/code_generator.dart:38 CodeGenerator.generate" generate(self::CodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:38 CodeGenerator.generate: abstract in $(typeof(self))"), "generate")
 
-@parity "dart2wasm/lib/code_generator.dart:112 AstCodeGenerator" @unported function AstCodeGenerator(translator, function_type, enclosing_member) end
+# an abstract class's constructor: a Julia abstract type has no instance, and each concrete code
+# generator's tagged constructor initializes AstCodeGenerator's fields (SynchronousProcedureCodeGenerator)
+@parity "dart2wasm/lib/code_generator.dart:112 AstCodeGenerator" AstCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, enclosing_member::Core.MethodInstance)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:112 AstCodeGenerator: an abstract type has no instance; a concrete code generator's constructor initializes its fields"), "$(enclosing_member)")
 
 @parity "dart2wasm/lib/code_generator.dart:114 AstCodeGenerator.outputs" outputs(self::AstCodeGenerator)::Vector{WasmBuilder.IR.ValueType} = self.function_type.outputs
 
@@ -224,7 +229,7 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:120 AstCodeGenerator.voidMarker" void_marker(self::AstCodeGenerator)::WasmBuilder.IR.ValueType = self.translator.void_marker[]
 
-@parity "dart2wasm/lib/code_generator.dart:122 AstCodeGenerator.types" @unported function types(self::AstCodeGenerator) end
+@parity "dart2wasm/lib/code_generator.dart:122 AstCodeGenerator.types" types(self::AstCodeGenerator)::Types = self.translator.types[]
 
 # dart's DartType is Julia's Type (the type Julia inferred)
 @parity "dart2wasm/lib/code_generator.dart:124 AstCodeGenerator.translateType" translate_type(self::AstCodeGenerator, type_::Type)::WasmBuilder.IR.ValueType = translate_type(self.translator, type_)
@@ -249,7 +254,11 @@ end
     unimplemented(self, node, string(typeof(node)), expected_type == void_marker(self) ? WasmBuilder.IR.ValueType[] : WasmBuilder.IR.ValueType[expected_type])
 end
 
-@parity "dart2wasm/lib/code_generator.dart:176 AstCodeGenerator.setSourceMapSource" @unported function set_source_map_source(self::AstCodeGenerator, source::Union{Nothing,Symbol}) end
+@parity "dart2wasm/lib/code_generator.dart:176 AstCodeGenerator.setSourceMapSource" function set_source_map_source(self::AstCodeGenerator, source::Union{Nothing,Symbol})::Union{Nothing,Symbol}
+    local old = self._source_map_source
+    self._source_map_source = source
+    return old
+end
 
 # a NIR statement carries no file offset yet, each passing dart's TreeNode.noOffset, which stops the
 # mapping; Julia's statement positions (its debuginfo) are the offsets still to read
@@ -269,7 +278,11 @@ end
     reject!(Unquarantined("src/julia/nir.jl: a NIR statement's source position, Julia's debuginfo"), "dart2wasm/lib/code_generator.dart:190 AstCodeGenerator.setSourceMapFileOffset")
 end
 
-@parity "dart2wasm/lib/code_generator.dart:217 AstCodeGenerator.setSourceMapSourceAndFileOffset" @unported function set_source_map_source_and_file_offset(self::AstCodeGenerator, source::Union{Nothing,Symbol}, file_offset::Int64) end
+@parity "dart2wasm/lib/code_generator.dart:217 AstCodeGenerator.setSourceMapSourceAndFileOffset" function set_source_map_source_and_file_offset(self::AstCodeGenerator, source::Union{Nothing,Symbol}, file_offset::Int64)::Tuple{Union{Nothing,Symbol},Int}
+    local old_source = set_source_map_source(self, source)
+    local old_file_offset = set_source_map_file_offset(self, file_offset)
+    return (old_source, old_file_offset)
+end
 
 @parity "dart2wasm/lib/code_generator.dart:228 AstCodeGenerator.generate" function generate(self::AstCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
     self.b[] = b
@@ -309,7 +322,7 @@ end
                 local_ = new_local
             end
         end
-        may_need_to_check_types && reject!(Unported("dart2wasm/lib/code_generator.dart:3306 AstCodeGenerator._generateArgumentTypeCheck"), "$(member): the parameter $variable_name")
+        may_need_to_check_types && reject!(Internal("dart2wasm/lib/code_generator.dart:3306 AstCodeGenerator._generateArgumentTypeCheck: Julia checks no covariant parameter (needToCheckTypesFor)"), "$(member): the parameter $variable_name")
         local_ = _upcast_parameter_local_if_needed(self, variable, local_; is_forwarder = is_forwarder)
         self.locals[variable] = local_
     end
@@ -1137,7 +1150,8 @@ end
 @parity "dart2wasm/lib/code_generator.dart:2810 AstCodeGenerator.visitConditionalExpression" visit_conditional_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:2810 AstCodeGenerator.visitConditionalExpression: Julia's lowering flattens it into statements, branches and phis, which visitBlock structures by LLVM's stackifier"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2824 AstCodeGenerator.visitNullCheck" @unported function visit_null_check(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2824 AstCodeGenerator.visitNullCheck" visit_null_check(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2824 AstCodeGenerator.visitNullCheck: Julia has no null-check operator: a narrowing of Union{Nothing,T} is a typeassert or a PiNode, visitAsExpression's"), "$(self.enclosing_member)")
 
 # a Julia call's arguments are its operands after the callee (`args[1]`), all positional: Julia has
 # no type arguments at run time, lowering passes keywords positionally, and an optional argument
@@ -1151,7 +1165,8 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation" @unported function visit_string_concatenation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation" visit_string_concatenation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation: Julia builds a string by calls of Base's methods, each an invoke, visitStaticInvocation's"), "$(self.enclosing_member)")
 
 @parity "dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow" @unported function visit_throw(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
 
@@ -1191,7 +1206,8 @@ end
     return expected_type
 end
 
-@parity "dart2wasm/lib/code_generator.dart:3014 AstCodeGenerator.visitListLiteral" @unported function visit_list_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3014 AstCodeGenerator.visitListLiteral" visit_list_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:3014 AstCodeGenerator.visitListLiteral: Julia builds an array by calls of Base's methods (vect and its kin), each an invoke, visitStaticInvocation's"), "$(self.enclosing_member)")
 
 # dart's item index counts from 0, as Translator.makeArray passes it
 @parity "dart2wasm/lib/code_generator.dart:3049 AstCodeGenerator.makeArrayFromExpressions" function make_array_from_expressions(self::AstCodeGenerator, expressions::Vector{NirValue}, element_type::Type)::WasmBuilder.IR.ValueType
@@ -1202,9 +1218,11 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3062 AstCodeGenerator.makeArray" make_array(self::AstCodeGenerator, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item::Function)::WasmBuilder.IR.ValueType =
     make_array(self.translator, self.b[], array_type, length, generate_item)
 
-@parity "dart2wasm/lib/code_generator.dart:3071 AstCodeGenerator.visitMapLiteral" @unported function visit_map_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3071 AstCodeGenerator.visitMapLiteral" visit_map_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:3071 AstCodeGenerator.visitMapLiteral: Julia builds a Dict by calls of Base's methods, each an invoke, visitStaticInvocation's"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:3119 AstCodeGenerator.visitSetLiteral" @unported function visit_set_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:3119 AstCodeGenerator.visitSetLiteral" visit_set_literal(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:3119 AstCodeGenerator.visitSetLiteral: Julia builds a Set by calls of Base's methods, each an invoke, visitStaticInvocation's"), "$(self.enclosing_member)")
 
 @parity "dart2wasm/lib/code_generator.dart:3154 AstCodeGenerator.visitTypeLiteral" @unported function visit_type_literal(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType) end
 
@@ -1333,11 +1351,17 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3292 AstCodeGenerator.visitFileUriExpression" visit_file_uri_expression(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:3292 AstCodeGenerator.visitFileUriExpression: Julia's lowering keeps a statement's file in its debuginfo, no expression wraps it"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:3306 AstCodeGenerator._generateArgumentTypeCheck" @unported function _generate_argument_type_check(self::AstCodeGenerator, arg_name::String, argument_type::WasmBuilder.IR.RefType, tested_against_type::Type) end
+@parity "dart2wasm/lib/code_generator.dart:3306 AstCodeGenerator._generateArgumentTypeCheck" _generate_argument_type_check(self::AstCodeGenerator, arg_name::String, argument_type::WasmBuilder.IR.RefType, tested_against_type::Type)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:3306 AstCodeGenerator._generateArgumentTypeCheck: Julia checks no covariant parameter: its dispatch proved every argument's type (needToCheckTypesFor)"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:3341 AstCodeGenerator._generateTypeArgumentBoundCheck" @unported function _generate_type_argument_bound_check(self::AstCodeGenerator, arg_name::String, type_local::WasmBuilder.IR.Local, bound::Type) end
+@parity "dart2wasm/lib/code_generator.dart:3341 AstCodeGenerator._generateTypeArgumentBoundCheck" _generate_type_argument_bound_check(self::AstCodeGenerator, arg_name::String, type_local::WasmBuilder.IR.Local, bound::Type)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:3341 AstCodeGenerator._generateTypeArgumentBoundCheck: a Julia method has no type argument at run time: its static parameters are part of the MethodInstance"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:3364 AstCodeGenerator._emitString" @unported function _emit_string(self::AstCodeGenerator, str::String) end
+# dart's non-nullable String is Julia's String
+@parity "dart2wasm/lib/code_generator.dart:3364 AstCodeGenerator._emitString" function _emit_string(self::AstCodeGenerator, str::String)::Nothing
+    translate_expression(self, NirConst(Core.Const(str)), translate_type(self.translator, String))
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:3370 AstCodeGenerator.visitPatternSwitchStatement" visit_pattern_switch_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:3370 AstCodeGenerator.visitPatternSwitchStatement: Julia's IR has no structured statement: lowering makes it GotoIfNot and GotoNode, which visitBlock structures by LLVM's stackifier"), "$(self.enclosing_member)")
@@ -1356,7 +1380,8 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3409 AstCodeGenerator.visitAuxiliaryInitializer" visit_auxiliary_initializer(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:3409 AstCodeGenerator.visitAuxiliaryInitializer: a Julia inner constructor has no initializer list: its new() is NirNew, visitConstructorInvocation's"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:3415 AstCodeGenerator.emitUnimplementedExternalError" @unported function emit_unimplemented_external_error(self::AstCodeGenerator, member::Core.MethodInstance) end
+@parity "dart2wasm/lib/code_generator.dart:3415 AstCodeGenerator.emitUnimplementedExternalError" emit_unimplemented_external_error(self::AstCodeGenerator, member::Core.MethodInstance)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:3415 AstCodeGenerator.emitUnimplementedExternalError: a Julia method is never external: the trim verifier accepted its body"), "$(member)")
 
 # deferred loading is out of scope (dev/skeleton_scope.toml), so no constant has a deferred module to
 # guard
@@ -1365,7 +1390,12 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:3450 AstCodeGenerator.instantiateConstantBackendUse" @unported function instantiate_constant_backend_use(self::AstCodeGenerator, constant::NirConst, expected_type::WasmBuilder.IR.ValueType) end
+# deferred loading is out of scope (dev/PARITY_MASTER.md), so no use of a constant carries a deferred
+# module guard, the backend's or the program's
+@parity "dart2wasm/lib/code_generator.dart:3450 AstCodeGenerator.instantiateConstantBackendUse" function instantiate_constant_backend_use(self::AstCodeGenerator, constant::NirConst, expected_type::WasmBuilder.IR.ValueType)::Nothing
+    instantiate_constant(self.translator.constants[], self.b[], constant, expected_type)
+    return nothing
+end
 
 # a Julia method is synchronous (tasks are out of scope, rejected by Julia's verifier) and never a
 # constructor, field or tear-off (a struct's constructor is Expr(:new) in a body, a field read a
