@@ -1577,6 +1577,8 @@ function write_main()::Int
         write(path, text)
         n += 1
     end
+    local pk = packages_text()
+    pk == read(PACKAGES, String) || (write(PACKAGES, pk); n += 1)
     println("skeleton: $n file(s) written")
     local stale = unused_kernel_rows(S)
     isempty(stale) || error("skeleton: KERNEL_TYPES rows no in-scope file names: $(join(stale, ", "))")
@@ -1610,6 +1612,7 @@ function diff_faults(S::Scope = read_scope(); fields::Bool = true)::Vector{Strin
         x === nothing || push!(out, x)
     end
     append!(out, ("KERNEL_TYPES row $r: no in-scope file names it" for r in unused_kernel_rows(S)))
+    packages_text() == src_text(PACKAGES) || push!(out, "src/julia/packages.jl's generated imports differ from what dev/skeleton.jl writes")
     fields && append!(out, field_faults(S))
     fields && append!(out, kernel_param_faults(S))
     return out
@@ -1815,6 +1818,182 @@ function kernel_param_faults(S::Scope)::Vector{String}
         end
     end
     return out
+end
+
+# ---- the modules' imports of src/julia: src/julia/packages.jl's generated blocks ----------------
+# Each package module (Runtime, LLVM, WasmBuilder and IR, Dart2Wasm with Util and JS) imports exactly
+# the src/julia names its own files use: every identifier or macro of its files that a src/julia file
+# defines at WasmTarget's top level, less a name the module's files define themselves. `write` writes
+# each module's block between its markers in src/julia/packages.jl, so no lane hand-edits an import of
+# src/julia (D5, D6: the list is computed, never agreed); L210 refuses a block that differs.
+
+const PACKAGES = joinpath(ROOT, "src", "julia", "packages.jl")
+PACKAGES_PATH()::String = PACKAGES
+# the modules a block is written for, each with its dot depth in packages.jl and its files: the
+# directories the pin tables' modules map to (DART_MODULES, LLVM_MODULES, RUNTIME_MODULES)
+const PACKAGE_MODULES = ["Runtime" => "..", "LLVM" => "..", "WasmBuilder" => "..", "IR" => "...",
+                         "Dart2Wasm" => "..", "Util" => "...", "JS" => "..."]
+function module_files()::Dict{String,Vector{String}}
+    local out = Dict(m => String[] for (m, _) in PACKAGE_MODULES)
+    for f in scope()
+        push!(out[last(split(module_of(f), '.'))], jl_file(f))
+    end
+    for (dir, mod) in (("llvm", "LLVM"), ("runtime", "Runtime"))
+        local d = joinpath(ROOT, "src", dir)
+        isdir(d) || continue
+        for (r, _, fs) in walkdir(d), x in fs
+            endswith(x, ".jl") && push!(out[mod], joinpath(r, x))
+        end
+    end
+    return out
+end
+
+# the names a parsed form defines at top level: types, functions, constants, macros, an @enum's
+# values, and those of a `let` block's quoted definitions (parity.jl's registry block)
+function defined_names!(out::Set{String}, ex)
+    ex isa Expr || return out
+    local h = ex.head
+    if h in (:toplevel, :block, :quote)
+        foreach(a -> defined_names!(out, a), ex.args)
+    elseif h == :let
+        for b in (Meta.isexpr(ex.args[1], :block) ? ex.args[1].args : [ex.args[1]])
+            Meta.isexpr(b, :(=)) && defined_names!(out, b.args[2])
+        end
+        defined_names!(out, ex.args[2])
+    elseif h == :macrocall
+        local m = ex.args[1]
+        if m === Symbol("@enum")
+            local args = filter(a -> !(a isa LineNumberNode), ex.args[2:end])
+            local t = args[1]; push!(out, string(Meta.isexpr(t, :(::)) ? t.args[1] : t))
+            foreach(v -> v isa Symbol && push!(out, string(v)), args[2:end])
+        else
+            defined_names!(out, ex.args[end])
+        end
+    elseif h == :struct
+        local t = ex.args[2]; t = Meta.isexpr(t, :(<:)) ? t.args[1] : t; t = Meta.isexpr(t, :curly) ? t.args[1] : t
+        t isa Symbol && push!(out, string(t))
+    elseif h in (:abstract, :primitive)
+        local t = ex.args[1]; t = Meta.isexpr(t, :(<:)) ? t.args[1] : t; t = Meta.isexpr(t, :curly) ? t.args[1] : t
+        t isa Symbol && push!(out, string(t))
+    elseif h == :const
+        defined_names!(out, ex.args[1])
+    elseif h in (:function, :(=))
+        local c = ex.args[1]
+        while Meta.isexpr(c, :where) || Meta.isexpr(c, :(::)) && length(c.args) == 2; c = c.args[1]; end
+        if Meta.isexpr(c, :call)
+            c.args[1] isa Symbol && push!(out, string(c.args[1]))
+        elseif c isa Symbol
+            push!(out, string(c))
+        end
+    elseif h == :macro
+        local c = ex.args[1]
+        Meta.isexpr(c, :call) && c.args[1] isa Symbol && push!(out, "@" * string(c.args[1]))
+    end
+    return out
+end
+function julia_defined()::Set{String}
+    local out = Set{String}()
+    for (r, _, fs) in walkdir(joinpath(ROOT, "src", "julia")), x in fs
+        local p = joinpath(r, x)
+        (endswith(x, ".jl") && p != PACKAGES) || continue
+        defined_names!(out, Meta.parseall(read(p, String); filename = p))
+    end
+    return setdiff(out, Set(first.(PACKAGE_MODULES)))
+end
+
+# the names a file's code refers to, unqualified: every symbol of its parsed forms and every macro it
+# calls, but a struct's field names, a keyword argument's name and the field of `x.f` (a QuoteNode),
+# which name no binding
+function used_names(text::AbstractString, file::AbstractString = "none")::Set{String}
+    local out = Set{String}()
+    local walk(x) = begin
+        if x isa Symbol
+            push!(out, string(x))
+        elseif x isa Expr
+            if x.head == :macrocall
+                x.args[1] isa Symbol && push!(out, string(x.args[1]))
+                foreach(walk, x.args[2:end])
+            elseif x.head == :struct
+                walk(x.args[2])
+                for f in x.args[3].args
+                    local g = Meta.isexpr(f, :const) ? f.args[1] : f
+                    g isa Symbol && continue                       # an untyped field's name
+                    Meta.isexpr(g, :(::)) && length(g.args) == 2 ? walk(g.args[2]) : walk(g)
+                end
+            elseif x.head == :kw
+                # a keyword's name names no binding; its type and default do
+                Meta.isexpr(x.args[1], :(::)) && walk(x.args[1].args[end])
+                walk(x.args[2])
+            elseif x.head == :.
+                walk(x.args[1])
+            else
+                foreach(walk, x.args)
+            end
+        end
+    end
+    walk(Meta.parseall(text; filename = String(file)))
+    return out
+end
+
+# a module's block: its src/julia names, sorted, one import wrapped at 100 columns
+function import_block(names::Vector{String}, dots::String)::String
+    isempty(names) && return ""
+    local lines, cur = String[], "import "
+    for (i, n) in enumerate(names)
+        local item = dots * n * (i < length(names) ? "," : "")
+        if length(cur) + length(item) + 1 > 100 && cur != "import "
+            push!(lines, rstrip(cur)); cur = "       "
+        end
+        cur *= item * " "
+    end
+    push!(lines, rstrip(cur))
+    return join(lines, "\n")
+end
+
+const BLOCK_RX(m) = Regex("(# ---- the src/julia names \\Q$(m)\\E's files use, written by dev/skeleton\\.jl write ----\\n)(?s:.*?)(# ---- end of $(m)'s src/julia names ----)")
+
+# the macros packages.jl's body of module `m` calls outside its nested modules' bodies (the
+# @quarantine declaring IR, Util or JS)
+function own_body_names(text::AbstractString, m::AbstractString)::Set{String}
+    local out = Set{String}()
+    local find(x) = begin
+        x isa Expr || return nothing
+        Meta.isexpr(x, :module) && string(x.args[2]) == m && return x
+        for a in x.args
+            local r = find(a); r === nothing || return r
+        end
+        nothing
+    end
+    local mx = find(Meta.parseall(text))
+    mx === nothing && return out
+    for st in mx.args[3].args
+        Meta.isexpr(st, :macrocall) && st.args[1] isa Symbol && Meta.isexpr(st.args[end], :module) && push!(out, string(st.args[1]))
+    end
+    return out
+end
+
+# packages.jl as `write` writes it: each module's block regenerated from its files' text
+function packages_text(read_src::Function = src_text)::String
+    local text = read_src(PACKAGES)
+    local defined = julia_defined()
+    local files = module_files()
+    for (m, dots) in PACKAGE_MODULES
+        local used, own = Set{String}(), Set{String}()
+        for f in files[m]
+            isfile(f) || continue
+            local t = read_src(f)
+            union!(used, used_names(t, f))
+            defined_names!(own, Meta.parseall(t; filename = f))
+        end
+        # packages.jl's own body of the module names some too: the macro declaring a nested module
+        union!(used, own_body_names(text, m))
+        local names = sort!(collect(setdiff(intersect(used, defined), own)))
+        local rx = BLOCK_RX(m)
+        occursin(rx, text) || error("skeleton: src/julia/packages.jl holds no generated block for $m")
+        local block = import_block(names, dots)
+        text = replace(text, rx => s -> (local mm = match(rx, s); mm[1] * (isempty(block) ? "" : block * "\n") * mm[2]))
+    end
+    return text
 end
 
 # ---- merging another lane's port --------------------------------------------------------------
