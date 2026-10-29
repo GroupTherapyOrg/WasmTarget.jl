@@ -46,7 +46,14 @@ front end's experiment flags; Julia's front end is Julia itself, so no flag reac
             CompilerPhase[CompilerPhase_cfe, CompilerPhase_tfa, CompilerPhase_codegen])
 end
 
-@parity "dart2wasm/lib/compiler_options.dart:27 CompilerPhase.parse" @unported function CompilerPhase_parse(name::String) end
+# a phase's name is dart's enum name, Julia's @enum value printed without its type's prefix; dart's
+# ArgumentError is Julia's own
+@parity "dart2wasm/lib/compiler_options.dart:27 CompilerPhase.parse" function CompilerPhase_parse(name::String)::CompilerPhase
+    for phase in instances(CompilerPhase)
+        chopprefix(string(Symbol(phase)), "CompilerPhase_") == name && return phase
+    end
+    throw(ArgumentError("Invalid compiler phase name: $name"))
+end
 
 @parity "dart2wasm/lib/compiler_options.dart:36 WasmCompilerOptions.mainModuleId" WasmCompilerOptions_main_module_id()::Int = 0
 
@@ -103,6 +110,71 @@ end
 
 @parity "dart2wasm/lib/compiler_options.dart:139 WasmCompilerOptions.readCodegen" read_codegen(self::WasmCompilerOptions)::Bool = self.phases[1] == CompilerPhase_codegen
 
-@parity "dart2wasm/lib/compiler_options.dart:141 WasmCompilerOptions.validate" @unported function validate(self::WasmCompilerOptions) end
+# an inconsistent set of options is the caller's error, dart's ArgumentError and Julia's own
+@parity "dart2wasm/lib/compiler_options.dart:141 WasmCompilerOptions.validate" function validate(self::WasmCompilerOptions)::Nothing
+    local translator_options = self.translator_options
+    if translator_options.import_shared_memory && translator_options.shared_memory_max_pages === nothing
+        throw(ArgumentError("--shared-memory-max-pages must be specified if --import-shared-memory is used."))
+    end
 
-@parity "dart2wasm/lib/compiler_options.dart:183 WasmCompilerOptions._validatePhases" @unported function _validate_phases(self::WasmCompilerOptions) end
+    if !translator_options.enable_deferred_loading
+        self.deferred_map_uri === nothing || throw(ArgumentError("--deferred-map can only be used with --enable-deferred-loading"))
+        self.use_load_ids && throw(ArgumentError("--use-load-ids can only be used with --enable-deferred-loading"))
+    elseif self.use_load_ids && self.deferred_map_uri === nothing
+        throw(ArgumentError("--use-load-ids requires --deferred-map"))
+    end
+
+    if translator_options.standalone
+        local handle_unsupported_option(enabled::Bool, name::String) =
+            enabled && throw(ArgumentError("$name is not supported with --standalone"))
+        handle_unsupported_option(translator_options.enable_deferred_loading, "--enable-deferred-loading")
+    end
+
+    _validate_phases(self)
+    return nothing
+end
+
+# dart's path.extension, the extension with its dot, is Julia's splitext's second part
+@parity "dart2wasm/lib/compiler_options.dart:183 WasmCompilerOptions._validatePhases" function _validate_phases(self::WasmCompilerOptions)::Nothing
+    isempty(self.phases) && throw(ArgumentError("--phases must contain at least one phase."))
+
+    local previous_phase = nothing
+    for phase in self.phases
+        # Ensure phases are consecutive
+        if previous_phase !== nothing && Integer(previous_phase) != Integer(phase) - 1
+            throw(ArgumentError("--phases must contain consecutive phases."))
+        end
+        previous_phase = phase
+    end
+
+    # Ensure correct input file type
+    local input_extension = last(splitext(self.main_uri))
+    local first_phase = self.phases[1]
+    if first_phase == CompilerPhase_cfe
+        input_extension == ".dart" || throw(ArgumentError("Input to cfe phase must be a .dart file."))
+    elseif first_phase == CompilerPhase_tfa
+        input_extension == ".dill" || throw(ArgumentError("Input to tfa phase must be a .dill file."))
+    elseif first_phase == CompilerPhase_codegen
+        input_extension == ".dill" || throw(ArgumentError("Input to codegen phase must be a .dill file."))
+    elseif first_phase == CompilerPhase_opt
+        input_extension == ".wasm" || throw(ArgumentError("Input to opt phase must be a .wasm file."))
+    end
+
+    # Ensure correct output file type
+    local output_extension = last(splitext(self.output_file))
+    local last_phase = self.phases[end]
+    if last_phase == CompilerPhase_cfe
+        output_extension == ".dill" || throw(ArgumentError("Output from cfe phase must be a .dill file."))
+    elseif last_phase == CompilerPhase_tfa
+        output_extension == ".dill" || throw(ArgumentError("Output from tfa phase must be a .dill file."))
+    elseif last_phase == CompilerPhase_codegen
+        output_extension == ".wasm" || throw(ArgumentError("Output from codegen phase must be a .wasm file."))
+    elseif last_phase == CompilerPhase_opt
+        output_extension == ".wasm" || throw(ArgumentError("Output from opt phase must be a .wasm file."))
+    end
+
+    if CompilerPhase_opt in self.phases && self.translator_options.optimization_level == 0
+        throw(ArgumentError("Cannot specify \"opt\" phase with optimization level 0"))
+    end
+    return nothing
+end
