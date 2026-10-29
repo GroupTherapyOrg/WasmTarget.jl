@@ -37,8 +37,16 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
     for b in world
         foreach(t -> _meet_value!(out, seen, t, at), Base.unwrap_unionall(b.ci.def.specTypes).parameters)
         foreach(t -> _meet_value!(out, seen, t, at), b.types)
-        for st in b.stmts, v in nir_value_operands(st)
-            v isa Union{NirConst,NirGlobal} && _meet_value!(out, seen, nir_value_type(b, v), at)
+        for st in b.stmts
+            for v in nir_value_operands(st)
+                v isa Union{NirConst,NirGlobal} && _meet_value!(out, seen, nir_value_type(b, v), at)
+            end
+            # a tuple's class is its operands' (nir_tuple_type), which the statement's widened type
+            # may hide; a tuple whose class only run time knows brings none
+            if st isa NirCall && nir_callee(st) === Core.tuple
+                local tt = nir_tuple_type(b, st)
+                isconcretetype(tt) && _meet_value!(out, seen, tt, at)
+            end
         end
         _meet_value!(out, seen, b.ci.rettype, at)
     end

@@ -1049,8 +1049,7 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_setter/checked3" => ((true, true, true), :outside),
     "dart_setter/checked_setter" => ((true,), :outside),
     "dart_setter/no_getter_call_runtime" => ((4, 6), :outside),
-    # WT bug: WasmTarget rejects MethodInstance for (::Main.DartCorpus.var"#7984#7985")(::Int64): internal error at dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral: no class info for Tuple{Int64, Int64, Int64}
-    "dart_setter/override2" => ((42, 42, 42), :wt_bug),
+    "dart_setter/override2" => ((42, 42, 42), :compiled),
     "dart_setter/override3" => ((42, 21), :compiled),
     "dart_setter/override" => ((42,), :rejects),
     "dart_setter/setter0" => ((10, 30, 20, 20), :rejects),

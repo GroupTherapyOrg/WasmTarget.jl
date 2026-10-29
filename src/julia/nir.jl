@@ -544,6 +544,20 @@ expression (dartTypeOf) and the closed world's classes (closed_world_classes) bo
 end
 
 """
+    nir_tuple_type(body, st) -> Type
+
+The class of the tuple `st`, a call of `Core.tuple`, builds: Julia's own answer, its tuple inference
+of the operands' types (`Core.Compiler.tuple_tfunc`, widened), so `tuple(Int, 1)` is a
+`Tuple{DataType, Int64}`. A statement's inferred type can be wider than the tuple it builds (Julia
+widens `tuple(x, y)` to `Tuple{Any, Any}` where the result flows to a wider place), while the
+object's class is always its operands' runtime types: the one source of that class, read by the
+closed world's classes and by the code generator's record literal.
+"""
+@quarantine "a tuple's class is Julia's tuple inference of its operands' types, which a statement's widened type may hide" Core.Compiler.tuple_tfunc function nir_tuple_type(body::NirBody, st::NirCall)::Type
+    return Core.Compiler.widenconst(Core.Compiler.tuple_tfunc(Core.Compiler.fallback_lattice, Any[nir_value_type(body, a) for a in st.args[2:end]]))
+end
+
+"""
     nir_method_nargs(mi) -> Int
 
 How many arguments `mi`'s method takes, the callee `Argument(1)` among them; a varargs method rejects,

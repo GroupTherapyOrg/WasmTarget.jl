@@ -156,3 +156,29 @@ mk(x::Int64, y::Float64) = (x, y)
     @test length(results) >= 7 && all(r -> r.ok, results)
 end
 end
+
+# a tuple whose statement Julia widened (Tuple{Any, Any}) is still an instance of its operands' class,
+# Tuple{Int64, Int64}: the closed world's classes hold it (nir_tuple_type), so its literal compiles, and
+# a program testing and reading it answers as native Julia (test/runner.jl)
+module RecordWidenedCases
+using Test, WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+const WTRunner = Main.WTRunner
+_facts(xs...) = xs
+@noinline Base.@constprop :none function widened(n::Int64)
+    a = Ref{Any}(nothing); a[] = 42n
+    b = Ref{Any}(nothing); b[] = 42n
+    return _facts(a[], b[])
+end
+sumfacts(n::Int64) = (t = widened(n); t isa Tuple{Int64, Int64} ? t[1] + t[2] : Int64(-1))
+@testset "classes, code_generator.dart: a widened tuple statement's class is its operands'" begin
+    # Julia's answers: the statement is widened, the object's class is not
+    @test Base.code_typed(widened, (Int64,))[1][2] == Tuple{Any, Any} && typeof(widened(1)) === Tuple{Int64, Int64}
+    local world = WasmTarget.build_nir(WasmTarget.check_subset(widened, (Int64,), "records"), "records")
+    @test Tuple{Int64, Int64} in WasmTarget.closed_world_classes(world, "records")
+    @test WasmTarget.compile(widened, (Int64,))[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    local results = WTRunner.run_cases(WTRunner.answer_cases("sumfacts", WasmTarget.compile, sumfacts, (Int64(1),), sumfacts(1)))
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    @test !isempty(results) && all(r -> r.ok, results)
+end
+end
