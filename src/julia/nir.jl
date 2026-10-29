@@ -436,7 +436,7 @@ census rejects with `Unquarantined`, located at the compile `at` names.
             reject!(Internal("src/julia/nir.jl: the closed world's entry $k is a $(typeof(ci)) and $(typeof(src)), not a CodeInstance and its CodeInfo"), at)
         local first_src = get(seen, ci, nothing)
         if first_src !== nothing
-            (src.code == first_src.code && src.ssavaluetypes == first_src.ssavaluetypes) ||
+            (isequal(src.code, first_src.code) && isequal(src.ssavaluetypes, first_src.ssavaluetypes)) ||
                 reject!(Internal("src/julia/nir.jl: the closed world lists $(ci.def) twice with different code"), at)
             continue
         end
