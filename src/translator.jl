@@ -396,19 +396,58 @@ PartialInstantiator's dart fields: `translator`, `callingModule`, `_oneTypeArgum
 @parity "dart2wasm/lib/translator.dart:3602 PartialInstantiator" @unported struct PartialInstantiator end
 
 """
-PolymorphicDispatchers's dart fields: `translator`, `callingModule`, `cache`, `uncheckedCache`.
+The polymorphic dispatchers a module calls: per selector, one function that tests the receiver's
+class id against the selector's static dispatch ranges and calls the target directly, made once (the
+unchecked entry's in a cache of its own where the selector has two entries). A Julia member calls
+through no selector (src/dispatch_table.jl), so no module makes one until the subset admits a
+dynamic call.
 """
-@parity "dart2wasm/lib/translator.dart:3686 PolymorphicDispatchers" @unported struct PolymorphicDispatchers end
+@parity "dart2wasm/lib/translator.dart:3686 PolymorphicDispatchers" struct PolymorphicDispatchers
+    translator::KernelNodes
+    calling_module::WasmBuilder.ModuleBuilder
+    cache::IdDict{SelectorInfo,PolymorphicDispatcherCallTarget}
+    unchecked_cache::IdDict{SelectorInfo,PolymorphicDispatcherCallTarget}
+    # the struct's one constructor, tagged; dart's constructor at :3692 is its outer function
+    PolymorphicDispatchers(::Val{:_}, translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder) =
+        new(translator, calling_module, IdDict{SelectorInfo,PolymorphicDispatcherCallTarget}(), IdDict{SelectorInfo,PolymorphicDispatcherCallTarget}())
+end
 
 """
-PolymorphicDispatcherCallTarget's dart fields: `translator`, `selector`, `callingModule`, `useUncheckedEntry`, `function`.
+A selector's polymorphic dispatcher as a call target: its `signature` (CallTarget's field) the class
+id then the selector's inputs, its function defined in the calling module on first read and queued.
 """
-@parity "dart2wasm/lib/translator.dart:3715 PolymorphicDispatcherCallTarget" @unported struct PolymorphicDispatcherCallTarget <: CallTarget end
+@parity "dart2wasm/lib/translator.dart:3715 PolymorphicDispatcherCallTarget" struct PolymorphicDispatcherCallTarget <: CallTarget
+    # CallTarget's field, then the class's own
+    signature::WasmBuilder.IR.FunctionType
+    translator::KernelNodes
+    selector::SelectorInfo
+    calling_module::WasmBuilder.ModuleBuilder
+    use_unchecked_entry::Bool
+    function_::Late{WasmBuilder.IR.BaseFunction}
+    # the struct's one constructor, tagged; dart's constructor at :3721 is its outer function, and the
+    # late function's initializer reads the target itself
+    function PolymorphicDispatcherCallTarget(::Val{:_}, translator::KernelNodes, selector::SelectorInfo, calling_module::WasmBuilder.ModuleBuilder,
+            use_unchecked_entry::Bool, signature::WasmBuilder.IR.FunctionType)
+        local self
+        self = new(signature, translator, selector, calling_module, use_unchecked_entry,
+            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function", function ()
+                local function_ = WasmBuilder.define(self.calling_module.functions[], self.signature, name(self))
+                add(self.translator.compilation_queue[], CompilationTask(function_, inlining_code_gen(self)))
+                return function_
+            end))
+        return self
+    end
+end
 
-"""
-PolymorphicDispatcherCodeGenerator's dart fields: `translator`, `selector`, `useUncheckedEntry`.
-"""
-@parity "dart2wasm/lib/translator.dart:3764 PolymorphicDispatcherCodeGenerator" @unported struct PolymorphicDispatcherCodeGenerator <: CodeGenerator end
+"""The code of a polymorphic dispatcher: a class-id search over the static dispatch ranges, each a direct call, the rest through the dispatch table."""
+@parity "dart2wasm/lib/translator.dart:3764 PolymorphicDispatcherCodeGenerator" struct PolymorphicDispatcherCodeGenerator <: CodeGenerator
+    translator::KernelNodes
+    selector::SelectorInfo
+    use_unchecked_entry::Bool
+    # the struct's one constructor, tagged; dart's constructor at :3769 is its outer function
+    PolymorphicDispatcherCodeGenerator(::Val{:_}, translator::KernelNodes, selector::SelectorInfo, use_unchecked_entry::Bool) =
+        new(translator, selector, use_unchecked_entry)
+end
 
 """
 The dummy values of a module: a global per heap type holding a value of it, and a function per
@@ -513,7 +552,8 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 
 @parity "dart2wasm/lib/translator.dart:316 Translator.getPartialInstantiatorForModule" @unported function get_partial_instantiator_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule" @unported function get_polymorphic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule" get_polymorphic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::PolymorphicDispatchers =
+    get!(() -> PolymorphicDispatchers(self, module_), self._polymorphic_dispatchers, module_)
 
 @parity "dart2wasm/lib/translator.dart:332 Translator.getDynamicDispatchersForModule" get_dynamic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::DynamicDispatchers =
     get!(() -> DynamicDispatchers(self, module_), self._dynamic_dispatchers, module_)
@@ -1417,23 +1457,76 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder" @unported function get_two_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type1::Type, type2::Type, name::String) end
 
-@parity "dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers" @unported function PolymorphicDispatchers(translator, calling_module) end
+@parity "dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers" PolymorphicDispatchers(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::PolymorphicDispatchers =
+    PolymorphicDispatchers(Val(:_), translator, calling_module)
 
-@parity "dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher" @unported function get_polymorphic_dispatcher(self::PolymorphicDispatchers, selector::SelectorInfo; use_unchecked_entry::Bool) end
+@parity "dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher" function get_polymorphic_dispatcher(self::PolymorphicDispatchers, selector::SelectorInfo; use_unchecked_entry::Bool)::CallTarget
+    length(targets(selector; unchecked = use_unchecked_entry).all_target_ranges) > 1 ||
+        reject!(Internal("dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher: the selector $(selector.name) has one target or none"), "PolymorphicDispatchers.getPolymorphicDispatcher")
+    local cache = use_unchecked_entry && selector.use_multiple_entry_points[] ? self.unchecked_cache : self.cache
+    return get!(() -> PolymorphicDispatcherCallTarget(self.translator, selector, self.calling_module, use_unchecked_entry), cache, selector)
+end
 
-@parity "dart2wasm/lib/translator.dart:3721 PolymorphicDispatcherCallTarget" @unported function PolymorphicDispatcherCallTarget(translator, selector, calling_module, use_unchecked_entry) end
+@parity "dart2wasm/lib/translator.dart:3721 PolymorphicDispatcherCallTarget" function PolymorphicDispatcherCallTarget(translator::KernelNodes, selector::SelectorInfo, calling_module::WasmBuilder.ModuleBuilder,
+        use_unchecked_entry::Bool)::PolymorphicDispatcherCallTarget
+    local signature = selector.signature[]
+    return PolymorphicDispatcherCallTarget(Val(:_), translator, selector, calling_module, use_unchecked_entry,
+        WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i32; signature.inputs], signature.outputs))
+end
 
-@parity "dart2wasm/lib/translator.dart:3734 PolymorphicDispatcherCallTarget.name" @unported function name(self::PolymorphicDispatcherCallTarget) end
+@parity "dart2wasm/lib/translator.dart:3734 PolymorphicDispatcherCallTarget.name" name(self::PolymorphicDispatcherCallTarget)::String = "$(self.selector.name) (polymorphic dispatcher)"
 
-@parity "dart2wasm/lib/translator.dart:3737 PolymorphicDispatcherCallTarget.supportsInlining" @unported function supports_inlining(self::PolymorphicDispatcherCallTarget) end
+@parity "dart2wasm/lib/translator.dart:3737 PolymorphicDispatcherCallTarget.supportsInlining" supports_inlining(self::PolymorphicDispatcherCallTarget)::Bool = true
 
-@parity "dart2wasm/lib/translator.dart:3740 PolymorphicDispatcherCallTarget.shouldInline" @unported function should_inline(self::PolymorphicDispatcherCallTarget) end
+@parity "dart2wasm/lib/translator.dart:3740 PolymorphicDispatcherCallTarget.shouldInline" should_inline(self::PolymorphicDispatcherCallTarget)::InliningDecision =
+    InliningDecision(length(targets(self.selector; unchecked = self.use_unchecked_entry).static_dispatch_ranges) <= 1, "staticDispatchRanges <= 1")
 
-@parity "dart2wasm/lib/translator.dart:3750 PolymorphicDispatcherCallTarget.inliningCodeGen" @unported function inlining_code_gen(self::PolymorphicDispatcherCallTarget) end
+@parity "dart2wasm/lib/translator.dart:3750 PolymorphicDispatcherCallTarget.inliningCodeGen" inlining_code_gen(self::PolymorphicDispatcherCallTarget)::CodeGenerator =
+    PolymorphicDispatcherCodeGenerator(self.translator, self.selector, self.use_unchecked_entry)
 
-@parity "dart2wasm/lib/translator.dart:3769 PolymorphicDispatcherCodeGenerator" @unported function PolymorphicDispatcherCodeGenerator(translator, selector, use_unchecked_entry) end
+@parity "dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function" var"function"(self::PolymorphicDispatcherCallTarget)::WasmBuilder.IR.BaseFunction = self.function_[]
 
-@parity "dart2wasm/lib/translator.dart:3776 PolymorphicDispatcherCodeGenerator.generate" @unported function generate(self::PolymorphicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
+@parity "dart2wasm/lib/translator.dart:3769 PolymorphicDispatcherCodeGenerator" PolymorphicDispatcherCodeGenerator(translator::KernelNodes, selector::SelectorInfo, use_unchecked_entry::Bool)::PolymorphicDispatcherCodeGenerator =
+    PolymorphicDispatcherCodeGenerator(Val(:_), translator, selector, use_unchecked_entry)
+
+@parity "dart2wasm/lib/translator.dart:3776 PolymorphicDispatcherCodeGenerator.generate" function generate(self::PolymorphicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
+    local translator = self.translator::Translator
+    local signature = self.selector.signature[]
+    local selector_targets = targets(self.selector; unchecked = self.use_unchecked_entry)
+    local target_ranges = NamedTuple{(:range, :value),Tuple{Range,Core.MethodInstance}}[(range = e.range, value = e.target) for e in selector_targets.static_dispatch_ranges]
+    local need_fallback = length(selector_targets.all_target_ranges) > length(selector_targets.static_dispatch_ranges)
+
+    # First parameter to the dispatcher is the class id.
+    local class_id_parameter_offset = 1
+
+    local emit_direct_call = function (target::Core.MethodInstance)
+        for i in 0:length(signature.inputs) - 1
+            WasmBuilder.local_get(b, param_locals[class_id_parameter_offset + i + 1])
+        end
+        call_reference(translator, target, b)
+        return nothing
+    end
+
+    local emit_dispatch_table_call = function ()
+        for i in 0:length(signature.inputs) - 1
+            WasmBuilder.local_get(b, param_locals[class_id_parameter_offset + i + 1])
+        end
+        WasmBuilder.local_get(b, param_locals[2])
+        call_dispatch_table(translator, b, self.selector; use_unchecked_entry = self.use_unchecked_entry)
+        return nothing
+    end
+
+    WasmBuilder.local_get(b, param_locals[1])
+    class_id_search(b, target_ranges, signature.outputs, emit_direct_call, need_fallback ? emit_dispatch_table_call : nothing)
+
+    if return_label !== nothing
+        WasmBuilder.br(b, return_label)
+    else
+        WasmBuilder.return_(b)
+    end
+    WasmBuilder.var"end"(b)
+    return nothing
+end
 
 @parity "dart2wasm/lib/translator.dart:3843 DummyValuesCollector" DummyValuesCollector(translator::KernelNodes, module_::WasmBuilder.ModuleBuilder)::DummyValuesCollector = DummyValuesCollector(Val(:_), translator, module_)
 

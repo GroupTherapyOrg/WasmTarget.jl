@@ -517,6 +517,8 @@ end
     # the per-module and per-member helpers, each made once: dynamic dispatchers, the exception tag, a
     # member's closures, a function's reference global
     @test D.get_dynamic_dispatchers_for_module(t, m) === D.get_dynamic_dispatchers_for_module(t, m)
+    local pd = D.get_polymorphic_dispatchers_for_module(t, m)
+    @test pd === D.get_polymorphic_dispatchers_for_module(t, m) && pd.calling_module === m && isempty(pd.cache)
     @test D.get_dart_exception_tag(t, m) isa IR.Tag && D.get_dart_exception_tag(t, m) === D.get_dart_exception_tag(t, m)
     local mi = t.component.entry
     @test D.get_closures(t, mi) === D.get_closures(t, mi) && D.get_closures(t, mi; find_captures = false) !== D.get_closures(t, mi)
