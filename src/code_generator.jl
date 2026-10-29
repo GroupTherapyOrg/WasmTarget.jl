@@ -156,40 +156,14 @@ is unused).
 end
 
 """
-A switch statement's information for a backward jump to it: `switchValueLocal`, the local holding the
-switched value, which a backward jump updates; `loopLabel`, the `loop` a backward jump targets; and
-`defaultLoopLabel`, while the `default` case compiles, the `loop` in its body for a jump to itself.
+SwitchBackwardJumpInfo's dart fields: `switchValueLocal`, `loopLabel`, `defaultLoopLabel`.
 """
-@parity "dart2wasm/lib/code_generator.dart:5108 SwitchBackwardJumpInfo" mutable struct SwitchBackwardJumpInfo
-    const switch_value_local::WasmBuilder.IR.Local
-    const loop_label::WasmBuilder.Label
-    default_loop_label::Union{Nothing,WasmBuilder.Label}
-    # the struct's one constructor, tagged, with dart's initializer list; dart's constructor at :5130
-    # is its outer function
-    SwitchBackwardJumpInfo(::Val{:_}, switch_value_local::WasmBuilder.IR.Local, loop_label::WasmBuilder.Label) =
-        new(switch_value_local, loop_label, nothing)
-end
+@parity "dart2wasm/lib/code_generator.dart:5108 SwitchBackwardJumpInfo" @unported struct SwitchBackwardJumpInfo end
 
 """
-Info needed to represent a switch statement using a br_table instruction: each option mapped to an
-index in the jump table, `minValue` to `maxValue`, so the switch jumps directly to its case; a range
-too sparse for a table is compared case by case instead. `_brTableExpr` pushes the switched value
-(an i64) from its local, and `caseMap` maps each value to its case, Kernel's SwitchCase, which has
-no Julia counterpart (the Kernel table's row): Julia's IR has no switch.
+BrTableInfo's dart fields: `minValue`, `maxValue`, `_brTableExpr`, `caseMap`.
 """
-@parity "dart2wasm/lib/code_generator.dart:5143 BrTableInfo" struct BrTableInfo
-    min_value::Int64
-    max_value::Int64
-    _br_table_expr::Function
-    case_map::Dict{Int64,NoCounterpart}
-    # dart's constructor `BrTableInfo._` :5157, the struct's one, tagged by the dart name; its assert
-    # is the constructor's check, a table too sparse WasmTarget's own defect
-    function BrTableInfo(::Val{:_}, min_value::Int64, max_value::Int64, case_map::Dict{Int64,NoCounterpart}, _br_table_expr::Function)
-        BrTableInfo__is_too_sparse(min_value, max_value, case_map) &&
-            reject!(Internal("dart2wasm/lib/code_generator.dart:5157 BrTableInfo._: the table $min_value..$max_value of $(length(case_map)) cases is too sparse"), "BrTableInfo._")
-        return new(min_value, max_value, _br_table_expr, case_map)
-    end
-end
+@parity "dart2wasm/lib/code_generator.dart:5143 BrTableInfo" @unported struct BrTableInfo end
 
 """
 SwitchInfo's dart fields: `nullableType`, `nonNullableType`, `dynamicTypeGuard`, `compare`, `defaultCase`, `nullCase`, `brTable`.
@@ -1569,45 +1543,34 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5103 TryBlockFinalizer" TryBlockFinalizer(label::WasmBuilder.Label)::TryBlockFinalizer = TryBlockFinalizer(Val(:_), label)
 
-@parity "dart2wasm/lib/code_generator.dart:5130 SwitchBackwardJumpInfo" SwitchBackwardJumpInfo(switch_value_local::WasmBuilder.IR.Local, loop_label::WasmBuilder.Label)::SwitchBackwardJumpInfo =
-    SwitchBackwardJumpInfo(Val(:_), switch_value_local, loop_label)
+# Julia's answer (D3): the switch family is the stackifier's, so no switch statement reaches it
+@parity "dart2wasm/lib/code_generator.dart:5130 SwitchBackwardJumpInfo" SwitchBackwardJumpInfo(switch_value_local::WasmBuilder.IR.Local, loop_label::WasmBuilder.Label)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5130 SwitchBackwardJumpInfo: a switch statement's backward jump; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "SwitchBackwardJumpInfo")
 
-# at least 50% of [min, max] must be occupied for a `br_table`
-@parity "dart2wasm/lib/code_generator.dart:5145 BrTableInfo._minimumTableOccupancy" BrTableInfo__minimum_table_occupancy()::Float64 = 0.5
+# Julia's answer (D3): the switch family is the stackifier's, so no switch statement reaches it
+@parity "dart2wasm/lib/code_generator.dart:5145 BrTableInfo._minimumTableOccupancy" BrTableInfo__minimum_table_occupancy()::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5145 BrTableInfo._minimumTableOccupancy: a switch statement's jump table; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "BrTableInfo__minimum_table_occupancy")
 
-# the largest table always worth a `br_table`; a bigger one is checked for sparseness
-@parity "dart2wasm/lib/code_generator.dart:5149 BrTableInfo._maxSparseSize" BrTableInfo__max_sparse_size()::Int64 = 50
+@parity "dart2wasm/lib/code_generator.dart:5149 BrTableInfo._maxSparseSize" BrTableInfo__max_sparse_size()::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5149 BrTableInfo._maxSparseSize: a switch statement's jump table; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "BrTableInfo__max_sparse_size")
 
-@parity "dart2wasm/lib/code_generator.dart:5151 BrTableInfo.rangeSize" range_size(self::BrTableInfo)::Int64 = BrTableInfo__range_size(self.min_value, self.max_value)
+@parity "dart2wasm/lib/code_generator.dart:5151 BrTableInfo.rangeSize" range_size(self::BrTableInfo)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5151 BrTableInfo.rangeSize: a switch statement's jump table; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "range_size")
 
-@parity "dart2wasm/lib/code_generator.dart:5157 BrTableInfo._" BrTableInfo__(min_value::Int64, max_value::Int64, case_map::Dict{Int64,NoCounterpart}, _br_table_expr::Function)::BrTableInfo =
-    BrTableInfo(Val(:_), min_value, max_value, case_map, _br_table_expr)
+@parity "dart2wasm/lib/code_generator.dart:5157 BrTableInfo._" BrTableInfo__(min_value::Int64, max_value::Int64, case_map::Dict{Int64,NoCounterpart}, _br_table_expr::Function)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5157 BrTableInfo._: a switch statement's jump table; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "BrTableInfo__")
 
-# the table, or nothing when it is too sparse to be worth a `br_table`
-@parity "dart2wasm/lib/code_generator.dart:5162 BrTableInfo.build" function BrTableInfo_build(case_map::Dict{Int64,NoCounterpart}, br_table_expr::Function; min_value::Int64, max_value::Int64)::Union{BrTableInfo,Nothing}
-    BrTableInfo__is_too_sparse(min_value, max_value, case_map) && return nothing
-    return BrTableInfo__(min_value, max_value, case_map, br_table_expr)
-end
+@parity "dart2wasm/lib/code_generator.dart:5162 BrTableInfo.build" BrTableInfo_build(case_map::Dict{Int64,NoCounterpart}, br_table_expr::Function; min_value::Int64, max_value::Int64)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5162 BrTableInfo.build: a switch statement's jump table; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "BrTableInfo_build")
 
-@parity "dart2wasm/lib/code_generator.dart:5174 BrTableInfo._isTooSparse" function BrTableInfo__is_too_sparse(min::Int64, max::Int64, case_map::Dict{Int64,NoCounterpart})::Bool
-    local range_size = BrTableInfo__range_size(min, max)
-    return (length(case_map) / range_size) < BrTableInfo__minimum_table_occupancy() && range_size > BrTableInfo__max_sparse_size()
-end
+@parity "dart2wasm/lib/code_generator.dart:5174 BrTableInfo._isTooSparse" BrTableInfo__is_too_sparse(min::Int64, max::Int64, case_map::Dict{Int64,NoCounterpart})::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5174 BrTableInfo._isTooSparse: a switch statement's jump table; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "BrTableInfo__is_too_sparse")
 
-@parity "dart2wasm/lib/code_generator.dart:5180 BrTableInfo._rangeSize" BrTableInfo__range_size(min::Int64, max::Int64)::Int64 = max - min + 1
+@parity "dart2wasm/lib/code_generator.dart:5180 BrTableInfo._rangeSize" BrTableInfo__range_size(min::Int64, max::Int64)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5180 BrTableInfo._rangeSize: a switch statement's jump table; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "BrTableInfo__range_size")
 
-# the switched value, normalized on 0, as the i32 index of the table
-@parity "dart2wasm/lib/code_generator.dart:5182 BrTableInfo.emitBrTableExpr" function emit_br_table_expr(self::BrTableInfo, b::WasmBuilder.InstructionsBuilder, switch_expr_local::WasmBuilder.IR.Local)::Nothing
-    self._br_table_expr(switch_expr_local)
-    # Normalize on 0.
-    if self.min_value != 0
-        WasmBuilder.i64_const(b, self.min_value)
-        WasmBuilder.i64_sub(b)
-    end
-    # Now that we've normalized on 0 it should be safe to switch to i32.
-    WasmBuilder.i32_wrap_i64(b)
-    return nothing
-end
+@parity "dart2wasm/lib/code_generator.dart:5182 BrTableInfo.emitBrTableExpr" emit_br_table_expr(self::BrTableInfo, b::WasmBuilder.InstructionsBuilder, switch_expr_local::WasmBuilder.IR.Local)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5182 BrTableInfo.emitBrTableExpr: a switch statement's jump table; Julia's IR has no switch statement, its case tests GotoIfNots and a backward case jump a back edge, and the one br_table WasmTarget emits is the stackifier's (FixIrreducibleControlFlow's dispatch in visit_block)"), "emit_br_table_expr")
 
 @parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" @unported function SwitchInfo(code_gen::AstCodeGenerator, node::NoCounterpart) end
 
