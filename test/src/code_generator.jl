@@ -568,10 +568,11 @@ end
 
 @testset "code_generator.dart: an unresolved call and a field outside the layout reject at their rows" begin
     local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    # a generic call Julia left unresolved (the trim verifier's must-throw warning) is dart's dynamic
-    # invocation, rejected at that row, not at the intrinsifier's
+    # a generic call Julia left unresolved (the trim verifier's must-throw warning) is Julia's
+    # MethodError throw, never dart's dynamic invocation: rejected at the throw's port, not at the
+    # intrinsifier's
     local e = rejection(() -> D.visit_static_invocation(g, W.NirCall(W.NirValue[W.NirConst(Core.Const(sin)), W.NirArgument(2)]), IR.NumType_f64))
-    @test e.rejection isa W.Unported && occursin("visitDynamicInvocation", e.rejection.anchor)
+    @test e.rejection isa W.Unported && occursin("AstCodeGenerator.visitThrow", e.rejection.anchor) && occursin("MethodError", e.at)
     # a field the class layout does not hold is a valid program outside the representation (A44S1)
     local t = translator_of(FieldGenCases.getb, (FieldGenCases.P,))
     local body = only(t.component)

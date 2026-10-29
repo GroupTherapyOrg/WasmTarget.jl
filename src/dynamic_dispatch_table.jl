@@ -5,9 +5,11 @@
 The tables of dynamic calls: for each call shape a dynamic call site has, the classes whose member
 answers it, by class id, a targets table and a class ids table, packed with unique offsets.
 
-Julia's trim verifier, whose subset WasmTarget compiles (ledger D32), rejects every unresolved call,
-so no NIR statement is a dynamic call, no call shape is collected (DynamicCallSiteCollector), and the
-tables are empty by Julia's answer. If the subset ever admitted a dynamic call, the same code would
+Julia's trim verifier, whose subset WasmTarget compiles (ledger D32), rejects every call it cannot
+resolve statically but one whose result is Union{}, which it lets through as a warning
+(Compiler/src/verifytrim.jl: a must-throw call is downgraded); that call is Julia's MethodError
+throw, the code generator's to emit (visitStaticInvocation), never a dynamic call. So no NIR statement is a dynamic call, no call shape is
+collected (DynamicCallSiteCollector), and the tables are empty by Julia's answer. If the subset ever admitted a dynamic call, the same code would
 fill them.
 
 Fields to come (1, its dynamic_dispatch_table.dart line): `dynamicSelectors` :41, made by build for

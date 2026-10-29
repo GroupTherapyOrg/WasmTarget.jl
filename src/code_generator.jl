@@ -797,13 +797,14 @@ end
 
 # a call Julia left unresolved: a builtin or an intrinsic, Julia's own operations, which the
 # intrinsifier emits (one it has no arm for rejects at the call, located); or a generic call the trim
-# verifier admits only as a warning, its result Union{} (it must throw: verifytrim.jl), which is
-# dart's dynamic invocation and rejects at that row, located
+# verifier admits only as a warning, its result Union{} (it must throw: verifytrim.jl). That call is
+# Julia's MethodError throw, Julia's answer (ledger D3), never dart's dynamic invocation: it rejects,
+# located, at the throw's port, visitThrow, until throwing is ported
 @parity "dart2wasm/lib/code_generator.dart:1668 AstCodeGenerator.visitStaticInvocation" function visit_static_invocation(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local f = nir_callee(node)
     f isa Core.Builtin ||
-        reject!(Unported("dart2wasm/lib/code_generator.dart:1861 AstCodeGenerator.visitDynamicInvocation"),
-            "$(self.enclosing_member): a call of $f Julia left unresolved, its result Union{} (the trim verifier's must-throw warning)")
+        reject!(Unported("dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow"),
+            "$(self.enclosing_member): a call of $f Julia left unresolved, its result Union{} (the trim verifier's must-throw warning), Julia's MethodError throw")
     local intrinsic_result = generate_static_intrinsic(self.intrinsifier[], node)
     intrinsic_result === nothing || return intrinsic_result
     reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"),

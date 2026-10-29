@@ -84,8 +84,9 @@ it, by class id, packed into one wasm table an instance call indexes by its rece
 
 A Julia member is no instance member: Julia dispatches on every argument and a method belongs to
 its generic function, not to a class, so no class contributes a selector; and Julia's trim
-verifier, whose subset WasmTarget compiles (ledger D32), rejects every unresolved call, leaving each
-call resolved (an invoke) or split by Julia into isa tests and invokes. So the table this builds is
+verifier, whose subset WasmTarget compiles (ledger D32), rejects every unresolved call but a
+must-throw one (Julia's MethodError throw, visitStaticInvocation), leaving each call resolved (an
+invoke) or split by Julia into isa tests and invokes. So the table this builds is
 empty by Julia's answer. If the subset ever admitted a dynamic call, the same code would fill it.
 
 Fields to come (2, each with its dispatch_table.dart line, TFA's selector metadata, which a Julia
