@@ -433,7 +433,13 @@ end
 # context
 @parity "dart2wasm/lib/code_generator.dart:630 AstCodeGenerator.captureParameters" capture_parameters(self::AstCodeGenerator, node::NirBody)::Nothing = nothing
 
-@parity "dart2wasm/lib/code_generator.dart:655 AstCodeGenerator.throwWasmRefError" @unported function throw_wasm_ref_error(self::AstCodeGenerator, expected::String) end
+# the expected type's name, then dart's runtime StackTrace.current and _TypeError._throwWasmRefError
+# (kernel_nodes.dart:620, :645); the runtime library is not ported, so the error rejects at the first,
+# Unported at its definition for the JS embedding (A52S1's ruling for a runtime function)
+@parity "dart2wasm/lib/code_generator.dart:655 AstCodeGenerator.throwWasmRefError" function throw_wasm_ref_error(self::AstCodeGenerator, expected::String)::Union{}
+    _emit_string(self, expected)
+    reject!(Unported("sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"), "$(self.enclosing_member): a wasm reference error, expected $expected")
+end
 
 # dart sets the source map's file offset from the node; a NIR node has none, Julia's line table taking
 # that place with the source map (translateStatement)
@@ -524,7 +530,18 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:702 AstCodeGenerator.translateVariable" @unported function translate_variable(self::AstCodeGenerator, node::Union{NirSSA,NirArgument}) end
+# a variable is declared by its statement (visitVariable); a parameter is none, its local set up by
+# _setupLocalParameters
+@parity "dart2wasm/lib/code_generator.dart:702 AstCodeGenerator.translateVariable" function translate_variable(self::AstCodeGenerator, node::Union{NirSSA,NirArgument})::Nothing
+    node isa NirSSA || reject!(Internal("dart2wasm/lib/code_generator.dart:702 AstCodeGenerator.translateVariable: $node is a parameter, whose local _setupLocalParameters sets up"), "$(self.enclosing_member)")
+    try
+        visit_variable(self, node)
+    catch
+        _print_location(self, self.body.stmts[node.id])
+        rethrow()
+    end
+    return nothing
+end
 
 """
 Generate the code of one statement of the function's NIR body. dart's `node.accept(this)` is the
@@ -687,7 +704,15 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:842 AstCodeGenerator.initializeVariable" @unported function initialize_variable(self::AstCodeGenerator, node::Union{NirSSA,NirArgument}, push_initial_value::Function) end
+# no Julia variable is captured (lowering made each capture a field of its closure's struct, so
+# Closures finds none), so the variable keeps its value in a local, dart's uncaptured path
+@parity "dart2wasm/lib/code_generator.dart:842 AstCodeGenerator.initializeVariable" function initialize_variable(self::AstCodeGenerator, node::Union{NirSSA,NirArgument}, push_initial_value::Function)::Nothing
+    local local_ = add_local(self, translate_type_of_local_variable(self.translator, dart_type_of(self, node)))
+    self.locals[node] = local_
+    push_initial_value()
+    WasmBuilder.local_set(self.b[], local_)
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:867 AstCodeGenerator.visitEmptyStatement" visit_empty_statement(self::AstCodeGenerator, node::NirNothing)::Nothing = nothing
 
@@ -1386,7 +1411,10 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3384 AstCodeGenerator.visitIfCaseStatement" visit_if_case_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:3384 AstCodeGenerator.visitIfCaseStatement: Julia's IR has no structured statement: lowering makes it GotoIfNot and GotoNode, which visitBlock structures by LLVM's stackifier"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:3390 AstCodeGenerator.debugRuntimePrint" @unported function debug_runtime_print(self::AstCodeGenerator, s::String) end
+# dart's runtime printToConsole (kernel_nodes.dart:845), not ported: Unported at its definition for the
+# JS embedding (A52S1's ruling for a runtime function)
+@parity "dart2wasm/lib/code_generator.dart:3390 AstCodeGenerator.debugRuntimePrint" debug_runtime_print(self::AstCodeGenerator, s::String)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/js_common/print_patch.dart:8 printToConsole"), "$(self.enclosing_member): a debug print")
 
 @parity "dart2wasm/lib/code_generator.dart:3402 AstCodeGenerator.visitAuxiliaryStatement" visit_auxiliary_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:3402 AstCodeGenerator.visitAuxiliaryStatement: Julia's IR has no structured statement: lowering makes it GotoIfNot and GotoNode, which visitBlock structures by LLVM's stackifier"), "$(self.enclosing_member)")

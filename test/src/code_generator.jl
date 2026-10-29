@@ -510,6 +510,13 @@ end
     @test occursin("visitAsExpression", rejection(() -> D.visit_null_check(g, call, IR.NumType_i32)).rejection.site)
     # no context: nothing to initialize, nothing emitted
     @test emitted_by(() -> D._initialize_context_locals(g, call), g) == String[]
+    # a variable declared by its statement is visitVariable's, its local holding the value; a parameter
+    # is no declaration; a variable initialized from a pushed value keeps it in a local of its own
+    @test emitted_by(() -> D.translate_variable(g, W.NirSSA(1)), g) == ["local.get", "i32.const 1", "i32.add", "local.set"]
+    @test rejection(() -> D.translate_variable(g, W.NirArgument(2))).rejection isa W.Internal
+    @test emitted_by(() -> D.initialize_variable(g, W.NirSSA(1), () -> W.WasmBuilder.i32_const(g.b[], 7)), g) == ["i32.const 7", "local.set"]
+    # the runtime's printToConsole is not ported: Unported at its definition
+    @test occursin("printToConsole", rejection(() -> D.debug_runtime_print(g, "x")).rejection.anchor)
 end
 
 @testset "code_generator.dart: a PiNode is the unchecked as" begin
