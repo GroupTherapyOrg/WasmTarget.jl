@@ -19,10 +19,36 @@
 @parity "dart2wasm/lib/kernel_nodes.dart:20 KernelNodes._stringImplClassName" _string_impl_class_name(self::KernelNodes)::String =
     is_standalone(self) ? "EmbedderStringImpl" : "JSStringImpl"
 
+# dart:_list's WasmListBase, a class of dart's runtime library at the pin, not ported: Unported there (the lead's ruling on runtime definitions)
+@parity "dart2wasm/lib/kernel_nodes.dart:57 KernelNodes.listBaseClass" list_base_class(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/common/list.dart:15 WasmListBase"), "KernelNodes.listBaseClass: the list class of dart:_list")
+
 # the lane fields of dart:_wasm's SIMD implementation classes (_WasmI8x16Impl and its siblings), which
 # no Julia type is: a Julia program reaches no class of dart:_wasm
 @parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" _get_lane_references(self::KernelNodes, class_node::DataType)::Union{} =
     reject!(Unquarantined("dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences: the lanes of $class_node, read as one of dart:_wasm's SIMD classes, which no Julia type is"), "KernelNodes._getLaneReferences")
+
+# dart:core's StackTrace.current, as the target's patch defines it (standalone or JS), a getter of
+# dart's runtime library at the pin, not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:620 KernelNodes.stackTraceCurrent" stack_trace_current(self::KernelNodes)::Union{} =
+    reject!(Unported(is_standalone(self) ? "sdk/lib/_internal/wasm/standalone/stack_trace_patch.dart:15 StackTrace.current" : "sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"), "KernelNodes.stackTraceCurrent")
+
+# dart:core's _TypeError._throwWasmRefError, of dart's runtime library at the pin, not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:645 KernelNodes.throwWasmRefError" throw_wasm_ref_error(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:87 _TypeError._throwWasmRefError"), "KernelNodes.throwWasmRefError: the thrower of a failed reference downcast")
+
+# dart:_internal's printToConsole, as the target's patch defines it (standalone or JS), of dart's
+# runtime library at the pin, not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:845 KernelNodes.printToConsole" print_to_console(self::KernelNodes)::Union{} =
+    reject!(Unported(is_standalone(self) ? "sdk/lib/_internal/wasm/standalone/print_patch.dart:9 printToConsole" : "sdk/lib/_internal/wasm/js_common/print_patch.dart:8 printToConsole"), "KernelNodes.printToConsole")
+
+# dart:_embedder's stringFromCharCodeArray, the standalone embedder's import, of dart's runtime library at the pin, not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:851 KernelNodes.embedderStringFromCharCodeArray" embedder_string_from_char_code_array(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/standalone/embedder.dart:62 stringFromCharCodeArray"), "KernelNodes.embedderStringFromCharCodeArray: the standalone embedder import making a string of UTF-16 code units")
+
+# dart:_embedder's stringFromAsciiBytes, the standalone embedder's import, of dart's runtime library at the pin, not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:853 KernelNodes.embedderStringFromAsciiBytes" embedder_string_from_ascii_bytes(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/standalone/embedder.dart:71 stringFromAsciiBytes"), "KernelNodes.embedderStringFromAsciiBytes: the standalone embedder import making a string of ASCII bytes")
 
 # dart's extension members; Julia has none, every method being its function's, outside any type
 @parity "dart2wasm/lib/kernel_nodes.dart:859 KernelNodes.extensionOfMember" extension_of_member(self::KernelNodes, member::Core.MethodInstance)::Union{} =
