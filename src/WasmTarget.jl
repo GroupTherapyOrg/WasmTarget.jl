@@ -9,6 +9,7 @@ module WasmTarget
 include("julia/parity.jl")
 include("julia/construction.jl")
 include("julia/reject.jl")
+include("julia/interpreter.jl")
 include("julia/subset.jl")
 include("julia/nir.jl")
 include("julia/classes.jl")
@@ -59,5 +60,8 @@ _pin_sdk() === nothing || construction_check(Val(:check_anchors_resolve))
 _pin_sdk() === nothing || construction_check(Val(:check_serializable_writable))
 # dart2wasm's `w.` reaches only what wasm_builder.dart exports, composed through its directives
 _pin_sdk() === nothing || construction_check(Val(:check_dart_exports))
+
+# WasmInterpreter's compiled Compiler kept in the package image (src/julia/interpreter.jl)
+precompile_interpreter()
 
 end # module

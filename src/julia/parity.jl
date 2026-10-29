@@ -246,10 +246,10 @@ let defs = quote
 
     # the bindings a definition creates in its module and the Julia name the anchor's rule judges, or
     # a refusal naming its line: function (long, short, `function f end`), macro, struct, abstract and
-    # primitive type, const, @enum and module, under @inline, @noinline or @closed
+    # primitive type, const, @enum, @MethodTable and module, under @inline, @noinline or @closed
     @quarantine "Julia's definition forms, read from the parsed expression" Base.Meta.isexpr function _defines(def, source::LineNumberNode)::Tuple{Vector{Symbol},Symbol}
         refuse() = throw(ConstructionViolation("the definition forms",
-            "$(_at(source)): not a definition @parity or @quarantine reads (function, macro, struct, abstract or primitive type, const, @enum, module)"))
+            "$(_at(source)): not a definition @parity or @quarantine reads (function, macro, struct, abstract or primitive type, const, @enum, @MethodTable, module)"))
         typename(t) = t isa Symbol ? t : Meta.isexpr(t, :(<:)) || Meta.isexpr(t, :curly) ? typename(t.args[1]) : refuse()
         if Meta.isexpr(def, :macrocall) && def.args[1] in _TRANSPARENT_MACROS
             return _defines(def.args[end], source)
@@ -257,6 +257,11 @@ let defs = quote
             # an export directive (src/julia/exports.jl): no binding; its target names it
             length(def.args) >= 3 && def.args[3] isa String || refuse()
             return ([Symbol("export ", def.args[3])], :export)
+        elseif Meta.isexpr(def, :macrocall) && length(def.args) == 3 && def.args[3] isa Symbol &&
+               (def.args[1] === Symbol("@MethodTable") ||
+                Meta.isexpr(def.args[1], :., 2) && def.args[1].args[2] == QuoteNode(Symbol("@MethodTable")))
+            # an overlay method table (src/julia/interpreter.jl), Julia's `const name = <table>`
+            return ([def.args[3]], def.args[3])
         elseif Meta.isexpr(def, :macrocall) && def.args[1] === Symbol("@enum")
             local head = def.args[3]
             local x = Meta.isexpr(head, :(::)) ? head.args[1] : head
