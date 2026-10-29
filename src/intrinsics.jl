@@ -330,6 +330,7 @@ end
     # each family of arms is its own method, compiled only when a program reaches it
     f === Core.:(===) && length(args) == 2 && return generate_static_intrinsic(self, Val(:identical), f, args)
     f === Core._svec_len && length(args) == 1 && return generate_static_intrinsic(self, Val(:svec_len), f, args)
+    f === Core._svec_ref && length(args) == 2 && return generate_static_intrinsic(self, Val(:svec_ref), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f isa Core.IntrinsicFunction || return nothing
     local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
@@ -420,6 +421,55 @@ end
         return t.top_type[]
     end
     reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String data operation $op"), at)
+end
+
+# Julia's `_svec_ref(v, i)`: the `i`th element (from 1) of a SimpleVector's data array, dart's
+# ImmutableWasmArrayExt.[] (intrinsics.dart:1223, array.get at the index wrapped to i32) behind the
+# check Julia's codegen emits (emit_bounds_check over jl_svec_len, as builtins.c's jl_f__svec_ref
+# checks): an index outside 1..length raises BoundsError(v, i) through the runtime's thrower
+# (src/julia/runtime/rtutils.jl throw_bounds_error, jl_bounds_error_int), never a trapping array.get.
+# The element is a reference of any class, the array's element type.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec_ref}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local i64 = WasmBuilder.IR.NumType_i64
+    (dart_type_of(self, args[1]) === Core.SimpleVector && dart_type_of(self, args[2]) === Int) || return nothing
+    local b = code_gen.b[]
+    local at = "$(code_gen.enclosing_member): a SimpleVector's element"
+    local sv_info = get(t.class_info, Core.SimpleVector, nothing)
+    sv_info === nothing && reject!(Internal("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic: Core.SimpleVector has no class info"), at)
+    local data = only(class_instance_fields(Core.SimpleVector, at))
+    local array_type = (translate_type_of_field(t, data)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+    local sv = add_local(code_gen, WasmBuilder.with_nullability(repr(sv_info), false))
+    local i = add_local(code_gen, i64)
+    translate_expression(code_gen, args[1], sv.type)
+    WasmBuilder.local_set(b, sv)
+    translate_expression(code_gen, args[2], i64)
+    WasmBuilder.local_set(b, i)
+    # i - 1, unsigned, at or past the length: outside 1..length (Julia's bounds check, one comparison)
+    WasmBuilder.local_get(b, i)
+    WasmBuilder.i64_const(b, 1)
+    WasmBuilder.i64_sub(b)
+    WasmBuilder.local_get(b, sv)
+    WasmBuilder.struct_get(b, sv_info.struct_, t.field_index[data])
+    WasmBuilder.array_len(b)
+    WasmBuilder.i64_extend_i32_u(b)
+    WasmBuilder.i64_ge_u(b)
+    WasmBuilder.if_(b)
+    WasmBuilder.local_get(b, sv)
+    convert_type(t, b, sv.type, t.top_type[])
+    WasmBuilder.local_get(b, i)
+    call(code_gen, nir_runtime_member(t.component, throw_bounds_error, at))
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    WasmBuilder.local_get(b, sv)
+    WasmBuilder.struct_get(b, sv_info.struct_, t.field_index[data])
+    WasmBuilder.local_get(b, i)
+    WasmBuilder.i64_const(b, 1)
+    WasmBuilder.i64_sub(b)
+    WasmBuilder.i32_wrap_i64(b)
+    WasmBuilder.array_get(b, array_type)
+    return WasmBuilder.unpacked(array_type.element_type[].type)
 end
 
 # identical: Julia's `===`, which compares a primitive value's bits (NaN === NaN, and 0.0 !== -0.0),
@@ -518,9 +568,7 @@ end
 end
 
 # Julia's `_svec_len`: a SimpleVector's length, jl_svec_t's own, which its wasm array carries
-# (src/julia/classes.jl, `_svec_instance_fields`): the data field's array.len, a Julia Int.
-# `_svec_ref` has no arm: an index out of range throws Julia's BoundsError, a catchable error
-# no trapping array.get may stand for, and throwing waits for visitThrow
+# (src/julia/classes.jl, `_svec_instance_fields`): the data field's array.len, a Julia Int
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec_len}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b

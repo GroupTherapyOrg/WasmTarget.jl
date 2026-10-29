@@ -132,8 +132,6 @@ end
     end
     @test intr_emitted_by(() -> DI.generate_static_intrinsic(r.intrinsifier[], r.body.stmts[k]), r) ==
           ["local.get", "struct.get", "array.len", "i64.extend_i32_u"]
-    # _svec_ref has no arm: its BoundsError waits for throwing
-    @test DI.generate_static_intrinsic(ii, WI.NirCall(WI.NirValue[lit(Core._svec_ref), body.stmts[k].args[2], lit(1)])) === nothing
 end
 
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
@@ -206,4 +204,23 @@ end
     @test WI.nir_intrinsified(cu) && !any(nb -> nb.ci.def === cu, t.component)
     local r = intr_rejection(() -> WI.nir_body_of(t.component, cu))
     @test r.rejection isa WI.Internal && occursin("a call it did not lower", r.rejection.site)
+end
+
+module SvecRefCases
+const ELEMENTS = Core.svec(Int64(7), "x", Int64(9))
+# a SimpleVector's element by its index from 1, read by its class
+sref(i::Int64) = (x = ELEMENTS[i]; x isa Int64 ? Int64(1) : x isa String ? Int64(2) : Int64(3))
+end
+
+@testset "intrinsics.dart: a SimpleVector's element, Julia's bounds check raising BoundsError" begin
+    # _svec_ref reads the data array at i - 1 behind Julia's check: an index outside 1..length
+    # raises BoundsError through the runtime's thrower, a wasm exception, never a trap
+    local native(f, a) = try; f(a...); catch e; WTRunner.Throws(typeof(e)); end
+    local args = [(Int64(k),) for k in (-1, 0, 1, 2, 3, 4)]
+    local bytes = WI.compile(SvecRefCases.sref, (Int64,))
+    local cases = [WTRunner.RunCase("sref$a", bytes, a, native(SvecRefCases.sref, a)) for a in args]
+    @test count(c -> c.native isa WTRunner.Throws, cases) == 3
+    for r in WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
 end
