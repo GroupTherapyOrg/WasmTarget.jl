@@ -168,6 +168,11 @@ let defs = quote
     # records a checked definition whose evaluation began at the last _mark! and ends now
     @quarantine "the registry grows as the package loads, Julia's top-level evaluation" Base.get_world_counter _register!(e::RegistryEntry, id::String)::Nothing = _register_range!(e, id, pop!(_WORLDS), Base.get_world_counter())
 
+    # the macros a definition may stand under that leave it the definition it is: Julia's inlining and
+    # inference annotations and @closed (src/julia/exhaustive.jl); every reader of a marked definition
+    # looks through these, one list (A54S4: four copies had drifted apart)
+    @quarantine "Julia's annotation macros wrap a definition without changing what it defines" Core.Symbol const _TRANSPARENT_MACROS = (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"))
+
     # a definition's identity across its evaluations: its module and, for a function or a macro, its
     # signature as written, every line number dropped (a method is its signature, as Julia's method
     # table keys it, and a Revise of its file evaluates it again under the same one, wherever its
@@ -175,7 +180,7 @@ let defs = quote
     @quarantine "a method is identified by its signature, Julia's method table key, never by its lines" Core.LineNumberNode function _identity(mod::Module, def, source::LineNumberNode)::String
         local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
         local d = def
-        while Meta.isexpr(d, :macrocall) && d.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"), Symbol("@unported"))
+        while Meta.isexpr(d, :macrocall) && (d.args[1] in _TRANSPARENT_MACROS || d.args[1] === Symbol("@unported"))
             d = d.args[end]
         end
         local form = Meta.isexpr(d, (:function, :(=), :macro)) && !(d.args[1] isa Symbol) ?
@@ -246,7 +251,7 @@ let defs = quote
         refuse() = throw(ConstructionViolation("the definition forms",
             "$(_at(source)): not a definition @parity or @quarantine reads (function, macro, struct, abstract or primitive type, const, @enum, module)"))
         typename(t) = t isa Symbol ? t : Meta.isexpr(t, :(<:)) || Meta.isexpr(t, :curly) ? typename(t.args[1]) : refuse()
-        if Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"))
+        if Meta.isexpr(def, :macrocall) && def.args[1] in _TRANSPARENT_MACROS
             return _defines(def.args[end], source)
         elseif Meta.isexpr(def, :macrocall) && def.args[1] === Symbol("@dart_export")
             # an export directive (src/julia/exports.jl): no binding; its target names it
@@ -587,7 +592,9 @@ end
 @quarantine "Julia needs a function to exist before another module adds a method to it; dart resolves a library's names first" Base.Meta.isexpr function _generic_name(st)::Union{Tuple{Any,Symbol},Nothing}
     local def = _marked_definition(st)
     def === nothing && return nothing
-    Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer")) && (def = def.args[end])
+    while Meta.isexpr(def, :macrocall) && def.args[1] in _TRANSPARENT_MACROS
+        def = def.args[end]
+    end
     (Meta.isexpr(def, :function) || Meta.isexpr(def, :(=))) || return nothing
     local c = _call(def.args[1])
     c === nothing && return nothing
@@ -1162,7 +1169,7 @@ end
     local ported = !_is_macro(def, Symbol("@unported"))
     if ported
         local inner = def
-        while Meta.isexpr(inner, :macrocall) && inner.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"))
+        while Meta.isexpr(inner, :macrocall) && inner.args[1] in _TRANSPARENT_MACROS
             inner = inner.args[end]
         end
         local kind = _rejection_only_kind(inner)
