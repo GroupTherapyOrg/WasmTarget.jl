@@ -55,7 +55,10 @@ end
 
 @parity "dart2wasm/lib/modules.dart:219 ModuleStrategy" abstract type ModuleStrategy end
 
-@parity "dart2wasm/lib/modules.dart:14 _enclosingLibraryForReference" @unported function _enclosing_library_for_reference(reference::Core.MethodInstance) end
+# a library is a Julia module, and a member's enclosing one is its method's module; a MethodInstance
+# always has its method, so dart's reference with no node (a constant's) has no counterpart here
+@parity "dart2wasm/lib/modules.dart:14 _enclosingLibraryForReference" _enclosing_library_for_reference(reference::Core.MethodInstance)::Module =
+    (reference.def::Method).module
 
 @parity "dart2wasm/lib/modules.dart:29 ModuleMetadataBuilder" ModuleMetadataBuilder(options::WasmCompilerOptions)::ModuleMetadataBuilder = ModuleMetadataBuilder(Val(:_), options)
 
@@ -98,7 +101,9 @@ default module.
     return m
 end
 
-@parity "dart2wasm/lib/modules.dart:176 ModuleOutputData.moduleForConstant" @unported function module_for_constant(self::ModuleOutputData, constant::NirConst) end
+# the monolithic data holds no constant map (`constantToModuleMetadata`, to come with deferred
+# loading), dart's null, so no constant has a module of its own
+@parity "dart2wasm/lib/modules.dart:176 ModuleOutputData.moduleForConstant" module_for_constant(self::ModuleOutputData, constant::NirConst)::Nothing = nothing
 
 @parity "dart2wasm/lib/modules.dart:187 DefaultModuleStrategy" DefaultModuleStrategy(options::WasmCompilerOptions)::DefaultModuleStrategy = DefaultModuleStrategy(Val(:_), options)
 
@@ -114,8 +119,14 @@ end
 
 @parity "dart2wasm/lib/modules.dart:202 DefaultModuleStrategy.prepareComponent" prepare_component(self::DefaultModuleStrategy)::Nothing = nothing
 
-@parity "dart2wasm/lib/modules.dart:220 ModuleStrategy.addEntryPoints" @unported function add_entry_points(self::ModuleStrategy) end
+# abstract in dart: each strategy adds its entry points
+@parity "dart2wasm/lib/modules.dart:220 ModuleStrategy.addEntryPoints" add_entry_points(self::ModuleStrategy)::Union{} =
+    reject!(Internal("dart2wasm/lib/modules.dart:220 ModuleStrategy.addEntryPoints: abstract in $(typeof(self))"), "ModuleStrategy.addEntryPoints")
 
-@parity "dart2wasm/lib/modules.dart:221 ModuleStrategy.prepareComponent" @unported function prepare_component(self::ModuleStrategy) end
+# abstract in dart: each strategy prepares the component
+@parity "dart2wasm/lib/modules.dart:221 ModuleStrategy.prepareComponent" prepare_component(self::ModuleStrategy)::Union{} =
+    reject!(Internal("dart2wasm/lib/modules.dart:221 ModuleStrategy.prepareComponent: abstract in $(typeof(self))"), "ModuleStrategy.prepareComponent")
 
-@parity "dart2wasm/lib/modules.dart:223 ModuleStrategy.buildModuleOutputData" @unported function build_module_output_data(self::ModuleStrategy) end
+# abstract in dart: each strategy builds its output data
+@parity "dart2wasm/lib/modules.dart:223 ModuleStrategy.buildModuleOutputData" build_module_output_data(self::ModuleStrategy)::Union{} =
+    reject!(Internal("dart2wasm/lib/modules.dart:223 ModuleStrategy.buildModuleOutputData: abstract in $(typeof(self))"), "ModuleStrategy.buildModuleOutputData")
