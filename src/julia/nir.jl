@@ -230,29 +230,51 @@ loads.
 end
 
 """
+    NirHandlers
+
+A body's try regions as Julia's compiler answers them: `handler_at[i]`, the statement of the
+EnterNode whose catch handles statement `i`, 0 where none does (compute_trycatch's catch handler),
+and `nothrow[i]`, whether Julia proved statement `i` throws nothing (its IR_FLAG_NOTHROW). The
+stackifier reads them as LLVM reads an invoke's unwind edge (src/julia/machine.jl).
+"""
+@quarantine "Julia's compiler answers each statement's try handler and whether it can throw; the stackifier reads both" Base.BitVector struct NirHandlers
+    handler_at::Vector{Int}
+    nothrow::BitVector
+end
+
+"""
     NirBody
 
 One function of the closed world in NIR: `ci`, the CodeInstance Julia inferred; `stmts`, its statements
 in Julia's order; `types`, the type Julia inferred for each statement; `cfg`, Julia's CFG of the
-statements (compute_basic_blocks), which the stackifier reads beside them (src/julia/machine.jl).
+statements (compute_basic_blocks), and `handlers`, its try regions (NirHandlers), which the
+stackifier reads beside them (src/julia/machine.jl).
 """
 @quarantine "a function of the closed world is a CodeInstance and its optimized CodeInfo, Julia's own" Core.CodeInstance struct NirBody
     ci::Core.CodeInstance
     stmts::Vector{NirStmt}
     types::Vector{Type}
     cfg::Core.Compiler.CFG
+    handlers::NirHandlers
 end
 
 # ---- building --------------------------------------------------------------------------------------
 """
-    nir_code(code, at) -> (Vector{NirStmt}, Core.Compiler.CFG)
+    nir_code(code, ssaflags, at) -> (Vector{NirStmt}, Core.Compiler.CFG, NirHandlers)
 
-The statements of an optimized CodeInfo's `code` in NIR, and Julia's CFG of them (compute_basic_blocks,
-whose blocks and edges name statements by their position, the same in both): the one reader of a
+The statements of an optimized CodeInfo's `code` in NIR, Julia's CFG of them (compute_basic_blocks,
+whose blocks and edges name statements by their position, the same in both), and its try regions:
+each statement's catch handler (compute_trycatch, over the CodeInfo's statements, whose catch
+destinations are statements) and whether `ssaflags` proves it throws nothing. The one reader of a
 body's raw statements, so every later stage, the stackifier's included, reads the closed sums.
 """
-@quarantine "Julia's IR is a CFG compute_basic_blocks reads from its optimized statements, read here once" Core.Compiler.compute_basic_blocks function nir_code(code::Vector{Any}, at::String)::Tuple{Vector{NirStmt},Core.Compiler.CFG}
-    return NirStmt[_nir_stmt(st, at) for st in code], Core.Compiler.compute_basic_blocks(code)
+@quarantine "Julia's IR is a CFG compute_basic_blocks reads from its optimized statements, read here once" Core.Compiler.compute_basic_blocks function nir_code(code::Vector{Any}, ssaflags::Vector{UInt32}, at::String)::Tuple{Vector{NirStmt},Core.Compiler.CFG,NirHandlers}
+    length(ssaflags) == length(code) || reject!(Internal("src/julia/nir.jl nir_code: $(length(ssaflags)) flags for $(length(code)) statements"), at)
+    local info = Core.Compiler.compute_trycatch(code)
+    local handler_at = info === nothing ? zeros(Int, length(code)) :
+        Int[h == 0 ? 0 : info.handlers[h].enter_idx for (h, _) in info.handler_at]
+    local nothrow = BitVector([f & Core.Compiler.IR_FLAG_NOTHROW != 0 for f in ssaflags])
+    return NirStmt[_nir_stmt(st, at) for st in code], Core.Compiler.compute_basic_blocks(code), NirHandlers(handler_at, nothrow)
 end
 
 # an operand of Julia's optimized IR as a NirValue; an IR node where a value belongs rejects, located
@@ -419,8 +441,8 @@ census rejects with `Unquarantined`, located at the compile `at` names.
             continue
         end
         seen[ci] = src
-        local stmts, cfg = nir_code(src.code, at)
-        push!(bodies, NirBody(ci, stmts, _nir_types(ci, src, at), cfg))
+        local stmts, cfg, handlers = nir_code(src.code, src.ssaflags, at)
+        push!(bodies, NirBody(ci, stmts, _nir_types(ci, src, at), cfg, handlers))
     end
     any(b -> b.ci.def === world.entry, bodies) ||
         reject!(Internal("src/julia/nir.jl: the closed world's entry $(world.entry) has no body"), at)

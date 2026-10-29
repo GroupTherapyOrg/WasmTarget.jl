@@ -42,7 +42,7 @@ end
 
 # the body's statements Julia's optimizer leaves, in NIR, and Julia's CFG of them (nir_code), the
 # input machine_function reads
-nir_of(f, types) = W.nir_code(Base.code_typed(f, types; optimize = true)[1][1].code, "llvm_loop_info")
+nir_of(f, types) = (ci = Base.code_typed(f, types; optimize = true)[1][1]; W.nir_code(ci.code, ci.ssaflags, "llvm_loop_info"))
 
 # the natural loop of `h` (CFGStackify.tla's BodyOf): h and the blocks reaching a predecessor h
 # dominates without passing h
@@ -97,7 +97,11 @@ end
     local brs = [i for b in mfb.layout for i in mfb.blocks[b].instrs if i.opcode == W.BR_UNLESS]
     @test length(brs) == 1
     local enter = Any[Core.EnterNode(2), Core.ReturnNode(nothing)]
-    @test_throws W.RejectionError W.machine_function(W.nir_code(enter, "try")..., "try")
+    # a try region's catch block is an EH pad; the stackifier rejects the region until it places a try_table
+    local mft = W.machine_function(W.nir_code(enter, zeros(UInt32, length(enter)), "try")..., "try")
+    @test mft.blocks[3].ehpad && !mft.blocks[2].ehpad
+    local e = try; L.add_pre_emit_pass(W.nir_code(enter, zeros(UInt32, length(enter)), "try")..., "try", false); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("placeTryTableMarker", e.rejection.anchor)
 end
 
 @testset "natural loops, LoopInfoBase::analyze" begin

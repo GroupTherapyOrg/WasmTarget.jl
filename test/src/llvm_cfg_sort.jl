@@ -53,7 +53,7 @@ end
 end
 
 # the body's statements Julia's optimizer leaves, in NIR, and Julia's CFG of them (nir_code)
-nir_of(f, types) = W.nir_code(Base.code_typed(f, types; optimize = true)[1][1].code, "llvm_cfg_sort")
+nir_of(f, types) = (ci = Base.code_typed(f, types; optimize = true)[1][1]; W.nir_code(ci.code, ci.ssaflags, "llvm_cfg_sort"))
 
 # the block every outcome of b's branches reaches: its BR, BR_IF and BR_UNLESS targets, and the next
 # block in the layout when its last instruction is no BR

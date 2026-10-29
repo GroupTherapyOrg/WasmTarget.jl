@@ -112,7 +112,7 @@ value needs a definition at entry (its addImplicitDefs).
 end
 
 """
-    machine_function(stmts, jcfg, at) -> MachineFunction
+    machine_function(stmts, jcfg, handlers, at) -> MachineFunction
 
 The machine code of a body whose statements are `stmts`, in NIR (nir_code), each jump naming the
 statement it goes to: `jcfg`, Julia's CFG of them (compute_basic_blocks), with a top block before
@@ -123,18 +123,42 @@ dominator tree of it (construct_domtree). A block no path reaches leaves the lay
 leave its successors' predecessors, as LLVM's UnreachableBlockElim runs before the backend. Each
 block's instructions: STMTS, then its terminator read from Julia's last statement, BR for a
 GotoNode and BR_UNLESS for a GotoIfNot (taken when the condition is false), and none for a block
-that returns or falls through to the next. A try region (EnterNode) rejects at `at` until
-placeTryTableMarker is ported.
+that returns, falls through to the next, or enters a try region (an EnterNode, its CFG successors
+the next block and the catch block).
+
+A try region's catch block is an EH pad, and a block holding a statement that may throw (`handlers`,
+Julia's answers) under a handler has that handler's catch block as a successor: LLVM's unwind edge
+from an invoke to its landing pad, here read from Julia's own facts. Julia's CFG marks a catch block
+and the entry with a predecessor 0, which names no block and is dropped; the top block is the entry's
+one predecessor.
 """
-@quarantine "Julia's IR is a CFG of its statements; codegen puts a top block before it" Core.Compiler.construct_domtree function machine_function(stmts::Vector{NirStmt}, jcfg::Core.Compiler.CFG, at::String)::MachineFunction
+@quarantine "Julia's IR is a CFG of its statements; codegen puts a top block before it" Core.Compiler.construct_domtree function machine_function(stmts::Vector{NirStmt}, jcfg::Core.Compiler.CFG, handlers::NirHandlers, at::String)::MachineFunction
     local jb = jcfg.blocks
     local n = length(jb) + 1
     # block 1 is codegen's top, its one successor Julia's first block; Julia's block k is k + 1
     local bbs = Core.Compiler.BasicBlock[Core.Compiler.BasicBlock(Core.Compiler.StmtRange(0, -1), Int[], Int[2])]
     for (k, b) in enumerate(jb)
-        local preds = Int[p + 1 for p in b.preds]
+        local preds = Int[p + 1 for p in b.preds if p != 0]
         k == 1 && pushfirst!(preds, 1)
         push!(bbs, Core.Compiler.BasicBlock(b.stmts, preds, Int[s + 1 for s in b.succs]))
+    end
+    # each try region's catch block, by its EnterNode's statement; a catch block is an EH pad
+    local catch_block(enter::Int) = begin
+        local e = stmts[enter]
+        e isa NirEnter || reject!(Internal("src/julia/machine.jl machine_function: statement $enter, a handler, is no EnterNode"), at)
+        e.catch_dest == 0 && reject!(Unquarantined("src/julia/machine.jl: an EnterNode with no catch, a scope region (ScopedValues)"), "$at: statement $enter")
+        Core.Compiler.block_for_inst(jcfg, e.catch_dest) + 1
+    end
+    local eh_pads = Set{Int}(catch_block(i) for i in eachindex(stmts) if stmts[i] isa NirEnter)
+    # the unwind edges: a block with a statement that may throw under a handler reaches its catch block
+    for b in 2:n
+        for i in bbs[b].stmts
+            local h = handlers.handler_at[i]
+            (h == 0 || handlers.nothrow[i]) && continue
+            local pad = catch_block(h)
+            pad in bbs[b].succs || push!(bbs[b].succs, pad)
+            b in bbs[pad].preds || push!(bbs[pad].preds, b)
+        end
     end
     local domtree = Core.Compiler.construct_domtree(bbs)
     local reachable(b::Int) = !Core.Compiler.bb_unreachable(domtree, b)
@@ -145,8 +169,6 @@ placeTryTableMarker is ported.
         if b > 1
             local r = bb.stmts
             local last_ = stmts[last(r)]
-            last_ isa NirEnter && reject!(Unported("llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:695 WebAssemblyCFGStackify::placeTryTableMarker"),
-                                                "$at: statement $(last(r)), a try region")
             local branch = last_ isa Union{NirGoto, NirGotoIfNot}
             push!(instrs, MachineInstr(STMTS, MachineOperand[MOImm(first(r)), MOImm(branch ? last(r) - 1 : last(r))], b))
             # a jump of the CodeInfo names a statement, the first of its block (block_for_inst)
@@ -157,7 +179,7 @@ placeTryTableMarker is ported.
                 dest == b + 1 || push!(instrs, MachineInstr(BR_UNLESS, MachineOperand[MOBlock(dest), MOImm(last(r))], b))
             end
         end
-        push!(blocks, MachineBasicBlock(b, unique(Int[p for p in bb.preds if reachable(p)]), unique(bb.succs), instrs, false))
+        push!(blocks, MachineBasicBlock(b, unique(Int[p for p in bb.preds if reachable(p)]), unique(bb.succs), instrs, b in eh_pads))
     end
     return MachineFunction(domtree, stmts, blocks, Int[b for b in 1:n if reachable(b)], 0, false)
 end

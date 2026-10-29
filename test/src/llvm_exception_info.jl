@@ -8,7 +8,7 @@ const W = WasmTarget
 const L = WasmTarget.LLVM
 
 # the machine function of a statement list, through the NIR (nir_code)
-machine_of(code, at) = W.machine_function(W.nir_code(code, at)..., at)
+machine_of(code, at) = W.machine_function(W.nir_code(code, zeros(UInt32, length(code)), at)..., at)
 
 @testset "DominanceFrontierImpl.h: each block's dominance frontier" begin
     # %1 branches to %3 or falls to %2, which jumps to %3: machine blocks 2 (%1), 3 (%2), 4 (%3, the join)
@@ -66,4 +66,33 @@ end
     L.sort_blocks(mf, li, wei)
     local pos(b) = findfirst(==(b), mf.layout)
     @test pos(5) == pos(4) + 1
+end
+
+module TryCases
+struct E; v::Int64; end
+@noinline thr(x::Int64) = x < 0 ? throw(E(x)) : x
+tc(x::Int64) = try; thr(x) + 1; catch e; e isa E ? e.v * 2 : 0; end
+end
+
+@testset "machine code: a try region's catch block is an EH pad, reached by unwind edges" begin
+    # Julia's blocks: %1 enters the try (catch at %6), %2..%4 call thr and leave, %5 returns, %6..
+    # catches; machine blocks are Julia's plus one
+    local ci = Base.code_typed(TryCases.tc, (Int64,); optimize = true)[1][1]
+    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, "tc")
+    # Julia's answers: the call of thr may throw under the try's handler (its EnterNode, statement 1);
+    # the add after it throws nothing
+    local call = findfirst(st -> st isa W.NirInvoke, stmts)
+    @test handlers.handler_at[call] == 1 && !handlers.nothrow[call] && handlers.nothrow[call + 1]
+    local mf = W.machine_function(stmts, cfg, handlers, "tc")
+    local pad = only(b for b in mf.layout if mf.blocks[b].ehpad)
+    local caller = Core.Compiler.block_for_inst(cfg, call) + 1
+    # the catch block is entered from the try's block (Julia's edge) and unwound to from the call's
+    @test pad == Core.Compiler.block_for_inst(cfg, (stmts[1]::W.NirEnter).catch_dest) + 1
+    @test caller in mf.blocks[pad].preds && pad in mf.blocks[caller].succs && 2 in mf.blocks[pad].preds && !(1 in mf.blocks[pad].preds)
+    # its exception is the catch block alone, and the stackifier rejects the region at placeTryTableMarker
+    local wei = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei, mf)
+    @test L.get_blocks(L.get_exception_for(wei, pad)) == [pad]
+    local e = try; L.add_pre_emit_pass(stmts, cfg, handlers, "tc", true); nothing; catch x; x; end
+    @test e isa W.RejectionError && occursin("placeTryTableMarker", e.rejection.anchor)
 end

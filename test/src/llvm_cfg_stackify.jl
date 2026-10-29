@@ -91,12 +91,12 @@ end
 end
 
 # the body's statements Julia's optimizer leaves, in NIR, and Julia's CFG of them (nir_code)
-nir_of(f, types) = W.nir_code(Base.code_typed(f, types; optimize = true)[1][1].code, "llvm_cfg_stackify")
+nir_of(f, types) = (ci = Base.code_typed(f, types; optimize = true)[1][1]; W.nir_code(ci.code, ci.ssaflags, "llvm_cfg_stackify"))
 
 # the machine code of `f`, analyzed, sorted and stackified (addPreEmitPass's order)
 function stackified(f, types)
-    local stmts, jcfg = nir_of(f, types)
-    local mf = W.machine_function(stmts, jcfg, "llvm_cfg_stackify")
+    local stmts, jcfg, handlers = nir_of(f, types)
+    local mf = W.machine_function(stmts, jcfg, handlers, "llvm_cfg_stackify")
     L.run_on_machine_function(L.WebAssemblyFixIrreducibleControlFlow(), mf)
     local li = L.LoopInfoBase()
     L.analyze(li, mf)

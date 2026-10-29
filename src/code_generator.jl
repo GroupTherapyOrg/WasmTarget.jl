@@ -627,7 +627,7 @@ end
 # registers
 @parity "dart2wasm/lib/code_generator.dart:768 AstCodeGenerator.visitBlock" function visit_block(self::AstCodeGenerator, node::NirBody)::Nothing
     local at = "$(self.enclosing_member)"
-    local mf = LLVM.add_pre_emit_pass(node.stmts, node.cfg, at, !isempty(outputs(self)))
+    local mf = LLVM.add_pre_emit_pass(node.stmts, node.cfg, node.handlers, at, !isempty(outputs(self)))
     mf.implicit_defs && reject!(Unported("llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow.cpp:521 addImplicitDefs"),
                                 "$at: a value defined at entry for every path an irreducible loop's dispatch adds")
     local b = self.b[]
