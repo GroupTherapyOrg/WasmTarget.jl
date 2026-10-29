@@ -1970,21 +1970,38 @@ function removals_negatives_missed()::Vector{String}
 end
 
 # ---- L227, its second half: a dart record is lowered only by name (A51E4, A53E2; dev/CHARTER.md C10) --
-# test/src/dart_tests.jl's records: each case's kind, the last element of its one-line record
+# test/src/dart_tests.jl's records: each case's kind, the last element of its record, read by Julia's own parser
+# from the `const DART_CASES = Dict(...)` expression, so a record written over several lines is read as one
+# (A55E1); a text holding no DART_CASES holds no record
 const DART_RECORDS = "test/src/dart_tests.jl"
-dart_record_kinds(text::AbstractString)::Dict{String,Symbol} =
-    Dict(String(m[1]) => Symbol(m[2]) for m in eachmatch(r"^\s*\"(dart_[^\"]+)\" => \(.*, :(compiled|rejects|outside|wt_bug)\),\s*$"m, text))
+function dart_record_kinds(text::AbstractString)::Dict{String,Symbol}
+    local out = Dict{String,Symbol}()
+    local at = findfirst("const DART_CASES", text)
+    at === nothing && return out
+    local ex = first(Meta.parse(text, first(at); raise = false))
+    local walk(e) = e isa Expr && (e.head === :call && length(e.args) == 3 && e.args[1] === :(=>) && e.args[2] isa String &&
+                                   startswith(e.args[2], "dart_") && e.args[3] isa Expr && e.args[3].head === :tuple &&
+                                   last(e.args[3].args) isa QuoteNode ?
+                                   (out[e.args[2]] = last(e.args[3].args).value) : foreach(walk, e.args))
+    walk(ex)
+    return out
+end
+
+# a kind's strength: what its property asserts of the compile. :compiled asserts the most, :outside that the
+# program stays outside the subset, :rejects only that a rejection is located, :wt_bug a known defect
+const DART_RECORD_RANK = Dict(:compiled => 3, :outside => 2, :rejects => 1, :wt_bug => 0)
 
 # the records a message does not name that the change lowers: a case recorded :wt_bug that was not (a known
-# WT bug the landing then admits), or a :compiled record turned to any other kind (a port losing ground); each
-# named by a line `Lowers-record: <case> — <reason>`. A record raised, or a new case recorded otherwise, needs
-# no line.
+# WT bug the landing then admits), or a record turned to a weaker kind (DART_RECORD_RANK: :compiled to anything
+# else, a port losing ground; :outside to :rejects, Julia's verdict dropped, A55E1); each named by a line
+# `Lowers-record: <case> — <reason>`. A record raised, or a new case recorded otherwise, needs no line.
 function unnamed_lowerings(msg::AbstractString, base::AbstractDict{String,Symbol}, head::AbstractDict{String,Symbol})::Vector{String}
     local named = Set{String}(m[1] for m in eachmatch(r"^Lowers-record: (\S+) (?:—|--) \S.*$"m, msg))
     local out = String[]
     for k in sort!(collect(keys(head)))
         local was, now = get(base, k, nothing), head[k]
-        ((now === :wt_bug && was !== :wt_bug) || (was === :compiled && now !== :compiled)) && !(k in named) && push!(out, k)
+        ((now === :wt_bug && was !== :wt_bug) || (was !== nothing && DART_RECORD_RANK[now] < DART_RECORD_RANK[was])) &&
+            !(k in named) && push!(out, k)
     end
     return out
 end
@@ -2015,8 +2032,14 @@ function lowerings_negatives_missed()::Vector{String}
               isempty(unnamed_lowerings("x\nLowers-record: dart_a/x — the trim verifier now rejects it\n", b, merge(b, Dict("dart_a/x" => :outside)))),
               unnamed_lowerings("Lowers-record: dart_a/x — \n", b, merge(b, Dict("dart_a/x" => :rejects))) == ["dart_a/x"],
               unnamed_lowerings("Lowers-record: dart_a/y — another case\n", b, merge(b, Dict("dart_a/x" => :wt_bug))) == ["dart_a/x"],
-              dart_record_kinds("    \"dart_a/x\" => ((1, (2, 3)), :compiled),\n    \"dart_a/y\" => (Bool[1, 0], :wt_bug),\n") ==
-                  Dict("dart_a/x" => :compiled, "dart_a/y" => :wt_bug)]) == 0 ||
+              dart_record_kinds("const DART_CASES = Dict(\n    \"dart_a/x\" => ((1, (2, 3)), :compiled),\n    \"dart_a/y\" => (Bool[1, 0], :wt_bug),\n)\n") ==
+                  Dict("dart_a/x" => :compiled, "dart_a/y" => :wt_bug),
+              # A55E1: an :outside record relaxed to :rejects, and a record written over several lines
+              unnamed_lowerings("", Dict("dart_a/o" => :outside), Dict("dart_a/o" => :rejects)) == ["dart_a/o"],
+              isempty(unnamed_lowerings("", Dict("dart_a/o" => :rejects), Dict("dart_a/o" => :outside))),
+              dart_record_kinds("const DART_CASES = Dict(\n    \"dart_a/m\" => ((1,\n        2), :outside),\n    \"dart_a/n\" =>\n        (3, :rejects),\n)\n") ==
+                  Dict("dart_a/m" => :outside, "dart_a/n" => :rejects),
+              isempty(dart_record_kinds("x = 1\n"))]) == 0 ||
         push!(out, "negative missed: a planted record's lowering")
     # a scratch repository: a record lowered with no line, then named
     mktempdir() do t
@@ -2377,7 +2400,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every :compiled record it turns to another kind, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line). Behavior, run here: seven planted messages and a scratch repository for removals, ten planted records and messages and a scratch repository for lowerings, answer as stated (dev/CHARTER.md C10)",
+    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every record it turns to a weaker kind (:compiled to any other, :outside to :rejects; A55E1), its records read by Julia's parser so one written over several lines counts, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line). Behavior, run here: seven planted messages and a scratch repository for removals, fourteen planted records and messages and a scratch repository for lowerings, answer as stated (dev/CHARTER.md C10)",
         () -> begin
             local base = get(ENV, "CHECK_BASE", "origin/wt2")
             local v = vcat(removals_unnamed(ROOT, base), removals_negatives_missed(), lowerings_unnamed(ROOT, base), lowerings_negatives_missed())
