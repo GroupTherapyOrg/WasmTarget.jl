@@ -73,10 +73,12 @@ checked_rebase() {
 # the common dir's wt-ship-failures.tsv (time, lane, the stopped commit, the first red line) and the
 # check's outputs under wt-ship-failed/<lane>/ (march-corrector, 22:10: two port stacks went red with
 # their causes only in the scrollback of the shells that ran them)
+# the red line is the check's own verdict: "red" as a word, never inside a name ("MCCFGStackifySinglePredBroken"
+# matched it and recorded a green TLC line as the cause, march-monitor-a, 09:30)
 record_failure() {
   local at red
   at=$(git log -1 --format='%h %s' 2>/dev/null | cut -c1-100 | tr '\t' ' ')
-  red=$(grep -m1 -E '^check: .*(RED|red|fails|REFUSED|does not)|CONFLICT|could not apply' .wtd/rebase.out 2>/dev/null | cut -c1-240 | tr '\t' ' ')
+  red=$(grep -m1 -E '^check: (RED|.*( red$| red[ ;:,]| fails|REFUSED|does not))|CONFLICT|could not apply' .wtd/rebase.out 2>/dev/null | cut -c1-240 | tr '\t' ' ')
   printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(basename "$lane")" "$at" "$red" >> "$common/wt-ship-failures.tsv"
   rm -rf "$common/wt-ship-failed/$(basename "$lane")"; mkdir -p "$common/wt-ship-failed/$(basename "$lane")"
   cp .wtd/*.out "$common/wt-ship-failed/$(basename "$lane")/" 2>/dev/null
