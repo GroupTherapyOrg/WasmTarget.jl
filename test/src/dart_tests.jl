@@ -1091,12 +1091,21 @@ function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{St
     return nothing
 end
 
+# WT_DART_SHARD="k/n" (dev/corpus.sh runs n shards side by side on the efficiency cores) takes the groups whose
+# index is k modulo n, and checks the records of those groups alone; without it, every group
+const _DART_SHARD = let sh = get(ENV, "WT_DART_SHARD", "")
+    isempty(sh) ? (1, 1) : Tuple(parse.(Int, split(sh, '/')))
+end
+_dart_in_shard(i::Int)::Bool = mod1(i, _DART_SHARD[2]) == _DART_SHARD[1]
+const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUPS) if _dart_in_shard(i))
+
 @testset "dart2wasm's tests, Julia the ground truth" begin
     local seen = Set{String}()
     local runs = Main.WTRunner.RunCase[]
     local unread = Pair{String,String}[]
     local nread = 0
     for (group, cases) in DART_GROUPS, case in cases
+        group in _DART_SHARD_GROUPS || continue
         local key = "$group/$(case[1])"
         push!(seen, key)
         @testset "$key" begin
@@ -1123,7 +1132,7 @@ end
         end
     end
     # every recorded case is a case of the corpus
-    @test sort!(collect(setdiff(keys(DART_CASES), seen))) == String[]
+    @test sort!(collect(setdiff(Set(k for k in keys(DART_CASES) if first(split(k, '/')) in _DART_SHARD_GROUPS), seen))) == String[]
     # every module read, in one node process: each fact native's, in both modules, or the case fails naming
     # the fact by its path and what the modules answered
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: running $(length(runs)) modules in node")

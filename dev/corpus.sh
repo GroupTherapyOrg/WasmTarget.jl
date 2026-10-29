@@ -38,19 +38,30 @@ run_head() {
     cd "$scratch" && . dev/depot.sh && wt_depot_export "$scratch"
     export JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2 WT_PROGRESS="$scratch/.wtd/progress"
     : > "$WT_PROGRESS"
-    taskpolicy -b julia --project=. --startup-file=no -e '
-      using Test
-      wt_progress(s::AbstractString) = write(ENV["WT_PROGRESS"], s)
-      @testset "corpus" begin include("test/src/dart_tests.jl") end' > "$out" 2>&1 & jpid=$!
+    # the corpus in CORPUS_SHARDS shards side by side (test/src/dart_tests.jl's WT_DART_SHARD), each on the
+    # efficiency cores, so its wall time stays inside its limit as the ported dart tests grow (one run took
+    # 346 s, then 733 s two hours later, 2026-10-28)
+    CORPUS_SHARDS=3; jpids=""
+    for k in $(seq 1 $CORPUS_SHARDS); do
+      : > "$WT_PROGRESS.$k"
+      WT_PROGRESS="$WT_PROGRESS.$k" WT_DART_SHARD="$k/$CORPUS_SHARDS" taskpolicy -b julia --project=. --startup-file=no -e '
+        using Test
+        wt_progress(s::AbstractString) = write(ENV["WT_PROGRESS"], s)
+        @testset "corpus" begin include("test/src/dart_tests.jl") end' > "$out.$k" 2>&1 & jpids="$jpids $!"
+    done
     s0=$(date +%s)
-    while kill -0 $jpid 2>/dev/null; do
+    alive() { for p in $jpids; do kill -0 $p 2>/dev/null && return 0; done; return 1; }
+    while alive; do
       if [ $(( $(date +%s) - s0 )) -gt "$WT_CORPUS_LIMIT" ]; then
-        echo "corpus: past the hard limit of ${WT_CORPUS_LIMIT}s at: $(cat "$WT_PROGRESS")" >> "$out"
-        pkill -P $jpid 2>/dev/null; kill $jpid 2>/dev/null; exit 124
+        cat "$out".[0-9]* > "$out"
+        echo "corpus: past the hard limit of ${WT_CORPUS_LIMIT}s at: $(cat "$WT_PROGRESS".[0-9]* | tr '\n' ' ')" >> "$out"
+        for p in $jpids; do pkill -P $p 2>/dev/null; kill $p 2>/dev/null; done; exit 124
       fi
       sleep 5
     done
-    wait $jpid
+    rc=0; for p in $jpids; do wait $p || rc=1; done
+    cat "$out".[0-9]* > "$out"
+    exit $rc
   ); rc=$?
   t=$(( $(date +%s) - r0 ))
   case $rc in 0) result=green;; 124) result=hung;; *) result=red;; esac
