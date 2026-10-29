@@ -1217,9 +1217,18 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2534 Translator.pushStandaloneStringConstant" @unported function push_standalone_string_constant(self::Translator, instructions::WasmBuilder.InstructionsBuilder, data::WasmBuilder.DataSegmentBuilder, s::String) end
 
-@parity "dart2wasm/lib/translator.dart:2575 Translator.findMemory" @unported function find_memory(self::Translator, top_level_external_memory_getter::Core.MethodInstance, module_builder::WasmBuilder.ModuleBuilder) end
+"""The memory an external memory getter names, the main module's, imported into any other module."""
+@parity "dart2wasm/lib/translator.dart:2575 Translator.findMemory" function find_memory(self::Translator, top_level_external_memory_getter::Core.MethodInstance, module_builder::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Memory
+    local in_main = _find_memory_for_main_module(self, top_level_external_memory_getter)
+    module_builder === main_module(self) && return in_main
+    return get(self._imported_memories[], in_main, module_builder)
+end
 
-@parity "dart2wasm/lib/translator.dart:2587 Translator._findMemoryForMainModule" @unported function _find_memory_for_main_module(self::Translator, top_level_external_memory_getter::Core.MethodInstance) end
+# dart reads the getter's wasm:memory-type pragma (MemoryLimits.readAnnotation, asserted present); a
+# Julia binding declares no pragmas (that reader is out of scope, "julia: Julia declares no pragmas"),
+# so no member names a wasm memory and a request is a located rejection, never a memory of guessed limits
+@parity "dart2wasm/lib/translator.dart:2587 Translator._findMemoryForMainModule" _find_memory_for_main_module(self::Translator, top_level_external_memory_getter::Core.MethodInstance)::WasmBuilder.IR.Memory =
+    reject!(Internal("dart2wasm/lib/translator.dart:2587 Translator._findMemoryForMainModule: $top_level_external_memory_getter declares no wasm memory; a Julia binding declares no pragmas"), "Translator._findMemoryForMainModule")
 
 # dart's struct heap type: an empty struct of its own; a defined struct its fields' dummies, an array
 # empty, a function type its trapping dummy function; another heap type, which dart leaves without a
@@ -1280,8 +1289,13 @@ end
 # the optimized IR Julia inferred, its body's CodeInfo
 @parity "dart2wasm/lib/translator.dart:2701 AstCompilationTask.run" function Base.run(self::AstCompilationTask, translator::Translator, print_kernel::Bool, print_wasm::Bool)::Nothing
     if print_kernel || print_wasm
-        println("#$(self.function_.function_name): $(self.reference)")
+        local names = _get_names(self, translator)
+        local header = "#$(self.function_.function_name): $(names.name)"
+        names.export_name === nothing || (header = "$header (exported as $(names.export_name))")
+        println(header)
         println(self.function_.type)
+        # dart's member's function type; a Julia member's is its specialization's signature
+        println(self.reference.specTypes)
     end
     if print_kernel
         # the member's optimized statements as the closed world holds them, never inferred again
@@ -1295,7 +1309,11 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/translator.dart:2744 AstCompilationTask._getNames" @unported function _get_names(self::AstCompilationTask, translator::Translator) end
+# dart's member's name, its getter, setter or tear-off marked, prefixed by its library's import URI
+# outside the main library; a MethodInstance names one callable, and its qualified name
+# (getFunctionName) names its module already
+@parity "dart2wasm/lib/translator.dart:2744 AstCompilationTask._getNames" _get_names(self::AstCompilationTask, translator::Translator)::NamedTuple{(:name, :export_name),Tuple{String,Union{String,Nothing}}} =
+    (name = get_function_name(translator.functions[], self.reference), export_name = get_export_name(translator.functions[], self.reference))
 
 @parity "dart2wasm/lib/translator.dart:2776 _ClosureTrampolineGenerator" @unported function _ClosureTrampolineGenerator(translator, trampoline, target, type_count, pos_arg_count, arg_names, param_info) end
 

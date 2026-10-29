@@ -465,6 +465,9 @@ end
     @test D.make_array(t, ab, a, 3, (et, i) -> (@assert et == IR.NumType_i64; B.i64_const(ab, i))) == IR.RefType_def(a; nullable = false)
     @test [typeof(x) for x in ab._instructions] == [IR.I64Const, IR.I64Const, IR.I64Const, IR.ArrayNewFixed]
     B.var"end"(ab)
+    # no Julia member names a wasm memory (it declares no pragmas): a located rejection
+    local em = try; D.find_memory(t, t.component.entry, m); nothing; catch x; x; end
+    @test em isa W.RejectionError && em.rejection isa W.Internal
     # Julia has no WasmTable class, so no field is a table
     @test D.get_table(t, m, W.class_instance_fields(ModuleCases.Square, "t")[1]) === nothing
 end
