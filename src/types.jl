@@ -459,8 +459,8 @@ Emits a test of a value against a type: the value on the stack as a top-type ref
 an i32. The test is a class-id range check whenever Julia tells the type's values by their class (see
 `canUseTypeCheckHelper`). A test that only needs the null case is dart's runtime
 `_isNullabilityCheck(o, isNullable)` (`o == null ? isNullable : true`), written out because the
-tested type is a constant. Any other test needs dart's runtime subtype check, which has no Julia
-counterpart yet, and it rejects, located.
+tested type is a constant. Any other test needs dart's runtime subtype check, `_isSubtype` of the
+runtime library at the pin, not ported: it rejects there, Unported, located.
 """
 @parity "dart2wasm/lib/types.dart:434 Types.emitIsTest" function emit_is_test(self::Types, code_gen::AstCodeGenerator, tested_against_type::Type, operand_type::Type;
         location::Union{String,Nothing} = nothing)::Nothing
@@ -468,7 +468,7 @@ counterpart yet, and it rejects, located.
     local b = code_gen.b[]
     WasmBuilder.comment(b, "type check against $tested_against_type")
     self.translator.options.verify_type_checks &&
-        reject!(Unquarantined("src/types.jl emitIsTest: verifyTypeChecks calls the runtime's verifyOptimizedTypeCheck, which has no Julia counterpart"), at)
+        reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1730 _verifyOptimizedTypeCheck"), "$at: verifyTypeChecks calls the runtime's check of an optimized type test")
     local check_only_null_assignability = _requires_only_null_assignability_check(self, operand_type, tested_against_type)
     local is_checkers = is_checkers_for_module(self, b.module_builder)
     local (type_to_check, check_arguments) = can_use_type_check_helper(is_checkers, tested_against_type, operand_type)
@@ -486,7 +486,7 @@ counterpart yet, and it rejects, located.
             WasmBuilder.i32_eqz(b)
         end
     else
-        reject!(Unquarantined("src/types.jl emitIsTest: a test against $tested_against_type needs the runtime's subtype check, which has no Julia counterpart"), at)
+        reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype"), "$at: a test against $tested_against_type needs the runtime's subtype check")
     end
     return nothing
 end
@@ -494,7 +494,7 @@ end
 """
 Emits a check that a value is of a type, returning the wasm type of the checked value: the as
 checker of the type when Julia tells its values by their class. dart otherwise calls its runtime
-`_asSubtype`, which has no Julia counterpart yet, and the check rejects, located.
+`_asSubtype`, of the runtime library at the pin, not ported: the check rejects there, Unported.
 """
 @parity "dart2wasm/lib/types.dart:527 Types.emitAsCheck" function emit_as_check(self::Types, code_gen::AstCodeGenerator, tested_against_type::Type, operand_type::Type,
         boxed_operand_type::WasmBuilder.IR.RefType; location::Union{String,Nothing} = nothing)::WasmBuilder.IR.ValueType
@@ -508,7 +508,7 @@ checker of the type when Julia tells its values by their class. dart otherwise c
         MacroAssembler_invoke(b, generate_as_checker(as_checkers, type_to_check, check_arguments, Nothing <: operand_type))
         return translate_type(self.translator, tested_against_type)
     end
-    reject!(Unquarantined("src/types.jl emitAsCheck: a check against $tested_against_type needs the runtime's _asSubtype, which has no Julia counterpart"), at)
+    reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype"), "$at: a check against $tested_against_type needs the runtime's _asSubtype")
 end
 
 """
@@ -746,7 +746,7 @@ in the runtime yet, so generating the failure path rejects, located.
     MacroAssembler_invoke(b, generate_is_checker(is_checkers_for_module(self.translator.types[], b.module_builder),
         self.tested_against_type, self.check_arguments, self.operand_is_nullable); force_inline = force_inline)
     WasmBuilder.br_if(b, as_check_block)
-    reject!(Unquarantined("src/types.jl AsCheckerCodeGenerator.generate: the TypeError typeassert throws, which the runtime has no counterpart for"), at)
+    reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:76 _TypeError._throwAsCheckError"), "$at: the TypeError a failed check throws, the runtime's")
 end
 
 @parity "dart2wasm/lib/types.dart:1195 RuntimeTypeInformation.noSubstitutionIndex" RuntimeTypeInformation_no_substitution_index()::Int = 0

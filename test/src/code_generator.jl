@@ -63,13 +63,12 @@ rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(
 
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
 
-# node runs the module `bytes` on each argument tuple (test/runner.jl, the third oracle): whether every
-# answer is native Julia's, === at its type; each one that differs prints, named
-function answers_native(label, bytes, f, argsets)
-    local results = WTRunner.run_cases([WTRunner.RunCase("$label$a", bytes, a, f(a...)) for a in argsets])
-    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
-    return all(r -> r.ok, results)
-end
+# the modules the file's cases compiled, each with its argument tuples and native Julia's answers,
+# queued for one node process at the file's end (test/runner.jl, the third oracle): a node start per
+# module would cost more than the cases
+const NATIVE_RUNS = WTRunner.RunCase[]
+queue_native!(label, bytes, f, argsets) =
+    append!(NATIVE_RUNS, [WTRunner.RunCase("$label$a", bytes, a, f(a...)) for a in argsets])
 
 @testset "code_generator.dart: a body's code generator over the NIR" begin
     local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
@@ -314,8 +313,8 @@ end
     # WasmTarget.compile runs the whole pipeline (compile.dart's phases, translate): the module our
     # builder accepted instruction by instruction; run by node it answers as native Julia on 0, 41,
     # -1, typemax and typemin, the add wrapping
-    local bytes = W.compile(CodegenCases.f_add, (Int32,))
-    @test answers_native("f_add", bytes, CodegenCases.f_add, [(x,) for x in Int32[0, 41, -1, typemax(Int32), typemin(Int32)]])
+    local bytes = W.compile(CodegenCases.f_add, (Int32,); optimize = false)
+    queue_native!("f_add", bytes, CodegenCases.f_add, [(x,) for x in Int32[0, 41, -1, typemax(Int32), typemin(Int32)]])
     @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
     # the body: local.get 0, i32.const 1, i32.add
     @test any(i -> bytes[i:i+4] == UInt8[0x20, 0x00, 0x41, 0x01, 0x6a], 1:length(bytes)-4)
@@ -380,7 +379,7 @@ end
                              (C.widen32, (Int32,), [(x,) for x in i32s]))
         local bytes = compile_one(f, at)
         @test bytes[1:8] == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
-        @test answers_native(string(nameof(f)), bytes, f, argsets)
+        queue_native!(string(nameof(f)), bytes, f, argsets)
     end
 end
 
@@ -453,7 +452,7 @@ end
                    [D.Range(i, i + 1) for i in 0:4:40])
         local bytes = range_module(ranges)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-        @test answers_native("ranges $(length(ranges)) ", bytes, id -> Int32(any(r -> contains(r, Int64(id)), ranges)), [(Int32(id),) for id in 0:45])
+        queue_native!("ranges $(length(ranges)) ", bytes, id -> Int32(any(r -> contains(r, Int64(id)), ranges)), [(Int32(id),) for id in 0:45])
     end
     # an empty search with no miss is WasmTarget's own defect
     local mb = B.ModuleBuilder("m", nothing)
@@ -532,7 +531,7 @@ end
                              (C.sumto, (Int64,), [(Int64(n),) for n in (0, 1, 10, 1000)]))
         local bytes = compile_one(f, at)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-        @test answers_native(string(nameof(f)), bytes, f, argsets)
+        queue_native!(string(nameof(f)), bytes, f, argsets)
     end
     # the loop's module holds a loop (0x03) and a conditional branch out of it
     local bytes = compile_one(C.sumto, (Int64,))
@@ -614,7 +613,7 @@ end
     local Wr = NarrowWires
     for (f, argsets) in ((Wr.add8, [(a, b) for a in e8 for b in e8]), (Wr.lt8u, [(a, b) for a in u8 for b in u8]),
                          (Wr.neg8, [(x,) for x in e8]), (Wr.widen8, [(x,) for x in e8]), (Wr.lshr8, [(x,) for x in e8]))
-        @test answers_native(string(nameof(f)), compile_one(f, map(typeof, first(argsets))), f, argsets)
+        queue_native!(string(nameof(f)), compile_one(f, map(typeof, first(argsets))), f, argsets)
     end
     # the add of two Int8s puts its result back sign-extended, i32.extend8_s right after the i32.add
     local ins = generated_instructions(C.add8, (Int8, Int8))
@@ -633,30 +632,45 @@ end
     @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     local f32 = UInt8[0x43, reinterpret(UInt8, [1.5f0])...]
     @test any(i -> bytes[i:i+4] == f32, 1:length(bytes)-4)
-    @test Float32Cases.addf(1.0f0) === 2.5f0
+    # run by node, it answers as native Julia, the f32 crossing as its bits
+    queue_native!("addf", bytes, Float32Cases.addf, [(x,) for x in Float32[0, -0.0, 1, -1.5, 3.0f38, Inf, NaN]])
 end
 
 module TypeTestCases
 # each entry's signature is concrete (Julia compiles no specialization for a Union signature); the
 # operand under test is the field read, whose inferred type is the Union
 maybe(r::Base.RefValue{Union{Nothing,Int64}}) = r[] isa Int64
+# the same isa over a reference the runner can build from an Int64 (an Int64 in the Union needs its
+# box, not ported): the Ref built inside, nothing for a negative argument
+mutable struct Cell; x::Int64; end
+maybe_cell(r::Base.RefValue{Union{Nothing,Cell}}) = r[] isa Cell
+maybe_of(x::Int64) = maybe_cell(Ref{Union{Nothing,Cell}}(x < 0 ? nothing : Cell(x)))
 as_int(r::Base.RefValue{Union{Nothing,Int64}}) = r[]::Int64
 dyn(r::Base.RefValue{Union{Nothing,Int64}}, T::DataType) = r[] isa T
 end
 
 @testset "code_generator.dart: isa and typeassert through types.dart's tests" begin
     local R = Base.RefValue{Union{Nothing,Int64}}
-    # Julia's isa of the field read, visitIsExpression over the body's own statement: the Union of
-    # Nothing and Int64 is a nullable reference, so the test is emitIsTest's null check, negated
-    @test generated_instructions(TypeTestCases.maybe, (R,)) ==
-          ["local.get", "struct.get", "local.set", "local.get", "ref.is_null", "i32.eqz", "local.set", "local.get", "return", "end"]
-    # Julia's typeassert, the checked AsExpression: emitAsCheck needs the runtime's _asSubtype, a
-    # located rejection at its definition
+    # Julia's isa of the field read, visitIsExpression over the body's own statement (the Union of
+    # Nothing and Int64 a nullable reference, emitIsTest's null check): run by node it answers as
+    # native Julia, nothing and every Int64
+    local bytes = W.compile(TypeTestCases.maybe_of, (Int64,); optimize = false)
+    queue_native!("maybe_of", bytes, TypeTestCases.maybe_of, [(x,) for x in Int64[-1, 0, 1, typemax(Int64), typemin(Int64)]])
+    # Julia's typeassert, the checked AsExpression: emitAsCheck needs the runtime's _asSubtype, not
+    # ported, a located rejection at the runtime library's definition
     local e = rejection(() -> generated_instructions(TypeTestCases.as_int, (R,)))
-    @test e.rejection isa W.Unquarantined && e.at == "dart2wasm/lib/types.dart:527 Types.emitAsCheck"
+    @test e.rejection isa W.Unported && e.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype" &&
+          startswith(e.at, "dart2wasm/lib/types.dart:527 Types.emitAsCheck")
     # a type computed at run time is no type test's constant: makeType makes it through
     # instantiateTypeParameter, not ported
     local d = rejection(() -> generated_instructions(TypeTestCases.dyn, (R, DataType)))
     @test d.rejection isa W.Unported && occursin("AstCodeGenerator.instantiateTypeParameter", d.rejection.anchor) &&
           occursin("TypeTestCases.dyn", d.at)
+end
+
+@testset "the third oracle: every module queued above answers as native Julia" begin
+    for r in WTRunner.run_cases(NATIVE_RUNS)
+        r.ok || println(r.label, ": ", r.why)
+        @test r.ok
+    end
 end
