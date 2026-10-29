@@ -635,13 +635,8 @@ end
 @parity "dart2wasm/lib/translator.dart:427 Translator.moduleForReference" module_for_reference(self::Translator, reference::Core.MethodInstance)::WasmBuilder.ModuleBuilder =
     self._output_to_builder[module_for_reference(self._module_output_data, reference)]
 
-# The module where `constant` should be placed; nothing for a constant the backend synthesizes, whose
-# place the backend decides
-@parity "dart2wasm/lib/translator.dart:436 Translator.moduleForConstant" function module_for_constant(self::Translator, constant::NirConst)::Union{WasmBuilder.ModuleBuilder,Nothing}
-    local module_ = module_for_constant(self._module_output_data, constant)
-    module_ === nothing && return nothing
-    return self._output_to_builder[module_]
-end
+@parity "dart2wasm/lib/translator.dart:436 Translator.moduleForConstant" module_for_constant(self::Translator, constant::NirConst)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:436 Translator.moduleForConstant: a constant's module in a deferred split; deferred loading is out of scope (dev/PARITY_MASTER.md), one module holds every constant"), "Translator.moduleForConstant")
 
 @parity "dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId" modules_for_load_id(self::Translator, enclosing_library::Module, load_id::Int64)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator.modulesForLoadId")
@@ -861,7 +856,17 @@ carry no free type variable here, so dart's walk to a type parameter's bound has
     return Nothing <: original_type && cls !== Any ? Union{Nothing,cls} : cls
 end
 
-@parity "dart2wasm/lib/translator.dart:974 Translator.getTearOffType" @unported function get_tear_off_type(self::Translator, method::Core.MethodInstance) end
+"""
+The runtime type of a tear-off: the method's function type, its covariant parameters' types replaced
+by Object?. A Julia function type is a method signature, a Tuple type (the Kernel table's FunctionType
+row): the specialization's parameter types after the callee's own, which no covariance widens (Julia
+has none). The callee's own type, params[1], is the tear-off's value's class (makeTearOffFunctionType
+reads it), so the two read disjoint parts of the one specialization.
+"""
+@parity "dart2wasm/lib/translator.dart:974 Translator.getTearOffType" function get_tear_off_type(self::Translator, method::Core.MethodInstance)::Type
+    local params = (Base.unwrap_unionall(method.specTypes)::DataType).parameters
+    return Tuple{params[2:end]...}
+end
 
 @parity "dart2wasm/lib/translator.dart:1028 Translator.getDartExceptionTag" get_dart_exception_tag(self::Translator, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Tag =
     get_dart_exception_tag(self._exception_tags[], module_)
@@ -1807,8 +1812,8 @@ end
         module_name::String, import_name::String)::WasmBuilder.IR.Tag =
     WasmBuilder.var"import"(importing_module.tags[], module_name, import_name, definition.type)
 
-@parity "dart2wasm/lib/translator.dart:4069 SingleClosureTarget._" SingleClosureTarget__(call_target::CallTarget, param_info::ParameterInfo)::SingleClosureTarget =
-    SingleClosureTarget(Val(:_), call_target, param_info)
+@parity "dart2wasm/lib/translator.dart:4069 SingleClosureTarget._" SingleClosureTarget__(call_target::CallTarget, param_info::ParameterInfo)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:4069 SingleClosureTarget._: TFA's direct closure call's target; Julia's inference resolved each call of a closure to an invoke of its method (singleTarget), so none is made"), "SingleClosureTarget._")
 
 # dart's extension on BytesBuilder, its bytes appended to an IOBuffer, Julia's byte builder; dart's
 # assert on a negative value a located rejection
