@@ -303,6 +303,8 @@ keywords positionally), so the array is empty by Julia's answer.
 Creates a `WasmArray<T>` (or, not `mutable_`, an `ImmutableWasmArray<T>`) with the given constants:
 the NIR's literal of a WasmArrayLiteral (src/julia/wasm_array.jl), compared field by field as Kernel
 compares the InstanceConstant dart builds.
+
+Reshaped: `elementType` — Julia's element type may be a UnionAll (`Type` itself), where dart's is always an InterfaceType.
 """
 @parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" make_array_of(self::Constants, element_type::Type, entries::Vector{NirConst}; mutable_::Bool = true)::NirConst =
     NirConst(Core.Const(WasmArrayLiteral(element_type, mutable_, Tuple(entries))))

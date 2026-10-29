@@ -130,7 +130,11 @@ end
 # is a helper import
 @parity "dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName" get_import_name(self::_InteropHelperMemberNamer, member::Core.MethodInstance)::Nothing = nothing
 
-# the closed world stands where dart passes coreTypes (_ExternalMemberNamer's docstring)
+"""
+The interop namer over the closed world, the export namer and the options.
+
+Reshaped: `coreTypes` — Julia's core types are the closed world's, whose entry the external namer names.
+"""
 @parity "dart2wasm/lib/namer.dart:142 InteropMemberNamer" InteropMemberNamer(component::NirWorld, export_namer::Namer, options::TranslatorOptions)::InteropMemberNamer =
     InteropMemberNamer(Val(:_), component, export_namer, options)
 
