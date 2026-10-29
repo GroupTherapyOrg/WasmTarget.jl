@@ -740,14 +740,11 @@ end
     @test d.rejection isa W.Internal && occursin("trim verifier", d.rejection.site) && occursin("visitStaticInvocation", d.rejection.site)
     # Julia's IR is a CFG, which visit_block structures by LLVM's CFGStackify port: each structured
     # statement's visitor takes the Kernel table's NoCounterpart, which no value inhabits, so no NIR
-    # reaches one; a try region is Julia's EnterNode, its visitors unported
+    # reaches one; a try region too, Julia's EnterNode, which visit_block structures as a try_table
     for v in (D.visit_labeled_statement, D.visit_break_statement, D.visit_if_statement, D.visit_do_statement, D.visit_while_statement,
-              D.visit_for_statement, D.emit_for_statement_update, D.visit_switch_statement, D.visit_continue_switch_statement)
+              D.visit_for_statement, D.emit_for_statement_update, D.visit_switch_statement, D.visit_continue_switch_statement,
+              D.visit_try_catch, D.visit_try_finally)
         @test only(m for m in methods(v) if m.sig.parameters[2] === D.AstCodeGenerator).sig.parameters[3] === W.NoCounterpart
-    end
-    for (v, line) in ((D.visit_try_catch, 925), (D.visit_try_finally, 1108))
-        local t = rejection(() -> v(g, W.NirEnter(2, nothing)))
-        @test t.rejection isa W.Unported && occursin("code_generator.dart:$line", t.rejection.anchor)
     end
     # a field the class layout does not hold is a valid program outside the representation (A44S1)
     local t = translator_of(FieldGenCases.getb, (FieldGenCases.P,))

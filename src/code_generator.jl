@@ -798,9 +798,11 @@ end
 @parity "dart2wasm/lib/code_generator.dart:916 AstCodeGenerator.visitAssertBlock" visit_assert_block(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     no_counterpart_rejection("AssertBlock", "dart2wasm/lib/code_generator.dart:916 AstCodeGenerator.visitAssertBlock", "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:925 AstCodeGenerator.visitTryCatch" @unported function visit_try_catch(self::AstCodeGenerator, node::NirEnter) end
+@parity "dart2wasm/lib/code_generator.dart:925 AstCodeGenerator.visitTryCatch" visit_try_catch(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    no_counterpart_rejection("TryCatch", "dart2wasm/lib/code_generator.dart:925 AstCodeGenerator.visitTryCatch", "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally" @unported function visit_try_finally(self::AstCodeGenerator, node::NirEnter) end
+@parity "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally" visit_try_finally(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
+    no_counterpart_rejection("TryFinally", "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally", "$(self.enclosing_member)")
 
 @parity "dart2wasm/lib/code_generator.dart:1197 AstCodeGenerator.visitExpressionStatement" function visit_expression_statement(self::AstCodeGenerator, node::NirStmt)::Nothing
     translate_expression(self, node, void_marker(self))
