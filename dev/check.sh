@@ -9,14 +9,14 @@ cd "$(dirname "$0")/.."
 # the depot of the lane being checked: dev/ship.sh checks in a scratch worktree of the lane and
 # names the lane in WT_DEPOT_DIR, so its compiled images are the lane's, never a cold depot
 . dev/depot.sh; wt_depot_export "${WT_DEPOT_DIR:-$(pwd)}"
-# D31: the machine is shared (Dale's own jobs run beside the lanes), so at most three checks (two Julia processes each) run at
-# once across every lane, each holding a slot in the repository's common dir; a slot whose holder
-# died is freed. The wait is reported and not counted in D14's band, which times the check itself.
+# D31: the machine is shared (Dale's own jobs run beside the lanes) and has 4 performance cores, two
+# per check, so one optimistic check runs at a time across every lane, beside the landing-lock
+# holder's, each holding a slot in the repository's common dir; a slot whose holder died is freed. The wait is reported and not counted in D14's band, which times the check itself.
 slots="$(git rev-parse --path-format=absolute --git-common-dir)/wt-check-slots"; mkdir -p "$slots"
 w0=$(date +%s); slot=""
 # the landing-lock holder (dev/ship.sh sets CHECK_RESERVED) takes slot L alone, so it never waits
 # behind other lanes' optimistic checks
-ids="1 2 3"; [ "${CHECK_RESERVED:-}" = 1 ] && ids="L"
+ids="1"; [ "${CHECK_RESERVED:-}" = 1 ] && ids="L"
 while [ -z "$slot" ]; do
   for i in $ids; do
     if mkdir "$slots/$i" 2>/dev/null; then echo $$ > "$slots/$i/pid"; slot=$i; break; fi

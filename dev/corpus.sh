@@ -8,7 +8,8 @@
 #
 # Each run appends <utc>\t<head>\t<green|red|hung>\t<seconds>\t<first failure> to the common dir's
 # wt-corpus.tsv and leaves its output in wt-corpus.out; a red head is the next lane's first fix.
-# It holds one of dev/check.sh's slots while it runs (D31) and runs niced, so a landing never waits on it.
+# It runs at background QoS (taskpolicy -b: efficiency cores only), taking no check slot, so it never takes
+# a performance core a landing's check needs (D31).
 set -uo pipefail
 MARCH=wt2
 cd "$(dirname "$0")/.."
@@ -27,25 +28,16 @@ echo $$ > "$lock/pid"
 trap 'rm -rf "$lock"' EXIT
 
 run_head() {
-  local head=$1 slots slot="" r0 t rc result first
+  local head=$1 r0 t rc result first
   r0=$(date +%s)
   if [ -d "$scratch/.git" ] || [ -f "$scratch/.git" ]; then git -C "$scratch" checkout -q --detach "$head" || return 1
   else rm -rf "$scratch"; git worktree add -q --detach "$scratch" "$head" || return 1; fi
   [ -f Manifest.toml ] && cp Manifest.toml "$scratch/Manifest.toml"
-  slots="$common/wt-check-slots"; mkdir -p "$slots"
-  while [ -z "$slot" ]; do
-    for i in 1 2 3; do
-      if mkdir "$slots/$i" 2>/dev/null; then echo $$ > "$slots/$i/pid"; slot=$i; break; fi
-      holder=$(cat "$slots/$i/pid" 2>/dev/null || true)
-      [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null && rm -rf "$slots/$i"
-    done
-    [ -n "$slot" ] || sleep 5
-  done
   (
     cd "$scratch" && . dev/depot.sh && wt_depot_export "$scratch"
     export JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2 WT_PROGRESS="$scratch/.wtd/progress"
     : > "$WT_PROGRESS"
-    nice -n 10 julia --project=. --startup-file=no -e '
+    taskpolicy -b julia --project=. --startup-file=no -e '
       using Test
       wt_progress(s::AbstractString) = write(ENV["WT_PROGRESS"], s)
       @testset "corpus" begin include("test/src/dart_tests.jl") end' > "$out" 2>&1 & jpid=$!
@@ -59,7 +51,6 @@ run_head() {
     done
     wait $jpid
   ); rc=$?
-  rm -rf "$slots/$slot"
   t=$(( $(date +%s) - r0 ))
   case $rc in 0) result=green;; 124) result=hung;; *) result=red;; esac
   first=$(grep -m1 -E 'Test Failed|Error During Test|past the hard limit|LoadError' "$out" | tr '\t' ' ' | cut -c1-200)
