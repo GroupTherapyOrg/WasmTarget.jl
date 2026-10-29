@@ -102,12 +102,6 @@
 (* LLVM's CompareBlockNumbers order picks is among them. A block's body is *)
 (* one instruction (STMTS), throwing when the block does.                  *)
 (*                                                                         *)
-(* WHERE THE PORT DIFFERS FROM LLVM, checked here: place_block_marker      *)
-(* classifies a previously placed BLOCK of the header but not a TRY_TABLE  *)
-(* (LLVM :351 names TRY_TABLE too); every TRY_TABLE follows its catch      *)
-(* BLOCK, whose end is its pad's, so the BLOCK's rule places the new BLOCK *)
-(* before both and WellNested holds without the TRY_TABLE arm.             *)
-(*                                                                         *)
 (* formal(src/llvm/cfg_stackify.jl place_try_table_marker,                 *)
 (* fix_call_unwind_mismatches, add_nested_try_table; src/julia/machine.jl  *)
 (* machine_function; src/julia/nir.jl nir_code): every exception lands     *)
@@ -317,7 +311,7 @@ PlaceBlock(st, i) ==
        ELSE LET h == Walk(st.tops, i - 1, NCD(fp))
                 sid == Len(st.scopes) + 1
                 After(x) == \/ x.k = "LOOP" /\ st.scopes[x.s].e - 1 < i
-                            \/ x.k = "BLOCK" /\ st.scopes[x.s].e <= i
+                            \/ x.k \in {"BLOCK", "TRY_TABLE"} /\ st.scopes[x.s].e <= i
                             \/ x.k \in Terminators
                 Before(x) == x.k = "END_LOOP" /\ st.scopes[x.s].b >= h
                 ins1 == [st.ins EXCEPT ![h] = InsertAt(@, LatestPos(@, After), Tok("BLOCK", 0, "", sid, 0))]

@@ -226,12 +226,12 @@ nested, before the markers of scopes it encloses and the terminators; its END_BL
             local loop_bottom = something(get_prev_node(mf, pass.begin_to_end[mi].parent))
             mbb_number > num(loop_bottom) ? push!(after_set, mi) : push!(before_set, mi)
         end
-        # a BLOCK whose END comes at or before this BLOCK's is nested in it: after it
-        if mi.opcode == BLOCK
+        # a BLOCK or TRY_TABLE whose END comes at or before this BLOCK's is nested in it: after it
+        if mi.opcode in (BLOCK, TRY_TABLE)
             num(pass.begin_to_end[mi].parent) <= mbb_number ? push!(after_set, mi) : push!(before_set, mi)
         end
         # every END marker before the BLOCK; the terminators after it
-        mi.opcode in (END_BLOCK, END_LOOP) && push!(before_set, mi)
+        mi.opcode in (END_BLOCK, END_LOOP, END_TRY_TABLE) && push!(before_set, mi)
         is_terminator(mi) && push!(after_set, mi)
     end
     # (LLVM's local expression tree goes after the BLOCK too: STMTS, the only other instruction here,
@@ -522,6 +522,8 @@ Wraps the instructions from `range_begin` to `range_end`, one block's, in a TRY_
 catch_all_ref clause branches to `unwind_dest`'s trampoline. The END_TRY_TABLE goes in a block of
 its own after the range: after the range's block where the range ends it, else between the two
 halves the block is split into, the EH pad keeping the half that holds its CATCH.
+
+formal(dev/formal/CFGStackifyEH.tla): every exception lands at the pad Julia's handler names, or leaves the function when none does
 """
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:1383 WebAssemblyCFGStackify::addNestedTryTable" function add_nested_try_table(pass::WebAssemblyCFGStackify, mf::MachineFunction, range_begin::MachineInstr, range_end::MachineInstr, unwind_dest::Int)::Nothing
     local begin_bb = range_begin.parent

@@ -161,6 +161,8 @@ catch block as a successor, LLVM's unwind edge from an invoke to its landing pad
 Julia's own facts, and Julia's CFG edge from the EnterNode's block to its catch block, which no
 statement throws along, is dropped. Julia's CFG marks a catch block and the entry with a predecessor
 0, which names no block and is dropped; the top block is the entry's one predecessor.
+
+formal(dev/formal/CFGStackifyEH.tla): an EH pad's predecessors are exactly the blocks unwinding to it, as Julia's inference sends them
 """
 @quarantine "Julia's IR is a CFG of its statements; codegen puts a top block before it" Core.Compiler.construct_domtree function machine_function(stmts::Vector{NirStmt}, jcfg::Core.Compiler.CFG, handlers::NirHandlers, at::String)::MachineFunction
     local jb = jcfg.blocks
