@@ -156,9 +156,9 @@ end
     Throws(T)
 
 The answer of a case whose native call throws an exception of type `T`: its module must raise a wasm exception
-(WasmTarget's exception tag, a `WebAssembly.Exception` in JS), never trap (a `WebAssembly.RuntimeError`:
-unreachable, an integer divided by zero) and never return. The exception's type is not read yet: its class id
-needs an exported reader the runtime has not ported.
+under its exception tag (a `WebAssembly.Exception` that `is` the one tag the module exports), never another tag,
+never a trap (a `WebAssembly.RuntimeError`: unreachable, an integer divided by zero) and never a return (A61E1).
+The exception's type is not read yet: its class id needs an exported reader the runtime has not ported.
 """
 struct Throws
     type::Type
@@ -253,8 +253,9 @@ const instances = new Map();
 (async () => {
   for (const line of lines) {
     const [wasmB64, entry, rtype, ...args] = line.split(' ');
+    let mi;
     try {
-      let mi = instances.get(wasmB64);
+      mi = instances.get(wasmB64);
       if (mi === undefined) {
         const mod = await WebAssembly.compile(Buffer.from(wasmB64, 'base64'));
         const imps = WebAssembly.Module.imports(mod);
@@ -273,8 +274,14 @@ const instances = new Map();
       process.stdout.write('ok ' + fromWasm(rtype, r) + ' ' + ms.toFixed(1) + '\n');
     } catch (e) {
       const why = String(e && e.message || e).replace(/\s+/g, ' ');
-      // a wasm exception (the module's throw) apart from a trap (unreachable, an integer divided by zero)
-      process.stdout.write((e instanceof WebAssembly.Exception ? 'exc ' : e instanceof WebAssembly.RuntimeError ? 'err trap: ' : 'err ') + why + '\n');
+      // a wasm exception (the module's throw) apart from a trap (unreachable, an integer divided by zero); a wasm
+      // exception counts only under the module's one exported tag, its exception tag (A61E1)
+      if (e instanceof WebAssembly.Exception) {
+        const tags = WebAssembly.Module.exports(mi.mod).filter(x => x.kind === 'tag');
+        if (tags.length !== 1) process.stdout.write('err a wasm exception, and the module exports ' + tags.length + ' tags, not its one exception tag to match it against\n');
+        else if (!e.is(mi.inst.exports[tags[0].name])) process.stdout.write('err a wasm exception under another tag than the module\'s exported ' + tags[0].name + '\n');
+        else process.stdout.write('exc ' + why + '\n');
+      } else process.stdout.write((e instanceof WebAssembly.RuntimeError ? 'err trap: ' : 'err ') + why + '\n');
     }
   }
 })();

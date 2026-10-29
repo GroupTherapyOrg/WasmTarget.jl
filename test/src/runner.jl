@@ -59,13 +59,18 @@ const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.c
     @test WTR.run_cases(WTR.RunCase[]) == WTR.RunResult[]
 end
 
-# a module whose `f` (i32 -> i32) raises a wasm exception: one tag of type () -> (), and `throw 0`
-const _RUN_THROWS = UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-                          0x01, 0x09, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x00,   # types: i32 -> i32, () -> ()
-                          0x03, 0x02, 0x01, 0x00,                                             # f has type 0
-                          0x0d, 0x03, 0x01, 0x00, 0x01,                                       # one tag, of type 1
-                          0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00,                           # export f
-                          0x0a, 0x06, 0x01, 0x04, 0x00, 0x08, 0x00, 0x0b]                     # f: throw 0
+# modules whose `f` (i32 -> i32) raises a wasm exception: tags of type () -> (), `throw <tag>`, and the tags exported
+function _run_thrower(ntags::Int, thrown::Int, exported::Vector{Int})::Vector{UInt8}
+    local tags = vcat(UInt8[ntags], reduce(vcat, (UInt8[0x00, 0x01] for _ in 1:ntags); init = UInt8[]))
+    local exps = vcat(UInt8[0x01, 0x66, 0x00, 0x00], reduce(vcat, (UInt8[0x01, UInt8('s' + t), 0x04, UInt8(t)] for t in exported); init = UInt8[]))
+    return vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+                UInt8[0x01, 0x09, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x00],   # types: i32 -> i32, () -> ()
+                UInt8[0x03, 0x02, 0x01, 0x00],                                            # f has type 0
+                UInt8[0x0d, UInt8(length(tags))], tags,
+                UInt8[0x07, UInt8(length(exps) + 1), UInt8(1 + length(exported))], exps,
+                UInt8[0x0a, 0x06, 0x01, 0x04, 0x00, 0x08, UInt8(thrown), 0x0b])          # f: throw <thrown>
+end
+const _RUN_THROWS = _run_thrower(1, 0, [0])
 const _RUN_TRAPS = _run_one_function(_RUN_I32, UInt8[0x00])   # local.get 0, unreachable
 
 @testset "a native throw wants a wasm exception: neither a trap nor a return" begin
@@ -73,8 +78,13 @@ const _RUN_TRAPS = _run_one_function(_RUN_I32, UInt8[0x00])   # local.get 0, unr
                              WTR.RunCase("traps where native throws", _RUN_TRAPS, (Int32(1),), WTR.Throws(DivideError)),
                              WTR.RunCase("returns where native throws", _RUN_ADD1, (Int32(1),), WTR.Throws(DivideError)),
                              WTR.RunCase("throws where native returns", _RUN_THROWS, (Int32(1),), Int32(2)),
-                             WTR.RunCase("both modules throw", _RUN_THROWS, (Int32(1),), WTR.Throws(DivideError); optimized = _RUN_THROWS)])
+                             WTR.RunCase("both modules throw", _RUN_THROWS, (Int32(1),), WTR.Throws(DivideError); optimized = _RUN_THROWS),
+                             WTR.RunCase("throws under another tag", _run_thrower(2, 1, [0]), (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("exports no tag", _run_thrower(1, 0, Int[]), (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("exports two tags", _run_thrower(2, 0, [0, 1]), (Int32(1),), WTR.Throws(DivideError))])
     @test r[1].ok && r[5].ok
+    @test !r[6].ok && occursin("under another tag than the module's exported s", r[6].why)   # A61E1
+    @test !r[7].ok && occursin("exports 0 tags", r[7].why) && !r[8].ok && occursin("exports 2 tags", r[8].why)
     @test !r[2].ok && occursin("trap: ", r[2].why) && occursin("where native Julia throws DivideError", r[2].why)
     @test !r[3].ok && occursin("returns, where native Julia throws DivideError", r[3].why)
     @test !r[4].ok && occursin("throws a wasm exception", r[4].why) && occursin("native Julia answers 2", r[4].why)
