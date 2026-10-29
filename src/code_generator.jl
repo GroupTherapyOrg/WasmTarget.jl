@@ -147,9 +147,25 @@ SwitchBackwardJumpInfo's dart fields: `switchValueLocal`, `loopLabel`, `defaultL
 @parity "dart2wasm/lib/code_generator.dart:5108 SwitchBackwardJumpInfo" @unported struct SwitchBackwardJumpInfo end
 
 """
-BrTableInfo's dart fields: `minValue`, `maxValue`, `_brTableExpr`, `caseMap`.
+Info needed to represent a switch statement using a br_table instruction: each option mapped to an
+index in the jump table, `minValue` to `maxValue`, so the switch jumps directly to its case; a range
+too sparse for a table is compared case by case instead. `_brTableExpr` pushes the switched value
+(an i64) from its local, and `caseMap` maps each value to its case, Kernel's SwitchCase, which has
+no Julia counterpart (the Kernel table's row): Julia's IR has no switch.
 """
-@parity "dart2wasm/lib/code_generator.dart:5143 BrTableInfo" @unported struct BrTableInfo end
+@parity "dart2wasm/lib/code_generator.dart:5143 BrTableInfo" struct BrTableInfo
+    min_value::Int64
+    max_value::Int64
+    _br_table_expr::Function
+    case_map::Dict{Int64,NoCounterpart}
+    # dart's constructor `BrTableInfo._` :5157, the struct's one, tagged by the dart name; its assert
+    # is the constructor's check, a table too sparse WasmTarget's own defect
+    function BrTableInfo(::Val{:_}, min_value::Int64, max_value::Int64, case_map::Dict{Int64,NoCounterpart}, _br_table_expr::Function)
+        BrTableInfo__is_too_sparse(min_value, max_value, case_map) &&
+            reject!(Internal("dart2wasm/lib/code_generator.dart:5157 BrTableInfo._: the table $min_value..$max_value of $(length(case_map)) cases is too sparse"), "BrTableInfo._")
+        return new(min_value, max_value, _br_table_expr, case_map)
+    end
+end
 
 """
 SwitchInfo's dart fields: `nullableType`, `nonNullableType`, `dynamicTypeGuard`, `compare`, `defaultCase`, `nullCase`, `brTable`.
@@ -1321,21 +1337,42 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5130 SwitchBackwardJumpInfo" @unported function SwitchBackwardJumpInfo(switch_value_local, loop_label) end
 
-@parity "dart2wasm/lib/code_generator.dart:5145 BrTableInfo._minimumTableOccupancy" @unported function BrTableInfo__minimum_table_occupancy() end
+# at least 50% of [min, max] must be occupied for a `br_table`
+@parity "dart2wasm/lib/code_generator.dart:5145 BrTableInfo._minimumTableOccupancy" BrTableInfo__minimum_table_occupancy()::Float64 = 0.5
 
-@parity "dart2wasm/lib/code_generator.dart:5149 BrTableInfo._maxSparseSize" @unported function BrTableInfo__max_sparse_size() end
+# the largest table always worth a `br_table`; a bigger one is checked for sparseness
+@parity "dart2wasm/lib/code_generator.dart:5149 BrTableInfo._maxSparseSize" BrTableInfo__max_sparse_size()::Int64 = 50
 
-@parity "dart2wasm/lib/code_generator.dart:5151 BrTableInfo.rangeSize" @unported function range_size(self::BrTableInfo) end
+@parity "dart2wasm/lib/code_generator.dart:5151 BrTableInfo.rangeSize" range_size(self::BrTableInfo)::Int64 = BrTableInfo__range_size(self.min_value, self.max_value)
 
-@parity "dart2wasm/lib/code_generator.dart:5157 BrTableInfo._" @unported function BrTableInfo__(min_value, max_value, case_map, _br_table_expr) end
+@parity "dart2wasm/lib/code_generator.dart:5157 BrTableInfo._" BrTableInfo__(min_value::Int64, max_value::Int64, case_map::Dict{Int64,NoCounterpart}, _br_table_expr::Function)::BrTableInfo =
+    BrTableInfo(Val(:_), min_value, max_value, case_map, _br_table_expr)
 
-@parity "dart2wasm/lib/code_generator.dart:5162 BrTableInfo.build" @unported function BrTableInfo_build(case_map::Dict{Int64,NoCounterpart}, br_table_expr::Function; min_value::Int64, max_value::Int64) end
+# the table, or nothing when it is too sparse to be worth a `br_table`
+@parity "dart2wasm/lib/code_generator.dart:5162 BrTableInfo.build" function BrTableInfo_build(case_map::Dict{Int64,NoCounterpart}, br_table_expr::Function; min_value::Int64, max_value::Int64)::Union{BrTableInfo,Nothing}
+    BrTableInfo__is_too_sparse(min_value, max_value, case_map) && return nothing
+    return BrTableInfo__(min_value, max_value, case_map, br_table_expr)
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5174 BrTableInfo._isTooSparse" @unported function BrTableInfo__is_too_sparse(min::Int64, max::Int64, case_map::Dict{Int64,NoCounterpart}) end
+@parity "dart2wasm/lib/code_generator.dart:5174 BrTableInfo._isTooSparse" function BrTableInfo__is_too_sparse(min::Int64, max::Int64, case_map::Dict{Int64,NoCounterpart})::Bool
+    local range_size = BrTableInfo__range_size(min, max)
+    return (length(case_map) / range_size) < BrTableInfo__minimum_table_occupancy() && range_size > BrTableInfo__max_sparse_size()
+end
 
-@parity "dart2wasm/lib/code_generator.dart:5180 BrTableInfo._rangeSize" @unported function BrTableInfo__range_size(min::Int64, max::Int64) end
+@parity "dart2wasm/lib/code_generator.dart:5180 BrTableInfo._rangeSize" BrTableInfo__range_size(min::Int64, max::Int64)::Int64 = max - min + 1
 
-@parity "dart2wasm/lib/code_generator.dart:5182 BrTableInfo.emitBrTableExpr" @unported function emit_br_table_expr(self::BrTableInfo, b::WasmBuilder.InstructionsBuilder, switch_expr_local::WasmBuilder.IR.Local) end
+# the switched value, normalized on 0, as the i32 index of the table
+@parity "dart2wasm/lib/code_generator.dart:5182 BrTableInfo.emitBrTableExpr" function emit_br_table_expr(self::BrTableInfo, b::WasmBuilder.InstructionsBuilder, switch_expr_local::WasmBuilder.IR.Local)::Nothing
+    self._br_table_expr(switch_expr_local)
+    # Normalize on 0.
+    if self.min_value != 0
+        WasmBuilder.i64_const(b, self.min_value)
+        WasmBuilder.i64_sub(b)
+    end
+    # Now that we've normalized on 0 it should be safe to switch to i32.
+    WasmBuilder.i32_wrap_i64(b)
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:5229 SwitchInfo" @unported function SwitchInfo(code_gen::AstCodeGenerator, node) end
 
