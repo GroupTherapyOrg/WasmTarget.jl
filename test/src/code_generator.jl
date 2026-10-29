@@ -486,6 +486,17 @@ function static_field_codegen(G, t, ftype, extra...)
     return g
 end
 
+@testset "code_generator.dart: unimplemented is never reached, every NIR form has its visitor" begin
+    local t = static_field_translator()
+    local counter = GlobalRef(StaticFieldCases, :counter)
+    local g = static_field_codegen(D.StaticFieldInitializerCodeGenerator, t, D.get_function_type(t.functions[], counter))
+    # the closed NIR sums are matched @exhaustive by the code generator, so no form falls to a default
+    @test any(m -> m[1] === D && m[2] === :NirValue, WasmTarget.MATCHES) && any(m -> m[1] === D && m[2] === :NirStmt, WasmTarget.MATCHES)
+    # reaching dart's default is WasmTarget's defect, Internal and located, never a trap in the module
+    local e = rejection(() -> D.default_expression(g, WasmTarget.NirConst(Core.Const(1)), W.WasmBuilder.IR.NumType_i64))
+    @test e.rejection isa W.Internal && occursin("AstCodeGenerator.unimplemented", e.rejection.site) && occursin("@exhaustive", e.rejection.site)
+end
+
 @testset "code_generator.dart: a static field's initializer function" begin
     local t = static_field_translator()
     local counter = GlobalRef(StaticFieldCases, :counter)

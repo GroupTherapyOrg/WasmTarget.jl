@@ -630,11 +630,15 @@ end
 # source the closed world's classes read too
 @parity "dart2wasm/lib/code_generator.dart:129 AstCodeGenerator.dartTypeOf" dart_type_of(self::AstCodeGenerator, exp::NirValue)::Type = nir_value_type(self.body, exp)
 
-# dart prints the gap and emits a trap in its place; WasmTarget never emits code past a gap (ledger
-# D9): the gap rejects, located at the node
+# dart prints the gap and emits a trap in its place for a node no visitor handles: an expression kind
+# with no visit override (defaultExpression), a yield, a call or get on a nullable receiver. Julia has
+# none of them: translate_expression and the statement visitor match the closed NIR sums (NirValue,
+# NirStmt) @exhaustive, so every form reaches its own visitor and defaultExpression, this one's only
+# caller here, is never reached; a yield and a null receiver have no Julia counterpart, rejected at
+# their own visitors. Reaching it is WasmTarget's defect, never code past a gap (ledger D9)
 @parity "dart2wasm/lib/code_generator.dart:138 AstCodeGenerator.unimplemented" function unimplemented(self::AstCodeGenerator, node::Union{NirValue,NirStmt}, message::String, expected_types::Vector{WasmBuilder.IR.ValueType})::Union{}
-    reject!(Unported("dart2wasm/lib/code_generator.dart:138 AstCodeGenerator.unimplemented"),
-        "$(self.enclosing_member): not implemented: $message at $node")
+    reject!(Internal("dart2wasm/lib/code_generator.dart:138 AstCodeGenerator.unimplemented: $message at $node, a NIR form with no visitor, where the NIR sums are matched @exhaustive"),
+        "$(self.enclosing_member)")
 end
 
 @parity "dart2wasm/lib/code_generator.dart:152 AstCodeGenerator.defaultExpression" function default_expression(self::AstCodeGenerator, node::Union{NirValue,NirStmt}, expected_type::WasmBuilder.IR.ValueType)::Union{}
