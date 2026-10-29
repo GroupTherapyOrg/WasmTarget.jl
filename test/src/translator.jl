@@ -471,6 +471,13 @@ end
     # no Julia member names a wasm memory (it declares no pragmas): a located rejection
     local em = try; D.find_memory(t, t.component.entry, m); nothing; catch x; x; end
     @test em isa W.RejectionError && em.rejection isa W.Internal
+    # a function whose value is computed once and cached in a global: the builder accepts the new body
+    local st = B.define_struct(m.types[], "Lazy"; brand = false)
+    local lt = IR.RefType_def(st; nullable = false)
+    local lf = B.define(m.functions[], B.define_function(m.types[], IR.ValueType[], IR.ValueType[lt]), "lazy")
+    D._lazy_initialize_global(t, lf, lt, "lazy global", ib -> B.struct_new(ib, st))
+    @test [typeof(x) for x in B.body(lf)._instructions] ==
+        [IR.BeginOneOutputBlock, IR.GlobalGet, IR.BrOnNonNull, IR.StructNew, IR.LocalTee, IR.GlobalSet, IR.LocalGet, IR.End, IR.End]
     # Julia has no WasmTable class, so no field is a table
     @test D.get_table(t, m, W.class_instance_fields(ModuleCases.Square, "t")[1]) === nothing
 end

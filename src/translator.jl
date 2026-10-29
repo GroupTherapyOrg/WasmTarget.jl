@@ -712,9 +712,36 @@ end
 
 @parity "dart2wasm/lib/translator.dart:748 Translator._patchLoadingMapNamesGetter" @unported function _patch_loading_map_names_getter(self::Translator, function_::WasmBuilder.FunctionBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:779 Translator._lazyInitializeGlobal" @unported function _lazy_initialize_global(self::Translator, f::WasmBuilder.FunctionBuilder, type_::WasmBuilder.IR.ValueType, name::String, gen::Function) end
+"""
+Replace `f`'s body with one returning a value of `type_` computed once by `gen` and cached in a new
+nullable global named `name`: the global read, returned when set, else computed, stored and returned.
+"""
+@parity "dart2wasm/lib/translator.dart:779 Translator._lazyInitializeGlobal" function _lazy_initialize_global(self::Translator, f::WasmBuilder.FunctionBuilder, type_::WasmBuilder.IR.ValueType, name::String, gen::Function)::Nothing
+    local global_type = WasmBuilder.IR.GlobalType(WasmBuilder.with_nullability(type_, true))
+    local global_ = WasmBuilder.define(f.module_builder.globals[], global_type, name)
+    WasmBuilder.ref_null(global_.initializer, WasmBuilder.IR.HeapType_none)
+    WasmBuilder.var"end"(global_.initializer)
 
-@parity "dart2wasm/lib/translator.dart:805 Translator._replaceBody" @unported function _replace_body(self::Translator, function_::WasmBuilder.FunctionBuilder) end
+    local b = _replace_body(self, f)
+
+    local label = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[type_])
+    WasmBuilder.global_get(b, global_)
+    WasmBuilder.br_on_non_null(b, label)
+    gen(b)
+    local local_ = WasmBuilder.add_local(b, type_)
+    WasmBuilder.local_tee(b, local_)
+    WasmBuilder.global_set(b, global_)
+    WasmBuilder.local_get(b, local_)
+    WasmBuilder.var"end"(b)
+    WasmBuilder.var"end"(b)
+    return nothing
+end
+
+@parity "dart2wasm/lib/translator.dart:805 Translator._replaceBody" function _replace_body(self::Translator, function_::WasmBuilder.FunctionBuilder)::WasmBuilder.InstructionsBuilder
+    local new_body = WasmBuilder.InstructionsBuilder(function_.module_builder, function_.type.inputs, function_.type.outputs)
+    WasmBuilder.replace_body(function_, new_body)
+    return new_body
+end
 
 @parity "dart2wasm/lib/translator.dart:815 Translator._printFunction" function _print_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, name::Union{String,NirConst,DummyValueConstant})::Nothing
     if self.options.print_wasm
