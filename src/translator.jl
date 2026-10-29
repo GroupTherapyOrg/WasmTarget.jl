@@ -1175,7 +1175,19 @@ Reshaped: `node` — dart passes the invocation node itself (an InstanceInvocati
 """
 @parity "dart2wasm/lib/translator.dart:2037 Translator.canUseUncheckedEntry" can_use_unchecked_entry(self::Translator, receiver::NirValue, node::NirStmt)::Bool = true
 
-@parity "dart2wasm/lib/translator.dart:2043 Translator.typeOfParameterVariable" @unported function type_of_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}, is_required::Bool) end
+"""
+The type of a parameter: dart's TFA-inferred type, nullable when the parameter is optional, else its
+declared type (Object? for a covariant one). A Julia parameter's type is the one its MethodInstance
+is specialized on, as for typeOfCheckedParameterVariable (Julia has no covariant parameter), and
+Julia's lowering turns a default argument into a method calling the full one, so every parameter is
+required; an optional one rejects, located.
+
+Reshaped: `node` — a NIR argument carries no type; the member and the argument's position (the callee 1) name it, as typeOfCheckedParameterVariable takes them.
+"""
+@parity "dart2wasm/lib/translator.dart:2043 Translator.typeOfParameterVariable" function type_of_parameter_variable(self::Translator, member::Core.MethodInstance, index::Int, is_required::Bool)::Type
+    is_required || reject!(Internal("dart2wasm/lib/translator.dart:2043 Translator.typeOfParameterVariable: an optional parameter $index of $member; Julia's lowering makes every parameter required"), "Translator.typeOfParameterVariable")
+    return type_of_checked_parameter_variable(self, member, index)
+end
 
 # dart reads TFA's inferred type of the checked parameter, else its declared type; a Julia
 # MethodInstance's specialization is exact, Julia's answer: the parameter's type in it, `index`
@@ -1328,11 +1340,28 @@ i)`: by `array.new_fixed`, or past its limit as a default array whose elements a
     return array_type_ref
 end
 
-@parity "dart2wasm/lib/translator.dart:2462 Translator.indexList" @unported function index_list(self::Translator, b::WasmBuilder.InstructionsBuilder, push_index::Function) end
+"""Index a list on the stack: its base array, the index `push_index` pushes, the element read."""
+@parity "dart2wasm/lib/translator.dart:2462 Translator.indexList" function index_list(self::Translator, b::WasmBuilder.InstructionsBuilder, push_index::Function)::Nothing
+    get_list_base_array(self, b)
+    push_index(b)
+    WasmBuilder.array_get(b, self.nullable_object_array_type[])
+    return nothing
+end
 
-@parity "dart2wasm/lib/translator.dart:2472 Translator.getListLength" @unported function get_list_length(self::Translator, b::WasmBuilder.InstructionsBuilder) end
+"""Push the length of the list on the stack as an i32: the runtime list class's length field, wrapped."""
+@parity "dart2wasm/lib/translator.dart:2472 Translator.getListLength" function get_list_length(self::Translator, b::WasmBuilder.InstructionsBuilder)::Nothing
+    local info = self.class_info[list_base_class(self)]
+    WasmBuilder.struct_get(b, info.struct_, FieldIndex_list_length())
+    WasmBuilder.i32_wrap_i64(b)
+    return nothing
+end
 
-@parity "dart2wasm/lib/translator.dart:2479 Translator.getListBaseArray" @unported function get_list_base_array(self::Translator, b::WasmBuilder.InstructionsBuilder) end
+"""Push the base array of the list on the stack: the runtime list class's data field."""
+@parity "dart2wasm/lib/translator.dart:2479 Translator.getListBaseArray" function get_list_base_array(self::Translator, b::WasmBuilder.InstructionsBuilder)::Nothing
+    local info = self.class_info[list_base_class(self)]
+    WasmBuilder.struct_get(b, info.struct_, FieldIndex_list_array())
+    return nothing
+end
 
 # dart's record class of the type's shape (recordClasses, generated per shape); a Julia record's class is
 # its own Tuple or NamedTuple type (Julia's answer: generateRecordClasses maps no shape), a class of
@@ -1346,7 +1375,31 @@ end
 @parity "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal" get_internalized_string_global(self::Translator, module_::WasmBuilder.ModuleBuilder, s::String)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal: a JS string's imported global; a Julia String is no JS string: its representation is its class's (class_info.jl), and no constant imports one"), "Translator.getInternalizedStringGlobal")
 
-@parity "dart2wasm/lib/translator.dart:2534 Translator.pushStandaloneStringConstant" @unported function push_standalone_string_constant(self::Translator, instructions::WasmBuilder.InstructionsBuilder, data::WasmBuilder.DataSegmentBuilder, s::String) end
+"""
+Push a string constant in standalone mode: its bytes appended to `data` and an array made from them
+(array.new_data), handed with its offset and length to the embedder's string constructor. dart takes
+the string's UTF-16 code units, one byte each when all are ASCII, else each a 16-bit little-endian
+unit; a Julia String is UTF-8, its code units the same bytes when ASCII, and its UTF-16 units
+otherwise Julia's own transcoding (`transcode(UInt16, s)`).
+"""
+@parity "dart2wasm/lib/translator.dart:2534 Translator.pushStandaloneStringConstant" function push_standalone_string_constant(self::Translator, instructions::WasmBuilder.InstructionsBuilder, data::WasmBuilder.DataSegmentBuilder, s::String)::Nothing
+    self.options.standalone || reject!(Internal("dart2wasm/lib/translator.dart:2534 Translator.pushStandaloneStringConstant: a string constant pushed standalone outside standalone mode"), "Translator.pushStandaloneStringConstant")
+    local is_ascii = isascii(s)
+    local units = is_ascii ? Vector{UInt8}(codeunits(s)) : transcode(UInt16, s)
+    local byte_contents = is_ascii ? units : reinterpret(UInt8, htol.(units)) |> collect
+    local kernel_function = is_ascii ? embedder_string_from_ascii_bytes(self) : embedder_string_from_char_code_array(self)
+    local imported_function = get_function(self.functions[], kernel_function)::WasmBuilder.IR.ImportedFunction
+    # The signature is (WasmArray<i8 | i16> data, i32 offset, i32 length)
+    local array_ref_type = (imported_function.type.inputs[1]::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+    WasmBuilder.i32_const(instructions, length(data))
+    WasmBuilder.i32_const(instructions, length(units))
+    WasmBuilder.array_new_data(instructions, array_ref_type, data)
+    WasmBuilder.i32_const(instructions, 0)
+    WasmBuilder.i32_const(instructions, length(units))
+    WasmBuilder.call(instructions, imported_function)
+    WasmBuilder.append(data, byte_contents)
+    return nothing
+end
 
 @parity "dart2wasm/lib/translator.dart:2575 Translator.findMemory" find_memory(self::Translator, top_level_external_memory_getter::Core.MethodInstance, module_builder::WasmBuilder.ModuleBuilder)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:2575 Translator.findMemory: an external memory getter's memory; a Julia binding declares no wasm:memory-type pragma, so no member names a memory"), "Translator.findMemory")

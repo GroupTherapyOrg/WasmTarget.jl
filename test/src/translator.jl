@@ -260,6 +260,17 @@ end
     local pc = D.get_parameters_to_check(t, mi)
     @test pc.positional == [W.NirArgument(2)] && pc.positional_to_type_check == Type[Int] && isempty(pc.type_parameters) && isempty(pc.named)
     @test D._types_from_type_parameter_bounds(t, [TypeVar(:T, Integer)]) == Type[Integer]
+    # a parameter's type is its specialization's; Julia's parameters are all required
+    @test D.type_of_parameter_variable(t, mi, 2, true) === Int
+    local eo2 = try; D.type_of_parameter_variable(t, mi, 2, false); nothing; catch x; x; end
+    @test eo2 isa W.RejectionError && eo2.rejection isa W.Internal
+    # the list helpers read the runtime's list class, not yet ported: Unported at its sdk definition;
+    # a standalone string constant outside standalone mode rejects
+    local bl = W.WasmBuilder.InstructionsBuilder(D.main_module(t), IR.ValueType[], IR.ValueType[])
+    local el2 = try; D.get_list_length(t, bl); nothing; catch x; x; end
+    @test el2 isa W.RejectionError && el2.rejection isa W.Unported && occursin("list.dart", el2.rejection.anchor)
+    local es = try; D.push_standalone_string_constant(t, bl, W.WasmBuilder.DataSegmentBuilder(0, UInt8[], nothing, nothing), "hi"); nothing; catch x; x; end
+    @test es isa W.RejectionError && es.rejection isa W.Internal
     # a single closure target holds its call target and parameter info
     local sct = D.SingleClosureTarget__(D.direct_call_target(t, mi), D.param_info_for_direct_call(t, mi))
     @test sct.call_target isa D.AstCallTarget && sct.param_info === D.param_info_for_direct_call(t, mi)
