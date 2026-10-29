@@ -990,6 +990,19 @@ end
           ["i64.const 7", "local.tee", "global.set", "local.get", "i32.const 1", "global.set", "end"]
 end
 
+@testset "code_generator.dart: a static field's eager initializer in the start function" begin
+    local t = static_field_translator()
+    local counter = GlobalRef(StaticFieldCases, :counter)
+    local mb = D.main_module(t)
+    local gl = W.WasmBuilder.define(mb.globals[], IR.GlobalType(D.translate_type_of_field(t, counter); mutable = true), "counter")
+    # its function type takes and returns nothing, its enclosing member the binding
+    local g0 = D.EagerStaticFieldInitializerCodeGenerator(t, counter, gl)
+    @test isempty(g0.function_type.inputs) && isempty(g0.function_type.outputs) && g0.enclosing_member === counter
+    # the binding's image value written to its global
+    local g = static_field_codegen((t, ft, f) -> D.EagerStaticFieldInitializerCodeGenerator(t, f, gl), t, g0.function_type)
+    @test emitted_by(() -> D.generate_internal(g), g) == ["i64.const 7", "global.set"]
+end
+
 # Base's fallback == is Julia's egal: identity for two mutable objects, content for immutable values (audit #56)
 module EqualsCases
 struct Q; x::Int; end
