@@ -705,10 +705,12 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
 # a case's answer is native's: of its type, and isequal (a NaN equal to itself, -0.0 apart from 0.0)
 _dart_same(got, native) = typeof(got) == typeof(native) && isequal(got, native)
 
-# what a compile gives: its rejection (an OutsideSubset by its errors' kinds), or :compiled
+# what a compile gives: its rejection (an OutsideSubset by its errors' kinds), or :compiled. The landing's
+# core stops at codegen, the compile this property judges: wasm-opt, an external tool, runs on every
+# case in dev/corpus.sh's whole run and in test/src/compile.jl, never once per case in the landing
 _dart_outcome(f, args) = try
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: compiling $(nameof(typeof(f))) $(typeof(args))")
-    WasmTarget.compile(f, Tuple(map(typeof, args)))
+    WasmTarget.compile(f, Tuple(map(typeof, args)); optimize = !_DART_CORE_ONLY)
     :compiled
 catch e
     e isa WasmTarget.RejectionError || rethrow()

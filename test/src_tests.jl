@@ -8,7 +8,7 @@ isempty(SRC_TESTS) && error("test/src/ holds no test file: the walk found nothin
 # the file and case running now, for dev/check.sh's hard limit to name (WT_PROGRESS)
 const _WT_PROGRESS = get(ENV, "WT_PROGRESS", "")
 wt_progress(s::AbstractString) = isempty(_WT_PROGRESS) || write(_WT_PROGRESS, s)
-@testset "src" begin
+@testset verbose = true "src" begin
     for f in SRC_TESTS
         wt_progress(f)
         @testset "$f" begin include(joinpath(SRC_TEST_DIR, f)) end
