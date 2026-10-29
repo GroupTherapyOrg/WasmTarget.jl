@@ -1644,7 +1644,8 @@ end
 function listed(text::AbstractString, label::AbstractString)::Vector{String}
     local m = match(Regex("\\Q$(label)\\E[^:]*:((?:[^.`]|`[^`]*`)*)\\.", "s"), text)
     m === nothing && return String[]
-    return String[x[1] for x in eachmatch(r"`([^`]+)`", m[1])]
+    # the names end at the em dash that opens the why, whose own backticked words are no names
+    return String[x[1] for x in eachmatch(r"`([^`]+)`", first(split(m[1], "—"; limit = 2)))]
 end
 fields_to_come(text::AbstractString)::Vector{String} =
     vcat(listed(text, "Fields to come"), listed(text, "Fields with no Julia counterpart"))
@@ -1707,7 +1708,7 @@ end
 function reshaped(text::AbstractString)::Vector{String}
     local m = match(r"Reshaped:((?:[^.`]|`[^`]*`)*)\."s, text)
     m === nothing && return String[]
-    return String[x[1] for x in eachmatch(r"`([^`]+)`", m[1])]
+    return String[x[1] for x in eachmatch(r"`([^`]+)`", first(split(m[1], "—"; limit = 2)))]
 end
 
 # whether a dart parameter's type names a Kernel table row (its head type, past `?` and arguments)
