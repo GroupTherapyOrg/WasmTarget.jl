@@ -75,6 +75,7 @@ module ClassesConstantCases
 const CELL = Ref(0)
 bump(n::Int) = (CELL[] += n; CELL[])
 changing = 1
+is_a(x::Symbol) = x === :a
 end
 
 @testset "classes: a constant's class, never a name's or a callee's" begin
@@ -94,6 +95,18 @@ end
         local vals = W.nir_value_operands(st)                       # the object, never the field's name
         @test st.args[2] in vals && !any(v -> v isa W.NirConst && v.c.val isa Symbol, vals)
     end
+    # a Symbol a builtin takes as data is a value: `x === :a`'s operand, read from the program, and
+    # tuple's element; one naming a field or a memory ordering is not
+    local sym = W.build_nir(W.check_subset(ClassesConstantCases.is_a, (Symbol,), "classes"), "classes")
+    local eq = only(st for b in sym for st in b.stmts if st isa W.NirCall && W.nir_callee(st) === Core.:(===))
+    @test W.NirConst(Core.Const(:a)) in W.nir_value_operands(eq)
+    local r = W.NirArgument(2)
+    @test W.nir_value_operands(W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.tuple)), W.NirConst(Core.Const(:k)), r])) ==
+        W.NirValue[W.NirConst(Core.Const(:k)), r]
+    @test W.nir_value_operands(W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.memoryrefget)), r,
+        W.NirConst(Core.Const(:not_atomic)), W.NirConst(Core.Const(false))])) == W.NirValue[r, W.NirConst(Core.Const(false))]
+    @test W.nir_value_operands(W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.setfield!)), r, W.NirConst(Core.Const(:x)),
+        W.NirConst(Core.Const(:v)), W.NirConst(Core.Const(:release))])) == W.NirValue[r, W.NirConst(Core.Const(:v))]
     # an allocation's type is its target
     local x = W.NirConst(Core.Const(1))
     @test W.nir_value_operands(W.NirNew(W.NirValue[W.NirConst(Core.Const(Base.RefValue{Int})), x])) == [x]
