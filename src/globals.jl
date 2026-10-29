@@ -123,7 +123,7 @@ end
 """
 Counts the program's static fields of each wasm type. dart counts every static field of every
 library; a Julia program's static fields are the global bindings the closed world reads (each
-`GlobalRef` of its NIR, an operand (nir_operands) or a statement), but a binding of a function, a type or a module,
+`GlobalRef` of its NIR, an operand (nir_operands) or a statement), but a constant binding of a function, a type or a module,
 which declare Julia's methods, classes and modules as dart's procedures, classes and libraries do.
 """
 @parity "dart2wasm/lib/globals.dart:97 DartGlobals" function DartGlobals(translator::Translator)::DartGlobals
@@ -132,7 +132,9 @@ which declare Julia's methods, classes and modules as dart's procedures, classes
     local count(ref::GlobalRef) = begin
         ref in seen && return nothing
         push!(seen, ref)
-        isdefinedglobal(ref.mod, ref.name) && getglobal(ref.mod, ref.name) isa Union{Function,Type,Module} && return nothing
+        # a declaration is a constant binding of a function, a type or a module (Julia's `function`,
+        # `struct` and `module` each define one), its value read at its one source
+        nir_binding_is_constant(ref) && nir_binding_value(ref, "dart2wasm/lib/globals.dart:97 DartGlobals").c.val isa Union{Function,Type,Module} && return nothing
         local wasm_type = translate_type_of_field(translator, ref)
         self._field_type_count[wasm_type] = get(self._field_type_count, wasm_type, 0) + 1
         return nothing
@@ -159,8 +161,9 @@ A deliberate difference from dart, whose initializer is the field's literal expr
 """
 @parity "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer" function get_constant_initializer(self::DartGlobals, variable::GlobalRef)::Union{NirConst,Nothing}
     nir_binding_is_constant(variable) || return nothing
-    Base.ismutationfree(typeof(getglobal(variable.mod, variable.name))) || return nothing
-    return nir_binding_value(variable, "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer")
+    local value = nir_binding_value(variable, "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer")
+    Base.ismutationfree(typeof(value.c.val)) || return nothing
+    return value
 end
 
 """
