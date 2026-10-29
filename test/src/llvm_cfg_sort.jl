@@ -77,7 +77,7 @@ function check_sort(f, types)
     local reachable = sort(copy(mf.layout))
     local li = L.LoopInfoBase()
     L.analyze(li, mf)
-    L.sort_blocks(mf, li)
+    L.sort_blocks(mf, li, L.WebAssemblyExceptionInfo())
     local num(b) = mf.blocks[b].number
     # EveryBlockOnce: the layout is a permutation of the reachable blocks, the entry first
     @test sort(copy(mf.layout)) == reachable && mf.layout[1] == 1

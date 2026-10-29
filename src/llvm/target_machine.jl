@@ -9,7 +9,8 @@ The structured control flow of a body whose statements are `stmts` (in NIR) and 
 the control-flow passes of LLVM's addPreEmitPass in its order: UnreachableMachineBlockElim (in
 machine_function), after PHIElimination (which runs before them, in register allocation's
 pipeline), WebAssemblyFixIrreducibleControlFlow, WebAssemblyCFGSort over the loop tree
-(MachineLoopInfo, LoopInfoBase::analyze), WebAssemblyCFGStackify. `has_results` says the function
+(MachineLoopInfo, LoopInfoBase::analyze) and the exception tree (WebAssemblyExceptionInfo),
+WebAssemblyCFGStackify. `has_results` says the function
 returns values, for the block types of scopes ending its body.
 """
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp:603 WebAssemblyPassConfig::addPreEmitPass" function add_pre_emit_pass(stmts::Vector{NirStmt}, jcfg::Core.Compiler.CFG, at::String, has_results::Bool)::MachineFunction
@@ -19,7 +20,10 @@ returns values, for the block types of scopes ending its body.
     run_on_machine_function(WebAssemblyFixIrreducibleControlFlow(), mf)
     local mli = LoopInfoBase()
     analyze(mli, mf)
-    sort_blocks(mf, mli)
-    run_on_machine_function(WebAssemblyCFGStackify(), mf, mli, has_results)
+    # the exception tree CFGSort and CFGStackify read, an analysis computed after the CFG is final
+    local wei = WebAssemblyExceptionInfo()
+    run_on_machine_function(wei, mf)
+    sort_blocks(mf, mli, wei)
+    run_on_machine_function(WebAssemblyCFGStackify(), mf, mli, wei, has_results)
     return mf
 end

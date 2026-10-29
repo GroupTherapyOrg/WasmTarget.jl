@@ -61,15 +61,16 @@ does not dominate, deferred until it is done.
 end
 
 """
-    sort_blocks(mf, mli) -> Nothing
+    sort_blocks(mf, mli, wei) -> Nothing
 
 Lays the blocks out: a topological sort ignoring loop back edges, from two ready lists (Preferred,
 the successors just made ready, to keep the original order; Ready, the rest), where a block the
-innermost active region's header does not dominate waits until the region's last block is placed.
-Then checks what LLVM asserts of the result: a block's predecessors are above it but a loop
-header's back edges, and every region's blocks lie within its header and bottom, regions nested.
+innermost active region's header (a loop's, `mli`, or an exception's, `wei`) does not dominate
+waits until the region's last block is placed. Then checks what LLVM asserts of the result: a
+block's predecessors are above it but a loop header's back edges, and every region's blocks lie
+within its header and bottom, regions nested.
 """
-@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGSort.cpp:183 sortBlocks" function sort_blocks(mf::MachineFunction, mli::LoopInfoBase)::Nothing
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGSort.cpp:183 sortBlocks" function sort_blocks(mf::MachineFunction, mli::LoopInfoBase, wei::WebAssemblyExceptionInfo)::Nothing
     local mdt = mf.domtree
     local num(b::Int) = mf.blocks[b].number
     # the original layout's numbers, so terminators can be updated to the original layout successor
@@ -90,7 +91,7 @@ header's back edges, and every region's blocks lie within its header and bottom,
     local ready = PriorityQueue()
     local pref_less(a::Int, b::Int) = compare_block_numbers(mf, a, b)
     local ready_less(a::Int, b::Int) = compare_block_numbers_backwards(mf, a, b)
-    local sri = SortRegionInfo(mli)
+    local sri = SortRegionInfo(mli, wei)
     local entries = Entry[]
     local mbb = mf.layout[1]
     while true
@@ -160,12 +161,13 @@ header's back edges, and every region's blocks lie within its header and bottom,
         local region = get_region_for(sri, mbb)
         local header = region !== nothing && mbb == get_header(region)
         for pred in mf.blocks[mbb].preds
-            num(pred) < num(mbb) || (header && contains(something(region), pred)) ||
+            # a loop header's back edges excepted; an exception header's predecessors are all above it
+            num(pred) < num(mbb) || (header && is_loop(something(region)) && contains(something(region), pred)) ||
                 reject!(Internal("src/llvm/cfg_sort.jl sort_blocks: block $mbb's predecessor $pred is below it and no back edge"), "sortBlocks")
         end
     end
     local intervals = Tuple{Int,Int}[]
-    for region in unique(values(sri.loop_map))
+    for region in Iterators.flatten((unique(values(sri.loop_map)), unique(values(sri.exception_map))))
         get_header(region) == mf.layout[1] && reject!(Internal("src/llvm/cfg_sort.jl sort_blocks: the entry block heads a region"), "sortBlocks")
         local interval = (num(get_header(region)), num(get_bottom(sri, mf, region)))
         interval[1] <= interval[2] || reject!(Internal("src/llvm/cfg_sort.jl sort_blocks: a region's bottom above its header"), "sortBlocks")

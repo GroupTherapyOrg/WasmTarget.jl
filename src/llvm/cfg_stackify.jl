@@ -194,13 +194,13 @@ nested, before the markers of scopes it encloses and the terminators; its END_BL
 end
 
 """
-    place_loop_marker(pass, mf, mli, mbb) -> Nothing
+    place_loop_marker(pass, mf, mli, wei, mbb) -> Nothing
 
 A LOOP at `mbb` when it heads a loop: after the END_LOOPs of loops ending there; its END_LOOP at the
 start of the block after the loop's bottom (the appendix block when the bottom is the last).
 """
-@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:434 WebAssemblyCFGStackify::placeLoopMarker" function place_loop_marker(pass::WebAssemblyCFGStackify, mf::MachineFunction, mli::LoopInfoBase, mbb::Int)::Nothing
-    local sri = SortRegionInfo(mli)
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:434 WebAssemblyCFGStackify::placeLoopMarker" function place_loop_marker(pass::WebAssemblyCFGStackify, mf::MachineFunction, mli::LoopInfoBase, wei::WebAssemblyExceptionInfo, mbb::Int)::Nothing
+    local sri = SortRegionInfo(mli, wei)
     local loop = get_loop_for(mli, mbb)
     (loop === nothing || get_header(loop) != mbb) && return nothing
     # the LOOP's operand is the first block after the loop: past the function's end, the appendix
@@ -238,15 +238,15 @@ start of the block after the loop's bottom (the appendix block when the bottom i
 end
 
 """
-    place_markers(pass, mf, mli) -> Nothing
+    place_markers(pass, mf, mli, wei) -> Nothing
 
 Every LOOP first, then a BLOCK for each block branched to from above, in layout order.
 """
-@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:2509 WebAssemblyCFGStackify::placeMarkers" function place_markers(pass::WebAssemblyCFGStackify, mf::MachineFunction, mli::LoopInfoBase)::Nothing
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:2509 WebAssemblyCFGStackify::placeMarkers" function place_markers(pass::WebAssemblyCFGStackify, mf::MachineFunction, mli::LoopInfoBase, wei::WebAssemblyExceptionInfo)::Nothing
     # one more than the blocks, for the appendix block a loop may add
     pass.scope_tops = Union{Nothing,Int}[nothing for _ in 1:length(mf.layout)+1]
     for mbb in copy(mf.layout)
-        place_loop_marker(pass, mf, mli, mbb)
+        place_loop_marker(pass, mf, mli, wei, mbb)
     end
     for mbb in copy(mf.layout)
         mf.blocks[mbb].ehpad && reject!(Unported("llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:695 WebAssemblyCFGStackify::placeTryTableMarker"), "placeMarkers")
@@ -324,14 +324,14 @@ lowered, as LLVM's Multivalue), since wasm checks the type at an end the code ne
 end
 
 """
-    run_on_machine_function(pass, mf, mli, has_results) -> Nothing
+    run_on_machine_function(pass, mf, mli, wei, has_results) -> Nothing
 
 Places the markers, rewrites the branches' targets to depths, and fixes the block types of the
 scopes ending the function.
 """
-@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:2701 WebAssemblyCFGStackify::runOnMachineFunction" function run_on_machine_function(pass::WebAssemblyCFGStackify, mf::MachineFunction, mli::LoopInfoBase, has_results::Bool)::Nothing
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:2701 WebAssemblyCFGStackify::runOnMachineFunction" function run_on_machine_function(pass::WebAssemblyCFGStackify, mf::MachineFunction, mli::LoopInfoBase, wei::WebAssemblyExceptionInfo, has_results::Bool)::Nothing
     pass.mdt = mf.domtree
-    place_markers(pass, mf, mli)
+    place_markers(pass, mf, mli, wei)
     rewrite_depth_immediates(pass, mf)
     fix_ends_at_end_of_function(pass, mf, has_results)
     return nothing

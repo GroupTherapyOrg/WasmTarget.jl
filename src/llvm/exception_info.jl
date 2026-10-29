@@ -22,6 +22,11 @@ end
 """    get_eh_pad(we) -> Int"""
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyExceptionInfo.h:55 WebAssemblyException::getEHPad" get_eh_pad(we::WebAssemblyException)::Int = we.eh_pad
 
+"""    get_header(we) -> Int
+
+The exception's header, its EH pad."""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyExceptionInfo.h:56 WebAssemblyException::getHeader" get_header(we::WebAssemblyException)::Int = we.eh_pad
+
 """    get_parent_exception(we) -> Union{WebAssemblyException,Nothing}"""
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyExceptionInfo.h:57 WebAssemblyException::getParentException" get_parent_exception(we::WebAssemblyException)::Union{WebAssemblyException,Nothing} = we.parent_exception
 
@@ -59,6 +64,12 @@ end
 
 """    get_blocks(we) -> Vector{Int}"""
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyExceptionInfo.h:78 WebAssemblyException::getBlocks" get_blocks(we::WebAssemblyException)::Vector{Int} = we.blocks
+
+"""    blocks(we) -> Vector{Int}"""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyExceptionInfo.h:82 WebAssemblyException::blocks" blocks(we::WebAssemblyException)::Vector{Int} = we.blocks
+
+"""    get_num_blocks(we) -> Int"""
+@parity "llvm/lib/Target/WebAssembly/WebAssemblyExceptionInfo.h:85 WebAssemblyException::getNumBlocks" get_num_blocks(we::WebAssemblyException)::Int = length(we.blocks)
 
 """    get_sub_exceptions(we) -> Vector{WebAssemblyException}"""
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyExceptionInfo.h:93 WebAssemblyException::getSubExceptions" get_sub_exceptions(we::WebAssemblyException)::Vector{WebAssemblyException} = we.sub_exceptions

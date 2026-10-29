@@ -48,3 +48,22 @@ end
     L.run_on_machine_function(wei3, machine_of(chain, "none"))
     @test L.empty(wei3)
 end
+
+@testset "WebAssemblySortRegion.cpp: an exception is a sort region, its bottom its last block" begin
+    local chain = Any[Core.GotoIfNot(Core.Argument(2), 3), Core.ReturnNode(1), Core.GotoNode(4), Core.ReturnNode(2)]
+    local mf = machine_of(chain, "chain")
+    mf.blocks[4].ehpad = true
+    local wei = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei, mf)
+    local li = L.LoopInfoBase()
+    L.analyze(li, mf)
+    # the pad's exception holds both its blocks; outside it, no region
+    local sri = L.SortRegionInfo(li, wei)
+    local r = L.get_region_for(sri, 5)
+    @test r !== nothing && !L.is_loop(r) && L.get_header(r) == 4 && L.get_region_for(sri, 4) === r && L.get_region_for(sri, 2) === nothing
+    @test L.get_bottom(sri, mf, r) == 5
+    # the sort keeps the exception's blocks contiguous below its pad, every check of LLVM's passing
+    L.sort_blocks(mf, li, wei)
+    local pos(b) = findfirst(==(b), mf.layout)
+    @test pos(5) == pos(4) + 1
+end

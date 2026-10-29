@@ -100,9 +100,11 @@ function stackified(f, types)
     L.run_on_machine_function(L.WebAssemblyFixIrreducibleControlFlow(), mf)
     local li = L.LoopInfoBase()
     L.analyze(li, mf)
-    L.sort_blocks(mf, li)
+    local wei = L.WebAssemblyExceptionInfo()
+    L.run_on_machine_function(wei, mf)
+    L.sort_blocks(mf, li, wei)
     local pass = L.WebAssemblyCFGStackify()
-    L.run_on_machine_function(pass, mf, li, true)
+    L.run_on_machine_function(pass, mf, li, wei, true)
     return stmts, jcfg, mf, pass
 end
 
