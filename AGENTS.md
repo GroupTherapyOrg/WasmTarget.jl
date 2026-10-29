@@ -49,6 +49,8 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D42** Without a dart port, port Julia's compiler and LLVM's (pinned); invent no algorithm.
 - **D43** 100% port, then Julia and JS fuzzing, then drift re-audits; nothing bespoke before them.
 - **D44** After the re-audits: assess Lean formalization; then bespoke work; then a fast WT package.
+- **D45** Build nothing bespoke: port a near 1:1 match (dart, LLVM, Julia's C), pinned and anchored.
+- **D46** A stub or rejection-only body is never complete; progress counts bodies only.
 <!-- ledger:end -->
 
 ## How to work
