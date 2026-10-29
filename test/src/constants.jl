@@ -184,3 +184,38 @@ rej(f) = try; f(); nothing; catch x; x isa WasmTarget.RejectionError ? x.rejecti
     @test rej(() -> D.core_types(cs)) isa WasmTarget.Internal
 end
 end
+
+# a type as a value: lowered to its type object, an instance of its kind, its fields filled; a boxed Bool
+# holds its class id and value, no identity hash (dart's visitBoolConstant)
+module ConstantsTypeValue
+using Test, WasmTarget
+const D = WasmTarget.Dart2Wasm
+const W = WasmTarget.WasmBuilder
+const I = W.IR
+is_int(r::Base.RefValue{Any}) = r[] isa Int64
+k(x) = WasmTarget.NirConst(Core.Const(x))
+@testset "constants.dart: a type literal is its lowered type object, an instance constant" begin
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(WasmTarget.check_subset(is_int, (Base.RefValue{Any},), "constants"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(t.closure_layouter[]); collect(t.class_info_collector[])
+    t.globals[] = D.Globals(t); t.dart_globals[] = D.DartGlobals(t); t.constants[] = D.Constants(t)
+    local cr = D.ConstantCreator(t.constants[])
+    # Int64 as a value: the DataType instance whose classId is Int64's, created as an instance constant
+    local info = D.ensure_constant(cr, k(Int64))
+    @test info.constant === D._lower_type_to_constant(t.constants[], Int64)
+    @test info.type == t.class_info[DataType].non_nullable_type
+    # its parameters, an empty SimpleVector, an immutable wasm array of none
+    @test any(c -> c.constant.c.val isa Core.SimpleVector, info.children)
+    local sv = only(filter(c -> c.constant.c.val isa Core.SimpleVector, info.children))
+    @test only(sv.children).constant.c.val isa WasmTarget.WasmArrayLiteral && !only(sv.children).constant.c.val.mutable
+    # the visitor that never sees an unlowered type
+    @test D.visit_instance_constant(D.TypeOfConstantVisitor(t), info.constant) == info.type
+    # a boxed Bool: its class id and its value, accepted by the builder as the box's struct
+    local bi = D.ensure_constant(cr, k(true))
+    local b = W.InstructionsBuilder(D.main_module(t), I.ValueType[], I.ValueType[bi.type])
+    bi._code_gen(bi, b, false)
+    @test [typeof(x) for x in b._instructions] == [I.I32Const, I.I32Const, I.StructNew]
+    W.var"end"(b)
+end
+end

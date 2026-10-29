@@ -552,7 +552,7 @@ the class's struct as class_info lays out every class below `Any`, its object he
             local defined_global = WasmBuilder.define(b.module_builder.globals[], global_type,
                 _constant_name(self.constants._constant_accessor[], NirConst(Core.Const(v))))
             local ib = defined_global.initializer
-            push_object_header_fields(ib, translator, info)
+            WasmBuilder.i32_const(ib, class_id(info))          # a box holds no identity hash (dart: info.classId alone)
             num_type == WasmBuilder.IR.NumType_i32 ? WasmBuilder.i32_const(ib, bits) : WasmBuilder.i64_const(ib, bits)
             WasmBuilder.struct_new(ib, info.struct_)
             WasmBuilder.var"end"(ib)
@@ -589,7 +589,7 @@ each Julia float type is its own class. A deliberate difference from dart: the b
             local defined_global = WasmBuilder.define(b.module_builder.globals[], global_type,
                 _constant_name(self.constants._constant_accessor[], NirConst(Core.Const(v))))
             local ib = defined_global.initializer
-            push_object_header_fields(ib, translator, info)
+            WasmBuilder.i32_const(ib, class_id(info))          # a box holds no identity hash (dart: info.classId alone)
             push(ib)
             WasmBuilder.struct_new(ib, info.struct_)
             WasmBuilder.var"end"(ib)
@@ -648,7 +648,9 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
             v isa String ? visit_string_constant(self, v) :
             v isa Symbol ? visit_symbol_constant(self, v) :
             v isa Union{Tuple,NamedTuple} ? visit_record_constant(self, v) :
-            v isa Type ? visit_type_literal_constant(self, v) :
+            # a type here is lowered above (_lowerTypeToConstant), dart's InstanceConstant of its type
+            # object: in Julia the type itself, an instance of its kind
+            v isa Type ? visit_instance_constant(self, constant) :
             v isa Union{Array,Memory} ? visit_list_constant(self, constant) :
             visit_instance_constant(self, constant)
         end
@@ -666,7 +668,7 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
                 v isa String ? visit_string_constant(tv, v) :
                 v isa Symbol ? visit_symbol_constant(tv, v) :
                 v isa Union{Tuple,NamedTuple} ? visit_record_constant(tv, v) :
-                v isa Type ? visit_type_literal_constant(tv, v) :
+                v isa Type ? visit_instance_constant(tv, ic) :          # a lowered type object, as above
                 v isa Union{Array,Memory} ? visit_list_constant(tv, ic) :
                 visit_instance_constant(tv, ic)
             end
@@ -699,7 +701,7 @@ difference from dart, whose `_BoxedBool` takes `i32.const classId` alone.
     local translator = self.constants.translator
     local info = translator.class_info[Bool]
     return create_constant(self, NirConst(Core.Const(constant)), ConstantInfo[], info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
-        push_object_header_fields(b, translator, info)
+        WasmBuilder.i32_const(b, class_id(info))
         WasmBuilder.i32_const(b, constant ? 1 : 0)
         WasmBuilder.struct_new(b, info.struct_)
     end; can_be_eager = true)
@@ -762,7 +764,13 @@ A field Julia holds no value in (`#undef`) rejects, located.
     for field in class_instance_fields(cls, at)
         local index = translator.field_index[field]
         sub_constants[index + 1] === nothing || reject!(Internal("$at: the field index $index of $cls is given twice"), at)
-        local field_value = if field.index == 0
+        local field_value = if field.index == 0 && cls === Core.SimpleVector
+            # a SimpleVector's one field, its elements as an immutable wasm array (src/julia/classes.jl
+            # _svec_instance_fields), the constant dart's _makeInterfaceTypeConstant makes of its
+            # typeArguments with makeArrayOf
+            field.name == "data" || reject!(Internal("$at: the SimpleVector field $(field.name), not classes.jl's data"), at)
+            make_array_of(self.constants, eltype(cls), NirConst[NirConst(Core.Const(x)) for x in v]; mutable_ = false).c.val
+        elseif field.index == 0
             # a kind's fields that are not Julia's own (src/julia/classes.jl _kind_instance_fields):
             # dart's _Type.isDeclaredNullable (types.jl's encodedNullability, Julia's `Nothing <: T`),
             # and _InterfaceType.classId, the
@@ -798,7 +806,7 @@ end
     local translator = self.constants.translator
     local literal = constant.c.val::WasmArrayLiteral
     local array_type = array_type_for_dart_type(translator, literal.element_type; mutable_ = mutable_)
-    local element_type = WasmBuilder.unpacked(array_type.element_type.type)
+    local element_type = WasmBuilder.unpacked(array_type.element_type[].type)
 
     local elements = NirConst[e for e in literal.entries]
     local too_large_for_array_new_fixed = length(elements) > max_array_new_fixed_length()
@@ -823,7 +831,7 @@ end
             # This can be a little bit larger than individual array stores, but the
             # data section will compress better, so for app.wasm.gz it'a a win and
             # will cause much faster validation & faster initialization.
-            local field_type = array_type.element_type.type
+            local field_type = array_type.element_type[].type
             local is_i32 = field_type == WasmBuilder.IR.NumType_i32
             local is_i16 = field_type == WasmBuilder.IR.PackedType_i16
             if is_i32 || is_i16
