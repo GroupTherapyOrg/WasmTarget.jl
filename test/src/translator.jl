@@ -519,6 +519,10 @@ end
     @test D.get_dynamic_dispatchers_for_module(t, m) === D.get_dynamic_dispatchers_for_module(t, m)
     local pd = D.get_polymorphic_dispatchers_for_module(t, m)
     @test pd === D.get_polymorphic_dispatchers_for_module(t, m) && pd.calling_module === m && isempty(pd.cache)
+    local pi = D.get_partial_instantiator_for_module(t, m)
+    @test pi === D.get_partial_instantiator_for_module(t, m) && isempty(pi._one_type_argument)
+    local ep = try; D.get_one_type_argument_forwarder(pi, t.component.entry, Base.unwrap_unionall(Vector), "f"); nothing; catch x; x; end
+    @test ep isa W.RejectionError && ep.rejection isa W.Internal          # a type argument must be a constant
     @test D.get_dart_exception_tag(t, m) isa IR.Tag && D.get_dart_exception_tag(t, m) === D.get_dart_exception_tag(t, m)
     local mi = t.component.entry
     @test D.get_closures(t, mi) === D.get_closures(t, mi) && D.get_closures(t, mi; find_captures = false) !== D.get_closures(t, mi)

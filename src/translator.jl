@@ -391,9 +391,21 @@ NodeCounter's dart fields: `translator`, `hadReturn`, `count`.
 end
 
 """
-PartialInstantiator's dart fields: `translator`, `callingModule`, `_oneTypeArgument`, `_twoTypeArguments`.
+The forwarders a module makes to instantiate a generic function partially: the target called with
+one or two type arguments fixed as constants before its other arguments, one function per target
+and types. Julia instantiates no generic function value (a specialization is a MethodInstance, the
+Kernel table's InstantiationConstant row), so no program makes one.
 """
-@parity "dart2wasm/lib/translator.dart:3602 PartialInstantiator" @unported struct PartialInstantiator end
+@parity "dart2wasm/lib/translator.dart:3602 PartialInstantiator" struct PartialInstantiator
+    translator::KernelNodes
+    calling_module::WasmBuilder.ModuleBuilder
+    _one_type_argument::Dict{Tuple{Core.MethodInstance,Type},WasmBuilder.IR.BaseFunction}
+    _two_type_arguments::Dict{Tuple{Core.MethodInstance,Type,Type},WasmBuilder.IR.BaseFunction}
+    # the struct's one constructor, tagged; dart's constructor at :3610 is its outer function
+    PartialInstantiator(::Val{:_}, translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder) =
+        new(translator, calling_module, Dict{Tuple{Core.MethodInstance,Type},WasmBuilder.IR.BaseFunction}(),
+            Dict{Tuple{Core.MethodInstance,Type,Type},WasmBuilder.IR.BaseFunction}())
+end
 
 """
 The polymorphic dispatchers a module calls: per selector, one function that tests the receiver's
@@ -550,7 +562,8 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
         WasmBuilder.var"import"(using_module.memories[], "ffi", "memory", self.options.import_shared_memory, 0, self.options.shared_memory_max_pages)
     end
 
-@parity "dart2wasm/lib/translator.dart:316 Translator.getPartialInstantiatorForModule" @unported function get_partial_instantiator_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/translator.dart:316 Translator.getPartialInstantiatorForModule" get_partial_instantiator_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::PartialInstantiator =
+    get!(() -> PartialInstantiator(self, module_), self._partial_instantiators, module_)
 
 @parity "dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule" get_polymorphic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::PolymorphicDispatchers =
     get!(() -> PolymorphicDispatchers(self, module_), self._polymorphic_dispatchers, module_)
@@ -1451,11 +1464,49 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3576 InliningDecision" InliningDecision(should_inline::Bool, reason::Union{String,Nothing})::InliningDecision = InliningDecision(Val(:_), should_inline, reason)
 
-@parity "dart2wasm/lib/translator.dart:3610 PartialInstantiator" @unported function PartialInstantiator(translator, calling_module) end
+@parity "dart2wasm/lib/translator.dart:3610 PartialInstantiator" PartialInstantiator(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::PartialInstantiator =
+    PartialInstantiator(Val(:_), translator, calling_module)
 
-@parity "dart2wasm/lib/translator.dart:3612 PartialInstantiator.getOneTypeArgumentForwarder" @unported function get_one_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type_::Type, name::String) end
+@parity "dart2wasm/lib/translator.dart:3612 PartialInstantiator.getOneTypeArgumentForwarder" function get_one_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type_::Type, name::String)::WasmBuilder.IR.BaseFunction
+    local translator = self.translator::Translator
+    is_type_constant(translator.types[], type_) ||
+        reject!(Internal("dart2wasm/lib/translator.dart:3612 PartialInstantiator.getOneTypeArgumentForwarder: the type argument $type_ has a free type variable"), "PartialInstantiator.getOneTypeArgumentForwarder")
+    return get!(self._one_type_argument, (target, type_)) do
+        local wasm_target = get_function(translator.functions[], target)
+        local function_ = WasmBuilder.define(self.calling_module.functions[],
+            WasmBuilder.define_function(types_builder(translator), wasm_target.type.inputs[2:end], wasm_target.type.outputs), name)
+        local b = WasmBuilder.body(function_)
+        instantiate_constant(translator.constants[], b, NirConst(Core.Const(type_)), non_nullable_type_type(translator.types[]))
+        for i in 2:length(wasm_target.type.inputs)
+            WasmBuilder.local_get(b, b.locals[i - 1])
+        end
+        call_function(translator, wasm_target, b)
+        WasmBuilder.return_(b)
+        WasmBuilder.var"end"(b)
+        function_
+    end
+end
 
-@parity "dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder" @unported function get_two_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type1::Type, type2::Type, name::String) end
+@parity "dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder" function get_two_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type1::Type, type2::Type, name::String)::WasmBuilder.IR.BaseFunction
+    local translator = self.translator::Translator
+    (is_type_constant(translator.types[], type1) && is_type_constant(translator.types[], type2)) ||
+        reject!(Internal("dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder: a type argument of $type1, $type2 has a free type variable"), "PartialInstantiator.getTwoTypeArgumentForwarder")
+    return get!(self._two_type_arguments, (target, type1, type2)) do
+        local wasm_target = get_function(translator.functions[], target)
+        local function_ = WasmBuilder.define(self.calling_module.functions[],
+            WasmBuilder.define_function(types_builder(translator), wasm_target.type.inputs[3:end], wasm_target.type.outputs), name)
+        local b = WasmBuilder.body(function_)
+        instantiate_constant(translator.constants[], b, NirConst(Core.Const(type1)), non_nullable_type_type(translator.types[]))
+        instantiate_constant(translator.constants[], b, NirConst(Core.Const(type2)), non_nullable_type_type(translator.types[]))
+        for i in 3:length(wasm_target.type.inputs)
+            WasmBuilder.local_get(b, b.locals[i - 2])
+        end
+        call_function(translator, wasm_target, b)
+        WasmBuilder.return_(b)
+        WasmBuilder.var"end"(b)
+        function_
+    end
+end
 
 @parity "dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers" PolymorphicDispatchers(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::PolymorphicDispatchers =
     PolymorphicDispatchers(Val(:_), translator, calling_module)
