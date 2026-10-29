@@ -50,13 +50,32 @@ into a member; a text with no member is an Internal rejection, never a guess.
     no_compileable_specialization
 end
 
+"""A verifier error at a statement: Julia's own `CallMissing` record, its CodeInstance, CodeInfo and
+sptypes, the statement index and the description."""
+@quarantine "the verifier's CallMissing, kept as Julia gives it" Core.Compiler.TrimVerifier.CallMissing struct TrimCallMissing
+    record::Core.Compiler.TrimVerifier.CallMissing
+end
+
+"""A verifier error at a ccallable: Julia's own `CCallableMissing` record, its types and description."""
+@quarantine "the verifier's CCallableMissing, kept as Julia gives it" Core.Compiler.TrimVerifier.CCallableMissing struct TrimCCallableMissing
+    record::Core.Compiler.TrimVerifier.CCallableMissing
+end
+
+"""An entry with nothing to verify: Julia's own text for it (its `which` error, or that it names no
+compileable specialization)."""
+@quarantine "an entry the verifier never sees is described by Julia's own text" Core.String struct TrimEntryText
+    text::String
+end
+
+"""The cause of a TrimError, one of the verifier's two records or the entry's text: a closed sum."""
+@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const TrimCause = Union{TrimCallMissing, TrimCCallableMissing, TrimEntryText}
+
 """
     TrimError(kind, codeinst, stmtidx, frames, cause)
 
-One error Julia's trim verifier reports, as Julia gives it: `kind`; `cause`, Julia's own record (a
-TrimVerifier `CallMissing`, which holds the CodeInstance, its CodeInfo and sptypes, the statement
-index and the description; a `CCallableMissing`; or, for an entry with nothing to verify, Julia's
-`which` text); `codeinst` and `stmtidx` the statement, nothing and 0 where there is none; and
+One error Julia's trim verifier reports, as Julia gives it: `kind`; `cause`, Julia's own record
+(TrimCause: a TrimVerifier `CallMissing`, a `CCallableMissing`, or, for an entry with nothing to
+verify, Julia's text); `codeinst` and `stmtidx` the statement, nothing and 0 where there is none; and
 `frames`, Julia's stack frames for it, the inline chain innermost first and then each caller
 (TrimVerifier.verify_create_stackframes), empty where there is no statement.
 """
@@ -65,7 +84,7 @@ index and the description; a `CCallableMissing`; or, for an entry with nothing t
     codeinst::Union{Nothing,Core.CodeInstance}
     stmtidx::Int
     frames::Vector{Base.StackTraces.StackFrame}
-    cause::Any
+    cause::TrimCause
 end
 
 """Julia's trim verifier rejects the program: `errors`, each it reports, in its order."""
@@ -77,15 +96,14 @@ end
 # the statement and the stack frames, from the records the error keeps
 @quarantine "the verifier's text is Julia's, printed by its own printers from its own records" Core.Compiler.TrimVerifier.verify_print_stmt function _trim_text(e::TrimError)::String
     return sprint() do io
-        local c = e.cause
-        if c isa Core.Compiler.TrimVerifier.CallMissing
-            print(io, c.desc, " from statement ")
-            Core.Compiler.TrimVerifier.verify_print_stmt(IOContext{IO}(io), c.codeinfo, c.sptypes, c.stmtidx)
-            Base.show_backtrace(io, e.frames)
-        elseif c isa Core.Compiler.TrimVerifier.CCallableMissing
-            Core.Compiler.TrimVerifier.verify_print_error(IOContext{IO}(io), c, Core.Compiler.TrimVerifier.ParentMap())
-        else
-            print(io, c)
+        @exhaustive e.cause::TrimCause begin
+            (c::TrimCallMissing) => begin
+                print(io, c.record.desc, " from statement ")
+                Core.Compiler.TrimVerifier.verify_print_stmt(IOContext{IO}(io), c.record.codeinfo, c.record.sptypes, c.record.stmtidx)
+                Base.show_backtrace(io, e.frames)
+            end
+            (c::TrimCCallableMissing) => Core.Compiler.TrimVerifier.verify_print_error(IOContext{IO}(io), c.record, Core.Compiler.TrimVerifier.ParentMap())
+            (c::TrimEntryText) => print(io, c.text)
         end
     end
 end
@@ -93,7 +111,7 @@ end
 # the errors' text, each the verifier reports numbered as juliac numbers them; an entry with nothing to
 # verify, Julia's own text alone
 @quarantine "the verifier's errors numbered as juliac prints them" Base.join _trim_texts(errors::Vector{TrimError})::String =
-    rstrip(join(((e.cause isa String ? "" : "Verifier error #$i: ") * _trim_text(e) for (i, e) in enumerate(errors)), "\n\n"))
+    rstrip(join(((e.cause isa TrimEntryText ? "" : "Verifier error #$i: ") * _trim_text(e) for (i, e) in enumerate(errors)), "\n\n"))
 
 """The module WasmTarget built is not valid wasm; `site` names where it was found."""
 @quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct InvalidModule
@@ -158,4 +176,5 @@ Stop the compile `at` names with `rejection`.
 # `_reason` an @exhaustive match over it, and every match over it names every kind (check_closed).
 # A violation refuses the package's load.
 @quarantine "the closed sum's assertion, run when the package loads" Base.Val construction_check(::Val{:Rejection})::Int = check_sum_matched(@__MODULE__, :Rejection)
+@quarantine "the closed sum's assertion, run when the package loads" Base.Val construction_check(::Val{:TrimCause})::Int = check_sum_matched(@__MODULE__, :TrimCause)
 construction_check(Val(:Rejection))

@@ -65,7 +65,7 @@ end
     local t = only(o.errors)
     @test t.kind == W.unresolved_call
     @test t.codeinst isa Core.CodeInstance && t.stmtidx > 0
-    @test t.cause isa Core.Compiler.TrimVerifier.CallMissing && t.cause.stmtidx == t.stmtidx
+    @test t.cause isa WasmTarget.TrimCallMissing && t.cause.record.stmtidx == t.stmtidx
     @test !isempty(t.frames) && t.frames[1].func === :dyn
     # shown in Julia's own words, numbered as juliac numbers them
     @test occursin("Verifier error #1: unresolved call from statement", sprint(showerror, e))

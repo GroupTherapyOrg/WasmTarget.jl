@@ -132,8 +132,9 @@ end
 @quarantine "the verifier's error and the stack frames Julia builds for it, kept as Julia gives them" Core.Compiler.TrimVerifier.verify_create_stackframes function _trim_error(@nospecialize(cause), parents, at::String)::TrimError
     local kind = get(TRIM_ERROR_KINDS, string(cause.desc), nothing)
     kind === nothing && reject!(Internal("src/julia/subset.jl TRIM_ERROR_KINDS: Julia $VERSION's trim verifier reports \"$(cause.desc)\", a description it has no kind for"), at)
-    cause isa Core.Compiler.TrimVerifier.CallMissing || return TrimError(kind, nothing, 0, Base.StackTraces.StackFrame[], cause)
-    return TrimError(kind, cause.codeinst, cause.stmtidx, Core.Compiler.TrimVerifier.verify_create_stackframes(cause.codeinst, cause.stmtidx, parents), cause)
+    cause isa Core.Compiler.TrimVerifier.CCallableMissing && return TrimError(kind, nothing, 0, Base.StackTraces.StackFrame[], TrimCCallableMissing(cause))
+    return TrimError(kind, cause.codeinst, cause.stmtidx, Core.Compiler.TrimVerifier.verify_create_stackframes(cause.codeinst, cause.stmtidx, parents),
+                     TrimCallMissing(cause::Core.Compiler.TrimVerifier.CallMissing))
 end
 
 """
@@ -155,10 +156,10 @@ holding Julia's own record, its statement and its stack frames.
             Base._which(sig; world = world)
         catch e
             e isa ErrorException || rethrow()
-            reject!(OutsideSubset([TrimError(no_unique_method, nothing, 0, Base.StackTraces.StackFrame[], sprint(showerror, e))]), at)
+            reject!(OutsideSubset([TrimError(no_unique_method, nothing, 0, Base.StackTraces.StackFrame[], TrimEntryText(sprint(showerror, e)))]), at)
         end
         reject!(OutsideSubset([TrimError(no_compileable_specialization, nothing, 0, Base.StackTraces.StackFrame[],
-                                         "$sig: Julia gives the call no compileable specialization")]), at)
+                                         TrimEntryText("$sig: Julia gives the call no compileable specialization"))]), at)
     end
     local entry = mi
     local codeinfos, notes, parents = _infer_verified(Any[entry], world, at)
