@@ -297,7 +297,7 @@ end
 
 # dart numbers `cls.typeParameters`; a Julia class is an instance, its parameters bound, so it has
 # none to number (ClassInfo.typeParameterMatch, src/class_info.jl)
-@parity "dart2wasm/lib/types.dart:28 InterfaceTypeEnvironment._add" _add(self::InterfaceTypeEnvironment, type_::DataType)::Nothing = nothing
+@parity "dart2wasm/lib/types.dart:28 InterfaceTypeEnvironment._add" _add(self::InterfaceTypeEnvironment, type_::Type)::Nothing = nothing
 
 # dart's `_typeOffsets[typeParameter]!`, which throws on a parameter never added
 @parity "dart2wasm/lib/types.dart:36 InterfaceTypeEnvironment.lookup" function lookup(self::InterfaceTypeEnvironment, type_parameter::TypeVar)::Int
@@ -386,7 +386,10 @@ kinds' fields): a SimpleVector, which for a type with no free variable is a cons
 `_makeTypeArray` instantiates a constant array when every argument is one. A DataType that is no
 class of the closed world has no id, and it rejects, located.
 """
-@parity "dart2wasm/lib/types.dart:207 Types._makeInterfaceType" function _make_interface_type(self::Types, code_gen::AstCodeGenerator, type_::DataType)::Nothing
+@parity "dart2wasm/lib/types.dart:207 Types._makeInterfaceType" function _make_interface_type(self::Types, code_gen::AstCodeGenerator, type_::Type)::Nothing
+    # dart's InterfaceType is the type of a class, a DataType in Julia (the Kernel row's Type narrowed);
+    # any other type reaching here is WasmTarget's own defect
+    type_ isa DataType || reject!(Internal("dart2wasm/lib/types.dart:207 Types._makeInterfaceType: $type_, no class's type"), "Types._makeInterfaceType")
     local b = code_gen.b[]
     local info = get(self.translator.class_info, type_, nothing)
     info === nothing && reject!(Unquarantined("src/types.jl _makeInterfaceType: the type value $type_ denotes no class of the closed world"), "Types._makeInterfaceType")
@@ -443,8 +446,10 @@ end
 The lower end of the type parameter index range of the binder `type_`, computed with every binder
 nested in it (see `_FunctionTypeParameterOffsetCollector`).
 """
-@parity "dart2wasm/lib/types.dart:413 Types.computeFunctionTypeParameterOffset" function compute_function_type_parameter_offset(self::Types, type_::UnionAll)::Int
-    # a UnionAll binds one parameter, never none
+@parity "dart2wasm/lib/types.dart:413 Types.computeFunctionTypeParameterOffset" function compute_function_type_parameter_offset(self::Types, type_::Type)::Int
+    # dart's generic function type is a binder of its type parameters, a UnionAll in Julia (the Kernel
+    # row's Type narrowed), which binds one parameter, never none; any other type is WasmTarget's defect
+    type_ isa UnionAll || reject!(Internal("dart2wasm/lib/types.dart:413 Types.computeFunctionTypeParameterOffset: $type_, no binder"), "Types.computeFunctionTypeParameterOffset")
     local offset = get(self.function_type_parameter_offset, type_, nothing)
     offset === nothing || return offset
     visit_function_type(_FunctionTypeParameterOffsetCollector(self), type_)
@@ -942,7 +947,9 @@ Visits a binder: its parameter's bounds and its body, as dart's RecursiveVisitor
 type's parts, then its offset, the least that clears every binder nested in it that refers to its
 parameter, and its parameter's index.
 """
-@parity "dart2wasm/lib/types.dart:1495 _FunctionTypeParameterOffsetCollector.visitFunctionType" function visit_function_type(self::_FunctionTypeParameterOffsetCollector, node::UnionAll)::Nothing
+@parity "dart2wasm/lib/types.dart:1495 _FunctionTypeParameterOffsetCollector.visitFunctionType" function visit_function_type(self::_FunctionTypeParameterOffsetCollector, node::Type)::Nothing
+    # a binder, a UnionAll (computeFunctionTypeParameterOffset's narrowing)
+    node isa UnionAll || reject!(Internal("dart2wasm/lib/types.dart:1495 _FunctionTypeParameterOffsetCollector.visitFunctionType: $node, no binder"), "_FunctionTypeParameterOffsetCollector.visitFunctionType")
     local slot = length(self._function_stack)
     push!(self._function_stack, node)
     push!(self._functions_containing_parameters, Base.IdSet{UnionAll}())
