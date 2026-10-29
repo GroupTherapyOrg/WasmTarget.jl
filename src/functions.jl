@@ -345,7 +345,9 @@ end
 @parity "dart2wasm/lib/functions.dart:470 _FunctionTypeGenerator" _FunctionTypeGenerator(translator::KernelNodes, synthesize_null_return_value::Bool, synthesize_no_return::Bool)::_FunctionTypeGenerator =
     _FunctionTypeGenerator(Val(:_), translator, synthesize_null_return_value, synthesize_no_return)
 
-@parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" @unported function visit_field(self::_FunctionTypeGenerator, node::ClassField, target::Core.MethodInstance) end
+# a field's implicit getter or setter; Julia's field access is an intrinsic call, never a member
+@parity "dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField" visit_field(self::_FunctionTypeGenerator, node::ClassField, target::Core.MethodInstance)::Union{} =
+    reject!(Internal("dart2wasm/lib/functions.dart:477 _FunctionTypeGenerator.visitField: the function type of $(node.name)'s implicit accessor; Julia reads and writes a field with the getfield and setfield! intrinsics, never an accessor member (the Kernel table's Field row)"), "_FunctionTypeGenerator.visitField")
 
 """
 A method's function type: its parameters' and return's wasm types, after its callee's when the
@@ -359,15 +361,25 @@ callee is a context (a closure's captured struct), dart's receiver of an instanc
                                synthesize_no_return = self.synthesize_no_return)
 end
 
-@parity "dart2wasm/lib/functions.dart:550 _FunctionTypeGenerator.visitConstructor" @unported function visit_constructor(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance) end
+# a Julia constructor is typed as any method (visitProcedure)
+@parity "dart2wasm/lib/functions.dart:550 _FunctionTypeGenerator.visitConstructor" visit_constructor(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance)::Union{} =
+    reject!(Internal("dart2wasm/lib/functions.dart:550 _FunctionTypeGenerator.visitConstructor: a constructor's function types; Julia's constructor is an ordinary method, typed as any member (visitProcedure), its allocation the %new statement, with no allocator, initializer list or separate body (the Kernel table's Constructor row)"), "_FunctionTypeGenerator.visitConstructor")
 
-@parity "dart2wasm/lib/functions.dart:570 _FunctionTypeGenerator._getConstructorAllocatorType" @unported function _get_constructor_allocator_type(self::_FunctionTypeGenerator, node::Core.MethodInstance) end
+# a Julia constructor is typed as any method (visitProcedure)
+@parity "dart2wasm/lib/functions.dart:570 _FunctionTypeGenerator._getConstructorAllocatorType" _get_constructor_allocator_type(self::_FunctionTypeGenerator, node::Core.MethodInstance)::Union{} =
+    reject!(Internal("dart2wasm/lib/functions.dart:570 _FunctionTypeGenerator._getConstructorAllocatorType: a constructor allocator's type; Julia's constructor is an ordinary method, typed as any member (visitProcedure), its allocation the %new statement, with no allocator, initializer list or separate body (the Kernel table's Constructor row)"), "_FunctionTypeGenerator._getConstructorAllocatorType")
 
-@parity "dart2wasm/lib/functions.dart:584 _FunctionTypeGenerator._getInitializerType" @unported function _get_initializer_type(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance) end
+# a Julia constructor is typed as any method (visitProcedure)
+@parity "dart2wasm/lib/functions.dart:584 _FunctionTypeGenerator._getInitializerType" _get_initializer_type(self::_FunctionTypeGenerator, node::Core.MethodInstance, target::Core.MethodInstance)::Union{} =
+    reject!(Internal("dart2wasm/lib/functions.dart:584 _FunctionTypeGenerator._getInitializerType: an initializer list's type; Julia's constructor is an ordinary method, typed as any member (visitProcedure), its allocation the %new statement, with no allocator, initializer list or separate body (the Kernel table's Constructor row)"), "_FunctionTypeGenerator._getInitializerType")
 
-@parity "dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType" @unported function _get_constructor_body_type(self::_FunctionTypeGenerator, node::Core.MethodInstance) end
+# a Julia constructor is typed as any method (visitProcedure)
+@parity "dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType" _get_constructor_body_type(self::_FunctionTypeGenerator, node::Core.MethodInstance)::Union{} =
+    reject!(Internal("dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType: a constructor body's type; Julia's constructor is an ordinary method, typed as any member (visitProcedure), its allocation the %new statement, with no allocator, initializer list or separate body (the Kernel table's Constructor row)"), "_FunctionTypeGenerator._getConstructorBodyType")
 
-@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" @unported function _get_constructor_input_types(translator::Translator, member::Core.MethodInstance, type_parameters::Vector{TypeVar}, parameters::Vector{NirArgument}, translate_type::Function; is_body_parameter::Bool = false) end
+# a Julia constructor's inputs are any method's (_getInputTypes)
+@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" _get_constructor_input_types(translator::Translator, member::Core.MethodInstance, type_parameters::Vector{TypeVar}, parameters::Vector{NirArgument}, translate_type::Function; is_body_parameter::Bool = false)::Union{} =
+    reject!(Internal("dart2wasm/lib/functions.dart:697 _getConstructorInputTypes: a constructor's input types; Julia's constructor is an ordinary method, typed as any member (visitProcedure), its allocation the %new statement, with no allocator, initializer list or separate body (the Kernel table's Constructor row)"), "_getConstructorInputTypes")
 
 # a Julia member has no type parameters (its MethodInstance binds them) and no named parameters; its
 # parameters are the arguments after the callee, each of the type it is specialized on
@@ -441,7 +453,7 @@ end
 # which Julia's trim verifier refuses, so no program WasmTarget compiles reaches this; it rejects,
 # naming what Julia lacks, as wt3-translator ruled
 @parity "dart2wasm/lib/functions.dart:875 makeInvocationCreatorSignature" function make_invocation_creator_signature(translator::Translator, shape::MethodCallShape)::Union{}
-    reject!(Unquarantined("dart2wasm/lib/functions.dart:875 makeInvocationCreatorSignature: an Invocation for $(sprint(show, shape)); Julia has no noSuchMethod, a call with no method being a MethodError the trim verifier refuses"), "make_invocation_creator_signature")
+    reject!(Internal("dart2wasm/lib/functions.dart:875 makeInvocationCreatorSignature: an Invocation for $(sprint(show, shape)); Julia has no noSuchMethod, a call with no method being a MethodError the trim verifier refuses (the Kernel table's DynamicInvocation row)"), "make_invocation_creator_signature")
 end
 
 # an import's or export's types are the external ones (translateExternalType); a member returning

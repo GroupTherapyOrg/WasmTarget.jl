@@ -115,7 +115,17 @@ end
 
     # an Invocation is noSuchMethod's, which Julia lacks: the invocation creator's path rejects
     local e2 = try; W.get_invocation_creator_stub(fc, shape); nothing; catch x; x; end
-    @test e2 isa WT.RejectionError && e2.rejection isa WT.Unquarantined && occursin("noSuchMethod", e2.rejection.row)
+    @test e2 isa WT.RejectionError && e2.rejection isa WT.Internal && occursin("noSuchMethod", e2.rejection.site) && occursin("DynamicInvocation row", e2.rejection.site)
+
+    # a constructor and a field accessor are no members of a Julia program: their types reject,
+    # Internal, naming their Kernel rows
+    local ftg = W._FunctionTypeGenerator(t, false, false)
+    for (f, row) in ((() -> W.visit_constructor(ftg, mi, mi), "Constructor row"), (() -> W._get_constructor_allocator_type(ftg, mi), "Constructor row"),
+                     (() -> W._get_initializer_type(ftg, mi, mi), "Constructor row"), (() -> W._get_constructor_body_type(ftg, mi), "Constructor row"),
+                     (() -> W.visit_field(ftg, WT.ClassField(Int, 1, "x", Int, false), mi), "Field row"))
+        local r = try; f(); nothing; catch x; x; end
+        @test r isa WT.RejectionError && r.rejection isa WT.Internal && occursin(row, r.rejection.site)
+    end
 end
 
 module Callables
