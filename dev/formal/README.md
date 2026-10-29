@@ -41,7 +41,7 @@ anchor in `src/` has a row.)
 | Closed world and its NIR | `check_subset`'s ccallable round, `_reached_ccallables` (subset.jl: Julia's trim inference answers the rest), `build_nir` (a record no body, a repeat asserted, one body per CodeInstance), `nir_code`, `_nir_stmt` (each statement at its position, a form outside the census rejected) (nir.jl) | NirHandoff |
 | Closure layout | `register_closure_type!` (structs.jl), `build_closure_vtable!` (closures.jl) | ClosureLayout |
 | Coercion funnel | `convert_type!` (the one widening check, read through `source_class`; `nothing` at every nullable reference of the any hierarchy its null, and never unboxed or cast), `_narrow_ref!`'s runtime-length tuple arm (values.jl) | Coercion |
-| Constant interning | `ensure_constant_global!` (types.jl) | Constants |
+| Constants: interning, eagerness and definition order | `ensure_constant` (ConstantCreator: one info per `===` constant, children first, a constant reaching itself rejected), `create_constant`, `_define_constant_in_module_recursive`, `_define_constant_in_module` (constants.jl) | Constants |
 | Call consult chain | `compile_call!` (calls.jl) | ConsultChain |
 | Fatal/trap resolution | `record_unsupported!` (diagnostics.jl) | Diagnostics |
 | Class ids and their ranges | `ClassIdNumbering__number`, `_get_transitive_implementors`, `get_concrete_class_id_range`, `normalize` (class_info.jl), `class_implemented_types` (classes.jl: Julia's covariant Tuples, dart's implementors) | ClassIdNumbering |

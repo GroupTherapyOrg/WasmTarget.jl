@@ -1,15 +1,11 @@
------------------------- MODULE MCConstants -------------------------------
-(* Model-checked instance: N=3 occurrences, 2 equality classes -- exhaustive *)
-(* over the whole supported class (by pigeonhole, every reachable Init state *)
-(* already has at least one forced eqclass collision among the 3            *)
-(* occurrences, so canonicalization/non-aliasing are exercised in EVERY      *)
-(* trace, not just some). `child[v] \in {0} \cup 1..(v-1)` lets a chain run  *)
-(* v3 -> v2 -> v1, so eagerness monotonicity is checked transitively         *)
-(* (grandchild spoils grandparent), not just one hop. All four bug flags are *)
-(* FALSE here -- the real, unmodified funnel. *)
+----------------------------- MODULE MCConstants -------------------------------
+(* The program's constants (src/constants.jl ensureConstant, createConstant,   *)
+(* _defineConstantInModuleRecursive) over a universe of a value, a string,    *)
+(* immutables egal and not, isequal tuples of two classes, a forced-lazy      *)
+(* constant and its holder, two mutable cells of equal contents and a cell    *)
+(* holding itself, for every program of one or two uses. Claims:              *)
+(* SharesOnlyEgal, ChildrenFirst, EagerChildrenEager, OperandsTyped,          *)
+(* CyclesReject. Broken: MCConstants{KeyIsequal,ParentFirst,                  *)
+(* IgnoreChildLaziness,OwnType,NoCycleCheck}Broken.cfg, each its claim.       *)
 EXTENDS Constants
-
-MCEqIds == {"e1", "e2"}
-MCTypes == {"t1", "t2"}
-
 =============================================================================

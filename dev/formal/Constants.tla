@@ -1,434 +1,168 @@
--------------------------- MODULE Constants --------------------------------
+----------------------------- MODULE Constants -------------------------------
 (***************************************************************************)
-(* A TLA+ model of WasmTarget's constant interning: the funnel that decides *)
-(* whether a compile-time constant gets ONE deduplicated Wasm global (an    *)
-(* "eager", constant-expression `global` whose initializer is itself a      *)
-(* constant expression) or a fresh per-occurrence allocation. Two source    *)
-(* sites, both cited by line:                                               *)
-(*   - `ensure_constant_global!` / `_const_init!`                           *)
-(*     (src/codegen/types.jl:221-322) -- THE funnel and its recursive       *)
-(*     eager-internability test.                                            *)
-(*   - the constant-MATERIALIZATION cascade in `compile_value`              *)
-(*     (src/codegen/values.jl) -- every branch that either calls the        *)
-(*     funnel first (immutable kinds) or unconditionally fresh-constructs   *)
-(*     (the mutable kinds).                                                 *)
-(*                                                                          *)
-(* WHAT THE REAL ALGORITHM DOES.                                            *)
-(*   (1) THE MAP. `registry.constant_globals::IdDict{Any,UInt32}` is keyed *)
-(*       by the constant under `===` (Julia's egal: the same type and egal  *)
-(*       fields, a float by its bits): `ensure_constant_global!` does       *)
-(*       `haskey(constant_globals, val) && return constant_globals[val]`    *)
-(*       BEFORE building anything -- two value objects that are egal share  *)
-(*       ONE global, exactly like dart2wasm's `Map<Constant, ConstantInfo>  *)
-(*       constantInfo` (constants.dart:154) keyed by `Constant`'s own       *)
-(*       equality (an InstanceConstant equals another of the SAME class,    *)
-(*       type arguments and field constants; an IntConstant never equals a  *)
-(*       DoubleConstant). `isequal` is NOT that key: `isequal((0x01,),(1,))`*)
-(*       and `isequal(1, 1.0)` hold across types, and a map keyed by it     *)
-(*       handed a `Tuple{UInt8}` site the `Tuple{Int64}` global (Random's    *)
-(*       hash_seed trapped on the cast; a same-layout pair such as          *)
-(*       `(true,)`/`(0x01,)` would pass the cast and carry the wrong type). *)
-(*       `define_global!` (src/builder/instr_builder.jl)                    *)
-(*       assigns the number: `push!(mod.globals, ...); return length(mod.  *)
-(*       globals) - 1` -- a plain APPEND, so the number is a pure function  *)
-(*       of CALL ORDER (how many prior calls actually pushed a NEW entry),  *)
-(*       never of the Dict's own hash-bucket layout.                       *)
-(*   (2) EAGERNESS IS RECURSIVE AND MONOTONE. `_const_init!`                *)
-(*       (types.jl:235-322) either returns a struct/array type idx (eager)  *)
-(*       or `nothing` (decline), and DECLINES for: a value that is not an   *)
-(*       immutable concrete struct/tuple (`!ismutabletype(T)` gate,         *)
-(*       types.jl:254 -- mutable kinds NEVER reach this map); a layout      *)
-(*       mismatch (types.jl:263-267); or -- the recursive case -- ANY field *)
-(*       that is itself `isdefined` but whose OWN recursive                 *)
-(*       `_const_init!` call declines (types.jl, "nested                    *)
-(*       immutable struct constant: recurse"). One declining field aborts   *)
-(*       the WHOLE constant-expression build (`=== nothing && return        *)
-(*       nothing`) -- there is no half-built global. Int128/UInt128         *)
-(*       (types.jl:237-253) are the one primitive (non-struct) eager kind,  *)
-(*       matching dart's boxed-numeric globals (constants.dart:622-655)     *)
-(*       even though dart's OWN `IntConstant`/`DoubleConstant` need no      *)
-(*       unique box at all (constants.dart:793-798, "value types do not     *)
-(*       have identity"). dart2wasm's own `createConstant`                  *)
-(*       (constants.dart:820-840) states the identical monotone rule in one *)
-(*       line: `canBeEager = canBeEager && childConstants.every((c) =>      *)
-(*       c.canBeEager);` (line 830) -- WT's recursive decline is the same   *)
-(*       AND-over-children fixpoint, read from Julia's `isdefined`/field-    *)
-(*       type machinery instead of dart's pre-canonicalized Kernel Constant *)
-(*       tree.                                                             *)
-(*   (3) NO FABRICATION. types.jl:270-271 and :291 both do `isdefined(val,  *)
-(*       k) ? getfield(val, k) : ... return nothing` -- an undefined field   *)
-(*       NEVER becomes bytes in a constant expression; it just declines     *)
-(*       eagerness (silently, not an error). The FALLBACK inline path       *)
-(*       (values.jl, the general-struct branch reached once the funnel      *)
-(*       declines) re-checks the SAME fact at line 1769 and this time       *)
-(*       REJECTS out loud (`record_unsupported!(...; soundness_fatal=       *)
-(*       true)`) UNLESS the value is `Core.Box` with exactly its            *)
-(*       `:contents` field undefined (values.jl:1755-1768) -- WT's captured-*)
-(*       variable cell for an as-yet-unassigned closure variable, whose     *)
-(*       PHYSICAL sentinel (`ref.null AnyRef`) is the one documented        *)
-(*       allowed exception; a Dict constant's unoccupied hash-bucket slot   *)
-(*       (`compile_memory_elements!`, values.jl:1578-1607) is the OTHER     *)
-(*       one -- `dict_slots[i] & 0x80 == 0` emits the destination Wasm      *)
-(*       type's own physical zero/null (values.jl:1590-1604), and rejects   *)
-(*       only if even THAT has no safe physical default (values.jl:1603).   *)
-(*       A `Memory`/`MemoryRef` constant's unassigned slot has no such      *)
-(*       exception at all: `isassigned(mem,i) || record_unsupported!(...)`  *)
-(*       (values.jl:1708-1711) always rejects. Dart has no anchor for this  *)
-(*       claim: Dart's Kernel constant evaluator only ever produces a fully *)
-(*       -evaluated `Constant` AST node, so "an undefined constant field"   *)
-(*       is not a shape `ensureConstant` can ever see -- this is a          *)
-(*       Julia-only extension of the funnel, arising from Julia's           *)
-(*       `isdefined`/`UndefRefError` runtime semantics.                    *)
-(*   (4) THE MUTABLE-IDENTITY FLOOR. `Vector`/`Dict`/`Memory`/`Core.Box`     *)
-(*       constants (values.jl's `typeof(val) <: Dict`/`<: Vector`/          *)
-(*       MemoryRef-family/general-struct-Box-case branches) NEVER call the  *)
-(*       funnel for THEMSELVES -- each occurrence is an unconditional fresh *)
-(*       `struct.new`/`array.new_fixed`, because per-object identity is     *)
-(*       observable through `===` and mutation and Julia's mutable types    *)
-(*       have no immutable-literal form to canonicalize. This is the exact  *)
-(*       mirror of dart's OWN split: `visitListConstant`/`visitMapConstant` *)
-(*       (constants.dart:1128/1152) canonicalize ONLY Dart's                *)
-(*       `immutableListClass`/`immutableMapClass` -- i.e. a genuine `const` *)
-(*       literal -- by rewriting it into an ordinary `InstanceConstant` and *)
-(*       routing it through the SAME `ensureConstant` map (constants.dart:  *)
-(*       1148/1189+); Julia's `Vector`/`Dict` have no such immutable-literal *)
-(*       form, so every occurrence takes dart's OTHER, ordinary            *)
-(*       runtime-instantiation shape instead (fresh, never canonicalized).  *)
-(*       A NESTED immutable sub-value of a mutable constant is NOT floored  *)
-(*       by this: a constant `Vector{T}`'s size tuple `(Int64(length        *)
-(*       (val)),)` is a bare immutable `Tuple{Int64}` and goes through the  *)
-(*       funnel exactly like any other tuple constant (values.jl:1685-      *)
-(*       1687) -- every constant Vector of one length shares ONE size-      *)
-(*       tuple global, matching dart's "sub-constants intern regardless of  *)
-(*       the composite's own eagerness" (constants.dart:938-959, cited      *)
-(*       in-source at that call site).                                     *)
-(*                                                                          *)
-(* OUT OF SCOPE, AND WHY. `String`/`Symbol`/`Type`/`Core.TypeName`/`Module`  *)
-(* constants each own a SEPARATE dedicated dict (`string_constant_globals`, *)
-(* `type_constant_globals`, `typename_constant_globals`, and the Module     *)
-(* case sharing `constant_globals` itself, types.jl:99-108) -- structurally *)
-(* the identical "one map, keyed by value, one global per distinct value"   *)
-(* funnel this model already covers; a second copy of the same mechanism    *)
-(* teaches TLC nothing new. `GlobalRef`'s `mutable_constant_globals`        *)
-(* (types.jl:103, consulted at values.jl:1351-1374) is a GENUINELY          *)
-(* different mechanism and is deliberately NOT modeled: it is keyed by      *)
-(* OBJECT IDENTITY (`IdDict`) and exists to alias a `GlobalRef` to a real,  *)
-(* already-shared Julia module BINDING back to the same Wasm global on      *)
-(* every reference -- correct aliasing of one true mutable object, not      *)
-(* materialization of a constant-propagated LITERAL value, so it is exempt  *)
-(* from (and does not test) the mutable-identity floor at all.              *)
-(*                                                                          *)
-(* WHAT THIS MODEL ABSTRACTS, AND WHY THAT IS SUFFICIENT.                   *)
-(*  - A "constant occurrence" is an opaque index 1..N processed in the      *)
-(*    order the compiler actually encounters it (program order); this is   *)
-(*    the only order-sensitive input to (1)'s numbering claim.             *)
-(*  - Structural nesting (a struct constant's fields) is collapsed to ONE   *)
-(*    optional `child` pointer per occurrence rather than a full field      *)
-(*    list: the claim under test is the AND-over-children FIXPOINT          *)
-(*    (monotone: one bad field spoils the whole value), which is            *)
-(*    associative/commutative over however many fields the real source has *)
-(*    -- a single modeled child, chained to arbitrary depth (`child[v] \in  *)
-(*    1..(v-1)`, so a chain can run the full length of the occurrence       *)
-(*    list), already forces TLC through both the "spoils" and "does not     *)
-(*    spoil" transitions at every depth; a second, independent sibling      *)
-(*    field would only re-run the identical AND, not exercise new state.    *)
-(*  - `fstat` (Def / UndefReject / UndefSentinel) collapses "which of       *)
-(*    general-struct-field / Memory-element / Dict-bucket-element this is"  *)
-(*    into the one fact each of those cases actually reduces to for this    *)
-(*    claim: does an unresolvable slot on this value REJECT (no safe        *)
-(*    physical default -- general struct fields, Memory elements) or        *)
-(*    proceed via a SENTINEL (Core.Box's contents field, a nullable/        *)
-(*    numeric Dict bucket)? `fstat` is left INDEPENDENT of `kind` on        *)
-(*    purpose (not restricted to kind="Mut"): the real UndefSentinel shapes *)
-(*    arise from two structurally different code paths (a struct FIELD     *)
-(*    vs. a Memory ARRAY ELEMENT) that this model does not otherwise        *)
-(*    distinguish, per MODEL_RULES.md's "if the source's decision procedure *)
-(*    has a case you cannot map, say so" -- forcing a kind correlation      *)
-(*    here would encode a distinction the claim does not depend on.         *)
-(*  - `eqclass` is an unconstrained per-occurrence label standing in for    *)
-(*    Julia's `isequal` (the value, across types), and `ty` for the         *)
-(*    constant's type: two occurrences are egal exactly when both agree.    *)
-(*    TLC is not asked to reprove that Julia's equality is itself correct,  *)
-(*    only that the FUNNEL'S reaction to two occurrences sharing (or not    *)
-(*    sharing) a class is right -- exactly like Stackifier.tla leaving      *)
-(*    `target`/`phifree` free within their supported class rather than     *)
-(*    deriving them from a real CFG.                                        *)
-(*  - Five historical-shaped bug classes are wired in as CONSTANT flags,    *)
-(*    each isolating exactly one of the claims below; only one is ever      *)
-(*    TRUE in a given run (the real algorithm is all five FALSE):           *)
-(*      KeyByIsequal -- claim (1c): the map is keyed by `isequal`/`hash`    *)
-(*        (a `Dict{Any}`), so constants of two types that are `isequal`     *)
-(*        share the first one's global -- the bug Random's hash_seed hit.   *)
-(*      InternMutableKind   -- claim (1): the funnel's `!ismutabletype(T)`  *)
-(*        gate (types.jl:254) is dropped, so a `kind="Mut"` occurrence      *)
-(*        becomes eager-eligible like any struct -- the shape of "someone   *)
-(*        adds Vector/Dict to the general struct branch's `isstructtype`    *)
-(*        check without excluding mutability."                             *)
-(*      SkipChildEagerCheck -- claim (2): the recursive "AND every field's  *)
-(*        own `_const_init!`" (types.jl) is skipped, so a value's           *)
-(*        eagerness is decided from its OWN fields only -- the shape of     *)
-(*        forgetting to propagate a nested `=== nothing` decline upward.    *)
-(*      FabricateUndefFields -- claim (3): the `isdefined(...) || return    *)
-(*        nothing` / `record_unsupported!` checks (types.jl:270-271/291,    *)
-(*        values.jl:1769) are skipped, so an UndefReject value is silently  *)
-(*        treated as though it were fully defined -- the shape of loosening *)
-(*        `isdefined(val,k) ? getfield(val,k) : nothing` into a defaulted   *)
-(*        value instead of bailing.                                        *)
-(*      HashOrderNumbering -- claim (4): `define_global!`'s append-and-     *)
-(*        return-next-index (instructions.jl:709) is replaced by drawing    *)
-(*        the new class's slot from whatever is left over in NO particular  *)
-(*        order -- the shape of re-deriving global numbering by walking a   *)
-(*        `Dict` in hash-bucket order (the L112 bug class, test/            *)
-(*        parity_ratchet.jl:1426, lifted from `registry.structs` to         *)
-(*        `registry.constant_globals`) instead of by discovery/call order.  *)
-(*                                                                          *)
-(* Like Stackifier.tla, every action below is atomic and single-threaded    *)
-(* (`ensure_constant_global!` has no concurrency to interleave); TLC's      *)
-(* exploration is over the INITIAL CHOICE of the occurrence class (kind /   *)
-(* fstat / child / eqclass / ty, chosen once in Init) and, only under       *)
-(* HashOrderNumbering, over which leftover slot a new class draws.          *)
-(*                                                                          *)
-(* formal(dev/formal/Constants.tla): two egal immutable constants intern    *)
-(* to exactly one global, constants that are not egal never share one, and  *)
-(* a mutable-kind constant never shares one; a constant's eagerness is the AND of its children's, so a    *)
-(* non-eager child always yields a fresh construction, never a partially-   *)
-(* interned global; an unresolvable field either rejects compilation or     *)
-(* takes its type's physical default, never a fabricated Julia value; and   *)
-(* global numbering is a deterministic function of interning (discovery)    *)
-(* order.                                                                   *)
+(* A TLA+ model of the program's constants (src/constants.jl), dart's        *)
+(* constants.dart over Julia's values:                                       *)
+(*   ConstantCreator.ensureConstant (:793): a value type (an integer, a     *)
+(*     float) gets no info, materialized where it is read; any other        *)
+(*     constant's info is looked up by the constant (constantInfo, keyed by  *)
+(*     Julia's === through NirConst's hash and ==), else made: its fields'   *)
+(*     sub-constants first, each ensured, then createConstant (:820), which *)
+(*     can be eager only when every child can (canBeEager).                  *)
+(*   _ConstantAccessor._defineConstantInModuleRecursive (:1978) and         *)
+(*     _defineConstantInModule (:2016): the children defined first, then    *)
+(*     the constant, lazy when it cannot be eager or a child is lazy, else  *)
+(*     an immutable global whose initializer builds it (struct.new over its  *)
+(*     fields, each sub-constant instantiated at the field's type,          *)
+(*     visitInstanceConstant and visitRecordConstant's generator).           *)
+(*                                                                           *)
+(* JULIA'S DIFFERENCES, MODELLED. Julia's === keys the map: two immutables   *)
+(* of one type with egal fields share an info; isequal is no key ((0x01,)    *)
+(* and (1,) are isequal, of two classes). A mutable constant is keyed by its *)
+(* identity, so two cells with equal contents are two constants. And a      *)
+(* mutable constant can reach itself through its fields, which dart's        *)
+(* immutable constant DAG never does: ensureConstant rejects it, located    *)
+(* (Unquarantined), as the cycle no constant expression builds, where an     *)
+(* unchecked recursion never ends (it overflowed Julia's stack, 2026-10-29). *)
+(*                                                                           *)
+(* ABSTRACTION. A universe of constants: an integer (a value type), a       *)
+(* string, immutable structs (P of an Int, Pcopy egal to P, Q whose field of *)
+(* type Any holds an Int, R holding P), two tuples isequal and not egal, a   *)
+(* constant its forceLazy makes lazy where it is defined (Big, an array too   *)
+(* large to be eager) and a struct holding it, two *)
+(* mutable cells of equal contents and a cell holding itself. Init picks     *)
+(* every program of one or two uses; each use ensures its constant and, if   *)
+(* ensured, defines it (global indices in definition order).                 *)
+(*                                                                           *)
+(* This replaces WT1's Constants (ensure_constant_global!, src/codegen/      *)
+(* types.jl, gone), whose mutable constants were never interned.             *)
+(*                                                                           *)
+(* Claims:                                                                   *)
+(*   SharesOnlyEgal     two used constants share an info exactly when egal   *)
+(*   ChildrenFirst      an eager global's children are defined before it    *)
+(*   EagerChildrenEager an eager global's children are eager                 *)
+(*   OperandsTyped      each operand of an eager initializer fits its field *)
+(*                      (a value in a reference field boxed)                 *)
+(*   CyclesReject       a constant reaching itself rejects, located; no use *)
+(*                      recurses past the universe's size                    *)
+(* Broken variants: KeyIsequal (SharesOnlyEgal), ParentFirst (ChildrenFirst),*)
+(* IgnoreChildLaziness (EagerChildrenEager), OwnType (a sub-constant at its  *)
+(* own type, the 45-case InvalidModule of 2026-10-28: OperandsTyped),        *)
+(* NoCycleCheck (CyclesReject).                                              *)
 (***************************************************************************)
-EXTENDS Naturals, FiniteSets
+EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS
-    N,                      \* number of constant occurrences, processed in program order 1..N
-    EqIds,                  \* finite universe of isequal classes (the value, across types)
-    Types,                  \* finite universe of constant types; egal = same type and same class
-    KeyByIsequal,           \* BOOLEAN: TRUE = key the map by isequal, not egal (claim 1c bug)
-    InternMutableKind,      \* BOOLEAN: TRUE = drop the "!ismutabletype" gate (claim 1 bug)
-    SkipChildEagerCheck,    \* BOOLEAN: TRUE = decide eagerness from self only, ignore children (claim 2 bug)
-    FabricateUndefFields,   \* BOOLEAN: TRUE = treat an UndefReject field as though defined (claim 3 bug)
-    HashOrderNumbering      \* BOOLEAN: TRUE = assign new global ids out of discovery order (claim 4 bug)
+CONSTANTS KeyIsequal, ParentFirst, IgnoreChildLaziness, OwnType, NoCycleCheck
 
-ASSUME N \in Nat /\ N >= 1
-ASSUME IsFiniteSet(EqIds) /\ EqIds # {}
-ASSUME IsFiniteSet(Types) /\ Types # {}
-ASSUME KeyByIsequal \in BOOLEAN
-ASSUME InternMutableKind \in BOOLEAN
-ASSUME SkipChildEagerCheck \in BOOLEAN
-ASSUME FabricateUndefFields \in BOOLEAN
-ASSUME HashOrderNumbering \in BOOLEAN
+\* the universe: each constant's class, mutability, fields (each a sub-constant and the field's kind)
+Consts == {"I1", "S", "P", "Pcopy", "Q", "R", "T8", "T64", "Big", "HoldsBig", "M1", "M2", "Mself"}
+ValueTypes == {"I1"}
+Mutable == {"M1", "M2", "Mself"}
+Class(c) == CASE c \in {"P", "Pcopy"} -> "P"
+              [] c = "T8" -> "Tuple{UInt8}"
+              [] c = "T64" -> "Tuple{Int64}"
+              [] c \in {"M1", "M2", "Mself"} -> "Cell"
+              [] OTHER -> c
+\* a field: its sub-constant and the wasm kind of its declared type ("i64" a value, "ref" a reference)
+F(sub, kind) == [sub |-> sub, kind |-> kind]
+Fields(c) == CASE c \in {"P", "Pcopy"} -> <<F("I1", "i64")>>
+               [] c = "Q" -> <<F("I1", "ref")>>          \* a field of type Any holding an Int
+               [] c = "R" -> <<F("P", "ref")>>
+               [] c = "T8" -> <<F("I1", "i64")>>
+               [] c = "T64" -> <<F("I1", "i64")>>
+               [] c = "HoldsBig" -> <<F("Big", "ref")>>
+               [] c \in {"M1", "M2"} -> <<F("S", "ref")>>
+               [] c = "Mself" -> <<F("Mself", "ref")>>
+               [] OTHER -> << >>
+\* the constant's own forceLazy, asked where it is defined (_defineConstantInModule :2060)
+ForceLazy(c) == c = "Big"
+\* Julia's ===: a value or an immutable by its class and its fields' ===; a mutable by identity
+RECURSIVE Egal(_, _)
+Egal(x, y) == IF x \in Mutable \/ y \in Mutable THEN x = y
+              ELSE Class(x) = Class(y) /\ Len(Fields(x)) = Len(Fields(y)) /\
+                   \A i \in 1..Len(Fields(x)) : Egal(Fields(x)[i].sub, Fields(y)[i].sub)
+\* isequal: across classes for these tuples (KeyIsequal's key)
+IsEq(x, y) == Egal(x, y) \/ ({x, y} = {"T8", "T64"})
+Key(x, y) == IF KeyIsequal THEN IsEq(x, y) ELSE Egal(x, y)
 
-Occurrences == 1..N
-Kinds == {"Imm", "Mut"}
-FStats == {"Def", "UndefReject", "UndefSentinel"}
+Range(s) == {s[i] : i \in 1..Len(s)}
+Uses == {<<c>> : c \in Consts} \cup {<<c, d>> : c, d \in Consts}
+Fuel == Cardinality(Consts) + 1
 
-\* the map's key: Julia's egal (the type and the value); the broken variant drops the type
-Keys == Types \X EqIds
-AnyType == CHOOSE t \in Types : TRUE
-MaxClasses == Cardinality(Keys)
-AvailableIds == {n \in 0..(MaxClasses - 1) : TRUE}
-\* Every element of GlobalVal is uniformly a 2-tuple, tagged by shape: TLC's
-\* SetEnum \cup normalizes by comparing elements pairwise, and a raw Nat has
-\* no defined comparison against a raw tuple (it throws mid-union) -- so a
-\* table-assigned global id is wrapped exactly like a fresh one, never left
-\* as a bare Nat next to <<"Fresh", v>> in the same set.
-TableVals == {<<"Table", n>> : n \in AvailableIds}
-FreshVals == {<<"Fresh", v>> : v \in Occurrences}
-GlobalVal == TableVals \cup FreshVals \cup {<<"Unprocessed", 0>>}
+VARIABLES program, st
+vars == <<program, st>>
 
-VARIABLES
-    kind,       \* [Occurrences -> Kinds] -- "Imm" (struct/tuple/Int128 shape) or "Mut" (Vector/Dict/Memory/Box shape)
-    fstat,      \* [Occurrences -> FStats] -- this occurrence's OWN field-definedness fact
-    child,      \* [Occurrences -> {0} \cup Occurrences] -- one nested constant-expressible field, or none
-    eqclass,    \* [Occurrences -> EqIds] -- isequal class (the value, across types)
-    ty,         \* [Occurrences -> Types] -- the constant's type
-    cur,        \* the occurrence currently being (or about to be) processed
-    pc,         \* "Run" | "Done" | "Reject"
-    globalOf,   \* [Occurrences -> GlobalVal] -- this occurrence's compiled outcome
-    \* registry.constant_globals, keyed by class, split into two HOMOGENEOUS
-    \* maps rather than one Nat-or-"NoGlobal" sum type: TLC's SetEnum \cup
-    \* normalizes by comparing elements pairwise, and neither a raw Nat vs. a
-    \* raw String nor a raw Nat vs. a tuple has a defined comparison (both
-    \* throw mid-union) -- so "no global yet" is BOOLEAN, never a sentinel
-    \* sharing a set with the Nat ids.
-    classAssigned,  \* [Keys -> BOOLEAN] -- has this key been given a global yet?
-    classId         \* [Keys -> AvailableIds] -- meaningful only where classAssigned[k]
+\* the state: infos (each an id; info[c] the id the constant maps to), each info's constant and
+\* children, canBeEager; definitions (each info's global index and laziness); the outcome
+Empty == [info |-> [c \in Consts |-> 0], ofInfo |-> << >>, eager |-> << >>, children |-> << >>,
+          def |-> << >>, lazy |-> << >>, nextGlobal |-> 1, outcome |-> "ok", operands |-> {}]
 
-vars == <<kind, fstat, child, eqclass, ty, cur, pc, globalOf, classAssigned, classId>>
+\* the info a constant already has: one made for a constant its key equates with it
+Found(s, c) == {i \in 1..Len(s.ofInfo) : Key(s.ofInfo[i], c)}
 
-\* ground truth: two constants are egal when they have one type and one value
-Egal(v) == <<ty[v], eqclass[v]>>
-\* the key the (possibly bugged) map uses
-KeyAlgo(v) == IF KeyByIsequal THEN <<AnyType, eqclass[v]>> ELSE Egal(v)
+\* ensureConstant: a value type none; a known constant its info; else the children first (each
+\* ensured), then the info, eager when it can be and every child can; `visiting` the constants on the
+\* way down, a constant met again on it a cycle
+RECURSIVE Ensure(_, _, _, _)
+RECURSIVE EnsureAll(_, _, _, _)
+Ensure(s, c, visiting, fuel) ==
+    IF s.outcome # "ok" \/ c \in ValueTypes THEN s
+    ELSE IF Found(s, c) # {} THEN [s EXCEPT !.info[c] = CHOOSE i \in Found(s, c) : TRUE]
+    ELSE IF ~NoCycleCheck /\ c \in visiting THEN [s EXCEPT !.outcome = "rejected"]
+    ELSE IF fuel = 0 THEN [s EXCEPT !.outcome = "overflow"]
+    ELSE LET kids == [i \in 1..Len(Fields(c)) |-> Fields(c)[i].sub]
+             s1 == EnsureAll(s, kids, visiting \cup {c}, fuel - 1)
+         IN IF s1.outcome # "ok" THEN s1
+            ELSE IF Found(s1, c) # {} THEN [s1 EXCEPT !.info[c] = CHOOSE i \in Found(s1, c) : TRUE]
+            ELSE LET id == Len(s1.ofInfo) + 1
+                     ch == {s1.info[k] : k \in {x \in Range(kids) : x \notin ValueTypes}}
+                     eager == \A k \in ch : s1.eager[k]
+                 IN [s1 EXCEPT !.info[c] = id, !.ofInfo = Append(@, c), !.eager = Append(@, eager),
+                               !.children = Append(@, ch), !.def = Append(@, 0), !.lazy = Append(@, FALSE)]
+EnsureAll(s, kids, visiting, fuel) ==
+    IF kids = << >> THEN s ELSE EnsureAll(Ensure(s, Head(kids), visiting, fuel), Tail(kids), visiting, fuel)
 
-----------------------------------------------------------------------------
-(* Ground truth: what the REAL (unbugged) algorithm decides. Every claim    *)
-(* below is checked against THESE, never against the (possibly patched)     *)
-(* Algo-prefixed versions Next actually runs -- exactly Stackifier's        *)
-(* physical/symbolic split (WellScopedBr checked against `physstack`, not   *)
-(* the algorithm's own `labelstack` belief).                                *)
+\* the operands an eager initializer pushes for c's fields: each sub-constant instantiated at the
+\* field's kind (a value boxed into a reference field), or, OwnType, at its own kind
+Operand(f) == IF f.sub \in ValueTypes THEN (IF OwnType THEN "i64" ELSE f.kind) ELSE "ref"
 
-RECURSIVE Eager(_)
-Eager(v) == /\ kind[v] = "Imm"
-            /\ fstat[v] = "Def"
-            /\ (child[v] = 0 \/ Eager(child[v]))
+\* _defineConstantInModuleRecursive: the children first (ParentFirst: the constant first), then the
+\* constant, lazy when it cannot be eager or (IgnoreChildLaziness aside) a child is lazy
+RECURSIVE Define(_, _, _)
+RECURSIVE DefineSet(_, _, _)
+DefineOne(s, i) ==
+    LET c == s.ofInfo[i]
+        lazy == ~s.eager[i] \/ (~IgnoreChildLaziness /\ \E k \in s.children[i] : s.lazy[k]) \/ ForceLazy(c)
+        ops == IF lazy THEN {} ELSE {<<c, j, Operand(Fields(c)[j]), Fields(c)[j].kind>> : j \in 1..Len(Fields(c))}
+    IN [s EXCEPT !.def[i] = s.nextGlobal, !.lazy[i] = lazy, !.nextGlobal = @ + 1, !.operands = @ \cup ops]
+Define(s, i, fuel) ==
+    IF s.def[i] # 0 \/ fuel = 0 THEN s
+    ELSE IF ParentFirst THEN DefineSet(DefineOne(s, i), s.children[i], fuel - 1)
+    ELSE DefineOne(DefineSet(s, s.children[i], fuel - 1), i)
+DefineSet(s, ks, fuel) == IF ks = {} THEN s
+                          ELSE LET k == CHOOSE x \in ks : \A y \in ks : x <= y
+                               IN DefineSet(Define(s, k, fuel), ks \ {k}, fuel)
 
-RECURSIVE HasUndef(_)
-HasUndef(v) == \/ fstat[v] = "UndefReject"
-               \/ (child[v] # 0 /\ HasUndef(child[v]))
+\* one use: ensured, then defined when it has an info
+Use(s, c) == LET s1 == Ensure(s, c, {}, Fuel) IN
+             IF s1.outcome # "ok" \/ c \in ValueTypes THEN s1 ELSE Define(s1, s1.info[c], Fuel)
+RECURSIVE Run(_, _)
+Run(s, us) == IF us = << >> THEN s ELSE Run(Use(s, Head(us)), Tail(us))
 
-----------------------------------------------------------------------------
-(* What the (possibly bugged) algorithm actually computes and acts on.      *)
-
-RECURSIVE EagerAlgo(_)
-EagerAlgo(v) == /\ (InternMutableKind \/ kind[v] = "Imm")
-                /\ (fstat[v] = "Def" \/ (FabricateUndefFields /\ fstat[v] = "UndefReject"))
-                /\ (SkipChildEagerCheck \/ child[v] = 0 \/ EagerAlgo(child[v]))
-
-RECURSIVE HasUndefAlgo(_)
-HasUndefAlgo(v) == /\ ~FabricateUndefFields
-                   /\ \/ fstat[v] = "UndefReject"
-                      \/ (child[v] # 0 /\ HasUndefAlgo(child[v]))
-
-----------------------------------------------------------------------------
-(* Init: choose one occurrence class (kind/fstat/child/eqclass), unconstrained *)
-(* within it -- this existential is what TLC "enumerates" (Stackifier's same  *)
-(* framing). `child[v]` ranges over strictly smaller indices so Eager/HasUndef *)
-(* are well-founded and a chain can run the whole occurrence list.            *)
-
-Init ==
-    /\ kind \in [Occurrences -> Kinds]
-    /\ fstat \in [Occurrences -> FStats]
-    /\ child \in {f \in [Occurrences -> {0} \cup Occurrences] :
-                    \A v \in Occurrences : f[v] \in ({0} \cup 1..(v - 1))}
-    /\ eqclass \in [Occurrences -> EqIds]
-    /\ ty \in [Occurrences -> Types]
-    /\ cur = 1
-    /\ pc = "Run"
-    /\ globalOf = [v \in Occurrences |-> <<"Unprocessed", 0>>]
-    /\ classAssigned = [k \in Keys |-> FALSE]
-    /\ classId = [k \in Keys |-> 0]
-
-----------------------------------------------------------------------------
-(* Next: process one occurrence per atomic step, in strict program order --  *)
-(* mirrors that `ensure_constant_global!`/`compile_value` runs straight-line, *)
-(* single-threaded, once per constant as the compiler encounters it. A       *)
-(* rejected compile halts everything (matches `soundness_fatal=true`         *)
-(* aborting the whole codegen run, never just skipping the one constant).    *)
-
-ProcessOccurrence(v) ==
-    /\ pc = "Run"
-    /\ cur = v
-    /\ UNCHANGED <<kind, fstat, child, eqclass, ty>>
-    /\ IF HasUndefAlgo(v)
-       THEN /\ pc' = "Reject"
-            /\ cur' = v
-            /\ UNCHANGED <<globalOf, classAssigned, classId>>
-       ELSE LET eagerNow == EagerAlgo(v)
-                ec == KeyAlgo(v)
-            IN /\ pc' = IF v = N THEN "Done" ELSE "Run"
-               /\ cur' = IF v = N THEN v ELSE v + 1
-               /\ IF ~eagerNow
-                  THEN /\ globalOf' = [globalOf EXCEPT ![v] = <<"Fresh", v>>]
-                       /\ UNCHANGED <<classAssigned, classId>>
-                  ELSE IF classAssigned[ec]
-                       THEN /\ globalOf' = [globalOf EXCEPT ![v] = <<"Table", classId[ec]>>]
-                            /\ UNCHANGED <<classAssigned, classId>>
-                       ELSE IF ~HashOrderNumbering
-                            THEN LET newid == Cardinality({k \in Keys : classAssigned[k]})
-                                 IN /\ classAssigned' = [classAssigned EXCEPT ![ec] = TRUE]
-                                    /\ classId' = [classId EXCEPT ![ec] = newid]
-                                    /\ globalOf' = [globalOf EXCEPT ![v] = <<"Table", newid>>]
-                            ELSE \E newid \in AvailableIds \ {classId[k] : k \in {k2 \in Keys : classAssigned[k2]}} :
-                                    /\ classAssigned' = [classAssigned EXCEPT ![ec] = TRUE]
-                                    /\ classId' = [classId EXCEPT ![ec] = newid]
-                                    /\ globalOf' = [globalOf EXCEPT ![v] = <<"Table", newid>>]
-
-Terminal == pc \in {"Done", "Reject"} /\ UNCHANGED vars
-
-Next == (\E v \in Occurrences : ProcessOccurrence(v)) \/ Terminal
-
+Init == /\ program \in Uses
+        /\ st = Run(Empty, program)
+Next == UNCHANGED vars
 Spec == Init /\ [][Next]_vars
 
-----------------------------------------------------------------------------
-(* The four claims. *)
+TypeOK == program \in Uses /\ st.outcome \in {"ok", "rejected", "overflow"}
 
-TypeOK ==
-    /\ kind \in [Occurrences -> Kinds]
-    /\ fstat \in [Occurrences -> FStats]
-    /\ child \in [Occurrences -> {0} \cup Occurrences]
-    /\ eqclass \in [Occurrences -> EqIds]
-    /\ ty \in [Occurrences -> Types]
-    /\ cur \in Occurrences
-    /\ pc \in {"Run", "Done", "Reject"}
-    /\ globalOf \in [Occurrences -> GlobalVal]
-    /\ classAssigned \in [Keys -> BOOLEAN]
-    /\ classId \in [Keys -> AvailableIds]
-
-(* (1a) CANONICALIZATION: two occurrences that are BOTH really eager and     *)
-(* egal intern to the SAME global -- the                                    *)
-(* `haskey(constant_globals, val) && return constant_globals[val]` reuse.   *)
-Canonicalization ==
-    pc = "Done" =>
-        \A i, j \in Occurrences :
-            (Eager(i) /\ Eager(j) /\ Egal(i) = Egal(j)) => globalOf[i] = globalOf[j]
-
-(* (1c) SHARED ONLY IF EGAL: two occurrences that share a global are egal -- *)
-(* a site never reads a constant of another type, however `isequal` the two *)
-(* values are (dart: a Constant equals only a constant of its own class).   *)
-SharedOnlyIfEgal ==
-    pc = "Done" =>
-        \A i, j \in Occurrences :
-            globalOf[i] = globalOf[j] => Egal(i) = Egal(j)
-
-(* (1b) MUTABLE NEVER ALIASES: any two DISTINCT occurrences where at least   *)
-(* one is really non-eager (in particular every "Mut"-kind occurrence, which *)
-(* is ALWAYS non-eager per Eager's definition) get DISTINCT outcomes -- the  *)
-(* mutable-identity floor: never a shared global, so mutation/`===` through  *)
-(* one occurrence can never be observed through the other.                  *)
-MutableNeverAliases ==
-    pc = "Done" =>
-        \A i, j \in Occurrences :
-            (i # j /\ (~Eager(i) \/ ~Eager(j))) => globalOf[i] # globalOf[j]
-
-(* (2) NO PARTIAL INTERN: a really non-eager occurrence's outcome is ALWAYS  *)
-(* its own fresh construction -- never a table id. Eagerness is the AND of a *)
-(* value's own fields and its child's eagerness (recursively): one bad      *)
-(* (mutable, undefined, or itself-non-eager) child forces the WHOLE value to *)
-(* the fallback tail, never a global built from a mix of shared and ad hoc   *)
-(* parts.                                                                   *)
-NoPartialIntern ==
-    pc = "Done" =>
-        \A v \in Occurrences : ~Eager(v) => globalOf[v] = <<"Fresh", v>>
-
-(* (3) NO FABRICATION: compilation never reaches Done while some occurrence  *)
-(* genuinely has an undefined field with no sanctioned physical sentinel --  *)
-(* the ONLY two outcomes for such a value are "reject the whole compile" and *)
-(* (only when the value carries the documented UndefSentinel exception) a    *)
-(* successful, un-canonicalized fresh construction; never a value invented   *)
-(* to fill the hole.                                                        *)
-NoFabrication ==
-    pc = "Done" => \A v \in Occurrences : ~HasUndef(v)
-
-(* (4) DETERMINISTIC NUMBERING: a really-eager occurrence's global id is the *)
-(* RANK of its class among all eager classes' first (smallest-index)         *)
-(* occurrence -- a pure function of interning (discovery) order, independent *)
-(* of anything hash-bucket-shaped. Ground truth, computed without reference  *)
-(* to `classId`/`globalOf` at all. *)
-EagerOccs == {v \in Occurrences : Eager(v)}
-EagerClasses == {Egal(v) : v \in EagerOccs}
-FirstOccOfClass(ec) ==
-    CHOOSE v \in EagerOccs :
-        /\ Egal(v) = ec
-        /\ \A w \in EagerOccs : Egal(w) = ec => v <= w
-ClassRank(ec) == Cardinality({ec2 \in EagerClasses : FirstOccOfClass(ec2) < FirstOccOfClass(ec)})
-
-DeterministicNumbering ==
-    pc = "Done" => \A v \in Occurrences : Eager(v) => globalOf[v] = <<"Table", ClassRank(Egal(v))>>
-
-(* Once rejected, the compile stays rejected -- no further label event or    *)
-(* global emission occurs (mirrors `soundness_fatal=true` unwinding the      *)
-(* whole codegen run, matching Stackifier's RejectNeverEmits). *)
-RejectHalts == [][pc = "Reject" => UNCHANGED vars]_vars
-
+Used == {c \in Range(program) : c \notin ValueTypes}
+Ok == st.outcome = "ok"
+SharesOnlyEgal == Ok => \A x, y \in Used : (st.info[x] = st.info[y]) <=> Egal(x, y)
+ChildrenFirst == Ok => \A i \in 1..Len(st.ofInfo) : st.def[i] # 0 /\ ~st.lazy[i] =>
+                     \A k \in st.children[i] : st.def[k] # 0 /\ st.def[k] < st.def[i]
+EagerChildrenEager == Ok => \A i \in 1..Len(st.ofInfo) : st.def[i] # 0 /\ ~st.lazy[i] =>
+                          \A k \in st.children[i] : ~st.lazy[k]
+OperandsTyped == Ok => \A o \in st.operands : o[3] = o[4]
+CyclesReject == /\ st.outcome # "overflow"
+                /\ ("Mself" \in Range(program) => st.outcome = "rejected")
 =============================================================================

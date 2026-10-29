@@ -346,3 +346,20 @@ consts(k::Int64, i::Int64) =
     @test length(results) == 19 && all(r -> r.ok, results)
 end
 end
+
+# a mutable constant reaching itself through its fields: ensureConstant rejects the cycle, located,
+# where its recursion overflowed the stack (dev/formal/Constants.tla's CyclesReject)
+module CyclicConstantCases
+using Test, WasmTarget
+mutable struct N
+    next::Any
+    v::Int
+end
+const n = N(nothing, 3)
+n.next = n
+f(x::Int) = n.v + x
+@testset "constants.dart: a constant reaching itself rejects, located" begin
+    local e = try; WasmTarget.compile(f, (Int,); optimize = false); nothing; catch x; x; end
+    @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Unquarantined && occursin("reaches itself", e.rejection.row)
+end
+end

@@ -133,11 +133,19 @@ end
         new(constants, b, expected_type, deferred_module_guard)
 end
 
-"""Creates the ConstantInfo of a constant: its sub-constants, its type and the code that builds it."""
+"""
+Creates the ConstantInfo of a constant: its sub-constants, its type and the code that builds it.
+
+`_visiting` holds the constants whose infos are being made, on the way down (the recursion's path): a field
+of none of dart's. dart's constants are immutable, a DAG; a Julia mutable constant can reach itself
+through its fields, and ensureConstant rejects that cycle, located, where the recursion would never
+end (dev/formal/Constants.tla's CyclesReject).
+"""
 @parity "dart2wasm/lib/constants.dart:780 ConstantCreator" struct ConstantCreator
     constants::Constants
+    _visiting::Vector{NirConst}
     # the struct's one constructor, tagged; dart's constructor at :784 is its outer function
-    ConstantCreator(::Val{:_}, constants::Constants) = new(constants)
+    ConstantCreator(::Val{:_}, constants::Constants) = new(constants, NirConst[])
 end
 
 """
@@ -634,6 +642,13 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
 
     local info = get(self.constants.constant_info, constant, nothing)
     if info === nothing
+        # a constant met again on the way down reaches itself through its fields: a cycle, which only
+        # a mutable value makes and no constant expression builds (dart's constants are a DAG)
+        if constant isa NirConst
+            any(v -> v.c.val === constant.c.val, self._visiting) &&
+                reject!(Unquarantined("src/constants.jl ensureConstant: the constant of $(typeof(constant.c.val)) reaches itself through its fields, a cycle no constant expression builds"), "dart2wasm/lib/constants.dart:793 ConstantCreator.ensureConstant")
+            push!(self._visiting, constant)
+        end
         info = if constant isa DummyValueConstant
             visit_auxiliary_constant(self, constant)
         else
@@ -653,6 +668,7 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
             v isa Vector ? visit_list_constant(self, constant) :
             visit_instance_constant(self, constant)
         end
+        constant isa NirConst && pop!(self._visiting)
         if info !== nothing
             local tv = TypeOfConstantVisitor(self.constants.translator)
             local ic = info.constant
