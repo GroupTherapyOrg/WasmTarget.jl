@@ -8,6 +8,7 @@
 # side by side only queued for the one slot and then re-checked under the lock when another lane
 # landed meanwhile, two checks a landing; waiting lanes keep working in their own trees.
 set -uo pipefail
+# a lane may run dev/autoship.sh beside its work, which calls this script whenever its committed work settles
 # the one march branch on origin (D23): every lane lands here; worktrees and their branches stay local
 MARCH=wt2
 cd "$(dirname "$0")/.."
