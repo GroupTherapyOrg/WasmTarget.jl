@@ -600,22 +600,18 @@ end
 """
     _builtin_name_operands(f) -> Tuple{Vararg{Int}}
 
-The positions, counted after the callee, at which `f`, a Core builtin or Base's property functions,
-takes a name rather than data:
+The positions, counted after the callee, at which the Core builtin `f` takes a name rather than data:
 a field's (its name or index), a module binding's (the module and the name together) or a memory
 ordering's, each the parameter of that name in the
 builtin's tfunc (Compiler/src/tfuncs.jl: `getfield_tfunc(𝕃, s00, name, order, boundscheck)`,
 `setfield!_tfunc(𝕃, o, f, v, order)`, `memoryrefget_tfunc(𝕃, mem, order, boundscheck)`,
 `atomic_pointerreplace_tfunc(𝕃, ptr, x, v, success_order, failure_order)`, ...; the global
 builtins' arities at its add_tfunc calls, `getglobal(module, name, order)`, and
-`get_binding_type(module, name)`); Base's getproperty and setproperty! take the property's name
-second, as getfield and setfield! do (a call of either the optimizer left unresolved). Every other
-callee takes data alone.
+`get_binding_type(module, name)`). Every other builtin takes data alone, and a call of a generic
+function (Base's getproperty among them, left unresolved) passes each argument as a value.
 """
 @quarantine "Julia's builtins take a field's, a binding's or an ordering's name as an operand, each at its tfunc's parameter" Core.getfield function _builtin_name_operands(@nospecialize(f))::Tuple{Vararg{Int}}
     f === Core.getfield && return (2, 3)
-    f === Base.getproperty && return (2,)
-    f === Base.setproperty! && return (2,)
     f === Core.setfield! && return (2, 4)
     f === Core.isdefined && return (2, 3)
     f === Core.fieldtype && return (2,)
@@ -667,7 +663,7 @@ region's leave and an exception pop hold no value.
     @exhaustive st::NirStmt begin
         (x::NirCall) => let f = x.args[1],
                 callee = f isa NirConst ? f.c.val : f isa NirGlobal && isconst(f.ref.mod, f.ref.name) ? getglobal(f.ref.mod, f.ref.name) : nothing
-            names = _builtin_name_operands(callee)
+            names = callee isa Core.Builtin ? _builtin_name_operands(callee) : ()
             NirValue[ops[i] for i in 2:length(ops) if !(i - 1 in names && ops[i] isa NirConst)]
         end
         NirInvoke => ops[2:end]
