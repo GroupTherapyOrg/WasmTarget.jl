@@ -437,8 +437,14 @@ end
     local B = W.WasmBuilder
     local IR = B.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.f, (Int32,), "translator"), "test"), data, D.TranslatorOptions())
-    local mods = D.translate(t, nothing)
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.f, (Int32,), "translator"), "test"), data, D.TranslatorOptions(print_kernel = true))
+    # printKernel: each member's header, function type, signature and its NIR statements, printed
+    local mods, printed = mktemp() do path, io
+        local m = redirect_stdout(() -> D.translate(t, nothing), io)
+        flush(io)
+        (m, read(path, String))
+    end
+    @test occursin("(exported as f)", printed) && occursin(", Int32}", printed) && occursin("  %1 = ", printed)
     # one module, the main one, built by the builder that validated every instruction (D10)
     @test length(mods) == 1 && only(keys(mods)).is_main
     local m = only(values(mods))

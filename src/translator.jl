@@ -1503,7 +1503,7 @@ end
     end
     if print_kernel
         # the member's optimized statements as the closed world holds them, never inferred again
-        for (i, st) in enumerate(nir_body_of(translator.component, self.reference).code)
+        for (i, st) in enumerate(nir_body_of(translator.component, self.reference).stmts)
             println("  %$i = $st")
         end
         print_wasm || println()
