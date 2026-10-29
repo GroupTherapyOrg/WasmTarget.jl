@@ -238,8 +238,8 @@ end
     # one entry, the member's own, and no entry check; a call's single target is the MethodInstance
     # Julia resolved it to, none for a call it left to a builtin
     @test D.get_function_entry(t, mi; unchecked_entry = true) === mi === D.get_function_entry(t, mi; unchecked_entry = false)
-    @test D.can_use_unchecked_entry(t, W.NirArgument(2), W.NirSSA(1))
     local inv = W.NirInvoke(mi, W.NirValue[W.NirConst(Core.Const(ModuleCases.shapes)), W.NirArgument(2)])
+    @test D.can_use_unchecked_entry(t, W.NirArgument(2), inv)
     @test D.single_target(t, inv) === mi && D.single_target(t, W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.tuple))])) === nothing
     # a member's return type is its body's, looked up by nir_body_of: a member with none rejects, located
     @test D.type_of_return_value(t, mi) === Union{ModuleCases.Circle, ModuleCases.Square}

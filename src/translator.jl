@@ -982,10 +982,15 @@ of the type's own function, whose result `new` allocates), so a request is a loc
 
 @parity "dart2wasm/lib/translator.dart:2033 Translator.canSkipImplicitCheck" @unported function can_skip_implicit_check(self::Translator, node::Union{NirSSA,NirArgument}) end
 
-# dart skips a call's entry checks when TFA proved its arguments' types (skipCheck); Julia's inference
-# proved every argument of a call it resolved against the specialization it calls, so a call needs no
-# entry check, and a Julia member has its one entry either way (getFunctionEntry)
-@parity "dart2wasm/lib/translator.dart:2037 Translator.canUseUncheckedEntry" can_use_unchecked_entry(self::Translator, receiver::NirValue, node::NirValue)::Bool = true
+"""
+Whether a call may take its target's unchecked entry. dart skips the entry checks when TFA proved
+the arguments' types (skipCheck); Julia's inference proved every argument of a call it resolved
+against the specialization it calls, so a call needs no entry check, and a Julia member has its one
+entry either way (getFunctionEntry).
+
+Reshaped: `node` — dart passes the invocation node itself (an InstanceInvocation, the Kernel table's NirInvoke), a NIR statement the code generator holds, not the operand naming its value.
+"""
+@parity "dart2wasm/lib/translator.dart:2037 Translator.canUseUncheckedEntry" can_use_unchecked_entry(self::Translator, receiver::NirValue, node::NirStmt)::Bool = true
 
 @parity "dart2wasm/lib/translator.dart:2043 Translator.typeOfParameterVariable" @unported function type_of_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument}, is_required::Bool) end
 
