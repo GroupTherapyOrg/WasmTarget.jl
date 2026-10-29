@@ -920,10 +920,60 @@ kind = "behavior"
 what = "named parameters called arguments, constructor, hasOwnProperty, isPrototypeOf, propertyIsEnumerable, toLocaleString, toString and valueOf, defaulted or passed, on a top-level function, a method and an override whose nullable parameters are filled by ??=; Julia keywords carry these names with no clash, and the override's ??= is something(p, default)"
 cases = ["dart_argument/strangely_named_arguments"]
 
-["tests/language/assert/"]
+["tests/language/assert/assert_test.dart"]
 kind = "behavior"
-what = "assert statements, their messages and evaluation"
-cases = []
+what = "assert on true, false, a Bool, a dynamic value and an immediately invoked closure, caught as AssertionError, non-Bool conditions throwing TypeError, and messages read off the AssertionError; dart's assert is Julia's @assert, always on in Julia; a non-Bool condition throws TypeError in both, and Julia's message is string(m), so the first message is the String 1234 where dart's is the int 1234"
+cases = ["dart_assert/assert"]
+
+["tests/language/assert/assignable_type_test.dart"]
+kind = "not_portable"
+what = "a VM regression: an int list filled in a loop after an unused negative int literal, past the optimization-counter threshold"
+reason = "main fills a list and asserts nothing"
+
+["tests/language/assert/initializer_const_error2_test.dart"]
+kind = "not_portable"
+what = "const constructors with initializer-list asserts, constructed with arguments that pass and that fail"
+reason = "static error test: the ten const constructions whose assert fails are CONST_EVAL_THROWS_EXCEPTION compile-time errors; the passing constructions check nothing"
+
+["tests/language/assert/initializer_const_error_test.dart"]
+kind = "not_portable"
+what = "a const constructor whose initializer-list assert calls a static method"
+reason = "static error test: assert(check(x, y)) in a const constructor is an INVALID_CONSTANT compile-time error in the constructor main calls"
+
+["tests/language/assert/initializer_const_function_test.dart"]
+kind = "not_portable"
+what = "a const constructor whose initializer-list assert is given a function"
+reason = "static error test: assert(staticTrue) is a NON_BOOL_EXPRESSION compile-time error in the constructor main calls"
+
+["tests/language/assert/initializer_test.dart"]
+kind = "behavior"
+what = "forty constructors with initializer-list asserts before, between and after their field initializers, with messages and trailing commas, plain, const, calling a static method and calling a closure, each built with x < y and with x >= y, and const C(1) identical to each const constructor's instance; dart's assert is Julia's @assert, always on in Julia, placed among the constructor function's statements; const constructors are ordinary functions and super() is dropped, and Julia's === of two immutable structs with equal fields is true, as dart's canonicalized instances are identical"
+cases = ["dart_assert/initializer"]
+
+["tests/language/assert/message_test.dart"]
+kind = "behavior"
+what = "a passing assert never evaluates its message, any value is a message, the condition or the message may throw, and a failing assert evaluates its message after its condition; dart's assert is Julia's @assert, always on in Julia; Julia's message is string(m), so the messages are the Strings 42, empty, nothing and 2 where dart's are the int 42, the empty String, null and the int 2; the file's asyncTests, await in the condition and the message, are not ported: async and tasks are outside WT's scope (dev/PARITY_MASTER.md)"
+cases = ["dart_assert/message"]
+
+["tests/language/assert/trailing_comma_error_test.dart"]
+kind = "behavior"
+what = "assert with and without a message and a trailing comma, once the UNEXPECTED_TOKEN statements with an extra argument and a doubled comma are removed; dart's assert is Julia's @assert, always on in Julia, whose value is nothing"
+cases = ["dart_assert/trailing_comma_error"]
+
+["tests/language/assert/trailing_comma_test.dart"]
+kind = "behavior"
+what = "assert with a trailing comma after the condition and after the message; dart's assert is Julia's @assert, always on in Julia, whose value is nothing"
+cases = ["dart_assert/trailing_comma"]
+
+["tests/language/assert/with_message_test.dart"]
+kind = "behavior"
+what = "a failing assert's message in its error text, a passing assert, a null message, a message not evaluated when the assert passes, a message that throws, and a message whose toString is never called; dart's assert is Julia's @assert, always on in Julia; Julia's message is string(m), so a null message's text is AssertionError: nothing, which lacks dart's is not true, and the message's show runs at the failure, so calledToString is true and the message is the String toString! where dart's is the object itself"
+cases = ["dart_assert/with_message"]
+
+["tests/language/assert/with_type_test_or_cast_test.dart"]
+kind = "behavior"
+what = "asserts holding a generic type test, a negated one and a generic cast; dart's assert is Julia's @assert, always on in Julia, whose value is nothing; Julia's Vector{Int64} is not a Vector{Real}, so dart's cast to List<num> is a typeassert to Vector{<:Real}"
+cases = ["dart_assert/with_type_test_or_cast"]
 
 ["tests/language/assign/instance_method_test.dart"]
 kind = "behavior"
@@ -1230,10 +1280,45 @@ kind = "behavior"
 what = "canonical identity of constant values"
 cases = []
 
-["tests/language/cascade/"]
+["tests/language/cascade/cascade2_test.dart"]
 kind = "behavior"
-what = "cascade expressions (..)"
-cases = []
+what = "a cascade calling a method and then the callable result, and a cascade storing into an element of a field's list, after which adding 2 to the stored Object throws; the cascade is a block yielding its receiver, the list is indexed from 1, and adding 2 throws Julia's MethodError where dart throws NoSuchMethodError (the port checks only that it throws)"
+cases = ["dart_cascade/cascade2"]
+
+["tests/language/cascade/cascade3_test.dart"]
+kind = "behavior"
+what = "getters whose bodies cascade add onto a recursive call, unparenthesized after a conditional (where the cascade's receiver is the whole conditional) and parenthesized, checked by length and identity on a root and a child, and a for-in over a sorted copy made by a cascade; each cascade is the block its dart parse means"
+cases = ["dart_cascade/cascade3"]
+
+["tests/language/cascade/cascade_test.dart"]
+kind = "behavior"
+what = "one cascade of method calls, field and index stores, a tear-off called twice, a method chain, an index read called, and a method named import, each followed by a check of x and y; the cascade is a block yielding its receiver, check's Expect.equals record x and y in a log the port returns, import is a function named _cas_import!, and the three MISSING_IDENTIFIER statements a..(42), a..37 and a.. before a string literal are dropped"
+cases = ["dart_cascade/cascade"]
+
+["tests/language/cascade/in_expression_function_test.dart"]
+kind = "behavior"
+what = "an expression-bodied function and method whose bodies are cascades, on a new Map and on the receiver, yielding the Map and the receiver; the cascade is a block yielding its receiver, the Map a Dict"
+cases = ["dart_cascade/in_expression_function"]
+
+["tests/language/cascade/in_initializer_list_test.dart"]
+kind = "behavior"
+what = "a constructor's initializer list storing cascades on its argument into a field and a final field, both the argument itself; the constructor is a function whose arguments are blocks yielding the argument, and the final field a const field of a mutable struct"
+cases = ["dart_cascade/in_initializer_list"]
+
+["tests/language/cascade/nested_test.dart"]
+kind = "behavior"
+what = "a cascade on a new Bar whose section stores a nested cascade on a new Foo into Bar's late field; the late field is one new leaves unset"
+cases = ["dart_cascade/nested"]
+
+["tests/language/cascade/on_static_field_test.dart"]
+kind = "not_portable"
+what = "a final top-level list initialized by a cascade of add calls"
+reason = "main prints the list and asserts nothing"
+
+["tests/language/cascade/precedence_test.dart"]
+kind = "behavior"
+what = "what a cascade binds to after a call, a getter, a + b, a conditional, an assignment c = a..m(c.get()), an assignment inside a section box..x = c = a, a parenthesized cascade and a nested one, checked by identity and by the values A.test sees; Julia has no cascade, so each is the block its dart parse means and there is no precedence left to check, test records the value in a log the port returns, and the A and Box members main never calls are left out"
+cases = ["dart_cascade/precedence"]
 
 ["tests/language/class/"]
 kind = "behavior"
@@ -6225,10 +6310,40 @@ kind = "behavior"
 what = "sealed classes"
 cases = []
 
-["tests/language/set_literals/"]
+["tests/language/set_literals/big_set_literal_test.dart"]
 kind = "behavior"
-what = "set literals and set operations (Julia's Set)"
-cases = []
+what = "top-level variables holding set literals of 10,000 integers and 10,000 strings, walked with their iterator: the length, each element and the end; Julia's Set iterates in its hash table's order, not dart's insertion order, so the port returns the elements as Julia's iteration yields them"
+cases = ["dart_set_literals/big_set_literal"]
+
+["tests/language/set_literals/const_big_set_literal_test.dart"]
+kind = "behavior"
+what = "constant set literals of 10,000 integers and 10,000 strings, walked with their iterator: the length, each element and the end; a const set is a const global, and Julia's Set iterates in its hash table's order, not dart's insertion order, so the port returns the elements as Julia's iteration yields them"
+cases = ["dart_set_literals/const_big_set_literal"]
+
+["tests/language/set_literals/const_set_literal_test.dart"]
+kind = "behavior"
+what = "constant set literals empty and not, untyped and typed, in set and iterable contexts, of strings, symbols and mixed values, nested, holding a map, of Something values joined by toString (after sorting, since Julia's default struct hash, and so the set's order, differs between sessions), and canonicalized by contents and order; a const set is a const global and each check returns Julia's iteration order; Julia takes the element type from the elements, not the context, the FutureOr contexts and the clear check are dropped (Julia's Set has no unmodifiable form), 1 and true are one element of the mixed set (isequal(1, true)), so it has 4 elements where dart's has 5, and two equal constant sets are distinct objects in Julia where dart's o7 and o9 are identical"
+cases = ["dart_set_literals/const_set_literal"]
+
+["tests/language/set_literals/in_annotations_test.dart"]
+kind = "not_portable"
+what = "set literals as the argument of annotations on an import, a function, a parameter, a class, a type parameter, fields, a constructor, a method, a local and an enum value"
+reason = "main is empty: the set literals appear only in annotation arguments, which are never evaluated at run time"
+
+["tests/language/set_literals/in_initializer_test.dart"]
+kind = "not_portable"
+what = "a Set<Object> field initialized from a null-aware default, an empty set literal and a constant set default"
+reason = "main constructs four Bags and asserts nothing"
+
+["tests/language/set_literals/invalid_set_literal_test.dart"]
+kind = "not_portable"
+what = "invalid set literals: map entries or wrong type argument counts, elements that override ==, empty elements, wrong element types, a set where a HashSet or a type variable bound is expected, type variables in const sets, and equal elements in a const set"
+reason = "static error test: sections 01-10, 14-17, 19-23 and 26-34 are compile-time errors and 11-13 syntax errors; without them main checks only that variables declared without an initializer are null, which has no Julia form (an unassigned Julia local is undefined)"
+
+["tests/language/set_literals/set_literal_test.dart"]
+kind = "behavior"
+what = "set literals empty and not, untyped and typed, in set and iterable contexts, with duplicates, of elements with their own == and hashCode joined by toString, evaluated left to right, nested, holding a map, mixed and with trailing commas; each check returns Julia's iteration order; Julia takes the element type from the elements, not the context, so the trailing-comma set is a Set{Int64} where dart's is a Set<Object>, the FutureOr contexts are dropped, and of equal elements Julia's Set keeps the last where dart's keeps the first, so es joins to 2:a,1:b where dart's joins to 1:a,2:b"
+cases = ["dart_set_literals/set_literal"]
 
 ["tests/language/setter/"]
 kind = "behavior"
@@ -7150,10 +7265,55 @@ kind = "not_portable"
 what = "the test runner's own expectations: transitively_imported_library_failure_test.dart"
 reason = "dart's test tooling"
 
-["tests/language/this/"]
+["tests/language/this/as_covariant_call_checks_test.dart"]
 kind = "behavior"
-what = "this in members"
-cases = []
+what = "methods that view this as A<dynamic> and pass an int where A<String>'s method, setter and late field take a String, run 100 times with a String first; the view is a local typed _ThA, the setter a function and the late field one new leaves unset; Julia checks each call when it runs, whatever the variation, and throws MethodError where dart throws TypeError under checked parameters (the port checks only that it throws)"
+cases = ["dart_this/as_covariant_call_checks"]
+
+["tests/language/this/as_dynamic_call_checks_test.dart"]
+kind = "behavior"
+what = "methods that view this as dynamic and pass an int where A<String>'s method, setter and late field take a String, run 100 times with a String first, violateType a named argument; the view is a local typed Any and violateType a keyword argument; Julia throws MethodError where dart throws TypeError (the port checks only that it throws)"
+cases = ["dart_this/as_dynamic_call_checks"]
+
+["tests/language/this/call_this_test.dart"]
+kind = "behavior"
+what = "this() and (this)() inside a method call the receiver's call method; a struct made callable, whose answer, dart's constant 42, is a field set to 42n so it depends on the argument"
+cases = ["dart_this/call_this"]
+
+["tests/language/this/conditional_operator_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of conditional_operator: this?.field stored, compound-assigned and read, and this?.method() called"
+reason = "main runs test(), whose four this?. statements carry only INVALID_NULL_AWARE_OPERATOR warnings, and asserts nothing"
+
+["tests/language/this/conditional_operator_test.dart"]
+kind = "not_portable"
+what = "a constructor that forwards to this?.namedConstructor(), and this?. inside a method"
+reason = "static error test: the forwarding initializer this?.namedConstructor() is an INVALID_REFERENCE_TO_THIS, MISSING_ASSIGNMENT_IN_INITIALIZER, INITIALIZER_FOR_NON_EXISTENT_FIELD and EXPECTED_TOKEN compile-time error in the one constructor main calls"
+
+["tests/language/this/implicit_runtime_test.dart"]
+kind = "behavior"
+what = "an abstract class whose toString reads the getter x through implicit this, x answered by Concrete's getter and by SubConcrete's field; an abstract type whose show prints a getter function, and since Julia cannot subtype a concrete type SubConcrete is Concrete's sibling; Interface and SubAbstract2, which main never reaches, are left out"
+cases = ["dart_this/implicit_runtime"]
+
+["tests/language/this/implicit_this_test.dart"]
+kind = "behavior"
+what = "the runtime checks of implicit_runtime once the NON_ABSTRACT_CLASS_INHERITS_ABSTRACT_MEMBER classes SubAbstract1 and SubSubAbstract2 and the INSTANTIATE_ABSTRACT_CLASS statement new Abstract() are removed; ported as implicit_runtime is"
+cases = ["dart_this/implicit_this"]
+
+["tests/language/this/in_initializer_test.dart"]
+kind = "not_portable"
+what = "constructor initializers that do and do not reference this, directly or through closures, static members and assignments"
+reason = "main is empty: the multitest sections choose which constructor A declares, and none is ever called"
+
+["tests/language/this/runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of this_test: a method that once held x.this and f().this"
+reason = "main calls an empty testMe: every statement was removed with its error section"
+
+["tests/language/this/this_test.dart"]
+kind = "not_portable"
+what = "this used as a member name after a dot: x.this, x.this(), f().this and their member accesses"
+reason = "static error test: each of testMe's eight statements is a MISSING_IDENTIFIER syntax error; no runtime check remains"
 
 ["tests/language/this_promotion/"]
 kind = "behavior"
