@@ -13,8 +13,10 @@
     closed_world_classes(world, at) -> Vector{DataType}
 
 The classes of the closed world `world`, its NIR, in the order its walk first meets them: each body in
-order, its argument types (its MethodInstance's signature), then each statement's type, then its
-return type. A type meets the walk by Julia's own inferred form: a `Union` by its members, a
+order, its argument types (its MethodInstance's signature), then each statement's type, then the
+type of each literal and constant binding its statements read (nir_value_type: the value's own
+type, which no statement's type need hold: `"hello"` compared, a `const` Ref read), then its return
+type. A type meets the walk by Julia's own inferred form: a `Union` by its members, a
 `Vararg` by its element, a type as a value (`Type{X}`, or a `UnionAll` under `Type`) by its kind
 (`typeof(X)`, or every kind when `X` is not known) and by the classes `X` denotes (`X` itself, or each
 member of a Union, that is a DataType with no free type variable), whose ids a type value's layout
@@ -33,6 +35,9 @@ values, each met once, and a parametric instance (`Vector{Int64}`) is a class of
     for b in world
         foreach(t -> _meet_value!(out, seen, t, at), Base.unwrap_unionall(b.ci.def.specTypes).parameters)
         foreach(t -> _meet_value!(out, seen, t, at), b.types)
+        for st in b.stmts, v in nir_value_operands(st)
+            v isa Union{NirConst,NirGlobal} && _meet_value!(out, seen, nir_value_type(b, v), at)
+        end
         _meet_value!(out, seen, b.ci.rettype, at)
     end
     return out

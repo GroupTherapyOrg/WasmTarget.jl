@@ -65,7 +65,7 @@ import ..MachineFunction, ..MachineInstr, ..MOBlock, ..MOImm, ..BLOCK, ..LOOP, .
        ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..BLOCK_TYPE_RESULTS, ..is_barrier
 # what the code generator reads from a body (src/julia/nir.jl)
 import ..TreeNode_no_offset, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
-       ..nir_invoke_target, ..nir_callee
+       ..nir_invoke_target, ..nir_callee, ..nir_value_type
 import ..WasmBuilder
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
 import ...@parity, ...@unported, ...@closed, ...@exhaustive

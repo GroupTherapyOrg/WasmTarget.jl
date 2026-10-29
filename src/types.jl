@@ -158,7 +158,7 @@ compilation.
         local self
         self = new(signature, translator, calling_module, tested_against_type, operand_is_nullable, check_arguments, argument_count,
             Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/types.dart:877 IsCheckerCallTarget.function", function ()
-                local function_ = WasmBuilder.define(self.calling_module.functions,
+                local function_ = WasmBuilder.define(self.calling_module.functions[],
                     WasmBuilder.define_function(types_builder(self.translator), self.signature.inputs, self.signature.outputs), name(self))
                 function_.is_pure = true
                 add(self.translator.compilation_queue[], CompilationTask(function_, inlining_code_gen(self)))
@@ -205,7 +205,7 @@ itself, defined on its first read and queued for compilation.
         local self
         self = new(signature, translator, calling_module, tested_against_type, operand_is_nullable, check_arguments, argument_count,
             Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/types.dart:1047 AsCheckerCallTarget.function", function ()
-                local function_ = WasmBuilder.define(self.calling_module.functions,
+                local function_ = WasmBuilder.define(self.calling_module.functions[],
                     WasmBuilder.define_function(types_builder(self.translator), self.signature.inputs, self.signature.outputs), name(self))
                 add(self.translator.compilation_queue[], CompilationTask(function_,
                     AsCheckerCodeGenerator(self.translator, self.signature, self.tested_against_type, self.operand_is_nullable,

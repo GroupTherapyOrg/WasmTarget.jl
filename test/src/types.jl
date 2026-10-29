@@ -197,8 +197,7 @@ end
     for (f, a) in ((CheckerCalls.nothing_or_bool, (Base.RefValue{Union{Nothing,Int64}},)), (CheckerCalls.as_int, (Base.RefValue{Any},)))
         local r = try; WasmTarget.compile(f, a); catch x; x isa WasmTarget.RejectionError ? x.rejection : rethrow(); end
         local ok = r isa Vector{UInt8} || (r isa WasmTarget.Rejection && !(r isa WasmTarget.Internal))
-        # broken until the class walk collects Julia's Type (translateStorageType: "Type{T} has no class
-        # info"), the translator lane's class-walk fix, which flips this to @test
-        @test_broken ok
+        # the class walk meets the tested type, a value operand, and with its kind Julia's Type{T}
+        @test ok
     end
 end

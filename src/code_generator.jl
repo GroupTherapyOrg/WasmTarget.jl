@@ -200,16 +200,9 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 # an expression's static type is the type Julia inferred for it: a statement's its `ssavaluetypes`
 # entry, an argument's its MethodInstance's signature, a literal's its value's type (dart asks a
 # constant its type for the same reason: the static type of a constant is less precise), a binding's
-# its value's, a constant binding being the only one the strict subset reads
-@parity "dart2wasm/lib/code_generator.dart:129 AstCodeGenerator.dartTypeOf" function dart_type_of(self::AstCodeGenerator, exp::NirValue)::Type
-    @exhaustive exp::NirValue begin
-        (s::NirSSA) => self.body.types[s.id]
-        (a::NirArgument) => nir_argument_type(self.member, a)
-        (c::NirConst) => Core.Typeof(c.c.val)
-        (g::NirGlobal) => isconst(g.ref.mod, g.ref.name) ? Core.Typeof(getglobal(g.ref.mod, g.ref.name)) :
-            reject!(Unquarantined("src/julia: a read of the non-constant binding $(g.ref)"), "dart2wasm/lib/code_generator.dart:129 AstCodeGenerator.dartTypeOf")
-    end
-end
+# its value's, a constant binding being the only one the strict subset reads: nir_value_type, the one
+# source the closed world's classes read too
+@parity "dart2wasm/lib/code_generator.dart:129 AstCodeGenerator.dartTypeOf" dart_type_of(self::AstCodeGenerator, exp::NirValue)::Type = nir_value_type(self.body, exp)
 
 # dart prints the gap and emits a trap in its place; WasmTarget never emits code past a gap (ledger
 # D9): the gap rejects, located at the node

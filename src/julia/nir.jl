@@ -453,6 +453,25 @@ The type of argument `a` of `mi`: its MethodInstance's signature, the type Julia
 end
 
 """
+    nir_value_type(body, v) -> Type
+
+The type Julia inferred for the operand `v` of `body`: a statement's its `ssavaluetypes` entry, an
+argument's its MethodInstance's signature (nir_argument_type), a literal's its value's type, and a
+binding's its value's, a constant binding being the only one the strict subset reads (any other
+rejects, located). The one source of an operand's type: the code generator's static type of an
+expression (dartTypeOf) and the closed world's classes (closed_world_classes) both read it.
+"""
+@quarantine "a Julia operand's type is its statement's inferred type, its argument's specialization or its value's type" Core.Typeof function nir_value_type(body::NirBody, v::NirValue)::Type
+    @exhaustive v::NirValue begin
+        (s::NirSSA) => body.types[s.id]
+        (a::NirArgument) => nir_argument_type(body.ci.def, a)
+        (c::NirConst) => Core.Typeof(c.c.val)
+        (g::NirGlobal) => isconst(g.ref.mod, g.ref.name) ? Core.Typeof(getglobal(g.ref.mod, g.ref.name)) :
+            reject!(Unquarantined("src/julia: a read of the non-constant binding $(g.ref)"), "src/julia/nir.jl nir_value_type")
+    end
+end
+
+"""
     nir_method_nargs(mi) -> Int
 
 How many arguments `mi`'s method takes, the callee `Argument(1)` among them; a varargs method rejects,
@@ -541,5 +560,53 @@ one place a pass over every operand of the NIR reads them.
         (x::NirPhiC) => x.values
         NirNothing => NirValue[]
         NirGlobalRead => NirValue[]
+    end
+end
+
+"""
+    nir_value_operands(st) -> Vector{NirValue}
+
+The operands of a NIR statement that are values of the program, dart's expressions: its operands
+(nir_operands) less those that name what the statement acts on or only annotate it, as Kernel names a
+node's target rather than evaluating it. A call's callee and an invoke's are its target (dart's
+Member); an allocation's type is its class (a ConstructorInvocation's target); a foreigncall's name,
+return type, argument types, required count and calling convention precede its arguments, and a
+cfunction's operands are all such (Julia's Expr(:foreigncall) and Expr(:cfunction) forms); a builtin's
+Symbol operand is a name, a field's or a memory ordering's (getfield's name and order, memoryrefget's
+order: Julia's builtins take no Symbol as data), as an InstanceGet names its Field; an undefined
+variable check names the variable before its condition; and a loop hint, a bounds-check flag, a try
+region's leave and an exception pop hold no value.
+"""
+@quarantine "Julia's IR passes a call's target, a builtin's names and a statement's annotations as operands; dart's Kernel names them in the node" Core.Builtin function nir_value_operands(st::NirStmt)::Vector{NirValue}
+    local ops = nir_operands(st)
+    @exhaustive st::NirStmt begin
+        (x::NirCall) => let f = x.args[1],
+                callee = f isa NirConst ? f.c.val : f isa NirGlobal && isconst(f.ref.mod, f.ref.name) ? getglobal(f.ref.mod, f.ref.name) : nothing
+            callee isa Core.Builtin ? NirValue[v for v in ops[2:end] if !(v isa NirConst && v.c.val isa Symbol)] : ops[2:end]
+        end
+        NirInvoke => ops[2:end]
+        NirNew => ops[2:end]
+        NirForeignCall => ops[6:end]
+        NirCFunction => NirValue[]
+        NirThrowUndefIfNot => ops[2:end]
+        NirLoopInfo => NirValue[]
+        NirBoundscheck => NirValue[]
+        NirLeave => NirValue[]
+        NirPopException => NirValue[]
+        NirGCPreserveBegin => ops
+        NirGCPreserveEnd => ops
+        NirTheException => ops
+        NirInvokeModify => ops
+        NirGoto => ops
+        NirGotoIfNot => ops
+        NirReturn => ops
+        NirUnreachable => ops
+        NirPhi => ops
+        NirPi => ops
+        NirEnter => ops
+        NirUpsilon => ops
+        NirPhiC => ops
+        NirNothing => ops
+        NirGlobalRead => ops
     end
 end

@@ -70,3 +70,34 @@ end
     local c2 = cs(ClassesTypeValueCases.f_vec_eltype, (Int,))
     @test Vector{Int} in c2 && Vector{Float64} in c2
 end
+
+module ClassesConstantCases
+const CELL = Ref(0)
+bump(n::Int) = (CELL[] += n; CELL[])
+changing = 1
+end
+
+@testset "classes: a constant's class, never a name's or a callee's" begin
+    local W = WasmTarget
+    local nw = W.build_nir(W.check_subset(ClassesConstantCases.bump, (Int,), "classes"), "classes")
+    # the constant binding's value is read and written through its field; its class is no argument's or
+    # statement's type, only the operand's (nir_value_type)
+    @test !any(b -> any(t -> t === Base.RefValue{Int64}, b.types), nw)
+    local reads = [(b, v) for b in nw for st in b.stmts for v in W.nir_value_operands(st) if v isa Union{W.NirConst,W.NirGlobal}]
+    @test any(((b, v),) -> W.nir_value_type(b, v) === Base.RefValue{Int64}, reads)
+    local cs = W.closed_world_classes(nw, "classes")
+    @test Base.RefValue{Int64} in cs && Int64 in cs
+    # a field builtin's field name and an intrinsic callee name what the call acts on: no class of theirs
+    @test !(Symbol in cs) && !(Core.IntrinsicFunction in cs) && !(typeof(Core.getfield) in cs)
+    for b in nw, st in b.stmts
+        st isa W.NirCall && W.nir_callee(st) === Core.getfield || continue
+        local vals = W.nir_value_operands(st)                       # the object, never the field's name
+        @test st.args[2] in vals && !any(v -> v isa W.NirConst && v.c.val isa Symbol, vals)
+    end
+    # an allocation's type is its target
+    local x = W.NirConst(Core.Const(1))
+    @test W.nir_value_operands(W.NirNew(W.NirValue[W.NirConst(Core.Const(Base.RefValue{Int})), x])) == [x]
+    # a read of a binding that can change has no type the subset reads: a located rejection
+    local e = try; W.nir_value_type(first(nw), W.NirGlobal(GlobalRef(ClassesConstantCases, :changing))); nothing; catch y; y; end
+    @test e isa W.RejectionError && e.rejection isa W.Unquarantined
+end
