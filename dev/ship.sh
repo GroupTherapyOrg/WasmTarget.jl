@@ -49,10 +49,28 @@ lock="$common/wt-landing-lock"
 # variables cleared: the ratchet's plants make scratch repositories, and an inherited GIT_DIR or
 # GIT_INDEX_FILE would point them at this one
 checked_rebase() {
-  if ! git rebase -q "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh'; then
+  # each commit green on its own tree is pushed at once, under the lock, so a long stack lands as it goes
+  # and a red commit keeps the green ones before it (march-corrector, 21:51: a ten-commit stack held the
+  # port count flat for 25 minutes, pushing only once all ten were green)
+  mkdir -p .wtd
+  if ! { git rebase -q "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh && git push -q origin HEAD:'"$MARCH"' && echo "ship: pushed $(git log -1 --format="%h %s" | cut -c1-90)"' 2>&1 | tee .wtd/rebase.out; [ "${PIPESTATUS[0]}" -eq 0 ]; }; then
+    record_failure
     if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then git rebase --abort; fi
     return 1
   fi
+}
+# a red landing leaves its record, which the scratch worktree's cleanup would otherwise delete: one row in
+# the common dir's wt-ship-failures.tsv (time, lane, the stopped commit, the first red line) and the
+# check's outputs under wt-ship-failed/<lane>/ (march-corrector, 22:10: two port stacks went red with
+# their causes only in the scrollback of the shells that ran them)
+record_failure() {
+  local at red
+  at=$(git log -1 --format='%h %s' 2>/dev/null | cut -c1-100 | tr '\t' ' ')
+  red=$(grep -m1 -E 'RED|REFUSED|fails|red|Test Failed|Error During|CONFLICT|could not apply' .wtd/rebase.out 2>/dev/null | cut -c1-240 | tr '\t' ' ')
+  printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(basename "$lane")" "$at" "$red" >> "$common/wt-ship-failures.tsv"
+  rm -rf "$common/wt-ship-failed/$(basename "$lane")"; mkdir -p "$common/wt-ship-failed/$(basename "$lane")"
+  cp .wtd/*.out "$common/wt-ship-failed/$(basename "$lane")/" 2>/dev/null
+  echo "ship: recorded in $common/wt-ship-failures.tsv; the check's outputs in $common/wt-ship-failed/$(basename "$lane")/"
 }
 release() { rm -rf "$lock"; }
 trap cleanup_scratch EXIT
@@ -67,20 +85,23 @@ while ! mkdir "$lock" 2>/dev/null; do
 done
 echo $$ > "$lock/pid"; trap 'release; cleanup_scratch' EXIT
 [ $(( $(date +%s) - w0 )) -gt 0 ] && echo "ship: waited $(( $(date +%s) - w0 ))s for the landing lock"
+# dev/check.sh runs only under the landing lock, which this marks
+export CHECK_LANDING=1
 git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
 [ "$(git rev-list --count "origin/$MARCH..HEAD")" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
 first=$(git log --reverse --format=%at "origin/$MARCH..HEAD" | head -1)
-checked_rebase || { echo "ship: a commit's check is red or the rebase conflicts; the branch is as it was. Fix it and ship again"; exit 1; }
+base=$(git rev-parse "origin/$MARCH")
+checked_rebase || { git fetch -q origin "$MARCH"; echo "ship: a commit's check is red or the rebase conflicts; $(git rev-list --count "$base..origin/$MARCH") commit(s) before it landed. Fix it, git rebase origin/$MARCH (the landed ones drop out) and ship again"; exit 1; }
 # a push that took no lock (a lane on an older dev/ship.sh) moved the base: refuse, never land unchecked
 git fetch -q origin "$MARCH" && git merge-base --is-ancestor "origin/$MARCH" HEAD ||
   { echo "ship: origin/$MARCH moved under the landing lock (a lane on an older dev/ship.sh); ship again"; exit 1; }
 # never claim a landing the push doesn't carry: HEAD must hold every commit this lane brought, by
 # subject (a rebase that lost them, leaving HEAD at origin's tip, would push nothing and print
 # "landed"; wt3-tests saw exactly that)
-want=$(git log --format=%s "origin/$MARCH..$start" | sort -u)
-have=$( { git log --format=%s "origin/$MARCH..HEAD"; git log -400 --format=%s "origin/$MARCH"; } | sort -u)
+want=$(git log --format=%s "$base..$start" | sort -u)
+have=$( { git log --format=%s "$base..HEAD"; git log -400 --format=%s "$base"; } | sort -u)
 missing=$(comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$have") | sed '/^$/d')
-if [ "$(git rev-list --count "origin/$MARCH..HEAD")" -eq 0 ] || [ -n "$missing" ]; then
+if [ "$(git rev-list --count "$base..HEAD")" -eq 0 ] || [ -n "$missing" ]; then
   echo "ship: REFUSED — the rebased HEAD doesn't carry this lane's commits (missing: ${missing:-all}); nothing pushed"; exit 1
 fi
 if git push -q origin HEAD:$MARCH; then

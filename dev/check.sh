@@ -6,6 +6,11 @@
 # red past 120 s. CHECK_BASE names the commit the change is measured from (default origin/wt2).
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# a check runs only inside a landing (dev/ship.sh sets CHECK_LANDING under the landing lock): with one
+# check at a time on the machine, a check outside a landing took the slot between a landing's per-commit
+# checks and held three ships behind it (march-monitor-a, 2026-10-28 21:45); to try a change before
+# shipping, run its test file at background QoS (taskpolicy -b) with a hard limit
+[ "${CHECK_LANDING:-}" = 1 ] || { echo "check: REFUSED — dev/check.sh runs only inside dev/ship.sh, which holds the landing lock; to try a change, run its test file under taskpolicy -b with a hard limit"; exit 2; }
 # the depot of the lane being checked: dev/ship.sh checks in a scratch worktree of the lane and
 # names the lane in WT_DEPOT_DIR, so its compiled images are the lane's, never a cold depot
 . dev/depot.sh; wt_depot_export "${WT_DEPOT_DIR:-$(pwd)}"
