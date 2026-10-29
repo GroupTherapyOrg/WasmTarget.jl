@@ -254,6 +254,13 @@ end
     # Julia's wasm types are its wasm arrays; at the boundary a reference is translateExternalType's
     @test D.is_wasm_type(t, W.WasmArray{Int64}) && D.is_wasm_type(t, W.ImmutableWasmArray{Any}) && !D.is_wasm_type(t, Int64)
     @test D.translate_external_storage_type(t, Any) == IR.RefType_any(; nullable = true)
+    # a wasm array crosses the boundary as the array of its elements' boundary type, nullable with
+    # `nothing`; an ImmutableWasmArray, which dart's arm does not take, as the anyref
+    local arr = D.translate_external_type(t, W.WasmArray{Any})
+    @test arr isa IR.RefType && !arr.nullable && arr.heap_type === D.wasm_array_type(t, IR.RefType_any(; nullable = true), string(IR.RefType_any(; nullable = true)); mutable_ = true)
+    @test D.translate_external_type(t, Union{Nothing,W.WasmArray{Any}}).nullable
+    @test D.translate_external_type(t, W.ImmutableWasmArray{Any}) == IR.RefType_any(; nullable = true)
+    @test D.translate_external_storage_type(t, W.WasmArray{Any}) == arr
     local ex = try; D.translate_external_storage_type(t, Int64); nothing; catch x; x; end
     @test ex isa W.RejectionError && ex.rejection isa W.Internal
     # the parameters an entry check would test: the arguments after the callee, of the specialization's types

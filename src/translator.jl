@@ -987,14 +987,22 @@ end
 
 """
 The wasm type of a Julia type on the interop boundary, an import's or export's parameter or
-return: a non-nullable primitive class its builtin type, when that is a number type; anything else
-the nullable anyref, as dart coerces every reference to an abstract one (Binaryen's closed world).
-dart's wasm classes (funcref, externref, arrays) have no Julia counterpart. Callable before the class
-info is built.
+return: a wasm array (`WasmArray{T}`, one of the wasm types is_wasm_type names) the array of its
+elements' boundary storage type, nullable with `nothing`; a non-nullable primitive class its builtin
+type, when that is a number type; anything else the nullable anyref, as dart coerces every reference
+to an abstract one (Binaryen's closed world). dart's funcref, function and externref classes have no
+Julia counterpart, and dart's arm takes its mutable WasmArray alone, an ImmutableWasmArray taking the
+anyref. Callable before the class info is built.
 """
 @parity "dart2wasm/lib/translator.dart:1239 Translator.translateExternalType" function translate_external_type(self::Translator, type_::Type)::WasmBuilder.IR.ValueType
-    if type_ isa DataType && isprimitivetype(type_)
-        local builtin = get(self.builtin_types[], type_, nothing)
+    local is_potentially_nullable = Nothing <: type_
+    local cls = is_potentially_nullable && type_ isa Union ? Base.nonnothingtype(type_) : type_
+    if cls isa DataType && cls <: WasmArray
+        local element_type = translate_external_storage_type(self, cls.parameters[1])
+        return WasmBuilder.IR.RefType_def(wasm_array_type(self, element_type, string(element_type); mutable_ = true); nullable = is_potentially_nullable)
+    end
+    if !is_potentially_nullable && cls isa DataType && isprimitivetype(cls)
+        local builtin = get(self.builtin_types[], cls, nothing)
         builtin !== nothing && WasmBuilder.is_primitive(builtin) && return builtin::WasmBuilder.IR.ValueType
     end
     return WasmBuilder.IR.RefType_any(; nullable = true)
