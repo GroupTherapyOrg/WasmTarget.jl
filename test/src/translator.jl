@@ -465,6 +465,9 @@ end
     @test D.make_array(t, ab, a, 3, (et, i) -> (@assert et == IR.NumType_i64; B.i64_const(ab, i))) == IR.RefType_def(a; nullable = false)
     @test [typeof(x) for x in ab._instructions] == [IR.I64Const, IR.I64Const, IR.I64Const, IR.ArrayNewFixed]
     B.var"end"(ab)
+    # the FFI memory, imported once per module as ffi.memory
+    local fm = D.ffi_memory(t, m)
+    @test fm === D.ffi_memory(t, m) && fm.module_ == "ffi" && fm.name == "memory" && fm.min_size == 0
     # no Julia member names a wasm memory (it declares no pragmas): a located rejection
     local em = try; D.find_memory(t, t.component.entry, m); nothing; catch x; x; end
     @test em isa W.RejectionError && em.rejection isa W.Internal

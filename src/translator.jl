@@ -505,7 +505,11 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 
 @parity "dart2wasm/lib/translator.dart:112 Translator.isStandalone" is_standalone(self::Translator)::Bool = self.options.standalone
 
-@parity "dart2wasm/lib/translator.dart:214 Translator.ffiMemory" @unported function ffi_memory(self::Translator, using_module::WasmBuilder.ModuleBuilder) end
+# Lazily import FFI memory if used.
+@parity "dart2wasm/lib/translator.dart:214 Translator.ffiMemory" ffi_memory(self::Translator, using_module::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Memory =
+    get!(self._ffi_memory_imports, using_module) do
+        WasmBuilder.var"import"(using_module.memories[], "ffi", "memory", self.options.import_shared_memory, 0, self.options.shared_memory_max_pages)
+    end
 
 @parity "dart2wasm/lib/translator.dart:316 Translator.getPartialInstantiatorForModule" @unported function get_partial_instantiator_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder) end
 
