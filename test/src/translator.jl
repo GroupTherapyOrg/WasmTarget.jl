@@ -265,10 +265,10 @@ end
     @test sct.call_target isa D.AstCallTarget && sct.param_info === D.param_info_for_direct_call(t, mi)
     # deferred loading is out of scope, and a Julia method declares no pragmas: located rejections
     local el = try; D.encode_load_list(t, D.ModuleMetadata[]); nothing; catch x; x; end
-    @test el isa W.RejectionError && el.rejection isa W.Unquarantined && occursin("deferred loading", el.rejection.row)
+    @test el isa W.RejectionError && el.rejection isa W.Internal && occursin("deferred loading", el.rejection.site)
     # TFA's inferred-type readers: Julia's inference typed every value, so none is read, located
     local et = try; D._inferred_type_of_return_value(t, mi); nothing; catch x; x; end
-    @test et isa W.RejectionError && et.rejection isa W.Unquarantined
+    @test et isa W.RejectionError && et.rejection isa W.Internal
     # a member's return type is its body's, looked up by nir_body_of: a member with none rejects, located
     @test D.type_of_return_value(t, mi) === Union{ModuleCases.Circle, ModuleCases.Square}
     local other = Core.Compiler.specialize_method(Base._which(Base.signature_type(sin, (Float64,))))
@@ -493,19 +493,11 @@ end
     @test D.make_array(t, ab, a, 3, (et, i) -> (@assert et == IR.NumType_i64; B.i64_const(ab, i))) == IR.RefType_def(a; nullable = false)
     @test [typeof(x) for x in ab._instructions] == [IR.I64Const, IR.I64Const, IR.I64Const, IR.ArrayNewFixed]
     B.var"end"(ab)
-    # the FFI memory, imported once per module as ffi.memory
-    local fm = D.ffi_memory(t, m)
-    @test fm === D.ffi_memory(t, m) && fm.module_ == "ffi" && fm.name == "memory" && fm.min_size == 0
-    # no Julia member names a wasm memory (it declares no pragmas): a located rejection
-    local em = try; D.find_memory(t, t.component.entry, m); nothing; catch x; x; end
-    @test em isa W.RejectionError && em.rejection isa W.Internal
-    # a function whose value is computed once and cached in a global: the builder accepts the new body
-    local st = B.define_struct(m.types[], "Lazy"; brand = false)
-    local lt = IR.RefType_def(st; nullable = false)
-    local lf = B.define(m.functions[], B.define_function(m.types[], IR.ValueType[], IR.ValueType[lt]), "lazy")
-    D._lazy_initialize_global(t, lf, lt, "lazy global", ib -> B.struct_new(ib, st))
-    @test [typeof(x) for x in B.body(lf)._instructions] ==
-        [IR.BeginOneOutputBlock, IR.GlobalGet, IR.BrOnNonNull, IR.StructNew, IR.LocalTee, IR.GlobalSet, IR.LocalGet, IR.End, IR.End]
+    # definitions Julia never reaches reject, Internal, naming Julia's replacement: dart:ffi's memory,
+    # a pragma'd memory, the loading map's lazy getters
+    local internal(f) = (e = try; f(); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Internal)
+    @test internal(() -> D.ffi_memory(t, m)) && internal(() -> D.find_memory(t, t.component.entry, m))
+    @test internal(() -> D._replace_body(t, D.get_dummy_function(D.get_dummy_values_collector_for_module(t, m), B.define_function(m.types[], IR.ValueType[], IR.ValueType[]))))
     # Julia has no WasmTable class, so no field is a table
     @test D.get_table(t, m, W.class_instance_fields(ModuleCases.Square, "t")[1]) === nothing
 end
@@ -552,25 +544,17 @@ end
     # the per-module and per-member helpers, each made once: dynamic dispatchers, the exception tag, a
     # member's closures, a function's reference global
     @test D.get_dynamic_dispatchers_for_module(t, m) === D.get_dynamic_dispatchers_for_module(t, m)
-    local pd = D.get_polymorphic_dispatchers_for_module(t, m)
-    @test pd === D.get_polymorphic_dispatchers_for_module(t, m) && pd.calling_module === m && isempty(pd.cache)
-    local pi = D.get_partial_instantiator_for_module(t, m)
-    @test pi === D.get_partial_instantiator_for_module(t, m) && isempty(pi._one_type_argument)
-    local ep = try; D.get_one_type_argument_forwarder(pi, t.component.entry, Base.unwrap_unionall(Vector), "f"); nothing; catch x; x; end
-    @test ep isa W.RejectionError && ep.rejection isa W.Internal          # a type argument must be a constant
+    # a polymorphic dispatcher and a partial instantiation: no Julia program makes either, Internal
+    local internal(f) = (e = try; f(); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Internal)
+    @test internal(() -> D.get_polymorphic_dispatchers_for_module(t, m)) && internal(() -> D.get_partial_instantiator_for_module(t, m))
     @test D.get_dart_exception_tag(t, m) isa IR.Tag && D.get_dart_exception_tag(t, m) === D.get_dart_exception_tag(t, m)
     local mi = t.component.entry
     @test D.get_closures(t, mi) === D.get_closures(t, mi) && D.get_closures(t, mi; find_captures = false) !== D.get_closures(t, mi)
     local f = D.get_dummy_function(D.get_dummy_values_collector_for_module(t, m), W.WasmBuilder.define_function(m.types[], IR.ValueType[], IR.ValueType[]))
     local g = D.make_function_ref(t, f)
     @test g === D.make_function_ref(t, f) && g.type == IR.GlobalType(IR.RefType_def(f.type; nullable = false); mutable = false)
-    # a JS string's global, imported once per module: by the string, or, holding bytes UTF-8 cannot
-    # carry, by its index among the strings handed to the JS runtime
-    local sg = D.get_internalized_string_global(t, m, "hi")
-    @test sg === D.get_internalized_string_global(t, m, "hi") && sg.module_ == "" && sg.name == "hi"
-    local bad = String(UInt8[0xff])
-    local bg = D.get_internalized_string_global(t, m, bad)
-    @test bg.module_ == "s" && bg.name == "0" && t.internalized_strings_for_js_runtime == [bad]
+    # a JS string's imported global: a Julia String is no JS string, Internal
+    @test internal(() -> D.get_internalized_string_global(t, m, "hi"))
     # a record's class is its own tuple type's, a class of the closed world; one the world lacks rejects
     local er = try; D.get_record_class_info(t, Tuple{Int8,Int8}); nothing; catch x; x; end
     @test er isa W.RejectionError && er.rejection isa W.Internal
@@ -612,7 +596,7 @@ end
     @test !D.synthesize_null_return_value(t, t.component.entry) && !D.synthesize_no_return(t, t.component.entry)
     # dart's node count is Julia's inliner's decision: the counter is never made, located
     local en = try; D.NodeCounter(t); nothing; catch x; x; end
-    @test en isa WasmTarget.RejectionError && en.rejection isa WasmTarget.Unquarantined && occursin("ssa_inlining_pass", en.rejection.row)
+    @test en isa WasmTarget.RejectionError && en.rejection isa WasmTarget.Internal && occursin("ssa_inlining_pass", en.rejection.site)
     local ec = try; D._should_inline_constructor_call(t, h, sig, h); nothing; catch x; x; end
-    @test ec isa WasmTarget.RejectionError && ec.rejection isa WasmTarget.Unquarantined && occursin("ssa_inlining_pass", ec.rejection.row)
+    @test ec isa WasmTarget.RejectionError && ec.rejection isa WasmTarget.Internal && occursin("ssa_inlining_pass", ec.rejection.site)
 end

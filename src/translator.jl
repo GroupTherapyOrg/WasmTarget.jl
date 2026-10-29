@@ -571,17 +571,14 @@ end
 
 @parity "dart2wasm/lib/translator.dart:112 Translator.isStandalone" is_standalone(self::Translator)::Bool = self.options.standalone
 
-# Lazily import FFI memory if used.
-@parity "dart2wasm/lib/translator.dart:214 Translator.ffiMemory" ffi_memory(self::Translator, using_module::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Memory =
-    get!(self._ffi_memory_imports, using_module) do
-        WasmBuilder.var"import"(using_module.memories[], "ffi", "memory", self.options.import_shared_memory, 0, self.options.shared_memory_max_pages)
-    end
+@parity "dart2wasm/lib/translator.dart:214 Translator.ffiMemory" ffi_memory(self::Translator, using_module::WasmBuilder.ModuleBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:214 Translator.ffiMemory: dart:ffi's memory; Julia has no dart:ffi, a foreign call being a quarantined host import (dev/MARCH.md 1.F)"), "Translator.ffiMemory")
 
-@parity "dart2wasm/lib/translator.dart:316 Translator.getPartialInstantiatorForModule" get_partial_instantiator_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::PartialInstantiator =
-    get!(() -> PartialInstantiator(self, module_), self._partial_instantiators, module_)
+@parity "dart2wasm/lib/translator.dart:316 Translator.getPartialInstantiatorForModule" get_partial_instantiator_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:316 Translator.getPartialInstantiatorForModule: a partial instantiation's forwarders; Julia instantiates no generic function value, a specialization being a MethodInstance (the Kernel table's InstantiationConstant row)"), "Translator.getPartialInstantiatorForModule")
 
-@parity "dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule" get_polymorphic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::PolymorphicDispatchers =
-    get!(() -> PolymorphicDispatchers(self, module_), self._polymorphic_dispatchers, module_)
+@parity "dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule" get_polymorphic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "Translator.getPolymorphicDispatchersForModule")
 
 @parity "dart2wasm/lib/translator.dart:332 Translator.getDynamicDispatchersForModule" get_dynamic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::DynamicDispatchers =
     get!(() -> DynamicDispatchers(self, module_), self._dynamic_dispatchers, module_)
@@ -613,7 +610,7 @@ end
 end
 
 @parity "dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId" modules_for_load_id(self::Translator, enclosing_library::Module, load_id::Int64)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator.modulesForLoadId")
+    reject!(Internal("dart2wasm/lib/translator.dart:442 Translator.modulesForLoadId: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator.modulesForLoadId")
 
 @parity "dart2wasm/lib/translator.dart:449 Translator.nameForModule" name_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::String = self._builder_to_output[module_].module_import_name
 
@@ -729,44 +726,19 @@ neededForLoadList, the empty modules' removal and the loading map getters).
 end
 
 @parity "dart2wasm/lib/translator.dart:649 Translator._patchLoadingMapGetter" _patch_loading_map_getter(self::Translator, function_::WasmBuilder.FunctionBuilder)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:649 Translator._patchLoadingMapGetter: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator._patchLoadingMapGetter")
+    reject!(Internal("dart2wasm/lib/translator.dart:649 Translator._patchLoadingMapGetter: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator._patchLoadingMapGetter")
 
 @parity "dart2wasm/lib/translator.dart:723 Translator.encodeLoadList" encode_load_list(self::Translator, module_list::Vector{ModuleMetadata})::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:723 Translator.encodeLoadList: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator.encodeLoadList")
+    reject!(Internal("dart2wasm/lib/translator.dart:723 Translator.encodeLoadList: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator.encodeLoadList")
 
 @parity "dart2wasm/lib/translator.dart:748 Translator._patchLoadingMapNamesGetter" _patch_loading_map_names_getter(self::Translator, function_::WasmBuilder.FunctionBuilder)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:748 Translator._patchLoadingMapNamesGetter: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator._patchLoadingMapNamesGetter")
+    reject!(Internal("dart2wasm/lib/translator.dart:748 Translator._patchLoadingMapNamesGetter: deferred loading is out of scope (dev/PARITY_MASTER.md): one main module, no loading map"), "Translator._patchLoadingMapNamesGetter")
 
-"""
-Replace `f`'s body with one returning a value of `type_` computed once by `gen` and cached in a new
-nullable global named `name`: the global read, returned when set, else computed, stored and returned.
-"""
-@parity "dart2wasm/lib/translator.dart:779 Translator._lazyInitializeGlobal" function _lazy_initialize_global(self::Translator, f::WasmBuilder.FunctionBuilder, type_::WasmBuilder.IR.ValueType, name::String, gen::Function)::Nothing
-    local global_type = WasmBuilder.IR.GlobalType(WasmBuilder.with_nullability(type_, true))
-    local global_ = WasmBuilder.define(f.module_builder.globals[], global_type, name)
-    WasmBuilder.ref_null(global_.initializer, WasmBuilder.IR.HeapType_none)
-    WasmBuilder.var"end"(global_.initializer)
+@parity "dart2wasm/lib/translator.dart:779 Translator._lazyInitializeGlobal" _lazy_initialize_global(self::Translator, f::WasmBuilder.FunctionBuilder, type_::WasmBuilder.IR.ValueType, name::String, gen::Function)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:779 Translator._lazyInitializeGlobal: the loading map's lazily initialized getters; deferred loading is out of scope (dev/PARITY_MASTER.md), so no getter is patched"), "Translator._lazyInitializeGlobal")
 
-    local b = _replace_body(self, f)
-
-    local label = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[type_])
-    WasmBuilder.global_get(b, global_)
-    WasmBuilder.br_on_non_null(b, label)
-    gen(b)
-    local local_ = WasmBuilder.add_local(b, type_)
-    WasmBuilder.local_tee(b, local_)
-    WasmBuilder.global_set(b, global_)
-    WasmBuilder.local_get(b, local_)
-    WasmBuilder.var"end"(b)
-    WasmBuilder.var"end"(b)
-    return nothing
-end
-
-@parity "dart2wasm/lib/translator.dart:805 Translator._replaceBody" function _replace_body(self::Translator, function_::WasmBuilder.FunctionBuilder)::WasmBuilder.InstructionsBuilder
-    local new_body = WasmBuilder.InstructionsBuilder(function_.module_builder, function_.type.inputs, function_.type.outputs)
-    WasmBuilder.replace_body(function_, new_body)
-    return new_body
-end
+@parity "dart2wasm/lib/translator.dart:805 Translator._replaceBody" _replace_body(self::Translator, function_::WasmBuilder.FunctionBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:805 Translator._replaceBody: the loading map's patched getters' bodies; deferred loading is out of scope (dev/PARITY_MASTER.md), so no getter is patched"), "Translator._replaceBody")
 
 @parity "dart2wasm/lib/translator.dart:815 Translator._printFunction" function _print_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, name::Union{String,NirConst,DummyValueConstant})::Nothing
     if self.options.print_wasm
@@ -824,33 +796,9 @@ so every function is the one module's and another module's is a located rejectio
     reject!(Internal("dart2wasm/lib/translator.dart:875 Translator.callFunction: a call across modules, which one module never makes"), "Translator.callFunction")
 end
 
-"""
-Call `selector`'s implementation for the receiver on `b`'s stack through the dispatch table: the
-receiver's class id plus the selector's offset indexes the table; a selector with no offset (no
-target) is unreachable. A Julia member calls through no selector (src/dispatch_table.jl), so the
-dispatch table is empty and no call reaches here until the subset admits a dynamic call.
-"""
-@parity "dart2wasm/lib/translator.dart:911 Translator.callDispatchTable" function call_dispatch_table(self::Translator, b::WasmBuilder.InstructionsBuilder, selector::SelectorInfo;
-        interface_target::Union{Nothing,Core.MethodInstance} = nothing, use_unchecked_entry::Bool)::Nothing
-    record_selector_use(self.functions[], selector, use_unchecked_entry)
-
-    local offset = targets(selector; unchecked = use_unchecked_entry).offset
-    if offset === nothing
-        WasmBuilder.unreachable(b)
-        return nothing
-    end
-
-    local signature = selector.signature[]
-    local receiver_type = signature.inputs[1]
-    load_class_id(b, self, receiver_type)
-    if offset != 0
-        WasmBuilder.i32_const(b, offset)
-        WasmBuilder.i32_add(b)
-    end
-    WasmBuilder.call_indirect(b, signature, get_wasm_table(self.dispatch_table[], b.module_builder))
-    emit_unreachable_if_no_result(b, signature.outputs)
-    return nothing
-end
+@parity "dart2wasm/lib/translator.dart:911 Translator.callDispatchTable" call_dispatch_table(self::Translator, b::WasmBuilder.InstructionsBuilder, selector::SelectorInfo;
+        interface_target::Union{Nothing,Core.MethodInstance} = nothing, use_unchecked_entry::Bool)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:911 Translator.callDispatchTable: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "Translator.callDispatchTable")
 
 @parity "dart2wasm/lib/translator.dart:936 Translator.classForType" function class_for_type(self::Translator, type_::Type)::DataType
     local t = to_most_specific_interface_type(self, type_)
@@ -1162,7 +1110,7 @@ end
 # dart reads each parameter's declared type; a NIR argument carries no type, its type the
 # specialization's, which getParametersToCheck reads (nir_argument_type)
 @parity "dart2wasm/lib/translator.dart:1830 Translator._typesFromPositionalParameters" _types_from_positional_parameters(self::Translator, type_parameters::Vector{Union{NirSSA,NirArgument}})::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:1830 Translator._typesFromPositionalParameters: a parameter's declared type; a NIR argument carries none, its type the specialization's (getParametersToCheck reads nir_argument_type)"), "Translator._typesFromPositionalParameters")
+    reject!(Internal("dart2wasm/lib/translator.dart:1830 Translator._typesFromPositionalParameters: a parameter's declared type; a NIR argument carries none, its type the specialization's (getParametersToCheck reads nir_argument_type)"), "Translator._typesFromPositionalParameters")
 
 # Julia's keyword body takes its keywords positionally (the Kernel table's NamedParameter row), so a
 # member has no named parameters: dart's first return
@@ -1287,19 +1235,19 @@ Reshaped: `node` — the variable's type is the NIR body's, which the code gener
 end
 
 @parity "dart2wasm/lib/translator.dart:2115 Translator._inferredTypeOfParameterVariable" _inferred_type_of_parameter_variable(self::Translator, node::Union{NirSSA,NirArgument})::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:2115 Translator._inferredTypeOfParameterVariable: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfParameterVariable")
+    reject!(Internal("dart2wasm/lib/translator.dart:2115 Translator._inferredTypeOfParameterVariable: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfParameterVariable")
 
 @parity "dart2wasm/lib/translator.dart:2119 Translator._inferredTypeOfReturnValue" _inferred_type_of_return_value(self::Translator, node::Core.MethodInstance)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:2119 Translator._inferredTypeOfReturnValue: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfReturnValue")
+    reject!(Internal("dart2wasm/lib/translator.dart:2119 Translator._inferredTypeOfReturnValue: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfReturnValue")
 
 @parity "dart2wasm/lib/translator.dart:2126 Translator._inferredTypeOfField" _inferred_type_of_field(self::Translator, node::ClassField)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:2126 Translator._inferredTypeOfField: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfField")
+    reject!(Internal("dart2wasm/lib/translator.dart:2126 Translator._inferredTypeOfField: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfField")
 
 @parity "dart2wasm/lib/translator.dart:2130 Translator._inferredTypeOfLocalVariable" _inferred_type_of_local_variable(self::Translator, variable::Union{NirSSA,NirArgument})::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:2130 Translator._inferredTypeOfLocalVariable: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfLocalVariable")
+    reject!(Internal("dart2wasm/lib/translator.dart:2130 Translator._inferredTypeOfLocalVariable: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._inferredTypeOfLocalVariable")
 
 @parity "dart2wasm/lib/translator.dart:2148 Translator._filterInferredType" _filter_inferred_type(self::Translator, default_type::Type, inferred_type::Union{Nothing,Type})::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:2148 Translator._filterInferredType: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._filterInferredType")
+    reject!(Internal("dart2wasm/lib/translator.dart:2148 Translator._filterInferredType: TFA's inferred type, filtered against the declared one; Julia's inference typed every value of the closed world exactly, the NIR's own type (nir_value_type, typeOfCheckedParameterVariable, typeOfReturnValue), so no metadata refines it"), "Translator._filterInferredType")
 
 """
 Whether a direct call to `target` is inlined. dart's pragmas are Julia's declarations: `@noinline`
@@ -1314,13 +1262,13 @@ never, `@inline` its preference; a Julia member is a method, dart's procedure ar
 end
 
 @parity "dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor" _should_inline_field_accessor(self::Translator, target::Core.MethodInstance, field::ClassField)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor: a field accessor's inlining; a Julia member is a method, never a field's implicit getter or setter, and Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost)"), "Translator._shouldInlineFieldAccessor")
+    reject!(Internal("dart2wasm/lib/translator.dart:2224 Translator._shouldInlineFieldAccessor: a field accessor's inlining; a Julia member is a method, never a field's implicit getter or setter, and Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost)"), "Translator._shouldInlineFieldAccessor")
 
 @parity "dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer" never_inline_static_field_initializer(self::Translator, field::ClassField)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer: a static field initializer's inlining by its node count; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), and a binding's value is globals.dart's constant initializer or none"), "Translator.neverInlineStaticFieldInitializer")
+    reject!(Internal("dart2wasm/lib/translator.dart:2272 Translator.neverInlineStaticFieldInitializer: a static field initializer's inlining by its node count; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), and a binding's value is globals.dart's constant initializer or none"), "Translator.neverInlineStaticFieldInitializer")
 
 @parity "dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall" _should_inline_constructor_call(self::Translator, target::Core.MethodInstance, signature::WasmBuilder.IR.FunctionType, constructor::Core.MethodInstance)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall: a constructor's inlining by its initializers' size; a Julia constructor is a method, and Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost)"), "Translator._shouldInlineConstructorCall")
+    reject!(Internal("dart2wasm/lib/translator.dart:2284 Translator._shouldInlineConstructorCall: a constructor's inlining by its initializers' size; a Julia constructor is a method, and Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost)"), "Translator._shouldInlineConstructorCall")
 
 """
 dart's size estimate of a procedure's body against the call's overhead. Julia's optimizer has run its
@@ -1343,7 +1291,7 @@ end
 end
 
 @parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" get_pragma(self::Translator, node::NoCounterpart, name::String, default_value::Union{Nothing,NirConst} = nothing)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:2423 Translator.getPragma: a pragma's value; a Julia method declares no pragmas (the Kernel table's Annotatable row), its inlining Julia's @inline and @noinline (shouldInline)"), "Translator.getPragma")
+    reject!(Internal("dart2wasm/lib/translator.dart:2423 Translator.getPragma: a pragma's value; a Julia method declares no pragmas (the Kernel table's Annotatable row), its inlining Julia's @inline and @noinline (shouldInline)"), "Translator.getPragma")
 
 """
 Push a new array of `array_type` holding `length` items, each pushed by `generate_item(element_type,
@@ -1393,40 +1341,13 @@ end
     return info
 end
 
-"""
-The imported global holding the JS string `s` in `module_`, one per module and string: named by the
-string itself, or, for a string UTF-8 cannot carry, by its index among the strings handed to the JS
-runtime. dart's test is an unpaired UTF-16 surrogate; Julia's String is UTF-8 bytes, which carry
-every code point but may hold bytes that are no UTF-8 (`isvalid`, which also refuses an encoded
-surrogate), the strings UTF-8 cannot carry here.
-"""
-@parity "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal" function get_internalized_string_global(self::Translator, module_::WasmBuilder.ModuleBuilder, s::String)::WasmBuilder.IR.Global
-    local at = "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal"
-    self.options.standalone && reject!(Internal("$at: Standalone mode doesn't have string globals"), at)
-    local existing = get(self._internalized_string_globals, (module_, s), nothing)
-    existing === nothing || return existing
-    local type_ = WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType_extern(; nullable = false); mutable = false)
-    local internalized_string
-    if !isvalid(s)
-        # Bytes UTF-8 cannot carry are imported from the JS runtime.
-        local i = length(self.internalized_strings_for_js_runtime)
-        internalized_string = WasmBuilder.var"import"(module_.globals[], "s", string(i), type_)
-        push!(self.internalized_strings_for_js_runtime, s)
-    else
-        internalized_string = WasmBuilder.var"import"(module_.globals[], "", s, type_)
-    end
-    self._internalized_string_globals[(module_, s)] = internalized_string
-    return internalized_string
-end
+@parity "dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal" get_internalized_string_global(self::Translator, module_::WasmBuilder.ModuleBuilder, s::String)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:2487 Translator.getInternalizedStringGlobal: a JS string's imported global; a Julia String is no JS string: its representation is its class's (class_info.jl), and no constant imports one"), "Translator.getInternalizedStringGlobal")
 
 @parity "dart2wasm/lib/translator.dart:2534 Translator.pushStandaloneStringConstant" @unported function push_standalone_string_constant(self::Translator, instructions::WasmBuilder.InstructionsBuilder, data::WasmBuilder.DataSegmentBuilder, s::String) end
 
-"""The memory an external memory getter names, the main module's, imported into any other module."""
-@parity "dart2wasm/lib/translator.dart:2575 Translator.findMemory" function find_memory(self::Translator, top_level_external_memory_getter::Core.MethodInstance, module_builder::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.Memory
-    local in_main = _find_memory_for_main_module(self, top_level_external_memory_getter)
-    module_builder === main_module(self) && return in_main
-    return get(self._imported_memories[], in_main, module_builder)
-end
+@parity "dart2wasm/lib/translator.dart:2575 Translator.findMemory" find_memory(self::Translator, top_level_external_memory_getter::Core.MethodInstance, module_builder::WasmBuilder.ModuleBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:2575 Translator.findMemory: an external memory getter's memory; a Julia binding declares no wasm:memory-type pragma, so no member names a memory"), "Translator.findMemory")
 
 # dart reads the getter's wasm:memory-type pragma (MemoryLimits.readAnnotation, asserted present); a
 # Julia binding declares no pragmas (that reader is out of scope, "julia: Julia declares no pragmas"),
@@ -1538,193 +1459,118 @@ end
 @parity "dart2wasm/lib/translator.dart:3365 _ClosureArgumentsToVtableEntryDispatcherGenerator._verifyAssumptions" @unported function _verify_assumptions(self::_ClosureArgumentsToVtableEntryDispatcherGenerator, b::WasmBuilder.InstructionsBuilder, closure_local::WasmBuilder.IR.Local, type_args_local::WasmBuilder.IR.Local, pos_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local) end
 
 @parity "dart2wasm/lib/translator.dart:3420 NodeCounter" NodeCounter(translator::KernelNodes)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3420 NodeCounter: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter")
+    reject!(Internal("dart2wasm/lib/translator.dart:3420 NodeCounter: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter")
 
 @parity "dart2wasm/lib/translator.dart:3429 NodeCounter.defaultTreeNode" default_tree_node(self::NodeCounter, node::NirStmt)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3429 NodeCounter.defaultTreeNode: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.defaultTreeNode")
+    reject!(Internal("dart2wasm/lib/translator.dart:3429 NodeCounter.defaultTreeNode: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.defaultTreeNode")
 
 @parity "dart2wasm/lib/translator.dart:3436 NodeCounter.visitFieldInitializer" visit_field_initializer(self::NodeCounter, node::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3436 NodeCounter.visitFieldInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitFieldInitializer")
+    reject!(Internal("dart2wasm/lib/translator.dart:3436 NodeCounter.visitFieldInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitFieldInitializer")
 
 @parity "dart2wasm/lib/translator.dart:3441 NodeCounter.visitLocalInitializer" visit_local_initializer(self::NodeCounter, node::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3441 NodeCounter.visitLocalInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitLocalInitializer")
+    reject!(Internal("dart2wasm/lib/translator.dart:3441 NodeCounter.visitLocalInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitLocalInitializer")
 
 @parity "dart2wasm/lib/translator.dart:3446 NodeCounter.visitSuperInitializer" visit_super_initializer(self::NodeCounter, node::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3446 NodeCounter.visitSuperInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitSuperInitializer")
+    reject!(Internal("dart2wasm/lib/translator.dart:3446 NodeCounter.visitSuperInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitSuperInitializer")
 
 @parity "dart2wasm/lib/translator.dart:3451 NodeCounter.visitRedirectingInitializer" visit_redirecting_initializer(self::NodeCounter, node::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3451 NodeCounter.visitRedirectingInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitRedirectingInitializer")
+    reject!(Internal("dart2wasm/lib/translator.dart:3451 NodeCounter.visitRedirectingInitializer: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitRedirectingInitializer")
 
 @parity "dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue" handle_field_initializer_value(self::NodeCounter, value::Union{Nothing,NirValue})::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.handleFieldInitializerValue")
+    reject!(Internal("dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.handleFieldInitializerValue")
 
 @parity "dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock" visit_block(self::NodeCounter, node::NirBody)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitBlock")
+    reject!(Internal("dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitBlock")
 
 @parity "dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement" visit_empty_statement(self::NodeCounter, node::NirNothing)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitEmptyStatement")
+    reject!(Internal("dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitEmptyStatement")
 
 @parity "dart2wasm/lib/translator.dart:3478 NodeCounter.visitReturnStatement" visit_return_statement(self::NodeCounter, node::NirReturn)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3478 NodeCounter.visitReturnStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitReturnStatement")
+    reject!(Internal("dart2wasm/lib/translator.dart:3478 NodeCounter.visitReturnStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitReturnStatement")
 
 @parity "dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement" visit_labeled_statement(self::NodeCounter, node::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitLabeledStatement")
+    reject!(Internal("dart2wasm/lib/translator.dart:3489 NodeCounter.visitLabeledStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitLabeledStatement")
 
 @parity "dart2wasm/lib/translator.dart:3494 NodeCounter.visitBlockExpression" visit_block_expression(self::NodeCounter, node::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3494 NodeCounter.visitBlockExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitBlockExpression")
+    reject!(Internal("dart2wasm/lib/translator.dart:3494 NodeCounter.visitBlockExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitBlockExpression")
 
 @parity "dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement" visit_expression_statement(self::NodeCounter, node::NirStmt)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitExpressionStatement")
+    reject!(Internal("dart2wasm/lib/translator.dart:3499 NodeCounter.visitExpressionStatement: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitExpressionStatement")
 
 @parity "dart2wasm/lib/translator.dart:3504 NodeCounter.visitLet" visit_let(self::NodeCounter, node::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3504 NodeCounter.visitLet: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitLet")
+    reject!(Internal("dart2wasm/lib/translator.dart:3504 NodeCounter.visitLet: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitLet")
 
 @parity "dart2wasm/lib/translator.dart:3509 NodeCounter.visitArguments" visit_arguments(self::NodeCounter, node::Vector{NirValue})::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3509 NodeCounter.visitArguments: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitArguments")
+    reject!(Internal("dart2wasm/lib/translator.dart:3509 NodeCounter.visitArguments: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitArguments")
 
 @parity "dart2wasm/lib/translator.dart:3515 NodeCounter.visitNamedExpression" visit_named_expression(self::NodeCounter, node::NoCounterpart)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3515 NodeCounter.visitNamedExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitNamedExpression")
+    reject!(Internal("dart2wasm/lib/translator.dart:3515 NodeCounter.visitNamedExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitNamedExpression")
 
 @parity "dart2wasm/lib/translator.dart:3520 NodeCounter.visitIsExpression" visit_is_expression(self::NodeCounter, node::NirCall)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3520 NodeCounter.visitIsExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitIsExpression")
+    reject!(Internal("dart2wasm/lib/translator.dart:3520 NodeCounter.visitIsExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitIsExpression")
 
 @parity "dart2wasm/lib/translator.dart:3526 NodeCounter.visitAsExpression" visit_as_expression(self::NodeCounter, node::NirCall)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3526 NodeCounter.visitAsExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitAsExpression")
+    reject!(Internal("dart2wasm/lib/translator.dart:3526 NodeCounter.visitAsExpression: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitAsExpression")
 
 @parity "dart2wasm/lib/translator.dart:3532 NodeCounter.defaultDartType" default_dart_type(self::NodeCounter, node::Type)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3532 NodeCounter.defaultDartType: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.defaultDartType")
+    reject!(Internal("dart2wasm/lib/translator.dart:3532 NodeCounter.defaultDartType: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.defaultDartType")
 
 @parity "dart2wasm/lib/translator.dart:3540 NodeCounter.visitInstanceGet" visit_instance_get(self::NodeCounter, node::NirCall)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3540 NodeCounter.visitInstanceGet: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitInstanceGet")
+    reject!(Internal("dart2wasm/lib/translator.dart:3540 NodeCounter.visitInstanceGet: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitInstanceGet")
 
 @parity "dart2wasm/lib/translator.dart:3546 NodeCounter.visitInstanceSet" visit_instance_set(self::NodeCounter, node::NirCall)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3546 NodeCounter.visitInstanceSet: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitInstanceSet")
+    reject!(Internal("dart2wasm/lib/translator.dart:3546 NodeCounter.visitInstanceSet: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitInstanceSet")
 
 @parity "dart2wasm/lib/translator.dart:3552 NodeCounter.visitInstanceInvocation" visit_instance_invocation(self::NodeCounter, node::NirInvoke)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3552 NodeCounter.visitInstanceInvocation: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitInstanceInvocation")
+    reject!(Internal("dart2wasm/lib/translator.dart:3552 NodeCounter.visitInstanceInvocation: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitInstanceInvocation")
 
 @parity "dart2wasm/lib/translator.dart:3558 NodeCounter.visitEqualsCall" visit_equals_call(self::NodeCounter, node::NirInvoke)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3558 NodeCounter.visitEqualsCall: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitEqualsCall")
+    reject!(Internal("dart2wasm/lib/translator.dart:3558 NodeCounter.visitEqualsCall: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter.visitEqualsCall")
 
 @parity "dart2wasm/lib/translator.dart:3563 NodeCounter._countInstanceCallCost" _count_instance_call_cost(self::NodeCounter, node::NirStmt)::Union{} =
-    reject!(Unquarantined("dart2wasm/lib/translator.dart:3563 NodeCounter._countInstanceCallCost: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter._countInstanceCallCost")
+    reject!(Internal("dart2wasm/lib/translator.dart:3563 NodeCounter._countInstanceCallCost: a body's node count for inlining; Julia's inliner decided inlining (Compiler's ssa_inlining_pass, inline_cost), so NodeCounter is never made"), "NodeCounter._countInstanceCallCost")
 
 @parity "dart2wasm/lib/translator.dart:3576 InliningDecision" InliningDecision(should_inline::Bool, reason::Union{String,Nothing})::InliningDecision = InliningDecision(Val(:_), should_inline, reason)
 
-@parity "dart2wasm/lib/translator.dart:3610 PartialInstantiator" PartialInstantiator(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::PartialInstantiator =
-    PartialInstantiator(Val(:_), translator, calling_module)
+@parity "dart2wasm/lib/translator.dart:3610 PartialInstantiator" PartialInstantiator(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3610 PartialInstantiator: a partial instantiation's forwarders; Julia instantiates no generic function value, a specialization being a MethodInstance (the Kernel table's InstantiationConstant row)"), "PartialInstantiator")
 
-@parity "dart2wasm/lib/translator.dart:3612 PartialInstantiator.getOneTypeArgumentForwarder" function get_one_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type_::Type, name::String)::WasmBuilder.IR.BaseFunction
-    local translator = self.translator::Translator
-    is_type_constant(translator.types[], type_) ||
-        reject!(Internal("dart2wasm/lib/translator.dart:3612 PartialInstantiator.getOneTypeArgumentForwarder: the type argument $type_ has a free type variable"), "PartialInstantiator.getOneTypeArgumentForwarder")
-    return get!(self._one_type_argument, (target, type_)) do
-        local wasm_target = get_function(translator.functions[], target)
-        local function_ = WasmBuilder.define(self.calling_module.functions[],
-            WasmBuilder.define_function(types_builder(translator), wasm_target.type.inputs[2:end], wasm_target.type.outputs), name)
-        local b = WasmBuilder.body(function_)
-        instantiate_constant(translator.constants[], b, NirConst(Core.Const(type_)), non_nullable_type_type(translator.types[]))
-        for i in 2:length(wasm_target.type.inputs)
-            WasmBuilder.local_get(b, b.locals[i - 1])
-        end
-        call_function(translator, wasm_target, b)
-        WasmBuilder.return_(b)
-        WasmBuilder.var"end"(b)
-        function_
-    end
-end
+@parity "dart2wasm/lib/translator.dart:3612 PartialInstantiator.getOneTypeArgumentForwarder" get_one_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type_::Type, name::String)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3612 PartialInstantiator.getOneTypeArgumentForwarder: a partial instantiation's forwarders; Julia instantiates no generic function value, a specialization being a MethodInstance (the Kernel table's InstantiationConstant row)"), "PartialInstantiator.getOneTypeArgumentForwarder")
 
-@parity "dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder" function get_two_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type1::Type, type2::Type, name::String)::WasmBuilder.IR.BaseFunction
-    local translator = self.translator::Translator
-    (is_type_constant(translator.types[], type1) && is_type_constant(translator.types[], type2)) ||
-        reject!(Internal("dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder: a type argument of $type1, $type2 has a free type variable"), "PartialInstantiator.getTwoTypeArgumentForwarder")
-    return get!(self._two_type_arguments, (target, type1, type2)) do
-        local wasm_target = get_function(translator.functions[], target)
-        local function_ = WasmBuilder.define(self.calling_module.functions[],
-            WasmBuilder.define_function(types_builder(translator), wasm_target.type.inputs[3:end], wasm_target.type.outputs), name)
-        local b = WasmBuilder.body(function_)
-        instantiate_constant(translator.constants[], b, NirConst(Core.Const(type1)), non_nullable_type_type(translator.types[]))
-        instantiate_constant(translator.constants[], b, NirConst(Core.Const(type2)), non_nullable_type_type(translator.types[]))
-        for i in 3:length(wasm_target.type.inputs)
-            WasmBuilder.local_get(b, b.locals[i - 2])
-        end
-        call_function(translator, wasm_target, b)
-        WasmBuilder.return_(b)
-        WasmBuilder.var"end"(b)
-        function_
-    end
-end
+@parity "dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder" get_two_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type1::Type, type2::Type, name::String)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder: a partial instantiation's forwarders; Julia instantiates no generic function value, a specialization being a MethodInstance (the Kernel table's InstantiationConstant row)"), "PartialInstantiator.getTwoTypeArgumentForwarder")
 
-@parity "dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers" PolymorphicDispatchers(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::PolymorphicDispatchers =
-    PolymorphicDispatchers(Val(:_), translator, calling_module)
+@parity "dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers" PolymorphicDispatchers(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatchers")
 
-@parity "dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher" function get_polymorphic_dispatcher(self::PolymorphicDispatchers, selector::SelectorInfo; use_unchecked_entry::Bool)::CallTarget
-    length(targets(selector; unchecked = use_unchecked_entry).all_target_ranges) > 1 ||
-        reject!(Internal("dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher: the selector $(selector.name) has one target or none"), "PolymorphicDispatchers.getPolymorphicDispatcher")
-    local cache = use_unchecked_entry && selector.use_multiple_entry_points[] ? self.unchecked_cache : self.cache
-    return get!(() -> PolymorphicDispatcherCallTarget(self.translator, selector, self.calling_module, use_unchecked_entry), cache, selector)
-end
+@parity "dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher" get_polymorphic_dispatcher(self::PolymorphicDispatchers, selector::SelectorInfo; use_unchecked_entry::Bool)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatchers.getPolymorphicDispatcher")
 
-@parity "dart2wasm/lib/translator.dart:3721 PolymorphicDispatcherCallTarget" function PolymorphicDispatcherCallTarget(translator::KernelNodes, selector::SelectorInfo, calling_module::WasmBuilder.ModuleBuilder,
-        use_unchecked_entry::Bool)::PolymorphicDispatcherCallTarget
-    local signature = selector.signature[]
-    return PolymorphicDispatcherCallTarget(Val(:_), translator, selector, calling_module, use_unchecked_entry,
-        WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i32; signature.inputs], signature.outputs))
-end
+@parity "dart2wasm/lib/translator.dart:3721 PolymorphicDispatcherCallTarget" PolymorphicDispatcherCallTarget(translator::KernelNodes, selector::SelectorInfo, calling_module::WasmBuilder.ModuleBuilder,
+        use_unchecked_entry::Bool)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3721 PolymorphicDispatcherCallTarget: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatcherCallTarget")
 
-@parity "dart2wasm/lib/translator.dart:3734 PolymorphicDispatcherCallTarget.name" name(self::PolymorphicDispatcherCallTarget)::String = "$(self.selector.name) (polymorphic dispatcher)"
+@parity "dart2wasm/lib/translator.dart:3734 PolymorphicDispatcherCallTarget.name" name(self::PolymorphicDispatcherCallTarget)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3734 PolymorphicDispatcherCallTarget.name: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatcherCallTarget.name")
 
-@parity "dart2wasm/lib/translator.dart:3737 PolymorphicDispatcherCallTarget.supportsInlining" supports_inlining(self::PolymorphicDispatcherCallTarget)::Bool = true
+@parity "dart2wasm/lib/translator.dart:3737 PolymorphicDispatcherCallTarget.supportsInlining" supports_inlining(self::PolymorphicDispatcherCallTarget)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3737 PolymorphicDispatcherCallTarget.supportsInlining: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatcherCallTarget.supportsInlining")
 
-@parity "dart2wasm/lib/translator.dart:3740 PolymorphicDispatcherCallTarget.shouldInline" should_inline(self::PolymorphicDispatcherCallTarget)::InliningDecision =
-    InliningDecision(length(targets(self.selector; unchecked = self.use_unchecked_entry).static_dispatch_ranges) <= 1, "staticDispatchRanges <= 1")
+@parity "dart2wasm/lib/translator.dart:3740 PolymorphicDispatcherCallTarget.shouldInline" should_inline(self::PolymorphicDispatcherCallTarget)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3740 PolymorphicDispatcherCallTarget.shouldInline: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatcherCallTarget.shouldInline")
 
-@parity "dart2wasm/lib/translator.dart:3750 PolymorphicDispatcherCallTarget.inliningCodeGen" inlining_code_gen(self::PolymorphicDispatcherCallTarget)::CodeGenerator =
-    PolymorphicDispatcherCodeGenerator(self.translator, self.selector, self.use_unchecked_entry)
+@parity "dart2wasm/lib/translator.dart:3750 PolymorphicDispatcherCallTarget.inliningCodeGen" inlining_code_gen(self::PolymorphicDispatcherCallTarget)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3750 PolymorphicDispatcherCallTarget.inliningCodeGen: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatcherCallTarget.inliningCodeGen")
 
-@parity "dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function" var"function"(self::PolymorphicDispatcherCallTarget)::WasmBuilder.IR.BaseFunction = self.function_[]
+@parity "dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function" var"function"(self::PolymorphicDispatcherCallTarget)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatcherCallTarget.function")
 
-@parity "dart2wasm/lib/translator.dart:3769 PolymorphicDispatcherCodeGenerator" PolymorphicDispatcherCodeGenerator(translator::KernelNodes, selector::SelectorInfo, use_unchecked_entry::Bool)::PolymorphicDispatcherCodeGenerator =
-    PolymorphicDispatcherCodeGenerator(Val(:_), translator, selector, use_unchecked_entry)
+@parity "dart2wasm/lib/translator.dart:3769 PolymorphicDispatcherCodeGenerator" PolymorphicDispatcherCodeGenerator(translator::KernelNodes, selector::SelectorInfo, use_unchecked_entry::Bool)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3769 PolymorphicDispatcherCodeGenerator: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatcherCodeGenerator")
 
-@parity "dart2wasm/lib/translator.dart:3776 PolymorphicDispatcherCodeGenerator.generate" function generate(self::PolymorphicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
-    local translator = self.translator::Translator
-    local signature = self.selector.signature[]
-    local selector_targets = targets(self.selector; unchecked = self.use_unchecked_entry)
-    local target_ranges = NamedTuple{(:range, :value),Tuple{Range,Core.MethodInstance}}[(range = e.range, value = e.target) for e in selector_targets.static_dispatch_ranges]
-    local need_fallback = length(selector_targets.all_target_ranges) > length(selector_targets.static_dispatch_ranges)
-
-    # First parameter to the dispatcher is the class id.
-    local class_id_parameter_offset = 1
-
-    local emit_direct_call = function (target::Core.MethodInstance)
-        for i in 0:length(signature.inputs) - 1
-            WasmBuilder.local_get(b, param_locals[class_id_parameter_offset + i + 1])
-        end
-        call_reference(translator, target, b)
-        return nothing
-    end
-
-    local emit_dispatch_table_call = function ()
-        for i in 0:length(signature.inputs) - 1
-            WasmBuilder.local_get(b, param_locals[class_id_parameter_offset + i + 1])
-        end
-        WasmBuilder.local_get(b, param_locals[2])
-        call_dispatch_table(translator, b, self.selector; use_unchecked_entry = self.use_unchecked_entry)
-        return nothing
-    end
-
-    WasmBuilder.local_get(b, param_locals[1])
-    class_id_search(b, target_ranges, signature.outputs, emit_direct_call, need_fallback ? emit_dispatch_table_call : nothing)
-
-    if return_label !== nothing
-        WasmBuilder.br(b, return_label)
-    else
-        WasmBuilder.return_(b)
-    end
-    WasmBuilder.var"end"(b)
-    return nothing
-end
+@parity "dart2wasm/lib/translator.dart:3776 PolymorphicDispatcherCodeGenerator.generate" generate(self::PolymorphicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:3776 PolymorphicDispatcherCodeGenerator.generate: a Julia member calls through no selector: Julia's trim verifier admits no call it cannot resolve to its MethodInstance (src/dispatch_table.jl), so no dynamic dispatch reaches here"), "PolymorphicDispatcherCodeGenerator.generate")
 
 @parity "dart2wasm/lib/translator.dart:3843 DummyValuesCollector" DummyValuesCollector(translator::KernelNodes, module_::WasmBuilder.ModuleBuilder)::DummyValuesCollector = DummyValuesCollector(Val(:_), translator, module_)
 
