@@ -94,9 +94,15 @@ DynamicForwarderCodeGenerator's dart fields: `reference`, `callShape`.
 @parity "dart2wasm/lib/code_generator.dart:3804 DynamicForwarderCodeGenerator" @unported struct DynamicForwarderCodeGenerator <: AstCodeGenerator end
 
 """
-InvocationCreationStubGenerator's dart fields: `translator`, `callShape`.
+Creates the Invocation object of a method call of `callShape`, whose function takes the call's type
+arguments, positional arguments and named arguments in that order.
 """
-@parity "dart2wasm/lib/code_generator.dart:4099 InvocationCreationStubGenerator" @unported struct InvocationCreationStubGenerator <: CodeGenerator end
+@parity "dart2wasm/lib/code_generator.dart:4099 InvocationCreationStubGenerator" struct InvocationCreationStubGenerator <: CodeGenerator
+    translator::Translator
+    call_shape::MethodCallShape
+    # the struct's one constructor, tagged; dart's constructor at :4103 is its outer function
+    InvocationCreationStubGenerator(::Val{:_}, translator::Translator, call_shape::MethodCallShape) = new(translator, call_shape)
+end
 
 @parity "dart2wasm/lib/code_generator.dart:4193 ConstructorCodeGeneratorBase" abstract type ConstructorCodeGeneratorBase <: AstCodeGenerator end
 
@@ -1348,11 +1354,15 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:3751 TearOffCodeGenerator" @unported function TearOffCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member) end
+# Julia's answer (D3): a function value is its type's instance, so getMemberCodeGenerator never asks for a tear-off
+@parity "dart2wasm/lib/code_generator.dart:3751 TearOffCodeGenerator" TearOffCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:3751 TearOffCodeGenerator: a tear-off of $member; a Julia function is already a value, the singleton instance of its type, and calling it calls its method, so no closure is made for it"), "TearOffCodeGenerator")
 
 @parity "dart2wasm/lib/code_generator.dart:3758 TearOffCodeGenerator.generateInternal" @unported function generate_internal(self::TearOffCodeGenerator) end
 
-@parity "dart2wasm/lib/code_generator.dart:3808 DynamicForwarderCodeGenerator" @unported function DynamicForwarderCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, reference, call_shape) end
+# Julia's answer (D3): the trim verifier admits no dynamic call, so no forwarder is asked for
+@parity "dart2wasm/lib/code_generator.dart:3808 DynamicForwarderCodeGenerator" DynamicForwarderCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, reference::Core.MethodInstance, call_shape::CallShape)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:3808 DynamicForwarderCodeGenerator: a dynamic forwarder of $reference for $(sprint(show, call_shape)); Julia's trim verifier rejects every call it cannot resolve statically, so no call is dynamic"), "DynamicForwarderCodeGenerator")
 
 @parity "dart2wasm/lib/code_generator.dart:3816 DynamicForwarderCodeGenerator.generateInternal" @unported function generate_internal(self::DynamicForwarderCodeGenerator) end
 
@@ -1364,19 +1374,63 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:4043 DynamicForwarderCodeGenerator._generateDynamicSetterForwarder" @unported function _generate_dynamic_setter_forwarder(self::DynamicForwarderCodeGenerator) end
 
-@parity "dart2wasm/lib/code_generator.dart:4103 InvocationCreationStubGenerator" @unported function InvocationCreationStubGenerator(translator, call_shape) end
+@parity "dart2wasm/lib/code_generator.dart:4103 InvocationCreationStubGenerator" InvocationCreationStubGenerator(translator::Translator, call_shape::MethodCallShape)::InvocationCreationStubGenerator =
+    InvocationCreationStubGenerator(Val(:_), translator, call_shape)
 
-@parity "dart2wasm/lib/code_generator.dart:4106 InvocationCreationStubGenerator.generate" @unported function generate(self::InvocationCreationStubGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
+# the arguments gathered into a type array, a positional array and a named array of name-value pairs,
+# then the Invocation made of them returned
+@parity "dart2wasm/lib/code_generator.dart:4106 InvocationCreationStubGenerator.generate" function generate(self::InvocationCreationStubGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
+    local at = "dart2wasm/lib/code_generator.dart:4106 InvocationCreationStubGenerator.generate"
+    return_label === nothing || reject!(Internal("$at: a return label, which a stub's generate never takes"), at)
+    local translator = self.translator
+    local call_shape = self.call_shape
+    local argument_iterator = 0
 
-@parity "dart2wasm/lib/code_generator.dart:4167 createInvocationObject" @unported function create_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol, type_args_local::WasmBuilder.IR.Local, positional_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local) end
+    local type_args = WasmBuilder.add_local(b, WasmBuilder.IR.RefType(translator.type_array_type[]; nullable = false))
+    for _ in 1:call_shape.type_count
+        WasmBuilder.local_get(b, param_locals[argument_iterator += 1])
+    end
+    WasmBuilder.array_new_fixed(b, translator.type_array_type[], call_shape.type_count)
+    WasmBuilder.local_set(b, type_args)
 
-@parity "dart2wasm/lib/code_generator.dart:4196 ConstructorCodeGeneratorBase" @unported function ConstructorCodeGeneratorBase(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member) end
+    local pos_args = WasmBuilder.add_local(b, WasmBuilder.IR.RefType(translator.nullable_object_array_type[]; nullable = false))
+    for _ in 1:call_shape.positional_count
+        WasmBuilder.local_get(b, param_locals[argument_iterator += 1])
+    end
+    WasmBuilder.array_new_fixed(b, translator.nullable_object_array_type[], call_shape.positional_count)
+    WasmBuilder.local_set(b, pos_args)
+
+    local named_args = WasmBuilder.add_local(b, WasmBuilder.IR.RefType(translator.nullable_object_array_type[]; nullable = false))
+    for name in call_shape.named
+        instantiate_constant(translator.constants[], b, NirConst(Core.Const(symbol_for_named_parameter(translator.symbols, string(name)))), translator.top_type[])
+        WasmBuilder.local_get(b, param_locals[argument_iterator += 1])
+    end
+    WasmBuilder.array_new_fixed(b, translator.nullable_object_array_type[], length(call_shape.named) * 2)
+    WasmBuilder.local_set(b, named_args)
+
+    create_invocation_object(translator, b, call_shape.name, type_args, pos_args, named_args)
+    WasmBuilder.return_(b)
+    WasmBuilder.var"end"(b)
+    return nothing
+end
+
+# an Invocation is noSuchMethod's argument, and a Julia program has no noSuchMethod: a call with no
+# method is a MethodError, which Julia's trim verifier refuses (makeInvocationCreatorSignature's
+# ruling), so no program WasmTarget compiles reaches this; it rejects, naming what Julia lacks
+@parity "dart2wasm/lib/code_generator.dart:4167 createInvocationObject" create_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol, type_args_local::WasmBuilder.IR.Local, positional_args_local::WasmBuilder.IR.Local, named_args_local::WasmBuilder.IR.Local)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4167 createInvocationObject: an Invocation of $member_name; Julia has no noSuchMethod, a call with no method being a MethodError the trim verifier refuses"), "create_invocation_object")
+
+# Julia's answer (D3): a constructor is a method, its allocation a %new statement the body's generator visits
+@parity "dart2wasm/lib/code_generator.dart:4196 ConstructorCodeGeneratorBase" ConstructorCodeGeneratorBase(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4196 ConstructorCodeGeneratorBase: $member is a constructor in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorCodeGeneratorBase")
 
 @parity "dart2wasm/lib/code_generator.dart:4202 ConstructorCodeGeneratorBase._getConstructorArgumentLocals" @unported function _get_constructor_argument_locals(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}) end
 
 @parity "dart2wasm/lib/code_generator.dart:4219 ConstructorCodeGeneratorBase._setupConstructorParameters" @unported function _setup_constructor_parameters(self::ConstructorCodeGeneratorBase, type_parameters::Vector{TypeVar}, parameters::Vector{Union{NirSSA,NirArgument}}, parameter_offset::Int64; is_forwarder::Bool = false) end
 
-@parity "dart2wasm/lib/code_generator.dart:4252 ConstructorInitializerCodeGenerator" @unported function ConstructorInitializerCodeGenerator(translator, function_type, member) end
+# Julia's answer (D3): a constructor is a method, its allocation a %new statement the body's generator visits
+@parity "dart2wasm/lib/code_generator.dart:4252 ConstructorInitializerCodeGenerator" ConstructorInitializerCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4252 ConstructorInitializerCodeGenerator: $member is a constructor in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorInitializerCodeGenerator")
 
 @parity "dart2wasm/lib/code_generator.dart:4259 ConstructorInitializerCodeGenerator.generateInternal" @unported function generate_internal(self::ConstructorInitializerCodeGenerator) end
 
@@ -1406,13 +1460,17 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:4589 ConstructorInitializerCodeGenerator.visitVariableSet" @unported function visit_variable_set(self::ConstructorInitializerCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:4617 ConstructorAllocatorCodeGenerator" @unported function ConstructorAllocatorCodeGenerator(translator, function_type, member) end
+# Julia's answer (D3): a constructor is a method, its allocation a %new statement the body's generator visits
+@parity "dart2wasm/lib/code_generator.dart:4617 ConstructorAllocatorCodeGenerator" ConstructorAllocatorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4617 ConstructorAllocatorCodeGenerator: $member is a constructor in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorAllocatorCodeGenerator")
 
 @parity "dart2wasm/lib/code_generator.dart:4624 ConstructorAllocatorCodeGenerator.generateInternal" @unported function generate_internal(self::ConstructorAllocatorCodeGenerator) end
 
 @parity "dart2wasm/lib/code_generator.dart:4637 ConstructorAllocatorCodeGenerator.generateConstructorAllocator" @unported function generate_constructor_allocator(self::ConstructorAllocatorCodeGenerator) end
 
-@parity "dart2wasm/lib/code_generator.dart:4729 ConstructorBodyCodeGenerator" @unported function ConstructorBodyCodeGenerator(translator, function_type, member) end
+# Julia's answer (D3): a constructor is a method, its allocation a %new statement the body's generator visits
+@parity "dart2wasm/lib/code_generator.dart:4729 ConstructorBodyCodeGenerator" ConstructorBodyCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4729 ConstructorBodyCodeGenerator: $member is a constructor in dart's sense; Julia's constructor is an ordinary method, compiled as a member, its allocation the %new statement, with no initializer list"), "ConstructorBodyCodeGenerator")
 
 @parity "dart2wasm/lib/code_generator.dart:4736 ConstructorBodyCodeGenerator.generateInternal" @unported function generate_internal(self::ConstructorBodyCodeGenerator) end
 
@@ -1436,15 +1494,21 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:4969 StaticFieldImplicitAccessorCodeGenerator._generateSetter" @unported function _generate_setter(self::StaticFieldImplicitAccessorCodeGenerator, definition::DartGlobalDefinition) end
 
-@parity "dart2wasm/lib/code_generator.dart:4986 ImplicitFieldAccessorCodeGenerator" @unported function ImplicitFieldAccessorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field, is_implicit_getter, use_unchecked_entry) end
+# Julia's answer (D3): a field access is an intrinsic call the body's generator visits, never a member
+@parity "dart2wasm/lib/code_generator.dart:4986 ImplicitFieldAccessorCodeGenerator" ImplicitFieldAccessorCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::ClassField, is_implicit_getter::Bool, use_unchecked_entry::Bool)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:4986 ImplicitFieldAccessorCodeGenerator: an accessor of $(field.name); Julia reads and writes a field with the getfield and setfield! intrinsics, never an accessor member"), "ImplicitFieldAccessorCodeGenerator")
 
 @parity "dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal" @unported function generate_internal(self::ImplicitFieldAccessorCodeGenerator) end
 
-@parity "dart2wasm/lib/code_generator.dart:5065 SynchronousLambdaCodeGenerator" @unported function SynchronousLambdaCodeGenerator(translator::Translator, lambda) end
+# Julia's answer (D3): a closure is a method compiled as any member (Closures._findCaptures)
+@parity "dart2wasm/lib/code_generator.dart:5065 SynchronousLambdaCodeGenerator" SynchronousLambdaCodeGenerator(translator::Translator, lambda::Lambda)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5065 SynchronousLambdaCodeGenerator: a lambda in $(lambda.enclosing_member); a Julia closure's call is a method of its own, on its closure type, compiled as a member, so Closures makes no Lambda"), "SynchronousLambdaCodeGenerator")
 
 @parity "dart2wasm/lib/code_generator.dart:5069 SynchronousLambdaCodeGenerator.generateInternal" @unported function generate_internal(self::SynchronousLambdaCodeGenerator) end
 
-@parity "dart2wasm/lib/code_generator.dart:5085 UnreachableCodeGenerator" @unported function UnreachableCodeGenerator(translator, function_type, member) end
+# Julia's answer (D3): no class is cyclic (getInlinableMemberCodeGenerator), so no member is unreachable for it
+@parity "dart2wasm/lib/code_generator.dart:5085 UnreachableCodeGenerator" UnreachableCodeGenerator(translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance)::Union{} =
+    reject!(Unquarantined("dart2wasm/lib/code_generator.dart:5085 UnreachableCodeGenerator: a member of a cyclic class, $member; no class of a Julia method is cyclic, a struct holding no instance of itself inline"), "UnreachableCodeGenerator")
 
 @parity "dart2wasm/lib/code_generator.dart:5088 UnreachableCodeGenerator.generateInternal" @unported function generate_internal(self::UnreachableCodeGenerator) end
 

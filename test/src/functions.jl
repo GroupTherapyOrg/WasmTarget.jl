@@ -110,7 +110,8 @@ end
     W.record_dynamic_selector_use(fc, ds)                   # the shape already called: nothing again
     @test length(fc._pending_allocation_dynamic[7]) == 1
     local e = try; W.record_class_allocation(fc, 7); nothing; catch x; x; end
-    @test e isa WT.RejectionError && e.rejection isa WT.Unported && occursin("DynamicForwarderCodeGenerator", e.rejection.anchor)
+    # a dynamic forwarder is unreachable by Julia's answer: the trim verifier admits no dynamic call
+    @test e isa WT.RejectionError && e.rejection isa WT.Unquarantined && occursin("DynamicForwarderCodeGenerator", e.rejection.row)
 
     # an Invocation is noSuchMethod's, which Julia lacks: the invocation creator's path rejects
     local e2 = try; W.get_invocation_creator_stub(fc, shape); nothing; catch x; x; end

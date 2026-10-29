@@ -59,11 +59,19 @@ end
 # a program whose closed world holds DataType, the class of a closure's runtime type
 is_int(r::Base.RefValue{Any}) = r[] isa Int64
 
-@testset "code_generator.dart: MacroAssembler's closure accessors type as dart documents them" begin
-    local t = D.Translator(W.check_subset(is_int, (Base.RefValue{Any},), "code_generator_sub"),
+# its translator as translate() leaves it before code: modules, closures and classes collected, the
+# globals and constants made; built once for the file's cases
+const TRANSLATOR = Ref{Any}()
+let t = D.Translator(W.check_subset(is_int, (Base.RefValue{Any},), "code_generator_sub"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(t.closure_layouter[]); collect(t.class_info_collector[])
+    t.globals[] = D.Globals(t); t.dart_globals[] = D.DartGlobals(t); t.constants[] = D.Constants(t)
+    TRANSLATOR[] = t
+end
+
+@testset "code_generator.dart: MacroAssembler's closure accessors type as dart documents them" begin
+    local t = TRANSLATOR[]
     local layouter = t.closure_layouter[]
     local closure = IR.RefType(layouter.closure_base_struct[]; nullable = false)
     # each accessor's documented signature `[ref _Closure] -> [output]`: the builder, which refuses
@@ -79,6 +87,49 @@ is_int(r::Base.RefValue{Any}) = r[] isa Int64
         B.local_get(b, B.locals(fb)[1])
         emit(b, t)
         @test B.var"end"(b) === nothing
+    end
+end
+
+
+@testset "code_generator.dart: an invocation stub gathers its arguments, then rejects: Julia has no noSuchMethod" begin
+    local t = TRANSLATOR[]
+    local mb = D.main_module(t)
+    # the stub of `f(x)` and of `f(x; k)`, each argument a top-type value
+    local stub(shape) = begin
+        local inputs = IR.ValueType[t.top_type[] for _ in 1:(shape.positional_count + length(shape.named))]
+        local fb = B.define(mb.functions[], B.define_function(mb.types[], inputs, IR.ValueType[t.top_type[]]), "stub")
+        (D.InvocationCreationStubGenerator(t, shape), fb)
+    end
+    local (g, fb) = stub(D.MethodCallShape(:f, 0, 1, Symbol[]))
+    local e = rejection(() -> D.generate(g, B.body(fb), B.locals(fb), nothing))
+    @test e.rejection isa W.Unquarantined && occursin("createInvocationObject", e.rejection.row)
+    # a named argument's name is a Symbol constant, whose creation is not ported yet
+    local (g2, fb2) = stub(D.MethodCallShape(:f, 0, 1, [:k]))
+    local e2 = rejection(() -> D.generate(g2, B.body(fb2), B.locals(fb2), nothing))
+    @test e2.rejection isa W.Unported && occursin("visitSymbolConstant", e2.rejection.anchor)
+end
+
+
+@testset "code_generator.dart: a generator of a construct Julia replaces rejects at its constructor, Unquarantined" begin
+    local t = TRANSLATOR[]
+    local mb = D.main_module(t)
+    local ft = B.define_function(mb.types[], IR.ValueType[], IR.ValueType[])
+    local body = only(nb for nb in t.component if nb.ci.def.def.name === :is_int)
+    local mi = body.ci.def
+    local field = W.ClassField(Base.RefValue{Any}, 1, "x", Any, true)
+    local lambda = D.Lambda__(body, :code_generator_sub, mi, D.Closures(t, mi; find_captures = false), 0)
+    for (ctor, why) in ((() -> D.TearOffCodeGenerator(t, ft, mi), "singleton instance"),
+                        (() -> D.DynamicForwarderCodeGenerator(t, ft, mi, D.GetterCallShape(:x)), "trim verifier"),
+                        (() -> D.ConstructorCodeGeneratorBase(t, ft, mi), "%new"),
+                        (() -> D.ConstructorInitializerCodeGenerator(t, ft, mi), "%new"),
+                        (() -> D.ConstructorAllocatorCodeGenerator(t, ft, mi), "%new"),
+                        (() -> D.ConstructorBodyCodeGenerator(t, ft, mi), "%new"),
+                        (() -> D.ImplicitFieldAccessorCodeGenerator(t, ft, field, true, false), "getfield"),
+                        (() -> D.SynchronousLambdaCodeGenerator(t, lambda), "Closures makes no Lambda"),
+                        (() -> D.get_lambda_code_generator(t, lambda), "Closures makes no Lambda"),
+                        (() -> D.UnreachableCodeGenerator(t, ft, mi), "cyclic"))
+        local e = rejection(ctor)
+        @test e !== nothing && e.rejection isa W.Unquarantined && occursin(why, e.rejection.row)
     end
 end
 
