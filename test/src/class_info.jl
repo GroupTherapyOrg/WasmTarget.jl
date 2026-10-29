@@ -139,11 +139,9 @@ end
     @test [(f.name, f.type, f.index) for f in fields(String)] == [("_data", W.WasmArray{W.WasmI8}, 0)]
     # a Symbol: its name, one String (dart's Symbol._name)
     @test [(f.name, f.type, f.index) for f in fields(Symbol)] == [("_name", String, 0)]
-    # a class whose data Julia holds outside its fields, its representation unwritten, rejects, located
-    for c in (Module,)
-        local e = try; fields(c); nothing; catch x; x; end
-        @test e isa W.RejectionError && e.rejection isa W.Unquarantined
-    end
+    # a Module: its name, one Symbol (jl_module_t's leading field); with it every concrete class of
+    # Core and Base that holds its data outside its fields has its representation
+    @test [(f.name, f.type, f.index) for f in fields(Module)] == [("name", Symbol, 0)]
     # the collector over a translator: no class masquerades in Julia; typeType, read only for a
     # class's type parameters, which Julia's classes do not have, stays unassigned
     local t = D.Translator(WasmTarget.build_nir(W.check_subset(ClassInfoCases.f_shapes, (Int,), at), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(optimization_level = 2))

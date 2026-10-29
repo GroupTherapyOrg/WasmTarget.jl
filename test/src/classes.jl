@@ -135,3 +135,27 @@ end
     local cs = _classes(SymbolCases.sym, (Int,))
     @test Symbol in cs && String in cs
 end
+
+module ModuleCases
+# a TypeError holds a GlobalRef in its context's Union, and a GlobalRef its module
+@noinline te(x::Int) = TypeError(:typeassert, "", Int, x)
+# a module as a value
+pick(x::Int) = x > 0 ? Base : Core
+end
+
+@testset "a Module's class is its name, one Symbol, Julia's jl_module_t's leading field" begin
+    # Julia holds a module's data outside its fields; its class's one field is the name, a Symbol at
+    # index 0, and a closed world meeting Module meets Symbol and String with it
+    @test fieldcount(Module) == 0 && nameof(ModuleCases) === :ModuleCases
+    @test W.class_instance_fields(Module, "classes") == [W.ClassField(Module, 0, "name", Symbol, false)]
+    local cs = _classes(ModuleCases.te, (Int,))
+    @test TypeError in cs && GlobalRef in cs && Module in cs && Symbol in cs && String in cs
+    # class_info.dart's collector lays the class out: its struct, the object header and then the name
+    local D = W.Dart2Wasm
+    local t = D.Translator(W.build_nir(W.check_subset(ModuleCases.pick, (Int,), "classes"), "classes"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local mod_info = t.class_info[Module]
+    @test t.field_index[only(W.class_instance_fields(Module, "classes"))] == length(mod_info.struct_.fields) - 1
+end

@@ -92,9 +92,10 @@ end
     if Base.iskindtype(t)
         # a kind's instance takes dart's runtime type layout, its fields' classes met as Julia's are
         foreach(f -> _meet_value!(out, seen, f.type, at), _kind_instance_fields(t, at))
-    elseif t === Symbol
-        # a symbol holds its name, a String, outside Julia's fields (_symbol_instance_fields)
-        foreach(f -> _meet_value!(out, seen, f.type, at), _symbol_instance_fields(t, at))
+    elseif t === Symbol || t === Module
+        # a symbol holds its name, a String, and a module its name, a Symbol, outside Julia's fields
+        # (_symbol_instance_fields, _module_instance_fields)
+        foreach(f -> _meet_value!(out, seen, f.type, at), class_instance_fields(t, at))
     elseif isconcretetype(t)
         foreach(f -> _meet_value!(out, seen, f, at), fieldtypes(t))
     end
@@ -169,8 +170,9 @@ boxed classes do (`_BoxedInt.value`); a struct has its `fieldnames` and `fieldty
 none; a kind (a type as a value) dart's runtime type layout (`_kind_instance_fields`); a
 `Core.SimpleVector` its elements as one immutable wasm array (`_svec_instance_fields`); a `String`
 its UTF-8 code units as one immutable i8 wasm array (`_string_instance_fields`); a `Symbol` its name,
-one String (`_symbol_instance_fields`). Any other class whose data Julia holds outside its fields
-rejects, located, until its representation is written.
+one String (`_symbol_instance_fields`); a `Module` its name, one Symbol (`_module_instance_fields`). Any
+other class whose data Julia holds outside its fields rejects, located, until its representation is
+written.
 """
 @quarantine "a class's fields are Julia's fieldnames, fieldtypes and isconst; a primitive type holds one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
     class_is_abstract(c) && return ClassField[]
@@ -181,6 +183,7 @@ rejects, located, until its representation is written.
         c === Core.SimpleVector && return _svec_instance_fields(c, at)
         c === String && return _string_instance_fields(c, at)
         c === Symbol && return _symbol_instance_fields(c, at)
+        c === Module && return _module_instance_fields(c, at)
         reject!(Unquarantined("src/julia/classes.jl class_instance_fields: $c, whose data Julia holds outside its fields"), at)
     end
     return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
@@ -312,4 +315,26 @@ which an object per constant symbol keeps (each symbol constant one instance).
 @quarantine "a Symbol's data lies outside its fields (Julia's jl_sym_t, jl_symbol_name), its name one String as dart's Symbol._name" Core.Symbol function _symbol_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c === Symbol || reject!(Internal("src/julia/classes.jl _symbol_instance_fields: $c, no Symbol"), at)
     return ClassField[ClassField(c, 0, "_name", String, false)]
+end
+
+"""
+    _module_instance_fields(c, at) -> Vector{ClassField}
+
+The fields of a `Module`, whose data Julia holds outside its fields (`fieldcount(Module) == 0`): one
+field, `name`, of type `Symbol`, immutable, in Symbol's own form (`_symbol_instance_fields`). Julia's
+layout (julia.h:806 `jl_module_t` at v1.12.7): `name` (:808), the module's name, which `nameof` reads,
+then `parent` (:809) and the bindings (:810), which are left out. `parent` is a cycle an eager
+constant cannot build (a root module is its own parent), and a program reads it only through
+`parentmodule`, a foreigncall. The bindings are runtime state: `getglobal` of a module known only at
+run time is a builtin over them, which the strict subset rejects. A module's identity is the one
+instance each module constant is (constants are canonical by `===`). The field is not one of Julia's
+(a Module has none), so it takes index 0, like a Symbol's `_name`.
+
+precedent(julia: jl_module_t, its name its first field after the header; dart: none, a library is no
+value). Julia's differs: a module is a value a program can hold (a GlobalRef's `mod`, TypeError's
+context), so it is a class, its layout Julia's own leading field.
+"""
+@quarantine "a Module's data lies outside its fields (Julia's jl_module_t); dart has no library value, so the layout is Julia's own, its leading name" Core.Module function _module_instance_fields(c::DataType, at::String)::Vector{ClassField}
+    c === Module || reject!(Internal("src/julia/classes.jl _module_instance_fields: $c, no Module"), at)
+    return ClassField[ClassField(c, 0, "name", Symbol, false)]
 end
