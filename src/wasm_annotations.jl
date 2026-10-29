@@ -13,8 +13,23 @@ end
 
 @parity "dart2wasm/lib/wasm_annotations.dart:16 MemoryLimits" MemoryLimits(; min_size::Int, max_size::Union{Int,Nothing} = nothing)::MemoryLimits = MemoryLimits(Val(:_), min_size, max_size)
 
-@parity "dart2wasm/lib/wasm_annotations.dart:19 MemoryLimits.readAnnotation" @unported function MemoryLimits_read_annotation(nodes::KernelNodes, member::Core.MethodInstance) end
+# the member's wasm:memory-type pragma, read through util.dart's getPragma as dart reads it: Julia
+# declares no memory type on any binding (util.jl's get_pragma answers only @inline and @noinline, on a
+# method), so a member has no memory type and the read answers nothing, dart's own answer for a member
+# without the pragma. A value there would be a constant of dart:_wasm's MemoryType, which no Julia
+# value is, so it rejects Internal, located, before _readMemoryType
+@parity "dart2wasm/lib/wasm_annotations.dart:19 MemoryLimits.readAnnotation" function MemoryLimits_read_annotation(nodes::KernelNodes, member::Core.MethodInstance)::Union{MemoryLimits,Nothing}
+    local memory_type = Util.get_pragma(member, "wasm:memory-type")
+    memory_type === nothing && return nothing
+    reject!(Internal("dart2wasm/lib/wasm_annotations.dart:19 MemoryLimits.readAnnotation: $member's wasm:memory-type is $(repr(memory_type)), no constant of dart:_wasm's MemoryType, which no Julia value is"), "MemoryLimits.readAnnotation")
+end
 
-@parity "dart2wasm/lib/wasm_annotations.dart:35 MemoryLimits._readMemoryType" @unported function MemoryLimits__read_memory_type(nodes::KernelNodes, constant::NirConst) end
+# dart reads the limits out of a constant of dart:_wasm's MemoryType and Limits, classes of dart's
+# runtime library; no Julia value is one, and readAnnotation answers before either reader is reached
+# (Julia declares no memory-type pragma), so each rejects Internal, located (the Kernel table's
+# InstanceConstant row: the constant would be a NirConst, of a class Julia never produces)
+@parity "dart2wasm/lib/wasm_annotations.dart:35 MemoryLimits._readMemoryType" MemoryLimits__read_memory_type(nodes::KernelNodes, constant::NirConst)::Union{} =
+    reject!(Internal("dart2wasm/lib/wasm_annotations.dart:35 MemoryLimits._readMemoryType: $(typeof(constant.c.val)) is no constant of dart:_wasm's MemoryType, which no Julia value is"), "MemoryLimits._readMemoryType")
 
-@parity "dart2wasm/lib/wasm_annotations.dart:43 MemoryLimits._readLimits" @unported function MemoryLimits__read_limits(nodes::KernelNodes, constant::NirConst) end
+@parity "dart2wasm/lib/wasm_annotations.dart:43 MemoryLimits._readLimits" MemoryLimits__read_limits(nodes::KernelNodes, constant::NirConst)::Union{} =
+    reject!(Internal("dart2wasm/lib/wasm_annotations.dart:43 MemoryLimits._readLimits: $(typeof(constant.c.val)) is no constant of dart:_wasm's Limits, which no Julia value is"), "MemoryLimits._readLimits")
