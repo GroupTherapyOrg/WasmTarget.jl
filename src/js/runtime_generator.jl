@@ -2,9 +2,17 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-RuntimeFinalizer's dart fields: `_coreTypes`, `_interopMemberNamer`.
+Writes the JS runtime that loads and instantiates the compiled modules: the runtime blob template
+filled with the program's JS methods, its internalized strings and the string builtins it needs.
+dart's `_coreTypes` serves only `JsInteropMemberData.fromMember`, which reads a member's JS interop
+annotations; a Julia method carries none (the Kernel table's Annotatable row, src/namer.jl), so it is
+dropped.
 """
-@parity "dart2wasm/lib/js/runtime_generator.dart:53 RuntimeFinalizer" @unported struct RuntimeFinalizer end
+@parity "dart2wasm/lib/js/runtime_generator.dart:53 RuntimeFinalizer" struct RuntimeFinalizer
+    _interop_member_namer::Dart2Wasm.InteropMemberNamer
+    # the struct's one constructor, tagged; dart's constructor at :58 is its outer function
+    RuntimeFinalizer(::Val{:_}, _interop_member_namer::Dart2Wasm.InteropMemberNamer) = new(_interop_member_namer)
+end
 
 """
 dart's `json.encode(s)` of a string (dart:convert's `_JsonStringifier.writeStringContent`): the
@@ -74,9 +82,14 @@ a surrogate code point one), and a byte sequence that is no character rejects, l
     return String(take!(out))
 end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:58 RuntimeFinalizer" @unported function RuntimeFinalizer(_core_types, _interop_member_namer) end
+# coreTypes dropped (the struct's docstring)
+@parity "dart2wasm/lib/js/runtime_generator.dart:58 RuntimeFinalizer" RuntimeFinalizer(_interop_member_namer::Dart2Wasm.InteropMemberNamer)::RuntimeFinalizer =
+    RuntimeFinalizer(Val(:_), _interop_member_namer)
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:60 RuntimeFinalizer.generateJsMethods" @unported function Dart2Wasm.generate_js_methods(self::RuntimeFinalizer, translated_procedures::AbstractVector{Core.MethodInstance}) end
+# the JS code of each translated procedure dart's JsInteropMemberData.fromMember finds an annotation on;
+# a Julia method carries no JS interop annotation (src/namer.jl _InteropHelperMemberNamer.getImportName
+# answers the same), so no procedure has JS code and the methods' text is empty
+@parity "dart2wasm/lib/js/runtime_generator.dart:60 RuntimeFinalizer.generateJsMethods" Dart2Wasm.generate_js_methods(self::RuntimeFinalizer, translated_procedures::AbstractVector{Core.MethodInstance})::String = ""
 
 @parity "dart2wasm/lib/js/runtime_generator.dart:106 RuntimeFinalizer._generateInternalizedStrings" function Dart2Wasm._generate_internalized_strings(self::RuntimeFinalizer, require_js_builtin::Bool, constant_strings::Vector{String})::String
     local sb = IOBuffer()
@@ -95,7 +108,32 @@ end
     return String(take!(sb))
 end
 
-@parity "dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate" @unported function Dart2Wasm.generate(self::RuntimeFinalizer, main_module_name::String, translated_procedures::AbstractVector{Core.MethodInstance}, constant_strings::Vector{String}, require_js_builtin::Bool, supports_additional_module_loading::Bool) end
+# dart's map literals with spreads are Julia's merge, a later key winning as in dart
+@parity "dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate" function Dart2Wasm.generate(self::RuntimeFinalizer, main_module_name::String, translated_procedures::AbstractVector{Core.MethodInstance}, constant_strings::Vector{String}, require_js_builtin::Bool, supports_additional_module_loading::Bool)::String
+    local js_methods = Dart2Wasm.generate_js_methods(self, translated_procedures)
+
+    local builtins = String["builtins: ['js-string']"]
+    require_js_builtin && push!(builtins, "importedStringConstants: ''")
+
+    local internalized_strings = Dart2Wasm._generate_internalized_strings(self, require_js_builtin, constant_strings)
+
+    local js_string_builtin_polyfill_import_vars = Dict{String,String}(
+        "JS_POLYFILL_IMPORT" => require_js_builtin ? "" : "\"wasm:js-string\": jsStringPolyfill,")
+    local module_loading_import_vars = Dict{String,String}(
+        "MODULE_LOADING_IMPORT" => supports_additional_module_loading ? "\"moduleLoadingHelper\": moduleLoadingHelper," : "")
+
+    local module_loading_helper_methods = supports_additional_module_loading ?
+        Dart2Wasm.instantiate(Dart2Wasm.module_loading_helper_template[],
+            merge(js_string_builtin_polyfill_import_vars, Dict{String,String}("MAIN_MODULE_NAME" => main_module_name))) : ""
+
+    return Dart2Wasm.instantiate(Dart2Wasm.js_runtime_blob_template[], merge(js_string_builtin_polyfill_import_vars, module_loading_import_vars, Dict{String,String}(
+        "BUILTINS_MAP_BODY" => join(builtins, ", "),
+        "JS_METHODS" => js_methods,
+        "INTERNAL_IMPORTS_MODULE_NAME" => Dart2Wasm.interop_helper_module_name(self._interop_member_namer),
+        "IMPORTED_JS_STRINGS_IN_MJS" => internalized_strings,
+        "JS_STRING_POLYFILL_METHODS" => require_js_builtin ? "" : Dart2Wasm.js_poly_fill_methods(),
+        "DEFERRED_LIBRARY_HELPER_METHODS" => module_loading_helper_methods)))
+end
 
 # Removes indentation common among all lines of [block] (except for first one)
 @parity "dart2wasm/lib/js/runtime_generator.dart:203 _unindentJsCode" function _unindent_js_code(block::String)::Vector{String}

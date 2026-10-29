@@ -45,3 +45,28 @@ end
     @test J._unindent_js_code(" one line ") == ["one line"]
     @test J._unindent_js_code("x\n  \n    y") == ["x", "", "y"]
 end
+
+module JSRuntimeGenerate
+using Test, WasmTarget
+const D = WasmTarget.Dart2Wasm
+const J = WasmTarget.Dart2Wasm.JS
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+entry(x::Int) = x + 1
+@testset "js/runtime_generator.dart: RuntimeFinalizer.generate writes a JS module node parses" begin
+    local world = WasmTarget.build_nir(WasmTarget.check_subset(entry, (Int,), "js_runtime"), "js_runtime")
+    local f = J.RuntimeFinalizer(D.InteropMemberNamer(world, D.Namer(), D.TranslatorOptions()))
+    local node = Main.WTRunner.node_binary()
+    @test node !== nothing
+    mktempdir() do dir
+        # each combination of the string builtin and additional module loading fills every variable of
+        # the blob (instantiate rejects one with no value), and node parses the runtime as an ES module
+        for (builtin, loading) in ((false, false), (true, false), (false, true), (true, true))
+            local js = D.generate(f, "main", Core.MethodInstance[], ["a", "b\"c"], builtin, loading)
+            @test occursin("dart2wasm", js) && occursin("builtins: ['js-string']", js)
+            local path = joinpath(dir, "runtime_$(builtin)_$(loading).mjs")
+            write(path, js)
+            @test success(pipeline(`perl -e 'alarm 30; exec @ARGV' $node --check $path`; stderr = devnull))
+        end
+    end
+end
+end
