@@ -27,6 +27,8 @@ import ..reject!, ..Internal, ..Unported, ..InvalidModule
 # InstructionsBuilder (src/julia/forward.jl)
 import ..Late, ..LinkedHashMap, ..LinkedHashSet, ..strongly_connected_components
 import ..AbstractModule, ..AbstractModuleBuilder, ..AbstractInstructionsBuilder
+# a method serving every subtype alike is inferred once, not once per caller's type (a compile's first-use cost)
+import Base: @nospecializeinfer
 @quarantine "dart's builder and serializer import ir under the prefix ir; a prefix is a module in Julia" Core.Module module IR
 import ...@parity, ...@unported, ...@closed, ...@exhaustive, ...@dart_export
 import ...reject!, ...Internal, ...Unported, ...InvalidModule, ...Late, ...LinkedHashMap, ...LinkedHashSet, ...AbstractModule

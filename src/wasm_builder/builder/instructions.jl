@@ -396,7 +396,9 @@ link phase fills in; `nothing` when the current point is unreachable.
     patch_builder
 end
 
-@parity "wasm_builder/lib/src/builder/instructions.dart:363 InstructionsBuilder._add" function _add(b::InstructionsBuilder, i::IR.Instruction)::Nothing
+# @nospecialize, inferred once (@nospecializeinfer): one compiled body serves all ~90 instruction types (each is pushed, never inspected here);
+# specialized, it compiled once per type, the builder's largest share of a compile's first-use cost
+@parity "wasm_builder/lib/src/builder/instructions.dart:363 InstructionsBuilder._add" @nospecializeinfer function _add(b::InstructionsBuilder, @nospecialize(i::IR.Instruction))::Nothing
     (!b.constant_expression || is_constant(i)) || _report_error(b, "Non-constant instruction $(name(i)) added to constant expression")
     b._reachable || return nothing
     push!(b._instructions, i)
@@ -438,7 +440,7 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/builder/instructions.dart:412 InstructionsBuilder._debugTrace" function _debug_trace(b::InstructionsBuilder, trace::Union{Tuple,Nothing}; reachable_after::Bool, indent_before::Int=0, indent_after::Int=0)::Bool
+@parity "wasm_builder/lib/src/builder/instructions.dart:412 InstructionsBuilder._debugTrace" @nospecializeinfer function _debug_trace(b::InstructionsBuilder, @nospecialize(trace::Union{Tuple,Nothing}); reachable_after::Bool, indent_before::Int=0, indent_after::Int=0)::Bool
     if b.trace_enabled && trace !== nothing
         b._indent += indent_before
         instr = string("  "^b._indent, " ", join(trace, " "))
@@ -511,7 +513,7 @@ end
     _verify_types_fun(b, inputs, _ -> outputs; trace, reachable_after)
 end
 
-@parity "wasm_builder/lib/src/builder/instructions.dart:508 InstructionsBuilder._verifyTypesFun" function _verify_types_fun(b::InstructionsBuilder, inputs::Vector{IR.ValueType}, outputs_fun::F; trace::Union{Tuple,Nothing}=nothing, reachable_after::Bool=true)::Bool where {F<:Base.Callable}
+@parity "wasm_builder/lib/src/builder/instructions.dart:508 InstructionsBuilder._verifyTypesFun" @nospecializeinfer function _verify_types_fun(b::InstructionsBuilder, inputs::Vector{IR.ValueType}, @nospecialize(outputs_fun::Base.Callable); trace::Union{Tuple,Nothing}=nothing, reachable_after::Bool=true)::Bool
     b._reachable || return _debug_trace(b, trace; reachable_after=false)
     base_stack_height = _top_of_label_stack(b).base_stack_height[]
     if length(b._stack_types) - length(inputs) < base_stack_height

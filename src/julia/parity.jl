@@ -175,7 +175,7 @@ let defs = quote
     @quarantine "a method is identified by its signature, Julia's method table key, never by its lines" Core.LineNumberNode function _identity(mod::Module, def, source::LineNumberNode)::String
         local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
         local d = def
-        while Meta.isexpr(d, :macrocall) && d.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@closed"), Symbol("@unported"))
+        while Meta.isexpr(d, :macrocall) && d.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"), Symbol("@unported"))
             d = d.args[end]
         end
         local form = Meta.isexpr(d, (:function, :(=), :macro)) && !(d.args[1] isa Symbol) ?
@@ -246,7 +246,7 @@ let defs = quote
         refuse() = throw(ConstructionViolation("the definition forms",
             "$(_at(source)): not a definition @parity or @quarantine reads (function, macro, struct, abstract or primitive type, const, @enum, module)"))
         typename(t) = t isa Symbol ? t : Meta.isexpr(t, :(<:)) || Meta.isexpr(t, :curly) ? typename(t.args[1]) : refuse()
-        if Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@closed"))
+        if Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"))
             return _defines(def.args[end], source)
         elseif Meta.isexpr(def, :macrocall) && def.args[1] === Symbol("@dart_export")
             # an export directive (src/julia/exports.jl): no binding; its target names it
@@ -585,7 +585,7 @@ end
 @quarantine "Julia needs a function to exist before another module adds a method to it; dart resolves a library's names first" Base.Meta.isexpr function _generic_name(st)::Union{Tuple{Any,Symbol},Nothing}
     local def = _marked_definition(st)
     def === nothing && return nothing
-    Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline")) && (def = def.args[end])
+    Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer")) && (def = def.args[end])
     (Meta.isexpr(def, :function) || Meta.isexpr(def, :(=))) || return nothing
     local c = _call(def.args[1])
     c === nothing && return nothing
