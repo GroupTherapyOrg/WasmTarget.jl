@@ -133,18 +133,18 @@ end
 """
 The wasm function of `target`, made on first request in its module and queued for its code.
 
-A Julia member carries none of dart's pragmas: no `wasm:import` (a foreign call is a host import,
-dev/MARCH.md 1.F), no `wasm:pure`, and only the program's entry is exported (getExportName); its
-inlining hint is Julia's own declaration, `@noinline` 0 and `@inline` 127 (dart's never- and
-prefer-inline pragmas).
+A Julia member carries none of dart's pragmas; util.dart's readers answer Julia's declarations in
+their place: no member is an import (a foreign call is a host import, dev/MARCH.md 1.F), the exports
+are the entry and the `@ccallable` methods (getExportName), and the inlining hint is `@noinline` 0 and
+`@inline` 127 (getWasmNeverInlinePragma, getWasmPreferInlinePragma). Purity is Julia's effects, not
+read yet (hasWasmPureFunctionPragma, Unported): no function is marked removable.
 """
 @parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::Core.MethodInstance)::WasmBuilder.IR.BaseFunction
     local existing = get(self._functions, target, nothing)
     existing === nothing || return existing
     local translator = self.translator
-    local method = target.def::Method
-    local never_inline = Core.Compiler.is_declared_noinline(method)
-    local always_inline = Core.Compiler.is_declared_inline(method)
+    local never_inline = something(Util.get_wasm_never_inline_pragma(target), false)
+    local always_inline = something(Util.get_wasm_prefer_inline_pragma(target), false)
     local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
     local module_ = module_for_reference(translator, target)
     # an exported member's function type is the external one

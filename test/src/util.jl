@@ -40,3 +40,27 @@ end
     @test U.module_name_to_id("M0x10") == parse(Int, "10"; base = 16) == 16
     @test U.module_name_to_id("M-0x1f") == -31 && U.module_name_to_id("M0xZ") === nothing
 end
+
+module UtilPragmas
+using Test, WasmTarget
+const D = WasmTarget.Dart2Wasm
+entry(x::Int) = (@noinline g(x)) + h(x)
+@noinline g(x::Int) = 2x
+@inline h(x::Int) = x - 1
+k(x::Int) = x
+Base.@ccallable ext(x::Int)::Int = x + 3
+@testset "util.dart: the pragma readers answer Julia's declarations" begin
+    local world = WasmTarget.build_nir(WasmTarget.check_subset(entry, (Int,), "util"), "util")
+    g(1); h(1); k(1); ext(1)
+    local mi(f, at = (Int,)) = only(Base.method_instances(f, at, Base.get_world_counter()))
+    # @noinline and @inline are dart's never- and prefer-inline pragmas, true when declared, else none
+    @test D.Util.get_wasm_never_inline_pragma(mi(g)) === true && D.Util.get_wasm_never_inline_pragma(mi(k)) === nothing
+    @test D.Util.get_wasm_prefer_inline_pragma(mi(h)) === true && D.Util.get_wasm_prefer_inline_pragma(mi(g)) === nothing
+    # the exports: the entry and a @ccallable method, by their functions' names; no import, no weak export
+    @test D.Util.get_wasm_export_pragma(world.entry; component = world) == "entry" && D.Util.has_wasm_export_pragma(world.entry; component = world)
+    ext(1)
+    @test D.Util.get_wasm_export_pragma(mi(ext); component = world) == "ext" && !D.Util.has_wasm_export_pragma(mi(g); component = world)
+    @test D.Util.get_wasm_import_pragma(mi(g)) === nothing && !D.Util.has_wasm_import_pragma(mi(g))
+    @test D.Util.get_wasm_weak_export_pragma(world.entry) === nothing && !D.Util.has_wasm_weak_export_pragma(world.entry)
+end
+end

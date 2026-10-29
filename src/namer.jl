@@ -98,24 +98,22 @@ end
 @parity "dart2wasm/lib/namer.dart:74 _ExternalMemberNamer" _ExternalMemberNamer(component::NirWorld, _export_namer::Namer)::_ExternalMemberNamer =
     _ExternalMemberNamer(Val(:_), component, _export_namer)
 
-# dart's wasm:import pragma: no Julia member is an import, a foreign call being a host import
-@parity "dart2wasm/lib/namer.dart:75 _ExternalMemberNamer.getImportName" get_import_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Nothing = nothing
+@parity "dart2wasm/lib/namer.dart:75 _ExternalMemberNamer.getImportName" get_import_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Nothing =
+    Util.get_wasm_import_pragma(member)
 
-# dart's wasm:export pragma: a `@ccallable` method's, its function's name; the entry's, its function's
-# name too (dart exports main); no Julia member is a weak export
-@parity "dart2wasm/lib/namer.dart:79 _ExternalMemberNamer.getExportName" function get_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Union{String,Nothing}
-    local method = member.def::Method
-    isdefined(method, :ccallable) && return string(method.name)
-    member === self.component.entry || return nothing
-    return string(method.name)
-end
+# External export names should be registered already so we don't have to reserve them with the namer here.
+@parity "dart2wasm/lib/namer.dart:79 _ExternalMemberNamer.getExportName" get_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Union{String,Nothing} =
+    something(Util.get_wasm_export_pragma(member; component = self.component), Util.get_wasm_weak_export_pragma(member), Some(nothing))
 
-# an export name is reserved in the export namer; every Julia export is strong
 @parity "dart2wasm/lib/namer.dart:86 _ExternalMemberNamer.registerExportName" function register_export_name(self::_ExternalMemberNamer, member::Core.MethodInstance)::Bool
-    local name = get_export_name(self, member)
-    name === nothing && return false
-    reserve_name(self._export_namer, name)
-    return true
+    local name = Util.get_wasm_export_pragma(member; component = self.component)
+    if name !== nothing
+        reserve_name(self._export_namer, name)
+        return true
+    end
+    local weak_name = Util.get_wasm_weak_export_pragma(member)
+    weak_name === nothing || reserve_name(self._export_namer, weak_name)
+    return false
 end
 
 # coreTypes dropped (the struct's docstring)
