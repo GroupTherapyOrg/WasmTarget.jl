@@ -875,26 +875,21 @@ end
         return expected_type
     end
     local fields = class_instance_fields(cls, at)
-    # Julia's `new` may pass fewer values than the struct has fields, never fewer than Julia's own count
-    # of fields every instance initializes (datatype_min_ninitialized): Julia's closure conversion
-    # allocates Core.Box() for a variable captured before it is assigned. A field past that count is
-    # nullable by translateTypeOfField, so a field left out is its null reference
+    # Julia's `new` may pass fewer values than the struct has fields: Julia's closure conversion allocates
+    # Core.Box() for a variable a closure captures before it is assigned, and a read before the assignment
+    # is Julia's UndefRefError, dart's late local read before its initializer (_throwLateErrorLocalNI).
+    # Until the runtime's throw is ported, such an allocation rejects there, located: a null in the field
+    # would read as `nothing` (the null of a type that admits it), a plausible value past the gap (D9;
+    # march-monitor-a, 00:41, on bd0b473a)
     local given = length(node.args) - 1
-    given <= length(fields) || reject!(Internal("$at: an allocation of $cls with $given values for $(length(fields)) fields"), "$(self.enclosing_member)")
-    given >= Core.Compiler.datatype_min_ninitialized(cls) ||
-        reject!(Internal("$at: an allocation of $cls leaving a field undefined below Julia's initialized count $(Core.Compiler.datatype_min_ninitialized(cls))"), "$(self.enclosing_member)")
+    given == length(fields) ||
+        reject!(Unported("sdk/lib/_internal/wasm/common/error_utils.dart:188 _throwLateErrorLocalNI"),
+            "$(self.enclosing_member): an allocation of $cls leaving $(length(fields) - given) of its fields undefined, whose read before assignment is Julia's UndefRefError")
     WasmBuilder.comment(b, "Allocate wasm struct optimized")
     push_object_header_fields(b, self.translator, info)
     for (k, field) in enumerate(fields)
         local field_index = self.translator.field_index[field]
-        local field_type = WasmBuilder.unpacked(info.struct_.fields[field_index + 1].type)
-        if k <= given
-            translate_expression(self, node.args[k + 1], field_type)
-        else
-            (field_type isa WasmBuilder.IR.RefType && field_type.nullable) ||
-                reject!(Internal("$at: the field $(field.name) of $cls left undefined is $field_type, no nullable reference"), "$(self.enclosing_member)")
-            WasmBuilder.ref_null(b, field_type.heap_type)
-        end
+        translate_expression(self, node.args[k + 1], WasmBuilder.unpacked(info.struct_.fields[field_index + 1].type))
     end
     WasmBuilder.struct_new(b, info.struct_)
     # Mark the class as allocated now, which enqueues those methods of the class that could be

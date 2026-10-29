@@ -817,7 +817,7 @@ end
 end
 
 # a variable a closure captures before it is assigned: Julia's closure conversion allocates Core.Box() with
-# its contents undefined, a field past Julia's initialized count, its null reference until assigned
+# its contents undefined; until the runtime's throw is ported, a located Unported rejection, never a null
 module BoxCases
 @noinline function counter(n::Int)
     local f
@@ -830,14 +830,17 @@ end
     return g(n)
 end
 end
-@testset "an allocation leaving a nullable field undefined: Core.Box of a variable captured before it is assigned" begin
+@testset "an allocation leaving a field undefined: Core.Box of a variable captured before it is assigned" begin
     for f in (BoxCases.counter, BoxCases.recur)
         local bytes = try
             W.compile(f, (Int,); optimize = false)
         catch e
             e isa W.RejectionError || rethrow()
-            # a rejection elsewhere in the program is admitted, located; never the undefined field's own
-            @test !isempty(e.at) && !occursin("left undefined", sprint(showerror, e))
+            # located; an allocation leaving a field undefined rejects at the runtime's throw of a local read
+            # before its assignment, never compiling to a null a later read takes for `nothing` (D9)
+            @test !isempty(e.at)
+            occursin("left undefined", sprint(showerror, e)) &&
+                @test e.rejection isa W.Unported && occursin("_throwLateErrorLocalNI", e.rejection.anchor)
             nothing
         end
         bytes === nothing || queue_native!("$(nameof(f)) ", bytes, f, [(3,), (0,)])
