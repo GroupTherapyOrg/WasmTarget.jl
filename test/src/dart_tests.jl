@@ -1150,17 +1150,28 @@ _dart_secs(t::NamedTuple)::Float64 = t.time - t.compile_time
 # within it (a process's first compile ~30 s there), a watchdog process interrupts it (SIGINT each second, taken at
 # Julia's next safepoint) and the case fails by name, "past its 120-s hard limit: <group>/<case> compiling <method>", the
 # process going on to the next case; before it a hang held a whole shard to dev/corpus.sh's 1200-s limit and named
-# only its method (355c70e5, 2026-10-29). A watchdog is one process per case, killed when the case returns.
+# only its method (355c70e5, 2026-10-29). Code that reaches no safepoint (a loop that allocates nothing, or Julia's
+# own code generation in C) never takes the interrupt, so DART_CASE_GRACE seconds on the watchdog prints the case to
+# the process's stderr and kills the process: the check or the corpus run then fails naming the case, never a shard
+# at its stage limit (wt3-constants' check at 14:12, 2026-10-29: "dart_is/function compiling", cut at 480 s). A
+# watchdog is one process per case, killed when the case returns.
 const DART_CASE_LIMIT = 120
+const DART_CASE_GRACE = 5
 Base.exit_on_sigint(false)
 struct _DartPastLimit
     why::String
 end
-function _dart_limited(f::Function, what::String; limit::Real = DART_CASE_LIMIT)
-    # SIGINT, then once a second: Julia takes it at its next safepoint, and a second one forces the exception on a
-    # thread that reaches none
-    local dog = run(pipeline(`perl -e "select(undef, undef, undef, $limit); while (1) { kill('INT', $(getpid())); sleep(1) }"`;
-                             stdout = devnull, stderr = devnull); wait = false)
+const _DART_WATCHDOG = raw"""
+my ($limit, $grace, $pid, $what) = @ARGV;
+select(undef, undef, undef, $limit);
+kill('INT', $pid);
+for (1 .. $grace) { sleep(1); kill(0, $pid) or exit 0; kill('INT', $pid); }
+print STDERR "dart_tests.jl: $what is past its $limit-s hard limit and took no interrupt in $grace s: the process is killed\n";
+kill('KILL', $pid);
+"""
+function _dart_limited(f::Function, what::String; limit::Real = DART_CASE_LIMIT, grace::Integer = DART_CASE_GRACE)
+    # SIGINT, then once a second for `grace` seconds; then the case named on stderr and the process killed
+    local dog = run(pipeline(`perl -e $(_DART_WATCHDOG) $limit $grace $(getpid()) $what`; stdout = devnull, stderr = stderr); wait = false)
     try
         return f()
     catch e
@@ -1386,6 +1397,20 @@ end
     @test time() - t0 < 30
     @test _dart_breaks(:rejects, first(cut)) == first(cut).why
     @test _dart_limited(() -> (:compiled, UInt8[1]), "dart_plant/quick"; limit = 5) == (:compiled, UInt8[1])
+    # code that reaches no safepoint never takes the interrupt: the watchdog names the case and kills the process,
+    # here a child julia running the same watchdog over an allocation-free loop
+    local child = """
+        Base.exit_on_sigint(false)
+        const _DART_WATCHDOG = $(repr(_DART_WATCHDOG))
+        run(pipeline(`perl -e \$(_DART_WATCHDOG) 1 1 \$(getpid()) "dart_plant/spins compiling f Tuple{Int64}"`; stdout = devnull, stderr = stderr); wait = false)
+        function spin(); local x = UInt(0); while true; x = x * 0x9e3779b9 + 1; end; x; end
+        spin()
+        """
+    local err = IOBuffer()
+    local t1 = time()
+    local p = run(pipeline(ignorestatus(`$(Base.julia_cmd()) --startup-file=no -e $child`); stdout = devnull, stderr = err))
+    @test !success(p) && time() - t1 < 60
+    @test occursin("dart_tests.jl: dart_plant/spins compiling f Tuple{Int64} is past its 1-s hard limit and took no interrupt in 1 s: the process is killed", String(take!(err)))
 end
 
 # the shards' split against its plants: every block in exactly one shard, and the loads within the largest block
