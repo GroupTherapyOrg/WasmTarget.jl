@@ -50,14 +50,11 @@ function _wt_qa_include(path::AbstractString)
     return nothing
 end
 
-# dart's late final field: assigned once or initialized on first read, its anchor on an unassigned read (src/julia/late.jl)
-_wt_qa_include("late.jl")
+# every test of ported code, each file under test/src/ (late.jl, classes.jl, the serializer's among them),
+# the same set a landing runs (dev/check.sh)
+_wt_qa_include("src_tests.jl")
 # two worktrees loading alternately each keep their compiled image, in their private depots (dev/depot.sh)
 _wt_qa_include("depot_isolation.jl")
-# the closed world's classes in program order, each supertype chain Julia's (src/julia/classes.jl, 1.C)
-_wt_qa_include("classes.jl")
-# src/wasm_builder's byte writer and source map write the bytes and mappings the formats specify
-_wt_qa_include("wasm_builder/serializer.jl")
 # the charter's checks (dev/CHARTER.md): every lock at 0, every ratchet at most its baseline
 if _wt_qa("parity_ratchet.jl")
     _wt_ratchet_t0 = time()
