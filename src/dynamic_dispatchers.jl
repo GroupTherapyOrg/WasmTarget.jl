@@ -44,6 +44,9 @@ end
     end
 end
 
+# dart's `late final w.BaseFunction function` overrides CallTarget's getter: the field, defined on first read
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:53 _DynamicDispatcherCallTarget.function" var"function"(self::_DynamicDispatcherCallTarget)::WasmBuilder.IR.BaseFunction = self.function_[]
+
 """Generates dispatching code to call the right dynamic function."""
 @parity "dart2wasm/lib/dynamic_dispatchers.dart:66 _DynamicDispatcherCodeGenerator" struct _DynamicDispatcherCodeGenerator <: CodeGenerator
     translator::KernelNodes

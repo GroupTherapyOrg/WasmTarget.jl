@@ -381,7 +381,7 @@ end
 # dart's List.toString, `[a, b]`; Julia's show writes to the stream it is given
 @parity "dart2wasm/lib/closures.dart:196 NameCombination.toString" Base.show(io::IO, self::NameCombination)::Nothing = print(io, "[", join(self.names, ", "), "]")
 
-@parity "dart2wasm/lib/closures.dart:377 ClosureLayouter.typeType" type_type(self::ClosureLayouter)::WasmBuilder.IR.RefType = non_nullable_type_type(self.translator.types)
+@parity "dart2wasm/lib/closures.dart:377 ClosureLayouter.typeType" type_type(self::ClosureLayouter)::WasmBuilder.IR.RefType = non_nullable_type_type(self.translator.types[])
 
 @parity "dart2wasm/lib/closures.dart:384 ClosureLayouter._getInstantiationContextBaseStruct" function _get_instantiation_context_base_struct(self::ClosureLayouter, num_types::Int64)::WasmBuilder.IR.StructType
     local type_field = WasmBuilder.IR.FieldType(type_type(self); mutable = false)
@@ -709,7 +709,7 @@ collected and their structs built (see `_findCaptures` for Julia's answer).
     return self
 end
 
-@parity "dart2wasm/lib/closures.dart:1500 Closures.typeType" type_type(self::Closures)::WasmBuilder.IR.RefType = non_nullable_type_type(self.translator.types)
+@parity "dart2wasm/lib/closures.dart:1500 Closures.typeType" type_type(self::Closures)::WasmBuilder.IR.RefType = non_nullable_type_type(self.translator.types[])
 
 """
 Finds the member's captured variables. dart walks the member's body for variables a nested function

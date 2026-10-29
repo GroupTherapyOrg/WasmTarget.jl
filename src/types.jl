@@ -157,7 +157,7 @@ compilation.
             check_arguments::Bool, argument_count::Int)
         local self
         self = new(signature, translator, calling_module, tested_against_type, operand_is_nullable, check_arguments, argument_count,
-            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/types.dart:876 IsCheckerCallTarget.function", function ()
+            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/types.dart:877 IsCheckerCallTarget.function", function ()
                 local function_ = WasmBuilder.define(self.calling_module.functions,
                     WasmBuilder.define_function(types_builder(self.translator), self.signature.inputs, self.signature.outputs), name(self))
                 function_.is_pure = true
@@ -167,6 +167,9 @@ compilation.
         return self
     end
 end
+
+# dart's `late final w.BaseFunction function` overrides CallTarget's getter: the field, defined on first read
+@parity "dart2wasm/lib/types.dart:877 IsCheckerCallTarget.function" var"function"(self::IsCheckerCallTarget)::WasmBuilder.IR.BaseFunction = self.function_[]
 
 """The code of an is check against one type: a class-id range check, the null case first."""
 @parity "dart2wasm/lib/types.dart:890 IsCheckerCodeGenerator" struct IsCheckerCodeGenerator <: CodeGenerator
@@ -201,7 +204,7 @@ itself, defined on its first read and queued for compilation.
             check_arguments::Bool, argument_count::Int)
         local self
         self = new(signature, translator, calling_module, tested_against_type, operand_is_nullable, check_arguments, argument_count,
-            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/types.dart:1048 AsCheckerCallTarget.function", function ()
+            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/types.dart:1047 AsCheckerCallTarget.function", function ()
                 local function_ = WasmBuilder.define(self.calling_module.functions,
                     WasmBuilder.define_function(types_builder(self.translator), self.signature.inputs, self.signature.outputs), name(self))
                 add(self.translator.compilation_queue[], CompilationTask(function_,
@@ -212,6 +215,9 @@ itself, defined on its first read and queued for compilation.
         return self
     end
 end
+
+# dart's `late final w.BaseFunction function` overrides CallTarget's getter: the field, defined on first read
+@parity "dart2wasm/lib/types.dart:1047 AsCheckerCallTarget.function" var"function"(self::AsCheckerCallTarget)::WasmBuilder.IR.BaseFunction = self.function_[]
 
 """The code of an as check against one type: the is check inlined, then the failure."""
 @parity "dart2wasm/lib/types.dart:1074 AsCheckerCodeGenerator" struct AsCheckerCodeGenerator <: CodeGenerator
@@ -737,7 +743,7 @@ in the runtime yet, so generating the failure path rejects, located.
     # will not cause meaningful increases in code size for the application but will be good for
     # performance.
     local force_inline = true
-    MacroAssembler_invoke(b, generate_is_checker(is_checkers_for_module(self.translator.types, b.module_builder),
+    MacroAssembler_invoke(b, generate_is_checker(is_checkers_for_module(self.translator.types[], b.module_builder),
         self.tested_against_type, self.check_arguments, self.operand_is_nullable); force_inline = force_inline)
     WasmBuilder.br_if(b, as_check_block)
     reject!(Unquarantined("src/types.jl AsCheckerCodeGenerator.generate: the TypeError typeassert throws, which the runtime has no counterpart for"), at)
