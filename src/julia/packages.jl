@@ -70,7 +70,7 @@ import ..WasmArrayLiteral, ..WasmArray, ..ImmutableWasmArray
 # the backend's passes that structure it (src/llvm/target_machine.jl)
 import ..LLVM
 import ..MachineFunction, ..MachineInstr, ..MOBlock, ..MOImm, ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF,
-       ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..TRY_TABLE, ..END_TRY_TABLE, ..CATCH, ..UNREACHABLE, ..BLOCK_TYPE_RESULTS, ..BLOCK_TYPE_CATCH, ..is_barrier
+       ..BR_UNLESS, ..BR_TABLE, ..CONST_I32, ..COPY, ..STMTS, ..TRY_TABLE, ..END_TRY_TABLE, ..CATCH, ..UNREACHABLE, ..BLOCK_TYPE_VOID, ..BLOCK_TYPE_RESULTS, ..BLOCK_TYPE_CATCH, ..is_barrier
 # what the code generator reads from a body (src/julia/nir.jl)
 import ..TreeNode_no_offset, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
        ..nir_invoke_target, ..nir_callee, ..nir_value_type, ..nir_binding_is_constant

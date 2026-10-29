@@ -324,7 +324,8 @@ end
     @test occursin("f_add", String(copy(bytes)))
 end
 
-# the instructions `generate` emits for the body of `f` at `argtypes`, compile_one's steps
+# the instructions `generate` emits for the body of `f` at `argtypes`, compile_one's steps, the
+# bodies of the functions it calls not generated
 function generated_instructions(f, argtypes)
     local B = W.WasmBuilder
     local t = translator_of(f, argtypes)
@@ -332,7 +333,7 @@ function generated_instructions(f, argtypes)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)
     local mb = D.main_module(t)
-    local nb = only(t.component)
+    local nb = only(nb for nb in t.component if nb.ci.def.def.name === nameof(f))
     local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
     local fb = B.define(mb.functions[], sig, "f")
     local b = B.body(fb)
@@ -648,6 +649,39 @@ end
     # the loop's module holds a loop (0x03) and a conditional branch out of it
     local bytes = compile_one(C.sumto, (Int64,))
     @test 0x03 in bytes && 0x0d in bytes
+end
+
+module TryGenCases
+struct E; v::Int64; end
+@noinline thr(x::Int64) = x < 0 ? throw(E(x)) : x
+tc(x::Int64) = try; thr(x) + 1; catch e; e isa E ? e.v * 2 : 0; end
+tn(x::Int64) = try; (try; thr(x); catch; -1; end) + thr(x + 1); catch; -2; end
+end
+
+@testset "code_generator.dart: a try/catch, the stackifier's try_table around the call that unwinds to the catch" begin
+    # tc's body alone (thr's, whose throw is not ported, is not generated), each instruction accepted
+    # by the builder (D10): a BLOCK typed by the exception tag's payload, the try_table catching the tag
+    # into it around the call, an unreachable after the try_table's end; after the block's end the
+    # caught exception stashed (dart's visitTryCatch) and Julia's the_exception, narrowed to E, cast
+    local names = generated_instructions(TryGenCases.tc, (Int64,))
+    local t = findfirst(==("try_table"), names)
+    @test names[t-2:t] == ["block", "block", "try_table"] && names[t+1:t+2] == ["local.get", "call"]
+    local u = findfirst(==("unreachable"), names)
+    @test names[u-1:u+5] == ["end", "unreachable", "end", "local.set", "local.get", "ref.cast", "local.set"]
+    # nested try regions: the value the inner catch receives, x, through its Upsilon into the PhiC's
+    # register, which the catch block reads
+    local nn = generated_instructions(TryGenCases.tn, (Int64,))
+    @test count(==("try_table"), nn) == 2 && count(==("unreachable"), nn) == 2
+    # a try region's entry, exit and pop are the stackifier's structure and emit nothing; its catch's
+    # exception and exception-edge values are read where visit_block translates them, never as statements
+    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    for st in (W.NirEnter(2, nothing), W.NirLeave(W.NirValue[W.NirSSA(1)]), W.NirPopException(W.NirValue[W.NirSSA(1)]))
+        @test isempty(emitted_by(() -> D.translate_statement(g, st, nothing), g))
+    end
+    for st in (W.NirTheException(W.NirValue[]), W.NirUpsilon(W.NirArgument(2)), W.NirPhiC(W.NirValue[W.NirSSA(1)]))
+        local r = rejection(() -> D.translate_statement(g, st, W.NirSSA(3)))
+        @test r.rejection isa W.Internal && occursin("visit_block", r.rejection.site)
+    end
 end
 
 @testset "types.dart's type tests read the code generator's late builder" begin

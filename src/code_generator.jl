@@ -504,12 +504,12 @@ end
             end
             NirGCPreserveBegin => reject!(Unquarantined("src/julia: Julia's Expr(:gc_preserve_begin) as a value"), "$(self.enclosing_member)")
             NirGCPreserveEnd => reject!(Unquarantined("src/julia: Julia's Expr(:gc_preserve_end)"), "$(self.enclosing_member)")
-            NirTheException => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's Expr(:the_exception), a catch region's exception"), "$(self.enclosing_member)")
+            NirTheException => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's Expr(:the_exception), a statement visit_block translates, as a value"), "$(self.enclosing_member)")
             NirThrowUndefIfNot => reject!(Unquarantined("src/julia: Julia's Expr(:throw_undef_if_not)"), "$(self.enclosing_member)")
             NirCFunction => reject!(Unquarantined("src/julia: Julia's Expr(:cfunction), a quarantined host import (dev/MARCH.md 1.F)"), "$(self.enclosing_member)")
             NirInvokeModify => reject!(Unquarantined("src/julia: Julia's Expr(:invoke_modify)"), "$(self.enclosing_member)")
             NirPhi => reject!(Unquarantined("dev/MARCH.md 1.D: the stackifier, Julia's PhiNode as wasm's structured control"), "$(self.enclosing_member)")
-            NirPhiC => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's PhiCNode, a catch region's value"), "$(self.enclosing_member)")
+            NirPhiC => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's PhiCNode, a statement visit_block translates, as a value"), "$(self.enclosing_member)")
             NirEnter => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's EnterNode, a try region"), "$(self.enclosing_member)")
             NirLeave => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's Expr(:leave) as a value"), "$(self.enclosing_member)")
             NirPopException => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's Expr(:pop_exception) as a value"), "$(self.enclosing_member)")
@@ -561,10 +561,12 @@ one fact Julia's flat IR keeps apart from the statement (Kernel nests a used exp
 parent), and `nothing` otherwise: a used value is Kernel's `VariableDeclaration` with its
 initializer, a local (translateVariableDeclaration), an unused one an `ExpressionStatement`
 (visitExpressionStatement, the void marker expected); a return is a `ReturnStatement`, an emptied
-statement an `EmptyStatement`. Every Julia-only form (the flat IR's jumps and merges, try regions, GC
-preservation, loop hints) rejects, located, until the stackifier
-(dev/MARCH.md 1.D), and a foreign call or C function pointer until the host imports (1.F). dart's
-source-map offset is set from the node; the NIR's line table takes that place with the source map.
+statement an `EmptyStatement`. A try region's entry, exit and exception-stack pop are the
+stackifier's structure (visit_block) and emit nothing here. The other Julia-only forms (the flat IR's
+jumps and merges, exception-edge values, GC preservation, loop hints) reject, located, until the
+stackifier (dev/MARCH.md 1.D), and a foreign call or C function pointer until the host imports (1.F).
+dart's source-map offset is set from the node; the NIR's line table takes that place with the source
+map.
 """
 @parity "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement" @nospecializeinfer function translate_statement(self::AstCodeGenerator, @nospecialize(node::NirStmt), variable::Union{NirSSA,Nothing})::Nothing
     local at = "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement"
@@ -580,9 +582,13 @@ source-map offset is set from the node; the NIR's line table takes that place wi
         (s::NirBoundscheck) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirGCPreserveBegin) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's GC preservation region"), at)
         (s::NirGCPreserveEnd) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's GC preservation region"), at)
-        (s::NirLeave) => reject!(Unquarantined("dev/MARCH.md 1.D: leaving a try region, structured by the stackifier"), at)
-        (s::NirPopException) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's exception stack"), at)
-        (s::NirTheException) => reject!(Unquarantined("dev/MARCH.md 1.D: the caught exception of a try region"), at)
+        # control leaves a try region by the stackifier's branch out of its TRY_TABLE (visit_block)
+        (s::NirLeave) => nothing
+        # Julia's exception stack has no reader: the_exception reads its catch's CATCH local
+        # (visit_block), where it is not in its catch's first block it rejects, and
+        # Base.current_exceptions is a foreign call
+        (s::NirPopException) => nothing
+        (s::NirTheException) => reject!(Internal("$at: the caught exception, which visit_block reads from its catch's CATCH local, as a statement"), at)
         (s::NirLoopInfo) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's loop hints"), at)
         (s::NirThrowUndefIfNot) => reject!(Unquarantined("dev/MARCH.md 1.D: Julia's undefined-variable check"), at)
         (s::NirInvokeModify) => reject!(Unquarantined("dev/MARCH.md 1.D: an atomic field modify"), at)
@@ -592,9 +598,10 @@ source-map offset is set from the node; the NIR's line table takes that place wi
         (s::NirUnreachable) => WasmBuilder.unreachable(self.b[])
         (s::NirPhi) => reject!(Internal("$at: an SSA merge, which visit_block reads from its incoming register, as a statement"), at)
         (s::NirPi) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
-        (s::NirEnter) => reject!(Unquarantined("dev/MARCH.md 1.D: entering a try region, structured by the stackifier"), at)
-        (s::NirUpsilon) => reject!(Unquarantined("dev/MARCH.md 1.D: an exception-edge value, structured by the stackifier"), at)
-        (s::NirPhiC) => reject!(Unquarantined("dev/MARCH.md 1.D: an exception-edge merge, structured by the stackifier"), at)
+        # the try region's TRY_TABLE, which the stackifier placed, opens it (visit_block)
+        (s::NirEnter) => nothing
+        (s::NirUpsilon) => reject!(Internal("$at: an exception-edge value, which visit_block writes to its PhiCs' registers, as a statement"), at)
+        (s::NirPhiC) => reject!(Internal("$at: an exception-edge merge, which visit_block reads from its register, as a statement"), at)
     end
     return nothing
 end
@@ -634,7 +641,11 @@ end
 # (WebAssemblyLowerBrUnless's i32.eqz), STMTS translates Julia's
 # statements, a PhiNode reading its incoming register, which each predecessor's COPY wrote
 # (PHIElimination), and BR_TABLE and CONST_I32 read and write FixIrreducibleControlFlow's label
-# registers
+# registers. A try region is LLVM's: TRY_TABLE opens a label whose one catch clause, dart's catch of
+# its exception tag (visitTryCatch), branches to a BLOCK typed by the values the tag carries; the CATCH
+# after that block's end stashes the caught exception in a local, as dart's visitTryCatch does after
+# its catch, and Julia's the_exception in the catch block reads it; an Upsilon writes the register of
+# each PhiC naming it, which the PhiC reads, as Julia's codegen does; UNREACHABLE is wasm's
 @parity "dart2wasm/lib/code_generator.dart:768 AstCodeGenerator.visitBlock" function visit_block(self::AstCodeGenerator, node::NirBody)::Nothing
     local at = "$(self.enclosing_member)"
     local mf = LLVM.add_pre_emit_pass(node.stmts, node.cfg, node.handlers, at, !isempty(outputs(self)))
@@ -646,19 +657,49 @@ end
     local registers = Dict{Int,WasmBuilder.IR.Local}()
     # a phi's registers are defaultable: a use may follow the end of the wasm block holding its copy
     local incoming_reg(p::Int) = get!(() -> add_local(self, WasmBuilder.with_nullability(translate_type_of_local_variable(self.translator, node.types[p]), true)), incoming, p)
+    # each Upsilon's PhiCs, the catch regions' merges that name it
+    local upsilon_phics = Dict{Int,Vector{Int}}()
+    for (p, st) in enumerate(node.stmts)
+        st isa NirPhiC || continue
+        for v in st.values
+            v isa NirSSA && node.stmts[v.id] isa NirUpsilon ||
+                reject!(Internal("src/code_generator.jl visit_block: a PhiC's value $v that no Upsilon gives"), at)
+            push!(get!(() -> Int[], upsilon_phics, v.id), p)
+        end
+    end
     local label_reg(r::Int) = get!(() -> add_local(self, WasmBuilder.IR.NumType_i32), registers, r)
     local imm(mi::MachineInstr, k::Int) = (mi.operands[k]::MOImm).imm
     local label_at(d::Int) = (d < length(labels) || reject!(Internal("src/code_generator.jl visit_block: depth $d past the open labels"), at); labels[end - d])
-    local block_outputs(mi::MachineInstr) = imm(mi, 1) == BLOCK_TYPE_RESULTS ? outputs(self) : WasmBuilder.IR.ValueType[]
+    local dart_tag() = get_dart_exception_tag(self.translator, b.module_builder)
+    local block_outputs(mi::MachineInstr) = imm(mi, 1) == BLOCK_TYPE_RESULTS ? outputs(self) :
+        # the values a catch of the tag delivers (Catch.caughtValues)
+        imm(mi, 1) == BLOCK_TYPE_CATCH ? dart_tag().type.inputs :
+        imm(mi, 1) == BLOCK_TYPE_VOID ? WasmBuilder.IR.ValueType[] :
+        reject!(Internal("src/code_generator.jl visit_block: block type $(imm(mi, 1))"), at)
+    # the caught exception of the catch block being emitted, its block's
+    local thrown_exception = nothing
     for mbb in mf.layout, mi in mf.blocks[mbb].instrs
         local op = mi.opcode
+        thrown_exception !== nothing && thrown_exception[1] != mbb && (thrown_exception = nothing)
         if op == BLOCK
             push!(labels, WasmBuilder.block(b, WasmBuilder.IR.ValueType[], block_outputs(mi)))
         elseif op == LOOP
             push!(labels, WasmBuilder.loop(b, WasmBuilder.IR.ValueType[], block_outputs(mi)))
-        elseif op == END_BLOCK || op == END_LOOP
+        elseif op == TRY_TABLE
+            # one catch clause, of the exception tag, to the label at its depth outside the try_table
+            imm(mi, 2) == 1 && imm(mi, 3) == 0x00 || reject!(Internal("src/code_generator.jl visit_block: a TRY_TABLE's catch clauses"), at)
+            local catches = WasmBuilder.TryTableCatch[WasmBuilder.Catch(dart_tag(), label_at(imm(mi, 4)))]
+            push!(labels, WasmBuilder.try_table(b, catches, WasmBuilder.IR.ValueType[], block_outputs(mi)))
+        elseif op == END_BLOCK || op == END_LOOP || op == END_TRY_TABLE
             WasmBuilder.var"end"(b)
             pop!(labels)
+        elseif op == CATCH
+            # dart's visitTryCatch: the exception its catch pushed, stashed in a local
+            local thrown = add_local(self, self.translator.top_type_non_nullable[])
+            WasmBuilder.local_set(b, thrown)
+            thrown_exception = (mbb, thrown)
+        elseif op == UNREACHABLE
+            WasmBuilder.unreachable(b)
         elseif op == STMTS
             for k in imm(mi, 1):imm(mi, 2)
                 local st = node.stmts[k]
@@ -667,6 +708,31 @@ end
                     local dest = add_local(self, incoming_reg(k).type)
                     self.locals[NirSSA(k)] = dest
                     WasmBuilder.local_get(b, incoming_reg(k))
+                    WasmBuilder.local_set(b, dest)
+                elseif st isa NirUpsilon
+                    # Julia's codegen (emit_upsilonnode, src/codegen.cpp): the value stored in the
+                    # register of each PhiC naming the Upsilon, which the catch block reads
+                    st.val === nothing && haskey(upsilon_phics, k) &&
+                        reject!(Unquarantined("dev/MARCH.md 1.D: an Upsilon with no value, a variable undefined on the exception edge"), at)
+                    for p in get(upsilon_phics, k, Int[])
+                        translate_expression(self, something(st.val), incoming_reg(p).type)
+                        WasmBuilder.local_set(b, incoming_reg(p))
+                    end
+                elseif st isa NirPhiC
+                    # the PhiC's destination, a copy of its register, which its Upsilons wrote
+                    local dest = add_local(self, incoming_reg(k).type)
+                    self.locals[NirSSA(k)] = dest
+                    WasmBuilder.local_get(b, incoming_reg(k))
+                    WasmBuilder.local_set(b, dest)
+                elseif st isa NirTheException
+                    # Julia's the_exception in its catch block, the exception its CATCH stashed; Julia's
+                    # inference may have narrowed its type (the try body's exception type)
+                    thrown_exception === nothing && reject!(Unquarantined("dev/MARCH.md 1.D: Julia's exception stack, the_exception outside the first block of its catch"), at)
+                    local caught = thrown_exception[2]
+                    local dest = add_local(self, translate_type_of_local_variable(self.translator, node.types[k]))
+                    self.locals[NirSSA(k)] = dest
+                    WasmBuilder.local_get(b, caught)
+                    convert_type(self.translator, b, caught.type, dest.type)
                     WasmBuilder.local_set(b, dest)
                 else
                     translate_statement(self, st, k in self.used ? NirSSA(k) : nothing)
