@@ -156,7 +156,8 @@ Reshaped: `target` — a Reference is a member's MethodInstance or, for a static
     # a static field's initializer (dart's `member is Field` arm): the value a Julia binding starts
     # the program with is its image value only once every module's __init__ has run at load (juliac
     # runs Base.__init__ and each module's in order), which the start function does not run yet, so
-    # the initializer has no value to compute: a located rejection, the one gap of the lazy arm
+    # the initializer has no value to compute: a located rejection, the one gap of the lazy arm, until
+    # the start function runs them as dev/MODULE_INIT.md rules
     target isa GlobalRef && reject!(Unquarantined("src/functions.jl getFunction: the initializer of the binding $target, whose starting value waits for the modules' __init__ (Base.__init__ and the closed world's) to run at load"), "FunctionCollector.getFunction")
     local never_inline = something(Util.get_wasm_never_inline_pragma(target), false)
     local always_inline = something(Util.get_wasm_prefer_inline_pragma(target), false)
