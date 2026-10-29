@@ -100,6 +100,22 @@ subtype is checked by reflection when the package loads.
 @quarantine "AbstractClosures's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractClosures})::Int = check_forward(AbstractClosures, Dart2Wasm.Closures, @__MODULE__)
 
 """
+    AbstractLambda
+
+The forward declaration of `Dart2Wasm.Lambda`, its one subtype: the type of a LambdaCallTarget's
+`_lambda`, declared before LambdaCallTarget so that Lambda, which holds its call target, can follow
+(closures.dart:1327 and code_generator.dart:6217 name each other).
+
+precedent(c: a forward-declared struct; ocaml: a signature before its implementation). Julia's
+differs: it has no forward declaration, so an abstract type stands for the struct and its one
+subtype is checked by reflection when the package loads.
+"""
+@quarantine "Julia has no forward struct declaration; a LambdaCallTarget's back-pointer to its Lambda names this abstract type" Core.DataType abstract type AbstractLambda end
+
+# checked when every definition exists (src/WasmTarget.jl calls it after include_dart)
+@quarantine "AbstractLambda's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractLambda})::Int = check_forward(AbstractLambda, Dart2Wasm.Lambda, @__MODULE__)
+
+"""
     AbstractDispatchTable
 
 The forward declaration of `Dart2Wasm.DispatchTable`, its one subtype: the type of a SelectorInfo's

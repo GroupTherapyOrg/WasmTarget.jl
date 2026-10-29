@@ -137,14 +137,32 @@ SynchronousLambdaCodeGenerator's dart fields: `lambda`.
 @parity "dart2wasm/lib/code_generator.dart:5084 UnreachableCodeGenerator" @unported struct UnreachableCodeGenerator <: AstCodeGenerator end
 
 """
-TryBlockFinalizer's dart fields: `label`, `mustHandleReturn`.
+A finalizer of a `try`: `label`, the `br` target that runs it, and `mustHandleReturn`, whether the
+last finalizer in the chain returns (when false the block, which runs the finalizers on a return,
+is unused).
 """
-@parity "dart2wasm/lib/code_generator.dart:5094 TryBlockFinalizer" @unported struct TryBlockFinalizer end
+@parity "dart2wasm/lib/code_generator.dart:5094 TryBlockFinalizer" mutable struct TryBlockFinalizer
+    const label::WasmBuilder.Label
+    must_handle_return::Bool
+    # the struct's one constructor, tagged, with dart's field initializer; dart's constructor at
+    # :5103 is its outer function
+    TryBlockFinalizer(::Val{:_}, label::WasmBuilder.Label) = new(label, false)
+end
 
 """
-SwitchBackwardJumpInfo's dart fields: `switchValueLocal`, `loopLabel`, `defaultLoopLabel`.
+A switch statement's information for a backward jump to it: `switchValueLocal`, the local holding the
+switched value, which a backward jump updates; `loopLabel`, the `loop` a backward jump targets; and
+`defaultLoopLabel`, while the `default` case compiles, the `loop` in its body for a jump to itself.
 """
-@parity "dart2wasm/lib/code_generator.dart:5108 SwitchBackwardJumpInfo" @unported struct SwitchBackwardJumpInfo end
+@parity "dart2wasm/lib/code_generator.dart:5108 SwitchBackwardJumpInfo" mutable struct SwitchBackwardJumpInfo
+    const switch_value_local::WasmBuilder.IR.Local
+    const loop_label::WasmBuilder.Label
+    default_loop_label::Union{Nothing,WasmBuilder.Label}
+    # the struct's one constructor, tagged, with dart's initializer list; dart's constructor at :5130
+    # is its outer function
+    SwitchBackwardJumpInfo(::Val{:_}, switch_value_local::WasmBuilder.IR.Local, loop_label::WasmBuilder.Label) =
+        new(switch_value_local, loop_label, nothing)
+end
 
 """
 Info needed to represent a switch statement using a br_table instruction: each option mapped to an
@@ -190,9 +208,29 @@ function type (CallTarget's field), called or inlined.
 end
 
 """
-LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
+The call target of a lambda: `signature` its wasm function type (CallTarget's field), its name and its
+function made on first read. `_lambda` is held as `AbstractLambda` (src/julia/forward.jl) and
+`_translator` as `KernelNodes`, Translator's supertype, because Lambda holds its call target and the
+translator's function collector holds each Lambda.
 """
-@parity "dart2wasm/lib/code_generator.dart:6217 LambdaCallTarget" @unported struct LambdaCallTarget <: CallTarget end
+@parity "dart2wasm/lib/code_generator.dart:6217 LambdaCallTarget" struct LambdaCallTarget <: CallTarget
+    signature::WasmBuilder.IR.FunctionType
+    _translator::KernelNodes
+    _lambda::AbstractLambda
+    name::Late{String}
+    function_::Late{WasmBuilder.IR.BaseFunction}
+    # the struct's one constructor, tagged, with dart's late initializers; dart's constructor at :6221
+    # is its outer function
+    function LambdaCallTarget(::Val{:_}, signature::WasmBuilder.IR.FunctionType, _translator::KernelNodes, _lambda::AbstractLambda)
+        local self
+        self = new(signature, _translator, _lambda,
+            Late{String}("dart2wasm/lib/code_generator.dart:6224 LambdaCallTarget.name",
+                () -> get_lambda_function_name(self._translator.functions[], self._lambda)),
+            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/code_generator.dart:6227 LambdaCallTarget.function",
+                () -> get_lambda_function(self._translator.functions[], self._lambda)))
+        return self
+    end
+end
 
 @parity "dart2wasm/lib/code_generator.dart:38 CodeGenerator.generate" @unported function generate(self::CodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
 
@@ -1263,7 +1301,11 @@ end
     return code_gen
 end
 
-@parity "dart2wasm/lib/code_generator.dart:3502 getLambdaCodeGenerator" @unported function get_lambda_code_generator(translator::Translator, lambda::Lambda) end
+# a lambda's enclosing member is a Julia method, which no class encloses (getInlinableMemberCodeGenerator:
+# no class of a Julia method is cyclic), and tasks are out of scope, Julia's verifier rejecting them
+# (the Kernel table's AsyncMarker row), so every lambda is synchronous
+@parity "dart2wasm/lib/code_generator.dart:3502 getLambdaCodeGenerator" get_lambda_code_generator(translator::Translator, lambda::Lambda)::CodeGenerator =
+    SynchronousLambdaCodeGenerator(translator, lambda)
 
 # a Julia method is dart's synchronous Procedure: no constructor, field or tear-off reference reaches
 # here (getMemberCodeGenerator), and no class of a Julia method is cyclic (a struct's fields cannot
@@ -1406,9 +1448,10 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5088 UnreachableCodeGenerator.generateInternal" @unported function generate_internal(self::UnreachableCodeGenerator) end
 
-@parity "dart2wasm/lib/code_generator.dart:5103 TryBlockFinalizer" @unported function TryBlockFinalizer(label) end
+@parity "dart2wasm/lib/code_generator.dart:5103 TryBlockFinalizer" TryBlockFinalizer(label::WasmBuilder.Label)::TryBlockFinalizer = TryBlockFinalizer(Val(:_), label)
 
-@parity "dart2wasm/lib/code_generator.dart:5130 SwitchBackwardJumpInfo" @unported function SwitchBackwardJumpInfo(switch_value_local, loop_label) end
+@parity "dart2wasm/lib/code_generator.dart:5130 SwitchBackwardJumpInfo" SwitchBackwardJumpInfo(switch_value_local::WasmBuilder.IR.Local, loop_label::WasmBuilder.Label)::SwitchBackwardJumpInfo =
+    SwitchBackwardJumpInfo(Val(:_), switch_value_local, loop_label)
 
 # at least 50% of [min, max] must be occupied for a `br_table`
 @parity "dart2wasm/lib/code_generator.dart:5145 BrTableInfo._minimumTableOccupancy" BrTableInfo__minimum_table_occupancy()::Float64 = 0.5
@@ -1453,9 +1496,9 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:5534 _VirtualCallKind.toString" @unported function Base.show(io::IO, self::_VirtualCallKind) end
 
-@parity "dart2wasm/lib/code_generator.dart:5542 _VirtualCallKind.isGetter" @unported function is_getter(self::_VirtualCallKind) end
+@parity "dart2wasm/lib/code_generator.dart:5542 _VirtualCallKind.isGetter" is_getter(self::_VirtualCallKind)::Bool = self == _VirtualCallKind_Get
 
-@parity "dart2wasm/lib/code_generator.dart:5544 _VirtualCallKind.isSetter" @unported function is_setter(self::_VirtualCallKind) end
+@parity "dart2wasm/lib/code_generator.dart:5544 _VirtualCallKind.isSetter" is_setter(self::_VirtualCallKind)::Bool = self == _VirtualCallKind_Set
 
 @parity "dart2wasm/lib/code_generator.dart:5553 MacroAssembler.emitUnreachableIfNoResult" function emit_unreachable_if_no_result(self::WasmBuilder.InstructionsBuilder, outputs::Vector{WasmBuilder.IR.ValueType})::Vector{WasmBuilder.IR.ValueType}
     for output in outputs
@@ -1835,6 +1878,13 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:6214 AstCallTarget.function" var"function"(self::AstCallTarget)::WasmBuilder.IR.BaseFunction = get_function(self._translator.functions[], self._reference)
 
-@parity "dart2wasm/lib/code_generator.dart:6221 LambdaCallTarget" @unported function LambdaCallTarget(signature, _translator, _lambda) end
+@parity "dart2wasm/lib/code_generator.dart:6221 LambdaCallTarget" LambdaCallTarget(signature::WasmBuilder.IR.FunctionType, _translator::Translator, _lambda::Lambda)::LambdaCallTarget =
+    LambdaCallTarget(Val(:_), signature, _translator, _lambda)
+
+# dart's `late final String name` overrides CallTarget's getter: the field, made on first read
+@parity "dart2wasm/lib/code_generator.dart:6224 LambdaCallTarget.name" name(self::LambdaCallTarget)::String = self.name[]
+
+# dart's `late final w.BaseFunction function` overrides CallTarget's getter: the field, defined on first read
+@parity "dart2wasm/lib/code_generator.dart:6227 LambdaCallTarget.function" var"function"(self::LambdaCallTarget)::WasmBuilder.IR.BaseFunction = self.function_[]
 
 @parity "dart2wasm/lib/code_generator.dart:6239 guardCanMatchJSException" @unported function guard_can_match_js_exception(translator::Translator, guard::Type) end

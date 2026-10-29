@@ -219,7 +219,7 @@ method's file, and the enclosing member the `MethodInstance` that allocates the 
 closed world reaches the method as any other, so `Closures` creates no Lambda (see
 `Closures._findCaptures`).
 """
-@parity "dart2wasm/lib/closures.dart:1327 Lambda" struct Lambda
+@parity "dart2wasm/lib/closures.dart:1327 Lambda" struct Lambda <: AbstractLambda
     function_node::NirBody
     function_node_source::Symbol
     enclosing_member::Core.MethodInstance
