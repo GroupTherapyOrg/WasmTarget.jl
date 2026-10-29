@@ -248,8 +248,13 @@ module (js/runtime_generator.dart), not yet ported: it rejects, located.
     options.translator_options.standalone ||
         reject!(Unported("dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate"), at)
     local wasm_output_filename = basename(options.output_file)
-    local module_ids = Set{Int}(something(WasmCompilerOptions_id_for_module_name(wasm_output_filename, m.module_name),
-                                          WasmCompilerOptions_main_module_id()) for m in keys(modules))
+    # dart asserts each module's name has an id (`idForModuleName(...)!`): a name with none rejects, located
+    local module_ids = Set{Int}()
+    for m in keys(modules)
+        local id = WasmCompilerOptions_id_for_module_name(wasm_output_filename, m.module_name)
+        id === nothing && reject!(Internal("$at: the module name $(m.module_name) has no id beside $wasm_output_filename"), at)
+        push!(module_ids, id)
+    end
     return CodegenResult(options.output_file, module_ids, wasm_files)
 end
 
