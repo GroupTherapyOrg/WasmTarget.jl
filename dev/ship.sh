@@ -87,7 +87,8 @@ record_failure() {
 release() { rm -rf "$lock"; }
 trap cleanup_scratch EXIT
 # the landing lock: a directory holding its holder's pid; a holder that died frees it, and so does
-# a lock older than 10 minutes with no pid written (its holder died before writing it)
+# a lock with no pid written 20 seconds after it was made (its holder died between the two steps; one empty
+# lock held eight ships for four minutes under the old ten-minute rule, 09:52)
 # lanes take the lock in the order they queued (a ticket, its name <seconds>-<pid>, in the common dir's
 # wt-landing-queue): a ship waits until its ticket is the oldest of a live ship, so a lane that queued
 # first is never skipped by one that polled first (march-monitor-a, 23:41: codegen-b's five commits were
@@ -118,7 +119,7 @@ while :; do
   if [ "$queue/$first" = "$ticket" ] && mkdir "$lock" 2>/dev/null; then break; fi
   holder=$(cat "$lock/pid" 2>/dev/null || true)
   if [ -n "$holder" ]; then kill -0 "$holder" 2>/dev/null || rm -rf "$lock"
-  elif [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rm -rf "$lock"; fi
+  elif [ -d "$lock" ] && [ $(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || date +%s) )) -gt 20 ]; then rm -rf "$lock"; fi
   sleep 2
 done
 echo $$ > "$lock/pid"; rm -f "$ticket"; trap 'release; cleanup_scratch' EXIT
