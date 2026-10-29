@@ -412,6 +412,9 @@ end
                     # a tuple's field by its position, a NamedTuple's by its name: Kernel's record gets
                     record_get(R::Type, K::Type) = f === Core.getfield && length(c.args) >= 3 && c.args[3] isa NirConst &&
                         c.args[3].c.val isa K && (let t = dart_type_of(self, c.args[2]); t isa DataType && isconcretetype(t) && t <: R end)
+                # `x === nothing` with x of a type that admits nothing and is no Nothing itself: Kernel's EqualsNull
+                equals_null() = f === Core.:(===) && length(c.args) == 3 && (let ts = (dart_type_of(self, c.args[2]), dart_type_of(self, c.args[3]))
+                        count(==(Nothing), ts) == 1 && all(t -> Nothing <: t, ts) end)
                 record_get(Tuple, Int) ? visit_record_index_get(self, c, expected_type) :
                 record_get(NamedTuple, Symbol) ? visit_record_name_get(self, c, expected_type) :
                 f === Core.getfield ? visit_instance_get(self, c, expected_type) :
@@ -420,6 +423,7 @@ end
                 f === Core.typeassert ? visit_as_expression(self, c, expected_type) :
                 f === Core.throw ? visit_throw(self, c, expected_type) :
                 f === Core.tuple ? visit_record_literal(self, c, expected_type) :
+                equals_null() ? visit_equals_null(self, c, expected_type) :
                 visit_static_invocation(self, c, expected_type)
             end
             (i::NirInvoke) => visit_static_invocation(self, i, expected_type)
@@ -838,7 +842,15 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:1926 AstCodeGenerator.visitEqualsCall" @unported function visit_equals_call(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2022 AstCodeGenerator.visitEqualsNull" @unported function visit_equals_null(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType) end
+# Julia's `x === nothing`, Kernel's EqualsNull: `nothing` is the null reference of a value whose type
+# admits it (translateExpression routes the === whose one operand is Nothing here), so the test is the
+# other operand's ref.is_null
+@parity "dart2wasm/lib/code_generator.dart:2022 AstCodeGenerator.visitEqualsNull" function visit_equals_null(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local expression = dart_type_of(self, node.args[2]) === Nothing ? node.args[3] : node.args[2]
+    translate_expression(self, expression, WasmBuilder.IR.RefType_any(; nullable = true))
+    WasmBuilder.ref_is_null(self.b[])
+    return WasmBuilder.IR.NumType_i32
+end
 
 @parity "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall" @unported function _virtual_call(self::AstCodeGenerator, node::NirStmt, interface_target::Core.MethodInstance, kind::_VirtualCallKind, push_receiver::Function, push_arguments::Function; use_unchecked_entry::Bool) end
 

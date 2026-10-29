@@ -654,6 +654,8 @@ maybe(r::Base.RefValue{Union{Nothing,Int64}}) = r[] isa Int64
 mutable struct Cell; x::Int64; end
 maybe_cell(r::Base.RefValue{Union{Nothing,Cell}}) = r[] isa Cell
 maybe_of(x::Int64) = maybe_cell(Ref{Union{Nothing,Cell}}(x < 0 ? nothing : Cell(x)))
+# Julia's `x === nothing` over the same field read, Kernel's EqualsNull
+null_of(x::Int64) = Ref{Union{Nothing,Cell}}(x < 0 ? nothing : Cell(x))[] === nothing
 as_int(r::Base.RefValue{Union{Nothing,Int64}}) = r[]::Int64
 dyn(r::Base.RefValue{Union{Nothing,Int64}}, T::DataType) = r[] isa T
 end
@@ -665,6 +667,9 @@ end
     # native Julia, nothing and every Int64
     local bytes = W.compile(TypeTestCases.maybe_of, (Int64,); optimize = false)
     queue_native!("maybe_of", bytes, TypeTestCases.maybe_of, [(x,) for x in Int64[-1, 0, 1, typemax(Int64), typemin(Int64)]])
+    # `x === nothing`, visitEqualsNull: the field read's null check, run by node against native
+    local nbytes = W.compile(TypeTestCases.null_of, (Int64,); optimize = false)
+    queue_native!("null_of", nbytes, TypeTestCases.null_of, [(x,) for x in Int64[-1, 0, 5]])
     # Julia's typeassert, the checked AsExpression: emitAsCheck needs the runtime's _asSubtype, not
     # ported, a located rejection at the runtime library's definition
     local e = rejection(() -> generated_instructions(TypeTestCases.as_int, (R,)))
