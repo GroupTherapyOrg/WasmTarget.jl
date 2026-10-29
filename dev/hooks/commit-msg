@@ -18,6 +18,14 @@ if ! grep -qE '^Charter: C[0-9]+' "$msg"; then
     echo "commit refused: add a 'Charter: C<n> …' trailer naming the dev/CHARTER.md clause(s) this change advances" >&2
     exit 1
 fi
+# the subject says what the change does, `<kind>(<scope>): <what>` as every landed commit does; a placeholder
+# subject (wip, tmp, fixup, squash) tells the history nothing (2e9ead2f landed as "wip", 2026-10-29)
+subject=$(sed -n '/^[[:space:]]*$/!{p;q;}' "$msg")
+if printf '%s' "$subject" | grep -qiE '^(wip|tmp|temp|fixup!?|squash!?|todo|xxx)([[:space:]:]|$)' ||
+   ! printf '%s' "$subject" | grep -qE '^(revert|[a-z]+)(\([^)]+\))?: .{12,}'; then
+    echo "commit refused: the subject must say what the change does, '<kind>(<scope>): <what>', not \"$subject\"" >&2
+    exit 1
+fi
 # one attribution: a message carries at most one Co-Authored-By trailer, indented or not (A35E4)
 coauthors=$(grep -ciE '^[[:space:]]*Co-Authored-By:' "$msg" || true)
 if [ "$coauthors" -gt 1 ]; then

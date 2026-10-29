@@ -1349,7 +1349,7 @@ end
 # L209's negative test: the hook refuses two trailers (one indented), accepts one
 function trailer_negatives_missed()::Vector{String}
     local out = String[]
-    local base = "fix: x\n\nCharter: C0 (x)\n\nCo-Authored-By: A <a@b>\n"
+    local base = "fix(hooks): a planted subject that says what it does\n\nCharter: C0 (x)\n\nCo-Authored-By: A <a@b>\n"
     hook_accepts(base) || push!(out, "negative missed: the hook refuses a message with one Co-Authored-By trailer")
     hook_accepts(base * "    Co-Authored-By: A <a@b>\n") && push!(out, "negative missed: the hook accepts an indented second trailer")
     hook_accepts(base * "Co-authored-by: B <c@d>\n") && push!(out, "negative missed: the hook accepts a second trailer in another case")
