@@ -1,194 +1,137 @@
 --------------------------- MODULE ClassIdNumbering ---------------------------
 (***************************************************************************)
-(* A TLA+ model of dart2wasm's class-id numbering, the one numbering of the  *)
-(* closed world (dev/MARCH.md 1.C):                                          *)
-(*   parity(class_info.dart:864 ClassIdNumbering._number)                    *)
-(*   parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange)    *)
-(* ported onto Julia's type graph, which Julia itself answers (ledger D3):   *)
-(* each class's parent is Julia's `supertype`, the root is `Any`.            *)
+(* A TLA+ model of the class ids and their ranges (src/class_info.jl):       *)
+(*   ClassIdNumbering._number (class_info.dart:864): the closed world's      *)
+(*     classes (closed_world_classes), each class's subclasses by Julia's    *)
+(*     supertype and its implementors by class_implemented_types; a depth-   *)
+(*     first pre-order walk from Any giving a concrete class the next        *)
+(*     concrete id (from 1) and an abstract class the next abstract id (from *)
+(*     one past the last concrete), each class's concrete subclass range     *)
+(*     [the concrete counter at its pre, the counter less one at its post];  *)
+(*   _getTransitiveImplementors (:805), getConcreteClassIdRange (:831) and   *)
+(*   normalize (:1093): a class's ranges, its own and its transitive         *)
+(*     implementors', sorted and merged.                                     *)
+(* Julia answers every edge (D3): a class's parent is its supertype; what   *)
+(* dart's interfaces give, a subtype off the superclass tree, is Julia's     *)
+(* covariant Tuple (Tuple{Int} <: Tuple{Any}, whose supertype is Any), so a *)
+(* concrete class implements every class of the world it is a subtype of    *)
+(* off its supertype chain.                                                  *)
 (*                                                                           *)
-(* WHAT dart DOES.  One depth-first pre-order walk from the root.  Its `pre` *)
-(* gives a concrete class the next concrete id (from 1; 0 is the artificial  *)
-(* top class) and an abstract class the next abstract id (from one past the  *)
-(* last concrete id, `nextAbstractClassId = 1 + concreteClassCount`), and    *)
-(* returns the concrete counter as it stood; its `post` writes the class's  *)
-(* range [first, next concrete id - 1], the concrete ids of its subtree.     *)
-(* Siblings are visited in the program's order (dart's component order: its *)
-(* libraries, then each library's classes), the root's children sorted by a  *)
-(* fixed preference first (`order`, class_info.dart:930), a stable sort.    *)
+(* THE SPECIFICATION is Julia's isa: a class's ranges hold exactly the ids  *)
+(* of the concrete classes Julia's <: puts under it (RangeIsa), so a class-  *)
+(* id range test answers isa.                                                *)
 (*                                                                           *)
-(* HOW JULIA DIFFERS, AND WHY THE MODEL HOLDS IT.  Julia has single          *)
-(* inheritance and no interfaces, so dart's `implementors` are empty and a  *)
-(* class's ranges are its subtree's one range; a concrete Julia type has no  *)
-(* subtypes, so every class with a child is abstract; an abstract type may   *)
-(* have no concrete subtype in the closed world (a field typed `Real` that  *)
-(* holds nothing), its range then empty, as dart's may be.  The sibling     *)
-(* order is an input: `ord`                                                  *)
-(* ranks every class (the order the closed world's walk first meets it, the  *)
-(* root's preferred children first); the model checks every order, so the   *)
-(* claims hold for whichever order the port takes, and the ids are a pure    *)
-(* function of the tree and the order (the closed form below).               *)
+(* ABSTRACTION. A universe of Any, Number, Int, Str and the tuples          *)
+(* Tuple{Any} (abstract), Tuple{Int} and Tuple{Str} (concrete), with Julia's *)
+(* <: as a fixed operator; Init picks every world (closed under supertype   *)
+(* and a tuple's element, as the class walk makes it) and every order the   *)
+(* walk can meet its classes in, which orders each class's children.        *)
 (*                                                                           *)
-(* The walk is stepwise with an explicit stack, one frame per abstract class *)
-(* ([node, first, pend]), as dart's recursive `dfs`: a concrete child takes  *)
-(* its id and its one-id range at once (its `pre` and `post` with no child   *)
-(* between); an abstract child takes its id and opens a frame; a frame with  *)
-(* no child left writes its range and closes.                                *)
+(* This replaces WT1's ClassIdNumbering, which held a class's ranges to be  *)
+(* its subtree's one range because Julia has no interfaces: Julia's         *)
+(* covariant Tuples are dart's implementors, and the port reads them.       *)
 (*                                                                           *)
-(* Broken variants: `RangeOffByOne` writes a range's end as the concrete     *)
-(* counter itself, not one less (TLC must report RangeIsa violated);         *)
-(* `SharedCounter` gives an abstract class the concrete counter's next id,   *)
-(* one counter for both (TLC must report ConcreteDense violated).            *)
+(* Claims:                                                                   *)
+(*   ConcreteDense  the concrete classes take 1..C, each once                *)
+(*   AbstractAfter  the abstract classes take C+1..C+A, each once            *)
+(*   RangeIsa       a class's ranges hold exactly its concrete subtypes' ids *)
+(*   Normalized     a class's ranges are sorted, disjoint and not adjacent   *)
+(* Broken variants: SharedCounter (one counter for both: ConcreteDense),     *)
+(* OffByOne (a range ends at the counter, not one before: RangeIsa),         *)
+(* NoImplementors (WT1's premise, no implemented types: RangeIsa),           *)
+(* NoAdjacentMerge (normalize merges overlaps only: Normalized).             *)
 (***************************************************************************)
-EXTENDS Integers, FiniteSets, Sequences
+EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS
-    N,              \* classes are 1..N; 0 is the root, `Any`
-    RangeOffByOne,  \* Broken: a range ends at the concrete counter, not one before it
-    SharedCounter   \* Broken: abstract classes draw from the concrete counter
+CONSTANTS SharedCounter, OffByOne, NoImplementors, NoAdjacentMerge
 
-Root    == 0
-Classes == 1..N
-Types   == 0..N
+U == {"Any", "Number", "Int", "Str", "TAny", "TInt", "TStr"}
+Tuples == {"TAny", "TInt", "TStr"}
+Concrete == {"Int", "Str", "TInt", "TStr"}
+Super(c) == CASE c = "Int" -> "Number" [] OTHER -> "Any"
+Elem(t) == CASE t = "TAny" -> "Any" [] t = "TInt" -> "Int" [] t = "TStr" -> "Str"
+RECURSIVE ChainOf(_)
+ChainOf(c) == IF c = "Any" THEN {} ELSE {Super(c)} \cup ChainOf(Super(c))
+\* Julia's <: over the universe: the supertype chain, and a Tuple's covariance
+Le(c, k) == c = k \/ k \in ChainOf(c) \/ (c \in Tuples /\ k \in Tuples /\ (Elem(c) = Elem(k) \/ Elem(k) \in ChainOf(Elem(c))))
 
-VARIABLES
-    parent,     \* [Classes -> Types], parent[c] < c : Julia's supertype
-    abs,        \* SUBSET Classes : the abstract classes but the root (every class with a child)
-    ord,        \* [Classes -> 1..N], a bijection : the sibling order (program order)
-    phase,      \* "walk" -> "done"
-    stack,      \* the walk's frames <<[node, first, pend]>>
-    nextConc,   \* nextConcreteClassId
-    nextAbs,    \* nextAbstractClassId
-    ids,        \* [Types -> Nat] : classIds (0 = not yet numbered)
-    ranges      \* [Types -> <<>> | <<lo, hi>>] : concreteSubclassRanges
+Closed(S) == "Any" \in S /\ \A c \in S : (c # "Any" => Super(c) \in S) /\ (c \in Tuples => Elem(c) \in S)
+Worlds == {S \in SUBSET U : Closed(S)}
 
-vars == <<parent, abs, ord, phase, stack, nextConc, nextAbs, ids, ranges>>
+VARIABLES world, rank
+vars == <<world, rank>>
 
-----------------------------------------------------------------------------
-(* The hierarchy and the order. *)
-
-Kids(n)  == {c \in Classes : parent[c] = n}
-Concrete == Classes \ abs
-Abstract == Types \ Concrete
-
-RECURSIVE Anc(_)
-Anc(c) == IF c = Root THEN {} ELSE {parent[c]} \cup Anc(parent[c])
-Sub(a, b) == a = b \/ b \in Anc(a)          \* a <: b
-
-Perms(S) == {f \in [S -> 1..Cardinality(S)] : \A i, j \in S : i # j => f[i] # f[j]}
-
-MinOrd(S) == CHOOSE x \in S : \A y \in S : ord[x] <= ord[y]
-RECURSIVE ByOrd(_)
-ByOrd(S) == IF S = {} THEN <<>> ELSE <<MinOrd(S)>> \o ByOrd(S \ {MinOrd(S)})
-
-C == Cardinality(Concrete)
-
-----------------------------------------------------------------------------
-(* The closed form: with siblings in `ord`, a concrete class's id is its rank *)
-(* among the concrete classes in pre-order, an abstract class's C plus its   *)
-(* rank among the abstract classes in pre-order; pre-order is lexicographic  *)
-(* order of the root paths, each step keyed by `ord`.                        *)
-RECURSIVE Path(_)
-Path(c) == IF c = Root THEN <<>> ELSE Append(Path(parent[c]), ord[c])
-
-RECURSIVE LexLess(_, _)
-LexLess(p, q) == IF p = <<>> THEN q # <<>>
-                 ELSE IF q = <<>> THEN FALSE
-                 ELSE IF Head(p) < Head(q) THEN TRUE
-                 ELSE IF Head(p) > Head(q) THEN FALSE
-                 ELSE LexLess(Tail(p), Tail(q))
-
-Before(S, c) == Cardinality({d \in S : LexLess(Path(d), Path(c))})
-ClosedForm == [t \in Types |-> IF t \in Concrete THEN 1 + Before(Concrete, t)
-                               ELSE C + 1 + Before(Abstract, t)]
-
-----------------------------------------------------------------------------
-(* The walk. *)
-
+Others == world \ {"Any"}
 Init ==
-    /\ parent \in {p \in [Classes -> Types] : \A c \in Classes : p[c] < c}
-    /\ abs \in {a \in SUBSET Classes : \A c \in Classes : (\E d \in Classes : parent[d] = c) => c \in a}
-    /\ ord \in Perms(Classes)
-    /\ phase = "walk"
-    \* the root's `pre`: Any is abstract, its id the first abstract id
-    /\ nextConc = 1
-    /\ nextAbs = C + 2
-    /\ ids = [t \in Types |-> IF t = Root THEN C + 1 ELSE 0]
-    /\ ranges = [t \in Types |-> <<>>]
-    /\ stack = <<[node |-> Root, first |-> 1, pend |-> ByOrd(Kids(Root))]>>
+    /\ world \in Worlds
+    /\ rank \in {r \in [Others -> 1..Cardinality(Others)] : \A a, b \in Others : a # b => r[a] # r[b]}
 
-\* the range dart's `post` writes from the class's first concrete id
-RangeFrom(first) == LET hi == IF RangeOffByOne THEN nextConc ELSE nextConc - 1
-                    IN IF first <= hi THEN <<first, hi>> ELSE <<>>
-
-Top == stack[Len(stack)]
-
-\* the next child of the innermost open class: its `pre` (and a concrete one's `post`)
-Visit ==
-    /\ phase = "walk"
-    /\ stack # <<>>
-    /\ Top.pend # <<>>
-    /\ LET c == Head(Top.pend)
-           rest == [Top EXCEPT !.pend = Tail(Top.pend)]
-       IN IF c \in Concrete
-          THEN /\ ids' = [ids EXCEPT ![c] = nextConc]
-               /\ ranges' = [ranges EXCEPT ![c] = <<nextConc, nextConc>>]
-               /\ nextConc' = nextConc + 1
-               /\ stack' = [stack EXCEPT ![Len(stack)] = rest]
-               /\ UNCHANGED nextAbs
-          ELSE /\ ids' = [ids EXCEPT ![c] = IF SharedCounter THEN nextConc ELSE nextAbs]
-               /\ IF SharedCounter
-                  THEN nextConc' = nextConc + 1 /\ UNCHANGED nextAbs
-                  ELSE nextAbs' = nextAbs + 1 /\ UNCHANGED nextConc
-               /\ stack' = Append([stack EXCEPT ![Len(stack)] = rest],
-                                  [node |-> c, first |-> IF SharedCounter THEN nextConc + 1 ELSE nextConc,
-                                   pend |-> ByOrd(Kids(c))])
-               /\ UNCHANGED ranges
-    /\ UNCHANGED <<parent, abs, ord, phase>>
-
-\* a class with no child left: its `post`
-Close ==
-    /\ phase = "walk"
-    /\ stack # <<>>
-    /\ Top.pend = <<>>
-    /\ ranges' = [ranges EXCEPT ![Top.node] = RangeFrom(Top.first)]
-    /\ stack' = SubSeq(stack, 1, Len(stack) - 1)
-    /\ phase' = IF Len(stack) = 1 THEN "done" ELSE "walk"
-    /\ UNCHANGED <<parent, abs, ord, nextConc, nextAbs, ids>>
-
-Done == phase = "done" /\ UNCHANGED vars
-
-Next == Visit \/ Close \/ Done
+Next == UNCHANGED vars
 Spec == Init /\ [][Next]_vars
 
-----------------------------------------------------------------------------
-(* The claims, each of the finished numbering. *)
+Min(S) == CHOOSE x \in S : \A y \in S : x <= y
+Max(S) == CHOOSE x \in S : \A y \in S : y <= x
+Range(s) == {s[i] : i \in 1..Len(s)}
 
-TypeOK ==
-    /\ phase \in {"walk", "done"}
-    /\ nextConc \in 1..(N + 2)
-    /\ ids \in [Types -> 0..(2 * N + 2)]
+Kids(k) == {c \in Others : Super(c) = k}
+RECURSIVE ByRank(_)
+ByRank(S) == IF S = {} THEN << >>
+             ELSE LET m == CHOOSE c \in S : \A d \in S : rank[c] <= rank[d] IN <<m>> \o ByRank(S \ {m})
+RECURSIVE CatPre(_)
+RECURSIVE Pre(_)
+Pre(k) == <<k>> \o CatPre(ByRank(Kids(k)))
+CatPre(s) == IF s = << >> THEN << >> ELSE Pre(Head(s)) \o CatPre(Tail(s))
 
-\* the concrete classes hold exactly the ids 1..C, one each
-ConcreteDense ==
-    phase = "done" =>
-        /\ {ids[c] : c \in Concrete} = 1..C
-        /\ \A c, d \in Concrete : c # d => ids[c] # ids[d]
+\* the walk's pre-order and its counters
+Order == Pre("Any")
+Pos(c) == CHOOSE i \in 1..Len(Order) : Order[i] = c
+IsConc(c) == c \in Concrete
+ConcBefore(i) == Cardinality({j \in 1..(i - 1) : IsConc(Order[j])})
+AbsBefore(i) == Cardinality({j \in 1..(i - 1) : ~IsConc(Order[j])})
+C == Cardinality(world \cap Concrete)
+A == Cardinality(world \ Concrete)
+Id(c) == IF SharedCounter THEN Pos(c)
+         ELSE IF IsConc(c) THEN ConcBefore(Pos(c)) + 1 ELSE C + AbsBefore(Pos(c)) + 1
 
-\* the abstract classes, the root among them, hold the ids after the concrete ones, one each
-AbstractAfter ==
-    phase = "done" =>
-        /\ {ids[a] : a \in Abstract} = (C + 1)..(C + Cardinality(Abstract))
-        /\ \A a, b \in Abstract : a # b => ids[a] # ids[b]
+RECURSIVE Subtree(_)
+Subtree(k) == {k} \cup UNION {Subtree(c) : c \in Kids(k)}
+\* the range the post writes: the concrete counter at the pre, the counter less one at the post
+Last(k) == Max({Pos(c) : c \in Subtree(k)})
+SubRange(k) == LET lo == ConcBefore(Pos(k)) + 1
+                   hi == ConcBefore(Last(k) + 1) + (IF OffByOne THEN 1 ELSE 0)
+               IN IF hi < lo THEN << >> ELSE <<<<lo, hi>>>>
 
-\* a class's range holds a concrete class's id exactly when that class is its subtype: the
-\* range a type test reads (getConcreteClassIdRange, Julia's implementors being empty)
-RangeIsa ==
-    phase = "done" =>
-        \A t \in Types : \A c \in Concrete :
-            (Sub(c, t) <=> (ranges[t] # <<>> /\ ranges[t][1] <= ids[c] /\ ids[c] <= ranges[t][2]))
+Impl(c) == IF NoImplementors \/ ~IsConc(c) THEN {}
+           ELSE {t \in world : t # c /\ t \notin ChainOf(c) /\ Le(c, t)}
+Implementors(k) == {c \in world : k \in Impl(c)}
+RECURSIVE TI(_)
+TI(k) == UNION {TI(s) : s \in Kids(k)} \cup UNION {{c} \cup TI(c) : c \in Implementors(k)}
 
-\* the ids are the closed form's: a pure function of the tree and the sibling order
-Determinism == phase = "done" => ids = ClosedForm
+\* normalize: sorted by start, a range contained, overlapping or adjacent merged
+RECURSIVE SortR(_)
+SortR(S) == IF S = {} THEN << >>
+            ELSE LET m == CHOOSE r \in S : \A q \in S : r[1] <= q[1] /\ (r[1] = q[1] => r[2] <= q[2])
+                 IN <<m>> \o SortR(S \ {m})
+RECURSIVE Merge(_, _)
+Merge(cur, rest) ==
+    IF rest = << >> THEN <<cur>>
+    ELSE LET nx == Head(rest) IN
+         IF nx[1] >= cur[1] /\ nx[2] <= cur[2] THEN Merge(cur, Tail(rest))
+         ELSE IF nx[1] <= cur[2] \/ (~NoAdjacentMerge /\ cur[2] + 1 = nx[1])
+              THEN Merge(<<cur[1], nx[2]>>, Tail(rest))
+              ELSE <<cur>> \o Merge(nx, Tail(rest))
+Normalize(rs) == LET s == SortR(rs) IN IF s = << >> THEN << >> ELSE Merge(Head(s), Tail(s))
+ClassRanges(k) == Normalize(UNION {Range(SubRange(x)) : x \in {k} \cup TI(k)})
 
+Covered(rs) == UNION {r[1]..r[2] : r \in Range(rs)}
+
+TypeOK == world \in Worlds /\ rank \in [Others -> Nat]
+
+ConcreteDense == {Id(c) : c \in world \cap Concrete} = 1..C /\
+                 \A a, b \in world \cap Concrete : a # b => Id(a) # Id(b)
+AbstractAfter == {Id(c) : c \in world \ Concrete} = (C + 1)..(C + A) /\
+                 \A a, b \in world \ Concrete : a # b => Id(a) # Id(b)
+RangeIsa == \A k \in world : Covered(ClassRanges(k)) = {Id(c) : c \in {x \in world \cap Concrete : Le(x, k)}}
+Normalized == \A k \in world : LET rs == ClassRanges(k) IN
+                  \A i \in 1..(Len(rs) - 1) : rs[i][2] + 1 < rs[i + 1][1]
 =============================================================================

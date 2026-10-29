@@ -564,6 +564,8 @@ Julia's differs: a class's superclass is Julia's `supertype` and `Any` the root;
 implemented types are its supertypes off that chain, Julia's covariant Tuples
 (`class_implemented_types`); no class is an anonymous mixin; and the root's children keep program
 order (dart's sort, below, is dropped).
+
+formal(dev/formal/ClassIdNumbering.tla): the concrete ids dense, the abstract after, a class's ranges exactly its concrete subtypes
 """
 @parity "dart2wasm/lib/class_info.dart:864 ClassIdNumbering._number" function ClassIdNumbering__number(translator::Translator, masqueraded::Base.IdSet{DataType})::ClassIdNumbering
     local at = "dart2wasm/lib/class_info.dart:864 ClassIdNumbering._number"

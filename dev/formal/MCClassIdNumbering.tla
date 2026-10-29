@@ -1,10 +1,9 @@
--------------------------- MODULE MCClassIdNumbering --------------------------
-(* Every tree over 4 classes (24 shapes), every choice of abstract leaves,      *)
-(* under every sibling order (24), the                                           *)
-(* closed world numbered by dart's one walk (class_info.dart:864).  Claims:     *)
-(* ConcreteDense, AbstractAfter, RangeIsa, Determinism.                         *)
-(* Broken: MCClassIdNumberingOffByOneBroken.cfg (a range ends at the counter,   *)
-(* RangeIsa violated) and MCClassIdNumberingSharedCounterBroken.cfg (abstract   *)
-(* classes take concrete ids, ConcreteDense violated).                          *)
+------------------------- MODULE MCClassIdNumbering ---------------------------
+(* The class ids and ranges (src/class_info.jl ClassIdNumbering._number,      *)
+(* getConcreteClassIdRange, normalize) over every world of Any, Number, Int,  *)
+(* Str, Tuple{Any}, Tuple{Int} and Tuple{Str} the class walk can make, in    *)
+(* every order it can meet them. Claims: ConcreteDense, AbstractAfter,        *)
+(* RangeIsa, Normalized. Broken: MCClassIdNumbering{SharedCounter,OffByOne,   *)
+(* NoImplementors,NoAdjacentMerge}Broken.cfg, each its header's claim.        *)
 EXTENDS ClassIdNumbering
 =============================================================================
