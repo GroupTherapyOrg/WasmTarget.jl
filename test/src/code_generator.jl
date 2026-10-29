@@ -390,6 +390,27 @@ end
     @test D.generate_static_intrinsic(nb.intrinsifier[], W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.Intrinsics.not_int)), W.NirArgument(2)])) === nothing
 end
 
+module InstanceCases
+# `c(y)` inside callc: a call whose callee, the closure, carries its capture x, Kernel's
+# InstanceInvocation, the closure the receiver
+@noinline callc(c, y::Int64) = c(y)
+mkc(x::Int64) = callc(z -> z + x, Int64(3))
+end
+
+@testset "code_generator.dart: a call of a callee that carries fields is an instance invocation" begin
+    local bytes = W.compile(InstanceCases.mkc, (Int64,); optimize = false)
+    @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    queue_native!("mkc", bytes, InstanceCases.mkc, [(x,) for x in Int64[0, 5, -7, typemax(Int64)]])
+    # Julia has no super call (Core.invoke, which the trim verifier rejects): reaching a super visitor
+    # is WasmTarget's own defect, naming why
+    local g = codegen_of(InstanceCases.mkc, (Int64,), [IR.NumType_i64], [IR.NumType_i64])
+    local inv = first(st for st in g.body.stmts if st isa W.NirInvoke)
+    for v in (D.visit_super_method_invocation, D.visit_super_property_get, D.visit_super_property_set)
+        local e = rejection(() -> v(g, inv, IR.NumType_i32))
+        @test e.rejection isa W.Internal && occursin("unimplemented_invoke", e.rejection.site)
+    end
+end
+
 module CallTargetCases
 @noinline h(x::Int64) = x * x + Int64(3)
 g(x::Int64) = h(x) + h(x + Int64(1))

@@ -459,7 +459,8 @@ end
                 equals_null() ? visit_equals_null(self, c, expected_type) :
                 visit_static_invocation(self, c, expected_type)
             end
-            (i::NirInvoke) => visit_static_invocation(self, i, expected_type)
+            (i::NirInvoke) => Base.issingletontype(dart_type_of(self, i.args[1])) ? visit_static_invocation(self, i, expected_type) :
+                visit_instance_invocation(self, i, expected_type)
             (n::NirNew) => visit_constructor_invocation(self, n, expected_type)
             (g::NirGlobalRead) => visit_static_get(self, g, expected_type)
             (p::NirPi) => visit_as_expression(self, p, expected_type)
@@ -870,11 +871,32 @@ end
         "$(self.enclosing_member): Julia's $(nir_callee(node)) on $(join((dart_type_of(self, a) for a in node.args[2:end]), ", "))")
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1688 AstCodeGenerator._lookupSuperTarget" @unported function _lookup_super_target(self::AstCodeGenerator, interface_target::Core.MethodInstance; setter::Bool) end
+@parity "dart2wasm/lib/code_generator.dart:1688 AstCodeGenerator._lookupSuperTarget" _lookup_super_target(self::AstCodeGenerator, interface_target::Core.MethodInstance; setter::Bool)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:1688 AstCodeGenerator._lookupSuperTarget: Julia has no super call: its counterpart, Core.invoke of a supertype's method, is a builtin Julia's trim verifier rejects (unimplemented_invoke), so no NIR reaches it"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1697 AstCodeGenerator.visitSuperMethodInvocation" @unported function visit_super_method_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:1697 AstCodeGenerator.visitSuperMethodInvocation" visit_super_method_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:1697 AstCodeGenerator.visitSuperMethodInvocation: Julia has no super call: its counterpart, Core.invoke of a supertype's method, is a builtin Julia's trim verifier rejects (unimplemented_invoke), so no NIR reaches it"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1755 AstCodeGenerator.visitInstanceInvocation" @unported function visit_instance_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+# a call whose callee carries fields (a closure, a callable struct), Kernel's InstanceInvocation
+# (translateExpression routes it here): the callee is the receiver, the method's `this`
+# (_initializeThis). Julia resolved the call, so its single target is the invoke's MethodInstance
+# (Translator.singleTarget) and the virtual call is never reached; a Julia receiver is never null, so
+# dart's arm for a nullable Object receiver (toString, noSuchMethod) has no Julia input
+@parity "dart2wasm/lib/code_generator.dart:1755 AstCodeGenerator.visitInstanceInvocation" function visit_instance_invocation(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local intrinsic_result = generate_instance_intrinsic(self.intrinsifier[], node)
+    intrinsic_result === nothing || return intrinsic_result
+    local receiver = node.args[1]
+    local use_unchecked_entry = can_use_unchecked_entry(self.translator, receiver, node)
+    local single_target_ = single_target(self.translator, node)
+    single_target_ === nothing &&
+        reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): a call of $(dart_type_of(self, receiver)) with no single target")
+    local target = get_function_entry(self.translator, single_target_; unchecked_entry = use_unchecked_entry)
+    local signature = signature_for_direct_call(self.translator, target)
+    local param_info = param_info_for_direct_call(self.translator, target)
+    translate_expression(self, receiver, signature.inputs[1])
+    _visit_arguments(self, node, signature, param_info, 1)
+    return output_or_void(self.translator, call(self, target))
+end
 
 @parity "dart2wasm/lib/code_generator.dart:1861 AstCodeGenerator.visitDynamicInvocation" visit_dynamic_invocation(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType)::Union{} =
     reject!(Internal("dart2wasm/lib/code_generator.dart:1861 AstCodeGenerator.visitDynamicInvocation: Julia's trim verifier rejects a call it cannot resolve (D32), except a must-throw one, Julia's MethodError throw (visitStaticInvocation)"), "$(self.enclosing_member)")
@@ -936,9 +958,11 @@ end
     reject!(Unported("dart2wasm/lib/code_generator.dart:4969 StaticFieldImplicitAccessorCodeGenerator._generateSetter"),
         "$(self.enclosing_member): a write of the binding $(node.args[2]).$(node.args[3]) (its setter)")
 
-@parity "dart2wasm/lib/code_generator.dart:2225 AstCodeGenerator.visitSuperPropertyGet" @unported function visit_super_property_get(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2225 AstCodeGenerator.visitSuperPropertyGet" visit_super_property_get(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2225 AstCodeGenerator.visitSuperPropertyGet: Julia has no super call: its counterpart, Core.invoke of a supertype's method, is a builtin Julia's trim verifier rejects (unimplemented_invoke), so no NIR reaches it"), "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:2243 AstCodeGenerator.visitSuperPropertySet" @unported function visit_super_property_set(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2243 AstCodeGenerator.visitSuperPropertySet" visit_super_property_set(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:2243 AstCodeGenerator.visitSuperPropertySet: Julia has no super call: its counterpart, Core.invoke of a supertype's method, is a builtin Julia's trim verifier rejects (unimplemented_invoke), so no NIR reaches it"), "$(self.enclosing_member)")
 
 # Julia's getfield(x, f[, boundscheck]) is Kernel's InstanceGet: a receiver whose class Julia inferred
 # concrete has the field as its single target (dart's _directGet); one Julia leaves abstract is a
@@ -1078,11 +1102,8 @@ end
 # a Julia call's arguments are its operands after the callee (`args[1]`), all positional: Julia has
 # no type arguments at run time, lowering passes keywords positionally, and an optional argument
 # makes a method of its own, so no default is pushed; a callee that carries fields is the receiver,
-# dart's instance call
+# which visitInstanceInvocation pushes first (`signature_offset` 1)
 @parity "dart2wasm/lib/code_generator.dart:2849 AstCodeGenerator._visitArguments" function _visit_arguments(self::AstCodeGenerator, node::NirInvoke, signature::WasmBuilder.IR.FunctionType, param_info::ParameterInfo, signature_offset::Int)::Nothing
-    local callee = node.args[1]
-    Base.issingletontype(dart_type_of(self, callee)) ||
-        reject!(Unported("dart2wasm/lib/code_generator.dart:1755 AstCodeGenerator.visitInstanceInvocation"), "$(self.enclosing_member): a call of $(dart_type_of(self, callee)), a callee that carries fields")
     local positional = node.args[2:end]
     for i in 0:length(positional)-1
         translate_expression(self, positional[i + 1], signature.inputs[signature_offset + i + 1])
