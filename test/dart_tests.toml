@@ -960,10 +960,230 @@ kind = "not_portable"
 what = "const bool.hasEnvironment of declared and undeclared names"
 reason = "dart compile-time environment declarations (-D) have no counterpart in a Julia program"
 
-["tests/language/call/"]
+["tests/language/call/argument_inference_test.dart"]
 kind = "behavior"
-what = "objects with a call method invoked as functions (Julia's callable structs)"
-cases = []
+what = "a call method with an untyped parameter invoked explicitly by .call and implicitly as a(x), testing is num"
+cases = ["dart_call/argument_inference"]
+
+["tests/language/call/call_test.dart"]
+kind = "behavior"
+what = "local functions (top-level functions in Julia, a local one with several methods is boxed) with positional, optional and named parameters called directly and through .call; calls with wrong arguments throw NoSuchMethodError (Julia MethodError)"
+cases = ["dart_call/call"]
+
+["tests/language/call/closurization_test.dart"]
+kind = "behavior"
+what = ".call tear-offs of local functions with positional, optional and named parameters stored and called; wrong-argument calls throw (Julia MethodError)"
+cases = ["dart_call/closurization"]
+
+["tests/language/call/constructor_on_unresolvable_class_error_test.dart"]
+kind = "not_portable"
+what = "constructing an undefined class, an undefined named constructor and a prefixed undefined class"
+reason = "static diagnostics only: CREATION_WITH_NON_TYPE and UNDEFINED_IDENTIFIER compile-time errors; main holds nothing else"
+
+["tests/language/call/dynamic_call_through_getter_test.dart"]
+kind = "behavior"
+what = "a dynamic receiver whose field holds a callable object, invoked as foo.bar(x)"
+cases = ["dart_call/dynamic_call_through_getter"]
+
+["tests/language/call/evaluation_order_lib.dart"]
+kind = "helper"
+what = "a prefix-imported top-level getter returning a function, recording a getter effect"
+of = ["tests/language/call/evaluation_order_test.dart"]
+
+["tests/language/call/evaluation_order_test.dart"]
+kind = "behavior"
+what = "order of the getter and argument effects in m(arg) where m is an instance, mock, static, top-level, prefixed or extension getter returning a function; Julia evaluates the callee before the arguments everywhere (GA), dart evaluates arguments first for instance getters (AG); this/super/mixin variants omitted"
+cases = ["dart_call/evaluation_order"]
+
+["tests/language/call/function2_test.dart"]
+kind = "behavior"
+what = "a map of function-typed values holding a function and a callable object, looked up and called"
+cases = ["dart_call/function2"]
+
+["tests/language/call/function_apply_test.dart"]
+kind = "behavior"
+what = "Function.apply on a callable object with a named argument (Julia: keyword splat of a NamedTuple)"
+cases = ["dart_call/function_apply"]
+
+["tests/language/call/function_test.dart"]
+kind = "behavior"
+what = "a function and a callable object held in Function, typedef and dynamic variables called directly and by .call; calling null throws NoSuchMethodError (Julia MethodError)"
+cases = ["dart_call/function"]
+
+["tests/language/call/implicit_tearoff_assignment_test.dart"]
+kind = "behavior"
+what = "the value and stored value of index, extension, instance, super, static, top-level and variable assignments of a callable object to function-typed targets (Julia stores the callable struct itself, no tear-off)"
+cases = ["dart_call/implicit_tearoff_assignment"]
+
+["tests/language/call/implicit_tearoff_error_test.dart"]
+kind = "not_portable"
+what = "a conditional of two unrelated callable classes passed in a function context"
+reason = "static diagnostics only: an ARGUMENT_TYPE_NOT_ASSIGNABLE compile-time error and the file has no main"
+
+["tests/language/call/implicit_tearoff_exceptions_test.dart"]
+kind = "behavior"
+what = "callables reached through a cascade target, conditional branches and ?? operands in a function context; dart throws TypeError where no tear-off occurs, Julia calls the callable struct (1) and only the non-callable A raises MethodError"
+cases = ["dart_call/implicit_tearoff_exceptions"]
+
+["tests/language/call/implicit_tearoff_local_assignment_test.dart"]
+kind = "behavior"
+what = "chained assignment y = x = <callable> on variables of class, function and Object type, promoted and unpromoted; Julia's Function-typed local raises MethodError from convert where dart tears off .call"
+cases = ["dart_call/implicit_tearoff_local_assignment"]
+
+["tests/language/call/implicit_tearoff_test.dart"]
+kind = "behavior"
+what = "every expression form (as, assignment, binary and unary operators, cascade, conditional, invocations, ??, index, constructors, getters, null check, parens, this) yielding a callable passed where a function is expected; the await form omitted"
+cases = ["dart_call/implicit_tearoff"]
+
+["tests/language/call/implicit_tearoff_type_variable_error_test.dart"]
+kind = "not_portable"
+what = "implicit .call tear-off from nullable type variables and type variables with nullable bounds"
+reason = "static diagnostics only: four ARGUMENT_TYPE_NOT_ASSIGNABLE compile-time errors and main is empty"
+
+["tests/language/call/implicit_tearoff_type_variable_test.dart"]
+kind = "behavior"
+what = "a callable reached through a type variable bounded by its class, promoted to it, or bounded by another type variable, passed in a function context"
+cases = ["dart_call/implicit_tearoff_type_variable"]
+
+["tests/language/call/method_as_cast_legacy_test.dart"]
+kind = "behavior"
+what = "casting callable objects to function typedefs and Function, one class implementing Function; Julia honours the Function supertype so that cast succeeds where dart 2.19 throws TypeError"
+cases = ["dart_call/method_as_cast_legacy"]
+
+["tests/language/call/method_as_cast_test.dart"]
+kind = "behavior"
+what = "casting callable objects to function typedefs and to Function throws TypeError"
+cases = ["dart_call/method_as_cast"]
+
+["tests/language/call/method_function_typed_value_test.dart"]
+kind = "behavior"
+what = ".call on and tear-off of .call from function-typed, Function and dynamic values is the function itself"
+cases = ["dart_call/method_function_typed_value"]
+
+["tests/language/call/method_implicit_invoke_instance_legacy_test.dart"]
+kind = "behavior"
+what = "instance fields of callable type and dynamic type invoked as c1(1), d.c1(1), one class implementing Function"
+cases = ["dart_call/method_implicit_invoke_instance_legacy"]
+
+["tests/language/call/method_implicit_invoke_instance_test.dart"]
+kind = "behavior"
+what = "instance fields of callable type and dynamic type invoked as c1(1), D().c1(1) and d.c1(1)"
+cases = ["dart_call/method_implicit_invoke_instance"]
+
+["tests/language/call/method_implicit_invoke_local_legacy_test.dart"]
+kind = "behavior"
+what = "local callable objects and dynamic aliases invoked as c1(1), one class implementing Function; the wrong-arity compile-time sections omitted"
+cases = ["dart_call/method_implicit_invoke_local_legacy"]
+
+["tests/language/call/method_implicit_invoke_local_runtime_legacy_test.dart"]
+kind = "behavior"
+what = "local callable objects and dynamic aliases invoked as c1(1), one class implementing Function"
+cases = ["dart_call/method_implicit_invoke_local_runtime_legacy"]
+
+["tests/language/call/method_implicit_invoke_local_test.dart"]
+kind = "behavior"
+what = "a local callable object and a dynamic alias invoked as c1(1); the wrong-arity compile-time sections omitted"
+cases = ["dart_call/method_implicit_invoke_local"]
+
+["tests/language/call/method_implicit_invoke_static_test.dart"]
+kind = "behavior"
+what = "static fields holding callable objects invoked from instance and static methods and as D.c1(1)"
+cases = ["dart_call/method_implicit_invoke_static"]
+
+["tests/language/call/method_implicit_invoke_top_level_test.dart"]
+kind = "behavior"
+what = "top-level variables holding callable objects invoked as c1(1)"
+cases = ["dart_call/method_implicit_invoke_top_level"]
+
+["tests/language/call/method_implicit_tear_off_assignable_test.dart"]
+kind = "not_portable"
+what = "implicit tear-off of a call method whose type is a supertype of the target function type"
+reason = "static diagnostics only: an INVALID_ASSIGNMENT compile-time error; main only constructs C"
+
+["tests/language/call/method_implicit_tear_off_nullable_test.dart"]
+kind = "not_portable"
+what = "implicit .call tear-off from a nullable callable variable"
+reason = "static diagnostics only: an ARGUMENT_TYPE_NOT_ASSIGNABLE compile-time error is the only statement of main"
+
+["tests/language/call/method_implicit_tear_off_test.dart"]
+kind = "behavior"
+what = "a callable object passed to function-typed, FutureOr, Function, class, Object and dynamic parameters, checked by identity, equality and call; Julia passes the struct itself (identical where dart tears off) and a Function-typed parameter raises MethodError"
+cases = ["dart_call/method_implicit_tear_off"]
+
+["tests/language/call/method_is_check_test.dart"]
+kind = "behavior"
+what = "is-tests of callable objects against function typedefs and Function are false"
+cases = ["dart_call/method_is_check"]
+
+["tests/language/call/method_must_not_be_field_test.dart"]
+kind = "behavior"
+what = "a field named call does not make the object callable (dynamic call throws) but call is invocable explicitly"
+cases = ["dart_call/method_must_not_be_field"]
+
+["tests/language/call/method_must_not_be_getter_test.dart"]
+kind = "behavior"
+what = "a getter named call does not make the object callable (dynamic call throws NoSuchMethodError, Julia MethodError) but c.call() works"
+cases = ["dart_call/method_must_not_be_getter"]
+
+["tests/language/call/method_override_error_test.dart"]
+kind = "not_portable"
+what = "overriding a function-typed return and parameter with a callable class type"
+reason = "static diagnostics only: two INVALID_OVERRIDE compile-time errors; main only constructs E"
+
+["tests/language/call/non_method_field_error_test.dart"]
+kind = "not_portable"
+what = "invoking an int field as a method, directly and through a subclass"
+reason = "static diagnostics only: two INVOCATION_OF_NON_FUNCTION_EXPRESSION compile-time errors are the statements of main"
+
+["tests/language/call/nonexistent_constructor_error_test.dart"]
+kind = "not_portable"
+what = "calling undefined named and default constructors"
+reason = "static diagnostics only: NEW_WITH_UNDEFINED_CONSTRUCTOR and NEW_WITH_UNDEFINED_CONSTRUCTOR_DEFAULT compile-time errors; the remaining A.foo(42) asserts nothing"
+
+["tests/language/call/nonexistent_static_test.dart"]
+kind = "not_portable"
+what = "reading, writing and calling nonexistent static and top-level members"
+reason = "static diagnostics only: every multitest section 01-10 is a compile-time error and main is empty without them"
+
+["tests/language/call/object_has_no_call_method_error_test.dart"]
+kind = "not_portable"
+what = "invoking and tearing off call on dynamic, Object and Function values"
+reason = "static diagnostics only: INVOCATION_OF_NON_FUNCTION_EXPRESSION, UNDEFINED_GETTER and UNDEFINED_METHOD compile-time errors and main is empty"
+
+["tests/language/call/operator_test.dart"]
+kind = "behavior"
+what = "call methods of zero and one argument, an optional argument and a named argument invoked implicitly and by .call; callables are not Function"
+cases = ["dart_call/operator"]
+
+["tests/language/call/property_test.dart"]
+kind = "behavior"
+what = "a class with a call getter is neither Function nor a function typedef"
+cases = ["dart_call/property"]
+
+["tests/language/call/regress60643_test.dart"]
+kind = "behavior"
+what = "a closure with a required named parameter stored in generic getters and fields, called with too few arguments; Julia raises MethodError for a missing positional and UndefKeywordError for the missing keyword where dart throws NoSuchMethodError"
+cases = ["dart_call/regress60643"]
+
+["tests/language/call/through_getter_test.dart"]
+kind = "behavior"
+what = "closures called through a top-level variable, a field, a getter and a method, a non-function field call throwing, and the effect order of getter and arguments; Julia evaluates the getter first in both b.g(x) forms (gxf), dart evaluates arguments first for b.g1(b.x) (xgf)"
+cases = ["dart_call/through_getter"]
+
+["tests/language/call/through_null_getter_test.dart"]
+kind = "behavior"
+what = "calling null through a top-level variable, a constant, a field, a getter and a method throws NoSuchMethodError (Julia MethodError)"
+cases = ["dart_call/through_null_getter"]
+
+["tests/language/call/type_literal_test.dart"]
+kind = "behavior"
+what = "a method called on a freshly constructed instance completes"
+cases = ["dart_call/type_literal"]
+
+["tests/language/call/with_no_such_method_test.dart"]
+kind = "behavior"
+what = "a callable object with noSuchMethod catching #call, invoked dynamically and through Function.apply; Julia's catch-all method also answers the splatted four-argument call (a) where dart's Function.apply throws NoSuchMethodError"
+cases = ["dart_call/with_no_such_method"]
 
 ["tests/language/canonicalize/"]
 kind = "behavior"
@@ -1720,10 +1940,360 @@ kind = "behavior"
 what = "the 2018 extensions of dart constant expressions"
 cases = []
 
-["tests/language/constructor/"]
+["tests/language/constructor/bad_constructor_test.dart"]
+kind = "not_portable"
+what = "static modifiers on generative and factory constructors; a named constructor named like a setter"
+reason = "static diagnostics only: STATIC_CONSTRUCTOR, EXTRANEOUS_MODIFIER and MISSING_FUNCTION_BODY errors; the remaining main only constructs E.setter with no check"
+
+["tests/language/constructor/bad_named_constructor_test.dart"]
+kind = "not_portable"
+what = "a constructor whose name is not the class name"
+reason = "static diagnostics only: SYNTACTIC_ERROR.INVALID_CONSTRUCTOR_NAME; main only constructs A with no check"
+
+["tests/language/constructor/body_test.dart"]
 kind = "behavior"
-what = "constructors: initializers, bodies, redirecting, defaults (Julia's inner and outer constructors)"
-cases = []
+what = "bodyless generative and const constructors with initializing formals, unnamed and named"
+cases = ["dart_constructor/body"]
+
+["tests/language/constructor/bodyless_wrong_arg_test.dart"]
+kind = "not_portable"
+what = "a const constructor's super call with too few arguments"
+reason = "static diagnostics only: NOT_ENOUGH_POSITIONAL_ARGUMENTS on the super() call; no runtime check remains"
+
+["tests/language/constructor/call_as_function_test.dart"]
+kind = "behavior"
+what = "a const constructor called without new and its fields"
+cases = ["dart_constructor/call_as_function"]
+
+["tests/language/constructor/call_wrong_argument_count_test.dart"]
+kind = "not_portable"
+what = "a constructor called with too few arguments"
+reason = "static diagnostics only: NOT_ENOUGH_POSITIONAL_ARGUMENTS; the remaining new Stockhorn(1) has no check"
+
+["tests/language/constructor/constructor10_test.dart"]
+kind = "not_portable"
+what = "synthetic subclass constructors whose superclass has no zero-argument constructor"
+reason = "static diagnostics only: each class carries NO_DEFAULT_SUPER_CONSTRUCTOR; no runtime check remains"
+
+["tests/language/constructor/constructor11_test.dart"]
+kind = "behavior"
+what = "synthetic subclass constructors (one and two levels, and an explicit super()) take the superclass's optional positional default"
+cases = ["dart_constructor/constructor11"]
+
+["tests/language/constructor/constructor12_lib.dart"]
+kind = "helper"
+what = "a generic subclass whose initializer closure and body closure share a parameter incremented by super(p++), and a list of its type argument"
+of = ["tests/language/constructor/constructor12_test.dart", "tests/language/constructor/constructor12_strong_test.dart"]
+
+["tests/language/constructor/constructor12_strong_test.dart"]
+kind = "behavior"
+what = "an instance made without type arguments (T dynamic) tested against A<Object>; Julia has no non-nullable top type, so dart's dynamic and Object are both Any and the isa is true where dart's is false"
+cases = ["dart_constructor/constructor12_strong"]
+
+["tests/language/constructor/constructor12_test.dart"]
+kind = "behavior"
+what = "closures over a boxed constructor parameter incremented by super(p++), method overrides, is-tests of generic instances and of their typed lists"
+cases = ["dart_constructor/constructor12"]
+
+["tests/language/constructor/constructor13_test.dart"]
+kind = "not_portable"
+what = "a constructor called with too few and too many arguments"
+reason = "static diagnostics only: NOT_ENOUGH_POSITIONAL_ARGUMENTS and EXTRA_POSITIONAL_ARGUMENTS; the remaining new Klass(1) has no check"
+
+["tests/language/constructor/constructor2_test.dart"]
+kind = "behavior"
+what = "evaluation order: B's initializer list, the super call's arguments, A's initializer list, A's body, B's body"
+cases = ["dart_constructor/constructor2"]
+
+["tests/language/constructor/constructor3_test.dart"]
+kind = "behavior"
+what = "evaluation order with a field initializer before super(E(1), E(2)) and body checks of the parameters"
+cases = ["dart_constructor/constructor3"]
+
+["tests/language/constructor/constructor4_test.dart"]
+kind = "behavior"
+what = "evaluation order with an implicit super call after B's initializer list"
+cases = ["dart_constructor/constructor4"]
+
+["tests/language/constructor/constructor5_test.dart"]
+kind = "behavior"
+what = "evaluation order with a named super argument; each initializer list and its body share incremented parameters"
+cases = ["dart_constructor/constructor5"]
+
+["tests/language/constructor/constructor6_test.dart"]
+kind = "behavior"
+what = "a field closure over the superclass constructor's parameter, called from both bodies, sees every increment"
+cases = ["dart_constructor/constructor6"]
+
+["tests/language/constructor/constructor7_test.dart"]
+kind = "behavior"
+what = "ten fields with declaration initializers set by an initializer list in an order unlike declaration"
+cases = ["dart_constructor/constructor7"]
+
+["tests/language/constructor/constructor8_test.dart"]
+kind = "behavior"
+what = "a closure in a named constructor's body assigns a body local and its result to a field"
+cases = ["dart_constructor/constructor8"]
+
+["tests/language/constructor/constructor9_test.dart"]
+kind = "not_portable"
+what = "a final field declared twice and left uninitialized"
+reason = "static diagnostics only: DUPLICATE_DEFINITION and the uninitialized final field error; main only constructs Klass with no check"
+
+["tests/language/constructor/constructor_contexts_test.dart"]
+kind = "behavior"
+what = "closures in an initializer list and a constructor body capturing the type parameter, a parameter shared by both, and this (six of the file's 32 combinations, one per context case)"
+cases = ["dart_constructor/constructor_contexts"]
+
+["tests/language/constructor/constructor_test.dart"]
+kind = "behavior"
+what = "super calls in initializer lists, a named constructor, and a subclass field initialized before the super body calls the subclass override"
+cases = ["dart_constructor/constructor"]
+
+["tests/language/constructor/cyclic_constructor_test.dart"]
+kind = "not_portable"
+what = "redirecting constructors that redirect to each other"
+reason = "static diagnostics only: RECURSIVE_CONSTRUCTOR_REDIRECT; no runtime check remains"
+
+["tests/language/constructor/default_class_implicit_constructor_test.dart"]
+kind = "behavior"
+what = "an abstract class's redirecting factory to a class that has only its implicit constructor"
+cases = ["dart_constructor/default_class_implicit_constructor"]
+
+["tests/language/constructor/default_factory2_test.dart"]
+kind = "not_portable"
+what = "a redirecting factory whose type argument violates the target's bound"
+reason = "static diagnostics only: TYPE_ARGUMENT_NOT_MATCHING_BOUNDS; main only constructs with no check"
+
+["tests/language/constructor/default_factory3_test.dart"]
+kind = "behavior"
+what = "a redirecting factory of a bounded generic class instantiated with a subtype of the bound; dart's concrete Foo is an abstract type in Julia"
+cases = ["dart_constructor/default_factory3"]
+
+["tests/language/constructor/default_factory_library.dart"]
+kind = "helper"
+what = "an abstract class whose factory redirects to a factory of a class in the test library"
+of = ["tests/language/constructor/default_factory_library_test.dart"]
+
+["tests/language/constructor/default_factory_library_test.dart"]
+kind = "behavior"
+what = "a factory redirecting across libraries to an abstract class's factory returning an implementing class"
+cases = ["dart_constructor/default_factory_library"]
+
+["tests/language/constructor/default_factory_test.dart"]
+kind = "behavior"
+what = "factories redirecting to a class's factory that returns its private generative constructor; dart's concrete GoogleOne is abstract with an implementing struct in Julia"
+cases = ["dart_constructor/default_factory"]
+
+["tests/language/constructor/default_test.dart"]
+kind = "behavior"
+what = "a subclass constructor body reads a field set by the superclass's initializer list"
+cases = ["dart_constructor/default"]
+
+["tests/language/constructor/duplicate_final_test.dart"]
+kind = "not_portable"
+what = "a final field initialized at its declaration and again by a constructor"
+reason = "static diagnostics only: sections 01-03 are compile-time errors and main is empty without them"
+
+["tests/language/constructor/duplicate_initializers_test.dart"]
+kind = "not_portable"
+what = "a final field initialized twice in one constructor"
+reason = "static diagnostics only: FIELD_INITIALIZED_BY_MULTIPLE_INITIALIZERS, FIELD_INITIALIZED_IN_PARAMETER_AND_INITIALIZER and DUPLICATE_FIELD_FORMAL_PARAMETER; no runtime check remains"
+
+["tests/language/constructor/duplicate_test.dart"]
+kind = "not_portable"
+what = "two unnamed constructors in one class"
+reason = "static diagnostics only: DUPLICATE_CONSTRUCTOR; no runtime check remains"
+
+["tests/language/constructor/evaluation_redirecting_constructor_test.dart"]
+kind = "behavior"
+what = "a field initializer runs once when an unnamed constructor redirects to a private one"
+cases = ["dart_constructor/evaluation_redirecting_constructor"]
+
+["tests/language/constructor/example_constructor_test.dart"]
+kind = "behavior"
+what = "evaluation order of an initializing formal, two field initializers, the super argument, A's list and body, B's body"
+cases = ["dart_constructor/example_constructor"]
+
+["tests/language/constructor/explicit_instantiation_syntax_test.dart"]
+kind = "not_portable"
+what = "parser disambiguation of C<int, int> followed by every dart token"
+reason = "static diagnostics only: sections 1-65 are syntax errors; the remaining lines pass parse variants to empty functions with no check"
+
+["tests/language/constructor/external_constructor_test.dart"]
+kind = "behavior"
+what = "calling an external constructor, directly and through a super call, throws NoSuchMethodError; a Julia function with no methods throws MethodError"
+cases = ["dart_constructor/external_constructor"]
+
+["tests/language/constructor/forwarding_factory_constructor_default_values_test.dart"]
+kind = "behavior"
+what = "a redirecting factory omits a named argument and the target constructor's default applies"
+cases = ["dart_constructor/forwarding_factory_constructor_default_values"]
+
+["tests/language/constructor/implicit_super_constructor_call_test.dart"]
+kind = "behavior"
+what = "an implicit super() takes the superclass's named-parameter default, checked in the super body and after"
+cases = ["dart_constructor/implicit_super_constructor_call"]
+
+["tests/language/constructor/implicit_super_constructor_test.dart"]
+kind = "behavior"
+what = "a field initializer of an abstract grand-superclass runs through implicit super calls"
+cases = ["dart_constructor/implicit_super_constructor"]
+
+["tests/language/constructor/inference_super_constructor_call_test.dart"]
+kind = "behavior"
+what = "a named super constructor call receives null; adding to the field throws (MethodError in Julia)"
+cases = ["dart_constructor/inference_super_constructor_call"]
+
+["tests/language/constructor/initializer_test.dart"]
+kind = "behavior"
+what = "parameters incremented in initializer lists keep their new values in the bodies; a super call after the subclass fields"
+cases = ["dart_constructor/initializer"]
+
+["tests/language/constructor/missing_const_constructor_test.dart"]
+kind = "not_portable"
+what = "a const expression naming an unknown constructor or class"
+reason = "static diagnostics only: sections 02-06 are compile-time errors; section 01 only prints a const instance with no check"
+
+["tests/language/constructor/missing_initializer_test.dart"]
+kind = "not_portable"
+what = "final instance fields without initializers in classes without generative constructors"
+reason = "static diagnostics only: FINAL_NOT_INITIALIZED and NON_ABSTRACT_CLASS_INHERITS_ABSTRACT_MEMBER; main only constructs with no check"
+
+["tests/language/constructor/multiple_field_assignment_constructor_test.dart"]
+kind = "behavior"
+what = "a constructor body assigns a field twice, last the null read from a list; adding to it throws (MethodError in Julia)"
+cases = ["dart_constructor/multiple_field_assignment_constructor"]
+
+["tests/language/constructor/name_clash_lib.dart"]
+kind = "helper"
+what = "a library class A whose constructor adds 10 to a global"
+of = ["tests/language/constructor/name_clash_test.dart"]
+
+["tests/language/constructor/name_clash_test.dart"]
+kind = "behavior"
+what = "a subclass named like its library superclass; the super body runs before the subclass body"
+cases = ["dart_constructor/name_clash"]
+
+["tests/language/constructor/name_test.dart"]
+kind = "not_portable"
+what = "constructors and factories whose names are not the class name"
+reason = "static diagnostics only: sections 01-03 are compile-time errors; the remaining main only constructs Foo with no check"
+
+["tests/language/constructor/named_arguments_test.dart"]
+kind = "behavior"
+what = "redirecting constructors pass named arguments in any order to a constructor with defaults; argument evaluation order"
+cases = ["dart_constructor/named_arguments"]
+
+["tests/language/constructor/named_constructor_test.dart"]
+kind = "behavior"
+what = "a generic class's unnamed and named constructors, with and without type arguments, locally and through a library prefix"
+cases = ["dart_constructor/named_constructor"]
+
+["tests/language/constructor/named_lib.dart"]
+kind = "helper"
+what = "a generic class with unnamed and named constructors in a prefixed library"
+of = ["tests/language/constructor/named_constructor_test.dart"]
+
+["tests/language/constructor/no_such_constructor_test.dart"]
+kind = "not_portable"
+what = "a zero-argument constructor called with one argument"
+reason = "static diagnostics only: EXTRA_POSITIONAL_ARGUMENTS; no runtime check remains"
+
+["tests/language/constructor/non_const_constructor_without_body_test.dart"]
+kind = "behavior"
+what = "bodyless constructors: a field initializer, an initializer list, a parameter, a field formal, a redirect"
+cases = ["dart_constructor/non_const_constructor_without_body"]
+
+["tests/language/constructor/non_parameterized_factory2_test.dart"]
+kind = "behavior"
+what = "redirecting factories of an abstract generic class called with a type argument"
+cases = ["dart_constructor/non_parameterized_factory2"]
+
+["tests/language/constructor/non_parameterized_factory_test.dart"]
+kind = "behavior"
+what = "redirecting factories of an abstract generic class called without type arguments (dynamic, and int inferred from the argument)"
+cases = ["dart_constructor/non_parameterized_factory"]
+
+["tests/language/constructor/patch_tear_off_test.dart"]
+kind = "behavior"
+what = "a tear-off of a core library constructor (dart's patched BigInt.from); Julia tears off Base's Float64 and calls it"
+cases = ["dart_constructor/patch_tear_off"]
+
+["tests/language/constructor/redirect2_test.dart"]
+kind = "not_portable"
+what = "redirecting constructors with a body, field initializers, field formals or a super call"
+reason = "static diagnostics only: REDIRECTING_CONSTRUCTOR_WITH_BODY, FIELD_INITIALIZER_REDIRECTING_CONSTRUCTOR, SUPER_IN_REDIRECTING_CONSTRUCTOR and EXTRA_POSITIONAL_ARGUMENTS; the remaining new A(3) has no check"
+
+["tests/language/constructor/redirect_cycle_test.dart"]
+kind = "not_portable"
+what = "a constructor redirecting to itself"
+reason = "static diagnostics only: RECURSIVE_CONSTRUCTOR_REDIRECT; no runtime check remains"
+
+["tests/language/constructor/redirect_indirect_cycle_test.dart"]
+kind = "not_portable"
+what = "two constructors redirecting to each other"
+reason = "static diagnostics only: RECURSIVE_CONSTRUCTOR_REDIRECT; no runtime check remains"
+
+["tests/language/constructor/redirect_test.dart"]
+kind = "behavior"
+what = "generative and const redirecting constructors and super calls to them (named2, an IMPLICIT_THIS_REFERENCE_IN_INITIALIZER error, is left out)"
+cases = ["dart_constructor/redirect"]
+
+["tests/language/constructor/reference_test.dart"]
+kind = "not_portable"
+what = "references to Foo.bar.baz and misplaced type arguments in constructor invocations"
+reason = "static diagnostics only: CREATION_WITH_NON_TYPE, UNDEFINED_METHOD and WRONG_NUMBER_OF_TYPE_ARGUMENTS_CONSTRUCTOR; the valid lines construct with no check"
+
+["tests/language/constructor/return_test.dart"]
+kind = "behavior"
+what = "a generative constructor body ending with a bare return (the return-a-value constructors are RETURN_IN_GENERATIVE_CONSTRUCTOR errors, left out)"
+cases = ["dart_constructor/return"]
+
+["tests/language/constructor/setter_test.dart"]
+kind = "not_portable"
+what = "an initializer list assigning a setter"
+reason = "static diagnostics only: INITIALIZER_FOR_NON_EXISTENT_FIELD; no runtime check remains"
+
+["tests/language/constructor/tear_off_test.dart"]
+kind = "behavior"
+what = "constructor tear-offs (generative, redirecting, factory, redirecting factory; generic and instantiated): calls, identity, inequality; Julia checks the call's result type where dart checks the function type"
+cases = ["dart_constructor/tear_off"]
+
+["tests/language/constructor/type_parameter_test.dart"]
+kind = "not_portable"
+what = "a constructor declaring type parameters"
+reason = "static diagnostics only: TYPE_PARAMETER_ON_CONSTRUCTOR; no runtime check remains"
+
+["tests/language/constructor/unnamed_new_error_test.dart"]
+kind = "not_portable"
+what = "new used as a member name and C.new for a class without an unnamed constructor"
+reason = "static diagnostics only: EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD, REDIRECT_TO_MISSING_CONSTRUCTOR and NEW_WITH_UNDEFINED_CONSTRUCTOR_DEFAULT; no runtime check remains"
+
+["tests/language/constructor/unnamed_new_test.dart"]
+kind = "behavior"
+what = "C.new as the unnamed constructor through this.new, this, factories to C.new and C, super.new and super, and tear-offs (Object.new and Symbol.new left out)"
+cases = ["dart_constructor/unnamed_new"]
+
+["tests/language/constructor/unresolved_default_constructor_test.dart"]
+kind = "not_portable"
+what = "calling an unnamed constructor that the class does not declare"
+reason = "static diagnostics only: NEW_WITH_UNDEFINED_CONSTRUCTOR_DEFAULT inside the Expect.throws; the remaining A.method() has no check"
+
+["tests/language/constructor/unresolved_in_factory_test.dart"]
+kind = "not_portable"
+what = "a factory body calling an undefined method"
+reason = "static diagnostics only: UNDEFINED_METHOD and BODY_MIGHT_COMPLETE_NORMALLY; no runtime check remains"
+
+["tests/language/constructor/with_mixin_test.dart"]
+kind = "behavior"
+what = "a super constructor call through a mixin application runs each class's body once"
+cases = ["dart_constructor/with_mixin"]
+
+["tests/language/constructor/with_type_parameters_test.dart"]
+kind = "not_portable"
+what = "constructor declarations with type parameters in each position"
+reason = "static diagnostics only: sections 03-06, 09-12 and 15-18 are compile-time or syntax errors and main is empty"
 
 ["tests/language/control_flow_collections/"]
 kind = "behavior"
@@ -2055,10 +2625,200 @@ kind = "behavior"
 what = "final variables and fields"
 cases = []
 
-["tests/language/function/"]
+["tests/language/function/apply_generic2_test.dart"]
 kind = "behavior"
-what = "functions: optional and named parameters, recursion, functions as values"
-cases = []
+what = "Function.apply with named arguments of a generic closure, function and method with optional named parameters bounded by num, and a String argument throwing a type error; named parameters are Julia keywords typed Union{Nothing,Int64}, a String keyword throws TypeError"
+cases = ["dart_function/apply_generic2"]
+
+["tests/language/function/apply_generic_test.dart"]
+kind = "behavior"
+what = "Function.apply of a generic function, a method and a method named map with ten optional positional parameters, called with 3, 4 and 7 arguments; the applied list is written as a direct call of the same arity (no runtime-length splat), nulls read as -1"
+cases = ["dart_function/apply_generic"]
+
+["tests/language/function/argument_test.dart"]
+kind = "behavior"
+what = "a function literal passed as a Function argument and called"
+cases = ["dart_function/argument"]
+
+["tests/language/function/call_generic_test.dart"]
+kind = "behavior"
+what = "generic function, method and map method with five optional positional parameters, type argument explicit or inferred; dart infers Object for a dynamic-cast int and dynamic through a dynamic receiver, Julia infers the typejoin of the concrete argument types (Int64 for ints, Any for a String with ints)"
+cases = ["dart_function/call_generic"]
+
+["tests/language/function/call_via_bound_argument_type_mismatch_error_test.dart"]
+kind = "not_portable"
+what = "calling a value of a bounded function type parameter with a String argument"
+reason = "every expectation is COMPILE_TIME_ERROR.ARGUMENT_TYPE_NOT_ASSIGNABLE and main is empty"
+
+["tests/language/function/direct_invocation_test.dart"]
+kind = "behavior"
+what = "a function, a bound method and a nested local function with an extra optional parameter passed where int Function(int) is expected and called"
+cases = ["dart_function/direct_invocation"]
+
+["tests/language/function/field_test.dart"]
+kind = "behavior"
+what = "a late Function field assigned a literal and called through the field"
+cases = ["dart_function/field"]
+
+["tests/language/function/function_test.dart"]
+kind = "behavior"
+what = "closures in constructor bodies, initializer lists, super initializers and statics; variable declaration order; block-scoped and loop-scoped captures; forEach; default and positional parameter order; defaults of literals; escaping local functions; this captured; the uncalled typedef assignments (UseFunctionTypes, Bar) are not ported"
+cases = ["dart_function/function"]
+
+["tests/language/function/getter_test.dart"]
+kind = "behavior"
+what = "a method torn off and called equals the method called"
+cases = ["dart_function/getter"]
+
+["tests/language/function/literals2_test.dart"]
+kind = "behavior"
+what = "local function statements, a literal in a variable, literals as arguments, in constructor initializer lists and fields, and called inside string interpolation"
+cases = ["dart_function/literals2"]
+
+["tests/language/function/literals_test.dart"]
+kind = "behavior"
+what = "arrow and block function literals, typed and untyped, returning ints or int functions, passed to generic higher-order functions, and instance methods passed as values"
+cases = ["dart_function/literals"]
+
+["tests/language/function/local2_test.dart"]
+kind = "behavior"
+what = "two closures updating one captured local; a literal typed by a class type parameter passed to a generic method"
+cases = ["dart_function/local2"]
+
+["tests/language/function/local3_test.dart"]
+kind = "behavior"
+what = "a closure is an Object and calling a method it lacks throws (MethodError in Julia); dart's toString starting with Closure is not ported, Julia prints a closure by its type name"
+cases = ["dart_function/local3"]
+
+["tests/language/function/local_function_test.dart"]
+kind = "behavior"
+what = "local functions capturing parameters and locals, a loop variable shared (declared outside the loop) or per iteration, fields through getters and setters, recursion shadowing a static (the local recurses through itself passed as an argument, so nothing is boxed), nesting, a static closure field, wrong-arity calls and a call of a non-function throwing; dart's toString check is not ported and f.xyz is a missing method throwing MethodError"
+cases = ["dart_function/local_function"]
+
+["tests/language/function/malformed_result_type_test.dart"]
+kind = "not_portable"
+what = "a local function whose result type has the wrong number of type arguments"
+reason = "its one expectation is COMPILE_TIME_ERROR.WRONG_NUMBER_OF_TYPE_ARGUMENTS and main only declares that uncalled local function"
+
+["tests/language/function/propagation_test.dart"]
+kind = "behavior"
+what = "a class with a call method is not a function type, and its implicit call tear-off is not the object; Julia's applicable answers true for the callable struct where dart's notType<F> holds"
+cases = ["dart_function/propagation"]
+
+["tests/language/function/regress_45601_test.dart"]
+kind = "behavior"
+what = "a function stored in a map key's field drives its == and hashCode; equality of function values, null and a generic function, statically and dynamically typed (the same in Julia)"
+cases = ["dart_function/regress_45601"]
+
+["tests/language/function/syntax_test.dart"]
+kind = "behavior"
+what = "function statement and expression syntax: local functions with and without types, literals as arguments, operator precedence inside arrow bodies, closures in constructor initializers (direct, wrapped, from a list, from a map), function-typed parameters; the syntax-error multitest sections are dropped and the n* and r* constructors repeat the c* shapes so the eight c* are ported"
+cases = ["dart_function/syntax"]
+
+["tests/language/function/type2_test.dart"]
+kind = "behavior"
+what = "a super constructor calls a literal whose parameter has the subclass's type parameter String with an int, throwing; dart throws a TypeError, Julia's typed closure throws MethodError"
+cases = ["dart_function/type2"]
+
+["tests/language/function/type3_test.dart"]
+kind = "behavior"
+what = "a method of a generic class reached through another generic method, torn off, is a zero-argument function and not a one-argument function"
+cases = ["dart_function/type3"]
+
+["tests/language/function/type_alias10_test.dart"]
+kind = "behavior"
+what = "a nullable field of a generic typedef type, null then assigned a literal returning its argument's runtime type"
+cases = ["dart_function/type_alias10"]
+
+["tests/language/function/type_alias2_test.dart"]
+kind = "behavior"
+what = "is checks of functions and bound methods with optional positional or named parameters against generic typedefs; dart gives a class type parameter's covariant parameter type Object? at run time, Julia's method keeps T, so a.baz and a.bar answer false for the raw, Object and double typedefs where dart answers true"
+cases = ["dart_function/type_alias2"]
+
+["tests/language/function/type_alias3_test.dart"]
+kind = "behavior"
+what = "is checks of a bound method of a generic class against a typedef whose result is an imported generic class named like its type parameter; library11's Library111 is the struct _FnTa3Lib"
+cases = ["dart_function/type_alias3"]
+
+["tests/language/function/type_alias4_test.dart"]
+kind = "behavior"
+what = "is checks of functions and bound methods against a typedef whose type parameter is named bool; dart treats the covariant parameter of A<T>.foo as Object so b.foo and i.foo are F and F<Object>, Julia keeps T and answers false"
+cases = ["dart_function/type_alias4"]
+
+["tests/language/function/type_alias5_test.dart"]
+kind = "not_portable"
+what = "illegally self-referencing and mutually referencing typedefs"
+reason = "multitest sections 00, 01 and 02 are each a compile-time error (typedef Handle referencing itself, F referencing itself, A and B referencing each other) and main without them is empty"
+
+["tests/language/function/type_alias6_test.dart"]
+kind = "behavior"
+what = "a bound method returning C is not a C = D Function(), one returning D is; the self-referencing typedef F (COMPILE_TIME_ERROR.TYPE_ALIAS_CANNOT_REFERENCE_ITSELF) and its two checks are not ported"
+cases = ["dart_function/type_alias6"]
+
+["tests/language/function/type_alias7_test.dart"]
+kind = "not_portable"
+what = "typedefs with default parameter values and a class extending a typedef"
+reason = "multitest sections 00, 01 and 02 are each a compile-time error (default values in a typedef, extending a typedef) and main without them only constructs an empty class, checking nothing"
+
+["tests/language/function/type_alias8_test.dart"]
+kind = "behavior"
+what = "a static final function typed by a bounded generic typedef returning a nullable generic function type, called without a type error (regression for issue 9442); the argument picks it or a second typedef value returning a non-null function, so the null result depends on it"
+cases = ["dart_function/type_alias8"]
+
+["tests/language/function/type_alias9_test.dart"]
+kind = "not_portable"
+what = "mutually referencing typedefs F and G and a cast between them"
+reason = "its expectations are COMPILE_TIME_ERROR.TYPE_ALIAS_CANNOT_REFERENCE_ITSELF on F and G, and main only casts null between those ill-formed types, checking nothing"
+
+["tests/language/function/type_alias_test.dart"]
+kind = "behavior"
+what = "is checks of functions with typed, optional and Object parameters against typedefs with Never, Object, int and String parameters and int, bool and dynamic results, a generic higher-order call, and a bounded generic typedef; dart's function types as _FnSig with Julia subtyping"
+cases = ["dart_function/type_alias"]
+
+["tests/language/function/type_call_getter2_test.dart"]
+kind = "behavior"
+what = "casting objects whose call is a field, a getter or a setter to Function or to a function type throws a type error; the INVALID_ASSIGNMENT compile-time sections are dropped"
+cases = ["dart_function/type_call_getter2"]
+
+["tests/language/function/type_call_getter_test.dart"]
+kind = "behavior"
+what = "objects whose call is a final field, a getter or a setter are neither Function nor a function type"
+cases = ["dart_function/type_call_getter"]
+
+["tests/language/function/type_in_constant_test.dart"]
+kind = "behavior"
+what = "constant instances of a generic class with function types or plain types as type arguments are not equal"
+cases = ["dart_function/type_in_constant"]
+
+["tests/language/function/type_parameter2_test.dart"]
+kind = "behavior"
+what = "an optional nullable function-typed parameter defaulting to null stored in a static formatter and called"
+cases = ["dart_function/type_parameter2"]
+
+["tests/language/function/type_parameter3_test.dart"]
+kind = "not_portable"
+what = "a function literal as the default value of a function-typed parameter"
+reason = "its expectations are COMPILE_TIME_ERROR.NON_CONSTANT_DEFAULT_VALUE and the CFE's Not a constant expression, and main only calls the empty-bodied function, checking nothing"
+
+["tests/language/function/type_parameter_bound_object_test.dart"]
+kind = "behavior"
+what = "a generic function returning its dynamic argument as Q, directly and through a generic function value, then a missing method called on the result throws (runtime-error sections 01 and 02); section 03, a compile-time error, is dropped"
+cases = ["dart_function/type_parameter_bound_object"]
+
+["tests/language/function/type_parameter_test.dart"]
+kind = "behavior"
+what = "an optional nullable function-typed parameter defaulting to null stored in a static and called; function-typed field initializing constructor parameters, also const"
+cases = ["dart_function/type_parameter"]
+
+["tests/language/function/type_test.dart"]
+kind = "behavior"
+what = "a function of List<String> cast to a function type of List<int> throws a type error at run time; Julia typeasserts the wrapper's invariant parameter where dart checks contravariant function subtyping"
+cases = ["dart_function/type"]
+
+["tests/language/function/type_this_parameter_test.dart"]
+kind = "behavior"
+what = "a function-typed this parameter initializing a Function field, then called"
+cases = ["dart_function/type_this_parameter"]
 
 ["tests/language/function_subtype/"]
 kind = "behavior"
@@ -4240,10 +5000,315 @@ kind = "behavior"
 what = "int and double arithmetic, overflow, division and conversions (number/separators_test and number/web_int_literals_test are SkipByDesign in language_dart2wasm.status)"
 cases = []
 
-["tests/language/operator/"]
+["tests/language/operator/and_operation_on_non_integer_operand_test.dart"]
 kind = "behavior"
-what = "user-defined operators (Julia's methods of +, ==, getindex and friends)"
-cases = []
+what = "a user-defined & on a class returning its receiver, chained with ints through an opaque id"
+cases = ["dart_operator/and_operation_on_non_integer_operand"]
+
+["tests/language/operator/arithmetic_canonicalization_test.dart"]
+kind = "behavior"
+what = "arithmetic identities x*1.0, x*0.0, x+0.0, x*1, x+0, x*0, 0&x, -1&x, 0|x, 0^x over a loop, NaN*0.0 and 0.0+-0.0"
+cases = ["dart_operator/arithmetic_canonicalization"]
+
+["tests/language/operator/arithmetic_int64_test.dart"]
+kind = "behavior"
+what = "int.parse of 64-bit integer strings up to the int64 limits (Julia parse(Int64, s))"
+cases = ["dart_operator/arithmetic_int64"]
+
+["tests/language/operator/arithmetic_smi_overflow_test.dart"]
+kind = "behavior"
+what = "subtraction producing 2^30 and 2^62 past the small-int range in a loop"
+cases = ["dart_operator/arithmetic_smi_overflow"]
+
+["tests/language/operator/arithmetic_test.dart"]
+kind = "behavior"
+what = "int and double + - * ~/ / % remainder, floor ceil round truncate toInt, isNegative isInfinite isNaN abs, parse, min max, hashCode, minInt ~/ -1, sin cos sqrt and NaN == NaN (Julia: round is half to even, div(typemin, -1) throws DivideError, sqrt of a String is a MethodError)"
+cases = ["dart_operator/arithmetic"]
+
+["tests/language/operator/bit_operations_test.dart"]
+kind = "behavior"
+what = "& | ^ ~ << >> on ints and bools, shifts by 64 and more, round trips of shifts, negative shift counts and & ^ | precedence (Julia: a negative count shifts the other way without throwing; & binds like *, xor and | like +, so the precedence result differs)"
+cases = ["dart_operator/bit_operations"]
+
+["tests/language/operator/bit_shift_test.dart"]
+kind = "behavior"
+what = "shifts by 32, 33 and 65 of constants, of values through a recursive id and of locals"
+cases = ["dart_operator/bit_shift"]
+
+["tests/language/operator/comparison_test.dart"]
+kind = "behavior"
+what = "identical == != < <= > >= over objects, bools, ints, doubles, null, mixed int/double, bignums and non-numbers"
+cases = ["dart_operator/comparison"]
+
+["tests/language/operator/compound_assignment_test.dart"]
+kind = "behavior"
+what = "the receiver and index of x[i][j] += v, x[i][j]++, obj().field += 1 and a static field++ are evaluated once, in order (Julia's update-operator lowering)"
+cases = ["dart_operator/compound_assignment"]
+
+["tests/language/operator/cond_expr_test.dart"]
+kind = "behavior"
+what = "a conditional expression whose branches are assignments to globals"
+cases = ["dart_operator/cond_expr"]
+
+["tests/language/operator/div_by_zero_test.dart"]
+kind = "behavior"
+what = "0 / 0 is NaN and 0 ~/ 0 throws (Julia: DivideError)"
+cases = ["dart_operator/div_by_zero"]
+
+["tests/language/operator/div_with_power_of_two2_test.dart"]
+kind = "behavior"
+what = "the same ~/ table as div_with_power_of_two plus ~/ 0 throwing (Julia: DivideError)"
+cases = ["dart_operator/div_with_power_of_two2"]
+
+["tests/language/operator/div_with_power_of_two_test.dart"]
+kind = "behavior"
+what = "~/ by +-1, +-2, +-4, +-2^27 and +-2^39 of 32- and 64-bit arguments through a table of functions"
+cases = ["dart_operator/div_with_power_of_two"]
+
+["tests/language/operator/equality_covariant_test.dart"]
+kind = "behavior"
+what = "== whose parameter is covariant Never or a type variable, compared both ways and with null (Julia: methods of == narrowed by argument type; a non-matching argument throws)"
+cases = ["dart_operator/equality_covariant"]
+
+["tests/language/operator/equality_static_test.dart"]
+kind = "not_portable"
+what = "the static typing of == on null, bool, set, num, classes with covariant ==, FutureOr and void operands"
+reason = "main only evaluates == expressions and discards every result; its expectations are ARGUMENT_TYPE_NOT_ASSIGNABLE and USE_OF_VOID_RESULT"
+
+["tests/language/operator/equality_test.dart"]
+kind = "behavior"
+what = "a user operator == returning a stored bool and one that throws, compared with null from both sides, and bool == true (Julia: x == nothing calls the user method and 1 == true is true)"
+cases = ["dart_operator/equality"]
+
+["tests/language/operator/equals_test.dart"]
+kind = "not_portable"
+what = "an operator == returning int used in (super == null) + 4"
+reason = "the runtime check calls B.foo whose body is the UNDEFINED_OPERATOR error and A.== carries RETURN_OF_INVALID_TYPE; with those removed main runs nothing"
+
+["tests/language/operator/incr_op_test.dart"]
+kind = "behavior"
+what = "x++ x-- ++x --x on locals, an instance field, a static getter/setter, a static field and list elements"
+cases = ["dart_operator/incr_op"]
+
+["tests/language/operator/index_evaluation_order_test.dart"]
+kind = "behavior"
+what = "b[i] += v evaluates the receiver, the index, operator [], operator + and operator []= in order"
+cases = ["dart_operator/index_evaluation_order"]
+
+["tests/language/operator/index_test.dart"]
+kind = "behavior"
+what = "a list filled by index with Fibonacci numbers, and the value of an index assignment"
+cases = ["dart_operator/index"]
+
+["tests/language/operator/integer_division_by_zero_test.dart"]
+kind = "behavior"
+what = "~/ of ints and doubles by zero and to infinity or NaN, and ~/ of doubles past the int64 range (Julia: div of an Int64 by 0 throws DivideError; div of a Float64 returns Inf or NaN and never throws)"
+cases = ["dart_operator/integer_division_by_zero"]
+
+["tests/language/operator/invalid_assignment_to_postfix_increment_test.dart"]
+kind = "not_portable"
+what = "assignment to x++ and z++"
+reason = "every statement is ILLEGAL_ASSIGNMENT_TO_NON_ASSIGNABLE and MISSING_ASSIGNABLE_SELECTOR (with UNCHECKED_USE_OF_NULLABLE_VALUE); main runs nothing else"
+
+["tests/language/operator/invalid_operators_test.dart"]
+kind = "not_portable"
+what = "operator declarations with wrong arity, optional or named parameters, type parameters, static, and wrong overrides"
+reason = "its expectations are WRONG_NUMBER_OF_PARAMETERS_FOR_OPERATOR, OPTIONAL_PARAMETER_IN_OPERATOR, TYPE_PARAMETER_ON_OPERATOR, INVALID_OVERRIDE, NON_VOID_RETURN_FOR_OPERATOR and STATIC_OPERATOR; main is empty"
+
+["tests/language/operator/left_shift_test.dart"]
+kind = "behavior"
+what = "-1 << i then ~/ -1 for i in 0..79 (Julia: typemin ÷ -1 throws DivideError)"
+cases = ["dart_operator/left_shift"]
+
+["tests/language/operator/literal_unary_plus_test.dart"]
+kind = "not_portable"
+what = "unary + on a literal and a string"
+reason = "every line of main is a syntax-error multitest section (dart has no unary plus); main runs nothing"
+
+["tests/language/operator/logical_expression2_test.dart"]
+kind = "behavior"
+what = "an is String test inside the right side of || must not narrow the guarded branch"
+cases = ["dart_operator/logical_expression2"]
+
+["tests/language/operator/logical_expression3_test.dart"]
+kind = "behavior"
+what = "a failed is! num && length test inside || must not assume the negative is test failed (the analyzer UNDEFINED_GETTER on o.length is static; the runtime check is ported)"
+cases = ["dart_operator/logical_expression3"]
+
+["tests/language/operator/logical_expression4_test.dart"]
+kind = "behavior"
+what = "is tests inside a negated && must not narrow the guarded branch"
+cases = ["dart_operator/logical_expression4"]
+
+["tests/language/operator/logical_expression5_test.dart"]
+kind = "behavior"
+what = "a negated is num test does not narrow, the following is String test does"
+cases = ["dart_operator/logical_expression5"]
+
+["tests/language/operator/logical_expression_test.dart"]
+kind = "behavior"
+what = "|| and && whose left operand has a side effect, and null checks on either side of || and &&"
+cases = ["dart_operator/logical_expression"]
+
+["tests/language/operator/mint_arithmetic_test.dart"]
+kind = "behavior"
+what = "& ^ | on 64-bit values past 32 bits and with -1, and (x & y) + 1.0"
+cases = ["dart_operator/mint_arithmetic"]
+
+["tests/language/operator/modulo_test.dart"]
+kind = "behavior"
+what = "% by +-256, +-254, 10, 12, by a ranged |i| and by 0, mixed with ~/ (Julia's mod takes the divisor's sign where dart's % is never negative; by 0 throws DivideError)"
+cases = ["dart_operator/modulo"]
+
+["tests/language/operator/mul_recipr_test.dart"]
+kind = "behavior"
+what = "x *= 1.0 / b with a subnormal b overflows to infinity; a normal b scales exactly"
+cases = ["dart_operator/mul_recipr"]
+
+["tests/language/operator/multi_assign_test.dart"]
+kind = "behavior"
+what = "chained assignment i = j = k = v and n = m = k = v"
+cases = ["dart_operator/multi_assign"]
+
+["tests/language/operator/negate_and_method_negate_test.dart"]
+kind = "behavior"
+what = "unary operator - and a method named negate on one class"
+cases = ["dart_operator/negate_and_method_negate"]
+
+["tests/language/operator/number_operator_context_test.dart"]
+kind = "behavior"
+what = "context types of + - * % remainder clamp and compound assignment on int, double and num operands (Julia: the run-time types and values Julia's promotion gives; num is Union{Int64,Float64})"
+cases = ["dart_operator/number_operator_context"]
+
+["tests/language/operator/number_operator_error_test.dart"]
+kind = "not_portable"
+what = "compound assignments and contexts whose number operator result type is not assignable"
+reason = "its expectations are INVALID_ASSIGNMENT and ARGUMENT_TYPE_NOT_ASSIGNABLE; what remains are static type checks with no runtime assertion"
+
+["tests/language/operator/number_operator_typing_test.dart"]
+kind = "behavior"
+what = "static result types of + - * % remainder and clamp over int, double, num and type-variable operands and in a const constructor (Julia: the run-time types and values Julia's promotion gives)"
+cases = ["dart_operator/number_operator_typing"]
+
+["tests/language/operator/operations_on_non_num_operand_test.dart"]
+kind = "behavior"
+what = "every arithmetic, bitwise and relational operator of a class returning its receiver, chained with ints, inlined and not"
+cases = ["dart_operator/operations_on_non_num_operand"]
+
+["tests/language/operator/operator1_test.dart"]
+kind = "not_portable"
+what = "a static operator +"
+reason = "its expectation is STATIC_OPERATOR; main only constructs C"
+
+["tests/language/operator/operator2_test.dart"]
+kind = "behavior"
+what = "operator [] and []=, and the value of an index assignment is its right side whatever the operator does or returns"
+cases = ["dart_operator/operator2"]
+
+["tests/language/operator/operator3_test.dart"]
+kind = "behavior"
+what = "unary - returning its receiver applied twice, then a method of the receiver"
+cases = ["dart_operator/operator3"]
+
+["tests/language/operator/operator4_test.dart"]
+kind = "behavior"
+what = "a < returning an int used as an if condition throws a TypeError"
+cases = ["dart_operator/operator4"]
+
+["tests/language/operator/operator5_test.dart"]
+kind = "behavior"
+what = "== < <= > >= returning non-bool values (int, null, string); the RETURN_OF_INVALID_TYPE on == is static, the runtime checks are ported"
+cases = ["dart_operator/operator5"]
+
+["tests/language/operator/operator6_test.dart"]
+kind = "behavior"
+what = "a user-defined operator ~"
+cases = ["dart_operator/operator6"]
+
+["tests/language/operator/operator7_test.dart"]
+kind = "not_portable"
+what = "a declaration of operator ==="
+reason = "its expectation is UNSUPPORTED_OPERATOR; main only constructs C"
+
+["tests/language/operator/operator_test.dart"]
+kind = "behavior"
+what = "every overloadable binary operator and unary - on a class, and compound assignment of fields and statics"
+cases = ["dart_operator/operator"]
+
+["tests/language/operator/operator_triple_shift_error_test.dart"]
+kind = "not_portable"
+what = "invalid >>> declarations (arity, optional and named parameters, type parameters, static)"
+reason = "its expectations are WRONG_NUMBER_OF_PARAMETERS_FOR_OPERATOR, OPTIONAL_PARAMETER_IN_OPERATOR, TYPE_PARAMETER_ON_OPERATOR and STATIC_OPERATOR; main only constructs the classes"
+
+["tests/language/operator/operator_triple_shift_test.dart"]
+kind = "behavior"
+what = "a user-defined >>> with + >> << & recording evaluation order and grouping, >>>=, the #>>> symbol and an extension >>> returning a filled list (Julia: shifts bind tighter than + and &; the noSuchMethod part has no analogue)"
+cases = ["dart_operator/operator_triple_shift"]
+
+["tests/language/operator/positive_bit_operations_test.dart"]
+kind = "behavior"
+what = "| & ^ << >> on values at and past 2^31 for constants, values through a recursive id and locals, and ~~x"
+cases = ["dart_operator/positive_bit_operations"]
+
+["tests/language/operator/precedence_test.dart"]
+kind = "behavior"
+what = "! ~ prefix and postfix ++ -- against + - * / and indexing"
+cases = ["dart_operator/precedence"]
+
+["tests/language/operator/round_test.dart"]
+kind = "behavior"
+what = "round of 0.49999999999999994 and +-(2^53 - 1)"
+cases = ["dart_operator/round"]
+
+["tests/language/operator/smi_type_test.dart"]
+kind = "behavior"
+what = "is Comparable<num>, Comparable, Comparable<String>, Comparable<double> of ints and a list (Julia: isa Real, Number, AbstractString, AbstractFloat)"
+cases = ["dart_operator/smi_type"]
+
+["tests/language/operator/ternary_test.dart"]
+kind = "behavior"
+what = "?: choosing between two static calls"
+cases = ["dart_operator/ternary"]
+
+["tests/language/operator/truncdiv_test.dart"]
+kind = "behavior"
+what = "% by 9 and ~/ by a ranged |i|, and ~/ 0 throwing (Julia: DivideError)"
+cases = ["dart_operator/truncdiv"]
+
+["tests/language/operator/truncdiv_uint32_test.dart"]
+kind = "behavior"
+what = "~/ 1 of 2^32 - 1 read from a top-level list"
+cases = ["dart_operator/truncdiv_uint32"]
+
+["tests/language/operator/truncdiv_zero_test.dart"]
+kind = "behavior"
+what = "% 0 and ~/ 0 throw (Julia: DivideError)"
+cases = ["dart_operator/truncdiv_zero"]
+
+["tests/language/operator/unary2_test.dart"]
+kind = "behavior"
+what = "-4 + 5 equals 1"
+cases = ["dart_operator/unary2"]
+
+["tests/language/operator/unary_plus_test.dart"]
+kind = "not_portable"
+what = "unary + on a variable"
+reason = "its expectation is MISSING_IDENTIFIER (+ is not a prefix operator); main has no runtime check"
+
+["tests/language/operator/unary_test.dart"]
+kind = "behavior"
+what = "4 + 5 equals 9.0"
+cases = ["dart_operator/unary"]
+
+["tests/language/operator/unsigned_right_shift_test.dart"]
+kind = "behavior"
+what = "a user-defined >>> and >>>=, a dynamic >>> with a wrong operand throwing, the #>>> symbol, a sync* >>>, and the grouping of >>> among ~ + / >> & | ^ < (Julia: shifts bind tighter; the noSuchMethod, async and typedef parts have no analogue)"
+cases = ["dart_operator/unsigned_right_shift"]
+
+["tests/language/operator/unsupported_test.dart"]
+kind = "not_portable"
+what = "the === and !== operators"
+reason = "its expectations are UNSUPPORTED_OPERATOR on every use; main has no runtime check once they are removed"
 
 ["tests/language/optimize/"]
 kind = "behavior"
@@ -4255,10 +5320,195 @@ kind = "behavior"
 what = "override rules"
 cases = []
 
-["tests/language/parameter/"]
+["tests/language/parameter/bad_named2_test.dart"]
+kind = "not_portable"
+what = "a named argument passed to a method that declares no named parameters"
+reason = "static diagnostics only: main's one call is a NOT_ENOUGH_POSITIONAL_ARGUMENTS and UNDEFINED_NAMED_PARAMETER compile-time error; no runtime check remains"
+
+["tests/language/parameter/bad_named_parameters_test.dart"]
+kind = "not_portable"
+what = "named-parameter calls passing a parameter twice, an unknown name, too many and too few positional arguments"
+reason = "static diagnostics only: every call in main is an EXTRA_POSITIONAL_ARGUMENTS_COULD_BE_NAMED, UNDEFINED_NAMED_PARAMETER or NOT_ENOUGH_POSITIONAL_ARGUMENTS compile-time error; no runtime check remains"
+
+["tests/language/parameter/default_test.dart"]
 kind = "behavior"
-what = "optional, named and default parameters (Julia's optional and keyword arguments)"
-cases = []
+what = "one-parameter local function, method, static method and top-level function called once each (the default-value sections are syntax errors and are dropped); the port returns the printed values"
+cases = ["dart_parameter/default"]
+
+["tests/language/parameter/initializer1_test.dart"]
+kind = "not_portable"
+what = "an initializing formal on an instance method"
+reason = "static diagnostics only: the method's this.x is a FIELD_INITIALIZER_OUTSIDE_CONSTRUCTOR compile-time error; no runtime check remains"
+
+["tests/language/parameter/initializer2_test.dart"]
+kind = "behavior"
+what = "initializing formals on mutable, const and untyped final fields, reassigned in the constructor body, mixed with an initializer list"
+cases = ["dart_parameter/initializer2"]
+
+["tests/language/parameter/initializer3_test.dart"]
+kind = "not_portable"
+what = "an initializing formal on a factory constructor"
+reason = "static diagnostics only: the factory's this.x is a FIELD_INITIALIZER_FACTORY_CONSTRUCTOR compile-time error; no runtime check remains"
+
+["tests/language/parameter/initializer4_test.dart"]
+kind = "not_portable"
+what = "an initializing formal on a static method"
+reason = "static diagnostics only: the static method's this.x is a FIELD_INITIALIZER_OUTSIDE_CONSTRUCTOR compile-time error; no runtime check remains"
+
+["tests/language/parameter/initializer5_test.dart"]
+kind = "behavior"
+what = "an initializing formal read by the constructor's initializer list (no Expect; the port returns both fields)"
+cases = ["dart_parameter/initializer5"]
+
+["tests/language/parameter/initializer7_test.dart"]
+kind = "not_portable"
+what = "an initializing formal on a setter"
+reason = "static diagnostics only: the setter's this.x is a FIELD_INITIALIZER_OUTSIDE_CONSTRUCTOR compile-time error; no runtime check remains"
+
+["tests/language/parameter/initializer_test.dart"]
+kind = "behavior"
+what = "initializing formals (typed, untyped, optional with default) and a constructor body whose x++ reaches a subclass's overriding getter and setter"
+cases = ["dart_parameter/initializer"]
+
+["tests/language/parameter/metadata_test.dart"]
+kind = "not_portable"
+what = "@deprecated metadata on nested function-typed parameters, in ok multitest sections"
+reason = "its subject is metadata annotations on nested function-typed parameters, which Julia has no form for; main only calls test(null), whose body is empty, so nothing is checked"
+
+["tests/language/parameter/name_conflict_test.dart"]
+kind = "behavior"
+what = "a parameter named like a compiler temporary (t0) with locals swapped under a branch"
+cases = ["dart_parameter/name_conflict"]
+
+["tests/language/parameter/named2_test.dart"]
+kind = "not_portable"
+what = "an optional positional parameter also passed by name"
+reason = "static diagnostics only: main's one call is an UNDEFINED_NAMED_PARAMETER compile-time error; no runtime check remains"
+
+["tests/language/parameter/named3_test.dart"]
+kind = "not_portable"
+what = "an unknown named argument to a function with an optional positional parameter"
+reason = "static diagnostics only: main's one call is an UNDEFINED_NAMED_PARAMETER compile-time error; no runtime check remains"
+
+["tests/language/parameter/named4_test.dart"]
+kind = "not_portable"
+what = "an unknown named argument to a function with exactly its positional parameters"
+reason = "static diagnostics only: main's one call is an UNDEFINED_NAMED_PARAMETER compile-time error; no runtime check remains"
+
+["tests/language/parameter/named_aggregated_test.dart"]
+kind = "not_portable"
+what = "default values in function types, a missing comma, a duplicate named argument and a missing positional argument"
+reason = "static diagnostics only: its expectations are DEFAULT_VALUE_IN_FUNCTION_TYPE, EXPECTED_TOKEN, EXTRA_POSITIONAL_ARGUMENTS, DUPLICATE_NAMED_ARGUMENT and NOT_ENOUGH_POSITIONAL_ARGUMENTS compile-time errors; the remaining main code checks nothing"
+
+["tests/language/parameter/named_clash_test.dart"]
+kind = "behavior"
+what = "named parameters a, b, c on one class and a$b, c on another, called on a receiver chosen at run time; mismatched calls throw (MethodError in Julia, NoSuchMethodError in dart)"
+cases = ["dart_parameter/named_clash"]
+
+["tests/language/parameter/named_count_test.dart"]
+kind = "behavior"
+what = "an optional positional parameter named count, omitted and passed 0, empty string, true and false"
+cases = ["dart_parameter/named_count"]
+
+["tests/language/parameter/named_default_eq_runtime_test.dart"]
+kind = "behavior"
+what = "named defaults on top-level, static, instance, local and closure functions, a tear-off, a constructor, a redirect, a factory and a redirecting factory (Julia has no function type, so the is functype check is dropped)"
+cases = ["dart_parameter/named_default_eq_runtime"]
+
+["tests/language/parameter/named_default_eq_test.dart"]
+kind = "behavior"
+what = "the runtime checks of named_default_eq_runtime once the DEFAULT_VALUE_IN_FUNCTION_TYPE and DEFAULT_VALUE_IN_REDIRECTING_FACTORY_CONSTRUCTOR declarations are removed (is functype dropped)"
+cases = ["dart_parameter/named_default_eq"]
+
+["tests/language/parameter/named_parameters_test.dart"]
+kind = "behavior"
+what = "optional positional defaults on static and instance methods, an interface's optional parameter defaulted by its implementation, a named argument; the UNDEFINED_NAMED_PARAMETER lines are removed"
+cases = ["dart_parameter/named_parameters"]
+
+["tests/language/parameter/named_passing_false_test.dart"]
+kind = "behavior"
+what = "a nullable Bool optional positional and named parameter omitted and passed true and false"
+cases = ["dart_parameter/named_passing_false"]
+
+["tests/language/parameter/named_passing_falsy_test.dart"]
+kind = "behavior"
+what = "0, 0.0, empty string, false and null passed past a non-falsy default, directly and through tear-offs"
+cases = ["dart_parameter/named_passing_falsy"]
+
+["tests/language/parameter/named_passing_null_test.dart"]
+kind = "behavior"
+what = "null passed past a numeric default, positionally and by name, on methods, static and top-level functions"
+cases = ["dart_parameter/named_passing_null"]
+
+["tests/language/parameter/named_passing_zero_test.dart"]
+kind = "behavior"
+what = "0 passed past a numeric default, positionally and by name, on methods, static and top-level functions"
+cases = ["dart_parameter/named_passing_zero"]
+
+["tests/language/parameter/named_regression_test.dart"]
+kind = "behavior"
+what = "the default of an unpassed named parameter when its neighbour is passed (dart's methods return null; the port returns the passed argument)"
+cases = ["dart_parameter/named_regression"]
+
+["tests/language/parameter/named_runtime_test.dart"]
+kind = "behavior"
+what = "optional positional defaults on static and instance methods, an interface's optional parameter defaulted by its implementation, a named argument"
+cases = ["dart_parameter/named_runtime"]
+
+["tests/language/parameter/named_type_test.dart"]
+kind = "not_portable"
+what = "function values with optional named parameters assigned to Function and passed where a named-parameter function type is expected"
+reason = "static diagnostics only: its expectations are ARGUMENT_TYPE_NOT_ASSIGNABLE compile-time errors; the remaining assignments and the empty accepted call check nothing"
+
+["tests/language/parameter/named_with_conversions_test.dart"]
+kind = "behavior"
+what = "positional and named defaults called with method syntax and function syntax on methods and closure-valued fields; wrong arity and unknown names throw (MethodError in Julia, NoSuchMethodError in dart)"
+cases = ["dart_parameter/named_with_conversions"]
+
+["tests/language/parameter/named_with_dollars_test.dart"]
+kind = "behavior"
+what = "named parameters spelled with dollar signs (a$b, a$$b, $ to $$$$) on a static and a run-time-chosen receiver, results formatted as lists"
+cases = ["dart_parameter/named_with_dollars"]
+
+["tests/language/parameter/named_with_object_property_names_test.dart"]
+kind = "behavior"
+what = "named parameters named like JavaScript Object properties (constructor, toString, valueOf...) omitted and passed 0"
+cases = ["dart_parameter/named_with_object_property_names"]
+
+["tests/language/parameter/optional_named_runtime_test.dart"]
+kind = "behavior"
+what = "named parameters with defaults on static and instance methods, passed in any order"
+cases = ["dart_parameter/optional_named_runtime"]
+
+["tests/language/parameter/optional_named_test.dart"]
+kind = "behavior"
+what = "named parameters with defaults passed in any order; the EXTRA_POSITIONAL_ARGUMENTS_COULD_BE_NAMED lines are removed"
+cases = ["dart_parameter/optional_named"]
+
+["tests/language/parameter/param_test.dart"]
+kind = "behavior"
+what = "a local assigned from a parameter and returned"
+cases = ["dart_parameter/param"]
+
+["tests/language/parameter/parameter1_test.dart"]
+kind = "behavior"
+what = "a static method with no parameters returning 0"
+cases = ["dart_parameter/parameter1"]
+
+["tests/language/parameter/parameter2_test.dart"]
+kind = "behavior"
+what = "function-typed parameters applied once, mapped over a list in place and used as predicates"
+cases = ["dart_parameter/parameter2"]
+
+["tests/language/parameter/positional_type_test.dart"]
+kind = "not_portable"
+what = "function values with optional positional parameters passed where an optional-positional function type is expected"
+reason = "static diagnostics only: its expectations are ARGUMENT_TYPE_NOT_ASSIGNABLE compile-time errors; the remaining assignments and accepted calls have empty bodies and check nothing"
+
+["tests/language/parameter/types_specialization_test.dart"]
+kind = "behavior"
+what = "optional positional parameters whose defaults and passed values differ in type, checked with is"
+cases = ["dart_parameter/types_specialization"]
 
 ["tests/language/part/"]
 kind = "behavior"
@@ -4915,10 +6165,335 @@ kind = "behavior"
 what = "static members and their static rules"
 cases = []
 
-["tests/language/string/"]
+["tests/language/string/adjacent_const_string_literals_test.dart"]
 kind = "behavior"
-what = "strings: literals, interpolation, concatenation, comparison and code units"
-cases = []
+what = "adjacent empty, interpolated, raw and triple-quoted literals held by a const object whose toString returns them (Julia joins literals with *)"
+cases = ["dart_string/adjacent_const_string_literals"]
+
+["tests/language/string/adjacent_string_literals_test.dart"]
+kind = "behavior"
+what = "adjacent empty, interpolated, raw and triple-quoted literals concatenated (Julia joins literals with *)"
+cases = ["dart_string/adjacent_string_literals"]
+
+["tests/language/string/bad_raw_string_runtime_test.dart"]
+kind = "behavior"
+what = "an empty literal joined to a triple-quoted string holding r' and a newline; the port returns its length and byte count"
+cases = ["dart_string/bad_raw_string_runtime"]
+
+["tests/language/string/bad_raw_string_test.dart"]
+kind = "not_portable"
+what = "a raw string broken by a newline"
+reason = "static only: SYNTACTIC_ERROR.UNTERMINATED_STRING_LITERAL on every single- and double-quoted raw literal; main has no runtime check"
+
+["tests/language/string/char_escape_test.dart"]
+kind = "behavior"
+what = "\x, \u and \u{} escapes of code points 0 to 0x10FFFF and the named escapes: length, first code unit, equality with String.fromCharCodes (Julia: \x80-\xFF are raw bytes, \a and \e are bell and escape, other letter escapes are not Julia syntax)"
+cases = ["dart_string/char_escape"]
+
+["tests/language/string/charcode_test.dart"]
+kind = "behavior"
+what = "== between a string literal and a String or int, and a string's indexed character against a one-character string, in both orders; an index past the end throws (Julia: s[i] is a Char, never == a String)"
+cases = ["dart_string/charcode"]
+
+["tests/language/string/const_interpolation2_test.dart"]
+kind = "behavior"
+what = "constants of every kind (null, numbers, strings, bools, fromEnvironment defaults) interpolated alone, together, across adjacent literals and nested (Julia prints null as nothing)"
+cases = ["dart_string/const_interpolation2"]
+
+["tests/language/string/const_interpolation_constant_string_interpolation_test.dart"]
+kind = "behavior"
+what = "an interpolated method call whose receiver changes type after many calls"
+cases = ["dart_string/const_interpolation_constant_string_interpolation"]
+
+["tests/language/string/escape4_test.dart"]
+kind = "not_portable"
+what = "a backslash before a newline in a single-line string"
+reason = "static only: SYNTACTIC_ERROR.INVALID_UNICODE_ESCAPE_STARTED, UNTERMINATED_STRING_LITERAL and EXPECTED_TOKEN; main has no runtime check"
+
+["tests/language/string/escapes_test.dart"]
+kind = "behavior"
+what = "\u{}, \f \v \b \r \n \t, \xFF and \u0001 escapes inside words read by length and codeUnitAt, and unknown letter escapes (Julia: codeunit is a UTF-8 byte, only \a and \e of the letter escapes parse, as bell and escape)"
+cases = ["dart_string/escapes"]
+
+["tests/language/string/interpolate1_test.dart"]
+kind = "not_portable"
+what = "an interpolation of $$x"
+reason = "static only: SYNTACTIC_ERROR.MISSING_IDENTIFIER and COMPILE_TIME_ERROR.UNDEFINED_IDENTIFIER; main has no runtime check"
+
+["tests/language/string/interpolate2_test.dart"]
+kind = "behavior"
+what = "interpolated arithmetic, list index, closure call, map lookup, a closure incrementing a captured counter, and nested interpolation across quote kinds and lines"
+cases = ["dart_string/interpolate2"]
+
+["tests/language/string/interpolate3_test.dart"]
+kind = "not_portable"
+what = "an interpolation of $-x"
+reason = "static only: SYNTACTIC_ERROR.MISSING_IDENTIFIER; main has no runtime check"
+
+["tests/language/string/interpolate_null_test.dart"]
+kind = "behavior"
+what = "a field interpolated from an object, then from null, which throws NoSuchMethodError (Julia: getproperty on nothing)"
+cases = ["dart_string/interpolate_null"]
+
+["tests/language/string/interpolate_test.dart"]
+kind = "behavior"
+what = "escaped dollar, consts and late globals in interpolation, $this with a subclass toString and field, and long interpolation chains of Latin-1, non-Latin and Stringable values (Julia: \xff is a raw byte, s * k is s^k) (outside Julia's strict subset: interpolating an Int and objects, and ^ on strings)"
+cases = ["dart_string/interpolate"]
+
+["tests/language/string/interpolation1_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of interpolation1"
+reason = "main calls an empty testMain: the DOLLAR const was removed with its error section"
+
+["tests/language/string/interpolation1_test.dart"]
+kind = "not_portable"
+what = "a const string holding a bare dollar"
+reason = "static only: SYNTACTIC_ERROR.MISSING_IDENTIFIER and COMPILE_TIME_ERROR.INVALID_CONSTANT; main has no runtime check"
+
+["tests/language/string/interpolation2_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of interpolation2"
+reason = "main calls an empty testMain: the print of a dollar before a slash was removed with its error section"
+
+["tests/language/string/interpolation2_test.dart"]
+kind = "not_portable"
+what = "a dollar followed by a slash"
+reason = "static only: SYNTACTIC_ERROR.MISSING_IDENTIFIER; main has no runtime check"
+
+["tests/language/string/interpolation3_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of interpolation3"
+reason = "main calls an empty testMain: the print of a dollar before a digit was removed with its error section"
+
+["tests/language/string/interpolation3_test.dart"]
+kind = "not_portable"
+what = "a dollar followed by a digit"
+reason = "static only: SYNTACTIC_ERROR.MISSING_IDENTIFIER; main has no runtime check"
+
+["tests/language/string/interpolation4_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of interpolation4"
+reason = "main calls an empty testMain: the print of a bare dollar was removed with its error section"
+
+["tests/language/string/interpolation4_test.dart"]
+kind = "not_portable"
+what = "a bare dollar string concatenated"
+reason = "static only: SYNTACTIC_ERROR.MISSING_IDENTIFIER; main has no runtime check"
+
+["tests/language/string/interpolation5_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of interpolation5"
+reason = "main calls an empty testMain: the print of a dollar before a digit was removed with its error section"
+
+["tests/language/string/interpolation5_test.dart"]
+kind = "not_portable"
+what = "a dollar followed by digits"
+reason = "static only: SYNTACTIC_ERROR.MISSING_IDENTIFIER; main has no runtime check"
+
+["tests/language/string/interpolation6_test.dart"]
+kind = "not_portable"
+what = "a regexp string ending in a bare dollar"
+reason = "static only: SYNTACTIC_ERROR.MISSING_IDENTIFIER; main has no runtime check"
+
+["tests/language/string/interpolation7_test.dart"]
+kind = "behavior"
+what = "interpolation of an object with toString, then of null (Julia prints nothing)"
+cases = ["dart_string/interpolation7"]
+
+["tests/language/string/interpolation8_test.dart"]
+kind = "behavior"
+what = "a static const holding an interpolated const, compared by identical (Julia ===)"
+cases = ["dart_string/interpolation8"]
+
+["tests/language/string/interpolation9_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of interpolation9"
+reason = "main returns an uninitialized null: every bad interpolation was removed with its error section"
+
+["tests/language/string/interpolation9_test.dart"]
+kind = "not_portable"
+what = "bare and trailing dollars in every quote kind"
+reason = "static only: SYNTACTIC_ERROR.MISSING_IDENTIFIER; main has no runtime check"
+
+["tests/language/string/interpolation_and_buffer_test.dart"]
+kind = "behavior"
+what = "interpolation and StringBuffer.write call toString, which may throw before later parts run (Julia evaluates every interpolated expression before printing, so the later throw wins)"
+cases = ["dart_string/interpolation_and_buffer"]
+
+["tests/language/string/interpolation_newline_test.dart"]
+kind = "behavior"
+what = "nested interpolations of list and map literals whose expressions span lines (Julia: the list and map text is built by join) (outside Julia's strict subset: Base.join)"
+cases = ["dart_string/interpolation_newline"]
+
+["tests/language/string/interpolation_runtime_test.dart"]
+kind = "behavior"
+what = "values, static consts, parameters and int fields interpolated; an escaped dollar read back by index (Julia indexes from 1) (outside Julia's strict subset: interpolating an Int)"
+cases = ["dart_string/interpolation_runtime"]
+
+["tests/language/string/interpolation_test.dart"]
+kind = "behavior"
+what = "values, static consts, parameters and int fields interpolated; an escaped dollar read back by index (Julia indexes from 1); the toHorse section is UNDEFINED_METHOD (outside Julia's strict subset: interpolating an Int)"
+cases = ["dart_string/interpolation"]
+
+["tests/language/string/intrinsics_test.dart"]
+kind = "behavior"
+what = "length and isEmpty of a one-byte and an empty string"
+cases = ["dart_string/intrinsics"]
+
+["tests/language/string/join_test.dart"]
+kind = "behavior"
+what = "List<String>.join with no and an empty separator (outside Julia's strict subset: Base.join)"
+cases = ["dart_string/join"]
+
+["tests/language/string/literals_test.dart"]
+kind = "behavior"
+what = "code point and code unit escapes in plain, triple-quoted, adjacent and interpolated literals against String.fromCharCodes (Julia: dart's \xff is \u00ff; dart's UTF-16 view is transcode(UInt16, s); a code point literal is one Char, so it is not == the string of its two surrogates, false where dart says true) (outside Julia's strict subset: a string interpolating three or more parts calls string(::String...) through a splat the trim verifier leaves unresolved)"
+cases = ["dart_string/literals"]
+
+["tests/language/string/multiline_newline_cr.dart"]
+kind = "helper"
+what = "const and var triple-quoted plain and raw strings written with CR line endings"
+of = ["tests/language/string/multiline_newline_test.dart", "tests/language/string/multiline_newline_runtime_test.dart", "tests/language/string/multiline_newline_runtime_1_test.dart", "tests/language/string/multiline_newline_runtime_2_test.dart", "tests/language/string/multiline_newline_runtime_3_test.dart", "tests/language/string/multiline_newline_runtime_4_test.dart", "tests/language/string/multiline_newline_runtime_5_test.dart", "tests/language/string/multiline_newline_runtime_6_test.dart"]
+
+["tests/language/string/multiline_newline_crlf.dart"]
+kind = "helper"
+what = "const and var triple-quoted plain and raw strings written with CRLF line endings"
+of = ["tests/language/string/multiline_newline_test.dart", "tests/language/string/multiline_newline_runtime_test.dart", "tests/language/string/multiline_newline_runtime_1_test.dart", "tests/language/string/multiline_newline_runtime_2_test.dart", "tests/language/string/multiline_newline_runtime_3_test.dart", "tests/language/string/multiline_newline_runtime_4_test.dart", "tests/language/string/multiline_newline_runtime_5_test.dart", "tests/language/string/multiline_newline_runtime_6_test.dart"]
+
+["tests/language/string/multiline_newline_lf.dart"]
+kind = "helper"
+what = "const and var triple-quoted plain and raw strings written with LF line endings"
+of = ["tests/language/string/multiline_newline_test.dart", "tests/language/string/multiline_newline_runtime_test.dart", "tests/language/string/multiline_newline_runtime_1_test.dart", "tests/language/string/multiline_newline_runtime_2_test.dart", "tests/language/string/multiline_newline_runtime_3_test.dart", "tests/language/string/multiline_newline_runtime_4_test.dart", "tests/language/string/multiline_newline_runtime_5_test.dart", "tests/language/string/multiline_newline_runtime_6_test.dart"]
+
+["tests/language/string/multiline_newline_runtime_1_test.dart"]
+kind = "behavior"
+what = "lengths and equality of CR, CRLF and LF triple-quoted strings (Julia parses the CR sources with Meta.parse), plus const c4 = c1 == true ? 1 : 2"
+cases = ["dart_string/multiline_newline_runtime_1"]
+
+["tests/language/string/multiline_newline_runtime_2_test.dart"]
+kind = "behavior"
+what = "lengths and equality of CR, CRLF and LF triple-quoted strings, plus const c5 = c2 == true ? 2 : 3"
+cases = ["dart_string/multiline_newline_runtime_2"]
+
+["tests/language/string/multiline_newline_runtime_3_test.dart"]
+kind = "behavior"
+what = "lengths and equality of CR, CRLF and LF triple-quoted strings, plus const c6 = c3 == true ? 3 : 4"
+cases = ["dart_string/multiline_newline_runtime_3"]
+
+["tests/language/string/multiline_newline_runtime_4_test.dart"]
+kind = "behavior"
+what = "lengths and equality of CR, CRLF and LF triple-quoted strings, plus const c4r = c1r == true ? 1 : 2"
+cases = ["dart_string/multiline_newline_runtime_4"]
+
+["tests/language/string/multiline_newline_runtime_5_test.dart"]
+kind = "behavior"
+what = "lengths and equality of CR, CRLF and LF triple-quoted strings, plus const c5r = c2r == true ? 2 : 3"
+cases = ["dart_string/multiline_newline_runtime_5"]
+
+["tests/language/string/multiline_newline_runtime_6_test.dart"]
+kind = "behavior"
+what = "lengths and equality of CR, CRLF and LF triple-quoted strings, plus const c6r = c3r == true ? 3 : 4"
+cases = ["dart_string/multiline_newline_runtime_6"]
+
+["tests/language/string/multiline_newline_runtime_test.dart"]
+kind = "behavior"
+what = "lengths and equality of CR, CRLF and LF triple-quoted plain and raw strings, const and var, and consts chosen by their equality"
+cases = ["dart_string/multiline_newline_runtime"]
+
+["tests/language/string/multiline_newline_test.dart"]
+kind = "behavior"
+what = "lengths and equality of CR, CRLF and LF triple-quoted strings; the sections using a nullable const as a condition are UNCHECKED_USE_OF_NULLABLE_VALUE and CONST_EVAL_TYPE_BOOL"
+cases = ["dart_string/multiline_newline"]
+
+["tests/language/string/multiline_strings_test.dart"]
+kind = "behavior"
+what = "whitespace, escapes, a backslash-newline and an interpolation after the opening triple quote, plain and raw (Julia keeps spaces and tabs on the opening line and keeps a raw backslash-newline; dart's backslash-space forms are not Julia syntax)"
+cases = ["dart_string/multiline_strings"]
+
+["tests/language/string/no_operator_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of no_operator"
+reason = "main declares two strings and checks nothing: every operator call was removed with its error section"
+
+["tests/language/string/no_operator_test.dart"]
+kind = "not_portable"
+what = "relational, arithmetic and bitwise operators applied to strings"
+reason = "static only: COMPILE_TIME_ERROR.UNDEFINED_OPERATOR and ARGUMENT_TYPE_NOT_ASSIGNABLE on every Expect.throws expression; main has no other check"
+
+["tests/language/string/optimizations_test.dart"]
+kind = "behavior"
+what = "an optional named parameter defaulting to null, printed by toString and returned, then called with a missing method (Julia: string(nothing), * on nothing is a MethodError)"
+cases = ["dart_string/optimizations"]
+
+["tests/language/string/raw_string_test.dart"]
+kind = "behavior"
+what = "raw literals empty, quoted, multi-line, holding dollars and backslashes (Julia: a raw literal of two backslashes is the one-backslash form of dart r with one backslash)"
+cases = ["dart_string/raw_string"]
+
+["tests/language/string/runtime_test.dart"]
+kind = "behavior"
+what = "each character and code unit of a string, join with a separator, and String.fromCharCodes indexed (Julia: s[i] is a Char, compared as its one-character string) (outside Julia's strict subset: string(::Char) and Base.join)"
+cases = ["dart_string/runtime"]
+
+["tests/language/string/split_test.dart"]
+kind = "behavior"
+what = "split by a Pattern whose match starts past the string's end throws RangeError (Julia: split ignores a findnext match past the end and returns the whole string)"
+cases = ["dart_string/split"]
+
+["tests/language/string/string_test.dart"]
+kind = "behavior"
+what = "each character and code unit of a string, join, String.fromCharCodes indexed (Julia: s[i] is a Char, compared as its one-character string); the []= section is UNDEFINED_OPERATOR (outside Julia's strict subset: string(::Char) and Base.join)"
+cases = ["dart_string/string"]
+
+["tests/language/string/substring_runtime_test.dart"]
+kind = "not_portable"
+what = "the runtime half of substring"
+reason = "main's try body is empty: the substring call with doubles was removed with its error section"
+
+["tests/language/string/substring_test.dart"]
+kind = "not_portable"
+what = "substring called with double indices"
+reason = "static only: COMPILE_TIME_ERROR.ARGUMENT_TYPE_NOT_ASSIGNABLE on both arguments; main has no other check"
+
+["tests/language/string/supertype_checked_test.dart"]
+kind = "behavior"
+what = "a Comparable class whose compareTo casts its Object argument (Julia: cmp through isless)"
+cases = ["dart_string/supertype_checked"]
+
+["tests/language/string/unicode1_test.dart"]
+kind = "not_portable"
+what = "\u escapes with fewer than 4 hex digits"
+reason = "static only: SYNTACTIC_ERROR.INVALID_UNICODE_ESCAPE_U_NO_BRACKET; main has no runtime check"
+
+["tests/language/string/unicode2_test.dart"]
+kind = "not_portable"
+what = "\u{} escapes with 0, 9 or non-hex digits"
+reason = "static only: SYNTACTIC_ERROR.INVALID_UNICODE_ESCAPE_U_BRACKET; main has no runtime check"
+
+["tests/language/string/unicode3_test.dart"]
+kind = "not_portable"
+what = "\x escapes with fewer than 2 hex digits"
+reason = "static only: SYNTACTIC_ERROR.INVALID_HEX_ESCAPE; main has no runtime check"
+
+["tests/language/string/unicode4_test.dart"]
+kind = "not_portable"
+what = "a code point escape above 0x10FFFF and surrogate escapes"
+reason = "static only: SYNTACTIC_ERROR.INVALID_CODE_POINT; the remaining surrogate assignments check nothing"
+
+["tests/language/string/unicode_bom_middle_test.dart"]
+kind = "behavior"
+what = "a BOM character between two letters of a literal, its length directly and through a function"
+cases = ["dart_string/unicode_bom_middle"]
+
+["tests/language/string/unicode_bom_test.dart"]
+kind = "not_portable"
+what = "a source file starting with a BOM"
+reason = "main's body is empty: the test is only that the parser skips the leading BOM"
+
+["tests/language/string/unicode_hash_test.dart"]
+kind = "behavior"
+what = "a \u{10412} escape equals the literal character, and their hashCodes"
+cases = ["dart_string/unicode_hash"]
 
 ["tests/language/subtyping_static/"]
 kind = "behavior"
@@ -5654,7 +7229,7 @@ what = "checks of a value's dynamic type"
 
 ["tests/language/static_type_helper.dart"]
 kind = "helper"
-of = ["tests/language/anonymous_methods/", "tests/language/async/", "tests/language/async_star/", "tests/language/await/", "tests/language/call/", "tests/language/closure/parameter_default_type_inference_test.dart", "tests/language/constructor/", "tests/language/extension_methods/", "tests/language/extension_type/", "tests/language/generic/generic_function_type_argument_test.dart", "tests/language/generic_methods/", "tests/language/if_null/", "tests/language/inference/", "tests/language/inference_update_1/", "tests/language/inference_update_2/", "tests/language/inference_update_3/", "tests/language/inference_update_4/", "tests/language/inference_using_bounds/", "tests/language/least_upper_bound/", "tests/language/mixin/", "tests/language/nnbd/flow_analysis/boolean_parameter_test.dart", "tests/language/nnbd/flow_analysis/demotion_and_type_of_interest_promotion_test.dart", "tests/language/nnbd/flow_analysis/expr_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/identical_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_compound_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_capture_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_does_not_detect_aliases_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_expression_types_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_new_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_join_equivalent_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_logical_op_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_null_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_on_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_try_finally_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_undefeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_cascade_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_conditional_test.dart", "tests/language/nnbd/flow_analysis/postfix_increment_decrement_test.dart", "tests/language/nnbd/flow_analysis/this_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/this_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_expr_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_never_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_variable_property_test.dart", "tests/language/nnbd/flow_analysis/variable_property_not_promoted_test.dart", "tests/language/nnbd/inference/late_variable_type_for_promotion_test.dart", "tests/language/nnbd/inference/variable_initialization_promotion_test.dart", "tests/language/nonfunction_type_aliases/", "tests/language/null_aware/", "tests/language/null_aware_elements/", "tests/language/operator/", "tests/language/patterns/empty_switch_expression_test.dart", "tests/language/patterns/flow_analysis/boolean_condition_test.dart", "tests/language/patterns/flow_analysis/cast_pattern_error_test.dart", "tests/language/patterns/flow_analysis/constant_pattern_error_test.dart", "tests/language/patterns/flow_analysis/for_in_collection_element_error_test.dart", "tests/language/patterns/flow_analysis/for_in_statement_error_test.dart", "tests/language/patterns/flow_analysis/if_case_element_error_test.dart", "tests/language/patterns/flow_analysis/if_case_statement_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_with_nullable_list_scrutinee_test.dart", "tests/language/patterns/flow_analysis/logical_and_pattern_error_test.dart", "tests/language/patterns/flow_analysis/logical_or_pattern_error_test.dart", "tests/language/patterns/flow_analysis/map_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_assert_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_check_in_guard_test.dart", "tests/language/patterns/flow_analysis/null_check_pattern_error_test.dart", "tests/language/patterns/flow_analysis/object_pattern_error_test.dart", "tests/language/patterns/flow_analysis/pattern_assignment_error_test.dart", "tests/language/patterns/flow_analysis/pattern_inside_guard_error_test.dart", "tests/language/patterns/flow_analysis/pattern_variable_declaration_error_test.dart", "tests/language/patterns/flow_analysis/record_pattern_error_test.dart", "tests/language/patterns/flow_analysis/relational_pattern_error_test.dart", "tests/language/patterns/flow_analysis/split_point_test.dart", "tests/language/patterns/flow_analysis/switch_expression_error_test.dart", "tests/language/patterns/flow_analysis/switch_statement_error_test.dart", "tests/language/patterns/flow_analysis/variable_pattern_error_test.dart", "tests/language/patterns/flow_analysis/wildcard_pattern_error_test.dart", "tests/language/patterns/issue52409_test.dart", "tests/language/patterns/object_pattern_inference_test.dart", "tests/language/patterns/schema_test.dart", "tests/language/patterns/switch_trivial_exhaustiveness_error_test.dart", "tests/language/patterns/type_question_before_when_test.dart", "tests/language/primary_constructors/", "tests/language/private_named_parameters/", "tests/language/records/", "tests/language/regress/", "tests/language/sound_flow_analysis/", "tests/language/spread_collections/", "tests/language/switch/case_null_legacy_flow_analysis_test.dart", "tests/language/sync_star/", "tests/language/this_promotion/", "tests/language/type_object/", "tests/language/type_promotion/", "tests/language/typedef/"]
+of = ["tests/language/anonymous_methods/", "tests/language/async/", "tests/language/async_star/", "tests/language/await/", "tests/language/call/implicit_tearoff_assignment_test.dart", "tests/language/call/implicit_tearoff_error_test.dart", "tests/language/call/implicit_tearoff_exceptions_test.dart", "tests/language/call/implicit_tearoff_local_assignment_test.dart", "tests/language/call/implicit_tearoff_test.dart", "tests/language/call/implicit_tearoff_type_variable_error_test.dart", "tests/language/call/implicit_tearoff_type_variable_test.dart", "tests/language/closure/parameter_default_type_inference_test.dart", "tests/language/constructor/tear_off_test.dart", "tests/language/extension_methods/", "tests/language/extension_type/", "tests/language/generic/generic_function_type_argument_test.dart", "tests/language/generic_methods/", "tests/language/if_null/", "tests/language/inference/", "tests/language/inference_update_1/", "tests/language/inference_update_2/", "tests/language/inference_update_3/", "tests/language/inference_update_4/", "tests/language/inference_using_bounds/", "tests/language/least_upper_bound/", "tests/language/mixin/", "tests/language/nnbd/flow_analysis/boolean_parameter_test.dart", "tests/language/nnbd/flow_analysis/demotion_and_type_of_interest_promotion_test.dart", "tests/language/nnbd/flow_analysis/expr_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/identical_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_compound_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_capture_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_does_not_detect_aliases_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_expression_types_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_new_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_join_equivalent_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_logical_op_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_null_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_on_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_try_finally_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_undefeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_cascade_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_conditional_test.dart", "tests/language/nnbd/flow_analysis/postfix_increment_decrement_test.dart", "tests/language/nnbd/flow_analysis/this_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/this_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_expr_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_never_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_variable_property_test.dart", "tests/language/nnbd/flow_analysis/variable_property_not_promoted_test.dart", "tests/language/nnbd/inference/late_variable_type_for_promotion_test.dart", "tests/language/nnbd/inference/variable_initialization_promotion_test.dart", "tests/language/nonfunction_type_aliases/", "tests/language/null_aware/", "tests/language/null_aware_elements/", "tests/language/operator/number_operator_context_test.dart", "tests/language/operator/number_operator_error_test.dart", "tests/language/operator/number_operator_typing_test.dart", "tests/language/patterns/empty_switch_expression_test.dart", "tests/language/patterns/flow_analysis/boolean_condition_test.dart", "tests/language/patterns/flow_analysis/cast_pattern_error_test.dart", "tests/language/patterns/flow_analysis/constant_pattern_error_test.dart", "tests/language/patterns/flow_analysis/for_in_collection_element_error_test.dart", "tests/language/patterns/flow_analysis/for_in_statement_error_test.dart", "tests/language/patterns/flow_analysis/if_case_element_error_test.dart", "tests/language/patterns/flow_analysis/if_case_statement_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_with_nullable_list_scrutinee_test.dart", "tests/language/patterns/flow_analysis/logical_and_pattern_error_test.dart", "tests/language/patterns/flow_analysis/logical_or_pattern_error_test.dart", "tests/language/patterns/flow_analysis/map_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_assert_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_check_in_guard_test.dart", "tests/language/patterns/flow_analysis/null_check_pattern_error_test.dart", "tests/language/patterns/flow_analysis/object_pattern_error_test.dart", "tests/language/patterns/flow_analysis/pattern_assignment_error_test.dart", "tests/language/patterns/flow_analysis/pattern_inside_guard_error_test.dart", "tests/language/patterns/flow_analysis/pattern_variable_declaration_error_test.dart", "tests/language/patterns/flow_analysis/record_pattern_error_test.dart", "tests/language/patterns/flow_analysis/relational_pattern_error_test.dart", "tests/language/patterns/flow_analysis/split_point_test.dart", "tests/language/patterns/flow_analysis/switch_expression_error_test.dart", "tests/language/patterns/flow_analysis/switch_statement_error_test.dart", "tests/language/patterns/flow_analysis/variable_pattern_error_test.dart", "tests/language/patterns/flow_analysis/wildcard_pattern_error_test.dart", "tests/language/patterns/issue52409_test.dart", "tests/language/patterns/object_pattern_inference_test.dart", "tests/language/patterns/schema_test.dart", "tests/language/patterns/switch_trivial_exhaustiveness_error_test.dart", "tests/language/patterns/type_question_before_when_test.dart", "tests/language/primary_constructors/", "tests/language/private_named_parameters/", "tests/language/records/", "tests/language/regress/", "tests/language/sound_flow_analysis/", "tests/language/spread_collections/", "tests/language/switch/case_null_legacy_flow_analysis_test.dart", "tests/language/sync_star/", "tests/language/this_promotion/", "tests/language/type_object/", "tests/language/type_promotion/", "tests/language/typedef/"]
 what = "checks of an expression's static type"
 
 ["tests/language/syntax_helper.dart"]
@@ -5679,7 +7254,7 @@ what = "a library imported by the prefix tests"
 
 ["tests/language/library11.dart"]
 kind = "helper"
-of = ["tests/language/function/", "tests/language/prefix/", "tests/language/top_level/"]
+of = ["tests/language/function/type_alias3_test.dart", "tests/language/prefix/", "tests/language/top_level/"]
 what = "a library imported by the function, prefix and top_level tests"
 
 ["tests/language/library12.dart"]

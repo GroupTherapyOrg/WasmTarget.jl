@@ -144,3 +144,9 @@
 1.2	0.4	dart_closure
 0.9	0.1	dart_exception
 0.9	0.3	dart_generic
+7.4	8.6	dart_operator
+1.4	0.5	dart_string
+1.2	0.2	dart_call
+1.2	0.3	dart_function
+0.8	0.2	dart_parameter
+1.0	0.3	dart_constructor

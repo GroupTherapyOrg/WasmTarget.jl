@@ -1961,6 +1961,72 @@ function removals_negatives_missed()::Vector{String}
     return out
 end
 
+# ---- L227, its second half: a dart record is lowered only by name (A51E4, A53E2; dev/CHARTER.md C10) --
+# test/src/dart_tests.jl's records: each case's kind, the last element of its one-line record
+const DART_RECORDS = "test/src/dart_tests.jl"
+dart_record_kinds(text::AbstractString)::Dict{String,Symbol} =
+    Dict(String(m[1]) => Symbol(m[2]) for m in eachmatch(r"^\s*\"(dart_[^\"]+)\" => \(.*, :(compiled|rejects|outside|wt_bug)\),\s*$"m, text))
+
+# the records a message does not name that the change lowers: a case recorded :wt_bug that was not (a known
+# WT bug the landing then admits), or a :compiled record turned to any other kind (a port losing ground); each
+# named by a line `Lowers-record: <case> — <reason>`. A record raised, or a new case recorded otherwise, needs
+# no line.
+function unnamed_lowerings(msg::AbstractString, base::AbstractDict{String,Symbol}, head::AbstractDict{String,Symbol})::Vector{String}
+    local named = Set{String}(m[1] for m in eachmatch(r"^Lowers-record: (\S+) (?:—|--) \S.*$"m, msg))
+    local out = String[]
+    for k in sort!(collect(keys(head)))
+        local was, now = get(base, k, nothing), head[k]
+        ((now === :wt_bug && was !== :wt_bug) || (was === :compiled && now !== :compiled)) && !(k in named) && push!(out, k)
+    end
+    return out
+end
+
+# the lowerings of the commits from `base` (its merge base with HEAD) to HEAD in the repository at `root`
+# that their messages do not name, a sentence each
+function lowerings_unnamed(root::AbstractString, base::AbstractString)::Vector{String}
+    local git(args...) = readchomp(`git -C $root $args`)
+    success(pipeline(`git -C $root rev-parse --verify -q $base^\{commit\}`; stdout = devnull, stderr = devnull)) ||
+        return ["the change's base $base names no commit: its records cannot be read (CHECK_BASE)"]
+    local mb = git("merge-base", base, "HEAD")
+    local at(rev) = success(pipeline(`git -C $root cat-file -e $rev:$DART_RECORDS`; stderr = devnull)) ?
+        dart_record_kinds(git("show", "$rev:$DART_RECORDS")) : Dict{String,Symbol}()
+    return ["the change lowers the record of $k and its message does not name it: add `Lowers-record: $k — <reason>`"
+            for k in unnamed_lowerings(git("log", "--format=%B", "$mb..HEAD"), at(mb), at("HEAD"))]
+end
+
+# L227's negative test of lowerings: planted records and messages, and a scratch repository, answer as stated
+function lowerings_negatives_missed()::Vector{String}
+    local out = String[]
+    local b = Dict("dart_a/x" => :compiled, "dart_a/y" => :rejects, "dart_a/z" => :wt_bug)
+    count(!, [isempty(unnamed_lowerings("", b, b)),                                                     # nothing changed
+              unnamed_lowerings("", b, merge(b, Dict("dart_a/y" => :wt_bug))) == ["dart_a/y"],          # :wt_bug added
+              unnamed_lowerings("", b, merge(b, Dict("dart_a/n" => :wt_bug))) == ["dart_a/n"],          # a new case as :wt_bug
+              unnamed_lowerings("", b, merge(b, Dict("dart_a/x" => :rejects))) == ["dart_a/x"],         # :compiled lowered
+              isempty(unnamed_lowerings("", b, merge(b, Dict("dart_a/y" => :compiled, "dart_a/z" => :rejects)))),   # raised
+              isempty(unnamed_lowerings("", b, merge(b, Dict("dart_a/n" => :rejects)))),                # a new case, no bug
+              isempty(unnamed_lowerings("x\nLowers-record: dart_a/x — the trim verifier now rejects it\n", b, merge(b, Dict("dart_a/x" => :outside)))),
+              unnamed_lowerings("Lowers-record: dart_a/x — \n", b, merge(b, Dict("dart_a/x" => :rejects))) == ["dart_a/x"],
+              unnamed_lowerings("Lowers-record: dart_a/y — another case\n", b, merge(b, Dict("dart_a/x" => :wt_bug))) == ["dart_a/x"],
+              dart_record_kinds("    \"dart_a/x\" => ((1, (2, 3)), :compiled),\n    \"dart_a/y\" => (Bool[1, 0], :wt_bug),\n") ==
+                  Dict("dart_a/x" => :compiled, "dart_a/y" => :wt_bug)]) == 0 ||
+        push!(out, "negative missed: a planted record's lowering")
+    # a scratch repository: a record lowered with no line, then named
+    mktempdir() do t
+        local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
+        g("init", "-q"); mkpath(joinpath(t, "test", "src"))
+        local f = joinpath(t, DART_RECORDS)
+        write(f, "const DART_CASES = Dict(\n    \"dart_a/x\" => (1, :compiled),\n)\n"); g("add", "test"); g("commit", "-qm", "c0")
+        local c0 = readchomp(`git -C $t rev-parse HEAD`)
+        write(f, "const DART_CASES = Dict(\n    \"dart_a/x\" => (1, :wt_bug),\n)\n"); g("commit", "-qam", "lower")
+        length(lowerings_unnamed(t, c0)) == 1 || push!(out, "negative missed: a record lowered, unnamed")
+        g("commit", "-q", "--amend", "-m", "lower\n\nLowers-record: dart_a/x — an Internal since the class info changed")
+        isempty(lowerings_unnamed(t, c0)) || push!(out, "negative missed: the same lowering, named")
+        isempty(lowerings_unnamed(t, "HEAD")) || push!(out, "negative missed: a change with no lowering")
+        length(lowerings_unnamed(t, "nosuchref")) == 1 || push!(out, "negative missed: a base that names no commit")
+    end
+    return out
+end
+
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
@@ -2303,9 +2369,10 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34). Behavior, run here: seven planted messages and a scratch repository answer as stated (dev/CHARTER.md C10)",
+    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every :compiled record it turns to another kind, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line). Behavior, run here: seven planted messages and a scratch repository for removals, ten planted records and messages and a scratch repository for lowerings, answer as stated (dev/CHARTER.md C10)",
         () -> begin
-            local v = vcat(removals_unnamed(ROOT, get(ENV, "CHECK_BASE", "origin/wt2")), removals_negatives_missed())
+            local base = get(ENV, "CHECK_BASE", "origin/wt2")
+            local v = vcat(removals_unnamed(ROOT, base), removals_negatives_missed(), lowerings_unnamed(ROOT, base), lowerings_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),

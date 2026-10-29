@@ -2,16 +2,22 @@
 # D41): every case of test/smoke_corpus.jl's `dart_*` groups. Native Julia computes the answer recorded
 # here (D3, never dart's value): one value, or the facts the dart test asserts as a tuple or a vector, each
 # fact its own element so a wrong one names itself. Each case's compile is judged by a property, never by a
-# snapshot of where it stops today: it compiles, or it rejects located (any Rejection but Internal, which is
-# WT's own bug; a raw exception fails). A case recorded :compiled must keep compiling, the ratchet that a
+# snapshot of where it stops today: it compiles, or it rejects located (Unported, Unquarantined or
+# OutsideSubset; InvalidModule and Internal are WT's own bugs, and a raw exception fails). A case recorded :compiled must keep compiling, the ratchet that a
 # port never loses ground; a case recorded :rejects may stop anywhere, so one lane's progress never turns
-# another lane's landing red (the snapshot form did, 2026-10-28, the loop's oscillation). The ratchet grows
+# another lane's landing red (the snapshot form did, 2026-10-28, the loop's oscillation), though it rejects at a
+# definition not yet written, Unported or Unquarantined, located: it names its compile and the definition it
+# reached stands in the pin table, where it points never pinned (A51E1); an InvalidModule or Internal there is
+# WT's defect and fails. The ratchet grows
 # when the corpus owner records a newly compiling case. A case whose compile gives a module runs it (the
 # differential, test/runner.jl): both modules, codegen's and wasm-opt's, each fact of the answer === native
 # Julia's, computed afresh; a module that answers otherwise is WT's bug, whatever the case's record. A case
-# recorded :wt_bug is a known WT bug (it rejects as Internal, or its module answers otherwise than native,
-# the difference named beside its record), listed so the landing stays green while its owner fixes it; the
-# list only shrinks. Native Julia's answer does not depend on
+# recorded :wt_bug is a known WT bug, a compile that rejects as Internal or InvalidModule, listed so the landing
+# stays green while its owner fixes it, and it must stay one (A51E4): once fixed it fails until re-recorded; the
+# list only shrinks, and grows only by a `Lowers-record:` line (L227). A :wt_bug never covers a module's
+# answer: a module that answers otherwise than native always fails (A53E2, D9's why). A case recorded :outside stands outside the strict subset by Julia's verifier (D32), and
+# must keep rejecting as OutsideSubset. A failing case prints its outcome, the rejection's own text among it
+# (A51E9). Native Julia's answer does not depend on
 # WasmTarget's code, so it runs for each case whose group text or record the change adds or edits against
 # CHECK_BASE (dev/check.sh's base, origin/wt2 by default; HEAD~1 under dev/ship.sh), proving a new or edited
 # answer native when it is written. A base that holds no corpus runs every native answer, and so does the
@@ -19,8 +25,9 @@
 # other groups' answers while its group text alone differs, and the whole run proves them all.
 #
 # Under WT_LANDING_CORE=1 (dev/check.sh sets it) the landing compiles a fixed core, the first case of each
-# group plus every case the change adds or edits, and runs no module, so the landing's cost does not grow with
-# the port; the whole corpus, every module it compiles run in node, wasm-opt's beside codegen's, goes beside
+# group, proves the native answer of every case the change adds or edits without compiling it, and runs no
+# module, so the landing's cost is fixed whatever a commit adds (the oscillation's rule 2: a batch of 220
+# ported cases compiled in the landing put its shard at 121 s); the whole corpus, every module it compiles run in node, wasm-opt's beside codegen's, goes beside
 # the landings on wt2's head (without the variable, dev/corpus.sh), its red the next landing's first item.
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
@@ -706,12 +713,238 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_generic/type_parameter" => ((true, true, true, false, true, false), :rejects),
     "dart_generic/type_parameter_literal" => (true, :compiled),
     "dart_generic/typedef" => (((true, true, true, true), (true, true, true, true, true), (true, true, true, true, true)), :rejects),
+    # tests/language/operator/
+    "dart_operator/and_operation_on_non_integer_operand" => ((true, 1), :rejects),
+    "dart_operator/arithmetic_canonicalization" => ((Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], true, false), :rejects),
+    "dart_operator/arithmetic_int64" => ((1234567890123456789, -1234567890123456789, 9223372036854775807, -9223372036854775808), :rejects),
+    "dart_operator/arithmetic_smi_overflow" => ([1073741824, 4611686018427387904, 1073741824, 4611686018427387904, 1073741824, 4611686018427387904, 1073741824, 4611686018427387904, 1073741824, 4611686018427387904, 1073741824, 4611686018427387904, 1073741824, 4611686018427387904, 1073741824, 4611686018427387904, 1073741824, 4611686018427387904, 1073741824, 4611686018427387904], :rejects),
+    "dart_operator/arithmetic" => (((26, 18, 88, 5, 5.5, 2.0, 2, 2), [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728, 268435456, 536870912, 1073741824, 2147483648, 4294967296, 8589934592, 17179869184, 34359738368, 68719476736, 137438953472, 274877906944, 549755813888, 1099511627776, 2199023255552, 4398046511104, 8796093022208, 17592186044416, 35184372088832, 70368744177664, 140737488355328, 281474976710656, 562949953421312, 1125899906842624, 2251799813685248, 4503599627370496, 9007199254740992, 18014398509481984, 36028797018963968, 72057594037927936, 144115188075855872, 288230376151711744, 576460752303423488, 1152921504606846976, 2305843009213693952, 4611686018427387904, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], (26.0, 18.0, 88.0, 5.0, 5.5, 2.0, 2.0), (26.0, 18.0, 88.0, 5.0, 5.5, 2.0, 2.0), (26.0, 18.0, 88.0, 5.0, 5.5, 2.0, 2.0), (2, -2, 123456789012345, -123456789012345, -123456789012345), (false, true, true, false, true, true, true, false, true, false, false, true, false, true), (2, 123456789012345, false, 2.0), (1, 1, 1, 0, -2, 3), (0, -1, -3, -1, 2), (0, 0, -2, true), (3, -3, 2, -2, 0, 0, 2, -2, 1, 0), (1234567890123, -1234567890123, -1073741825, 1073741824, -1.0), (2.0, true, true), (12, -12, 9007199254740991, 1.2, false, true, true, false, true, true, true, true), (false, true, true, true), (1, 12, 1.0, 12.0, false, true), (false, true, false, true), (1073741824, 1073741824), (true, true, true, true), (2.0, -1), (false, true)), :rejects),
+    "dart_operator/bit_operations" => (((3, 7, 4, 25, 400, -25, -101, 0, 0, 1073741824, 4611686018427387904, 0, -1, 0, -1), (1152921504606846977, 1, 1, 1152939161217400833, 1152939161217400849, 1152939161217400849, 1080863910568919040, 49, 1080863910568919089, 1080863910568919089, 15, 15, 1030792151040, 240, 64424509440), (true, false, false, false, true, true, true, false, false, true, true, false), (3, 1, 0, -1, -1, -1), (4294967295, 4294967295, 8589934590, 9223372034707292160, -9223372036854775808, 0, 0), (false, false, false, false, 1, 96), (Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], ((4, 7, 4, true, 1, 1, 16), (0, 5, 1, true, 9, 9, 0), (2320, 16212, 7488, true, 32040, 32040, 0)), (0, -1)), :rejects),
+    "dart_operator/bit_shift" => (((0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)), :rejects),
+    "dart_operator/comparison" => (((true, false, false, true, true), (true, false, true, true, false, true, false), NTuple{8, Bool}[(1, 0, 1, 0, 0, 1, 0, 1), (1, 0, 1, 0, 0, 1, 0, 1), (1, 0, 1, 0, 0, 1, 0, 1), (0, 1, 0, 1, 1, 1, 0, 0), (0, 1, 0, 1, 1, 1, 0, 0), (0, 1, 0, 1, 1, 1, 0, 0), (0, 1, 0, 1, 0, 0, 1, 1), (0, 1, 0, 1, 0, 0, 1, 1), (0, 1, 0, 1, 0, 0, 1, 1)], NTuple{8, Bool}[(1, 0, 1, 0, 0, 1, 0, 1), (1, 0, 1, 0, 0, 1, 0, 1), (1, 0, 1, 0, 0, 1, 0, 1), (0, 1, 0, 1, 1, 1, 0, 0), (0, 1, 0, 1, 1, 1, 0, 0), (0, 1, 0, 1, 1, 1, 0, 0), (0, 1, 0, 1, 0, 0, 1, 1), (0, 1, 0, 1, 0, 0, 1, 1), (0, 1, 0, 1, 0, 0, 1, 1)], (true, false, true, true, true), (false, true, true, false, true, true, true, true, true, true, true, true, true, true, false, false, true, true, true, true, false, false, true), (false, false, false, false, false)), :rejects),
+    "dart_operator/compound_assignment" => (((0, 1, 100, 2, 100, 3, 101, 4, 5, 111, 2, 10), [0, 1, 2, 0, 1, 3], [0, 1, 2, 0, 1, 3], [0, 1, 2, 0, 1, 3]), :rejects),
+    "dart_operator/cond_expr" => (((-1, -1, 0), (1, 0, 1)), :rejects),
+    "dart_operator/div_by_zero" => ((true, true), :rejects),
+    "dart_operator/div_with_power_of_two" => ([134217730, -134217730, 67108865, -67108865, 33554432, -33554432, 1, -1, -134217730, 134217730, -67108865, 67108865, -33554432, 33554432, -1, 1, 10, -10, 5, -5, 2, -2, 0, 0, -10, 10, -5, 5, -2, 2, 0, 0, 137438953497, -137438953497, 1, -1, -137438953497, 137438953497, -1, 1, 72057731476881408, -72057731476881408, 524289, -524289, -72057731476881408, 72057731476881408, -524289, 524289], :rejects),
+    "dart_operator/div_with_power_of_two2" => (([134217730, -134217730, 67108865, -67108865, 33554432, -33554432, 1, -1, -134217730, 134217730, -67108865, 67108865, -33554432, 33554432, -1, 1, 10, -10, 5, -5, 2, -2, 0, 0, -10, 10, -5, 5, -2, 2, 0, 0, 137438953497, -137438953497, 1, -1, -137438953497, 137438953497, -1, 1, 72057731476881408, -72057731476881408, 524289, -524289, -72057731476881408, 72057731476881408, -524289, 524289], true), :rejects),
+    "dart_operator/equality_covariant" => ((0, 0, -2, 0, 0, 0, 0, 0, 0, 0, -1, 0, -1), :rejects),
+    "dart_operator/equality" => ((0, 1, 1, 1, 1, 0, 0, 1, 1, 0, -2, -2, 0, -2, 1, (true, false, false, true, true, false, false, true), (true, true, false, true)), :compiled),
+    "dart_operator/incr_op" => ([4, 4, 5, 3, 3, 2, 5, 3, 100, 101, 102, 102, 103, 55, 56, 57, 57, 56, 55, 56, 57, 57, 56, 1, 2, 3, 4, 3, 3, 2, 1], :rejects),
+    "dart_operator/index_evaluation_order" => ([-1, -2, -3, 42, 100, -4, 101, 37, -5, 42, 102], :rejects),
+    "dart_operator/index" => ((10, Bool[1, 1, 1, 1, 1, 1, 1, 1], 515, 515), :rejects),
+    "dart_operator/integer_division_by_zero" => (((-1, -1, 3, 3, 3, 3, 2, 2, 3, 2, 2, 3, 3, 3, 3, 3), true, 8.988465674311579e307, -8.988465674311579e307, 3.6893488147419103e19, -3.6893488147419103e19), :rejects),
+    "dart_operator/left_shift" => ([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728, 268435456, 536870912, 1073741824, 2147483648, 4294967296, 8589934592, 17179869184, 34359738368, 68719476736, 137438953472, 274877906944, 549755813888, 1099511627776, 2199023255552, 4398046511104, 8796093022208, 17592186044416, 35184372088832, 70368744177664, 140737488355328, 281474976710656, 562949953421312, 1125899906842624, 2251799813685248, 4503599627370496, 9007199254740992, 18014398509481984, 36028797018963968, 72057594037927936, 144115188075855872, 288230376151711744, 576460752303423488, 1152921504606846976, 2305843009213693952, 4611686018427387904, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], :rejects),
+    "dart_operator/logical_expression" => (((Int64[], 1, 2), [1, 2, 3], (Int64[], 1, 2), [1, 2, 3]), :rejects),
+    "dart_operator/logical_expression2" => (1, :rejects),
+    "dart_operator/logical_expression3" => (false, :rejects),
+    "dart_operator/logical_expression4" => ((true, false), :rejects),
+    "dart_operator/logical_expression5" => ((true, false, true), :rejects),
+    "dart_operator/mint_arithmetic" => ((true, false, 4294967295, 1234, 4294967297, -1073741824, 1073741824, 1073741823, 0, true, true, 4294967295, -1, -1, 2.0), :compiled),
+    "dart_operator/modulo" => (([226, -30, 224, -30, -3, -3, 1, 0, -1, 227, -29, 225, -29, -2, 0, 4, 0, -1, 228, -28, 226, -28, -2, 2, 6, 0, -1, 229, -27, 227, -27, -2, 4, 8, 0, -1, 230, -26, 228, -26, -2, 6, 10, 0, -1, 231, -25, 229, -25, -2, 8, 12, 0, -1, 232, -24, 230, -24, -2, 10, 2, 0, -1, 233, -23, 231, -23, -2, 12, 5, 0, -1, 234, -22, 232, -22, -2, 14, 7, 0, -1, 235, -21, 233, -21, -2, 16, 9, 0, -1, 236, -20, 234, -20, -2, -2, 1, 0, -1, 237, -19, 235, -19, -1, 1, 4, 0, -1, 238, -18, 236, -18, -1, 3, 6, 0, -1, 239, -17, 237, -17, -1, 5, 8, 0, -1, 240, -16, 238, -16, -1, 7, 10, 0, -1, 241, -15, 239, -15, -1, 9, 12, 0, -1, 242, -14, 240, -14, -1, 11, 14, 0, -1, 243, -13, 241, -13, -1, 13, 16, 0, -1, 244, -12, 242, -12, -1, 15, 6, 0, -1, 245, -11, 243, -11, -1, 17, 9, 0, -1, 246, -10, 244, -10, -1, -1, 1, 0, -1, 247, -9, 245, -9, 0, 2, 4, 0, -1, 248, -8, 246, -8, 0, 4, 6, 0, -1, 249, -7, 247, -7, 0, 6, 8, 0, -1, 250, -6, 248, -6, 0, 8, 10, 0, -1, 251, -5, 249, -5, 0, 10, 12, 0, -1, 252, -4, 250, -4, 0, 12, 14, 0, -1, 253, -3, 251, -3, 0, 14, 16, 0, -1, 254, -2, 252, -2, 0, 16, 18, 0, -1, 255, -1, 253, -1, 0, 18, 20, 0, -1, 0, 0, 0, 0, 0, 0, 0, 1, -255, 1, -253, 1, 2, 2, 0, 1, 2, -254, 2, -252, 2, 4, 4, 0, 1, 3, -253, 3, -251, 3, 6, 6, 0, 1, 4, -252, 4, -250, 4, 8, 8, 0, 1, 5, -251, 5, -249, 5, 10, 10, 0, 1, 6, -250, 6, -248, 6, 12, 12, 0, 1, 7, -249, 7, -247, 7, 14, 14, 0, 1, 8, -248, 8, -246, 8, 16, 16, 0, 1, 9, -247, 9, -245, 9, 18, 18, 0, 1, 10, -246, 10, -244, 0, 1, 11, 0, 1, 11, -245, 11, -243, 1, 3, 13, 0, 1, 12, -244, 12, -242, 2, 5, 4, 0, 1, 13, -243, 13, -241, 3, 7, 6, 0, 1, 14, -242, 14, -240, 4, 9, 8, 0, 1, 15, -241, 15, -239, 5, 11, 10, 0, 1, 16, -240, 16, -238, 6, 13, 12, 0, 1, 17, -239, 17, -237, 7, 15, 14, 0, 1, 18, -238, 18, -236, 8, 17, 16, 0, 1, 19, -237, 19, -235, 9, 19, 18, 0, 1, 20, -236, 20, -234, 0, 2, 11, 0, 1, 21, -235, 21, -233, 1, 4, 13, 0, 1, 22, -234, 22, -232, 2, 6, 15, 0, 1, 23, -233, 23, -231, 3, 8, 17, 0, 1, 24, -232, 24, -230, 4, 10, 8, 0, 1, 25, -231, 25, -229, 5, 12, 10, 0, 1, 26, -230, 26, -228, 6, 14, 12, 0, 1, 27, -229, 27, -227, 7, 16, 14, 0, 1, 28, -228, 28, -226, 8, 18, 16, 0, 1, 29, -227, 29, -225, 9, 20, 18, 0, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], true, true), :rejects),
+    "dart_operator/mul_recipr" => ((true, [4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0], true), :rejects),
+    "dart_operator/multi_assign" => (((11, 11, 11), (55, 55, 55)), :compiled),
+    "dart_operator/negate_and_method_negate" => ((42, 87), :compiled),
+    "dart_operator/number_operator_context" => (((2, 0, 1, 0, 0, 1, 1), 0, (2.0, 0.0, 1.0, 0.0, 0.0, 2.1, 2.1, 0.10000000000000009, 0.10000000000000009, 1.0, 1.0), 0.0, (true, true, true, true, true)), :rejects),
+    "dart_operator/number_operator_typing" => (((2, 0, 1, 0, 0), (2.0, 0.0, 1.0, 0.0, 0.0), (2.0, 0.0, 1.0, 0.0, 0.0), (2.0, 0.0, 1.0, 0.0, 0.0), (true, true, true, true, true, true, true, true), (1, 1.0, true, true, true), (2, 2, 2, 2.0, 2.0, true, 2.0, 2.0, true, true)), :rejects),
+    "dart_operator/operations_on_non_num_operand" => (((true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, 1), (true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, 1), (true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, 1)), :rejects),
+    "dart_operator/operator" => (((3, -1, 0.5, 0, 2, 1, true, true, true, true, true, 3, 3, 0, 4, 0, -1), 3, 6, 6, (42, 42), (42, 42), 49, (66, 17), (86, 20)), :rejects),
+    "dart_operator/operator_triple_shift" => (("(3:1>>>2)", "4", "(6:4>>>5)", ("(11:7+(10:8>>>9))", "(16:(14:12>>>13)+15)", "(23:(22:17+(20:18>>>19))+21)", "(28:(26:24>>>25)&27)", "(33:29&(32:30>>>31))", "(40:(38:34&(37:35>>>36))&39)", "(45:(43:41>>>42)>>44)", "(50:(48:46>>47)>>>49)", "(55:(53:51>>>52)<<54)", "(60:(58:56<<57)>>>59)", "(67:(65:(63:61<<62)>>>64)>>66)"), true, 5, true), :rejects),
+    "dart_operator/operator2" => ((10, 30, true, 23, 123), :rejects),
+    "dart_operator/operator3" => ((true, 1), :compiled),
+    "dart_operator/operator4" => (499, :rejects),
+    "dart_operator/operator5" => ((1, true, 499, "foo", 42), :rejects),
+    "dart_operator/operator6" => ((-2, -2), :compiled),
+    "dart_operator/positive_bit_operations" => (((2147483648, 2147483649, 2147483648, 4294967295, 2147483648, 2147483648, 2147483648, 2147483648, 2147483648, 4294967295, 4294967295, 4026531840, 2147483648, 4294967280, 2147483647, 4294967292), (2147483648, 2147483649, 4294967295, 2147483648, 2147483648, 4294967295, 4026531840, 2147483648, 4294967280, 2147483647, 4294967292), (2147483648, 2147483649, 2147483648, 2147483648, 2147483648, 4294967295, 4294967295, 2147483648, 2147483647, 4294967292), (2147483648, 2147483648, 2147483648, 2147483648)), :rejects),
+    "dart_operator/precedence" => (((true, true, (false, 4), (false, 5)), [7, 4, 2, 5, 8, 4, -1, 3, 7, 4, -2, 5, 8, 4, 1, 3], [6, 4, 1, 5, 9, 4, 0, 3, 6, 4, -1, 5, 9, 4, 0, 3], true, [3, 2, 4, 2, 5, 2, 4, 2, 3], [7, 4, 2, 5, 8, 4, -1, 3, 7, 4, -2, 5, 8, 4, 1, 3], [6, 4, 1, 5, 9, 4, 0, 3, 6, 4, -1, 5, 9, 4, 0, 3], [12.0, 4.0, 1.0, 5.0, 12.0, 4.0, 0.75, 3.0, 12.0, 4.0, 1.0, 5.0, 12.0, 4.0, 2.0, 3.0], [9.0, 4.0, 1.0, 5.0, 15.0, 4.0, 1.0, 3.0, 9.0, 4.0, 0.75, 5.0, 20.0, 4.0, 1.0, 3.0]), :rejects),
+    "dart_operator/round" => ((0, 0, 9007199254740991, -9007199254740991), :rejects),
+    "dart_operator/smi_type" => (((false, false, false, false), Bool[1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0]), :rejects),
+    "dart_operator/ternary" => ((-4, 5), :compiled),
+    "dart_operator/truncdiv" => (([6, -1, 7, -1, 8, -1, 0, -1, 1, -1, 2, -1, 3, -1, 4, -1, 5, -1, 6, -1, 7, -1, 8, -1, 0, -1, 1, -1, 2, -1, 3, -1, 4, -1, 5, -1, 6, -1, 7, -1, 8, -1, 0, -1, 1, -1, 2, -1, 3, -1, 4, -1, 5, -1, 6, -1, 7, -1, 8, -1, 0, 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0, 1, 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0, 1, 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0, 1, 1, 1, 2, 1], true), :rejects),
+    "dart_operator/truncdiv_uint32" => (4294967295, :rejects),
+    "dart_operator/truncdiv_zero" => ((true, true), :rejects),
+    "dart_operator/unary" => ((true, 9), :compiled),
+    "dart_operator/unary2" => (1, :compiled),
+    "dart_operator/unsigned_right_shift" => ((true, true, true, true, true, 1, true, ("((~*)>>>(~*))", "((*+(*>>>*))+*)", "((*/(*>>>*))/*)", "(((*>>*)>>>*)>>*)", "((*&(*>>>*))&*)", "((*|(*>>>*))|*)", "((*^(*>>>*))^*)", "(*<(*>>>*))", "((*>>>*)<*)"), "((*>>>*)>>>*)"), :rejects),
+    # tests/language/string/
+    "dart_string/adjacent_const_string_literals" => (Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], :rejects),
+    "dart_string/adjacent_string_literals" => ((Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1]), :rejects),
+    "dart_string/bad_raw_string_runtime" => ((13, 13), :rejects),
+    "dart_string/char_escape" => ((([1, 1, 1, 1, 1, 1, 1, 1], [0, 0, 0, 0, 0, 0, 0, 0], Bool[1, 1, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1], [85, 85, 85, 85, 85, 85, 85], Bool[1, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1], [127, 127, 127, 127, 127, 127, 127], Bool[1, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1], [128, 194, 194, 194, 194, 194, 194], Bool[0, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1], [170, 194, 194, 194, 194, 194, 194], Bool[0, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1], [254, 195, 195, 195, 195, 195, 195], Bool[0, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1], [255, 195, 195, 195, 195, 195, 195], Bool[0, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1], [225, 225, 225, 225], Bool[1, 1, 1, 1]), ([1, 1, 1, 1], [229, 229, 229, 229], Bool[1, 1, 1, 1]), ([1, 1, 1, 1], [231, 231, 231, 231], Bool[1, 1, 1, 1]), ([1, 1, 1, 1], [232, 232, 232, 232], Bool[1, 1, 1, 1]), ([1, 1, 1, 1], [234, 234, 234, 234], Bool[1, 1, 1, 1]), ([1, 1, 1, 1], [239, 239, 239, 239], Bool[1, 1, 1, 1]), ([1, 1, 1, 1], [239, 239, 239, 239], Bool[1, 1, 1, 1]), ([1, 1], [240, 240], Bool[1, 1]), ([1, 1], [240, 240], Bool[1, 1]), ([1], [244], Bool[1]), ([1], [244], Bool[1]), ([1, 1, 1, 1, 1, 1, 1, 1, 1], [8, 8, 8, 8, 8, 8, 8, 8, 8], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1, 1, 1], [9, 9, 9, 9, 9, 9, 9, 9, 9], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1, 1, 1], [10, 10, 10, 10, 10, 10, 10, 10, 10], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1, 1, 1], [11, 11, 11, 11, 11, 11, 11, 11, 11], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1, 1, 1], [12, 12, 12, 12, 12, 12, 12, 12, 12], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1]), ([1, 1, 1, 1, 1, 1, 1, 1, 1], [13, 13, 13, 13, 13, 13, 13, 13, 13], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1]), Bool[1, 1, 1, 1, 1, 1], Bool[0, 0]), :rejects),
+    "dart_string/charcode" => ((Bool[1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0], Bool[0, 0, 1, 1], -1, -1), :rejects),
+    "dart_string/const_interpolation_constant_string_interpolation" => ((Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], true), :rejects),
+    "dart_string/const_interpolation2" => ((Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1]), :rejects),
+    "dart_string/escapes" => (((15, 1, 1, 237, false), (15, 12, true, 11, true, 8, true), (15, 13, true, 10, true, 9, true), (7, 255, true), (7, 1, true), false), :rejects),
+    "dart_string/interpolate_null" => ((true, -2), :rejects),
+    "dart_string/interpolate" => ((true, true, true, true, true, Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), :outside),
+    "dart_string/interpolate2" => ((true, true, true, true, true, true, true, true), :rejects),
+    "dart_string/interpolation_and_buffer" => ((true, 2, true, 1), :rejects),
+    "dart_string/interpolation_newline" => ((true, true, true), :outside),
+    "dart_string/interpolation_runtime" => ((Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1]), :outside),
+    "dart_string/interpolation" => ((Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1]), :outside),
+    "dart_string/interpolation7" => ((true, true), :rejects),
+    "dart_string/interpolation8" => (true, :rejects),
+    "dart_string/intrinsics" => ((11, 0, false, true), :rejects),
+    "dart_string/join" => ((true, true), :outside),
+    "dart_string/literals" => ((Bool[1, 1, 1, 1, 0], Bool[0, 0, 0, 1, 0], true), :outside),
+    "dart_string/multiline_newline" => (([4, 4, 4, 6, 6, 6, 4, 4, 4, 6, 6, 6], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), :rejects),
+    "dart_string/multiline_newline_runtime" => (([4, 4, 4, 6, 6, 6, 4, 4, 4, 6, 6, 6], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), :rejects),
+    "dart_string/multiline_newline_runtime_1" => ((([4, 4, 4, 6, 6, 6, 4, 4, 4, 6, 6, 6], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 1), :rejects),
+    "dart_string/multiline_newline_runtime_2" => ((([4, 4, 4, 6, 6, 6, 4, 4, 4, 6, 6, 6], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 2), :rejects),
+    "dart_string/multiline_newline_runtime_3" => ((([4, 4, 4, 6, 6, 6, 4, 4, 4, 6, 6, 6], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 3), :rejects),
+    "dart_string/multiline_newline_runtime_4" => ((([4, 4, 4, 6, 6, 6, 4, 4, 4, 6, 6, 6], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 1), :rejects),
+    "dart_string/multiline_newline_runtime_5" => ((([4, 4, 4, 6, 6, 6, 4, 4, 4, 6, 6, 6], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 2), :rejects),
+    "dart_string/multiline_newline_runtime_6" => ((([4, 4, 4, 6, 6, 6, 4, 4, 4, 6, 6, 6], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 3), :rejects),
+    "dart_string/multiline_strings" => (Bool[0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0], :rejects),
+    "dart_string/optimizations" => ((true, true, true, -1), :rejects),
+    "dart_string/raw_string" => (Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], :rejects),
+    "dart_string/runtime" => ((Bool[1, 1, 1, 1, 1, 1], [115, 116, 114, 105, 110, 103], true, true, 129), :outside),
+    "dart_string/split" => (3, :rejects),
+    "dart_string/string" => ((Bool[1, 1, 1, 1, 1, 1], [115, 116, 114, 105, 110, 103], true, true, 129), :outside),
+    "dart_string/supertype_checked" => ((-1, -1), :compiled),
+    "dart_string/unicode_bom_middle" => ((3, 3), :rejects),
+    "dart_string/unicode_hash" => ((true, true), :rejects),
+    # tests/language/call/
+    "dart_call/argument_inference" => ((true, false), :rejects),
+    "dart_call/call" => ((true, true, true, true, true, true, true, true, -1, -1, -1), :rejects),
+    "dart_call/closurization" => ((true, true, true, true, true, true, true, -1, -1, -1), :rejects),
+    "dart_call/dynamic_call_through_getter" => (4, :compiled),
+    "dart_call/evaluation_order" => ((true, true, true, true, true, true, true, true), :rejects),
+    "dart_call/function_apply" => (497, :compiled),
+    "dart_call/function" => ((true, true, true, -1), :rejects),
+    "dart_call/function2" => ((true, true), :rejects),
+    "dart_call/implicit_tearoff_assignment" => (((1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)), :compiled),
+    "dart_call/implicit_tearoff_exceptions" => ((0, 0, 0, 0, 0, -1, false), :rejects),
+    "dart_call/implicit_tearoff_local_assignment" => (((true, true, true, true), (true, true, true, true), -1, (true, true, true, true, true), (true, true, true, true)), :rejects),
+    "dart_call/implicit_tearoff" => ([1, 2, 2, 3, 3, 3, 3, 4, 5, 6, 7, 8, 9, 10, 11, 1, 12, 13, 3, -1, 3, 3], :rejects),
+    "dart_call/implicit_tearoff_type_variable" => ((1, 2, 3), :compiled),
+    "dart_call/method_as_cast_legacy" => ((-3, -3, -3, -3, -3, 0), :rejects),
+    "dart_call/method_as_cast" => ((-3, -3, -3, -3, -3, -3), :rejects),
+    "dart_call/method_function_typed_value" => ((true, true, true, true, true, true), :compiled),
+    "dart_call/method_implicit_invoke_instance_legacy" => (((true, true, true, true), (true, true, true, true), (true, true, true, true)), :compiled),
+    "dart_call/method_implicit_invoke_instance" => (((true, true, true, true), (true, true, true, true), (true, true, true, true)), :compiled),
+    "dart_call/method_implicit_invoke_local_legacy" => ((true, true, true, true, true, false), :compiled),
+    "dart_call/method_implicit_invoke_local_runtime_legacy" => ((true, true, true, true), :compiled),
+    "dart_call/method_implicit_invoke_local" => ((true, true), :compiled),
+    "dart_call/method_implicit_invoke_static" => (((true, true, true, true), (true, true, true, true), (true, true, true, true)), :compiled),
+    "dart_call/method_implicit_invoke_top_level" => ((true, true, true, true), :compiled),
+    "dart_call/method_implicit_tear_off" => (((true, true, true), (true, true), -1, true, (true, true)), :rejects),
+    "dart_call/method_is_check" => ((false, false, false, false, false, false), :compiled),
+    "dart_call/method_must_not_be_field" => ((-1, 1, 1, 1, 1), :compiled),
+    "dart_call/method_must_not_be_getter" => ((-1, -1, 1, 1, 1), :compiled),
+    "dart_call/operator" => ((42, 35, 28, 42, 42, 7, 14, true, true, true, false, false), :rejects),
+    "dart_call/property" => ((false, false, true), :compiled),
+    "dart_call/regress60643" => (((-1, -4, true), (-1, -4, true), (-1, -4, true)), :rejects),
+    "dart_call/through_getter" => (((true, true, true), (42, 42), (87, 87, 87, 87), (true, 87), (-1, -1, -1), true, (true, true, true, true, true)), :rejects),
+    "dart_call/through_null_getter" => ((-1, -1, -1, -1, -1, -1, -1), :rejects),
+    "dart_call/type_literal" => (1, :compiled),
+    "dart_call/with_no_such_method" => ((true, true, true), :rejects),
+    # tests/language/function/
+    "dart_function/apply_generic" => (([1, 2, 3, -1, -1, -1, -1, -1, -1, -1], [1, 2, 3, 4, -1, -1, -1, -1, -1, -1], [1, 2, 3, 4, 5, 6, 7, -1, -1, -1], [1, 2, 3, -1, -1, -1, -1, -1, -1, -1], [1, 2, 3, 4, -1, -1, -1, -1, -1, -1], [1, 2, 3, 4, 5, 6, 7, -1, -1, -1], [1, 2, 3, -1, -1, -1, -1, -1, -1, -1], [1, 2, 3, 4, -1, -1, -1, -1, -1, -1], [1, 2, 3, 4, 5, 6, 7, -1, -1, -1]), :rejects),
+    "dart_function/apply_generic2" => (([-1, 33, -1, 11, 22, -1], -1, [11, 22, 33, -1, -1], [-1, 33, -1, 11, 22], -1, [-1, 33, -1, 11, 22, -1], -1), :rejects),
+    "dart_function/argument" => (42, :compiled),
+    "dart_function/call_generic" => (((true, 1, 2, 3, -1, -1), (false, "Z1", 2, 4, -1, -1), (true, 7, 2, -1, -1, -1), (true, 8, 2, 3, -1, -1), (false, "A1", 2, 3, -1, -1), (true, 9, 2, 3, -1, -1), (true, 10, 2, 3, -1, -1), (false, "B1", 2, 3, -1, -1), (true, 15, -1, -1, -1, -1), (true, 16, 2, 3, 4, -1)), :rejects),
+    "dart_function/direct_invocation" => ((1, 2, 3), :compiled),
+    "dart_function/field" => (42, :compiled),
+    "dart_function/function" => ((6, (2, 0, 1), (2, 0, 1), (1, 2), (1, 2), 45, 45, (-2, -2), (10, 10, true), (10, 1), (42, 42), true, (1, 1, 1), 1, (10, 10, 11, 2, 12, 12)), :rejects),
+    "dart_function/getter" => ((42, 42), :compiled),
+    "dart_function/literals" => ([42, 42, 84, 84, 84, 84, 42, 42, 84, 84, 84, 84, 42, 42, 42, 42], :rejects),
+    "dart_function/literals2" => ((20, 20, 20, 7, 10, 20, (-1, -3), (-2, 2), true, false, (10, 100), (10, 101), true), :rejects),
+    "dart_function/local_function" => ((18, 145, 90, 320, 145, 5, (true, 300), true, 99, (2, true, true, true, true, true, 2, 3)), :rejects),
+    "dart_function/local2" => ((36, 9.0), :compiled),
+    "dart_function/local3" => ((true, true, 2), :rejects),
+    "dart_function/propagation" => ((true, false, true, false, 499), :compiled),
+    "dart_function/regress_45601" => ((42, true, false, false, true), :rejects),
+    "dart_function/syntax" => (([42, 87, 3, 42, 87, 3, 42, 87, 3, 42, 87, 3, 87, 3, 87, 3, 42, 87, 42, 87], [42, 87, 3, 42, 87, 3, 87, 3, 87, 3], Bool[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [42, 43, 44, 45, 46, 47, 48, 49], [42, 87, 43, 44], 87, 42, true), :rejects),
+    "dart_function/type_alias" => (((true, true, false, false, false, false), (true, true, false, false, false, true), (true, true, false, true, true, false), (true, true, false, false, true, false), (true, true, false, false, true, false), 3, -1, 99, true, false), :rejects),
+    "dart_function/type_alias10" => ((true, true), :rejects),
+    "dart_function/type_alias2" => (((false, false, true, false, false, false, false, false), (false, false, false, true, false, false, false, false), (false, false, true, false, false, false, false, false), (false, false, false, true, false, false, false, false), -1, -1), :rejects),
+    "dart_function/type_alias3" => (((false, true, false), (false, false, false)), :rejects),
+    "dart_function/type_alias4" => (((false, true, false), (false, false, true), (false, true, false), (false, false, true), false, -1), :rejects),
+    "dart_function/type_alias6" => ((false, true), :compiled),
+    "dart_function/type_alias8" => (true, :compiled),
+    "dart_function/type_call_getter" => (Bool[0, 0, 0, 0, 0, 0], :rejects),
+    "dart_function/type_call_getter2" => ([-1, -1, -1, -1, -1, -1], :rejects),
+    "dart_function/type_in_constant" => ((true, true, true), :compiled),
+    "dart_function/type_parameter_bound_object" => ((42, -1, -1), :rejects),
+    "dart_function/type_parameter" => ((true, false, true, true, 42, 42), :rejects),
+    "dart_function/type_parameter2" => ((true, false, true, true), :rejects),
+    "dart_function/type" => ((-1, 0), :rejects),
+    "dart_function/type_this_parameter" => (499, :compiled),
+    "dart_function/type2" => ((-1, 0), :rejects),
+    "dart_function/type3" => ((true, false), :rejects),
+    # tests/language/parameter/
+    "dart_parameter/default" => ([1, 2, 3, 4], :rejects),
+    "dart_parameter/initializer" => ((1, 7, 111, 5, 2, 1, (true, true, true), 1, ((true, true, true), true)), :compiled),
+    "dart_parameter/initializer2" => ((123, 123, 123, 123, 4, 4), :compiled),
+    "dart_parameter/initializer5" => ((12, 12), :compiled),
+    "dart_parameter/name_conflict" => ((true, true, true, true), :rejects),
+    "dart_parameter/named_clash" => ((true, true, -1, -1), :rejects),
+    "dart_parameter/named_count" => ((true, true, true, true, true, true, true, true, true), :rejects),
+    "dart_parameter/named_default_eq_runtime" => ((((30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14)), ((30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14))), :compiled),
+    "dart_parameter/named_default_eq" => ((((30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14)), ((30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14), (30, 70, 42, 28, 15, 21, 35, 14))), :compiled),
+    "dart_parameter/named_parameters" => (((0, 0, 10, 10, 20, 20, 20, 20), (1020, 1020, 1025, 1025), (102030, 102030, 102530, 102530, 102535, 102535), (10200040, 10200040), (100, 1000, 100, 1000, true)), :compiled),
+    "dart_parameter/named_passing_false" => (((true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true)), :compiled),
+    "dart_parameter/named_passing_falsy" => (((true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true, true, true, true, true, true), (true, true, true, true, true, true, true, true, true, true, true), (true, true, true, true, true, true, true, true, true, true, true)), :rejects),
+    "dart_parameter/named_passing_null" => (((true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true)), :compiled),
+    "dart_parameter/named_passing_zero" => (((true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true)), :compiled),
+    "dart_parameter/named_regression" => ((true, true), :compiled),
+    "dart_parameter/named_runtime" => (((0, 0, 10, 10, 20, 20, 20, 20), (1020, 1020, 1025, 1025), (102030, 102030, 102530, 102530, 102535, 102535), (10200040, 10200040), (100, 1000, 100, 1000, true)), :compiled),
+    "dart_parameter/named_with_conversions" => (((7, -1, -1, -1, -1, 7, true), (7, -1, -1, -1, -1, 7, true), (7, -1, -1, -1, -1, 7, true), (7, -1, -1, -1, -1, 7, true)), :rejects),
+    "dart_parameter/named_with_dollars" => (((true, true, true, true, true, true), (true, true, true, true, true), (true, true, true, true, true), (true, true, true, true), (true, true, true, true)), :rejects),
+    "dart_parameter/named_with_object_property_names" => (((true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true), (true, true, true, true, true, true)), :compiled),
+    "dart_parameter/optional_named_runtime" => (((0, 0, 10, 10, 20, 20, 20, 20), (1020, 1020, 1025, 1025), (102030, 102030, 102530, 102530, 102035, 102035, 102535, 102535, 102535, 102535), (10200040, 10200040, 10203540, 10203540, 10250045, 10250045, 10253545, 10253545)), :compiled),
+    "dart_parameter/optional_named" => (((0, 0, 10, 10, 20, 20, 20, 20), (1020, 1020, 1025, 1025), (102030, 102030, 102530, 102530, 102035, 102035, 102535, 102535, 102535, 102535), (10200040, 10200040, 10203540, 10203540, 10250045, 10250045, 10253545, 10253545)), :compiled),
+    "dart_parameter/param" => (2, :compiled),
+    "dart_parameter/parameter1" => (0, :compiled),
+    "dart_parameter/parameter2" => (((4, 100), [1, 4, 9, 16, 25, 36], (true, false, false), (true, false, false)), :rejects),
+    "dart_parameter/types_specialization" => (((true, true), (true, true)), :rejects),
+    # tests/language/constructor/
+    "dart_constructor/body" => ((4, 5, 6, 7), :compiled),
+    "dart_constructor/call_as_function" => ((1, 2), :compiled),
+    "dart_constructor/constructor11" => ([499, 42, 99], :rejects),
+    "dart_constructor/constructor12_strong" => ((true, 2), :compiled),
+    "dart_constructor/constructor12" => (((2, 3, 3, 1, 2, 3), (true, false, false, false, true), (2, 3, 3, 4), (0, 0), (1, 0, true, false, false, false)), :rejects),
+    "dart_constructor/constructor2" => (([1, 5, 2, 3, 4, 6, 7], ((true, true, true), (true, true))), :rejects),
+    "dart_constructor/constructor3" => (([4, 1, 2, 3, 5, 6], ((true, true), true)), :rejects),
+    "dart_constructor/constructor4" => (([1, 2, 3, 4], (2, 1)), :rejects),
+    "dart_constructor/constructor5" => (([10, 20, 100, 50, 101, 51, 11, 21], (100, 50, 10, 20)), :rejects),
+    "dart_constructor/constructor6" => (([10, 20, 1001, 1011, 1111, 1121, 11, 21, 1131], 1001, 10, 20), :rejects),
+    "dart_constructor/constructor7" => (([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)), :rejects),
+    "dart_constructor/constructor8" => (((true, true), (true, true)), :rejects),
+    "dart_constructor/constructor_contexts" => (((true, true, true, true), ((true, true), (true, true), true, true), (true, true, true, true), (true, true, (true, true), (true, true)), (true, true, true, true), ((true, true), (true, true), (true, true, true), (true, true, true))), :rejects),
+    "dart_constructor/constructor" => ((10, 2, 10, 22, true, 3), :compiled),
+    "dart_constructor/default_class_implicit_constructor" => ((true, true), :compiled),
+    "dart_constructor/default_factory3" => ((true, true), :compiled),
+    "dart_constructor/default_factory_library" => ((true, 1, 2), :rejects),
+    "dart_constructor/default_factory" => ((true, true), :compiled),
+    "dart_constructor/default" => ((499, true), :rejects),
+    "dart_constructor/evaluation_redirecting_constructor" => (1, :rejects),
+    "dart_constructor/example_constructor" => (([0, 1, 2, 3, 4, 5, 6], (true, true), (0, 4, 2, 1)), :rejects),
+    "dart_constructor/external_constructor" => ((-1, -1), :rejects),
+    "dart_constructor/forwarding_factory_constructor_default_values" => ((0, true), :rejects),
+    "dart_constructor/implicit_super_constructor_call" => ((true, true), :rejects),
+    "dart_constructor/implicit_super_constructor" => (42, :compiled),
+    "dart_constructor/inference_super_constructor_call" => ((84, -1), :rejects),
+    "dart_constructor/initializer" => (((true, true), (true, true, true), (3, 5, 10, 10), (3, 10), (true, true)), :compiled),
+    "dart_constructor/multiple_field_assignment_constructor" => ((-1, -1), :rejects),
+    "dart_constructor/name_clash" => (110, :rejects),
+    "dart_constructor/named_arguments" => ((((true, true), (true, true), (true, true), (true, true), (true, true)), true, true), :rejects),
+    "dart_constructor/named_constructor" => ([0, 0, 1, 1, 2, 2, 3, 3], :rejects),
+    "dart_constructor/non_const_constructor_without_body" => ([-1, -1, 1, 2, 2, 1], :rejects),
+    "dart_constructor/non_parameterized_factory" => ((true, true, true), :compiled),
+    "dart_constructor/non_parameterized_factory2" => ((true, true), :compiled),
+    "dart_constructor/patch_tear_off" => (1.0, :compiled),
+    "dart_constructor/redirect" => ((499, 848, 499, 499, 499, 499, 499, 499), :compiled),
+    "dart_constructor/return" => (11, :compiled),
+    "dart_constructor/tear_off" => ((((true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true)), ((true, true), (true, true), (true, true), (true, true), (true, true), (true, true), (true, true), (true, true)), ((true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true), (true, 1, true, true)), (true, true, true, true, true, true, true, true), (0, 0, 1, 0, 0, 1), (true, true, true, true, true, true)), :rejects),
+    "dart_constructor/unnamed_new" => (((1, 1, 1, 1, 1, 1, 1, 1, 1, 1), (0, 0, 1, 1, 0, 1), (1, 1, 1, 1, 1, 1, 1, 1, 1, 1), (0, 0, 1, 1, 0, 1), 1, 1, true, true), :compiled),
+    "dart_constructor/with_mixin" => ((1, 1, 17, 13), :rejects),
 )
 
 # a case's answer is native's: of its type, and isequal (a NaN equal to itself, -0.0 apart from 0.0)
 _dart_same(got, native) = typeof(got) == typeof(native) && isequal(got, native)
 
-# what a compile gives: its rejection (an OutsideSubset by its errors' kinds), or :compiled. The landing's
+# what a compile gives: its RejectionError (an OutsideSubset by its errors' kinds), or :compiled. The landing's
 # core stops at codegen, the compile this property judges: wasm-opt, an external tool, runs on every
 # case in dev/corpus.sh's whole run and in test/src/compile.jl, never once per case in the landing
 _dart_outcome(f, args) = try
@@ -721,34 +954,92 @@ _dart_outcome(f, args) = try
 catch e
     e isa WasmTarget.RejectionError || rethrow()
     local r = e.rejection
-    r isa WasmTarget.OutsideSubset || return r
+    r isa WasmTarget.OutsideSubset || return e
     return _outside((t.kind for t in r.errors)...)
 end
 
-# each compile's budget (D17): intent, a case compiles in well under a second (the core's slowest today 1.7 s,
-# an Unquarantined rejection), past a warm-up compile no case pays (a process's first compile spends ~30 s
-# compiling WasmTarget itself, the next new path ~20 s); band, past DART_COMPILE_BUDGET seconds it fails,
-# naming its case and seconds. A compile that never returns is cut by dev/check.sh's hard limit
-# (dev/corpus.sh's in the whole run), which names the case _dart_outcome wrote to WT_PROGRESS.
-const DART_COMPILE_BUDGET = 10.0
-WasmTarget.compile(x -> x + 1, (Int64,))
+# an outcome as a failure names it: the rejection's own text (A51E9)
+_dart_said(got)::String = got === :compiled ? "compiles" : got isa _Outside ? "rejects as OutsideSubset $(got[2])" :
+    first(sprint(showerror, got), 400)
 
-# the landing's fixed core: the first 5 cases of each group plus every case the change adds or edits
+# a WasmTarget defect: reject.jl's two kinds that say WT itself is wrong, the builder's or wasm-opt's refusal
+# (InvalidModule, D10's alarm) and a broken invariant (Internal)
+_dart_defect(got)::Bool = got isa WasmTarget.RejectionError &&
+    (got.rejection isa WasmTarget.InvalidModule || got.rejection isa WasmTarget.Internal)
+
+# why a rejection is not located, or "" (A51E1): it names its compile (`at`), and the definition it reached
+# stands in the pin table: an Unported's anchor parses by parse_anchor to a file of DART_FILES or LLVM_FILES,
+# an Unquarantined's row opens with a file of this repository or of DART_FILES. Where the anchor points is
+# never pinned: one lane's progress moves it (the snapshot that oscillated, 2026-10-28).
+const _DART_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
+function _dart_unlocated(e::WasmTarget.RejectionError)::String
+    isempty(e.at) && return "its rejection names no compile (an empty `at`)"
+    local r = e.rejection
+    if r isa WasmTarget.Unported
+        local a = WasmTarget.parse_anchor(r.anchor)
+        a === nothing && return "its Unported anchor $(repr(r.anchor)) is no anchor"
+        a.unit in (a.pin === :dart ? WasmTarget.DART_FILES : WasmTarget.LLVM_FILES) ||
+            return "its Unported anchor names $(a.unit), in no pin table"
+    elseif r isa WasmTarget.Unquarantined
+        local m = match(r"^([\w./-]+?)(?::\d+)?(?::|\s|$)", r.row)
+        local file = m === nothing ? "" : String(m[1])
+        (isfile(joinpath(_DART_ROOT, file)) || file in WasmTarget.DART_FILES) ||
+            return "its Unquarantined row $(repr(first(r.row, 120))) opens with no file of the repository or the pin"
+    else
+        return "a $(nameof(typeof(r))) is no rejection a :rejects case admits"
+    end
+    return ""
+end
+
+# each compile's budget (D17): intent, a case compiles in well under a second (the core's slowest today 1.7 s,
+# an Unquarantined rejection); band, past DART_COMPILE_BUDGET seconds it fails, naming its case and seconds. The
+# seconds are @timed's less its compile_time (A53E3): Julia compiling WasmTarget's own methods on a path's first
+# use (a process's first compile ~30 s, a new path's ~20 s) is no case's cost, and which case pays it depends
+# on the corpus's order. A compile that never returns is cut by dev/check.sh's hard limit (dev/corpus.sh's in
+# the whole run), which names the case _dart_outcome wrote to WT_PROGRESS.
+const DART_COMPILE_BUDGET = 10.0
+_dart_secs(t::NamedTuple)::Float64 = t.time - t.compile_time
+
+# why a case's outcome breaks its record's property, or "" when it holds
+function _dart_breaks(today::Symbol, got)::String
+    if today === :compiled
+        # a compiling case never loses ground
+        got === :compiled || return "recorded :compiled, now: $(_dart_said(got))"
+    elseif today === :outside
+        # Julia's verifier's verdict (D32): the program stands outside the strict subset, a fact of the
+        # program and of Julia, never of a lane's progress
+        got isa _Outside || return "recorded :outside, now: $(_dart_said(got))"
+    elseif today === :wt_bug
+        # still WT's defect (A51E4); a module never stands under :wt_bug (A53E2)
+        _dart_defect(got) || return "recorded :wt_bug, fixed: now $(_dart_said(got)); re-record it"
+    elseif today === :rejects
+        # compiles, outside the subset, or a rejection at a definition not yet written, located (A51E1)
+        (got === :compiled || got isa _Outside) && return ""
+        _dart_defect(got) && return "a WasmTarget defect: $(_dart_said(got))"
+        local why = _dart_unlocated(got)
+        isempty(why) || return "$why: $(_dart_said(got))"
+    else
+        return "no record kind $(repr(today))"
+    end
+    return ""
+end
+
+# the landing's fixed core: the first case of each group; a case the change adds or edits has its native answer
+# proven (DART_NATIVE_DUE) and its compile judged by dev/corpus.sh on the head
 const _DART_CORE_ONLY = get(ENV, "WT_LANDING_CORE", "") == "1"
-const DART_CORE = Set{String}(vcat([["$(g)/$(c[1])" for c in cs[1:min(1, end)]] for (g, cs) in DART_GROUPS]...,
-                                   collect(DART_NATIVE_DUE)))
+const DART_CORE = Set{String}("$(g)/$(c[1])" for (g, cs) in DART_GROUPS for c in cs[1:min(1, end)])
 
 # a compiled case's modules, each fact of its answer read by test/runner.jl against native Julia's, computed
 # afresh (a stale record is not the module's fault); a reader that does not compile fails the case, named. The
 # reading has the compile's budget, per case. The whole run reads both modules, codegen's and wasm-opt's.
 function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{String,String}}, key::String, f, args::Tuple)
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: reading $key's answer")
-    local secs = @elapsed try
+    local secs = _dart_secs(@timed try
         append!(runs, Main.WTRunner.answer_cases(key, WasmTarget.compile, f, args, f(args...)))
     catch e
         e isa WasmTarget.RejectionError || rethrow()
         push!(unread, key => "the reader of its answer does not compile: $(sprint(showerror, e))")
-    end
+    end)
     secs <= DART_COMPILE_BUDGET || push!(unread, key => "reading its answer took $(round(secs; digits = 1)) s, past its $(DART_COMPILE_BUDGET) s budget")
     return nothing
 end
@@ -768,24 +1059,15 @@ end
                 local f, args = case[2], case[3:end]
                 (key in DART_NATIVE_DUE || !_DART_CORE_ONLY) && @test _dart_same(f(args...), native)
                 if !_DART_CORE_ONLY || key in DART_CORE
-                    local got
-                    local secs = @elapsed (got = _dart_outcome(f, args))
+                    local timed = @timed _dart_outcome(f, args)
+                    local got, secs = timed.value, _dart_secs(timed)
                     @test secs <= DART_COMPILE_BUDGET
-                    if today === :compiled
-                        @test got === :compiled          # a compiling case never loses ground
-                    elseif today === :wt_bug
-                        # a known WT bug (an Internal rejection), each routed to its owner; this list only
-                        # shrinks, and a NEW Internal anywhere else fails the landing
-                        @test got === :compiled || got isa _Outside || got isa WasmTarget.Rejection
-                    else
-                        @test today === :rejects
-                        @test got === :compiled || got isa _Outside ||
-                              (got isa WasmTarget.Rejection && !(got isa WasmTarget.Internal))
-                    end
-                    # the modules run in the whole run, every module whatever its record but :wt_bug; the
-                    # landing runs none, its cost fixed (the lead's ruling: a landing sample comes later, its
-                    # cost measured)
-                    if got === :compiled && today !== :wt_bug && !_DART_CORE_ONLY
+                    # the record's property; a failure prints why, the rejection's own text in it (A51E9)
+                    @test _dart_breaks(today, got) == ""
+                    # the modules run in the whole run, every module whatever its record, a wrong answer never
+                    # admitted (A53E2); the landing runs none, its cost fixed (the lead's ruling: a landing
+                    # sample comes later, its cost measured)
+                    if got === :compiled && !_DART_CORE_ONLY
                         _dart_read!(runs, unread, key, f, args)
                         nread += 1
                     end

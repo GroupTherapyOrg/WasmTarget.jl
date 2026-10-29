@@ -17602,3 +17602,4326 @@ _g("dart_generic", Any[
         (_dw_facts(applicable(d, n, Int64(2)), d(n, Int64(2)) == 3, b(n, Int64(2)) == 2, b("a", "b") == "a"),
          _ge_td_gtest(_GeTdG{Int64,String}(), n, "s"), _ge_td_gtest(_GeTdG{String,String}(), "t", "s"))), Int64(1)),
 ])
+
+# ---- dart2wasm's tests at the pin, tests/language/operator ---------------------------------------
+# dart's user-defined operators become methods of Base's operator functions on structs; dart's ~/ is
+# div, % is mod, remainder is rem and ^ is xor (written ⊻ where precedence is the point); x++ is
+# `(x += 1) - 1`. dart hex literals become Int64 through `% Int64` (Julia's 0x.. literals are
+# unsigned). The expected value is what native Julia computes, never dart's.
+# shared: an Int64 from any integer literal, scaled by the case's argument; a DivideError probe
+_op_k(x::Integer, n::Int64) = (x % Int64) * n
+_op_divthrows(f::F, i::Int64) where {F} = try; f(i); false; catch e; e isa DivideError; end
+_op_try_div(a::Int64, b::Int64)::Int64 = try; div(a, b); catch e; e isa DivideError ? Int64(-1) : Int64(-2); end
+_op_pick(n::Int64, s::String) = n == 1 ? s : "0"
+# and_operation_on_non_integer_operand: a user-defined & returning its receiver, chained with ints
+struct _OpNotAnInt
+    v::Int64
+end
+Base.:&(a::_OpNotAnInt, b::Int64) = a
+@noinline _op_id(x) = x
+# arithmetic_canonicalization: x*1.0, x*0.0, x+0.0, x*1, x+0, x*0, 0&x, -1&x, 0|x, 0⊻x
+_op_mul1double(x) = 1.0 * x
+_op_mul0double(x) = 0.0 * x
+_op_add0double(x) = 0.0 + x
+_op_mul1int(x) = 1 * x
+_op_mul0int(x) = 0 * x
+_op_add0int(x) = 0 + x
+_op_and0(x) = 0 & x
+_op_or0(x) = 0 | x
+_op_xor0(x) = xor(0, x)
+_op_and1(x) = (-1) & x
+function _op_canon(n::Int64)
+    r = Bool[]
+    for i in 0:(10n - 1)
+        push!(r, _op_mul1double(i) isa Float64, _op_mul1double(i) == Float64(i), _op_mul0double(i) == 0.0,
+              _op_add0double(i) == Float64(i), _op_mul1int(i) == i, _op_add0int(i) == i, _op_mul0int(i) == 0,
+              _op_and0(i) == 0, _op_and1(i) == i, _op_or0(i) == i, _op_xor0(i) == i)
+    end
+    return r
+end
+# arithmetic_int64: parse of 64-bit integer strings up to typemax and typemin
+_op_i64_strs(n::Int64) = n == 1 ? ("1234567890123456789", "-1234567890123456789", "9223372036854775807", "-9223372036854775808") :
+                                  ("0", "0", "0", "0")
+# arithmetic: Int64 and Float64 + - * div / mod rem, rounding to Int64 (Julia's round is half to
+# even), sign, Inf and NaN tests, abs, parse, min, max, hash, div of typemin by -1 and NaN == NaN
+_op_parse_int_fails(s::String) = try; parse(Int64, s); false; catch e; e isa ArgumentError; end
+_op_parse_float_fails(s::String) = try; parse(Float64, s); false; catch e; e isa ArgumentError; end
+_op_toint_throws(s::String) = (d = parse(Float64, s); try; trunc(Int64, d); false; catch e; e isa InexactError; end)
+_op_ar_div(a, b) = div(a, b)
+_op_ar_divmod(a, b) = div(a, b) + mod(a, b)
+_op_sincos_sub(a::Float64) = sin(a) - cos(a)
+_op_sincos_addcos(a::Float64) = sin(a) * cos(a) + cos(a)
+_op_mysqrt(x::Union{Float64,String}) = sqrt(x)
+_op_sqrt_str_throws(n::Int64)::Int64 = try; _op_mysqrt(n == 1 ? "abc" : 4.0); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+_op_self_eq(x) = x == x
+function _op_arith_corner(n::Int64)
+    r = Int64[]
+    for i in 0:(80n - 1)
+        push!(r, _op_try_div(-(1 << i), Int64(-1)))
+    end
+    return r
+end
+function _op_arith(n::Int64)
+    a = 22n; b = 4n; c = 4.0n; d = 22.0n; big = 123456789012345n; nan = 0.0n / 0.0; inf = 1.0n / 0.0
+    smi = (a + b, a - b, a * b, div(a, b), a / b, 10n / 5n, mod(a, b), rem(a, b))
+    smi_dbl = (a + c, a - c, a * c, div(a, c), a / c, mod(a, c), rem(a, c))
+    dbl_smi = (d + b, d - b, d * b, div(d, b), d / b, mod(d, b), rem(d, b))
+    dbl_dbl = (d + c, d - c, d * c, div(d, c), d / c, mod(d, c), rem(d, c))
+    introunds = (floor(2n), ceil(-2n), round(big), trunc(-big), floor(-big))
+    signs = (big < 0, -big < 0, signbit(-0.0n), signbit(0.0n), signbit(-2.0n), isinf(inf), isinf(-inf), isinf(12.0n),
+             isnan(nan), isnan(12.0n), isnan(inf), signbit(-(0.0n)), signbit(-(-3500.0n)), signbit(-(3500.0n)))
+    abss = (abs(-2n), abs(-big), signbit(abs(-0.0n)), abs(-2.0n))
+    ceils = (ceil(Int64, 0.1n), ceil(Int64, nextfloat(0.0) * n), ceil(Int64, 0.49999999999999994n), ceil(Int64, -0.3n), ceil(Int64, -2.1n), ceil(Int64, 2.1n))
+    floors = (floor(Int64, 0.1n), floor(Int64, -0.1n), floor(Int64, -2.1n), floor(Int64, -0.49999999999999994n), floor(Int64, 2.1n))
+    truncs = (trunc(Int64, 0.1n), trunc(Int64, -0.3n), trunc(Int64, -2.1n), trunc(Int64, 1234567890124.0n) == trunc(Int64, 1234567890123.0n) + 1.0)
+    rounds = (round(Int64, 2.6n), round(Int64, -2.6n), round(Int64, 2.5n), round(Int64, -2.5n), round(Int64, 0.5n), round(Int64, -0.5n),
+              round(Int64, 1.5n), round(Int64, -1.5n), round(Int64, 0.99n), round(Int64, -0.3n))
+    toints = (Int64(1234567890123.0n), Int64(-1234567890123.0n), Int64(-1073741825.0n), Int64(1073741824.0n), Float64(-1n))
+    maths = (sqrt(4.0n), abs(sin(3.14159265n / 2.0) - 1.0) < 1e-4, abs(cos(3.14159265n) + 1.0) < 1e-4)
+    parses = (parse(Int64, string(12n)), parse(Int64, "-" * string(12n)), parse(Int64, _op_pick(n, "9007199254740991")), parse(Float64, string(1.2n)),
+              _op_parse_int_fails(_op_pick(n, "22")), _op_parse_int_fails(_op_pick(n, "alpha")), _op_parse_int_fails(_op_pick(n, "-alpha")),
+              _op_parse_float_fails(_op_pick(n, "22.2")), _op_parse_float_fails(_op_pick(n, "alpha")),
+              isnan(parse(Float64, _op_pick(n, "NaN"))), isinf(parse(Float64, _op_pick(n, "Inf"))), isinf(parse(Float64, _op_pick(n, "-Inf"))))
+    toint_throws = (_op_toint_throws(_op_pick(n, "1.2")), _op_toint_throws(_op_pick(n, "Inf")), _op_toint_throws(_op_pick(n, "-Inf")), _op_toint_throws(_op_pick(n, "NaN")))
+    minmax = (min(1n, 12n), max(1n, 12n), min(1.0n, 12.0n), max(1.0n, 12.0n), 1.0 < min(1.0n, 12.0n), 1.0 < max(1.0n, 12.0n))
+    hashes = (hash(3.4n) == hash(1.2n), hash(1.2n) == hash(1.2n), hash(3n) == hash(1n), hash(10n) == hash(10n))
+    deopt = (_op_ar_div(-1073741824n, -1), _op_ar_divmod(-1073741824n, -1))
+    sincos = (abs(_op_sincos_sub(1.234n) - (sin(1.234) - cos(1.234))) < 1e-9, abs(_op_sincos_addcos(1.234n) - (sin(1.234) * cos(1.234) + cos(1.234))) < 1e-9,
+              abs(_op_sincos_sub(3.14159265n) - 1.0) < 1e-4, abs(_op_sincos_sub(3.14159265n / 2.0) - 1.0) < 1e-4)
+    sqrt_str = (_op_mysqrt(4.0n), _op_sqrt_str_throws(n))
+    return (smi, _op_arith_corner(n), smi_dbl, dbl_smi, dbl_dbl, introunds, signs, abss, ceils, floors, truncs, rounds, toints, maths,
+            parses, toint_throws, minmax, hashes, deopt, sincos, sqrt_str, (_op_self_eq(NaN * n), _op_self_eq(3.0n)))
+end
+# bit_operations: & | xor >> << ~ on Int64, Bool & | xor, shifts by 64 and more, negative shift
+# counts (Julia shifts the other way, no throw), shift round trips, and & xor | precedence (Julia's:
+# & binds like *, ⊻ and | like +, shifts tighter than both)
+_op_bitlen(v::Int64) = v < 0 ? 64 - leading_ones(v) : 64 - leading_zeros(v)
+function _op_shift_roundtrip(values, n::Int64)
+    r = Bool[]
+    for value in values
+        for i in 0:(70n - 1)
+            b = (value << i) >> i
+            if i < 64 - _op_bitlen(value)
+                push!(r, b == value)
+            elseif i >= 64
+                push!(r, b == 0)
+            else
+                masked = value & ((1 << (64 - i)) - 1)
+                sbit = masked & (1 << (63 - i))
+                signmask = sbit != 0 ? (-1 << (64 - i)) : 0
+                push!(r, b == (signmask | masked))
+            end
+        end
+    end
+    return r
+end
+_op_shl(a::Int64, b::Int64) = a << b
+_op_shr(a::Int64, b::Int64) = a >> b
+_op_throws_shl(a::Int64, b::Int64) = try; a << b; false; catch; true; end
+_op_throws_shr(a::Int64, b::Int64) = try; a >> b; false; catch; true; end
+function _op_no_masking(n::Int64)
+    r = Bool[]
+    push!(r, 0n >> 256 == 0, 1n >> 256 == 0, 2n >> 256 == 0, _op_shr(0n, 256n) == 0, _op_shr(1n, 256n) == 0, _op_shr(2n, 256n) == 0)
+    for shift in 1:(100n)
+        push!(r, _op_shr(1n, shift) == 0, _op_shr(-n, shift) == -1)
+        if shift < 63
+            push!(r, _op_shl(1n, shift) > _op_shl(1n, shift - 1))
+        elseif shift > 64
+            push!(r, _op_shl(1n, shift) == 0 && _op_shl(1n, shift - 1) == 0)
+        end
+    end
+    return r
+end
+_op_bit_prec(a::Int64, b::Int64, c::Int64, d::Int64) = (result = a & b ⊻ c | d & b ⊻ c;
+    _dw_facts(result, ((a & b) ⊻ c) | ((d & b) ⊻ c), (a & (b ⊻ c)) | (d & (b ⊻ c)), (a & b < c & d) == ((a & b) < (c & d)),
+              a & b << c ⊻ d, (a & (b << c)) ⊻ d, (a & b) << (c ⊻ d)))
+@noinline _op_shr65(a::Int64) = a >> 65
+function _op_bitops(n::Int64)
+    k = x -> _op_k(x, n)
+    basic = (k(3) & k(7), k(3) | k(7), xor(k(3), k(7)), k(100) >> 2, k(100) << 2, k(-100) >> 2, ~k(100), k(1) << 64, k(-1) << 64,
+             k(0x04000000) << 4, k(0x0400000000000000) << 4, ~k(-1), ~k(0), k(1) >> 160, k(-1) >> 160)
+    wide = (k(0x1000000000000001) & k(0x1000100F00000001), k(0x1) & k(0x1000100F00000001), k(0x1000100F00000001) & k(0x1),
+            k(0x1000000000000001) | k(0x1000100F00000001), k(0x11) | k(0x1000100F00000001), k(0x1000100F00000001) | k(0x11),
+            xor(k(0x0F00000000000001), k(0x0000000000000001)), xor(k(0x0F00000000000001), k(0x0F00000000000030)),
+            xor(k(0x0F00000000000001), k(0x30)), xor(k(0x30), k(0x0F00000000000001)),
+            k(0xF7) >> 4, k(0xF00000000) >> 32, k(16492674416655) >> 4, k(0xF00000000000000F) << 4, k(15) << 32)
+    t = parse(Int64, string(n)) == 1
+    f = parse(Int64, string(2n)) == 1
+    bools = (t & t, t & f, f & t, f & f, t | t, t | f, f | t, f | f, xor(t, t), xor(t, f), xor(f, t), xor(f, f))
+    v32 = k(0xFF000000); v64 = k(0xFF00000000000000)
+    corner = (v32 >> 30, v32 >> 31, v32 >> 32, v64 >> 62, v64 >> 63, v64 >> 64)
+    t1 = k(0x1ffffffff); t2 = k(0xffffffff)
+    wide64 = (t1 >> 1, t2 << 0, t2 << 1, t2 << 31, (t2 + 1) << 31, 2 * (t2 + 1) << 31, 4 * (t2 + 1) << 31)
+    negcount = (_op_throws_shl(k(12), k(-3)), _op_throws_shr(k(12), k(-3)), _op_throws_shl(k(12), k(3)), _op_throws_shr(k(12), k(3)),
+                _op_shl(k(12), k(-3)), _op_shr(k(12), k(-3)))
+    roundtrip = (_op_shift_roundtrip(0:-1:-(10n - 1), n), _op_shift_roundtrip(0:(10n - 1), n))
+    prec = (_op_bit_prec(4n, 5n, 3n, 1n), _op_bit_prec(3n, 4n, 5n, 9n), _op_bit_prec(k(0x5c71), k(0x6b92), k(0x7654), k(0x7d28)))
+    return (basic, wide, bools, corner, wide64, negcount, roundtrip, _op_no_masking(n), prec,
+            (_op_shr65(k(0x5f22334455667788)), _op_shr65(-k(0x5f22334455667788))))
+end
+# bit_shift: shifts by 32, 33 and 65 of constants, of values from a recursive id, and of locals
+const _OP_BS_Y = Ref(Int64(0))
+function _op_bs_foo(i::Int64)
+    if i != 0
+        _OP_BS_Y[] -= 1
+        _op_bs_foo(i - 1)
+        _OP_BS_Y[] += 1
+    end
+    return nothing
+end
+_op_bs_id(x::Int64) = (_OP_BS_Y[] = x; _op_bs_foo(Int64(10)); _OP_BS_Y[])
+function _op_bitshift(n::Int64)
+    m = Int64(0xFFFFFFFF) * n
+    constants = (499n >> 33, (499n << 33) & m, (499n << 32) >> 65, (499n << 32) << 65)
+    inter = (_op_bs_id(499n) >> 33, (_op_bs_id(499n) << 33) & m, _op_bs_id(499n << 32) >> 65, _op_bs_id(499n << 32) << 65)
+    a = _op_bs_id(499n)
+    b = _op_bs_id(499n << 32)
+    return (constants, inter, (a >> 33, (a << 33) & m, b >> 65, b << 65))
+end
+# comparison: === and == on structs, Bools, Int64s, Float64s and nothing; < <= > >= over Int64,
+# Float64 and mixed operands; == across numbers, strings and nothing
+struct _OpCmpA
+    b::Int64
+end
+_op_strict_eq(a, b) = a === b
+_op_strict_ne(a, b) = a !== b
+_op_eq(a, b) = a == b
+_op_ne(a, b) = a != b
+_op_lt(a, b) = a < b
+_op_le(a, b) = a <= b
+_op_gt(a, b) = a > b
+_op_ge(a, b) = a >= b
+function _op_cmp_all(x, y)
+    return (_op_strict_eq(x, y), _op_strict_ne(x, y), _op_eq(x, y), _op_ne(x, y), _op_lt(x, y), _op_le(x, y), _op_gt(x, y), _op_ge(x, y))
+end
+function _op_comparison(n::Int64)
+    a = _OpCmpA(0n); b = _OpCmpA(n)
+    t = n == 1; f = n != 1
+    structs = (_op_strict_eq(a, a), _op_strict_eq(a, b), _op_strict_eq(b, a), _op_strict_eq(b, b), _op_strict_ne(a, b))
+    bools = (_op_strict_eq(f, f), _op_strict_eq(f, t), _op_strict_ne(t, f), _op_eq(f, f), _op_eq(f, t), _op_ne(t, f), _op_ne(t, t))
+    ints = Tuple{Int64,Int64}[(-n, -n), (0n, 0n), (n, n), (-n, 0n), (-n, n), (0n, n), (0n, -n), (n, -n), (n, 0n)]
+    flts = Tuple{Float64,Float64}[(-1.0n, -1.0n), (0.0n, 0.0n), (1.0n, 1.0n), (-1.0n, 0.0n), (-1.0n, 1.0n), (0.0n, 1.0n), (0.0n, -1.0n), (1.0n, -1.0n), (1.0n, 0.0n)]
+    intr = [_op_cmp_all(x, y) for (x, y) in ints]
+    fltr = [_op_cmp_all(x, y) for (x, y) in flts]
+    nul = n == 1 ? nothing : n
+    nulls = (_op_eq(nul, nothing), _op_eq(nul, "Str"), _op_ne(nul, 2n), _op_strict_eq(nul, nothing), _op_strict_ne(nul, 2n))
+    mixed = (_op_gt(n, 1.2), _op_gt(3n, 1.2), _op_gt(2.0n, 1), _op_gt(3.1n, 4), _op_ge(2.0n, 2), _op_ge(2n, 2.0), _op_lt(n, 1.2), _op_lt(3.1n, 4),
+             _op_le(2.0n, 2), _op_le(2n, 2.0), _op_le(263882790666245n, 263882790666246), _op_le(12.2n, 263882790666245),
+             _op_eq(4294967295n, 4.294967295e9), _op_eq(4.294967295e9 * n, 4294967295), _op_eq(4.294967295e9 * n, 42), _op_eq(42n, 4294967295),
+             _op_eq(1.0n, 1), _op_eq(n, 1.0), _op_eq(1.1n, 1.1), _op_gt(1.2n, 1.1), _op_lt(1.2n, 1.1), _op_ge(1.1n, 1.2), _op_ge(1.2n, 1.2))
+    nonnum = (_op_eq(n, "eeny"), _op_eq("meeny", n), _op_eq(1.1n, "miny"), _op_eq(n, nothing), _op_eq(nothing, 1.1n))
+    return (structs, bools, intr, fltr, nulls, mixed, nonnum)
+end
+# compound_assignment: the receiver and index of x[i][j] += v, x.f += v and a static x++ evaluate
+# once, in order (Julia's lowering of an update operator binds its receiver and index first)
+mutable struct _OpIndexed
+    f::Vector{Int64}
+    count::Int64
+end
+_OpIndexed() = (f = zeros(Int64, 10); f[1] = 100; f[2] = 200; _OpIndexed(f, 0))
+Base.getindex(x::_OpIndexed, i::Int64) = (x.count += 1; x.f)
+const _OP_CA_RESULT = Int64[]
+_op_ca_array() = (push!(_OP_CA_RESULT, 0); Int64[0])
+_op_ca_index() = (push!(_OP_CA_RESULT, 1); Int64(1))
+_op_ca_middle() = (push!(_OP_CA_RESULT, 2); nothing)
+_op_ca_seq(a, b, c) = (push!(_OP_CA_RESULT, 3); nothing)
+struct _OpCaA end
+_op_ca_obj() = (push!(_OP_CA_RESULT, 0); _OpCaA())
+Base.getproperty(::_OpCaA, s::Symbol) = (push!(_OP_CA_RESULT, 1); Int64(1))
+Base.setproperty!(::_OpCaA, s::Symbol, v) = nothing
+_op_ca_static_get() = (push!(_OP_CA_RESULT, 0); Int64(1))
+_op_ca_static_set!(v) = (push!(_OP_CA_RESULT, 1); nothing)
+_op_ca_static_postinc() = (v = _op_ca_static_get(); _op_ca_static_set!(v + 1); v)
+function _op_compound(n::Int64)
+    x = _OpIndexed()
+    c0 = x.count
+    tmp = x[n]
+    c1 = x.count
+    v1 = x[4n][1]
+    c2 = x.count
+    v2 = (x[4n][1] += n) - n
+    c3 = x.count
+    v3 = x[4n][1]
+    c4 = x.count
+    x[4n][1] += 10n
+    c5 = x.count
+    v4 = x[4n][1]
+    i = n
+    x[3n][(i += 1) - 1] += 1
+    empty!(_OP_CA_RESULT)
+    _op_ca_seq((_op_ca_array()[_op_ca_index()] += n), _op_ca_middle(), (_op_ca_array()[_op_ca_index()] += n))
+    r1 = copy(_OP_CA_RESULT)
+    empty!(_OP_CA_RESULT)
+    _op_ca_seq((_op_ca_obj().field += n), _op_ca_middle(), (_op_ca_obj().field += n))
+    r2 = copy(_OP_CA_RESULT)
+    empty!(_OP_CA_RESULT)
+    _op_ca_seq(_op_ca_static_postinc(), _op_ca_middle(), _op_ca_static_postinc())
+    r3 = copy(_OP_CA_RESULT)
+    return _dw_facts((c0, c1, v1, c2, v2, c3, v3, c4, c5, v4, i, length(tmp)), r1, r2, r3)
+end
+# cond_expr: a conditional whose branches are assignments to globals
+const _OP_CE_E1 = Ref(Int64(0))
+const _OP_CE_E2 = Ref(Int64(0))
+_op_ce_f(a::Int64) = a < 0 ? (_OP_CE_E1[] = -1) : (_OP_CE_E2[] = 1)
+function _op_condexpr(n::Int64)
+    _OP_CE_E1[] = 0; _OP_CE_E2[] = 0
+    r1 = _op_ce_f(-100n)
+    f1 = (r1, _OP_CE_E1[], _OP_CE_E2[])
+    _OP_CE_E1[] = 0; _OP_CE_E2[] = 0
+    r2 = _op_ce_f(100n)
+    return (f1, (r2, _OP_CE_E1[], _OP_CE_E2[]))
+end
+# div_by_zero: 0 / 0 is NaN, div(0, 0) throws
+_op_dbz_divby(a::Int64, b::Int64) = 1.0 * (a / b)
+_op_dbz_moustache(a::Int64, b::Int64) = try; div(a, b); false; catch e; true; end
+# div_with_power_of_two: div by ±1, ±2, ±4, ±2^27 and ±2^39 of 32- and 64-bit arguments
+_op_div_by0(a) = div(a, 0)
+_op_div_by1(a) = div(a, 1)
+_op_div_by_neg1(a) = div(a, -1)
+_op_div_by2(a) = div(a, 2)
+_op_div_by_neg2(a) = div(a, -2)
+_op_div_by4(a) = div(a, 4)
+_op_div_by_neg4(a) = div(a, -4)
+_op_div_by134217728(a) = div(a, 134217728)
+_op_div_by_neg134217728(a) = div(a, -134217728)
+_op_div_by549755813888(a) = div(a, 549755813888)
+_op_div_by_neg549755813888(a) = div(a, -549755813888)
+function _op_dpt(n::Int64)
+    r = Int64[]
+    for a in Int64[134217730n, -134217730n, 10n, -10n]
+        push!(r, _op_div_by1(a), _op_div_by_neg1(a), _op_div_by2(a), _op_div_by_neg2(a), _op_div_by4(a), _op_div_by_neg4(a),
+              _op_div_by134217728(a), _op_div_by_neg134217728(a))
+    end
+    for a in Int64[549755813990n, -549755813990n, 288230925907525632n, -288230925907525632n]
+        push!(r, _op_div_by4(a), _op_div_by_neg4(a), _op_div_by549755813888(a), _op_div_by_neg549755813888(a))
+    end
+    return r
+end
+# equality_covariant: == whose argument is narrowed (a throwing method for any non-nothing argument;
+# a parametric struct accepting only its parameter), compared from both sides and with nothing
+struct _OpEqNever
+    v::Int64
+end
+Base.:(==)(a::_OpEqNever, b::Nothing) = false
+Base.:(==)(a::_OpEqNever, b) = throw(ErrorException("unreachable"))
+struct _OpEqTV{T<:Number}
+    v::Int64
+end
+Base.:(==)(a::_OpEqTV{T}, b::T) where {T<:Number} = a === b
+Base.:(==)(a::_OpEqTV, b::Nothing) = false
+Base.:(==)(a::_OpEqTV, b) = throw(TypeError(:(==), "covariant", Number, b))
+_op_eq_try(a, b)::Int64 = try; (a == b) ? Int64(1) : Int64(0); catch e; e isa TypeError ? Int64(-1) : e isa ErrorException ? Int64(-2) : Int64(-3); end
+_op_ne_try(a, b)::Int64 = try; (a != b) ? Int64(1) : Int64(0); catch e; e isa TypeError ? Int64(-1) : e isa ErrorException ? Int64(-2) : Int64(-3); end
+# equality: a user-defined == returning a stored Bool and one that throws, compared with nothing
+# (Julia calls the method for x == nothing; dart answers null itself), and Bool == true
+struct _OpEqA
+    result::Bool
+end
+Base.:(==)(a::_OpEqA, x) = a.result
+struct _OpDeath
+    v::Int64
+end
+Base.:(==)(a::_OpDeath, x) = error("Dead!")
+_op_bool_eq_pa(a) = a == true
+_op_bool_ne_pa(a) = a != true
+_op_bool_eq_pb(a) = true == a
+_op_bool_ne_pb(a) = true != a
+# incr_op: x++ x-- ++x --x on locals, a field, a static getter/setter pair, a global and a list
+mutable struct _OpIncr
+    x::Int64
+end
+const _OP_INCR_AYY = Ref(Int64(0))
+const _OP_INCR_Y = Ref(Int64(0))
+_op_incr_ay() = _OP_INCR_AYY[]
+_op_incr_set_ay!(v::Int64) = (_OP_INCR_AYY[] = v)
+_op_incr_ay_post!(d::Int64) = (v = _op_incr_ay(); _op_incr_set_ay!(v + d); v)
+_op_incr_ay_pre!(d::Int64) = _op_incr_set_ay!(_op_incr_ay() + d)
+function _op_incr(n::Int64)
+    r = Int64[]
+    a = 3n
+    c = ((a += 1) - 1) + 1; push!(r, c, a)
+    c = ((a -= 1) + 1) + 1; push!(r, c, a)
+    c = (a -= 1) + 1; push!(r, c, a)
+    c = 2 + (a += 1); push!(r, c, a)
+    obj = _OpIncr(0)
+    obj.x = 100n
+    push!(r, obj.x)
+    obj.x += 1
+    push!(r, obj.x, (obj.x += 1), (obj.x += 1) - 1, obj.x)
+    _op_incr_set_ay!(55n)
+    push!(r, _op_incr_ay_post!(1), _op_incr_ay(), _op_incr_ay_pre!(1), _op_incr_ay(), _op_incr_ay_pre!(-1))
+    _OP_INCR_Y[] = 55n
+    push!(r, (_OP_INCR_Y[] += 1) - 1, _OP_INCR_Y[], (_OP_INCR_Y[] += 1), _OP_INCR_Y[], (_OP_INCR_Y[] -= 1))
+    list = Int64[0n, 1n, 2n, 3n]
+    for i in 1:length(list)
+        list[i] += 1
+    end
+    for i in 1:length(list)
+        push!(r, list[i])
+        list[i] += 1
+    end
+    push!(r, list[2], (list[2] -= 1) + 1, list[2], (list[2] -= 1))
+    return r
+end
+# index_evaluation_order: b[i] += v calls the receiver, the index, getindex, + and setindex! in order
+mutable struct _OpIeoB
+    value::Int64
+    trace::Vector{Int64}
+end
+function Base.getindex(b::_OpIeoB, index::Int64)
+    push!(b.trace, -3, index, b.value)
+    b.value += 1
+    return b
+end
+function Base.setindex!(b::_OpIeoB, value::_OpIeoB, index::Int64)
+    push!(b.trace, -5, index, value.value)
+    b.value += 1
+    return b
+end
+function Base.:+(b::_OpIeoB, value::Int64)
+    push!(b.trace, -4, b.value, value)
+    b.value += 1
+    return b
+end
+_op_ieo_getb(trace::Vector{Int64}) = (push!(trace, -1); _OpIeoB(100, trace))
+_op_ieo_getindex(trace::Vector{Int64}) = (push!(trace, -2); Int64(42))
+# index: a list filled by index with Fibonacci numbers; an index assignment's value
+function _op_fib(n::Int64)
+    a = 0; b = 1; i = 0
+    while (i += 1) - 1 < n
+        a = a + b
+        b = a - b
+    end
+    return a
+end
+function _op_index(n::Int64)
+    a = zeros(Int64, 10n)
+    for i in 1:length(a)
+        a[i] = _op_fib(i - 1)
+    end
+    a[1] = _op_fib(0)
+    r = Bool[a[i - 2] + a[i - 1] == a[i] for i in 3:length(a)]
+    last = (a[4] = 515n)
+    return (length(a), r, last, a[4])
+end
+# integer_division_by_zero: div of Int64 and Float64 by zero and to infinity or NaN (Julia's div of a
+# Float64 returns Inf or NaN, it does not throw; dart throws); div of a Float64 past typemax(Int64)
+_op_divby_num(a::Union{Int64,Float64}, b::Union{Int64,Float64}) = div(a, b)
+function _op_idz(a::Union{Int64,Float64}, b::Union{Int64,Float64})::Int64
+    try
+        v = _op_divby_num(a, b)
+        v isa Int64 && return Int64(0)
+        return isnan(v) ? Int64(3) : isinf(v) ? Int64(2) : Int64(1)
+    catch e
+        return e isa DivideError ? Int64(-1) : Int64(-2)
+    end
+end
+function _op_intdivzero(n::Int64)
+    mx = floatmax(Float64) * n; mn = nextfloat(0.0) * n; inf = Inf * n
+    codes = (_op_idz(n, 0n), _op_idz(0n, 0n), _op_idz(1.0n, 0n), _op_idz(n, 0.0n), _op_idz(n, -0.0n), _op_idz(1.0n, 0.0n),
+             _op_idz(mx, 0.5), _op_idz(n, mn), _op_idz(inf, 2.0), _op_idz(-mx, 0.5), _op_idz(-n, mn), _op_idz(-inf, 2.0),
+             _op_idz(0.0n, 0.0), _op_idz(inf, inf), _op_idz(-0.0n, 0.0), _op_idz(-inf, inf))
+    minint = typemin(Int64) * n
+    maxint = minint - 1
+    return (codes, maxint > 0, div(mx, 2), div(-mx, 2), div(maxint, 0.25), div(minint, 0.25))
+end
+# logical_expression: || and && whose left side has a side effect, and nothing checks on either side
+const _OP_LE_COUNTER = Ref(Int64(0))
+@noinline _op_le_confuse(n::Int64) = n == 42
+function _op_le_false_side(n::Int64)
+    result = _op_le_confuse(n)
+    if result
+        _op_le_confuse(n) && return Int64(499)
+    end
+    _OP_LE_COUNTER[] += 1
+    return result
+end
+function _op_le_false_noside(n::Int64)
+    result = _op_le_confuse(n)
+    if result
+        _op_le_confuse(n) && return Int64(499)
+    end
+    return result
+end
+function _op_le_or(n::Int64)
+    fails = Int64[]
+    _OP_LE_COUNTER[] = 0
+    cond1 = _op_le_false_side(n)::Bool
+    for k in 1:3
+        (cond1 || _op_le_false_noside(n)) && push!(fails, k)
+    end
+    c1 = _OP_LE_COUNTER[]
+    cond1 = _op_le_false_side(n) == 499
+    for k in 4:6
+        (cond1 || _op_le_false_noside(n)) && push!(fails, k)
+    end
+    return (fails, c1, _OP_LE_COUNTER[])
+end
+function _op_le_and(n::Int64)
+    fails = Int64[]
+    _OP_LE_COUNTER[] = 0
+    cond1 = _op_le_false_side(n)::Bool
+    for k in 1:3
+        (cond1 && _op_le_false_noside(n)) && push!(fails, k)
+    end
+    c1 = _OP_LE_COUNTER[]
+    cond1 = _op_le_false_side(n) == 499
+    for k in 4:6
+        (cond1 && _op_le_false_noside(n)) && push!(fails, k)
+    end
+    return (fails, c1, _OP_LE_COUNTER[])
+end
+function _op_le_value_or!(g::Vector{Int64}, list::Union{Nothing,Vector{String}})
+    list === nothing && push!(g, 1)
+    (list === nothing || "2" in list) && push!(g, 2)
+    (list === nothing || "3" in list) && push!(g, 3)
+    return g
+end
+function _op_le_value_and!(g::Vector{Int64}, list::Union{Nothing,Vector{String}})
+    list === nothing && push!(g, 1)
+    (list === nothing && 1 in g) && push!(g, 2)
+    (list === nothing && 1 in g) && push!(g, 3)
+    return g
+end
+# logical_expression2..5: isa tests inside || && and ! must not narrow the branch they guard
+const _OP_LE2_COUNTER = Ref(Int64(0))
+function _op_le2_use(o::Union{String,Int64})
+    if !(o isa String)
+        _OP_LE2_COUNTER[] += 1
+    end
+    return nothing
+end
+_op_le_isnum(o::Union{String,Int64}) = o isa Number
+_op_le_isstr(o::Union{String,Int64}) = o isa String
+# mint_arithmetic: & xor | on values past 32 bits and -1, and (x & y) + 1.0
+_op_mint_and1(a, b) = (s = b; t = a & s; t == b)
+_op_mint_and2(a, b) = a & b
+_op_mint_xor(a, b) = (s = b; xor(a, s))
+_op_mint_or(a, b) = (s = b; a | s)
+_op_mint_func(x, y) = (x & y) + 1.0
+function _op_mint(n::Int64)
+    x = Int64(0xffffffff) * n
+    y = (0xffffffffffffffff % Int64) * n
+    return (_op_mint_and1(x, 0 * n), _op_mint_and1(x, -n), _op_mint_and2(x, x), _op_mint_and2(x, 1234n), _op_mint_and2(4294967297n, -n),
+            _op_mint_and2(-1073741824n, -n), _op_mint_and2(1073741824n, -n), _op_mint_and2(1073741823n, -n),
+            _op_mint_xor(x, x), _op_mint_xor(x, -n) == -x - 1, _op_mint_xor(y, -n) == -y - 1,
+            _op_mint_or(x, x), _op_mint_or(x, -n), _op_mint_or(y, -n), _op_mint_func(4294967295n, n))
+end
+# modulo: mod by ±256, ±254, 10, 12, by a ranged |i| and by 0 (Julia's mod takes the divisor's sign;
+# dart's % is never negative)
+_op_mod_foo(i) = mod(i, 256)
+_op_mod_boo(i) = mod(i, -256)
+_op_mod_hoo(i) = mod(i, 0)
+_op_mod_footwo(i) = div(i, 254) + mod(i, 254)
+_op_mod_bootwo(i) = div(i, -254) + mod(i, -254)
+_op_mod_hootwo(i) = div(i, 0) + mod(i, 0)
+_op_mod_nodom(a) = a > 0 ? mod(a, 10) : div(a, 10)
+_op_mod_threeop(a) = (x = div(a, 10); y = mod(a, 10); z = mod(a, 10); x + y + z)
+_op_mod_fourop(a) = (x0 = div(a, 10); x1 = div(a, 12); y0 = mod(a, 10); y1 = mod(a, 12); x0 + x1 + y0 + y1)
+_op_mod_foo2(i) = (x = i < 0 ? -i : i; mod(i, x))
+_op_mod_footwo2(i) = (x = i < 0 ? -i : i; div(i, x) + mod(i, x))
+function _op_modulo(n::Int64)
+    r = Int64[]
+    thr = Bool[]
+    for i in (-30n):(29n)
+        push!(r, _op_mod_foo(i), _op_mod_boo(i), _op_mod_footwo(i), _op_mod_bootwo(i), _op_mod_nodom(i), _op_mod_threeop(i), _op_mod_fourop(i))
+        push!(thr, _op_divthrows(_op_mod_hoo, i), _op_divthrows(_op_mod_hootwo, i))
+        i != 0 && push!(r, _op_mod_foo2(i), _op_mod_footwo2(i))
+    end
+    return (r, thr, _op_divthrows(_op_mod_foo2, 0n), _op_divthrows(_op_mod_footwo2, 0n))
+end
+# mul_recipr: x *= 1.0 / b with a subnormal b overflows to Inf
+const _OP_MR_XX = Ref(23.0)
+_op_mr_scale(a::Float64) = (_OP_MR_XX[] *= a; nothing)
+_op_mr_scaleit(b::Float64) = _op_mr_scale(1.0 / b)
+function _op_mulrecipr(x::Float64)
+    _OP_MR_XX[] = 1e-6 * x
+    _op_mr_scaleit(1e-310 * x)
+    f1 = isinf(_OP_MR_XX[])
+    v = Float64[]
+    for i in 1:10
+        _OP_MR_XX[] = 24.0 * x
+        _op_mr_scaleit(6.0 * x)
+        push!(v, _OP_MR_XX[])
+    end
+    _OP_MR_XX[] = 1e-6 * x
+    _op_mr_scaleit(1e-310 * x)
+    return (f1, v, isinf(_OP_MR_XX[]))
+end
+# negate_and_method_negate: unary - and a function named negate on one struct
+struct _OpFoo
+    v::Int64
+end
+Base.:-(f::_OpFoo) = 42 * f.v
+_op_negate(f::_OpFoo) = 87 * f.v
+# number_operator_context: + - * mod rem clamp and compound assignment of Int64 and Float64
+# operands (Julia's promotion answers dart's context types; dart's num is Union{Int64,Float64})
+function _op_noc(n::Int64)
+    i = n
+    d = 1.1 * n
+    num = n == 1 ? n : d
+    ints = (1 + i, 1 - i, 1 * i, mod(1, i), rem(1, i), clamp(1, i, i), clamp(i, 1, 1))
+    ii = 0
+    ii += i
+    ii -= i
+    ii *= i
+    ii %= i
+    dbls = (1 + 1.0 * i, 1 - 1.0 * i, 1 * 1.0 * i, mod(1, 1.0 * i), rem(1, 1.0 * i), i + d, d + i, mod(d, i), rem(d, i),
+            clamp(1.1 * i, 1.0, 1.0), clamp(d, 1.0, 1.0))
+    dd = 0.0
+    dd += i
+    dd -= i
+    dd *= i
+    dd %= 2i
+    nums = ((i + num) isa Int64, (d + num) isa Float64, mod(num, i) isa Int64, rem(i, num) isa Int64, clamp(num, 1, 1) isa Int64)
+    return (ints, ii, dbls, dd, nums)
+end
+# number_operator_typing: the result types of + - * mod rem and clamp over Int64, Float64 and
+# Union{Int64,Float64} operands, and the fields of a struct initialized from such sums
+function _op_not(n::Int64)
+    i = n; d = 1.0 * n; num = n == 1 ? n : d
+    return ((i + i, i - i, i * i, mod(i, i), rem(i, i)),
+            (i + d, i - d, i * d, mod(i, d), rem(i, d)),
+            (d + i, d - i, d * i, mod(d, i), rem(d, i)),
+            (d + d, d - d, d * d, mod(d, d), rem(d, d)),
+            ((i + num) isa Int64, (i - num) isa Int64, (d + num) isa Float64, (num + i) isa Int64, (num + d) isa Float64,
+             (num * num) isa Int64, rem(num, d) isa Float64, mod(i, num) isa Int64),
+            (clamp(i, i, i), clamp(d, d, d), clamp(i, d, d) isa Float64, clamp(num, i, i) isa Int64, clamp(d, i, i) isa Float64),
+            (1 + i, i + 1, i + i, 1.0 + i, 1.0 + d, (1.0 + num) isa Float64, d + i, d + d, (i + num) isa Int64, (num + num) isa Int64))
+end
+# operations_on_non_num_operand: & | xor << >> + - * / div mod rem < <= > >= on structs, each
+# returning its receiver, chained with ints
+struct _OpThing1
+    v::Int64
+end
+Base.:&(a::_OpThing1, b::Int64) = a
+Base.:|(a::_OpThing1, b::Int64) = a
+Base.xor(a::_OpThing1, b::Int64) = a
+Base.:<<(a::_OpThing1, b::Int64) = a
+Base.:>>(a::_OpThing1, b::Int64) = a
+Base.:+(a::_OpThing1, b::Int64) = a
+Base.:-(a::_OpThing1, b::Int64) = a
+Base.:*(a::_OpThing1, b::Int64) = a
+Base.:/(a::_OpThing1, b::Int64) = a
+Base.div(a::_OpThing1, b::Int64) = a
+Base.mod(a::_OpThing1, b::Int64) = a
+Base.rem(a::_OpThing1, b::Int64) = a
+Base.:<(a::_OpThing1, b::Int64) = a
+Base.:<=(a::_OpThing1, b::Int64) = a
+Base.:>(a::_OpThing1, b::Int64) = a
+Base.:>=(a::_OpThing1, b::Int64) = a
+struct _OpThing2
+    v::Int64
+end
+@noinline Base.:&(a::_OpThing2, b::Int64) = a
+@noinline Base.:|(a::_OpThing2, b::Int64) = a
+@noinline Base.xor(a::_OpThing2, b::Int64) = a
+@noinline Base.:<<(a::_OpThing2, b::Int64) = a
+@noinline Base.:>>(a::_OpThing2, b::Int64) = a
+@noinline Base.:+(a::_OpThing2, b::Int64) = a
+@noinline Base.:-(a::_OpThing2, b::Int64) = a
+@noinline Base.:*(a::_OpThing2, b::Int64) = a
+@noinline Base.:/(a::_OpThing2, b::Int64) = a
+@noinline Base.div(a::_OpThing2, b::Int64) = a
+@noinline Base.mod(a::_OpThing2, b::Int64) = a
+@noinline Base.rem(a::_OpThing2, b::Int64) = a
+@noinline Base.:<(a::_OpThing2, b::Int64) = a
+@noinline Base.:<=(a::_OpThing2, b::Int64) = a
+@noinline Base.:>(a::_OpThing2, b::Int64) = a
+@noinline Base.:>=(a::_OpThing2, b::Int64) = a
+function _op_nonnum(a::T, n::Int64) where {T}
+    return (a === (a & 5n & 2n), a === (a | 5n | 2n), a === xor(xor(a, 5n), 2n), a === (a << 5n << 2n), a === (a >> 5n >> 2n),
+            a === (a + 5n + 2n), a === (a - 5n - 2n), a === (a * 5n * 2n), a === (a / 5n / 2n), a === mod(mod(a, 5n), 2n),
+            a === div(div(a, 5n), 2n), a === rem(rem(a, 5n), 2n), a === ((a < 5n) < 2n), a === ((a <= 5n) <= 2n),
+            a === ((a > 5n) > 2n), a === ((a >= 5n) >= 2n), (a & 5n).v)
+end
+# operator: every overloadable binary operator, unary - and compound assignment of fields and globals
+mutable struct _OpOperator
+    value::Int64
+end
+Base.:+(a::_OpOperator, b::_OpOperator) = a.value + b.value
+Base.:-(a::_OpOperator, b::_OpOperator) = a.value - b.value
+Base.:/(a::_OpOperator, b::_OpOperator) = a.value / b.value
+Base.:*(a::_OpOperator, b::_OpOperator) = a.value * b.value
+Base.mod(a::_OpOperator, b::_OpOperator) = mod(a.value, b.value)
+Base.:(==)(a::_OpOperator, b::_OpOperator) = a.value == b.value
+Base.:<(a::_OpOperator, b::_OpOperator) = a.value < b.value
+Base.:>(a::_OpOperator, b::_OpOperator) = a.value > b.value
+Base.:<=(a::_OpOperator, b::_OpOperator) = a.value <= b.value
+Base.:>=(a::_OpOperator, b::_OpOperator) = a.value >= b.value
+Base.:|(a::_OpOperator, b::_OpOperator) = a.value | b.value
+Base.xor(a::_OpOperator, b::_OpOperator) = xor(a.value, b.value)
+Base.:&(a::_OpOperator, b::_OpOperator) = a.value & b.value
+Base.:<<(a::_OpOperator, b::_OpOperator) = a.value << b.value
+Base.:>>(a::_OpOperator, b::_OpOperator) = a.value >> b.value
+Base.div(a::_OpOperator, b::_OpOperator) = div(a.value, b.value)
+Base.:-(a::_OpOperator) = -a.value
+const _OP_OPT_I1 = Ref(Int64(-1))
+const _OP_OPT_I2 = Ref(Int64(-1))
+function _op_operator(n::Int64)
+    op1 = _OpOperator(n); op2 = _OpOperator(2n)
+    ops = (op1 + op2, op1 - op2, op1 / op2, div(op1, op2), op1 * op2, mod(op1, op2), !(op1 == op2), op1 < op2, !(op1 > op2),
+           op1 <= op2, !(op1 >= op2), op1 | op2, xor(op1, op2), op1 & op2, op1 << op2, op1 >> op2, -op1)
+    op1.value += op2.value
+    v1 = op1.value
+    op2.value += (op2.value += op2.value)
+    v2 = op2.value
+    op2.value -= (op2.value -= op2.value)
+    v3 = op2.value
+    op1.value = op2.value = 42n
+    v4 = (op1.value, op2.value)
+    _OP_OPT_I1[] = _OP_OPT_I2[] = 42n
+    s1 = (_OP_OPT_I1[], _OP_OPT_I2[])
+    _OP_OPT_I1[] += 7
+    s2 = _OP_OPT_I1[]
+    _OP_OPT_I1[] += (_OP_OPT_I2[] = 17n)
+    s3 = (_OP_OPT_I1[], _OP_OPT_I2[])
+    _OP_OPT_I1[] += _OP_OPT_I2[] += 3
+    s4 = (_OP_OPT_I1[], _OP_OPT_I2[])
+    return (ops, v1, v2, v3, v4, s1, s2, s3, s4)
+end
+# operator_triple_shift: a user-defined >>> with + >> << & recording evaluation order and grouping
+# (Julia's precedence: shifts bind tighter than + and &), >>>=, the >>> Symbol, and >>> on a struct
+# returning a filled vector (dart's extension operator)
+const _OP_TS_CTR = Ref(Int64(0))
+struct _OpTsC
+    text::String
+end
+_OpTsC() = _OpTsC(string((_OP_TS_CTR[] += 1)))
+_op_ts_mk(a::_OpTsC, op::String, b::_OpTsC) = _OpTsC(string("(", (_OP_TS_CTR[] += 1), ":", a.text, op, b.text, ")"))
+Base.:>>>(a::_OpTsC, b::_OpTsC) = _op_ts_mk(a, ">>>", b)
+Base.:+(a::_OpTsC, b::_OpTsC) = _op_ts_mk(a, "+", b)
+Base.:>>(a::_OpTsC, b::_OpTsC) = _op_ts_mk(a, ">>", b)
+Base.:<<(a::_OpTsC, b::_OpTsC) = _op_ts_mk(a, "<<", b)
+Base.:&(a::_OpTsC, b::_OpTsC) = _op_ts_mk(a, "&", b)
+struct _OpTsObj
+    v::Int64
+end
+Base.:>>>(o::_OpTsObj, count::Int64) = fill(o, count)
+function _op_tshift(n::Int64)
+    _OP_TS_CTR[] = n - 1
+    s1 = (_OpTsC() >>> _OpTsC()).text
+    c = _OpTsC()
+    s2 = c.text
+    c >>>= _OpTsC()
+    s3 = c.text
+    p = ((_OpTsC() + _OpTsC() >>> _OpTsC()).text, (_OpTsC() >>> _OpTsC() + _OpTsC()).text,
+         (_OpTsC() + _OpTsC() >>> _OpTsC() + _OpTsC()).text, (_OpTsC() >>> _OpTsC() & _OpTsC()).text,
+         (_OpTsC() & _OpTsC() >>> _OpTsC()).text, (_OpTsC() & _OpTsC() >>> _OpTsC() & _OpTsC()).text,
+         (_OpTsC() >>> _OpTsC() >> _OpTsC()).text, (_OpTsC() >> _OpTsC() >>> _OpTsC()).text,
+         (_OpTsC() >>> _OpTsC() << _OpTsC()).text, (_OpTsC() << _OpTsC() >>> _OpTsC()).text,
+         (_OpTsC() << _OpTsC() >>> _OpTsC() >> _OpTsC()).text)
+    sym = Symbol(n == 1 ? ">>>" : "x") === Symbol(">>>")
+    o = _OpTsObj(n)
+    l = o >>> 5n
+    return (s1, s2, s3, p, sym, length(l), all(x -> x === o, l))
+end
+# operator2: a getindex and a setindex!; an index assignment's value is its right side whatever the
+# method does or returns
+mutable struct _OpHelper
+    i::Int64
+end
+Base.getindex(h::_OpHelper, index::Int64) = h.i + index
+Base.setindex!(h::_OpHelper, val::Int64, index::Int64) = (h.i = val; nothing)
+struct _OpC32754 end
+Base.setindex!(::_OpC32754, value, i) = (value = "OOPS"; nothing)
+mutable struct _OpC2x32754
+    data::Int64
+    _OpC2x32754() = new()
+end
+Base.setindex!(c::_OpC2x32754, value::Int64, i::Int64) = (() -> (c.data = i + value; nothing))()
+function _op_operator2(n::Int64)
+    obj = _OpHelper(10n)
+    f1 = obj.i
+    obj[10] = 20n
+    f2 = obj[10]
+    c = _OpC32754()
+    r1 = (c[0] = _op_pick(n, "ok"))
+    c2 = _OpC2x32754()
+    r2 = (c2[100] = 23n)
+    return (f1, f2, r1 == "ok", r2, c2.data)
+end
+# operator3: unary - returning its receiver, applied twice, then a method of the receiver
+struct _OpA3
+    v::Int64
+end
+Base.:-(a::_OpA3) = a
+Base.abs(a::_OpA3) = "correct"
+_op_a3_foo(a) = -(-a)
+# operator4: a < returning an Int64 used as an if condition throws TypeError (the receiver's field
+# decides at run time whether < returns a Bool or the Int64)
+struct _OpA4
+    v::Int64
+end
+Base.:<(a::_OpA4, b::_OpA4) = a.v == 2 ? (a.v < b.v) : a.v
+_op_a4_foo(a::_OpA4)::Int64 = try; if a < a; Int64(-3); else; Int64(499); end; catch e; e isa TypeError ? Int64(499) : Int64(-2); end
+# operator5: == < <= > >= returning non-Bool values (Int64, nothing, String)
+struct _OpA5
+    v::Int64
+end
+Base.:(==)(a::_OpA5, b::_OpA5) = a.v
+Base.:<(a::_OpA5, b::_OpA5) = nothing
+Base.:<=(a::_OpA5, b::_OpA5) = 499 * a.v
+Base.:>(a::_OpA5, b::_OpA5) = "foo"
+Base.:>=(a::_OpA5, b::_OpA5) = 42 * a.v
+# operator6: a user-defined ~
+struct _OpOp6
+    value::Int64
+end
+Base.:~(o::_OpOp6) = ~o.value
+# positive_bit_operations: | & xor << >> on values at and past 2^31, of constants, of values from the
+# recursive id, of locals, and ~~x
+function _op_pbo(n::Int64)
+    k = x -> _op_k(x, n)
+    id = _op_bs_id
+    consts = (k(0x80000000) | k(0), k(0x80000000) | k(1), k(0x80000000) | k(0x80000000), k(0xFFFF0000) | k(0xFFFF),
+              k(0x80000000) & k(0xFFFFFFFF), k(0x80000000) & k(0x80000000), k(0x80000000) & k(0xF0000000), k(0xFFFFFFFF) & k(0x80000000),
+              xor(k(0x80000000), k(0)), xor(k(0x80000000), k(0x7FFFFFFF)), xor(k(0x7FFFFFFF), k(0x80000000)), xor(k(0x70000000), k(0x80000000)),
+              k(1) << 31, k(0xFFFFFFF) << 4, k(0xFFFFFFFF) >> 1,
+              xor(((((k(0xFFFFFFF) << 4) >> 1) | k(0x80000000)) >> 2), k(0x40000000)) << 1)
+    inter = (id(k(0x80000000)) | id(k(0)), id(k(0x80000000)) | id(k(1)), id(k(0xFFFF0000)) | id(k(0xFFFF)),
+             id(k(0x80000000)) & id(k(0xFFFFFFFF)), id(k(0xFFFFFFFF)) & id(k(0x80000000)),
+             xor(id(k(0x80000000)), id(k(0x7FFFFFFF))), xor(id(k(0x70000000)), id(k(0x80000000))),
+             id(k(1)) << id(k(31)), id(k(0xFFFFFFF)) << id(k(4)), id(k(0xFFFFFFFF)) >> id(k(1)),
+             xor(((((id(k(0xFFFFFFF)) << 4) >> 1) | k(0x80000000)) >> 2), k(0x40000000)) << 1)
+    a = id(k(0x80000000)); b = id(k(0)); c = id(k(1)); f = id(k(0xFFFFFFFF)); h = id(k(0x7FFFFFFF)); kk = id(k(31)); m = id(k(0xFFFFFFF))
+    spec = (a | b, a | c, a & f, f & a, xor(a, b), xor(a, h), xor(h, a), c << kk, f >> c,
+            xor(((((m << 4) >> 1) | k(0x80000000)) >> 2), k(0x40000000)) << 1)
+    prec = (-n & k(0x80000000), id(-n) & k(0x80000000), ~(~(k(0x80000000))), ~(~(id(k(0x80000000)))))
+    return (consts, inter, spec, prec)
+end
+# precedence: ! ~ prefix and postfix increment against + - * / and indexing
+function _op_prec(n::Int64)
+    x = 3n
+    bang = (!true == false, !iseven(x), (!iseven(x += 1), x), (!iseven((x += 1) - 1), x))
+    v = Int64[3n]
+    pre = Int64[]
+    push!(pre, (v[1] += 1) + 3, v[1], (v[1] += 1) - 3, v[1], (v[1] -= 1) + 4, v[1], (v[1] -= 1) - 4, v[1],
+          3 + (v[1] += 1), v[1], 3 - (v[1] += 1), v[1], 4 + (v[1] -= 1), v[1], 4 - (v[1] -= 1), v[1])
+    w = Int64[3n]
+    post = Int64[]
+    push!(post, ((w[1] += 1) - 1) + 3, w[1], ((w[1] += 1) - 1) - 3, w[1], ((w[1] -= 1) + 1) + 4, w[1], ((w[1] -= 1) + 1) - 4, w[1],
+          3 + ((w[1] += 1) - 1), w[1], 3 - ((w[1] += 1) - 1), w[1], 4 + ((w[1] -= 1) + 1), w[1], 4 - ((w[1] -= 1) + 1), w[1])
+    y = 3n
+    tilde = Int64[]
+    push!(tilde, ~y + 7, ~(y += 1) + 7, y, ~((y += 1) - 1) + 7, y, ~(y -= 1) + 7, y, ~((y -= 1) + 1) + 7, y)
+    z = 3n
+    preadd = Int64[]
+    push!(preadd, (z += 1) + 3, z, (z += 1) - 3, z, (z -= 1) + 4, z, (z -= 1) - 4, z, 3 + (z += 1), z, 3 - (z += 1), z, 4 + (z -= 1), z, 4 - (z -= 1), z)
+    u = 3n
+    postadd = Int64[]
+    push!(postadd, ((u += 1) - 1) + 3, u, ((u += 1) - 1) - 3, u, ((u -= 1) + 1) + 4, u, ((u -= 1) + 1) - 4, u,
+          3 + ((u += 1) - 1), u, 3 - ((u += 1) - 1), u, 4 + ((u -= 1) + 1), u, 4 - ((u -= 1) + 1), u)
+    p = 3n
+    premul = Float64[]
+    push!(premul, (p += 1) * 3, p, (p += 1) / 5, p, (p -= 1) * 3, p, (p -= 1) / 4, p, 3 * (p += 1), p, 5 / (p += 1), p, 3 * (p -= 1), p, 6 / (p -= 1), p)
+    q = 3n
+    postmul = Float64[]
+    push!(postmul, ((q += 1) - 1) * 3, q, ((q += 1) - 1) / 4, q, ((q -= 1) + 1) * 3, q, ((q -= 1) + 1) / 4, q,
+          3 * ((q += 1) - 1), q, 3 / ((q += 1) - 1), q, 4 * ((q -= 1) + 1), q, 4 / ((q -= 1) + 1), q)
+    return (bang, pre, post, ~sign(y) == ~(sign(y)), tilde, preadd, postadd, premul, postmul)
+end
+# smi_type: isa against abstract number and string types (dart's Comparable<num>, Comparable,
+# Comparable<String>, Comparable<double> become Real, Number, AbstractString, AbstractFloat)
+_op_st_isnum(a) = a isa Real
+_op_st_isnumraw(a) = a isa Number
+_op_st_isnotnum(a) = a isa AbstractString
+_op_st_isnotint(a) = a isa AbstractFloat
+# ternary: ?: choosing between two calls
+_op_tern_cond(n::Int64) = n == 1
+_op_tern_foo() = Int64(-4)
+_op_tern_moo() = Int64(5)
+# truncdiv: mod by 9 and div by a ranged |i|, and div by 0
+_op_td_foo(i, x) = mod(i, x)
+_op_td_foo2(i) = (x = i < 0 ? -i : i; div(i, x))
+function _op_truncdiv(n::Int64)
+    r = Int64[]
+    for i in (-30n):(29n)
+        push!(r, _op_td_foo(i, 9))
+        i != 0 && push!(r, _op_td_foo2(i))
+    end
+    return (r, _op_divthrows(_op_td_foo2, 0n))
+end
+# truncdiv_uint32: div by 1 of 2^32 - 1 read from a global list
+const _OP_TU_A = Int64[4294967295]
+# unary, unary2: a sum of two calls compared with a Float64 and an Int64
+_op_un_foo(n::Int64) = 4n
+_op_un_moo(n::Int64) = 5n
+_op_un2_foo(n::Int64) = -4n
+# unsigned_right_shift: a user-defined >>> and >>>=, >>> on a Union receiver with a wrong operand
+# (MethodError), the >>> Symbol, >>> returning an iterable, and the grouping of >>> among ~ + / >>
+# & | xor < (Julia's precedence)
+struct _OpUrsC
+    id::Int64
+end
+Base.:>>>(a::_OpUrsC, other::_OpUrsC) = other
+struct _OpUrsSyncStar end
+Base.:>>>(::_OpUrsSyncStar, value::_OpUrsC) = (value,)
+struct _OpAssoc
+    ops::String
+end
+Base.:~(a::_OpAssoc) = _OpAssoc("(~" * a.ops * ")")
+Base.:+(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * "+" * b.ops * ")")
+Base.:/(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * "/" * b.ops * ")")
+Base.:&(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * "&" * b.ops * ")")
+Base.:|(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * "|" * b.ops * ")")
+Base.xor(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * "^" * b.ops * ")")
+Base.:>(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * ">" * b.ops * ")")
+Base.:>>(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * ">>" * b.ops * ")")
+Base.:>>>(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * ">>>" * b.ops * ")")
+Base.:<(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * "<" * b.ops * ")")
+Base.:>=(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * ">=" * b.ops * ")")
+Base.:<=(a::_OpAssoc, b::_OpAssoc) = _OpAssoc("(" * a.ops * "<=" * b.ops * ")")
+function _op_urs(n::Int64)
+    c1 = _OpUrsC(n); c2 = _OpUrsC(2n)
+    f1 = (c1 >>> c2) === c2
+    c = c1
+    c >>>= c2
+    f2 = c === c2
+    d = n == 1 ? c1 : 2n
+    f3 = (d >>> c2) === c2
+    f4 = try; d >>> 4n; false; catch e; e isa MethodError; end
+    sym = Symbol(n == 1 ? ">>>" : "x") === Symbol(">>>")
+    cnt = 0
+    same = true
+    for v in _OpUrsSyncStar() >>> c1
+        cnt += 1
+        same = same && v === c1
+    end
+    a = _OpAssoc(n == 1 ? "*" : "?")
+    strs = ((~a >>> ~a).ops, (a + a >>> a + a).ops, (a / a >>> a / a).ops, (a >> a >>> a >> a).ops, (a & a >>> a & a).ops,
+            (a | a >>> a | a).ops, (a ⊻ a >>> a ⊻ a).ops, (a < a >>> a).ops, (a >>> a < a).ops)
+    res = a
+    res >>>= a
+    res >>>= a
+    return (f1, f2, f3, f4, sym, cnt, same, strs, res.ops)
+end
+_g("dart_operator", Any[
+    ("and_operation_on_non_integer_operand", (n::Int64) -> (a = _op_id(_OpNotAnInt(n)); r = a & 5n & 2n; _dw_facts(r === a, r.v)), Int64(1)),
+    ("arithmetic_canonicalization", (n::Int64) -> _dw_facts(_op_canon(n), isnan(_op_mul0double(NaN * n)), signbit(_op_add0double(-0.0 * n))), Int64(1)),
+    ("arithmetic_int64", (n::Int64) -> (s = _op_i64_strs(n); _dw_facts(parse(Int64, s[1]), parse(Int64, s[2]), parse(Int64, s[3]), parse(Int64, s[4]))), Int64(1)),
+    ("arithmetic_smi_overflow", (n::Int64) -> (r = Int64[]; for i in 0:(10n - 1); push!(r, (i - i) - -1073741824, (i - i) - -4611686018427387904); end; r), Int64(1)),
+    ("arithmetic", (n::Int64) -> _op_arith(n), Int64(1)),
+    ("bit_operations", (n::Int64) -> _op_bitops(n), Int64(1)),
+    ("bit_shift", (n::Int64) -> _op_bitshift(n), Int64(1)),
+    ("comparison", (n::Int64) -> _op_comparison(n), Int64(1)),
+    ("compound_assignment", (n::Int64) -> _op_compound(n), Int64(1)),
+    ("cond_expr", (n::Int64) -> _op_condexpr(n), Int64(1)),
+    ("div_by_zero", (n::Int64) -> _dw_facts(isnan(_op_dbz_divby(n - 1, n - 1)), _op_dbz_moustache(n - 1, n - 1)), Int64(1)),
+    ("div_with_power_of_two", (n::Int64) -> _op_dpt(n), Int64(1)),
+    ("div_with_power_of_two2", (n::Int64) -> _dw_facts(_op_dpt(n), _op_divthrows(_op_div_by0, 4n)), Int64(1)),
+    ("equality_covariant", (n::Int64) -> (oNever = _OpEqNever(n); oNum = _OpEqTV{Real}(n); nul = n == 1 ? nothing : n; z = n - 1; zf = 0.0 * n;
+        s = _op_pick(n, "not a number");
+        _dw_facts(_op_eq_try(oNever, nul), _op_eq_try(nul, oNever), _op_eq_try(oNever, z), _op_eq_try(z, oNever),
+                  _op_eq_try(oNum, nul), _op_eq_try(nul, oNum), _op_eq_try(oNum, z), _op_eq_try(z, oNum), _op_eq_try(oNum, zf), _op_eq_try(zf, oNum),
+                  _op_eq_try(oNum, s), _op_eq_try(s, oNum), _op_eq_try(oNum, oNum))), Int64(1)),
+    ("equality", (n::Int64) -> (t = _OpEqA(n == 1); f = _OpEqA(n != 1); nul = n == 1 ? nothing : n; d = _OpDeath(n);
+        _dw_facts(_op_eq_try(f, f), _op_ne_try(f, f), _op_eq_try(t, t), _op_eq_try(t, 5n), _op_eq_try(t, nul), _op_eq_try(nul, t),
+                  _op_ne_try(t, nul), _op_ne_try(nul, t), _op_eq_try(nul, nul), _op_ne_try(nul, nul),
+                  _op_eq_try(d, 5n), _op_eq_try(d, nul), _op_eq_try(nul, d), _op_ne_try(d, nul), _op_ne_try(nul, d),
+                  (_op_bool_eq_pa(n == 1), _op_bool_eq_pa(n != 1), _op_bool_ne_pa(n == 1), _op_bool_ne_pa(n != 1),
+                   _op_bool_eq_pb(n == 1), _op_bool_eq_pb(n != 1), _op_bool_ne_pb(n == 1), _op_bool_ne_pb(n != 1)),
+                  (_op_bool_eq_pa(n), _op_bool_ne_pa(_op_pick(n, "hi")), _op_bool_eq_pb(2.0n), _op_bool_ne_pb(Int64[n])))), Int64(1)),
+    ("incr_op", (n::Int64) -> _op_incr(n), Int64(1)),
+    ("index_evaluation_order", (n::Int64) -> (trace = Int64[]; _op_ieo_getb(trace)[_op_ieo_getindex(trace)] += 37n; trace), Int64(1)),
+    ("index", (n::Int64) -> _op_index(n), Int64(1)),
+    ("integer_division_by_zero", (n::Int64) -> _op_intdivzero(n), Int64(1)),
+    ("left_shift", (n::Int64) -> (r = Int64[]; for i in 0:(80n - 1); push!(r, _op_try_div(-n << i, -n)); end; r), Int64(1)),
+    ("logical_expression", (n::Int64) -> (g1 = Int64[]; _op_le_value_or!(g1, n == 1 ? String[] : nothing); _op_le_value_or!(g1, n == 1 ? nothing : String[]);
+        g2 = Int64[]; _op_le_value_and!(g2, n == 1 ? String[] : nothing); _op_le_value_and!(g2, n == 1 ? nothing : String[]);
+        _dw_facts(_op_le_or(n), g1, _op_le_and(n), g2)), Int64(1)),
+    ("logical_expression2", (n::Int64) -> (_OP_LE2_COUNTER[] = 0; o = Union{String,Int64}["foo", 499][n + 1];
+        if (o isa Number) || (o isa String && true); _op_le2_use(o); end; _OP_LE2_COUNTER[]), Int64(1)),
+    ("logical_expression3", (n::Int64) -> (o = Union{String,Int64}["foo", 499][n]; (!(o isa Number) && length(o) == 4) || _op_le_isnum(o)), Int64(1)),
+    ("logical_expression4", (n::Int64) -> (o = Union{String,Int64}["foo", 499][n]; entered = !(o isa Number && o isa Number);
+        _dw_facts(entered, entered ? _op_le_isnum(o) : true)), Int64(1)),
+    ("logical_expression5", (n::Int64) -> (o = Union{String,Int64}["foo", 499][n]; entered = !(o isa Number) && o isa String;
+        _dw_facts(entered, entered ? _op_le_isnum(o) : true, entered ? _op_le_isstr(o) : false)), Int64(1)),
+    ("mint_arithmetic", (n::Int64) -> _op_mint(n), Int64(1)),
+    ("modulo", (n::Int64) -> _op_modulo(n), Int64(1)),
+    ("mul_recipr", (x::Float64) -> _op_mulrecipr(x), 1.0),
+    ("multi_assign", (n::Int64) -> (i = j = k = 11n; f1 = (i, j, k); nn = m = k = 55n; _dw_facts(f1, (m, nn, k))), Int64(1)),
+    ("negate_and_method_negate", (n::Int64) -> _dw_facts(-_OpFoo(n), _op_negate(_OpFoo(n))), Int64(1)),
+    ("number_operator_context", (n::Int64) -> _op_noc(n), Int64(1)),
+    ("number_operator_typing", (n::Int64) -> _op_not(n), Int64(1)),
+    ("operations_on_non_num_operand", (n::Int64) -> _dw_facts(_op_nonnum(_op_id(_OpThing1(n)), n), _op_nonnum(_OpThing1(n), n), _op_nonnum(_OpThing2(n), n)), Int64(1)),
+    ("operator", (n::Int64) -> _op_operator(n), Int64(1)),
+    ("operator_triple_shift", (n::Int64) -> _op_tshift(n), Int64(1)),
+    ("operator2", (n::Int64) -> _op_operator2(n), Int64(1)),
+    ("operator3", (n::Int64) -> (r = _op_a3_foo(_OpA3(n)); _dw_facts(abs(r) == "correct", r.v)), Int64(1)),
+    ("operator4", (n::Int64) -> _op_a4_foo(_OpA4(n)), Int64(1)),
+    ("operator5", (n::Int64) -> (a = _OpA5(n); _dw_facts(a == a, (a < a) === nothing, a <= a, a > a, a >= a)), Int64(1)),
+    ("operator6", (n::Int64) -> _dw_facts(~n, ~_OpOp6(n)), Int64(1)),
+    ("positive_bit_operations", (n::Int64) -> _op_pbo(n), Int64(1)),
+    ("precedence", (n::Int64) -> _op_prec(n), Int64(1)),
+    ("round", (x::Float64) -> _dw_facts(round(Int64, 0.49999999999999994 * x), round(Int64, -0.49999999999999994 * x),
+        round(Int64, 9007199254740991.0 * x), round(Int64, -9007199254740991.0 * x)), 1.0),
+    ("smi_type", (n::Int64) -> (e = Int64[]; f0 = (_op_st_isnum(e), _op_st_isnumraw(e), _op_st_isnotnum(e), _op_st_isnotint(e)); r = Bool[];
+        for i in 0:(20n - 1); v = n == 1 ? i : e; push!(r, _op_st_isnum(v), _op_st_isnumraw(v), _op_st_isnotnum(v), _op_st_isnotint(v)); end; _dw_facts(f0, r)), Int64(1)),
+    ("ternary", (n::Int64) -> _dw_facts(_op_tern_cond(n) ? _op_tern_foo() : _op_tern_moo(), !_op_tern_cond(n) ? _op_tern_foo() : _op_tern_moo()), Int64(1)),
+    ("truncdiv", (n::Int64) -> _op_truncdiv(n), Int64(1)),
+    ("truncdiv_uint32", (n::Int64) -> div(_OP_TU_A[n], 1), Int64(1)),
+    ("truncdiv_zero", (n::Int64) -> _dw_facts(_op_divthrows(i -> _op_td_foo(i, 0), 12n), _op_divthrows(_op_td_foo2, 0n)), Int64(1)),
+    ("unary", (n::Int64) -> (s = _op_un_foo(n) + _op_un_moo(n); _dw_facts(s == 9.0, s)), Int64(1)),
+    ("unary2", (n::Int64) -> _op_un2_foo(n) + _op_un_moo(n), Int64(1)),
+    ("unsigned_right_shift", (n::Int64) -> _op_urs(n), Int64(1)),
+])
+
+# ---- tests/language/string: literals, escapes, raw and multi-line strings, interpolation ----
+# _st_c is the dart tests' opaque string: the literal when the case's argument is 1, else "?".
+# dart's '...' strings are Julia "..."; adjacent literals are `*`; codeUnitAt(i) is codeunit(s, i + 1)
+# (a UTF-8 byte) and .length is length (characters): the expected values are Julia's.
+_st_c(n::Int64, s::String) = n == 1 ? s : "?"
+_st_fromcodes(xs::Vector{Int64}) = String(map(Char, xs))
+_st_cu(s::String, i::Int64) = Int64(codeunit(s, i))
+function _st_eqs(n::Int64, got::NTuple{N,String}, want::NTuple{N,String}) where {N}
+    v = Bool[]
+    for i in 1:N
+        push!(v, _st_c(n, got[i]) == want[i])
+    end
+    return v
+end
+# adjacent_string_literals: empty, interpolated, raw and triple-quoted literals joined by `*`
+function _st_adjacent(n::Int64)
+    empty = _st_eqs(n, ("" * "" * "", "" * "" * raw"", "a" * "", "a" * raw"", raw"c" * "", raw"c" * raw"",
+                        "" * "a", "" * raw"a", raw"" * "c", raw"" * raw"c"),
+                    ("", "", "a", "a", "c", "c", "a", "a", "c", "c"))
+    s = _st_c(n, "a")
+    interp = Bool["$s" * "b" == "ab", _st_c(n, raw"$s" * "b") == "\$sb", "-$s-" * "b" == "-a-b",
+                  _st_c(n, raw"-$s-" * "b") == "-\$s-b", "b" * "$s" == "ba", _st_c(n, "b" * raw"$s") == "b\$s",
+                  "b" * "-$s-" == "b-a-", _st_c(n, "b" * raw"-$s-") == "b-\$s-"]
+    multiline = _st_eqs(n, ("a" * "b" * "e", "a " * "b " * "e", "a" * " b" * " e", """
+a""" * "b" * "e", """
+a""" * " b" * " e", """
+a""" * """
+b""" * """
+e"""), ("abe", "a b e", "a b e", "abe", "a b e", "abe"))
+    return (empty, interp, multiline)
+end
+# adjacent_const_string_literals: the same joined literals held by a constant object whose show
+# prints its value
+struct _StConster{T}
+    value::T
+end
+Base.show(io::IO, c::_StConster) = print(io, c.value)
+const _ST_ACS_S = "a"
+const _ST_ACS = (_StConster("" * "" * ""), _StConster("" * "" * raw""), _StConster("a" * ""), _StConster("a" * raw""),
+                 _StConster(raw"c" * ""), _StConster(raw"c" * raw""), _StConster("" * "a"), _StConster("" * raw"a"),
+                 _StConster(raw"" * "c"), _StConster(raw"" * raw"c"),
+                 _StConster("$_ST_ACS_S" * "b"), _StConster(raw"$s" * "b"), _StConster("-$_ST_ACS_S-" * "b"),
+                 _StConster(raw"-$s-" * "b"), _StConster("b" * "$_ST_ACS_S"), _StConster("b" * raw"$s"),
+                 _StConster("b" * "-$_ST_ACS_S-"), _StConster("b" * raw"-$s-"),
+                 _StConster("a" * "b" * "e"), _StConster("a " * "b " * "e"), _StConster("""
+a""" * " b" * " e"), _StConster("""
+a""" * """
+b""" * """
+e"""))
+const _ST_ACS_WANT = ("", "", "a", "a", "c", "c", "a", "a", "c", "c",
+                      "ab", "\$sb", "-a-b", "-\$s-b", "ba", "b\$s", "b-a-", "b-\$s-",
+                      "abe", "a b e", "a b e", "abe")
+_st_ck(n::Int64, k::_StConster{String}) = n == 1 ? k : _StConster("?")
+function _st_adjacent_const(n::Int64)
+    v = Bool[]
+    for i in 1:length(_ST_ACS)
+        push!(v, string(_st_ck(n, _ST_ACS[i])) == _ST_ACS_WANT[i])
+    end
+    return v
+end
+# bad_raw_string_runtime: an empty literal joined to a triple-quoted string holding r' and a newline
+_st_bad_raw(n::Int64) = _st_c(n, "") * """
+    r'
+'
+    """
+# char_escape: \x, \u and \U escapes of each code point, their length, first code unit and
+# equality with the string built from the code point; then the named escapes \b \t \n \v \f \r
+function _st_esc(n::Int64, c::Int64, forms::NTuple{N,String}) where {N}
+    ref = _st_fromcodes(Int64[c])
+    lens = Int64[]
+    units = Int64[]
+    eqs = Bool[]
+    for f in forms
+        s = _st_c(n, f)
+        push!(lens, Int64(length(s)))
+        push!(units, _st_cu(s, 1))
+        push!(eqs, s == ref)
+    end
+    return (lens, units, eqs)
+end
+function _st_char_escape(n::Int64)
+    return _dw_facts(
+        _st_esc(n, Int64(0x00), ("\x00", "\u0000", "\U0", "\U00", "\U000", "\U0000", "\U00000", "\U000000")),
+        _st_esc(n, Int64(0x01), ("\x01", "\u0001", "\U1", "\U01", "\U001", "\U0001", "\U00001", "\U000001")),
+        _st_esc(n, Int64(0x55), ("\x55", "\u0055", "\U55", "\U055", "\U0055", "\U00055", "\U000055")),
+        _st_esc(n, Int64(0x7F), ("\x7F", "\u007F", "\U7F", "\U07F", "\U007F", "\U0007F", "\U00007F")),
+        _st_esc(n, Int64(0x80), ("\x80", "\u0080", "\U80", "\U080", "\U0080", "\U00080", "\U000080")),
+        _st_esc(n, Int64(0xAA), ("\xAA", "\u00AA", "\UAA", "\U0AA", "\U00AA", "\U000AA", "\U0000AA")),
+        _st_esc(n, Int64(0xFE), ("\xFE", "\u00FE", "\UFE", "\U0FE", "\U00FE", "\U000FE", "\U0000FE")),
+        _st_esc(n, Int64(0xFF), ("\xFF", "\u00FF", "\UFF", "\U0FF", "\U00FF", "\U000FF", "\U0000FF")),
+        _st_esc(n, Int64(0x1000), ("\u1000", "\U1000", "\U01000", "\U001000")),
+        _st_esc(n, Int64(0x5555), ("\u5555", "\U5555", "\U05555", "\U005555")),
+        _st_esc(n, Int64(0x7FFF), ("\u7FFF", "\U7FFF", "\U07FFF", "\U007FFF")),
+        _st_esc(n, Int64(0x8000), ("\u8000", "\U8000", "\U08000", "\U008000")),
+        _st_esc(n, Int64(0xAAAA), ("\uAAAA", "\UAAAA", "\U0AAAA", "\U00AAAA")),
+        _st_esc(n, Int64(0xFFFE), ("\uFFFE", "\UFFFE", "\U0FFFE", "\U00FFFE")),
+        _st_esc(n, Int64(0xFFFF), ("\uFFFF", "\UFFFF", "\U0FFFF", "\U00FFFF")),
+        _st_esc(n, Int64(0x10000), ("\U10000", "\U010000")),
+        _st_esc(n, Int64(0x1FFFF), ("\U1FFFF", "\U01FFFF")),
+        _st_esc(n, Int64(0x105555), ("\U105555",)),
+        _st_esc(n, Int64(0x10FFFF), ("\U10FFFF",)),
+        _st_esc(n, Int64(0x08), ("\b", "\x08", "\u0008", "\U8", "\U08", "\U008", "\U0008", "\U00008", "\U000008")),
+        _st_esc(n, Int64(0x09), ("\t", "\x09", "\u0009", "\U9", "\U09", "\U009", "\U0009", "\U00009", "\U000009")),
+        _st_esc(n, Int64(0x0A), ("\n", "\x0A", "\u000A", "\UA", "\U0A", "\U00A", "\U000A", "\U0000A", "\U00000A")),
+        _st_esc(n, Int64(0x0B), ("\v", "\x0B", "\u000B", "\UB", "\U0B", "\U00B", "\U000B", "\U0000B", "\U00000B")),
+        _st_esc(n, Int64(0x0C), ("\f", "\x0C", "\u000C", "\UC", "\U0C", "\U00C", "\U000C", "\U0000C", "\U00000C")),
+        _st_esc(n, Int64(0x0D), ("\r", "\x0D", "\u000D", "\UD", "\U0D", "\U00D", "\U000D", "\U0000D", "\U00000D")),
+        Bool[_st_c(n, "\b") != "b", _st_c(n, "\t") != "t", _st_c(n, "\n") != "n", _st_c(n, "\v") != "v",
+             _st_c(n, "\f") != "f", _st_c(n, "\r") != "r"],
+        Bool[_st_c(n, "\a") == "a", _st_c(n, "\e") == "e"])
+end
+# charcode: == between a string literal and a String/Int64 value or a String/Vector element, each order
+_st_moo(j::Union{String,Int64}) = "x" == j
+_st_moo_rev(j::Union{String,Int64}) = j == "x"
+_st_goo(a::Union{String,Vector{Int64}}, j::Union{String,Int64}) = a[2] == j
+_st_goo_rev(a::Union{String,Vector{Int64}}, j::Union{String,Int64}) = j == a[2]
+_st_hoo(a::String) = a[2] == "Hello"[1]
+_st_hoo_rev(a::String) = "Hello"[1] == a[2]
+_st_bounds(f) = try; f(); Int64(0); catch e; e isa BoundsError ? Int64(-1) : Int64(-2); end
+function _st_charcode(n::Int64)
+    strs = Bool[_st_moo(_st_c(n, "x")), _st_moo(_st_c(n, "X")), _st_moo(_st_c(n, "xx")),
+                _st_moo_rev(_st_c(n, "x")), _st_moo_rev(_st_c(n, "X")), _st_moo_rev(_st_c(n, "xx")),
+                _st_goo(_st_c(n, "Hello"), _st_c(n, "e")), _st_goo(_st_c(n, "Hello"), _st_c(n, "E")),
+                _st_goo(_st_c(n, "Hello"), _st_c(n, "ee")), _st_goo_rev(_st_c(n, "Hello"), _st_c(n, "e")),
+                _st_goo_rev(_st_c(n, "Hello"), _st_c(n, "E")), _st_goo_rev(_st_c(n, "Hello"), _st_c(n, "ee")),
+                _st_hoo(_st_c(n, "HH")), _st_hoo(_st_c(n, "Ha")), _st_hoo_rev(_st_c(n, "HH")), _st_hoo_rev(_st_c(n, "Ha"))]
+    others = Bool[_st_moo(n + 11), _st_moo_rev(n + 11), _st_goo(Int64[n, 2], 2n), _st_goo_rev(Int64[n, 2], 2n)]
+    return (strs, others, _st_bounds(() -> _st_hoo(_st_c(n, "H"))), _st_bounds(() -> _st_hoo_rev(_st_c(n, "H"))))
+end
+# const_interpolation_constant_string_interpolation: an interpolated call on a receiver of either type
+struct _StCiA end
+struct _StCiB end
+_st_ci_foo(::_StCiA) = "home"
+_st_ci_foo(::_StCiB) = "world"
+_st_interpol_it(v::Union{_StCiA,_StCiB}) = "hello $(_st_ci_foo(v))"
+function _st_const_interp_constant(n::Int64)
+    a = n == 1 ? _StCiA() : _StCiB()
+    v = Bool[]
+    for _ in 1:20
+        push!(v, _st_interpol_it(a) == "hello home")
+    end
+    b = n == 1 ? _StCiB() : _StCiA()
+    return (v, _st_interpol_it(b) == "hello world")
+end
+# const_interpolation2: constants of every kind interpolated alone, in one string, across joined
+# literals and nested; dart's null prints as nothing, its fromEnvironment reads ENV
+const _ST_CI_U1 = nothing
+const _ST_CI_U2 = nothing
+const _ST_CI_U3 = nothing
+const _ST_CI_U4 = haskey(ENV, "XXXXX") ? ENV["XXXXX"] : nothing
+const _ST_CI_U5 = haskey(ENV, "XXXXX") ? parse(Int64, ENV["XXXXX"]) : nothing
+const _ST_CI_U6 = haskey(ENV, "XXXXX") ? ENV["XXXXX"] == "true" : nothing
+const _ST_CI_B1 = true
+const _ST_CI_B2 = false
+const _ST_CI_B3 = _ST_CI_B1 && (_ST_CI_B2 || !_ST_CI_B1)
+const _ST_CI_B4 = get(ENV, "XXXXX", "true") == "true"
+const _ST_CI_N1 = 42
+const _ST_CI_N2 = 3.1415
+const _ST_CI_N3 = 37
+const _ST_CI_N4 = 4.6692
+const _ST_CI_N5 = _ST_CI_B3 ? 1 : 2.71828
+const _ST_CI_N6 = parse(Int64, get(ENV, "XXXXX", "87"))
+const _ST_CI_S1 = "s1"
+const _ST_CI_S2 = "s2"
+const _ST_CI_S3 = "$_ST_CI_S1$_ST_CI_S2"
+const _ST_CI_S4 = get(ENV, "XXXXX", "s4")
+const _ST_CI_EACH = ("$_ST_CI_U1", "$_ST_CI_U2", "$_ST_CI_U3", "$_ST_CI_U4", "$_ST_CI_U5", "$_ST_CI_U6",
+                     "$_ST_CI_N1", "$_ST_CI_N2", "$_ST_CI_N3", "$_ST_CI_N4", "$_ST_CI_N5", "$_ST_CI_N6",
+                     "$_ST_CI_S1", "$_ST_CI_S2", "$_ST_CI_S3", "$_ST_CI_S4",
+                     "$_ST_CI_B1", "$_ST_CI_B2", "$_ST_CI_B3", "$_ST_CI_B4")
+const _ST_CI_I1 = "$_ST_CI_U1 $_ST_CI_U2 $_ST_CI_U3 $_ST_CI_U4 $_ST_CI_U5 $_ST_CI_U6 $_ST_CI_N1 $_ST_CI_N2 $_ST_CI_N3 $_ST_CI_N4 $_ST_CI_N5 $_ST_CI_N6 $_ST_CI_S1 $_ST_CI_S2 $_ST_CI_S3 $_ST_CI_S4 $_ST_CI_B1 $_ST_CI_B2 $_ST_CI_B3 $_ST_CI_B4"
+const _ST_CI_I2 = "$(_ST_CI_U1) $(_ST_CI_U2) $(_ST_CI_U3) $(_ST_CI_U4) $(_ST_CI_U5) $(_ST_CI_U6) $(_ST_CI_N1) $(_ST_CI_N2) $(_ST_CI_N3) $(_ST_CI_N4) $(_ST_CI_N5) $(_ST_CI_N6) $(_ST_CI_S1) $(_ST_CI_S2) $(_ST_CI_S3) $(_ST_CI_S4) $(_ST_CI_B1) $(_ST_CI_B2) $(_ST_CI_B3) $(_ST_CI_B4)"
+const _ST_CI_I3 = "$_ST_CI_U1 $_ST_CI_U2 $_ST_CI_U3 $_ST_CI_U4 $_ST_CI_U5 " *
+                  "$_ST_CI_U6 $_ST_CI_N1 $_ST_CI_N2 $_ST_CI_N3 $_ST_CI_N4 " *
+                  """$_ST_CI_N5 $_ST_CI_N6 $_ST_CI_S1 $_ST_CI_S2 $_ST_CI_S3 """ *
+                  """$_ST_CI_S4 $_ST_CI_B1 $_ST_CI_B2 $_ST_CI_B3 $_ST_CI_B4"""
+const _ST_CI_I4 = "$("$_ST_CI_U1 $_ST_CI_U2 $_ST_CI_U3 $_ST_CI_U4 $_ST_CI_U5 " *
+                     "$_ST_CI_U6 $_ST_CI_N1 $_ST_CI_N2 $_ST_CI_N3 $_ST_CI_N4") $("""$_ST_CI_N5 $_ST_CI_N6 $_ST_CI_S1 $_ST_CI_S2 $_ST_CI_S3 """ *
+                     """$_ST_CI_S4 $_ST_CI_B1 $_ST_CI_B2 $_ST_CI_B3 $_ST_CI_B4""")"
+function _st_const_interpolation2(n::Int64)
+    each = _st_eqs(n, (string(_ST_CI_U1), string(_ST_CI_U2), string(_ST_CI_U3), string(_ST_CI_U4),
+                       string(_ST_CI_U5), string(_ST_CI_U6), string(_ST_CI_N1), string(_ST_CI_N2),
+                       string(_ST_CI_N3), string(_ST_CI_N4), string(_ST_CI_N5), string(_ST_CI_N6),
+                       string(_ST_CI_S1), string(_ST_CI_S2), string(_ST_CI_S3), string(_ST_CI_S4),
+                       string(_ST_CI_B1), string(_ST_CI_B2), string(_ST_CI_B3), string(_ST_CI_B4)), _ST_CI_EACH)
+    expect = "nothing nothing nothing nothing nothing nothing 42 3.1415 37 4.6692 2.71828 87 " *
+             "s1 s2 s1s2 s4 true false false true"
+    whole = _st_eqs(n, (_ST_CI_I1, _ST_CI_I2, _ST_CI_I3, _ST_CI_I4), (expect, expect, expect, expect))
+    return (each, whole)
+end
+# escapes: \U, \f \v \b \r \n \t, \x and \u escapes inside words, read by length and codeunit;
+# \a and \e are Julia's bell and escape, dart's other letter escapes are not Julia syntax
+function _st_escapes(n::Int64)
+    d = _st_c(n, "Foo\U00000001Bar\U00000001Baz\U0000D7FFBoo")
+    delimited = (Int64(length(d)), _st_cu(d, 4), _st_cu(d, 8), _st_cu(d, 12), _st_cu(d, 13) == _st_cu("B", 1))
+    e = _st_c(n, "Foo\fBar\vBaz\bBoo")
+    escapes = (Int64(length(e)), _st_cu(e, 4), _st_cu(e, 5) == _st_cu("B", 1), _st_cu(e, 8),
+               _st_cu(e, 11) == _st_cu("z", 1), _st_cu(e, 12), _st_cu(e, 15) == _st_cu("o", 1))
+    r = _st_c(n, "Abc\rDef\nGhi\tJkl")
+    escapes2 = (Int64(length(r)), _st_cu(r, 4), _st_cu(r, 5) == _st_cu("D", 1), _st_cu(r, 8),
+                _st_cu(r, 9) == _st_cu("G", 1), _st_cu(r, 12), _st_cu(r, 13) == _st_cu("J", 1))
+    f2 = _st_c(n, "Foo\xFFBar")
+    fixed2 = (Int64(length(f2)), _st_cu(f2, 4), _st_cu(f2, 5) == _st_cu("B", 1))
+    f4 = _st_c(n, "Foo\u0001Bar")
+    fixed4 = (Int64(length(f4)), _st_cu(f4, 4), _st_cu(f4, 5) == _st_cu("B", 1))
+    literal = _st_c(n, "\a\e\$\"") == raw"ae$\""
+    return (delimited, escapes, escapes2, fixed2, fixed4, literal)
+end
+# interpolate_null: a field interpolated from a value, then from nothing, which throws
+mutable struct _StKermit
+    name::String
+end
+function _st_interpolate_null(n::Int64)
+    a = _StKermit(_st_c(n, "Kermit"))
+    s = "Hello Mr. $(a.name)"
+    b = n == 1 ? nothing : a
+    threw = try
+        "Hello Mr. $(b.name)"
+        Int64(0)
+    catch e
+        e isa ErrorException ? Int64(-1) : e isa Exception ? Int64(-2) : Int64(-3)
+    end
+    return (s == "Hello Mr. Kermit", threw)
+end
+# interpolate: \$ escapes, consts, a late global as a Ref, a subtype's show and field, and chains of
+# interpolated Latin-1, non-Latin and object values (dart's s * k is Julia's s^k)
+abstract type _StWhatchamaCallIt end
+struct _StThingamaBob <: _StWhatchamaCallIt
+    name::String
+end
+Base.show(io::IO, ::_StThingamaBob) = print(io, "Hansel")
+_st_whatchama_foo(self::_StWhatchamaCallIt) = "$self and $(self.name)"
+const _ST_IP_A = "svin"
+const _ST_IP_B = "hest"
+const _ST_IP_N = 1 + 1
+const _ST_IP_PRINTERS = Ref{String}()
+const _ST_IP_AAR_PRINTERS = Ref{String}()
+struct _StStringable
+    value::String
+end
+Base.show(io::IO, o::_StStringable) = print(io, o.value)
+Base.:^(o::_StStringable, count::Int64) = _StStringable(o.value^count)
+function _st_interpolate(n::Int64)
+    _ST_IP_PRINTERS[] = "Printers: $_ST_IP_A and $_ST_IP_B"
+    _ST_IP_AAR_PRINTERS[] = "AAR has $_ST_IP_N $(_ST_IP_PRINTERS[])."
+    x = n
+    f1 = _st_c(n, "eins und \$x macht zwei.") == raw"eins und $x macht zwei."
+    f2 = "eins und $x macht zwei." == "eins und 1 macht zwei."
+    f3 = _ST_IP_AAR_PRINTERS[] == "AAR has 2 Printers: svin and hest."
+    s_eins = _st_c(n, "eins")
+    d1 = n
+    zw = "zw"
+    ei = "ei"
+    f4 = "$(s_eins) und $(d1) macht $zw$ei." == "eins und 1 macht zwei."
+    f5 = _st_whatchama_foo(_StThingamaBob(_st_c(n, "Gretel"))) == "Hansel and Gretel"
+    latin = _st_c(n, "ab\x00\xff")
+    nonlatin = _st_c(n, "\u2000\U10000\ufeff")
+    olatin = _StStringable(latin)
+    ononlatin = _StStringable(nonlatin)
+    o1 = _StStringable(_st_c(n, "x"))
+    o2 = _StStringable(_st_c(n, "\ufeff"))
+    variants = Bool[latin^3 == "$latin$latin$latin",
+                    latin^12 == "$(latin^4)$(latin^4)$(latin^4)",
+                    nonlatin^3 == "$nonlatin$nonlatin$nonlatin",
+                    nonlatin^8 == "$(nonlatin^4)$(nonlatin^4)",
+                    latin^3 * nonlatin == "$latin$latin$latin$nonlatin",
+                    nonlatin * latin^3 == "$nonlatin$latin$latin$latin",
+                    latin^3 == "$latin$olatin$latin",
+                    latin^8 == "$(latin^4)$(olatin^4)",
+                    nonlatin^3 == "$nonlatin$ononlatin$nonlatin",
+                    nonlatin^8 == "$(nonlatin^4)$(ononlatin^4)",
+                    latin^2 * nonlatin^2 == "$latin$olatin$nonlatin$ononlatin",
+                    (nonlatin^2 * latin^2)^2 ==
+                        "$nonlatin$ononlatin$latin$olatin$nonlatin$ononlatin$latin$olatin",
+                    "a\u2000x\ufeff" == "$("a")$("\u2000")$(o1)$(o2)",
+                    "ax\ufeff\u2000" == "$("a")$(o1)$(o2)$("\u2000")",
+                    "\ufeffa\u2000x" == "$(o2)$("a")$("\u2000")$(o1)",
+                    "x\ufeff\u2000a" == "$(o1)$(o2)$("\u2000")$("a")"]
+    return (f1, f2, f3, f4, f5, variants)
+end
+# interpolate2: interpolated expressions, an indexed list, a closure call, a Dict lookup, a closure
+# that increments a captured counter, and nested interpolation across quote kinds and lines
+function _st_interpolate2(n::Int64)
+    f1 = "$n + 5 = $(n + 5)" == "1 + 5 = 6"
+    fib = Int64[n, 1, 2, 3, 5, 8, 13, 21]
+    local i::Int64 = 5
+    f2 = "$(i)" == "5"
+    f3 = "fib($(i)) = $(fib[i + 1])" == "fib(5) = 8"
+    f4 = "$i squared is $(((x) -> x * x)(i))" == "5 squared is 25"
+    f5 = "$(length(fib))" == "8"
+    colors = Dict{String,Int64}("red" => n, "green" => 2, "blue" => 3)
+    f6 = "green has value $(colors["green"])" == "green has value 2"
+    i = 0
+    b = () -> "$(i += 1)"
+    f7 = "aaa $("bbb $(b()) bbb") aaa $(b())" == "aaa bbb 1 bbb aaa 2"
+    s = "a $((() -> "b $((() -> """
+c""")())")()) d"
+    f8 = s == "a b c d"
+    return (f1, f2, f3, f4, f5, f6, f7, f8)
+end
+# interpolation_and_buffer: interpolation and an IOBuffer call show, which may throw; Julia
+# evaluates every interpolated expression before printing any
+struct _StToStringString end
+struct _StToStringThrows end
+Base.show(io::IO, ::_StToStringString) = print(io, "String")
+Base.show(io::IO, ::_StToStringThrows) = throw("Throw")
+_st_thrown(e) = e isa String ? (e::String == "Throw" ? Int64(1) : e::String == "unreachable" ? Int64(2) : Int64(3)) : Int64(4)
+function _st_interpolation_and_buffer(n::Int64)
+    s = _StToStringString()
+    t = _StToStringThrows()
+    f1 = "$s$s" == _st_c(n, "StringString")
+    f2 = try; "$t$(throw("unreachable"))"; Int64(0); catch e; _st_thrown(e); end
+    io = IOBuffer()
+    print(io, s)
+    print(io, s)
+    f3 = String(take!(io)) == _st_c(n, "StringString")
+    f4 = try; io2 = IOBuffer(); print(io2, t); print(io2, throw("unreachable")); Int64(0); catch e; _st_thrown(e); end
+    return (f1, f2, f3, f4)
+end
+# interpolation_newline: nested interpolations whose expressions span lines
+_st_brk(xs::Vector{String}) = "[" * join(xs, ", ") * "]"
+_st_brc(xs::Vector{String}) = "{" * join(xs, ", ") * "}"
+function _st_interpolation_newline(n::Int64)
+    expected = _st_c(n, "[[{{}: {}}]]")
+    a = "$(_st_brk([
+        "$(_st_brk([
+          "$(_st_brc(["$(_st_brc(String[])): $(_st_brc(String[]))"]))",
+        ]))",
+      ]))"
+    b = "$(_st_brk([
+        "$(_st_brk([
+          "$(_st_brc(["$(_st_brc(String[])): $(_st_brc(String[]))"]))",
+        ]))",
+      ]))"
+    c = "$(_st_brk([
+        "$(_st_brk([
+          "$(_st_brc(["$(_st_brc(String[])): $(_st_brc(String[]))"]))",
+        ]))",
+      ]))"
+    return (expected == a, a == b, b == c)
+end
+# interpolation, interpolation_runtime: values, consts, parameters and fields interpolated; an
+# escaped \$ read back by index (dart's s[12] is Julia's s[13])
+mutable struct _StInterpolation
+    j::Int64
+    k::Int64
+end
+const _ST_INTERP_I = 1
+const _ST_INTERP_A = "<hi>"
+_st_embed_params(::_StInterpolation, z::Int64) = "param = $(z)"
+_st_embed_single_field(t::_StInterpolation) = "j = $(t.j)"
+_st_embed_multiple_fields(t::_StInterpolation) = "j = $(t.j); k = $(t.k)"
+function _st_interpolation(n::Int64)
+    test = _StInterpolation(-1, -1)
+    test.j = n + 2
+    test.k = n + 4
+    c1 = _st_c(n, "1")
+    c2 = _st_c(n, "2")
+    c3 = _st_c(n, "3")
+    c4 = _st_c(n, "4")
+    esc = _st_c(n, "escaped     \${3+2}")
+    return (Bool[_st_c(n, " hi ") == " hi ", " 1" == " $(c1)", "1 " == "$(c1) ", "1" == "$(c1)", "12" == "$(c1)$(c2)",
+                 "12 34" == "$(c1)$(c2) $(c3)$(c4)", " hi 1 " == _st_c(n, " hi $(_ST_INTERP_I) "),
+                 " hi <hi> " == _st_c(n, " hi $(_ST_INTERP_A) "), "param = 9" == _st_embed_params(test, 8 + n),
+                 "j = 3" == _st_embed_single_field(test), " hi 1 <hi>" == _st_c(n, " hi $(_ST_INTERP_I) $(_ST_INTERP_A)"),
+                 "j = 3; k = 5" == _st_embed_multiple_fields(test)],
+            Bool[esc[13] == '$', esc[14] == '{', esc[15] == '3', esc[16] == '+', esc[17] == '2', esc[18] == '}'])
+end
+# interpolation7: a value whose show prints A, then nothing, interpolated (dart's null, Julia's nothing)
+struct _StA7 end
+Base.show(io::IO, ::_StA7) = print(io, "A")
+function _st_interpolation7(n::Int64)
+    a = _StA7()
+    b = n == 1 ? nothing : a
+    return ("$a + $a" == _st_c(n, "A + A"), "$b" == "nothing")
+end
+# interpolation8: a constant holding an interpolated constant, compared by ===
+const _ST_X8 = 1
+const _ST_Y8 = "Two is greater than $(_ST_X8)"
+# intrinsics: length and isempty of a one-byte and an empty string
+_st_test_length(s::String) = Int64(length(s))
+_st_test_isempty(s::String) = isempty(s)
+function _st_intrinsics(n::Int64)
+    onebyte = _st_c(n, "Hello world")
+    empty = _st_c(n, "")
+    return (_st_test_length(onebyte), _st_test_length(empty), _st_test_isempty(onebyte), _st_test_isempty(empty))
+end
+# literals: code point and code unit escapes in plain, triple-quoted, joined and interpolated
+# literals against String.fromCharCodes; dart's \xff (U+00FF) is Julia's ÿ, Julia's \xff being
+# a raw byte; dart compares UTF-16 code units, read in Julia through transcode(UInt16, s), which
+# also gives dart's "\u{10000}"[0] and [1]
+function _st_literals(n::Int64)
+    expect = _st_fromcodes(Int64[0, 0x0a, 0x0d, 0x7f, 0xff, 0xffff, 0xd800, 0xdc00, 0xdbff, 0xdfff])
+    points = _st_fromcodes(Int64[0, 0x0a, 0x0d, 0x7f, 0xff, 0xffff, 0x10000, 0x10ffff])
+    units = UInt16[0x0000, 0x000a, 0x000d, 0x007f, 0x00ff, 0xffff, 0xd800, 0xdc00, 0xdbff, 0xdfff]
+    p1 = _st_c(n, "\x00\x0a\x0d\x7fÿ￿\U10000\U10ffff")
+    p2 = _st_c(n, """\x00\x0a\x0d\x7fÿ￿\U10000\U10ffff""")
+    code_points = Bool[p1 == points, p2 == points, transcode(UInt16, p1) == units, transcode(UInt16, p2) == units,
+                       p1 == expect]
+    code_units = Bool[_st_c(n, "\x00\x0a\x0d\x7fÿ￿𐀀􏿿") == expect,
+                      _st_c(n, """\x00\x0a\x0d\x7fÿ￿𐀀􏿿""") == expect,
+                      _st_c(n, """\x00
+\x0d\x7fÿ￿𐀀􏿿""") == expect,
+                      _st_c(n, "\x00\x0a\x0d\x7fÿ￿" * "\ud800" * "\udc00\udbff" * "\udfff") == expect,
+                      _st_c(n, "\x00\x0a\x0d\x7fÿ$("")￿𐀀􏿿") == expect]
+    u1 = transcode(UInt16, _st_c(n, "\U10000"))
+    u2 = transcode(UInt16, _st_c(n, "\U10FFFF"))
+    extracted = _st_fromcodes(Int64[0, 0x0a, 0x0d, 0x7f, 0xff, 0xffff, Int64(u1[1]), Int64(u1[2]),
+                                    Int64(u2[1]), Int64(u2[2])]) == expect
+    return (code_points, code_units, extracted)
+end
+# multiline_newline (and _runtime, _runtime_1.._6, with the helpers multiline_newline_cr, _crlf,
+# _lf): triple-quoted strings whose line endings are CR, CRLF and LF, as consts and typed globals;
+# the CR and CRLF sources go through Meta.parse at load so this file holds no CR byte
+const _ST_ML_CR = Meta.parse("\"\"\"\ra\rb\r\"\"\"")::String
+const _ST_ML_CRLF = Meta.parse("\"\"\"\r\na\r\nb\r\n\"\"\"")::String
+const _ST_ML_LF = """
+a
+b
+"""
+const _ST_ML_RAW_CR = (Meta.parse("raw\"\"\"\r\\a\r\\b\r\"\"\"")::Expr).args[end]::String
+const _ST_ML_RAW_CRLF = (Meta.parse("raw\"\"\"\r\n\\a\r\n\\b\r\n\"\"\"")::Expr).args[end]::String
+const _ST_ML_RAW_LF = raw"""
+\a
+\b
+"""
+_st_ml_cr::String = Meta.parse("\"\"\"\ra\rb\r\"\"\"")::String
+_st_ml_crlf::String = Meta.parse("\"\"\"\r\na\r\nb\r\n\"\"\"")::String
+_st_ml_lf::String = """
+a
+b
+"""
+_st_ml_raw_cr::String = (Meta.parse("raw\"\"\"\r\\a\r\\b\r\"\"\"")::Expr).args[end]::String
+_st_ml_raw_crlf::String = (Meta.parse("raw\"\"\"\r\n\\a\r\n\\b\r\n\"\"\"")::Expr).args[end]::String
+_st_ml_raw_lf::String = raw"""
+\a
+\b
+"""
+_st_mlnl_strings(n::Int64) = (_st_c(n, _ST_ML_CR), _st_c(n, _ST_ML_CRLF), _st_c(n, _ST_ML_LF),
+                              _st_c(n, _ST_ML_RAW_CR), _st_c(n, _ST_ML_RAW_CRLF), _st_c(n, _ST_ML_RAW_LF),
+                              _st_c(n, _st_ml_cr), _st_c(n, _st_ml_crlf), _st_c(n, _st_ml_lf),
+                              _st_c(n, _st_ml_raw_cr), _st_c(n, _st_ml_raw_crlf), _st_c(n, _st_ml_raw_lf))
+function _st_mlnl_cs(n::Int64)
+    s = _st_mlnl_strings(n)
+    return (c1 = s[1] == s[2] ? true : nothing, c2 = s[2] == s[3] ? true : nothing, c3 = s[3] == s[1] ? true : nothing,
+            c1r = s[4] == s[5] ? true : nothing, c2r = s[5] == s[6] ? true : nothing, c3r = s[6] == s[4] ? true : nothing,
+            c7 = s[1] != s[2] ? true : nothing, c8 = s[2] != s[3] ? true : nothing, c9 = s[3] != s[1] ? true : nothing,
+            c7r = s[4] != s[5] ? true : nothing, c8r = s[5] != s[6] ? true : nothing, c9r = s[6] != s[4] ? true : nothing)
+end
+function _st_mlnl(n::Int64)
+    s = _st_mlnl_strings(n)
+    lens = Int64[]
+    for x in s
+        push!(lens, Int64(length(x)))
+    end
+    eqs = Bool[s[1] == s[2], s[2] == s[3], s[3] == s[1], s[4] == s[5], s[5] == s[6], s[6] == s[4],
+               s[7] == s[8], s[8] == s[9], s[9] == s[7], s[10] == s[11], s[11] == s[12], s[12] == s[10]]
+    cs = _st_mlnl_cs(n)
+    consts = Bool[cs.c1 === true, cs.c2 === true, cs.c3 === true, cs.c1r === true, cs.c2r === true, cs.c3r === true,
+                  cs.c7 === nothing, cs.c8 === nothing, cs.c9 === nothing, cs.c7r === nothing, cs.c8r === nothing,
+                  cs.c9r === nothing]
+    return (lens, eqs, consts)
+end
+# multiline_strings: whitespace, \\, \t, a backslash-newline, \x20 and an interpolation after the
+# opening triple quote, plain and raw (Julia strips only a newline right after the quotes)
+function _st_multiline_strings(n::Int64)
+    x = _st_c(n, " ")
+    return Bool[_st_c(n, """  
+foo""") == "foo",
+                _st_c(n, """		
+foo""") == "foo",
+                _st_c(n, """\\
+foo""") == "\\\nfoo",
+                _st_c(n, """\t
+foo""") == "\t\nfoo",
+                _st_c(n, """\
+foo""") == "foo",
+                _st_c(n, """\x20
+foo""") == " \nfoo",
+                """$x
+foo""" == " \nfoo",
+                _st_c(n, raw"""  
+foo""") == "foo",
+                _st_c(n, raw"""		
+foo""") == "foo",
+                _st_c(n, raw"""\\
+foo""") == "\\\\\nfoo",
+                _st_c(n, raw"""\t
+foo""") == "\\t\nfoo",
+                _st_c(n, raw"""\
+foo""") == "foo"]
+end
+# optimizations: a keyword argument defaulting to nothing, printed, and returned then concatenated
+function _st_opt_foo(; path::Union{Nothing,String} = nothing)
+    () -> 42
+    return string(path)
+end
+function _st_opt_bar(; path::Union{Nothing,String} = nothing)
+    () -> 42
+    return path
+end
+function _st_optimizations(n::Int64)
+    a = (_st_opt_foo(path = _st_c(n, "42")), n == 1 ? _st_opt_foo() : _st_opt_foo(path = "x"), 42, _st_opt_bar(path = "54"))
+    p = n == 1 ? _st_opt_bar() : _st_opt_bar(path = "x")
+    threw = try; p * "54"; Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    return (a[1] == "42", a[2] == "nothing", a[4] == "54", threw)
+end
+# raw_string: raw literals, empty, quoted, multi-line, holding \$ and backslashes (Julia's raw"\\"
+# is one backslash, the form of dart's r"\")
+_st_raw_string(n::Int64) = _st_eqs(n,
+    (raw"abcd", raw"", raw"""""", raw"''''", raw"\"\"\"\"", raw"""1
+2
+3""", raw"""
+1""", raw"'", raw"\"", raw"1", raw"$", raw"\\", raw"${12}", raw"\a\b\c\d\e\f\g\h\i\j\k\l\m",
+     raw"\n\o\p\q\r\s\t\u\v\w\x\y\z"),
+    ("abcd", "", "", "''''", "\"\"\"\"", "1\n2\n3", "1", "'", "\"", "1", "\$", "\\", "\${12}",
+     "\\a\\b\\c\\d\\e\\f\\g\\h\\i\\j\\k\\l\\m", "\\n\\o\\p\\q\\r\\s\\t\\u\\v\\w\\x\\y\\z"))
+# runtime, string: each character and code unit of a string, join with a separator, and a string
+# built from code points (Julia's str[i] is a Char, compared as its one-character string)
+function _st_string_facts(n::Int64)
+    str = _st_c(n, "string")
+    ones = Bool[]
+    units = Int64[]
+    for i in 1:length(str)
+        push!(ones, string(str[i]) == str[i:i])
+        push!(units, _st_cu(str, i))
+    end
+    a = String["Hello", _st_c(n, "World")]
+    s = _st_fromcodes(Int64[0x41 * n, 0xC1, 0x424])
+    return (ones, units, join(a, "*^*") == "Hello*^*World", string(s[1]) == "A", _st_cu(s, 3))
+end
+# split: a pattern whose findnext returns a match starting past the string's end
+struct _StEvilPattern end
+Base.findnext(::_StEvilPattern, s::String, i::Integer) = 100000000:3
+_st_split(s::String) = try; Int64(length(split(s, _StEvilPattern())[1])); catch e; e isa BoundsError ? Int64(-1) : Int64(-2); end
+# supertype_checked: a comparable type whose compareTo promotes its argument, and cmp through isless
+struct _StComparable
+    value::Int64
+end
+_st_promote(other) = other
+function _st_compare_to(a::_StComparable, other)
+    o::_StComparable = _st_promote(other)
+    return Int64(cmp(a.value, o.value))
+end
+Base.isless(a::_StComparable, b::_StComparable) = isless(a.value, b.value)
+# unicode_bom_middle: a BOM character between two letters of a literal, passed through a function
+_st_inscrutable(x::Int64)::Int64 = x == 0 ? 0 : x | _st_inscrutable(x & (x - 1))
+_st_bom_foo(x::String) = _st_inscrutable(1999) == 1999 ? x : 499
+_g("dart_string", Any[
+    ("adjacent_const_string_literals", (n::Int64) -> _st_adjacent_const(n), Int64(1)),
+    ("adjacent_string_literals", (n::Int64) -> _st_adjacent(n), Int64(1)),
+    ("bad_raw_string_runtime", (n::Int64) -> (x = _st_bad_raw(n); _dw_facts(Int64(length(x)), Int64(ncodeunits(x)))), Int64(1)),
+    ("char_escape", (n::Int64) -> _st_char_escape(n), Int64(1)),
+    ("charcode", (n::Int64) -> _st_charcode(n), Int64(1)),
+    ("const_interpolation_constant_string_interpolation", (n::Int64) -> _st_const_interp_constant(n), Int64(1)),
+    ("const_interpolation2", (n::Int64) -> _st_const_interpolation2(n), Int64(1)),
+    ("escapes", (n::Int64) -> _st_escapes(n), Int64(1)),
+    ("interpolate_null", (n::Int64) -> _st_interpolate_null(n), Int64(1)),
+    ("interpolate", (n::Int64) -> _st_interpolate(n), Int64(1)),
+    ("interpolate2", (n::Int64) -> _st_interpolate2(n), Int64(1)),
+    ("interpolation_and_buffer", (n::Int64) -> _st_interpolation_and_buffer(n), Int64(1)),
+    ("interpolation_newline", (n::Int64) -> _st_interpolation_newline(n), Int64(1)),
+    ("interpolation_runtime", (n::Int64) -> _st_interpolation(n), Int64(1)),
+    ("interpolation", (n::Int64) -> _st_interpolation(n), Int64(1)),
+    ("interpolation7", (n::Int64) -> _st_interpolation7(n), Int64(1)),
+    ("interpolation8", (n::Int64) -> ("Two is greater than " * string(n)) === _ST_Y8, Int64(1)),
+    ("intrinsics", (n::Int64) -> _st_intrinsics(n), Int64(1)),
+    ("join", (n::Int64) -> (ga = String["a", _st_c(n, "b")]; _dw_facts(join(ga) == "ab", join(ga, "") == "ab")), Int64(1)),
+    ("literals", (n::Int64) -> _st_literals(n), Int64(1)),
+    ("multiline_newline", (n::Int64) -> _st_mlnl(n), Int64(1)),
+    ("multiline_newline_runtime", (n::Int64) -> _st_mlnl(n), Int64(1)),
+    ("multiline_newline_runtime_1", (n::Int64) -> (cs = _st_mlnl_cs(n); _dw_facts(_st_mlnl(n), cs.c1 == true ? Int64(1) : Int64(2))), Int64(1)),
+    ("multiline_newline_runtime_2", (n::Int64) -> (cs = _st_mlnl_cs(n); _dw_facts(_st_mlnl(n), cs.c2 == true ? Int64(2) : Int64(3))), Int64(1)),
+    ("multiline_newline_runtime_3", (n::Int64) -> (cs = _st_mlnl_cs(n); _dw_facts(_st_mlnl(n), cs.c3 == true ? Int64(3) : Int64(4))), Int64(1)),
+    ("multiline_newline_runtime_4", (n::Int64) -> (cs = _st_mlnl_cs(n); _dw_facts(_st_mlnl(n), cs.c1r == true ? Int64(1) : Int64(2))), Int64(1)),
+    ("multiline_newline_runtime_5", (n::Int64) -> (cs = _st_mlnl_cs(n); _dw_facts(_st_mlnl(n), cs.c2r == true ? Int64(2) : Int64(3))), Int64(1)),
+    ("multiline_newline_runtime_6", (n::Int64) -> (cs = _st_mlnl_cs(n); _dw_facts(_st_mlnl(n), cs.c3r == true ? Int64(3) : Int64(4))), Int64(1)),
+    ("multiline_strings", (n::Int64) -> _st_multiline_strings(n), Int64(1)),
+    ("optimizations", (n::Int64) -> _st_optimizations(n), Int64(1)),
+    ("raw_string", (n::Int64) -> _st_raw_string(n), Int64(1)),
+    ("runtime", (n::Int64) -> _st_string_facts(n), Int64(1)),
+    ("split", (s::String) -> _st_split(s), "foo"),
+    ("string", (n::Int64) -> _st_string_facts(n), Int64(1)),
+    ("supertype_checked", (n::Int64) -> (a = _StComparable(n); b = _StComparable(n + 1);
+        _dw_facts(_st_compare_to(a, b), Int64(cmp(a, b)))), Int64(1)),
+    ("unicode_bom_middle", (n::Int64) -> (s = _st_c(n, "x﻿x");
+        _dw_facts(Int64(length(s)), Int64(length(_st_bom_foo(s))))), Int64(1)),
+    ("unicode_hash", (n::Int64) -> (s = _st_c(n, "\U10412"); _dw_facts(s == "𐐒", hash(s) == hash("𐐒"))), Int64(1)),
+])
+
+# ---- tests/language/call: callable objects, .call, calls through fields and getters ----
+# A dart object with a `call` method is a Julia callable struct; a dart function type `B Function(B)`
+# is _CaFn{Tuple{B},B}, a wrapper of a function value; dart's NoSuchMethodError is Julia's MethodError.
+struct _CaFn{A,R,F} <: Function
+    f::F
+end
+_CaFn{A,R}(f::F) where {A,R,F} = _CaFn{A,R,F}(f)
+(w::_CaFn)(xs...) = w.f(xs...)
+mutable struct _CaB
+    k::Int64
+end
+const _CaBToB = _CaFn{Tuple{_CaB},_CaB}
+const _CaNullToObject = _CaFn{Tuple{Nothing},Any}
+_ca_try(f::F) where {F} = try; f(); Int64(0); catch e; e isa MethodError ? Int64(-1) : e isa TypeError ? Int64(-3) : e isa UndefKeywordError ? Int64(-4) : Int64(-2); end
+
+# argument_inference: a call method taking an untyped argument, called explicitly and implicitly
+struct _CaAiA end
+(::_CaAiA)(a) = a isa Number
+
+# call: local functions with positional, optional and keyword parameters called directly and by .call
+_ca_call_bar(a) = a isa String
+_ca_call_opt_arg(a = "a") = a isa String
+_ca_call_named_arg(; x = Int64(11), y = Int64(22)) = "$x$y"
+function _ca_call(n::Int64)
+    v1 = n == 1 ? n : "one"
+    foo = n == 1 ? "foo" : n
+    return _dw_facts(!_ca_call_bar(v1), _ca_call_bar(foo), !_ca_call_opt_arg(v1), _ca_call_opt_arg(), _ca_call_opt_arg(foo),
+                     _ca_call_named_arg(x = 10 + n) == "1122", _ca_call_named_arg(y = 55, x = 43 + n) == "4455",
+                     _ca_call_named_arg(x = 43 + n, y = 55) == "4455", _ca_try(() -> _ca_call_bar()),
+                     _ca_try(() -> _ca_call_opt_arg(; x = "p")), _ca_try(() -> _ca_call_named_arg("p", "q")))
+end
+
+# closurization: the same functions torn off by .call into variables, then called
+function _ca_closurization(n::Int64)
+    bar(a) = a isa String
+    opt_arg(a = "a") = a isa String
+    named_arg(; x = Int64(11), y = Int64(22)) = "$x$y"
+    bar_tearoff = bar
+    opt_arg_tearoff = opt_arg
+    named_arg_tearoff = named_arg
+    v1 = n == 1 ? n : "one"
+    foo = n == 1 ? "foo" : n
+    return _dw_facts(!bar_tearoff(v1), bar_tearoff(foo), !opt_arg_tearoff(v1), opt_arg_tearoff(), opt_arg_tearoff(foo),
+                     named_arg_tearoff(x = 10 + n) == "1122", named_arg_tearoff(y = 55, x = 43 + n) == "4455",
+                     _ca_try(() -> bar_tearoff()), _ca_try(() -> opt_arg_tearoff(; x = "p")), _ca_try(() -> named_arg_tearoff("p", "q")))
+end
+
+# dynamic_call_through_getter: a field holding a callable object, called through the receiver
+struct _CaDcgBar end
+(::_CaDcgBar)(x::Int64) = x * 2
+struct _CaDcgFoo
+    bar::_CaDcgBar
+end
+_ca_dcg_do(foo::_CaDcgFoo, x::Int64) = foo.bar(x)
+
+# evaluation_order: a getter returning a function, called with an argument that has an effect
+mutable struct _CaEoFx
+    s::String
+end
+struct _CaEoNop end
+(::_CaEoNop)(_) = nothing
+_ca_eo_mark(fx::_CaEoFx, c::String) = (fx.s = fx.s * c; nothing)
+struct _CaEoA
+    fx::_CaEoFx
+end
+struct _CaEoMockA
+    fx::_CaEoFx
+end
+Base.getproperty(a::Union{_CaEoA,_CaEoMockA}, ::Symbol) = (_ca_eo_mark(getfield(a, :fx), "G"); _CaEoNop())
+_ca_eo_arg(fx::_CaEoFx) = _ca_eo_mark(fx, "A")
+_ca_eo_static_n(fx::_CaEoFx) = (_ca_eo_mark(fx, "G"); _CaEoNop())
+_ca_eo_top_m(fx::_CaEoFx) = (_ca_eo_mark(fx, "G"); _CaEoNop())
+_ca_eo_lib_m(fx::_CaEoFx) = (_ca_eo_mark(fx, "G"); _CaEoNop())
+_ca_eo_ext_m(fx::_CaEoFx, ::Int64) = (_ca_eo_mark(fx, "G"); _CaEoNop())
+_ca_eo_test(fx::_CaEoFx, code::F) where {F} = (fx.s = ""; code(); fx.s)
+function _ca_eo(n::Int64)
+    fx = _CaEoFx(string(n))
+    a = _CaEoA(fx)
+    mock = _CaEoMockA(fx)
+    d = n == 1 ? a : mock
+    md = n == 1 ? mock : a
+    return _dw_facts(_ca_eo_test(fx, () -> a.m(_ca_eo_arg(fx))) == "GA", _ca_eo_test(fx, () -> d.m(_ca_eo_arg(fx))) == "GA",
+                     _ca_eo_test(fx, () -> mock.m(_ca_eo_arg(fx))) == "GA", _ca_eo_test(fx, () -> md.m(_ca_eo_arg(fx))) == "GA",
+                     _ca_eo_test(fx, () -> _ca_eo_static_n(fx)(_ca_eo_arg(fx))) == "GA", _ca_eo_test(fx, () -> _ca_eo_top_m(fx)(_ca_eo_arg(fx))) == "GA",
+                     _ca_eo_test(fx, () -> _ca_eo_lib_m(fx)(_ca_eo_arg(fx))) == "GA", _ca_eo_test(fx, () -> _ca_eo_ext_m(fx, n)(_ca_eo_arg(fx))) == "GA")
+end
+
+# function_apply: a call method with a keyword parameter, applied with a keyword collection
+struct _CaFaA end
+(::_CaFaA)(; a = Int64(42)) = 499 + a
+
+# function: a function and a callable object held in one variable, called; calling nothing throws
+_ca_ft_bar(x) = x
+struct _CaFtFoo end
+(::_CaFtFoo)(x) = "Foo$x"
+function _ca_function(n::Int64)
+    baz = n == 1 ? _ca_ft_bar : _CaFtFoo()
+    foo = n == 1 ? _CaFtFoo() : _ca_ft_bar
+    d = n == 1 ? nothing : _ca_ft_bar
+    return _dw_facts(baz(42n) == 42, _ca_ft_bar(42n) == 42, foo(42n) == "Foo42", _ca_try(() -> d()))
+end
+
+# function2: a map of function-typed values holding a function and a callable object
+_ca_f2_baz(x) = x
+struct _CaF2Bar
+    x::Int64
+end
+(::_CaF2Bar)(x) = "Bar $x"
+const _CaF2Func = Union{typeof(_ca_f2_baz),_CaF2Bar}
+_ca_f2_test(m::Dict{String,_CaF2Func}, str::String, arg::Int64) = m[str](arg)
+
+# implicit_tearoff_assignment: the value of index, property, setter and variable assignments of a callable
+struct _CaItaC
+    k::Int64
+end
+(c::_CaItaC)() = c.k
+mutable struct _CaItaSlots
+    top::Union{Nothing,_CaItaC}
+    static::Union{Nothing,_CaItaC}
+end
+_ca_ita_set_top!(s::_CaItaSlots, v::_CaItaC) = (s.top = v)
+_ca_ita_set_static!(s::_CaItaSlots, v::_CaItaC) = (s.static = v)
+mutable struct _CaItaDerived
+    baseProperty::Union{Nothing,_CaItaC}
+    instanceProperty::Union{Nothing,_CaItaC}
+    idx::Union{Nothing,_CaItaC}
+end
+Base.setindex!(d::_CaItaDerived, v::_CaItaC, i::Int64) = (d.idx = v; d)
+mutable struct _CaItaExtended
+    idx::Union{Nothing,_CaItaC}
+    extensionProperty::Union{Nothing,_CaItaC}
+end
+Base.setindex!(e::_CaItaExtended, v::_CaItaC, i::Int64) = (e.idx = v; e)
+_ca_ita_called(x::Union{Nothing,_CaItaC}) = x === nothing ? Int64(-1) : x()
+function _ca_ita(n::Int64)
+    d = _CaItaDerived(nothing, nothing, nothing)
+    e = _CaItaExtended(nothing, nothing)
+    s = _CaItaSlots(nothing, nothing)
+    r1 = (e[0] = _CaItaC(n))
+    r2 = (e.extensionProperty = _CaItaC(n + 1))
+    r3 = (d[0] = _CaItaC(n + 2))
+    r4 = (d.instanceProperty = _CaItaC(n + 3))
+    r5 = _ca_ita_set_static!(s, _CaItaC(n + 4))
+    r6 = (d.baseProperty = _CaItaC(n + 5))
+    r7 = _ca_ita_set_top!(s, _CaItaC(n + 6))
+    r8 = (f = _CaItaC(n + 7))
+    return ((r1(), _ca_ita_called(e.idx)), (r2(), _ca_ita_called(e.extensionProperty)), (r3(), _ca_ita_called(d.idx)),
+            (r4(), _ca_ita_called(d.instanceProperty)), (r5(), _ca_ita_called(s.static)), (r6(), _ca_ita_called(d.baseProperty)),
+            (r7(), _ca_ita_called(s.top)), (r8(), f()))
+end
+
+# implicit_tearoff_exceptions: a callable reached through a cascade, a conditional and ?? in a function context
+abstract type _CaIteAT end
+struct _CaIteA <: _CaIteAT end
+struct _CaIteC <: _CaIteAT
+    k::Int64
+end
+(c::_CaIteC)() = c.k
+_ca_ite_m(c::_CaIteC) = c
+function _ca_ite(n::Int64)
+    c = _CaIteC(n)
+    a = _CaIteA()
+    aq = n == 1 ? nothing : a
+    btrue = n == 1
+    return _dw_facts(_ca_try(() -> _ca_ite_m(c)()), _ca_try(() -> (btrue ? c : a)()), _ca_try(() -> (!btrue ? a : c)()),
+                     _ca_try(() -> something(c, a)()), _ca_try(() -> something(aq, c)()), _ca_try(() -> (!btrue ? c : a)()),
+                     (btrue ? c : _ca_ite_m) isa Function)
+end
+
+# implicit_tearoff_local_assignment: y = x = <callable> on variables of class, function and Object type
+abstract type _CaItlAbsB end
+struct _CaItlB <: _CaItlAbsB
+    k::Int64
+end
+struct _CaItlC <: _CaItlAbsB
+    k::Int64
+end
+(::_CaItlB)() = "B.call called"
+(::_CaItlC)() = "C.call called"
+_ca_itl_mkc(n::Int64) = n == 1 ? _CaItlC(n) : _CaItlB(n)
+_ca_itl_mkb(n::Int64) = n == 1 ? _CaItlB(n) : _CaItlC(n)
+function _ca_itl(n::Int64)
+    local x1::_CaItlAbsB = _ca_itl_mkc(n)
+    typeassert(x1, _CaItlC)
+    y1 = x1 = _ca_itl_mkc(n)
+    local x2::_CaItlAbsB = _ca_itl_mkb(n)
+    y2 = x2 = _ca_itl_mkc(n)
+    f = () -> string("f called ", n)
+    local x3::Function = f
+    e3 = try; x3 = _ca_itl_mkb(n); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    x4 = n == 1 ? f : string(n)
+    p4 = x4 isa Function
+    y4 = x4 = _ca_itl_mkb(n)
+    x5 = string(n)
+    y5 = x5 = _ca_itl_mkb(n)
+    return _dw_facts((x1 isa _CaItlC, x1() == "C.call called", y1 isa _CaItlC, y1() == "C.call called"),
+                     (x2 isa _CaItlC, x2() == "C.call called", y2 isa _CaItlC, y2() == "C.call called"),
+                     e3, (p4, x4 isa _CaItlB, x4() == "B.call called", y4 isa _CaItlB, y4() == "B.call called"),
+                     (x5 isa _CaItlB, x5() == "B.call called", y5 isa _CaItlB, y5() == "B.call called"))
+end
+
+# implicit_tearoff: every expression form yielding a callable object passed where a function is expected
+struct _CaItC
+    k::Int64
+end
+(c::_CaItC)() = c.k
+_ca_it_ctx(f::F) where {F} = f()
+_ca_it_m(c::_CaItC) = nothing
+_ca_it_this(c::_CaItC) = _ca_it_ctx(c)
+_ca_it_this_ext(c::_CaItC) = _ca_it_ctx(c)
+struct _CaItD
+    k::Int64
+end
+Base.:+(d::_CaItD, o::_CaItD) = _CaItC(d.k + o.k)
+Base.:-(d::_CaItD) = _CaItC(-d.k)
+_ca_it_instance_method(d::_CaItD) = _CaItC(d.k)
+_ca_it_static_method(k::Int64) = _CaItC(k)
+_ca_it_instance_getter(d::_CaItD) = _CaItC(d.k)
+_ca_it_top_level_method(k::Int64) = _CaItC(k)
+function _ca_it(n::Int64)
+    v = Int64[]
+    dd = n == 1 ? _CaItC(n) : _CaItD(n)
+    push!(v, _ca_it_ctx(dd::_CaItC))
+    local b::Union{_CaItD,_CaItC} = _CaItD(n)
+    push!(v, _ca_it_ctx(begin b = _CaItC(n + 1) end))
+    d = _CaItD(n)
+    push!(v, _ca_it_ctx(d + d))
+    c = _CaItC(n + 2)
+    push!(v, _ca_it_ctx((_ca_it_m(c); c)))
+    push!(v, _ca_it_ctx(n != 1 ? c : c))
+    push!(v, _ca_it_ctx(n == 1 ? c : c))
+    push!(v, _ca_it_ctx((() -> c)()))
+    local_function() = _CaItC(n + 3)
+    push!(v, _ca_it_ctx(local_function()))
+    push!(v, _ca_it_ctx(_ca_it_static_method(n + 4)))
+    push!(v, _ca_it_ctx(_ca_it_top_level_method(n + 5)))
+    c1 = n == 1 ? _CaItC(n + 6) : nothing
+    c2 = _CaItC(n + 7)
+    push!(v, _ca_it_ctx(something(c1, c2)))
+    c3 = n == 1 ? nothing : c1
+    push!(v, _ca_it_ctx(something(c3, c2)))
+    l = _CaItC[_CaItC(n + 8)]
+    push!(v, _ca_it_ctx(l[1]))
+    push!(v, _ca_it_ctx(_CaItC(n + 9)))
+    dfunction = () -> _CaItD(n + 10)
+    push!(v, _ca_it_ctx(_ca_it_instance_getter(dfunction())))
+    push!(v, _ca_it_ctx(_ca_it_instance_getter(d)))
+    push!(v, _ca_it_ctx(_ca_it_instance_method(_CaItD(n + 11))))
+    cq = n == 1 ? _CaItC(n + 12) : nothing
+    push!(v, _ca_it_ctx(something(cq)))
+    push!(v, _ca_it_ctx((c)))
+    push!(v, _ca_it_ctx(-d))
+    push!(v, _ca_it_this(c))
+    push!(v, _ca_it_this_ext(c))
+    return v
+end
+
+# implicit_tearoff_type_variable: a callable reached through a type variable bounded by its class
+struct _CaItvC
+    k::Int64
+end
+(c::_CaItvC)() = c.k
+_ca_itv_ctx(f::F) where {F} = f()
+_ca_itv_extends(t::T) where {T<:_CaItvC} = _ca_itv_ctx(t)
+_ca_itv_promoted(t::T) where {T} = t isa _CaItvC ? _ca_itv_ctx(t) : Int64(-1)
+_ca_itv_extends_other(t::T, ::Type{U}) where {U<:_CaItvC,T<:U} = _ca_itv_ctx(t)
+
+# method_as_cast: casting a callable object to function types and to Function
+struct _CaMacC end
+(::_CaMacC)(b::_CaB) = b
+struct _CaMacD end
+(::_CaMacD)(b::_CaB) = b
+function _ca_mac(n::Int64)
+    w = _CaFn{Tuple{_CaB},_CaB}(identity)
+    c = n == 1 ? _CaMacC() : w
+    d = n == 1 ? _CaMacD() : w
+    return _dw_facts(_ca_try(() -> typeassert(c, _CaBToB)), _ca_try(() -> typeassert(c, _CaNullToObject)), _ca_try(() -> typeassert(c, Function)),
+                     _ca_try(() -> typeassert(d, _CaBToB)), _ca_try(() -> typeassert(d, _CaNullToObject)), _ca_try(() -> typeassert(d, Function)))
+end
+
+# method_as_cast_legacy: the same casts, with D declared a subtype of Function
+struct _CaMaclC end
+(::_CaMaclC)(b::_CaB) = b
+struct _CaMaclD <: Function end
+(::_CaMaclD)(b::_CaB) = b
+function _ca_macl(n::Int64)
+    w = _CaFn{Tuple{_CaB},_CaB}(identity)
+    c = n == 1 ? _CaMaclC() : w
+    d = n == 1 ? _CaMaclD() : w
+    return _dw_facts(_ca_try(() -> typeassert(c, _CaBToB)), _ca_try(() -> typeassert(c, _CaNullToObject)), _ca_try(() -> typeassert(c, Function)),
+                     _ca_try(() -> typeassert(d, _CaBToB)), _ca_try(() -> typeassert(d, _CaNullToObject)), _ca_try(() -> typeassert(d, Function)))
+end
+
+# method_function_typed_value: .call on a function value is the function itself
+_ca_mftv_f(i::Int64) = 2 * i
+_ca_mftv_g(i::Int64) = 3 * i
+function _ca_mftv(n::Int64)
+    f = n == 1 ? _ca_mftv_f : _ca_mftv_g
+    f2 = _CaFn{Tuple{Int64},Int64}(f)
+    f3 = f
+    return _dw_facts(f(n) == 2, f === _ca_mftv_f, f2(n) == 2, f2.f === _ca_mftv_f, f3(n) == 2, f3 === _ca_mftv_f)
+end
+
+# method_implicit_invoke_instance: fields holding callable objects invoked as d.c1(1)
+struct _CaMiiC1 end
+(::_CaMiiC1)(i::Int64) = 2 * i
+struct _CaMiiC2 end
+(::_CaMiiC2)(i::Int64) = 2 * i
+struct _CaMiiD
+    c1::_CaMiiC1
+    d1::Union{_CaMiiC1,_CaMiiC2}
+    c2::_CaMiiC2
+    d2::Union{_CaMiiC1,_CaMiiC2}
+end
+_CaMiiD(n::Int64) = _CaMiiD(_CaMiiC1(), n == 1 ? _CaMiiC1() : _CaMiiC2(), _CaMiiC2(), n == 1 ? _CaMiiC2() : _CaMiiC1())
+_ca_mii_test(d::_CaMiiD, n::Int64) = _dw_facts(d.c1(n) == 2, d.d1(n) == 2, d.c2(n) == 2, d.d2(n) == 2)
+
+# method_implicit_invoke_instance_legacy: the same, with C2 declared a subtype of Function
+struct _CaMiilC1 end
+(::_CaMiilC1)(i::Int64) = 2 * i
+struct _CaMiilC2 <: Function end
+(::_CaMiilC2)(i::Int64) = 2 * i
+struct _CaMiilD
+    c1::_CaMiilC1
+    d1::Union{_CaMiilC1,_CaMiilC2}
+    c2::_CaMiilC2
+    d2::Union{_CaMiilC1,_CaMiilC2}
+end
+_CaMiilD(n::Int64) = _CaMiilD(_CaMiilC1(), n == 1 ? _CaMiilC1() : _CaMiilC2(), _CaMiilC2(), n == 1 ? _CaMiilC2() : _CaMiilC1())
+_ca_miil_test(d::_CaMiilD, n::Int64) = _dw_facts(d.c1(n) == 2, d.d1(n) == 2, d.c2(n) == 2, d.d2(n) == 2)
+
+# method_implicit_invoke_local: a local callable object invoked as c1(1)
+struct _CaMilC1 end
+(::_CaMilC1)(i::Int64) = 2 * i
+_ca_mil_twice(i::Int64) = 2 * i
+
+# method_implicit_invoke_local_legacy: local callables, one declared a subtype of Function
+struct _CaMillC1 end
+(::_CaMillC1)(i::Int64) = 2 * i
+struct _CaMillC2 <: Function end
+(::_CaMillC2)(i::Int64) = 2 * i
+
+# method_implicit_invoke_local_runtime_legacy: the runtime half of the legacy local test
+struct _CaMilrC1 end
+(::_CaMilrC1)(i::Int64) = 2 * i
+struct _CaMilrC2 <: Function end
+(::_CaMilrC2)(i::Int64) = 2 * i
+
+# method_implicit_invoke_static: static fields holding callable objects, invoked from instance and static methods
+struct _CaMisC1 end
+(::_CaMisC1)(i::Int64) = 2 * i
+struct _CaMisC2 end
+(::_CaMisC2)(i::Int64) = 2 * i
+const _ca_mis_c1 = _CaMisC1()
+const _ca_mis_d1 = _CaMisC1()
+const _ca_mis_c2 = _CaMisC2()
+const _ca_mis_d2 = _CaMisC2()
+struct _CaMisD end
+_ca_mis_test1(::_CaMisD, n::Int64) = _dw_facts(_ca_mis_c1(n) == 2, _ca_mis_d1(n) == 2, _ca_mis_c2(n) == 2, _ca_mis_d2(n) == 2)
+_ca_mis_test2(n::Int64) = _dw_facts(_ca_mis_c1(n) == 2, _ca_mis_d1(n) == 2, _ca_mis_c2(n) == 2, _ca_mis_d2(n) == 2)
+
+# method_implicit_invoke_top_level: top-level variables holding callable objects, invoked as c1(1)
+struct _CaMitlC1 end
+(::_CaMitlC1)(i::Int64) = 2 * i
+struct _CaMitlC2 end
+(::_CaMitlC2)(i::Int64) = 2 * i
+const _ca_mitl_c1 = _CaMitlC1()
+const _ca_mitl_d1 = _CaMitlC1()
+const _ca_mitl_c2 = _CaMitlC2()
+const _ca_mitl_d2 = _CaMitlC2()
+
+# method_implicit_tear_off: a callable object passed to function-typed, Function, class and Object parameters
+struct _CaMitoC
+    k::Int64
+end
+(::_CaMitoC)(b::Union{Nothing,_CaB}) = b
+_ca_mito_check(c::_CaMitoC, f::F, x::Union{Nothing,_CaB}, b::_CaB) where {F} = _dw_facts(c === f, c == f, f(x) === b)
+_ca_mito_check_null(c::_CaMitoC, f::F) where {F} = _dw_facts(c === f, f(nothing) === nothing)
+_ca_mito_check_function(c::_CaMitoC, f::Function, b::_CaB) = f(b) === b
+_ca_mito_check_nullable(c::_CaMitoC, f::Union{Nothing,_CaMitoC}, b::_CaB) = _dw_facts(c === f, something(f)(b) === b)
+_ca_mito_same(c::_CaMitoC, x) = c === x
+function _ca_mito(n::Int64)
+    c = _CaMitoC(n)
+    b = _CaB(n)
+    bb = n == 1 ? b : nothing
+    return _dw_facts(_ca_mito_check(c, c, bb, b), _ca_mito_check_null(c, c), _ca_try(() -> _ca_mito_check_function(c, c, b)),
+                     _ca_mito_same(c, c), _ca_mito_check_nullable(c, n == 1 ? c : nothing, b))
+end
+
+# method_is_check: is-tests of callable objects against function types and Function
+struct _CaMicC end
+(::_CaMicC)(b::_CaB) = b
+struct _CaMicD end
+(::_CaMicD)(b::_CaB) = b
+function _ca_mic(n::Int64)
+    w = _CaFn{Tuple{_CaB},_CaB}(identity)
+    c = n == 1 ? _CaMicC() : w
+    d = n == 1 ? _CaMicD() : w
+    return _dw_facts(c isa _CaBToB, c isa _CaNullToObject, c isa Function, d isa _CaBToB, d isa _CaNullToObject, d isa Function)
+end
+
+# method_must_not_be_field: a field named call does not make its object callable
+struct _CaMmnbfC{F}
+    call::F
+end
+function _ca_mmnbf(n::Int64)
+    c = _CaMmnbfC(() -> n)
+    d = c
+    f = c.call
+    return _dw_facts(_ca_try(() -> d()), c.call(), f(), d.call(), (d.call)())
+end
+
+# method_must_not_be_getter: a getter named call does not make its object callable
+struct _CaMmnbgC
+    k::Int64
+end
+Base.getproperty(c::_CaMmnbgC, ::Symbol) = () -> getfield(c, :k)
+struct _CaMmnbgD end
+Base.getproperty(d::_CaMmnbgD, ::Symbol) = d
+_ca_mmnbg_call_d() = (d = _CaMmnbgD(); d())
+function _ca_mmnbg(n::Int64)
+    c = _CaMmnbgC(n)
+    d = c
+    f = c.call
+    return _dw_facts(_ca_try(() -> d()), _ca_try(() -> _ca_mmnbg_call_d()), c.call(), f(), d.call())
+end
+
+# operator: call methods of zero and one argument, an optional argument and a keyword argument
+struct _CaOpA1 end
+(::_CaOpA1)() = Int64(42)
+struct _CaOpA2 end
+(::_CaOpA2)()::Int64 = 35
+struct _CaOpB end
+(::_CaOpB)() = Int64(28)
+struct _CaOpC end
+(::_CaOpC)(arg) = 7 * arg
+struct _CaOpD end
+(::_CaOpD)(arg = Int64(6)) = 7 * arg
+struct _CaOpE end
+function (::_CaOpE)(str::String; count::Int64 = Int64(1))
+    buffer = ""
+    for i in 0:count-1
+        buffer *= str
+        if i < count - 1
+            buffer *= ":"
+        end
+    end
+    return buffer
+end
+function _ca_op(n::Int64)
+    a1 = n == 1 ? _CaOpA1() : _CaOpB()
+    a2 = n == 1 ? _CaOpA2() : _CaOpB()
+    b = n == 1 ? _CaOpB() : _CaOpA1()
+    c = _CaOpC()
+    d = n == 1 ? _CaOpD() : _CaOpA1()
+    e = _CaOpE()
+    s = n == 1 ? "foo" : "bar"
+    return _dw_facts(a1(), a2(), b(), c(6n), d(), _CaOpD()(n), _CaOpD()(2n), e(s) == "foo", e(s; count = 2n) == "foo:foo",
+                     e(s; count = 3n) == "foo:foo:foo", (n == 1 ? a1 : string) isa Function, (n == 1 ? e : string) isa Function)
+end
+
+# property: a getter named call does not make its class a Function or a function type
+struct _CaPtCall end
+Base.getproperty(::_CaPtCall, ::Symbol) = Int64(0)
+_ca_pt_f() = nothing
+
+# regress60643: a closure with a required keyword held in a generic getter or field, called with too few arguments
+mutable struct _CaR6Getter{T}
+    _value::Union{Nothing,T}
+end
+_ca_r6_set!(g::_CaR6Getter{T}, v::T) where {T} = (g._value = v)
+_ca_r6_get(g::_CaR6Getter) = something(g._value)
+mutable struct _CaR6Field{T}
+    value::Union{Nothing,T}
+end
+function _ca_r6(n::Int64)
+    hello(i::Int64; s::String) = i == 10 ? "hello world" : s
+    g = _CaR6Getter{typeof(hello)}(nothing)
+    _ca_r6_set!(g, hello)
+    fc = _CaR6Field{typeof(hello)}(nothing)
+    fc.value = hello
+    inner = _CaR6Getter{typeof(hello)}(nothing)
+    _ca_r6_set!(inner, hello)
+    outer = _CaR6Field{typeof(inner)}(inner)
+    return _dw_facts((_ca_try(() -> _ca_r6_get(g)()), _ca_try(() -> _ca_r6_get(g)(10n)), _ca_r6_get(g)(10n; s = "hello") == "hello world"),
+                     (_ca_try(() -> something(fc.value)()), _ca_try(() -> something(fc.value)(10n)), something(fc.value)(10n; s = "hello") == "hello world"),
+                     (_ca_try(() -> _ca_r6_get(something(outer.value))()), _ca_try(() -> _ca_r6_get(something(outer.value))(10n)),
+                      _ca_r6_get(something(outer.value))(10n; s = "hello") == "hello world"))
+end
+
+# through_getter: closures called through a variable, a field, a getter and a method; getters' evaluation order
+const _ca_tg_top_level_const = Int64(1)
+const _ca_tg_top_level_const_ref = _ca_tg_top_level_const
+_ca_tg_const(v::Int64) = () -> v
+const _CaTgFn = typeof(_ca_tg_const(Int64(0)))
+mutable struct _CaTgA
+    field::Union{Nothing,Int64,_CaTgFn}
+end
+_ca_tg_getter(a::_CaTgA) = a.field
+_ca_tg_method(a::_CaTgA) = a.field
+mutable struct _CaTgB
+    order::String
+end
+_ca_tg_mark(b::_CaTgB, m::String) = (b.order = b.order * m; b.order)
+_ca_tg_g0(b::_CaTgB) = (_ca_tg_mark(b, "g"); () -> _ca_tg_mark(b, "f"))
+_ca_tg_g1(b::_CaTgB) = (_ca_tg_mark(b, "g"); x -> _ca_tg_mark(b, "f"))
+_ca_tg_g2(b::_CaTgB) = (_ca_tg_mark(b, "g"); (x, y) -> _ca_tg_mark(b, "f"))
+_ca_tg_g3(b::_CaTgB) = (_ca_tg_mark(b, "g"); (x, y, z) -> _ca_tg_mark(b, "f"))
+_ca_tg_x(b::_CaTgB) = (_ca_tg_mark(b, "x"); Int64(0))
+_ca_tg_y(b::_CaTgB) = (_ca_tg_mark(b, "y"); Int64(1))
+_ca_tg_z(b::_CaTgB) = (_ca_tg_mark(b, "z"); Int64(2))
+function _ca_tg(n::Int64)
+    top_level = () -> 2n
+    top = (_ca_tg_top_level_const == n, _ca_tg_top_level_const_ref == n, top_level() == 2)
+    a = _CaTgA(nothing)
+    a.field = _ca_tg_const(42n)
+    f1 = (a.field(), (a.field)())
+    a.field = _ca_tg_const(87n)
+    f2 = (a.field(), (a.field)(), _ca_tg_getter(a)(), (_ca_tg_getter(a))())
+    m1 = (_ca_tg_method(a) isa Function, _ca_tg_method(a)())
+    a.field = 99n
+    e1 = (_ca_try(() -> a.field()), _ca_try(() -> (a.field)()), _ca_try(() -> _ca_tg_getter(a)()))
+    a.field = nothing
+    m2 = _ca_tg_method(a) === nothing
+    b1 = _CaTgB(""); b2 = _CaTgB(""); b3 = _CaTgB(""); b4 = _CaTgB(""); b5 = _CaTgB("")
+    order = (_ca_tg_g0(b1)() == "gf", _ca_tg_g1(b2)(_ca_tg_x(b2)) == "gxf", _ca_tg_g2(b3)(_ca_tg_x(b3), _ca_tg_y(b3)) == "gxyf",
+             _ca_tg_g3(b4)(_ca_tg_x(b4), _ca_tg_y(b4), _ca_tg_z(b4)) == "gxyzf", _ca_tg_g3(b5)(_ca_tg_y(b5), _ca_tg_z(b5), _ca_tg_x(b5)) == "gyzxf")
+    return (top, f1, f2, m1, e1, m2, order)
+end
+
+# through_null_getter: calling null through a variable, a constant, a field, a getter and a method
+const _ca_tng_top_level_null = nothing
+_ca_tng_const(v::Int64) = () -> v
+const _CaTngFn = typeof(_ca_tng_const(Int64(0)))
+mutable struct _CaTngA
+    field::Union{Nothing,_CaTngFn}
+end
+_ca_tng_getter(a::_CaTngA) = a.field
+_ca_tng_method(a::_CaTngA) = a.field
+function _ca_tng(n::Int64)
+    top_level = n == 1 ? nothing : _ca_tng_const(n)
+    a = _CaTngA(n == 1 ? nothing : _ca_tng_const(n))
+    return _dw_facts(_ca_try(() -> top_level()), _ca_try(() -> (top_level)()), _ca_try(() -> _ca_tng_top_level_null()),
+                     _ca_try(() -> a.field()), _ca_try(() -> (a.field)()), _ca_try(() -> _ca_tng_getter(a)()), _ca_try(() -> _ca_tng_method(a)()))
+end
+
+# type_literal: a method called on a freshly constructed instance
+mutable struct _CaTlC
+    calls::Int64
+end
+_ca_tl_a(c::_CaTlC) = (c.calls += 1; nothing)
+
+# with_no_such_method: a call method beside a catch-all method standing for noSuchMethod(#call)
+struct _CaWnsmF
+    value::Int64
+end
+(f::_CaWnsmF)() = f.value
+(f::_CaWnsmF)(a, rest...) = a
+
+_g("dart_call", Any[
+    ("argument_inference", (n::Int64) -> (a = _CaAiA(); _dw_facts(a(n == 1 ? 42n : string(n)), a(n == 1 ? "foo" : n))), Int64(1)),
+    ("call", (n::Int64) -> _ca_call(n), Int64(1)),
+    ("closurization", (n::Int64) -> _ca_closurization(n), Int64(1)),
+    ("dynamic_call_through_getter", (n::Int64) -> _ca_dcg_do(_CaDcgFoo(_CaDcgBar()), 2n), Int64(1)),
+    ("evaluation_order", (n::Int64) -> _ca_eo(n), Int64(1)),
+    ("function_apply", (n::Int64) -> (kw = (a = -2n,); _CaFaA()(; kw...)), Int64(1)),
+    ("function", (n::Int64) -> _ca_function(n), Int64(1)),
+    ("function2", (n::Int64) -> (m = Dict{String,_CaF2Func}(); m["baz"] = _ca_f2_baz; m["bar"] = _CaF2Bar(42);
+        _dw_facts(_ca_f2_test(m, "baz", 42n) == 42, _ca_f2_test(m, "bar", 42n) == "Bar 42")), Int64(1)),
+    ("implicit_tearoff_assignment", (n::Int64) -> _ca_ita(n), Int64(1)),
+    ("implicit_tearoff_exceptions", (n::Int64) -> _ca_ite(n), Int64(1)),
+    ("implicit_tearoff_local_assignment", (n::Int64) -> _ca_itl(n), Int64(1)),
+    ("implicit_tearoff", (n::Int64) -> _ca_it(n), Int64(1)),
+    ("implicit_tearoff_type_variable", (n::Int64) -> (_ca_itv_extends(_CaItvC(n)), _ca_itv_promoted(n == 1 ? _CaItvC(n + 1) : n),
+        _ca_itv_extends_other(_CaItvC(n + 2), _CaItvC)), Int64(1)),
+    ("method_as_cast_legacy", (n::Int64) -> _ca_macl(n), Int64(1)),
+    ("method_as_cast", (n::Int64) -> _ca_mac(n), Int64(1)),
+    ("method_function_typed_value", (n::Int64) -> _ca_mftv(n), Int64(1)),
+    ("method_implicit_invoke_instance_legacy", (n::Int64) -> (d = _CaMiilD(n);
+        (_ca_miil_test(d, n), (_CaMiilD(n).c1(n) == 2, _CaMiilD(n).d1(n) == 2, _CaMiilD(n).c2(n) == 2, _CaMiilD(n).d2(n) == 2),
+         (d.c1(n) == 2, d.d1(n) == 2, d.c2(n) == 2, d.d2(n) == 2))), Int64(1)),
+    ("method_implicit_invoke_instance", (n::Int64) -> (d = _CaMiiD(n);
+        (_ca_mii_test(d, n), (_CaMiiD(n).c1(n) == 2, _CaMiiD(n).d1(n) == 2, _CaMiiD(n).c2(n) == 2, _CaMiiD(n).d2(n) == 2),
+         (d.c1(n) == 2, d.d1(n) == 2, d.c2(n) == 2, d.d2(n) == 2))), Int64(1)),
+    ("method_implicit_invoke_local_legacy", (n::Int64) -> (c1 = _CaMillC1(); d1 = n == 1 ? c1 : _CaMillC2(); c2 = _CaMillC2(); d2 = n == 1 ? c2 : c1;
+        _dw_facts(c1(n) == 2, d1(n) == 2, c2(n) == 2, d2(n) == 2, c2 isa Function, c1 isa Function)), Int64(1)),
+    ("method_implicit_invoke_local_runtime_legacy", (n::Int64) -> (c1 = _CaMilrC1(); d1 = n == 1 ? c1 : _CaMilrC2(); c2 = _CaMilrC2(); d2 = n == 1 ? c2 : c1;
+        _dw_facts(c1(n) == 2, d1(n) == 2, c2(n) == 2, d2(n) == 2)), Int64(1)),
+    ("method_implicit_invoke_local", (n::Int64) -> (c1 = _CaMilC1(); d1 = n == 1 ? c1 : _ca_mil_twice; _dw_facts(c1(n) == 2, d1(n) == 2)), Int64(1)),
+    ("method_implicit_invoke_static", (n::Int64) -> (_ca_mis_test1(_CaMisD(), n), _ca_mis_test2(n),
+        (_ca_mis_c1(n) == 2, _ca_mis_d1(n) == 2, _ca_mis_c2(n) == 2, _ca_mis_d2(n) == 2)), Int64(1)),
+    ("method_implicit_invoke_top_level", (n::Int64) -> _dw_facts(_ca_mitl_c1(n) == 2, _ca_mitl_d1(n) == 2, _ca_mitl_c2(n) == 2, _ca_mitl_d2(n) == 2), Int64(1)),
+    ("method_implicit_tear_off", (n::Int64) -> _ca_mito(n), Int64(1)),
+    ("method_is_check", (n::Int64) -> _ca_mic(n), Int64(1)),
+    ("method_must_not_be_field", (n::Int64) -> _ca_mmnbf(n), Int64(1)),
+    ("method_must_not_be_getter", (n::Int64) -> _ca_mmnbg(n), Int64(1)),
+    ("operator", (n::Int64) -> _ca_op(n), Int64(1)),
+    ("property", (n::Int64) -> (x = n == 1 ? _CaPtCall() : _CaFn{Tuple{},Nothing}(_ca_pt_f);
+        _dw_facts(x isa Function, x isa _CaFn{Tuple{},Nothing}, x isa _CaPtCall ? x.call == 0 : false)), Int64(1)),
+    ("regress60643", (n::Int64) -> _ca_r6(n), Int64(1)),
+    ("through_getter", (n::Int64) -> _ca_tg(n), Int64(1)),
+    ("through_null_getter", (n::Int64) -> _ca_tng(n), Int64(1)),
+    ("type_literal", (n::Int64) -> (c = _CaTlC(n - 1); _ca_tl_a(c); c.calls), Int64(1)),
+    ("with_no_such_method", (n::Int64) -> (f = _CaWnsmF(42n); s = n == 1 ? "a" : "z"; args = (s, "b", "c", "d");
+        _dw_facts(f(args...) == "a", f(s, "b", "c", "d") == "a", f(()...) == 42)), Int64(1)),
+])
+
+# ---- tests/language/function: local and nested functions, function values, literals, defaults, function types ----
+# A dart function type is _FnSig{Pos,Named,Ret}: Pos the Union of the positional Tuple types the function accepts,
+# Named the NamedTuple type of its keyword parameters, Ret its return type; dart's `f is F` is _fn_is: F's call
+# shapes are subtypes of f's (parameters contravariant) and f's return a subtype of F's (covariant).
+struct _FnSig{P,K,R,F}
+    f::F
+end
+_FnSig{P,K,R}(f::F) where {P,K,R,F} = _FnSig{P,K,R,F}(f)
+const _FnNoKw = NamedTuple{(),Tuple{}}
+const _FnI = Union{Nothing,Int64}
+_fn_is(::_FnSig{P,K,R}, ::Type{Q}, ::Type{KQ}, ::Type{S}) where {P,K,R,Q,KQ,S} = (Q <: P) && (KQ <: K) && (R <: S)
+_fn_is(w::_FnSig, ::Type{Q}, ::Type{S}) where {Q,S} = _fn_is(w, Q, _FnNoKw, S)
+_fn_ag_ints(v::Vector{Union{Nothing,Int64}}) = Int64[x === nothing ? Int64(-1) : x for x in v]
+
+# apply_generic: ten optional positional parameters filled by the call's arity, on a function, a method and a method named map
+_fn_ag_static(a1 = nothing, a2 = nothing, a3 = nothing, a4 = nothing, a5 = nothing, a6 = nothing, a7 = nothing,
+              a8 = nothing, a9 = nothing, a10 = nothing) = _FnI[a1, a2, a3, a4, a5, a6, a7, a8, a9, a10]
+struct _FnAgC{CT} end
+_fn_ag_member(::_FnAgC, a1 = nothing, a2 = nothing, a3 = nothing, a4 = nothing, a5 = nothing, a6 = nothing,
+              a7 = nothing, a8 = nothing, a9 = nothing, a10 = nothing) = _FnI[a1, a2, a3, a4, a5, a6, a7, a8, a9, a10]
+_fn_ag_map(::_FnAgC, a1 = nothing, a2 = nothing, a3 = nothing, a4 = nothing, a5 = nothing, a6 = nothing,
+           a7 = nothing, a8 = nothing, a9 = nothing, a10 = nothing) = _FnI[a1, a2, a3, a4, a5, a6, a7, a8, a9, a10]
+
+# apply_generic2: optional keyword parameters named at the call, on a closure, a function and a method; a String keyword throws
+_fn_ag2_make() = function (; a1::_FnI = nothing, a2::_FnI = nothing, a3::_FnI = nothing, a4::_FnI = nothing, a5::_FnI = nothing)
+    return _FnI[a1, a2, a3, a4, a5]
+end
+_fn_ag2_static(; a1::_FnI = nothing, a2::_FnI = nothing, a3::_FnI = nothing, a4::_FnI = nothing, a5::_FnI = nothing,
+               xx::_FnI = nothing) = _FnI[a1, a2, a3, a4, a5, xx]
+struct _FnAg2C end
+_fn_ag2_member(::_FnAg2C; a1::_FnI = nothing, a2::_FnI = nothing, a3::_FnI = nothing, a4::_FnI = nothing,
+               a5::_FnI = nothing, yy::_FnI = nothing) = _FnI[a1, a2, a3, a4, a5, yy]
+_fn_ag2_throws(f) = try; f(); Int64(0); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end
+
+# argument: a function literal passed as an argument and called
+_fn_arg_test_me(f) = f()
+
+# call_generic: a type parameter given or inferred (dart's least upper bound is Julia's typejoin of the argument types)
+# and five optional positional parameters, on a function, a method and a method named map
+_fn_cg_lub(::T, ::T...) where {T} = T
+_fn_cg_lub(::Any, ::Any...) = Any
+_fn_cg_n(::Nothing) = Int64(-1)
+_fn_cg_n(x::Int64) = x
+_fn_cg_static(::Type{T}, a1::Union{Nothing,T} = nothing, a2::Union{Nothing,T} = nothing, a3::Union{Nothing,T} = nothing,
+              a4::Union{Nothing,T} = nothing, a5::Union{Nothing,T} = nothing) where {T} =
+    (T === Int64, a1, _fn_cg_n(a2), _fn_cg_n(a3), _fn_cg_n(a4), _fn_cg_n(a5))
+struct _FnCgC end
+_fn_cg_member(::_FnCgC, ::Type{T}, a1::Union{Nothing,T} = nothing, a2::Union{Nothing,T} = nothing,
+              a3::Union{Nothing,T} = nothing, a4::Union{Nothing,T} = nothing, a5::Union{Nothing,T} = nothing) where {T} =
+    (T === Int64, a1, _fn_cg_n(a2), _fn_cg_n(a3), _fn_cg_n(a4), _fn_cg_n(a5))
+_fn_cg_map(::_FnCgC, ::Type{T}, a1::Union{Nothing,T} = nothing, a2::Union{Nothing,T} = nothing,
+           a3::Union{Nothing,T} = nothing, a4::Union{Nothing,T} = nothing, a5::Union{Nothing,T} = nothing) where {T} =
+    (T === Int64, a1, _fn_cg_n(a2), _fn_cg_n(a3), _fn_cg_n(a4), _fn_cg_n(a5))
+_fn_cg_infer(f, xs...) = f(_fn_cg_lub(xs...), xs...)
+_fn_cg_infer_m(f, c::_FnCgC, xs...) = f(c, _fn_cg_lub(xs...), xs...)
+
+# direct_invocation: a function, a bound method and a local function with an optional parameter, each passed where a
+# one-parameter function is expected
+_fn_di_f(x::Int64, y::_FnI = nothing) = x
+_fn_di_test(cb, v::Int64) = cb(v)
+struct _FnDiA end
+_fn_di_af(::_FnDiA, x::Int64, y::_FnI = nothing) = x
+struct _FnDiB end
+function _fn_di_nested(::_FnDiB, v::Int64)
+    cb1(x::Int64, y::_FnI = nothing) = x
+    return _fn_di_test(cb1, v)
+end
+
+# field: a late function-typed field assigned a literal, then called
+mutable struct _FnFieldWrapper{F}
+    f::F
+    _FnFieldWrapper{F}() where {F} = new{F}()
+end
+
+# function: closures in constructors, statics and initializer lists, loop and block scoping, defaults, `this` captured
+struct _FnFtBug4089219{F}
+    x::Int64
+    f::F
+end
+_fn_ft_bug4089219(i::Int64) = _FnFtBug4089219(i, () -> i)
+struct _FnFtBug4342163{F}
+    m::F
+end
+_fn_ft_bug4342163(a::Int64) = _FnFtBug4342163(() -> a)
+_fn_ft_static_init(one::Int64) = (() -> one, () -> (() -> one)(), () -> (loc = one; (() -> loc)()))
+struct _FnFtB{M,F}
+    ma::M
+    mfn::F
+end
+_fn_ft_b1(a::Int64) = _FnFtB(a, () -> a)
+_fn_ft_b2(a::Int64) = _FnFtB(Int64(2), () -> a)
+_fn_ft_b3(a::Int64) = _FnFtB(() -> a, () -> a)
+struct _FnFtTest
+    id::Int64
+end
+function _fn_ft_for_each(n::Int64)
+    local total::Int64 = 0
+    foreach((v::Int64) -> (total += v; nothing), Int64[n, 2, 3])
+    return total
+end
+function _fn_ft_var_order1(n::Int64)
+    a = n - 1
+    b = a; a += 1
+    c = a; a += 1
+    return (a, b, c)
+end
+function _fn_ft_var_order2(n::Int64)
+    local a::Int64 = n - 1
+    f() = (v = a; a += 1; v)
+    b = f(); c = f()
+    return (a, b, c)
+end
+function _fn_ft_lex1(n::Int64)
+    a = n
+    f = let b = n + 1; () -> b - a; end
+    g = let b = n + 2; () -> b - a; end
+    return (f(), g())
+end
+function _fn_ft_lex2(n::Int64)
+    a = n
+    f = let b = n + 1; () -> (() -> b - a)(); end
+    g = let b = n + 2; () -> (() -> b - a)(); end
+    return (f(), g())
+end
+function _fn_ft_lex3(n::Int64)
+    a = [(x = i + n - 1; () -> x) for i in Int64(0):Int64(9)]
+    s = Int64(0)
+    for k in eachindex(a)
+        s += a[k]()
+    end
+    return s
+end
+function _fn_ft_lex4(n::Int64)
+    a = [(() -> i) for i in (n - 1):(n + 8)]
+    s = Int64(0)
+    for k in eachindex(a)
+        s += a[k]()
+    end
+    return s
+end
+function _fn_ft_params(n::Int64)
+    f(a = n, b = n + 2) = a - b
+    g(a, b) = a - b
+    return (f(), g(n, n + 2))
+end
+function _fn_ft_defaults1(n::Int64)
+    f() = n == 1 ? nothing : n
+    r1 = ((a = 9 + n) -> a)()
+    r2 = ((a, b = 9 + n) -> b)(n)
+    r3 = ((a = 10) -> a)(f())
+    return (r1, r2, r3 === nothing)
+end
+_fn_ft_helper2(a = 10) = (() -> a)()
+function _fn_ft_main(n::Int64)
+    b1 = _fn_ft_b1(10n); b2 = _fn_ft_b2(11n); b3 = _fn_ft_b3(12n)
+    (s1, s2, s3) = _fn_ft_static_init(n)
+    t = _FnFtTest(n)
+    o = _fn_ft_bug4089219(42n)
+    f() = 41 + n
+    return _dw_facts(_fn_ft_for_each(n), _fn_ft_var_order1(n), _fn_ft_var_order2(n), _fn_ft_lex1(n), _fn_ft_lex2(n),
+        _fn_ft_lex3(n), _fn_ft_lex4(n), _fn_ft_params(n), _fn_ft_defaults1(n), (_fn_ft_helper2(), _fn_ft_helper2(n)),
+        ((() -> f())(), o.f()), (() -> t)() === t, (s1(), s2(), s3()), _fn_ft_bug4342163(n).m(),
+        (b1.mfn(), b1.ma, b2.mfn(), b2.ma, b3.mfn(), b3.ma()))
+end
+
+# getter: a method torn off and called equals the method called
+struct _FnGetA
+    v::Int64
+end
+_fn_get_a(o::_FnGetA) = o.v
+
+# literals: arrow and block literals, typed and untyped, returning ints or int functions, and bound methods as values
+_fn_lit_check_int(f, arg) = f(arg)::Int64
+_fn_lit_check_int_func(f, arg) = f(arg)(arg)::Int64
+struct _FnLit end
+_fn_lit_func1(::_FnLit, x::Int64) = x
+_fn_lit_func2(::_FnLit, x) = x::Int64
+function _fn_lit_func3(::_FnLit, x::Int64)
+    return x
+end
+function _fn_lit_func4(::_FnLit, x)
+    return x::Int64
+end
+
+# literals2: local functions, a literal held in a variable, literals as arguments, in constructor initializers and in
+# string interpolation
+_fn_lit2_apply(f, n) = f(n)::Int64
+_fn_lit2_is_odd(b) = b % 2 == 1
+mutable struct _FnLit2A
+    f::Int64
+    f2::Int64
+end
+_fn_lit2_a(p::Int64) = (o = _FnLit2A(_fn_lit2_apply(j -> 2 - j, p), -1); o.f2 = -p; o)
+_fn_lit2_a_n(p::Int64) = (o = _FnLit2A(1 + _fn_lit2_apply(j -> 2 - j, p), -1); o.f2 = -o.f; o)
+mutable struct _FnLit2B{F}
+    f::F
+    n::Int64
+end
+_fn_lit2_b(z::Int64) = (o = _FnLit2B(x -> x * x, Int64(-1)); o.n = z; o)
+_fn_lit2_b_with_z(z::Int64) = (o = _FnLit2B(function (x) return x * x + 1 end, Int64(-1)); o.n = z; o)
+struct _FnLit2C
+    s::String
+end
+_fn_lit2_c(x::Int64) = _FnLit2C("2*x is $((() -> 2 * x)())")
+function _fn_lit2_main(n::Int64)
+    function f(x)
+        return x * 2
+    end
+    f(42n)
+    function g(x)::Int64
+        return x * 2
+    end
+    g(42n)
+    h(x) = x * 2
+    h(42n)
+    a = function (x) return x + 2 end
+    a1 = _fn_lit2_a(3n); a2 = _fn_lit2_a_n(5n)
+    b1 = _fn_lit2_b(10n); b2 = _fn_lit2_b_with_z(10n)
+    return _dw_facts(f(10n), g(10n), h(10n), a(5n), _fn_lit2_apply(function (k) return k << 1 end, 5n),
+        _fn_lit2_apply(k -> k << 1, 10n), (a1.f, a1.f2), (a2.f, a2.f2), _fn_lit2_is_odd(5n), _fn_lit2_is_odd(8n),
+        (b1.n, b1.f(10n)), (b2.n, b2.f(10n)), _fn_lit2_c(5n).s == "2*x is 10")
+end
+
+# local_function: local functions capturing parameters, locals, a shared or a per-iteration loop variable, fields and
+# themselves; wrong-arity calls and a call of a non-function throw
+function _fn_lf_f(n::Int64)
+    local a::Int64 = 0
+    g(m::Int64) = (a = 3 * n + m + 1; a)
+    b = g(n)
+    return a + b
+end
+function _fn_lf_h(n::Int64)
+    function k(n::Int64)
+        local i::Int64 = 0
+        capi = () -> (() -> i)
+        capj = (j::Int64) -> (() -> j)
+        a = Vector{typeof(capi())}(undef, n)
+        b = Vector{typeof(capj(Int64(0)))}(undef, n)
+        while i < n
+            j = i
+            a[i + 1] = capi()
+            b[i + 1] = capj(j)
+            i += 1
+        end
+        a_sum = Int64(0); b_sum = Int64(0)
+        for m in 1:n
+            a_sum += a[m]()
+            b_sum += b[m]()
+        end
+        return a_sum + b_sum
+    end
+    return k(n)
+end
+function _fn_lf_h2(n::Int64)
+    function k(n::Int64)
+        a = [(() -> i) for i in Int64(0):(n - 1)]
+        b = [(j = i; () -> j) for i in Int64(0):(n - 1)]
+        a_sum = Int64(0); b_sum = Int64(0)
+        for m in 1:n
+            a_sum += a[m]()
+            b_sum += b[m]()
+        end
+        return a_sum + b_sum
+    end
+    return k(n)
+end
+mutable struct _FnLfT
+    field1::Int64
+    field2_::Int64
+end
+_fn_lf_field2(o::_FnLfT) = o.field2_
+_fn_lf_set_field2!(o::_FnLfT, v::Int64) = (o.field2_ = v; nothing)
+function _fn_lf_method(o::_FnLfT, n::Int64)
+    incField1() = (o.field1 += 1; nothing)
+    incField2() = _fn_lf_set_field2!(o, _fn_lf_field2(o) + 1)
+    for i in 0:(n - 1)
+        incField1()
+        incField2()
+    end
+    return o.field1 + _fn_lf_field2(o)
+end
+function _fn_lf_execute(o::_FnLfT, times::Int64, apply)
+    for i in Int64(0):(times - 1)
+        apply(i)
+    end
+    return o.field1
+end
+_fn_lf_test_execute(o::_FnLfT, n::Int64) = (_fn_lf_execute(o, n, (x::Int64) -> (o.field1 += x; nothing)); o.field1)
+_fn_lf_foo(n::Int64) = Int64(-100)
+# the local foo shadows the global; it recurses through itself passed as an argument, so no binding is captured before assignment
+function _fn_lf_self_reference1(n::Int64)
+    _fn_lf_foo = function (self, m::Int64)
+        if m == 0
+            return Int64(0)
+        else
+            return 1 + self(self, m - 1)
+        end
+    end
+    return _fn_lf_foo(_fn_lf_foo, n)
+end
+function _fn_lf_nesting(n::Int64)
+    mk = (vi::Int64, vj::Int64) -> (() -> vi * n + vj)
+    a = Vector{typeof(mk(Int64(0), Int64(0)))}(undef, n * n)
+    function f0()
+        for i in 0:(n - 1)
+            vi = i
+            function f1()
+                for j in 0:(n - 1)
+                    vj = j
+                    a[i * n + j + 1] = mk(vi, vj)
+                end
+            end
+            f1()
+        end
+    end
+    f0()
+    ok = true
+    result = Int64(0)
+    for k in 0:(n * n - 1)
+        ok = ok && a[k + 1]() == k
+        result += a[k + 1]()
+    end
+    return (ok, result)
+end
+const _FN_LF_FIELD5 = Ref{Int64}(0)
+function _fn_lf_closure_call_statement(x::Int64)
+    set_field5_func = (m::Int64) -> (_FN_LF_FIELD5[] = m * m; nothing)
+    set_field5_func(x)
+    return _FN_LF_FIELD5[] == x * x
+end
+_fn_lf_xyz(::Int64, ::Int64) = Int64(0)
+function _fn_lf_exceptions(n::Int64)
+    f = (m::Int64) -> m + 1
+    e1 = try; f(n, 2); false; catch e; e isa MethodError; end
+    e2 = try; f(); false; catch e; e isa MethodError; end
+    e3 = try; _fn_lf_xyz(f, 0); false; catch e; e isa MethodError; end
+    f3 = 3n
+    e4 = try; f3(1); false; catch e; e isa MethodError; end
+    g = (m::Int64 = 1) -> m + 1
+    return (f(n), f isa Function, e1, e2, e3, e4, g(), g(2n))
+end
+_fn_lf_do_this(n::Int64, f) = f(n)
+
+# local2: two literals updating one captured local; a literal typed by a class parameter passed to a method
+function _fn_loc2_f(n::Int64)
+    local a::Int64 = 0
+    g = (m::Int64) -> (a += m; a)
+    h = (m::Int64) -> (a += 10 * m; a)
+    return g(n) + h(n)
+end
+struct _FnLoc2Param{T} end
+_fn_loc2_mul3(::_FnLoc2Param{T}, f, t::T) where {T} = 3 * f(t)
+_fn_loc2_test(p::_FnLoc2Param{T}, t::T) where {T} = _fn_loc2_mul3(p, (u::T) -> 3 * u, t)
+
+# local3: a literal is an object; calling a method it lacks throws
+_fn_loc3_xyz(::Int64, ::Int64) = Int64(0)
+
+# propagation: an object with a call method is callable but is not a Function; its implicit tear-off is not the object
+struct _FnPropA
+    v::Int64
+end
+(a::_FnPropA)(str::String) = a.v
+
+# regress_45601: a function held in a map key's field, compared and hashed through it; function equality
+struct _FnRegW{F}
+    f::F
+end
+Base.:(==)(a::_FnRegW, b::_FnRegW) = a.f == b.f
+Base.hash(w::_FnRegW, h::UInt) = hash(w.f, h)
+_fn_reg_main() = nothing
+_fn_reg_fn(t) = nothing
+
+# syntax: local function statements, literals as arguments, closures evaluating each operator, closures in constructor
+# initializers, function-typed parameters
+_fn_syn_wrap(fn) = fn
+struct _FnSynC{F}
+    fn::F
+end
+function _fn_syn_nested(n::Int64)
+    function nb0()
+        return 41 + n
+    end
+    function nb1(a)
+        return a
+    end
+    function nb2(a, b)
+        return a + b
+    end
+    na0() = 41 + n
+    na1(a) = a
+    na2(a, b) = a + b
+    function rb0()::Int64
+        return 41 + n
+    end
+    function rb1(a)::Int64
+        return a
+    end
+    function rb2(a, b)::Int64
+        return a + b
+    end
+    ra0()::Int64 = 41 + n
+    ra1(a)::Int64 = a
+    ra2(a, b)::Int64 = a + b
+    function fb1(a::Int64)::Int64
+        return a
+    end
+    function fb2(a::Int64, b::Int64)::Int64
+        return a + b
+    end
+    fa1(a::Int64)::Int64 = a
+    fa2(a::Int64, b::Int64)::Int64 = a + b
+    function gb0()::Vector{Int64}
+        return Int64[41 + n]
+    end
+    function gb1(a::Vector{Int64})::Vector{Int64}
+        return a
+    end
+    ga0()::Vector{Int64} = Int64[41 + n]
+    ga1(a::Vector{Int64})::Vector{Int64} = a
+    return Int64[nb0(), nb1(86 + n), nb2(n, 2), na0(), na1(86 + n), na2(n, 2), rb0(), rb1(86 + n), rb2(n, 2),
+                 ra0(), ra1(86 + n), ra2(n, 2), fb1(86 + n), fb2(n, 2), fa1(86 + n), fa2(n, 2),
+                 gb0()[1], gb1(Int64[86 + n])[1], ga0()[1], ga1(Int64[86 + n])[1]]
+end
+function _fn_syn_expressions(n::Int64)
+    eval0(fn) = fn()
+    eval1(fn, a) = fn(a)
+    eval2(fn, a, b) = fn(a, b)
+    return Int64[eval0(function () return 41 + n end), eval1(function (a) return a end, 86 + n),
+                 eval2(function (a, b) return a + b end, n, 2), eval0(() -> 41 + n), eval1(a -> a, 86 + n),
+                 eval2((a, b) -> a + b, n, 2), eval1(function (a::Int64) return a end, 86 + n),
+                 eval2(function (a::Int64, b::Int64) return a + b end, n, 2), eval1((a::Int64) -> a, 86 + n),
+                 eval2((a::Int64, b::Int64) -> a + b, n, 2)]
+end
+function _fn_syn_precedence(n::Int64)
+    expect = (value, fn) -> fn() == value
+    v = Bool[]
+    local x::Int64 = 0
+    push!(v, expect(42n, () -> (x = 42n)))
+    push!(v, x == 42n)
+    x = n
+    push!(v, expect(100n, () -> (x += 99)))
+    push!(v, x == 100n)
+    x = n
+    push!(v, expect(87n, () -> (x *= 87)))
+    push!(v, x == 87n)
+    t = n == 1
+    f = n != 1
+    push!(v, expect(42, () -> t ? 42 : 87))
+    push!(v, expect(87, () -> f ? 42 : 87))
+    push!(v, expect(true, () -> t || t))
+    push!(v, expect(true, () -> t || f))
+    push!(v, expect(true, () -> f || t))
+    push!(v, expect(false, () -> f || f))
+    push!(v, expect(true, () -> t && t))
+    push!(v, expect(false, () -> t && f))
+    push!(v, expect(false, () -> f && t))
+    push!(v, expect(false, () -> f && f))
+    push!(v, expect(3, () -> n | 2))
+    push!(v, expect(2, () -> (n + 2) ⊻ 1))
+    push!(v, expect(1, () -> (n + 2) & 1))
+    push!(v, expect(true, () -> n == 1))
+    push!(v, expect(false, () -> n != 1))
+    push!(v, expect(true, () -> n === 1))
+    push!(v, expect(false, () -> !(n === 1)))
+    push!(v, expect(true, () -> n <= 1))
+    push!(v, expect(false, () -> n < 1))
+    push!(v, expect(false, () -> n > 1))
+    push!(v, expect(true, () -> n >= 1))
+    push!(v, expect(true, () -> n isa Int64))
+    push!(v, expect(true, () -> Float64(n) isa Float64))
+    push!(v, expect(2, () -> n << 1))
+    push!(v, expect(1, () -> 2n >> 1))
+    push!(v, expect(2, () -> n + 1))
+    push!(v, expect(1, () -> 2n - 1))
+    push!(v, expect(2, () -> n * 2))
+    push!(v, expect(2.0, () -> 4n / 2))
+    push!(v, expect(2, () -> div(4n, 2)))
+    push!(v, expect(0, () -> 4n % 2))
+    push!(v, expect(false, () -> !t))
+    local y::Int64 = n - 1
+    push!(v, expect(0, () -> (old = y; y += 1; old)))
+    push!(v, expect(2, () -> (y += 1)))
+    push!(v, expect(1, () -> (y -= 1)))
+    push!(v, expect(1, () -> (old = y; y -= 1; old)))
+    push!(v, y == 0)
+    fn() = 41 + n
+    list = Int64[86 + n]
+    push!(v, expect(42, () -> fn()))
+    push!(v, expect(1, () -> length(list)))
+    push!(v, expect(87, () -> list[1]))
+    push!(v, expect(87, () -> pop!(list)))
+    return v
+end
+_fn_syn_cb0(n::Int64) = _FnSynC(function () return 41 + n end)
+_fn_syn_ca0(n::Int64) = _FnSynC(() -> 42 + n)
+_fn_syn_cb1(n::Int64) = _FnSynC(_fn_syn_wrap(function () return 43 + n end))
+_fn_syn_ca1(n::Int64) = _FnSynC(_fn_syn_wrap(() -> 44 + n))
+_fn_syn_cb2(n::Int64) = _FnSynC([function () return 45 + n end][1])
+_fn_syn_ca2(n::Int64) = _FnSynC([() -> 46 + n][1])
+_fn_syn_cb3(n::Int64) = _FnSynC(Dict("x" => (function () return 47 + n end))["x"])
+_fn_syn_ca3(n::Int64) = _FnSynC(Dict("x" => (() -> 48 + n))["x"])
+function _fn_syn_param(n::Int64)
+    f0(fn) = fn()
+    f1(fn) = fn()::Int64
+    f2(fn) = fn(42n)
+    f3(fn) = fn(42n)
+    return Int64[f0(() -> 41 + n), f1(() -> 86 + n), f2(a -> a + 1), f3((a::Int64) -> a + 2)]
+end
+function _fn_syn_main(n::Int64)
+    fnc() = 41 + n
+    return _dw_facts(_fn_syn_nested(n), _fn_syn_expressions(n), _fn_syn_precedence(n),
+        Int64[_fn_syn_cb0(n).fn(), _fn_syn_ca0(n).fn(), _fn_syn_cb1(n).fn(), _fn_syn_ca1(n).fn(), _fn_syn_cb2(n).fn(),
+              _fn_syn_ca2(n).fn(), _fn_syn_cb3(n).fn(), _fn_syn_ca3(n).fn()],
+        _fn_syn_param(n), (() -> 86 + n)(), fnc(), fnc isa Function)
+end
+
+# type_alias: functions with typed, optional and Object parameters tested against typedefs of Never, int, Object and
+# String parameters and of int, bool and dynamic results, and called through a generic higher-order function
+const _FnTaCmpStr = Union{Tuple{String,String},Tuple{String,String,Bool}}
+_fn_ta_str_len(a::String, b::String) = ncodeunits(a) - ncodeunits(b)
+_fn_ta_str_len_swap(a::String, b::String, swap::Bool = false) = swap ? ncodeunits(a) - ncodeunits(b) : ncodeunits(b) - ncodeunits(a)
+_fn_ta_obj(a, b) = a === b ? Int64(0) : Int64(-1)
+_fn_ta_plus(a::Int64, b::Int64 = Int64(1)) = a + b
+const _FN_TA_STR_LEN = _FnSig{Tuple{String,String},_FnNoKw,Int64}(_fn_ta_str_len)
+const _FN_TA_SWAP = _FnSig{_FnTaCmpStr,_FnNoKw,Int64}(_fn_ta_str_len_swap)
+const _FN_TA_OBJ = _FnSig{Tuple{Any,Any},_FnNoKw,Int64}(_fn_ta_obj)
+const _FN_TA_PLUS = _FnSig{Union{Tuple{Int64},Tuple{Int64,Int64}},_FnNoKw,Int64}(_fn_ta_plus)
+_fn_ta_test(w::_FnSig, a, b) = w.f(a, b)::Int64
+_fn_ta_row(w::_FnSig) = _dw_facts(_fn_is(w, Union{}, Any), _fn_is(w, Union{}, Int64), _fn_is(w, Union{}, Bool),
+    _fn_is(w, Tuple{Any,Any}, Int64), _fn_is(w, Tuple{Int64,Int64}, Int64), _fn_is(w, _FnTaCmpStr, Int64))
+function _fn_ta_main(n::Int64)
+    minus = _FnSig{Tuple{Int64,Int64},_FnNoKw,Int64}((a::Int64, b::Int64) -> a - b)
+    bounds_true = _FnSig{Tuple{Real},_FnNoKw,Nothing}((arg::Real) -> nothing)
+    bounds_false = _FnSig{Tuple{String},_FnNoKw,Nothing}((arg::String) -> nothing)
+    s = string(n)
+    return _dw_facts(_fn_ta_row(n == 1 ? _FN_TA_STR_LEN : _FN_TA_SWAP), _fn_ta_row(n == 1 ? _FN_TA_SWAP : _FN_TA_OBJ),
+        _fn_ta_row(n == 1 ? _FN_TA_OBJ : _FN_TA_PLUS), _fn_ta_row(n == 1 ? minus : _FN_TA_STR_LEN),
+        _fn_ta_row(n == 1 ? _FN_TA_PLUS : _FN_TA_SWAP),
+        _fn_ta_test(n == 1 ? _FN_TA_STR_LEN : _FN_TA_OBJ, "abcde" * s, "xyz"),
+        _fn_ta_test(n == 1 ? _FN_TA_OBJ : _FN_TA_STR_LEN, "abcde" * s, "xyz"), _fn_ta_test(minus, 100n, 1),
+        _fn_is(n == 1 ? bounds_true : bounds_false, Tuple{Int64}, Nothing),
+        _fn_is(n == 1 ? bounds_false : bounds_true, Tuple{Real}, Nothing))
+end
+
+# type_alias10: a nullable field typed by a generic typedef, assigned a literal returning its argument's type
+struct _FnTa10Foo end
+struct _FnTa10Bar end
+mutable struct _FnTa10Baz{F}
+    func::Union{Nothing,F}
+end
+
+# type_alias2: functions and bound methods with optional positional or keyword parameters tested against generic
+# typedefs of optional positional (f1, f2) and keyword (f3 a,b,c; f4 a,b,d) parameters
+const _FnTa2Pos{T} = Union{Tuple{},Tuple{_FnI},Tuple{_FnI,_FnI},Tuple{_FnI,_FnI,Union{Nothing,T}}}
+const _FnTa2Kw{T} = NamedTuple{(:a, :b, :c),Tuple{_FnI,_FnI,Union{Nothing,T}}}
+const _FnTa2KwD{T} = NamedTuple{(:a, :b, :d),Tuple{_FnI,_FnI,Union{Nothing,T}}}
+struct _FnTa2A{T} end
+_fn_ta2_abaz(::_FnTa2A{T}, a::_FnI = nothing, b::_FnI = nothing, c::Union{Nothing,T} = nothing) where {T} = Int64(-1)
+_fn_ta2_abar(::_FnTa2A{T}; a::_FnI = nothing, b::_FnI = nothing, c::Union{Nothing,T} = nothing) where {T} = Int64(-1)
+_fn_ta2_baz(a::_FnI = nothing, b::_FnI = nothing, c::_FnI = nothing) = Int64(-1)
+_fn_ta2_bar(; a::_FnI = nothing, b::_FnI = nothing, c::_FnI = nothing) = Int64(-1)
+const _FN_TA2_BAZ = _FnSig{_FnTa2Pos{Int64},_FnNoKw,Int64}(_fn_ta2_baz)
+const _FN_TA2_BAR = _FnSig{Tuple{},_FnTa2Kw{Int64},Int64}(_fn_ta2_bar)
+_fn_ta2_abaz_sig(o::_FnTa2A{T}) where {T} = _FnSig{_FnTa2Pos{T},_FnNoKw,Int64}((xs...) -> _fn_ta2_abaz(o, xs...))
+_fn_ta2_abar_sig(o::_FnTa2A{T}) where {T} = _FnSig{Tuple{},_FnTa2Kw{T},Int64}((; kw...) -> _fn_ta2_abar(o; kw...))
+_fn_ta2_row(w::_FnSig) = _dw_facts(_fn_is(w, _FnTa2Pos{Any}, _FnNoKw, Int64), _fn_is(w, Tuple{}, _FnTa2Kw{Any}, Int64),
+    _fn_is(w, _FnTa2Pos{Int64}, _FnNoKw, Int64), _fn_is(w, Tuple{}, _FnTa2Kw{Int64}, Int64),
+    _fn_is(w, _FnTa2Pos{Float64}, _FnNoKw, Int64), _fn_is(w, Tuple{}, _FnTa2Kw{Float64}, Int64),
+    _fn_is(w, Tuple{}, _FnTa2KwD{Any}, Int64), _fn_is(w, Tuple{}, _FnTa2KwD{Int64}, Int64))
+
+# type_alias3: a bound method of a generic class tested against a typedef whose result type is an imported generic
+# class sharing its type parameter's name
+struct _FnTa3Lib{T} end
+struct _FnTa3A{T} end
+_fn_ta3_foo(::_FnTa3A{T}, a::T, b::Bool) where {T} = error("uncalled")
+_fn_ta3_sig(o::_FnTa3A{T}) where {T} = _FnSig{Tuple{T,Bool},_FnNoKw,T}((a, b) -> _fn_ta3_foo(o, a, b))
+_fn_ta3_row(w::_FnSig) = _dw_facts(_fn_is(w, Tuple{_FnTa3Lib{Any},Any}, _FnTa3Lib{Any}),
+    _fn_is(w, Tuple{_FnTa3Lib{Bool},Bool}, _FnTa3Lib{Bool}), _fn_is(w, Tuple{_FnTa3Lib{Int64},Int64}, _FnTa3Lib{Int64}))
+
+# type_alias4: functions and bound methods tested against a typedef whose type parameter is named bool
+_fn_ta4_bar(a::Bool) = false
+_fn_ta4_baz(a::Int64) = Int64(-1)
+struct _FnTa4A{T} end
+_fn_ta4_foo(::_FnTa4A{T}, a::T) where {T} = error("uncalled")
+const _FN_TA4_BAR = _FnSig{Tuple{Bool},_FnNoKw,Bool}(_fn_ta4_bar)
+const _FN_TA4_BAZ = _FnSig{Tuple{Int64},_FnNoKw,Int64}(_fn_ta4_baz)
+_fn_ta4_sig(o::_FnTa4A{T}) where {T} = _FnSig{Tuple{T},_FnNoKw,T}((a) -> _fn_ta4_foo(o, a))
+_fn_ta4_row(w::_FnSig) = _dw_facts(_fn_is(w, Tuple{Any}, Any), _fn_is(w, Tuple{Bool}, Bool), _fn_is(w, Tuple{Int64}, Int64))
+
+# type_alias6: bound methods tested against a typedef C = D Function(): one returns a C, one returns a D
+struct _FnTa6D end
+_fn_ta6_foo(::_FnTa6D) = error("uncalled")
+_fn_ta6_bar(::_FnTa6D) = error("uncalled")
+const _FnTa6C = _FnSig{Tuple{},_FnNoKw,_FnTa6D}
+
+# type_alias8: a static final function value typed by bounded generic typedefs, called
+struct _FnTa8Thing end
+const _FN_TA8_GET = _FnSig{Tuple{_FnTa8Thing},_FnNoKw,Any}((target::_FnTa8Thing) -> target)
+const _FnTa8DefRet = Union{Nothing,typeof(_FN_TA8_GET)}
+const _FN_TA8_FROM_THING = _FnSig{Tuple{Any},_FnNoKw,_FnTa8DefRet}((def) -> nothing)
+const _FN_TA8_TO_GETTER = _FnSig{Tuple{Any},_FnNoKw,_FnTa8DefRet}((def) -> _FN_TA8_GET)
+
+# type_call_getter: objects whose `call` is a field, a getter or a setter are not functions
+struct _FnTcgA
+    call::Nothing
+end
+struct _FnTcgB end
+_fn_tcg_call(::_FnTcgB) = nothing
+struct _FnTcgC end
+_fn_tcg_set_call!(::_FnTcgC, x) = nothing
+_fn_tcg_obj(k::Int64) = k == 1 ? _FnTcgA(nothing) : k == 2 ? _FnTcgB() : _FnTcgC()
+
+# type_in_constant: constant instances of a generic class whose type arguments are function types differ
+struct _FnTicA{T} end
+_fn_tic_test(a, b) = a != b
+const _FnTicIntFn = _FnSig{Tuple{},_FnNoKw,Int64}
+const _FnTicStrFn = _FnSig{Tuple{},_FnNoKw,String}
+
+# type_parameter_bound_object: a generic function returning its argument as Q, then a missing method called on it
+_fn_tpbo_hest(::Type{Q}, x) where {Q} = x isa Q ? x : error("unreached")
+_fn_tpbo_fisk(::String) = Int64(0)
+
+# type_parameter: a static nullable function set through an optional function parameter defaulting to null; a
+# function-typed constructor parameter
+const _FN_TP_FMT = (i::Int64) -> string(i)
+const _FN_TP_FUNC = Ref{Union{Nothing,typeof(_FN_TP_FMT)}}(nothing)
+_fn_tp_set_func(fmt::Union{Nothing,typeof(_FN_TP_FMT)} = nothing) = (_FN_TP_FUNC[] = fmt; nothing)
+struct _FnTpA{F}
+    f::F
+end
+_fn_tp_a_nother(f) = _FnTpA(f)
+
+# type_parameter2: a static nullable formatter set through an optional function parameter defaulting to null
+const _FN_TP2_FMT = (i::Int64) -> string(i)
+const _FN_TP2_FORMATTER = Ref{Union{Nothing,typeof(_FN_TP2_FMT)}}(nothing)
+_fn_tp2_set_formatter(fmt::Union{Nothing,typeof(_FN_TP2_FMT)} = nothing) = (_FN_TP2_FORMATTER[] = fmt; nothing)
+
+# type_test: a function of List<String> cast to a function type of List<int> throws
+_fn_tt_cast(w::_FnSig) = try; w::_FnSig{Tuple{Vector{Int64}}}; Int64(0); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end
+
+# type_this_parameter: a function-typed constructor parameter initializing a field
+struct _FnTtpA{F}
+    f::F
+end
+
+# type2: a superclass constructor calls a literal whose parameter has the subclass's type parameter
+struct _FnT2A{T} end
+_fn_t2_a_init(f) = (f(Int64(42)); nothing)
+function _fn_t2_b(::Type{T}) where {T}
+    _fn_t2_a_init((param::T) -> Int64(42))
+    return _FnT2A{T}()
+end
+_fn_t2_try(n::Int64, k::Int64) = try; k == n ? _fn_t2_b(String) : _fn_t2_b(Int64); Int64(0); catch e; e isa MethodError ? Int64(-1) : e isa TypeError ? Int64(-3) : Int64(-2); end
+
+# type3: a method of a generic class returned by another generic method, torn off and tested by arity
+struct _FnT3B{T} end
+_fn_t3_bar(::_FnT3B{T}) where {T} = error("uncalled")
+struct _FnT3A{T} end
+_fn_t3_foo(::_FnT3A{T}) where {T} = _FnT3B{T}()
+
+_g("dart_function", Any[
+    ("apply_generic", (n::Int64) -> (o = _FnAgC{Float64}(); m1 = (a...) -> _fn_ag_map(o, a...); m2 = (a...) -> _fn_ag_member(o, a...);
+        (_fn_ag_ints(_fn_ag_static(n, 2, 3)), _fn_ag_ints(_fn_ag_static(n, 2, 3, 4)), _fn_ag_ints(_fn_ag_static(n, 2, 3, 4, 5, 6, 7)),
+         _fn_ag_ints(m1(n, 2, 3)), _fn_ag_ints(m1(n, 2, 3, 4)), _fn_ag_ints(m1(n, 2, 3, 4, 5, 6, 7)),
+         _fn_ag_ints(m2(n, 2, 3)), _fn_ag_ints(m2(n, 2, 3, 4)), _fn_ag_ints(m2(n, 2, 3, 4, 5, 6, 7)))), Int64(1)),
+    ("apply_generic2", (n::Int64) -> (c = _FnAg2C(); s = string(n);
+        (_fn_ag_ints(_fn_ag2_member(c; a4 = 11n, a5 = 22n, a2 = 33n)), _fn_ag2_throws(() -> _fn_ag2_member(c; a3 = s)),
+         _fn_ag_ints(_fn_ag2_make()(; a1 = 11n, a2 = 22n, a3 = 33n)), _fn_ag_ints(_fn_ag2_make()(; a4 = 11n, a5 = 22n, a2 = 33n)),
+         _fn_ag2_throws(() -> _fn_ag2_make()(; a3 = s)), _fn_ag_ints(_fn_ag2_static(; a4 = 11n, a5 = 22n, a2 = 33n)),
+         _fn_ag2_throws(() -> _fn_ag2_static(; a3 = s)))), Int64(1)),
+    ("argument", (n::Int64) -> _fn_arg_test_me(() -> 41 + n), Int64(1)),
+    ("call_generic", (n::Int64) -> (c = _FnCgC(); s = string(n);
+        (_fn_cg_infer(_fn_cg_static, n, 2, 3), _fn_cg_infer(_fn_cg_static, "Z" * s, 2, 4), _fn_cg_static(Int64, 7n, 2),
+         _fn_cg_infer_m(_fn_cg_member, c, 8n, 2, 3), _fn_cg_infer_m(_fn_cg_member, c, "A" * s, 2, 3), _fn_cg_member(c, Int64, 9n, 2, 3),
+         _fn_cg_infer_m(_fn_cg_map, c, 10n, 2, 3), _fn_cg_infer_m(_fn_cg_map, c, "B" * s, 2, 3), _fn_cg_map(c, Int64, 15n),
+         _fn_cg_map(c, Int64, 16n, 2, 3, 4))), Int64(1)),
+    ("direct_invocation", (n::Int64) -> (a = _FnDiA();
+        _dw_facts(_fn_di_test(_fn_di_f, n), _fn_di_test((x, y = nothing) -> _fn_di_af(a, x, y), 2n), _fn_di_nested(_FnDiB(), 3n))), Int64(1)),
+    ("field", (n::Int64) -> (cl = () -> 41 + n; w = _FnFieldWrapper{typeof(cl)}(); w.f = cl; w.f()), Int64(1)),
+    ("function", (n::Int64) -> _fn_ft_main(n), Int64(1)),
+    ("getter", (n::Int64) -> (o = _FnGetA(41 + n); _dw_facts(_fn_get_a(o), (() -> _fn_get_a(o))())), Int64(1)),
+    ("literals", (n::Int64) -> (t = _FnLit(); v = 41 + n;
+        Int64[_fn_lit_check_int(x -> x::Int64, v), _fn_lit_check_int(x -> x, v),
+              _fn_lit_check_int_func(x -> (y -> x::Int64 + y::Int64), v), _fn_lit_check_int_func(x -> (y -> x + y), v),
+              _fn_lit_check_int_func(x -> function (y) return x::Int64 + y::Int64 end, v),
+              _fn_lit_check_int_func((x::Int64) -> function (y) return (x + y)::Int64 end, v),
+              _fn_lit_check_int(function (x) return x::Int64 end, v), _fn_lit_check_int(function (x::Int64) return x end, v),
+              _fn_lit_check_int_func(function (x) return y -> x::Int64 + y::Int64 end, v),
+              _fn_lit_check_int_func(function (x::Int64) return y -> (x + y)::Int64 end, v),
+              _fn_lit_check_int_func(function (x) return function (y) return x::Int64 + y::Int64 end end, v),
+              _fn_lit_check_int_func(function (x::Int64) return function (y) return (x + y)::Int64 end end, v),
+              _fn_lit_check_int(x -> _fn_lit_func1(t, x), v), _fn_lit_check_int(x -> _fn_lit_func2(t, x), v),
+              _fn_lit_check_int(x -> _fn_lit_func3(t, x), v), _fn_lit_check_int(x -> _fn_lit_func4(t, x), v)]), Int64(1)),
+    ("literals2", (n::Int64) -> _fn_lit2_main(n), Int64(1)),
+    ("local_function", (n::Int64) -> _dw_facts(_fn_lf_f(2n), _fn_lf_h(10n), _fn_lf_h2(10n), _fn_lf_method(_FnLfT(100, 200), 10n),
+        _fn_lf_test_execute(_FnLfT(100, 200), 10n), _fn_lf_self_reference1(5n), _fn_lf_nesting(5n), _fn_lf_closure_call_statement(7n),
+        _fn_lf_do_this(10n, m -> m * m - 1), _fn_lf_exceptions(n)), Int64(1)),
+    ("local2", (n::Int64) -> _dw_facts(_fn_loc2_f(n), _fn_loc2_test(_FnLoc2Param{Float64}(), Float64(n) - 2.0)), Int64(3)),
+    ("local3", (n::Int64) -> (f = (m::Int64) -> m + n;
+        caught = try; _fn_loc3_xyz(f, 0); false; catch e; e isa MethodError; end; _dw_facts(f isa Any, caught, f(n))), Int64(1)),
+    ("propagation", (n::Int64) -> (a = _FnPropA(498 + n); a3 = (str::String) -> a(str);
+        _dw_facts(a isa _FnPropA, a isa Function, applicable(a, "x"), a3 isa _FnPropA, a3("x"))), Int64(1)),
+    ("regress_45601", (n::Int64) -> (m = Dict{_FnRegW{typeof(_fn_reg_main)},Int64}(); r = _FnRegW(_fn_reg_main); m[r] = 41 + n;
+        sf = n == 1 ? _fn_reg_fn : _fn_reg_main; sf2 = n == 1 ? nothing : _fn_reg_fn; sf3 = n == 1 ? _fn_reg_fn : nothing;
+        _dw_facts(m[_FnRegW(_fn_reg_main)], sf == _fn_reg_fn, sf == _fn_reg_main, sf2 == sf, sf3 == sf)), Int64(1)),
+    ("syntax", (n::Int64) -> _fn_syn_main(n), Int64(1)),
+    ("type_alias", (n::Int64) -> _fn_ta_main(n), Int64(1)),
+    ("type_alias10", (n::Int64) -> (cl = (b::_FnTa10Bar) -> typeof(b); baz = _FnTa10Baz{typeof(cl)}(n == 1 ? nothing : cl);
+        was_null = baz.func === nothing; baz.func = cl; _dw_facts(was_null, Base.something(baz.func)(_FnTa10Bar()) === _FnTa10Bar)), Int64(1)),
+    ("type_alias2", (n::Int64) -> (a = _FnTa2A{Int64}(); abaz = _fn_ta2_abaz_sig(a); abar = _fn_ta2_abar_sig(a);
+        _dw_facts(_fn_ta2_row(n == 1 ? _FN_TA2_BAZ : _FN_TA2_BAR), _fn_ta2_row(n == 1 ? _FN_TA2_BAR : _FN_TA2_BAZ),
+                  _fn_ta2_row(n == 1 ? abaz : abar), _fn_ta2_row(n == 1 ? abar : abaz), abaz.f(n, 2, 3), abar.f(; c = n))), Int64(1)),
+    ("type_alias3", (n::Int64) -> (a = _fn_ta3_sig(_FnTa3A{_FnTa3Lib{Bool}}()); b = _fn_ta3_sig(_FnTa3A{_FnTa3Lib{Int64}}());
+        _dw_facts(_fn_ta3_row(n == 1 ? a : b), _fn_ta3_row(n == 1 ? b : a))), Int64(1)),
+    ("type_alias4", (n::Int64) -> (b = _fn_ta4_sig(_FnTa4A{Bool}()); i = _fn_ta4_sig(_FnTa4A{Int64}());
+        _dw_facts(_fn_ta4_row(n == 1 ? _FN_TA4_BAR : _FN_TA4_BAZ), _fn_ta4_row(n == 1 ? _FN_TA4_BAZ : _FN_TA4_BAR),
+                  _fn_ta4_row(n == 1 ? b : i), _fn_ta4_row(n == 1 ? i : b), _FN_TA4_BAR.f(n == 1), _FN_TA4_BAZ.f(n))), Int64(1)),
+    ("type_alias6", (n::Int64) -> (d = _FnTa6D(); foo = _FnSig{Tuple{},_FnNoKw,_FnTa6C}(() -> _fn_ta6_foo(d));
+        bar = _FnSig{Tuple{},_FnNoKw,_FnTa6D}(() -> _fn_ta6_bar(d));
+        _dw_facts(_fn_is(n == 1 ? foo : bar, Tuple{}, _FnTa6D), _fn_is(n == 1 ? bar : foo, Tuple{}, _FnTa6D))), Int64(1)),
+    ("type_alias8", (n::Int64) -> (w = n == 10 ? _FN_TA8_FROM_THING : _FN_TA8_TO_GETTER; r = w.f(n);
+        r === nothing), Int64(10)),
+    ("type_call_getter", (n::Int64) -> (v = Bool[]; for k in n:(n + 2); o = _fn_tcg_obj(k); push!(v, o isa Function); push!(v, applicable(o, "s")); end; v), Int64(1)),
+    ("type_call_getter2", (n::Int64) -> (v = Int64[];
+        for k in n:(n + 2);
+            o = _fn_tcg_obj(k);
+            push!(v, try; o::Function; Int64(0); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end);
+            push!(v, try; o::_FnSig{Tuple{String},_FnNoKw,Int64}; Int64(0); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end);
+        end; v), Int64(1)),
+    ("type_in_constant", (n::Int64) -> _dw_facts(
+        _fn_tic_test(n == 1 ? _FnTicA{_FnTicIntFn}() : _FnTicA{_FnTicStrFn}(), _FnTicA{_FnTicStrFn}()),
+        _fn_tic_test(n == 1 ? _FnTicA{Int64}() : _FnTicA{_FnTicStrFn}(), _FnTicA{_FnTicStrFn}()),
+        _fn_tic_test(n == 1 ? _FnTicA{_FnTicIntFn}() : _FnTicA{String}(), _FnTicA{String}())), Int64(1)),
+    ("type_parameter_bound_object", (n::Int64) -> (pony = _fn_tpbo_hest;
+        _dw_facts(_fn_tpbo_hest(Any, 41 + n),
+                  try; _fn_tpbo_fisk(_fn_tpbo_hest(Any, 41 + n)); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end,
+                  try; _fn_tpbo_fisk(pony(Any, 41 + n)); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end)), Int64(1)),
+    ("type_parameter", (n::Int64) -> (r0 = _FN_TP_FUNC[] === nothing; _fn_tp_set_func(_FN_TP_FMT); r1 = _FN_TP_FUNC[] === nothing;
+        r2 = Base.something(_FN_TP_FUNC[])(1230 + 4n); _fn_tp_set_func(); r3 = _FN_TP_FUNC[] === nothing;
+        _dw_facts(r0, r1, r2 == "1234", r3, _FnTpA(() -> 41 + n).f(), _fn_tp_a_nother(() -> 41 + n).f())), Int64(1)),
+    ("type_parameter2", (n::Int64) -> (r0 = _FN_TP2_FORMATTER[] === nothing; _fn_tp2_set_formatter(_FN_TP2_FMT);
+        r1 = _FN_TP2_FORMATTER[] === nothing; r2 = Base.something(_FN_TP2_FORMATTER[])(1230 + 4n); _fn_tp2_set_formatter();
+        r3 = _FN_TP2_FORMATTER[] === nothing; _dw_facts(r0, r1, r2 == "1234", r3)), Int64(1)),
+    ("type", (n::Int64) -> (ws = _FnSig{Tuple{Vector{String}},_FnNoKw,Nothing}((l::Vector{String}) -> nothing);
+        wi = _FnSig{Tuple{Vector{Int64}},_FnNoKw,Nothing}((l::Vector{Int64}) -> nothing);
+        _dw_facts(_fn_tt_cast(n == 1 ? ws : wi), _fn_tt_cast(n == 1 ? wi : ws))), Int64(1)),
+    ("type_this_parameter", (n::Int64) -> _FnTtpA(() -> 498 + n).f(), Int64(1)),
+    ("type2", (n::Int64) -> _dw_facts(_fn_t2_try(n, 1), _fn_t2_try(n, 2)), Int64(1)),
+    ("type3", (n::Int64) -> (b = n == 1 ? _fn_t3_foo(_FnT3A{Int64}()) : _fn_t3_foo(_FnT3A{String}()); f = () -> _fn_t3_bar(b);
+        _dw_facts(applicable(f), applicable(f, n))), Int64(1)),
+])
+
+# ---- tests/language/parameter: optional positional, named and initializing-formal parameters ----
+# dart's optional positional parameters are Julia's default arguments, its named parameters keywords,
+# an initializing formal `this.x` a constructor argument. A tear-off `o.m` is _PaTear(m, o), whose call
+# forwards positional and keyword arguments to m with o first.
+struct _PaTear{F,O}
+    f::F
+    o::O
+end
+(t::_PaTear)(args...; kw...) = t.f(t.o, args...; kw...)
+
+# default: a one-parameter local function, method, static method and top-level function called once each
+struct _PaDfC end
+_pa_df_foo(::_PaDfC, a::Int64) = a
+_pa_df_bar(a::Int64) = a
+_pa_df_baz(a::Int64) = a
+
+# initializer: initializing formals (typed, untyped, optional) and a constructor body reaching x through a
+# subclass's virtual accessor; SubFoo carries Foo's field x and its own x_
+abstract type _PaInAbs end
+mutable struct _PaInFoo <: _PaInAbs
+    x::Int64
+end
+mutable struct _PaInSubFoo <: _PaInAbs
+    x::Int64
+    x_::Int64
+end
+mutable struct _PaInSubSubFoo <: _PaInAbs
+    x::Int64
+    x_::Int64
+end
+_pa_in_getx(o::_PaInFoo) = o.x
+_pa_in_setx!(o::_PaInFoo, v::Int64) = (o.x = v; nothing)
+_pa_in_getx(o::Union{_PaInSubFoo,_PaInSubSubFoo}) = o.x_
+_pa_in_setx!(o::Union{_PaInSubFoo,_PaInSubSubFoo}, v::Int64) = (o.x_ = v; nothing)
+_pa_in_foo_optional(x::Int64 = Int64(5)) = _PaInFoo(x)
+function _pa_in_foo_body!(o::_PaInAbs)
+    _pa_in_setx!(o, _pa_in_getx(o) + 1)
+    return _pa_in_getx(o) == _pa_in_getx(o)
+end
+_pa_in_foo(x::Int64) = (o = _PaInFoo(x); _pa_in_foo_body!(o); o)
+_pa_in_subfoo_body(o::Union{_PaInSubFoo,_PaInSubSubFoo}, y::Int64) = _dw_facts(_pa_in_getx(o) == 1, o.x_ == 1, o.x == y)
+function _pa_in_subfoo(y::Int64)
+    o = _PaInSubFoo(y, 0)
+    _pa_in_foo_body!(o)
+    return (o, _pa_in_subfoo_body(o, y))
+end
+function _pa_in_subsubfoo(y::Int64)
+    o = _PaInSubSubFoo(y, 0)
+    _pa_in_foo_body!(o)
+    return (o, (_pa_in_subfoo_body(o, y), _pa_in_getx(o) == 1))
+end
+
+# initializer2: initializing formals on mutable, const and untyped classes, reassigned in the body, mixed
+# with an initializer list
+mutable struct _PaI2A
+    x::Int64
+end
+mutable struct _PaI2B
+    x::Int64
+end
+struct _PaI2C
+    x::Int64
+end
+struct _PaI2D{T}
+    x::T
+end
+mutable struct _PaI2E
+    x::Int64
+    function _PaI2E(x::Int64)
+        o = new(x)
+        myvar = o.x * 2
+        o.x = myvar + 1
+        o.x = myvar + 2
+        foo = o.x + 1
+        return o
+    end
+end
+mutable struct _PaI2F
+    x_::Int64
+    y_::Int64
+    w_::Int64
+    z::Int64
+    az_::Int64
+    _PaI2F(x::Int64, y_::Int64, w::Int64, z::Int64) = new(x, y_, w, z)
+end
+
+# initializer5: an initializing formal read by the initializer list
+mutable struct _PaI5Foo
+    x::Int64
+    y::Int64
+    _PaI5Foo(x::Int64) = new(x, x)
+end
+
+# name_conflict: a parameter named like a compiler temporary, locals swapped under a branch
+_pa_nmc_bar() = "bar"
+_pa_nmc_baz() = "baz"
+function _pa_nmc_foo(t0::String)
+    a = t0
+    b = _pa_nmc_baz()
+    c = _pa_nmc_bar()
+    if t0 == "foo"
+        tmp = c
+        c = b
+        b = tmp
+    end
+    return _dw_facts(a == "foo", t0 == "foo", b == "bar", c == "baz")
+end
+
+# named_clash: named parameters a, b, c on one class and a$b, c on another, the receiver chosen at run time
+struct _PaClFoo end
+struct _PaClBar end
+_pa_cl_m(::_PaClFoo; a = nothing, b = nothing, c = nothing) = "Foo $a $b $c"
+_pa_cl_m(::_PaClBar, z; var"a$b" = nothing, c = nothing) = (ab = var"a$b"; "Bar $z $ab $c")
+_pa_cl_pick(i::Int64) = i == 0 ? _PaClFoo() : _PaClBar()
+
+# named_count: an optional positional parameter named count, defaulting to nothing
+struct _PaCntC end
+_pa_cnt_method(::_PaCntC, count = nothing) = count
+_pa_cnt_static(count = nothing) = count
+_pa_cnt_global(count = nothing) = count
+
+# named_default_eq, named_default_eq_runtime: named defaults on functions, methods, a local function, a
+# closure, a tear-off, a constructor, a redirect, a factory and a redirecting factory
+struct _PaNdeA
+    x::Int64
+    y::Int64
+    z::Int64
+end
+_PaNdeA(; x::Int64 = 3, y::Int64 = 5, z::Union{Nothing,Int64} = nothing) = _PaNdeA(x, y, z === nothing ? 2 : z)
+_pa_nde_redirect(; x::Int64 = 3, y::Int64 = 5, z::Union{Nothing,Int64} = nothing) = _PaNdeA(; x = x, y = y, z = z)
+_pa_nde_factory(; x::Int64 = 3, y::Int64 = 5, z::Union{Nothing,Int64} = nothing) = _PaNdeA(; x = x, y = y, z = z === nothing ? 2 : z)
+_pa_nde_redirect_factory(; kw...) = _PaNdeA(; kw...)
+_pa_nde_value(a::_PaNdeA) = a.x * a.y * a.z
+_pa_nde_top(; x = 3, y = 5, z = nothing) = x * y * (z === nothing ? 2 : z)
+_pa_nde_static(; x = 3, y = 5, z = nothing) = x * y * (z === nothing ? 2 : z)
+_pa_nde_instance(::_PaNdeA; x = 3, y = 5, z = nothing) = x * y * (z === nothing ? 2 : z)
+function _pa_nde_test(f::F, n::Int64) where {F}
+    return _dw_facts(f(), f(x = 7n), f(y = 7n), f(x = 7n, y = 2n), f(z = n), f(y = 7n, z = n), f(x = 7n, z = n),
+                     f(x = 7n, y = 2n, z = n))
+end
+function _pa_nde_vtest(mk::M, n::Int64) where {M}
+    v = _pa_nde_value
+    return _dw_facts(v(mk()), v(mk(x = 7n)), v(mk(y = 7n)), v(mk(x = 7n, y = 2n)), v(mk(z = n)), v(mk(y = 7n, z = n)),
+                     v(mk(x = 7n, z = n)), v(mk(x = 7n, y = 2n, z = n)))
+end
+function _pa_nde_main(n::Int64)
+    a = _PaNdeA()
+    loc(; x = 3, y = 5, z = nothing) = x * y * (z === nothing ? 2 : z)
+    expr = (; x = 3, y = 5, z = nothing) -> x * y * (z === nothing ? 2 : z)
+    tear = _PaTear(_pa_nde_instance, a)
+    return ((_pa_nde_test(_pa_nde_top, n), _pa_nde_test(_pa_nde_static, n), _pa_nde_test(_PaTear(_pa_nde_instance, a), n),
+             _pa_nde_test(loc, n), _pa_nde_test(expr, n), _pa_nde_test(tear, n)),
+            (_pa_nde_vtest(_PaNdeA, n), _pa_nde_vtest(_pa_nde_redirect, n), _pa_nde_vtest(_pa_nde_factory, n),
+             _pa_nde_vtest(_pa_nde_redirect_factory, n)))
+end
+
+# named_parameters, named_runtime: optional positional parameters with defaults on static and instance
+# methods, an interface's optional parameter defaulted by its implementation, a named argument
+struct _PaNp end
+_pa_np_F00() = Int64(0)
+_pa_np_f11(::_PaNp) = Int64(0)
+_pa_np_F11(a::Int64) = a
+_pa_np_f22(::_PaNp, a::Int64) = a
+_pa_np_F10(b::Int64 = 20) = b
+_pa_np_f21(::_PaNp, b::Int64 = 20) = b
+_pa_np_F21(a::Int64, b::Int64 = 20) = 100 * a + b
+_pa_np_f32(::_PaNp, a::Int64, b::Int64 = 20) = 100 * a + b
+_pa_np_F31(a::Int64, b::Int64 = 20, c::Int64 = 30) = 100 * (100 * a + b) + c
+_pa_np_f42(::_PaNp, a::Int64, b::Int64 = 20, c::Int64 = 30) = 100 * (100 * a + b) + c
+_pa_np_F41(a::Int64, b::Int64 = 20, c::Union{Nothing,Int64} = nothing, d::Int64 = 40) =
+    100 * (100 * (100 * a + b) + (c === nothing ? 0 : c)) + d
+_pa_np_f52(::_PaNp, a::Int64, b::Int64 = 20, c::Union{Nothing,Int64} = nothing, d::Int64 = 40) =
+    100 * (100 * (100 * a + b) + (c === nothing ? 0 : c)) + d
+abstract type _PaNpI end
+struct _PaNpC <: _PaNpI end
+_pa_np_mul(::_PaNpC, a::Int64, factor::Int64 = 10) = a * factor
+_pa_np_new_i() = _PaNpC()
+_pa_np_hello(msg, to; from = nothing) = "$(from) sent $(msg) to $(to)"
+_pa_np_message() = _pa_np_hello("gladiolas", "possums"; from = "Edna")
+function _pa_np_main(n::Int64)
+    np = _PaNp()
+    a = 10n
+    i = _pa_np_new_i()
+    c = _PaNpC()
+    return (_dw_facts(_pa_np_F00(), _pa_np_f11(np), _pa_np_F11(a), _pa_np_f22(np, a), _pa_np_F10(), _pa_np_f21(np),
+                      _pa_np_F10(2a), _pa_np_f21(np, 2a)),
+            _dw_facts(_pa_np_F21(a), _pa_np_f32(np, a), _pa_np_F21(a, 25n), _pa_np_f32(np, a, 25n)),
+            _dw_facts(_pa_np_F31(a), _pa_np_f42(np, a), _pa_np_F31(a, 25n), _pa_np_f42(np, a, 25n),
+                      _pa_np_F31(a, 25n, 35n), _pa_np_f42(np, a, 25n, 35n)),
+            _dw_facts(_pa_np_F41(a), _pa_np_f52(np, a)),
+            _dw_facts(_pa_np_mul(i, a), _pa_np_mul(i, a, 100n), _pa_np_mul(c, a), _pa_np_mul(c, a, 100n),
+                      _pa_np_message() == "Edna sent gladiolas to possums"))
+end
+
+# optional_named, optional_named_runtime: named parameters with defaults on static and instance methods,
+# passed in any order
+struct _PaOn end
+_pa_on_F00() = Int64(0)
+_pa_on_f11(::_PaOn) = Int64(0)
+_pa_on_F11(a::Int64) = a
+_pa_on_f22(::_PaOn, a::Int64) = a
+_pa_on_F10(; b::Int64 = 20) = b
+_pa_on_f21(::_PaOn; b::Int64 = 20) = b
+_pa_on_F21(a::Int64; b::Int64 = 20) = 100 * a + b
+_pa_on_f32(::_PaOn, a::Int64; b::Int64 = 20) = 100 * a + b
+_pa_on_F31(a::Int64; b::Int64 = 20, c::Int64 = 30) = 100 * (100 * a + b) + c
+_pa_on_f42(::_PaOn, a::Int64; b::Int64 = 20, c::Int64 = 30) = 100 * (100 * a + b) + c
+_pa_on_F41(a::Int64; b::Int64 = 20, c::Union{Nothing,Int64} = nothing, d::Int64 = 40) =
+    100 * (100 * (100 * a + b) + (c !== nothing ? c : 0)) + d
+_pa_on_f52(::_PaOn, a::Int64; b::Int64 = 20, c::Union{Nothing,Int64} = nothing, d::Int64 = 40) =
+    100 * (100 * (100 * a + b) + (c !== nothing ? c : 0)) + d
+function _pa_on_main(n::Int64)
+    np = _PaOn()
+    a = 10n
+    return (_dw_facts(_pa_on_F00(), _pa_on_f11(np), _pa_on_F11(a), _pa_on_f22(np, a), _pa_on_F10(), _pa_on_f21(np),
+                      _pa_on_F10(b = 2a), _pa_on_f21(np; b = 2a)),
+            _dw_facts(_pa_on_F21(a), _pa_on_f32(np, a), _pa_on_F21(a; b = 25n), _pa_on_f32(np, a; b = 25n)),
+            _dw_facts(_pa_on_F31(a), _pa_on_f42(np, a), _pa_on_F31(a; b = 25n), _pa_on_f42(np, a; b = 25n),
+                      _pa_on_F31(a; c = 35n), _pa_on_f42(np, a; c = 35n), _pa_on_F31(a; b = 25n, c = 35n),
+                      _pa_on_f42(np, a; b = 25n, c = 35n), _pa_on_F31(a; c = 35n, b = 25n), _pa_on_f42(np, a; c = 35n, b = 25n)),
+            _dw_facts(_pa_on_F41(a), _pa_on_f52(np, a), _pa_on_F41(a; c = 35n), _pa_on_f52(np, a; c = 35n),
+                      _pa_on_F41(a; d = 45n, b = 25n), _pa_on_f52(np, a; d = 45n, b = 25n),
+                      _pa_on_F41(a; d = 45n, c = 35n, b = 25n), _pa_on_f52(np, a; d = 45n, c = 35n, b = 25n)))
+end
+
+# named_passing_false: a Bool-or-nothing optional positional and named parameter passed nothing, true, false
+struct _PaPfT end
+_pa_pf_method(::_PaPfT, value::Union{Nothing,Bool} = nothing) = value
+_pa_pf_method2(::_PaPfT; value::Union{Nothing,Bool} = nothing) = value
+_pa_pf_static(value::Union{Nothing,Bool} = nothing) = value
+_pa_pf_static2(; value::Union{Nothing,Bool} = nothing) = value
+_pa_pf_global(value::Union{Nothing,Bool} = nothing) = value
+_pa_pf_global2(; value::Union{Nothing,Bool} = nothing) = value
+_pa_pf_six(f::F, f2::G, t::Bool) where {F,G} =
+    _dw_facts(f() === nothing, f2() === nothing, f(t) === true, f2(value = t) === true, f(!t) === false, f2(value = !t) === false)
+
+# named_passing_falsy: 0, 0.0, "", false and nothing passed past a non-falsy default, directly and through
+# tear-offs
+struct _PaPfyT end
+_pa_pfy_method(::_PaPfyT, value = 100) = value
+_pa_pfy_method2(::_PaPfyT; value = 100) = value
+_pa_pfy_static(value = 200) = value
+_pa_pfy_static2(; value = 200) = value
+_pa_pfy_global(value = 300) = value
+_pa_pfy_global2(; value = 300) = value
+_pa_pfy_direct(o::_PaPfyT, v::V) where {V} =
+    _dw_facts(_pa_pfy_method(o, v) == v, _pa_pfy_method2(o; value = v) == v, _pa_pfy_static(v) == v,
+              _pa_pfy_static2(; value = v) == v, _pa_pfy_global(v) == v, _pa_pfy_global2(; value = v) == v)
+function _pa_pfy_test_function(f::F, f2::G, n::Int64) where {F,G}
+    z = n - 1
+    s = n == 1 ? "" : "x"
+    b = n != 1
+    return _dw_facts(f() >= 100, f(z) == z, f2(value = z) == z, f(Float64(z)) == Float64(z), f2(value = Float64(z)) == Float64(z),
+                     f(s) == s, f2(value = s) == s, f(b) == b, f2(value = b) == b, f(nothing) === nothing, f2(value = nothing) === nothing)
+end
+
+# named_passing_null: nothing passed past a numeric default, positionally and by name
+struct _PaPnT end
+_pa_pn_method(::_PaPnT, value = 100) = value
+_pa_pn_method2(::_PaPnT; value = 100) = value
+_pa_pn_static(value = 200) = value
+_pa_pn_static2(; value = 200) = value
+_pa_pn_global(value = 300) = value
+_pa_pn_global2(; value = 300) = value
+_pa_pn_six(f::F, f2::G, d::Int64, v::Int64) where {F,G} =
+    _dw_facts(f() == d, f2() == d, f(v) == v, f2(value = v) == v, f(nothing) === nothing, f2(value = nothing) === nothing)
+
+# named_passing_zero: 0 passed past a numeric default, positionally and by name
+struct _PaPzT end
+_pa_pz_method(::_PaPzT, value::Real = 100) = value
+_pa_pz_method2(::_PaPzT; value::Real = 100) = value
+_pa_pz_static(value::Real = 200) = value
+_pa_pz_static2(; value::Real = 200) = value
+_pa_pz_global(value::Real = 300) = value
+_pa_pz_global2(; value::Real = 300) = value
+_pa_pz_six(f::F, f2::G, d::Int64, v::Int64, z::Int64) where {F,G} =
+    _dw_facts(f() == d, f2() == d, f(v) == v, f2(value = v) == v, f(z) == 0, f2(value = z) == 0)
+
+# named_regression: the default of an unpassed named parameter when its neighbour is passed
+struct _PaNrFisk end
+function _pa_nr_foo(::_PaNrFisk; b = nothing, a = true)
+    b === nothing && return a
+    error("broken")
+end
+function _pa_nr_bar(::_PaNrFisk; a = nothing, b = true)
+    a === nothing && return b
+    error("broken")
+end
+
+# named_with_conversions: positional and named defaults called as methods, as closure fields and through
+# tear-offs; wrong arity and unknown names throw
+function _pa_nwc_validate(tag::String, a::Int64, b::Int64)
+    tag == "ab" && return a == 111 && b == 222
+    tag == "a" && return a == 111 && b == 20
+    tag == "b" && return a == 10 && b == 222
+    tag == "" && return a == 10 && b == 20
+    return true
+end
+mutable struct _PaNwcCell
+    calls::Int64
+    ok::Bool
+end
+_pa_nwc_record!(c::_PaNwcCell, tag::String, a::Int64, b::Int64) = (c.calls += 1; c.ok &= _pa_nwc_validate(tag, a, b); nothing)
+struct _PaNwcM
+    cell::_PaNwcCell
+end
+_pa_nwc_foo(o::_PaNwcM, tag::String, a::Int64 = 10, b::Int64 = 20) = _pa_nwc_record!(o.cell, tag, a, b)
+_pa_nwc_foo2(o::_PaNwcM, tag::String; a::Int64 = 10, b::Int64 = 20) = _pa_nwc_record!(o.cell, tag, a, b)
+struct _PaNwcFoo
+    owner::_PaNwcCell
+end
+(f::_PaNwcFoo)(tag::String, a::Int64 = 10, b::Int64 = 20) = _pa_nwc_record!(f.owner, tag, a, b)
+struct _PaNwcFoo2
+    owner::_PaNwcCell
+end
+(f::_PaNwcFoo2)(tag::String; a::Int64 = 10, b::Int64 = 20) = _pa_nwc_record!(f.owner, tag, a, b)
+struct _PaNwcF
+    cell::_PaNwcCell
+    foo::_PaNwcFoo
+    foo2::_PaNwcFoo2
+end
+_pa_nwc_has_method() = _PaNwcM(_PaNwcCell(0, true))
+_pa_nwc_has_field() = (c = _PaNwcCell(0, true); _PaNwcF(c, _PaNwcFoo(c), _PaNwcFoo2(c)))
+# method syntax on HasField calls the field's closure, one method per accepted arity
+_pa_nwc_foo(o::_PaNwcF, tag::String) = o.foo(tag)
+_pa_nwc_foo(o::_PaNwcF, tag::String, a::Int64) = o.foo(tag, a)
+_pa_nwc_foo(o::_PaNwcF, tag::String, a::Int64, b::Int64) = o.foo(tag, a, b)
+_pa_nwc_foo2(o::_PaNwcF, tag::String; a::Int64 = 10, b::Int64 = 20) = o.foo2(tag; a = a, b = b)
+# HasMethod's tear-offs o.foo and o.foo2, with the method's own parameter lists
+struct _PaNwcTearFoo
+    o::_PaNwcM
+end
+(t::_PaNwcTearFoo)(tag::String, a::Int64 = 10, b::Int64 = 20) = _pa_nwc_foo(t.o, tag, a, b)
+struct _PaNwcTearFoo2
+    o::_PaNwcM
+end
+(t::_PaNwcTearFoo2)(tag::String; a::Int64 = 10, b::Int64 = 20) = _pa_nwc_foo2(t.o, tag; a = a, b = b)
+_pa_nwc_tear_foo(o::_PaNwcM) = _PaNwcTearFoo(o)
+_pa_nwc_tear_foo(o::_PaNwcF) = o.foo
+_pa_nwc_tear_foo2(o::_PaNwcM) = _PaNwcTearFoo2(o)
+_pa_nwc_tear_foo2(o::_PaNwcF) = o.foo2
+function _pa_nwc_method_syntax(o::O) where {O}
+    _pa_nwc_foo(o, "")
+    _pa_nwc_foo(o, "a", 111)
+    _pa_nwc_foo(o, "ab", 111, 222)
+    _pa_nwc_foo2(o, "a"; a = 111)
+    _pa_nwc_foo2(o, "b"; b = 222)
+    _pa_nwc_foo2(o, "ab"; a = 111, b = 222)
+    _pa_nwc_foo2(o, "ab"; b = 222, a = 111)
+    c1 = o.cell.calls
+    e1 = try; _pa_nwc_foo(o); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    e2 = try; _pa_nwc_foo(o, "abc", 1, 2, 3); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    e3 = try; _pa_nwc_foo2(o, "c"; c = 1); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    e4 = try; _pa_nwc_foo2(o, "c"; a = 111, c = 1); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    return _dw_facts(c1, e1, e2, e3, e4, o.cell.calls, o.cell.ok)
+end
+function _pa_nwc_function_syntax(o::O) where {O}
+    f = _pa_nwc_tear_foo(o)
+    f2 = _pa_nwc_tear_foo2(o)
+    f("")
+    f("a", 111)
+    f("ab", 111, 222)
+    f2("a"; a = 111)
+    f2("b"; b = 222)
+    f2("ab"; a = 111, b = 222)
+    f2("ab"; b = 222, a = 111)
+    c1 = o.cell.calls
+    e1 = try; f(); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    e2 = try; f("abc", 1, 2, 3); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    e3 = try; f2("c"; c = 1); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    e4 = try; f2("c"; a = 111, c = 1); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end
+    return _dw_facts(c1, e1, e2, e3, e4, o.cell.calls, o.cell.ok)
+end
+_pa_nwc_round() = (_pa_nwc_method_syntax(_pa_nwc_has_method()), _pa_nwc_function_syntax(_pa_nwc_has_field()),
+                   _pa_nwc_method_syntax(_pa_nwc_has_field()), _pa_nwc_function_syntax(_pa_nwc_has_method()))
+
+# named_with_dollars: named parameters spelled a$b, a$$b, $, $$, $$$, $$$$, on a receiver chosen from three
+struct _PaNwdT end
+struct _PaNwdDecoy end
+_pa_nwd_method(::_PaNwdT; a = nothing, b = nothing, var"a$b" = nothing, var"a$$b" = nothing) =
+    Union{Nothing,Int64}[a, b, var"a$b", var"a$$b"]
+_pa_nwd_psycho(::_PaNwdT; var"$" = nothing, var"$$" = nothing, var"$$$" = nothing, var"$$$$" = nothing) =
+    Union{Nothing,Int64}[var"$", var"$$", var"$$$", var"$$$$"]
+_pa_nwd_global(; a = nothing, b = nothing, var"a$b" = nothing, var"a$$b" = nothing) =
+    Union{Nothing,Int64}[a, b, var"a$b", var"a$$b"]
+_pa_nwd_method(::_PaNwdDecoy, var"a$b" = nothing, b = nothing, a = nothing) = error("unimplemented")
+_pa_nwd_psycho(::_PaNwdDecoy, var"$$$" = nothing, var"$$" = nothing, var"$" = nothing) = error("unimplemented")
+_pa_nwd_make(i::Int64) = (k = mod(i, 3); k == 0 ? _PaNwdT() : k == 1 ? _PaNwdDecoy() : "string")
+function _pa_nwd_format(v::Vector{Union{Nothing,Int64}})
+    s = "["
+    first = true
+    for item in v
+        first || (s *= ", ")
+        first = false
+        s *= item === nothing ? "-" : string(item)
+    end
+    return s * "]"
+end
+
+# named_with_object_property_names: named parameters named like JavaScript Object properties
+struct _PaOpConstructor end
+_pa_op_constructor_method(::_PaOpConstructor; constructor = nothing) = constructor
+_pa_op_constructor_static(; constructor = nothing) = constructor
+_pa_op_constructor_global(; constructor = nothing) = constructor
+struct _PaOpHasOwnProperty end
+_pa_op_hasownproperty_method(::_PaOpHasOwnProperty; hasOwnProperty = nothing) = hasOwnProperty
+_pa_op_hasownproperty_static(; hasOwnProperty = nothing) = hasOwnProperty
+_pa_op_hasownproperty_global(; hasOwnProperty = nothing) = hasOwnProperty
+struct _PaOpIsPrototypeOf end
+_pa_op_isprototypeof_method(::_PaOpIsPrototypeOf; isPrototypeOf = nothing) = isPrototypeOf
+_pa_op_isprototypeof_static(; isPrototypeOf = nothing) = isPrototypeOf
+_pa_op_isprototypeof_global(; isPrototypeOf = nothing) = isPrototypeOf
+struct _PaOpPropertyIsEnumerable end
+_pa_op_propertyisenumerable_method(::_PaOpPropertyIsEnumerable; propertyIsEnumerable = nothing) = propertyIsEnumerable
+_pa_op_propertyisenumerable_static(; propertyIsEnumerable = nothing) = propertyIsEnumerable
+_pa_op_propertyisenumerable_global(; propertyIsEnumerable = nothing) = propertyIsEnumerable
+struct _PaOpToSource end
+_pa_op_tosource_method(::_PaOpToSource; toSource = nothing) = toSource
+_pa_op_tosource_static(; toSource = nothing) = toSource
+_pa_op_tosource_global(; toSource = nothing) = toSource
+struct _PaOpToLocaleString end
+_pa_op_tolocalestring_method(::_PaOpToLocaleString; toLocaleString = nothing) = toLocaleString
+_pa_op_tolocalestring_static(; toLocaleString = nothing) = toLocaleString
+_pa_op_tolocalestring_global(; toLocaleString = nothing) = toLocaleString
+struct _PaOpToString end
+_pa_op_tostring_method(::_PaOpToString; toString = nothing) = toString
+_pa_op_tostring_static(; toString = nothing) = toString
+_pa_op_tostring_global(; toString = nothing) = toString
+struct _PaOpUnwatch end
+_pa_op_unwatch_method(::_PaOpUnwatch; unwatch = nothing) = unwatch
+_pa_op_unwatch_static(; unwatch = nothing) = unwatch
+_pa_op_unwatch_global(; unwatch = nothing) = unwatch
+struct _PaOpValueOf end
+_pa_op_valueof_method(::_PaOpValueOf; valueOf = nothing) = valueOf
+_pa_op_valueof_static(; valueOf = nothing) = valueOf
+_pa_op_valueof_global(; valueOf = nothing) = valueOf
+struct _PaOpWatch end
+_pa_op_watch_method(::_PaOpWatch; watch = nothing) = watch
+_pa_op_watch_static(; watch = nothing) = watch
+_pa_op_watch_global(; watch = nothing) = watch
+_pa_op_six(o::O, fm::M, fs::S, fg::G, nt::NamedTuple) where {O,M,S,G} =
+    _dw_facts(fm(o) === nothing, fm(o; nt...) == 0, fs() === nothing, fs(; nt...) == 0, fg() === nothing, fg(; nt...) == 0)
+
+# param: a local assigned from a parameter and returned
+_pa_pm_foo(i::Int64) = (b = i + 1; b)
+
+# parameter1: a static method with no parameters
+_pa_p1_test_main() = Int64(0)
+
+# parameter2: function-typed parameters called on each element, once, and as a predicate
+_pa_p2_for_each!(a::Vector{Int64}, f::F) where {F} = (for i in eachindex(a); a[i] = f(a[i]); end; a)
+_pa_p2_apply(f::F, arg::Int64) where {F} = f(arg)
+function _pa_p2_exists(a::Vector{Int64}, f::F) where {F}
+    for x in a
+        f(x) && return true
+    end
+    return false
+end
+
+# types_specialization: optional positional parameters whose defaults and passed values differ in type
+struct _PaTsA end
+_pa_ts_foo(::_PaTsA, first::Bool, a = 42, b = "foo") = first ? (a isa String, b isa Int64) : (a isa Int64, b isa String)
+
+_g("dart_parameter", Any[
+    ("default", (n::Int64) -> (out = Int64[]; foo = ((a::Int64) -> a); push!(out, foo(n)); push!(out, _pa_df_foo(_PaDfC(), n + 1));
+        push!(out, _pa_df_bar(n + 2)); push!(out, _pa_df_baz(n + 3)); out), Int64(1)),
+    ("initializer", (n::Int64) -> (s = _pa_in_subfoo(42n); ss = _pa_in_subsubfoo(42n);
+        _dw_facts(_PaInFoo(n).x, _PaInFoo(7n).x, _pa_in_foo_optional(111n).x, _pa_in_foo_optional().x, _pa_in_foo(n).x,
+                 _pa_in_getx(s[1]), s[2], _pa_in_getx(ss[1]), ss[2])), Int64(1)),
+    ("initializer2", (n::Int64) -> _dw_facts(_PaI2A(123n).x, _PaI2B(123n).x, _PaI2C(123n).x, _PaI2D(123n).x, _PaI2E(n).x,
+        _PaI2F(n, 2n, 3n, 4n).z), Int64(1)),
+    ("initializer5", (n::Int64) -> (o = _PaI5Foo(12n); _dw_facts(o.x, o.y)), Int64(1)),
+    ("name_conflict", (s::String) -> _pa_nmc_foo(s), "foo"),
+    ("named_clash", (n::Int64) -> (foo = _pa_cl_pick(n - 1); bar = _pa_cl_pick(n);
+        r1 = _pa_cl_m(foo; a = "a", b = "b", c = "c"); r2 = _pa_cl_m(bar, "z"; var"a$b" = "a\$b", c = "c");
+        e1 = try; _pa_cl_m(foo, "z"; var"a$b" = "a\$b", c = "c"); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end;
+        e2 = try; _pa_cl_m(bar; a = "a", b = "b", c = "c"); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end;
+        _dw_facts(r1 == "Foo a b c", r2 == "Bar z a\$b c", e1, e2)), Int64(1)),
+    ("named_count", (n::Int64) -> (o = _PaCntC(); z = n - 1; s = n == 1 ? "" : "x"; t = n == 1;
+        _dw_facts(_pa_cnt_method(o) === nothing, _pa_cnt_method(o, z) == 0, _pa_cnt_method(o, s) == "",
+                 _pa_cnt_static() === nothing, _pa_cnt_static(t) === true, _pa_cnt_static(!t) === false,
+                 _pa_cnt_global() === nothing, _pa_cnt_global(t) === true, _pa_cnt_global(!t) === false)), Int64(1)),
+    ("named_default_eq_runtime", (n::Int64) -> _pa_nde_main(n), Int64(1)),
+    ("named_default_eq", (n::Int64) -> _pa_nde_main(n), Int64(1)),
+    ("named_parameters", (n::Int64) -> _pa_np_main(n), Int64(1)),
+    ("named_passing_false", (t::Bool) -> (o = _PaPfT();
+        (_pa_pf_six(_PaTear(_pa_pf_method, o), _PaTear(_pa_pf_method2, o), t), _pa_pf_six(_pa_pf_static, _pa_pf_static2, t),
+         _pa_pf_six(_pa_pf_global, _pa_pf_global2, t))), true),
+    ("named_passing_falsy", (n::Int64) -> (o = _PaPfyT(); z = n - 1; s = n == 1 ? "" : "x"; b = n != 1;
+        (_dw_facts(_pa_pfy_method(o) == 100, _pa_pfy_method2(o) == 100, _pa_pfy_static() == 200, _pa_pfy_static2() == 200,
+                   _pa_pfy_global() == 300, _pa_pfy_global2() == 300),
+         _pa_pfy_direct(o, z), _pa_pfy_direct(o, Float64(z)), _pa_pfy_direct(o, s), _pa_pfy_direct(o, b), _pa_pfy_direct(o, nothing),
+         _pa_pfy_test_function(_PaTear(_pa_pfy_method, o), _PaTear(_pa_pfy_method2, o), n),
+         _pa_pfy_test_function(_pa_pfy_static, _pa_pfy_static2, n), _pa_pfy_test_function(_pa_pfy_global, _pa_pfy_global2, n))), Int64(1)),
+    ("named_passing_null", (n::Int64) -> (o = _PaPnT(); v = 50n;
+        (_pa_pn_six(_PaTear(_pa_pn_method, o), _PaTear(_pa_pn_method2, o), Int64(100), v), _pa_pn_six(_pa_pn_static, _pa_pn_static2, Int64(200), v),
+         _pa_pn_six(_pa_pn_global, _pa_pn_global2, Int64(300), v))), Int64(1)),
+    ("named_passing_zero", (n::Int64) -> (o = _PaPzT(); v = 7n; z = n - 1;
+        (_pa_pz_six(_PaTear(_pa_pz_method, o), _PaTear(_pa_pz_method2, o), Int64(100), v, z), _pa_pz_six(_pa_pz_static, _pa_pz_static2, Int64(200), v, z),
+         _pa_pz_six(_pa_pz_global, _pa_pz_global2, Int64(300), v, z))), Int64(1)),
+    ("named_regression", (t::Bool) -> _dw_facts(_pa_nr_foo(_PaNrFisk(); a = t), _pa_nr_bar(_PaNrFisk(); b = t)), true),
+    ("named_runtime", (n::Int64) -> _pa_np_main(n), Int64(1)),
+    ("named_with_conversions", (n::Int64) -> (r = _pa_nwc_round(); for _ in 2:(20n); r = _pa_nwc_round(); end; r), Int64(1)),
+    ("named_with_dollars", (n::Int64) -> (t = _PaNwdT(); obj = _pa_nwd_make(n - 1); f = _pa_nwd_format;
+        (_dw_facts(f(Union{Nothing,Int64}[]) == "[]", f(_pa_nwd_global()) == "[-, -, -, -]", f(_pa_nwd_global(a = n, b = 2n)) == "[1, 2, -, -]",
+                   f(_pa_nwd_global(b = 2n, a = n)) == "[1, 2, -, -]", f(_pa_nwd_global(var"a$b" = 3n)) == "[-, -, 3, -]",
+                   f(_pa_nwd_global(var"a$$b" = 4n)) == "[-, -, -, 4]"),
+         _dw_facts(f(_pa_nwd_method(t)) == "[-, -, -, -]", f(_pa_nwd_method(t; a = n, b = 2n)) == "[1, 2, -, -]",
+                   f(_pa_nwd_method(t; b = 2n, a = n)) == "[1, 2, -, -]", f(_pa_nwd_method(t; var"a$b" = 3n)) == "[-, -, 3, -]",
+                   f(_pa_nwd_method(t; var"a$$b" = 4n)) == "[-, -, -, 4]"),
+         _dw_facts(f(_pa_nwd_method(obj)) == "[-, -, -, -]", f(_pa_nwd_method(obj; a = n, b = 2n)) == "[1, 2, -, -]",
+                   f(_pa_nwd_method(obj; b = 2n, a = n)) == "[1, 2, -, -]", f(_pa_nwd_method(obj; var"a$b" = 3n)) == "[-, -, 3, -]",
+                   f(_pa_nwd_method(obj; var"a$$b" = 4n)) == "[-, -, -, 4]"),
+         _dw_facts(f(_pa_nwd_psycho(t; var"$" = n, var"$$" = 2n, var"$$$" = 3n)) == "[1, 2, 3, -]",
+                   f(_pa_nwd_psycho(t; var"$$$" = 3n, var"$$" = 2n, var"$" = n)) == "[1, 2, 3, -]",
+                   f(_pa_nwd_psycho(t; var"$" = n, var"$$" = 2n)) == "[1, 2, -, -]", f(_pa_nwd_psycho(t; var"$$$$" = 4n)) == "[-, -, -, 4]"),
+         _dw_facts(f(_pa_nwd_psycho(obj; var"$" = n, var"$$" = 2n)) == "[1, 2, -, -]", f(_pa_nwd_psycho(obj; var"$$$$" = 4n)) == "[-, -, -, 4]",
+                   f(_pa_nwd_psycho(obj; var"$" = n, var"$$" = 2n, var"$$$" = 3n)) == "[1, 2, 3, -]",
+                   f(_pa_nwd_psycho(obj; var"$$$" = 3n, var"$$" = 2n, var"$" = n)) == "[1, 2, 3, -]"))), Int64(1)),
+    ("named_with_object_property_names", (n::Int64) -> (z = n - 1;
+        (_pa_op_six(_PaOpConstructor(), _pa_op_constructor_method, _pa_op_constructor_static, _pa_op_constructor_global, (constructor = z,)),
+         _pa_op_six(_PaOpHasOwnProperty(), _pa_op_hasownproperty_method, _pa_op_hasownproperty_static, _pa_op_hasownproperty_global, (hasOwnProperty = z,)),
+         _pa_op_six(_PaOpIsPrototypeOf(), _pa_op_isprototypeof_method, _pa_op_isprototypeof_static, _pa_op_isprototypeof_global, (isPrototypeOf = z,)),
+         _pa_op_six(_PaOpPropertyIsEnumerable(), _pa_op_propertyisenumerable_method, _pa_op_propertyisenumerable_static,
+                    _pa_op_propertyisenumerable_global, (propertyIsEnumerable = z,)),
+         _pa_op_six(_PaOpToSource(), _pa_op_tosource_method, _pa_op_tosource_static, _pa_op_tosource_global, (toSource = z,)),
+         _pa_op_six(_PaOpToLocaleString(), _pa_op_tolocalestring_method, _pa_op_tolocalestring_static, _pa_op_tolocalestring_global, (toLocaleString = z,)),
+         _pa_op_six(_PaOpToString(), _pa_op_tostring_method, _pa_op_tostring_static, _pa_op_tostring_global, (toString = z,)),
+         _pa_op_six(_PaOpUnwatch(), _pa_op_unwatch_method, _pa_op_unwatch_static, _pa_op_unwatch_global, (unwatch = z,)),
+         _pa_op_six(_PaOpValueOf(), _pa_op_valueof_method, _pa_op_valueof_static, _pa_op_valueof_global, (valueOf = z,)),
+         _pa_op_six(_PaOpWatch(), _pa_op_watch_method, _pa_op_watch_static, _pa_op_watch_global, (watch = z,)))), Int64(1)),
+    ("optional_named_runtime", (n::Int64) -> _pa_on_main(n), Int64(1)),
+    ("optional_named", (n::Int64) -> _pa_on_main(n), Int64(1)),
+    ("param", (n::Int64) -> _pa_pm_foo(n), Int64(1)),
+    ("parameter1", (n::Int64) -> (n == 1 ? _pa_p1_test_main() : Int64(-1)), Int64(1)),
+    ("parameter2", (n::Int64) -> (sq = ((x::Int64) -> x * x); odd = ((e::Int64) -> e % 2 == 1);
+        r1 = _dw_facts(_pa_p2_apply(sq, 2n), _pa_p2_apply(sq, 10n));
+        v = Int64[n, 2n, 3n, 4n, 5n, 6n]; _pa_p2_for_each!(v, sq);
+        r2 = _dw_facts(_pa_p2_exists(Int64[3n, 5n, 7n, 11n, 13n], odd), _pa_p2_exists(Int64[2n, 4n, 10n], odd), _pa_p2_exists(Int64[], odd));
+        w = Int64[4n, 5n, 7n]; is_zero = ((e::Int64) -> e == 0);
+        r3 = _dw_facts(_pa_p2_exists(w, ((e::Int64) -> e % 2 == 1)), _pa_p2_exists(w, ((e::Int64) -> e == 6n)), _pa_p2_exists(w, is_zero));
+        (r1, v, r2, r3)), Int64(1)),
+    ("types_specialization", (t::Bool) -> (_pa_ts_foo(_PaTsA(), !t), _pa_ts_foo(_PaTsA(), t, "bar", 42)), true),
+])
+
+# ---- tests/language/constructor: initializer lists, bodies, redirecting, factory and named constructors ----
+# dart's named constructor C.name is the function _ct_<file>_<class>_<name>; a factory is a function or a constructor
+# method on an abstract type; a superclass's fields are duplicated in the subclass or held by composition; the steps of
+# a subclass's initializer list, the super initializer list and the bodies run in dart's order, pushed to a Vector{Int64}.
+_ct_e(tr::Vector{Int64}, i::Int64) = (push!(tr, i); i)
+
+# body: bodyless generative and const constructors with initializing formals, unnamed and named
+mutable struct _CtBodyFirst
+    value::Int64
+end
+_ct_body_first_named(value::Int64) = _CtBodyFirst(value)
+struct _CtBodySecond
+    value::Int64
+end
+_ct_body_second_named(value::Int64) = _CtBodySecond(value)
+
+# call_as_function: a const constructor called without new
+struct _CtCafPoint
+    x::Int64
+    y::Int64
+end
+
+# constructor11: synthetic constructors of subclasses call the superclass constructor, whose optional default applies
+struct _CtC11A
+    x::Int64
+    _CtC11A(x::Int64 = Int64(499)) = new(x)
+end
+struct _CtC11B
+    sup::_CtC11A
+    _CtC11B() = new(_CtC11A())
+end
+struct _CtC11X
+    x::Int64
+    _CtC11X(x::Int64 = Int64(42)) = new(x)
+end
+struct _CtC11Y
+    sup::_CtC11X
+    _CtC11Y() = new(_CtC11X())
+end
+struct _CtC11Z
+    sup::_CtC11Y
+    _CtC11Z() = new(_CtC11Y())
+end
+struct _CtC11F
+    x::Int64
+    _CtC11F(x::Int64 = Int64(99)) = new(x)
+end
+struct _CtC11G
+    sup::_CtC11F
+    _CtC11G() = new(_CtC11F())
+end
+struct _CtC11H
+    sup::_CtC11G
+    _CtC11H() = new(_CtC11G())
+end
+_ct_c11_x(o::Union{_CtC11A,_CtC11X,_CtC11F}) = o.x
+_ct_c11_x(o::Union{_CtC11B,_CtC11Y,_CtC11Z,_CtC11G,_CtC11H}) = _ct_c11_x(o.sup)
+_ct_c11_pick(k::Int64) = k == 1 ? _ct_c11_x(_CtC11B()) : k == 2 ? _ct_c11_x(_CtC11Z()) : _ct_c11_x(_CtC11H())
+
+# constructor12_lib (constructor12, constructor12_strong): a generic subclass whose initializer closure and body closure
+# share the parameter p that super(p++) increments; its body makes a list of its type argument
+struct _CtCt12B
+    z::Int64
+end
+struct _CtCt12A{T,F,G}
+    z::Int64
+    captured::F
+    captured2::G
+    typedList::Vector{T}
+end
+function _ct_ct12_a(::Type{T}, p0::Int64) where {T}
+    local p::Int64 = p0
+    captured = () -> p
+    z = p
+    p += 1
+    captured2 = () -> (old = p; p += 1; old)
+    return _CtCt12A{T,typeof(captured),typeof(captured2)}(z, captured, captured2, T[])
+end
+_ct_ct12_foo(b::_CtCt12B) = b.z
+_ct_ct12_foo(a::_CtCt12A) = a.captured()
+_ct_ct12_bar(a::_CtCt12A) = a.captured2()
+function _ct_ct12(n::Int64)
+    a = _ct_ct12_a(Int64, n)
+    a2 = _ct_ct12_a(Any, 2n)
+    b = _CtCt12B(3n)
+    r1 = (_ct_ct12_foo(a), _ct_ct12_foo(a2), _ct_ct12_foo(b), a.z, a2.z, b.z)
+    r2 = (a isa _CtCt12A{Int64}, a isa _CtCt12A{String}, a2 isa _CtCt12A{Int64}, a2 isa _CtCt12A{String}, a2 isa _CtCt12A{Any})
+    r3 = (_ct_ct12_bar(a), _ct_ct12_bar(a2), _ct_ct12_foo(a), _ct_ct12_foo(a2))
+    l0 = (length(a.typedList), length(a2.typedList))
+    push!(a.typedList, 499)
+    r4 = (length(a.typedList), length(a2.typedList), a.typedList isa Vector{Int64}, a2.typedList isa Vector{Int64},
+          a.typedList isa Vector{String}, a2.typedList isa Vector{String})
+    return (r1, r2, r3, l0, r4)
+end
+
+# constructor2: B's initializer list, the super call's arguments, A's initializer list, A's body, B's body
+mutable struct _CtC2B
+    a1::Int64
+    b1::Int64
+    b2::Int64
+end
+_ct_c2_a(tr::Vector{Int64}, x::Int64, y::Int64) = (a1 = _ct_e(tr, 4); ok = (x == 2, y == 3, a1 == 4); _ct_e(tr, 6); (a1, ok))
+function _ct_c2_b(tr::Vector{Int64}, x::Int64)
+    b1 = _ct_e(tr, 1)
+    b2 = _ct_e(tr, 5)
+    sx = _ct_e(tr, 2)
+    sy = _ct_e(tr, 3)
+    a1, ok_a = _ct_c2_a(tr, sx, sy)
+    o = _CtC2B(a1, b1, b2)
+    ok_b = (o.b1 == 1, o.b2 == 5)
+    _ct_e(tr, 7)
+    return (ok_a, ok_b)
+end
+
+# constructor3: a field initializer before the super call's arguments, then A's list and body, then B's body
+mutable struct _CtC3B
+    a1::Int64
+    b1::Int64
+end
+_ct_c3_a(tr::Vector{Int64}, x::Int64, y::Int64) = (a1 = _ct_e(tr, 3); ok = (x == 1, y == 2); _ct_e(tr, 5); (a1, ok))
+function _ct_c3_b(tr::Vector{Int64}, x::Int64)
+    b1 = _ct_e(tr, 4)
+    sx = _ct_e(tr, 1)
+    sy = _ct_e(tr, 2)
+    a1, ok_a = _ct_c3_a(tr, sx, sy)
+    o = _CtC3B(a1, b1)
+    ok_b = o.b1 == 4
+    _ct_e(tr, 6)
+    return (ok_a, ok_b)
+end
+
+# constructor4: an implicit super() after B's initializer list runs A's list and body before B's body
+mutable struct _CtC4B
+    a1::Int64
+    b1::Int64
+end
+_ct_c4_a(tr::Vector{Int64}) = (a1 = _ct_e(tr, 2); _ct_e(tr, 3); a1)
+function _ct_c4_b(tr::Vector{Int64}, x::Int64)
+    b1 = _ct_e(tr, 1)
+    o = _CtC4B(_ct_c4_a(tr), b1)
+    _ct_e(tr, 4)
+    return (o.a1, o.b1)
+end
+
+# constructor5: a super call with one named argument; each list and its body share the incremented parameters
+mutable struct _CtC5C
+    a1::Int64
+    a2::Int64
+    b1::Int64
+    b2::Int64
+end
+function _ct_c5_a(tr::Vector{Int64}; arg1::Int64 = Int64(100), arg2::Int64 = Int64(200))
+    a1 = _ct_e(tr, arg1); arg1 += 1
+    a2 = _ct_e(tr, arg2); arg2 += 1
+    _ct_e(tr, arg1)
+    _ct_e(tr, arg2)
+    return (a1, a2)
+end
+function _ct_c5_b(tr::Vector{Int64}, x::Int64, y::Int64)
+    b1 = _ct_e(tr, x); x += 1
+    b2 = _ct_e(tr, y); y += 1
+    a1, a2 = _ct_c5_a(tr; arg2 = Int64(50))
+    o = _CtC5C(a1, a2, b1, b2)
+    _ct_e(tr, x)
+    _ct_e(tr, y)
+    return o
+end
+_ct_c5_c(tr::Vector{Int64}) = _ct_c5_b(tr, Int64(10), Int64(20))
+
+# constructor6: a field closure over A's parameter, called by A's body and again by B's body, sees every update
+struct _CtC6C{F}
+    a::Int64
+    f::F
+    b1::Int64
+    b2::Int64
+end
+function _ct_c6_a(tr::Vector{Int64}, arg0::Int64)
+    local arg::Int64 = arg0
+    arg += 1
+    a = _ct_e(tr, arg)
+    f = () -> (arg += 10; _ct_e(tr, arg))
+    f()
+    arg += 100
+    _ct_e(tr, arg)
+    f()
+    return (a, f)
+end
+function _ct_c6_b(tr::Vector{Int64}, x::Int64, y::Int64)
+    b1 = _ct_e(tr, x); x += 1
+    b2 = _ct_e(tr, y); y += 1
+    a, f = _ct_c6_a(tr, Int64(1000))
+    o = _CtC6C(a, f, b1, b2)
+    _ct_e(tr, x)
+    _ct_e(tr, y)
+    o.f()
+    return o
+end
+_ct_c6_c(tr::Vector{Int64}) = _ct_c6_b(tr, Int64(10), Int64(20))
+
+# constructor7: ten fields, some with declaration initializers, set by an initializer list in an order unlike declaration
+mutable struct _CtC7A
+    j::Int64
+    i::Int64
+    h::Int64
+    g::Int64
+    f::Int64
+    e::Int64
+    d::Int64
+    c::Int64
+    b::Int64
+    a::Int64
+    function _CtC7A(tr::Vector{Int64})
+        i = Int64(0); g = Int64(0); e = Int64(0); c = Int64(0); a = Int64(0)
+        a = _ct_e(tr, 1); b = _ct_e(tr, 2); c = _ct_e(tr, 3)
+        f = _ct_e(tr, 4); e = _ct_e(tr, 5); d = _ct_e(tr, 6)
+        g = _ct_e(tr, 7); h = _ct_e(tr, 8); i = _ct_e(tr, 9); j = _ct_e(tr, 10)
+        return new(j, i, h, g, f, e, d, c, b, a)
+    end
+end
+
+# constructor8: a closure in a named constructor's body assigns a body local and its result to a field
+mutable struct _CtC8A
+    b::Union{Nothing,Int64}
+end
+function _ct_c8_a_with_closure(a::Union{Nothing,Dict{String,Int64}})
+    o = _CtC8A(nothing)
+    local c::Union{Nothing,Int64} = nothing
+    f = () -> (c = Int64(42); c)
+    o.b = f()
+    return (o.b == 42, c == 42)
+end
+
+# constructor_contexts: closures in an initializer list and a body capturing T, a parameter shared by both, and this
+const _ct_cc_expected = Ref(Int64(0))
+_ct_cc_next(a::Int64) = (_ct_cc_expected[] += 1; _ct_cc_expected[] == a)
+_ct_cc_run(fs::Tuple) = map(f -> f(), fs)
+struct _CtCcNone{T,F1,F2}
+    f1::F1
+    f2::F2
+end
+function _ct_cc_none(::Type{T}, a::T) where {T}
+    f1 = () -> true
+    f2 = () -> true
+    o = _CtCcNone{T,typeof(f1),typeof(f2)}(f1, f2)
+    return (o.f1, o.f2, () -> true, () -> true)
+end
+mutable struct _CtCcObj{T,F1,F2}
+    a::Int64
+    f1::F1
+    f2::F2
+end
+_ct_cc_obj(::Type{T}, a::Int64, f1::F1, f2::F2) where {T,F1,F2} = _CtCcObj{T,F1,F2}(a, f1, f2)
+function _ct_cc_alloc_type_and_param(::Type{T}, a0::Int64) where {T}
+    local a::Int64 = a0
+    f1 = () -> (a += 1; (_ct_cc_next(a), T === Int64))
+    f2 = () -> (a += 1; (_ct_cc_next(a), T === Int64))
+    o = _ct_cc_obj(T, a, f1, f2)
+    return (o.f1, o.f2, () -> true, () -> true)
+end
+function _ct_cc_body_this(::Type{T}, a::Int64) where {T}
+    f1 = () -> true
+    f2 = () -> true
+    o = _ct_cc_obj(T, a, f1, f2)
+    return (o.f1, o.f2, () -> (o.a += 1; _ct_cc_next(o.a)), () -> (o.a += 1; _ct_cc_next(o.a)))
+end
+function _ct_cc_body_this_twice(::Type{T}, a::Int64) where {T}
+    f1 = () -> true
+    f2 = () -> true
+    o = _ct_cc_obj(T, a, f1, f2)
+    g1 = () -> (o.a += 1; r = _ct_cc_next(o.a); o.a += 1; (r, _ct_cc_next(o.a)))
+    g2 = () -> (o.a += 1; r = _ct_cc_next(o.a); o.a += 1; (r, _ct_cc_next(o.a)))
+    return (o.f1, o.f2, g1, g2)
+end
+function _ct_cc_alloc_param_both(::Type{T}, a0::Int64) where {T}
+    local a::Int64 = a0
+    f1 = () -> (a += 1; _ct_cc_next(a))
+    f2 = () -> (a += 1; _ct_cc_next(a))
+    o = _ct_cc_obj(T, a, f1, f2)
+    return (o.f1, o.f2, () -> (a += 1; _ct_cc_next(a)), () -> (a += 1; _ct_cc_next(a)))
+end
+function _ct_cc_both_everything(::Type{T}, a0::Int64) where {T}
+    local a::Int64 = a0
+    f1 = () -> (a += 1; (_ct_cc_next(a), T === Int64))
+    f2 = () -> (a += 1; (_ct_cc_next(a), T === Int64))
+    o = _ct_cc_obj(T, a, f1, f2)
+    g1 = () -> (o.a += 1; a += 1; (_ct_cc_expected[] - 1 == o.a, _ct_cc_next(a), T === Int64))
+    g2 = () -> (o.a += 1; a += 1; (_ct_cc_expected[] - 1 == o.a, _ct_cc_next(a), T === Int64))
+    return (o.f1, o.f2, g1, g2)
+end
+function _ct_cc(n::Int64)
+    _ct_cc_expected[] = n; r1 = _ct_cc_run(_ct_cc_none(Int64, n))
+    _ct_cc_expected[] = n; r2 = _ct_cc_run(_ct_cc_alloc_type_and_param(Int64, n))
+    _ct_cc_expected[] = n; r3 = _ct_cc_run(_ct_cc_body_this(Int64, n))
+    _ct_cc_expected[] = n; r4 = _ct_cc_run(_ct_cc_body_this_twice(Int64, n))
+    _ct_cc_expected[] = n; r5 = _ct_cc_run(_ct_cc_alloc_param_both(Int64, n))
+    _ct_cc_expected[] = n; r6 = _ct_cc_run(_ct_cc_both_everything(Int64, n))
+    return (r1, r2, r3, r4, r5, r6)
+end
+
+# constructor: a super call in an initializer list; a subclass field set before the super body calls its override
+mutable struct _CtCB
+    b::Int64
+end
+_ct_c_b_named_b(x::Int64) = _CtCB(x)
+struct _CtCA
+    sup::_CtCB
+    a::Int64
+end
+_ct_c_a(x::Int64, y::Int64) = (a = x; _CtCA(_CtCB(y), a))
+abstract type _CtCAlpha end
+_ct_c_foo(::_CtCAlpha, v::Int64) = error("Alpha.foo should never be called.")
+mutable struct _CtCBeta <: _CtCAlpha
+    b::Int64
+end
+_ct_c_foo(this::_CtCBeta, v::Int64) = (ok = this.b == 1; this.b = v; ok)
+_ct_c_alpha_body(this::_CtCAlpha, v::Int64) = _ct_c_foo(this, v)
+function _ct_c_beta(v::Int64)
+    this = _CtCBeta(1)
+    ok = _ct_c_alpha_body(this, v)
+    return (this, ok)
+end
+function _ct_c(n::Int64)
+    o = _ct_c_a(10n, 2n)
+    o1 = _ct_c_b_named_b(10n)
+    beta, ok = _ct_c_beta(3n)
+    return (o.a, o.sup.b, o1.b, o.a + o.sup.b + o1.b, ok, beta.b)
+end
+
+# default_class_implicit_constructor: an abstract class's redirecting factory to a class with only its implicit constructor
+abstract type _CtDcicA end
+struct _CtDcicB <: _CtDcicA end
+_CtDcicA() = _CtDcicB()
+
+# default_factory3: a redirecting factory of a bounded generic abstract class (dart's concrete Foo is abstract here)
+abstract type _CtDf3Bar end
+abstract type _CtDf3Foo <: _CtDf3Bar end
+struct _CtDf3Moo <: _CtDf3Foo end
+abstract type _CtDf3A{T<:_CtDf3Foo} end
+struct _CtDf3AImpl{T<:_CtDf3Foo} <: _CtDf3A{T} end
+_CtDf3A{T}() where {T<:_CtDf3Foo} = _CtDf3AImpl{T}()
+
+# default_factory_library (and its library): a factory redirecting to another library's abstract class's factory
+abstract type _CtDflA end
+abstract type _CtDflC <: _CtDflA end
+struct _CtDflB <: _CtDflC end
+_ct_dfl_method_a(::_CtDflB) = Int64(1)
+_ct_dfl_method_b(::_CtDflB) = Int64(2)
+_ct_dfl_c_a() = _CtDflB()
+_CtDflA() = _ct_dfl_c_a()
+
+# default_factory: a factory redirecting to a class's factory returning its private generative constructor
+abstract type _CtDfSpaceShip end
+abstract type _CtDfGoogleOne <: _CtDfSpaceShip end
+struct _CtDfGoogleOneImpl <: _CtDfGoogleOne end
+struct _CtDfBike <: _CtDfGoogleOne end
+_ct_df_bike_red_one() = _CtDfBike()
+_CtDfGoogleOne() = _CtDfGoogleOneImpl()
+_CtDfSpaceShip() = _CtDfGoogleOne()
+
+# default: a subclass body reads the field the superclass's initializer list set
+mutable struct _CtDefB
+    a::Int64
+end
+_ct_def_a_init() = Int64(499)
+_ct_def_b() = (o = _CtDefB(_ct_def_a_init()); (o, o.a == 499))
+
+# evaluation_redirecting_constructor: a field initializer runs once through a redirecting constructor
+const _ct_erc_counter = Ref(Int64(0))
+struct _CtErcBar
+    _CtErcBar() = (_ct_erc_counter[] += 1; new())
+end
+struct _CtErcA
+    bar::_CtErcBar
+end
+_ct_erc_a_private() = (bar = _CtErcBar(); f = () -> Int64(42); _CtErcA(bar))
+_ct_erc_a() = _ct_erc_a_private()
+
+# example_constructor: an initializing formal, two field initializers, the super argument, A's list and body, B's body
+mutable struct _CtExB
+    x::Int64
+    a::Int64
+    y::Int64
+    z::Int64
+end
+function _ct_ex_a(tr::Vector{Int64}, x::Int64)
+    thisx = _ct_e(tr, 4)
+    ok = (x == 3, thisx == 4)
+    _ct_e(tr, 5)
+    return (thisx, ok)
+end
+function _ct_ex_b(tr::Vector{Int64}, a::Int64, y::Int64, z::Int64)
+    fz = _ct_e(tr, 1)
+    fy = _ct_e(tr, 2)
+    x, ok = _ct_ex_a(tr, _ct_e(tr, 3))
+    o = _CtExB(x, a, fy, fz)
+    _ct_e(tr, 6)
+    return (o, ok)
+end
+function _ct_ex(n::Int64)
+    tr = Int64[]
+    o, ok = _ct_ex_b(tr, _ct_e(tr, n - 1), Int64(0), Int64(0))
+    return (tr, ok, (o.a, o.x, o.y, o.z))
+end
+
+# external_constructor: an external constructor has no body (a function without methods); calling it throws
+struct _CtExtA
+    field::Int64
+end
+function _ct_ext_a_foo end
+struct _CtExtB
+    field::Int64
+end
+_ct_ext_b_foo(arg::Int64) = _CtExtB(_ct_ext_a_foo(arg).field)
+
+# forwarding_factory_constructor_default_values: a redirecting factory forwards an omitted named argument; the target's default applies
+abstract type _CtFfcA end
+struct _CtFfcA1 <: _CtFfcA
+    condition::Bool
+end
+_ct_ffc_a1_boo(; condition::Bool = true) = _CtFfcA1(condition)
+_ct_ffc_a_a1(; kw...) = _ct_ffc_a1_boo(; kw...)
+_ct_ffc_test(a::_CtFfcA) = a.condition != true ? throw(ErrorException("FAILED")) : nothing
+function _ct_ffc(n::Int64)
+    a = n == 1 ? _ct_ffc_a_a1() : _ct_ffc_a_a1(; condition = false)
+    code = try; _ct_ffc_test(a); Int64(0); catch e; e isa ErrorException ? Int64(-1) : Int64(-2); end
+    return (code, a.condition)
+end
+
+# implicit_super_constructor_call: an implicit super() takes the superclass's named-parameter default
+struct _CtIsccA
+    x::String
+end
+_ct_iscc_a(; x::String = "foo") = (o = _CtIsccA(x); (o, string(o.x) == "foo"))
+struct _CtIsccC
+    x::String
+end
+_ct_iscc_c(foobar::Int64) = (r = _ct_iscc_a(); (_CtIsccC(r[1].x), r[2]))
+
+# implicit_super_constructor: a field initializer of an abstract grand-superclass runs through implicit super calls
+abstract type _CtIscA end
+abstract type _CtIscB <: _CtIscA end
+struct _CtIscC <: _CtIscB
+    _x::Int64
+    _CtIscC() = new(Int64(42))
+end
+
+# inference_super_constructor_call: a named super constructor receives null; adding to the field throws
+struct _CtInfA
+    field::Union{Nothing,Int64}
+end
+_ct_inf_a_full(field::Union{Nothing,Int64}) = _CtInfA(field)
+struct _CtInfB
+    field::Union{Nothing,Int64}
+end
+_ct_inf_b_full(field::Union{Nothing,Int64}) = _CtInfB(_ct_inf_a_full(field).field)
+
+# initializer: parameters incremented in initializer lists keep their new values in the bodies; a super call after B's fields
+mutable struct _CtInitA
+    _x::Int64
+    _y::Int64
+end
+function _ct_init_a_parts(x::Int64, y::Int64 = Int64(10))
+    _x = x; x += 1
+    _y = y; y += 1
+    return (_x, _y, (x == _x + 1, y == _y + 1))
+end
+_ct_init_a(x::Int64, y::Int64 = Int64(10)) = (p = _ct_init_a_parts(x, y); (_CtInitA(p[1], p[2]), p[3]))
+mutable struct _CtInitB
+    _x::Int64
+    _y::Int64
+    _a::Int64
+    _b::Int64
+end
+function _ct_init_b(a::Int64, b::Int64)
+    _a = a; a += 1
+    _b = b; b += 1
+    s = a + b; b += 1
+    _x, _y, ok_a = _ct_init_a_parts(s)
+    o = _CtInitB(_x, _y, _a, _b)
+    ok_b = (a == o._a + 1, b == o._b + 2, a + (b - 2) == o._x - 1)
+    return (o, ok_a, ok_b)
+end
+function _ct_init(n::Int64)
+    o, ok_a, ok_b = _ct_init_b(3n, 5n)
+    q, ok_q = _ct_init_a(3n)
+    return (ok_a, ok_b, (o._a, o._b, o._x, o._y), (q._x, q._y), ok_q)
+end
+
+# multiple_field_assignment_constructor: a body assigns a field an int, then the null read from a list; adding to it throws
+const _ct_mfac_a = Union{Nothing,Int64}[nothing]
+mutable struct _CtMfacA{F}
+    foo::Union{Nothing,Int64}
+    bar::F
+end
+function _ct_mfac_new_a()
+    o = _CtMfacA(nothing, () -> Int64(42))
+    o.foo = 42
+    o.foo = _ct_mfac_a[1]
+    return o
+end
+mutable struct _CtMfacB{F}
+    foo::Union{Nothing,Int64}
+    bar::F
+end
+function _ct_mfac_new_b()
+    o = _CtMfacB(nothing, () -> Int64(42))
+    o.foo = 42
+    o.foo = _ct_mfac_a[1]
+    if false
+        o.foo = 42
+    end
+    return o
+end
+
+# name_clash_lib (name_clash): a subclass named like its library superclass; the superclass body runs first
+const _ct_ncl_global = Ref(Int64(0))
+struct _CtNclLibA
+    _CtNclLibA() = (_ct_ncl_global[] += 10; new())
+end
+struct _CtNclA
+    sup::_CtNclLibA
+    function _CtNclA()
+        s = _CtNclLibA()
+        _ct_ncl_global[] += 100
+        return new(s)
+    end
+end
+
+# named_arguments: redirecting constructors pass named arguments in any order to a constructor with defaults
+const _ct_na_message = Ref("")
+_ct_na_foo() = (_ct_na_message[] = _ct_na_message[] * "foo"; Int64(1))
+_ct_na_bar() = (_ct_na_message[] = _ct_na_message[] * "bar"; Int64(2))
+struct _CtNaX
+    i::Union{Int64,String}
+    j::Union{Int64,String}
+    _CtNaX(; a::Union{Int64,String} = "defa", b::Union{Int64,String} = "defb") = new(a, b)
+end
+_ct_na_x_foo() = _CtNaX(b = Int64(1), a = Int64(2))
+_ct_na_x_bar() = _CtNaX(a = Int64(2))
+_ct_na_x_baz() = _CtNaX(a = Int64(1), b = Int64(2))
+_ct_na_x_qux() = _CtNaX(b = Int64(2))
+_ct_na_x_hest() = _CtNaX()
+_ct_na_x_fisk() = _CtNaX(b = _ct_na_bar(), a = _ct_na_foo())
+_ct_na_x_naebdyr() = _CtNaX(a = _ct_na_foo(), b = _ct_na_bar())
+_ct_na_test(x::_CtNaX, a::A, b::B) where {A,B} = (x.i == a, x.j == b)
+function _ct_na(n::Int64)
+    r = (_ct_na_test(_ct_na_x_foo(), 2n, n), _ct_na_test(_ct_na_x_bar(), 2n, "defb"), _ct_na_test(_ct_na_x_baz(), n, 2n),
+         _ct_na_test(_ct_na_x_qux(), "defa", 2n), _ct_na_test(_ct_na_x_hest(), "defa", "defb"))
+    _ct_na_message[] = ""
+    _ct_na_x_fisk()
+    m1 = _ct_na_message[] == "barfoo"
+    _ct_na_message[] = ""
+    _ct_na_x_naebdyr()
+    m2 = _ct_na_message[] == "foobar"
+    return (r, m1, m2)
+end
+
+# named_constructor (and named_lib): a generic class's unnamed and named constructors, with and without type arguments, here and through a prefix
+struct _CtNamedClass{T}
+    value::Int64
+end
+_CtNamedClass{T}() where {T} = _CtNamedClass{T}(Int64(0))
+_CtNamedClass() = _CtNamedClass{Any}()
+_ct_named_class_named(::Type{T}) where {T} = _CtNamedClass{T}(Int64(1))
+_ct_named_class_named() = _ct_named_class_named(Any)
+struct _CtNamedLibClass{T}
+    value::Int64
+end
+_CtNamedLibClass{T}() where {T} = _CtNamedLibClass{T}(Int64(2))
+_CtNamedLibClass() = _CtNamedLibClass{Any}()
+_ct_named_lib_class_named(::Type{T}) where {T} = _CtNamedLibClass{T}(Int64(3))
+_ct_named_lib_class_named() = _ct_named_lib_class_named(Any)
+function _ct_named_pick(k::Int64)
+    k == 1 && return _CtNamedClass().value
+    k == 2 && return _CtNamedClass{Int64}().value
+    k == 3 && return _ct_named_class_named().value
+    k == 4 && return _ct_named_class_named(Int64).value
+    k == 5 && return _CtNamedLibClass().value
+    k == 6 && return _CtNamedLibClass{Int64}().value
+    k == 7 && return _ct_named_lib_class_named().value
+    return _ct_named_lib_class_named(Int64).value
+end
+
+# non_const_constructor_without_body: bodyless constructors: a field initializer, an initializer list, a parameter, a field formal, a redirect
+mutable struct _CtNccwb
+    x::Int64
+end
+_CtNccwb() = _CtNccwb(Int64(-1))
+_ct_nccwb_named() = _CtNccwb(Int64(-1))
+_ct_nccwb_initializers() = _CtNccwb(Int64(1))
+_ct_nccwb_parameters(x::Int64) = _CtNccwb(x + 1)
+_ct_nccwb_field_parameter(x::Int64) = _CtNccwb(x)
+_ct_nccwb_redirection() = _ct_nccwb_initializers()
+function _ct_nccwb_pick(k::Int64)
+    k == 1 && return _CtNccwb().x
+    k == 2 && return _ct_nccwb_named().x
+    k == 3 && return _ct_nccwb_initializers().x
+    k == 4 && return _ct_nccwb_parameters(Int64(1)).x
+    k == 5 && return _ct_nccwb_field_parameter(Int64(2)).x
+    return _ct_nccwb_redirection().x
+end
+
+# non_parameterized_factory, non_parameterized_factory2: an abstract generic class's factories redirect to another class's factories
+abstract type _CtNpfInterface{T} end
+struct _CtNpfFactory{T} <: _CtNpfInterface{T} end
+_ct_npf_factory(::Type{T}) where {T} = _CtNpfFactory{T}()
+_ct_npf_factory_with_arg(::Type{T}, value::T) where {T} = _CtNpfFactory{T}()
+_CtNpfInterface{T}() where {T} = _ct_npf_factory(T)
+_CtNpfInterface() = _CtNpfInterface{Any}()
+_ct_npf_interface_with_arg(::Type{T}, value::T) where {T} = _ct_npf_factory_with_arg(T, value)
+_ct_npf_interface_with_arg(value::T) where {T} = _ct_npf_interface_with_arg(T, value)
+
+# patch_tear_off: a tear-off of a core library constructor (dart's patched BigInt.from; Base's Float64 here), called
+
+# redirect: redirecting constructors, generative and const, and super calls to them
+mutable struct _CtRedA
+    x::Int64
+end
+_ct_red_a_named(x::Int64, y::Int64) = _CtRedA(x + y)
+mutable struct _CtRedB
+    x::Int64
+end
+_ct_red_b(y::Int64) = _CtRedB(_CtRedA(y + 1).x)
+_ct_red_b_named(y::Int64) = _CtRedB(_ct_red_a_named(y, y + 1).x)
+struct _CtRedC
+    x::Int64
+end
+_ct_red_c_named(x::Int64, y::Int64) = _CtRedC(x + y)
+struct _CtRedD
+    x::Int64
+end
+_ct_red_d(y::Int64) = _CtRedD(_CtRedC(y + 1).x)
+_ct_red_d_named(y::Int64) = _CtRedD(_ct_red_c_named(y, y + 1).x)
+
+# return: a generative constructor's body ends with a bare return
+mutable struct _CtRetA
+    x::Int64
+    function _CtRetA(x::Int64)
+        o = new(x)
+        return o
+    end
+end
+_ct_ret_foo(a::_CtRetA, y::Int64) = a.x + y
+
+# tear_off: constructors torn off as function values: calls, identity, inequality; generic ones instantiated by a type argument
+struct _CtToInst{T,F}
+    f::F
+end
+_CtToInst{T}(f::F) where {T,F} = _CtToInst{T,F}(f)
+(i::_CtToInst{T})(x::Int64) where {T} = i.f(T, x)
+struct _CtToNGen
+    x::Int64
+end
+_ct_to_ngen_named(x::Int64) = _CtToNGen(x)
+struct _CtToNGenRedir
+    x::Int64
+end
+_ct_to_ngen_redir_new(x::Int64) = _CtToNGenRedir(x)
+_ct_to_ngen_redir_named(x::Int64) = _CtToNGenRedir(x)
+abstract type _CtToNFacRedir end
+struct _CtToNFac <: _CtToNFacRedir
+    x::Int64
+end
+_ct_to_nfac_new(x::Int64) = _CtToNFac(x)
+_ct_to_nfac_named(x::Int64) = _CtToNFac(x)
+_CtToNFacRedir(x::Int64) = _CtToNFac(x)
+_ct_to_nfac_redir_named(x::Int64) = _CtToNFac(x)
+struct _CtToGGen{T}
+    x::Int64
+end
+_ct_to_ggen_named(::Type{T}, x::Int64) where {T} = _CtToGGen{T}(x)
+struct _CtToGGenRedir{T}
+    x::Int64
+end
+_ct_to_ggen_redir_new(::Type{T}, x::Int64) where {T} = _CtToGGenRedir{T}(x)
+_ct_to_ggen_redir_named(::Type{T}, x::Int64) where {T} = _CtToGGenRedir{T}(x)
+abstract type _CtToGFacRedir{T} end
+struct _CtToGFac{T} <: _CtToGFacRedir{T}
+    x::Int64
+end
+_ct_to_gfac_new(::Type{T}, x::Int64) where {T} = _CtToGFac{T}(x)
+_ct_to_gfac_named(::Type{T}, x::Int64) where {T} = _CtToGFac{T}(x)
+_CtToGFacRedir{T}(x::Int64) where {T} = _CtToGFac{T}(x)
+_ct_to_gfac_redir_named(::Type{T}, x::Int64) where {T} = _CtToGFac{T}(x)
+struct _CtToOptional{T}
+    x::Int64
+    y::Int64
+end
+_CtToOptional{T}() where {T} = _CtToOptional{T}(Int64(0), Int64(0))
+_CtToOptional{T}(x::Int64) where {T} = _CtToOptional{T}(x, Int64(0))
+_ct_to_optional_named(::Type{T}; x::Int64 = Int64(0), y::Int64 = Int64(0)) where {T} = _CtToOptional{T}(x, y)
+_ct_to_test(::Type{R}, f1::F, same::S, not_same::N, n::Int64) where {R,F,S,N} =
+    (r = f1(n); (r isa R, r.x, f1 === same, not_same === nothing ? true : f1 != not_same))
+_ct_to_gtest(f1::F, same::S, not_same::N) where {F,S,N} = (f1 === same, not_same === nothing ? true : f1 != not_same)
+function _ct_to_generic(::Type{T}) where {T}
+    return (_CtToGGen{T} == _CtToGGen{T}, _CtToInst{T}(_ct_to_ggen_named) == _CtToInst{T}(_ct_to_ggen_named),
+            _CtToInst{T}(_ct_to_ggen_redir_new) == _CtToInst{T}(_ct_to_ggen_redir_new),
+            _CtToInst{T}(_ct_to_gfac_new) == _CtToInst{T}(_ct_to_gfac_new), _CtToGFacRedir{T} == _CtToGFacRedir{T},
+            _CtToInst{T}(_ct_to_gfac_redir_named) == _CtToInst{T}(_ct_to_gfac_redir_named))
+end
+function _ct_to(n::Int64)
+    ng = (_ct_to_test(_CtToNGen, _CtToNGen, _CtToNGen, _ct_to_ngen_named, n),
+          _ct_to_test(_CtToNGen, _ct_to_ngen_named, _ct_to_ngen_named, nothing, n),
+          _ct_to_test(_CtToNGenRedir, _ct_to_ngen_redir_new, _ct_to_ngen_redir_new, _ct_to_ngen_redir_named, n),
+          _ct_to_test(_CtToNGenRedir, _ct_to_ngen_redir_named, _ct_to_ngen_redir_named, nothing, n),
+          _ct_to_test(_CtToNFac, _ct_to_nfac_new, _ct_to_nfac_new, _ct_to_nfac_named, n),
+          _ct_to_test(_CtToNFac, _ct_to_nfac_named, _ct_to_nfac_named, nothing, n),
+          _ct_to_test(_CtToNFacRedir, _CtToNFacRedir, _CtToNFacRedir, _ct_to_nfac_redir_named, n),
+          _ct_to_test(_CtToNFacRedir, _ct_to_nfac_redir_named, _ct_to_nfac_redir_named, nothing, n))
+    gg = (_ct_to_gtest(_CtToGGen, _CtToGGen, _ct_to_ggen_named), _ct_to_gtest(_ct_to_ggen_named, _ct_to_ggen_named, nothing),
+          _ct_to_gtest(_ct_to_ggen_redir_new, _ct_to_ggen_redir_new, _ct_to_ggen_redir_named),
+          _ct_to_gtest(_ct_to_ggen_redir_named, _ct_to_ggen_redir_named, nothing),
+          _ct_to_gtest(_ct_to_gfac_new, _ct_to_gfac_new, _ct_to_gfac_named), _ct_to_gtest(_ct_to_gfac_named, _ct_to_gfac_named, nothing),
+          _ct_to_gtest(_CtToGFacRedir, _CtToGFacRedir, _ct_to_gfac_redir_named),
+          _ct_to_gtest(_ct_to_gfac_redir_named, _ct_to_gfac_redir_named, nothing))
+    gi = (_ct_to_test(_CtToGGen{Int64}, _CtToGGen{Int64}, _CtToGGen{Int64}, _CtToInst{Int64}(_ct_to_ggen_named), n),
+          _ct_to_test(_CtToGGen{Int64}, _CtToInst{Int64}(_ct_to_ggen_named), _CtToInst{Int64}(_ct_to_ggen_named), nothing, n),
+          _ct_to_test(_CtToGGenRedir{Int64}, _CtToInst{Int64}(_ct_to_ggen_redir_new), _CtToInst{Int64}(_ct_to_ggen_redir_new),
+                      _CtToInst{Int64}(_ct_to_ggen_redir_named), n),
+          _ct_to_test(_CtToGGenRedir{Int64}, _CtToInst{Int64}(_ct_to_ggen_redir_named), _CtToInst{Int64}(_ct_to_ggen_redir_named), nothing, n),
+          _ct_to_test(_CtToGFac{Int64}, _CtToInst{Int64}(_ct_to_gfac_new), _CtToInst{Int64}(_ct_to_gfac_new), _CtToInst{Int64}(_ct_to_gfac_named), n),
+          _ct_to_test(_CtToGFac{Int64}, _CtToInst{Int64}(_ct_to_gfac_named), _CtToInst{Int64}(_ct_to_gfac_named), nothing, n),
+          _ct_to_test(_CtToGFacRedir{Int64}, _CtToGFacRedir{Int64}, _CtToGFacRedir{Int64}, _CtToInst{Int64}(_ct_to_gfac_redir_named), n),
+          _ct_to_test(_CtToGFacRedir{Int64}, _CtToInst{Int64}(_ct_to_gfac_redir_named), _CtToInst{Int64}(_ct_to_gfac_redir_named), nothing, n))
+    neq = (_CtToGGen{Int64} != _CtToGGen{Number}, _CtToInst{Int64}(_ct_to_ggen_named) != _CtToInst{Number}(_ct_to_ggen_named),
+           _CtToInst{Int64}(_ct_to_ggen_redir_new) != _CtToInst{Number}(_ct_to_ggen_redir_new),
+           _CtToInst{Int64}(_ct_to_ggen_redir_named) != _CtToInst{Number}(_ct_to_ggen_redir_named),
+           _CtToInst{Int64}(_ct_to_gfac_new) != _CtToInst{Number}(_ct_to_gfac_new),
+           _CtToInst{Int64}(_ct_to_gfac_named) != _CtToInst{Number}(_ct_to_gfac_named),
+           _CtToGFacRedir{Int64} != _CtToGFacRedir{Number},
+           _CtToInst{Int64}(_ct_to_gfac_redir_named) != _CtToInst{Number}(_ct_to_gfac_redir_named))
+    fo = _CtToOptional{Int64}
+    o1 = fo()
+    o2 = fo(n)
+    o3 = _ct_to_optional_named(Int64; y = n)
+    opt = (o1.x, o1.y, o2.x, o2.y, o3.x, o3.y)
+    return (ng, gg, gi, neq, opt, _ct_to_generic(Int64))
+end
+
+# unnamed_new: C.new as the unnamed constructor: this.new and this redirects, factories to C.new and to C, super.new and super calls
+struct _CtUnNew{T}
+    x::Int64
+end
+_CtUnNew{T}() where {T} = _CtUnNew{T}(Int64(0))
+_CtUnNew(x::Int64) = _CtUnNew{Any}(x)
+_ct_un_new_this_new(::Type{T}, x::Int64) where {T} = _CtUnNew{T}(x)
+_ct_un_new_this_no_new(::Type{T}, x::Int64) where {T} = _CtUnNew{T}(x)
+_ct_un_new_factory_new(::Type{T}, x::Int64) where {T} = _CtUnNew{T}(x)
+_ct_un_new_factory_no_new(::Type{T}, x::Int64) where {T} = _CtUnNew{T}(x)
+struct _CtUnNewSub{T}
+    sup::_CtUnNew{T}
+end
+_CtUnNewSub{T}() where {T} = _CtUnNewSub{T}(_CtUnNew{T}())
+_ct_un_new_sub_implicit(::Type{T}) where {T} = _CtUnNewSub{T}(_CtUnNew{T}())
+_ct_un_new_sub_super_new(::Type{T}, x::Int64) where {T} = _CtUnNewSub{T}(_CtUnNew{T}(x))
+_ct_un_new_sub_super_no_new(::Type{T}, x::Int64) where {T} = _CtUnNewSub{T}(_CtUnNew{T}(x))
+struct _CtUnNoNew{T}
+    x::Int64
+end
+_CtUnNoNew{T}() where {T} = _CtUnNoNew{T}(Int64(0))
+_CtUnNoNew(x::Int64) = _CtUnNoNew{Any}(x)
+_ct_un_no_new_this_new(::Type{T}, x::Int64) where {T} = _CtUnNoNew{T}(x)
+_ct_un_no_new_this_no_new(::Type{T}, x::Int64) where {T} = _CtUnNoNew{T}(x)
+_ct_un_no_new_factory_new(::Type{T}, x::Int64) where {T} = _CtUnNoNew{T}(x)
+_ct_un_no_new_factory_no_new(::Type{T}, x::Int64) where {T} = _CtUnNoNew{T}(x)
+struct _CtUnNoNewSub{T}
+    sup::_CtUnNoNew{T}
+end
+_CtUnNoNewSub{T}() where {T} = _CtUnNoNewSub{T}(_CtUnNoNew{T}())
+_ct_un_no_new_sub_implicit(::Type{T}) where {T} = _CtUnNoNewSub{T}(_CtUnNoNew{T}())
+_ct_un_no_new_sub_super_new(::Type{T}, x::Int64) where {T} = _CtUnNoNewSub{T}(_CtUnNoNew{T}(x))
+_ct_un_no_new_sub_super_no_new(::Type{T}, x::Int64) where {T} = _CtUnNoNewSub{T}(_CtUnNoNew{T}(x))
+function _ct_un(n::Int64)
+    a = (_CtUnNew(n).x, _ct_un_new_this_new(Any, n).x, _ct_un_new_this_no_new(Any, n).x, _ct_un_new_factory_new(Any, n).x,
+         _ct_un_new_factory_no_new(Any, n).x, _CtUnNew{Int64}(n).x, _ct_un_new_this_new(Int64, n).x,
+         _ct_un_new_this_no_new(Int64, n).x, _ct_un_new_factory_new(Int64, n).x, _ct_un_new_factory_no_new(Int64, n).x)
+    s = (_CtUnNewSub{Any}().sup.x, _ct_un_new_sub_implicit(Any).sup.x, _ct_un_new_sub_super_new(Any, n).sup.x,
+         _ct_un_new_sub_super_no_new(Any, n).sup.x, _CtUnNewSub{Int64}().sup.x, _ct_un_new_sub_super_new(Int64, n).sup.x)
+    b = (_CtUnNoNew(n).x, _ct_un_no_new_this_new(Any, n).x, _ct_un_no_new_this_no_new(Any, n).x, _ct_un_no_new_factory_new(Any, n).x,
+         _ct_un_no_new_factory_no_new(Any, n).x, _CtUnNoNew{Int64}(n).x, _ct_un_no_new_this_new(Int64, n).x,
+         _ct_un_no_new_this_no_new(Int64, n).x, _ct_un_no_new_factory_new(Int64, n).x, _ct_un_no_new_factory_no_new(Int64, n).x)
+    t = (_CtUnNoNewSub{Any}().sup.x, _ct_un_no_new_sub_implicit(Any).sup.x, _ct_un_no_new_sub_super_new(Any, n).sup.x,
+         _ct_un_no_new_sub_super_no_new(Any, n).sup.x, _CtUnNoNewSub{Int64}().sup.x, _ct_un_no_new_sub_super_new(Int64, n).sup.x)
+    f1 = _CtUnNew{Int64}
+    f2 = _CtUnNoNew{Int64}
+    return (a, s, b, t, f1(n).x, f2(n).x, _CtUnNew{Int64}(n) isa _CtUnNew{Int64}, _CtUnNew(n) isa _CtUnNew{Any})
+end
+
+# with_mixin: a super constructor call through a mixin application runs each class's body once
+const _ct_wm_a_count = Ref(Int64(0))
+const _ct_wm_b_count = Ref(Int64(0))
+abstract type _CtWmI end
+struct _CtWmB <: _CtWmI
+    x::Int64
+    y::Int64
+end
+_ct_wm_a_parts(x::Int64) = (_ct_wm_a_count[] += 1; x)
+function _ct_wm_b(xx::Int64)
+    y = Int64(13)
+    x = _ct_wm_a_parts(xx)
+    o = _CtWmB(x, y)
+    _ct_wm_b_count[] += 1
+    return o
+end
+
+_g("dart_constructor", Any[
+    ("body", (n::Int64) -> (_CtBodyFirst(4n).value, _ct_body_first_named(5n).value, _CtBodySecond(6n).value,
+        _ct_body_second_named(7n).value), Int64(1)),
+    ("call_as_function", (n::Int64) -> (p = _CtCafPoint(n, 2n); (p.x, p.y)), Int64(1)),
+    ("constructor11", (n::Int64) -> (r = Int64[]; for k in n:n+2; push!(r, _ct_c11_pick(k)); end; r), Int64(1)),
+    ("constructor12_strong", (n::Int64) -> (a2 = _ct_ct12_a(Any, 2n); (a2 isa _CtCt12A{Any}, a2.z)), Int64(1)),
+    ("constructor12", (n::Int64) -> _ct_ct12(n), Int64(1)),
+    ("constructor2", (n::Int64) -> (tr = Int64[]; oks = _ct_c2_b(tr, n - 1); (tr, oks)), Int64(1)),
+    ("constructor3", (n::Int64) -> (tr = Int64[]; oks = _ct_c3_b(tr, n - 1); (tr, oks)), Int64(1)),
+    ("constructor4", (n::Int64) -> (tr = Int64[]; fs = _ct_c4_b(tr, n - 1); (tr, fs)), Int64(1)),
+    ("constructor5", (n::Int64) -> (tr = Int64[]; c = _ct_c5_c(tr); (tr, (c.a1, c.a2, c.b1, c.b2))), Int64(1)),
+    ("constructor6", (n::Int64) -> (tr = Int64[]; c = _ct_c6_c(tr); (tr, c.a, c.b1, c.b2)), Int64(1)),
+    ("constructor7", (n::Int64) -> (tr = Int64[]; x = _CtC7A(tr);
+        (tr, (x.a, x.b, x.c, x.f, x.e, x.d, x.g, x.h, x.i, x.j))), Int64(1)),
+    ("constructor8", (n::Int64) -> (_ct_c8_a_with_closure(n == 1 ? nothing : Dict{String,Int64}()),
+        _ct_c8_a_with_closure(n == 1 ? Dict{String,Int64}() : nothing)), Int64(1)),
+    ("constructor_contexts", (n::Int64) -> _ct_cc(n), Int64(123)),
+    ("constructor", (n::Int64) -> _ct_c(n), Int64(1)),
+    ("default_class_implicit_constructor", (n::Int64) -> (val = n == 1 ? _CtDcicA() : nothing;
+        (val isa _CtDcicA, val isa _CtDcicB)), Int64(1)),
+    ("default_factory3", (n::Int64) -> (r = n == 1 ? _CtDf3A{_CtDf3Moo}() : nothing;
+        (r isa _CtDf3A{_CtDf3Moo}, r isa _CtDf3AImpl{_CtDf3Moo})), Int64(1)),
+    ("default_factory_library", (n::Int64) -> (val = n == 1 ? _CtDflA() : nothing;
+        val === nothing ? (false, Int64(-1), Int64(-1)) : (val isa _CtDflB, _ct_dfl_method_a(val), _ct_dfl_method_b(val))), Int64(1)),
+    ("default_factory", (n::Int64) -> (b = n == 1 ? _ct_df_bike_red_one() : nothing; s = n == 1 ? _CtDfSpaceShip() : nothing;
+        (b isa _CtDfBike, s isa _CtDfGoogleOne)), Int64(1)),
+    ("default", (n::Int64) -> (r = n == 1 ? _ct_def_b() : nothing; r === nothing ? (Int64(-1), false) : (r[1].a, r[2])), Int64(1)),
+    ("evaluation_redirecting_constructor", (n::Int64) -> (_ct_erc_counter[] = n - 1; a = _ct_erc_a(); _ct_erc_counter[]), Int64(1)),
+    ("example_constructor", (n::Int64) -> _ct_ex(n), Int64(1)),
+    ("external_constructor", (n::Int64) -> (e1 = try; _ct_ext_a_foo(n); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end;
+        e2 = try; _ct_ext_b_foo(n); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end; (e1, e2)), Int64(1)),
+    ("forwarding_factory_constructor_default_values", (n::Int64) -> _ct_ffc(n), Int64(1)),
+    ("implicit_super_constructor_call", (n::Int64) -> (r = n == 1 ? _ct_iscc_c(499n) : nothing;
+        r === nothing ? (false, false) : (r[2], string(r[1].x) == "foo")), Int64(1)),
+    ("implicit_super_constructor", (n::Int64) -> (c = n == 1 ? _CtIscC() : nothing; c === nothing ? Int64(-1) : c._x), Int64(1)),
+    ("inference_super_constructor_call", (n::Int64) -> (r1 = _ct_inf_a_full(42n).field + 42;
+        r2 = try; _ct_inf_b_full(n == 1 ? nothing : n).field + 42; Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end;
+        (r1, r2)), Int64(1)),
+    ("initializer", (n::Int64) -> _ct_init(n), Int64(1)),
+    ("multiple_field_assignment_constructor", (n::Int64) -> (_ct_mfac_a[1] = n == 1 ? nothing : n;
+        r1 = try; _ct_mfac_new_a().foo + 42; Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end;
+        r2 = try; _ct_mfac_new_b().foo + 42; Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end; (r1, r2)), Int64(1)),
+    ("name_clash", (n::Int64) -> (_ct_ncl_global[] = n - 1; _CtNclA(); _ct_ncl_global[]), Int64(1)),
+    ("named_arguments", (n::Int64) -> _ct_na(n), Int64(1)),
+    ("named_constructor", (n::Int64) -> (r = Int64[]; for k in n:n+7; push!(r, _ct_named_pick(k)); end; r), Int64(1)),
+    ("non_const_constructor_without_body", (n::Int64) -> (r = Int64[]; for k in n:n+5; push!(r, _ct_nccwb_pick(k)); end; r), Int64(1)),
+    ("non_parameterized_factory", (n::Int64) -> (i1 = n == 1 ? _CtNpfInterface() : nothing; i2 = _ct_npf_interface_with_arg(4n);
+        (i1 isa _CtNpfFactory{Any}, i2 isa _CtNpfFactory{Int64}, i2 isa _CtNpfInterface{Int64})), Int64(1)),
+    ("non_parameterized_factory2", (n::Int64) -> (i1 = n == 1 ? _CtNpfInterface{Int64}() : nothing;
+        i2 = _ct_npf_interface_with_arg(Int64, 4n); (i1 isa _CtNpfFactory{Int64}, i2 isa _CtNpfFactory{Int64})), Int64(1)),
+    ("patch_tear_off", (n::Int64) -> (f = Float64; f(n)), Int64(1)),
+    ("redirect", (n::Int64) -> (_CtRedA(499n).x, _ct_red_a_named(349n, 499n).x, _ct_red_b(498n).x, _ct_red_b_named(249n).x,
+        _CtRedC(499n).x, _ct_red_c_named(249n, 250n).x, _ct_red_d(498n).x, _ct_red_d_named(249n).x), Int64(1)),
+    ("return", (n::Int64) -> _ct_ret_foo(_CtRetA(n), 10n), Int64(1)),
+    ("tear_off", (n::Int64) -> _ct_to(n), Int64(1)),
+    ("unnamed_new", (n::Int64) -> _ct_un(n), Int64(1)),
+    ("with_mixin", (n::Int64) -> (_ct_wm_a_count[] = 0; _ct_wm_b_count[] = 0; b = _ct_wm_b(17n);
+        (_ct_wm_a_count[], _ct_wm_b_count[], b.x, b.y)), Int64(1)),
+])
