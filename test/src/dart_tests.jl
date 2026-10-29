@@ -1076,15 +1076,15 @@ _dart_same(got, native) = typeof(got) == typeof(native) && isequal(got, native)
 # what a compile gives: its RejectionError (an OutsideSubset by its errors' kinds), or :compiled. The landing's
 # core stops at codegen, the compile this property judges: wasm-opt, an external tool, runs on every
 # case in dev/corpus.sh's whole run and in test/src/compile.jl, never once per case in the landing
-_dart_outcome(f, args) = try
+# The module's bytes come back beside it, so the whole run runs the case's own module without compiling it again.
+_dart_outcome(f, args)::Tuple{Any,Vector{UInt8}} = try
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: compiling $(nameof(typeof(f))) $(typeof(args))")
-    WasmTarget.compile(f, Tuple(map(typeof, args)); optimize = !_DART_CORE_ONLY)
-    :compiled
+    (:compiled, WasmTarget.compile(f, Tuple(map(typeof, args)); optimize = !_DART_CORE_ONLY))
 catch e
     e isa WasmTarget.RejectionError || rethrow()
     local r = e.rejection
-    r isa WasmTarget.OutsideSubset || return e
-    return _outside((t.kind for t in r.errors)...)
+    r isa WasmTarget.OutsideSubset || return (e, UInt8[])
+    return (_outside((t.kind for t in r.errors)...), UInt8[])
 end
 
 # an outcome as a failure names it: the rejection's own text (A51E9)
@@ -1169,10 +1169,11 @@ const DART_CORE = Set{String}("$(g)/$(c[1])" for (g, cs) in DART_GROUPS for c in
 # a compiled case's modules, each fact of its answer read by test/runner.jl against native Julia's, computed
 # afresh (a stale record is not the module's fault); a reader that does not compile fails the case, named. The
 # reading has the compile's budget, per case. The whole run reads both modules, codegen's and wasm-opt's.
-function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{String,String}}, key::String, f, args::Tuple)
+function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{String,String}}, key::String, f, args::Tuple,
+                     own::Vector{UInt8})
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: reading $key's answer")
     local secs = _dart_secs(@timed try
-        append!(runs, Main.WTRunner.answer_cases(key, WasmTarget.compile, f, args, f(args...)))
+        append!(runs, Main.WTRunner.answer_cases(key, WasmTarget.compile, f, args, f(args...); own))
     catch e
         e isa WasmTarget.RejectionError || rethrow()
         push!(unread, key => "the reader of its answer does not compile: $(sprint(showerror, e))")
@@ -1207,7 +1208,7 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
                 (key in DART_NATIVE_DUE || !_DART_CORE_ONLY) && @test _dart_same(f(args...), native)
                 if !_DART_CORE_ONLY || key in DART_CORE
                     local timed = @timed _dart_outcome(f, args)
-                    local got, secs = timed.value, _dart_secs(timed)
+                    local (got, own), secs = timed.value, _dart_secs(timed)
                     @test secs <= DART_COMPILE_BUDGET
                     # the record's property; a failure prints why, the rejection's own text in it (A51E9)
                     @test _dart_breaks(today, got) == ""
@@ -1216,7 +1217,7 @@ const _DART_SHARD_GROUPS = Set{String}(g for (i, (g, _)) in enumerate(DART_GROUP
                     # sample comes later, its cost measured)
                     if got === :compiled && !_DART_CORE_ONLY
                         today === :unread && push!(gap_keys, key)
-                        _dart_read!(runs, unread, key, f, args)
+                        _dart_read!(runs, unread, key, f, args, own)
                         nread += 1
                     end
                 end

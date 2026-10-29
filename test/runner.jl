@@ -2,7 +2,8 @@
 # every module a test gets from WasmTarget, which the builder already accepted (D10), runs in node, the
 # major .github/workflows/ci.yml names, its entry called with the case's arguments, and its answer is
 # compared with native Julia's, === at the answer's type. One node process runs every case of a batch.
-# Marshalled: Int32, UInt32, Int64, UInt64, UInt8, Float32, Float64 and Bool, arguments and answer, an answer of a
+# Marshalled: Int32, UInt32, Int64, UInt64, UInt8, Float32, Float64 and Bool, arguments and answer, ReturnsRef(), a
+# read answer's own module returning a non-null reference, an answer of a
 # singleton type (nothing), whose call must return and whose type is its value, and Throws(T), a native call that
 # throws, whose module must raise a wasm exception, neither trap nor return; any other type, a module that imports anything, an entry not found, a trap or a throw is a located failure of its
 # case, never a skip. An unsigned integer crosses as the signed one of its bits, a float as its bit
@@ -105,12 +106,18 @@ for a tuple or a vector, one reader per leaf type, each leaf a case of its reade
 reader can read (a type the runner does not marshal, or a case of more than 3 arguments) is a case
 with no module, which run_cases fails, naming why.
 """
-function answer_cases(label::String, compile, f, args::Tuple, native; optimized::Bool = true)::Vector{RunCase}
+function answer_cases(label::String, compile, f, args::Tuple, native; optimized::Bool = true,
+                      own::Vector{UInt8} = UInt8[])::Vector{RunCase}
     (native isa Tuple && !isempty(native)) || native isa Vector || native isa String ||
         return [compiled_case(label, compile, f, args, native; optimized)]
     local paths = _leaves(native)
     local leaf(p) = foldl(_step, p; init = native)
-    local out = RunCase[]
+    # the case's own modules run too: a non-null reference, returned without a trap; `own` is the compile the
+    # caller already holds (compile's default, wasm-opt'd), so only codegen's module is compiled here
+    local argtypes = Tuple(map(typeof, args))
+    local plain = compile(f, argtypes; optimize = false)
+    local opt = !optimized ? UInt8[] : isempty(own) ? compile(f, argtypes) : own
+    local out = RunCase[RunCase("$label(own module)", plain, args, ReturnsRef(); optimized = plain == opt ? UInt8[] : opt)]
     # one reader per leaf type, a String's leaves apart from the rest. A reader WasmTarget rejects as Unported or
     # Unquarantined (a String's codeunit before its lowering, a boxed leaf before convertType's boxing) leaves its
     # facts unread, each a case naming the rejection: the runner's gap, which only a :unread record admits; a
@@ -155,6 +162,14 @@ struct Throws
     type::Type
 end
 
+"""
+    ReturnsRef()
+
+What a case's own module must answer when its answer is read by readers (a tuple, a vector, a String): a
+reference, non-null, returned without a trap. Its facts are the readers'; this is the module itself run.
+"""
+struct ReturnsRef end
+
 """A case's verdict: `ok` when the module answered native's value; `why` says what differs, located."""
 struct RunResult
     label::String
@@ -192,10 +207,11 @@ end
 # which carries no bits: its call must return no value (undefined or null in JS), and its type is its value; a
 # module returning a value there, a Union{Nothing,T} answer's T, differs from native (A56E1)
 _wire_answer(x)::Union{Tuple{String,String},Nothing} =
-    x isa Throws ? ("throws", "-") : Base.issingletontype(typeof(x)) ? ("void", "-") : _wire(x)
+    x isa Throws ? ("throws", "-") : x isa ReturnsRef ? ("ref", "-") : Base.issingletontype(typeof(x)) ? ("void", "-") : _wire(x)
 
 # the answer read back at native's type
 function _unwire(::Type{T}, s::AbstractString) where {T}
+    T === ReturnsRef && return s == "ref" ? ReturnsRef() : "the module returns $(s == "null" ? "a null reference" : s)"
     Base.issingletontype(T) && return s == "-" ? T.instance : String(s)   # a value where none is due: compared, it differs
     T === Bool && return s == "1" ? true : s == "0" ? false : nothing
     T === Int32 && return parse(Int32, s)
@@ -224,6 +240,7 @@ const toWasm = (t, v) => {
 const fromWasm = (t, x) => {
   if (t === 'void') return (x === undefined || x === null) ? '-' : 'a_value:' + typeof x;
   if (t === 'throws') return 'returned';
+  if (t === 'ref') return (x === undefined || x === null) ? 'null' : typeof x === 'object' ? 'ref' : 'a_value:' + typeof x;
   if (t === 'i32') return String(x | 0);
   if (t === 'i64') return BigInt.asIntN(64, x).toString();
   const dv = new DataView(new ArrayBuffer(8));

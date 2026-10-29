@@ -114,38 +114,44 @@ _runner_facts(x::Int64) = (x + 1, (x > 0, x * 2), x < 0)
     local calls = Ref(0)
     local counted(f, ts; optimize::Bool = true) = (calls[] += 1; _RUN_ADD1)
     local cs = WTR.answer_cases("t", counted, _runner_facts, (Int64(3),), (4, (true, 6), 0.5, :x))
-    @test [c.label for c in cs] == ["t(1,)", "t(2, 2)", "t(2, 1)", "t(3,)", "t(4,)"]
-    @test [c.args for c in cs] == [(3, 1), (3, 2), (3, 1), (3, 1), (3, 1)]
-    @test calls[] == 2 * 3   # Int64, Bool and Float64 each one reader, each both modules; no reader for Symbol
+    @test cs[1].label == "t(own module)" && cs[1].native === WTR.ReturnsRef()   # the case's own module, run too
+    @test [c.label for c in cs[2:end]] == ["t(1,)", "t(2, 2)", "t(2, 1)", "t(3,)", "t(4,)"]
+    @test [c.args for c in cs[2:end]] == [(3, 1), (3, 2), (3, 1), (3, 1), (3, 1)]
+    @test calls[] == 2 + 2 * 3   # the own module and Int64, Bool and Float64's readers, each both modules; no reader for Symbol
+    # `own`, the caller's compile, spares the own module's second compile
+    calls[] = 0; WTR.answer_cases("t", counted, _runner_facts, (Int64(3),), (4, true); own = _RUN_ADD1)
+    @test calls[] == 1 + 2 * 2
+    # the own module must return a non-null reference: a number, as from an i32 module, fails
+    @test occursin("the module returns a_value:number", only(WTR.run_cases([WTR.RunCase("n", _RUN_ADD1, (Int32(1),), WTR.ReturnsRef())])).why)
     # a leaf of a singleton type crosses as "void": its call returns, its type its value
     local v = WTR.answer_cases("v", counted, _runner_facts, (Int64(3),), (4, nothing))
-    @test [c.label for c in v] == ["v(1,)", "v(2,)"] && WTR._wire_answer(nothing) == ("void", "-") && WTR._unwire(Nothing, "-") === nothing
+    @test [c.label for c in v[2:end]] == ["v(1,)", "v(2,)"] && WTR._wire_answer(nothing) == ("void", "-") && WTR._unwire(Nothing, "-") === nothing
     # a vector inside the answer: its length a leaf, each element a leaf, read by getindex
     local vec = WTR.answer_cases("w", counted, _runner_facts, (Int64(3),), (4, [true, false]))
-    @test [c.label for c in vec] == ["w(1,)", "w(2, :len)", "w(2, (:ix, 1))", "w(2, (:ix, 2))"]
-    @test [c.native for c in vec] == Any[4, 2, true, false]
+    @test [c.label for c in vec[2:end]] == ["w(1,)", "w(2, :len)", "w(2, (:ix, 1))", "w(2, (:ix, 2))"]
+    @test [c.native for c in vec[2:end]] == Any[4, 2, true, false]
     @test WTR._pick((4, [true, false]), Val(((2, (:ix, 2)), (2, :len))), Int64(1)) === false &&
           WTR._pick((4, [true, false]), Val(((2, (:ix, 2)), (2, :len))), Int64(2)) === Int64(2)
     # a String is read as its ncodeunits and each codeunit; while its reader is rejected (Unported), the String
     # is one case the runner does not read, "marshals no String", never a failure of WT's
     local sc = WTR.answer_cases("s", counted, _runner_facts, (Int64(3),), (4, "ab"))
-    @test [c.label for c in sc] == ["s(1,)", "s(2, :ncu)", "s(2, (:cu, 1))", "s(2, (:cu, 2))"]
-    @test [c.native for c in sc] == Any[4, 2, 0x61, 0x62]
+    @test [c.label for c in sc[2:end]] == ["s(1,)", "s(2, :ncu)", "s(2, (:cu, 1))", "s(2, (:cu, 2))"]
+    @test [c.native for c in sc[2:end]] == Any[4, 2, 0x61, 0x62]
     local refused(f, ts; optimize::Bool = true) = f isa WTR.Leaves && any(p -> WTR._on_string(p), typeof(f).parameters[2]) ?
         throw(WasmTarget.RejectionError(WasmTarget.Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "codeunit")) : _RUN_ADD1
     local su = WTR.answer_cases("s", refused, _runner_facts, (Int64(3),), (4, "ab"))
-    @test [c.label for c in su] == ["s(1,)", "s(2,)"] && su[2].native == "ab" && isempty(su[2].bytes)
-    @test occursin("the runner does not read it yet, its reader is rejected", WTR.run_cases(su[2:2])[1].why)
+    @test [c.label for c in su[2:end]] == ["s(1,)", "s(2,)"] && su[3].native == "ab" && isempty(su[3].bytes)
+    @test occursin("the runner does not read it yet, its reader is rejected", WTR.run_cases(su[3:3])[1].why)
     # any reader rejected as Unported leaves its facts unread, named; an Internal propagates
     local boxed(f, ts; optimize::Bool = true) = f isa WTR.Leaves && Int64 in map(p -> typeof(foldl(WTR._step, p; init = (4, true))), collect(typeof(f).parameters[2])) ?
         throw(WasmTarget.RejectionError(WasmTarget.Unported("dart2wasm/lib/translator.dart:1597 Translator.convertType"), "boxing")) : _RUN_ADD1
     local bx = WTR.answer_cases("b", boxed, _runner_facts, (Int64(3),), (4, true))
-    @test [c.label for c in bx] == ["b(1,)", "b(2,)"] && occursin("convertType", WTR.run_cases(bx[1:1])[1].why) && isempty(bx[2].unread)
+    @test [c.label for c in bx[2:end]] == ["b(1,)", "b(2,)"] && occursin("convertType", WTR.run_cases(bx[2:2])[1].why) && isempty(bx[3].unread)
     local broken(f, ts; optimize::Bool = true) = throw(WasmTarget.RejectionError(WasmTarget.Internal("x"), "y"))
     @test_throws WasmTarget.RejectionError WTR.answer_cases("i", broken, _runner_facts, (Int64(3),), (4, true))
     @test WTR._unwire(UInt8, "255") === 0xff && WTR._unwire(UInt8, "-1") isa String
     # a leaf of a type the runner does not marshal has no reader and fails, named
-    @test isempty(cs[5].bytes) && occursin("marshals no Symbol", WTR.run_cases(cs[5:5])[1].why)
+    @test isempty(cs[6].bytes) && occursin("marshals no Symbol", WTR.run_cases(cs[6:6])[1].why)
 end
 
 @testset "a tuple answer read leaf by leaf from WasmTarget's modules" begin
