@@ -16,10 +16,16 @@ cd "$(dirname "$0")/.."
 # lands the stop's own fix. check.sh runs from the scratch rebased onto origin/wt2, so a stop binds every
 # lane's ship as soon as this lands, whatever autoship.sh its loop runs (a stop by message leaked six loops
 # into four certain D14 reds, march-corrector 2026-10-29 13:20)
+# The stop is read again as the check's last step, before it answers green: a check already running when the stop
+# was set passed and pushed under it, a hand edit landing in the named lane's file (5a89f571 at 14:53:30, a minute
+# into a stop naming wt3-skeleton; march-corrector 2026-10-29 14:55)
 stop="$(git rev-parse --path-format=absolute --git-common-dir)/wt-line-stop"
-if [ -f "$stop" ] && [ "$(head -1 "$stop")" != "$(basename "${WT_DEPOT_DIR:-$(pwd)}")" ]; then
-  echo "check: REFUSED — line stop: only $(head -1 "$stop") lands until $stop is removed"; exit 2
-fi
+line_stop() {
+  if [ -f "$stop" ] && [ "$(head -1 "$stop")" != "$(basename "${WT_DEPOT_DIR:-$(pwd)}")" ]; then
+    echo "check: REFUSED — line stop: only $(head -1 "$stop") lands until $stop is removed"; exit 2
+  fi
+}
+line_stop
 # the depot of the lane being checked: dev/ship.sh checks in a scratch worktree of the lane and
 # names the lane in WT_DEPOT_DIR, so its compiled images are the lane's, never a cold depot
 . dev/depot.sh; wt_depot_export "${WT_DEPOT_DIR:-$(pwd)}"
@@ -166,4 +172,5 @@ for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_SRC); shards="$shar
 path=$(( c_load + path_par ))
 echo "check: ${path} s on the critical path (load ${c_load} CPU-s, ratchet ${p_ratchet}, src shards${shards}, from G instructions $(gi ratchet)$(for k in $(seq 1 $SHARDS); do printf ' %s' "$(gi "src_tests.$k")"; done)); ${wall}s wall; CPU-s, unjudged: ${cpus}"
 [ $path -gt 120 ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past 120 s)"; exit 1; }
+line_stop
 echo "check: green (${wall}s)"
