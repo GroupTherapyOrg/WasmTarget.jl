@@ -33,6 +33,15 @@ fi
 if grep -qxF "$(basename "$lane")" "$common/wt-held" 2>/dev/null; then
   echo "ship: REFUSED — this lane is held ($common/wt-held names $(basename "$lane")); the lead lifts it"; exit 2
 fi
+# dev/MARCH.md has one owner, the lead (a wt3-lead* worktree), as a CODEOWNERS file gives a path one owner: six
+# conflicts on it in one day (17:26–21:06, march-monitor-a) were the shared hot file the oscillation lesson names.
+# A lane sends its row to the lead; its commit that touches the file is refused here, before any rebase or check.
+case "$(basename "$lane")" in
+  wt3-lead*) ;;
+  *) if [ -n "$(git diff --name-only "$(git merge-base "origin/$MARCH" HEAD)" HEAD -- dev/MARCH.md 2>/dev/null)" ]; then
+       echo "ship: REFUSED — this lane's commits touch dev/MARCH.md, the lead's file; drop that hunk and send the lead the row"; exit 2
+     fi;;
+esac
 # STOPGAP, the 13:10Z ruling (dev/MARCH.md 1.L, ended by A68S4's measure): a commit whose check went red on D14's band
 # alone twice in the last hour is not shipped a third time, so a retry re-rolls the shards' noise once, never more
 since=$(date -u -v-60M +%FT%TZ 2>/dev/null || date -u -d '-60 min' +%FT%TZ)
