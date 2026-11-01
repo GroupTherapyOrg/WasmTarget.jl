@@ -120,7 +120,7 @@ host library), the JS string builtins' module, which the engine or the runtime's
 (STANDALONE_EMBEDDER_MODULE), which a module compiled without JavaScript imports from. Read once
 (HOST_MODULES).
 """
-@quarantine "Julia's foreign call names a library; the host's libraries are the import object dart's runtime blob declares (its baseImports in pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate), read by dart's own JS parser" Base.findfirst function host_modules()::Vector{String}
+@quarantine "Julia's foreign call names a library; the host's libraries are the import object dart's runtime blob declares (its baseImports in pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate), read by dart's own JS parser from the template's one statement declaring it, found by that declaration's text: the template is a module with a class, no program the mini parser takes whole, so the statement is not read as its parseVariableDeclarationList reads one (pkg/js_ast/lib/src/builder.dart:1142 MiniJsParser.parseVariableDeclarationList)" Base.findfirst function host_modules()::Vector{String}
     local template = Dart2Wasm.js_runtime_blob_template[]
     local vars = Dict{String,String}(p.variable => (p.variable == "INTERNAL_IMPORTS_MODULE_NAME" ? "#$(p.variable)" : "")
                                      for p in template._parts if p isa Dart2Wasm._TemplateVariablePart)

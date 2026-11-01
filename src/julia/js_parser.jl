@@ -294,9 +294,11 @@ end
     return nothing
 end
 
-# dart's parseAssignment reaches parseMember through its operators' levels; an import object's value
-# is a member expression, and an operator, call or `new` after one rejects, located
-@quarantine "dart's mini JS parser reads an assignment expression down to its member expression (pkg/js_ast/lib/src/builder.dart:929 MiniJsParser.parseMember)" Base.in function js_parse_assignment!(p::MiniJsParser)::Nothing
+# dart's parseAssignment, its chain down to parseMember kept and its levels dropped: an import object's
+# value is a member expression, so parseConditional's `?:`, parseBinary's operators, parseUnaryLow's and
+# parseUnaryHigh's prefixes, parsePostfix's `++`/`--`, parseCall's calls and `new`, and the assignment
+# operators are not ported; each, met after a member expression, rejects, located
+@quarantine "dart's mini JS parser reads an assignment expression, here down to its member expression alone (pkg/js_ast/lib/src/builder.dart:1076 MiniJsParser.parseAssignment)" Base.in function js_parse_assignment!(p::MiniJsParser)::Nothing
     p.last_category === :alpha && p.last_token == "new" && js_error(p, "a new expression, which the import object's reader does not take")
     js_parse_member!(p)
     p.last_category in (:comma, :rbrace, :rsquare, :none) ||
