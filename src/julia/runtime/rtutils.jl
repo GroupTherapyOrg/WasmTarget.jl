@@ -12,7 +12,7 @@
 # the ArgumentError Julia's codegen raises where memorynew's element count is negative or its byte size
 # too large for the address width (cgutils.cpp emit_memorynew's error_unless over jlargumenterror_func,
 # genericmemory.c _new_genericmemory_'s jl_exceptionf), its message Julia's
-@quarantine "julia/src/cgutils.cpp:4563 emit_memorynew raises ArgumentError where a GenericMemory's size is invalid, as julia/src/genericmemory.c:54 _new_genericmemory_ does" Core.ArgumentError @noinline throw_invalid_memory_size()::Union{} =
+@quarantine "julia/src/cgutils.cpp:4563 emit_memorynew raises ArgumentError where a GenericMemory's size is invalid, as julia/src/genericmemory.c:55 _new_genericmemory_ does" Core.ArgumentError @noinline throw_invalid_memory_size()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(ArgumentError("invalid GenericMemory size: the number of elements is either negative or too large for system address width"))
 
 # jl_memory_exception (julia.h), the OutOfMemoryError Julia's allocator throws where a memory's
@@ -115,7 +115,7 @@ precedent(julia: julia/src/ccall.cpp:1980 function_sig_t::emit_a_ccall, which de
 the module by its symbol and the call site's signature, getOrInsertFunction). Julia's differs: a
 foreign call is a statement, not a declaration, so each call site names its import.
 """
-@quarantine "Julia's ccall lowering reads a foreign call's callee at its call site (julia/src/ccall.cpp:1419 emit_ccall); dart2wasm's ffi transformer makes the callee a wasm:import procedure (pkg/dart2wasm/lib/ffi_native_transformer.dart:159 visitProcedure)" Core.Type struct NirForeignImport
+@quarantine "Julia's ccall lowering reads a foreign call's callee at its call site (julia/src/ccall.cpp:1419 emit_ccall); dart2wasm's ffi transformer makes the callee a wasm:import procedure (pkg/dart2wasm/lib/ffi_native_transformer.dart:160 WasmFfiNativeTransformer.visitProcedure)" Core.Type struct NirForeignImport
     lib::String
     name::String
     params::Vector{Type}
