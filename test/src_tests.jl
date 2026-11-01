@@ -57,7 +57,8 @@ const _WT_CLAIMS = get(ENV, "WT_SRC_CLAIMS", "")
 # file's definitions from another's by a fresh module each (precedent(julia: test/testdefs.jl:16, v1.12.7: `m =
 # @eval(Main, module $mod_name end)`)) and its worker processes; a module does not stop methods added to Base's
 # generics, and WT's shards are a fixed set of processes, so here the order isolates them
-_wt_loads_corpus(f::String)::Bool = occursin("DartCorpus", read(joinpath(SRC_TEST_DIR, f), String))
+# (it loads the corpus through test/DartCorpus or, on Julia 1.13, test/smoke_corpus.jl itself: subset.jl, A69S4)
+_wt_loads_corpus(f::String)::Bool = occursin(r"DartCorpus|smoke_corpus\.jl", read(joinpath(SRC_TEST_DIR, f), String))
 const SRC_SHARD = isempty(get(ENV, "WT_SRC_SHARD", "")) ? SRC_TESTS :
     sort(SRC_TESTS; by = f -> (_wt_loads_corpus(f), -SRC_COST[f], f))
 isempty(get(ENV, "WT_SRC_SHARD", "")) || !isempty(_WT_CLAIMS) ||
