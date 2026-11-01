@@ -61,13 +61,18 @@ end
 # (src/js/runtime_generator.jl's JS_POLYFILL_IMPORT): one name for both
 @quarantine "dart's runtime names the JS string builtins' module in its polyfill import (pkg/dart2wasm/lib/js/runtime_generator.dart:150 jsStringPolyfill); WasmTarget's host imports read the same name" Core.String const JS_STRING_BUILTINS_MODULE::Core.String = "wasm:js-string"
 
+# the standalone embedder's module, which every import of dart's standalone embedder library names
+# (`@pragma("wasm:import", "dart.<name>")`), its functions the embedder's own
+@quarantine "dart's standalone embedder library names its imports' module (sdk/lib/_internal/wasm/standalone/embedder.dart:238 stackTraceGetCurrent); WasmTarget's host imports read the same name" Core.String const STANDALONE_EMBEDDER_MODULE::Core.String = "dart"
+
 """
     host_modules() -> Vector{String}
 
 The modules a WasmTarget host supplies to a module's imports: the keys of the JS runtime's
 `baseImports` object (src/js/runtime_blob.jl, dart's runtime_blob.dart), read from its template, so
-the host's import object is their one source, and the JS string builtins' module, which the engine
-or the runtime's polyfill supplies (JS_STRING_BUILTINS_MODULE). A key the template fills in (`<<...>>`)
+the host's import object is their one source, the JS string builtins' module, which the engine
+or the runtime's polyfill supplies (JS_STRING_BUILTINS_MODULE), and the standalone embedder's
+module (STANDALONE_EMBEDDER_MODULE), which a module compiled without JavaScript imports from. A key the template fills in (`<<...>>`)
 is the runtime's own, never a program's host library.
 """
 @quarantine "Julia's foreign call names a library; the host's libraries are the keys of the JS runtime's import object" Base.match function host_modules()::Vector{String}
@@ -82,7 +87,7 @@ is the runtime's own, never a program's host library.
         depth == 0 && key !== nothing && push!(out, String(key[1]))
         depth += count(==('{'), line) - count(==('}'), line)
     end
-    push!(out, JS_STRING_BUILTINS_MODULE)
+    push!(out, JS_STRING_BUILTINS_MODULE, STANDALONE_EMBEDDER_MODULE)
     return out
 end
 

@@ -11,6 +11,7 @@ const W = WasmTarget
 const D = WasmTarget.Dart2Wasm
 
 f(x::Int) = x + 1
+g(x::Int) = x < 0 ? throw(DomainError(x)) : x
 
 @testset "kernel_nodes.dart: the runtime's classes and procedures, Unported at the sdk" begin
     local world = W.build_nir(W.check_subset(f, (Int,), "kernel_nodes"), "kernel_nodes")
@@ -27,9 +28,11 @@ f(x::Int) = x + 1
     @test anchor(D.throw_wasm_ref_error, js) == "sdk/lib/_internal/wasm/common/errors_patch.dart:87 _TypeError._throwWasmRefError"
     @test anchor(D.embedder_string_from_char_code_array, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:62 stringFromCharCodeArray"
     @test anchor(D.embedder_string_from_ascii_bytes, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:71 stringFromAsciiBytes"
-    # the target's patch: standalone or JS
+    # the target's patch: standalone or JS; the standalone StackTrace.current is ported, its method in
+    # every closed world that throws (an entry point the throw demands)
     @test anchor(D.stack_trace_current, js) == "sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"
-    @test anchor(D.stack_trace_current, standalone) == "sdk/lib/_internal/wasm/standalone/stack_trace_patch.dart:15 StackTrace.current"
+    local throwing = D.Translator(W.build_nir(W.check_subset(g, (Int,), "kernel_nodes"), "kernel_nodes"), data(), D.TranslatorOptions(; standalone = true))
+    @test D.stack_trace_current(throwing).def === only(methods(W.Runtime.StackTrace_current))
     @test anchor(D.print_to_console, js) == "sdk/lib/_internal/wasm/js_common/print_patch.dart:8 printToConsole"
     @test anchor(D.print_to_console, standalone) == "sdk/lib/_internal/wasm/standalone/print_patch.dart:9 printToConsole"
     @test D._string_impl_class_name(js) == "JSStringImpl" && D._string_impl_class_name(standalone) == "EmbedderStringImpl"
@@ -37,7 +40,7 @@ f(x::Int) = x + 1
     local sdk = W._pin_sdk()
     if sdk !== nothing
         for (fn, t) in ((D.throw_wasm_ref_error, js), (D.embedder_string_from_char_code_array, standalone),
-                        (D.embedder_string_from_ascii_bytes, standalone), (D.stack_trace_current, js), (D.stack_trace_current, standalone),
+                        (D.embedder_string_from_ascii_bytes, standalone), (D.stack_trace_current, js),
                         (D.print_to_console, js), (D.print_to_console, standalone))
             local a = anchor(fn, t)
             local (path, rest) = split(a, ':'; limit = 2)

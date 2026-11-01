@@ -56,10 +56,14 @@ lookup takes it where dart's one class takes it as a type argument.
     return class_instance_fields(class_node, at)
 end
 
-# dart:core's StackTrace.current, as the target's patch defines it (standalone or JS), a getter of
-# dart's runtime library at the pin, not ported: Unported there
-@parity "dart2wasm/lib/kernel_nodes.dart:620 KernelNodes.stackTraceCurrent" stack_trace_current(self::KernelNodes)::Union{} =
-    reject!(Unported(is_standalone(self) ? "sdk/lib/_internal/wasm/standalone/stack_trace_patch.dart:15 StackTrace.current" : "sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"), "KernelNodes.stackTraceCurrent")
+# dart:core's StackTrace.current, as the target's patch defines it: the standalone patch's
+# (src/runtime/standalone/stack_trace_patch.jl), its method in the closed world, an entry point every
+# closed world that throws holds; the JS patch's (JavaScriptStack.current) not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:620 KernelNodes.stackTraceCurrent" function stack_trace_current(self::KernelNodes)::Core.MethodInstance
+    is_standalone(self) ||
+        reject!(Unported("sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"), "KernelNodes.stackTraceCurrent")
+    return nir_runtime_member(self.component, Runtime.StackTrace_current, "KernelNodes.stackTraceCurrent")
+end
 
 # dart:core's _TypeError._throwWasmRefError, of dart's runtime library at the pin, not ported: Unported there
 @parity "dart2wasm/lib/kernel_nodes.dart:645 KernelNodes.throwWasmRefError" throw_wasm_ref_error(self::KernelNodes)::Union{} =

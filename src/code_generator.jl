@@ -1510,6 +1510,10 @@ end
     local target = nir_foreign_import(self.body, node)
     target === nothing &&
         reject!(Unquarantined("src/julia/runtime/rtutils.jl nir_foreign_import: a foreign call of $(node.args[1]), whose library no host supplies"), "$(self.enclosing_member)")
+    # the standalone embedder's function, which a JS host does not supply: dart's JS target patches its
+    # caller with a JS counterpart instead (js_common), not ported
+    target.lib == STANDALONE_EMBEDDER_MODULE && !is_standalone(self.translator) &&
+        reject!(Unquarantined("src/julia/runtime/rtutils.jl: the standalone embedder's $(target.lib).$(target.name) outside standalone mode, whose caller's JS patch is not ported"), "$(self.enclosing_member)")
     local b = self.b[]
     local function_ = get_function(self.translator.functions[], target, b.module_builder)
     for (operand, input) in zip(nir_foreign_operands(node), function_.type.inputs)

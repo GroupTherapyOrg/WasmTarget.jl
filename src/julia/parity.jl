@@ -544,6 +544,8 @@ path, so the runtime's file map is a table too.
 @quarantine "Julia's include takes any path; the runtime pin table is the file map of dart's patch libraries' ports" Core.String const RUNTIME_FILES::Tuple{Vararg{String}} = (
     "sdk/lib/_internal/wasm/common/errors_patch.dart",
     "sdk/lib/_internal/wasm/js_common/js_string.dart",
+    "sdk/lib/_internal/wasm/standalone/embedder.dart",
+    "sdk/lib/_internal/wasm/standalone/stack_trace_patch.dart",
 )
 
 """

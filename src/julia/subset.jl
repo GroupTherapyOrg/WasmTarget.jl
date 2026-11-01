@@ -188,6 +188,7 @@ checked to name one method when the package loads (check_runtime_entry_points).
 """
 @quarantine "a method carries no entry-point pragma; the runtime's roots of Julia's trim inference are listed with their argument types" Core.Type const RUNTIME_ENTRY_POINTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol,Tuple{Vararg{Type}},Symbol}}} = (
     ((:Runtime,), :Error__throw_with_current_stack_trace, (Any,), :throw),
+    ((:Runtime,), :StackTrace_current, (), :throw),
     ((), :throw_divide_error, (), :checked_division),
     ((), :throw_bounds_error, (Any, Int), :bounds),
     ((), :throw_undef_ref_error, (), :undefined_field),

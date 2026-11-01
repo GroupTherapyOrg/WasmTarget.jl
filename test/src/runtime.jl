@@ -39,6 +39,34 @@ world_of(p, at) = W.build_nir(W.check_subset(p, at, "runtime"), "runtime")
     local tf = D.Translator(world_of(f, (Int,)), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local e = try; D.error_throw(tf); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
+    # a throw also demands StackTrace.current, the standalone patch's (dart's entry point)
+    @test :StackTrace_current in names_of(gw) && !(:StackTrace_current in names_of(world_of(f, (Int,))))
+end
+
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+
+# the standalone StackTrace.current called, its trace held and dropped
+st(x::Int) = (W.Runtime.StackTrace_current(); x)
+
+@testset "standalone/stack_trace_patch.dart: StackTrace.current, the embedder's trace in an _EmbedderStackTrace" begin
+    # its one import, the standalone embedder's stackTraceGetCurrent, the embedder's own function
+    local bytes = W.compile(st, (Int,); optimize = false)
+    local path = tempname() * ".wasm"
+    write(path, bytes)
+    local node = Main.WTRunner.node_binary()
+    local imports = readchomp(`$node -e "const m = new WebAssembly.Module(require('fs').readFileSync(process.argv[1])); console.log(WebAssembly.Module.imports(m).map(i => i.module + '.' + i.name + ':' + i.kind).join(','))" $path`)
+    rm(path)
+    @test imports == "dart.stackTraceGetCurrent:function"
+    # run by node, given dart's test runner's embedder, it answers its argument, the host's trace made
+    # and dropped (native Julia has no standalone embedder to call: st's answer is its argument whatever
+    # the trace)
+    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("st$(a)", bytes, a, a[1]) for a in [(3,), (-7,)]])
+        @test r.ok || (@info r.label r.why; false)
+    end
+    # outside standalone mode a JS host supplies no `dart` module: the import rejects, located
+    local ns = D.WasmCompilerOptions(; main_uri = "", output_file = "out/prog.wasm"); ns.translator_options.generate_source_maps = false
+    local e = try; D.compile(ns, W.check_subset(st, (Int,), "runtime")); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("dart.stackTraceGetCurrent outside standalone mode", e.rejection.row)
 end
 
 end
