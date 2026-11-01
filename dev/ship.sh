@@ -66,8 +66,10 @@ checked_rebase() {
   # each pushed commit is one row of the landings log, its seconds from its own first commit (author time, kept
   # through the rebase) to its push: a stack that lands some commits and then goes red still records the ones
   # it landed (march-monitor-a, 15:03: three landings missing from the log, each a stack's green head before a red)
+  # one row per landed commit: a head pushed again (a re-ship whose commit already landed) writes none (A70E2: f05b2fa8
+  # logged twice, its D13 median skewed)
   export WT_LANDINGS_LOG="$log"
-  if ! { git rebase -q --no-keep-empty --empty=drop "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh && git push -q origin HEAD:'"$MARCH"' && echo "ship: pushed $(git log -1 --format="%h %s" | cut -c1-90)" && printf "%s\t%s\t%s\n" "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$(( $(date +%s) - $(git log -1 --format=%at HEAD) ))" >> "$WT_LANDINGS_LOG"' 2>&1 | tee .wtd/rebase.out; [ "${PIPESTATUS[0]}" -eq 0 ]; }; then
+  if ! { git rebase -q --no-keep-empty --empty=drop "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh && git push -q origin HEAD:'"$MARCH"' && echo "ship: pushed $(git log -1 --format="%h %s" | cut -c1-90)" && { grep -q "	$(git rev-parse --short HEAD)	" "$WT_LANDINGS_LOG" 2>/dev/null || printf "%s\t%s\t%s\n" "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$(( $(date +%s) - $(git log -1 --format=%at HEAD) ))" >> "$WT_LANDINGS_LOG"; }' 2>&1 | tee .wtd/rebase.out; [ "${PIPESTATUS[0]}" -eq 0 ]; }; then
     record_failure
     if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then git rebase --abort; fi
     return 1
