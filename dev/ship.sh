@@ -114,7 +114,7 @@ checked_rebase() {
 record_failure() {
   local at red
   at=$(git log -1 --format='%h %s' 2>/dev/null | cut -c1-100 | tr '\t' ' ')
-  red=$(grep -m1 -E '^check: (RED|.*( red$| red[ ;:,]| fails|REFUSED|does not))|CONFLICT|could not apply' .wtd/rebase.out 2>/dev/null | cut -c1-240 | tr '\t' ' ')
+  red=$(grep -m1 -E '^check: (RED|.*( red$| red[ ;:,]| fails|REFUSED|does not))|CONFLICT|could not apply|^pre-push: REFUSED' .wtd/rebase.out 2>/dev/null | cut -c1-240 | tr '\t' ' ')
   printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(basename "$lane")" "$at" "$red" >> "$common/wt-ship-failures.tsv"
   rm -rf "$common/wt-ship-failed/$(basename "$lane")"; mkdir -p "$common/wt-ship-failed/$(basename "$lane")"
   cp .wtd/*.out "$common/wt-ship-failed/$(basename "$lane")/" 2>/dev/null
@@ -191,6 +191,11 @@ echo $$ > "$lock/pid"; rm -f "$ticket"; trap 'release; cleanup_scratch' EXIT
 # dev/check.sh runs only under the landing lock, which this marks
 export CHECK_LANDING=1
 git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 1; }
+# under the lock nothing else lands, so the ship.sh this run must match (dev/hooks/pre-push admits only origin's blob)
+# cannot change before its push; a ship.sh that changed while this run queued is caught here, before its check, not
+# at the push after a passing one (ca14d187 lost a green 134-s check that way, march-monitor-a, 20:17)
+[ "$(git rev-parse "origin/$MARCH:dev/ship.sh")" = "$WT_SHIP_RULES" ] ||
+  { echo "ship: REFUSED — origin's dev/ship.sh changed while this landing queued; ship again (no check was spent)"; exit 2; }
 [ "$(git rev-list --count "origin/$MARCH..HEAD")" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
 # a lane whose commits another ship already carried (the same patch under a new hash) has nothing to land,
 # never a red: the rebase would drop them all and the carry check below would refuse "missing: all"
