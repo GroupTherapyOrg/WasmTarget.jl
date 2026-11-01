@@ -45,7 +45,7 @@ run_head() {
     # cores holding four shards beside the lanes' background runs
     # the shards split by each group's measured seconds (wt-dart-costs.tsv, kept from the last green run), so their
     # compiles and node runs end together (a split by index put 859 modules in one shard, which hung, a5e89d25)
-    CORPUS_SHARDS=4; jpids=""; rm -f "$scratch"/.wtd/shard.*.time "$scratch"/.wtd/dart_costs.*
+    CORPUS_SHARDS=4; jpids=""; rm -f "$scratch"/.wtd/shard.*.time "$scratch"/.wtd/shard.*.cpu "$scratch"/.wtd/dart_costs.*
     # each shard runs under dev/corpus_shard.sh, again past a case whose process its watchdog killed, so one hang
     # costs a restart and its case's verdict, never the shard's other verdicts (665146f1, 2026-11-01)
     for k in $(seq 1 $CORPUS_SHARDS); do
@@ -66,6 +66,15 @@ run_head() {
         echo "corpus: past the hard limit of ${WT_CORPUS_LIMIT}s at: $(cat "$WT_PROGRESS".[0-9]* | tr '\n' ' ')" >> "$out"
         # a julia deep in a compile may outlive SIGTERM: three hung runs left their shards running with no
         # parent, holding swap for half an hour (march-corrector, 10:55); a shard still alive 10 s later is killed
+        # each shard's CPU-s beside the wall, read from its live processes before they are killed: /usr/bin/time
+        # writes nothing for a process killed under it, so a hung run's row held no CPU-s, and a starved shard
+        # (four warm-ups of 384 G took 263 s each beside the lanes, 133 s alone, f05b2fa8) read as a slow one
+        k=0; for p in $jpids; do
+          k=$((k + 1))
+          ps -o time= -p "$(treepids "$p" | tr '\n' ',' | sed 's/,$//')" 2>/dev/null |
+            awk -F: '{ s = 0; for (i = 1; i <= NF; i++) s = s * 60 + $i; t += s } END { printf "%d", t }' > "$scratch/.wtd/shard.$k.cpu"
+        done
+        echo "corpus: each shard's CPU-s at the hard limit, of ${WT_CORPUS_LIMIT}s wall: $(cat "$scratch"/.wtd/shard.[0-9]*.cpu | tr '\n' ' ')" >> "$out"
         tree=$(for p in $jpids; do treepids "$p"; done)
         kill $tree 2>/dev/null; sleep 10; kill -9 $tree 2>/dev/null; exit 124
       fi
@@ -84,7 +93,13 @@ run_head() {
   # each shard's CPU seconds beside the run's wall: a starved run (CPU far below wall, the machine swapping or
   # crowded) reads apart from a real per-case cost increase (march-corrector, 10:55)
   cpu=$(for f in "$scratch"/.wtd/shard.[0-9]*.time; do awk '/user/ { printf "%d ", $3 + $5 }' "$f" 2>/dev/null; done)
+  # a hung run's shards were killed under /usr/bin/time, which wrote nothing: their CPU-s read at the hard limit
+  [ -n "${cpu// /}" ] || cpu=$(for f in "$scratch"/.wtd/shard.[0-9]*.cpu; do printf '%s ' "$(cat "$f")"; done 2>/dev/null)
   first="${first}${cpu:+ [shard CPU-s: ${cpu% }]}"
+  # each shard's first warm-up, its seconds and G instructions: against its 300-s limit (test/src/dart_tests.jl's
+  # DART_WARMUP_LIMIT) the trend shows in the row before the limit fires; its G steady, its seconds are contention
+  warm=$(sed -n 's/^dart tests: dart_warmup\/[0-9]*-of-[0-9]* the warm-up compile, attempt 1 took \([0-9.]*\) s, \([0-9.]*\) G instructions.*/\1s\/\2G/p' "$out" | tr '\n' ' ')
+  first="${first}${warm:+ [warm-up: ${warm% }]}"
   printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short "$head")" "$result" "$t" "$first" >> "$tsv"
   # a red run's whole output outlives the next run, which truncates wt-corpus.out at its start: kept as
   # wt-corpus-red-<head>.out, the latest three (a red's cases were read from a file the next run had

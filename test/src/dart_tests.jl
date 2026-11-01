@@ -1239,14 +1239,19 @@ const _DART_CORE_ONLY = get(ENV, "WT_LANDING_CORE", "") == "1"
 
 # a compiled case's modules, each fact of its answer read by test/runner.jl against native Julia's, computed
 # afresh (a stale record is not the module's fault); a reader that does not compile fails the case, named. The
-# reading has the compile's budget, per case. The whole run reads both modules, codegen's and wasm-opt's.
+# whole run reads both modules, codegen's and wasm-opt's. A reading is several whole compiles of the program, the
+# plain own module and each leaf type's reader plain and wasm-opt'd (test/runner.jl's answer_cases), so it has the
+# compile's budget per compile it runs: its seconds over its compiles, never their sum, which failed a reading of
+# several compiles by construction (four readings at 12.5 to 42.9 s on f05b2fa8, 2026-11-01)
 function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{String,String}}, key::String, f, args::Tuple,
                      own::Vector{UInt8})
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: reading $key's answer")
     local native = nothing
+    local compiles = 0
+    local counted(g, T; kw...) = (compiles += 1; WasmTarget.compile(g, T; kw...))
     local secs = _dart_secs(@timed try
         local read = first(_dart_limited("$key reading its answer") do
-            (Main.WTRunner.answer_cases(key, WasmTarget.compile, f, args; own), UInt8[])
+            (Main.WTRunner.answer_cases(key, counted, f, args; own), UInt8[])
         end)
         if read isa _DartPastLimit
             push!(unread, key => read.why)
@@ -1258,7 +1263,8 @@ function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{St
         e isa WasmTarget.RejectionError || rethrow()
         push!(unread, key => "the reader of its answer does not compile: $(sprint(showerror, e))")
     end)
-    secs <= DART_COMPILE_BUDGET || push!(unread, key => "reading its answer took $(round(secs; digits = 1)) s, past its $(DART_COMPILE_BUDGET) s budget")
+    secs / max(1, compiles) <= DART_COMPILE_BUDGET ||
+        push!(unread, key => "reading its answer took $(round(secs; digits = 1)) s over $compiles compiles, $(round(secs / max(1, compiles); digits = 1)) s each, past its $(DART_COMPILE_BUDGET) s budget per compile")
     return native   # Some(the runner's native answer, computed after the case's compiles), or nothing when none was read
 end
 
