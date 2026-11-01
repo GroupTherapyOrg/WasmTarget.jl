@@ -136,3 +136,24 @@ end
                       for n in (WasmTarget.program_export_name(x.def, w.entry),) if n !== nothing)
     @test names == Set(["named", "named_float", "both_named"])
 end
+
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+
+module UndefReadCases
+# Ref{Integer}: its one field, past RefValue's count of fields required initialized (none), is a
+# reference whose type cannot hold `nothing`, so a read of it is null-tested and may raise UndefRefError
+@noinline read_ref(r::Base.RefValue{Integer}) = r[]
+held(x::Int) = read_ref(Ref{Integer}(x)) isa Int
+end
+
+@testset "check_subset: a read of a field an allocation may leave undefined demands the runtime's UndefRefError raise" begin
+    @test Core.Compiler.datatype_min_ninitialized(Base.RefValue{Integer}) == 0
+    local cw = WasmTarget.check_subset(UndefReadCases.held, (Int,), "subset")
+    local nw = WasmTarget.build_nir(cw, "subset")
+    @test any(nb -> nb.ci.def.def.name === :throw_undef_ref_error, nw)
+    # the read compiles, its null test calling the raise, and answers as native Julia
+    local bytes = WasmTarget.compile(UndefReadCases.held, (Int,); optimize = false)
+    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("held$(a)", bytes, a, UndefReadCases.held(a...)) for a in [(3,), (-1,)]])
+        @test r.ok || (@info r.label r.why; false)
+    end
+end

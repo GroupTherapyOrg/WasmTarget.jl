@@ -173,7 +173,8 @@ holds the IR form `demand` names (`_demanded`): `:throw`, a call of Julia's thro
 visitThrow calls errors_patch.dart's `_throwWithCurrentStackTrace`), `:checked_division`, a
 checked integer division or remainder, which raises DivideError at a zero divisor, `:svec_ref`, a
 read of a SimpleVector's element, which raises BoundsError out of range, and `:undefined_field`, an
-allocation leaving a field undefined, whose read raises UndefRefError. Each demanded one is queued for
+allocation leaving a field undefined or a read of a field one may leave so, which raises
+UndefRefError. Each demanded one is queued for
 Julia's one trim inference beside the entry (`check_subset`), so its CodeInstance is in the closed
 world and its NirBody in the NIR.
 
@@ -209,21 +210,46 @@ end
     return T isa DataType && isconcretetype(T) && length(st.args) - 1 < fieldcount(T)
 end
 
-# the IR forms a root's demand names, each a test of one statement: a call of a builtin or intrinsic
-# whose raise the root lowers, or an allocation leaving a field undefined
+# whether a statement `Core.getfield(x, f)` of `src` reads a field an allocation may leave undefined,
+# the read code_generator.jl's _directGet null-tests and raises UndefRefError at: Julia's own test, its
+# codegen's field_may_be_null, of x's concrete type, x's type Julia's argextype as the trim verifier
+# reads an operand's; a field whose type admits `nothing` holds that null as `nothing` (_directGet)
+@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null, its operand typed as precedent(julia: Compiler/src/verifytrim.jl:56) types one" Core.Compiler.argextype function _reads_undefinable_field(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState})::Bool
+    _calls_builtin(st, (Core.getfield,)) && length(st.args) >= 3 || return false
+    local T = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes))
+    T isa DataType && isconcretetype(T) && fieldcount(T) > 0 || return false
+    local k = _ir_value(st.args[3])
+    k isa QuoteNode && (k = k.value)
+    local i = k isa Symbol ? something(Base.fieldindex(T, k, false), 0) : k isa Int ? k : 0
+    1 <= i <= fieldcount(T) || return false
+    local F = fieldtype(T, i)
+    # idx < nfields - n_uninitialized: a field every constructor assigns
+    i <= Core.Compiler.datatype_min_ninitialized(T) && return false
+    # !jl_field_isptr && !jl_type_hasptr: an inline field holding no reference
+    Base.allocatedinline(F) && !(F isa DataType && !Base.datatype_pointerfree(F)) && return false
+    return !(Nothing <: F)
+end
+
+# the IR forms a root's demand names, each a test of one statement of its CodeInfo: a call of a builtin
+# or intrinsic whose raise the root lowers, or an allocation leaving a field undefined and a read of
+# a field one may have left so
 @quarantine "a runtime root is demanded by the Julia builtin or intrinsic whose raise it lowers" Core.Intrinsics.checked_sdiv_int const RUNTIME_DEMANDS = Dict{Symbol,Function}(
-    :throw => st -> _calls_builtin(st, (Core.throw,)),
-    :checked_division => st -> _calls_builtin(st, (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
-                                                   Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int)),
-    :svec_ref => st -> _calls_builtin(st, (Core._svec_ref,)),
-    :undefined_field => _leaves_field_undefined,
+    :throw => (st, src, sptypes) -> _calls_builtin(st, (Core.throw,)),
+    :checked_division => (st, src, sptypes) -> _calls_builtin(st, (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
+                                                                   Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int)),
+    :svec_ref => (st, src, sptypes) -> _calls_builtin(st, (Core._svec_ref,)),
+    :undefined_field => (st, src, sptypes) -> _leaves_field_undefined(st) || _reads_undefinable_field(st, src, sptypes),
 )
 
-# whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts
+# whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts, each body read
+# with its method instance's static parameter types, as the trim verifier reads it
 @quarantine "a demanded form is read from the inferred CodeInfo's statements, as Julia writes them" Core.CodeInfo function _demanded(codeinfos::Vector{Any}, holds::Function)::Bool
-    for x in codeinfos
-        x isa Core.CodeInfo || continue
-        any(holds, x.code) && return true
+    for i in 1:length(codeinfos) - 1
+        local item = codeinfos[i]
+        local src = codeinfos[i + 1]
+        item isa Core.CodeInstance && src isa Core.CodeInfo || continue
+        local sptypes = Core.Compiler.sptypes_from_meth_instance(Core.Compiler.get_ci_mi(item))
+        any(st -> holds(st, src, sptypes), src.code) && return true
     end
     return false
 end
