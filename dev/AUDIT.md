@@ -6292,3 +6292,137 @@ constant holding an #undef field reaching an outcome other than its located reje
 info's number the rank of its first use), each with a Broken cfg TLC rejects (wt3-runtime, as the lead routed it);
 then a lock that the claims named by the cfgs' INVARIANTS and `\* expect:` lines shrink only in a commit that names each
 dropped claim and its successor (wt3-parity). A69E2 is open on MARCH 1.C.
+
+## 2026-11-01 — audited through 498bb40d (1bed6b74..498bb40d: getListBaseArray Internal, the memory overlays' grow and delete cases, varargs packed as Julia's codegen packs them, the corpus-last predicate, a demand's argument types, StackTrace.current, the dart run's warm-up, getfield of a tuple at a run-time index, a positional field's selector, Constants' two claims restated)
+
+The seventieth audit, beside the work, covers the 10 commits of 1bed6b74..498bb40d that are not audit entry 69 (45d3430c,
+96c321f2; c6707ae0 judged in 69's follow-up): db12aa4a, 8a3daed8, 9059aa71, da22dcf8, c672f6e4, 0d1d234a, 7600f4d3,
+e7915a8b, f05b2fa8 and 498bb40d, read here, under Dale's R1 and R2 as standing sections. Every finding rests on one exact
+command, quoted. Standing items. src changes in 17 files (`git diff --stat 1bed6b74..origin/wt2 -- src | tail -1` gives
+`17 files changed, 434 insertions(+), 87 deletions(-)`); no exemption lands (`git diff 1bed6b74..origin/wt2 -- src | grep
+-cE '^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 0). The debt list reads 400 at both ends (`grep -v '^#'
+dev/quarantine_unpinned.txt | grep -c .`). Earlier findings: A66E5 is fixed by db12aa4a; A69S2 by f05b2fa8; A69S4 by
+da22dcf8 (`grep -rln 'smoke_corpus.jl\|DartCorpus' test/src` gives dart_tests.jl and subset.jl, both matched by the new
+`r"DartCorpus|smoke_corpus\.jl"`); A69E2 by 498bb40d for NoFabrication, its DeterministicNumbering half reopened as A70E1.
+Open as they stood: A69E1 (`grep -rln invalidat test/src src` gives only test/src/dart_tests.jl, the warm-up's comment; no
+case reaches the invalidation, and 7600f4d3 now carries its ~174 G inside a 300-s warm-up, a second place the src fix must
+delete); A69S1 (`grep -A3 'const JULIA_FILES' src/julia/parity.jl` still lists C units only; `grep -rn 'genericmemory.c:223'
+src | wc -l` gives 4); A69S3; A68E2 (`grep -n '^SHARDS=' dev/check.sh` gives `112:SHARDS=6`); A68E3 (`tail -1
+.git/wt-corpus.tsv` gives eb5655ce's `hung 1213` row, no corpus run judged since); A68S1 (`grep -n 'f === nothing && return
+nothing' src/julia/parity.jl` gives `1378:`); A68S4; A67E2, A67S1-A67S4, A66S1's export half, A66S3, A64E2. The
+_meet_constant! anchor (wt3-runtime) is unchanged: `grep -n '_meet_constant!' dev/quarantine_unpinned.txt` gives `15:`, its
+@quarantine (classes.jl:76) still naming Base.isdefined with no pinned anchor in its reason. Findings A70S1, A70S2, A70S3,
+A70S4, A70E1, A70E2 and A70E3.
+
+Area: builder — no change under src/wasm_builder. e7915a8b emits a select per field over a typed local, ref.cast per
+class arm and a trailing unreachable; 9059aa71 a struct.new of the packed tuple. 9059aa71's two dart cases reach the
+builder's own refusal, "Uninitialized local with non-defaultable type" (D10 working). (A70E3, low, D12) that refusal is a
+code generator defect in try_table regions, now recorded :wt_bug (`grep -n 'nested_catch_rethrow' test/src/dart_tests.jl`
+gives `636: … :wt_bug`), and no MARCH row names it or an owner (`grep -c 'non-defaultable' dev/MARCH.md` gives 0). Fix: a
+case in test/src reaching the try/finally local, red, and its fix at the local's definite initialisation. Owner:
+wt3-cgstubs2 (src/code_generator.jl).
+
+stopgap in disguise: none new.
+precedent: dart's MacroAssembler.classIdSearch (code_generator.dart:5709, read), Julia's CreateSelect (cgutils.cpp:2855).
+
+Area: collection and planning — 9059aa71 numbers the packed tuple and each call's packed operands (classes.jl), and
+f05b2fa8 resolves a position to the field each admitted class holds there (builtins.c:994 get_checked_fieldindex, read):
+a name is its own selector, a position past a class's fields or naming two fields rejects Unquarantined, located. Watch:
+`isempty(names) ? string(f)` (classes.jl:590) still answers the selector "1" when no class is admitted, and a position
+below 1 reaches `fieldname(c, f)` as a host error, not a located rejection. c672f6e4 types a demand's arguments by the
+specialization, where a cached body carries no slottypes (D12, a case). (A70S4, low, D3/D5) its slottypes unwrap each
+specTypes parameter (`grep -n 'slottypes = Any\[Base.unwrapva' src/julia/subset.jl` gives `260:`), so a varargs method's
+slot is typed by its first trailing argument and a slot past a zero-length tail indexes past the vector; Julia's codegen
+types that slot by the packed tuple (`sed -n 8289p ~/.cache/wasmtarget/julia/src/codegen.cpp` gives `vatyp = specsig ?
+compute_va_type(abi, nreq) : (jl_tuple_type);`), and 9059aa71, in the same range, made NirVarargPacking that type's one
+source. Fix: the slottypes read nir_argument_type (or NirVarargPacking) for the va slot; a case demands through a varargs
+entry. Owner: wt3-runtime (src/julia/subset.jl). (A70S1, medium, D5) e7915a8b's arms come from one list at the site, and an
+empty list rejects located (`Unquarantined(… which no class of the closed world is)`), but that list is a third reading of
+the closed world's concrete classes below a type: `grep -n 'isconcretetype(c) && c <:' src/*.jl` gives types.jl:681 and
+:729 (over `numbering.class_ids`) and intrinsics.jl:302 (over `keys(t.class_info)`, then indexed into class_ids), none
+through get_concrete_class_id_range (class_info.jl:544, dart's getConcreteClassIdRange). Two sources can disagree, and a
+class in class_info without an id is a host KeyError, not a rejection. Fix: ClassIdNumbering answers a Julia type with no
+class of its own (a tuple's UnionAll or Vararg) from its one numbering, and all three sites read it, the commit deleting the
+comprehensions. Owner: wt3-memory (src/class_info.jl, src/intrinsics.jl; types.jl's two sites in the same commit).
+
+stopgap in disguise: none new.
+precedent: dart's getConcreteClassIdRange and Julia's get_checked_fieldindex, by line.
+
+Area: emission and diagnostics — e7915a8b, item (a). For a concrete tuple it ports Julia's bounds check as written
+(cgutils.cpp:2067 bounds_check_enabled, :2081 emit_bounds_check, read: `i - 1 <u len`, the flag's constant false,
+jl_options' ON and OFF), nfields 0 and 1 as emit_getfield_unknownidx has them (:2805-:2817, read), and the select chain
+(:2855-:2866, read). The trailing unreachable is justified: every allocation of a class rejects without its class_info
+(9059aa71's `info === nothing && reject!`), A68S3's arm makes no type at run time, and Julia's type soundness puts every value
+of static type T in a class below T, so the closed world's list is complete and the miss cannot run. (A70S2, low, R1/D3)
+the heterogeneous tuple (Int64, String, Float64) and a run-time-length tuple whose elements are not one leaf type are arms
+Julia does not take: the unboxed select chain runs only `if (isboxed || (issame && isa<ArrayType>…))` (cgutils.cpp:2855),
+the run-time-length arm only for `is_tupletype_homogeneous(utt->parameters, true)` (codegen.cpp:4585), and every other read
+is `prepare_call(jlgetnthfieldchecked_func)` (codegen.cpp:4620), the runtime's boxed field. The answer agrees (a boxed
+field); the citation names the inlined arm, and the comment does not say how WasmTarget differs (no runtime layout to read,
+so the closed world's switch and a boxed select stand for jl_get_nth_field_checked). Fix: cite :4620 for those two cases and
+name the difference in the @parity's comment. Owner: wt3-memory. Watch: the module now follows the compiling process's
+--check-bounds (`grep -n 'opt = Base.JLOptions().check_bounds' src/intrinsics.jl` gives `298:` and `671:`), as Julia's own
+code does; Pkg.test runs with it on, so the probes must hold one setting. 9059aa71, item (c). The packing criterion is
+uses_specsig's vararg test (codegen.cpp:2792, read: `jl_vararg_kind(…) == JL_VARARG_UNBOUND` returns false), the entry
+pack is codegen.cpp:8859's specsig arm (emit_new_struct for a concrete tuple, jl_f_tuple otherwise, here a located
+rejection), and the call pack is the jlcall arm's jl_f_tuple (:8881, the message's :8879 is the brace above it) moved to the
+caller, a reshape the quarantine names. uses_specsig's other false answers (needsparams, a non-DataType sig) are ABI choices
+with no behavior; the port treats a UnionAll specTypes as specsig, harmless while no needsparams body compiles. (A70S3,
+medium, D3) the packed tuple's class is inference's, not codegen's: `grep -n 'va_process_argtypes(Core.Compiler.fallback_lattice'
+src/julia/nir.jl` gives `573:` (NirVarargPacking.packed) and `grep -n 'return Tuple{(nir_value_type' src/julia/nir.jl` gives
+`591:`, but codegen builds the entry tuple as compute_va_type (`sed -n 8110,8115p codegen.cpp`: `if
+(is_uniquerep_Type(argType)) argType = jl_typeof(jl_tparam0(argType));`), and jl_f_tuple types the call's tuple by each
+value's typeof. So f(xs...) called as f(Int) packs Tuple{DataType} in Julia and rejects in WasmTarget at
+"whose class only run time knows" (Tuple{Type{Int64}} is not concrete). Located, never silent, but an approximation where
+Julia answers. Fix: the tuple's class from compute_va_type's rule (the slot's type stays inference's), and the call's from
+each operand's class; a case with a type argument against native. Owner: wt3-cgstubs2 (src/julia/nir.jl,
+src/code_generator.jl). Watch: only _visitArguments packs an open count; _virtualCall (Unported) and any closure call must
+read nir_vararg_call_tuple when ported. 0d1d234a ports StackTrace.current, _EmbedderStackTrace and stackTraceGetCurrent at
+their lines (stack_trace_patch.dart:15, :21, embedder.dart:238, each read at the pin), the non-standalone import a located
+rejection.
+
+stopgap in disguise: none new.
+precedent: Julia's emit_getfield_unknownidx, emit_bounds_check, uses_specsig and the rest-argument arms, dart's standalone
+patch, by line.
+
+Area: enforcement and prose — 8a3daed8 adds seven cases against native in an already compiled program; no hack. da22dcf8
+is A69S4's fix as asked. 7600f4d3 gives the dart run's first compile its own 300-s band (D17, "about twice the 129 s"),
+printed with its G, a plant failing by name; it is honest, and it is the second carrier of A69E1's 174 G. db12aa4a's
+rejection is right; its prose says dart calls getListBaseArray "only from the Function.apply intrinsic", but `grep -rn
+getListBaseArray pkg/dart2wasm/lib` also gives translator.dart:2466 (indexList, itself with no caller at the pin); a
+watch point, the conclusion holds. Item (b), 498bb40d against D11. Each Broken cfg lists its own claim first, so TLC's first
+violation is that claim; whether a Broken also breaks another is not checked (HashOrder does, ChildrenFirst, by its own
+cfg's comment). NoFabrication is restated faithfully: U's #undef field reads as the null, Dflt never gets an info, Ubad
+rejects, and Fabricate violates it. (A70E1, medium, D11/L112) DeterministicNumbering no longer has a ground truth:
+`grep -n 'nextGlobal = @ + 1, !.order = Append' dev/formal/Constants.tla` gives `164:`, the number and the recorded order
+advanced in one step, and the claim reads that record (`:203 DeterministicNumbering == Ok => \A n \in 1..Len(st.order) :
+st.def[st.order[n]] = n`), so it holds for any walk order. The claim it replaced computed each rank from the program alone,
+"without reference to classId/globalOf" (`git show c6707ae0^:dev/formal/Constants.tla | sed -n 413,425p`). The L112 class
+the cfg names is a Dict's walk, which changes the order, not the counter; HashOrder breaks the counter only. Fix: the rank
+computed apart from Ensure, the children-first walk of the program's uses in operand order, and a Broken variant that walks
+siblings or uses in HashSeq's order with the counter intact; then the shrink-only claim lock A69E2 asked for (wt3-parity).
+Owner: wt3-translator2 (dev/formal Constants). (A70E2, low, D13) a landed commit was logged twice: `awk -F'\t'
+'$1>="2026-11-01"' .git/wt-landings.tsv | cut -f2 | sort | uniq -d` gives `f05b2fa8` (14:46:00Z and 14:47:31Z), and
+wt-ship-failures.tsv shows wt3-constants shipping it a third time at 14:48:58Z. ship.sh's exec line pushes and appends a
+row whether or not the commit was already on the march, so a lane re-shipping a landed head inflates D13's band. Fix: the row
+written only when the push moved origin's branch. Owner: lead (dev/ship.sh). Requirements: D3, D5, D11, D12, D13; no lock
+fired inside its band.
+
+R1 and R2. R1: each new definition's citation resolves at its pin: intrinsics.dart:607 and :1194, code_generator.dart:2299,
+:5684, :5709, kernel_nodes.dart:620, embedder.dart:238, stack_trace_patch.dart:15 and :21; codegen.cpp:2792, :4564, :8102,
+:8859; cgutils.cpp:2067, :2081, :2768, :2794; builtins.c:994, each line read here. The bodies port what they cite, except
+A70S2's two arms (cited to an inlined arm Julia does not take) and A70S3's tuple class (inference's where codegen's
+decides). Nothing in the range is built without a precedent. R2: by the diffs, db12aa4a moves get_list_base_array from a body
+to an Internal rejection (headline -1, Internal +1); 0d1d234a moves stack_trace_current from one Unported rejection to a body
+(gaps -1, headline +1) and adds three runtime bodies (stack_trace_get_current, _EmbedderStackTrace, StackTrace_current);
+e7915a8b adds one body (generateStaticIntrinsic's tuple_index arm) and fills generate_instance_getter_intrinsic, a body
+before. From 3119, 273 Internal and 11 gaps, the src definitions should read 3120 with 274 Internal and 10 gaps (the three
+runtime bodies counted where dev/src_progress.sh counts the runtime); each move is a real body or a rejection leaving the
+headline. dart's _EmbedderStackTrace.toString is not ported and no rejection names it, so the runtime's gap count does not
+hold it; a watch point while no Julia call reaches it.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A66E5 leaves MARCH 1.C, A69S2 1.E, A69S4 1.L, A69E2 1.C.
+A70E1 and A70S4 are open on MARCH 1.C; A70S1, A70S2, A70S3 and A70E3 on 1.D; A70E2 on 1.L. By owner: wt3-memory holds A70S1
+and A70S2 (src/class_info.jl, src/intrinsics.jl); wt3-cgstubs2 A70S3 and A70E3 (src/julia/nir.jl, src/code_generator.jl);
+wt3-runtime A70S4 (src/julia/subset.jl); wt3-translator2 A70E1 (dev/formal/Constants.tla), wt3-parity its claim lock; lead
+A70E2 (dev/ship.sh).
