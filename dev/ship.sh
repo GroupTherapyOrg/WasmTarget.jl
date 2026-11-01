@@ -14,6 +14,17 @@ MARCH=wt2
 cd "$(dirname "$0")/.."
 lane=$(pwd -P)
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
+# the rules that judge a landing are origin's, never the lane's copy: a lane, or a stale loop, on an older tree ran
+# an older ship.sh without the refusals added since (the hold, the retry cap, the progress row; march-monitor-a, 19:47,
+# D6). So when origin's dev/ship.sh differs from this file, this run executes origin's instead, from the lane's .wtd
+# (so its dirname/.. is still the lane), saying so; dev/check.sh already runs from the scratch rebased onto origin
+if [ -z "${WT_SHIP_ORIGIN:-}" ] && git fetch -q origin "$MARCH" 2>/dev/null; then
+  mkdir -p .wtd; git show "origin/$MARCH:dev/ship.sh" > .wtd/ship.origin.sh 2>/dev/null
+  if [ -s .wtd/ship.origin.sh ] && ! cmp -s .wtd/ship.origin.sh dev/ship.sh; then
+    echo "ship: this lane's dev/ship.sh differs from origin/$MARCH's; running origin's"
+    WT_SHIP_ORIGIN=1 exec bash .wtd/ship.origin.sh "$@"
+  fi
+fi
 # a lane the lead holds (one worktree name a line in the common dir's wt-held) lands nothing, whatever runs this
 # script: a stale autoship loop landed a held commit on its third attempt (3ea90d3b, march-monitor-a 15:16)
 if grep -qxF "$(basename "$lane")" "$common/wt-held" 2>/dev/null; then
@@ -218,6 +229,7 @@ if git push -q origin HEAD:$MARCH; then
     # and the same line kept in the common dir's wt-progress.tsv, one row per landing (time, head, line), so R2's history
     # is read from one file rather than from each lane's overwritten autoship output (march-monitor-a, 19:16)
     p=$(grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //' | tr '\t\n' '  ')
+    [ -n "$p" ] || echo "ship: no src line in the check's ratchet output, so no row is written to wt-progress.tsv"
     [ -n "$p" ] && printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$p" >> "$common/wt-progress.tsv"
     grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'; exit 0
 fi
