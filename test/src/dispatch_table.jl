@@ -138,6 +138,13 @@ struct Holder; s::S; end
 two(n::Int) = (read_side(Holder(n > 0 ? A(n, 1) : B(n, 2))), read_tag(Holder(n > 1 ? A(n, 3) : B(n, 4))))
 # C, which a read of `side` on an S may reach, has no field `side`: Julia's FieldError
 missing_side(n::Int) = read_side(Holder(n > 0 ? A(n, 1) : C(n)))
+# a field read by position on an S: Julia's getfield reads each class's field there, `side` in A and B
+@noinline read_first(h::Holder) = getfield(h.s, 1)
+@noinline read_second(h::Holder) = getfield(h.s, 2)
+first_of(n::Int) = read_first(Holder(n > 0 ? A(n, 1) : B(n + 7, 2)))
+# position 1 is `tag` in C, `side` in A; position 2 is past C's one field
+first_mixed(n::Int) = read_first(Holder(n > 0 ? A(n, 1) : C(n)))
+second_short(n::Int) = read_second(Holder(n > 0 ? A(n, 1) : C(n)))
 end
 
 @testset "dispatch_table.dart: field selectors, each class's accessor by class id (dev/formal/FieldSelectorTable.tla)" begin
@@ -192,4 +199,24 @@ end
     collect(DD.ClassInfoCollector(t2))
     local e2 = try; DD.build(t2.dispatch_table[]); nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Unquarantined && occursin("FieldError", e2.rejection.row)
+    # a read by position is the selector of the field each admitted class holds there (Julia's
+    # get_checked_fieldindex), never a selector named "1" that every class lacks (A69S2)
+    local world(f) = W.build_nir(W.check_subset(f, (Int,), "dispatch_table"), "test")
+    local pc = W.field_selector_calls(world(F.first_of), DataType[F.A, F.B, F.Holder])
+    @test [(c.name, c.is_setter, c.call_count, Set(c.classes)) for c in pc] == [("side", false, 1, Set([F.A, F.B]))]
+    local t3 = DD.Translator(world(F.first_of), data, DD.TranslatorOptions())
+    DD._init_modules(t3, nothing)
+    collect(t3.closure_layouter[]); collect(t3.class_info_collector[])
+    DD.build(t3.dispatch_table[])
+    local s3 = DD.selector_for_target(t3.dispatch_table[], getter(F.B, "side"))
+    @test s3.name == "side" && t3.dispatch_table[]._table[][t3.class_id_numbering[].class_ids[F.B] + DD.targets(s3; unchecked = false).offset + 1] === getter(F.B, "side")
+    # a position naming different fields in different classes, or past a class's fields: located
+    local em = try; W.field_selector_calls(world(F.first_mixed), DataType[F.A, F.C, F.Holder]); nothing; catch x; x; end
+    @test em isa W.RejectionError && em.rejection isa W.Unquarantined && occursin("side, tag", em.rejection.row)
+    local eb = try; W.field_selector_calls(world(F.second_short), DataType[F.A, F.C, F.Holder]); nothing; catch x; x; end
+    @test eb isa W.RejectionError && eb.rejection isa W.Unquarantined && occursin("BoundsError", eb.rejection.row)
+    # the compile passes the table and stops at the call through it, _virtualCall, not yet written; its
+    # port runs first_of against native here
+    local ec = try; W.compile(F.first_of, (Int,); optimize = false); nothing; catch x; x; end
+    @test ec isa W.RejectionError && ec.rejection isa W.Unported && occursin("_virtualCall", string(ec.rejection))
 end

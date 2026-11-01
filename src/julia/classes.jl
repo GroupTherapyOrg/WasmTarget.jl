@@ -572,11 +572,29 @@ end
     const classes::Vector{DataType}
 end
 
+# the field selector a field access names on receivers of the classes `admitted`: a name, its own; a
+# position, the field each class holds there, as Julia's getfield reads it (fieldname(typeof(x), i)).
+# The selectors are named by their fields (DispatchTable.build), so a position naming one field in every
+# admitted class is that field's selector; a position past a class's fields is Julia's BoundsError, and
+# one naming different fields in different classes no one named selector, each a located rejection
+@quarantine "Julia's getfield reads a position or a name as one field index of the receiver's own type (julia/src/builtins.c:994 get_checked_fieldindex)" Base.fieldname function field_selector_name(@nospecialize(f), admitted::Vector{DataType})::String
+    local at = "src/julia/classes.jl field_selector_name"
+    f isa Symbol && return string(f)
+    local names = String[]
+    for c in admitted
+        f <= fieldcount(c) || reject!(Unquarantined("$at: Julia's BoundsError for $c, which a field access at position $f may reach past its $(fieldcount(c)) fields, a target not yet written"), at)
+        local n = string(fieldname(c, f))
+        n in names || push!(names, n)
+    end
+    length(names) <= 1 || reject!(Unquarantined("$at: a field access at position $f names the fields $(join(names, ", ")) in the classes its receiver admits, a selector per position not yet written"), at)
+    return isempty(names) ? string(f) : only(names)
+end
+
 """
 Julia's answer where dart reads TFA's selector metadata: the calls of each field selector. A
 `Core.getfield(x, f)` or `Core.setfield!(x, f, v)` whose receiver's type Julia's inference left
 abstract (no concrete type, or a Union) and whose field `f` is a constant (a name or a position) is a
-dynamic call of the getter or setter selector named by `f`, dart's instance field access through the
+dynamic call of the getter or setter selector `f` names (`field_selector_name`), dart's instance field access through the
 dispatch table. Each selector, a `FieldSelectorCalls` of its name and kind, in the order the closed world first meets it,
 maps to its call count and the classes its receivers' types admit, each class of `concrete` (the
 program's concrete classes) Julia's `<:` puts under one. DispatchTable.build (src/dispatch_table.jl)
@@ -593,12 +611,13 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
         isconcretetype(receiver) && continue
         local name_op = st.args[3]
         name_op isa NirConst && (name_op.c.val isa Symbol || name_op.c.val isa Int) || continue
-        local name = string(name_op.c.val); local is_setter = f === Core.setfield!
+        local admitted = DataType[c for c in concrete if c <: receiver]
+        local name = field_selector_name(name_op.c.val, admitted); local is_setter = f === Core.setfield!
         local k = findfirst(e -> e.name == name && e.is_setter == is_setter, out)
         k === nothing && (push!(out, FieldSelectorCalls(name, is_setter, 0, DataType[])); k = length(out))
         out[k].call_count += 1
-        for c in concrete
-            c <: receiver && !(c in out[k].classes) && push!(out[k].classes, c)
+        for c in admitted
+            c in out[k].classes || push!(out[k].classes, c)
         end
     end
     return out
