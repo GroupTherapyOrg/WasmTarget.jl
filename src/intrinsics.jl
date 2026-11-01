@@ -274,11 +274,15 @@ end
 # the bounds check (emit_bounds_check: the index less 1 below the field count unsigned, else
 # BoundsError(t, i), jl_bounds_error_int; none where the flag is the constant false, @inbounds) and
 # then a select chain over every field (CreateSelect per field, each field converted to the read's
-# type: the fields' one type, or the top type, boxed, where they differ); of a tuple whose length only
-# run time knows (Tuple{String,Vararg{String}}), the class-id switch over the closed world's concrete
-# tuple classes below its type (dart's types.dart emitClassIdRangeCheck, classIdSearch), each arm the
-# concrete arm over its own class, its bound that class's field count (codegen.cpp:4584
-# emit_datatype_nfields). The arms are generated from that one list; an empty one rejects, located,
+# type: the fields' one type); of a tuple whose length only run time knows and whose elements share one
+# type (Tuple{String,Vararg{String}}), Julia's typed load bounded by emit_datatype_nfields (codegen.cpp:4584),
+# here the class-id switch over the closed world's concrete tuple classes below its type (dart's
+# types.dart emitClassIdRangeCheck, classIdSearch), each arm the concrete arm over its own class, its
+# bound that class's field count. Where the fields' types differ, Julia's codegen calls the runtime
+# instead (codegen.cpp:4620 jl_get_nth_field_checked, its answer boxed, Any), for a concrete tuple held
+# by reference and for one of run-time length alike; WasmTarget differs: no runtime call, the same arms
+# with each field boxed to the top type and selected, the answer the boxed field
+# jl_get_nth_field_checked returns. The arms are generated from that one list; an empty one rejects, located,
 # and a class outside it is none the program can hold, the closed world holding every class and no
 # type being made at run time (dev/AUDIT.md A68S3, the run_time_type arm), so its miss is unreachable.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:tuple_index}, node::NirCall, T::DataType)::WasmBuilder.IR.ValueType
@@ -297,10 +301,12 @@ end
         v isa NirSSA && (local st = code_gen.body.stmts[v.id]; st isa NirBoundscheck && !isempty(st.args) && st.args[1] isa NirConst && st.args[1].c.val === false)
     local opt = Base.JLOptions().check_bounds
     local check = opt == 1 ? true : opt == 2 ? false : !(flag !== nothing && dart_type_of(self, flag) === Bool && known_false(flag))
-    # the classes the value can have: T itself, or the closed world's concrete tuple classes below it
-    local classes = isconcretetype(T) ? DataType[T] :
-        sort!(DataType[c for c in keys(t.class_info) if c isa DataType && isconcretetype(c) && c <: T];
-              by = c -> t.class_id_numbering[].class_ids[c])
+    # the classes the value can have: T itself, or the closed world's concrete tuple classes below it,
+    # their ids read through the one reading of a type's concrete classes (getConcreteClassIdRange),
+    # each id's class the translator's (dart's translator.classes, indexed by class id)
+    local ids = isconcretetype(T) ? Int[] :
+        Int[id for r in get_concrete_class_id_range(t.class_id_numbering[], T) for id in r.start:r.end_]
+    local classes = isconcretetype(T) ? DataType[T] : DataType[t.classes[][id + 1].cls for id in ids]
     isempty(classes) && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, which no class of the closed world is"), at)
     # the read's type: the fields' one type, or their union, the top type where they differ
     local field_types = Base.IdSet{Any}(ft for c in classes for ft in fieldtypes(c))
@@ -371,8 +377,7 @@ end
     translate_expression(code_gen, node.args[2], t.top_type_non_nullable[])
     WasmBuilder.local_tee(b, o)
     load_class_id(b, t, o.type)
-    local ids = t.class_id_numbering[].class_ids
-    local ranges = [(range = Range(Val(:_), ids[c], ids[c]), value = c) for c in classes]
+    local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(ids, classes)]
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[R], c -> begin
             local info = t.class_info[c]
             local v = add_local(code_gen, info.non_nullable_type)

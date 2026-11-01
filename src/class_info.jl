@@ -88,7 +88,7 @@ other, so the collaborator names the abstract type only Translator subtypes.
     max_concrete_class_id::Int
     max_class_id::Int
     _transitive_implementors::IdDict{DataType,Base.IdSet{DataType}}
-    _concrete_class_id_ranges::IdDict{DataType,Vector{Range}}
+    _concrete_class_id_ranges::IdDict{Type,Vector{Range}}
     first_non_masqueraded_interface_class_cid::Late{Int}
     # dart's constructor `ClassIdNumbering._` with its field initializers, the struct's one
     # constructor tagged by the dart name; the late field's initializer reads the numbering itself
@@ -107,7 +107,7 @@ other, so the collaborator names the abstract type only Translator subtypes.
         end)
         self = new(translator, _subclasses, _implementors, _concrete_subclass_id_range, _masqueraded, dfs_order,
                          class_ids, max_concrete_class_id, max_class_id, IdDict{DataType,Base.IdSet{DataType}}(),
-                         IdDict{DataType,Vector{Range}}(), cid)
+                         IdDict{Type,Vector{Range}}(), cid)
         return self
     end
 end
@@ -539,18 +539,30 @@ class for every class but a type as a value: `Int isa Type{Int}` though `DataTyp
 false. So a singleton type `Type{X}` whose member's class is not under it rejects here, located,
 until type values are tested by their own runtime type (types.dart); `Type{Union{}}`, whose one
 member's class `Core.TypeofBottom` is under it, and the open `Type{T}`, which every kind is under,
-answer as any class.
+answer as any class. The one reading of a type's concrete classes: the is check's, its inlining
+decision's and a tuple's field read at a run-time index all take their class ids here.
+
+Reshaped: `klass` — a type Julia's program has that is no class of the closed world (a UnionAll, an
+abstract tuple type such as `Tuple{String,Vararg{String}}`, which the class walk never meets as a
+class) holds the concrete classes Julia puts under it (`c <: klass`), each its own range, where dart's
+`klass` is always a class of its hierarchy.
 """
-@parity "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" function get_concrete_class_id_range(self::ClassIdNumbering, klass::DataType)::Vector{Range}
-    Base.isType(klass) && !(klass.parameters[1] isa TypeVar) && !(typeof(klass.parameters[1]) <: klass) &&
+@parity "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" function get_concrete_class_id_range(self::ClassIdNumbering, klass::Type)::Vector{Range}
+    klass isa DataType && Base.isType(klass) && !(klass.parameters[1] isa TypeVar) && !(typeof(klass.parameters[1]) <: klass) &&
         reject!(Unquarantined("src/class_info.jl getConcreteClassIdRange: $klass, whose members are types, not the instances of a class"), "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange")
     local cached = get(self._concrete_class_id_ranges, klass, nothing)
     cached === nothing || return cached
     local ranges = Range[]
-    local transitive_implementors = _get_transitive_implementors(self, klass)
-    append!(ranges, get(self._concrete_subclass_id_range, klass, Range[]))
-    for implementor in transitive_implementors
-        append!(ranges, get(self._concrete_subclass_id_range, implementor, Range[]))
+    if klass isa DataType && haskey(self.class_ids, klass)
+        local transitive_implementors = _get_transitive_implementors(self, klass)
+        append!(ranges, get(self._concrete_subclass_id_range, klass, Range[]))
+        for implementor in transitive_implementors
+            append!(ranges, get(self._concrete_subclass_id_range, implementor, Range[]))
+        end
+    else
+        for (c, id) in self.class_ids
+            isconcretetype(c) && c <: klass && push!(ranges, Range(id, id))
+        end
     end
     normalize(ranges)
     return self._concrete_class_id_ranges[klass] = ranges

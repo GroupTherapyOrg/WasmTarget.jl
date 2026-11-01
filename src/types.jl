@@ -677,8 +677,7 @@ classes a range like any other.
     local numbering = self.translator.class_id_numbering[]
     local ranges = Range[]
     for t in Base.uniontypes(Base.typesplit(tested, Nothing))
-        append!(ranges, haskey(numbering.class_ids, t) ? get_concrete_class_id_range(numbering, t) :
-            Range[Range(id, id) for (c, id) in numbering.class_ids if isconcretetype(c) && c <: t])
+        append!(ranges, get_concrete_class_id_range(numbering, t))
     end
     normalize(ranges)
     return InliningDecision(length(ranges) <= 1, "ranges <= 1")
@@ -694,9 +693,8 @@ end
 """
 The is check's code. A null operand answers the type's nullability. A non-null one is checked by its
 class id against the ranges of the classes under the type. Those ranges are dart's
-`getConcreteClassIdRange` for each member of the type that is a class of the closed world. A member
-that is not a class (a `UnionAll`, or a DataType no class reaches) holds the concrete classes Julia
-puts under it (`c <: t`). `Nothing` is null (the ruling: `Union{Nothing,T}` is a nullable `T`), so
+`getConcreteClassIdRange` for each member of the type (a member that is no class of the closed world
+holding the concrete classes Julia puts under it, that function's Reshaped arm). `Nothing` is null (the ruling: `Union{Nothing,T}` is a nullable `T`), so
 it contributes the null case and no class. `Any` holds every value (dart's Object). dart's
 Function is an ordinary abstract class in Julia. A Julia class has no arguments to check.
 """
@@ -725,8 +723,7 @@ Function is an ordinary abstract class in Julia. A Julia class has no arguments 
         local numbering = translator.class_id_numbering[]
         local ranges = Range[]
         for t in Base.uniontypes(Base.typesplit(tested, Nothing))
-            append!(ranges, haskey(numbering.class_ids, t) ? get_concrete_class_id_range(numbering, t) :
-                Range[Range(id, id) for (c, id) in numbering.class_ids if isconcretetype(c) && c <: t])
+            append!(ranges, get_concrete_class_id_range(numbering, t))
         end
         normalize(ranges)
         WasmBuilder.local_get(b, operand)
