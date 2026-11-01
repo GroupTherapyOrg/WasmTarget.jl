@@ -7114,3 +7114,124 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A70S3 leaves 
 A75S1 and A75S2 are open on 1.D; A75S3, A75S4 and A75S5 on 1.F; A75S6 on 1.K; A75E3 on 1.A6; A75E1 and A75E2 on 1.L. By
 owner: wt3-memory A75S1 (with wt3-cgstubs2) and A75S2; wt3-runtime A75S3, A75S4, A75S5, with A73S2 and A73S3; wt3-parity
 A75S6, A75E2, A75E3, with A74S1, A74S3, A74S4; lead A75E1; wt3-latency A73E1; wt3-cgstubs2 A71S3.
+
+## 2026-11-01 — audited through c7e8b37b (e84214d1..c7e8b37b: dart's throwing and abstract members read by dev/skeleton.jl, _makeFunctionType one body, the OverrideVerifier step map and jl_method_def, the progress history file, the rejection kinds cached per src tree, the D11 lock's closure over the definitions a claim reads, the héllo case under the JS runtime)
+
+The seventy-sixth audit, beside the work, covers the 7 commits of e84214d1..c7e8b37b that are not audit entries (318c4c93,
+entry 75): a945477c, 12ed37ae, 9acc0b92, 8e4d4d73, 0ccae918, 709bfbee and c7e8b37b, read here, under Dale's R1 and R2 as
+standing sections. Every finding rests on one exact command, quoted. Standing items. src changes in 3 files (`git diff
+--stat e84214d1..origin/wt2 -- src | tail -1` gives `3 files changed, 64 insertions(+), 122 deletions(-)`); no exemption
+lands (`git diff e84214d1..origin/wt2 -- src | grep -cE '^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 0). The
+debt list reads 389, unchanged (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`). Earlier findings: A74S1 is fixed
+by a945477c (`grep -c 'local dart_member' src/julia/parity.jl` gives 0; the body forms read from skeleton's tokens,
+dart_kinds composing them, with plants); A74S3 by 9acc0b92, its residue A76S2; A74S4 by 9acc0b92 (`grep -c 'julia.h:905'
+src/julia/parity.jl` gives 0; `sed -n 1191p src/method.c` of the julia pin gives `JL_DLLEXPORT jl_method_t*
+jl_method_def(jl_svec_t *argdata,`, and :1315 `m->file = file;`); A67S3 by 12ed37ae (`grep -c 'functions.dart:890
+_makeFunctionType' src/functions.jl` gives 1), its residue A76S1; A75E2 by 709bfbee, its residue A76E4; A75S3 by c7e8b37b
+(the case compiles by Dart2Wasm.compile, runs under the generated .mjs in node and compares `sprint(println, "héllo") *
+sprint(println, 7)`). A75E1 is corrected: dev/ship.sh has refused a lane named in the common dir's wt-held since 3d0e7725
+(07:24 -0800, `git log -S'wt-held' -- dev/ship.sh`), but a lane runs the ship.sh of its own base (A76E3), so a lane based
+before 3d0e7725 lands past a hold; eight autoship loops still run (`ps aux | grep -c '[b]ash dev/autoship.sh'` gives 8).
+Open as they stood: A75S1 (`grep -n max_union_splitting src/julia/classes.jl` gives `86:`, `90:`); A75S4 (`grep -n 'lib ==
+JS_INTEROP_LIBRARY' src/julia/runtime/rtutils.jl` gives `181:`); A75S6 (`grep -n 'Symbol("@assume_effects")'
+src/julia/parity.jl` gives `177:`); A75E3 (`grep -c 'own signature matches no method\|no frame for its signature'
+test/parity_ratchet.jl` gives 0); A71S3 (`grep -n 'codegen.cpp:2638' src/code_generator.jl` gives `2040:`); A73S2 (`grep -n
+'const baseImports = ' src/julia/runtime/rtutils.jl` gives `113:`); A73S3 (`grep -n ':typeassert),' src/julia/subset.jl`
+gives `199:`); A73E1 (`grep -n 'instantiates no' src/julia/nir.jl` gives `727:`); A68E3 (`tail -1 .git/wt-corpus.tsv` gives
+f05b2fa8's `hung 1216` row); A75S2, A75S5, A75E1, A71E2, A69E1, A68E2, A68S4, A72E1, A67E1 and A67S1, carried, not re-read.
+Findings A76S1, A76S2 and A76E1 to A76E6.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — no change to the closed world's walk; 12ed37ae's inputs, below.
+
+Area: emission and diagnostics — 12ed37ae: one _make_function_type (functions.jl:560) for every target, a static field's
+accessors in dart's first arm, every other target through _get_input_types (dart's Field arm for an instance field's
+setter value, a NirForeignImport's declared argument types) and type_of_return_value (translator.jl:1413); the callers pass
+the target and its receiver. (A76S1, low, D8) the three match `Union{Reference,NirForeignImport}` by isa chains whose last
+arm is a wildcard: `target isa FieldReference ? … : target isa NirForeignImport ? target.params :
+nir_parameter_types(target)[2:end]` (functions.jl, _get_input_types), the same chain in type_of_return_value, and the
+static-field arm's FieldReferenceKind tested for getter and initializer with the setter the fall-through; Reference is a
+closed sum (`grep -n '@closed const Reference' src/julia/kernel.jl` gives `69:`) that functions.jl itself matches
+@exhaustive (`grep -n '@exhaustive target::Reference' src/functions.jl` gives `119:`, `160:`, `302:`, `313:`, `322:`), so a
+third Reference arm would take the MethodInstance path silently. Fix: each matched @exhaustive over Reference's arms, with
+NirForeignImport its own arm, and FieldReferenceKind matched @exhaustive. Owner: wt3-runtime (src/functions.jl,
+src/translator.jl). c7e8b37b: the héllo case, above.
+
+Area: enforcement and prose — a945477c: Decl carries each member's body form from its tokens (body_form: `;` abstract unless
+external, `=>` or `{` then `throw` a throw at its line, `=` a body); dart_kinds turns Internal into DartThrow and
+DartAbstract; rejection_only_kinds reads no dart. 0ccae918: the kinds (rejection_only_kinds then dart_kinds, with their
+lines) written to `<common dir>/wt-rejection-kinds/<key>.tsv`, the key a sha256 of src/'s files, dev/skeleton.jl,
+dev/skeleton_scope.toml and `julia --version`; the line ends `the kinds cache: hit` or `miss`. Against the lead's four
+conditions: (2) holds, the plants call rejection_only_kinds and dart_kinds directly and the planted-number lines run no
+Julia (`sed -n 1584,1680p test/parity_ratchet.jl`); (4) holds (wt3-codegen-b's .wtd/autoship.out for c7e8b37b ends `3084 +
+274 + 4 + 42 = 3404 of 3404; the kinds cache: hit`). (A76E1, medium, D5/D17, the snapshot record) (1) and (3) fail. The key
+(`sed -n 36,41p dev/src_progress.sh`) leaves out dev/src_progress.sh itself, whose inline program chooses the entries
+(`_within(x.mod, WasmTarget)`) and writes and parses the file; lib/WasmInterpreter/, which src imports (`grep -rln
+WasmInterpreter src` gives src/WasmTarget.jl, src/julia/subset.jl, src/julia/interpreter.jl) and whose callees inference
+reads in deciding that a src method never returns; and Project.toml/Manifest.toml. The dart, julia and llvm pins are in
+src/julia/parity.jl (:918, :1048, :1029), held to dev/PARITY_MASTER.md by the ratchet, so they are covered. `julia
+--version` gives `julia version 1.12.7`, a release name, where Julia's own cache checks the build (`sed -n 4049p
+base/loading.jl` of the julia pin gives `@constprop :none function stale_cachefile(modkey::PkgId, build_id::UInt128,
+modpath::String, cachefile::String;`, which checks each include's content and each dependency's build id). No plant changes
+one input alone and expects a miss (`git show 0ccae918 -- test/parity_ratchet.jl` changes only L208's text), and the commit
+names no precedent (D7). Fix: the key read as stale_cachefile reads it, from WasmTarget's own include list (its cache
+header's includes, which hold lib/WasmInterpreter and every src file) and Base's build id, plus dev/skeleton.jl, its scope
+and dev/src_progress.sh, cited at loading.jl:4049; plants in L208 on a scratch copy: a change to dev/skeleton.jl alone, to
+the program alone and to a src file alone, each a miss. Owner: wt3-parity (dev/src_progress.sh, test/parity_ratchet.jl).
+(A76E2, low, D5) the cache's read and write are written twice, verbatim (`grep -n 'cache = ENV\["WT_KINDS_CACHE"\]\|the
+newest sixteen kept' dev/src_progress.sh` gives `52:`, `68:`, `118:`, `134:`), and the kinds branch builds `es` and then the
+same filter again in its miss arm. Fix: one function both call. Owner: wt3-parity (dev/src_progress.sh). 8e4d4d73: ship.sh
+appends each landing's line to `<common dir>/wt-progress.tsv`. (A76E3, medium, D5, R2) the history holds one row in four
+landings: `cut -f1,2 .git/wt-progress.tsv` gives only `2026-11-01T19:24:37Z 8e4d4d73`, where `tail -4 .git/wt-landings.tsv`
+gives 8e4d4d73, 0ccae918, 709bfbee and c7e8b37b; c7e8b37b's ship printed its line (wt3-codegen-b's .wtd/autoship.out,
+`ship: pushed c7e8b37b`) and wrote no row, because the ship.sh that ran is the lane's own (`git -C
+../.worktrees/wt3-codegen-b show HEAD:dev/ship.sh | grep -c wt-progress` gives 0, that lane's HEAD a22bcfd7). Every change to
+ship.sh, the hold of 3d0e7725 among them, binds a landing only once its lane is based past it. Fix: dev/ship.sh, after its
+fetch, runs origin/wt2's own copy (`git show origin/$MARCH:dev/ship.sh`) when it differs from the lane's, or refuses; the
+stale autoship loops stopped. Owner: lead (dev/ship.sh, dev/autoship.sh). 709bfbee: invariants_dropped closes the compared
+definitions over every operator a claim's text names, recursively, from the claims, Init, Next and the constants'
+definitions. (A76E4, medium, D11) the roots are the literal names `Init` and `Next` (`union!(defs_named, ("Init",
+"Next"))`), never a cfg's SPECIFICATION: `grep -h '^SPECIFICATION\|^INIT\|^NEXT' dev/formal/MC*.cfg | sort | uniq -c` gives
+207 `SPECIFICATION Spec`, 21 `SPECIFICATION Spec_`, 5 `INIT Init` and 5 `NEXT Next`, so `Spec == Init /\ [][UNCHANGED
+vars]_vars` passes unnamed, and a model whose next-state relation is named otherwise (`grep -h '^Spec ==' dev/formal/*.tla`
+gives `Spec == Init /\ [][Step \/ Terminal]_vars`) has neither read; Next has no plant (the plant's cfg names `Spec`, which
+its module does not define). Fix: the roots read from each cfg (SPECIFICATION, INIT, NEXT, its claims), with plants for Spec
+rewritten and for a Next rewritten. Owner: wt3-parity (test/parity_ratchet.jl). (A76E5, low, the 19:35Z rule) 709bfbee
+changes L227 (committed 19:37:25Z) and its body states no measured G cost (`git log -1 --format=%B 709bfbee | grep -ciE 'G
+cost|CPU-s|[0-9]+ ?G\b'` gives 0). Fix: the cost measured and stated with the A76E4 fix. Owner: wt3-parity. 9acc0b92:
+_parity_entry's map, read against `pkg/analyzer/lib/src/error/override_verifier.dart` at the pin line by line: :70
+hasOverride, :71 the switch, :73 the report (its diag on :74), :86 the super call, :121 _isOverride, :123 the null class,
+:131 the nameless member, each as cited. (A76S2, low, R1) 9acc0b92's subject claims every step of OverrideVerifier, but the
+map covers visitMethodDeclaration and _isOverride only: visitFunctionDeclaration (:50, a top-level function's annotation),
+visitFieldDeclaration and _checkField (:39, :110, a field's), visitPrimaryConstructorDeclaration (:97) and the class
+visitors that set the `_currentClass` :122 reads (:25, :32, :90) are neither mapped nor said to have no counterpart, where
+@parity anchors top-level functions and a class's fields too. Fix: each named in the map or the subject trimmed. Owner:
+wt3-parity (src/julia/parity.jl). (A76E6, low, evidence) a945477c's body says `The count is unchanged: 3083 + 274 + 5 + 42 =
+3404` and 0ccae918's `the same line both times (3083 + 274 + 5 + 42 = 3404 of 3404)`, where the head both landed onto read
+`3084 + 274 + 4 + 42` since d5db52fa (audit 75's R2; the one wt-progress.tsv row): measured on trees before their rebase.
+Fix: a landing's numbers taken from its own check's line. Owner: wt3-parity.
+
+stopgap in disguise: the kinds cache, a record whose key a hand-picked list of inputs bounds, A76E1; the D11 lock's roots, two names written in rather than read from the cfg, A76E4.
+
+precedent: jl_method_def (method.c:1191) for _methods_of_file; OverrideVerifier by line for _parity_entry; the cache has none cited, Base's stale_cachefile (loading.jl:4049) the nearest, A76E1.
+
+Requirements: D5, D7, D8, D11, D17; no lock fired inside its band.
+
+R1 and R2. R1: each new citation is read at its pin (above): method.c:1191 and :1315 resolve; the step map's lines resolve;
+c7e8b37b's oracle is Julia's println. The cache is the one bespoke construction, its precedent Base's stale_cachefile
+(A76E1). R2: the latest row of `.git/wt-progress.tsv` (8e4d4d73, 19:24:37Z) reads `3084 + 274 + 4 + 42 = 3404 of 3404`,
+32 of the 3084 a dart body that throws, the one @unported stub (_virtualCall) and 3 rejecting Unported or Unquarantined
+counted as the 4 gaps, 42 DartAbstract beside the headline; c7e8b37b's ship prints the same. `bash dev/src_progress.sh
+kinds` was not run: in this new worktree its private depot would precompile WasmTarget, and its answer would be read from
+the same cache (this tree's key, computed as the script computes it, is 8ae17673…, whose file exists). The cached file's
+kinds over every entry (`cut -f2 .git/wt-rejection-kinds/8ae1767342da5ce3cda3a9cd36e55f496925504a.tsv | sort | uniq -c`)
+give 32 DartThrow and 42 DartAbstract, as the line; 278 Internal and 6 Unported or Unquarantined over all entries, the
+line's 274 and 3 being those at counted anchors. The agreement rests on the cache this entry finds unkeyed (A76E1), so it
+is no independent read.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A74S1 leaves 1.A6; A74S3 and A74S4 1.K; A75E2 1.L;
+A67S3 and A75S3 had left 1.F by their fixing commits. A76E1, A76E2 and A76E6 are open on 1.A6; A76E3, A76E4 and A76E5 on
+1.L; A76S1 on 1.F; A76S2 on 1.K. By owner: wt3-parity A76E1, A76E2, A76E4, A76E5, A76E6 and A76S2, with A75S6 and A75E3;
+lead A76E3, with A75E1; wt3-runtime A76S1, with A75S4, A75S5, A73S2 and A73S3; wt3-memory A75S1 and A75S2; wt3-latency
+A73E1; wt3-cgstubs2 A71S3.
