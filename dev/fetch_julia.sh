@@ -14,13 +14,13 @@ cd "$dir"
 [ -d .git ] || git init -q
 git remote get-url origin >/dev/null 2>&1 || git remote add origin https://github.com/JuliaLang/julia.git
 git config core.sparseCheckout true
-# each unit of JULIA_FILES ("julia/src/<name>"), its .h, .c and .cpp
+# each unit of JULIA_FILES ("julia/src/<name>", or under a directory of src, "julia/src/support/<name>"), its .h, .c and .cpp
 # the list only grows: the checkout is shared by every worktree, and one whose JULIA_FILES predates a
 # unit must never take another's unit out from under it (a lane's fetch dropped two Compiler units a
 # check in another tree then failed to read)
 touch .git/info/sparse-checkout
 { cat .git/info/sparse-checkout
-  grep -oE '"julia/src/[A-Za-z0-9_]+"' "$here/src/julia/parity.jl" | tr -d '"' | sed 's|^julia/||' |
+  grep -oE '"julia/src/[A-Za-z0-9_/]+"' "$here/src/julia/parity.jl" | tr -d '"' | sed 's|^julia/||' |
     while read -r u; do printf '%s.h\n%s.c\n%s.cpp\n' "$u" "$u" "$u"; done
   # each Julia unit of JULIA_FILES ("julia/base/<name>", "julia/Compiler/src/<name>"), Base and Julia's
   # compiler in Julia, its .jl

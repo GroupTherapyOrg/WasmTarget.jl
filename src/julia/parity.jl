@@ -520,6 +520,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/src/julia", "julia/src/genericmemory", "julia/src/builtins", "julia/src/cgutils",
     "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv", "julia/src/ccall",
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer",
+    "julia/src/support/hashing", "julia/src/support/MurmurHash3",
 )
 
 """
@@ -557,7 +558,7 @@ members by the CFE; gpucompiler: the method table a device's overlays of Base li
 differs: `include` takes any path, so the overlays' file map is a table too, beside RUNTIME_FILES.
 """
 @quarantine "Julia's include takes any path; the overlay table's file map is a table" Core.String const PATCH_FILES::Tuple{Vararg{String}} = (
-    "patch/string.jl", "patch/genericmemory.jl",
+    "patch/string.jl", "patch/genericmemory.jl", "patch/hashing.jl",
 )
 
 # the patch files include_patch has loaded, in order

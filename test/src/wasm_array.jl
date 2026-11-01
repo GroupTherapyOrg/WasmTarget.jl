@@ -27,13 +27,14 @@ end
 # natively Base's, overlapping ranges included; compiled, push! growing a Vector of each kind of element
 # (bits, a reference, one admitting nothing with its set flags) past its memory several times, resize!
 # shrinking and growing, pop! and popfirst!, deleteat!, append! and insert! (in range and past it), a byte
-# memory's fill! (wasm_memory_fill!), a Dict{Int64,Int64} built on them, and Julia's egal of two
-# MemoryRefs (an offset and a memory)
+# memory's fill! (wasm_memory_fill!), a Dict{Int64,Int64} built on them, a Dict{String,Int64} and a
+# String's hash (src/patch/hashing.jl), and Julia's egal of two MemoryRefs (an offset and a memory)
 module WasmArrayMemoryTest
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
 const WTRunner = Main.WTRunner
 const W = WasmTarget
+const KEYS = ["k$i" for i in 1:40]
 function memory(k::Int64, n::Int64)
     if k == 1
         local v = Int64[]
@@ -90,6 +91,18 @@ function memory(k::Int64, n::Int64)
         for i in 1:n; d[i] = i * i; end
         delete!(d, 1)
         return length(d) + 10 * get(d, n, Int64(-1)) + 1000 * Int64(haskey(d, 1))
+    elseif k == 12
+        # a Dict{String,Int64}: each key hashed by Julia's runtime hash ported (memhash_seed), grown,
+        # deleted from, looked up present and absent
+        local sd = Dict{String,Int64}()
+        for i in 1:n; sd[KEYS[i]] = i; end
+        sd["bb"] = 2
+        delete!(sd, "k1")
+        return length(sd) + 10 * sd["bb"] + 100 * Int64(haskey(sd, "k1")) + 1000 * get(sd, KEYS[n], Int64(0))
+    elseif k == 13
+        # a String's hash, bit for bit native's: empty, short, one 16-byte block and a tail, several blocks
+        local hs = n == 0 ? "" : n == 1 ? "a" : n == 2 ? "héllo wörld, a longer one" : "k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1"
+        return (hash(hs, n % UInt) % UInt(1000003)) % Int64
     elseif k == 7
         local w = Vector{Int64}(undef, 4)
         w[1] = 1; w[2] = 2; w[3] = 3; w[4] = 4
@@ -99,6 +112,14 @@ function memory(k::Int64, n::Int64)
     local m = Memory{Int64}(undef, 4)
     local r = Core.memoryrefnew(Core.memoryrefnew(m), n)
     return Int64(r === Core.memoryrefnew(Core.memoryrefnew(m), 2)) + 2 * Int64(r === Core.memoryrefnew(Core.memoryrefnew(Memory{Int64}(undef, 4)), n))
+end
+@testset "runtime/hashing.jl: Julia's runtime hash of a String's bytes, ported, natively equal to the runtime's" begin
+    # memhash_seed (hashing.c over MurmurHash3_x64_128) against the runtime's own, every tail length and
+    # several blocks, under three seeds
+    local agree = all(n -> all(seed -> (local s = String(UInt8[(37 * j + n) % 256 for j in 1:n]);
+        W.memhash_seed(s, seed) == ccall(:memhash_seed, UInt, (Ptr{UInt8}, Csize_t, UInt32), s, sizeof(s), seed)),
+        (UInt32(0), UInt32(7), 0xdeadbeef)), 0:70)
+    @test agree
 end
 @testset "wasm_array.jl: a memory's elements copied, natively and as push! grows a Vector" begin
     local a = Memory{Union{Nothing,String}}(undef, 6)
@@ -113,7 +134,8 @@ end
     @test !isassigned(a, 2) && a[4] == "q" && bits[1] == 7
     local plain = W.compile(memory, (Int64, Int64); optimize = false)
     local argsets = [(1, 1), (1, 40), (2, 1), (2, 40), (3, 1), (3, 40), (5, 2), (5, 3), (6, 1), (6, 9),
-                     (7, 1), (7, 3), (8, 1), (8, 3), (8, 6), (8, 9), (9, 1), (9, 4), (9, 9), (10, 1), (10, 4), (10, 5), (11, 1), (11, 2), (11, 40), (4, 2), (4, 3)]
+                     (7, 1), (7, 3), (8, 1), (8, 3), (8, 6), (8, 9), (9, 1), (9, 4), (9, 9), (10, 1), (10, 4), (10, 5), (11, 1), (11, 2), (11, 40), (12, 1), (12, 30),
+                     (13, 0), (13, 1), (13, 2), (13, 3), (4, 2), (4, 3)]
     local cases = [WTRunner.RunCase("memory$a", plain, Int64.(a), WTRunner.native_answer(memory, Int64.(a))) for a in argsets]
     for r in WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
