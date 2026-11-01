@@ -60,8 +60,10 @@ forged(x::Int64) = (ccall(("s => (", "dart2wasm"), Nothing, ()); x)
 @testset "js_common/print_patch.dart: printToConsole hands its line to the JS runtime's inline JS" begin
     local world = W.build_nir(W.check_subset(said, (Int64,), "print_patch"), "print_patch")
     # the method whose body holds the inline JS: printToConsole's, or its caller's where Julia inlined it
-    local mi = only(b.ci.def for b in world if !isempty(W.nir_js_codes(world, b.ci.def)))
-    @test W.nir_js_codes(world, mi) == ["s => printToConsole(s)"]
+    local mi = only(b.ci.def for b in world if !isempty(W.nir_js_sites(world, b.ci.def)))
+    local (site, sname, code) = only(W.nir_js_sites(world, mi))
+    # the site is where it was written, print_patch.jl's port, whatever caller Julia inlined it into
+    @test startswith(site, "WasmTarget.Runtime.print_to_console:") && sname == "print_to_console" && code == "s => printToConsole(s)"
     # generateJsMethods writes the method under the name the code generator imports it by
     local namer = D.InteropMemberNamer(world, D.Namer(), D.TranslatorOptions())
     local body = only(b for b in world if b.ci.def === mi)

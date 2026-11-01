@@ -89,8 +89,8 @@ end
 
 # the JS code of each translated procedure that hands its host one, `<importName>: <code>,` a line each:
 # dart's JsInteropMemberData.fromMember reads a procedure's `wasm:js-code` pragma, Julia's the symbol of
-# each of its body's foreign calls to the interop module (nir_js_codes, in the interop namer's closed
-# world), each site once, by the name the code generator imported it by (the interop namer's).
+# each of its body's foreign calls to the interop module (nir_js_sites, in the interop namer's closed
+# world), each written site once, by the name the code generator imported it by (the interop namer's).
 # Sorted as dart's compareNatural sorts (package:collection), a run of digits read as its number, so
 # _9 comes before _11. dart's trampolines are its interop specializer's, which Julia has none of
 @parity "dart2wasm/lib/js/runtime_generator.dart:60 RuntimeFinalizer.generateJsMethods" function Dart2Wasm.generate_js_methods(self::RuntimeFinalizer, translated_procedures::AbstractVector{Core.MethodInstance})::String
@@ -98,15 +98,15 @@ end
     local namer = self._interop_member_namer
     local component = namer._external_member_namer.component
     local used_procedures = Set{Core.MethodInstance}()
-    local used_codes = Set{String}()
+    local used_sites = Set{String}()
     local used_js_methods = Tuple{String,String}[]
     for p in translated_procedures
         p in used_procedures && continue
         push!(used_procedures, p)
-        for js_code in nir_js_codes(component, p)
-            js_code in used_codes && continue
-            push!(used_codes, js_code)
-            local import_name = get(namer._interop_helper_member_namer.interop_member_names, js_code, nothing)
+        for (site, _, js_code) in nir_js_sites(component, p)
+            site in used_sites && continue
+            push!(used_sites, site)
+            local import_name = get(namer._interop_helper_member_namer.interop_member_names, site, nothing)
             import_name === nothing && reject!(Internal("$at: $p hands its host JS code no import of it named"), at)
             push!(used_js_methods, (import_name, js_code))
         end

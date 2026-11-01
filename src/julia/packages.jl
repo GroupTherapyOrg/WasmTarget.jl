@@ -115,7 +115,7 @@ import ..Dart2Wasm
 end
 @quarantine "dart2wasm's compile imports js/runtime_generator.dart under the prefix js; a prefix is a module in Julia" Core.Module module JS
 # ---- the src/julia names JS's files use, written by dev/skeleton.jl write ----
-import ...@parity, ...Internal, ...JS_STRING_BUILTINS_MODULE, ...nir_js_codes, ...reject!
+import ...@parity, ...Internal, ...JS_STRING_BUILTINS_MODULE, ...nir_js_sites, ...reject!
 # ---- end of JS's src/julia names ----
 import ...WasmBuilder
 import ..Dart2Wasm
