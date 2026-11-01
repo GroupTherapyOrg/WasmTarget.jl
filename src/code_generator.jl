@@ -1100,6 +1100,11 @@ end
             # or, a nested try_table fixing an unwind mismatch, of every exception, its exnref to a
             # trampoline
             imm(mi, 2) == 1 || reject!(Internal("src/code_generator.jl visit_block: a TRY_TABLE with $(imm(mi, 2)) catch clauses"), at)
+            # dart's visitTryCatch and visitTryFinally also catch the JS tag where a catch's guard can
+            # match a JS exception, boxing it (boxJsException); a Julia catch's guard is Any, so outside
+            # standalone mode a catch of the exception tag alone would let a JS exception pass
+            imm(mi, 3) == WASM_OPCODE_CATCH && guard_can_match_js_exception(self.translator, Any) &&
+                reject!(Unported("sdk/lib/_internal/wasm/js_common/js_helper.dart:803 boxJsException"), "$at: a catch outside standalone mode, which catches a JS exception too")
             local catches = WasmBuilder.TryTableCatch[
                 imm(mi, 3) == WASM_OPCODE_CATCH ? WasmBuilder.Catch(dart_tag(), label_at(imm(mi, 4))) :
                 imm(mi, 3) == WASM_OPCODE_CATCH_ALL_REF ? WasmBuilder.CatchAllRef(label_at(imm(mi, 4))) :

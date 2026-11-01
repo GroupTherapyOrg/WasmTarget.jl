@@ -21,8 +21,9 @@ loop(n::Int) = (s = 0; for i in 1:n; s += i; end; s)
 end
 
 # the translator of the closed world of `f` at `argtypes`, one main module
-translator_of(f, argtypes) = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "code_generator"), "test"),
-    D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+# outside standalone mode by default, dart's TranslatorOptions; `standalone`, the mode WasmTarget.compile takes
+translator_of(f, argtypes; standalone::Bool = false) = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "code_generator"), "test"),
+    D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(; standalone = standalone))
 
 # the code generator of the entry body of `f` at `argtypes`, its wasm signature `ins -> outs`
 function codegen_of(f, argtypes, ins, outs)
@@ -72,9 +73,9 @@ queue_native!(label, bytes, f, argsets) =
 
 # the instructions `generate` emits for the body of `f` at `argtypes`, compile_one's steps, the
 # bodies of the functions it calls not generated
-function generated_instructions(f, argtypes)
+function generated_instructions(f, argtypes; standalone::Bool = false)
     local B = W.WasmBuilder
-    local t = translator_of(f, argtypes)
+    local t = translator_of(f, argtypes; standalone = standalone)
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)

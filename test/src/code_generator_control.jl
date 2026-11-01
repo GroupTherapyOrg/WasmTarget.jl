@@ -108,18 +108,18 @@ nest_of(x::Int64) = try; nest(x); catch e; e isa E ? e.v : -3; end
 end
 
 @testset "code_generator.dart: a try/catch, the stackifier's try_table around the call that unwinds to the catch" begin
-    # tc's body alone (thr's, whose throw is not ported, is not generated), each instruction accepted
-    # by the builder (D10): a BLOCK typed by the exception tag's payload, the try_table catching the tag
+    # tc's body alone in standalone mode (thr's is not generated), each instruction accepted by the
+    # builder (D10): a BLOCK typed by the exception tag's payload, the try_table catching the tag
     # into it around the call, an unreachable after the try_table's end; after the block's end the
     # caught exception stashed (dart's visitTryCatch) and Julia's the_exception, narrowed to E, cast
-    local names = generated_instructions(TryGenCases.tc, (Int64,))
+    local names = generated_instructions(TryGenCases.tc, (Int64,); standalone = true)
     local t = findfirst(==("try_table"), names)
     @test names[t-2:t] == ["block", "block", "try_table"] && names[t+1:t+2] == ["local.get", "call"]
     local u = findfirst(==("unreachable"), names)
     @test names[u-1:u+5] == ["end", "unreachable", "end", "local.set", "local.get", "ref.cast", "local.set"]
     # nested try regions: the value the inner catch receives, x, through its Upsilon into the PhiC's
     # register, which the catch block reads
-    local nn = generated_instructions(TryGenCases.tn, (Int64,))
+    local nn = generated_instructions(TryGenCases.tn, (Int64,); standalone = true)
     @test count(==("try_table"), nn) == 2 && count(==("unreachable"), nn) == 2
     # a try region's entry, exit and pop are the stackifier's structure and emit nothing; its catch's
     # exception and exception-edge values are read where visit_block translates them, never as statements
@@ -142,13 +142,21 @@ end
     local re = findfirst(st -> Meta.isexpr(st, :invoke) && st.args[2] isa GlobalRef && st.args[2].name === :rethrow, src.code)
     @test re !== nothing && handlers.exception_at[re] == enter && handlers.exception_at[enter] == 0
     # rt's body: the stashed exception thrown with the exception tag after its catch's type test
-    local names = generated_instructions(TryGenCases.rt, (Int64,))
+    local names = generated_instructions(TryGenCases.rt, (Int64,); standalone = true)
     @test count(==("throw"), names) == 1
     # run by node, each answers as native Julia: a rethrow caught by the caller, a finally's exception
     # exit, an inner rethrow under two catches
     for (f, xs) in ((TryGenCases.rt_of, Int64[3, -1, -9]), (TryGenCases.fin_of, Int64[3, -1, -9]), (TryGenCases.nest_of, Int64[3, -1, -9]))
         queue_native!(string(nameof(f)), W.compile(f, (Int64,); optimize = false), f, [(x,) for x in xs])
     end
+end
+
+@testset "code_generator.dart: outside standalone mode a catch catches a JS exception, a located gap" begin
+    # dart's catch of the JS tag boxes the JS exception through the runtime's boxJsException, not
+    # ported: the catch rejects there, never a module whose catch lets a JS exception pass
+    local ns = D.WasmCompilerOptions(; main_uri = "", output_file = "out/prog.wasm"); ns.translator_options.generate_source_maps = false
+    local r = rejection(() -> D.compile(ns, W.check_subset(TryGenCases.tc, (Int64,), "tc")))
+    @test r.rejection isa W.Unported && r.rejection.anchor == "sdk/lib/_internal/wasm/js_common/js_helper.dart:803 boxJsException"
 end
 
 @testset "types.dart's type tests read the code generator's late builder" begin
