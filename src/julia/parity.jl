@@ -522,7 +522,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv", "julia/src/ccall",
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types", "julia/base/hashing", "julia/base/expr",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3",
-    "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation",
+    "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation", "julia/src/method",
 )
 
 """
@@ -674,7 +674,7 @@ end
 
 # the methods defined in `file`, read from Julia's one method table (Core.methodtable): wasm_array.jl's
 # operations, the native bodies src/patch's overlays call
-@quarantine "julia/src/julia.h:905 jl_methtable_t is Julia's one table of every method, each recording its file" Base.visit function _methods_of_file(file::String)::Vector{Method}
+@quarantine "julia/src/method.c:1191 jl_method_def records each method's file as it defines it, which this reads back from Julia's method table" Base.visit function _methods_of_file(file::String)::Vector{Method}
     local out = Method[]
     Base.visit(m -> string(m.file) == file && push!(out, m), Core.methodtable)
     return out
@@ -1634,16 +1634,29 @@ end
 # a refusal at its line: the anchor's form and file, the file outside src/julia (and loaded by
 # include_dart, in WasmTarget), the Julia name the rule admits, the anchor resolved at the pin.
 # Its steps follow dart's OverrideVerifier.visitMethodDeclaration, which checks `@override` where it is
-# written, one to one: it finds the annotation (`element.metadata.hasOverride`) where this reads
+# written, one to one: it finds the annotation (`element.metadata.hasOverride`, :70) where this reads
 # @parity's anchor (`parse_anchor`); it resolves the member the annotation claims through the
-# inheritance manager (`_isOverride`) where this resolves the anchor in the pinned dart declarations
+# inheritance manager (`_isOverride`, :121) where this resolves the anchor in the pinned dart declarations
 # (`_anchor_fault`, and `_form_fault` for a class's mirror); it reports a located diagnostic
-# (`diag.overrideOnNonOverridingMethod.at(node.name)`) where this refuses at the definition's line.
+# (`diag.overrideOnNonOverridingMethod.at(node.name)`, :73) where this refuses at the definition's line.
 # Julia's differs: the anchor names a declaration of another language's source at a pinned commit, not
-# an inherited member of the same program, so it is read from the pinned file's text. Steps with no
-# counterpart there, WasmTarget's own file map and naming: the pin tables' membership, the file's
-# place (outside src/julia, loaded by include_dart), a ported struct's one inner constructor, and the
-# naming rule (`_admitted_names`)
+# an inherited member of the same program, so it is read from the pinned file's text. Its other steps:
+# - the switch on the element's kind (:71, a diagnostic each for a method, a getter and a setter): no
+#   counterpart; a Julia definition is one form, a method of a function, and one refusal names any;
+# - `_isOverride`'s return on no enclosing class (:123): no counterpart; an anchor names its own file
+#   and class, and an anchor no pinned line declares is refused by `_anchor_fault`;
+# - `_isOverride`'s return on a nameless member (:131), a parse error already reported: the anchor
+#   that reads as no anchor (`parse_anchor` nothing), refused here as dart's parser reports it;
+# - `super.visitMethodDeclaration` (:86), the visitor's walk on: no counterpart; the macro checks each
+#   definition where it is written, and the load checks every one, with no tree to walk;
+# - here, the anchor a string literal: dart's annotation is a constant expression the analyzer
+#   evaluates; Julia's macro sees the literal, and refuses any other expression;
+# - here, an @unported stub expanded (`_unported`): no counterpart; dart has no stub of a declaration;
+# - here, the resolution only for WasmTarget's own modules (`own`): dart's analyzer verifies the
+#   library it analyzes, not its dependencies, the same scope;
+# - here, WasmTarget's own file map and naming: the pin tables' membership, the file's place (outside
+#   src/julia, loaded by include_dart), a ported struct's one inner constructor, and the naming rule
+#   (`_admitted_names`): no counterpart in OverrideVerifier
 @quarantine "dart's analyzer checks an annotation where it is written, as pkg/analyzer/lib/src/error/override_verifier.dart:68 OverrideVerifier.visitMethodDeclaration checks @override" Base.readlines function _parity_entry(mod::Module, source::LineNumberNode, anchor, def)::Tuple{ParityEntry,Any}
     local refuse(why) = throw(ConstructionViolation("@parity", "$(_at(source)): $why"))
     anchor isa String || refuse("the anchor is not a string literal")
