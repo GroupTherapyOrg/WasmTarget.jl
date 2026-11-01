@@ -45,3 +45,36 @@ units(bytes) = join(Int.(transcode(UInt16, collect(bytes))), ",")
 end
 
 end
+
+module PrintPatchTest
+using Test, WasmTarget
+const W = WasmTarget
+const D = WasmTarget.Dart2Wasm
+const J = WasmTarget.Dart2Wasm.JS
+# a program that prints through the JS patch's printToConsole, then answers its argument
+said(x::Int64) = (W.Runtime.print_to_console("héllo"); x)
+@testset "js_common/print_patch.dart: printToConsole hands its line to the JS runtime's inline JS" begin
+    local world = W.build_nir(W.check_subset(said, (Int64,), "print_patch"), "print_patch")
+    # the method whose body holds the inline JS: printToConsole's, or its caller's where Julia inlined it
+    local mi = only(b.ci.def for b in world if W.nir_js_code(world, b.ci.def) !== nothing)
+    @test W.nir_js_code(world, mi) == "s => printToConsole(s)"
+    # generateJsMethods writes the method under the name the code generator imports it by
+    local namer = D.InteropMemberNamer(world, D.Namer(), D.TranslatorOptions())
+    local body = only(b for b in world if b.ci.def === mi)
+    local site = W.nir_foreign_import(body, only(st for st in body.stmts if st isa W.NirForeignCall && st.args[1].c.val[2] == "dart2wasm"))
+    local name = D.get_import_name(namer._interop_helper_member_namer, site, mi)
+    @test name.module_name == "dart2wasm"
+    @test D.generate_js_methods(J.RuntimeFinalizer(namer), [mi, mi]) == "      $(name.item_name): s => printToConsole(s),\n"
+    # the module imports the inline JS from the interop module, and run with JS's console for the
+    # runtime's printToConsole it prints the line and answers 7
+    local path = tempname() * ".wasm"
+    write(path, W.compile(said, (Int64,)))
+    local script = "(async () => { const m = await WebAssembly.compile(require('fs').readFileSync(process.argv[1]), {builtins: ['js-string'], importedStringConstants: ''}); " *
+        "const imps = WebAssembly.Module.imports(m).filter(i => i.module === 'dart2wasm'); " *
+        "const dart2wasm = Object.fromEntries(imps.map(i => [i.name, s => console.log(s)])); " *
+        "const i = await WebAssembly.instantiate(m, {dart2wasm}); console.log(imps.length + ' ' + i.exports.said(7n)); })()"
+    local out = readchomp(`node -e $script $path`)
+    rm(path)
+    @test out == "héllo\n1 7"
+end
+end

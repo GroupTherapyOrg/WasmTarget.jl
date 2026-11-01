@@ -126,9 +126,20 @@ end
 @parity "dart2wasm/lib/namer.dart:111 _InteropHelperMemberNamer" _InteropHelperMemberNamer(options::TranslatorOptions)::_InteropHelperMemberNamer =
     _InteropHelperMemberNamer(Val(:_), options)
 
-# dart's JsInteropMemberData.fromMember: a Julia method carries no JS interop annotation, so no member
-# is a helper import
+# dart's JsInteropMemberData.fromMember: a Julia member carries no JS interop annotation, so no member
+# is a helper import; the procedure dart's specializer makes of an inline JS site is the site itself
+# (the method below)
 @parity "dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName" get_import_name(self::_InteropHelperMemberNamer, member::Core.MethodInstance)::Nothing = nothing
+
+# the import name of an inline JS site, the foreign call to the interop module (NirForeignImport) in
+# `enclosing`'s body, the procedure dart's specializer makes of a JS<T> call: the interop module and a
+# JS-safe name minted once per enclosing method, which hands its host one JS code (nir_js_code)
+@parity "dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName" function get_import_name(self::_InteropHelperMemberNamer, site::NirForeignImport, enclosing::Core.MethodInstance)::Util.ImportName
+    site.lib == JS_INTEROP_LIBRARY ||
+        reject!(Internal("dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName: the foreign call $(site.lib).$(site.name), no inline JS site"), "$enclosing")
+    return Util.ImportName(self.interop_module_name,
+        get!(() -> get_name(self._interop_helper_namer, string((enclosing.def::Method).name); js_safe_name = true), self.interop_member_names, enclosing))
+end
 
 """
 The interop namer over the closed world, the export namer and the options.

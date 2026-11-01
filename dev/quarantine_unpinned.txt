@@ -234,7 +234,6 @@ julia/parity.jl REASON_ANCHOR_RX
 julia/parity.jl REASON_PATH_RX
 julia/parity.jl REASON_PRECEDENT_RX
 julia/parity.jl REGISTRY
-julia/parity.jl RUNTIME_FILES
 julia/parity.jl RUNTIME_MODULES
 julia/parity.jl RegistryEntry
 julia/parity.jl SRC

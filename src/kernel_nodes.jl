@@ -69,7 +69,6 @@ end
 @parity "dart2wasm/lib/kernel_nodes.dart:645 KernelNodes.throwWasmRefError" throw_wasm_ref_error(self::KernelNodes)::Union{} =
     reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:87 _TypeError._throwWasmRefError"), "KernelNodes.throwWasmRefError: the thrower of a failed reference downcast")
 
-# dart:_internal's printToConsole, as the target's patch defines it (standalone or JS), of dart's
 # dart:core's Error._throw, the runtime's thrower (src/runtime/common/errors_patch.jl), which the
 # intrinsifier lowers to wasm's throw: its method in the closed world, reached through
 # _throwWithCurrentStackTrace, an entry point
@@ -81,9 +80,14 @@ end
 @parity "dart2wasm/lib/kernel_nodes.dart:681 KernelNodes.errorThrowWithCurrentStackTrace" error_throw_with_current_stack_trace(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime.Error__throw_with_current_stack_trace, "KernelNodes.errorThrowWithCurrentStackTrace")
 
-# runtime library at the pin, not ported: Unported there
-@parity "dart2wasm/lib/kernel_nodes.dart:845 KernelNodes.printToConsole" print_to_console(self::KernelNodes)::Union{} =
-    reject!(Unported(is_standalone(self) ? "sdk/lib/_internal/wasm/standalone/print_patch.dart:9 printToConsole" : "sdk/lib/_internal/wasm/js_common/print_patch.dart:8 printToConsole"), "KernelNodes.printToConsole")
+# dart:_internal's printToConsole, as the target's patch defines it: the JS patch's
+# (src/runtime/js_common/print_patch.jl), its method in the closed world; the standalone patch's
+# (embedder.print) not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:845 KernelNodes.printToConsole" function print_to_console(self::KernelNodes)::Core.MethodInstance
+    is_standalone(self) &&
+        reject!(Unported("sdk/lib/_internal/wasm/standalone/print_patch.dart:9 printToConsole"), "KernelNodes.printToConsole")
+    return nir_runtime_member(self.component, Runtime.print_to_console, "KernelNodes.printToConsole")
+end
 
 # dart:_embedder's stringFromCharCodeArray, the standalone embedder's import, of dart's runtime library at the pin, not ported: Unported there
 @parity "dart2wasm/lib/kernel_nodes.dart:851 KernelNodes.embedderStringFromCharCodeArray" embedder_string_from_char_code_array(self::KernelNodes)::Union{} =

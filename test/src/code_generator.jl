@@ -298,8 +298,10 @@ end
     @test emitted_by(() -> D.translate_variable(g, W.NirSSA(1)), g) == ["local.get", "i32.const 1", "i32.add", "local.set"]
     @test rejection(() -> D.translate_variable(g, W.NirArgument(2))).rejection isa W.Internal
     @test emitted_by(() -> D.initialize_variable(g, W.NirSSA(1), () -> W.WasmBuilder.i32_const(g.b[], 7)), g) == ["i32.const 7", "local.set"]
-    # the runtime's printToConsole is not ported: Unported at its definition
-    @test occursin("printToConsole", rejection(() -> D.debug_runtime_print(g, "x")).rejection.anchor)
+    # the runtime's printToConsole (the JS patch's) is called where the closed world holds it; this one
+    # holds none, WasmTarget's own defect, located
+    local dp = rejection(() -> D.debug_runtime_print(g, "x")).rejection
+    @test dp isa W.Internal && occursin("print_to_console", sprint(show, dp))
 end
 
 @testset "code_generator.dart: a PiNode is the unchecked as" begin

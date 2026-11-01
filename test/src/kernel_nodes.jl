@@ -33,7 +33,11 @@ g(x::Int) = x < 0 ? throw(DomainError(x)) : x
     @test anchor(D.stack_trace_current, js) == "sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"
     local throwing = D.Translator(W.build_nir(W.check_subset(g, (Int,), "kernel_nodes"), "kernel_nodes"), data(), D.TranslatorOptions(; standalone = true))
     @test D.stack_trace_current(throwing).def === only(methods(W.Runtime.StackTrace_current))
-    @test anchor(D.print_to_console, js) == "sdk/lib/_internal/wasm/js_common/print_patch.dart:8 printToConsole"
+    # the JS patch's printToConsole is ported (src/runtime/js_common/print_patch.jl): its method in a closed
+    # world that holds it, an Internal where none does
+    local printing = D.Translator(W.build_nir(W.check_subset(W.Runtime.print_to_console, (String,), "kernel_nodes"), "kernel_nodes"), data(), D.TranslatorOptions())
+    @test D.print_to_console(printing).def === only(methods(W.Runtime.print_to_console))
+    @test anchor(D.print_to_console, js) isa W.RejectionError && anchor(D.print_to_console, js).rejection isa W.Internal
     @test anchor(D.print_to_console, standalone) == "sdk/lib/_internal/wasm/standalone/print_patch.dart:9 printToConsole"
     @test D._string_impl_class_name(js) == "JSStringImpl" && D._string_impl_class_name(standalone) == "EmbedderStringImpl"
     # each anchor names a line of the pinned sdk that declares it
@@ -41,7 +45,7 @@ g(x::Int) = x < 0 ? throw(DomainError(x)) : x
     if sdk !== nothing
         for (fn, t) in ((D.throw_wasm_ref_error, js), (D.embedder_string_from_char_code_array, standalone),
                         (D.embedder_string_from_ascii_bytes, standalone), (D.stack_trace_current, js),
-                        (D.print_to_console, js), (D.print_to_console, standalone))
+                        (D.print_to_console, standalone))
             local a = anchor(fn, t)
             local (path, rest) = split(a, ':'; limit = 2)
             local (line, name) = split(rest, ' '; limit = 2)

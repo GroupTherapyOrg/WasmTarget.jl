@@ -538,9 +538,10 @@ precedent(dart: the sdk's @patch libraries, each `part` of its library, as DART_
 a runtime library of Julia methods compiled with every kernel). Julia's differs: `include` takes any
 path, so the runtime's file map is a table too.
 """
-@quarantine "Julia's include takes any path; the runtime pin table is the file map of dart's patch libraries' ports" Core.String const RUNTIME_FILES::Tuple{Vararg{String}} = (
+@quarantine "Julia's include takes any path; the runtime pin table is the file map of the ports of the runtime libraries dart compiles every program with (pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries)" Core.String const RUNTIME_FILES::Tuple{Vararg{String}} = (
     "sdk/lib/_internal/wasm/common/errors_patch.dart",
     "sdk/lib/_internal/wasm/js_common/js_string.dart",
+    "sdk/lib/_internal/wasm/js_common/print_patch.dart",
     "sdk/lib/_internal/wasm/standalone/embedder.dart",
     "sdk/lib/_internal/wasm/standalone/stack_trace_patch.dart",
 )

@@ -1525,7 +1525,7 @@ end
     target.lib == STANDALONE_EMBEDDER_MODULE && !is_standalone(self.translator) &&
         reject!(Unquarantined("src/julia/runtime/rtutils.jl: the standalone embedder's $(target.lib).$(target.name) outside standalone mode, whose caller's JS patch is not ported"), "$(self.enclosing_member)")
     local b = self.b[]
-    local function_ = get_function(self.translator.functions[], target, b.module_builder)
+    local function_ = get_function(self.translator.functions[], target, b.module_builder, self.enclosing_member)
     for (operand, input) in zip(nir_foreign_operands(node), function_.type.inputs)
         translate_expression(self, operand, input)
     end
@@ -2192,10 +2192,14 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3384 AstCodeGenerator.visitIfCaseStatement" visit_if_case_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     no_counterpart_rejection("IfCaseStatement", "dart2wasm/lib/code_generator.dart:3384 AstCodeGenerator.visitIfCaseStatement", "$(self.enclosing_member)")
 
-# dart's runtime printToConsole (kernel_nodes.dart:845), not ported: Unported at its definition for the
-# JS embedding (A52S1's ruling for a runtime function)
-@parity "dart2wasm/lib/code_generator.dart:3390 AstCodeGenerator.debugRuntimePrint" debug_runtime_print(self::AstCodeGenerator, s::String)::Union{} =
-    reject!(Unported("sdk/lib/_internal/wasm/js_common/print_patch.dart:8 printToConsole"), "$(self.enclosing_member): a debug print")
+# dart's runtime printToConsole (kernel_nodes.dart:845, the JS patch's), called with the string
+# constant; its method must be in the closed world (KernelNodes.printToConsole)
+@parity "dart2wasm/lib/code_generator.dart:3390 AstCodeGenerator.debugRuntimePrint" function debug_runtime_print(self::AstCodeGenerator, s::String)::Nothing
+    local print_function = get_function(self.translator.functions[], print_to_console(self.translator))
+    instantiate_constant_backend_use(self, NirConst(Core.Const(s)), print_function.type.inputs[1])
+    call_function(self.translator, print_function, self.b[])
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:3402 AstCodeGenerator.visitAuxiliaryStatement" visit_auxiliary_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     no_counterpart_rejection("AuxiliaryStatement", "dart2wasm/lib/code_generator.dart:3402 AstCodeGenerator.visitAuxiliaryStatement", "$(self.enclosing_member)")

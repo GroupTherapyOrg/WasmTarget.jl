@@ -198,18 +198,22 @@ signature, reusing a declaration already there (julia/src/ccall.cpp:1980
 function_sig_t::emit_a_ccall's getOrInsertFunction): the import is found in `module_` by its module,
 name and type, or made there.
 """
-@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::NirForeignImport, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.BaseFunction
+@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::NirForeignImport, module_::WasmBuilder.ModuleBuilder, enclosing::Core.MethodInstance)::WasmBuilder.IR.BaseFunction
     local translator = self.translator
-    local import_name = Util.ImportName(target.lib, target.name)
+    # an inline JS site imports from the interop module under the interop namer's name for it, as dart's
+    # getFunction imports a JsCodeData procedure by the namer's import name (namer.dart:117); a host
+    # call imports `<library>.<symbol>`
+    local import_name = target.lib == JS_INTEROP_LIBRARY ? get_import_name(interop_namer(self)._interop_helper_member_namer, target, enclosing) :
+        Util.ImportName(target.lib, target.name)
     local ftype = _make_function_type(translator, target, nothing; is_import_or_export = true, synthesize_null_return_value = false, synthesize_no_return = false)
     for (t, w) in zip((target.params..., target.rt), (ftype.inputs..., ftype.outputs...))
         w == WasmBuilder.IR.RefType_any(; nullable = true) &&
             reject!(Unquarantined("src/functions.jl getFunction: the host import $(sprint(show, import_name)) passes $t, which has no wasm boundary type"), "$(sprint(show, import_name))")
     end
     for f in module_.functions[]._imported_functions
-        f.module_ == target.lib && f.name == target.name && f.type === ftype && return f
+        f.module_ == import_name.module_name && f.name == import_name.item_name && f.type === ftype && return f
     end
-    return WasmBuilder.var"import"(module_.functions[], target.lib, target.name, ftype, "$(sprint(show, import_name)) (import)")
+    return WasmBuilder.var"import"(module_.functions[], import_name.module_name, import_name.item_name, ftype, "$(sprint(show, import_name)) (import)")
 end
 
 @parity "dart2wasm/lib/functions.dart:192 FunctionCollector.hasDynamicSelectorCall" has_dynamic_selector_call(self::FunctionCollector, shape::CallShape)::Bool = shape in self._called_dynamic_selectors
