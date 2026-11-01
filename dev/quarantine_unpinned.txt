@@ -179,7 +179,6 @@ julia/nir.jl construction_check(::Val{:NirStmt})::Int
 julia/nir.jl construction_check(::Val{:NirValue})::Int
 julia/nir.jl nir_argument_type
 julia/nir.jl nir_binding_is_constant
-julia/nir.jl nir_binding_value
 julia/nir.jl nir_body_of
 julia/nir.jl nir_callee
 julia/nir.jl nir_carries_data

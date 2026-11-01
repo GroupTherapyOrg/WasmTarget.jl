@@ -289,6 +289,38 @@ loads; a caller outside the package can still reach the token, a limit of the la
 end
 
 """
+    runtime_initializers() -> Vector{Function}
+
+The runtime's module initializers: the `__init__` of each module of Core and Base, their submodules
+among them, that defines one (Julia 1.12: Base's, Base.GMP's, Base.MPFR's and Base.Sys's). They are
+the image's init list (`jl_module_init_order`, julia/src/init.c:618-628 runs it at startup), which the
+running session has already emptied (`jl_module_init_order = NULL`), so the modules are walked here,
+each submodule its parent binds under its own name. Looking bindings up by computed names is
+reflection, so it lives in this file, as core_kinds does.
+
+precedent(julia: juliac's trim takes each module of the init list as an entrypoint, the worklist of
+julia/src/precompile.c:98 jl_write_compiler_output). Julia's differs: the session's list is
+gone, so its modules are found again by walking the runtime's module tree.
+"""
+@quarantine "julia/src/init.c:563 _finish_jl_init_ runs the init list at startup, its modules found again here by walking Core's and Base's submodules, reflection by computed names" Base.parentmodule function runtime_initializers()::Vector{Function}
+    local out = Function[]
+    local seen = Base.IdSet{Module}()
+    local queue = Module[Core, Base]
+    while !isempty(queue)
+        local m = popfirst!(queue)
+        m in seen && continue
+        push!(seen, m)
+        isdefined(m, :__init__) && parentmodule(getglobal(m, :__init__)) === m && push!(out, getglobal(m, :__init__))
+        for n in names(m; all = true)
+            isdefined(m, n) || continue
+            local b = getglobal(m, n)
+            b isa Module && b !== m && parentmodule(b) === m && push!(queue, b)
+        end
+    end
+    return out
+end
+
+"""
     core_kinds() -> Tuple{Vararg{DataType}}
 
 Julia's kinds, the concrete types of a type as a value: every type Core binds that `Base.iskindtype`

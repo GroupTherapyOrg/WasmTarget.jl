@@ -111,11 +111,19 @@ end
     @test v.c.val === InitTwice.seen
     local w = WasmTarget.check_subset(InitTwice.read_seen, (Int,), "test")
     @test !any(x -> x isa Core.CodeInstance && x.def isa Core.MethodInstance && x.def.def.name === :__init__, w.codeinfos)
-    # a binding of the runtime that is not const, or holds a mutable value, is host state Base.__init__
-    # set: rejected, located, naming it; a const value free of mutation is Julia's own
-    for ref in (GlobalRef(Base, :stdout), GlobalRef(Base, :DEPOT_PATH), GlobalRef(Base.Sys, :CPU_THREADS))
+    # host state, by the closed world of the runtime's initializers (runtime_init_bindings, Julia's trim
+    # over juliac's init list): (a) a binding no const holds that one touches (stdout, Sys.CPU_THREADS),
+    # (b) a const object one passes to a call Julia's effects infer may write (DEPOT_PATH): rejected,
+    # located, naming the initializer; a const table they only read (base36digits, powers_of_ten), and a
+    # const free of mutation, start at their session value, as a juliac image holds them
+    @test WasmTarget.runtime_initializers() == Function[Base.__init__, Base.GMP.__init__, Base.MPFR.__init__, Base.Sys.__init__]
+    for (ref, init, how) in ((GlobalRef(Base, :stdout), "Base.__init__", "sets or reads"), (GlobalRef(Base, :DEPOT_PATH), "Base.__init__", "mutates"),
+                             (GlobalRef(Base.Sys, :CPU_THREADS), "Base.Sys.__init__", "sets or reads"))
         local e = _rejection(() -> WasmTarget.nir_binding_value(ref, "test"))
-        @test e isa WasmTarget.Unquarantined && occursin("Base.__init__ (the runtime's)", e.row)
+        @test e isa WasmTarget.Unquarantined && occursin("$init (the runtime's) $how", e.row)
+    end
+    for (m, n) in ((Base, :base36digits), (Base, :powers_of_ten))
+        @test WasmTarget.nir_binding_value(GlobalRef(m, n), "test").c.val === getglobal(m, n)
     end
     @test WasmTarget.nir_binding_value(GlobalRef(Base.Sys, :WORD_SIZE), "test").c.val === Sys.WORD_SIZE
     @test WasmTarget.runtime_module(Base.Sys) && WasmTarget.runtime_module(Core.Compiler) && !WasmTarget.runtime_module(InitTwice) && !WasmTarget.runtime_module(Main)
