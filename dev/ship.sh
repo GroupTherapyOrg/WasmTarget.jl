@@ -24,7 +24,10 @@ fi
 since=$(date -u -v-60M +%FT%TZ 2>/dev/null || date -u -d '-60 min' +%FT%TZ)
 for s in $(git log --format=%s "origin/wt2..HEAD" 2>/dev/null | cut -c1-60 | tr ' ' '\001'); do
   s=$(printf '%s' "$s" | tr '\001' ' ')
-  n=$(awk -F'\t' -v t="$since" -v s="$s" '$1 >= t && index($3, s) && $4 ~ /past D14/' "$common/wt-ship-failures.tsv" 2>/dev/null | wc -l | tr -d ' ')
+  # a red counts only past today's band (dev/check.sh's D14_RED): a red the band now admits was no red
+  n=$(awk -F'\t' -v t="$since" -v s="$s" -v band="$(sed -n 's/^D14_RED=\([0-9]*\).*/\1/p' dev/check.sh)" \
+    '$1 >= t && index($3, s) && $4 ~ /past D14/ && match($4, /[0-9]+ s, past/) && substr($4, RSTART, RLENGTH - 8) + 0 > band + 0' \
+    "$common/wt-ship-failures.tsv" 2>/dev/null | wc -l | tr -d ' ')
   [ "$n" -ge 2 ] && { echo "ship: REFUSED — \"$s\" went red on D14 alone $n times in the last hour; the ruling allows one retry"; exit 2; }
 done
 [ -z "$(git status --porcelain --untracked-files=no)" ] || echo "ship: uncommitted changes stay here and are not landed"
