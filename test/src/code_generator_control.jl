@@ -151,6 +151,30 @@ end
     end
 end
 
+module HintCases
+mutable struct Cell; x::Int64; end
+@noinline peek(c::Cell) = c.x
+# a GC preservation region around a call, and a loop carrying Julia's @simd hint
+pres(x::Int64) = (c = Cell(x); GC.@preserve c begin peek(c) + 1 end)
+simdsum(n::Int64) = (s = 0; @simd for i in 1:n; s += i; end; s)
+hints(x::Int64) = pres(x) + 1000 * simdsum(x)
+end
+
+@testset "code_generator.dart: a GC preservation region and a loop hint, statements with no wasm effect" begin
+    # each emits nothing, as Julia's codegen gives neither a wasm effect (GC rooting, LLVM loop metadata)
+    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    for st in (W.NirGCPreserveBegin(W.NirValue[W.NirArgument(2)]), W.NirGCPreserveEnd(W.NirValue[W.NirSSA(1)]),
+               W.NirLoopInfo(W.NirValue[W.NirConst(Core.Const(Symbol("julia.simdloop"))), W.NirConst(Core.Const(nothing))]))
+        @test isempty(emitted_by(() -> D.translate_statement(g, st, nothing), g))
+    end
+    # the begin's token, used by its end, is read by no other statement: none takes it as a value
+    @test rejection(() -> D.translate_expression(g, W.NirGCPreserveBegin(W.NirValue[W.NirArgument(2)]), IR.NumType_i32)).rejection isa W.Internal
+    # both forms in one program, run by node, answer as native Julia
+    local src = only(code_typed(HintCases.hints, (Int64,); optimize = true))[1]
+    @test any(st -> Meta.isexpr(st, :gc_preserve_begin), src.code) && any(st -> Meta.isexpr(st, :loopinfo), src.code)
+    queue_native!("hints", W.compile(HintCases.hints, (Int64,); optimize = false), HintCases.hints, [(x,) for x in Int64[0, 3, 100]])
+end
+
 @testset "code_generator.dart: outside standalone mode a catch catches a JS exception, a located gap" begin
     # dart's catch of the JS tag boxes the JS exception through the runtime's boxJsException, not
     # ported: the catch rejects there, never a module whose catch lets a JS exception pass

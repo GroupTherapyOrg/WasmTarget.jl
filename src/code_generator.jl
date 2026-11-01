@@ -903,8 +903,8 @@ end
                 WasmBuilder.i32_const(self.b[], (opt == 1 ? true : opt == 2 ? false : arg) ? 1 : 0)
                 WasmBuilder.IR.NumType_i32
             end
-            NirGCPreserveBegin => reject!(Unquarantined("src/julia: Julia's Expr(:gc_preserve_begin) as a value"), "$(self.enclosing_member)")
-            NirGCPreserveEnd => reject!(Unquarantined("src/julia: Julia's Expr(:gc_preserve_end)"), "$(self.enclosing_member)")
+            NirGCPreserveBegin => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's gc_preserve_begin token, which only its gc_preserve_end reads (translateStatement), as a value"), "$(self.enclosing_member)")
+            NirGCPreserveEnd => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's gc_preserve_end, a statement with no wasm effect (translateStatement), as a value"), "$(self.enclosing_member)")
             NirTheException => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's Expr(:the_exception), a statement visit_block translates, as a value"), "$(self.enclosing_member)")
             NirThrowUndefIfNot => reject!(Unquarantined("src/julia: Julia's Expr(:throw_undef_if_not)"), "$(self.enclosing_member)")
             NirCFunction => reject!(Unquarantined("src/julia: Julia's Expr(:cfunction), a quarantined host import (dev/MARCH.md 1.F)"), "$(self.enclosing_member)")
@@ -984,8 +984,12 @@ map.
         (s::NirForeignCall) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirCFunction) => reject!(Unquarantined("src/functions.jl getFunction: a C function pointer's host import, dart's wasm:import arm (dev/MARCH.md 1.F)"), at)
         (s::NirBoundscheck) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
-        (s::NirGCPreserveBegin) => reject!(Unquarantined("src/code_generator.jl translateStatement: Julia's GC preservation region, which WasmGC's references keep alive (dev/MARCH.md 1.D)"), at)
-        (s::NirGCPreserveEnd) => reject!(Unquarantined("src/code_generator.jl translateStatement: Julia's GC preservation region, which WasmGC's references keep alive (dev/MARCH.md 1.D)"), at)
+        # Julia's GC preservation region: its codegen roots the values for its own collector
+        # (julia/src/codegen.cpp's emit_expr, gc_preserve_begin and gc_preserve_end, the token its late
+        # GC lowering consumes); WasmGC traces every live reference, so the region has no wasm effect,
+        # its token read by its end alone
+        (s::NirGCPreserveBegin) => nothing
+        (s::NirGCPreserveEnd) => nothing
         # control leaves a try region by the stackifier's branch out of its TRY_TABLE (visit_block)
         (s::NirLeave) => nothing
         # Julia's exception stack has no reader: the_exception reads its catch's CATCH local
@@ -993,7 +997,9 @@ map.
         # Base.current_exceptions is a foreign call
         (s::NirPopException) => nothing
         (s::NirTheException) => reject!(Internal("$at: the caught exception, which visit_block reads from its catch's CATCH local, as a statement"), at)
-        (s::NirLoopInfo) => reject!(Unquarantined("src/code_generator.jl translateStatement: Julia's loop hints, LLVM's loop metadata (dev/MARCH.md 1.D)"), at)
+        # Julia's loop hints: its codegen makes them the loop's LLVM metadata (julia/src/codegen.cpp's
+        # emit_expr, loopinfo, ctx.LoopID), an optimizer hint WebAssembly's backend emits nothing for
+        (s::NirLoopInfo) => nothing
         (s::NirThrowUndefIfNot) => reject!(Unquarantined("src/julia/runtime/rtutils.jl: Julia's undefined-variable check, its UndefVarError raise (jl_undefined_var_error)"), at)
         (s::NirInvokeModify) => reject!(Unquarantined("src/code_generator.jl visitInstanceSet: an atomic field modify (modifyfield!), its read, call and write"), at)
         (s::NirGoto) => reject!(Internal("$at: a jump of the flat IR, which the stackifier's BR carries (visit_block), as a statement"), at)
