@@ -12,7 +12,6 @@ julia/classes.jl ClassField
 julia/classes.jl _KINDS
 julia/classes.jl _kind_instance_fields
 julia/classes.jl _meet_class!
-julia/classes.jl _meet_constant!
 julia/classes.jl _meet_value!
 julia/classes.jl _memory_element_storage
 julia/classes.jl _memory_instance_fields

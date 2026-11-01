@@ -73,7 +73,11 @@ end
 # immutable one by Julia's ===, a literal's key (NirConst, its hash bounded), so a constant whose
 # immutable fields share heap objects is walked in linear time, never once per path (a 40-level DAG
 # has 2^40). A field declared abstract (Any) holds a value whose class only the value tells.
-@quarantine "a constant is Julia's object graph, each value's class its typeof" Base.isdefined function _meet_constant!(out::Vector{DataType}, seen::Base.IdSet{DataType}, objs::Set{NirConst}, @nospecialize(v), at::String)::Nothing
+# precedent(dart: dart2wasm's record class collection walks each constant's children once, its cache
+# a Set.identity of the constants met, record_class_generator.dart:773; kernel's
+# VisitOnceConstantVisitor.visitConstant, visitor.dart:1546, the same rule). Julia's differs: a constant
+# is no canonical node, so an immutable value is met by === (its NirConst key), a mutable one by identity.
+@quarantine "a constant's object graph is walked once per object, as dart2wasm's record class collection visits each constant's children once (pkg/dart2wasm/lib/record_class_generator.dart:773 _RecordVisitor.defaultConstantReference); a Julia constant is keyed by === where dart's canonical node is keyed by identity" Base.Set function _meet_constant!(out::Vector{DataType}, seen::Base.IdSet{DataType}, objs::Set{NirConst}, @nospecialize(v), at::String)::Nothing
     if !isbits(v)
         local key = NirConst(Core.Const(v))
         key in objs && return nothing
