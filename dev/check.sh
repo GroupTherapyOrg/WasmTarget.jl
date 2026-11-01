@@ -37,8 +37,8 @@ line_stop
 # A separate check slot that anything could take was a second gate on the same thing, and an ad-hoc run
 # holding it stalled a landing's check and nine ships behind it for five minutes (2026-10-29 10:01).
 export JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2
-# the landing compiles a fixed core of the dart corpus, never a set that grows with the port; the whole
-# corpus runs beside the landings on wt2's head (dev/corpus.sh, test/src/dart_tests.jl)
+# the landing compiles no case of the dart corpus, only proving the native answers a change adds or edits; the
+# whole corpus runs beside the landings on wt2's head (dev/corpus.sh, test/src/dart_tests.jl)
 export WT_LANDING_CORE=1
 mkdir -p .wtd; s0=$(date +%s)
 base=${CHECK_BASE:-origin/wt2}

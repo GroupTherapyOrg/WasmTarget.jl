@@ -27,11 +27,14 @@
 # whole run beside the landings: a change to a definition several groups share (a helper, a struct) edits
 # other groups' answers while its group text alone differs, and the whole run proves them all.
 #
-# Under WT_LANDING_CORE=1 (dev/check.sh sets it) the landing compiles a fixed core, the first case of each
-# group, proves the native answer of every case the change adds or edits without compiling it, and runs no
-# module, so the landing's cost is fixed whatever a commit adds (the oscillation's rule 2: a batch of 220
-# ported cases compiled in the landing put its shard at 121 s); the whole corpus, every module it compiles run in node, wasm-opt's beside codegen's, goes beside
-# the landings on wt2's head (without the variable, dev/corpus.sh), its red the next landing's first item.
+# Under WT_LANDING_CORE=1 (dev/check.sh sets it) the landing compiles nothing: it checks every case's record and
+# proves the native answer of every case the change adds or edits, and runs no module, so the landing's cost is
+# fixed whatever a commit adds (the oscillation's rule 2: a batch of 220 ported cases compiled in the landing put
+# its shard at 121 s). A fixed core of first cases compiled in the landing was the check's floor, its one file 37.7
+# s of a 122-s path, and split across files each shard paid WasmTarget's compile paths again (cb339987, red at
+# 150 s, 2026-11-01). The whole corpus, every case compiled and every module run in node, wasm-opt's beside
+# codegen's, goes beside the landings on wt2's head (without the variable, dev/corpus.sh), its red the next
+# landing's first item.
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
 
@@ -1211,10 +1214,9 @@ function _dart_breaks(today::Symbol, got)::String
     return ""
 end
 
-# the landing's fixed core: the first case of each group; a case the change adds or edits has its native answer
-# proven (DART_NATIVE_DUE) and its compile judged by dev/corpus.sh on the head
+# the landing compiles no case: a case the change adds or edits has its native answer proven (DART_NATIVE_DUE), and
+# every compile is judged by dev/corpus.sh on the head
 const _DART_CORE_ONLY = get(ENV, "WT_LANDING_CORE", "") == "1"
-const DART_CORE = Set{String}("$(g)/$(c[1])" for (g, cs) in DART_GROUPS for c in cs[1:min(1, end)])
 
 # a compiled case's modules, each fact of its answer read by test/runner.jl against native Julia's, computed
 # afresh (a stale record is not the module's fault); a reader that does not compile fails the case, named. The
@@ -1304,25 +1306,24 @@ const _DART_COSTS_OUT = get(ENV, "WT_DART_COSTS_OUT", "")
                 if haskey(_DART_RECORDS, key)
                     local today = _dart_kind(key)
                     local f, args = case[2], case[3:end]
-                    # the landing proves a due case's native answer before its compile: no module of it runs
+                    # the landing proves a due case's native answer and compiles nothing; the whole run compiles every case
                     _DART_CORE_ONLY && key in DART_NATIVE_DUE && @test _dart_same(f(args...), _dart_native(key))
-                    if !_DART_CORE_ONLY || key in DART_CORE
+                    if !_DART_CORE_ONLY
                         local timed = @timed _dart_outcome(f, args, key)
                         local (got, own), secs = timed.value, _dart_secs(timed)
                         @test secs <= DART_COMPILE_BUDGET
                         # the record's property; a failure prints why, the rejection's own text in it (A51E9)
                         @test _dart_breaks(today, got) == ""
                         # the modules run in the whole run, every module whatever its record, a wrong answer never
-                        # admitted (A53E2); the landing runs none, its cost fixed (the lead's ruling: a landing
-                        # sample comes later, its cost measured)
+                        # admitted (A53E2)
                         # the whole run proves the native answer after the compiles, the runner's own value
                         # when the modules were read (A61S4: a compile reads the session's heap as it stands)
-                        if got === :compiled && !_DART_CORE_ONLY
+                        if got === :compiled
                             today === :unread && push!(gap_keys, key)
                             local native = _dart_read!(runs, unread, key, f, args, own)
                             nread += 1
                             @test _dart_same(native === nothing ? Main.WTRunner.native_answer(f, args) : something(native), _dart_native(key))
-                        elseif !_DART_CORE_ONLY
+                        else
                             @test _dart_same(Main.WTRunner.native_answer(f, args), _dart_native(key))
                         end
                     end
@@ -1365,7 +1366,7 @@ const _DART_COSTS_OUT = get(ENV, "WT_DART_COSTS_OUT", "")
     end
     global DART_RUN_COUNTS = (nread, length(results), count(r -> r.ok, results))
 end
-println("dart tests: $(_DART_CORE_ONLY ? length(DART_CORE) : length(_DART_RECORDS)) compiles checked$(_DART_CORE_ONLY ? " (the landing core)" : ""); native answers proven for ",
+println("dart tests: $(_DART_CORE_ONLY ? "no compile (the landing)" : "$(length(_DART_RECORDS)) compiles checked"); native answers proven for ",
         _DART_CORE_ONLY ? "the $(length(DART_NATIVE_DUE)) the change adds or edits against $(_DART_BASE)" : "every case", "; $(DART_RUN_COUNTS[1]) compiled cases run in node, $(DART_RUN_COUNTS[3]) of their $(DART_RUN_COUNTS[2]) facts native's")
 
 # _dart_unlocated against its own plants (A51E1, A57E1): a located Unported and Unquarantined admitted, and each

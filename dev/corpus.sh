@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The whole dart corpus, compiled on the march branch's head beside the landings, never in their path.
-# A landing compiles a fixed core of it (dev/check.sh, WT_LANDING_CORE); what grows with the port runs
-# here, once per new head, so a landing's cost stays fixed while the corpus deepens.
+# A landing compiles none of it (dev/check.sh, WT_LANDING_CORE); every case runs here, once per new head, so a
+# landing's cost stays fixed while the corpus deepens.
 #
 #   bash dev/corpus.sh          loop: each new head of origin/wt2, once; idle a minute between looks
 #   bash dev/corpus.sh --once   the current head, once
