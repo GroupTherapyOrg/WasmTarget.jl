@@ -640,7 +640,7 @@ an overlay names nothing but its method's signature, so the load reads each over
 end
 
 """
-    check_overlays_agree(interp, table, helpers) -> Int
+    check_overlays_agree(interp, table, helpers, root = WasmTarget) -> Int
 
 The overlays' agreement (dev/AUDIT.md A69S3): each method of the overlay table `table`, and each of the
 methods `helpers` (the operations an overlay calls, whose native bodies Julia infers), is inferred at its
@@ -656,7 +656,7 @@ overlaid call by the native method when the overlay claims `@consistent_overlay`
 table of Compiler/src/methodtable.jl:37 OverlayMethodTable). Julia's differs: it trusts the
 `@consistent_overlay` claim, where this check reads each one's inferred answer.
 """
-@quarantine "julia/Compiler/src/methodtable.jl:37 OverlayMethodTable redirects a query to an overlay's table apart from Base's; Julia trusts @consistent_overlay (precedent(julia: Compiler/src/abstractinterpretation.jl:935 concrete_eval_eligible) runs the native method for an overlaid call), the load infers each one over both tables" Core.Compiler.AbstractInterpreter function check_overlays_agree(interp::Core.Compiler.AbstractInterpreter, table::Core.MethodTable, helpers::Vector{Method})::Int
+@quarantine "julia/Compiler/src/methodtable.jl:37 OverlayMethodTable redirects a query to an overlay's table apart from Base's; Julia trusts @consistent_overlay (precedent(julia: Compiler/src/abstractinterpretation.jl:935 concrete_eval_eligible) runs the native method for an overlaid call), the load infers each one over both tables" Core.Compiler.AbstractInterpreter function check_overlays_agree(interp::Core.Compiler.AbstractInterpreter, table::Core.MethodTable, helpers::Vector{Method}, root::Module = @__MODULE__)::Int
     local native = Core.Compiler.NativeInterpreter(Core.Compiler.get_inference_world(interp))
     local sigs = Any[]
     Base.visit(m -> push!(sigs, m.sig), table)
@@ -667,6 +667,28 @@ table of Compiler/src/methodtable.jl:37 OverlayMethodTable). Julia's differs: it
     for sig in sigs
         local a, b = answer(sig, native), answer(sig, interp)
         a === b || push!(out, "$sig answers $a natively and $b over the overlay table")
+    end
+    # an effects claim (@assume_effects, a Method's purity), which Julia's inference trusts to fold or delete
+    # a call, stands only on an overlay that keeps the claim of the Base method it replaces, read from that
+    # method; on any other WasmTarget method it is refused (A75S6)
+    local world = Core.Compiler.get_inference_world(interp)
+    local overlays = Set{Method}()
+    # a purity's claims, Julia's own decoding, less the consistent-overlay bit every overlay carries
+    local claims(p) = (local e = Core.Compiler.decode_effects_override(p);
+                       Tuple(getfield(e, f) for f in fieldnames(typeof(e)) if f !== :consistent_overlay))
+    local none = claims(0x0000)
+    Base.visit(table) do m
+        push!(overlays, m)
+        claims(m.purity) == none && return
+        local ms = Base._methods_by_ftype(m.sig, -1, world)
+        local i = ms === nothing ? nothing : findfirst(x -> x.method.sig == m.sig && x.method.module !== m.module, ms)
+        i === nothing && return push!(out, "the overlay $m claims effects (purity $(m.purity)) and replaces no Base method of its signature")
+        claims(ms[i].method.purity) == claims(m.purity) ||
+            push!(out, "the overlay $m claims effects (purity $(m.purity)) its Base method $(ms[i].method) does not (purity $(ms[i].method.purity))")
+    end
+    Base.visit(Core.methodtable) do m
+        _within(m.module, root) && claims(m.purity) != none && !(m in overlays) &&
+            push!(out, "$m at $(m.file):$(m.line) claims effects (purity $(m.purity)) outside an overlay, which no Base claim backs")
     end
     isempty(out) || throw(ConstructionViolation("overlays_agree", join(out, "; ")))
     return 0
