@@ -5,7 +5,7 @@
 # Marshalled: Int32, UInt32, Int64, UInt64, UInt8, Float32, Float64 and Bool, arguments and answer, ReturnsRef(), a
 # read answer's own module returning a non-null reference, an answer of a
 # singleton type (nothing), whose call must return and whose type is its value, and Throws(T), a native call that
-# throws, whose module must raise a wasm exception, neither trap nor return; any other type, a module that imports anything, an entry not found, a trap or a throw is a located failure of its
+# throws, whose module must raise a wasm exception, neither trap nor return; any other type, a module that imports anything but the standalone embedder's `dart` functions the runner gives (dart's own test runner's), an entry not found, a trap or a throw is a located failure of its
 # case, never a skip. An unsigned integer crosses as the signed one of its bits, a float as its bit
 # pattern, so NaN payloads and -0.0 keep their bits.
 # A case carries both modules of its program: compile's own (dartdev's default phases, ending with
@@ -274,6 +274,23 @@ const fromWasm = (t, x) => {
   if (t === 'f32') { dv.setFloat32(0, x); return dv.getUint32(0).toString(16); }
   dv.setFloat64(0, x); return dv.getBigUint64(0).toString(16);
 };
+// the standalone embedder's `dart` imports a module may take, dart's own test runner's
+// (pkg/test_runner/lib/src/browser.dart:441 dartEmbedder, given as {dart: dartEmbedder} at :695): those
+// the runtime's ports import, each as dart's runner writes it
+const dartEmbedder = {
+  // browser.dart:509-519
+  stackTraceGetCurrent: () => new Error().stack,
+  stackTraceToString: (trace) => {
+    const stackString = trace.toString();
+    const frames = stackString.split('\n');
+    // Format of stack traces is:
+    //   1. stackTraceGetCurrent (from this embedder object)
+    //   2. module0.StackTrace.current <noInline>
+    //   3. The callsite we care about.
+    const drop = 1 + frames.findIndex((l) => l.indexOf('stackTraceGetCurrent') > 0);
+    return frames.slice(drop).join('\n');
+  },
+};
 const instances = new Map();
 (async () => {
   for (const line of lines) {
@@ -283,12 +300,12 @@ const instances = new Map();
       mi = instances.get(wasmB64);
       if (mi === undefined) {
         const mod = await WebAssembly.compile(Buffer.from(wasmB64, 'base64'));
-        const imps = WebAssembly.Module.imports(mod);
-        mi = imps.length > 0 ? { imports: imps.map(i => i.module + '.' + i.name) } :
-          { mod, inst: await WebAssembly.instantiate(mod, {}) };
+        const missing = WebAssembly.Module.imports(mod).filter(i => !(i.module === 'dart' && i.kind === 'function' && i.name in dartEmbedder));
+        mi = missing.length > 0 ? { imports: missing.map(i => i.module + '.' + i.name) } :
+          { mod, inst: await WebAssembly.instantiate(mod, {dart: dartEmbedder}) };
         instances.set(wasmB64, mi);
       }
-      if (mi.imports) { process.stdout.write('err the module imports ' + mi.imports.join(', ') + ', which the runner provides none of yet\n'); continue; }
+      if (mi.imports) { process.stdout.write('err the module imports ' + mi.imports.join(', ') + ', which the runner does not provide\n'); continue; }
       const fns = WebAssembly.Module.exports(mi.mod).filter(e => e.kind === 'function').map(e => e.name);
       const name = entry === '-' ? (fns.length === 1 ? fns[0] : null) : entry;
       if (name === null || typeof mi.inst.exports[name] !== 'function') { process.stdout.write('err no entry: the module exports the functions [' + fns.join(', ') + ']\n'); continue; }

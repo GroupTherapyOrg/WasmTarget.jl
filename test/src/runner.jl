@@ -20,6 +20,14 @@ const _RUN_I32, _RUN_I64, _RUN_F32, _RUN_F64 = 0x7f, 0x7e, 0x7d, 0x7c
 const _RUN_IMPORTS = UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
                       0x02, 0x07, 0x01, 0x01, 0x6d, 0x01, 0x66, 0x00, 0x00]
 const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.const 1, i32.add
+# a module importing the standalone embedder's dart.stackTraceGetCurrent (() -> externref), its `f`
+# (i32 -> i32) calling it, dropping the trace and returning its argument
+const _RUN_EMBEDDER = vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+    UInt8[0x01, 0x0a, 0x02, 0x60, 0x00, 0x01, 0x6f, 0x60, 0x01, 0x7f, 0x01, 0x7f],     # types: () -> externref, i32 -> i32
+    UInt8[0x02, 0x1d, 0x01, 0x04], Vector{UInt8}("dart"), UInt8[0x14], Vector{UInt8}("stackTraceGetCurrent"), UInt8[0x00, 0x00],
+    UInt8[0x03, 0x02, 0x01, 0x01],                                                    # f has type 1
+    UInt8[0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x01],                                  # export f, function 1
+    UInt8[0x0a, 0x09, 0x01, 0x07, 0x00, 0x10, 0x00, 0x1a, 0x20, 0x00, 0x0b])          # call 0, drop, local.get 0
 
 @testset "each marshalled type crosses with its bits; what differs or cannot run fails, located" begin
     @test WTR.node_binary() !== nothing
@@ -43,6 +51,7 @@ const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.c
         WTR.RunCase("UInt32 past typemax(Int32)", _RUN_ADD1, (typemax(UInt32) - UInt32(1),), typemax(UInt32)),
         WTR.RunCase("UInt64 past typemax(Int64)", _run_one_function(_RUN_I64), (typemax(UInt64),), typemax(UInt64)),
         WTR.RunCase("a value where native answers nothing", _RUN_ADD1, (Int32(1),), nothing),
+        WTR.RunCase("the standalone embedder's import, given", _RUN_EMBEDDER, (Int32(7),), Int32(7)),
     ]
     local r = WTR.run_cases(cases)
     @test length(r) == length(cases) && [x.label for x in r] == [c.label for c in cases]
@@ -56,6 +65,7 @@ const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.c
     @test !r[15].ok && occursin("the wasm-opt'd module answers 41", r[15].why) && occursin("differ: 42 against 41", r[15].why) &&
           !occursin("the module answers", r[15].why)
     @test !r[19].ok && occursin("the module answers \"a_value:number\", native Julia nothing", r[19].why)   # A56E1
+    @test r[20].ok
     @test WTR.run_cases(WTR.RunCase[]) == WTR.RunResult[]
 end
 
