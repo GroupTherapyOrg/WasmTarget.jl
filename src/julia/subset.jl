@@ -214,7 +214,7 @@ end
 # the read code_generator.jl's _directGet null-tests and raises UndefRefError at: Julia's own test, its
 # codegen's field_may_be_null, of x's concrete type, x's type Julia's argextype as the trim verifier
 # reads an operand's; a field whose type admits `nothing` holds that null as `nothing` (_directGet)
-@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null, its operand typed as precedent(julia: Compiler/src/verifytrim.jl:56) types one" Core.Compiler.argextype function _reads_undefinable_field(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState})::Bool
+@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null, its operand typed by Core.Compiler.argextype as the trim verifier types one" Core.Compiler.argextype function _reads_undefinable_field(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState})::Bool
     _calls_builtin(st, (Core.getfield,)) && length(st.args) >= 3 || return false
     local T = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes))
     T isa DataType && isconcretetype(T) && fieldcount(T) > 0 || return false

@@ -1302,7 +1302,8 @@ end
 # ---- each @quarantine ports a pinned source (dev/LEDGER.md D45, L213) --------------------------------
 # A src/julia definition ports what Julia forces from a pinned near 1:1 match, never a bespoke build:
 # its @quarantine reason carries a pinned anchor that resolves at its pin (a dart file of the sdk, an
-# LLVM unit, a unit of JULIA_FILES or a runtime file) or a `precedent(<ecosystem>: <file:line>)`.
+# LLVM unit, a unit of JULIA_FILES or a runtime file) or a `precedent(<ecosystem>: <file>:<line> <symbol>)`
+# that resolves the same way in its ecosystem's pinned checkout.
 # The definitions that do not yet are an exact debt list, dev/quarantine_unpinned.txt, one line per
 # definition, `<its file under src> <its names>`: a definition unpinned and unlisted refuses the load,
 # and so does a line naming a definition now pinned or gone, so the list only shrinks (D20).
@@ -1310,17 +1311,51 @@ end
 # the anchors a reason cites, each form of the pins'
 @quarantine "an anchor in prose is found by its pins' forms, read with a regex" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|(?:llvm|julia)/[\w/]+\.(?:cpp|c|h):[1-9]\d* [A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)"
 @quarantine "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$#][\w$.]*))?"
-@quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\([\w+#.-]+: [^\s():]+:[1-9]\d*"
+@quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
 
-# why a quarantine's reason pins no source, or nothing when it does: a precedent, or an anchor that
-# resolves at its pin's checkout (an anchor whose checkout is missing does not)
-@quarantine "a reason's anchors are read against the pinned files, as @parity's are" Base.eachmatch function _reason_unpinned(reason::AbstractString, sdk::Union{String,Nothing})::Union{String,Nothing}
-    occursin(REASON_PRECEDENT_RX, reason) && return nothing
-    local why = "no pinned anchor and no precedent(<ecosystem>: <file:line>)"
+# why a precedent (REASON_PRECEDENT_RX's match `m`) does not resolve, or nothing when it does: its
+# ecosystem one with a pinned checkout (dart's at PIN, `sdk`; LLVM's and Julia's, `cpin(pin)`), its file
+# under that checkout (a Julia file a unit of JULIA_FILES), and its line declaring its symbol as an
+# anchor's does; any other ecosystem has no pin table and is refused
+@quarantine "a reference in prose resolves to the declaration it names, as pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:15 CommentReferenceResolver resolves a doc comment's" Base.startswith function _precedent_fault(m::RegexMatch, sdk::Union{String,Nothing}, cpin::Function)::Union{String,Nothing}
+    local eco, path, ln, sym = m.captures
+    sym === nothing && return "it names no symbol for its line to declare"
+    local anchor, pin = if eco == "dart"
+        startswith(path, "pkg/") || startswith(path, "sdk/") || return "a dart precedent's file lies under the checkout's pkg/ or sdk/, not $path"
+        (startswith(path, "pkg/") ? path[length("pkg/")+1:end] : path) * ":$ln $sym", :dart
+    elseif eco == "llvm"
+        startswith(path, "llvm/") || return "an LLVM precedent's file lies under llvm-project's llvm/, not $path"
+        "$path:$ln $sym", :llvm
+    elseif eco == "julia"
+        "julia/$path:$ln $sym", :julia
+    else
+        return "no pin table holds the ecosystem $eco (dart, llvm and julia have pinned checkouts)"
+    end
+    local a = parse_anchor(anchor)
+    a === nothing && return "$path:$ln $sym reads as no declaration of the $eco pin"
+    a.pin === :julia && !(a.unit in JULIA_FILES) && return "$path is no unit of the Julia pin table JULIA_FILES"
+    local dir = pin === :dart ? sdk : cpin(pin)
+    dir === nothing && return pin === :dart ? "no dart-lang/sdk checkout" : _c_pin_missing(pin)
+    return _anchor_fault(dir, anchor)
+end
+
+# why a quarantine's reason pins no source, or nothing when it does: its precedents, each resolving at
+# its ecosystem's pinned checkout, or an anchor that resolves at its pin's checkout (an anchor whose
+# checkout is missing does not); `cpin` gives the LLVM and Julia checkouts
+@quarantine "a reason's anchors are read against the pinned files, as @parity's are" Base.eachmatch function _reason_unpinned(reason::AbstractString, sdk::Union{String,Nothing}, cpin::Function = _c_pin_checkout)::Union{String,Nothing}
+    # every precedent resolves, or the reason pins nothing: an invented one never rides beside a real one
+    local cited = false
+    for m in eachmatch(REASON_PRECEDENT_RX, reason)
+        local f = _precedent_fault(m, sdk, cpin)
+        f === nothing || return "$(m.match)) does not resolve: $f"
+        cited = true
+    end
+    cited && return nothing
+    local why = "no pinned anchor and no precedent(<ecosystem>: <file>:<line> <symbol>)"
     for m in eachmatch(REASON_ANCHOR_RX, reason)
         local a = parse_anchor(m.captures[1])
         a === nothing && continue
-        local dir = a.pin === :dart ? sdk : _c_pin_checkout(a.pin)
+        local dir = a.pin === :dart ? sdk : cpin(a.pin)
         dir === nothing && (why = "$(m.captures[1]): " * (a.pin === :dart ? "no dart-lang/sdk checkout" : _c_pin_missing(a.pin)); continue)
         local f = _anchor_fault(dir, String(m.captures[1]))
         f === nothing && return nothing
@@ -1360,7 +1395,8 @@ end
     check_quarantine_pinned(mod, src, sdk, debt) -> Int
 
 D45's check inside L213: every `@quarantine` definition of `mod` (its file under `src`) carries in its
-reason a pinned anchor that resolves, or a `precedent(<ecosystem>: <file:line>)`, unless the debt list
+reason a pinned anchor that resolves, or a `precedent(<ecosystem>: <file>:<line> <symbol>)` that resolves
+in its ecosystem's pinned checkout, unless the debt list
 `debt` names it; a debt line naming a definition now pinned or gone refuses too, so the list only
 shrinks. Throws a `ConstructionViolation` listing each.
 
