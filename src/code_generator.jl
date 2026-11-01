@@ -1399,29 +1399,41 @@ end
     # undefined is a reference past that count, nullable by translateTypeOfField's rule, so it holds the
     # null reference, Julia's NULL, and a read of it raises Julia's UndefRefError (_directGet; Julia's
     # closure conversion guards a Core.Box variable's read with isdefined, its UndefVarError). A field
-    # whose type admits `nothing` would hold `nothing` as that same null, so an undefined one is no
-    # value a read can tell from `nothing`: it rejects, located, never a null a read takes for nothing
-    # (D9; audit A59S1). An isbits field left undefined holds bits Julia leaves arbitrary: no reference
-    # to leave null, located too
+    # whose type admits `nothing` keeps its set flag (class_is_set_field, dart's late lowering's
+    # isSet), stored true where `new` gives the field and false where it leaves it out, so its null
+    # `nothing` and its #undef stay apart (D9). An isbits field left undefined holds bits Julia leaves
+    # arbitrary: no reference to leave null, located
+    local nf = fieldcount(cls)
     local given = length(node.args) - 1
-    given <= length(fields) ||
-        reject!(Internal("$at: an allocation of $cls passing $given values to its $(length(fields)) fields, which Julia's IR never produces"), "$(self.enclosing_member)")
+    given <= nf ||
+        reject!(Internal("$at: an allocation of $cls passing $given values to its $nf fields, which Julia's IR never produces"), "$(self.enclosing_member)")
     given >= Core.Compiler.datatype_min_ninitialized(cls) ||
         reject!(Internal("$at: an allocation of $cls passing $given values where its type requires $(Core.Compiler.datatype_min_ninitialized(cls)) initialized, which Julia's IR never produces"), "$(self.enclosing_member)")
-    for field in fields[given+1:end]
+    all(i -> fields[i].index == i, 1:nf) ||
+        reject!(Internal("$at: the class layout of $cls does not begin with Julia's $nf fields"), "$(self.enclosing_member)")
+    # each set flag's field (class_is_set_field), the flags following Julia's fields
+    local owner = Dict{ClassField,ClassField}()
+    for field in fields[1:nf]
+        local flag = class_is_set_field(field)
+        flag === nothing || (owner[flag] = field)
+    end
+    length(fields) == nf + length(owner) && all(f -> haskey(owner, f), fields[nf+1:end]) ||
+        reject!(Internal("$at: the class layout of $cls holds a field past Julia's that is no set flag"), "$(self.enclosing_member)")
+    for field in fields[given+1:nf]
         local storage = WasmBuilder.unpacked(info.struct_.fields[self.translator.field_index[field] + 1].type)
         storage isa WasmBuilder.IR.RefType && storage.nullable ||
             reject!(Unquarantined("src/code_generator.jl visitConstructorInvocation: the isbits field $(field.name) of $cls left undefined, whose bits Julia leaves arbitrary"), "$(self.enclosing_member)")
-        Nothing <: field.type &&
-            reject!(Unquarantined("src/code_generator.jl visitConstructorInvocation: the field $(field.name)::$(field.type) of $cls left undefined, whose undefined state and `nothing` would share the null reference"), "$(self.enclosing_member)")
     end
     WasmBuilder.comment(b, "Allocate wasm struct optimized")
     push_object_header_fields(b, self.translator, info)
-    for (k, field) in enumerate(fields)
+    for field in fields
         local field_index = self.translator.field_index[field]
         local storage = WasmBuilder.unpacked(info.struct_.fields[field_index + 1].type)
-        if k <= given
-            translate_expression(self, node.args[k + 1], storage)
+        if haskey(owner, field)
+            # the set flag: whether `new` gives its field
+            WasmBuilder.i32_const(b, owner[field].index <= given ? 1 : 0)
+        elseif field.index <= given
+            translate_expression(self, node.args[field.index + 1], storage)
         else
             WasmBuilder.ref_null(b, (storage::WasmBuilder.IR.RefType).heap_type)
         end
@@ -1663,10 +1675,33 @@ end
     local receiver_type = info.non_nullable_type
     local storage = info.struct_.fields[field_index + 1].type
     local field_type = WasmBuilder.unpacked(storage)
+    local flag = class_is_set_field(target)
+    if flag !== nothing
+        # a field whose type admits `nothing` that may be undefined: dart's late getter
+        # (late_lowering.dart:295) tests its isSet flag first and throws where it is false, Julia's
+        # UndefRefError; set, the field holds its value, `nothing` the null
+        local b = self.b[]
+        local r = add_local(self, receiver_type)
+        translate_expression(self, receiver, receiver_type)
+        WasmBuilder.local_tee(b, r)
+        local flag_index = self.translator.field_index[flag]
+        # a Bool, stored packed where translateTypeOfField packs it
+        info.struct_.fields[flag_index + 1].type isa WasmBuilder.IR.PackedType ?
+            WasmBuilder.struct_get_u(b, info.struct_, flag_index) : WasmBuilder.struct_get(b, info.struct_, flag_index)
+        WasmBuilder.i32_eqz(b)
+        WasmBuilder.if_(b)
+        call(self, nir_runtime_member(self.translator.component, throw_undef_ref_error, "$(self.enclosing_member): a read of $(target.cls).$(target.name)"))
+        WasmBuilder.unreachable(b)
+        WasmBuilder.var"end"(b)
+        WasmBuilder.local_get(b, r)
+        WasmBuilder.struct_get(b, info.struct_, field_index)
+        return field_type
+    end
     # a reference field past the count Julia's type requires initialized may be undefined, the null an
-    # allocation left (visitConstructorInvocation), unless its type admits `nothing`, whose null it is:
-    # the read raises Julia's UndefRefError there (jl_undefref_exception, the runtime's
-    # throw_undef_ref_error), and answers the non-nullable field otherwise
+    # allocation left (visitConstructorInvocation), unless its type admits `nothing`, whose null it is
+    # (an inline bits union's; one held by reference keeps its set flag, above): the read raises
+    # Julia's UndefRefError there (jl_undefref_exception, the runtime's throw_undef_ref_error), and
+    # answers the non-nullable field otherwise
     if target.index > Core.Compiler.datatype_min_ninitialized(target.cls) && field_type isa WasmBuilder.IR.RefType &&
             field_type.nullable && !(Nothing <: target.type)
         local b = self.b[]
@@ -1733,6 +1768,13 @@ end
         WasmBuilder.local_tee(b, temp)
     end
     WasmBuilder.struct_set(b, info.struct_, field_index)
+    local flag = class_is_set_field(target)
+    if flag !== nothing
+        # the field's set flag set, as dart's late setter sets its isSet (late_lowering.dart:382)
+        translate_expression(self, receiver, info.non_nullable_type)
+        WasmBuilder.i32_const(b, 1)
+        WasmBuilder.struct_set(b, info.struct_, self.translator.field_index[flag])
+    end
     if temp !== nothing
         WasmBuilder.local_get(b, temp)
         return temp.type

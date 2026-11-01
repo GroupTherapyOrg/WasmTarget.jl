@@ -228,7 +228,8 @@ none, and so does a mutable struct declared with no fields, each instance an obj
 its UTF-8 code units as one immutable i8 wasm array (`_string_instance_fields`); a `Symbol` its name,
 one String (`_symbol_instance_fields`); a `Module` its name, one Symbol (`_module_instance_fields`). Any
 other class whose data Julia holds outside its fields rejects, located, until its representation is
-written.
+written. After a struct's own fields come their set flags (`class_is_set_field`), one per field an
+allocation may leave undefined whose type admits `nothing`, dart's late lowering's `#isSet` fields.
 """
 @quarantine "a class's fields are Julia's fieldnames, fieldtypes and isconst; a primitive type holds one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
     class_is_abstract(c) && return ClassField[]
@@ -248,7 +249,49 @@ written.
     end
     c <: Core.GenericMemory && return _memory_instance_fields(c, at)
     c <: Core.GenericMemoryRef && return _memoryref_instance_fields(c, at)
-    return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
+    local fields = ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
+    for i in 1:fieldcount(c)
+        local flag = class_is_set_field(fields[i])
+        flag === nothing || push!(fields, flag)
+    end
+    return fields
+end
+
+"""
+    holds_reference(T) -> Bool
+
+Whether a slot of type `T` holds a reference Julia's NULL can stand in, its #undef: one Julia stores
+boxed (`jl_field_isptr`, a memory's `arrayelem_isboxed`), or inline holding a pointer
+(`jl_type_hasptr`, a memory's `first_ptr >= 0`). An inline slot of bits (a primitive, an isbits
+struct, an isbits union) is never #undef: it holds bits.
+"""
+@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null tests a slot's reference as jl_field_isptr || jl_type_hasptr" Base.allocatedinline holds_reference(@nospecialize(T))::Bool =
+    !Base.allocatedinline(T) || (T isa DataType && !Base.datatype_pointerfree(T))
+
+"""
+    field_may_be_null(c, i) -> Bool
+
+Whether field `i` of the struct `c` may be undefined (#undef), Julia's codegen's answer: a field past
+the ones every constructor assigns (the trailing `n_uninitialized` of its type's name,
+`Core.Compiler.datatype_min_ninitialized`) holding a reference (`holds_reference`).
+"""
+@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null: a field past n_uninitialized's start holding a reference" Core.Compiler.datatype_min_ninitialized field_may_be_null(c::DataType, i::Int)::Bool =
+    1 <= i <= fieldcount(c) && i > Core.Compiler.datatype_min_ninitialized(c) && holds_reference(fieldtype(c, i))
+
+"""
+    class_is_set_field(field) -> Union{ClassField,Nothing}
+
+The set flag of a struct's field, or nothing: a field that may be undefined (`field_may_be_null`)
+whose type admits `nothing` (`_needs_is_set`) keeps dart's late lowering's flag, named after it with
+`#isSet` (late_lowering.dart:12 lateIsSetSuffix), a Bool, mutable where the field is, at index 0, not
+one of Julia's fields. An allocation stores it true for a field it is given and false for one it
+leaves out, a write sets it (late_lowering.dart:382), a read raises UndefRefError on false where dart's
+getter throws (:295), and `isdefined` reads it. Every other field that may be undefined keeps the
+null for #undef (useNull). The one test the layout, an allocation, a read, a write and `isdefined` ask.
+"""
+@quarantine "pkg/front_end/lib/src/kernel/late_lowering.dart:12 lateIsSetSuffix names a potentially nullable late slot's set flag (useIsSetField)" Core.Bool function class_is_set_field(field::ClassField)::Union{ClassField,Nothing}
+    field.index > 0 && field_may_be_null(field.cls, field.index) && _needs_is_set(field.type) || return nothing
+    return ClassField(field.cls, 0, field.name * "#isSet", Bool, field.mutable)
 end
 
 """

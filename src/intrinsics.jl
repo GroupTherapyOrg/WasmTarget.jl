@@ -338,6 +338,7 @@ end
      f === Core.memoryrefoffset || f === Core.memoryref_isassigned || f === Core.memoryrefswap! ||
      f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) &&
         return generate_static_intrinsic(self, Val(:memory), f, args)
+    f === Core.isdefined && length(args) in (2, 3) && return generate_static_intrinsic(self, Val(:isdefined), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f isa Core.IntrinsicFunction || return nothing
     local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
@@ -664,9 +665,10 @@ end
     local storage = array_type.element_type[].type
     local T = eltype(RT)
     # whether an element can be #undef, Julia's answer (codegen.cpp memoryref_isassigned's `isboxed ||
-    # layout->first_ptr >= 0`): a boxed element, or one stored inline holding a reference; with no set
-    # flags, its #undef is the null (useNull: its type excludes nothing, or it is a struct, never nothing)
-    local may_be_undef = !Base.allocatedinline(T) || (T isa DataType && !Base.datatype_pointerfree(T))
+    # layout->first_ptr >= 0`, classes.jl holds_reference): a boxed element, or one stored inline holding
+    # a reference; with no set flags, its #undef is the null (useNull: its type excludes nothing, or it
+    # is a struct, never nothing)
+    local may_be_undef = holds_reference(T)
     local undef_is_null = is_set === nothing && may_be_undef
     # the element's set flag, dart's late field's isSet (late_lowering.dart's getter :295-300 reads it)
     local flag() = begin
@@ -796,6 +798,54 @@ end
         return I32
     end
     return nothing
+end
+
+# Julia's `isdefined(x, f)` on a struct field, Julia's codegen arm (codegen.cpp:4864, emit_builtin_call's
+# isdefined): a field named by a constant Symbol or Int of a concrete struct; a field the struct does
+# not have is false; one that cannot be undefined (field_may_be_null, cgutils.cpp:2768) true, as is
+# one of a constant Julia holds defined where the struct or the field is immutable; else its set flag
+# where it keeps one (class_is_set_field, dart's late lowering's isSet), and otherwise whether its
+# reference is not null (CreateIsNotNull). A field named at run time (jl_field_isdefined_checked), an
+# order other than :not_atomic, a module's or a type's binding return nothing, rejected unported at
+# the call, located.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:isdefined}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i32 = WasmBuilder.IR.NumType_i32
+    local at = "$(code_gen.enclosing_member): Julia's isdefined"
+    local obj, fld = args[1], args[2]
+    local T = dart_type_of(self, obj)
+    T isa DataType && isconcretetype(T) && !(T <: Type) && T !== Module && !(T <: Array) || return nothing
+    fld isa NirConst && (fld.c.val isa Symbol || fld.c.val isa Int) || return nothing
+    length(args) == 3 && !(args[3] isa NirConst && args[3].c.val === :not_atomic) && return nothing
+    local i = fld.c.val isa Symbol ? something(Base.fieldindex(T, fld.c.val, false), 0) : fld.c.val
+    if !(1 <= i <= fieldcount(T))
+        WasmBuilder.i32_const(b, 0)
+        return i32
+    end
+    local known = obj isa NirConst && (!ismutabletype(T) || isconst(T, i)) && isdefined(obj.c.val, i)
+    if !field_may_be_null(T, i) || known
+        WasmBuilder.i32_const(b, 1)
+        return i32
+    end
+    local info = get(t.class_info, T, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: isdefined on $T, which has no class info"), at)
+    local fields = class_instance_fields(T, at)
+    local field = fields[i]
+    field.index == i || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the class layout of $T does not begin with Julia's fields"), at)
+    translate_expression(code_gen, obj, info.non_nullable_type)
+    local flag = class_is_set_field(field)
+    if flag !== nothing
+        local flag_index = t.field_index[flag]
+        info.struct_.fields[flag_index + 1].type isa WasmBuilder.IR.PackedType ?
+            WasmBuilder.struct_get_u(b, info.struct_, flag_index) : WasmBuilder.struct_get(b, info.struct_, flag_index)
+        return i32
+    end
+    WasmBuilder.struct_get(b, info.struct_, t.field_index[field])
+    WasmBuilder.ref_is_null(b)
+    WasmBuilder.i32_eqz(b)
+    return i32
 end
 
 # Julia's `_svec_ref(v, i)`: the `i`th element (from 1) of a SimpleVector's data array, dart's

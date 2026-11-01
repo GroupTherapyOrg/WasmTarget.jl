@@ -274,3 +274,34 @@ end
     collect(D.ClassInfoCollector(t))
     @test haskey(t.class_info, M) && haskey(t.class_info, R) && haskey(t.class_info, Vector{Int})
 end
+
+module IsSetCases
+# fields an inner constructor may leave undefined: a bits one (unspecified bits), one that cannot be
+# nothing (null for unset), two that may (each its set flag) and an inline bits union (never #undef)
+mutable struct Part
+    a::Int
+    b::Int
+    s::String
+    c::Any
+    d::Union{Nothing,String}
+    u::Union{Nothing,Int}
+    Part(a) = new(a)
+end
+struct Frozen
+    x::Any
+    Frozen() = new()
+end
+end
+
+@testset "#undef is dart's late lowering: a potentially nullable slot keeps an isSet flag, any other null" begin
+    local P, F = IsSetCases.Part, IsSetCases.Frozen
+    # Julia's answer for which fields an inner constructor may leave out
+    @test P.name.n_uninitialized == 5 && F.name.n_uninitialized == 1
+    @test [W.field_may_be_null(P, i) for i in 1:6] == [false, false, true, true, true, false]
+    local fs = W.class_instance_fields(P, "classes")
+    # Julia's fields, then a flag for each field that may be unset and may hold nothing, index 0
+    @test [f.name for f in fs] == ["a", "b", "s", "c", "d", "u", "c#isSet", "d#isSet"]
+    @test fs[7] == W.ClassField(P, 0, "c#isSet", Bool, true) && W.class_is_set_field(fs[5]) == fs[8]
+    @test W.class_is_set_field(fs[3]) === nothing && W.class_is_set_field(fs[6]) === nothing
+    @test W.class_instance_fields(F, "classes")[2] == W.ClassField(F, 0, "x#isSet", Bool, false)
+end

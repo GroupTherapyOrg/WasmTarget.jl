@@ -434,11 +434,9 @@ end
             W.compile(f, (Int,); optimize = false)
         catch e
             e isa W.RejectionError || rethrow()
-            # located; a Core.Box's contents::Any admits `nothing`, so its undefined state would share the
-            # null: the allocation rejects, never a null a later read takes for `nothing` (D9)
+            # located; a Core.Box's contents::Any admits `nothing`, so it keeps its set flag
+            # (class_is_set_field) and compiles, its run compared with native's
             @test !isempty(e.at)
-            occursin("left undefined", sprint(showerror, e)) &&
-                @test e.rejection isa W.Unquarantined && occursin("share the null", e.rejection.row)
             nothing
         end
         bytes === nothing || queue_native!("$(nameof(f)) ", bytes, f, [(3,), (0,)])
@@ -461,6 +459,50 @@ end
     queue_native!("linked ", W.compile(UndefFieldCases.linked, (Int,); optimize = false), UndefFieldCases.linked, [(4,), (-1,)])
     @test (try; UndefFieldCases.unlinked(4); nothing; catch err; err; end) isa UndefRefError
     push!(NATIVE_RUNS, WTRunner.RunCase("unlinked(4) throws ", W.compile(UndefFieldCases.unlinked, (Int,); optimize = false), (4,), WTRunner.Throws(UndefRefError)))
+end
+
+# a field that may be left undefined and may hold nothing keeps dart's late lowering's set flag
+# (class_is_set_field): its #undef read raises UndefRefError, a written nothing reads nothing, and
+# isdefined reads the flag; a reference field excluding nothing keeps the null for #undef
+module IsSetFieldCases
+mutable struct Part
+    a::Int64
+    s::String
+    c::Any
+    d::Union{Nothing,String}
+    Part(a) = new(a)
+    Part(a, s, c, d) = new(a, s, c, d)
+end
+struct Frozen
+    x::Any
+    Frozen() = new()
+    Frozen(x) = new(x)
+end
+const PART = Part(5)
+# every case in one program, case k on x, so the cases cost one compile
+function undef_case(k::Int64, x::Int64)
+    k == 1 && return Int64(Part(x).d === nothing)                           # #undef: UndefRefError
+    k == 2 && return (p = Part(x); p.d = nothing; Int64(p.d === nothing))   # a written nothing
+    k == 3 && return Int64(Part(x, "s", x, nothing).d === nothing)          # a given nothing
+    k == 4 && return (p = Part(x); Int64(isdefined(p, :d)) + 2 * Int64(isdefined(p, :s)) + 4 * Int64(isdefined(p, :a)))
+    k == 5 && return (p = Part(x); p.d = "d"; p.s = "s"; Int64(isdefined(p, :d)) + 2 * Int64(isdefined(p, :s)))
+    k == 6 && return Int64(Part(x).c === nothing)                           # an Any left undefined
+    k == 7 && return (p = Part(x); p.c = nothing; Int64(p.c === nothing))
+    k == 8 && return Int64(isdefined(Frozen(), :x)) + 2 * Int64(isdefined(Frozen(nothing), :x))
+    k == 9 && return Int64(getfield(Frozen(nothing), :x) === nothing)
+    k == 10 && return Int64(getfield(Frozen(), :x) === nothing)             # UndefRefError
+    k == 11 && return Int64(isdefined(PART, :d))                            # a constant's flag
+    return Int64(PART.d === nothing)                                        # its #undef: UndefRefError
+end
+end
+@testset "late_lowering.dart: a field admitting nothing keeps its set flag, its #undef apart from nothing" begin
+    local f = IsSetFieldCases.undef_case
+    @test [f.name for f in W.class_instance_fields(IsSetFieldCases.Part, "code_generator")] == ["a", "s", "c", "d", "c#isSet", "d#isSet"]
+    @test W.class_instance_fields(IsSetFieldCases.Frozen, "code_generator")[2] == W.ClassField(IsSetFieldCases.Frozen, 0, "x#isSet", Bool, false)
+    local bytes = W.compile(f, (Int64, Int64); optimize = false)
+    local cases = [WTRunner.RunCase("undef_case$a", bytes, a, WTRunner.native_answer(f, a)) for a in ((Int64(k), Int64(3)) for k in 1:12)]
+    @test count(c -> c.native isa WTRunner.Throws, cases) == 4
+    append!(NATIVE_RUNS, cases)
 end
 
 @testset "code_generator.dart: the switch statement's info, whose constructors no NIR reaches" begin

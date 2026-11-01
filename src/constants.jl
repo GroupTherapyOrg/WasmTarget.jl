@@ -760,7 +760,7 @@ wasm array class is a WasmArrayLiteral (makeArrayOf), built by `_makeWasmArrayLi
 value classes (WasmI32 and the rest) are Julia's primitive values, never an instance here. A Julia
 class stores no type arguments (its parameters are bound), so the type-argument slots dart fills are
 none.
-A field Julia holds no value in (`#undef`) rejects, located.
+A field Julia holds no value in (`#undef`) holds the null, its set flag false where it keeps one.
 """
 @parity "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant" function visit_instance_constant(self::ConstantCreator, constant::NirConst)::Union{ConstantInfo,Nothing}
     local at = "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant"
@@ -779,6 +779,12 @@ A field Julia holds no value in (`#undef`) rejects, located.
     local field_count = length(info.struct_.fields)
     local sub_constants = Union{NirConst,Nothing}[nothing for _ in 1:field_count]
     local child_constants = ConstantInfo[]
+    # each set flag's field (src/julia/classes.jl class_is_set_field)
+    local owner = Dict{ClassField,ClassField}()
+    for field in class_instance_fields(cls, at)
+        local flag = class_is_set_field(field)
+        flag === nothing || (owner[flag] = field)
+    end
     for field in class_instance_fields(cls, at)
         local index = translator.field_index[field]
         sub_constants[index + 1] === nothing || reject!(Internal("$at: the field index $index of $cls is given twice"), at)
@@ -804,6 +810,9 @@ A field Julia holds no value in (`#undef`) rejects, located.
             else
                 reject!(Internal("$at: the Memory field $(field.name), not classes.jl's data or data#isSet"), at)
             end
+        elseif field.index == 0 && haskey(owner, field)
+            # a field's set flag (src/julia/classes.jl class_is_set_field): whether Julia holds a value in it
+            isdefined(v, owner[field].index)
         elseif field.index == 0
             # a kind's fields that are not Julia's own (src/julia/classes.jl _kind_instance_fields):
             # dart's _Type.isDeclaredNullable (types.jl's encodedNullability, Julia's `Nothing <: T`),
@@ -814,9 +823,14 @@ A field Julia holds no value in (`#undef`) rejects, located.
             field.name == "isDeclaredNullable" ? (encoded_nullability(v) == 1) :
             field.name == "classId" ? Int32(translator.class_id_numbering[].class_ids[v]) :
             reject!(Internal("$at: the kind $cls's field $(field.name), not one of classes.jl's"), at)
-        else
-            isdefined(v, field.index) || reject!(Unquarantined("src/constants.jl visitInstanceConstant: the field $(field.name) of the constant $cls holds no value (#undef)"), at)
+        elseif isdefined(v, field.index)
             getfield(v, field.index)
+        else
+            # #undef, the null an allocation leaves (visitConstructorInvocation), its set flag false
+            # where it keeps one; a field Julia's codegen holds may not be null rejects, located
+            field_may_be_null(cls, field.index) ||
+                reject!(Internal("$at: the field $(field.name) of the constant $cls holds no value (#undef), which Julia's field_may_be_null rules out"), at)
+            nothing
         end
         local sub_constant = NirConst(Core.Const(field_value))
         sub_constants[index + 1] = sub_constant

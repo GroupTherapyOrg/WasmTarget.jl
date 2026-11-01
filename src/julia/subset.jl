@@ -216,8 +216,9 @@ end
 
 # whether a statement `Core.getfield(x, f)` of `src` reads a field an allocation may leave undefined,
 # the read code_generator.jl's _directGet null-tests and raises UndefRefError at: Julia's own test, its
-# codegen's field_may_be_null, of x's concrete type, x's type Julia's argextype as the trim verifier
-# reads an operand's; a field whose type admits `nothing` holds that null as `nothing` (_directGet)
+# codegen's field_may_be_null (classes.jl), of x's concrete type, x's type Julia's argextype as the trim
+# verifier reads an operand's; a field whose type admits `nothing` raises where its set flag is false
+# (classes.jl class_is_set_field), an inline bits union never
 @quarantine "julia/src/cgutils.cpp:2768 field_may_be_null, its operand typed by Core.Compiler.argextype as the trim verifier types one" Core.Compiler.argextype function _reads_undefinable_field(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState})::Bool
     _calls_builtin(st, (Core.getfield,)) && length(st.args) >= 3 || return false
     local T = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes))
@@ -225,13 +226,7 @@ end
     local k = _ir_value(st.args[3])
     k isa QuoteNode && (k = k.value)
     local i = k isa Symbol ? something(Base.fieldindex(T, k, false), 0) : k isa Int ? k : 0
-    1 <= i <= fieldcount(T) || return false
-    local F = fieldtype(T, i)
-    # idx < nfields - n_uninitialized: a field every constructor assigns
-    i <= Core.Compiler.datatype_min_ninitialized(T) && return false
-    # !jl_field_isptr && !jl_type_hasptr: an inline field holding no reference
-    Base.allocatedinline(F) && !(F isa DataType && !Base.datatype_pointerfree(F)) && return false
-    return !(Nothing <: F)
+    return field_may_be_null(T, i)
 end
 
 # the IR forms a root's demand names, each a test of one statement of its CodeInfo: a call of a builtin
