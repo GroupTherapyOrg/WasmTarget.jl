@@ -85,6 +85,9 @@ for d in lib/*/; do
   unjudged_build "$name" "$d" -- julia --project=. --startup-file=no -e "using Pkg; Pkg.precompile(\"$name\")"
 done
 unjudged_build DartCorpus test/smoke_corpus.jl test/DartCorpus -- julia --project=. --startup-file=no test/DartCorpus/load.jl
+# dev/SkeletonImage (dev/SkeletonImage/src/SkeletonImage.jl), the generator's image the ratchet's L210 loads (dev/skeleton.jl and its reader's compiled
+# code): one more, a change leaving dev/skeleton.jl and the package untouched building it here
+unjudged_build SkeletonImage dev/skeleton.jl dev/SkeletonImage -- julia --project=. --startup-file=no -e 'push!(LOAD_PATH, joinpath(pwd(), "dev", "SkeletonImage")); using SkeletonImage'
 # a change to WasmTarget's source pays its precompile inside the judged load, every attempt: the depot's
 # WasmTarget images go first, so a retry of the same tree in the same scratch path cannot load the image its red
 # attempt built and read "load 0" (779986b2 landed a change to src/ on "120 s (load 0 ...)", its precompile

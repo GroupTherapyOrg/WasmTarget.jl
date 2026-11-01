@@ -1650,12 +1650,18 @@ end
 # the no-diff check's faults: the scope's, each file that differs, each stale Kernel row and, with
 # `fields`, each filled struct's field faults and each filled definition's Kernel-typed parameter that
 # is not the table's type
-function diff_faults(S::Scope = read_scope(); fields::Bool = true)::Vector{String}
+# `memo(f, inputs, compute)` gives in-scope file `f`'s fault: `compute()`, or a verdict kept from an earlier run
+# whose inputs were the same (the ratchet's L210 cache, keyed per file as Base keys an image per include):
+# `inputs` are the src anchors that touch `f`, those of its dart file or written in its src file, each
+# `anchor=(src file, filled)`; the rest it reads is the pinned dart, this file and its scope
+function diff_faults(S::Scope = read_scope(); fields::Bool = true, memo::Function = (f, inputs, compute) -> compute())::Vector{String}
     local anchors = src_anchors()
     local bykey = by_anchor(S)
     local out = scope_faults()
     for f in scope()
-        local x = file_fault(f, S, anchors, bykey)
+        local path = jl_file(f)
+        local inputs = sort!(String["$a=$v" for (a, v) in anchors if startswith(a, f * ":") || v[1] == path])
+        local x = memo(f, inputs, () -> file_fault(f, S, anchors, bykey))
         x === nothing || push!(out, x)
     end
     append!(out, ("KERNEL_TYPES row $r: no in-scope file names it" for r in unused_kernel_rows(S)))
