@@ -28,15 +28,15 @@ NOTE_AFTER=5
 REBUILD_START=e2371eca08605231256dd5f3ee97609d6fc019a4   # chore(land): the march branch is wt2
 cd "$(git rev-parse --show-toplevel)"
 # the kinds (rejection_only_kinds, then Skeleton.dart_kinds) cost Julia's inference over every @parity
-# method, about 15 CPU-s: kept per src tree in the common dir, keyed by the content of src/, the dart
-# reader and its scope, and the julia running (JULIA_PIN and the dart pin live in src/), recomputed when
-# the key changes; the line says whether it read the cache (the lead's ruling, the ratchet one port from
-# binding the check's path)
+# method, about 15 CPU-s: kept in the common dir under dev/cache_key.sh's key (Base's staleness rule over
+# every input the kinds read: the julia build, the pinned checkouts, src/, the interpreter it imports, the
+# manifest, the dart reader and this program), recomputed when the key is new (dev/progress_kinds.jl); the
+# line names the key and whether it read the cache
 kinds_cache() {
     local dir key
     dir="$(git rev-parse --path-format=absolute --git-common-dir)/wt-rejection-kinds"; mkdir -p "$dir"
-    key=$( { git ls-files -co --exclude-standard -z src dev/skeleton.jl dev/skeleton_scope.toml | sort -z | xargs -0 cat; julia --version; } |
-           shasum -a 256 | cut -c1-40)
+    key=$(bash dev/cache_key.sh src lib/WasmInterpreter Manifest.toml Project.toml dev/skeleton.jl dev/skeleton_scope.toml \
+          dev/src_progress.sh dev/progress_kinds.jl dev/cache_key.sh)
     echo "$dir/$key.tsv"
 }
 # a port is a change to src/'s code: its added and removed lines, the diff's file headers aside, less the
@@ -49,27 +49,8 @@ if [ "${1:-}" = kinds ]; then
         S = Skeleton.read_scope()
         counted = Set(Skeleton.anchor(f, d) for f in Skeleton.scope() for d in S.decls[f] if Skeleton.counted(d))
         es = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]
-            cache = ENV["WT_KINDS_CACHE"]
-            if isfile(cache)
-                R = Dict{String,Symbol}(); L = Dict{String,String}()
-                for l in eachline(cache)
-                    f = split(l, '"'"'\t'"'"')
-                    R[f[1]] = Symbol(f[2]); length(f) > 2 && (L[f[1]] = f[3])
-                end
-                hit = "hit"
-            else
-                R, L = Skeleton.dart_kinds(WasmTarget.rejection_only_kinds([x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]),
-                                           Skeleton.anchored_decls(S))
-                tmp = cache * ".$(getpid())"
-                open(tmp, "w") do io
-                    for (a, k) in R; println(io, a, '"'"'\t'"'"', k, haskey(L, a) ? "\t" * L[a] : ""); end
-                end
-                mv(tmp, cache; force = true)
-                # the newest sixteen kept
-                old = sort!(filter(f -> endswith(f, ".tsv"), readdir(dirname(cache); join = true)); by = mtime, rev = true)
-                foreach(rm, old[17:end])
-                hit = "miss"
-            end
+        include("dev/progress_kinds.jl")
+        R, L, hit = progress_kinds(S, ENV["WT_KINDS_CACHE"])
         present = Set(x.anchor for x in es)
         stubbed = Set(x.anchor for x in es if x.anchor in counted && !x.ported)
         for a in sort!(collect(counted))
@@ -115,27 +96,8 @@ else
             # (ruling A55S12); Unported (a dart definition) and Unquarantined (a Julia-only one,
             # src/julia/reject.jl): gaps; DartThrow: dart'"'"'s own body throws, a body; DartAbstract: dart
             # declares it abstract, no body to port, never counted
-            cache = ENV["WT_KINDS_CACHE"]
-            if isfile(cache)
-                R = Dict{String,Symbol}(); L = Dict{String,String}()
-                for l in eachline(cache)
-                    f = split(l, '"'"'\t'"'"')
-                    R[f[1]] = Symbol(f[2]); length(f) > 2 && (L[f[1]] = f[3])
-                end
-                hit = "hit"
-            else
-                R, L = Skeleton.dart_kinds(WasmTarget.rejection_only_kinds([x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]),
-                                           Skeleton.anchored_decls(S))
-                tmp = cache * ".$(getpid())"
-                open(tmp, "w") do io
-                    for (a, k) in R; println(io, a, '"'"'\t'"'"', k, haskey(L, a) ? "\t" * L[a] : ""); end
-                end
-                mv(tmp, cache; force = true)
-                # the newest sixteen kept
-                old = sort!(filter(f -> endswith(f, ".tsv"), readdir(dirname(cache); join = true)); by = mtime, rev = true)
-                foreach(rm, old[17:end])
-                hit = "miss"
-            end
+            include("dev/progress_kinds.jl")
+            R, L, hit = progress_kinds(S, ENV["WT_KINDS_CACHE"])
             k(a) = get(R, a, :body)
             replaced = count(a -> k(a) === :Internal, ported)
             gaps = count(a -> k(a) in (:Unported, :Unquarantined), ported)
@@ -167,7 +129,7 @@ line="$line; $since landing(s) since src/ last changed"
 # the line sums to the anchored total by itself: an @unported stub (anchored, not ported) is a gap too
 stubs=$(( anchored - ported ))
 [ -n "${replaced:-}" ] && line="$line; not counted ported: $replaced that never return, Julia's inference finds, rejecting Internal (Julia's answer replacing dart's construct, each to triage), $(( gaps + stubs )) gap(s) still to fill ($gaps rejecting Unported or Unquarantined, $stubs an @unported stub) and ${abstract:-0} in place of a dart abstract declaration (no body to port); $body + $replaced + $(( gaps + stubs )) + ${abstract:-0} = $(( body + replaced + gaps + stubs + ${abstract:-0} )) of $anchored"
-[ -n "${kinds_read:-}" ] && line="$line; the kinds cache: $kinds_read"
+[ -n "${kinds_read:-}" ] && line="$line; the kinds cache: $kinds_read ($(basename "$WT_KINDS_CACHE" .tsv | cut -c1-12))"
 [ -n "${rt_sites:-}" ] && line="$line; the runtime library: $rt_sites rejecting site(s) name $rt_defs definition(s) of sdk/lib/_internal/wasm/ still to port"
 [ $started -eq 1 ] || line="$line (the rebuild's src/ not started: WT1 holds src/ until 1.A2c)"
 echo "$line"
