@@ -48,12 +48,11 @@ let defs = quote
     end
 
     """
-        QuarantineEntry(mod, necessity, api, names, file, first, last, signature, worlds, pid, methods)
+        QuarantineEntry(mod, necessity, api, names, file, first, last, identity, worlds, pid, methods)
 
     A definition `@quarantine` checked: `necessity` what Julia forces, `api` the Julia API it relies
-    on (resolved, and referenced by the definition, where it was checked), `signature` a function's
-    or a macro's signature as written (`_written_signature`, "" for any other form), and the rest as
-    `ParityEntry`.
+    on (resolved, and referenced by the definition, where it was checked), `identity` its identity
+    across evaluations (`_identity`: a method's signature as written), and the rest as `ParityEntry`.
     """
     @quarantine "the Julia-only definitions' record, Rust's unsafe blocks with their SAFETY comments" Base.Method struct QuarantineEntry
         mod::Module
@@ -63,7 +62,7 @@ let defs = quote
         file::Symbol
         first::Int
         last::Int
-        signature::String
+        identity::String
         worlds::UnitRange{UInt}
         pid::Int32
         methods::Vector{Method}
@@ -181,28 +180,17 @@ let defs = quote
     # table and signature, as Julia keys it, and a Revise of its file evaluates it again under the same
     # one, wherever its lines moved); for any other form, the form and its names
     @quarantine "a method is identified by its table and signature, Julia's method key, never by its lines" Core.LineNumberNode function _identity(mod::Module, def, source::LineNumberNode)::String
+        local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
         local d = def
         local table = ""
         while Meta.isexpr(d, :macrocall) && (d.args[1] in _TRANSPARENT_MACROS || d.args[1] === Symbol("@unported"))
             d.args[1] === Symbol("@consistent_overlay") && (table = string(" in ", d.args[end-1]))
             d = d.args[end]
         end
-        local sig = _written_signature(d)
-        local form = !isempty(sig) ? string(d.head, " ", sig) :
+        local form = Meta.isexpr(d, (:function, :(=), :macro)) && !(d.args[1] isa Symbol) ?
+            string(d.head, " ", unlined(d.args[1])) :
             string(Meta.isexpr(d, :macrocall) ? d.args[1] : d.head, " ", join(first(_defines(d, source)), ","))
         return join(fullname(mod), ".") * " " * form * table
-    end
-
-    # a function's or a macro's signature as written, every line number dropped, under the annotation
-    # macros (the one text _identity keys a method by and the debt list names a method by); "" for
-    # any other form
-    @quarantine "a method is its signature, which Julia's parser gives as written" Base.Meta.isexpr function _written_signature(def)::String
-        local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
-        local d = def
-        while Meta.isexpr(d, :macrocall) && (d.args[1] in _TRANSPARENT_MACROS || d.args[1] === Symbol("@unported"))
-            d = d.args[end]
-        end
-        return Meta.isexpr(d, (:function, :(=), :macro)) && !(d.args[1] isa Symbol) ? string(unlined(d.args[1])) : ""
     end
 
     # whether `file` lies in the directory `dir` (both absolute)
@@ -365,7 +353,7 @@ let defs = quote
             refuse("a definition outside src/julia and src/patch carries @parity, the dart definition it copies")
         local names, _ = _defines(def, source)
         return QuarantineEntry(mod, necessity, string(api), names, Symbol(file), source.line, _last_line(def, source),
-                               _written_signature(def), UInt(0):UInt(0), Int32(0), Method[])
+                               _identity(mod, def, source), UInt(0):UInt(0), Int32(0), Method[])
     end
 
     # a checked definition's expansion: the evaluation bracketed by its worlds, then the entry; a
@@ -1373,40 +1361,40 @@ end
 @quarantine "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:\.(?:[A-Za-z_$][\w$]*|\[\]=?|[-+*/%<>=~&|^]+))?))?"
 @quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
 
-# why a precedent (REASON_PRECEDENT_RX's match `m`) does not resolve, or nothing when it does: its
-# ecosystem one with a pinned checkout (dart's at PIN, `sdk`; LLVM's and Julia's, `cpin(pin)`), its file
-# under that checkout (a Julia file a unit of JULIA_FILES), and its line declaring its symbol as an
-# anchor's does; any other ecosystem has no pin table and is refused
-@quarantine "a reference in prose resolves to the declaration it names, as pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:15 CommentReferenceResolver resolves a doc comment's" Base.startswith function _precedent_fault(m::RegexMatch, sdk::Union{String,Nothing}, cpin::Function)::Union{String,Nothing}
-    local eco, path, ln, sym = m.captures
-    sym === nothing && return "it names no symbol for its line to declare"
-    local anchor, pin = if eco == "dart"
-        startswith(path, "pkg/") || startswith(path, "sdk/") || return "a dart precedent's file lies under the checkout's pkg/ or sdk/, not $path"
-        (startswith(path, "pkg/") ? path[length("pkg/")+1:end] : path) * ":$ln $sym", :dart
-    elseif eco == "llvm"
-        startswith(path, "llvm/") || return "an LLVM precedent's file lies under llvm-project's llvm/, not $path"
-        "$path:$ln $sym", :llvm
-    elseif eco == "julia"
-        "julia/$path:$ln $sym", :julia
-    else
-        return "no pin table holds the ecosystem $eco (dart, llvm and julia have pinned checkouts)"
-    end
-    local a = parse_anchor(anchor)
-    a === nothing && return "$path:$ln $sym reads as no declaration of the $eco pin"
-    a.pin === :julia && !(a.unit in JULIA_FILES) && return "$path is no unit of the Julia pin table JULIA_FILES"
-    local dir = pin === :dart ? sdk : cpin(pin)
-    dir === nothing && return pin === :dart ? "no dart-lang/sdk checkout" : _c_pin_missing(pin)
-    return _anchor_fault(dir, anchor)
-end
-
 # why a quarantine's reason pins no source, or nothing when it does: its precedents, each resolving at
 # its ecosystem's pinned checkout, or an anchor that resolves at its pin's checkout (an anchor whose
-# checkout is missing does not); `cpin` gives the LLVM and Julia checkouts
+# checkout is missing does not); `cpin` gives the LLVM and Julia checkouts. Its checking logic, the
+# precedent resolver among it, is unported: no pinned near 1:1 match is named for it, so it stays on the
+# debt list (dev/quarantine_unpinned.txt) until one is ported (the lead's ruling on A67E2)
 @quarantine "a reason's anchors are read against the pinned files, as @parity's are" Base.eachmatch function _reason_unpinned(reason::AbstractString, sdk::Union{String,Nothing}, cpin::Function = _c_pin_checkout)::Union{String,Nothing}
-    # every precedent resolves, or the reason pins nothing: an invented one never rides beside a real one
+    # every precedent resolves, or the reason pins nothing: an invented one never rides beside a real one.
+    # A precedent resolves when its ecosystem has a pinned checkout (dart's at PIN, `sdk`; LLVM's and
+    # Julia's, `cpin(pin)`), its file lies under that checkout (a Julia file a unit of JULIA_FILES), and
+    # its line declares its symbol as an anchor's does; any other ecosystem has no pin table
+    local precedent_fault(m) = begin
+        local eco, path, ln, sym = m.captures
+        sym === nothing && return "it names no symbol for its line to declare"
+        local anchor, pin = if eco == "dart"
+            startswith(path, "pkg/") || startswith(path, "sdk/") || return "a dart precedent's file lies under the checkout's pkg/ or sdk/, not $path"
+            (startswith(path, "pkg/") ? path[length("pkg/")+1:end] : path) * ":$ln $sym", :dart
+        elseif eco == "llvm"
+            startswith(path, "llvm/") || return "an LLVM precedent's file lies under llvm-project's llvm/, not $path"
+            "$path:$ln $sym", :llvm
+        elseif eco == "julia"
+            "julia/$path:$ln $sym", :julia
+        else
+            return "no pin table holds the ecosystem $eco (dart, llvm and julia have pinned checkouts)"
+        end
+        local a = parse_anchor(anchor)
+        a === nothing && return "$path:$ln $sym reads as no declaration of the $eco pin"
+        a.pin === :julia && !(a.unit in JULIA_FILES) && return "$path is no unit of the Julia pin table JULIA_FILES"
+        local dir = pin === :dart ? sdk : cpin(pin)
+        dir === nothing && return pin === :dart ? "no dart-lang/sdk checkout" : _c_pin_missing(pin)
+        return _anchor_fault(dir, anchor)
+    end
     local cited = false
     for m in eachmatch(REASON_PRECEDENT_RX, reason)
-        local f = _precedent_fault(m, sdk, cpin)
+        local f = precedent_fault(m)
         f === nothing || return "$(m.match)) does not resolve: $f"
         cited = true
     end
@@ -1439,12 +1427,16 @@ end
 # a quarantined definition's key in the debt list: its file under `src` and its names, or, for a method
 # of a function it does not bind (an extension of Base's), the API it names in brackets; where its file
 # quarantines more than one method of that name (`count` of each such key), its file and its signature
-# as written, so pinning one method never covers another of its name
+# as written, its identity less the module and the form's head, so pinning one method never covers
+# another of its name
 @quarantine "a method is identified by its signature, Julia's method key, where its name has several" Base.relpath function _quarantine_key(e, src::String, count::Union{Dict{String,Int},Nothing} = nothing)::String
     local file = replace(relpath(string(e.file), src), '\\' => '/')
     local n = file * " " * (isempty(e.names) ? "[" * e.api * "]" : join(string.(e.names), ","))
-    count !== nothing && get(count, n, 0) > 1 && !isempty(e.signature) || return n
-    return file * " " * e.signature
+    count !== nothing && get(count, n, 0) > 1 || return n
+    # the identity is `<module> <head> <signature>` for a method, `<module> <form> <names>` otherwise
+    local form = split(chopprefix(e.identity, join(fullname(e.mod), ".") * " "), ' '; limit = 2)
+    form[1] in ("function", "=", "macro") && occursin('(', form[2]) || return n
+    return file * " " * form[2]
 end
 
 # the debt list's lines: one key each, comments and blank lines aside

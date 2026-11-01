@@ -305,7 +305,6 @@ julia/parity.jl _source_text
 julia/parity.jl _unmarked
 julia/parity.jl _unported
 julia/parity.jl _within
-julia/parity.jl _written_signature
 julia/parity.jl anchor_of
 julia/parity.jl check_anchors_resolve
 julia/parity.jl check_include_dart
