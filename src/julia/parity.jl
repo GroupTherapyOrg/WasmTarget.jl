@@ -521,6 +521,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv", "julia/src/ccall",
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3",
+    "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation",
 )
 
 """
@@ -648,12 +649,12 @@ sees; `Union{}` in one table alone is a call that never returns there, a cycle t
 memory copy's native body calling Base's method, the overlay's own, made the code after it unreachable).
 Throws a `ConstructionViolation` naming each.
 
-precedent(julia: `Base.Experimental.@consistent_overlay`, an overlay whose answers are the native
-method's, and Julia's own test of an overlay interpreter, test/compiler/AbstractInterpreter.jl, which
-infers one call over both tables). Julia's differs: it trusts the `@consistent_overlay` claim, where
-this check reads each one's inferred answer.
+precedent(julia: Compiler/src/abstractinterpretation.jl:935 concrete_eval_eligible, which evaluates an
+overlaid call by the native method when the overlay claims `@consistent_overlay`, over the overlay
+table of Compiler/src/methodtable.jl:37 OverlayMethodTable). Julia's differs: it trusts the
+`@consistent_overlay` claim, where this check reads each one's inferred answer.
 """
-@quarantine "julia/src/julia.h:905 jl_methtable_t holds an overlay table's methods apart from Base's; Julia trusts @consistent_overlay, the load infers each one over both tables" Core.Compiler.AbstractInterpreter function check_overlays_agree(interp::Core.Compiler.AbstractInterpreter, table::Core.MethodTable, helpers::Vector{Method})::Int
+@quarantine "julia/Compiler/src/methodtable.jl:37 OverlayMethodTable redirects a query to an overlay's table apart from Base's; Julia trusts @consistent_overlay (precedent(julia: Compiler/src/abstractinterpretation.jl:935 concrete_eval_eligible) runs the native method for an overlaid call), the load infers each one over both tables" Core.Compiler.AbstractInterpreter function check_overlays_agree(interp::Core.Compiler.AbstractInterpreter, table::Core.MethodTable, helpers::Vector{Method})::Int
     local native = Core.Compiler.NativeInterpreter(Core.Compiler.get_inference_world(interp))
     local sigs = Any[]
     Base.visit(m -> push!(sigs, m.sig), table)

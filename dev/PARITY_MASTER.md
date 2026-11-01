@@ -41,7 +41,8 @@ ported too, never built bespoke (dev/LEDGER.md D45): from Julia's own sources at
 julia WasmTarget runs, JuliaLang/julia **`6d172b025e4befc4d274d9fbc9339917a8a86b65`** (v1.12.7),
 the units `JULIA_FILES` names (`src/julia.h`, `genericmemory.c`, `builtins.c`, `cgutils.cpp`,
 `codegen.cpp`, `rtutils.c`, `jl_uv.c`, `ccall.cpp`, and Base's and Julia's compiler's own Julia,
-`base/genericmemory.jl`, `base/array.jl`, `Compiler/src/typeinfer.jl`). `dev/fetch_julia.sh` makes the sparse checkout at
+`base/genericmemory.jl`, `base/array.jl`, `Compiler/src/typeinfer.jl`, `methodtable.jl`,
+`abstractinterpretation.jl`). `dev/fetch_julia.sh` makes the sparse checkout at
 `~/.cache/wasmtarget/julia`; an anchor `julia/src/<unit>.<c|cpp|h>:<line> <X>` or
 `julia/<base|Compiler/src>/<unit>.jl:<line> <X>` resolves there under L213's rule.
 ## The optimizer: wasm-opt, dart's opt phase
