@@ -65,16 +65,21 @@ said(x::Int64) = (W.Runtime.print_to_console("héllo"); x)
     local name = D.get_import_name(namer._interop_helper_member_namer, site, mi)
     @test name.module_name == "dart2wasm"
     @test D.generate_js_methods(J.RuntimeFinalizer(namer), [mi, mi]) == "      $(name.item_name): s => printToConsole(s),\n"
-    # the module imports the inline JS from the interop module, and run with JS's console for the
-    # runtime's printToConsole it prints the line and answers 7
-    local path = tempname() * ".wasm"
-    write(path, W.compile(said, (Int64,)))
-    local script = "(async () => { const m = await WebAssembly.compile(require('fs').readFileSync(process.argv[1]), {builtins: ['js-string'], importedStringConstants: ''}); " *
-        "const imps = WebAssembly.Module.imports(m).filter(i => i.module === 'dart2wasm'); " *
-        "const dart2wasm = Object.fromEntries(imps.map(i => [i.name, s => console.log(s)])); " *
-        "const i = await WebAssembly.instantiate(m, {dart2wasm}); console.log(imps.length + ' ' + i.exports.said(7n)); })()"
-    local out = readchomp(`node -e $script $path`)
-    rm(path)
-    @test out == "héllo\n1 7"
+    # compiled as dart2wasm compiles a program, the module beside the JS runtime the runtime generator
+    # writes (its methods generateJsMethods'), and run under that runtime in node: the runtime's own
+    # printToConsole prints the line as Julia's println prints it, then the export answers 7
+    local opts = D.WasmCompilerOptions(; main_uri = "", output_file = "out/said.wasm"); opts.translator_options.generate_source_maps = false
+    local r = D.compile(opts, W.check_subset(said, (Int64,), "print_patch"))
+    @test occursin(": s => printToConsole(s),", r.js_files["out/said.mjs"])
+    mktempdir() do dir
+        write(joinpath(dir, "said.mjs"), r.js_files["out/said.mjs"])
+        write(joinpath(dir, "said.wasm"), only(values(r.wasm_files)))
+        local script = "import {compile} from '$(dir)/said.mjs'; import {readFileSync} from 'fs'; " *
+            "const app = await compile(readFileSync('$(dir)/said.wasm')); const i = await app.instantiate({}); " *
+            "console.log(String(i.instantiatedModule.exports.said(7n)));"
+        local out = read(`perl -e 'alarm 60; exec @ARGV' node --input-type=module -e $script`, String)
+        # (said itself cannot run natively: its JS string lives only in the module)
+        @test out == sprint(println, "héllo") * sprint(println, 7)
+    end
 end
 end
