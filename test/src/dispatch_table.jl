@@ -83,7 +83,11 @@ end
     DD.build(ddt, DD.DynamicCallSiteCollector_collect(t.component))
     @test isempty(ddt._table[]) && ddt._defined_targets_table[].min_size == 0 && ddt._defined_class_ids_table[].min_size == 0
     DD.output(dt); DD.output(ddt)
-    # a collected shape or a placed entry: none in Julia's subset, so the collector's or builder's error
+    # a collected shape or a placed entry: none in Julia's subset, so the collector's or builder's error.
+    # No admitted program can collect a dynamic call shape: check_subset (src/julia/subset.jl) admits only
+    # what Julia's trim verifier accepts (_verify_trim over Compiler/src/verifytrim.jl), which rejects
+    # every call it cannot resolve statically before WasmTarget compiles anything, so the shapes and
+    # entries planted here are reachable only by hand
     local internal(f) = (e = try; f(); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Internal)
     @test internal(() -> DD.build(DD.DynamicDispatchTable(t), Set{DD.CallShape}([DD.GetterCallShape(:f)])))
     local entry = DD.TableEntry(first(b.ci.def for b in t.component), 0, DD.GetterCallShape(:f))
