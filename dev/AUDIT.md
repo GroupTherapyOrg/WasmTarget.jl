@@ -6117,8 +6117,30 @@ line it names; one second anchor is off by one and unread (A68S1); nothing joins
 (both visitors) and immutableListClass move from a rejection to a body; the Memory and isdefined gaps reject inside full
 bodies and are counted gaps; nothing in the range counts a rejection-only body as ported; A66E5 is open.
 
+Follow-up, two items the lead raised after the entry landed. (1) A dated stopgap ruling, 2026-11-01 13:10Z: a src
+commit gets at most one retry on a red that is D14's alone, march-monitor-a counting the greens a retry gives apart from
+first-attempt greens; it is deleted by wt3-latency's invalidation fix. Recorded on MARCH 1.L. Judged: the band is not
+edited and, since 7794d773, a retry pays its precompile, so a retry re-reads the change honestly; what it samples is
+which file first pays the ~110 G shared compile in its shard, a cost of the check, not of the change. (A68S4, low, D20)
+the exit names a suspected cause, not a measure: nothing records when the ruling ends, and if the cause is elsewhere
+(item 2) the fix may land and the retries stay. Fix: the ruling ends when the shared first compile is gone from the
+measure (a file's two kept measures within a band of each other), or with SHARDS back to four, whichever comes first,
+and the check prints each retry-green for the audit. (2) wt3-latency's suspicion that the corpus's Base methods
+invalidate WasmTarget's compiled pipeline: no finding against the tests. Every Base method the corpus defines
+dispatches on a corpus type in its first argument (`grep -cE '^\s*(function\s+)?Base\.' test/smoke_corpus.jl` gives
+172; filtered for a first argument not of a `_`-named corpus type, `::Type{_…}`, or `io::IO, ::_…`, only `==` methods
+on corpus types and calls of Base.ImmutableDict and Base.Ryu.writeexp remain; no `import Base`, no convert or
+promote_rule, nothing in test/DartCorpus), so none widens a signature of Base's own; they port dart's operator
+overrides, which the cases exist to compile, and they change no dispatch on Base's types. Such methods can invalidate
+only code compiled at a call site whose argument types are abstract, so if a measurement confirms the invalidation, its
+fix is WasmTarget's own call sites typed concretely (D15, src, wt3-latency), not the tests. Only two of the 52 src test
+files load the corpus (`grep -rlE 'smoke_corpus|DartCorpus' test/src` gives dart_tests.jl and subset.jl), while the
+shared cost shows in files that load none (records.jl 136 G then 24, globals.jl 67 then 3, 0bc356c5's message); the
+measurement that decides it is whether that cost appears only in a shard where one of the two ran first. Owner of the
+measurement: wt3-latency.
+
 Resolution: this entry lands alone, prose only, and fixes nothing. A68E1 is fixed by 7794d773, after the range. A68E2
-is open on MARCH 1.L (A67E1's text there now names A68E2). A68E3 is open on MARCH 1.T. A68S1 is open on MARCH 1.K. A68S2 and A68S3 are open on MARCH 1.D.
-By owner: lead holds A68E2 (dev/check.sh, test/src_tests.jl), with wt3-latency holding the first-compile cut;
+is open on MARCH 1.L (A67E1's text there now names A68E2). A68E3 is open on MARCH 1.T. A68S1 is open on MARCH 1.K. A68S2 and A68S3 are open on MARCH 1.D. A68S4 is open on MARCH 1.L (the follow-up).
+By owner: lead holds A68E2 and A68S4 (dev/check.sh, test/src_tests.jl), with wt3-latency holding the first-compile cut;
 wt3-tests2 holds A68E3 (dev/corpus.sh, test/src/dart_tests.jl); wt3-parity holds A68S1's check (src/julia/parity.jl)
 and wt3-runtime its citation (src/julia/runtime/rtutils.jl); wt3-memory holds A68S2 and A68S3 (src/intrinsics.jl).
