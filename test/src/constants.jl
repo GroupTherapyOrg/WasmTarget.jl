@@ -147,6 +147,8 @@ end
 
 # a constant whose fields share heap objects keys the caches in linear time: objectid walks every path
 # (2^40 here), so NirConst's hash takes the value's type, agreeing with ===
+module ConstantsDagHash
+using Test, WasmTarget
 struct _DagHashNode; a::Any; b::Any; end
 @testset "a shared-DAG constant hashes in linear time" begin
     local n = _DagHashNode(nothing, nothing)
@@ -165,6 +167,7 @@ struct _DagHashNode; a::Any; b::Any; end
     local ks = WasmTarget.NirConst(Core.Const((selfref, 1)))
     local h0 = hash(ks); push!(selfref, 2)
     @test hash(ks) == h0
+end
 end
 
 module ConstantsRest
@@ -232,10 +235,11 @@ end
 # a record constant, Julia's Tuple: each field is instantiated at its struct field's own type (an Int64 an
 # i64, a Bool an i32), never as the boxed constant's global, which the builder refuses at struct.new (b54115e0)
 module RecordConstantCases
+using Test, WasmTarget
 records(n::Int64) = ((42, 42, 42), ((42,), true), n)
-end
 @testset "a record constant's fields at their own types" begin
-    @test WasmTarget.compile(RecordConstantCases.records, (Int64,); optimize = false) isa Vector{UInt8}
+    @test WasmTarget.compile(records, (Int64,); optimize = false) isa Vector{UInt8}
+end
 end
 
 # a tuple constant passed as a value: each element at its field's own wasm type (an i64, never the
@@ -321,21 +325,21 @@ function lists(k::Int64, i::Int64)
     k == 5 && return Int64(length(OFF))
     return (CELL[1] = i; CELL[1])
 end
+# every case in one program, case k at i (lists' cases from 11), so the family costs one program's two compiles
+consts(k::Int64, i::Int64) =
+    k == 1 ? plen(i == 1) : k == 2 ? nlen(i == 1) : k == 3 ? maybe(i, true) : k == 4 ? maybe(i, false) : lists(k - 10, i)
 @testset "constants.dart: a Memory constant is its class's struct, its elements a wasm array literal; a list constant its Array" begin
     @test !isassigned(NAMES, 2)
-    # each program compiled once, its two modules, then each argument set's native answer
-    local cases_of(f, argsets) = begin
-        local T = map(typeof, first(argsets))
-        local own, plain = WasmTarget.compile(f, T), WasmTarget.compile(f, T; optimize = false)
-        [WTRunner.RunCase("$(nameof(f))$a", plain, a, WTRunner.native_answer(f, a); optimized = own) for a in argsets]
-    end
-    local cases = [cases_of(plen, [(true,), (false,)]); cases_of(nlen, [(true,), (false,)])]
-    # the set flags of a constant whose elements admit nothing, `data#isSet`: an unset element's read
-    # raises UndefRefError, a written nothing reads as nothing
-    append!(cases, cases_of(maybe, [(Int64(1), true), (Int64(2), true), (Int64(3), true), (Int64(2), false), (Int64(3), false)]))
-    # constant lists: in range, and past the end (BoundsError)
+    # one program, its two modules, then each argument set's native answer
+    local own = WasmTarget.compile(consts, (Int64, Int64))
+    local plain = WasmTarget.compile(consts, (Int64, Int64); optimize = false)
+    # the lengths of each constant memory and its type's empty instance; the set flags of a constant
+    # whose elements admit nothing, `data#isSet`: an unset element's read raises UndefRefError, a written
+    # nothing reads as nothing; constant lists in range and past the end (BoundsError)
     @test Base.memoryrefoffset(OFF.ref) == 2
-    append!(cases, cases_of(lists, [(Int64(k), Int64(i)) for (k, i) in ((1, 1), (1, 3), (1, 4), (2, 1), (2, 3), (2, 4), (3, 2), (4, 3), (5, 0), (6, 7))]))
+    local argsets = [(1, 1), (1, 0), (2, 1), (2, 0), (3, 1), (3, 2), (3, 3), (4, 2), (4, 3),
+                     (11, 1), (11, 3), (11, 4), (12, 1), (12, 3), (12, 4), (13, 2), (14, 3), (15, 0), (16, 7)]
+    local cases = [WTRunner.RunCase("consts$a", plain, Int64.(a), WTRunner.native_answer(consts, Int64.(a)); optimized = own) for a in argsets]
     @test count(c -> c.native isa WTRunner.Throws, cases) == 3
     local results = WTRunner.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)

@@ -254,36 +254,27 @@ cells(b::Bool) = (c = Cell(1); d = b ? c : Cell(1); Int64(c === d))
 # a memory constant against another of the same contents, and an Any against a mutable object
 mems(b::Bool) = Int64((b ? PRIMES : OTHER) === PRIMES)
 anys(b::Bool) = (c = Cell(1); x = b ? (c::Any) : (Int64(1)::Any); Int64(x === c))
-end
-
-@testset "intrinsics.dart: identical's ref.eq where an operand's class Julia's egal compares by identity" begin
-    # jl_egal_ answers a mutable class's === by the pointers alone: the same object, else false
-    local M = IdenticalCases
-    local cases = [WTRunner.compiled_case("$(nameof(f))$a", WI.compile, f, a) for f in (M.cells, M.mems, M.anys) for a in ((true,), (false,))]
-    @test count(c -> c.native == 1, cases) == 3
-    for r in WTRunner.run_cases(cases)
-        @test r.ok || (@info r.label r.why; false)
-    end
-end
-
-module TypePairCases
 # a pair of types (Tuple{DataType,DataType}) and a type, picked at run time
 pair(k::Int64) = k == 1 ? (Int64, String) : k == 2 ? (Int64, Float64) : k == 3 ? (Vector{Int64}, String) : (AbstractVector{Int64}, String)
 kind(k::Int64) = k == 1 ? Int64 : k == 2 ? String : AbstractVector{Int64}
-# Julia's egal of two pairs, field by field, and of two DataTypes, one case per (case, a, b)
-types(c::Int64, a::Int64, b::Int64) = c == 1 ? Int64(pair(a) === pair(b)) : Int64(kind(a) === kind(b))
+# every case in one program, case c on (a, b), so the family costs one program's two compiles
+identical(c::Int64, a::Int64, b::Int64) =
+    c == 1 ? cells(a == 1) : c == 2 ? mems(a == 1) : c == 3 ? anys(a == 1) :
+    c == 4 ? Int64(pair(a) === pair(b)) : Int64(kind(a) === kind(b))
 end
 
-@testset "intrinsics.dart: identical on DataTypes and on tuples of them, each one canonical constant" begin
-    # a DataType is egal by its pointer (concrete) or its name and parameters (abstract); WasmTarget holds
-    # each type as one constant canonical by ===, so ref.eq, field by field for a tuple of them
-    local f = TypePairCases.types
-    @test only(Base.return_types(TypePairCases.pair, (Int64,))) === Tuple{DataType,DataType}
-    local argsets = [(1, 1, 1), (1, 1, 2), (1, 2, 2), (1, 3, 4), (1, 4, 4), (2, 1, 1), (2, 1, 2), (2, 3, 3)]
+@testset "intrinsics.dart: identical's ref.eq where Julia's egal compares by identity, on DataTypes and on tuples of them" begin
+    # jl_egal_ answers a mutable class's === by the pointers alone: the same object, else false. A DataType
+    # is egal by its pointer (concrete) or its name and parameters (abstract); WasmTarget holds each type
+    # as one constant canonical by ===, so ref.eq, field by field for a tuple of them
+    local f = IdenticalCases.identical
+    @test only(Base.return_types(IdenticalCases.pair, (Int64,))) === Tuple{DataType,DataType}
+    local argsets = [(1, 1, 0), (1, 0, 0), (2, 1, 0), (2, 0, 0), (3, 1, 0), (3, 0, 0),
+                     (4, 1, 1), (4, 1, 2), (4, 2, 2), (4, 3, 4), (4, 4, 4), (5, 1, 1), (5, 1, 2), (5, 3, 3)]
     local own = WI.compile(f, (Int64, Int64, Int64))
     local plain = WI.compile(f, (Int64, Int64, Int64); optimize = false)
-    local cases = [WTRunner.RunCase("types$a", plain, Int64.(a), WTRunner.native_answer(f, Int64.(a)); optimized = own) for a in argsets]
-    @test count(c -> c.native == 1, cases) == 5
+    local cases = [WTRunner.RunCase("identical$a", plain, Int64.(a), WTRunner.native_answer(f, Int64.(a)); optimized = own) for a in argsets]
+    @test count(c -> c.native == 1, cases) == 8
     for r in WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
