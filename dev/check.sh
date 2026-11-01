@@ -88,7 +88,9 @@ unjudged_build DartCorpus test/smoke_corpus.jl test/DartCorpus -- julia --projec
 # a change to WasmTarget's source pays its precompile inside the judged load, every attempt: the depot's
 # WasmTarget images go first, so a retry of the same tree in the same scratch path cannot load the image its red
 # attempt built and read "load 0" (779986b2 landed a change to src/ on "120 s (load 0 ...)", its precompile
-# cached by the stale loop's earlier attempt, march-monitor-a 12:46). Its dependencies' images stay.
+# cached by the stale loop's earlier attempt, march-monitor-a 12:46). Its dependencies' images stay. The depot is the
+# lane's own and one check runs at a time under the landing lock, so no other process is loading these images; every
+# file the image tracks (each include, include_dependency) is under src/, and Manifest.toml is not in git
 if ! git diff --quiet "$base" HEAD -- src Project.toml 2>/dev/null; then
   rm -rf "${JULIA_DEPOT_PATH%%:*}"/compiled/v*/WasmTarget
 fi

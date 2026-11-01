@@ -130,7 +130,7 @@ fi
 # does not yet reach, so 6 of 7 of the day's ports removed fewer sites than they added (march-corrector, 15:14;
 # 6d540b66's @unported-marker test ranked almost nothing early once one marker was left)
 early=0; why="other work"
-if git log --format=%B "origin/$MARCH..HEAD" | grep -qE '\bA[0-9]+[SE][0-9]+\b'; then early=2400; why="an audit finding's fix"
+if git log --format=%B "origin/$MARCH..HEAD" | grep -E '\bA[0-9]+[SE][0-9]+\b' > /dev/null; then early=2400; why="an audit finding's fix"
 elif ! git diff --quiet "origin/$MARCH...HEAD" -- src; then early=1200; why="a change to src/, port work (D40)"; fi
 queue="$common/wt-landing-queue"; mkdir -p "$queue"
 ticket="$queue/$(( $(date +%s) - early ))-$$"; : > "$ticket"
@@ -159,7 +159,10 @@ git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 
 # never a red: the rebase would drop them all and the carry check below would refuse "missing: all"
 # (wt3-codegen and wt3-tests, 07:52: each landed commit marked red, its lane told to fix nothing)
 # (and an empty commit carries nothing either: the rebase drops it, --no-keep-empty)
-git log --diff-filter=ACDMRT --format=%H "origin/$MARCH..HEAD" | grep -qxFf <(git cherry "origin/$MARCH" HEAD | sed -n 's/^+ //p') ||
+# (grep reads every line, never -q: under pipefail a grep that quits at its first match can leave git log
+# writing into a closed pipe, its SIGPIPE failing the pipeline, and a lane of 7 unlanded commits was told it had
+# nothing to land, wt3-translator2 12:47)
+git log --diff-filter=ACDMRT --format=%H "origin/$MARCH..HEAD" | grep -xFf <(git cherry "origin/$MARCH" HEAD | sed -n 's/^+ //p') > /dev/null ||
   { echo "ship: every commit of this lane is on origin/$MARCH already, as the same patch; nothing to land (git reset --hard origin/$MARCH)"; exit 0; }
 first=$(git log --reverse --format=%at "origin/$MARCH..HEAD" | head -1)
 base=$(git rev-parse "origin/$MARCH")
