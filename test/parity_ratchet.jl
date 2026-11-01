@@ -552,27 +552,47 @@ function skeleton_negatives_missed()::Vector{String}
     local sk = skeleton_module()
     local S = skeleton_call(:read_scope)
     # the plants need a file holding both a stub and a filled definition: the first in-scope file that
-    # does (src/translator.jl held the plants until it held no stub)
+    # does (src/translator.jl held the plants until it held no stub), else a planted one
     local stub_re = r"\n(@parity \"[^\"]+\" @unported function [^\n]*\((?:[^\n]*)\) end)\n"
     local filled_re = r"\n(@parity \"[^\"]+\" function [^\n]*\n)(?=    )"
     local holds(k) = (p = skeleton_call(:jl_file, k); isfile(p) && (t = read(p, String); occursin(stub_re, t) && occursin(filled_re, t)))
     local keys = sort(skeleton_call(:scope))
     local i = findfirst(holds, keys)
-    i === nothing && return ["no in-scope src file holds both a stub and a filled definition to plant"]
-    local f = keys[i]
-    local path = skeleton_call(:jl_file, f)
-    local real = read(path, String)
     local bykey = skeleton_call(:by_anchor, S)
     local hook = getglobal(sk, :SRC_READ)
-    local fault(text) = begin
+    local anchors = skeleton_call(:src_anchors)
+    local with_text(g, path, text) = begin
         local old = hook[]
         hook[] = p -> p == path ? text : read(p, String)
-        try
-            skeleton_call(:file_fault, f, S, skeleton_call(:src_anchors), bykey) !== nothing
-        finally
-            hook[] = old
-        end
+        try g() finally hook[] = old end
     end
+    local f, path, real
+    if i !== nothing
+        f = keys[i]; path = skeleton_call(:jl_file, f); real = read(path, String)
+    else
+        # every in-scope definition has a body: the plants run on a planted tree holding one stub, the
+        # stub the generator writes for a one-line filled definition of the first file holding one, with
+        # no docstring or comment above it, deleted, its anchor defined nowhere else
+        local one_line = r"\n\n(@parity \"([^\"]+)\" (?!@unported)[^\n]*[^=\n])\n(?=\n)"
+        # a method's or function's, whose stub the generator writes as `@unported function` (a field's
+        # it never stubs)
+        local stubbed(x) = (a = skeleton_call(:canonical_anchor, x[2], Set(keys)); haskey(bykey, a) && bykey[a][2].kind in (:method, :function))
+        local pick = nothing
+        for k in keys
+            local p = skeleton_call(:jl_file, k)
+            isfile(p) || continue
+            local x = findfirst(stubbed, collect(eachmatch(one_line, read(p, String))))
+            x === nothing || (pick = (k, collect(eachmatch(one_line, read(p, String)))[x]); break)
+        end
+        pick === nothing && return ["no in-scope src file holds a stub, nor a one-line filled method or function to plant one from"]
+        f = pick[1]; path = skeleton_call(:jl_file, f)
+        local m = pick[2]
+        delete!(anchors, skeleton_call(:canonical_anchor, m[2], Set(keys)))
+        local without = replace(read(path, String), "\n\n" * m[1] * "\n" => "\n"; count = 1)
+        real = with_text(() -> skeleton_call(:generate, f, S, anchors, bykey), path, without)
+        occursin(stub_re, real) || return ["the generator wrote no stub for $(m[2]) deleted from $(relpath(path, ROOT)); its plants cannot run"]
+    end
+    local fault(text) = with_text(() -> skeleton_call(:file_fault, f, S, anchors, bykey) !== nothing, path, text)
     fault(real) && return ["the tree's $(relpath(path, ROOT)) differs from what the generator writes; its plants cannot run"]
     local stub = match(r"\n(@parity \"[^\"]+\" @unported function [^\n]*\((?:[^\n]*)\) end)\n", real)
     stub === nothing && return ["$(relpath(path, ROOT)) holds no stub to plant"]

@@ -49,7 +49,7 @@ end
 
 @quarantine "Julia has no per-file namespace; dart's dart2wasm package, its library entered at pkg/dart2wasm/lib/dart2wasm.dart:298 main, is a module" Core.Module module Dart2Wasm
 # ---- the src/julia names Dart2Wasm's files use, written by dev/skeleton.jl write ----
-import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..@unported, ..AbstractClosures,
+import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..AbstractDispatchTable, ..AbstractLambda, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF,
        ..BLOCK_TYPE_RESULTS, ..BLOCK_TYPE_VOID, ..BR, ..BR_IF, ..BR_TABLE, ..BR_UNLESS, ..CATCH,
        ..CATCH_ALL_REF, ..CONST_I32, ..COPY, ..ClassField, ..ClosedWorld, ..END_BLOCK, ..END_LOOP,
@@ -69,9 +69,9 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..@unported, ..Abstra
        ..WasmExternRef, ..WasmF32, ..WasmF64, ..WasmI16, ..WasmI32, ..WasmI64, ..WasmI8, .._KINDS,
        ..build_nir, ..class_implemented_types, ..class_instance_fields, ..class_is_abstract,
        ..class_is_set_field, ..class_superclass, ..closed_world_classes, ..egal_by_identity,
-       ..field_may_be_null, ..field_name, ..field_selector_calls, ..holds_reference,
-       ..nir_argument_type, ..nir_binding_is_constant, ..nir_binding_value, ..nir_body_of,
-       ..nir_callee, ..nir_carries_data, ..nir_const_type, ..nir_foreign_import,
+       ..field_may_be_null, ..field_name, ..field_selector_calls, ..field_selector_name,
+       ..holds_reference, ..nir_argument_type, ..nir_binding_is_constant, ..nir_binding_value,
+       ..nir_body_of, ..nir_callee, ..nir_carries_data, ..nir_const_type, ..nir_foreign_import,
        ..nir_foreign_operands, ..nir_invoke_target, ..nir_method_nargs, ..nir_operands,
        ..nir_parameter_types, ..nir_runtime_member, ..nir_tuple_type, ..nir_used_statements,
        ..nir_value_type, ..nir_vararg_call_tuple, ..nir_vararg_packing, ..no_counterpart_rejection,

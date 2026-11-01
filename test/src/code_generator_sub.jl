@@ -131,4 +131,48 @@ end
     @test D.is_setter(D._VirtualCallKind_Set) && !D.is_setter(D._VirtualCallKind_Get)
 end
 
+module VirtualCases
+abstract type S end
+struct A <: S; side::Int; tag::Int; end
+struct B <: S; tag::Int; side::Int; end
+struct Holder; s::S; end
+# a field read on a receiver Julia left abstract: the getter selector of `side`, two classes holding it
+# at different positions, a call through the dispatch table; its value narrowed back to Int
+@noinline read_side(h::Holder) = h.s.side
+reads(n::Int) = (r = read_side(Holder(n > 0 ? A(n, 1) : B(2, -n))); r isa Int ? r : -1)
+# one class under its abstract type: one range, a direct call of that class's getter
+abstract type T end
+struct D1 <: T; v::Int; end
+struct HolderT; t::T; end
+@noinline read_v(h::HolderT) = h.t.v
+direct(n::Int) = (r = read_v(HolderT(D1(n))); r isa Int ? r : -1)
+# a field write on a receiver Julia left abstract: the setter selector, its value used
+abstract type U end
+mutable struct M1 <: U; v::Int; end
+mutable struct M2 <: U; w::Int; v::Int; end
+struct HolderU; u::U; end
+@noinline write_v!(h::HolderU, x::Int) = setfield!(h.u, :v, x)
+writes(n::Int) = (m = n > 0 ? M1(0) : M2(5, 0); r = write_v!(HolderU(m), 3n); s = m isa M1 ? m.v : (m::M2).v; r isa Int ? r + s : -1)
+# a class the receiver admits without the field: Julia's FieldError
+struct C <: S; tag::Int; end
+missing_side(n::Int) = (r = read_side(Holder(n > 0 ? A(n, 1) : C(n))); r isa Int ? r : -1)
+end
+
+@testset "code_generator.dart: _virtualCall, a field access on a receiver Julia left abstract through its selector" begin
+    local V = VirtualCases
+    # reads: the getter selector's two ranges, the receiver kept in a local and the table called
+    # indirectly; writes: the setter selector's, its synthesized null dropped and the value kept;
+    # direct: one range, a direct call of D1's getter. Run by node each answers as native Julia
+    local cases = WTRunner.RunCase[]
+    for (f, xs) in ((V.reads, [5, -7]), (V.direct, [4]), (V.writes, [2, -3]))
+        local bytes = W.compile(f, (Int,); optimize = false)
+        append!(cases, [WTRunner.RunCase("$(nameof(f))($x)", bytes, (x,), f(x)) for x in xs])
+    end
+    @test answers_native(cases)
+    # MissingFieldTraps: a class the receiver admits without the field reaches Julia's FieldError, a
+    # located rejection at the dispatch table's build
+    local e = rejection(() -> W.compile(V.missing_side, (Int,); optimize = false))
+    @test e !== nothing && e.rejection isa W.Unquarantined && occursin("FieldError", e.rejection.row)
+end
+
 end

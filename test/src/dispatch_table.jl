@@ -153,6 +153,8 @@ missing_side(n::Int) = read_side(Holder(n > 0 ? A(n, 1) : C(n)))
 @noinline read_first(h::Holder) = getfield(h.s, 1)
 @noinline read_second(h::Holder) = getfield(h.s, 2)
 first_of(n::Int) = read_first(Holder(n > 0 ? A(n, 1) : B(n + 7, 2)))
+# its value narrowed back to Int, an answer the runner reads
+first_int(n::Int) = (r = first_of(n); r isa Int ? r : -1)
 # position 1 is `tag` in C, `side` in A; position 2 is past C's one field
 first_mixed(n::Int) = read_first(Holder(n > 0 ? A(n, 1) : C(n)))
 second_short(n::Int) = read_second(Holder(n > 0 ? A(n, 1) : C(n)))
@@ -226,10 +228,13 @@ end
     @test em isa W.RejectionError && em.rejection isa W.Unquarantined && occursin("side, tag", em.rejection.row)
     local eb = try; W.field_selector_calls(world(F.second_short), DataType[F.A, F.C, F.Holder]); nothing; catch x; x; end
     @test eb isa W.RejectionError && eb.rejection isa W.Unquarantined && occursin("BoundsError", eb.rejection.row)
-    # the compile passes the table and stops at the call through it, _virtualCall, not yet written; its
-    # port runs first_of against native here
-    local ec = try; W.compile(F.first_of, (Int,); optimize = false); nothing; catch x; x; end
-    @test ec isa W.RejectionError && ec.rejection isa W.Unported && occursin("_virtualCall", string(ec.rejection))
+    # the compile calls through the table (_virtualCall): first_of's read by position, run by node,
+    # answers as native Julia
+    isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+    local fb = W.compile(F.first_int, (Int,); optimize = false)
+    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("first_int($n)", fb, (n,), Main.WTRunner.native_answer(F.first_int, (n,))) for n in (3, -2)])
+        @test r.ok || (@info r.label r.why; false)
+    end
 end
 
 @testset "translator.dart: PolymorphicDispatchers, a class-id search over the static dispatch ranges (polymorphic specialization)" begin

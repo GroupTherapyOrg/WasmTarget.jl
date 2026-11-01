@@ -875,8 +875,12 @@ end
 # one compiled body for every kind of node (@nospecialize, inferred once): the @exhaustive match below
 # dispatches on the kind, so a body per kind of caller's node would only repeat it; and one for every kind of
 # expected type, which each visitor then takes as dart's declared ValueType: a body per NumType and RefType
-# caller had compiled each visitor up to three times for each code generator (visit_static_get 14 times)
-@parity "dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression" @nospecializeinfer function translate_expression(self::AstCodeGenerator, @nospecialize(node::Union{NirValue,NirStmt}), @nospecialize(expected_type::WasmBuilder.IR.ValueType))::WasmBuilder.IR.ValueType
+# caller had compiled each visitor up to three times for each code generator (visit_static_get 14 times).
+# Reshaped: `value_type` — the type Julia inferred for a statement node, which the node itself does not
+# carry (a value's, dart_type_of's): convertType's boxed_class, as Julia's codegen unboxes a call's
+# boxed result by its statement's inferred type (julia/src/codegen.cpp emit_invoke's mark_julia_type)
+@parity "dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression" @nospecializeinfer function translate_expression(self::AstCodeGenerator, @nospecialize(node::Union{NirValue,NirStmt}), @nospecialize(expected_type::WasmBuilder.IR.ValueType);
+        value_type::Union{Type,Nothing} = nothing)::WasmBuilder.IR.ValueType
     try
         # dart's `node.accept1(this, expectedType)`: the visitor of the node's kind
         local result_type = node isa NirValue ? (@exhaustive node::NirValue begin
@@ -956,8 +960,9 @@ end
             NirNothing => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: an emptied statement as a value"), "$(self.enclosing_member)")
         end)
         # a box is the value's own Julia class, which the NIR types (convertType's boxed_class): a
-        # literal's its value's, read with no body (a static field's initializer has none)
-        local value_type = node isa NirConst ? nir_const_type(node) : node isa NirValue ? dart_type_of(self, node) : nothing
+        # literal's its value's, read with no body (a static field's initializer has none); a
+        # statement's the type its caller passes
+        node isa NirValue && (value_type = node isa NirConst ? nir_const_type(node) : dart_type_of(self, node))
         convert_type(self.translator, self.b[], result_type, expected_type; boxed_class = value_type isa DataType ? value_type : nothing)
         return expected_type
     catch
@@ -1254,7 +1259,7 @@ end
     local type_ = translate_type_of_local_variable(self.translator, self.body.types[node.id])
     local local_ = add_local(self, type_)
     self.locals[node] = local_
-    translate_expression(self, self.body.stmts[node.id], local_.type)
+    translate_expression(self, self.body.stmts[node.id], local_.type; value_type = self.body.types[node.id])
     WasmBuilder.local_set(self.b[], local_)
     return nothing
 end
@@ -1613,7 +1618,80 @@ end
     return WasmBuilder.IR.NumType_i32
 end
 
-@parity "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall" @unported function _virtual_call(self::AstCodeGenerator, node::NirStmt, interface_target::Core.MethodInstance, kind::_VirtualCallKind, push_receiver::Function, push_arguments::Function; use_unchecked_entry::Bool) end
+"""
+A call through a selector: dart's virtual call of `interface_target`'s getter, setter or method.
+Julia's selectors are field selectors (DispatchTable.build, ruling (a)): a field access on a receiver
+Julia's inference left abstract, its interface target the field as the receiver's type names it, a
+FieldReference whose name and kind find the selector. No target is dart's unreachable call; one range
+of one target is a direct call of that target's function; otherwise the receiver is kept in a local
+and the call goes through the dispatch table (callDispatchTable), or a polymorphic dispatcher where
+the selector has static ranges beside its table's.
+"""
+@parity "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall" function _virtual_call(self::AstCodeGenerator, node::NirStmt, interface_target::Reference, kind::_VirtualCallKind, push_receiver::Function, push_arguments::Function; use_unchecked_entry::Bool)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"
+    kind != _VirtualCallKind_Get || !use_unchecked_entry ||
+        reject!(Internal("$at: a getter's unchecked entry"), "$(self.enclosing_member)")
+    local translator = self.translator
+    local b = self.b[]
+    # Julia's interface target already names the getter or setter (dart's referenceAs)
+    local reference = interface_target
+    local selector = selector_for_target(translator.dispatch_table[], reference)
+    local signature = selector.signature[]
+    local name = entry_point_name(selector, use_unchecked_entry)
+    reference isa FieldReference && selector.name == field_name(reference.field) ||
+        reject!(Internal("$at: the selector $(selector.name) for $reference"), "$(self.enclosing_member)")
+    push_receiver(signature)
+    local targets_ = targets(selector; unchecked = use_unchecked_entry)
+    local target_ranges = targets_.all_target_ranges
+    local static_dispatch_ranges = targets_.static_dispatch_ranges
+    # NOTE: Keep this in sync with `dynamic_dispatchers.dart:generateNoSuchMethodCall`.
+    local no_target = isempty(target_ranges)
+    local direct_call = length(target_ranges) == 1 && length(static_dispatch_ranges) == 1
+    local call_polymorphic_dispatcher = !direct_call && !isempty(static_dispatch_ranges)
+    if no_target
+        # Unreachable call
+        WasmBuilder.comment(b, "Virtual call of $name with no targets at $(self.enclosing_member)")
+        push_arguments(signature, selector.param_info[])
+        WasmBuilder.unreachable(b)
+        return void_marker(self)
+    end
+    if direct_call
+        local target = get_function_entry(translator, target_ranges[1].target; unchecked_entry = use_unchecked_entry)
+        local direct_call_signature = signature_for_direct_call(translator, target)
+        local param_info = param_info_for_direct_call(translator, target)
+        push_arguments(direct_call_signature, param_info)
+        return output_or_void(translator, call(self, target))
+    end
+    # Receiver is already on stack.
+    local receiver_var = add_local(self, signature.inputs[1])
+    receiver_var.type isa WasmBuilder.IR.RefType && receiver_var.type.nullable &&
+        reject!(Internal("$at: a nullable receiver for $name"), "$(self.enclosing_member)")
+    WasmBuilder.local_tee(b, receiver_var)
+    if call_polymorphic_dispatcher
+        load_class_id(b, translator, receiver_var.type)
+        WasmBuilder.local_get(b, receiver_var)
+    end
+    push_arguments(signature, selector.param_info[])
+    if call_polymorphic_dispatcher
+        MacroAssembler_invoke(b, get_polymorphic_dispatcher(get_polymorphic_dispatchers_for_module(translator, b.module_builder), selector;
+            use_unchecked_entry = use_unchecked_entry))
+    else
+        WasmBuilder.comment(b, "Instance $kind of '$name'")
+        WasmBuilder.local_get(b, receiver_var)
+        call_dispatch_table(translator, b, selector; interface_target = reference, use_unchecked_entry = use_unchecked_entry)
+    end
+    if selector.synthesize_null_return_value[]
+        isempty(signature.outputs) || reject!(Internal("$at: a synthesized null after outputs"), "$(self.enclosing_member)")
+        WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+        return WasmBuilder.IR.RefType(WasmBuilder.IR.HeapType_none; nullable = true)
+    end
+    if selector.synthesize_no_return[]
+        isempty(signature.outputs) || reject!(Internal("$at: no return after outputs"), "$(self.enclosing_member)")
+        WasmBuilder.unreachable(b)
+        return void_marker(self)
+    end
+    return output_or_void(translator, signature.outputs)
+end
 
 # a NIR variable is never captured (allocateContext): its local holds it
 @parity "dart2wasm/lib/code_generator.dart:2127 AstCodeGenerator.visitVariableGet" function visit_variable_get(self::AstCodeGenerator, node::Union{NirSSA,NirArgument}, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
@@ -1692,12 +1770,32 @@ end
     # a type as a value Julia types Type{X} (Core.Typeof); its class is X's kind, typeof(X), whose
     # layout holds the field, as Julia's codegen reads the value's own type (jl_typeof)
     Base.isType(cls) && !Base.has_free_typevars(cls.parameters[1]) && (cls = typeof(cls.parameters[1]))
-    cls isa DataType && isconcretetype(cls) ||
-        reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): a field of $cls, no concrete class")
     local name = node.args[3]
     name isa NirConst && name.c.val isa Union{Symbol,Int} ||
         reject!(Unquarantined("src/code_generator.jl visitInstanceGet: a field of $cls named at run time"), "$(self.enclosing_member)")
     local key = name.c.val
+    # a receiver Julia left abstract has no single target: the field's getter selector (_virtualCall),
+    # its interface target the field as the receiver's class names it (dart's node.interfaceTarget, a
+    # member of the static type, which a Julia abstract type does not declare), a FieldReference whose
+    # name and kind DispatchTable.selectorForTarget reads: the selector's name as field_selector_calls
+    # names it over the classes the receiver admits, a position the field each holds there
+    if !(cls isa DataType && isconcretetype(cls))
+        local reference = FieldReference(ClassField(class_for_type(self.translator, cls), 0, field_selector_name(key, DataType[info.cls for info in self.translator.classes[] if info.cls isa DataType && !class_is_abstract(info.cls) && info.cls <: cls]), Any, false), FieldReferenceKind_getter)
+        local result = _virtual_call(self, node, reference, _VirtualCallKind_Get,
+            signature -> (translate_expression(self, receiver, signature.inputs[1]); nothing), (signature, param_info) -> nothing;
+            use_unchecked_entry = false)
+        # an unboxed result boxed where the read's value is a reference: its box is its Julia class,
+        # the type every target's field holds, where dart boxes by the wasm type's boxed class, which
+        # names no one Julia class (several share a wasm primitive)
+        (result isa WasmBuilder.IR.RefType || !(expected_type isa WasmBuilder.IR.RefType)) && return result
+        local selector = selector_for_target(self.translator.dispatch_table[], reference)
+        local field_types = unique(Type[type_of_field(self.translator, (r.target::FieldReference).field::ClassField)
+                                        for r in targets(selector; unchecked = false).all_target_ranges])
+        length(field_types) == 1 && only(field_types) isa DataType ||
+            reject!(Unquarantined("src/dispatch_table.jl SelectorInfo._upperBound: the field $key's value, unboxed though its targets' fields hold $(join(field_types, ", "))"), "$(self.enclosing_member)")
+        convert_type(self.translator, self.b[], result, expected_type; boxed_class = only(field_types))
+        return expected_type
+    end
     local fields = class_instance_fields(cls, at)
     local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
     k === nothing && reject!(Unquarantined("src/julia/classes.jl: the field $key of $cls, which its class layout (a kind's runtime type layout) does not hold"), "$(self.enclosing_member)")
@@ -1783,12 +1881,32 @@ end
     length(node.args) in (4, 5) || reject!(Internal("$at: setfield! with $(length(node.args) - 1) operands"), "$(self.enclosing_member)")
     local receiver = node.args[2]
     local cls = dart_type_of(self, receiver)
-    cls isa DataType && isconcretetype(cls) ||
-        reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): a field of $cls, no concrete class")
     local name = node.args[3]
     name isa NirConst && name.c.val isa Union{Symbol,Int} ||
         reject!(Unquarantined("src/code_generator.jl visitInstanceSet: a field of $cls named at run time"), "$(self.enclosing_member)")
     local key = name.c.val
+    # a receiver Julia left abstract has no single target: the field's setter selector (_virtualCall),
+    # the value kept where the expression's value is used, the setter's synthesized null dropped
+    if !(cls isa DataType && isconcretetype(cls))
+        local b = self.b[]
+        local temp = Ref{Union{Nothing,WasmBuilder.IR.Local}}(nothing)
+        _virtual_call(self, node, FieldReference(ClassField(class_for_type(self.translator, cls), 0, field_selector_name(key, DataType[info.cls for info in self.translator.classes[] if info.cls isa DataType && !class_is_abstract(info.cls) && info.cls <: cls]), Any, true), FieldReferenceKind_setter), _VirtualCallKind_Set,
+            signature -> (translate_expression(self, receiver, signature.inputs[1]); nothing),
+            function (signature, param_info)
+                local param_type = signature.inputs[end]
+                translate_expression(self, node.args[4], param_type)
+                if preserved
+                    temp[] = add_local(self, param_type)
+                    WasmBuilder.local_tee(b, temp[])
+                end
+                return nothing
+            end;
+            use_unchecked_entry = false)
+        WasmBuilder.drop(b) # Drop `null` from setter call.
+        preserved || return void_marker(self)
+        WasmBuilder.local_get(b, something(temp[]))
+        return something(temp[]).type
+    end
     local fields = class_instance_fields(cls, at)
     local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
     k === nothing && reject!(Unquarantined("src/julia/classes.jl: the field $key of $cls, which its class layout (a kind's runtime type layout) does not hold"), "$(self.enclosing_member)")
@@ -2041,8 +2159,10 @@ end
 # Julia's own codegen emits a PiNode through convert_julia_type (julia/src/codegen.cpp:2638
 # convert_julia_type), whose answers come first: a narrowing to a singleton type is that type's ghost
 # value whatever the operand holds, and one between two different concrete types is a path no value
-# takes, a trap. Julia's optimizer leaves both on a branch its forwarding made dead (a field's
-# Union{Nothing,Int64} test kept after the stored Int64 replaced the load)
+# takes. Julia's optimizer leaves both on a branch its forwarding made dead (a field's
+# Union{Nothing,Int64} test kept after the stored Int64 replaced the load). Julia's codegen passes
+# &skip for a PiNode (julia/src/codegen.cpp:6384) and so emits no trap there, skipping the dead value;
+# WasmTarget differs, emitting wasm's unreachable, which the dead path never reaches
 @parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" function visit_as_expression(self::AstCodeGenerator, node::NirPi, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local narrowed = node.typ
     local own = dart_type_of(self, node.val)

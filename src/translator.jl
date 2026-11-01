@@ -151,7 +151,7 @@ the translator holds each collaborator.
     class_for_heap_type::Dict{WasmBuilder.IR.HeapType,ClassInfo}
     field_index::Dict{ClassField,Int}
     type_parameter_index::IdDict{TypeVar,Int}
-    static_param_info::IdDict{Core.MethodInstance,ParameterInfo}
+    static_param_info::IdDict{Reference,ParameterInfo}
     _declared_field_tables::Dict{ClassField,WasmBuilder.IR.AbstractTable}
     _imported_field_tables::Late{WasmTableImporter}
     members_containing_inner_functions::Base.IdSet{Core.MethodInstance}
@@ -238,7 +238,7 @@ the translator holds each collaborator.
             Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"),
             IdDict{DataType,ClassInfo}(), String[], Dict{Tuple{WasmBuilder.ModuleBuilder,String},WasmBuilder.IR.Global}(),
             Dict{WasmBuilder.IR.HeapType,ClassInfo}(), Dict{ClassField,Int}(), IdDict{TypeVar,Int}(),
-            IdDict{Core.MethodInstance,ParameterInfo}(), Dict{ClassField,WasmBuilder.IR.AbstractTable}(),
+            IdDict{Reference,ParameterInfo}(), Dict{ClassField,WasmBuilder.IR.AbstractTable}(),
             Late{WasmTableImporter}("dart2wasm/lib/translator.dart:198 Translator._importedFieldTables",
                 () -> WasmTableImporter(self, "fieldTable")),
             Base.IdSet{Core.MethodInstance}(), Base.IdSet{Reference}(),
@@ -1315,11 +1315,14 @@ end
 
 """
 The entry of `target` a call takes: dart's checked or unchecked entry of an instance member whose
-parameters need checks, else the member itself. A Julia member is never an instance member (a method
-belongs to its generic function), so it has one entry, its own.
+parameters need checks, else the member itself. A Julia method is never an instance member (a method
+belongs to its generic function), so it has one entry, its own; a field's getter never checks its
+parameters, and its setter checks none either, a Julia field taking no covariant value (dart's
+needToCheckTypesFor), so a field accessor's entry is its own too.
 """
-@parity "dart2wasm/lib/translator.dart:1663 Translator.getFunctionEntry" function get_function_entry(self::Translator, target::Core.MethodInstance; unchecked_entry::Bool)::Core.MethodInstance
-    # Julia's member is no instance member (preciseThisFor), dart's first return
+@parity "dart2wasm/lib/translator.dart:1663 Translator.getFunctionEntry" function get_function_entry(self::Translator, target::Reference; unchecked_entry::Bool)::Reference
+    # Julia's method is no instance member (preciseThisFor), dart's first return; a getter's, dart's
+    # second; a setter's, the member with no parameter to check, its last
     return target
 end
 
@@ -1420,10 +1423,17 @@ end
     return synthesize_no_return(self.functions[], target)
 end
 
-# a Julia method is no instance member, so it has no selector (src/dispatch_table.jl's are fields'):
-# its info is the static one, made once per member
-@parity "dart2wasm/lib/translator.dart:1896 Translator.paramInfoForDirectCall" param_info_for_direct_call(self::Translator, target::Core.MethodInstance)::ParameterInfo =
-    get!(() -> ParameterInfo_from_member(target, false), self.static_param_info, target)
+# an instance member's selector answers for the targets it holds, as signatureForDirectCall reads it;
+# every other member's info is the static one, made once per member (a Julia method is no instance
+# member, src/dispatch_table.jl's selectors being fields')
+@parity "dart2wasm/lib/translator.dart:1896 Translator.paramInfoForDirectCall" function param_info_for_direct_call(self::Translator, target::Reference)::ParameterInfo
+    if target isa FieldReference && target.field isa ClassField
+        for (_, selector) in self.dispatch_table[]._selector_info
+            contains_target(selector, target) && return selector.param_info[]
+        end
+    end
+    return get!(() -> ParameterInfo_from_member(target, false), self.static_param_info, target)
+end
 
 """
 The precise type of `this` in an instance member. A Julia method's `this` is its callee, `Argument(1)`,
