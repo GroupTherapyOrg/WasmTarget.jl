@@ -1024,9 +1024,9 @@ map.
         (s::NirGCPreserveEnd) => nothing
         # control leaves a try region by the stackifier's branch out of its TRY_TABLE (visit_block)
         (s::NirLeave) => nothing
-        # Julia's exception stack has no reader: the_exception reads its catch's CATCH local
-        # (visit_block), where it is not in its catch's first block it rejects, and
-        # Base.current_exceptions is a foreign call
+        # Julia's exception stack is read where compute_trycatch says it is topped
+        # (NirHandlers.exception_at): the_exception and rethrow() read the CATCH locals of the catch
+        # topping it (visit_block), so a pop leaves nothing to emit
         (s::NirPopException) => nothing
         (s::NirTheException) => reject!(Internal("$at: the caught exception, which visit_block reads from its catch's CATCH local, as a statement"), at)
         # Julia's loop hints: its codegen makes them the loop's LLVM metadata (julia/src/codegen.cpp's
@@ -1154,9 +1154,12 @@ end
             pop!(labels)
         elseif op == CATCH
             # dart's visitTryCatch: the exception and stack trace its catch pushed, each stashed in a
-            # local, its try block's locals for the statements whose exception stack it tops
-            local thrown = add_local(self, self.translator.top_type_non_nullable[])
-            local thrown_stack_trace = add_local(self, self.translator.stack_trace_type[])
+            # local, its try block's locals for the statements whose exception stack it tops. Each is
+            # defaultable, as a phi's register is: the stackifier may place a read (a rethrow, a
+            # the_exception) after the end of the wasm block holding the set, where a non-nullable
+            # local is uninitialized again; each read converts to the type it needs
+            local thrown = add_local(self, WasmBuilder.with_nullability(self.translator.top_type_non_nullable[], true))
+            local thrown_stack_trace = add_local(self, WasmBuilder.with_nullability(self.translator.stack_trace_type[], true))
             WasmBuilder.local_set(b, thrown_stack_trace)
             WasmBuilder.local_set(b, thrown)
             caught[get(() -> reject!(Internal("src/code_generator.jl visit_block: a CATCH in block $mbb, no EnterNode's catch"), at), catch_enter, mbb)] =
@@ -1930,9 +1933,12 @@ end
     isempty(self.try_block_locals) && reject!(Unquarantined("src/julia/runtime/rtutils.jl: rethrow() outside a catch block, which Julia's runtime raises as ErrorException (julia/src/julia.h:2437 jl_rethrow)"), "$(self.enclosing_member)")
     local b = self.b[]
     local exception_locals = self.try_block_locals[end]
+    local tag = get_dart_exception_tag(self.translator, b.module_builder)
     WasmBuilder.local_get(b, exception_locals.exception_local)
+    convert_type(self.translator, b, exception_locals.exception_local.type, tag.type.inputs[1])
     WasmBuilder.local_get(b, exception_locals.stack_trace_local)
-    WasmBuilder.throw_(b, get_dart_exception_tag(self.translator, b.module_builder))
+    convert_type(self.translator, b, exception_locals.stack_trace_local.type, tag.type.inputs[2])
+    WasmBuilder.throw_(b, tag)
     return expected_type
 end
 

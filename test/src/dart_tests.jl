@@ -636,7 +636,7 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_exception/identity" => ((true, true, true, true), :rejects),
     "dart_exception/in_increment" => ((20, true), :rejects),
     "dart_exception/multiple_breaks_crossing_finally" => ((true, true), :rejects),
-    "dart_exception/nested_catch_rethrow" => ((true, true, true, true), :wt_bug),
+    "dart_exception/nested_catch_rethrow" => ((true, true, true, true), :compiled),
     "dart_exception/rethrow" => (((true, true), (true, true, true)), :rejects),
     "dart_exception/throw_expr" => ((false, true, true, true, true, true, true, false, true, true, true, true), :rejects),
     "dart_exception/throw" => (900, :rejects),
@@ -660,7 +660,7 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_exception/try_catch3" => (900, :compiled),
     "dart_exception/try_catch4" => ((true, true, true, true, true, true, true, true, true), :rejects),
     "dart_exception/try_catch5" => (true, :compiled),
-    "dart_exception/try_finally_regress_25333" => ((true, true, true), :wt_bug),
+    "dart_exception/try_finally_regress_25333" => ((true, true, true), :compiled),
     "dart_exception/try_finally_regress_25654" => ((true, true), :rejects),
     # tests/language/generic/
     "dart_generic/cascaded_forwarding_stubs_generic" => ((true, true, true), :rejects),
