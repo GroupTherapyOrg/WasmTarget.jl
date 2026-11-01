@@ -102,9 +102,11 @@ WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: to
 # to four (A67E1), by the commit that cuts that first-compile cost (wt3-latency)
 SHARDS=6; tpids=""
 costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-instr.tsv"; rm -f .wtd/src_costs.*
+# the shards take files from one queue (test/src_tests.jl), each claimed by a directory made here
+rm -rf .wtd/claims; mkdir -p .wtd/claims
 for k in $(seq 1 $SHARDS); do
   : > ".wtd/progress.$k"
-  WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_COSTS="$costs" WT_SRC_COSTS_OUT="$PWD/.wtd/src_costs.$k" /usr/bin/time -l -o ".wtd/src_tests.$k.time" \
+  WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_CLAIMS="$PWD/.wtd/claims" WT_SRC_COSTS="$costs" WT_SRC_COSTS_OUT="$PWD/.wtd/src_costs.$k" /usr/bin/time -l -o ".wtd/src_tests.$k.time" \
     julia --project=. --startup-file=no test/src_tests.jl > ".wtd/src_tests.$k.out" 2>&1 & tpids="$tpids $!"
 done
 running() { kill -0 $rpid 2>/dev/null && return 0; for p in $tpids; do kill -0 $p 2>/dev/null && return 0; done; return 1; }

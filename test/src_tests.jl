@@ -39,23 +39,25 @@ const SRC_COST = let p = get(ENV, "WT_SRC_COSTS", ""), c = Dict{String,Float64}(
     local rate = isempty(measured) ? 1.0 : sum(c[f] for f in measured) / max(1, sum(filesize(joinpath(SRC_TEST_DIR, f)) for f in measured))
     Dict(f => get(c, f, filesize(joinpath(SRC_TEST_DIR, f)) * rate) for f in SRC_TESTS)
 end
-# WT_SRC_SHARD="k/n" (dev/check.sh runs n shards side by side on the performance cores) takes shard k of a
-# longest-first split by cost, so the shards finish together; without it, every file runs
-const SRC_SHARD = let sh = get(ENV, "WT_SRC_SHARD", "")
-    if isempty(sh)
-        SRC_TESTS
-    else
-        local k, n = parse.(Int, split(sh, '/'))
-        local load = zeros(n)
-        local mine = String[]
-        for f in sort(SRC_TESTS; by = f -> (-SRC_COST[f], f))
-            local j = argmin(load)
-            load[j] += SRC_COST[f]
-            j == k && push!(mine, f)
-        end
-        sort!(mine)
+# WT_SRC_SHARD="k/n" (dev/check.sh runs n shards side by side) runs the files as Julia's own test runner hands its
+# tests to workers: a shared queue, longest first, each shard taking the next file when it finishes one
+# (precedent(julia: test/runtests.jl:267, v1.12.7: `test = popfirst!(tests)` in each worker's loop); WT's queue is
+# a directory, WT_SRC_CLAIMS, a file claimed by the shard whose mkdir of its name succeeds, since the shards are
+# separate processes, not one process's workers). A static split cannot balance these files: about 110 G of first
+# compile lands on whichever file first reaches it in its process (records.jl measured 136 G, then 24; globals.jl
+# 67, then 3), so a shard drawing two read 669-706 G against 420-550 for the rest, red on D14 with its tests green
+# (25f5d125 and the four checks after it, 2026-11-01); a shard that pays such a cost takes fewer files instead.
+# Without WT_SRC_SHARD every file runs.
+const _WT_CLAIMS = get(ENV, "WT_SRC_CLAIMS", "")
+const SRC_SHARD = isempty(get(ENV, "WT_SRC_SHARD", "")) ? SRC_TESTS : sort(SRC_TESTS; by = f -> (-SRC_COST[f], f))
+isempty(get(ENV, "WT_SRC_SHARD", "")) || !isempty(_WT_CLAIMS) ||
+    error("WT_SRC_SHARD runs the queue in WT_SRC_CLAIMS, which is unset: no shard could claim a file")
+# a file is this shard's when its claim is made here: mkdir is atomic, so exactly one shard runs each file
+_wt_claim(f::String)::Bool = isempty(get(ENV, "WT_SRC_SHARD", "")) ||
+    try mkdir(joinpath(_WT_CLAIMS, replace(f, '/' => "__"))); true
+    catch e   # only "it exists" is another shard's claim; any other failure is red
+        e isa Base.IOError && e.code == Base.UV_EEXIST || rethrow(); false
     end
-end
 # the file and case running now, for dev/check.sh's hard limit to name (WT_PROGRESS)
 const _WT_PROGRESS = get(ENV, "WT_PROGRESS", "")
 wt_progress(s::AbstractString) = isempty(_WT_PROGRESS) || write(_WT_PROGRESS, s)
@@ -77,6 +79,7 @@ isempty(_WT_COSTS_OUT) || Sys.isapple() || error("WT_SRC_COSTS_OUT measures inst
 isempty(_WT_COSTS_OUT) || WasmTarget.compile(x::Int64 -> x + Int64(1), (Int64,))   # a failure here is a broken pipeline, red
 @testset verbose = true "src" begin
     for (i, f) in enumerate(SRC_SHARD)
+        _wt_claim(f) || continue
         wt_progress(f)
         local i0 = isempty(_WT_COSTS_OUT) ? UInt64(0) : _wt_instructions()
         @testset "$f" begin include(joinpath(SRC_TEST_DIR, f)) end
