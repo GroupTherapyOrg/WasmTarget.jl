@@ -55,7 +55,7 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
             # of a varargs specialization of an open count packs (nir_vararg_call_tuple)
             if st isa NirCall && nir_callee(st) === Core.tuple
                 local tt = nir_tuple_type(b, st)
-                isconcretetype(tt) && _meet_value!(out, seen, tt, at)
+                isconcretetype(tt) ? _meet_value!(out, seen, tt, at) : push!(open_tuples, tt)
             end
             if st isa NirInvoke
                 local vt = nir_vararg_call_tuple(b, st)
@@ -64,10 +64,12 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
         end
         _meet_value!(out, seen, b.ci.rettype, at)
     end
-    # a varargs tuple whose elements' classes only run time knows: each class jl_f_tuple can give it, over
+    # a tuple, a literal's or a varargs call's, whose elements' classes only run time knows: each class
+    # jl_f_tuple can give it, over
     # the concrete classes the walk met (tuple_classes, the code generator's one source too)
     for tt in open_tuples
-        foreach(c -> _meet_value!(out, seen, c, at), tuple_classes(tt, p -> DataType[c for c in out if isconcretetype(c) && c <: p], at))
+        # one past Julia's bound brings none: the statement rejects where the code generator meets it
+        foreach(c -> _meet_value!(out, seen, c, at), tuple_classes(tt, p -> DataType[c for c in out if isconcretetype(c) && c <: p], at; past_bound = :none))
     end
     return out
 end
@@ -81,16 +83,20 @@ each one's classes, an element's static type read as compute_va_type reads it (c
 `Type{X}` of one value is `typeof(X)`), a concrete one its own class, any other the concrete classes
 `below` gives (the walk's met classes, or getConcreteClassIdRange's). No type is made at run time
 (A68S3), so the classes are enumerated, bounded by Julia's own bound on a split of a union,
-InferenceParams' max_union_splitting: a product past it rejects, located.
+InferenceParams' max_union_splitting: a product past it rejects, located, or, for the class walk
+(`past_bound = :none`), which meets every statement whether or not the code generator reaches it,
+brings no class.
 """
-@quarantine "julia/src/builtins.c:946 jl_f_tuple types a tuple by its values, enumerated here within julia/Compiler/src/types.jl:199 InferenceParams' max_union_splitting" Base.Iterators.product function tuple_classes(T::Type, below::Function, at::String)::Vector{DataType}
+@quarantine "julia/src/builtins.c:946 jl_f_tuple types a tuple by its values, enumerated here within julia/Compiler/src/types.jl:199 InferenceParams' max_union_splitting" Base.Iterators.product function tuple_classes(T::Type, below::Function, at::String; past_bound::Symbol = :reject)::Vector{DataType}
     local tt = Base.unwrap_unionall(T)
-    tt isa DataType && tt <: Tuple && !any(p -> p isa Core.TypeofVararg, tt.parameters) ||
-        reject!(Unquarantined("src/julia/classes.jl tuple_classes: a tuple of type $T, of no fixed length, packed at run time"), at)
+    local fixed = tt isa DataType && tt <: Tuple && !any(p -> p isa Core.TypeofVararg, tt.parameters)
+    fixed || past_bound === :none && return DataType[]
+    fixed || reject!(Unquarantined("src/julia/classes.jl tuple_classes: a tuple of type $T, of no fixed length, packed at run time"), at)
     local element(p) = Base.isType(p) && !(p.parameters[1] isa TypeVar) ? typeof(p.parameters[1]) : p
     local options = Vector{DataType}[(local e = element(p); isconcretetype(e) ? DataType[e] : below(e)) for p in tt.parameters]
     local limit = Core.Compiler.InferenceParams().max_union_splitting
     local n = prod(length, options; init = 1)
+    n > limit && past_bound === :none && return DataType[]
     n > limit && reject!(Unquarantined("src/julia/classes.jl tuple_classes: a tuple of type $T has $n classes at run time, past Julia's max_union_splitting ($limit)"), at)
     return vec(DataType[Tuple{c...} for c in Iterators.product(options...)])
 end

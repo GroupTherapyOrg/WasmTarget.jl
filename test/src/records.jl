@@ -226,3 +226,31 @@ end
     @test all(r -> r.ok, only_results)
 end
 end
+
+# a tuple literal whose operands' classes only run time knows, Julia's jl_f_tuple's: chosen among the closed
+# world's tuple classes by the open operand's class (tuple_classes, the varargs tuple's one source), read
+# back at a run-time index; past max_union_splitting it rejects, located
+module OpenLiteralCases
+using Test, WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+const WTRunner = Main.WTRunner
+const TS = Type[Int64, String, Union{Int64,String}]
+const ANYS = Any[1, "s"]
+@noinline pick(@nospecialize(t::Tuple), i::Int64) = t[i]
+function open_literal(k::Int64, n::Int64)
+    local t = (TS[n], n)                                   # a Tuple{Type, Int64}: DataType or Union first
+    k == 1 && return pick(t, 2)::Int64
+    return Int64(pick(t, 1) isa DataType)
+end
+over(n::Int64) = pick((ANYS[n], n), 2)::Int64            # Tuple{Any, Int64}: every class first
+@testset "records.dart: a tuple literal of open operands is jl_f_tuple's class, within max_union_splitting" begin
+    @test Base.return_types(open_literal, (Int64, Int64)) == [Int64]
+    local plain = WasmTarget.compile(open_literal, (Int64, Int64); optimize = false)
+    local cases = [WTRunner.RunCase("open_literal$a", plain, Int64.(a), WTRunner.native_answer(open_literal, Int64.(a))) for a in ((k, n) for k in 1:2 for n in 1:3)]
+    local results = WTRunner.run_cases(cases)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    @test length(results) == 6 && all(r -> r.ok, results)
+    local e = try; WasmTarget.compile(over, (Int64,); optimize = false); nothing; catch x; x; end
+    @test e isa WasmTarget.RejectionError && occursin("max_union_splitting", e.rejection.row)
+end
+end

@@ -2099,14 +2099,25 @@ class, the tuple type of its fields' types, Julia's answer (`nir_tuple_type`, th
 closed world's classes also read: `tuple(Int, 1)` is a `Tuple{DataType, Int64}`), laid out as any
 class with Julia's field types (src/class_info.jl), so each operand is translated to its field's own
 wasm type. An operand whose class Julia leaves open makes a tuple whose class only run time knows,
-and it rejects, located.
+Julia's jl_f_tuple's: it is chosen among the closed world's tuple classes by the open operands' classes
+(intrinsics.jl's open_tuple arm over tuple_classes), past max_union_splitting rejected, located.
 """
 @parity "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral" function visit_record_literal(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral"
     local args = node.args[2:end]
     local record_type = nir_tuple_type(self.body, node)
-    record_type isa DataType && isconcretetype(record_type) ||
-        reject!(Unquarantined("src/code_generator.jl visitRecordLiteral: a tuple of type $record_type, whose class only run time knows"), "$(self.enclosing_member)")
+    if !(record_type isa DataType && isconcretetype(record_type))
+        # its class only run time knows: jl_f_tuple's, chosen by its open elements' classes, as a varargs
+        # tuple's (the open_tuple arm over tuple_classes, the one source)
+        local values = WasmBuilder.IR.Local[]
+        for operand in args
+            local l = add_local(self, translate_type(self, nir_value_type(self.body, operand)))
+            translate_expression(self, operand, l.type)
+            WasmBuilder.local_set(self.b[], l)
+            push!(values, l)
+        end
+        return generate_static_intrinsic(self.intrinsifier[], Val(:open_tuple), record_type, values, at)
+    end
     local record_class_info = get(self.translator.class_info, record_type, nothing)
     record_class_info === nothing && reject!(Internal("$at: no class info for $record_type"), "$(self.enclosing_member)")
     record_class_allocation(self.translator.functions[], class_id(record_class_info))
