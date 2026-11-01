@@ -7372,3 +7372,119 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A75S5 and A73
 A77S1 is open on 1.C, beside A64R3; A77S2 on 1.F; A77E1, A77E2 and A77E3 on 1.L. By owner: lead A77E1, A77E2 and A77E3;
 wt3-memory A77S1, with A75S1 and A75S2; wt3-runtime A77S2, with A75S4, A76S1, A73S3 and A67S1; wt3-parity A76E1, A76E2,
 A76E4, A76E5, A76E6, A76S2, A75S6 and A75E3; wt3-latency A73E1; wt3-cgstubs2 A71S3.
+
+## 2026-11-01 — audited through 0f92ada6 (903a3332..0f92ada6: a changed ship.sh refused under the lock before its check, a String argument bound as a literal of the program, an effects claim only on an overlay keeping Base's, the no-match refusal planted, the kinds cache keyed by Base's staleness rule in one script and one block)
+
+The seventy-eighth audit, beside the work, covers the 5 commits of 903a3332..0f92ada6 that are not audit entries (16981666,
+entry 77): 3b1a4643, 6732d4a6, a36ed084, 98390e9e and 0f92ada6, read here, under Dale's R1 and R2 as standing sections.
+Every finding rests on one exact command, quoted. Standing items. src changes in 1 file (`git diff --stat
+903a3332..0f92ada6 -- src | tail -1` gives `1 file changed, 24 insertions(+), 2 deletions(-)`, src/julia/parity.jl); no
+exemption lands (`git diff 903a3332..0f92ada6 -- src | grep -cE '^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives
+0), and no catch (`grep -cE '^\+.*catch'` of the same diff gives 0). The debt list reads 387, unchanged (`grep -v '^#'
+dev/quarantine_unpinned.txt | grep -c .`). Each commit names its clause (C0, C10, C2, C2, C0). Earlier findings: A75S6 is
+fixed by a36ed084 for a Method's purity, its residue A78E2; A75E3 by 98390e9e (`grep -c 'matches no method of its own'
+test/parity_ratchet.jl` gives 4), its residue A78S1; A76E2 by 0f92ada6 (`grep -n 'the newest sixteen kept'
+dev/src_progress.sh dev/progress_kinds.jl` gives only `dev/progress_kinds.jl:25:`); A76E1 by 0f92ada6, its residue A78E1
+and A78S2; A77E3's blob half by 3b1a4643 (dev/ship.sh:197 compares `origin/$MARCH:dev/ship.sh` with WT_SHIP_RULES after the
+locked fetch, before the rebase), its message naming no finding, the first half open (`grep -n 'D14_RED=' dev/ship.sh`
+gives `42:`, the lane's dev/check.sh). Open as they stood: A77E1 (`grep -n 'hooks/pre-push' dev/ship.sh` gives only the
+comments at `17:` and `194:`, no comparison of the installed copy); A77E2 (`ps aux | grep -c '[b]ash dev/autoship.sh'` gives
+8; `tail -1 .git/wt-ship-failures.tsv` is wt3-constants' conflict at 20:40:22 naming 0f92ada6); A77S1 (`grep -n TRIM_NO
+src/julia/nir.jl` gives `704:`, `760:`); A77S2 (`grep -n 'interop_member_names, site' src/namer.jl` gives `143:`); A75S1
+(`grep -n max_union_splitting src/julia/classes.jl` gives `86:`, `90:`, `97:`, `100:`); A71S3 (`grep -n 'codegen.cpp:2638'
+src/code_generator.jl` gives `2040:`); A73S3 (`grep -n ':typeassert),' src/julia/subset.jl` gives `199:`); A73E1 (`grep -n
+'instantiates no' src/julia/nir.jl` gives `827:`); A76E4 (`grep -n 'union!(defs_named, ("Init"' test/parity_ratchet.jl`
+gives `2679:`); A76S1 (`grep -n 'target isa FieldReference ?' src/functions.jl` gives `481:`); A68E3 (`tail -1
+.git/wt-corpus.tsv` gives 6732d4a6's `hung 1218` row); A76S2, A76E5, A76E6, A75S2, A71E2, A69E1, A68E2, A68S4, A72E1, A67E1
+and A67S1, carried, not re-read. Findings A78E1 to A78E3, A78S1 and A78S2.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — no change to the collection or the plan in src.
+
+Area: emission and diagnostics — 6732d4a6 (test/runner.jl): a case's String argument becomes a literal of a method
+`_call_bound` generates, passed to the function inside the program, its native answer Bound's own and its label naming the
+position bound. Its precedent resolves at the dart pin: `git -C ~/.cache/wasmtarget/dart-sdk show
+898a1e4b:tests/language/identity/identical_test.dart` has `notIdenticalTest1(a) {`, `if (!identical("ho", a)) {` and a
+main calling `notIdenticalTest1("ho")`, the shape Bound reproduces. The literal is not folded through the call by Julia's
+inference: a Const String is no const-prop argument (abstractlattice.jl:232 `!ismutable(val)`, and jltypes.c:3190-3191 makes
+String a mutable type). The corpus run at its head bears the commit's count out: `grep -c 'marshals no String'
+.git/wt-corpus-red-f05b2fa8.out .git/wt-corpus-red-6732d4a6.out` gives 109 and 0. Its self-test hands a recording compile,
+so no landing case compiles a bound String; the corpus is its judge, as the commit says.
+
+Area: enforcement and prose — 3b1a4643: the blob comparison under the lock, above; the hook's refusal reaches
+wt-ship-failures.tsv (record_failure greps `^pre-push: REFUSED`, which the rebase's `2>&1 | tee .wtd/rebase.out` captures).
+a36ed084: check_overlays_agree compares each overlay's purity, decoded by decode_effects_override less the
+consistent-overlay bit, with its Base method's of the same signature, and refuses a purity on any other method of `root`.
+(A78E2, medium, D6, R1) Julia carries an effects claim in three places, and the check reads one: `sed -n 764,786p
+base/expr.jl` of the julia pin gives the function-definition case `pushmeta!(lastex::Expr, form_purity_expr(override))`
+(a Method's purity, read), the `@ccall` case `lastex.args[1] = GlobalRef(Base, Symbol("@ccall_effects"))` (the claim an
+argument of the foreigncall), and the call-site case `Expr(:block, form_purity_expr(override), ..., Expr(:purity), :val)`,
+whose region `sed -n 508,553p src/method.c` sets into the statements' ssaflags (`flag |= ... (1 << (NUM_IR_FLAGS+j))`,
+`jl_array_uint32_set(li->ssaflags, j, flag)`), never into the Method's purity. So `Base.@assume_effects :nothrow
+reject!(...)` written inside any src body passes `claims(m.purity) != none`, and it is A75S6's own hazard: a nothrow claim
+deleting a rejection. Fix: the scan reads each WasmTarget method's lowered code beside its purity (the ssaflags bits from
+NUM_IR_FLAGS on, julia.h:281, and each :foreigncall's effects argument), refusing any claim outside an overlay that keeps
+its Base method's; plants: a call-site claim and an @assume_effects @ccall each refused. Owner: wt3-parity
+(src/julia/parity.jl). 98390e9e: a method deleted after its entry is taken is refused, naming the reason. (A78S1, low, D17)
+L208's text now says the no-frame refusal is "unplanted since no definition reaches it", where a plant reaches it as the
+no-match one does, in the scratch module: `typeinf_frame` returns nothing when InferenceState does (Compiler/src/typeinfer.jl
+:1118), which returns nothing when retrieve_code_info does (inferencestate.jl:603); `get_staged` swallows a generator that
+throws (`sed -n 87,91p Compiler/src/utilities.jl` gives `try`, `return call_get_staged(...)`, `catch # user code might throw
+errors – ignore them`, `return nothing`), and a generated-only method keeps no source (`sed -n 969,971p src/method.c` gives
+`if (gen_only) {`, `m->source = NULL;`). src forbids @generated (construction.jl:279), which bars a src definition, not a
+plant. Fix: a plant in rp, `@generated g(x::Int) = error()`, refused naming "no frame". Owner: wt3-parity
+(test/parity_ratchet.jl). 0f92ada6: dev/cache_key.sh keys a cached verdict by the julia's commit, tagged commit, machine
+and cache flags, the three checkouts' heads and each named file's path and blob id; one block, dev/progress_kinds.jl, reads
+and writes the kinds; its citation resolves (`sed -n 4049p base/loading.jl` gives `@constprop :none function
+stale_cachefile(modkey::PkgId, build_id::UInt128, modpath::String, cachefile::String;`). (A78E1, medium, D9) the key is
+computed past a failed input and handed on. The file hashes run in a process substitution whose status nothing reads, and
+the header in a brace group that `set -e` ends; measured on a copy of the script in a scratch repository, its julia line
+replaced by `echo header` (src/a.jl, b.jl, c.jl committed): `bash dev/cache_key.sh src` gives `3a27d8b6...`; after `rm
+src/a.jl` it prints `fatal: could not open 'src/a.jl' for reading` and `5114f837a44faa0f0d7e44bd11f8c7ef9134c9d0`, `exit=0`,
+and after editing src/c.jl as well, `5114f837a44faa0f0d7e44bd11f8c7ef9134c9d0` again: every file after the missing one
+leaves the key. With the header replaced by `false`, it prints `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391` (the empty blob,
+one key for every tree), `exit=1`, and a caller shaped as kinds_cache under `set -euo pipefail` (`kc() { local key;
+key=$(bash dev/cache_key.sh src); echo "/d/$key.tsv"; }; X=$(kc)`) gets `/d/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391.tsv`,
+since bash runs a command substitution without errexit. A lane's tree with a tracked file removed and not yet staged, or
+a julia that fails to start, reads another tree's kinds as a hit. Fix: cache_key.sh hashing the files with a status it
+checks (the count of blob ids equal to the count of paths), the header's status checked, and kinds_cache refusing a
+non-zero exit or a key that is not 40 hex, located; plants: a tracked file missing and a failing header each refused.
+Owner: wt3-parity (dev/cache_key.sh, dev/src_progress.sh). (A78S2, low, D5, R1) the port keeps stale_cachefile's
+comparison and drops its list: Base checks the includes the load itself recorded in the image's header, where cache_key.sh
+checks the pathspecs its caller names by hand, so a file the kinds come to read is keyed only if a lane adds it there
+(dev/skeleton.jl:26 reads dev/PARITY_MASTER.md, which no pathspec names; today it only guards the checkout's head); and the
+lock's "an edit only to a pin" plant edits a text under src/, none moving a checkout's head, the input it adds. Fix:
+WasmTarget's files read from its image's recorded includes, the readers' from what they open, and a plant moving a
+checkout's head. Owner: wt3-parity. (A78E3, medium, D5, R2) wt-progress.tsv holds one row per ship, not per landing: `cut
+-f2 .git/wt-progress.tsv | tail -5` gives `903a3332 16981666 3b1a4643 6732d4a6 0f92ada6`, where `.git/wt-landings.tsv` has
+`20:36:46Z a36ed084`, `20:38:37Z 98390e9e` and `20:40:19Z 0f92ada6`, one ship's three pushes. dev/ship.sh:102 checks and
+pushes each commit inside the rebase's `--exec` and writes the landings row there; :241 writes the progress row once,
+after, from .wtd/ratchet.out, which each commit's check overwrites (dev/check.sh:109 `> .wtd/ratchet.out`); the comment at
+:237 says "one row per landing". a36ed084, the one src commit of the range, has no count of its own. This is A76E3's and
+A77E2's missing rows from the current ship.sh, not an older copy. Fix: the progress row written in the --exec beside the
+landings row, from that commit's ratchet output. Owner: lead (dev/ship.sh).
+
+stopgap in disguise: none new; A78S2 is a precedent ported without its source of the list.
+
+precedent: dart's tests/language/identity/identical_test.dart, a main passing its literal through a call, for Bound;
+decode_effects_override and the @assume_effects forms (base/expr.jl:764) for the overlay check, two of three read (A78E2);
+typeinf_frame and get_staged (typeinfer.jl:1115, utilities.jl:83) for the no-frame refusal (A78S1); stale_cachefile
+(loading.jl:4049) for the cache key, its recorded include list left out (A78S2).
+
+Requirements: D5, D6, D9, D17; no lock fired inside its band.
+
+R1 and R2. R1: each citation of the range is read at its pin, above, and resolves. 6732d4a6 reproduces the dart test's
+shape. a36ed084 reads Julia's own decoding of a claim, of one of the three places Julia writes one (A78E2). 0f92ada6 ports
+stale_cachefile's comparison without its recorded list (A78S2). R2: the latest row of `.git/wt-progress.tsv` (0f92ada6,
+20:40:21Z) reads `3084 + 274 + 4 + 42 = 3404 of 3404; the kinds cache: hit (cc625125e91b)`: 3084 ported with a body, 32 of
+them a dart body that throws, 274 Internal (never returning, by Julia's inference), 4 gaps (3 Unported or Unquarantined, 1
+the @unported stub) and 42 DartAbstract, none counted ported; the sum is 3404, unchanged. a36ed084 changed src/julia, which
+holds no dart-anchored definition, so the count could not move; it has no row of its own (A78E3). The hit was read in a
+landing's clean scratch, where A78E1's missing file cannot arise.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A75S6 leaves 1.K; A75E3, A76E1 and A76E2 leave 1.A6;
+A77E3 stays on 1.L for its first half. A78E1, A78S1 and A78S2 are open on 1.A6; A78E2 on 1.K; A78E3 on 1.L. By owner: lead
+A78E3, with A77E1, A77E2 and A77E3; wt3-parity A78E1, A78E2, A78S1 and A78S2, with A76E4, A76E5, A76E6 and A76S2;
+wt3-memory A77S1, with A75S1 and A75S2; wt3-runtime A77S2, with A76S1, A73S3 and A67S1; wt3-latency A73E1; wt3-cgstubs2
+A71S3.
