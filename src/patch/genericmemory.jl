@@ -20,3 +20,8 @@ end
     wasm_memory_unset!(A)
     return A
 end
+
+@quarantine "julia/src/genericmemory.c:30 jl_alloc_genericmemory_unchecked's elements lie at the memory's address, which Base's fill! of a byte memory memsets; WasmGC fills the data array" Base.fill! @consistent_overlay METHOD_TABLE function Base.fill!(a::Union{Memory{UInt8},Memory{Int8}}, x::Integer)
+    wasm_memory_fill!(a, x isa eltype(a) ? x : convert(eltype(a), x))
+    return a
+end

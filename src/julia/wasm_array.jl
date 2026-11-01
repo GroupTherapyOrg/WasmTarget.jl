@@ -306,3 +306,17 @@ generator meets the call and lowers it (src/intrinsics.jl); natively Base's.
     end
     return nothing
 end
+
+"""
+    wasm_memory_fill!(mem, x) -> Nothing
+
+Stores the byte `x` into every element of the byte memory `mem`: Julia's memset of a Memory{UInt8} or
+Memory{Int8} (base/genericmemory.jl:204 fill!, memset through the memory's address), over WasmTarget's
+layout one `array.fill` of the memory's data array from 0 for its length (dart's `WasmArrayExt.fill`).
+Never inlined, so the code generator meets the call and lowers it (src/intrinsics.jl); natively Base's
+memset written out (its fill! is the overlay's own method in WasmTarget's table, src/patch/genericmemory.jl).
+"""
+@quarantine "julia/src/genericmemory.c:30 jl_alloc_genericmemory_unchecked lays a byte memory's elements at its address, which Base's fill! memsets; WasmGC fills the data array (array.fill)" Base.memset @noinline function wasm_memory_fill!(mem::Union{Memory{UInt8},Memory{Int8}}, x::Union{UInt8,Int8})::Nothing
+    GC.@preserve mem Base.memset(Base.unsafe_convert(Ptr{Cvoid}, mem), x, length(mem) % UInt)
+    return nothing
+end

@@ -78,8 +78,8 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..@unported, ..Abstra
        ..throw_bounds_error, ..throw_divide_error, ..throw_invalid_memory_size,
        ..throw_out_of_memory, ..throw_undef_ref_error, ..uf_add!, ..uf_find!, ..uf_union!,
        ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!, ..wasm_memory_copy!,
-       ..wasm_memory_unset!, ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!,
-       ..wasm_string_length
+       ..wasm_memory_fill!, ..wasm_memory_unset!, ..wasm_string_alloc, ..wasm_string_codeunit,
+       ..wasm_string_copy!, ..wasm_string_length
 # ---- end of Dart2Wasm's src/julia names ----
 # a dispatcher over every NIR kind is inferred once, not once per kind of node (a compile's first-use cost)
 import Base: @nospecializeinfer
