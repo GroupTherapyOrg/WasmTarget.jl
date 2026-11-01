@@ -822,9 +822,9 @@ end
 How many arguments `mi`'s method's body takes, the callee `Argument(1)` among them, a varargs
 method's trailing ones its one packed tuple (NirVarargPacking).
 """
-@quarantine "a Julia method's arity is its Method's nargs, with isva for a varargs tail" Core.Method function nir_method_nargs(mi::Core.MethodInstance)::Int
+@quarantine "a Julia method's arity is its Method's nargs, with isva for a varargs tail, the fields of julia/src/julia.h:396 jl_method_t" Core.Method function nir_method_nargs(mi::Core.MethodInstance)::Int
     local m = mi.def
-    m isa Method || reject!(Unquarantined("src/julia/nir.jl: $mi instantiates no method"), "$mi")
+    m isa Method || reject!(Unquarantined("src/julia/nir.jl: $(rejection_text(mi)) instantiates no method"), rejection_text(mi))
     return Int(m.nargs)
 end
 

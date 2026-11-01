@@ -475,7 +475,10 @@ end
     end
     local f = nir_callee(node)
     local args = node.args[2:end]
-    # each family of arms is its own method, compiled only when a program reaches it
+    # each family of arms is its own method, compiled only when a program reaches it, and compiled once
+    # for every builtin it matches (@nospecialize f, as Compiler/src/tfuncs.jl's builtin_tfunction takes
+    # its callee): the `f === ...` tests above narrowed f to each builtin's own type, so the memory family
+    # alone was compiled ten times, one body per builtin
     f === Core.:(===) && length(args) == 2 && return generate_static_intrinsic(self, Val(:identical), f, args)
     f === Core._svec_len && length(args) == 1 && return generate_static_intrinsic(self, Val(:svec_len), f, args)
     f === Core.nfields && length(args) == 1 && return generate_static_intrinsic(self, Val(:nfields), f, args)
@@ -584,7 +587,7 @@ end
 # translated to the array's element type, then array.new_fixed of their count), the array then the
 # data field of the SimpleVector's struct below its header (src/julia/classes.jl
 # `_svec_instance_fields`), as visitStringConstant wraps a String's bytes
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local t = translator(self)
     local at = "$(code_gen.enclosing_member): a SimpleVector made"
@@ -677,7 +680,7 @@ end
 #   defined, true for any other.
 # An order other than :not_atomic (Julia's emit_atomic_error and the atomic orders) and atomic memory,
 # and memoryrefswap!, replace!, setonce! and modify!, reject Unquarantined, located: gaps, never done.
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local t = translator(self)
     local I32, I64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
@@ -957,7 +960,7 @@ end
 # ground (the identical arm, `a_data_type`): a type made at run time would be a second object for an
 # egal type, so each rejects at its statement, located, the one place that ground is kept
 # (dev/AUDIT.md A68S3). Porting one makes run-time types canonical first (jl_apply_type's type cache).
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(self::Intrinsifier, ::Val{:run_time_type}, f::Core.Builtin, args::Vector{NirValue})::Union{} =
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(self::Intrinsifier, ::Val{:run_time_type}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{} =
     reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a type made at run time by Julia's $(nameof(f)), which === on DataTypes (ref.eq of canonical constants) rules out"),
         "$(self.code_gen.enclosing_member): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))")
 
@@ -1100,7 +1103,7 @@ end
 # reference is not null (CreateIsNotNull). A field named at run time (jl_field_isdefined_checked), an
 # order other than :not_atomic, a module's or a type's binding return nothing, rejected unported at
 # the call, located.
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:isdefined}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:isdefined}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local t = translator(self)
     local b = code_gen.b[]
@@ -1166,7 +1169,7 @@ end
 # checks): an index outside 1..length raises BoundsError(v, i) through the runtime's thrower
 # (src/julia/runtime/rtutils.jl throw_bounds_error, jl_bounds_error_int), never a trapping array.get.
 # The element is a reference of any class, the array's element type.
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec_ref}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec_ref}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local t = translator(self)
     local i64 = WasmBuilder.IR.NumType_i64
@@ -1220,7 +1223,7 @@ end
 # one constant, canonical by Julia's egal (constants.jl _lowerTypeToConstant, the constant table keyed
 # by ===), with no type made at run time (Julia's typeof and apply_type reject at their statements, the
 # run_time_type arm), so a reference is equal exactly where Julia's types are egal
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:identical}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:identical}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
     local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
@@ -1367,7 +1370,7 @@ end
 # an empty list rejects, located, and a class outside it is none the program can hold (A68S3), so its
 # miss is unreachable. A SimpleVector or a kind's own layout counts other than its fields: none is taken
 # here, and its call rejects as before
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:nfields}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:nfields}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local t = translator(self)
     local b = code_gen.b[]
@@ -1396,7 +1399,7 @@ end
 
 # Julia's `_svec_len`: a SimpleVector's length, jl_svec_t's own, which its wasm array carries
 # (src/julia/classes.jl, `_svec_instance_fields`): the data field's array.len, a Julia Int
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec_len}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec_len}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
     local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
@@ -1412,7 +1415,7 @@ end
 end
 
 # Julia's `ifelse`: both values computed, one chosen by the Bool, wasm's typed select
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:ifelse}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:ifelse}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
     local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
@@ -1435,7 +1438,7 @@ end
 # never an error, and natively (aarch64's fcvtzs) the value saturates and NaN is 0, which wasm's
 # saturating truncation computes: no trap, which no Julia program does there (A47S1)
 # the type operand a literal or a constant binding, its static type Type{T}
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:conversion}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:conversion}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
     local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
@@ -1507,7 +1510,7 @@ end
 
 # Julia's flipsign_int(x, y): x where y is not negative, else its wrapping negation (Julia's
 # codegen: a select over y >= 0); x and y of one full-width integer type
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:flipsign}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:flipsign}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
     local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
@@ -1532,7 +1535,7 @@ end
 # Julia's shifts, as its codegen answers them: the count is unsigned, and a count of the width or
 # more shifts every bit out (0 for shl_int and lshr_int, the sign for ashr_int), where wasm's
 # shift counts modulo the width; the count is converted to the value's type for the instruction
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:shift}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:shift}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
     local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
@@ -1597,7 +1600,7 @@ end
 # emit_checked_srem_int's own -1 case does). An 8- or 16-bit operand is read in its operation's view
 # and the result put back in its type's form. dart raises its division error in dart code
 # (boxed_int.dart's `~/`), Julia in its codegen, so the arm is Julia's.
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:checked_division}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:checked_division}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = code_gen.b[]
     local I = Core.Intrinsics
@@ -1644,7 +1647,7 @@ end
     return w
 end
 
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:narrow_operator}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:narrow_operator}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
     local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
@@ -1676,7 +1679,7 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:operator}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:operator}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     # whether Julia's operation on an operand of type `t`, held in the wasm number type `w`, is the
     # instruction's: the operand is as wide as `w`, or a Bool under a bitwise operation or equality

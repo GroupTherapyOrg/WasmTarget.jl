@@ -184,7 +184,6 @@ julia/nir.jl nir_code
 julia/nir.jl nir_const_type
 julia/nir.jl nir_intrinsified
 julia/nir.jl nir_invoke_target
-julia/nir.jl nir_method_nargs
 julia/nir.jl nir_operands
 julia/nir.jl nir_tuple_type
 julia/nir.jl nir_used_statements
