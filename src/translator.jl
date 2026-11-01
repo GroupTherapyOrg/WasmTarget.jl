@@ -108,7 +108,8 @@ Julia's answers, not stored (each with its translator.dart line; ledger D3): the
 `coreTypes` :106 and `index` :146 (a port names Julia's types and functions directly, the Kernel
 table's CoreTypes row), `typeEnvironment` :107, `hierarchy` :108 and `subtypes` :109 (Julia's
 `supertype` and its subtyping, the Kernel table's ClassHierarchy row), and `recordClasses` :228 (a
-record's class is its own `Tuple` or `NamedTuple` type, so generateRecordClasses maps no shape,
+concrete record's class is its own `Tuple` or `NamedTuple` type and an open tuple's the record of its
+arity, which the closed world's walk meets, so generateRecordClasses maps no shape,
 src/record_class_generator.jl); and TFA's metadata, whose Julia counterpart is the inference the NIR
 holds: `directCallMetadata` :115 (a call Julia resolved is an invoke of its MethodInstance),
 `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123 and `inferredReturnTypeMetadata` :127

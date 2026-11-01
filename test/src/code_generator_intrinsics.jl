@@ -65,7 +65,7 @@ end
     @test (NaN === NaN) && !(0.0 === -0.0) && reinterpret(Int64, NaN) == reinterpret(Int64, NaN)
     @test emits(g, call(Core.:(===), x, lit(Int32(3)))) == ["local.get", "i32.const 3", "i32.eq"]
     @test emits(p, call(Core.:(===), x, W.NirArgument(3))) == ["local.get", "i64.reinterpret_f64", "local.get", "i64.reinterpret_f64", "i64.eq"]
-    @test absent(g, call(Core.:(===), x, lit(Int64(3))))   # different types: no value comparison
+    @test emits(g, call(Core.:(===), x, lit(Int64(3)))) == ["i32.const 0"]   # disjoint types: never egal (emit_f_is)
     @test emits(g, call(Core.ifelse, lit(true), x, x)) == ["local.get", "local.get", "i32.const 1", "select"]
     @test absent(g, call(Core.ifelse, lit(true), x, lit(1.0)))
     # conversions between full-width types, each its one instruction (a bitcast between two integers of

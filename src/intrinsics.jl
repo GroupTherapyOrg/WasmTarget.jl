@@ -465,6 +465,7 @@ end
         local target = nir_invoke_target(node)
         local string_op = generate_static_intrinsic(Val(:string_data_op), target)
         string_op === nothing || return generate_static_intrinsic(self, Val(:string_data), string_op, node.args[2:end])
+        target.def in methods(wasm_egal) && return generate_static_intrinsic(self, Val(:egal), node.args[2:end])
         local array_op = generate_static_intrinsic(Val(:wasm_array_op), target)
         array_op === nothing || return generate_static_intrinsic(self, Val(:wasm_array), array_op, target, node.args[2:end])
         local memory_op = generate_static_intrinsic(Val(:memory_data_op), target)
@@ -1289,7 +1290,203 @@ end
             return i32
         end
     end
-    return nothing
+    # two types no value has both of: never egal (julia/src/codegen.cpp:3566 emit_f_is, its disjoint
+    # concrete leaf types and its exhaustive intersection test), the operands, NIR values, read for nothing
+    typeintersect(first_type, second_type) === Union{} && (WasmBuilder.i32_const(b[], 0); return i32)
+    # any other pair: Julia's jl_egal, each operand boxed (julia/src/codegen.cpp:3379 emit_box_compare's
+    # call of jl_egal__unboxed past its pointer and type tag tests, jl_egal_'s own), the runtime's
+    # (src/julia/runtime/rtutils.jl), which the closed world holds wherever such a `===` is (:egal)
+    local tr = translator(self)
+    translate_expression(code_gen, first, tr.top_type[])
+    translate_expression(code_gen, second, tr.top_type[])
+    call(code_gen, nir_runtime_member(tr.component, jl_egal, "$(code_gen.enclosing_member): Julia's === on $first_type, $second_type"))
+    return i32
+end
+
+# Julia's egal of two values of any classes, jl_egal_'s body (julia.h:1885, the runtime's jl_egal,
+# src/julia/runtime/rtutils.jl, calls wasm_egal): the same reference is egal; a null (Julia's
+# `nothing`) is egal only to null; values of two classes are not (the type tags); else the switch over
+# the closed world's concrete classes, each its class's arm of jl_egal__unboxed_ (julia.h:1874) and
+# jl_egal__bitstag (builtins.c:243): a class egal compares by identity (a mutable one but String,
+# SimpleVector and DataType: name->mutabl) answers no, as do the kinds, each type one canonical constant
+# (constants.jl _lowerTypeToConstant, no type made at run time, A68S3), whose references were already
+# compared; any other class compares its fields, builtins.c:100 compare_fields: a field of bits by its
+# bits (a float's as an integer, bits_equal), a reference by jl_egal again (a null egal only to null),
+# and a field holding a wasm array (a String's bytes, a SimpleVector's elements) by its length and
+# elements, jl_string_tag's memcmp and compare_svec (builtins.c:87). Julia answers Bool's and Symbol's
+# by their tags, its two Bools and each Symbol canonical; WasmTarget's boxed Bool is not, so it compares
+# its value, and a Symbol is a mutable class compared by identity, as the inline === compares it.
+# precedent(dart: the runtime's identical, intrinsics.dart:2974 MemberIntrinsic.identical: the
+# references, then null and the class ids, then a boxed int's and double's values, any other class not
+# identical). Julia's differs: its immutable classes compare by their fields, so each class has its arm.
+# A class holding a host reference (an externref, no eqref wasm can compare) answers as dart's
+# identical answers a class it does not compare by value: not egal past the reference test; Julia
+# compares its bits, which wasm cannot read. A field of any other wasm type rejects, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:egal}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
+    local at = "$(code_gen.enclosing_member): Julia's jl_egal"
+    local top = t.top_type[]
+    local top_nn = t.top_type_non_nullable[]
+    local egal = nir_runtime_member(t.component, jl_egal, at)
+    local a = add_local(code_gen, top)
+    local c = add_local(code_gen, top)
+    translate_expression(code_gen, args[1], top)
+    WasmBuilder.local_set(b, a)
+    translate_expression(code_gen, args[2], top)
+    WasmBuilder.local_set(b, c)
+    local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
+    # the same reference, or both null
+    WasmBuilder.i32_const(b, 1)
+    WasmBuilder.local_get(b, a)
+    WasmBuilder.local_get(b, c)
+    WasmBuilder.ref_eq(b)
+    WasmBuilder.br_if(b, done)
+    WasmBuilder.drop(b)
+    # one null
+    WasmBuilder.i32_const(b, 0)
+    WasmBuilder.local_get(b, a)
+    WasmBuilder.ref_is_null(b)
+    WasmBuilder.local_get(b, c)
+    WasmBuilder.ref_is_null(b)
+    WasmBuilder.i32_or(b)
+    WasmBuilder.br_if(b, done)
+    WasmBuilder.drop(b)
+    local x = add_local(code_gen, top_nn)
+    local y = add_local(code_gen, top_nn)
+    WasmBuilder.local_get(b, a)
+    WasmBuilder.ref_as_non_null(b)
+    WasmBuilder.local_set(b, x)
+    WasmBuilder.local_get(b, c)
+    WasmBuilder.ref_as_non_null(b)
+    WasmBuilder.local_set(b, y)
+    # the type tags
+    WasmBuilder.i32_const(b, 0)
+    WasmBuilder.local_get(b, x)
+    load_class_id(b, t, top_nn)
+    WasmBuilder.local_get(b, y)
+    load_class_id(b, t, top_nn)
+    WasmBuilder.i32_ne(b)
+    WasmBuilder.br_if(b, done)
+    WasmBuilder.drop(b)
+    # a field pair's test, the two values on the stack at `storage`, leaving an i32
+    local compare(storage::WasmBuilder.IR.StorageType, where::String) = begin
+        if storage isa WasmBuilder.IR.PackedType || storage == i32
+            WasmBuilder.i32_eq(b)
+        elseif storage == i64
+            WasmBuilder.i64_eq(b)
+        elseif storage == f32
+            local r = add_local(code_gen, f32)
+            WasmBuilder.local_set(b, r)
+            WasmBuilder.i32_reinterpret_f32(b)
+            WasmBuilder.local_get(b, r)
+            WasmBuilder.i32_reinterpret_f32(b)
+            WasmBuilder.i32_eq(b)
+        elseif storage == f64
+            local r = add_local(code_gen, f64)
+            WasmBuilder.local_set(b, r)
+            WasmBuilder.i64_reinterpret_f64(b)
+            WasmBuilder.local_get(b, r)
+            WasmBuilder.i64_reinterpret_f64(b)
+            WasmBuilder.i64_eq(b)
+        elseif storage isa WasmBuilder.IR.RefType && WasmBuilder.is_subtype_of(storage, top)
+            call(code_gen, egal)
+        elseif storage isa WasmBuilder.IR.RefType && storage.heap_type isa WasmBuilder.IR.ArrayType
+            # its length and its elements, compare_svec's loop (memcmp's for bytes)
+            local arr = storage.heap_type
+            local element = arr.element_type[].type
+            local p = add_local(code_gen, storage)
+            local q = add_local(code_gen, storage)
+            local n = add_local(code_gen, i32)
+            local i = add_local(code_gen, i32)
+            WasmBuilder.local_set(b, q)
+            WasmBuilder.local_set(b, p)
+            local result = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
+            WasmBuilder.i32_const(b, 0)
+            WasmBuilder.local_get(b, p)
+            WasmBuilder.array_len(b)
+            WasmBuilder.local_tee(b, n)
+            WasmBuilder.local_get(b, q)
+            WasmBuilder.array_len(b)
+            WasmBuilder.i32_ne(b)
+            WasmBuilder.br_if(b, result)
+            WasmBuilder.drop(b)
+            WasmBuilder.i32_const(b, 0)
+            WasmBuilder.local_set(b, i)
+            local again = WasmBuilder.loop(b)
+            WasmBuilder.i32_const(b, 1)
+            WasmBuilder.local_get(b, i)
+            WasmBuilder.local_get(b, n)
+            WasmBuilder.i32_ge_u(b)
+            WasmBuilder.br_if(b, result)
+            WasmBuilder.drop(b)
+            WasmBuilder.i32_const(b, 0)
+            for v in (p, q)
+                WasmBuilder.local_get(b, v)
+                WasmBuilder.local_get(b, i)
+                element isa WasmBuilder.IR.PackedType ? WasmBuilder.array_get_u(b, arr) : WasmBuilder.array_get(b, arr)
+            end
+            compare(element, where)
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.br_if(b, result)
+            WasmBuilder.drop(b)
+            WasmBuilder.local_get(b, i)
+            WasmBuilder.i32_const(b, 1)
+            WasmBuilder.i32_add(b)
+            WasmBuilder.local_set(b, i)
+            WasmBuilder.br(b, again)
+            WasmBuilder.var"end"(b)   # loop
+            WasmBuilder.unreachable(b)
+            WasmBuilder.var"end"(b)   # result
+        else
+            reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's egal of $where, held as $storage, which no Julia layout compares"), at)
+        end
+        nothing
+    end
+    # a class holding a host reference, which no eqref holds: dart's not identical past the reference test
+    local host(storage::WasmBuilder.IR.StorageType) = storage isa WasmBuilder.IR.RefType && !WasmBuilder.is_subtype_of(storage, WasmBuilder.IR.RefType_eq(; nullable = true))
+    # jl_egal__unboxed_: the class's arm
+    local numbering = t.class_id_numbering[]
+    local ids = Int[id for r in get_concrete_class_id_range(numbering, Any) for id in r.start:r.end_]
+    local ranges = [(range = Range(Val(:_), id, id), value = t.classes[][id + 1].cls) for id in ids]
+    WasmBuilder.local_get(b, x)
+    load_class_id(b, t, top_nn)
+    class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
+            local info = t.class_info[cls]
+            local fields = Base.iskindtype(cls) || egal_by_identity(cls) ? ClassField[] : class_instance_fields(cls, at)
+            if Base.iskindtype(cls) || egal_by_identity(cls) || any(f -> host(info.struct_.fields[t.field_index[f] + 1].type), fields)
+                WasmBuilder.i32_const(b, 0)
+                return nothing
+            end
+            if isempty(fields)
+                # a class of no field: its two values are one (jl_egal__bits, a size of 0)
+                WasmBuilder.i32_const(b, 1)
+                return nothing
+            end
+            local u = add_local(code_gen, info.non_nullable_type)
+            local v = add_local(code_gen, info.non_nullable_type)
+            WasmBuilder.local_get(b, x)
+            WasmBuilder.ref_cast(b, info.non_nullable_type)
+            WasmBuilder.local_set(b, u)
+            WasmBuilder.local_get(b, y)
+            WasmBuilder.ref_cast(b, info.non_nullable_type)
+            WasmBuilder.local_set(b, v)
+            for (k, field) in enumerate(fields)
+                local index = t.field_index[field]
+                local storage = info.struct_.fields[index + 1].type
+                for w in (u, v)
+                    WasmBuilder.local_get(b, w)
+                    storage isa WasmBuilder.IR.PackedType ? WasmBuilder.struct_get_u(b, info.struct_, index) : WasmBuilder.struct_get(b, info.struct_, index)
+                end
+                compare(storage isa WasmBuilder.IR.PackedType ? storage : WasmBuilder.unpacked(storage), "$cls's field $(field.name)")
+                k > 1 && WasmBuilder.i32_and(b)
+            end
+            nothing
+        end, () -> WasmBuilder.unreachable(b))
+    WasmBuilder.var"end"(b)   # done
+    return i32
 end
 
 # Julia's `===` on two Strings, jl_egal's: equal when their lengths are and their bytes (memcmp over

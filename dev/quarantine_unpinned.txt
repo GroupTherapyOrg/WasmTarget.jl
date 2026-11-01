@@ -346,8 +346,6 @@ julia/serializable.jl _dart_reaches
 julia/serializable.jl check_serializable_writable
 julia/serializable.jl construction_check
 julia/subset.jl ClosedWorld
-julia/subset.jl RUNTIME_DEMANDS
-julia/subset.jl RUNTIME_ENTRY_POINTS
 julia/subset.jl TRIM_ERROR_KINDS
 julia/subset.jl _SubsetToken
 julia/subset.jl _calls_builtin

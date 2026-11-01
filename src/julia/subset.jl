@@ -178,7 +178,8 @@ range, `:undefined_field`, an allocation leaving a field undefined, a read of a 
 or a read of a Memory's element (memoryrefget), each raising UndefRefError where the reference is
 undefined, and `:memorynew`, a Memory's allocation, which raises ArgumentError at a negative size and
 OutOfMemoryError past what can be allocated, and `:atomic_order`, an isdefined given an order, which
-raises ConcurrencyViolationError where the order does not fit the field. Each demanded one is queued for
+raises ConcurrencyViolationError where the order does not fit the field, and `:egal`, a `===` whose
+operands the intrinsifier does not compare inline, which Julia's jl_egal compares. Each demanded one is queued for
 Julia's one trim inference beside the entry (`check_subset`), so its CodeInstance is in the closed
 world and its NirBody in the NIR.
 
@@ -187,7 +188,7 @@ reaches, queued as roots beside main, as check_subset queues them, `_reached_cca
 differs: a method carries no pragma, so the roots are listed with the form that demands each, each
 checked to name one method when the package loads (check_runtime_entry_points).
 """
-@quarantine "a method carries no entry-point pragma; the runtime's roots of Julia's trim inference are listed with their argument types" Core.Type const RUNTIME_ENTRY_POINTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol,Tuple{Vararg{Type}},Symbol}}} = (
+@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel takes its roots as a list of methods; a method carries no entry-point pragma, so the runtime's roots are listed with their argument types" Core.Type const RUNTIME_ENTRY_POINTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol,Tuple{Vararg{Type}},Symbol}}} = (
     ((:Runtime,), :Error__throw_with_current_stack_trace, (Any,), :throw),
     ((:Runtime,), :StackTrace_current, (), :throw),
     ((), :throw_divide_error, (), :checked_division),
@@ -197,6 +198,7 @@ checked to name one method when the package loads (check_runtime_entry_points).
     ((), :throw_out_of_memory, (), :memorynew),
     ((), :throw_atomic_error, (String,), :atomic_order),
     ((:Runtime,), :_TypeError__throw_as_check_error, (Any, Type), :typeassert),
+    ((), :jl_egal, (Any, Any), :egal),
 )
 
 # a statement operand's value: a GlobalRef's binding (nothing when unbound) or the operand itself, as
@@ -248,10 +250,32 @@ end
     return !(k isa Int) || !isconcretetype(T)
 end
 
+# whether a statement `Core.:(===)(x, y)` of `src` compares operands Julia's jl_egal compares, the call
+# the intrinsifier's === makes where it compares no inline (src/intrinsics.jl, the identical arm, as
+# Julia's codegen calls jl_egal__unboxed at julia/src/codegen.cpp:3379 emit_box_compare): every `===`
+# but one of an operand egal compares by identity, of two DataTypes, of two Strings, of two of one
+# primitive class, of two types no value has both of (emit_f_is's disjoint test) or of `nothing` against
+# a type admitting it (the code generator's EqualsNull), each operand typed by Julia's argextype as the
+# trim verifier types one; the arm's other inline case (an immutable class of reference and bit
+# fields) keeps jl_egal unused, never missing
+@quarantine "julia/src/codegen.cpp:3379 emit_box_compare calls jl_egal__unboxed for operands it cannot compare inline, its operands typed by Core.Compiler.argextype" Core.Compiler.argextype function _compares_by_egal(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState}, slottypes::Vector{Any})::Bool
+    _calls_builtin(st, (Core.:(===),)) && length(st.args) == 3 || return false
+    local A = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes, slottypes))
+    local B = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[3], src, sptypes, slottypes))
+    (egal_by_identity(A) || egal_by_identity(B)) && return false
+    A !== Union{} && B !== Union{} && A <: DataType && B <: DataType && return false
+    typeintersect(A, B) === Union{} && return false
+    # two of one primitive class: their bits, inline (a primitive class with no wasm number, Float16,
+    # reaches no arm and rejects at the statement, as before jl_egal)
+    A === B && A isa DataType && isprimitivetype(A) && return false
+    count(==(Nothing), (A, B)) == 1 && Nothing <: A && Nothing <: B && return false
+    return !(A === String && B === String)
+end
+
 # the IR forms a root's demand names, each a test of one statement of its CodeInfo: a call of a builtin
 # or intrinsic whose raise the root lowers, or an allocation leaving a field undefined and a read of
 # a field one may have left so
-@quarantine "a runtime root is demanded by the Julia builtin or intrinsic whose raise it lowers" Core.Intrinsics.checked_sdiv_int const RUNTIME_DEMANDS = Dict{Symbol,Function}(
+@quarantine "julia/src/codegen.cpp:4064 emit_builtin_call lowers each builtin, calling the runtime where one raises; a runtime root is demanded by the builtin or intrinsic whose raise it lowers" Core.Intrinsics.checked_sdiv_int const RUNTIME_DEMANDS = Dict{Symbol,Function}(
     :throw => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.throw,)),
     :checked_division => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
                                                                    Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int)),
@@ -262,6 +286,7 @@ end
     :memorynew => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.memorynew,)),
     :atomic_order => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.isdefined,)) && length(st.args) == 4,
     :typeassert => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.typeassert,)),
+    :egal => _compares_by_egal,
 )
 
 # whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts, each body read

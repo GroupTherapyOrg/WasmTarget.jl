@@ -275,8 +275,10 @@ end
 # into its arity's record, its unbox where Julia narrows it); and a tuple from each producer of an open
 # tuple (an open literal, an open-count varargs call, a constant through an Any slot) tested by isa,
 # nfields and a run-time index, each the record of its arity, so a producer that left a tuple of its own
-# class in an open slot would answer false where native answers true. Julia's === on two open tuples
-# needs jl_egal on their open fields, which no arm ports yet: a located rejection
+# class in an open slot would answer false where native answers true; and Julia's === over them, the
+# runtime's jl_egal (its class-id switch, builtins.c's arms): the producers' tuples against each other
+# and through an Any slot, and values of every kind an open slot holds (a float's bits, a String's
+# bytes, a boxed Bool, nothing, a nested tuple, a mutable object by identity)
 module RecordModelCases
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
@@ -311,7 +313,19 @@ function producers(k::Int64, n::Int64)
     k == 4 && return (x = pick(va, 1); x isa Int64 ? x : Int64(-1)) + 10 * (c::Tuple{Int64,String})[1]
     return Int64(ncodeunits(pick(lit, 2)::String))
 end
-egal(n::Int64) = (lit = (ANYS[n], "ab"); va = vt(ANYS[n], "ab"); lit === va)
+mutable struct Cell; x::Int64; end
+const CELL = Cell(1)
+const MIXED = Any[NaN, -0.0, 0.0, "ab", "ab" * "", true, nothing, ((Int64(1), "a"), 2.5), CELL, Cell(1), Int64(3), Int32(3)]
+function egal(k::Int64, n::Int64)
+    local lit = (ANYS[n], "ab")
+    local va = vt(ANYS[n], "ab")
+    SLOT[1] = CT
+    local c = SLOT[1]
+    k == 1 && return Int64(lit === va) + 2 * Int64(c === lit) + 4 * Int64(c === va)
+    k == 2 && return (v = (Int64(3), "ab"); SLOT[1] = v; Int64(SLOT[1] === v) + 2 * Int64(SLOT[1] === (n, "ab")))
+    local i, j = divrem(k - 3, length(MIXED))
+    return Int64(MIXED[i % length(MIXED) + 1] === MIXED[(j + n - 1) % length(MIXED) + 1])
+end
 @testset "records.dart: a tuple through an open slot is the record of its arity, read as native" begin
     for (f, ks) in ((round_trip, 1:8), (producers, 1:5))
         local bytes = WasmTarget.compile(f, (Int64, Int64); optimize = false)
@@ -320,7 +334,12 @@ egal(n::Int64) = (lit = (ANYS[n], "ab"); va = vt(ANYS[n], "ab"); lit === va)
         foreach(r -> r.ok || println(r.label, ": ", r.why), results)
         @test length(results) == 2 * length(ks) && all(r -> r.ok, results)
     end
-    local e = try; WasmTarget.compile(egal, (Int64,); optimize = false); nothing; catch x; x; end
-    @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Unported && occursin("=== on Tuple{Any, String}", sprint(showerror, e))
+    local bytes = WasmTarget.compile(egal, (Int64, Int64); optimize = false)
+    local ks = 1:(2 + length(MIXED)^2)
+    local cases = [WTRunner.RunCase("egal($k, $n)", bytes, (Int64(k), Int64(n)), WTRunner.native_answer(egal, (Int64(k), Int64(n)))) for k in ks for n in 1:2]
+    @test count(c -> c.native == 1, cases) >= 2 * length(MIXED)
+    local results = WTRunner.run_cases(cases)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    @test length(results) == length(cases) && all(r -> r.ok, results)
 end
 end

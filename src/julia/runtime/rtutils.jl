@@ -36,6 +36,24 @@
 @quarantine "Julia's runtime raises BoundsError with the value and the index where a bounds check fails" Core.BoundsError @noinline throw_bounds_error(@nospecialize(a::Any), i::Int)::Union{} =
     Runtime.Error__throw_with_current_stack_trace(BoundsError(a, i))
 
+# Julia's egal of two values of any classes, which Julia's codegen calls for `===` where it cannot
+# compare its operands inline (julia/src/codegen.cpp:3379 emit_box_compare: the pointers, then the
+# type tags, then jl_egal__unboxed): jl_egal_ (julia.h:1885), its pointer and tag tests and
+# jl_egal__unboxed_'s switch over the value's class, the intrinsifier's egal arm (wasm_egal), each
+# class's arm builtins.c's own. Kept in the closed world wherever such a `===` is (RUNTIME_ENTRY_POINTS)
+@quarantine "julia/src/julia.h:1885 jl_egal_ compares two values by their pointers, their type tags and then jl_egal__unboxed_'s arm for their class" Core.Bool @noinline jl_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool =
+    wasm_egal(a, b)
+
+"""
+    wasm_egal(a, b) -> Bool
+
+jl_egal_'s body, which the intrinsifier writes as a class-id switch over the closed world's
+classes (src/intrinsics.jl, the egal arm): each class's arm Julia's own (builtins.c:243
+jl_egal__bitstag, :100 compare_fields), a field that holds a reference compared by jl_egal again.
+Natively Julia's `===`.
+"""
+@quarantine "julia/src/builtins.c:237 jl_egal__unboxed compares two values of one type by that type's arm; WasmTarget's arm is a class-id switch the intrinsifier writes" Core.:(===) @noinline wasm_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool = a === b
+
 """
     nir_runtime_member(world, f) -> Core.MethodInstance
 
