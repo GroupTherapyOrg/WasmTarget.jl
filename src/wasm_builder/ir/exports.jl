@@ -14,8 +14,12 @@ end
 
 # The classes that mix in Exportable (BaseFunction, Global, Table, Memory, Tag) cannot also subtype it
 # in Julia, so its members take their Union.
-# dart's abstract getter, which each class's field `enclosingModule` answers
-@parity "wasm_builder/lib/src/ir/exports.dart:11 Exportable.enclosingModule" WasmBuilder.enclosing_module(x::Union{BaseFunction,Global,AbstractTable,Memory,Tag})::AbstractModule = x.enclosing_module
+# dart's abstract getter, which each class's field `enclosingModule` answers. The field is declared
+# AbstractModule, Module's one subtype, since Module (module.jl) holds these parts and Julia declares no
+# type before its definition; the getter answers the Module it is, so a module_to_builder lookup is
+# inferred on Module, not on an untyped key a package's new `==` method invalidates (call_function's
+# lookup re-compiled 73 MethodInstances through getindex(::Dict{Module,ModuleBuilder}, ::Any))
+@parity "wasm_builder/lib/src/ir/exports.dart:11 Exportable.enclosingModule" WasmBuilder.enclosing_module(x::Union{BaseFunction,Global,AbstractTable,Memory,Tag})::Module = x.enclosing_module::Module
 
 # dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
 @parity "wasm_builder/lib/src/ir/exports.dart:13 Exportable.buildExport" WasmBuilder.build_export(x::Union{BaseFunction,Global,AbstractTable,Memory,Tag}, name::String)::Export =

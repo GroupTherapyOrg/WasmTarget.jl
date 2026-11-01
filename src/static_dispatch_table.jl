@@ -40,7 +40,7 @@ end
 @parity "dart2wasm/lib/static_dispatch_table.dart:42 CrossModuleFunctionTable.output" function output(self::CrossModuleFunctionTable)::Nothing
     local translator = self.translator
     for (fun, index) in self._table
-        local target_module = translator.module_to_builder[fun.enclosing_module]
+        local target_module = translator.module_to_builder[WasmBuilder.enclosing_module(fun)]
         if is_main_module(translator, target_module)
             local defined = self._defined_wasm_table[]
             WasmBuilder.set_function_at(WasmBuilder.active_function_segment_builder_for(defined.module_builder.elements[], defined), index, fun)

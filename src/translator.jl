@@ -840,7 +840,7 @@ so every function is the one module's and another module's is a located rejectio
 @parity "dart2wasm/lib/translator.dart:875 Translator.callFunction" function call_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, b::WasmBuilder.InstructionsBuilder,
         target::Union{Reference,Nothing} = nothing)::Vector{WasmBuilder.IR.ValueType}
     # If the target function is defined in the same module as the caller, just invoke it.
-    local target_module_builder = self.module_to_builder[function_.enclosing_module]
+    local target_module_builder = self.module_to_builder[WasmBuilder.enclosing_module(function_)]
     if target_module_builder === b.module_builder
         WasmBuilder.call(b, function_)
         return emit_unreachable_if_no_result(b, function_.type.outputs)
@@ -1103,7 +1103,7 @@ end
 
 """A global holding a reference to `f`, defined once in `f`'s module."""
 @parity "dart2wasm/lib/translator.dart:1290 Translator.makeFunctionRef" function make_function_ref(self::Translator, f::WasmBuilder.IR.BaseFunction)::WasmBuilder.IR.Global
-    local f_module_builder = self.module_to_builder[f.enclosing_module]
+    local f_module_builder = self.module_to_builder[WasmBuilder.enclosing_module(f)]
     return get!(self.function_ref_cache, f) do
         local global_ = WasmBuilder.define(f_module_builder.globals[],
             WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType_def(f.type; nullable = false); mutable = false))
@@ -2001,7 +2001,7 @@ name the export namer makes from the prefix, and imported once into `module_`.
 @parity "dart2wasm/lib/translator.dart:3941 _WasmImporter.get" function Base.get(self::_WasmImporter, key::Union{WasmBuilder.IR.BaseFunction,WasmBuilder.IR.Global,WasmBuilder.IR.Memory,WasmBuilder.IR.AbstractTable,WasmBuilder.IR.Tag},
         module_::WasmBuilder.ModuleBuilder)
     local translator = self._translator
-    local key_module_builder = translator.module_to_builder[key.enclosing_module]
+    local key_module_builder = translator.module_to_builder[WasmBuilder.enclosing_module(key)]
     key_module_builder === module_ && return key
     local inner_map = get(self._map, key, nothing)
     if inner_map === nothing

@@ -780,12 +780,14 @@ end
     end
     if f === Core.memoryrefnew && length(args) == 1
         RT isa DataType && RT <: GenericMemory || return nothing
-        local rinfo, rfs, off, mem = ref_parts(GenericMemoryRef{RT.parameters...})
+        # its own names: the reference's parts below are captured by get_offset and get_mem, and a name
+        # assigned twice in one function is boxed for its closures, its type lost (Julia's Core.Box)
+        local new_info, new_fs, _, _ = ref_parts(GenericMemoryRef{RT.parameters...})
         local m = add_local(code_gen, WasmBuilder.with_nullability(repr(t.class_info[RT]), false))
         translate_expression(code_gen, args[1], m.type)
         WasmBuilder.local_set(b, m)
-        new_struct(rinfo, rfs, Dict{String,Function}("ptr_or_offset" => () -> WasmBuilder.i64_const(b, 0), "mem" => () -> WasmBuilder.local_get(b, m)))
-        return WasmBuilder.with_nullability(repr(rinfo), false)
+        new_struct(new_info, new_fs, Dict{String,Function}("ptr_or_offset" => () -> WasmBuilder.i64_const(b, 0), "mem" => () -> WasmBuilder.local_get(b, m)))
+        return WasmBuilder.with_nullability(repr(new_info), false)
     end
     RT isa DataType && RT <: GenericMemoryRef || return nothing
     local rinfo, rfs, off, mem = ref_parts(RT)

@@ -506,7 +506,7 @@ section, dart's table.fill of a long run waiting for a table that has entries.
         target === nothing && continue
         local target_function = get_existing_function(translator.functions[], target)
         target_function === nothing && continue
-        local target_module_builder = translator.module_to_builder[target_function.enclosing_module]
+        local target_module_builder = translator.module_to_builder[WasmBuilder.enclosing_module(target_function)]
         WasmBuilder.set_function_at(WasmBuilder.active_function_segment_builder_for(target_module_builder.elements[], get_wasm_table(self, target_module_builder)), i - 1, target_function)
     end
     return nothing

@@ -618,7 +618,7 @@ for (`Argument(1)` the callee itself), a varargs method's last argument the pack
     va === nothing || a.n != va.first || return va.packed
     local ps = Base.unwrap_unionall(mi.specTypes).parameters
     1 <= a.n <= (va === nothing ? length(ps) : va.first - 1) && ps[a.n] isa Type && !(ps[a.n] isa Core.TypeofVararg) ||
-        reject!(Unquarantined("src/julia/nir.jl: argument $(a.n) of $mi, outside its signature $(mi.specTypes)"), "$mi")
+        reject!(Unquarantined("src/julia/nir.jl: argument $(a.n) of $(rejection_text(mi)), outside its signature $(mi.specTypes)"), rejection_text(mi))
     return ps[a.n]
 end
 
@@ -739,8 +739,8 @@ The body in `world` (the closed world's NIR) Julia inferred for `mi`: dart's mem
         nb.ci.def === mi && return nb
     end
     nir_intrinsified(mi) &&
-        reject!(Internal("src/julia/nir.jl nir_body_of: $mi, a member the intrinsifier lowers at its call, reached by a call it did not lower (its body is never collected, nir_intrinsified)"), "$mi")
-    reject!(Internal("src/julia/nir.jl: the closed world holds no body for $mi"), "$mi")
+        reject!(Internal("src/julia/nir.jl nir_body_of: $(rejection_text(mi)), a member the intrinsifier lowers at its call, reached by a call it did not lower (its body is never collected, nir_intrinsified)"), rejection_text(mi))
+    reject!(Internal("src/julia/nir.jl: the closed world holds no body for $(rejection_text(mi))"), rejection_text(mi))
 end
 
 """
@@ -753,7 +753,7 @@ The MethodInstance an invoke calls: its target, or the MethodInstance its CodeIn
     t isa Core.MethodInstance && return t
     local d = t.def
     d isa Core.MethodInstance && return d
-    reject!(Unquarantined("src/julia/nir.jl: an invoke of a CodeInstance of a $(typeof(d))"), "$t")
+    reject!(Unquarantined("src/julia/nir.jl: an invoke of a CodeInstance of a $(typeof(d))"), rejection_text(t))
 end
 
 """

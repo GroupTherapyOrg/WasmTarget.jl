@@ -193,6 +193,22 @@ Stop the compile `at` names with `rejection`.
 """
 @quarantine "a rejection stops the compile by throwing, where dart throws at the site" Core.throw reject!(r::Rejection, at::String)::Union{} = throw(RejectionError(r, at))
 
+"""
+    rejection_text(x) -> String
+
+`x`'s text in a rejection, Julia's own `string(x)`, inferred once over every value: a site that
+interpolates a MethodInstance compiles Base's show of it (show_mi, and in it Compiler's
+IRShow.debuginfo_firstline with its `linetable != nothing` on an untyped value), so a package's new
+`==` method invalidated that site, and every compiled caller of it, though the text is built only on
+the rejection's path (a `==(::T, ::Any)` re-compiled 1196 MethodInstances through nir_body_of and
+nir_argument_type alone).
+
+precedent(julia: src/rtutils.c:1496 jl_static_show, the runtime's printing of a value on an error
+path, which no method's inference sees). Julia's differs: the text is Julia's own `string(x)`, its
+call made where the caller's inference cannot specialize it.
+"""
+@quarantine "a rejection's text of a value, printed where no caller infers its printing, as julia/src/rtutils.c:1496 jl_static_show prints one on an error path" Base.string @nospecializeinfer rejection_text(@nospecialize(x))::String = string(x)
+
 # The sum's load-time check: Rejection is a @closed sum (its kinds concrete, subtyping nothing),
 # `_reason` an @exhaustive match over it, and every match over it names every kind (check_closed).
 # A violation refuses the package's load.
