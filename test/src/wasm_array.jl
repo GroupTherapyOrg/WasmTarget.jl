@@ -26,7 +26,8 @@ end
 # Base's unsafe_copyto! of two MemoryRefs and _unsetindex! are by overlay (src/patch/genericmemory.jl):
 # natively Base's, overlapping ranges included; compiled, push! growing a Vector of each kind of element
 # (bits, a reference, one admitting nothing with its set flags) past its memory several times, resize!
-# shrinking and growing, pop! and popfirst!, and Julia's egal of two MemoryRefs (an offset and a memory)
+# shrinking and growing, pop! and popfirst!, deleteat!, append! and insert! (in range and past it), and
+# Julia's egal of two MemoryRefs (an offset and a memory)
 module WasmArrayMemoryTest
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
@@ -61,6 +62,21 @@ function memory(k::Int64, n::Int64)
         v[1] = 1; v[2] = 2; v[3] = 3; v[4] = 4
         resize!(v, n)
         return length(v) + 10 * v[1]
+    elseif k == 8
+        # deleteat! (_deleteat!'s copy over the gap, then _deleteend!/_deletebeg!), past the end BoundsError
+        local d = Vector{Int64}(undef, 6)
+        for i in 1:6; d[i] = i; end
+        deleteat!(d, n)
+        return length(d) + 10 * d[1] + 100 * d[end]
+    elseif k == 9
+        # append! of a String vector (_growend!'s copy, then the elements copied in) and insert! (_growat!)
+        local p = Vector{String}(undef, 2)
+        p[1] = "a"; p[2] = "bb"
+        local q = Vector{String}(undef, 1)
+        q[1] = "ccc"
+        append!(p, q)
+        insert!(p, n, "dddd")
+        return length(p) + 10 * Int64(ncodeunits(p[n])) + 100 * Int64(ncodeunits(p[end]))
     elseif k == 7
         local w = Vector{Int64}(undef, 4)
         w[1] = 1; w[2] = 2; w[3] = 3; w[4] = 4
@@ -84,7 +100,7 @@ end
     @test !isassigned(a, 2) && a[4] == "q" && bits[1] == 7
     local plain = W.compile(memory, (Int64, Int64); optimize = false)
     local argsets = [(1, 1), (1, 40), (2, 1), (2, 40), (3, 1), (3, 40), (5, 2), (5, 3), (6, 1), (6, 9),
-                     (7, 1), (7, 3), (4, 2), (4, 3)]
+                     (7, 1), (7, 3), (8, 1), (8, 3), (8, 6), (8, 9), (9, 1), (9, 4), (9, 9), (4, 2), (4, 3)]
     local cases = [WTRunner.RunCase("memory$a", plain, Int64.(a), WTRunner.native_answer(memory, Int64.(a))) for a in argsets]
     for r in WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
