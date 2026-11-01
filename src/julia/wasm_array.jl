@@ -156,8 +156,10 @@ end
 
 # a dart:_wasm operation's native body: no wasm array exists natively, so the body raises, loud, and
 # its value is hidden from inference (compilerbarrier) so Julia never folds a wasm array's operation;
-# inlined, so it lies in the operation's body, which the closed world never collects
-@quarantine "dart declares a wasm array operation external, its body the compiler's (sdk/lib/_wasm/wasm_types.dart:737 WasmArray); no wasm array exists natively, so its native body raises, its value hidden from Julia's inference" Base.compilerbarrier @inline function _wasm_only(::Type{R})::R where {R}
+# inlined, so it lies in the operation's body, which the closed world never collects. It has no dart
+# counterpart: dart declares such an operation `external`, with no body at all, which Julia cannot
+# write, so it rests on Julia's own barrier, Core.compilerbarrier, whose builtin it cites (A72S2)
+@quarantine "no dart counterpart (dart's external member has no body); a native body that raises, its value hidden from inference by Julia's compilerbarrier builtin (julia/src/builtins.c:2065 jl_f_compilerbarrier)" Base.compilerbarrier @inline function _wasm_only(::Type{R})::R where {R}
     local r = Base.compilerbarrier(:type, nothing)
     r === nothing && error("src/julia/wasm_array.jl: a wasm array operation, run natively; only the compiled module holds a wasm array")
     return r::R
