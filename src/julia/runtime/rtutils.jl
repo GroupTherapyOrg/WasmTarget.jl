@@ -21,6 +21,11 @@
 @quarantine "julia/src/genericmemory.c:30 jl_alloc_genericmemory_unchecked raises Julia's OutOfMemoryError where a memory's allocation cannot be satisfied" Core.OutOfMemoryError @noinline throw_out_of_memory()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(OutOfMemoryError())
 
+# jl_atomic_error, raised by Julia's codegen (cgutils.cpp emit_atomic_error) where an access's atomic
+# ordering does not fit its field, with codegen's message
+@quarantine "julia/src/rtutils.c:181 jl_atomic_error raises ConcurrencyViolationError with codegen's message" Core.ConcurrencyViolationError @noinline throw_atomic_error(msg::String)::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(ConcurrencyViolationError(msg))
+
 # jl_undefref_exception, raised where an undefined field or array element is read (rtutils.c)
 @quarantine "Julia's runtime raises UndefRefError where an undefined reference is read" Core.UndefRefError @noinline throw_undef_ref_error()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(UndefRefError())

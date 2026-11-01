@@ -176,7 +176,8 @@ read of a SimpleVector's element or a MemoryRef's index (memoryrefnew), which ra
 range, `:undefined_field`, an allocation leaving a field undefined, a read of a field one may leave so
 or a read of a Memory's element (memoryrefget), each raising UndefRefError where the reference is
 undefined, and `:memorynew`, a Memory's allocation, which raises ArgumentError at a negative size and
-OutOfMemoryError past what can be allocated. Each demanded one is queued for
+OutOfMemoryError past what can be allocated, and `:atomic_order`, an isdefined given an order, which
+raises ConcurrencyViolationError where the order does not fit the field. Each demanded one is queued for
 Julia's one trim inference beside the entry (`check_subset`), so its CodeInstance is in the closed
 world and its NirBody in the NIR.
 
@@ -192,6 +193,7 @@ checked to name one method when the package loads (check_runtime_entry_points).
     ((), :throw_undef_ref_error, (), :undefined_field),
     ((), :throw_invalid_memory_size, (), :memorynew),
     ((), :throw_out_of_memory, (), :memorynew),
+    ((), :throw_atomic_error, (String,), :atomic_order),
 )
 
 # a statement operand's value: a GlobalRef's binding (nothing when unbound) or the operand itself, as
@@ -240,6 +242,7 @@ end
     :undefined_field => (st, src, sptypes) -> _leaves_field_undefined(st) || _reads_undefinable_field(st, src, sptypes) ||
                                               _calls_builtin(st, (Core.memoryrefget,)),
     :memorynew => (st, src, sptypes) -> _calls_builtin(st, (Core.memorynew,)),
+    :atomic_order => (st, src, sptypes) -> _calls_builtin(st, (Core.isdefined,)) && length(st.args) == 4,
 )
 
 # whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts, each body read

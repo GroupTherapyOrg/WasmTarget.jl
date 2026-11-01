@@ -341,6 +341,7 @@ end
      f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) &&
         return generate_static_intrinsic(self, Val(:memory), f, args)
     f === Core.isdefined && length(args) in (2, 3) && return generate_static_intrinsic(self, Val(:isdefined), f, args)
+    (f === Core.apply_type || f === Core.typeof) && return generate_static_intrinsic(self, Val(:run_time_type), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f isa Core.IntrinsicFunction || return nothing
     local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
@@ -802,6 +803,17 @@ end
     return nothing
 end
 
+# A type made at run time: Julia's apply_type with an operand only run time knows, or typeof of a value
+# whose type only run time knows (Julia folds either where its operands are known, so every call
+# reaching here makes its type at run time). WasmTarget holds each type as one constant, canonical by
+# Julia's egal (constants.jl _lowerTypeToConstant), and `===` on two DataTypes is their ref.eq on that
+# ground (the identical arm, `a_data_type`): a type made at run time would be a second object for an
+# egal type, so each rejects at its statement, located, the one place that ground is kept
+# (dev/AUDIT.md A68S3). Porting one makes run-time types canonical first (jl_apply_type's type cache).
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(self::Intrinsifier, ::Val{:run_time_type}, f::Core.Builtin, args::Vector{NirValue})::Union{} =
+    reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a type made at run time by Julia's $(nameof(f)), which === on DataTypes (ref.eq of canonical constants) rules out"),
+        "$(self.code_gen.enclosing_member): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))")
+
 # a memory's data operation (src/julia/wasm_array.jl), the call Julia's runtime copy makes on two
 # memories (genericmemory.c jl_genericmemory_copyto): the elements of `src`'s data array from its
 # reference's offset copied into `dest`'s from its own, one array.copy, dart's WasmArrayExt.copy
@@ -857,8 +869,10 @@ end
 end
 
 # Julia's `isdefined(x, f)` on a struct field, Julia's codegen arm (codegen.cpp:4864, emit_builtin_call's
-# isdefined): a field named by a constant Symbol or Int of a concrete struct; a field the struct does
-# not have is false; one that cannot be undefined (field_may_be_null, cgutils.cpp:2768) true, as is
+# isdefined): a field named by a constant Symbol or Int of a concrete struct; an order that does not
+# fit the field (an atomic order on a field that is not atomic, :not_atomic on one that is, any order
+# on a field the struct lacks, an order no load takes) raises Julia's ConcurrencyViolationError
+# (codegen.cpp:4910-4934); a field the struct does not have is false; one that cannot be undefined (field_may_be_null, cgutils.cpp:2768) true, as is
 # one of a constant Julia holds defined where the struct or the field is immutable; else its set flag
 # where it keeps one (class_is_set_field, dart's late lowering's isSet), and otherwise whether its
 # reference is not null (CreateIsNotNull). A field named at run time (jl_field_isdefined_checked), an
@@ -874,12 +888,32 @@ end
     local T = dart_type_of(self, obj)
     T isa DataType && isconcretetype(T) && !(T <: Type) && T !== Module && !(T <: Array) || return nothing
     fld isa NirConst && (fld.c.val isa Symbol || fld.c.val isa Int) || return nothing
-    length(args) == 3 && !(args[3] isa NirConst && args[3].c.val === :not_atomic) && return nothing
+    # the order, jl_get_atomic_order's for a load (loading, not storing): none given, :not_atomic, an
+    # atomic one a load may take, or invalid (:release and :acquire_release are a store's)
+    length(args) == 3 && !(args[3] isa NirConst && args[3].c.val isa Symbol) && return nothing
+    local o = length(args) == 3 ? args[3].c.val : nothing
+    local order = o === nothing ? :unspecified : o === :not_atomic ? :notatomic :
+        o in (:unordered, :monotonic, :acquire, :sequentially_consistent) ? :atomic : :invalid
+    # Julia's emit_atomic_error (cgutils.cpp:2759): jl_atomic_error's ConcurrencyViolationError, raised
+    # through the runtime's thrower, the expression never answering
+    local atomic_error(msg::String) = begin
+        translate_expression(code_gen, NirConst(Core.Const(msg)), translate_type(t, String))
+        call(code_gen, nir_runtime_member(t.component, throw_atomic_error, at))
+        WasmBuilder.unreachable(b)
+        i32
+    end
+    order === :invalid && return atomic_error("invalid atomic ordering")
     local i = fld.c.val isa Symbol ? something(Base.fieldindex(T, fld.c.val, false), 0) : fld.c.val
     if !(1 <= i <= fieldcount(T))
+        order === :unspecified || return atomic_error("isdefined: atomic ordering cannot be specified for nonexistent field")
         WasmBuilder.i32_const(b, 0)
         return i32
     end
+    local isatomic = Base.isfieldatomic(T, i)
+    !isatomic && order === :atomic && return atomic_error("isdefined: non-atomic field cannot be accessed atomically")
+    isatomic && order === :notatomic && return atomic_error("isdefined: atomic field cannot be accessed non-atomically")
+    # an atomic field's read: threads lie outside the strict subset, a gap, located
+    isatomic && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: isdefined of $T's atomic field $(fieldname(T, i))"), at)
     local known = obj isa NirConst && (!ismutabletype(T) || isconst(T, i)) && isdefined(obj.c.val, i)
     if !field_may_be_null(T, i) || known
         WasmBuilder.i32_const(b, 1)
@@ -962,7 +996,8 @@ end
 # Two DataTypes are compared by their references too: jl_egal__bitstag (builtins.c) answers a concrete
 # one by its pointer and an abstract one by its name and parameters, and WasmTarget holds each type as
 # one constant, canonical by Julia's egal (constants.jl _lowerTypeToConstant, the constant table keyed
-# by ===), with no type made at run time, so a reference is equal exactly where Julia's types are egal
+# by ===), with no type made at run time (Julia's typeof and apply_type reject at their statements, the
+# run_time_type arm), so a reference is equal exactly where Julia's types are egal
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:identical}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b

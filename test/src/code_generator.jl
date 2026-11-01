@@ -505,6 +505,41 @@ end
     append!(NATIVE_RUNS, cases)
 end
 
+# isdefined given an order: one that does not fit the field raises Julia's ConcurrencyViolationError
+# (codegen.cpp's emit_atomic_error), :not_atomic on a plain field reads as without; and a type made at run
+# time (typeof, apply_type of a value only run time knows) rejects at its statement, the ground of ===
+# on DataTypes as ref.eq (A68S3)
+module AtomicOrderCases
+mutable struct Plain
+    x::Any
+    Plain() = new()
+end
+mutable struct Atom
+    @atomic x::Any
+    Atom() = new()
+end
+function orders(k::Int64)
+    k == 1 && return Int64(isdefined(Plain(), :x, :not_atomic))
+    k == 2 && return Int64(isdefined(Plain(), :x, :acquire))                # non-atomic field, atomically
+    k == 3 && return Int64(isdefined(Atom(), :x, :not_atomic))              # atomic field, non-atomically
+    k == 4 && return Int64(isdefined(Plain(), :y, :acquire))                # an order on no field
+    return Int64(isdefined(Plain(), :x, :release))                          # a store's order
+end
+kind_of(v::Vector{Any}) = typeof(v[1])
+apply_of(v::Vector{Any}) = Int64(Core.apply_type(v[1], v[2]) === Vector{Int64})
+end
+@testset "codegen.cpp: isdefined's order checks raise ConcurrencyViolationError; a type made at run time rejects (A68S3)" begin
+    local f = AtomicOrderCases.orders
+    local bytes = W.compile(f, (Int64,); optimize = false)
+    local cases = [WTRunner.RunCase("orders$a", bytes, a, WTRunner.native_answer(f, a)) for a in ((Int64(k),) for k in 1:5)]
+    @test count(c -> c.native == WTRunner.Throws(ConcurrencyViolationError), cases) == 4
+    append!(NATIVE_RUNS, cases)
+    for g in (AtomicOrderCases.kind_of, AtomicOrderCases.apply_of)
+        local e = rejection(() -> W.compile(g, (Vector{Any},); optimize = false))
+        @test e !== nothing && e.rejection isa W.Unquarantined && occursin("a type made at run time", e.rejection.row) && !isempty(e.at)
+    end
+end
+
 # a value held as a reference narrowed to a primitive class (a PiNode): convertType's unboxing, the box
 # of the PiNode's class, cast where the reference is wider; case k at i
 module UnboxCases
