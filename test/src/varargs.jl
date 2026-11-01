@@ -2,7 +2,8 @@
 # its type Julia's own, Core.Compiler.va_process_argtypes: a specialization of a fixed count takes each
 # argument as a parameter and packs them at entry (Julia's specsig, codegen.cpp's emit_new_struct); one
 # of an open count takes the tuple as one parameter, which the call packs from its operands (Julia's
-# jl_f_tuple over the argument array, moved to the caller, a wasm function's arity being fixed).
+# jl_f_tuple over the argument array, moved to the caller, a wasm function's arity being fixed), and
+# its body reads it by nfields and a position over the tuple's run-time class.
 
 module VarargsTest
 
@@ -23,6 +24,11 @@ fixed(x::Int) = gn(x, x + 1, 3)
 # an open count: g's tail packed by the call into the Tuple{Int,Int} passed as its one parameter
 open_count(x::Int) = g(x, 2, 3)
 cat3(a::String, b::String, c::String) = string(a, b, c)
+# string(a, b, c) read back as numbers: its length and its bytes at both ends
+function cat3_read(n::Int64)::Int64
+    local s = cat3(n > 0 ? "x" : "yy", "-", n > 1 ? "zzzé" : "w")
+    return Int64(ncodeunits(s)) * 1_000_000 + Int64(codeunit(s, 1)) * 1000 + Int64(codeunit(s, ncodeunits(s)))
+end
 end
 
 world_of(f, at) = W.build_nir(W.check_subset(f, at, "varargs"), "varargs")
@@ -64,13 +70,15 @@ end
     end
 end
 
-@testset "varargs: an open count packs at the call; the body's read of a tuple only run time sizes rejects, located" begin
-    # the call packs (no rejection names the signature); the body reads the abstract Tuple{Vararg{Int}}
-    # by nfields and a run-time index, which WasmTarget's struct-per-class tuples cannot yet answer
-    for (f, at) in ((Cases.open_count, (Int,)), (Cases.cat3, (String, String, String)))
-        local e = rejection(() -> W.compile(f, at))
-        @test e !== nothing && !occursin("Vararg signature", sprint(showerror, e)) &&
-            !occursin("varargs specialization", sprint(showerror, e)) && e.rejection isa Union{W.Unquarantined, W.Unported}
+@testset "varargs: an open count packs at the call and its body reads the tuple, answering as native Julia" begin
+    # the call packs the operands' concrete tuple; the body reads the abstract Tuple{Vararg{Int}} by
+    # nfields and a position, each a class-id switch over the closed world's tuple classes below it,
+    # as Julia's codegen reads the value's own type (emit_datatype_nfields, emit_bounds_check)
+    for (f, args) in ((Cases.open_count, [(1,), (0,), (-9,)]), (Cases.cat3_read, [(Int64(0),), (Int64(1),), (Int64(2),)]))
+        local bytes = W.compile(f, (Int64,))
+        for r in WTRunner.run_cases([WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, f(a...)) for a in args])
+            @test r.ok || (@info r.label r.why; false)
+        end
     end
 end
 

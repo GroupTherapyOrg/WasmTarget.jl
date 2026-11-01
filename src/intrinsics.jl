@@ -256,16 +256,18 @@ A field read inlined as an intrinsic, or `nothing`. dart's are getters of dart:_
 (WasmAnyRef, WasmArrayRef, WasmTable) and int's bit counts; no class of Julia's is one of dart:_wasm's,
 and Julia's bit counts are its intrinsics (`ctlz_int`, `cttz_int`, `ctpop_int`, the unary map). Julia's
 one field read its codegen inlines past an object's layout is a tuple's field at an index only run time
-knows (`getfield(t, i)`, an Int `i`), lowered here (`Val(:tuple_index)`); every other read is the
-field's own (visitInstanceGet).
+knows (`getfield(t, i)`, an Int `i`), lowered here (`Val(:tuple_index)`), and a field at a constant
+index of a tuple whose type has no layout (Tuple{String,Vararg{String}}), which Julia's codegen
+reads the same way (codegen.cpp:4563, jl_struct_try_layout failing, the index unboxed as at run time);
+every other read is the field's own (visitInstanceGet).
 """
 @parity "dart2wasm/lib/intrinsics.dart:607 Intrinsifier.generateInstanceGetterIntrinsic" function generate_instance_getter_intrinsic(self::Intrinsifier, node::NirCall)::Union{WasmBuilder.IR.ValueType,Nothing}
     nir_callee(node) === Core.getfield && length(node.args) in (3, 4) || return nothing
     local index = node.args[3]
-    index isa NirConst && return nothing
     dart_type_of(self, index) === Int || return nothing
     local T = dart_type_of(self, node.args[2])
     T isa DataType && T <: Tuple || return nothing
+    index isa NirConst && isconcretetype(T) && return nothing
     return generate_static_intrinsic(self, Val(:tuple_index), node, T)
 end
 
@@ -464,6 +466,7 @@ end
     # each family of arms is its own method, compiled only when a program reaches it
     f === Core.:(===) && length(args) == 2 && return generate_static_intrinsic(self, Val(:identical), f, args)
     f === Core._svec_len && length(args) == 1 && return generate_static_intrinsic(self, Val(:svec_len), f, args)
+    f === Core.nfields && length(args) == 1 && return generate_static_intrinsic(self, Val(:nfields), f, args)
     f === Core._svec_ref && length(args) == 2 && return generate_static_intrinsic(self, Val(:svec_ref), f, args)
     f === Core.svec && return generate_static_intrinsic(self, Val(:svec), f, args)
     (f === Core.memorynew || f === Core.memoryrefnew || f === Core.memoryrefget || f === Core.memoryrefset! ||
@@ -1289,6 +1292,40 @@ end
     WasmBuilder.unreachable(b)
     WasmBuilder.var"end"(b)
     return i32
+end
+
+# Julia's `nfields(x)` (codegen.cpp:4712 emit_builtin_call's nfields arm): a constant where the value's
+# type tells its field count (a concrete type, its jl_datatype_nfields), else the count of the type the
+# value has at run time (emit_datatype_nfields of its typeof). That type is one of the closed world's
+# concrete classes below the static type, so the count is the class-id switch over them (dart's
+# types.dart classIdSearch, as the run-time tuple index takes it), each arm its class's field count;
+# an empty list rejects, located, and a class outside it is none the program can hold (A68S3), so its
+# miss is unreachable. A SimpleVector or a kind's own layout counts other than its fields: none is taken
+# here, and its call rejects as before
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:nfields}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i64 = WasmBuilder.IR.NumType_i64
+    local T = dart_type_of(self, args[1])
+    T isa DataType && T <: Tuple || return nothing
+    if isconcretetype(T)
+        translate_expression(code_gen, args[1], t.void_marker[])
+        WasmBuilder.i64_const(b, fieldcount(T))
+        return i64
+    end
+    local at = "$(code_gen.enclosing_member): Julia's nfields of a $T"
+    local classes = sort!(DataType[c for c in keys(t.class_info) if c isa DataType && isconcretetype(c) && c <: T];
+                          by = c -> t.class_id_numbering[].class_ids[c])
+    isempty(classes) && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: nfields of $T, which no class of the closed world is"), at)
+    local o = add_local(code_gen, t.top_type_non_nullable[])
+    translate_expression(code_gen, args[1], t.top_type_non_nullable[])
+    WasmBuilder.local_tee(b, o)
+    load_class_id(b, t, o.type)
+    local ids = t.class_id_numbering[].class_ids
+    local ranges = [(range = Range(Val(:_), ids[c], ids[c]), value = c) for c in classes]
+    class_id_search(b, ranges, WasmBuilder.IR.ValueType[i64], c -> WasmBuilder.i64_const(b, fieldcount(c)), () -> WasmBuilder.unreachable(b))
+    return i64
 end
 
 # Julia's `_svec_len`: a SimpleVector's length, jl_svec_t's own, which its wasm array carries

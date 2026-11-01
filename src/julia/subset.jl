@@ -236,13 +236,15 @@ end
 # whether a statement `Core.getfield(t, i)` of `src` reads a tuple's field at an index only run time
 # knows, the read the intrinsifier lowers with Julia's bounds check (intrinsics.jl's tuple_index arm,
 # BoundsError(t, i) through throw_bounds_error): t's type a Tuple by Julia's argextype, as the trim
-# verifier reads an operand's, and i no literal
+# verifier reads an operand's, and i no literal, or any Int index of a tuple type with no layout
+# (Tuple{String,Vararg{String}}), which Julia's codegen reads the same way (codegen.cpp:4563)
 @quarantine "julia/src/cgutils.cpp:2794 emit_getfield_unknownidx raises BoundsError at a tuple's run-time index, its operand typed by Core.Compiler.argextype" Core.Compiler.argextype function _reads_tuple_at_run_time_index(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState}, slottypes::Vector{Any})::Bool
     _calls_builtin(st, (Core.getfield,)) && length(st.args) >= 3 || return false
     local k = _ir_value(st.args[3])
-    (k isa QuoteNode || k isa Symbol || k isa Int) && return false
+    (k isa QuoteNode || k isa Symbol) && return false
     local T = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes, slottypes))
-    return T isa DataType && T <: Tuple
+    T isa DataType && T <: Tuple || return false
+    return !(k isa Int) || !isconcretetype(T)
 end
 
 # the IR forms a root's demand names, each a test of one statement of its CodeInfo: a call of a builtin
@@ -272,6 +274,9 @@ end
         local mi = Core.Compiler.get_ci_mi(item)
         local sptypes = Core.Compiler.sptypes_from_meth_instance(mi)
         local slottypes = Any[Base.unwrapva(p) for p in (Base.unwrap_unionall(mi.specTypes)::DataType).parameters]
+        # a varargs body's last argument is its packed tuple (src/julia/nir.jl NirVarargPacking)
+        local va = nir_vararg_packing(mi)
+        va === nothing || (slottypes = Any[slottypes[1:va.first - 1]..., va.packed])
         any(st -> holds(st, src, sptypes, slottypes), src.code) && return true
     end
     return false
