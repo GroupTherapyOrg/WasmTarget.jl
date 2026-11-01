@@ -96,8 +96,11 @@ WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: to
 # compile of WasmTarget plus a fifth of the suite's tests, and the suite grows with every port (the judged path read
 # 105-113 s at three shards, 2026-10-29 09:09; at four, every change to src/ read 121 s, load 13 + a shard of 108,
 # its tests all green, 2026-11-01 11:20, wt3-memory); a fifth shard takes ~11 s off the slowest, at one more process
-# and a slower wall clock, which the band does not judge
-SHARDS=5; tpids=""
+# and a slower wall clock, which the band does not judge. A sixth is a STOPGAP (D20): split by instructions
+# (25f5d125) the shards still read 477-620 G, about 305 G of each being its own load and first compile of
+# WasmTarget's pipeline, so a change to src/ read 125 s (load 13 + a shard of 112 s, its tests green), red, 2026-11-01. It is deleted, back
+# to four (A67E1), by the commit that cuts that first-compile cost (wt3-latency)
+SHARDS=6; tpids=""
 costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-instr.tsv"; rm -f .wtd/src_costs.*
 for k in $(seq 1 $SHARDS); do
   : > ".wtd/progress.$k"
