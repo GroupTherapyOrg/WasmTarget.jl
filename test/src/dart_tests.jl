@@ -133,7 +133,10 @@ const DART_CASES = Dict{String,Tuple{Any,Symbol}}(
     "dart_web_wasm/function_apply" => ((true, true, true, true, true), :rejects),
     # tests/language
     "dart_language/flutter_regession_151473" => ((true, true, true, true), :rejects),
-    "dart_language/local_null_initialization" => (Union{Nothing, Int64}[1, nothing, 2], :rejects),
+    # runner gap: it compiles since f05b2fa8; its call takes a String, which test/runner.jl marshals once its
+    # String-from-code-units port lands, and each element's reader rejects located at dart2wasm/lib/types.dart:527
+    # Types.emitAsCheck (a check against Int64 needs the runtime's _asSubtype, wt3-runtime's queue)
+    "dart_language/local_null_initialization" => (Union{Nothing, Int64}[1, nothing, 2], :unread),
     "dart_language/record_literal" => (((1, 2), 3, 4, (42, 42, 42), 42, 42, 42, 42, ((42, 42), 42), 42, 42, (42,), (42,), true), :rejects),
     "dart_language/record_type" => (((1, 2), (1, 2, (a = 3, b = 4)), [(1, 2)], (1,), 1, (42, 42), (42, 42), 42, true), :rejects),
     "dart_language/regress_54994" => (((false, true, false, true, false, true), (true, true, false), (true, false, true)), :compiled),
