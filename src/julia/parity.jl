@@ -170,10 +170,11 @@ let defs = quote
     @quarantine "the registry grows as the package loads, Julia's top-level evaluation" Base.get_world_counter _register!(e::RegistryEntry, id::String)::Nothing = _register_range!(e, id, pop!(_WORLDS), Base.get_world_counter())
 
     # the macros a definition may stand under that leave it the definition it is: Julia's inlining and
-    # inference annotations, @closed (src/julia/exhaustive.jl) and Julia's consistent overlay, which
+    # inference annotations (an effects assumption, as Base's hash(::String) carries, kept by its
+    # overlay), @closed (src/julia/exhaustive.jl) and Julia's consistent overlay, which
     # defines the method in an overlay table instead (src/patch/); every reader of a marked definition
     # looks through these, one list (A54S4: four copies had drifted apart)
-    @quarantine "Julia's annotation macros wrap a definition without changing what it defines" Core.Symbol const _TRANSPARENT_MACROS = (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"), Symbol("@consistent_overlay"))
+    @quarantine "Julia's annotation macros wrap a definition without changing what it defines (julia/base/expr.jl:277 inline, :354 noinline, julia/base/expr.jl:764 assume_effects)" Core.Symbol const _TRANSPARENT_MACROS = (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"), Symbol("@consistent_overlay"), Symbol("@assume_effects"))
 
     # a definition's identity across its evaluations: its module and, for a function or a macro, its
     # signature as written, every line number dropped, and an overlay's method table (a method is its
@@ -519,7 +520,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
 @quarantine "Julia's runtime is its own C and C++ sources, pinned at the julia WasmTarget runs, which src/julia ports" Core.String const JULIA_FILES::Tuple{Vararg{String}} = (
     "julia/src/julia", "julia/src/genericmemory", "julia/src/builtins", "julia/src/cgutils",
     "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv", "julia/src/ccall",
-    "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types",
+    "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types", "julia/base/hashing", "julia/base/expr",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3",
     "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation",
 )

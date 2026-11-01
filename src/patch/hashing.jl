@@ -7,7 +7,9 @@
 # precedent(dart: the wasm target's @patch libraries, sdk/lib/_internal/wasm; gpucompiler: a device's
 # overlays of Base in its method table).
 
-@quarantine "julia/src/support/hashing.c:68 memhash_seed is what Base's hash of a String calls through a pointer; WasmGC reads the String's bytes" Base.hash @consistent_overlay METHOD_TABLE function Base.hash(s::String, h::UInt)
+using Base: @assume_effects
+
+@quarantine "julia/base/hashing.jl:198 hash of a String calls the runtime's hash through a pointer, keeping its @assume_effects :total; WasmGC reads the String's bytes" Base.hash @consistent_overlay METHOD_TABLE @assume_effects :total function Base.hash(s::String, h::UInt)
     h += Base.memhash_seed
     return memhash_seed(s, h % UInt32) + h
 end

@@ -242,7 +242,6 @@ julia/parity.jl [Base.showerror]
 julia/parity.jl _IDENTITIES
 julia/parity.jl _PIN_LINES
 julia/parity.jl _SOURCE
-julia/parity.jl _TRANSPARENT_MACROS
 julia/parity.jl _WORLDS
 julia/parity.jl _admitted_names
 julia/parity.jl _anchor_fault
