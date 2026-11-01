@@ -648,7 +648,9 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
             # a type here is lowered above (_lowerTypeToConstant), dart's InstanceConstant of its type
             # object: in Julia the type itself, an instance of its kind
             v isa Type ? visit_instance_constant(self, constant) :
-            v isa Union{Array,Memory} ? visit_list_constant(self, constant) :
+            # a Memory is its class's struct (src/julia/classes.jl), an instance constant; an Array,
+            # dart's list, is visitListConstant's
+            v isa Array ? visit_list_constant(self, constant) :
             visit_instance_constant(self, constant)
         end
         if info !== nothing
@@ -666,7 +668,7 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
                 v isa Symbol ? visit_symbol_constant(tv, v) :
                 v isa Union{Tuple,NamedTuple} ? visit_record_constant(tv, v) :
                 v isa Type ? visit_instance_constant(tv, ic) :          # a lowered type object, as above
-                v isa Union{Array,Memory} ? visit_list_constant(tv, ic) :
+                v isa Array ? visit_list_constant(tv, ic) :
                 visit_instance_constant(tv, ic)
             end
             t == info.type || reject!(Internal("dart2wasm/lib/constants.dart:808 ConstantCreator.ensureConstant: the constant $(info.constant) is created as $(info.type), its type $t"), "ConstantCreator.ensureConstant")
@@ -786,6 +788,18 @@ A field Julia holds no value in (`#undef`) rejects, located.
             # typeArguments with makeArrayOf
             field.name == "data" || reject!(Internal("$at: the SimpleVector field $(field.name), not classes.jl's data"), at)
             make_array_of(self.constants, eltype(cls), NirConst[NirConst(Core.Const(x)) for x in v]; mutable_ = false).c.val
+        elseif field.index == 0 && cls <: GenericMemory
+            # a Memory's field that is not Julia's (src/julia/classes.jl _memory_instance_fields): `data`,
+            # its elements as one mutable wasm array of its storage type, as visitStringConstant builds a
+            # String's bytes into its struct; an element Julia holds no value in (#undef) the null, where
+            # the element type excludes nothing (dart's late lowering's useNull)
+            field.name == "data" || reject!(Internal("$at: the Memory field $(field.name), not classes.jl's data"), at)
+            local storage = field.type isa DataType && field.type <: WasmArray ? field.type.parameters[1] :
+                reject!(Internal("$at: the Memory field $(field.name) is no wasm array"), at)
+            Nothing <: eltype(cls) && !all(k -> isassigned(v, k), eachindex(v)) &&
+                reject!(Unquarantined("src/julia/classes.jl _memory_instance_fields: the constant $cls holds an element no write has set, whose element type admits nothing, laid out without its set flags"), at)
+            make_array_of(self.constants, storage,
+                NirConst[NirConst(Core.Const(isassigned(v, k) ? v[k] : nothing)) for k in eachindex(v)]).c.val
         elseif field.index == 0
             # a kind's fields that are not Julia's own (src/julia/classes.jl _kind_instance_fields):
             # dart's _Type.isDeclaredNullable (types.jl's encodedNullability, Julia's `Nothing <: T`),

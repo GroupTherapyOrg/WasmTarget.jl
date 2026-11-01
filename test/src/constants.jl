@@ -288,3 +288,26 @@ translated(f) = (t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f
     @test seg.content == Vector{UInt8}(codeunits(BIG))
 end
 end
+
+# a Memory constant: an instance constant of its class (src/julia/classes.jl), its `data` a wasm array
+# literal of its elements' storage beside Julia's `length`, as visitStringConstant builds a String's
+# bytes into its struct; an unset reference element (#undef) the null; read through a phi so Julia
+# folds nothing, run against native
+module MemoryConstants
+using Test, WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+const WTRunner = Main.WTRunner
+const PRIMES = let m = Memory{Int64}(undef, 4); m .= (2, 3, 5, 7); m end
+const EMPTY = Memory{Int64}(undef, 0)
+const NAMES = let m = Memory{String}(undef, 3); m[1] = "a"; m[3] = "ccc"; m end
+const NONE = Memory{String}(undef, 0)
+plen(b::Bool) = length(b ? PRIMES : EMPTY)
+nlen(b::Bool) = length(b ? NAMES : NONE)
+@testset "constants.dart: a Memory constant is its class's struct, its elements a wasm array literal" begin
+    @test !isassigned(NAMES, 2)
+    local cases = [WTRunner.compiled_case("$(nameof(f))$a", WasmTarget.compile, f, a) for f in (plen, nlen) for a in ((true,), (false,))]
+    local results = WTRunner.run_cases(cases)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    @test length(results) == 4 && all(r -> r.ok, results)
+end
+end

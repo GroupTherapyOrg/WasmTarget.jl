@@ -60,7 +60,7 @@ end
 
 # A constant's object graph met by the walk (dev/formal/ValueClasses.tla's MeetObject): the value's
 # class, then every value it holds that constants.jl instantiates in its place, a field's value, an
-# svec's element, a type value's own fields (its kind's layout, _kind_instance_fields), each mutable
+# svec's or a memory's element, a type value's own fields (its kind's layout, _kind_instance_fields), each mutable
 # object walked once. A field declared abstract (Any) holds a value whose class only the value tells.
 @quarantine "a constant is Julia's object graph, each value's class its typeof" Base.isdefined function _meet_constant!(out::Vector{DataType}, seen::Base.IdSet{DataType}, objs::Base.IdSet{Any}, @nospecialize(v), at::String)::Nothing
     if ismutable(v)
@@ -71,6 +71,11 @@ end
     _meet_value!(out, seen, Core.Typeof(v), at)
     if t === Core.SimpleVector
         foreach(x -> _meet_constant!(out, seen, objs, x, at), v)
+    elseif t <: Core.GenericMemory
+        # a memory's length and its elements, the values its data array holds (_memory_instance_fields;
+        # Julia's `ptr`, a host address, is not one), each element written
+        _meet_value!(out, seen, Int, at)
+        foreach(k -> isassigned(v, k) && _meet_constant!(out, seen, objs, v[k], at), eachindex(v))
     elseif Base.iskindtype(t)
         for f in _kind_instance_fields(t, at)
             f.index > 0 && isdefined(v, f.index) && _meet_constant!(out, seen, objs, getfield(v, f.index), at)
