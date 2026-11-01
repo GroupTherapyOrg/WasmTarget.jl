@@ -94,6 +94,12 @@ unjudged_build DartCorpus test/smoke_corpus.jl test/DartCorpus -- julia --projec
 if ! git diff --quiet "$base" HEAD -- src Project.toml 2>/dev/null; then
   rm -rf "${JULIA_DEPOT_PATH%%:*}"/compiled/v*/WasmTarget
 fi
+# the shared checkout of Julia's sources the pinned anchors read (~/.cache/wasmtarget/julia) holds every unit this
+# tree's JULIA_FILES names before WasmTarget loads: a tree on an older base running its own older dev/fetch_julia.sh
+# rewrites the shared sparse list without the newer units, and every lane's load then fails check_quarantine_pinned
+# ("WasmTarget does not load"; src/support stripped at 17:14Z, after 686966ac cited it). This tree's script only grows
+# the list and, at the pinned commit, only re-reads the tree, with no fetch (unjudged, a second or two)
+bash dev/fetch_julia.sh > .wtd/fetch_julia.out 2>&1 || { echo "check: the julia checkout cannot be made"; tail -5 .wtd/fetch_julia.out; exit 1; }
 # each stage's CPU seconds (user + sys) go to .wtd/<stage>.time for D14's band, below
 /usr/bin/time -l -o .wtd/load.time julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
