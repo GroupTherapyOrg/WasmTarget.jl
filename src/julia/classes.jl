@@ -560,7 +560,7 @@ context), so it is a class, its layout Julia's own leading field.
 end
 
 # a field's name, its Julia name as text: a struct's field's, or a module binding's
-@quarantine "a Julia field is named by its fieldname, a Symbol or a tuple's position, and a binding by its Symbol, as kernel names a member by its Name's text (pkg/kernel/lib/src/ast/names.dart:25 text)" Core.GlobalRef field_name(field::Union{ClassField,GlobalRef})::String =
+@quarantine "a Julia field is named by its fieldname, a Symbol or a tuple's position, and a binding by its Symbol, as kernel names a member by its Name's text (pkg/kernel/lib/src/ast/names.dart:25 Name.text)" Core.GlobalRef field_name(field::Union{ClassField,GlobalRef})::String =
     field isa ClassField ? field.name : string(field.name)
 
 # a field selector's calls: its field's name, whether it is the setter, its call count and the classes
@@ -600,7 +600,7 @@ maps to its call count and the classes its receivers' types admit, each class of
 program's concrete classes) Julia's `<:` puts under one. DispatchTable.build (src/dispatch_table.jl)
 reads it where dart reads TFA's selector ids. A receiver of a concrete type is a direct access, no call of a selector.
 """
-@quarantine "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, concrete::Vector{DataType})::Vector{FieldSelectorCalls}
+@quarantine "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, concrete::Vector{DataType})::Vector{FieldSelectorCalls}
     local out = FieldSelectorCalls[]
     for b in world, st in b.stmts
         st isa NirCall || continue

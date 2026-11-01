@@ -1236,7 +1236,7 @@ end
         end
         col == 2 || return "line $ln is at column $col, no declaration's"
         local enc = _enclosing(lines, ln)
-        enc == x && occursin(Regex("^(?:const\\s+|factory\\s+)?\\Q" * x * "\\E\\s*\\("), s) && return nothing
+        enc == x && occursin(Regex("^(?:external\\s+)?(?:const\\s+|factory\\s+)?\\Q" * x * "\\E\\s*\\("), s) && return nothing
         enc == "" && member(nothing, x) && return nothing
         return "line $ln does not declare $x (a top-level declaration sits at column 0)"
     end
@@ -1370,7 +1370,7 @@ end
 
 # the anchors a reason cites, each form of the pins'
 @quarantine "an anchor in prose is found by its pins' forms, read with a regex" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|(?:llvm|julia)/[\w/]+\.(?:cpp|c|h):[1-9]\d* [A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)"
-@quarantine "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$#][\w$.]*))?"
+@quarantine "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:\.(?:[A-Za-z_$][\w$]*|\[\]=?|[-+*/%<>=~&|^]+))?))?"
 @quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
 
 # why a precedent (REASON_PRECEDENT_RX's match `m`) does not resolve, or nothing when it does: its
@@ -1421,21 +1421,17 @@ end
         f === nothing && return nothing
         why = "$(m.captures[1]) does not resolve: $f"
     end
-    # a file of the dart checkout cited by its path (pkg/front_end/..., sdk/lib/...): the line exists and
-    # is code, a declaration or a statement, and holds the symbol where the citation names one
+    # a file of the dart checkout cited by its path (pkg/front_end/..., sdk/lib/...): the citation names a
+    # symbol, and its line declares it as an anchor's does (_declares), never a line that merely holds it
     for m in eachmatch(REASON_PATH_RX, reason)
+        local sym = m.captures[3]
+        sym === nothing && (why = "$(m.captures[1]):$(m.captures[2]) names no symbol for its line to declare"; continue)
         sdk === nothing && (why = "$(m.captures[1]): no dart-lang/sdk checkout"; continue)
         local path = joinpath(sdk, m.captures[1])
         isfile(path) || (why = "the dart pin has no $(m.captures[1])"; continue)
-        local lines = get!(() -> readlines(path), _PIN_LINES, path)
-        local ln = parse(Int, m.captures[2])
-        ln <= length(lines) || (why = "$(m.captures[1]):$ln is past the file's end"; continue)
-        local l = strip(lines[ln])
-        (isempty(l) || startswith(l, "//") || startswith(l, "/*") || startswith(l, "*") || l in ("}", ");", ")")) &&
-            (why = "$(m.captures[1]):$ln is no declaration or statement"; continue)
-        local sym = m.captures[3]
-        (sym === nothing || occursin(sym, l)) && return nothing
-        why = "$(m.captures[1]):$ln does not hold $sym"
+        local f = _declares(get!(() -> readlines(path), _PIN_LINES, path), parse(Int, m.captures[2]), sym)
+        f === nothing && return nothing
+        why = "$(m.captures[1]):$(m.captures[2]) $sym does not resolve: $f"
     end
     return why
 end

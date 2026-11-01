@@ -59,7 +59,7 @@ end
 # the module of the JS string builtins (`builtins: ['js-string']`, the JS String Builtins proposal's
 # `wasm:js-string`), which the engine supplies or the JS runtime's polyfill stands in for
 # (src/js/runtime_generator.jl's JS_POLYFILL_IMPORT): one name for both
-@quarantine "dart's runtime names the JS string builtins' module in its polyfill import (pkg/dart2wasm/lib/js/runtime_generator.dart:150 jsStringPolyfill); WasmTarget's host imports read the same name" Core.String const JS_STRING_BUILTINS_MODULE::Core.String = "wasm:js-string"
+@quarantine "dart's runtime imports its JS string polyfill (pkg/dart2wasm/lib/js/runtime_blob.dart:126 jsStringPolyfill) under the JS string builtins' module name (runtime_generator.dart:150); WasmTarget's host imports read the same name" Core.String const JS_STRING_BUILTINS_MODULE::Core.String = "wasm:js-string"
 
 # the standalone embedder's module, which every import of dart's standalone embedder library names
 # (`@pragma("wasm:import", "dart.<name>")`), its functions the embedder's own

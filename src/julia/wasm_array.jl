@@ -179,7 +179,7 @@ generator meets the call and lowers it (src/intrinsics.jl).
 Writes `v` at offset `i` (from 0) of `a`, unchecked: dart's `WasmArray<T>.write`, `array.set`, a packed
 element truncated as wasm's array.set truncates.
 """
-@quarantine "dart:_wasm's WasmArray write (sdk/lib/_wasm/wasm_types.dart:748 operator) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_write!(a::WasmArray{T}, i::Int, v::Union{UInt16,Int32,Int64,Float64}) where {T} =
+@quarantine "dart:_wasm's WasmArray write (sdk/lib/_wasm/wasm_types.dart:748 WasmArrayExt.[]=) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_write!(a::WasmArray{T}, i::Int, v::Union{UInt16,Int32,Int64,Float64}) where {T} =
     (_wasm_only(Int); nothing)
 
 """
@@ -187,7 +187,7 @@ element truncated as wasm's array.set truncates.
 
 The number of elements of `a`: dart's `WasmArrayRef.length`, `array.len`.
 """
-@quarantine "dart:_wasm's WasmArray length (sdk/lib/_wasm/wasm_types.dart:142 length) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_length(a::WasmArray) =
+@quarantine "dart:_wasm's WasmArray length (sdk/lib/_wasm/wasm_types.dart:142 WasmArrayRef.length) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_length(a::WasmArray) =
     _wasm_only(Int)
 
 """
