@@ -216,9 +216,31 @@ struct Decl
     rettype::Vector{Tok}  # the tokens before the name (return or field type); a typedef's aliased type
     implements::Vector{String}  # a class's `implements` targets, each with its prefix
     mixins::Vector{String}      # a class's `with` targets, each with its prefix
+    # a method's, getter's, setter's, operator's or function's body as its tokens show it: :abstract (it
+    # ends at `;`, no body), :throw (its block or expression begins with `throw`), :body otherwise; :none
+    # for every other kind. `body_line` is the throw's line, or the abstract declaration's
+    body::Symbol
+    body_line::Int
 end
-Decl(kind, symbol, line, modifiers, extends, params, rettype) = Decl(kind, symbol, line, modifiers, extends, params, rettype, String[], String[])
-Decl(kind, symbol, line, modifiers, extends, params, rettype, impls) = Decl(kind, symbol, line, modifiers, extends, params, rettype, impls, String[])
+Decl(kind, symbol, line, modifiers, extends, params, rettype) = Decl(kind, symbol, line, modifiers, extends, params, rettype, String[], String[], :none, 0)
+Decl(kind, symbol, line, modifiers, extends, params, rettype, impls) = Decl(kind, symbol, line, modifiers, extends, params, rettype, impls, String[], :none, 0)
+Decl(kind, symbol, line, modifiers, extends, params, rettype, impls, mixins) = Decl(kind, symbol, line, modifiers, extends, params, rettype, impls, mixins, :none, 0)
+
+# a member's body read from its tokens after its parameter list (or a getter's name), `k`, to its
+# statement's end `e`: the first `;`, `=>`, `{` or `=` there decides it; an external member has the
+# compiler's body, never an abstract one
+function body_form(toks::Vector{Tok}, k::Int, e::Int, mods::Vector{String}, line::Int)::Tuple{Symbol,Int}
+    for m in k:e-1
+        local t = toks[m].text
+        t == ";" && return "external" in mods ? (:body, 0) : (:abstract, line)
+        if t == "=>" || t == "{"
+            return m + 1 < e && toks[m+1].text == "throw" ? (:throw, toks[m+1].line) : (:body, 0)
+        end
+        t == "=" && return (:body, 0)
+    end
+    return (:body, 0)
+end
+with_body(d::Decl, bf::Tuple{Symbol,Int})::Decl = Decl(d.kind, d.symbol, d.line, d.modifiers, d.extends, d.params, d.rettype, d.implements, d.mixins, bf[1], bf[2])
 
 const MODIFIERS = Set(["abstract", "sealed", "base", "final", "interface", "static", "external", "const",
                        "late", "var", "covariant", "factory", "augment"])
@@ -421,13 +443,15 @@ function classify!(toks::Vector{Tok}, i::Int, e::Int, container::String, file, o
                 op *= toks[q].text; q += 1
             end
             local unary = op == "-" && q + 1 < e && toks[q+1].text == ")"
-            push!(out, Decl(:operator, sym(container, unary ? "unary-" : op), t.line, mods, "",
-                            params_of(toks, q, file), toks[j:m-1])); return
+            push!(out, with_body(Decl(:operator, sym(container, unary ? "unary-" : op), t.line, mods, "",
+                            params_of(toks, q, file), toks[j:m-1]), body_form(toks, close_of(toks, q, file), e, mods, t.line))); return
         elseif t.kind == :ident && t.text in ("get", "set") && m + 1 < e && toks[m+1].kind == :ident &&
                (m + 2 >= e || toks[m+2].text != "<" || t.text == "set") && toks[m+1].text != "("
             local kind = t.text == "get" ? :getter : :setter
-            push!(out, Decl(kind, sym(container, toks[m+1].text), toks[m+1].line, mods, "",
-                            kind == :setter && p != 0 ? params_of(toks, p, file) : Tok[], toks[j:m-1])); return
+            local after = kind == :setter && p != 0 ? close_of(toks, p, file) : m + 2
+            push!(out, with_body(Decl(kind, sym(container, toks[m+1].text), toks[m+1].line, mods, "",
+                            kind == :setter && p != 0 ? params_of(toks, p, file) : Tok[], toks[j:m-1]),
+                            body_form(toks, after, e, mods, toks[m+1].line))); return
         end
     end
     if p != 0
@@ -449,7 +473,8 @@ function classify!(toks::Vector{Tok}, i::Int, e::Int, container::String, file, o
             push!(out, Decl(kind, container, nm.line, mods, "", params_of(toks, p, file), Tok[])); return
         end
         local kind = container == "" ? :function : :method
-        push!(out, Decl(kind, sym(container, nm.text), nm.line, mods, "", params_of(toks, p, file), toks[j:q-1])); return
+        push!(out, with_body(Decl(kind, sym(container, nm.text), nm.line, mods, "", params_of(toks, p, file), toks[j:q-1]),
+                             body_form(toks, close_of(toks, p, file), e, mods, nm.line))); return
     end
     # variables and fields: each name before `=`, `,` or `;` at depth 0
     local names = Tok[]
@@ -1235,6 +1260,28 @@ function qualified(name::String)::String
 end
 
 anchor(file::String, d::Decl)::String = "$file:$(d.line) $(d.symbol)"
+
+# each counted anchor's declaration, by its anchor
+anchored_decls(S::Scope)::Dict{String,Decl} = Dict(anchor(f, d) => d for f in scope() for d in S.decls[f] if counted(d))
+
+# the kinds of rejection_only_kinds (WasmTarget, src/julia/parity.jl), each Internal one read against its
+# dart member by this reader, the one dart reader (A74S1): DartThrow where dart's body begins with `throw`,
+# a faithful port counted as a body; DartAbstract where dart declares no body, a stub reported beside the
+# headline; the second result names each one's dart line, `<file at the checkout>:<line>`, the throw's or
+# the declaration's
+function dart_kinds(kinds::Dict{String,Symbol}, decls::Dict{String,Decl})::Tuple{Dict{String,Symbol},Dict{String,String}}
+    local out = copy(kinds)
+    local lines = Dict{String,String}()
+    for (a, k) in kinds
+        k === :Internal || continue
+        local d = get(decls, a, nothing)
+        (d === nothing || !(d.body in (:throw, :abstract))) && continue
+        out[a] = d.body === :throw ? :DartThrow : :DartAbstract
+        local file = first(split(a, ':'))
+        lines[a] = (startswith(file, "sdk/") ? file : "pkg/" * file) * ":" * string(d.body_line)
+    end
+    return out, lines
+end
 
 # the stub of one declaration
 function stub(file::String, d::Decl, S::Scope, fields::Vector{Decl})::String

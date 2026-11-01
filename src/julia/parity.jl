@@ -1524,18 +1524,16 @@ end
 end
 
 # the rejection-only kind of each @parity anchor of `entries` (each with `anchor`, `ported` and `methods`),
-# by which dev/src_progress.sh tells a port with a body from one that only rejects (A55S13, A64E2), and
-# for a faithful one the dart line that makes it so. Julia's inference answers whether a method returns:
-# its own signature inferred unoptimized (the compiler's typeinf_frame), a return type of Union{} is no
-# path returning, a call to a helper that only rejects among them; a return type of Nothing whose typed
-# code calls nothing for an effect alone is a guard that rejects and otherwise does nothing (A72S1). Its kind
-# is a gap (Unported, Unquarantined) where a reject! in its typed code takes one, Internal where one
-# takes Internal (or none shows and no path returns), and a check's rejections alone a body. An
-# Internal anchor of the dart pin whose member in `sdk` throws first is DartThrow, a faithful body,
-# counted; one that is abstract is DartAbstract, no body to port, a stub under R2 reported beside the
-# headline (the lead's rulings on audit 64's (p) rows); each names in the second result the dart
-# file:line of its throw or declaration, a throw's line confirmed to throw. Every other anchor is :body
-@quarantine "Julia's inference answers whether a method returns, a return type of Union{} none, precedent(julia: Compiler/src/typeinfer.jl:1115 typeinf_frame)" Core.Compiler.typeinf_frame function rejection_only_kinds(entries::AbstractVector, sdk::Union{String,Nothing})::Tuple{Dict{String,Symbol},Dict{String,String}}
+# by which dev/src_progress.sh tells a port with a body from one that only rejects (A55S13, A64E2).
+# Julia's inference answers whether a method returns: its own signature inferred unoptimized (the
+# compiler's typeinf_frame), a return type of Union{} is no path returning, a call to a helper that only
+# rejects among them; a return type of Nothing whose typed code calls nothing for an effect alone is a
+# guard that rejects and otherwise does nothing (A72S1). Its kind is a gap (Unported, Unquarantined)
+# where a reject! in its typed code takes one, Internal where one takes Internal (or none shows and no
+# path returns), and a check's rejections alone a body; every other anchor is :body. dev/skeleton.jl's
+# dart_kinds then reads each Internal one against dart's member (DartThrow, DartAbstract), the one dart
+# reader (A74S1)
+@quarantine "Julia's inference answers whether a method returns, a return type of Union{} none, precedent(julia: Compiler/src/typeinfer.jl:1115 typeinf_frame)" Core.Compiler.typeinf_frame function rejection_only_kinds(entries::AbstractVector)::Dict{String,Symbol}
     # a method's kind: :body when inference finds a return of a value or an effect, else the kind its
     # reject! calls take; the method itself is inferred over its own signature (its MethodMatch, never
     # dispatch's, which would take a subtype's override for it), unoptimized, by the compiler's
@@ -1621,40 +1619,6 @@ end
         :Internal in ks && return :Internal
         return isempty(ks) && rt === Union{} ? :Internal : :body
     end
-    # dart's member at line `ln`: its head read up to the first `{`, `=>` or `;` outside brackets; a
-    # throw when its block or expression begins with `throw` (the throw's line), abstract when the head
-    # ends at `;` with a parameter list or `get`, no `external`, no `=` and no constructor (the
-    # declaration's line); nothing otherwise
-    local dart_member(lines::Vector{String}, ln::Int, symbol::String) = begin
-        ln <= length(lines) || return nothing
-        local x = first(split(symbol, '.'))
-        local ctor = !occursin('.', symbol) || occursin(Regex("^(?:const\\s+|factory\\s+)?\\Q" * x * "\\E\\s*[(.]"), lstrip(lines[ln]))
-        local text = join((replace(l, r"//.*$" => "") for l in lines[ln:min(length(lines), ln + 300)]), "\n")
-        local line_at(i) = ln + count(==('\n'), text[1:i])
-        local throw_at(i) = (local r = findnext(r"\S", text, i); r !== nothing && startswith(text[first(r):end], "throw") ? (:DartThrow, line_at(first(r))) : nothing)
-        local depth = 0
-        local eq = false
-        local i = firstindex(text)
-        while i <= lastindex(text)
-            local c = text[i]
-            if c in ('(', '[')
-                depth += 1
-            elseif c in (')', ']')
-                depth -= 1
-            elseif depth == 0 && c == ';'
-                local head = text[1:i]
-                return !ctor && !eq && !occursin(r"\bexternal\b", head) && (occursin('(', head) || occursin(r"\bget\b", head)) ? (:DartAbstract, ln) : nothing
-            elseif depth == 0 && c == '=' && i < lastindex(text) && text[nextind(text, i)] == '>'
-                return throw_at(nextind(text, i, 2))
-            elseif depth == 0 && c == '='
-                eq = true
-            elseif depth == 0 && c == '{'
-                return throw_at(nextind(text, i))
-            end
-            i = nextind(text, i)
-        end
-        return nothing
-    end
     local kinds = Dict{String,Symbol}()
     # of several kinds, a body wins (an anchor several definitions name is a port when any has a body),
     # then a gap
@@ -1663,24 +1627,7 @@ end
         local k = e.ported && !isempty(e.methods) ? join_kinds(Symbol[method_kind(m) for m in e.methods]) : :body
         kinds[e.anchor] = haskey(kinds, e.anchor) ? join_kinds((k, kinds[e.anchor])) : k
     end
-    local lines_ = Dict{String,String}()
-    if sdk !== nothing
-        for (anchor, k) in kinds
-            k === :Internal || continue
-            local a = parse_anchor(anchor)
-            (a === nothing || a.pin !== :dart) && continue
-            local path = joinpath(sdk, a.file)
-            isfile(path) || continue
-            local ls = get!(() -> readlines(path), _PIN_LINES, path)
-            local d = dart_member(ls, a.line, a.symbol)
-            d === nothing && continue
-            # a throw's line is confirmed to throw; an abstract declaration is its own line
-            d[1] === :DartThrow && !occursin(r"\bthrow\b", ls[d[2]]) && continue
-            kinds[anchor] = d[1]
-            lines_[anchor] = "$(a.file):$(d[2])"
-        end
-    end
-    return kinds, lines_
+    return kinds
 end
 
 # the ParityEntry of one definition and the definition to evaluate (an @unported stub expanded), or

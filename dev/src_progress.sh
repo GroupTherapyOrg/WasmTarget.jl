@@ -36,7 +36,7 @@ if [ "${1:-}" = kinds ]; then
         S = Skeleton.read_scope()
         counted = Set(Skeleton.anchor(f, d) for f in Skeleton.scope() for d in S.decls[f] if Skeleton.counted(d))
         es = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]
-        R, L = WasmTarget.rejection_only_kinds(es, WasmTarget._pin_sdk())
+        R, L = Skeleton.dart_kinds(WasmTarget.rejection_only_kinds(es), Skeleton.anchored_decls(S))
         present = Set(x.anchor for x in es)
         stubbed = Set(x.anchor for x in es if x.anchor in counted && !x.ported)
         for a in sort!(collect(counted))
@@ -77,11 +77,12 @@ else
             stubbed = Set(x.anchor for x in e if !x.ported)
             ported = setdiff(Set(x.anchor for x in e), stubbed)
             # A55S13, A64E2: of the ported, those Julia'"'"'s inference finds never return, by kind
-            # (rejection_only_kinds). Internal: the answer of Julia replacing a construct it never produces
+            # (rejection_only_kinds, then dev/skeleton.jl'"'"'s dart_kinds). Internal: the answer of Julia replacing a construct it never produces
             # (ruling A55S12); Unported (a dart definition) and Unquarantined (a Julia-only one,
             # src/julia/reject.jl): gaps; DartThrow: dart'"'"'s own body throws, a body; DartAbstract: dart
             # declares it abstract, no body to port, never counted
-            R, _ = WasmTarget.rejection_only_kinds([x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)], WasmTarget._pin_sdk())
+            R, _ = Skeleton.dart_kinds(WasmTarget.rejection_only_kinds([x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]),
+                                       Skeleton.anchored_decls(S))
             k(a) = get(R, a, :body)
             replaced = count(a -> k(a) === :Internal, ported)
             gaps = count(a -> k(a) in (:Unported, :Unquarantined), ported)
