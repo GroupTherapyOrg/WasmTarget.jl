@@ -6566,3 +6566,139 @@ cconv; :1423-1428), `nccallargs = jl_svec_len(at)` (:1425) and the arguments fro
 (:1416, :1491), which is `node.args[6:5 + length(types)]`. 6b79bdf9 only binds the svec before taking its length; the
 answer is unchanged. src/patch/ and wasm_array.jl are unchanged in the range (3ea90d3b reads wasm_array.jl's methods and
 changes none). No finding; the clause is a standing section of R1 from audit 72 on.
+
+## 2026-11-01 — audited through 5f05f54e (6378f3b4..5f05f54e: _late_get pinned to dart's late getter lowering, path citations that declare their symbol, ship's port class by code lines, the precedent resolver and written signature folded away, JULIA_PIN read against the master, names refused where recorded, Base's and the compiler's .jl files pinned, fill! of a byte memory by overlay, PolymorphicDispatchers, the dynamic table's guards Internal, back to six shards, C10's 140-s band, the memory overlays re-cited to Base, Constants' ReverseUses, Node 26, per-compile dart readings)
+
+The seventy-second audit, beside the work, covers the 17 commits of 6378f3b4..5f05f54e that are not audit entries (b3dcc076,
+entry 71; c70c3c67, its follow-up): 9d72a168, 8db1a970, e55edc4d, 667bd48f, 4dfdfc88, 3c1b8ede, c03a8ba9, 70207e38, 27cec3a2,
+08cb5604, e825ebf2, 61ffebbb, 85d54f4a, 73b64c1e, 4c682f55, 26e75a8c and 5f05f54e, read here, under Dale's R1 (its runtime
+clause standing from this audit on) and R2 as standing sections. Every finding rests on one exact command, quoted. Standing
+items. src changes in 20 files (`git diff --stat 6378f3b4..origin/wt2 -- src | tail -1` gives `20 files changed, 261
+insertions(+), 142 deletions(-)`); no exemption lands (`git diff 6378f3b4..origin/wt2 -- src | grep -cE
+'^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 0). The debt list reads 398, from 400 (`grep -v '^#'
+dev/quarantine_unpinned.txt | grep -c .`): 9d72a168 deletes `julia/late.jl _late_get`, 667bd48f `julia/parity.jl
+_written_signature`. Earlier findings: A66S3 is fixed by 8db1a970 for its citation rule and its other half dropped (A72S2);
+A66E4 by e55edc4d; A67E2 and A67S2 by 667bd48f (the resolver a local function of _reason_unpinned, whose line covers it; the
+signature folded into _identity, itself listed, since L227 refuses a line added); A66E3 by 4dfdfc88; A66S4 by 3c1b8ede; A69S1
+by c03a8ba9 (Base's and the compiler's .jl units) with 85d54f4a (the four memory citations moved to Base's methods, below);
+A71E1 by e825ebf2 (`grep -n '^SHARDS=' dev/check.sh` gives `114:SHARDS=6`; five not measured, a watch); A71E3 and A68S4 by
+61ffebbb (below); A71E2 by 73b64c1e for its Broken variant, its claim-lock half (A69E2's) left open. Open as they stood:
+A71S1 (`grep -n 'isconcretetype(c) && c <: T' src/intrinsics.jl` gives `1340:`); A71S2 (`grep -n 'julia.h:905'
+src/julia/parity.jl` gives `655:` and `673:`); A71S3 (code_generator.jl:2016 cites codegen.cpp:2638 alone, no :6384 skip);
+A70S3 (`grep -n 'va_process_argtypes(Core.Compiler.fallback_lattice' src/julia/nir.jl` gives `573:`); A68S1 (`grep -n 'f ===
+nothing && return nothing' src/julia/parity.jl` gives `1428:` and `1440:`); A68E3 (`tail -1 .git/wt-corpus.tsv` gives
+f05b2fa8's `hung 1216` row); A68E2 and A67E1 at six shards; A69E1, A67S1, A67S3, A67S4 and A66S1's export half, carried, not
+re-read; A64E2 not landed (`git log --oneline --grep=A64E2 6378f3b4..origin/wt2` gives only c03a8ba9, which names it as the
+typeinfer unit's reason). Two commits landed while this entry queued (`git log --oneline 5f05f54e..origin/wt2`: bdd5539c,
+5bfcb2b7); 5bfcb2b7 names A70E3 fixed (a catch's stash defaultable, both :wt_bug cases :compiled) and drops it from 1.D,
+audit 73's to judge. Findings A72S1, A72S2 and A72E1.
+
+Area: builder — 3c1b8ede moves D10's UTF-8 refusal of a name-section name from NameSection.serializeContents to each
+recording site, InvalidModule naming the site's dart line: StructType and ArrayType (type.jl:158, :180), FunctionBuilder,
+FunctionsBuilder.import's function name, GlobalBuilder, ModuleBuilder, InstructionsBuilder.addLocal, and Dart2Wasm's three
+writes. The serializer's check becomes an Internal. The writes into the name maps are covered: `grep -rnE
+'(local_names|field_names)\[[^]]*\] *=' src` gives seven sites; the computed ones (code_generator.jl:744, class_info.jl:250,
+closures.jl:425, instructions.jl:420) each refuse first; code_generator.jl:821 and closures.jl:132, :538 write literals;
+types.jl:224 copies a recorded name. The other writes of a name, `grep -rnE '\.(global_name|function_name|name) *= ' src`,
+are translator.jl:2014 and :2023 (copies of recorded definitions) and types.jl:220 (a recgroup name made of recorded ones).
+27cec3a2 emits through the builder's class_id_search and call paths only.
+
+stopgap in disguise: none new.
+
+precedent: wasm_builder's own constructors by line; the serializer's check kept as the alarm (D10).
+
+Area: collection and planning — 27cec3a2 ports PolymorphicDispatchers (translator.dart:3686-3800, read at the pin against
+each body). getPolymorphicDispatchersForModule is `??=` as `get!`. getPolymorphicDispatcher picks the cache as dart does
+(`useUncheckedEntry && selector.useMultipleEntryPoints`), and dart's assert of more than one target range becomes a located
+Internal (D9). The call target's signature is `[i32, ...selector.signature.inputs]`; shouldInline is
+`staticDispatchRanges.length <= 1`. The late `function` is defined in the calling module by name and queued with
+inliningCodeGen, as dart's initializer is. generate reads paramLocals[classIdParameterOffset + i] 1-based as `+ i + 1`,
+pushes paramLocals[1] as `param_locals[2]` before callDispatchTable, and passes the fallback only when allTargetRanges
+outnumber staticDispatchRanges. No difference found. Watch: no differential case reaches it (WasmTarget.compile leaves
+polymorphic_specialization off, and _virtualCall, its one caller, is Unported); the structural test is
+test/src/dispatch_table.jl. 08cb5604 makes the dynamic table's three guards Internal under D32 (the collector collects no
+shape, so build places no entry), each naming its own dart definition; for the count, see R2.
+
+stopgap in disguise: none new.
+
+precedent: dart's PolymorphicDispatchers, PolymorphicDispatcherCallTarget and PolymorphicDispatcherCodeGenerator, by line.
+
+Area: emission and diagnostics — 70207e38 lowers wasm_memory_fill! to one array.fill of the memory's data array, offset 0,
+for its length wrapped to i32, the value translated to the element's unpacked type; dart's wasmArrayFill case
+(intrinsics.dart:1279, read: `case StaticIntrinsic.wasmArrayFill:`) takes the same four operands. A memory type with no class
+info rejects Internal, located. The overlay's body is Base's (`sed -n 204,211p
+~/.cache/wasmtarget/julia/base/genericmemory.jl` gives `function fill!(a::Union{Memory{UInt8}, Memory{Int8}}, x::Integer)` …
+`memset(p, x isa T ? x : convert(T, x), length(a) % UInt)`), the same conversion written around the intrinsic, and the native
+body is Base's memset, never the overlaid method. Its cases are six more equal against native, Dict{Int64,Int64} among them.
+5f05f54e records local_null_initialization :unread with both of its causes named (no String marshalling yet;
+Types.emitAsCheck at types.dart:527); it is no pass.
+
+stopgap in disguise: none new.
+
+precedent: Base's fill! (genericmemory.jl:204) and dart's wasmArrayFill, by line.
+
+Area: enforcement and prose — item (a), 61ffebbb, D19: the C10 text reads `target, red past 120 s, past 140 s until each
+shard's first compile is cut (Dale, 2026-11-01)`, and its trailer `Charter-change: C10 — Dale 2026-11-01: "Raise to 140 s
+until the cut"`. That is Dale's choice and nothing more: the same exit as the ledger's D14 band (`until the first-compile cut
+lands`) and check.sh's (back to 120 s and four shards), and no other clause text changes (`git show 61ffebbb --stat` gives
+dev/CHARTER.md 2 +- and dev/MARCH.md 2 +-). It also gives MARCH 1.L's retry ruling one exit, a measure: SHARDS back to four,
+or every row of wt-src-instr.tsv keeping its two measures within 15%. ship.sh:22 points to that measure (`ended by A68S4's
+measure`) rather than restating it, one source (D5). (A72E1, low, D17) the second arm fails on rounding, not on noise: `awk
+-F'\t' '{a=$2;b=$3;d=(a>b?a-b:b-a)/(a<b?a:b); if(d>0.15)n++} END{print n" of "NR}' .git/wt-src-instr.tsv` gives `10 of 53`,
+among them `compiler_options.jl 0.3 0.4` and `target.jl 0.6 0.7`. The log keeps one decimal of G, so one 0.1-G step on a file
+under 0.7 G is past 15%, and the arm cannot fire while such files exist, whatever the first compile does. Fix: the arm judges
+the measure D14 judges, the slowest shard's summed G across two checks within a band, or each row within 15% or 1 G. Owner:
+lead (dev/MARCH.md 1.L). Item (b), e825ebf2: six shards, the seventh's reason gone with the 140-s band; A71E1's measure of
+five is not made, a watch for the first-compile cut. Item (c), 4dfdfc88: julia_pin_faults requires the master's `**`<pin>`**
+(v<x.y.z>)` and a julia of the pinned minor series at the pin, and its four refusing plants and two passing ones are each
+written. Item (d), e55edc4d: the port class is a code line under src/ (src_progress.sh's `code`), its pipeline read without
+pipefail for the SIGPIPE it names. Watch: a change to a @quarantine reason or a docstring alone is a code line by this rule,
+so a re-cite like 85d54f4a ranks as port work unless its message names a finding (it does). Item (e), c03a8ba9: a .jl unit's
+anchor resolves when Julia's parser, reading from the line, gives a definition whose _defines name is the symbol; a blank or
+comment line is refused, since the parser would skip it. The sparse checkout holds the three units (`ls
+~/.cache/wasmtarget/julia/base ~/.cache/wasmtarget/julia/Compiler/src` gives array.jl, genericmemory.jl, typeinfer.jl). Item
+(f), 73b64c1e: ReverseUses runs Run over the program reversed, the count 1..n intact, and by its message breaks
+DeterministicNumbering alone (not re-run here). Item (g), 26e75a8c: the per-compile reading matches the budget's own
+definition (`git show 26e75a8c^:test/src/dart_tests.jl | sed -n 1143p` gives `# each compile's budget (D17)`), the number
+unchanged, so it is a measure fixed, not a budget edited (D14). 4c682f55 pins Node 26 in ci.yml, one source, the floor the
+lowest major that was run. Requirements: D5, D9, D10, D17, D19, D20, D32, D40; no lock fired inside its band.
+
+R1 and R2. R1: each new citation is read against its body at its pin. late_lowering.dart:22 and :271 (`sed -n 22p` and `271p`
+of pkg/front_end/lib/src/kernel/late_lowering.dart give `Statement createGetterWithInitializer(` and `Statement
+createGetterBodyWithoutInitializer(`), the three branches of _late_get's body. 8db1a970's five: wasm_types.dart:748 `external
+void operator []=(int index, T value);`, :142 `external int get length;`, runtime_blob.dart:126 `const jsStringPolyfill = {`,
+names.dart:25 `final String text;` and table_selector_assigner.dart:142 `void registerGetterCall(Member member, bool
+calledOnNull) {`. The runtime clause (src/julia/runtime/, src/patch/, wasm_array.jl): `git diff --stat 6378f3b4..origin/wt2
+-- src/julia/runtime src/patch src/julia/wasm_array.jl` gives rtutils.jl 2, wasm_array.jl 20 and genericmemory.jl 9. 70207e38
+cited jl_alloc_genericmemory_unchecked (genericmemory.c:30, an allocator) for the fill! it replaces; 85d54f4a, in the range,
+re-cites it and its three siblings to the Base methods replaced (`sed -n 78p`, `116p` of base/genericmemory.jl give `function
+_unsetindex!(A::MemoryRef{T}) where T` and `function unsafe_copyto!(dest::MemoryRef{T}, src::MemoryRef{T}, n) where {T}`;
+:204 is fill!, above), so the re-cite routed to wt3-memory has landed. (A72S2, low, R1) A66S3's second half was dropped
+untracked. 8db1a970 says `_wasm_only`'s citation "stays with its owner", and `grep -n A66S3 dev/MARCH.md` gives nothing at
+the head. wasm_array.jl:160 still pins by `sdk/lib/_wasm/wasm_types.dart:737 WasmArray`, which `sed -n 737p` gives as
+`external factory WasmArray(int length);`: the line now resolves, since 8db1a970's `external` rule admits it, but it does not
+port the helper. _wasm_only is a native body that raises behind compilerbarrier, and dart's external has no body at all. Fix:
+_wasm_only cites a pinned definition it ports (Julia's own native-raise helper for a codegen-only intrinsic, if one exists at
+JULIA_PIN), or the debt list admits an audit-named re-listing by a rule L227 states. Owner: wt3-runtime
+(src/julia/wasm_array.jl).
+
+R2: 27cec3a2 fills eleven whole-body Unported definitions (`git diff 6378f3b4..origin/wt2 -- src/translator.jl | grep -cE
+'^-.*reject!\(Unported'` gives 11, `^\+` 0). Ten are counted: skeleton.jl:2312's counted() excludes an instance field, and
+:3757 is dart's `late final w.BaseFunction function`. So bodies rise by 10 and gaps fall by 10, and 3129 bodies with 1 gap
+agrees with 3119 and #70's 11, #71's 12 reading as a mismeasure. Each of the ten is a dispatcher body read above. 08cb5604
+changes no count: its three guards precede other statements, so _rejection_only_kind reads each definition as a body before
+and after. build's body defines the empty tables, the answer of the only case Julia reaches. (A72S1, medium, R2) the other
+two are stubs counted as complete. `sed -n 124,132p src/dynamic_dispatch_table.jl` gives output_target_table and
+output_class_id_table as `any(!isnothing, self._table[]) && reject!(Internal(…))` then `return nothing`, none of dart's entry
+loop (dynamic_dispatch_table.dart:199-255, read). 08cb5604's message says "They count as rejection-only, never as ported",
+but the predicate counts them in the headline: parity.jl:1533 `length(stmts) == 1 || return nothing` and :1535 `st.args[1]
+=== :reject!`, so a guard (`&&`/`||`) or a trailing `return nothing` makes a body. An awk scan of each `@parity … function`
+whose two-line body is a rejection then `return nothing` finds these two alone. Fix: _rejection_only_kind reads a body that
+is one rejection, guarded or not, followed by nothing but `return nothing`, as rejection-only by its kind, with a plant of
+each shape; the headline then reads 3127 with 275 Internal. Owner: wt3-parity (src/julia/parity.jl), beside A47E2 on 1.A6.
+A64E2 has not landed, so DartAbstract has no count to read.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A69S1 leaves MARCH 1.K; A71E1 and A71E3 leave 1.L; A71E2
+stays on 1.C narrowed to its claim-lock half. A72S1 is open on 1.A6; A72S2 on 1.K; A72E1 on 1.L. By owner: wt3-parity
+A72S1 (src/julia/parity.jl), with A71S2, A68S1 and A71E2's claim lock; wt3-runtime A72S2 (src/julia/wasm_array.jl); lead
+A72E1 (dev/MARCH.md 1.L); wt3-memory A71S1; wt3-cgstubs2 A71S3 and A70S3.
