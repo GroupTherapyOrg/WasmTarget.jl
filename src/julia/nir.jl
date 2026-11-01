@@ -542,14 +542,82 @@ as a variable and translates an unused one as an expression statement.
 end
 
 """
+    NirVarargPacking
+
+How a varargs method's trailing arguments reach its body, which always sees them as one tuple, its
+argument `first` (the method's `nargs`), of type `packed` (Julia's own, Core.Compiler's
+va_process_argtypes over the specialization). `at_entry`: the specialization fixes the argument count
+(specTypes ends in no Vararg), so Julia's codegen passes each argument as a parameter of its own
+(specsig) and the callee packs the trailing ones into the tuple at entry; otherwise (a trailing
+Vararg, the count open) Julia passes the arguments in one array the callee packs from (jlcall), and a
+wasm function, of a fixed arity, takes the tuple itself, which the caller packs.
+
+precedent(julia: codegen.cpp's specsig, which passes a count-specialized varargs call's arguments one
+by one and builds the vararg tuple in the callee, and its jlcall ABI for an open count). dart has no
+varargs.
+"""
+@quarantine "Julia passes a varargs method's trailing arguments as one tuple its body reads, packed at entry by a specialized signature or from the call's arguments otherwise (julia/src/codegen.cpp:2792 uses_specsig)" Core.Type struct NirVarargPacking
+    first::Int
+    packed::Type
+    at_entry::Bool
+end
+
+"""
+    nir_vararg_packing(mi) -> Union{NirVarargPacking,Nothing}
+
+The packing of `mi`'s trailing arguments (NirVarargPacking), or nothing for a method with no varargs.
+"""
+@quarantine "Julia's inference packs a varargs method's trailing argument types into one tuple type, va_process_argtypes, and its codegen packs at entry where the count is bound (julia/src/codegen.cpp:2792 uses_specsig)" Core.Compiler.va_process_argtypes function nir_vararg_packing(mi::Core.MethodInstance)::Union{NirVarargPacking,Nothing}
+    local m = mi.def
+    m isa Method && m.isva || return nothing
+    local argtypes = Core.Compiler.va_process_argtypes(Core.Compiler.fallback_lattice,
+        Core.Compiler.most_general_argtypes(m, mi.specTypes), UInt(m.nargs), true)
+    local packed = Core.Compiler.widenconst(argtypes[m.nargs])
+    local ps = Base.unwrap_unionall(mi.specTypes).parameters
+    return NirVarargPacking(Int(m.nargs), packed, !(last(ps) isa Core.TypeofVararg))
+end
+
+"""
+    nir_vararg_call_tuple(body, node) -> Union{Type,Nothing}
+
+The tuple an invoke of a varargs specialization of an open count packs from its trailing operands
+(NirVarargPacking): the tuple of their inferred types, the type Julia's jl_f_tuple gives the tuple of
+those values (julia/src/codegen.cpp:2792 uses_specsig sends such a call through the argument array
+it packs from); nothing for any other invoke.
+"""
+@quarantine "Julia packs an open count's trailing arguments into the tuple of their values' types, jl_f_tuple over the call's arguments (julia/src/codegen.cpp:2792 uses_specsig)" Core.Tuple function nir_vararg_call_tuple(body::NirBody, node::NirInvoke)::Union{Type,Nothing}
+    local va = nir_vararg_packing(nir_invoke_target(node))
+    (va === nothing || va.at_entry) && return nothing
+    return Tuple{(nir_value_type(body, a) for a in node.args[va.first:end])...}
+end
+
+"""
+    nir_parameter_types(mi) -> Vector{Type}
+
+The types of the parameters `mi`'s function takes, the callee's first: its specialization's argument
+types, each its own parameter (a varargs specialization of a fixed count among them, which packs at
+entry), but for a varargs specialization of an open count, whose trailing arguments are one parameter,
+the packed tuple (NirVarargPacking).
+"""
+@quarantine "a function's parameters are its specialization's argument types, a varargs tail of open count one packed tuple, as Julia's codegen passes each argument of a specialized signature (julia/src/codegen.cpp:2792 uses_specsig)" Core.MethodInstance function nir_parameter_types(mi::Core.MethodInstance)::Vector{Type}
+    local ps = Type[p for p in Base.unwrap_unionall(mi.specTypes).parameters if !(p isa Core.TypeofVararg)]
+    local va = nir_vararg_packing(mi)
+    (va === nothing || va.at_entry) && return ps
+    return Type[ps[1:va.first-1]..., va.packed]
+end
+
+"""
     nir_argument_type(mi, a) -> Type
 
-The type of argument `a` of `mi`: its MethodInstance's signature, the type Julia specialized it for
-(`Argument(1)` the callee itself).
+The type of argument `a` of `mi`'s body: its MethodInstance's signature, the type Julia specialized it
+for (`Argument(1)` the callee itself), a varargs method's last argument the packed tuple
+(NirVarargPacking).
 """
 @quarantine "a Julia argument's type is its MethodInstance's specialization, specTypes" Core.MethodInstance function nir_argument_type(mi::Core.MethodInstance, a::NirArgument)::Type
+    local va = nir_vararg_packing(mi)
+    va === nothing || a.n != va.first || return va.packed
     local ps = Base.unwrap_unionall(mi.specTypes).parameters
-    1 <= a.n <= length(ps) && ps[a.n] isa Type && !(ps[a.n] isa Core.TypeofVararg) ||
+    1 <= a.n <= (va === nothing ? length(ps) : va.first - 1) && ps[a.n] isa Type && !(ps[a.n] isa Core.TypeofVararg) ||
         reject!(Unquarantined("src/julia/nir.jl: argument $(a.n) of $mi, outside its signature $(mi.specTypes)"), "$mi")
     return ps[a.n]
 end
@@ -651,13 +719,12 @@ end
 """
     nir_method_nargs(mi) -> Int
 
-How many arguments `mi`'s method takes, the callee `Argument(1)` among them; a varargs method rejects,
-located, its trailing tuple not yet read.
+How many arguments `mi`'s method's body takes, the callee `Argument(1)` among them, a varargs
+method's trailing ones its one packed tuple (NirVarargPacking).
 """
 @quarantine "a Julia method's arity is its Method's nargs, with isva for a varargs tail" Core.Method function nir_method_nargs(mi::Core.MethodInstance)::Int
     local m = mi.def
     m isa Method || reject!(Unquarantined("src/julia/nir.jl: $mi instantiates no method"), "$mi")
-    m.isva && reject!(Unquarantined("src/julia/nir.jl: the varargs method $m"), "$mi")
     return Int(m.nargs)
 end
 

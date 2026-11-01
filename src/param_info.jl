@@ -51,17 +51,14 @@ first read.
 The parameter info of the member `target`, a Kernel Reference. A field's accessor (dart's Field):
 its receiver taken, no type parameter, a setter's one value its one positional parameter, a
 getter's none. A MethodInstance: no type parameters, a required positional parameter for each
-argument after the callee (Julia's specialization signature), none named, and the callee taken as
-the context when it carries data (nir_carries_data). A Vararg left in the signature rejects,
-located. `use_default_value_sentinel` has nothing to mark: no parameter is optional.
+parameter after the callee (Julia's specialization signature, a varargs tail of open count one
+packed tuple, nir_parameter_types), none named, and the callee taken as the context when it carries
+data (nir_carries_data). `use_default_value_sentinel` has nothing to mark: no parameter is optional.
 """
 @parity "dart2wasm/lib/param_info.dart:59 ParameterInfo.fromMember" function ParameterInfo_from_member(target::Reference, use_default_value_sentinel::Bool)::ParameterInfo
     target isa FieldReference && return ParameterInfo__(true, 0, Union{Nothing,NirConst}[nothing for _ in 1:(target.kind === FieldReferenceKind_setter ? 1 : 0)],
                                                         LinkedHashMap{String,Union{Nothing,NirConst}}())
-    local sig = Base.unwrap_unionall((target::Core.MethodInstance).specTypes)::DataType
-    local params = sig.parameters
-    any(p -> p isa Core.TypeofVararg, params) &&
-        reject!(Unquarantined("src/param_info.jl fromMember: the Vararg signature $(target.specTypes), whose argument count Julia left open"), "dart2wasm/lib/param_info.dart:59 ParameterInfo.fromMember")
+    local params = nir_parameter_types(target::Core.MethodInstance)
     local positional = Union{Nothing,NirConst}[nothing for _ in 2:length(params)]
     return ParameterInfo__(nir_carries_data(params[1]), 0, positional, LinkedHashMap{String,Union{Nothing,NirConst}}())
 end
@@ -74,10 +71,7 @@ takes its context, the closure itself.
 """
 @parity "dart2wasm/lib/param_info.dart:115 ParameterInfo.fromLocalFunction" function ParameterInfo_from_local_function(function_::NirBody)::ParameterInfo
     local mi = function_.ci.def::Core.MethodInstance
-    local sig = Base.unwrap_unionall(mi.specTypes)::DataType
-    local params = sig.parameters
-    any(p -> p isa Core.TypeofVararg, params) &&
-        reject!(Unquarantined("src/param_info.jl fromLocalFunction: the Vararg signature $(mi.specTypes), whose argument count Julia left open"), "dart2wasm/lib/param_info.dart:115 ParameterInfo.fromLocalFunction")
+    local params = nir_parameter_types(mi)
     local positional = Union{Nothing,NirConst}[nothing for _ in 2:length(params)]
     return ParameterInfo__(true, 0, positional, LinkedHashMap{String,Union{Nothing,NirConst}}())
 end

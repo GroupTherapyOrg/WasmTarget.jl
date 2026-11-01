@@ -37,6 +37,9 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
     local objs = Set{NirConst}()
     for b in world
         foreach(t -> _meet_value!(out, seen, t, at), Base.unwrap_unionall(b.ci.def.specTypes).parameters)
+        # a varargs method's body reads its trailing arguments as one tuple (NirVarargPacking)
+        local va = nir_vararg_packing(b.ci.def)
+        va === nothing || _meet_value!(out, seen, va.packed, at)
         foreach(t -> _meet_value!(out, seen, t, at), b.types)
         for st in b.stmts
             for v in nir_value_operands(st)
@@ -47,10 +50,15 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
                                     _meet_constant!(out, seen, objs, nir_binding_value(v.ref, at).c.val, at))
             end
             # a tuple's class is its operands' (nir_tuple_type), which the statement's widened type
-            # may hide; a tuple whose class only run time knows brings none
+            # may hide; a tuple whose class only run time knows brings none; so is the tuple an invoke
+            # of a varargs specialization of an open count packs (nir_vararg_call_tuple)
             if st isa NirCall && nir_callee(st) === Core.tuple
                 local tt = nir_tuple_type(b, st)
                 isconcretetype(tt) && _meet_value!(out, seen, tt, at)
+            end
+            if st isa NirInvoke
+                local vt = nir_vararg_call_tuple(b, st)
+                vt !== nothing && isconcretetype(vt) && _meet_value!(out, seen, vt, at)
             end
         end
         _meet_value!(out, seen, b.ci.rettype, at)

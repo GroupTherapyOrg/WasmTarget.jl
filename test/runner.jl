@@ -107,7 +107,7 @@ struct Leaves{F,P,T} <: Function end
     end
     return ex
 end
-# fixed arities: compile has no varargs method yet (src/julia/nir.jl rejects one, unported)
+# fixed arities: a varargs method of an open count reads its tuple by a run-time index, not yet compiled
 (::Leaves{F,P,T})(k::Int64) where {F,P,T} = _pick(F(), Val(P), T, k)
 (::Leaves{F,P,T})(a, k::Int64) where {F,P,T} = _pick(F(a), Val(P), T, k)
 (::Leaves{F,P,T})(a, b, k::Int64) where {F,P,T} = _pick(F(a, b), Val(P), T, k)

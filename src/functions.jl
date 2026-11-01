@@ -280,7 +280,8 @@ closure has no type parameters and no named ones.
 @parity "dart2wasm/lib/functions.dart:262 FunctionCollector.getLambdaFunctionType" function get_lambda_function_type(self::FunctionCollector, lambda::Lambda)::WasmBuilder.IR.FunctionType
     local translator = self.translator
     local ci = lambda.function_node.ci
-    local params = (Base.unwrap_unionall(ci.def.specTypes)::DataType).parameters
+    # its parameters, a varargs tail of open count one packed tuple (nir_parameter_types)
+    local params = nir_parameter_types(ci.def)
     local inputs = WasmBuilder.IR.ValueType[closure_context_field_type()]
     for p in params[2:end]
         push!(inputs, translate_type(translator, p))
@@ -468,11 +469,10 @@ end
 # parameters are the arguments after the callee, each of the type it is specialized on
 @parity "dart2wasm/lib/functions.dart:731 _getInputTypes" function _get_input_types(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType},
         is_import_or_export::Bool, translate_type::Function)::Vector{WasmBuilder.IR.ValueType}
-    local params = (Base.unwrap_unionall(target.specTypes)::DataType).parameters
-    # a varargs specialization's trailing Vararg has no argument count to type (as ParameterInfo.fromMember
-    # rejects it), located, never a MethodError past the gap
-    any(p -> p isa Core.TypeofVararg, params) &&
-        reject!(Unquarantined("src/param_info.jl fromMember: the Vararg signature $(target.specTypes), whose argument count Julia left open"), "dart2wasm/lib/functions.dart:731 _getInputTypes")
+    # the function's parameters: a varargs specialization of a fixed count takes each argument (Julia's
+    # specsig, the callee packing them at entry), one of an open count its trailing arguments as one
+    # packed tuple (packed by the caller), Julia's answer (nir_parameter_types, NirVarargPacking)
+    local params = nir_parameter_types(target)
     local inputs = WasmBuilder.IR.ValueType[]
     if receiver_type !== nothing
         is_import_or_export && reject!(Internal("dart2wasm/lib/functions.dart:731 _getInputTypes: an import or export with a receiver"), "_getInputTypes")
@@ -491,7 +491,7 @@ then its return. A Julia method has no type parameters (its MethodInstance binds
 ones.
 """
 @parity "dart2wasm/lib/functions.dart:787 makeFunctionTypeForBody" function make_function_type_for_body(translator::Translator, member::Core.MethodInstance, synthesize_null_return_value::Bool, synthesize_no_return::Bool)::WasmBuilder.IR.FunctionType
-    local params = (Base.unwrap_unionall(member.specTypes)::DataType).parameters
+    local params = nir_parameter_types(member)
     # dart asserts an instance member: a Julia member whose callee is a value, no singleton function
     !nir_carries_data(params[1]) && reject!(Internal("dart2wasm/lib/functions.dart:793 makeFunctionTypeForBody: $(member) has no receiver"), "make_function_type_for_body")
     local inputs = WasmBuilder.IR.ValueType[translate_type(translator, params[1])]

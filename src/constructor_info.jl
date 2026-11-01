@@ -48,11 +48,9 @@ end
 
 @parity "dart2wasm/lib/constructor_info.dart:35 ConstructorInfo" function ConstructorInfo(constructor::Core.MethodInstance, translator::Translator)::ConstructorInfo
     # All parameters of the constructor in canonical order (positional first, then named sorted by
-    # name): a Julia method's arguments after the callee, every one positional
-    local sig = Base.unwrap_unionall(constructor.specTypes)::DataType
-    any(p -> p isa Core.TypeofVararg, sig.parameters) &&
-        reject!(Unquarantined("src/constructor_info.jl ConstructorInfo: the Vararg signature $(constructor.specTypes), whose argument count Julia left open"), "dart2wasm/lib/constructor_info.dart:35 ConstructorInfo")
-    local self = ConstructorInfo(Val(:_), constructor, translator, NirArgument[NirArgument(i) for i in 2:length(sig.parameters)])
+    # name): a Julia method's arguments after the callee, every one positional, a varargs tail its one
+    # packed tuple (nir_method_nargs)
+    local self = ConstructorInfo(Val(:_), constructor, translator, NirArgument[NirArgument(i) for i in 2:nir_method_nargs(constructor)])
 
     # The initializer gets all arguments and produces
     #   - arguments to be passed to the body function

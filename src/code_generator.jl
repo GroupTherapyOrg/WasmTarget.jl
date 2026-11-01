@@ -698,15 +698,44 @@ end
 # Julia's method has no type parameters at run time (its static parameters are part of the
 # MethodInstance) and no named parameters (lowering passes keywords positionally), and no parameter
 # has a default (an optional argument makes a method of its own): its positional parameters are its
-# arguments after the callee itself, `Argument(2)` on, each required
+# arguments after the callee itself, `Argument(2)` on, each required. A varargs specialization of a
+# fixed count takes each trailing argument as a parameter of its own and its body reads them as one
+# tuple, which Julia's codegen builds at entry from those parameters (julia/src/codegen.cpp:8859, a
+# concrete tuple by emit_new_struct): the tuple's struct is allocated from them here, its local the
+# packed argument's (NirVarargPacking)
 @parity "dart2wasm/lib/code_generator.dart:245 AstCodeGenerator._setupLocalParameters" function _setup_local_parameters(self::AstCodeGenerator, member::Core.MethodInstance, param_info::ParameterInfo, parameter_offset::Int, implicit_params::Int; is_forwarder::Bool = false, can_safely_omit_implicit_checks::Bool = false)::Nothing
     local positional = get_parameters_to_check(self.translator, member).positional
     local names = Base.method_argnames(member.def::Method)
     local may_need_to_check_types = need_to_check_types_for(self.translator, member)
     local b = self.b[]
+    local va = nir_vararg_packing(member)
     for i in 0:length(positional)-1
         local variable = positional[i + 1]
         local is_required = true
+        if va !== nothing && va.at_entry && variable.n == va.first
+            local at = "dart2wasm/lib/code_generator.dart:245 AstCodeGenerator._setupLocalParameters"
+            local tuple_type = va.packed
+            # codegen.cpp builds a concrete tuple in place and any other by jl_f_tuple, its class the
+            # values' at run time
+            isconcretetype(tuple_type) ||
+                reject!(Unquarantined("src/code_generator.jl _setupLocalParameters: the varargs tuple $tuple_type $(member) packs at entry, whose class only run time knows"), "$(member)")
+            local info = get(self.translator.class_info, tuple_type, nothing)
+            info === nothing && reject!(Internal("$at: no class info for $(member)'s packed varargs tuple $tuple_type"), "$(member)")
+            local trailing = self.param_locals[][implicit_params + i + 1:end]
+            local fields = class_instance_fields(tuple_type, at)
+            length(fields) == length(trailing) || reject!(Internal("$at: $(length(trailing)) trailing parameters for the $(length(fields)) fields of $tuple_type"), "$(member)")
+            record_class_allocation(self.translator.functions[], class_id(info))
+            push_object_header_fields(b, self.translator, info)
+            for (field, param) in zip(fields, trailing)
+                WasmBuilder.local_get(b, param)
+                convert_type(self.translator, b, param.type, WasmBuilder.unpacked(info.struct_.fields[self.translator.field_index[field] + 1].type))
+            end
+            WasmBuilder.struct_new(b, info.struct_)
+            local tuple_local = add_local(self, info.non_nullable_type; name = string(names[variable.n]))
+            WasmBuilder.local_set(b, tuple_local)
+            self.locals[variable] = tuple_local
+            continue
+        end
         local local_ = self.param_locals[][implicit_params + i + 1]
         local variable_name = string(names[variable.n])
         isempty(variable_name) || (b.local_names[local_.index] = variable_name)
@@ -1833,11 +1862,36 @@ end
 # a Julia call's arguments are its operands after the callee (`args[1]`), all positional: Julia has
 # no type arguments at run time, lowering passes keywords positionally, and an optional argument
 # makes a method of its own, so no default is pushed; a callee that carries fields is the receiver,
-# which visitInstanceInvocation pushes first (`signature_offset` 1)
+# which visitInstanceInvocation pushes first (`signature_offset` 1). A varargs specialization of an
+# open count takes its trailing arguments as one tuple, which Julia's codegen packs from the call's
+# arguments (julia/src/codegen.cpp:8879, jl_f_tuple over the argument array, the tuple's type its
+# values'); a wasm function's arity is fixed, so the call packs them: the operands' concrete tuple,
+# allocated here and passed as the packed parameter (NirVarargPacking)
 @parity "dart2wasm/lib/code_generator.dart:2849 AstCodeGenerator._visitArguments" function _visit_arguments(self::AstCodeGenerator, node::NirInvoke, signature::WasmBuilder.IR.FunctionType, param_info::ParameterInfo, signature_offset::Int)::Nothing
-    local positional = node.args[2:end]
+    local va = nir_vararg_packing(nir_invoke_target(node))
+    local packed = va !== nothing && !va.at_entry
+    local positional = node.args[2:(packed ? va.first - 1 : end)]
     for i in 0:length(positional)-1
         translate_expression(self, positional[i + 1], signature.inputs[signature_offset + i + 1])
+    end
+    if packed
+        local at = "dart2wasm/lib/code_generator.dart:2849 AstCodeGenerator._visitArguments"
+        local trailing = node.args[va.first:end]
+        local tuple_type = nir_vararg_call_tuple(self.body, node)
+        isconcretetype(tuple_type) && tuple_type <: va.packed ||
+            reject!(Unquarantined("src/code_generator.jl _visitArguments: the varargs tuple $tuple_type of a call of $(nir_invoke_target(node)), whose class only run time knows"), "$(self.enclosing_member)")
+        local info = get(self.translator.class_info, tuple_type, nothing)
+        info === nothing &&
+            reject!(Unquarantined("src/julia/classes.jl closed_world_classes: the varargs tuple $tuple_type a call of $(nir_invoke_target(node)) packs, a class the closed world does not number"), "$(self.enclosing_member)")
+        record_class_allocation(self.translator.functions[], class_id(info))
+        local b = self.b[]
+        push_object_header_fields(b, self.translator, info)
+        local fields = class_instance_fields(tuple_type, at)
+        for (field, operand) in zip(fields, trailing)
+            translate_expression(self, operand, WasmBuilder.unpacked(info.struct_.fields[self.translator.field_index[field] + 1].type))
+        end
+        WasmBuilder.struct_new(b, info.struct_)
+        convert_type(self.translator, b, info.non_nullable_type, signature.inputs[signature_offset + va.first - 1])
     end
     return nothing
 end

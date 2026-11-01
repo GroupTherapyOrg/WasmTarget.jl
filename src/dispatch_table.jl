@@ -179,7 +179,7 @@ takes the default-value sentinel.
         local receiver, positional, returns
         @exhaustive target::Reference begin
             (m::MethodInstance) => begin
-                local params = (Base.unwrap_unionall(m.specTypes)::DataType).parameters
+                local params = nir_parameter_types(m)
                 receiver = params[1]
                 positional = Type[params[i] for i in 2:length(params)]
                 returns = return_count == 0 ? Type[] : Type[type_of_return_value(translator_, m)]

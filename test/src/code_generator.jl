@@ -388,11 +388,12 @@ end
         push!(NATIVE_RUNS, WTRunner.RunCase("$(nameof(f))($x) throws ", bytes, (x,), WTRunner.Throws(T)))
         queue_native!("$(nameof(f)) ", bytes, f, [(7,)])
     end
-    # Base's InexactError is built by its varargs constructor, InexactError(f, args...), whose trailing
-    # Vararg has no argument count yet: a located rejection at the function type, never a MethodError
+    # Base's InexactError is built by its varargs constructor of an open count, InexactError(f, args...),
+    # whose call packs (T, val) into a tuple: T's class, a Type, only run time knows (Julia's jl_f_tuple
+    # reads the value's), so the call rejects where it packs, located, never a MethodError
     @test (try; ThrowCases.to_u8(300); nothing; catch err; err; end) isa InexactError
     local iv = rejection(() -> W.compile(ThrowCases.to_u8, (Int64,); optimize = false))
-    @test iv.rejection isa W.Unquarantined && occursin("Vararg signature", iv.rejection.row)
+    @test iv.rejection isa W.Unquarantined && occursin("_visitArguments: the varargs tuple", iv.rejection.row)
     # dart's dynamic invocation has no Julia input: the verifier resolves every call it admits but a
     # must-throw one, so reaching it is WasmTarget's own defect, naming Julia's replacement
     local d = rejection(() -> D._handle_dynamic_invocation(g, W.NirArgument(2), W.NirValue[], :f))
