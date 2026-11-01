@@ -565,12 +565,17 @@ end
     # and the interop namer last, over the export namer
     @test t.interop_member_namer[] isa D.InteropMemberNamer && t.interop_member_namer[]._external_member_namer._export_namer === t.export_namer
     # a late field whose class is not ported yet is read before its assignment: Unported, at its line
-    for (f, line) in ((:stack_trace_info, 243), (:record_info, 244),
-                      (:list_array_type, 249), (:boxed_int_type, 267), (:boxed_double_type, 271), (:stack_trace_type, 285),
-                      (:stack_trace_type_nullable, 285), (:invocation_type, 309), (:boxed_classes, 374), (:box_classes, 380),
-                      (:value_classes, 389))
+    for (f, line) in ((:record_info, 244),
+                      (:list_array_type, 249), (:boxed_int_type, 267), (:boxed_double_type, 271), (:invocation_type, 309),
+                      (:boxed_classes, 374), (:box_classes, 380), (:value_classes, 389))
         local e = try; getfield(t, f)[]; nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("translator.dart:$line ", e.rejection.anchor)
+    end
+    # the stack trace class outside standalone mode, the JS runtime's JavaScriptStack, not ported: its
+    # info and types reject there (a standalone module's, the standalone runtime's, src/tags.jl's test)
+    for f in (:stack_trace_info, :stack_trace_type, :stack_trace_type_nullable)
+        local e = try; getfield(t, f)[]; nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Unported && e.rejection.anchor == "sdk/lib/_internal/wasm/js_common/js_helper.dart:830 JavaScriptStack"
     end
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
@@ -594,7 +599,9 @@ end
     # made once (test/src/dispatch_table.jl generates one)
     local internal(f) = (e = try; f(); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Internal)
     @test D.get_polymorphic_dispatchers_for_module(t, m) === D.get_polymorphic_dispatchers_for_module(t, m) && internal(() -> D.get_partial_instantiator_for_module(t, m))
-    @test D.get_dart_exception_tag(t, m) isa IR.Tag && D.get_dart_exception_tag(t, m) === D.get_dart_exception_tag(t, m)
+    # the exception tag carries the stack trace, whose class outside standalone mode is not ported
+    local et = try; D.get_dart_exception_tag(t, m); nothing; catch x; x; end
+    @test et isa W.RejectionError && et.rejection isa W.Unported && et.rejection.anchor == "sdk/lib/_internal/wasm/js_common/js_helper.dart:830 JavaScriptStack"
     local mi = t.component.entry
     @test D.get_closures(t, mi) === D.get_closures(t, mi) && D.get_closures(t, mi; find_captures = false) !== D.get_closures(t, mi)
     local f = D.get_dummy_function(D.get_dummy_values_collector_for_module(t, m), W.WasmBuilder.define_function(m.types[], IR.ValueType[], IR.ValueType[]))

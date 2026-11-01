@@ -90,8 +90,9 @@ TypeVar), `staticParamInfo`, `_declaredFieldTables`, `_importedFieldTables`,
 `runtimeTypeTypeNullable`, `stringType`, `stringTypeNullable`, `invocationType` (each late with
 dart's initializer, the class it reads Julia's answer where src states one: dart's `Object` and
 `Object?` are `Any`, its `Type` and `_Type` Julia's `Type`, its `String` `String`, its `_Closure`
-`Function`; a late field whose class is not ported yet, `StackTrace`, `Record`, the list base, the
-boxed classes, `Invocation`, is assigned when its class is); `_partialInstantiators`,
+`Function`, its `StackTrace` in a standalone module the standalone runtime's _EmbedderStackTrace; a
+late field whose class is not ported yet, `Record`, the list base, the boxed classes, `Invocation`, is
+assigned when its class is); `_partialInstantiators`,
 `_polymorphicDispatchers`, `_dynamicDispatchers`, `_dummyValueCollectors`; `builtinTypes`
 (Julia's primitive classes with a wasm representation: `Bool`, `Char` and the 32-bit integers i32,
 the 64-bit i64, `Float32` f32, `Float64` f64, and the 8- and 16-bit integers packed i8 and i16, as
@@ -266,7 +267,16 @@ the translator holds each collaborator.
                 info === nothing && reject!(Internal("dart2wasm/lib/translator.dart:242 Translator.closureInfo: Function is no class of the closed world"), "Translator.closureInfo")
                 return info
             end),
-            Late{ClassInfo}("dart2wasm/lib/translator.dart:243 Translator.stackTraceInfo"),
+            # dart's StackTrace, an abstract class of dart:core: in a standalone module its one
+            # implementation, the standalone runtime's _EmbedderStackTrace; the JS runtime's,
+            # JavaScriptStack, not ported
+            Late{ClassInfo}("dart2wasm/lib/translator.dart:243 Translator.stackTraceInfo", function ()
+                is_standalone(self) ||
+                    reject!(Unported("sdk/lib/_internal/wasm/js_common/js_helper.dart:830 JavaScriptStack"), "Translator.stackTraceInfo: the stack trace class outside standalone mode")
+                local info = get(self.class_info, Runtime._EmbedderStackTrace, nothing)
+                info === nothing && reject!(Internal("dart2wasm/lib/translator.dart:243 Translator.stackTraceInfo: _EmbedderStackTrace is no class of the closed world"), "Translator.stackTraceInfo")
+                return info
+            end),
             Late{ClassInfo}("dart2wasm/lib/translator.dart:244 Translator.recordInfo"),
             # dart's `_Type`, a type as a value: Julia's `Type` (translateStorageType)
             Late{WasmBuilder.IR.ArrayType}("dart2wasm/lib/translator.dart:245 Translator.typeArrayType",
@@ -284,7 +294,8 @@ the translator holds each collaborator.
             # The wasm type used to hold values of Dart top types excluding null (e.g. `Object`)
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:282 Translator.topTypeNonNullable", () -> WasmBuilder.with_nullability(self.top_type[], false)),
             # The wasm type used to hold values of `StackTrace`
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:285 Translator.stackTraceType"),
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:285 Translator.stackTraceType",
+                () -> translate_type(self, self.stack_trace_info[].cls)::WasmBuilder.IR.RefType),
             # The wasm type used to hold values of `StackTrace?`
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:289 Translator.stackTraceTypeNullable", () -> WasmBuilder.with_nullability(self.stack_trace_type[], true)),
             # The wasm type used to hold values of `Type`

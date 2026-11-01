@@ -20,9 +20,9 @@ Translator.getClosures, as dart's is), `exceptionLocationPrinted`, `locals` (a v
 argument or a used SSA statement, Julia's own names for a value), `thisLocal`, `preciseThisLocal`,
 `returnValueLocal`, `typeLocals` :90 (a type parameter a TypeVar, the Kernel table's row; Julia's
 answer leaves it empty, a static parameter being part of the MethodInstance and no parameter of its
-function), `returnFinalizers`, `tryBlockLocals` :101 (dart's record a NamedTuple of its exception
-local; its stackTraceLocal comes with the exception tag's stack trace, src/tags.jl, and the stack
-Julia's exception stack, the top at each statement compute_trycatch's, NirHandlers.exception_at),
+function), `returnFinalizers`, `tryBlockLocals` :101 (dart's record a NamedTuple of the two locals,
+and the stack Julia's exception stack, the top at each statement compute_trycatch's,
+NirHandlers.exception_at),
 `_sourceMapSource` :159 (a source the file Julia's debuginfo names, the Kernel table's row) and
 `_sourceMapFileOffset`; and SynchronousProcedureCodeGenerator's `member` and `reference`.
 
@@ -59,7 +59,7 @@ SSAValue, so a used statement is a variable declaration and an unused one an exp
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const member::Core.MethodInstance
@@ -79,7 +79,7 @@ SSAValue, so a used statement is a variable declaration and an unused one an exp
             Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
             Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
-            NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}[],
+            NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
             nothing, TreeNode_no_offset, member, member, body, nir_used_statements(body))
         return self
     end
@@ -108,7 +108,7 @@ function, rejects Internal, and so does its one inner constructor.
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const member::Core.MethodInstance
@@ -139,7 +139,7 @@ its outer function, rejects Internal, and so does its one inner constructor.
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const reference::Core.MethodInstance
@@ -185,7 +185,7 @@ one inner constructor.
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const member::Core.MethodInstance
@@ -217,7 +217,7 @@ constructor (:4617), its outer function, rejects Internal, and so does its one i
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const member::Core.MethodInstance
@@ -248,7 +248,7 @@ constructor (:4729), its outer function, rejects Internal, and so does its one i
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const member::Core.MethodInstance
@@ -279,7 +279,7 @@ FieldReference (A62S1).
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const field::GlobalRef
@@ -295,7 +295,7 @@ FieldReference (A62S1).
             Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
             Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
-            NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}[],
+            NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
             nothing, TreeNode_no_offset, field)
         return self
     end
@@ -325,7 +325,7 @@ pragma marks (DartGlobals._initializeAtStartup), which no Julia binding carries;
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const field::GlobalRef
@@ -355,7 +355,7 @@ SynchronousProcedureCodeGenerator does, the enclosing member the accessor's Fiel
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const field::GlobalRef
@@ -372,7 +372,7 @@ SynchronousProcedureCodeGenerator does, the enclosing member the accessor's Fiel
             Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
             Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
-            NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}[],
+            NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
             nothing, TreeNode_no_offset, field, is_implicit_getter)
         return self
     end
@@ -404,7 +404,7 @@ a field access on a receiver Julia left abstract is dispatched (_virtualCall).
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const field::ClassField
@@ -422,7 +422,7 @@ a field access on a receiver Julia left abstract is dispatched (_virtualCall).
             Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
             Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
-            NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}[],
+            NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
             nothing, TreeNode_no_offset, field, is_implicit_getter, use_unchecked_entry)
         return self
     end
@@ -451,7 +451,7 @@ own, on its closure type, compiled as a member, so Closures makes no Lambda; dar
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     const lambda::Lambda
@@ -484,7 +484,7 @@ one inner constructor.
     return_value_local::Union{Nothing,WasmBuilder.IR.Local}
     const type_locals::Dict{TypeVar,WasmBuilder.IR.Local}
     const return_finalizers::Vector{TryBlockFinalizer}
-    const try_block_locals::Vector{NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}
+    const try_block_locals::Vector{NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}
     _source_map_source::Union{Nothing,Symbol}
     _source_map_file_offset::Int
     # the struct's one constructor, tagged: the type of no value, as the Kernel table's NoCounterpart is
@@ -1115,9 +1115,15 @@ end
     local imm(mi::MachineInstr, k::Int) = (mi.operands[k]::MOImm).imm
     local label_at(d::Int) = (d < length(labels) || reject!(Internal("src/code_generator.jl visit_block: depth $d past the open labels"), at); labels[end - d])
     local dart_tag() = get_dart_exception_tag(self.translator, b.module_builder)
+    # the tag a catch catches: dart's visitTryCatch and visitTryFinally also catch the JS tag where a
+    # catch's guard can match a JS exception, boxing it (boxJsException); a Julia catch's guard is Any,
+    # so outside standalone mode a catch of the exception tag alone would let a JS exception pass
+    local catch_tag() = (guard_can_match_js_exception(self.translator, Any) &&
+        reject!(Unported("sdk/lib/_internal/wasm/js_common/js_helper.dart:803 boxJsException"), "$at: a catch outside standalone mode, which catches a JS exception too");
+        dart_tag())
     local block_outputs(mi::MachineInstr) = imm(mi, 1) == BLOCK_TYPE_RESULTS ? outputs(self) :
         # the values a catch of the tag delivers (Catch.caughtValues)
-        imm(mi, 1) == BLOCK_TYPE_CATCH ? dart_tag().type.inputs :
+        imm(mi, 1) == BLOCK_TYPE_CATCH ? catch_tag().type.inputs :
         imm(mi, 1) == BLOCK_TYPE_VOID ? WasmBuilder.IR.ValueType[] :
         # LLVM's exnref, wasm's (ref null exn)
         imm(mi, 1) == BLOCK_TYPE_EXNREF ? WasmBuilder.IR.ValueType[WasmBuilder.IR.RefType_exn(; nullable = true)] :
@@ -1126,7 +1132,7 @@ end
     # and the exception each catch's CATCH stashed, by its EnterNode
     local catch_enter = Dict{Int,Int}(Core.Compiler.block_for_inst(node.cfg, st.catch_dest) + 1 => k
                                       for (k, st) in enumerate(node.stmts) if st isa NirEnter && st.catch_dest != 0)
-    local caught = Dict{Int,NamedTuple{(:exception_local,),Tuple{WasmBuilder.IR.Local}}}()
+    local caught = Dict{Int,NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}()
     for mbb in mf.layout, mi in mf.blocks[mbb].instrs
         local op = mi.opcode
         if op == BLOCK
@@ -1138,13 +1144,8 @@ end
             # or, a nested try_table fixing an unwind mismatch, of every exception, its exnref to a
             # trampoline
             imm(mi, 2) == 1 || reject!(Internal("src/code_generator.jl visit_block: a TRY_TABLE with $(imm(mi, 2)) catch clauses"), at)
-            # dart's visitTryCatch and visitTryFinally also catch the JS tag where a catch's guard can
-            # match a JS exception, boxing it (boxJsException); a Julia catch's guard is Any, so outside
-            # standalone mode a catch of the exception tag alone would let a JS exception pass
-            imm(mi, 3) == WASM_OPCODE_CATCH && guard_can_match_js_exception(self.translator, Any) &&
-                reject!(Unported("sdk/lib/_internal/wasm/js_common/js_helper.dart:803 boxJsException"), "$at: a catch outside standalone mode, which catches a JS exception too")
             local catches = WasmBuilder.TryTableCatch[
-                imm(mi, 3) == WASM_OPCODE_CATCH ? WasmBuilder.Catch(dart_tag(), label_at(imm(mi, 4))) :
+                imm(mi, 3) == WASM_OPCODE_CATCH ? WasmBuilder.Catch(catch_tag(), label_at(imm(mi, 4))) :
                 imm(mi, 3) == WASM_OPCODE_CATCH_ALL_REF ? WasmBuilder.CatchAllRef(label_at(imm(mi, 4))) :
                 reject!(Internal("src/code_generator.jl visit_block: a TRY_TABLE's catch clause kind $(imm(mi, 3))"), at)]
             push!(labels, WasmBuilder.try_table(b, catches, WasmBuilder.IR.ValueType[], block_outputs(mi)))
@@ -1152,12 +1153,14 @@ end
             WasmBuilder.var"end"(b)
             pop!(labels)
         elseif op == CATCH
-            # dart's visitTryCatch: the exception its catch pushed, stashed in a local, its try block's
-            # locals for the statements whose exception stack it tops
+            # dart's visitTryCatch: the exception and stack trace its catch pushed, each stashed in a
+            # local, its try block's locals for the statements whose exception stack it tops
             local thrown = add_local(self, self.translator.top_type_non_nullable[])
+            local thrown_stack_trace = add_local(self, self.translator.stack_trace_type[])
+            WasmBuilder.local_set(b, thrown_stack_trace)
             WasmBuilder.local_set(b, thrown)
             caught[get(() -> reject!(Internal("src/code_generator.jl visit_block: a CATCH in block $mbb, no EnterNode's catch"), at), catch_enter, mbb)] =
-                (exception_local = thrown,)
+                (exception_local = thrown, stack_trace_local = thrown_stack_trace)
         elseif op == UNREACHABLE
             WasmBuilder.unreachable(b)
         elseif op == CATCH_ALL_REF
@@ -1921,13 +1924,14 @@ end
 
 # Julia's rethrow(), an invoke of Base.rethrow() (translateExpression routes it here; its body, the
 # foreign call jl_rethrow, julia/src/julia.h:2437, rethrows the top of the task's exception stack): the
-# exception its catch stashed thrown again under the exception tag. The stack trace waits for the tag's
-# (src/tags.jl); Julia's runtime raises an ErrorException where the stack is empty
+# exception and stack trace its catch stashed thrown again under the exception tag; Julia's runtime
+# raises an ErrorException where the stack is empty
 @parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" function visit_rethrow(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     isempty(self.try_block_locals) && reject!(Unquarantined("src/julia/runtime/rtutils.jl: rethrow() outside a catch block, which Julia's runtime raises as ErrorException (julia/src/julia.h:2437 jl_rethrow)"), "$(self.enclosing_member)")
     local b = self.b[]
     local exception_locals = self.try_block_locals[end]
     WasmBuilder.local_get(b, exception_locals.exception_local)
+    WasmBuilder.local_get(b, exception_locals.stack_trace_local)
     WasmBuilder.throw_(b, get_dart_exception_tag(self.translator, b.module_builder))
     return expected_type
 end

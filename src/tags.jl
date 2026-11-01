@@ -5,10 +5,9 @@
 The exception tags: the one tag that throws and catches every Julia exception, defined in the main
 module and imported where another module uses it, and the JS tag catching a JS exception.
 
-The lead's ruling (2026-10-28): the tag's payload is the exception object, the top type without its
-null. dart's tag also carries the exception's StackTrace (translator.dart:285's stackTraceType);
-Julia's backtrace has no port yet, so WasmTarget's tag holds the exception alone and the stack trace
-is a located gap where it is read (a catch binding it), never a stand-in value.
+The tag's payload is dart's: the exception object, the top type without its null, and its stack
+trace, a StackTrace (translator.dart:285's stackTraceType), the standalone runtime's
+_EmbedderStackTrace (src/runtime/standalone/stack_trace_patch.jl).
 """
 @parity "dart2wasm/lib/tags.dart:9 ExceptionTags" struct ExceptionTags
     translator::KernelNodes
@@ -43,8 +42,7 @@ end
 
 """
 The tag every Julia exception is thrown and caught with: a void function type taking the exception
-object, the top type without its null, defined in the main module. dart's second parameter, the
-StackTrace, waits for Julia's backtrace's port (the type's docstring).
+object, the top type without its null, and its stack trace, defined in the main module.
 
 The main module exports the tag as `\$exceptionTag` (EXCEPTION_TAG_EXPORT), so a host tells a Julia exception from
 any other (`e.is(tag)` in JS) and reads its object. precedent(emscripten: the C++ exception tag,
@@ -55,7 +53,7 @@ host, which must know it as the program's.
 """
 @parity "dart2wasm/lib/tags.dart:37 ExceptionTags._defineDartExceptionTag" function _define_dart_exception_tag(self::ExceptionTags)::WasmBuilder.IR.Tag
     local translator = self.translator
-    local tag_type = WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[translator.top_type_non_nullable[]], WasmBuilder.IR.ValueType[])
+    local tag_type = WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[translator.top_type_non_nullable[], translator.stack_trace_type[]], WasmBuilder.IR.ValueType[])
     local tag = WasmBuilder.define(main_module(translator).tags[], tag_type)
     WasmBuilder.var"export"(main_module(translator).exports, EXCEPTION_TAG_EXPORT, tag)
     return tag

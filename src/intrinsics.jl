@@ -1686,17 +1686,19 @@ method, Julia having resolved it, so no call is one.
     local intrinsic = MemberIntrinsic_from_procedure(target)
     intrinsic === nothing && return false
     local b = self.code_gen.b[]
-    # Error._throw: the object thrown with the program's exception tag. dart first stores the stack
-    # trace in an Error's _stackTrace field and throws it beside the object; WasmTarget's tag carries
-    # the object alone (src/tags.jl) and Julia's exceptions have no such field, so the object is all.
-    # Every other intrinsic's dart member has no runtime port (MemberIntrinsic.fromProcedure), so none
-    # reaches here
+    # Error._throw: the object and its stack trace thrown with the program's exception tag. dart first
+    # stores the stack trace in an Error's _stackTrace field where the field is null; Julia's exceptions
+    # have no such field, so the object and the trace are all. Every other intrinsic's dart member has
+    # no runtime port (MemberIntrinsic.fromProcedure), so none reaches here
     intrinsic === MemberIntrinsic_errorThrow ||
         reject!(Internal("dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic: the member intrinsic $intrinsic, whose dart member the runtime does not port"), "$target")
-    local object_local = param_locals[1]
+    local object_local = param_locals[1] # ref #Top
+    local stack_trace_local = param_locals[2]
     local tag = get_dart_exception_tag(translator(self), b.module_builder)
     WasmBuilder.local_get(b, object_local)
-    convert_type(translator(self), b, object_local.type, only(tag.type.inputs))
+    convert_type(translator(self), b, object_local.type, tag.type.inputs[1])
+    WasmBuilder.local_get(b, stack_trace_local)
+    convert_type(translator(self), b, stack_trace_local.type, tag.type.inputs[2])
     WasmBuilder.throw_(b, tag)
     return true
 end

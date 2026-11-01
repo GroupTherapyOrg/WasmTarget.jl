@@ -111,12 +111,13 @@ end
     # tc's body alone in standalone mode (thr's is not generated), each instruction accepted by the
     # builder (D10): a BLOCK typed by the exception tag's payload, the try_table catching the tag
     # into it around the call, an unreachable after the try_table's end; after the block's end the
-    # caught exception stashed (dart's visitTryCatch) and Julia's the_exception, narrowed to E, cast
+    # caught stack trace and exception stashed (dart's visitTryCatch) and Julia's the_exception, narrowed
+    # to E, cast
     local names = generated_instructions(TryGenCases.tc, (Int64,); standalone = true)
     local t = findfirst(==("try_table"), names)
     @test names[t-2:t] == ["block", "block", "try_table"] && names[t+1:t+2] == ["local.get", "call"]
     local u = findfirst(==("unreachable"), names)
-    @test names[u-1:u+5] == ["end", "unreachable", "end", "local.set", "local.get", "ref.cast", "local.set"]
+    @test names[u-1:u+6] == ["end", "unreachable", "end", "local.set", "local.set", "local.get", "ref.cast", "local.set"]
     # nested try regions: the value the inner catch receives, x, through its Upsilon into the PhiC's
     # register, which the catch block reads
     local nn = generated_instructions(TryGenCases.tn, (Int64,); standalone = true)

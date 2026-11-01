@@ -50,13 +50,21 @@ st(x::Int) = (W.Runtime.StackTrace_current(); x)
 
 @testset "standalone/stack_trace_patch.dart: StackTrace.current, the embedder's trace in an _EmbedderStackTrace" begin
     # its one import, the standalone embedder's stackTraceGetCurrent, the embedder's own function
-    local bytes = W.compile(st, (Int,); optimize = false)
-    local path = tempname() * ".wasm"
-    write(path, bytes)
     local node = Main.WTRunner.node_binary()
-    local imports = readchomp(`$node -e "const m = new WebAssembly.Module(require('fs').readFileSync(process.argv[1])); console.log(WebAssembly.Module.imports(m).map(i => i.module + '.' + i.name + ':' + i.kind).join(','))" $path`)
-    rm(path)
-    @test imports == "dart.stackTraceGetCurrent:function"
+    local imports_of(bytes) = mktempdir() do dir
+        local path = joinpath(dir, "m.wasm")
+        write(path, bytes)
+        readchomp(`$node -e "const m = new WebAssembly.Module(require('fs').readFileSync(process.argv[1])); console.log(WebAssembly.Module.imports(m).map(i => i.module + '.' + i.name + ':' + i.kind).join(','))" $path`)
+    end
+    local bytes = W.compile(st, (Int,); optimize = false)
+    @test imports_of(bytes) == "dart.stackTraceGetCurrent:function"
+    # a throw throws with the current stack trace (_throwWithCurrentStackTrace), the same one import;
+    # run by node, its raise is a wasm exception under the module's tag, as native Julia throws
+    local gbytes = W.compile(g, (Int,); optimize = false)
+    @test imports_of(gbytes) == "dart.stackTraceGetCurrent:function"
+    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("g$(a)", gbytes, a, Main.WTRunner.native_answer(g, a)) for a in [(2,), (-2,)]])
+        @test r.ok || (@info r.label r.why; false)
+    end
     # run by node, given dart's test runner's embedder, it answers its argument, the host's trace made
     # and dropped (native Julia has no standalone embedder to call: st's answer is its argument whatever
     # the trace)
