@@ -864,13 +864,11 @@ end
 # context
 @parity "dart2wasm/lib/code_generator.dart:630 AstCodeGenerator.captureParameters" capture_parameters(self::AstCodeGenerator, node::NirBody)::Nothing = nothing
 
-# the expected type's name, then dart's runtime StackTrace.current and _TypeError._throwWasmRefError
-# (kernel_nodes.dart:620, :645); the runtime library is not ported, so the error rejects at the first,
-# Unported at its definition for the JS embedding (A52S1's ruling for a runtime function)
-@parity "dart2wasm/lib/code_generator.dart:655 AstCodeGenerator.throwWasmRefError" function throw_wasm_ref_error(self::AstCodeGenerator, expected::String)::Union{}
-    _emit_string(self, expected)
-    reject!(Unported("sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"), "$(self.enclosing_member): a wasm reference error, expected $expected")
-end
+# dart throws a wasm reference error where one of dart:_wasm's reference intrinsics finds the wrong
+# reference (intrinsics.dart:704, :2013); no Julia value is a dart:_wasm reference, so no Julia program
+# reaches it: Internal, no counterpart reachable (KernelNodes.throwWasmRefError)
+@parity "dart2wasm/lib/code_generator.dart:655 AstCodeGenerator.throwWasmRefError" throw_wasm_ref_error(self::AstCodeGenerator, expected::String)::Union{} =
+    reject!(Internal("dart2wasm/lib/code_generator.dart:655 AstCodeGenerator.throwWasmRefError: only dart:_wasm's reference intrinsics throw a wasm reference error, and no Julia value is a dart:_wasm reference ($expected expected)"), "$(self.enclosing_member)")
 
 # dart sets the source map's file offset from the node; a NIR node has none, Julia's line table taking
 # that place with the source map (translateStatement)

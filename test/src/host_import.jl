@@ -28,6 +28,10 @@ is_array() = Int64(js_is_array(js_array_of()))
 struct Pair2; a::Int; b::Int; end
 @noinline host_pair(p::Pair2) = ccall((:max, "Math"), Float64, (Pair2,), p)
 pair(x::Int) = host_pair(Pair2(x, x))
+# one foreign function declared Any, called from two sites with different inferred classes
+@noinline isarr_int(x::Int) = ccall((:isArray, "Array"), Int32, (Any,), x)
+@noinline isarr_str(s::String) = ccall((:isArray, "Array"), Int32, (Any,), s)
+both(x::Int) = Int64(isarr_int(x) + isarr_str("s"))
 end
 
 world_of(f, at) = W.build_nir(W.check_subset(f, at, "host_import"), "host_import")
@@ -89,6 +93,18 @@ end
     # Array.of() makes a JS array the module holds as an externref and passes to Array.isArray: the
     # module, given JS's Array as the host's, answers JS's true, 1
     @test run_in_node(W.compile(Cases.is_array, ()), "is_array") == "Array.isArray,Array.of 1"
+end
+
+@testset "host import: an argument declared Any crosses as the top reference type, one import type for every class" begin
+    # julia_to_native's one jl_value_t*: an Int and a String passed to one foreign function share its
+    # import, (anyref) -> i32; a dart:_wasm class crosses as its nullable wasm type
+    local hw = world_of(Cases.both, (Int,))
+    local imps = [W.nir_foreign_import(b, st) for b in hw for st in b.stmts if st isa W.NirForeignCall]
+    @test length(imps) == 2 && all(i -> i.params == Type[Any], imps)
+    @test W.nir_foreign_param_type(Union{Nothing,W.WasmArray{W.WasmI16}}) === Union{Nothing,W.WasmArray{W.WasmI16}}
+    @test W.nir_foreign_param_type(W.WasmExternRef) === Union{Nothing,W.WasmExternRef} && W.nir_foreign_param_type(Int) === Any
+    # run with JS's Array, neither value is a JS array: 0 + 0, under one import
+    @test run_in_node(W.compile(Cases.both, (Int,)), "both", "5n") == "Array.isArray 0"
 end
 
 @testset "host import: a foreign call to any other library rejects, located" begin

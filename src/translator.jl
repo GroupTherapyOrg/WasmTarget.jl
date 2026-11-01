@@ -1507,9 +1507,12 @@ end
 # Julia inferred for it, its CodeInstance's rettype in the closed world
 # a method's is Julia's inferred return type; an instance field accessor returns the field's type (dart's
 # getterType); the import procedure dart's ffi transformer synthesizes returns its declared type
-@parity "dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue" type_of_return_value(self::Translator, member::Union{Reference,NirForeignImport})::Type =
-    member isa FieldReference ? type_of_field(self, member.field) :
-    member isa NirForeignImport ? member.rt : nir_body_of(self.component, member).ci.rettype
+@parity "dart2wasm/lib/translator.dart:2081 Translator.typeOfReturnValue" type_of_return_value(self::Translator, member::FunctionTarget)::Type =
+    @exhaustive member::FunctionTarget begin
+        (m::MethodInstance) => nir_body_of(self.component, m).ci.rettype
+        (r::FieldReference) => type_of_field(self, r.field)
+        (i::NirForeignImport) => i.rt
+    end
 
 # dart narrows a field's declared type by TFA's inferred type; Julia's inference does not narrow a
 # field, so its type is its declared one: an instance field's (a ClassField), and a static field's,

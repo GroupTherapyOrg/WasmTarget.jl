@@ -486,6 +486,8 @@ runtime library at the pin, not ported: it rejects there, Unported, located.
     local is_checkers = is_checkers_for_module(self, b.module_builder)
     local (type_to_check, check_arguments) = can_use_type_check_helper(is_checkers, tested_against_type, operand_type)
     if !check_only_null_assignability && type_to_check !== nothing
+        # dart's checkArguments arm (types.dart:457) tests an interface type's type arguments; a Julia class
+        # binds its parameters in the class itself (Vector{Int} is a class of its own), so it has none to test
         check_arguments && reject!(Internal("$at: a Julia class has no type arguments to check"), at)
         MacroAssembler_invoke(b, generate_is_checker(is_checkers, type_to_check, check_arguments, Nothing <: operand_type))
     elseif check_only_null_assignability && is_type_constant(self, tested_against_type)
@@ -517,6 +519,8 @@ checker of the type when Julia tells its values by their class. dart otherwise c
     local as_checkers = as_checkers_for_module(self, b.module_builder)
     local (type_to_check, check_arguments) = can_use_type_check_helper(as_checkers, tested_against_type, operand_type)
     if !check_only_null_assignability && type_to_check !== nothing
+        # dart's checkArguments arm (types.dart:547): a Julia class binds its parameters in the class itself,
+        # so it has no type arguments to test
         check_arguments && reject!(Internal("$at: a Julia class has no type arguments to check"), at)
         MacroAssembler_invoke(b, generate_as_checker(as_checkers, type_to_check, check_arguments, Nothing <: operand_type))
         return translate_type(self.translator, tested_against_type)
@@ -840,6 +844,9 @@ operand is returned at the checked type.
     MacroAssembler_invoke(b, generate_is_checker(is_checkers_for_module(self.translator.types[], b.module_builder),
         self.tested_against_type, self.check_arguments, self.operand_is_nullable); force_inline = force_inline)
     WasmBuilder.br_if(b, as_check_block)
+    # dart's checkArguments arm (types.dart:1129) passes the tested type's class id and its type arguments
+    # to _throwInterfaceTypeAsCheckError; a Julia class binds its parameters in the class itself, so it
+    # has none
     self.check_arguments && reject!(Internal("$at: a Julia class has no type arguments to check"), at)
     WasmBuilder.local_get(b, b.locals[1])
     instantiate_constant(self.translator.constants[], b, NirConst(Core.Const(self.tested_against_type)), non_nullable_type_type(self.translator.types[]))

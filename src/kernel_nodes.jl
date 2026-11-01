@@ -65,9 +65,12 @@ end
     return nir_runtime_member(self.component, Runtime.StackTrace_current, "KernelNodes.stackTraceCurrent")
 end
 
-# dart:core's _TypeError._throwWasmRefError, of dart's runtime library at the pin, not ported: Unported there
+# dart:core's _TypeError._throwWasmRefError, the thrower of a failed downcast of a dart:_wasm reference
+# (WasmAnyRef.toObject, a function reference's signature): only dart:_wasm's intrinsics call it
+# (intrinsics.dart:704, :2013), and no Julia value is a dart:_wasm reference, so no Julia program
+# reaches it; Internal, no counterpart reachable
 @parity "dart2wasm/lib/kernel_nodes.dart:645 KernelNodes.throwWasmRefError" throw_wasm_ref_error(self::KernelNodes)::Union{} =
-    reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:87 _TypeError._throwWasmRefError"), "KernelNodes.throwWasmRefError: the thrower of a failed reference downcast")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:645 KernelNodes.throwWasmRefError: only dart:_wasm's reference intrinsics throw a wasm reference error (intrinsics.dart:704, :2013), and no Julia value is a dart:_wasm reference"), "KernelNodes.throwWasmRefError")
 
 # dart:core's Error._throw, the runtime's thrower (src/runtime/common/errors_patch.jl), which the
 # intrinsifier lowers to wasm's throw: its method in the closed world, reached through

@@ -25,7 +25,9 @@ g(x::Int) = x < 0 ? throw(DomainError(x)) : x
     @test lb isa W.RejectionError && lb.rejection isa W.Internal && occursin("Array{T,1}", lb.rejection.site)
     # dart:_list's ImmutableList, a constant list's class, is Julia's Array{T,1} of its element type
     @test D.immutable_list_class(js, Int) === Vector{Int}
-    @test anchor(D.throw_wasm_ref_error, js) == "sdk/lib/_internal/wasm/common/errors_patch.dart:87 _TypeError._throwWasmRefError"
+    # _throwWasmRefError: only dart:_wasm's reference intrinsics reach it, which no Julia value is: Internal
+    local wr = anchor(D.throw_wasm_ref_error, js)
+    @test wr isa W.RejectionError && wr.rejection isa W.Internal && occursin("dart:_wasm", wr.rejection.site)
     @test anchor(D.embedder_string_from_char_code_array, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:62 stringFromCharCodeArray"
     @test anchor(D.embedder_string_from_ascii_bytes, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:71 stringFromAsciiBytes"
     # the target's patch: standalone or JS; the standalone StackTrace.current is ported, its method in
@@ -43,7 +45,7 @@ g(x::Int) = x < 0 ? throw(DomainError(x)) : x
     # each anchor names a line of the pinned sdk that declares it
     local sdk = W._pin_sdk()
     if sdk !== nothing
-        for (fn, t) in ((D.throw_wasm_ref_error, js), (D.embedder_string_from_char_code_array, standalone),
+        for (fn, t) in ((D.embedder_string_from_char_code_array, standalone),
                         (D.embedder_string_from_ascii_bytes, standalone), (D.stack_trace_current, js),
                         (D.print_to_console, standalone))
             local a = anchor(fn, t)

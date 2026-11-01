@@ -149,11 +149,13 @@ import: dart2wasm's ffi transformer makes a `@Native<sig>(symbol:, asset:)` decl
 procedure `@pragma("wasm:import", "<asset>.<symbol>")` typed by its native signature
 (pkg/dart2wasm/lib/ffi_native_transformer.dart:159 visitProcedure), which getFunction imports; this is
 that procedure for one call site, typed, as dart types it, by the declared signature. An argument
-declared `Any` is passed as the object reference it is (julia_to_native's boxed arm,
-julia/src/ccall.cpp:528 julia_to_native): it crosses as its operand's inferred class, nullable as
-`Any` admits `nothing`.
+declared `Any` crosses by one rule keyed by its operand's class (nir_foreign_param_type): the top
+reference type, as julia_to_native passes every boxed argument as one jl_value_t*
+(julia/src/ccall.cpp:528 julia_to_native), but for a class of dart:_wasm's, which crosses as that
+wasm type, nullable, as dart declares such a parameter (`WasmArray<WasmI16>? array`,
+sdk/lib/_internal/wasm/js_common/js_string.dart:858 jsStringFromCharCodeArray).
 
-precedent(julia: julia/src/ccall.cpp:1980 function_sig_t::emit_a_ccall, which declares the callee in
+precedent(julia: src/ccall.cpp:1980 function_sig_t::emit_a_ccall, which declares the callee in
 the module by its symbol and the call site's signature, getOrInsertFunction). Julia's differs: a
 foreign call is a statement, not a declaration, so each call site names its import.
 """
@@ -163,6 +165,11 @@ foreign call is a statement, not a declaration, so each call site names its impo
     params::Vector{Type}
     rt::Type
 end
+
+# what a function type is made for (_makeFunctionType, _getInputTypes, typeOfReturnValue): dart's
+# Reference, a member or a field's accessor, and the import procedure dart2wasm's ffi transformer
+# synthesizes for a foreign declaration (NirForeignImport), a closed sum matched @exhaustive
+@quarantine "dart types a function for a member's Reference (pkg/dart2wasm/lib/functions.dart:890 _makeFunctionType), the ffi transformer's import procedure among them; a closed sum is a Union in Julia" Core.Union @closed const FunctionTarget = Union{MethodInstance, FieldReference, NirForeignImport}
 
 """
     nir_foreign_operands(node) -> Vector{NirValue}
@@ -214,6 +221,21 @@ wasm import cannot take, rejects here, located.
     all(t -> t isa Type, argtypes.c.val) ||
         reject!(Internal("$at: the foreign call $lib.$item, an argument type of which is no type: $(argtypes.c.val)"), at)
     local operands = nir_foreign_operands(node)
-    local params = Type[t === Any ? Union{Nothing, nir_value_type(body, operands[i])} : t for (i, t) in enumerate(argtypes.c.val)]
+    local params = Type[t === Any ? nir_foreign_param_type(nir_value_type(body, operands[i])) : t for (i, t) in enumerate(argtypes.c.val)]
     return NirForeignImport(lib, item, params, rt.c.val)
+end
+
+"""
+    nir_foreign_param_type(T) -> Type
+
+The type a foreign call's argument declared `Any` crosses as, given its operand's inferred type `T`,
+one rule keyed by class, so every call site of a foreign function passing one class shares one
+import type: a class of dart:_wasm's (a WasmArray, WasmExternRef), the operand `nothing` aside,
+crosses as that wasm type, nullable, as dart declares such a parameter; any other is Julia's top type,
+`Any`, the one jl_value_t* julia_to_native passes for a boxed argument.
+"""
+@quarantine "Julia passes an Any argument as one boxed reference (julia/src/ccall.cpp:528 julia_to_native); dart declares a wasm-typed parameter as its nullable wasm type (sdk/lib/_internal/wasm/js_common/js_string.dart:858 jsStringFromCharCodeArray)" Core.Union function nir_foreign_param_type(@nospecialize(T::Type))::Type
+    local cls = T isa Union ? Base.nonnothingtype(T) : T
+    cls isa DataType && (cls <: WasmArray || cls === WasmExternRef) && return Union{Nothing, cls}
+    return Any
 end
