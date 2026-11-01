@@ -85,6 +85,13 @@ for d in lib/*/; do
   unjudged_build "$name" "$d" -- julia --project=. --startup-file=no -e "using Pkg; Pkg.precompile(\"$name\")"
 done
 unjudged_build DartCorpus test/smoke_corpus.jl test/DartCorpus -- julia --project=. --startup-file=no test/DartCorpus/load.jl
+# a change to WasmTarget's source pays its precompile inside the judged load, every attempt: the depot's
+# WasmTarget images go first, so a retry of the same tree in the same scratch path cannot load the image its red
+# attempt built and read "load 0" (779986b2 landed a change to src/ on "120 s (load 0 ...)", its precompile
+# cached by the stale loop's earlier attempt, march-monitor-a 12:46). Its dependencies' images stay.
+if ! git diff --quiet "$base" HEAD -- src Project.toml 2>/dev/null; then
+  rm -rf "${JULIA_DEPOT_PATH%%:*}"/compiled/v*/WasmTarget
+fi
 # each stage's CPU seconds (user + sys) go to .wtd/<stage>.time for D14's band, below
 /usr/bin/time -l -o .wtd/load.time julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
