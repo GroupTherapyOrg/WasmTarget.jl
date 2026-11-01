@@ -1539,14 +1539,23 @@ end
     # reject! calls take; the method itself is inferred over its own signature (its MethodMatch, never
     # dispatch's, which would take a subtype's override for it), unoptimized, by the compiler's
     # typeinf_frame, its return type and effects read from the frame
+    # each kind of the closed sum Rejection named once, the table refused unless it names every kind and no
+    # other, so a kind added to the sum cannot be read by omission (D8): a gap's, Internal's, or a check's
+    local REJECTION_KINDS = (Unported => :Unported, Unquarantined => :Unquarantined, Internal => :Internal,
+                             OutsideSubset => :check, ProgramError => :check, InvalidModule => :check)
+    Set{Any}(first.(REJECTION_KINDS)) == Set{Any}(Base.uniontypes(Rejection)) && length(REJECTION_KINDS) == length(Base.uniontypes(Rejection)) ||
+        throw(ConstructionViolation("rejection_only_kinds", "the kinds table names $(first.(REJECTION_KINDS)), not the closed sum Rejection's $(Base.uniontypes(Rejection))"))
     local interp = Core.Compiler.NativeInterpreter()
     local world = Base.get_world_counter()
     local method_kind(m::Method) = begin
+        # no match of its own signature or no inference frame is a gap in the count, refused where it stands
+        # (D9), never read as a body
+        local at = "$(m.module).$(m.name) at $(m.file):$(m.line)"
         local matches = Base._methods_by_ftype(m.sig, -1, world)
         local i = matches === nothing ? nothing : findfirst(x -> x.method === m, matches)
-        i === nothing && return :body
+        i === nothing && throw(ConstructionViolation("rejection_only_kinds", "$at: its own signature matches no method of its own"))
         local frame = Core.Compiler.typeinf_frame(interp, Core.Compiler.specialize_method(matches[i]), false)
-        frame === nothing && return :body
+        frame === nothing && throw(ConstructionViolation("rejection_only_kinds", "$at: Julia's inference gives no frame for its signature"))
         local ci = frame.src
         local rt = Core.Compiler.widenconst(frame.result.result)
         local resolve(x) = x isa Core.SSAValue ? resolve(ci.code[x.id]) :
@@ -1570,14 +1579,27 @@ end
                 (v isa Core.SlotNumber || v isa Core.Argument) && push!(returned, v)
             end
             local serves = Dict{Int,Bool}()
+            local is_reject(x) = Meta.isexpr(x, :call) && resolve(x.args[1]) === reject!
+            # whether statement `j`, reading a value, serves a guard: a branch's condition, a rejection, a local
+            # no return reads, or a call or a local's read that itself serves one
+            local serves_user(j) = (local u = ci.code[j];
+                u isa Core.GotoIfNot || is_reject(u) || (Meta.isexpr(u, :(=)) && !(u.args[1] in returned)) ||
+                ((Meta.isexpr(u, :call) || u isa Core.SlotNumber) && guard(j)))
+            local reads(x, slot) = x === slot || (x isa Core.GotoIfNot && x.cond === slot) ||
+                (x isa Expr && !(Meta.isexpr(x, :(=)) && x.args[1] === slot && !reads(x.args[2], slot)) && any(a -> reads(a, slot), x.args))
             local guard(i) = get!(serves, i) do
                 local st = ci.code[i]
-                Meta.isexpr(st, :call) && resolve(st.args[1]) !== reject! || return true
-                !isempty(users[i]) && all(users[i]) do j
-                    local u = ci.code[j]
-                    u isa Core.GotoIfNot || (Meta.isexpr(u, :(=)) && !(u.args[1] in returned)) ||
-                        (Meta.isexpr(u, :call) && (resolve(u.args[1]) === reject! || guard(j)))
+                if Meta.isexpr(st, :(=))
+                    # a call's value stored to a local: the local no return reads, and every read of it serves a guard
+                    Meta.isexpr(st.args[2], :call) && !is_reject(st.args[2]) || return true
+                    local slot = st.args[1]
+                    slot in returned && return false
+                    local readers = [j for j in eachindex(ci.code) if j != i && reads(ci.code[j], slot)]
+                    return !isempty(readers) && all(j -> ci.code[j] isa Core.SlotNumber ? guard(j) : serves_user(j), readers)
                 end
+                Meta.isexpr(st, :call) && !is_reject(st) || st isa Core.SlotNumber || return true
+                st isa Core.SlotNumber && st in returned && return true
+                return !isempty(users[i]) && all(serves_user, users[i])
             end
             return all(i -> ci.ssavaluetypes[i] === Union{} || guard(i), eachindex(ci.code))
         end
@@ -1586,9 +1608,10 @@ end
         for st in ci.code
             local c = Meta.isexpr(st, :(=)) ? st.args[2] : st
             Meta.isexpr(c, :call) && length(c.args) >= 2 && resolve(c.args[1]) === reject! || continue
-            local t = c.args[2] isa Core.SSAValue ? Core.Compiler.widenconst(ci.ssavaluetypes[c.args[2].id]) : Any
-            push!(ks, t === Unported ? :Unported : t === Unquarantined ? :Unquarantined : t === Internal ? :Internal :
-                      t <: Rejection ? :check : :Internal)
+            local t = Core.Compiler.widenconst(Core.Compiler.argextype(c.args[2], ci, frame.sptypes))
+            local k = findfirst(p -> p.first === t, REJECTION_KINDS)
+            k === nothing && throw(ConstructionViolation("rejection_only_kinds", "$at: a reject! whose rejection's kind its typed code does not fix ($t)"))
+            push!(ks, REJECTION_KINDS[k].second)
         end
         # a gap where a rejection is one; Internal where one is, or where none shows and no path returns (a
         # helper's rejection); a check's rejections alone (InvalidModule, OutsideSubset, ProgramError) a body

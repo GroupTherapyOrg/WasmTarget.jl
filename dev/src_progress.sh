@@ -7,6 +7,9 @@
 #                                                 from WasmTarget's @parity registry (A35S1), and the
 #                                                 landings (commits) since src/ last changed
 #   bash dev/src_progress.sh <anchored> <ported> <since> [<replaced> <gaps>]   the line for planted numbers (L208's negative)
+#   bash dev/src_progress.sh kinds                 each counted anchor and its kind, one line each (`<kind>\t<anchor>`,
+#                                                 a DartThrow's or DartAbstract's dart line after it), from
+#                                                 which the line's counts are read back (A74S2)
 #   bash dev/src_progress.sh code <base> <head>   exits 0 when the change from <base>'s merge base with
 #                                                 <head> changes a line of code under src/ (a line neither
 #                                                 blank nor a comment), 1 when it changes none, 2 when a
@@ -26,6 +29,21 @@ REBUILD_START=e2371eca08605231256dd5f3ee97609d6fc019a4   # chore(land): the marc
 cd "$(git rev-parse --show-toplevel)"
 # a port is a change to src/'s code: its added and removed lines, the diff's file headers aside, less the
 # blank ones and Julia's `#` comments (f4cc916d, comment only, ranked early as port work: A66E4)
+if [ "${1:-}" = kinds ]; then
+    . dev/depot.sh; wt_depot_export "$PWD"
+    exec julia --project=. --startup-file=no -e 'using WasmTarget
+        include("dev/skeleton.jl")
+        S = Skeleton.read_scope()
+        counted = Set(Skeleton.anchor(f, d) for f in Skeleton.scope() for d in S.decls[f] if Skeleton.counted(d))
+        es = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]
+        R, L = WasmTarget.rejection_only_kinds(es, WasmTarget._pin_sdk())
+        present = Set(x.anchor for x in es)
+        stubbed = Set(x.anchor for x in es if x.anchor in counted && !x.ported)
+        for a in sort!(collect(counted))
+            k = !(a in present) ? :absent : a in stubbed ? :Unported_stub : get(R, a, :body)
+            println(k, "\t", a, haskey(L, a) ? "\t" * L[a] : "")
+        end'
+fi
 if [ "${1:-}" = code ]; then
     [ $# -eq 3 ] || { echo "src_progress: code <base> <head>"; exit 2; }
     for r in "$2" "$3"; do

@@ -1592,7 +1592,7 @@ function src_progress_negatives_missed()::Vector{String}
     # abstract DartAbstract, naming its declaration; a dart body and a bodiless constructor are neither
     local wt = Base.require(Base.PkgId(Base.UUID("9f3a1415-1112-405b-ae89-c61daf9872bd"), "WasmTarget"))
     local rp = Module(:RejectPlant)
-    Core.eval(rp, :(import WasmTarget: reject!, Internal, Unported, InvalidModule))
+    Core.eval(rp, :(import WasmTarget: reject!, Internal, Unported, InvalidModule, Rejection))
     Base.include_string(rp, """
         single(x::Int) = reject!(Internal("single"), "at")
         guarded(x::Int) = (x > 0 || reject!(Unported("guard"), "at"); reject!(Internal("after"), "at"))
@@ -1604,6 +1604,9 @@ function src_progress_negatives_missed()::Vector{String}
         effect(v::Vector{Int})::Nothing = (isempty(v) || reject!(Internal("effect"), "at"); push!(v, 1); return nothing)
         sink(v::Vector{Int})::Nothing = (empty!(v); nothing)
         returned(v::Vector{Int})::Nothing = (isempty(v) || reject!(Internal("returned"), "at"); return sink(v))
+        stored(v::Vector{Int})::Nothing = (n = length(v); n > 0 || reject!(Internal("stored"), "at"); return nothing)
+        loose(r::Rejection) = reject!(r, "at")
+        hidden(v::Vector{Int})::Nothing = (isempty(v) || reject!(Internal("hidden"), "at"); x = push!(v, 1); return nothing)
         """, "/plant/src/rp.jl")
     local ms(f) = collect(methods(getglobal(rp, f)))
     local pe(a, f) = (anchor = a, ported = true, methods = ms(f))
@@ -1614,6 +1617,7 @@ function src_progress_negatives_missed()::Vector{String}
     local rk, rl = Base.invokelatest(getfield(wt, :rejection_only_kinds), Any[
         pe("a/single", :single), pe("a/guarded", :guarded), pe("a/either", :either), pe("a/through", :through),
         pe("a/guard_only", :guard_only), pe("a/checks", :checks), pe("a/effect", :effect), pe("a/returned", :returned),
+        pe("a/stored", :stored), pe("a/hidden", :hidden),
         pe("dart2wasm/lib/plant.dart:2 P.size", :single), pe("dart2wasm/lib/plant.dart:3 P.thrower", :single),
         pe("dart2wasm/lib/plant.dart:6 P.bodied", :single), pe("dart2wasm/lib/plant.dart:9 P", :single)], dsdk)
     rm(dsdk; recursive = true)
@@ -1627,6 +1631,12 @@ function src_progress_negatives_missed()::Vector{String}
     get(rk, "a/checks", nothing) === :body || push!(out, "negative missed: a check whose rejection is InvalidModule counts as a rejection-only stub")
     get(rk, "a/effect", nothing) === :body || push!(out, "negative missed: a guard followed by a call made for its effect counts as a rejection")
     get(rk, "a/returned", nothing) === :body || push!(out, "negative missed: a guard followed by a call whose value a return reads counts as a rejection")
+    get(rk, "a/stored", nothing) === :Internal || push!(out, "negative missed: a guard whose value is stored to a local no return reads counts as a body")
+    get(rk, "a/hidden", nothing) === :body || push!(out, "negative missed: a call made for its effect, its value stored to a local never read, counts as a rejection")
+    # A74S2: a rejection whose kind the typed code does not fix is refused, never read as Internal or a body
+    local V = getfield(wt, :ConstructionViolation)
+    (try; Base.invokelatest(getfield(wt, :rejection_only_kinds), Any[pe("a/loose", :loose)], nothing); false; catch e; e isa V; end) ||
+        push!(out, "negative missed: a reject! of a rejection whose kind is not fixed is read as a kind")
     (get(rk, "dart2wasm/lib/plant.dart:3 P.thrower", nothing) === :DartThrow && get(rl, "dart2wasm/lib/plant.dart:3 P.thrower", nothing) == "pkg/dart2wasm/lib/plant.dart:4") ||
         push!(out, "negative missed: a rejection porting a dart body that throws is not DartThrow at the throw's line")
     (get(rk, "dart2wasm/lib/plant.dart:2 P.size", nothing) === :DartAbstract && get(rl, "dart2wasm/lib/plant.dart:2 P.size", nothing) == "pkg/dart2wasm/lib/plant.dart:2") ||
@@ -2996,7 +3006,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/ship.sh` prints dev/src_progress.sh's line after every landing, the one the landing's check ran it for (this lock, in the ratchet dev/check.sh runs), which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. A definition counts ported with a body unless Julia's inference finds it never returns (its method inferred over its own signature, unoptimized, by the compiler's typeinf_code: A64E2), its kind a gap's (Unported, Unquarantined) where a reject! in its typed code takes one, else Internal; an Internal one whose dart member at the pin throws first is DartThrow, counted, naming its throw's line, and one that is abstract DartAbstract, reported beside the headline and never in it, naming its declaration; a return type of Nothing whose typed code calls nothing but reject! for its effect or its returned value a guard and so a rejection (A72S1, output_target_table's form), and a check's rejections alone (InvalidModule, OutsideSubset, ProgramError) a body; with plants (one rejection, a guard and then a rejection, a helper that only rejects, a guard returning nothing otherwise, each a rejection; a returning path, a check, a call for its effect and a call whose value is returned, each a body; a throwing dart body DartThrow at its throw's line, an abstract dart getter DartAbstract at its line, a dart body and a bodiless constructor neither). And dev/ship.sh ranks a stack early as port work only when it changes src/'s code, read by the same program (`code <base> <head>`): a changed or removed line neither blank nor a comment (A66E4). Here: land runs the program, this tree's line is printed, the program on planted numbers (4 landings print no note, 5 print it), and its port class on a scratch repository (comments, blank lines and a file outside src/ no port; a changed and a removed line of code a port, and a change past a pipe's buffer; a base naming no commit refused) (dev/CHARTER.md C0)",
+    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/ship.sh` prints dev/src_progress.sh's line after every landing, the one the landing's check ran it for (this lock, in the ratchet dev/check.sh runs), which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. A definition counts ported with a body unless Julia's inference finds it never returns (its method inferred over its own signature, unoptimized, by the compiler's typeinf_frame: A64E2), its kind a gap's (Unported, Unquarantined) where a reject! in its typed code takes one, else Internal; an Internal one whose dart member at the pin throws first is DartThrow, counted, naming its throw's line, and one that is abstract DartAbstract, reported beside the headline and never in it, naming its declaration; a return type of Nothing whose typed code calls nothing but reject! for its effect or its returned value a guard and so a rejection (A72S1, output_target_table's form), and a check's rejections alone (InvalidModule, OutsideSubset, ProgramError) a body; with plants (one rejection, a guard and then a rejection, a helper that only rejects, a guard returning nothing otherwise and one whose value a local no return reads holds, each a rejection; a call for its effect whose value goes to a local never read a body; a rejection whose kind the typed code does not fix refused, and a method with no match or no inference frame a located refusal, never a body (A74S2), the Rejection sum's kinds named in one table checked against the sum; a returning path, a check, a call for its effect and a call whose value is returned, each a body; a throwing dart body DartThrow at its throw's line, an abstract dart getter DartAbstract at its line, a dart body and a bodiless constructor neither). And dev/ship.sh ranks a stack early as port work only when it changes src/'s code, read by the same program (`code <base> <head>`): a changed or removed line neither blank nor a comment (A66E4). Here: land runs the program, this tree's line is printed, the program on planted numbers (4 landings print no note, 5 print it), and its port class on a scratch repository (comments, blank lines and a file outside src/ no port; a changed and a removed line of code a port, and a change past a pipe's buffer; a base naming no commit refused) (dev/CHARTER.md C0)",
         () -> begin
             local v = src_progress_negatives_missed()
             local o = src_progress()
