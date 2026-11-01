@@ -6428,3 +6428,129 @@ A70E1 and A70S4 are open on MARCH 1.C; A70S1, A70S2, A70S3 and A70E3 on 1.D; A70
 and A70S2 (src/class_info.jl, src/intrinsics.jl); wt3-cgstubs2 A70S3 and A70E3 (src/julia/nir.jl, src/code_generator.jl);
 wt3-runtime A70S4 (src/julia/subset.jl); wt3-translator2 A70E1 (dev/formal/Constants.tla), wt3-parity its claim lock; lead
 A70E2 (dev/ship.sh).
+
+## 2026-11-01 — audited through 6378f3b4 (498bb40d..6378f3b4: the late read inferred once, the overlays' agreement checked at load, one landings row per commit, ship's held-lane and retry refusals, a seventh shard, Constants' numbering against the program's order, one reading of a type's classes, a run-time tuple index's BoundsError demand, a PiNode's ghost and trap, D14 raised to 140 s by Dale's word, open-count varargs read)
+
+The seventy-first audit, beside the work, covers the 12 commits of 498bb40d..6378f3b4 that are not audit entry 70 (2be875a4,
+77a46e8e): 6b79bdf9, 3ea90d3b, a3d6a52e, 3d0e7725, 2ebfbe5b, 918117d1, a7515a01, d23c9f8b, 898999d9, 1189af25, 872107aa and
+6378f3b4, read here, under Dale's R1 and R2 as standing sections. Every finding rests on one exact command, quoted. Standing
+items. src changes in 9 files (`git diff --stat 498bb40d..origin/wt2 -- src | tail -1` gives `9 files changed, 172
+insertions(+), 39 deletions(-)`); one exemption lands (`git diff 498bb40d..origin/wt2 -- src | grep -cE '^\+.*(Reshaped:|Fields
+with no Julia counterpart)'` gives 1: a7515a01's `Reshaped: klass`, class_info.jl:545, which names how Julia differs, a type
+that is no class of the closed world, D7 met). The debt list reads 400 at both ends (`grep -v '^#' dev/quarantine_unpinned.txt
+| grep -c .`). Earlier findings: A69S3 is fixed by 3ea90d3b; A70S1 by a7515a01 and reopened by 872107aa as A71S1; A70S2 by
+a7515a01 (`sed -n 4620p codegen.cpp` gives the `prepare_call(jlgetnthfieldchecked_func)` call the comment now cites); A70S4 by
+872107aa, which does not name it (subset.jl:278-279 type the va slot by NirVarargPacking.packed, `first` being m.nargs, so a
+zero-length tail indexes no further than specTypes holds); A70E2 by a3d6a52e (`awk -F'\t' '$1>="2026-11-01T15"'
+.git/wt-landings.tsv | cut -f2 | sort | uniq -d` gives nothing); A70E1 by 918117d1 for its ground truth, the rest carried as
+A71E2. Open as they stood: A69E1 (6b79bdf9 cuts one tree and measures no residual; `grep -rln invalidat test/src src` gives
+dart_tests.jl's warm-up and late.jl's comment, no case); A69S1 (`grep -A3 'const JULIA_FILES' src/julia/parity.jl` lists C
+units only); A68E2 and A67E1, now seven shards (`grep -n '^SHARDS=' dev/check.sh` gives `115:SHARDS=7`); A68E3 (`tail -1
+.git/wt-corpus.tsv` gives f05b2fa8's `hung 1216` row); A68S1 (`grep -n 'f === nothing && return nothing'
+src/julia/parity.jl` gives `1421:`); A68S4, which 3d0e7725 makes worse (below); A70S3 (`grep -n
+'va_process_argtypes(Core.Compiler.fallback_lattice' src/julia/nir.jl` gives `573:`); A70E3 (`grep -n nested_catch_rethrow
+test/src/dart_tests.jl` gives `636: … :wt_bug`); A67E2, A67S1-A67S4, A66S1's export half, A66S3, A64E2. Item (d):
+at 6378f3b4 _late_get was still unpinned (`git show 6378f3b4:dev/quarantine_unpinned.txt | grep -n _late_get` gives
+`90:julia/late.jl _late_get`); 9d72a168, landed after the range, pins it by dart's late getter lowering
+(late_lowering.dart:22 createGetterWithInitializer and :271 createGetterBodyWithoutInitializer, both read at the pin) and
+deletes the line. Seven commits landed after 6378f3b4 while this entry queued (`git log --oneline 6378f3b4..c03a8ba9`:
+9d72a168, 8db1a970, e55edc4d, 667bd48f, 4dfdfc88, 3c1b8ede, c03a8ba9); their fixes (A69S1, A66S3, A67E2, A67S2, A66E3,
+A66S4, A66E4) are audit 72's to judge, and the statuses above are 6378f3b4's. Findings A71S1, A71S2, A71S3, A71E1, A71E2
+and A71E3.
+
+Area: builder — no change under src/wasm_builder. 898999d9 emits `unreachable` for a PiNode between two concrete types and
+the singleton's constant for a narrowing to a ghost; 872107aa an i64.const per class arm of class_id_search with an
+unreachable miss, the arm's list complete by A68S3's argument (#70's area: emission). Nothing new reaches the builder's own
+refusals.
+
+stopgap in disguise: none new.
+precedent: dart's classIdSearch (code_generator.dart:5709, read in #70); Julia's convert_julia_type (codegen.cpp:2638, read).
+
+Area: collection and planning — a7515a01 makes get_concrete_class_id_range (class_info.dart:831, read at the pin: `List<Range>
+getConcreteClassIdRange(Class klass)`) the one reading of a type's concrete classes: its Reshaped arm scans class_ids once per
+type, cached in `IdDict{Type,…}`, normalize sorts (class_info.dart:1093's port, class_info.jl:717), and the run-time index maps
+each id to `t.classes[][id + 1].cls`, the indexing class_info.jl:373 fills. types.jl's two scans and intrinsics.jl's are gone.
+(A71S1, medium, D5) 872107aa, in the same range, writes the deleted reading back for nfields: `grep -n 'isconcretetype(c) &&
+c <:' src/*.jl src/julia/*.jl` gives class_info.jl:564 (the one reading) and `intrinsics.jl:1318: local classes =
+sort!(DataType[c for c in keys(t.class_info) if c isa DataType && isconcretetype(c) && c <: T];`, over class_info and indexed
+into class_ids, A70S1's exact shape, a class with info and no id a host KeyError. Fix: the nfields arm takes its ids from
+get_concrete_class_id_range and its classes from t.classes, as the tuple_index arm does at intrinsics.jl:309-311, the commit
+deleting :1318. Owner: wt3-memory (src/intrinsics.jl), 872107aa's lane told. d23c9f8b and 872107aa extend RUNTIME_DEMANDS'
+:bounds by _reads_tuple_at_run_time_index (subset.jl), its operand typed by argextype as the trim verifier types it, matching
+the intrinsifier's own predicate (a DataType tuple; a literal index only where the type has no layout, codegen.cpp:4563, read:
+`if (jl_struct_try_layout(utt))`, the constant-index arm inside it).
+
+stopgap in disguise: none new.
+precedent: dart's getConcreteClassIdRange and normalize, Julia's argextype and jl_struct_try_layout, by line.
+
+Area: emission and diagnostics — 872107aa's nfields arm ports codegen.cpp:4712's (read: a constant for a concrete type, else
+`emit_datatype_nfields(ctx, emit_typeof(…))`), only for tuples, the rest rejecting as before; its constant-index read of a
+layout-less tuple goes where Julia's does (codegen.cpp:4580, `vidx = emit_unbox(…)`, then the homogeneous arm or :4620's
+runtime call, both now cited). 898999d9 answers convert_julia_type's two early arms in its order (read: `if
+(type_is_ghost(T)) return ghostValue(ctx, typ);` before `if (jl_is_concrete_type(typ)) { if (jl_is_concrete_type(v.typ))`),
+and its three cases run against native. (A71S3, low, R1/D7) the PiNode's call passes a skip flag: `sed -n 6382,6385p
+codegen.cpp` gives `Value *skip = NULL; return convert_julia_type(ctx, emit_expr(…), jl_fieldref_noalloc(expr, 1), &skip);`,
+and with skip set convert_julia_type stores 1 into it and returns `jl_cgval_t()` (:2651-2655), never CreateTrap. So Julia
+emits no trap for a PiNode between two concrete types, an empty value on a dead path; WasmTarget's `unreachable` is stricter
+and sound there, but the comment says Julia's answer is a trap and does not say how WasmTarget differs. Fix: cite :6384's skip
+and state the difference (a trap where Julia leaves the value undefined). Owner: wt3-cgstubs2 (src/code_generator.jl). Watch:
+the ghost arm's `own !== narrowed` gives the ghost for a Union{} operand, where Julia's fast path (`v.typ == jl_bottom_type`)
+returns the operand; unreachable either way. d23c9f8b cites cgutils.cpp:2794 emit_getfield_unknownidx (read), its case the
+program's only raising read.
+
+stopgap in disguise: none new.
+precedent: Julia's emit_builtin_call nfields arm, emit_getfield's arms and convert_julia_type, by line.
+
+Area: enforcement and prose — item (a), 1189af25: exactly Dale's choice. `D14_RED=140` (check.sh:198), a literal assigned in the
+script, the target still 60 s in the message and the header; the exit is stated in check.sh (:195-197, the first-compile cut
+back to 120 s and SHARDS to four) and in the ledger's D14 band (`red past 140 s from 2026-11-01 until the first-compile cut
+lands, Dale: "Raise to 140 s until the cut"`); the trailer reads `Ledger-change: D14 — Dale 2026-11-01: "Raise to 140 s
+until the cut"`. 6378f3b4 makes the retry count read that band. (A71E3, low, D19) the charter still says 120: `sed -n 138p
+dev/CHARTER.md` gives `target, red past 120 s: WasmTarget loads, …`, C10's clause, so the code and the clause that decides done
+disagree for the raise's life. Fix: propose the C10 edit carrying Dale's words and the same exit, by land.sh's charter
+authorisation. Owner: lead (dev/CHARTER.md proposal). Item (b), 2ebfbe5b. (A71E1, medium, D31/D20) the seventh shard bought
+14 G on the slowest shard (`git show 1189af25 | grep -c '589 G to 575'` gives 1; about 3 s at the commit's 111 s for 589 G)
+and costs one more process paying the ~300 G first compile on every src check: eight Julia processes (load, ratchet, seven
+shards) on a machine of four performance cores, the saturation D31 forbids, for a gain inside the noise the retry ruling
+exists for. With the band at 140 s the reason given for it (every change past 120 s) is gone. Revert it, back to six, in one
+commit that reads the critical path at six against 140 s; keep the sixth until the cut, and measure five before keeping
+six. Owner: lead (dev/check.sh). Watch: 3ea90d3b's check costs "cold, 5.2 s of first inference" by its own message, inside
+every src change's load on D14's critical path (load 13 s at the sixth shard's commit, 15 s at the seventh's). Item (c),
+3d0e7725. The held-lane refusal and the retry cap live in ship.sh, the one landing path; a direct `git push origin HEAD:wt2`
+or a reworded subject (the cap keys on its first 60 characters) passes both, so they are D6 stopgaps, which the cap's
+comment says and the hold's does not. The cap's exit: ship.sh:22 says `ended by A68S4's measure`, a finding whose text is
+that the exit names no measure, and MARCH 1.L says `deleted by wt3-latency's invalidation fix`: two exits, neither a measure,
+so A68S4 stays open and now holds both. Fix (A68S4's): one exit, a measure (the last N src checks under D14_RED with a stated
+margin), written in ship.sh and 1.L alike. a3d6a52e is A70E2's fix (a log lookup rather than "the push moved origin's branch";
+equivalent while a hash is pushed once). Item (e), 918117d1. DeterministicNumbering now has a ground truth from the program
+alone (Pos over the program, Reaches over Ensure's reads), and the walk's record is gone from the state. (A71E2, low, D11) its
+second conjunct, the order of use, has no Broken variant that breaks it alone: HashOrder numbers by `Hash(c)` (`grep -n 'n ==
+IF HashOrder' dev/formal/Constants.tla` gives the counter replaced), which the first conjunct (`= 1..Cardinality(Defined)`)
+catches, and `ls dev/formal/MCConstants*Broken.cfg` lists no variant that walks siblings or uses out of order with the counter
+intact, the variant A70E1 asked for. Fix: that Broken variant, its cfg expecting DeterministicNumbering, TLC reporting it; the
+claim lock A69E2 asked for (wt3-parity) still absent. Owner: wt3-translator2 (dev/formal/Constants.tla). Item (d).
+6b79bdf9's @nospecializeinfer precedent (abstractinterpretation.jl:3904, read in the 1.12.7 install: `@nospecializeinfer
+function widenreturn(@nospecialize(rt), info::BestguessInfo)`) sits in a comment, and `ls ~/.cache/wasmtarget/julia/Compiler/src`
+gave only typeinfer.jl at the audit; a watch point now that c03a8ba9 lets a Compiler unit be pinned. Requirements:
+D5, D6, D7, D11, D19, D20, D31; no lock fired inside its band.
+
+R1 and R2. R1: each new definition's citation resolves at its pin: class_info.dart:831 and :1093, intrinsics.dart:607 and
+:1194, code_generator.dart:3170 (dart at 898a1e4b); codegen.cpp:2638, :4563, :4620, :4712, :6382; cgutils.cpp:2794; each line
+read here. (A71S2, low, R1) 3ea90d3b's check_overlays_agree and _methods_of_file cite `julia/src/julia.h:905 jl_methtable_t`,
+which `sed -n 905p julia.h` gives as `} jl_methtable_t;`, the struct's closing brace: a data layout, not the algorithm (infer
+each signature over both tables and compare). Its docstring's precedent, `test/compiler/AbstractInterpreter.jl`, carries no
+line and is not in the pinned checkout (`ls ~/.cache/wasmtarget/julia` gives base, Compiler, src). The check is enforcement,
+not a compiler port, and catches a real class (the a1f78cbc cycle); but its precedent must resolve. Fix: cite the overlay
+interpreter test's lines at the pin (the file added to the checkout) and @consistent_overlay's definition by line. Owner:
+wt3-parity (src/julia/parity.jl). Nothing else in the range is built without a precedent. R2: by the diffs (`git diff
+498bb40d..origin/wt2 -- src | grep -nE '^[-+].*(@parity|@unported|reject!\((Unported|Internal|Unquarantined))'`), one method
+is added to an anchored definition (generateStaticIntrinsic's nfields arm, a body with a located rejection for an empty
+class list) and get_concrete_class_id_range's signature widens; no definition moves between body, Internal and gap, so the
+headline is unchanged by the range. The lead's last measure (3119 bodies, 273 Internal, 12 stubs or gaps) differs from #70's
+landing (11 gaps) with no diff here that adds a gap; a watch point, read again from this entry's landing.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A69S3 leaves MARCH 1.F; A70S1, A70S2 1.D; A70S4, A70E1
+1.C; A70E2 1.L. A71S1 and A71S3 are open on 1.D; A71S2 on 1.F; A71E2 on 1.C; A71E1 and A71E3 on 1.L. By owner:
+wt3-memory A71S1 (src/intrinsics.jl); wt3-cgstubs2 A71S3 (src/code_generator.jl), with A70S3 and A70E3; wt3-parity A71S2
+(src/julia/parity.jl); wt3-translator2 A71E2 (dev/formal/Constants.tla); lead A71E1 (dev/check.sh), A71E3 (dev/CHARTER.md
+proposal) and A68S4 (dev/ship.sh, 1.L).
