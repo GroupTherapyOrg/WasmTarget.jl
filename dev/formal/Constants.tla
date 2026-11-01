@@ -51,8 +51,11 @@
 (*   NoFabrication      an #undef field is the null, no info ever made for a *)
 (*                      value it does not hold; one Julia rules out rejects  *)
 (*                      (D9)                                                 *)
-(*   DeterministicNumbering a global's number is its rank in definition     *)
-(*                      order (_nextGlobalId), never a hash of the constant *)
+(*   DeterministicNumbering the globals are numbered 1..n (_nextGlobalId's  *)
+(*                      count), and of two used constants the one the       *)
+(*                      program uses first, unless its walk reaches the     *)
+(*                      other, has the lower number: a function of the      *)
+(*                      program, never of the constant's hash               *)
 (* Broken variants: KeyIsequal (SharesOnlyEgal), ParentFirst (ChildrenFirst),*)
 (* IgnoreChildLaziness (EagerChildrenEager), OwnType (a sub-constant at its  *)
 (* own type, the 45-case InvalidModule of 2026-10-28: OperandsTyped),        *)
@@ -114,7 +117,7 @@ vars == <<program, st>>
 \* the state: infos (each an id; info[c] the id the constant maps to), each info's constant and
 \* children, canBeEager; definitions (each info's global index and laziness); the outcome
 Empty == [info |-> [c \in Consts |-> 0], ofInfo |-> << >>, eager |-> << >>, children |-> << >>,
-          def |-> << >>, lazy |-> << >>, nextGlobal |-> 1, order |-> << >>, outcome |-> "ok", operands |-> {}]
+          def |-> << >>, lazy |-> << >>, nextGlobal |-> 1, outcome |-> "ok", operands |-> {}]
 
 \* the info a constant already has: one made for a constant its key equates with it
 Found(s, c) == {i \in 1..Len(s.ofInfo) : Key(s.ofInfo[i], c)}
@@ -161,8 +164,7 @@ DefineOne(s, i) ==
         lazy == ~s.eager[i] \/ (~IgnoreChildLaziness /\ \E k \in s.children[i] : s.lazy[k]) \/ ForceLazy(c)
         ops == IF lazy THEN {} ELSE {<<c, j, Operand(Fields(c)[j]), Fields(c)[j].kind>> : j \in 1..Len(Fields(c))}
         n == IF HashOrder THEN Hash(c) ELSE s.nextGlobal
-    IN [s EXCEPT !.def[i] = n, !.lazy[i] = lazy, !.nextGlobal = @ + 1, !.order = Append(@, i),
-                 !.operands = @ \cup ops]
+    IN [s EXCEPT !.def[i] = n, !.lazy[i] = lazy, !.nextGlobal = @ + 1, !.operands = @ \cup ops]
 Define(s, i, fuel) ==
     IF s.def[i] # 0 \/ fuel = 0 THEN s
     ELSE IF ParentFirst THEN DefineSet(DefineOne(s, i), s.children[i], fuel - 1)
@@ -199,6 +201,17 @@ CyclesReject == /\ st.outcome # "overflow"
 NoFabrication == /\ Ok => /\ st.info["Dflt"] = 0
                          /\ \A o \in st.operands : Fields(o[1])[o[2]].undef => o[3] = "null"
                  /\ ("Ubad" \in Range(program) => st.outcome = "rejected")
-\* each global's number is its rank in the order the globals were defined
-DeterministicNumbering == Ok => \A n \in 1..Len(st.order) : st.def[st.order[n]] = n
+\* the ground truth, from the program and the universe alone: where the program first uses a constant
+\* or one egal to it, and whether a constant's walk (its fields' sub-constants, as Ensure reads them)
+\* reaches one egal to another
+Pos(c) == CHOOSE i \in 1..Len(program) : Egal(program[i], c) /\ \A j \in 1..(i - 1) : ~Egal(program[j], c)
+Kids(c) == {k \in Range(Subs(SelectSeq(Fields(c), Read))) : k \notin ValueTypes}
+RECURSIVE Reaches(_, _, _)
+Reaches(x, y, fuel) == Egal(x, y) \/ (fuel > 0 /\ \E k \in Kids(x) : Reaches(k, y, fuel - 1))
+Defined == {i \in 1..Len(st.ofInfo) : st.def[i] # 0}
+\* the globals numbered 1..n, and a constant the program uses first numbered first unless its walk
+\* defines the other
+DeterministicNumbering == Ok => /\ {st.def[i] : i \in Defined} = 1..Cardinality(Defined)
+                                /\ \A x, y \in Used : Pos(x) < Pos(y) /\ ~Reaches(x, y, Fuel) =>
+                                       st.def[st.info[x]] < st.def[st.info[y]]
 =============================================================================
