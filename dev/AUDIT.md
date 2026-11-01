@@ -6702,3 +6702,140 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A69S1 leaves 
 stays on 1.C narrowed to its claim-lock half. A72S1 is open on 1.A6; A72S2 on 1.K; A72E1 on 1.L. By owner: wt3-parity
 A72S1 (src/julia/parity.jl), with A71S2, A68S1 and A71E2's claim lock; wt3-runtime A72S2 (src/julia/wasm_array.jl); lead
 A72E1 (dev/MARCH.md 1.L); wt3-memory A71S1; wt3-cgstubs2 A71S3 and A70S3.
+
+## 2026-11-01 — audited through 110c2936 (5f05f54e..110c2936: the exception tag's stack trace, a catch's stash defaultable, the retry exit's 1-G floor, the shared julia checkout's sparse list grown and refreshed per check, rejection_text and a typed enclosing-module getter, the host's modules by dart's MiniJsParser, _throwAsCheckError, hash(::String) by Julia's MurmurHash3)
+
+The seventy-third audit, beside the work, covers the 9 commits of 5f05f54e..110c2936 that are not audit entries (3930a67a,
+entry 72): bdd5539c, 5bfcb2b7, 5c0f44cf, 9743c109, b2d8d811, d6638a61, 414aa5c0, 686966ac and 110c2936, read here, under
+Dale's R1 and R2 as standing sections. Every finding rests on one exact command, quoted. Standing items. src changes in 18
+files (`git diff --stat 5f05f54e..origin/wt2 -- src | tail -1` gives `18 files changed, 579 insertions(+), 103
+deletions(-)`); no exemption lands (`git diff 5f05f54e..origin/wt2 -- src | grep -cE '^\+.*(Reshaped:|Fields with no Julia
+counterpart)'` gives 0). The debt list reads 397, from 398 (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`):
+d6638a61 deletes `julia/runtime/rtutils.jl host_modules`. Earlier findings: A70E3 is fixed by 5bfcb2b7 (below); A67S4 by the
+same commit (`git show 5bfcb2b7 -- src/code_generator.jl` replaces "Julia's exception stack has no reader" with a comment
+naming NirHandlers.exception_at), so it leaves 1.D; A72E1 by 5c0f44cf (`awk -F'\t' '{a=$2;b=$3;e=(a>b?a-b:b-a);
+d=e/(a<b?a:b); if(d>0.15 && e>1)n++} END{print n+0" of "NR}' .git/wt-src-instr.tsv` gives `8 of 53`, closures.jl 10.9/8.3 and
+types.jl 17.6/28.9 among them, real differences, none a rounding step), its "audit 72, open" text left on 1.L by that commit
+and removed here; A64R4 by d6638a61 (the regex gone, dart's own parser read; its residue A73S2). Open as they stood: A72S1
+(`grep -n 'length(stmts) == 1 || return nothing' src/julia/parity.jl` gives `1534:`); A72S2 (`grep -n 'wasm_types.dart:737'
+src/julia/wasm_array.jl` gives `173:`); A71S1 (`grep -n 'isconcretetype(c) && c <: T' src/intrinsics.jl` gives `1342:`);
+A71S2 (`grep -n 'julia.h:905' src/julia/parity.jl` gives `656:` and `674:`); A71S3 (`grep -n 'codegen.cpp:2638'
+src/code_generator.jl` gives `2026:`); A70S3 (`grep -n 'va_process_argtypes(Core.Compiler.fallback_lattice'
+src/julia/nir.jl` gives `573:`); A68S1 (`grep -n 'f === nothing && return nothing' src/julia/parity.jl` gives `1429:` and
+`1441:`); A68E3 (`tail -1 .git/wt-corpus.tsv` gives f05b2fa8's `hung 1216` row); A64R1, grown by one (A73S3); A68E2 and
+A67E1 at six shards; A69E1, A67S1, A67S3 and A66S1's export half, carried, not re-read; A64E2 not landed (`git log --oneline
+--grep=A64E2 5f05f54e..origin/wt2` gives nothing). Findings A73S1, A73S2, A73S3, A73E1 and A73E2.
+
+Area: builder — no change under src/wasm_builder but b2d8d811's Exportable.enclosingModule getter (exports.jl:22), which now
+answers `x.enclosing_module::Module`: the field stays AbstractModule, Module's one subtype, declared so because Module is
+defined after its parts. The five module_to_builder lookups (dispatch_table.jl:509, static_dispatch_table.jl:43,
+translator.jl:843, :1106, :2004) read the getter. bdd5539c's tag type is `[top_type_non_nullable, stack_trace_type]`
+(tags.dart:37 with translator.dart:285), the builder checking each throw's and catch's operands against it. 5bfcb2b7's two
+stash locals are nullable and each read converts (rethrow to the tag's inputs), so the builder's "Uninitialized local with
+non-defaultable type" no longer fires past the CATCH block's end; it is LLVM's choice, every wasm local defaultable, and
+visit_block's phi registers' precedent. Both A70E3 cases move :wt_bug to :compiled.
+
+stopgap in disguise: none new.
+
+precedent: dart's tag (tags.dart:37) and visitRethrow (:2966); visit_block's defaultable phi registers.
+
+Area: collection and planning — 414aa5c0 keeps _TypeError._throwAsCheckError in the closed world by a RUNTIME_ENTRY_POINTS row
+whose demand is `:typeassert` (`grep -n 'typeassert' src/julia/subset.jl` gives `199: ((:Runtime,),
+:_TypeError__throw_as_check_error, (Any, Type), :typeassert),` and `264: :typeassert => (st, src, sptypes, slottypes) ->
+_calls_builtin(st, (Core.typeassert,)),`). Core.typeassert is the one form reaching the as checker (code_generator.jl:910 calls
+visit_as_expression on it; the NirPi arm, :2031, emits no as check), so the predicate's reading is right. (A73S3, medium,
+R1/D1) the mechanism is not dart's. dart keeps the method by `@pragma("wasm:entry-point")` (`git show
+898a1e4b:sdk/lib/_internal/wasm/common/errors_patch.dart | sed -n 75,76p` gives the pragma and `static Never
+_throwAsCheckError(Object? operand, Type? type) {`), a root TFA keeps, never a list of forms; this is A64R1's bespoke class,
+one row more, and RUNTIME_ENTRY_POINTS' docstring (subset.jl:168-187) still lists six demands, not :typeassert. And dart's as
+checker calls `translator.throwAsCheckError` (types.dart:1165), KernelNodes' late field (`sed -n 630,634p
+pkg/dart2wasm/lib/kernel_nodes.dart` gives `late final Procedure throwAsCheckError = index.getProcedure(` … `"_throwAsCheckError",`);
+`grep -rn 'kernel_nodes.dart:630' src` gives nothing, the call being an inline `nir_runtime_member(…,
+Runtime._TypeError__throw_as_check_error, at)` at types.jl:787 with a comment naming the field, where :620 stackTraceCurrent
+is ported as its own definition (kernel_nodes.jl:62). Fix: KernelNodes.throw_as_check_error anchored at kernel_nodes.dart:630,
+read by the as checker; the root carried by the runtime method itself as dart's pragma is (A64R1's fix), or, until then, the
+docstring names :typeassert. Owner: wt3-runtime (src/types.jl, src/kernel_nodes.jl, src/julia/subset.jl).
+
+stopgap in disguise: A73S3's demand predicate, A64R1's class.
+
+precedent: dart's AsCheckerCodeGenerator.generate (types.dart:1094-1175, read): the failure path passes `b.locals[0]` and the
+TypeLiteralConstant at nonNullableTypeType, then unreachable, end, the operand converted, return; the port matches, its
+check_arguments arm an Internal (a Julia class has no type arguments), and its minify arm absent with its reason.
+
+Area: emission and diagnostics — bdd5539c: Error._throw takes the stack trace (errors_patch.jl:14), the errorThrow intrinsic
+pushes both values (intrinsics.dart:3449), _throwWithCurrentStackTrace passes StackTrace_current(), each catch stashes both
+(visitTryCatch :956-960), and Translator.stackTraceInfo rejects Unported at JavaScriptStack (js_helper.dart:830) outside
+standalone mode. b2d8d811's rejection_text (reject.jl:210) is `string(x)` behind @nospecialize and @nospecializeinfer, its
+precedent jl_static_show (`sed -n 1496p ~/.cache/wasmtarget/julia/src/rtutils.c` gives `JL_DLLEXPORT size_t
+jl_static_show(JL_STREAM *out, jl_value_t *v) JL_NOTSAFEPOINT`), the text unchanged. (A73E1, low, D5) its commit leaves
+the other path beside it: `grep -rnE '\$\(?mi\)?\b' src | grep -E 'reject!|Internal\(|Unquarantined\(' | grep -v
+rejection_text` gives `src/julia/nir.jl:727: m isa Method || reject!(Unquarantined("src/julia/nir.jl: $mi instantiates no
+method"), "$mi")`, nir_method_nargs, eleven lines above nir_body_of's converted sites. Fix: that site reads rejection_text,
+and a rejection's text of a MethodInstance has the one spelling. Owner: wt3-latency (src/julia/nir.jl).
+
+stopgap in disguise: none new.
+
+precedent: dart's errorThrow intrinsic and visitTryCatch, by line; jl_static_show for the error path's printing.
+
+Area: enforcement and prose — 5c0f44cf: the retry exit's second arm takes "within 15% or within 1 G", read above against the
+log. 9743c109 makes dev/fetch_julia.sh's sparse list the union of what it holds and what this tree names (`sort -u` over
+both); 110c2936 runs this tree's script at the head of dev/check.sh. (A73E2, low, D12) the shared checkout is still
+rewritten by any tree whose script predates 9743c109: 110c2936's own message records src/support stripped at 17:14Z, after
+9743c109 (17:01Z in .git/wt-landings.tsv), and the check restores it only at its start, so a strip during a check still fails
+it ("the julia pin has no …", L213). The source is a sparse list written by whichever tree last ran. Fix: the list a function
+of the pin, not of a tree (the pinned commit's src/support, base and Compiler/src units checked out whole, or a checkout per
+JULIA_FILES digest), so no tree's run can remove another's unit. Owner: lead (dev/fetch_julia.sh, dev/check.sh).
+Requirements: D5, D9, D10, D12, D17, D32; no lock fired inside its band.
+
+R1 and R2. R1: each new citation is read against its body at its pin. 686966ac: `sed -n 47p` and `220p` of
+src/support/MurmurHash3.c give `FORCE_INLINE uint64_t fmix64 ( uint64_t k )` and `void MurmurHash3_x64_128 ( const void * key,
+const size_t len,`; `sed -n 68p src/support/hashing.c` gives `uint64_t memhash_seed(const char *buf, size_t n, uint32_t
+seed)`, which returns `out[1]`. Line by line: fmix64's three xor-shifts and two multiplies by 0xff51afd7ed558ccd and
+0xc4ceb9fe1a85ec53 match; the body's k1/k2 rotations 31/33, h1/h2 rotations 27/31, `*5+0x52dce729` and `*5+0x38495ab5` match;
+murmur3_block reads bytes j=0..7 into bit 8j, jl_load_unaligned_i64 little-endian; the tail's k2 takes tail[8..rest-1] at
+8(j-8) and k1 tail[0..min(rest,8)-1] at 8j, the C switch's shifts (case 15 `tail[14] << 48` down to case 9 `tail[8] << 0`,
+case 8 `tail[7] << 56` down to case 1), each mixed only where rest > 8 and rest > 0 as the fall-through mixes them; the
+finalization `h1 ^= len; h2 ^= len`, two adds, fmix64 twice, two adds, `out[1]` = h2 match. No difference found in the port.
+(A73S1, low, R1) the overlay's citation and effects. src/patch/hashing.jl's @quarantine cites hashing.c:68, the C its body
+calls, where 85d54f4a's rule (A69S1) cites each overlay at the Base method it replaces (the three of
+src/patch/genericmemory.jl cite `julia/base/genericmemory.jl:116`, `:78`, `:204`); `grep -c '"julia/base/hashing"'
+src/julia/parity.jl` gives 0. And Base's method is `@assume_effects :total function hash(s::String, h::UInt)` (`git -C
+~/.cache/wasmtarget/julia show HEAD:base/hashing.jl | sed -n 198p`), while `grep -c assume_effects src/patch/hashing.jl` gives
+0: the overlay drops the effects Base asserts, so a hash Julia folds natively is not folded in the overlay's inference. Fix:
+the overlay cites julia/base/hashing.jl:198 (JULIA_FILES gains julia/base/hashing) and carries Base's @assume_effects :total.
+Owner: wt3-memory (src/patch/hashing.jl, src/julia/parity.jl). d6638a61: the seventeen js_parser.jl anchors each resolve to
+their definition at the dart pin (`sed -n Np pkg/js_ast/lib/src/builder.dart` for 394, 417, 462, 481, 489, 528, 541, 550,
+580, 620, 725, 730, 762, 784, 888, 899 and 929 gives `enum _Category {`, `static const _asciiTable`, `class MiniJsParser {`,
+`_singleCharCategory`, `BINARY_PRECEDENCE`, `UNARY_OPERATORS`, `OPERATORS_THAT_LOOK_LIKE_IDENTIFIERS`, `_category`,
+`getString`, `getToken`, `_expectCategory`, `_acceptCategory`, `error`, `parsePrimary`, `parseObjectInitializer`,
+`parseMethodDefinitionOrProperty` and `parseMember`). Read against dart's bodies: the 127-entry ASCII table matches row for
+row; getString's escapes match, dart's `\t` as 8 kept; getToken's comment skips, hex literal, `/` token, the do-while with
+its `!`/`~`/`/` rule, and the operator classification match, 0-based positions over 1-based indexing checked at each read;
+the object initializer and property loops match, a hole's name taken as parseHash takes it (the positional/named mix check
+dropped, the template having one hole). (A73S2, low, R1) two readings are not dart's. js_parse_assignment! cites
+`builder.dart:929 MiniJsParser.parseMember` (js_parser.jl:299), a second definition at parseMember's line, while it stands
+in for parseAssignment (`grep -n 'Expression parseAssignment' pkg/js_ast/lib/src/builder.dart` gives `1076:`) and its chain
+down to parseMember; and host_modules finds the object by `findfirst("const baseImports = ", text)` (rtutils.jl:87), a
+fixed-text search where the commit's subject says "never a pattern over the template". Fix: js_parse_assignment! anchored at
+:1076 with what it drops named; the declaration read as dart's parser reads a `const` statement (parseVariableDeclarationList),
+or the search's reason in host_modules' quarantine. Owner: wt3-runtime (src/julia/js_parser.jl, src/julia/runtime/rtutils.jl).
+414aa5c0: errors_patch.dart:76 is the method (above), and jl_type_error_rt (`sed -n 113p src/rtutils.c` of the julia pin) is
+the TypeError the body builds; its mechanism is A73S3.
+
+R2: the headline does not move in the range. `git diff 5f05f54e..origin/wt2 -- src | grep -E '^[-+].*reject!\(Unported'`
+gives four lines: boxJsException moved (one out, one in, bdd5539c's catch_tag), JavaScriptStack added inside
+Translator.stackTraceInfo's Late thunk (a gap within a body, outside the standalone answer), and errors_patch.dart:76's
+removed from AsCheckerCodeGenerator.generate. That generate was already a body (its rejection the last of several
+statements), so its fill completes a partial body and leaves bodies at 3129, 273 Internal and 1 Unported. The runtime clause
+gains one @parity definition (`git diff 5f05f54e..origin/wt2 -- src | grep -E '^\+@parity'` gives errors_patch.dart:40's
+re-signed Error._throw, :76 _throwAsCheckError and exports.dart:11's getter re-typed), the runtime count up by one, honestly a
+body: `Error__throw(TypeError(:typeassert, "", type, operand), StackTrace_current())`. A64E2 has not landed, so the
+3086-or-below headline and DartAbstract's separate count have nothing to read, and A72S1's guarded-rejection rule is not
+applied (parity.jl:1534 unchanged).
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A67S4 leaves MARCH 1.D (A70E3 had left it with 5bfcb2b7);
+A72E1's stale text leaves 1.L. A73S1 is open on 1.K; A73S2 on 1.F; A73S3 on 1.C; A73E1 and A73E2 on 1.L. By owner:
+wt3-runtime A73S3 (src/types.jl, src/kernel_nodes.jl, src/julia/subset.jl) and A73S2 (src/julia/js_parser.jl,
+src/julia/runtime/rtutils.jl), with A72S2; wt3-memory A73S1 (src/patch/hashing.jl), with A71S1; wt3-latency A73E1
+(src/julia/nir.jl); lead A73E2 (dev/fetch_julia.sh, dev/check.sh); wt3-parity A72S1, A71S2, A68S1 and A71E2's claim lock;
+wt3-cgstubs2 A71S3 and A70S3.
