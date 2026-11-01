@@ -253,11 +253,136 @@ f64 only as the operand's, as dart has it.
 
 """
 A field read inlined as an intrinsic, or `nothing`. dart's are getters of dart:_wasm's classes
-(WasmAnyRef, WasmArrayRef, WasmTable) and int's bit counts. A Julia field read (`getfield`) reads
-its object's field, no class of Julia's is one of dart:_wasm's, and Julia's bit counts are its
-intrinsics (`ctlz_int`, `cttz_int`, `ctpop_int`, the unary map), so no read is one.
+(WasmAnyRef, WasmArrayRef, WasmTable) and int's bit counts; no class of Julia's is one of dart:_wasm's,
+and Julia's bit counts are its intrinsics (`ctlz_int`, `cttz_int`, `ctpop_int`, the unary map). Julia's
+one field read its codegen inlines past an object's layout is a tuple's field at an index only run time
+knows (`getfield(t, i)`, an Int `i`), lowered here (`Val(:tuple_index)`); every other read is the
+field's own (visitInstanceGet).
 """
-@parity "dart2wasm/lib/intrinsics.dart:607 Intrinsifier.generateInstanceGetterIntrinsic" generate_instance_getter_intrinsic(self::Intrinsifier, node::NirCall)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
+@parity "dart2wasm/lib/intrinsics.dart:607 Intrinsifier.generateInstanceGetterIntrinsic" function generate_instance_getter_intrinsic(self::Intrinsifier, node::NirCall)::Union{WasmBuilder.IR.ValueType,Nothing}
+    nir_callee(node) === Core.getfield && length(node.args) in (3, 4) || return nothing
+    local index = node.args[3]
+    index isa NirConst && return nothing
+    dart_type_of(self, index) === Int || return nothing
+    local T = dart_type_of(self, node.args[2])
+    T isa DataType && T <: Tuple || return nothing
+    return generate_static_intrinsic(self, Val(:tuple_index), node, T)
+end
+
+# Julia's getfield of a tuple at an index only run time knows (codegen.cpp:4564 emit_builtin_call's
+# getfield, its unknown-index arms): of a concrete tuple, cgutils.cpp:2794 emit_getfield_unknownidx,
+# the bounds check (emit_bounds_check: the index less 1 below the field count unsigned, else
+# BoundsError(t, i), jl_bounds_error_int; none where the flag is the constant false, @inbounds) and
+# then a select chain over every field (CreateSelect per field, each field converted to the read's
+# type: the fields' one type, or the top type, boxed, where they differ); of a tuple whose length only
+# run time knows (Tuple{String,Vararg{String}}), the class-id switch over the closed world's concrete
+# tuple classes below its type (dart's types.dart emitClassIdRangeCheck, classIdSearch), each arm the
+# concrete arm over its own class, its bound that class's field count (codegen.cpp:4584
+# emit_datatype_nfields). The arms are generated from that one list; an empty one rejects, located,
+# and a class outside it is none the program can hold, the closed world holding every class and no
+# type being made at run time (dev/AUDIT.md A68S3, the run_time_type arm), so its miss is unreachable.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:tuple_index}, node::NirCall, T::DataType)::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
+    local at = "$(code_gen.enclosing_member): Julia's getfield of a $T at an index only run time knows"
+    # the third operand: a bounds-check flag (Bool) or an order (Symbol); Julia's bounds_check_enabled
+    # (cgutils.cpp:2067) checks unless the flag is the constant false, an Expr(:boundscheck, false) here
+    local flag = length(node.args) == 4 ? node.args[4] : nothing
+    flag !== nothing && dart_type_of(self, flag) === Symbol &&
+        !(flag isa NirConst && flag.c.val === :not_atomic) &&
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index with an atomic order"), at)
+    local known_false(v::NirValue) = v isa NirConst ? v.c.val === false :
+        v isa NirSSA && (local st = code_gen.body.stmts[v.id]; st isa NirBoundscheck && !isempty(st.args) && st.args[1] isa NirConst && st.args[1].c.val === false)
+    local opt = Base.JLOptions().check_bounds
+    local check = opt == 1 ? true : opt == 2 ? false : !(flag !== nothing && dart_type_of(self, flag) === Bool && known_false(flag))
+    # the classes the value can have: T itself, or the closed world's concrete tuple classes below it
+    local classes = isconcretetype(T) ? DataType[T] :
+        sort!(DataType[c for c in keys(t.class_info) if c isa DataType && isconcretetype(c) && c <: T];
+              by = c -> t.class_id_numbering[].class_ids[c])
+    isempty(classes) && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, which no class of the closed world is"), at)
+    # the read's type: the fields' one type, or their union, the top type where they differ
+    local field_types = Base.IdSet{Any}(ft for c in classes for ft in fieldtypes(c))
+    local R = translate_type(t, isempty(field_types) ? Union{} : Union{field_types...})
+    R isa WasmBuilder.IR.RefType && R.nullable && !any(ft -> Nothing <: ft, field_types) && (R = WasmBuilder.with_nullability(R, false))
+    local i = add_local(code_gen, i64)
+    translate_expression(code_gen, node.args[3], i64)
+    WasmBuilder.local_set(b, i)
+    # the concrete arm over `c`, its struct in local `v`, leaving the field at the read's type
+    local concrete_arm(c::DataType, v::WasmBuilder.IR.Local) = begin
+        local info = t.class_info[c]
+        local n = fieldcount(c)
+        if check
+            WasmBuilder.local_get(b, i)
+            WasmBuilder.i64_const(b, 1)
+            WasmBuilder.i64_sub(b)
+            WasmBuilder.i64_const(b, n)
+            WasmBuilder.i64_lt_u(b)
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.if_(b)
+            WasmBuilder.local_get(b, v)
+            convert_type(t, b, v.type, t.top_type[])
+            WasmBuilder.local_get(b, i)
+            call(code_gen, nir_runtime_member(t.component, throw_bounds_error, at))
+            WasmBuilder.unreachable(b)
+            WasmBuilder.var"end"(b)
+        end
+        if n == 0
+            # emit_getfield_unknownidx's nfields 0: no field to read, the check alone
+            WasmBuilder.unreachable(b)
+            return nothing
+        end
+        local fields = class_instance_fields(c, at)
+        local get_field(k::Int) = begin
+            local index = t.field_index[fields[k]]
+            local storage = info.struct_.fields[index + 1].type
+            WasmBuilder.local_get(b, v)
+            if storage isa WasmBuilder.IR.PackedType
+                fields[k].type <: Signed ? WasmBuilder.struct_get_s(b, info.struct_, index) : WasmBuilder.struct_get_u(b, info.struct_, index)
+            else
+                WasmBuilder.struct_get(b, info.struct_, index)
+            end
+            local ft = fields[k].type
+            convert_type(t, b, WasmBuilder.unpacked(storage), R; boxed_class = ft isa DataType ? ft : nothing)
+        end
+        get_field(1)
+        local acc = add_local(code_gen, R)
+        for k in 2:n
+            WasmBuilder.local_set(b, acc)
+            get_field(k)
+            WasmBuilder.local_get(b, acc)
+            WasmBuilder.local_get(b, i)
+            WasmBuilder.i64_const(b, k)
+            WasmBuilder.i64_eq(b)
+            WasmBuilder.select(b, R)
+        end
+        nothing
+    end
+    if isconcretetype(T)
+        local info = t.class_info[T]
+        local v = add_local(code_gen, info.non_nullable_type)
+        translate_expression(code_gen, node.args[2], info.non_nullable_type)
+        WasmBuilder.local_set(b, v)
+        concrete_arm(T, v)
+        return R
+    end
+    local o = add_local(code_gen, t.top_type_non_nullable[])
+    translate_expression(code_gen, node.args[2], t.top_type_non_nullable[])
+    WasmBuilder.local_tee(b, o)
+    load_class_id(b, t, o.type)
+    local ids = t.class_id_numbering[].class_ids
+    local ranges = [(range = Range(Val(:_), ids[c], ids[c]), value = c) for c in classes]
+    class_id_search(b, ranges, WasmBuilder.IR.ValueType[R], c -> begin
+            local info = t.class_info[c]
+            local v = add_local(code_gen, info.non_nullable_type)
+            WasmBuilder.local_get(b, o)
+            WasmBuilder.ref_cast(b, info.non_nullable_type)
+            WasmBuilder.local_set(b, v)
+            concrete_arm(c, v)
+        end, () -> WasmBuilder.unreachable(b))
+    return R
+end
 
 """
 An instance call inlined as an intrinsic, or `nothing`. dart's are dart:_wasm's members and the int,

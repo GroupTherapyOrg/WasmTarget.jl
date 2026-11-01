@@ -1675,6 +1675,8 @@ end
 @parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" function visit_instance_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet"
     length(node.args) in (3, 4) || reject!(Internal("$at: getfield with $(length(node.args) - 1) operands"), "$(self.enclosing_member)")
+    local intrinsic = generate_instance_getter_intrinsic(self.intrinsifier[], node)
+    intrinsic === nothing || return intrinsic
     local receiver = node.args[2]
     local cls = dart_type_of(self, receiver)
     # a type as a value Julia types Type{X} (Core.Typeof); its class is X's kind, typeof(X), whose

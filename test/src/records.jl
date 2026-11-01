@@ -182,3 +182,36 @@ sumfacts(n::Int64) = (t = widened(n); t isa Tuple{Int64, Int64} ? t[1] + t[2] : 
     @test !isempty(results) && all(r -> r.ok, results)
 end
 end
+
+# a tuple's field at an index only run time knows (getfield(t, i), Julia's emit_getfield_unknownidx):
+# a concrete tuple's bounds check and select chain, a homogeneous one (a vector literal's elements), a
+# heterogeneous one (its field boxed), one under @inbounds, a one-field and a zero-field tuple; and a
+# tuple whose length only run time knows (Tuple{String,Vararg{String}}), the class-id switch over the
+# closed world's tuple classes below it, at two lengths. Out of range each raises BoundsError, as native
+module RecordIndexCases
+using Test, WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+const WTRunner = Main.WTRunner
+@noinline pick(t::Tuple, i::Int64) = t[i]
+@noinline pickin(t::NTuple{3,Int64}, i::Int64) = @inbounds t[i]
+@noinline nth(@nospecialize(t::Tuple{String,Vararg{String}}), i::Int64) = t[i]
+function tuple_index(k::Int64, i::Int64)
+    k == 1 && return (v = Int64[10, 20, 30]; v[i])
+    k == 2 && return (x = pick((Int64(1), "ab", 2.5), i); x isa Int64 ? x : x isa String ? Int64(ncodeunits(x)) : Int64(99))
+    k == 3 && return pickin((Int64(4), Int64(5), Int64(6)), i)
+    k == 4 && return Int64(ncodeunits(nth(("ab", "c"), i))) + 10 * Int64(ncodeunits(nth(("ab", "c", "def"), i)))
+    k == 5 && return pick((Int64(7),), i)
+    return (pick((), i); Int64(0))
+end
+@testset "codegen.cpp: a tuple's field at a run-time index, its bounds check and select chain, a Vararg tuple by its class" begin
+    @test only(Base.code_typed(nth, (Tuple{String,Vararg{String}}, Int64)))[1].slottypes[2] === Tuple{String,Vararg{String}}
+    local plain = WasmTarget.compile(tuple_index, (Int64, Int64); optimize = false)
+    local argsets = [(1, 1), (1, 3), (1, 4), (1, 0), (2, 1), (2, 2), (2, 3), (2, 4), (3, 2), (4, 1), (4, 2), (4, 3),
+                     (5, 1), (5, 2), (6, 1)]
+    local cases = [WTRunner.RunCase("tuple_index$a", plain, Int64.(a), WTRunner.native_answer(tuple_index, Int64.(a))) for a in argsets]
+    @test count(c -> c.native == WTRunner.Throws(BoundsError), cases) == 6
+    local results = WTRunner.run_cases(cases)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    @test length(results) == 15 && all(r -> r.ok, results)
+end
+end
