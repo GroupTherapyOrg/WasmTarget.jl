@@ -3,7 +3,7 @@
 # construction checks itself at load; the ratchet passes (its exit status decides); every test of
 # ported code passes (test/src_tests.jl); and TLC checks every model the change touches, each
 # Broken instance required to break its claim (dev/formal/run_tlc.sh). D14's band: a 60-s target,
-# red past 120 s. CHECK_BASE names the commit the change is measured from (default origin/wt2).
+# red past 120 s (140 s until the first-compile cut, Dale 2026-11-01; D14_RED below). CHECK_BASE names the commit the change is measured from (default origin/wt2).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 # a check runs only inside a landing (dev/ship.sh sets CHECK_LANDING under the landing lock): with one
@@ -192,6 +192,10 @@ c_load=$(cpu load); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratche
 for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
 echo "check: ${path} s on the critical path (load ${c_load} CPU-s, ratchet ${p_ratchet}, src shards${shards}, from G instructions $(gi ratchet)$(for k in $(seq 1 $SHARDS); do printf ' %s' "$(gi "src_tests.$k")"; done)); ${wall}s wall; CPU-s, unjudged: ${cpus}"
-[ $path -gt 120 ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past 120 s)"; exit 1; }
+# D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
+# change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget. It returns to 120 s in the commit
+# that cuts that first compile and takes SHARDS back to four (wt3-latency, A67E1/A68E2); the 60-s target is unchanged
+D14_RED=140
+[ $path -gt $D14_RED ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past ${D14_RED} s until the first-compile cut, then 120 s)"; exit 1; }
 line_stop
 echo "check: green (${wall}s)"
