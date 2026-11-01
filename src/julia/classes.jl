@@ -76,6 +76,10 @@ end
         # Julia's `ptr`, a host address, is not one), each element written
         _meet_value!(out, seen, Int, at)
         foreach(k -> isassigned(v, k) && _meet_constant!(out, seen, objs, v[k], at), eachindex(v))
+    elseif t <: Core.GenericMemoryRef
+        # a reference's index and its memory (_memoryref_instance_fields; Julia's address is not one)
+        _meet_value!(out, seen, Int, at)
+        _meet_constant!(out, seen, objs, v.mem, at)
     elseif Base.iskindtype(t)
         for f in _kind_instance_fields(t, at)
             f.index > 0 && isdefined(v, f.index) && _meet_constant!(out, seen, objs, getfield(v, f.index), at)

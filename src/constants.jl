@@ -648,9 +648,9 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
             # a type here is lowered above (_lowerTypeToConstant), dart's InstanceConstant of its type
             # object: in Julia the type itself, an instance of its kind
             v isa Type ? visit_instance_constant(self, constant) :
-            # a Memory is its class's struct (src/julia/classes.jl), an instance constant; an Array,
-            # dart's list, is visitListConstant's
-            v isa Array ? visit_list_constant(self, constant) :
+            # a Vector, dart's list, is visitListConstant's; any other Array, and a Memory, is an object
+            # of its class (src/julia/classes.jl), an instance constant
+            v isa Vector ? visit_list_constant(self, constant) :
             visit_instance_constant(self, constant)
         end
         if info !== nothing
@@ -668,7 +668,7 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
                 v isa Symbol ? visit_symbol_constant(tv, v) :
                 v isa Union{Tuple,NamedTuple} ? visit_record_constant(tv, v) :
                 v isa Type ? visit_instance_constant(tv, ic) :          # a lowered type object, as above
-                v isa Array ? visit_list_constant(tv, ic) :
+                v isa Vector ? visit_list_constant(tv, ic) :
                 visit_instance_constant(tv, ic)
             end
             t == info.type || reject!(Internal("dart2wasm/lib/constants.dart:808 ConstantCreator.ensureConstant: the constant $(info.constant) is created as $(info.type), its type $t"), "ConstantCreator.ensureConstant")
@@ -823,6 +823,10 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             field.name == "isDeclaredNullable" ? (encoded_nullability(v) == 1) :
             field.name == "classId" ? Int32(translator.class_id_numbering[].class_ids[v]) :
             reject!(Internal("$at: the kind $cls's field $(field.name), not one of classes.jl's"), at)
+        elseif cls <: GenericMemoryRef && field.name == "ptr_or_offset"
+            # a MemoryRef's index into its memory, from 0 (src/julia/classes.jl _memoryref_instance_fields),
+            # where Julia holds an address: Julia's memoryrefoffset, from 1
+            Base.memoryrefoffset(v) - 1
         elseif isdefined(v, field.index)
             getfield(v, field.index)
         else
@@ -958,11 +962,16 @@ end
     end; can_be_eager = !too_large_for_array_new_fixed)
 end
 
-# a constant list: dart makes it an instance constant of dart:_list's ImmutableList, its length and its
-# entries' wasm array; that class is of dart's runtime library, not ported, so naming it rejects there
-# (KernelNodes.immutableListClass), the accept chain reaching an Array or Memory as an object's value
-@parity "dart2wasm/lib/constants.dart:1128 ConstantCreator.visitListConstant" visit_list_constant(self::ConstantCreator, constant::NirConst)::Union{} =
-    immutable_list_class(translator(self))
+# a constant list: dart makes it an instance constant of the immutable list class, its length and its
+# entries' wasm array, and ensures that. Julia's constant Vector is already an instance of its class,
+# Array{T,1} (KernelNodes.immutableListClass), whose fields hold its MemoryRef and its size, so it is
+# that instance constant (visitInstanceConstant), its memory a constant of its own
+@parity "dart2wasm/lib/constants.dart:1128 ConstantCreator.visitListConstant" function visit_list_constant(self::ConstantCreator, constant::NirConst)::Union{ConstantInfo,Nothing}
+    local v = constant.c.val
+    typeof(v) === immutable_list_class(translator(self), eltype(v)) ||
+        reject!(Internal("dart2wasm/lib/constants.dart:1128 ConstantCreator.visitListConstant: the list constant $(typeof(v)), no Array{T,1}"), "ConstantCreator.visitListConstant")
+    return visit_instance_constant(self, constant)
+end
 
 @parity "dart2wasm/lib/constants.dart:1152 ConstantCreator.visitMapConstant" visit_map_constant(self::ConstantCreator, constant::NoCounterpart)::Union{ConstantInfo,Nothing} =
     reject!(Internal("dart2wasm/lib/constants.dart:1152 ConstantCreator.visitMapConstant: Julia has no constant map"), "ConstantCreator.visitMapConstant")
@@ -1107,10 +1116,9 @@ end
 
 @parity "dart2wasm/lib/constants.dart:1714 TypeOfConstantVisitor.visitStringConstant" visit_string_constant(self::TypeOfConstantVisitor, constant::String)::WasmBuilder.IR.RefType = _type_of_class(self, String)
 
-# dart's `_typeOfClass(translator.immutableListClass)`: the class is of dart's runtime library, not
-# ported, so naming it rejects there
-@parity "dart2wasm/lib/constants.dart:1719 TypeOfConstantVisitor.visitListConstant" visit_list_constant(self::TypeOfConstantVisitor, constant::NirConst)::Union{} =
-    immutable_list_class(self.translator)
+# dart's `_typeOfClass(translator.immutableListClass)`, Julia's Array{T,1} of the list's element type
+@parity "dart2wasm/lib/constants.dart:1719 TypeOfConstantVisitor.visitListConstant" visit_list_constant(self::TypeOfConstantVisitor, constant::NirConst)::WasmBuilder.IR.RefType =
+    _type_of_class(self, immutable_list_class(self.translator, eltype(constant.c.val)))
 
 @parity "dart2wasm/lib/constants.dart:1724 TypeOfConstantVisitor.visitMapConstant" visit_map_constant(self::TypeOfConstantVisitor, constant::NoCounterpart)::WasmBuilder.IR.RefType =
     reject!(Internal("dart2wasm/lib/constants.dart:1724 TypeOfConstantVisitor.visitMapConstant: Julia has no constant map"), "TypeOfConstantVisitor.visitMapConstant")

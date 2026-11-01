@@ -28,10 +28,19 @@
 @parity "dart2wasm/lib/kernel_nodes.dart:57 KernelNodes.listBaseClass" list_base_class(self::KernelNodes)::Union{} =
     reject!(Internal("dart2wasm/lib/kernel_nodes.dart:57 KernelNodes.listBaseClass: dart:_list's WasmListBase is Julia's Array{T,1}, a class per element type laid out by its own fields, and its one reader, getListBaseArray, is dart's Function.apply intrinsic, which no Julia call is"), "KernelNodes.listBaseClass")
 
-# dart:_list's ImmutableList, the class of a constant list, of dart's runtime library at the pin, not
-# ported: Unported there
-@parity "dart2wasm/lib/kernel_nodes.dart:73 KernelNodes.immutableListClass" immutable_list_class(self::KernelNodes)::Union{} =
-    reject!(Unported("sdk/lib/_internal/wasm/common/list.dart:290 ImmutableList"), "KernelNodes.immutableListClass: the class of a constant list")
+"""
+    immutable_list_class(self, element_type) -> DataType
+
+The class of a constant list. dart's is dart:_list's ImmutableList (list.dart:290), one class whose
+element type is a type argument, its constant built of WasmListBase's `_length` and `_data`; Julia's
+constant list is a `Vector`, an object of its own class `Array{T,1}`, laid out by its own fields (`ref`,
+its MemoryRef, and `size`), as `listBaseClass` answers for every list.
+
+Reshaped: `element_type` — Julia's Array{T,1} binds its element type, a class per element type, so the
+lookup takes it where dart's one class takes it as a type argument.
+"""
+@parity "dart2wasm/lib/kernel_nodes.dart:73 KernelNodes.immutableListClass" immutable_list_class(self::KernelNodes, element_type::Type)::DataType =
+    Array{element_type,1}
 
 # the lanes of a SIMD vector class, in lane order: dart's _WasmI8x16Impl and its siblings hold them as
 # fields `_0`, `_1`, ..., which dart sorts by their number; Julia's SIMD vector is an NTuple of

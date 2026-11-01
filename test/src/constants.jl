@@ -186,11 +186,10 @@ rej(f) = try; f(); nothing; catch x; x isa WasmTarget.RejectionError ? x.rejecti
     @test D.make_named_parameter_constant(cs, Pair{Symbol,Type}(:x, Int)) === k(Pair{Symbol,Type}(:x, Int))
     @test rej(() -> D._make_top_type_constant(cs, Union{Int,String})) isa WasmTarget.Internal
     # Julia has no constant map or set: the hash index rejects, Internal, naming the MapConstant row; a
-    # constant array is dart's ImmutableList, a runtime class not ported, which rejects there, Unported
+    # constant Vector's class is its own Array{T,1}, dart's immutable list class
     local hi = rej(() -> D._uninitialized_hash_base_index_constant(cr))
     @test hi isa WasmTarget.Internal && occursin("MapConstant row", hi.site)
-    local la = rej(() -> D.ensure_constant(cs, k([1, 2])))
-    @test la isa WasmTarget.Unported && la.anchor == "sdk/lib/_internal/wasm/common/list.dart:290 ImmutableList"
+    @test D.immutable_list_class(Nodes(D.TranslatorOptions()), String) === Vector{String}
     @test rej(() -> D.core_types(cs)) isa WasmTarget.Internal
 end
 end
@@ -306,7 +305,23 @@ const MAYBE = let m = Memory{Union{Nothing,String}}(undef, 3); m[1] = nothing; m
 plen(b::Bool) = length(b ? PRIMES : EMPTY)
 nlen(b::Bool) = length(b ? NAMES : NONE)
 maybe(i::Int64, read::Bool) = read ? Int64(MAYBE[i] === nothing) : Int64(isassigned(MAYBE, i))
-@testset "constants.dart: a Memory constant is its class's struct, its elements a wasm array literal" begin
+# a constant Vector (visitListConstant, an instance of Array{T,1}: its MemoryRef and its size), one whose
+# MemoryRef starts past its memory's first element, a Vector{String}, a Matrix (an Array of its class)
+# and a constant Vector written then read: case k at i
+const VEC = [2, 3, 5]
+const OFF = let v = [1, 2, 3, 4]; popfirst!(v); v end
+const STRS = ["a", "bcd"]
+const MAT = [1 2; 3 4]
+const CELL = [0]
+function lists(k::Int64, i::Int64)
+    k == 1 && return VEC[i]
+    k == 2 && return OFF[i]
+    k == 3 && return Int64(ncodeunits(STRS[i]))
+    k == 4 && return MAT[i] + 10 * Int64(size(MAT, 1))
+    k == 5 && return Int64(length(OFF))
+    return (CELL[1] = i; CELL[1])
+end
+@testset "constants.dart: a Memory constant is its class's struct, its elements a wasm array literal; a list constant its Array" begin
     @test !isassigned(NAMES, 2)
     # each program compiled once, its two modules, then each argument set's native answer
     local cases_of(f, argsets) = begin
@@ -318,9 +333,12 @@ maybe(i::Int64, read::Bool) = read ? Int64(MAYBE[i] === nothing) : Int64(isassig
     # the set flags of a constant whose elements admit nothing, `data#isSet`: an unset element's read
     # raises UndefRefError, a written nothing reads as nothing
     append!(cases, cases_of(maybe, [(Int64(1), true), (Int64(2), true), (Int64(3), true), (Int64(2), false), (Int64(3), false)]))
-    @test count(c -> c.native isa WTRunner.Throws, cases) == 1
+    # constant lists: in range, and past the end (BoundsError)
+    @test Base.memoryrefoffset(OFF.ref) == 2
+    append!(cases, cases_of(lists, [(Int64(k), Int64(i)) for (k, i) in ((1, 1), (1, 3), (1, 4), (2, 1), (2, 3), (2, 4), (3, 2), (4, 3), (5, 0), (6, 7))]))
+    @test count(c -> c.native isa WTRunner.Throws, cases) == 3
     local results = WTRunner.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
-    @test length(results) == 9 && all(r -> r.ok, results)
+    @test length(results) == 19 && all(r -> r.ok, results)
 end
 end
