@@ -215,6 +215,10 @@ if git push -q origin HEAD:$MARCH; then
   if [ "$(git -C "$lane" rev-parse HEAD)" = "$start" ] && [ -z "$(git -C "$lane" status --porcelain --untracked-files=no)" ]; then
     git -C "$lane" rebase -q "origin/$MARCH" && echo "ship: this lane's branch is now on origin/$MARCH"
   else echo "ship: this lane moved on while landing; run git rebase origin/$MARCH when ready (the landed commits drop out)"; fi
+    # and the same line kept in the common dir's wt-progress.tsv, one row per landing (time, head, line), so R2's history
+    # is read from one file rather than from each lane's overwritten autoship output (march-monitor-a, 19:16)
+    p=$(grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //' | tr '\t\n' '  ')
+    [ -n "$p" ] && printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$p" >> "$common/wt-progress.tsv"
     grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'; exit 0
 fi
 echo "ship: the push was refused under the landing lock"; exit 1
