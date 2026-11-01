@@ -17,6 +17,10 @@ git config core.sparseCheckout true
 # each unit of JULIA_FILES ("julia/src/<name>"), its .h, .c and .cpp
 grep -oE '"julia/src/[A-Za-z0-9_]+"' "$here/src/julia/parity.jl" | tr -d '"' | sed 's|^julia/||' |
   while read -r u; do printf '%s.h\n%s.c\n%s.cpp\n' "$u" "$u" "$u"; done > .git/info/sparse-checkout
+# each Julia unit of JULIA_FILES ("julia/base/<name>", "julia/Compiler/src/<name>"), Base and Julia's
+# compiler in Julia, its .jl
+grep -oE '"julia/(base|Compiler/src)/[A-Za-z0-9_]+"' "$here/src/julia/parity.jl" | tr -d '"' | sed 's|^julia/||' |
+  while read -r u; do printf '%s.jl\n' "$u"; done >> .git/info/sparse-checkout
 if [ "$(git rev-parse HEAD 2>/dev/null)" = "$pin" ]; then
   git read-tree -mu HEAD
   echo "JuliaLang/julia at $pin: $dir"

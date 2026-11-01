@@ -506,9 +506,12 @@ DART_FILES, `include` takes any path, so the second oracle's file map is a table
 The Julia pin table (dev/LEDGER.md D45: nothing bespoke, a pinned near 1:1 match ported): each unit of
 Julia's own C and C++ sources at `JULIA_PIN`, the commit of the julia WasmTarget runs, that a
 src/julia definition ports, by its path under the julia repository prefixed `julia/` and without its
-extension, the unit its `.h`, `.c` and `.cpp` make together (`julia/src/genericmemory`). An anchor
-on one, `julia/src/genericmemory.c:<line> <X>`, resolves at that checkout under L213's rule
-(dev/fetch_julia.sh makes it at ~/.cache/wasmtarget/julia).
+extension, the unit its `.h`, `.c` and `.cpp` make together (`julia/src/genericmemory`), or a file of
+Base or of Julia's compiler, written in Julia, its `.jl` (`julia/base/array`,
+`julia/Compiler/src/typeinfer`). An anchor on one, `julia/src/genericmemory.c:<line> <X>` or
+`julia/base/array.jl:<line> <X>`, resolves at that checkout under L213's rule, a Julia unit's line
+beginning a definition of X (`function X`, `X(...) =`, a struct, a macro, a const) as Julia's parser
+reads it (dev/fetch_julia.sh makes the checkout at ~/.cache/wasmtarget/julia).
 
 precedent(llvm: LLVM_FILES, the second oracle's pin table). Julia's differs: its runtime is C, so the
 ports of what Julia forces are anchored at the C that defines it, as the stackifier's are at LLVM's.
@@ -516,6 +519,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
 @quarantine "Julia's runtime is its own C and C++ sources, pinned at the julia WasmTarget runs, which src/julia ports" Core.String const JULIA_FILES::Tuple{Vararg{String}} = (
     "julia/src/julia", "julia/src/genericmemory", "julia/src/builtins", "julia/src/cgutils",
     "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv", "julia/src/ccall",
+    "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer",
 )
 
 """
@@ -1107,7 +1111,7 @@ end
 
 # an anchor of either pin: a dart file under pkg/ (1), or an LLVM unit (2) and its extension (3); its
 # line (4); its symbol (5), dart's X or X.m, or C++'s X or X::m
-@quarantine "an anchor is a string, which Julia reads with a regex where dart's analyzer and clang have a name" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia)/[\w/]+)\.(cpp|c|h)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)$"
+@quarantine "an anchor is a string, which Julia reads with a regex where dart's analyzer and clang have a name" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia)/[\w/]+)\.(cpp|c|h|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
 
 """
     Anchor
@@ -1150,7 +1154,7 @@ The parts of `s`, an anchor of either pin; nothing when it reads as neither
     if startswith(m[2], "julia/")
         return Anchor(:julia, String(m[2]), m[2][length("julia/")+1:end] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
     end
-    m[3] == "c" && return nothing
+    m[3] in ("c", "jl") && return nothing
     return Anchor(:llvm, String(m[2]), m[2] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
 end
 
@@ -1300,7 +1304,22 @@ end
     if a !== nothing && a.pin in (:llvm, :julia)
         local file = joinpath(sdk, a.file)
         isfile(file) || return "the $(a.pin) pin has no $(a.file)"
-        return _cpp_declares(get!(() -> readlines(file), _PIN_LINES, file), a.line, a.written)
+        local clines = get!(() -> readlines(file), _PIN_LINES, file)
+        endswith(a.file, ".jl") || return _cpp_declares(clines, a.line, a.written)
+        # a unit of Base or of Julia's compiler, in Julia: Julia's parser reads the expression that begins at the line,
+        # and it declares the symbol when it is a definition whose name (_defines') is the symbol
+        a.line <= length(clines) || return "line $(a.line) is past the file's end ($(length(clines)) lines)"
+        # the parser skips blank and comment lines to the next expression; the line itself must begin it
+        (isempty(strip(clines[a.line])) || startswith(lstrip(clines[a.line]), '#')) && return "line $(a.line) is blank or a comment"
+        local def = first(Meta.parse(join(clines[a.line:end], "\n"), 1; raise = false))
+        while Meta.isexpr(def, :macrocall) && def.args[1] in _TRANSPARENT_MACROS
+            def = def.args[end]
+        end
+        (Meta.isexpr(def, (:function, :macro, :struct, :abstract, :primitive, :module)) ||
+         (Meta.isexpr(def, :(=)) && _call(def.args[1]) !== nothing) || (Meta.isexpr(def, :const) && Meta.isexpr(def.args[1], :(=)))) ||
+            return "line $(a.line) begins no Julia definition"
+        local name = last(_defines(def, LineNumberNode(a.line)))
+        return string(name) == a.written ? nothing : "line $(a.line) defines $name, not $(a.written)"
     end
     a === nothing && return "$(repr(anchor)) is no anchor"
     local path = joinpath(sdk, a.file)
@@ -1357,9 +1376,9 @@ end
 # adds a line, so the list only shrinks (D20).
 
 # the anchors a reason cites, each form of the pins'
-@quarantine "an anchor in prose is found by its pins' forms, read with a regex" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|(?:llvm|julia)/[\w/]+\.(?:cpp|c|h):[1-9]\d* [A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)"
+@quarantine "an anchor in prose is found by its pins' forms, read with a regex" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|(?:llvm|julia)/[\w/]+\.(?:cpp|c|h|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
 @quarantine "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:\.(?:[A-Za-z_$][\w$]*|\[\]=?|[-+*/%<>=~&|^]+))?))?"
-@quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
+@quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*!?(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
 
 # why a quarantine's reason pins no source, or nothing when it does: its precedents, each resolving at
 # its ecosystem's pinned checkout, or an anchor that resolves at its pin's checkout (an anchor whose
