@@ -5807,3 +5807,112 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A64E1 is fixe
 carried by A64E4; A64E2's headline half is fixed by fa1d5dad, its registry half open on its row. A65E1 is open on MARCH
 1.T. A64E4 is open on MARCH 1.T. By owner: the tests lane holds A65E1 and A64E4 (with the hang's cause); wt3-skeleton
 holds A64E2's registry half and the (p) state.
+
+## 2026-11-01 — audited through e0cd6392 (327dfc5b..e0cd6392: the name section's UTF-8, one landings row per commit, D45 and D46, the third pin, L213's pinned sources and their debt list, WasmListBase as Array{T,1}, the name section's precedent, ship's early class, host references and the JS string)
+
+The sixty-sixth audit, beside the work, covers the 9 commits of 327dfc5b..e0cd6392 that are not audit entries 64 and 65
+(fbc1d741, a0df288f, b1068ffd): 58b25a5d, b29ce5ca, 28ed33e6, d8b01dc9, e292e618, 2bad8676, b2b4bf59, f4cc916d and
+e0cd6392, read here, under Dale's R1 and R2 as standing sections. Every finding rests on
+one exact command, quoted. Standing items. src changes in 13 files (`git diff --stat 327dfc5b..e0cd6392 -- src | tail
+-1` gives `13 files changed, 499 insertions(+), 82 deletions(-)`); one exemption lands (`git diff 327dfc5b..e0cd6392 --
+src | grep -cE '^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 1, src/runtime/js_common/js_string.jl:35,
+A66S2). e0cd6392, committed after 2bad8676, is the first landing under L213's new check, and each @quarantine it adds
+cites a dart path (wasm_types.dart:59, :142, :151, :737, :748; runtime_generator.dart:150), each line read at the pin
+and holding the symbol it names. b29ce5ca writes one landings row per pushed commit, so a stack red after
+some landings still records them. Findings A66E1, A66E2, A66E3, A66E4, A66E5, A66S1, A66S2, A66S3 and A66S4.
+
+Area: builder — 58b25a5d refuses a name section name that is not valid UTF-8, InvalidModule naming the entity;
+f4cc916d, comment only, cites WebAssembly Core 2.0 §5.2.4 for it by URL. (A66S4, low, D10) the refusal is at
+serialization, not at the line that records the name: `grep -n 'checked(name::String' src/wasm_builder/serialize/sections.jl`
+gives `430:`, the one check, in NameSection.serializeContents, so the rejection names `function i` or `field k of type
+i`, never the define, add_local or Dart2Wasm write that recorded it, where an import or export name is refused as it
+is recorded. Fix: each recording site's builder refuses an invalid name as it records it, the serializer's check then
+an Internal. Requirements: D10 (A66S4). f4cc916d's precedent grammar, `precedent(<spec>, <URL>)`, is not the `precedent(<ecosystem>: <file:line>)` L213 reads,
+which only matters once comments in @parity bodies are checked.
+
+stopgap in disguise: none new.
+precedent: the spec's Names rule, by URL and version.
+
+Area: collection and planning — b2b4bf59 answers KernelNodes.listBaseClass Internal (WasmListBase is Array{T,1}, a
+class per element type); the dart readers at the pin (`grep -rn "listBaseClass" pkg/dart2wasm/lib` gives
+class_info.dart:126, :127, :916, types.dart:53, translator.dart:250, :2473, :2480) are each answered elsewhere in src
+(class_info.jl:604 drops the fixed order; types.jl:79 names Core.SimpleVector; translator.jl:1493 Internal). (A66E5,
+low, R2) get_list_base_array counts as a body and can never succeed: `sed -n 1497,1501p src/translator.jl` is three
+statements whose first, `self.class_info[list_base_class(self)]`, always rejects Internal, so `_rejection_only_kind`
+(one `reject!` statement only, A64E2's open half) counts it ported with a body; test/src/translator.jl:288 asserts its
+Internal. Fix: get_list_base_array answers Internal itself (its WT callers, indexList and the Function.apply
+intrinsic, reach none), so it counts rejection-only.
+
+stopgap in disguise: none new.
+precedent: Base's Array{T,1} over its Memory, compiled as it is (D3).
+
+Area: emission and diagnostics — e0cd6392: WasmArray{T} and WasmExternRef inhabited primitive types; dart:_wasm's
+array new, write and length intrinsified (intrinsics.dart:1959, :1290, :626); `===` on two 8- or 16-bit integers an
+i32.eq, sound under the put_form invariant (intrinsics.jl:359); js_string.dart's fromCharCodeArray and fromAsciiBytes.
+(A66S1, medium, D1/D5) the host import's function type is a second path: `grep -n "local declared = Type\[\|
+_make_function_type(translator, target, nothing; is_import_or_export = true" src/functions.jl` gives `176: local
+declared = Type[(m.def::Method).sig.parameters[2:end]...]` and `194: _make_function_type(...)`: the import arm builds
+its type inline with `define_function` from the method's declared signature, while the export arm still calls the port
+of dart's `_makeFunctionType` (functions.dart:890), which reads the specialization through `_get_input_types`; dart
+calls `_makeFunctionType` for both. Fix: `_get_input_types` reads the member's declared signature for an import or
+export, at its one source, and the import arm calls `_make_function_type` again. (A66S2, medium, R1/D5) fromAsciiBytes'
+body is a copy of Base's algorithm under dart's anchor: js_string.jl's loop read beside `sed -n 181,230p
+…/julia-1.12.7…/base/strings/cstring.jl` is, branch for branch, `transcode(UInt16, ::AbstractVector{UInt8})`,
+`push!` replaced by `wasm_array_write!`; dart's body at js_string.dart:151 widens bytes. The citation
+`strings/cstring.jl:181` (js_string.jl:30) lies in no pin table (JULIA_FILES holds C units only), so L213 cannot resolve
+it, and the algorithm now has two copies, Base's and this one, that drift apart when Base changes. Its `Reshaped:` note
+(js_string.jl:35) also drops dart's `_codeUnitsCache`, a `wasm:initialize-at-startup` static that globals.jl:296
+answers false for every binding. Fix: Base's transcode compiled as is, its Memory{UInt16} the i16 array the builtin
+takes; failing that, Julia's base/ files pinned as a unit of JULIA_FILES and the copy anchored there. The differential
+case (test/src/js_string.jl) covers each branch either way.
+
+stopgap in disguise: A66S2's copy, a port of Julia's answer by transcription rather than by compiling it (D3).
+precedent: dart:_wasm's WasmExternRef and wasm-bindgen's JsValue; Base's transcode.
+
+Area: enforcement and prose — d8b01dc9 records D45 and D46 the same day (D18); e292e618 pins Julia's C and C++ sources
+(JULIA_PIN 6d172b02, v1.12.7) with resolving plants; 2bad8676 adds check_quarantine_pinned to L213 with an exact debt
+list; 28ed33e6 ranks a src stack early. The plants are real (test/parity_ratchet.jl:846–869: an unlisted unpinned
+definition, an anchor with no checkout, a stale line and a gone line each refused, a front_end citation at a moved line
+refused), and the commit reports them missed with the check stubbed. (A66E1, high, R1) a precedent pins without being
+read: `grep -n 'occursin(REASON_PRECEDENT_RX' src/julia/parity.jl` gives `1318: occursin(REASON_PRECEDENT_RX, reason)
+&& return nothing`, a text match of `precedent(<eco>: <path>:<line>)` with no file opened, and the lock's own plant
+passes an invented one (`grep -n 'mod.rs:400' test/parity_ratchet.jl` gives `850: … precedent(rust:
+library/alloc/src/vec/mod.rs:400)`): any of the 400 debt lines leaves the list by writing a precedent that names no
+real line, the bespoke build D45 forbids passing as ported. Fix: a precedent names a pinned checkout (an ecosystem's
+pin table and commit) and resolves as an anchor does, or it pins nothing; a plant with a precedent at a missing file
+refused. (A66E2, medium, D20) the debt list is exact but not shrink-only: `grep -rn "quarantine_unpinned" src test
+dev/*.sh` finds only parity.jl's reader (:1299) and its messages; a stale line is refused, an added one never, so a new
+unpinned @quarantine lands by adding its line; and keys are names, not definitions (`grep -v '^#'
+dev/quarantine_unpinned.txt | grep . | sort | uniq -c | sort -rn | head -1` gives `7 julia/parity.jl
+construction_check`), so pinning one method and adding an unpinned one of the same name trades invisibly. Fix: ship and
+the gate refuse a stack whose diff adds a non-comment line to dev/quarantine_unpinned.txt, with a plant; the 1.K
+construction (the source a required argument) ends the list. (A66S3, low, R1) a path citation pins on a substring:
+`grep -n 'occursin(sym, l)' src/julia/parity.jl` gives `1342: (sym === nothing || occursin(sym, l)) && return nothing`;
+a citation without a symbol pins on any code line, and wasm_array.jl:160's `_wasm_only`, a native-raise helper dart has
+no counterpart of, passes by citing wasm_types.dart:737, the WasmArray constructor's line, not its own source. Fix: a
+path citation names its symbol and the line declares it (`_anchor_fault`'s rule), and `_wasm_only` is listed or cites
+what it ports. (A66E3, low, D17) the Julia pin's plant is vacuous off one version: `grep -n 'VERSION != v"1.12.7"'
+test/parity_ratchet.jl` gives `844: getfield(wt, :JULIA_PIN) == Base.GIT_VERSION_INFO.commit || VERSION !=
+v"1.12.7" || …`, so CI's `'1.12'` (the latest 1.12.x) and `'~1.13.0-0'` ratchet lanes pass it without comparing, and
+nothing checks JULIA_PIN against dev/PARITY_MASTER.md as :807 does LLVM_PIN. Fix: a julia whose commit is not JULIA_PIN
+fails loud unless the pin moves with it, and PARITY_MASTER's pin is checked. (A66E4, low, D40) the early class counts a
+comment: `grep -n 'git diff --quiet "origin/$MARCH...HEAD" -- src' dev/ship.sh` is the whole test, so f4cc916d
+("Comment only; no behaviour changes") ranks 20 minutes early as "port work (D40)". Fix: the class reads a change to a
+src definition's code, comments and docstrings aside. Requirements: D20 (A66E2); D17 (A66E3); D40 (A66E4); no lock fired
+inside its band.
+
+R1 and R2. R1: L213's check is a stopgap, honestly labelled, a load-time scan of prose with an exact allowlist; the
+construction is MARCH 1.K's. Its debt list is exact by name but not shrink-only (A66E2), its precedent unread (A66E1),
+its path citations substring-matched (A66S3); its four refusing plants fire. The third pin carries no anchor yet (`grep
+-rn '@quarantine "[^"]*julia/src/' src | wc -l` gives 0). e0cd6392 ports dart's runtime with one copied Base algorithm
+(A66S2) and one second path (A66S1). R2: nothing in the range counts a one-statement rejection as ported; b2b4bf59 moves
+two definitions from Unported to Internal, apart from bodies; A66E5 is a body that only rejects through its callee,
+counted ported, A64E2's second half again.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A66E1 is open on MARCH 1.K. A66E2 is open on MARCH
+1.K. A66S3 is open on MARCH 1.K. A66E3 is open on MARCH 1.K. A66S1 is open on MARCH 1.F. A66S2 is open on MARCH 1.F.
+A66E5 is open on MARCH 1.C. A66S4 is open on MARCH 1.B. A66E4 is open on MARCH 1.L. By owner: lead holds A66E1, A66E2,
+A66S3's check, A66E3, A66E4 and A66S4 (src/julia/parity.jl, test/parity_ratchet.jl, dev/ship.sh,
+src/wasm_builder/serialize/sections.jl); wt3-runtime holds A66S1 (src/functions.jl) and A66S2
+(src/runtime/js_common/js_string.jl); wt3-memory holds A66S3's `_wasm_only` (src/julia/wasm_array.jl); wt3-cgstubs2
+holds A66E5 (src/translator.jl).
