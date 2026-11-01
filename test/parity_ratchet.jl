@@ -2379,6 +2379,67 @@ function debt_lines_added(root::AbstractString, base::AbstractString)::Vector{St
     return out
 end
 
+# each debt-listed definition of a source file's text, by its debt key, to its definition as Julia's parser
+# reads it, line numbers dropped: every `@quarantine` the file writes, keyed as the load keys it
+# (_quarantine_key, over _defines' names and _identity's signature), so a change of whitespace or comments
+# alone reads the same
+function quarantine_bodies(wt::Module, file::AbstractString, text::AbstractString)::Dict{String,String}
+    local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
+    local found = Any[]
+    local walk(x) = if Meta.isexpr(x, :macrocall) && (x.args[1] === Symbol("@quarantine") ||
+                                                       (x.args[1] isa GlobalRef && x.args[1].name === Symbol("@quarantine")))
+        push!(found, (x.args[2], x.args[end-1], x.args[end]))
+    elseif x isa Expr
+        foreach(walk, x.args)
+    end
+    walk(Meta.parseall(text; filename = file))
+    local m = Module(:DebtBodies)
+    local call(f, args...) = Base.invokelatest(getfield(wt, f), args...)
+    local entries = [(file = Symbol(joinpath("/src", file)), mod = m, api = string(api),
+                      names = first(call(:_defines, def, src)), identity = call(:_identity, m, def, src), def = def)
+                     for (src, api, def) in found]
+    local count = Dict{String,Int}()
+    foreach(e -> (k = call(:_quarantine_key, e, "/src"); count[k] = get(count, k, 0) + 1), entries)
+    return Dict{String,String}(call(:_quarantine_key, e, "/src", count) => string(unlined(e.def)) for e in entries)
+end
+
+# the pin tables, whose rows are the pinned files themselves (no source pins a table of pins), an exact
+# allowlist until 1.K's construction removes the debt list (D20, the lead's ruling): a change that only adds
+# rows to one is no rewrite of it; any other change is
+const PIN_TABLES = ("julia/parity.jl JULIA_FILES", "julia/parity.jl LLVM_FILES", "julia/parity.jl DART_FILES")
+function pin_rows_added(key::AbstractString, before::AbstractString, after::AbstractString)::Bool
+    key in PIN_TABLES || return false
+    local rows(t) = (local e = Meta.parse(t); local v = Meta.isexpr(e, :const) ? e.args[1].args[2] : nothing;
+                     Meta.isexpr(v, :tuple) && all(x -> x isa String, v.args) ? String[v.args...] : nothing)
+    local b, a = rows(before), rows(after)
+    return b !== nothing && a !== nothing && issubset(b, a) && b == filter(in(Set(b)), a)
+end
+
+# the debt-listed definitions a change from `base` (its merge base with HEAD) in the repository at `root`
+# rewrites while leaving their lines in the list, a sentence each (the lead's ruling, from the monitor, R1:
+# the commit that changes a debt-listed body owns it, pins it and deletes its line)
+function debt_bodies_changed(root::AbstractString, base::AbstractString)::Vector{String}
+    success(pipeline(`git -C $root rev-parse --verify -q $base^\{commit\}`; stdout = devnull, stderr = devnull)) ||
+        return ["the change's base $base names no commit: the debt-listed bodies it changes cannot be read (CHECK_BASE)"]
+    local wt = Base.require(Base.PkgId(Base.UUID("9f3a1415-1112-405b-ae89-c61daf9872bd"), "WasmTarget"))
+    local mb = readchomp(`git -C $root merge-base $base HEAD`)
+    local has(rev, f) = success(pipeline(`git -C $root cat-file -e $rev:$f`; stderr = devnull))
+    has("HEAD", DEBT_LIST) || return String[]
+    local listed = Set(String[strip(l) for l in split(readchomp(`git -C $root show HEAD:$DEBT_LIST`), '\n') if !isempty(strip(l)) && !startswith(strip(l), "#")])
+    local out = String[]
+    for f in split(readchomp(`git -C $root diff --name-only $mb HEAD -- src`), '\n'; keepempty = false)
+        endswith(f, ".jl") && has(mb, f) && has("HEAD", f) || continue
+        local rel = f[length("src/")+1:end]
+        local before = quarantine_bodies(wt, rel, readchomp(`git -C $root show $mb:$f`))
+        local after = quarantine_bodies(wt, rel, readchomp(`git -C $root show HEAD:$f`))
+        for (k, body) in after
+            k in listed && haskey(before, k) && before[k] != body && !pin_rows_added(k, before[k], body) &&
+                push!(out, "the change rewrites the debt-listed $k and leaves its line in $DEBT_LIST: pin its source and delete the line")
+        end
+    end
+    return out
+end
+
 function debt_negatives_missed()::Vector{String}
     local out = String[]
     mktempdir() do t
@@ -2395,6 +2456,29 @@ function debt_negatives_missed()::Vector{String}
         write(f, "# the list\njulia/a.jl f\njulia/a.jl f\njulia/a.jl g(x::Int)\n"); g("commit", "-qam", "twice")
         length(debt_lines_added(t, c0)) == 1 || push!(out, "negative missed: a debt line written a second time passes")
         length(debt_lines_added(t, "nosuchref")) == 1 || push!(out, "negative missed: a base that names no commit")
+        # a debt-listed body rewritten: refused while its line stays, passed once pinned with its line deleted,
+        # and a change of whitespace alone no rewrite
+        mkpath(joinpath(t, "src", "julia"))
+        local q = joinpath(t, "src", "julia", "q.jl")
+        write(q, "@quarantine \"Julia's vectors\" Base.Vector qf(x::Vector{Int}) = x\n")
+        write(f, "# the list\njulia/q.jl qf\n"); g("add", "-A"); g("commit", "-qm", "q0")
+        local q0 = readchomp(`git -C $t rev-parse HEAD`)
+        write(q, "@quarantine \"Julia's vectors\" Base.Vector qf(x::Vector{Int})   =   x   # spaced\n"); g("commit", "-qam", "spaces")
+        isempty(debt_bodies_changed(t, q0)) || push!(out, "negative missed: a debt-listed definition re-spaced reads as rewritten")
+        write(q, "@quarantine \"Julia's vectors\" Base.Vector qf(x::Vector{Int}) = reverse(x)\n"); g("commit", "-qam", "rewrite")
+        length(debt_bodies_changed(t, q0)) == 1 || push!(out, "negative missed: a debt-listed body rewritten with its line kept passes")
+        write(q, "@quarantine \"Julia's vectors, as dart2wasm/lib/translator.dart:1 Translator\" Base.Vector qf(x::Vector{Int}) = reverse(x)\n")
+        write(f, "# the list\n"); g("commit", "-qam", "pinned")
+        isempty(debt_bodies_changed(t, q0)) || push!(out, "negative missed: a debt-listed body rewritten, pinned and its line deleted, is refused")
+        # a pin table's rows added is no rewrite; a row removed is
+        pin_rows_added("julia/parity.jl JULIA_FILES", "const JULIA_FILES::Tuple{Vararg{String}} = (\"a\", \"b\")",
+                       "const JULIA_FILES::Tuple{Vararg{String}} = (\"a\", \"b\", \"c\")") ||
+            push!(out, "negative missed: a row added to a pin table reads as a rewrite")
+        pin_rows_added("julia/parity.jl JULIA_FILES", "const JULIA_FILES::Tuple{Vararg{String}} = (\"a\", \"b\")",
+                       "const JULIA_FILES::Tuple{Vararg{String}} = (\"a\", \"c\")") &&
+            push!(out, "negative missed: a row removed from a pin table passes as an addition")
+        pin_rows_added("julia/parity.jl SRC", "const SRC = (\"a\",)", "const SRC = (\"a\", \"b\")") &&
+            push!(out, "negative missed: a definition outside the pin tables passes as a pin table's addition")
     end
     return out
 end
@@ -2831,11 +2915,11 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every record it turns to a weaker kind (:compiled to any other, :outside to :rejects; A55E1), its records read by Julia's parser so one written over several lines counts, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line); and the D45 debt list only shrinks (A66E2, dev/LEDGER.md D20): a line of dev/quarantine_unpinned.txt, comments and blank lines aside, that the file at that merge base does not hold (counted, so a line written twice adds one) is refused with no escape, so a new unpinned @quarantine pins its source and never joins the list, and a line traded for another is an addition. Behavior, run here: seven planted messages and a scratch repository for removals, fourteen planted records and messages and a scratch repository for lowerings, and a scratch repository's five debt-list changes (none, a deletion with a reworded comment, a trade, a line written twice, a base naming no commit), answer as stated (dev/CHARTER.md C10)",
+    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every record it turns to a weaker kind (:compiled to any other, :outside to :rejects; A55E1), its records read by Julia's parser so one written over several lines counts, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line); and the D45 debt list only shrinks (A66E2, dev/LEDGER.md D20): a line of dev/quarantine_unpinned.txt, comments and blank lines aside, that the file at that merge base does not hold (counted, so a line written twice adds one) is refused with no escape, so a new unpinned @quarantine pins its source and never joins the list, and a line traded for another is an addition; and a change that rewrites a debt-listed definition's body (by its debt key, its definition as Julia's parser reads it, whitespace and comments aside) while leaving its line is refused, naming it, since the commit that changes the body owns it, pins it and deletes its line (the lead's ruling, from the monitor, R1); the pin tables JULIA_FILES, LLVM_FILES and DART_FILES, whose rows are the pins themselves, an exact allowlist until 1.K, take added rows and nothing else. Behavior, run here: seven planted messages and a scratch repository for removals, fourteen planted records and messages and a scratch repository for lowerings, and a scratch repository's five debt-list changes (none, a deletion with a reworded comment, a trade, a line written twice, a base naming no commit) and three changes to a debt-listed body (re-spaced, rewritten with its line kept, rewritten and pinned with its line deleted), answer as stated (dev/CHARTER.md C10)",
         () -> begin
             local base = get(ENV, "CHECK_BASE", "origin/wt2")
             local v = vcat(removals_unnamed(ROOT, base), removals_negatives_missed(), lowerings_unnamed(ROOT, base), lowerings_negatives_missed(),
-                           debt_lines_added(ROOT, base), debt_negatives_missed())
+                           debt_lines_added(ROOT, base), debt_bodies_changed(ROOT, base), debt_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
