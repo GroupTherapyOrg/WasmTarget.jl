@@ -7488,3 +7488,138 @@ A77E3 stays on 1.L for its first half. A78E1, A78S1 and A78S2 are open on 1.A6; 
 A78E3, with A77E1, A77E2 and A77E3; wt3-parity A78E1, A78E2, A78S1 and A78S2, with A76E4, A76E5, A76E6 and A76S2;
 wt3-memory A77S1, with A75S1 and A75S2; wt3-runtime A77S2, with A76S1, A73S3 and A67S1; wt3-latency A73E1; wt3-cgstubs2
 A71S3.
+
+## 2026-11-01 — audited through 4b171979 (0f92ada6..4b171979: dev/MARCH.md the lead's alone, a progress row per landed commit, the push rules on the push, the generator loaded from its image and its verdict kept per file, the load counted by its whole tree's instructions, D14 raised to 160 s by Dale's word)
+
+The seventy-ninth audit, beside the work, covers the 7 commits of 0f92ada6..4b171979 that are not audit entries (826d8641,
+entry 78): a054922a, 909e874f, 013beff4, b67274ee, ad31d8f6, 94dbbc61 and 4b171979, read here, under Dale's R1 and R2 as
+standing sections. Every finding rests on one exact command, quoted. Standing items. No src change (`git diff --stat
+0f92ada6..4b171979 -- src | tail -1` gives nothing); no exemption lands (`git diff 0f92ada6..4b171979 -- src | grep -cE
+'^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 0), and no catch outside entry 78's prose (`git diff
+0f92ada6..4b171979 | grep -nE '^\+.*catch'` gives two lines, both of dev/AUDIT.md). The debt list reads 387, unchanged
+(`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`). Each commit names its clause (C10, C2, C10, C10, C10, C10, C10).
+Earlier findings: A78E3 is fixed by 013beff4: for every first-parent head of 0f92ada6..origin/wt2, `grep -c "	$h	"` gives 1
+in `.git/wt-landings.tsv` and 1 in `.git/wt-progress.tsv` (826d8641, a054922a, 909e874f, 013beff4, b67274ee, ad31d8f6,
+94dbbc61, 4b171979, 19efb42b), b67274ee and ad31d8f6, one ship, each with a row of its own (23:09:28Z, 23:12:44Z). A77E3's
+band half is fixed by 013beff4 (dev/ship.sh:52 reads `git show "origin/$MARCH:dev/check.sh"`); its port-class half stays
+open (dev/ship.sh:188 runs `bash dev/src_progress.sh code` in the scratch at the lane's HEAD, before the rebase). A77E1 is
+narrowed, not fixed: 013beff4 sets WT_SHIP_RULES on the pushes alone, but the hook still admits by that variable, `--no-verify`
+still skips it, and the installed copy is still compared with nothing (`grep -n 'hooks/pre-push' dev/ship.sh` gives only
+the comments at `17:` and `214:`). A77E2 stands (`ps aux | grep -c '[b]ash dev/autoship.sh'` gives 8). A78E1 now reaches a
+second cache, L210's (below). A78E2, A78S1, A78S2, A77S1, A77S2, A75S1, A71S3, A73S3, A73E1, A76E4, A76S1, A68E3, A76S2,
+A76E5, A76E6, A75S2, A71E2, A69E1, A68E2, A68S4, A72E1, A67E1 and A67S1, carried, not re-read. Findings A79E1 to A79E4 and
+A79S1 to A79S5.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — no change to the collection or the plan in src. 909e874f (test/src/dispatch_table.jl)
+says why no admitted program collects a dynamic call shape; its citation holds: `grep -n 'verify_trim' src/julia/subset.jl`
+gives `64:` (the quarantined `_verify_trim` over Compiler/src/verifytrim.jl) and `337:` (check_subset calling it).
+
+Area: emission and diagnostics — no change to emission or to a diagnostic in src.
+
+Area: enforcement and prose — a054922a: ship.sh refuses a lane, by worktree name, whose commits since the merge base touch
+dev/MARCH.md. (A79S3, low, D6) the owner is a name, `case "$(basename "$lane")" in wt3-lead*) ;;` (dev/ship.sh:40-41), so
+any worktree named wt3-lead<anything> passes, and the comment does not mark it a stopgap; the diff it reads is
+`merge-base..HEAD` (:42), where the landing carries only the oldest SHIP_MAX commits (`start`, :75), so a seventh commit
+touching the file refuses the six before it. Fix: the comment marks the STOPGAP and its end (a CODEOWNERS rule on origin's
+wt2 ruleset); the diff read over `$base..$start`. Owner: lead (dev/ship.sh). 013beff4: the --exec writes
+`$common/wt-ship/<lane>.landed.sh` and runs it after each push, writing that head's landings and progress rows, each once
+per head, from the ratchet output its own check just wrote (dev/check.sh:117 writes .wtd/ratchet.out on every path that
+reaches a push). To the lead's question: one row per landed head, as the table above reads; a head whose ratchet output has
+no `· src:` line gets none, said on the ship's output alone (dev/ship.sh:119). (A79S2, low, D9) the retry cap reads the band
+as `band + 0` (dev/ship.sh:52-53): when `git show origin/$MARCH:dev/check.sh` fails, the band is empty, reads 0, and every
+D14 red in the last hour counts, a plausible default past a gap. Fix: an empty band refuses, naming the read that failed.
+Owner: lead (dev/ship.sh).
+
+b67274ee and ad31d8f6: dev/SkeletonImage includes dev/skeleton.jl in a package whose precompile workload runs the reader
+and the generator's checks (dev/SkeletonImage/src/SkeletonImage.jl:11-18); L210 loads it through LOAD_PATH and keeps its
+verdict in `.git/wt-skeleton-faults/` under dev/cache_key.sh's key over SKELETON_INPUTS (test/parity_ratchet.jl:469), each
+in-scope file's diff under that key with its src file's content and the anchors touching it. (A79E1, high, D9, D5, R1) the
+image keeps the tree it was built from. dev/skeleton.jl fills its tables lazily into module constants (`isempty(KERNEL) ||
+return KERNEL`, :1000, from src/julia/kernel.jl; DART_BASE, :637, from src/julia/parity.jl; OUT_DEFINITIONS and OUT_TYPES,
+:2307-2308, from dev/skeleton_scope.toml; KERNEL_USED, :878; SDK, :29) and evaluates `snake` from src/julia/parity.jl when it
+loads (:629); the workload fills every table at precompile, the image serializes them, and none of those files is an
+include of the image, so Base's staleness rule (loading.jl:4049) keeps it when they change. The image wt3-parity's check
+built at 15:09 holds them: `LC_ALL=C grep -a -o '<s>' .worktrees/wt3-parity/.wtd/depot/compiled/v1.12/SkeletonImage/IVLXl_wkdCF.dylib
+| wc -l` gives 5 for `deferred loading is out of scope` and 1 for `NirWorld`, where `grep -o` of the same strings in
+dev/skeleton.jl gives 0 and 0: dev/skeleton_scope.toml's reasons and a KERNEL_TYPES value, baked. So after a commit that
+edits only kernel.jl, parity.jl or the scope, every later load reads the old table and the old naming rule, and a row used
+when the image was built stays in KERNEL_USED, so the stale-row fault (:1667) misses it silently. The precedent the
+package names, PrecompileTools' @compile_workload, keeps compiled code, never state a later process must recompute. Fix:
+the image keeps no tree state: SkeletonImage's `__init__` empties every lazily filled table and evaluates `snake` from the
+loading tree, and `include_dependency` names src/julia/kernel.jl, src/julia/parity.jl and dev/skeleton_scope.toml, so
+stale_cachefile tracks what the include reads; plant: an image built, a KERNEL_TYPES row and a scope line then edited, the
+next load's verdict reading both. Owner: wt3-parity (dev/SkeletonImage, dev/skeleton.jl). (A79E2, medium, D5, D9) the
+verdict's key leaves out files every verdict reads: SKELETON_INPUTS (test/parity_ratchet.jl:469) names dev/skeleton.jl,
+dev/skeleton_scope.toml, dev/SkeletonImage, test/parity_ratchet.jl and dev/cache_key.sh, and the per-file key adds only the
+file and its anchors, while generate() reads KERNEL_TYPES for every type it annotates (dev/skeleton.jl:875-877, src/julia/
+kernel.jl) and names every definition by parity.jl's snake. A KERNEL_TYPES row moved from `planned:` to a type changes the
+text written for each file naming it while every key stays, so a hit returns the old verdict, even with A79E1 fixed.
+kernel.jl is no quiet file (`git log --oneline -5 -- src/julia/kernel.jl` gives five commits of 2026-10-28 and 29). It is
+A78S2's hand-listed inputs, now at a lock, and dev/cache_key.sh's own header says each cache passes src/ among its
+pathspecs; the plants edit only the generator and the lock. The key also inherits A78E1 (a tracked file missing reads exit 0
+with a wrong key, which `readchomp` accepts). Fix: the key over every file the generator opens (A78S2's fix: dev/skeleton.jl
+records each path it reads), until then src/julia/kernel.jl, src/julia/parity.jl and dev/PARITY_MASTER.md added to
+SKELETON_INPUTS; plant: an edit only to KERNEL_TYPES gives a new shared key. Owner: wt3-parity (test/parity_ratchet.jl).
+
+94dbbc61: dev/tree_instructions.jl runs the load and reads every process of its tree each 2 ms (proc_pid_rusage's
+ri_instructions, the 30th field after ri_uuid; `info[2 + 29 + 1]` reads it, :25), and check.sh judges the load at
+G/RATE_SRC. To the lead's question: it skews with core type, beyond its stated bound, both ways, and the judged term has no
+bound. (A79E3, medium, D17, D9) the header says an efficiency core reads "up to about a fifth fewer" (:16-17), and the plant's
+band is 30% (:66-68). Measured: `cat .git/wt-ship-failed/wt3-latency/tree_plant.out` (15:06) gives `the plant reads 9.64 G at
+default QoS and 7.39 at background` (23% fewer); `cat .git/wt-ship-failed/wt3-codegen-b/tree_plant.out` (15:26:51) gives `the
+tree at background QoS read 5.56 G, at default 9.71` (43% fewer), and `tail -6 .git/wt-ship-failures.tsv` shows that plant
+refusing 7ae93d77 at 23:26:51Z, a red for where the scheduler put a process, not for the change; 94dbbc61's own load read
+177.8 G at default and 191.3 G at background (8% more). dev/check.sh:205 judges the load as `$1 / r` alone, dropping the
+CPU-s/2 floor that ps_of (:203) keeps for the ratchet and every shard, so a load placed on efficiency cores can read some 40%
+low (33 s as about 19) and be admitted; and :190-191 still says the instructions are what "neither the core it ran on nor
+another job's load moves". Fix: the load judged as ps_of judges a stage, the larger of G/RATE_SRC and half its CPU-s
+(load.time's CPU-s hold the reaped tree); the plant keeps its counting claim (`normal > alone + 1`) and prints the QoS
+comparison unjudged, or a band from a measured spread; the header's bound and check.sh:190-191 made true. Owner: wt3-latency
+(dev/tree_instructions.jl), lead (dev/check.sh:205). (A79S1, low, D17) the load is judged at the shards' rate: 94dbbc61's
+measure gives 177.8 G in 28.7 + 1.5 CPU-s, 5.9 G a CPU-s, so 33 s judged stand for about 30 of a performance core. Fix: the
+load's own measured rate, or the 10% stated as its band. Owner: wt3-latency. (A79S4, low, D7, R1) the tree count names no
+precedent for polling a process tree's counters; the closest production ones are psutil's `Process.children(recursive=True)`
+sampling, the same walk, and perf stat's inherited counters, what it stands in for on macOS. Fix: the header names them.
+Owner: wt3-latency.
+
+4b171979: D14 red past 160 s. To the lead's question: Dale's words stand in the trailer (`Charter-change: C10 — Dale
+2026-11-01: "Raise to 160 until the cuts"`), the ledger's D14 row and check.sh's comment, as his answer read less the option's
+"(Recommended)" tag; the steps to 140 s and 120 s are the lead's reading of "until the cuts", not his words. (A79E4, medium,
+D14, D5) the exit is stated three ways. dev/check.sh:212-215: 160 until the shards' first-compile cut and the ratchet's L210
+cache land, then 140 until SHARDS is four, then 120. dev/CHARTER.md:138: "past 160 s until the shards' first compile and
+the ratchet are cut, then 140 s", with no exit from 140 (the commit replaced the old "past 140 s until each shard's first
+compile is cut"). dev/LEDGER.md:37: 140 "until the first-compile cut lands", 160 "until the shard and ratchet cuts land",
+so by the ledger the first-compile cut ends both raises, back to 120, and by check.sh it reaches only 140. And the L210
+cache named as pending had already landed (`git merge-base --is-ancestor ad31d8f6 4b171979 && echo ancestor` gives
+`ancestor`), so "the ratchet cut" is either met or undefined. Fix: one schedule, check.sh's, written alike in C10 and the
+ledger, its L210 condition marked met at ad31d8f6 or the further ratchet cut named; C10's exit from 140 restored. Owner: lead.
+
+stopgap in disguise: A79S3, a refusal by worktree name not marked a stopgap.
+
+precedent: Base.stale_cachefile (loading.jl:4049, its includes check at :4190 resolving the image per tree) and
+PrecompileTools' @compile_workload for SkeletonImage, the state the workload leaves kept (A79E1); stale_cachefile for the
+verdict key, its include list again a hand list (A79E2); /usr/bin/time -l's ri_instructions for the tree count, the
+polling walk unnamed (A79S4); CODEOWNERS for dev/MARCH.md's owner, by name (A79S3).
+
+Requirements: D5, D6, D7, D9, D14, D17; one check fired outside the change's doing (A79E3's plant on 7ae93d77).
+
+R1 and R2. R1: the range ports no src definition. Each citation is read: loading.jl:4049 and :4190 resolve; verifytrim's
+use in check_subset resolves (subset.jl:64, :337); SkeletonImage follows PrecompileTools without its rule on state (A79E1);
+tree_instructions names no precedent (A79S4). R2: the latest rows of `.git/wt-progress.tsv` read `src: 3084 of 3404
+anchored dart definitions ported` for b67274ee, ad31d8f6, 94dbbc61 and 4b171979, unchanged, as no commit of the range
+touches src; 19efb42b, past the range, reads 3086. No stub is called complete here; A79E1 and A79E2 put at risk the lock
+(L210) that keeps a stub regenerated from the pin, and so R2's count of what the generator writes.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A78E3 leaves 1.L; A77E3 stays on 1.L for its port-class
+half; A77E1 stays, narrowed. Open, their rows the lead's to write, since a054922a refuses a lane's edit of dev/MARCH.md:
+A79E1 and A79E2 for row 1.A6; A79E3, A79E4, A79S1, A79S2, A79S3, A79S4 and A79S5 for row 1.L. (A79S5, low, D5) L154 holds an
+audit entry red until each finding its Resolution leaves open sits in the dev/MARCH.md row it names (`grep -n 'which does
+not hold it' test/parity_ratchet.jl` gives `1568:`), which a054922a forbids a lane to write: this entry's first check went red
+on L154 with 8 such faults (`.git/wt-ship-failed/wt3-audit79/ratchet.out`), so an audit from a lane must name its rows in
+words L154 does not read. Fix: L154 reads the lead's queue of rows to add, or the lead lands each audit's row with the
+entry. Owner: lead (dev/ship.sh), wt3-parity (test/parity_ratchet.jl). By owner: lead A79E3 (check.sh:205), A79E4, A79S2,
+A79S3 and A79S5, with A77E1, A77E2 and A77E3; wt3-parity A79E1 and A79E2, with
+A78E1, A78E2, A78S1, A78S2, A76E4, A76E5, A76E6 and A76S2; wt3-latency A79E3 (tree_instructions.jl), A79S1 and A79S4, with
+A73E1; wt3-memory A77S1, with A75S1 and A75S2; wt3-runtime A77S2, with A76S1, A73S3 and A67S1; wt3-cgstubs2 A71S3.
