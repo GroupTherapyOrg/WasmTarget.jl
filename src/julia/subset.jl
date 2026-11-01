@@ -196,6 +196,7 @@ checked to name one method when the package loads (check_runtime_entry_points).
     ((), :throw_invalid_memory_size, (), :memorynew),
     ((), :throw_out_of_memory, (), :memorynew),
     ((), :throw_atomic_error, (String,), :atomic_order),
+    ((:Runtime,), :_TypeError__throw_as_check_error, (Any, Type), :typeassert),
 )
 
 # a statement operand's value: a GlobalRef's binding (nothing when unbound) or the operand itself, as
@@ -260,6 +261,7 @@ end
                                               _calls_builtin(st, (Core.memoryrefget,)),
     :memorynew => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.memorynew,)),
     :atomic_order => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.isdefined,)) && length(st.args) == 4,
+    :typeassert => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.typeassert,)),
 )
 
 # whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts, each body read

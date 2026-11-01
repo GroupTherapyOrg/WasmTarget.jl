@@ -78,3 +78,21 @@ st(x::Int) = (W.Runtime.StackTrace_current(); x)
 end
 
 end
+
+module RuntimeAsCheck
+using Test, WasmTarget
+const W = WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+# a typeassert Julia keeps: the value's class only run time knows, an Int or a String
+@noinline pick(x::Int)::Union{Int,String} = x > 0 ? x : "neg"
+checked(x::Int) = typeassert(pick(x), Int) + 1
+@testset "errors_patch.dart: _throwAsCheckError throws Julia's TypeError where a typeassert fails" begin
+    local world = W.build_nir(W.check_subset(checked, (Int,), "runtime"), "runtime")
+    @test :_TypeError__throw_as_check_error in Set(b.ci.def.def.name for b in world)
+    @test (try; checked(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Int, "neg")
+    local bytes = W.compile(checked, (Int,))
+    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("checked$(a)", bytes, a, Main.WTRunner.native_answer(checked, a)) for a in [(3,), (-1,)]])
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
+end

@@ -23,3 +23,15 @@ the stack trace StackTrace.current's.
 """
 @parity "sdk/lib/_internal/wasm/common/errors_patch.dart:19 Error._throwWithCurrentStackTrace" @noinline Error__throw_with_current_stack_trace(@nospecialize(object::Any))::Union{} =
     Error__throw(object, StackTrace_current())
+
+"""
+Throws the error of a failed cast of `operand` to `type` (dart's `@pragma("wasm:entry-point") static
+Never _throwAsCheckError(Object? operand, Type? type)`), the call dart2wasm's as checker makes where
+its type test fails. dart builds a `_TypeError` whose message names both; Julia's failed typeassert
+raises Julia's own error, `TypeError(:typeassert, "", expected, got)`, the struct jl_type_error_rt
+builds (julia/src/rtutils.c:113 jl_type_error_rt, `got` the value itself, the context empty), which is
+thrown as dart throws its error, by Error._throw with StackTrace.current. dart's Object? is Julia's Any and its Type? Julia's
+Type, never `nothing` (the as checker always passes the tested type's constant); never inlined, an entry point the closed world keeps wherever a typeassert is demanded (RUNTIME_ENTRY_POINTS).
+"""
+@parity "sdk/lib/_internal/wasm/common/errors_patch.dart:76 _TypeError._throwAsCheckError" @noinline _TypeError__throw_as_check_error(@nospecialize(operand::Any), @nospecialize(type::Type))::Union{} =
+    Error__throw(TypeError(:typeassert, "", type, operand), StackTrace_current())

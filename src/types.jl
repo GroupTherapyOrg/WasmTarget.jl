@@ -756,9 +756,11 @@ end
     AsCheckerCodeGenerator(Val(:_), translator, signature, tested_against_type, operand_is_nullable, check_arguments, argument_count)
 
 """
-The as check's code: the is check inlined, and on its failure dart's runtime error, thrown with or
-without details. Julia's failure is a `TypeError` from `typeassert`, whose throw has no counterpart
-in the runtime yet, so generating the failure path rejects, located.
+The as check's code: the is check inlined, and on its failure dart's runtime error: the operand and
+the tested type's constant passed to the runtime's _throwAsCheckError, which throws Julia's
+TypeError (src/runtime/common/errors_patch.jl). A Julia class has no type arguments to check, and
+dart's minified build, which throws without details, has no Julia counterpart; the check passed, the
+operand is returned at the checked type.
 """
 @parity "dart2wasm/lib/types.dart:1094 AsCheckerCodeGenerator.generate" function generate(self::AsCheckerCodeGenerator, b::WasmBuilder.InstructionsBuilder,
         param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
@@ -777,7 +779,21 @@ in the runtime yet, so generating the failure path rejects, located.
     MacroAssembler_invoke(b, generate_is_checker(is_checkers_for_module(self.translator.types[], b.module_builder),
         self.tested_against_type, self.check_arguments, self.operand_is_nullable); force_inline = force_inline)
     WasmBuilder.br_if(b, as_check_block)
-    reject!(Unported("sdk/lib/_internal/wasm/common/errors_patch.dart:76 _TypeError._throwAsCheckError"), "$at: the TypeError a failed check throws, the runtime's")
+    self.check_arguments && reject!(Internal("$at: a Julia class has no type arguments to check"), at)
+    WasmBuilder.local_get(b, b.locals[1])
+    instantiate_constant(self.translator.constants[], b, NirConst(Core.Const(self.tested_against_type)), non_nullable_type_type(self.translator.types[]))
+    # KernelNodes.throwAsCheckError: the runtime's method in the closed world, kept wherever a
+    # typeassert is (RUNTIME_ENTRY_POINTS)
+    call_reference(self.translator, nir_runtime_member(self.translator.component, Runtime._TypeError__throw_as_check_error, at), b)
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)   # asCheckBlock
+    WasmBuilder.local_get(b, b.locals[1])
+    # the checked value unboxed where its class is a primitive one (convertType's boxed class, the tested type)
+    local tested = self.tested_against_type
+    convert_type(self.translator, b, self.signature.inputs[1], self.signature.outputs[1]; boxed_class = tested isa DataType && isconcretetype(tested) ? tested : nothing)
+    WasmBuilder.return_(b)
+    WasmBuilder.var"end"(b)
+    return nothing
 end
 
 @parity "dart2wasm/lib/types.dart:1195 RuntimeTypeInformation.noSubstitutionIndex" RuntimeTypeInformation_no_substitution_index()::Int = 0
