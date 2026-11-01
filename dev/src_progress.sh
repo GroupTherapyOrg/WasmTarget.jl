@@ -27,16 +27,49 @@ set -euo pipefail
 NOTE_AFTER=5
 REBUILD_START=e2371eca08605231256dd5f3ee97609d6fc019a4   # chore(land): the march branch is wt2
 cd "$(git rev-parse --show-toplevel)"
+# the kinds (rejection_only_kinds, then Skeleton.dart_kinds) cost Julia's inference over every @parity
+# method, about 15 CPU-s: kept per src tree in the common dir, keyed by the content of src/, the dart
+# reader and its scope, and the julia running (JULIA_PIN and the dart pin live in src/), recomputed when
+# the key changes; the line says whether it read the cache (the lead's ruling, the ratchet one port from
+# binding the check's path)
+kinds_cache() {
+    local dir key
+    dir="$(git rev-parse --path-format=absolute --git-common-dir)/wt-rejection-kinds"; mkdir -p "$dir"
+    key=$( { git ls-files -co --exclude-standard -z src dev/skeleton.jl dev/skeleton_scope.toml | sort -z | xargs -0 cat; julia --version; } |
+           shasum -a 256 | cut -c1-40)
+    echo "$dir/$key.tsv"
+}
 # a port is a change to src/'s code: its added and removed lines, the diff's file headers aside, less the
 # blank ones and Julia's `#` comments (f4cc916d, comment only, ranked early as port work: A66E4)
 if [ "${1:-}" = kinds ]; then
     . dev/depot.sh; wt_depot_export "$PWD"
+    WT_KINDS_CACHE=$(kinds_cache); export WT_KINDS_CACHE
     exec julia --project=. --startup-file=no -e 'using WasmTarget
         include("dev/skeleton.jl")
         S = Skeleton.read_scope()
         counted = Set(Skeleton.anchor(f, d) for f in Skeleton.scope() for d in S.decls[f] if Skeleton.counted(d))
         es = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]
-        R, L = Skeleton.dart_kinds(WasmTarget.rejection_only_kinds(es), Skeleton.anchored_decls(S))
+            cache = ENV["WT_KINDS_CACHE"]
+            if isfile(cache)
+                R = Dict{String,Symbol}(); L = Dict{String,String}()
+                for l in eachline(cache)
+                    f = split(l, '"'"'\t'"'"')
+                    R[f[1]] = Symbol(f[2]); length(f) > 2 && (L[f[1]] = f[3])
+                end
+                hit = "hit"
+            else
+                R, L = Skeleton.dart_kinds(WasmTarget.rejection_only_kinds([x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]),
+                                           Skeleton.anchored_decls(S))
+                tmp = cache * ".$(getpid())"
+                open(tmp, "w") do io
+                    for (a, k) in R; println(io, a, '"'"'\t'"'"', k, haskey(L, a) ? "\t" * L[a] : ""); end
+                end
+                mv(tmp, cache; force = true)
+                # the newest sixteen kept
+                old = sort!(filter(f -> endswith(f, ".tsv"), readdir(dirname(cache); join = true)); by = mtime, rev = true)
+                foreach(rm, old[17:end])
+                hit = "miss"
+            end
         present = Set(x.anchor for x in es)
         stubbed = Set(x.anchor for x in es if x.anchor in counted && !x.ported)
         for a in sort!(collect(counted))
@@ -69,6 +102,7 @@ else
         # the anchored count is the generator's in-scope total, each definition dev/skeleton.jl counts
         # (an enum's values and a field's accessors are parts of their definition, not more); a ported
         # one is a counted anchor src fills, no @unported entry left at it
+        WT_KINDS_CACHE=$(kinds_cache); export WT_KINDS_CACHE
         counts=$(julia --project=. --startup-file=no -e 'using WasmTarget
             include("dev/skeleton.jl")
             S = Skeleton.read_scope()
@@ -81,16 +115,35 @@ else
             # (ruling A55S12); Unported (a dart definition) and Unquarantined (a Julia-only one,
             # src/julia/reject.jl): gaps; DartThrow: dart'"'"'s own body throws, a body; DartAbstract: dart
             # declares it abstract, no body to port, never counted
-            R, _ = Skeleton.dart_kinds(WasmTarget.rejection_only_kinds([x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]),
-                                       Skeleton.anchored_decls(S))
+            cache = ENV["WT_KINDS_CACHE"]
+            if isfile(cache)
+                R = Dict{String,Symbol}(); L = Dict{String,String}()
+                for l in eachline(cache)
+                    f = split(l, '"'"'\t'"'"')
+                    R[f[1]] = Symbol(f[2]); length(f) > 2 && (L[f[1]] = f[3])
+                end
+                hit = "hit"
+            else
+                R, L = Skeleton.dart_kinds(WasmTarget.rejection_only_kinds([x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]),
+                                           Skeleton.anchored_decls(S))
+                tmp = cache * ".$(getpid())"
+                open(tmp, "w") do io
+                    for (a, k) in R; println(io, a, '"'"'\t'"'"', k, haskey(L, a) ? "\t" * L[a] : ""); end
+                end
+                mv(tmp, cache; force = true)
+                # the newest sixteen kept
+                old = sort!(filter(f -> endswith(f, ".tsv"), readdir(dirname(cache); join = true)); by = mtime, rev = true)
+                foreach(rm, old[17:end])
+                hit = "miss"
+            end
             k(a) = get(R, a, :body)
             replaced = count(a -> k(a) === :Internal, ported)
             gaps = count(a -> k(a) in (:Unported, :Unquarantined), ported)
             abstract = count(a -> k(a) === :DartAbstract, ported)
             faithful = count(a -> k(a) === :DartThrow, ported)
-            println(length(counted), " ", length(ported), " ", replaced, " ", gaps, " ", abstract, " ", faithful)') ||
+            println(length(counted), " ", length(ported), " ", replaced, " ", gaps, " ", abstract, " ", faithful, " ", hit)') ||
             { echo "src: WasmTarget did not load, so its @parity registry gives no count"; exit 1; }
-        read -r anchored ported replaced gaps abstract faithful <<< "$counts"
+        read -r anchored ported replaced gaps abstract faithful kinds_read <<< "$counts"
         # the runtime's gaps: the Unported rejections anchored in the wasm runtime library of the same dart-lang/sdk
         # pin (sdk/lib/_internal/wasm/, A52S1), each a call a module would make into a runtime src/runtime/ has not
         # ported yet; counted as the sites rejecting and the distinct runtime definitions they name (the measure
@@ -114,6 +167,7 @@ line="$line; $since landing(s) since src/ last changed"
 # the line sums to the anchored total by itself: an @unported stub (anchored, not ported) is a gap too
 stubs=$(( anchored - ported ))
 [ -n "${replaced:-}" ] && line="$line; not counted ported: $replaced that never return, Julia's inference finds, rejecting Internal (Julia's answer replacing dart's construct, each to triage), $(( gaps + stubs )) gap(s) still to fill ($gaps rejecting Unported or Unquarantined, $stubs an @unported stub) and ${abstract:-0} in place of a dart abstract declaration (no body to port); $body + $replaced + $(( gaps + stubs )) + ${abstract:-0} = $(( body + replaced + gaps + stubs + ${abstract:-0} )) of $anchored"
+[ -n "${kinds_read:-}" ] && line="$line; the kinds cache: $kinds_read"
 [ -n "${rt_sites:-}" ] && line="$line; the runtime library: $rt_sites rejecting site(s) name $rt_defs definition(s) of sdk/lib/_internal/wasm/ still to port"
 [ $started -eq 1 ] || line="$line (the rebuild's src/ not started: WT1 holds src/ until 1.A2c)"
 echo "$line"
