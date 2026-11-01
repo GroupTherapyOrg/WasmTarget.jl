@@ -4,7 +4,7 @@
 # file quarantines more than one method of that name, its file and the method's signature as written,
 # so each line names one definition. The list is
 # exact: a definition unpinned and unlisted refuses the load, and so does a line naming a definition now
-# pinned or gone, so it only shrinks (D20). A definition is pinned when its reason carries an anchor
+# pinned or gone, and the ratchet's L227 refuses a change that adds a line, so it only shrinks (D20). A definition is pinned when its reason carries an anchor
 # that resolves at its pin (a dart file, an LLVM unit, a unit of JULIA_FILES, a runtime file) or a
 # `precedent(<ecosystem>: <file>:<line> <symbol>)` resolving the same way in its ecosystem's pinned checkout
 # (dart, llvm or julia; any other ecosystem has no pin table and is refused); its owner pins it and deletes its line in the same commit.

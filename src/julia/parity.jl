@@ -1320,7 +1320,8 @@ end
 # The definitions that do not yet are an exact debt list, dev/quarantine_unpinned.txt, one line per
 # definition, `<its file under src> <its names>` (`<its file> <its signature>` where its name has
 # several methods in the file): a definition unpinned and unlisted refuses the load,
-# and so does a line naming a definition now pinned or gone, so the list only shrinks (D20).
+# and so does a line naming a definition now pinned or gone; the ratchet's L227 refuses a change that
+# adds a line, so the list only shrinks (D20).
 
 # the anchors a reason cites, each form of the pins'
 @quarantine "an anchor in prose is found by its pins' forms, read with a regex" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.[\w$]+)?|(?:llvm|julia)/[\w/]+\.(?:cpp|c|h):[1-9]\d* [A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)"

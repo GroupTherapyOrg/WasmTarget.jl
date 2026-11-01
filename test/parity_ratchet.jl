@@ -2188,6 +2188,49 @@ function removals_negatives_missed()::Vector{String}
     return out
 end
 
+# ---- L227, its third part: the D45 debt list only shrinks (A66E2, dev/LEDGER.md D20) ---------------------
+# dev/quarantine_unpinned.txt names each @quarantine whose reason pins no source; the load refuses a line
+# naming a definition pinned or gone, and here a change from `base` (its merge base with HEAD) in the
+# repository at `root` that adds a line, comments and blank lines aside, is refused outright: a new
+# unpinned definition pins its source, never joins the list
+const DEBT_LIST = "dev/quarantine_unpinned.txt"
+function debt_lines_added(root::AbstractString, base::AbstractString)::Vector{String}
+    local has(rev) = success(pipeline(`git -C $root cat-file -e $rev:$DEBT_LIST`; stderr = devnull))
+    success(pipeline(`git -C $root rev-parse --verify -q $base^\{commit\}`; stdout = devnull, stderr = devnull)) ||
+        return ["the change's base $base names no commit: $DEBT_LIST's additions cannot be read (CHECK_BASE)"]
+    local mb = readchomp(`git -C $root merge-base $base HEAD`)
+    local lines(rev) = has(rev) ? String[strip(l) for l in split(readchomp(`git -C $root show $rev:$DEBT_LIST`), '\n')
+                                          if !isempty(strip(l)) && !startswith(strip(l), "#")] : String[]
+    local before = Dict{String,Int}()
+    foreach(l -> before[l] = get(before, l, 0) + 1, lines(mb))
+    local out = String[]
+    for l in lines("HEAD")
+        get(before, l, 0) > 0 ? (before[l] -= 1) :
+            push!(out, "the change adds `$l` to $DEBT_LIST, which only shrinks: pin its source (a resolving anchor or precedent) instead")
+    end
+    return out
+end
+
+function debt_negatives_missed()::Vector{String}
+    local out = String[]
+    mktempdir() do t
+        local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
+        g("init", "-q"); mkpath(joinpath(t, "dev"))
+        local f = joinpath(t, DEBT_LIST)
+        write(f, "# the list\njulia/a.jl f\njulia/a.jl g(x::Int)\n"); g("add", "dev"); g("commit", "-qm", "c0")
+        local c0 = readchomp(`git -C $t rev-parse HEAD`)
+        isempty(debt_lines_added(t, "HEAD")) || push!(out, "negative missed: a change that leaves the debt list alone")
+        write(f, "# the list, reworded\n\njulia/a.jl g(x::Int)\n"); g("commit", "-qam", "shrink")
+        isempty(debt_lines_added(t, c0)) || push!(out, "negative missed: a debt line deleted and a comment reworded")
+        write(f, "# the list\njulia/a.jl g(x::Int)\njulia/a.jl g(x::String)\n"); g("commit", "-qam", "trade")
+        length(debt_lines_added(t, c0)) == 1 || push!(out, "negative missed: a debt line added as another is deleted passes")
+        write(f, "# the list\njulia/a.jl f\njulia/a.jl f\njulia/a.jl g(x::Int)\n"); g("commit", "-qam", "twice")
+        length(debt_lines_added(t, c0)) == 1 || push!(out, "negative missed: a debt line written a second time passes")
+        length(debt_lines_added(t, "nosuchref")) == 1 || push!(out, "negative missed: a base that names no commit")
+    end
+    return out
+end
+
 # ---- L227, its second half: a dart record is lowered only by name (A51E4, A53E2; dev/CHARTER.md C10) --
 # test/src/dart_tests.jl's records: each case's kind, the last element of its record, read by Julia's own parser
 # from the `const DART_CASES = Dict(...)` expression, so a record written over several lines is read as one
@@ -2620,10 +2663,11 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every record it turns to a weaker kind (:compiled to any other, :outside to :rejects; A55E1), its records read by Julia's parser so one written over several lines counts, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line). Behavior, run here: seven planted messages and a scratch repository for removals, fourteen planted records and messages and a scratch repository for lowerings, answer as stated (dev/CHARTER.md C10)",
+    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every record it turns to a weaker kind (:compiled to any other, :outside to :rejects; A55E1), its records read by Julia's parser so one written over several lines counts, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line); and the D45 debt list only shrinks (A66E2, dev/LEDGER.md D20): a line of dev/quarantine_unpinned.txt, comments and blank lines aside, that the file at that merge base does not hold (counted, so a line written twice adds one) is refused with no escape, so a new unpinned @quarantine pins its source and never joins the list, and a line traded for another is an addition. Behavior, run here: seven planted messages and a scratch repository for removals, fourteen planted records and messages and a scratch repository for lowerings, and a scratch repository's five debt-list changes (none, a deletion with a reworded comment, a trade, a line written twice, a base naming no commit), answer as stated (dev/CHARTER.md C10)",
         () -> begin
             local base = get(ENV, "CHECK_BASE", "origin/wt2")
-            local v = vcat(removals_unnamed(ROOT, base), removals_negatives_missed(), lowerings_unnamed(ROOT, base), lowerings_negatives_missed())
+            local v = vcat(removals_unnamed(ROOT, base), removals_negatives_missed(), lowerings_unnamed(ROOT, base), lowerings_negatives_missed(),
+                           debt_lines_added(ROOT, base), debt_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
