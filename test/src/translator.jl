@@ -704,12 +704,21 @@ end
 @noinline put_value!(c::Cell, v::Int64) = (c.v = v; nothing)
 @noinline get_value(c::Cell) = c.v
 boxed_is_int(n::Int64) = (c = Cell(nothing); put_value!(c, n); get_value(c) isa Int64)
+# the box read back: an isa test narrows the Any to Int64 (Julia's PiNode), and the box is unboxed
+unboxed_plus_one(n::Int64) = (c = Cell(nothing); put_value!(c, n); v = get_value(c); v isa Int64 ? v + 1 : Int64(0))
+# a UInt8's box holds it packed (i8): read back zero-extended, so 200 stays 200, not -56
+@noinline put_byte!(c::Cell, v::UInt8) = (c.v = v; nothing)
+unboxed_byte_plus_one(n::Int64) = (c = Cell(nothing); put_byte!(c, n % UInt8); v = get_value(c); v isa UInt8 ? Int64(v) + 1 : Int64(0))
 end
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
 
-@testset "translator.dart: convertType boxes a value as its Julia class" begin
-    local f = BoxCases.boxed_is_int
-    local results = Main.WTRunner.run_cases(first(Main.WTRunner.answer_cases("boxed_is_int", WasmTarget.compile, f, (Int64(5),))))
+@testset "translator.dart: convertType boxes a value as its Julia class and unboxes it as the narrowed one" begin
+    local cases = Main.WTRunner.RunCase[]
+    for f in (BoxCases.boxed_is_int, BoxCases.unboxed_plus_one)
+        append!(cases, first(Main.WTRunner.answer_cases(string(nameof(f)), WasmTarget.compile, f, (Int64(5),))))
+    end
+    append!(cases, first(Main.WTRunner.answer_cases("unboxed_byte_plus_one", WasmTarget.compile, BoxCases.unboxed_byte_plus_one, (Int64(200),))))
+    local results = Main.WTRunner.run_cases(cases)
     for r in results
         @test r.ok || (println(r); false)
     end

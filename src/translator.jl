@@ -1093,7 +1093,8 @@ primitive class's struct holds its class id and its value (class_info.jl), alloc
 allocates its boxed int. An unbox reads the value field of that class's box, cast to it where the
 reference is wider, as dart's does, the class the value's (a PiNode's narrowed type,
 visitAsExpression). A box or an unbox with no class given rejects, located, as a conversion between
-two non-reference types does. Julia's `===` compares two Bools by their bits, so a Bool is boxed like any primitive, where
+two non-reference types does. A value stored packed (an 8- or 16-bit integer, a Bool) is read
+sign-extended for a signed class and zero-extended otherwise, as Julia's ABI holds it. Julia's `===` compares two Bools by their bits, so a Bool is boxed like any primitive, where
 dart takes its canonical true or false constant (its `identical`).
 
 Reshaped: `boxed_class` — dart's boxedClasses keys a box by the wasm type, which names no one Julia class.
@@ -1151,7 +1152,13 @@ Reshaped: `boxed_class` — dart's boxedClasses keys a box by the wasm type, whi
                 # Cast to box type
                 WasmBuilder.ref_cast(b, info.non_nullable_type)
             end
-            WasmBuilder.struct_get(b, info.struct_, FieldIndex_box_value())
+            local field = info.struct_.fields[FieldIndex_box_value() + 1].type
+            if field isa WasmBuilder.IR.PackedType
+                cls <: Signed ? WasmBuilder.struct_get_s(b, info.struct_, FieldIndex_box_value()) :
+                                WasmBuilder.struct_get_u(b, info.struct_, FieldIndex_box_value())
+            else
+                WasmBuilder.struct_get(b, info.struct_, FieldIndex_box_value())
+            end
         else
             reject!(Internal("$at: Conversion between non-reference types (from $from to $to)"), at)
         end
