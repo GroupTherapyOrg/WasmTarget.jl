@@ -7,6 +7,10 @@
 #                                                 from WasmTarget's @parity registry (A35S1), and the
 #                                                 landings (commits) since src/ last changed
 #   bash dev/src_progress.sh <anchored> <ported> <since> [<replaced> <gaps>]   the line for planted numbers (L208's negative)
+#   bash dev/src_progress.sh code <base> <head>   exits 0 when the change from <base>'s merge base with
+#                                                 <head> changes a line of code under src/ (a line neither
+#                                                 blank nor a comment), 1 when it changes none, 2 when a
+#                                                 revision names no commit: dev/ship.sh's port class (A66E4)
 #
 # Until legacy/ exists, src/ is still WT1's (1.A2c moves it), so the rebuild's src counts none and
 # every landing since the rebuild began (REBUILD_START) is a src-less one. An anchored definition is
@@ -20,6 +24,20 @@ set -euo pipefail
 NOTE_AFTER=5
 REBUILD_START=e2371eca08605231256dd5f3ee97609d6fc019a4   # chore(land): the march branch is wt2
 cd "$(git rev-parse --show-toplevel)"
+# a port is a change to src/'s code: its added and removed lines, the diff's file headers aside, less the
+# blank ones and Julia's `#` comments (f4cc916d, comment only, ranked early as port work: A66E4)
+if [ "${1:-}" = code ]; then
+    [ $# -eq 3 ] || { echo "src_progress: code <base> <head>"; exit 2; }
+    for r in "$2" "$3"; do
+        git rev-parse --verify -q "$r^{commit}" > /dev/null || { echo "src_progress: $r names no commit"; exit 2; }
+    done
+    # the pipeline's status is its last grep's alone: with pipefail, `grep -q` stopping at the first line of
+    # code ends the commands before it by SIGPIPE on a large diff (141), read as an error
+    set +eo pipefail
+    git diff -U0 --no-color "$2...$3" -- src | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) (a/|b/|/dev/null)' |
+        cut -c2- | grep -qvE '^[[:space:]]*(#.*)?$'
+    exit $?
+fi
 started=1
 if [ $# -eq 3 ] || [ $# -eq 5 ]; then
     anchored=$1; ported=$2; since=$3

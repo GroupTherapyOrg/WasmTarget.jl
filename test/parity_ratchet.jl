@@ -1530,6 +1530,26 @@ function src_progress_negatives_missed()::Vector{String}
     occursin("note:", src_progress("10", "2", "4")) && push!(out, "negative missed: four src-less landings printed the note")
     occursin("note:", src_progress("10", "2", "5")) || push!(out, "negative missed: five src-less landings printed no note")
     startswith(src_progress("10", "2", "0"), "src: 2 of 10 anchored dart definitions ported") || push!(out, "negative missed: the line's form")
+    # dev/ship.sh's port class (A66E4): a change to src/'s code, never a comment, a blank line or a file outside src/
+    mktempdir() do t
+        local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
+        g("init", "-q"); mkpath(joinpath(t, "src"))
+        local a = joinpath(t, "src", "a.jl")
+        write(a, "f(x) = x\n# a note\n"); write(joinpath(t, "README"), "d\n"); g("add", "-A"); g("commit", "-qm", "c0")
+        local c0 = readchomp(`git -C $t rev-parse HEAD`)
+        local code(base = c0) = Base.run(pipeline(Cmd(`bash $(joinpath(ROOT, "dev", "src_progress.sh")) code $base HEAD`; dir = t, ignorestatus = true);
+                                                  stdout = devnull, stderr = devnull)).exitcode
+        write(a, "f(x) = x\n# a note, reworded\n\n    # an indented note\n"); write(joinpath(t, "README"), "e\n"); g("commit", "-qam", "notes")
+        code() == 1 || push!(out, "negative missed: a change to src/'s comments and blank lines and a file outside src/ ranks as port work")
+        write(a, "f(x) = x + 1\n# a note\n"); g("commit", "-qam", "code")
+        code() == 0 || push!(out, "negative missed: a changed line of src/'s code does not rank as port work")
+        g("reset", "-q", "--hard", c0); write(a, "# a note\n"); g("commit", "-qam", "removal")
+        code() == 0 || push!(out, "negative missed: a removed line of src/'s code does not rank as port work")
+        code("nosuchref") == 2 || push!(out, "negative missed: a base that names no commit")
+        # a diff past a pipe's buffer: the class stops reading at its first line of code, which is no error
+        g("reset", "-q", "--hard", c0); write(a, join(("g$i(x) = x + $i" for i in 1:20000), "\n")); g("commit", "-qam", "large")
+        code() == 0 || push!(out, "negative missed: a large change to src/'s code does not rank as port work")
+    end
     # a rejection-only body is never counted ported (Dale 2026-10-29: "DO NOT allow stubs to be clalled complete")
     startswith(src_progress("10", "8", "0", "2", "1"), "src: 5 of 10 anchored dart definitions ported with a body") ||
         push!(out, "negative missed: rejection-only bodies counted as ported")
@@ -2697,7 +2717,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/ship.sh` prints dev/src_progress.sh's line after every landing, the one the landing's check ran it for (this lock, in the ratchet dev/check.sh runs), which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. Here: land runs the program, this tree's line is printed, and the program on planted numbers (4 landings print no note, 5 print it) (dev/CHARTER.md C0)",
+    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/ship.sh` prints dev/src_progress.sh's line after every landing, the one the landing's check ran it for (this lock, in the ratchet dev/check.sh runs), which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. And dev/ship.sh ranks a stack early as port work only when it changes src/'s code, read by the same program (`code <base> <head>`): a changed or removed line neither blank nor a comment (A66E4). Here: land runs the program, this tree's line is printed, the program on planted numbers (4 landings print no note, 5 print it), and its port class on a scratch repository (comments, blank lines and a file outside src/ no port; a changed and a removed line of code a port, and a change past a pipe's buffer; a base naming no commit refused) (dev/CHARTER.md C0)",
         () -> begin
             local v = src_progress_negatives_missed()
             local o = src_progress()

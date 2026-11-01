@@ -142,14 +142,19 @@ if [ -n "$changed_jl" ]; then
     echo "ship: a changed Julia file does not parse; not queued:"; printf '%s\n' "$perr" | head -20; exit 1
   fi
 fi
-# a port stack is one that changes src/, the compiler, read from its diff (D40: a landing that changes nothing under
-# src/ is no rebuild progress): it queues 20 minutes early, ahead of tooling, docs and tests. Counting removed
+# a port stack is one that changes src/'s code, the compiler, read from its diff by dev/src_progress.sh (D40: a landing
+# that changes nothing under src/ is no rebuild progress, and a comment-only change none either, A66E4): it queues
+# 20 minutes early, ahead of tooling, docs and tests. Counting removed
 # rejection sites was tried and refused: a real port fills a body and adds located rejections for the cases it
 # does not yet reach, so 6 of 7 of the day's ports removed fewer sites than they added (march-corrector, 15:14;
 # 6d540b66's @unported-marker test ranked almost nothing early once one marker was left)
 early=0; why="other work"
 if git log --format=%B "origin/$MARCH..HEAD" | grep -E '\bA[0-9]+[SE][0-9]+\b' > /dev/null; then early=2400; why="an audit finding's fix"
-elif ! git diff --quiet "origin/$MARCH...HEAD" -- src; then early=1200; why="a change to src/, port work (D40)"; fi
+else
+  bash dev/src_progress.sh code "origin/$MARCH" HEAD; rc=$?
+  [ $rc -gt 1 ] && { echo "ship: the port class cannot read the change from origin/$MARCH; not queued"; exit 1; }
+  [ $rc -eq 0 ] && { early=1200; why="a change to src/'s code, port work (D40)"; }
+fi
 queue="$common/wt-landing-queue"; mkdir -p "$queue"
 ticket="$queue/$(( $(date +%s) - early ))-$$"; : > "$ticket"
 echo "ship: queued $(( early / 60 )) minutes early ($why)"
