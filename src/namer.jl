@@ -46,12 +46,13 @@ row), read only by JsInteropMemberData.fromMember.
 @parity "dart2wasm/lib/namer.dart:105 _InteropHelperMemberNamer" struct _InteropHelperMemberNamer
     _interop_helper_namer::Namer
     interop_module_name::String
-    interop_member_names::Dict{Core.MethodInstance,String}
+    # each inline JS site's name, a site known by its JS code (nir_js_codes)
+    interop_member_names::Dict{String,String}
     # the struct's one constructor, tagged, with dart's initializer list; dart's constructor at :111 is
     # its outer function
     _InteropHelperMemberNamer(::Val{:_}, options::TranslatorOptions) =
         new(Namer(; minify = minify(options) || options.minify_interop_names), minify(options) ? "_" : "dart2wasm",
-            Dict{Core.MethodInstance,String}())
+            Dict{String,String}())
 end
 
 """
@@ -133,12 +134,13 @@ end
 
 # the import name of an inline JS site, the foreign call to the interop module (NirForeignImport) in
 # `enclosing`'s body, the procedure dart's specializer makes of a JS<T> call: the interop module and a
-# JS-safe name minted once per enclosing method, which hands its host one JS code (nir_js_code)
+# JS-safe name minted once per site, a site known by its JS code (nir_js_codes; Julia's inlining copies
+# a site into each caller), the name from the enclosing method's
 @parity "dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName" function get_import_name(self::_InteropHelperMemberNamer, site::NirForeignImport, enclosing::Core.MethodInstance)::Util.ImportName
     site.lib == JS_INTEROP_LIBRARY ||
         reject!(Internal("dart2wasm/lib/namer.dart:117 _InteropHelperMemberNamer.getImportName: the foreign call $(site.lib).$(site.name), no inline JS site"), "$enclosing")
     return Util.ImportName(self.interop_module_name,
-        get!(() -> get_name(self._interop_helper_namer, string((enclosing.def::Method).name); js_safe_name = true), self.interop_member_names, enclosing))
+        get!(() -> get_name(self._interop_helper_namer, string((enclosing.def::Method).name); js_safe_name = true), self.interop_member_names, site.name))
 end
 
 """

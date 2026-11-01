@@ -89,8 +89,8 @@ end
 
 # the JS code of each translated procedure that hands its host one, `<importName>: <code>,` a line each:
 # dart's JsInteropMemberData.fromMember reads a procedure's `wasm:js-code` pragma, Julia's the symbol of
-# its body's foreign call to the interop module (nir_js_code, in the interop namer's closed world), and
-# its import name is the one the code generator imported it by (the interop namer's, minted per method).
+# each of its body's foreign calls to the interop module (nir_js_codes, in the interop namer's closed
+# world), each site once, by the name the code generator imported it by (the interop namer's).
 # Sorted as dart's compareNatural sorts (package:collection), a run of digits read as its number, so
 # _9 comes before _11. dart's trampolines are its interop specializer's, which Julia has none of
 @parity "dart2wasm/lib/js/runtime_generator.dart:60 RuntimeFinalizer.generateJsMethods" function Dart2Wasm.generate_js_methods(self::RuntimeFinalizer, translated_procedures::AbstractVector{Core.MethodInstance})::String
@@ -98,15 +98,18 @@ end
     local namer = self._interop_member_namer
     local component = namer._external_member_namer.component
     local used_procedures = Set{Core.MethodInstance}()
+    local used_codes = Set{String}()
     local used_js_methods = Tuple{String,String}[]
     for p in translated_procedures
         p in used_procedures && continue
         push!(used_procedures, p)
-        local js_code = nir_js_code(component, p)
-        js_code === nothing && continue
-        local import_name = get(namer._interop_helper_member_namer.interop_member_names, p, nothing)
-        import_name === nothing && reject!(Internal("$at: $p hands its host JS code no import of it named"), at)
-        push!(used_js_methods, (import_name, js_code))
+        for js_code in nir_js_codes(component, p)
+            js_code in used_codes && continue
+            push!(used_codes, js_code)
+            local import_name = get(namer._interop_helper_member_namer.interop_member_names, js_code, nothing)
+            import_name === nothing && reject!(Internal("$at: $p hands its host JS code no import of it named"), at)
+            push!(used_js_methods, (import_name, js_code))
+        end
     end
     # Sort so _9 comes before _11 (for example)
     local natural(name::String) = [(isdigit(r[1]) ? ('0', parse(BigInt, r), "") : (r[1], big(0), String(r))) for r in (m.match for m in eachmatch(r"\d+|\D+", name))]

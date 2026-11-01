@@ -53,11 +53,15 @@ const D = WasmTarget.Dart2Wasm
 const J = WasmTarget.Dart2Wasm.JS
 # a program that prints through the JS patch's printToConsole, then answers its argument
 said(x::Int64) = (W.Runtime.print_to_console("héllo"); x)
+# the site inlined twice into one caller: one site, one import
+twice(x::Int64) = (W.Runtime.print_to_console("a"); W.Runtime.print_to_console("b"); x)
+# a program naming the runtime's internal interop module itself, as no dart program may import dart:_js_helper
+forged(x::Int64) = (ccall(("s => (", "dart2wasm"), Nothing, ()); x)
 @testset "js_common/print_patch.dart: printToConsole hands its line to the JS runtime's inline JS" begin
     local world = W.build_nir(W.check_subset(said, (Int64,), "print_patch"), "print_patch")
     # the method whose body holds the inline JS: printToConsole's, or its caller's where Julia inlined it
-    local mi = only(b.ci.def for b in world if W.nir_js_code(world, b.ci.def) !== nothing)
-    @test W.nir_js_code(world, mi) == "s => printToConsole(s)"
+    local mi = only(b.ci.def for b in world if !isempty(W.nir_js_codes(world, b.ci.def)))
+    @test W.nir_js_codes(world, mi) == ["s => printToConsole(s)"]
     # generateJsMethods writes the method under the name the code generator imports it by
     local namer = D.InteropMemberNamer(world, D.Namer(), D.TranslatorOptions())
     local body = only(b for b in world if b.ci.def === mi)
@@ -81,5 +85,11 @@ said(x::Int64) = (W.Runtime.print_to_console("héllo"); x)
         # (said itself cannot run natively: its JS string lives only in the module)
         @test out == sprint(println, "héllo") * sprint(println, 7)
     end
+    # a site Julia inlined twice into one caller is one site: one import, one JS method
+    local r2 = D.compile(opts, W.check_subset(twice, (Int64,), "print_patch"))
+    @test count(": s => printToConsole(s),", r2.js_files["out/said.mjs"]) == 1
+    # the interop module named outside the runtime is the program's error, located, never invalid JS
+    local e = try; W.compile(forged, (Int64,)); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.ProgramError && occursin("dart:_js_helper", sprint(showerror, e))
 end
 end

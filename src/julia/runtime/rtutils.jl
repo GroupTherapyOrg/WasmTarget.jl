@@ -67,29 +67,44 @@ end
 
 # the library a port's foreign call names for dart's inline JS (`JS<T>(code, ...)` of dart:_js_helper):
 # the runtime's internal interop module, whose name the interop namer gives at the import
-# (interop_module_name, "dart2wasm" or "_" when minified), its symbol the JS code itself (nir_js_code)
+# (interop_module_name, "dart2wasm" or "_" when minified), its symbol the JS code itself
+# (nir_js_codes), as Julia's own llvmcall carries its IR text as an argument of the call
+# (julia/src/ccall.cpp:721 emit_llvmcall). Only the runtime's ports may name it, as only dart's internal
+# libraries may import dart:_js_helper (nir_foreign_import)
 @quarantine "dart's inline JS is an import of the internal interop module (pkg/dart2wasm/lib/namer.dart:108 _InteropHelperMemberNamer.interopModuleName); a Julia port names it in its foreign call" Core.String const JS_INTEROP_LIBRARY::Core.String = "dart2wasm"
 
 """
-    nir_js_code(world, mi) -> Union{String,Nothing}
+    nir_js_codes(world, mi) -> Vector{String}
 
-The JS code `mi`'s body hands its host (dart's JsCodeData, the `wasm:js-code` pragma
-JsInteropMemberData.fromMember reads from a member, js/util.dart:33): the symbol of its foreign call
-to the internal interop module (JS_INTEROP_LIBRARY), or nothing for a body with none. dart's
-specializer gives each JS<T> site a procedure of its own; two different codes in one body reject,
-located.
+The JS codes `mi`'s body hands its host (dart's JsCodeData, the `wasm:js-code` pragma
+JsInteropMemberData.fromMember reads from the procedure dart's specializer makes of each JS<T> site,
+js/util.dart:33): the symbol of each of its foreign calls to the internal interop module
+(JS_INTEROP_LIBRARY), in statement order, each code once. Julia's inlining copies a site into each
+caller, so a site is known by its code, and one body may hold several.
 """
-@quarantine "dart reads a member's inline JS from its pragma (pkg/dart2wasm/lib/js/util.dart:33 JsInteropMemberData.fromMember); a Julia method carries it as its foreign call's symbol" Core.String function nir_js_code(world::NirWorld, mi::Core.MethodInstance)::Union{String,Nothing}
-    local code = nothing
+@quarantine "dart reads a procedure's inline JS from its pragma (pkg/dart2wasm/lib/js/util.dart:33 JsInteropMemberData.fromMember); a Julia method carries it as its foreign call's symbol" Core.String function nir_js_codes(world::NirWorld, mi::Core.MethodInstance)::Vector{String}
+    local codes = String[]
     for st in nir_body_of(world, mi).stmts
         st isa NirForeignCall && st.args[1] isa NirConst || continue
         local name = st.args[1].c.val
         name isa Tuple{Union{Symbol,String},Union{Symbol,String}} && String(name[2]) == JS_INTEROP_LIBRARY || continue
-        code === nothing || code == String(name[1]) ||
-            reject!(Internal("src/julia/runtime/rtutils.jl nir_js_code: $mi hands its host two JS codes, where dart's specializer gives each its own procedure"), "$mi")
-        code = String(name[1])
+        String(name[1]) in codes || push!(codes, String(name[1]))
     end
-    return code
+    return codes
+end
+
+"""
+    nir_statement_module(body, k) -> Module
+
+The module of the method statement `k` of `body` was written in: the innermost frame of its debug
+info (Julia's own reading, IRShow's buildLineInfoNode), the inlined callee's where Julia inlined
+it, else the body's own method's.
+"""
+@quarantine "Julia records where each statement was written, inlined frames innermost last (julia/Compiler/src/ssair/show.jl:405 buildLineInfoNode)" Core.Module function nir_statement_module(body::NirBody, k::Int)::Module
+    local frames = Base.IRShow.buildLineInfoNode(body.ci.debuginfo, body.ci.def, k)
+    local m = isempty(frames) ? body.ci.def : last(frames).method
+    m isa Core.MethodInstance && (m = m.def)
+    return m isa Method ? m.module : (body.ci.def.def::Method).module
 end
 
 """
@@ -179,6 +194,13 @@ wasm import cannot take, rejects here, located.
     sym isa NirConst && sym.c.val isa Tuple{Union{Symbol,String},Union{Symbol,String}} || return nothing
     local item, lib = String(sym.c.val[1]), String(sym.c.val[2])
     lib in HOST_MODULES[] || lib == JS_INTEROP_LIBRARY || return nothing
+    # inline JS is the runtime's own (dart:_js_helper, an internal library no program imports): a call to
+    # the interop module written outside Runtime's ports is the program's error, located
+    if lib == JS_INTEROP_LIBRARY
+        local k = findfirst(st -> st === node, body.stmts)
+        k !== nothing && nir_statement_module(body, k) === Runtime ||
+            reject!(ProgramError("src/julia/runtime/rtutils.jl nir_foreign_import: the foreign call $(repr(item)) of the runtime's internal interop module $lib, written outside WasmTarget's runtime, as no program may import dart's internal dart:_js_helper"), at)
+    end
     local rt, argtypes, nreq, cc = node.args[2], node.args[3], node.args[4], node.args[5]
     rt isa NirConst && rt.c.val isa Type && argtypes isa NirConst && argtypes.c.val isa Core.SimpleVector ||
         reject!(Internal("$at: the foreign call $lib.$item, whose return and argument types are no constants"), at)
