@@ -6268,3 +6268,27 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A68S2 and A68
 A69S4 (test/src_tests.jl), wt3-latency A69E1's src fix; wt3-parity holds A69S1's pin table, wt3-memory its citations and
 A69S3 (src/patch/genericmemory.jl, src/julia/wasm_array.jl); wt3-translator2 holds A69S2 (src/julia/classes.jl
 field_selector_calls, src/dispatch_table.jl).
+
+Follow-up, one item the lead raised after the entry landed: c6707ae0 (landed after 1bed6b74, so outside the range) and
+D11. It rewrites dev/formal/Constants.tla (`git show --stat c6707ae0 | tail -1` gives `20 files changed, 313 insertions(+),
+677 deletions(-)`) from WT1's interning (ensure_constant_global!, gone) to the port's ConstantCreator, and drops five
+claims of the old model (`git show c6707ae0^:dev/formal/Constants.tla | grep -nE
+'^(NoFabrication|DeterministicNumbering|NoPartialIntern|Canonicalization|RejectHalts)\b'` gives :371, :400, :410, :426,
+:432) with the Broken configs that held them (Fabricate, HashOrder, SkipChild, InternMutable, Isequal). Judged claim by
+claim against the new MCConstants.cfg (TypeOK, SharesOnlyEgal, ChildrenFirst, EagerChildrenEager, OperandsTyped,
+CyclesReject). Canonicalization (egal eager occurrences share a global) is carried by SharesOnlyEgal's `<=>`;
+NoPartialIntern (one non-eager child makes the whole value non-eager) by EagerChildrenEager, with ParentFirst and
+IgnoreChildLaziness as its Broken variants; MutableNeverAliases described WT1's design, which the port reverses (a mutable
+constant interned by identity, M1 and M2 equal and apart under SharesOnlyEgal), so its drop is right; RejectHalts is
+vacuous in a model whose run is one functional step (`Next == UNCHANGED vars`), the outcome terminal by structure. Two
+claims are port-independent and have no successor. (A69E2, medium, D11/D9/D17) NoFabrication and DeterministicNumbering
+were dropped with their Broken variants, and the model no longer reaches either: `grep -c 'undef\|Undef'
+dev/formal/Constants.tla` gives 0, so no constant with an #undef field is in its universe, though the port compiles them
+(779986b2's set flag, 7023257b's constant Vector, a1f78cbc's unset elements); and no claim fixes a constant's number to
+its discovery order, independent of hashing, which byte-identical modules rest on. The commit names what it replaced,
+not what it dropped. D11's "never weaken an invariant" is checked by nothing: dev/formal/run_tlc.sh reads the cfgs as
+they stand, so a rewrite can delete a claim and stay green. Fix: both claims restated over the new model's state (a
+constant holding an #undef field reaching an outcome other than its located rejection or its sanctioned sentinel; an
+info's number the rank of its first use), each with a Broken cfg TLC rejects (wt3-runtime, as the lead routed it);
+then a lock that the claims named by the cfgs' INVARIANTS and `\* expect:` lines shrink only in a commit that names each
+dropped claim and its successor (wt3-parity). A69E2 is open on MARCH 1.C.
