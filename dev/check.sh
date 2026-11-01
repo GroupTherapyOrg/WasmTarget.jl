@@ -98,7 +98,7 @@ WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: to
 # its tests all green, 2026-11-01 11:20, wt3-memory); a fifth shard takes ~11 s off the slowest, at one more process
 # and a slower wall clock, which the band does not judge
 SHARDS=5; tpids=""
-costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-costs.tsv"; rm -f .wtd/src_costs.*
+costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-instr.tsv"; rm -f .wtd/src_costs.*
 for k in $(seq 1 $SHARDS); do
   : > ".wtd/progress.$k"
   WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_COSTS="$costs" WT_SRC_COSTS_OUT="$PWD/.wtd/src_costs.$k" /usr/bin/time -l -o ".wtd/src_tests.$k.time" \
@@ -136,10 +136,12 @@ for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD" -- dev/CHARTER.md
 done
 echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $SHARDS reported" 
 [ $trc -eq 0 ] || { echo "check: src tests red"; grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 1; }
-# a green check's measured file costs replace the kept ones, file by file, for the next check's split; a row
+# a check whose tests pass replaces the kept file costs (instructions, G) with its measured ones, file by file, for
+# the next check's split, whatever D14's band then reads, since a file's instructions are its own; a row
 # for a file this tree, origin/wt2 rebased under the lane, does not hold is dropped, so one lane's unlanded file
 # never steers another tree's split (A62E1: a shelved split's dart_core_1..3.jl rows stood in the table)
-cat .wtd/src_costs.* 2>/dev/null | awk -F'\t' 'NR == FNR { c[$1] = $2; next } { c[$1] = $2 } END { for (f in c) print f "\t" c[f] }' \
+# (each row is the file, its newest measure and the one before, which test/src_tests.jl costs at their larger)
+cat .wtd/src_costs.* 2>/dev/null | awk -F'\t' 'NR == FNR { c[$1] = $2; next } { c[$1] = $2 "\t" ($1 in c ? c[$1] : $2) } END { for (f in c) print f "\t" c[f] }' \
   "$( [ -f "$costs" ] && echo "$costs" || echo /dev/null )" - | sort |
   while IFS="$(printf '\t')" read -r f s; do [ -f "test/src/$f" ] && printf '%s\t%s\n' "$f" "$s"; done > "$costs.new" && mv "$costs.new" "$costs"
 # the models the change touches: a changed dev/formal/<Name>.tla or MC<Name>*.{tla,cfg} selects

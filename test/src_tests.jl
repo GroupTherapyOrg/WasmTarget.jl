@@ -16,15 +16,23 @@ const SRC_TEST_DIR = joinpath(@__DIR__, "src")
 const SRC_TESTS = sort!([relpath(joinpath(d, f), SRC_TEST_DIR)
                          for (d, _, fs) in walkdir(SRC_TEST_DIR) for f in fs if endswith(f, ".jl")])
 isempty(SRC_TESTS) && error("test/src/ holds no test file: the walk found nothing")
-# each file's cost, its seconds in the last green landing check (WT_SRC_COSTS, the common dir's wt-src-costs.tsv
-# dev/check.sh keeps): the shards split by measured cost, never by file size alone (a size split put 91 s in one
-# of four shards and 72 s in another, 2026-10-29); a file not yet measured costs its size at the measured files'
-# seconds per byte, and with nothing measured every file costs its size
+# each file's cost, its instructions retired (G) in the last landing check whose tests passed (WT_SRC_COSTS, the
+# common dir's wt-src-instr.tsv dev/check.sh keeps): the shards split by measured cost, never by file size alone (a
+# size split put 91 s in one of four shards and 72 s in another, 2026-10-29), and by the instructions D14's band
+# judges, never wall seconds (a split by seconds, which the machine's load moves, left 150 G between the lightest and
+# heaviest shard and turned wt3-memory's #undef field commit red at 129 and 131 s, its tests green, 2026-11-01); a
+# file not yet measured costs its size at the measured files' instructions per byte, and with nothing measured every
+# file costs its size. A row keeps a file's last two measures and costs their larger: files that compile the same
+# runtime code (js_string.jl and string_ops.jl both compile the string runtime) share its first-compile cost, which
+# lands on whichever runs first in its process, so one check measured string_ops.jl at 132 G and js_string.jl low,
+# the next the reverse, and the split by the last measure alone put 706 G in one shard (3a5b6ee7, twice); a file's
+# larger measure is its cost in a shard without its sibling, which a longest-first split makes the usual case
 const SRC_COST = let p = get(ENV, "WT_SRC_COSTS", ""), c = Dict{String,Float64}()
     if !isempty(p) && isfile(p)
         for l in eachline(p)
             local a = split(l, '\t')
-            length(a) == 2 && (local v = tryparse(Float64, a[2]); v === nothing || (c[String(a[1])] = v))
+            local v = [tryparse(Float64, x) for x in a[2:end]]
+            2 <= length(a) <= 3 && !any(isnothing, v) && (c[String(a[1])] = maximum(v))
         end
     end
     local measured = [f for f in SRC_TESTS if haskey(c, f)]
@@ -51,17 +59,27 @@ end
 # the file and case running now, for dev/check.sh's hard limit to name (WT_PROGRESS)
 const _WT_PROGRESS = get(ENV, "WT_PROGRESS", "")
 wt_progress(s::AbstractString) = isempty(_WT_PROGRESS) || write(_WT_PROGRESS, s)
-# each file's seconds go to WT_SRC_COSTS_OUT, for dev/check.sh to keep once the check is green. A process's first
+# each file's instructions retired go to WT_SRC_COSTS_OUT, for dev/check.sh to keep once the tests pass, read from
+# the process's own counter (macOS's proc_pid_rusage, the rusage_info_v4 counter /usr/bin/time -l reports as
+# "instructions retired", sys/resource.h: ri_instructions, the 30th 64-bit field after the 16-byte ri_uuid; check.sh
+# runs on macOS alone). A process's first
 # WasmTarget.compile pays about 49 CPU-s compiling WasmTarget's own pipeline (wt3-cgstubs, 12:59), which would land on
 # whichever file ran first and leave that file unmeasured or mismeasured; so a measured run compiles one small
 # function first, every shard paying that start alike, and every file's seconds are then its own
 const _WT_COSTS_OUT = get(ENV, "WT_SRC_COSTS_OUT", "")
+function _wt_instructions()
+    local info = zeros(UInt64, 40)   # rusage_info_v4 is 16 + 37 * 8 bytes; 40 words hold it
+    ccall(:proc_pid_rusage, Cint, (Cint, Cint, Ptr{UInt64}), getpid(), 4, info) == 0 ||
+        error("proc_pid_rusage(RUSAGE_INFO_V4) failed: no instruction count to measure this file by")
+    info[2 + 29 + 1]
+end
+isempty(_WT_COSTS_OUT) || Sys.isapple() || error("WT_SRC_COSTS_OUT measures instructions by macOS's proc_pid_rusage; dev/check.sh runs on macOS alone")
 isempty(_WT_COSTS_OUT) || WasmTarget.compile(x::Int64 -> x + Int64(1), (Int64,))   # a failure here is a broken pipeline, red
 @testset verbose = true "src" begin
     for (i, f) in enumerate(SRC_SHARD)
         wt_progress(f)
-        local t0 = time()
+        local i0 = isempty(_WT_COSTS_OUT) ? UInt64(0) : _wt_instructions()
         @testset "$f" begin include(joinpath(SRC_TEST_DIR, f)) end
-        !isempty(_WT_COSTS_OUT) && open(io -> println(io, f, '\t', round(time() - t0; digits = 1)), _WT_COSTS_OUT, "a")
+        !isempty(_WT_COSTS_OUT) && open(io -> println(io, f, '\t', round((_wt_instructions() - i0) / 1e9; digits = 1)), _WT_COSTS_OUT, "a")
     end
 end
