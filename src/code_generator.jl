@@ -738,6 +738,9 @@ end
         end
         local local_ = self.param_locals[][implicit_params + i + 1]
         local variable_name = string(names[variable.n])
+        # beyond dart's checks (D10): a name the name section writes is valid UTF-8, refused where it is recorded
+        isempty(variable_name) || isvalid(variable_name) ||
+            reject!(InvalidModule("dart2wasm/lib/code_generator.dart:245 AstCodeGenerator._setupLocalParameters: the local name $(repr(variable_name)) is not valid UTF-8"), "_setupLocalParameters")
         isempty(variable_name) || (b.local_names[local_.index] = variable_name)
         if !is_forwarder
             local incoming_argument_type = translate_type_of_parameter(self.translator, member, variable.n, is_required)

@@ -420,6 +420,8 @@ in order (dart's insertion-ordered Map, here its pairs).
         for (field_name, value) in named_fields
             local index = length(type_.fields)
             push!(type_.fields, value)
+            # beyond dart's checks (D10): a name the name section writes is valid UTF-8, refused where it is recorded
+            isvalid(field_name) || reject!(InvalidModule("dart2wasm/lib/closures.dart:437 ClosureLayouter._defineStruct: the field name $(repr(field_name)) is not valid UTF-8"), "_defineStruct")
             type_.field_names[index] = field_name
         end
     end

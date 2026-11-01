@@ -15,6 +15,8 @@
     _built::Union{IR.DefinedGlobal,Nothing}
     # dart's constructor (line 13), the struct's one inner constructor
     function GlobalBuilder(module_builder::AbstractModuleBuilder, index::IR.Finalizable{Int}, type::IR.GlobalType, global_name::Union{String,Nothing}=nothing)
+        # beyond dart's checks (D10): a name the name section writes is valid UTF-8, refused where it is recorded
+        global_name === nothing || isvalid(global_name) || reject!(InvalidModule("wasm_builder/lib/src/builder/global.dart:13 GlobalBuilder: the global name $(repr(global_name)) is not valid UTF-8"), "GlobalBuilder")
         initializer = InstructionsBuilder(module_builder, IR.ValueType[], IR.ValueType[type.type]; constant_expression=true)
         new(index, type, module_builder.module_, global_name, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> IR.Indexable__global_id(module_builder.module_)), module_builder, initializer, nothing)
     end

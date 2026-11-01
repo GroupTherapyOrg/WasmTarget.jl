@@ -245,6 +245,8 @@ end
     push!(self.struct_.fields, field_type)
     if field_name !== nothing && !isempty(field_name)
         local field_index = length(self.struct_.fields) - 1
+        # beyond dart's checks (D10): a name the name section writes is valid UTF-8, refused where it is recorded
+        isvalid(field_name) || reject!(InvalidModule("dart2wasm/lib/class_info.dart:278 ClassInfo._addField: the field name $(repr(field_name)) is not valid UTF-8"), "_addField")
         self.struct_.field_names[field_index] = field_name
     end
     return nothing

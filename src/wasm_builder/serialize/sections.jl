@@ -419,16 +419,18 @@ end
 @parity "wasm_builder/lib/src/serialize/sections.dart:852 NameSection" function NameSection end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:861 NameSection.serializeContents" function serialize_contents(s::Serializer, n::NameSection)::Nothing
-    # beyond dart's checks (D10): the spec's names are valid UTF-8. A name of this section is recorded at
-    # many sites (each builder's define, add_local, Dart2Wasm's writes of field and function names), and
-    # every one is written here, so each is refused here, naming what it names.
+    # beyond dart's checks (D10): the spec's names are valid UTF-8. Each site that records a name of this
+    # section refuses an invalid one as it records it (StructType, ArrayType, FunctionBuilder,
+    # FunctionsBuilder.import, GlobalBuilder, ModuleBuilder, InstructionsBuilder.addLocal, and Dart2Wasm's
+    # writes of field and local names), so a name reaching here invalid is a recording site without its
+    # refusal: an Internal, naming what it names.
     # precedent(WebAssembly Core 2.0 §5.2.4 Names, https://www.w3.org/TR/wasm-core-2/#names%E2%91%A2):
     # "Names are encoded as a list of bytes containing the Unicode UTF-8 encoding of the name's character
     # sequence"; the name section's names are such names (WebAssembly 3.0 (2026-10-28), Appendix, Custom
     # Sections, Name Section, https://webassembly.github.io/spec/core/appendix/custom.html#name-section,
     # whose appendix sections carry no number)
     checked(name::String, what::String)::String = isvalid(name) ? name :
-        reject!(InvalidModule("wasm_builder/lib/src/serialize/sections.dart:861 NameSection.serializeContents: the name $(repr(name)) of $what is not valid UTF-8"), "NameSection")
+        reject!(Internal("wasm_builder/lib/src/serialize/sections.dart:861 NameSection.serializeContents: the name $(repr(name)) of $what is not valid UTF-8, and the site that recorded it did not refuse it"), "NameSection")
     module_name_subsection = Serializer()
     if n.module_name !== nothing
         write_name(module_name_subsection, checked(n.module_name, "the module"))

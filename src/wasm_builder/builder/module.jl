@@ -25,6 +25,8 @@
     # initializers (lines 31 to 37) allocate builders and nothing else, read lazily; the constructor
     # assigns them here, then the types builder as dart's constructor body does (line 54)
     function ModuleBuilder(module_name::String, source_map_url::Union{String,Nothing}; parent::Union{ModuleBuilder,Nothing} = nothing, watch_points::Vector{Int} = Int[])
+        # beyond dart's checks (D10): a name the name section writes is valid UTF-8, refused where it is recorded
+        isvalid(module_name) || reject!(InvalidModule("wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder: the module name $(repr(module_name)) is not valid UTF-8"), "ModuleBuilder")
         local m = IR.Module_uninitialized()
         local b = new(m, module_name, source_map_url, watch_points,
             Late{TypesBuilder}("wasm_builder/lib/src/builder/module.dart:30 ModuleBuilder.types"), Late{FunctionsBuilder}("wasm_builder/lib/src/builder/module.dart:31 ModuleBuilder.functions"),

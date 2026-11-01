@@ -415,6 +415,8 @@ end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal" function add_local(b::InstructionsBuilder, type::IR.ValueType; name::Union{String,Nothing}=nothing)::IR.Local
     if name !== nothing
+        # beyond dart's checks (D10): a name the name section writes is valid UTF-8, refused where it is recorded
+        isvalid(name) || reject!(InvalidModule("wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal: the local name $(repr(name)) is not valid UTF-8"), "addLocal")
         b.local_names[length(b.locals)] = name
     end
     l = IR.Local(length(b.locals), type)

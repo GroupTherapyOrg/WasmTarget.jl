@@ -154,6 +154,8 @@ end
     # dart's constructor (line 1123), the struct's one inner constructor: `fields` starts empty and
     # takes the given ones
     function StructType(name::Union{String,Nothing}; fields::Union{Vector{FieldType},Nothing} = nothing, super_type::Union{DefType,Nothing} = nothing)
+        # beyond dart's checks (D10): a name the name section writes is valid UTF-8, refused where it is recorded
+        name === nothing || isvalid(name) || reject!(InvalidModule("wasm_builder/lib/src/ir/type.dart:1123 StructType: the type name $(repr(name)) is not valid UTF-8"), "StructType")
         # DefType's constructor (line 719): the depth of the supertype chain, and the supertype marked
         # as having subtypes
         local depth = super_type === nothing ? 0 : super_type.depth + 1
@@ -174,6 +176,8 @@ end
     # dart's constructor (line 1232), the struct's one inner constructor: the element type assigned
     # when given
     function ArrayType(name::Union{String,Nothing}; element_type::Union{FieldType,Nothing} = nothing, super_type::Union{DefType,Nothing} = nothing)
+        # beyond dart's checks (D10): a name the name section writes is valid UTF-8, refused where it is recorded
+        name === nothing || isvalid(name) || reject!(InvalidModule("wasm_builder/lib/src/ir/type.dart:1232 ArrayType: the type name $(repr(name)) is not valid UTF-8"), "ArrayType")
         # DefType's constructor (line 719): the depth of the supertype chain, and the supertype marked
         # as having subtypes
         local depth = super_type === nothing ? 0 : super_type.depth + 1
