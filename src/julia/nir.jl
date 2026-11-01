@@ -450,7 +450,8 @@ body, so the one the intrinsifier lowers is left out here.
 """
 @quarantine "an intrinsified member has no body of its own, as dart's external member: its call is recorded, its body never collected" Core.MethodInstance nir_intrinsified(mi::Core.MethodInstance)::Bool =
     Dart2Wasm.generate_static_intrinsic(Val(:string_data_op), mi) !== nothing ||
-    Dart2Wasm.generate_static_intrinsic(Val(:wasm_array_op), mi) !== nothing
+    Dart2Wasm.generate_static_intrinsic(Val(:wasm_array_op), mi) !== nothing ||
+    Dart2Wasm.generate_static_intrinsic(Val(:memory_data_op), mi) !== nothing
 
 """
     build_nir(world::ClosedWorld, at::String) -> NirWorld

@@ -323,6 +323,8 @@ end
         string_op === nothing || return generate_static_intrinsic(self, Val(:string_data), string_op, node.args[2:end])
         local array_op = generate_static_intrinsic(Val(:wasm_array_op), target)
         array_op === nothing || return generate_static_intrinsic(self, Val(:wasm_array), array_op, target, node.args[2:end])
+        local memory_op = generate_static_intrinsic(Val(:memory_data_op), target)
+        memory_op === nothing || return generate_static_intrinsic(self, Val(:memory_data), memory_op, target, node.args[2:end])
         local intrinsic = StaticIntrinsic_from_procedure(target)
         intrinsic === nothing && return nothing
         reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "the static intrinsic $intrinsic")
@@ -800,6 +802,60 @@ end
     return nothing
 end
 
+# a memory's data operation (src/julia/wasm_array.jl), the call Julia's runtime copy makes on two
+# memories (genericmemory.c jl_genericmemory_copyto): the elements of `src`'s data array from its
+# reference's offset copied into `dest`'s from its own, one array.copy, dart's WasmArrayExt.copy
+# (intrinsics.dart:1254), wasm's memmove; for elements admitting nothing (classes.jl `data#isSet`) their
+# set flags copied the same way. An offset or count is wrapped to the i32 a wasm array takes.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:memory_data_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
+    target.def in methods(wasm_memory_copy!) ? :copy : nothing
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory_data}, op::Symbol, target::Core.MethodInstance, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local at = "$(code_gen.enclosing_member): a memory's data"
+    op === :copy || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory data operation $op"), at)
+    local R = Base.unwrap_unionall(target.specTypes).parameters[2]
+    (R isa DataType && R <: GenericMemoryRef && R.parameters[1] === :not_atomic) ||
+        reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory copy of $R, no non-atomic MemoryRef"), at)
+    local M = GenericMemory{R.parameters...}
+    local rinfo, minfo = get(t.class_info, R, nothing), get(t.class_info, M, nothing)
+    (rinfo === nothing || minfo === nothing) && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory copy where $R or $M has no class info"), at)
+    local rfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(R, at))
+    local mfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(M, at))
+    local dest = add_local(code_gen, rinfo.non_nullable_type)
+    local src = add_local(code_gen, rinfo.non_nullable_type)
+    local n = add_local(code_gen, WasmBuilder.IR.NumType_i32)
+    translate_expression(code_gen, args[1], rinfo.non_nullable_type)
+    WasmBuilder.local_set(b, dest)
+    translate_expression(code_gen, args[2], rinfo.non_nullable_type)
+    WasmBuilder.local_set(b, src)
+    translate_expression(code_gen, args[3], WasmBuilder.IR.NumType_i64)
+    WasmBuilder.i32_wrap_i64(b)
+    WasmBuilder.local_set(b, n)
+    # one array of the memory's (`data`, or its set flags `data#isSet`) at a reference's offset
+    local at_offset(r::WasmBuilder.IR.Local, name::String) = begin
+        WasmBuilder.local_get(b, r)
+        WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[rfs["mem"]])
+        WasmBuilder.struct_get(b, minfo.struct_, t.field_index[mfs[name]])
+        WasmBuilder.local_get(b, r)
+        WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[rfs["ptr_or_offset"]])
+        WasmBuilder.i32_wrap_i64(b)
+    end
+    for name in ("data", "data#isSet")
+        haskey(mfs, name) || continue
+        local array_type = (translate_type_of_field(t, mfs[name])::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+        at_offset(dest, name)
+        at_offset(src, name)
+        WasmBuilder.local_get(b, n)
+        WasmBuilder.array_copy(b, array_type, array_type)
+    end
+    # dart's void intrinsics leave the null of the top type (WasmArrayExt.copy), Julia's nothing
+    WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+    return t.top_type[]
+end
+
 # Julia's `isdefined(x, f)` on a struct field, Julia's codegen arm (codegen.cpp:4864, emit_builtin_call's
 # isdefined): a field named by a constant Symbol or Int of a concrete struct; a field the struct does
 # not have is false; one that cannot be undefined (field_may_be_null, cgutils.cpp:2768) true, as is
@@ -939,32 +995,39 @@ end
         WasmBuilder.ref_eq(b[])
         return i32
     end
-    # two tuples of one class whose fields are each compared by reference: Julia's egal of an immutable
-    # struct compares its fields (builtins.c compare_fields, jl_egal on each pointer field), so the
-    # fields' ref.eq, all of them
+    # two values of one immutable class whose fields are each compared by reference or by their integer
+    # bits (a tuple of DataTypes, a MemoryRef's offset and memory): Julia's egal of an immutable struct
+    # compares its fields (builtins.c compare_fields: the bits of an inline field, jl_egal on each
+    # pointer field), so each field pair's ref.eq or integer eq, all of them
     local by_reference(F::Type) = a_data_type(F) || egal_by_identity(F)
-    if first_type === second_type && first_type isa DataType && first_type <: Tuple && isconcretetype(first_type) &&
-            fieldcount(first_type) > 0 && all(by_reference, fieldtypes(first_type))
+    local by_bits(F::Type) = F isa DataType && (F <: Base.BitInteger || F === Bool)
+    if first_type === second_type && first_type isa DataType && isconcretetype(first_type) && !ismutabletype(first_type) &&
+            !isprimitivetype(first_type) && fieldcount(first_type) > 0
         local t = translator(self)
         local at = "$(code_gen.enclosing_member): === on two $(first_type)"
-        local info = get(t.class_info, first_type, nothing)
-        info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: === on $first_type, which has no class info"), at)
-        local x = add_local(code_gen, info.non_nullable_type)
-        local y = add_local(code_gen, info.non_nullable_type)
-        translate_expression(code_gen, first, info.non_nullable_type)
-        WasmBuilder.local_set(b[], x)
-        translate_expression(code_gen, second, info.non_nullable_type)
-        WasmBuilder.local_set(b[], y)
-        for (k, field) in enumerate(class_instance_fields(first_type, at))
-            local index = t.field_index[field]
-            WasmBuilder.local_get(b[], x)
-            WasmBuilder.struct_get(b[], info.struct_, index)
-            WasmBuilder.local_get(b[], y)
-            WasmBuilder.struct_get(b[], info.struct_, index)
-            WasmBuilder.ref_eq(b[])
-            k > 1 && WasmBuilder.i32_and(b[])
+        local fields = class_instance_fields(first_type, at)
+        if all(f -> by_reference(f.type) || by_bits(f.type), fields)
+            local info = get(t.class_info, first_type, nothing)
+            info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: === on $first_type, which has no class info"), at)
+            local x = add_local(code_gen, info.non_nullable_type)
+            local y = add_local(code_gen, info.non_nullable_type)
+            translate_expression(code_gen, first, info.non_nullable_type)
+            WasmBuilder.local_set(b[], x)
+            translate_expression(code_gen, second, info.non_nullable_type)
+            WasmBuilder.local_set(b[], y)
+            for (k, field) in enumerate(fields)
+                local index = t.field_index[field]
+                local storage = info.struct_.fields[index + 1].type
+                local get_field(v::WasmBuilder.IR.Local) = (WasmBuilder.local_get(b[], v);
+                    storage isa WasmBuilder.IR.PackedType ? WasmBuilder.struct_get_u(b[], info.struct_, index) : WasmBuilder.struct_get(b[], info.struct_, index))
+                get_field(x)
+                get_field(y)
+                local w = WasmBuilder.unpacked(storage)
+                w isa WasmBuilder.IR.RefType ? WasmBuilder.ref_eq(b[]) : w == i64 ? WasmBuilder.i64_eq(b[]) : WasmBuilder.i32_eq(b[])
+                k > 1 && WasmBuilder.i32_and(b[])
+            end
+            return i32
         end
-        return i32
     end
     return nothing
 end

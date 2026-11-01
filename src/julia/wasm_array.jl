@@ -258,3 +258,18 @@ fresh String's (wasm_string_alloc): dart's `WasmArray.copy`, `array.copy`. Nativ
     GC.@preserve dst src unsafe_copyto!(pointer(dst) + dst_offset, pointer(src) + src_offset, n)
     return nothing
 end
+
+"""
+    wasm_memory_copy!(dest, src, n) -> Nothing
+
+Copies `n` elements of `src`'s memory from its reference's offset into `dest`'s memory from its own,
+unchecked, the two ranges possibly overlapping: Julia's runtime copy of a memory's elements
+(genericmemory.c jl_genericmemory_copyto, which copies forwards or backwards as the ranges overlap),
+over WasmTarget's layout one `array.copy` of the memories' data arrays (dart's `WasmArray.copy`,
+memmove's semantics) and, for elements admitting nothing, one of their set flags. Never inlined, so the
+code generator meets the call and lowers it (src/intrinsics.jl); natively Base's copy.
+"""
+@quarantine "julia/src/genericmemory.c:223 jl_genericmemory_copyto copies a memory's elements, overlapping ranges included; WasmGC copies the data arrays (array.copy)" Base.unsafe_copyto! @noinline function wasm_memory_copy!(dest::MemoryRef{T}, src::MemoryRef{T}, n::Int)::Nothing where {T}
+    unsafe_copyto!(dest, src, n)
+    return nothing
+end
