@@ -301,13 +301,26 @@ const PRIMES = let m = Memory{Int64}(undef, 4); m .= (2, 3, 5, 7); m end
 const EMPTY = Memory{Int64}(undef, 0)
 const NAMES = let m = Memory{String}(undef, 3); m[1] = "a"; m[3] = "ccc"; m end
 const NONE = Memory{String}(undef, 0)
+# elements admitting nothing: a written nothing, an unset element (#undef, its set flag 0), a String
+const MAYBE = let m = Memory{Union{Nothing,String}}(undef, 3); m[1] = nothing; m[3] = "x"; m end
 plen(b::Bool) = length(b ? PRIMES : EMPTY)
 nlen(b::Bool) = length(b ? NAMES : NONE)
+maybe(i::Int64, read::Bool) = read ? Int64(MAYBE[i] === nothing) : Int64(isassigned(MAYBE, i))
 @testset "constants.dart: a Memory constant is its class's struct, its elements a wasm array literal" begin
     @test !isassigned(NAMES, 2)
-    local cases = [WTRunner.compiled_case("$(nameof(f))$a", WasmTarget.compile, f, a) for f in (plen, nlen) for a in ((true,), (false,))]
+    # each program compiled once, its two modules, then each argument set's native answer
+    local cases_of(f, argsets) = begin
+        local T = map(typeof, first(argsets))
+        local own, plain = WasmTarget.compile(f, T), WasmTarget.compile(f, T; optimize = false)
+        [WTRunner.RunCase("$(nameof(f))$a", plain, a, WTRunner.native_answer(f, a); optimized = own) for a in argsets]
+    end
+    local cases = [cases_of(plen, [(true,), (false,)]); cases_of(nlen, [(true,), (false,)])]
+    # the set flags of a constant whose elements admit nothing, `data#isSet`: an unset element's read
+    # raises UndefRefError, a written nothing reads as nothing
+    append!(cases, cases_of(maybe, [(Int64(1), true), (Int64(2), true), (Int64(3), true), (Int64(2), false), (Int64(3), false)]))
+    @test count(c -> c.native isa WTRunner.Throws, cases) == 1
     local results = WTRunner.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
-    @test length(results) == 4 && all(r -> r.ok, results)
+    @test length(results) == 9 && all(r -> r.ok, results)
 end
 end

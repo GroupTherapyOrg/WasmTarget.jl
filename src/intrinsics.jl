@@ -334,6 +334,10 @@ end
     f === Core._svec_len && length(args) == 1 && return generate_static_intrinsic(self, Val(:svec_len), f, args)
     f === Core._svec_ref && length(args) == 2 && return generate_static_intrinsic(self, Val(:svec_ref), f, args)
     f === Core.svec && return generate_static_intrinsic(self, Val(:svec), f, args)
+    (f === Core.memorynew || f === Core.memoryrefnew || f === Core.memoryrefget || f === Core.memoryrefset! ||
+     f === Core.memoryrefoffset || f === Core.memoryref_isassigned || f === Core.memoryrefswap! ||
+     f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) &&
+        return generate_static_intrinsic(self, Val(:memory), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f isa Core.IntrinsicFunction || return nothing
     local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
@@ -492,6 +496,306 @@ end
         return i64
     end
     reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a wasm array operation $op"), at)
+end
+
+# Julia's Memory builtins, each a port of Julia's own codegen arm at Julia's pin (1.12.7, 6d172b02),
+# src/codegen.cpp's emit_builtin_call cases and the cgutils.cpp emitters they call, over WasmTarget's
+# layout (src/julia/classes.jl): a Memory{T} is its class's struct holding `data`, the elements as one
+# wasm array (dart:_wasm's WasmArray{E}), and Julia's `length`; a MemoryRef{T} holds Julia's
+# `ptr_or_offset` as the element offset from 0 (Julia's own form for union and zero-size elements) and
+# its `mem`. dart's counterparts are dart:_wasm's WasmArray operations (intrinsics.dart): the
+# constructor's array.new_default and WasmArray.filled's array.new (:1959), WasmArrayExt.[] and []=
+# (:1223, array.get and array.set at the index wrapped to i32). Each arm follows its Julia arm:
+# - memorynew (codegen.cpp:4206, cgutils.cpp:4563 emit_memorynew): n == 0 answers the type's one empty
+#   instance; a negative n, or one whose byte size passes Julia's limit, raises ArgumentError through
+#   the runtime's raiser (error_unless over jlargumenterror_func); else the allocation, zero filled as
+#   emit_memory_zeroinit_and_stores leaves it (a number's zero and an inline struct's all-zero bits,
+#   Julia's arbitrary contents; a reference's #undef, the null); a count past a wasm array's i32
+#   length is an allocation that cannot be made, raising OutOfMemoryError as Julia's allocator does.
+# - memoryrefnew(m) (codegen.cpp:4230, _emit_memoryref) is {0, m}; memoryrefnew(r, i, bc)
+#   (codegen.cpp:4241, cgutils.cpp:4686 emit_memoryref's offset arm) is {r.offset + i - 1, r.mem},
+#   raising BoundsError(r, i) where bounds_check_enabled holds and the new offset is not below the
+#   length (ICmpULT).
+# - memoryrefget (codegen.cpp:4266) and memoryrefset! (codegen.cpp:3876 emit_f_opmemory) raise
+#   BoundsError(m, 1) where bounds_check_enabled holds and the memory is empty (CreateIsNull(mlen)),
+#   the one way a MemoryRef made in bounds is not; the get then loads (typed_load, maybenull: an
+#   undefined reference element raises UndefRefError), the set stores and answers the value. An
+#   element admitting nothing is #undef by its set flag, dart's late lowering's (useIsSetField): set
+#   writes it, get raises UndefRefError on 0, isassigned reads it; every other reference by its null.
+# - memoryrefoffset (codegen.cpp:4255, cgutils.cpp:4802) is the offset + 1; memoryref_isassigned
+#   (codegen.cpp:4391) is false for an empty memory where bounds_check_enabled holds, else whether an
+#   element that can be #undef (boxed, or inline holding a reference: `isboxed || first_ptr >= 0`) is
+#   defined, true for any other.
+# An order other than :not_atomic (Julia's emit_atomic_error and the atomic orders) and atomic memory,
+# and memoryrefswap!, replace!, setonce! and modify!, reject Unquarantined, located: gaps, never done.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local I32, I64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
+    local at = "$(code_gen.enclosing_member): Julia's $(nameof(f))"
+    local atomic_gap() = reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $(nameof(f)) with an atomic order or memory"), at)
+    (f === Core.memoryrefswap! || f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) && atomic_gap()
+    local ty(v::NirValue) = dart_type_of(self, v)
+    # cgutils.cpp:2067 bounds_check_enabled: --check-bounds=yes checks, =no never, else unless the flag
+    # is the constant false (a flag known only at run time checks)
+    local bounds_check_enabled(bc::Union{NirValue,Nothing}) = begin
+        local opt = Base.JLOptions().check_bounds
+        opt == 1 ? true : opt == 2 ? false : !(bc isa NirConst && bc.c.val === false)
+    end
+    local fields_of(T::Type) = begin
+        local info = get(t.class_info, T, nothing)
+        info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: $T has no class info"), at)
+        (info, Dict{String,ClassField}(fld.name => fld for fld in class_instance_fields(T, at)))
+    end
+    local field(fs::Dict{String,ClassField}, name::String) = get(fs, name, nothing) === nothing ?
+        reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: no field $name in $(collect(keys(fs)))"), at) : fs[name]
+    # the memory's class and its array type
+    local memory_of(M::Type) = begin
+        (M isa DataType && M <: GenericMemory && M.parameters[1] === :not_atomic) || atomic_gap()
+        local info, fs = fields_of(M)
+        local data = field(fs, "data")
+        local array_type = (translate_type_of_field(t, data)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+        # a reference element admitting nothing: WasmTarget's nothing is the null reference, so #undef
+        # is dart's late lowering's set flag (useIsSetField, late_lowering.dart:560), the class's
+        # `data#isSet` array, which the layout gives exactly such elements (classes.jl _needs_is_set)
+        local is_set = get(fs, "data#isSet", nothing)
+        local flag_type = is_set === nothing ? nothing :
+            (translate_type_of_field(t, is_set)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+        (info, fs, data, array_type, is_set, flag_type)
+    end
+    local b = code_gen.b[]
+    local new_struct(info::ClassInfo, fs::Dict{String,ClassField}, vals::Dict{String,Function}) = begin
+        push_object_header_fields(b, t, info)
+        for fld in sort(collect(values(fs)); by = x -> t.field_index[x])
+            vals[fld.name]()
+        end
+        WasmBuilder.struct_new(b, info.struct_)
+    end
+    local raise_bounds(target::Function, index::Function) = begin
+        target()
+        index()
+        call(code_gen, nir_runtime_member(t.component, throw_bounds_error, at))
+        WasmBuilder.unreachable(b)
+    end
+    if f === Core.memorynew
+        length(args) == 2 || return nothing
+        local MT = ty(args[1])
+        (MT isa DataType && MT <: Type && MT.parameters[1] isa DataType) || return nothing
+        local M = MT.parameters[1]
+        local info, fs, data, array_type, is_set, flag_type = memory_of(M)
+        local E = eltype(M)
+        local storage = array_type.element_type[].type
+        # Julia's size limit, emit_memorynew's: nel * elsz (plus a selector byte each for an isbits
+        # union) neither overflowing nor past typemax(Int) >> 1 - 1, so one unsigned comparison of nel
+        local elsz = Base.elsize(M) + (Base.isbitsunion(E) ? 1 : 0)
+        local limit = elsz == 0 ? typemax(Int) - 1 : div(typemax(Int) - 1, elsz)
+        local n = add_local(code_gen, I64)
+        translate_expression(code_gen, args[2], I64)
+        WasmBuilder.local_set(b, n)
+        WasmBuilder.local_get(b, n)
+        WasmBuilder.i64_const(b, limit)
+        WasmBuilder.i64_gt_u(b)
+        WasmBuilder.if_(b)
+        call(code_gen, nir_runtime_member(t.component, throw_invalid_memory_size, at))
+        WasmBuilder.unreachable(b)
+        WasmBuilder.var"end"(b)
+        # past a wasm array's i32 length the allocation cannot be made: Julia's answer for an allocation
+        # it cannot satisfy is OutOfMemoryError (jl_memory_exception, thrown by gc.c's allocation path),
+        # raised through the runtime's thrower
+        WasmBuilder.local_get(b, n)
+        WasmBuilder.i64_const(b, Int64(typemax(UInt32)))
+        WasmBuilder.i64_gt_u(b)
+        WasmBuilder.if_(b)
+        call(code_gen, nir_runtime_member(t.component, throw_out_of_memory, at))
+        WasmBuilder.unreachable(b)
+        WasmBuilder.var"end"(b)
+        local mem_type = WasmBuilder.with_nullability(repr(info), false)
+        # n == 0: the type's one empty instance (emit_memorynew's emptymem, typ->instance)
+        WasmBuilder.local_get(b, n)
+        WasmBuilder.i64_eqz(b)
+        local done = WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[mem_type])
+        instantiate_constant(code_gen, NirConst(Core.Const(M.instance)), mem_type)
+        WasmBuilder.else_(b)
+        local fill() = if !isprimitivetype(E) && isbitstype(E)
+            local zero = Base.issingletontype(E) ? E.instance : reinterpret(E, zeros(UInt8, sizeof(E)))[1]
+            instantiate_constant(code_gen, NirConst(Core.Const(zero)), WasmBuilder.unpacked(storage))
+            WasmBuilder.local_get(b, n)
+            WasmBuilder.i32_wrap_i64(b)
+            WasmBuilder.array_new(b, array_type)
+        else
+            WasmBuilder.local_get(b, n)
+            WasmBuilder.i32_wrap_i64(b)
+            WasmBuilder.array_new_default(b, array_type)
+        end
+        local vals = Dict{String,Function}("data" => fill, "length" => () -> WasmBuilder.local_get(b, n))
+        # every set flag 0, no element written (dart's late field starts unset)
+        is_set === nothing || (vals["data#isSet"] = () -> (WasmBuilder.local_get(b, n); WasmBuilder.i32_wrap_i64(b); WasmBuilder.array_new_default(b, something(flag_type))))
+        new_struct(info, fs, vals)
+        WasmBuilder.var"end"(b)
+        return mem_type
+    end
+    # every other builtin takes a reference first
+    local RT = ty(args[1])
+    local ref_parts(R::Type) = begin
+        (R isa DataType && R <: GenericMemoryRef && R.parameters[1] === :not_atomic) || atomic_gap()
+        local rinfo, rfs = fields_of(R)
+        (rinfo, rfs, field(rfs, "ptr_or_offset"), field(rfs, "mem"))
+    end
+    if f === Core.memoryrefnew && length(args) == 1
+        RT isa DataType && RT <: GenericMemory || return nothing
+        local rinfo, rfs, off, mem = ref_parts(GenericMemoryRef{RT.parameters...})
+        local m = add_local(code_gen, WasmBuilder.with_nullability(repr(t.class_info[RT]), false))
+        translate_expression(code_gen, args[1], m.type)
+        WasmBuilder.local_set(b, m)
+        new_struct(rinfo, rfs, Dict{String,Function}("ptr_or_offset" => () -> WasmBuilder.i64_const(b, 0), "mem" => () -> WasmBuilder.local_get(b, m)))
+        return WasmBuilder.with_nullability(repr(rinfo), false)
+    end
+    RT isa DataType && RT <: GenericMemoryRef || return nothing
+    local rinfo, rfs, off, mem = ref_parts(RT)
+    local M = GenericMemory{RT.parameters...}
+    local minfo, mfs, data, array_type, is_set, flag_type = memory_of(M)
+    local r = add_local(code_gen, WasmBuilder.with_nullability(repr(rinfo), false))
+    translate_expression(code_gen, args[1], r.type)
+    WasmBuilder.local_set(b, r)
+    local get_offset() = (WasmBuilder.local_get(b, r); WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[off]))
+    local get_mem() = (WasmBuilder.local_get(b, r); WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[mem]))
+    local get_length() = (get_mem(); WasmBuilder.struct_get(b, minfo.struct_, t.field_index[field(mfs, "length")]))
+    local get_data() = (get_mem(); WasmBuilder.struct_get(b, minfo.struct_, t.field_index[data]))
+    local storage = array_type.element_type[].type
+    local T = eltype(RT)
+    # whether an element can be #undef, Julia's answer (codegen.cpp memoryref_isassigned's `isboxed ||
+    # layout->first_ptr >= 0`): a boxed element, or one stored inline holding a reference; with no set
+    # flags, its #undef is the null (useNull: its type excludes nothing, or it is a struct, never nothing)
+    local may_be_undef = !Base.allocatedinline(T) || (T isa DataType && !Base.datatype_pointerfree(T))
+    local undef_is_null = is_set === nothing && may_be_undef
+    # the element's set flag, dart's late field's isSet (late_lowering.dart's getter :295-300 reads it)
+    local flag() = begin
+        get_mem()
+        WasmBuilder.struct_get(b, minfo.struct_, t.field_index[something(is_set)])
+        get_offset()
+        WasmBuilder.i32_wrap_i64(b)
+        WasmBuilder.array_get_u(b, something(flag_type))
+    end
+    if f === Core.memoryrefnew
+        # memoryrefnew(r, i) checks as an unknown flag does (codegen.cpp:4247, a null boundscheck)
+        length(args) in (2, 3) || return nothing
+        local o = add_local(code_gen, I64)
+        local i = add_local(code_gen, I64)
+        translate_expression(code_gen, args[2], I64)
+        WasmBuilder.local_set(b, i)
+        get_offset()
+        WasmBuilder.local_get(b, i)
+        WasmBuilder.i64_const(b, 1)
+        WasmBuilder.i64_sub(b)
+        WasmBuilder.i64_add(b)
+        WasmBuilder.local_set(b, o)
+        if bounds_check_enabled(length(args) == 3 ? args[3] : nothing)
+            WasmBuilder.local_get(b, o)
+            get_length()
+            WasmBuilder.i64_ge_u(b)
+            WasmBuilder.if_(b)
+            raise_bounds(() -> (WasmBuilder.local_get(b, r); convert_type(t, b, r.type, t.top_type[])), () -> WasmBuilder.local_get(b, i))
+            WasmBuilder.var"end"(b)
+        end
+        new_struct(rinfo, rfs, Dict{String,Function}("ptr_or_offset" => () -> WasmBuilder.local_get(b, o), "mem" => get_mem))
+        return WasmBuilder.with_nullability(repr(rinfo), false)
+    elseif f === Core.memoryrefoffset
+        length(args) == 1 || return nothing
+        get_offset()
+        WasmBuilder.i64_const(b, 1)
+        WasmBuilder.i64_add(b)
+        return I64
+    end
+    # the order: a constant :not_atomic on non-atomic memory, else a gap
+    local ord = args[f === Core.memoryrefset! ? 3 : 2]
+    (ord isa NirConst && ord.c.val === :not_atomic) || atomic_gap()
+    local bc = args[end]
+    # an empty memory where bounds_check_enabled holds: BoundsError(m, 1)
+    local empty_check() = if bounds_check_enabled(bc)
+        get_length()
+        WasmBuilder.i64_eqz(b)
+        WasmBuilder.if_(b)
+        raise_bounds(() -> (get_mem(); convert_type(t, b, WasmBuilder.with_nullability(repr(minfo), false), t.top_type[])), () -> WasmBuilder.i64_const(b, 1))
+        WasmBuilder.var"end"(b)
+    end
+    local element() = begin
+        get_data()
+        get_offset()
+        WasmBuilder.i32_wrap_i64(b)
+        # a signed element read sign-extended, any other zero-extended (readIntArray)
+        read_int_array(self, array_type; unsigned = !(T <: Signed))
+    end
+    # whether the element on the stack is #undef, the null (useNull, T excluding nothing)
+    local is_undef() = WasmBuilder.ref_is_null(b)
+    if f === Core.memoryrefget
+        length(args) == 3 || return nothing
+        empty_check()
+        if is_set !== nothing
+            # an unset element raises UndefRefError, where dart's getter throws LateInitializationError
+            flag()
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.if_(b)
+            call(code_gen, nir_runtime_member(t.component, throw_undef_ref_error, at))
+            WasmBuilder.unreachable(b)
+            WasmBuilder.var"end"(b)
+            element()
+            return WasmBuilder.unpacked(storage)
+        end
+        element()
+        undef_is_null || return WasmBuilder.unpacked(storage)
+        # typed_load's maybenull: an undefined element raises UndefRefError
+        local v = add_local(code_gen, storage)
+        WasmBuilder.local_tee(b, v)
+        is_undef()
+        WasmBuilder.if_(b)
+        call(code_gen, nir_runtime_member(t.component, throw_undef_ref_error, at))
+        WasmBuilder.unreachable(b)
+        WasmBuilder.var"end"(b)
+        WasmBuilder.local_get(b, v)
+        WasmBuilder.ref_as_non_null(b)
+        return WasmBuilder.with_nullability(storage, false)
+    elseif f === Core.memoryrefset!
+        length(args) == 4 || return nothing
+        empty_check()
+        local x = add_local(code_gen, WasmBuilder.unpacked(storage))
+        translate_expression(code_gen, args[2], x.type)
+        WasmBuilder.local_set(b, x)
+        get_data()
+        get_offset()
+        WasmBuilder.i32_wrap_i64(b)
+        WasmBuilder.local_get(b, x)
+        WasmBuilder.array_set(b, array_type)
+        if is_set !== nothing
+            # the set flag written, as dart's setter sets its isSet (late_lowering.dart:385)
+            get_mem()
+            WasmBuilder.struct_get(b, minfo.struct_, t.field_index[something(is_set)])
+            get_offset()
+            WasmBuilder.i32_wrap_i64(b)
+            WasmBuilder.i32_const(b, 1)
+            WasmBuilder.array_set(b, something(flag_type))
+        end
+        WasmBuilder.local_get(b, x)
+        return x.type
+    elseif f === Core.memoryref_isassigned
+        length(args) == 3 || return nothing
+        # an element that cannot be #undef is assigned (the oob test alone), a flagged one by its flag,
+        # any other by its reference not being null
+        local defined() = !may_be_undef ? WasmBuilder.i32_const(b, 1) : is_set !== nothing ? flag() :
+            (element(); is_undef(); WasmBuilder.i32_eqz(b))
+        if bounds_check_enabled(bc)
+            get_length()
+            WasmBuilder.i64_eqz(b)
+            WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[I32])
+            WasmBuilder.i32_const(b, 0)
+            WasmBuilder.else_(b)
+            defined()
+            WasmBuilder.var"end"(b)
+        else
+            defined()
+        end
+        return I32
+    end
+    return nothing
 end
 
 # Julia's `_svec_ref(v, i)`: the `i`th element (from 1) of a SimpleVector's data array, dart's
@@ -1002,10 +1306,27 @@ method, Julia having resolved it, so no call is one.
     return true
 end
 
-# the read of dart:_wasm's typed WasmArray, one of its static intrinsics, which no Julia call is
-# (StaticIntrinsic.fromProcedure); a Julia array's element is read by its own methods
-@parity "dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray" read_int_array(self::Intrinsifier, node::NirInvoke; unsigned::Bool)::WasmBuilder.IR.ValueType =
-    reject!(Internal("dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray: a read of dart:_wasm's typed WasmArray, which no Julia call is"), "Intrinsifier.readIntArray")
+"""
+    read_int_array(self, array_type; unsigned) -> ValueType
+
+The read of a typed wasm array's element, its array and its i32 index on the stack: a packed i8 or i16
+element read sign-extended or zero-extended (array.get_s or array.get_u, by `unsigned`), any other
+element as it is stored (array.get). dart's readIntArray also translates the array and index operands
+and widens a 32-bit result to its 64-bit int (outerExtend); a Julia element keeps its own type's width,
+an 8- or 16-bit integer held in an i32 in its type's form (Translator.translateType), so the caller
+pushes the operands (a Memory's data array at the reference's offset) and nothing is widened.
+"""
+@parity "dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray" function read_int_array(self::Intrinsifier, array_type::WasmBuilder.IR.ArrayType; unsigned::Bool)::WasmBuilder.IR.ValueType
+    local b = self.code_gen.b[]
+    local wasm_type = array_type.element_type[].type
+    local inner_extend = wasm_type == WasmBuilder.IR.PackedType_i8 || wasm_type == WasmBuilder.IR.PackedType_i16
+    if inner_extend
+        unsigned ? WasmBuilder.array_get_u(b, array_type) : WasmBuilder.array_get_s(b, array_type)
+    else
+        WasmBuilder.array_get(b, array_type)
+    end
+    return WasmBuilder.unpacked(wasm_type)
+end
 
 # the memory a dart:_wasm memory intrinsic names, which no Julia call is: Julia's memory is its
 # objects (WasmGC), not a linear memory a call names

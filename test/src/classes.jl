@@ -250,6 +250,12 @@ end
     @test W.class_instance_fields(Memory{String}, "classes")[1].type === W.WasmArray{Union{String,Nothing}}
     @test W.class_instance_fields(Memory{Float64}, "classes")[1].type === W.WasmArray{W.WasmF64}
     @test W.class_instance_fields(Memory{Bool}, "classes")[1].type === W.WasmArray{W.WasmI8}
+    # elements that may hold nothing keep a set flag each (dart's late lowering, useIsSetField), one i8
+    # array beside the data; a reference excluding nothing, or an inline bits union, none
+    @test [f.name for f in W.class_instance_fields(Memory{Any}, "classes")] == ["data", "data#isSet", "length"]
+    @test W.class_instance_fields(Memory{Union{Nothing,String}}, "classes")[2] == W.ClassField(Memory{Union{Nothing,String}}, 0, "data#isSet", W.WasmArray{W.WasmI8}, false)
+    @test [f.name for f in W.class_instance_fields(Memory{String}, "classes")] == ["data", "length"]
+    @test [f.name for f in W.class_instance_fields(Memory{Union{Nothing,Int}}, "classes")] == ["data", "length"]
     @test W.class_instance_fields(R, "classes") == [W.ClassField(R, 1, "ptr_or_offset", Int, false), W.ClassField(R, 2, "mem", M, false)]
     # an atomic memory, a primitive with no storage class: located rejections
     local e = try; W.class_instance_fields(AtomicMemory{Int}, "classes"); nothing; catch x; x; end

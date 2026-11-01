@@ -789,17 +789,21 @@ A field Julia holds no value in (`#undef`) rejects, located.
             field.name == "data" || reject!(Internal("$at: the SimpleVector field $(field.name), not classes.jl's data"), at)
             make_array_of(self.constants, eltype(cls), NirConst[NirConst(Core.Const(x)) for x in v]; mutable_ = false).c.val
         elseif field.index == 0 && cls <: GenericMemory
-            # a Memory's field that is not Julia's (src/julia/classes.jl _memory_instance_fields): `data`,
+            # a Memory's fields that are not Julia's (src/julia/classes.jl _memory_instance_fields): `data`,
             # its elements as one mutable wasm array of its storage type, as visitStringConstant builds a
-            # String's bytes into its struct; an element Julia holds no value in (#undef) the null, where
-            # the element type excludes nothing (dart's late lowering's useNull)
-            field.name == "data" || reject!(Internal("$at: the Memory field $(field.name), not classes.jl's data"), at)
+            # String's bytes into its struct, an element Julia holds no value in (#undef) the null; and,
+            # where the elements may hold nothing, `data#isSet`, each element's set flag (dart's late
+            # lowering, useIsSetField), 1 where Julia holds a value
             local storage = field.type isa DataType && field.type <: WasmArray ? field.type.parameters[1] :
                 reject!(Internal("$at: the Memory field $(field.name) is no wasm array"), at)
-            Nothing <: eltype(cls) && !all(k -> isassigned(v, k), eachindex(v)) &&
-                reject!(Unquarantined("src/julia/classes.jl _memory_instance_fields: the constant $cls holds an element no write has set, whose element type admits nothing, laid out without its set flags"), at)
-            make_array_of(self.constants, storage,
-                NirConst[NirConst(Core.Const(isassigned(v, k) ? v[k] : nothing)) for k in eachindex(v)]).c.val
+            if field.name == "data"
+                make_array_of(self.constants, storage,
+                    NirConst[NirConst(Core.Const(isassigned(v, k) ? v[k] : nothing)) for k in eachindex(v)]).c.val
+            elseif field.name == "data#isSet"
+                make_array_of(self.constants, storage, NirConst[NirConst(Core.Const(Int32(isassigned(v, k)))) for k in eachindex(v)]).c.val
+            else
+                reject!(Internal("$at: the Memory field $(field.name), not classes.jl's data or data#isSet"), at)
+            end
         elseif field.index == 0
             # a kind's fields that are not Julia's own (src/julia/classes.jl _kind_instance_fields):
             # dart's _Type.isDeclaredNullable (types.jl's encodedNullability, Julia's `Nothing <: T`),

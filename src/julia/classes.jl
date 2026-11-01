@@ -420,6 +420,11 @@ unspecified, so the zero a new wasm array holds is one of Julia's own values, ne
 a gap (D9). An atomic memory (`AtomicMemory`) or another address space rejects, located: threads lie
 outside the strict subset.
 
+Reshaped: `data#isSet` — dart's late lowering gives a potentially nullable slot one bool flag
+(pkg/front_end/lib/src/kernel/late_lowering.dart:560 computeIsSetEncoding, useIsSetField); a memory's
+elements are slots of one array, so where they may hold nothing (`_needs_is_set`) their flags are one
+array beside it, an i8 each, zero (unset) as a new array holds, a write setting it.
+
 precedent(dart: list.dart:15 WasmListBase, its `WasmArray<Object?> _data` beside `int _length`;
 Julia's jl_genericmemory_t, its length beside its inline data). Julia's differs: a Memory is an
 object of its own class (it flows into `Any`), so the array sits in a field of its struct, as a
@@ -429,9 +434,29 @@ SimpleVector's does (`_svec_instance_fields`).
     c <: Core.GenericMemory || reject!(Internal("src/julia/classes.jl _memory_instance_fields: $c, no GenericMemory"), at)
     c.parameters[1] === :not_atomic && c.parameters[3] === Core.CPU ||
         reject!(Unquarantined("src/julia/classes.jl _memory_instance_fields: $c, an atomic memory or one of another address space"), at)
-    return ClassField[ClassField(c, 0, "data", WasmArray{_memory_element_storage(c.parameters[2], at)}, false),
-                      ClassField(c, Base.fieldindex(c, :length), "length", fieldtype(c, :length), false)]
+    local T = c.parameters[2]
+    local data = ClassField(c, 0, "data", WasmArray{_memory_element_storage(T, at)}, false)
+    local length = ClassField(c, Base.fieldindex(c, :length), "length", fieldtype(c, :length), false)
+    # elements that may hold nothing, each its set flag (_needs_is_set), as one array beside the data
+    _needs_is_set(T) || return ClassField[data, length]
+    return ClassField[data, ClassField(c, 0, "data#isSet", WasmArray{WasmI8}, false), length]
 end
+
+"""
+    _needs_is_set(T) -> Bool
+
+Whether a slot of type `T` that no write has set (Julia's #undef) keeps a separate set flag. dart's
+late lowering answers how a slot tells unset apart from its values: under the strategy dart2wasm's
+target selects (late_lowering.dart:552 computeIsSetStrategy's useIsSetFieldOrNull, as
+pkg/dart2wasm/lib/target.dart:565 declares `supportsLateLoweringSentinel => false`), a slot of a
+potentially nullable type keeps a flag, `useIsSetField`, which the setter sets (late_lowering.dart:382)
+and the getter tests before reading the slot, throwing when it is false (:295); a slot of any other type
+uses null for unset (`useNull`). WasmTarget's `nothing` is dart's null, so a reference slot whose type
+admits `nothing` (`Nothing <: T`, potentially nullable) takes the flag; one Julia stores inline
+(`Base.allocatedinline`) holds bits, never #undef, and takes none.
+"""
+@quarantine "pkg/front_end/lib/src/kernel/late_lowering.dart:560 computeIsSetEncoding keeps a potentially nullable slot's set state in a separate flag (useIsSetField); WasmTarget's nothing is dart's null" Base.allocatedinline _needs_is_set(@nospecialize(T))::Bool =
+    !Base.allocatedinline(T) && Nothing <: T
 
 """
     _memoryref_instance_fields(c, at) -> Vector{ClassField}

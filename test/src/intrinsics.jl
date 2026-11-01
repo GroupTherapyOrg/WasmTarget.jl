@@ -103,8 +103,6 @@ end
     @test DI.generate_instance_getter_intrinsic(ii, WI.NirCall(WI.NirValue[lit(getfield), x, lit(:a)])) === nothing
     @test DI.generate_static_getter_intrinsic(ii, WI.NirGlobalRead(GlobalRef(Base, :pi))) === nothing
     @test DI.generate_function_call_intrinsic(ii, inv(mi(+, (Int64, Int64)), x, lit(3))) === nothing
-    # dart:_wasm's typed array and memory intrinsics, which no Julia call is: located rejections
-    @test intr_rejection(() -> DI.read_int_array(ii, inv(mi(+, (Int64, Int64)), x, lit(3)); unsigned = true)).rejection isa WI.Internal
 end
 
 module SvecLenCases
@@ -263,6 +261,69 @@ end
     local M = IdenticalCases
     local cases = [WTRunner.compiled_case("$(nameof(f))$a", WI.compile, f, a) for f in (M.cells, M.mems, M.anys) for a in ((true,), (false,))]
     @test count(c -> c.native == 1, cases) == 3
+    for r in WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
+
+module MemoryCases
+# a Vector{Int} of n elements, x written at i and read back: memorynew, memoryrefnew, memoryrefset!
+# and memoryrefget under Julia's own bounds check (Base.throw_boundserror)
+vec(n::Int64, i::Int64, x::Int64) = (v = Vector{Int64}(undef, n); v[i] = x; v[i])
+# a Vector{String}'s unassigned element read: UndefRefError
+unset(n::Int64, i::Int64) = (v = Vector{String}(undef, n); ncodeunits(v[i]))
+# isassigned of each kind, and a negative size: ArgumentError
+assigned(n::Int64, i::Int64) = (v = Vector{String}(undef, n); i > 1 && (v[1] = "a"); Int64(isassigned(v, 1)) + Int64(isassigned(Vector{Int64}(undef, n), 1)))
+# the builtins directly on a Memory of n elements: set then get (an empty memory's BoundsError(m, 1)
+# under the bounds check), and isassigned of an empty or unassigned String element
+direct(n::Int64) = (r = Core.memoryrefnew(Memory{Int64}(undef, n)); Core.memoryrefset!(r, Int64(5), :not_atomic, true); Core.memoryrefget(r, :not_atomic, true))
+direct_assigned(n::Int64) = Int64(Core.memoryref_isassigned(Core.memoryrefnew(Memory{String}(undef, n)), :not_atomic, true))
+# a Memory past what can be allocated: OutOfMemoryError. The memory escapes to a global: one read only
+# for its length is an allocation Julia's optimizer may drop (AllocOpt), answering n natively
+const SINK = Ref{Any}(nothing)
+huge(n::Int64) = (m = Memory{UInt8}(undef, n); SINK[] = m; Int64(length(m)))
+# an element admitting nothing: #undef by its set flag, apart from a written nothing
+maybe(i::Int64) = (v = Vector{Union{Nothing,String}}(undef, 2); i > 1 && (v[1] = nothing); (v[1] === nothing ? Int64(10) : Int64(20)) + Int64(isassigned(v, 2)))
+# a signed 8-bit element read back sign-extended (readIntArray's array.get_s), an unsigned one not
+signed8(i::Int64) = (v = Vector{Int8}(undef, 2); v[1] = Int8(-1); Int64(v[i]))
+unsigned8(i::Int64) = (v = Vector{UInt8}(undef, 2); v[1] = 0xff; Int64(v[i]))
+# a constant Memory read by index (its class struct, the constant's data array), and the one empty
+# instance memorynew answers for 0, identical each time
+const PRIMES = let m = Memory{Int64}(undef, 4); m .= (2, 3, 5, 7); m end
+prime(i::Int64) = PRIMES[i]
+empties(n::Int64) = Int64(Memory{Int64}(undef, n) === Memory{Int64}(undef, n))
+# an inline element holding a reference, #undef until written (UndefRefError), an inline bits union
+# never #undef (its unwritten element nothing), and isassigned of an empty memory of bits false
+inline_ref(i::Int64) = (v = Vector{Some{String}}(undef, 2); v[1] = Some("ab"); Int64(isassigned(v, i)) + Int64(ncodeunits(something(v[i]))))
+bits_union(i::Int64) = (v = Vector{Union{Nothing,Int64}}(undef, 2); v[1] = Int64(5); Int64(v[i] === nothing))
+bits_assigned(n::Int64) = Int64(Core.memoryref_isassigned(Core.memoryrefnew(Memory{Int64}(undef, n)), :not_atomic, true))
+# memoryrefnew(r, i) without its flag, which checks
+ref2(i::Int64) = (r = Core.memoryrefnew(Core.memoryrefnew(Memory{Int64}(undef, 2)), i); Core.memoryrefset!(r, Int64(9), :not_atomic, true); Core.memoryrefget(r, :not_atomic, true))
+# every case above in one program, case k on (a, b), so the cases cost one compile
+const CASES = (vec, unset, assigned, direct, direct_assigned, huge, maybe, signed8, unsigned8, prime, empties, inline_ref, bits_union, bits_assigned, ref2)
+memory(k::Int64, a::Int64, b::Int64) =
+    k == 1 ? vec(a, b, Int64(7)) : k == 2 ? unset(a, b) : k == 3 ? assigned(a, b) : k == 4 ? direct(a) :
+    k == 5 ? direct_assigned(a) : k == 6 ? huge(a) : k == 7 ? maybe(a) : k == 8 ? signed8(a) :
+    k == 9 ? unsigned8(a) : k == 10 ? prime(a) : k == 11 ? empties(a) : k == 12 ? inline_ref(a) :
+    k == 13 ? bits_union(a) : k == 14 ? bits_assigned(a) : ref2(a)
+end
+
+@testset "builtins.c: Memory's builtins over its data array, Julia's errors raised" begin
+    # memorynew's negative size raises ArgumentError, an out-of-range index BoundsError (Julia's
+    # array code), an empty memory's get or set BoundsError(m, 1) under the bounds check, an
+    # unassigned reference element UndefRefError, a size past what can be allocated OutOfMemoryError:
+    # each a wasm exception where native Julia throws, never a trap; every other call answers as native
+    local M = MemoryCases
+    # (case, a, b): vec's n and i, unset's and assigned's n and i, every other case's one argument
+    local argsets = [(1, 3, 1), (1, 3, 3), (1, 3, 4), (1, 3, 0), (1, -1, 1), (2, 2, 1), (2, 2, 3), (3, 2, 1), (3, 2, 2),
+                     (4, 0, 0), (4, 1, 0), (5, 0, 0), (5, 1, 0), (6, 3, 0), (6, 2^50, 0), (7, 1, 0), (7, 2, 0), (8, 1, 0),
+                     (8, 3, 0), (9, 1, 0), (9, 0, 0), (10, 1, 0), (10, 4, 0), (10, 5, 0), (11, 0, 0), (11, 2, 0),
+                     (12, 1, 0), (12, 2, 0), (13, 1, 0), (13, 2, 0), (14, 0, 0), (14, 1, 0), (15, 2, 0), (15, 3, 0)]
+    local own = WI.compile(M.memory, (Int64, Int64, Int64))
+    local plain = WI.compile(M.memory, (Int64, Int64, Int64); optimize = false)
+    local cases = [WTRunner.RunCase("$(nameof(M.CASES[k]))$((k, a, b))", plain, Int64.((k, a, b)), WTRunner.native_answer(M.memory, Int64.((k, a, b))); optimized = own)
+                   for (k, a, b) in argsets]
+    @test count(c -> c.native isa WTRunner.Throws, cases) == 13
     for r in WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end

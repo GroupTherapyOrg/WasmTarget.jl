@@ -9,6 +9,18 @@
 @quarantine "Julia's runtime raises DivideError where a checked integer division fails" Core.DivideError @noinline throw_divide_error()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(DivideError())
 
+# the ArgumentError Julia's codegen raises where memorynew's element count is negative or its byte size
+# too large for the address width (cgutils.cpp emit_memorynew's error_unless over jlargumenterror_func,
+# genericmemory.c _new_genericmemory_'s jl_exceptionf), its message Julia's
+@quarantine "julia/src/cgutils.cpp:4563 emit_memorynew raises ArgumentError where a GenericMemory's size is invalid, as julia/src/genericmemory.c:54 _new_genericmemory_ does" Core.ArgumentError @noinline throw_invalid_memory_size()::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(ArgumentError("invalid GenericMemory size: the number of elements is either negative or too large for system address width"))
+
+# jl_memory_exception (julia.h), the OutOfMemoryError Julia's allocator throws where a memory's
+# allocation (genericmemory.c jl_alloc_genericmemory_unchecked, through jl_gc_managed_malloc) cannot be
+# satisfied
+@quarantine "julia/src/genericmemory.c:30 jl_alloc_genericmemory_unchecked raises Julia's OutOfMemoryError where a memory's allocation cannot be satisfied" Core.OutOfMemoryError @noinline throw_out_of_memory()::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(OutOfMemoryError())
+
 # jl_undefref_exception, raised where an undefined field or array element is read (rtutils.c)
 @quarantine "Julia's runtime raises UndefRefError where an undefined reference is read" Core.UndefRefError @noinline throw_undef_ref_error()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(UndefRefError())

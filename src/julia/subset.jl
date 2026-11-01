@@ -171,10 +171,12 @@ The runtime's entry points, each `(module path, name, argument types, demand)`: 
 generator calls where Julia raises, kept in the closed world beside the program whenever the program
 holds the IR form `demand` names (`_demanded`): `:throw`, a call of Julia's throw (dart2wasm's
 visitThrow calls errors_patch.dart's `_throwWithCurrentStackTrace`), `:checked_division`, a
-checked integer division or remainder, which raises DivideError at a zero divisor, `:svec_ref`, a
-read of a SimpleVector's element, which raises BoundsError out of range, and `:undefined_field`, an
-allocation leaving a field undefined or a read of a field one may leave so, which raises
-UndefRefError. Each demanded one is queued for
+checked integer division or remainder, which raises DivideError at a zero divisor, `:bounds`, a
+read of a SimpleVector's element or a MemoryRef's index (memoryrefnew), which raises BoundsError out of
+range, `:undefined_field`, an allocation leaving a field undefined, a read of a field one may leave so
+or a read of a Memory's element (memoryrefget), each raising UndefRefError where the reference is
+undefined, and `:memorynew`, a Memory's allocation, which raises ArgumentError at a negative size and
+OutOfMemoryError past what can be allocated. Each demanded one is queued for
 Julia's one trim inference beside the entry (`check_subset`), so its CodeInstance is in the closed
 world and its NirBody in the NIR.
 
@@ -186,8 +188,10 @@ checked to name one method when the package loads (check_runtime_entry_points).
 @quarantine "a method carries no entry-point pragma; the runtime's roots of Julia's trim inference are listed with their argument types" Core.Type const RUNTIME_ENTRY_POINTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol,Tuple{Vararg{Type}},Symbol}}} = (
     ((:Runtime,), :Error__throw_with_current_stack_trace, (Any,), :throw),
     ((), :throw_divide_error, (), :checked_division),
-    ((), :throw_bounds_error, (Any, Int), :svec_ref),
+    ((), :throw_bounds_error, (Any, Int), :bounds),
     ((), :throw_undef_ref_error, (), :undefined_field),
+    ((), :throw_invalid_memory_size, (), :memorynew),
+    ((), :throw_out_of_memory, (), :memorynew),
 )
 
 # a statement operand's value: a GlobalRef's binding (nothing when unbound) or the operand itself, as
@@ -237,8 +241,10 @@ end
     :throw => (st, src, sptypes) -> _calls_builtin(st, (Core.throw,)),
     :checked_division => (st, src, sptypes) -> _calls_builtin(st, (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
                                                                    Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int)),
-    :svec_ref => (st, src, sptypes) -> _calls_builtin(st, (Core._svec_ref,)),
-    :undefined_field => (st, src, sptypes) -> _leaves_field_undefined(st) || _reads_undefinable_field(st, src, sptypes),
+    :bounds => (st, src, sptypes) -> _calls_builtin(st, (Core._svec_ref, Core.memoryrefnew)),
+    :undefined_field => (st, src, sptypes) -> _leaves_field_undefined(st) || _reads_undefinable_field(st, src, sptypes) ||
+                                              _calls_builtin(st, (Core.memoryrefget,)),
+    :memorynew => (st, src, sptypes) -> _calls_builtin(st, (Core.memorynew,)),
 )
 
 # whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts, each body read
