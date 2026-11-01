@@ -126,6 +126,25 @@ _runner_add1(x::Int32) = x + Int32(1)
     @test calls == [false] && isempty(plain.optimized) && only(WTR.run_cases([plain])).ok
 end
 
+# a String argument crosses no wire: it is bound as a constant of the program (test/runner.jl's Bound), still passed to
+# the function as its argument inside the program, the case's label naming the position bound
+_runner_is_ho(s::String, n::Int64) = s === "ho" ? n : -n
+
+@testset "a String argument is bound as a constant of the program, its native answer Bound's" begin
+    @test WTR._bound("x", _runner_add1, (Int32(1),)) == ("x", _runner_add1, (Int32(1),))   # no String: the case as given
+    # the compile is handed the bound program and the wire arguments' types alone; WasmTarget's own compile of a
+    # bound String is the corpus's to judge (dart_language/identity_identical, 62 facts), a compile here costing the
+    # landing ~47 G instructions of first-compile paths
+    local handed = Any[]
+    local rec(f, ts; optimize::Bool = true) = (push!(handed, (f, ts)); _RUN_ADD1)
+    local c = WTR.compiled_case("ho", rec, _runner_is_ho, ("ho", Int64(3)); optimized = false)
+    @test c.label == "ho(String argument 1 bound)" && c.args == (Int64(3),) && c.native === Int64(3)
+    @test length(handed) == 1 && first(only(handed)) isa WTR.Bound && last(only(handed)) == (Int64,)
+    # the bound callable is the program native Julia runs too: another String, another answer
+    local label, b, args = WTR._bound("hi", _runner_is_ho, ("hi", Int64(3)))
+    @test label == "hi(String argument 1 bound)" && args == (Int64(3),) && WTR.native_answer(b, args) === Int64(-3)
+end
+
 # the A61S4 plant's log, and programs that log their native call (a reader's type parameter wants a function with
 # no captured state, so they are top-level)
 const _RUNNER_EVENTS = String[]

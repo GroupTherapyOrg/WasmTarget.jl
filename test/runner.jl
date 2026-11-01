@@ -73,8 +73,41 @@ The case of a program `compile` compiles: codegen's module as the case's own, an
 computed after both compiles.
 """
 function compiled_case(label::String, compile, f, args::Tuple; optimized::Bool = true)::RunCase
-    local plain, opt = _modules(compile, f, args; optimized)
-    return RunCase(label, plain, args, native_answer(f, args); optimized = opt)
+    local label′, f′, args′ = _bound(label, f, args)
+    local plain, opt = _modules(compile, f′, args′; optimized)
+    return RunCase(label′, plain, args′, native_answer(f′, args′); optimized = opt)
+end
+
+# A String argument crosses no wire: JS has no way to hand the module a Julia String. It becomes a constant of the
+# program, as a dart test's strings are literals its main holds (dart2wasm's tests at the pin pass their programs
+# no argument; precedent: tests/web/wasm, each a main()). Julia differs in that a case's arguments live in the corpus,
+# not in the program's text, so the runner binds them: Bound{F,P,S} is the callable `(wire arguments...) ->
+# F(...)` with the String S[j] at argument position P[j], each one a literal of the method _call_bound generates,
+# lowered by WT's own constant lowering as a literal of the program is, and passed to F as its argument inside the
+# program, so argument passing is still exercised. The native answer is Bound's own, the same constants, and the
+# case's label names the positions bound, "(String argument 1 bound)", so a bound case reads apart from a wire one.
+# F is the function itself, as Leaves's is: a function of no fields is its own type's one instance.
+struct Bound{F,P,S} <: Function end
+@generated function _call_bound(f, ::Val{P}, ::Val{S}, w::Tuple) where {P,S}
+    local wire = Any[:(getfield(w, $k)) for k in 1:fieldcount(w)]
+    local all = Any[]
+    for i in 1:(length(P) + fieldcount(w))
+        local j = findfirst(==(i), P)
+        push!(all, j === nothing ? popfirst!(wire) : String(S[j]))
+    end
+    return :(f($(all...)))
+end
+# fixed arities, as Leaves's: a varargs method of an open count reads its tuple by a run-time index, not yet compiled
+(::Bound{F,P,S})() where {F,P,S} = _call_bound(F, Val(P), Val(S), ())
+(::Bound{F,P,S})(a) where {F,P,S} = _call_bound(F, Val(P), Val(S), (a,))
+(::Bound{F,P,S})(a, b) where {F,P,S} = _call_bound(F, Val(P), Val(S), (a, b))
+(::Bound{F,P,S})(a, b, c) where {F,P,S} = _call_bound(F, Val(P), Val(S), (a, b, c))
+# the case as the runner compiles it: (label, f, args) unchanged when no argument is a String, else Bound's
+function _bound(label::String, f, args::Tuple)
+    local P = Tuple(i for (i, a) in enumerate(args) if a isa String)
+    isempty(P) && return (label, f, args)
+    local B = Bound{f,P,Tuple(Symbol(args[i]) for i in P)}
+    return ("$label(String argument$(length(P) == 1 ? "" : "s") $(join(P, ", ")) bound)", B(), Tuple(a for a in args if !(a isa String)))
 end
 
 # A tuple answer leaves the module as a reference to a wasm struct, which JS cannot read (and wasm-opt,
@@ -135,6 +168,10 @@ failure, never a false pass.
 """
 function answer_cases(label::String, compile, f, args::Tuple; optimized::Bool = true,
                       own::Vector{UInt8} = UInt8[])::Tuple{Vector{RunCase},Any}
+    # a String argument bound as a constant of the program (Bound); the caller's own compile took it as an argument,
+    # so it is not the bound program's
+    local label′, f′, args′ = _bound(label, f, args)
+    args′ === args || return answer_cases(label′, compile, f′, args′; optimized)
     # the case's own modules first, `own` the compile the caller already holds (compile's default, wasm-opt'd)
     local plain, opt = _modules(compile, f, args; optimized, own)
     local native = native_answer(f, args)
