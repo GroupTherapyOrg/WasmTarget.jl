@@ -6416,9 +6416,11 @@ decides). Nothing in the range is built without a precedent. R2: by the diffs, d
 to an Internal rejection (headline -1, Internal +1); 0d1d234a moves stack_trace_current from one Unported rejection to a body
 (gaps -1, headline +1) and adds three runtime bodies (stack_trace_get_current, _EmbedderStackTrace, StackTrace_current);
 e7915a8b adds one body (generateStaticIntrinsic's tuple_index arm) and fills generate_instance_getter_intrinsic, a body
-before. From 3119, 273 Internal and 11 gaps, the src definitions should read 3120 with 274 Internal and 10 gaps (the three
-runtime bodies counted where dev/src_progress.sh counts the runtime); each move is a real body or a rejection leaving the
-headline. dart's _EmbedderStackTrace.toString is not ported and no rejection names it, so the runtime's gap count does not
+before. Net from 1bed6b74: headline +1, Internal +1, gaps -1. This entry's own landing measured the head after the range:
+`src: 3119 of 3404 anchored dart definitions ported with a body … 273 whose body is one Internal rejection … and 11 one
+Unported or Unquarantined rejection` (ship.sh on 2be875a4), so the 3119/273/11 given at the audit's start is the range's end,
+not its start, which no record holds; each move above is a real body or a rejection leaving the headline (the three
+runtime bodies outside the dart count). dart's _EmbedderStackTrace.toString is not ported and no rejection names it, so the runtime's gap count does not
 hold it; a watch point while no Julia call reaches it.
 
 Resolution: this entry lands alone, prose only, and fixes nothing. A66E5 leaves MARCH 1.C, A69S2 1.E, A69S4 1.L, A69E2 1.C.
