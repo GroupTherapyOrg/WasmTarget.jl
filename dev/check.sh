@@ -92,10 +92,12 @@ unjudged_build DartCorpus test/smoke_corpus.jl test/DartCorpus -- julia --projec
 # shared-DAG constant hashed in 2^40 steps and held a landing for 50 minutes)
 WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: today's slowest loaded check is ~170 s
 /usr/bin/time -l -o .wtd/ratchet.time julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
-# four shards beside the ratchet (five processes on the four performance cores): each shard's instructions, which
-# D14's band judges, fall by a quarter of the suite's, and the suite grows with every port (the judged path read
-# 105-113 s of its 120-s edge at three shards, 2026-10-29 09:09); the wall clock rises a little, the judged path falls
-SHARDS=4; tpids=""
+# five shards beside the ratchet: each shard's instructions, which D14's band judges, are its own ~49 CPU-s first
+# compile of WasmTarget plus a fifth of the suite's tests, and the suite grows with every port (the judged path read
+# 105-113 s at three shards, 2026-10-29 09:09; at four, every change to src/ read 121 s, load 13 + a shard of 108,
+# its tests all green, 2026-11-01 11:20, wt3-memory); a fifth shard takes ~11 s off the slowest, at one more process
+# and a slower wall clock, which the band does not judge
+SHARDS=5; tpids=""
 costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-costs.tsv"; rm -f .wtd/src_costs.*
 for k in $(seq 1 $SHARDS); do
   : > ".wtd/progress.$k"
