@@ -244,3 +244,26 @@ end
         @test r.ok || (@info r.label r.why; false)
     end
 end
+
+module IdenticalCases
+mutable struct Cell
+    x::Int64
+end
+const PRIMES = let m = Memory{Int64}(undef, 2); m .= (2, 3); m end
+const OTHER = let m = Memory{Int64}(undef, 2); m .= (2, 3); m end
+# a mutable object is === only itself, whatever its contents
+cells(b::Bool) = (c = Cell(1); d = b ? c : Cell(1); Int64(c === d))
+# a memory constant against another of the same contents, and an Any against a mutable object
+mems(b::Bool) = Int64((b ? PRIMES : OTHER) === PRIMES)
+anys(b::Bool) = (c = Cell(1); x = b ? (c::Any) : (Int64(1)::Any); Int64(x === c))
+end
+
+@testset "intrinsics.dart: identical's ref.eq where an operand's class Julia's egal compares by identity" begin
+    # jl_egal_ answers a mutable class's === by the pointers alone: the same object, else false
+    local M = IdenticalCases
+    local cases = [WTRunner.compiled_case("$(nameof(f))$a", WI.compile, f, a) for f in (M.cells, M.mems, M.anys) for a in ((true,), (false,))]
+    @test count(c -> c.native == 1, cases) == 3
+    for r in WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+end

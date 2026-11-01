@@ -544,7 +544,11 @@ end
 end
 
 # identical: Julia's `===`, which compares a primitive value's bits (NaN === NaN, and 0.0 !== -0.0),
-# so a float is compared as the integer of its bits, where dart compares a double by value
+# so a float is compared as the integer of its bits, where dart compares a double by value; and, where
+# an operand cannot be a value compared by content (intrinsics.dart:1450 canBeValueType), the
+# references (ref.eq): Julia's jl_egal_ (julia.h:1885) answers by the pointers alone when either
+# operand's class is one it compares by identity (egal_by_identity: a mutable class but String,
+# SimpleVector and DataType), the same object or else, by a type tag apart or a mutable class, false
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:identical}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
@@ -569,6 +573,12 @@ end
         return i32
     end
     first_type === String && second_type === String && return generate_static_intrinsic(self, Val(:string_egal), first, second)
+    if egal_by_identity(first_type) || egal_by_identity(second_type)
+        translate_expression(code_gen, first, WasmBuilder.IR.RefType_eq(; nullable = true))
+        translate_expression(code_gen, second, WasmBuilder.IR.RefType_eq(; nullable = true))
+        WasmBuilder.ref_eq(b[])
+        return i32
+    end
     return nothing
 end
 
