@@ -219,11 +219,11 @@ end
 # whether a statement `Core.getfield(x, f)` of `src` reads a field an allocation may leave undefined,
 # the read code_generator.jl's _directGet null-tests and raises UndefRefError at: Julia's own test, its
 # codegen's field_may_be_null (classes.jl), of x's concrete type, x's type Julia's argextype as the trim
-# verifier reads an operand's; a field whose type admits `nothing` raises where its set flag is false
-# (classes.jl class_is_set_field), an inline bits union never
-@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null, its operand typed by Core.Compiler.argextype as the trim verifier types one" Core.Compiler.argextype function _reads_undefinable_field(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState})::Bool
+# verifier reads an operand's, an argument's by `slottypes`; a field whose type admits `nothing` raises
+# where its set flag is false (classes.jl class_is_set_field), an inline bits union never
+@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null, its operand typed by Core.Compiler.argextype as the trim verifier types one" Core.Compiler.argextype function _reads_undefinable_field(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState}, slottypes::Vector{Any})::Bool
     _calls_builtin(st, (Core.getfield,)) && length(st.args) >= 3 || return false
-    local T = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes))
+    local T = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes, slottypes))
     T isa DataType && isconcretetype(T) && fieldcount(T) > 0 || return false
     local k = _ir_value(st.args[3])
     k isa QuoteNode && (k = k.value)
@@ -235,25 +235,29 @@ end
 # or intrinsic whose raise the root lowers, or an allocation leaving a field undefined and a read of
 # a field one may have left so
 @quarantine "a runtime root is demanded by the Julia builtin or intrinsic whose raise it lowers" Core.Intrinsics.checked_sdiv_int const RUNTIME_DEMANDS = Dict{Symbol,Function}(
-    :throw => (st, src, sptypes) -> _calls_builtin(st, (Core.throw,)),
-    :checked_division => (st, src, sptypes) -> _calls_builtin(st, (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
+    :throw => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.throw,)),
+    :checked_division => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
                                                                    Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int)),
-    :bounds => (st, src, sptypes) -> _calls_builtin(st, (Core._svec_ref, Core.memoryrefnew)),
-    :undefined_field => (st, src, sptypes) -> _leaves_field_undefined(st) || _reads_undefinable_field(st, src, sptypes) ||
+    :bounds => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core._svec_ref, Core.memoryrefnew)),
+    :undefined_field => (st, src, sptypes, slottypes) -> _leaves_field_undefined(st) || _reads_undefinable_field(st, src, sptypes, slottypes) ||
                                               _calls_builtin(st, (Core.memoryrefget,)),
-    :memorynew => (st, src, sptypes) -> _calls_builtin(st, (Core.memorynew,)),
-    :atomic_order => (st, src, sptypes) -> _calls_builtin(st, (Core.isdefined,)) && length(st.args) == 4,
+    :memorynew => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.memorynew,)),
+    :atomic_order => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.isdefined,)) && length(st.args) == 4,
 )
 
 # whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts, each body read
-# with its method instance's static parameter types, as the trim verifier reads it
+# with its method instance's static parameter types, as the trim verifier reads it, and its arguments'
+# types its specialization's, as Julia's codegen types an argument (julia/src/codegen.cpp's
+# emit_function, jl_nth_slot_type of the specTypes): a body from Julia's cache carries no slottypes
 @quarantine "a demanded form is read from the inferred CodeInfo's statements, as Julia writes them" Core.CodeInfo function _demanded(codeinfos::Vector{Any}, holds::Function)::Bool
     for i in 1:length(codeinfos) - 1
         local item = codeinfos[i]
         local src = codeinfos[i + 1]
         item isa Core.CodeInstance && src isa Core.CodeInfo || continue
-        local sptypes = Core.Compiler.sptypes_from_meth_instance(Core.Compiler.get_ci_mi(item))
-        any(st -> holds(st, src, sptypes), src.code) && return true
+        local mi = Core.Compiler.get_ci_mi(item)
+        local sptypes = Core.Compiler.sptypes_from_meth_instance(mi)
+        local slottypes = Any[Base.unwrapva(p) for p in (Base.unwrap_unionall(mi.specTypes)::DataType).parameters]
+        any(st -> holds(st, src, sptypes, slottypes), src.code) && return true
     end
     return false
 end

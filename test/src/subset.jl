@@ -144,6 +144,9 @@ module UndefReadCases
 # reference whose type cannot hold `nothing`, so a read of it is null-tested and may raise UndefRefError
 @noinline read_ref(r::Base.RefValue{Integer}) = r[]
 held(x::Int) = read_ref(Ref{Integer}(x)) isa Int
+# the entry's own argument read: its body from Julia's cache carries no slottypes, so the argument's
+# type is its specialization's, as Julia's codegen types it
+as_int(r::Base.RefValue{Any}) = (r[]::Int64) + 1
 end
 
 @testset "check_subset: a read of a field an allocation may leave undefined demands the runtime's UndefRefError raise" begin
@@ -151,6 +154,8 @@ end
     local cw = WasmTarget.check_subset(UndefReadCases.held, (Int,), "subset")
     local nw = WasmTarget.build_nir(cw, "subset")
     @test any(nb -> nb.ci.def.def.name === :throw_undef_ref_error, nw)
+    # a read of the entry's argument demands it too, the argument typed by its specialization
+    @test any(nb -> nb.ci.def.def.name === :throw_undef_ref_error, WasmTarget.build_nir(WasmTarget.check_subset(UndefReadCases.as_int, (Base.RefValue{Any},), "subset"), "subset"))
     # the read compiles, its null test calling the raise, and answers as native Julia
     local bytes = WasmTarget.compile(UndefReadCases.held, (Int,); optimize = false)
     for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("held$(a)", bytes, a, UndefReadCases.held(a...)) for a in [(3,), (-1,)]])
