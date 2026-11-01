@@ -1520,31 +1520,158 @@ end
     return n
 end
 
-# a ported definition whose whole body is one rejection, by the rejection's kind (A55S13): Internal is a
-# dart definition Julia's answer replaces (a construct Julia never produces); Unported (a dart definition
-# not ported, a runtime function among them) and Unquarantined (a Julia-only definition not yet written,
-# src/julia/reject.jl) are gaps behind a definition that is written; read from the definition's
-# parsed body when @parity checks it, so the src progress count tells them from a port with a body
-@quarantine "Julia keeps no record of a definition's parsed body; the macro reads it once, as it checks it" Base.Dict const REJECTION_ONLY = Dict{String,Symbol}()
-
-@quarantine "a definition's body read from its parsed form, as the macro sees it" Base.Meta.isexpr function _rejection_only_kind(def)::Union{Symbol,Nothing}
-    (Meta.isexpr(def, :function) || Meta.isexpr(def, :(=))) && length(def.args) == 2 || return nothing
-    local body = def.args[2]
-    local stmts = Meta.isexpr(body, :block) ? filter(x -> !(x isa LineNumberNode), body.args) : Any[body]
-    length(stmts) == 1 || return nothing
-    local st = only(stmts)
-    (Meta.isexpr(st, :call) && length(st.args) >= 2 && st.args[1] === :reject!) || return nothing
-    local r = st.args[2]
-    Meta.isexpr(r, :call) || return nothing
-    local k = r.args[1]
-    local kind = k isa Symbol ? k : k isa GlobalRef ? k.name : Meta.isexpr(k, :.) ? k.args[end].value : nothing
-    return kind in (:Internal, :Unquarantined, :Unported) ? kind : nothing
+# the rejection-only kind of each @parity anchor of `entries` (each with `anchor`, `ported` and `methods`),
+# by which dev/src_progress.sh tells a port with a body from one that only rejects (A55S13, A64E2), and
+# for a faithful one the dart line that makes it so. Julia's inference answers whether a method returns:
+# its own signature inferred unoptimized (the compiler's typeinf_frame), a return type of Union{} is no
+# path returning, a call to a helper that only rejects among them; a return type of Nothing whose typed
+# code calls nothing for an effect alone is a guard that rejects and otherwise does nothing (A72S1). Its kind
+# is a gap (Unported, Unquarantined) where a reject! in its typed code takes one, Internal where one
+# takes Internal (or none shows and no path returns), and a check's rejections alone a body. An
+# Internal anchor of the dart pin whose member in `sdk` throws first is DartThrow, a faithful body,
+# counted; one that is abstract is DartAbstract, no body to port, a stub under R2 reported beside the
+# headline (the lead's rulings on audit 64's (p) rows); each names in the second result the dart
+# file:line of its throw or declaration, a throw's line confirmed to throw. Every other anchor is :body
+@quarantine "Julia's inference answers whether a method returns, a return type of Union{} none, precedent(julia: Compiler/src/typeinfer.jl:1115 typeinf_frame)" Core.Compiler.typeinf_frame function rejection_only_kinds(entries::AbstractVector, sdk::Union{String,Nothing})::Tuple{Dict{String,Symbol},Dict{String,String}}
+    # a method's kind: :body when inference finds a return of a value or an effect, else the kind its
+    # reject! calls take; the method itself is inferred over its own signature (its MethodMatch, never
+    # dispatch's, which would take a subtype's override for it), unoptimized, by the compiler's
+    # typeinf_frame, its return type and effects read from the frame
+    local interp = Core.Compiler.NativeInterpreter()
+    local world = Base.get_world_counter()
+    local method_kind(m::Method) = begin
+        local matches = Base._methods_by_ftype(m.sig, -1, world)
+        local i = matches === nothing ? nothing : findfirst(x -> x.method === m, matches)
+        i === nothing && return :body
+        local frame = Core.Compiler.typeinf_frame(interp, Core.Compiler.specialize_method(matches[i]), false)
+        frame === nothing && return :body
+        local ci = frame.src
+        local rt = Core.Compiler.widenconst(frame.result.result)
+        local resolve(x) = x isa Core.SSAValue ? resolve(ci.code[x.id]) :
+            x isa GlobalRef ? (isdefined(x.mod, x.name) ? getglobal(x.mod, x.name) : nothing) : x
+        # a method that returns only `nothing` and does nothing else (A72S1, output_target_table's form): in
+        # its typed code every reachable call but reject! serves a guard, its value read only by a branch's
+        # condition, a rejection's argument, a local no return reads, or another call that serves a guard;
+        # a call whose value is returned or never read is made for its effect, and the method is a body. Julia's effect
+        # analysis would also count a lazy field's first read, which no port of a guard means
+        local only_guards() = begin
+            local users = [Int[] for _ in ci.code]
+            local mark(x, j) = x isa Core.SSAValue ? push!(users[x.id], j) : x isa Expr ? foreach(y -> mark(y, j), x.args) : nothing
+            for (j, st) in enumerate(ci.code)
+                st isa Core.GotoIfNot ? mark(st.cond, j) : st isa Core.ReturnNode ? (isdefined(st, :val) && mark(st.val, j)) : mark(st, j)
+            end
+            # the locals a return reads (the declared return type's conversion passes the value through one)
+            local returned = Set{Any}()
+            for st in ci.code
+                st isa Core.ReturnNode && isdefined(st, :val) || continue
+                local v = st.val isa Core.SSAValue ? ci.code[st.val.id] : st.val
+                (v isa Core.SlotNumber || v isa Core.Argument) && push!(returned, v)
+            end
+            local serves = Dict{Int,Bool}()
+            local guard(i) = get!(serves, i) do
+                local st = ci.code[i]
+                Meta.isexpr(st, :call) && resolve(st.args[1]) !== reject! || return true
+                !isempty(users[i]) && all(users[i]) do j
+                    local u = ci.code[j]
+                    u isa Core.GotoIfNot || (Meta.isexpr(u, :(=)) && !(u.args[1] in returned)) ||
+                        (Meta.isexpr(u, :call) && (resolve(u.args[1]) === reject! || guard(j)))
+                end
+            end
+            return all(i -> ci.ssavaluetypes[i] === Union{} || guard(i), eachindex(ci.code))
+        end
+        rt === Union{} || (rt === Nothing && only_guards()) || return :body
+        local ks = Set{Symbol}()
+        for st in ci.code
+            local c = Meta.isexpr(st, :(=)) ? st.args[2] : st
+            Meta.isexpr(c, :call) && length(c.args) >= 2 && resolve(c.args[1]) === reject! || continue
+            local t = c.args[2] isa Core.SSAValue ? Core.Compiler.widenconst(ci.ssavaluetypes[c.args[2].id]) : Any
+            push!(ks, t === Unported ? :Unported : t === Unquarantined ? :Unquarantined : t === Internal ? :Internal :
+                      t <: Rejection ? :check : :Internal)
+        end
+        # a gap where a rejection is one; Internal where one is, or where none shows and no path returns (a
+        # helper's rejection); a check's rejections alone (InvalidModule, OutsideSubset, ProgramError) a body
+        :Unported in ks && return :Unported
+        :Unquarantined in ks && return :Unquarantined
+        :Internal in ks && return :Internal
+        return isempty(ks) && rt === Union{} ? :Internal : :body
+    end
+    # dart's member at line `ln`: its head read up to the first `{`, `=>` or `;` outside brackets; a
+    # throw when its block or expression begins with `throw` (the throw's line), abstract when the head
+    # ends at `;` with a parameter list or `get`, no `external`, no `=` and no constructor (the
+    # declaration's line); nothing otherwise
+    local dart_member(lines::Vector{String}, ln::Int, symbol::String) = begin
+        ln <= length(lines) || return nothing
+        local x = first(split(symbol, '.'))
+        local ctor = !occursin('.', symbol) || occursin(Regex("^(?:const\\s+|factory\\s+)?\\Q" * x * "\\E\\s*[(.]"), lstrip(lines[ln]))
+        local text = join((replace(l, r"//.*$" => "") for l in lines[ln:min(length(lines), ln + 300)]), "\n")
+        local line_at(i) = ln + count(==('\n'), text[1:i])
+        local throw_at(i) = (local r = findnext(r"\S", text, i); r !== nothing && startswith(text[first(r):end], "throw") ? (:DartThrow, line_at(first(r))) : nothing)
+        local depth = 0
+        local eq = false
+        local i = firstindex(text)
+        while i <= lastindex(text)
+            local c = text[i]
+            if c in ('(', '[')
+                depth += 1
+            elseif c in (')', ']')
+                depth -= 1
+            elseif depth == 0 && c == ';'
+                local head = text[1:i]
+                return !ctor && !eq && !occursin(r"\bexternal\b", head) && (occursin('(', head) || occursin(r"\bget\b", head)) ? (:DartAbstract, ln) : nothing
+            elseif depth == 0 && c == '=' && i < lastindex(text) && text[nextind(text, i)] == '>'
+                return throw_at(nextind(text, i, 2))
+            elseif depth == 0 && c == '='
+                eq = true
+            elseif depth == 0 && c == '{'
+                return throw_at(nextind(text, i))
+            end
+            i = nextind(text, i)
+        end
+        return nothing
+    end
+    local kinds = Dict{String,Symbol}()
+    # of several kinds, a body wins (an anchor several definitions name is a port when any has a body),
+    # then a gap
+    local join_kinds(ks) = :body in ks ? :body : :Unported in ks ? :Unported : :Unquarantined in ks ? :Unquarantined : :Internal
+    for e in entries
+        local k = e.ported && !isempty(e.methods) ? join_kinds(Symbol[method_kind(m) for m in e.methods]) : :body
+        kinds[e.anchor] = haskey(kinds, e.anchor) ? join_kinds((k, kinds[e.anchor])) : k
+    end
+    local lines_ = Dict{String,String}()
+    if sdk !== nothing
+        for (anchor, k) in kinds
+            k === :Internal || continue
+            local a = parse_anchor(anchor)
+            (a === nothing || a.pin !== :dart) && continue
+            local path = joinpath(sdk, a.file)
+            isfile(path) || continue
+            local ls = get!(() -> readlines(path), _PIN_LINES, path)
+            local d = dart_member(ls, a.line, a.symbol)
+            d === nothing && continue
+            # a throw's line is confirmed to throw; an abstract declaration is its own line
+            d[1] === :DartThrow && !occursin(r"\bthrow\b", ls[d[2]]) && continue
+            kinds[anchor] = d[1]
+            lines_[anchor] = "$(a.file):$(d[2])"
+        end
+    end
+    return kinds, lines_
 end
 
 # the ParityEntry of one definition and the definition to evaluate (an @unported stub expanded), or
 # a refusal at its line: the anchor's form and file, the file outside src/julia (and loaded by
-# include_dart, in WasmTarget), the Julia name the rule admits, the anchor resolved at the pin
-@quarantine "the dart anchors are checked where they are written, as dart's analyzer would" Base.readlines function _parity_entry(mod::Module, source::LineNumberNode, anchor, def)::Tuple{ParityEntry,Any}
+# include_dart, in WasmTarget), the Julia name the rule admits, the anchor resolved at the pin.
+# Its steps follow dart's OverrideVerifier.visitMethodDeclaration, which checks `@override` where it is
+# written, one to one: it finds the annotation (`element.metadata.hasOverride`) where this reads
+# @parity's anchor (`parse_anchor`); it resolves the member the annotation claims through the
+# inheritance manager (`_isOverride`) where this resolves the anchor in the pinned dart declarations
+# (`_anchor_fault`, and `_form_fault` for a class's mirror); it reports a located diagnostic
+# (`diag.overrideOnNonOverridingMethod.at(node.name)`) where this refuses at the definition's line.
+# Julia's differs: the anchor names a declaration of another language's source at a pinned commit, not
+# an inherited member of the same program, so it is read from the pinned file's text. Steps with no
+# counterpart there, WasmTarget's own file map and naming: the pin tables' membership, the file's
+# place (outside src/julia, loaded by include_dart), a ported struct's one inner constructor, and the
+# naming rule (`_admitted_names`)
+@quarantine "dart's analyzer checks an annotation where it is written, as pkg/analyzer/lib/src/error/override_verifier.dart:68 OverrideVerifier.visitMethodDeclaration checks @override" Base.readlines function _parity_entry(mod::Module, source::LineNumberNode, anchor, def)::Tuple{ParityEntry,Any}
     local refuse(why) = throw(ConstructionViolation("@parity", "$(_at(source)): $why"))
     anchor isa String || refuse("the anchor is not a string literal")
     local a = parse_anchor(anchor)
@@ -1558,16 +1685,6 @@ end
     (_inside(file, SRC) || own) && !any(d -> _jl_path(d) == normpath(file), INCLUDED) &&
         refuse("$file is not a file include_dart loaded")
     local ported = !_is_macro(def, Symbol("@unported"))
-    if ported
-        local inner = def
-        while Meta.isexpr(inner, :macrocall) && inner.args[1] in _TRANSPARENT_MACROS
-            inner = inner.args[end]
-        end
-        local kind = _rejection_only_kind(inner)
-        # an anchor several definitions name (a struct and its constructor, a method per signature) is a
-        # port with a body when any of them has one
-        get(REJECTION_ONLY, anchor, nothing) === :body || (REJECTION_ONLY[anchor] = something(kind, :body))
-    end
     ported || (def = _unported(anchor, def.args[end], source))
     local names, name = _defines(def, source)
     if ported && Meta.isexpr(def, :struct)

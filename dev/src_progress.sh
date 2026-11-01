@@ -58,14 +58,20 @@ else
             e = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget) && x.anchor in counted]
             stubbed = Set(x.anchor for x in e if !x.ported)
             ported = setdiff(Set(x.anchor for x in e), stubbed)
-            # A55S13: of the ported, those whose whole body is one rejection, by kind (REJECTION_ONLY)
-            # Internal: the answer of Julia replacing a construct it never produces (ruling A55S12);
-            # Unported (a dart definition) and Unquarantined (a Julia-only one, src/julia/reject.jl): gaps
-            replaced = count(a -> get(WasmTarget.REJECTION_ONLY, a, :body) === :Internal, ported)
-            gaps = count(a -> get(WasmTarget.REJECTION_ONLY, a, :body) in (:Unported, :Unquarantined), ported)
-            println(length(counted), " ", length(ported), " ", replaced, " ", gaps)') ||
+            # A55S13, A64E2: of the ported, those Julia'"'"'s inference finds never return, by kind
+            # (rejection_only_kinds). Internal: the answer of Julia replacing a construct it never produces
+            # (ruling A55S12); Unported (a dart definition) and Unquarantined (a Julia-only one,
+            # src/julia/reject.jl): gaps; DartThrow: dart'"'"'s own body throws, a body; DartAbstract: dart
+            # declares it abstract, no body to port, never counted
+            R, _ = WasmTarget.rejection_only_kinds([x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)], WasmTarget._pin_sdk())
+            k(a) = get(R, a, :body)
+            replaced = count(a -> k(a) === :Internal, ported)
+            gaps = count(a -> k(a) in (:Unported, :Unquarantined), ported)
+            abstract = count(a -> k(a) === :DartAbstract, ported)
+            faithful = count(a -> k(a) === :DartThrow, ported)
+            println(length(counted), " ", length(ported), " ", replaced, " ", gaps, " ", abstract, " ", faithful)') ||
             { echo "src: WasmTarget did not load, so its @parity registry gives no count"; exit 1; }
-        read -r anchored ported replaced gaps <<< "$counts"
+        read -r anchored ported replaced gaps abstract faithful <<< "$counts"
         # the runtime's gaps: the Unported rejections anchored in the wasm runtime library of the same dart-lang/sdk
         # pin (sdk/lib/_internal/wasm/, A52S1), each a call a module would make into a runtime src/runtime/ has not
         # ported yet; counted as the sites rejecting and the distinct runtime definitions they name (the measure
@@ -82,9 +88,13 @@ fi
 # A55S13, and Dale 2026-10-29, "DO NOT allow stubs to be clalled complete": a definition whose whole body is one
 # rejection is no port: an Internal one claims Julia never produces dart's construct, an Unported or Unquarantined
 # one is a gap. The headline counts only definitions with a body; the rejection-only ones stand beside it, never in it
-body=$(( ported - ${replaced:-0} - ${gaps:-0} ))
-line="src: $body of $anchored anchored dart definitions ported with a body (every definition of each dart file src loads, dev/skeleton.jl); $since landing(s) since src/ last changed"
-[ -n "${replaced:-}" ] && line="$line; not counted ported: $replaced whose body is one Internal rejection (Julia's answer replacing dart's construct, each to triage) and $gaps one Unported or Unquarantined rejection, a gap still to fill"
+body=$(( ported - ${replaced:-0} - ${gaps:-0} - ${abstract:-0} ))
+line="src: $body of $anchored anchored dart definitions ported with a body (every definition of each dart file src loads, dev/skeleton.jl)"
+[ -n "${faithful:-}" ] && line="$line, $faithful of them a dart body that itself throws, ported as its throw"
+line="$line; $since landing(s) since src/ last changed"
+# the line sums to the anchored total by itself: an @unported stub (anchored, not ported) is a gap too
+stubs=$(( anchored - ported ))
+[ -n "${replaced:-}" ] && line="$line; not counted ported: $replaced that never return, Julia's inference finds, rejecting Internal (Julia's answer replacing dart's construct, each to triage), $(( gaps + stubs )) gap(s) still to fill ($gaps rejecting Unported or Unquarantined, $stubs an @unported stub) and ${abstract:-0} in place of a dart abstract declaration (no body to port); $body + $replaced + $(( gaps + stubs )) + ${abstract:-0} = $(( body + replaced + gaps + stubs + ${abstract:-0} )) of $anchored"
 [ -n "${rt_sites:-}" ] && line="$line; the runtime library: $rt_sites rejecting site(s) name $rt_defs definition(s) of sdk/lib/_internal/wasm/ still to port"
 [ $started -eq 1 ] || line="$line (the rebuild's src/ not started: WT1 holds src/ until 1.A2c)"
 echo "$line"

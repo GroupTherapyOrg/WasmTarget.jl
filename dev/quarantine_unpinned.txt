@@ -236,7 +236,6 @@ julia/parity.jl REASON_ANCHOR_RX
 julia/parity.jl REASON_PATH_RX
 julia/parity.jl REASON_PRECEDENT_RX
 julia/parity.jl REGISTRY
-julia/parity.jl REJECTION_ONLY
 julia/parity.jl RUNTIME_FILES
 julia/parity.jl RUNTIME_MODULES
 julia/parity.jl RegistryEntry
@@ -286,7 +285,6 @@ julia/parity.jl _mentions_any
 julia/parity.jl _misplaced
 julia/parity.jl _module_of
 julia/parity.jl _modules
-julia/parity.jl _parity_entry
 julia/parity.jl _pin_julia
 julia/parity.jl _pin_llvm
 julia/parity.jl _pin_sdk
@@ -297,7 +295,6 @@ julia/parity.jl _reason_unpinned
 julia/parity.jl _references
 julia/parity.jl _register!
 julia/parity.jl _register_range!
-julia/parity.jl _rejection_only_kind
 julia/parity.jl _resolve_name
 julia/parity.jl _sealed_ancestor
 julia/parity.jl _source_text
