@@ -82,12 +82,12 @@ end
 """
 Make a selector for each collected call shape, its row of classes by id, and pack the rows with
 unique offsets; define the targets and class ids tables. A Julia program has no dynamic call shape
-(the type's docstring); a shape, if one were collected, waits for its selector (DynamicSelector).
+(the type's docstring), so a collected shape is the collector's error, Internal (A55S14's rule).
 """
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:52 DynamicDispatchTable.build" function build(self::DynamicDispatchTable, dynamic_call_shapes::Set{CallShape})::Nothing
     local translator = self.translator
     isempty(dynamic_call_shapes) ||
-        reject!(Unported("dart2wasm/lib/dynamic_dispatch_table.dart:330 DynamicSelector"), "DynamicDispatchTable.build")
+        reject!(Internal("dart2wasm/lib/dynamic_dispatch_table.dart:52 DynamicDispatchTable.build: $(length(dynamic_call_shapes)) dynamic call shape(s), where Julia's trim verifier admits no dynamic call (D32)"), "DynamicDispatchTable.build")
     local rows = Row{TableEntry}[]
     # A dynamic call may not succeed, so the offsets are unique
     self._table[] = build_row_displacement_table(rows; unique_offsets = true)
@@ -119,15 +119,15 @@ end
     return nothing
 end
 
-# the table is empty in a Julia program (the type's docstring); an entry, if one were placed, waits for
-# the dynamic forwarders of its shape
+# the table is empty in a Julia program (the type's docstring): build places no entry, so an entry is
+# the builder's error, Internal (A55S14's rule)
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:199 DynamicDispatchTable.outputTargetTable" function output_target_table(self::DynamicDispatchTable)::Nothing
-    any(!isnothing, self._table[]) && reject!(Unported("dart2wasm/lib/functions.dart:195 FunctionCollector.getExistingDynamicForwarder"), "DynamicDispatchTable.outputTargetTable")
+    any(!isnothing, self._table[]) && reject!(Internal("dart2wasm/lib/dynamic_dispatch_table.dart:199 DynamicDispatchTable.outputTargetTable: an entry in the targets table, where Julia's trim verifier admits no dynamic call (D32)"), "DynamicDispatchTable.outputTargetTable")
     return nothing
 end
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:257 DynamicDispatchTable.outputClassIdTable" function output_class_id_table(self::DynamicDispatchTable)::Nothing
-    any(!isnothing, self._table[]) && reject!(Unported("dart2wasm/lib/dynamic_dispatch_table.dart:408 buildIntegerExpression"), "DynamicDispatchTable.outputClassIdTable")
+    any(!isnothing, self._table[]) && reject!(Internal("dart2wasm/lib/dynamic_dispatch_table.dart:257 DynamicDispatchTable.outputClassIdTable: an entry in the class ids table, where Julia's trim verifier admits no dynamic call (D32)"), "DynamicDispatchTable.outputClassIdTable")
     return nothing
 end
 

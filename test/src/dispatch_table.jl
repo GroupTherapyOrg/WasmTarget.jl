@@ -83,6 +83,13 @@ end
     DD.build(ddt, DD.DynamicCallSiteCollector_collect(t.component))
     @test isempty(ddt._table[]) && ddt._defined_targets_table[].min_size == 0 && ddt._defined_class_ids_table[].min_size == 0
     DD.output(dt); DD.output(ddt)
+    # a collected shape or a placed entry: none in Julia's subset, so the collector's or builder's error
+    local internal(f) = (e = try; f(); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Internal)
+    @test internal(() -> DD.build(DD.DynamicDispatchTable(t), Set{DD.CallShape}([DD.GetterCallShape(:f)])))
+    local entry = DD.TableEntry(first(b.ci.def for b in t.component), 0, DD.GetterCallShape(:f))
+    local ddt2 = DD.DynamicDispatchTable(t)
+    ddt2._table[] = Union{DD.TableEntry,Nothing}[entry]
+    @test internal(() -> DD.output_target_table(ddt2)) && internal(() -> DD.output_class_id_table(ddt2))
     # a member asks for no selector: a located rejection
     local e = try; DD.selector_for_target(dt, first(b.ci.def for b in t.component)); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
