@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# a push to the march branch is a landing, and a landing is judged by origin's dev/ship.sh (dab5842d): only a ship.sh
+# that carries today's rules sets WT_SHIP_RULES, so a lane or a stale autoship loop running an older copy (one without
+# the hold, the retry cap or the progress row) is refused here, where every worktree's push passes, old copies included
+# (the common dir's hooks are shared by every worktree; march-monitor-a, 19:56, D6). Install with
+# cp dev/hooks/pre-push "$(git rev-parse --git-common-dir)/hooks/"
+while read -r _local _lsha remote _rsha; do
+  case "$remote" in
+    refs/heads/wt2)
+      if [ "${WT_SHIP_RULES:-0}" -lt 2 ]; then
+        echo "pre-push: REFUSED — a push to wt2 comes only from dev/ship.sh with today's rules (WT_SHIP_RULES=2); this copy is older: rebase onto origin/wt2 and ship again" >&2
+        exit 1
+      fi ;;
+  esac
+done
+exit 0
