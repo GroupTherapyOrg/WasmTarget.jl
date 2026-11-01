@@ -2483,6 +2483,98 @@ function debt_negatives_missed()::Vector{String}
     return out
 end
 
+# ---- L227, its fourth part: a model's claims are never weakened unnamed (A69E2, dev/LEDGER.md D11) -------
+# a TLC cfg's claims: the names its INVARIANT(S) and PROPERTY(IES) sections list, comments aside
+function cfg_claims(text::AbstractString)::Set{String}
+    local out = Set{String}()
+    local section = false
+    for raw in split(text, '\n')
+        local l = strip(replace(raw, r"\\\*.*$" => ""))
+        isempty(l) && continue
+        local w = split(l)
+        if occursin(r"^[A-Z_]+$", w[1])
+            section = w[1] in ("INVARIANT", "INVARIANTS", "PROPERTY", "PROPERTIES")
+            section && foreach(x -> push!(out, x), w[2:end])
+        elseif section
+            foreach(x -> push!(out, x), w)
+        end
+    end
+    return out
+end
+
+# the `Invariant-dropped: <Name> — carried by <NewName>` and `… — moot: <reason>` lines of `msg`, by name:
+# the successor named, or "" for moot with a reason
+function invariant_drop_lines(msg::AbstractString)::Dict{String,String}
+    local out = Dict{String,String}()
+    for m in eachmatch(r"^Invariant-dropped: (\S+) — (?:carried by (\S+)|moot: \S.*)$"m, msg)
+        out[m[1]] = something(m[2], "")
+    end
+    return out
+end
+
+# the claims a change from `base` (its merge base with HEAD) in the repository at `root` drops from a
+# dev/formal MC*.cfg, and the Broken cfgs it removes, that its messages do not name, a sentence each: a
+# dropped name is carried by a successor its cfg lists at HEAD, or moot for a stated reason; a removed
+# Broken cfg the same, by its name, its successor a cfg at HEAD
+function invariants_dropped(root::AbstractString, base::AbstractString)::Vector{String}
+    success(pipeline(`git -C $root rev-parse --verify -q $base^\{commit\}`; stdout = devnull, stderr = devnull)) ||
+        return ["the change's base $base names no commit: the claims it drops cannot be read (CHECK_BASE)"]
+    local mb = readchomp(`git -C $root merge-base $base HEAD`)
+    local lines = invariant_drop_lines(readchomp(`git -C $root log --format=%B $mb..HEAD`))
+    local has(rev, f) = success(pipeline(`git -C $root cat-file -e $rev:$f`; stderr = devnull))
+    local cfgs(rev) = String[f for f in split(readchomp(`git -C $root ls-tree -r --name-only $rev -- dev/formal`), '\n'; keepempty = false)
+                             if occursin(r"(^|/)MC[^/]*\.cfg$", f)]
+    local now = Set(cfgs("HEAD"))
+    local out = String[]
+    for f in cfgs(mb)
+        local before = cfg_claims(readchomp(`git -C $root show $mb:$f`))
+        if !(f in now)
+            endswith(f, "Broken.cfg") || (isempty(before) || push!(out, "the change removes $f, its claims $(join(sort!(collect(before)), ", ")) with it: move them or name each by `Invariant-dropped:`"); continue)
+            local n = basename(f)[1:end-4]
+            local succ = get(lines, n, nothing)
+            succ === nothing && (push!(out, "the change removes the Broken cfg $n and no `Invariant-dropped: $n — carried by <cfg>` or `— moot: <reason>` line names it"); continue)
+            isempty(succ) || any(g -> basename(g) == succ * ".cfg", now) ||
+                push!(out, "the change removes the Broken cfg $n carried by $succ, which is no cfg at HEAD")
+            continue
+        end
+        local after = cfg_claims(readchomp(`git -C $root show HEAD:$f`))
+        for name in sort!(collect(setdiff(before, after)))
+            local succ = get(lines, name, nothing)
+            succ === nothing && (push!(out, "the change drops $name from $f and no `Invariant-dropped: $name — carried by <Name>` or `— moot: <reason>` line names it"); continue)
+            isempty(succ) || succ in after || push!(out, "the change drops $name from $f carried by $succ, which $f does not list")
+        end
+    end
+    return out
+end
+
+function invariants_negatives_missed()::Vector{String}
+    local out = String[]
+    mktempdir() do t
+        local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
+        g("init", "-q"); mkpath(joinpath(t, "dev", "formal"))
+        local c = joinpath(t, "dev", "formal", "MCM.cfg")
+        local b = joinpath(t, "dev", "formal", "MCMXBroken.cfg")
+        write(c, "\\* the model\nSPECIFICATION Spec\nINVARIANT TypeOK\nINVARIANTS\n    Safe\n    Live\nPROPERTY Ends\n")
+        write(b, "\\* expect: Safe\nSPECIFICATION Spec\nINVARIANT Safe\n"); g("add", "-A"); g("commit", "-qm", "c0")
+        local c0 = readchomp(`git -C $t rev-parse HEAD`)
+        isempty(invariants_dropped(t, "HEAD")) || push!(out, "negative missed: a change that drops no claim")
+        write(c, "SPECIFICATION Spec\nINVARIANT TypeOK\nINVARIANTS\n    Safe\nPROPERTY Ends\n"); g("commit", "-qam", "drop")
+        length(invariants_dropped(t, c0)) == 1 || push!(out, "negative missed: a dropped invariant with no line passes")
+        g("commit", "-q", "--amend", "-m", "drop\n\nInvariant-dropped: Live — carried by Lively")
+        length(invariants_dropped(t, c0)) == 1 || push!(out, "negative missed: a dropped invariant carried by a successor the cfg does not list passes")
+        g("commit", "-q", "--amend", "-m", "drop\n\nInvariant-dropped: Live — carried by Safe")
+        isempty(invariants_dropped(t, c0)) || push!(out, "negative missed: a dropped invariant carried by a listed successor is refused")
+        g("commit", "-q", "--amend", "-m", "drop\n\nInvariant-dropped: Live — moot: the model no longer has a live state")
+        isempty(invariants_dropped(t, c0)) || push!(out, "negative missed: a dropped invariant moot for a stated reason is refused")
+        g("rm", "-q", "dev/formal/MCMXBroken.cfg"); g("commit", "-qm", "rmb\n\nInvariant-dropped: Live — moot: no live state")
+        length(invariants_dropped(t, c0)) == 1 || push!(out, "negative missed: a removed Broken cfg with no line passes")
+        g("commit", "-q", "--amend", "-m", "rmb\n\nInvariant-dropped: Live — moot: no live state\nInvariant-dropped: MCMXBroken — moot: its claim went with Live")
+        isempty(invariants_dropped(t, c0)) || push!(out, "negative missed: a removed Broken cfg named moot is refused")
+        length(invariants_dropped(t, "nosuchref")) == 1 || push!(out, "negative missed: a base that names no commit")
+    end
+    return out
+end
+
 # ---- L227, its second half: a dart record is lowered only by name (A51E4, A53E2; dev/CHARTER.md C10) --
 # test/src/dart_tests.jl's records: each case's kind, the last element of its record, read by Julia's own parser
 # from the `const DART_CASES = Dict(...)` expression, so a record written over several lines is read as one
@@ -2915,11 +3007,12 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every record it turns to a weaker kind (:compiled to any other, :outside to :rejects; A55E1), its records read by Julia's parser so one written over several lines counts, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line); and the D45 debt list only shrinks (A66E2, dev/LEDGER.md D20): a line of dev/quarantine_unpinned.txt, comments and blank lines aside, that the file at that merge base does not hold (counted, so a line written twice adds one) is refused with no escape, so a new unpinned @quarantine pins its source and never joins the list, and a line traded for another is an addition; and a change that rewrites a debt-listed definition's body (by its debt key, its definition as Julia's parser reads it, whitespace and comments aside) while leaving its line is refused, naming it, since the commit that changes the body owns it, pins it and deletes its line (the lead's ruling, from the monitor, R1); the pin tables JULIA_FILES, LLVM_FILES and DART_FILES, whose rows are the pins themselves, an exact allowlist until 1.K, take added rows and nothing else. Behavior, run here: seven planted messages and a scratch repository for removals, fourteen planted records and messages and a scratch repository for lowerings, and a scratch repository's five debt-list changes (none, a deletion with a reworded comment, a trade, a line written twice, a base naming no commit) and three changes to a debt-listed body (re-spaced, rewritten with its line kept, rewritten and pinned with its line deleted), answer as stated (dev/CHARTER.md C10)",
+    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every record it turns to a weaker kind (:compiled to any other, :outside to :rejects; A55E1), its records read by Julia's parser so one written over several lines counts, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line); and the D45 debt list only shrinks (A66E2, dev/LEDGER.md D20): a line of dev/quarantine_unpinned.txt, comments and blank lines aside, that the file at that merge base does not hold (counted, so a line written twice adds one) is refused with no escape, so a new unpinned @quarantine pins its source and never joins the list, and a line traded for another is an addition; and a change that rewrites a debt-listed definition's body (by its debt key, its definition as Julia's parser reads it, whitespace and comments aside) while leaving its line is refused, naming it, since the commit that changes the body owns it, pins it and deletes its line (the lead's ruling, from the monitor, R1); the pin tables JULIA_FILES, LLVM_FILES and DART_FILES, whose rows are the pins themselves, an exact allowlist until 1.K, take added rows and nothing else. And a model's claims are never weakened unnamed (A69E2, dev/LEDGER.md D11): each name a dev/formal MC*.cfg's INVARIANT(S) or PROPERTY(IES) lists at that merge base and not at HEAD, and each Broken cfg the change removes, is named by a line `Invariant-dropped: <Name> — carried by <NewName>` (a successor the cfg lists at HEAD; for a Broken cfg, a cfg at HEAD) or `Invariant-dropped: <Name> — moot: <reason>`. Behavior, run here: seven planted messages and a scratch repository for removals, fourteen planted records and messages and a scratch repository for lowerings, and a scratch repository's five debt-list changes (none, a deletion with a reworded comment, a trade, a line written twice, a base naming no commit) and three changes to a debt-listed body (re-spaced, rewritten with its line kept, rewritten and pinned with its line deleted), and a scratch repository's model changes (no drop; a dropped invariant unnamed, carried by a successor the cfg lacks, carried by one it lists, moot; a removed Broken cfg unnamed and named moot; a base naming no commit), answer as stated (dev/CHARTER.md C10)",
         () -> begin
             local base = get(ENV, "CHECK_BASE", "origin/wt2")
             local v = vcat(removals_unnamed(ROOT, base), removals_negatives_missed(), lowerings_unnamed(ROOT, base), lowerings_negatives_missed(),
-                           debt_lines_added(ROOT, base), debt_bodies_changed(ROOT, base), debt_negatives_missed())
+                           debt_lines_added(ROOT, base), debt_bodies_changed(ROOT, base), debt_negatives_missed(),
+                           invariants_dropped(ROOT, base), invariants_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
