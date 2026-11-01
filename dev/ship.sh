@@ -14,8 +14,9 @@ MARCH=wt2
 cd "$(dirname "$0")/.."
 lane=$(pwd -P)
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
-# the rules version dev/hooks/pre-push requires of every push to the march branch: an older copy sets none and is refused
-export WT_SHIP_RULES=2
+# the rules dev/hooks/pre-push requires of every push to the march branch: this script's own blob, which must be
+# origin's dev/ship.sh, so any older or edited copy is refused with no version to bump by hand (march-monitor-a, 20:06, D6)
+export WT_SHIP_RULES="$(git hash-object "$0")"
 # the rules that judge a landing are origin's, never the lane's copy: a lane, or a stale loop, on an older tree ran
 # an older ship.sh without the refusals added since (the hold, the retry cap, the progress row; march-monitor-a, 19:47,
 # D6). So when origin's dev/ship.sh differs from this file, this run executes origin's instead, from the lane's .wtd

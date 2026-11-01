@@ -7,8 +7,9 @@
 while read -r _local _lsha remote _rsha; do
   case "$remote" in
     refs/heads/wt2)
-      if [ "${WT_SHIP_RULES:-0}" -lt 2 ]; then
-        echo "pre-push: REFUSED — a push to wt2 comes only from dev/ship.sh with today's rules (WT_SHIP_RULES=2); this copy is older: rebase onto origin/wt2 and ship again" >&2
+      want=$(git rev-parse "origin/wt2:dev/ship.sh" 2>/dev/null)
+      if [ -z "$want" ] || [ "${WT_SHIP_RULES:-}" != "$want" ]; then
+        echo "pre-push: REFUSED — a push to wt2 comes only from origin/wt2's own dev/ship.sh (its blob $want), not ${WT_SHIP_RULES:-a plain push}: rebase onto origin/wt2 and ship again" >&2
         exit 1
       fi ;;
   esac
