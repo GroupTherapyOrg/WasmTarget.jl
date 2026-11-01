@@ -5916,3 +5916,102 @@ A66S3's check, A66E3, A66E4 and A66S4 (src/julia/parity.jl, test/parity_ratchet.
 src/wasm_builder/serialize/sections.jl); wt3-runtime holds A66S1 (src/functions.jl) and A66S2
 (src/runtime/js_common/js_string.jl); wt3-memory holds A66S3's `_wasm_only` (src/julia/wasm_array.jl); wt3-cgstubs2
 holds A66E5 (src/translator.jl).
+
+## 2026-11-01 — audited through 0d69d3c2 (e0cd6392..0d69d3c2: an undefinable field's read demanding UndefRefError, a Memory constant as its class's struct, === by identity, five shards, visitRethrow over Julia's exception stack, a precedent resolved, the non-standalone catch refused, debt lines by signature, host foreign calls per call site, GC preservation and loop hints, the debt list shrink-only)
+
+The sixty-seventh audit, beside the work, covers the 11 commits of e0cd6392..0d69d3c2 that are not audit entry 66
+(f8ec7d2b): 04dcb5d8, b1134735, af8319f4, 70b857dc, dd9c2109, e46d66b4, 47a7668e, 665146f1, 247ea3a1, 7fe30d10 and
+0d69d3c2, read here, under Dale's R1 and R2 as standing sections. Every finding rests on one exact command, quoted.
+Standing items. src changes in 13 files (`git diff --stat e0cd6392..0d69d3c2 -- src | tail -1` gives `13 files
+changed, 387 insertions(+), 170 deletions(-)`); no exemption lands (`git diff e0cd6392..origin/wt2 -- src | grep -cE
+'^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 0). Fixed in the range: A66E1 by e46d66b4 (a precedent names
+a symbol and resolves at its ecosystem's pinned checkout, `_precedent_fault`, every precedent of a reason required);
+A66E2 by 665146f1 (a debt line names one definition, by signature where a file quarantines several of one name) and
+0d69d3c2 (L227 refuses a change adding a line, counted, with a scratch repository's five plants); A66S1's import half by
+247ea3a1 (the import's type is `_make_function_type`'s; its export half is open, below, A67S3); A64R2 by 247ea3a1
+(nir_host_import's whole-body shape test deleted, D5); A63S3 by 7fe30d10. A66E5 has not landed (`sed -n 1497,1501p
+src/translator.jl` unchanged). The debt list reads 400 at both ends (`git show <c>:dev/quarantine_unpinned.txt | grep -v
+'^#' | grep -c .` gives 400, 401 at 665146f1, 400 at 247ea3a1 and 0d69d3c2): 665146f1 added `julia/parity.jl
+_written_signature`, an unpinned definition, by its line, the last addition the list can take now that 0d69d3c2
+refuses one. Findings A67E1, A67E2, A67S1, A67S2, A67S3 and A67S4.
+
+Area: builder — no change under src/wasm_builder. 247ea3a1's get_function for a NirForeignImport reuses an import only
+of the same module, name and type (functions.jl:210), as emit_a_ccall's getOrInsertFunction does (ccall.cpp:1980,
+read at JULIA_PIN).
+
+stopgap in disguise: none new.
+precedent: Julia's emit_a_ccall, by line at the pin.
+
+Area: collection and planning — 04dcb5d8 demands throw_undef_ref_error where a getfield reads a field Julia's
+field_may_be_null (cgutils.cpp:2768, read at the pin: `idx < nfields - n_uninitialized` and the pointer test, both
+ported) may read as null, the operand typed by argextype with the method instance's sptypes; its `strct.constant` arm is
+not ported, which demands more, never less, and `!(Nothing <: F)` follows _directGet's rule that a nothing-admitting
+field's undefined allocation rejects (A63's entry). b1134735 meets a constant memory's length and written elements in
+the class walk, never `ptr`. dd9c2109 adds NirHandlers.exception_at, compute_trycatch's exception stack top, Julia's
+answer (D3). 247ea3a1 adds NirForeignImport and nir_foreign_import, read as interpret_symbol_arg (:571) and
+convert_cconv (:1307) read a foreigncall, each line read at the pin. (A67S1, low, R1/D3) an Any argument of a host
+call crosses as the operand's inferred class: `grep -n 'local params = Type\[t === Any' src/julia/runtime/rtutils.jl`
+gives `139: local params = Type[t === Any ? Union{Nothing, nir_value_type(body, operands[i])} : t …]`, so the import's
+type is the call site's inference, where julia_to_native (ccall.cpp:528, cited as its source) passes every boxed
+argument as one jl_value_t* whatever its class and dart types the import by its declaration; two sites passing
+different classes import one `<lib>.<sym>` twice under two types. Its docstring's precedent, `grep -n 'precedent(julia:
+julia/' src/julia/runtime/rtutils.jl` giving `86:`, doubles the prefix `_precedent_fault` adds (`"julia/$path"`), so
+it reads julia/julia/src/ccall.cpp and is refused the day it moves into a reason. Fix: an Any argument crosses as one
+reference type at every site, its operand converted to it (Julia's one pointer type), or rejects located; the precedent
+written `precedent(julia: src/ccall.cpp:1980 function_sig_t::emit_a_ccall)`.
+
+stopgap in disguise: A67S1's narrowing, Julia's boxed arm read as a per-class one.
+precedent: Julia's field_may_be_null, compute_trycatch and emit_ccall, by line.
+
+Area: emission and diagnostics — af8319f4 adds identical's ref.eq arm where either operand's class is one
+egal_by_identity names, julia.h:1885 jl_egal_ and :1874 jl_egal__unboxed_ read at the pin (a mutable datatype past
+the small tags returns 0; String, SimpleVector and DataType carry small tags, compared by content); dd9c2109 ports
+visitRethrow's body (code_generator.dart:2966), the_exception reading the same stack top; 47a7668e rejects Unported at
+boxJsException wherever guardCanMatchJSException holds; 7fe30d10 answers gc_preserve_begin, gc_preserve_end and
+loopinfo with no wasm effect, each a value Internal. (A67S3, low, D1/D5) A66S1's import half closes by a third copy of
+_makeFunctionType's body: `grep -c '@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType"' src/functions.jl`
+gives 3 (MethodInstance :548, NirForeignImport :567, FieldReference :582), the external-type and void rules written in
+each, where dart's one body reads its target through _getInputTypes and the member's return type; and the export arm
+still reads the specialization through `_get_input_types` (A66S1's open half). Fix: one `_make_function_type` body,
+`_get_input_types` and the return type read per target kind, an export's from its declared signature. (A67S4, low,
+prose) a comment dd9c2109 falsified: `grep -n "Julia.s exception stack has no reader" src/code_generator.jl` gives
+`995:`, which says the_exception rejects outside its catch's first block; it now reads exception_at. Fix: the comment
+says the stack's reader is NirHandlers.exception_at (visit_block). Watch points. (1) Base.rethrow is routed only as an
+invoke; inlined, its foreigncall `:jl_rethrow` names no library and rejects at nir_foreign_import as "whose library no
+host supplies", located but misnamed. (2) b1134735 holds an unset Memory element as its null; memoryrefget is not yet
+lowered (`grep -rn memoryrefget src` gives only nir.jl's tfunc table), so its UndefRefError test lands with it.
+
+stopgap in disguise: none new.
+precedent: dart's identical and visitRethrow, Julia's jl_egal_ and codegen's gc_preserve and loopinfo arms.
+
+Area: enforcement and prose — e46d66b4, 665146f1 and 0d69d3c2 close A66E1 and A66E2 with plants that fire when their
+checks are stubbed (nine, two and five). 70b857dc runs the src tests in five shards. (A67E1, medium, D14/D31) the
+check's growth is answered by another process: `grep -n '^SHARDS=' dev/check.sh` gives `100:SHARDS=5`, six Julia
+processes with the ratchet on the four performance cores during every landing, each shard paying the ~49 CPU-s first
+compile A64E3 names, a fifth time; the band judges the slowest shard, so a shard lowers the judged number while the
+wall clock and total work rise, and the first src change after it reds anyway (`tail -2 "$(git rev-parse --git-common-dir)/wt-ship-failures.tsv"`
+gives 13845711 `check: RED — 135 s` and `123 s`, 12:08Z and 12:10Z). 70b857dc does not name A64E3, whose fix is the
+first-compile cut. Fix: the shard count the cores hold (four processes), and A64E3's latency cut as the fix (D15).
+(A67E2, medium, R1) `_precedent_fault` is pinned by an analogy it does not port: `grep -n 'function _precedent_fault'
+src/julia/parity.jl` gives `1334: @quarantine "… as pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:15
+CommentReferenceResolver resolves a doc comment's"`; that class resolves `[name]` in a doc comment against the AST's
+scope (`sed -n 15p` at the pin, `class CommentReferenceResolver {`), and the body, an ecosystem switch, prefix checks
+and JULIA_FILES membership, ports none of it; it pins only because a path citation pins on any code line naming its
+symbol (A66S3). Fix: the line returns to the debt list until a pinned near 1:1 match is named, and A66S3's fix (a
+citation's line declares what the definition ports) refuses such a pin. (A67S2, low, R1) 665146f1 adds
+`_written_signature` (parity.jl:199, reason "a method is its signature, which Julia's parser gives as written") to the
+debt list, the last addition before 0d69d3c2: `grep -n _written_signature dev/quarantine_unpinned.txt` gives `309:`.
+Fix: pinned to the source it ports, its line deleted. Requirements: D14 and D31 (A67E1); no lock fired inside its band.
+
+R1 and R2. R1: each new src/julia definition's citation resolves at its pin (cgutils.cpp:2768, ccall.cpp:528, :571,
+:1307, :1419, :1980; julia.h:1874, :1885, read here); one is pinned by analogy (A67E2), one narrows Julia's answer
+(A67S1), one joined the debt list (A67S2), and _makeFunctionType's body is copied a third time (A67S3). L213's precedent
+now resolves and its list only shrinks; its path citations still pin on a substring (A66S3). R2: visitRethrow and three
+translateStatement arms move from a rejection to a body; nothing in the range counts a one-statement rejection as
+ported; A66E5 is open.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A67E1 is open on MARCH 1.L. A67E2 is open on MARCH
+1.K. A67S2 is open on MARCH 1.K. A67S1 is open on MARCH 1.F. A67S3 is open on MARCH 1.F. A67S4 is open on MARCH 1.D.
+A66S1's row names its open export half. By owner: lead holds A67E1 (dev/check.sh), A67E2 and A67S2
+(src/julia/parity.jl); wt3-runtime holds A67S1 (src/julia/runtime/rtutils.jl) and A67S3 (src/functions.jl);
+wt3-cgstubs2 holds A67S4 (src/code_generator.jl).
