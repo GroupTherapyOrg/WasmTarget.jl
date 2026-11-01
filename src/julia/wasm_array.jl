@@ -290,7 +290,7 @@ into the memory's data array at the reference's offset (classes.jl holds_referen
 be #undef) and, for elements admitting nothing, one of 0 into their set flags. Never inlined, so the code
 generator meets the call and lowers it (src/intrinsics.jl); natively Base's.
 """
-@quarantine "julia/src/genericmemory.c:223 jl_genericmemory_copyto's NULL is an element's #undef, which Base's _unsetindex! stores through a pointer; WasmGC stores the data array's null (array.set)" Core.Intrinsics.atomic_pointerset @noinline function wasm_memory_unset!(ref::MemoryRef{T})::Nothing where {T}
+@quarantine "julia/base/genericmemory.jl:78 _unsetindex! stores an element's #undef, C_NULL, through a pointer; WasmGC stores the data array's null (array.set)" Core.Intrinsics.atomic_pointerset @noinline function wasm_memory_unset!(ref::MemoryRef{T})::Nothing where {T}
     # Base's store written out (base/genericmemory.jl:88-99): its method is the overlay's own
     # (src/patch/genericmemory.jl), a call of which would be a cycle with no way out, Union{}
     holds_reference(T) || return nothing
@@ -316,7 +316,7 @@ layout one `array.fill` of the memory's data array from 0 for its length (dart's
 Never inlined, so the code generator meets the call and lowers it (src/intrinsics.jl); natively Base's
 memset written out (its fill! is the overlay's own method in WasmTarget's table, src/patch/genericmemory.jl).
 """
-@quarantine "julia/src/genericmemory.c:30 jl_alloc_genericmemory_unchecked lays a byte memory's elements at its address, which Base's fill! memsets; WasmGC fills the data array (array.fill)" Base.memset @noinline function wasm_memory_fill!(mem::Union{Memory{UInt8},Memory{Int8}}, x::Union{UInt8,Int8})::Nothing
+@quarantine "julia/base/genericmemory.jl:204 fill! memsets a byte memory's elements through its address; WasmGC fills the data array (array.fill)" Base.memset @noinline function wasm_memory_fill!(mem::Union{Memory{UInt8},Memory{Int8}}, x::Union{UInt8,Int8})::Nothing
     GC.@preserve mem Base.memset(Base.unsafe_convert(Ptr{Cvoid}, mem), x, length(mem) % UInt)
     return nothing
 end
