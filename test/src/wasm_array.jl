@@ -100,8 +100,10 @@ function memory(k::Int64, n::Int64)
         delete!(sd, "k1")
         return length(sd) + 10 * sd["bb"] + 100 * Int64(haskey(sd, "k1")) + 1000 * get(sd, KEYS[n], Int64(0))
     elseif k == 13
-        # a String's hash, bit for bit native's: empty, short, one 16-byte block and a tail, several blocks
-        local hs = n == 0 ? "" : n == 1 ? "a" : n == 2 ? "héllo wörld, a longer one" : "k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1"
+        # a String's hash, bit for bit native's: empty, 1, 7 and exactly 8 bytes, non-ASCII short (6 bytes)
+        # and long (one 16-byte block and a tail), several blocks
+        local hs = n == 0 ? "" : n == 1 ? "a" : n == 2 ? "héllo wörld, a longer one" : n == 4 ? "abcdefg" : n == 5 ? "abcdefgh" :
+            n == 6 ? "日本" : "k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1"
         return (hash(hs, n % UInt) % UInt(1000003)) % Int64
     elseif k == 7
         local w = Vector{Int64}(undef, 4)
@@ -135,7 +137,7 @@ end
     local plain = W.compile(memory, (Int64, Int64); optimize = false)
     local argsets = [(1, 1), (1, 40), (2, 1), (2, 40), (3, 1), (3, 40), (5, 2), (5, 3), (6, 1), (6, 9),
                      (7, 1), (7, 3), (8, 1), (8, 3), (8, 6), (8, 9), (9, 1), (9, 4), (9, 9), (10, 1), (10, 4), (10, 5), (11, 1), (11, 2), (11, 40), (12, 1), (12, 30),
-                     (13, 0), (13, 1), (13, 2), (13, 3), (4, 2), (4, 3)]
+                     (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (4, 2), (4, 3)]
     local cases = [WTRunner.RunCase("memory$a", plain, Int64.(a), WTRunner.native_answer(memory, Int64.(a))) for a in argsets]
     for r in WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
