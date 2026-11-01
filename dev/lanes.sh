@@ -58,7 +58,8 @@ fi
 want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
 fail=0
 # the wasm engine is CI's (ci.yml's node-version, the one source): a gate on another Node passes
-# what CI's traps (batch 108: V8 12.4, Node 22, traps entering a try_table with a reference result)
+# what CI's traps (batch 108: V8 12.4, Node 22, traps entering a try_table with a reference result; so
+# ci.yml names Node 26, test/runner.jl's NODE_MIN_MAJOR)
 NODE_MAJOR=$(sed -n "s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p" .github/workflows/ci.yml | head -1)
 ci_node="$(brew --prefix "node@$NODE_MAJOR" 2>/dev/null)/bin"
 [ -x "$ci_node/node" ] && export PATH="$ci_node:$PATH"

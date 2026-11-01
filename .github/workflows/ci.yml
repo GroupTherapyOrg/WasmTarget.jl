@@ -95,7 +95,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '26'
 
       # Prebuilt binary (seconds) instead of `cargo install wasm-tools`, which
       # compiled wasm-tools from source on every job (~5-10 min x 6 matrix jobs,

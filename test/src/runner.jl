@@ -20,6 +20,13 @@ const _RUN_I32, _RUN_I64, _RUN_F32, _RUN_F64 = 0x7f, 0x7e, 0x7d, 0x7c
 const _RUN_IMPORTS = UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
                       0x02, 0x07, 0x01, 0x01, 0x6d, 0x01, 0x66, 0x00, 0x00]
 const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.const 1, i32.add
+# a try_table of a reference result, which Node 22's V8 traps with no WT code in it (test/runner.jl's NODE_MIN_MAJOR):
+#   (type $s (struct (field i32))) (tag $t (param (ref $s))) (func $g)
+#   (func (export "f") (result i32)
+#     block (result (ref $s)) try_table (result (ref $s)) (catch $t 0) call $g i32.const 20 struct.new $s end end
+#     drop i32.const 7)
+const _RUN_TRY_TABLE_REF = hex2bytes("0061736d010000000111045f017f0060016400006000006000017f03030202030d03010001" *
+                                     "070501016600010a1d0202000b18000264001f64000100000010004114fb00000b0b1a41070b")
 # a module importing the standalone embedder's dart.stackTraceGetCurrent (() -> externref), its `f`
 # (i32 -> i32) calling it, dropping the trace and returning its argument
 const _RUN_EMBEDDER = vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
@@ -52,6 +59,7 @@ const _RUN_EMBEDDER = vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
         WTR.RunCase("UInt64 past typemax(Int64)", _run_one_function(_RUN_I64), (typemax(UInt64),), typemax(UInt64)),
         WTR.RunCase("a value where native answers nothing", _RUN_ADD1, (Int32(1),), nothing),
         WTR.RunCase("the standalone embedder's import, given", _RUN_EMBEDDER, (Int32(7),), Int32(7)),
+        WTR.RunCase("a try_table of a reference result", _RUN_TRY_TABLE_REF, (), Int32(7)),
     ]
     local r = WTR.run_cases(cases)
     @test length(r) == length(cases) && [x.label for x in r] == [c.label for c in cases]
@@ -66,6 +74,7 @@ const _RUN_EMBEDDER = vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
           !occursin("the module answers", r[15].why)
     @test !r[19].ok && occursin("the module answers \"a_value:number\", native Julia nothing", r[19].why)   # A56E1
     @test r[20].ok
+    @test r[21].ok   # the engine runs a try_table of a reference result: an engine that traps it fails here, named
     @test WTR.run_cases(WTR.RunCase[]) == WTR.RunResult[]
 end
 

@@ -205,11 +205,21 @@ struct RunResult
 end
 
 # the node of CI's major: Homebrew's node@<major>, else the node on PATH when it is that major
+# the lowest Node major whose V8 runs WT's modules: Node 22's (v22.23.3) traps "unreachable" entering any try_table
+# with a reference result, with no WT code in it (test/src/runner.jl's "a try_table of a reference result" module,
+# 12 lines, returns 7 on Node 26.11 and traps on Node 22; the corpus's wasm-opt'd modules of
+# dart_switch/case_fallthrough, dart_switch/try_catch and dart_web_wasm/no_omit_error_details trapped so on
+# f05b2fa8, 2026-11-01, wt3-cgstubs2). Node 24 is untried here, so the floor is the major that was run.
+const NODE_MIN_MAJOR = 26
 function node_binary()::Union{String,Nothing}
     local ci = read(joinpath(ROOT, ".github", "workflows", "ci.yml"), String)
     local m = match(r"node-version: *'?([0-9]+)", ci)
     m === nothing && return nothing
     local major = m[1]
+    # no exception-handling module runs on an engine that traps it: a ci.yml naming an older Node is refused, located
+    parse(Int, major) >= NODE_MIN_MAJOR || error(".github/workflows/ci.yml names Node $major, below test/runner.jl's " *
+        "NODE_MIN_MAJOR $NODE_MIN_MAJOR: its V8 traps entering a try_table with a reference result " *
+        "(test/src/runner.jl's \"a try_table of a reference result\" module)")
     for pre in ("/opt/homebrew/opt/node@$major/bin", "/usr/local/opt/node@$major/bin")
         isfile(joinpath(pre, "node")) && return joinpath(pre, "node")
     end
