@@ -78,15 +78,20 @@ end
     @test D.get_concrete_class_id_range(v, Type{Union{}}) == [D.Range(v.class_ids[Core.TypeofBottom], v.class_ids[Core.TypeofBottom])]
     # a world with Tuple covariance (Tuple{Int64} <: Tuple{Any} off its supertype chain) and with
     # Type{Union{}} beside TypeofBottom: every class's ranges hold a concrete class's id exactly when
-    # Julia's <: says it is a subtype, the implementors' ranges merged in
+    # Julia's <: says it is a subtype, the implementors' ranges merged in; an open tuple type's ranges
+    # hold the records of the arities it admits (TupleRecord), its values' classes, a concrete tuple
+    # being boxed into its record where it flows into an open slot
     local cov = number(ClassInfoCases.f_cov, (ClassInfoCases.Holder, Tuple{Int}, Int))
     local cconc = filter(isconcretetype, cov.dfs_order)
     @test Tuple{Any} in cov.dfs_order && Tuple{Int} in cov.dfs_order && Core.TypeofBottom in cov.dfs_order && Type{Union{}} in cov.dfs_order
+    @test W.tuple_record_class(1) in cov.dfs_order
     @test Tuple{Int} <: Tuple{Any} && supertype(Tuple{Int}) === Any
     @test cov._implementors[Tuple{Any}] == DataType[c for c in cconc if c <: Tuple{Any}]
-    @test all(((k, c),) -> (c <: k) == any(r -> contains(r, cov.class_ids[c]), D.get_concrete_class_id_range(cov, k)),
+    local holds(k, c) = k isa DataType && k <: Tuple && !isconcretetype(k) ?
+        (local n = W.tuple_record_arity(c); n !== nothing && typeintersect(k, NTuple{n,Any}) !== Union{}) : c <: k
+    @test all(((k, c),) -> holds(k, c) == any(r -> contains(r, cov.class_ids[c]), D.get_concrete_class_id_range(cov, k)),
               [(k, c) for k in cov.dfs_order for c in cconc])
-    @test any(r -> contains(r, cov.class_ids[Tuple{Int}]), D.get_concrete_class_id_range(cov, Tuple{Any}))
+    @test D.get_concrete_class_id_range(cov, Tuple{Any}) == [D.Range(cov.class_ids[W.tuple_record_class(1)], cov.class_ids[W.tuple_record_class(1)])]
     @test D.get_concrete_class_id_range(cov, Type{Union{}}) == [D.Range(cov.class_ids[Core.TypeofBottom], cov.class_ids[Core.TypeofBottom])]
     # a singleton type as a value: its member Int isa Type{Int}, yet no class is <: it, so the range
     # query rejects, located (audit A41S3)

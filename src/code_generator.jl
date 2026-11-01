@@ -1897,7 +1897,8 @@ end
         tuple_type <: va.packed ||
             reject!(Internal("$at: the varargs tuple $tuple_type of a call of $(nir_invoke_target(node)), no $(va.packed)"), "$(self.enclosing_member)")
         if !isconcretetype(tuple_type)
-            # its class only run time knows: jl_f_tuple's, chosen by its open elements' classes
+            # its class only run time knows (jl_f_tuple's): the record of its arity, each element boxed
+            # (the open_tuple arm, src/julia/classes.jl TupleRecord)
             local values = WasmBuilder.IR.Local[]
             for operand in trailing
                 local l = add_local(self, translate_type(self, nir_value_type(self.body, operand)))
@@ -2099,16 +2100,17 @@ class, the tuple type of its fields' types, Julia's answer (`nir_tuple_type`, th
 closed world's classes also read: `tuple(Int, 1)` is a `Tuple{DataType, Int64}`), laid out as any
 class with Julia's field types (src/class_info.jl), so each operand is translated to its field's own
 wasm type. An operand whose class Julia leaves open makes a tuple whose class only run time knows,
-Julia's jl_f_tuple's: it is chosen among the closed world's tuple classes by the open operands' classes
-(intrinsics.jl's open_tuple arm over tuple_classes), past max_union_splitting rejected, located.
+Julia's jl_f_tuple's: it is the record of its arity, each element boxed to the top type (intrinsics.jl's
+open_tuple arm, src/julia/classes.jl TupleRecord, dart's record class of a shape), as every tuple is
+in a slot whose static type is open.
 """
 @parity "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral" function visit_record_literal(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/code_generator.dart:3239 AstCodeGenerator.visitRecordLiteral"
     local args = node.args[2:end]
     local record_type = nir_tuple_type(self.body, node)
     if !(record_type isa DataType && isconcretetype(record_type))
-        # its class only run time knows: jl_f_tuple's, chosen by its open elements' classes, as a varargs
-        # tuple's (the open_tuple arm over tuple_classes, the one source)
+        # its class only run time knows (jl_f_tuple's): the record of its arity, as a varargs tuple's
+        # (the open_tuple arm, src/julia/classes.jl TupleRecord)
         local values = WasmBuilder.IR.Local[]
         for operand in args
             local l = add_local(self, translate_type(self, nir_value_type(self.body, operand)))

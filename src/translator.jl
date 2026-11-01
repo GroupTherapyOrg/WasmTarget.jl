@@ -999,6 +999,9 @@ the representation here is a reference to the join's struct, each value boxed in
     # the class representing the type, classForType's one answer (a Union's join, a type value's kind)
     local cls = class_for_type(self, type_)
     cls === Any && return WasmBuilder.with_nullability(self.top_type[], nullable)
+    # an open tuple type holds the records of its arities (src/julia/classes.jl TupleRecord), classes
+    # under the top one, never under its own: the top type
+    cls <: Tuple && !isconcretetype(cls) && return WasmBuilder.with_nullability(self.top_type[], nullable)
     # Wasm array? dart:_wasm's WasmArray<T> and ImmutableWasmArray<T> (src/julia/wasm_array.jl), the
     # type of a field holding a wasm array of T
     cls <: WasmArray && return WasmBuilder.IR.RefType_def(array_type_for_dart_type(self, cls.parameters[1]; mutable_ = true); nullable = nullable)
@@ -1164,6 +1167,101 @@ Reshaped: `boxed_class` — dart's boxedClasses keys a box by the wasm type, whi
             WasmBuilder.unreachable(b)
             return nothing
         end
+    end
+    # a tuple (src/julia/classes.jl TupleRecord): a reference of its own class flowing into a slot of
+    # another type is boxed into its arity's record, dart's record class of a shape, each field boxed to
+    # the top type; one narrowed back into its own class is unboxed from the record, each field
+    # unboxed to its own type, as dart boxes a value type on upcast and unboxes it on downcast
+    # (a reference's class read from its struct, translator.classForHeapType)
+    local tuple_of(t::WasmBuilder.IR.ValueType) = t isa WasmBuilder.IR.RefType &&
+        (local info = get(self.class_for_heap_type, t.heap_type, nothing); info !== nothing && info.cls isa DataType &&
+         info.cls <: Tuple && isconcretetype(info.cls) && fieldcount(info.cls) > 0) ? info.cls : nothing
+    local from_tuple = tuple_of(from)
+    local to_tuple = tuple_of(to)
+    if from_tuple !== nothing && from_tuple !== to_tuple && to isa WasmBuilder.IR.RefType
+        local cls = something(from_tuple)
+        local rinfo = get(self.class_info, tuple_record_class(fieldcount(cls)), nothing)
+        local info = self.class_info[cls]
+        rinfo === nothing && reject!(Internal("$at: no record class for the tuple $cls"), at)
+        local fields = class_instance_fields(cls, at)
+        local rfields = class_instance_fields(rinfo.cls, at)
+        local temp = WasmBuilder.add_local(b, info.non_nullable_type)
+        local box() = begin
+            record_class_allocation(self.functions[], class_id(rinfo))
+            push_object_header_fields(b, self, rinfo)
+            for (k, field) in enumerate(fields)
+                local index = self.field_index[field]
+                local storage = info.struct_.fields[index + 1].type
+                WasmBuilder.local_get(b, temp)
+                storage isa WasmBuilder.IR.PackedType ?
+                    (field.type <: Signed ? WasmBuilder.struct_get_s(b, info.struct_, index) : WasmBuilder.struct_get_u(b, info.struct_, index)) :
+                    WasmBuilder.struct_get(b, info.struct_, index)
+                local slot = WasmBuilder.unpacked(rinfo.struct_.fields[self.field_index[rfields[k]] + 1].type)
+                convert_type(self, b, WasmBuilder.unpacked(storage), slot; boxed_class = field.type isa DataType ? field.type : nothing)
+            end
+            WasmBuilder.struct_new(b, rinfo.struct_)
+        end
+        if from.nullable
+            # nothing, the null, stays the null
+            local maybe = WasmBuilder.add_local(b, from)
+            WasmBuilder.local_tee(b, maybe)
+            WasmBuilder.ref_is_null(b)
+            WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[rinfo.nullable_type])
+            WasmBuilder.ref_null(b, rinfo.struct_)
+            WasmBuilder.else_(b)
+            WasmBuilder.local_get(b, maybe)
+            WasmBuilder.ref_as_non_null(b)
+            WasmBuilder.local_set(b, temp)
+            box()
+            WasmBuilder.var"end"(b)
+            convert_type(self, b, rinfo.nullable_type, to)
+        else
+            WasmBuilder.local_set(b, temp)
+            box()
+            convert_type(self, b, rinfo.non_nullable_type, to)
+        end
+        return nothing
+    end
+    if to_tuple !== nothing && from_tuple !== to_tuple && from isa WasmBuilder.IR.RefType
+        local cls = something(to_tuple)
+        local rinfo = get(self.class_info, tuple_record_class(fieldcount(cls)), nothing)
+        local info = self.class_info[cls]
+        rinfo === nothing && reject!(Internal("$at: no record class for the tuple $cls"), at)
+        local fields = class_instance_fields(cls, at)
+        local rfields = class_instance_fields(rinfo.cls, at)
+        local rec = WasmBuilder.add_local(b, rinfo.non_nullable_type)
+        local unbox() = begin
+            record_class_allocation(self.functions[], class_id(info))
+            push_object_header_fields(b, self, info)
+            for (k, field) in enumerate(fields)
+                local rindex = self.field_index[rfields[k]]
+                WasmBuilder.local_get(b, rec)
+                WasmBuilder.struct_get(b, rinfo.struct_, rindex)
+                local storage = WasmBuilder.unpacked(info.struct_.fields[self.field_index[field] + 1].type)
+                convert_type(self, b, WasmBuilder.unpacked(rinfo.struct_.fields[rindex + 1].type), storage; boxed_class = field.type isa DataType ? field.type : nothing)
+            end
+            WasmBuilder.struct_new(b, info.struct_)
+        end
+        if from.nullable && to.nullable
+            # nothing, the null, stays the null
+            local maybe = WasmBuilder.add_local(b, from)
+            WasmBuilder.local_tee(b, maybe)
+            WasmBuilder.ref_is_null(b)
+            WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[info.nullable_type])
+            WasmBuilder.ref_null(b, info.struct_)
+            WasmBuilder.else_(b)
+            WasmBuilder.local_get(b, maybe)
+            WasmBuilder.ref_cast(b, rinfo.non_nullable_type)
+            WasmBuilder.local_set(b, rec)
+            unbox()
+            WasmBuilder.var"end"(b)
+        else
+            # the record of the tuple's arity, which Julia's narrowing guarantees the value is
+            WasmBuilder.ref_cast(b, rinfo.non_nullable_type)
+            WasmBuilder.local_set(b, rec)
+            unbox()
+        end
+        return nothing
     end
     if !WasmBuilder.is_subtype_of(from, to)
         if from isa WasmBuilder.IR.RefType && to isa WasmBuilder.IR.RefType

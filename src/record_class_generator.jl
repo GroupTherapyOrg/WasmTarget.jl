@@ -6,10 +6,13 @@ Generates a class for each record shape: its fields, constructor, `hashCode`, `t
 type check and its runtime type, built as Kernel members from the core library's procedures.
 
 Julia's records are its tuples. A `Tuple` holds positional fields and a `NamedTuple` named ones, and
-each tuple type is a class of its own (`Tuple{Int,Float64}`), whose `==`, `hash` and `show` are
-Base's methods, compiled like any other. So no class is generated for a shape, `classes` stays
-empty, and the Kernel classes and procedures dart reads (`_Type`, `_RecordType`, `Object.hash`, ...)
-have no use and no field here.
+each concrete tuple type is a class of its own (`Tuple{Int,Float64}`), whose `==`, `hash` and `show`
+are Base's methods, compiled like any other. A tuple held where its static type is open (`Any`,
+`Tuple{Any,Any}`) is the record class of its arity, dart's class of a shape (src/julia/classes.jl
+TupleRecord): `_generateClass` names it and `_generateFields` gives its fields, and the closed world's
+walk meets each arity a program's open tuples have, where dart's visitor meets each record type, so
+`classes` stays empty. The Kernel classes and procedures dart reads (`_Type`, `_RecordType`,
+`Object.hash`, ...) have no use and no field here.
 
 Fields with no Julia counterpart: `coreTypes` :101, `library` :103, `typeRuntimetypeTypeClass` :105, `recordRuntimeTypeClass` :109, `recordRuntimeTypeConstructor` :114, `objectHashProcedure` :117, `objectHashAllProcedure` :123, `objectToStringProcedure` :129, `identical` :135, `objectEqualsProcedure` :140, `integerEqualsFunctionType` :142, `stringPlusProcedure` :148, `isSubtype` :154, `wasmArrayClass` :159, `immutableWasmArrayClass` :164, `wasmArrayRefLength` :169, `wasmArrayIndex` :175, `wasmArrayLiteralConstructor` :186, `wasmArrayValueField` :189, `immutableWasmArrayValueField` :195, `wasmArrayOfType` :201, `immutableWasmArrayOfString` :207, `runtimeTypeType` :213, `nonNullableTypeType` :218, `getActualRuntimeTypeNullable` :223, `getMasqueradedRuntimeTypeNullableProcedure` :226 — each a Kernel library, class, procedure or type the generated
 record class is built from, where Julia's tuple types are Base's classes with Base's methods.
@@ -34,9 +37,11 @@ constant tree to revisit.
 end
 
 """
-The class of each record shape of the program. A Julia record value is an instance of its own
-`Tuple` or `NamedTuple` class, which the closed world holds like any class (src/julia/classes.jl),
-with Base's `==`, `hash` and `show`. No class belongs to a shape, so the map is empty.
+The class of each record shape of the program. A Julia record value of a concrete static type is an
+instance of its own `Tuple` or `NamedTuple` class, which the closed world holds like any class
+(src/julia/classes.jl), with Base's `==`, `hash` and `show`; one of an open static type is the record
+class of its arity (`_generateClass`), which the closed world's walk meets with the program's other
+classes. The map is empty: no Kernel visit precedes that walk.
 """
 @parity "dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" generate_record_classes(component::NirWorld)::Dict{RecordShape,DataType} = Dict{RecordShape,DataType}()
 
@@ -56,16 +61,28 @@ with Base's `==`, `hash` and `show`. No class belongs to a shape, so the map is 
 @parity "dart2wasm/lib/record_class_generator.dart:240 _RecordClassGenerator.generateClassForRecordType" generate_class_for_record_type(self::_RecordClassGenerator, record_type::DataType)::Nothing =
     reject!(Internal("dart2wasm/lib/record_class_generator.dart:240 _RecordClassGenerator.generateClassForRecordType: the record type $record_type is a class of its own, which Base declares"), "_RecordClassGenerator.generateClassForRecordType")
 
-# a record shape's class; Julia's tuple types are Base's classes
-@parity "dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass" _generate_class(self::_RecordClassGenerator, shape::RecordShape, id::Int64)::DataType =
-    reject!(Internal("dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass: Julia's tuple types are Base's classes; no class is generated for $(sprint(show, shape))"), "_RecordClassGenerator._generateClass")
+# a record shape's class: a tuple's positional shape is the record class of its arity (TupleRecord,
+# src/julia/classes.jl), its fields `_generateFields`'s; a named shape is a NamedTuple, a class of its
+# own, never a record
+@parity "dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass" function _generate_class(self::_RecordClassGenerator, shape::RecordShape, id::Int64)::DataType
+    isempty(names(shape)) || reject!(Internal("dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass: a shape with names, $(sprint(show, shape)), is a NamedTuple, a class of its own"), "_RecordClassGenerator._generateClass")
+    return tuple_record_class(shape.positionals)
+end
 
 """
-A record shape's fields, `\$1`, `\$2`, ... then the names. A Julia tuple's fields are its type's own
-(`fieldnames(Tuple{Int,Int}) == (1, 2)`, a NamedTuple's its names), so none is generated.
+A record shape's fields, `\$1`, `\$2`, ... then the names, each immutable and of dart's `Object?`
+(Julia's `Any`): the fields of the record class of a tuple's arity (`_generateClass`). A concrete
+tuple's fields are its type's own (`fieldnames(Tuple{Int,Int}) == (1, 2)`), and a named shape is a
+NamedTuple's, a class of its own, so `_generateClass` rejects it first.
 """
-@parity "dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields" _generate_fields(self::_RecordClassGenerator, shape::RecordShape)::Vector{ClassField} =
-    reject!(Internal("dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields: a Julia tuple's fields are its type's own"), "_RecordClassGenerator._generateFields")
+@parity "dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields" function _generate_fields(self::_RecordClassGenerator, shape::RecordShape)::Vector{ClassField}
+    local cls = _generate_class(self, shape, Int64(0))
+    local fields = ClassField[]
+    for i in 1:shape.positionals
+        push!(fields, ClassField(cls, i, "\$" * string(i), nullable_object_type(self), false))
+    end
+    return fields
+end
 
 # a record class's constructor; a Julia tuple is made by Core.tuple or Expr(:new) of its type
 @parity "dart2wasm/lib/record_class_generator.dart:314 _RecordClassGenerator._generateConstructor" _generate_constructor(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Core.MethodInstance =
@@ -83,8 +100,9 @@ A record shape's fields, `\$1`, `\$2`, ... then the names. A Julia tuple's field
 @parity "dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals" _generate_equals(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField}, cls::DataType, get_rti::Core.MethodInstance)::Core.MethodInstance =
     reject!(Internal("dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals: a Julia tuple's equality is Base's ==(::Tuple, ::Tuple)"), "_RecordClassGenerator._generateEquals")
 
-# a record class's check against a record type's field types; a Julia tuple is checked by isa, its
-# class the tuple type itself
+# a record class's check against a record type's field types; the tested types are Julia's constants,
+# so the check is written out in the is checker (src/types.jl IsCheckerCodeGenerator.generate, its
+# tuple members), never a method of the record
 @parity "dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType" _generate_check_record_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Core.MethodInstance =
     reject!(Internal("dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType: a Julia tuple's class is its type, checked by isa"), "_RecordClassGenerator._generateCheckRecordType")
 

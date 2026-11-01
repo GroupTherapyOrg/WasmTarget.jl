@@ -392,8 +392,8 @@ end
     end
     # Base's InexactError is built by its varargs constructor of an open count, InexactError(f, args...),
     # whose call packs (T, val) into a tuple: T's class, a Type, only run time knows (Julia's jl_f_tuple
-    # reads the value's), so the call switches on T's class among the closed world's tuple classes
-    # (tuple_classes, A70S3): InexactError raised where native raises it
+    # reads the value's), so the call builds the record of its arity (TupleRecord), T boxed in it:
+    # InexactError raised where native raises it
     @test (try; ThrowCases.to_u8(300); nothing; catch err; err; end) isa InexactError
     local iv_bytes = W.compile(ThrowCases.to_u8, (Int64,); optimize = false)
     push!(NATIVE_RUNS, WTRunner.RunCase("to_u8(300) throws ", iv_bytes, (300,), WTRunner.Throws(InexactError)))

@@ -35,7 +35,6 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
     local out = DataType[]
     local seen = Base.IdSet{DataType}()
     local objs = Set{NirConst}()
-    local open_tuples = Type[]
     for b in world
         foreach(t -> _meet_value!(out, seen, t, at), Base.unwrap_unionall(b.ci.def.specTypes).parameters)
         # a varargs method's body reads its trailing arguments as one tuple (NirVarargPacking)
@@ -51,55 +50,69 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
                                     _meet_constant!(out, seen, objs, nir_binding_value(v.ref, at).c.val, at))
             end
             # a tuple's class is its operands' (nir_tuple_type), which the statement's widened type
-            # may hide; a tuple whose class only run time knows brings none; so is the tuple an invoke
-            # of a varargs specialization of an open count packs (nir_vararg_call_tuple)
+            # may hide; so is the tuple an invoke of a varargs specialization of an open count packs
+            # (nir_vararg_call_tuple); one whose class only run time knows is the record of its arity
             if st isa NirCall && nir_callee(st) === Core.tuple
                 local tt = nir_tuple_type(b, st)
-                isconcretetype(tt) ? _meet_value!(out, seen, tt, at) : push!(open_tuples, tt)
+                isconcretetype(tt) ? _meet_value!(out, seen, tt, at) : _meet_tuple_record!(out, seen, tt, at)
             end
             if st isa NirInvoke
                 local vt = nir_vararg_call_tuple(b, st)
-                vt !== nothing && (isconcretetype(vt) ? _meet_value!(out, seen, vt, at) : push!(open_tuples, vt))
+                vt !== nothing && (isconcretetype(vt) ? _meet_value!(out, seen, vt, at) : _meet_tuple_record!(out, seen, vt, at))
             end
         end
         _meet_value!(out, seen, b.ci.rettype, at)
     end
-    # a tuple, a literal's or a varargs call's, whose elements' classes only run time knows: each class
-    # jl_f_tuple can give it, over
-    # the concrete classes the walk met (tuple_classes, the code generator's one source too)
-    for tt in open_tuples
-        # one past Julia's bound brings none: the statement rejects where the code generator meets it
-        foreach(c -> _meet_value!(out, seen, c, at), tuple_classes(tt, p -> DataType[c for c in out if isconcretetype(c) && c <: p], at; past_bound = :none))
+    # every tuple can reach a slot whose static type is open, where it is the record of its arity
+    # (tuple_record_class, convertType's box): each concrete tuple class's record
+    for c in copy(out)
+        c <: Tuple && isconcretetype(c) && _meet_value!(out, seen, tuple_record_class(fieldcount(c)), at)
     end
     return out
 end
 
-"""
-    tuple_classes(T, below, at) -> Vector{DataType}
-
-The classes a tuple of static type `T` can have at run time, where Julia's codegen packs it by
-jl_f_tuple (builtins.c:946), the tuple of each value's own type: the product over its elements of
-each one's classes, an element's static type read as compute_va_type reads it (codegen.cpp:8102: a
-`Type{X}` of one value is `typeof(X)`), a concrete one its own class, any other the concrete classes
-`below` gives (the walk's met classes, or getConcreteClassIdRange's). No type is made at run time
-(A68S3), so the classes are enumerated, bounded by Julia's own bound on a split of a union,
-InferenceParams' max_union_splitting: a product past it rejects, located, or, for the class walk
-(`past_bound = :none`), which meets every statement whether or not the code generator reaches it,
-brings no class.
-"""
-@quarantine "julia/src/builtins.c:946 jl_f_tuple types a tuple by its values, enumerated here within julia/Compiler/src/types.jl:199 InferenceParams' max_union_splitting" Base.Iterators.product function tuple_classes(T::Type, below::Function, at::String; past_bound::Symbol = :reject)::Vector{DataType}
+# the record class a tuple of static type `T` takes where its class only run time knows: its arity's,
+# a fixed one; a tuple of no fixed length brings none (the code generator rejects it where it meets it)
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses holds one class per record shape, which a tuple of open elements takes" Base.unwrap_unionall function _meet_tuple_record!(out::Vector{DataType}, seen::Base.IdSet{DataType}, @nospecialize(T), at::String)::Nothing
     local tt = Base.unwrap_unionall(T)
-    local fixed = tt isa DataType && tt <: Tuple && !any(p -> p isa Core.TypeofVararg, tt.parameters)
-    fixed || past_bound === :none && return DataType[]
-    fixed || reject!(Unquarantined("src/julia/classes.jl tuple_classes: a tuple of type $T, of no fixed length, packed at run time"), at)
-    local element(p) = Base.isType(p) && !(p.parameters[1] isa TypeVar) ? typeof(p.parameters[1]) : p
-    local options = Vector{DataType}[(local e = element(p); isconcretetype(e) ? DataType[e] : below(e)) for p in tt.parameters]
-    local limit = Core.Compiler.InferenceParams().max_union_splitting
-    local n = prod(length, options; init = 1)
-    n > limit && past_bound === :none && return DataType[]
-    n > limit && reject!(Unquarantined("src/julia/classes.jl tuple_classes: a tuple of type $T has $n classes at run time, past Julia's max_union_splitting ($limit)"), at)
-    return vec(DataType[Tuple{c...} for c in Iterators.product(options...)])
+    tt isa DataType && tt <: Tuple && !any(p -> p isa Core.TypeofVararg, tt.parameters) || return nothing
+    _meet_value!(out, seen, tuple_record_class(length(tt.parameters)), at)
+    return nothing
 end
+
+"""
+    TupleRecord{N}
+
+The class of a Julia tuple of `N` elements held where its static type is open (`Any`, `Tuple`,
+`Tuple{Any,Any}`, a Union of tuple types): dart2wasm's record class of a shape, one class per shape
+with a top-typed field per element (record_class_generator.dart:84 generateRecordClasses: its recordClasses, :280
+_generateFields, its fields `Object? \$1..\$N`), here per arity `N ≥ 1`, a Julia tuple having
+positional elements only; the empty shape's class is `Tuple{}` itself (`tuple_record_class`). A tuple whose static type is concrete is its own class, its fields unboxed;
+convertType boxes it into its arity's record where it flows into an open slot and unboxes it where
+Julia narrows it back (a PiNode, a typeassert), as dart boxes a value type on upcast. Julia's egal and
+isa of a tuple read its fields (builtins.c:100 compare_fields; a tuple type is covariant), as dart's
+record is-check reads its fields (_checkRecordType, type.dart:585 _RecordType._checkInstance). No Julia
+value has the type: a struct of one field of type `Union{}`, uninhabited, its fields the record's
+(`class_instance_fields`).
+
+precedent(dart: the record classes of record_class_generator.dart, one per RecordShape). Julia's
+differs: its tuple's type is its elements' (jl_f_tuple), so a tuple of a concrete static type keeps its
+own class and only an open one is a record; the typeof of an open tuple, a type made at run time,
+stays a rejection (A68S3).
+"""
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields gives a record class a top-typed field per element, a tuple's record here" Core.Union struct TupleRecord{N}
+    _never::Union{}
+end
+
+# the record class of a tuple of `n` elements (TupleRecord), the one name of it; the empty shape's is
+# Tuple{} itself, the class of Julia's one empty tuple (julia/src/julia.h:1134 jl_emptytuple), which has
+# no field to box, so the empty tuple is never boxed (and a class of no field of its own shares its
+# superclass's struct, so its reference could not be told apart from that struct's other classes)
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses maps each shape to its class, a tuple's arity to its record here" Core.Int tuple_record_class(n::Int)::DataType = n == 0 ? Tuple{} : TupleRecord{n}
+
+# the arity of the record class `c` (TupleRecord, or Tuple{} for the empty shape), or nothing for any other class
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses keys each class by its shape, a record's arity its parameter here" Core.DataType tuple_record_arity(@nospecialize(c))::Union{Int,Nothing} =
+    c === Tuple{} ? 0 : c isa DataType && c <: TupleRecord && c.parameters[1] isa Int ? c.parameters[1] : nothing
 
 # A constant's object graph met by the walk (dev/formal/ValueClasses.tla's MeetObject): the value's
 # class, then every value it holds that constants.jl instantiates in its place, a field's value, an
@@ -174,11 +187,13 @@ end
 end
 
 # a class met by the walk: itself, its supertype chain, and a concrete non-kind class's field types
-@quarantine "a class's parent is Julia's supertype and its fields Julia's fieldtypes" Base.fieldtypes function _meet_class!(out::Vector{DataType}, seen::Base.IdSet{DataType}, t::DataType, at::String)::Nothing
+@quarantine "pkg/dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass meets a class's supertypes before it; a Julia class's parent is its supertype and its fields' classes Julia's fieldtypes" Base.fieldtypes function _meet_class!(out::Vector{DataType}, seen::Base.IdSet{DataType}, t::DataType, at::String)::Nothing
     t in seen && return nothing
     push!(seen, t)
     push!(out, t)
     _meet_class!(out, seen, supertype(t), at)   # Any's supertype is Any, already met
+    # a tuple's record holds top-typed fields, no class of its own (TupleRecord)
+    tuple_record_arity(t) === nothing || return nothing
     if Base.iskindtype(t)
         # a kind's instance takes dart's runtime type layout, its fields' classes met as Julia's are
         foreach(f -> _meet_value!(out, seen, f.type, at), _kind_instance_fields(t, at))
@@ -286,8 +301,11 @@ other class whose data Julia holds outside its fields rejects, located, until it
 written. After a struct's own fields come their set flags (`class_is_set_field`), one per field an
 allocation may leave undefined whose type admits `nothing`, dart's late lowering's `#isSet` fields.
 """
-@quarantine "a class's fields are Julia's fieldnames, fieldtypes and isconst; a primitive type holds one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine "pkg/dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields reads a class's instance fields; a Julia class's are its fieldnames, fieldtypes and isconst, a primitive type holding one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
     class_is_abstract(c) && return ClassField[]
+    # a tuple's record (TupleRecord): a top-typed field per element, dart's record fields $1..$N
+    local arity = tuple_record_arity(c)
+    arity === nothing || return Dart2Wasm._generate_fields(Dart2Wasm._RecordClassGenerator(Dict{Dart2Wasm.RecordShape,DataType}()), Dart2Wasm.RecordShape(arity, String[]))
     isprimitivetype(c) && return ClassField[ClassField(c, 0, "value", c, false)]
     Base.iskindtype(c) && return _kind_instance_fields(c, at)
     if fieldcount(c) == 0

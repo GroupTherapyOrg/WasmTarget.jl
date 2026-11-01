@@ -11,7 +11,6 @@
 julia/classes.jl ClassField
 julia/classes.jl _KINDS
 julia/classes.jl _kind_instance_fields
-julia/classes.jl _meet_class!
 julia/classes.jl _meet_value!
 julia/classes.jl _memory_instance_fields
 julia/classes.jl _memoryref_instance_fields
@@ -20,7 +19,6 @@ julia/classes.jl _string_instance_fields
 julia/classes.jl _svec_instance_fields
 julia/classes.jl _symbol_instance_fields
 julia/classes.jl class_implemented_types
-julia/classes.jl class_instance_fields
 julia/classes.jl class_is_abstract
 julia/classes.jl class_superclass
 julia/classes.jl egal_by_identity

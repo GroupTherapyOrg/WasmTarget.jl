@@ -43,7 +43,8 @@ end
         local e = try; D.RecordShape_from_type(T); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end
-    # a Julia tuple type is a class of its own, Base's: no class is generated per shape
+    # a concrete Julia tuple type is a class of its own, Base's; the closed world's walk meets each
+    # arity's record, so no Kernel visit fills the map
     local t = D.Translator(WasmTarget.build_nir(W.check_subset(x -> (x, x + 1), (Int,), "records"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     @test isempty(D.generate_record_classes(t.component))
     local g = D._RecordClassGenerator(Dict{D.RecordShape,DataType}())
@@ -51,6 +52,17 @@ end
     @test D.bool_type(g) === Bool && D.int_type(g) === Int64
     local e = try; D.visit_record_type(D._RecordVisitor(g), Tuple{Int,Int}); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
+    # a positional shape's class is the record of its arity, its fields \$1..\$N of dart's Object?, Any
+    local rec = D._generate_class(g, D.RecordShape(2, String[]), Int64(0))
+    @test rec === W.tuple_record_class(2) && W.tuple_record_arity(rec) == 2 && W.tuple_record_arity(Tuple{Int,Int}) === nothing
+    # the empty shape's class is Julia's one empty tuple's, Tuple{}, no field to box
+    @test W.tuple_record_class(0) === Tuple{} && W.tuple_record_arity(Tuple{}) == 0 && isempty(D._generate_fields(g, D.RecordShape(0, String[])))
+    local fs = D._generate_fields(g, D.RecordShape(2, String[]))
+    @test [(f.cls, f.index, f.name, f.type, f.mutable) for f in fs] == [(rec, 1, "\$1", Any, false), (rec, 2, "\$2", Any, false)]
+    @test W.class_instance_fields(rec, "records") == fs
+    # a named shape is a NamedTuple's, a class of its own, never a record
+    local en = try; D._generate_class(g, D.RecordShape(1, ["a"]), Int64(0)); nothing; catch x; x; end
+    @test en isa W.RejectionError && en.rejection isa W.Internal && occursin("NamedTuple", en.rejection.site)
 end
 
 @testset "record_class_generator.dart: a shape's field names, a constant" begin
@@ -187,7 +199,7 @@ end
 # a concrete tuple's bounds check and select chain, a homogeneous one (a vector literal's elements), a
 # heterogeneous one (its field boxed), one under @inbounds, a one-field and a zero-field tuple; and a
 # tuple whose length only run time knows (Tuple{String,Vararg{String}}), the class-id switch over the
-# closed world's tuple classes below it, at two lengths. Out of range each raises BoundsError, as native
+# records of the arities it admits, at two lengths. Out of range each raises BoundsError, as native
 module RecordIndexCases
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
@@ -227,9 +239,9 @@ end
 end
 end
 
-# a tuple literal whose operands' classes only run time knows, Julia's jl_f_tuple's: chosen among the closed
-# world's tuple classes by the open operand's class (tuple_classes, the varargs tuple's one source), read
-# back at a run-time index; past max_union_splitting it rejects, located
+# a tuple literal whose operands' classes only run time knows, Julia's jl_f_tuple's: the record of its arity
+# (src/julia/classes.jl TupleRecord, the varargs tuple's too), each operand boxed, read back at a run-time
+# index, whatever classes its open operand has
 module OpenLiteralCases
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
@@ -243,14 +255,72 @@ function open_literal(k::Int64, n::Int64)
     return Int64(pick(t, 1) isa DataType)
 end
 over(n::Int64) = pick((ANYS[n], n), 2)::Int64            # Tuple{Any, Int64}: every class first
-@testset "records.dart: a tuple literal of open operands is jl_f_tuple's class, within max_union_splitting" begin
+@testset "records.dart: a tuple literal of open operands is the record of its arity" begin
     @test Base.return_types(open_literal, (Int64, Int64)) == [Int64]
     local plain = WasmTarget.compile(open_literal, (Int64, Int64); optimize = false)
     local cases = [WTRunner.RunCase("open_literal$a", plain, Int64.(a), WTRunner.native_answer(open_literal, Int64.(a))) for a in ((k, n) for k in 1:2 for n in 1:3)]
     local results = WTRunner.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == 6 && all(r -> r.ok, results)
-    local e = try; WasmTarget.compile(over, (Int64,); optimize = false); nothing; catch x; x; end
-    @test e isa WasmTarget.RejectionError && occursin("max_union_splitting", e.rejection.row)
+    # Tuple{Any, Int64}: an operand of every class the closed world has, one record, as native
+    local over_bytes = WasmTarget.compile(over, (Int64,); optimize = false)
+    local over_results = WTRunner.run_cases([WTRunner.RunCase("over($n)", over_bytes, (Int64(n),), WTRunner.native_answer(over, (Int64(n),))) for n in 1:2])
+    foreach(r -> r.ok || println(r.label, ": ", r.why), over_results)
+    @test length(over_results) == 2 && all(r -> r.ok, over_results)
+end
+end
+
+# the record model (src/julia/classes.jl TupleRecord): the same Tuple{Int64,String} value through an Any
+# slot and back, read on both sides by isa, nfields, a run-time index and its fields (convertType's box
+# into its arity's record, its unbox where Julia narrows it); and a tuple from each producer of an open
+# tuple (an open literal, an open-count varargs call, a constant through an Any slot) tested by isa,
+# nfields and a run-time index, each the record of its arity, so a producer that left a tuple of its own
+# class in an open slot would answer false where native answers true. Julia's === on two open tuples
+# needs jl_egal on their open fields, which no arm ports yet: a located rejection
+module RecordModelCases
+using Test, WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+const WTRunner = Main.WTRunner
+const ANYS = Any[Int64(1), "s"]
+const SLOT = Any[nothing]
+const CT = (Int64(3), "ab")
+@noinline vt(@nospecialize(xs...)) = xs
+@noinline pick(@nospecialize(t::Tuple), i::Int64) = t[i]
+@noinline nf(@nospecialize(t::Tuple)) = nfields(t)
+function round_trip(k::Int64, n::Int64)
+    local v = (n, "ab")
+    SLOT[1] = v
+    local a = SLOT[1]
+    k == 1 && return Int64(a isa Tuple{Int64,String}) + 2 * Int64(v isa Tuple{Int64,String})
+    k == 2 && return Int64(a isa Tuple{String,String})
+    k == 3 && return Int64(a isa Tuple{Integer,Any}) + 2 * Int64(a isa Tuple) + 4 * Int64(a isa NTuple{3,Any})
+    k == 4 && return nf(a::Tuple) + 10 * nfields(v)
+    k == 5 && return (a::Tuple{Int64,String})[1] + 10 * v[1]
+    k == 6 && return Int64(ncodeunits((a::Tuple{Int64,String})[2]))
+    k == 7 && return (x = pick(a::Tuple, n); x isa Int64 ? x : Int64(ncodeunits(x::String)))
+    return (x = pick(v, n); x isa Int64 ? x : Int64(ncodeunits(x::String)))
+end
+function producers(k::Int64, n::Int64)
+    local lit = (ANYS[n], "ab")
+    local va = vt(ANYS[n], "ab")
+    SLOT[1] = CT
+    local c = SLOT[1]
+    k == 1 && return Int64(lit isa Tuple{Int64,String}) + 2 * Int64(va isa Tuple{Int64,String}) + 4 * Int64(c isa Tuple{Int64,String})
+    k == 2 && return Int64(lit isa Tuple{String,String}) + 2 * Int64(va isa Tuple{String,String}) + 4 * Int64(c isa Tuple{String,String})
+    k == 3 && return nf(lit) + nf(va) + nf(c::Tuple)
+    k == 4 && return (x = pick(va, 1); x isa Int64 ? x : Int64(-1)) + 10 * (c::Tuple{Int64,String})[1]
+    return Int64(ncodeunits(pick(lit, 2)::String))
+end
+egal(n::Int64) = (lit = (ANYS[n], "ab"); va = vt(ANYS[n], "ab"); lit === va)
+@testset "records.dart: a tuple through an open slot is the record of its arity, read as native" begin
+    for (f, ks) in ((round_trip, 1:8), (producers, 1:5))
+        local bytes = WasmTarget.compile(f, (Int64, Int64); optimize = false)
+        local cases = [WTRunner.RunCase("$(nameof(f))($k, $n)", bytes, (Int64(k), Int64(n)), WTRunner.native_answer(f, (Int64(k), Int64(n)))) for k in ks for n in 1:2]
+        local results = WTRunner.run_cases(cases)
+        foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+        @test length(results) == 2 * length(ks) && all(r -> r.ok, results)
+    end
+    local e = try; WasmTarget.compile(egal, (Int64,); optimize = false); nothing; catch x; x; end
+    @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Unported && occursin("=== on Tuple{Any, String}", sprint(showerror, e))
 end
 end

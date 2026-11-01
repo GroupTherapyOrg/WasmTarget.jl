@@ -480,6 +480,28 @@ end
 # value's Julia type, a kind the instantiator does not visit going to defaultConstant
 # (ConstantVisitorDefaultMixin)
 @parity "dart2wasm/lib/constants.dart:568 ConstantInstantiator.instantiate" function instantiate(self::ConstantInstantiator, constant::Union{NirConst,DummyValueConstant})::Nothing
+    # a tuple constant in a slot of another type than its own class is its arity's record (src/julia/
+    # classes.jl TupleRecord), as convertType boxes any tuple there: the record of its elements, each
+    # instantiated at the top type, no local needed (a global's initializer has none)
+    # (the empty tuple is its own record, tuple_record_class)
+    if constant isa NirConst && constant.c.val isa Tuple && !isempty(constant.c.val) && isconcretetype(typeof(constant.c.val))
+        local tr = self.constants.translator
+        local own = get(tr.class_info, typeof(constant.c.val), nothing)
+        if own !== nothing && self.expected_type isa WasmBuilder.IR.RefType && self.expected_type.heap_type !== own.struct_
+            local v = constant.c.val
+            local rinfo = get(tr.class_info, tuple_record_class(length(v)), nothing)
+            rinfo === nothing && reject!(Internal("dart2wasm/lib/constants.dart:568 ConstantInstantiator.instantiate: no record class for the tuple constant $(typeof(v))"), "ConstantInstantiator.instantiate")
+            record_class_allocation(tr.functions[], class_id(rinfo))
+            push_object_header_fields(self.b, tr, rinfo)
+            local fields = class_instance_fields(rinfo.cls, "dart2wasm/lib/constants.dart:568 ConstantInstantiator.instantiate")
+            for (k, x) in enumerate(v)
+                local field = fields[k]
+                instantiate_constant(self.constants, self.b, NirConst(Core.Const(x)), WasmBuilder.unpacked(rinfo.struct_.fields[tr.field_index[field] + 1].type))
+            end
+            WasmBuilder.struct_new(self.b, rinfo.struct_)
+            return nothing
+        end
+    end
     local result_type = if constant isa DummyValueConstant
         default_constant(self, constant)
     else

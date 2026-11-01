@@ -278,13 +278,13 @@ end
 # then a select chain over every field (CreateSelect per field, each field converted to the read's
 # type: the fields' one type); of a tuple whose length only run time knows and whose elements share one
 # type (Tuple{String,Vararg{String}}), Julia's typed load bounded by emit_datatype_nfields (codegen.cpp:4584),
-# here the class-id switch over the closed world's concrete tuple classes below its type (dart's
-# types.dart emitClassIdRangeCheck, classIdSearch), each arm the concrete arm over its own class, its
-# bound that class's field count. Where the fields' types differ, Julia's codegen calls the runtime
-# instead (codegen.cpp:4620 jl_get_nth_field_checked, its answer boxed, Any), for a concrete tuple held
-# by reference and for one of run-time length alike; WasmTarget differs: no runtime call, the same arms
-# with each field boxed to the top type and selected, the answer the boxed field
-# jl_get_nth_field_checked returns. The arms are generated from that one list; an empty one rejects, located,
+# here the class-id switch over the records of the arities the type admits (an open tuple is the record
+# of its arity, src/julia/classes.jl TupleRecord; dart's types.dart emitClassIdRangeCheck, classIdSearch),
+# each arm the concrete arm over its own record, its bound that record's arity. Where the fields' types
+# differ, Julia's codegen calls the runtime instead (codegen.cpp:4620 jl_get_nth_field_checked, its answer
+# boxed, Any), for a concrete tuple held by reference and for one of run-time length alike; WasmTarget
+# differs: no runtime call, the same arms over the record's fields, each already boxed to the top type,
+# the answer the boxed field jl_get_nth_field_checked returns. The arms are generated from that one list; an empty one rejects, located,
 # and a class outside it is none the program can hold, the closed world holding every class and no
 # type being made at run time (dev/AUDIT.md A68S3, the run_time_type arm), so its miss is unreachable.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:tuple_index}, node::NirCall, T::DataType)::WasmBuilder.IR.ValueType
@@ -303,15 +303,26 @@ end
         v isa NirSSA && (local st = code_gen.body.stmts[v.id]; st isa NirBoundscheck && !isempty(st.args) && st.args[1] isa NirConst && st.args[1].c.val === false)
     local opt = Base.JLOptions().check_bounds
     local check = opt == 1 ? true : opt == 2 ? false : !(flag !== nothing && dart_type_of(self, flag) === Bool && known_false(flag))
-    # the classes the value can have: T itself, or the closed world's concrete tuple classes below it,
+    # the classes the value can have: T itself, or the records of the arities T admits,
     # their ids read through the one reading of a type's concrete classes (getConcreteClassIdRange),
     # each id's class the translator's (dart's translator.classes, indexed by class id)
     local ids = isconcretetype(T) ? Int[] :
         Int[id for r in get_concrete_class_id_range(t.class_id_numbering[], T) for id in r.start:r.end_]
     local classes = isconcretetype(T) ? DataType[T] : DataType[t.classes[][id + 1].cls for id in ids]
     isempty(classes) && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, which no class of the closed world is"), at)
-    # the read's type: the fields' one type, or their union, the top type where they differ
-    local field_types = Base.IdSet{Any}(ft for c in classes for ft in fieldtypes(c))
+    # a class's element count: a record's arity, a concrete tuple's field count
+    local elements(c::DataType) = something(tuple_record_arity(c), fieldcount(c))
+    # a class's elements' Julia types: a concrete tuple's field types; a record's, each field boxed, the
+    # types T gives its elements at the record's arity (Julia's typed load reads T's element type)
+    local element_types(c::DataType) = begin
+        local n = tuple_record_arity(c)
+        n === nothing && return Any[fieldtypes(c)...]
+        local shape = typeintersect(T, NTuple{n,Any})
+        shape isa DataType || reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, whose elements at arity $n constrain one another"), at)
+        return Any[fieldtypes(shape)...]
+    end
+    # the read's type: the elements' one type, or their union, the top type where they differ
+    local field_types = Base.IdSet{Any}(ft for c in classes for ft in element_types(c))
     local R = translate_type(t, isempty(field_types) ? Union{} : Union{field_types...})
     R isa WasmBuilder.IR.RefType && R.nullable && !any(ft -> Nothing <: ft, field_types) && (R = WasmBuilder.with_nullability(R, false))
     local i = add_local(code_gen, i64)
@@ -320,7 +331,7 @@ end
     # the concrete arm over `c`, its struct in local `v`, leaving the field at the read's type
     local concrete_arm(c::DataType, v::WasmBuilder.IR.Local) = begin
         local info = t.class_info[c]
-        local n = fieldcount(c)
+        local n = elements(c)
         if check
             WasmBuilder.local_get(b, i)
             WasmBuilder.i64_const(b, 1)
@@ -342,6 +353,7 @@ end
             return nothing
         end
         local fields = class_instance_fields(c, at)
+        local types = element_types(c)
         local get_field(k::Int) = begin
             local index = t.field_index[fields[k]]
             local storage = info.struct_.fields[index + 1].type
@@ -351,8 +363,8 @@ end
             else
                 WasmBuilder.struct_get(b, info.struct_, index)
             end
-            local ft = fields[k].type
-            convert_type(t, b, WasmBuilder.unpacked(storage), R; boxed_class = ft isa DataType ? ft : nothing)
+            local ft = types[k]
+            convert_type(t, b, WasmBuilder.unpacked(storage), R; boxed_class = ft isa DataType && isconcretetype(ft) ? ft : nothing)
         end
         get_field(1)
         local acc = add_local(code_gen, R)
@@ -1051,77 +1063,31 @@ end
 end
 
 # Julia's tuple builtin over values whose classes only run time knows, a varargs tuple's elements packed
-# at a call or at entry (code_generator.jl _visitArguments, _setupLocalParameters), as jl_f_tuple packs it
-# (builtins.c:946, the tuple of each value's own type): its possible classes are tuple_classes' (the one
-# source the closed world's walk numbers them by), and the value of each open element is switched on by
-# its class id (dart's classIdSearch, the run-time tuple index's), nested element by element, a value of
-# `nothing` (the null) its own arm, each leaf allocating its tuple class from the values, each converted
-# to its field (a cast, or an unbox of a primitive). `values` holds the elements, each at its static
-# type's wasm type. Leaves the tuple as the top type, non-null; a class outside the list is none the
-# program can hold (A68S3), so a search's miss is unreachable.
+# at a call or a tuple literal (code_generator.jl _visitArguments, visitRecordLiteral), where Julia's
+# jl_f_tuple types the tuple by its values (builtins.c:946): its arity's record (src/julia/classes.jl
+# TupleRecord, dart's record class of a shape, record_class_generator.dart:280), each element boxed to
+# the top type, where convertType boxes every tuple flowing into an open slot. `values` holds the
+# elements, each at its static type's wasm type; leaves the record, non-null.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(intrinsifier::Intrinsifier, ::Val{:open_tuple}, tuple_type::Type, values::Vector{WasmBuilder.IR.Local}, at::String)::WasmBuilder.IR.ValueType
     local self = intrinsifier.code_gen
     local t = self.translator
-    local numbering = t.class_id_numbering[]
-    local below(p::Type) = DataType[t.classes[][id + 1].cls for r in get_concrete_class_id_range(numbering, p) for id in r.start:r.end_]
-    local classes = tuple_classes(tuple_type, below, at)
-    isempty(classes) && reject!(Unquarantined("src/code_generator.jl _packTupleOfOpenElements: the tuple $tuple_type, which no class of the closed world is"), "$(self.enclosing_member)")
     local b = self.b[]
-    local top = t.top_type_non_nullable[]
-    local n = length(values)
-    # the leaf: the tuple class of the chosen element classes, its fields from the values
-    local leaf(chosen::Vector{DataType}) = begin
-        local cls = Tuple{chosen...}
-        local info = get(t.class_info, cls, nothing)
-        info === nothing && reject!(Internal("$at: no class info for the packed tuple $cls"), "$(self.enclosing_member)")
-        record_class_allocation(t.functions[], class_id(info))
-        push_object_header_fields(b, t, info)
-        for (k, field) in enumerate(class_instance_fields(cls, at))
-            local to = WasmBuilder.unpacked(info.struct_.fields[t.field_index[field] + 1].type)
-            WasmBuilder.local_get(b, values[k])
-            convert_type(t, b, values[k].type, to; boxed_class = chosen[k])
-        end
-        WasmBuilder.struct_new(b, info.struct_)
-        convert_type(t, b, info.non_nullable_type, top)
+    local tt = Base.unwrap_unionall(tuple_type)
+    (tt isa DataType && tt <: Tuple && length(tt.parameters) == length(values) && !any(p -> p isa Core.TypeofVararg, tt.parameters)) ||
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a tuple of type $tuple_type, of no fixed length, built at run time"), "$(self.enclosing_member)")
+    local rinfo = get(t.class_info, tuple_record_class(length(values)), nothing)
+    rinfo === nothing && reject!(Internal("$at: no record class for a tuple of $(length(values))"), "$(self.enclosing_member)")
+    record_class_allocation(t.functions[], class_id(rinfo))
+    push_object_header_fields(b, t, rinfo)
+    local fields = class_instance_fields(rinfo.cls, at)
+    for (k, value) in enumerate(values)
+        local field = fields[k]
+        local p = tt.parameters[k]
+        WasmBuilder.local_get(b, value)
+        convert_type(t, b, value.type, WasmBuilder.unpacked(rinfo.struct_.fields[t.field_index[field] + 1].type); boxed_class = p isa DataType && isconcretetype(p) ? p : nothing)
     end
-    # element k's classes among the tuple classes, given the ones chosen before it
-    local options(k::Int, chosen::Vector{DataType}) =
-        unique(DataType[c.parameters[k] for c in classes if all(j -> c.parameters[j] === chosen[j], 1:k-1)])
-    local choose(k::Int, chosen::Vector{DataType}) = begin
-        if k > n
-            leaf(chosen)
-            return nothing
-        end
-        local opts = options(k, chosen)
-        if length(opts) == 1 && !(values[k].type isa WasmBuilder.IR.RefType && Nothing === opts[1])
-            choose(k + 1, DataType[chosen; opts[1]])
-            return nothing
-        end
-        local others = filter(c -> c !== Nothing, opts)
-        local search() = begin
-            local ids = numbering.class_ids
-            local ranges = sort([(range = Range(Val(:_), ids[c], ids[c]), value = c) for c in others]; by = r -> r.range.start)
-            WasmBuilder.local_get(b, values[k])
-            WasmBuilder.ref_as_non_null(b)
-            load_class_id(b, t, top)
-            class_id_search(b, ranges, WasmBuilder.IR.ValueType[top], c -> choose(k + 1, DataType[chosen; c]), () -> WasmBuilder.unreachable(b))
-        end
-        if Nothing in opts
-            # nothing is the null: its own arm, the rest by class id
-            WasmBuilder.local_get(b, values[k])
-            WasmBuilder.ref_is_null(b)
-            WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[top])
-            choose(k + 1, DataType[chosen; Nothing])
-            WasmBuilder.else_(b)
-            isempty(others) ? WasmBuilder.unreachable(b) : search()
-            WasmBuilder.var"end"(b)
-        else
-            search()
-        end
-        return nothing
-    end
-    choose(1, DataType[])
-    return top
+    WasmBuilder.struct_new(b, rinfo.struct_)
+    return rinfo.non_nullable_type
 end
 
 # Julia's `isdefined(x, f)` on a struct field, Julia's codegen arm (codegen.cpp:4864, emit_builtin_call's
@@ -1394,9 +1360,10 @@ end
 
 # Julia's `nfields(x)` (codegen.cpp:4712 emit_builtin_call's nfields arm): a constant where the value's
 # type tells its field count (a concrete type, its jl_datatype_nfields), else the count of the type the
-# value has at run time (emit_datatype_nfields of its typeof). That type is one of the closed world's
-# concrete classes below the static type, so the count is the class-id switch over them (dart's
-# types.dart classIdSearch, as the run-time tuple index takes it), each arm its class's field count;
+# value has at run time (emit_datatype_nfields of its typeof). A value of an open tuple type is the record
+# of its arity (src/julia/classes.jl TupleRecord), so the count is the class-id switch over the records the
+# static type admits (dart's types.dart classIdSearch, as the run-time tuple index takes it), each arm its
+# record's arity;
 # an empty list rejects, located, and a class outside it is none the program can hold (A68S3), so its
 # miss is unreachable. A SimpleVector or a kind's own layout counts other than its fields: none is taken
 # here, and its call rejects as before
@@ -1423,7 +1390,7 @@ end
     WasmBuilder.local_tee(b, o)
     load_class_id(b, t, o.type)
     local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(ids, classes)]
-    class_id_search(b, ranges, WasmBuilder.IR.ValueType[i64], c -> WasmBuilder.i64_const(b, fieldcount(c)), () -> WasmBuilder.unreachable(b))
+    class_id_search(b, ranges, WasmBuilder.IR.ValueType[i64], c -> WasmBuilder.i64_const(b, something(tuple_record_arity(c), fieldcount(c))), () -> WasmBuilder.unreachable(b))
     return i64
 end
 

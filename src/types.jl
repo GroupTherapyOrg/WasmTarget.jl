@@ -677,6 +677,8 @@ classes a range like any other.
     local numbering = self.translator.class_id_numbering[]
     local ranges = Range[]
     for t in Base.uniontypes(Base.typesplit(tested, Nothing))
+        # a tuple type's values are records, checked field by field (_RecordType._checkInstance)
+        t <: Tuple && return InliningDecision(false, "record")
         append!(ranges, get_concrete_class_id_range(numbering, t))
     end
     normalize(ranges)
@@ -697,6 +699,18 @@ class id against the ranges of the classes under the type. Those ranges are dart
 holding the concrete classes Julia puts under it, that function's Reshaped arm). `Nothing` is null (the ruling: `Union{Nothing,T}` is a nullable `T`), so
 it contributes the null case and no class. `Any` holds every value (dart's Object). dart's
 Function is an ordinary abstract class in Julia. A Julia class has no arguments to check.
+
+A tuple member is dart's record type, checked as the runtime's `_RecordType._checkInstance`
+(sdk/lib/_internal/wasm/common/type.dart:585): the class id a record's, then the record's
+`_checkRecordType` (record_class_generator.dart:546), its field count the shape's and each field a
+subtype of its type. A tuple in a top-typed operand is always the record of its arity
+(src/julia/classes.jl TupleRecord), so the records are those of the arities the member admits
+(getConcreteClassIdRange of Tuple, each record's arity intersected with the member), and each
+field's type is the member's at that arity, tested by its own is checker where dart calls
+`_isSubtype` with the type's runtime value: Julia's types here are constants. Julia's subtyping of a
+tuple is covariant (`x isa Tuple{A,B}` exactly when `x[1] isa A && x[2] isa B`); a member whose
+fields constrain one another (`Tuple{T,T} where T`) is no product of its fields' tests and rejects,
+located, as dart's `_isSubtype` would be called.
 """
 @parity "dart2wasm/lib/types.dart:907 IsCheckerCodeGenerator.generate" function generate(self::IsCheckerCodeGenerator, b::WasmBuilder.InstructionsBuilder,
         param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
@@ -722,13 +736,60 @@ Function is an ordinary abstract class in Julia. A Julia class has no arguments 
     else
         local numbering = translator.class_id_numbering[]
         local ranges = Range[]
+        local records = Type[]
         for t in Base.uniontypes(Base.typesplit(tested, Nothing))
-            append!(ranges, get_concrete_class_id_range(numbering, t))
+            t <: Tuple ? push!(records, t) : append!(ranges, get_concrete_class_id_range(numbering, t))
         end
         normalize(ranges)
         WasmBuilder.local_get(b, operand)
         load_class_id(b, translator, operand.type)
         emit_class_id_range_check(b, ranges)
+        if !isempty(records)
+            # the tuple members, after the other members' range check, whose hit answers 1: each record
+            # of an arity a member admits tested by its class id and then its fields (_checkRecordType)
+            local at = "sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance: <obj> is $tested"
+            local is_checkers = is_checkers_for_module(translator.types[], b.module_builder)
+            WasmBuilder.if_(b)
+            WasmBuilder.i32_const(b, 1)
+            WasmBuilder.br(b, result_label)
+            WasmBuilder.var"end"(b)
+            for t in records, r in get_concrete_class_id_range(numbering, Tuple), id in r.start:r.end_
+                local c = translator.classes[][id + 1].cls
+                local n = tuple_record_arity(c)
+                n === nothing && reject!(Internal("$at: class $c below Tuple is no record"), at)
+                # the member at the record's arity: no value of it where Julia's intersection is empty
+                local shape = typeintersect(t, NTuple{n,Any})
+                shape === Union{} && continue
+                shape isa DataType || reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype"), "$at: $t at arity $n, whose fields constrain one another")
+                local info = translator.class_info[c]
+                local fields = class_instance_fields(c, at)
+                WasmBuilder.local_get(b, operand)
+                load_class_id(b, translator, operand.type)
+                WasmBuilder.i32_const(b, id)
+                WasmBuilder.i32_eq(b)
+                WasmBuilder.if_(b)
+                local fail = WasmBuilder.block(b)
+                local rec = WasmBuilder.add_local(b, info.non_nullable_type)
+                WasmBuilder.local_get(b, operand)
+                WasmBuilder.ref_cast(b, info.non_nullable_type)
+                WasmBuilder.local_set(b, rec)
+                for k in 1:n
+                    local field_type = fieldtype(shape, k)
+                    local (type_to_check, _) = can_use_type_check_helper(is_checkers, field_type, Any)
+                    type_to_check === nothing && reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype"), "$at: field $k's type $field_type")
+                    WasmBuilder.local_get(b, rec)
+                    WasmBuilder.struct_get(b, info.struct_, translator.field_index[fields[k]])
+                    MacroAssembler_invoke(b, generate_is_checker(is_checkers, type_to_check, false, true))
+                    WasmBuilder.i32_eqz(b)
+                    WasmBuilder.br_if(b, fail)
+                end
+                WasmBuilder.i32_const(b, 1)
+                WasmBuilder.br(b, result_label)
+                WasmBuilder.var"end"(b)   # fail
+                WasmBuilder.var"end"(b)   # if
+            end
+            WasmBuilder.i32_const(b, 0)
+        end
     end
     WasmBuilder.br(b, result_label)
     if self.operand_is_nullable

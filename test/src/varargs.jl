@@ -72,8 +72,9 @@ end
 
 @testset "varargs: an open count packs at the call and its body reads the tuple, answering as native Julia" begin
     # the call packs the operands' concrete tuple; the body reads the abstract Tuple{Vararg{Int}} by
-    # nfields and a position, each a class-id switch over the closed world's tuple classes below it,
-    # as Julia's codegen reads the value's own type (emit_datatype_nfields, emit_bounds_check)
+    # nfields and a position, each a class-id switch over the records of the arities it admits (the
+    # concrete tuple boxed into its record where it flows into the open parameter), as Julia's codegen
+    # reads the value's own type (emit_datatype_nfields, emit_bounds_check)
     for (f, args) in ((Cases.open_count, [(1,), (0,), (-9,)]), (Cases.cat3_read, [(Int64(0),), (Int64(1),), (Int64(2),)]))
         local bytes = W.compile(f, (Int64,))
         for r in WTRunner.run_cases([WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, f(a...)) for a in args])
@@ -84,9 +85,8 @@ end
 
 # an open count's tuple whose elements' classes only run time knows (A70S3): InexactError(::Symbol, ::Any,
 # ::Vararg{Any}) packs Tuple{Type, UInt64}, which Julia's codegen types by its values at run time
-# (jl_f_tuple); the call switches on each open element's class among the closed world's tuple classes
-# below it (tuple_classes), each checked conversion that can raise now compiling; past Julia's
-# max_union_splitting the classes reject, located
+# (jl_f_tuple); the call builds the record of its arity (src/julia/classes.jl TupleRecord), each element
+# boxed, each checked conversion that can raise now compiling, whatever classes the open element has
 module OpenTupleCases
 const KEYS = ["k$i" for i in 1:4]
 const ANYS = Any[1, "s"]
@@ -100,7 +100,7 @@ function open_tuple(k::Int64, n::Int64)
 end
 over(n::Int64) = throw(InexactError(:over, Int64, ANYS[n]))
 end
-@testset "varargs: a tuple of open elements packs as jl_f_tuple, by its elements' classes, within max_union_splitting" begin
+@testset "varargs: a tuple of open elements packs as jl_f_tuple, the record of its arity" begin
     local f = OpenTupleCases.open_tuple
     local bytes = W.compile(f, (Int64, Int64); optimize = false)
     local argsets = [(1, 5), (1, -1), (2, 7), (2, 300), (3, 2), (3, -3), (4, 10)]
@@ -109,9 +109,13 @@ end
     for r in WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
-    # Tuple{Type{Int64}, Any}: one class times every class the closed world has, past the bound
-    local e = try; W.compile(OpenTupleCases.over, (Int64,); optimize = false); nothing; catch x; x; end
-    @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("max_union_splitting", e.rejection.row)
+    # Tuple{Type{Int64}, Any}: an element of every class the closed world has, one record, raised as native
+    local over_bytes = W.compile(OpenTupleCases.over, (Int64,); optimize = false)
+    local over_cases = [WTRunner.RunCase("over($n)", over_bytes, (Int64(n),), WTRunner.native_answer(OpenTupleCases.over, (Int64(n),))) for n in 1:2]
+    @test all(c -> c.native == WTRunner.Throws(InexactError), over_cases)
+    for r in WTRunner.run_cases(over_cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
 end
 
 end

@@ -544,10 +544,10 @@ member's class `Core.TypeofBottom` is under it, and the open `Type{T}`, which ev
 answer as any class. The one reading of a type's concrete classes: the is check's, its inlining
 decision's and a tuple's field read at a run-time index all take their class ids here.
 
-Reshaped: `klass` — a type Julia's program has that is no class of the closed world (a UnionAll, an
-abstract tuple type such as `Tuple{String,Vararg{String}}`, which the class walk never meets as a
-class) holds the concrete classes Julia puts under it (`c <: klass`), each its own range, where dart's
-`klass` is always a class of its hierarchy.
+Reshaped: `klass` — a type Julia's program has that is no class of the closed world (a UnionAll)
+holds the concrete classes Julia puts under it (`c <: klass`), each its own range, where dart's
+`klass` is always a class of its hierarchy; an open tuple type (`Tuple{String,Vararg{String}}`) holds
+the record classes of the arities it admits (src/julia/classes.jl TupleRecord), its values' classes.
 """
 @parity "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" function get_concrete_class_id_range(self::ClassIdNumbering, klass::Type)::Vector{Range}
     klass isa DataType && Base.isType(klass) && !(klass.parameters[1] isa TypeVar) && !(typeof(klass.parameters[1]) <: klass) &&
@@ -555,7 +555,14 @@ class) holds the concrete classes Julia puts under it (`c <: klass`), each its o
     local cached = get(self._concrete_class_id_ranges, klass, nothing)
     cached === nothing || return cached
     local ranges = Range[]
-    if klass isa DataType && haskey(self.class_ids, klass)
+    if klass isa DataType && klass <: Tuple && !isconcretetype(klass)
+        # an open tuple type's values are the records of the arities it admits (TupleRecord): a tuple of
+        # a concrete static type is boxed into its arity's record where it flows into an open slot
+        for (c, id) in self.class_ids
+            local n = tuple_record_arity(c)
+            n === nothing || typeintersect(klass, NTuple{n,Any}) === Union{} || push!(ranges, Range(id, id))
+        end
+    elseif klass isa DataType && haskey(self.class_ids, klass)
         local transitive_implementors = _get_transitive_implementors(self, klass)
         append!(ranges, get(self._concrete_subclass_id_range, klass, Range[]))
         for implementor in transitive_implementors
