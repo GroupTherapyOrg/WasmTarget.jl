@@ -105,6 +105,13 @@ function memory(k::Int64, n::Int64)
         local hs = n == 0 ? "" : n == 1 ? "a" : n == 2 ? "héllo wörld, a longer one" : n == 4 ? "abcdefg" : n == 5 ? "abcdefgh" :
             n == 6 ? "日本" : "k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1"
         return (hash(hs, n % UInt) % UInt(1000003)) % Int64
+    elseif k == 14
+        # 16-bit elements, each a packed i16 (WasmI16), a signed one read sign-extended, an unsigned not
+        local a16 = Vector{Int16}(undef, 2)
+        a16[1] = Int16(-2)
+        local u16 = Vector{UInt16}(undef, 2)
+        u16[1] = 0xfffe
+        return Int64(a16[n]) + 100000 * Int64(u16[n])
     elseif k == 7
         local w = Vector{Int64}(undef, 4)
         w[1] = 1; w[2] = 2; w[3] = 3; w[4] = 4
@@ -137,7 +144,7 @@ end
     local plain = W.compile(memory, (Int64, Int64); optimize = false)
     local argsets = [(1, 1), (1, 40), (2, 1), (2, 40), (3, 1), (3, 40), (5, 2), (5, 3), (6, 1), (6, 9),
                      (7, 1), (7, 3), (8, 1), (8, 3), (8, 6), (8, 9), (9, 1), (9, 4), (9, 9), (10, 1), (10, 4), (10, 5), (11, 1), (11, 2), (11, 40), (12, 1), (12, 30),
-                     (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (4, 2), (4, 3)]
+                     (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (14, 1), (14, 3), (4, 2), (4, 3)]
     local cases = [WTRunner.RunCase("memory$a", plain, Int64.(a), WTRunner.native_answer(memory, Int64.(a))) for a in argsets]
     for r in WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)

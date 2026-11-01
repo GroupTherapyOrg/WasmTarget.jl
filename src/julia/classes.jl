@@ -483,19 +483,20 @@ end
 The element type of the wasm array a `Memory{T}` holds its elements in, by Julia's layout of `T`
 (`Base.allocatedinline`, `sizeof`): a primitive element is stored unboxed, dart:_wasm's storage
 class of its size (src/julia/wasm_array.jl), a float as WasmF32 or WasmF64 and any other as WasmI8,
-WasmI32 or WasmI64 (a 16-bit element waits for dart's WasmI16, rejected, located, until it is defined); every other element is stored boxed, `Union{T,Nothing}`, a nullable
+WasmI16, WasmI32 or WasmI64 (a 16-bit float, which dart:_wasm has no storage class for, rejected, located); every other element is stored boxed, `Union{T,Nothing}`, a nullable
 reference to its class (the top type for `Any`), null an element no write has set (#undef).
 
 Reshaped: `T` — an element type Julia stores inline as a union of bits types (`Union{Nothing,Int}`,
 allocatedinline, its selector bytes after the data, genericmemory.c `jl_genericmemory_typetagdata`)
 is stored boxed, its answers the same, as is an inline struct of bits, whose class a box holds.
 """
-@quarantine "a Memory's element storage is Julia's layout of its element type: inline bits by size, else a reference" Base.isprimitivetype function _memory_element_storage(@nospecialize(T), at::String)::Type
+@quarantine "a Memory's element storage is Julia's layout of its element type, julia/src/genericmemory.c:55 _new_genericmemory_'s element size: inline bits by size, else a reference" Base.isprimitivetype function _memory_element_storage(@nospecialize(T), at::String)::Type
     if T isa DataType && isprimitivetype(T)
         local n = sizeof(T)
         T <: AbstractFloat && n == 4 && return WasmF32
         T <: AbstractFloat && n == 8 && return WasmF64
         !(T <: AbstractFloat) && n == 1 && return WasmI8
+        !(T <: AbstractFloat) && n == 2 && return WasmI16
         !(T <: AbstractFloat) && n == 4 && return WasmI32
         !(T <: AbstractFloat) && n == 8 && return WasmI64
         reject!(Unquarantined("src/julia/classes.jl _memory_element_storage: the primitive element type $T, $n bytes, with no wasm storage class"), at)
