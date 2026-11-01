@@ -6144,3 +6144,127 @@ is open on MARCH 1.L (A67E1's text there now names A68E2). A68E3 is open on MARC
 By owner: lead holds A68E2 and A68S4 (dev/check.sh, test/src_tests.jl), with wt3-latency holding the first-compile cut;
 wt3-tests2 holds A68E3 (dev/corpus.sh, test/src/dart_tests.jl); wt3-parity holds A68S1's check (src/julia/parity.jl)
 and wt3-runtime its citation (src/julia/runtime/rtutils.jl); wt3-memory holds A68S2 and A68S3 (src/intrinsics.jl).
+
+## 2026-11-01 — audited through 1bed6b74 (cad03f24..1bed6b74: field selectors and their table call, convertType's unboxing, the shards' one queue, src images deleted before the judged load, grep under pipefail, Base's MemoryRef copy and unset by overlay, the corpus file last, one program per family, isdefined's atomic errors, run-time types rejected, a killed corpus case failed by name, the constant walk once per object, a parametric union's class)
+
+The sixty-ninth audit, beside the work, covers the 16 commits of cad03f24..1bed6b74 that are not audit entry 68 (bc74cd55,
+0be10d4d): 0bc356c5, 7794d773, 6f48fa35, 3a8c06c1, b5f056a0, ed8085cd, a4f60ad3, 88bc946f, 582e6e0a, eb5655ce, c955b037,
+a1f78cbc, 0993dc79, 134a0198 and 1bed6b74, read here, under Dale's R1 and R2 as standing sections. Every finding rests on
+one exact command, quoted. Standing items. src changes in 14 files (`git diff --stat cad03f24..origin/wt2 -- src | tail -1`
+gives `14 files changed, 638 insertions(+), 152 deletions(-)`); one exemption lands (`git diff cad03f24..origin/wt2 -- src
+| grep -nE '^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives `Reshaped: unreachableMetadata dropped`, naming how
+Julia differs). The debt list reads 400 at both ends (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`). Audit 68's
+findings: A68S2 and A68S3 are fixed by 582e6e0a (below); A68E2 is open (`grep -n '^SHARDS=' dev/check.sh` gives
+`112:SHARDS=6`, `grep -n 'maximum(v)' test/src_tests.jl` gives `35:`); A68E3 is open (`tail -1 wt-corpus.tsv` still gives
+665146f1's row; a `dev/corpus.sh --once` on this head was running at the audit, its shards under dev/corpus_shard.sh);
+A68S1 is open (`grep -n 'f === nothing && return nothing' src/julia/parity.jl` gives `1376:`, rtutils.jl:15 still cites
+genericmemory.c:54); A68S4 is open (MARCH 1.L's ruling still ends at "wt3-latency's invalidation fix"). Audit 67's A67E2,
+A67S1, A67S2, A67S3 (`grep -c '@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType"' src/functions.jl` gives 3),
+A67S4 (`grep -n "Julia.s exception stack has no reader" src/code_generator.jl` gives `995:`), A66E5 and A66S1's export
+half are open as audit 68 left them. Findings A69E1, A69S1, A69S2, A69S3 and A69S4.
+
+Area: builder — no change under src/wasm_builder. 3a8c06c1, a1f78cbc and 134a0198 emit only builder instructions over
+typed locals: array.copy and array.set of the memories' data arrays, call_indirect at the selector's signature.
+
+stopgap in disguise: none new.
+precedent: dart's WasmArrayExt arms and callDispatchTable, by line.
+
+Area: collection and planning — 3a8c06c1 builds dart's table for field selectors: DispatchTable.build's member loop, the
+ranges merged by consecutive class id, one range static, the rest through the table, rows sorted by weight and packed
+(dispatch_table.dart:118, :291, :360, :436, :451, :453, :919, :926, :1040, :1045, param_info.dart:59, each read at the
+pin), its model dev/formal/FieldSelectorTable.tla with two Broken configs (d200c316, D11); a class a call's receiver
+admits without the field rejects Unquarantined at Julia's FieldError, never an empty slot. field_selector_calls
+(classes.jl:577) cites TFA's registerGetterCall (table_selector_assigner.dart:142, read: `void registerGetterCall(Member
+member, bool calledOnNull) {`). (A69S2, low, D3/D9) a positional field names no field: `grep -n 'name_op.c.val isa Int'
+src/julia/classes.jl` gives `587:`, so `getfield(x, 1)` on an abstract receiver is a call of the selector "1", while a
+struct's ClassField is named by its fieldname (`classes.jl:260 … string(fieldname(c, i))`), so no class has a member
+"1" and every admitted struct reaches dispatch_table.jl:415's rejection, a FieldError Julia never raises (it answers the
+field at that position). Loud, never silent, but a wrong diagnosis. Fix: a positional field is resolved per class to its
+name before the selector is chosen, or a positional access on an abstract receiver rejects with its own located reason;
+a case reaches it. Owner: wt3-translator2. c955b037 keys the constant walk by NirConst, === for an immutable object, as
+dev/formal/ValueClasses.tla's seenObj holds every object: the port was wrong, not the model, and the fix makes the walk
+linear on a shared DAG (D12, a case of 41 nodes).
+
+stopgap in disguise: none new.
+precedent: dart's DispatchTable.build and TFA's selector registration, by line; the walk's model.
+
+Area: emission and diagnostics — b5f056a0 and 0993dc79 port convertType's Unboxing arm (translator.dart:1597, read: the
+box class's value field, a ref.cast where the reference is wider), the class the PiNode's (Reshaped boxed_class, named),
+a packed value read signed by the class. 582e6e0a ports isdefined's order checks (codegen.cpp:4910-4934, read: invalid
+order, an order on a missing field, atomic against non-atomic, each emit_atomic_error) through throw_atomic_error
+(rtutils.c:181 jl_atomic_error, read), jl_get_atomic_order's load set as written: A68S2 is fixed. Its run_time_type arm
+rejects Core.apply_type and Core.typeof at their statements, so a DataType value comes only from a canonical constant
+(`grep -n "f === Core.apply_type || f === Core.typeof" src/intrinsics.jl` gives `344:`): A68S3 is fixed, the guard an arm
+rather than a construction. ed8085cd's === over an immutable class's fields compares by ref.eq or integer bits only where
+egal is identity or bits (by_reference is egal_by_identity or a DataType), Julia's compare_fields (builtins.c:100, read).
+134a0198 ports callDispatchTable (translator.dart:911, read line by line) and moves the ten PolymorphicDispatchers
+definitions from Internal to Unported, gaps, outside the headline. 1bed6b74 joins a Union whose typejoin is a UnionAll by
+the supertype walk typejoin itself makes, stopping at the first DataType. Overlays, item (a). src/patch/genericmemory.jl
+mirrors base/genericmemory.jl as dart's sdk/lib/_internal/wasm/lib/*_patch.dart files mirror the libraries they patch,
+registered in PATCH_FILES, and each overlay calls a helper the intrinsifier lowers, as a dart patch calls dart:_wasm's
+WasmArray.copy: the structure is dart's. Against Julia: the unsafe_copyto! overlay keeps Base's checks (base/genericmemory.jl:116
+at 1.12.7, read), and two array.copy's (data, data#isSet) have jl_genericmemory_copyto's overlap semantics (genericmemory.c:223,
+read); the _unsetindex! overlay leaves bits and isbits-union elements as Base does (`arrayelem == isbits &&
+datatype_pointerfree(T) && return A`, and nothing for isunion), holds_reference being false for both. (A69S3, low, D9/D6) an
+overlay's consistency is asserted, never checked: an intrinsified helper (`@noinline`, lowered by the intrinsifier) still
+types its callers by its native body inferred in METHOD_TABLE, and a1f78cbc's message records that the body ed8085cd landed
+for wasm_memory_copy!, a call of unsafe_copyto!, is the overlay's own there, "a cycle Julia's inference answers Union{}, which
+made the code after the call unreachable, a trap in the module", found only by a1f78cbc's shrinking cases. Fix: the patch
+load infers each overlay and each intrinsified helper in METHOD_TABLE and natively and refuses a return type that differs,
+Union{} where the native one is not above all. Owner: wt3-memory (src/patch, src/julia/wasm_array.jl). Watch points. (1)
+a1f78cbc's message cites `intrinsics.dart:1223 WasmArrayExt.[]= (array.set)`; :1223 is `case StaticIntrinsic.wasmArrayIndex:`,
+the get, and `[]=` is :1239 (src cites neither). (2) Field selectors are keyed by name across unrelated classes, dart's
+dynamic-call grouping, not TFA's override sets; Julia's fields override nothing, so this is the faithful choice, at the cost
+of wider rows.
+
+stopgap in disguise: none new.
+precedent: dart's convertType, callDispatchTable and @patch libraries; Julia's codegen isdefined arm and Base's copy, by line.
+
+Area: enforcement and prose — 7794d773 deletes WasmTarget's images before the judged load (A68E1, fixed, audit 68).
+6f48fa35's diagnosis is right: under pipefail `grep -q` can close the pipe while git log writes; the one remaining
+`git log -1 … | grep -qE` (check.sh:148) is safe while a message fits the pipe buffer. eb5655ce relaunches a shard past a
+killed case, failed by name (ReTestItems' record_timeout!, src/ReTestItems.jl:453, as cited): a past-limit verdict
+always fails (`_dart_breaks`' first line), so a relaunch cannot turn a shard green over an earlier failure. 88bc946f
+merges each family's cases into one program, every case still run in both modules against native; no test hack.
+Item (b). 0bc356c5's claim queue is a deterministic sort (corpus last, then cost, then name) claimed by mkdir; which shard
+runs a file varies with timing, which changes no verdict while files are independent, and its precedent resolves in
+Julia 1.12.7's test tree (`sed -n 267p test/runtests.jl` gives `test = popfirst!(tests)`, outside the pinned checkout); no
+finding against D17. (A69E1, medium, D12/D15) a4f60ad3 routes around a src defect: its comment records that loading the
+corpus "invalidates the compiled code of every caller that reached those generics at an abstract type … (3145 method
+instances, the next WasmTarget.compile then 174 G instead of 0.2)", and fixes it by order, "so here the order isolates
+them" (test/src_tests.jl:59). Every user program that adds a method to a Base generic pays the same recompile; the gate no
+longer measures it, no case reaches it (`grep -rln invalidat test/src src` gives nothing), and the order names no exit.
+Seven landings followed with no D14 red (`wt-ship-failures.tsv` after 13:33:46Z holds none). Fix: a case in test/src that
+defines a Base method on a fresh type and then compiles, its instructions within a band, red today (wt3-latency); the
+order is deleted by the src commit that turns it green. Owners: lead (test/src_tests.jl), wt3-latency (src). (A69S4, low,
+D12) the corpus-last test reads text, not what loads the corpus: `grep -n '_wt_loads_corpus(f::String)' test/src_tests.jl`
+gives `60: … occursin("DartCorpus", …)`, but subset.jl:95 includes smoke_corpus.jl under `@static if VERSION >= v"1.13-"`
+(:90) and holds no "DartCorpus" (`grep -c DartCorpus test/src/subset.jl` gives 0), so on 1.13 (the full matrix) it is
+queued by cost and its invalidations reach the later files of its shard. Fix: the predicate names the corpus's files
+(smoke_corpus.jl, DartCorpus), or falls with A69E1's order. Owner: lead. Requirements: D12, D14, D15; no lock fired inside
+its band.
+
+R1 and R2. R1: each new definition's citation resolves at its pin (dispatch_table.dart, param_info.dart:59,
+translator.dart:911 and :1597, code_generator.dart:3170, intrinsics.dart:1194, rtutils.c:181, builtins.c:100,
+genericmemory.c:223, names.dart:25, table_selector.dart:10, table_selector_assigner.dart:142, each line read here). The
+known item: c955b037's _meet_constant! names Base.isdefined in its @quarantine's API slot, which L213 never reads
+(`_reason_unpinned(e.necessity, sdk)` reads the reason alone); its reason holds no anchor, so it is on the debt list
+(`grep -n '_meet_constant!' dev/quarantine_unpinned.txt` gives `15:`): a bare Julia symbol cannot pass L213, no finding
+there. (A69S1, medium, R1/L213) an anchor that resolves passes whatever the body ports, and Base's Julia sources have no
+pin: `grep -A2 'const JULIA_FILES' src/julia/parity.jl` lists C units only and dev/fetch_julia.sh checks out
+`<unit>.h/.c/.cpp` alone, so wasm_memory_unset! (wasm_array.jl:293) and the _unsetindex! overlay (patch/genericmemory.jl:17),
+whose bodies port base/genericmemory.jl:78 _unsetindex! (1.12.7, read), cite `julia/src/genericmemory.c:223
+jl_genericmemory_copyto`, a copy (`grep -rn 'genericmemory.c:223' src` gives 4 sites), and pass. As the overlay section
+grows, every Base port must cite a C neighbour. Fix: the Julia pin table holds base/*.jl (JULIA_FILES' units with a .jl
+form, a `function X` or `X(` at column 0 resolving), and the four sites cite Base's lines. Related, open: A66S3 (a path
+citation pins on a substring or no symbol). Owner: wt3-parity; the citations wt3-memory. R2: the ten PolymorphicDispatchers
+rejection-only bodies move from Internal to Unported and stay outside the headline (dev/src_progress.sh:67 subtracts both
+kinds); callDispatchTable, selectorForTarget and _createSelectorForTarget move from a rejection to a body; nothing in the
+range counts a rejection-only body as ported. wt3-parity's A64E2 recount did not land in range (`git diff
+cad03f24..origin/wt2 | grep -c DartAbstract` gives 0); A66E5 is open.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A68S2 and A68S3 are fixed by 582e6e0a and leave MARCH
+1.D. A69E1 and A69S4 are open on MARCH 1.L. A69S1 is open on MARCH 1.K. A69S2 is open on MARCH 1.E. A69S3 is open on MARCH 1.F. By owner: lead holds A69E1's order and
+A69S4 (test/src_tests.jl), wt3-latency A69E1's src fix; wt3-parity holds A69S1's pin table, wt3-memory its citations and
+A69S3 (src/patch/genericmemory.jl, src/julia/wasm_array.jl); wt3-translator2 holds A69S2 (src/julia/classes.jl
+field_selector_calls, src/dispatch_table.jl).
