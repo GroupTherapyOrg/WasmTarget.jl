@@ -108,11 +108,10 @@ WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: to
 # and a slower wall clock, which the band does not judge. A sixth is a STOPGAP (D20): split by instructions
 # (25f5d125) the shards still read 477-620 G, about 305 G of each being its own load and first compile of
 # WasmTarget's pipeline, so a change to src/ read 125 s (load 13 + a shard of 112 s, its tests green), red, 2026-11-01. It is deleted, back
-# to four (A67E1), by the commit that cuts that first-compile cost (wt3-latency). A seventh, the same STOPGAP: at six,
-# the suite's growth put every change to src/ past the band, a one-line edit of a quarantine reason reading 126 s
-# (load 15 + a shard of 111, shards 543-589 G, its tests green, 2026-11-01 15:25); seven take about 40 G of tests off
-# the slowest. Deleted with the sixth, back to four, by the first-compile cut
-SHARDS=7; tpids=""
+# to four (A67E1), by the commit that cuts that first-compile cost (wt3-latency). A seventh was tried and reverted
+# (A71E1): it took the slowest shard from 589 to 575 G, about 3 s, for one more ~300 G first compile and an eighth Julia
+# process on four performance cores (D31)
+SHARDS=6; tpids=""
 costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-instr.tsv"; rm -f .wtd/src_costs.*
 # the shards take files from one queue (test/src_tests.jl), each claimed by a directory made here
 rm -rf .wtd/claims; mkdir -p .wtd/claims
