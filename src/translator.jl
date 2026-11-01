@@ -464,8 +464,8 @@ The polymorphic dispatchers a module calls: per selector, one function that test
 class id against the selector's static dispatch ranges and calls the target directly, made once (the
 unchecked entry's in a cache of its own where the selector has two entries). A Julia selector is a
 field's (src/dispatch_table.jl), and a field has no wasm:static-dispatch pragma, so a selector has
-several static ranges only under TranslatorOptions.polymorphic_specialization, whose dispatchers are
-not yet ported (each definition rejects Unported).
+several static ranges only under TranslatorOptions.polymorphic_specialization (dart's
+--polymorphic-specialization), which WasmTarget.compile leaves off as dart does.
 """
 @parity "dart2wasm/lib/translator.dart:3686 PolymorphicDispatchers" struct PolymorphicDispatchers
     translator::KernelNodes
@@ -618,8 +618,8 @@ end
 @parity "dart2wasm/lib/translator.dart:316 Translator.getPartialInstantiatorForModule" get_partial_instantiator_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:316 Translator.getPartialInstantiatorForModule: a partial instantiation's forwarders; Julia instantiates no generic function value, a specialization being a MethodInstance (the Kernel table's InstantiationConstant row)"), "Translator.getPartialInstantiatorForModule")
 
-@parity "dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule" get_polymorphic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule"), "Translator.getPolymorphicDispatchersForModule: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+@parity "dart2wasm/lib/translator.dart:322 Translator.getPolymorphicDispatchersForModule" get_polymorphic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::PolymorphicDispatchers =
+    get!(() -> PolymorphicDispatchers(self, module_), self._polymorphic_dispatchers, module_)
 
 @parity "dart2wasm/lib/translator.dart:332 Translator.getDynamicDispatchersForModule" get_dynamic_dispatchers_for_module(self::Translator, module_::WasmBuilder.ModuleBuilder)::DynamicDispatchers =
     get!(() -> DynamicDispatchers(self, module_), self._dynamic_dispatchers, module_)
@@ -1830,36 +1830,84 @@ end
 @parity "dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder" get_two_type_argument_forwarder(self::PartialInstantiator, target::Core.MethodInstance, type1::Type, type2::Type, name::String)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:3645 PartialInstantiator.getTwoTypeArgumentForwarder: a partial instantiation's forwarders; Julia instantiates no generic function value, a specialization being a MethodInstance (the Kernel table's InstantiationConstant row)"), "PartialInstantiator.getTwoTypeArgumentForwarder")
 
-@parity "dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers" PolymorphicDispatchers(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers"), "PolymorphicDispatchers: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+@parity "dart2wasm/lib/translator.dart:3692 PolymorphicDispatchers" PolymorphicDispatchers(translator::KernelNodes, calling_module::WasmBuilder.ModuleBuilder)::PolymorphicDispatchers =
+    PolymorphicDispatchers(Val(:_), translator, calling_module)
 
-@parity "dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher" get_polymorphic_dispatcher(self::PolymorphicDispatchers, selector::SelectorInfo; use_unchecked_entry::Bool)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher"), "PolymorphicDispatchers.getPolymorphicDispatcher: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+@parity "dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher" function get_polymorphic_dispatcher(self::PolymorphicDispatchers, selector::SelectorInfo; use_unchecked_entry::Bool)::CallTarget
+    local at = "dart2wasm/lib/translator.dart:3694 PolymorphicDispatchers.getPolymorphicDispatcher"
+    length(targets(selector; unchecked = use_unchecked_entry).all_target_ranges) > 1 ||
+        reject!(Internal("$at: the selector $(selector.name) has one target range or none, a direct call"), at)
+    local cache = use_unchecked_entry && selector.use_multiple_entry_points[] ? self.unchecked_cache : self.cache
+    return get!(() -> PolymorphicDispatcherCallTarget(self.translator, selector, self.calling_module, use_unchecked_entry), cache, selector)
+end
 
-@parity "dart2wasm/lib/translator.dart:3721 PolymorphicDispatcherCallTarget" PolymorphicDispatcherCallTarget(translator::KernelNodes, selector::SelectorInfo, calling_module::WasmBuilder.ModuleBuilder,
-        use_unchecked_entry::Bool)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3721 PolymorphicDispatcherCallTarget"), "PolymorphicDispatcherCallTarget: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+@parity "dart2wasm/lib/translator.dart:3721 PolymorphicDispatcherCallTarget" function PolymorphicDispatcherCallTarget(translator::KernelNodes, selector::SelectorInfo, calling_module::WasmBuilder.ModuleBuilder,
+        use_unchecked_entry::Bool)::PolymorphicDispatcherCallTarget
+    local signature = selector.signature[]
+    local inputs = WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i32; signature.inputs]
+    return PolymorphicDispatcherCallTarget(Val(:_), translator, selector, calling_module, use_unchecked_entry,
+        WasmBuilder.define_function(types_builder(translator), inputs, signature.outputs))
+end
 
-@parity "dart2wasm/lib/translator.dart:3734 PolymorphicDispatcherCallTarget.name" name(self::PolymorphicDispatcherCallTarget)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3734 PolymorphicDispatcherCallTarget.name"), "PolymorphicDispatcherCallTarget.name: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+@parity "dart2wasm/lib/translator.dart:3734 PolymorphicDispatcherCallTarget.name" name(self::PolymorphicDispatcherCallTarget)::String = "$(self.selector.name) (polymorphic dispatcher)"
 
-@parity "dart2wasm/lib/translator.dart:3737 PolymorphicDispatcherCallTarget.supportsInlining" supports_inlining(self::PolymorphicDispatcherCallTarget)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3737 PolymorphicDispatcherCallTarget.supportsInlining"), "PolymorphicDispatcherCallTarget.supportsInlining: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+@parity "dart2wasm/lib/translator.dart:3737 PolymorphicDispatcherCallTarget.supportsInlining" supports_inlining(self::PolymorphicDispatcherCallTarget)::Bool = true
 
-@parity "dart2wasm/lib/translator.dart:3740 PolymorphicDispatcherCallTarget.shouldInline" should_inline(self::PolymorphicDispatcherCallTarget)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3740 PolymorphicDispatcherCallTarget.shouldInline"), "PolymorphicDispatcherCallTarget.shouldInline: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+@parity "dart2wasm/lib/translator.dart:3740 PolymorphicDispatcherCallTarget.shouldInline" should_inline(self::PolymorphicDispatcherCallTarget)::InliningDecision =
+    InliningDecision(length(targets(self.selector; unchecked = self.use_unchecked_entry).static_dispatch_ranges) <= 1, "staticDispatchRanges <= 1")
 
-@parity "dart2wasm/lib/translator.dart:3750 PolymorphicDispatcherCallTarget.inliningCodeGen" inlining_code_gen(self::PolymorphicDispatcherCallTarget)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3750 PolymorphicDispatcherCallTarget.inliningCodeGen"), "PolymorphicDispatcherCallTarget.inliningCodeGen: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+@parity "dart2wasm/lib/translator.dart:3750 PolymorphicDispatcherCallTarget.inliningCodeGen" inlining_code_gen(self::PolymorphicDispatcherCallTarget)::CodeGenerator =
+    PolymorphicDispatcherCodeGenerator(self.translator, self.selector, self.use_unchecked_entry)
 
-@parity "dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function" var"function"(self::PolymorphicDispatcherCallTarget)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function"), "PolymorphicDispatcherCallTarget.function: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+# dart's `late final w.BaseFunction function` overrides CallTarget's getter: the field, defined on first read
+@parity "dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function" var"function"(self::PolymorphicDispatcherCallTarget)::WasmBuilder.IR.BaseFunction = self.function_[]
 
-@parity "dart2wasm/lib/translator.dart:3769 PolymorphicDispatcherCodeGenerator" PolymorphicDispatcherCodeGenerator(translator::KernelNodes, selector::SelectorInfo, use_unchecked_entry::Bool)::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3769 PolymorphicDispatcherCodeGenerator"), "PolymorphicDispatcherCodeGenerator: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+@parity "dart2wasm/lib/translator.dart:3769 PolymorphicDispatcherCodeGenerator" PolymorphicDispatcherCodeGenerator(translator::KernelNodes, selector::SelectorInfo, use_unchecked_entry::Bool)::PolymorphicDispatcherCodeGenerator =
+    PolymorphicDispatcherCodeGenerator(Val(:_), translator, selector, use_unchecked_entry)
 
-@parity "dart2wasm/lib/translator.dart:3776 PolymorphicDispatcherCodeGenerator.generate" generate(self::PolymorphicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Union{} =
-    reject!(Unported("dart2wasm/lib/translator.dart:3776 PolymorphicDispatcherCodeGenerator.generate"), "PolymorphicDispatcherCodeGenerator.generate: a selector of several static dispatch ranges, which only TranslatorOptions.polymorphic_specialization makes (no Julia field carries wasm:static-dispatch)")
+"""
+The dispatcher's body: its first parameter the receiver's class id, the selector's inputs after it.
+A class-id search over the static dispatch ranges calls each range's target directly with the
+inputs; a receiver in none, where some ranges are the table's, calls through the dispatch table.
+"""
+@parity "dart2wasm/lib/translator.dart:3776 PolymorphicDispatcherCodeGenerator.generate" function generate(self::PolymorphicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
+    local translator = self.translator::Translator
+    local selector = self.selector
+    local signature = selector.signature[]
+
+    local targets_ = targets(selector; unchecked = self.use_unchecked_entry)
+
+    local target_ranges = NamedTuple{(:range, :value),Tuple{Range,Reference}}[(range = e.range, value = e.target) for e in targets_.static_dispatch_ranges]
+
+    local need_fallback = length(targets_.all_target_ranges) > length(targets_.static_dispatch_ranges)
+
+    # First parameter to the dispatcher is the class id.
+    local class_id_parameter_offset = 1
+
+    local emit_direct_call = function (target::Reference)
+        for i in 0:length(signature.inputs)-1
+            WasmBuilder.local_get(b, param_locals[class_id_parameter_offset + i + 1])
+        end
+        call_reference(translator, target, b)
+        return nothing
+    end
+
+    local emit_dispatch_table_call = function ()
+        for i in 0:length(signature.inputs)-1
+            WasmBuilder.local_get(b, param_locals[class_id_parameter_offset + i + 1])
+        end
+        WasmBuilder.local_get(b, param_locals[2])
+        call_dispatch_table(translator, b, selector; use_unchecked_entry = self.use_unchecked_entry)
+        return nothing
+    end
+
+    WasmBuilder.local_get(b, param_locals[1])
+    class_id_search(b, target_ranges, signature.outputs, emit_direct_call, need_fallback ? emit_dispatch_table_call : nothing)
+
+    return_label !== nothing ? WasmBuilder.br(b, return_label) : WasmBuilder.return_(b)
+    WasmBuilder.var"end"(b)
+    return nothing
+end
 
 @parity "dart2wasm/lib/translator.dart:3843 DummyValuesCollector" DummyValuesCollector(translator::KernelNodes, module_::WasmBuilder.ModuleBuilder)::DummyValuesCollector = DummyValuesCollector(Val(:_), translator, module_)
 

@@ -220,3 +220,44 @@ end
     local ec = try; W.compile(F.first_of, (Int,); optimize = false); nothing; catch x; x; end
     @test ec isa W.RejectionError && ec.rejection isa W.Unported && occursin("_virtualCall", string(ec.rejection))
 end
+
+@testset "translator.dart: PolymorphicDispatchers, a class-id search over the static dispatch ranges (polymorphic specialization)" begin
+    local W = WasmTarget
+    local F = FieldSelectorCases
+    local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
+    local t = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions(polymorphic_specialization = true))
+    DD._init_modules(t, nothing)
+    collect(t.closure_layouter[]); collect(t.class_info_collector[])
+    local dt = t.dispatch_table[]
+    DD.build(dt)
+    local getter(cls) = W.FieldReference(only(f for f in W.class_instance_fields(cls, "test") if f.name == "side"), W.FieldReferenceKind_getter)
+    local side = DD.selector_for_target(dt, getter(F.A))
+    # dispatch_table.dart:694: under polymorphic specialization each of the two ranges is static
+    local tg = DD.targets(side; unchecked = false)
+    @test length(tg.all_target_ranges) == 2 && length(tg.static_dispatch_ranges) == 2
+    # one dispatcher per module and selector, its signature the class id then the selector's inputs
+    local pd = DD.get_polymorphic_dispatchers_for_module(t, DD.main_module(t))
+    @test DD.get_polymorphic_dispatchers_for_module(t, DD.main_module(t)) === pd
+    local ct = DD.get_polymorphic_dispatcher(pd, side; use_unchecked_entry = false)
+    @test DD.get_polymorphic_dispatcher(pd, side; use_unchecked_entry = false) === ct
+    @test DD.name(ct) == "side (polymorphic dispatcher)" && DD.supports_inlining(ct)
+    @test ct.signature.inputs == W.WasmBuilder.IR.ValueType[W.WasmBuilder.IR.NumType_i32; side.signature[].inputs] && ct.signature.outputs == side.signature[].outputs
+    # two static ranges: not inlined
+    @test !DD.should_inline(ct).should_inline
+    # the body: the class id searched, each range's own accessor called directly (an implicit getter,
+    # inlined: its struct.get), no table fallback
+    local b = W.WasmBuilder.InstructionsBuilder(DD.main_module(t), ct.signature.inputs, ct.signature.outputs)
+    @test DD.generate(DD.inlining_code_gen(ct), b, b.locals, nothing) === nothing
+    local ops = [nameof(typeof(i)) for i in b._instructions]
+    @test count(==(:StructGet), ops) == 2 && !(:CallIndirect in ops) && :Return in ops
+    # its function, defined in the calling module on first read, queued once
+    local f = DD.var"function"(ct)
+    @test f isa W.WasmBuilder.IR.BaseFunction && DD.var"function"(ct) === f
+    # a selector of one range is a direct call, no dispatcher
+    local t1 = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
+    DD._init_modules(t1, nothing)
+    collect(t1.closure_layouter[]); collect(t1.class_info_collector[])
+    DD.build(t1.dispatch_table[])
+    local side1 = DD.selector_for_target(t1.dispatch_table[], getter(F.A))
+    @test isempty(DD.targets(side1; unchecked = false).static_dispatch_ranges)
+end

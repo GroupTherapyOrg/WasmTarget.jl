@@ -590,11 +590,10 @@ end
     # the per-module and per-member helpers, each made once: dynamic dispatchers, the exception tag, a
     # member's closures, a function's reference global
     @test D.get_dynamic_dispatchers_for_module(t, m) === D.get_dynamic_dispatchers_for_module(t, m)
-    # a partial instantiation: no Julia program makes one, Internal; a polymorphic dispatcher, which only
-    # polymorphic_specialization makes for a field selector, not yet ported: Unported
+    # a partial instantiation: no Julia program makes one, Internal; a module's polymorphic dispatchers,
+    # made once (test/src/dispatch_table.jl generates one)
     local internal(f) = (e = try; f(); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Internal)
-    local ep = try; D.get_polymorphic_dispatchers_for_module(t, m); nothing; catch x; x; end
-    @test ep isa W.RejectionError && ep.rejection isa W.Unported && internal(() -> D.get_partial_instantiator_for_module(t, m))
+    @test D.get_polymorphic_dispatchers_for_module(t, m) === D.get_polymorphic_dispatchers_for_module(t, m) && internal(() -> D.get_partial_instantiator_for_module(t, m))
     @test D.get_dart_exception_tag(t, m) isa IR.Tag && D.get_dart_exception_tag(t, m) === D.get_dart_exception_tag(t, m)
     local mi = t.component.entry
     @test D.get_closures(t, mi) === D.get_closures(t, mi) && D.get_closures(t, mi; find_captures = false) !== D.get_closures(t, mi)
