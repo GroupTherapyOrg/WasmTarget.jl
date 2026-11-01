@@ -902,7 +902,11 @@ end
 # an operand cannot be a value compared by content (intrinsics.dart:1450 canBeValueType), the
 # references (ref.eq): Julia's jl_egal_ (julia.h:1885) answers by the pointers alone when either
 # operand's class is one it compares by identity (egal_by_identity: a mutable class but String,
-# SimpleVector and DataType), the same object or else, by a type tag apart or a mutable class, false
+# SimpleVector and DataType), the same object or else, by a type tag apart or a mutable class, false.
+# Two DataTypes are compared by their references too: jl_egal__bitstag (builtins.c) answers a concrete
+# one by its pointer and an abstract one by its name and parameters, and WasmTarget holds each type as
+# one constant, canonical by Julia's egal (constants.jl _lowerTypeToConstant, the constant table keyed
+# by ===), with no type made at run time, so a reference is equal exactly where Julia's types are egal
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:identical}, f::Core.Builtin, args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
@@ -927,10 +931,39 @@ end
         return i32
     end
     first_type === String && second_type === String && return generate_static_intrinsic(self, Val(:string_egal), first, second)
-    if egal_by_identity(first_type) || egal_by_identity(second_type)
+    # a value of a type below DataType (DataType itself, Type{X} of a DataType X, a Union of such) is a DataType
+    local a_data_type(T::Type) = T !== Union{} && T <: DataType
+    if egal_by_identity(first_type) || egal_by_identity(second_type) || (a_data_type(first_type) && a_data_type(second_type))
         translate_expression(code_gen, first, WasmBuilder.IR.RefType_eq(; nullable = true))
         translate_expression(code_gen, second, WasmBuilder.IR.RefType_eq(; nullable = true))
         WasmBuilder.ref_eq(b[])
+        return i32
+    end
+    # two tuples of one class whose fields are each compared by reference: Julia's egal of an immutable
+    # struct compares its fields (builtins.c compare_fields, jl_egal on each pointer field), so the
+    # fields' ref.eq, all of them
+    local by_reference(F::Type) = a_data_type(F) || egal_by_identity(F)
+    if first_type === second_type && first_type isa DataType && first_type <: Tuple && isconcretetype(first_type) &&
+            fieldcount(first_type) > 0 && all(by_reference, fieldtypes(first_type))
+        local t = translator(self)
+        local at = "$(code_gen.enclosing_member): === on two $(first_type)"
+        local info = get(t.class_info, first_type, nothing)
+        info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: === on $first_type, which has no class info"), at)
+        local x = add_local(code_gen, info.non_nullable_type)
+        local y = add_local(code_gen, info.non_nullable_type)
+        translate_expression(code_gen, first, info.non_nullable_type)
+        WasmBuilder.local_set(b[], x)
+        translate_expression(code_gen, second, info.non_nullable_type)
+        WasmBuilder.local_set(b[], y)
+        for (k, field) in enumerate(class_instance_fields(first_type, at))
+            local index = t.field_index[field]
+            WasmBuilder.local_get(b[], x)
+            WasmBuilder.struct_get(b[], info.struct_, index)
+            WasmBuilder.local_get(b[], y)
+            WasmBuilder.struct_get(b[], info.struct_, index)
+            WasmBuilder.ref_eq(b[])
+            k > 1 && WasmBuilder.i32_and(b[])
+        end
         return i32
     end
     return nothing

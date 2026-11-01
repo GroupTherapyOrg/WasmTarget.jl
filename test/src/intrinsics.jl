@@ -266,6 +266,29 @@ end
     end
 end
 
+module TypePairCases
+# a pair of types (Tuple{DataType,DataType}) and a type, picked at run time
+pair(k::Int64) = k == 1 ? (Int64, String) : k == 2 ? (Int64, Float64) : k == 3 ? (Vector{Int64}, String) : (AbstractVector{Int64}, String)
+kind(k::Int64) = k == 1 ? Int64 : k == 2 ? String : AbstractVector{Int64}
+# Julia's egal of two pairs, field by field, and of two DataTypes, one case per (case, a, b)
+types(c::Int64, a::Int64, b::Int64) = c == 1 ? Int64(pair(a) === pair(b)) : Int64(kind(a) === kind(b))
+end
+
+@testset "intrinsics.dart: identical on DataTypes and on tuples of them, each one canonical constant" begin
+    # a DataType is egal by its pointer (concrete) or its name and parameters (abstract); WasmTarget holds
+    # each type as one constant canonical by ===, so ref.eq, field by field for a tuple of them
+    local f = TypePairCases.types
+    @test only(Base.return_types(TypePairCases.pair, (Int64,))) === Tuple{DataType,DataType}
+    local argsets = [(1, 1, 1), (1, 1, 2), (1, 2, 2), (1, 3, 4), (1, 4, 4), (2, 1, 1), (2, 1, 2), (2, 3, 3)]
+    local own = WI.compile(f, (Int64, Int64, Int64))
+    local plain = WI.compile(f, (Int64, Int64, Int64); optimize = false)
+    local cases = [WTRunner.RunCase("types$a", plain, Int64.(a), WTRunner.native_answer(f, Int64.(a)); optimized = own) for a in argsets]
+    @test count(c -> c.native == 1, cases) == 5
+    for r in WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
+
 module MemoryCases
 # a Vector{Int} of n elements, x written at i and read back: memorynew, memoryrefnew, memoryrefset!
 # and memoryrefget under Julia's own bounds check (Base.throw_boundserror)
