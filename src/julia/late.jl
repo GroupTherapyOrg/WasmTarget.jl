@@ -44,7 +44,7 @@ end
 # with it (DartCorpus's loading re-compiled 484 MethodInstances through Late{Vector{IR.Local}} alone)
 @quarantine "the late field's read, Julia's dereference syntax c[]" Base.getindex Base.getindex(c::Late{T}) where {T} = _late_get(c, T)::T
 
-@quarantine "the late field's read, one body for every T" Base.convert @nospecializeinfer function _late_get(@nospecialize(c::Late), @nospecialize(T::Type))
+@quarantine "the late field's read, one body for every T: a set cell answers its value, an initializer runs on the first read and a read before assignment rejects, as dart lowers a late field's getter (pkg/front_end/lib/src/kernel/late_lowering.dart:22 createGetterWithInitializer, :271 createGetterBodyWithoutInitializer); Julia has no late fields, so the lowering is one generic cell" Base.convert @nospecializeinfer function _late_get(@nospecialize(c::Late), @nospecialize(T::Type))
     c.state == 0x02 && return c.value
     c.state == 0x01 && reject!(Internal("$(c.anchor): the late field's initializer read the field itself"), "Late")
     c.init === nothing && reject!(Unported(c.anchor), "the late field $(c.anchor), read before its assignment")

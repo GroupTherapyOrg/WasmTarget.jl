@@ -87,7 +87,6 @@ julia/kernel.jl no_counterpart_rejection
 julia/late.jl Late
 julia/late.jl [Base.getindex]
 julia/late.jl [Base.setindex!]
-julia/late.jl _late_get
 julia/late.jl _late_set!
 julia/linked_hash_map.jl (Base.delete!(m::LinkedHashMap{K, V}, k)::LinkedHashMap{K, V}) where {K, V}
 julia/linked_hash_map.jl (Base.delete!(s::LinkedHashSet{T}, x)::LinkedHashSet{T}) where T
