@@ -6839,3 +6839,122 @@ wt3-runtime A73S3 (src/types.jl, src/kernel_nodes.jl, src/julia/subset.jl) and A
 src/julia/runtime/rtutils.jl), with A72S2; wt3-memory A73S1 (src/patch/hashing.jl), with A71S1; wt3-latency A73E1
 (src/julia/nir.jl); lead A73E2 (dev/fetch_julia.sh, dev/check.sh); wt3-parity A72S1, A71S2, A68S1 and A71E2's claim lock;
 wt3-cgstubs2 A71S3 and A70S3.
+
+## 2026-11-01 — audited through a44c25d6 (110c2936..a44c25d6: nfields' classes through getConcreteClassIdRange, _meet_constant! anchored at dart's visit-once walk, a String's hash at 7 and 8 bytes, the julia checkout's sparse list a function of the pin, every citation of a reason resolved, ported-with-a-body read from Julia's inference with DartThrow and DartAbstract apart, the overlay check cited at OverlayMethodTable, the debt-body lock, the D11 lock)
+
+The seventy-fourth audit, beside the work, covers the 9 commits of 110c2936..a44c25d6 that are not audit entries (88cbefa7,
+entry 73): f459aba1, d88b3e71, 4fd0e871, 36720fe3, f1a65f36, 334b7ac6, 858c559a, 9791ed9f and a44c25d6, read here, under
+Dale's R1 and R2 as standing sections. Every finding rests on one exact command, quoted. Standing items. src changes in 4
+files (`git diff --stat 110c2936..origin/wt2 -- src | tail -1` gives `4 files changed, 179 insertions(+), 56
+deletions(-)`); no exemption lands (`git diff 110c2936..origin/wt2 -- src | grep -cE '^\+.*(Reshaped:|Fields with no Julia
+counterpart)'` gives 0). The debt list reads 393, from 397 (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`):
+4fd0e871 deletes `_meet_constant!`, 334b7ac6 `REJECTION_ONLY`, `_rejection_only_kind` (both gone) and `_parity_entry`
+(pinned). Earlier findings: A71S1 is fixed by f459aba1 (`grep -c 'isconcretetype(c) && c <: T' src/intrinsics.jl` gives 0;
+the one scan left is getConcreteClassIdRange's own, class_info.jl:565), its text left on 1.D by that commit and removed
+here; A68S1 by f1a65f36 (each anchor, path citation and precedent now returns its fault or sets `cited`, parity.jl's
+_reason_unpinned, with plants); A73E2 by 36720fe3 (the list `src/`, `base/`, `Compiler/src/` whole, so no tree's list
+removes another's unit; a tree whose script predates 9743c109 shrinks it only until its rebase), removed from 1.L here;
+A72S1 and A64E2 by 334b7ac6 (`grep -c 'length(stmts) == 1 || return nothing' src/julia/parity.jl` gives 0), A47E2 with them
+(the numerator now leaves out every definition inference finds never returns, a dart throw counted as A47E2 asked),
+removed from 1.A6 here; A71S2 by 858c559a (`sed -n 37p Compiler/src/methodtable.jl` of the julia pin gives `struct
+OverlayMethodTable <: MethodTableView`, and `sed -n 935p Compiler/src/abstractinterpretation.jl` gives `function
+concrete_eval_eligible(interp::AbstractInterpreter,`, whose body runs the native method under `is_consistent_overlay`), its
+residue A74S4; A69E2 by a44c25d6, its residue A74E1. Open as they stood: A72S2 (`grep -n 'wasm_types.dart:737'
+src/julia/wasm_array.jl` gives `160:` and `173:`); A71S3 (`grep -n 'codegen.cpp:2638' src/code_generator.jl` gives
+`2026:`); A70S3 (`grep -n 'va_process_argtypes(Core.Compiler.fallback_lattice' src/julia/nir.jl` gives `573:`); A73S1
+(`grep -n 'hashing.c:68' src/patch/hashing.jl` gives `10:`); A73S2 (`grep -n 'const baseImports = '
+src/julia/runtime/rtutils.jl` gives `86:`); A73S3 (`grep -n ':typeassert),' src/julia/subset.jl` gives `199:`); A73E1
+(`grep -n 'instantiates no' src/julia/nir.jl` gives `727:`); A68E3 (`tail -1 .git/wt-corpus.tsv` gives f05b2fa8's `hung
+1216` row); A71E2, A69E1, A68E2, A67E1, A67S1 and A67S3, carried, not re-read. Findings A74S1, A74S2, A74S3, A74S4 and
+A74E1.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — f459aba1: the nfields arm reads ids through get_concrete_class_id_range and each id's
+class from translator.classes, the scan deleted (class_info.dart:831 ported, the cases varargs 19 and records 48 kept).
+4fd0e871: _meet_constant!'s @quarantine now cites `pkg/dart2wasm/lib/record_class_generator.dart:773
+_RecordVisitor.defaultConstantReference` (`sed -n 772,776p` gives `void defaultConstantReference(Constant node) {` / `if
+(constantCache.add(node)) {` / `node.visitChildren(this);`), the visit-once rule the body follows, its === key for an
+immutable value the stated difference; its body is unchanged. d88b3e71 runs the hash at 7 bytes, exactly 8 and a 6-byte
+non-ASCII String against native, the lengths 686966ac's ruling named.
+
+stopgap in disguise: none new.
+
+precedent: dart's getConcreteClassIdRange and _RecordVisitor, by line.
+
+Area: emission and diagnostics — no change under the emitting code in the range.
+
+Area: enforcement and prose — 36720fe3 and 858c559a read above. 9791ed9f (debt_bodies_changed, L227): each src file the
+change touches is read at the merge base and at HEAD, every @quarantine keyed by the package's own _defines, _identity and
+_quarantine_key (one keying, D5), compared as Julia's parser reads it with line numbers dropped; a body that differs while
+its line stays is refused. D6/D20: a diff scan, a stopgap whose exit, 1.K's required source, its text names; its allowlist
+is exact (PIN_TABLES, three keys, `pin_rows_added` taking only rows added in order) and its exit the same. By reading, its
+plants fire when stubbed: debt_bodies_changed returning nothing fails "a debt-listed body rewritten with its line kept
+passes", pin_rows_added returning true fails "a row removed from a pin table passes". f1a65f36 edited two debt-listed
+bodies (REASON_ANCHOR_RX, _reason_unpinned) before the lock landed, the lead's recorded exception (its message), both
+still listed (`grep -n 'julia/parity.jl _reason_unpinned' dev/quarantine_unpinned.txt` gives `294:`). a44c25d6
+(invariants_dropped, L227): each MC*.cfg's INVARIANT and PROPERTY names at the merge base and at HEAD, a dropped name or a
+removed Broken cfg refused without an `Invariant-dropped:` line naming a successor its cfg lists or a moot reason; its
+plants fire when stubbed (an empty result fails "a dropped invariant with no line passes"). (A74E1, medium, D11/D6) the
+lock reads names, not what they claim: `grep -c '\.tla' test/parity_ratchet.jl` gives 0, so `Safe == TRUE` written in the
+model, or a cfg's CONSTANTS shrunk to a trivial instance, drops nothing it reads; and a correct cfg removed is refused
+whatever lines name its claims (`endswith(f, "Broken.cfg") || (isempty(before) || push!(out, …); continue)` never reads
+`lines`), where its message says such a removal "names each of its claims the same way", with no plant for either. Fix:
+the claim read at its source, each named operator's definition in the .tla and the cfg's CONSTANTS compared at both
+revisions, a change refused unless named; a removed correct cfg passes when each claim is named, with plants. Owner:
+wt3-parity (test/parity_ratchet.jl). Requirements: D5, D6, D8, D9, D11, D20; no lock fired inside its band.
+
+R1 and R2. R1: each new citation is read against its body at its pin. 334b7ac6's precedent: `sed -n 1115p
+Compiler/src/typeinfer.jl` of the julia pin gives `function typeinf_frame(interp::AbstractInterpreter, mi::MethodInstance,
+run_optimizer::Bool)`, the overload method_kind calls with the method's own MethodMatch, unoptimized; the inference half
+rests on it. The guard rule (A72S1) is stated in the comment and L208, with plants (guard_only a rejection; checks, effect
+and returned bodies). (A74S1, medium, R1/D5) the other half is bespoke: dart_member (parity.jl:1603) tells a throwing or
+abstract dart member by a bracket walk to the first `;`, `=>` or `{` and a regex for `throw`, `external` and `get`, with no
+precedent, beside dev/skeleton.jl, the one reader of dart's declarations (its Decl's kinds and modifiers). Its rules misread
+an enum value as abstract: for `V128Instruction.i8x16Splat` (`sed -n 4442p pkg/wasm_builder/lib/src/ir/instruction.dart`
+gives `  i8x16Splat(0x0F, 'i8x16.splat'),`) the head runs to :4524's `;`, holds `(`, no `=` and no constructor's name, so
+DartAbstract; harmless today only because those ports are consts with no methods (`e.ported && !isempty(e.methods)`,
+parity.jl:1638). Fix: abstract and throwing read from the skeleton's Decl (its statement end already parsed), or from
+dart's analyzer (ExecutableElement.isAbstract) with that as precedent. (A74S2, medium, D9/D8/R2) rejection_only_kinds
+defaults to a body past a gap: `grep -n 'return :body' src/julia/parity.jl` gives `1546:` (no MethodMatch), `1548:` (no
+frame) and `1583:` (the rule's own exit), the first two a definition inference cannot read counted ported; `sed -n 1589,1590p` matches the closed sum Rejection with a
+wildcard, `t <: Rejection ? :check : :Internal`, so a rejection typed `Union{Unported,Internal}` reads as a check's and
+the method as a body, and an argument not an SSA value reads Internal; and the guard rule at :1577 takes a call whose value
+is stored to a local no return reads as a guard, so `r = push!(v, 1); return nothing` after a guard counts as rejection-only
+with no plant; L208's text says `typeinf_code` (`grep -c typeinf_code src/julia/parity.jl` gives 0). Fix: an unreadable
+method refused, located; the kind matched @exhaustive over Rejection's arms, a Union refused; a stored value followed to
+its readers as an SSA value is, with plants; L208 names typeinf_frame. Owner of both: wt3-parity (src/julia/parity.jl,
+test/parity_ratchet.jl). (A74S3, low, R1) _parity_entry's map to `pkg/analyzer/lib/src/error/override_verifier.dart:68
+OverrideVerifier.visitMethodDeclaration` (resolving, `sed -n 68p` gives `  void visitMethodDeclaration(MethodDeclaration
+node) {`) is not one to one: hasOverride to parse_anchor, _isOverride to _anchor_fault and _form_fault, the report to
+`refuse` are mapped, but dart's switch on the element's kind (:71, three diagnostics), _isOverride's null class (:123) and
+nameless member (:131) returns and `super.visitMethodDeclaration` (:86) are neither mapped nor said to have no
+counterpart, nor on WT's side the string-literal check, the @unported expansion (`_unported`) and the resolution only for
+WasmTarget's own modules (`own ? _pin_sdk() : nothing`). Fix: each named in the comment's map. Owner: wt3-parity. (A74S4,
+low, R1) A71S2's residue: `grep -n 'julia.h:905' src/julia/parity.jl` gives `675:`, _methods_of_file citing the same
+`} jl_methtable_t;` line for "Julia's one table of every method". Fix: cited at the code that keeps a method's file.
+Owner: wt3-parity. f1a65f36's re-pins resolve: rtutils.jl's `genericmemory.c:55` and
+`ffi_native_transformer.dart:160 WasmFfiNativeTransformer.visitProcedure`, both checked by the load (L213).
+
+R2: the first progress line after 334b7ac6, from its landing's check (`grep -oE 'src: [0-9]+ of 3404 .*' r25.log` in the
+lead's ship logs, 17:29Z, before the 17:34Z landing): `src: 3083 of 3404 anchored dart definitions ported with a body (…),
+32 of them a dart body that itself throws, ported as its throw; … not counted ported: 274 that never return, Julia's
+inference finds, rejecting Internal (…), 5 gap(s) still to fill (4 rejecting Unported or Unquarantined, 1 an @unported
+stub) and 42 in place of a dart abstract declaration (no body to port); 3083 + 274 + 5 + 42 = 3404 of 3404`, as the lead
+stated; a44c25d6's ship prints the same head (`tasks/benmcq0k2.output`). The registry's kinds are not printed, so the
+samples come from dart_member's rules transcribed (a scratch script over every @parity anchor, 42 abstract and 32 throwing
+among those whose body rejects Internal, matching the line), each read at the dart pin. DartThrow: code_generator.dart:1356
+visitForInStatement (`throw "ForInStatement should have been desugared: $node";`), constants.dart:862 visitIntConstant
+(`throw StateError('Int constants should be handled at instantiation');`), type.dart:49 ValueType.byteSize (`int get
+byteSize => throw "Size of non-primitive type $runtimeType";`), type.dart:412 CommonHeapType.topType (`=> throw "No top
+type of internal common supertype"`), constants.dart:1667 DummyValueConstant.getType (`throw UnsupportedError(…)`): each
+a throw first. DartAbstract: globals.dart:306 DartGlobalDefinition.type (`w.ValueType get type;`), kernel_nodes.dart:12
+KernelNodes.index (`LibraryIndex get index;` in the mixin), modules.dart:220 ModuleStrategy.addEntryPoints (`void
+addEntryPoints();`), type.dart:14 StorageType.isSubtypeOf (`bool isSubtypeOf(StorageType other);`), instructions.dart:43
+Label.targetTypes (`List<ir.ValueType> get targetTypes;`): each abstract. The 42 stand beside the headline, never in it;
+the one @unported stub, AstCodeGenerator._virtualCall, is counted a gap, so the line totals its anchored count.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A71S1 leaves 1.D, A73E2 1.L, A47E2 1.A6. A74S1 and
+A74S2 are open on 1.A6; A74S3 and A74S4 on 1.K; A74E1 on 1.L. By owner: wt3-parity A74S1, A74S2, A74S3, A74S4
+(src/julia/parity.jl) and A74E1 (test/parity_ratchet.jl), with A71E2's claim lock; wt3-runtime A73S3 and A73S2, with A72S2;
+wt3-memory A73S1; wt3-latency A73E1; wt3-cgstubs2 A71S3 and A70S3.
