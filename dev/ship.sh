@@ -16,7 +16,8 @@ lane=$(pwd -P)
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 # the rules dev/hooks/pre-push requires of every push to the march branch: this script's own blob, which must be
 # origin's dev/ship.sh, so any older or edited copy is refused with no version to bump by hand (march-monitor-a, 20:06, D6)
-export WT_SHIP_RULES="$(git hash-object "$0")"
+# the rules this copy carries, set on the push alone (A77E1: exported, every check under the lock inherited it)
+ship_rules="$(git hash-object "$0")"
 # the rules that judge a landing are origin's, never the lane's copy: a lane, or a stale loop, on an older tree ran
 # an older ship.sh without the refusals added since (the hold, the retry cap, the progress row; march-monitor-a, 19:47,
 # D6). So when origin's dev/ship.sh differs from this file, this run executes origin's instead, from the lane's .wtd
@@ -33,8 +34,8 @@ fi
 if grep -qxF "$(basename "$lane")" "$common/wt-held" 2>/dev/null; then
   echo "ship: REFUSED — this lane is held ($common/wt-held names $(basename "$lane")); the lead lifts it"; exit 2
 fi
-# dev/MARCH.md has one owner, the lead (a wt3-lead* worktree), as a CODEOWNERS file gives a path one owner: six
-# conflicts on it in one day (17:26–21:06, march-monitor-a) were the shared hot file the oscillation lesson names.
+# dev/MARCH.md has one owner, the lead (a wt3-lead* worktree), as a CODEOWNERS file gives a path one owner: fifteen
+# conflicts on it in one day (11:44–21:06, march-monitor-a's count) were the shared hot file the oscillation lesson names.
 # A lane sends its row to the lead; its commit that touches the file is refused here, before any rebase or check.
 case "$(basename "$lane")" in
   wt3-lead*) ;;
@@ -47,8 +48,8 @@ esac
 since=$(date -u -v-60M +%FT%TZ 2>/dev/null || date -u -d '-60 min' +%FT%TZ)
 for s in $(git log --format=%s "origin/wt2..HEAD" 2>/dev/null | cut -c1-60 | tr ' ' '\001'); do
   s=$(printf '%s' "$s" | tr '\001' ' ')
-  # a red counts only past today's band (dev/check.sh's D14_RED): a red the band now admits was no red
-  n=$(awk -F'\t' -v t="$since" -v s="$s" -v band="$(sed -n 's/^D14_RED=\([0-9]*\).*/\1/p' dev/check.sh)" \
+  # a red counts only past today's band (origin's dev/check.sh D14_RED, never the lane's copy, A77E3): a red the band now admits was no red
+  n=$(awk -F'\t' -v t="$since" -v s="$s" -v band="$(git show "origin/$MARCH:dev/check.sh" 2>/dev/null | sed -n 's/^D14_RED=\([0-9]*\).*/\1/p')" \
     '$1 >= t && index($3, s) && $4 ~ /past D14/ && match($4, /[0-9]+ s, past/) && substr($4, RSTART, RLENGTH - 8) + 0 > band + 0' \
     "$common/wt-ship-failures.tsv" 2>/dev/null | wc -l | tr -d ' ')
   [ "$n" -ge 2 ] && { echo "ship: REFUSED — \"$s\" went red on D14 alone $n times in the last hour; the ruling allows one retry"; exit 2; }
@@ -107,8 +108,18 @@ checked_rebase() {
   # it landed (march-monitor-a, 15:03: three landings missing from the log, each a stack's green head before a red)
   # one row per landed commit: a head pushed again (a re-ship whose commit already landed) writes none (A70E2: f05b2fa8
   # logged twice, its D13 median skewed)
-  export WT_LANDINGS_LOG="$log"
-  if ! { git rebase -q --no-keep-empty --empty=drop "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh && git push -q origin HEAD:'"$MARCH"' && echo "ship: pushed $(git log -1 --format="%h %s" | cut -c1-90)" && { grep -q "	$(git rev-parse --short HEAD)	" "$WT_LANDINGS_LOG" 2>/dev/null || printf "%s\t%s\t%s\n" "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$(( $(date +%s) - $(git log -1 --format=%at HEAD) ))" >> "$WT_LANDINGS_LOG"; }' 2>&1 | tee .wtd/rebase.out; [ "${PIPESTATUS[0]}" -eq 0 ]; }; then
+  # and its progress row, from that commit's own ratchet output, before the next commit's check overwrites it (A78E3:
+  # one row per ship, written after the rebase, left a36ed084 and 98390e9e with landings rows and no progress row)
+  export WT_LANDINGS_LOG="$log" WT_PROGRESS_LOG="$common/wt-progress.tsv" WT_SHIP_LANDED="$common/wt-ship/$(basename "$lane").landed.sh"
+  cat > "$WT_SHIP_LANDED" <<'LANDED'
+h=$(git rev-parse --short HEAD)
+echo "ship: pushed $(git log -1 --format='%h %s' | cut -c1-90)"
+grep -q "	$h	" "$WT_LANDINGS_LOG" 2>/dev/null || printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$h" "$(( $(date +%s) - $(git log -1 --format=%at HEAD) ))" >> "$WT_LANDINGS_LOG"
+p=$(grep -E '^ *· src:' .wtd/ratchet.out 2>/dev/null | sed 's/^ *· //' | tr '\t\n' '  ')
+if [ -z "$p" ]; then echo "ship: no src line in $h's ratchet output, so no row is written to wt-progress.tsv"
+else grep -q "	$h	" "$WT_PROGRESS_LOG" 2>/dev/null || printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$h" "$p" >> "$WT_PROGRESS_LOG"; fi
+LANDED
+  if ! { git rebase -q --no-keep-empty --empty=drop "origin/$MARCH" --exec 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_REFLOG_ACTION CHECK_BASE=HEAD~1 bash dev/check.sh && WT_SHIP_RULES='"$ship_rules"' git push -q origin HEAD:'"$MARCH"' && bash "$WT_SHIP_LANDED"' 2>&1 | tee .wtd/rebase.out; [ "${PIPESTATUS[0]}" -eq 0 ]; }; then
     record_failure
     if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then git rebase --abort; fi
     return 1
@@ -203,7 +214,7 @@ git fetch -q origin "$MARCH" || { echo "ship: cannot fetch origin/$MARCH"; exit 
 # under the lock nothing else lands, so the ship.sh this run must match (dev/hooks/pre-push admits only origin's blob)
 # cannot change before its push; a ship.sh that changed while this run queued is caught here, before its check, not
 # at the push after a passing one (ca14d187 lost a green 134-s check that way, march-monitor-a, 20:17)
-[ "$(git rev-parse "origin/$MARCH:dev/ship.sh")" = "$WT_SHIP_RULES" ] ||
+[ "$(git rev-parse "origin/$MARCH:dev/ship.sh")" = "$ship_rules" ] ||
   { echo "ship: REFUSED — origin's dev/ship.sh changed while this landing queued; ship again (no check was spent)"; exit 2; }
 [ "$(git rev-list --count "origin/$MARCH..HEAD")" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
 # a lane whose commits another ship already carried (the same patch under a new hash) has nothing to land,
@@ -230,6 +241,8 @@ missing=$(comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$have") | sed '/^$/
 if [ "$(git rev-list --count "$base..HEAD")" -eq 0 ] || [ -n "$missing" ]; then
   echo "ship: REFUSED — the rebased HEAD doesn't carry this lane's commits (missing: ${missing:-all}); nothing pushed"; exit 1
 fi
+# the rules ride on this last push alone: every check has run by now (A77E1)
+export WT_SHIP_RULES="$ship_rules"
 if git push -q origin HEAD:$MARCH; then
   release; trap cleanup_scratch EXIT
   secs=$(( $(date +%s) - first ))
@@ -243,11 +256,8 @@ if git push -q origin HEAD:$MARCH; then
   if [ "$(git -C "$lane" rev-parse HEAD)" = "$start" ] && [ -z "$(git -C "$lane" status --porcelain --untracked-files=no)" ]; then
     git -C "$lane" rebase -q "origin/$MARCH" && echo "ship: this lane's branch is now on origin/$MARCH"
   else echo "ship: this lane moved on while landing; run git rebase origin/$MARCH when ready (the landed commits drop out)"; fi
-    # and the same line kept in the common dir's wt-progress.tsv, one row per landing (time, head, line), so R2's history
-    # is read from one file rather than from each lane's overwritten autoship output (march-monitor-a, 19:16)
-    p=$(grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //' | tr '\t\n' '  ')
-    [ -n "$p" ] || echo "ship: no src line in the check's ratchet output, so no row is written to wt-progress.tsv"
-    [ -n "$p" ] && printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$p" >> "$common/wt-progress.tsv"
+    # each landed commit's line is kept in the common dir's wt-progress.tsv by the rebase's --exec (WT_SHIP_LANDED), one
+    # row per landing, so R2's history is read from one file (march-monitor-a, 19:16; A78E3)
     grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'; exit 0
 fi
 echo "ship: the push was refused under the landing lock"; exit 1
