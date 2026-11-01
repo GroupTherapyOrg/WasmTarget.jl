@@ -37,10 +37,14 @@ end
 
 # the read and the assignment are each one compiled body over every Late, `T` passed as a value
 # (@nospecialize), the typed accessors below a typeassert and a convert per T: a cell is read in
-# every collaborator, so a body per T multiplies its compile across the port's field types
+# every collaborator, so a body per T multiplies its compile across the port's field types. The read
+# is also inferred once (@nospecializeinfer, precedent(julia: Compiler/src/abstractinterpretation.jl:3904, v1.12.7, widenreturn): inferred per T,
+# its convert of the initializer's untyped value compiled convert(::Type{Vector{T}}, ::AbstractArray)
+# for every Vector field, a body a package's new `>` method invalidates, and every reader of the field
+# with it (DartCorpus's loading re-compiled 484 MethodInstances through Late{Vector{IR.Local}} alone)
 @quarantine "the late field's read, Julia's dereference syntax c[]" Base.getindex Base.getindex(c::Late{T}) where {T} = _late_get(c, T)::T
 
-@quarantine "the late field's read, one body for every T" Base.convert function _late_get(@nospecialize(c::Late), @nospecialize(T::Type))
+@quarantine "the late field's read, one body for every T" Base.convert @nospecializeinfer function _late_get(@nospecialize(c::Late), @nospecialize(T::Type))
     c.state == 0x02 && return c.value
     c.state == 0x01 && reject!(Internal("$(c.anchor): the late field's initializer read the field itself"), "Late")
     c.init === nothing && reject!(Unported(c.anchor), "the late field $(c.anchor), read before its assignment")

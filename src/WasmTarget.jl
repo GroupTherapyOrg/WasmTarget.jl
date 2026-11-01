@@ -11,6 +11,8 @@ module WasmTarget
 # each overlay of src/patch/
 import WasmInterpreter as WasmInterpreterPackage
 using Base.Experimental: @consistent_overlay
+# a method serving every type alike is inferred once, not once per caller's type (src/julia/late.jl's read)
+import Base: @nospecializeinfer
 
 include("julia/parity.jl")
 include("julia/construction.jl")

@@ -124,9 +124,10 @@ The arguments a foreign call passes, one per declared argument type, Julia's `ar
 """
 @quarantine "Julia's foreigncall lists its arguments after its five header operands (julia/src/ccall.cpp:1419 emit_ccall)" Core.SimpleVector function nir_foreign_operands(node::NirForeignCall)::Vector{NirValue}
     local at = node.args[3]
-    at isa NirConst && at.c.val isa Core.SimpleVector ||
+    local types = at isa NirConst ? at.c.val : nothing
+    types isa Core.SimpleVector ||
         reject!(Internal("src/julia/runtime/rtutils.jl nir_foreign_operands: a foreign call whose argument types are no constant svec"), "nir_foreign_operands")
-    return node.args[6:5 + length(at.c.val)]
+    return node.args[6:5 + length(types)]
 end
 
 """
