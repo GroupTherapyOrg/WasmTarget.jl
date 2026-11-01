@@ -48,10 +48,11 @@ let defs = quote
     end
 
     """
-        QuarantineEntry(mod, necessity, api, names, file, first, last, worlds, pid, methods)
+        QuarantineEntry(mod, necessity, api, names, file, first, last, signature, worlds, pid, methods)
 
     A definition `@quarantine` checked: `necessity` what Julia forces, `api` the Julia API it relies
-    on (resolved, and referenced by the definition, where it was checked), and the rest as
+    on (resolved, and referenced by the definition, where it was checked), `signature` a function's
+    or a macro's signature as written (`_written_signature`, "" for any other form), and the rest as
     `ParityEntry`.
     """
     @quarantine "the Julia-only definitions' record, Rust's unsafe blocks with their SAFETY comments" Base.Method struct QuarantineEntry
@@ -62,6 +63,7 @@ let defs = quote
         file::Symbol
         first::Int
         last::Int
+        signature::String
         worlds::UnitRange{UInt}
         pid::Int32
         methods::Vector{Method}
@@ -179,17 +181,28 @@ let defs = quote
     # table and signature, as Julia keys it, and a Revise of its file evaluates it again under the same
     # one, wherever its lines moved); for any other form, the form and its names
     @quarantine "a method is identified by its table and signature, Julia's method key, never by its lines" Core.LineNumberNode function _identity(mod::Module, def, source::LineNumberNode)::String
-        local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
         local d = def
         local table = ""
         while Meta.isexpr(d, :macrocall) && (d.args[1] in _TRANSPARENT_MACROS || d.args[1] === Symbol("@unported"))
             d.args[1] === Symbol("@consistent_overlay") && (table = string(" in ", d.args[end-1]))
             d = d.args[end]
         end
-        local form = Meta.isexpr(d, (:function, :(=), :macro)) && !(d.args[1] isa Symbol) ?
-            string(d.head, " ", unlined(d.args[1])) :
+        local sig = _written_signature(d)
+        local form = !isempty(sig) ? string(d.head, " ", sig) :
             string(Meta.isexpr(d, :macrocall) ? d.args[1] : d.head, " ", join(first(_defines(d, source)), ","))
         return join(fullname(mod), ".") * " " * form * table
+    end
+
+    # a function's or a macro's signature as written, every line number dropped, under the annotation
+    # macros (the one text _identity keys a method by and the debt list names a method by); "" for
+    # any other form
+    @quarantine "a method is its signature, which Julia's parser gives as written" Base.Meta.isexpr function _written_signature(def)::String
+        local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
+        local d = def
+        while Meta.isexpr(d, :macrocall) && (d.args[1] in _TRANSPARENT_MACROS || d.args[1] === Symbol("@unported"))
+            d = d.args[end]
+        end
+        return Meta.isexpr(d, (:function, :(=), :macro)) && !(d.args[1] isa Symbol) ? string(unlined(d.args[1])) : ""
     end
 
     # whether `file` lies in the directory `dir` (both absolute)
@@ -352,7 +365,7 @@ let defs = quote
             refuse("a definition outside src/julia and src/patch carries @parity, the dart definition it copies")
         local names, _ = _defines(def, source)
         return QuarantineEntry(mod, necessity, string(api), names, Symbol(file), source.line, _last_line(def, source),
-                               UInt(0):UInt(0), Int32(0), Method[])
+                               _written_signature(def), UInt(0):UInt(0), Int32(0), Method[])
     end
 
     # a checked definition's expansion: the evaluation bracketed by its worlds, then the entry; a
@@ -1305,7 +1318,8 @@ end
 # LLVM unit, a unit of JULIA_FILES or a runtime file) or a `precedent(<ecosystem>: <file>:<line> <symbol>)`
 # that resolves the same way in its ecosystem's pinned checkout.
 # The definitions that do not yet are an exact debt list, dev/quarantine_unpinned.txt, one line per
-# definition, `<its file under src> <its names>`: a definition unpinned and unlisted refuses the load,
+# definition, `<its file under src> <its names>` (`<its file> <its signature>` where its name has
+# several methods in the file): a definition unpinned and unlisted refuses the load,
 # and so does a line naming a definition now pinned or gone, so the list only shrinks (D20).
 
 # the anchors a reason cites, each form of the pins'
@@ -1381,9 +1395,15 @@ end
 end
 
 # a quarantined definition's key in the debt list: its file under `src` and its names, or, for a method
-# of a function it does not bind (an extension of Base's), the API it names in brackets
-@quarantine "a definition is named by its file and the bindings it defines, Julia's own record of it" Base.relpath _quarantine_key(e, src::String)::String =
-    replace(relpath(string(e.file), src), '\\' => '/') * " " * (isempty(e.names) ? "[" * e.api * "]" : join(string.(e.names), ","))
+# of a function it does not bind (an extension of Base's), the API it names in brackets; where its file
+# quarantines more than one method of that name (`count` of each such key), its file and its signature
+# as written, so pinning one method never covers another of its name
+@quarantine "a method is identified by its signature, Julia's method key, where its name has several" Base.relpath function _quarantine_key(e, src::String, count::Union{Dict{String,Int},Nothing} = nothing)::String
+    local file = replace(relpath(string(e.file), src), '\\' => '/')
+    local n = file * " " * (isempty(e.names) ? "[" * e.api * "]" : join(string.(e.names), ","))
+    count !== nothing && get(count, n, 0) > 1 && !isempty(e.signature) || return n
+    return file * " " * e.signature
+end
 
 # the debt list's lines: one key each, comments and blank lines aside
 @quarantine "the debt list is a text file beside the check, read when the package loads" Base.readlines function _quarantine_debt(path::String)::Vector{String}
@@ -1406,11 +1426,13 @@ Julia's differs: no keyword marks Julia-only code, so the reason is read where t
 @quarantine "Julia marks no Julia-only definition with its source; the load reads each reason" Base.empty! function check_quarantine_pinned(mod::Module, src::String, sdk::Union{String,Nothing}, debt::Vector{String})::Int
     local unpinned = Dict{String,Int}()
     local why = Dict{String,String}()
-    for e in REGISTRY
-        e isa QuarantineEntry && _within(e.mod, mod) && _inside(string(e.file), src) || continue
+    local entries = [e for e in REGISTRY if e isa QuarantineEntry && _within(e.mod, mod) && _inside(string(e.file), src)]
+    local count = Dict{String,Int}()
+    foreach(e -> (k = _quarantine_key(e, src); count[k] = get(count, k, 0) + 1), entries)
+    for e in entries
         local w = _reason_unpinned(e.necessity, sdk)
         w === nothing && continue
-        local k = _quarantine_key(e, src)
+        local k = _quarantine_key(e, src, count)
         unpinned[k] = get(unpinned, k, 0) + 1
         why[k] = w
     end
