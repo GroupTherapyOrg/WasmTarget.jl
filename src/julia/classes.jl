@@ -34,7 +34,7 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
 @quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values" Base.unwrap_unionall function closed_world_classes(world::NirWorld, at::String)::Vector{DataType}
     local out = DataType[]
     local seen = Base.IdSet{DataType}()
-    local objs = Base.IdSet{Any}()
+    local objs = Set{NirConst}()
     for b in world
         foreach(t -> _meet_value!(out, seen, t, at), Base.unwrap_unionall(b.ci.def.specTypes).parameters)
         foreach(t -> _meet_value!(out, seen, t, at), b.types)
@@ -60,12 +60,16 @@ end
 
 # A constant's object graph met by the walk (dev/formal/ValueClasses.tla's MeetObject): the value's
 # class, then every value it holds that constants.jl instantiates in its place, a field's value, an
-# svec's or a memory's element, a type value's own fields (its kind's layout, _kind_instance_fields), each mutable
-# object walked once. A field declared abstract (Any) holds a value whose class only the value tells.
-@quarantine "a constant is Julia's object graph, each value's class its typeof" Base.isdefined function _meet_constant!(out::Vector{DataType}, seen::Base.IdSet{DataType}, objs::Base.IdSet{Any}, @nospecialize(v), at::String)::Nothing
-    if ismutable(v)
-        v in objs && return nothing
-        push!(objs, v)
+# svec's or a memory's element, a type value's own fields (its kind's layout, _kind_instance_fields), each
+# object walked once, as the model's seenObj holds every object: a mutable one by its identity and an
+# immutable one by Julia's ===, a literal's key (NirConst, its hash bounded), so a constant whose
+# immutable fields share heap objects is walked in linear time, never once per path (a 40-level DAG
+# has 2^40). A field declared abstract (Any) holds a value whose class only the value tells.
+@quarantine "a constant is Julia's object graph, each value's class its typeof" Base.isdefined function _meet_constant!(out::Vector{DataType}, seen::Base.IdSet{DataType}, objs::Set{NirConst}, @nospecialize(v), at::String)::Nothing
+    if !isbits(v)
+        local key = NirConst(Core.Const(v))
+        key in objs && return nothing
+        push!(objs, key)
     end
     local t = typeof(v)
     _meet_value!(out, seen, Core.Typeof(v), at)

@@ -305,3 +305,27 @@ end
     @test W.class_is_set_field(fs[3]) === nothing && W.class_is_set_field(fs[6]) === nothing
     @test W.class_instance_fields(F, "classes")[2] == W.ClassField(F, 0, "x#isSet", Bool, false)
 end
+
+# A constant whose immutable fields share heap objects: a 41-node DAG, each node's two children the same
+# node, has 2^40 paths. The walk meets each object once (dev/formal/ValueClasses.tla's seenObj), an
+# immutable one by ===, so it ends in linear time; walking every path never ended (dart_const/constant_dag)
+module ClassesDagCases
+struct Node
+    a::Union{Nothing,Node}
+    b::Union{Nothing,Node}
+end
+depth(n::Node)::Int64 = (local a = n.a; a === nothing ? Int64(0) : 1 + depth(a))
+const DAG = let n = Node(nothing, nothing)
+    for _ in 1:40
+        n = Node(n, n)
+    end
+    n
+end
+f(x::Int64) = depth(DAG) * x
+end
+
+@testset "a constant DAG's walk meets each object once" begin
+    local t = @elapsed (local cs = _classes(ClassesDagCases.f, (Int64,)))
+    @test ClassesDagCases.Node in cs
+    @test t < 60
+end
