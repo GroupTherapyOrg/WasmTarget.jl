@@ -471,18 +471,21 @@ end
 
 # a Julia member has no type parameters (its MethodInstance binds them) and no named parameters; its
 # parameters are the arguments after the callee, each of the type it is specialized on
-@parity "dart2wasm/lib/functions.dart:731 _getInputTypes" function _get_input_types(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType},
+@parity "dart2wasm/lib/functions.dart:731 _getInputTypes" function _get_input_types(translator::Translator, target::Union{Reference,NirForeignImport}, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType},
         is_import_or_export::Bool, translate_type::Function)::Vector{WasmBuilder.IR.ValueType}
-    # the function's parameters: a varargs specialization of a fixed count takes each argument (Julia's
-    # specsig, the callee packing them at entry), one of an open count its trailing arguments as one
-    # packed tuple (packed by the caller), Julia's answer (nir_parameter_types, NirVarargPacking)
-    local params = nir_parameter_types(target)
+    # dart's Field arm: an implicit setter takes the field's value, its getter nothing. A method's
+    # parameters: a varargs specialization of a fixed count takes each argument (Julia's specsig, the
+    # callee packing them at entry), one of an open count its trailing arguments as one packed tuple
+    # (packed by the caller), Julia's answer (nir_parameter_types, NirVarargPacking). The import
+    # procedure dart's ffi transformer synthesizes takes its declared argument types (NirForeignImport)
+    local params = target isa FieldReference ? (target.kind === FieldReferenceKind_setter ? Type[type_of_field(translator, target.field)] : Type[]) :
+        target isa NirForeignImport ? target.params : nir_parameter_types(target)[2:end]
     local inputs = WasmBuilder.IR.ValueType[]
     if receiver_type !== nothing
         is_import_or_export && reject!(Internal("dart2wasm/lib/functions.dart:731 _getInputTypes: an import or export with a receiver"), "_getInputTypes")
         push!(inputs, receiver_type)
     end
-    for p in params[2:end]
+    for p in params
         push!(inputs, translate_type(p)::WasmBuilder.IR.ValueType)
     end
     return inputs
@@ -547,10 +550,24 @@ end
     reject!(Internal("dart2wasm/lib/functions.dart:875 makeInvocationCreatorSignature: an Invocation for $(sprint(show, shape)); Julia has no noSuchMethod, a call with no method being a MethodError the trim verifier refuses (the Kernel table's DynamicInvocation row)"), "make_invocation_creator_signature")
 end
 
-# an import's or export's types are the external ones (translateExternalType); a member returning
-# only `nothing` returns nothing in an export, dart's void
-@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" function _make_function_type(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType};
+# dart's one function for every kind of target: a static field's accessors first (a Julia global
+# binding: its implicit getter returning the field's type, nothing where its null is synthesized, its
+# initializer returning it, its implicit setter taking it); then any other target's inputs
+# (_getInputTypes: a method's parameters, an instance field accessor's receiver and setter value, an
+# import procedure's declared argument types) and its return (typeOfReturnValue), an import's or
+# export's types the external ones (translateExternalType) and an import's or export's `nothing`
+# dart's void
+@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" function _make_function_type(translator::Translator, target::Union{Reference,NirForeignImport}, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType};
         synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export::Bool = false)::WasmBuilder.IR.FunctionType
+    if target isa FieldReference && !(target.field isa ClassField)
+        local field_type = translate_type_of_field(translator, target.field)
+        local none = WasmBuilder.IR.ValueType[]
+        target.kind === FieldReferenceKind_getter &&
+            return WasmBuilder.define_function(types_builder(translator), none, synthesize_null_return_value ? none : WasmBuilder.IR.ValueType[field_type])
+        target.kind === FieldReferenceKind_initializer &&
+            return WasmBuilder.define_function(types_builder(translator), none, WasmBuilder.IR.ValueType[field_type])
+        return WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[field_type], none)
+    end
     # Translate types differently for imports and exports.
     local tt(t::Type) = is_import_or_export ? translate_external_type(translator, t) : translate_type(translator, t)
     local trt(t::Type) = is_import_or_export ? translate_external_type(translator, t) : translate_return_type(translator, t)
@@ -563,44 +580,6 @@ end
         is_void_type(return_type) || push!(outputs, trt(return_type))
     end
     return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
-end
-
-# the import procedure dart2wasm's ffi transformer synthesizes for a foreign declaration, a static
-# member with no receiver: its parameters the declared argument types and its result the declared
-# return type, each external, `nothing` dart's void (NirForeignImport)
-@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" function _make_function_type(translator::Translator, target::NirForeignImport, receiver_type::Nothing;
-        synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export::Bool = false)::WasmBuilder.IR.FunctionType
-    local tt(t::Type) = is_import_or_export ? translate_external_type(translator, t) : translate_type(translator, t)
-    local trt(t::Type) = is_import_or_export ? translate_external_type(translator, t) : translate_return_type(translator, t)
-    local inputs = WasmBuilder.IR.ValueType[tt(t) for t in target.params]
-    local is_void_type(t::Type) = is_import_or_export && t === Nothing
-    local outputs = WasmBuilder.IR.ValueType[]
-    synthesize_null_return_value || synthesize_no_return || is_void_type(target.rt) || push!(outputs, trt(target.rt))
-    return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
-end
-
-# a field's accessor: dart's static field arm, a static field's implicit getter returning the field's
-# type (nothing when its null is synthesized), its initializer returning it and its implicit setter
-# taking it; an instance field's accessor is the general path, the receiver then the setter's value
-# (_getInputTypes' Field arm), returning the field's type unless its null is synthesized
-@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" function _make_function_type(translator::Translator, target::FieldReference, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType};
-        synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export::Bool = false)::WasmBuilder.IR.FunctionType
-    local member = target.field
-    if member isa ClassField
-        local inputs = WasmBuilder.IR.ValueType[]
-        receiver_type === nothing || push!(inputs, receiver_type)
-        target.kind === FieldReferenceKind_setter && push!(inputs, translate_type(translator, member.type))
-        local outputs = synthesize_null_return_value || synthesize_no_return ? WasmBuilder.IR.ValueType[] :
-            WasmBuilder.IR.ValueType[translate_return_type(translator, member.type)]
-        return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
-    end
-    local field_type = translate_type_of_field(translator, member)
-    local none = WasmBuilder.IR.ValueType[]
-    target.kind === FieldReferenceKind_getter &&
-        return WasmBuilder.define_function(types_builder(translator), none, synthesize_null_return_value ? none : WasmBuilder.IR.ValueType[field_type])
-    target.kind === FieldReferenceKind_initializer &&
-        return WasmBuilder.define_function(types_builder(translator), none, WasmBuilder.IR.ValueType[field_type])
-    return WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[field_type], none)
 end
 
 # dart's sealed class is abstract: its constructor runs only as a kind's super constructor, whose
