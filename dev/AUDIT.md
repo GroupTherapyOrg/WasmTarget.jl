@@ -7235,3 +7235,140 @@ A67S3 and A75S3 had left 1.F by their fixing commits. A76E1, A76E2 and A76E6 are
 1.L; A76S1 on 1.F; A76S2 on 1.K. By owner: wt3-parity A76E1, A76E2, A76E4, A76E5, A76E6 and A76S2, with A75S6 and A75E3;
 lead A76E3, with A75E1; wt3-runtime A76S1, with A75S4, A75S5, A73S2 and A73S3; wt3-memory A75S1 and A75S2; wt3-latency
 A73E1; wt3-cgstubs2 A71S3.
+
+## 2026-11-01 — audited through 903a3332 (c7e8b37b..903a3332: ship.sh run from origin's copy, a pre-push hook admitting origin's ship.sh by its blob, the packed i16 element, a runtime binding judged by its initializers' closed world and Julia's effects, inline JS admitted only from Runtime's ports and named once per code, js_parse_assignment! anchored at parseAssignment)
+
+The seventy-seventh audit, beside the work, covers the 7 commits of c7e8b37b..903a3332 that are not audit entries (84885030,
+entry 76): dab5842d, 84f7098d, 40d2c6d9, 449338c0, 77f7126a, 43bb71d3 and 903a3332, read here, under Dale's R1 and R2 as
+standing sections. Every finding rests on one exact command, quoted. Standing items. src changes in 9 files (`git diff
+--stat c7e8b37b..origin/wt2 -- src | tail -1` gives `9 files changed, 202 insertions(+), 40 deletions(-)`); no exemption
+lands (`git diff c7e8b37b..origin/wt2 -- src | grep -cE '^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 0), and
+no catch (`grep -cE '^\+.*catch'` of the same diff gives 0). The debt list reads 387, two fewer (`grep -v '^#'
+dev/quarantine_unpinned.txt | grep -c .`; _memory_element_storage and nir_binding_value now cite their pin lines). Earlier
+findings: A75S5 is fixed by 449338c0 (two sites in one caller are two imports; `sed -n 721p src/ccall.cpp` of the julia pin
+gives `static jl_cgval_t emit_llvmcall(...`), its residue A77S2; A75S4's admission half by 449338c0 (`grep -n 'lib ==
+JS_INTEROP_LIBRARY' src/julia/runtime/rtutils.jl` gives `196:` and `199:`, the second refusing a call written outside
+Runtime as a ProgramError), its parse half open on 1.F, where the commit's ground holds (`git grep -n MiniJsParser 898a1e4b
+-- pkg/dart2wasm/lib` of the dart pin gives nothing, and pkg/js_ast/lib/src/builder.dart:801 reaches
+parseExpressionOrArrowFunction, the one arrow form, only after a `(`); A73S2 by 903a3332 (builder.dart:1076 `Expression
+parseAssignment() {` and :1142 `VariableDeclarationList parseVariableDeclarationList() {` at the pin; the blob is a module
+with classes, `export` and `class` the mini parser has no rule for); A76E3 by dab5842d, 77f7126a and 43bb71d3, every
+landing since 43bb71d3 with its row (`cut -f2 .git/wt-progress.tsv | tail -2` gives 43bb71d3, 903a3332), its residue A77E2;
+A75E1 by 43bb71d3, an older copy's push refused at the hook, its residue A77E1. Open as they stood: A75S1 (`grep -n
+max_union_splitting src/julia/classes.jl` gives `86:`, `90:`, `97:`, `100:`); A75S6 (`grep -n 'Symbol("@assume_effects")'
+src/julia/parity.jl` gives `177:`); A75E3 (`grep -c 'own signature matches no method\|no frame for its signature'
+test/parity_ratchet.jl` gives 0); A71S3 (`grep -n 'codegen.cpp:2638' src/code_generator.jl` gives `2040:`); A73S3 (`grep -n
+':typeassert),' src/julia/subset.jl` gives `199:`); A73E1 (`grep -n 'instantiates no' src/julia/nir.jl` gives `827:`);
+A68E3 (`tail -1 .git/wt-corpus.tsv` gives f05b2fa8's `hung 1216` row); A76E2 (`grep -n 'cache = ENV\["WT_KINDS_CACHE"\]\|the
+newest sixteen kept' dev/src_progress.sh` gives `52:`, `68:`, `118:`, `134:`); A76E4 (`grep -n 'union!(defs_named, ("Init"'
+test/parity_ratchet.jl` gives `2630:`); A76S1 (`grep -n 'target isa FieldReference ?' src/functions.jl` gives `481:`);
+A76E1 (`sed -n 36,41p dev/src_progress.sh | grep -c 'src_progress.sh\|WasmInterpreter\|Manifest'` gives 0); A76S2, A76E5,
+A76E6, A75S2, A71E2, A69E1, A68E2, A68S4, A72E1, A67E1 and A67S1, carried, not re-read. Findings A77S1, A77S2 and A77E1 to
+A77E3.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — 40d2c6d9: runtime_initializers (construction.jl) walks Core's and Base's submodules for an
+`__init__` each defines (Base, GMP, MPFR, Sys); runtime_init_bindings (nir.jl) runs `Core.Compiler.typeinf_ext_toplevel(Any[mi],
+[world], TRIM_NO)` on each and collects (a) every GlobalRef, setglobal! and getglobal target its CodeInfos name and (b) each
+GlobalRef, or SSA value holding one, passed to a call Julia's effects do not infer effect_free; nir_binding_value rejects a
+non-const binding in (a) or a const object in (b). Its citations resolve at the julia pin: init.c:563 `static NOINLINE void
+_finish_jl_init_(`, :618-628 the init-order loop; precompile.c:98 `JL_DLLEXPORT void jl_write_compiler_output(void)`, whose
+worklist compiles each init-list module's `__init__` under trim; Compiler/src/typeinfer.jl:1534 `function
+typeinf_ext_toplevel(methods::Vector{Any}, worlds::Vector{UInt}, trim_mode::UInt8)`; effects.jl:119 `struct Effects`;
+toplevel.c:207-230 pushing and deferring the init order. (A77S1, medium, D9, R1) the closed world is the one juliac verifies,
+read unverified: compile! (typeinfer.jl:1451) follows only `:invoke` edges (collectinvokes!, :1336), so a dynamic call's
+callees are never in it, and juliac's TRIM_SAFE would refuse each where TRIM_NO passes them silently. Measured on the four
+initializers (`taskpolicy -b julia --startup-file=no scratchpad/init_world.jl`, counting each CodeInfo's `:call` to a
+non-builtin or to _apply_iterate, invoke or invokelatest): `Base.__init__: 1006 bodies, 225 dynamic call(s)` (60 of them
+invokelatest in stale_cachefile alone), `Base.Sys.__init__: 127 bodies, 1`, `Base.GMP.__init__: 178 bodies, 8`,
+`Base.MPFR.__init__: 60 bodies, 0`. A binding an initializer sets only behind one of these (a logging handler invokelatest
+reaches, a show method) is never in (a), and starts at its session value unnamed: a plausible value past a gap. (b) follows a
+const object only through an SSA value whose statement is the bare GlobalRef (`holds[k] = st` for `st isa GlobalRef`), not
+through getfield, a PiNode or a PhiNode, so an object reached from a const (a field of a const struct) and mutated is never
+in it; no plant reaches either (`git show 40d2c6d9 -- test/src/globals.jl` adds stdout, DEPOT_PATH, CPU_THREADS,
+base36digits and powers_of_ten, each reached directly). Fix: each dynamic call's callees enqueued as juliac's verifier
+enumerates them (verify_typeinf_trim, typeinfer.jl:1567), a call with no finite match set rejecting every binding read the
+initializers could reach, located at that call; (b) through Julia's own flow of a value (the IR's def-use, PiNode and
+PhiNode included); runtime_init_bindings taking its initializers, so a plant passes one setting a global behind
+invokelatest and one mutating a const's field, each named. Owner: wt3-memory (src/julia/nir.jl, src/julia/construction.jl).
+Cost (the lead's question): lazy, `_RUNTIME_INIT_BINDINGS` nothing until nir_binding_value first meets a runtime binding
+that is not a mutation-free const; nothing computes it at precompile (`grep -rn
+'compile_workload\|PrecompileTools\|precompile(' src/WasmTarget.jl src/*.jl` gives nothing). One landing check pays it once,
+in the shard that runs globals.jl: `grep globals .git/wt-src-instr.tsv` gives `globals.jl 7.2 3.2`, 4.0 G more than before,
+its cases' own cost; the four closed worlds took 2.4 s wall in a plain julia (above).
+
+Area: emission and diagnostics — 84f7098d: _memory_element_storage gives a 2-byte non-float primitive WasmI16 and
+read_int_array's inner extend already takes PackedType_i16; dart's own at the pin: wasm_types.dart:151 `class WasmI16 extends
+_WasmBase {}`, intrinsics.dart:3490 readIntArray's `wasmType == w.PackedType.i8 || wasmType == w.PackedType.i16`; the
+quarantine's genericmemory.c:55 is `_new_genericmemory_(...)`. Its cases read a signed and an unsigned element in range and
+one past it against native; Float16 still rejects, located. 449338c0: nir_statement_module reads the innermost frame of a
+statement's debug info (Compiler/src/ssair/show.jl:405 `function buildLineInfoNode(debuginfo, @nospecialize(def), pc::Int)`);
+nir_js_codes reads each code of a body once; the interop namer keys a site by its code. (A77S2, low, R1, D4) dart makes one
+procedure per JS<T> site, named by a counter: `git show 898a1e4b:pkg/dart2wasm/lib/js/inline_expander.dart | sed -n 62,64p`
+gives `dartProcedure = makeInteropProcedure(`, `_staticTypeContext.enclosingLibrary,`, `'_JS_Inline_${_counter++}',`, and
+that procedure is the key of interopMemberNames (namer.dart:109 `final Map<Member, String> interopMemberNames = {};`, :123
+`interopMemberNames[member] ??= _interopHelperNamer.getName(member.name.text`). get_import_name keys by the code text and
+mints the name from the enclosing method, the first caller the site was inlined into (`get!(() -> get_name(...,
+string((enclosing.def::Method).name); ...), self.interop_member_names, site.name)`), so two sites written apart with one
+code are one import and a site's name changes with the caller met first, where Julia records the site itself: the method
+and line that wrote the foreign call, the innermost frame nir_statement_module already reads. Fix: a site keyed by its
+innermost frame (method and line), named `_JS_Inline_<n>` in the order generateJsMethods meets sites, cited at
+inline_expander.dart:62. Owner: wt3-runtime (src/namer.jl, src/julia/runtime/rtutils.jl, src/js/runtime_generator.jl).
+903a3332, above.
+
+Area: enforcement and prose — dab5842d: after a fetch, a lane whose dev/ship.sh differs from origin's runs `git show
+origin/wt2:dev/ship.sh` saved as .wtd/ship.origin.sh, by `WT_SHIP_ORIGIN=1 exec bash .wtd/ship.origin.sh`; its paths resolve
+(`cd "$(dirname "$0")/.."` takes .wtd/.. to the lane, and `git hash-object "$0"` reads .wtd/ship.origin.sh from there).
+77f7126a's `export WT_SHIP_RULES=2` was a hand-bumped number; 43bb71d3 replaces it with ship.sh's own blob, which the hook
+requires to equal `git rev-parse origin/wt2:dev/ship.sh`, a comparison, not a version. The installed copy is today's (`cmp
+.git/hooks/pre-push dev/hooks/pre-push` silent; core.hooksPath is the common dir's hooks). (A77E1, medium, D6) the hook
+admits by an environment variable, which every child process inherits: a ship.sh from before 77f7126a sets none and reads
+the caller's, so an older copy run from a shell holding origin's blob (as 43bb71d3's own test set it) passes, and `git push
+--no-verify` skips it; and the installed hook is a copy nothing compares with dev/hooks/pre-push (`grep -rn
+'hooks/pre-push' dev test src` gives only ship.sh's comment and the hook's install line), so a change to the hook or its
+removal goes unnoticed. Fix: the marker written where only a running ship.sh writes it, the landing lock (`$common/wt-landing-lock`,
+beside its pid), and the hook admitting a push only while that lock's live pid holds origin's blob; ship.sh refusing unless
+`git hash-object $common/hooks/pre-push` equals `git rev-parse origin/wt2:dev/hooks/pre-push`. The source that would make
+an unchecked push unwritable is origin itself (a ruleset on wt2), recorded below. Owner: lead (dev/hooks/pre-push,
+dev/ship.sh). (A77E2, medium, D5, R2) eight autoship loops still run (`ps aux | grep -c '[b]ash dev/autoship.sh'` gives 8),
+in wt3-audit, wt3-cgstubs, wt3-codegen, wt3-codegen-b, wt3-constants, wt3-fix, wt3-loop and wt3-tests, five on trees whose
+ship.sh has no trampoline (`git -C ../<lane> show HEAD:dev/ship.sh | grep -c WT_SHIP_ORIGIN` gives 0 for all but the two
+codegen lanes): wt3-constants' writes a conflict row to wt-ship-failures.tsv every few minutes, each naming origin's newest
+landed commit as the failed one (`tail -5 .git/wt-ship-failures.tsv` gives rows at 19:50:41, 19:59:46, 20:04:51 and
+20:07:54 naming dab5842d, 449338c0, 77f7126a and 43bb71d3), and wt3-loop's ship.sh has waited since Thursday (pid 80814).
+84f7098d and 40d2c6d9 landed from older copies before the hook and have no progress row (`cut -f2 .git/wt-progress.tsv` gives
+84885030, dab5842d, 449338c0, ..., where `tail -7 .git/wt-landings.tsv` has 84f7098d and 40d2c6d9 between dab5842d and
+449338c0). Fix: the loops stopped, A76E3's second half, and an autoship loop that finds its ship.sh differs from origin's
+exits. Owner: lead (dev/autoship.sh). (A77E3, low, D5) the trampoline swaps ship.sh alone: line 42 reads D14_RED from the
+lane's own dev/check.sh (`sed -n 's/^D14_RED=...' dev/check.sh`, run before `cd "$scratch"` at :85) and line 168 ranks the
+queue by the scratch's dev/src_progress.sh, the lane's HEAD before its rebase; and the blob is compared only at the push, so a
+ship.sh that lands while a lane waits in the queue makes that lane's whole check run before the hook refuses it (the fetch
+under the lock, :193, is followed by checked_rebase, :206, with no comparison). Fix: D14_RED and the port class read from
+origin's blobs; WT_SHIP_RULES compared with origin's blob after the locked fetch, before the check. Owner: lead (dev/ship.sh).
+
+stopgap in disguise: the pre-push hook, a client-side check keyed by an inherited environment variable where a ruleset on
+origin's wt2 is the source, A77E1; the binding rule's closed world, juliac's trim read with its verifier off, A77S1.
+
+precedent: juliac's init list and trim (init.c:563, precompile.c:98, typeinfer.jl:1534) for runtime_init_bindings, its
+dynamic callees left out (A77S1); Julia's effects (effects.jl:119) per call; buildLineInfoNode (show.jl:405) for a
+statement's module; llvmcall's emit_llvmcall (ccall.cpp:721) for code carried as a call's argument; dart's
+`_JS_Inline_<n>` (inline_expander.dart:62) the naming 449338c0 leaves (A77S2); MiniJsParser.parseAssignment (builder.dart:1076)
+for js_parse_assignment!.
+
+Requirements: D4, D5, D6, D9; no lock fired inside its band.
+
+R1 and R2. R1: each citation of the range is read at its pin, above, and resolves. 84f7098d is dart's WasmI16 and
+readIntArray as written. 40d2c6d9 ports juliac's mechanism, with the verifier half of it dropped (A77S1). 449338c0 parses
+nothing, as dart2wasm writes a JS<T> code verbatim (generateJsMethods), and its naming departs from dart's counter (A77S2).
+903a3332 names the parser levels it drops, each a located rejection. R2: the latest row of `.git/wt-progress.tsv`
+(903a3332, 20:11:39Z; 43bb71d3's, 20:07:46Z, the same) reads `3084 + 274 + 4 + 42 = 3404 of 3404; the kinds cache: hit`:
+3084 ported with a body, 32 of them a dart body that throws, 274 Internal (never returning, by Julia's inference), 4 gaps (3
+Unported or Unquarantined, 1 the @unported stub) and 42 DartAbstract, none counted ported; the sum is 3404, unchanged since
+d5db52fa. 84f7098d and 40d2c6d9 changed src without moving the count, each filling an arm inside a body already counted.
+The line is read from the kinds cache A76E1 finds keyed short of its inputs, so it is no independent read.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A75S5 and A73S2 leave 1.F; A75E1 and A76E3 leave 1.L.
+A77S1 is open on 1.C, beside A64R3; A77S2 on 1.F; A77E1, A77E2 and A77E3 on 1.L. By owner: lead A77E1, A77E2 and A77E3;
+wt3-memory A77S1, with A75S1 and A75S2; wt3-runtime A77S2, with A75S4, A76S1, A73S3 and A67S1; wt3-parity A76E1, A76E2,
+A76E4, A76E5, A76E6, A76S2, A75S6 and A75E3; wt3-latency A73E1; wt3-cgstubs2 A71S3.
