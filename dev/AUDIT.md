@@ -6554,3 +6554,15 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A69S3 leaves 
 wt3-memory A71S1 (src/intrinsics.jl); wt3-cgstubs2 A71S3 (src/code_generator.jl), with A70S3 and A70E3; wt3-parity A71S2
 (src/julia/parity.jl); wt3-translator2 A71E2 (dev/formal/Constants.tla); lead A71E1 (dev/check.sh), A71E3 (dev/CHARTER.md
 proposal) and A68S4 (dev/ship.sh, 1.L).
+
+Follow-up, R1's runtime clause (Dale, after the entry landed: each definition of src/julia/runtime/, src/patch/ and
+wasm_array.jl ports the nearest existing implementation, dart's runtime at the pin, Julia's Base or C runtime at JULIA_PIN,
+or a named production implementation, its citation read against its body). In 498bb40d..6378f3b4 one such definition
+changes (`git diff --stat 498bb40d..6378f3b4 -- src/julia/runtime src/patch src/julia/wasm_array.jl` gives `src/julia/runtime/rtutils.jl
+| 5 +++--`): 6b79bdf9's nir_foreign_operands, cited to julia/src/ccall.cpp:1419 emit_ccall. The line resolves at JULIA_PIN
+(`sed -n 1419p ~/.cache/wasmtarget/julia/src/ccall.cpp` gives `static jl_cgval_t emit_ccall(jl_codectx_t &ctx, jl_value_t
+**args, size_t nargs)`), and the body is what it ports: five header operands (args[1..5]: pointer, rettype, argtypes, nreq,
+cconv; :1423-1428), `nccallargs = jl_svec_len(at)` (:1425) and the arguments from `args[fc_args_start + i]`, fc_args_start 6
+(:1416, :1491), which is `node.args[6:5 + length(types)]`. 6b79bdf9 only binds the svec before taking its length; the
+answer is unchanged. src/patch/ and wasm_array.jl are unchanged in the range (3ea90d3b reads wasm_array.jl's methods and
+changes none). No finding; the clause is a standing section of R1 from audit 72 on.
