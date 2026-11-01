@@ -730,6 +730,28 @@ isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runne
     end
 end
 
+# a PiNode Julia's optimizer left on a branch its forwarding made dead: the field's Union{Nothing,Int64}
+# (Union{Float64,Int64}) test kept after the stored Int64 replaced the load. Julia's convert_julia_type
+# answers it: a narrowing to Nothing, a singleton, is its ghost value; Int64 to Float64 a trap. Each
+# runs against native (the corpus's nnbd/inference_variables_initialized_to_null and abstract/method)
+module DeadPiCases
+mutable struct Held; v::Union{Nothing,Int64}; end
+mutable struct Num; f::Union{Float64,Int64}; end
+ghost(three::Int64) = (o = Held(nothing); o.v = three; iseven(something(o.v)))
+held_sum(n::Int64) = (o = Held(nothing); o.v = 234n; something(o.v) + n)
+trap(three::Int64) = (o = Num(1.0); o.f = three; v = o.f; v isa Float64 ? unsafe_trunc(Int64, v * 2.0) : v + 1)
+end
+
+@testset "code_generator.dart: a PiNode on a dead branch, Julia's convert_julia_type: a singleton's ghost, a trap between concrete types" begin
+    local cases = Main.WTRunner.RunCase[]
+    for f in (DeadPiCases.ghost, DeadPiCases.held_sum, DeadPiCases.trap)
+        append!(cases, first(Main.WTRunner.answer_cases(string(nameof(f)), WasmTarget.compile, f, (Int64(3),))))
+    end
+    local results = Main.WTRunner.run_cases(cases)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    @test length(results) == 3 && all(r -> r.ok, results)
+end
+
 # an entry's 8-bit parameters cross the boundary as i32, Julia's ABI (translateExternalType unpacks a
 # packed builtin type): the wrapping add answers as native Julia (test/runner.jl)
 module PackedEntryCases

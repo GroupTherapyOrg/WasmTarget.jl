@@ -2009,10 +2009,23 @@ end
 # Julia's PiNode, the unchecked AsExpression: the operand at the expected type. Where that unboxes (an
 # operand held as a reference narrowed to a primitive class), the box is the narrowed class's, which
 # the PiNode names and the operand's own type does not (Union{Nothing,Int64}, Any): the operand is
-# translated at its own type and converted with the PiNode's class (convertType's boxed_class)
+# translated at its own type and converted with the PiNode's class (convertType's boxed_class).
+# Julia's own codegen emits a PiNode through convert_julia_type (julia/src/codegen.cpp:2638
+# convert_julia_type), whose answers come first: a narrowing to a singleton type is that type's ghost
+# value whatever the operand holds, and one between two different concrete types is a path no value
+# takes, a trap. Julia's optimizer leaves both on a branch its forwarding made dead (a field's
+# Union{Nothing,Int64} test kept after the stored Int64 replaced the load)
 @parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" function visit_as_expression(self::AstCodeGenerator, node::NirPi, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local narrowed = node.typ
-    local operand_type = translate_type(self, dart_type_of(self, node.val))
+    local own = dart_type_of(self, node.val)
+    if narrowed isa DataType && Base.issingletontype(narrowed) && own !== narrowed
+        return translate_expression(self, NirConst(Core.Const(narrowed.instance)), expected_type)
+    end
+    if narrowed isa DataType && isconcretetype(narrowed) && own isa DataType && isconcretetype(own) && own !== narrowed
+        WasmBuilder.unreachable(self.b[])
+        return expected_type
+    end
+    local operand_type = translate_type(self, own)
     if narrowed isa DataType && isprimitivetype(narrowed) && operand_type isa WasmBuilder.IR.RefType && !(expected_type isa WasmBuilder.IR.RefType) &&
             expected_type != void_marker(self)
         translate_expression(self, node.val, operand_type)
