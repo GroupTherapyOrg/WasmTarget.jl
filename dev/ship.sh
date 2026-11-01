@@ -14,6 +14,19 @@ MARCH=wt2
 cd "$(dirname "$0")/.."
 lane=$(pwd -P)
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
+# a lane the lead holds (one worktree name a line in the common dir's wt-held) lands nothing, whatever runs this
+# script: a stale autoship loop landed a held commit on its third attempt (3ea90d3b, march-monitor-a 15:16)
+if grep -qxF "$(basename "$lane")" "$common/wt-held" 2>/dev/null; then
+  echo "ship: REFUSED — this lane is held ($common/wt-held names $(basename "$lane")); the lead lifts it"; exit 2
+fi
+# STOPGAP, the 13:10Z ruling (dev/MARCH.md 1.L, ended by A68S4's measure): a commit whose check went red on D14's band
+# alone twice in the last hour is not shipped a third time, so a retry re-rolls the shards' noise once, never more
+since=$(date -u -v-60M +%FT%TZ 2>/dev/null || date -u -d '-60 min' +%FT%TZ)
+for s in $(git log --format=%s "origin/wt2..HEAD" 2>/dev/null | cut -c1-60 | tr ' ' '\001'); do
+  s=$(printf '%s' "$s" | tr '\001' ' ')
+  n=$(awk -F'\t' -v t="$since" -v s="$s" '$1 >= t && index($3, s) && $4 ~ /past D14/' "$common/wt-ship-failures.tsv" 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -ge 2 ] && { echo "ship: REFUSED — \"$s\" went red on D14 alone $n times in the last hour; the ruling allows one retry"; exit 2; }
+done
 [ -z "$(git status --porcelain --untracked-files=no)" ] || echo "ship: uncommitted changes stay here and are not landed"
 # a lane mid-rebase, mid-merge, mid-cherry-pick or mid-revert has a HEAD that is not its work: refuse,
 # never land a half-finished history (a ship from a mid-rebase worktree landed the wrong commits twice)
