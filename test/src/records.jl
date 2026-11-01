@@ -195,6 +195,8 @@ const WTRunner = Main.WTRunner
 @noinline pick(t::Tuple, i::Int64) = t[i]
 @noinline pickin(t::NTuple{3,Int64}, i::Int64) = @inbounds t[i]
 @noinline nth(@nospecialize(t::Tuple{String,Vararg{String}}), i::Int64) = t[i]
+const SQUARES = ntuple(k -> Int64(k * k), 36)
+only_tuple(i::Int64) = SQUARES[i]
 function tuple_index(k::Int64, i::Int64)
     k == 1 && return (v = Int64[10, 20, 30]; v[i])
     k == 2 && return (x = pick((Int64(1), "ab", 2.5), i); x isa Int64 ? x : x isa String ? Int64(ncodeunits(x)) : Int64(99))
@@ -213,5 +215,14 @@ end
     local results = WTRunner.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == 15 && all(r -> r.ok, results)
+    # a program whose one read that can raise BoundsError is a tuple's at a run-time index (an NTuple of
+    # 36, the corpus's case): its read demands the runtime's raise (subset.jl's :bounds), which no other
+    # statement brings into the closed world
+    local only_bytes = WasmTarget.compile(only_tuple, (Int64,); optimize = false)
+    local only_cases = [WTRunner.RunCase("only_tuple$a", only_bytes, a, WTRunner.native_answer(only_tuple, a)) for a in ((Int64(1),), (Int64(36),), (Int64(37),))]
+    @test only_cases[3].native == WTRunner.Throws(BoundsError)
+    local only_results = WTRunner.run_cases(only_cases)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), only_results)
+    @test all(r -> r.ok, only_results)
 end
 end

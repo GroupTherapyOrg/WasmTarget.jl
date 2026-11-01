@@ -172,7 +172,8 @@ generator calls where Julia raises, kept in the closed world beside the program 
 holds the IR form `demand` names (`_demanded`): `:throw`, a call of Julia's throw (dart2wasm's
 visitThrow calls errors_patch.dart's `_throwWithCurrentStackTrace`), `:checked_division`, a
 checked integer division or remainder, which raises DivideError at a zero divisor, `:bounds`, a
-read of a SimpleVector's element or a MemoryRef's index (memoryrefnew), which raises BoundsError out of
+read of a SimpleVector's element, a MemoryRef's index (memoryrefnew) or a tuple's field at an index only
+run time knows, which raises BoundsError out of
 range, `:undefined_field`, an allocation leaving a field undefined, a read of a field one may leave so
 or a read of a Memory's element (memoryrefget), each raising UndefRefError where the reference is
 undefined, and `:memorynew`, a Memory's allocation, which raises ArgumentError at a negative size and
@@ -232,6 +233,18 @@ end
     return field_may_be_null(T, i)
 end
 
+# whether a statement `Core.getfield(t, i)` of `src` reads a tuple's field at an index only run time
+# knows, the read the intrinsifier lowers with Julia's bounds check (intrinsics.jl's tuple_index arm,
+# BoundsError(t, i) through throw_bounds_error): t's type a Tuple by Julia's argextype, as the trim
+# verifier reads an operand's, and i no literal
+@quarantine "julia/src/cgutils.cpp:2794 emit_getfield_unknownidx raises BoundsError at a tuple's run-time index, its operand typed by Core.Compiler.argextype" Core.Compiler.argextype function _reads_tuple_at_run_time_index(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState}, slottypes::Vector{Any})::Bool
+    _calls_builtin(st, (Core.getfield,)) && length(st.args) >= 3 || return false
+    local k = _ir_value(st.args[3])
+    (k isa QuoteNode || k isa Symbol || k isa Int) && return false
+    local T = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes, slottypes))
+    return T isa DataType && T <: Tuple
+end
+
 # the IR forms a root's demand names, each a test of one statement of its CodeInfo: a call of a builtin
 # or intrinsic whose raise the root lowers, or an allocation leaving a field undefined and a read of
 # a field one may have left so
@@ -239,7 +252,8 @@ end
     :throw => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.throw,)),
     :checked_division => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
                                                                    Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int)),
-    :bounds => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core._svec_ref, Core.memoryrefnew)),
+    :bounds => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core._svec_ref, Core.memoryrefnew)) ||
+                                                 _reads_tuple_at_run_time_index(st, src, sptypes, slottypes),
     :undefined_field => (st, src, sptypes, slottypes) -> _leaves_field_undefined(st) || _reads_undefinable_field(st, src, sptypes, slottypes) ||
                                               _calls_builtin(st, (Core.memoryrefget,)),
     :memorynew => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.memorynew,)),
