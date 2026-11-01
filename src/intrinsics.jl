@@ -814,20 +814,21 @@ end
     reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a type made at run time by Julia's $(nameof(f)), which === on DataTypes (ref.eq of canonical constants) rules out"),
         "$(self.code_gen.enclosing_member): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))")
 
-# a memory's data operation (src/julia/wasm_array.jl), the call Julia's runtime copy makes on two
+# a memory's data operations (src/julia/wasm_array.jl): an element left #undef (Base's _unsetindex!,
+# the null of its data array, array.set, dart's WasmArrayExt.[]=), and the call Julia's runtime copy makes on two
 # memories (genericmemory.c jl_genericmemory_copyto): the elements of `src`'s data array from its
 # reference's offset copied into `dest`'s from its own, one array.copy, dart's WasmArrayExt.copy
 # (intrinsics.dart:1254), wasm's memmove; for elements admitting nothing (classes.jl `data#isSet`) their
 # set flags copied the same way. An offset or count is wrapped to the i32 a wasm array takes.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:memory_data_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
-    target.def in methods(wasm_memory_copy!) ? :copy : nothing
+    target.def in methods(wasm_memory_copy!) ? :copy : target.def in methods(wasm_memory_unset!) ? :unset : nothing
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory_data}, op::Symbol, target::Core.MethodInstance, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
     local t = translator(self)
     local b = code_gen.b[]
     local at = "$(code_gen.enclosing_member): a memory's data"
-    op === :copy || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory data operation $op"), at)
+    op in (:copy, :unset) || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory data operation $op"), at)
     local R = Base.unwrap_unionall(target.specTypes).parameters[2]
     (R isa DataType && R <: GenericMemoryRef && R.parameters[1] === :not_atomic) ||
         reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory copy of $R, no non-atomic MemoryRef"), at)
@@ -836,6 +837,30 @@ end
     (rinfo === nothing || minfo === nothing) && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory copy where $R or $M has no class info"), at)
     local rfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(R, at))
     local mfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(M, at))
+    if op === :unset
+        # the element's #undef: the null of its data array and 0 in its set flags, where it can be
+        # #undef (holds_reference: boxed, or inline holding a reference); an element of bits keeps its bits
+        local r = add_local(code_gen, rinfo.non_nullable_type)
+        translate_expression(code_gen, args[1], rinfo.non_nullable_type)
+        WasmBuilder.local_set(b, r)
+        if holds_reference(eltype(R))
+            for name in ("data", "data#isSet")
+                haskey(mfs, name) || continue
+                local array_type = (translate_type_of_field(t, mfs[name])::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+                WasmBuilder.local_get(b, r)
+                WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[rfs["mem"]])
+                WasmBuilder.struct_get(b, minfo.struct_, t.field_index[mfs[name]])
+                WasmBuilder.local_get(b, r)
+                WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[rfs["ptr_or_offset"]])
+                WasmBuilder.i32_wrap_i64(b)
+                local element = array_type.element_type[].type
+                element isa WasmBuilder.IR.RefType ? WasmBuilder.ref_null(b, element.heap_type) : WasmBuilder.i32_const(b, 0)
+                WasmBuilder.array_set(b, array_type)
+            end
+        end
+        WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+        return t.top_type[]
+    end
     local dest = add_local(code_gen, rinfo.non_nullable_type)
     local src = add_local(code_gen, rinfo.non_nullable_type)
     local n = add_local(code_gen, WasmBuilder.IR.NumType_i32)

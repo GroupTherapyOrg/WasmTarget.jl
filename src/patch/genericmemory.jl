@@ -13,3 +13,10 @@
     wasm_memory_copy!(dest, src, Int(n))
     return dest
 end
+
+@quarantine "julia/src/genericmemory.c:223 jl_genericmemory_copyto's NULL is the #undef Base's _unsetindex! of a MemoryRef stores through pointers (atomic_pointerset of C_NULL); WasmGC stores the data array's null" Base._unsetindex! @consistent_overlay METHOD_TABLE @inline function Base._unsetindex!(A::MemoryRef{T}) where {T}
+    Base.@_propagate_inbounds_meta
+    @boundscheck memoryref(A, 1)
+    wasm_memory_unset!(A)
+    return A
+end

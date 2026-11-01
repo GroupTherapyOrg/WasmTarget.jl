@@ -269,7 +269,40 @@ over WasmTarget's layout one `array.copy` of the memories' data arrays (dart's `
 memmove's semantics) and, for elements admitting nothing, one of their set flags. Never inlined, so the
 code generator meets the call and lowers it (src/intrinsics.jl); natively Base's copy.
 """
-@quarantine "julia/src/genericmemory.c:223 jl_genericmemory_copyto copies a memory's elements, overlapping ranges included; WasmGC copies the data arrays (array.copy)" Base.unsafe_copyto! @noinline function wasm_memory_copy!(dest::MemoryRef{T}, src::MemoryRef{T}, n::Int)::Nothing where {T}
-    unsafe_copyto!(dest, src, n)
+@quarantine "julia/src/genericmemory.c:223 jl_genericmemory_copyto copies a memory's elements, overlapping ranges included; WasmGC copies the data arrays (array.copy)" Base.memmove @noinline function wasm_memory_copy!(dest::MemoryRef{T}, src::MemoryRef{T}, n::Int)::Nothing where {T}
+    # Base's copy written out (base/genericmemory.jl:120-130): its method is the overlay's own in
+    # WasmTarget's table (src/patch/genericmemory.jl), a call of which would be a cycle with no way out
+    if isbitstype(T)
+        GC.@preserve dest src Base.memmove(Base.unsafe_convert(Ptr{Cvoid}, dest), Base.unsafe_convert(Ptr{Cvoid}, src), Base.aligned_sizeof(T) * n)
+    else
+        ccall(:jl_genericmemory_copyto, Cvoid, (Any, Ptr{Cvoid}, Any, Ptr{Cvoid}, Int), dest.mem, dest.ptr_or_offset, src.mem, src.ptr_or_offset, n)
+    end
+    return nothing
+end
+
+"""
+    wasm_memory_unset!(ref) -> Nothing
+
+Leaves the element `ref` names #undef: Julia's runtime stores NULL in a boxed element or in each pointer
+of an inline one (base/genericmemory.jl _unsetindex!, atomic_pointerset of C_NULL), and leaves an
+element of bits, or of an isbits union, as it is. Over WasmTarget's layout one `array.set` of the null
+into the memory's data array at the reference's offset (classes.jl holds_reference: an element that can
+be #undef) and, for elements admitting nothing, one of 0 into their set flags. Never inlined, so the code
+generator meets the call and lowers it (src/intrinsics.jl); natively Base's.
+"""
+@quarantine "julia/src/genericmemory.c:223 jl_genericmemory_copyto's NULL is an element's #undef, which Base's _unsetindex! stores through a pointer; WasmGC stores the data array's null (array.set)" Core.Intrinsics.atomic_pointerset @noinline function wasm_memory_unset!(ref::MemoryRef{T})::Nothing where {T}
+    # Base's store written out (base/genericmemory.jl:88-99): its method is the overlay's own
+    # (src/patch/genericmemory.jl), a call of which would be a cycle with no way out, Union{}
+    holds_reference(T) || return nothing
+    GC.@preserve ref begin
+        local p = Ptr{Ptr{Cvoid}}(Base.unsafe_convert(Ptr{Cvoid}, ref))
+        if !Base.allocatedinline(T)
+            Core.Intrinsics.atomic_pointerset(p, C_NULL, :monotonic)
+        else
+            for j in 1:sizeof(Ptr{Cvoid}):Base.aligned_sizeof(T)
+                Core.Intrinsics.atomic_pointerset(p + j - 1, C_NULL, :monotonic)
+            end
+        end
+    end
     return nothing
 end
