@@ -46,13 +46,18 @@ run_head() {
     # the shards split by each group's measured seconds (wt-dart-costs.tsv, kept from the last green run), so their
     # compiles and node runs end together (a split by index put 859 modules in one shard, which hung, a5e89d25)
     CORPUS_SHARDS=4; jpids=""; rm -f "$scratch"/.wtd/shard.*.time "$scratch"/.wtd/dart_costs.*
+    # each shard runs under dev/corpus_shard.sh, again past a case whose process its watchdog killed, so one hang
+    # costs a restart and its case's verdict, never the shard's other verdicts (665146f1, 2026-11-01)
     for k in $(seq 1 $CORPUS_SHARDS); do
       : > "$WT_PROGRESS.$k"
-      WT_PROGRESS="$WT_PROGRESS.$k" WT_DART_SHARD="$k/$CORPUS_SHARDS" WT_DART_COSTS="$costs" WT_DART_COSTS_OUT="$scratch/.wtd/dart_costs.$k" taskpolicy -b /usr/bin/time -o "$scratch/.wtd/shard.$k.time" julia --project=. --startup-file=no -e '
+      WT_PROGRESS="$WT_PROGRESS.$k" WT_DART_SHARD="$k/$CORPUS_SHARDS" WT_DART_COSTS="$costs" WT_DART_COSTS_OUT="$scratch/.wtd/dart_costs.$k" \
+        bash dev/corpus_shard.sh "$out.$k" "$scratch/.wtd/shard.$k" taskpolicy -b /usr/bin/time -o "$scratch/.wtd/shard.$k.time" julia --project=. --startup-file=no -e '
         using Test
         wt_progress(s::AbstractString) = write(ENV["WT_PROGRESS"], s)
-        @testset "corpus" begin include("test/src/dart_tests.jl") end' > "$out.$k" 2>&1 & jpids="$jpids $!"
+        @testset "corpus" begin include("test/src/dart_tests.jl") end' & jpids="$jpids $!"
     done
+    # a shard's whole process tree, read before any of it is signalled (a child whose parent died is no longer its child)
+    treepids() { local c; echo "$1"; for c in $(pgrep -P "$1"); do treepids "$c"; done; }
     s0=$(date +%s)
     alive() { for p in $jpids; do kill -0 $p 2>/dev/null && return 0; done; return 1; }
     while alive; do
@@ -61,8 +66,8 @@ run_head() {
         echo "corpus: past the hard limit of ${WT_CORPUS_LIMIT}s at: $(cat "$WT_PROGRESS".[0-9]* | tr '\n' ' ')" >> "$out"
         # a julia deep in a compile may outlive SIGTERM: three hung runs left their shards running with no
         # parent, holding swap for half an hour (march-corrector, 10:55); a shard still alive 10 s later is killed
-        for p in $jpids; do pkill -P $p 2>/dev/null; kill $p 2>/dev/null; done
-        sleep 10; for p in $jpids; do pkill -9 -P $p 2>/dev/null; kill -9 $p 2>/dev/null; done; exit 124
+        tree=$(for p in $jpids; do treepids "$p"; done)
+        kill $tree 2>/dev/null; sleep 10; kill -9 $tree 2>/dev/null; exit 124
       fi
       sleep 5
     done
@@ -75,7 +80,7 @@ run_head() {
   ); rc=$?
   t=$(( $(date +%s) - r0 ))
   case $rc in 0) result=green;; 124) result=hung;; *) result=red;; esac
-  first=$(grep -m1 -E 'Test Failed|Error During Test|past the hard limit|LoadError' "$out" | tr '\t' ' ' | cut -c1-200)
+  first=$(grep -m1 -E 'Test Failed|Error During Test|hard limit|LoadError' "$out" | tr '\t' ' ' | cut -c1-200)
   # each shard's CPU seconds beside the run's wall: a starved run (CPU far below wall, the machine swapping or
   # crowded) reads apart from a real per-case cost increase (march-corrector, 10:55)
   cpu=$(for f in "$scratch"/.wtd/shard.[0-9]*.time; do awk '/user/ { printf "%d ", $3 + $5 }' "$f" 2>/dev/null; done)
