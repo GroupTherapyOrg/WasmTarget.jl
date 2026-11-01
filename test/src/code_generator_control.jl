@@ -95,6 +95,16 @@ struct E; v::Int64; end
 @noinline thr(x::Int64) = x < 0 ? throw(E(x)) : x
 tc(x::Int64) = try; thr(x) + 1; catch e; e isa E ? e.v * 2 : 0; end
 tn(x::Int64) = try; (try; thr(x); catch; -1; end) + thr(x + 1); catch; -2; end
+# rethrow() in its catch, past the catch's first block, rethrows the exception the catch caught, which
+# the caller's catch receives
+@noinline rt(x::Int64) = try; thr(x); catch e; e isa E && e.v < -5 && rethrow(); -1; end
+rt_of(x::Int64) = try; rt(x); catch e; e isa E ? e.v : -3; end
+# a finally's exception exit runs the finally and rethrows (Julia's lowering, an invoke of rethrow())
+@noinline fin(c::Base.RefValue{Int64}, x::Int64) = try; thr(x); finally; c[] += 1; end
+fin_of(x::Int64) = (c = Ref(Int64(0)); v = try; fin(c, x); catch e; e isa E ? e.v : -7; end; v + 100 * c[])
+# nested catches: the inner rethrow reads the inner catch's exception, the outer catch its own
+nest(x::Int64) = try; thr(x); catch e; (try; thr(x - 1); catch; e isa E && e.v < -5 && rethrow(); end); -1; end
+nest_of(x::Int64) = try; nest(x); catch e; e isa E ? e.v : -3; end
 end
 
 @testset "code_generator.dart: a try/catch, the stackifier's try_table around the call that unwinds to the catch" begin
@@ -120,6 +130,24 @@ end
     for st in (W.NirTheException(W.NirValue[]), W.NirUpsilon(W.NirArgument(2)), W.NirPhiC(W.NirValue[W.NirSSA(1)]))
         local r = rejection(() -> D.translate_statement(g, st, W.NirSSA(3)))
         @test r.rejection isa W.Internal && occursin("visit_block", r.rejection.site)
+    end
+end
+
+@testset "code_generator.dart: visitRethrow, the exception Julia's exception stack tops thrown again" begin
+    # Julia's answer for the exception stack: at rt's rethrow() (a block of its own, past the catch's
+    # first), compute_trycatch's top is the catch's EnterNode
+    local src = only(code_typed(TryGenCases.rt, (Int64,); optimize = true))[1]
+    local _, _, handlers = W.nir_code(src.code, src.ssaflags, "rt")
+    local enter = findfirst(st -> st isa Core.EnterNode, src.code)
+    local re = findfirst(st -> Meta.isexpr(st, :invoke) && st.args[2] isa GlobalRef && st.args[2].name === :rethrow, src.code)
+    @test re !== nothing && handlers.exception_at[re] == enter && handlers.exception_at[enter] == 0
+    # rt's body: the stashed exception thrown with the exception tag after its catch's type test
+    local names = generated_instructions(TryGenCases.rt, (Int64,))
+    @test count(==("throw"), names) == 1
+    # run by node, each answers as native Julia: a rethrow caught by the caller, a finally's exception
+    # exit, an inner rethrow under two catches
+    for (f, xs) in ((TryGenCases.rt_of, Int64[3, -1, -9]), (TryGenCases.fin_of, Int64[3, -1, -9]), (TryGenCases.nest_of, Int64[3, -1, -9]))
+        queue_native!(string(nameof(f)), W.compile(f, (Int64,); optimize = false), f, [(x,) for x in xs])
     end
 end
 

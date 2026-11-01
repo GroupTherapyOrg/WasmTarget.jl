@@ -235,12 +235,16 @@ end
 
 A body's try regions as Julia's compiler answers them: `handler_at[i]`, the statement of the
 EnterNode whose catch handles statement `i`, 0 where none does (compute_trycatch's catch handler),
-and `nothrow[i]`, whether statement `i` sends no exception to its handler as Julia's inference
+`exception_at[i]`, the statement of the EnterNode whose caught exception is the top of Julia's
+exception stack at statement `i`, the one `the_exception` and `rethrow()` read, 0 where none is
+(compute_trycatch's exception stack, which a catch block pushes and a :pop_exception pops), and
+`nothrow[i]`, whether statement `i` sends no exception to its handler as Julia's inference
 decides it: a return or a :leave never does, every other statement unless it carries IR_FLAG_NOTHROW.
 The stackifier reads them as LLVM reads an invoke's unwind edge (src/julia/machine.jl).
 """
 @quarantine "Julia's compiler answers each statement's try handler and whether it can throw; the stackifier reads both" Base.BitVector struct NirHandlers
     handler_at::Vector{Int}
+    exception_at::Vector{Int}
     nothrow::BitVector
 end
 
@@ -266,8 +270,8 @@ end
 
 The statements of an optimized CodeInfo's `code` in NIR, Julia's CFG of them (compute_basic_blocks,
 whose blocks and edges name statements by their position, the same in both), and its try regions:
-each statement's catch handler (compute_trycatch, over the CodeInfo's statements, whose catch
-destinations are statements) and whether it sends no exception to that handler. The one reader of a
+each statement's catch handler and exception stack top (compute_trycatch, over the CodeInfo's
+statements, whose catch destinations are statements) and whether it sends no exception to that handler. The one reader of a
 body's raw statements, so every later stage, the stackifier's included, reads the closed sums.
 
 Whether a statement sends an exception to its handler is inference's rule (typeinf_local,
@@ -282,9 +286,11 @@ flagged.
     local info = Core.Compiler.compute_trycatch(code)
     local handler_at = info === nothing ? zeros(Int, length(code)) :
         Int[h == 0 ? 0 : info.handlers[h].enter_idx for (h, _) in info.handler_at]
+    local exception_at = info === nothing ? zeros(Int, length(code)) :
+        Int[e == 0 ? 0 : info.handlers[e].enter_idx for (_, e) in info.handler_at]
     local nothrow = BitVector([code[i] isa Core.ReturnNode || Meta.isexpr(code[i], :leave) || ssaflags[i] & Core.Compiler.IR_FLAG_NOTHROW != 0
                                for i in eachindex(code)])
-    return NirStmt[_nir_stmt(st, at) for st in code], Core.Compiler.compute_basic_blocks(code), NirHandlers(handler_at, nothrow)
+    return NirStmt[_nir_stmt(st, at) for st in code], Core.Compiler.compute_basic_blocks(code), NirHandlers(handler_at, exception_at, nothrow)
 end
 
 # an operand of Julia's optimized IR as a NirValue; an IR node where a value belongs rejects, located
