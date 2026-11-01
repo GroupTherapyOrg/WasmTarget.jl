@@ -1339,15 +1339,16 @@ end
         return i64
     end
     local at = "$(code_gen.enclosing_member): Julia's nfields of a $T"
-    local classes = sort!(DataType[c for c in keys(t.class_info) if c isa DataType && isconcretetype(c) && c <: T];
-                          by = c -> t.class_id_numbering[].class_ids[c])
+    # the closed world's concrete classes below T, their ids read through the one reading of a type's
+    # concrete classes (getConcreteClassIdRange), each id's class the translator's (translator.classes)
+    local ids = Int[id for r in get_concrete_class_id_range(t.class_id_numbering[], T) for id in r.start:r.end_]
+    local classes = DataType[t.classes[][id + 1].cls for id in ids]
     isempty(classes) && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: nfields of $T, which no class of the closed world is"), at)
     local o = add_local(code_gen, t.top_type_non_nullable[])
     translate_expression(code_gen, args[1], t.top_type_non_nullable[])
     WasmBuilder.local_tee(b, o)
     load_class_id(b, t, o.type)
-    local ids = t.class_id_numbering[].class_ids
-    local ranges = [(range = Range(Val(:_), ids[c], ids[c]), value = c) for c in classes]
+    local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(ids, classes)]
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i64], c -> WasmBuilder.i64_const(b, fieldcount(c)), () -> WasmBuilder.unreachable(b))
     return i64
 end
