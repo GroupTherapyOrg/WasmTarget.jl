@@ -24,7 +24,6 @@ julia/classes.jl class_implemented_types
 julia/classes.jl class_instance_fields
 julia/classes.jl class_is_abstract
 julia/classes.jl class_superclass
-julia/classes.jl closed_world_classes
 julia/classes.jl egal_by_identity
 julia/collection.jl strongly_connected_components
 julia/construction.jl @exhaustive
@@ -198,7 +197,6 @@ julia/nir.jl nir_value_type
 julia/nir.jl runtime_module
 julia/nir.jl stmt_form
 julia/nir.jl value_form
-julia/packages.jl Dart2Wasm
 julia/packages.jl IR
 julia/packages.jl JS
 julia/packages.jl LLVM

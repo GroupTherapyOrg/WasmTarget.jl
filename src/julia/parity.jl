@@ -519,7 +519,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
 @quarantine "Julia's runtime is its own C and C++ sources, pinned at the julia WasmTarget runs, which src/julia ports" Core.String const JULIA_FILES::Tuple{Vararg{String}} = (
     "julia/src/julia", "julia/src/genericmemory", "julia/src/builtins", "julia/src/cgutils",
     "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv", "julia/src/ccall",
-    "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer",
+    "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3",
     "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation",
 )

@@ -390,10 +390,12 @@ end
     end
     # Base's InexactError is built by its varargs constructor of an open count, InexactError(f, args...),
     # whose call packs (T, val) into a tuple: T's class, a Type, only run time knows (Julia's jl_f_tuple
-    # reads the value's), so the call rejects where it packs, located, never a MethodError
+    # reads the value's), so the call switches on T's class among the closed world's tuple classes
+    # (tuple_classes, A70S3): InexactError raised where native raises it
     @test (try; ThrowCases.to_u8(300); nothing; catch err; err; end) isa InexactError
-    local iv = rejection(() -> W.compile(ThrowCases.to_u8, (Int64,); optimize = false))
-    @test iv.rejection isa W.Unquarantined && occursin("_visitArguments: the varargs tuple", iv.rejection.row)
+    local iv_bytes = W.compile(ThrowCases.to_u8, (Int64,); optimize = false)
+    push!(NATIVE_RUNS, WTRunner.RunCase("to_u8(300) throws ", iv_bytes, (300,), WTRunner.Throws(InexactError)))
+    queue_native!("to_u8 ", iv_bytes, ThrowCases.to_u8, [(7,)])
     # dart's dynamic invocation has no Julia input: the verifier resolves every call it admits but a
     # must-throw one, so reaching it is WasmTarget's own defect, naming Julia's replacement
     local d = rejection(() -> D._handle_dynamic_invocation(g, W.NirArgument(2), W.NirValue[], :f))

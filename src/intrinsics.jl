@@ -1050,6 +1050,80 @@ end
     return t.top_type[]
 end
 
+# Julia's tuple builtin over values whose classes only run time knows, a varargs tuple's elements packed
+# at a call or at entry (code_generator.jl _visitArguments, _setupLocalParameters), as jl_f_tuple packs it
+# (builtins.c:946, the tuple of each value's own type): its possible classes are tuple_classes' (the one
+# source the closed world's walk numbers them by), and the value of each open element is switched on by
+# its class id (dart's classIdSearch, the run-time tuple index's), nested element by element, a value of
+# `nothing` (the null) its own arm, each leaf allocating its tuple class from the values, each converted
+# to its field (a cast, or an unbox of a primitive). `values` holds the elements, each at its static
+# type's wasm type. Leaves the tuple as the top type, non-null; a class outside the list is none the
+# program can hold (A68S3), so a search's miss is unreachable.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(intrinsifier::Intrinsifier, ::Val{:open_tuple}, tuple_type::Type, values::Vector{WasmBuilder.IR.Local}, at::String)::WasmBuilder.IR.ValueType
+    local self = intrinsifier.code_gen
+    local t = self.translator
+    local numbering = t.class_id_numbering[]
+    local below(p::Type) = DataType[t.classes[][id + 1].cls for r in get_concrete_class_id_range(numbering, p) for id in r.start:r.end_]
+    local classes = tuple_classes(tuple_type, below, at)
+    isempty(classes) && reject!(Unquarantined("src/code_generator.jl _packTupleOfOpenElements: the tuple $tuple_type, which no class of the closed world is"), "$(self.enclosing_member)")
+    local b = self.b[]
+    local top = t.top_type_non_nullable[]
+    local n = length(values)
+    # the leaf: the tuple class of the chosen element classes, its fields from the values
+    local leaf(chosen::Vector{DataType}) = begin
+        local cls = Tuple{chosen...}
+        local info = get(t.class_info, cls, nothing)
+        info === nothing && reject!(Internal("$at: no class info for the packed tuple $cls"), "$(self.enclosing_member)")
+        record_class_allocation(t.functions[], class_id(info))
+        push_object_header_fields(b, t, info)
+        for (k, field) in enumerate(class_instance_fields(cls, at))
+            local to = WasmBuilder.unpacked(info.struct_.fields[t.field_index[field] + 1].type)
+            WasmBuilder.local_get(b, values[k])
+            convert_type(t, b, values[k].type, to; boxed_class = chosen[k])
+        end
+        WasmBuilder.struct_new(b, info.struct_)
+        convert_type(t, b, info.non_nullable_type, top)
+    end
+    # element k's classes among the tuple classes, given the ones chosen before it
+    local options(k::Int, chosen::Vector{DataType}) =
+        unique(DataType[c.parameters[k] for c in classes if all(j -> c.parameters[j] === chosen[j], 1:k-1)])
+    local choose(k::Int, chosen::Vector{DataType}) = begin
+        if k > n
+            leaf(chosen)
+            return nothing
+        end
+        local opts = options(k, chosen)
+        if length(opts) == 1 && !(values[k].type isa WasmBuilder.IR.RefType && Nothing === opts[1])
+            choose(k + 1, DataType[chosen; opts[1]])
+            return nothing
+        end
+        local others = filter(c -> c !== Nothing, opts)
+        local search() = begin
+            local ids = numbering.class_ids
+            local ranges = sort([(range = Range(Val(:_), ids[c], ids[c]), value = c) for c in others]; by = r -> r.range.start)
+            WasmBuilder.local_get(b, values[k])
+            WasmBuilder.ref_as_non_null(b)
+            load_class_id(b, t, top)
+            class_id_search(b, ranges, WasmBuilder.IR.ValueType[top], c -> choose(k + 1, DataType[chosen; c]), () -> WasmBuilder.unreachable(b))
+        end
+        if Nothing in opts
+            # nothing is the null: its own arm, the rest by class id
+            WasmBuilder.local_get(b, values[k])
+            WasmBuilder.ref_is_null(b)
+            WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[top])
+            choose(k + 1, DataType[chosen; Nothing])
+            WasmBuilder.else_(b)
+            isempty(others) ? WasmBuilder.unreachable(b) : search()
+            WasmBuilder.var"end"(b)
+        else
+            search()
+        end
+        return nothing
+    end
+    choose(1, DataType[])
+    return top
+end
+
 # Julia's `isdefined(x, f)` on a struct field, Julia's codegen arm (codegen.cpp:4864, emit_builtin_call's
 # isdefined): a field named by a constant Symbol or Int of a concrete struct; an order that does not
 # fit the field (an atomic order on a field that is not atomic, :not_atomic on one that is, any order

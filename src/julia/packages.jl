@@ -47,7 +47,7 @@ import ..WasmBuilder
 end
 end
 
-@quarantine "Julia has no per-file namespace; dart's dart2wasm package is a module" Core.Module module Dart2Wasm
+@quarantine "Julia has no per-file namespace; dart's dart2wasm package, its library entered at pkg/dart2wasm/lib/dart2wasm.dart:298 main, is a module" Core.Module module Dart2Wasm
 # ---- the src/julia names Dart2Wasm's files use, written by dev/skeleton.jl write ----
 import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..@unported, ..AbstractClosures,
        ..AbstractDispatchTable, ..AbstractLambda, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF,
@@ -76,10 +76,10 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..@unported, ..Abstra
        ..nir_used_statements, ..nir_value_type, ..nir_vararg_call_tuple, ..nir_vararg_packing,
        ..no_counterpart_rejection, ..reject!, ..run_wasm_opt, ..throw_atomic_error,
        ..throw_bounds_error, ..throw_divide_error, ..throw_invalid_memory_size,
-       ..throw_out_of_memory, ..throw_undef_ref_error, ..uf_add!, ..uf_find!, ..uf_union!,
-       ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!, ..wasm_memory_copy!,
-       ..wasm_memory_fill!, ..wasm_memory_unset!, ..wasm_string_alloc, ..wasm_string_codeunit,
-       ..wasm_string_copy!, ..wasm_string_length
+       ..throw_out_of_memory, ..throw_undef_ref_error, ..tuple_classes, ..uf_add!, ..uf_find!,
+       ..uf_union!, ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!,
+       ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_unset!, ..wasm_string_alloc,
+       ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length
 # ---- end of Dart2Wasm's src/julia names ----
 # a dispatcher over every NIR kind is inferred once, not once per kind of node (a compile's first-use cost)
 import Base: @nospecializeinfer

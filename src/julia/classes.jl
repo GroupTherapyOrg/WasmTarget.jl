@@ -31,10 +31,11 @@ values, each met once, and a parametric instance (`Vector{Int64}`) is a class of
 
 formal(dev/formal/ValueClasses.tla): every class a value can have listed once, closed under supertype and fields, nothing extra
 """
-@quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values" Base.unwrap_unionall function closed_world_classes(world::NirWorld, at::String)::Vector{DataType}
+@quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values over the closed world julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers for a trimmed program" Base.unwrap_unionall function closed_world_classes(world::NirWorld, at::String)::Vector{DataType}
     local out = DataType[]
     local seen = Base.IdSet{DataType}()
     local objs = Set{NirConst}()
+    local open_tuples = Type[]
     for b in world
         foreach(t -> _meet_value!(out, seen, t, at), Base.unwrap_unionall(b.ci.def.specTypes).parameters)
         # a varargs method's body reads its trailing arguments as one tuple (NirVarargPacking)
@@ -58,12 +59,40 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
             end
             if st isa NirInvoke
                 local vt = nir_vararg_call_tuple(b, st)
-                vt !== nothing && isconcretetype(vt) && _meet_value!(out, seen, vt, at)
+                vt !== nothing && (isconcretetype(vt) ? _meet_value!(out, seen, vt, at) : push!(open_tuples, vt))
             end
         end
         _meet_value!(out, seen, b.ci.rettype, at)
     end
+    # a varargs tuple whose elements' classes only run time knows: each class jl_f_tuple can give it, over
+    # the concrete classes the walk met (tuple_classes, the code generator's one source too)
+    for tt in open_tuples
+        foreach(c -> _meet_value!(out, seen, c, at), tuple_classes(tt, p -> DataType[c for c in out if isconcretetype(c) && c <: p], at))
+    end
     return out
+end
+
+"""
+    tuple_classes(T, below, at) -> Vector{DataType}
+
+The classes a tuple of static type `T` can have at run time, where Julia's codegen packs it by
+jl_f_tuple (builtins.c:946), the tuple of each value's own type: the product over its elements of
+each one's classes, an element's static type read as compute_va_type reads it (codegen.cpp:8102: a
+`Type{X}` of one value is `typeof(X)`), a concrete one its own class, any other the concrete classes
+`below` gives (the walk's met classes, or getConcreteClassIdRange's). No type is made at run time
+(A68S3), so the classes are enumerated, bounded by Julia's own bound on a split of a union,
+InferenceParams' max_union_splitting: a product past it rejects, located.
+"""
+@quarantine "julia/src/builtins.c:946 jl_f_tuple types a tuple by its values, enumerated here within julia/Compiler/src/types.jl:199 InferenceParams' max_union_splitting" Base.Iterators.product function tuple_classes(T::Type, below::Function, at::String)::Vector{DataType}
+    local tt = Base.unwrap_unionall(T)
+    tt isa DataType && tt <: Tuple && !any(p -> p isa Core.TypeofVararg, tt.parameters) ||
+        reject!(Unquarantined("src/julia/classes.jl tuple_classes: a tuple of type $T, of no fixed length, packed at run time"), at)
+    local element(p) = Base.isType(p) && !(p.parameters[1] isa TypeVar) ? typeof(p.parameters[1]) : p
+    local options = Vector{DataType}[(local e = element(p); isconcretetype(e) ? DataType[e] : below(e)) for p in tt.parameters]
+    local limit = Core.Compiler.InferenceParams().max_union_splitting
+    local n = prod(length, options; init = 1)
+    n > limit && reject!(Unquarantined("src/julia/classes.jl tuple_classes: a tuple of type $T has $n classes at run time, past Julia's max_union_splitting ($limit)"), at)
+    return vec(DataType[Tuple{c...} for c in Iterators.product(options...)])
 end
 
 # A constant's object graph met by the walk (dev/formal/ValueClasses.tla's MeetObject): the value's

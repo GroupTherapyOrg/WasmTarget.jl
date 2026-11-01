@@ -82,4 +82,36 @@ end
     end
 end
 
+# an open count's tuple whose elements' classes only run time knows (A70S3): InexactError(::Symbol, ::Any,
+# ::Vararg{Any}) packs Tuple{Type, UInt64}, which Julia's codegen types by its values at run time
+# (jl_f_tuple); the call switches on each open element's class among the closed world's tuple classes
+# below it (tuple_classes), each checked conversion that can raise now compiling; past Julia's
+# max_union_splitting the classes reject, located
+module OpenTupleCases
+const KEYS = ["k$i" for i in 1:4]
+const ANYS = Any[1, "s"]
+function open_tuple(k::Int64, n::Int64)
+    k == 1 && return UInt(n) % Int64                                    # InexactError for n < 0
+    k == 2 && return Int64(UInt8(n))                                    # InexactError past 255
+    k == 3 && return (hash(KEYS[1], UInt(n)) % UInt(1000003)) % Int64   # a String hash under UInt(n)
+    local d = Dict{Int64,Int64}()
+    for i in 1:n; d[i] = Int64(UInt16(i)); end
+    return length(d)
+end
+over(n::Int64) = throw(InexactError(:over, Int64, ANYS[n]))
+end
+@testset "varargs: a tuple of open elements packs as jl_f_tuple, by its elements' classes, within max_union_splitting" begin
+    local f = OpenTupleCases.open_tuple
+    local bytes = W.compile(f, (Int64, Int64); optimize = false)
+    local argsets = [(1, 5), (1, -1), (2, 7), (2, 300), (3, 2), (3, -3), (4, 10)]
+    local cases = [WTRunner.RunCase("open_tuple$(a)", bytes, Int64.(a), WTRunner.native_answer(f, Int64.(a))) for a in argsets]
+    @test count(c -> c.native == WTRunner.Throws(InexactError), cases) == 3
+    for r in WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+    # Tuple{Type{Int64}, Any}: one class times every class the closed world has, past the bound
+    local e = try; W.compile(OpenTupleCases.over, (Int64,); optimize = false); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("max_union_splitting", e.rejection.row)
+end
+
 end

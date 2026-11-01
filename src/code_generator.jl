@@ -716,7 +716,8 @@ end
             local at = "dart2wasm/lib/code_generator.dart:245 AstCodeGenerator._setupLocalParameters"
             local tuple_type = va.packed
             # codegen.cpp builds a concrete tuple in place and any other by jl_f_tuple, its class the
-            # values' at run time
+            # values' at run time: no case yet reaches one packed at entry (Julia widens such a
+            # specialization to an open count, packed by its callers, _visitArguments)
             isconcretetype(tuple_type) ||
                 reject!(Unquarantined("src/code_generator.jl _setupLocalParameters: the varargs tuple $tuple_type $(member) packs at entry, whose class only run time knows"), "$(member)")
             local info = get(self.translator.class_info, tuple_type, nothing)
@@ -1893,8 +1894,21 @@ end
         local at = "dart2wasm/lib/code_generator.dart:2849 AstCodeGenerator._visitArguments"
         local trailing = node.args[va.first:end]
         local tuple_type = nir_vararg_call_tuple(self.body, node)
-        isconcretetype(tuple_type) && tuple_type <: va.packed ||
-            reject!(Unquarantined("src/code_generator.jl _visitArguments: the varargs tuple $tuple_type of a call of $(nir_invoke_target(node)), whose class only run time knows"), "$(self.enclosing_member)")
+        tuple_type <: va.packed ||
+            reject!(Internal("$at: the varargs tuple $tuple_type of a call of $(nir_invoke_target(node)), no $(va.packed)"), "$(self.enclosing_member)")
+        if !isconcretetype(tuple_type)
+            # its class only run time knows: jl_f_tuple's, chosen by its open elements' classes
+            local values = WasmBuilder.IR.Local[]
+            for operand in trailing
+                local l = add_local(self, translate_type(self, nir_value_type(self.body, operand)))
+                translate_expression(self, operand, l.type)
+                WasmBuilder.local_set(self.b[], l)
+                push!(values, l)
+            end
+            local result = generate_static_intrinsic(self.intrinsifier[], Val(:open_tuple), tuple_type, values, at)
+            convert_type(self.translator, self.b[], result, signature.inputs[signature_offset + va.first - 1])
+            return nothing
+        end
         local info = get(self.translator.class_info, tuple_type, nothing)
         info === nothing &&
             reject!(Unquarantined("src/julia/classes.jl closed_world_classes: the varargs tuple $tuple_type a call of $(nir_invoke_target(node)) packs, a class the closed world does not number"), "$(self.enclosing_member)")
