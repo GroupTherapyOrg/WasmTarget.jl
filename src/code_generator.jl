@@ -1946,7 +1946,19 @@ end
 # Julia's PiNode is a narrowing its inference proved on this path, dart's unchecked AsExpression:
 # the operand at the expected type, the conversion a downcast where the wasm types differ; the
 # checked form, Julia's typeassert, is the method below
+# Julia's PiNode, the unchecked AsExpression: the operand at the expected type. Where that unboxes (an
+# operand held as a reference narrowed to a primitive class), the box is the narrowed class's, which
+# the PiNode names and the operand's own type does not (Union{Nothing,Int64}, Any): the operand is
+# translated at its own type and converted with the PiNode's class (convertType's boxed_class)
 @parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" function visit_as_expression(self::AstCodeGenerator, node::NirPi, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local narrowed = node.typ
+    local operand_type = translate_type(self, dart_type_of(self, node.val))
+    if narrowed isa DataType && isprimitivetype(narrowed) && operand_type isa WasmBuilder.IR.RefType && !(expected_type isa WasmBuilder.IR.RefType) &&
+            expected_type != void_marker(self)
+        translate_expression(self, node.val, operand_type)
+        convert_type(self.translator, self.b[], operand_type, expected_type; boxed_class = narrowed)
+        return expected_type
+    end
     return translate_expression(self, node.val, expected_type)
 end
 

@@ -1090,9 +1090,10 @@ type alone (`boxedClasses[from]`, its one boxed class per i32, i64, f64); a Juli
 classes (`Int64` and `UInt64` are each i64; `Int32`, `UInt32`, `Char` and `Bool` each i32), so the
 box is the value's own Julia class, `boxed_class`, which the code generator knows and passes: a
 primitive class's struct holds its class id and its value (class_info.jl), allocated as dart
-allocates its boxed int. A box with no class given, and an unbox (the class the consumer reads,
-which no value's type names), reject, located, as a conversion between two non-reference types
-does. Julia's `===` compares two Bools by their bits, so a Bool is boxed like any primitive, where
+allocates its boxed int. An unbox reads the value field of that class's box, cast to it where the
+reference is wider, as dart's does, the class the value's (a PiNode's narrowed type,
+visitAsExpression). A box or an unbox with no class given rejects, located, as a conversion between
+two non-reference types does. Julia's `===` compares two Bools by their bits, so a Bool is boxed like any primitive, where
 dart takes its canonical true or false constant (its `identical`).
 
 Reshaped: `boxed_class` — dart's boxedClasses keys a box by the wasm type, which names no one Julia class.
@@ -1139,7 +1140,18 @@ Reshaped: `boxed_class` — dart's boxedClasses keys a box by the wasm type, whi
             WasmBuilder.local_get(b, temp)
             WasmBuilder.struct_new(b, info.struct_)
         elseif from isa WasmBuilder.IR.RefType
-            reject!(Unquarantined("dart2wasm/lib/translator.dart:1597 convertType: unboxing to a $to, whose Julia class the code generator knows (dev/MARCH.md 1.D)"), at)
+            # Unboxing: the box of the value's own Julia class, cast to where the reference is wider
+            boxed_class === nothing &&
+                reject!(Unquarantined("dart2wasm/lib/translator.dart:1597 convertType: unboxing to a $to, whose Julia class the code generator knows (dev/MARCH.md 1.D)"), at)
+            local cls = something(boxed_class)
+            local info = get(self.class_info, cls, nothing)
+            (info !== nothing && isprimitivetype(cls)) ||
+                reject!(Internal("$at: unboxing to a $to as $cls, no primitive class with class info"), at)
+            if !WasmBuilder.is_subtype_of(from.heap_type, info.struct_)
+                # Cast to box type
+                WasmBuilder.ref_cast(b, info.non_nullable_type)
+            end
+            WasmBuilder.struct_get(b, info.struct_, FieldIndex_box_value())
         else
             reject!(Internal("$at: Conversion between non-reference types (from $from to $to)"), at)
         end

@@ -505,6 +505,29 @@ end
     append!(NATIVE_RUNS, cases)
 end
 
+# a value held as a reference narrowed to a primitive class (a PiNode): convertType's unboxing, the box
+# of the PiNode's class, cast where the reference is wider; case k at i
+module UnboxCases
+function unbox(k::Int64, i::Int64)
+    local v = Vector{Union{Nothing,Int64}}(undef, 2)
+    v[1] = i
+    if k <= 2
+        local x = v[k]                      # Union{Nothing,Int64}, an inline bits union held boxed
+        return x === nothing ? Int64(-1) : x
+    end
+    local a = Vector{Any}(undef, 2)
+    a[1] = i
+    a[2] = "s"
+    local y = a[k - 2]                      # Any
+    return y isa Int64 ? y + Int64(1) : Int64(0)
+end
+end
+@testset "translator.dart: convertType unboxes a reference to its PiNode's primitive class" begin
+    local f = UnboxCases.unbox
+    local bytes = W.compile(f, (Int64, Int64); optimize = false)
+    append!(NATIVE_RUNS, [WTRunner.RunCase("unbox$a", bytes, a, WTRunner.native_answer(f, a)) for a in ((Int64(k), Int64(7)) for k in 1:4)])
+end
+
 @testset "code_generator.dart: the switch statement's info, whose constructors no NIR reaches" begin
     # dart's fields, each by the one rule's name: the backward jump's local and labels, the jump table's
     # range, value pusher and cases, and the switch's types, comparisons, special cases and table
