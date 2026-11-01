@@ -427,7 +427,9 @@ under src/ rebuilds the image and meets the check, rather than loading the image
         include_dependency(dir; track_content = true)
     end
     return check_include_dart(SRC, INCLUDED) + check_include_patch(SRC, PATCHED) +
-           check_patch(METHOD_TABLE, joinpath(SRC, "patch"))
+           check_patch(METHOD_TABLE, joinpath(SRC, "patch")) +
+           check_overlays_agree(WasmInterpreter(Base.get_world_counter(); inf_params = Core.Compiler.InferenceParams()),
+                                METHOD_TABLE, _methods_of_file(joinpath(SRC, "julia", "wasm_array.jl")))
 end
 
 """
@@ -639,6 +641,47 @@ an overlay names nothing but its method's signature, so the load reads each over
     end
     isempty(out) || throw(ConstructionViolation("patch", join(out, "; ")))
     return 0
+end
+
+"""
+    check_overlays_agree(interp, table, helpers) -> Int
+
+The overlays' agreement (dev/AUDIT.md A69S3): each method of the overlay table `table`, and each of the
+methods `helpers` (the operations an overlay calls, whose native bodies Julia infers), is inferred at its
+own signature twice, by Julia's native interpreter over Base's table and by `interp` over `table`, and
+the two return types must be equal. An overlay replaces a Base method by one that answers as it does
+(Julia's consistent overlay), so a return type that differs is a disagreement Julia's inference already
+sees; `Union{}` in one table alone is a call that never returns there, a cycle through the overlay (the
+memory copy's native body calling Base's method, the overlay's own, made the code after it unreachable).
+Throws a `ConstructionViolation` naming each.
+
+precedent(julia: `Base.Experimental.@consistent_overlay`, an overlay whose answers are the native
+method's, and Julia's own test of an overlay interpreter, test/compiler/AbstractInterpreter.jl, which
+infers one call over both tables). Julia's differs: it trusts the `@consistent_overlay` claim, where
+this check reads each one's inferred answer.
+"""
+@quarantine "julia/src/julia.h:905 jl_methtable_t holds an overlay table's methods apart from Base's; Julia trusts @consistent_overlay, the load infers each one over both tables" Core.Compiler.AbstractInterpreter function check_overlays_agree(interp::Core.Compiler.AbstractInterpreter, table::Core.MethodTable, helpers::Vector{Method})::Int
+    local native = Core.Compiler.NativeInterpreter(Core.Compiler.get_inference_world(interp))
+    local sigs = Any[]
+    Base.visit(m -> push!(sigs, m.sig), table)
+    foreach(m -> push!(sigs, m.sig), helpers)
+    local answer(sig, i) = (local rts = Any[rt for (_, rt) in Base.code_typed_by_type(sig; optimize = false, interp = i)];
+                            isempty(rts) ? nothing : Union{rts...})
+    local out = String[]
+    for sig in sigs
+        local a, b = answer(sig, native), answer(sig, interp)
+        a === b || push!(out, "$sig answers $a natively and $b over the overlay table")
+    end
+    isempty(out) || throw(ConstructionViolation("overlays_agree", join(out, "; ")))
+    return 0
+end
+
+# the methods defined in `file`, read from Julia's one method table (Core.methodtable): wasm_array.jl's
+# operations, the native bodies src/patch's overlays call
+@quarantine "julia/src/julia.h:905 jl_methtable_t is Julia's one table of every method, each recording its file" Base.visit function _methods_of_file(file::String)::Vector{Method}
+    local out = Method[]
+    Base.visit(m -> string(m.file) == file && push!(out, m), Core.methodtable)
+    return out
 end
 
 """
