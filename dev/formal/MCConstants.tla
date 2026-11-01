@@ -7,7 +7,7 @@
 (* out, for every program of one or two uses. Claims: SharesOnlyEgal,         *)
 (* ChildrenFirst, EagerChildrenEager, OperandsTyped, CyclesReject,            *)
 (* NoFabrication, DeterministicNumbering. Broken: MCConstants{KeyIsequal,     *)
-(* ParentFirst,IgnoreChildLaziness,OwnType,NoCycleCheck,Fabricate,HashOrder}  *)
-(* Broken.cfg, each its claim.                                                *)
+(* ParentFirst,IgnoreChildLaziness,OwnType,NoCycleCheck,Fabricate,HashOrder, *)
+(* ReverseUses}Broken.cfg, each its claim.                                    *)
 EXTENDS Constants
 =============================================================================

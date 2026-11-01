@@ -61,11 +61,13 @@
 (* own type, the 45-case InvalidModule of 2026-10-28: OperandsTyped),        *)
 (* NoCycleCheck (CyclesReject), Fabricate (an #undef field read as a        *)
 (* defaulted value, WT1's: NoFabrication), HashOrder (a global numbered by  *)
-(* the constant's hash bucket: DeterministicNumbering).                      *)
+(* the constant's hash bucket: DeterministicNumbering's 1..n), ReverseUses  *)
+(* (the uses defined last first, numbered 1..n in the wrong order of use:   *)
+(* DeterministicNumbering's order).                                          *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS KeyIsequal, ParentFirst, IgnoreChildLaziness, OwnType, NoCycleCheck, Fabricate, HashOrder
+CONSTANTS KeyIsequal, ParentFirst, IgnoreChildLaziness, OwnType, NoCycleCheck, Fabricate, HashOrder, ReverseUses
 
 \* the universe: each constant's class, mutability, fields (each a sub-constant and the field's kind)
 Consts == {"I1", "S", "P", "Pcopy", "Q", "R", "T8", "T64", "Big", "HoldsBig", "M1", "M2", "Mself", "U", "Ubad", "Dflt"}
@@ -179,8 +181,10 @@ Use(s, c) == LET s1 == Ensure(s, c, {}, Fuel) IN
 RECURSIVE Run(_, _)
 Run(s, us) == IF us = << >> THEN s ELSE Run(Use(s, Head(us)), Tail(us))
 
+\* the program's uses in the order the walk takes them: the program's own, or (ReverseUses) last first
+Rev(us) == [i \in 1..Len(us) |-> us[Len(us) - i + 1]]
 Init == /\ program \in Uses
-        /\ st = Run(Empty, program)
+        /\ st = Run(Empty, IF ReverseUses THEN Rev(program) ELSE program)
 Next == UNCHANGED vars
 Spec == Init /\ [][Next]_vars
 
