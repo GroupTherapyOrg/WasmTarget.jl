@@ -86,7 +86,7 @@ function records_compile_one(f, argtypes)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)
     local mb = D.main_module(t)
-    local nb = only(t.component)
+    local nb = only(nb for nb in t.component if nb.ci.def === t.component.entry)   # the program's body, beside the runtime's roots
     local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
     local fb = B.define(mb.functions[], sig, "f")
     D.generate(D.get_member_code_generator(t, fb, nb.ci.def), B.body(fb), B.locals(fb), nothing)
@@ -118,7 +118,7 @@ end
     local t3 = D.Translator(WasmTarget.build_nir(W.check_subset(RecordCodegenCases.fst, (Tuple{Int64, Float64},), "records"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t3, nothing)
     collect(D.ClassInfoCollector(t3))
-    local nb = only(t3.component)
+    local nb = first(t3.component)
     local g = D.get_inlinable_member_code_generator(t3, IR.FunctionType(IR.ValueType[D.translate_type(t3, Tuple{Int64, Float64})], IR.ValueType[IR.NumType_i64]), nb.ci.def)
     local get1 = nb.stmts[findfirst(st -> st isa W.NirCall && W.nir_callee(st) === Core.getfield, nb.stmts)]
     local B = W.WasmBuilder
@@ -228,8 +228,8 @@ end
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == 15 && all(r -> r.ok, results)
     # a program whose one read that can raise BoundsError is a tuple's at a run-time index (an NTuple of
-    # 36, the corpus's case): its read demands the runtime's raise (subset.jl's :bounds), which no other
-    # statement brings into the closed world
+    # 36, the corpus's case): its read calls the runtime's raise, a root of every closed world
+    # (RUNTIME_ROOTS)
     local only_bytes = WasmTarget.compile(only_tuple, (Int64,); optimize = false)
     local only_cases = [WTRunner.RunCase("only_tuple$a", only_bytes, a, WTRunner.native_answer(only_tuple, a)) for a in ((Int64(1),), (Int64(36),), (Int64(37),))]
     @test only_cases[3].native == WTRunner.Throws(BoundsError)

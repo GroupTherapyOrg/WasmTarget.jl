@@ -58,12 +58,17 @@ end
 
 # dart:core's StackTrace.current, as the target's patch defines it: the standalone patch's
 # (src/runtime/standalone/stack_trace_patch.jl), its method in the closed world, an entry point every
-# closed world that throws holds; the JS patch's (JavaScriptStack.current) not ported: Unported there
+# closed world holds (RUNTIME_ROOTS); the JS patch's (JavaScriptStack.current) not ported: Unported there
 @parity "dart2wasm/lib/kernel_nodes.dart:620 KernelNodes.stackTraceCurrent" function stack_trace_current(self::KernelNodes)::Core.MethodInstance
     is_standalone(self) ||
         reject!(Unported("sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"), "KernelNodes.stackTraceCurrent")
     return nir_runtime_member(self.component, Runtime.StackTrace_current, "KernelNodes.stackTraceCurrent")
 end
+
+# dart:core's _TypeError._throwAsCheckError, the thrower of a failed as check
+# (src/runtime/common/errors_patch.jl): its method in the closed world, a runtime root (RUNTIME_ROOTS)
+@parity "dart2wasm/lib/kernel_nodes.dart:630 KernelNodes.throwAsCheckError" throw_as_check_error(self::KernelNodes)::Core.MethodInstance =
+    nir_runtime_member(self.component, Runtime._TypeError__throw_as_check_error, "KernelNodes.throwAsCheckError")
 
 # dart:core's _TypeError._throwWasmRefError, the thrower of a failed downcast of a dart:_wasm reference
 # (WasmAnyRef.toObject, a function reference's signature): only dart:_wasm's intrinsics call it

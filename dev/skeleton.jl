@@ -313,6 +313,21 @@ function skip_metadata(toks::Vector{Tok}, i::Int, file)::Int
     return i
 end
 
+# the `@pragma("<name>", ...)` annotations a declaration carries, by its file and the line it starts on
+# (the metadata skip_metadata passes, toks[a:i-1], the declaration at toks[i]): the reader's record of
+# dart's pragmas, which the runtime's roots read (runtime_roots)
+const PRAGMAS = Dict{Tuple{String,Int},Vector{String}}()
+function record_pragmas!(toks::Vector{Tok}, a::Int, i::Int, file)
+    i > a && i <= length(toks) || return
+    local names = String[]
+    for k in a:i-3
+        toks[k].text == "@" && toks[k+1].text == "pragma" && toks[k+2].text == "(" && k + 3 <= i - 1 &&
+            toks[k+3].kind == :string && push!(names, strip(toks[k+3].text, ['\'', '"']))
+    end
+    isempty(names) || (PRAGMAS[(String(file), toks[i].line)] = names)
+    return
+end
+
 # the first `(` at depth 0 in toks[a:b-1] that opens a parameter list (not a `Function(` type), or 0
 function param_open(toks::Vector{Tok}, a::Int, b::Int, file)::Int
     local j = a
@@ -347,8 +362,10 @@ function declarations(toks::Vector{Tok}, a::Int, b::Int, container::String, file
         i += 1
     end
     while i < b
+        local m0 = i
         i = skip_metadata(toks, i, file)
         i >= b && break
+        record_pragmas!(toks, m0, i, file)
         local e = statement_end(toks, i, b, file)
         local n0 = length(out)
         classify!(toks, i, e, container, file, out)
@@ -2049,7 +2066,79 @@ function packages_text(read_src::Function = src_text)::String
         local block = import_block(names, dots)
         text = replace(text, rx => s -> (local mm = match(rx, s); mm[1] * (isempty(block) ? "" : block * "\n") * mm[2]))
     end
+    occursin(ROOTS_RX, text) || error("skeleton: src/julia/packages.jl holds no generated block for the runtime's roots")
+    local roots = roots_block(read_src)
+    text = replace(text, ROOTS_RX => s -> (local mm = match(ROOTS_RX, s); mm[1] * roots * "\n" * mm[2]))
     return text
+end
+
+# ---- the runtime's roots ------------------------------------------------------------------------
+# dart roots every procedure carrying @pragma('wasm:entry-point') in every program
+# (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure).
+# The roots are read, never written by hand: each Runtime port (src/runtime) whose @parity anchor's
+# dart declaration carries the pragma, read by this reader at the pin (PRAGMAS), and each raiser of
+# Julia's own runtime (src/julia/runtime/rtutils.jl, a definition returning Union{}), which every Julia
+# process links (libjulia's JL_DLLEXPORT raisers). The block in packages.jl is RUNTIME_ROOTS.
+const ROOTS_RX = r"(# ---- the runtime's roots, written by dev/skeleton\.jl write ----\n)(?s:.*?)(# ---- end of the runtime's roots ----)"
+
+# the Julia names each top-level definition of `text` binds, with its @parity anchor
+function anchored_names(text::AbstractString, file::AbstractString)::Vector{Tuple{String,String}}
+    local out = Tuple{String,String}[]
+    for ex in Meta.parseall(text; filename = String(file)).args
+        local (a, _) = parity_of(ex)
+        isempty(a) && continue
+        for n in sort!(collect(defined_names!(Set{String}(), ex)))
+            push!(out, (n, a))
+        end
+    end
+    return out
+end
+
+# the Runtime ports whose anchored dart declaration carries @pragma('wasm:entry-point'); `pragma(path,
+# line)` answers a dart declaration's pragmas (the reader's, PRAGMAS, read from the pin)
+function entry_point_ports(ports::Vector{Tuple{String,String}}, pragma::Function)::Vector{String}
+    local out = String[]
+    for (n, a) in ports
+        local m = match(r"^(sdk/lib/[\w/]+\.dart):(\d+) ", a)
+        m === nothing && continue
+        "wasm:entry-point" in pragma(String(m[1]), parse(Int, m[2])) && push!(out, n)
+    end
+    return sort!(unique!(out))
+end
+
+# a dart declaration's pragmas, read by this reader from the pinned file
+function pin_pragmas(path::AbstractString, line::Int)::Vector{String}
+    any(k -> k[1] == path, keys(PRAGMAS)) || read_dart(joinpath(sdk(), path))
+    return get(PRAGMAS, (String(path), line), String[])
+end
+
+# the raisers of Julia's own runtime: each top-level definition of `text` declared to return Union{}
+function union_raisers(text::AbstractString, file::AbstractString)::Vector{String}
+    local out = String[]
+    local find(x) = begin
+        x isa Expr || return
+        if Meta.isexpr(x, :(::)) && length(x.args) == 2 && x.args[2] == :(Union{}) && Meta.isexpr(x.args[1], :call)
+            local f = x.args[1].args[1]
+            f isa Symbol && push!(out, string(f))
+            return
+        end
+        Meta.isexpr(x, :macrocall) || Meta.isexpr(x, :(=)) || Meta.isexpr(x, :function) || return
+        foreach(find, x.args)
+    end
+    foreach(find, Meta.parseall(text; filename = String(file)).args)
+    return sort!(unique!(out))
+end
+
+function roots_block(read_src::Function = src_text, pragma::Function = pin_pragmas)::String
+    local ports = Tuple{String,String}[]
+    for f in sort!(module_files()["Runtime"])
+        isfile(f) && append!(ports, anchored_names(read_src(f), f))
+    end
+    local rt = joinpath(ROOT, "src", "julia", "runtime", "rtutils.jl")
+    local items = String["    ((:Runtime,), :$n)," for n in entry_point_ports(ports, pragma)]
+    append!(items, ("    ((), :$n)," for n in union_raisers(read_src(rt), rt)))
+    return "@quarantine \"dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's raisers, which every Julia process links (julia/src/rtutils.c:189 jl_bounds_error)\" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (\n" *
+           join(items, "\n") * "\n)"
 end
 
 # ---- merging another lane's port --------------------------------------------------------------

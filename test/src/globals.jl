@@ -49,20 +49,30 @@ module GlobalsProgram
 global counter::Int = 0
 global scale::Float64 = 2.0
 read_counter(x::Int) = counter + x + round(Int, scale)
+same(x::Int) = x
 end
 
 @testset "globals.dart: a program's static fields" begin
-    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(GlobalsProgram.read_counter, (Int,), "globals"), "test"),
-        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    # translate()'s steps before the globals: the classes collected, as a binding's type reads them
+    local translator_of(f) = (t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f, (Int,), "globals"), "test"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions());
+        D._init_modules(t, nothing); collect(D.ClassInfoCollector(t)); t)
+    local t = translator_of(GlobalsProgram.read_counter)
     local g = D.DartGlobals(t)
     # the bindings the closed world reads, each counted once by its wasm type; the functions it
-    # calls (round, +) are declarations, never fields
+    # calls (round, +) are declarations, never fields; every world also holds the runtime's roots, whose
+    # bindings (a `nothing` a root compares with) a program of no binding of its own counts alike
+    # (each translator defines its own wasm types, so the counts compare by the types' text)
+    local base = Dict(string(k) => v for (k, v) in D.DartGlobals(translator_of(GlobalsProgram.same))._field_type_count)
     local tc = D.translate_type_of_field(t, GlobalRef(GlobalsProgram, :counter))
     local ts = D.translate_type_of_field(t, GlobalRef(GlobalsProgram, :scale))
-    @test tc != ts && g._field_type_count[tc] == 1 && g._field_type_count[ts] == 1 && sum(values(g._field_type_count)) == 2
-    # a definition reads the main module, which this translator, its modules not yet built, does
-    # not have: a located rejection, never a value
-    local e = try; D.get_definition_for_static_field(g, GlobalRef(GlobalsProgram, :counter)); nothing; catch x; x; end
+    local own = Dict(string(k) => v - get(base, string(k), 0) for (k, v) in g._field_type_count if v != get(base, string(k), 0))
+    @test tc != ts && own == Dict(string(tc) => 1, string(ts) => 1)
+    # a definition reads the main module, which a translator whose modules are not yet built does not
+    # have: a located rejection, never a value
+    local t0 = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(GlobalsProgram.read_counter, (Int,), "globals"), "test"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local e = try; D.get_definition_for_static_field(D.DartGlobals(Val(:_), t0), GlobalRef(GlobalsProgram, :counter)); nothing; catch x; x; end
     @test e isa WasmTarget.RejectionError
 end
 

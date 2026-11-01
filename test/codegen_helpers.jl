@@ -25,6 +25,10 @@ end
 translator_of(f, argtypes; standalone::Bool = false) = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "code_generator"), "test"),
     D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(; standalone = standalone))
 
+# the body of a world's entry, the program's own: every world also holds the runtime's roots
+# (src/julia/packages.jl RUNTIME_ROOTS), so a world has more bodies than the program's
+entry_body(world) = only(nb for nb in world if nb.ci.def === world.entry)
+
 # the code generator of the entry body of `f` at `argtypes`, its wasm signature `ins -> outs`
 function codegen_of(f, argtypes, ins, outs)
     local t = translator_of(f, argtypes)
@@ -96,7 +100,7 @@ function compile_one(f, argtypes)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)
     local mb = D.main_module(t)
-    local nb = only(t.component)
+    local nb = entry_body(t.component)
     local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
     local fb = B.define(mb.functions[], sig, "f")
     D.generate(D.get_member_code_generator(t, fb, nb.ci.def), B.body(fb), B.locals(fb), nothing)

@@ -31,7 +31,7 @@ g(x::Int) = x < 0 ? throw(DomainError(x)) : x
     @test anchor(D.embedder_string_from_char_code_array, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:62 stringFromCharCodeArray"
     @test anchor(D.embedder_string_from_ascii_bytes, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:71 stringFromAsciiBytes"
     # the target's patch: standalone or JS; the standalone StackTrace.current is ported, its method in
-    # every closed world that throws (an entry point the throw demands)
+    # every closed world (a runtime root)
     @test anchor(D.stack_trace_current, js) == "sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"
     local throwing = D.Translator(W.build_nir(W.check_subset(g, (Int,), "kernel_nodes"), "kernel_nodes"), data(), D.TranslatorOptions(; standalone = true))
     @test D.stack_trace_current(throwing).def === only(methods(W.Runtime.StackTrace_current))

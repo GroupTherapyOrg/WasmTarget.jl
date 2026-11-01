@@ -72,7 +72,7 @@ function compile_one(f, argtypes)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)
     local mb = D.main_module(t)
-    local nb = only(t.component)
+    local nb = only(nb for nb in t.component if nb.ci.def === t.component.entry)   # the program's body, beside the runtime's roots
     local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, T) for T in argtypes], IR.ValueType[D.translate_return_type(t, nb.ci.rettype)])
     local fb = B.define(mb.functions[], sig, "f")
     D.generate(D.get_member_code_generator(t, fb, nb.ci.def), B.body(fb), B.locals(fb), nothing)

@@ -559,8 +559,7 @@ the record classes of the arities it admits (src/julia/classes.jl TupleRecord), 
         # an open tuple type's values are the records of the arities it admits (TupleRecord): a tuple of
         # a concrete static type is boxed into its arity's record where it flows into an open slot
         for (c, id) in self.class_ids
-            local n = tuple_record_arity(c)
-            n === nothing || typeintersect(klass, NTuple{n,Any}) === Union{} || push!(ranges, Range(id, id))
+            open_tuple_holds(klass, c) && push!(ranges, Range(id, id))
         end
     elseif klass isa DataType && haskey(self.class_ids, klass)
         local transitive_implementors = _get_transitive_implementors(self, klass)

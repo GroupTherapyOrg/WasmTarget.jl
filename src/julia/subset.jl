@@ -164,92 +164,23 @@ end
     return nothing
 end
 
-"""
-    RUNTIME_ENTRY_POINTS
-
-The runtime's entry points, each `(module path, name, argument types, demand)`: a method the code
-generator calls where Julia raises, kept in the closed world beside the program whenever the program
-holds the IR form `demand` names (`_demanded`): `:throw`, a call of Julia's throw (dart2wasm's
-visitThrow calls errors_patch.dart's `_throwWithCurrentStackTrace`), `:checked_division`, a
-checked integer division or remainder, which raises DivideError at a zero divisor, `:bounds`, a
-read of a SimpleVector's element, a MemoryRef's index (memoryrefnew) or a tuple's field at an index only
-run time knows, which raises BoundsError out of
-range, `:undefined_field`, an allocation leaving a field undefined, a read of a field one may leave so
-or a read of a Memory's element (memoryrefget), each raising UndefRefError where the reference is
-undefined, and `:memorynew`, a Memory's allocation, which raises ArgumentError at a negative size and
-OutOfMemoryError past what can be allocated, and `:atomic_order`, an isdefined given an order, which
-raises ConcurrencyViolationError where the order does not fit the field, and `:egal`, a `===` whose
-operands the intrinsifier does not compare inline, which Julia's jl_egal compares, and `:methoderror`, a
-call of the builtin throw_methoderror, which raises MethodError. Each demanded one is queued for
-Julia's one trim inference beside the entry (`check_subset`), so its CodeInstance is in the closed
-world and its NirBody in the NIR.
-
-precedent(dart: `@pragma("wasm:entry-point")`, which TFA keeps; juliac: the ccallables the entry
-reaches, queued as roots beside main, as check_subset queues them, `_reached_ccallables`). Julia's
-differs: a method carries no pragma, so the roots are listed with the form that demands each, each
-checked to name one method when the package loads (check_runtime_entry_points).
-"""
-@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel takes its roots as a list of methods; a method carries no entry-point pragma, so the runtime's roots are listed with their argument types" Core.Type const RUNTIME_ENTRY_POINTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol,Tuple{Vararg{Type}},Symbol}}} = (
-    ((:Runtime,), :Error__throw_with_current_stack_trace, (Any,), :throw),
-    ((:Runtime,), :StackTrace_current, (), :throw),
-    ((), :throw_divide_error, (), :checked_division),
-    ((), :throw_bounds_error, (Any, Int), :bounds),
-    ((), :throw_undef_ref_error, (), :undefined_field),
-    ((), :throw_invalid_memory_size, (), :memorynew),
-    ((), :throw_out_of_memory, (), :memorynew),
-    ((), :throw_atomic_error, (String,), :atomic_order),
-    ((:Runtime,), :_TypeError__throw_as_check_error, (Any, Type), :typeassert),
-    ((), :jl_egal, (Any, Any), :egal),
-    ((), :throw_method_error, (Any, Tuple), :methoderror),
-)
+# The runtime's roots, RUNTIME_ROOTS (src/julia/packages.jl), dev/skeleton.jl's generated block: each
+# `(module path, name)`, every Runtime port whose anchored dart declaration carries
+# @pragma('wasm:entry-point') and every raiser of Julia's own runtime, rooted in every closed world as
+# dart's tree shaker roots every entry point in every program
+# (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure),
+# so the code generator finds each raise's method wherever it lowers one.
 
 # a statement operand's value: a GlobalRef's binding (nothing when unbound) or the operand itself, as
 # Julia's optimized IR writes a builtin callee or an allocation's type
-@quarantine "Julia's optimized IR names a builtin or a type by its value or its GlobalRef" Core.GlobalRef _ir_value(x) =
+@quarantine "Julia's optimized IR names a builtin or a type by its value or its GlobalRef, which argextype reads by the binding (julia/Compiler/src/optimize.jl:423 argextype)" Core.GlobalRef _ir_value(x) =
     x isa GlobalRef ? (isdefined(x.mod, x.name) ? getglobal(x.mod, x.name) : nothing) : x
 
 # whether a statement `Expr(:call, f, ...)` calls one of `fs`, a builtin or intrinsic
-@quarantine "a builtin call is read from the inferred CodeInfo's statements, as Julia writes them" Core.Builtin function _calls_builtin(st, fs::Tuple{Vararg{Core.Builtin}})::Bool
+@quarantine "a builtin call is read from the inferred CodeInfo's statements, as Julia's own passes recognize one (julia/Compiler/src/ssair/passes.jl:3 is_known_call)" Core.Builtin function _calls_builtin(st, fs::Tuple{Vararg{Core.Builtin}})::Bool
     Meta.isexpr(st, :call) && !isempty(st.args) || return false
     local v = _ir_value(st.args[1])
     return any(f -> v === f, fs)
-end
-
-# whether a statement `Expr(:new, T, fields...)` passes fewer values than T has fields, leaving a field
-# undefined, whose read raises UndefRefError
-@quarantine "Julia's optimized IR allocates with Expr(:new), its operand count the fields it initializes" Base.fieldcount function _leaves_field_undefined(st)::Bool
-    Meta.isexpr(st, :new) && !isempty(st.args) || return false
-    local T = _ir_value(st.args[1])
-    return T isa DataType && isconcretetype(T) && length(st.args) - 1 < fieldcount(T)
-end
-
-# whether a statement `Core.getfield(x, f)` of `src` reads a field an allocation may leave undefined,
-# the read code_generator.jl's _directGet null-tests and raises UndefRefError at: Julia's own test, its
-# codegen's field_may_be_null (classes.jl), of x's concrete type, x's type Julia's argextype as the trim
-# verifier reads an operand's, an argument's by `slottypes`; a field whose type admits `nothing` raises
-# where its set flag is false (classes.jl class_is_set_field), an inline bits union never
-@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null, its operand typed by Core.Compiler.argextype as the trim verifier types one" Core.Compiler.argextype function _reads_undefinable_field(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState}, slottypes::Vector{Any})::Bool
-    _calls_builtin(st, (Core.getfield,)) && length(st.args) >= 3 || return false
-    local T = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes, slottypes))
-    T isa DataType && isconcretetype(T) && fieldcount(T) > 0 || return false
-    local k = _ir_value(st.args[3])
-    k isa QuoteNode && (k = k.value)
-    local i = k isa Symbol ? something(Base.fieldindex(T, k, false), 0) : k isa Int ? k : 0
-    return field_may_be_null(T, i)
-end
-
-# whether a statement `Core.getfield(t, i)` of `src` reads a tuple's field at an index only run time
-# knows, the read the intrinsifier lowers with Julia's bounds check (intrinsics.jl's tuple_index arm,
-# BoundsError(t, i) through throw_bounds_error): t's type a Tuple by Julia's argextype, as the trim
-# verifier reads an operand's, and i no literal, or any Int index of a tuple type with no layout
-# (Tuple{String,Vararg{String}}), which Julia's codegen reads the same way (codegen.cpp:4563)
-@quarantine "julia/src/cgutils.cpp:2794 emit_getfield_unknownidx raises BoundsError at a tuple's run-time index, its operand typed by Core.Compiler.argextype" Core.Compiler.argextype function _reads_tuple_at_run_time_index(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState}, slottypes::Vector{Any})::Bool
-    _calls_builtin(st, (Core.getfield,)) && length(st.args) >= 3 || return false
-    local k = _ir_value(st.args[3])
-    (k isa QuoteNode || k isa Symbol) && return false
-    local T = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes, slottypes))
-    T isa DataType && T <: Tuple || return false
-    return !(k isa Int) || !isconcretetype(T)
 end
 
 # whether a statement `Core.:(===)(x, y)` of `src` compares operands Julia's jl_egal compares, the call
@@ -274,29 +205,11 @@ end
     return !(A === String && B === String)
 end
 
-# the IR forms a root's demand names, each a test of one statement of its CodeInfo: a call of a builtin
-# or intrinsic whose raise the root lowers, or an allocation leaving a field undefined and a read of
-# a field one may have left so
-@quarantine "julia/src/codegen.cpp:4064 emit_builtin_call lowers each builtin, calling the runtime where one raises; a runtime root is demanded by the builtin or intrinsic whose raise it lowers" Core.Intrinsics.checked_sdiv_int const RUNTIME_DEMANDS = Dict{Symbol,Function}(
-    :throw => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.throw,)),
-    :checked_division => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.Intrinsics.checked_sdiv_int, Core.Intrinsics.checked_srem_int,
-                                                                   Core.Intrinsics.checked_udiv_int, Core.Intrinsics.checked_urem_int)),
-    :bounds => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core._svec_ref, Core.memoryrefnew)) ||
-                                                 _reads_tuple_at_run_time_index(st, src, sptypes, slottypes),
-    :undefined_field => (st, src, sptypes, slottypes) -> _leaves_field_undefined(st) || _reads_undefinable_field(st, src, sptypes, slottypes) ||
-                                              _calls_builtin(st, (Core.memoryrefget,)),
-    :memorynew => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.memorynew,)),
-    :atomic_order => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.isdefined,)) && length(st.args) == 4,
-    :typeassert => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.typeassert,)),
-    :egal => _compares_by_egal,
-    :methoderror => (st, src, sptypes, slottypes) -> _calls_builtin(st, (Core.throw_methoderror,)),
-)
-
 # whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts, each body read
 # with its method instance's static parameter types, as the trim verifier reads it, and its arguments'
 # types its specialization's, as Julia's codegen types an argument (julia/src/codegen.cpp's
 # emit_function, jl_nth_slot_type of the specTypes): a body from Julia's cache carries no slottypes
-@quarantine "a demanded form is read from the inferred CodeInfo's statements, as Julia writes them" Core.CodeInfo function _demanded(codeinfos::Vector{Any}, holds::Function)::Bool
+@quarantine "a demanded form is read from the inferred CodeInfo's statements, each body's static parameters its method instance's (julia/Compiler/src/inferencestate.jl:689 sptypes_from_meth_instance)" Core.CodeInfo function _demanded(codeinfos::Vector{Any}, holds::Function)::Bool
     for i in 1:length(codeinfos) - 1
         local item = codeinfos[i]
         local src = codeinfos[i + 1]
@@ -312,8 +225,8 @@ end
     return false
 end
 
-# an entry point's function, resolved in `mod` along its module path, or nothing
-@quarantine "an entry point names its function by module path and name, resolved where the package loaded" Core.getglobal function _runtime_entry_function(mod::Module, path::Tuple{Vararg{Symbol}}, name::Symbol)::Union{Function,Nothing}
+# a root's function, resolved in `mod` along its module path, or nothing
+@quarantine "a root names its function by module path and name, resolved where the package loaded, as dart's visitor reads each annotated procedure (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Core.getglobal function _runtime_entry_function(mod::Module, path::Tuple{Vararg{Symbol}}, name::Symbol)::Union{Function,Nothing}
     local m = mod
     for n in path
         isdefined(m, n) || return nothing
@@ -326,34 +239,32 @@ end
 end
 
 """
-    check_runtime_entry_points(mod, entries) -> Int
+    check_runtime_roots(mod, roots) -> Int
 
-The runtime roots' check: each of `entries` (RUNTIME_ENTRY_POINTS' form) names a function of `mod`
-with exactly one method for its argument types, so `check_subset` can queue it; throws a
-`ConstructionViolation` naming the first that does not.
+The runtime roots' check: each of `roots` (RUNTIME_ROOTS' form) names a function of `mod` with exactly
+one method, its signature the root `check_subset` queues; throws a `ConstructionViolation` naming the
+first that does not.
 
 precedent(juliac: an entrypoint with no matching method fails the build, jl_add_ccallable_entrypoints
-and Base.Experimental.entrypoint). Julia's differs: the list is data, so the load resolves it.
+and Base.Experimental.entrypoint). Julia's differs: the roots are data, so the load resolves them.
 """
-@quarantine "the runtime roots are resolved when the package loads, by Julia's method table" Base.methods function check_runtime_entry_points(mod::Module, entries)::Int
-    for (path, name, argtypes, demand) in entries
-        haskey(RUNTIME_DEMANDS, demand) || throw(ConstructionViolation("RUNTIME_ENTRY_POINTS", "$(join((path..., name), '.')) is demanded by $demand, no form RUNTIME_DEMANDS names"))
+@quarantine "the runtime roots are resolved when the package loads, by Julia's method table, as dart's visitor resolves each annotated procedure (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Base.methods function check_runtime_roots(mod::Module, roots)::Int
+    for (path, name) in roots
         local f = _runtime_entry_function(mod, path, name)
-        f === nothing && throw(ConstructionViolation("RUNTIME_ENTRY_POINTS", "$(join((path..., name), '.')) names no function"))
-        local n = length(methods(f, Tuple{argtypes...}))
-        n == 1 || throw(ConstructionViolation("RUNTIME_ENTRY_POINTS", "$(join((path..., name), '.'))$argtypes matches $n methods, not one"))
+        f === nothing && throw(ConstructionViolation("RUNTIME_ROOTS", "$(join((path..., name), '.')) names no function"))
+        local n = length(methods(f))
+        n == 1 || throw(ConstructionViolation("RUNTIME_ROOTS", "$(join((path..., name), '.')) has $n methods, not one"))
     end
     return 0
 end
 
-# the MethodInstance of each runtime entry point `codeinfos` demands at `world`, its compileable
-# specialization, as the entry's
-@quarantine "a runtime root is the specialization Julia compiles for it, as juliac's entrypoint takes it" Core.Typeof function _runtime_roots(codeinfos::Vector{Any}, world::UInt)::Vector{Any}
+# the MethodInstance of each runtime root at `world`, its one method's compileable specialization, as
+# the entry's
+@quarantine "a runtime root is the specialization Julia compiles for it, as juliac's entrypoint takes it, and every one is a root, as dart's visitor roots each (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Base.methods function _runtime_roots(world::UInt)::Vector{Any}
     local out = Any[]
-    for (path, name, argtypes, demand) in RUNTIME_ENTRY_POINTS
-        _demanded(codeinfos, RUNTIME_DEMANDS[demand]) || continue
+    for (path, name) in RUNTIME_ROOTS
         local f = something(_runtime_entry_function(@__MODULE__, path, name))
-        push!(out, something(_entry_specialization(Tuple{Core.Typeof(f), argtypes...}, world)))
+        push!(out, something(_entry_specialization(only(methods(f)).sig, world)))
     end
     return out
 end
@@ -434,7 +345,7 @@ holding Julia's own record, its statement and its stack frames.
 
 formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and judged, none the entry never reaches
 """
-@quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed" Base.signature_type function check_subset(@nospecialize(f), argtypes::Tuple, at::String)::ClosedWorld
+@quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed (julia/Compiler/src/verifytrim.jl:300 get_verify_typeinf_trim), its roots the entry and the runtime's, as juliac adds each entrypoint (julia/src/gf.c:3910 jl_add_entrypoint)" Base.signature_type function check_subset(@nospecialize(f), argtypes::Tuple, at::String)::ClosedWorld
     local sig = Base.signature_type(f, argtypes)
     local world = Base.get_world_counter()
     local mi = _entry_specialization(sig, world)
@@ -450,16 +361,18 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
                                          TrimEntryText("$sig: Julia gives the call no compileable specialization"))]), at)
     end
     local entry = mi
-    local roots = Any[]
-    local codeinfos, notes, parents = _infer_verified(Any[entry], world, at)
-    # the runtime's entry points the program demands, queued beside the entry, until a root's own body
-    # demands no other (a thrower throws: each pass adds roots, of which there are finitely many)
-    while true
-        local demanded = _runtime_roots(codeinfos, world)
-        length(demanded) == length(roots) && break
-        roots = demanded
-        # the roots queued before the entry, so Julia's inference returns the program's bodies first and
-        # the closed world keeps program order (its classes met from the entry's callable on)
+    # the runtime's roots, every one queued beside the entry (RUNTIME_ROOTS), before it, so Julia's
+    # inference returns the program's bodies first and the closed world keeps program order (its classes
+    # met from the entry's callable on)
+    local roots = _runtime_roots(world)
+    local codeinfos, notes, parents = _infer_verified(Any[roots; entry], world, at)
+    # jl_egal (src/julia/runtime/rtutils.jl), the runtime function the intrinsifier's === calls where it
+    # compares no inline (src/intrinsics.jl, the identical arm), queued only where a body holds such a ===
+    # (`_compares_by_egal`): the intrinsic that calls it demands it, as dart's intrinsifier references its
+    # runtime helper only from the call it lowers (pkg/dart2wasm/lib/intrinsics.dart:2974 MemberIntrinsic.identical),
+    # so two values of one primitive class, compared inline, keep it out of the world
+    if _demanded(codeinfos, _compares_by_egal)
+        push!(roots, something(_entry_specialization(only(methods(jl_egal)).sig, world)))
         (codeinfos, notes, parents) = _infer_verified(Any[roots; entry], world, at)
     end
     # the ccallables the entry reaches, queued beside it as juliac queues each, so the verifier judges
@@ -479,11 +392,11 @@ end
 # the typestate's assertion, run when the package loads: ClosedWorld and its token each have one
 # constructor method, both in this file, ClosedWorld's taking the token (a construction, L220); and
 # its next state, src/julia/nir.jl's NirWorld, which build_nir makes from a ClosedWorld, the same
-@quarantine "the typestate's assertion, run when the package loads" Base.Val construction_check(::Val{:ClosedWorld})::Int =
+@quarantine "the typestate's assertion, run when the package loads, its runtime roots each resolved to one method as juliac resolves an entrypoint (julia/src/gf.c:3910 jl_add_entrypoint)" Base.Val construction_check(::Val{:ClosedWorld})::Int =
     check_sole_constructor(ClosedWorld, _SubsetToken, @__FILE__) +
     check_sole_constructor(NirWorld, _NirToken, joinpath(@__DIR__, "nir.jl")) +
-    # a ClosedWorld holds the runtime roots its program demands: each one names one method
-    check_runtime_entry_points(@__MODULE__, RUNTIME_ENTRY_POINTS)
+    # a ClosedWorld holds every runtime root: each one names one method
+    check_runtime_roots(@__MODULE__, RUNTIME_ROOTS)
 
 # no method of WasmTarget but check_subset names the token or makes either: read in every method's
 # lowered code when the package loads. A stopgap, not a construction (L224): Julia has no module

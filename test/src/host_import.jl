@@ -99,7 +99,8 @@ end
     # julia_to_native's one jl_value_t*: an Int and a String passed to one foreign function share its
     # import, (anyref) -> i32; a dart:_wasm class crosses as its nullable wasm type
     local hw = world_of(Cases.both, (Int,))
-    local imps = [W.nir_foreign_import(b, st) for b in hw for st in b.stmts if st isa W.NirForeignCall]
+    # the program's two calls of Array.isArray (the runtime's roots' own foreign calls aside)
+    local imps = filter(i -> i !== nothing && i.lib == "Array", [W.nir_foreign_import(b, st) for b in hw for st in b.stmts if st isa W.NirForeignCall])
     @test length(imps) == 2 && all(i -> i.params == Type[Any], imps)
     @test W.nir_foreign_param_type(Union{Nothing,W.WasmArray{W.WasmI16}}) === Union{Nothing,W.WasmArray{W.WasmI16}}
     @test W.nir_foreign_param_type(W.WasmExternRef) === Union{Nothing,W.WasmExternRef} && W.nir_foreign_param_type(Int) === Any

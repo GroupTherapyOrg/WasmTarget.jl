@@ -193,7 +193,7 @@ end
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)
-    local mi = only(nb.ci.def for nb in t.component)
+    local mi = t.component.entry
     local fb = B.define(D.main_module(t).functions[], B.define_function(D.main_module(t).types[], IR.ValueType[], IR.ValueType[]), "probe")
     local g = D.get_inlinable_member_code_generator(t, fb.type, mi)
     g.b[] = B.body(fb)

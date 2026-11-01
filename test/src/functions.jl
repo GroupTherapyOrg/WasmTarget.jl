@@ -95,8 +95,10 @@ end
     @test st.inputs == [nn, top] && isempty(st.outputs)
     local mt = W.make_dynamic_dispatcher_signature(t, W.MethodCallShape(:f, 0, 2, [:k]))
     @test mt.inputs == [top, top, top, top] && mt.outputs == [top]
-    # a type argument is a Type, which this program's classes lack: a located rejection
-    @test_throws WT.RejectionError W.make_dynamic_dispatcher_signature(t, W.MethodCallShape(:f, 1, 0, Symbol[]))
+    # a type argument is a Type, a class of every world: the runtime's roots take one
+    # (_TypeError._throwAsCheckError's tested type), so its value type is the type argument's input
+    local ta = W.make_dynamic_dispatcher_signature(t, W.MethodCallShape(:f, 1, 0, Symbol[]))
+    @test ta.inputs == [top, W.translate_type(t, Type)] && ta.outputs == [top]
     @test isempty(W.make_dynamic_dispatcher_signature(t, W.MethodCallShape(:setindex!, 0, 2, Symbol[])).outputs)
     @test W.make_dynamic_dispatcher_signature(t, W.GetterCallShape(:y)) === g     # one type per signature
 

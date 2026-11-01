@@ -89,7 +89,10 @@ end
     local cs = W.closed_world_classes(nw, "classes")
     @test Base.RefValue{Int64} in cs && Int64 in cs
     # a field builtin's field name and an intrinsic callee name what the call acts on: no class of theirs
-    @test !(Symbol in cs) && !(Core.IntrinsicFunction in cs) && !(typeof(Core.getfield) in cs)
+    # beyond the runtime's roots', which every closed world holds (a TypeError's Symbol)
+    local root_classes = W.closed_world_classes(W.build_nir(W.check_subset(ClassesCases.f_arith, (Int, Int), "classes"), "classes"), "classes")
+    local own = setdiff(cs, root_classes)
+    @test !(Symbol in own) && !(Core.IntrinsicFunction in cs) && !(typeof(Core.getfield) in cs)
     for b in nw, st in b.stmts
         st isa W.NirCall && W.nir_callee(st) === Core.getfield || continue
         local vals = W.nir_value_operands(st)                       # the object, never the field's name

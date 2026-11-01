@@ -21,7 +21,7 @@ end
 """
 The current stack trace (dart's `@pragma("wasm:entry-point") @pragma('wasm:never-inline') static
 StackTrace get current`): the embedder's, held in an _EmbedderStackTrace. Never inlined, as dart's
-pragma says (Julia's @noinline), and kept in every closed world that throws (RUNTIME_ENTRY_POINTS),
+pragma says (Julia's @noinline), and kept in every closed world (RUNTIME_ROOTS),
 as dart's entry-point pragma keeps it.
 """
 @parity "sdk/lib/_internal/wasm/standalone/stack_trace_patch.dart:15 StackTrace.current" @noinline function StackTrace_current()::_EmbedderStackTrace

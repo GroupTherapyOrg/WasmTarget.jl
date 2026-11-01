@@ -7,13 +7,27 @@
 # src/julia names its files use, so no lane edits them by hand (L210 refuses a block that differs).
 
 # dart's runtime library, the @patch libraries a program is compiled with (RUNTIME_FILES), its ports
-# Julia methods compiled into every closed world (src/julia/subset.jl RUNTIME_ENTRY_POINTS)
+# Julia methods compiled into every closed world (RUNTIME_ROOTS, below)
 @quarantine "Julia has no per-file namespace; dart's patch libraries, the program's runtime, are a module" Core.Module module Runtime
 # ---- the src/julia names Runtime's files use, written by dev/skeleton.jl write ----
 import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..wasm_array_new, ..wasm_array_write!,
        ..wasm_string_codeunit
 # ---- end of Runtime's src/julia names ----
 end
+# ---- the runtime's roots, written by dev/skeleton.jl write ----
+@quarantine "dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's raisers, which every Julia process links (julia/src/rtutils.c:189 jl_bounds_error)" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (
+    ((:Runtime,), :Error__throw_with_current_stack_trace),
+    ((:Runtime,), :StackTrace_current),
+    ((:Runtime,), :_TypeError__throw_as_check_error),
+    ((), :throw_atomic_error),
+    ((), :throw_bounds_error),
+    ((), :throw_divide_error),
+    ((), :throw_invalid_memory_size),
+    ((), :throw_method_error),
+    ((), :throw_out_of_memory),
+    ((), :throw_undef_ref_error),
+)
+# ---- end of the runtime's roots ----
 
 @quarantine "Julia has no per-file namespace; LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), is a module" Core.Module module LLVM
 # ---- the src/julia names LLVM's files use, written by dev/skeleton.jl write ----
@@ -75,8 +89,8 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..nir_foreign_import, ..nir_foreign_operands, ..nir_invoke_target, ..nir_method_nargs,
        ..nir_operands, ..nir_parameter_types, ..nir_runtime_member, ..nir_tuple_type,
        ..nir_used_statements, ..nir_value_operands, ..nir_value_type, ..nir_vararg_call_tuple,
-       ..nir_vararg_packing, ..no_counterpart_rejection, ..reject!, ..run_wasm_opt,
-       ..throw_atomic_error, ..throw_bounds_error, ..throw_divide_error,
+       ..nir_vararg_packing, ..no_counterpart_rejection, ..open_tuple_holds, ..reject!,
+       ..run_wasm_opt, ..throw_atomic_error, ..throw_bounds_error, ..throw_divide_error,
        ..throw_invalid_memory_size, ..throw_method_error, ..throw_out_of_memory,
        ..throw_undef_ref_error, ..tuple_record_arity, ..tuple_record_class, ..uf_add!, ..uf_find!,
        ..uf_union!, ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!, ..wasm_egal,

@@ -99,6 +99,10 @@ end
             # stops at the first piece not yet given here (a constant, a parameter, an allocation)
             local r2 = rejection(() -> D.translate_statement(g, st, nothing))
             @test r2 isa W.RejectionError && !occursin("voidMarker", string(r2.rejection))
+        elseif st isa Union{W.NirUnreachable, W.NirPi}
+            # a trap and a narrowing are emitted into the builder `generate` gives (the runtime's roots,
+            # in every world, hold both)
+            @test r.rejection isa W.Unported && occursin("AstCodeGenerator.b", r.rejection.anchor)
         elseif st isa W.NirCFunction
             @test r.rejection isa W.Unquarantined && startswith(r.rejection.row, "src/functions.jl getFunction") && occursin("1.F", r.rejection.row)
         elseif st isa Union{W.NirGoto, W.NirGotoIfNot, W.NirPhi}
@@ -127,7 +131,7 @@ end
 
 @testset "code_generator.dart: a field read and an allocation" begin
     local t = translator_of(FieldGenCases.getb, (FieldGenCases.P,))
-    local body = only(t.component)
+    local body = entry_body(t.component)
     local g = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
     # getfield(p, :b) is the field read, routed to visitInstanceGet; it reaches the class table, which
     # no collect has filled here: a located rejection, the field found
@@ -140,7 +144,7 @@ end
     @test rejection(() -> D.visit_instance_get(g, dyn, IR.NumType_f64)).rejection isa W.Unquarantined
     # Expr(:new): the allocation, its class the type operand's value
     local t2 = translator_of(FieldGenCases.mk, (Int32,))
-    local b2 = only(t2.component)
+    local b2 = entry_body(t2.component)
     local g2 = D.SynchronousProcedureCodeGenerator(Val(:_), t2, IR.FunctionType(IR.ValueType[], IR.ValueType[]), b2.ci.def, b2)
     local nw = b2.stmts[findfirst(s -> s isa W.NirNew, b2.stmts)]::W.NirNew
     @test D.generate_constructor_intrinsic(g2.intrinsifier[], nw) === nothing
@@ -167,7 +171,7 @@ end
 
 @testset "code_generator.dart: a field write" begin
     local t = translator_of(SetGenCases.seta, (SetGenCases.M, Int32))
-    local body = only(t.component)
+    local body = entry_body(t.component)
     local g = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
     local sf = body.stmts[findfirst(s -> s isa W.NirCall && W.nir_callee(s) === Core.setfield!, body.stmts)]::W.NirCall
     # setfield! routes to visitInstanceSet, which reaches the class table no collect filled here
@@ -412,7 +416,7 @@ end
     end
     # a field the class layout does not hold is a valid program outside the representation (A44S1)
     local t = translator_of(FieldGenCases.getb, (FieldGenCases.P,))
-    local body = only(t.component)
+    local body = entry_body(t.component)
     local gb = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
     local gf = body.stmts[findfirst(s -> s isa W.NirCall, body.stmts)]::W.NirCall
     local nofield = W.NirCall(W.NirValue[gf.args[1], gf.args[2], W.NirConst(Core.Const(:nope))])

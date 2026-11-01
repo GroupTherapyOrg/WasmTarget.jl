@@ -522,7 +522,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv", "julia/src/ccall",
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types", "julia/base/hashing", "julia/base/expr", "julia/src/init", "julia/src/precompile", "julia/Compiler/src/effects",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3",
-    "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation", "julia/src/method", "julia/Compiler/src/ssair/show",
+    "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation", "julia/src/method", "julia/Compiler/src/ssair/show", "julia/Compiler/src/verifytrim", "julia/src/gf", "julia/src/subtype",
 )
 
 """

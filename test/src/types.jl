@@ -139,9 +139,11 @@ end
     local offsets = [val(e) for e in val(rtt.type_row_displacement_offsets[]).entries]
     for (s, sid) in ids, (c, cid) in ids
         (s === Any || Base.has_free_typevars(s) || Base.has_free_typevars(c)) && continue
-        # a rule exactly where Julia says the class is a proper subtype of the superclass
+        # a rule exactly where Julia says the class is a proper subtype of the superclass; an open tuple
+        # type's values are its arities' records, a concrete tuple boxed into one (the record model,
+        # src/julia/classes.jl open_tuple_holds), as the class-id ranges hold them
         local has_rule = haskey(super_to_sub, sid) && haskey(super_to_sub[sid], cid)
-        @test has_rule == (c !== s && c <: s)
+        @test has_rule == (s <: Tuple && !isconcretetype(s) ? W.open_tuple_holds(s, c) : c !== s && c <: s)
         # and the displaced row finds it: the superclass's offset plus the class id holds the superclass
         has_rule && @test table[offsets[sid + 1] + cid + 1] == sid
     end

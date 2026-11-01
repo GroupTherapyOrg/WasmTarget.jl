@@ -149,12 +149,12 @@ held(x::Int) = read_ref(Ref{Integer}(x)) isa Int
 as_int(r::Base.RefValue{Any}) = (r[]::Int64) + 1
 end
 
-@testset "check_subset: a read of a field an allocation may leave undefined demands the runtime's UndefRefError raise" begin
+@testset "check_subset: a read of a field an allocation may leave undefined finds the runtime's UndefRefError raise, a root of every closed world" begin
     @test Core.Compiler.datatype_min_ninitialized(Base.RefValue{Integer}) == 0
     local cw = WasmTarget.check_subset(UndefReadCases.held, (Int,), "subset")
     local nw = WasmTarget.build_nir(cw, "subset")
     @test any(nb -> nb.ci.def.def.name === :throw_undef_ref_error, nw)
-    # a read of the entry's argument demands it too, the argument typed by its specialization
+    # and so does a read of the entry's argument
     @test any(nb -> nb.ci.def.def.name === :throw_undef_ref_error, WasmTarget.build_nir(WasmTarget.check_subset(UndefReadCases.as_int, (Base.RefValue{Any},), "subset"), "subset"))
     # the read compiles, its null test calling the raise, and answers as native Julia
     local bytes = WasmTarget.compile(UndefReadCases.held, (Int,); optimize = false)

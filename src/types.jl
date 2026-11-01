@@ -850,9 +850,7 @@ operand is returned at the checked type.
     self.check_arguments && reject!(Internal("$at: a Julia class has no type arguments to check"), at)
     WasmBuilder.local_get(b, b.locals[1])
     instantiate_constant(self.translator.constants[], b, NirConst(Core.Const(self.tested_against_type)), non_nullable_type_type(self.translator.types[]))
-    # KernelNodes.throwAsCheckError: the runtime's method in the closed world, kept wherever a
-    # typeassert is (RUNTIME_ENTRY_POINTS)
-    call_reference(self.translator, nir_runtime_member(self.translator.component, Runtime._TypeError__throw_as_check_error, at), b)
+    call_reference(self.translator, throw_as_check_error(self.translator), b)
     WasmBuilder.unreachable(b)
     WasmBuilder.var"end"(b)   # asCheckBlock
     WasmBuilder.local_get(b, b.locals[1])
@@ -915,15 +913,26 @@ see, being an instance with its parameters bound, so the list is empty.
         # algorithm.
         (superclass === nothing || superclass === Any) && continue
         # dart's translator.subtypes.getSubtypesOf(superclass), less the class itself: the classes
-        # whose supertype chain reaches it
+        # whose supertype chain reaches it; a Type{X} class (X no type variable) is below exactly X's
+        # kind, as Julia's subtype decides it (julia/src/subtype.c:1419 subtype's `jl_is_type_type(x)`
+        # arm: `jl_typeof(tp0) == yd`), never along its own chain
         for sub_info in classes
             local subtype = sub_info.cls
             (subtype === nothing || subtype === superclass) && continue
-            local c = class_superclass(subtype)
-            while c !== nothing && c !== superclass
-                c = class_superclass(c)
+            if superclass <: Tuple && !isconcretetype(superclass)
+                # an open tuple type's values are the records of the arities it admits, a concrete
+                # tuple boxed into its record in an open slot (src/julia/classes.jl open_tuple_holds),
+                # as getConcreteClassIdRange holds them
+                open_tuple_holds(superclass, subtype) || continue
+            elseif Base.isType(subtype) && !(subtype.parameters[1] isa TypeVar)
+                typeof(subtype.parameters[1]) === superclass || continue
+            else
+                local c = class_superclass(subtype)
+                while c !== nothing && c !== superclass
+                    c = class_superclass(c)
+                end
+                c === nothing && continue
             end
-            c === nothing && continue
             _add(types(self).interface_type_environment, subtype)
             # the superclass's type arguments as the subclass sees them: none, a Julia class's
             # parameters being bound

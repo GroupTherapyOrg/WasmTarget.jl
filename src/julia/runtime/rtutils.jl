@@ -3,7 +3,7 @@
 # runtime's thrower (src/runtime/common/errors_patch.jl Error._throwWithCurrentStackTrace). They have
 # no dart counterpart: dart raises its own errors in dart code (boxed_int.dart's
 # `throw IntegerDivisionByZeroException()`), where Julia's are raised by its runtime, so they are
-# quarantined, each naming Julia's exception, and kept in every closed world (RUNTIME_ENTRY_POINTS).
+# quarantined, each naming Julia's exception, and kept in every closed world (RUNTIME_ROOTS).
 
 # jl_diverror_exception, raised by checked_sdiv_int and its kin at a zero divisor (runtime_intrinsics.c)
 @quarantine "Julia's runtime raises DivideError where a checked integer division fails" Core.DivideError @noinline throw_divide_error()::Union{} =
@@ -47,7 +47,7 @@
 # compare its operands inline (julia/src/codegen.cpp:3379 emit_box_compare: the pointers, then the
 # type tags, then jl_egal__unboxed): jl_egal_ (julia.h:1885), its pointer and tag tests and
 # jl_egal__unboxed_'s switch over the value's class, the intrinsifier's egal arm (wasm_egal), each
-# class's arm builtins.c's own. Kept in the closed world wherever such a `===` is (RUNTIME_ENTRY_POINTS)
+# class's arm builtins.c's own. Kept in the closed world wherever such a `===` is (check_subset's demand of it)
 @quarantine "julia/src/julia.h:1885 jl_egal_ compares two values by their pointers, their type tags and then jl_egal__unboxed_'s arm for their class" Core.Bool @noinline jl_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool =
     wasm_egal(a, b)
 
@@ -65,7 +65,7 @@ Natively Julia's `===`.
     nir_runtime_member(world, f) -> Core.MethodInstance
 
 The MethodInstance of the runtime's function `f` in the closed world `world`: an entry point's
-(RUNTIME_ENTRY_POINTS keeps each) or a callee one reaches, its one specialization there, the method
+(RUNTIME_ROOTS keeps each) or a callee one reaches, its one specialization there, the method
 dart2wasm's KernelNodes names by `index.getProcedure`. None, or more than one, is WasmTarget's own
 defect.
 """

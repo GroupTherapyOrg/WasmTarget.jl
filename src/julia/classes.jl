@@ -117,6 +117,15 @@ end
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses keys each class by its shape, a record's arity its parameter here" Core.DataType tuple_record_arity(@nospecialize(c))::Union{Int,Nothing} =
     c === Tuple{} ? 0 : c isa DataType && c <: TupleRecord && c.parameters[1] isa Int ? c.parameters[1] : nothing
 
+# whether the class `c` holds values of the open tuple type `T` (a Tuple type no concrete class is):
+# the record classes of the arities `T` admits, a tuple of a concrete type boxed into its arity's record
+# where it flows into an open slot (TupleRecord), never a concrete tuple class itself; the one rule the
+# class-id ranges (getConcreteClassIdRange) and the type rules (_buildTypeRules) read
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: a value of a record type is an instance of the record class of its shape, a tuple's arity here" Base.typeintersect function open_tuple_holds(@nospecialize(T), @nospecialize(c))::Bool
+    local n = tuple_record_arity(c)
+    return n !== nothing && typeintersect(T, NTuple{n,Any}) !== Union{}
+end
+
 # A constant's object graph met by the walk (dev/formal/ValueClasses.tla's MeetObject): the value's
 # class, then every value it holds that constants.jl instantiates in its place, a field's value, an
 # svec's or a memory's element, a type value's own fields (its kind's layout, _kind_instance_fields), each

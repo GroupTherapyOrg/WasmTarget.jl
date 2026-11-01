@@ -30,7 +30,7 @@ end
 # lowering declares each call site's callee (src/julia/runtime/rtutils.jl nir_foreign_import,
 # FunctionCollector.getFunction). The two Julia records sit in the closed world, Julia's own keyword `component`. No method is a wasm:weak-export
 # (Julia's exports are all strong) or a wasm:entry-point (the runtime's roots are
-# RUNTIME_ENTRY_POINTS, src/julia/subset.jl), and no other pragma has a Julia declaration. coreTypes is
+# RUNTIME_ROOTS, read from the ports' dart pragmas), and no other pragma has a Julia declaration. coreTypes is
 # dropped (the CoreTypes row)
 @parity "dart2wasm/lib/util.dart:31 getPragma" function get_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}, name::String; default_value::Union{String,Bool,Nothing} = nothing,
         component::Union{NirWorld,Nothing} = nothing)::Union{String,Bool,Nothing}
@@ -98,10 +98,10 @@ end
     get_pragma(member, "wasm:pure-function"; default_value = true, component = component) == true
 
 # dart adds an annotation to a Kernel node in its transforms; a Julia method's declarations are fixed
-# by its source, and a runtime root is kept by RUNTIME_ENTRY_POINTS (src/julia/subset.jl), so no
+# by its source, and a runtime root is kept by RUNTIME_ROOTS (src/julia/packages.jl), so no
 # transform adds one. coreTypes is dropped (the CoreTypes row)
 @parity "dart2wasm/lib/util.dart:154 addWasmEntryPointPragma" add_wasm_entry_point_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module})::Union{} =
-    reject!(Internal("dart2wasm/lib/util.dart:154 addWasmEntryPointPragma: an entry-point pragma added to $node; a Julia method's declarations are its source's, a runtime root kept by RUNTIME_ENTRY_POINTS"), "add_wasm_entry_point_pragma")
+    reject!(Internal("dart2wasm/lib/util.dart:154 addWasmEntryPointPragma: an entry-point pragma added to $node; a Julia method's declarations are its source's, a runtime root kept by RUNTIME_ROOTS"), "add_wasm_entry_point_pragma")
 
 @parity "dart2wasm/lib/util.dart:157 addPragma" add_pragma(node::Union{Core.MethodInstance,ClassField,GlobalRef,DataType,Module}, pragma_name::String; value::Union{Nothing,Union{NirConst,Dart2Wasm.DummyValueConstant}} = nothing)::Union{} =
     reject!(Internal("dart2wasm/lib/util.dart:157 addPragma: the pragma $pragma_name added to $node; a Julia method's declarations are its source's, which no transform adds to"), "add_pragma")
