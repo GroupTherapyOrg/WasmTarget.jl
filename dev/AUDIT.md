@@ -6015,3 +6015,110 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A67E1 is open
 A66S1's row names its open export half. By owner: lead holds A67E1 (dev/check.sh), A67E2 and A67S2
 (src/julia/parity.jl); wt3-runtime holds A67S1 (src/julia/runtime/rtutils.jl) and A67S3 (src/functions.jl);
 wt3-cgstubs2 holds A67S4 (src/code_generator.jl).
+
+## 2026-11-01 — audited through cad03f24 (0d69d3c2..cad03f24: dart's embedder imports in the runner, the landing compiling no dart case, Julia's Memory builtins, the shards split by instructions, an #undef field's set flag, a sixth shard, a constant Vector as its Array{T,1}, === on DataTypes)
+
+The sixty-eighth audit, beside the work, covers the 8 commits of 0d69d3c2..cad03f24 that are not audit entry 67
+(0ddfa633): bcdd3cc1, bbc1ded7, 7a1fc91c, 25f5d125, 779986b2, 0db086ee, 7023257b and cad03f24, read here, under Dale's
+R1 and R2 as standing sections. Every finding rests on one exact command, quoted. Standing items. src changes in 8
+files (`git diff --stat 0d69d3c2..origin/wt2 -- src | tail -1` gives `8 files changed, 645 insertions(+), 78
+deletions(-)`); two exemptions land (`git diff 0d69d3c2..origin/wt2 -- src | grep -nE '^\+.*(Reshaped:|Fields with no
+Julia counterpart)'` gives `Reshaped: data#isSet` and `Reshaped: element_type`, each naming how Julia differs). The debt
+list reads 400 at both ends (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .` gives 400). Nothing in the range
+touches a file of an open finding of audit 67 (`git diff --stat 0d69d3c2..origin/wt2 -- src/functions.jl
+src/translator.jl src/julia/parity.jl dev/quarantine_unpinned.txt` lists none of them), so A67E2, A67S1 (now
+rtutils.jl:151), A67S2, A67S3, A67S4, A66E5 and A66S1's export half are open as audit 67 left them; A67E1 is open and
+worse (A68E2). Findings A68E1, A68E2, A68E3, A68S1, A68S2 and A68S3.
+
+Area: builder — no change under src/wasm_builder. 7a1fc91c ports readIntArray (intrinsics.dart:3490, read at the pin:
+`w.ValueType readIntArray(StaticInvocation node, {required bool unsigned})`): a packed signed element array.get_s, any
+other packed array.get_u, every other array.get. The Memory arms emit only builder instructions over typed locals.
+
+stopgap in disguise: none new.
+precedent: dart's readIntArray, by line.
+
+Area: collection and planning — 779986b2 makes field_may_be_null (classes.jl:282) the one test, ported from
+cgutils.cpp:2768 (read at JULIA_PIN 6d172b02: the n_uninitialized start and `jl_field_isptr || jl_type_hasptr`; its
+`strct.constant` arm is isdefined's `known`), and deletes subset.jl's copy (D5); holds_reference (classes.jl:272) is the
+one reference rule, and 7a1fc91c's inline copy in the memory arms now reads it (`grep -rn datatype_pointerfree src` gives
+classes.jl:273 alone). class_is_set_field and _needs_is_set port computeIsSetEncoding's useIsSetFieldOrNull arm
+(late_lowering.dart:560-569, read: `type.isPotentiallyNullable ? useIsSetField : useNull`), nothing standing for dart's
+null, and lateIsSetSuffix (:12, `'#isSet'`). 7023257b's visitListConstant (constants.dart:1128) and immutableListClass
+(kernel_nodes.dart:73) move from a rejection to a body: a constant Vector is its Array{T,1}'s instance constant, keyed
+by ===, so its writes reach one global; the class walk meets a MemoryRef's Int offset and memory, never Julia's Ptr.
+
+stopgap in disguise: none new.
+precedent: Julia's field_may_be_null, dart's late lowering, by line.
+
+Area: emission and diagnostics — 7a1fc91c lowers memorynew, memoryrefnew, memoryrefget, memoryrefset!, memoryrefoffset
+and memoryref_isassigned, each arm cited by line and read at the pin (codegen.cpp:4206, :4230, :4241, :4247, :4255,
+:4266, :3876, :4391; cgutils.cpp:4563, :4686, :2067), bounds_check_enabled as Julia's (`--check-bounds`, then the flag
+constant false); atomic orders and swap/replace/setonce/modify reject Unquarantined, located, inside full bodies.
+779986b2's isdefined arm follows codegen.cpp:4864. (A68S2, low, D3/D9) its atomic tests are not ported: `grep -n
+'isfieldatomic\|isatomic' src/intrinsics.jl` gives nothing, so isdefined(x, :f, :not_atomic) on an @atomic field answers
+the defined test where Julia's arm raises (`isdefined: atomic field cannot be accessed non-atomically`, codegen.cpp:4932),
+and an order on a field the struct lacks answers false where Julia raises (:4918). Fix: both emit_atomic_error arms
+ported, or rejected located. (A68S3, low, D6) cad03f24 compares two DataTypes by ref.eq on a soundness argument that
+rests on an absence: its comment says each type is one constant "with no type made at run time", true today (`grep -n
+'Core.typeof\|Core.apply_type' src/intrinsics.jl src/code_generator.jl` gives nothing), but nothing ties the arm to it,
+so the commit that first lowers typeof or apply_type to a built type turns === on two egal types false, silently. Fix:
+the invariant held where it can be broken: the one producer of a DataType value is _lowerTypeToConstant, any other
+producer rejecting located, or the arm's plant failing once a run-time type exists. Watch points. (1) memorynew raises
+OutOfMemoryError past 2^32 elements, but an engine's own array limit sits lower, so a count between them traps in the
+engine. (2) bcdd3cc1's runner admits `i.name in dartEmbedder`, which reaches Object.prototype (toString, constructor);
+Object.hasOwn is the exact test. bcdd3cc1's embedder is dart's test runner's (browser.dart:441, :695, :509-519, read).
+
+stopgap in disguise: none new.
+precedent: Julia's codegen Memory and isdefined arms, by line.
+
+Area: enforcement and prose — 25f5d125 splits the src shards by each file's instructions retired, the measure D14's
+band judges (ri_instructions is the 30th 64-bit field after ri_uuid in the SDK's rusage_info_v4, read: info[32], as
+written); 0db086ee adds a sixth shard named a stopgap; bbc1ded7 compiles no dart case in the landing. Item (a). (A68E1,
+medium, D14/D9) src changes landed on a load stage that built no image: cad03f24's ship output
+reads `105 s on the critical path (load 0 CPU-s, ratchet 78, src shards 101 85 103 72
+97 105 …)` for cad03f24, a change to src/intrinsics.jl whose first attempt f40cbcd2 read RED 135 s
+(wt-ship-failures.tsv, 12:48:55Z), and a0e123ff's message records 779986b2 landing on `120 s (load 0 …)`; 8581639e read
+load 0 too (wt3-codegen's autoship.out). The fix, deleting WasmTarget's images in the lane's depot when the change
+touches src/ or Project.toml, is right and by construction (a retry cannot read a cached image; depot.sh always sets
+JULIA_DEPOT_PATH, so the path is never empty), and it landed after the range as 7794d773 (`git log --oneline
+cad03f24..origin/wt2` lists it; `git show origin/wt2:dev/check.sh | grep -n 'compiled/v\*/WasmTarget'` gives `95:`):
+A68E1 is fixed. Its honest load (~13 CPU-s) now counts toward A68E2. Item (b). (A68E2, medium, D14/D31/D20) sharding is
+exhausted and the stopgap's exit is prose: `grep -n '^SHARDS=' dev/check.sh` gives `103:SHARDS=6`, seven Julia
+processes with the ratchet on four performance cores (`sysctl -n hw.perflevel0.physicalcpu` gives 4); after 0db086ee
+every src check reads red (`tail -8 wt-ship-failures.tsv`: 125, 135, 128, 123, 131, 137 s, 12:44-13:01Z); each shard
+carries ~305 G of its own load and first compile (0db086ee's message), ~58 s at RATE_SRC 5.3, so a seventh shard buys
+~6 s. 25f5d125's larger-of-two cost inflates the summed suite (`awk` over wt-src-instr.tsv: 1483 G by the larger, 1249
+by the newest) and the split still reads 420-655 G (8581639e: `src shards 99 79 107 93 94 123`). On D17/D20: the 60/120
+band is untouched (no budget edited), the split's measure is the band's own, and the shard count is no ratchet; but
+0db086ee's exit, "deleted, back to four (A67E1), by the commit that cuts that first-compile cost (wt3-latency)", is a
+comment no check holds, the larger-of-two names no exit, and `grep -n 'five shards beside' dev/check.sh` gives `95:`
+beside SHARDS=6. Fix: no seventh shard; A64E3's first-compile cut (wt3-latency, D15) is the line's blocker for every src
+change; its commit sets SHARDS=4, deletes the larger-of-two with the shared first compile it measures around, and
+rewrites the comment. After the range, 0bc356c5 replaces the static split with one queue each shard claims from
+(its precedent, Julia's test/runtests.jl:267, lies outside the pinned checkout, which holds src/ alone, and is unread
+here), which answers the imbalance; the larger-of-two still orders the queue (`git show origin/wt2:test/src_tests.jl |
+grep -n 'maximum(v)'` gives `35:`) and SHARDS is still 6, so A68E2 stands. (A68E3, medium, C10/D9) no dart compile has been judged since bbc1ded7: its message says "Every
+compile is judged by dev/corpus.sh on wt2's head", but `tail -1 "$(git rev-parse --git-common-dir)/wt-corpus.tsv"`
+gives `2026-11-01T12:13:16Z 665146f1 red 866 [shard CPU-s: 170 102 457 102]`, a head before the range, red with four
+hard-limit kills (wt-corpus-red-665146f1.out) and its first-failure column the shard costs, not a failure; no row exists
+for any of the eight heads since and no corpus loop runs (`ps` shows only a shell polling origin/wt2 for
+dev/corpus_shard.sh). Fix: the corpus runs on every head and a killed shard names its case in the row; a red or absent
+corpus head is the next lane's first fix, as corpus.sh's header says. (A68S1, low, R1/L213) a reason's anchors after the
+first resolving one are never read: `sed -n 1376p src/julia/parity.jl` gives `f === nothing && return nothing` inside
+the anchor loop, so rtutils.jl:15's second anchor `julia/src/genericmemory.c:54 _new_genericmemory_` lands off by one
+(`sed -n 54,55p` at the pin gives a blank line, then the declaration at :55), as 7a1fc91c's message cites it. Fix: every
+anchor of a reason resolves, as every precedent already must; the citation :55. Requirements: D14 and D31 (A68E1,
+A68E2); no lock fired inside its band.
+
+R1 and R2. R1: each new definition's citation resolves at its pin (codegen.cpp, cgutils.cpp, builtins.c:100 and :243,
+genericmemory.c:30, late_lowering.dart:12, :295, :382, :560, target.dart:565, constants.dart:1128 and :1719,
+kernel_nodes.dart:73, intrinsics.dart:1194, :1409, :1454 and :3490, each line read here), each a near 1:1 port of the
+line it names; one second anchor is off by one and unread (A68S1); nothing joins the debt list. R2: visitListConstant
+(both visitors) and immutableListClass move from a rejection to a body; the Memory and isdefined gaps reject inside full
+bodies and are counted gaps; nothing in the range counts a rejection-only body as ported; A66E5 is open.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A68E1 is fixed by 7794d773, after the range. A68E2
+is open on MARCH 1.L (A67E1's text there now names A68E2). A68E3 is open on MARCH 1.T. A68S1 is open on MARCH 1.K. A68S2 and A68S3 are open on MARCH 1.D.
+By owner: lead holds A68E2 (dev/check.sh, test/src_tests.jl), with wt3-latency holding the first-compile cut;
+wt3-tests2 holds A68E3 (dev/corpus.sh, test/src/dart_tests.jl); wt3-parity holds A68S1's check (src/julia/parity.jl)
+and wt3-runtime its citation (src/julia/runtime/rtutils.jl); wt3-memory holds A68S2 and A68S3 (src/intrinsics.jl).
