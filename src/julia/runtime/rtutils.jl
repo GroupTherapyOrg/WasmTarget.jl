@@ -68,28 +68,34 @@ end
 """
     host_modules() -> Vector{String}
 
-The modules a WasmTarget host supplies to a module's imports: the keys of the JS runtime's
-`baseImports` object (src/js/runtime_blob.jl, dart's runtime_blob.dart), read from its template, so
-the host's import object is their one source, the JS string builtins' module, which the engine
-or the runtime's polyfill supplies (JS_STRING_BUILTINS_MODULE), and the standalone embedder's
-module (STANDALONE_EMBEDDER_MODULE), which a module compiled without JavaScript imports from. A key the template fills in (`<<...>>`)
-is the runtime's own, never a program's host library.
+The modules a WasmTarget host supplies to a module's imports: the property names of the JS runtime's
+`baseImports` object (src/js/runtime_blob.jl, dart's runtime_blob.dart:84), read by dart's mini JS
+parser (src/julia/js_parser.jl, pkg/js_ast's MiniJsParser) from the template instantiated as the
+runtime generator instantiates it for a program with no interop methods and no string constants (every
+variable empty but the internal imports' module name, a hole `#`, the runtime's own, never a program's
+host library), the JS string builtins' module, which the engine or the runtime's polyfill supplies
+(the generator's JS_POLYFILL_IMPORT, JS_STRING_BUILTINS_MODULE), and the standalone embedder's module
+(STANDALONE_EMBEDDER_MODULE), which a module compiled without JavaScript imports from. Read once
+(HOST_MODULES).
 """
-@quarantine "Julia's foreign call names a library; the host's libraries are the keys of the JS runtime's import object" Base.match function host_modules()::Vector{String}
-    local parts = Dart2Wasm.js_runtime_blob_template[]._parts
-    local text = join(p isa Dart2Wasm._TemplateStringPart ? p.string : "<<>>" for p in parts)
-    local block = match(r"const baseImports = \{\n(.*?)\n\s*\};"s, text)
-    block === nothing && reject!(Internal("src/julia/runtime/rtutils.jl host_modules: the JS runtime's template holds no baseImports object"), "host_modules")
-    local out = String[]
-    local depth = 0
-    for line in split(block[1], '\n')
-        local key = match(r"^\s*([A-Za-z_$][\w$]*)\s*:", line)
-        depth == 0 && key !== nothing && push!(out, String(key[1]))
-        depth += count(==('{'), line) - count(==('}'), line)
-    end
+@quarantine "Julia's foreign call names a library; the host's libraries are the import object dart's runtime blob declares (its baseImports in pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate), read by dart's own JS parser" Base.findfirst function host_modules()::Vector{String}
+    local template = Dart2Wasm.js_runtime_blob_template[]
+    local vars = Dict{String,String}(p.variable => (p.variable == "INTERNAL_IMPORTS_MODULE_NAME" ? "#$(p.variable)" : "")
+                                     for p in template._parts if p isa Dart2Wasm._TemplateVariablePart)
+    local text = Dart2Wasm.instantiate(template, vars)
+    local declaration = "const baseImports = "
+    local at = findfirst(declaration, text)
+    at === nothing && reject!(Internal("src/julia/runtime/rtutils.jl host_modules: the JS runtime's template declares no baseImports object"), "host_modules")
+    local parser = MiniJsParser(text[last(at)+1:end])
+    js_expect_category!(parser, :lbrace)
+    local out = String[name for name in js_parse_object_initializer!(parser) if name !== nothing]
     push!(out, JS_STRING_BUILTINS_MODULE, STANDALONE_EMBEDDER_MODULE)
     return out
 end
+
+# the host's modules, read once from the template (host_modules), as dart's runtime generator holds
+# its template once
+@quarantine "the host's modules are read once, the template being fixed (pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate)" Core.String const HOST_MODULES = Late{Vector{String}}("src/julia/runtime/rtutils.jl HOST_MODULES", host_modules)
 
 """
     NirForeignImport
@@ -145,7 +151,7 @@ wasm import cannot take, rejects here, located.
     local sym = node.args[1]
     sym isa NirConst && sym.c.val isa Tuple{Union{Symbol,String},Union{Symbol,String}} || return nothing
     local item, lib = String(sym.c.val[1]), String(sym.c.val[2])
-    lib in host_modules() || return nothing
+    lib in HOST_MODULES[] || return nothing
     local rt, argtypes, nreq, cc = node.args[2], node.args[3], node.args[4], node.args[5]
     rt isa NirConst && rt.c.val isa Type && argtypes isa NirConst && argtypes.c.val isa Core.SimpleVector ||
         reject!(Internal("$at: the foreign call $lib.$item, whose return and argument types are no constants"), at)

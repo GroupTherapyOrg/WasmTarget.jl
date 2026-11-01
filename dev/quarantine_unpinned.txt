@@ -351,7 +351,6 @@ julia/reject.jl construction_check(::Val{:Rejection})::Int
 julia/reject.jl construction_check(::Val{:TrimCause})::Int
 julia/reject.jl reject!
 julia/runtime/rtutils.jl EXCEPTION_TAG_EXPORT
-julia/runtime/rtutils.jl host_modules
 julia/runtime/rtutils.jl nir_runtime_member
 julia/runtime/rtutils.jl throw_bounds_error
 julia/runtime/rtutils.jl throw_divide_error

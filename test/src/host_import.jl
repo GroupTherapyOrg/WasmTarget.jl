@@ -47,10 +47,25 @@ function run_in_node(bytes, entry, args...)
 end
 rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(); end
 
+@testset "host import: the host's modules are the import object's names, read by dart's mini JS parser" begin
+    # the JS runtime's baseImports keys, a nested object's names and the internal module's hole none of them
+    local hosts = W.host_modules()
+    @test issubset(["Math", "Date", "Object", "Array", "Reflect", "WebAssembly", W.JS_STRING_BUILTINS_MODULE], hosts)
+    @test !("JSTag" in hosts) && !("dart2wasm" in hosts) && W.HOST_MODULES[] == hosts
+    # pkg/js_ast's MiniJsParser as ported: names by identifier, string or hole, values read to their end,
+    # comments and a trailing comma skipped
+    local names(src) = (local p = W.MiniJsParser(src); W.js_expect_category!(p, :lbrace); W.js_parse_object_initializer!(p))
+    @test names("{ a: b, 'c d': e.f.g, /* x */ #H: i, j: { k: l }, // y\n m: [n, 'o', 1.5], }") ==
+          Union{String,Nothing}["a", "c d", nothing, "j", "m"]
+    @test names("{}") == Union{String,Nothing}[] && names("{ \"q\\\"r\": s }") == Union{String,Nothing}["q\"r"]
+    # what the reader does not take rejects, located: a method, an operator, a new expression, a bad token
+    for bad in ("{ f() { } }", "{ a: b + c }", "{ a: new P() }", "{ a: 'unterminated }", "{ a b }")
+        local e = try; names(bad); nothing; catch x; x; end
+        @test e isa W.RejectionError && occursin("MiniJsParser", sprint(showerror, e))
+    end
+end
+
 @testset "host import: a foreign call to a host module is dart's wasm:import" begin
-    # the host's modules are the JS runtime's baseImports keys
-    @test issubset(["Math", "Date", "Object", "Array", "Reflect", "WebAssembly"], W.host_modules())
-    @test !("JSTag" in W.host_modules())
     local hw = world_of(Cases.host, (Float64,))
     local sb = body_named(hw, :host_sin)
     local imp = W.nir_foreign_import(sb, only(foreign_calls(sb)))
