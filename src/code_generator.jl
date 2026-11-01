@@ -891,7 +891,7 @@ end
             (n::NirNew) => visit_constructor_invocation(self, n, expected_type)
             (g::NirGlobalRead) => visit_static_get(self, g, expected_type)
             (p::NirPi) => visit_as_expression(self, p, expected_type)
-            NirForeignCall => reject!(Unquarantined("src/julia: a foreigncall, a quarantined host import (dev/MARCH.md 1.F)"), "$(self.enclosing_member)")
+            (c::NirForeignCall) => visit_static_invocation(self, c, expected_type)
             # Julia's bounds-check flag, a Bool constant as Julia's codegen answers it (codegen.cpp,
             # bounds_check_enabled): true under --check-bounds=yes, false under =no (julia.h's
             # JL_OPTIONS_CHECK_BOUNDS_ON 1 and _OFF 2, read from the compiling process), else the
@@ -981,7 +981,7 @@ map.
         (s::NirGlobalRead) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirReturn) => visit_return_statement(self, s)
         (s::NirNothing) => visit_empty_statement(self, s)
-        (s::NirForeignCall) => reject!(Unquarantined("src/functions.jl getFunction: a foreign call's host import, dart's wasm:import arm (dev/MARCH.md 1.F)"), at)
+        (s::NirForeignCall) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirCFunction) => reject!(Unquarantined("src/functions.jl getFunction: a C function pointer's host import, dart's wasm:import arm (dev/MARCH.md 1.F)"), at)
         (s::NirBoundscheck) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirGCPreserveBegin) => reject!(Unquarantined("src/code_generator.jl translateStatement: Julia's GC preservation region, which WasmGC's references keep alive (dev/MARCH.md 1.D)"), at)
@@ -1451,6 +1451,24 @@ end
     intrinsic_result === nothing || return intrinsic_result
     reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"),
         "$(self.enclosing_member): Julia's $(nir_callee(node)) on $(join((dart_type_of(self, a) for a in node.args[2:end]), ", "))")
+end
+
+# a foreign call, Julia's ccall: dart2wasm's ffi transformer makes a `@Native` declaration's body a
+# call of the wasm:import procedure it synthesizes (ffi_native_transformer.dart:159 visitProcedure), a
+# StaticInvocation visited here; Julia's codegen lowers each call site (julia/src/ccall.cpp emit_ccall),
+# so the site's callee is that procedure (nir_foreign_import), imported by getFunction into this
+# function's module, each argument translated to the import's parameter type and the call made as
+# Translator.callFunction makes it. A call to a library no host supplies rejects, located
+@parity "dart2wasm/lib/code_generator.dart:1668 AstCodeGenerator.visitStaticInvocation" function visit_static_invocation(self::AstCodeGenerator, node::NirForeignCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local target = nir_foreign_import(self.body, node)
+    target === nothing &&
+        reject!(Unquarantined("src/julia/runtime/rtutils.jl nir_foreign_import: a foreign call of $(node.args[1]), whose library no host supplies"), "$(self.enclosing_member)")
+    local b = self.b[]
+    local function_ = get_function(self.translator.functions[], target, b.module_builder)
+    for (operand, input) in zip(nir_foreign_operands(node), function_.type.inputs)
+        translate_expression(self, operand, input)
+    end
+    return output_or_void(self.translator, call_function(self.translator, function_, b))
 end
 
 @parity "dart2wasm/lib/code_generator.dart:1688 AstCodeGenerator._lookupSuperTarget" _lookup_super_target(self::AstCodeGenerator, interface_target::Core.MethodInstance; setter::Bool)::Union{} =

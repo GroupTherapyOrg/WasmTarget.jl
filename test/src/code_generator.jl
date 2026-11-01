@@ -92,14 +92,14 @@ end
             @test r isa W.RejectionError && !occursin("outputOrVoid", string(r.rejection))
         elseif st isa W.NirNothing
             @test r === nothing
-        elseif st isa Union{W.NirCall, W.NirInvoke, W.NirNew, W.NirGlobalRead}
+        elseif st isa Union{W.NirCall, W.NirInvoke, W.NirNew, W.NirGlobalRead, W.NirForeignCall}
             # a used value is a local declared with its initializer; an unused one an expression statement
             @test r.rejection isa W.Unported && occursin("AstCodeGenerator.b", r.rejection.anchor)
             # the unused one is translated at the void marker: its expression's own visitor, which
             # stops at the first piece not yet given here (a constant, a parameter, an allocation)
             local r2 = rejection(() -> D.translate_statement(g, st, nothing))
             @test r2 isa W.RejectionError && !occursin("voidMarker", string(r2.rejection))
-        elseif st isa Union{W.NirForeignCall, W.NirCFunction}
+        elseif st isa W.NirCFunction
             @test r.rejection isa W.Unquarantined && startswith(r.rejection.row, "src/functions.jl getFunction") && occursin("1.F", r.rejection.row)
         elseif st isa Union{W.NirGoto, W.NirGotoIfNot, W.NirPhi}
             # a jump and a merge are the stackifier's (visit_block), never a statement of their own

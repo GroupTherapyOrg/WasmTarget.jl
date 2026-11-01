@@ -70,47 +70,72 @@ is the runtime's own, never a program's host library.
 end
 
 """
-    nir_host_import(world, mi) -> Union{Tuple{String,String},Nothing}
+    NirForeignImport
 
-The host import a method is, `(module, name)`, the quarantined host import of a Julia foreign call
-(dev/MARCH.md 1.F), dart's `@pragma("wasm:import", "<module>.<name>")`, read from the method's
-inferred body in the closed world, its one source: a body that is one foreign call of a literal
-`(name, library)` whose library is a host module (`host_modules`), its declared argument types the
-method's own (a nullable parameter declared Any, Julia's ccall having no C type for a Union) and its
-arguments the method's, in order, its result returned. Any other method, a
-foreign call to another library among them (libjulia's `jl_uv_puts`, a C library), is no import:
-its body is compiled, and the code generator rejects its foreign call, located.
+The callee of a foreign call to a library the host supplies, as Julia's ccall lowering reads it at
+the call site (julia/src/ccall.cpp:1419 emit_ccall): its library and symbol (interpret_symbol_arg),
+the Julia type each argument crosses as (`params`) and the declared return type (`rt`). A wasm
+import: dart2wasm's ffi transformer makes a `@Native<sig>(symbol:, asset:)` declaration a synthesized
+procedure `@pragma("wasm:import", "<asset>.<symbol>")` typed by its native signature
+(pkg/dart2wasm/lib/ffi_native_transformer.dart:159 visitProcedure), which getFunction imports; this is
+that procedure for one call site, typed, as dart types it, by the declared signature. An argument
+declared `Any` is passed as the object reference it is (julia_to_native's boxed arm,
+julia/src/ccall.cpp:528 julia_to_native): it crosses as its operand's inferred class, nullable as
+`Any` admits `nothing`.
 
-precedent(clang: `__attribute__((import_module("m"), import_name("n")))` on a wasm function
-declaration; dart: the ffi transformer's `wasm:import` for an `@Native`). Julia's differs: a foreign
-call is a statement of a method's body, not a declaration, so the method whose whole body it is
-stands for the declaration.
+precedent(julia: julia/src/ccall.cpp:1980 function_sig_t::emit_a_ccall, which declares the callee in
+the module by its symbol and the call site's signature, getOrInsertFunction). Julia's differs: a
+foreign call is a statement, not a declaration, so each call site names its import.
 """
-@quarantine "Julia's foreign call is a statement; the method whose whole body it is stands for dart's wasm:import declaration" Core.SimpleVector function nir_host_import(world::NirWorld, mi::Core.MethodInstance)::Union{Tuple{String,String},Nothing}
-    local body = nir_body_of(world, mi)
-    # the statements but those Julia's optimizer emptied
-    local stmts = [st for st in body.stmts if !(st isa NirNothing)]
-    length(stmts) == 2 || return nothing
-    local call, ret = stmts[1], stmts[2]
-    call isa NirForeignCall && ret isa NirReturn || return nothing
-    local name = call.args[1]
-    name isa NirConst && name.c.val isa Tuple{Symbol,String} || return nothing
-    local item, lib = name.c.val
+@quarantine "Julia's ccall lowering reads a foreign call's callee at its call site (julia/src/ccall.cpp:1419 emit_ccall); dart2wasm's ffi transformer makes the callee a wasm:import procedure (pkg/dart2wasm/lib/ffi_native_transformer.dart:159 visitProcedure)" Core.Type struct NirForeignImport
+    lib::String
+    name::String
+    params::Vector{Type}
+    rt::Type
+end
+
+"""
+    nir_foreign_operands(node) -> Vector{NirValue}
+
+The arguments a foreign call passes, one per declared argument type, Julia's `args[6:5+nccallargs]`
+(julia/src/ccall.cpp:1419 emit_ccall); the GC roots after them are no argument.
+"""
+@quarantine "Julia's foreigncall lists its arguments after its five header operands (julia/src/ccall.cpp:1419 emit_ccall)" Core.SimpleVector function nir_foreign_operands(node::NirForeignCall)::Vector{NirValue}
+    local at = node.args[3]
+    at isa NirConst && at.c.val isa Core.SimpleVector ||
+        reject!(Internal("src/julia/runtime/rtutils.jl nir_foreign_operands: a foreign call whose argument types are no constant svec"), "nir_foreign_operands")
+    return node.args[6:5 + length(at.c.val)]
+end
+
+"""
+    nir_foreign_import(body, node) -> Union{NirForeignImport,Nothing}
+
+The host import a foreign call of `body` calls (NirForeignImport), read as Julia's ccall lowering
+reads it (julia/src/ccall.cpp:1419 emit_ccall): its name a literal `(symbol, library)`
+(interpret_symbol_arg) whose library is a host module (`host_modules`), its calling convention C
+(convert_cconv), its argument count fixed. A call to any other library is no import, nothing, and the
+code generator rejects it, located; a host call by another convention or with C varargs, which a
+wasm import cannot take, rejects here, located.
+"""
+@quarantine "Julia's ccall lowering reads the callee's name, convention and signature from the foreigncall (julia/src/ccall.cpp:571 interpret_symbol_arg)" Core.SimpleVector function nir_foreign_import(body::NirBody, node::NirForeignCall)::Union{NirForeignImport,Nothing}
+    local at = "src/julia/runtime/rtutils.jl nir_foreign_import"
+    local sym = node.args[1]
+    sym isa NirConst && sym.c.val isa Tuple{Union{Symbol,String},Union{Symbol,String}} || return nothing
+    local item, lib = String(sym.c.val[1]), String(sym.c.val[2])
     lib in host_modules() || return nothing
-    local rt, ats = call.args[2], call.args[3]
-    # the declaration's parameter types, the method's signature, as dart reads the member's (a call
-    # may specialize the method on narrower arguments)
-    local sig = mi.def isa Method ? mi.def.sig : nothing
-    sig isa DataType || return nothing
-    local params = Any[sig.parameters[2:end]...]
-    all(p -> p isa Type && !(p isa Core.TypeofVararg), params) || return nothing
-    rt isa NirConst && ats isa NirConst && ats.c.val isa Core.SimpleVector || return nothing
-    # each declared type is the parameter's own, or Any for a nullable one: Julia's ccall has no C type
-    # for a Union, its Any passing the value as it is (a jl_value_t*)
-    local declared = Any[ats.c.val...]
-    length(declared) == length(params) || return nothing
-    all(i -> declared[i] === params[i] || declared[i] === Any && params[i] isa Union && Nothing <: params[i], eachindex(params)) || return nothing
-    all(i -> call.args[5 + i] == NirArgument(i + 1), eachindex(params)) || return nothing
-    ret.val == NirSSA(1) || rt.c.val === Nothing && ret.val == NirConst(Core.Const(nothing)) || return nothing
-    return (lib, String(item))
+    local rt, argtypes, nreq, cc = node.args[2], node.args[3], node.args[4], node.args[5]
+    rt isa NirConst && rt.c.val isa Type && argtypes isa NirConst && argtypes.c.val isa Core.SimpleVector ||
+        reject!(Internal("$at: the foreign call $lib.$item, whose return and argument types are no constants"), at)
+    # convert_cconv: `ccall` is C's convention, the one a wasm import has
+    local conv = cc isa NirConst ? (cc.c.val isa Tuple ? cc.c.val[1] : cc.c.val) : nothing
+    conv === :ccall || conv === :cdecl ||
+        reject!(Unquarantined("$at: the foreign call $lib.$item by the convention $(repr(conv)), where a wasm import takes C's"), at)
+    # nreqargs > 0 is a C varargs function, which no wasm import's fixed arity takes
+    nreq isa NirConst && nreq.c.val == 0 ||
+        reject!(Unquarantined("$at: the foreign call $lib.$item of a C varargs function, which no wasm import's fixed arity takes"), at)
+    all(t -> t isa Type, argtypes.c.val) ||
+        reject!(Internal("$at: the foreign call $lib.$item, an argument type of which is no type: $(argtypes.c.val)"), at)
+    local operands = nir_foreign_operands(node)
+    local params = Type[t === Any ? Union{Nothing, nir_value_type(body, operands[i])} : t for (i, t) in enumerate(argtypes.c.val)]
+    return NirForeignImport(lib, item, params, rt.c.val)
 end

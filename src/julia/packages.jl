@@ -57,10 +57,10 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..@unported, ..Abstra
        ..FieldReferenceKind_initializer, ..FieldReferenceKind_setter, ..ImmutableWasmArray,
        ..InstanceConstant, ..Internal, ..LOOP, ..Late, ..LinkedHashMap, ..LinkedHashSet, ..MOImm,
        ..MachineInstr, ..NirArgument, ..NirBody, ..NirBoundscheck, ..NirCFunction, ..NirCall,
-       ..NirConst, ..NirEnter, ..NirForeignCall, ..NirGCPreserveBegin, ..NirGCPreserveEnd,
-       ..NirGlobal, ..NirGlobalRead, ..NirGoto, ..NirGotoIfNot, ..NirInvoke, ..NirInvokeModify,
-       ..NirLeave, ..NirLoopInfo, ..NirNew, ..NirNothing, ..NirPhi, ..NirPhiC, ..NirPi,
-       ..NirPopException, ..NirReturn, ..NirSSA, ..NirStmt, ..NirTheException,
+       ..NirConst, ..NirEnter, ..NirForeignCall, ..NirForeignImport, ..NirGCPreserveBegin,
+       ..NirGCPreserveEnd, ..NirGlobal, ..NirGlobalRead, ..NirGoto, ..NirGotoIfNot, ..NirInvoke,
+       ..NirInvokeModify, ..NirLeave, ..NirLoopInfo, ..NirNew, ..NirNothing, ..NirPhi, ..NirPhiC,
+       ..NirPi, ..NirPopException, ..NirReturn, ..NirSSA, ..NirStmt, ..NirTheException,
        ..NirThrowUndefIfNot, ..NirUnreachable, ..NirUpsilon, ..NirValue, ..NirWorld,
        ..NoCounterpart, ..Reference, ..STMTS, ..THROW_REF, ..TRY_TABLE, ..TreeNode_no_offset,
        ..UNREACHABLE, ..UnionFind, ..Unported, ..Unquarantined, ..WASM_OPCODE_CATCH,
@@ -69,12 +69,13 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..@unported, ..Abstra
        ..build_nir, ..class_implemented_types, ..class_instance_fields, ..class_is_abstract,
        ..class_superclass, ..closed_world_classes, ..egal_by_identity, ..nir_argument_type,
        ..nir_binding_is_constant, ..nir_binding_value, ..nir_body_of, ..nir_callee,
-       ..nir_carries_data, ..nir_const_type, ..nir_invoke_target, ..nir_method_nargs,
-       ..nir_operands, ..nir_runtime_member, ..nir_tuple_type, ..nir_used_statements,
-       ..nir_value_type, ..no_counterpart_rejection, ..reject!, ..run_wasm_opt,
-       ..throw_bounds_error, ..throw_divide_error, ..throw_undef_ref_error, ..uf_add!, ..uf_find!,
-       ..uf_union!, ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!,
-       ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length
+       ..nir_carries_data, ..nir_const_type, ..nir_foreign_import, ..nir_foreign_operands,
+       ..nir_invoke_target, ..nir_method_nargs, ..nir_operands, ..nir_runtime_member,
+       ..nir_tuple_type, ..nir_used_statements, ..nir_value_type, ..no_counterpart_rejection,
+       ..reject!, ..run_wasm_opt, ..throw_bounds_error, ..throw_divide_error,
+       ..throw_undef_ref_error, ..uf_add!, ..uf_find!, ..uf_union!, ..wasm_array_length,
+       ..wasm_array_new, ..wasm_array_write!, ..wasm_string_alloc, ..wasm_string_codeunit,
+       ..wasm_string_copy!, ..wasm_string_length
 # ---- end of Dart2Wasm's src/julia names ----
 # a dispatcher over every NIR kind is inferred once, not once per kind of node (a compile's first-use cost)
 import Base: @nospecializeinfer
@@ -86,7 +87,7 @@ import ..WasmBuilder
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
 # ---- the src/julia names Util's files use, written by dev/skeleton.jl write ----
 import ...@parity, ...ClassField, ...Internal, ...NirConst, ...NirWorld, ...nir_body_of,
-       ...nir_host_import, ...program_export_name, ...reject!
+       ...program_export_name, ...reject!
 # ---- end of Util's src/julia names ----
 import ...WasmBuilder
 import ..Dart2Wasm

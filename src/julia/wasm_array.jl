@@ -195,7 +195,7 @@ The number of elements of `a`: dart's `WasmArrayRef.length`, `array.len`.
 
 dart:_wasm's host reference (sdk/lib/_wasm/wasm_types.dart:59, `class WasmExternRef extends
 _WasmBase`), wasm's `externref`: a value the host made and the module only holds and passes back, the
-type of a host import's argument or result (src/julia/runtime/rtutils.jl nir_host_import), never
+type of a host import's argument or result (src/julia/runtime/rtutils.jl nir_foreign_import), never
 boxed, nullable as `Union{Nothing,WasmExternRef}` (dart's `WasmExternRef?`). Julia's inference must
 see its values flow through a body, so the type is inhabited, a primitive type of a pointer's width,
 whose bits Julia never reads: only a host import makes one.

@@ -164,29 +164,11 @@ unused where Julia's effects prove it (hasWasmPureFunctionPragma).
     end
     local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
     # If this function is a `@pragma('wasm:import', '<module>.<name>')` we import the function and
-    # return it: Julia's, a method whose whole body is a foreign call to a host module (getPragma)
+    # return it: a Julia member carries none, a foreign call site to a host library being the import
+    # (get_function(::FunctionCollector, ::NirForeignImport, ...)), so the namer answers nothing for every member
     local import_name = target isa MethodInstance ? get_import_name(interop_namer(self), target) : nothing
-    if import_name !== nothing
-        local m = target::MethodInstance
-        # dart's _makeFunctionType of the member, its declared types: Julia's are the method's signature
-        # (getPragma read the import from a method with no type variable), never a call's narrower
-        # specialization; beyond dart's (which trusts its dart: libraries), each argument and the result
-        # crosses the boundary by a type of its own (translateExternalType's number, array or reference
-        # arm), never the anyref every other Julia value would be coerced to
-        local declared = Type[(m.def::Method).sig.parameters[2:end]...]
-        local result = type_of_return_value(translator, m)
-        local boundary(t::Type) = (local w = translate_external_type(translator, t);
-            w == WasmBuilder.IR.RefType_any(; nullable = true) &&
-                reject!(Unquarantined("src/functions.jl getFunction: the host import $(sprint(show, import_name)) passes $t, which has no wasm boundary type"), "$m");
-            w)
-        local ftype = WasmBuilder.define_function(types_builder(translator), WasmBuilder.IR.ValueType[boundary(t) for t in declared],
-            result === Nothing ? WasmBuilder.IR.ValueType[] : WasmBuilder.IR.ValueType[boundary(result)])
-        local imported = WasmBuilder.var"import"(module_for_reference(translator, m).functions[], import_name.module_name, import_name.item_name, ftype,
-            "$(sprint(show, import_name)) (import)")
-        imported.is_pure = is_pure
-        imported.inline_hint = inline_hint
-        return self._functions[target] = imported
-    end
+    import_name === nothing ||
+        reject!(Internal("dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction: the member $target with the wasm:import $(sprint(show, import_name)), which no Julia member carries"), "get_function")
     local module_ = module_for_reference(translator, target)
     # an exported member's function type is the external one
     local export_name = get_export_name(self, target)
@@ -203,6 +185,31 @@ unused where Julia's effects prove it (hasWasmPureFunctionPragma).
     self._functions[target] = function_
     add(translator.compilation_queue[], AstCompilationTask(function_, get_member_code_generator(translator, function_, target), target))
     return function_
+end
+
+"""
+The imported function a foreign call to a host library calls, getFunction's import arm for the
+procedure dart2wasm's ffi transformer synthesizes for a `@Native` declaration (`NirForeignImport`, one
+per call site, as Julia's ccall lowering reads each): imported from `<library>.<symbol>`, its type
+dart's _makeFunctionType of an import. Beyond dart's, which trusts its dart: libraries, an argument
+or result with no wasm boundary type, which every other Julia value would be coerced to as anyref,
+rejects, located. Julia declares the callee in the emitting function's module by its symbol and
+signature, reusing a declaration already there (julia/src/ccall.cpp:1980
+function_sig_t::emit_a_ccall's getOrInsertFunction): the import is found in `module_` by its module,
+name and type, or made there.
+"""
+@parity "dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction" function get_function(self::FunctionCollector, target::NirForeignImport, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.BaseFunction
+    local translator = self.translator
+    local import_name = Util.ImportName(target.lib, target.name)
+    local ftype = _make_function_type(translator, target, nothing; is_import_or_export = true, synthesize_null_return_value = false, synthesize_no_return = false)
+    for (t, w) in zip((target.params..., target.rt), (ftype.inputs..., ftype.outputs...))
+        w == WasmBuilder.IR.RefType_any(; nullable = true) &&
+            reject!(Unquarantined("src/functions.jl getFunction: the host import $(sprint(show, import_name)) passes $t, which has no wasm boundary type"), "$(sprint(show, import_name))")
+    end
+    for f in module_.functions[]._imported_functions
+        f.module_ == target.lib && f.name == target.name && f.type === ftype && return f
+    end
+    return WasmBuilder.var"import"(module_.functions[], target.lib, target.name, ftype, "$(sprint(show, import_name)) (import)")
 end
 
 @parity "dart2wasm/lib/functions.dart:192 FunctionCollector.hasDynamicSelectorCall" has_dynamic_selector_call(self::FunctionCollector, shape::CallShape)::Bool = shape in self._called_dynamic_selectors
@@ -551,6 +558,20 @@ end
         local return_type = type_of_return_value(translator, target)
         is_void_type(return_type) || push!(outputs, trt(return_type))
     end
+    return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
+end
+
+# the import procedure dart2wasm's ffi transformer synthesizes for a foreign declaration, a static
+# member with no receiver: its parameters the declared argument types and its result the declared
+# return type, each external, `nothing` dart's void (NirForeignImport)
+@parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" function _make_function_type(translator::Translator, target::NirForeignImport, receiver_type::Nothing;
+        synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export::Bool = false)::WasmBuilder.IR.FunctionType
+    local tt(t::Type) = is_import_or_export ? translate_external_type(translator, t) : translate_type(translator, t)
+    local trt(t::Type) = is_import_or_export ? translate_external_type(translator, t) : translate_return_type(translator, t)
+    local inputs = WasmBuilder.IR.ValueType[tt(t) for t in target.params]
+    local is_void_type(t::Type) = is_import_or_export && t === Nothing
+    local outputs = WasmBuilder.IR.ValueType[]
+    synthesize_null_return_value || synthesize_no_return || is_void_type(target.rt) || push!(outputs, trt(target.rt))
     return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
 end
 

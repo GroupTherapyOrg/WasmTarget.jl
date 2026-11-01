@@ -8,9 +8,10 @@
 The JS string of the UTF-16 code units `array[start:end)`: the JS string builtin
 `wasm:js-string.fromCharCodeArray` (dart's `@pragma("wasm:import", "wasm:js-string.fromCharCodeArray")
 external WasmExternRef jsStringFromCharCodeArray(WasmArray<WasmI16>? array, WasmI32 start, WasmI32
-end)`), a host import (src/julia/runtime/rtutils.jl nir_host_import): a method whose whole body is the
-foreign call, the nullable array declared Any to it (Julia's ccall has no C type for a Union). Never
-inlined, so its call stays the import's call.
+end)`), a foreign call to the host library `wasm:js-string`, which the code generator imports
+(src/julia/runtime/rtutils.jl nir_foreign_import), the nullable array declared Any to it (Julia's
+ccall has no C type for the isbits Union{Nothing,WasmArray{WasmI16}}), so it crosses as the wasm
+array, nullable as dart's parameter is.
 """
 @parity "sdk/lib/_internal/wasm/js_common/js_string.dart:858 jsStringFromCharCodeArray" @noinline js_string_from_char_code_array(array::Union{Nothing,WasmArray{WasmI16}}, start::Int32, end_::Int32)::WasmExternRef =
     ccall((:fromCharCodeArray, "wasm:js-string"), WasmExternRef, (Any, Int32, Int32), array, start, end_)
