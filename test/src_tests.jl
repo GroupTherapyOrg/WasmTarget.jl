@@ -49,7 +49,17 @@ end
 # (25f5d125 and the four checks after it, 2026-11-01); a shard that pays such a cost takes fewer files instead.
 # Without WT_SRC_SHARD every file runs.
 const _WT_CLAIMS = get(ENV, "WT_SRC_CLAIMS", "")
-const SRC_SHARD = isempty(get(ENV, "WT_SRC_SHARD", "")) ? SRC_TESTS : sort(SRC_TESTS; by = f -> (-SRC_COST[f], f))
+# A file that loads test/DartCorpus goes last: the corpus ports dart's operator overrides as methods of Base's
+# generics on its own types (>=, >, ==, getindex, iterate), and loading them invalidates the compiled code of every
+# caller that reached those generics at an abstract type, Base's and Julia's compiler's above all (3145 method
+# instances, the next WasmTarget.compile then 174 G instead of 0.2, wt3-latency 13:38). Claimed last, it is claimed
+# once every other file is, so its invalidations reach no other file's compiles. Julia's own test runner keeps one
+# file's definitions from another's by a fresh module each (precedent(julia: test/testdefs.jl:16, v1.12.7: `m =
+# @eval(Main, module $mod_name end)`)) and its worker processes; a module does not stop methods added to Base's
+# generics, and WT's shards are a fixed set of processes, so here the order isolates them
+_wt_loads_corpus(f::String)::Bool = occursin("DartCorpus", read(joinpath(SRC_TEST_DIR, f), String))
+const SRC_SHARD = isempty(get(ENV, "WT_SRC_SHARD", "")) ? SRC_TESTS :
+    sort(SRC_TESTS; by = f -> (_wt_loads_corpus(f), -SRC_COST[f], f))
 isempty(get(ENV, "WT_SRC_SHARD", "")) || !isempty(_WT_CLAIMS) ||
     error("WT_SRC_SHARD runs the queue in WT_SRC_CLAIMS, which is unset: no shard could claim a file")
 # a file is this shard's when its claim is made here: mkdir is atomic, so exactly one shard runs each file
