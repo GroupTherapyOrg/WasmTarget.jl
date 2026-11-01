@@ -73,19 +73,12 @@ _wt_claim(f::String)::Bool = isempty(get(ENV, "WT_SRC_SHARD", "")) ||
 const _WT_PROGRESS = get(ENV, "WT_PROGRESS", "")
 wt_progress(s::AbstractString) = isempty(_WT_PROGRESS) || write(_WT_PROGRESS, s)
 # each file's instructions retired go to WT_SRC_COSTS_OUT, for dev/check.sh to keep once the tests pass, read from
-# the process's own counter (macOS's proc_pid_rusage, the rusage_info_v4 counter /usr/bin/time -l reports as
-# "instructions retired", sys/resource.h: ri_instructions, the 30th 64-bit field after the 16-byte ri_uuid; check.sh
-# runs on macOS alone). A process's first
+# the process's own counter (test/instructions.jl). A process's first
 # WasmTarget.compile pays about 49 CPU-s compiling WasmTarget's own pipeline (wt3-cgstubs, 12:59), which would land on
 # whichever file ran first and leave that file unmeasured or mismeasured; so a measured run compiles one small
 # function first, every shard paying that start alike, and every file's seconds are then its own
 const _WT_COSTS_OUT = get(ENV, "WT_SRC_COSTS_OUT", "")
-function _wt_instructions()
-    local info = zeros(UInt64, 40)   # rusage_info_v4 is 16 + 37 * 8 bytes; 40 words hold it
-    ccall(:proc_pid_rusage, Cint, (Cint, Cint, Ptr{UInt64}), getpid(), 4, info) == 0 ||
-        error("proc_pid_rusage(RUSAGE_INFO_V4) failed: no instruction count to measure this file by")
-    info[2 + 29 + 1]
-end
+isdefined(Main, :_wt_instructions) || Base.include(Main, joinpath(@__DIR__, "instructions.jl"))
 isempty(_WT_COSTS_OUT) || Sys.isapple() || error("WT_SRC_COSTS_OUT measures instructions by macOS's proc_pid_rusage; dev/check.sh runs on macOS alone")
 isempty(_WT_COSTS_OUT) || WasmTarget.compile(x::Int64 -> x + Int64(1), (Int64,))   # a failure here is a broken pipeline, red
 @testset verbose = true "src" begin

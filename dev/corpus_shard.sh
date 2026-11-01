@@ -23,7 +23,7 @@ mkdir -p "$state"; : > "$state/killed"; : > "$state/done"; : > "$out"
 export WT_DART_KILLED="$state/killed" WT_DART_DONE="$state/done"
 for attempt in $(seq 1 $CORPUS_ATTEMPTS); do
   nk=$(wc -l < "$WT_DART_KILLED")
-  ( "$@" ) >> "$out" 2>&1; rc=$?   # a subshell, so the shell's note of a killed run lands in the output
+  ( WT_DART_ATTEMPT=$attempt "$@" ) >> "$out" 2>&1; rc=$?   # a subshell, so the shell's note of a killed run lands in the output
   { [ $rc -ne 0 ] && [ "$(wc -l < "$WT_DART_KILLED")" -gt "$nk" ]; } || break
   echo "corpus_shard: attempt $attempt's process was killed at $(tail -n 1 "$WT_DART_KILLED"); the shard runs again past it" >> "$out"
 done
