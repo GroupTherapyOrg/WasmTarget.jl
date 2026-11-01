@@ -1573,12 +1573,11 @@ end
 @parity "dart2wasm/lib/translator.dart:2472 Translator.getListLength" get_list_length(self::Translator, b::WasmBuilder.InstructionsBuilder)::Union{} =
     reject!(Internal("dart2wasm/lib/translator.dart:2472 Translator.getListLength: no caller in dart2wasm at the pin, so no compile reaches it"), "Translator.getListLength")
 
-"""Push the base array of the list on the stack: the runtime list class's data field."""
-@parity "dart2wasm/lib/translator.dart:2479 Translator.getListBaseArray" function get_list_base_array(self::Translator, b::WasmBuilder.InstructionsBuilder)::Nothing
-    local info = self.class_info[list_base_class(self)]
-    WasmBuilder.struct_get(b, info.struct_, FieldIndex_list_array())
-    return nothing
-end
+# dart2wasm at the pin calls getListBaseArray only from the Function.apply intrinsic
+# (intrinsics.dart:3381), which no Julia call is, and its list base class is Julia's Array{T,1}, laid
+# out by its own fields (KernelNodes.listBaseClass): no compile reaches it, Internal (A55S14's rule)
+@parity "dart2wasm/lib/translator.dart:2479 Translator.getListBaseArray" get_list_base_array(self::Translator, b::WasmBuilder.InstructionsBuilder)::Union{} =
+    reject!(Internal("dart2wasm/lib/translator.dart:2479 Translator.getListBaseArray: dart:_list's WasmListBase is Julia's Array{T,1}, laid out by its own fields, and its one caller is dart's Function.apply intrinsic, which no Julia call is"), "Translator.getListBaseArray")
 
 # dart's record class of the type's shape (recordClasses, generated per shape); a Julia record's class is
 # its own Tuple or NamedTuple type (Julia's answer: generateRecordClasses maps no shape), a class of
