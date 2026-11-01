@@ -6958,3 +6958,159 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A71S1 leaves 
 A74S2 are open on 1.A6; A74S3 and A74S4 on 1.K; A74E1 on 1.L. By owner: wt3-parity A74S1, A74S2, A74S3, A74S4
 (src/julia/parity.jl) and A74E1 (test/parity_ratchet.jl), with A71E2's claim lock; wt3-runtime A73S3 and A73S2, with A72S2;
 wt3-memory A73S1; wt3-latency A73E1; wt3-cgstubs2 A71S3 and A70S3.
+
+## 2026-11-01 — audited through e84214d1 (a44c25d6..e84214d1: _wasm_only with no dart counterpart, a varargs tuple and a tuple literal of open elements by a product of classes bounded by max_union_splitting, the String hash overlay at base/hashing.jl:198, the rejection count refusing what it cannot read, generateJsMethods and the JS printToConsole, the D11 lock reading definitions and constants)
+
+The seventy-fifth audit, beside the work, covers the 7 commits of a44c25d6..e84214d1 that are not audit entries (0cf3bd32,
+entry 74): 72d0d42d, bee9ca3c, 18acb938, 11c9e8a2, d5db52fa, 92e6b448 and e84214d1, read here, under Dale's R1 and R2 as
+standing sections. Every finding rests on one exact command, quoted. Standing items. src changes in 13 files (`git diff
+--stat a44c25d6..origin/wt2 -- src | tail -1` gives `13 files changed, 332 insertions(+), 73 deletions(-)`); no exemption
+lands (`git diff a44c25d6..origin/wt2 -- src | grep -cE '^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 0).
+The debt list reads 389, from 393 (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`): bee9ca3c pins
+closed_world_classes (`sed -n 1534p Compiler/src/typeinfer.jl` gives `function typeinf_ext_toplevel(methods::Vector{Any},
+worlds::Vector{UInt}, trim_mode::UInt8)`) and Dart2Wasm (`sed -n 298p pkg/dart2wasm/lib/dart2wasm.dart` gives `Future<int>
+main(List<String> args) async {`), 18acb938 _TRANSPARENT_MACROS (base/expr.jl :277 `macro inline(x)`, :354 `macro
+noinline(x)`, :764 `macro assume_effects(args...)`), d5db52fa RUNTIME_FILES. Earlier findings: A72S2 is fixed by 72d0d42d
+(`sed -n 2065p src/builtins.c` of the julia pin gives `JL_CALLABLE(jl_f_compilerbarrier)`, the builtin _wasm_only rests
+on, its want of a dart counterpart stated; wasm_array.jl:175 keeps `wasm_types.dart:737` for wasm_array_new, whose dart
+counterpart that factory is); A73S1 by 18acb938 (`sed -n 198p base/hashing.jl` gives `@assume_effects :total function
+hash(s::String, h::UInt)`, the overlay carrying the same claim; `grep -c 'hashing.c:68' src/patch/hashing.jl` gives 0);
+A70S3 by bee9ca3c in its call half (tuple_classes reads each element as compute_va_type does, `sed -n 8102p
+src/codegen.cpp` giving `static jl_datatype_t *compute_va_type(jl_value_t *sig, size_t nreq)`), its entry half still
+inference's (`grep -n 'va_process_argtypes(Core.Compiler.fallback_lattice' src/julia/nir.jl` gives `573:`, rejecting at
+_setupLocalParameters, which the commit says no case reaches), carried in A75S1; A74S2 by 11c9e8a2, its residue A75E3;
+A74E1 by 92e6b448, its residue A75E2. Open as they stood: A71S3 (`grep -n 'codegen.cpp:2638' src/code_generator.jl` gives
+`2040:`); A73S2 (`grep -n 'const baseImports = ' src/julia/runtime/rtutils.jl` gives `113:`); A73S3 (`grep -n
+':typeassert),' src/julia/subset.jl` gives `199:`); A73E1 (`grep -n 'instantiates no' src/julia/nir.jl` gives `727:`);
+A74S1 (`grep -n 'local dart_member' src/julia/parity.jl` gives `1628:`); A74S3 (`grep -n 'override_verifier.dart:68'
+src/julia/parity.jl` gives `1700:`); A74S4 (`grep -n 'julia.h:905' src/julia/parity.jl` gives `677:`); A68E3 (`tail -1
+.git/wt-corpus.tsv` gives f05b2fa8's `hung 1216` row); A71E2, A69E1, A68E2, A68S4, A72E1, A67E1, A67S1 and A67S3, carried,
+not re-read. Findings A75S1 to A75S6 and A75E1 to A75E3.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — bee9ca3c: closed_world_classes collects each open varargs tuple and, after the walk, meets
+every class tuple_classes gives it; e84214d1 does the same for a Core.tuple literal and, past the bound, brings none
+(`past_bound = :none`), so a statement no code reaches no longer refuses the compile. (A75S2, low, D5) tuple_classes has two
+`below` sources: the walk passes `p -> DataType[c for c in out if isconcretetype(c) && c <: p]` (classes.jl, the loop over
+open_tuples), read while `out` grows, so a later open tuple sees the classes an earlier one added and the result depends on
+the order of the loop; the code generator passes getConcreteClassIdRange over the final numbering (intrinsics.jl, the
+open_tuple arm's `below`), which also holds every tuple class the loop added. Where an open element's type is above such a
+class (`Tuple`, `Tuple{Any,…}`, `Any`), the generator's product holds a class the walk never met, so the leaf reads no
+class info and rejects as Internal, or the two counts fall on opposite sides of the bound; the docstring's "the one source"
+holds only for the function, not its input. No case covers it. Fix: one class list for both, the walk's open tuples
+expanded to a fixpoint over the met classes and the code generator reading that same list (or the numbering alone), with
+a case that nests an open tuple in one. Owner: wt3-memory (src/julia/classes.jl, src/intrinsics.jl).
+
+stopgap in disguise: the bound, A75S1.
+
+precedent: compute_va_type and jl_f_tuple by line; the bound, A75S1.
+
+Area: emission and diagnostics — bee9ca3c's open_tuple arm (intrinsics.jl, generate_static_intrinsic Val(:open_tuple))
+switches on each open element's class id, nested element by element, through class_id_search (dart's classIdSearch,
+code_generator.dart:5709), null its own arm and a miss unreachable (A68S3); each leaf allocates the concrete tuple class, so
+a value built here and one built at a concrete site share one class, Julia's invariant that each value's class is its
+concrete type. e84214d1 routes visitRecordLiteral's open case through the same arm. d5db52fa: an inline JS site is a
+foreign call to `"dart2wasm"`, its symbol the JS code (rtutils.jl JS_INTEROP_LIBRARY, nir_js_code); getFunction imports it
+under _InteropHelperMemberNamer's name (`sed -n 117p pkg/dart2wasm/lib/namer.dart` gives `  ImportName?
+getImportName(Member member) {`); generateJsMethods (`sed -n 60p pkg/dart2wasm/lib/js/runtime_generator.dart` gives `
+String generateJsMethods(Iterable<Procedure> translatedProcedures) {`) writes `<name>: <code>,` in natural order;
+printToConsole is ported over it (`sed -n 8p sdk/lib/_internal/wasm/js_common/print_patch.dart` gives `void
+printToConsole(String line) => JS<void>(`); JsCodeData is cited in the comments (functions.jl:204, rtutils.jl:76). (A75S3,
+medium, D2) the "héllo" case is a self-golden: it compares node's output with the literal `"héllo\n1 7"` (`grep -n 'out ==
+"héllo' test/src/js_string.jl`), never with Julia's println of the same line, and the host it runs under binds every
+`dart2wasm` import to the test's own `s => console.log(s)` (`Object.fromEntries(imps.map(i => [i.name, s =>
+console.log(s)]))`), so neither the JS text generate_js_methods writes nor the JS runtime's printToConsole ever runs; the
+text is checked only as a string. Fix: the module run under the JS runtime the runtime generator writes, its methods from
+generate_js_methods, and the printed bytes compared with `sprint(println, "héllo")`. Owner: wt3-runtime
+(test/src/js_string.jl). (A75S4, medium, D9/D10) JS code is admitted from any body and never read:
+`nir_foreign_import` admits the library whatever method holds the call (`grep -n 'lib == JS_INTEROP_LIBRARY'
+src/julia/runtime/rtutils.jl` gives `181:`), and generate_js_methods writes the symbol verbatim, so a program's
+`ccall(("s => (", "dart2wasm"), Nothing, ())` puts invalid JS into the runtime, refused only by the JS engine at load; dart's
+JS<T> lives in dart:_js_helper, an internal library a user program cannot import, and its specializer reads the template.
+Fix: the interop module admitted only in a Runtime-module method (dart's internal-library rule), any other a located
+rejection, and the code parsed where it is read, by the ported MiniJsParser (src/julia/js_parser.jl), a parse failure
+located. Owner: wt3-runtime (src/julia/runtime/rtutils.jl). (A75S5, low, R1/D4) one name per enclosing method:
+get_import_name keys `interop_member_names` by the enclosing MethodInstance, and nir_js_code refuses a body holding two
+different codes as Internal, where dart's specializer makes one procedure per JS<T> site; Julia inlining two JS patches into
+one caller (printToConsole and the next) is a valid program that this refuses as WasmTarget's own defect. And the Julia-side
+precedent for code carried as a foreign call's argument, Base.llvmcall (its IR text an argument), is not cited (`grep -rn
+llvmcall src | grep -c .` gives 0). Fix: keyed by the site (enclosing method and statement), with a two-site case, and
+llvmcall cited beside JsCodeData. Owner: wt3-runtime (src/namer.jl, src/julia/runtime/rtutils.jl).
+
+Area: enforcement and prose — 11c9e8a2: a method with no match of its own signature or no frame now throws
+ConstructionViolation, located (parity.jl :1557, :1559); the kinds of Rejection sit in one table checked against
+`Base.uniontypes(Rejection)`; a rejection's type read by argextype; the guard rule follows a stored value to its readers,
+with plants `stored`, `hidden` and `loose`. (A75E3, low, D17) L208's text says the no-match and no-frame refusals have
+plants ("a method with no match or no inference frame a located refusal"), but none exists (`grep -c 'own signature matches
+no method\|no frame for its signature' test/parity_ratchet.jl` gives 0). Fix: a plant whose method's signature matches no
+method (a method deleted after its entry is taken), or the text trimmed. Owner: wt3-parity (test/parity_ratchet.jl).
+18acb938: (A75S6, low, D6) `@assume_effects` joins _TRANSPARENT_MACROS (`grep -n 'Symbol("@assume_effects")'
+src/julia/parity.jl` gives `177:`), so any src definition may carry an effects claim, which Julia's inference trusts to fold
+or delete a call (a `:nothrow` on a body that rejects deletes the rejection), as a macro that "wraps a definition without
+changing what it defines"; the one use (hashing.jl:12) repeats Base's own claim. Fix: admitted only where the definition it
+overlays carries the same claim, read from that Base method, else refused. Owner: wt3-parity (src/julia/parity.jl).
+92e6b448: invariants_dropped now compares each claim's definition in every .tla (comments and whitespace aside), a cfg's
+CONSTANTS and a removed correct cfg's claims, with plants that fire when stubbed. (A75E2, medium, D11) it reads only the
+claim's own text: `defs_named` holds the claims and the `<-` constants' definitions (`sed -n 2617,2619p
+test/parity_ratchet.jl`), so an operator a claim names (Soundness's helpers) rewritten to TRUE, or the cfg's SPECIFICATION
+operator, Init or Next rewritten (`Next == UNCHANGED vars` makes every invariant hold), passes unnamed. Fix: the definitions
+read transitively from each claim and from the SPECIFICATION (or INIT/NEXT) operator, with plants for a helper and for
+Next. Owner: wt3-parity (test/parity_ratchet.jl). (A75E1, medium, D13/D23) e84214d1 landed after the lead asked to hold it:
+the lane shipped 7f975e4d at 18:44:45Z and the wt3-codegen autoship loop (pid 56055, running since 2026-10-29) at 18:44:58Z
+and 18:50:46Z, all red (`grep -n 'tuple literal of open operands' .git/wt-ship-failures.tsv` gives rows 254, 255 and 256, the
+third ad4c35c0, and 258, wt3-constants' conflict naming the new head),
+its log ending there (`tail -1 .wtd/autoship.log` in that worktree: `autoship: 7f975e4d went red; not shipped again until HEAD
+moves`, 18:53:23Z); the lane then amended to e9e81a83 and its own ship.sh rebased it onto 92e6b448 (`git reflog` there:
+`rebase (start): checkout origin/wt2`, `rebase (pick)`, e84214d1) and landed it at 18:55:21Z (`tail -1
+.git/wt-landings.tsv`: `e84214d1 729`). Nothing in dev/ship.sh or dev/autoship.sh honours a hold, and a lane's committed HEAD
+lands by itself once it settles. Eight autoship loops are alive since 2026-10-29 (`ps aux | grep -c '[b]ash
+dev/autoship.sh'` gives 8), among them wt3-constants', which conflicts on test/src/constants.jl at each of the six landings
+since 18:04Z (rows 246 to 258 of the failures file). Fix: a hold a ship refuses (a file per lane under the common dir that
+dev/ship.sh reads, set by the lead), and the stale loops stopped. Owner: lead (dev/ship.sh, dev/autoship.sh).
+Requirements: D5, D6, D8, D9, D11, D20; no lock fired inside its band.
+
+R1 and R2. R1: each new citation is read at its pin (above). The lead's and the monitor's holding is judged here. (A75S1,
+medium, R1/D3/D32) the bound in tuple_classes is a wrong pin: `sed -n 199,201p Compiler/src/types.jl` gives `struct
+InferenceParams` / `    max_methods::Int` / `    max_union_splitting::Int`, a bound read at a call
+(`sed -n 352,353p Compiler/src/abstractinterpretation.jl` gives `is_union_split_eligible(𝕃::AbstractLattice,
+argtypes::Vector{Any}, max_union_splitting::Int) =` / `    1 < unionsplitcost(𝕃, argtypes) <= max_union_splitting`), which
+counts the members of a Union in the argument types and never the concrete types below an abstract one: by Julia's measure
+Tuple{Type{Int64}, Any} costs 1, and jl_f_tuple builds its tuple with no enumeration at all, its type made from the values
+(`sed -n 946,950p src/builtins.c` gives `JL_CALLABLE(jl_f_tuple)` … `return arg_tuple(args[0], &args[1], nargs);`). So the
+product of classes has no Julia precedent, and its bound is a number taken from another limit (D3: the answer
+approximated). By reading, the code it generates is sound (each leaf the concrete class Julia's value has, the search's miss
+unreachable under A68S3) but for A75S2; it over-rejects: an open element of type `Any`, or any abstract type with five or more
+classes met, rejects (the cases' own Tuple{Type{Int64}, Any} with 26 classes and (Any, Int64)), each located (D9 met), each a
+program inside Julia's verifier (D32 not). The nearest 1:1 match is dart's record model: one class per shape (`sed -n 84p
+pkg/dart2wasm/lib/record_class_generator.dart` gives `Map<RecordShape, Class> generateRecordClasses(`, its fields untyped,
+:280 `_generateFields`), its run-time type made from its fields' (:653 `_generateRecordRuntimeType`, the
+_RecordType of sdk/lib/_internal/wasm/common/type.dart:573), an is-check field by field (type.dart:587 `return
+unsafeCast<Record>(o)._checkRecordType(fieldTypes, names);`, :547 `_generateCheckRecordType`). Ported, it needs: a shape
+class per tuple length whose fields hold the top type, built where the static type is not concrete; the Julia type of such a
+value made from its fields at run time, Julia's own arg_tuple (builtins.c) ported, which lifts A68S3 for tuples and needs
+type identity for the result; isa, typeassert and dispatch on such a value read field by field as _checkRecordType does;
+and, because WasmTarget lays a concrete tuple class out with Julia's field types, a conversion from the shape class to the
+concrete class where a concrete static type meets it, which dart (one layout per shape) has no counterpart for, so that step
+needs its own precedent (Julia boxes a jl_f_tuple result with its concrete type, one layout per type). The entry half of
+A70S3 joins this: a tuple packed at entry is the same jl_f_tuple tuple. Fix: the lead rules between the record model so
+ported and the enumeration kept as a @quarantine that names no borrowed bound (its budget then a D17 target with a band);
+either way max_union_splitting leaves the citation, in bee9ca3c's and e84214d1's text and in tuple_classes' reason. Owner:
+wt3-memory (src/julia/classes.jl, src/intrinsics.jl), with wt3-cgstubs2 (src/code_generator.jl _visitArguments,
+_setupLocalParameters, visit_record_literal).
+
+R2: the first progress line after 11c9e8a2, from its landing (the lead's ship log of 18:34:11Z, `grep -oE 'pushed
+[0-9a-f]{8}|src: [0-9]+ of 3404 .*' ship18.log`): `pushed 11c9e8a2`, `src: 3083 of 3404 anchored dart definitions ported with
+a body (…), 32 of them a dart body that itself throws, ported as its throw; … not counted ported: 274 that never return,
+Julia's inference finds, rejecting Internal (…), 5 gap(s) still to fill (4 rejecting Unported or Unquarantined, 1 an
+@unported stub) and 42 in place of a dart abstract declaration (no body to port); 3083 + 274 + 5 + 42 = 3404 of 3404`, the
+lead's headline, matching 11c9e8a2's own read-back (3051 body + 32 DartThrow). No definition hits the new refusal: it throws
+ConstructionViolation, which stops the count, and every landing since prints its line. d5db52fa moves one gap to a body
+(KernelNodes.printToConsole, Unported to a body): its landing prints `3084 + 274 + 4 + 42 = 3404 of 3404` and `13 rejecting
+site(s) name 10 definition(s) of sdk/lib/_internal/wasm/` (from 15 and 11; wt3-codegen-b's .wtd/autoship.out, `pushed
+d5db52fa`), as 92e6b448's does (ship19.log); so the headline at the head is 3084 of 3404.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A70S3 leaves 1.D, A73S1 1.K, A74S2 1.A6, A74E1 1.L.
+A75S1 and A75S2 are open on 1.D; A75S3, A75S4 and A75S5 on 1.F; A75S6 on 1.K; A75E3 on 1.A6; A75E1 and A75E2 on 1.L. By
+owner: wt3-memory A75S1 (with wt3-cgstubs2) and A75S2; wt3-runtime A75S3, A75S4, A75S5, with A73S2 and A73S3; wt3-parity
+A75S6, A75E2, A75E3, with A74S1, A74S3, A74S4; lead A75E1; wt3-latency A73E1; wt3-cgstubs2 A71S3.
