@@ -12,6 +12,4 @@
 # once the file exists, unless the lead admits exactly the keys it adds (dev/no_counterpart_spend.sh), so it
 # only shrinks.
 julia/parity.jl _jl_rel — WasmTarget's own map from a pinned source file to its port's file under src/ (dev/MARCH.md 1.A4); no ecosystem defines it
-julia/parity.jl check_no_counterpart — reads and checks this list, WasmTarget's own format over its own debt-list keys
-julia/parity.jl check_precedent_kinds — checks WasmTarget's own pinning rule (a counterpart is a definition of its own kind) over its reasons' citations
 julia/parity.jl _quarantine_debt — reads the debt list's lines, WasmTarget's own format

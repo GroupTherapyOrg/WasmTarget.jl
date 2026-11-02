@@ -1582,7 +1582,7 @@ end
 
 # the keys the exemption list at `path` admits, one per definition, or a refusal listing each line that fails;
 # its lines `<key> — <reason>` (the reason "" where a line gives none), comments and blank lines aside
-@quarantine "WasmTarget's exemption list is a text file in its own format over its own debt-list keys, which no ecosystem defines, so its reader and check have no counterpart (dev/quarantine_no_counterpart.txt)" Base.readlines function check_no_counterpart(mod::Module, src::String, sdk::Union{String,Nothing}, path::String, debt::Vector{String})::Vector{String}
+@quarantine "a listed definition is admitted only where its reason's citations resolve to nothing, as dart's analyzer resolves a doc comment's identifier and gives null where it resolves to no element (pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:164 CommentReferenceResolver._resolveSimpleIdentifier); Julia differs: it reads WasmTarget's own list of such definitions, each line with its reason, and a listed definition whose reason resolves at its pin, a line naming none, written twice or also on the debt list refuses the load, where dart records the null and goes on" Base.readlines function check_no_counterpart(mod::Module, src::String, sdk::Union{String,Nothing}, path::String, debt::Vector{String})::Vector{String}
     local lines = Tuple{String,String}[]
     for l in (isfile(path) ? readlines(path) : String[])
         local t = strip(l)
@@ -1622,7 +1622,7 @@ end
 # (a table taken from the getter that returns it, a record of what a generator builds, a library entered at
 # main), so kind alone cannot tell a near miss from a port where Julia differs; a pin's fit beyond
 # function versus type is the audit's to read
-@quarantine "a citation's kind is read for WasmTarget's own pinning rule, which no ecosystem defines, so it has no counterpart (dev/quarantine_no_counterpart.txt)" Base.Meta.parse function check_precedent_kinds(mod::Module, src::String, cpin::Function = _c_pin_checkout)::Int
+@quarantine "a citation names a definition of the kind its reference requires, as dart's analyzer requires a doc comment's `new X` to name a class whose constructor it resolves (pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:204 CommentReferenceResolver._resolveSimpleIdentifierReference); Julia differs: a function whose every citation is a type, or a type whose every citation is a function, refuses the load, read from Julia's units by Julia's parser, where dart leaves a reference of the wrong kind unreported (its TODO)" Base.Meta.parse function check_precedent_kinds(mod::Module, src::String, cpin::Function = _c_pin_checkout)::Int
     local jl = cpin(:julia)
     jl === nothing && return 0
     local out = String[]
