@@ -8885,3 +8885,63 @@ and 0d7a4769. A84S5 leaves row 1.F, its D5 half fixed by 30e9397e and its D9 hal
 A87S1 for row 1.D (intrinsics, the compiler-rt ports anchored at the llvm pin, jl_egal's host arm); A87S2 and A87S3
 for row 1.F (runtime and host imports). By owner: wt3-memory A87E1, A87S1 and A87E2's arm; wt3-runtime A87S2, A87S3
 and A87E2's js_helper.jl:8 sentence.
+
+## 2026-11-02 — audited through 5520cb1d (a5a6fa39..5520cb1d: ValueClasses' closure facts judged at the walk's end, a run-time type test through type.dart's _isSubtype and _asSubtype, a getfield on a Union of tuples rejected located, the runtime.jl and js_string.jl cases run through the compile)
+
+The eighty-eighth audit, beside the work, covers the 5 commits of a5a6fa39..5520cb1d that are not audit entries
+(e5ed12a3, entry 87): 8fbd1f67, 96cd8929, 1b0faed6, aea36fc5 and 5520cb1d, read under Dale's R1 and R2 as standing
+sections. Standing items. Each commit names its clause. No silent catch: the 4 new catches, all in tests, each check
+the RejectionError they catch. The debt list reads 370, unchanged. src reads 3087 of 3404 at every commit of the
+range; the runtime library moved from 13 sites naming 9 definitions to 13 naming 11 (1b0faed6). D13: a median of
+158 s; aea36fc5's 626 s was queue wait behind 1b0faed6, not the gate. Earlier findings: 8fbd1f67's rows match audit
+87's Resolution. A83E1 is fixed by 96cd8929, A85E1 by aea36fc5, A87S3 by 5520cb1d. A87E2 is narrowed: js_helper.jl's
+sentence is corrected, the arm at intrinsics.jl:1687 still answers false. Findings: A88E1 and A88S1 to A88S4.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — 96cd8929 restores the invariants and weakens none (D11). WalkEnd is the old Done
+(stack empty); SupertypeClosed and FieldsClosed are judged there again; ValuesCovered adds a Done conjunct for
+records. Each Broken variant still breaks its claim, by reading the model. One narrowing: WalkEnd subtracts every
+record, so the record an open tuple owes the walk is judged at Done only, no weaker than either earlier text.
+
+Area: emission and diagnostics — (A88E1, medium, D9, R1, R2) a run-time type test answers a plausible false in two
+cases. Any: rtutils.jl's link-time walk lets Any through and type.jl:150-152 compares class ids, but the type rules
+skip every row whose superclass is Any (types.jl:957-958) and dart's _TopType._checkInstance (type.dart:138, `=>
+true`) has no port, so `1 isa T` with T = Any known only at run time answers false. A concrete tuple type: the walk
+rejects only open tuple types (rtutils.jl:123); a tuple held in a top-typed operand is its arity's TupleRecord, and
+no rule puts a record under a concrete tuple class (types.jl:967-971), so `(1, 2) isa T` with T = Tuple{Int64,Int64}
+answers false, where the static arm sends every tuple member to the record field check (types.jl:790). rt_isa's
+types include neither. The walk itself, check_run_time_type_values, is a scan (D6): it reads NirConst operands only,
+not NirGlobal values (classes.jl:72 meets those), so the claim that a program's type value is a literal is enforced
+by nothing. (A88S1, low, D1, D5, R2) the run-time arm is written inline in visit_is_expression and
+visit_as_expression (code_generator.jl:2201-2213, :2262-2282); in dart it is the general arm of emitIsTest and
+emitAsCheck (types.dart:495-504, :586-588), whose ports at types.jl:525, :567, :812 and :828 still reject Unported
+naming _isSubtype and _asSubtype, now ported. The commit lists ":97 _Type._checkInstance" among the ports while
+rtutils.jl:122 counts that anchor a gap, and its switch folds dart's overrides (:111 _BottomType, :138 _TopType,
+:291 _InterfaceType) under the abstract :97, which hides that :138 is missing; the Type{X} rejection names :97, not
+a Julia-only row. (A88S2, low, D12) aea36fc5's union_tuple_first reaches the new rejection, replacing the Internal
+the commit measured at the same read, but nothing pins it: smoke.jl:121 counts any Unported or Unquarantined green,
+and the Unquarantined row names "src/intrinsics.jl generateInstanceGetterIntrinsic", a dart-anchored definition.
+(A88S3, low, D12) 5520cb1d's two rewritten cases compile, with no hand-built Translator, namer or generator; the same
+staging stands beside them: js_string.jl:133 builds a separate NIR for a precondition, js_string.jl:90-95 its own
+InteropMemberNamer and generate_js_methods call, runtime.jl:38 its own Translator.
+
+Area: enforcement and prose — no lock or ratchet changed. (A88S4, low, prose) 1b0faed6's subject cites A44S1, whose
+substance is a type value's own fields (T.name) rejecting as Internal; the commit does not touch it and carries no
+`Fixes:` line, so the row stands.
+
+stopgap in disguise: check_run_time_type_values, the link-time walk 1b0faed6 offers as the guarantee that a program's
+type value is a literal, is a scan (D6): it reads NirConst operands only, not NirGlobal values (classes.jl:72 meets
+those), so the claim is enforced by nothing (A88E1).
+
+precedent: type.dart:68, :97, :111, :138, :276, :585, :1484 and :1561 at the dart pin; types.dart:495-504 and
+:586-588; kernel_nodes.dart:701 and :721; julia builtins.c:584 and :591, subtype.c:1419 and :2511.
+
+R1: _isSubtype, _asSubtype, isDeclaredNullable and classId are 1:1 ports (type.dart:68, :276, :1484, :1561;
+kernel_nodes.dart:701, :721; julia builtins.c:584, :591, subtype.c:1419, :2511); two overrides (:138 _TopType, :585 _RecordType)
+are neither ported nor named (A88E1). R2: :97 is called ported while counted a gap, and two definitions with bodies
+are still counted to port at their emit sites (A88S1).
+
+Resolution: this entry lands alone, prose only. A83E1, A85E1 and A87S3 leave their rows; A87E2 stays on 1.D (the
+arm). Fix first: A88E1, wt3-runtime's ahead of A87S2. 1.F: A88E1, A88S1 (wt3-cgstubs2 the general arm, wt3-runtime
+the kind anchors), A88S3 (wt3-runtime) and A88S4 (A44S1's row stands). 1.E: A88S2 (wt3-tests2, wt3-cgstubs2 the row).
