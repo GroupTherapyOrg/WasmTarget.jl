@@ -810,7 +810,10 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
     # a class no constant of which is made (src/julia/classes.jl constant_unmade, the one source)
     local unmade = constant_unmade(translator, cls)
     unmade === nothing || reject!(unmade, at)
-    local info = translator.class_info[cls]
+    # a builtin type's value is its builtin constant (constant_unmade answers nothing for it), never an
+    # instance constant: one reaching here with no class info is WasmTarget's fault, located
+    local info = get(translator.class_info, cls, nothing)
+    info === nothing && reject!(Internal("$at: the class $cls of the constant has no class info"), at)
     record_class_allocation(translator.functions[], info._class_id)
     local type_ = info.non_nullable_type
 
