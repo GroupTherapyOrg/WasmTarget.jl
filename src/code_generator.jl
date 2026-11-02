@@ -864,11 +864,12 @@ end
 # context
 @parity "dart2wasm/lib/code_generator.dart:630 AstCodeGenerator.captureParameters" capture_parameters(self::AstCodeGenerator, node::NirBody)::Nothing = nothing
 
-# dart throws a wasm reference error where one of dart:_wasm's reference intrinsics finds the wrong
-# reference (intrinsics.dart:704, :2013); no Julia value is a dart:_wasm reference, so no Julia program
-# reaches it: Internal, no counterpart reachable (KernelNodes.throwWasmRefError)
+# dart throws a wasm reference error in exactly two intrinsics, where a cast of a dart:_wasm reference
+# fails: WasmAnyRef.toObject (intrinsics.dart:704) and WasmFunction.fromFuncRef (:2013). WasmTarget
+# has neither class (intrinsics.jl's list of dart:_wasm classes it does not have), so no Julia call is
+# either intrinsic and nothing reaches this: Internal, naming them (KernelNodes.throwWasmRefError)
 @parity "dart2wasm/lib/code_generator.dart:655 AstCodeGenerator.throwWasmRefError" throw_wasm_ref_error(self::AstCodeGenerator, expected::String)::Union{} =
-    reject!(Internal("dart2wasm/lib/code_generator.dart:655 AstCodeGenerator.throwWasmRefError: only dart:_wasm's reference intrinsics throw a wasm reference error, and no Julia value is a dart:_wasm reference ($expected expected)"), "$(self.enclosing_member)")
+    reject!(Internal("dart2wasm/lib/code_generator.dart:655 AstCodeGenerator.throwWasmRefError: its only callers are the intrinsics WasmAnyRef.toObject (intrinsics.dart:704) and WasmFunction.fromFuncRef (intrinsics.dart:2013), and no Julia call is either ($expected expected)"), "$(self.enclosing_member)")
 
 # dart sets the source map's file offset from the node; a NIR node has none, Julia's line table taking
 # that place with the source map (translateStatement)

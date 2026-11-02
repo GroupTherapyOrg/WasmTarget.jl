@@ -125,6 +125,15 @@ end
 end
 
 
+@testset "code_generator.dart: throwWasmRefError rejects Internal, naming its two unreached callers (A80S5)" begin
+    local t = TRANSLATOR[]
+    local mi = only(nb for nb in t.component if nb.ci.def.def.name === :is_int).ci.def
+    local mb = D.main_module(t)
+    local g = D.get_inlinable_member_code_generator(t, B.define_function(mb.types[], IR.ValueType[], IR.ValueType[]), mi)
+    local e = rejection(() -> D.throw_wasm_ref_error(g, "a Dart object"))
+    @test e.rejection isa W.Internal && occursin("WasmAnyRef.toObject", e.rejection.site) && occursin("WasmFunction.fromFuncRef", e.rejection.site)
+end
+
 @testset "code_generator.dart: _VirtualCallKind" begin
     @test [sprint(show, k) for k in instances(D._VirtualCallKind)] == ["get", "set", "call"]
     @test D.is_getter(D._VirtualCallKind_Get) && !D.is_getter(D._VirtualCallKind_Call)
