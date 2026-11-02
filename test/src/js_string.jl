@@ -100,5 +100,24 @@ forged(x::Int64) = (ccall(("s => (", "dart2wasm"), Nothing, ()); x)
     local twe = try; W.nir_js_sites(tw, tw.entry); nothing; catch x; x; end
     @test twe isa W.RejectionError && twe.rejection isa W.Internal && occursin("two inline JS sites", twe.rejection.site) &&
           occursin("() => 1", twe.rejection.site) && occursin("() => 2", twe.rejection.site)
+    # the same line's two sites inlined into two callers, each keeping one (its branch pruned): each body
+    # holds one site, so generateJsMethods, which writes one code per site across the world, refuses the
+    # second code, located, never the first's JS for both
+    Core.eval(W.Runtime, :(@inline one_line_of_two(b::Bool) = b ? ccall(("() => 3", "dart2wasm"), Nothing, ()) : ccall(("() => 4", "dart2wasm"), Nothing, ())))
+    Core.eval(W.Runtime, :(@noinline keeps_first() = (one_line_of_two(true); nothing)))
+    Core.eval(W.Runtime, :(@noinline keeps_second() = (one_line_of_two(false); nothing)))
+    local both = (x::Int64) -> (W.Runtime.keeps_first(); W.Runtime.keeps_second(); x)
+    local bw = W.build_nir(W.check_subset(both, (Int64,), "print_patch"), "print_patch")
+    local keepers = [b.ci.def for b in bw if b.ci.def.def.name in (:keeps_first, :keeps_second)]
+    @test length(keepers) == 2 && all(mi -> length(W.nir_js_sites(bw, mi)) == 1, keepers)
+    local bnamer = D.InteropMemberNamer(bw, D.Namer(), D.TranslatorOptions())
+    # each keeper's import named, as the code generator names it at the call (both sites one key, one name)
+    for mi in keepers
+        local kb = only(b for b in bw if b.ci.def === mi)
+        D.get_import_name(bnamer._interop_helper_member_namer, W.nir_foreign_import(kb, only(st for st in kb.stmts if st isa W.NirForeignCall)), mi)
+    end
+    local ge = try; D.generate_js_methods(J.RuntimeFinalizer(bnamer), keepers); nothing; catch x; x; end
+    @test ge isa W.RejectionError && ge.rejection isa W.Internal && occursin("kept by different callers", ge.rejection.site) &&
+          occursin("() => 3", ge.rejection.site) && occursin("() => 4", ge.rejection.site)
 end
 end
