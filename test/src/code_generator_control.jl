@@ -254,6 +254,23 @@ end
     @test p.rejection isa W.Internal && occursin("Expr(:static_parameter)", p.rejection.site)
 end
 
+# a value defined in a try region and read after it (the stackifier's block holding the set ends
+# before the read): an unset slot's read, its UndefRefError caught, a value read where its set does not
+# dominate structurally, whose local is defaultable and its read ref.as_non_null (visit_block)
+module UndefSlotCases
+@noinline ulen(s::String) = ncodeunits(s)
+unset_len(n::Int64) = (v = Vector{String}(undef, 2); v[2] = "a"; try; ulen(v[n - 2]); catch e; e isa UndefRefError ? -1 : -2; end)
+some_len(n::Int64) = (v = Vector{Some{String}}(undef, 2); v[2] = Some("ab"); try; ulen(v[n - 2].value); catch e; e isa UndefRefError ? -1 : -2; end)
+end
+
+@testset "code_generator.dart: a value set in a try region and read after its block, defaultable" begin
+    for f in (UndefSlotCases.unset_len, UndefSlotCases.some_len)
+        local bytes = W.compile(f, (Int64,); optimize = false)
+        queue_native!(string(nameof(f)), bytes, f, [(Int64(n),) for n in (3, 4)])
+    end
+    @test UndefSlotCases.unset_len(Int64(3)) == -1 && UndefSlotCases.some_len(Int64(4)) == 2
+end
+
 @testset "the third oracle: every module queued above answers as native Julia" begin
     for r in WTRunner.run_cases(NATIVE_RUNS)
         r.ok || println(r.label, ": ", r.why)

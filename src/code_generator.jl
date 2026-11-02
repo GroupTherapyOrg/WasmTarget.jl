@@ -1139,6 +1139,40 @@ end
     # and the exception each catch's CATCH stashed, by its EnterNode
     local catch_enter = Dict{Int,Int}(Core.Compiler.block_for_inst(node.cfg, st.catch_dest) + 1 => k
                                       for (k, st) in enumerate(node.stmts) if st isa NirEnter && st.catch_dest != 0)
+    # a value read where its set does not structurally dominate the read: the stackifier may place the
+    # read after the end of the wasm block holding the set, where wasm counts a non-nullable local
+    # uninitialized again (a use Julia's dominance allows, a def in a try region read after it). Each
+    # such value's local is defaultable, its reads ref.as_non_null (visitVariableGet), Binaryen's
+    # TypeUpdating::handleNonDefaultableLocals over its LocalStructuralDominance: the scopes open at
+    # each set, a read outside the set's innermost one not dominated
+    local def_scope = Dict{Int,Int}()
+    local escaping = Base.IdSet{Int}()
+    let open = Int[0], next = 0
+        local read(v::Union{NirValue,Nothing}) = v isa NirSSA && haskey(def_scope, v.id) && !(def_scope[v.id] in open) && push!(escaping, v.id)
+        for mbb in mf.layout, mi in mf.blocks[mbb].instrs
+            local op = mi.opcode
+            if op == BLOCK || op == LOOP || op == TRY_TABLE
+                push!(open, next += 1)
+            elseif op == END_BLOCK || op == END_LOOP || op == END_TRY_TABLE
+                pop!(open)
+            elseif op == STMTS
+                for k in imm(mi, 1):imm(mi, 2)
+                    local st = node.stmts[k]
+                    st isa NirPhi || st isa NirPhiC || foreach(read, nir_value_operands(st))
+                    def_scope[k] = open[end]
+                end
+            elseif op == COPY
+                read((node.stmts[imm(mi, 1)]::NirPhi).values[imm(mi, 2)])
+            elseif op == BR_IF || op == BR_UNLESS
+                read((node.stmts[imm(mi, 2)]::NirGotoIfNot).cond)
+            end
+        end
+    end
+    for k in escaping
+        local t = translate_type_of_local_variable(self.translator, node.types[k])
+        node.stmts[k] isa Union{NirPhi,NirPhiC} && continue
+        t isa WasmBuilder.IR.RefType && !t.nullable && (self.locals[NirSSA(k)] = add_local(self, WasmBuilder.with_nullability(t, true)))
+    end
     local caught = Dict{Int,NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}()
     for mbb in mf.layout, mi in mf.blocks[mbb].instrs
         local op = mi.opcode
@@ -1213,7 +1247,7 @@ end
                     # narrowed its type (the try body's exception type)
                     e == 0 && reject!(Internal("src/code_generator.jl visit_block: the_exception at statement $k, where Julia's exception stack is empty"), at)
                     local thrown = self.try_block_locals[end].exception_local
-                    local dest = add_local(self, translate_type_of_local_variable(self.translator, node.types[k]))
+                    local dest = get(() -> add_local(self, translate_type_of_local_variable(self.translator, node.types[k])), self.locals, NirSSA(k))
                     self.locals[NirSSA(k)] = dest
                     WasmBuilder.local_get(b, thrown)
                     convert_type(self.translator, b, thrown.type, dest.type)
@@ -1257,9 +1291,13 @@ end
 # a NIR variable is never captured (allocateContext) and always has its initializer, the statement
 # whose value it names
 @parity "dart2wasm/lib/code_generator.dart:789 AstCodeGenerator.visitVariable" function visit_variable(self::AstCodeGenerator, node::NirSSA)::Nothing
-    local type_ = translate_type_of_local_variable(self.translator, self.body.types[node.id])
-    local local_ = add_local(self, type_)
-    self.locals[node] = local_
+    # a value read where its set does not dominate structurally has its defaultable local already
+    # (visit_block)
+    local local_ = get(self.locals, node, nothing)
+    if local_ === nothing
+        local_ = add_local(self, translate_type_of_local_variable(self.translator, self.body.types[node.id]))
+        self.locals[node] = local_
+    end
     translate_expression(self, self.body.stmts[node.id], local_.type; value_type = self.body.types[node.id])
     WasmBuilder.local_set(self.b[], local_)
     return nothing
@@ -1699,6 +1737,14 @@ end
     local local_ = get(self.locals, node, nothing)
     local_ === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:2127 AstCodeGenerator.visitVariableGet: read of undefined variable $node"), "$(self.enclosing_member)")
     WasmBuilder.local_get(self.b[], local_)
+    # a defaultable local of a value Julia types non-nullable (visit_block): the value, never null
+    if node isa NirSSA && local_.type isa WasmBuilder.IR.RefType && local_.type.nullable
+        local declared = translate_type_of_local_variable(self.translator, self.body.types[node.id])
+        if declared isa WasmBuilder.IR.RefType && !declared.nullable
+            WasmBuilder.ref_as_non_null(self.b[])
+            return declared
+        end
+    end
     return local_.type
 end
 
