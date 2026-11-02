@@ -54,7 +54,7 @@ end
 )
 # ---- end of the runtime's roots ----
 
-@quarantine "Julia has no per-file namespace; the ports of LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), and of the compiler-rt builtins its libcalls name are one module, as Julia keeps its methods over a foreign C library in one module of their own (precedent(julia: base/libc.jl:3 Libc), libc's interface)" Core.Module module LLVM
+@quarantine "Julia has no per-file namespace; the ports of LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), and of the compiler-rt builtins its libcalls name are one module, as Julia keeps its port of the Ryu algorithm, an external code base (Ulf Adams' reference C implementation), in one module of its own (precedent(julia: base/ryu/Ryu.jl:1 Ryu))" Core.Module module LLVM
 # ---- LLVM's imports, written by dev/skeleton.jl write ----
 import ..@parity, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF, ..BLOCK_TYPE_RESULTS,
        ..BLOCK_TYPE_VOID, ..BR, ..BR_IF, ..BR_TABLE, ..BR_UNLESS, ..CATCH, ..CATCH_ALL_REF,

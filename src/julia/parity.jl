@@ -530,7 +530,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types", "julia/base/hashing", "julia/base/expr", "julia/src/init", "julia/src/precompile", "julia/Compiler/src/effects",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3", "julia/base/floatfuncs", "julia/base/experimental", "julia/base/float",
     "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation", "julia/src/method", "julia/Compiler/src/ssair/show", "julia/Compiler/src/verifytrim", "julia/src/gf", "julia/src/subtype",
-    "julia/base/loading", "julia/base/stacktraces", "julia/base/libc",
+    "julia/base/loading", "julia/base/stacktraces", "julia/base/libc", "julia/base/ryu/Ryu",
 )
 
 """
@@ -758,7 +758,7 @@ Julia's differs: it has no per-file namespace, so a prefix is a module, and a fi
 
 # the module an LLVM unit loads into: LLVM's WebAssembly backend is one namespace, llvm::WebAssembly,
 # and compiler-rt's builtins, the routines its libcalls name, load beside it
-@quarantine "Julia has no per-file namespace; LLVM's ports share one module, as Julia keeps its methods over a foreign C library in one module of their own (precedent(julia: base/libc.jl:3 Libc), libc's interface)" Base.Pair const LLVM_MODULES = (
+@quarantine "Julia has no per-file namespace; LLVM's ports share one module, as Julia keeps its port of the Ryu algorithm, an external code base, in one module of its own (precedent(julia: base/ryu/Ryu.jl:1 Ryu))" Base.Pair const LLVM_MODULES = (
     "llvm/" => (:LLVM,),
     "compiler-rt/" => (:LLVM,),
 )
