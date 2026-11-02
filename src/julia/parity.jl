@@ -1677,11 +1677,12 @@ end
 # the ParityEntry of one definition and the definition to evaluate (an @unported stub expanded), or
 # a refusal at its line: the anchor's form and file, the file outside src/julia (and loaded by
 # include_dart, in WasmTarget), the Julia name the rule admits, the anchor resolved at the pin.
-# Its steps follow dart's OverrideVerifier.visitMethodDeclaration, which checks `@override` where it is
-# written, one to one: it finds the annotation (`element.metadata.hasOverride`, :70) where this reads
-# @parity's anchor (`parse_anchor`); it resolves the member the annotation claims through the
-# inheritance manager (`_isOverride`, :121) where this resolves the anchor in the pinned dart declarations
-# (`_anchor_fault`, and `_form_fault` for a class's mirror); it reports a located diagnostic
+# Its steps follow dart's OverrideVerifier, each visitor named below; visitMethodDeclaration checks
+# `@override` where it is written, one to one: it finds the annotation
+# (`element.metadata.hasOverride`, :70) where this reads @parity's anchor (`parse_anchor`); it
+# resolves the member the annotation claims through the inheritance manager (`_isOverride`, :121)
+# where this resolves the anchor in the pinned dart declarations (`_anchor_fault`, and `_form_fault`
+# for a class's mirror); it reports a located diagnostic
 # (`diag.overrideOnNonOverridingMethod.at(node.name)`, :73) where this refuses at the definition's line.
 # Julia's differs: the anchor names a declaration of another language's source at a pinned commit, not
 # an inherited member of the same program, so it is read from the pinned file's text. Its other steps:
@@ -1701,6 +1702,21 @@ end
 # - here, WasmTarget's own file map and naming: the pin tables' membership, the file's place (outside
 #   src/julia, loaded by include_dart), a ported struct's one inner constructor, and the naming rule
 #   (`_admitted_names`): no counterpart in OverrideVerifier
+# Its other visitors, each a declaration form @parity anchors too:
+# - visitClassDeclaration (:25), visitEnumDeclaration (:32) and visitMixinDeclaration (:90) set the
+#   `_currentClass` that `_isOverride` reads (:122): here `_declares` finds the declaration whose body
+#   holds the anchored line (`_enclosing`), and an anchor `X.m` requires it to be X; dart carries the
+#   class down the tree it walks, where this reads it from the pinned file's text;
+# - visitFunctionDeclaration (:50), a top-level function's annotation, reported outright for a getter
+#   or a setter, which no superinterface declares: here an anchor `X` resolves at column 0 of the
+#   pinned file (`_declares`), a top-level function, variable or type; Julia's differs: the anchor
+#   claims a declaration exists, not an override, so a top-level anchor is resolved as any other;
+# - visitFieldDeclaration (:39) and `_checkField` (:110), a field's annotation, admitted when the
+#   field's getter or setter overrides: here an anchor `X.m` naming a field resolves by `_declares`'s
+#   member rule, which reads a field's line as its getter's and its setter's;
+# - visitPrimaryConstructorDeclaration (:97), a declaring parameter's field: no counterpart; such a
+#   field is declared in the class header, not at column 2 of its body, and `_declares` refuses an
+#   anchor at any column but 0 and 2
 @quarantine "dart's analyzer checks an annotation where it is written, as pkg/analyzer/lib/src/error/override_verifier.dart:68 OverrideVerifier.visitMethodDeclaration checks @override" Base.readlines function _parity_entry(mod::Module, source::LineNumberNode, anchor, def)::Tuple{ParityEntry,Any}
     local refuse(why) = throw(ConstructionViolation("@parity", "$(_at(source)): $why"))
     anchor isa String || refuse("the anchor is not a string literal")
