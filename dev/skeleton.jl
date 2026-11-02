@@ -1694,6 +1694,7 @@ function diff_faults(S::Scope = read_scope(); fields::Bool = true, memo::Functio
     end
     append!(out, ("KERNEL_TYPES row $r: no in-scope file names it" for r in unused_kernel_rows(S)))
     packages_text() == src_text(PACKAGES) || push!(out, "src/julia/packages.jl's generated imports differ from what dev/skeleton.jl writes")
+    append!(out, imports_outside_blocks(src_text(PACKAGES)))
     fields && append!(out, field_faults(S))
     fields && append!(out, kernel_param_faults(S))
     return out
@@ -1901,12 +1902,13 @@ function kernel_param_faults(S::Scope)::Vector{String}
     return out
 end
 
-# ---- the modules' imports of src/julia: src/julia/packages.jl's generated blocks ----------------
-# Each package module (Runtime, LLVM, WasmBuilder and IR, Dart2Wasm with Util and JS) imports exactly
-# the src/julia names its own files use: every identifier or macro of its files that a src/julia file
-# defines at WasmTarget's top level, less a name the module's files define themselves. `write` writes
-# each module's block between its markers in src/julia/packages.jl, so no lane hand-edits an import of
-# src/julia (D5, D6: the list is computed, never agreed); L210 refuses a block that differs.
+# ---- the modules' imports: src/julia/packages.jl's generated blocks ---------------------------------
+# Each package module (Runtime, LLVM, WasmBuilder and IR, Dart2Wasm with Util and JS) imports exactly what
+# its own files use as globals (global_names): each name a src/julia file defines at WasmTarget's top level,
+# each name Base or Core binds without exporting it (from the module that binds it), and each other package
+# module, less a name the module's files define themselves. `write` writes each module's whole import set
+# between its markers in src/julia/packages.jl, so no lane hand-edits an import (D5, D6: the list is
+# computed, never agreed); L210 refuses a block that differs and an import outside every block.
 
 const PACKAGES = joinpath(ROOT, "src", "julia", "packages.jl")
 PACKAGES_PATH()::String = PACKAGES
@@ -1982,41 +1984,197 @@ function julia_defined()::Set{String}
     return setdiff(out, Set(first.(PACKAGE_MODULES)))
 end
 
-# the names a file's code refers to, unqualified: every symbol of its parsed forms and every macro it
-# calls, but a struct's field names, a keyword argument's name and the field of `x.f` (a QuoteNode),
-# which name no binding
-function used_names(text::AbstractString, file::AbstractString = "none")::Set{String}
+# the names a file's code refers to as globals, unqualified, read with Julia's scope rule
+# (julia/src/julia-syntax.scm, resolve-scopes): a function's arguments and type parameters, and every name its
+# body assigns, iterates, declares local or defines as a local function, are local throughout that function, as
+# are a let's, a loop's, a comprehension's and a catch's; `global x` keeps x global. A name local where it is
+# read refers to no global. precedent(julia: ExplicitImports.jl's analysis of the names a module uses, which
+# reads local bindings by the same scope rule)
+function global_names(text::AbstractString, file::AbstractString = "none")::Set{String}
     local out = Set{String}()
-    local walk(x) = begin
+    # the names a binding form binds: `x`, `x::T`, `(a, b)`, `x...`, `x = default`, `::T` (none)
+    local bound_by!(s::Set{Symbol}, x) = begin
         if x isa Symbol
-            push!(out, string(x))
+            push!(s, x)
         elseif x isa Expr
-            if x.head == :macrocall
+            if x.head == :(::)
+                length(x.args) == 2 && bound_by!(s, x.args[1])
+            elseif x.head in (:tuple, :parameters)
+                foreach(a -> bound_by!(s, a), x.args)
+            elseif x.head in (:..., :kw, :(=))
+                bound_by!(s, x.args[1])
+            elseif x.head == :call && !isempty(x.args) && x.args[1] === :(=>)
+                nothing
+            end
+        end
+        s
+    end
+    # a call signature's arguments, type parameters and name: `f(a, b; c) where {T}`
+    local sig!(s::Set{Symbol}, c) = begin
+        while Meta.isexpr(c, :where)
+            for t in c.args[2:end]
+                local tv = Meta.isexpr(t, :(<:)) || Meta.isexpr(t, :(>:)) ? t.args[1] : t
+                tv isa Symbol && push!(s, tv)
+            end
+            c = c.args[1]
+        end
+        Meta.isexpr(c, :(::)) && length(c.args) == 2 && (c = c.args[1])
+        if Meta.isexpr(c, :call)
+            foreach(a -> bound_by!(s, a), c.args[2:end])
+        elseif Meta.isexpr(c, :tuple)
+            foreach(a -> bound_by!(s, a), c.args)
+        else
+            bound_by!(s, c)
+        end
+        s
+    end
+    local isdef(x) = Meta.isexpr(x, :function) || (Meta.isexpr(x, :(=)) && (local c = x.args[1];
+        while Meta.isexpr(c, :where) || (Meta.isexpr(c, :(::)) && length(c.args) == 2); c = c.args[1]; end; Meta.isexpr(c, :call)))
+    # the names a scope's body binds: assignments, loop and comprehension variables, local declarations, local
+    # functions, but not inside a nested function, which is its own scope; and the names it declares global
+    local assigned!(s::Set{Symbol}, g::Set{Symbol}, x) = begin
+        x isa Expr || return s
+        local h = x.head
+        if h == :function || h == :->
+            # a local function binds its name; its body is its own scope
+            if h == :function
+                local c = x.args[1]
+                while Meta.isexpr(c, :where) || (Meta.isexpr(c, :(::)) && length(c.args) == 2); c = c.args[1]; end
+                Meta.isexpr(c, :call) && c.args[1] isa Symbol && push!(s, c.args[1])
+            end
+        elseif isdef(x)
+            local c = x.args[1]
+            while Meta.isexpr(c, :where) || (Meta.isexpr(c, :(::)) && length(c.args) == 2); c = c.args[1]; end
+            c.args[1] isa Symbol && push!(s, c.args[1])
+        elseif h in (:(=), :+=, :-=, :*=, :/=, :|=, :&=, :^=, :÷=, :%=, :<<=, :>>=, :.=)
+            bound_by!(s, x.args[1]); assigned!(s, g, x.args[2])
+        elseif h == :local
+            # `local x`, `local x = v`, and `local f(x) = v`, a local function
+            foreach(a -> isdef(a) ? assigned!(s, g, a) : Meta.isexpr(a, :(=)) ? (bound_by!(s, a.args[1]); assigned!(s, g, a.args[2])) : bound_by!(s, a), x.args)
+        elseif h == :global
+            foreach(a -> (local n = Meta.isexpr(a, :(=)) ? a.args[1] : a; n isa Symbol && push!(g, n)), x.args)
+        elseif h == :for
+            local spec = x.args[1]
+            for a in (Meta.isexpr(spec, :block) ? spec.args : [spec])
+                Meta.isexpr(a, :(=)) && bound_by!(s, a.args[1])
+            end
+            assigned!(s, g, x.args[2])
+        elseif h in (:tuple, :parameters, :call, :ref, :curly, :vect, :braces, :macrocall)
+            # `(a = 1,)` and a call's keywords bind nothing
+            foreach(a -> Meta.isexpr(a, (:(=), :kw)) ? assigned!(s, g, a.args[2]) : assigned!(s, g, a), x.args)
+        else
+            foreach(a -> assigned!(s, g, a), x.args)
+        end
+        s
+    end
+    local walk(x, local_::Set{Symbol}) = begin
+        if x isa Symbol
+            x in local_ || push!(out, string(x))
+        elseif x isa Expr
+            local h = x.head
+            if h == :macrocall
                 x.args[1] isa Symbol && push!(out, string(x.args[1]))
-                foreach(walk, x.args[2:end])
-            elseif x.head == :struct
-                walk(x.args[2])
+                foreach(a -> walk(a, local_), x.args[2:end])
+            elseif h == :struct
+                local s = copy(local_)
+                local t = x.args[2]; t = Meta.isexpr(t, :(<:)) ? t.args[1] : t
+                Meta.isexpr(t, :curly) && foreach(p -> (local q = Meta.isexpr(p, :(<:)) ? p.args[1] : p; q isa Symbol && push!(s, q)), t.args[2:end])
+                walk(x.args[2], s)
                 for f in x.args[3].args
-                    local g = Meta.isexpr(f, :const) ? f.args[1] : f
-                    g isa Symbol && continue                       # an untyped field's name
-                    Meta.isexpr(g, :(::)) && length(g.args) == 2 ? walk(g.args[2]) : walk(g)
+                    local fd = Meta.isexpr(f, :const) ? f.args[1] : f
+                    fd isa Symbol && continue
+                    Meta.isexpr(fd, :(::)) && length(fd.args) == 2 ? walk(fd.args[2], s) : walk(fd, s)
                 end
-            elseif x.head == :kw
-                # a keyword's name names no binding; its type and default do
-                Meta.isexpr(x.args[1], :(::)) && walk(x.args[1].args[end])
-                walk(x.args[2])
-            elseif x.head == :.
-                walk(x.args[1])
+            elseif h == :kw
+                Meta.isexpr(x.args[1], :(::)) && walk(x.args[1].args[end], local_)
+                walk(x.args[2], local_)
+            elseif h == :.
+                walk(x.args[1], local_)
+            elseif h == :function && length(x.args) == 1
+                nothing                                  # `function f end` declares, reads nothing
+            elseif h == :function || h == :-> || isdef(x)
+                # its own scope: the signature's names, then what its body binds, less what it declares global
+                local s, g = copy(local_), Set{Symbol}()
+                local c = x.args[1]
+                sig!(s, c)
+                assigned!(s, g, x.args[2]); setdiff!(s, g)
+                # the signature's types and defaults are read
+                local types(e) = begin
+                    if Meta.isexpr(e, :(::))
+                        walk(e.args[end], s); length(e.args) == 2 && types(e.args[1])
+                    elseif Meta.isexpr(e, (:kw, :(=))) && !(e === x)
+                        types(e.args[1]); walk(e.args[2], s)
+                    elseif Meta.isexpr(e, (:call, :tuple, :parameters, :where, :...))
+                        local first = Meta.isexpr(e, :call) ? 2 : 1
+                        Meta.isexpr(e, :call) && !(e.args[1] isa Symbol) && walk(e.args[1], s)
+                        Meta.isexpr(e, :where) ? (types(e.args[1]); foreach(t -> Meta.isexpr(t, :(<:)) && walk(t.args[2], s), e.args[2:end])) :
+                            foreach(types, e.args[first:end])
+                    end
+                end
+                types(c)
+                walk(x.args[2], s)
+            elseif h == :let
+                local s, g = copy(local_), Set{Symbol}()
+                for b in (Meta.isexpr(x.args[1], :block) ? x.args[1].args : [x.args[1]])
+                    if Meta.isexpr(b, :(=))
+                        walk(b.args[2], local_); bound_by!(s, b.args[1])
+                    else
+                        bound_by!(s, b)
+                    end
+                end
+                assigned!(s, g, x.args[2]); setdiff!(s, g)
+                walk(x.args[2], s)
+            elseif h == :for || h == :while
+                local s, g = copy(local_), Set{Symbol}()
+                if h == :for
+                    for a in (Meta.isexpr(x.args[1], :block) ? x.args[1].args : [x.args[1]])
+                        Meta.isexpr(a, :(=)) && (walk(a.args[2], local_); bound_by!(s, a.args[1]))
+                    end
+                else
+                    walk(x.args[1], local_)
+                end
+                assigned!(s, g, x.args[2]); setdiff!(s, g)
+                walk(x.args[2], s)
+            elseif h == :generator || h == :flatten
+                local s = copy(local_)
+                local gen = h == :flatten ? x.args[1] : x
+                for a in gen.args[2:end]
+                    local specs = Meta.isexpr(a, :filter) ? a.args[2:end] : [a]
+                    for sp in specs
+                        Meta.isexpr(sp, :(=)) && (walk(sp.args[2], s); bound_by!(s, sp.args[1]))
+                    end
+                    Meta.isexpr(a, :filter) && walk(a.args[1], s)
+                end
+                walk(gen.args[1], s)
+            elseif h == :try
+                walk(x.args[1], local_)
+                local s = copy(local_)
+                length(x.args) >= 2 && x.args[2] isa Symbol && push!(s, x.args[2])
+                length(x.args) >= 3 && walk(x.args[3], s)
+                foreach(a -> walk(a, local_), x.args[4:end])
+            elseif h == :where
+                local s = copy(local_)
+                for t in x.args[2:end]
+                    local tv = Meta.isexpr(t, :(<:)) ? t.args[1] : t
+                    tv isa Symbol && push!(s, tv)
+                    Meta.isexpr(t, :(<:)) && walk(t.args[2], local_)
+                end
+                walk(x.args[1], s)
+            elseif h == :tuple || h == :parameters
+                foreach(a -> Meta.isexpr(a, :(=)) && a.args[1] isa Symbol ? walk(a.args[2], local_) : walk(a, local_), x.args)
+            elseif h in (:(=), :local, :global) || h in (:+=, :-=, :*=, :|=, :&=)
+                # a binding's target names no reference; its value and a destructured or indexed target's parts do
+                foreach(a -> walk(a, local_), x.args)
             else
-                foreach(walk, x.args)
+                foreach(a -> walk(a, local_), x.args)
             end
         end
     end
-    walk(Meta.parseall(text; filename = String(file)))
+    walk(Meta.parseall(text; filename = String(file)), Set{Symbol}())
     return out
 end
 
-# a module's block: its src/julia names, sorted, one import wrapped at 100 columns
+# a module's src/julia names, sorted, one import wrapped at 100 columns
 function import_block(names::Vector{String}, dots::String)::String
     isempty(names) && return ""
     local lines, cur = String[], "import "
@@ -2031,7 +2189,44 @@ function import_block(names::Vector{String}, dots::String)::String
     return join(lines, "\n")
 end
 
-const BLOCK_RX(m) = Regex("(# ---- the src/julia names \\Q$(m)\\E's files use, written by dev/skeleton\\.jl write ----\\n)(?s:.*?)(# ---- end of $(m)'s src/julia names ----)")
+const BLOCK_RX(m) = Regex("(# ---- \\Q$(m)\\E's imports, written by dev/skeleton\\.jl write ----\\n)(?s:.*?)(# ---- end of \\Q$(m)\\E's imports ----)")
+
+# each package module's enclosing package module in packages.jl (IR's WasmBuilder, Util's and JS's
+# Dart2Wasm), read from the file's own module nesting
+function module_parents(text::AbstractString)::Dict{String,String}
+    local out = Dict{String,String}()
+    local walk(x, parent) = begin
+        x isa Expr || return
+        if Meta.isexpr(x, :module)
+            local n = string(x.args[2])
+            parent === nothing || (out[n] = parent)
+            foreach(a -> walk(a, n), x.args[3].args)
+        else
+            foreach(a -> walk(a, parent), x.args)
+        end
+    end
+    walk(Meta.parseall(text), nothing)
+    return out
+end
+
+# the module that binds `n` where Base or Core binds it without exporting it, or nothing: a module's file
+# names it bare only through an import (a Julia module reads Base's exported names alone)
+function unexported_owner(n::AbstractString)::Union{Module,Nothing}
+    local s = Symbol(n)
+    isdefined(Base, s) && return Base.isexported(Base, s) ? nothing : Base.binding_module(Base, s)
+    return isdefined(Core, s) && !Base.isexported(Core, s) ? Core : nothing
+end
+
+# an import outside every generated block of packages.jl, each a sentence with its line: the generator writes
+# every import of a module, so a hand import is refused (a rebase that regenerates the file would drop it)
+function imports_outside_blocks(text::AbstractString)::Vector{String}
+    local masked = text
+    for rx in (ROOTS_RX, (BLOCK_RX(m) for (m, _) in PACKAGE_MODULES)...)
+        masked = replace(masked, rx => s -> replace(s, r"[^\n]" => " "))
+    end
+    return String["src/julia/packages.jl:$i: `$(strip(l))` imports outside a generated block; the generator writes each module's imports (julia dev/skeleton.jl write)"
+                  for (i, l) in enumerate(split(masked, '\n')) if occursin(r"^\s*(?:import|using)\b", l)]
+end
 
 # the macros packages.jl's body of module `m` calls outside its nested modules' bodies (the
 # @quarantine declaring IR, Util or JS)
@@ -2058,12 +2253,13 @@ function packages_text(read_src::Function = src_text)::String
     local text = read_src(PACKAGES)
     local defined = julia_defined()
     local files = module_files()
+    local parents = module_parents(text)
     for (m, dots) in PACKAGE_MODULES
         local used, own = Set{String}(), Set{String}()
         for f in files[m]
             isfile(f) || continue
             local t = read_src(f)
-            union!(used, used_names(t, f))
+            union!(used, global_names(t, f))
             defined_names!(own, Meta.parseall(t; filename = f))
         end
         # packages.jl's own body of the module names some too: the macro declaring a nested module
@@ -2071,7 +2267,21 @@ function packages_text(read_src::Function = src_text)::String
         local names = sort!(collect(setdiff(intersect(used, defined), own)))
         local rx = BLOCK_RX(m)
         occursin(rx, text) || error("skeleton: src/julia/packages.jl holds no generated block for $m")
-        local block = import_block(names, dots)
+        local lines = String[import_block(names, dots)]
+        # Base's and Core's unexported names, each from the module binding it
+        local owners = Dict{String,Vector{String}}()
+        for n in sort!(collect(setdiff(used, own, defined, Set(first.(PACKAGE_MODULES)))))
+            local o = unexported_owner(n)
+            o === nothing || push!(get!(owners, string(o), String[]), n)
+        end
+        append!(lines, ("import $o: " * join(owners[o], ", ") for o in sort!(collect(keys(owners)))))
+        # the other package modules its files name: the enclosing one, a sibling, or a top-level one
+        for p in sort!([p for (p, _) in PACKAGE_MODULES if p != m && p in used && get(parents, p, nothing) != m])
+            local pp = get(parents, p, nothing)
+            push!(lines, "import " * (p == get(parents, m, nothing) || (pp !== nothing && pp == get(parents, m, nothing)) ? ".." * p :
+                                      pp === nothing ? dots * p : dots * pp * "." * p))
+        end
+        local block = join(filter(!isempty, lines), "\n")
         text = replace(text, rx => s -> (local mm = match(rx, s); mm[1] * (isempty(block) ? "" : block * "\n") * mm[2]))
     end
     occursin(ROOTS_RX, text) || error("skeleton: src/julia/packages.jl holds no generated block for the runtime's roots")

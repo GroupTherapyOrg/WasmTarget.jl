@@ -3,17 +3,18 @@
 # IR for the ir library builder/ and serialize/ import `as ir`; Dart2Wasm for dart2wasm, with Util
 # and JS for `util.dart as util` and `js/runtime_generator.dart as js`. A name dart spells `p.X` is
 # `P.X` where P is bound: each module binds its package and the package modules it uses. Each module's
-# imports of src/julia are written by `julia dev/skeleton.jl write` between its markers: exactly the
-# src/julia names its files use, so no lane edits them by hand (L210 refuses a block that differs).
+# imports are written by `julia dev/skeleton.jl write` between its markers, all of them: the src/julia
+# names, Base's and Core's unexported names and the package modules its files use as globals, so no lane
+# edits an import by hand (L210 refuses a block that differs and an import outside every block).
 
 # dart's runtime library, the @patch libraries a program is compiled with (RUNTIME_FILES), its ports
 # Julia methods compiled into every closed world (RUNTIME_ROOTS, below)
 @quarantine "Julia has no per-file namespace; dart's patch libraries, the program's runtime (pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries), are a module" Core.Module module Runtime
-# ---- the src/julia names Runtime's files use, written by dev/skeleton.jl write ----
+# ---- Runtime's imports, written by dev/skeleton.jl write ----
 import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..WasmI32, .._wasm_only, ..jl_to_typeof,
        ..jl_typetagis, ..wasm_array_length, ..wasm_array_new, ..wasm_array_read,
        ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_string_codeunit
-# ---- end of Runtime's src/julia names ----
+# ---- end of Runtime's imports ----
 end
 # ---- the runtime's roots, written by dev/skeleton.jl write ----
 @quarantine "dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's runtime functions the code generator calls (julia/src/rtutils.c:189 jl_bounds_error), which every Julia process links whole, where Julia differs: libjulia has no demand to keep one out, so every one is a root" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (
@@ -47,7 +48,7 @@ end
 # ---- end of the runtime's roots ----
 
 @quarantine "Julia has no per-file namespace; LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), one namespace whose members its files define as WebAssembly::m (llvm/lib/Target/WebAssembly/WebAssemblyUtilities.cpp:41 WebAssembly::mayThrow), is a module, the compiler-rt builtins its libcalls name beside it" Core.Module module LLVM
-# ---- the src/julia names LLVM's files use, written by dev/skeleton.jl write ----
+# ---- LLVM's imports, written by dev/skeleton.jl write ----
 import ..@parity, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF, ..BLOCK_TYPE_RESULTS,
        ..BLOCK_TYPE_VOID, ..BR, ..BR_IF, ..BR_TABLE, ..BR_UNLESS, ..CATCH, ..CATCH_ALL_REF,
        ..CONST_I32, ..COPY, ..END_BLOCK, ..END_LOOP, ..END_TRY_TABLE, ..Internal, ..LOOP,
@@ -58,30 +59,28 @@ import ..@parity, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF, ..BLOCK_TYPE
        ..get_prev_node, ..is_barrier, ..is_terminator, ..machine_function, ..post_order,
        ..pq_empty, ..pq_pop!, ..pq_push!, ..recompute_domtree!, ..reject!, ..renumber_blocks!,
        ..sd_get, ..strongly_connected_components, ..terminators
-# ---- end of LLVM's src/julia names ----
-# the type legalizer's expansions emit their nodes' instructions through wasm_builder
 import ..WasmBuilder
+# ---- end of LLVM's imports ----
 end
 
 @quarantine "Julia has no per-file namespace; dart's wasm_builder package is a module" Core.Module module WasmBuilder
-# ---- the src/julia names WasmBuilder's files use, written by dev/skeleton.jl write ----
+# ---- WasmBuilder's imports, written by dev/skeleton.jl write ----
 import ..@dart_export, ..@parity, ..@quarantine, ..AbstractInstructionsBuilder, ..AbstractModule,
        ..AbstractModuleBuilder, ..Internal, ..InvalidModule, ..Late, ..LinkedHashMap,
-       ..LinkedHashSet, ..Unported, ..field_name, ..reject!, ..strongly_connected_components
-# ---- end of WasmBuilder's src/julia names ----
-# a method serving every subtype alike is inferred once, not once per caller's type (a compile's first-use cost)
+       ..LinkedHashSet, ..Unported, ..reject!, ..strongly_connected_components
 import Base: @nospecializeinfer
+# ---- end of WasmBuilder's imports ----
 @quarantine "dart's builder and serializer import ir under the prefix ir; a prefix is a module in Julia" Core.Module module IR
-# ---- the src/julia names IR's files use, written by dev/skeleton.jl write ----
+# ---- IR's imports, written by dev/skeleton.jl write ----
 import ...@closed, ...@dart_export, ...@parity, ...AbstractModule, ...Internal, ...InvalidModule,
        ...Late, ...LinkedHashMap, ...Unported, ...reject!
-# ---- end of IR's src/julia names ----
 import ..WasmBuilder
+# ---- end of IR's imports ----
 end
 end
 
 @quarantine "Julia has no per-file namespace; dart's dart2wasm package, its library entered at pkg/dart2wasm/lib/dart2wasm.dart:298 main, is a module" Core.Module module Dart2Wasm
-# ---- the src/julia names Dart2Wasm's files use, written by dev/skeleton.jl write ----
+# ---- Dart2Wasm's imports, written by dev/skeleton.jl write ----
 import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..AbstractDispatchTable, ..AbstractLambda, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF,
        ..BLOCK_TYPE_RESULTS, ..BLOCK_TYPE_VOID, ..BR, ..BR_IF, ..BR_TABLE, ..BR_UNLESS, ..CATCH,
@@ -103,44 +102,40 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..WasmI32, ..WasmI64, ..WasmI8, ..build_nir, ..class_implemented_types,
        ..class_instance_fields, ..class_is_abstract, ..class_is_set_field, ..class_superclass,
        ..closed_world_classes, ..concrete_class_ids, ..concrete_classes, ..egal_by_identity,
-       ..field_may_be_null, ..field_name, ..field_selector_calls, ..holds_reference,
-       ..is_interface_class_type, ..jl_egal, ..jl_to_typeof, ..jl_typetagis, ..nir_argument_type,
-       ..nir_binding_is_constant, ..nir_binding_value, ..nir_body_of, ..nir_callee,
-       ..nir_carries_data, ..nir_const_type, ..nir_foreign_import, ..nir_foreign_operands,
-       ..nir_invoke_target, ..nir_method_nargs, ..nir_operands, ..nir_parameter_types,
-       ..nir_runtime_member, ..nir_tuple_type, ..nir_used_statements, ..nir_value_operands,
-       ..nir_value_type, ..nir_vararg_call_tuple, ..nir_vararg_packing, ..no_counterpart_rejection,
-       ..open_tuple_holds, ..reject!, ..run_time_type_gap, ..run_time_type_test!,
-       ..run_time_type_value!, ..run_wasm_opt, ..sd_get, ..throw_atomic_error,
-       ..throw_bounds_error, ..throw_divide_error, ..throw_invalid_memory_size,
-       ..throw_method_error, ..throw_out_of_memory, ..throw_undef_ref_error, ..told_by_class,
-       ..tuple_record_arity, ..tuple_record_class, ..type_value_unmade, ..uf_add!, ..uf_find!,
-       ..uf_union!, ..wasm_array_length, ..wasm_array_new, ..wasm_array_read,
-       ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_egal, ..wasm_memory_copy!,
-       ..wasm_memory_fill!, ..wasm_memory_string, ..wasm_memory_unset!, ..wasm_string_alloc,
-       ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length, ..wasm_string_memory
-# ---- end of Dart2Wasm's src/julia names ----
-# a dispatcher over every NIR kind is inferred once, not once per kind of node (a compile's first-use cost)
+       ..field_may_be_null, ..field_selector_calls, ..holds_reference, ..is_interface_class_type,
+       ..jl_egal, ..jl_to_typeof, ..jl_typetagis, ..nir_argument_type, ..nir_binding_is_constant,
+       ..nir_binding_value, ..nir_body_of, ..nir_callee, ..nir_carries_data, ..nir_const_type,
+       ..nir_foreign_import, ..nir_foreign_operands, ..nir_invoke_target, ..nir_method_nargs,
+       ..nir_operands, ..nir_parameter_types, ..nir_runtime_member, ..nir_tuple_type,
+       ..nir_used_statements, ..nir_value_operands, ..nir_value_type, ..nir_vararg_call_tuple,
+       ..nir_vararg_packing, ..no_counterpart_rejection, ..open_tuple_holds, ..reject!,
+       ..run_time_type_gap, ..run_time_type_test!, ..run_time_type_value!, ..run_wasm_opt,
+       ..sd_get, ..throw_atomic_error, ..throw_bounds_error, ..throw_divide_error,
+       ..throw_invalid_memory_size, ..throw_method_error, ..throw_out_of_memory,
+       ..throw_undef_ref_error, ..told_by_class, ..tuple_record_arity, ..tuple_record_class,
+       ..type_value_unmade, ..uf_add!, ..uf_find!, ..uf_union!, ..wasm_array_length,
+       ..wasm_array_new, ..wasm_array_read, ..wasm_array_read_unsigned, ..wasm_array_write!,
+       ..wasm_egal, ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_string,
+       ..wasm_memory_unset!, ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!,
+       ..wasm_string_length, ..wasm_string_memory
 import Base: @nospecializeinfer
-# a match over the Kernel table's Reference names its MethodInstance kind by its name
 import Core: MethodInstance
 import ..LLVM
 import ..Runtime
 import ..WasmBuilder
+# ---- end of Dart2Wasm's imports ----
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
-# ---- the src/julia names Util's files use, written by dev/skeleton.jl write ----
+# ---- Util's imports, written by dev/skeleton.jl write ----
 import ...@parity, ...ClassField, ...Internal, ...NirConst, ...NirWorld, ...nir_body_of,
        ...program_export_name, ...reject!
-# ---- end of Util's src/julia names ----
-import ...WasmBuilder
 import ..Dart2Wasm
+# ---- end of Util's imports ----
 end
 @quarantine "dart2wasm's compile imports js/runtime_generator.dart under the prefix js; a prefix is a module in Julia" Core.Module module JS
-# ---- the src/julia names JS's files use, written by dev/skeleton.jl write ----
+# ---- JS's imports, written by dev/skeleton.jl write ----
 import ...@parity, ...Internal, ...JS_STRING_BUILTINS_MODULE, ...nir_js_sites, ...reject!
-# ---- end of JS's src/julia names ----
-import ...WasmBuilder
 import ..Dart2Wasm
+# ---- end of JS's imports ----
 end
 end
 
