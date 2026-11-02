@@ -103,18 +103,19 @@ fi
 # ("WasmTarget does not load"; src/support stripped at 17:14Z, after 686966ac cited it). This tree's script only grows
 # the list and, at the pinned commit, only re-reads the tree, with no fetch (unjudged, a second or two)
 bash dev/fetch_julia.sh > .wtd/fetch_julia.out 2>&1 || { echo "check: the julia checkout cannot be made"; tail -5 .wtd/fetch_julia.out; exit 1; }
-# each stage's CPU seconds (user + sys) go to .wtd/<stage>.time, printed unjudged, below. D14's band judges the load by
-# the instructions its whole process tree retires (dev/tree_instructions.jl): its precompile runs in a child process
-# rusage does not report, and its CPU seconds doubled on efficiency cores (13 CPU-s on a performance core, 28 on
-# efficiency cores, the same instructions, 2026-11-01); the counter's plant runs first, a tree whose grandchild does
-# fixed work, counted whole and alike at default and background QoS within its band
+# every stage runs under dev/tree_instructions.jl, which writes to .wtd/<stage>.gi what its whole process tree retired, each
+# process read at its exit: its instructions and those on performance cores, its CPU seconds and those on performance
+# cores, and the stage's own process's instructions (the load's precompile runs in a child process rusage does not
+# report, and the shards' node and wasm-opt are children too). D14's band reads them below. The counter's plant runs
+# first: a tree whose grandchild does fixed work, counted whole, each split inside its whole, and a run at background
+# QoS read wholly on efficiency cores
 julia --startup-file=no dev/tree_instructions.jl --plant > .wtd/tree_plant.out 2>&1 || { echo "check: the load's instruction counter fails its plant: $(tail -1 .wtd/tree_plant.out)"; exit 1; }
-/usr/bin/time -l -o .wtd/load.time julia --startup-file=no dev/tree_instructions.jl .wtd/load.gi julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
+julia --startup-file=no dev/tree_instructions.jl .wtd/load.gi julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
 # test file and case it was running (WT_PROGRESS), never an hour of a pinned core (2026-10-28: a
 # shared-DAG constant hashed in 2^40 steps and held a landing for 50 minutes)
 WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: today's slowest loaded check is ~170 s
-/usr/bin/time -l -o .wtd/ratchet.time julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
+julia --startup-file=no dev/tree_instructions.jl .wtd/ratchet.gi julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
 # five shards beside the ratchet: each shard's instructions, which D14's band judges, are its own ~49 CPU-s first
 # compile of WasmTarget plus a fifth of the suite's tests, and the suite grows with every port (the judged path read
 # 105-113 s at three shards, 2026-10-29 09:09; at four, every change to src/ read 121 s, load 13 + a shard of 108,
@@ -131,7 +132,7 @@ costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-instr.tsv
 rm -rf .wtd/claims; mkdir -p .wtd/claims
 for k in $(seq 1 $SHARDS); do
   : > ".wtd/progress.$k"
-  WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_CLAIMS="$PWD/.wtd/claims" WT_SRC_COSTS="$costs" WT_SRC_COSTS_OUT="$PWD/.wtd/src_costs.$k" /usr/bin/time -l -o ".wtd/src_tests.$k.time" \
+  WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_CLAIMS="$PWD/.wtd/claims" WT_SRC_COSTS="$costs" WT_SRC_COSTS_OUT="$PWD/.wtd/src_costs.$k" julia --startup-file=no dev/tree_instructions.jl ".wtd/src_tests.$k.gi" \
     julia --project=. --startup-file=no test/src_tests.jl > ".wtd/src_tests.$k.out" 2>&1 & tpids="$tpids $!"
 done
 running() { kill -0 $rpid 2>/dev/null && return 0; for p in $tpids; do kill -0 $p 2>/dev/null && return 0; done; return 1; }
@@ -216,17 +217,22 @@ RATE_LOAD=11.6
 # efficiency-core seconds over the slowdown, so neither bound rests on placement. The plant prints the slowdown it
 # measures, unjudged, since taskpolicy does not hold work on the efficiency cores (dev/tree_instructions.jl)
 ECORE_SLOWDOWN=1.4
-cpu() { awk 'NR == 1 { printf "%d", $3 + $5 }' ".wtd/$1.time"; }
-gi() { awk '/instructions retired/ { printf "%d", $1 / 1e9 }' ".wtd/$1.time"; }
+# a stage's .gi (dev/tree_instructions.jl): G, G on performance cores, CPU-s, CPU-s on performance cores, its own process's G
+cpu() { awk '{ printf "%d", $3 }' ".wtd/$1.gi"; }
+gi() { awk '{ printf "%d", $5 }' ".wtd/$1.gi"; }
+# a stage's split, printed unjudged until each stage is judged by it: its G on performance cores of its whole, and its
+# CPU seconds on performance cores of its whole
+split_of() { awk '{ printf "%d/%d G, %d/%d s", $2, $1, $4, $3 }' ".wtd/$1.gi"; }
 # rusage reports the instructions of the measured process alone, never its children (node, wasm-opt,
 # the ratchet's git: A54E1), while its CPU seconds hold them all; so a stage is judged at the larger of its
 # instructions at the measured rate and its CPU seconds over ECORE_SLOWDOWN
-ps_of() { awk -v r="$2" -v e="$ECORE_SLOWDOWN" '/instructions retired/ { g = $1 / 1e9 / r } NR == 1 { c = ($3 + $5) / e } END { printf "%d", (g > c ? g : c) }' ".wtd/$1.time"; }
+ps_of() { awk -v r="$2" -v e="$ECORE_SLOWDOWN" '{ g = $5 / r; c = $3 / e; printf "%d", (g > c ? g : c) }' ".wtd/$1.gi"; }
 # the load at its rate, from its tree's instructions (dev/tree_instructions.jl), by the same rule
-c_load=$(awk -v r="$RATE_LOAD" -v e="$ECORE_SLOWDOWN" -v c="$(cpu load)" '{ g = $1 / r; f = c / e; printf "%d", (g > f ? g : f) }' .wtd/load.gi); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
+c_load=$(awk -v r="$RATE_LOAD" -v e="$ECORE_SLOWDOWN" '{ g = $1 / r; f = $3 / e; printf "%d", (g > f ? g : f) }' .wtd/load.gi); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
 for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
 echo "check: ${path} s on the critical path (load ${c_load} from $(awk '{ printf "%d", $1 }' .wtd/load.gi) G, ratchet ${p_ratchet}, src shards${shards}, from G instructions $(gi ratchet)$(for k in $(seq 1 $SHARDS); do printf ' %s' "$(gi "src_tests.$k")"; done)); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
+echo "check: core split, unjudged (performance cores of the whole): load $(split_of load); ratchet $(split_of ratchet); src shards$(for k in $(seq 1 $SHARDS); do printf ' %s;' "$(split_of "src_tests.$k")"; done)"
 # D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
 # change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget, then to 160 s the same day ("Raise
 # to 160 until the cuts") once the load counted whole by instructions read ~33 s and a src path ~155 s (load 33 +
