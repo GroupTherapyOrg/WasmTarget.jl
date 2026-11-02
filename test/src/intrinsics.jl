@@ -62,12 +62,16 @@ end
     # intrinsics.dart:287 `isRecordClassId('dart:core', null, '_isRecordClassId')`); no method is a
     # dart:_wasm member
     @test DI.MemberIntrinsic__lookup[] == Dict("dart:core" => Dict("Error" => Dict("_throw" => DI.MemberIntrinsic_errorThrow))) &&
-          DI.StaticIntrinsic__lookup[] == Dict("dart:_internal" => Dict("ClassID" => Dict("getID" => DI.StaticIntrinsic_getID)),
+          DI.StaticIntrinsic__lookup[] == Dict("dart:_internal" => Dict("ClassID" => Dict("getID" => DI.StaticIntrinsic_getID),
+                                                                         nothing => Dict("unsafeCast" => DI.StaticIntrinsic_unsafeCast)),
                                                "dart:core" => Dict(nothing => Dict("_isRecordClassId" => DI.StaticIntrinsic_isRecordClassId)))
     local get_id_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime.ClassID_get_id)), Tuple{typeof(WI.Runtime.ClassID_get_id),Any}, Core.svec())
     @test DI.StaticIntrinsic_from_procedure(get_id_mi) === DI.StaticIntrinsic_getID
     local record_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime._is_record_class_id)), Tuple{typeof(WI.Runtime._is_record_class_id),Int32}, Core.svec())
     @test DI.StaticIntrinsic_from_procedure(record_mi) === DI.StaticIntrinsic_isRecordClassId
+    # unsafeCast, filed at intrinsics.dart:290 `unsafeCast('dart:_internal', null, 'unsafeCast')`
+    local cast_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime.unsafe_cast)), Tuple{typeof(WI.Runtime.unsafe_cast),Type{DataType},Any}, Core.svec(DataType))
+    @test DI.StaticIntrinsic_from_procedure(cast_mi) === DI.StaticIntrinsic_unsafeCast
     local throw_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime.Error__throw)), Tuple{typeof(WI.Runtime.Error__throw),Exception}, Core.svec())
     @test DI.MemberIntrinsic_from_procedure(throw_mi) === DI.MemberIntrinsic_errorThrow
     local other_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime.Error__throw_with_current_stack_trace)),

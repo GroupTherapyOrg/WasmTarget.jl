@@ -60,11 +60,12 @@ member the runtime ports, each under its dart library, class and name, as Member
     "dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup", () -> StaticIntrinsic__populate_lookup())
 
 # dart files each intrinsic under its member's library, class and name; the members the runtime ports
-# are the ones a Julia method can be: ClassID.getID (class_id.dart:10) and _isRecordClassId
-# (type.dart:2060), src/runtime/common
+# are the ones a Julia method can be: ClassID.getID (class_id.dart:10), _isRecordClassId
+# (type.dart:2060) and unsafeCast (internal_patch.dart:49), src/runtime/common
 @parity "dart2wasm/lib/intrinsics.dart:404 StaticIntrinsic._populateLookup" StaticIntrinsic__populate_lookup()::Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}} =
     Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}}(
-        "dart:_internal" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}("ClassID" => Dict{String,StaticIntrinsic}("getID" => StaticIntrinsic_getID)),
+        "dart:_internal" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}("ClassID" => Dict{String,StaticIntrinsic}("getID" => StaticIntrinsic_getID),
+                                                                         nothing => Dict{String,StaticIntrinsic}("unsafeCast" => StaticIntrinsic_unsafeCast)),
         "dart:core" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}(nothing => Dict{String,StaticIntrinsic}("_isRecordClassId" => StaticIntrinsic_isRecordClassId)))
 
 # a Julia method is a dart library member when it is the runtime's port of one, Runtime.ClassID_get_id
@@ -74,7 +75,8 @@ member the runtime ports, each under its dart library, class and name, as Member
 @parity "dart2wasm/lib/intrinsics.dart:414 StaticIntrinsic.fromProcedure" function StaticIntrinsic_from_procedure(member::Core.MethodInstance)::Union{StaticIntrinsic,Nothing}
     member.def.module === Runtime || return nothing
     local (library, cls, name) = member.def in methods(Runtime.ClassID_get_id) ? ("dart:_internal", "ClassID", "getID") :
-                                 member.def in methods(Runtime._is_record_class_id) ? ("dart:core", nothing, "_isRecordClassId") : (nothing, nothing, nothing)
+                                 member.def in methods(Runtime._is_record_class_id) ? ("dart:core", nothing, "_isRecordClassId") :
+                                 member.def in methods(Runtime.unsafe_cast) ? ("dart:_internal", nothing, "unsafeCast") : (nothing, nothing, nothing)
     library === nothing && return nothing
     return get(get(get(StaticIntrinsic__lookup[], library, Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}()), cls, Dict{String,StaticIntrinsic}()), name, nothing)
 end
@@ -555,12 +557,11 @@ end
             return generate_static_intrinsic(self, Val(:to_typeof), node.args[2:end])
         target.def.name === :jl_typetagis && target.def in methods(jl_typetagis) &&
             return generate_static_intrinsic(self, Val(:typetagis), target, node.args[2:end])
-        target.def.module === Runtime && target.def in methods(Runtime.unsafe_cast) &&
-            return generate_static_intrinsic(self, Val(:unsafe_cast), target, node.args[2:end])
         local intrinsic = StaticIntrinsic_from_procedure(target)
         intrinsic === nothing && return nothing
         intrinsic === StaticIntrinsic_getID && return generate_static_intrinsic(self, Val(:get_id), node.args[2:end])
         intrinsic === StaticIntrinsic_isRecordClassId && return generate_static_intrinsic(self, Val(:is_record_class_id), node.args[2:end])
+        intrinsic === StaticIntrinsic_unsafeCast && return generate_static_intrinsic(self, Val(:unsafe_cast), node.args[2:end])
         reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "the static intrinsic $intrinsic")
     end
     local f = nir_callee(node)
@@ -831,13 +832,12 @@ end
     return WasmBuilder.IR.NumType_i32
 end
 
-# dart's unsafeCast (intrinsics.dart:1517): the operand translated at the target type's wasm type, its
-# conversion a cast with no test, as dart lets the context convert it
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:unsafe_cast}, target::Core.MethodInstance, args::Vector{NirValue})::WasmBuilder.IR.ValueType
-    local T = (Base.unwrap_unionall(target.specTypes)::DataType).parameters[2].parameters[1]
-    local type_ = translate_type(translator(self), T)
-    translate_expression(self.code_gen, args[2], type_)
-    return type_
+# dart's unsafeCast (intrinsics.dart:1517): the operand translated at its own type (typeOfExp), and the
+# context converts it, as dart lets it (its conversion to the call's expected type a cast with no test);
+# the type argument, Julia's `::Type{T}` parameter, takes no code
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:unsafe_cast}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local operand = args[2]
+    return translate_expression(self.code_gen, operand, type_of_exp(self, operand))
 end
 
 # _InterfaceType.classId (type.dart:276), a DataType value's field (src/julia/classes.jl, the kinds'
