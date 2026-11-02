@@ -1743,7 +1743,8 @@ end
 # not, else areEqualInJS, JS's === (the runtime's jl_egal_host_references). A standalone module has no
 # JS runtime (translator.dart:112 isStandalone), and no wasm instruction compares two externrefs, so
 # there the comparison raises, naming the gap (the runtime's throw_host_reference_egal), never
-# answering. A field of any other wasm type rejects, located
+# answering; the null cases are answered first, as JSValue's == answers them with no JS runtime. A field
+# of any other wasm type rejects, located
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:egal}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
     local t = translator(self)
@@ -1820,15 +1821,23 @@ end
             local hq = add_local(code_gen, storage)
             WasmBuilder.local_set(b, hq)
             WasmBuilder.local_set(b, hp)
-            if is_standalone(t)
-                call(code_gen, nir_runtime_member(t.component, throw_host_reference_egal, at))
-                WasmBuilder.unreachable(b)
-                return nothing
+            # two non-null references: JS's === under the JS runtime; a standalone module has no JS
+            # runtime, and no wasm instruction compares two externrefs, so the comparison raises there
+            local nullable = (storage::WasmBuilder.IR.RefType).nullable
+            local references() = begin
+                if is_standalone(t)
+                    call(code_gen, nir_runtime_member(t.component, throw_host_reference_egal, at))
+                    WasmBuilder.unreachable(b)
+                else
+                    WasmBuilder.local_get(b, hp); nullable && WasmBuilder.ref_as_non_null(b)
+                    WasmBuilder.local_get(b, hq); nullable && WasmBuilder.ref_as_non_null(b)
+                    call(code_gen, nir_runtime_member(t.component, jl_egal_host_references, at))
+                end
             end
-            local js = nir_runtime_member(t.component, jl_egal_host_references, at)
-            if (storage::WasmBuilder.IR.RefType).nullable
+            if nullable
+                # the null cases first, as JSValue's == answers them with no JS runtime: both null egal,
+                # one null not
                 local result = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
-                # both null: egal; one null: not
                 WasmBuilder.i32_const(b, 1)
                 WasmBuilder.local_get(b, hp); WasmBuilder.ref_is_null(b); WasmBuilder.local_get(b, hq); WasmBuilder.ref_is_null(b)
                 WasmBuilder.i32_and(b)
@@ -1839,13 +1848,10 @@ end
                 WasmBuilder.i32_or(b)
                 WasmBuilder.br_if(b, result)
                 WasmBuilder.drop(b)
-                WasmBuilder.local_get(b, hp); WasmBuilder.ref_as_non_null(b)
-                WasmBuilder.local_get(b, hq); WasmBuilder.ref_as_non_null(b)
-                call(code_gen, js)
+                references()
                 WasmBuilder.var"end"(b)   # result
             else
-                WasmBuilder.local_get(b, hp); WasmBuilder.local_get(b, hq)
-                call(code_gen, js)
+                references()
             end
         elseif storage isa WasmBuilder.IR.RefType && storage.heap_type isa WasmBuilder.IR.ArrayType
             # its length and its elements, compare_svec's loop (memcmp's for bytes)
