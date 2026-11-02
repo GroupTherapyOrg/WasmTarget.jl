@@ -7623,3 +7623,163 @@ entry. Owner: lead (dev/ship.sh), wt3-parity (test/parity_ratchet.jl). By owner:
 A79S3 and A79S5, with A77E1, A77E2 and A77E3; wt3-parity A79E1 and A79E2, with
 A78E1, A78E2, A78S1, A78S2, A76E4, A76E5, A76E6 and A76S2; wt3-latency A79E3 (tree_instructions.jl), A79S1 and A79S4, with
 A73E1; wt3-memory A77S1, with A75S1 and A75S2; wt3-runtime A77S2, with A76S1, A73S3 and A67S1; wt3-cgstubs2 A71S3.
+
+## 2026-11-01 — audited through 9c2d9848 (4b171979..9c2d9848: an open tuple the record of its arity, boxed by convertType; an Any host argument crossing by class; the load counted by an exit-time counter and judged at its own rate with a CPU-seconds floor; generateStaticIntrinsic's families and translateExpression inferred once; the generator's image emptied at load; a cache key refused past a failed input)
+
+The eightieth audit, beside the work, covers the 13 commits of 4b171979..9c2d9848 that are not audit entries (c98bfcc5,
+entry 79): 19efb42b, 08bf22f5, 261493b5, 5a6bec51, b150fc00, 1fd4ff21, f60e45a1, 7a2f804e, ebba5ad7, f8afd6e5, d0444541,
+b5ab0feb and 9c2d9848, read here, under Dale's R1 and R2 as standing sections. Every finding rests on one exact command,
+quoted. Standing items. src changes (`git diff --stat 4b171979..9c2d9848 -- src | tail -1` gives `13 files changed, 444
+insertions(+), 200 deletions(-)`); no exemption lands (`git diff 4b171979..9c2d9848 -- src | grep -cE
+'^\+.*(Reshaped:|Fields with no Julia counterpart)'` gives 1, getConcreteClassIdRange's Reshaped rewritten, the open tuple
+type moved out of its "abstract tuple" case to the records it holds), and no silent catch (`git diff 4b171979..9c2d9848 |
+grep -nE '^\+.*\bcatch\b'` gives four lines: two of entry 79's prose, two test captures of a RejectionError in
+test/src/records.jl). The debt list reads 384, from 387 (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`):
+_meet_class!, class_instance_fields and nir_method_nargs pinned. Each commit names its clause in a `Charter:` line (C2, C3,
+C10, C9, C10, C10, C10, C10, C10, C10, C10, C10, C0). Every head has one row in `.git/wt-progress.tsv`; src reads 3086 of
+3404 from 19efb42b on, 3084 before. Earlier findings: A78E1 is fixed by 9c2d9848 (L208's plants: a tracked input missing
+and a julia whose header fails, each refused). A79E1 and A79E2 are fixed by b5ab0feb (SkeletonImage's `__init__` calls
+reset!, include_dependency names parity.jl, kernel.jl and the scope, SKELETON_INPUTS holds kernel.jl and parity.jl, each
+planted); its residual is A80S4. A79E4, A79S2, A79S3 and A79S5 are fixed by ebba5ad7. A79S1 and A79S4 are fixed by
+f8afd6e5 (RATE_LOAD, dev/check.sh:203; perf stat named, dev/tree_instructions.jl:23-26). A79E3 is narrowed by f8afd6e5,
+not fixed: the floor is back and the plant judges counting alone, but the header's bound stands and the floor's own
+residual is unstated (A80E1). A75S1 and A75S2 are fixed by 19efb42b (`grep -rn tuple_classes src | wc -l` gives 0), and
+A73E1 by 7a2f804e (src/julia/nir.jl:827 names its MethodInstance through rejection_text). A67S1, A76S1 and A75S4 are
+fixed by 08bf22f5, their row cleared by 5a6bec51. A77E2 stands (`ps aux | grep -c '[b]ash dev/autoship.sh'` gives 8; wt3-constants' loop wrote 12 CONFLICT rows naming
+origin's landed heads from 23:23Z to 00:48Z, `awk -F'\t' '$1 >= "2026-11-01T23:20" && $2 == "wt3-constants"'
+.git/wt-ship-failures.tsv | wc -l` giving 12).
+A77E1, A77E3, A78E2, A78S1, A78S2, A77S1, A77S2, A71S3, A73S3, A76E4, A76E5, A76E6, A76S2, A68E3, A71E2, A69E1, A68E2,
+A68S4, A72E1 and A67E1, carried, not re-read. Findings A80E1, A80E2 and A80S1 to A80S6.
+
+Area: builder — no change under src/wasm_builder (`git diff --stat 4b171979..9c2d9848 -- src/wasm_builder` gives nothing).
+
+Area: collection and planning — 19efb42b: the walk deletes the open-tuple product and meets, for every concrete tuple
+class it holds, the record of its arity (src/julia/classes.jl:66-70), and for a literal or varargs tuple of open elements
+the record of its fixed arity (_meet_tuple_record!, :76). (A80E2, medium, D11, D6) the record model is an algorithm with no
+model, and it breaks the claim of the one model its walk cites. Its soundness rests on one representation invariant
+every reader assumes, a value in a top-typed slot is a record and never a concrete tuple's own struct (types.jl:745 and
+:760 test tuple members against records alone; class_info.jl:558-564 gives an open tuple type records alone), kept by hand
+at four producers (translator.jl:1181 and :1225, intrinsics.jl:1081, constants.jl:492); a concrete tuple's struct is a
+wasm subtype of the top struct, so a fifth producer that skips the box validates and answers `isa` false where native
+answers true, the failure RecordModelCases' own comment names. `git show --stat 19efb42b | grep -c formal` gives 0;
+`grep -rn 'formal(dev/formal/Coercion' src | wc -l` gives 0: dev/formal/Coercion.tla models the coercion funnel, its
+tuple_build arm WT1's counterpart of this box (Coercion.tla:154), and anchors legacy's convert_type!, so WT2's
+convert_type (translator.jl:1154) with its new arms cites none. And classes.jl:32 cites formal(dev/formal/ValueClasses.tla)
+"nothing extra" (NothingExtra, ValueClasses.tla:205), while :68-70 meets a record for every concrete tuple whether or not
+any reaches an open slot. Fix: the record arms modelled (Coercion.tla's tuple arms re-anchored at translator.jl
+convert_type: a concrete tuple Tc, its record Rn; box Tc to top builds Rn, null kept; unbox top to Tc casts Rn; the claim
+that a top slot never holds Tc; Broken variants a producer that leaves Tc in a top slot and a null boxed), and the walk's
+pass either modelled in ValueClasses.tla's Required or narrowed to the tuples that meet an open slot. Owner: wt3-memory.
+
+To the lead's question: yes. A concrete static type keeps its own class (translate_type maps only an open tuple type to
+the top type, translator.jl:1002-1005); convertType boxes it into its arity's record where its reference flows into a
+slot of another type and unboxes it where Julia narrows it back (translator.jl:1181-1224, :1225-1264), nothing kept the
+null. dart's own record values are always their shape's class, every field `Object?` (record_class_generator.dart:280), so
+the split is Julia's difference, stated in TupleRecord's docstring ("a tuple of a concrete static type keeps its own class
+and only an open one is a record"), and the box's precedent is dart's value-type boxing in convertType
+(translator.dart:1597), named at :1171-1175. === on two open tuples and typeof of one reject, located (RecordModelCases'
+egal; the run_time_type arm). The range's tests run 26 native-differential cases of the model (round_trip 1:8 and
+producers 1:5, two inputs each).
+
+Area: emission and diagnostics — 7a2f804e and d0444541: the 15 builtin families take @nospecialize(f) with
+@nospecializeinfer, and translate_expression @nospecialize(expected_type). To the lead's questions: @nospecialize is used as
+Julia's compiler uses it (builtin_tfunction's @nospecialize(f), Compiler/src/tfuncs.jl:2759), a fix to WT's own compile cost
+that every user pays, no dev flag (D15). (A80S2, low, D7) the @nospecializeinfer half names that same precedent, which
+does not carry it: `grep -c '@nospecializeinfer' ~/.cache/wasmtarget/julia/Compiler/src/tfuncs.jl` gives 0 (the checkout at
+6d172b0); Julia's compiler pairs the two on its lattice functions (`grep -n '@nospecializeinfer'
+Compiler/src/typelattice.jl` gives `210:` assert_nested_slotwrapper and `218:` widenslotwrapper; abstractinterpretation.jl
+:3904 widenreturn). Fix: src/intrinsics.jl:478-481 cites those. Owner: wt3-latency. (A80S3, low, AGENTS.md's rule, D12)
+no case shows the cuts change no output: both say "Behavior is unchanged" with only instruction counts as evidence
+(`git log -1 --format=%B d0444541 | grep -ci 'probe'` gives 0), and the gate runs no probe (`grep -n probe dev/check.sh`
+gives only the comment at `194:`), where AGENTS.md has a pure restructuring byte-identical on the probes. By mechanism
+none should: the two annotations change what is compiled and inferred, and a result moves only through a value read from
+inference (an empty comprehension's eltype, Core.Compiler.return_type), of which `grep -n 'return_type\|promote_op'
+src/intrinsics.jl src/code_generator.jl` finds only WT's own return_type(self); and the src shards' differential cases
+passed at both landings. The counts were also taken at background QoS, which f8afd6e5 finds misreads by core (12.2 G and
+6.2 G for one loop). Fix: test/probe_bytes.jl at 4b171979 and at d0444541, the identity quoted; the cut re-read at default
+QoS. Owner: wt3-latency.
+
+08bf22f5: an Any host argument crosses as the top reference type by its class (nir_foreign_param_type), a WasmArray or
+WasmExternRef as its nullable wasm type; getFunction admits anyref only for an argument declared Any. (A80S5, low, D9) the
+two throwWasmRefError rejections become Internal on the ground that "no Julia value is a dart:_wasm reference"
+(src/kernel_nodes.jl:69-73, src/code_generator.jl:867-871), where the same commit crosses a WasmExternRef, one of
+dart:_wasm's references, by class (translator.jl:1070); what no Julia program reaches is the two intrinsics that throw it,
+WasmAnyRef.toObject and WasmFunction.fromFuncRef (intrinsics.dart:704, :2013), which `grep -rn 'WasmAnyRef\|WasmFuncRef'
+src` finds only in intrinsics.jl:256's list of dart:_wasm classes WT does not have. Fix: each Internal names those two
+intrinsics as the unreached callers. Owner: wt3-runtime (kernel_nodes.jl), wt3-cgstubs2 (code_generator.jl).
+
+Area: enforcement and prose — the load measure. 261493b5 stops the plant refusing; b150fc00 floors the load by its CPU
+seconds; 1fd4ff21 replaces the 2-ms poll with a library inserted by DYLD_INSERT_LIBRARIES whose destructor writes each
+process's ri_instructions at exit, and drops the floor; f60e45a1 restores it; f8afd6e5 judges every stage at
+max(G / its rate, CPU-s / ECORE_SLOWDOWN 1.4), the load at RATE_LOAD 11.6. To the lead's questions: RATE_LOAD is derived
+from measurement, the lowest of three check readings, so the load reads high (check.sh:198-203; its sample, A80S1); the
+residual of a stage split across core types is not stated anywhere (`grep -n 'split\|residual\|9%' dev/check.sh
+dev/tree_instructions.jl` finds no such text). (A80E1, medium, D17, D9) the measure's stated bounds are false both ways.
+Low: check.sh:210 says the CPU term reads "high there, never low", and :210-211 "Intent: never read low". A stage with a
+share f of its work on efficiency cores reads G/rate x (1 - (1 - r) f) and CPU/1.4 reads (1 + (s - 1) f)/1.4; with the
+commit's own r = 6.2/12.2 (a hash loop's counter on the two core types) and s = 1.56 (its measured minimum slowdown),
+`awk` over f in 0..1 gives a worst reading of 0.843 of the true seconds at f = 0.32, 16% low (with r = 0.75, 11%), the
+monitor's ~9% at a milder r. High: the load on efficiency cores is judged at max(182.3 / 11.6 = 15.7, 91.8 / 1.4 = 65.6)
+= 65.6 s against 21.6 on performance cores (f8afd6e5's own 91.8 and 30.2 CPU-s), 44 s of critical path from where the
+scheduler put the load, enough to turn a 120-s path red past 160: A79E3's red for placement, moved from the plant to the
+band. And the header disagrees with both: dev/tree_instructions.jl:28-30 says a stage on efficiency cores "reads up to
+about a third low ... the plant's band states it", where check.sh:206 quotes 12.2 against 6.2 G (half) and the plant
+has had no band since f8afd6e5 (`grep -c BAND dev/tree_instructions.jl` gives 0). The kernel reports the split: `grep -n
+'ri_pinstructions\|ri_user_ptime' $(xcrun --show-sdk-path)/usr/include/sys/resource.h` gives `406:` ri_user_ptime and
+`408:` ri_pinstructions (rusage_info_v6). Fix: the exit-time library reads RUSAGE_INFO_V6 and writes each process's
+P-core instructions and its P-core and total CPU time; each stage judged by its P-core instructions at its rate plus its
+E-core seconds over the measured slowdown, so neither bound rests on placement; until then both residuals (16% low at
+worst by the commit's numbers, up to s_E/1.4 high) stated beside ECORE_SLOWDOWN as its band, and tree_instructions.jl:28-30
+made true. Owner: wt3-latency. (A80S1, low, D17) RATE_LOAD's band is prose and its samples mixed: "a load reading outside
+11-13 G a CPU-s on a performance core re-measures it" (`grep -n '11-13' dev/check.sh` gives only the comment at `201:`), no
+line reads it; two of its three samples, 08bf22f5 and 261493b5, were counted by the poll 1fd4ff21 replaced as reading low
+(`git show 261493b5:dev/tree_instructions.jl | grep -n '^const POLL'` gives `18:`, and `git merge-base --is-ancestor
+261493b5 1fd4ff21` holds); and 1fd4ff21's own exact count, 182.3 G in 26.0 + 2.1 CPU-s, is 6.5 G a CPU-s, outside the band,
+with no core named. Fix: three exact-count readings with their core shares (A80E1's counters), and the check printing a
+note when a load read wholly on performance cores falls outside the band. Owner: wt3-latency.
+
+b5ab0feb and 9c2d9848: the generator's image empties its lazy tables at load and the key refuses a failed input, each
+planted. (A80S4, low, D6, D5) the tables emptied are a hand list: LAZY_TABLES (dev/skeleton.jl:2317-2318) names the 14
+tables the generator fills today, which `grep -cE '^const [A-Z_]+ *= *(Dict\{|Set\{|String\[\]|Pair\{)' dev/skeleton.jl` counts
+as 14, and the plant fills only KERNEL_USED (test/parity_ratchet.jl, skeleton_negatives_missed); a table added later
+and not listed is served from the image again, A79E1's fault, unrefused. Fix: a lazy table declared through one form that
+registers it, LAZY_TABLES read from that registry, the plant adding a table outside the list; or lazy_tables_filled
+walking every mutable container constant of the module. Owner: wt3-parity.
+
+ebba5ad7: one D14 schedule in check.sh, C10 and the ledger; the retry cap refuses an unreadable band; the MARCH.md owner
+rule marked a stopgap. (A80S6, low, D19) the charter now states the steps as Dale's, "past 160 s until the shards'
+first-compile cut ..., then 140 s, then 120 s with four shards (Dale, 2026-11-01)" (dev/CHARTER.md:138), under the trailer
+4b171979 already carried (`git log -1 --format=%B ebba5ad7 | grep '^Charter-change'` gives `Charter-change: C10 — Dale
+2026-11-01: "Raise to 160 until the cuts"`), while entry 79 read the steps to 140 s and 120 s as the lead's reading of
+"until the cuts"; the ledger now calls them "the steps of the option he chose", whose text no commit quotes, and check.sh's
+D19 test (:163-165) admits any trailer of that form. Fix: the trailer quotes the option's text that holds the steps, or the
+charter marks them the lead's schedule. Owner: lead.
+
+stopgap in disguise: none new; b150fc00 and f60e45a1 mark their floor a STOPGAP, and f8afd6e5 makes the floor the rule,
+its premise stated as evidence (A80E1 finds its bounds unstated).
+
+precedent: dart's record class per shape (record_class_generator.dart:84, :246, :280) and _RecordType._checkInstance
+(type.dart:585) for the record model, dart's value-type boxing in convertType (translator.dart:1597) for the box, the
+coercion model unported (A80E2); builtin_tfunction's @nospecialize for the families, typelattice.jl's @nospecializeinfer
+unnamed (A80S2); LD_PRELOAD interposition and perf stat's inherited counters for the tree count, rusage_info_v6's P-core
+fields unused (A80E1); julia_to_native's boxed argument (ccall.cpp:528) for an Any host argument; include_dependency and
+stale_cachefile for the image.
+
+Requirements: D6, D7, D9, D11, D17, D19; one check fired outside the change's doing, the plant refusing 7ae93d77 at
+23:26:51Z (A79E3's case, before 261493b5; since f8afd6e5 the plant judges only counting).
+
+R1 and R2. R1: 19efb42b ports _generateClass and _generateFields with bodies and pins _meet_class! and
+class_instance_fields to class_info.dart:420 and :539; the box is anchored at dart's convertType and the record check at
+_checkRecordType; nir_foreign_param_type names julia_to_native and js_string.dart:858; each citation resolves (`sed -n
+2759p ~/.cache/wasmtarget/julia/Compiler/src/tfuncs.jl` gives builtin_tfunction's signature; dart's intrinsics.dart:704
+and :2013 hold the two throwWasmRefError calls). The bespoke pieces are dev tooling: the CPU-seconds floor names no
+precedent for its rule (A80E1); the record arms of convert_type have no model (A80E2). R2: `.git/wt-progress.tsv` reads
+`src: 3086 of 3404 anchored dart definitions ported with a body` from 19efb42b on, the two added being _generate_class and
+_generate_fields, each a body that returns (a record class, its fields); 08bf22f5's two throwWasmRefError arms moved from
+Unported to Internal and the count stayed 3086, so no rejection-only body is counted ported. No stub is called complete.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A78E1, A79E1 and A79E2 leave 1.A6; A79E3, A79S1,
+A79S4 and A73E1 leave 1.L; A75S1 and A75S2 leave 1.D. Open, their rows the lead's to write: A80E2 for row 1.C; A80S5 for
+row 1.F; A80S4 for row 1.A6; A80E1, A80S1, A80S2, A80S3 and A80S6 for row 1.L. By owner: wt3-memory A80E2, with A77S1; wt3-latency A80E1, A80S1,
+A80S2 and A80S3; wt3-parity A80S4, with A78E2, A78S1, A78S2, A76E4, A76E5, A76E6 and A76S2; wt3-runtime A80S5 (kernel_nodes.jl),
+with A77S2 and A73S3; wt3-cgstubs2 A80S5 (code_generator.jl), with A71S3; lead A80S6, with A77E1, A77E2 and A77E3.
