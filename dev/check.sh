@@ -48,6 +48,22 @@ export JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2
 export WT_LANDING_CORE=1
 mkdir -p .wtd; s0=$(date +%s)
 base=${CHECK_BASE:-origin/wt2}
+# the message checks need only git, so they run before the plant, the load and the ratchet: a commit with no
+# trailer git reads is refused in seconds, never after a full check (audit 95, A95S4)
+# D19: dev/CHARTER.md changes only with Dale's say-so, which the commit names in its trailer
+# `Charter-change: <clauses> — Dale <YYYY-MM-DD>: "<his words>"`; the audit reads each claim
+# against the conversation (a stopgap: no program can verify Dale's words)
+for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD" -- dev/CHARTER.md); do
+  git log -1 --format=%B "$c" | grep -qE '^Charter-change: .*Dale [0-9]{4}-[0-9]{2}-[0-9]{2}: ".+"' ||
+    { echo "check: $(git log -1 --format='%h %s' "$c" | cut -c1-80) changes dev/CHARTER.md with no Charter-change trailer quoting Dale (D19)"; exit 1; }
+done
+# every commit landing names its clause in a trailer git reads: dev/hooks/commit-msg asks the same, but a hook lives
+# only in a client, and three commits made before its copy was installed landed with no Charter trailer (24201341,
+# c371e764, 4b892d06; audit 94, A94E2). precedent(git: git-interpret-trailers(1) --parse)
+for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD"); do
+  git log -1 --format=%B "$c" | git interpret-trailers --parse | grep -qE '^Charter: C[0-9]+' ||
+    { echo "check: $(git log -1 --format='%h %s' "$c" | cut -c1-80) has no Charter trailer git reads (the Charter line belongs in the last paragraph, beside Co-Authored-By; dev/CHARTER.md rule 3)"; exit 1; }
+done
 # the ratchet and the tests of ported code run side by side (two processes, one thread each): the
 # landing-lock holder's re-check is the loop's one serial step, so its wall is the slower of the two
 # a dependency the project names but the (gitignored) Manifest lacks is resolved first, once: a
@@ -177,20 +193,6 @@ if [ $rc -ne 0 ]; then
   exit 1
 fi
 echo "check: ratchet passes ($(( $(date +%s) - s0 ))s)"
-# D19: dev/CHARTER.md changes only with Dale's say-so, which the commit names in its trailer
-# `Charter-change: <clauses> — Dale <YYYY-MM-DD>: "<his words>"`; the audit reads each claim
-# against the conversation (a stopgap: no program can verify Dale's words)
-for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD" -- dev/CHARTER.md); do
-  git log -1 --format=%B "$c" | grep -qE '^Charter-change: .*Dale [0-9]{4}-[0-9]{2}-[0-9]{2}: ".+"' ||
-    { echo "check: $(git log -1 --format='%h %s' "$c" | cut -c1-80) changes dev/CHARTER.md with no Charter-change trailer quoting Dale (D19)"; exit 1; }
-done
-# every commit landing names its clause in a trailer git reads: dev/hooks/commit-msg asks the same, but a hook lives
-# only in a client, and three commits made before its copy was installed landed with no Charter trailer (24201341,
-# c371e764, 4b892d06; audit 94, A94E2). precedent(git: git-interpret-trailers(1) --parse)
-for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD"); do
-  git log -1 --format=%B "$c" | git interpret-trailers --parse | grep -qE '^Charter: C[0-9]+' ||
-    { echo "check: $(git log -1 --format='%h %s' "$c" | cut -c1-80) has no Charter trailer git reads (the Charter line belongs in the last paragraph, beside Co-Authored-By; dev/CHARTER.md rule 3)"; exit 1; }
-done
 echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $SHARDS reported" 
 [ $trc -eq 0 ] || { echo "check: src tests red"; grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 1; }
 # every shard reports its summary, or the check is red: a shard whose output is lost passed on its exit status alone, its
