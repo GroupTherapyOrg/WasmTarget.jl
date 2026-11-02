@@ -9291,3 +9291,63 @@ stays a located gap (run_time_type_gap), and so does apply_type on a type only r
 Resolution: this entry lands alone, prose only. A92E2, A92S1, A92S2, A92S3, A92S4, A92S6, A87E2, A93E2, A93S5 and
 A93S6 leave their rows. Fix first: A94E1. 1.K: A94E1, A94S1. 1.L: A94E2. 1.C: A94S2, A94S3. 1.D: A94S4. 1.F carries
 the apply_type gap as a blocked line, the lead's ruling.
+
+## 2026-11-02 — audited through 99935030 (28e49629..99935030: the record type rule, SimplifySetCC's constant block, the trailer in the check, the comment-reference pin, two citations, constant_unmade)
+
+The ninety-fifth audit, beside the work, covers the six commits of 28e49629..99935030 that are not audit entries
+(ace1df66, entry 94), read under Dale's R1 and R2. Standing items. Every commit in range has a Charter trailer that
+git reads. No new silent catch. The debt list goes from 354 to 353 at 55a1c154 (_trim_error), and the no-counterpart
+list from 5 to 4 at d31b3dc4. The runtime gap goes from 9 sites naming 8 definitions to 8 naming 7 at 55a1c154, which
+says so; no other commit moves it, and none claims to. src stays at 3087. Earlier findings: 55a1c154 fixes A92S5,
+1b5d4233 fixes A90S2, 10b2ff1c fixes A94E2, 7286193a fixes A93S1, and d31b3dc4 fixes A93E2. A94E1 is only narrowed,
+check_no_counterpart and check_precedent_kinds still listed in range; 7286193a's fix of A93S3 cites a line Julia has
+commented out (A95E3). Findings: A95E1 to A95E3, A95S1 to A95S4.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — each record class's arm follows record_class_generator.dart:547: a length test, then
+type.dart:1484 _isSubtype on each field; the names test is left out with its reason (a Julia tuple is positional).
+_TypeUniverse_is_record_subtype is :1322 by index, and jl_is_tuple_type is julia.h:1837. No plausible false was found:
+a tuple in a top-typed slot is always its record (translator.jl:1173-1180, TupleRecord.tla), _is_record_class_id and
+the switch read the same Tuple range (intrinsics.jl:952, :888), and a Vararg field rejects at link time
+(rtutils.jl:285-287). (A95E2, medium, D5) constant_unmade is not the one source: type_value_unmade still restates its
+primitive and class-info conditions (classes.jl:61, :64), and the commit narrows the restatement instead of deleting
+it. (A95S3, low, D9) constant_unmade answers nothing for every builtin (classes.jl:29), and visitInstanceConstant then
+indexes class_info[cls] with no guard (constants.jl:813), so a builtin with no class info raises an unlocated KeyError
+where the old code rejected, a row the commit calls unchanged.
+
+Area: emission and diagnostics — simplify_set_cc's folds and guards match TargetLowering.cpp:5308-:5380;
+isBeforeLegalizeOps holds at AfterLegalizeTypes (LegalizeIntegerTypes.cpp:5932); `x < 2^64` reaches the shortcut.
+(A95S1, low, D3, R1) the reason for leaving out FoldSetCC and the commute (target_lowering.jl:11-14) is false:
+expansions make constant left halves (ZERO_EXTEND returns `(lo, Int64(0))`, legalize_integer_types.jl:236, and shifts
+do too, :191-198), LLVM commutes `0 <u yhi` (:4823-4826) and folds `0 <u 1` to true (:4810), while WT emits compares.
+The answers stay right, but the shortcut's HiCmp arms are unreachable. (A95E1, medium, D12, D7) Julia's
+verify_create_stackframes (verifytrim.jl:125-145) has no repeat guard, and :182 keeps only the first caller, so
+recursion among roots makes a cycle in Julia too: WT's cut is a departure, yet the reason at subset.jl:276 says "kept
+as Julia gives them", and no test reaches the cycle (`git grep` over test/ finds none).
+
+Area: enforcement and prose — 10b2ff1c reads merge-base..HEAD, and ship.sh never merges (ship.sh:3), so the range is
+exactly the lane's own commits and no legitimate landing is refused. (A95S4, low, C10) the trailer test
+(check.sh:190-193), which needs only git, runs after the ratchet (:179) and the shards. (A95S2, low, D7, R1) d31b3dc4
+says "dart reports nothing for an unresolved reference", but linter comment_references.dart:82 visitCommentReference
+reports one (:88-90), and that rule is the nearer counterpart; the docstring still names precedent(rust: clippy)
+(parity.jl:1544). (A95E3, medium, D7, D3) floatfuncs.jl's reason cites _INCONSISTENT_INTRINSICS' "muladd_float entry",
+which at the pin is commented out under a TODO (tfuncs.jl:2486-2488), so Julia's compiler treats muladd_float as
+consistent (:3044). The other anchors are true: TargetLoweringBase.cpp:1063, runtime_intrinsics.c:1517,
+verifytrim.jl:125 and comment_reference_resolver.dart:29.
+
+stopgap in disguise: a one-source helper that a second reader restates (A95E2); a Julia departure filed as "kept as
+Julia gives them" (A95E1).
+
+precedent: record_class_generator.dart:547, type.dart:585, :1322, :1440, :1484, record_patch.dart:15,
+comment_reference_resolver.dart:29 and linter comment_references.dart:82 at the dart pin;
+TargetLowering.cpp:4800-:5381, LegalizeIntegerTypes.cpp:5932-:5966 and TargetLoweringBase.cpp:1063 at the LLVM pin;
+julia.h:1837, subtype.c:1348, verifytrim.jl:125 and :182, and tfuncs.jl:2472 at the julia pin.
+
+R1: the record rule and SimplifySetCC's block are near 1:1 ports. The analyzer pin passes over a nearer rule (A95S2),
+and a fold is left out on a false reason (A95S1). R2: no stub is called complete; the Vararg tuple stays a located
+gap, and Record._getMasqueradedRecordRuntimeType still raises loud (type.jl:359).
+
+Resolution: this entry lands alone, prose only. A92S5, A90S2, A94E2, A93E2 and A93S1 leave their rows. Fix first:
+A95E2. 1.C: A95E2, A95S3. 1.D: A95E3, A95S1. 1.F: A95E1. 1.K: A95S2. 1.L: A95S4. 1.D also takes wt3-memory2's row for
+the 1.13 per-site muladd divergence, the lead's.
