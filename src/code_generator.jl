@@ -881,9 +881,11 @@ end
 # widenreturn, Compiler/src/typelattice.jl:210 and :218).
 # Reshaped: `value_type` — the type Julia inferred for a statement node, which the node itself does not
 # carry (a value's, dart_type_of's): convertType's boxed_class, as Julia's codegen unboxes a call's
-# boxed result by its statement's inferred type (julia/src/codegen.cpp emit_invoke's mark_julia_type)
+# boxed result by its statement's inferred type (julia/src/codegen.cpp emit_invoke's mark_julia_type);
+# `statement` — a statement node's SSA index, which visitBlock passes down as it visits statements by
+# index, naming a field access's call site (FieldAccessSite) where dart names a TreeNode
 @parity "dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression" @nospecializeinfer function translate_expression(self::AstCodeGenerator, @nospecialize(node::Union{NirValue,NirStmt}), @nospecialize(expected_type::WasmBuilder.IR.ValueType);
-        value_type::Union{Type,Nothing} = nothing)::WasmBuilder.IR.ValueType
+        value_type::Union{Type,Nothing} = nothing, statement::Union{Int,Nothing} = nothing)::WasmBuilder.IR.ValueType
     try
         # dart's `node.accept1(this, expectedType)`: the visitor of the node's kind
         local result_type = node isa NirValue ? (@exhaustive node::NirValue begin
@@ -911,8 +913,8 @@ end
                         count(==(Nothing), ts) == 1 && all(t -> Nothing <: t, ts) end)
                 record_get(Tuple, Int) ? visit_record_index_get(self, c, expected_type) :
                 record_get(NamedTuple, Symbol) ? visit_record_name_get(self, c, expected_type) :
-                f === Core.getfield ? visit_instance_get(self, c, expected_type) :
-                f === Core.setfield! ? visit_instance_set(self, c, expected_type) :
+                f === Core.getfield ? visit_instance_get(self, c, expected_type; statement) :
+                f === Core.setfield! ? visit_instance_set(self, c, expected_type; statement) :
                 f === Core.setglobal! ? visit_static_set(self, c, expected_type) :
                 f === Core.isa ? visit_is_expression(self, c, expected_type) :
                 f === Core.typeassert ? visit_as_expression(self, c, expected_type) :
@@ -1013,10 +1015,11 @@ stackifier (dev/MARCH.md 1.D), and a foreign call or C function pointer until th
 dart's source-map offset is set from the node; the NIR's line table takes that place with the source
 map.
 """
-@parity "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement" @nospecializeinfer function translate_statement(self::AstCodeGenerator, @nospecialize(node::NirStmt), variable::Union{NirSSA,Nothing})::Nothing
+@parity "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement" @nospecializeinfer function translate_statement(self::AstCodeGenerator, @nospecialize(node::NirStmt), variable::Union{NirSSA,Nothing};
+        statement::Union{Int,Nothing} = nothing)::Nothing
     local at = "dart2wasm/lib/code_generator.dart:714 AstCodeGenerator.translateStatement"
     @exhaustive node::NirStmt begin
-        (s::NirCall) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
+        (s::NirCall) => variable === nothing ? visit_expression_statement(self, s; statement) : translate_variable_declaration(self, variable)
         (s::NirInvoke) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirNew) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
         (s::NirGlobalRead) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
@@ -1255,7 +1258,7 @@ end
                     convert_type(self.translator, b, thrown.type, dest.type)
                     WasmBuilder.local_set(b, dest)
                 else
-                    translate_statement(self, st, k in self.used ? NirSSA(k) : nothing)
+                    translate_statement(self, st, k in self.used ? NirSSA(k) : nothing; statement = k)
                 end
                 e == 0 || pop!(self.try_block_locals)
             end
@@ -1300,7 +1303,7 @@ end
         local_ = add_local(self, translate_type_of_local_variable(self.translator, self.body.types[node.id]))
         self.locals[node] = local_
     end
-    translate_expression(self, self.body.stmts[node.id], local_.type; value_type = self.body.types[node.id])
+    translate_expression(self, self.body.stmts[node.id], local_.type; value_type = self.body.types[node.id], statement = node.id)
     WasmBuilder.local_set(self.b[], local_)
     return nothing
 end
@@ -1329,8 +1332,8 @@ end
 @parity "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally" visit_try_finally(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     no_counterpart_rejection("TryFinally", "dart2wasm/lib/code_generator.dart:1108 AstCodeGenerator.visitTryFinally", "$(self.enclosing_member)")
 
-@parity "dart2wasm/lib/code_generator.dart:1197 AstCodeGenerator.visitExpressionStatement" function visit_expression_statement(self::AstCodeGenerator, node::NirStmt)::Nothing
-    translate_expression(self, node, void_marker(self))
+@parity "dart2wasm/lib/code_generator.dart:1197 AstCodeGenerator.visitExpressionStatement" function visit_expression_statement(self::AstCodeGenerator, node::NirStmt; statement::Union{Int,Nothing} = nothing)::Nothing
+    translate_expression(self, node, void_marker(self); statement)
     return nothing
 end
 
@@ -1676,8 +1679,8 @@ end
 """
 A call through a selector: dart's virtual call of `interface_target`'s getter, setter or method.
 Julia's selectors are field selectors (DispatchTable.build, ruling (a)): a field access on a receiver
-Julia's inference left abstract, its interface target a SelectorReference, the selector's name and
-kind, which a Julia abstract type, declaring no field, stands for. No target is dart's unreachable call; one range
+Julia's inference left abstract, its interface target a SelectorReference, the call site and kind,
+whose selector the dispatch table recorded at build. No target is dart's unreachable call; one range
 of one target is a direct call of that target's function; otherwise the receiver is kept in a local
 and the call goes through the dispatch table (callDispatchTable), or a polymorphic dispatcher where
 the selector has static ranges beside its table's.
@@ -1693,8 +1696,8 @@ the selector has static ranges beside its table's.
     local selector = selector_for_target(translator.dispatch_table[], reference)
     local signature = selector.signature[]
     local name = entry_point_name(selector, use_unchecked_entry)
-    selector.name == reference.name ||
-        reject!(Internal("$at: the selector $(selector.name) for $reference"), "$(self.enclosing_member)")
+    selector.is_setter == (reference.kind === FieldReferenceKind_setter) ||
+        reject!(Internal("$at: the selector $(selector.name) for $reference, of the other kind"), "$(self.enclosing_member)")
     push_receiver(signature)
     local targets_ = targets(selector; unchecked = use_unchecked_entry)
     local target_ranges = targets_.all_target_ranges
@@ -1823,7 +1826,7 @@ end
 # concrete has the field as its single target (dart's _directGet); one Julia leaves abstract is a
 # virtual get. No field of a Julia struct is one of dart's getter intrinsics (wasm reference types,
 # int's bit counts). A field Julia names at run time rejects, located.
-@parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" function visit_instance_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" function visit_instance_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType; statement::Union{Int,Nothing} = nothing)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet"
     length(node.args) in (3, 4) || reject!(Internal("$at: getfield with $(length(node.args) - 1) operands"), "$(self.enclosing_member)")
     local intrinsic = generate_instance_getter_intrinsic(self.intrinsifier[], node)
@@ -1840,9 +1843,8 @@ end
     # a receiver Julia left abstract has no single target: the field's getter selector (_virtualCall),
     # its interface target the field as the receiver's class names it (dart's node.interfaceTarget, a
     # member of the static type, which a Julia abstract type does not declare), a SelectorReference
-    # naming the selector DispatchTable.selectorForTarget reads: the field's name as field_selector_calls
-    # names it over the classes the receiver admits (getConcreteClassIdRange's one reading), a position
-    # the field each holds there
+    # naming this call site, whose selector DispatchTable.build recorded once (field_selector_calls'
+    # sites) and selectorForTarget reads
     # a field read on a Union of tuples: dart's DynamicGet on a receiver of no one record shape
     # (code_generator.dart:2317 visitDynamicGet), switching over the record classes holding the field,
     # which the intrinsifier writes for an open tuple type but not yet for a Union of them; no selector
@@ -1850,7 +1852,8 @@ end
     cls isa Type && !(cls isa DataType) && cls <: Tuple &&
         reject!(Unquarantined("src/intrinsics.jl generateInstanceGetterIntrinsic: a field read on $cls, a Union of tuples, dart's DynamicGet over the record classes, not lowered"), "$(self.enclosing_member)")
     if !(cls isa DataType && isconcretetype(cls))
-        local reference = SelectorReference(field_selector_name(key, concrete_classes(self.translator, cls)), FieldReferenceKind_getter)
+        statement === nothing && reject!(Internal("$at: a field access on $cls reached with no statement index, its call site unnamed"), "$(self.enclosing_member)")
+        local reference = SelectorReference(FieldAccessSite(self.enclosing_member::Core.MethodInstance, statement), FieldReferenceKind_getter)
         local result = _virtual_call(self, node, reference, _VirtualCallKind_Get,
             signature -> (translate_expression(self, receiver, signature.inputs[1]); nothing), (signature, param_info) -> nothing;
             use_unchecked_entry = false)
@@ -1945,7 +1948,7 @@ end
 # abstract is a virtual set. Julia checks no covariant value (a field's type is exact), so no call
 # needs the unchecked entry. A field named at run time, or one Julia's struct does not let change (an
 # immutable struct's, a const field), rejects, located.
-@parity "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet" function visit_instance_set(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet" function visit_instance_set(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType; statement::Union{Int,Nothing} = nothing)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet"
     local preserved = expected_type != void_marker(self)
     length(node.args) in (4, 5) || reject!(Internal("$at: setfield! with $(length(node.args) - 1) operands"), "$(self.enclosing_member)")
@@ -1960,7 +1963,8 @@ end
     if !(cls isa DataType && isconcretetype(cls))
         local b = self.b[]
         local temp = Ref{Union{Nothing,WasmBuilder.IR.Local}}(nothing)
-        _virtual_call(self, node, SelectorReference(field_selector_name(key, concrete_classes(self.translator, cls)), FieldReferenceKind_setter), _VirtualCallKind_Set,
+        statement === nothing && reject!(Internal("$at: a field access on $cls reached with no statement index, its call site unnamed"), "$(self.enclosing_member)")
+        _virtual_call(self, node, SelectorReference(FieldAccessSite(self.enclosing_member::Core.MethodInstance, statement), FieldReferenceKind_setter), _VirtualCallKind_Set,
             signature -> (translate_expression(self, receiver, signature.inputs[1]); nothing),
             function (signature, param_info)
                 local param_type = signature.inputs[end]

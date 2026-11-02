@@ -55,29 +55,30 @@ its own, so this names one by the field and its kind, compared by value.
 end
 
 """
-    SelectorReference(name, kind)
+    SelectorReference(site, kind)
 
 The interface target of a field access on a receiver Julia's inference left abstract: dart's
 InstanceGet's and InstanceSet's interfaceTargetReference, the member the receiver's static type
-declares, which DispatchTable.selectorForTarget reads to find the call's selector. A Julia abstract
-type declares no field, so the reference names the selector itself: the field's name as
-field_selector_calls names it, and the accessor's kind, a getter or a setter. It is no member, so it
-stands outside the Reference sum: no function is made or called for it, and only _virtualCall,
-callDispatchTable and selectorForTarget take one.
+declares, whose selector id DispatchTable.selectorForTarget reads from TFA's metadata. A Julia
+abstract type declares no field, so the reference names the call site itself (a FieldAccessSite), whose
+selector DispatchTable.build recorded once (procedureAttributeMetadata), and
+the accessor's kind, a getter or a setter. It is no member, so it stands outside the Reference sum:
+no function is made or called for it, and only _virtualCall, callDispatchTable and selectorForTarget
+take one.
 
 precedent(dart: pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfaceTargetReference, a Reference to a
 member of the static type). Julia's differs: the static type declares no member, so the reference
-names what the member would select.
+names the site the member's selector id would be recorded for.
 """
-@quarantine "dart's instance access names its interface target (pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfaceTargetReference); a Julia abstract type declares no member, so the selector's name and kind stand for it" Core.String struct SelectorReference
-    name::String
+@quarantine "dart's instance access names its interface target (pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfaceTargetReference); a Julia abstract type declares no member, so the call site and kind stand for it" WasmTarget.FieldAccessSite struct SelectorReference
+    site::FieldAccessSite
     kind::FieldReferenceKind
     # a selector is a getter's or a setter's; an initializer is a static field's, never called
     # through a selector
-    SelectorReference(name::String, kind::FieldReferenceKind) =
+    SelectorReference(site::FieldAccessSite, kind::FieldReferenceKind) =
         kind === FieldReferenceKind_initializer ?
-            reject!(Internal("src/julia/kernel.jl SelectorReference: the selector $name of an initializer, which no call dispatches"), "SelectorReference") :
-            new(name, kind)
+            reject!(Internal("src/julia/kernel.jl SelectorReference: the selector of an initializer at $(site.member), which no call dispatches"), "SelectorReference") :
+            new(site, kind)
 end
 
 """

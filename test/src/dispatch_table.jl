@@ -137,9 +137,12 @@ end
     @test ce isa W.WasmBuilder.InstructionsBuilder
 end
 
-# a receiver's admitted classes among `cs`, as getConcreteClassIdRange reads a closed world's (the test
-# names the classes itself, before any numbering)
-admitted_of(cs::Vector{DataType}) = r -> DataType[c for c in cs if c <: r]
+# a numbered translator of `f`'s world (modules, closures and classes collected), whose admitted classes
+# getConcreteClassIdRange reads, as DispatchTable.build passes them (concrete_classes)
+numbered(f) = (t = DD.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f, (Int,), "dispatch_table"), "test"),
+        DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options())), DD.TranslatorOptions());
+    DD._init_modules(t, nothing); collect(t.closure_layouter[]); collect(t.class_info_collector[]); t)
+admitted(t) = r -> WasmTarget.concrete_classes(t, r)
 
 module FieldSelectorCases
 abstract type S end
@@ -172,7 +175,7 @@ end
     DD._init_modules(t, nothing)
     collect(t.closure_layouter[]); collect(t.class_info_collector[])
     # Julia's IR reads both fields on an S, each one call of its getter selector
-    local calls = W.field_selector_calls(t.component, admitted_of(DataType[F.A, F.B, F.Holder]))
+    local calls = W.field_selector_calls(t.component, admitted(t))
     @test Set((c.name, c.is_setter, c.call_count, Set(c.classes)) for c in calls) == Set([("side", false, 1, Set([F.A, F.B])), ("tag", false, 1, Set([F.A, F.B]))])
     local dt = t.dispatch_table[]
     DD.build(dt)
@@ -206,10 +209,18 @@ end
     @test DD.call_dispatch_table(t, b, side; use_unchecked_entry = false) === nothing
     local ops = [nameof(typeof(i)) for i in b._instructions]
     @test :CallIndirect in ops
-    # an interface target, a SelectorReference, names its selector by name and kind; an initializer's
-    # cannot be made
-    @test DD.selector_for_target(dt, W.SelectorReference("side", W.FieldReferenceKind_getter)) === side
-    local ei = try; W.SelectorReference("side", W.FieldReferenceKind_initializer); nothing; catch x; x; end
+    # an interface target, a SelectorReference, names its call site, whose selector build recorded once
+    # (procedureAttributeMetadata); a site build never met has none, located; an initializer's cannot
+    # be made
+    local rs = only(nb for nb in t.component if nb.ci.def.def.name === :read_side)
+    local site_stmt = only(st for st in rs.stmts if st isa W.NirCall && W.nir_callee(st) === Core.getfield && st.args[3] isa W.NirConst && st.args[3].c.val === :side)
+    local site = W.FieldAccessSite(rs.ci.def, findfirst(st -> st === site_stmt, rs.stmts))
+    @test DD.selector_for_target(dt, W.SelectorReference(site, W.FieldReferenceKind_getter)) === side
+    @test dt.procedure_attribute_metadata[site] == side.id
+    local other = only(st for st in rs.stmts if st isa W.NirCall && W.nir_callee(st) === Core.getfield && st.args[3] isa W.NirConst && st.args[3].c.val === :s)
+    local en = try; DD.selector_for_target(dt, W.SelectorReference(W.FieldAccessSite(rs.ci.def, findfirst(st -> st === other, rs.stmts)), W.FieldReferenceKind_getter)); nothing; catch x; x; end
+    @test en isa W.RejectionError && en.rejection isa W.Internal
+    local ei = try; W.SelectorReference(site, W.FieldReferenceKind_initializer); nothing; catch x; x; end
     @test ei isa W.RejectionError && ei.rejection isa W.Internal
     # a method is no instance member: no selector
     local e = try; DD.selector_for_target(dt, t.component.entry); nothing; catch x; x; end
@@ -224,7 +235,8 @@ end
     # a read by position is the selector of the field each admitted class holds there (Julia's
     # get_checked_fieldindex), never a selector named "1" that every class lacks (A69S2)
     local world(f) = W.build_nir(W.check_subset(f, (Int,), "dispatch_table"), "test")
-    local pc = W.field_selector_calls(world(F.first_of), admitted_of(DataType[F.A, F.B, F.Holder]))
+    local tf = numbered(F.first_of)
+    local pc = W.field_selector_calls(tf.component, admitted(tf))
     @test [(c.name, c.is_setter, c.call_count, Set(c.classes)) for c in pc] == [("side", false, 1, Set([F.A, F.B]))]
     local t3 = DD.Translator(world(F.first_of), data, DD.TranslatorOptions())
     DD._init_modules(t3, nothing)
@@ -233,9 +245,9 @@ end
     local s3 = DD.selector_for_target(t3.dispatch_table[], getter(F.B, "side"))
     @test s3.name == "side" && t3.dispatch_table[]._table[][t3.class_id_numbering[].class_ids[F.B] + DD.targets(s3; unchecked = false).offset + 1] === getter(F.B, "side")
     # a position naming different fields in different classes, or past a class's fields: located
-    local em = try; W.field_selector_calls(world(F.first_mixed), admitted_of(DataType[F.A, F.C, F.Holder])); nothing; catch x; x; end
+    local em = try; (tm = numbered(F.first_mixed); W.field_selector_calls(tm.component, admitted(tm))); nothing; catch x; x; end
     @test em isa W.RejectionError && em.rejection isa W.Unquarantined && occursin("side, tag", em.rejection.row)
-    local eb = try; W.field_selector_calls(world(F.second_short), admitted_of(DataType[F.A, F.C, F.Holder])); nothing; catch x; x; end
+    local eb = try; (ts = numbered(F.second_short); W.field_selector_calls(ts.component, admitted(ts))); nothing; catch x; x; end
     @test eb isa W.RejectionError && eb.rejection isa W.Unquarantined && occursin("BoundsError", eb.rejection.row)
     # the compile calls through the table (_virtualCall): first_of's read by position, run by node,
     # answers as native Julia

@@ -693,13 +693,27 @@ end
 @quarantine "a Julia field is named by its fieldname, a Symbol or a tuple's position, and a binding by its Symbol, as kernel names a member by its Name's text (pkg/kernel/lib/src/ast/names.dart:25 Name.text)" Core.GlobalRef field_name(field::Union{ClassField,GlobalRef})::String =
     field isa ClassField ? field.name : string(field.name)
 
-# a field selector's calls: its field's name, whether it is the setter, its call count and the classes
-# its receivers' types admit
+"""
+    FieldAccessSite(member, index)
+
+A field access's call site: the enclosing member's MethodInstance and the statement's SSA index in its
+body, Julia's own name for a statement. dart keys TFA's selector metadata by the member's TreeNode
+(DispatchTable.procedureAttributeMetadata); a Julia field access calls no member, so its site is named
+by position, which a rebuilt NIR keeps.
+"""
+@quarantine "dart keys TFA's selector metadata by TreeNode (dart2wasm/lib/dispatch_table.dart:399 DispatchTable.procedureAttributeMetadata); a Julia field access has no Member, so the enclosing MethodInstance and the statement's SSA index name its site" Core.MethodInstance struct FieldAccessSite
+    member::Core.MethodInstance
+    index::Int
+end
+
+# a field selector's calls: its field's name, whether it is the setter, its call count, the classes
+# its receivers' types admit, and its call sites
 @quarantine "a field selector's calls, Julia's field accesses on receivers its inference left abstract, as TFA counts a selector's calls in its TableSelectorInfo (pkg/vm/lib/metadata/table_selector.dart:10 TableSelectorInfo)" Core.DataType mutable struct FieldSelectorCalls
     const name::String
     const is_setter::Bool
     call_count::Int
     const classes::Vector{DataType}
+    const sites::Vector{FieldAccessSite}
 end
 
 # the class ids of a type's concrete classes, ClassIdNumbering.getConcreteClassIdRange's ranges read out
@@ -742,7 +756,7 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
 """
 @quarantine "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, admitted_classes::Function)::Vector{FieldSelectorCalls}
     local out = FieldSelectorCalls[]
-    for b in world, st in b.stmts
+    for b in world, (index, st) in enumerate(b.stmts)
         st isa NirCall || continue
         local f = nir_callee(st)
         (f === Core.getfield || f === Core.setfield!) || continue
@@ -760,8 +774,9 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
         local admitted = admitted_classes(receiver)::Vector{DataType}
         local name = field_selector_name(name_op.c.val, admitted); local is_setter = f === Core.setfield!
         local k = findfirst(e -> e.name == name && e.is_setter == is_setter, out)
-        k === nothing && (push!(out, FieldSelectorCalls(name, is_setter, 0, DataType[])); k = length(out))
+        k === nothing && (push!(out, FieldSelectorCalls(name, is_setter, 0, DataType[], FieldAccessSite[])); k = length(out))
         out[k].call_count += 1
+        push!(out[k].sites, FieldAccessSite(b.ci.def, index))
         for c in admitted
             c in out[k].classes || push!(out[k].classes, c)
         end

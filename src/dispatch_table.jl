@@ -93,6 +93,10 @@ Fields to come (2, each with its dispatch_table.dart line, TFA's selector metada
 member never reads): `procedureAttributeMetadata` :399, `_selectorMetadata` :403.
 """
 @parity "dart2wasm/lib/dispatch_table.dart:396 DispatchTable" struct DispatchTable <: AbstractDispatchTable
+    # dart's procedureAttributeMetadata (:399), TFA's selector ids per member, read by selectorForTarget
+    # (:440-443): each field access a selector serves, by its call site (FieldAccessSite: Julia's site
+    # has no Member to key by), to its selector's id, written once by build (field_selector_calls' sites)
+    procedure_attribute_metadata::Dict{FieldAccessSite,Int}
     translator::KernelNodes
     _selector_info::LinkedHashMap{Int,SelectorInfo}
     _table::Late{Vector{Union{Reference,Nothing}}}
@@ -103,7 +107,7 @@ member never reads): `procedureAttributeMetadata` :399, `_selectorMetadata` :403
     # its outer function
     function DispatchTable(::Val{:_}, translator::KernelNodes)
         local self
-        self = new(translator, LinkedHashMap{Int,SelectorInfo}(),
+        self = new(Dict{FieldAccessSite,Int}(), translator, LinkedHashMap{Int,SelectorInfo}(),
             Late{Vector{Union{Reference,Nothing}}}("dart2wasm/lib/dispatch_table.dart:409 DispatchTable._table"),
             Late{IdDict{Reference,Int}}("dart2wasm/lib/dispatch_table.dart:413 DispatchTable._tableIndexForReference"),
             Late{WasmBuilder.TableBuilder}("dart2wasm/lib/dispatch_table.dart:415 DispatchTable._definedWasmTable"),
@@ -318,17 +322,21 @@ An interface target (`SelectorReference`, the method below) names its selector's
         (m::MethodInstance) => reject!(Internal("$at: $m, no instance member, has no selector"), at)
         (f::FieldReference) => f
     end
-    return selector_for_target(self, SelectorReference(field_name(f.field), f.kind))
-end
-
-# an interface target names its selector: the one of its name and kind
-@parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" function selector_for_target(self::DispatchTable, target::SelectorReference)::SelectorInfo
-    local at = "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget"
-    local name, is_setter = target.name, target.kind === FieldReferenceKind_setter
+    local name, is_setter = field_name(f.field), f.kind === FieldReferenceKind_setter
     for (_, selector) in self._selector_info
         selector.name == name && selector.is_setter == is_setter && return selector
     end
     reject!(Internal("$at: no selector for the field $name, which no call reads on a receiver Julia left abstract"), at)
+end
+
+# an interface target's selector: the id build recorded for its call site (dart's
+# `procedureAttributeMetadata[member]!` then getterSelectorId or methodOrSetterSelectorId, :440-443),
+# then the selector of that id; a site with none is WasmTarget's own defect, located
+@parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" function selector_for_target(self::DispatchTable, target::SelectorReference)::SelectorInfo
+    local at = "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget"
+    local selector_id = get(self.procedure_attribute_metadata, target.site, nothing)
+    selector_id === nothing && reject!(Internal("$at: the field access at statement $(target.site.index) of $(target.site.member), for which build recorded no selector"), at)
+    return self._selector_info[selector_id]
 end
 
 @parity "dart2wasm/lib/dispatch_table.dart:451 DispatchTable.indexForTarget" index_for_target(self::DispatchTable, target::Reference)::Union{Int,Nothing} =
@@ -378,6 +386,9 @@ formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the
     for c in calls
         local id = length(self._selector_info)
         self._selector_info[id] = SelectorInfo__(self, id, c.name, c.call_count; is_setter = c.is_setter, is_index_setter = false)
+        for site in c.sites
+            self.procedure_attribute_metadata[site] = id
+        end
     end
     local called(name::String, is_setter::Bool) = findfirst(c -> c.name == name && c.is_setter == is_setter, calls)
     # Maps class to selector IDs of the class
