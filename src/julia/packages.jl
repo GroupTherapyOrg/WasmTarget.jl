@@ -8,10 +8,11 @@
 
 # dart's runtime library, the @patch libraries a program is compiled with (RUNTIME_FILES), its ports
 # Julia methods compiled into every closed world (RUNTIME_ROOTS, below)
-@quarantine "Julia has no per-file namespace; dart's patch libraries, the program's runtime, are a module" Core.Module module Runtime
+@quarantine "Julia has no per-file namespace; dart's patch libraries, the program's runtime (pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries), are a module" Core.Module module Runtime
 # ---- the src/julia names Runtime's files use, written by dev/skeleton.jl write ----
-import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..wasm_array_new, ..wasm_array_write!,
-       ..wasm_string_codeunit
+import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..WasmI32, .._wasm_only, ..jl_to_typeof,
+       ..wasm_array_length, ..wasm_array_new, ..wasm_array_read, ..wasm_array_read_unsigned,
+       ..wasm_array_write!, ..wasm_string_codeunit
 # ---- end of Runtime's src/julia names ----
 end
 # ---- the runtime's roots, written by dev/skeleton.jl write ----
@@ -19,6 +20,13 @@ end
     ((:Runtime,), :Error__throw_with_current_stack_trace),
     ((:Runtime,), :StackTrace_current),
     ((:Runtime,), :_TypeError__throw_as_check_error),
+    ((:Runtime,), :_as_interface_subtype0),
+    ((:Runtime,), :_is_interface_subtype0),
+    ((:Runtime,), :_is_nullability_check),
+    ((:Runtime,), :_no_substitution_index),
+    ((:Runtime,), :_type_row_displacement_offsets),
+    ((:Runtime,), :_type_row_displacement_subst_table),
+    ((:Runtime,), :_type_row_displacement_table),
     ((), :throw_atomic_error),
     ((), :throw_bounds_error),
     ((), :throw_divide_error),
@@ -80,20 +88,22 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..STANDALONE_EMBEDDER_MODULE, ..STMTS, ..THROW_REF, ..TRY_TABLE, ..TreeNode_no_offset,
        ..UNREACHABLE, ..UnionFind, ..Unported, ..Unquarantined, ..WASM_OPCODE_CATCH,
        ..WASM_OPCODE_CATCH_ALL_REF, ..WASM_STORAGE_TYPES, ..WasmArray, ..WasmArrayLiteral,
-       ..WasmExternRef, ..WasmF32, ..WasmF64, ..WasmI16, ..WasmI32, ..WasmI64, ..WasmI8, .._KINDS,
+       ..WasmExternRef, ..WasmF32, ..WasmF64, ..WasmI16, ..WasmI32, ..WasmI64, ..WasmI8,
        ..build_nir, ..class_implemented_types, ..class_instance_fields, ..class_is_abstract,
        ..class_is_set_field, ..class_superclass, ..closed_world_classes, ..egal_by_identity,
        ..field_may_be_null, ..field_name, ..field_selector_calls, ..field_selector_name,
-       ..holds_reference, ..jl_egal, ..nir_argument_type, ..nir_binding_is_constant,
-       ..nir_binding_value, ..nir_body_of, ..nir_callee, ..nir_carries_data, ..nir_const_type,
-       ..nir_foreign_import, ..nir_foreign_operands, ..nir_invoke_target, ..nir_method_nargs,
-       ..nir_operands, ..nir_parameter_types, ..nir_runtime_member, ..nir_tuple_type,
-       ..nir_used_statements, ..nir_value_operands, ..nir_value_type, ..nir_vararg_call_tuple,
-       ..nir_vararg_packing, ..no_counterpart_rejection, ..open_tuple_holds, ..reject!,
-       ..run_wasm_opt, ..throw_atomic_error, ..throw_bounds_error, ..throw_divide_error,
+       ..holds_reference, ..is_interface_class_type, ..jl_egal, ..jl_to_typeof,
+       ..nir_argument_type, ..nir_binding_is_constant, ..nir_binding_value, ..nir_body_of,
+       ..nir_callee, ..nir_carries_data, ..nir_const_type, ..nir_foreign_import,
+       ..nir_foreign_operands, ..nir_invoke_target, ..nir_method_nargs, ..nir_operands,
+       ..nir_parameter_types, ..nir_runtime_member, ..nir_tuple_type, ..nir_used_statements,
+       ..nir_value_operands, ..nir_value_type, ..nir_vararg_call_tuple, ..nir_vararg_packing,
+       ..no_counterpart_rejection, ..open_tuple_holds, ..reject!, ..run_wasm_opt,
+       ..throw_atomic_error, ..throw_bounds_error, ..throw_divide_error,
        ..throw_invalid_memory_size, ..throw_method_error, ..throw_out_of_memory,
-       ..throw_undef_ref_error, ..tuple_record_arity, ..tuple_record_class, ..uf_add!, ..uf_find!,
-       ..uf_union!, ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!, ..wasm_egal,
+       ..throw_undef_ref_error, ..told_by_class, ..tuple_record_arity, ..tuple_record_class,
+       ..uf_add!, ..uf_find!, ..uf_union!, ..wasm_array_length, ..wasm_array_new,
+       ..wasm_array_read, ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_egal,
        ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_string, ..wasm_memory_unset!,
        ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length,
        ..wasm_string_memory

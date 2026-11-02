@@ -95,3 +95,25 @@ checked(x::Int) = typeassert(pick(x), Int) + 1
     end
 end
 end
+
+module RuntimeInterfaceCheck
+using Test, WasmTarget
+const W = WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+# a value only its null case can fail: an Int or nothing, tested and checked as an Int
+@noinline maybe(x::Int)::Union{Nothing,Int} = x > 0 ? x : nothing
+unwrapped(x::Int) = typeassert(maybe(x), Int) + 1
+isint(x::Int) = maybe(x) isa Int
+@testset "type.dart: _asInterfaceSubtype0 and _isNullabilityCheck test a class's null case, the error's type its class id's" begin
+    local world = W.build_nir(W.check_subset(unwrapped, (Int,), "runtime"), "runtime")
+    local names = Set(b.ci.def.def.name for b in world)
+    @test :_as_interface_subtype0 in names && :_throw_interface_type_as_check_error0 in names
+    @test (try; unwrapped(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Int, nothing)
+    for (f, args) in ((unwrapped, [(3,), (-1,)]), (isint, [(3,), (-1,)]))
+        local bytes = W.compile(f, (Int,))
+        for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, Main.WTRunner.native_answer(f, a)) for a in args])
+            @test r.ok || (@info r.label r.why; false)
+        end
+    end
+end
+end

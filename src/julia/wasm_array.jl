@@ -193,6 +193,24 @@ The number of elements of `a`: dart's `WasmArrayRef.length`, `array.len`.
     _wasm_only(Int)
 
 """
+    wasm_array_read(a, i) -> Int32
+
+The element at offset `i` (from 0) of an i32 array, unchecked by Julia (wasm's bounds trap): dart's
+`WasmArrayExt<WasmI32>.[]`, `array.get`, a WasmI32, whose Julia value is an Int32.
+"""
+@quarantine "dart:_wasm's WasmArray read (sdk/lib/_wasm/wasm_types.dart:746 WasmArrayExt.[]) is one wasm instruction; no wasm array exists natively" Core.Int32 @noinline wasm_array_read(a::WasmArray{WasmI32}, i::Int) =
+    _wasm_only(Core.Int32)
+
+"""
+    wasm_array_read_unsigned(a, i) -> Int
+
+The element at offset `i` (from 0) of a packed i16 array, zero-extended: dart's
+`I16ArrayExt.readUnsigned`, `array.get_u`, an int.
+"""
+@quarantine "dart:_wasm's packed read (sdk/lib/_wasm/wasm_types.dart:775 I16ArrayExt.readUnsigned) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_read_unsigned(a::WasmArray{WasmI16}, i::Int) =
+    _wasm_only(Int)
+
+"""
     WasmExternRef
 
 dart:_wasm's host reference (sdk/lib/_wasm/wasm_types.dart:59, `class WasmExternRef extends

@@ -261,6 +261,9 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
     type_row_displacement_subst_table::Late{NirConst}
     canonical_substitution_table::Late{NirConst}
     type_names::Late{NirConst}
+    # Julia's: the type value of each class id an as check names (emitAsCheck), as julia.h:969
+    # jl_small_typeof holds the type of each small tag
+    small_typeof::Dict{Int,DataType}
     _requires_substitution_for_subclasses::Dict{Int,Bool}
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
     # :1217, which builds the rules and the tables, is its outer function
@@ -275,6 +278,7 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
             Late{NirConst}("dart2wasm/lib/types.dart:1207 RuntimeTypeInformation.typeRowDisplacementSubstTable"),
             Late{NirConst}("dart2wasm/lib/types.dart:1208 RuntimeTypeInformation.canonicalSubstitutionTable"),
             Late{NirConst}("dart2wasm/lib/types.dart:1209 RuntimeTypeInformation.typeNames"),
+            Dict{Int,DataType}(),
             Dict{Int,Bool}())
 end
 
@@ -470,7 +474,9 @@ end
 """
 Emits a test of a value against a type: the value on the stack as a top-type reference, the result
 an i32. The test is a class-id range check whenever Julia tells the type's values by their class (see
-`canUseTypeCheckHelper`). A test that only needs the null case is dart's runtime
+`canUseTypeCheckHelper`). Otherwise a class of the closed world is tested by the runtime's
+`_isNullabilityCheck` or `_isInterfaceSubtype0` (src/runtime/common/type.jl), its nullability and
+class id passed (`is_interface_class_type`, src/julia/classes.jl). Any other type's null case is dart's
 `_isNullabilityCheck(o, isNullable)` (`o == null ? isNullable : true`), written out because the
 tested type is a constant. Any other test needs dart's runtime subtype check, `_isSubtype` of the
 runtime library at the pin, not ported: it rejects there, Unported, located.
@@ -490,9 +496,20 @@ runtime library at the pin, not ported: it rejects there, Unported, located.
         # binds its parameters in the class itself (Vector{Int} is a class of its own), so it has none to test
         check_arguments && reject!(Internal("$at: a Julia class has no type arguments to check"), at)
         MacroAssembler_invoke(b, generate_is_checker(is_checkers, type_to_check, check_arguments, Nothing <: operand_type))
+    elseif is_interface_class_type(self.translator, tested_against_type, check_only_null_assignability)
+        # a Julia class binds its parameters in the class itself, so it has no type arguments: dart's
+        # isInterfaceSubtype0
+        WasmBuilder.i32_const(b, encoded_nullability(tested_against_type))
+        if check_only_null_assignability
+            call(code_gen, is_nullability_check(self.translator))
+        else
+            WasmBuilder.i32_const(b, class_id(self.translator.class_info[tested_against_type]))
+            call(code_gen, is_interface_subtype0(self.translator))
+        end
     elseif check_only_null_assignability && is_type_constant(self, tested_against_type)
-        # _isNullabilityCheck(o, isNullable): a nullable type admits every value; else a value is one
-        # exactly when it is not null
+        # dart's makeType, the type's isDeclaredNullable read from it and _isNullabilityCheck: the type
+        # a constant, its nullability is known here, so the test is written out: a nullable type admits
+        # every value; else a value is one exactly when it is not null
         if encoded_nullability(tested_against_type) == 1
             WasmBuilder.drop(b)
             WasmBuilder.i32_const(b, 1)
@@ -508,8 +525,12 @@ end
 
 """
 Emits a check that a value is of a type, returning the wasm type of the checked value: the as
-checker of the type when Julia tells its values by their class. dart otherwise calls its runtime
-`_asSubtype`, of the runtime library at the pin, not ported: the check rejects there, Unported.
+checker of the type when Julia tells its values by their class. Otherwise the value, kept in a local
+of its boxed type, is checked by the runtime: a class of the closed world by `_asInterfaceSubtype0`
+(src/runtime/common/type.jl), told whether only the null case is checked, the type's nullability and
+its class id (`is_interface_class_type`, src/julia/classes.jl), and the checked value is the local's. dart calls
+`_asSubtype` for any other type, of the runtime library at the pin, not ported: the check rejects
+there, Unported.
 """
 @parity "dart2wasm/lib/types.dart:527 Types.emitAsCheck" function emit_as_check(self::Types, code_gen::AstCodeGenerator, tested_against_type::Type, operand_type::Type,
         boxed_operand_type::WasmBuilder.IR.RefType; location::Union{String,Nothing} = nothing)::WasmBuilder.IR.ValueType
@@ -525,7 +546,27 @@ checker of the type when Julia tells its values by their class. dart otherwise c
         MacroAssembler_invoke(b, generate_as_checker(as_checkers, type_to_check, check_arguments, Nothing <: operand_type))
         return translate_type(self.translator, tested_against_type)
     end
-    reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype"), "$at: a check against $tested_against_type needs the runtime's _asSubtype")
+    local operand = WasmBuilder.add_local(b, boxed_operand_type)
+    WasmBuilder.local_tee(b, operand)
+    WasmBuilder.i32_const(b, encoded_bool(check_only_null_assignability))
+    local outputs_to_drop::Vector{WasmBuilder.IR.ValueType}
+    if is_interface_class_type(self.translator, tested_against_type, check_only_null_assignability)
+        # a Julia class binds its parameters in the class itself, so it has no type arguments: dart's
+        # asInterfaceSubtype0
+        local type_class_info = self.translator.class_info[tested_against_type]
+        WasmBuilder.i32_const(b, encoded_nullability(tested_against_type))
+        WasmBuilder.i32_const(b, class_id(type_class_info))
+        # the type its failure names, read back from the class id (src/julia/runtime/rtutils.jl jl_to_typeof)
+        self.rtt[].small_typeof[class_id(type_class_info)] = tested_against_type
+        outputs_to_drop = call(code_gen, as_interface_subtype0(self.translator))
+    else
+        reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype"), "$at: a check against $tested_against_type needs the runtime's _asSubtype")
+    end
+    for _ in outputs_to_drop
+        WasmBuilder.drop(b)
+    end
+    WasmBuilder.local_get(b, operand)
+    return operand.type
 end
 
 """
@@ -556,7 +597,7 @@ the value itself. Julia's classes have no type arguments, so the type's argument
     Base.has_free_typevars(tested_against_type) && return (nothing, false)
     # Julia's kinds (src/julia/classes.jl, read from Base.iskindtype): each wholly in the type or
     # wholly out of it
-    all(k -> k <: tested_against_type || typeintersect(k, tested_against_type) === Union{}, _KINDS) || return (nothing, false)
+    told_by_class(tested_against_type) || return (nothing, false)
     _has_only_default_type_arguments(self, tested_against_type) && return (tested_against_type, false)
     reject!(Internal("dart2wasm/lib/types.dart:619 _TypeCheckers.canUseTypeCheckHelper: $tested_against_type has type arguments"), "_TypeCheckers.canUseTypeCheckHelper")
 end
@@ -979,7 +1020,8 @@ end
 Builds the tables: a row per superclass of the (superclass id, substitution index) of each subclass
 id in its ranges, displaced into one table (invalid class id 0 in a hole), the substitution indices
 beside it, the canonical substitutions, each class's row offset (-1 for none) and the class names
-(null when minified).
+(null when minified). The tables of class ids and substitution indices are dart's WasmArray<WasmI32>
+and WasmArray<WasmI16>, unboxed.
 """
 @parity "dart2wasm/lib/types.dart:1342 RuntimeTypeInformation._setupRtt" function _setup_rtt(self::RuntimeTypeInformation)::Nothing
     local translator = self.translator
@@ -1007,14 +1049,14 @@ beside it, the canonical substitutions, each class's row offset (-1 for none) an
     local table = build_row_displacement_table(rows; first_available = 1)
     local invalid_class_id = 0
     local entry_constants(f::Function) = NirConst[make_wasm_i32(constants, f(entry)) for entry in table]
-    self.type_row_displacement_table[] = make_array_of(constants, Int32,
+    self.type_row_displacement_table[] = make_array_of(constants, WasmI32,
         entry_constants(e -> e === nothing ? invalid_class_id : e[1]))
     # dart stores the substitution indices as WasmI16, each made as a WasmI32 constant
-    self.type_row_displacement_subst_table[] = make_array_of(constants, Int16,
+    self.type_row_displacement_subst_table[] = make_array_of(constants, WasmI16,
         entry_constants(e -> e === nothing ? RuntimeTypeInformation_no_substitution_index() : e[2]))
     self.canonical_substitution_table[] = make_array_of(constants, Vector{Type},
         NirConst[substitution for substitution in self._substitution_table_by_index[]])
-    self.type_row_displacement_offsets[] = make_array_of(constants, Int32,
+    self.type_row_displacement_offsets[] = make_array_of(constants, WasmI32,
         NirConst[make_wasm_i32(constants, (r = row_for_superclass[class_id + 1]) === nothing ? -1 : r.offset[]) for class_id in 0:n_classes-1])
     self.type_names[] = minify(translator.options) ? NirConst(Core.Const(nothing)) : _get_type_names(self)
     return nothing

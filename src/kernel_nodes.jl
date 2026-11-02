@@ -70,12 +70,13 @@ end
 @parity "dart2wasm/lib/kernel_nodes.dart:630 KernelNodes.throwAsCheckError" throw_as_check_error(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime._TypeError__throw_as_check_error, "KernelNodes.throwAsCheckError")
 
-# dart:core's _TypeError._throwWasmRefError, the thrower of a failed downcast of a dart:_wasm reference
-# (WasmAnyRef.toObject, a function reference's signature): only dart:_wasm's intrinsics call it
-# (intrinsics.dart:704, :2013), and no Julia value is a dart:_wasm reference, so no Julia program
-# reaches it; Internal, no counterpart reachable
+# dart:core's _TypeError._throwWasmRefError, the thrower of a failed downcast of a dart:_wasm reference:
+# only two of dart:_wasm's intrinsics call it, WasmAnyRef.toObject (intrinsics.dart:704) and
+# WasmFunction.fromFuncRef (:2013), and the intrinsifier ports neither (a host reference crosses as
+# WasmExternRef by its class, translator.jl's interop types, never through them), so no Julia program
+# reaches it; Internal, naming the unreached intrinsics
 @parity "dart2wasm/lib/kernel_nodes.dart:645 KernelNodes.throwWasmRefError" throw_wasm_ref_error(self::KernelNodes)::Union{} =
-    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:645 KernelNodes.throwWasmRefError: only dart:_wasm's reference intrinsics throw a wasm reference error (intrinsics.dart:704, :2013), and no Julia value is a dart:_wasm reference"), "KernelNodes.throwWasmRefError")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:645 KernelNodes.throwWasmRefError: only WasmAnyRef.toObject (intrinsics.dart:704) and WasmFunction.fromFuncRef (intrinsics.dart:2013) throw a wasm reference error, and the intrinsifier ports neither"), "KernelNodes.throwWasmRefError")
 
 # dart:core's Error._throw, the runtime's thrower (src/runtime/common/errors_patch.jl), which the
 # intrinsifier lowers to wasm's throw: its method in the closed world, reached through
@@ -87,6 +88,18 @@ end
 # its method in the closed world, an entry point every closed world holds
 @parity "dart2wasm/lib/kernel_nodes.dart:681 KernelNodes.errorThrowWithCurrentStackTrace" error_throw_with_current_stack_trace(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime.Error__throw_with_current_stack_trace, "KernelNodes.errorThrowWithCurrentStackTrace")
+
+# dart:core's _isNullabilityCheck, _isInterfaceSubtype0 and _asInterfaceSubtype0, the type tests the
+# code generator calls (src/runtime/common/type.jl): each its method in the closed world, an entry
+# point every closed world holds (RUNTIME_ROOTS)
+@parity "dart2wasm/lib/kernel_nodes.dart:697 KernelNodes.isNullabilityCheck" is_nullability_check(self::KernelNodes)::Core.MethodInstance =
+    nir_runtime_member(self.component, Runtime._is_nullability_check, "KernelNodes.isNullabilityCheck")
+
+@parity "dart2wasm/lib/kernel_nodes.dart:709 KernelNodes.isInterfaceSubtype0" is_interface_subtype0(self::KernelNodes)::Core.MethodInstance =
+    nir_runtime_member(self.component, Runtime._is_interface_subtype0, "KernelNodes.isInterfaceSubtype0")
+
+@parity "dart2wasm/lib/kernel_nodes.dart:729 KernelNodes.asInterfaceSubtype0" as_interface_subtype0(self::KernelNodes)::Core.MethodInstance =
+    nir_runtime_member(self.component, Runtime._as_interface_subtype0, "KernelNodes.asInterfaceSubtype0")
 
 # dart:_internal's printToConsole, as the target's patch defines it: the JS patch's
 # (src/runtime/js_common/print_patch.jl), its method in the closed world; the standalone patch's

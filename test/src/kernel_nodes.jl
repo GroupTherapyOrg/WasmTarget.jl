@@ -25,9 +25,11 @@ g(x::Int) = x < 0 ? throw(DomainError(x)) : x
     @test lb isa W.RejectionError && lb.rejection isa W.Internal && occursin("Array{T,1}", lb.rejection.site)
     # dart:_list's ImmutableList, a constant list's class, is Julia's Array{T,1} of its element type
     @test D.immutable_list_class(js, Int) === Vector{Int}
-    # _throwWasmRefError: only dart:_wasm's reference intrinsics reach it, which no Julia value is: Internal
+    # _throwWasmRefError: only WasmAnyRef.toObject and WasmFunction.fromFuncRef reach it, which the
+    # intrinsifier ports neither of: Internal, naming both
     local wr = anchor(D.throw_wasm_ref_error, js)
-    @test wr isa W.RejectionError && wr.rejection isa W.Internal && occursin("dart:_wasm", wr.rejection.site)
+    @test wr isa W.RejectionError && wr.rejection isa W.Internal &&
+          occursin("WasmAnyRef.toObject (intrinsics.dart:704)", wr.rejection.site) && occursin("WasmFunction.fromFuncRef (intrinsics.dart:2013)", wr.rejection.site)
     @test anchor(D.embedder_string_from_char_code_array, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:62 stringFromCharCodeArray"
     @test anchor(D.embedder_string_from_ascii_bytes, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:71 stringFromAsciiBytes"
     # the target's patch: standalone or JS; the standalone StackTrace.current is ported, its method in

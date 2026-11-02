@@ -61,6 +61,14 @@ Natively Julia's `===`.
 """
 @quarantine "julia/src/builtins.c:237 jl_egal__unboxed compares two values of one type by that type's arm; WasmTarget's arm is a class-id switch the intrinsifier writes" Core.:(===) @noinline wasm_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool = a === b
 
+# Julia's type of a type tag: a value's header holds its tag, the type read from the table of tags'
+# types (julia.h:971 jl_to_typeof over jl_small_typeof). A class id is WasmTarget's tag of every
+# class, its type read from the closed world's table of each class's type value (types.jl
+# RuntimeTypeInformation.small_typeof); the code generator lowers the call to that read
+# (src/intrinsics.jl), and natively no tag exists, so the body raises
+@quarantine "julia/src/julia.h:971 jl_to_typeof reads a type tag's type from the table of tags' types (jl_small_typeof)" Core.DataType @noinline jl_to_typeof(tag::Int32) =
+    _wasm_only(Core.DataType)
+
 """
     nir_runtime_member(world, f) -> Core.MethodInstance
 

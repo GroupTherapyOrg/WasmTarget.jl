@@ -52,19 +52,27 @@ end
     reject!(Internal("dart2wasm/lib/intrinsics.dart:399 StaticIntrinsic: Julia's operations are its builtins, matched by the callee; no dart:_wasm member ($library, $cls, $name) names one"), "StaticIntrinsic")
 
 """
-The static intrinsics by library, class and name, built on first read. A Julia method's library is a
-Julia module, never dart:_wasm, so the map is empty (StaticIntrinsic.fromProcedure answers nothing).
+The static intrinsics by library, class and name, built on first read. The Julia methods that are dart
+library members are the runtime's ports of them (src/runtime/), so the map files the intrinsics whose
+member the runtime ports, each under its dart library, class and name, as MemberIntrinsic's does.
 """
 @parity "dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup" const StaticIntrinsic__lookup = Late{Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}}}(
     "dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup", () -> StaticIntrinsic__populate_lookup())
 
-# no Julia method is a dart:_wasm member, so none is filed
+# dart files each intrinsic under its member's library, class and name; the members the runtime ports
+# are the ones a Julia method can be: ClassID.getID (class_id.dart:10, src/runtime/common)
 @parity "dart2wasm/lib/intrinsics.dart:404 StaticIntrinsic._populateLookup" StaticIntrinsic__populate_lookup()::Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}} =
-    Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}}()
+    Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}}(
+        "dart:_internal" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}("ClassID" => Dict{String,StaticIntrinsic}("getID" => StaticIntrinsic_getID)))
 
-# a Julia method is never one of dart:_wasm's static intrinsics: Julia's own operations are calls of
-# its builtins, which generateStaticIntrinsic matches by the callee
-@parity "dart2wasm/lib/intrinsics.dart:414 StaticIntrinsic.fromProcedure" StaticIntrinsic_from_procedure(member::Core.MethodInstance)::Union{StaticIntrinsic,Nothing} = nothing
+# a Julia method is a dart library member when it is the runtime's port of one, Runtime.ClassID_get_id
+# of dart:_internal's ClassID.getID, looked up by that member's library, class and name as dart looks
+# it up; Julia's own operations are calls of its builtins, which generateStaticIntrinsic matches by
+# the callee
+@parity "dart2wasm/lib/intrinsics.dart:414 StaticIntrinsic.fromProcedure" function StaticIntrinsic_from_procedure(member::Core.MethodInstance)::Union{StaticIntrinsic,Nothing}
+    member.def.module === Runtime && member.def in methods(Runtime.ClassID_get_id) || return nothing
+    return get(get(get(StaticIntrinsic__lookup[], "dart:_internal", Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}()), "ClassID", Dict{String,StaticIntrinsic}()), "getID", nothing)
+end
 
 @parity "dart2wasm/lib/intrinsics.dart:432 Intrinsifier.boolType" Intrinsifier_bool_type()::WasmBuilder.IR.ValueType = WasmBuilder.IR.NumType_i32
 
@@ -483,6 +491,33 @@ WasmTarget's own (src/class_info.jl), so no read is one.
 """
 @parity "dart2wasm/lib/intrinsics.dart:1059 Intrinsifier.generateStaticGetterIntrinsic" generate_static_getter_intrinsic(self::Intrinsifier, node::Union{NirGlobalRead,NirGlobal})::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
+# dart's runtime getters of its type tables (intrinsics.dart:1103, its core-library switch), each a
+# function of no argument in Julia's runtime (src/runtime/common/type.jl): dart's getter is `external`,
+# with no body, and a Julia binding declared without a value is no definition @parity reads, so each is
+# a call the code generator meets, as a static intrinsic's is. Each reads what dart's does: the
+# no-substitution index, or one of the tables RuntimeTypeInformation built, an i32 array or the packed
+# i16 one of substitution indices.
+@parity "dart2wasm/lib/intrinsics.dart:1059 Intrinsifier.generateStaticGetterIntrinsic" function generate_static_getter_intrinsic(self::Intrinsifier, target::Core.MethodInstance)::Union{WasmBuilder.IR.ValueType,Nothing}
+    # only the runtime's ports are its getters
+    target.def.module === Runtime || return nothing
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    if target.def in methods(Runtime._no_substitution_index)
+        WasmBuilder.i32_const(b, RuntimeTypeInformation_no_substitution_index())
+        return WasmBuilder.IR.NumType_i32
+    end
+    local rtt = t.types[].rtt[]
+    local (constant, storage) =
+        target.def in methods(Runtime._type_row_displacement_offsets) ? (rtt.type_row_displacement_offsets[], WasmI32) :
+        target.def in methods(Runtime._type_row_displacement_table) ? (rtt.type_row_displacement_table[], WasmI32) :
+        target.def in methods(Runtime._type_row_displacement_subst_table) ? (rtt.type_row_displacement_subst_table[], WasmI16) :
+        (nothing, nothing)
+    constant === nothing && return nothing
+    local type_ = WasmBuilder.IR.RefType_def(array_type_for_dart_type(t, storage; mutable_ = true); nullable = false)
+    instantiate_constant(t.constants[], b, constant, type_)
+    return type_
+end
+
 # dart throws ArgumentError for a lane that is no literal or out of range; here located rejections
 @parity "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex" function _get_simd_lane_index(self::Intrinsifier, argument::NirValue, num_lanes::Int64, node::NirStmt)::Int
     local at = "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex"
@@ -508,8 +543,13 @@ end
         array_op === nothing || return generate_static_intrinsic(self, Val(:wasm_array), array_op, target, node.args[2:end])
         local memory_op = generate_static_intrinsic(Val(:memory_data_op), target)
         memory_op === nothing || return generate_static_intrinsic(self, Val(:memory_data), memory_op, target, node.args[2:end])
+        local getter = generate_static_getter_intrinsic(self, target)
+        getter === nothing || return getter
+        target.def.name === :jl_to_typeof && target.def in methods(jl_to_typeof) &&
+            return generate_static_intrinsic(self, Val(:to_typeof), node.args[2:end])
         local intrinsic = StaticIntrinsic_from_procedure(target)
         intrinsic === nothing && return nothing
+        intrinsic === StaticIntrinsic_getID && return generate_static_intrinsic(self, Val(:get_id), node.args[2:end])
         reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "the static intrinsic $intrinsic")
     end
     local f = nir_callee(node)
@@ -711,7 +751,8 @@ end
 # an Int offset or length is wrapped to the i32 a wasm array takes, as dart wraps its int.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:wasm_array_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
     target.def in methods(wasm_array_new) ? :new : target.def in methods(wasm_array_write!) ? :write :
-    target.def in methods(wasm_array_length) ? :length : nothing
+    target.def in methods(wasm_array_length) ? :length : target.def in methods(wasm_array_read) ? :read :
+    target.def in methods(wasm_array_read_unsigned) ? :read_unsigned : nothing
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:wasm_array}, op::Symbol, target::Core.MethodInstance, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
@@ -744,8 +785,58 @@ end
         WasmBuilder.array_len(b)
         WasmBuilder.i64_extend_i32_u(b)
         return i64
+    elseif op === :read
+        # WasmArrayExt.[] (intrinsics.dart:1223): array.get at the index wrapped to i32
+        translate_expression(code_gen, args[1], array_ref)
+        offset(args[2])
+        WasmBuilder.array_get(b, array_type)
+        return WasmBuilder.unpacked(array_type.element_type[].type)
+    elseif op === :read_unsigned
+        # readUnsigned (intrinsics.dart:1351): array.get_u, zero-extended to dart's int
+        translate_expression(code_gen, args[1], array_ref)
+        offset(args[2])
+        WasmBuilder.array_get_u(b, array_type)
+        WasmBuilder.i64_extend_i32_u(b)
+        return i64
     end
     reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a wasm array operation $op"), at)
+end
+
+# ClassID.getID (intrinsics.dart:1577): the operand translated as the non-null top type, its class id
+# loaded
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:get_id}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local type_ = t.top_type_non_nullable[]
+    translate_expression(self.code_gen, only(args), type_)
+    load_class_id(self.code_gen.b[], t, type_)
+    return WasmBuilder.IR.NumType_i32
+end
+
+# Julia's type of a type tag (julia.h:971 jl_to_typeof, src/julia/runtime/rtutils.jl): the class id's
+# entry of a table of type values, read as a non-null DataType. The table holds the type of each class
+# an as check names (types.jl emitAsCheck records it in RuntimeTypeInformation.small_typeof), its other
+# entries null: the runtime reads a class id's type only in the as check's failure, its id the check's
+# (src/runtime/common/type.jl _throwInterfaceTypeAsCheckError0), so no read reaches a null entry. The
+# checks are known only once every function is generated, so the read is a patchable region the
+# linking actions fill with the table's constant, as dart patches a constant's read once every use is
+# known (constants.dart:1913)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:to_typeof}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local array_type = array_type_for_dart_type(t, Union{Nothing,DataType}; mutable_ = true)
+    local table_type = WasmBuilder.IR.RefType_def(array_type; nullable = false)
+    local patch = WasmBuilder.create_patchable_region(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[table_type])
+    if patch !== nothing
+        push!(t.linking_actions, function ()
+            local small_typeof = t.types[].rtt[].small_typeof
+            local entries = NirConst[NirConst(Core.Const(get(small_typeof, id, nothing))) for id in 0:length(t.classes[])-1]
+            instantiate_constant(t.constants[], patch, make_array_of(t.constants[], Union{Nothing,DataType}, entries), table_type)
+        end)
+    end
+    translate_expression(self.code_gen, only(args), WasmBuilder.IR.NumType_i32)
+    WasmBuilder.array_get(b, array_type)
+    WasmBuilder.ref_as_non_null(b)
+    return translate_type(t, DataType)
 end
 
 # Julia's Memory builtins, each a port of Julia's own codegen arm at Julia's pin (1.12.7, 6d172b02),

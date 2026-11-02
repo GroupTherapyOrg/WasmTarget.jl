@@ -237,11 +237,9 @@ end
     # `x === nothing`, visitEqualsNull: the field read's null check, run by node against native
     local nbytes = W.compile(TypeTestCases.null_of, (Int64,); optimize = false)
     queue_native!("null_of", nbytes, TypeTestCases.null_of, [(x,) for x in Int64[-1, 0, 5]])
-    # Julia's typeassert, the checked AsExpression: emitAsCheck needs the runtime's _asSubtype, not
-    # ported, a located rejection at the runtime library's definition
-    local e = rejection(() -> generated_instructions(TypeTestCases.as_int, (R,)))
-    @test e.rejection isa W.Unported && e.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype" &&
-          startswith(e.at, "dart2wasm/lib/types.dart:527 Types.emitAsCheck")
+    # Julia's typeassert, the checked AsExpression: only the null case can fail, so emitAsCheck's interface
+    # arm calls the runtime's _asInterfaceSubtype0 (type.dart:1589); test/src/runtime.jl runs it by node
+    @test "call" in generated_instructions(TypeTestCases.as_int, (R,))
     # a type computed at run time is no type test's constant: a value, which only the runtime's
     # subtype check takes, not ported
     local d = rejection(() -> generated_instructions(TypeTestCases.dyn, (R, DataType)))

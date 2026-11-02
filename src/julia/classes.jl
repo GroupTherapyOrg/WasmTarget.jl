@@ -9,6 +9,29 @@
 # bindings (src/julia/construction.jl, core_kinds), never a copy of its list (D3, D5)
 @quarantine "a type is a value in Julia, its class one of Julia's kinds, which Base.iskindtype names" Core.DataType const _KINDS = core_kinds()::Tuple{Vararg{DataType}}
 
+# Whether a value's class tells whether it is of the type `T`: each kind wholly in `T` or wholly out of
+# it. Julia's isa tests a type value against a type that splits its kind (Type{Int} holds Int and no
+# other DataType) by the value itself, any other value by its class (julia/src/subtype.c:2511 jl_isa:
+# `jl_is_type_type(t)`, then `jl_subtype(jl_typeof(x), t)`)
+@quarantine "julia/src/subtype.c:2511 jl_isa tests a type value by itself where the type splits its kind, any other value by its class (jl_typeof)" Base.typeintersect told_by_class(@nospecialize(T::Type))::Bool =
+    all(k -> k <: T || typeintersect(k, T) === Union{}, _KINDS)
+
+"""
+    is_interface_class_type(translator, T, check_only_null_assignability) -> Bool
+
+Whether dart's emitIsTest and emitAsCheck take their interface arm for the tested type `T`: dart's
+`testedAgainstType is InterfaceType && classForType(testedAgainstType) == interfaceTypeClass`, a
+Julia DataType that is a class of the closed world, its runtime test the class table's. The table
+relates classes, so it answers a test only where a value's class tells it (`told_by_class`); a type
+that splits a kind's instances (Type{X}) is tested by the value itself, so it takes the arm only where
+the null case alone is tested, which reads no table.
+"""
+@quarantine "julia/src/subtype.c:2511 jl_isa tests a type value by itself where the type splits its kind, any other value by its class (jl_typeof), the relation the class table holds" Base.haskey function is_interface_class_type(translator, @nospecialize(T::Type), check_only_null_assignability::Bool)::Bool
+    T isa DataType || return false
+    haskey(translator.class_info, T) || return false
+    return check_only_null_assignability || told_by_class(T)
+end
+
 """
     closed_world_classes(world, at) -> Vector{DataType}
 

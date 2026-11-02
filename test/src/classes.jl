@@ -101,7 +101,8 @@ end
     # a Symbol a builtin takes as data is a value: `x === :a`'s operand, read from the program, and
     # tuple's element; one naming a field or a memory ordering is not
     local sym = W.build_nir(W.check_subset(ClassesConstantCases.is_a, (Symbol,), "classes"), "classes")
-    local eq = only(st for b in sym for st in b.stmts if st isa W.NirCall && W.nir_callee(st) === Core.:(===))
+    # the program's own `===`, the runtime's roots holding theirs (type.dart's null tests)
+    local eq = only(st for b in sym if b.ci.def.def.name === :is_a for st in b.stmts if st isa W.NirCall && W.nir_callee(st) === Core.:(===))
     @test W.NirConst(Core.Const(:a)) in W.nir_value_operands(eq)
     local r = W.NirArgument(2)
     @test W.nir_value_operands(W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.tuple)), W.NirConst(Core.Const(:k)), r])) ==

@@ -195,7 +195,6 @@ julia/nir.jl value_form
 julia/packages.jl IR
 julia/packages.jl JS
 julia/packages.jl LLVM
-julia/packages.jl Runtime
 julia/packages.jl Util
 julia/packages.jl WasmBuilder
 julia/parity.jl @closed
