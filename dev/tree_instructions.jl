@@ -85,7 +85,10 @@ end
 function tree_instructions(cmd::Cmd)::Tuple{TreeCount,Base.Process}
     local lib = counter_library()
     local counts = mktempdir()
-    local p = run(ignorestatus(addenv(cmd, "DYLD_INSERT_LIBRARIES" => lib, "WT_TREE_COUNT_DIR" => counts)); wait = false)
+    # run(...; wait = false) connects a command's standard streams to devnull unless they are given: the stage's output
+    # (the ratchet's report, the shards' test summaries) goes where this process's goes
+    local p = run(pipeline(ignorestatus(addenv(cmd, "DYLD_INSERT_LIBRARIES" => lib, "WT_TREE_COUNT_DIR" => counts));
+                           stdin = stdin, stdout = stdout, stderr = stderr); wait = false)
     local root = getpid(p)
     wait(p)
     local sums = zeros(4); local root_g = 0.0
