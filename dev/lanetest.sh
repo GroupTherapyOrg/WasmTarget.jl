@@ -23,12 +23,13 @@ common="$(git rev-parse --path-format=absolute --git-common-dir)"
 slots="$common/wt-lanetest"; mkdir -p "$slots"
 prefix="taskpolicy -b"; mine=""
 # a landing's check running now holds the performance cores (a ratchet and three shards): no slot then, so
-# the check keeps its cores (march-monitor-a, 08:58)
+# the check keeps its cores (march-monitor-a, 08:58). A check runs only under the landing lock (dev/ship.sh),
+# so the lock is what is read: a lane's own ship lock is held by a ship still queued for it, and one stale
+# queued ship (wt3-loop's, four days) sent every lane's test to the efficiency cores with no check running
+# (2026-11-02 11:45, one julia at background, four performance cores idle)
 busy=0
-for l in "$common"/wt-ship/*.lock; do
-  [ -d "$l" ] || continue
-  h=$(cat "$l/pid" 2>/dev/null || true); [ -n "$h" ] && kill -0 "$h" 2>/dev/null && busy=1
-done
+h=$(cat "$common/wt-landing-lock/pid" 2>/dev/null || true)
+[ -n "$h" ] && kill -0 "$h" 2>/dev/null && busy=1
 [ $busy -eq 1 ] || for s in $(seq 1 $LANE_SLOTS); do
   holder=$(cat "$slots/$s/pid" 2>/dev/null || true)
   [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null && rm -rf "$slots/$s"
