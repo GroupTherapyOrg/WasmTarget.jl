@@ -30,18 +30,27 @@ NOTE_AFTER=5
 REBUILD_START=e2371eca08605231256dd5f3ee97609d6fc019a4   # chore(land): the march branch is wt2
 cd "$(git rev-parse --show-toplevel)"
 # the kinds (rejection_only_kinds, then Skeleton.dart_kinds) cost Julia's inference over every @parity
-# method, about 15 CPU-s: kept in the common dir under dev/cache_key.sh's key (Base's staleness rule over
-# every input the kinds read: the julia build, the pinned checkouts, src/, the interpreter it imports, the
-# manifest, the dart reader and this program), recomputed when the key is new (dev/progress_kinds.jl); the
-# line names the key and whether it read the cache
+# method, about 15 CPU-s: kept in the common dir as Base keeps an image (julia/base/loading.jl:4049
+# stale_cachefile). Files are named by dev/cache_key.sh's key over the julia build, the pinned checkouts and
+# the program (this file, dev/progress_kinds.jl, the key, the dart reader, the manifest and project), as Base
+# finds an image's candidates by its package; each candidate records the files the kinds read (WasmTarget's
+# image's includes, the interpreter's, the reader's reads: progress_kinds.jl), and the newest whose record is
+# unchanged (`cache_key.sh --fresh`, any_includes_stale) is read; with none, a new file, recomputed
+# (dev/progress_kinds.jl); the line names the file and whether it read the cache (A78S2: the inputs read from
+# what the load and the reader record, never a hand list)
 KINDS_HEADER=()
 kinds_cache() {
-    local dir key
+    local dir key c rc
     dir="$(git rev-parse --path-format=absolute --git-common-dir)/wt-rejection-kinds"; mkdir -p "$dir"
-    key=$(bash dev/cache_key.sh ${KINDS_HEADER[@]+"${KINDS_HEADER[@]}"} src lib/WasmInterpreter Manifest.toml Project.toml dev/skeleton.jl dev/skeleton_scope.toml \
+    key=$(bash dev/cache_key.sh ${KINDS_HEADER[@]+"${KINDS_HEADER[@]}"} Manifest.toml Project.toml dev/skeleton.jl \
           dev/src_progress.sh dev/progress_kinds.jl dev/cache_key.sh) || { echo "src_progress: the kinds cache's key failed" >&2; return 1; }
     [[ $key =~ ^[0-9a-f]{40}$ ]] || { echo "src_progress: the kinds cache's key is no key ($key)" >&2; return 1; }
-    echo "$dir/$key.tsv"
+    for c in $(ls -t "$dir/$key".*.tsv 2>/dev/null); do
+        rc=0; bash dev/cache_key.sh --fresh "$c" || rc=$?
+        [ $rc -eq 0 ] && { echo "$c"; return 0; }
+        [ $rc -eq 1 ] || { echo "src_progress: the kinds cache $c could not be compared" >&2; return 1; }
+    done
+    echo "$dir/$key.$(date -u +%Y%m%dT%H%M%S).$$.tsv"
 }
 # a port is a change to src/'s code: its added and removed lines, the diff's file headers aside, less the
 # blank ones and Julia's `#` comments (f4cc916d, comment only, ranked early as port work: A66E4)

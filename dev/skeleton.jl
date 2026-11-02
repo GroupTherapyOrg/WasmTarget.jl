@@ -22,8 +22,16 @@ module Skeleton
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
 
+# every file of the tree the reader reads, recorded where it reads it (read_input), as Base records each
+# include and include_dependency in an image's header (julia/base/loading.jl:2368 include_dependency): a
+# verdict cached from the reader is kept under exactly the files it read, never a hand list of pathspecs
+# (dev/progress_kinds.jl, A78S2). A lazy table, emptied by reset!. The naming rule's read (load_snake!) is
+# the generator's own code, an include of its image (dev/SkeletonImage), not a recorded input.
+const INPUTS = Set{String}()
+read_input(path::AbstractString)::String = (push!(INPUTS, String(path)); read(path, String))
+
 # ---- the pin and the sdk -------------------------------------------------------------------------
-pin()::String = match(r"\b[0-9a-f]{40}\b", read(joinpath(ROOT, "dev", "PARITY_MASTER.md"), String)).match
+pin()::String = match(r"\b[0-9a-f]{40}\b", read_input(joinpath(ROOT, "dev", "PARITY_MASTER.md"))).match
 
 # the checkout, verified at the pin once per run (each library path asks for it)
 const SDK = String[]
@@ -657,7 +665,7 @@ load_snake!()
 const DART_BASE = Dict{String,String}()
 function dart_base()::Dict{String,String}
     isempty(DART_BASE) || return DART_BASE
-    local m = match(r"const DART_BASE = (Dict\{String,Symbol\}\((?s:.*?)\))\n", read(PARITY, String))
+    local m = match(r"const DART_BASE = (Dict\{String,Symbol\}\((?s:.*?)\))\n", read_input(PARITY))
     m === nothing && error("skeleton: src/julia/parity.jl holds no DART_BASE")
     local ex = Meta.parse(m[1])
     Meta.isexpr(ex, :call) || error("skeleton: DART_BASE is no Dict literal")
@@ -673,7 +681,7 @@ end
 const MODULES = Pair{String,String}[]
 function dart_modules()::Vector{Pair{String,String}}
     isempty(MODULES) || return MODULES
-    local m = match(r"(?s)const DART_MODULES = \((.*?)\n\)", read(PARITY, String))
+    local m = match(r"(?s)const DART_MODULES = \((.*?)\n\)", read_input(PARITY))
     m === nothing && error("skeleton: src/julia/parity.jl holds no DART_MODULES")
     for e in eachmatch(r"\"([^\"]+)\" => \(([^)]*)\)", m[1])
         push!(MODULES, String(e[1]) => join(strip.(lstrip.(strip.(split(e[2], ',', keepempty = false)), ':')), '.'))
@@ -1018,7 +1026,7 @@ const KERNEL = Dict{Tuple{String,String},String}()
 const KERNEL_USED = Set{Tuple{String,String}}()
 function kernel_types()::Dict{Tuple{String,String},String}
     isempty(KERNEL) || return KERNEL
-    local m = match(r"(?s)const KERNEL_TYPES = (\(\n.*?\n\))", read(joinpath(ROOT, "src", "julia", "kernel.jl"), String))
+    local m = match(r"(?s)const KERNEL_TYPES = (\(\n.*?\n\))", read_input(joinpath(ROOT, "src", "julia", "kernel.jl")))
     m === nothing && error("skeleton: src/julia/kernel.jl holds no KERNEL_TYPES")
     for p in Meta.parse(m[1]).args
         KERNEL[(p.args[2].args[1], p.args[2].args[2])] = p.args[3].args[1]
@@ -1030,7 +1038,7 @@ end
 const KERNEL_SUMS = Dict{String,Set{String}}()
 function kernel_sums()::Dict{String,Set{String}}
     isempty(KERNEL_SUMS) || return KERNEL_SUMS
-    for m in eachmatch(r"@closed const (\w+) = Union\{([^}]*)\}", read(joinpath(ROOT, "src", "julia", "kernel.jl"), String))
+    for m in eachmatch(r"@closed const (\w+) = Union\{([^}]*)\}", read_input(joinpath(ROOT, "src", "julia", "kernel.jl")))
         KERNEL_SUMS[m[1]] = Set(replace.(strip.(split(m[2], ',')), r"^Core\." => ""))
     end
     return KERNEL_SUMS
@@ -1470,7 +1478,7 @@ end
 
 # the Julia file of a pin-table key: src/julia/parity.jl's `_jl_rel`, its pattern read from there
 function jl_file(key::String)::String
-    local m = match(r"function _jl_rel\(dart::String\)::String\n(?s:.*?)\n\s*local m = match\(r\"(.+?)\", dart\)", read(PARITY, String))
+    local m = match(r"function _jl_rel\(dart::String\)::String\n(?s:.*?)\n\s*local m = match\(r\"(.+?)\", dart\)", read_input(PARITY))
     m === nothing && error("skeleton: src/julia/parity.jl holds no _jl_rel")
     local k = match(Regex(m[1]), key)
     k === nothing && error("skeleton: $key is no path _jl_rel maps")
@@ -1655,7 +1663,7 @@ end
 # the no-diff check: every in-scope file is exactly what the generator writes (a hand-edited stub, a
 # missing stub or a filled definition out of dart's order differs)
 # src's text of a file, read through SRC_READ, which the ratchet's plants replace (L210)
-const SRC_READ = Ref{Function}(p -> read(p, String))
+const SRC_READ = Ref{Function}(read_input)
 src_text(path::AbstractString)::String = SRC_READ[](path)
 
 # whether in-scope file `f` is missing or differs from what the generator writes, or nothing
@@ -1969,7 +1977,7 @@ function julia_defined()::Set{String}
     for (r, _, fs) in walkdir(joinpath(ROOT, "src", "julia")), x in fs
         local p = joinpath(r, x)
         (endswith(x, ".jl") && p != PACKAGES) || continue
-        defined_names!(out, Meta.parseall(read(p, String); filename = p))
+        defined_names!(out, Meta.parseall(read_input(p); filename = p))
     end
     return setdiff(out, Set(first.(PACKAGE_MODULES)))
 end
@@ -2373,14 +2381,14 @@ end
 const PARITY = joinpath(ROOT, "src", "julia", "parity.jl")
 
 function scope()::Vector{String}
-    local m = match(r"(?s)const DART_FILES(?:::[^=]*)? = \((.*?)\n\)", read(PARITY, String))
+    local m = match(r"(?s)const DART_FILES(?:::[^=]*)? = \((.*?)\n\)", read_input(PARITY))
     m === nothing && error("skeleton: src/julia/parity.jl holds no DART_FILES")
     return String[x[1] for x in eachmatch(r"\"([^\"]+)\"", m[1])]
 end
 
 # a section of dev/skeleton_scope.toml: key => reason
 function scope_section(name::AbstractString)::Dict{String,String}
-    local text = read(joinpath(ROOT, "dev", "skeleton_scope.toml"), String)
+    local text = read_input(joinpath(ROOT, "dev", "skeleton_scope.toml"))
     local sec = match(Regex("(?s)\\[\\Q$(name)\\E\\]\\n(.*?)(?:\\n\\[|\\z)"), text)
     sec === nothing && error("skeleton: dev/skeleton_scope.toml has no [$name] section")
     return Dict(String(m[1]) => String(m[2]) for m in eachmatch(r"^\"([^\"]+)\"\s*=\s*\"([^\"]*)\""m, sec[1]))

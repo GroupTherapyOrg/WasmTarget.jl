@@ -1743,8 +1743,9 @@ src_progress(args::String...)::String = read(`bash $(joinpath(ROOT, "dev", "src_
 
 # this tree's line, its counts read in this process, which has WasmTarget and the generator loaded
 # (progress_counts, the one reading src_progress.sh's own julia shares), and the rest by the program: a second
-# julia loading WasmTarget again was most of L208's children's CPU (wt3-latency's table)
-function src_progress_here()::String
+# julia loading WasmTarget again was most of L208's children's CPU (wt3-latency's table); with the kinds
+# cache's file, whose record L208 reads
+function src_progress_here()::Tuple{String,String}
     local cache = String(readchomp(`bash $(joinpath(ROOT, "dev", "src_progress.sh")) key --header $(julia_header())`))
     local wt = Base.require(Base.PkgId(Base.UUID("9f3a1415-1112-405b-ae89-c61daf9872bd"), "WasmTarget"))
     local sk = skeleton_module()
@@ -1752,7 +1753,7 @@ function src_progress_here()::String
     Core.eval(m, :(const Skeleton = $sk)); Core.eval(m, :(const WasmTarget = $wt))
     Base.include(m, joinpath(ROOT, "dev", "progress_kinds.jl"))
     local c = Base.invokelatest(getglobal(m, :progress_counts), Base.invokelatest(getglobal(sk, :read_scope)), cache)
-    return src_progress("line", string.(c)..., cache)
+    return src_progress("line", string.(c)..., cache), cache
 end
 
 # the line of dev/ship.sh that prints, after its push, the src progress line its check's ratchet printed
@@ -1878,6 +1879,34 @@ function src_progress_negatives_missed()::Vector{String}
         refused(setenv(Cmd(`bash dev/cache_key.sh src dev/skeleton.jl`; dir = t), "PATH" => fake * ":" * ENV["PATH"], "HOME" => homedir(), "WT_JULIA_HEADER" => julia_header())) ||
             push!(out, "negative missed: a key computed with the julia's header failing")
         rm(fake; recursive = true)
+        # a pinned checkout's head moved gives another key (A78S2): HOME's dart-sdk checkout, moved by a commit
+        mktempdir() do h
+            local co = joinpath(h, ".cache", "wasmtarget", "dart-sdk"); mkpath(co)
+            local gh = (args...) -> Base.run(pipeline(`git -C $co -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
+            gh("init", "-q"); gh("commit", "-q", "--allow-empty", "-m", "a")
+            local hk() = readchomp(setenv(Cmd(`bash dev/cache_key.sh --header $(julia_header()) src dev/skeleton.jl`; dir = t), "PATH" => ENV["PATH"], "HOME" => h))
+            local h0 = hk()
+            gh("commit", "-q", "--allow-empty", "-m", "b")
+            hk() == h0 && push!(out, "negative missed: a pinned checkout's head moved keeps the kinds cache's key")
+        end
+        # a cache that records its inputs (dev/progress_kinds.jl) is read again only while each is unchanged (`--fresh`,
+        # Base's any_includes_stale): fresh as written, stale past an edit or a removal, refused recording none
+        local rec = joinpath(t, "rec.tsv")
+        local ids = readlines(pipeline(Cmd(`bash dev/cache_key.sh --ids`; dir = t); stdin = IOBuffer("src/b.jl\ndev/skeleton.jl\nsrc/julia\n")))
+        write(rec, join(("#input\t" * r * "\n" for r in ids)) * "k\tInternal\n")
+        local fresh() = Base.run(pipeline(ignorestatus(Cmd(`bash dev/cache_key.sh --fresh $rec`; dir = t)); stdout = devnull, stderr = devnull)).exitcode
+        fresh() == 0 || push!(out, "negative missed: a cache whose recorded inputs are unchanged is not fresh")
+        # a directory recorded (an image's include_dependency on a directory) by its listing, Base's content for it
+        w("src/julia/new.jl", "h() = 5\n")
+        fresh() == 1 || push!(out, "negative missed: a cache whose recorded directory gained a file is fresh")
+        rm(joinpath(t, "src", "julia", "new.jl"))
+        w("src/b.jl", "f() = 1\ng() = 4\n")
+        fresh() == 1 || push!(out, "negative missed: a cache whose recorded input changed is fresh")
+        rm(joinpath(t, "src", "b.jl"))
+        fresh() == 1 || push!(out, "negative missed: a cache whose recorded input was removed is fresh")
+        w("src/b.jl", "f() = 1\ng() = 3\n"); fresh() == 0 || push!(out, "negative missed: a cache whose input was restored is not fresh")
+        write(rec, "k\tInternal\n")
+        fresh() == 2 || push!(out, "negative missed: a cache recording no input is not refused")
     end
     # dev/ship.sh's port class (A66E4): a change to src/'s code, never a comment, a blank line or a file outside src/
     mktempdir() do t
@@ -3434,12 +3463,19 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/ship.sh` prints dev/src_progress.sh's line after every landing, the one the landing's check ran it for (this lock, in the ratchet dev/check.sh runs), which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. A definition counts ported with a body unless Julia's inference finds it never returns (its method inferred over its own signature, unoptimized, by the compiler's typeinf_frame: A64E2), its kind a gap's (Unported, Unquarantined) where a reject! in its typed code takes one, else Internal; an Internal one whose dart member at the pin throws first is DartThrow, counted, naming its throw's line, and one that is abstract DartAbstract, reported beside the headline and never in it, naming its declaration, each read by dev/skeleton.jl's reader (dart_kinds over its declarations' body forms), the one dart reader (A74S1); a return type of Nothing whose typed code calls nothing but reject! for its effect or its returned value a guard and so a rejection (A72S1, output_target_table's form), and a check's rejections alone (InvalidModule, OutsideSubset, ProgramError) a body; with plants (one rejection, a guard and then a rejection, a helper that only rejects, a guard returning nothing otherwise and one whose value a local no return reads holds, each a rejection; a call for its effect whose value goes to a local never read a body; a rejection whose kind the typed code does not fix refused, a method whose own signature matches no method of its own refused (a method deleted after its entry was taken, A75E3), and one Julia's inference gives no frame refused the same (a generator that throws, A78S1), each a located refusal, never a body (A74S2), the Rejection sum's kinds named in one table checked against the sum; a returning path, a check, a call for its effect and a call whose value is returned, each a body; a throwing dart body DartThrow at its throw's line past a comment, an abstract dart getter DartAbstract at its line, a dart body, a bodiless constructor and an enum neither). The kinds are kept in the common dir (wt-rejection-kinds/) under dev/cache_key.sh's key, Base's staleness rule (stale_cachefile) over every input they read (the julia build and flags, the pinned checkouts' heads, and src/, lib/WasmInterpreter, the manifest, the dart reader and the program, each by path and content), read and written by one block (dev/progress_kinds.jl), the line naming the key and a hit or a miss, with plants (the same inputs one key; an edit only to the reader, only to the program, only to a pin, and a text moved between files, each another; a key computed with a tracked input missing, or with the julia's header failing, refused, A78E1). And dev/ship.sh ranks a stack early as port work only when it changes src/'s code, read by the same program (`code <base> <head>`): a changed or removed line neither blank nor a comment (A66E4). Here: land runs the program, this tree's line is printed, the program on planted numbers (4 landings print no note, 5 print it), and its port class on a scratch repository (comments, blank lines and a file outside src/ no port; a changed and a removed line of code a port, and a change past a pipe's buffer; a base naming no commit refused) (dev/CHARTER.md C0)",
+    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/ship.sh` prints dev/src_progress.sh's line after every landing, the one the landing's check ran it for (this lock, in the ratchet dev/check.sh runs), which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. A definition counts ported with a body unless Julia's inference finds it never returns (its method inferred over its own signature, unoptimized, by the compiler's typeinf_frame: A64E2), its kind a gap's (Unported, Unquarantined) where a reject! in its typed code takes one, else Internal; an Internal one whose dart member at the pin throws first is DartThrow, counted, naming its throw's line, and one that is abstract DartAbstract, reported beside the headline and never in it, naming its declaration, each read by dev/skeleton.jl's reader (dart_kinds over its declarations' body forms), the one dart reader (A74S1); a return type of Nothing whose typed code calls nothing but reject! for its effect or its returned value a guard and so a rejection (A72S1, output_target_table's form), and a check's rejections alone (InvalidModule, OutsideSubset, ProgramError) a body; with plants (one rejection, a guard and then a rejection, a helper that only rejects, a guard returning nothing otherwise and one whose value a local no return reads holds, each a rejection; a call for its effect whose value goes to a local never read a body; a rejection whose kind the typed code does not fix refused, a method whose own signature matches no method of its own refused (a method deleted after its entry was taken, A75E3), and one Julia's inference gives no frame refused the same (a generator that throws, A78S1), each a located refusal, never a body (A74S2), the Rejection sum's kinds named in one table checked against the sum; a returning path, a check, a call for its effect and a call whose value is returned, each a body; a throwing dart body DartThrow at its throw's line past a comment, an abstract dart getter DartAbstract at its line, a dart body, a bodiless constructor and an enum neither). The kinds are kept in the common dir (wt-rejection-kinds/) as Base keeps an image (stale_cachefile): files named by dev/cache_key.sh's key over the julia build and flags, the pinned checkouts' heads, the manifest, the dart reader and the program, each by path and content, and each file recording the inputs the kinds read, every include of each image of the tree loaded (WasmTarget's, the interpreter's) read from its header and every file the reader read (Skeleton.INPUTS), the newest whose record is unchanged read (`cache_key.sh --fresh`, any_includes_stale) (A78S2), read and written by one block (dev/progress_kinds.jl), the line naming the key and a hit or a miss; this lock reads the file's record naming the pin's file, the scope, WasmTarget's files and the interpreter's; with plants (the same inputs one key; an edit only to the reader, only to the program, only to a pin, a text moved between files and a pinned checkout's head moved, each another; a key computed with a tracked input missing, or with the julia's header failing, refused, A78E1; a record fresh as written, stale past an edit or a removal of an input and past a file added to a recorded directory (read by its listing, as Base reads a directory include), and refused recording none). And dev/ship.sh ranks a stack early as port work only when it changes src/'s code, read by the same program (`code <base> <head>`): a changed or removed line neither blank nor a comment (A66E4). Here: land runs the program, this tree's line is printed, the program on planted numbers (4 landings print no note, 5 print it), and its port class on a scratch repository (comments, blank lines and a file outside src/ no port; a changed and a removed line of code a port, and a change past a pipe's buffer; a base naming no commit refused) (dev/CHARTER.md C0)",
         () -> begin
             local v = src_progress_negatives_missed()
-            local o = src_progress_here()
+            local o, cache = src_progress_here()
             foreach(l -> println("    · ", l), split(rstrip(o), '\n'))
             startswith(o, "src: ") || push!(v, "dev/src_progress.sh printed no src line")
+            # the kinds' file records what the load and the reader read (A78S2): the pin's file, the scope, WasmTarget's
+            # includes and the interpreter's
+            local recorded = Set(split(l, '\t')[2] for l in eachline(cache) if startswith(l, "#input\t"))
+            for f in ("dev/PARITY_MASTER.md", "dev/skeleton_scope.toml", "src/WasmTarget.jl", "src/julia/parity.jl")
+                f in recorded || push!(v, "the kinds cache $(basename(cache)) does not record $f, an input the kinds read")
+            end
+            any(startswith("lib/WasmInterpreter/"), recorded) || push!(v, "the kinds cache $(basename(cache)) records no file of lib/WasmInterpreter")
             occursin(SHIP_SRC_LINE, read(joinpath(ROOT, "dev", "ship.sh"), String)) ||
                 push!(v, "dev/ship.sh does not print the src progress line after its landing")
             foreach(x -> println("    ✗ ", x), v)

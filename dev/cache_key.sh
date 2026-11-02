@@ -11,8 +11,56 @@
 # Each cache passes its own program and readers among the pathspecs (dev/src_progress.sh, dev/skeleton.jl,
 # test/parity_ratchet.jl for a lock's verdict), with src/, lib/WasmInterpreter, Manifest.toml and
 # Project.toml (the required modules). Prints a 40-hex key.
+#
+# dev/cache_key.sh --ids — each path on stdin (a file or a directory of the tree) with its id, `<path><TAB><id>`:
+# a file's blob id; a directory's, the blob id of its listing joined, the content Base gives a directory
+# include (julia/base/loading.jl:2358, `join(readdir(path))`); exit 1 when a path is missing, 2 when an id
+# cannot be read. The one definition of an input's id, for a cache that records its inputs (dev/progress_kinds.jl).
+# dev/cache_key.sh --fresh <file> — whether such a cache (lines `#input<TAB><path><TAB><id>`) is fresh: exit 0
+# when every recorded input exists with its recorded id, 1 when one is missing or changed (stale), 2 when the
+# file records no input or an id cannot be read. A port of Base's any_includes_stale (loading.jl:3994), which
+# reads an image's includes from its header, never from its caller: the key below names the cache's program
+# and pins, and the record its other inputs.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+input_ids() {
+    local paths files dirs f
+    paths=$(cat)
+    files=""; dirs=""
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        if [ -d "$f" ]; then dirs="$dirs$f"$'\n'
+        elif [ -f "$f" ]; then files="$files$f"$'\n'
+        else return 1; fi
+    done <<< "$paths"
+    {
+        if [ -n "$files" ]; then
+            local ids
+            ids=$(printf '%s' "$files" | git hash-object --stdin-paths) || return 2
+            [ "$(printf '%s' "$files" | wc -l)" -eq "$(printf '%s\n' "$ids" | wc -l)" ] || return 2
+            paste <(printf '%s' "$files") <(printf '%s\n' "$ids")
+        fi
+        if [ -n "$dirs" ]; then
+            while IFS= read -r f; do
+                [ -n "$f" ] || continue
+                printf '%s\t%s\n' "$f" "$(LC_ALL=C ls -A "$f" | tr -d '\n' | git hash-object --stdin)" || return 2
+            done <<< "$dirs"
+        fi
+    } | LC_ALL=C sort
+}
+if [ "${1:-}" = --ids ]; then
+    rc=0; input_ids || rc=$?
+    exit $rc
+fi
+if [ "${1:-}" = --fresh ]; then
+    [ $# -eq 2 ] && [ -f "$2" ] || { echo "cache_key: --fresh <file>" >&2; exit 2; }
+    rec=$(grep $'^#input\t' "$2" | cut -f2,3 | LC_ALL=C sort) || true
+    [ -n "$rec" ] || { echo "cache_key: $2 records no input" >&2; exit 2; }
+    rc=0; now=$(printf '%s\n' "$rec" | cut -f1 | input_ids) || rc=$?
+    [ $rc -eq 0 ] || { [ $rc -eq 1 ] && exit 1; echo "cache_key: a recorded input of $2 could not be read" >&2; exit 2; }
+    [ "$now" = "$rec" ] && exit 0
+    exit 1
+fi
 # every input read or the key refused, located (D9, A78E1): a key computed past a failed input would serve a
 # verdict whose inputs were never compared
 # the julia's header (dev/julia_header.jl, its one definition): `--header <h>` when the caller is the julia that
