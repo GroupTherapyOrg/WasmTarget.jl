@@ -13,19 +13,18 @@
 # Project.toml (the required modules). Prints a 40-hex key.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-[ $# -ge 1 ] || { echo "cache_key: name the pathspecs the verdict reads" >&2; exit 2; }
 # every input read or the key refused, located (D9, A78E1): a key computed past a failed input would serve a
 # verdict whose inputs were never compared
-# the julia's header: WT_JULIA_HEADER when a julia process that computes the verdict passes its own (the
-# ratchet, which would otherwise start a julia per key, ~0.3 s each), else read from the julia on PATH
-if [ -n "${WT_JULIA_HEADER:-}" ]; then
-    header=$WT_JULIA_HEADER
+# the julia's header (dev/julia_header.jl, its one definition): `--header <h>` when the caller is the julia that
+# computes the verdict (the ratchet, which would otherwise start a julia per key, ~0.3 s each), never read
+# from the environment (A83S8); else from the julia on PATH
+if [ "${1:-}" = --header ]; then
+    header=$2; shift 2
 else
-    header=$(julia --startup-file=no -e 'print(Base.GIT_VERSION_INFO.commit, " ", Base.GIT_VERSION_INFO.tagged_commit, " ",
-                                               Sys.MACHINE, " ", ccall(:jl_cache_flags, UInt8, ()))') ||
-        { echo "cache_key: the julia running gave no header" >&2; exit 1; }
+    header=$(julia --startup-file=no dev/julia_header.jl) || { echo "cache_key: the julia running gave no header" >&2; exit 1; }
 fi
 [ -n "$header" ] || { echo "cache_key: the julia running gave an empty header" >&2; exit 1; }
+[ $# -ge 1 ] || { echo "cache_key: name the pathspecs the verdict reads" >&2; exit 2; }
 pins=""
 for d in dart-sdk julia llvm-project; do
     pins="$pins$d $(git -C "$HOME/.cache/wasmtarget/$d" rev-parse HEAD 2>/dev/null || echo none)"$'\n'

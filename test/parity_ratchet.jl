@@ -28,6 +28,10 @@ module ParityRatchet
 # `[section]` + `key = int` lines; the two 10-line helpers below read/write exactly that.
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
+# this julia's header for dev/cache_key.sh, its one definition (julia_header): every verdict the ratchet keys
+# its own process computes, so it passes its header as the script's argument, one julia start saved per key
+# (~0.3 s each), never through the environment (A83S8)
+include(joinpath(ROOT, "dev", "julia_header.jl"))
 const SRC = joinpath(ROOT, "src")
 const BASELINE_PATH = joinpath(ROOT, "dev", "parity_baseline.toml")
 
@@ -482,7 +486,7 @@ skeleton_call(f::Symbol, args...; kw...) = Base.invokelatest(getglobal(skeleton_
 # recomputes one file
 const SKELETON_INPUTS = ("dev/skeleton.jl", "dev/skeleton_scope.toml", "dev/SkeletonImage", "src/julia/kernel.jl", "src/julia/parity.jl",
                          "test/parity_ratchet.jl", "dev/cache_key.sh")
-skeleton_cache_key(root::AbstractString)::String = readchomp(Cmd(`bash dev/cache_key.sh $SKELETON_INPUTS`; dir = root))
+skeleton_cache_key(root::AbstractString)::String = readchomp(Cmd(`bash dev/cache_key.sh --header $(julia_header()) $SKELETON_INPUTS`; dir = root))
 # Julia's own 128 bits of a text, two seeds of Base.hash (the test env declares no SHA; the julia build is in the
 # shared key, so the hash is one function across the runs it is compared between)
 hash128(x::AbstractString)::String = string(hash(x, UInt(1)); base = 16, pad = 16) * string(hash(x, UInt(2)); base = 16, pad = 16)
@@ -1730,7 +1734,7 @@ src_progress(args::String...)::String = read(`bash $(joinpath(ROOT, "dev", "src_
 # (progress_counts, the one reading src_progress.sh's own julia shares), and the rest by the program: a second
 # julia loading WasmTarget again was most of L208's children's CPU (wt3-latency's table)
 function src_progress_here()::String
-    local cache = String(readchomp(`bash $(joinpath(ROOT, "dev", "src_progress.sh")) key`))
+    local cache = String(readchomp(`bash $(joinpath(ROOT, "dev", "src_progress.sh")) key --header $(julia_header())`))
     local wt = Base.require(Base.PkgId(Base.UUID("9f3a1415-1112-405b-ae89-c61daf9872bd"), "WasmTarget"))
     local sk = skeleton_module()
     local m = Module(:ProgressCounts)
@@ -1839,7 +1843,7 @@ function src_progress_negatives_missed()::Vector{String}
         local w(f, x) = write(joinpath(t, f), x)
         w("src/julia/parity.jl", "const PIN = \"aaaa\"\nf() = 1\n"); w("src/b.jl", "g() = 2\n")
         w("dev/skeleton.jl", "# reader\n"); w("dev/src_progress.sh", "# program\n"); g("add", "-A"); g("commit", "-qm", "k0")
-        local key() = readchomp(Cmd(`bash dev/cache_key.sh src dev/skeleton.jl dev/src_progress.sh`; dir = t))
+        local key() = readchomp(Cmd(`bash dev/cache_key.sh --header $(julia_header()) src dev/skeleton.jl dev/src_progress.sh`; dir = t))
         local k0 = key()
         key() == k0 || push!(out, "negative missed: the same inputs give two keys")
         local differs(what, f, x) = (local old = read(joinpath(t, f), String); w(f, x); local k = key(); w(f, old); k == k0 && push!(out, "negative missed: $what keeps the kinds cache's key"))
@@ -1849,18 +1853,18 @@ function src_progress_negatives_missed()::Vector{String}
         w("src/julia/parity.jl", "const PIN = \"aaaa\"\n"); w("src/b.jl", "f() = 1\ng() = 2\n")
         key() == k0 && push!(out, "negative missed: a text moved between two files keeps the kinds cache's key")
         # a directory named last reads its files too (a pathspec that names no file is no failure of the key)
-        local lastdir() = readchomp(Cmd(`bash dev/cache_key.sh dev/skeleton.jl src`; dir = t))
+        local lastdir() = readchomp(Cmd(`bash dev/cache_key.sh --header $(julia_header()) dev/skeleton.jl src`; dir = t))
         local d0 = lastdir()
         w("src/b.jl", "f() = 1\ng() = 3\n")
         lastdir() == d0 && push!(out, "negative missed: an edit under a directory named last keeps the kinds cache's key")
         # a key past a failed input is refused (A78E1): a tracked input missing, and a julia whose header fails
         local refused(cmd) = !success(pipeline(cmd; stdout = devnull, stderr = devnull))
         rm(joinpath(t, "src", "b.jl"))
-        refused(Cmd(`bash dev/cache_key.sh src dev/skeleton.jl`; dir = t)) || push!(out, "negative missed: a key computed with a tracked input missing")
+        refused(Cmd(`bash dev/cache_key.sh --header $(julia_header()) src dev/skeleton.jl`; dir = t)) || push!(out, "negative missed: a key computed with a tracked input missing")
         w("src/b.jl", "f() = 1\ng() = 3\n")
         local fake = mktempdir()
         write(joinpath(fake, "julia"), "#!/bin/sh\nexit 1\n"); chmod(joinpath(fake, "julia"), 0o755)
-        refused(setenv(Cmd(`bash dev/cache_key.sh src dev/skeleton.jl`; dir = t), "PATH" => fake * ":" * ENV["PATH"], "HOME" => homedir(), "WT_JULIA_HEADER" => "")) ||
+        refused(setenv(Cmd(`bash dev/cache_key.sh src dev/skeleton.jl`; dir = t), "PATH" => fake * ":" * ENV["PATH"], "HOME" => homedir(), "WT_JULIA_HEADER" => julia_header())) ||
             push!(out, "negative missed: a key computed with the julia's header failing")
         rm(fake; recursive = true)
     end
@@ -3389,10 +3393,6 @@ const LOCKS = [
 
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
-    # this julia's header for dev/cache_key.sh, whose every verdict here this process computes: one julia start
-    # saved per key (~0.3 s each, about fifteen keys a run, wt3-latency's table)
-    ENV["WT_JULIA_HEADER"] = string(Base.GIT_VERSION_INFO.commit, " ", Base.GIT_VERSION_INFO.tagged_commit, " ",
-                                    Sys.MACHINE, " ", ccall(:jl_cache_flags, UInt8, ()))
     baseline = _read_baseline(BASELINE_PATH)
     bm = get(baseline, "metrics", Dict{String,Int}())
 

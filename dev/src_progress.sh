@@ -34,10 +34,11 @@ cd "$(git rev-parse --show-toplevel)"
 # every input the kinds read: the julia build, the pinned checkouts, src/, the interpreter it imports, the
 # manifest, the dart reader and this program), recomputed when the key is new (dev/progress_kinds.jl); the
 # line names the key and whether it read the cache
+KINDS_HEADER=()
 kinds_cache() {
     local dir key
     dir="$(git rev-parse --path-format=absolute --git-common-dir)/wt-rejection-kinds"; mkdir -p "$dir"
-    key=$(bash dev/cache_key.sh src lib/WasmInterpreter Manifest.toml Project.toml dev/skeleton.jl dev/skeleton_scope.toml \
+    key=$(bash dev/cache_key.sh ${KINDS_HEADER[@]+"${KINDS_HEADER[@]}"} src lib/WasmInterpreter Manifest.toml Project.toml dev/skeleton.jl dev/skeleton_scope.toml \
           dev/src_progress.sh dev/progress_kinds.jl dev/cache_key.sh) || { echo "src_progress: the kinds cache's key failed" >&2; return 1; }
     [[ $key =~ ^[0-9a-f]{40}$ ]] || { echo "src_progress: the kinds cache's key is no key ($key)" >&2; return 1; }
     echo "$dir/$key.tsv"
@@ -45,6 +46,8 @@ kinds_cache() {
 # a port is a change to src/'s code: its added and removed lines, the diff's file headers aside, less the
 # blank ones and Julia's `#` comments (f4cc916d, comment only, ranked early as port work: A66E4)
 if [ "${1:-}" = key ]; then
+    # `key --header <h>`: the caller's julia computes the kinds, so its header keys them (dev/cache_key.sh)
+    [ "${2:-}" = --header ] && KINDS_HEADER=(--header "$3")
     kinds_cache; exit $?
 fi
 if [ "${1:-}" = kinds ]; then
