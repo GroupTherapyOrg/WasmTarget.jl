@@ -16,9 +16,15 @@ cd "$(git rev-parse --show-toplevel)"
 [ $# -ge 1 ] || { echo "cache_key: name the pathspecs the verdict reads" >&2; exit 2; }
 # every input read or the key refused, located (D9, A78E1): a key computed past a failed input would serve a
 # verdict whose inputs were never compared
-header=$(julia --startup-file=no -e 'print(Base.GIT_VERSION_INFO.commit, " ", Base.GIT_VERSION_INFO.tagged_commit, " ",
-                                           Sys.MACHINE, " ", ccall(:jl_cache_flags, UInt8, ()))') ||
-    { echo "cache_key: the julia running gave no header" >&2; exit 1; }
+# the julia's header: WT_JULIA_HEADER when a julia process that computes the verdict passes its own (the
+# ratchet, which would otherwise start a julia per key, ~0.3 s each), else read from the julia on PATH
+if [ -n "${WT_JULIA_HEADER:-}" ]; then
+    header=$WT_JULIA_HEADER
+else
+    header=$(julia --startup-file=no -e 'print(Base.GIT_VERSION_INFO.commit, " ", Base.GIT_VERSION_INFO.tagged_commit, " ",
+                                               Sys.MACHINE, " ", ccall(:jl_cache_flags, UInt8, ()))') ||
+        { echo "cache_key: the julia running gave no header" >&2; exit 1; }
+fi
 [ -n "$header" ] || { echo "cache_key: the julia running gave an empty header" >&2; exit 1; }
 pins=""
 for d in dart-sdk julia llvm-project; do

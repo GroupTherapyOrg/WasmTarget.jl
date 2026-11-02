@@ -1838,7 +1838,7 @@ function src_progress_negatives_missed()::Vector{String}
         w("src/b.jl", "f() = 1\ng() = 3\n")
         local fake = mktempdir()
         write(joinpath(fake, "julia"), "#!/bin/sh\nexit 1\n"); chmod(joinpath(fake, "julia"), 0o755)
-        refused(setenv(Cmd(`bash dev/cache_key.sh src dev/skeleton.jl`; dir = t), "PATH" => fake * ":" * ENV["PATH"], "HOME" => homedir())) ||
+        refused(setenv(Cmd(`bash dev/cache_key.sh src dev/skeleton.jl`; dir = t), "PATH" => fake * ":" * ENV["PATH"], "HOME" => homedir(), "WT_JULIA_HEADER" => "")) ||
             push!(out, "negative missed: a key computed with the julia's header failing")
         rm(fake; recursive = true)
     end
@@ -3367,6 +3367,10 @@ const LOCKS = [
 
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
+    # this julia's header for dev/cache_key.sh, whose every verdict here this process computes: one julia start
+    # saved per key (~0.3 s each, about fifteen keys a run, wt3-latency's table)
+    ENV["WT_JULIA_HEADER"] = string(Base.GIT_VERSION_INFO.commit, " ", Base.GIT_VERSION_INFO.tagged_commit, " ",
+                                    Sys.MACHINE, " ", ccall(:jl_cache_flags, UInt8, ()))
     baseline = _read_baseline(BASELINE_PATH)
     bm = get(baseline, "metrics", Dict{String,Int}())
 
