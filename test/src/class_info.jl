@@ -27,6 +27,9 @@ const D = WasmTarget.Dart2Wasm
 end
 
 module ClassInfoCases
+# a slot of DataTypes tested against Type{Int64}: Float64 is a DataType too, so only the value's own
+# test (jl_isa's jl_types_equal) answers, never its class
+kind_isa(n::Int64) = (v = Any[Int64, Float64]; v[n] isa Type{Int64} ? 1 : 0)
 abstract type Shape end
 struct Circle <: Shape; r::Float64; end
 struct Square <: Shape; s::Float64; end
@@ -99,6 +102,12 @@ end
     # is <: it; its classes are its member's class, Int's kind DataType (a class set, never a test)
     @test Int isa Type{Int} && !(DataType <: Type{Int})
     @test D.get_concrete_class_id_range(cov, Type{Int}) == D.get_concrete_class_id_range(cov, DataType)
+    # that class set is never a membership test: an isa over a Type{Int64} slot holding a DataType of the
+    # same kind (Float64) is the value's run-time test, jl_isa's jl_types_equal, which rejects at its
+    # gap, located, never a class-id check answering true for every DataType
+    local ke = try; W.compile(ClassInfoCases.kind_isa, (Int64,)); nothing; catch x; x; end
+    @test ke isa W.RejectionError && ke.rejection isa W.Unquarantined &&
+          startswith(ke.rejection.row, "src/julia/runtime/rtutils.jl run_time_type_gap: the type Type{Int64}")
     # a covariant Tuple class is abstract: no value has it exactly
     @test W.class_is_abstract(Tuple{Any}) && !W.class_is_abstract(Tuple{Int})
     # the translator's late classIdNumbering, read before ClassInfoCollector.collect assigns it

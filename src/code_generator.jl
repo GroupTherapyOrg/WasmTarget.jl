@@ -934,8 +934,8 @@ end
             (g::NirGlobalRead) => visit_static_get(self, g, expected_type)
             (p::NirPi) => visit_as_expression(self, p, expected_type)
             (c::NirForeignCall) => visit_static_invocation(self, c, expected_type)
-            # Julia's bounds-check flag, a Bool constant as Julia's codegen answers it (codegen.cpp,
-            # bounds_check_enabled): true under --check-bounds=yes, false under =no (julia.h's
+            # Julia's bounds-check flag, a Bool constant as Julia's codegen answers it
+            # (julia/src/cgutils.cpp:2067 bounds_check_enabled): true under --check-bounds=yes, false under =no (julia.h's
             # JL_OPTIONS_CHECK_BOUNDS_ON 1 and _OFF 2, read from the compiling process), else the
             # statement's own argument, false where the optimizer resolved an @inbounds region, true
             # with none
