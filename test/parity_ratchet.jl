@@ -2782,21 +2782,23 @@ function cfg_claims(text::AbstractString)::Set{String}
 end
 
 # the `Invariant-dropped: <Name> — carried by <NewName>` and `… — moot: <reason>` lines of `msg`, by name:
-# the successor named, or "" for moot with a reason
+# the successor named, or `moot: <reason>` (a name has no space, so the two never meet)
 function invariant_drop_lines(msg::AbstractString)::Dict{String,String}
     local out = Dict{String,String}()
-    for m in eachmatch(r"^Invariant-dropped: (\S+) — (?:carried by (\S+)|moot: \S.*)$"m, msg)
-        out[m[1]] = something(m[2], "")
+    for m in eachmatch(r"^Invariant-dropped: (\S+) — (?:carried by (\S+)|(moot: \S.*))$"m, msg)
+        out[m[1]] = something(m[2], m[3])
     end
     return out
 end
+moot_line(x::AbstractString)::Bool = startswith(x, "moot: ")
 
 # the claims a change from `base` (its merge base with HEAD) in the repository at `root` drops from a
 # dev/formal MC*.cfg, and the Broken cfgs it removes, that its messages do not name, a sentence each: a
 # dropped name is carried by a successor its cfg lists at HEAD, or moot for a stated reason; a removed
 # Broken cfg the same, by its name, its successor a cfg at HEAD
-# a TLA+ module's operator definitions, by name, each its text with comments and whitespace dropped: a
-# definition starts at column 0 with `Name ==` or `Name(args) ==` and runs to the next one at column 0
+# a TLA+ module's operator definitions, by name, each its text with comments dropped and each run of whitespace
+# collapsed to one space (identifiers keep their boundaries): a definition starts at column 0 with `Name ==` or
+# `Name(args) ==` and runs to the next one at column 0
 function tla_definitions(text::AbstractString)::Dict{String,String}
     local out = Dict{String,String}()
     local name = nothing
@@ -2815,6 +2817,124 @@ function tla_definitions(text::AbstractString)::Dict{String,String}
     end
     flush()
     return out
+end
+
+# a TLA+ module's operator definitions, by name, each its body (the text past `==`) as a tree whose leaves are
+# tokens with their line and column, comments dropped: tla_definitions' split, kept in place so that a junction
+# list's bullets are read by their columns, as TLA+ reads them. A bracket pair is a :group (its opener kept), and
+# a bullet list a :junction of items; a bullet is a `/\` or `\/` that opens a sequence or its line
+const TLA_TOKEN = r"<=>|=>|~>|\|->|->|<=|>=|=<|==|\\/|/\\|\[\]|<>|<<|>>|\\[A-Za-z]+|[A-Za-z_][A-Za-z0-9_]*|\d+|\"(?:[^\"\\]|\\.)*\"|\S"
+const TLA_CLOSER = Dict("(" => ")", "[" => "]", "{" => "}", "<<" => ">>")
+function tla_formulas(text::AbstractString)::Dict{String,Vector{Any}}
+    local toks = Dict{String,Vector{NamedTuple{(:s, :line, :col),Tuple{String,Int,Int}}}}()
+    local name = nothing
+    for (ln, raw) in enumerate(split(replace(text, r"\(\*.*?\*\)"s => s -> replace(s, r"[^\n]" => " ")), '\n'))
+        local l = replace(raw, r"\\\*.*$" => "")
+        local m = match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)]*\))?\s*==", l)
+        local from = 1
+        if m !== nothing
+            name = String(m[1]); toks[name] = []; from = length(m.match) + 1
+        elseif !isempty(l) && !isspace(l[1])
+            name = nothing
+        end
+        name === nothing && continue
+        for t in eachmatch(TLA_TOKEN, l)
+            t.offset >= from && push!(toks[name], (s = String(t.match), line = ln, col = t.offset))
+        end
+    end
+    return Dict(n => first(tla_tree(ts, 1, "", -1)) for (n, ts) in toks)
+end
+# the elements of `ts` from `i` to its closer or to a token that opens its line at a column at or left of
+# `bound` (a bullet list's end), and the index past them
+function tla_tree(ts, i::Int, closer::String, bound::Int)
+    local elems = Any[]
+    local opens(j) = j == 1 || ts[j-1].line < ts[j].line
+    while i <= length(ts)
+        local t = ts[i]
+        (t.s == closer || t.s in values(TLA_CLOSER) || (opens(i) && t.col <= bound)) && break
+        if t.s in ("/\\", "\\/") && (isempty(elems) || opens(i))
+            local items = Vector{Any}[]
+            local op, c = t.s, t.col
+            while i <= length(ts) && ts[i].s == op && ts[i].col == c && (isempty(items) || opens(i))
+                local item, j = tla_tree(ts, i + 1, closer, c)
+                push!(items, item); i = j
+            end
+            push!(elems, (kind = :junction, items = items))
+        elseif haskey(TLA_CLOSER, t.s)
+            local inner, j = tla_tree(ts, i + 1, TLA_CLOSER[t.s], -1)
+            i = j <= length(ts) && ts[j].s == TLA_CLOSER[t.s] ? j + 1 : j
+            push!(elems, (kind = :group, opener = t.s, items = Vector{Any}[inner]))
+        else
+            push!(elems, t); i += 1
+        end
+    end
+    return elems, i
+end
+
+# the polarity of each name a formula reads, +1 or -1 or both, into `pol`, the formula at sign `s`: negative
+# under a negation and left of `=>` and `~>`, both under `<=>` and in an IF's condition (`IF c THEN a ELSE b`
+# reads c on both sides), positive otherwise, flipped under each negation (the lead's ruling on c964a22f);
+# a name whose polarity the formula leaves open (a quantifier's bound, a LET's definitions, a CASE, an
+# operator's arguments, fairness's action) is read both ways, the strict reading
+const TLA_BINDERS = ("IF", "LET", "CASE", "\\A", "\\E", "\\AA", "\\EE", "CHOOSE")
+function tla_polarity!(pol::Dict{String,Set{Int}}, elems::Vector, s::Int)
+    isempty(elems) && return pol
+    local istok(e, xs) = e isa NamedTuple && haskey(e, :s) && e.s in xs
+    local both(es) = (tla_polarity!(pol, es, s); tla_polarity!(pol, es, -s))
+    local b = findfirst(e -> istok(e, TLA_BINDERS), elems)
+    local region = b === nothing ? elems : elems[1:b-1]
+    # the lowest binary operator before a binder, which reaches as far right as it can
+    for (ops, how) in ((("=>",), :imp), (("~>",), :imp), (("<=>", "\\equiv"), :both), (("/\\", "\\/", "\\land", "\\lor"), :same))
+        local k = findfirst(e -> istok(e, ops), region)
+        k === nothing && continue
+        local l, r = elems[1:k-1], elems[k+1:end]
+        how === :imp ? (tla_polarity!(pol, l, -s); tla_polarity!(pol, r, s)) :
+        how === :both ? (both(l); both(r)) : (tla_polarity!(pol, l, s); tla_polarity!(pol, r, s))
+        return pol
+    end
+    local e1 = elems[1]
+    istok(e1, ("~", "\\lnot", "\\neg")) && return tla_polarity!(pol, elems[2:end], -s)
+    istok(e1, ("[]", "<>", "ENABLED", "UNCHANGED")) && return tla_polarity!(pol, elems[2:end], s)
+    if b == 1
+        local depth(j, open, close) = begin     # the matching keyword at nesting 0 from j
+            local d = 0
+            for x in j:length(elems)
+                istok(elems[x], (open,)) && (d += 1)
+                istok(elems[x], (close,)) && (d == 0 ? (return x) : (d -= 1))
+            end
+            nothing
+        end
+        if e1.s == "IF"
+            local th = depth(2, "IF", "THEN")
+            th === nothing && (both(elems[2:end]); return pol)
+            local el = something(depth(th + 1, "IF", "ELSE"), length(elems) + 1)
+            both(elems[2:th-1]); tla_polarity!(pol, elems[th+1:el-1], s); tla_polarity!(pol, elems[el+1:end], s)
+        elseif e1.s == "LET"
+            local in_ = depth(2, "LET", "IN")
+            in_ === nothing && (both(elems[2:end]); return pol)
+            both(elems[2:in_-1]); tla_polarity!(pol, elems[in_+1:end], s)
+        elseif e1.s == "CASE"
+            both(elems[2:end])
+        else
+            local colon = findfirst(e -> istok(e, (":",)), elems)
+            colon === nothing && (both(elems[2:end]); return pol)
+            both(elems[2:colon-1]); tla_polarity!(pol, elems[colon+1:end], s)
+        end
+        return pol
+    end
+    for (j, e) in enumerate(region)
+        if e isa NamedTuple && haskey(e, :kind)
+            local applied = j > 1 && e.kind === :group && e.opener == "(" && region[j-1] isa NamedTuple && haskey(region[j-1], :s) &&
+                            occursin(r"^[A-Za-z_]", region[j-1].s)
+            for it in e.items
+                applied ? both(it) : tla_polarity!(pol, it, s)
+            end
+        elseif occursin(r"^[A-Za-z_]", e.s)
+            push!(get!(pol, e.s, Set{Int}()), s)
+        end
+    end
+    b === nothing || tla_polarity!(pol, elems[b:end], s)
+    return pol
 end
 
 # a cfg's CONSTANTS, by name, each its assignment's text: `C = value` or `C <- Def`
@@ -2870,7 +2990,7 @@ function invariants_dropped(root::AbstractString, base::AbstractString)::Vector{
     local out = String[]
     local named(n, why, succs) = (local s = get(lines, n, nothing);
         s === nothing ? (push!(out, "$why and no `Invariant-dropped: $n — carried by <Name>` or `— moot: <reason>` line names it"); false) :
-        isempty(s) || s in succs || (push!(out, "$why, carried by $s, which is no successor at HEAD"); false))
+        moot_line(s) || s in succs || (push!(out, "$why, carried by $s, which is no successor at HEAD"); false))
     local claims_before = Set{String}()
     for f in files(mb, r"(^|/)MC[^/]*\.cfg$")
         local before = cfg_claims(show(mb, f))
@@ -2914,35 +3034,54 @@ function invariants_dropped(root::AbstractString, base::AbstractString)::Vector{
     local tlas_mb = files(mb, r"\.tla$")
     local defs_mb = Dict(t => tla_definitions(show(mb, t)) for t in tlas_mb)
     local all_names = Set{String}(n for d in values(defs_mb) for n in keys(d))
-    # each root's reach: the definitions its text names, recursively, wherever a module defines them
-    local reaches = Dict{String,Set{String}}()
-    local reach(r) = get!(reaches, r) do
-        local seen = Set{String}([r])
-        local todo = [r]
-        while !isempty(todo)
-            local n = pop!(todo)
-            for d in values(defs_mb)
-                haskey(d, n) || continue
-                for m in eachmatch(r"[A-Za-z_][A-Za-z0-9_]*", d[n])
-                    local x = m.match
-                    x in all_names && !(x in seen) && (push!(seen, x); push!(todo, x))
-                end
-            end
-        end
-        seen
-    end
-    local defs_named = reduce(union, (reach(r) for r in roots); init = Set{String}())
+    # each root's reach: the definitions its text names, recursively, wherever a module defines them, at the base
+    # (reach) and at HEAD (reach_now, a carried claim's successor's: A84E4)
     local tlas_now = Set(files("HEAD", r"\.tla$"))
     local defs_now = Dict(t => tla_definitions(show("HEAD", t)) for t in tlas_now)
-    # a name read left of an implication in a claim at the base is that claim's antecedent: strengthening it
-    # judges fewer states, so no moot reason excuses its rewrite, and its line carries the claims to a
-    # definition at HEAD that holds its old text (march-monitor-a, 53a91cd0's "Done — moot: strengthened")
-    local antecedent(n) = any(claims_before) do c
-        any(values(defs_mb)) do d
-            haskey(d, c) || return false
-            local segs = split(split(d[c], "=="; limit = 2)[end], "=>")
-            any(seg -> occursin(Regex("(?<![A-Za-z0-9_])\\Q" * n * "\\E(?![A-Za-z0-9_])"), seg), segs[1:end-1])
+    local reacher(defs) = begin
+        local names = Set{String}(n for d in values(defs) for n in keys(d))
+        local memo = Dict{String,Set{String}}()
+        r -> get!(memo, r) do
+            local seen = Set{String}([r])
+            local todo = [r]
+            while !isempty(todo)
+                local n = pop!(todo)
+                for d in values(defs)
+                    haskey(d, n) || continue
+                    for m in eachmatch(r"[A-Za-z_][A-Za-z0-9_]*", d[n])
+                        local x = m.match
+                        x in names && !(x in seen) && (push!(seen, x); push!(todo, x))
+                    end
+                end
+            end
+            seen
         end
+    end
+    local reach, reach_now = reacher(defs_mb), reacher(defs_now)
+    local defs_named = reduce(union, (reach(r) for r in roots); init = Set{String}())
+    # (its limit, the lead's ruling: Init, Next and Spec carry no polarity, though restricting them weakens every
+    # claim as a strengthened antecedent does; TLC's Broken variants guard that)
+    # each name's polarity in the claims at the base (tla_polarity!, through every definition a claim reads): a
+    # strengthening at negative polarity, or a weakening at positive, weakens the claim (march-monitor-a, 53a91cd0's
+    # "Done — moot: strengthened"; the lead's ruling on c964a22f); a name a claim reaches that the formulas leave
+    # unread is both, the strict reading
+    local direct = Dict{String,Dict{String,Set{Int}}}()
+    for t in tlas_mb, (n, tree) in tla_formulas(show(mb, t))
+        tla_polarity!(get!(direct, n, Dict{String,Set{Int}}()), tree, 1)
+    end
+    local polarity = Dict{String,Set{Int}}()
+    let todo = [(c, 1) for c in claims_before if c in all_names], seen = Set{Tuple{String,Int}}()
+        while !isempty(todo)
+            local n, sg = pop!(todo)
+            (n, sg) in seen && continue
+            push!(seen, (n, sg)); push!(get!(polarity, n, Set{Int}()), sg)
+            for (m, ss) in get(direct, n, Dict{String,Set{Int}}()), x in ss
+                m in all_names && push!(todo, (m, sg * x))
+            end
+        end
+    end
+    for c in claims_before, n in reach(c)
+        n in all_names && !haskey(polarity, n) && (polarity[n] = Set([1, -1]))
     end
     for t in tlas_mb
         local db = defs_mb[t]
@@ -2955,10 +3094,41 @@ function invariants_dropped(root::AbstractString, base::AbstractString)::Vector{
                     push!(out, "the change rewrites $name in $t, which the claim $c reads, and no `Invariant-dropped: $c — ...` line names the claim")
             end
             if haskey(lines, name)
-                local succ = lines[name]
-                local body(x) = strip(split(x, "=="; limit = 2)[end])
-                antecedent(name) && !(!isempty(succ) && any(d -> haskey(d, succ) && body(d[succ]) == body(text), values(defs_now))) &&
-                    push!(out, "the change rewrites $name in $t, an antecedent of a claim (read left of =>), and its line keeps no claim judged at its old text: carry it by a definition at HEAD that holds that text")
+                local line = lines[name]
+                local pol = get(polarity, name, Set{Int}())
+                isempty(pol) && continue
+                local where_ = pol == Set([1, -1]) ? "at both polarities" : 1 in pol ? "at positive polarity" : "at negative polarity"
+                local readers = sort!([c for c in claims_before if c != name && name in reach(c)])
+                if !moot_line(line)
+                    # carried: a definition at HEAD holds its old text, and every claim it judged is carried to a claim a
+                    # cfg at HEAD lists that reads it, so the old claim is still model-checked (A84E4)
+                    local body(x) = strip(split(x, "=="; limit = 2)[end])
+                    any(d -> haskey(d, line) && body(d[line]) == body(text), values(defs_now)) ||
+                        push!(out, "the change rewrites $name in $t, which a claim reads $where_, carried by $line, which holds no definition at HEAD with its old text")
+                    name in claims_before && !(line in nowclaims) &&
+                        push!(out, "the change carries the claim $name to $line, which no cfg at HEAD lists, so the old claim is never checked")
+                    for c in readers
+                        local cl = get(lines, c, nothing)
+                        cl === nothing && continue          # refused above: the claim unnamed
+                        (!moot_line(cl) && cl in nowclaims && line in reach_now(cl)) ||
+                            push!(out, "the change carries $name to $line, and the claim $c that reads it is not carried to a claim a cfg at HEAD lists that reads $line (`Invariant-dropped: $c — carried by <it>`)")
+                    end
+                    continue
+                end
+                # moot: its direction stated, never the one that weakens a claim at the name's polarity; `gone` only where
+                # its subject is (A84S2): the definition defined nowhere at HEAD and each claim reading it listed by no cfg
+                local dir = match(r"^moot: (strengthened|weakened|gone)\b", line)
+                if dir === nothing
+                    push!(out, "the change rewrites $name in $t, which a claim reads $where_, under a moot line that states no direction: `moot: strengthened …`, `moot: weakened …` or `moot: gone …`, or carry it by its old text")
+                elseif dir[1] == "gone"
+                    local defined = any(d -> haskey(d, name), values(defs_now))
+                    local listed = [c for c in readers if c in nowclaims]
+                    name in claims_before && name in nowclaims && push!(listed, name)
+                    defined && push!(out, "the change rewrites $name in $t under `moot: gone`, but a module at HEAD still defines it: carry it by its old text")
+                    isempty(listed) || push!(out, "the change drops $name in $t under `moot: gone`, but a cfg at HEAD still lists $(join(listed, ", ")), which read it: carry it by its old text")
+                elseif (dir[1] == "strengthened" && -1 in pol) || (dir[1] == "weakened" && 1 in pol)
+                    push!(out, "the change rewrites $name in $t, which a claim reads $where_, $(dir[1]) under a moot line, which weakens the claim: carry it by a definition at HEAD that holds its old text, the claim kept in a cfg")
+                end
                 continue
             end
             push!(out, "the change rewrites or removes $name, a claim, a definition one reads, Init, Next or a constant's definition, in $t and no `Invariant-dropped: $name — ...` line names it")
@@ -3000,8 +3170,13 @@ function invariants_negatives_missed()::Vector{String}
         isempty(invariants_dropped(t, m0)) || push!(out, "negative missed: a claim's definition re-spaced, a comment dropped, reads as rewritten")
         write(m, "---- MODULE M ----\nSafe == x \\in 0..9\nLive == TRUE\n====\n"); g("commit", "-qam", "weaken")
         length(invariants_dropped(t, m0)) == 1 || push!(out, "negative missed: a claim's definition weakened with no line passes")
-        g("commit", "-q", "--amend", "-m", "weaken\n\nInvariant-dropped: Safe — moot: the bound moved to 9 with the model")
-        isempty(invariants_dropped(t, m0)) || push!(out, "negative missed: a claim's definition changed under a line is refused")
+        g("commit", "-q", "--amend", "-m", "weaken\n\nInvariant-dropped: Safe — moot: weakened, the bound moved to 9 with the model")
+        any(r -> occursin("weakened under a moot line", r), invariants_dropped(t, m0)) || push!(out, "negative missed: a claim weakened under a moot line passes")
+        write(m, "---- MODULE M ----\nSafe == x \\in 0..2\nLive == TRUE\n====\n")
+        g("commit", "-q", "--amend", "-am", "narrow\n\nInvariant-dropped: Safe — moot: the bound narrowed")
+        any(r -> occursin("states no direction", r), invariants_dropped(t, m0)) || push!(out, "negative missed: a claim's definition rewritten under a moot line stating no direction passes")
+        g("commit", "-q", "--amend", "-m", "narrow\n\nInvariant-dropped: Safe — moot: strengthened, the bound narrowed")
+        isempty(invariants_dropped(t, m0)) || push!(out, "negative missed: a claim strengthened under a moot line is refused")
         write(c, "SPECIFICATION Spec\nCONSTANTS\n    N = 2\nINVARIANT TypeOK\nINVARIANTS\n    Safe\nPROPERTY Ends\n"); g("commit", "-qam", "shrink")
         length(invariants_dropped(t, m0)) == 1 || push!(out, "negative missed: a cfg's constant shrunk with no line passes")
         g("rm", "-q", "dev/formal/MCM.cfg"); g("commit", "-qm", "rmcfg\n\nInvariant-dropped: MCM.N — moot: the instance goes")
@@ -3021,10 +3196,21 @@ function invariants_negatives_missed()::Vector{String}
         write(m, "---- MODULE M ----\nDone == x = 3\nHolds == Done => y = 1\n====\n"); g("add", "-A"); g("commit", "-qm", "a0")
         local a0 = readchomp(`git -C $t rev-parse HEAD`)
         write(m, "---- MODULE M ----\nDone == x = 3 /\\ z = 0\nHolds == Done => y = 1\n====\n"); g("commit", "-qam", "strengthen\n\nInvariant-dropped: Done — moot: strengthened")
-        any(r -> occursin("an antecedent of a claim", r), invariants_dropped(t, a0)) || push!(out, "negative missed: an antecedent strengthened under a moot line passes")
+        any(r -> occursin("at negative polarity, strengthened", r), invariants_dropped(t, a0)) || push!(out, "negative missed: an antecedent strengthened under a moot line passes")
         write(m, "---- MODULE M ----\nDone == x = 3 /\\ z = 0\nDoneThen == x = 3\nHolds == Done => y = 1\nHoldsThen == DoneThen => y = 1\n====\n")
         g("commit", "-q", "--amend", "-am", "strengthen\n\nInvariant-dropped: Done — carried by DoneThen\nInvariant-dropped: Holds — carried by HoldsThen")
-        isempty(invariants_dropped(t, a0)) || push!(out, "negative missed: an antecedent carried by its old text at HEAD is refused")
+        # its claim carried to a successor no cfg lists is never checked (A84E4); listed but not reading the carried
+        # definition, the same; listed and reading it, it passes
+        any(r -> occursin("is not carried to a claim a cfg at HEAD lists", r), invariants_dropped(t, a0)) ||
+            push!(out, "negative missed: a claim carried to a successor no cfg lists passes")
+        write(c, "SPECIFICATION Spec\nINVARIANTS\n    Holds\n    HoldsThen\n")
+        write(m, "---- MODULE M ----\nDone == x = 3 /\\ z = 0\nDoneThen == x = 3\nHolds == Done => y = 1\nHoldsThen == y = 1\n====\n")
+        g("commit", "-q", "--amend", "-am", "strengthen\n\nInvariant-dropped: Done — carried by DoneThen\nInvariant-dropped: Holds — carried by HoldsThen")
+        any(r -> occursin("is not carried to a claim a cfg at HEAD lists", r), invariants_dropped(t, a0)) ||
+            push!(out, "negative missed: a claim carried to a listed successor that does not read the carried definition passes")
+        write(m, "---- MODULE M ----\nDone == x = 3 /\\ z = 0\nDoneThen == x = 3\nHolds == Done => y = 1\nHoldsThen == DoneThen => y = 1\n====\n")
+        g("commit", "-q", "--amend", "-am", "strengthen\n\nInvariant-dropped: Done — carried by DoneThen\nInvariant-dropped: Holds — carried by HoldsThen")
+        isempty(invariants_dropped(t, a0)) || push!(out, "negative missed: an antecedent carried by its old text, its claim to a listed successor reading it, is refused")
         # a definition a claim reads, rewritten under its own line, names the claim too; a cfg's SPECIFICATION is a
         # root, its fairness rewritten unnamed refused (A83S2, A76E4)
         write(c, "SPECIFICATION Spec\nINVARIANT Holds\n")
@@ -3032,12 +3218,58 @@ function invariants_negatives_missed()::Vector{String}
         g("add", "-A"); g("commit", "-qm", "s0")
         local s0 = readchomp(`git -C $t rev-parse HEAD`)
         write(m, "---- MODULE M ----\nLimit == 4\nHolds == x <= Limit\nFair == WF_x(Next)\nSpec == Init /\\ [][Next]_x /\\ Fair\n====\n")
-        g("commit", "-qam", "limit\n\nInvariant-dropped: Limit — moot: the bound moved")
-        length(invariants_dropped(t, s0)) == 1 || push!(out, "negative missed: a definition a claim reads, rewritten with only its own line, passes")
-        g("commit", "-q", "--amend", "-m", "limit\n\nInvariant-dropped: Limit — moot: the bound moved\nInvariant-dropped: Holds — moot: judged at the new bound")
+        g("commit", "-qam", "limit\n\nInvariant-dropped: Limit — moot: weakened, the bound moved")
+        any(r -> occursin("no `Invariant-dropped: Holds", r), invariants_dropped(t, s0)) || push!(out, "negative missed: a definition a claim reads, rewritten with only its own line, passes")
+        write(m, "---- MODULE M ----\nLimit == 2\nHolds == x <= Limit\nFair == WF_x(Next)\nSpec == Init /\\ [][Next]_x /\\ Fair\n====\n")
+        g("commit", "-q", "--amend", "-am", "limit\n\nInvariant-dropped: Limit — moot: strengthened, the bound lowered\nInvariant-dropped: Holds — moot: strengthened, judged at the lower bound")
         isempty(invariants_dropped(t, s0)) || push!(out, "negative missed: a definition a claim reads, named with the claim, is refused")
-        write(m, "---- MODULE M ----\nLimit == 4\nHolds == x <= Limit\nFair == TRUE\nSpec == Init /\\ [][Next]_x /\\ Fair\n====\n"); g("commit", "-qam", "fair")
+        write(m, "---- MODULE M ----\nLimit == 2\nHolds == x <= Limit\nFair == TRUE\nSpec == Init /\\ [][Next]_x /\\ Fair\n====\n"); g("commit", "-qam", "fair")
         any(r -> occursin("Fair", r), invariants_dropped(t, s0)) || push!(out, "negative missed: the specification's fairness rewritten unnamed passes")
+        # polarity read from the formula (the lead's ruling on c964a22f): a name under a negation, left of ~> and in an
+        # IF's condition is negative, so strengthening it under a moot line is refused; in a consequent (<>Done) it is
+        # positive, so weakening it is refused and strengthening it passes; a bullet list's item beside an implication
+        # stays positive
+        local polar(claim, kind, dir) = begin
+            write(c, "SPECIFICATION Spec\n$kind Holds\n")
+            write(m, "---- MODULE M ----\nDone == x = 3\nP == y = 1\nHolds == $claim\n====\n"); g("add", "-A"); g("commit", "-qm", "p0")
+            local p0 = readchomp(`git -C $t rev-parse HEAD`)
+            write(m, "---- MODULE M ----\nDone == x = 3 /\\ z = 0\nP == y = 1\nHolds == $claim\n====\n")
+            g("commit", "-qam", "p1\n\nInvariant-dropped: Done — moot: $dir, z joins it\nInvariant-dropped: Holds — moot: $dir, with Done")
+            invariants_dropped(t, p0)
+        end
+        for (claim, kind, what) in (("~Done \\/ P", "INVARIANT", "under a negation"), ("IF Done THEN P ELSE TRUE", "INVARIANT", "in an IF's condition"),
+                                    ("Done ~> P", "PROPERTY", "left of ~>"))
+            any(r -> occursin("rewrites Done", r) && occursin("strengthened under a moot line", r), polar(claim, kind, "strengthened")) ||
+                push!(out, "negative missed: a name $what strengthened under a moot line passes")
+        end
+        any(r -> occursin("rewrites Done", r) && occursin("weakened under a moot line", r), polar("<>Done", "PROPERTY", "weakened")) ||
+            push!(out, "negative missed: a name in a consequent (<>Done) weakened under a moot line passes")
+        isempty(polar("<>Done", "PROPERTY", "strengthened")) || push!(out, "negative missed: a name in a consequent strengthened under a moot line is refused")
+        isempty(polar("\n  /\\ Done\n  /\\ P => y = 2", "INVARIANT", "strengthened")) ||
+            push!(out, "negative missed: a bullet list's item beside an implication, strengthened under a moot line, is refused")
+        any(r -> occursin("rewrites Done", r) && occursin("strengthened under a moot line", r), polar("P <=> Done", "INVARIANT", "strengthened")) ||
+            push!(out, "negative missed: a name right of <=> strengthened under a moot line passes")
+        # an antecedent reached only through another definition (A84S1), and `moot: gone` only where the subject is
+        # (A84S2): the definition defined nowhere at HEAD and no claim reading it listed
+        local judged(before, after, cb, ca, msg) = begin
+            write(c, cb); write(m, "---- MODULE M ----\n" * before * "====\n"); g("add", "-A"); g("commit", "-qm", "q0")
+            local q0 = readchomp(`git -C $t rev-parse HEAD`)
+            write(c, ca); write(m, "---- MODULE M ----\n" * after * "====\n"); g("add", "-A"); g("commit", "-qm", "q1\n\n" * msg)
+            invariants_dropped(t, q0)
+        end
+        any(r -> occursin("rewrites Finished", r) && occursin("strengthened under a moot line", r),
+            judged("Finished == x = 3\nDone == Finished /\\ w = 0\nHolds == Done => y = 1\n", "Finished == x = 3 /\\ z = 0\nDone == Finished /\\ w = 0\nHolds == Done => y = 1\n",
+                   "SPECIFICATION Spec\nINVARIANT Holds\n", "SPECIFICATION Spec\nINVARIANT Holds\n",
+                   "Invariant-dropped: Finished — moot: strengthened, z joins it\nInvariant-dropped: Holds — moot: strengthened, with Finished")) ||
+            push!(out, "negative missed: an antecedent reached through another definition, strengthened under a moot line, passes")
+        local gone_before = "Done == x = 3\nP == y = 1\nHolds == Done => P\n"
+        isempty(judged(gone_before, "P == y = 1\nP2 == P\n", "SPECIFICATION Spec\nINVARIANT Holds\n", "SPECIFICATION Spec\nINVARIANT P2\n",
+                       "Invariant-dropped: Holds — moot: gone, the end state goes\nInvariant-dropped: Done — moot: gone, the model has no end")) ||
+            push!(out, "negative missed: a definition and its claim both gone under `moot: gone` are refused")
+        any(r -> occursin("still lists Holds", r),
+            judged(gone_before, "P == y = 1\nHolds == P\n", "SPECIFICATION Spec\nINVARIANT Holds\n", "SPECIFICATION Spec\nINVARIANT Holds\n",
+                   "Invariant-dropped: Done — moot: gone, the model has no end\nInvariant-dropped: Holds — moot: strengthened, no longer conditional")) ||
+            push!(out, "negative missed: a definition gone under `moot: gone` while a claim that read it is still listed passes")
     end
     return out
 end
@@ -3481,7 +3713,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every record it turns to a weaker kind (:compiled to any other, :outside to :rejects; A55E1), its records read by Julia's parser so one written over several lines counts, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line); and the D45 debt list only shrinks (A66E2, dev/LEDGER.md D20): a line of dev/quarantine_unpinned.txt, comments and blank lines aside, that the file at that merge base does not hold (counted, so a line written twice adds one) is refused with no escape, so a new unpinned @quarantine pins its source and never joins the list, and a line traded for another is an addition; and a change that rewrites a debt-listed definition's body (by its debt key, its definition as Julia's parser reads it, whitespace and comments aside) while leaving its line is refused, naming it, since the commit that changes the body owns it, pins it and deletes its line (the lead's ruling, from the monitor, R1); the pin tables JULIA_FILES, LLVM_FILES and DART_FILES, whose rows are the pins themselves, an exact allowlist until 1.K, take added rows and nothing else. And a model's claims are never weakened unnamed (A69E2, dev/LEDGER.md D11): each name a dev/formal MC*.cfg's INVARIANT(S) or PROPERTY(IES) lists at that merge base and not at HEAD, and each Broken cfg the change removes, is named by a line `Invariant-dropped: <Name> — carried by <NewName>` (a successor the cfg lists at HEAD; for a Broken cfg, a cfg at HEAD) or `Invariant-dropped: <Name> — moot: <reason>`; and so is a claim's definition rewritten in a module (its text, comments and whitespace aside, against the base; a line naming it), a cfg's constant removed or reassigned or the definition it names rewritten (`Invariant-dropped: <cfg>.<CONSTANT> — ...`), and a correct cfg removed, each of its claims named (A74E1); a definition a claim reads, recursively, and Init and Next with theirs, is a claim's for this (A75E2). A definition a claim reads, rewritten, needs a line naming that claim too, and each cfg's SPECIFICATION, INIT and NEXT are roots beside Init and Next (A83S2, A76E4). A definition read left of an implication in a claim is that claim's antecedent: no moot reason excuses its rewrite, and its line carries it to a definition at HEAD holding its old text (march-monitor-a). Behavior, run here: seven planted messages and a scratch repository for removals, fourteen planted records and messages and a scratch repository for lowerings, and a scratch repository's five debt-list changes (none, a deletion with a reworded comment, a trade, a line written twice, a base naming no commit) and three changes to a debt-listed body (re-spaced, rewritten with its line kept, rewritten and pinned with its line deleted), and a scratch repository's model changes (no drop; a dropped invariant unnamed, carried by a successor the cfg lacks, carried by one it lists, moot; a removed Broken cfg unnamed and named moot; a base naming no commit; a claim's definition re-spaced, weakened unnamed and changed under a line; a constant shrunk unnamed; a correct cfg removed with two claims unnamed; a definition no claim reads rewritten, one a claim reads weakened unnamed, Init rewritten unnamed; an antecedent strengthened under a moot line refused, and carried by its old text at HEAD passed; a definition a claim reads rewritten with only its own line refused and named with the claim passed; the specification's fairness rewritten unnamed refused), answer as stated (dev/CHARTER.md C10)",
+    "L227_removed_tests_are_named" => ("a change removes a test only by name (A33E1, restored 2026-10-28 when the blocking gate that held it was deleted): every test file under test/ the change deletes and every case of test/smoke_corpus.jl (dart's ported cases among them) or test/probe_corpus.jl it drops, measured from CHECK_BASE's merge base with HEAD (dev/check.sh's base: origin/wt2, or each landed commit's parent under dev/ship.sh), is named in one of its commits' messages by a line `Removes-test: <what> — <reason>`, <what> the file or `<corpus>:<case>`; `<corpus>:*` or the corpus names its cases only when the change leaves it with none, so a blanket never hides one dropped case among kept ones (audit 34); and a dart record is weakened only by name (A51E4, A53E2): every case of test/src/dart_tests.jl the change records :wt_bug that was not, and every record it turns to a weaker kind (:compiled to any other, :outside to :rejects; A55E1), its records read by Julia's parser so one written over several lines counts, is named by a line `Lowers-record: <case> — <reason>`, so the known WT bugs grow and a port loses ground only where a commit says why (a record raised, or a new case recorded otherwise, needs no line); and the D45 debt list only shrinks (A66E2, dev/LEDGER.md D20): a line of dev/quarantine_unpinned.txt, comments and blank lines aside, that the file at that merge base does not hold (counted, so a line written twice adds one) is refused with no escape, so a new unpinned @quarantine pins its source and never joins the list, and a line traded for another is an addition; and a change that rewrites a debt-listed definition's body (by its debt key, its definition as Julia's parser reads it, whitespace and comments aside) while leaving its line is refused, naming it, since the commit that changes the body owns it, pins it and deletes its line (the lead's ruling, from the monitor, R1); the pin tables JULIA_FILES, LLVM_FILES and DART_FILES, whose rows are the pins themselves, an exact allowlist until 1.K, take added rows and nothing else. And a model's claims are never weakened unnamed (A69E2, dev/LEDGER.md D11): each name a dev/formal MC*.cfg's INVARIANT(S) or PROPERTY(IES) lists at that merge base and not at HEAD, and each Broken cfg the change removes, is named by a line `Invariant-dropped: <Name> — carried by <NewName>` (a successor the cfg lists at HEAD; for a Broken cfg, a cfg at HEAD) or `Invariant-dropped: <Name> — moot: <reason>`; and so is a claim's definition rewritten in a module (its text, comments and whitespace aside, against the base; a line naming it), a cfg's constant removed or reassigned or the definition it names rewritten (`Invariant-dropped: <cfg>.<CONSTANT> — ...`), and a correct cfg removed, each of its claims named (A74E1); a definition a claim reads, recursively, and Init and Next with theirs, is a claim's for this (A75E2). A definition a claim reads, rewritten, needs a line naming that claim too, and each cfg's SPECIFICATION, INIT and NEXT are roots beside Init and Next (A83S2, A76E4). Each name a claim reads has a polarity, read from the formulas through every definition (negative under a negation, left of => and ~>; both under <=>, in an IF's condition, a quantifier's bound, a LET's definitions, a CASE and an operator's arguments; positive otherwise, flipped under each negation; a name the formulas leave unread both): a rewritten one's line either carries it to a definition at HEAD holding its old text, each claim reading it then carried to a claim a cfg at HEAD lists that reads that definition, so the old claim is still model-checked (A84E4), or is moot stating its direction (`moot: strengthened …` or `moot: weakened …`), never a strengthening at negative polarity or a weakening at positive, or `moot: gone …` only where the definition is defined nowhere at HEAD and no cfg at HEAD lists a claim that read it (march-monitor-a; the lead's ruling on c964a22f; A84S1, A84S2). Its stated limit: Init, Next and Spec carry no polarity here, so a definition only they read is rewritten under any line; restricting Init or Next (fewer behaviours) weakens every claim as a strengthened antecedent does, and this lock does not judge it: TLC's Broken variants guard it. Behavior, run here: seven planted messages and a scratch repository for removals, fourteen planted records and messages and a scratch repository for lowerings, and a scratch repository's five debt-list changes (none, a deletion with a reworded comment, a trade, a line written twice, a base naming no commit) and three changes to a debt-listed body (re-spaced, rewritten with its line kept, rewritten and pinned with its line deleted), and a scratch repository's model changes (no drop; a dropped invariant unnamed, carried by a successor the cfg lacks, carried by one it lists, moot; a removed Broken cfg unnamed and named moot; a base naming no commit; a claim's definition re-spaced, weakened unnamed, weakened under a moot line, rewritten under a moot line stating no direction and strengthened under one; a constant shrunk unnamed; a correct cfg removed with two claims unnamed; a definition no claim reads rewritten, one a claim reads weakened unnamed, Init rewritten unnamed; an antecedent strengthened under a moot line refused, its claim carried to a successor no cfg lists refused, to a listed one not reading the carried definition refused, and to a listed one reading it passed; a name strengthened under a negation, in an IF's condition, left of ~>, right of <=> and reached through another definition each refused, a definition gone with its claim under `moot: gone` passed and gone while a claim that read it is still listed refused, one in a consequent (<>Done) weakened refused and strengthened passed, and a bullet list's item beside an implication strengthened passed; a definition a claim reads rewritten with only its own line refused and named with the claim passed; the specification's fairness rewritten unnamed refused), answer as stated (dev/CHARTER.md C10)",
         () -> begin
             local base = get(ENV, "CHECK_BASE", "origin/wt2")
             local v = vcat(removals_unnamed(ROOT, base), removals_negatives_missed(), lowerings_unnamed(ROOT, base), lowerings_negatives_missed(),
