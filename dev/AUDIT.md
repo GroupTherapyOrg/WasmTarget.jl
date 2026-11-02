@@ -9232,3 +9232,62 @@ collectInitializerUsages counts as a gap.
 
 Resolution: this entry lands alone, prose only. A91E1, A91S1, A91S2, A84E1, A86S3 and A92E1 leave their rows. Fix
 first: A93E2. 1.K: A93E2. 1.D: A93E1, A93S1, A93S3, A93S5. 1.F: A93S4. 1.L: A93S2, A93S6.
+
+## 2026-11-02 — audited through 28e49629 (2d848ea7..28e49629: the stack-frame regex pin, Ryu for LLVM's module, the block grammar cross-check, jl_egal of host references, Type{X} classed by its kind, one selector id, the trailer and held-lane refusals, the runners at _computeLints)
+
+The ninety-fourth audit, beside the work, covers the 13 commits of 2d848ea7..28e49629 that are not audit entries
+(385ecabb, entry 93), read under Dale's R1 and R2. Standing items. Three commits put a blank line between `Charter:`
+and `Co-Authored-By` (24201341, c371e764, 4b892d06), so git reads no Charter trailer in them (A94E2). No new silent
+catch. The debt list stays at 354; the no-counterpart list goes from 12 to 11 at a155ec54 and to 5 at 28e49629. No
+commit in range quotes a src count. D13: by f4161f99's body, 24201341 landed about ten minutes after its lane was
+held. Earlier findings: 3a28f94c fixes A92E2, 71aa7393 fixes A92S2, 2dcfc53e fixes A92S4, c371e764 fixes A92S6,
+93d070d1 fixes A87E2, 4b892d06 fixes A93S5, and 5c326aba rules A92S1; f975ecef fixes A92S3 only by a cross-check
+(A94S2), 2c526b77 fixes A93S6 only in the client hook (A94E2), and a155ec54 with 28e49629 fixes A93E2 but leaves part
+of it (A94E1). Findings: A94E1, A94E2, A94S1 to A94S4.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — get_concrete_class_id_range now answers Type{X} with the ranges of typeof(X)
+(class_info.jl:559-560); subtype.c:2511 jl_isa's `jl_is_type_type` arm is the line the commit cites. The is and as
+checks are guarded: told_by_class refuses Type{X} at types.jl:650 and at classes.jl:64; the field-selector, getfield
+and nfields readers use the set as a set of classes. (A94S3, low, D6) callers enforce the "never a membership test"
+rule and the range enforces nothing: the typetagis intrinsic (intrinsics.jl:830) reads it unguarded, safe today only
+because every K is a literal kind (rtutils.jl:80, type.jl:124-246); kind_isa reaches the isa path only, and no case
+reaches the as check. c371e764's key is exact, since field_selector_calls is unique per name and setter
+(classes.jl:788).
+
+Area: emission and diagnostics — the standalone arm calls the rooted throw_host_reference_egal (packages.jl:45) and
+then emits unreachable (intrinsics.jl:1676-1679): it never answers. is_standalone is translator.dart:112
+`options.standalone` (translator.jl:625). (A94S4, low, D9) the raise comes before the null tests at :1682, so two null
+host fields raise where JSValue's == answers egal without a JS runtime.
+
+Area: enforcement and prose — :73 is `final _stackFrameLocationPattern`, a regex pinned at a regex; Ryu.jl:1 is
+`module Ryu`; gf.c:3017 is jl_method_table_insert. f4161f99 matches basename(WT_DEPOT_DIR), which ship.sh:101 sets to
+the lane, the same name ship.sh:37 matches in wt-held. _computeLints (library_analyzer.dart:400) loops over the
+registered rules and reports through the reporter, a fair counterpart for a runner. (A94S1, low, D7) the stated
+difference "runs it once over WasmTarget's records" is false for check_anchors_resolve, check_typed_signatures and
+check_typed_fields, which read the dart checkout (parity.jl:1422-1431, :2221, :2370), and for check_mirrors, which
+converts Julia's forms; it also leaves out that each check throws at its first fault and returns 0 (:1975-1976), where
+dart reports and goes on, so the commit's "counts its faults" is wrong. (A94E1, medium, D20, R1) three of the list's
+five entries fail its own criterion: check_quarantine_pinned names its own counterpart (:1543) and resolves reasons
+through the debt-listed _reason_unpinned (:1553; quarantine_unpinned.txt:274); check_no_counterpart does the same at
+:1606; check_precedent_kinds reads Julia's sources (:1625, :1651). The new line's reason, "no pinned checkout", is not
+the criterion. (A94E2, medium, D19) the commit-msg hook lives only on the client, and its installed copy changed at
+06:04: c371e764 and 4b892d06 were committed before it and landed without a trailer, and check.sh reads trailers only
+for Charter-change (:184). (A94S2, low, D5) three readers of the block grammar remain, skeleton.jl:2300,
+merge_packages.sh:14 and parity_ratchet.jl:2784; L210 now cross-checks them, but they are still three.
+
+stopgap in disguise: A92S3 closed by a ratchet over three copies of one grammar (A94S2); the no-counterpart list
+holding definitions by ruling rather than by its criterion (A94E1).
+
+precedent: library_analyzer.dart:400, dap_adapters utils.dart:73 and :99, translator.dart:112 and js_helper.dart:42
+and :151 at the dart pin; julia subtype.c:2511, gf.c:3017, julia.h:136, builtins.c:100, base/ryu/Ryu.jl:1.
+
+R1: the regex, Ryu and _computeLints pins are near 1:1 matches of the same kind. Three listed definitions have no
+ported counterpart and fail the exemption's criterion (A94E1). R2: no stub is called complete; Type{X}'s run-time test
+stays a located gap (run_time_type_gap), and so does apply_type on a type only run time knows
+(intrinsics.jl:1197-1203, jl_apply_type's type cache), on which dart_is/is4 waits (dart_tests.toml:4266).
+
+Resolution: this entry lands alone, prose only. A92E2, A92S1, A92S2, A92S3, A92S4, A92S6, A87E2, A93E2, A93S5 and
+A93S6 leave their rows. Fix first: A94E1. 1.K: A94E1, A94S1. 1.L: A94E2. 1.C: A94S2, A94S3. 1.D: A94S4. 1.F carries
+the apply_type gap as a blocked line, the lead's ruling.
