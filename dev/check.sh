@@ -167,6 +167,12 @@ for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD" -- dev/CHARTER.md
 done
 echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $SHARDS reported" 
 [ $trc -eq 0 ] || { echo "check: src tests red"; grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 1; }
+# every shard reports its summary, or the check is red: a shard whose output is lost passed on its exit status alone, its
+# tests unread (fd65f41e's check read "0 of 6 reported" and was green, D9)
+reported=$(grep -cE '^src ' .wtd/src_tests.out)
+[ "$reported" -eq "$SHARDS" ] || { echo "check: src tests red, $reported of $SHARDS shards reported a summary"; exit 1; }
+# the ratchet reports its charter block, or the check is red, for the same reason
+grep -q '── charter' .wtd/ratchet.out || { echo "check: the ratchet reported no charter block (its output is lost or cut short)"; exit 1; }
 # a check whose tests pass replaces the kept file costs (instructions, G) with its measured ones, file by file, for
 # the next check's split, whatever D14's band then reads, since a file's instructions are its own; a row
 # for a file this tree, origin/wt2 rebased under the lane, does not hold is dropped, so one lane's unlanded file
