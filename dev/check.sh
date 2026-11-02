@@ -230,7 +230,7 @@ echo "check: ${path} s on the critical path (load ${c_load} from $(awk '{ printf
 # D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
 # change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget, then to 160 s the same day ("Raise
 # to 160 until the cuts") once the load counted whole by instructions read ~33 s and a src path ~155 s (load 33 +
-# max(ratchet 112, shards 122)). It stepped to 140 s when the shards' first-compile cut landed (7a2f804e, d0444541: the
+# max(ratchet 112, shards 122)). It stepped to 140 s when cuts 1 and 2 of the shards' first compile landed (7a2f804e, d0444541: the
 # first compile 348 -> 263 G; d0444541's own src check read 131 s) with the ratchet's L210 cache (ad31d8f6), and steps
 # to 120 s with SHARDS back to four (wt3-latency, A67E1/A68E2); the 60-s target is unchanged
 D14_RED=140
