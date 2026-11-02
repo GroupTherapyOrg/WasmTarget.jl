@@ -1940,6 +1940,13 @@ end
 #     (ExpandIntOp_TRUNCATE); bitcast between Int128 and UInt128: the same halves in the other class
 #   eq_int and ne_int: both halves equal, or not (ExpandIntOp_SETCC's equality, the halves'
 #     xors or'd and compared with zero, here their compares and'd)
+#   add_int and sub_int: the low halves' sum or difference, its carry or borrow an unsigned compare,
+#     added to or taken from the high halves' (ExpandIntRes_ADDSUB where the target has no carry
+#     operations, wasm's case: ISD::SETULT on the low result); neg_int: 0 less the value
+#   and_int, or_int, xor_int: each half's (ExpandIntRes_Logical); not_int: each half xor -1
+#   slt_int, sle_int, ult_int, ule_int: the low halves' unsigned compare where the high halves are
+#     equal, else the high halves' compare, signed or not (TargetLowering::IntegerExpandSetCCOperands'
+#     select on the high halves' equality)
 # Any other operation is not yet ported and rejects at its statement, located
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:int128}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
@@ -2015,6 +2022,60 @@ end
         get_half(x, T, 2); get_half(y, T, 2); WasmBuilder.i64_eq(b)
         WasmBuilder.i32_and(b)
         f === I.ne_int && WasmBuilder.i32_eqz(b)
+        return i32
+    end
+    local T = dart_type_of(self, args[1])
+    wide(T) && all(a -> dart_type_of(self, a) === T, args) || return nothing
+    local T_ = T::DataType
+    if length(args) == 2 && (f === I.add_int || f === I.sub_int)
+        local x = load(args[1])
+        local y = load(args[2])
+        local lo = add_local(code_gen, i64)
+        get_half(x, T_, 1); get_half(y, T_, 1)
+        f === I.add_int ? WasmBuilder.i64_add(b) : WasmBuilder.i64_sub(b)
+        WasmBuilder.local_set(b, lo)
+        return make(T_, () -> WasmBuilder.local_get(b, lo), () -> begin
+            get_half(x, T_, 2); get_half(y, T_, 2)
+            if f === I.add_int
+                # the carry: the low sum below an addend, unsigned
+                WasmBuilder.i64_add(b)
+                WasmBuilder.local_get(b, lo); get_half(x, T_, 1); WasmBuilder.i64_lt_u(b)
+                WasmBuilder.i64_extend_i32_u(b); WasmBuilder.i64_add(b)
+            else
+                # the borrow: the low minuend below the subtrahend, unsigned
+                WasmBuilder.i64_sub(b)
+                get_half(x, T_, 1); get_half(y, T_, 1); WasmBuilder.i64_lt_u(b)
+                WasmBuilder.i64_extend_i32_u(b); WasmBuilder.i64_sub(b)
+            end
+        end)
+    elseif length(args) == 1 && f === I.neg_int
+        # 0 less the value: the low half's negation, the high half's less the borrow of a nonzero low
+        local x = load(args[1])
+        return make(T_, () -> (WasmBuilder.i64_const(b, 0); get_half(x, T_, 1); WasmBuilder.i64_sub(b)), () -> begin
+            WasmBuilder.i64_const(b, 0); get_half(x, T_, 2); WasmBuilder.i64_sub(b)
+            WasmBuilder.i64_const(b, 0); get_half(x, T_, 1); WasmBuilder.i64_lt_u(b)
+            WasmBuilder.i64_extend_i32_u(b); WasmBuilder.i64_sub(b)
+        end)
+    elseif length(args) == 2 && (f === I.and_int || f === I.or_int || f === I.xor_int)
+        local x = load(args[1])
+        local y = load(args[2])
+        local op() = f === I.and_int ? WasmBuilder.i64_and(b) : f === I.or_int ? WasmBuilder.i64_or(b) : WasmBuilder.i64_xor(b)
+        return make(T_, () -> (get_half(x, T_, 1); get_half(y, T_, 1); op()), () -> (get_half(x, T_, 2); get_half(y, T_, 2); op()))
+    elseif length(args) == 1 && f === I.not_int
+        local x = load(args[1])
+        return make(T_, () -> (get_half(x, T_, 1); WasmBuilder.i64_const(b, -1); WasmBuilder.i64_xor(b)),
+                        () -> (get_half(x, T_, 2); WasmBuilder.i64_const(b, -1); WasmBuilder.i64_xor(b)))
+    elseif length(args) == 2 && (f === I.slt_int || f === I.sle_int || f === I.ult_int || f === I.ule_int)
+        local x = load(args[1])
+        local y = load(args[2])
+        local strict = f === I.slt_int || f === I.ult_int
+        local signed = f === I.slt_int || f === I.sle_int
+        # the low halves' unsigned compare, the high halves' compare (each strict), selected by the
+        # high halves' equality
+        get_half(x, T_, 1); get_half(y, T_, 1); strict ? WasmBuilder.i64_lt_u(b) : WasmBuilder.i64_le_u(b)
+        get_half(x, T_, 2); get_half(y, T_, 2); signed ? WasmBuilder.i64_lt_s(b) : WasmBuilder.i64_lt_u(b)
+        get_half(x, T_, 2); get_half(y, T_, 2); WasmBuilder.i64_eq(b)
+        WasmBuilder.select(b, i32)
         return i32
     end
     return nothing

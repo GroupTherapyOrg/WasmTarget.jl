@@ -256,11 +256,29 @@ wide(n::Int64) = Int64(Int128(n) % Int64) + Int64(Int128(n) == BIG) * 10 + Int64
     Int64(BIG % Int64) + Int64((BIG >> 64) % Int64) * 3 + Int64(UBIG % UInt32) +
     Int64(reinterpret(UInt128, Int128(n)) == UInt128(n % UInt64)) * 1000 + Int64(UInt128(UInt32(n % UInt32)) % Int32) * 7 +
     Int64(Int128(n) === Int128(n % Int32)) * 100_000 + Int64(Int128(n % Int8) % Int16)
+# add, sub, neg, the bitwise operations and the compares over the halves, the carries and borrows
+# between them crossed (BIG's low half near its top, typemax's wrap), each high half observed by a
+# compare against a constant
+const NEARTOP = Int128(typemax(UInt64)) - Int128(2)
+function arith(a::Int64, b::Int64)
+    local x = NEARTOP + Int128(a)
+    local y = BIG - Int128(b)
+    local r = x + y
+    local s = x - y
+    local u = reinterpret(UInt128, x)
+    local v = reinterpret(UInt128, -y)
+    return Int64(r % Int64) + 3 * Int64(s % Int64) + 5 * Int64((-x) % Int64) + 7 * Int64(((x & y) | (x ⊻ ~y)) % Int64) +
+        11 * Int64(x < y) + 13 * Int64(x <= y) + 17 * Int64(u < v) + 19 * Int64(u <= v) + 23 * Int64(r > BIG) +
+        29 * Int64(s < -BIG) + 31 * Int64(typemax(Int128) + Int128(a) < Int128(0)) + 37 * Int64(x > Int128(typemax(UInt64)))
+end
 end
 
-@testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions and equality" begin
+@testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions, equality, arithmetic and compares" begin
     local bytes = W.compile(Int128Cases.wide, (Int64,); optimize = false)
     queue_native!("wide", bytes, Int128Cases.wide, [(n,) for n in Int64[0, 5, -3, 300, typemax(Int64), typemin(Int64)]])
+    local abytes = W.compile(Int128Cases.arith, (Int64, Int64); optimize = false)
+    local edge = Int64[0, 1, 2, 3, -1, -3, typemax(Int64), typemin(Int64)]
+    queue_native!("arith", abytes, Int128Cases.arith, [(a, b) for a in edge for b in edge])
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin
