@@ -9351,3 +9351,57 @@ gap, and Record._getMasqueradedRecordRuntimeType still raises loud (type.jl:359)
 Resolution: this entry lands alone, prose only. A92S5, A90S2, A94E2, A93E2 and A93S1 leave their rows. Fix first:
 A95E2. 1.C: A95E2, A95S3. 1.D: A95E3, A95S1. 1.F: A95E1. 1.K: A95S2. 1.L: A95S4. 1.D also takes wt3-memory2's row for
 the 1.13 per-site muladd divergence, the lead's.
+
+## 2026-11-02 — audited through fe6c10d2 (99935030..fe6c10d2: Type{X} at run time, two comment-reference pins, the trailer checks moved, constant_unmade read once, a dropped re-ship)
+
+The ninety-sixth audit, beside the work, covers the six commits of 99935030..fe6c10d2 that are not audit entries
+(68ad36cc, entry 95), read under Dale's R1 and R2. Standing items. Every commit has a Charter trailer that git reads.
+No new silent catch. The debt list stays at 353; the no-counterpart list goes from 4 to 2 at d4c15214. The runtime gap
+is 8 sites naming 7 definitions at every commit, and every commit says so; 3b9f3832 removes run_time_type_gap's
+Type{X} arm, which sits outside that count. src stays at 3087. Earlier findings: d4c15214 fixes A94E1, e4a87c41 fixes
+A94S1 and 0eee4b11 fixes A95S4; 0613a505 narrows A89S1 and fixes A95E2 in substance (classes.jl:62 now calls
+constant_unmade), but no Fixes: line names A95E2. Findings: A96E1, A96E2, A96S1 to A96S3.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — the is_type_type intrinsic (intrinsics.jl:875) reads the Type{X} classes; _meet_value!
+meets every Type{X} type value as a class (classes.jl:259-262), so a test type never misses its range. (A96E2, medium,
+D9, D7) 0613a505's Internal at types.jl:607 assumes a class layout has already rejected every parameter
+constant_unmade rejects. That holds only for the primitive arm: its class-info arm is a Vararg's Core.TypeofVararg
+(classes.jl:42, :61), a class never laid out, because _meet_value! meets only the Vararg's element
+(classes.jl:247-248). An as check against a class with a Vararg tuple parameter would reach the Internal and report a
+program gap as WasmTarget's own bug; no case reaches it, and the commit's message itself scopes the premise to "a
+primitive not builtin and not 128-bit".
+
+Area: emission and diagnostics — the Type{X} arms follow subtype.c:1550 (`jl_typeof(tp0) == yd`) and jl_isa's :2523.
+(A96E1, medium, D3, D9) both decide jl_types_equal by `===` (type.jl:166, :307), on the premise "canonical type values
+egal exactly where equal", which Julia's own code denies: jl_types_equal (subtype.c:2353-2363) falls back from `a ==
+b` to jl_types_egal and then to subtyping both ways, and subtype.c:1556-1557 says "non-DataTypes can be type-equal to
+`Int`". A Union{Tuple{Int},Tuple{Float64}} value tested against Type{Tuple{Union{Int,Float64}}} would give a plausible
+false; no case pairs two types equal but not egal (KIND_VALUES are all DataTypes). (A96S1, low, D7) type.jl:148 still
+says a Type{X} "never reaches here", while :166 now decides it.
+
+Area: enforcement and prose — 0eee4b11's loops read `base` (check.sh:50) before its first use at :119, and nothing
+reassigns it. fe6c10d2 drops a commit only when the regenerated tree equals the parent's, its net change nil, so it
+cannot drop a commit that changed something elsewhere; in the exec, `exit 0` inside a brace group ends the exec shell,
+skipping check and push; a failed amend leaves the tree dirty, but ship.sh:139 aborts the rebase and cleanup_scratch
+removes the worktree. (A96S3, low, D12) neither the drop nor the exec's exit-3 rule has a case (`git grep
+regen_packages -- test` finds none). (A96S2, low, D7, R1) d4c15214's pins are near misses: :164 returns null and
+refuses nothing, while check_no_counterpart refuses where resolution succeeds, the inverse; :204's kind test is two
+`TODO(brianwilkerson): Report this error.` arms (:217, :222). The refusals the checks make are exactly what dart
+lacks. Both remaining list entries read only WasmTarget's own formats (parity.jl:956, :1530), so the list meets its
+criterion.
+
+stopgap in disguise: pointer identity standing for jl_types_equal (A96E1); an invariant asserted over half of its
+premise (A96E2).
+
+precedent: comment_reference_resolver.dart:164 and :204 at the dart pin; subtype.c:1550, :2353, :2511 and julia.h:1855
+at the julia pin; git-rebase(1) --exec.
+
+R1: the Type{X} rules follow jl_isa and subtype's datatype arm, but they leave out jl_types_equal (A96E1); two pins
+cite TODOs (A96S2). R2: nothing is called complete; the one remaining gap, the Vararg tuple, stays located, and A96E2
+mislabels a gap's kind rather than hiding it.
+
+Resolution: this entry lands alone, prose only. A94E1, A94S1 and A95S4 leave their rows. A95E2, fixed in substance by
+0613a505, keeps its row until a Fixes: line names it. Fix first: A96E1. 1.F: A96E1, A96E2, A96S1. 1.K: A96S2. 1.L:
+A96S3.
