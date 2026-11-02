@@ -106,11 +106,9 @@ bash dev/fetch_julia.sh > .wtd/fetch_julia.out 2>&1 || { echo "check: the julia 
 # each stage's CPU seconds (user + sys) go to .wtd/<stage>.time, printed unjudged, below. D14's band judges the load by
 # the instructions its whole process tree retires (dev/tree_instructions.jl): its precompile runs in a child process
 # rusage does not report, and its CPU seconds doubled on efficiency cores (13 CPU-s on a performance core, 28 on
-# efficiency cores, the same instructions, 2026-11-01); the counter's plant runs first, a tree at default and at
-# background QoS reading the same G. It reports and never refuses until it reads exactly: a busy machine starved the
-# 2-ms poll at background QoS and the plant read 5.56 G against 9.71, refusing a landing on scheduling (wt3-codegen-b,
-# 23:26, D17), so an exited descendant's last instructions are not yet counted exactly
-julia --startup-file=no dev/tree_instructions.jl --plant > .wtd/tree_plant.out 2>&1 || echo "check: the load's instruction counter's plant, reported, not judged: $(tail -1 .wtd/tree_plant.out)"
+# efficiency cores, the same instructions, 2026-11-01); the counter's plant runs first, a tree whose grandchild does
+# fixed work, counted whole and alike at default and background QoS within its band
+julia --startup-file=no dev/tree_instructions.jl --plant > .wtd/tree_plant.out 2>&1 || { echo "check: the load's instruction counter fails its plant: $(tail -1 .wtd/tree_plant.out)"; exit 1; }
 /usr/bin/time -l -o .wtd/load.time julia --startup-file=no dev/tree_instructions.jl .wtd/load.gi julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
 # test file and case it was running (WT_PROGRESS), never an hour of a pinned core (2026-10-28: a
@@ -203,11 +201,8 @@ gi() { awk '/instructions retired/ { printf "%d", $1 / 1e9 }' ".wtd/$1.time"; }
 # the ratchet's git: A54E1), while its CPU seconds hold them all; so a stage is judged at the larger of its
 # instructions at the measured rate and half its CPU seconds, an efficiency core's worst slowdown
 ps_of() { awk -v r="$2" '/instructions retired/ { g = $1 / 1e9 / r } NR == 1 { c = ($3 + $5) / 2 } END { printf "%d", (g > c ? g : c) }' ".wtd/$1.time"; }
-# the load at the shards' rate, from its tree's instructions (dev/tree_instructions.jl), or its CPU seconds where they
-# are more. A STOPGAP (D6, D20): the counter polls, and a poll starved under load misses an exiting process's last
-# instructions and reads low, a green on noise (D9, D17); CPU seconds read high on efficiency cores, never low. Its exit:
-# the counter reads each process at its exit, exactly, and this max goes
-c_load=$(awk -v r="$RATE_SRC" -v c="$(cpu load)" '{ g = $1 / r; printf "%d", (g > c ? g : c) }' .wtd/load.gi); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
+# the load at the shards' rate, from its tree's instructions (dev/tree_instructions.jl)
+c_load=$(awk -v r="$RATE_SRC" '{ printf "%d", $1 / r }' .wtd/load.gi); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
 for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
 echo "check: ${path} s on the critical path (load ${c_load} from $(awk '{ printf "%d", $1 }' .wtd/load.gi) G, ratchet ${p_ratchet}, src shards${shards}, from G instructions $(gi ratchet)$(for k in $(seq 1 $SHARDS); do printf ' %s' "$(gi "src_tests.$k")"; done)); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
