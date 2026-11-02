@@ -8721,3 +8721,167 @@ ba45a6c5 and db6e65ac; A82S1 leaves row 1.C, fixed in substance by ba45a6c5 (no 
 here). A85S5 stays in row 1.B, narrowed by 3d30144c, for the baseline's header. Open, their rows the lead's to write:
 A86E1, A86S2 and A86S3 for row 1.D (intrinsics, the LLVM ports anchored at the llvm pin); A86S1 for row 1.F (runtime
 and host imports). By owner: wt3-memory A86E1, A86S2 and A86S3; wt3-runtime A86S1.
+
+## 2026-11-01 — audited through a5a6fa39 (47865b93..a5a6fa39: a 128-bit product and shifts as compiler-rt's __multi3, __ashlti3, __lshrti3 and __ashrti3, the class-table path run against native isa, jl_to_typeof's table read from translator.classes, a second JS code at one site refused across procedures, js_helper.dart's areEqualInJS)
+
+The eighty-seventh audit, beside the work, covers the 5 commits of 47865b93..a5a6fa39 that are not audit entries
+(d8b65794, entry 86): 969b1cf0, d732aeb5, 30e9397e, 0d7a4769 and a5a6fa39, read under Dale's R1 and R2 as standing
+sections. Every finding rests on one exact command, quoted.
+Standing items. Each commit names its clause in a `Charter:` line (969b1cf0 C9, d732aeb5 C3, 30e9397e C1, 0d7a4769
+C6, a5a6fa39 C2). No silent catch: `git diff 47865b93..a5a6fa39 | grep -nE '^\+.*\bcatch\b'` gives 3 lines, two in
+entry 86's prose and one in test/src/js_string.jl, which tests the RejectionError it catches. The debt list reads 370
+(`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`), unchanged. src reads 3087 of 3404 at every commit of the
+range (`.git/wt-progress.tsv`), and at 51 landings (`awk -F'\t' '$3 ~ /src: 3087 of/' .git/wt-progress.tsv | wc -l`
+gives 51). d732aeb5's compiler work sits inside the int128 arm, one dart definition already counted (A86E1, A87E1);
+js_helper.dart joins RUNTIME_FILES, a runtime file, which the count does not read. D13 at the head: `tail -5
+.git/wt-landings.tsv | cut -f3` gives 150, 199, 164, 133 and 153, a median of 153 s, inside the 300-s target.
+Earlier findings: 969b1cf0's MARCH rows match audit 86's Resolution: A86E1, A86S2 and A86S3 in 1.D, A86S1 in 1.F,
+A83S1 and A82S1 gone from 1.C, A83S6 gone from 1.F, A85S5 kept in 1.B. A84S4 is fixed by 30e9397e (`Fixes:`):
+test/src/runtime.jl:134 compiles `Runtime._is_interface_subtype0` as the entry, over Shape, Circle and Plain and a
+Circle, a Square, a Plain and nothing, each against native `isa` (its ids read by a hand-staged pipeline, A87S3).
+A84S5 is fixed by 30e9397e in its D5 half only: `grep -rn small_typeof src test` gives nothing, and the table's
+entries read translator.classes (intrinsics.jl:839-840); its D9 half stands (A87S2). A86S1 is fixed by 0d7a4769
+(`Fixes:`): runtime_generator.jl:102-116 keeps site => code across procedures and refuses a second code, Internal,
+naming the site and both codes, at `dart2wasm/lib/js/runtime_generator.dart:60 RuntimeFinalizer.generateJsMethods`,
+and js_string.jl's keeps_first/keeps_second case reaches it. A82E1 is fixed by a5a6fa39 in its wt3-runtime half
+only: the arm still answers (A87E2). Carried, not re-read: A86E1, A86S2, A86S3, A85E1, A85S1 to A85S5, A84E1, A84E2,
+A84E4, A84S1 to A84S3, A83E1, A83S4, A83S5, A83S9, A83S10, A82S4, A82S5, A82S7, A80E2, A77S1, A80S2, A80S3, A77E1,
+A77E2, A77E3, A78S2, A76E5, A76E6, A68E3, A71E2, A69E1, A68E2, A68S4, A72E1, A67E1 and A51E3. Findings: A87E1,
+A87E2 and A87S1 to A87S3.
+
+Area: builder — no change under src/wasm_builder (`git diff --stat 47865b93..a5a6fa39 -- src/wasm_builder` gives
+nothing).
+
+Area: collection and planning — 30e9397e, to the lead's question. With null entries left for classes no as check
+names, can a read reach one at run time: not through the code generator, but by an argument, not by construction.
+`grep -rn "jl_to_typeof" src` shows one reader, `_throw_interface_type_as_check_error0` (src/runtime/common/type.jl:111),
+called only by `_as_interface_subtype0` (:101), whose one compiled call site is emitAsCheck (types.jl:561), which
+records its id the line before (:560). (A87S2, low, D9, R2) A84S5's D9 half stands under a `Fixes:` line. `sed -n
+839,846p src/intrinsics.jl` gives `NirConst(Core.Const(id in named ? info.cls : nothing))`, every other class's entry
+null, read by `WasmBuilder.ref_as_non_null(b)`, a trap with no location. `_as_interface_subtype0` is a runtime root
+(src/julia/packages.jl:23) and a Julia method a program can call, as the commit's own case calls its sibling
+`_is_interface_subtype0` (test/src/runtime.jl:134). A program calling it with a class id no as check names, in a
+module with no as check, reads a null entry and traps unlocated. A84S5's fix offered two forms: a called id the table
+lacks refused, located, or the entries read from translator.classes "for every class whose type is a constant, its
+exceptions named". 30e9397e reads translator.classes but keeps the as-checked ids alone. Is the remaining block
+stated: yes, in intrinsics.jl:824-827 and the commit message, and constants.jl:811 rejects it, Unquarantined and
+located (`a constant of the primitive type $cls, with no wasm representation`). But no row holds it: `grep -c
+"AddrSpace\|primitive constant" dev/MARCH.md` gives 0. Fix: the table holds the type of every class whose type value
+constants.jl makes; the classes it cannot make (GenericMemory's Core.AddrSpace{Core} parameter) are named in one list,
+and an as check naming one refuses at types.jl:560, located; the block goes to row 1.F. Owner: wt3-runtime.
+
+(A87S3, low, D12, Dale's rule on tests: no stage mimicry) Two of the range's cases stage the pipeline by hand instead
+of compiling. `sed -n 138,140p test/src/runtime.jl` gives `D.Translator(W.build_nir(W.check_subset(probe, ...)), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())`
+and `D._init_modules(t, nothing); collect(D.ClassInfoCollector(t))`. That is a second translator, built apart from
+the compile whose bytes run, without `_run_tfa_phase`'s generate_record_classes, _create_module_strategy,
+add_entry_points and prepare_component (src/compile.jl:278-282), and the case's class ids come from it. Likewise
+js_string.jl:128-141 builds an InteropMemberNamer, calls get_import_name per body ("as the code generator names it at
+the call") and calls generate_js_methods directly. a5a6fa39's case in the same file shows the direct route:
+`D.compile(opts, W.check_subset(f, (), "js_helper"))` (js_string.jl:48). Fix: 0d7a4769's case asserts the
+RejectionError from D.compile of `both`; 30e9397e's case reads each class id from the translator that emitted the
+bytes it runs. Owner: wt3-runtime.
+
+Area: emission and diagnostics — d732aeb5, to the lead's questions. Are __multi3, __ashlti3, __lshrti3 and
+__ashrti3 ported line for line: in substance, yes. The text was fetched at the llvm pin (`git show
+7a941dfb:compiler-rt/lib/builtins/<file>` in ~/.cache/wasmtarget/llvm-project, a blob:none clone). __mulddi3
+(multi3.c:19-36) and __multi3 (:40-49) match intrinsics.jl:2148-2175 statement for statement, each commented with its
+C line. __lshrti3 and __ashrti3 (lshrti3.c:21-36, ashrti3.c:21-38) match their arms at :2081-2104. __ashlti3
+(ashlti3.c:21-37) matches as well. Are they anchored at file:line: no, they are cited in comments only, the class
+A86E1 named an hour before. (A87E1, medium, R1, D1, D7) `grep -c '@parity "llvm\|@parity "compiler-rt\|precedent(llvm\|precedent(compiler-rt' src/intrinsics.jl`
+gives 0. `grep -n "compiler-rt\|LegalizeIntegerTypes" dev/fetch_llvm.sh src/julia/parity.jl` gives nothing, so
+neither compiler-rt nor LegalizeIntegerTypes.cpp is in LLVM_FILES or the fetch list. The four routines and
+ExpandIntRes_MUL and ExpandIntRes_Shift's libcall paths are three more closures inside `@parity
+"dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" ... ::Val{:int128}`. The shifts are at
+intrinsics.jl:2043-2106 and the product at :2148-2175, each cited by file name, no line (:1954-1961), and `ls src/llvm`
+gives no such file. The owner of A86E1 added to its debt while the row held it open. The claim the commit rests on
+holds at the pin: WebAssemblyISelLowering.cpp:175-181 expands SMUL_LOHI, UMUL_LOHI, MULHS, MULHU and SHL/SRA/SRL_PARTS
+for i32 and i64, with UMUL_LOHI custom only under wide arithmetic (:186-191). WebAssemblyRuntimeLibcallSignatures.cpp
+:103, :107, :111 and :116 give SHL_I128, SRL_I128 and SRA_I128 `i64_i64_func_i64_i64_i32` and MUL_I128
+`i64_i64_func_i64_i64_i64_i64`. And ExpandIntRes_MUL (LegalizeIntegerTypes.cpp:4710) falls to `RTLIB::getMUL(VT)`
+once expandMUL's OnlyLegalOrCustom fails. Fix: within A86E1's port, add compiler-rt/lib/builtins/multi3.c, ashlti3.c,
+lshrti3.c and ashrti3.c to LLVM_FILES and dev/fetch_llvm.sh. Port each routine as its own definition in a src file
+mirroring its path, `@parity "compiler-rt/lib/builtins/multi3.c:19 __mulddi3"`, :40 `__multi3`, ashlti3.c:21,
+lshrti3.c:21 and ashrti3.c:21, over two i64 halves. ExpandIntRes_MUL (:4710) and ExpandIntRes_Shift (:5227) go in
+src/llvm/legalize_integer_types.jl and call them, and the int128 arm calls those. Owner: wt3-memory.
+
+Do the ports follow the text where they claim to: with two departures, each giving the same answer. (A87S1, low, R1,
+D7) (a) Each compiler-rt shift tests `b & bits_in_dword` first and `b == 0` only inside its else (ashlti3.c:26-31,
+lshrti3.c:26-31, ashrti3.c:26-32). The port hoists the zero test above both (intrinsics.jl:2081-2083, `lget(amt);
+WasmBuilder.i64_eqz(b); WasmBuilder.br_if(b, blk)` before :2085's `i64_and` with 64). (b) The message says
+ExpandIntRes_Shift is ported, but its first two branches are neither ported nor named. `sed -n '5235,5236p;5240,5241p'
+llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp` gives `if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(N->getOperand(1)))`
+/ `return ExpandShiftByConstant(N, CN->getAPIntValue(), Lo, Hi);` and `if (ExpandShiftWithKnownAmountBit(N, Lo, Hi))`.
+The port takes the libcall path (:5315) for a NirConst amount too. Fix: within A87E1's port, each compiler-rt routine
+in its own branch order, and ExpandIntRes_Shift's constant and known-bit branches ported or named, with their reason.
+Owner: wt3-memory.
+
+Do the cases cover shift counts 0, 63, 64 and 127, and products overflowing across the halves: yes.
+test/src/code_generator_intrinsics.jl:294-296 runs Int128Cases.mulshift over six values of a (0, 1, -1, 3,
+typemax(Int64), typemin(Int64)) and the amounts 0, 1, 31, 63, 64, 65, 100, 127, 128, 129, 200, -1 and -64. The amounts
+reach Int64 shifts (`x << n`, `x >> n`, `u >>> n`), a UInt8 one (`n % UInt8`: 200, 255 and 192 cross the width) and a
+UInt128 one (`n % UInt128`: a negative n sets the high half, which :2054-2056 tests). Every __mulddi3 line runs with
+nonzero operands. `NEARTOP * Int128(a)` (:280) has a low half 2^64 - 3 whose upper 32 bits are set, against Int128(a)'s
+low half, all ones for a = -1 and 0x7fff... for typemax. So multi3.c:31 and :34 contribute, though y's low half
+(`BIG - n`, below 2^32) zeroes them in `x * y`. typemin(Int128) times a and the signed and unsigned products wrap past
+2^128. Both halves of each result are observed (`halves`, `uhalves`). The cases run at landing (dev/check.sh:149,
+test/src_tests.jl). Julia's rule for an amount of the width or more is read correctly: `sed -n 1653,1661p
+src/intrinsics.cpp` at the julia pin (6d172b0) gives `CreateShl(x, uint_cnvt(ctx, t, y))` under `CreateICmpUGE(y,
+... getPrimitiveSizeInBits())`, the compare at y's own width, unsigned. The port zero-extends a narrow amount after
+its unsigned view (:2060-2061), so an Int8 -1 reads 255 and is the width or more, as Julia's i8 compare answers.
+ifelse's widening to references (:1848-1853) emits wasm's typed select with the type (`WasmBuilder.select(b[], w)`), so a
+struct operand is valid.
+
+a5a6fa39, to the lead's questions. Is areEqualInJS a 1:1 port: yes. `git show
+898a1e4b:sdk/lib/_internal/wasm/js_common/js_helper.dart | sed -n 151,152p` gives `bool areEqualInJS(WasmExternRef?
+l, WasmExternRef? r) =>` / `JS<bool>("(l, r) => l === r", l, r);`, and js_helper.jl:12-13 is the same inline JS as a
+foreign call to the interop module, anchored at js_helper.dart:151. Is it reached by a case: yes. js_string.jl:43-60
+compiles same_in_js and differ_in_js with D.compile, beside the JS runtime, and runs each in node (1 for two JS strings
+of one text made apart, 0 for two texts). Each runtime holds `: (l, r) => l === r,`. But the finding it fixes is not
+fixed. (A87E2, medium, R2, D9, D12) `Fixes: A82E1` closes a finding whose substance, jl_egal's plausible false, stands.
+`sed -n 1687,1688p src/intrinsics.jl` gives `if Base.iskindtype(cls) || egal_by_identity(cls) || any(f ->
+host(info.struct_.fields[t.field_index[f] + 1].type), fields)` / `WasmBuilder.i32_const(b, 0)`. `grep -rn
+are_equal_in_js src` gives only its definition (js_helper.jl:12). A82E1's fix read "an externref field compared by it;
+until then the arm rejects, located, rather than answering". The commit message says the opposite of the code: `git
+log -1 --format=%B a5a6fa39` gives "wt3-memory's arm of jl_egal for such a field rejects until it exists". js_helper.jl:8
+says, in the present tense, "jl_egal compares a field holding a host reference by it". The comment above the arm
+(intrinsics.jl:1550-1552) still states the false answer as dart's. So one host reference boxed twice is egal natively
+and not here, as before, and a `Fixes:` line now frees the row that held it. Fix: the arm compares an externref field
+by `are_equal_in_js` (a runtime root, called as jl_egal is), or rejects, located, at once. js_helper.jl:8's sentence
+waits for that arm. A82E1's residue stays on a row. Owner: wt3-memory (the arm), wt3-runtime (js_helper.jl:8).
+
+0d7a4769, read under D9: the refusal is located at generateJsMethods' anchor and names the site and both codes
+(runtime_generator.jl:113). The same site with the same code in two procedures is still written once (:114).
+
+Area: enforcement and prose — 969b1cf0 changes MARCH.md alone, as audit 86's Resolution asked. No lock or ratchet
+changed in the range (`git diff --stat 47865b93..a5a6fa39 -- test/parity_ratchet.jl` gives nothing). Two commit
+messages call a finding fixed whose residue stands (A87S2, A87E2). Each is caught here, not by a check: L154 frees
+any row whose ID a `Fixes:` line names, so a fix called whole cannot be told from a whole fix (R2's ground).
+
+stopgap in disguise: none new. A87S2's argument that no read reaches a null is the same reasoning A84S5 named. It is
+correct today and enforced by nothing.
+
+precedent: compiler-rt/lib/builtins at the llvm pin (7a941dfb): multi3.c:19 __mulddi3 and :40 __multi3, ashlti3.c:21,
+lshrti3.c:21 and ashrti3.c:21. LegalizeIntegerTypes.cpp:4710 ExpandIntRes_MUL and :5227 ExpandIntRes_Shift (libcall
+at :5315). WebAssemblyISelLowering.cpp:175-191 and WebAssemblyRuntimeLibcallSignatures.cpp:103-116. julia/src/
+intrinsics.cpp:1653 (6d172b0). js_helper.dart:151 areEqualInJS and runtime_generator.dart:60 generateJsMethods at the
+dart pin. type.dart:1589 _asInterfaceSubtype0 and :1651 _throwInterfaceTypeAsCheckError0.
+
+Requirements: D1 and D7 (A87E1, A87S1). D2: d732aeb5 is differential, native the oracle, 78 cases; a5a6fa39's cases
+run in node, natively unrunnable, so they check JS's answer rather than Julia's. D3: Julia's codegen hands LLVM an
+i128, so LLVM's libcalls are Julia's answer, and intrinsics.cpp:1653's rule is ported. D5: small_typeof deleted, one
+map (30e9397e); A86S3's six sites unchanged (`grep -rn "sizeof([a-zA-Z_]*) == 16" src` still gives six). D9 (A87E2,
+A87S2; 0d7a4769 refuses across procedures). D12 (A87S3; A84S4's case reaches the path it names). D13 (median 153 s).
+D40 (src flat at 3087 for 51 landings).
+
+R1 and R2. R1: d732aeb5 ports compiler-rt's four routines faithfully, the nearest 1:1 counterpart, but it is not built
+as a port. It has no anchor, no pin entry and no own file, and sits inside a dart definition (A87E1, extending A86E1),
+with two departures from the text (A87S1). areEqualInJS is a 1:1 port, anchored. R2: two `Fixes:` lines call a
+finding fixed whose substance stands. A82E1's plausible false is unchanged (A87E2), and A84S5's null-past-a-gap is
+unchanged (A87S2). No stub is called complete, and src stays 3087 of 3404.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A84S4 and A86S1 leave row 1.F, fixed by 30e9397e
+and 0d7a4769. A84S5 leaves row 1.F, its D5 half fixed by 30e9397e and its D9 half carried as A87S2. A82E1 leaves row
+1.D, its port fixed by a5a6fa39 and its arm carried as A87E2. Open, their rows the lead's to write: A87E1, A87E2 and
+A87S1 for row 1.D (intrinsics, the compiler-rt ports anchored at the llvm pin, jl_egal's host arm); A87S2 and A87S3
+for row 1.F (runtime and host imports). By owner: wt3-memory A87E1, A87S1 and A87E2's arm; wt3-runtime A87S2, A87S3
+and A87E2's js_helper.jl:8 sentence.
