@@ -191,8 +191,6 @@ takes the default-value sentinel.
                 positional = f.kind === FieldReferenceKind_getter ? Type[] : Type[type_of_field(translator_, f.field)]
                 returns = f.kind === FieldReferenceKind_getter ? Type[type_of_field(translator_, f.field)] : Type[]
             end
-            # a selector's targets are its classes' accessors (build), never an interface target
-            (s::SelectorReference) => reject!(Internal("dart2wasm/lib/dispatch_table.dart:118 SelectorInfo._computeSignature: the interface target $(s.name) among $(self.name)'s targets"), "SelectorInfo._computeSignature")
         end
         local named = LinkedHashMap{String,Type}()
         length(returns) <= length(output_sets) ||
@@ -311,16 +309,22 @@ end
 """
 The selector of `target`. dart reads the member's selector id from TFA's metadata; a Julia selector
 is a field's, named by the field (DispatchTable.build), so a field accessor's selector is the one of
-its field's name and kind, and an interface target (`SelectorReference`) names its selector's name
-and kind itself. A Julia method is no instance member and has none: a located rejection.
+its field's name and kind. A Julia method is no instance member and has none: a located rejection.
+An interface target (`SelectorReference`, the method below) names its selector's name and kind itself.
 """
 @parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" function selector_for_target(self::DispatchTable, target::Reference)::SelectorInfo
     local at = "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget"
-    local name, is_setter = @exhaustive target::Reference begin
+    local f = @exhaustive target::Reference begin
         (m::MethodInstance) => reject!(Internal("$at: $m, no instance member, has no selector"), at)
-        (f::FieldReference) => (field_name(f.field), f.kind === FieldReferenceKind_setter)
-        (s::SelectorReference) => (s.name, s.kind === FieldReferenceKind_setter)
+        (f::FieldReference) => f
     end
+    return selector_for_target(self, SelectorReference(field_name(f.field), f.kind))
+end
+
+# an interface target names its selector: the one of its name and kind
+@parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" function selector_for_target(self::DispatchTable, target::SelectorReference)::SelectorInfo
+    local at = "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget"
+    local name, is_setter = target.name, target.kind === FieldReferenceKind_setter
     for (_, selector) in self._selector_info
         selector.name == name && selector.is_setter == is_setter && return selector
     end

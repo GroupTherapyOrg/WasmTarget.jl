@@ -1676,7 +1676,7 @@ of one target is a direct call of that target's function; otherwise the receiver
 and the call goes through the dispatch table (callDispatchTable), or a polymorphic dispatcher where
 the selector has static ranges beside its table's.
 """
-@parity "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall" function _virtual_call(self::AstCodeGenerator, node::NirStmt, interface_target::Reference, kind::_VirtualCallKind, push_receiver::Function, push_arguments::Function; use_unchecked_entry::Bool)::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall" function _virtual_call(self::AstCodeGenerator, node::NirStmt, interface_target::SelectorReference, kind::_VirtualCallKind, push_receiver::Function, push_arguments::Function; use_unchecked_entry::Bool)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"
     kind != _VirtualCallKind_Get || !use_unchecked_entry ||
         reject!(Internal("$at: a getter's unchecked entry"), "$(self.enclosing_member)")
@@ -1687,7 +1687,7 @@ the selector has static ranges beside its table's.
     local selector = selector_for_target(translator.dispatch_table[], reference)
     local signature = selector.signature[]
     local name = entry_point_name(selector, use_unchecked_entry)
-    reference isa SelectorReference && selector.name == reference.name ||
+    selector.name == reference.name ||
         reject!(Internal("$at: the selector $(selector.name) for $reference"), "$(self.enclosing_member)")
     push_receiver(signature)
     local targets_ = targets(selector; unchecked = use_unchecked_entry)
@@ -2482,7 +2482,6 @@ end
                 ImplicitFieldAccessorCodeGenerator(translator, function_type, field, r.kind === FieldReferenceKind_getter, false)
             end
         end
-        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/code_generator.dart:3528 getInlinableMemberCodeGenerator: the interface target $(s.name), a selector's name, no member"), "getInlinableMemberCodeGenerator")
     end
 end
 

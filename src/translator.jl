@@ -856,7 +856,7 @@ row in the table) is unreachable. A Julia selector is a field's (src/dispatch_ta
 access on a receiver Julia's inference left abstract.
 """
 @parity "dart2wasm/lib/translator.dart:911 Translator.callDispatchTable" function call_dispatch_table(self::Translator, b::WasmBuilder.InstructionsBuilder, selector::SelectorInfo;
-        interface_target::Union{Nothing,Reference} = nothing, use_unchecked_entry::Bool)::Nothing
+        interface_target::Union{Nothing,Reference,SelectorReference} = nothing, use_unchecked_entry::Bool)::Nothing
     record_selector_use(self.functions[], selector, use_unchecked_entry)
     local offset = targets(selector; unchecked = use_unchecked_entry).offset
     if offset === nothing
@@ -1603,7 +1603,6 @@ accessor dart's field arm (a Julia field carries no pragma).
             _should_inline_procedure_call(self, m, signature)
         end
         (r::FieldReference) => _should_inline_field_accessor(self, r, r.field)
-        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/translator.dart:2195 Translator.shouldInline: the interface target $(s.name), a selector's name, no member"), "Translator.shouldInline")
     end
 end
 

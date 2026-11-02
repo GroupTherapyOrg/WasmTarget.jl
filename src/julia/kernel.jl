@@ -61,8 +61,9 @@ The interface target of a field access on a receiver Julia's inference left abst
 InstanceGet's and InstanceSet's interfaceTargetReference, the member the receiver's static type
 declares, which DispatchTable.selectorForTarget reads to find the call's selector. A Julia abstract
 type declares no field, so the reference names the selector itself: the field's name as
-field_selector_calls names it, and the accessor's kind, a getter or a setter. It is no member: no
-function is made or called for it.
+field_selector_calls names it, and the accessor's kind, a getter or a setter. It is no member, so it
+stands outside the Reference sum: no function is made or called for it, and only _virtualCall,
+callDispatchTable and selectorForTarget take one.
 
 precedent(dart: pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfaceTargetReference, a Reference to a
 member of the static type). Julia's differs: the static type declares no member, so the reference
@@ -83,8 +84,9 @@ end
     Reference
 
 The Kernel table's Reference: a member's MethodInstance (Julia compiles one function per
-specialization, and a MethodInstance names one callable), a field's accessor, a `FieldReference`, or
-an interface target, a `SelectorReference`.
+specialization, and a MethodInstance names one callable) or a field's accessor, a `FieldReference`.
+An interface target names no member, so it is no Reference: a `SelectorReference`, which only
+_virtualCall, callDispatchTable and selectorForTarget take.
 
 precedent(dart: kernel/lib/canonical_name.dart's Reference, which names a member or its getter,
 setter, initializer or tear-off). Julia's differs: a method has no tear-off (a Julia function is a
@@ -92,7 +94,7 @@ value already), so the sum is a method's specialization or a field's accessor.
 """
 # the sum's kinds are named in the module that declares it (@closed), Julia's MethodInstance among them
 import Core: MethodInstance
-@quarantine "Kernel's Reference (pkg/kernel/lib/canonical_name.dart:429 Reference) names a member or one of its accessors; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Reference = Union{MethodInstance, FieldReference, SelectorReference}
+@quarantine "Kernel's Reference (pkg/kernel/lib/canonical_name.dart:429 Reference) names a member or one of its accessors; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Reference = Union{MethodInstance, FieldReference}
 
 """
     KERNEL_TYPES
