@@ -9116,3 +9116,60 @@ inference finds (A91S1).
 
 Resolution: this entry lands alone, prose only. A78S2, A84E4, A84S1 and A84S2 leave their rows. Fix first: A91E1. 1.C:
 A91E1. 1.A6: A91S1. 1.F: A91S2.
+
+## 2026-11-02 — audited through de0224f0 (2f1910b2..de0224f0: selectorForTarget's one metadata map, the type test's general arm in emitIsTest, packages.jl's imports all generated and merged blanked, the no-counterpart list and the kind check)
+
+The ninety-second audit, beside the work, covers the 7 commits of 2f1910b2..de0224f0 that are not audit entries
+(75b024b2, entry 91): 7d4993a6, 133803d8, 493602a9, 052310fe, c6268af4, 0e38dfc1 and de0224f0, read under Dale's R1
+and R2. Standing items. Each commit names its clause. No new silent catch. The debt list goes from 364 to 363 at
+de0224f0. src stays at 3087 + 274 + 1 + 42. The runtime library goes from 12 sites naming 10 to 9 naming 8 at
+133803d8, which says so. D13: a median of 459 s from authoring and 240 s from ship; 493602a9 took 3045 s. Earlier
+findings: 7d4993a6 fixes A90S3; 133803d8 fixes A88S1; 052310fe fixes A90S1 and A90S4; de0224f0 fixes A90E1 but leaves
+A92E1 and A92E2. A91E1, A91S1, A91S2, A90S2, A88S4, A89S1 and A87E2 stand and were not re-read. Findings: A92E1, A92E2
+and A92S1 to A92S6.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — 7d4993a6 reads one map at selectorForTarget (dispatch_table.dart:440-443). (A92S6,
+low, D5) build derives a selector's id twice, at :387 `length(self._selector_info)` and at :419 `k - 1`, and :440
+still maps a selector back to its call by name. 052310fe's zip is sound: concrete_classes maps concrete_class_ids
+(classes.jl:726).
+
+Area: emission and diagnostics — 133803d8's anchors hold: type.dart:111 is _BottomType's, :138 _TopType's and :291
+_InterfaceType's `_checkInstance`. run_time_type_gap is the one predicate, used at types.jl:537 and :610 and
+rtutils.jl:173. Of the three sites dropped, :97 was reclassified, from Unported to Unquarantined, and not ported; the
+commit names it. (A92S5, low, D9) rtutils.jl:163 still says Type{X} "rejects, Unported", but :130 rejects
+Unquarantined.
+
+Area: enforcement and prose — (A92E1, medium, D20, D12, R1) de0224f0 deletes `julia/parity.jl
+construction_check(::Val{:check_anchors_resolve})::Int` from the debt list, whose rule makes a rewrite pin its body,
+and lists it as having no counterpart beside the list's own three checkers. Siblings of the same nature stay debt:
+check_quarantine_pinned and _quarantine_debt (quarantine_unpinned.txt:296, :274), and construction_check's
+typed_signatures, typed_fields and four others (:299-304). L227 refuses additions, so they can never join the list:
+they can only be pinned to near misses or stay on the debt list forever. (A92E2, low, D7) REASON_ANCHOR_RX
+(parity.jl:1446), a regex constant, is pinned at utils.dart:35 parseDartStackFrame, a function that filters by
+_isDartUri; the regex that finds a location inside a line is :73, an unanchored firstMatch, which ANCHOR_RX took
+(:1177, anchored `^…$`). parse_anchor's "a part that does not read is a refusal" is false: it returns nothing (:1206),
+as :99 returns null. (A92S1, low, D6) check_precedent_kinds skips constants and modules (:1628), skips any reason
+citing dart or LLVM (:1630), and treats a cited line of neither kind as a match (:1655), so it would not have refused
+the earlier mayThrow pin, or A92E2. (A92S2, low, R1) Libc (base/libc.jl:3) wraps libc through ccall and ports none of
+it; base/ryu/Ryu.jl:1 `module Ryu` holds ports of ulfjack/ryu. (A92S3, low, D5) the marker grammar is written three
+times: skeleton.jl:2192 and :2300, parity_ratchet.jl:2728 (which omits the roots block), and merge_packages.sh's awk,
+which does not pair names; the queued driver plant does not exist yet (`git grep merge_packages origin/wt2 -- test`
+gives nothing). (A92S4, low, D5) the base-side blank (parity_ratchet.jl:2732) is inert, since every later base passed
+L210: it is dead code. In ship.sh:134, regen runs before check before push, so no unjudged tree lands; skeleton.jl:23
+sets ROOT from @__DIR__, so regen cannot read a foreign ROOT; 0e38dfc1 refuses unpaired markers.
+
+stopgap in disguise: the exemption list is shrink-only only through L227, and the commit that created it chose what
+went on it (A92E1).
+
+precedent: dispatch_table.dart:440-443, type.dart:97, :111, :138, :291 and :585,
+pkg/dap_adapters/lib/src/utils.dart:35, :73 and :99 at the dart pin; julia base/libc.jl:3, base/ryu/Ryu.jl:1,
+base/stacktraces.jl:51, src/subtype.c:1419 and :2523.
+
+R1: _BottomType._checkInstance and _InterfaceType._checkInstance are near 1:1 ports, and so is parse_anchor at :99.
+REASON_ANCHOR_RX and the LLVM module are not (A92E2, A92S2). R2: no stub is called complete; the runtime count moved
+only at 133803d8, which names its reclassified :97 site.
+
+Resolution: this entry lands alone, prose only. A90E1, A90S1, A90S3, A90S4 and A88S1 leave their rows. Fix first:
+A92E1. 1.K: A92E1, A92E2, A92S1, A92S2. 1.E: A92S6. 1.F: A92S5. 1.C: A92S3, A92S4.
