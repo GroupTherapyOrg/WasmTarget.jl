@@ -873,8 +873,10 @@ end
 # dart sets the source map's file offset from the node; a NIR node has none, Julia's line table taking
 # that place with the source map (translateStatement)
 # one compiled body for every kind of node (@nospecialize, inferred once): the @exhaustive match below
-# dispatches on the kind, so a body per kind of caller's node would only repeat it
-@parity "dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression" @nospecializeinfer function translate_expression(self::AstCodeGenerator, @nospecialize(node::Union{NirValue,NirStmt}), expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+# dispatches on the kind, so a body per kind of caller's node would only repeat it; and one for every kind of
+# expected type, which each visitor then takes as dart's declared ValueType: a body per NumType and RefType
+# caller had compiled each visitor up to three times for each code generator (visit_static_get 14 times)
+@parity "dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression" @nospecializeinfer function translate_expression(self::AstCodeGenerator, @nospecialize(node::Union{NirValue,NirStmt}), @nospecialize(expected_type::WasmBuilder.IR.ValueType))::WasmBuilder.IR.ValueType
     try
         # dart's `node.accept1(this, expectedType)`: the visitor of the node's kind
         local result_type = node isa NirValue ? (@exhaustive node::NirValue begin
