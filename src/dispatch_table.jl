@@ -94,9 +94,10 @@ member never reads): `procedureAttributeMetadata` :399, `_selectorMetadata` :403
 """
 @parity "dart2wasm/lib/dispatch_table.dart:396 DispatchTable" struct DispatchTable <: AbstractDispatchTable
     # dart's procedureAttributeMetadata (:399), TFA's selector ids per member, read by selectorForTarget
-    # (:440-443): each field access a selector serves, by its call site (FieldAccessSite: Julia's site
-    # has no Member to key by), to its selector's id, written once by build (field_selector_calls' sites)
-    procedure_attribute_metadata::Dict{FieldAccessSite,Int}
+    # (:440-443), one map for both kinds of key, written once by build: each field accessor a selector
+    # holds (a FieldReference, a member's Reference) and each field access it serves, by its call site
+    # (FieldAccessSite: Julia's site has no Member to key by), to the selector's id
+    procedure_attribute_metadata::Dict{Union{FieldAccessSite,FieldReference},Int}
     translator::KernelNodes
     _selector_info::LinkedHashMap{Int,SelectorInfo}
     _table::Late{Vector{Union{Reference,Nothing}}}
@@ -107,7 +108,7 @@ member never reads): `procedureAttributeMetadata` :399, `_selectorMetadata` :403
     # its outer function
     function DispatchTable(::Val{:_}, translator::KernelNodes)
         local self
-        self = new(Dict{FieldAccessSite,Int}(), translator, LinkedHashMap{Int,SelectorInfo}(),
+        self = new(Dict{Union{FieldAccessSite,FieldReference},Int}(), translator, LinkedHashMap{Int,SelectorInfo}(),
             Late{Vector{Union{Reference,Nothing}}}("dart2wasm/lib/dispatch_table.dart:409 DispatchTable._table"),
             Late{IdDict{Reference,Int}}("dart2wasm/lib/dispatch_table.dart:413 DispatchTable._tableIndexForReference"),
             Late{WasmBuilder.TableBuilder}("dart2wasm/lib/dispatch_table.dart:415 DispatchTable._definedWasmTable"),
@@ -311,10 +312,11 @@ end
 @parity "dart2wasm/lib/dispatch_table.dart:427 DispatchTable" DispatchTable(translator::KernelNodes)::DispatchTable = DispatchTable(Val(:_), translator)
 
 """
-The selector of `target`. dart reads the member's selector id from TFA's metadata; a Julia selector
-is a field's, named by the field (DispatchTable.build), so a field accessor's selector is the one of
-its field's name and kind. A Julia method is no instance member and has none: a located rejection.
-An interface target (`SelectorReference`, the method below) names its selector's name and kind itself.
+The selector of `target`: the id build recorded for it in procedureAttributeMetadata (dart's
+`procedureAttributeMetadata[member]!` then getterSelectorId or methodOrSetterSelectorId, :440-443),
+then the selector of that id. A field accessor's id is recorded when build assigns it, its field's
+name and kind matched once to the selector made for them; an interface target's (the method below)
+for its call site. A Julia method is no instance member and has none: a located rejection.
 """
 @parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" function selector_for_target(self::DispatchTable, target::Reference)::SelectorInfo
     local at = "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget"
@@ -322,11 +324,9 @@ An interface target (`SelectorReference`, the method below) names its selector's
         (m::MethodInstance) => reject!(Internal("$at: $m, no instance member, has no selector"), at)
         (f::FieldReference) => f
     end
-    local name, is_setter = field_name(f.field), f.kind === FieldReferenceKind_setter
-    for (_, selector) in self._selector_info
-        selector.name == name && selector.is_setter == is_setter && return selector
-    end
-    reject!(Internal("$at: no selector for the field $name, which no call reads on a receiver Julia left abstract"), at)
+    local selector_id = get(self.procedure_attribute_metadata, f, nothing)
+    selector_id === nothing && reject!(Internal("$at: the accessor $f, for which build recorded no selector"), at)
+    return self._selector_info[selector_id]
 end
 
 # an interface target's selector: the id build recorded for its call site (dart's
@@ -412,11 +412,17 @@ formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the
         end
         # a Julia field is never abstract, so its accessor overrides any inherited one, and no
         # field carries dart's wasm:static-dispatch pragma
-        local add_member(reference::Reference) = (selectors[_create_selector_for_target(self, reference)] = reference)
+        # each accessor's selector id recorded once, its field's name and kind matched to the selector
+        # made for them (TFA's assignment of selector ids, procedureAttributeMetadata), then read by
+        # _createSelectorForTarget through selectorForTarget
+        local add_member(reference::FieldReference, k::Int) =
+            (self.procedure_attribute_metadata[reference] = k - 1; selectors[_create_selector_for_target(self, reference)] = reference)
         for field in class_instance_fields(cls, at)
             field.index == 0 && continue    # a primitive class's one value is no field to access
-            called(field.name, false) === nothing || add_member(FieldReference(field, FieldReferenceKind_getter))
-            field.mutable && called(field.name, true) !== nothing && add_member(FieldReference(field, FieldReferenceKind_setter))
+            local g = called(field.name, false)
+            g === nothing || add_member(FieldReference(field, FieldReferenceKind_getter), g)
+            local st = called(field.name, true)
+            field.mutable && st !== nothing && add_member(FieldReference(field, FieldReferenceKind_setter), st)
         end
         selectors_in_class[cls] = selectors
     end
