@@ -16,7 +16,12 @@
 (*     Type, every kind; a DataType itself.                                  *)
 (*   _meet_class!: a class met once (seen); it brings its supertype, then a  *)
 (*     kind's instance fields, or a concrete class's field types, each met   *)
-(*     as a value's type.                                                    *)
+(*     as a value's type; a tuple's record (TupleRecord) none, its fields     *)
+(*     top-typed.                                                            *)
+(*   the record pass: a tuple whose static type is open is the record of its *)
+(*     arity (_meet_tuple_record!), and after the walk each listed concrete   *)
+(*     tuple class brings its arity's record, the class its value has where   *)
+(*     convertType boxes it into an open slot (src/translator.jl).           *)
 (* dart reads its class list from the component; a Julia program declares   *)
 (* none, so its list is the types Julia inferred for its values (D3), and   *)
 (* every class a value can have must be on it: class_info numbers only these,*)
@@ -38,13 +43,16 @@
 (*   SupertypeClosed  every listed class but Any has its supertype listed    *)
 (*   FieldsClosed     every listed concrete class has its fields' classes    *)
 (*                    listed, a kind its instance fields'                    *)
-(*   NothingExtra     every listed class is required by the above            *)
+(*   NothingExtra     every listed class is required by the above, a        *)
+(*                    concrete tuple's record among them                     *)
 (*   Terminates       the walk ends                                          *)
 (* Broken variants: NoSeenGuard (Once), KindOnly (Type{X} brings its kind    *)
 (* alone: ValuesCovered), NoSupertype (SupertypeClosed), NoFields            *)
 (* (FieldsClosed), KindsAlways (Type{X} brings every kind: NothingExtra),    *)
 (* NoContents (a constant brings its own class alone: ValuesCovered, a Float *)
-(* held in a field declared Any never numbered).                             *)
+(* held in a field declared Any never numbered), NoRecordPass (a concrete     *)
+(* tuple class brings no record: ValuesCovered, its boxed value's class never *)
+(* numbered).                                                                *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -54,11 +62,16 @@ CONSTANTS
     NoSupertype,  \* Broken: a class brings no supertype
     NoFields,     \* Broken: a concrete class brings no field types
     KindsAlways,  \* Broken: Type{X} with X known brings every kind
-    NoContents    \* Broken: a constant brings its own class, not the values it holds
+    NoContents,   \* Broken: a constant brings its own class, not the values it holds
+    NoRecordPass  \* Broken: after the walk, a concrete tuple class brings no record
 
 \* the universe of classes, Julia's answers
 Classes == {"Any", "Number", "Int", "Float", "Node", "Nothing", "Pair", "Str", "TypeT",
-            "DataType", "UnionKind", "Box"}
+            "DataType", "UnionKind", "Box", "Tup", "Rec1"}
+\* a concrete tuple class (Tuple{Int}) and the record of its arity (TupleRecord{1})
+TupleClasses == {"Tup"}
+RecordOf(t) == "Rec1"
+Records == {"Rec1"}
 Kinds   == <<"DataType", "UnionKind">>
 KindSet == {Kinds[i] : i \in 1..Len(Kinds)}
 Supertype(t) == CASE t \in {"Int", "Float"}  -> "Number"
@@ -80,7 +93,10 @@ Bottom     == [k |-> "bottom", t |-> "", s |-> <<>>]
 FieldTypes(t) == CASE t = "Node" -> <<U(<<"Node", "Nothing">>)>>
                    [] t = "Pair" -> <<DT("Int"), DT("Float")>>
                    [] t = "Box"  -> <<DT("Any")>>
+                   [] t = "Tup"  -> <<DT("Int")>>
                    [] OTHER      -> <<>>
+\* an open tuple type of one element (Tuple{Any}): its value is the record
+OT         == [k |-> "opentuple", t |-> "Rec1", s |-> <<>>]
 
 \* constant objects, Julia's values: each its class and the objects it holds. A Box whose field,
 \* declared Any, holds a Float; a Node whose next is itself (a cycle the object guard ends)
@@ -94,14 +110,16 @@ Reach(S) == LET N == S \cup UNION {{Contents(o)[i] : i \in 1..Len(Contents(o))} 
 KindFields(k) == IF k = "DataType" THEN <<DT("Str")>> ELSE <<>>
 
 Forms == {DT("Int"), DT("Pair"), DT("Node"), DT("Str"), U(<<"Int", "Nothing">>), Va("Float"),
-          TyDT("Int"), TyU(<<"Int", "Float">>), TyTV, TyAll, Bottom, Cst("box"), Cst("cyc")}
+          TyDT("Int"), TyU(<<"Int", "Float">>), TyTV, TyAll, Bottom, Cst("box"), Cst("cyc"),
+          DT("Tup"), OT}
 Programs == {<<f>> : f \in Forms} \cup {<<f, g>> : f, g \in Forms}
 
 Range(q) == {q[i] : i \in 1..Len(q)}
 
 \* the classes a value of the type can have, and those a type value's layout names
 ValueClassesOf(f) ==
-    CASE f.k = "dt"        -> {f.t}
+    CASE f.k = "dt"        -> {f.t} \cup (IF f.t \in TupleClasses THEN {RecordOf(f.t)} ELSE {})
+      [] f.k = "opentuple" -> {f.t}
       [] f.k = "union"     -> Range(f.s)
       [] f.k = "vararg"    -> {f.t}
       [] f.k = "type"      -> {"DataType", f.t}
@@ -112,7 +130,8 @@ ValueClassesOf(f) ==
       [] f.k = "const"     -> {ClassOf(o) : o \in Reach({f.t})}
 
 FieldClasses(t) ==
-    IF t \in KindSet THEN UNION {ValueClassesOf(f) : f \in Range(KindFields(t))}
+    IF t \in Records THEN {}
+    ELSE IF t \in KindSet THEN UNION {ValueClassesOf(f) : f \in Range(KindFields(t))}
     ELSE IF IsConcrete(t) THEN UNION {ValueClassesOf(f) : f \in Range(FieldTypes(t))}
     ELSE {}
 
@@ -120,8 +139,8 @@ RECURSIVE Closure(_)
 Closure(S) == LET N == S \cup {Supertype(t) : t \in S} \cup UNION {FieldClasses(t) : t \in S}
               IN IF N = S THEN S ELSE Closure(N)
 
-VARIABLES program, stack, out, seen, seenObj
-vars == <<program, stack, out, seen, seenObj>>
+VARIABLES program, stack, out, seen, seenObj, phase
+vars == <<program, stack, out, seen, seenObj, phase>>
 
 Value(f) == [task |-> "value", f |-> f, t |-> ""]
 Class(t) == [task |-> "class", f |-> Bottom, t |-> t]
@@ -136,6 +155,7 @@ TypeOK ==
     /\ Range(out) \subseteq Classes
     /\ seen \subseteq Classes
     /\ seenObj \subseteq Objects
+    /\ phase \in {"walk", "records", "done"}
 
 Init ==
     /\ program \in Programs
@@ -143,6 +163,7 @@ Init ==
     /\ out = <<>>
     /\ seen = {}
     /\ seenObj = {}
+    /\ phase = "walk"
 
 \* _meet_value!: what a value's type brings
 MeetValue(f) ==
@@ -158,6 +179,7 @@ MeetValue(f) ==
       [] f.k = "typeall"   -> ClassesTasks(Kinds)
       [] f.k = "bottom"    -> <<>>
       [] f.k = "const"     -> <<Obj(f.t)>>
+      [] f.k = "opentuple" -> <<Class(f.t)>>
 
 \* _meet_constant!: an object walked once, its class met, then each object it holds
 MeetObject(o) ==
@@ -167,7 +189,8 @@ MeetObject(o) ==
 \* _meet_class!: the class listed once, then its supertype, then its fields
 MeetClass(t) ==
     (IF NoSupertype THEN <<>> ELSE <<Class(Supertype(t))>>) \o
-    (IF t \in KindSet THEN Values(KindFields(t))
+    (IF t \in Records THEN <<>>
+     ELSE IF t \in KindSet THEN Values(KindFields(t))
      ELSE IF IsConcrete(t) /\ ~NoFields THEN Values(FieldTypes(t))
      ELSE <<>>)
 
@@ -176,27 +199,41 @@ Step ==
     /\ LET x == Head(stack) IN
        IF x.task = "value"
        THEN /\ stack' = MeetValue(x.f) \o Tail(stack)
-            /\ UNCHANGED <<program, out, seen, seenObj>>
+            /\ UNCHANGED <<program, out, seen, seenObj, phase>>
        ELSE IF x.task = "object"
        THEN IF x.t \in seenObj
             THEN /\ stack' = Tail(stack)
-                 /\ UNCHANGED <<program, out, seen, seenObj>>
+                 /\ UNCHANGED <<program, out, seen, seenObj, phase>>
             ELSE /\ seenObj' = seenObj \cup {x.t}
                  /\ stack' = MeetObject(x.t) \o Tail(stack)
-                 /\ UNCHANGED <<program, out, seen>>
+                 /\ UNCHANGED <<program, out, seen, phase>>
        ELSE IF x.t \in seen /\ ~NoSeenGuard
        THEN /\ stack' = Tail(stack)
-            /\ UNCHANGED <<program, out, seen, seenObj>>
+            /\ UNCHANGED <<program, out, seen, seenObj, phase>>
        ELSE /\ seen' = seen \cup {x.t}
             /\ out' = Append(out, x.t)
             /\ stack' = MeetClass(x.t) \o Tail(stack)
-            /\ UNCHANGED <<program, seenObj>>
+            /\ UNCHANGED <<program, seenObj, phase>>
 
-Done == stack = <<>>
+\* the record pass, once the walk's stack is empty: each listed concrete tuple class's record
+RecordPass ==
+    /\ stack = <<>>
+    /\ phase = "walk"
+    /\ phase' = "records"
+    /\ stack' = IF NoRecordPass \/ \A t \in Range(out) : t \notin TupleClasses
+                THEN <<>> ELSE <<Class("Rec1")>>
+    /\ UNCHANGED <<program, out, seen, seenObj>>
+Finish ==
+    /\ stack = <<>>
+    /\ phase = "records"
+    /\ phase' = "done"
+    /\ UNCHANGED <<program, stack, out, seen, seenObj>>
+
+Done == stack = <<>> /\ phase = "done"
 Terminal == Done /\ UNCHANGED vars
 
-Next == Step \/ Terminal
-Spec == Init /\ [][Next]_vars /\ WF_vars(Step)
+Next == Step \/ RecordPass \/ Finish \/ Terminal
+Spec == Init /\ [][Next]_vars /\ WF_vars(Step \/ RecordPass \/ Finish)
 
 Once            == \A i, j \in 1..Len(out) : i # j => out[i] # out[j]
 ValuesCovered   == Done => UNION {ValueClassesOf(f) : f \in Range(program)} \subseteq Range(out)

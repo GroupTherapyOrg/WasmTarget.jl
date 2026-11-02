@@ -1172,7 +1172,9 @@ Reshaped: `boxed_class` — dart's boxedClasses keys a box by the wasm type, whi
     # a tuple (src/julia/classes.jl TupleRecord): a reference of its own class flowing into a slot of
     # another type is boxed into its arity's record, dart's record class of a shape, each field boxed to
     # the top type; one narrowed back into its own class is unboxed from the record, each field
-    # unboxed to its own type, as dart boxes a value type on upcast and unboxes it on downcast
+    # unboxed to its own type, as dart boxes a value type on upcast and unboxes it on downcast; the
+    # null of a nullable slot stays the null.
+    # formal(dev/formal/TupleRecord.tla): no top slot holds a concrete tuple's struct, isa over a top slot answers Julia's, the null kept
     # (a reference's class read from its struct, translator.classForHeapType)
     local tuple_of(t::WasmBuilder.IR.ValueType) = t isa WasmBuilder.IR.RefType &&
         (local info = get(self.class_for_heap_type, t.heap_type, nothing); info !== nothing && info.cls isa DataType &&

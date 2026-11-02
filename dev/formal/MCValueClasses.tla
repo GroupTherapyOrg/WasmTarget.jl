@@ -5,10 +5,11 @@
 (* kinds, for every program of one or two value types among a DataType, a     *)
 (* Union, a Vararg, Type{X} of a DataType, of a Union and of an unknown T, a  *)
 (* UnionAll under Type, Union{} and two constants (a Box holding a Float in a *)
-(* field declared Any, a Node holding itself). Claims: Once, ValuesCovered,  *)
-(* SupertypeClosed, FieldsClosed, NothingExtra, Terminates. Broken:           *)
-(* MCValueClasses{NoSeenGuard,KindOnly,NoSupertype,NoFields,KindsAlways,    *)
-(* NoContents}                                                               *)
+(* field declared Any, a Node holding itself), a concrete tuple class and an *)
+(* open tuple type, each brought to its record (TupleRecord). Claims: Once,   *)
+(* ValuesCovered, SupertypeClosed, FieldsClosed, NothingExtra, Terminates.    *)
+(* Broken: MCValueClasses{NoSeenGuard,KindOnly,NoSupertype,NoFields,          *)
+(* KindsAlways,NoContents,NoRecordPass}                                       *)
 (* Broken.cfg, each its header's claim.                                       *)
 EXTENDS ValueClasses
 =============================================================================

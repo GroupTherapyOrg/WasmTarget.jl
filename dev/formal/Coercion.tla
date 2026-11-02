@@ -151,7 +151,9 @@ DropNull(t) == IF IsRef(t) THEN Ref(t.k, FALSE) ELSE t
 \*   <<"str_data">>          ref.cast $Str + struct.get data → (ref null StrArr)
 \*   <<"str_wrap">>          the one string producer: (ref null StrArr) → (ref Str)
 \*   <<"num", n>>            a numeric conversion opcode whose result is n
-\*   <<"tuple_build">>       emit_fixed_to_vararg_tuple!: an NTuple's fields into a fresh
+\*   <<"tuple_build">>       (legacy convert_type!'s arm; src/translator.jl's convert_type boxes a
+\*                           concrete tuple into its arity's record instead: TupleRecord.tla)
+\*                           emit_fixed_to_vararg_tuple!: an NTuple's fields into a fresh
 \*                           runtime-length tuple: (ref null? Tf) → (ref Tv)
 \*   <<"tuple_narrow", n>>   the narrowing to the runtime-length tuple (_narrow_ref!): the
 \*                           value is Tv, or an NTuple built into it: any-hierarchy → (ref null? Tv)
