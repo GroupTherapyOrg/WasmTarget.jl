@@ -148,6 +148,9 @@ precedent(julia: julia/src/subtype.c:2511 jl_isa, the kinds told apart by the ty
 Julia's differs from dart: its Union is a kind of its own, where dart's nullable type is a flag.
 """
 @parity "sdk/lib/_internal/wasm/common/type.dart:97 _Type._checkInstance" function _Type__check_instance(t::Type, @nospecialize(o::Any))::Bool
+    # Any, dart's _TopType (Object?), whose class row the class table does not hold (types.jl
+    # _buildTypeRules skips the top): every value is of it
+    t === Any && return _TopType__check_instance(o)
     if t isa DataType
         return _TypeUniverse_is_object_interface_subtype0(o, _InterfaceType_class_id(t))
     elseif t isa Union
@@ -161,6 +164,12 @@ Julia's differs from dart: its Union is a kind of its own, where dart's nullable
     # loud, never an answer
     Error__throw_with_current_stack_trace(ErrorException("WasmTarget: a run-time type test against a UnionAll, which Julia's subtype decides by its environment"))
 end
+
+"""
+Whether `o` is of the top type, Julia's Any (dart's `_TopType._checkInstance`, `=> true`): every value
+is.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:138 _TopType._checkInstance" _TopType__check_instance(@nospecialize(o::Any))::Bool = true
 
 """
 Whether `o` is of the run-time type `t`: null answers the type's nullability, any other value the
@@ -198,9 +207,11 @@ end
 Whether the type `s` is a subtype of the type `t` (dart's `_TypeUniverse.isSubtype`, its rules in its
 order, over the kinds the runtime ports): reflexivity, nullability, left bottom, right top, right
 bottom, then Julia's Union, which dart has no kind of (julia/src/subtype.c:1419 subtype: a Union on the
-left where both members are, on the right where either is), then two DataTypes by the class table,
-the one relation the instance check reads. dart's function, FutureOr, record and type-parameter rules
-have no Julia kind here; a UnionAll raises, loud, its environment unported.
+left where both members are, on the right where either is), then two classes' DataTypes by the class
+table, the one relation the instance check reads. dart's record rule (type.dart:1440, a Julia tuple
+type, subtype.c:1582) and Julia's Type{X} (subtype.c:1550) are not ported: a program holding such a type
+beside a run-time subtype test rejects, located, at link time, as it does a UnionAll. dart's function,
+FutureOr and type-parameter rules have no Julia kind.
 """
 @parity "sdk/lib/_internal/wasm/common/type.dart:1351 _TypeUniverse.isSubtype" function _TypeUniverse_is_subtype(s::Type, t::Type)::Bool
     # Reflexivity:
@@ -216,9 +227,17 @@ have no Julia kind here; a UnionAll raises, loud, its environment unported.
     # Julia's Union, left then right (subtype.c)
     s isa Union && return _TypeUniverse_is_subtype(s.a::Type, t) && _TypeUniverse_is_subtype(s.b::Type, t)
     t isa Union && return _TypeUniverse_is_subtype(s, t.a::Type) || _TypeUniverse_is_subtype(s, t.b::Type)
-    # Null, past the nullabilities: below Nothing and Any only, both answered above
+    # Null: dart's Null is the nullable bottom, below every nullable type (Left bottom, type.dart:1364);
+    # Julia's Nothing, past the nullabilities, is below Nothing and Any only, both answered above, and no
+    # other type is below Nothing (julia/src/subtype.c:1419 subtype)
     (s === Nothing || t === Nothing) && return false
+    # two DataTypes by the class table: a class's DataType, never a Type{X} (subtype.c:1550) nor a tuple
+    # type (subtype.c:1582 subtype_tuple, dart's record rule, type.dart:1440): a program holding either
+    # beside a run-time subtype test rejects, located, at link time (src/julia/runtime/rtutils.jl
+    # check_run_time_type_values), as it does a UnionAll
     s isa DataType && t isa DataType && return _TypeUniverse_is_interface_subtype(s, t)
+    # a UnionAll, which that link-time check rejects in the program; here only one of WasmTarget's own
+    # runtime: loud, never an answer
     Error__throw_with_current_stack_trace(ErrorException("WasmTarget: a run-time subtype test of a UnionAll, which Julia's subtype decides by its environment"))
 end
 

@@ -100,11 +100,12 @@ end
 
 A run-time type test decides by the kinds the runtime ports (type.dart's `_checkInstance`: a class's
 DataType by the class table, a Union by its members, Union{}), so every type value the program holds
-must be one of those: each literal operand of the program's own bodies (WasmTarget's runtime aside),
-and every value a literal's object holds, its elements and fields. A UnionAll or a free TypeVar, which
+must be one of those: each literal operand of the program's own bodies (WasmTarget's runtime aside)
+and each binding they read (a NirGlobal operand, a GlobalRef statement, its value at compile time), and
+every value those hold, their elements and fields. A UnionAll or a free TypeVar, which
 Julia's subtype decides by its environment (julia/src/subtype.c:1419), rejects, Unquarantined, at the
-first run-time test; a Type{X} (jl_isa's `jl_types_equal`, subtype.c:2523) or an open tuple type
-(type.dart's `_RecordType._checkInstance`) rejects, Unported, there. A program's type value is a literal:
+first run-time test; a Type{X} (jl_isa's `jl_types_equal`, subtype.c:2523) or a tuple type but Tuple{}
+(type.dart's `_RecordType._checkInstance`, reading a record's fields) rejects, Unported, there. A program's type value is a literal:
 one made at run time (apply_type, typeof) rejects at its statement (src/intrinsics.jl).
 """
 @quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by subtyping with an environment, which the runtime does not port; dart patches what every use needs once every use is known (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant)" Base.has_free_typevars function check_run_time_type_values(translator)::Nothing
@@ -120,8 +121,11 @@ one made at run time (apply_type, typeof) rejects at its statement (src/intrinsi
                 foreach(visit, Base.uniontypes(v))
             elseif v isa DataType && Base.isType(v)
                 reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:97 _Type._checkInstance"), "$at: a run-time type test where the program holds $v, whose values are told by jl_types_equal (julia/src/subtype.c:2523)")
-            elseif v isa DataType && v <: Tuple && !isconcretetype(v)
-                reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance"), "$at: a run-time type test where the program holds the open tuple type $v")
+            elseif v isa DataType && v <: Tuple && v !== Tuple{}
+                # a tuple type, dart's record type: a tuple in a top-typed slot is its arity's record
+                # (src/julia/classes.jl TupleRecord), which no class-table row puts under a tuple type,
+                # concrete or open, so the test reads its fields, unported (Tuple{} is its own class)
+                reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance"), "$at: a run-time type test where the program holds the tuple type $v")
             end
         elseif v isa Union{Tuple,Core.SimpleVector,AbstractArray}
             for x in v
@@ -137,7 +141,17 @@ one made at run time (apply_type, typeof) rejects at its statement (src/intrinsi
         local m = body.ci.def.def
         m isa Method && (parentmodule(m) === Runtime || m.module === @__MODULE__) && continue
         for st in body.stmts, x in nir_operands(st)
+            # the type an isa or a typeassert names as a literal is the static test's (types.jl
+            # emitIsTest, emitAsCheck), never a value a run-time test meets
+            st isa NirCall && (nir_callee(st) === Core.isa || nir_callee(st) === Core.typeassert) &&
+                length(st.args) == 3 && x === st.args[3] && continue
             x isa NirConst && visit(x.c.val)
+            # a binding's value, the other place a program's value comes from at compile time
+            # (src/julia/classes.jl meets each)
+            x isa NirGlobal && isdefined(x.ref.mod, x.ref.name) && visit(getglobal(x.ref.mod, x.ref.name))
+        end
+        for st in body.stmts
+            st isa NirGlobalRead && isdefined(st.ref.mod, st.ref.name) && visit(getglobal(st.ref.mod, st.ref.name))
         end
     end
     return nothing

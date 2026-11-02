@@ -1546,6 +1546,10 @@ end
     local intrinsic_result = generate_static_intrinsic(self.intrinsifier[], node)
     intrinsic_result === nothing || return intrinsic_result
     local target = nir_invoke_target(node)
+    # a call of the runtime's run-time subtype tests themselves: the program's type values checked at
+    # link time, as for a type test (src/julia/runtime/rtutils.jl run_time_type_test!)
+    target.def isa Method && target.def.module === Runtime && target.def.name in (:_is_type_subtype, :_TypeUniverse_is_subtype, :_is_subtype, :_as_subtype, :_Type__check_instance) &&
+        run_time_type_test!(self.translator, "$(self.enclosing_member)")
     _visit_arguments(self, node, signature_for_direct_call(self.translator, target), param_info_for_direct_call(self.translator, target), 0)
     return output_or_void(self.translator, call(self, target))
 end
