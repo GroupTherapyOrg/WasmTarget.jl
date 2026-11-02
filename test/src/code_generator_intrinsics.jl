@@ -212,6 +212,33 @@ end
     queue_native!("addf", bytes, Float32Cases.addf, [(x,) for x in Float32[0, -0.0, 1, -1.5, 3.0f38, Inf, NaN]])
 end
 
+# muladd_float as an fmul then an fadd (core wasm has no fused multiply-add; inputs whose product is
+# exact, where Julia's fused and unfused answers agree); have_fma false for wasm, so Base's fma takes
+# its emulation, answering native's hardware fma; fpiseq, Float64's and Float32's isequal
+module FloatBitCases
+mad(x::Float64) = muladd(x, 2.0, 0.5)
+mad32(x::Float32) = muladd(x, 4.0f0, -1.25f0)
+fma32(x::Float32) = fma(x, 0.1f0, -0.3f0)
+iseq(x::Float64, y::Float64) = isequal(x, y)
+iseq32(x::Float32, y::Float32) = isequal(x, y)
+end
+
+@testset "intrinsics.cpp: muladd_float, have_fma and fpiseq against native" begin
+    local C = FloatBitCases
+    local f64s = [0.0, -0.0, 1.5, -2.5, 1e300, -Inf, NaN]
+    local f32s = Float32[0, -0.0, 1.5, -2.5, 3.0f38, -Inf, NaN, 0.7f0, 1.0f-30]
+    for (f, at, argsets) in ((C.mad, (Float64,), [(x,) for x in f64s]), (C.mad32, (Float32,), [(x,) for x in f32s]),
+                             (C.fma32, (Float32,), [(x,) for x in f32s]),
+                             (C.iseq, (Float64, Float64), [(x, y) for x in f64s for y in f64s]),
+                             (C.iseq32, (Float32, Float32), [(x, y) for x in f32s for y in f32s]))
+        local bytes = W.compile(f, at; optimize = false)
+        queue_native!(string(nameof(f)), bytes, f, argsets)
+    end
+    # have_fma of a constant Float64 or Float32 is the constant false the wasm target lowers it to
+    local g = ready_codegen_of(C.mad, (Float64,), [IR.NumType_f64], [IR.NumType_f64])
+    @test emitted_by(() -> D.generate_static_intrinsic(g.intrinsifier[], W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.Intrinsics.have_fma)), W.NirConst(Core.Const(Float64))])), g) == ["i32.const 0"]
+end
+
 @testset "the third oracle: every module queued above answers as native Julia" begin
     for r in WTRunner.run_cases(NATIVE_RUNS)
         r.ok || println(r.label, ": ", r.why)

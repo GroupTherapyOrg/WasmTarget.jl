@@ -221,7 +221,6 @@ julia/parity.jl MIRRORS
 julia/parity.jl MIRROR_SAMPLES
 julia/parity.jl MIRROR_SUMS
 julia/parity.jl PATCHED
-julia/parity.jl PATCH_FILES
 julia/parity.jl PIN
 julia/parity.jl ParityEntry
 julia/parity.jl QuarantineEntry

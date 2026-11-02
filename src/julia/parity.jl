@@ -521,7 +521,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/src/julia", "julia/src/genericmemory", "julia/src/builtins", "julia/src/cgutils",
     "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv", "julia/src/ccall",
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types", "julia/base/hashing", "julia/base/expr", "julia/src/init", "julia/src/precompile", "julia/Compiler/src/effects",
-    "julia/src/support/hashing", "julia/src/support/MurmurHash3",
+    "julia/src/support/hashing", "julia/src/support/MurmurHash3", "julia/base/floatfuncs", "julia/base/experimental",
     "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation", "julia/src/method", "julia/Compiler/src/ssair/show", "julia/Compiler/src/verifytrim", "julia/src/gf", "julia/src/subtype",
 )
 
@@ -560,8 +560,8 @@ precedent(dart: the wasm target's @patch libraries, sdk/lib/_internal/wasm, merg
 members by the CFE; gpucompiler: the method table a device's overlays of Base live in). Julia's
 differs: `include` takes any path, so the overlays' file map is a table too, beside RUNTIME_FILES.
 """
-@quarantine "Julia's include takes any path; the overlay table's file map is a table" Core.String const PATCH_FILES::Tuple{Vararg{String}} = (
-    "patch/string.jl", "patch/genericmemory.jl", "patch/hashing.jl",
+@quarantine "julia/base/experimental.jl:421 consistent_overlay defines a method in an overlay table, from any file; the overlay table's files are a table, each one include_patch loads" Core.String const PATCH_FILES::Tuple{Vararg{String}} = (
+    "patch/string.jl", "patch/genericmemory.jl", "patch/hashing.jl", "patch/floatfuncs.jl",
 )
 
 # the patch files include_patch has loaded, in order
