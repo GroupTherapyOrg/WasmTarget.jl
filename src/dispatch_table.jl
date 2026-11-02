@@ -383,14 +383,17 @@ formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the
     # the selectors, from the field calls Julia's IR holds (TFA's selector metadata in dart)
     # a receiver's admitted classes: its type's concrete classes, getConcreteClassIdRange's one reading
     local calls = field_selector_calls(translator.component, receiver -> concrete_classes(translator, receiver))
+    # each selector's id, assigned once here and recorded for its field's name and kind, the key its
+    # accessors are matched by (TFA's one assignment of selector ids)
+    local selector_id = Dict{Tuple{String,Bool},Int}()
     for c in calls
         local id = length(self._selector_info)
         self._selector_info[id] = SelectorInfo__(self, id, c.name, c.call_count; is_setter = c.is_setter, is_index_setter = false)
+        selector_id[(c.name, c.is_setter)] = id
         for site in c.sites
             self.procedure_attribute_metadata[site] = id
         end
     end
-    local called(name::String, is_setter::Bool) = findfirst(c -> c.name == name && c.is_setter == is_setter, calls)
     # Maps class to selector IDs of the class
     local selectors_in_class = IdDict{DataType,LinkedHashMap{SelectorInfo,Reference}}()
     local static_dispatch_pragmas = Base.IdSet{Reference}()
@@ -415,13 +418,13 @@ formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the
         # each accessor's selector id recorded once, its field's name and kind matched to the selector
         # made for them (TFA's assignment of selector ids, procedureAttributeMetadata), then read by
         # _createSelectorForTarget through selectorForTarget
-        local add_member(reference::FieldReference, k::Int) =
-            (self.procedure_attribute_metadata[reference] = k - 1; selectors[_create_selector_for_target(self, reference)] = reference)
+        local add_member(reference::FieldReference, id::Int) =
+            (self.procedure_attribute_metadata[reference] = id; selectors[_create_selector_for_target(self, reference)] = reference)
         for field in class_instance_fields(cls, at)
             field.index == 0 && continue    # a primitive class's one value is no field to access
-            local g = called(field.name, false)
+            local g = get(selector_id, (field.name, false), nothing)
             g === nothing || add_member(FieldReference(field, FieldReferenceKind_getter), g)
-            local st = called(field.name, true)
+            local st = get(selector_id, (field.name, true), nothing)
             field.mutable && st !== nothing && add_member(FieldReference(field, FieldReferenceKind_setter), st)
         end
         selectors_in_class[cls] = selectors
@@ -437,7 +440,7 @@ formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the
         # a class a call's receiver admits that lacks the field: Julia's FieldError throw
         for (_, selector) in self._selector_info
             haskey(selectors_in_class[cls], selector) && continue
-            cls in calls[something(called(selector.name, selector.is_setter))].classes &&
+            cls in calls[selector.id + 1].classes &&
                 reject!(Unquarantined("src/dispatch_table.jl build: Julia's FieldError for $cls, which a call of $(selector.name)$(selector.is_setter ? "'s setter" : "") may reach without that field, a target not yet written"), at)
         end
     end
