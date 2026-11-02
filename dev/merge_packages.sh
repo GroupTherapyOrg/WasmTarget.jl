@@ -9,7 +9,10 @@
 # git-merge-file(1)); taking either whole side dropped the other's lines outside the blocks (10:38: `import
 # ..WasmBuilder` lost, "UndefVarError: WasmBuilder not defined in WasmTarget.LLVM")
 set -uo pipefail
-blank() { awk '/written by dev\/skeleton\.jl write ----$/{print; skip=1; next} /^# ---- end of /{skip=0} !skip' "$1" > "$1.wtblank" && mv "$1.wtblank" "$1"; }
+# a start marker without its end, or an end without its start, would blank every line after it and merge the
+# truncated text cleanly: such a version is refused, a conflict that stops the rebase (march-monitor-a, 12:08)
+blank() { awk '/written by dev\/skeleton\.jl write ----$/{if (skip) exit 3; print; skip=1; next}
+  /^# ---- end of /{if (!skip) exit 3; skip=0} !skip; END{if (skip) exit 3}' "$1" > "$1.wtblank" && mv "$1.wtblank" "$1"; }
 blank "$1" && blank "$2" && blank "$3" || exit 2
 git merge-file "$2" "$1" "$3"; rc=$?
 [ -n "${WT_PACKAGES_MERGED:-}" ] && touch "$WT_PACKAGES_MERGED"
