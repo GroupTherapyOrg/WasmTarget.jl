@@ -134,6 +134,20 @@ end
     @test e.rejection isa W.Internal && occursin("WasmAnyRef.toObject", e.rejection.site) && occursin("WasmFunction.fromFuncRef", e.rejection.site)
 end
 
+module UndefBitsCases
+# `new` leaving isbits fields undefined: a number and an inline struct, each written before any read
+struct P; x::Int; y::Int; end
+mutable struct Late; set::Bool; v::Int; p::P; Late() = new(false); end
+late(n::Int) = (l = Late(); l.v = n; l.p = P(n, 2n); l.set = true; l.set ? l.v + l.p.y : -1)
+end
+
+@testset "code_generator.dart: visitConstructorInvocation, an isbits field `new` leaves undefined is its type's zero bits" begin
+    # Julia's frozen undef (emit_new_struct), which any one value refines; the case reads only fields it
+    # set, so run by node it answers as native Julia
+    local bytes = W.compile(UndefBitsCases.late, (Int,); optimize = false)
+    @test answers_native([WTRunner.RunCase("late($n)", bytes, (n,), UndefBitsCases.late(n)) for n in (3, -4)])
+end
+
 @testset "code_generator.dart: _VirtualCallKind" begin
     @test [sprint(show, k) for k in instances(D._VirtualCallKind)] == ["get", "set", "call"]
     @test D.is_getter(D._VirtualCallKind_Get) && !D.is_getter(D._VirtualCallKind_Call)

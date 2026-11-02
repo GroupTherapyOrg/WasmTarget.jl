@@ -1485,7 +1485,11 @@ end
     # whose type admits `nothing` keeps its set flag (class_is_set_field, dart's late lowering's
     # isSet), stored true where `new` gives the field and false where it leaves it out, so its null
     # `nothing` and its #undef stay apart (D9). An isbits field left undefined holds bits Julia leaves
-    # arbitrary: no reference to leave null, located
+    # arbitrary: its codegen builds the struct from LLVM's undef, frozen where `new` passes fewer values
+    # than fields (julia/src/cgutils.cpp:4151 emit_new_struct, its `CreateFreeze(UndefValue::get(lt))`),
+    # and LLVM's LangRef lets a frozen undef be any one value. WasmTarget picks the wasm default, the
+    # field type's all-zero bits, as memorynew fills an inline element (intrinsics.jl), where LLVM picks
+    # undef: a refinement of Julia's answer, not a stand-in past a gap
     local nf = fieldcount(cls)
     local given = length(node.args) - 1
     given <= nf ||
@@ -1504,8 +1508,8 @@ end
         reject!(Internal("$at: the class layout of $cls holds a field past Julia's that is no set flag"), "$(self.enclosing_member)")
     for field in fields[given+1:nf]
         local storage = WasmBuilder.unpacked(info.struct_.fields[self.translator.field_index[field] + 1].type)
-        storage isa WasmBuilder.IR.RefType && storage.nullable ||
-            reject!(Unquarantined("src/code_generator.jl visitConstructorInvocation: the isbits field $(field.name) of $cls left undefined, whose bits Julia leaves arbitrary"), "$(self.enclosing_member)")
+        storage isa WasmBuilder.IR.RefType && storage.nullable || isbitstype(field.type) ||
+            reject!(Unquarantined("src/code_generator.jl visitConstructorInvocation: the field $(field.name) of $cls left undefined, stored as neither a nullable reference nor isbits bits"), "$(self.enclosing_member)")
     end
     WasmBuilder.comment(b, "Allocate wasm struct optimized")
     push_object_header_fields(b, self.translator, info)
@@ -1517,8 +1521,13 @@ end
             WasmBuilder.i32_const(b, owner[field].index <= given ? 1 : 0)
         elseif field.index <= given
             translate_expression(self, node.args[field.index + 1], storage)
+        elseif storage isa WasmBuilder.IR.RefType && storage.nullable
+            WasmBuilder.ref_null(b, storage.heap_type)
         else
-            WasmBuilder.ref_null(b, (storage::WasmBuilder.IR.RefType).heap_type)
+            # an isbits field left undefined: its type's all-zero bits (emit_new_struct's frozen undef)
+            local T = field.type::DataType
+            local zero = Base.issingletontype(T) ? T.instance : reinterpret(T, zeros(UInt8, sizeof(T)))[1]
+            translate_expression(self, NirConst(Core.Const(zero)), storage)
         end
     end
     WasmBuilder.struct_new(b, info.struct_)
