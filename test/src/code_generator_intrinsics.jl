@@ -246,6 +246,23 @@ end
     @test emitted_by(() -> D.generate_static_intrinsic(g.intrinsifier[], W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.Intrinsics.have_fma)), W.NirConst(Core.Const(Float64))])), g) == ["i32.const 1"]
 end
 
+# a 128-bit integer, its class's struct of two i64 halves (LLVM's expansion of an i128): a constant's
+# halves, sext_int and zext_int into it, trunc_int out of it, bitcast between Int128 and UInt128, and
+# eq_int, ne_int and === over its halves
+module Int128Cases
+const BIG = Int128(1) << 100 + Int128(12345)
+const UBIG = typemax(UInt128) - UInt128(7)
+wide(n::Int64) = Int64(Int128(n) % Int64) + Int64(Int128(n) == BIG) * 10 + Int64(Int128(n) != Int128(n)) * 100 +
+    Int64(BIG % Int64) + Int64((BIG >> 64) % Int64) * 3 + Int64(UBIG % UInt32) +
+    Int64(reinterpret(UInt128, Int128(n)) == UInt128(n % UInt64)) * 1000 + Int64(UInt128(UInt32(n % UInt32)) % Int32) * 7 +
+    Int64(Int128(n) === Int128(n % Int32)) * 100_000 + Int64(Int128(n % Int8) % Int16)
+end
+
+@testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions and equality" begin
+    local bytes = W.compile(Int128Cases.wide, (Int64,); optimize = false)
+    queue_native!("wide", bytes, Int128Cases.wide, [(n,) for n in Int64[0, 5, -3, 300, typemax(Int64), typemin(Int64)]])
+end
+
 @testset "the third oracle: every module queued above answers as native Julia" begin
     for r in WTRunner.run_cases(NATIVE_RUNS)
         r.ok || println(r.label, ": ", r.why)

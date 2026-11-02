@@ -101,10 +101,13 @@ end
         @test D.translate_storage_type(t, T; unbox = false) == w
     end
     # a primitive class with no wasm representation rejects, located
-    for T in (Int128, Float16, Ptr{Nothing})
+    for T in (Float16, Ptr{Nothing})
         local e = try; D.translate_type(t, T); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end
+    # a 128-bit integer is its class's struct of two i64 halves, a regular class: none in this world
+    local e128 = try; D.translate_type(t, Int128); nothing; catch x; x; end
+    @test e128 isa W.RejectionError && e128.rejection isa W.Internal && occursin("Int128 has no class info", e128.rejection.site)
     # Union{} and Nothing are the nullable none reference; Union{} returned, the non-nullable one
     @test D.translate_type(t, Nothing) == IR.RefType_none(; nullable = true) == D.translate_type(t, Union{})
     @test D.translate_return_type(t, Union{}) == IR.RefType_none(; nullable = false)

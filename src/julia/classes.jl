@@ -341,6 +341,11 @@ allocation may leave undefined whose type admits `nothing`, dart's late lowering
     # a tuple's record (TupleRecord): a top-typed field per element, dart's record fields $1..$N
     local arity = tuple_record_arity(c)
     arity === nothing || return Dart2Wasm._generate_fields(Dart2Wasm._RecordClassGenerator(Dict{Dart2Wasm.RecordShape,DataType}()), Dart2Wasm.RecordShape(arity, String[]))
+    # a 128-bit integer (Int128, UInt128): its two 64-bit halves, LLVM's legalization of an i128 on a
+    # 64-bit target (llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp, ExpandIntegerResult:
+    # the low and the high i64), each a field of the class's struct, as the value is one wasm value
+    isprimitivetype(c) && c <: Base.BitInteger && sizeof(c) == 16 &&
+        return ClassField[ClassField(c, 0, "lo", UInt64, false), ClassField(c, 0, "hi", UInt64, false)]
     isprimitivetype(c) && return ClassField[ClassField(c, 0, "value", c, false)]
     Base.iskindtype(c) && return _kind_instance_fields(c, at)
     if fieldcount(c) == 0

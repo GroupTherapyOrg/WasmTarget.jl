@@ -807,7 +807,8 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
     v isa WasmArrayLiteral && return _make_wasm_array_literal(self, constant; mutable_ = v.mutable)
     local cls = typeof(v)
 
-    isprimitivetype(cls) && reject!(Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation"), at)
+    isprimitivetype(cls) && !(cls <: Base.BitInteger && sizeof(cls) == 16) &&
+        reject!(Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation"), at)
     local info = get(translator.class_info, cls, nothing)
     info === nothing && reject!(Internal("$at: the class $cls of the constant has no class info"), at)
     record_class_allocation(translator.functions[], info._class_id)
@@ -848,6 +849,9 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             else
                 reject!(Internal("$at: the Memory field $(field.name), not classes.jl's data or data#isSet"), at)
             end
+        elseif isprimitivetype(cls) && (field.name == "lo" || field.name == "hi")
+            # a 128-bit integer's halves (src/julia/classes.jl), its low and high 64 bits
+            field.name == "lo" ? v % UInt64 : (v >> 64) % UInt64
         elseif field.index == 0 && haskey(owner, field)
             # a field's set flag (src/julia/classes.jl class_is_set_field): whether Julia holds a value in it
             isdefined(v, owner[field].index)
@@ -880,9 +884,12 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
         sub_info === nothing || push!(child_constants, sub_info)
     end
 
+    # a primitive class's struct is a box's, its class id alone ahead of its value (a 128-bit integer's
+    # two halves), as convertType's boxing builds one
+    local first_field = isprimitivetype(cls) ? FieldIndex_box_value() : FieldIndex_object_field_base()
     return create_constant(self, constant, child_constants, type_, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
-        push_object_header_fields(b, translator, info)
-        for i in FieldIndex_object_field_base():field_count - 1
+        isprimitivetype(cls) ? WasmBuilder.i32_const(b, class_id(info)) : push_object_header_fields(b, translator, info)
+        for i in first_field:field_count - 1
             local sub_constant = sub_constants[i + 1]
             sub_constant === nothing && reject!(Internal("$at: the field $i of $cls has no constant"), at)
             instantiate_constant(self.constants, b, sub_constant, WasmBuilder.unpacked(info.struct_.fields[i + 1].type))

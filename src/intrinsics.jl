@@ -572,6 +572,12 @@ end
     (f === Core.apply_type || f === Core.typeof) && return generate_static_intrinsic(self, Val(:run_time_type), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f isa Core.IntrinsicFunction || return nothing
+    # an operation on a 128-bit integer, an operand's or a conversion's result: its two i64 halves
+    local wide(T::Type) = T isa DataType && T <: Base.BitInteger && sizeof(T) == 16
+    local converted = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
+    (any(a -> wide(dart_type_of(self, a)), args) ||
+     converted isa DataType && converted <: Type && length(converted.parameters) == 1 && converted.parameters[1] isa Type && wide(converted.parameters[1])) &&
+        return generate_static_intrinsic(self, Val(:int128), f, args)
     local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
     type_operand isa DataType && type_operand <: Type && length(type_operand.parameters) == 1 && type_operand.parameters[1] isa Type &&
         return generate_static_intrinsic(self, Val(:conversion), f, args)
@@ -1435,6 +1441,9 @@ end
         return i32
     end
     first_type === String && second_type === String && return generate_static_intrinsic(self, Val(:string_egal), first, second)
+    # two of one 128-bit integer class: their bits, both halves equal (the int128 arm's eq_int)
+    first_type === second_type && first_type isa DataType && first_type <: Base.BitInteger && sizeof(first_type) == 16 &&
+        return generate_static_intrinsic(self, Val(:int128), Core.Intrinsics.eq_int, args)
     # a value of a type below DataType (DataType itself, Type{X} of a DataType X, a Union of such) is a DataType
     local a_data_type(T::Type) = T !== Union{} && T <: DataType
     if egal_by_identity(first_type) || egal_by_identity(second_type) || (a_data_type(first_type) && a_data_type(second_type))
@@ -1919,6 +1928,96 @@ end
     translate_expression(code_gen, x, from_w)
     emit(b[])
     return to_w
+end
+
+# Julia's intrinsics on a 128-bit integer (Int128, UInt128), whose value is its class's struct of two
+# i64 halves (src/julia/classes.jl), as LLVM's WebAssembly backend legalizes an i128 into the low and
+# high i64 (llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp ExpandIntegerResult), each
+# operation its expansion over the halves:
+#   sext_int to 128 bits: the value in the low half, its sign in the high (ExpandIntRes_SIGN_EXTEND,
+#     the high half the low's arithmetic shift by 63); zext_int: the high half 0
+#     (ExpandIntRes_ZERO_EXTEND); trunc_int from 128 bits: the low half, truncated on
+#     (ExpandIntOp_TRUNCATE); bitcast between Int128 and UInt128: the same halves in the other class
+#   eq_int and ne_int: both halves equal, or not (ExpandIntOp_SETCC's equality, the halves'
+#     xors or'd and compared with zero, here their compares and'd)
+# Any other operation is not yet ported and rejects at its statement, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:int128}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
+    local I = Core.Intrinsics
+    local at = "$(code_gen.enclosing_member): Julia's $f on a 128-bit integer"
+    local wide(T::Type) = T isa DataType && T <: Base.BitInteger && sizeof(T) == 16
+    local narrow(T::Type) = generate_static_intrinsic(Val(:narrow), T)
+    local put_form(T::Type) = generate_static_intrinsic(Val(:put_form), b, T)
+    local signed_view(T::Type) = generate_static_intrinsic(Val(:signed_view), b, T)
+    local unsigned_view(T::Type) = generate_static_intrinsic(Val(:unsigned_view), b, T)
+    local info_of(T::DataType) = (local i = get(t.class_info, T, nothing);
+        i === nothing ? reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the 128-bit class $T has no class info"), at) : i)
+    # the halves' field indices, low then high
+    local halves(T::DataType) = (local fs = class_instance_fields(T, at); (t.field_index[fs[1]], t.field_index[fs[2]]))
+    # the struct of a 128-bit operand, in a local
+    local load(v::NirValue) = begin
+        local T = dart_type_of(self, v)::DataType
+        local s = add_local(code_gen, info_of(T).non_nullable_type)
+        translate_expression(code_gen, v, s.type)
+        WasmBuilder.local_set(b, s)
+        s
+    end
+    local get_half(s::WasmBuilder.IR.Local, T::DataType, k::Int) = (WasmBuilder.local_get(b, s);
+        WasmBuilder.struct_get(b, info_of(T).struct_, halves(T)[k]))
+    # a new value of the 128-bit class T from its halves, each emitted by its function; the class a
+    # box's layout, its class id alone ahead of its value (dart's boxed classes sit below the top type)
+    local make(T::DataType, lo::Function, hi::Function) = begin
+        local info = info_of(T)
+        local (l, h) = halves(T)
+        WasmBuilder.i32_const(b, class_id(info))
+        l < h || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the 128-bit class $T's halves out of order"), at)
+        lo(); hi()
+        WasmBuilder.struct_new(b, info.struct_)
+        info.non_nullable_type
+    end
+    if length(args) == 2 && (local c = dart_type_of(self, args[1]); c isa DataType && c <: Type && length(c.parameters) == 1)
+        local to = c.parameters[1]
+        to isa Type || return nothing
+        local x = args[2]
+        local from = dart_type_of(self, x)
+        if (f === I.sext_int || f === I.zext_int) && wide(to) && from isa DataType && (from <: Base.BitInteger || from === Bool) && sizeof(from) <= 8
+            local from_w = type_of_exp(self, x)
+            local lo = add_local(code_gen, i64)
+            translate_expression(code_gen, x, from_w)
+            narrow(from) && (f === I.sext_int ? signed_view(from) : unsigned_view(from))
+            from_w == i32 && (f === I.sext_int ? WasmBuilder.i64_extend_i32_s(b) : WasmBuilder.i64_extend_i32_u(b))
+            WasmBuilder.local_set(b, lo)
+            return make(to, () -> WasmBuilder.local_get(b, lo),
+                f === I.sext_int ? () -> (WasmBuilder.local_get(b, lo); WasmBuilder.i64_const(b, 63); WasmBuilder.i64_shr_s(b)) :
+                                   () -> WasmBuilder.i64_const(b, 0))
+        elseif f === I.trunc_int && wide(from) && to isa DataType && to <: Base.BitInteger && sizeof(to) <= 8
+            local s = load(x)
+            get_half(s, from, 1)
+            local to_w = translate_type(t, to)
+            to_w == i32 && WasmBuilder.i32_wrap_i64(b)
+            narrow(to) && put_form(to)
+            return to_w
+        elseif f === I.bitcast && wide(from) && wide(to)
+            local s = load(x)
+            return make(to, () -> get_half(s, from, 1), () -> get_half(s, from, 2))
+        end
+        return nothing
+    end
+    if length(args) == 2 && (f === I.eq_int || f === I.ne_int)
+        local T = dart_type_of(self, args[1])
+        wide(T) && dart_type_of(self, args[2]) === T || return nothing
+        local x = load(args[1])
+        local y = load(args[2])
+        get_half(x, T, 1); get_half(y, T, 1); WasmBuilder.i64_eq(b)
+        get_half(x, T, 2); get_half(y, T, 2); WasmBuilder.i64_eq(b)
+        WasmBuilder.i32_and(b)
+        f === I.ne_int && WasmBuilder.i32_eqz(b)
+        return i32
+    end
+    return nothing
 end
 
 # Julia's have_fma(T): Julia's codegen emits julia.cpu.have_fma.f32 or .f64 for a constant Float32 or

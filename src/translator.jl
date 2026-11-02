@@ -1025,7 +1025,9 @@ the representation here is a reference to the join's struct, each value boxed in
             box === nothing && reject!(Internal("$at: the primitive class $cls has no class info, its box"), at)
             return type_with_nullability(box, nullable)
         end
-        unbox && reject!(Unquarantined("src/translator.jl translateStorageType: the primitive class $cls, with no wasm representation"), at)
+        # a 128-bit integer is its class's struct of two i64 halves (src/julia/classes.jl), a regular class
+        unbox && !(cls <: Base.BitInteger && sizeof(cls) == 16) &&
+            reject!(Unquarantined("src/translator.jl translateStorageType: the primitive class $cls, with no wasm representation"), at)
     end
     # Regular class.
     local info = get(self.class_info, cls, nothing)
