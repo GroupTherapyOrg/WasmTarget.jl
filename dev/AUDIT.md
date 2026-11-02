@@ -9061,3 +9061,58 @@ arms reject Unported, and 827878cb names them open.
 
 Resolution: this entry lands alone, prose only. A88E1, A89E1, A88S3, A86E1, A87E1, A86S2, A87S1 and A85S3 leave their
 rows. Fix first: A90E1. 1.K: A90E1. 1.E: A90S1, A90S3. 1.D: A90S2. 1.F: A90S4.
+
+## 2026-11-02 — audited through 2f1910b2 (d995126a..2f1910b2: the kinds cache keyed by its read files, the D11 lock's polarity, verifyTypeChecks through the runtime, two rulings made Internal, the lanetest slot read from the landing lock)
+
+The ninety-first audit, beside the work, covers the 8 commits of d995126a..2f1910b2 that are not audit entries
+(85a26b8b, entry 90): 8f64af3a, 83ebafe8, 57335b45, a976f223, 523151ec, 1baed867, f951ee6e and 2f1910b2, read under
+Dale's R1 and R2 as standing sections. Standing items. Each commit names its clause. No silent catch: the one new
+catch is in a test and checks what it catches. The debt list stays at 364. src goes from 3087 + 273 + 2 + 42 to 3087 +
+274 + 1 + 42 at 523151ec. The runtime library goes from 13 sites naming 11 to 12 naming 10 at 57335b45. D13: a median
+of 282 s; 57335b45 took 5196 s from authoring and 151 s from its ship. Earlier findings: 8f64af3a fixes A78S2;
+83ebafe8 fixes A84E4, A84S1 and A84S2, but leaves A91E1; 2f1910b2 narrows A90S1, whose types half stands at
+types.jl:852. A90E1, A90S2 to A90S4, A88S1, A88S4, A89S1 and A87E2 stand and were not re-read. Findings: A91E1, A91S1
+and A91S2.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — 523151ec is honest: build rejects any shape Internal before it makes a DynamicSelector
+(dynamic_dispatch_table.jl:88-89), so _lookupTarget (:107) has no input inside D32. f951ee6e is honest: single_target
+answers a NirInvoke with nir_invoke_target (translator.jl:1477); a CodeInstance whose def is not a MethodInstance (an
+ABIOverride, an opaque closure's) rejects Unquarantined at nir.jl:897 before either Internal is reached; emit_invoke
+reads args[0] (codegen.cpp:5282). a976f223 rules the captured arm Unported at closures.dart:1524, a missing port,
+which is right. The counter places collectInitializerUsages among the gaps by the guard rule (parity.jl:1623-1660, `rt
+=== Nothing && only_guards()`); inference alone finds that it returns Nothing. 8f64af3a records each image include and
+each read_input file; its directory id matches Base's `join(readdir(path))`.
+
+Area: emission and diagnostics — 57335b45 leaves no isa or typeassert in type.jl's bodies (`git show
+origin/wt2:src/runtime/common/type.jl | grep -n isa` finds comments only): a kind is read by jl_typetagis
+(julia.h:136) and narrowed by unsafe_cast. _isRecordClassId is in dart's table at intrinsics.dart:287 under
+('dart:core', null); the test's entry is that key, in WT's two-entry subset of the table, and the omitted
+_isObjectClassId and _isClosureClassId arms (type.dart:1945, :1949) are stated. (A91S2, low, R1, D5) unsafe_cast
+translates its operand at T's wasm type (intrinsics.jl:839), where dart translates it at the operand's own type and
+lets the context convert (intrinsics.dart:1521); the intrinsic is matched by method identity (:558), not through the
+StaticIntrinsic table where dart files it (:290), although _isRecordClassId's own commit extended that table.
+
+Area: enforcement and prose — (A91E1, medium, D11, D6) at d995126a, :2932 refused every moot line at an antecedent;
+test/parity_ratchet.jl:3129 now judges only the stated direction, so an antecedent that is strengthened, which weakens
+its claim, passes under `moot: weakened`. The direction is the author's word, and no plant mislabels one. (A91S1, low,
+D9, R2) the progress line says "274 that never return, Julia's inference finds"; the guard rule also counts Internal
+methods that inference finds returning Nothing there, such as output_target_table (dynamic_dispatch_table.jl:118-121).
+1baed867: check.sh refuses outside CHECK_LANDING (:13), which ship.sh sets under the landing lock (:220), so no check
+runs without the lock; a slot taken before the lock is held keeps its core for up to 900 s, within LANE_SLOTS' stated
+half.
+
+stopgap in disguise: a moot line's direction is the author's claim, read as fact by L227 (A91E1).
+
+precedent: constructor_info.dart:119, dynamic_dispatch_table.dart:52 and :141, closures.dart:1524,
+intrinsics.dart:287, :290, :1485 and :1515-1521, type.dart:7, :1730, :1941, :1955 and :2060, internal_patch.dart:49 at
+the dart pin; julia src/codegen.cpp:5282, src/julia.h:136 and :971, base/loading.jl:2358 and :3994.
+
+R1: _verifyOptimizedTypeCheck, _getActualRuntimeType, _isRecordClassId and jl_typetagis name near 1:1 counterparts.
+unsafeCast's lowering and lookup do not follow dart's (A91S2). R2: nothing in range calls a rejection-only body
+ported; _lookupTarget counts as Internal, collectInitializerUsages as a gap. The counter's label overstates what
+inference finds (A91S1).
+
+Resolution: this entry lands alone, prose only. A78S2, A84E4, A84S1 and A84S2 leave their rows. Fix first: A91E1. 1.C:
+A91E1. 1.A6: A91S1. 1.F: A91S2.
