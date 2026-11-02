@@ -24,6 +24,12 @@ line_stop() {
   if [ -f "$stop" ] && [ "$(head -1 "$stop")" != "$(basename "${WT_DEPOT_DIR:-$(pwd)}")" ]; then
     echo "check: REFUSED — line stop: only $(head -1 "$stop") lands until $stop is removed"; exit 2
   fi
+  # a hold the lead writes while this lane's landing queues or checks stops it here, as the line stop does: dev/ship.sh
+  # reads the common dir's wt-held only at its start, and 24201341 landed from a lane held while it checked
+  # (march-monitor-a, 13:45)
+  if grep -qxF "$(basename "${WT_DEPOT_DIR:-$(pwd)}")" "$(dirname "$stop")/wt-held" 2>/dev/null; then
+    echo "check: REFUSED — this lane is held ($(dirname "$stop")/wt-held names it); the lead lifts it"; exit 2
+  fi
 }
 line_stop
 # the depot of the lane being checked: dev/ship.sh checks in a scratch worktree of the lane and
