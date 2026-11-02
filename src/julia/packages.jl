@@ -11,8 +11,8 @@
 @quarantine "Julia has no per-file namespace; dart's patch libraries, the program's runtime (pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries), are a module" Core.Module module Runtime
 # ---- the src/julia names Runtime's files use, written by dev/skeleton.jl write ----
 import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..WasmI32, .._wasm_only, ..jl_to_typeof,
-       ..wasm_array_length, ..wasm_array_new, ..wasm_array_read, ..wasm_array_read_unsigned,
-       ..wasm_array_write!, ..wasm_string_codeunit
+       ..jl_typetagis, ..wasm_array_length, ..wasm_array_new, ..wasm_array_read,
+       ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_string_codeunit
 # ---- end of Runtime's src/julia names ----
 end
 # ---- the runtime's roots, written by dev/skeleton.jl write ----
@@ -31,6 +31,7 @@ end
     ((:Runtime,), :_type_row_displacement_offsets),
     ((:Runtime,), :_type_row_displacement_subst_table),
     ((:Runtime,), :_type_row_displacement_table),
+    ((:Runtime,), :_verify_optimized_type_check),
     ((), :jl_egal),
     ((), :jl_to_typeof),
     ((), :jl_typechk_type),
@@ -103,7 +104,7 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..class_instance_fields, ..class_is_abstract, ..class_is_set_field, ..class_superclass,
        ..closed_world_classes, ..concrete_class_ids, ..concrete_classes, ..egal_by_identity,
        ..field_may_be_null, ..field_name, ..field_selector_calls, ..holds_reference,
-       ..is_interface_class_type, ..jl_egal, ..jl_to_typeof, ..jl_typechk_type,
+       ..is_interface_class_type, ..jl_egal, ..jl_to_typeof, ..jl_typechk_type, ..jl_typetagis,
        ..nir_argument_type, ..nir_binding_is_constant, ..nir_binding_value, ..nir_body_of,
        ..nir_callee, ..nir_carries_data, ..nir_const_type, ..nir_foreign_import,
        ..nir_foreign_operands, ..nir_invoke_target, ..nir_method_nargs, ..nir_operands,

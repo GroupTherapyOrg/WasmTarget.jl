@@ -250,3 +250,29 @@ kind_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(KIND_TYPES[i]::Type, K
     @test startswith(sprint(show, W.Runtime._TypeCheckVerificationError(Int64, String, false, true, nothing)), "Type check verification error\n")
 end
 end
+
+module RuntimeVerifyTypeChecks
+using Test, WasmTarget
+const W = WasmTarget
+const D = W.Dart2Wasm
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+abstract type Shape end
+struct Circle <: Shape; r::Float64; end
+struct Plain; x::Int64; end
+@noinline pick(k::Int64)::Any = k == 1 ? Circle(1.0) : k == 2 ? Plain(2) : nothing
+vis(k::Int64) = (pick(k) isa Shape ? 10 : 0) + (pick(k) isa Circle ? 1 : 0)
+@testset "type.dart: _verifyOptimizedTypeCheck checks each optimized test under verifyTypeChecks" begin
+    # compiled as WasmTarget.compile compiles (standalone), with dart's --verify-type-checks: every type
+    # test followed by the runtime's reference check (_getActualRuntimeTypeNullable, _isTypeSubtype);
+    # each agrees, so the answers are native Julia's
+    local opts = D.WasmCompilerOptions(; main_uri = "", output_file = "main.wasm")
+    opts.translator_options.standalone = true
+    opts.translator_options.generate_source_maps = false
+    opts.translator_options.verify_type_checks = true
+    local r = D.compile(opts, W.check_subset(vis, (Int64,), "runtime"))
+    local bytes = r.wasm_files[basename(r.main_wasm_file)]
+    for res in Main.WTRunner.run_cases([Main.WTRunner.RunCase("vis($k)", bytes, (k,), Main.WTRunner.native_answer(vis, (k,))) for k in 1:3])
+        @test res.ok || (@info res.label res.why; false)
+    end
+end
+end

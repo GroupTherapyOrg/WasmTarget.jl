@@ -60,18 +60,23 @@ member the runtime ports, each under its dart library, class and name, as Member
     "dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup", () -> StaticIntrinsic__populate_lookup())
 
 # dart files each intrinsic under its member's library, class and name; the members the runtime ports
-# are the ones a Julia method can be: ClassID.getID (class_id.dart:10, src/runtime/common)
+# are the ones a Julia method can be: ClassID.getID (class_id.dart:10) and _isRecordClassId
+# (type.dart:2060), src/runtime/common
 @parity "dart2wasm/lib/intrinsics.dart:404 StaticIntrinsic._populateLookup" StaticIntrinsic__populate_lookup()::Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}} =
     Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}}(
-        "dart:_internal" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}("ClassID" => Dict{String,StaticIntrinsic}("getID" => StaticIntrinsic_getID)))
+        "dart:_internal" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}("ClassID" => Dict{String,StaticIntrinsic}("getID" => StaticIntrinsic_getID)),
+        "dart:core" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}(nothing => Dict{String,StaticIntrinsic}("_isRecordClassId" => StaticIntrinsic_isRecordClassId)))
 
 # a Julia method is a dart library member when it is the runtime's port of one, Runtime.ClassID_get_id
 # of dart:_internal's ClassID.getID, looked up by that member's library, class and name as dart looks
 # it up; Julia's own operations are calls of its builtins, which generateStaticIntrinsic matches by
 # the callee
 @parity "dart2wasm/lib/intrinsics.dart:414 StaticIntrinsic.fromProcedure" function StaticIntrinsic_from_procedure(member::Core.MethodInstance)::Union{StaticIntrinsic,Nothing}
-    member.def.module === Runtime && member.def in methods(Runtime.ClassID_get_id) || return nothing
-    return get(get(get(StaticIntrinsic__lookup[], "dart:_internal", Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}()), "ClassID", Dict{String,StaticIntrinsic}()), "getID", nothing)
+    member.def.module === Runtime || return nothing
+    local (library, cls, name) = member.def in methods(Runtime.ClassID_get_id) ? ("dart:_internal", "ClassID", "getID") :
+                                 member.def in methods(Runtime._is_record_class_id) ? ("dart:core", nothing, "_isRecordClassId") : (nothing, nothing, nothing)
+    library === nothing && return nothing
+    return get(get(get(StaticIntrinsic__lookup[], library, Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}()), cls, Dict{String,StaticIntrinsic}()), name, nothing)
 end
 
 @parity "dart2wasm/lib/intrinsics.dart:432 Intrinsifier.boolType" Intrinsifier_bool_type()::WasmBuilder.IR.ValueType = WasmBuilder.IR.NumType_i32
@@ -548,9 +553,14 @@ end
             return generate_static_intrinsic(self, Val(:interface_type_class_id), node.args[2:end])
         target.def.name === :jl_to_typeof && target.def in methods(jl_to_typeof) &&
             return generate_static_intrinsic(self, Val(:to_typeof), node.args[2:end])
+        target.def.name === :jl_typetagis && target.def in methods(jl_typetagis) &&
+            return generate_static_intrinsic(self, Val(:typetagis), target, node.args[2:end])
+        target.def.module === Runtime && target.def in methods(Runtime.unsafe_cast) &&
+            return generate_static_intrinsic(self, Val(:unsafe_cast), target, node.args[2:end])
         local intrinsic = StaticIntrinsic_from_procedure(target)
         intrinsic === nothing && return nothing
         intrinsic === StaticIntrinsic_getID && return generate_static_intrinsic(self, Val(:get_id), node.args[2:end])
+        intrinsic === StaticIntrinsic_isRecordClassId && return generate_static_intrinsic(self, Val(:is_record_class_id), node.args[2:end])
         reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "the static intrinsic $intrinsic")
     end
     local f = nir_callee(node)
@@ -809,6 +819,27 @@ end
     reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a wasm array operation $op"), at)
 end
 
+# jl_typetagis (julia.h:136, src/julia/runtime/rtutils.jl): the value's class id against the ranges of the
+# classes under K, the type its call names, as the is checker's range check reads them
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:typetagis}, target::Core.MethodInstance, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local K = (Base.unwrap_unionall(target.specTypes)::DataType).parameters[3].parameters[1]
+    local type_ = t.top_type_non_nullable[]
+    translate_expression(self.code_gen, args[1], type_)
+    load_class_id(self.code_gen.b[], t, type_)
+    emit_class_id_range_check(self.code_gen.b[], get_concrete_class_id_range(t.class_id_numbering[], K))
+    return WasmBuilder.IR.NumType_i32
+end
+
+# dart's unsafeCast (intrinsics.dart:1517): the operand translated at the target type's wasm type, its
+# conversion a cast with no test, as dart lets the context convert it
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:unsafe_cast}, target::Core.MethodInstance, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local T = (Base.unwrap_unionall(target.specTypes)::DataType).parameters[2].parameters[1]
+    local type_ = translate_type(translator(self), T)
+    translate_expression(self.code_gen, args[2], type_)
+    return type_
+end
+
 # _InterfaceType.classId (type.dart:276), a DataType value's field (src/julia/classes.jl, the kinds'
 # fields): its struct.get, as dart's code generator reads an instance field
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:interface_type_class_id}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
@@ -819,6 +850,17 @@ end
     local field = only(f for f in class_instance_fields(DataType, at) if f.name == "classId")
     translate_expression(self.code_gen, only(args), info.non_nullable_type)
     WasmBuilder.struct_get(self.code_gen.b[], info.struct_, t.field_index[field])
+    return WasmBuilder.IR.NumType_i32
+end
+
+# _isRecordClassId (intrinsics.dart:1485): the class id checked against the record classes' ranges,
+# dart's getConcreteClassIdRange of its Record class; Julia's records are the open tuple type's
+# (src/julia/classes.jl open_tuple_holds), not one range as dart asserts but each its own
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:is_record_class_id}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local ranges = get_concrete_class_id_range(t.class_id_numbering[], Tuple)
+    translate_expression(self.code_gen, only(args), WasmBuilder.IR.NumType_i32)
+    emit_class_id_range_check(self.code_gen.b[], ranges)
     return WasmBuilder.IR.NumType_i32
 end
 

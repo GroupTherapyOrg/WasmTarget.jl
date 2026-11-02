@@ -549,6 +549,7 @@ path, so the runtime's file map is a table too.
 @quarantine "Julia's include takes any path; the runtime pin table is the file map of the ports of the runtime libraries dart compiles every program with (pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries)" Core.String const RUNTIME_FILES::Tuple{Vararg{String}} = (
     "sdk/lib/_internal/wasm/common/class_id.dart",
     "sdk/lib/_internal/wasm/common/errors_patch.dart",
+    "sdk/lib/_internal/wasm/common/internal_patch.dart",
     "sdk/lib/_internal/wasm/common/type.dart",
     "sdk/lib/_internal/wasm/js_common/js_helper.dart",
     "sdk/lib/_internal/wasm/js_common/js_string.dart",

@@ -77,9 +77,17 @@ Natively Julia's `===`.
 # (builtins.c:584 in jl_f_isa, :591 in jl_f_typeassert): the value itself where it is a type, else
 # Julia's TypeError naming the builtin; the code generator calls it before a run-time type test
 @quarantine "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK), raising TypeError naming the builtin, as jl_f_typeassert does" Core.TypeError @noinline jl_typechk_type(fname::Symbol, @nospecialize(t::Any))::Type =
-    t isa Type ? t : Runtime.Error__throw_with_current_stack_trace(TypeError(fname, "", Type, t))
+    jl_typetagis(t, Type) ? Runtime.unsafe_cast(Type, t) : Runtime.Error__throw_with_current_stack_trace(TypeError(fname, "", Type, t))
 
 # ---- end of Julia's runtime ----
+
+# Julia's test of a value's kind by its type tag (julia.h:136 jl_typetagis, as jl_is_datatype and
+# jl_is_uniontype read it): the value's class id against the classes under `K` (getConcreteClassIdRange,
+# a kind's one class, or every kind for Type), the intrinsifier's class-id range check. The runtime's
+# type code tests a type value's kind by it, holding no type test of its own (`isa`), as dart's type.dart
+# tests by ClassID.getID. Natively no tag exists, so the body raises
+@quarantine "julia/src/julia.h:136 jl_typetagis tests a value's type tag" Core.Bool @noinline jl_typetagis(@nospecialize(x::Any), ::Type{K}) where {K} =
+    _wasm_only(Bool)
 
 """
     run_time_type_test!(translator, at)

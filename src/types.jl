@@ -486,8 +486,14 @@ runtime library at the pin, not ported: it rejects there, Unported, located.
     local at = "dart2wasm/lib/types.dart:434 Types.emitIsTest"
     local b = code_gen.b[]
     WasmBuilder.comment(b, "type check against $tested_against_type")
-    self.translator.options.verify_type_checks &&
-        reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1730 _verifyOptimizedTypeCheck"), "$at: verifyTypeChecks calls the runtime's check of an optimized type test")
+    local operand_temp = nothing
+    if self.translator.options.verify_type_checks
+        # dart keeps the operand in a local of the nullable top type; local.tee leaves the local's type on
+        # the stack, so the local takes the operand's own nullability, which the is checker's signature
+        # reads (Nothing <: operand_type)
+        operand_temp = WasmBuilder.add_local(b, Nothing <: operand_type ? self.translator.top_type[] : self.translator.top_type_non_nullable[])
+        WasmBuilder.local_tee(b, operand_temp)
+    end
     local check_only_null_assignability = _requires_only_null_assignability_check(self, operand_type, tested_against_type)
     local is_checkers = is_checkers_for_module(self, b.module_builder)
     local (type_to_check, check_arguments) = can_use_type_check_helper(is_checkers, tested_against_type, operand_type)
@@ -520,6 +526,17 @@ runtime library at the pin, not ported: it rejects there, Unported, located.
     else
         reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype"), "$at: a test against $tested_against_type needs the runtime's subtype check")
     end
+    if self.translator.options.verify_type_checks
+        # the runtime's reference check of the optimized result: the operand, the tested type and the
+        # test's location, the empty String where the compiler knew none (dart's null; the runtime's
+        # port takes a String, src/runtime/common/type.jl)
+        WasmBuilder.local_get(b, operand_temp)
+        make_type(self, code_gen, tested_against_type)
+        local verify = verify_optimized_type_check(self.translator)
+        local verify_function_type = signature_for_direct_call(self.translator, verify)
+        instantiate_constant(self.translator.constants[], b, NirConst(Core.Const(something(location, ""))), verify_function_type.inputs[end])
+        call(code_gen, verify)
+    end
     return nothing
 end
 
@@ -528,9 +545,9 @@ Emits a check that a value is of a type, returning the wasm type of the checked 
 checker of the type when Julia tells its values by their class. Otherwise the value, kept in a local
 of its boxed type, is checked by the runtime: a class of the closed world by `_asInterfaceSubtype0`
 (src/runtime/common/type.jl), told whether only the null case is checked, the type's nullability and
-its class id (`is_interface_class_type`, src/julia/classes.jl), and the checked value is the local's. dart calls
-`_asSubtype` for any other type, of the runtime library at the pin, not ported: the check rejects
-there, Unported.
+its class id (`is_interface_class_type`, src/julia/classes.jl), and the checked value is the local's.
+dart calls `_asSubtype` for any other constant type; its constant-type arm here rejects, Unported (a
+type only run time knows takes the code generator's own call of `_asSubtype`).
 """
 @parity "dart2wasm/lib/types.dart:527 Types.emitAsCheck" function emit_as_check(self::Types, code_gen::AstCodeGenerator, tested_against_type::Type, operand_type::Type,
         boxed_operand_type::WasmBuilder.IR.RefType; location::Union{String,Nothing} = nothing)::WasmBuilder.IR.ValueType

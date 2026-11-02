@@ -104,6 +104,9 @@ end
 @parity "dart2wasm/lib/kernel_nodes.dart:721 KernelNodes.asSubtype" as_subtype(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime._as_subtype, "KernelNodes.asSubtype")
 
+@parity "dart2wasm/lib/kernel_nodes.dart:745 KernelNodes.verifyOptimizedTypeCheck" verify_optimized_type_check(self::KernelNodes)::Core.MethodInstance =
+    nir_runtime_member(self.component, Runtime._verify_optimized_type_check, "KernelNodes.verifyOptimizedTypeCheck")
+
 @parity "dart2wasm/lib/kernel_nodes.dart:729 KernelNodes.asInterfaceSubtype0" as_interface_subtype0(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime._as_interface_subtype0, "KernelNodes.asInterfaceSubtype0")
 

@@ -1,7 +1,9 @@
 # parity(sdk/lib/_internal/wasm/common/type.dart): dart's runtime types at the pin, the subtype checks
 # the code generator calls where a type test needs the runtime, ported as Julia methods of the module
-# Runtime (src/julia/parity.jl RUNTIME_FILES). As dart's file, the code avoids type tests (`isa`,
-# typeassert) of its own, which would call back into these checks.
+# Runtime (src/julia/parity.jl RUNTIME_FILES). As dart's file, the code holds no type test (`isa`,
+# typeassert) of its own, which would call back into these checks and which verifyTypeChecks would
+# check again: a type value's kind is read from its tag (src/julia/runtime/rtutils.jl jl_typetagis, as
+# dart reads ClassID.getID) and narrowed by unsafeCast (internal_patch.jl).
 
 """
 The index of the substitution table entry that substitutes nothing (dart's `external WasmI32 get
@@ -119,8 +121,11 @@ a DataType is a supertype of Nothing only as Nothing or Any, a Union where eithe
 never.
 """
 @parity "sdk/lib/_internal/wasm/common/type.dart:68 _Type.isDeclaredNullable" function _Type_is_declared_nullable(t::Type)::Bool
-    t isa DataType && return t === Nothing || t === Any
-    t isa Union && return _Type_is_declared_nullable(t.a::Type) || _Type_is_declared_nullable(t.b::Type)
+    jl_typetagis(t, DataType) && return (d = unsafe_cast(DataType, t); d === Nothing || d === Any)
+    if jl_typetagis(t, Union)
+        local u = unsafe_cast(Union, t)
+        return _Type_is_declared_nullable(unsafe_cast(Type, u.a)) || _Type_is_declared_nullable(unsafe_cast(Type, u.b))
+    end
     return false
 end
 
@@ -151,11 +156,12 @@ Julia's differs from dart: its Union is a kind of its own, where dart's nullable
     # Any, dart's _TopType (Object?), whose class row the class table does not hold (types.jl
     # _buildTypeRules skips the top): every value is of it
     t === Any && return _TopType__check_instance(o)
-    if t isa DataType
-        return _TypeUniverse_is_object_interface_subtype0(o, _InterfaceType_class_id(t))
-    elseif t isa Union
-        return _is_subtype(o, t.a::Type) || _is_subtype(o, t.b::Type)
-    elseif t isa Core.TypeofBottom
+    if jl_typetagis(t, DataType)
+        return _TypeUniverse_is_object_interface_subtype0(o, _InterfaceType_class_id(unsafe_cast(DataType, t)))
+    elseif jl_typetagis(t, Union)
+        local u = unsafe_cast(Union, t)
+        return _is_subtype(o, unsafe_cast(Type, u.a)) || _is_subtype(o, unsafe_cast(Type, u.b))
+    elseif jl_typetagis(t, Core.TypeofBottom)
         # Union{}'s kind, dart's _BottomType (type.dart:111): no value is of it
         return false
     end
@@ -219,14 +225,20 @@ FutureOr and type-parameter rules have no Julia kind.
     # Compare nullabilities:
     _Type_is_declared_nullable(s) && !_Type_is_declared_nullable(t) && return false
     # Left bottom:
-    s isa Core.TypeofBottom && return true
+    jl_typetagis(s, Core.TypeofBottom) && return true
     # Right top:
     t === Any && return true
     # Right bottom:
-    t isa Core.TypeofBottom && return false
+    jl_typetagis(t, Core.TypeofBottom) && return false
     # Julia's Union, left then right (subtype.c)
-    s isa Union && return _TypeUniverse_is_subtype(s.a::Type, t) && _TypeUniverse_is_subtype(s.b::Type, t)
-    t isa Union && return _TypeUniverse_is_subtype(s, t.a::Type) || _TypeUniverse_is_subtype(s, t.b::Type)
+    if jl_typetagis(s, Union)
+        local su = unsafe_cast(Union, s)
+        return _TypeUniverse_is_subtype(unsafe_cast(Type, su.a), t) && _TypeUniverse_is_subtype(unsafe_cast(Type, su.b), t)
+    end
+    if jl_typetagis(t, Union)
+        local tu = unsafe_cast(Union, t)
+        return _TypeUniverse_is_subtype(s, unsafe_cast(Type, tu.a)) || _TypeUniverse_is_subtype(s, unsafe_cast(Type, tu.b))
+    end
     # Null: dart's Null is the nullable bottom, below every nullable type (Left bottom, type.dart:1364);
     # Julia's Nothing, past the nullabilities, is below Nothing and Any only, both answered above, and no
     # other type is below Nothing (julia/src/subtype.c:1419 subtype)
@@ -235,7 +247,8 @@ FutureOr and type-parameter rules have no Julia kind.
     # type (subtype.c:1582 subtype_tuple, dart's record rule, type.dart:1440): a program holding either
     # beside a run-time subtype test rejects, located, at link time (src/julia/runtime/rtutils.jl
     # check_run_time_type_values), as it does a UnionAll
-    s isa DataType && t isa DataType && return _TypeUniverse_is_interface_subtype(s, t)
+    jl_typetagis(s, DataType) && jl_typetagis(t, DataType) &&
+        return _TypeUniverse_is_interface_subtype(unsafe_cast(DataType, s), unsafe_cast(DataType, t))
     # a UnionAll, which that link-time check rejects in the program; here only one of WasmTarget's own
     # runtime: loud, never an answer
     Error__throw_with_current_stack_trace(ErrorException("WasmTarget: a run-time subtype test of a UnionAll, which Julia's subtype decides by its environment"))
@@ -274,4 +287,51 @@ one, the two types and both results, line for line as dart writes it.
         "Checking $(e.left) <: $(e.right)\n",
         "Optimized result $(e.optimized), reference result $(e.reference)\n")
     return nothing
+end
+
+"""
+Whether the class id is a record class's (dart's `@pragma("wasm:intrinsic") external bool
+_isRecordClassId(WasmI32 classId)`): the intrinsifier lowers it to the class-id range check over the
+record classes, Julia's tuple records (src/julia/classes.jl TupleRecord, the classes an open tuple
+type's range holds). Natively no class id exists, so the body raises.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:2060 _isRecordClassId" @noinline _is_record_class_id(class_id::Int32)::Bool =
+    _wasm_only(Bool)
+
+"""
+The runtime type of a non-null value (dart's `_getActualRuntimeType`): the type of its class id, read
+from the table of each class's type value (julia.h:971 jl_to_typeof). Julia's typeof answers the same:
+a value's class is its type, its parameters bound. dart's Object class id has no Julia instance. A
+closure is a class of its own, its type the table's. A record class is the record model's TupleRecord,
+whose values' Julia type is the tuple of their fields' types: dart's
+Record._getMasqueradedRecordRuntimeType, not ported, raises, loud.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1941 _getActualRuntimeType" function _get_actual_runtime_type(@nospecialize(object::Any))::Type
+    local class_id = ClassID_get_id(object)
+    _is_record_class_id(class_id) &&
+        Error__throw_with_current_stack_trace(ErrorException("WasmTarget: the runtime type of a tuple held as its record (dart's Record._getMasqueradedRecordRuntimeType) is not ported"))
+    return jl_to_typeof(class_id)
+end
+
+"""
+The runtime type of a value that may be null (dart's `_getActualRuntimeTypeNullable`): null's is
+Julia's Nothing, dart's `_literal<Null>()`; any other value's is `_get_actual_runtime_type`'s.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1955 _getActualRuntimeTypeNullable" _get_actual_runtime_type_nullable(@nospecialize(object::Any))::Type =
+    object === nothing ? Nothing : _get_actual_runtime_type(object)
+
+"""
+Checks an optimized type test against the runtime's reference subtype check (dart's
+`@pragma("wasm:entry-point") bool _verifyOptimizedTypeCheck(bool result, Object? o, _Type t, String?
+location)`), the call emitIsTest makes after a test under `verifyTypeChecks`: the value's runtime type
+tested against `t` by `_isTypeSubtype`; a disagreement throws `_TypeCheckVerificationError`; else the
+optimized result is returned. dart's `String? location` is a String here, empty where the compiler
+knew none: a root is the specialization Julia compiles for its signature (src/julia/subset.jl
+_entry_specialization), and Julia compiles none for a `Union{Nothing,String}` parameter.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1730 _verifyOptimizedTypeCheck" function _verify_optimized_type_check(result::Bool, @nospecialize(o::Any), t::Type, location::String)::Bool
+    local s = _get_actual_runtime_type_nullable(o)
+    local reference = _is_type_subtype(s, t)
+    result != reference && Error__throw_with_current_stack_trace(_TypeCheckVerificationError(s, t, result, reference, isempty(location) ? nothing : location))
+    return result
 end
