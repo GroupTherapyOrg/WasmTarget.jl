@@ -27,8 +27,10 @@ ship_rules="$(git hash-object "$0")"
 # (so its dirname/.. is still the lane), saying so; dev/check.sh already runs from the scratch rebased onto origin
 if [ -z "${WT_SHIP_ORIGIN:-}" ] && git fetch -q origin "$MARCH" 2>/dev/null; then
   mkdir -p .wtd; git show "origin/$MARCH:dev/ship.sh" > .wtd/ship.origin.sh 2>/dev/null
-  if [ -s .wtd/ship.origin.sh ] && ! cmp -s .wtd/ship.origin.sh dev/ship.sh; then
-    echo "ship: this lane's dev/ship.sh differs from origin/$MARCH's; running origin's"
+  # always the copy, never this file in place: bash reads a script as it runs, so an edit to the tree's dev/ship.sh
+  # during a ship changed the running ship ("dev/ship.sh: line 247: ...", wt3-lead2 14:47; march-monitor-a)
+  if [ -s .wtd/ship.origin.sh ]; then
+    cmp -s .wtd/ship.origin.sh dev/ship.sh || echo "ship: this lane's dev/ship.sh differs from origin/$MARCH's; running origin's"
     WT_SHIP_ORIGIN=1 exec bash .wtd/ship.origin.sh "$@"
   fi
 fi

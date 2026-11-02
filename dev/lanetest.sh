@@ -20,8 +20,9 @@ cd "$(git rev-parse --show-toplevel)"
 # lanetest.sh kept its stale slot rule and ran at background with both slots free (wt3-codegen-b, 12:44)
 if [ -z "${WT_LANETEST_ORIGIN:-}" ]; then
   mkdir -p .wtd; git show "origin/wt2:dev/lanetest.sh" > .wtd/lanetest.origin.sh 2>/dev/null
-  if [ -s .wtd/lanetest.origin.sh ] && ! cmp -s .wtd/lanetest.origin.sh dev/lanetest.sh; then
-    echo "lanetest: this tree's dev/lanetest.sh differs from origin/wt2's; running origin's"
+  # always the copy, never this file in place, as dev/ship.sh: an edit to the tree's file can't change a running test
+  if [ -s .wtd/lanetest.origin.sh ]; then
+    cmp -s .wtd/lanetest.origin.sh dev/lanetest.sh || echo "lanetest: this tree's dev/lanetest.sh differs from origin/wt2's; running origin's"
     WT_LANETEST_ORIGIN=1 exec bash .wtd/lanetest.origin.sh "$@"
   fi
 fi
