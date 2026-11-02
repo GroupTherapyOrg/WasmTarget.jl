@@ -1648,7 +1648,8 @@ function audit_fixes(root::AbstractString, heading::AbstractString)::Union{Nothi
         local c = readchomp(`git -C $root log -1 --format=%H -S$heading -- dev/AUDIT.md`)
         isempty(c) && return fixed
         for l in split(readchomp(`git -C $root log $c..HEAD --format=%B`), '\n')
-            startswith(l, "Fixes:") && union!(fixed, String[x.match for x in eachmatch(r"\bA\d+[A-Z]\d+\b", l)])
+            # a line listing IDs alone (dev/hooks/commit-msg refuses any other); a `Narrows:` line frees nothing (A81S3)
+            occursin(r"^Fixes: A\d+[A-Z]\d+(, A\d+[A-Z]\d+)*$", l) && union!(fixed, String[x.match for x in eachmatch(r"\bA\d+[A-Z]\d+\b", l)])
         end
     catch
         return nothing
@@ -1680,7 +1681,8 @@ function findings_negatives_missed()::Vector{String}
         write(log, "# log\n\n## e1 (a..b)\n"); g("commit", "-qam", "entry")
         write(joinpath(t, "f"), "x"); g("add", "f"); g("commit", "-qm", "fix\n\nFixes: A1B2")
         write(log, "# the log\n\n## e1 (a..b)\n"); g("commit", "-qam", "header")
-        audit_fixes(t, "## e1 (a..b)") == Set(["A1B2"]) || push!(out, "negative missed: a fix after the entry, then a header edit")
+        write(joinpath(t, "f"), "y"); g("commit", "-qam", "partial\n\nFixes: A1B3 (interim, step one)\nNarrows: A1B4 — its first half")
+        audit_fixes(t, "## e1 (a..b)") == Set(["A1B2"]) || push!(out, "negative missed: a fix after the entry, then a header edit, or a partial fix read as one")
         audit_fixes(t, "## e2 (b..c)") == Set{String}() || push!(out, "negative missed: an entry not yet committed")
     end
     return out
@@ -1703,6 +1705,10 @@ function trailer_negatives_missed()::Vector{String}
     hook_accepts(base) || push!(out, "negative missed: the hook refuses a message with one Co-Authored-By trailer")
     hook_accepts(base * "    Co-Authored-By: A <a@b>\n") && push!(out, "negative missed: the hook accepts an indented second trailer")
     hook_accepts(base * "Co-authored-by: B <c@d>\n") && push!(out, "negative missed: the hook accepts a second trailer in another case")
+    # a Fixes: line lists IDs alone; a partial fix is Narrows: (A81S3)
+    hook_accepts(base * "Fixes: A1B1, A1B2\n") || push!(out, "negative missed: the hook refuses a Fixes: line of IDs")
+    hook_accepts(base * "Fixes: A1B1 (interim)\n") && push!(out, "negative missed: the hook accepts a Fixes: line with a parenthetical")
+    hook_accepts(base * "Narrows: A1B1 — step one\n") || push!(out, "negative missed: the hook refuses a Narrows: line")
     return out
 end
 
@@ -3177,7 +3183,7 @@ const LOCKS = [
                           occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)", sh) &&
                           occursin(raw"-v B=\"$budget\"", sh) && occursin("PAST THE %d-MINUTE BUDGET", sh)])
         end),
-    "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every row names its clauses: no finding ID in any clause's Planned text; every row it cites exists; each row names in its Clause column exactly the clauses whose Planned cites it, and a row that names none (1.M the merge, 1.P post-merge) is cited by none; and every finding the latest dev/AUDIT.md entry's Resolution leaves open on a row (a MARCH row 1.<x> or a ledger row D<n>) sits on that row, until a commit after the entry's own carries a `Fixes:` line naming it, and every row it names exists (A32E3). Audits then lengthen MARCH rows and their own entries, not the charter (A3P4). Behavior, run here: a planted entry's five open findings, read, and four planted rows and fixes answer as stated (dev/CHARTER.md C0)",
+    "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every row names its clauses: no finding ID in any clause's Planned text; every row it cites exists; each row names in its Clause column exactly the clauses whose Planned cites it, and a row that names none (1.M the merge, 1.P post-merge) is cited by none; and every finding the latest dev/AUDIT.md entry's Resolution leaves open on a row (a MARCH row 1.<x> or a ledger row D<n>) sits on that row, until a commit after the entry's own carries a `Fixes:` line naming it, a line listing finding IDs alone (dev/hooks/commit-msg refuses any other, and a partial fix's `Narrows: <ID> — <what>` frees no row, A81S3), and every row it names exists (A32E3). Audits then lengthen MARCH rows and their own entries, not the charter (A3P4). Behavior, run here: a planted entry's five open findings, read, and four planted rows and fixes answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local rx = r"\b(A\d+[A-Z]\d+|[BEHMPS]\d+)\b"
             local rowid = r"\b1\.[A-Z]\d*[a-z]?\b"
@@ -3348,7 +3354,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L209_one_coauthor_trailer" => ("a commit carries one Co-Authored-By trailer (A35E4: bb2c2fee, 3b3a0a0c and edf2327b each carried a second, indented one; dev/LEDGER.md D24): dev/hooks/commit-msg refuses a message with more than one, indented or in any case, and CI's message-hygiene refuses one from the commit that put the rule in the hook on. Behavior, run here: the hook on three planted messages, one trailer accepted, an indented second and a second in another case refused; and ci.yml holds the rule (dev/CHARTER.md C0)",
+    "L209_one_coauthor_trailer" => ("a commit carries one Co-Authored-By trailer (A35E4: bb2c2fee, 3b3a0a0c and edf2327b each carried a second, indented one; dev/LEDGER.md D24): dev/hooks/commit-msg refuses a message with more than one, indented or in any case, and CI's message-hygiene refuses one from the commit that put the rule in the hook on. And the hook refuses a `Fixes:` line that is not a list of finding IDs alone, a partial fix written `Narrows: <ID> — <what>` (A81S3). Behavior, run here: the hook on six planted messages, one trailer accepted, an indented second and a second in another case refused, a Fixes: line of IDs and a Narrows: line accepted, a Fixes: line with a parenthetical refused; and ci.yml holds the rule (dev/CHARTER.md C0)",
         () -> begin
             local v = trailer_negatives_missed()
             occursin("commits with more than one Co-Authored-By trailer:", read(joinpath(ROOT, ".github", "workflows", "ci.yml"), String)) ||

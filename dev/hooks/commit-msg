@@ -26,6 +26,12 @@ if printf '%s' "$subject" | grep -qiE '^(wip|tmp|temp|fixup!?|squash!?|todo|xxx)
     echo "commit refused: the subject must say what the change does, '<kind>(<scope>): <what>', not \"$subject\"" >&2
     exit 1
 fi
+# a `Fixes:` line lists finding IDs and nothing else, so L154 frees a finding's row only when it is fixed: a
+# partial fix says `Narrows: <ID> — <what>` (A81S3; "Fixes: A80E1 (interim ...)" freed its row)
+if grep -E '^Fixes:' "$msg" | grep -qvE '^Fixes: A[0-9]+[A-Z][0-9]+(, A[0-9]+[A-Z][0-9]+)*$'; then
+    echo "commit refused: a 'Fixes:' line lists finding IDs alone ('Fixes: A1E1, A1E2'); a partial fix is 'Narrows: <ID> — <what>'" >&2
+    exit 1
+fi
 # one attribution: a message carries at most one Co-Authored-By trailer, indented or not (A35E4)
 coauthors=$(grep -ciE '^[[:space:]]*Co-Authored-By:' "$msg" || true)
 if [ "$coauthors" -gt 1 ]; then
