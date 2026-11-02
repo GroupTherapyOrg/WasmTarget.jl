@@ -226,8 +226,11 @@ wall=$(( $(date +%s) - s0 ))
 # The shards, three green dev-only checks, 2026-11-02 (performance-core G in performance-core seconds, the lowest of
 # each check's six): fd65f41e 375 G in 36 s, f4ea3125 372 in 34, 6baa3349 362 in 36: 362/37 = 9.78
 RATE_P_SRC=9.7
-# the ratchet, the same checks: fd65f41e 317 G in 27 s, f4ea3125 315 in 26, 6baa3349 317 in 28: 317/29 = 10.9
-RATE_P_RATCHET=10.9
+# the ratchet, re-measured when 812c7779's check ran it at 9.3 G a performance-core second (its children's work, once
+# bash-wrapped julia, now in its own reported processes): three green default-QoS checks' exact splits (.wtd/ratchet.gi,
+# performance-core G in performance-core seconds), 2026-11-02: b7f86566 299.09 G in 32.23 s (9.28), d2da291c 244.36 in
+# 26.01 (9.40), 4e87b54c 290.35 in 31.56 (9.20)
+RATE_P_RATCHET=9.2
 # the load of a change to src/, its image removed, three runs at default QoS on a quiet machine, 2026-11-02: 183.9 G in
 # 14.86 s (12.38), 182.1 in 15.08 (12.08), 183.6 in 14.68 (12.50): its image codegen runs on several threads at a high
 # instruction rate
