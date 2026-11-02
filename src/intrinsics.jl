@@ -149,20 +149,58 @@ Julia module, never dart:_wasm, so the map is empty (StaticIntrinsic.fromProcedu
 # a static final, lazily initialized as dart's is (Late); Julia's unary intrinsics by operand type, as Julia's codegen answers them: an integer's negation and
 # complement wrap (dart's `unary-` and `~`, the same instructions), a float's negation, magnitude,
 # square root and rounding are IEEE's (rint_llvm rounds to nearest even, wasm's nearest); an integer's
-# leading and trailing zeros and its population count, the width for zero as Julia's
+# leading and trailing zeros and its population count, the width for zero as Julia's; its byte swap
+# (bswap_int, LLVM's llvm.bswap, julia/src/intrinsics.cpp:1692), which wasm has no instruction for,
+# as LLVM's WebAssembly backend expands it (llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp:11513
+# expandBSWAP): an i32 by its rotate path, wasm having rotr (t = x ^ rotr(x, 16), t &= 0xFF00FFFF,
+# t >>= 8, x = t ^ rotr(x, 8)), an i64 by its eight shifted and masked bytes
 @parity "dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap" const Intrinsifier__unary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}("dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(
     WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.neg_int => c -> (WasmBuilder.i32_const(c.b[], -1); WasmBuilder.i32_mul(c.b[])),
         Core.Intrinsics.not_int => c -> (WasmBuilder.i32_const(c.b[], -1); WasmBuilder.i32_xor(c.b[])),
         Core.Intrinsics.ctlz_int => c -> WasmBuilder.i32_clz(c.b[]),
         Core.Intrinsics.cttz_int => c -> WasmBuilder.i32_ctz(c.b[]),
-        Core.Intrinsics.ctpop_int => c -> WasmBuilder.i32_popcnt(c.b[])),
+        Core.Intrinsics.ctpop_int => c -> WasmBuilder.i32_popcnt(c.b[]),
+        Core.Intrinsics.bswap_int => c -> begin
+            local b = c.b[]
+            local x = add_local(c, WasmBuilder.IR.NumType_i32)
+            WasmBuilder.local_tee(b, x)
+            WasmBuilder.local_get(b, x); WasmBuilder.i32_const(b, 16); WasmBuilder.i32_rotr(b)
+            WasmBuilder.i32_xor(b)
+            WasmBuilder.i32_const(b, Int64(reinterpret(Int32, 0xFF00FFFF))); WasmBuilder.i32_and(b)
+            WasmBuilder.i32_const(b, 8); WasmBuilder.i32_shr_u(b)
+            WasmBuilder.local_get(b, x); WasmBuilder.i32_const(b, 8); WasmBuilder.i32_rotr(b)
+            WasmBuilder.i32_xor(b)
+        end),
     WasmBuilder.IR.NumType_i64 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.neg_int => c -> (WasmBuilder.i64_const(c.b[], -1); WasmBuilder.i64_mul(c.b[])),
         Core.Intrinsics.not_int => c -> (WasmBuilder.i64_const(c.b[], -1); WasmBuilder.i64_xor(c.b[])),
         Core.Intrinsics.ctlz_int => c -> WasmBuilder.i64_clz(c.b[]),
         Core.Intrinsics.cttz_int => c -> WasmBuilder.i64_ctz(c.b[]),
-        Core.Intrinsics.ctpop_int => c -> WasmBuilder.i64_popcnt(c.b[])),
+        Core.Intrinsics.ctpop_int => c -> WasmBuilder.i64_popcnt(c.b[]),
+        Core.Intrinsics.bswap_int => c -> begin
+            local b = c.b[]
+            local x = add_local(c, WasmBuilder.IR.NumType_i64)
+            WasmBuilder.local_set(b, x)
+            # Tmp8..Tmp5: each low byte shifted up; Tmp4..Tmp1: each high byte shifted down
+            local term(mask::UInt64, shift::Int, left::Bool) = begin
+                WasmBuilder.local_get(b, x)
+                if left
+                    mask == 0 || (WasmBuilder.i64_const(b, reinterpret(Int64, mask)); WasmBuilder.i64_and(b))
+                    WasmBuilder.i64_const(b, shift); WasmBuilder.i64_shl(b)
+                else
+                    WasmBuilder.i64_const(b, shift); WasmBuilder.i64_shr_u(b)
+                    mask == 0 || (WasmBuilder.i64_const(b, reinterpret(Int64, mask)); WasmBuilder.i64_and(b))
+                end
+            end
+            term(UInt64(0), 56, true); term(UInt64(255) << 8, 40, true); WasmBuilder.i64_or(b)
+            term(UInt64(255) << 16, 24, true); term(UInt64(255) << 24, 8, true); WasmBuilder.i64_or(b)
+            WasmBuilder.i64_or(b)
+            term(UInt64(255) << 24, 8, false); term(UInt64(255) << 16, 24, false); WasmBuilder.i64_or(b)
+            term(UInt64(255) << 8, 40, false); term(UInt64(0), 56, false); WasmBuilder.i64_or(b)
+            WasmBuilder.i64_or(b)
+            WasmBuilder.i64_or(b)
+        end),
     WasmBuilder.IR.NumType_f32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.neg_float => c -> WasmBuilder.f32_neg(c.b[]),
         Core.Intrinsics.abs_float => c -> WasmBuilder.f32_abs(c.b[]),
@@ -2015,6 +2053,16 @@ end
     elseif length(args) == 1 && (f === I.neg_int || f === I.not_int)
         translate_expression(code_gen, args[1], i32)
         Intrinsifier__unary_operator_map[][i32][f](code_gen)
+        put_form(t)
+        return i32
+    elseif length(args) == 1 && f === I.bswap_int && sizeof(t) == 2
+        # a 16-bit byte swap, promoted to i32 as LLVM's type legalizer promotes it
+        # (DAGTypeLegalizer::PromoteIntRes_BSWAP: the swap of the zero-extended value, shifted down by 16)
+        translate_expression(code_gen, args[1], i32)
+        unsigned_view(t)
+        Intrinsifier__unary_operator_map[][i32][f](code_gen)
+        WasmBuilder.i32_const(b[], 16)
+        WasmBuilder.i32_shr_u(b[])
         put_form(t)
         return i32
     end

@@ -214,23 +214,30 @@ end
 
 # muladd_float as an fmul then an fadd (core wasm has no fused multiply-add; inputs whose product is
 # exact, where Julia's fused and unfused answers agree); have_fma false for wasm, so Base's fma takes
-# its emulation, answering native's hardware fma; fpiseq, Float64's and Float32's isequal
+# its emulation, answering native's hardware fma; fpiseq, Float64's and Float32's isequal; bswap_int on
+# every width Julia's bswap takes it, LLVM's expansion
 module FloatBitCases
 mad(x::Float64) = muladd(x, 2.0, 0.5)
 mad32(x::Float32) = muladd(x, 4.0f0, -1.25f0)
 fma32(x::Float32) = fma(x, 0.1f0, -0.3f0)
 iseq(x::Float64, y::Float64) = isequal(x, y)
 iseq32(x::Float32, y::Float32) = isequal(x, y)
+# the 16-bit operands made inside (the runner passes no 16-bit argument): z's low bits, w's wrapped
+swap(x::UInt32, y::Int64, z::Int64, w::Int64) = (UInt64(bswap(x)) ⊻ reinterpret(UInt64, bswap(y))) +
+    UInt64(bswap(z % UInt16)) + UInt64(reinterpret(UInt16, bswap(w % Int16))) + (bswap(w % Int16) < 0 ? UInt64(1) << 40 : UInt64(0))
 end
 
-@testset "intrinsics.cpp: muladd_float, have_fma and fpiseq against native" begin
+@testset "intrinsics.cpp: muladd_float, have_fma, fpiseq and bswap_int against native" begin
     local C = FloatBitCases
     local f64s = [0.0, -0.0, 1.5, -2.5, 1e300, -Inf, NaN]
     local f32s = Float32[0, -0.0, 1.5, -2.5, 3.0f38, -Inf, NaN, 0.7f0, 1.0f-30]
     for (f, at, argsets) in ((C.mad, (Float64,), [(x,) for x in f64s]), (C.mad32, (Float32,), [(x,) for x in f32s]),
                              (C.fma32, (Float32,), [(x,) for x in f32s]),
                              (C.iseq, (Float64, Float64), [(x, y) for x in f64s for y in f64s]),
-                             (C.iseq32, (Float32, Float32), [(x, y) for x in f32s for y in f32s]))
+                             (C.iseq32, (Float32, Float32), [(x, y) for x in f32s for y in f32s]),
+                             (C.swap, (UInt32, Int64, Int64, Int64), [(UInt32(0x12345678), Int64(0x0102030405060708), Int64(0xabcd), Int64(-2)),
+                                                                     (typemax(UInt32), typemin(Int64), Int64(1), Int64(-32768)),
+                                                                     (UInt32(0), Int64(-1), Int64(0xff00), Int64(0x7f01))]))
         local bytes = W.compile(f, at; optimize = false)
         queue_native!(string(nameof(f)), bytes, f, argsets)
     end
