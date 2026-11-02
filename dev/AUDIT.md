@@ -8236,3 +8236,185 @@ A80E2 and A77S1 stay in row 1.C, no `Fixes:` line naming them. Open, their rows 
 beside A80E2; A83S1 for row 1.C, beside A82S1; A83S3, A83S4, A83S5, A83S9 and A83S10 for row 1.D; A83S6 for row 1.F;
 A83S2, A83S7 and A83S8 for row 1.L. By owner: wt3-memory A83E1, A83S4, A83S9 and A83S10, with A83S1's arm (A82S1);
 wt3-runtime A83S1 and A83S6; wt3-cgstubs2 A83S3; wt3-tests2 A83S5; wt3-parity A83S2 and A83S8; lead A83S7.
+
+## 2026-11-01 — audited through 111b93c6 (d84934e0..111b93c6: a class's null case checked by type.dart's _asInterfaceSubtype0, muladd and fma in one rounding with have_fma true, D13 judged from ship start, one julia header definition, the D11 lock's readers and antecedents, the wall-backstop plant in a child, OverrideVerifier's visitors mapped)
+
+The eighty-fourth audit, beside the work, covers the 8 commits of d84934e0..111b93c6 that are not audit entries
+(2313d029, entry 83): 399ba903, 787f152f, d3cfc78f, f08173cf, 5feef74f, c964a22f, 56687090 and 111b93c6, read under
+Dale's R1 and R2 as standing sections. Every finding rests on one exact command, quoted.
+Standing items. Each commit names its clause in a `Charter:` line (399ba903 C2, 787f152f C10, d3cfc78f C3, f08173cf
+C10, 5feef74f C0, c964a22f C10, 56687090 C10, 111b93c6 C2). No silent catch: `git diff d84934e0..111b93c6 | grep -cE
+'^\+.*\bcatch\b'` gives 3, two in entry 83's own prose and test/src/runtime.jl's, which tests the TypeError it catches.
+The debt list reads 371 (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`), one fewer: 399ba903 deletes
+`julia/packages.jl Runtime`. src reads 3087 of 3404 at every commit of the range (`.git/wt-progress.tsv`, d84934e0 to
+111b93c6), the runtime library's 13 rejecting sites naming 9 definitions before and after 399ba903: no dart definition
+of dart2wasm gained a body; the range's src work is type.dart's and class_id.dart's runtime ports (12 definitions) and
+the fma overlays. Earlier findings: A83S7 is fixed by 787f152f (`grep -n "^SHARDS=6\|tree_instructions.jl --plant"
+dev/check.sh` gives `106:` and `125:`, the tie at :118 between them); A83S8 by 5feef74f (`grep -rn WT_JULIA_HEADER dev
+test src` gives only MARCH's row, entry 83 and the plant at test/parity_ratchet.jl:1867 that sets it to prove it
+ignored); A83S2 and A76E4 by c964a22f, their residues A84E4, A84S1 and A84S2; A76S2 by 111b93c6 (each visitor's line
+read at the dart pin: `grep -n "void visit\|_checkField\|_isOverride" override_verifier.dart` gives :25, :32, :39, :50,
+:68, :90, :97, :110 and :121, as the map cites). A83S5 is narrowed by d3cfc78f, with no `Fixes:` line, so it stays: mad's
+second muladd over 1.5 and -2.5 now runs Float64's fma_emulated against native, while have_fma's arm is still checked
+only by emitted_by. A77E2 stands, re-read: `ps` finds an autoship loop in .worktrees/wt3-constants (held: `cat
+.git/wt-held` gives `wt3-constants`), its dev/ship.sh holding neither the hold's refusal nor origin's trampoline
+(`grep -c "wt-held\|ship.origin.sh"` gives 0), 117 failure rows (110 of them rebase conflicts) in wt-ship-failures.tsv since 2026-10-29T09:11Z; the
+pre-push hook is what keeps it from landing. A51E3 stands, worse (A84E2). A83E1, A83S1, A83S3, A83S4, A83S6, A83S9,
+A83S10, A82E1, A82S1 to A82S5, A82S7, A80E2, A77S1, A80S2, A80S3, A77E1, A77E3, A78S2, A76E5, A76E6, A68E3, A71E2, A69E1,
+A68E2, A68S4, A72E1 and A67E1, carried, not re-read. Findings A84E1 to A84E4 and A84S1 to A84S6.
+
+Area: builder — no change under src/wasm_builder (`git diff --stat d84934e0..111b93c6 -- src/wasm_builder` gives
+nothing).
+
+Area: collection and planning — 399ba903: the runtime ports and their roots. Each anchor read at the dart pin (`sed -n
+<line>p sdk/lib/_internal/wasm/common/type.dart` for 665, 670, 687, 695, 1005, 1185, 1196, 1498, 1518, 1589 and 1651
+gives each declaration as cited), and emit_as_check (src/types.jl:535-570) is types.dart:527-595 line for line: the
+operand teed to a local, encodedBool, the nullability and class id, the call, its outputs dropped, the local read.
+Two departures, each stated: dart's `assert(!_isObjectClassId(tId))` (:1188) is not written, and `if (minify)
+_throwErrorWithoutDetails()` (:1599) is not ported ("WasmTarget has no minified build of its runtime"). told_by_class
+(src/julia/classes.jl) replaces the inline kind test in can_use_type_check_helper, one definition for both callers (D5).
+(A84S4, low, D12) the table path is ported and no case runs it, and none can through the code generator: `sed -n
+595,602p src/types.jl` gives can_use_type_check_helper answering `(tested_against_type, false)` or rejecting for every
+type with no free type variable that its kinds do not split, so is_interface_class_type (classes.jl) reaches the
+non-null arm of emit_is_test (:499) and emit_as_check (:553) for no class of the closed world; `grep -ln
+"_check_subclass_relationship\|wasm_array_read\|_type_row_displacement\|_is_interface_subtype0" test/src/*.jl
+test/smoke_corpus.jl` gives nothing. So _checkSubclassRelationshipViaTable (src/runtime/common/type.jl:61), the three
+table getters' lowering (generate_static_getter_intrinsic), WasmArray's read and readUnsigned, and ClassID.getID's
+header load are compiled into every module (rooted by their pragmas) and executed by none; the commit's cases test the
+null case alone. Fix: a case compiling `Runtime._is_interface_subtype0` as an entry, called with a value of a class, of
+its subclass, of an unrelated class and `nothing`, each answer against native `isa` on the class the id names. Owner:
+wt3-runtime.
+
+Area: emission and diagnostics — d3cfc78f, to the lead's questions. Is one rounding Julia's own answer on this host:
+for an inlined Float32 or Float64 muladd, yes. At the julia pin, `sed -n 1555,1561p src/intrinsics.cpp` gives `case
+muladd_float:` emitting `mathb().CreateFAdd(mathb().CreateFMul(x, y), z)` under math_builder(ctx, true, true), the
+contract flags AArch64's backend fuses into one fmadd; `sed -n 40,47p src/llvm-cpufeatures.cpp` gives always_have_fma
+answering `typ == "f32" || typ == "f64"` on AArch64; the runtime intrinsic (runtime_intrinsics.c:1517 `#define
+muladd(a, b, c) a * b + c`) is one C expression. Float16, the third IEEEFloat the overlay names, is refused before any
+arithmetic (src/translator.jl:978), so fma_emulated(::Float16)'s Float32 double rounding is never reached. Is the
+departure stated: yes, in the floatfuncs.jl header, both @quarantine reasons and have_fma's comment (intrinsics.jl:
+1924-1932): core wasm has no fused multiply-add, the oracle is the native FMA host. Does another path lower muladd
+unfused: no. `git grep -c muladd -- src` gives `src/intrinsics.jl:2` (have_fma's comment) and
+`src/patch/floatfuncs.jl:5`; muladd_float reached directly rejects; legacy's julia_numeric_tier.jl:144 lowers it fused,
+so WT1 agrees. Have_fma true sends Base's two_mul (math.jl:55, :63) and hypot (:769) to their fma branches, each fma the
+overlay's fma_emulated. (A84E1, medium, D3, D9) one rounding is not Julia's answer at every muladd, and the overlay
+claims it is: `sed -n 716,718p test/smoke_corpus.jl` gives "x^n is not here: muladd lets the compiler round once or
+twice, and native / Julia 1.12 fuses the muladds in pow_body where native 1.13 does not (measured on all 4001", while
+`grep -n consistent_overlay src/patch/floatfuncs.jl` gives `15:@quarantine "julia/base/float.jl:500 muladd is
+muladd_float, which LLVM fuses on an FMA host; … one rounding as natively" Base.muladd @consistent_overlay`. LLVM's
+contraction is a choice per site, not a function of the source; a consistent overlay tells WasmTarget's inference it
+may evaluate the call with Base's native method, so on 1.13 a constant-folded x^n (native pow_body, unfused) and a
+run-time x^n (the overlay, fused) can differ in one module, where native agrees with itself; and the reason states the
+fused answer as native's unconditionally, with the measured exception only in a test comment. Fix: the overlay
+declared without @consistent_overlay (the call evaluated only by the overlay), and its reason stating that native's
+answer is LLVM's contraction per site, fused at every muladd here, x^n on 1.13 the measured departure; or the departure
+made a located rejection. Owner: wt3-memory. (A84S6, low, D9) the oracle's fusing is assumed, never checked: `grep -rn
+have_fma test dev` gives the corpus comment, the intrinsics test and MARCH's row, and nothing asserts that the native
+side fuses, so on a host whose CPU lacks FMA every bit_exact_math case would read WasmTarget wrong. Fix: the
+differential harness (test/runner.jl's native answer) asserts native `Core.Intrinsics.have_fma(Float64)` once and
+refuses, located, on a host that answers false. Owner: wt3-tests2.
+
+399ba903's failure type. (A84S5, low, D9) the table jl_to_typeof reads is null past a gap: `sed -n 831p src/intrinsics.jl`
+gives `local entries = NirConst[NirConst(Core.Const(get(small_typeof, id, nothing))) for id in
+0:length(t.classes[])-1]`, every class no as check names a null entry, guarded by :837's `ref_as_non_null`, a trap
+with no location, and a comment arguing that no read reaches one; small_typeof is a second map from class id to type
+beside translator.classes. Fix: jl_to_typeof's callers pass only ids the table holds by construction (the linking
+action refuses, located, a called id with no entry), or the table's entries read from translator.classes for every
+class whose type is a constant, its exceptions named. Owner: wt3-runtime.
+
+Area: enforcement and prose — (A84E2, high, D2, D12) the landing check runs no group of test/smoke.jl, so a wrong
+answer lands green. `grep -n smoke dev/check.sh dev/ship.sh dev/gate.sh` gives only check.sh:72 and :87, the corpus
+image's build; `grep -oE '_g\("[a-z0-9_]+"' test/smoke_corpus.jl | sort -u | wc -l` gives 140 groups, 35 of them
+`dart_` (`grep -cE '^_g\("dart_'` gives 35), and dev/corpus.sh, the runner beside the landings, runs only the dart_
+groups (test/src/dart_tests.jl:2, "every case of test/smoke_corpus.jl's `dart_*` groups"); the other 105, bit_exact_math
+among them, run only in dev/lanes.sh at a clause's closure. So bdd08864 landed 14 wrong bit_exact_math answers green,
+its own case built not to tell (`git show bdd08864 -- test/src/code_generator_intrinsics.jl | grep -n "product is"`
+gives `46:+# muladd_float as an fmul then an fadd (core wasm has no fused multiply-add; inputs whose product is`, "exact,
+where fused and unfused agree"), and audit #83 read the lowering sound without running the group; d3cfc78f found it by
+running WT_SMOKE_EXACT=1 test/smoke.jl by hand. And the runner itself is down: `ps aux | grep -c "[c]orpus.sh"` gives
+0, and `.git/wt-corpus.tsv`'s verdicts read 26 green, 24 red and 7 hung, the last green 2026-10-29T08:13:38Z at
+a0573e28, the last run 2026-11-01T20:46:19Z at 6732d4a6, hung. D2 says a green differential means sound; the charter
+(dev/CHARTER.md:162) makes the differential lanes "the soundness gate", and D2's ledger row names test/smoke.jl as its
+check. That needs the differential to run on a semantic change before it lands, or a red on the head to stop the next
+landing, which neither does today (A51E3's half). Fix: row 1.Q's construction, each smoke group's outcome recorded in
+the tree and the landing refused where a case PASS at the tip is not PASS; until it lands, dev/corpus.sh runs every
+group, not the dart_ groups alone, on each new head, restarted, and a red head writes the line stop naming the lane
+that landed it. Owner: lead (the check's stage and the stop), wt3-tests2 (the runner's coverage and its restart).
+
+f08173cf, to the lead's question: it judges the queue and the check honestly and no longer the backlog, but it changed
+the measure Dale's row names, and a lane can hide a slow landing in it. (A84E3, medium, D13, D17, D18) `grep -n
+"edit-to-landed" dev/LEDGER.md` gives `36:`, D13's band "a 300-s target for the median edit-to-landed of the last five
+landings, red past 600 s", while dev/ship.sh:260 reads field 4, seconds from this ship's start, and the ledger row
+is unchanged. A red attempt restarts the clock: `tail -4 .git/wt-landings.tsv` gives `111b93c6 1209 173 wt3-parity`,
+and `awk -F'\t' '$1 >= "2026-11-02T04:12:50Z"' .git/wt-ship-failures.tsv` gives the same change red at
+2026-11-02T04:28:19Z as 4d819ea9, so it landed at least 648 s after its first ship began, past D13's red line, and was
+recorded at 173 s; 5feef74f, red at 04:19:52Z as ace1e8c3, was recorded at 117 s. The backlog is printed and judged by
+nothing, so a lane holding a stack for hours is invisible to every band (A41E3's half). And `sed -n 22p dev/ship.sh`
+gives `export WT_SHIP_START="${WT_SHIP_START:-$(date +%s)}"`, a value any lane's shell can set (A50E1's class).
+Fix: D13 measured from the first ship of a change (its patch-id's first row in wt-ship-failures.tsv or its first ship
+start, kept in the common dir) to its landing, the backlog judged per lane with its own band, and WT_SHIP_START
+inherited only under WT_SHIP_ORIGIN=1 (the trampoline); a change to what D13 measures arrives with its ledger row,
+quoting Dale. Owner: lead.
+
+c964a22f, to the lead's question: it refuses an antecedent strengthened under a moot line where the claim names it
+left of `=>`, and its carry is satisfied by a definition nothing checks. (A84E4, medium, D11, D6, R2) `sed -n
+2980p;2985,2987p test/parity_ratchet.jl` gives the cfg `SPECIFICATION Spec\nINVARIANT Holds\n`, the module adding
+`HoldsThen == DoneThen => y = 1`, the lines `Done — carried by DoneThen` and `Holds — carried by HoldsThen`, and
+`isempty(invariants_dropped(t, a0))` expected: the plant passes with HoldsThen in no cfg, so the claim at the old
+antecedent is defined and never model-checked. The check (:2917-2921) asks only that some definition at HEAD hold the
+antecedent's old text, while its refusal says "its line keeps no claim judged at its old text", and a reader claim's
+line is accepted by `haskey(lines, c)` (:2914) whatever it names. Fix: a carried claim's successor must be listed by a
+cfg at HEAD and read the carried definition (the successor's reach), the plant's cfg listing HoldsThen and a plant
+with it unlisted refused. Owner: wt3-parity. (A84S1, low, D11, D6) the polarity residuals, each a negative position
+the regex misses: `sed -n 2903p test/parity_ratchet.jl` gives `local segs = split(split(d[c], "=="; limit = 2)[end],
+"=>")`, so `~P \/ Q` and `IF P THEN Q ELSE TRUE` (P's), `P ~> Q` (leads-to: no `=>` in `~>`), the right side of `P <=> Q`
+(split gives `P <` and `Q`, only P taken), a definition the antecedent reads (Finished under `Done == Finished /\ …`:
+the test reads the claim's own text, never its reach) and the specification itself, the antecedent of every claim
+(`Spec => []Inv`): Init, Next, Spec's fairness and a cfg's CONSTANTS, each accepted under any moot line, so a narrower
+Init, Next or bound, or a stronger fairness, weakens every claim with one line. And `sed -n 2758p` still says
+definitions are compared "with comments and whitespace dropped", where the code now collapses whitespace. Fix: the
+antecedent read by polarity over TLA+'s connectives (the negative positions of `~`, `=>`, both sides of `<=>`, IF's
+condition, `~>`'s left), through the reach, and Init, Next, the SPECIFICATION's conjuncts and the CONSTANTS treated as
+antecedents of every claim; the comment as the code. Owner: wt3-parity. (A84S2, low, D11) a positive-position
+weakening is excused by any moot reason: `sed -n 2994,2998p` gives `Limit == 4` over `Holds == x <= Limit` (the
+bound 3 raised to 4, Holds weaker) passing with `Limit — moot: the bound moved` and `Holds — moot: judged at the new
+bound`; D11 says never weaken an invariant. Fix: a rewritten definition a claim reads carried like an antecedent, the
+claim at its old text kept in a cfg, moot only where the variable or the claim's subject is gone. Owner: wt3-parity.
+
+56687090. (A84S3, low, D12, D6) the untaken interrupt is routed around, not found: `sed -n 1477,1478p
+test/src/dart_tests.jl` passes the plant on either end, "past its 2-s wall backstop, at \d+ CPU-s" (the interrupt
+taken) or "took no interrupt in 1 s: the process is killed", so the interrupt path, the one the shard showed broken, is
+checked by nothing; the commit does not say why a sleeping task under `Base.exit_on_sigint(false)`
+(test/dart_limit.jl:33) took no SIGINT in the shard's process, and `grep -c "took no interrupt" .git/wt-corpus.tsv`
+gives 1, the same failure on the corpus runner (eb5655ce, hung). Fix: the cause found and fixed in _dart_limited, and
+the plant requiring the interrupt's end. Owner: wt3-tests2. 5feef74f: the header has one definition
+(dev/julia_header.jl), passed as `--header`, the environment read nowhere. 787f152f: the tie at check.sh:118, before
+the plant (:125), the load and the ratchet. 111b93c6: comments only, each line as cited.
+
+stopgap in disguise: A84E4's carry, a definition with the old text standing in for a claim kept judged; A84S1's
+antecedent, a regex over `=>` standing in for polarity; A84E3's D13, a narrower measure under the same name.
+
+precedent: intrinsics.cpp:1555 muladd_float and :1408 have_fma, llvm-cpufeatures.cpp:40 always_have_fma, floatfuncs.jl
+:279-357 fma_emulated and float.jl:500 muladd (d3cfc78f); types.dart:434 emitIsTest and :527 emitAsCheck, type.dart:665
+to :1651, class_id.dart:10, intrinsics.dart:1059 and :1577, constants.dart:1913, julia.h:971 jl_to_typeof (399ba903);
+override_verifier.dart:25 to :121 (111b93c6); base/loading.jl's stale_cachefile header (5feef74f); TLA+'s polarity of
+`=>`, `~`, `<=>` and `~>` (Lamport, Specifying Systems), which c964a22f's antecedent rule names none of.
+
+Requirements: D2 (A84E2), D3 (A84E1), D5 (5feef74f's header and told_by_class each one definition; A84S5's second id
+map), D6 (A84E3, A84E4, A84S1, A84S3), D9 (A84E1, A84S5, A84S6), D11 (A84E4, A84S1, A84S2), D12 (A84E2, A84S3, A84S4),
+D13 (A84E3), D17 (A84E3; 56687090's 2-s wall and 1-s grace, each in a plant; D14's band untouched).
+
+R1 and R2. R1: d3cfc78f ports Julia's own fma_emulated and the host's have_fma answer; 399ba903 ports type.dart and
+emitAsCheck one to one, its one Julia piece, the type table, after jl_small_typeof; c964a22f's antecedent rule is
+bespoke, a regex with no precedent named (A84S1); 56687090 is a test-side bypass with no counterpart (A84S3). R2: no
+stub is called complete; src stays 3087 of 3404 and 399ba903 says the general arm still rejects, Unported. Fixes
+called done that are not: c964a22f's "refuses a moot line for an antecedent", whose own passing plant carries the
+claim to a definition no cfg lists (A84E4); f08173cf's "D13 judges the loop", which drops each red attempt (A84E3); and
+399ba903's table path, ported but run by nothing (A84S4).
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A83S8 leaves row 1.L, fixed by 5feef74f; A83S2 and
+A76E4 leave row 1.L, fixed by c964a22f; A76S2 leaves row 1.K, fixed by 111b93c6; A83S7 sat in no row, fixed by
+787f152f. A83S5 stays in row 1.D, narrowed, no `Fixes:` line naming it. Open, their rows the lead's to write: A84E1 for
+row 1.D; A84E2 for row 1.Q; A84E3, A84E4, A84S1 and A84S2 for row 1.L; A84S3 and A84S6 for row 1.T; A84S4 and A84S5
+for row 1.F. By owner: wt3-memory A84E1; wt3-runtime A84S4 and A84S5; wt3-tests2 A84S3 and A84S6, with A84E2's runner;
+wt3-parity A84E4, A84S1 and A84S2; lead A84E2 and A84E3.
