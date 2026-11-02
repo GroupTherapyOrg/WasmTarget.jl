@@ -1544,7 +1544,7 @@ shrinks. Throws a `ConstructionViolation` listing each.
 precedent(rust: unsafe with clippy's undocumented_unsafe_blocks, every block's SAFETY comment).
 Julia's differs: no keyword marks Julia-only code, so the reason is read where the load checks it.
 """
-@quarantine "Julia marks no Julia-only definition with its source; the load reads each reason" Base.empty! function check_quarantine_pinned(mod::Module, src::String, sdk::Union{String,Nothing}, debt::Vector{String})::Int
+@quarantine "every reason's citation resolves at its pin, as dart's analyzer resolves each reference written in a doc comment's prose to its declaration (pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:29 CommentReferenceResolver.resolve); Julia differs: a citation names a declaration of a pinned checkout, not of the same program, and one that does not resolve refuses the load unless the debt list or the no-counterpart list names its definition, where dart reports nothing for an unresolved reference" Base.empty! function check_quarantine_pinned(mod::Module, src::String, sdk::Union{String,Nothing}, debt::Vector{String})::Int
     local unpinned = Dict{String,Int}()
     local why = Dict{String,String}()
     local entries = [e for e in REGISTRY if e isa QuarantineEntry && _within(e.mod, mod) && _inside(string(e.file), src)]
