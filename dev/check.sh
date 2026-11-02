@@ -196,8 +196,11 @@ fi
 wall=$(( $(date +%s) - s0 ))
 # D14's band judges the check's own cost in seconds of a performance core (A53E1), read from each stage's whole process
 # tree at each process's exit (dev/tree_instructions.jl, rusage_info_v6): the instructions it retired on performance
-# cores at that stage's performance-core rate, plus the CPU seconds it spent on efficiency cores, one for one. An
-# efficiency core is never faster than a performance core on the same work (a lower clock and a narrower core), so its
+# cores at that stage's performance-core rate, plus the CPU seconds it spent on efficiency cores, one for one, plus the
+# CPU seconds of its processes that reported nothing, one for one (the kernel's whole-tree CPU less the reported:
+# perl- and bash-wrapped node, a process killed by a signal or ended by _exit, A81E1). An efficiency core is never
+# faster than a performance core on the same work (a lower clock and a narrower core; measured, an efficiency core ran
+# Julia's work 1.56 to 3.0 times slower: a julia tree with a 4x10^8-iteration loop, the plant's tree, the load), so its
 # seconds stand for at least a performance core's time for that work; Apple's counters read efficiency-core
 # instructions low for some instruction mixes (a Julia hash loop, compiled once: 12.2 G on a performance core, 6.2 G on
 # an efficiency core), so those are not used. The performance-core instructions are counted exactly, and another
@@ -216,19 +219,22 @@ RATE_P_RATCHET=10.9
 # 14.86 s (12.38), 182.1 in 15.08 (12.08), 183.6 in 14.68 (12.50): its image codegen runs on several threads at a high
 # instruction rate
 RATE_P_LOAD=12.0
-# a stage's .gi (dev/tree_instructions.jl): G, G on performance cores, CPU-s, CPU-s on performance cores, its own process's G
-cpu() { awk '{ printf "%d", $3 }' ".wtd/$1.gi"; }
-# a stage's judged seconds: its performance-core G at its rate, plus its efficiency-core seconds
-ps_of() { awk -v r="$2" '{ printf "%d", $2 / r + ($3 - $4) }' ".wtd/$1.gi"; }
-# a stage's split as the band reads it: performance-core G, and efficiency-core seconds
-split_of() { awk '{ printf "%.1f G + %.1f s", $2, $3 - $4 }' ".wtd/$1.gi"; }
-# a stage whose performance cores ran slower than its rate reads low there: named, for its rate to be re-measured (A80S1)
+# a stage's .gi (dev/tree_instructions.jl): G, G on performance cores, CPU-s, CPU-s on performance cores, its own process's
+# G, and the CPU-s of its processes that reported nothing (the kernel's whole-tree CPU less the reported)
+cpu() { awk '{ printf "%d", $3 + $6 }' ".wtd/$1.gi"; }
+# a stage's judged seconds: its performance-core G at its rate, plus its efficiency-core seconds, plus its unreported
+# seconds, each at least a performance core's second (A81E1)
+ps_of() { awk -v r="$2" '{ printf "%d", $2 / r + ($3 - $4) + $6 }' ".wtd/$1.gi"; }
+# a stage's split as the band reads it: performance-core G, efficiency-core seconds, unreported seconds
+split_of() { awk '{ printf "%.1f G + %.1f s + %.1f s", $2, $3 - $4, $6 }' ".wtd/$1.gi"; }
+# a stage whose performance cores ran slower than its rate reads low there: named, and its rate is re-measured from
+# three fresh splits before the next commit that touches it (A80S1)
 slow_of() { awk -v r="$2" -v n="$1" '$4 > 1 && $2 / $4 < r { printf " %s ran %.1f G a performance-core second, under its rate %s;", n, $2 / $4, r }' ".wtd/$1.gi"; }
 c_load=$(ps_of load $RATE_P_LOAD); p_ratchet=$(ps_of ratchet $RATE_P_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"; splits="$(split_of ratchet)"
 slow="$(slow_of load $RATE_P_LOAD)$(slow_of ratchet $RATE_P_RATCHET)"
 for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_P_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; splits="$splits; $(split_of "src_tests.$k")"; slow="$slow$(slow_of "src_tests.$k" $RATE_P_SRC)"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
-echo "check: ${path} s on the critical path (load ${c_load}, ratchet ${p_ratchet}, src shards${shards}; performance-core G + efficiency-core seconds: load $(split_of load); ratchet ${splits}); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
+echo "check: ${path} s on the critical path (load ${c_load}, ratchet ${p_ratchet}, src shards${shards}; performance-core G + efficiency-core seconds + unreported seconds: load $(split_of load); ratchet ${splits}); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
 [ -z "$slow" ] || echo "check: note, a stage's performance cores ran under its rate, so it reads low there:${slow}"
 # D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
 # change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget, then to 160 s the same day ("Raise
