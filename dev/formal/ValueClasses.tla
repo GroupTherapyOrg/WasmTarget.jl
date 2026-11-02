@@ -229,6 +229,10 @@ Finish ==
     /\ phase' = "done"
     /\ UNCHANGED <<program, stack, out, seen, seenObj>>
 
+\* the walk's end, and every later state with an empty stack: the facts the walk owes hold from here on, so the
+\* record pass (A80E2) only adds to them and never moves their check later (D11; A83E1: judging them under Done
+\* alone, after the record pass, weakened all three)
+WalkEnd == stack = <<>>
 Done == stack = <<>> /\ phase = "done"
 Terminal == Done /\ UNCHANGED vars
 
@@ -236,9 +240,11 @@ Next == Step \/ RecordPass \/ Finish \/ Terminal
 Spec == Init /\ [][Next]_vars /\ WF_vars(Step \/ RecordPass \/ Finish)
 
 Once            == \A i, j \in 1..Len(out) : i # j => out[i] # out[j]
-ValuesCovered   == Done => UNION {ValueClassesOf(f) : f \in Range(program)} \subseteq Range(out)
-SupertypeClosed == Done => \A t \in Range(out) : t # "Any" => Supertype(t) \in Range(out)
-FieldsClosed    == Done => \A t \in Range(out) : FieldClasses(t) \subseteq Range(out)
+\* a value's classes but its records at the walk's end, and the records too once the record pass is done
+ValuesCovered   == /\ WalkEnd => (UNION {ValueClassesOf(f) : f \in Range(program)} \ Records) \subseteq Range(out)
+                   /\ Done => UNION {ValueClassesOf(f) : f \in Range(program)} \subseteq Range(out)
+SupertypeClosed == WalkEnd => \A t \in Range(out) : t # "Any" => Supertype(t) \in Range(out)
+FieldsClosed    == WalkEnd => \A t \in Range(out) : FieldClasses(t) \subseteq Range(out)
 NothingExtra    == Range(out) \subseteq Required
 Terminates      == <>Done
 =============================================================================
