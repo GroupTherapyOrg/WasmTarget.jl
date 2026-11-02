@@ -1422,7 +1422,7 @@ the load checks every anchor, both where the pinned checkout exists.
 end
 # the oracle's assertion: run when the package loads where the pinned checkout exists
 # (src/WasmTarget.jl), and required by the ratchet's L213, which a missing checkout fails
-@quarantine "the oracle's assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it once over WasmTarget's records, where dart loops over the enabled rules on each file's AST" Base.Val function construction_check(::Val{:check_anchors_resolve})::Int
+@quarantine "the oracle's assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it over WasmTarget's records and whatever pinned checkout or Julia form that check reads, and the load stops at the first check that fails, its ConstructionViolation listing that check's faults, where dart loops over the enabled rules on each file's AST and its reporter collects every rule's diagnostics and goes on" Base.Val function construction_check(::Val{:check_anchors_resolve})::Int
     local sdk = _pin_sdk()
     sdk === nothing && throw(ConstructionViolation("check_anchors_resolve",
         "no checkout of dart-lang/sdk at $PIN at ~/.cache/wasmtarget/dart-sdk: bash dev/fetch_dart_sdk.sh"))
@@ -1976,7 +1976,7 @@ checked by converting a sample of the form, built by Julia's own constructors, w
     isempty(out) || throw(ConstructionViolation("check_mirrors", join(out, "; ")))
     return 0
 end
-@quarantine "the mirrors' assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it once over WasmTarget's records, where dart loops over the enabled rules on each file's AST" Base.Val construction_check(::Val{:check_mirrors})::Int = check_mirrors(@__MODULE__)
+@quarantine "the mirrors' assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it over WasmTarget's records and whatever pinned checkout or Julia form that check reads, and the load stops at the first check that fails, its ConstructionViolation listing that check's faults, where dart loops over the enabled rules on each file's AST and its reporter collects every rule's diagnostics and goes on" Base.Val construction_check(::Val{:check_mirrors})::Int = check_mirrors(@__MODULE__)
 
 """
     anchor_of(f) -> String
@@ -2107,7 +2107,7 @@ definition's; throws a `ConstructionViolation` listing the rest.
     isempty(out) || throw(ConstructionViolation("parity", join(out, "; ")))
     return 0
 end
-@quarantine "the anchors' assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it once over WasmTarget's records, where dart loops over the enabled rules on each file's AST" Base.Val construction_check(::Val{:parity})::Int = check_parity(@__MODULE__, SRC)
+@quarantine "the anchors' assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it over WasmTarget's records and whatever pinned checkout or Julia form that check reads, and the load stops at the first check that fails, its ConstructionViolation listing that check's faults, where dart loops over the enabled rules on each file's AST and its reporter collects every rule's diagnostics and goes on" Base.Val construction_check(::Val{:parity})::Int = check_parity(@__MODULE__, SRC)
 
 """
     check_quarantine(mod, src) -> Int
@@ -2160,7 +2160,7 @@ compares the two lists.
     isempty(out) || throw(ConstructionViolation("quarantine", join(out, "; ")))
     return 0
 end
-@quarantine "the quarantine's assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it once over WasmTarget's records, where dart loops over the enabled rules on each file's AST" Base.Val construction_check(::Val{:quarantine})::Int =
+@quarantine "the quarantine's assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it over WasmTarget's records and whatever pinned checkout or Julia form that check reads, and the load stops at the first check that fails, its ConstructionViolation listing that check's faults, where dart loops over the enabled rules on each file's AST and its reporter collects every rule's diagnostics and goes on" Base.Val construction_check(::Val{:quarantine})::Int =
     check_quarantine(@__MODULE__, SRC) + check_package_declared(WasmInterpreterPackage, @__MODULE__)
 
 # ---- typed signatures and fields (L214, L215) -----------------------------------------------------
@@ -2219,7 +2219,7 @@ untyped parameter is `Any`, which Julia accepts, so the load reads each method's
     isempty(out) || throw(ConstructionViolation("check_typed_signatures", join(out, "; ")))
     return 0
 end
-@quarantine "the typed signatures' assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it once over WasmTarget's records, where dart loops over the enabled rules on each file's AST" Base.Val construction_check(::Val{:check_typed_signatures})::Int = check_typed_signatures(@__MODULE__, _pin_sdk())
+@quarantine "the typed signatures' assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it over WasmTarget's records and whatever pinned checkout or Julia form that check reads, and the load stops at the first check that fails, its ConstructionViolation listing that check's faults, where dart loops over the enabled rules on each file's AST and its reporter collects every rule's diagnostics and goes on" Base.Val construction_check(::Val{:check_typed_signatures})::Int = check_typed_signatures(@__MODULE__, _pin_sdk())
 
 # the parameters of the dart declaration at `anchor`, each Julia's snake name => dart's type as
 # written, read from the pinned source: the list that opens after the member's name on the anchor's
@@ -2368,4 +2368,4 @@ Any or nothing by its declared type alone, so the load reads each field type and
     isempty(out) || throw(ConstructionViolation("check_typed_fields", join(out, "; ")))
     return 0
 end
-@quarantine "the typed fields' assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it once over WasmTarget's records, where dart loops over the enabled rules on each file's AST" Base.Val construction_check(::Val{:check_typed_fields})::Int = check_typed_fields(@__MODULE__, _pin_sdk())
+@quarantine "the typed fields' assertion, run when the package loads, as dart's analyzer runs each registered lint rule and collects its diagnostics (pkg/analyzer/lib/src/dart/analysis/library_analyzer.dart:400 LibraryAnalyzer._computeLints); Julia differs: one method of construction_check per check, dispatched on its Val tag when the package loads, runs it over WasmTarget's records and whatever pinned checkout or Julia form that check reads, and the load stops at the first check that fails, its ConstructionViolation listing that check's faults, where dart loops over the enabled rules on each file's AST and its reporter collects every rule's diagnostics and goes on" Base.Val construction_check(::Val{:check_typed_fields})::Int = check_typed_fields(@__MODULE__, _pin_sdk())
