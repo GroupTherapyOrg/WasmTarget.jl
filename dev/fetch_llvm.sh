@@ -19,6 +19,14 @@ printf '%s\n' llvm/lib/Target/WebAssembly/ \
   llvm/include/llvm/Support/GenericLoopInfo.h llvm/include/llvm/Support/GenericLoopInfoImpl.h \
   llvm/include/llvm/Support/GenericDomTree.h llvm/lib/CodeGen/MachineBasicBlock.cpp \
   llvm/lib/CodeGen/PHIElimination.cpp llvm/include/llvm/Analysis/DominanceFrontier.h \
+  llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp \
+  llvm/lib/CodeGen/TargetLoweringBase.cpp llvm/lib/CodeGen/SelectionDAG/LegalizeTypesGeneric.cpp \
+  llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp llvm/include/llvm/CodeGen/SelectionDAGNodes.h \
+  llvm/include/llvm/CodeGen/SelectionDAG.h llvm/include/llvm/CodeGen/TargetLowering.h \
+  compiler-rt/lib/builtins/multi3.c compiler-rt/lib/builtins/ashlti3.c compiler-rt/lib/builtins/lshrti3.c \
+  compiler-rt/lib/builtins/ashrti3.c compiler-rt/lib/builtins/udivmodti4.c compiler-rt/lib/builtins/udivti3.c \
+  compiler-rt/lib/builtins/umodti3.c compiler-rt/lib/builtins/divti3.c compiler-rt/lib/builtins/modti3.c \
+  compiler-rt/lib/builtins/int_div_impl.inc \
   llvm/include/llvm/Analysis/DominanceFrontierImpl.h llvm/include/llvm/CodeGen/MachineDominanceFrontier.h \
   llvm/unittests/Target/WebAssembly/WebAssemblyExceptionInfoTest.cpp \
   > .git/info/sparse-checkout

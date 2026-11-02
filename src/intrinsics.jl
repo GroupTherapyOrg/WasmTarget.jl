@@ -1936,31 +1936,30 @@ end
 end
 
 # Julia's intrinsics on a 128-bit integer (Int128, UInt128), whose value is its class's struct of two
-# i64 halves (src/julia/classes.jl), as LLVM's WebAssembly backend legalizes an i128 into the low and
-# high i64 (llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp ExpandIntegerResult), each
-# operation its expansion over the halves:
-#   sext_int to 128 bits: the value in the low half, its sign in the high (ExpandIntRes_SIGN_EXTEND,
-#     the high half the low's arithmetic shift by 63); zext_int: the high half 0
-#     (ExpandIntRes_ZERO_EXTEND); trunc_int from 128 bits: the low half, truncated on
-#     (ExpandIntOp_TRUNCATE); bitcast between Int128 and UInt128: the same halves in the other class
-#   eq_int and ne_int: both halves equal, or not (ExpandIntOp_SETCC's equality, the halves'
-#     xors or'd and compared with zero, here their compares and'd)
-#   add_int and sub_int: the low halves' sum or difference, its carry or borrow an unsigned compare,
-#     added to or taken from the high halves' (ExpandIntRes_ADDSUB where the target has no carry
-#     operations, wasm's case: ISD::SETULT on the low result); neg_int: 0 less the value
-#   and_int, or_int, xor_int: each half's (ExpandIntRes_Logical); not_int: each half xor -1
-#   slt_int, sle_int, ult_int, ule_int: the low halves' unsigned compare where the high halves are
-#     equal, else the high halves' compare, signed or not (TargetLowering::IntegerExpandSetCCOperands'
-#     select on the high halves' equality)
-#   mul_int: wasm has no 64-bit multiply-high (UMUL_LOHI and MULHU expand), so ExpandIntRes_MUL makes
-#     its libcall, compiler-rt's __multi3 (compiler-rt/lib/builtins/multi3.c): the low halves' full
-#     product by 32-bit pieces (__mulddi3), its high half plus the two cross products' low halves
-#   shl_int, lshr_int, ashr_int: wasm has no SHL_PARTS (it expands), so ExpandIntRes_Shift makes its
-#     libcall, compiler-rt's __ashlti3, __lshrti3 and __ashrti3 (compiler-rt/lib/builtins/ashlti3.c,
-#     lshrti3.c, ashrti3.c: an amount of 64 or more moves one half into the other, a smaller one
-#     carries the bits across, 0 returns the value), within Julia's rule for an amount of the width
-#     or more: 0, or the sign for ashr_int (julia/src/intrinsics.cpp:1653's select on y >= width)
-# Any other operation is not yet ported and rejects at its statement, located
+# i64 halves (src/julia/classes.jl), as LLVM's WebAssembly backend legalizes an i128: TypeExpandInteger,
+# the low and high i64 (src/llvm/legalize_integer_types.jl). Each intrinsic is the LLVM instruction
+# Julia's codegen emits for it (julia/src/intrinsics.cpp), and the instruction is the expansion
+# LegalizeIntegerTypes.cpp makes of it over the halves:
+#   sext_int, zext_int to 128 bits (intrinsics.cpp:1363 CreateSExt, :1367 CreateZExt):
+#     ExpandIntRes_SIGN_EXTEND, ExpandIntRes_ZERO_EXTEND; trunc_int from 128 bits (:1359 CreateTrunc):
+#     ExpandIntOp_TRUNCATE; bitcast between Int128 and UInt128: one LLVM type, the same halves
+#   eq_int, ne_int, slt_int, ult_int, sle_int, ule_int (:1622-:1627 CreateICmp): ExpandIntOp_SETCC, a
+#     literal left operand first moved right with its condition swapped (TargetLowering.cpp:4800
+#     SimplifySetCC's canonicalization, which DAGCombiner runs before the legalizer)
+#   add_int, sub_int (:1503 CreateAdd, :1504 CreateSub), neg_int (:1502 CreateNeg, 0 less the value):
+#     ExpandIntRes_ADDSUB, an add's literal left operand first moved right (DAGCombiner.cpp:2935
+#     visitADDLike's canonicalization)
+#   and_int, or_int, xor_int (:1649-:1651), not_int (:1404 CreateNot, an xor with all ones):
+#     ExpandIntRes_Logical
+#   mul_int (:1505 CreateMul): ExpandIntRes_MUL, compiler-rt's __multi3 in place; the product reads no
+#     operand order, so visitMUL's canonicalization changes nothing
+#   shl_int, lshr_int, ashr_int (:1653, :1666, :1679): the shift of x by y converted to 128 bits
+#     (uint_cnvt), ExpandIntRes_Shift, selected (SplitRes_Select, over the halves) by y >= 128, in y's
+#     type, against 0, or x's arithmetic shift by 127 for ashr_int; a literal y decides the select,
+#     which Julia's IRBuilder folds
+# An operand's halves are GetExpandedInteger's: a literal's ExpandIntRes_Constant, any other value's
+# two fields read into i64 locals once, one value read once. Any other operation is not yet ported
+# and rejects at its statement, located
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:int128}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local t = translator(self)
@@ -1971,34 +1970,39 @@ end
     local wide(T::Type) = T isa DataType && T <: Base.BitInteger && sizeof(T) == 16
     local narrow(T::Type) = generate_static_intrinsic(Val(:narrow), T)
     local put_form(T::Type) = generate_static_intrinsic(Val(:put_form), b, T)
-    local signed_view(T::Type) = generate_static_intrinsic(Val(:signed_view), b, T)
     local unsigned_view(T::Type) = generate_static_intrinsic(Val(:unsigned_view), b, T)
+    local signed_view(T::Type) = generate_static_intrinsic(Val(:signed_view), b, T)
     local info_of(T::DataType) = (local i = get(t.class_info, T, nothing);
         i === nothing ? reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the 128-bit class $T has no class info"), at) : i)
-    # a local's read and write, and an i64 constant
-    local lget(v::WasmBuilder.IR.Local) = WasmBuilder.local_get(b, v)
-    local lset(v::WasmBuilder.IR.Local) = WasmBuilder.local_set(b, v)
-    local k(n::Integer) = WasmBuilder.i64_const(b, Int64(n))
     # the halves' field indices, low then high
-    local halves(T::DataType) = (local fs = class_instance_fields(T, at); (t.field_index[fs[1]], t.field_index[fs[2]]))
-    # the struct of a 128-bit operand, in a local
-    local load(v::NirValue) = begin
+    local fields(T::DataType) = (local fs = class_instance_fields(T, at); (t.field_index[fs[1]], t.field_index[fs[2]]))
+    local literal(v::NirValue) = v isa NirConst && v.c.val isa Union{Int128,UInt128}
+    # GetExpandedInteger: the halves of a 128-bit operand
+    local read = Tuple{NirValue,Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[]
+    local expanded(v::NirValue) = begin
+        literal(v) && return LLVM.expand_int_res_constant(v.c.val)
+        for (w, h) in read
+            w == v && return h
+        end
         local T = dart_type_of(self, v)::DataType
         local s = add_local(code_gen, info_of(T).non_nullable_type)
         translate_expression(code_gen, v, s.type)
         WasmBuilder.local_set(b, s)
-        s
+        local lo = add_local(code_gen, i64); local hi = add_local(code_gen, i64)
+        local (l, h) = fields(T)
+        WasmBuilder.local_get(b, s); WasmBuilder.struct_get(b, info_of(T).struct_, l); WasmBuilder.local_set(b, lo)
+        WasmBuilder.local_get(b, s); WasmBuilder.struct_get(b, info_of(T).struct_, h); WasmBuilder.local_set(b, hi)
+        push!(read, (v, (lo, hi)))
+        (lo, hi)
     end
-    local get_half(s::WasmBuilder.IR.Local, T::DataType, k::Int) = (WasmBuilder.local_get(b, s);
-        WasmBuilder.struct_get(b, info_of(T).struct_, halves(T)[k]))
-    # a new value of the 128-bit class T from its halves, each emitted by its function; the class a
-    # box's layout, its class id alone ahead of its value (dart's boxed classes sit below the top type)
-    local make(T::DataType, lo::Function, hi::Function) = begin
+    # a new value of the 128-bit class T from its halves; the class a box's layout, its class id alone
+    # ahead of its value (dart's boxed classes sit below the top type)
+    local make(T::DataType, h::Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}) = begin
         local info = info_of(T)
-        local (l, h) = halves(T)
+        local (l, hf) = fields(T)
+        l < hf || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the 128-bit class $T's halves out of order"), at)
         WasmBuilder.i32_const(b, class_id(info))
-        l < h || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the 128-bit class $T's halves out of order"), at)
-        lo(); hi()
+        sd_get(b, h[1]); sd_get(b, h[2])
         WasmBuilder.struct_new(b, info.struct_)
         info.non_nullable_type
     end
@@ -2008,184 +2012,92 @@ end
         local x = args[2]
         local from = dart_type_of(self, x)
         if (f === I.sext_int || f === I.zext_int) && wide(to) && from isa DataType && (from <: Base.BitInteger || from === Bool) && sizeof(from) <= 8
+            # the operand in its wasm type, a narrow integer extended within it
             local from_w = type_of_exp(self, x)
-            local lo = add_local(code_gen, i64)
             translate_expression(code_gen, x, from_w)
             narrow(from) && (f === I.sext_int ? signed_view(from) : unsigned_view(from))
-            from_w == i32 && (f === I.sext_int ? WasmBuilder.i64_extend_i32_s(b) : WasmBuilder.i64_extend_i32_u(b))
-            WasmBuilder.local_set(b, lo)
-            return make(to, () -> WasmBuilder.local_get(b, lo),
-                f === I.sext_int ? () -> (WasmBuilder.local_get(b, lo); WasmBuilder.i64_const(b, 63); WasmBuilder.i64_shr_s(b)) :
-                                   () -> WasmBuilder.i64_const(b, 0))
+            local op = add_local(code_gen, from_w)
+            WasmBuilder.local_set(b, op)
+            return make(to, f === I.sext_int ? LLVM.expand_int_res_sign_extend(b, op) : LLVM.expand_int_res_zero_extend(b, op))
         elseif f === I.trunc_int && wide(from) && to isa DataType && to <: Base.BitInteger && sizeof(to) <= 8
-            local s = load(x)
-            get_half(s, from, 1)
             local to_w = translate_type(t, to)
-            to_w == i32 && WasmBuilder.i32_wrap_i64(b)
+            LLVM.expand_int_op_truncate(b, expanded(x), to_w)
             narrow(to) && put_form(to)
             return to_w
         elseif f === I.bitcast && wide(from) && wide(to)
-            local s = load(x)
-            return make(to, () -> get_half(s, from, 1), () -> get_half(s, from, 2))
+            return make(to, expanded(x))
         end
         return nothing
     end
-    if length(args) == 2 && (f === I.eq_int || f === I.ne_int)
+    local cc = f === I.eq_int ? :SETEQ : f === I.ne_int ? :SETNE : f === I.slt_int ? :SETLT : f === I.ult_int ? :SETULT :
+               f === I.sle_int ? :SETLE : f === I.ule_int ? :SETULE : nothing
+    if length(args) == 2 && cc !== nothing
         local T = dart_type_of(self, args[1])
         wide(T) && dart_type_of(self, args[2]) === T || return nothing
-        local x = load(args[1])
-        local y = load(args[2])
-        get_half(x, T, 1); get_half(y, T, 1); WasmBuilder.i64_eq(b)
-        get_half(x, T, 2); get_half(y, T, 2); WasmBuilder.i64_eq(b)
-        WasmBuilder.i32_and(b)
-        f === I.ne_int && WasmBuilder.i32_eqz(b)
+        local (l, r) = (args[1], args[2])
+        # SimplifySetCC: a literal on the left moves right, its condition swapped (getSetCCSwappedOperands)
+        if literal(l) && !literal(r)
+            (l, r) = (r, l)
+            cc = cc === :SETLT ? :SETGT : cc === :SETULT ? :SETUGT : cc === :SETLE ? :SETGE : cc === :SETULE ? :SETUGE : cc
+        end
+        WasmBuilder.local_get(b, LLVM.expand_int_op_setcc(b, expanded(l), expanded(r), cc))
         return i32
     end
     if length(args) == 2 && (f === I.shl_int || f === I.lshr_int || f === I.ashr_int) && wide(dart_type_of(self, args[1]))
         local T = dart_type_of(self, args[1])::DataType
         local A = dart_type_of(self, args[2])
         (A isa DataType && (A <: Base.BitInteger || A === Bool)) || return nothing
-        local x = load(args[1])
-        # the amount, unsigned (Julia's uint_cnvt), as an i64, and whether it is the width or more
+        local opc = f === I.shl_int ? :SHL : f === I.lshr_int ? :SRL : :SRA
+        local x = expanded(args[1])
+        # the select's other value: 0, or for ashr_int x's arithmetic shift by 127, a constant amount
+        local other() = f === I.ashr_int ? LLVM.expand_shift_by_constant(b, :SRA, x, Int64(127)) : (Int64(0), Int64(0))
+        local y = args[2]
+        if y isa NirConst
+            # a literal amount, unsigned in its own type, decides the select
+            local n = A === Bool ? UInt128(y.c.val::Bool) : UInt128(reinterpret(unsigned(A), y.c.val))
+            n >= 128 && return make(T, other())
+            return make(T, LLVM.expand_int_res_shift(b, opc, x, Int64(n)))
+        end
+        # the amount converted to 128 bits and truncated to the libcall's i32: its low 64 bits, held in
+        # an i64; and y >= 128 compared in y's own type
         local amt = add_local(code_gen, i64)
-        local big = add_local(code_gen, i32)
-        if wide(A)
-            local s = load(args[2])
-            get_half(s, A, 1); WasmBuilder.local_set(b, amt)
-            get_half(s, A, 2); WasmBuilder.i64_const(b, 0); WasmBuilder.i64_ne(b)
-            WasmBuilder.local_get(b, amt); WasmBuilder.i64_const(b, 128); WasmBuilder.i64_ge_u(b)
-            WasmBuilder.i32_or(b); WasmBuilder.local_set(b, big)
+        local big = if wide(A)
+            local yh = expanded(y)
+            sd_get(b, yh[1]); WasmBuilder.local_set(b, amt)
+            LLVM.expand_int_op_setcc(b, yh, (Int64(128), Int64(0)), :SETUGE)
         else
-            local aw = type_of_exp(self, args[2])
-            translate_expression(code_gen, args[2], aw)
+            local aw = type_of_exp(self, y)
+            translate_expression(code_gen, y, aw)
             narrow(A) && unsigned_view(A)
-            aw == i32 && WasmBuilder.i64_extend_i32_u(b)
-            WasmBuilder.local_set(b, amt)
-            WasmBuilder.local_get(b, amt); WasmBuilder.i64_const(b, 128); WasmBuilder.i64_ge_u(b); WasmBuilder.local_set(b, big)
+            local ay = add_local(code_gen, aw)
+            WasmBuilder.local_set(b, ay)
+            WasmBuilder.local_get(b, ay); aw == i32 && WasmBuilder.i64_extend_i32_u(b); WasmBuilder.local_set(b, amt)
+            local g = add_local(code_gen, i32)
+            WasmBuilder.local_get(b, ay)
+            aw == i32 ? (WasmBuilder.i32_const(b, 128); WasmBuilder.i32_ge_u(b)) : (WasmBuilder.i64_const(b, Int64(128)); WasmBuilder.i64_ge_u(b))
+            WasmBuilder.local_set(b, g)
+            g
         end
-        local lo = add_local(code_gen, i64)
-        local hi = add_local(code_gen, i64)
-        local sar() = WasmBuilder.i64_shr_s(b)
-        local shr() = WasmBuilder.i64_shr_u(b)
-        local shl() = WasmBuilder.i64_shl(b)
-        local blk = WasmBuilder.block(b)
-        # Julia's amount of the width or more: 0, or the sign for ashr_int
-        lget(big)
-        WasmBuilder.if_(b)
-        if f === I.ashr_int
-            get_half(x, T, 2); k(63); sar(); WasmBuilder.local_tee(b, hi); lset(lo)
-        else
-            k(0); WasmBuilder.local_tee(b, hi); lset(lo)
-        end
-        WasmBuilder.br(b, blk)
-        WasmBuilder.var"end"(b)
-        # compiler-rt: an amount of 0 returns the value
-        get_half(x, T, 1); lset(lo); get_half(x, T, 2); lset(hi)
-        lget(amt); WasmBuilder.i64_eqz(b); WasmBuilder.br_if(b, blk)
-        # an amount of 64 or more: one half into the other
-        lget(amt); k(64); WasmBuilder.i64_and(b); WasmBuilder.i64_const(b, 0); WasmBuilder.i64_ne(b)
-        WasmBuilder.if_(b)
-        if f === I.shl_int
-            get_half(x, T, 1); lget(amt); k(64); WasmBuilder.i64_sub(b); shl(); lset(hi); k(0); lset(lo)
-        elseif f === I.lshr_int
-            get_half(x, T, 2); lget(amt); k(64); WasmBuilder.i64_sub(b); shr(); lset(lo); k(0); lset(hi)
-        else
-            get_half(x, T, 2); lget(amt); k(64); WasmBuilder.i64_sub(b); sar(); lset(lo); get_half(x, T, 2); k(63); sar(); lset(hi)
-        end
-        WasmBuilder.br(b, blk)
-        WasmBuilder.var"end"(b)
-        # an amount below 64: the bits carried across
-        if f === I.shl_int
-            get_half(x, T, 1); lget(amt); shl(); lset(lo)
-            get_half(x, T, 2); lget(amt); shl(); get_half(x, T, 1); k(64); lget(amt); WasmBuilder.i64_sub(b); shr(); WasmBuilder.i64_or(b); lset(hi)
-        else
-            get_half(x, T, 2); lget(amt); f === I.ashr_int ? sar() : shr(); lset(hi)
-            get_half(x, T, 2); k(64); lget(amt); WasmBuilder.i64_sub(b); shl(); get_half(x, T, 1); lget(amt); shr(); WasmBuilder.i64_or(b); lset(lo)
-        end
-        WasmBuilder.var"end"(b)
-        return make(T, () -> lget(lo), () -> lget(hi))
+        local shifted = LLVM.expand_int_res_shift(b, opc, x, amt)
+        return make(T, LLVM.split_res_select(b, big, other(), shifted))
     end
     local T = dart_type_of(self, args[1])
     wide(T) && all(a -> dart_type_of(self, a) === T, args) || return nothing
     local T_ = T::DataType
     if length(args) == 2 && (f === I.add_int || f === I.sub_int)
-        local x = load(args[1])
-        local y = load(args[2])
-        local lo = add_local(code_gen, i64)
-        get_half(x, T_, 1); get_half(y, T_, 1)
-        f === I.add_int ? WasmBuilder.i64_add(b) : WasmBuilder.i64_sub(b)
-        WasmBuilder.local_set(b, lo)
-        return make(T_, () -> WasmBuilder.local_get(b, lo), () -> begin
-            get_half(x, T_, 2); get_half(y, T_, 2)
-            if f === I.add_int
-                # the carry: the low sum below an addend, unsigned
-                WasmBuilder.i64_add(b)
-                WasmBuilder.local_get(b, lo); get_half(x, T_, 1); WasmBuilder.i64_lt_u(b)
-                WasmBuilder.i64_extend_i32_u(b); WasmBuilder.i64_add(b)
-            else
-                # the borrow: the low minuend below the subtrahend, unsigned
-                WasmBuilder.i64_sub(b)
-                get_half(x, T_, 1); get_half(y, T_, 1); WasmBuilder.i64_lt_u(b)
-                WasmBuilder.i64_extend_i32_u(b); WasmBuilder.i64_sub(b)
-            end
-        end)
+        local (l, r) = (args[1], args[2])
+        # visitADDLike: an add's literal on the left moves right
+        f === I.add_int && literal(l) && !literal(r) && ((l, r) = (r, l))
+        return make(T_, LLVM.expand_int_res_addsub(b, f === I.add_int, expanded(l), expanded(r)))
     elseif length(args) == 1 && f === I.neg_int
-        # 0 less the value: the low half's negation, the high half's less the borrow of a nonzero low
-        local x = load(args[1])
-        return make(T_, () -> (WasmBuilder.i64_const(b, 0); get_half(x, T_, 1); WasmBuilder.i64_sub(b)), () -> begin
-            WasmBuilder.i64_const(b, 0); get_half(x, T_, 2); WasmBuilder.i64_sub(b)
-            WasmBuilder.i64_const(b, 0); get_half(x, T_, 1); WasmBuilder.i64_lt_u(b)
-            WasmBuilder.i64_extend_i32_u(b); WasmBuilder.i64_sub(b)
-        end)
+        return make(T_, LLVM.expand_int_res_addsub(b, false, (Int64(0), Int64(0)), expanded(args[1])))
     elseif length(args) == 2 && (f === I.and_int || f === I.or_int || f === I.xor_int)
-        local x = load(args[1])
-        local y = load(args[2])
-        local op() = f === I.and_int ? WasmBuilder.i64_and(b) : f === I.or_int ? WasmBuilder.i64_or(b) : WasmBuilder.i64_xor(b)
-        return make(T_, () -> (get_half(x, T_, 1); get_half(y, T_, 1); op()), () -> (get_half(x, T_, 2); get_half(y, T_, 2); op()))
+        local opc = f === I.and_int ? :AND : f === I.or_int ? :OR : :XOR
+        return make(T_, LLVM.expand_int_res_logical(b, opc, expanded(args[1]), expanded(args[2])))
     elseif length(args) == 1 && f === I.not_int
-        local x = load(args[1])
-        return make(T_, () -> (get_half(x, T_, 1); WasmBuilder.i64_const(b, -1); WasmBuilder.i64_xor(b)),
-                        () -> (get_half(x, T_, 2); WasmBuilder.i64_const(b, -1); WasmBuilder.i64_xor(b)))
+        return make(T_, LLVM.expand_int_res_logical(b, :XOR, expanded(args[1]), (Int64(-1), Int64(-1))))
     elseif length(args) == 2 && f === I.mul_int
-        local x = load(args[1])
-        local y = load(args[2])
-        local a = add_local(code_gen, i64); local c = add_local(code_gen, i64)
-        local rl = add_local(code_gen, i64); local rh = add_local(code_gen, i64); local tt = add_local(code_gen, i64)
-        get_half(x, T_, 1); WasmBuilder.local_set(b, a)
-        get_half(y, T_, 1); WasmBuilder.local_set(b, c)
-        local mask = 0xffffffff
-        # __mulddi3(a, c): r.low = (a & M) * (c & M); t = r.low >> 32; r.low &= M
-        lget(a); k(mask); WasmBuilder.i64_and(b); lget(c); k(mask); WasmBuilder.i64_and(b); WasmBuilder.i64_mul(b); lset(rl)
-        lget(rl); k(32); WasmBuilder.i64_shr_u(b); lset(tt)
-        lget(rl); k(mask); WasmBuilder.i64_and(b); lset(rl)
-        # t += (a >> 32) * (c & M); r.low += (t & M) << 32; r.high = t >> 32
-        lget(tt); lget(a); k(32); WasmBuilder.i64_shr_u(b); lget(c); k(mask); WasmBuilder.i64_and(b); WasmBuilder.i64_mul(b); WasmBuilder.i64_add(b); lset(tt)
-        lget(rl); lget(tt); k(mask); WasmBuilder.i64_and(b); k(32); WasmBuilder.i64_shl(b); WasmBuilder.i64_add(b); lset(rl)
-        lget(tt); k(32); WasmBuilder.i64_shr_u(b); lset(rh)
-        # t = r.low >> 32; r.low &= M; t += (c >> 32) * (a & M); r.low += (t & M) << 32; r.high += t >> 32
-        lget(rl); k(32); WasmBuilder.i64_shr_u(b); lset(tt)
-        lget(rl); k(mask); WasmBuilder.i64_and(b); lset(rl)
-        lget(tt); lget(c); k(32); WasmBuilder.i64_shr_u(b); lget(a); k(mask); WasmBuilder.i64_and(b); WasmBuilder.i64_mul(b); WasmBuilder.i64_add(b); lset(tt)
-        lget(rl); lget(tt); k(mask); WasmBuilder.i64_and(b); k(32); WasmBuilder.i64_shl(b); WasmBuilder.i64_add(b); lset(rl)
-        lget(rh); lget(tt); k(32); WasmBuilder.i64_shr_u(b); WasmBuilder.i64_add(b); lset(rh)
-        # r.high += (a >> 32) * (c >> 32)
-        lget(rh); lget(a); k(32); WasmBuilder.i64_shr_u(b); lget(c); k(32); WasmBuilder.i64_shr_u(b); WasmBuilder.i64_mul(b); WasmBuilder.i64_add(b); lset(rh)
-        # __multi3: r.high += x.high * y.low + x.low * y.high
-        lget(rh); get_half(x, T_, 2); lget(c); WasmBuilder.i64_mul(b); lget(a); get_half(y, T_, 2); WasmBuilder.i64_mul(b)
-        WasmBuilder.i64_add(b); WasmBuilder.i64_add(b); lset(rh)
-        return make(T_, () -> lget(rl), () -> lget(rh))
-    elseif length(args) == 2 && (f === I.slt_int || f === I.sle_int || f === I.ult_int || f === I.ule_int)
-        local x = load(args[1])
-        local y = load(args[2])
-        local strict = f === I.slt_int || f === I.ult_int
-        local signed = f === I.slt_int || f === I.sle_int
-        # the low halves' unsigned compare, the high halves' compare (each strict), selected by the
-        # high halves' equality
-        get_half(x, T_, 1); get_half(y, T_, 1); strict ? WasmBuilder.i64_lt_u(b) : WasmBuilder.i64_le_u(b)
-        get_half(x, T_, 2); get_half(y, T_, 2); signed ? WasmBuilder.i64_lt_s(b) : WasmBuilder.i64_lt_u(b)
-        get_half(x, T_, 2); get_half(y, T_, 2); WasmBuilder.i64_eq(b)
-        WasmBuilder.select(b, i32)
-        return i32
+        return make(T_, LLVM.expand_int_res_mul(b, expanded(args[1]), expanded(args[2])))
     end
     return nothing
 end

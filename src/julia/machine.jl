@@ -13,6 +13,9 @@
 #   MachineDominatorTree   Core.Compiler.DomTree, Julia's construct_domtree over that CFG
 #   MachineLoopInfo        LoopInfoBase, ported from GenericLoopInfo.h (src/llvm/generic_loop_info.jl)
 #   MachineLoop            LoopBase, likewise
+#   SDValue                in the type legalizer's expansions (src/llvm/legalize_integer_types.jl), a
+#                          constant half an Int64, any other value the local of the function being
+#                          written that holds it (sd_get)
 #
 # precedent(llvm: a MachineFunction, the list of blocks its backend passes reorder and rewrite in
 # place; cranelift: a function's Layout, its block order held apart from its data-flow graph).
@@ -359,4 +362,14 @@ The block numbered `n`, nothing past the last (LLVM's MachineFunction::getBlockN
 @quarantine "LLVM's MachineFunction::getBlockNumbered over the layout's numbers" Base.findfirst function get_block_numbered(mf::MachineFunction, n::Int)::Union{Int,Nothing}
     local i = findfirst(b -> mf.blocks[b].number == n, mf.layout)
     return i === nothing ? nothing : mf.layout[i]
+end
+
+"""    sd_get(b, v)
+
+Pushes `v`, an SDValue of the type legalizer's expansions: a constant node, an `Int64` (a half
+ExpandIntRes_Constant splits off a literal), by `i64.const`, any other value by `local.get` of the
+local holding it."""
+@quarantine "llvm/include/llvm/CodeGen/SelectionDAGNodes.h:147 SDValue is a node of the DAG, a constant or a value; Julia's IR builds no DAG, so an expansion holds a constant half as an Int64 and every other value in a local of the function being written" Core.Int64 function sd_get(b::AbstractInstructionsBuilder, v)::Nothing
+    v isa Int64 ? WasmBuilder.i64_const(b, v) : WasmBuilder.local_get(b, v)
+    return nothing
 end

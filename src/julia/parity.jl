@@ -486,7 +486,10 @@ The LLVM pin table (dev/LEDGER.md D42: where dart2wasm has no counterpart, the p
 WebAssembly backend's at the commit `LLVM_PIN`): each LLVM source unit a file of src/llvm ports, by
 its path under llvm-project without its extension, the unit its `.h` and `.cpp` make together
 (`llvm/lib/Target/WebAssembly/WebAssemblyCFGSort`), its Julia file named for it (`_jl_rel`:
-src/llvm/cfg_sort.jl). `include_dart` loads these after the dart files, into the module LLVM.
+src/llvm/cfg_sort.jl). A unit of compiler-rt's builtins at the same commit, the routines LLVM's
+WebAssembly backend makes its libcalls to (`compiler-rt/lib/builtins/multi3`, its `.c`), is ported
+under src/llvm/compiler_rt (`_jl_rel`: src/llvm/compiler_rt/multi3.jl). `include_dart` loads these
+after the dart files, into the module LLVM.
 
 precedent(dart: `part` naming each file, as DART_FILES; rust: `mod`). Julia's differs: as for
 DART_FILES, `include` takes any path, so the second oracle's file map is a table too.
@@ -499,6 +502,10 @@ DART_FILES, `include` takes any path, so the second oracle's file map is a table
     "llvm/lib/Target/WebAssembly/WebAssemblySortRegion", "llvm/lib/Target/WebAssembly/WebAssemblyCFGSort",
     "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify", "llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine",
     "llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow", "llvm/lib/CodeGen/PHIElimination",
+    "llvm/include/llvm/CodeGen/SelectionDAG", "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes",
+    "llvm/lib/CodeGen/SelectionDAG/LegalizeTypesGeneric",
+    "compiler-rt/lib/builtins/multi3", "compiler-rt/lib/builtins/ashlti3", "compiler-rt/lib/builtins/lshrti3",
+    "compiler-rt/lib/builtins/ashrti3",
 )
 
 """
@@ -523,6 +530,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types", "julia/base/hashing", "julia/base/expr", "julia/src/init", "julia/src/precompile", "julia/Compiler/src/effects",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3", "julia/base/floatfuncs", "julia/base/experimental", "julia/base/float",
     "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation", "julia/src/method", "julia/Compiler/src/ssair/show", "julia/Compiler/src/verifytrim", "julia/src/gf", "julia/src/subtype",
+    "julia/base/loading", "julia/base/stacktraces",
 )
 
 """
@@ -747,9 +755,11 @@ Julia's differs: it has no per-file namespace, so a prefix is a module, and a fi
     "wasm_builder/lib/" => (:WasmBuilder,),
 )
 
-# the module an LLVM unit loads into: LLVM's WebAssembly backend is one namespace, llvm::WebAssembly
-@quarantine "Julia has no per-file namespace; LLVM's ports share one module, as llvm's namespace" Base.Pair const LLVM_MODULES = (
+# the module an LLVM unit loads into: LLVM's WebAssembly backend is one namespace, llvm::WebAssembly,
+# and compiler-rt's builtins, the routines its libcalls name, load beside it
+@quarantine "Julia has no per-file namespace; LLVM's ports share one module, as the backend's files share the namespace WebAssembly (llvm/lib/Target/WebAssembly/WebAssemblyUtilities.cpp:41 WebAssembly::mayThrow)" Base.Pair const LLVM_MODULES = (
     "llvm/" => (:LLVM,),
+    "compiler-rt/" => (:LLVM,),
 )
 
 # the module a runtime file loads into: dart's patch libraries patch dart:core and its siblings, one
@@ -941,10 +951,13 @@ end
 
 # the source file of a dart file of the pin table, relative to src/: dart2wasm's lib/<f>.dart is
 # <f>.jl, wasm_builder's lib/<f>.dart and lib/src/<f>.dart are wasm_builder/<f>.jl (dev/MARCH.md 1.A4)
-@quarantine "a Julia package's files sit under one src/, where the sdk keeps two packages' lib/" Base.match function _jl_rel(dart::String)::String
+@quarantine "a Julia package's files sit under one src/, its entry src/<name>.jl (precedent(julia: base/loading.jl:931 entry_path)), where the sdk keeps two packages' lib/ and llvm-project its llvm/ and compiler-rt/" Base.match function _jl_rel(dart::String)::String
     # an LLVM unit's port is src/llvm/<its name, WebAssembly's prefix dropped, snake_case>.jl
     local u = match(r"^llvm/(?:[\w]+/)*(?:WebAssembly)?(\w+)$", dart)
     u === nothing || return "llvm/" * snake(u[1]) * ".jl"
+    # a unit of compiler-rt's builtins is src/llvm/compiler_rt/<its name>.jl
+    local c = match(r"^compiler-rt/lib/builtins/(\w+)$", dart)
+    c === nothing || return "llvm/compiler_rt/" * c[1] * ".jl"
     # a runtime file's port is src/runtime/<its path under sdk/lib/_internal/wasm>.jl
     local r = match(r"^sdk/lib/_internal/wasm/([\w/]+)\.dart$", dart)
     r === nothing || return "runtime/" * r[1] * ".jl"
@@ -1158,9 +1171,9 @@ end
     return occursin(Regex("(?<![\\w:~.>])\\Q" * m * "\\E\\s*(?:[(;={\\[]|\$)"), s) ? nothing : "line $ln does not declare $x::$m"
 end
 
-# an anchor of either pin: a dart file under pkg/ (1), or an LLVM unit (2) and its extension (3); its
-# line (4); its symbol (5), dart's X or X.m, or C++'s X or X::m
-@quarantine "an anchor is a string, which Julia reads with a regex where dart's analyzer and clang have a name" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia)/[\w/]+)\.(cpp|c|h|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
+# an anchor of either pin: a dart file under pkg/ (1), or an LLVM, compiler-rt or Julia unit (2) and its
+# extension (3); its line (4); its symbol (5), dart's X or X.m, or C++'s X or X::m
+@quarantine "an anchor is a string naming a file, a line and the symbol declared there, the parts Julia's own record of a source position holds (precedent(julia: base/stacktraces.jl:51 StackFrame)), which Julia reads with a regex where dart's analyzer and clang have a name" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia|compiler-rt)/[\w/]+)\.(cpp|c|h|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
 
 """
     Anchor
@@ -1185,8 +1198,9 @@ end
 """    parse_anchor(s) -> Union{Anchor,Nothing}
 
 The parts of `s`, an anchor of either pin; nothing when it reads as neither
-"<file>.dart:<line> <X or X.m>" nor "llvm/<unit>.<cpp|h>:<line> <X or X::m>"."""
-@quarantine "an anchor's two forms, one per pin, read by one regex" Base.match function parse_anchor(s::AbstractString)::Union{Anchor,Nothing}
+"<file>.dart:<line> <X or X.m>" nor "llvm/<unit>.<cpp|h>:<line> <X or X::m>" nor
+"compiler-rt/<unit>.<c|h>:<line> <X>"."""
+@quarantine "an anchor's forms, one per pin, read by one regex into the file, line and symbol a source position holds (precedent(julia: base/stacktraces.jl:51 StackFrame))" Base.match function parse_anchor(s::AbstractString)::Union{Anchor,Nothing}
     local m = match(ANCHOR_RX, s)
     m === nothing && return nothing
     local sym = String(m[5])
@@ -1203,7 +1217,8 @@ The parts of `s`, an anchor of either pin; nothing when it reads as neither
     if startswith(m[2], "julia/")
         return Anchor(:julia, String(m[2]), m[2][length("julia/")+1:end] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
     end
-    m[3] in ("c", "jl") && return nothing
+    # LLVM's units are C++, compiler-rt's builtins C, both at the llvm pin
+    (startswith(m[2], "compiler-rt/") ? m[3] in ("c", "h") : m[3] in ("cpp", "h")) || return nothing
     return Anchor(:llvm, String(m[2]), m[2] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
 end
 
@@ -1425,7 +1440,7 @@ end
 # adds a line, so the list only shrinks (D20).
 
 # the anchors a reason cites, each form of the pins'
-@quarantine "an anchor in prose is found by its pins' forms, read with a regex" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia)/[\w/]+\.(?:cpp|c|h|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
+@quarantine "an anchor in prose is found by its pins' forms, a file, a line and the symbol declared there (precedent(julia: base/stacktraces.jl:51 StackFrame)), read with a regex" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia|compiler-rt)/[\w/]+\.(?:cpp|c|h|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
 @quarantine "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:\.(?:[A-Za-z_$][\w$]*|\[\]=?|[-+*/%<>=~&|^]+))?))?"
 @quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*!?(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
 
@@ -1723,7 +1738,7 @@ end
     anchor isa String || refuse("the anchor is not a string literal")
     local a = parse_anchor(anchor)
     a === nothing &&
-        refuse("the anchor $(repr(anchor)) reads neither \"<file>.dart:<line> <Symbol>\" nor \"llvm/<unit>.<cpp|h>:<line> <X or X::m>\" nor \"julia/<unit>.<c|cpp|h>:<line> <X>\"")
+        refuse("the anchor $(repr(anchor)) reads neither \"<file>.dart:<line> <Symbol>\" nor \"llvm/<unit>.<cpp|h>:<line> <X or X::m>\" nor \"compiler-rt/<unit>.<c|h>:<line> <X>\" nor \"julia/<unit>.<c|cpp|h>:<line> <X>\"")
     a.pin === :dart ? (a.unit in DART_FILES || a.unit in RUNTIME_FILES || refuse("the anchor's file $(a.unit) is no file of the pin tables DART_FILES and RUNTIME_FILES")) :
                       (a.unit in _c_pin_units(a.pin) || refuse("the anchor's unit $(a.unit) is no unit of the $(a.pin === :julia ? "Julia pin table JULIA_FILES" : "LLVM pin table LLVM_FILES")"))
     local file = string(something(source.file, :none))

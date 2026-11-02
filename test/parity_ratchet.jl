@@ -777,6 +777,8 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         refuses(() -> check(dir, ["dart2wasm/lib/translator.dart"])) || push!(out, "negative missed: a file loaded other than by include_dart passes")
         Base.invokelatest(getfield(wt, :_jl_rel), "llvm/lib/Target/WebAssembly/WebAssemblyCFGSort") == "llvm/cfg_sort.jl" ||
             push!(out, "negative missed: an LLVM unit's port is not src/llvm/<its name, snake_case>.jl")
+        Base.invokelatest(getfield(wt, :_jl_rel), "compiler-rt/lib/builtins/multi3") == "llvm/compiler_rt/multi3.jl" ||
+            push!(out, "negative missed: a compiler-rt unit's port is not src/llvm/compiler_rt/<its name>.jl")
         refuses(() -> check(dir, ["dart2wasm/lib/translator.dart", "wasm_builder/lib/src/ir/type.dart", "dart2wasm/lib/types.dart"])) || push!(out, "negative missed: an included dart file with no source passes")
         refuses(() -> getfield(wt, :include_dart)("dart2wasm/lib/dart2wasm.dart")) || push!(out, "negative missed: a dart file outside the pin table includes")
         # the runtime's files, RUNTIME_FILES: a port at src/runtime/<its path under sdk/lib/_internal/wasm>,
@@ -999,6 +1001,12 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
             push!(out, "negative missed: a dart anchor's parts misread")
         parse("dart2wasm/lib/translator.dart:4 Translator::translateType") === nothing || push!(out, "negative missed: a dart anchor with a C++ member reads")
         parse("llvm/lib/Target/WebAssembly/WebAssemblyCFGSort.cpp:183 X.m") === nothing || push!(out, "negative missed: an LLVM anchor with a dart member reads")
+        # compiler-rt's builtins, C at the llvm pin: a unit of LLVM_FILES, its file the .c
+        local pc = parse("compiler-rt/lib/builtins/multi3.c:40 __multi3")
+        (pc !== nothing && pc.pin === :llvm && pc.unit == "compiler-rt/lib/builtins/multi3" && pc.line == 40 &&
+         pc.symbol == "__multi3" && pc.file == "compiler-rt/lib/builtins/multi3.c") ||
+            push!(out, "negative missed: a compiler-rt anchor's parts misread")
+        parse("compiler-rt/lib/builtins/multi3.cpp:40 __multi3") === nothing || push!(out, "negative missed: a compiler-rt anchor on a .cpp file reads")
         occursin(getfield(wt, :LLVM_PIN), _text(joinpath(ROOT, "dev", "PARITY_MASTER.md"))) ||
             push!(out, "src/julia/parity.jl's LLVM_PIN is not the commit dev/PARITY_MASTER.md pins for llvm-project")
         # the Julia pin (D45): Julia's own C sources at a planted julia checkout, each C form its anchors

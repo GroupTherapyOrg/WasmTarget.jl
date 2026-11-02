@@ -193,14 +193,12 @@ julia/nir.jl stmt_form
 julia/nir.jl value_form
 julia/packages.jl IR
 julia/packages.jl JS
-julia/packages.jl LLVM
 julia/packages.jl Util
 julia/packages.jl WasmBuilder
 julia/parity.jl @closed
 julia/parity.jl @parity
 julia/parity.jl @quarantine
 julia/parity.jl @unported
-julia/parity.jl ANCHOR_RX
 julia/parity.jl Anchor
 julia/parity.jl CLOSED_SUMS
 julia/parity.jl CPP_DECL_RX
@@ -213,7 +211,6 @@ julia/parity.jl INCLUDED
 julia/parity.jl JULIA_FILES
 julia/parity.jl JULIA_PIN
 julia/parity.jl LLVM_FILES
-julia/parity.jl LLVM_MODULES
 julia/parity.jl LLVM_PIN
 julia/parity.jl MIRRORS
 julia/parity.jl MIRROR_SAMPLES
@@ -222,7 +219,6 @@ julia/parity.jl PATCHED
 julia/parity.jl PIN
 julia/parity.jl ParityEntry
 julia/parity.jl QuarantineEntry
-julia/parity.jl REASON_ANCHOR_RX
 julia/parity.jl REASON_PATH_RX
 julia/parity.jl REASON_PRECEDENT_RX
 julia/parity.jl REGISTRY
@@ -264,7 +260,6 @@ julia/parity.jl _inside
 julia/parity.jl _is_declaration
 julia/parity.jl _is_macro
 julia/parity.jl _jl_path
-julia/parity.jl _jl_rel
 julia/parity.jl _last_line
 julia/parity.jl _load_two_pass!
 julia/parity.jl _mark!
@@ -311,7 +306,6 @@ julia/parity.jl construction_check(::Val{:quarantine})::Int
 julia/parity.jl include_dart
 julia/parity.jl include_patch
 julia/parity.jl mirror_samples!
-julia/parity.jl parse_anchor
 julia/parity.jl snake
 julia/reject.jl Internal
 julia/reject.jl InvalidModule

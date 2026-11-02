@@ -45,7 +45,7 @@ end
 )
 # ---- end of the runtime's roots ----
 
-@quarantine "Julia has no per-file namespace; LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), is a module" Core.Module module LLVM
+@quarantine "Julia has no per-file namespace; LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), one namespace whose members its files define as WebAssembly::m (llvm/lib/Target/WebAssembly/WebAssemblyUtilities.cpp:41 WebAssembly::mayThrow), is a module, the compiler-rt builtins its libcalls name beside it" Core.Module module LLVM
 # ---- the src/julia names LLVM's files use, written by dev/skeleton.jl write ----
 import ..@parity, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF, ..BLOCK_TYPE_RESULTS,
        ..BLOCK_TYPE_VOID, ..BR, ..BR_IF, ..BR_TABLE, ..BR_UNLESS, ..CATCH, ..CATCH_ALL_REF,
@@ -56,8 +56,10 @@ import ..@parity, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF, ..BLOCK_TYPE
        ..create_label_register!, ..create_machine_basic_block!, ..get_block_numbered,
        ..get_prev_node, ..is_barrier, ..is_terminator, ..machine_function, ..post_order,
        ..pq_empty, ..pq_pop!, ..pq_push!, ..recompute_domtree!, ..reject!, ..renumber_blocks!,
-       ..strongly_connected_components, ..terminators
+       ..sd_get, ..strongly_connected_components, ..terminators
 # ---- end of LLVM's src/julia names ----
+# the type legalizer's expansions emit their nodes' instructions through wasm_builder
+import ..WasmBuilder
 end
 
 @quarantine "Julia has no per-file namespace; dart's wasm_builder package is a module" Core.Module module WasmBuilder
@@ -108,7 +110,7 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..nir_parameter_types, ..nir_runtime_member, ..nir_tuple_type, ..nir_used_statements,
        ..nir_value_operands, ..nir_value_type, ..nir_vararg_call_tuple, ..nir_vararg_packing,
        ..no_counterpart_rejection, ..open_tuple_holds, ..reject!, ..run_time_type_test!,
-       ..run_wasm_opt, ..throw_atomic_error, ..throw_bounds_error, ..throw_divide_error,
+       ..run_wasm_opt, ..sd_get, ..throw_atomic_error, ..throw_bounds_error, ..throw_divide_error,
        ..throw_invalid_memory_size, ..throw_method_error, ..throw_out_of_memory,
        ..throw_undef_ref_error, ..told_by_class, ..tuple_record_arity, ..tuple_record_class,
        ..type_value_unmade, ..uf_add!, ..uf_find!, ..uf_union!, ..wasm_array_length,

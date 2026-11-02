@@ -283,6 +283,22 @@ function mulshift(a::Int64, n::Int64)
         7 * halves(x << n) + 11 * halves(x >> n) + 13 * uhalves(u >>> n) + 17 * uhalves(u << (n % UInt8)) +
         19 * halves(x >> (n % UInt128))
 end
+# the expansions' branches on a literal operand (LegalizeIntegerTypes.cpp): an add of 1, of all ones
+# in the low half alone and in both halves, a literal on the left of an add and of a compare (moved
+# right), equality with -1, the sign-bit tests x < 0 and x > -1, a compare of a value with itself, and
+# shifts by literal amounts below, at and past a half's width and past the type's
+function literals(a::Int64, b::Int64)
+    local x = NEARTOP * Int128(a) + Int128(b)
+    local u = reinterpret(UInt128, x)
+    return halves(x + Int128(1)) + 3 * halves(x + Int128(typemax(UInt64))) + 5 * halves(x + Int128(-1)) +
+        7 * halves(Int128(5) + x) + 11 * halves(x - Int128(1)) +
+        13 * Int64(x == Int128(-1)) + 17 * Int64(x != Int128(-1)) + 19 * Int64(x < Int128(0)) + 23 * Int64(x > Int128(-1)) +
+        29 * Int64(Int128(3) < x) + 31 * Int64(Int128(3) <= x) + 37 * Int64(UInt128(3) < u) + 41 * Int64(x >= Int128(0)) +
+        43 * Int64(x < x) + 47 * Int64(u <= u) +
+        53 * halves(x << 3) + 59 * halves(x << 64) + 61 * halves(x << 70) + 67 * halves(x >> 3) + 71 * halves(x >> 64) +
+        73 * halves(x >> 100) + 79 * uhalves(u >>> 3) + 83 * uhalves(u >>> 64) + 89 * uhalves(u >>> 100) +
+        97 * halves(x << 200) + 101 * halves(x >> 200)
+end
 end
 
 @testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions, equality, arithmetic, compares, product and shifts" begin
@@ -294,6 +310,8 @@ end
     local mbytes = W.compile(Int128Cases.mulshift, (Int64, Int64); optimize = false)
     local amounts = Int64[0, 1, 31, 63, 64, 65, 100, 127, 128, 129, 200, -1, -64]
     queue_native!("mulshift", mbytes, Int128Cases.mulshift, [(a, n) for a in Int64[0, 1, -1, 3, typemax(Int64), typemin(Int64)] for n in amounts])
+    local lbytes = W.compile(Int128Cases.literals, (Int64, Int64); optimize = false)
+    queue_native!("literals", lbytes, Int128Cases.literals, [(a, b) for a in edge for b in edge])
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin
