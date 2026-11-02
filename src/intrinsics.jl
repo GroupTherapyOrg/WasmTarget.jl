@@ -576,7 +576,6 @@ end
     type_operand isa DataType && type_operand <: Type && length(type_operand.parameters) == 1 && type_operand.parameters[1] isa Type &&
         return generate_static_intrinsic(self, Val(:conversion), f, args)
     f === Core.Intrinsics.flipsign_int && length(args) == 2 && return generate_static_intrinsic(self, Val(:flipsign), f, args)
-    f === Core.Intrinsics.muladd_float && length(args) == 3 && return generate_static_intrinsic(self, Val(:muladd), f, args)
     f === Core.Intrinsics.have_fma && length(args) == 1 && return generate_static_intrinsic(self, Val(:have_fma), f, args)
     f === Core.Intrinsics.fpiseq && length(args) == 2 && return generate_static_intrinsic(self, Val(:fpiseq), f, args)
     length(args) == 2 && (f === Core.Intrinsics.shl_int || f === Core.Intrinsics.lshr_int || f === Core.Intrinsics.ashr_int) &&
@@ -1922,33 +1921,19 @@ end
     return to_w
 end
 
-# Julia's muladd_float(x, y, z): x * y + z, which Julia's codegen emits as an fmul and an fadd that LLVM
-# may contract (julia/src/intrinsics.cpp:1555, the contract flag); core wasm has no fused multiply-add,
-# so LLVM's WebAssembly backend keeps the two operations, as here: Julia's muladd allows either answer
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:muladd}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
-    local code_gen = self.code_gen
-    local b = self.code_gen.b
-    local f32, f64 = WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
-    local t = dart_type_of(self, args[1])
-    (t === Float64 || t === Float32) && all(a -> dart_type_of(self, a) === t, args) || return nothing
-    local w = t === Float64 ? f64 : f32
-    translate_expression(code_gen, args[1], w)
-    translate_expression(code_gen, args[2], w)
-    w == f64 ? WasmBuilder.f64_mul(b[]) : WasmBuilder.f32_mul(b[])
-    translate_expression(code_gen, args[3], w)
-    w == f64 ? WasmBuilder.f64_add(b[]) : WasmBuilder.f32_add(b[])
-    return w
-end
-
 # Julia's have_fma(T): Julia's codegen emits julia.cpu.have_fma.f32 or .f64 for a constant Float32 or
 # Float64 (julia/src/intrinsics.cpp:1408), which its CPU-features pass lowers by the target
-# (julia/src/llvm-cpufeatures.cpp:50 have_fma: true on AArch64, on ARM with vfp4, on x86 with fma),
-# false for any other target, wasm32 among them: core wasm has no fused multiply-add. Any other
-# operand is Julia's runtime call, which rejects
+# (julia/src/llvm-cpufeatures.cpp:40 always_have_fma: true on AArch64; :50 have_fma by the target's
+# features elsewhere). WasmTarget answers as the native host its differential oracle runs on, an FMA
+# host: true. Its fma is Julia's software fma, correctly rounded (src/patch/floatfuncs.jl: Base's fma
+# and muladd are fma_emulated), so the algorithms Base picks on an FMA host (Math.two_mul, hypot's
+# correctly rounded branch) compute native's bits; LLVM's WebAssembly backend would answer false and
+# round muladd twice, which differs from native in the last bit (the corpus's bit_exact_math). Any
+# other operand is Julia's runtime call, which rejects
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:have_fma}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local T = dart_type_of(self, args[1])
     T === Type{Float64} || T === Type{Float32} || return nothing
-    WasmBuilder.i32_const(self.code_gen.b[], 0)
+    WasmBuilder.i32_const(self.code_gen.b[], 1)
     return WasmBuilder.IR.NumType_i32
 end
 
