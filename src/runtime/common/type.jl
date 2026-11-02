@@ -180,3 +180,79 @@ rest, else the full test; on failure Julia's typeassert error (_TypeError._throw
     success && return nothing
     _TypeError__throw_as_check_error(o, t)
 end
+
+"""
+Whether the class of the DataType `s` is below the class of the DataType `t`, by the class table (dart's
+`_TypeUniverse.isInterfaceSubtype`): the substitution index of `s`'s class id to `t`'s, -1 where it is
+not below. A Julia class binds its parameters, so no type arguments are compared.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:974 _TypeUniverse.isInterfaceSubtype" function _TypeUniverse_is_interface_subtype(s::DataType, t::DataType)::Bool
+    local substitution_index = _TypeUniverse__check_subclass_relationship(_InterfaceType_class_id(s), _InterfaceType_class_id(t))
+    # Return early if [sId] isn't a direct/indirect subclass of [tId].
+    substitution_index == Int32(-1) && return false
+    # A Julia class's type arguments are bound in the class itself: none to compare
+    return true
+end
+
+"""
+Whether the type `s` is a subtype of the type `t` (dart's `_TypeUniverse.isSubtype`, its rules in its
+order, over the kinds the runtime ports): reflexivity, nullability, left bottom, right top, right
+bottom, then Julia's Union, which dart has no kind of (julia/src/subtype.c:1419 subtype: a Union on the
+left where both members are, on the right where either is), then two DataTypes by the class table,
+the one relation the instance check reads. dart's function, FutureOr, record and type-parameter rules
+have no Julia kind here; a UnionAll raises, loud, its environment unported.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1351 _TypeUniverse.isSubtype" function _TypeUniverse_is_subtype(s::Type, t::Type)::Bool
+    # Reflexivity:
+    s === t && return true
+    # Compare nullabilities:
+    _Type_is_declared_nullable(s) && !_Type_is_declared_nullable(t) && return false
+    # Left bottom:
+    s isa Core.TypeofBottom && return true
+    # Right top:
+    t === Any && return true
+    # Right bottom:
+    t isa Core.TypeofBottom && return false
+    # Julia's Union, left then right (subtype.c)
+    s isa Union && return _TypeUniverse_is_subtype(s.a::Type, t) && _TypeUniverse_is_subtype(s.b::Type, t)
+    t isa Union && return _TypeUniverse_is_subtype(s, t.a::Type) || _TypeUniverse_is_subtype(s, t.b::Type)
+    # Null, past the nullabilities: below Nothing and Any only, both answered above
+    (s === Nothing || t === Nothing) && return false
+    s isa DataType && t isa DataType && return _TypeUniverse_is_interface_subtype(s, t)
+    Error__throw_with_current_stack_trace(ErrorException("WasmTarget: a run-time subtype test of a UnionAll, which Julia's subtype decides by its environment"))
+end
+
+"""
+Whether the type `s` is a subtype of the type `t` (dart's `_isTypeSubtype`, `_TypeUniverse.isSubtype`
+with no type environments).
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1555 _isTypeSubtype" _is_type_subtype(s::Type, t::Type)::Bool =
+    _TypeUniverse_is_subtype(s, t)
+
+"""
+The error an optimized type check raises when the runtime's reference check disagrees (dart's
+`class _TypeCheckVerificationError extends Error`): the value's type and the tested type, both results,
+and the check's source location when the compiler knew it. dart's Error is Julia's Exception.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1744 _TypeCheckVerificationError" struct _TypeCheckVerificationError <: Exception
+    left::Type
+    right::Type
+    optimized::Bool
+    reference::Bool
+    location::Union{String,Nothing}
+    # dart's unnamed constructor, each field from its parameter
+    _TypeCheckVerificationError(left::Type, right::Type, optimized::Bool, reference::Bool, location::Union{String,Nothing}) =
+        new(left, right, optimized, reference, location)
+end
+
+"""
+The verification error's message (dart's `String toString()`, Julia's `show`): its location when it has
+one, the two types and both results, line for line as dart writes it.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1759 _TypeCheckVerificationError.toString" function Base.show(io::IO, e::_TypeCheckVerificationError)::Nothing
+    local location_string = e.location !== nothing ? " at $(e.location)" : ""
+    print(io, "Type check verification error$location_string\n",
+        "Checking $(e.left) <: $(e.right)\n",
+        "Optimized result $(e.optimized), reference result $(e.reference)\n")
+    return nothing
+end

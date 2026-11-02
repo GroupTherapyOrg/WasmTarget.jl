@@ -26,6 +26,7 @@ end
     ((:Runtime,), :_is_interface_subtype0),
     ((:Runtime,), :_is_nullability_check),
     ((:Runtime,), :_is_subtype),
+    ((:Runtime,), :_is_type_subtype),
     ((:Runtime,), :_no_substitution_index),
     ((:Runtime,), :_type_row_displacement_offsets),
     ((:Runtime,), :_type_row_displacement_subst_table),

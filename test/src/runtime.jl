@@ -194,3 +194,28 @@ rt_all(k::Int64, j::Int64) = isa(value_at(k), all_type_at(j)) ? 1 : 0
     @test u isa W.RejectionError && u.rejection isa W.Unquarantined && occursin("as a value", u.rejection.row)
 end
 end
+
+module RuntimeTypeSubtype
+using Test, WasmTarget
+const W = WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+abstract type Shape end
+struct Circle <: Shape; r::Float64; end
+struct Plain; x::Int64; end
+# type.dart's _isTypeSubtype over the kinds the runtime ports, against Julia's <: (jl_subtype)
+const TYPES = Any[Shape, Circle, Plain, Union{Circle,Plain}, Any, Nothing, Union{}, Union{Nothing,Circle}]
+type_at(i::Int64)::Type = TYPES[i]::Type
+sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(type_at(i), type_at(j)) ? 1 : 0
+@testset "type.dart: _isTypeSubtype, _TypeUniverse.isSubtype by kind, against Julia's <:" begin
+    local bytes = W.compile(sub, (Int64, Int64))
+    local n = length(TYPES)
+    local cases = [Main.WTRunner.RunCase("sub($(TYPES[i]), $(TYPES[j]))", bytes, (i, j), TYPES[i] <: TYPES[j] ? 1 : 0) for i in 1:n for j in 1:n]
+    for r in Main.WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+    # _TypeCheckVerificationError's message, dart's toString line for line, natively
+    @test sprint(show, W.Runtime._TypeCheckVerificationError(Int64, String, true, false, "f.jl:3")) ==
+          "Type check verification error at f.jl:3\nChecking Int64 <: String\nOptimized result true, reference result false\n"
+    @test startswith(sprint(show, W.Runtime._TypeCheckVerificationError(Int64, String, false, true, nothing)), "Type check verification error\n")
+end
+end
