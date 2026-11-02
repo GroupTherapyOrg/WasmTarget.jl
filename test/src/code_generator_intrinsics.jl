@@ -271,14 +271,29 @@ function arith(a::Int64, b::Int64)
         11 * Int64(x < y) + 13 * Int64(x <= y) + 17 * Int64(u < v) + 19 * Int64(u <= v) + 23 * Int64(r > BIG) +
         29 * Int64(s < -BIG) + 31 * Int64(typemax(Int128) + Int128(a) < Int128(0)) + 37 * Int64(x > Int128(typemax(UInt64)))
 end
+# mul_int (compiler-rt's __multi3) and the shifts (__ashlti3, __lshrti3, __ashrti3 within Julia's
+# rule for an amount of the width or more), each result's halves both observed
+halves(r::Int128) = Int64(r % Int64) ⊻ (Int64((r >> 64) % Int64) * 31)
+uhalves(r::UInt128) = Int64(r % UInt64 % Int64) ⊻ (Int64((r >> 64) % UInt64 % Int64) * 37)
+function mulshift(a::Int64, n::Int64)
+    local x = NEARTOP * Int128(a) + Int128(n)
+    local y = BIG - Int128(n)
+    local u = reinterpret(UInt128, x) * reinterpret(UInt128, y)
+    return halves(x * y) + 3 * uhalves(u) + 5 * halves(typemin(Int128) * Int128(a)) +
+        7 * halves(x << n) + 11 * halves(x >> n) + 13 * uhalves(u >>> n) + 17 * uhalves(u << (n % UInt8)) +
+        19 * halves(x >> (n % UInt128))
+end
 end
 
-@testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions, equality, arithmetic and compares" begin
+@testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions, equality, arithmetic, compares, product and shifts" begin
     local bytes = W.compile(Int128Cases.wide, (Int64,); optimize = false)
     queue_native!("wide", bytes, Int128Cases.wide, [(n,) for n in Int64[0, 5, -3, 300, typemax(Int64), typemin(Int64)]])
     local abytes = W.compile(Int128Cases.arith, (Int64, Int64); optimize = false)
     local edge = Int64[0, 1, 2, 3, -1, -3, typemax(Int64), typemin(Int64)]
     queue_native!("arith", abytes, Int128Cases.arith, [(a, b) for a in edge for b in edge])
+    local mbytes = W.compile(Int128Cases.mulshift, (Int64, Int64); optimize = false)
+    local amounts = Int64[0, 1, 31, 63, 64, 65, 100, 127, 128, 129, 200, -1, -64]
+    queue_native!("mulshift", mbytes, Int128Cases.mulshift, [(a, n) for a in Int64[0, 1, -1, 3, typemax(Int64), typemin(Int64)] for n in amounts])
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin
