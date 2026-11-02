@@ -26,6 +26,13 @@ import Base64
 const ROOT = dirname(@__DIR__)
 const RUN_BUDGET = 5.0
 const NODE_START = 30.0
+# WasmTarget answers have_fma(Float64) true and rounds muladd and fma once, as native Julia does on an FMA host, and the
+# differential reads Julia's math kernels bit for bit against native (test/smoke_corpus.jl's bit_exact_math). On a host
+# without FMA, native Julia takes the kernels' other branches (have_fma in expm1), and every such case would read as
+# WasmTarget's wrong answer: refused here, located, once (A84S6)
+Core.Intrinsics.have_fma(Float64) || error("test/runner.jl: native Julia on this host has no fused multiply-add " *
+    "(Core.Intrinsics.have_fma(Float64) is false), so its math kernels take branches WasmTarget's modules do not: " *
+    "the differential runs on an FMA host only (A84S6)")
 
 """One module's case: its bytes, its wasm-opt'd bytes (empty for none), the arguments of its entry,
 native Julia's answer for them."""
