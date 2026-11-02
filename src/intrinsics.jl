@@ -1591,9 +1591,12 @@ end
 # precedent(dart: the runtime's identical, intrinsics.dart:2974 MemberIntrinsic.identical: the
 # references, then null and the class ids, then a boxed int's and double's values, any other class not
 # identical). Julia's differs: its immutable classes compare by their fields, so each class has its arm.
-# A class holding a host reference (an externref, no eqref wasm can compare) answers as dart's
-# identical answers a class it does not compare by value: not egal past the reference test; Julia
-# compares its bits, which wasm cannot read. A field of any other wasm type rejects, located
+# A field holding a host reference (an externref, which no eqref holds and whose bits wasm cannot read)
+# is compared as dart compares two JS values, JSValue's == (js_helper.dart:42): both null egal, one null
+# not, else areEqualInJS, JS's === (the runtime's jl_egal_host_references). A standalone module has no
+# JS runtime (translator.dart:112 isStandalone), and no wasm instruction compares two externrefs, so
+# there the comparison raises, naming the gap (the runtime's throw_host_reference_egal), never
+# answering. A field of any other wasm type rejects, located
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:egal}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
     local t = translator(self)
@@ -1665,6 +1668,38 @@ end
             WasmBuilder.i64_eq(b)
         elseif storage isa WasmBuilder.IR.RefType && WasmBuilder.is_subtype_of(storage, top)
             call(code_gen, egal)
+        elseif host(storage)
+            local hp = add_local(code_gen, storage)
+            local hq = add_local(code_gen, storage)
+            WasmBuilder.local_set(b, hq)
+            WasmBuilder.local_set(b, hp)
+            if is_standalone(t)
+                call(code_gen, nir_runtime_member(t.component, throw_host_reference_egal, at))
+                WasmBuilder.unreachable(b)
+                return nothing
+            end
+            local js = nir_runtime_member(t.component, jl_egal_host_references, at)
+            if (storage::WasmBuilder.IR.RefType).nullable
+                local result = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
+                # both null: egal; one null: not
+                WasmBuilder.i32_const(b, 1)
+                WasmBuilder.local_get(b, hp); WasmBuilder.ref_is_null(b); WasmBuilder.local_get(b, hq); WasmBuilder.ref_is_null(b)
+                WasmBuilder.i32_and(b)
+                WasmBuilder.br_if(b, result)
+                WasmBuilder.drop(b)
+                WasmBuilder.i32_const(b, 0)
+                WasmBuilder.local_get(b, hp); WasmBuilder.ref_is_null(b); WasmBuilder.local_get(b, hq); WasmBuilder.ref_is_null(b)
+                WasmBuilder.i32_or(b)
+                WasmBuilder.br_if(b, result)
+                WasmBuilder.drop(b)
+                WasmBuilder.local_get(b, hp); WasmBuilder.ref_as_non_null(b)
+                WasmBuilder.local_get(b, hq); WasmBuilder.ref_as_non_null(b)
+                call(code_gen, js)
+                WasmBuilder.var"end"(b)   # result
+            else
+                WasmBuilder.local_get(b, hp); WasmBuilder.local_get(b, hq)
+                call(code_gen, js)
+            end
         elseif storage isa WasmBuilder.IR.RefType && storage.heap_type isa WasmBuilder.IR.ArrayType
             # its length and its elements, compare_svec's loop (memcmp's for bytes)
             local arr = storage.heap_type
@@ -1717,7 +1752,7 @@ end
         end
         nothing
     end
-    # a class holding a host reference, which no eqref holds: dart's not identical past the reference test
+    # a host reference, which no eqref holds
     local host(storage::WasmBuilder.IR.StorageType) = storage isa WasmBuilder.IR.RefType && !WasmBuilder.is_subtype_of(storage, WasmBuilder.IR.RefType_eq(; nullable = true))
     # jl_egal__unboxed_: the class's arm
     local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(concrete_class_ids(t, Any), concrete_classes(t, Any))]
@@ -1726,7 +1761,7 @@ end
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
             local info = t.class_info[cls]
             local fields = Base.iskindtype(cls) || egal_by_identity(cls) ? ClassField[] : class_instance_fields(cls, at)
-            if Base.iskindtype(cls) || egal_by_identity(cls) || any(f -> host(info.struct_.fields[t.field_index[f] + 1].type), fields)
+            if Base.iskindtype(cls) || egal_by_identity(cls)
                 WasmBuilder.i32_const(b, 0)
                 return nothing
             end

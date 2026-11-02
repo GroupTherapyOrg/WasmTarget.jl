@@ -23,6 +23,13 @@ empty() = R.JSStringImpl_from_ascii_bytes(TEXT, 2, 2)
 # js_helper.dart's areEqualInJS: JS's ===, which compares two JS strings by their contents
 same_in_js() = R.are_equal_in_js(text(), R.JSStringImpl_from_ascii_bytes(TEXT, 0, ncodeunits(TEXT))) ? 1 : 0
 differ_in_js() = R.are_equal_in_js(text(), tail()) ? 1 : 0
+# jl_egal of a class holding a host reference compares it by areEqualInJS under the JS runtime, as
+# dart's JSValue == does: two boxes of one JS string's text egal, of two texts not
+struct Host
+    ref::WasmTarget.WasmExternRef
+end
+same_host() = Host(text()) === Host(R.JSStringImpl_from_ascii_bytes(TEXT, 0, ncodeunits(TEXT))) ? 1 : 0
+differ_host() = Host(text()) === Host(tail()) ? 1 : 0
 end
 
 # the JS string an export returns, as its UTF-16 code units, run with the engine's JS string builtins and
@@ -42,7 +49,7 @@ units(bytes) = join(Int.(transcode(UInt16, collect(bytes))), ",")
 
 @testset "js_helper.dart: areEqualInJS is JS's ===, through the JS runtime's inline JS" begin
     local D = W.Dart2Wasm
-    for (f, want) in ((Cases.same_in_js, 1), (Cases.differ_in_js, 0))
+    for (f, want) in ((Cases.same_in_js, 1), (Cases.differ_in_js, 0), (Cases.same_host, 1), (Cases.differ_host, 0))
         local name = string(nameof(f))
         local opts = D.WasmCompilerOptions(; main_uri = "", output_file = "out/$name.wasm"); opts.translator_options.generate_source_maps = false
         local r = D.compile(opts, W.check_subset(f, (), "js_helper"))
@@ -57,6 +64,19 @@ units(bytes) = join(Int.(transcode(UInt16, collect(bytes))), ",")
             @test readchomp(`perl -e 'alarm 60; exec @ARGV' node --input-type=module -e $script`) == string(want)
         end
     end
+end
+
+# a standalone module has no JS runtime to compare two host references: jl_egal raises there, never
+# answering (WasmTarget.compile is standalone, translator.dart:112 isStandalone), run with the standalone
+# embedder's imports as test/runner.jl gives them
+@testset "jl_egal of host references in a standalone module raises, naming the gap" begin
+    local path = tempname() * ".wasm"
+    write(path, W.compile(Cases.same_host, ()))
+    local script = "(async () => { const m = await WebAssembly.compile(require('fs').readFileSync(process.argv[1]), {builtins: ['js-string'], importedStringConstants: ''}); " *
+        "const dart = {stackTraceGetCurrent: () => new Error().stack, stackTraceToString: (t) => String(t)}; " *
+        "const i = await WebAssembly.instantiate(m, {dart}); try { i.exports.same_host(); console.log('answered'); } catch (e) { console.log(e instanceof WebAssembly.Exception ? 'raised' : 'trapped'); } })()"
+    @test readchomp(`perl -e 'alarm 60; exec @ARGV' node -e $script $path`) == "raised"
+    rm(path)
 end
 
 @testset "js_string.dart: a String's code units made a JS string, widened as Base.transcode widens them" begin

@@ -79,6 +79,17 @@ Natively Julia's `===`.
 @quarantine "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK), raising TypeError naming the builtin, as jl_f_typeassert does" Core.TypeError @noinline jl_typechk_type(fname::Symbol, @nospecialize(t::Any))::Type =
     jl_typetagis(t, Type) ? Runtime.unsafe_cast(Type, t) : Runtime.Error__throw_with_current_stack_trace(TypeError(fname, "", Type, t))
 
+# jl_egal of two host references, a field of a class the egal arm compares (src/intrinsics.jl): wasm
+# reads no externref's bits, so the two are compared as dart compares two JS values, JSValue's ==, by
+# areEqualInJS, JS's === (Runtime.are_equal_in_js)
+@quarantine "sdk/lib/_internal/wasm/js_common/js_helper.dart:42 JSValue.== compares two JS values by areEqualInJS, JS's ===, where Julia's jl_egal compares a field's bits (julia/src/builtins.c:100 compare_fields), which wasm cannot read of a host reference" Core.Bool @noinline jl_egal_host_references(l::WasmExternRef, r::WasmExternRef)::Bool =
+    Runtime.are_equal_in_js(l, r)
+
+# jl_egal of two host references in a standalone module, which has no JS runtime and so no areEqualInJS,
+# and no wasm instruction compares two externrefs: the comparison raises, naming the gap, never answering
+@quarantine "dart2wasm/lib/translator.dart:112 Translator.isStandalone: a standalone module has no JS runtime, so no sdk/lib/_internal/wasm/js_common/js_helper.dart:151 areEqualInJS; Julia's jl_egal compares a field's bits (julia/src/builtins.c:100 compare_fields), which wasm cannot read of a host reference" Core.ErrorException @noinline throw_host_reference_egal()::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(ErrorException("WasmTarget: === on two values holding a host reference in a standalone module, which has no JS runtime to compare them (areEqualInJS)"))
+
 # compiler-rt's 128-bit division and remainder (compiler-rt/lib/builtins at the llvm pin), the libcalls
 # LLVM's WebAssembly backend makes for an i128 SDIV, SREM, UDIV and UREM (src/llvm/legalize_integer_types.jl,
 # ExpandIntRes_SDIV and its kin: wasm has no UDIVREM of an i128), each ported over WasmTarget's 128-bit
