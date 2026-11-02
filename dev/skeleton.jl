@@ -2351,7 +2351,7 @@ function roots_block(read_src::Function = src_text, pragma::Function = pin_pragm
     local rt = joinpath(ROOT, "src", "julia", "runtime", "rtutils.jl")
     local items = String["    ((:Runtime,), :$n)," for n in entry_point_ports(ports, pragma)]
     append!(items, ("    ((), :$n)," for n in julia_runtime_functions(read_src(rt), rt)))
-    return "@quarantine \"dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's runtime functions the code generator calls (julia/src/rtutils.c:189 jl_bounds_error), which every Julia process links whole, where Julia differs: libjulia has no demand to keep one out, so every one is a root\" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (\n" *
+    return "@quarantine pin\"pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure\" \"dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's runtime functions the code generator calls (julia/src/rtutils.c:189 jl_bounds_error), which every Julia process links whole, where Julia differs: libjulia has no demand to keep one out, so every one is a root\" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (\n" *
            join(items, "\n") * "\n)"
 end
 

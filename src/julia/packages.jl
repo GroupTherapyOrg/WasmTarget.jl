@@ -9,7 +9,7 @@
 
 # dart's runtime library, the @patch libraries a program is compiled with (RUNTIME_FILES), its ports
 # Julia methods compiled into every closed world (RUNTIME_ROOTS, below)
-@quarantine "Julia has no per-file namespace; dart's patch libraries, the program's runtime (pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries), are a module" Core.Module module Runtime
+@quarantine pin"pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries" "Julia has no per-file namespace; dart's patch libraries, the program's runtime (pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries), are a module" Core.Module module Runtime
 # ---- Runtime's imports, written by dev/skeleton.jl write ----
 import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..WasmI32, .._wasm_only,
        ..jl_is_tuple_type, ..jl_is_type_type, ..jl_to_typeof, ..jl_typetagis, ..wasm_array_length,
@@ -18,7 +18,7 @@ import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..WasmI32, .._wasm_on
 # ---- end of Runtime's imports ----
 end
 # ---- the runtime's roots, written by dev/skeleton.jl write ----
-@quarantine "dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's runtime functions the code generator calls (julia/src/rtutils.c:189 jl_bounds_error), which every Julia process links whole, where Julia differs: libjulia has no demand to keep one out, so every one is a root" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (
+@quarantine pin"pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure" "dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's runtime functions the code generator calls (julia/src/rtutils.c:189 jl_bounds_error), which every Julia process links whole, where Julia differs: libjulia has no demand to keep one out, so every one is a root" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (
     ((:Runtime,), :Error__throw_with_current_stack_trace),
     ((:Runtime,), :StackTrace_current),
     ((:Runtime,), :_InterfaceType_class_id),
@@ -57,7 +57,7 @@ end
 )
 # ---- end of the runtime's roots ----
 
-@quarantine "Julia has no per-file namespace; the ports of LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), and of the compiler-rt builtins its libcalls name are one module, as Julia keeps its port of the Ryu algorithm, an external code base (Ulf Adams' reference C implementation), in one module of its own (precedent(julia: base/ryu/Ryu.jl:1 Ryu))" Core.Module module LLVM
+@quarantine pin"precedent(julia: base/ryu/Ryu.jl:1 Ryu)" "Julia has no per-file namespace; the ports of LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), and of the compiler-rt builtins its libcalls name are one module, as Julia keeps its port of the Ryu algorithm, an external code base (Ulf Adams' reference C implementation), in one module of its own (precedent(julia: base/ryu/Ryu.jl:1 Ryu))" Core.Module module LLVM
 # ---- LLVM's imports, written by dev/skeleton.jl write ----
 import ..@parity, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF, ..BLOCK_TYPE_RESULTS,
        ..BLOCK_TYPE_VOID, ..BR, ..BR_IF, ..BR_TABLE, ..BR_UNLESS, ..CATCH, ..CATCH_ALL_REF,
@@ -73,14 +73,14 @@ import ..WasmBuilder
 # ---- end of LLVM's imports ----
 end
 
-@quarantine "Julia has no per-file namespace; dart's wasm_builder package is a module" Core.Module module WasmBuilder
+@quarantine unpinned "Julia has no per-file namespace; dart's wasm_builder package is a module" Core.Module module WasmBuilder
 # ---- WasmBuilder's imports, written by dev/skeleton.jl write ----
 import ..@dart_export, ..@parity, ..@quarantine, ..AbstractInstructionsBuilder, ..AbstractModule,
        ..AbstractModuleBuilder, ..Internal, ..InvalidModule, ..Late, ..LinkedHashMap,
        ..LinkedHashSet, ..Unported, ..reject!, ..strongly_connected_components
 import Base: @nospecializeinfer
 # ---- end of WasmBuilder's imports ----
-@quarantine "dart's builder and serializer import ir under the prefix ir; a prefix is a module in Julia" Core.Module module IR
+@quarantine unpinned "dart's builder and serializer import ir under the prefix ir; a prefix is a module in Julia" Core.Module module IR
 # ---- IR's imports, written by dev/skeleton.jl write ----
 import ...@closed, ...@dart_export, ...@parity, ...AbstractModule, ...Internal, ...InvalidModule,
        ...Late, ...LinkedHashMap, ...Unported, ...reject!
@@ -89,7 +89,7 @@ import ..WasmBuilder
 end
 end
 
-@quarantine "Julia has no per-file namespace; dart's dart2wasm package, its library entered at pkg/dart2wasm/lib/dart2wasm.dart:298 main, is a module" Core.Module module Dart2Wasm
+@quarantine pin"pkg/dart2wasm/lib/dart2wasm.dart:298 main" "Julia has no per-file namespace; dart's dart2wasm package, its library entered at pkg/dart2wasm/lib/dart2wasm.dart:298 main, is a module" Core.Module module Dart2Wasm
 # ---- Dart2Wasm's imports, written by dev/skeleton.jl write ----
 import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..AbstractDispatchTable, ..AbstractLambda, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF,
@@ -137,14 +137,14 @@ import ..LLVM
 import ..Runtime
 import ..WasmBuilder
 # ---- end of Dart2Wasm's imports ----
-@quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
+@quarantine unpinned "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
 # ---- Util's imports, written by dev/skeleton.jl write ----
 import ...@parity, ...ClassField, ...Internal, ...NirConst, ...NirWorld, ...nir_body_of,
        ...program_export_name, ...reject!
 import ..Dart2Wasm
 # ---- end of Util's imports ----
 end
-@quarantine "dart2wasm's compile imports js/runtime_generator.dart under the prefix js; a prefix is a module in Julia" Core.Module module JS
+@quarantine unpinned "dart2wasm's compile imports js/runtime_generator.dart under the prefix js; a prefix is a module in Julia" Core.Module module JS
 # ---- JS's imports, written by dev/skeleton.jl write ----
 import ...@parity, ...Internal, ...JS_STRING_BUILTINS_MODULE, ...nir_js_sites, ...reject!
 import ..Dart2Wasm

@@ -9,10 +9,10 @@
 Every `@exhaustive` match, by its module, its sum's name, the kinds its arms name and its line, in
 load order; `check_closed` checks each against its sum when the package loads.
 """
-@quarantine "Julia keeps no record of a match; @exhaustive records each where it is written" Base.Vector const MATCHES = Vector{Tuple{Module,Symbol,Vector{Symbol},String}}()
+@quarantine unpinned "Julia keeps no record of a match; @exhaustive records each where it is written" Base.Vector const MATCHES = Vector{Tuple{Module,Symbol,Vector{Symbol},String}}()
 
 # the arms of an @exhaustive match, (kind, binder or nothing, body), or a refusal at its line
-@quarantine "a match's arms are Julia pairs, read from the parsed expression" Base.Meta.isexpr function _arms(arms, source::LineNumberNode)::Vector{Tuple{Symbol,Union{Symbol,Nothing},Any}}
+@quarantine unpinned "a match's arms are Julia pairs, read from the parsed expression" Base.Meta.isexpr function _arms(arms, source::LineNumberNode)::Vector{Tuple{Symbol,Union{Symbol,Nothing},Any}}
     local refuse(why) = throw(ConstructionViolation("@exhaustive", "$(_at(source)): $why"))
     Meta.isexpr(arms, :block) || refuse("the arms are a begin ... end block of `Kind => body` or `(v::Kind) => body`")
     local out = Tuple{Symbol,Union{Symbol,Nothing},Any}[]
@@ -47,7 +47,7 @@ precedent(rust: match, its missing arm error E0004; dart: switch over a sealed c
 differs: it has no match statement and checks no exhaustiveness, so the macro checks the arms
 against the sum's kinds where it is written and expands into a chain of isa tests.
 """
-@quarantine "Julia has no match statement and no exhaustiveness check; a macro checks each match" Base.esc macro exhaustive(subject, arms)
+@quarantine unpinned "Julia has no match statement and no exhaustiveness check; a macro checks each match" Base.esc macro exhaustive(subject, arms)
     local refuse(why) = throw(ConstructionViolation("@exhaustive", "$(_at(__source__)): $why"))
     Meta.isexpr(subject, :(::), 2) && subject.args[2] isa Symbol || refuse("the subject reads `value::Sum`")
     local sum = subject.args[2]
@@ -81,7 +81,7 @@ The closed sums' check: every `Union` binding `mod` defines is a `@closed` sum, 
 are concrete structs that subtype nothing, and every `@exhaustive` match names exactly its sum's
 kinds. Throws a `ConstructionViolation` listing the rest.
 """
-@quarantine "the closed sums' totality, by reflection when the package loads" Base.uniontypes function check_closed(mod::Module)::Int
+@quarantine unpinned "the closed sums' totality, by reflection when the package loads" Base.uniontypes function check_closed(mod::Module)::Int
     local out = String[]
     for sub in _modules(mod), n in names(sub; all = true)
         (startswith(string(n), '#') || !isdefined(sub, n) || which(sub, n) !== sub) && continue
@@ -100,7 +100,7 @@ kinds. Throws a `ConstructionViolation` listing the rest.
     isempty(out) || throw(ConstructionViolation("closed", join(out, "; ")))
     return 0
 end
-@quarantine "the closed sums' assertion, run when the package loads" Base.Val construction_check(::Val{:closed})::Int = check_closed(@__MODULE__)
+@quarantine unpinned "the closed sums' assertion, run when the package loads" Base.Val construction_check(::Val{:closed})::Int = check_closed(@__MODULE__)
 
 """
     check_sum_matched(mod, sum) -> Int
@@ -109,7 +109,7 @@ A named closed sum's check: `sum` in `mod` is a `@closed` sum, an `@exhaustive` 
 and every match over a sum of `mod` names exactly its kinds (`check_closed`). Throws a
 `ConstructionViolation` naming the fault.
 """
-@quarantine "a sum's closure and its match are asserted when the package loads" Core.throw function check_sum_matched(mod::Module, sum::Symbol)::Int
+@quarantine unpinned "a sum's closure and its match are asserted when the package loads" Core.throw function check_sum_matched(mod::Module, sum::Symbol)::Int
     (mod, sum) in CLOSED_SUMS || throw(ConstructionViolation(string(sum), "$sum is not a @closed sum"))
     any(m -> m[1] === mod && m[2] === sum, MATCHES) ||
         throw(ConstructionViolation(string(sum), "no @exhaustive match over $sum gives each kind its arm"))
@@ -128,7 +128,7 @@ comment. Throws a `ConstructionViolation` naming the first other abstract type.
 precedent(dart: sealed class against abstract class; rust: enum against trait). Julia's differs:
 its abstract types are open by language, so the refusal runs when the package loads.
 """
-@quarantine "Julia's abstract types are open by language; dart's sealed classes and Rust's enums are not" Base.isabstracttype function check_no_open_abstract(mod::Module)::Int
+@quarantine unpinned "Julia's abstract types are open by language; dart's sealed classes and Rust's enums are not" Base.isabstracttype function check_no_open_abstract(mod::Module)::Int
     for n in names(mod; all = true)
         isdefined(mod, n) || continue
         local b = getglobal(mod, n)
@@ -145,7 +145,7 @@ its abstract types are open by language, so the refusal runs when the package lo
     return 0
 end
 # checked last, when every definition exists (src/WasmTarget.jl calls it after every include)
-@quarantine "the open-hierarchy refusal's assertion, run when the package loads" Base.Val construction_check(::Val{:check_no_open_abstract})::Int = check_no_open_abstract(@__MODULE__)
+@quarantine unpinned "the open-hierarchy refusal's assertion, run when the package loads" Base.Val construction_check(::Val{:check_no_open_abstract})::Int = check_no_open_abstract(@__MODULE__)
 
 """
     check_sole_constructor(T, token, file) -> Int
@@ -159,7 +159,7 @@ precedent(rust: typestate with a private constructor, the value made by one func
 Julia's differs: it has no private constructors, so the sole constructor and the token's are checked
 by reflection over their method tables when the package loads.
 """
-@quarantine "Julia has no private constructors; a typestate's sole constructor is checked by reflection" Base.methods function check_sole_constructor(T::DataType, token::DataType, file::AbstractString)::Int
+@quarantine unpinned "Julia has no private constructors; a typestate's sole constructor is checked by reflection" Base.methods function check_sole_constructor(T::DataType, token::DataType, file::AbstractString)::Int
     local name = string(nameof(T))
     local here(m) = normpath(string(m.file)) == normpath(file)
     local ms = collect(methods(T))
@@ -178,7 +178,7 @@ end
 # same way, or `getproperty(M, :x)` / `getfield(M, :x)` of a module `M` read as `M.x`; `nothing` for
 # anything else (A38: lowering spells `M.x` as a getproperty call and puts each callee or type in its
 # own statement)
-@quarantine "lowered code refers to bindings by GlobalRef, SSAValue and module property, Julia's lowered IR" Core.GlobalRef function _binding(code::Vector{Any}, x, depth::Int=0)::Any
+@quarantine unpinned "lowered code refers to bindings by GlobalRef, SSAValue and module property, Julia's lowered IR" Core.GlobalRef function _binding(code::Vector{Any}, x, depth::Int=0)::Any
     depth > 32 && return nothing
     x isa Core.SSAValue && return _binding(code, code[x.id], depth + 1)
     x isa GlobalRef && return isdefined(x.mod, x.name) ? getglobal(x.mod, x.name) : nothing
@@ -197,7 +197,7 @@ end
 # GlobalRef, `M.x` or getfield), a call whose callee's binding is `T`, a `:new` or `:splatnew` whose
 # type's binding is `T` or `token`, or a foreigncall of Julia's runtime struct constructors
 # (jl_new_struct, jl_new_structv, jl_new_structt) (A36S3, A37S1, A38); naming `T` as a type makes nothing
-@quarantine "a lowered body's makers are its bindings, calls, :new, :splatnew and foreigncall forms, Julia's lowered IR" Core.Expr function _code_makes(code::Vector{Any}, T::DataType, token::DataType)::Bool
+@quarantine unpinned "a lowered body's makers are its bindings, calls, :new, :splatnew and foreigncall forms, Julia's lowered IR" Core.Expr function _code_makes(code::Vector{Any}, T::DataType, token::DataType)::Bool
     local walk(x) = if x isa Expr
         if (x.head === :new || x.head === :splatnew) && !isempty(x.args)
             local t = _binding(code, x.args[1])
@@ -219,7 +219,7 @@ end
 end
 
 # a foreigncall's function name in lowered code: a quoted symbol, or the first of a (name, library) tuple
-@quarantine "a foreigncall names its C function as a quoted symbol or a tuple, Julia's lowered IR" Core.QuoteNode function _ccall_name(x)::Symbol
+@quarantine unpinned "a foreigncall names its C function as a quoted symbol or a tuple, Julia's lowered IR" Core.QuoteNode function _ccall_name(x)::Symbol
     x isa QuoteNode && x.value isa Symbol && return x.value
     x isa Symbol && return x
     x isa Expr && x.head === :tuple && !isempty(x.args) && return _ccall_name(x.args[1])
@@ -231,7 +231,7 @@ end
 # splat lowers to Core._apply_iterate, invokelatest takes eval as an argument), whose binding is a
 # function named eval, include_string or include; or a getfield, getglobal or getproperty of a module
 # with a name that is no literal symbol (A37S1, A38)
-@quarantine "code made at run time or a binding found by a computed name is invisible to a read of lowered IR" Core.getglobal function _code_escapes(code::Vector{Any})::Bool
+@quarantine unpinned "code made at run time or a binding found by a computed name is invisible to a read of lowered IR" Core.getglobal function _code_escapes(code::Vector{Any})::Bool
     local evalish(b) = b isa Function && nameof(b) in (:eval, :include_string, :include)
     local walk(x) = if x isa Expr
         if x.head === :call && length(x.args) >= 3
@@ -267,7 +267,7 @@ precedent(rust: a private constructor, which no code outside its module can call
 has no module privacy, so the guarantee holds for WasmTarget's own code, read when the package
 loads; a caller outside the package can still reach the token, a limit of the language, not a choice.
 """
-@quarantine "Julia has no module privacy; WasmTarget's own lowered code is read when the package loads" Base.uncompressed_ast function check_sole_maker(root::Module, T::DataType, token::DataType, makers::Tuple, checks::Tuple, reflection::Tuple)::Int
+@quarantine unpinned "Julia has no module privacy; WasmTarget's own lowered code is read when the package loads" Base.uncompressed_ast function check_sole_maker(root::Module, T::DataType, token::DataType, makers::Tuple, checks::Tuple, reflection::Tuple)::Int
     local name = string(nameof(T))
     local allowed = Set{Method}(vcat(collect(methods(T)), collect(methods(token)), collect(Method, makers), collect(Method, checks)))
     local found = String[]
@@ -302,7 +302,7 @@ precedent(julia: juliac's trim takes each module of the init list as an entrypoi
 julia/src/precompile.c:98 jl_write_compiler_output). Julia's differs: the session's list is
 gone, so its modules are found again by walking the runtime's module tree.
 """
-@quarantine "julia/src/init.c:563 _finish_jl_init_ runs the init list at startup, its modules found again here by walking Core's and Base's submodules, reflection by computed names" Base.parentmodule function runtime_initializers()::Vector{Function}
+@quarantine pin"julia/src/init.c:563 _finish_jl_init_" "julia/src/init.c:563 _finish_jl_init_ runs the init list at startup, its modules found again here by walking Core's and Base's submodules, reflection by computed names" Base.parentmodule function runtime_initializers()::Vector{Function}
     local out = Function[]
     local seen = Base.IdSet{Module}()
     local queue = Module[Core, Base]
@@ -333,7 +333,7 @@ closed-world maker check reads as reflection.
 precedent(rust: `std::any::TypeId` reflection over the compiler's own registry). Julia's differs: its
 kinds are bindings of Core that a predicate names, so the list is read from Core when the package loads.
 """
-@quarantine "Julia's kinds are Core's bindings Base.iskindtype accepts; reading them looks bindings up by name" Base.iskindtype function core_kinds()::Tuple{Vararg{DataType}}
+@quarantine unpinned "Julia's kinds are Core's bindings Base.iskindtype accepts; reading them looks bindings up by name" Base.iskindtype function core_kinds()::Tuple{Vararg{DataType}}
     # a loop, not a comprehension: a comprehension's closure has no file, so the maker check could not
     # read it as this file's reflection
     local kinds = DataType[]

@@ -2801,7 +2801,12 @@ end
 const GENERATED_IMPORTS_RX = r"# ---- (\w+)'s imports, written by dev/skeleton\.jl write ----\n(?s:.*?)# ---- end of \1's imports ----"
 function quarantine_bodies(wt::Module, file::AbstractString, text::AbstractString)::Dict{String,String}
     file == "julia/packages.jl" && (text = replace(text, GENERATED_IMPORTS_RX => s -> replace(s, r"[^\n]" => " ")))
-    local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
+    # a nested @quarantine's pin (1.K: pin"…" or `unpinned`) is how its source is written, never its owner's
+    # body: a body reads a nested definition in the old form, so the migration rewrites no body
+    local isq(x) = Meta.isexpr(x, :macrocall) && (x.args[1] === Symbol("@quarantine") || (x.args[1] isa GlobalRef && x.args[1].name === Symbol("@quarantine")))
+    local unlined(x) = x isa LineNumberNode ? nothing :
+        isq(x) && length(x.args) == 6 ? Expr(:macrocall, x.args[1], nothing, Any[unlined(a) for a in x.args[4:end]]...) :
+        x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
     local found = Any[]
     local walk(x) = if Meta.isexpr(x, :macrocall) && (x.args[1] === Symbol("@quarantine") ||
                                                        (x.args[1] isa GlobalRef && x.args[1].name === Symbol("@quarantine")))
@@ -2901,6 +2906,11 @@ function debt_negatives_missed()::Vector{String}
         length(debt_bodies_changed(t, p0)) == 1 || push!(out, "negative missed: a debt-listed module of packages.jl rewritten by hand passes")
         write(pkj, pm("import ..a\n", "import ..b\n")); g("commit", "-qam", "outside")
         length(debt_bodies_changed(t, p0)) == 1 || push!(out, "negative missed: a hand import outside the generated block of a debt-listed module passes")
+        # a nested @quarantine rewritten in the pin form (1.K) rewrites no body of its debt-listed owner
+        write(pkj, pm("import ..a\n", "@quarantine \"inner\" Core.Module module Q\nend\n")); write(f, "# the list\njulia/packages.jl PM\n"); g("add", "-A"); g("commit", "-qam", "nest")
+        local p2 = readchomp(`git -C $t rev-parse HEAD`)
+        write(pkj, pm("import ..a\n", "@quarantine unpinned \"inner\" Core.Module module Q\nend\n")); g("commit", "-qam", "pinform")
+        isempty(debt_bodies_changed(t, p2)) || push!(out, "negative missed: a nested @quarantine written in the pin form reads as its owner's rewrite")
         # a pin table's rows added is no rewrite; a row removed is
         pin_rows_added("julia/parity.jl JULIA_FILES", "const JULIA_FILES::Tuple{Vararg{String}} = (\"a\", \"b\")",
                        "const JULIA_FILES::Tuple{Vararg{String}} = (\"a\", \"b\", \"c\")") ||
