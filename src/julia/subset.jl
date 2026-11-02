@@ -279,9 +279,12 @@ end
     cause isa Core.Compiler.TrimVerifier.CCallableMissing && return TrimError(kind, nothing, 0, Base.StackTraces.StackFrame[], TrimCCallableMissing(cause))
     cause isa Core.Compiler.TrimVerifier.CallMissing ||
         reject!(Internal("src/julia/subset.jl _trim_error: Julia $VERSION's trim verifier reports a $(typeof(cause)), a record it has no kind for (TrimCause)"), at)
-    # the chain of parents from the error's CodeInstance, cut where it meets one already on it: the
-    # runtime's roots call one another (a recursion, each queued beside the entry, so each a parent of
-    # another), and verify_create_stackframes follows the map until it ends, which a cycle never does
+    # the chain of parents from the error's CodeInstance, cut where it meets one already on it: a
+    # departure from Julia's, which has no repeat guard. verify_codeinstance! (verifytrim.jl:182) records a
+    # parent for every invoke edge, inspected or not, so a recursion back to a root (the entry or a
+    # runtime root, one calling another) gives the root a parent and the map a cycle, and
+    # verify_create_stackframes (verifytrim.jl:125) follows the map until it ends, which a cycle never
+    # does: juliac's walk would not end either. Here the frames end at the first repeat.
     local chain = Core.Compiler.TrimVerifier.ParentMap()
     local seen = Base.IdSet{Core.CodeInstance}((cause.codeinst,))
     local ci = cause.codeinst

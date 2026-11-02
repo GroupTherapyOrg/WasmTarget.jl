@@ -51,6 +51,13 @@ module SubsetErrors
 dyn(x::Int) = Base.inferencebarrier(x) + 1
 end
 
+# a recursion back to the entry with a call inference cannot resolve: the verifier's parents form a
+# cycle (ping's parent pong, pong's ping), which verify_create_stackframes alone never leaves
+module SubsetCycle
+@noinline ping(n::Int) = n <= 0 ? Base.inferencebarrier(n) + 1 : pong(n - 1)
+@noinline pong(n::Int) = n <= 0 ? 0 : ping(n - 1)
+end
+
 @testset "check_subset: OutsideSubset keeps the verifier's records" begin
     local W = WasmTarget
     local rejection(f, at) = try
@@ -79,6 +86,13 @@ end
     local described = collect(values(W.TRIM_ERROR_KINDS))
     @test allunique(described)
     @test Set(described) == Set(k for k in instances(W.TrimErrorKind) if !(k in (W.no_unique_method, W.no_compileable_specialization)))
+    # a trim error inside a recursion back to the entry: a located rejection, its frames the chain from
+    # the error up to its first repeat (ping, its parent pong, then ping again, cut)
+    local ce = rejection(SubsetCycle.ping, (Int,))
+    @test ce.at == "subset" && ce.rejection isa W.OutsideSubset
+    local ct = only(ce.rejection.errors)
+    @test ct.kind == W.unresolved_call && Core.Compiler.get_ci_mi(ct.codeinst).def.name === :ping
+    @test [f.func for f in ct.frames if !f.inlined] == [:ping, :pong]
     # an accepted world keeps the verifier's parents, from which any statement is located
     @test WasmTarget.check_subset(SubsetCases.g, (Int,), "subset").parents isa IdDict
 end
