@@ -237,6 +237,11 @@ echo "check: ${path} s on the critical path (load ${c_load}, ratchet ${p_ratchet
 # first compile 348 -> 263 G; d0444541's own src check read 131 s) with the ratchet's L210 cache (ad31d8f6), and steps
 # to 120 s with SHARDS back to four (wt3-latency, A67E1/A68E2); the 60-s target is unchanged
 D14_RED=140
+# the band and the shard count are one schedule, the option Dale chose: 140 s while SHARDS is above four, 120 s at four
+# or fewer. D14_RED stays a literal (dev/ship.sh's retry cap reads it from origin), so a mismatch is refused here (A81S1)
+[ $(( SHARDS > 4 ? 140 : 120 )) -eq $D14_RED ] || { echo "check: RED — D14_RED=$D14_RED disagrees with SHARDS=$SHARDS (140 s while SHARDS > 4, then 120 s, the option Dale chose)"; exit 1; }
+# today's judged path fell by measure alone, nothing the check runs changed: 156 (CPU-s) -> 131 (f8afd6e5) -> ~95
+# (89a5deb2), 2026-11-01/02; D14's intent is about a minute of wall, so a judged path under 120 is not D14 met
 [ $path -gt $D14_RED ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past ${D14_RED} s until four shards, then 120 s)"; exit 1; }
 line_stop
 echo "check: green (${wall}s)"
