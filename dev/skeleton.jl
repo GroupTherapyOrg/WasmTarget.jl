@@ -51,8 +51,8 @@ struct Tok
 end
 
 # the operator spellings dart's grammar names after `operator`, longest first
-const OPS = [">>>=", "[]=", ">>>", "~/=", "==", "<=", ">=", "<<", ">>", "~/", "[]", "+", "-", "*", "/",
-             "%", "<", ">", "&", "|", "^", "~"]
+const OPS = (">>>=", "[]=", ">>>", "~/=", "==", "<=", ">=", "<<", ">>", "~/", "[]", "+", "-", "*", "/",
+             "%", "<", ">", "&", "|", "^", "~")
 
 mutable struct Lexer
     s::Vector{Char}
@@ -242,8 +242,8 @@ function body_form(toks::Vector{Tok}, k::Int, e::Int, mods::Vector{String}, line
 end
 with_body(d::Decl, bf::Tuple{Symbol,Int})::Decl = Decl(d.kind, d.symbol, d.line, d.modifiers, d.extends, d.params, d.rettype, d.implements, d.mixins, bf[1], bf[2])
 
-const MODIFIERS = Set(["abstract", "sealed", "base", "final", "interface", "static", "external", "const",
-                       "late", "var", "covariant", "factory", "augment"])
+const MODIFIERS = ("abstract", "sealed", "base", "final", "interface", "static", "external", "const",
+                   "late", "var", "covariant", "factory", "augment")
 
 # the index after a balanced group opened at `i` (one of `( [ {`; `<` counts generic angles)
 function close_of(toks::Vector{Tok}, i::Int, file)::Int
@@ -988,13 +988,13 @@ end
 # (unannotated) where no row of the table covers it
 # the platform's types (dart:core, dart:typed_data, dart:_internal) and the language's own (void,
 # dynamic, Never), each with its Julia type; DART_GENERIC's take their arguments
-const DART_TYPES = Dict("int" => "Int64", "double" => "Float64", "bool" => "Bool", "String" => "String",
+const DART_TYPES = Base.ImmutableDict("int" => "Int64", "double" => "Float64", "bool" => "Bool", "String" => "String",
                         "num" => "Real", "void" => "Nothing", "Object" => "Any", "dynamic" => "Any",
                         "Function" => "Function", "Null" => "Nothing", "Never" => "Union{}", "Type" => "Type",
                         "Uri" => "String", "StringSink" => "IO", "StringBuffer" => "IOBuffer",
                         "Uint8List" => "Vector{UInt8}", "BytesBuilder" => "IOBuffer",
                         "List" => "Vector", "Set" => "Set", "Map" => "Dict", "Iterable" => "AbstractVector")
-const DART_GENERIC = Set(["List", "Set", "Map", "Iterable"])
+const DART_GENERIC = ("List", "Set", "Map", "Iterable")
 
 # the Kernel table, src/julia/kernel.jl's KERNEL_TYPES: (library, name) => Julia type
 const KERNEL = Dict{Tuple{String,String},String}()
@@ -1248,10 +1248,10 @@ function julia_name(d::Decl)::Tuple{String,Bool}
     return (snake(m), true)
 end
 
-const JULIA_KEYWORDS = Set(["end", "function", "global", "local", "begin", "module", "struct", "do", "try",
+const JULIA_KEYWORDS = ("end", "function", "global", "local", "begin", "module", "struct", "do", "try",
     "catch", "quote", "let", "const", "return", "for", "while", "if", "else", "elseif", "import", "using",
     "export", "macro", "abstract", "primitive", "mutable", "baremodule", "finally", "break", "continue",
-    "outer", "public", "true", "false"])
+    "outer", "public", "true", "false")
 
 # a Julia function name that Base exports is extended as Base.<name>, as A3's rule admits; a name that
 # is a Julia keyword is written var"name", the name the rule wants
@@ -1887,8 +1887,8 @@ const PACKAGES = joinpath(ROOT, "src", "julia", "packages.jl")
 PACKAGES_PATH()::String = PACKAGES
 # the modules a block is written for, each with its dot depth in packages.jl and its files: the
 # directories the pin tables' modules map to (DART_MODULES, LLVM_MODULES, RUNTIME_MODULES)
-const PACKAGE_MODULES = ["Runtime" => "..", "LLVM" => "..", "WasmBuilder" => "..", "IR" => "...",
-                         "Dart2Wasm" => "..", "Util" => "...", "JS" => "..."]
+const PACKAGE_MODULES = ("Runtime" => "..", "LLVM" => "..", "WasmBuilder" => "..", "IR" => "...",
+                         "Dart2Wasm" => "..", "Util" => "...", "JS" => "...")
 function module_files()::Dict{String,Vector{String}}
     local out = Dict(m => String[] for (m, _) in PACKAGE_MODULES)
     for f in scope()
@@ -2310,14 +2310,17 @@ out_of_scope()::Dict{String,String} = scope_section("out")
 const OUT_DEFINITIONS = Dict{String,String}()
 const OUT_TYPES = Dict{String,String}()
 
-# every table the generator fills lazily from the pin, src/ and its scope, one list: an image built with a
-# workload (dev/SkeletonImage) would serve the build's rows (a build-time row in KERNEL_USED hides a stale
-# Kernel row, A79E1), so the image's __init__ empties them (reset!) and reads `snake` again, and a load
+# every table the generator fills lazily from the pin, src/ and its scope: each module-level constant whose
+# value is a mutable container, read from the module itself, never a hand list (A80S4: a new lazy table is one
+# by construction); its literal tables are immutable (Tuples, an ImmutableDict) for that reason. An image built
+# with a workload (dev/SkeletonImage) would serve the build's rows (a build-time row in KERNEL_USED hides a
+# stale Kernel row, A79E1), so the image's __init__ empties them (reset!) and reads `snake` again, and a load
 # finds them empty (lazy_tables_filled, the ratchet's L210 check)
-const LAZY_TABLES = (:SDK, :DART_BASE, :MODULES, :PLATFORM_URIS, :DIRECTIVES, :OWN_TYPES, :EXPORTED, :SCOPE_SET,
-                     :KERNEL, :KERNEL_USED, :KERNEL_SUMS, :TPARAMS, :OUT_DEFINITIONS, :OUT_TYPES)
-reset!() = (foreach(t -> empty!(getglobal(@__MODULE__, t)), LAZY_TABLES); load_snake!(); nothing)
-lazy_tables_filled()::Vector{Symbol} = Symbol[t for t in LAZY_TABLES if !isempty(getglobal(@__MODULE__, t))]
+lazy_tables()::Vector{Symbol} = Symbol[n for n in names(@__MODULE__; all = true)
+    if !startswith(string(n), '#') && isdefined(@__MODULE__, n) && isconst(@__MODULE__, n) &&
+       getglobal(@__MODULE__, n) isa Union{AbstractDict,AbstractSet,Vector} && !(getglobal(@__MODULE__, n) isa Base.ImmutableDict)]
+reset!() = (foreach(t -> empty!(getglobal(@__MODULE__, t)), lazy_tables()); load_snake!(); nothing)
+lazy_tables_filled()::Vector{Symbol} = Symbol[t for t in lazy_tables() if !isempty(getglobal(@__MODULE__, t))]
 function out_reason(file::AbstractString, d::Decl, ext_on::Dict{String,String})::Union{Nothing,String}
     isempty(OUT_DEFINITIONS) && merge!(OUT_DEFINITIONS, scope_section("out_definitions"))
     isempty(OUT_TYPES) && merge!(OUT_TYPES, scope_section("out_types"), OUT_DEFINITIONS)

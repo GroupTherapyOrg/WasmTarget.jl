@@ -524,6 +524,12 @@ function skeleton_negatives_missed()::Vector{String}
     push!(kused, ("planted.dart", "Planted"))
     :KERNEL_USED in Base.invokelatest(getglobal(skm, :lazy_tables_filled)) || push!(out, "negative missed: a filled lazy table is not reported")
     delete!(kused, ("planted.dart", "Planted"))
+    # a table outside today's list, declared in the module, is one by construction (A80S4)
+    Core.eval(skm, :(const PLANTED_LAZY_TABLE = Dict{String,Int}()))
+    local planted_t = getglobal(skm, :PLANTED_LAZY_TABLE)
+    planted_t["planted"] = 1
+    :PLANTED_LAZY_TABLE in Base.invokelatest(getglobal(skm, :lazy_tables_filled)) || push!(out, "negative missed: a new lazy table outside the list is not reported")
+    empty!(planted_t)
     # the verdict's key: an edit only to the generator, or only to this lock's code, misses the cache
     mktempdir() do t
         local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
