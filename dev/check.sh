@@ -103,6 +103,19 @@ fi
 # ("WasmTarget does not load"; src/support stripped at 17:14Z, after 686966ac cited it). This tree's script only grows
 # the list and, at the pinned commit, only re-reads the tree, with no fetch (unjudged, a second or two)
 bash dev/fetch_julia.sh > .wtd/fetch_julia.out 2>&1 || { echo "check: the julia checkout cannot be made"; tail -5 .wtd/fetch_julia.out; exit 1; }
+SHARDS=6
+# D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
+# change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget, then to 160 s the same day ("Raise
+# to 160 until the cuts") once the load counted whole by instructions read ~33 s and a src path ~155 s (load 33 +
+# max(ratchet 112, shards 122)). It stepped to 140 s when cuts 1 and 2 of the shards' first compile landed (7a2f804e, d0444541: the
+# first compile 348 -> 263 G; d0444541's own src check read 131 s) with the ratchet's L210 cache (ad31d8f6), and steps
+# to 120 s with SHARDS back to four (wt3-latency, A67E1/A68E2); the 60-s target is unchanged
+D14_RED=140
+# the band and the shard count are one schedule, the option Dale chose: 140 s while SHARDS is above four, 120 s at four
+# or fewer. D14_RED stays a literal (dev/ship.sh's retry cap reads it from origin), so a mismatch is refused here, before
+# the plant, the load or the ratchet starts (A81S1, A82S6, A83S7). STOPGAP: two literals held together by a refusal; it ends when SHARDS is derived from
+# the band (or the band from SHARDS) in one definition that ship.sh can still read
+[ $(( SHARDS > 4 ? 140 : 120 )) -eq $D14_RED ] || { echo "check: RED — D14_RED=$D14_RED disagrees with SHARDS=$SHARDS (140 s while SHARDS > 4, then 120 s, the option Dale chose)"; exit 1; }
 # every stage runs under dev/tree_instructions.jl, which writes to .wtd/<stage>.gi what its whole process tree retired, each
 # process read at its exit: its instructions and those on performance cores, its CPU seconds and those on performance
 # cores, and the stage's own process's instructions (the load's precompile runs in a child process rusage does not
@@ -126,19 +139,7 @@ julia --startup-file=no dev/tree_instructions.jl .wtd/ratchet.gi julia --project
 # to four (A67E1), by the commit that cuts that first-compile cost (wt3-latency). A seventh was tried and reverted
 # (A71E1): it took the slowest shard from 589 to 575 G, about 3 s, for one more ~300 G first compile and an eighth Julia
 # process on four performance cores (D31)
-SHARDS=6; tpids=""
-# D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
-# change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget, then to 160 s the same day ("Raise
-# to 160 until the cuts") once the load counted whole by instructions read ~33 s and a src path ~155 s (load 33 +
-# max(ratchet 112, shards 122)). It stepped to 140 s when cuts 1 and 2 of the shards' first compile landed (7a2f804e, d0444541: the
-# first compile 348 -> 263 G; d0444541's own src check read 131 s) with the ratchet's L210 cache (ad31d8f6), and steps
-# to 120 s with SHARDS back to four (wt3-latency, A67E1/A68E2); the 60-s target is unchanged
-D14_RED=140
-# the band and the shard count are one schedule, the option Dale chose: 140 s while SHARDS is above four, 120 s at four
-# or fewer. D14_RED stays a literal (dev/ship.sh's retry cap reads it from origin), so a mismatch is refused here, before
-# any stage runs (A81S1, A82S6). STOPGAP: two literals held together by a refusal; it ends when SHARDS is derived from
-# the band (or the band from SHARDS) in one definition that ship.sh can still read
-[ $(( SHARDS > 4 ? 140 : 120 )) -eq $D14_RED ] || { echo "check: RED — D14_RED=$D14_RED disagrees with SHARDS=$SHARDS (140 s while SHARDS > 4, then 120 s, the option Dale chose)"; exit 1; }
+tpids=""
 costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-instr.tsv"; rm -f .wtd/src_costs.*
 # the shards take files from one queue (test/src_tests.jl), each claimed by a directory made here
 rm -rf .wtd/claims; mkdir -p .wtd/claims
