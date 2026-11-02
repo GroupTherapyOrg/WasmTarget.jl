@@ -95,8 +95,14 @@ end
 @parity "dart2wasm/lib/kernel_nodes.dart:697 KernelNodes.isNullabilityCheck" is_nullability_check(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime._is_nullability_check, "KernelNodes.isNullabilityCheck")
 
+@parity "dart2wasm/lib/kernel_nodes.dart:701 KernelNodes.isSubtype" is_subtype(self::KernelNodes)::Core.MethodInstance =
+    nir_runtime_member(self.component, Runtime._is_subtype, "KernelNodes.isSubtype")
+
 @parity "dart2wasm/lib/kernel_nodes.dart:709 KernelNodes.isInterfaceSubtype0" is_interface_subtype0(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime._is_interface_subtype0, "KernelNodes.isInterfaceSubtype0")
+
+@parity "dart2wasm/lib/kernel_nodes.dart:721 KernelNodes.asSubtype" as_subtype(self::KernelNodes)::Core.MethodInstance =
+    nir_runtime_member(self.component, Runtime._as_subtype, "KernelNodes.asSubtype")
 
 @parity "dart2wasm/lib/kernel_nodes.dart:729 KernelNodes.asInterfaceSubtype0" as_interface_subtype0(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime._as_interface_subtype0, "KernelNodes.asInterfaceSubtype0")

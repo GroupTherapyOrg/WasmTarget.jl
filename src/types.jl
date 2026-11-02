@@ -264,6 +264,9 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
     # Julia's: the class ids an as check names (emitAsCheck), whose type values the runtime reads back
     # from the id (jl_to_typeof, julia.h:971), each the class translator.classes holds at its id
     as_checked_class_ids::Set{Int}
+    # Julia's: where each type test against a type value only run time knows stands (rtutils.jl
+    # run_time_type_test!), checked at link time against the program's type values
+    run_time_type_tests::Vector{String}
     _requires_substitution_for_subclasses::Dict{Int,Bool}
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
     # :1217, which builds the rules and the tables, is its outer function
@@ -279,6 +282,7 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
             Late{NirConst}("dart2wasm/lib/types.dart:1208 RuntimeTypeInformation.canonicalSubstitutionTable"),
             Late{NirConst}("dart2wasm/lib/types.dart:1209 RuntimeTypeInformation.typeNames"),
             Set{Int}(),
+            String[],
             Dict{Int,Bool}())
 end
 

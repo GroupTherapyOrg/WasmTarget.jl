@@ -109,3 +109,74 @@ class id's type (julia.h:971 jl_to_typeof), whose nullability it holds itself: a
 """
 @parity "sdk/lib/_internal/wasm/common/type.dart:1651 _throwInterfaceTypeAsCheckError0" @noinline _throw_interface_type_as_check_error0(@nospecialize(o::Any), is_declared_nullable::Bool, t_id::Int32)::Union{} =
     _TypeError__throw_as_check_error(o, jl_to_typeof(t_id))
+
+"""
+Whether the type `t` admits null (dart's `final bool isDeclaredNullable`), Julia's `Nothing <: t`. The
+layout holds it as each kind's first field, written from Julia's `Nothing <: T` (constants.jl, the
+kinds' fields). dart reads its field from any kind; a Julia kind's struct shares no prefix with
+another's, so the answer is Julia's own, by kind, as jl_isa answers `nothing` (julia/src/subtype.c:2511):
+a DataType is a supertype of Nothing only as Nothing or Any, a Union where either member is, Union{}
+never.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:68 _Type.isDeclaredNullable" function _Type_is_declared_nullable(t::Type)::Bool
+    t isa DataType && return t === Nothing || t === Any
+    t isa Union && return _Type_is_declared_nullable(t.a::Type) || _Type_is_declared_nullable(t.b::Type)
+    return false
+end
+
+"""
+The id of the class the DataType `t` denotes (dart's `final WasmI32 classId`), its layout's field,
+read by the intrinsifier.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:276 _InterfaceType.classId" @noinline _InterfaceType_class_id(t::DataType)::Int32 =
+    _wasm_only(Int32)
+
+"""
+Whether the non-null `o` is of the type `t`, dart's `_checkInstance`, a virtual method of each runtime
+type class, here a switch over Julia's kinds by the type value's own class:
+- a DataType is dart's `_InterfaceType`: its class id's relation to `o`'s class, the class table
+  (`_InterfaceType._checkInstance`, a Julia class binding its parameters, so no type arguments);
+- a Union, Julia's `jl_uniontype_t` (julia.h), which dart has no kind of: `o` is of it exactly when it
+  is of either member, subtype.c's rule for a concrete type on the left (julia/src/subtype.c:1419
+  subtype, its `jl_is_uniontype(y)` arm), each member a type again;
+- `Union{}`'s kind is dart's `_BottomType`: no value.
+A UnionAll, a Type{X} or an open tuple type never reaches here from the program: a run-time type test
+compiles only where the program's type values hold none (src/julia/runtime/rtutils.jl
+check_run_time_type_values, at link time); a UnionAll of WasmTarget's own runtime raises, loud.
+
+precedent(julia: julia/src/subtype.c:2511 jl_isa, the kinds told apart by the type value's tag).
+Julia's differs from dart: its Union is a kind of its own, where dart's nullable type is a flag.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:97 _Type._checkInstance" function _Type__check_instance(t::Type, @nospecialize(o::Any))::Bool
+    if t isa DataType
+        return _TypeUniverse_is_object_interface_subtype0(o, _InterfaceType_class_id(t))
+    elseif t isa Union
+        return _is_subtype(o, t.a::Type) || _is_subtype(o, t.b::Type)
+    elseif t isa Core.TypeofBottom
+        # Union{}'s kind, dart's _BottomType (type.dart:111): no value is of it
+        return false
+    end
+    # a UnionAll, which no type value of the program is where a run-time test compiles (the code
+    # generator's link-time check), here only one of WasmTarget's own runtime (a TypeError's `Type`):
+    # loud, never an answer
+    Error__throw_with_current_stack_trace(ErrorException("WasmTarget: a run-time type test against a UnionAll, which Julia's subtype decides by its environment"))
+end
+
+"""
+Whether `o` is of the run-time type `t`: null answers the type's nullability, any other value the
+type's `_checkInstance`.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype" function _is_subtype(@nospecialize(o::Any), t::Type)::Bool
+    o === nothing && return _Type_is_declared_nullable(t)
+    return _Type__check_instance(t, o)
+end
+
+"""
+A check of `o` against the run-time type `t`: only its null case where the operand's type assures the
+rest, else the full test; on failure Julia's typeassert error (_TypeError._throwAsCheckError).
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype" function _as_subtype(@nospecialize(o::Any), only_nullability_check::Bool, t::Type)::Nothing
+    local success = only_nullability_check ? _is_nullability_check(o, _Type_is_declared_nullable(t)) : _is_subtype(o, t)
+    success && return nothing
+    _TypeError__throw_as_check_error(o, t)
+end

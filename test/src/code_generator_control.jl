@@ -240,11 +240,9 @@ end
     # Julia's typeassert, the checked AsExpression: only the null case can fail, so emitAsCheck's interface
     # arm calls the runtime's _asInterfaceSubtype0 (type.dart:1589); test/src/runtime.jl runs it by node
     @test "call" in generated_instructions(TypeTestCases.as_int, (R,))
-    # a type computed at run time is no type test's constant: a value, which only the runtime's
-    # subtype check takes, not ported
-    local d = rejection(() -> generated_instructions(TypeTestCases.dyn, (R, DataType)))
-    @test d.rejection isa W.Unported && d.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype" &&
-          occursin("TypeTestCases.dyn", d.at)
+    # a type computed at run time is no type test's constant: a value, which the runtime's _isSubtype
+    # takes (type.dart:1484), called (test/src/runtime.jl runs it by node)
+    @test W.compile(TypeTestCases.dyn, (R, DataType); optimize = false)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     # Julia's type parameter is a static parameter of the MethodInstance, never a type local, a
     # capture or a field: no NIR reaches instantiateTypeParameter, an Internal naming nir.jl's rejection
     local g = codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])

@@ -545,6 +545,8 @@ end
         memory_op === nothing || return generate_static_intrinsic(self, Val(:memory_data), memory_op, target, node.args[2:end])
         local getter = generate_static_getter_intrinsic(self, target)
         getter === nothing || return getter
+        target.def.module === Runtime && target.def in methods(Runtime._InterfaceType_class_id) &&
+            return generate_static_intrinsic(self, Val(:interface_type_class_id), node.args[2:end])
         target.def.name === :jl_to_typeof && target.def in methods(jl_to_typeof) &&
             return generate_static_intrinsic(self, Val(:to_typeof), node.args[2:end])
         local intrinsic = StaticIntrinsic_from_procedure(target)
@@ -807,6 +809,19 @@ end
     reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a wasm array operation $op"), at)
 end
 
+# _InterfaceType.classId (type.dart:276), a DataType value's field (src/julia/classes.jl, the kinds'
+# fields): its struct.get, as dart's code generator reads an instance field
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:interface_type_class_id}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local at = "$(self.code_gen.enclosing_member): _InterfaceType.classId"
+    local info = get(t.class_info, DataType, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: _InterfaceType.classId where DataType has no class info"), at)
+    local field = only(f for f in class_instance_fields(DataType, at) if f.name == "classId")
+    translate_expression(self.code_gen, only(args), info.non_nullable_type)
+    WasmBuilder.struct_get(self.code_gen.b[], info.struct_, t.field_index[field])
+    return WasmBuilder.IR.NumType_i32
+end
+
 # ClassID.getID (intrinsics.dart:1577): the operand translated as the non-null top type, its class id
 # loaded
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:get_id}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
@@ -827,7 +842,7 @@ end
 # (GenericMemory's Core.AddrSpace{Core}) has no constant yet (constants.jl visitInstanceConstant). The
 # checks are known only once every function is generated, so the read is a patchable region the linking
 # actions fill with the table's constant, as dart patches a constant's read once every use is known
-# (constants.dart:1913)
+# (constants.dart:1860 _ConstantAccessor.loadConstant)
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:to_typeof}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local t = translator(self)
     local b = self.code_gen.b[]

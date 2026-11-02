@@ -73,7 +73,75 @@ Natively Julia's `===`.
 @quarantine "julia/src/julia.h:971 jl_to_typeof reads a type tag's type from the table of tags' types (jl_small_typeof)" Core.DataType @noinline jl_to_typeof(tag::Int32) =
     _wasm_only(Core.DataType)
 
+# JL_TYPECHK (julia.h), the check Julia's isa and typeassert builtins make of their type argument
+# (builtins.c:584 in jl_f_isa, :591 in jl_f_typeassert): the value itself where it is a type, else
+# Julia's TypeError naming the builtin; the code generator calls it before a run-time type test
+@quarantine "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK), raising TypeError naming the builtin, as jl_f_typeassert does" Core.TypeError @noinline jl_typechk_type(fname::Symbol, @nospecialize(t::Any))::Type =
+    t isa Type ? t : Runtime.Error__throw_with_current_stack_trace(TypeError(fname, "", Type, t))
+
 # ---- end of Julia's runtime ----
+
+"""
+    run_time_type_test!(translator, at)
+
+Records a type test against a type value only run time knows (types.dart's `_isSubtype`/`_asSubtype`
+of a value, src/runtime/common/type.jl), at `at`, and on the first one registers the link-time check
+of the program's type values (`check_run_time_type_values`).
+"""
+@quarantine "dart patches a read once every use is known, in a linking action (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant); a run-time type test is checked against the program's type values once every function is generated" Base.isempty function run_time_type_test!(translator, at::String)::Nothing
+    local tests = translator.types[].rtt[].run_time_type_tests
+    isempty(tests) && push!(translator.linking_actions, () -> check_run_time_type_values(translator))
+    push!(tests, at)
+    return nothing
+end
+
+"""
+    check_run_time_type_values(translator)
+
+A run-time type test decides by the kinds the runtime ports (type.dart's `_checkInstance`: a class's
+DataType by the class table, a Union by its members, Union{}), so every type value the program holds
+must be one of those: each literal operand of the program's own bodies (WasmTarget's runtime aside),
+and every value a literal's object holds, its elements and fields. A UnionAll or a free TypeVar, which
+Julia's subtype decides by its environment (julia/src/subtype.c:1419), rejects, Unquarantined, at the
+first run-time test; a Type{X} (jl_isa's `jl_types_equal`, subtype.c:2523) or an open tuple type
+(type.dart's `_RecordType._checkInstance`) rejects, Unported, there. A program's type value is a literal:
+one made at run time (apply_type, typeof) rejects at its statement (src/intrinsics.jl).
+"""
+@quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by subtyping with an environment, which the runtime does not port; dart patches what every use needs once every use is known (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant)" Base.has_free_typevars function check_run_time_type_values(translator)::Nothing
+    local at = first(translator.types[].rtt[].run_time_type_tests)
+    local seen = Base.IdSet{Any}()
+    local visit(@nospecialize(v)) = begin
+        (v isa Union{Module,Function,Symbol,String,Number,Nothing} || v in seen) && return
+        push!(seen, v)
+        if v isa Type
+            if v isa UnionAll || Base.has_free_typevars(v)
+                reject!(Unquarantined("src/julia/runtime/rtutils.jl check_run_time_type_values: the program holds the type $v, a UnionAll or a free TypeVar, which a run-time type test cannot decide (julia/src/subtype.c:1419, its environment)"), at)
+            elseif v isa Union
+                foreach(visit, Base.uniontypes(v))
+            elseif v isa DataType && Base.isType(v)
+                reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:97 _Type._checkInstance"), "$at: a run-time type test where the program holds $v, whose values are told by jl_types_equal (julia/src/subtype.c:2523)")
+            elseif v isa DataType && v <: Tuple && !isconcretetype(v)
+                reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance"), "$at: a run-time type test where the program holds the open tuple type $v")
+            end
+        elseif v isa Union{Tuple,Core.SimpleVector,AbstractArray}
+            for x in v
+                visit(x)
+            end
+        elseif isstructtype(typeof(v))
+            for i in 1:nfields(v)
+                isdefined(v, i) && visit(getfield(v, i))
+            end
+        end
+    end
+    for body in translator.component
+        local m = body.ci.def.def
+        m isa Method && (parentmodule(m) === Runtime || m.module === @__MODULE__) && continue
+        for st in body.stmts, x in nir_operands(st)
+            x isa NirConst && visit(x.c.val)
+        end
+    end
+    return nothing
+end
 
 """
     nir_runtime_member(world, f) -> Core.MethodInstance

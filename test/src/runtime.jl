@@ -148,3 +148,42 @@ probe(k::Int64, tid::Int32) = W.Runtime._is_interface_subtype0(pick(k), false, t
     end
 end
 end
+
+module RuntimeTypeTests
+using Test, WasmTarget
+const W = WasmTarget
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+# a type only run time knows: type.dart's _isSubtype and _asSubtype over the kinds the runtime ports, a
+# class's DataType, a Union and Nothing, against native isa and typeassert
+@noinline type_at(j::Int64)::Any = j == 1 ? Int64 : j == 2 ? Float64 : j == 3 ? Union{Int64,String} : j == 4 ? Nothing : 5
+@noinline value_at(k::Int64)::Any = k == 1 ? 1 : k == 2 ? 2.0 : k == 3 ? "s" : nothing
+rt_isa(k::Int64, j::Int64) = isa(value_at(k), type_at(j)) ? 1 : 0
+rt_as(k::Int64, j::Int64) = (typeassert(value_at(k), type_at(j)); 1)
+# the same test where the program holds a type value the runtime decides by no ported kind: an open
+# tuple type, and a UnionAll
+@noinline open_type_at(j::Int64)::Any = j == 1 ? Int64 : Tuple{Any}
+rt_open(k::Int64, j::Int64) = isa(value_at(k), open_type_at(j)) ? 1 : 0
+@noinline all_type_at(j::Int64)::Any = j == 1 ? Int64 : Vector
+rt_all(k::Int64, j::Int64) = isa(value_at(k), all_type_at(j)) ? 1 : 0
+@testset "type.dart: _isSubtype and _asSubtype test a type only run time knows, against native" begin
+    local cases = Main.WTRunner.RunCase[]
+    local isa_bytes = W.compile(rt_isa, (Int64, Int64))
+    local as_bytes = W.compile(rt_as, (Int64, Int64))
+    for k in 1:4, j in 1:5
+        push!(cases, Main.WTRunner.RunCase("rt_isa($k, $j)", isa_bytes, (k, j), Main.WTRunner.native_answer(rt_isa, (k, j))))
+        push!(cases, Main.WTRunner.RunCase("rt_as($k, $j)", as_bytes, (k, j), Main.WTRunner.native_answer(rt_as, (k, j))))
+    end
+    for r in Main.WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+    # a program holding the open tuple type Tuple{Any} beside a run-time test: rejected at the test,
+    # located, the link-time check of the program's type values (_RecordType._checkInstance unported)
+    local e = try; W.compile(rt_open, (Int64, Int64)); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unported && e.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance" &&
+          occursin("rt_open", e.at) && occursin("Tuple{Any}", e.at)
+    # one holding the UnionAll Vector: a UnionAll as a value has no constant yet, rejected at that
+    # constant, located, before any run-time test is decided
+    local u = try; W.compile(rt_all, (Int64, Int64)); nothing; catch x; x; end
+    @test u isa W.RejectionError && u.rejection isa W.Unquarantined && occursin("as a value", u.rejection.row)
+end
+end
