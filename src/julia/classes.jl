@@ -17,6 +17,38 @@
     all(k -> k <: T || typeintersect(k, T) === Union{}, _KINDS)
 
 """
+    type_value_unmade(translator, T) -> Union{Nothing,Some}
+
+The parameter that keeps the type `T` from being a constant (`Some(p)`), or `nothing` where constants.jl
+makes it: a parameter that is a value of a primitive type with no wasm representation (GenericMemory's
+`Core.AddrSpace{Core}`), or a value of no class of the closed world (a `Vararg`'s Core.TypeofVararg),
+each of which visitInstanceConstant rejects, found in `T`'s parameters and in theirs. The one reading of which classes' type values jl_to_typeof's table lacks.
+"""
+@quarantine "julia/src/julia.h:971 jl_to_typeof reads every tag's type from its table; a type value whose parameter is a primitive with no wasm representation, or a value of no class, has no constant (src/constants.jl visitInstanceConstant)" Base.isprimitivetype function type_value_unmade(translator, @nospecialize(T))::Union{Nothing,Some}
+    local builtins = translator.builtin_types[]
+    local walk(@nospecialize(x)) = begin
+        if x isa Union
+            local a = walk(x.a)
+            return a === nothing ? walk(x.b) : a
+        elseif x isa DataType
+            for p in x.parameters
+                local r = walk(p)
+                r === nothing || return r
+            end
+            return nothing
+        elseif x isa Type || x isa TypeVar || x isa Symbol
+            return nothing
+        end
+        local c = typeof(x)
+        isprimitivetype(c) && return !haskey(builtins, c) && !(c <: Base.BitInteger && sizeof(c) == 16) ? Some(x) : nothing
+        # any other value is an instance constant of its class, which must be a class of the closed world
+        # (a Vararg parameter's Core.TypeofVararg is none)
+        return haskey(translator.class_info, c) ? nothing : Some(x)
+    end
+    return walk(T)
+end
+
+"""
     is_interface_class_type(translator, T, check_only_null_assignability) -> Bool
 
 Whether dart's emitIsTest and emitAsCheck take their interface arm for the tested type `T`: dart's

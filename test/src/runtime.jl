@@ -104,11 +104,19 @@ isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runne
 @noinline maybe(x::Int)::Union{Nothing,Int} = x > 0 ? x : nothing
 unwrapped(x::Int) = typeassert(maybe(x), Int) + 1
 isint(x::Int) = maybe(x) isa Int
+# an as check naming a class whose type value has no constant yet (Memory{Int64}'s Core.AddrSpace{Core})
+@noinline maybe_memory(x::Int)::Union{Nothing,Memory{Int64}} = x > 0 ? Memory{Int64}(undef, x) : nothing
+memory_length(x::Int) = length(typeassert(maybe_memory(x), Memory{Int64}))
 @testset "type.dart: _asInterfaceSubtype0 and _isNullabilityCheck test a class's null case, the error's type its class id's" begin
     local world = W.build_nir(W.check_subset(unwrapped, (Int,), "runtime"), "runtime")
     local names = Set(b.ci.def.def.name for b in world)
     @test :_as_interface_subtype0 in names && :_throw_interface_type_as_check_error0 in names
     @test (try; unwrapped(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Int, nothing)
+    # a class whose type value has no constant (Memory{Int64}, its Core.AddrSpace{Core}): the program
+    # rejects, located, at the class's layout before any as check, and an as check naming such a class
+    # refuses at its statement (types.jl, type_value_unmade) once its layout is made
+    local me = try; W.compile(memory_length, (Int,)); nothing; catch x; x; end
+    @test me isa W.RejectionError && me.rejection isa W.Unquarantined && occursin("AddrSpace", me.rejection.row)
     for (f, args) in ((unwrapped, [(3,), (-1,)]), (isint, [(3,), (-1,)]))
         local bytes = W.compile(f, (Int,))
         for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, Main.WTRunner.native_answer(f, a)) for a in args])

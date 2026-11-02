@@ -261,9 +261,6 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
     type_row_displacement_subst_table::Late{NirConst}
     canonical_substitution_table::Late{NirConst}
     type_names::Late{NirConst}
-    # Julia's: the class ids an as check names (emitAsCheck), whose type values the runtime reads back
-    # from the id (jl_to_typeof, julia.h:971), each the class translator.classes holds at its id
-    as_checked_class_ids::Set{Int}
     # Julia's: where each type test against a type value only run time knows stands (rtutils.jl
     # run_time_type_test!), checked at link time against the program's type values
     run_time_type_tests::Vector{String}
@@ -281,7 +278,6 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
             Late{NirConst}("dart2wasm/lib/types.dart:1207 RuntimeTypeInformation.typeRowDisplacementSubstTable"),
             Late{NirConst}("dart2wasm/lib/types.dart:1208 RuntimeTypeInformation.canonicalSubstitutionTable"),
             Late{NirConst}("dart2wasm/lib/types.dart:1209 RuntimeTypeInformation.typeNames"),
-            Set{Int}(),
             String[],
             Dict{Int,Bool}())
 end
@@ -560,8 +556,10 @@ there, Unported.
         local type_class_info = self.translator.class_info[tested_against_type]
         WasmBuilder.i32_const(b, encoded_nullability(tested_against_type))
         WasmBuilder.i32_const(b, class_id(type_class_info))
-        # the type its failure names, read back from the class id (src/julia/runtime/rtutils.jl jl_to_typeof)
-        push!(self.rtt[].as_checked_class_ids, class_id(type_class_info))
+        # the type its failure names, read back from the class id (src/julia/runtime/rtutils.jl
+        # jl_to_typeof), whose table lacks a class whose type value has no constant yet: refused here
+        local unmade = type_value_unmade(self.translator, tested_against_type)
+        unmade === nothing || reject!(Unquarantined("src/julia/classes.jl type_value_unmade: an as check against $tested_against_type, whose type value has no constant (its parameter $(repr(something(unmade))) is a primitive with no wasm representation, constants.jl visitInstanceConstant), so its failure could not name it"), "$at")
         outputs_to_drop = call(code_gen, as_interface_subtype0(self.translator))
     else
         reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype"), "$at: a check against $tested_against_type needs the runtime's _asSubtype")

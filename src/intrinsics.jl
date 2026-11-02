@@ -834,29 +834,17 @@ end
 end
 
 # Julia's type of a type tag (julia.h:971 jl_to_typeof, src/julia/runtime/rtutils.jl): the class id's
-# entry of a table of type values, read as a non-null DataType. Each entry is the class of its id in the
-# translator's classes (translator.classes, the one map from a class id to its class), for each class an
-# as check names (types.jl emitAsCheck records its id in RuntimeTypeInformation.as_checked_class_ids),
-# the other entries null: the runtime reads a class id's type only in the as check's failure, its id the
-# check's (src/runtime/common/type.jl _throwInterfaceTypeAsCheckError0). A table of every class's type is
-# not made: a class's type value whose parameter is a primitive value with no wasm representation
-# (GenericMemory's Core.AddrSpace{Core}) has no constant yet (constants.jl visitInstanceConstant). The
-# checks are known only once every function is generated, so the read is a patchable region the linking
-# actions fill with the table's constant, as dart patches a constant's read once every use is known
-# (constants.dart:1860 _ConstantAccessor.loadConstant)
+# entry of the table of each class's type value, the class translator.classes holds at its id (the one
+# map from a class id to its class), read as a non-null DataType. The top's entry, which no value
+# carries, is null, and so is the entry of each class whose type value has no constant yet
+# (src/julia/classes.jl type_value_unmade, the one list of them): an as check naming one refuses at its
+# statement (types.jl emitAsCheck), so no as check's failure reads a null entry
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:to_typeof}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local t = translator(self)
     local b = self.code_gen.b[]
     local array_type = array_type_for_dart_type(t, Union{Nothing,DataType}; mutable_ = true)
-    local table_type = WasmBuilder.IR.RefType_def(array_type; nullable = false)
-    local patch = WasmBuilder.create_patchable_region(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[table_type])
-    if patch !== nothing
-        push!(t.linking_actions, function ()
-            local named = t.types[].rtt[].as_checked_class_ids
-            local entries = NirConst[NirConst(Core.Const(id in named ? info.cls : nothing)) for (id, info) in zip(0:length(t.classes[])-1, t.classes[])]
-            instantiate_constant(t.constants[], patch, make_array_of(t.constants[], Union{Nothing,DataType}, entries), table_type)
-        end)
-    end
+    local entries = NirConst[NirConst(Core.Const(info.cls === nothing || type_value_unmade(t, info.cls) !== nothing ? nothing : info.cls)) for info in t.classes[]]
+    instantiate_constant(t.constants[], b, make_array_of(t.constants[], Union{Nothing,DataType}, entries), WasmBuilder.IR.RefType_def(array_type; nullable = false))
     translate_expression(self.code_gen, only(args), WasmBuilder.IR.NumType_i32)
     WasmBuilder.array_get(b, array_type)
     WasmBuilder.ref_as_non_null(b)
