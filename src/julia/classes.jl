@@ -40,10 +40,10 @@ end
 The parameter that keeps the type `T` from being a constant (`Some(p)`), or `nothing` where constants.jl
 makes it: a parameter that is a value of a primitive type with no wasm representation (GenericMemory's
 `Core.AddrSpace{Core}`), or a value of no class of the closed world (a `Vararg`'s Core.TypeofVararg),
-each of which visitInstanceConstant rejects, found in `T`'s parameters and in theirs. The one reading of which classes' type values jl_to_typeof's table lacks.
+each of which visitInstanceConstant rejects, found in `T`'s parameters and in theirs: a parameter value is
+unmade exactly where constant_unmade rejects its class, the one source of which constants are made.
 """
-@quarantine "julia/src/julia.h:971 jl_to_typeof reads every tag's type from its table; a type value whose parameter is a primitive with no wasm representation, or a value of no class, has no constant (src/constants.jl visitInstanceConstant)" Base.isprimitivetype function type_value_unmade(translator, @nospecialize(T))::Union{Nothing,Some}
-    local builtins = translator.builtin_types[]
+@quarantine "julia/src/julia.h:971 jl_to_typeof reads every tag's type from its table; a type value whose parameter is a primitive with no wasm representation, or a value of no class, has no constant (src/julia/classes.jl constant_unmade)" Core.typeof function type_value_unmade(translator, @nospecialize(T))::Union{Nothing,Some}
     local walk(@nospecialize(x)) = begin
         if x isa Union
             local a = walk(x.a)
@@ -57,11 +57,9 @@ each of which visitInstanceConstant rejects, found in `T`'s parameters and in th
         elseif x isa Type || x isa TypeVar || x isa Symbol
             return nothing
         end
-        local c = typeof(x)
-        isprimitivetype(c) && return !haskey(builtins, c) && !type_expand_integer(c) ? Some(x) : nothing
-        # any other value is an instance constant of its class, which must be a class of the closed world
-        # (a Vararg parameter's Core.TypeofVararg is none)
-        return haskey(translator.class_info, c) ? nothing : Some(x)
+        # any other value is an instance constant of its class, made where constant_unmade (the one source)
+        # finds no rejection: a Vararg parameter's Core.TypeofVararg is of no class of the closed world
+        return constant_unmade(translator, typeof(x)) === nothing ? nothing : Some(x)
     end
     return walk(T)
 end

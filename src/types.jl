@@ -600,9 +600,11 @@ type only run time knows takes the code generator's own call of `_asSubtype`).
         WasmBuilder.i32_const(b, encoded_nullability(tested_against_type))
         WasmBuilder.i32_const(b, class_id(type_class_info))
         # the type its failure names, read back from the class id (src/julia/runtime/rtutils.jl
-        # jl_to_typeof), whose table lacks a class whose type value has no constant yet: refused here
+        # jl_to_typeof), whose table holds every class's type value: a type value with no constant
+        # (src/julia/classes.jl type_value_unmade) has a parameter whose class ClassInfoCollector already
+        # laid out, and translateStorageType rejects every class constant_unmade does, so none reaches here
         local unmade = type_value_unmade(self.translator, tested_against_type)
-        unmade === nothing || reject!(Unquarantined("src/julia/classes.jl type_value_unmade: an as check against $tested_against_type, whose type value has no constant (its parameter $(repr(something(unmade))) is a primitive with no wasm representation, constants.jl visitInstanceConstant), so its failure could not name it"), "$at")
+        unmade === nothing || reject!(Internal("$at: an as check against $tested_against_type, whose type value has no constant (its parameter $(repr(something(unmade))), src/julia/classes.jl constant_unmade), past the class layout that rejects it"), "$at")
         outputs_to_drop = call(code_gen, as_interface_subtype0(self.translator))
     else
         # dart's general arm (types.dart:586): makeType and _asSubtype, for a type the runtime's type test

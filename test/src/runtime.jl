@@ -112,16 +112,23 @@ isint(x::Int) = maybe(x) isa Int
 # an as check naming a class whose type value has no constant yet (Memory{Int64}'s Core.AddrSpace{Core})
 @noinline maybe_memory(x::Int)::Union{Nothing,Memory{Int64}} = x > 0 ? Memory{Int64}(undef, x) : nothing
 memory_length(x::Int) = length(typeassert(maybe_memory(x), Memory{Int64}))
+# a user class whose type value has no constant only by a parameter value (Float16(1))
+struct Tagged{V}; x::Int; end
+@noinline maybe_tagged(x::Int)::Union{Nothing,Tagged{Float16(1)}} = x > 0 ? Tagged{Float16(1)}(x) : nothing
+tagged_x(x::Int) = typeassert(maybe_tagged(x), Tagged{Float16(1)}).x
 @testset "type.dart: _asInterfaceSubtype0 and _isNullabilityCheck test a class's null case, the error's type its class id's" begin
     local world = W.build_nir(W.check_subset(unwrapped, (Int,), "runtime"), "runtime")
     local names = Set(b.ci.def.def.name for b in world)
     @test :_as_interface_subtype0 in names && :_throw_interface_type_as_check_error0 in names
     @test (try; unwrapped(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Int, nothing)
     # a class whose type value has no constant (Memory{Int64}, its Core.AddrSpace{Core}): the program
-    # rejects, located, at the class's layout before any as check, and an as check naming such a class
-    # refuses at its statement (types.jl, type_value_unmade) once its layout is made
+    # rejects, located, at the parameter's class layout (translateStorageType) before any as check, as it
+    # does for every parameter constant_unmade rejects; types.jl's as check asserts it, Internal
     local me = try; W.compile(memory_length, (Int,)); nothing; catch x; x; end
     @test me isa W.RejectionError && me.rejection isa W.Unquarantined && occursin("AddrSpace", me.rejection.row)
+    local te = try; W.compile(tagged_x, (Int,)); nothing; catch x; x; end
+    @test te isa W.RejectionError && te.rejection isa W.Unquarantined &&
+          te.rejection.row == "src/translator.jl translateStorageType: the primitive class Float16, with no wasm representation"
     for (f, args) in ((unwrapped, [(3,), (-1,)]), (isint, [(3,), (-1,)]))
         local bytes = W.compile(f, (Int,))
         for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, Main.WTRunner.native_answer(f, a)) for a in args])
