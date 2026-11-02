@@ -104,18 +104,20 @@ end
 
 """
 The variables a constructor's initializer list uses: the variables its root context holds, captured
-by closures; then each initializer, of which a Julia constructor has none (its `new` ends its
-body). A Julia context holds its captured variables as fields of the closure (`ClassField`), whose
-correspondence to the constructor's arguments is not written: a root context capturing a variable
-rejects, located.
+by closures; then each initializer, of which a Julia constructor has none, by construction: its body
+ends in `new`, Julia's struct allocation, and no initializer list precedes it (julia/src/codegen.cpp's
+emit_new_struct takes the fields `new` passes). A root context waits on the capture collection:
+Closures._collectContexts (closures.dart:1524) does not yet collect a Julia constructor's captured
+locals (a closure capturing one, Core.Box or a closure struct), so `closures.contexts` holds none today,
+and the arm adding a root context's variables rejects Unported there, located, until it does.
 """
 @parity "dart2wasm/lib/constructor_info.dart:119 _UsageCollector.collectInitializerUsages" function collect_initializer_usages(self::_UsageCollector, constructor::Core.MethodInstance)::Nothing
     local root_context = get(self.closures.contexts, constructor, nothing)
     if root_context !== nothing
         root_context.parent === nothing ||
             reject!(Internal("dart2wasm/lib/constructor_info.dart:122 _UsageCollector.collectInitializerUsages: the constructor's root context has a parent"), "_UsageCollector.collectInitializerUsages")
-        isempty(root_context.variables) ||
-            reject!(Unquarantined("src/constructor_info.jl collectInitializerUsages: the constructor $constructor, whose variables a closure captures as the fields $(root_context.variables)"), "_UsageCollector.collectInitializerUsages")
+        # this arm waits on the capture collection (Closures._collectContexts), which makes no context yet
+        reject!(Unported("dart2wasm/lib/closures.dart:1524 Closures._collectContexts"), "_UsageCollector.collectInitializerUsages: the root context of $constructor, its captured variables")
     end
     # a Julia constructor has no initializer list: no initializer to visit
     return nothing

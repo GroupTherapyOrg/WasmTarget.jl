@@ -28,7 +28,9 @@ end
     D.collect_body_usages(body_collector, mi)
     @test WasmTarget.NirArgument(2) in body_collector.variables_read && WasmTarget.NirArgument(3) in body_collector.variables_read
     @test !(WasmTarget.NirArgument(4) in body_collector.variables_read) && isempty(body_collector.variables_written)
-    # the initializer list: none, and no context, so nothing captured or stored in a field
+    # the initializer list: none, and no context (Closures makes none for a Julia member), so nothing
+    # captured or stored in a field
+    @test isempty(closures.contexts)
     local init_collector = D._UsageCollector(t, closures)
     D.collect_initializer_usages(init_collector, mi)
     @test isempty(init_collector.variables_captured) && isempty(init_collector.variables_stored_in_fields)
