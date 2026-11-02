@@ -7783,3 +7783,137 @@ A79S4 and A73E1 leave 1.L; A75S1 and A75S2 leave 1.D. Open, their rows the lead'
 row 1.F; A80S4 for row 1.A6; A80E1, A80S1, A80S2, A80S3 and A80S6 for row 1.L. By owner: wt3-memory A80E2, with A77S1; wt3-latency A80E1, A80S1,
 A80S2 and A80S3; wt3-parity A80S4, with A78E2, A78S1, A78S2, A76E4, A76E5, A76E6 and A76S2; wt3-runtime A80S5 (kernel_nodes.jl),
 with A77S2 and A73S3; wt3-cgstubs2 A80S5 (code_generator.jl), with A71S3; lead A80S6, with A77E1, A77E2 and A77E3.
+
+## 2026-11-01 — audited through 6baa3349 (9c2d9848..6baa3349: the split-core limit stated, D14 stepped back to 140 s, the floor's band stated both ways, every stage run under the exit-time counter reading rusage_info_v6, the counter's streams restored, a stage that reports nothing red)
+
+The eighty-first audit, beside the work, covers the 7 commits of 9c2d9848..6baa3349 that are not audit entries (10cf7ec1,
+entry 80): 26b5649f, c8d25950, 1f13996d, 3d8ab557, fd65f41e, f4ea3125 and 6baa3349, read here, under Dale's R1 and R2 as
+standing sections. Every finding rests on one exact command, quoted. Standing items. No change under src/, test/ or
+legacy/ (`git diff --stat 9c2d9848..6baa3349 -- src test legacy | tail -1` gives nothing); no silent catch (`git diff
+9c2d9848..6baa3349 | grep -cE '^\+.*\bcatch\b'` gives 1, entry 80's own prose). The debt list reads 384 (`grep -v '^#'
+dev/quarantine_unpinned.txt | grep -c .`). Each commit names its clause in a `Charter:` line (C10, C10, C0, C10, C10, C10,
+C10, C10). Every head but one has its row in `.git/wt-progress.tsv`: fd65f41e has none (`grep -c fd65f41e
+.git/wt-progress.tsv` gives 0, `.git/wt-landings.tsv` holds `fd65f41e	139`), since its check lost the ratchet's output
+and ship.sh writes no row without a `· src:` line; src reads 3086 of 3404 throughout. Earlier findings: A80S6 is fixed by
+3d8ab557 (its trailer quotes the option's text, "The four queued commits land now. The band drops to 140 and then 120 as
+the shard and ratchet cuts land, the same exit as before."). A80E1 is narrowed by 1f13996d (both residuals stated) and
+fd65f41e (each stage's split read), and A80E1 and A80S1 are fixed after this range by 89a5deb2 (its `Fixes:` line), whose
+judged number A81E1 reaches. A80E2, A80S2, A80S3, A80S4 and A80S5 stand, untouched (`git diff --stat 9c2d9848..6baa3349`
+names only dev/AUDIT.md, CHARTER.md, LEDGER.md, MARCH.md, check.sh and tree_instructions.jl). A77E1, A77E2, A77E3, A78E2,
+A78S1, A78S2, A77S1, A77S2, A71S3, A73S3, A76E4, A76E5, A76E6, A76S2, A68E3, A71E2, A69E1, A68E2, A68S4, A72E1 and A67E1,
+carried, not re-read; A77E2 still writes (wt3-constants' loop wrote 6 CONFLICT rows naming origin's landed heads from
+00:48Z to 01:13Z, `awk -F'\t' '$1 >= "2026-11-02T00:40" && $2 == "wt3-constants"' .git/wt-ship-failures.tsv | wc -l`).
+Findings A81E1 to A81E3 and A81S1 to A81S3.
+
+Area: builder — no change under src/wasm_builder (`git diff --stat 9c2d9848..6baa3349 -- src/wasm_builder` gives nothing).
+
+Area: collection and planning — no change under src/ (above).
+
+Area: emission and diagnostics — no change under src/ (above). The check's own diagnostics: f4ea3125 hands the counted
+command this process's streams (dev/tree_instructions.jl:88-91), which `run(...; wait = false)` had sent to devnull, so
+fd65f41e's own check read `src tests  passed in 6 shards; 0 of 6 reported` and landed on exit statuses alone; 6baa3349
+makes that red (dev/check.sh:170-175, :172 and :175: every shard's `^src ` summary row counted against SHARDS, the ratchet's `── charter`
+block, which test/parity_ratchet.jl:3367 prints, required). Sound for the shards and the ratchet; the stage's counts are
+the gap it leaves (A81E2).
+
+Area: enforcement and prose — the band. To the lead's first question: yes. c8d25950 steps D14_RED from 160 to 140 (a
+tightening) on cuts 1 and 2 of the shards' first compile (7a2f804e, d0444541: 348 -> 263 G) with the ratchet's L210 cache
+(ad31d8f6) landed, d0444541's own check reading 131 s; the option Dale chose says "drops to 140 and then 120 as the shard and
+ratchet cuts land, the same exit as before", and the exit before was SHARDS back to four (A68S4). The four texts agree:
+`grep -n -o '140 s until four shards[^;]*' dev/check.sh` gives `6:140 s until four shards, Dale 2026-11-01`, dev/CHARTER.md:138
+reads "red past 120 s, past 140 s until four shards", dev/LEDGER.md:37 "so red past 140 until four shards", and
+check.sh:249 prints "red past ${D14_RED} s until four shards, then 120 s". (A81S1, low, D6, D20) the 120 step is prose
+alone: `grep -n 'D14_RED\|^SHARDS' dev/check.sh` gives `129:SHARDS=6` and `248:D14_RED=140`, two literals nothing ties,
+and `grep -c 'D14_RED' test/parity_ratchet.jl` gives 0; the commit that sets SHARDS=4 can keep 140 and every check stays
+green past 120. Fix: D14_RED derived from SHARDS at the line that judges (140 while SHARDS > 4, else 120), the one source
+of the step, the charter and ledger citing it. Owner: lead.
+
+fd65f41e, f4ea3125: every stage runs under the counter. To the lead's second question: no, and the stated limits are
+false. The library's destructor writes a process's counts only when that process loads the library and leaves by exit().
+A copy of COUNTER_C taken from the head (`awk '/^const COUNTER_C = """/{f=1;next} f&&/^"""/{exit} f'
+dev/tree_instructions.jl`), built by clang and run by a 30-line spawner in the audit's scratch that sets
+DYLD_INSERT_LIBRARIES and WT_TREE_COUNT_DIR as tree_instructions.jl:91 does, sums the files and reads
+getrusage(RUSAGE_CHILDREN), gives, for a node loop of 1e9 steps:
+direct `reported processes 1 ... library: 61.48 G, 3.45 CPU-s; kernel RUSAGE_CHILDREN: 3.45 CPU-s`;
+under `perl -e 'alarm 30; exec @ARGV'` (test/src/compile.jl:75's wrapper) `reported processes 0 ... library: 0.00 G, 0.00
+CPU-s; kernel RUSAGE_CHILDREN: 3.56 CPU-s; status exit 0`; under `/bin/bash -c` `reported processes 0 ... 0.00 CPU-s;
+kernel RUSAGE_CHILDREN: 3.89 CPU-s; status exit 0`; a node child SIGKILLed while its node parent exits 0 `reported
+processes 1 ... library: 0.66 G, 0.08 CPU-s; kernel RUSAGE_CHILDREN: 4.62 CPU-s; status exit 0`; a C loop leaving by
+_exit `reported processes 0 ... kernel RUSAGE_CHILDREN: 0.74 CPU-s; status exit 0`; `/usr/bin/git rev-list --count HEAD`
+`reported processes 0`, /opt/homebrew/bin/git `reported processes 1`. The stages hold such processes: `grep -nE '`perl '
+test/src/*.jl` finds four perl-wrapped node runs (compile.jl:75, :86, js_string.jl:84, js_runtime.jl:68) and two watchdogs,
+and `grep -cE '`(ba)?sh ' test/parity_ratchet.jl` gives 12 shell runs, each with every process below it.
+
+(A81E1, medium, D9, D17) fd65f41e replaced the kernel's whole-tree CPU seconds with the library's sum, so the judged
+number drops every process that does not report. Before it, each stage ran under /usr/bin/time -l (`git show
+9c2d9848:dev/check.sh | grep -c '/usr/bin/time -l -o'` gives 3), whose wait4 rusage holds every reaped descendant, as
+tree_instructions.jl's own children_cpu (RUSAGE_CHILDREN) did; fd65f41e deletes both, and check.sh:227 and :235 read the
+CPU term from .gi's third field, the library's sum, while check.sh:232-233 still said "its CPU seconds hold them all". The
+floor existed for exactly the children the instruction term misses (A54E1: node, wasm-opt, the ratchet's git); a child
+behind perl or bash, or killed, is now in neither term on any placement, and A80E1's stated 0.84 band assumed the CPU term
+whole. 89a5deb2, after this range, judges every term from the library (`ps_of` reads `$2 / r + ($3 - $4)`) under "Intent:
+never read low", so the same processes are missing from the whole judged number. Fix: tree_instructions.jl reads the
+tree's CPU seconds from the kernel again (getrusage(RUSAGE_CHILDREN) around the command, as before fd65f41e), writes the
+unreported remainder (kernel minus the library's sum) as a sixth field, and check.sh judges that remainder one for one as
+seconds beside the split, printing it; the plant gains a perl-wrapped grandchild whose seconds the remainder must hold.
+Owner: wt3-latency.
+
+(A81E2, medium, D9) a tree that reports nothing reads 0 and passes. tree_instructions.jl:94 starts `local sums = zeros(4);
+local root_g = 0.0` and :98 sets root_g only when a file bears the root's pid, so a root that never reports (a protected
+binary, an exec into one, _exit) writes `0.0 0.0 0.0 0.0 0.0` and exits with the command's status 0 (the spawner's bash
+and _exit runs above: `reported processes 0`, `status exit 0`); check.sh then judges that stage at 0 s, green. 6baa3349
+refuses a lost summary; nothing refuses a lost count. Fix: tree_instructions.jl exits non-zero, naming the command, when
+the root's pid wrote no file, and with A81E1's remainder the plant plants a bash-rooted tree that must refuse. Owner:
+wt3-latency.
+
+(A81E3, low, D17, D7) the counter's stated limits are false for the stages it now counts. tree_instructions.jl:22 says one
+killed by a signal "writes none, and the command fails": true of the root alone, where the SIGKILLed child above left
+`status exit 0` with 0.08 of 4.62 CPU-s counted; :23-24 says a protected binary and what it starts cost "a few
+milliseconds in the load", written when only the load ran under the counter, where the ratchet's 12 shell runs and the
+shards' perl-wrapped node runs now run under it, unmeasured. Fix: the header states each class (a non-root killed by a
+signal, a process leaving by _exit, a protected binary and its descendants) and the remainder A81E1 measures, the
+"few milliseconds" replaced by that measure. Owner: wt3-latency.
+
+To the lead's third question: inside the range no new low reading on placement beyond A80E1's stated 0.84 (fd65f41e keeps
+the formula and prints the split unjudged), but A81E1's dropped processes read low on every placement, the binding CPU term
+missing them whole; the measurement itself is right where it reports (the spawner's library CPU equals the kernel's, 3.45
+and 3.45, 0.60 and 0.60, and at background QoS `taskpolicy -b` five runs of the C loop read 0.000-0.001 P-core seconds of
+7.13-9.65, the plant's known split). Prose fixed after the range: check.sh's "(/usr/bin/time -l)" (:197-198), "taskpolicy
+does not hold work on the efficiency cores" (:224, against the plant's new assertion) and the header's "measured slowdown
+printed" (tree_instructions.jl:8-9, the ratio deleted by fd65f41e) are gone at 89a5deb2.
+
+3d8ab557: the plan's rows. (A81S2, low, D25, C9) two rows carry audit 80's findings outside their cells: `grep -o '| a
+hand-edited stub fails |.\{0,60\}' dev/MARCH.md` gives `| a hand-edited stub fails |; audit 80, open: A80S4 LAZY_TABLES a
+hand list, the plant f`, and `grep -o 'cited in place of this row |.\{0,40\}' dev/MARCH.md` gives `cited in place of this
+row |; audit 80, open: A80E1 the floor max(G/`; the text sits after each row's closing pipe, a sixth cell a rendered table
+drops, so 1.A6's A80S4 and 1.L's A80E1, A80S1, A80S2, A80S3 are read only by L154's whole-line regex. Fix: each moved inside
+its row's Work cell, before the Exit cell. Owner: lead.
+
+1f13996d and fd65f41e: the partial fixes. (A81S3, low, R2, D9) a partial fix closes its finding for L154: 1f13996d carries
+`Fixes: A80E1 (interim: both residuals stated)` and fd65f41e `Fixes: A80E1 (step one: each stage's split read and
+printed)`, and audit_fixes (test/parity_ratchet.jl, findings_off_row_here) takes every ID on a `Fixes:` line, so audit 80's
+A80E1 was free to leave its row at 1f13996d while its exit had not landed; the lead kept it there by hand. Fix: a partial
+fix's trailer a distinct word (`Narrows:`), L154 reading only `Fixes:` and dev/hooks/commit-msg refusing a parenthetical on a
+`Fixes:` line. Owner: wt3-parity.
+
+stopgap in disguise: none new; 1f13996d marks the floor a STOPGAP with its exit, and fd65f41e prints the split unjudged
+until the exit lands (89a5deb2).
+
+precedent: LD_PRELOAD interposition and perf stat's inherited counters for the tree count (tree_instructions.jl:27-30);
+perf stat inherits its counters into every child the kernel creates, killed or not, where an exit-time destructor reports
+only a process that loads it and calls exit(), the difference A81E1 and A81E3 name; rusage_info_v6's P-core fields
+(sys/resource.h:406-408) for the split.
+
+Requirements: D6, D9, D17, D19 (3d8ab557's trailer quotes the option, closing A80S6), D25; one check passed outside its
+doing, fd65f41e's own, green on `0 of 6 reported` (closed by 6baa3349).
+
+R1 and R2. R1: no src change in the range; the dev tooling's one new mechanism, the rusage_info_v6 read, is the kernel's
+own counter, its precedent named, and its reach short of perf stat's (A81E1). R2: `.git/wt-progress.tsv` reads `src: 3086
+of 3404 anchored dart definitions ported with a body` at every row of the range; no body changed, so no stub is called
+complete. A partial fix called a fix is A81S3.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A80S6 leaves row 1.L, fixed by 3d8ab557; A80E1 and
+A80S1 leave row 1.L, fixed by 89a5deb2. Open, their rows the lead's to write: A81E1, A81E2, A81E3, A81S1 and A81S3 for row
+1.L; A81S2 for row 1.L and row 1.A6, as the rows' own repair. By owner: wt3-latency A81E1, A81E2 and A81E3, with A80S2 and
+A80S3; wt3-parity A81S3, with A80S4, A78E2, A78S1, A78S2, A76E4, A76E5, A76E6 and A76S2; lead A81S1 and A81S2, with A77E1,
+A77E2 and A77E3.
