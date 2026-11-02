@@ -238,6 +238,12 @@ end
 @quarantine "julia/src/julia.h:1837 jl_is_tuple_type tests whether a type is a tuple type" Core.Bool @noinline jl_is_tuple_type(t::DataType) =
     _wasm_only(Bool)
 
+# Julia's test of whether a DataType is a Type{X} (julia.h:1855 jl_is_type_type, its name Type's): the
+# class the type value denotes, its classId, against the closed world's Type{X} classes, the
+# intrinsifier's class-id range check. Natively no class id exists, so the body raises
+@quarantine "julia/src/julia.h:1855 jl_is_type_type tests whether a type is a Type{X}" Core.Bool @noinline jl_is_type_type(t::DataType) =
+    _wasm_only(Bool)
+
 """
     run_time_type_test!(translator, at)
 
@@ -257,15 +263,15 @@ end
 
 Why the runtime's type test cannot decide `T`, or `nothing` where it can: it decides a class's
 DataType by the class table, Any (dart's _TopType), Union{} (dart's _BottomType) and a Union by its
-members. A UnionAll or a free TypeVar, which Julia's subtype decides by its environment
-(julia/src/subtype.c:1419), and a Type{X}, whose values jl_isa tells by jl_types_equal
-(subtype.c:2523), are Julia's own, with no dart kind: Unquarantined. A tuple type, dart's record type,
+members, a Type{X} by the value itself (jl_isa's `jl_types_equal`, subtype.c:2523). A UnionAll or a free
+TypeVar, which Julia's subtype decides by its environment (julia/src/subtype.c:1419), is Julia's own,
+with no dart kind: Unquarantined. A tuple type, dart's record type,
 is decided field by field (_RecordType._checkInstance, the record rule), so its fields' types must be:
 a Vararg field, a length only run time knows, is Julia's own, Unquarantined. The one
 reading the code generator's general arm (types.jl, a constant type) and the link-time walk (a type only
 run time knows) share.
 """
-@quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by its environment and a Type{X} by jl_types_equal, which the runtime does not port" Base.isType function run_time_type_gap(@nospecialize(T::Type))::Union{Nothing,Rejection}
+@quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by its environment, which the runtime does not port" Base.has_free_typevars function run_time_type_gap(@nospecialize(T::Type))::Union{Nothing,Rejection}
     (T isa UnionAll || Base.has_free_typevars(T)) &&
         return Unquarantined("src/julia/runtime/rtutils.jl run_time_type_gap: the type $T, a UnionAll or a free TypeVar, which a run-time type test cannot decide (julia/src/subtype.c:1419, its environment)")
     if T isa Union
@@ -275,8 +281,6 @@ run time knows) share.
         end
         return nothing
     end
-    T isa DataType && Base.isType(T) &&
-        return Unquarantined("src/julia/runtime/rtutils.jl run_time_type_gap: the type $T, whose values jl_isa tells by jl_types_equal (julia/src/subtype.c:2523), a kind dart has no counterpart of")
     if T isa DataType && T <: Tuple
         # a tuple type, dart's record type: decided field by field (_RecordType._checkInstance, and the
         # type-level record rule, type.dart:1322), each field's type in turn; a Vararg field, a length
@@ -319,9 +323,8 @@ every type value the program holds must be one of those: each literal operand of
 bodies (WasmTarget's runtime aside) and each binding they read (a NirGlobal operand, a GlobalRef
 statement, its value at compile time), and every value those hold, their elements and fields. What the
 runtime cannot decide (run_time_type_gap, the one reading) rejects at the first run-time test: a
-UnionAll or a free TypeVar (julia/src/subtype.c:1419, its environment), a Type{X} (jl_isa's
-`jl_types_equal`, subtype.c:2523) and a tuple type with a Vararg field (subtype.c:1348), each Julia's
-own, Unquarantined. A program's type value is a literal: one made at run time (apply_type, typeof)
+UnionAll or a free TypeVar (julia/src/subtype.c:1419, its environment) and a tuple type with a Vararg
+field (subtype.c:1348), each Julia's own, Unquarantined. A program's type value is a literal: one made at run time (apply_type, typeof)
 rejects at its statement (src/intrinsics.jl).
 """
 @quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by subtyping with an environment, which the runtime does not port; dart patches what every use needs once every use is known (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant)" Base.IdSet function check_run_time_type_values(translator)::Nothing

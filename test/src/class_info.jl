@@ -4,6 +4,7 @@ using Test
 using WasmTarget
 
 const D = WasmTarget.Dart2Wasm
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
 
 @testset "class_info.dart: Range and normalize" begin
     local R = D.Range
@@ -103,11 +104,12 @@ end
     @test Int isa Type{Int} && !(DataType <: Type{Int})
     @test D.get_concrete_class_id_range(cov, Type{Int}) == D.get_concrete_class_id_range(cov, DataType)
     # that class set is never a membership test: an isa over a Type{Int64} slot holding a DataType of the
-    # same kind (Float64) is the value's run-time test, jl_isa's jl_types_equal, which rejects at its
-    # gap, located, never a class-id check answering true for every DataType
-    local ke = try; W.compile(ClassInfoCases.kind_isa, (Int64,)); nothing; catch x; x; end
-    @test ke isa W.RejectionError && ke.rejection isa W.Unquarantined &&
-          startswith(ke.rejection.row, "src/julia/runtime/rtutils.jl run_time_type_gap: the type Type{Int64}")
+    # same kind (Float64) is the value's run-time test, jl_isa's jl_types_equal, never a class-id check
+    # answering true for every DataType: Int64 is in it and Float64 is not, as natively
+    local kb = W.compile(ClassInfoCases.kind_isa, (Int64,))
+    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("kind_isa$(a)", kb, a, ClassInfoCases.kind_isa(a...)) for a in [(1,), (2,)]])
+        @test r.ok || (@info r.label r.why; false)
+    end
     # a covariant Tuple class is abstract: no value has it exactly
     @test W.class_is_abstract(Tuple{Any}) && !W.class_is_abstract(Tuple{Int})
     # the translator's late classIdNumbering, read before ClassInfoCollector.collect assigns it

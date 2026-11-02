@@ -559,6 +559,8 @@ end
             return generate_static_intrinsic(self, Val(:typetagis), target, node.args[2:end])
         target.def.name === :jl_is_tuple_type && target.def in methods(jl_is_tuple_type) &&
             return generate_static_intrinsic(self, Val(:is_tuple_type), node.args[2:end])
+        target.def.name === :jl_is_type_type && target.def in methods(jl_is_type_type) &&
+            return generate_static_intrinsic(self, Val(:is_type_type), node.args[2:end])
         target.def.module === Runtime && target.def in methods(Runtime.Record__check_record_type) &&
             return generate_static_intrinsic(self, Val(:check_record_type), node.args[2:end])
         local intrinsic = StaticIntrinsic_from_procedure(target)
@@ -855,6 +857,22 @@ end
     translate_expression(self.code_gen, only(args), info.non_nullable_type)
     WasmBuilder.struct_get(self.code_gen.b[], info.struct_, t.field_index[field])
     local ranges = Range[Range(Val(:_), class_id(c), class_id(c)) for c in t.classes[] if c.cls isa DataType && c.cls <: Tuple]
+    normalize(ranges)
+    emit_class_id_range_check(self.code_gen.b[], ranges)
+    return WasmBuilder.IR.NumType_i32
+end
+
+# jl_is_type_type (julia.h:1855, src/julia/runtime/rtutils.jl): the class the DataType denotes, its
+# classId field, against the ids of the closed world's Type{X} classes (Base.isType, X no type variable)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:is_type_type}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local at = "$(self.code_gen.enclosing_member): jl_is_type_type"
+    local info = get(t.class_info, DataType, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_is_type_type where DataType has no class info"), at)
+    local field = only(f for f in class_instance_fields(DataType, at) if f.name == "classId")
+    translate_expression(self.code_gen, only(args), info.non_nullable_type)
+    WasmBuilder.struct_get(self.code_gen.b[], info.struct_, t.field_index[field])
+    local ranges = Range[Range(Val(:_), class_id(c), class_id(c)) for c in t.classes[] if c.cls isa DataType && Base.isType(c.cls) && !(c.cls.parameters[1] isa TypeVar)]
     normalize(ranges)
     emit_class_id_range_check(self.code_gen.b[], ranges)
     return WasmBuilder.IR.NumType_i32

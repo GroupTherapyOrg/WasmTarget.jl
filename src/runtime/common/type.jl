@@ -160,6 +160,10 @@ Julia's differs from dart: its Union is a kind of its own, where dart's nullable
         local d = unsafe_cast(DataType, t)
         # a tuple type is dart's record type (_RecordType), any other DataType its interface type
         jl_is_tuple_type(d) && return _RecordType__check_instance(d, o)
+        # Julia's Type{X}, which dart has no kind of: a type value and X itself, as jl_isa answers
+        # (julia/src/subtype.c:2523: jl_is_type(x), then jl_types_equal(x, X), canonical type values
+        # egal exactly where equal)
+        jl_is_type_type(d) && return jl_typetagis(o, Type) && o === d.parameters[1]
         return _InterfaceType__check_instance(d, o)
     elseif jl_typetagis(t, Union)
         # Julia's Union, which dart has no kind of: either member (subtype.c's union rule)
@@ -295,6 +299,15 @@ dart's function, FutureOr and type-parameter rules have no Julia kind.
         # two tuple types by the record rule (type.dart:1440, its isRecordSubtype); a tuple type is below
         # no other DataType but Any, answered above, as the class table answers
         jl_is_tuple_type(sd) && jl_is_tuple_type(td) && return _TypeUniverse_is_record_subtype(sd, td)
+        # Julia's Type{X} (julia/src/subtype.c:1550): below Type{Y} exactly where X and Y are one type
+        # (Type's parameter invariant), below another DataType exactly where it is X's kind
+        # (`jl_typeof(tp0) == yd`); no other DataType is below a Type{Y}
+        if jl_is_type_type(sd)
+            local x = sd.parameters[1]
+            jl_is_type_type(td) && return x === td.parameters[1]
+            return jl_to_typeof(ClassID_get_id(x)) === td
+        end
+        jl_is_type_type(td) && return false
         return _TypeUniverse_is_interface_subtype(sd, td)
     end
     # a UnionAll, which that link-time check rejects in the program; here only one of WasmTarget's own

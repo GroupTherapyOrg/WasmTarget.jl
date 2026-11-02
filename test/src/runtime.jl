@@ -238,12 +238,14 @@ const TYPES = Any[Shape, Circle, Plain, Union{Circle,Plain}, Any, Nothing, Union
 type_at(i::Int64)::Type = TYPES[i]::Type
 sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(type_at(i), type_at(j)) ? 1 : 0
 # tuple pairs by dart's record rule (type.dart:1440, isRecordSubtype): Tuple{Int64,Int64} <:
-# Tuple{Integer,Integer}, which the class table alone answered false, field by field. A Type{X} as a
-# value is classed by its member's kind (getConcreteClassIdRange), and its run-time type test, jl_isa's
-# jl_types_equal, is not yet written, rejected at it.
+# Tuple{Integer,Integer}, which the class table alone answered false, field by field.
 const TUPLE_TYPES = Any[Tuple{Int64,Int64}, Tuple{Integer,Integer}, Tuple{Any}]
 tuple_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(TUPLE_TYPES[i]::Type, TUPLE_TYPES[j]::Type) ? 1 : 0
-const KIND_TYPES = Any[Type{Int64}, DataType]
+# Julia's Type{X}: below Type{Y} where X is Y, below X's kind (subtype.c:1550); and its instances, the
+# type value X itself (jl_isa's jl_types_equal, subtype.c:2523)
+const KIND_TYPES = Any[Type{Int64}, DataType, Type{Float64}, Any]
+const KIND_VALUES = Any[Int64, Float64, 1]
+type_isa(k::Int64, j::Int64) = isa(KIND_VALUES[k], KIND_TYPES[j]) ? 1 : 0
 kind_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(KIND_TYPES[i]::Type, KIND_TYPES[j]::Type) ? 1 : 0
 @testset "type.dart: _isTypeSubtype, _TypeUniverse.isSubtype by kind, against Julia's <:" begin
     local tb = W.compile(tuple_sub, (Int64, Int64))
@@ -251,9 +253,14 @@ kind_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(KIND_TYPES[i]::Type, K
     for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("tuple_sub($(TUPLE_TYPES[i]), $(TUPLE_TYPES[j]))", tb, (i, j), TUPLE_TYPES[i] <: TUPLE_TYPES[j] ? 1 : 0) for i in 1:tn for j in 1:tn])
         @test r.ok || (@info r.label r.why; false)
     end
-    local ke = try; W.compile(kind_sub, (Int64, Int64)); nothing; catch x; x; end
-    @test ke isa W.RejectionError && ke.rejection isa W.Unquarantined &&
-          startswith(ke.rejection.row, "src/julia/runtime/rtutils.jl run_time_type_gap: the type Type{Int64}")
+    local kb = W.compile(kind_sub, (Int64, Int64))
+    local kn = length(KIND_TYPES)
+    local kinds = [Main.WTRunner.RunCase("kind_sub($(KIND_TYPES[i]), $(KIND_TYPES[j]))", kb, (i, j), KIND_TYPES[i] <: KIND_TYPES[j] ? 1 : 0) for i in 1:kn for j in 1:kn]
+    local ib = W.compile(type_isa, (Int64, Int64))
+    append!(kinds, [Main.WTRunner.RunCase("type_isa($(KIND_VALUES[k]), $(KIND_TYPES[j]))", ib, (k, j), Main.WTRunner.native_answer(type_isa, (k, j))) for k in 1:length(KIND_VALUES) for j in 1:kn])
+    for r in Main.WTRunner.run_cases(kinds)
+        @test r.ok || (@info r.label r.why; false)
+    end
     local bytes = W.compile(sub, (Int64, Int64))
     local n = length(TYPES)
     local cases = [Main.WTRunner.RunCase("sub($(TYPES[i]), $(TYPES[j]))", bytes, (i, j), TYPES[i] <: TYPES[j] ? 1 : 0) for i in 1:n for j in 1:n]
