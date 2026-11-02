@@ -148,6 +148,14 @@ end
     @test answers_native([WTRunner.RunCase("late($n)", bytes, (n,), UndefBitsCases.late(n)) for n in (3, -4)])
 end
 
+@testset "code_generator.dart: an instance invocation and an == are never virtual calls: every invoke has its single target" begin
+    # visitInstanceInvocation and visitEqualsCall reject Internal where singleTarget is nothing; Julia's
+    # invoke names its MethodInstance, so over a closed world every invoke's single target is one
+    local t = TRANSLATOR[]
+    local invokes = [st for nb in t.component for st in nb.stmts if st isa W.NirInvoke]
+    @test !isempty(invokes) && all(st -> D.single_target(t, st) isa Core.MethodInstance, invokes)
+end
+
 @testset "code_generator.dart: _VirtualCallKind" begin
     @test [sprint(show, k) for k in instances(D._VirtualCallKind)] == ["get", "set", "call"]
     @test D.is_getter(D._VirtualCallKind_Get) && !D.is_getter(D._VirtualCallKind_Call)

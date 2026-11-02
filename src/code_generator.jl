@@ -1612,8 +1612,12 @@ end
     local receiver = node.args[1]
     local use_unchecked_entry = can_use_unchecked_entry(self.translator, receiver, node)
     local single_target_ = single_target(self.translator, node)
+    # Julia's invoke carries its target as its first argument, a MethodInstance or a CodeInstance of one
+    # (julia/src/codegen.cpp:5282 emit_invoke, `args[0]`), which Translator.singleTarget answers for
+    # every invoke (src/julia/nir.jl nir_invoke_target), so dart's virtual call of an instance
+    # invocation is never reached: Julia resolved the call
     single_target_ === nothing &&
-        reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): a call of $(dart_type_of(self, receiver)) with no single target")
+        reject!(Internal("dart2wasm/lib/code_generator.dart:1755 AstCodeGenerator.visitInstanceInvocation: a call of $(dart_type_of(self, receiver)) with no single target, where Translator.singleTarget answers every invoke's MethodInstance"), "$(self.enclosing_member)")
     local target = get_function_entry(self.translator, single_target_; unchecked_entry = use_unchecked_entry)
     local signature = signature_for_direct_call(self.translator, target)
     local param_info = param_info_for_direct_call(self.translator, target)
@@ -1656,8 +1660,10 @@ end
         WasmBuilder.ref_eq(b)
         return WasmBuilder.IR.NumType_i32
     end
+    # an == Julia resolved is an invoke, carrying its target as its first argument (julia/src/codegen.cpp:5282
+    # emit_invoke), which Translator.singleTarget answers, so dart's virtual call of `==` is never reached
     single_target_ === nothing &&
-        reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): an == with no single target")
+        reject!(Internal("dart2wasm/lib/code_generator.dart:1926 AstCodeGenerator.visitEqualsCall: an == with no single target, where Translator.singleTarget answers every invoke's MethodInstance"), "$(self.enclosing_member)")
     local use_unchecked_entry = can_use_unchecked_entry(self.translator, left, node)
     local target = get_function_entry(self.translator, single_target_; unchecked_entry = use_unchecked_entry)
     local signature = signature_for_direct_call(self.translator, target)
