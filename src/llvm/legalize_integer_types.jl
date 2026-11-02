@@ -128,8 +128,9 @@ end
     return __multi3(b, lhs, rhs)
 end
 
-# SDIV, SREM, UDIV and UREM: SDIVREM and UDIVREM are Expand on wasm (WebAssemblyISelLowering.cpp:176),
-# not Custom, so each is the libcall RTLIB names for an i128 (SDIV_I128, SREM_I128, UDIV_I128,
+# SDIV, SREM, UDIV and UREM: SDIVREM and UDIVREM of an i128 keep TargetLoweringBase.cpp:1063
+# initActions's default, every operation Legal (its memset of OpActions to 0), which no WebAssembly
+# setOperationAction overrides (WebAssemblyISelLowering.cpp:176 sets i32's and i64's only): not Custom, so each is the libcall RTLIB names for an i128 (SDIV_I128, SREM_I128, UDIV_I128,
 # UREM_I128: compiler-rt's __divti3, __modti3, __udivti3 and __umodti3), made by `make_lib_call`
 # (TargetLowering::makeLibCall: the caller's call of the routine and SplitInteger of its result). A
 # constant divisor of UDIV and UREM first tries TLI.expandDIVREMByConstant, which needs MULHU or

@@ -14,5 +14,5 @@
 @quarantine "julia/base/floatfuncs.jl:357 fma takes the hardware's fma where have_fma holds, else fma_emulated; the wasm target has no fused multiply-add, so Base's emulation" Base.fma @consistent_overlay METHOD_TABLE Base.fma(x::T, y::T, z::T) where {T<:Base.IEEEFloat} =
     Base.fma_emulated(x, y, z)
 
-@quarantine "julia/base/float.jl:500 muladd is muladd_float, which native LLVM contracts per site on an FMA host, once or twice by where it stands; the wasm target has no fused multiply-add, so Base's emulated fma at every muladd, one rounding, an overlay native's answer is not at every site" Base.muladd @overlay METHOD_TABLE Base.muladd(x::T, y::T, z::T) where {T<:Base.IEEEFloat} =
+@quarantine "julia/base/float.jl:500 muladd is muladd_float, which Julia's compiler marks not interprocedurally consistent (julia/Compiler/src/tfuncs.jl:2472 _INCONSISTENT_INTRINSICS, its muladd_float entry), whose native fold is julia/src/runtime_intrinsics.c:1517 muladd's a * b + c, and which native LLVM contracts per site on an FMA host, once or twice by where it stands; the wasm target has no fused multiply-add, so Base's emulated fma at every muladd, one rounding, an overlay native's answer is not at every site" Base.muladd @overlay METHOD_TABLE Base.muladd(x::T, y::T, z::T) where {T<:Base.IEEEFloat} =
     Base.fma_emulated(x, y, z)
