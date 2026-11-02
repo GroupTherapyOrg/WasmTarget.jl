@@ -9001,3 +9001,63 @@ refusal guards a future and is called a fix with no case that reaches it (A89S1)
 
 Resolution: this entry lands alone, prose only. A85S1, A85S2, A80S2 and A87S2 leave their rows; A80S3 stays on 1.L
 (its default-QoS re-read). Fix first: A89E1, with A88E1. 1.F: A89E1, A89S1. 1.L: A89S2, A89S3.
+
+## 2026-11-02 — audited through d995126a (4e87b54c..d995126a: the ratchet's rate at 9.2, one projection of concrete classes, Any's arm and the tuple rejections, cases reading the compile, the 128-bit expansions in src/llvm, the selector recorded by call site)
+
+The ninetieth audit, beside the work, covers the 6 commits of 4e87b54c..d995126a that are not audit entries (7ba1fc1b,
+entry 89): 293f84a5, a124256e, 827878cb, 492e0962, 32dbc45d and d995126a, read under Dale's R1 and R2 as standing
+sections. Standing items. Each commit names its clause. No silent catch: the seven new catches, all in tests, check
+what they catch. The debt list goes from 370 to 364, its six lines leaving at 32dbc45d (A90E1). src reads 3087 of 3404
+at every commit. The runtime library reads 13 sites naming 11 at every commit, unmoved, as 492e0962 says. D13: a
+median of 546 s; 32dbc45d took 7234 s from authoring, 239 s from its ship. D14: 293f84a5 changes RATE_P_RATCHET alone,
+10.9 to 9.2, the lowest of its three quoted splits; D14_RED stays 140, and a lower rate judges the ratchet heavier.
+Earlier findings: 827878cb fixes A88E1 and A89E1 by located rejection; 492e0962 fixes A88S3; 32dbc45d fixes A86E1,
+A87E1, A86S2 and A87S1, but for A90S2; a124256e with d995126a fixes A85S3, but for A90S1. A88S1, A88S4, A89S1 and
+A87E2 stand. Findings: A90E1, A90S1 to A90S4.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — d995126a carries the statement index on both paths that reach the visitors,
+translate_statement's NirCall arm and visitVariable's node.id; a missing index rejects Internal, located, and so does
+a site build never met (dispatch_table.jl:327). FieldAccessSite's quarantine says dart keys by member
+(dispatch_table.dart:399, `Map<TreeNode, …>`): honest. (A90S1, low, D5) a124256e's "all five sites" leaves the
+projection whole at types.jl:803-804 and its ids-to-classes half at intrinsics.jl:1682: `grep -n "classes\[\]\[id +
+1\]"` over src gives both, beside classes.jl:726. (A90S3, low, D5, prose) dispatch_table.jl:316 still says a
+SelectorReference "names its selector's name and kind itself", and a member's selector (:319-330) is still found by a
+scan of names, where dart's one procedureAttributeMetadata serves both (:438-443).
+
+Area: emission and diagnostics — 827878cb's skip of a literal isa or typeassert type is sound: a NirConst's type is
+Core.Typeof, Type{T} (nir.jl:833), so visit_is_expression takes emitIsTest's static arm, which answers or rejects
+Unported (types.jl:530); a NirGlobal there is constant or rejected (nir.jl:840-842). No run-time isa answering a
+plausible false was found. The expansions match LegalizeIntegerTypes.cpp :3905-4024 and :5227, and compiler-rt's
+multi3.c and ashlti3.c, line for line. (A90S2, low, R1) legalize_integer_types.jl:172-175 says SimplifySetCC folds
+only when both halves are constant, so the known-half shortcut (:5959) is never taken; but
+TargetLowering.cpp:5308-5310 (X >= MIN, true) and :5348-5349 (X < MIN, false) fold with one constant. So `x <
+Int128(1) << 64` takes LLVM's HiCmp-only branch, while WT emits LoCmp and the select: the same answer by a different
+branch, with no case.
+
+Area: enforcement and prose — (A90E1, medium, R1, D7, D20) 32dbc45d pins six definitions to sources that are not
+ported counterparts: ANCHOR_RX, parse_anchor and REASON_ANCHOR_RX (parity.jl:1176, :1203, :1443) cite julia
+base/stacktraces.jl:51 StackFrame, a struct of func, file and line that reads no string; module LLVM and LLVM_MODULES
+(packages.jl:48, parity.jl:760) cite WebAssemblyUtilities.cpp:41 WebAssembly::mayThrow, an opcode switch, while the
+module now holds llvm:: units (LegalizeIntegerTypes.cpp:30 `using namespace llvm`) and compiler-rt's C, neither in
+that namespace; _jl_rel (:954) cites loading.jl:931 entry_path, which returns a package's entry file. Each is a shared
+shape, not a near 1:1 match, and the six debt lines leave on them. (A90S4, low, D10, D12) runtime.jl:41-46 asserts on
+`wasm-tools print` text, the only test/src file that does (`git grep -c`); its occursin shows that a name is in the
+module, not the call the comment claims. runtime.jl:240's kind_sub matches any error naming Type{Int64}.
+
+stopgap in disguise: the StackFrame, mayThrow and entry_path pins pass L213 and L227 and shrink the debt list by six
+with no ported counterpart; the regex readers are as bespoke as before (A90E1).
+
+precedent: class_info.dart:831, dispatch_table.dart:399 and :436-443, type.dart:97, :138, :585 and :1351 at the dart
+pin; LegalizeIntegerTypes.cpp:30, :3476, :3905, :5227 and :5879-5959, TargetLowering.cpp:5308 and :5348,
+WebAssemblyUtilities.cpp:41, compiler-rt multi3.c:19 and :40 and ashlti3.c:21 at the llvm pin; julia
+base/stacktraces.jl:51 and base/loading.jl:931.
+
+R1: the expansions, compiler-rt's routines, _TopType._checkInstance (type.dart:138) and concrete_classes
+(class_info.dart:831) name near 1:1 counterparts. The parity.jl and packages.jl pins do not (A90E1), and one omitted
+branch gives a false reason (A90S2). R2: nothing in range calls a rejection-only body ported; the tuple and Type{X}
+arms reject Unported, and 827878cb names them open.
+
+Resolution: this entry lands alone, prose only. A88E1, A89E1, A88S3, A86E1, A87E1, A86S2, A87S1 and A85S3 leave their
+rows. Fix first: A90E1. 1.K: A90E1. 1.E: A90S1, A90S3. 1.D: A90S2. 1.F: A90S4.
