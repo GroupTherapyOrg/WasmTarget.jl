@@ -1292,7 +1292,7 @@ anchor(file::String, d::Decl)::String = "$file:$(d.line) $(d.symbol)"
 # each counted anchor's declaration, by its anchor
 anchored_decls(S::Scope)::Dict{String,Decl} = Dict(anchor(f, d) => d for f in scope() for d in S.decls[f] if counted(d))
 
-# the kinds of rejection_only_kinds (WasmTarget, src/julia/parity.jl), each Internal one read against its
+# the kinds of rejection_only_kinds (WasmTarget, src/julia/parity.jl), each Internal or Guard one read against its
 # dart member by this reader, the one dart reader (A74S1): DartThrow where dart's body begins with `throw`,
 # a faithful port counted as a body; DartAbstract where dart declares no body, a stub reported beside the
 # headline; the second result names each one's dart line, `<file at the checkout>:<line>`, the throw's or
@@ -1301,7 +1301,7 @@ function dart_kinds(kinds::Dict{String,Symbol}, decls::Dict{String,Decl})::Tuple
     local out = copy(kinds)
     local lines = Dict{String,String}()
     for (a, k) in kinds
-        k === :Internal || continue
+        k in (:Internal, :Guard) || continue
         local d = get(decls, a, nothing)
         (d === nothing || !(d.body in (:throw, :abstract))) && continue
         out[a] = d.body === :throw ? :DartThrow : :DartAbstract

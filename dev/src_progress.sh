@@ -92,10 +92,10 @@ started=1
 if [ $# -eq 3 ] || [ $# -eq 5 ]; then
     anchored=$1; ported=$2; since=$3
     [ $# -eq 5 ] && { replaced=$4; gaps=$5; }
-elif [ "${1:-}" = line ] && [ $# -eq 9 ]; then
-    # `line <anchored> <ported> <replaced> <gaps> <abstract> <faithful> <kinds_read> <kinds key>`: the counts read in
-    # a julia that has WasmTarget loaded (the ratchet's L208, progress_counts), the rest read here as below
-    anchored=$2; ported=$3; replaced=$4; gaps=$5; abstract=$6; faithful=$7; kinds_read=$8; WT_KINDS_CACHE=$9
+elif [ "${1:-}" = line ] && [ $# -eq 10 ]; then
+    # `line <anchored> <ported> <replaced> <guards> <gaps> <abstract> <faithful> <kinds_read> <kinds key>`: the counts
+    # read in a julia that has WasmTarget loaded (the ratchet's L208, progress_counts), the rest read here as below
+    anchored=$2; ported=$3; replaced=$4; guards=$5; gaps=$6; abstract=$7; faithful=$8; kinds_read=$9; WT_KINDS_CACHE=${10}
     rt=$(grep -rh 'Unported(' src | grep -oE '"sdk/lib/_internal/wasm/[^"]+"' || true)
     rt_sites=$(printf '%s' "$rt" | grep -c . || true); rt_defs=$(printf '%s' "$rt" | sort -u | grep -c . || true)
     since=$(git rev-list --count --no-merges "$(git log -1 --format=%H -- src)"..HEAD)
@@ -116,7 +116,7 @@ else
             # finds (progress_counts, the one reading the ratchet'"'"'s L208 shares)
             println(join(progress_counts(Skeleton.read_scope(), ENV["WT_KINDS_CACHE"]), " "))') ||
             { echo "src: WasmTarget did not load, so its @parity registry gives no count"; exit 1; }
-        read -r anchored ported replaced gaps abstract faithful kinds_read <<< "$counts"
+        read -r anchored ported replaced guards gaps abstract faithful kinds_read <<< "$counts"
         # the runtime's gaps: the Unported rejections anchored in the wasm runtime library of the same dart-lang/sdk
         # pin (sdk/lib/_internal/wasm/, A52S1), each a call a module would make into a runtime src/runtime/ has not
         # ported yet; counted as the sites rejecting and the distinct runtime definitions they name (the measure
@@ -133,13 +133,15 @@ fi
 # A55S13, and Dale 2026-10-29, "DO NOT allow stubs to be clalled complete": a definition whose whole body is one
 # rejection is no port: an Internal one claims Julia never produces dart's construct, an Unported or Unquarantined
 # one is a gap. The headline counts only definitions with a body; the rejection-only ones stand beside it, never in it
-body=$(( ported - ${replaced:-0} - ${gaps:-0} - ${abstract:-0} ))
+body=$(( ported - ${replaced:-0} - ${guards:-0} - ${gaps:-0} - ${abstract:-0} ))
 line="src: $body of $anchored anchored dart definitions ported with a body (every definition of each dart file src loads, dev/skeleton.jl)"
 [ -n "${faithful:-}" ] && line="$line, $faithful of them a dart body that itself throws, ported as its throw"
 line="$line; $since landing(s) since src/ last changed"
 # the line sums to the anchored total by itself: an @unported stub (anchored, not ported) is a gap too
 stubs=$(( anchored - ported ))
-[ -n "${replaced:-}" ] && line="$line; not counted ported: $replaced that never return, Julia's inference finds, rejecting Internal (Julia's answer replacing dart's construct, each to triage), $(( gaps + stubs )) gap(s) still to fill ($gaps rejecting Unported or Unquarantined, $stubs an @unported stub) and ${abstract:-0} in place of a dart abstract declaration (no body to port); $body + $replaced + $(( gaps + stubs )) + ${abstract:-0} = $(( body + replaced + gaps + stubs + ${abstract:-0} )) of $anchored"
+# a guard (A91S1): a method that returns nothing past a guard rejecting Internal, read by the guard rule, not
+# inference's Union{}, beside the ones that never return and never in the headline
+[ -n "${replaced:-}" ] && line="$line; not counted ported: $replaced that never return, Julia's inference finds, rejecting Internal (Julia's answer replacing dart's construct, each to triage), ${guards:-0} that only guard, returning nothing past a guard that rejects Internal (the guard rule's, each to triage), $(( gaps + stubs )) gap(s) still to fill ($gaps rejecting Unported or Unquarantined, $stubs an @unported stub) and ${abstract:-0} in place of a dart abstract declaration (no body to port); $body + ($replaced + ${guards:-0}) + $(( gaps + stubs )) + ${abstract:-0} = $(( body + replaced + ${guards:-0} + gaps + stubs + ${abstract:-0} )) of $anchored"
 [ -n "${kinds_read:-}" ] && line="$line; the kinds cache: $kinds_read ($(basename "$WT_KINDS_CACHE" .tsv | cut -c1-12))"
 [ -n "${rt_sites:-}" ] && line="$line; the runtime library: $rt_sites rejecting site(s) name $rt_defs definition(s) of sdk/lib/_internal/wasm/ still to port"
 [ $started -eq 1 ] || line="$line (the rebuild's src/ not started: WT1 holds src/ until 1.A2c)"

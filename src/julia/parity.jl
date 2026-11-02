@@ -1683,8 +1683,10 @@ end
 # compiler's typeinf_frame), a return type of Union{} is no path returning, a call to a helper that only
 # rejects among them; a return type of Nothing whose typed code calls nothing for an effect alone is a
 # guard that rejects and otherwise does nothing (A72S1). Its kind is a gap (Unported, Unquarantined)
-# where a reject! in its typed code takes one, Internal where one takes Internal (or none shows and no
-# path returns), and a check's rejections alone a body; every other anchor is :body. dev/skeleton.jl's
+# where a reject! in its typed code takes one, Internal where one takes Internal and no path returns (or
+# none shows and no path returns), Guard where one takes Internal and the method returns nothing past its
+# guards (the guard rule, not inference's Union{}: A91S1), and a check's rejections alone a body; every
+# other anchor is :body. dev/skeleton.jl's
 # dart_kinds then reads each Internal one against dart's member (DartThrow, DartAbstract), the one dart
 # reader (A74S1)
 @quarantine "Julia's inference answers whether a method returns, a return type of Union{} none, precedent(julia: Compiler/src/typeinfer.jl:1115 typeinf_frame)" Core.Compiler.typeinf_frame function rejection_only_kinds(entries::AbstractVector)::Dict{String,Symbol}
@@ -1770,13 +1772,14 @@ end
         # helper's rejection); a check's rejections alone (InvalidModule, OutsideSubset, ProgramError) a body
         :Unported in ks && return :Unported
         :Unquarantined in ks && return :Unquarantined
-        :Internal in ks && return :Internal
+        :Internal in ks && return rt === Union{} ? :Internal : :Guard
         return isempty(ks) && rt === Union{} ? :Internal : :body
     end
     local kinds = Dict{String,Symbol}()
     # of several kinds, a body wins (an anchor several definitions name is a port when any has a body),
-    # then a gap
-    local join_kinds(ks) = :body in ks ? :body : :Unported in ks ? :Unported : :Unquarantined in ks ? :Unquarantined : :Internal
+    # then a gap, then a method that never returns over a guard
+    local join_kinds(ks) = :body in ks ? :body : :Unported in ks ? :Unported : :Unquarantined in ks ? :Unquarantined :
+                           :Internal in ks ? :Internal : :Guard
     for e in entries
         local k = e.ported && !isempty(e.methods) ? join_kinds(Symbol[method_kind(m) for m in e.methods]) : :body
         kinds[e.anchor] = haskey(kinds, e.anchor) ? join_kinds((k, kinds[e.anchor])) : k

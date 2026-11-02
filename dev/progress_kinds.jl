@@ -71,8 +71,9 @@ end
 # the src progress line's counts, read once (dev/src_progress.sh's julia, and the ratchet's L208 in its own
 # process, which has WasmTarget and the generator loaded): the anchored total (each definition the generator
 # counts in scope), the ported (a counted anchor src fills, no @unported entry left at it), and of the ported
-# those whose kind (progress_kinds) is Internal, a gap (Unported, Unquarantined), DartAbstract and DartThrow,
-# and whether the kinds were the cache's
+# those whose kind (progress_kinds) is Internal (inference finds no return), Guard (it returns nothing past a
+# guard that rejects, A91S1), a gap (Unported, Unquarantined), DartAbstract and DartThrow, and whether the
+# kinds were the cache's
 function progress_counts(S, cache::String)
     local counted = Set(Skeleton.anchor(f, d) for f in Skeleton.scope() for d in S.decls[f] if Skeleton.counted(d))
     local e = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget) && x.anchor in counted]
@@ -80,7 +81,7 @@ function progress_counts(S, cache::String)
     local ported = setdiff(Set(x.anchor for x in e), stubbed)
     local R, _, hit = progress_kinds(S, cache)
     local k(a) = get(R, a, :body)
-    return (length(counted), length(ported), count(a -> k(a) === :Internal, ported),
+    return (length(counted), length(ported), count(a -> k(a) === :Internal, ported), count(a -> k(a) === :Guard, ported),
             count(a -> k(a) in (:Unported, :Unquarantined), ported), count(a -> k(a) === :DartAbstract, ported),
             count(a -> k(a) === :DartThrow, ported), hit)
 end
