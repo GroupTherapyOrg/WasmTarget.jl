@@ -206,4 +206,28 @@ end
     @test e !== nothing && e.rejection isa W.Unquarantined && occursin("FieldError", e.rejection.row)
 end
 
+module TypeofCases
+# typeof of a value only run time knows: a Union slot holding either member, its type compared by ===
+struct ToA end
+struct ToB end
+struct Slot; x::Union{ToA,ToB}; end
+@noinline code_of(s::Slot) = (t = typeof(s.x); (t === ToA ? 1 : 0) + (t === ToB ? 2 : 0))
+pick(n::Int) = code_of(Slot(n > 0 ? ToA() : ToB()))
+# a slot admitting `nothing`, the null reference: its typeof is Nothing's type, past the table
+struct NSlot; x::Union{Nothing,ToA}; end
+@noinline code_of_n(s::NSlot) = (t = typeof(s.x); (t === ToA ? 1 : 0) + (t === Nothing ? 2 : 0))
+pick_n(n::Int) = code_of_n(NSlot(n > 0 ? ToA() : nothing))
+end
+
+@testset "intrinsics.dart: typeof of a value run time knows is Julia's jl_typeof, its class id's entry in jl_to_typeof's table" begin
+    # Julia leaves `typeof(s.x)` a builtin call on the Union; each member's type value is its canonical
+    # constant, so === answers as native Julia for either member, `nothing` among them
+    local cases = WTRunner.RunCase[]
+    for f in (TypeofCases.pick, TypeofCases.pick_n)
+        local bytes = W.compile(f, (Int,); optimize = false)
+        append!(cases, [WTRunner.RunCase("$(nameof(f))($n)", bytes, (n,), f(n)) for n in (1, -1)])
+    end
+    @test answers_native(cases)
+end
+
 end

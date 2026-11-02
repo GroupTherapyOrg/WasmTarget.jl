@@ -536,19 +536,25 @@ function orders(k::Int64)
     k == 4 && return Int64(isdefined(Plain(), :y, :acquire))                # an order on no field
     return Int64(isdefined(Plain(), :x, :release))                          # a store's order
 end
-kind_of(v::Vector{Any}) = typeof(v[1])
+# typeof of a value only run time knows, an element of a Vector of a Union: Julia's jl_typeof, run
+# against native; of an Any, a value that may be a Memory{Any}, whose type value has no constant yet
+kind_of(n::Int64) = (v = Union{Int64,Float64,Int32}[Int64(1), 2.0, Int32(3)]; t = typeof(v[n]); Int64(t === Int64) + 2Int64(t === Float64) + 4Int64(t === Int32))
+any_kind_of(v::Vector{Any}) = typeof(v[1])
 apply_of(v::Vector{Any}) = Int64(Core.apply_type(v[1], v[2]) === Vector{Int64})
 end
-@testset "codegen.cpp: isdefined's order checks raise ConcurrencyViolationError; a type made at run time rejects (A68S3)" begin
+@testset "codegen.cpp: isdefined's order checks raise ConcurrencyViolationError; typeof is jl_typeof; a type made at run time rejects (A68S3)" begin
     local f = AtomicOrderCases.orders
     local bytes = W.compile(f, (Int64,); optimize = false)
     local cases = [WTRunner.RunCase("orders$a", bytes, a, WTRunner.native_answer(f, a)) for a in ((Int64(k),) for k in 1:5)]
     @test count(c -> c.native == WTRunner.Throws(ConcurrencyViolationError), cases) == 4
     append!(NATIVE_RUNS, cases)
-    for g in (AtomicOrderCases.kind_of, AtomicOrderCases.apply_of)
-        local e = rejection(() -> W.compile(g, (Vector{Any},); optimize = false))
-        @test e !== nothing && e.rejection isa W.Unquarantined && occursin("a type made at run time", e.rejection.row) && !isempty(e.at)
-    end
+    local kbytes = W.compile(AtomicOrderCases.kind_of, (Int64,); optimize = false)
+    append!(NATIVE_RUNS, [WTRunner.RunCase("kind_of($n)", kbytes, (n,), AtomicOrderCases.kind_of(n)) for n in Int64[1, 2, 3]])
+    local ke = rejection(() -> W.compile(AtomicOrderCases.any_kind_of, (Vector{Any},); optimize = false))
+    @test ke !== nothing && ke.rejection isa W.Unquarantined && !isempty(ke.at) &&
+          startswith(ke.rejection.row, "src/julia/classes.jl type_value_unmade: typeof of a value that may be a Memory{Any}")
+    local e = rejection(() -> W.compile(AtomicOrderCases.apply_of, (Vector{Any},); optimize = false))
+    @test e !== nothing && e.rejection isa W.Unquarantined && occursin("a type made at run time", e.rejection.row) && !isempty(e.at)
 end
 
 # a value held as a reference narrowed to a primitive class (a PiNode): convertType's unboxing, the box

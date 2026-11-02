@@ -588,7 +588,9 @@ end
      f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) &&
         return generate_static_intrinsic(self, Val(:memory), f, args)
     f === Core.isdefined && length(args) in (2, 3) && return generate_static_intrinsic(self, Val(:isdefined), f, args)
-    (f === Core.apply_type || f === Core.typeof) && return generate_static_intrinsic(self, Val(:run_time_type), f, args)
+    # typeof of a value only run time knows: Julia's jl_typeof, a read of the value's tag
+    f === Core.typeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:to_typeof), args; tag_of_value = true)
+    f === Core.apply_type && return generate_static_intrinsic(self, Val(:run_time_type), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f isa Core.IntrinsicFunction || return nothing
     # an operation on a 128-bit integer, an operand's or a conversion's result: its two i64 halves
@@ -988,17 +990,52 @@ end
 # map from a class id to its class), read as a non-null DataType. The top's entry, which no value
 # carries, is null, and so is the entry of each class whose type value has no constant yet
 # (src/julia/classes.jl type_value_unmade, the one list of them): an as check naming one refuses at its
-# statement (types.jl emitAsCheck), so no as check's failure reads a null entry
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:to_typeof}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+# statement (types.jl emitAsCheck), so no as check's failure reads a null entry.
+# With `tag_of_value`, the operand is a value and its tag its class id: Julia's typeof, jl_typeof
+# (julia/src/julia.h:117), a read of the value's tag, never a new type, so every answer is one of the
+# table's canonical constants. A class the operand admits whose type value has no constant refuses at
+# the statement, located, so no typeof reads a null entry. Julia's `nothing` is the null reference, so
+# where the operand admits it the lookup takes dart's shape for an Object member on a nullable receiver
+# (code_generator.dart:2258 visitInstanceGet): null branches past it to Nothing's type, as runtimeType's
+# null arm answers Null's type literal
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:to_typeof}, args::Vector{NirValue}; tag_of_value::Bool = false)::WasmBuilder.IR.ValueType
     local t = translator(self)
     local b = self.code_gen.b[]
+    local result = translate_type(t, DataType)
     local array_type = array_type_for_dart_type(t, Union{Nothing,DataType}; mutable_ = true)
-    local entries = NirConst[NirConst(Core.Const(info.cls === nothing || type_value_unmade(t, info.cls) !== nothing ? nothing : info.cls)) for info in t.classes[]]
-    instantiate_constant(t.constants[], b, make_array_of(t.constants[], Union{Nothing,DataType}, entries), WasmBuilder.IR.RefType_def(array_type; nullable = false))
-    translate_expression(self.code_gen, only(args), WasmBuilder.IR.NumType_i32)
-    WasmBuilder.array_get(b, array_type)
-    WasmBuilder.ref_as_non_null(b)
-    return translate_type(t, DataType)
+    # the table, then the class id pushed by `index`, read as a non-null DataType
+    local lookup(index::Function) = begin
+        local entries = NirConst[NirConst(Core.Const(info.cls === nothing || type_value_unmade(t, info.cls) !== nothing ? nothing : info.cls)) for info in t.classes[]]
+        instantiate_constant(t.constants[], b, make_array_of(t.constants[], Union{Nothing,DataType}, entries), WasmBuilder.IR.RefType_def(array_type; nullable = false))
+        index()
+        WasmBuilder.array_get(b, array_type)
+        WasmBuilder.ref_as_non_null(b)
+    end
+    tag_of_value || (lookup(() -> translate_expression(self.code_gen, only(args), WasmBuilder.IR.NumType_i32)); return result)
+    local operand_type = dart_type_of(self, only(args))
+    for c in concrete_classes(t, operand_type)
+        local why = type_value_unmade(t, c)
+        why === nothing ||
+            reject!(Unquarantined("src/julia/classes.jl type_value_unmade: typeof of a value that may be a $c, whose type value has no constant ($(something(why)))"), "$(self.code_gen.enclosing_member): Julia's typeof on $operand_type")
+    end
+    local top = t.top_type_non_nullable[]
+    if Nothing <: operand_type
+        local class_id = add_local(self.code_gen, WasmBuilder.IR.NumType_i32)
+        local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[result])
+        local null_label = WasmBuilder.block(b)
+        translate_expression(self.code_gen, only(args), t.top_type[])
+        WasmBuilder.br_on_null(b, null_label)
+        load_class_id(b, t, top)
+        WasmBuilder.local_set(b, class_id)
+        lookup(() -> WasmBuilder.local_get(b, class_id))
+        WasmBuilder.br(b, done)
+        WasmBuilder.var"end"(b)
+        translate_expression(self.code_gen, NirConst(Core.Const(Nothing)), result)
+        WasmBuilder.var"end"(b)
+    else
+        lookup(() -> (translate_expression(self.code_gen, only(args), top); load_class_id(b, t, top)))
+    end
+    return result
 end
 
 # Julia's Memory builtins, each a port of Julia's own codegen arm at Julia's pin (1.12.7, 6d172b02),
@@ -1304,9 +1341,9 @@ end
     return nothing
 end
 
-# A type made at run time: Julia's apply_type with an operand only run time knows, or typeof of a value
-# whose type only run time knows (Julia folds either where its operands are known, so every call
-# reaching here makes its type at run time). WasmTarget holds each type as one constant, canonical by
+# A type made at run time: Julia's apply_type with an operand only run time knows (Julia folds it where
+# its operands are known, so every call reaching here makes its type at run time; typeof, a read of a
+# value's tag, is the to_typeof arm's). WasmTarget holds each type as one constant, canonical by
 # Julia's egal (constants.jl _lowerTypeToConstant), and `===` on two DataTypes is their ref.eq on that
 # ground (the identical arm, `a_data_type`): a type made at run time would be a second object for an
 # egal type, so each rejects at its statement, located, the one place that ground is kept
