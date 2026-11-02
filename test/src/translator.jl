@@ -105,6 +105,15 @@ end
         local e = try; D.translate_type(t, T); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end
+    # whether a constant of a class is made, constant_unmade, the one source visitInstanceConstant rejects
+    # with: a builtin type's value is its builtin constant; a primitive with no wasm representation is
+    # Unquarantined, by visitInstanceConstant's row; a class of no class info Internal (this table is
+    # not yet collected; a class it holds is made by every compiled constant, code_generator_intrinsics.jl)
+    @test W.constant_unmade(t, Int64) === nothing
+    local pu = W.constant_unmade(t, Float16)
+    @test pu isa W.Unquarantined && occursin("visitInstanceConstant: a constant of the primitive type Float16, with no wasm representation", pu.row)
+    local pi = W.constant_unmade(t, Core.TypeofVararg)
+    @test pi isa W.Internal && occursin("visitInstanceConstant: the class Core.TypeofVararg of the constant has no class info", pi.site)
     # a 128-bit integer is its class's struct of two i64 halves, a regular class: none in this world
     local e128 = try; D.translate_type(t, Int128); nothing; catch x; x; end
     @test e128 isa W.RejectionError && e128.rejection isa W.Internal && occursin("Int128 has no class info", e128.rejection.site)

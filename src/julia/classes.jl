@@ -17,6 +17,24 @@
     all(k -> k <: T || typeintersect(k, T) === Union{}, _KINDS)
 
 """
+    constant_unmade(translator, cls) -> Union{Rejection,Nothing}
+
+Why no constant of the class `cls` can be made, as constants.jl's visitInstanceConstant refuses it, or
+`nothing` where one is made: a builtin type's value is its builtin constant; any other primitive type
+with no wasm representation (a 128-bit integer has one, its class's two halves) is Unquarantined; a
+class with no class info, outside the closed world, is Internal. The one source of the fact:
+visitInstanceConstant rejects with it, and type_value_unmade reads it.
+"""
+@quarantine "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes an instance constant of its class's info; a Julia primitive type with no wasm representation has none" Base.isprimitivetype function constant_unmade(translator, cls::DataType)::Union{Rejection,Nothing}
+    haskey(translator.builtin_types[], cls) && return nothing
+    isprimitivetype(cls) && !type_expand_integer(cls) &&
+        return Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation")
+    haskey(translator.class_info, cls) ||
+        return Internal("dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant: the class $cls of the constant has no class info")
+    return nothing
+end
+
+"""
     type_value_unmade(translator, T) -> Union{Nothing,Some}
 
 The parameter that keeps the type `T` from being a constant (`Some(p)`), or `nothing` where constants.jl
