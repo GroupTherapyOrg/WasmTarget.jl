@@ -37,6 +37,8 @@ fi
 # dev/MARCH.md has one owner, the lead (a wt3-lead* worktree), as a CODEOWNERS file gives a path one owner: fifteen
 # conflicts on it in one day (11:44–21:06, march-monitor-a's count) were the shared hot file the oscillation lesson names.
 # A lane sends its row to the lead; its commit that touches the file is refused here, before any rebase or check.
+# STOPGAP (A79S3): the owner is named by worktree, and the diff spans merge-base..HEAD, every commit the lane holds, not
+# only the SHIP_MAX carried (it over-refuses, never under). It ends when MARCH.md's rows become per-lane files the plan includes.
 case "$(basename "$lane")" in
   wt3-lead*) ;;
   *) if [ -n "$(git diff --name-only "$(git merge-base "origin/$MARCH" HEAD)" HEAD -- dev/MARCH.md 2>/dev/null)" ]; then
@@ -46,10 +48,13 @@ esac
 # STOPGAP, the 13:10Z ruling (dev/MARCH.md 1.L, ended by A68S4's measure): a commit whose check went red on D14's band
 # alone twice in the last hour is not shipped a third time, so a retry re-rolls the shards' noise once, never more
 since=$(date -u -v-60M +%FT%TZ 2>/dev/null || date -u -d '-60 min' +%FT%TZ)
+band=$(git show "origin/$MARCH:dev/check.sh" 2>/dev/null | sed -n 's/^D14_RED=\([0-9]*\).*/\1/p')
+# an unreadable band is no band of 0, which would count every D14 red: refuse, located (A79S2)
+[ -n "$band" ] || { echo "ship: REFUSED — origin/$MARCH:dev/check.sh names no D14_RED, so the retry cap cannot read today's band"; exit 2; }
 for s in $(git log --format=%s "origin/wt2..HEAD" 2>/dev/null | cut -c1-60 | tr ' ' '\001'); do
   s=$(printf '%s' "$s" | tr '\001' ' ')
   # a red counts only past today's band (origin's dev/check.sh D14_RED, never the lane's copy, A77E3): a red the band now admits was no red
-  n=$(awk -F'\t' -v t="$since" -v s="$s" -v band="$(git show "origin/$MARCH:dev/check.sh" 2>/dev/null | sed -n 's/^D14_RED=\([0-9]*\).*/\1/p')" \
+  n=$(awk -F'\t' -v t="$since" -v s="$s" -v band="$band" \
     '$1 >= t && index($3, s) && $4 ~ /past D14/ && match($4, /[0-9]+ s, past/) && substr($4, RSTART, RLENGTH - 8) + 0 > band + 0' \
     "$common/wt-ship-failures.tsv" 2>/dev/null | wc -l | tr -d ' ')
   [ "$n" -ge 2 ] && { echo "ship: REFUSED — \"$s\" went red on D14 alone $n times in the last hour; the ruling allows one retry"; exit 2; }
