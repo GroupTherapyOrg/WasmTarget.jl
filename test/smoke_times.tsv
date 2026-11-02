@@ -36,6 +36,7 @@
 2.6	2.2	float32_fastmath
 9.1	7.2	foreign_calls
 5.0	4.7	getfield_runtime_name
+2.0	2.0	tuple_receiver_read
 4.1	4.6	heterogeneous_tuple_read
 14.9	13.9	higherorder
 23.1	24.5	identity

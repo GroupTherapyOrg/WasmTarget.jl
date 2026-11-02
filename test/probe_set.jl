@@ -4,6 +4,7 @@
 # Every group of test/smoke_corpus.jl stands in exactly one of the two; a group whose first case compiles moves from
 # PROBE_UNCOVERED to PROBE_NAMES, never stays (D20: an exact list).
 const PROBE_NAMES = String[
+    "tuple_receiver_read/open_tuple_first",
     "numerics/mixed_promote",
     "controlflow/ifelse_chain",
     "phi_union/ternary_widen",

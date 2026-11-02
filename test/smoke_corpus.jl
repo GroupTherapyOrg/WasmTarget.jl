@@ -2289,6 +2289,13 @@ _g("getfield_runtime_name", Any[
     ("vararg_names_are_integers", (x::Int64) -> (try; _sm_va_getfield(_sm_rn_name(x), x, 2); 0; catch e; e isa FieldError ? 1 : 2; end), Int64(3)),
 ])
 @noinline _sm_va_getfield(s::Symbol, xs...) = getfield(xs, s)
+# a field read by position on a tuple of no one shape: an open tuple type, read by the intrinsifier's
+# class-id switch over its records, and a Union of tuples, rejected located until the same switch
+# serves it (dart's DynamicGet over the record classes)
+_g("tuple_receiver_read", Any[
+    ("open_tuple_first", (n::Int64) -> (r = Ref{Tuple{Vararg{Int64}}}(n > 0 ? (n, 1) : (n, 2, 3)); getfield(r[], 1)::Int64), Int64(4)),
+    ("union_tuple_first", (n::Int64) -> (r = Ref{Union{Tuple{Int64,Int64},Tuple{Int64,Int64,Int64}}}(n > 0 ? (n, 1) : (n, 2, 3)); getfield(r[], 1)::Int64), Int64(4)),
+])
 @noinline _sm_iiw_set!(r::Base.RefValue{Int64}, v::Int64) = (r[] = v; nothing)
 @noinline _sm_iiw2(x::Int64) = 1
 @noinline _sm_iiw2(x::String) = 2

@@ -1837,6 +1837,12 @@ end
     # naming the selector DispatchTable.selectorForTarget reads: the field's name as field_selector_calls
     # names it over the classes the receiver admits (getConcreteClassIdRange's one reading), a position
     # the field each holds there
+    # a field read on a Union of tuples: dart's DynamicGet on a receiver of no one record shape
+    # (code_generator.dart:2317 visitDynamicGet), switching over the record classes holding the field,
+    # which the intrinsifier writes for an open tuple type but not yet for a Union of them; no selector
+    # serves it (field_selector_calls skips a tuple receiver), located
+    cls isa Type && !(cls isa DataType) && cls <: Tuple &&
+        reject!(Unquarantined("src/intrinsics.jl generateInstanceGetterIntrinsic: a field read on $cls, a Union of tuples, dart's DynamicGet over the record classes, not lowered"), "$(self.enclosing_member)")
     if !(cls isa DataType && isconcretetype(cls))
         local reference = SelectorReference(field_selector_name(key, DataType[self.translator.classes[][id + 1].cls for r in get_concrete_class_id_range(self.translator.class_id_numbering[], cls) for id in r.start:r.end_]), FieldReferenceKind_getter)
         local result = _virtual_call(self, node, reference, _VirtualCallKind_Get,
