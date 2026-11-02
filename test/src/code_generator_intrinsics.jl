@@ -286,7 +286,9 @@ end
 # the expansions' branches on a literal operand (LegalizeIntegerTypes.cpp): an add of 1, of all ones
 # in the low half alone and in both halves, a literal on the left of an add and of a compare (moved
 # right), equality with -1, the sign-bit tests x < 0 and x > -1, a compare of a value with itself, and
-# shifts by literal amounts below, at and past a half's width and past the type's
+# shifts by literal amounts below, at and past a half's width and past the type's; and compares whose
+# literal decides a half (TargetLowering.cpp's SimplifySetCC: x < 2^64's low compare false, so the high
+# compare answers alone; x >= 2^64's low compare true; u <= MAX-5 rewritten u < MAX-4)
 function literals(a::Int64, b::Int64)
     local x = NEARTOP * Int128(a) + Int128(b)
     local u = reinterpret(UInt128, x)
@@ -297,7 +299,8 @@ function literals(a::Int64, b::Int64)
         43 * Int64(x < x) + 47 * Int64(u <= u) +
         53 * halves(x << 3) + 59 * halves(x << 64) + 61 * halves(x << 70) + 67 * halves(x >> 3) + 71 * halves(x >> 64) +
         73 * halves(x >> 100) + 79 * uhalves(u >>> 3) + 83 * uhalves(u >>> 64) + 89 * uhalves(u >>> 100) +
-        97 * halves(x << 200) + 101 * halves(x >> 200)
+        97 * halves(x << 200) + 101 * halves(x >> 200) +
+        103 * Int64(x < Int128(1) << 64) + 107 * Int64(x >= Int128(1) << 64) + 109 * Int64(u <= typemax(UInt128) - UInt128(5))
 end
 # division and remainder, signed and unsigned (compiler-rt's __divti3, __modti3, __udivti3, __umodti3
 # in the runtime), a divisor of one half and of both, negative operands, literal divisors, Julia's

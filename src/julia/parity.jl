@@ -503,7 +503,7 @@ DART_FILES, `include` takes any path, so the second oracle's file map is a table
     "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify", "llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine",
     "llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow", "llvm/lib/CodeGen/PHIElimination",
     "llvm/include/llvm/CodeGen/SelectionDAG", "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes",
-    "llvm/lib/CodeGen/SelectionDAG/LegalizeTypesGeneric",
+    "llvm/lib/CodeGen/SelectionDAG/LegalizeTypesGeneric", "llvm/lib/CodeGen/SelectionDAG/TargetLowering",
     "compiler-rt/lib/builtins/multi3", "compiler-rt/lib/builtins/ashlti3", "compiler-rt/lib/builtins/lshrti3",
     "compiler-rt/lib/builtins/ashrti3",
 )

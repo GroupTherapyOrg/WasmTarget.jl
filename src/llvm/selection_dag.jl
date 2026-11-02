@@ -38,6 +38,15 @@
     return r
 end
 
+# A boolean constant of the target's boolean contents (ZeroOrOneBooleanContent on wasm,
+# WebAssemblyISelLowering.cpp:54): an i32 local holding 1 or 0
+@parity "llvm/include/llvm/CodeGen/SelectionDAG.h:749 SelectionDAG::getBoolConstant" function get_bool_constant(b::WasmBuilder.InstructionsBuilder, v::Bool)::WasmBuilder.IR.Local
+    local r = WasmBuilder.add_local(b, WasmBuilder.IR.NumType_i32)
+    WasmBuilder.i32_const(b, v ? 1 : 0)
+    WasmBuilder.local_set(b, r)
+    return r
+end
+
 # Helper function to make it easier to build Select's if you just have operands that don't need to
 # be legalized: the local of type `vt` holding `cond` ? LHS : RHS
 @parity "llvm/include/llvm/CodeGen/SelectionDAG.h:1410 SelectionDAG::getSelect" function get_select(b::WasmBuilder.InstructionsBuilder, vt::WasmBuilder.IR.ValueType, cond::WasmBuilder.IR.Local, lhs::Union{WasmBuilder.IR.Local,Int64}, rhs::Union{WasmBuilder.IR.Local,Int64})::WasmBuilder.IR.Local

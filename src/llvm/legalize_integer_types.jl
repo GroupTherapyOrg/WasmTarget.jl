@@ -16,10 +16,10 @@
 #   - a shift's amount is an i32 where the type is wider than 64 bits (WebAssemblyISelLowering.cpp:493
 #     getScalarShiftAmountTy), and the shift strategy of a one-step expansion is ExpandToParts
 #     (llvm/include/llvm/CodeGen/TargetLowering.h:1115 preferredShiftLegalizationStrategy)
-# What has no counterpart: DAG.computeKnownBits and TargetLowering::SimplifySetCC's folds read facts
-# of a DAG that Julia's IR does not build. WasmTarget knows a value only as a literal (a constant
-# SDValue), so each branch they decide is taken where the operands are literals and named where it is
-# not taken.
+# What has no counterpart: DAG.computeKnownBits, and the folds of TargetLowering::SimplifySetCC that read
+# an operand's own node (src/llvm/target_lowering.jl names each), read facts of a DAG that Julia's IR
+# does not build. WasmTarget knows a value only as a literal (a constant SDValue), so each branch they
+# decide is taken where the operands are literals and named where it is not taken.
 
 # The halves of a constant: its low bits, and its bits shifted down by the half's width
 @parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:4296 DAGTypeLegalizer::ExpandIntRes_Constant" function expand_int_res_constant(cst::Union{Int128,UInt128})::Tuple{Int64,Int64}
@@ -239,10 +239,11 @@ end
 # or'd and compared with zero, or a comparison with all ones as the halves' and; a sign-bit test as
 # the high halves'; any other as the low halves' unsigned compare where the high halves are equal,
 # else the high halves' compare under the original condition. A scalar result (NewRHS nothing) is
-# the compare itself. Not taken: SimplifySetCC on LoCmp and HiCmp folds a compare it can decide,
-# which needs both halves constant, so both operands literals, a compare Julia decides before
-# codegen; so neither LoCmpC nor HiCmpC is a constant here and the known-half shortcut is
-# never taken (:5956). SETCCCARRY is Expand on wasm (above), so the select of the two compares
+# the compare itself. LoCmp and HiCmp are each TLI.SimplifySetCC's where it simplifies (a constant
+# half decides one, X >= MIN or X < MIN), and a decided half answers alone: for LE and GE a high
+# compare known false, for LT and GT a high compare known true or a low compare known false, returns
+# the high compare (:5956). SETCCCARRY is Expand on wasm (above), so the select of the two compares,
+# the high halves' equality simplified the same way
 @parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:5879 DAGTypeLegalizer::IntegerExpandSetCCOperands" function integer_expand_set_cc_operands(b::WasmBuilder.InstructionsBuilder, lhs::Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}, rhs::Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}, cccode::Symbol)::Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64,Nothing},Symbol}
     local i64 = WasmBuilder.IR.NumType_i64
     local (lhslo, lhshi), (rhslo, rhshi) = lhs, rhs
@@ -269,14 +270,26 @@ end
                   cccode === :SETLE || cccode === :SETULE ? :SETULE :
                   cccode === :SETGE || cccode === :SETUGE ? :SETUGE :
                   reject!(Internal("llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:5879 DAGTypeLegalizer::IntegerExpandSetCCOperands: Unknown integer setcc! $cccode"), "DAGTypeLegalizer::IntegerExpandSetCCOperands")
-    # LoCmp = lo(op1) < lo(op2), always unsigned; HiCmp = hi(op1) < hi(op2), its signedness the operands'
-    local locmp = get_set_cc(b, lhslo, rhslo, lowcc)
-    # the high halves the same node: comparing the low bits is enough (HiCmp, unused, is not emitted)
-    lhshi === rhshi && return (locmp, nothing, cccode)
-    local hicmp = get_set_cc(b, lhshi, rhshi, cccode)
+    # LoCmp = lo(op1) < lo(op2), always unsigned; HiCmp = hi(op1) < hi(op2), its signedness the operands':
+    # each TLI.SimplifySetCC's (a Bool where it decides, an equal compare it rewrites to), else the
+    # compare itself; a compare is emitted only where it is used (a node the DAG drops is none)
+    local cmp(l::Union{WasmBuilder.IR.Local,Int64}, r::Union{WasmBuilder.IR.Local,Int64}, cc::Symbol) = (local s = simplify_set_cc(l, r, cc); s === nothing ? (l, r, cc) : s)
+    local emit(c::Union{Bool,Tuple}) = c isa Bool ? get_bool_constant(b, c) : get_set_cc(b, c...)
+    local locmp = cmp(lhslo, rhslo, lowcc)
+    local hicmp = cmp(lhshi, rhshi, cccode)
+    # For LE / GE, if high part is known false, ignore the low part. For LT / GT: if low part is known
+    # false, return the high part; if high part is known true, ignore the low part
+    local eq_allowed = cccode === :SETLE || cccode === :SETGE || cccode === :SETULE || cccode === :SETUGE
+    if (eq_allowed && hicmp === false) || (!eq_allowed && (hicmp === true || locmp === false))
+        return (emit(hicmp), nothing, cccode)
+    end
+    # the high halves the same node: comparing the low bits is enough
+    lhshi === rhshi && return (emit(locmp), nothing, cccode)
+    local lo = emit(locmp)
+    local hi = emit(hicmp)
     # dest = hi(op1) == hi(op2) ? LoCmp : HiCmp
-    local eq = get_set_cc(b, lhshi, rhshi, :SETEQ)
-    return (get_select(b, WasmBuilder.IR.NumType_i32, eq, locmp, hicmp), nothing, cccode)
+    local eq = emit(cmp(lhshi, rhshi, :SETEQ))
+    return (get_select(b, WasmBuilder.IR.NumType_i32, eq, lo, hi), nothing, cccode)
 end
 
 # A SETCC whose operands are expanded integers: the scalar IntegerExpandSetCCOperands answers, or the
