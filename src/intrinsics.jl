@@ -557,9 +557,10 @@ end
     local f = nir_callee(node)
     local args = node.args[2:end]
     # each family of arms is its own method, compiled only when a program reaches it, and inferred and
-    # compiled once for every builtin it matches (@nospecialize f with @nospecializeinfer, as
-    # Compiler/src/tfuncs.jl's builtin_tfunction takes its callee): the `f === ...` tests above narrowed f to each builtin's own type, so the memory family
-    # alone was compiled ten times, one body per builtin
+    # compiled once for every builtin it matches (@nospecialize f with @nospecializeinfer, as Julia's compiler
+    # writes a function over any lattice element: Compiler/src/typelattice.jl:210 assert_nested_slotwrapper,
+    # :218 widenslotwrapper, Compiler/src/abstractinterpretation.jl:3904 widenreturn): the `f === ...` tests
+    # above narrowed f to each builtin's own type, so the memory family alone was compiled ten times
     f === Core.:(===) && length(args) == 2 && return generate_static_intrinsic(self, Val(:identical), f, args)
     f === Core._svec_len && length(args) == 1 && return generate_static_intrinsic(self, Val(:svec_len), f, args)
     f === Core.throw_methoderror && length(args) >= 1 && return generate_static_intrinsic(self, Val(:throw_methoderror), f, args)

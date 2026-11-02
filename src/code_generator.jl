@@ -876,7 +876,9 @@ end
 # one compiled body for every kind of node (@nospecialize, inferred once): the @exhaustive match below
 # dispatches on the kind, so a body per kind of caller's node would only repeat it; and one for every kind of
 # expected type, which each visitor then takes as dart's declared ValueType: a body per NumType and RefType
-# caller had compiled each visitor up to three times for each code generator (visit_static_get 14 times).
+# caller had compiled each visitor up to three times for each code generator (visit_static_get 14 times);
+# Julia's compiler writes a function over any lattice element so (Compiler/src/abstractinterpretation.jl:3904
+# widenreturn, Compiler/src/typelattice.jl:210 and :218).
 # Reshaped: `value_type` — the type Julia inferred for a statement node, which the node itself does not
 # carry (a value's, dart_type_of's): convertType's boxed_class, as Julia's codegen unboxes a call's
 # boxed result by its statement's inferred type (julia/src/codegen.cpp emit_invoke's mark_julia_type)
