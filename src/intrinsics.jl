@@ -1721,7 +1721,7 @@ end
     # a class holding a host reference, which no eqref holds: dart's not identical past the reference test
     local host(storage::WasmBuilder.IR.StorageType) = storage isa WasmBuilder.IR.RefType && !WasmBuilder.is_subtype_of(storage, WasmBuilder.IR.RefType_eq(; nullable = true))
     # jl_egal__unboxed_: the class's arm
-    local ranges = [(range = Range(Val(:_), id, id), value = t.classes[][id + 1].cls) for id in concrete_class_ids(t, Any)]
+    local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(concrete_class_ids(t, Any), concrete_classes(t, Any))]
     WasmBuilder.local_get(b, x)
     load_class_id(b, t, top_nn)
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
