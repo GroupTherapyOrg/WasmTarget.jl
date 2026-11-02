@@ -197,7 +197,6 @@ julia/packages.jl Util
 julia/packages.jl WasmBuilder
 julia/parity.jl @closed
 julia/parity.jl @parity
-julia/parity.jl @quarantine
 julia/parity.jl @unported
 julia/parity.jl Anchor
 julia/parity.jl CLOSED_SUMS
@@ -218,7 +217,6 @@ julia/parity.jl MIRROR_SUMS
 julia/parity.jl PATCHED
 julia/parity.jl PIN
 julia/parity.jl ParityEntry
-julia/parity.jl QuarantineEntry
 julia/parity.jl REASON_PATH_RX
 julia/parity.jl REASON_PRECEDENT_RX
 julia/parity.jl REGISTRY
@@ -270,7 +268,6 @@ julia/parity.jl _modules
 julia/parity.jl _pin_julia
 julia/parity.jl _pin_llvm
 julia/parity.jl _pin_sdk
-julia/parity.jl _quarantine_entry
 julia/parity.jl _reason_unpinned
 julia/parity.jl _references
 julia/parity.jl _register!

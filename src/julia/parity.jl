@@ -48,13 +48,15 @@ let defs = quote
     end
 
     """
-        QuarantineEntry(mod, necessity, api, names, file, first, last, identity, worlds, pid, methods)
+        QuarantineEntry(mod, necessity, api, names, file, first, last, identity, pin, worlds, pid, methods)
 
     A definition `@quarantine` checked: `necessity` what Julia forces, `api` the Julia API it relies
     on (resolved, and referenced by the definition, where it was checked), `identity` its identity
-    across evaluations (`_identity`: a method's signature as written), and the rest as `ParityEntry`.
+    across evaluations (`_identity`: a method's signature as written), `pin` its pinned source as its
+    `pin"…"` argument writes it, `"unpinned"` for one declared so, or "" for the old form whose reason's
+    prose carries its citations (1.K), and the rest as `ParityEntry`.
     """
-    @quarantine "the Julia-only definitions' record, Rust's unsafe blocks with their SAFETY comments" Base.Method struct QuarantineEntry
+    @quarantine "a quarantined definition's record, as Julia records one docstring with its metadata (precedent(julia: base/docs/Docs.jl:161 DocStr)); Julia differs: the record holds the definition's pinned source and its necessity, checked at load, where DocStr holds free text" Base.Method struct QuarantineEntry
         mod::Module
         necessity::String
         api::String
@@ -63,6 +65,7 @@ let defs = quote
         first::Int
         last::Int
         identity::String
+        pin::String
         worlds::UnitRange{UInt}
         pid::Int32
         methods::Vector{Method}
@@ -334,11 +337,15 @@ let defs = quote
         return any(a -> _references(mod, a, v), ex.args)
     end
 
-    # the QuarantineEntry of one definition, or a refusal at its line: the necessity stated, the API a
-    # qualified name that resolves and that the definition references, the file in src/julia or src/patch
-    # (a file under src/ elsewhere carries @parity)
-    @quarantine "the Julia-only definitions are checked where they are written, Rust's unsafe" Base.Meta.isexpr function _quarantine_entry(mod::Module, source::LineNumberNode, necessity, api, def)::QuarantineEntry
+    # the QuarantineEntry of one definition, or a refusal at its line: its pin a `pin"<citation>"` literal,
+    # `unpinned` or none (the old form, `pin` nothing), the necessity stated, the API a qualified name that
+    # resolves and that the definition references, the file in src/julia or src/patch (a file under src/
+    # elsewhere carries @parity)
+    @quarantine "a definition's record is built where it is written and registered for its binding, as Julia builds and registers a docstring's record (precedent(julia: base/docs/Docs.jl:233 doc!)); Julia differs: the record is refused at the definition's line unless its pin, necessity and API are well formed" Base.Meta.isexpr function _quarantine_entry(mod::Module, source::LineNumberNode, pin, necessity, api, def)::QuarantineEntry
         refuse(why) = throw(ConstructionViolation("@quarantine", "$(_at(source)): $why"))
+        local pintext = pin === nothing ? "" : pin === :unpinned ? "unpinned" :
+            Meta.isexpr(pin, :macrocall) && pin.args[1] === Symbol("@pin_str") && pin.args[end] isa String && !isempty(strip(pin.args[end])) ? String(pin.args[end]) :
+            refuse("the pin $(repr(pin)) is neither a pin\"<citation>\" literal nor `unpinned`")
         necessity isa String && !isempty(strip(necessity)) || refuse("the necessity is not a non-empty string")
         Meta.isexpr(api, :., 2) && api.args[2] isa QuoteNode || refuse("the Julia API $(repr(api)) is not a qualified name (Module.name)")
         local v = _resolve_name(mod, api)
@@ -354,7 +361,7 @@ let defs = quote
             refuse("a definition outside src/julia and src/patch carries @parity, the dart definition it copies")
         local names, _ = _defines(def, source)
         return QuarantineEntry(mod, necessity, string(api), names, Symbol(file), source.line, _last_line(def, source),
-                               _identity(mod, def, source), UInt(0):UInt(0), Int32(0), Method[])
+                               _identity(mod, def, source), pintext, UInt(0):UInt(0), Int32(0), Method[])
     end
 
     # a checked definition's expansion: the evaluation bracketed by its worlds, then the entry; a
@@ -367,36 +374,46 @@ let defs = quote
     end
 
     """
+        @quarantine pin"<citation>" "<necessity>" <Module.api> <definition>
+        @quarantine unpinned "<necessity>" <Module.api> <definition>
         @quarantine "<necessity>" <Module.api> <definition>
 
-    Marks a definition of src/julia: what Julia forces that dart lacks, and the Julia API it relies
-    on, a qualified name that resolves and that the definition's own code references (one that does
-    not refuses the load at this line). A definition outside src/julia carries `@parity` instead.
+    Marks a definition of src/julia: the source it ports, one citation (an anchor of a pin, a path of the
+    dart checkout or a `precedent(<ecosystem>: <file>:<line> <symbol>)`) resolved when the package loads,
+    or `unpinned` for a definition the debt list names; what Julia forces that dart lacks; and the Julia
+    API it relies on, a qualified name that resolves and that the definition's own code references (one
+    that does not refuses the load at this line). The third form, the citations read from the
+    necessity's prose, is the old one, each site to be rewritten in the first (1.K). A definition outside
+    src/julia carries `@parity` instead.
 
     precedent(rust: `unsafe` with clippy's undocumented_unsafe_blocks, each block saying why). Julia's
     differs: no keyword marks Julia-only code, so the macro checks and records it when it loads.
     """
-    @quarantine "Julia has no unsafe blocks; a macro marks and records each Julia-only definition" Base.esc macro quarantine(necessity, api, def)
-        return esc(_expansion(__source__, def, _quarantine_entry(__module__, __source__, necessity, api, def)))
+    @quarantine "a macro attaches a record to the definition it precedes, as Julia's @doc attaches a docstring's (precedent(julia: base/docs/Docs.jl:639 docm)); Julia differs: the record names the definition's pinned source, resolved when the package loads, where a docstring is free text" Base.esc macro quarantine(necessity, api, def)
+        return esc(_expansion(__source__, def, _quarantine_entry(__module__, __source__, nothing, necessity, api, def)))
+    end
+    @quarantine "a macro attaches a record to the definition it precedes, as Julia's @doc attaches a docstring's (precedent(julia: base/docs/Docs.jl:639 docm)); Julia differs: the record names the definition's pinned source, resolved when the package loads, where a docstring is free text" Base.esc macro quarantine(pin, necessity, api, def)
+        return esc(_expansion(__source__, def, _quarantine_entry(__module__, __source__, pin, necessity, api, def)))
     end
 end
-    local marked = Tuple{LineNumberNode,Any,Any,Any,UInt,UInt}[]
+    local marked = Tuple{LineNumberNode,Any,Any,Any,Any,UInt,UInt}[]
     for st in defs.args
         st isa LineNumberNode && continue
         local doc = nothing
         if Meta.isexpr(st, :macrocall) && st.args[1] == GlobalRef(Core, Symbol("@doc"))
             doc, st = st.args[3], st.args[4]
         end
-        Meta.isexpr(st, :macrocall) && st.args[1] === Symbol("@quarantine") && length(st.args) == 5 ||
+        Meta.isexpr(st, :macrocall) && st.args[1] === Symbol("@quarantine") && length(st.args) in (5, 6) ||
             error("parity.jl: the registry's block holds only @quarantine definitions")
-        local source, necessity, api, def = st.args[2], st.args[3], st.args[4], st.args[5]
+        local source, def = st.args[2], st.args[end]
+        local pin, necessity, api = length(st.args) == 6 ? (st.args[3], st.args[4], st.args[5]) : (nothing, st.args[3], st.args[4])
         local w0 = Base.get_world_counter()
         Core.eval(@__MODULE__, doc === nothing ? def : Expr(:macrocall, GlobalRef(Core, Symbol("@doc")), source, doc, def))
-        push!(marked, (source, necessity, api, def, w0, Base.get_world_counter()))
+        push!(marked, (source, pin, necessity, api, def, w0, Base.get_world_counter()))
     end
-    for (source, necessity, api, def, w0, w1) in marked
+    for (source, pin, necessity, api, def, w0, w1) in marked
         Core.eval(@__MODULE__, Expr(:call, :_register_range!, Expr(:call, :_quarantine_entry, @__MODULE__, QuoteNode(source),
-                                                                     necessity, QuoteNode(api), QuoteNode(def)),
+                                                                     QuoteNode(pin), necessity, QuoteNode(api), QuoteNode(def)),
                                     Expr(:call, :_identity, @__MODULE__, QuoteNode(def), QuoteNode(source)), w0, w1))
     end
 end
@@ -530,7 +547,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types", "julia/base/hashing", "julia/base/expr", "julia/src/init", "julia/src/precompile", "julia/Compiler/src/effects",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3", "julia/base/floatfuncs", "julia/base/experimental", "julia/base/float",
     "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation", "julia/src/method", "julia/Compiler/src/ssair/show", "julia/Compiler/src/verifytrim", "julia/src/gf", "julia/src/subtype",
-    "julia/base/loading", "julia/base/stacktraces", "julia/base/libc", "julia/base/ryu/Ryu",
+    "julia/base/loading", "julia/base/stacktraces", "julia/base/libc", "julia/base/ryu/Ryu", "julia/base/docs/Docs",
 )
 
 """
@@ -1551,7 +1568,12 @@ Julia's differs: no keyword marks Julia-only code, so the reason is read where t
     local count = Dict{String,Int}()
     foreach(e -> (k = _quarantine_key(e, src); count[k] = get(count, k, 0) + 1), entries)
     for e in entries
-        local w = _reason_unpinned(e.necessity, sdk)
+        # a pin"…" holds exactly one citation, resolving at its pin; `unpinned` pins nothing; the old form's
+        # citations are read from its necessity's prose (1.K)
+        local w = e.pin == "unpinned" ? "it is declared unpinned" :
+            isempty(e.pin) ? _reason_unpinned(e.necessity, sdk) :
+            sum(length(collect(eachmatch(rx, e.pin))) for rx in (REASON_PRECEDENT_RX, REASON_ANCHOR_RX, REASON_PATH_RX)) == 1 ?
+                _reason_unpinned(e.pin, sdk) : "its pin\"$(e.pin)\" holds no single citation"
         w === nothing && continue
         local k = _quarantine_key(e, src, count)
         unpinned[k] = get(unpinned, k, 0) + 1
@@ -1604,7 +1626,7 @@ end
         k in debt && (push!(out, "$list lists $k, which dev/quarantine_unpinned.txt lists too: one list names a definition"); continue)
         local es = get(bykey, k, QuarantineEntry[])
         isempty(es) && (push!(out, "$list lists $k, which names no quarantined definition: delete the line"); continue)
-        any(e -> _reason_unpinned(e.necessity, sdk) === nothing, es) &&
+        any(e -> e.pin != "unpinned" && _reason_unpinned(isempty(e.pin) ? e.necessity : e.pin, sdk) === nothing, es) &&
             (push!(out, "$list lists $k, whose reason pins a source: a definition with a counterpart is pinned, never listed; delete the line"); continue)
         append!(admitted, fill(k, length(es)))
     end
@@ -1633,13 +1655,14 @@ end
                      form[1] in ("struct", "abstract", "primitive") ? :type : nothing
         kind === nothing && continue
         # a citation whose kind is not read here (another ecosystem's, a C unit's, a dart path) may be the counterpart
-        local unread = any(m -> m.captures[1] != "julia", eachmatch(REASON_PRECEDENT_RX, e.necessity)) ||
-                       !isempty(collect(eachmatch(REASON_PATH_RX, e.necessity)))
+        local cited = isempty(e.pin) ? e.necessity : e.pin     # a pin's one citation, or the old form's prose
+        local unread = any(m -> m.captures[1] != "julia", eachmatch(REASON_PRECEDENT_RX, cited)) ||
+                       !isempty(collect(eachmatch(REASON_PATH_RX, cited)))
         local cites = String[]
-        for m in eachmatch(REASON_PRECEDENT_RX, e.necessity)
+        for m in eachmatch(REASON_PRECEDENT_RX, cited)
             m.captures[1] == "julia" && m.captures[4] !== nothing && push!(cites, "$(m.captures[2]):$(m.captures[3])")
         end
-        for m in eachmatch(REASON_ANCHOR_RX, e.necessity)
+        for m in eachmatch(REASON_ANCHOR_RX, cited)
             local a = parse_anchor(m.captures[1])
             a !== nothing && a.pin === :julia && endswith(a.file, ".jl") ? push!(cites, "$(a.file):$(a.line)") : (unread = true)
         end
