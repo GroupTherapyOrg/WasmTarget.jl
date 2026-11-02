@@ -169,8 +169,12 @@ isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runne
 # class's DataType, a Union and Nothing, against native isa and typeassert
 # Any is dart's top type (_TopType._checkInstance), whose row the class table does not hold: 1 isa Any
 # and (1, 2) isa Any answered false before its arm
-@noinline type_at(j::Int64)::Any = j == 1 ? Int64 : j == 2 ? Float64 : j == 3 ? Union{Int64,String} : j == 4 ? Nothing : j == 5 ? 5 : Any
-@noinline value_at(k::Int64)::Any = k == 1 ? 1 : k == 2 ? 2.0 : k == 3 ? "s" : k == 4 ? nothing : (1, 2)
+# a tuple type is dart's record type (_RecordType._checkInstance): (1, 2), (1, 2.0), a nested tuple and
+# the 0-tuple against Tuple{Int64,Int64}, Tuple{Tuple{Int64,Int64},Int64} and Tuple{}
+@noinline type_at(j::Int64)::Any = j == 1 ? Int64 : j == 2 ? Float64 : j == 3 ? Union{Int64,String} : j == 4 ? Nothing : j == 5 ? 5 :
+    j == 6 ? Any : j == 7 ? Tuple{Int64,Int64} : j == 8 ? Tuple{Tuple{Int64,Int64},Int64} : Tuple{}
+@noinline value_at(k::Int64)::Any = k == 1 ? 1 : k == 2 ? 2.0 : k == 3 ? "s" : k == 4 ? nothing : k == 5 ? (1, 2) :
+    k == 6 ? (1, 2.0) : k == 7 ? ((1, 2), 3) : ()
 rt_isa(k::Int64, j::Int64) = isa(value_at(k), type_at(j)) ? 1 : 0
 rt_as(k::Int64, j::Int64) = (typeassert(value_at(k), type_at(j)); 1)
 # the same test where the program holds a type value the runtime decides by no ported kind: an open
@@ -183,31 +187,38 @@ rt_open(k::Int64, j::Int64) = isa(value_at(k), open_type_at(j)) ? 1 : 0
 rt_tuple(k::Int64, j::Int64) = isa(value_at(k), tuple_type_at(j)) ? 1 : 0
 const BOUND_TYPES = Any[Int64, Tuple{Int64,Int64}]
 rt_bound(k::Int64, j::Int64) = isa(value_at(k), BOUND_TYPES[j]) ? 1 : 0
+@noinline vararg_type_at(j::Int64)::Any = j == 1 ? Int64 : Tuple{Vararg{Int64}}
+rt_vararg(k::Int64, j::Int64) = isa(value_at(k), vararg_type_at(j)) ? 1 : 0
 @noinline all_type_at(j::Int64)::Any = j == 1 ? Int64 : Vector
 rt_all(k::Int64, j::Int64) = isa(value_at(k), all_type_at(j)) ? 1 : 0
 @testset "type.dart: _isSubtype and _asSubtype test a type only run time knows, against native" begin
     local cases = Main.WTRunner.RunCase[]
     local isa_bytes = W.compile(rt_isa, (Int64, Int64))
     local as_bytes = W.compile(rt_as, (Int64, Int64))
-    for k in 1:5, j in 1:6
+    for k in 1:8, j in 1:9
         push!(cases, Main.WTRunner.RunCase("rt_isa($k, $j)", isa_bytes, (k, j), Main.WTRunner.native_answer(rt_isa, (k, j))))
         push!(cases, Main.WTRunner.RunCase("rt_as($k, $j)", as_bytes, (k, j), Main.WTRunner.native_answer(rt_as, (k, j))))
     end
     for r in Main.WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
-    # a program holding the open tuple type Tuple{Any} beside a run-time test: rejected at the test,
-    # located, the link-time check of the program's type values (_RecordType._checkInstance unported)
-    local e = try; W.compile(rt_open, (Int64, Int64)); nothing; catch x; x; end
-    @test e isa W.RejectionError && e.rejection isa W.Unported && e.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance" &&
-          occursin("rt_open", e.at) && occursin("Tuple{Any}", e.at)
-    # a concrete tuple type, a literal or a binding's element: rejected at the test, located, until
-    # _RecordType._checkInstance reads a record's fields
-    for f in (rt_tuple, rt_bound)
-        local te = try; W.compile(f, (Int64, Int64)); nothing; catch x; x; end
-        @test te isa W.RejectionError && te.rejection isa W.Unported && te.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance" &&
-              occursin(string(nameof(f)), te.at) && occursin("Tuple{Int64, Int64}", te.at)
+    # the open tuple type Tuple{Any}, read field by field as any tuple type: native's answers
+    local ob = W.compile(rt_open, (Int64, Int64))
+    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("rt_open($k, $j)", ob, (k, j), Main.WTRunner.native_answer(rt_open, (k, j))) for k in 1:8 for j in 1:2])
+        @test r.ok || (@info r.label r.why; false)
     end
+    # a tuple type, a literal or a binding's element, read field by field: native's answers
+    local tuple_cases = Main.WTRunner.RunCase[]
+    for f in (rt_tuple, rt_bound)
+        local fb = W.compile(f, (Int64, Int64))
+        append!(tuple_cases, [Main.WTRunner.RunCase("$(nameof(f))($k, $j)", fb, (k, j), Main.WTRunner.native_answer(f, (k, j))) for k in 1:8 for j in 1:2])
+    end
+    for r in Main.WTRunner.run_cases(tuple_cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+    # a Vararg tuple type, its length only run time knows: rejected at the test, located (Julia's own row)
+    local ve = try; W.compile(rt_vararg, (Int64, Int64)); nothing; catch x; x; end
+    @test ve isa W.RejectionError && occursin("Vararg", sprint(showerror, ve))
     # one holding the UnionAll Vector: a UnionAll as a value has no constant yet, rejected at that
     # constant, located, before any run-time test is decided
     local u = try; W.compile(rt_all, (Int64, Int64)); nothing; catch x; x; end
@@ -226,18 +237,20 @@ struct Plain; x::Int64; end
 const TYPES = Any[Shape, Circle, Plain, Union{Circle,Plain}, Any, Nothing, Union{}, Union{Nothing,Circle}]
 type_at(i::Int64)::Type = TYPES[i]::Type
 sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(type_at(i), type_at(j)) ? 1 : 0
-# tuple pairs, dart's record rule (type.dart:1440) unported: Tuple{Int64,Int64} <: Tuple{Integer,Integer}
-# answered false from the class table; rejected at link time, located. A Type{X} as a value is classed by
-# its member's kind (getConcreteClassIdRange), and its run-time type test, jl_isa's jl_types_equal, is
-# not yet written, rejected at it.
-const TUPLE_TYPES = Any[Tuple{Int64,Int64}, Tuple{Integer,Integer}]
+# tuple pairs by dart's record rule (type.dart:1440, isRecordSubtype): Tuple{Int64,Int64} <:
+# Tuple{Integer,Integer}, which the class table alone answered false, field by field. A Type{X} as a
+# value is classed by its member's kind (getConcreteClassIdRange), and its run-time type test, jl_isa's
+# jl_types_equal, is not yet written, rejected at it.
+const TUPLE_TYPES = Any[Tuple{Int64,Int64}, Tuple{Integer,Integer}, Tuple{Any}]
 tuple_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(TUPLE_TYPES[i]::Type, TUPLE_TYPES[j]::Type) ? 1 : 0
 const KIND_TYPES = Any[Type{Int64}, DataType]
 kind_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(KIND_TYPES[i]::Type, KIND_TYPES[j]::Type) ? 1 : 0
 @testset "type.dart: _isTypeSubtype, _TypeUniverse.isSubtype by kind, against Julia's <:" begin
-    local te = try; W.compile(tuple_sub, (Int64, Int64)); nothing; catch x; x; end
-    @test te isa W.RejectionError && te.rejection isa W.Unported && te.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance" &&
-          occursin("tuple_sub", te.at)
+    local tb = W.compile(tuple_sub, (Int64, Int64))
+    local tn = length(TUPLE_TYPES)
+    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("tuple_sub($(TUPLE_TYPES[i]), $(TUPLE_TYPES[j]))", tb, (i, j), TUPLE_TYPES[i] <: TUPLE_TYPES[j] ? 1 : 0) for i in 1:tn for j in 1:tn])
+        @test r.ok || (@info r.label r.why; false)
+    end
     local ke = try; W.compile(kind_sub, (Int64, Int64)); nothing; catch x; x; end
     @test ke isa W.RejectionError && ke.rejection isa W.Unquarantined &&
           startswith(ke.rejection.row, "src/julia/runtime/rtutils.jl run_time_type_gap: the type Type{Int64}")

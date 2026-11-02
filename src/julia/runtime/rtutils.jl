@@ -231,6 +231,13 @@ end
 @quarantine "julia/src/julia.h:136 jl_typetagis tests a value's type tag" Core.Bool @noinline jl_typetagis(@nospecialize(x::Any), ::Type{K}) where {K} =
     _wasm_only(Bool)
 
+# Julia's test of whether a DataType is a tuple type (julia.h:1837 jl_is_tuple_type, its name the tuple's
+# type name): the class the type value denotes, its classId, against the tuple classes of the closed
+# world (each class that is a Tuple type), the intrinsifier's class-id range check; dart's
+# `isRecord`, its _RecordType's class id. Natively no class id exists, so the body raises
+@quarantine "julia/src/julia.h:1837 jl_is_tuple_type tests whether a type is a tuple type" Core.Bool @noinline jl_is_tuple_type(t::DataType) =
+    _wasm_only(Bool)
+
 """
     run_time_type_test!(translator, at)
 
@@ -252,9 +259,9 @@ Why the runtime's type test cannot decide `T`, or `nothing` where it can: it dec
 DataType by the class table, Any (dart's _TopType), Union{} (dart's _BottomType) and a Union by its
 members. A UnionAll or a free TypeVar, which Julia's subtype decides by its environment
 (julia/src/subtype.c:1419), and a Type{X}, whose values jl_isa tells by jl_types_equal
-(subtype.c:2523), are Julia's own, with no dart kind: Unquarantined. A tuple type but Tuple{}, dart's
-record type, waits for _RecordType._checkInstance to read a record's fields (a tuple in a top-typed slot
-is its arity's record, src/julia/classes.jl TupleRecord, under no class-table row): Unported. The one
+(subtype.c:2523), are Julia's own, with no dart kind: Unquarantined. A tuple type, dart's record type,
+is decided field by field (_RecordType._checkInstance, the record rule), so its fields' types must be:
+a Vararg field, a length only run time knows, is Julia's own, Unquarantined. The one
 reading the code generator's general arm (types.jl, a constant type) and the link-time walk (a type only
 run time knows) share.
 """
@@ -270,7 +277,18 @@ run time knows) share.
     end
     T isa DataType && Base.isType(T) &&
         return Unquarantined("src/julia/runtime/rtutils.jl run_time_type_gap: the type $T, whose values jl_isa tells by jl_types_equal (julia/src/subtype.c:2523), a kind dart has no counterpart of")
-    T isa DataType && T <: Tuple && T !== Tuple{} && return Unported("sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance")
+    if T isa DataType && T <: Tuple
+        # a tuple type, dart's record type: decided field by field (_RecordType._checkInstance, and the
+        # type-level record rule, type.dart:1322), each field's type in turn; a Vararg field, a length
+        # only run time knows, has no dart counterpart (Julia's subtype_tuple, subtype.c:1348)
+        for p in T.parameters
+            p isa Core.TypeofVararg &&
+                return Unquarantined("src/julia/runtime/rtutils.jl run_time_type_gap: the tuple type $T, its Vararg field a length only run time knows (julia/src/subtype.c:1348 subtype_tuple)")
+            p isa Type || return Unquarantined("src/julia/runtime/rtutils.jl run_time_type_gap: the tuple type $T, its field $p no type")
+            local g = run_time_type_gap(p)
+            g === nothing || return g
+        end
+    end
     return nothing
 end
 
@@ -296,14 +314,15 @@ end
     check_run_time_type_values(translator)
 
 A run-time type test decides by the kinds the runtime ports (type.dart's `_checkInstance`: a class's
-DataType by the class table, a Union by its members, Union{}), so every type value the program holds
-must be one of those: each literal operand of the program's own bodies (WasmTarget's runtime aside)
-and each binding they read (a NirGlobal operand, a GlobalRef statement, its value at compile time), and
-every value those hold, their elements and fields. A UnionAll or a free TypeVar, which
-Julia's subtype decides by its environment (julia/src/subtype.c:1419), rejects, Unquarantined, at the
-first run-time test; a Type{X} (jl_isa's `jl_types_equal`, subtype.c:2523) or a tuple type but Tuple{}
-(type.dart's `_RecordType._checkInstance`, reading a record's fields) rejects, Unported, there. A program's type value is a literal:
-one made at run time (apply_type, typeof) rejects at its statement (src/intrinsics.jl).
+DataType by the class table, a tuple type field by field, Any, a Union by its members, Union{}), so
+every type value the program holds must be one of those: each literal operand of the program's own
+bodies (WasmTarget's runtime aside) and each binding they read (a NirGlobal operand, a GlobalRef
+statement, its value at compile time), and every value those hold, their elements and fields. What the
+runtime cannot decide (run_time_type_gap, the one reading) rejects at the first run-time test: a
+UnionAll or a free TypeVar (julia/src/subtype.c:1419, its environment), a Type{X} (jl_isa's
+`jl_types_equal`, subtype.c:2523) and a tuple type with a Vararg field (subtype.c:1348), each Julia's
+own, Unquarantined. A program's type value is a literal: one made at run time (apply_type, typeof)
+rejects at its statement (src/intrinsics.jl).
 """
 @quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by subtyping with an environment, which the runtime does not port; dart patches what every use needs once every use is known (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant)" Base.IdSet function check_run_time_type_values(translator)::Nothing
     local at = first(translator.types[].rtt[].run_time_type_tests)

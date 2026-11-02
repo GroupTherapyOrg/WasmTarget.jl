@@ -333,7 +333,6 @@ julia/subset.jl _check_export_names
 julia/subset.jl _entry_specialization
 julia/subset.jl _infer_verified
 julia/subset.jl _reached_ccallables
-julia/subset.jl _trim_error
 julia/subset.jl _trim_infer
 julia/subset.jl _verify_trim
 julia/subset.jl check_closed_world_makers

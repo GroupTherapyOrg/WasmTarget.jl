@@ -273,13 +273,26 @@ end
 # One error the verifier reports, kept as Julia gives it: its kind, its statement and Julia's stack
 # frames for it (verify_create_stackframes over the verifier's parents); a description with no kind
 # in TRIM_ERROR_KINDS is an Internal rejection, the table behind this Julia's verifier
-@quarantine "the verifier's error and the stack frames Julia builds for it, kept as Julia gives them" Core.Compiler.TrimVerifier.verify_create_stackframes function _trim_error(@nospecialize(cause), parents, at::String)::TrimError
+@quarantine "the verifier's error and the stack frames Julia builds for it (julia/Compiler/src/verifytrim.jl:125 verify_create_stackframes), kept as Julia gives them" Core.Compiler.TrimVerifier.verify_create_stackframes function _trim_error(@nospecialize(cause), parents, at::String)::TrimError
     local kind = get(TRIM_ERROR_KINDS, string(cause.desc), nothing)
     kind === nothing && reject!(Internal("src/julia/subset.jl TRIM_ERROR_KINDS: Julia $VERSION's trim verifier reports \"$(cause.desc)\", a description it has no kind for"), at)
     cause isa Core.Compiler.TrimVerifier.CCallableMissing && return TrimError(kind, nothing, 0, Base.StackTraces.StackFrame[], TrimCCallableMissing(cause))
     cause isa Core.Compiler.TrimVerifier.CallMissing ||
         reject!(Internal("src/julia/subset.jl _trim_error: Julia $VERSION's trim verifier reports a $(typeof(cause)), a record it has no kind for (TrimCause)"), at)
-    return TrimError(kind, cause.codeinst, cause.stmtidx, Core.Compiler.TrimVerifier.verify_create_stackframes(cause.codeinst, cause.stmtidx, parents),
+    # the chain of parents from the error's CodeInstance, cut where it meets one already on it: the
+    # runtime's roots call one another (a recursion, each queued beside the entry, so each a parent of
+    # another), and verify_create_stackframes follows the map until it ends, which a cycle never does
+    local chain = Core.Compiler.TrimVerifier.ParentMap()
+    local seen = Base.IdSet{Core.CodeInstance}((cause.codeinst,))
+    local ci = cause.codeinst
+    while true
+        local p = get(parents, ci, nothing)
+        (p === nothing || p[1] in seen) && break
+        chain[ci] = p
+        push!(seen, p[1])
+        ci = p[1]
+    end
+    return TrimError(kind, cause.codeinst, cause.stmtidx, Core.Compiler.TrimVerifier.verify_create_stackframes(cause.codeinst, cause.stmtidx, chain),
                      TrimCallMissing(cause))
 end
 

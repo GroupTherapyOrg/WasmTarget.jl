@@ -157,7 +157,10 @@ Julia's differs from dart: its Union is a kind of its own, where dart's nullable
     # _buildTypeRules skips the top): every value is of it
     t === Any && return _TopType__check_instance(o)
     if jl_typetagis(t, DataType)
-        return _InterfaceType__check_instance(unsafe_cast(DataType, t), o)
+        local d = unsafe_cast(DataType, t)
+        # a tuple type is dart's record type (_RecordType), any other DataType its interface type
+        jl_is_tuple_type(d) && return _RecordType__check_instance(d, o)
+        return _InterfaceType__check_instance(d, o)
     elseif jl_typetagis(t, Union)
         # Julia's Union, which dart has no kind of: either member (subtype.c's union rule)
         local u = unsafe_cast(Union, t)
@@ -182,6 +185,34 @@ id's relation to `t`'s through the class table, no type arguments (a Julia class
 """
 @parity "sdk/lib/_internal/wasm/common/type.dart:291 _InterfaceType._checkInstance" _InterfaceType__check_instance(t::DataType, @nospecialize(o::Any))::Bool =
     _TypeUniverse_is_object_interface_subtype0(o, _InterfaceType_class_id(t))
+
+"""
+Whether `o` is of the tuple type `t` (dart's `_RecordType._checkInstance`): `o` a record, a tuple held in
+a top-typed slot as its arity's record class (src/julia/classes.jl TupleRecord), whose fields are each
+of `t`'s field types (Record._checkRecordType); no other class's value is.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance" function _RecordType__check_instance(t::DataType, @nospecialize(o::Any))::Bool
+    _is_record_class_id(ClassID_get_id(o)) || return false
+    return Record__check_record_type(unsafe_cast(Tuple, o), t.parameters)
+end
+
+"""
+Whether the tuple type `s` is a subtype of the tuple type `t` (dart's `_TypeUniverse.isRecordSubtype`):
+the same shape, Julia's same number of fields, and each of `s`'s fields a subtype of `t`'s at its
+index, Julia's covariant tuple (julia/src/subtype.c:1348 subtype_tuple). No Vararg field reaches here
+(src/julia/runtime/rtutils.jl run_time_type_gap).
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:1322 _TypeUniverse.isRecordSubtype" function _TypeUniverse_is_record_subtype(s::DataType, t::DataType)::Bool
+    local sp = s.parameters
+    local tp = t.parameters
+    # [s] <: [t] iff s and t have the same shape and fields of `s` are subtypes of the same field in `t`
+    # by index.
+    length(sp) == length(tp) || return false
+    for i in 1:length(sp)
+        _TypeUniverse_is_subtype(unsafe_cast(Type, sp[i]), unsafe_cast(Type, tp[i])) || return false
+    end
+    return true
+end
 
 """
 Whether `o` is of the top type, Julia's Any (dart's `_TopType._checkInstance`, `=> true`): every value
@@ -226,10 +257,10 @@ Whether the type `s` is a subtype of the type `t` (dart's `_TypeUniverse.isSubty
 order, over the kinds the runtime ports): reflexivity, nullability, left bottom, right top, right
 bottom, then Julia's Union, which dart has no kind of (julia/src/subtype.c:1419 subtype: a Union on the
 left where both members are, on the right where either is), then two classes' DataTypes by the class
-table, the one relation the instance check reads. dart's record rule (type.dart:1440, a Julia tuple
-type, subtype.c:1582) and Julia's Type{X} (subtype.c:1550) are not ported: a program holding such a type
-beside a run-time subtype test rejects, located, at link time, as it does a UnionAll. dart's function,
-FutureOr and type-parameter rules have no Julia kind.
+table, the one relation the instance check reads, two tuple types by dart's record rule (type.dart:1440,
+isRecordSubtype, Julia's subtype_tuple). Julia's Type{X} (subtype.c:1550) is not ported: a program
+holding one beside a run-time subtype test rejects, located, at link time, as it does a UnionAll.
+dart's function, FutureOr and type-parameter rules have no Julia kind.
 """
 @parity "sdk/lib/_internal/wasm/common/type.dart:1351 _TypeUniverse.isSubtype" function _TypeUniverse_is_subtype(s::Type, t::Type)::Bool
     # Reflexivity:
@@ -255,12 +286,17 @@ FutureOr and type-parameter rules have no Julia kind.
     # Julia's Nothing, past the nullabilities, is below Nothing and Any only, both answered above, and no
     # other type is below Nothing (julia/src/subtype.c:1419 subtype)
     (s === Nothing || t === Nothing) && return false
-    # two DataTypes by the class table: a class's DataType, never a Type{X} (subtype.c:1550) nor a tuple
-    # type (subtype.c:1582 subtype_tuple, dart's record rule, type.dart:1440): a program holding either
-    # beside a run-time subtype test rejects, located, at link time (src/julia/runtime/rtutils.jl
-    # check_run_time_type_values), as it does a UnionAll
-    jl_typetagis(s, DataType) && jl_typetagis(t, DataType) &&
-        return _TypeUniverse_is_interface_subtype(unsafe_cast(DataType, s), unsafe_cast(DataType, t))
+    # two DataTypes: tuple types by the record rule, any other by the class table; never a Type{X}
+    # (subtype.c:1550), which a program holding beside a run-time subtype test rejects, located, at link
+    # time (src/julia/runtime/rtutils.jl check_run_time_type_values), as it does a UnionAll
+    if jl_typetagis(s, DataType) && jl_typetagis(t, DataType)
+        local sd = unsafe_cast(DataType, s)
+        local td = unsafe_cast(DataType, t)
+        # two tuple types by the record rule (type.dart:1440, its isRecordSubtype); a tuple type is below
+        # no other DataType but Any, answered above, as the class table answers
+        jl_is_tuple_type(sd) && jl_is_tuple_type(td) && return _TypeUniverse_is_record_subtype(sd, td)
+        return _TypeUniverse_is_interface_subtype(sd, td)
+    end
     # a UnionAll, which that link-time check rejects in the program; here only one of WasmTarget's own
     # runtime: loud, never an answer
     Error__throw_with_current_stack_trace(ErrorException("WasmTarget: a run-time subtype test of a UnionAll, which Julia's subtype decides by its environment"))

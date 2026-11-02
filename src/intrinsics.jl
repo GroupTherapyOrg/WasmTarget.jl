@@ -557,6 +557,10 @@ end
             return generate_static_intrinsic(self, Val(:to_typeof), node.args[2:end])
         target.def.name === :jl_typetagis && target.def in methods(jl_typetagis) &&
             return generate_static_intrinsic(self, Val(:typetagis), target, node.args[2:end])
+        target.def.name === :jl_is_tuple_type && target.def in methods(jl_is_tuple_type) &&
+            return generate_static_intrinsic(self, Val(:is_tuple_type), node.args[2:end])
+        target.def.module === Runtime && target.def in methods(Runtime.Record__check_record_type) &&
+            return generate_static_intrinsic(self, Val(:check_record_type), node.args[2:end])
         local intrinsic = StaticIntrinsic_from_procedure(target)
         intrinsic === nothing && return nothing
         intrinsic === StaticIntrinsic_getID && return generate_static_intrinsic(self, Val(:get_id), node.args[2:end])
@@ -837,6 +841,94 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:unsafe_cast}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local operand = args[2]
     return translate_expression(self.code_gen, operand, type_of_exp(self, operand))
+end
+
+# jl_is_tuple_type (julia.h:1837, src/julia/runtime/rtutils.jl): the class the DataType denotes, its
+# classId field, against the ids of the closed world's tuple classes (each class a Tuple type, concrete
+# or not; a tuple record, TupleRecord, is none)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:is_tuple_type}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local at = "$(self.code_gen.enclosing_member): jl_is_tuple_type"
+    local info = get(t.class_info, DataType, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_is_tuple_type where DataType has no class info"), at)
+    local field = only(f for f in class_instance_fields(DataType, at) if f.name == "classId")
+    translate_expression(self.code_gen, only(args), info.non_nullable_type)
+    WasmBuilder.struct_get(self.code_gen.b[], info.struct_, t.field_index[field])
+    local ranges = Range[Range(Val(:_), class_id(c), class_id(c)) for c in t.classes[] if c.cls isa DataType && c.cls <: Tuple]
+    normalize(ranges)
+    emit_class_id_range_check(self.code_gen.b[], ranges)
+    return WasmBuilder.IR.NumType_i32
+end
+
+# Record._checkRecordType (record_patch.dart:15), dart's virtual call on a record: a class-id switch over
+# the record classes (src/julia/classes.jl TupleRecord, the open tuple type's classes), each class's arm
+# the body dart generates for its shape (record_class_generator.dart:547 _generateCheckRecordType):
+# `types` of another length answers false; each field, read from the record's struct, tested by
+# _isSubtype against `types`'s element at its index, the first failing answering false; else true. A
+# Julia tuple is positional, so no names are compared. Class ids count from 0 in the translator's list
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:check_record_type}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i32 = WasmBuilder.IR.NumType_i32
+    local at = "$(code_gen.enclosing_member): Record._checkRecordType"
+    local top_nn = t.top_type_non_nullable[]
+    local sv_info = get(t.class_info, Core.SimpleVector, nothing)
+    sv_info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Record._checkRecordType where Core.SimpleVector has no class info"), at)
+    local data = only(class_instance_fields(Core.SimpleVector, at))
+    local data_type = (translate_type_of_field(t, data)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+    local is_subtype_mi = is_subtype(t)
+    local type_param = signature_for_direct_call(t, is_subtype_mi).inputs[2]
+    local record = add_local(code_gen, top_nn)
+    local elements = add_local(code_gen, WasmBuilder.IR.RefType_def(data_type; nullable = false))
+    translate_expression(code_gen, args[1], top_nn)
+    WasmBuilder.local_set(b, record)
+    translate_expression(code_gen, args[2], sv_info.non_nullable_type)
+    WasmBuilder.struct_get(b, sv_info.struct_, t.field_index[data])
+    WasmBuilder.local_set(b, elements)
+    local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(concrete_class_ids(t, Tuple), concrete_classes(t, Tuple))]
+    WasmBuilder.local_get(b, record)
+    load_class_id(b, t, top_nn)
+    class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
+            local n = tuple_record_arity(cls)
+            n === nothing && reject!(Internal("$at: class $cls under the open tuple type is no record"), at)
+            local info = t.class_info[cls]
+            local fields = class_instance_fields(cls, at)
+            local arm = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
+            # if (types.length != shape.numFields) return false;
+            WasmBuilder.i32_const(b, 0)
+            WasmBuilder.local_get(b, elements)
+            WasmBuilder.array_len(b)
+            WasmBuilder.i32_const(b, n)
+            WasmBuilder.i32_ne(b)
+            WasmBuilder.br_if(b, arm)
+            WasmBuilder.drop(b)
+            local rec = n == 0 ? nothing : add_local(code_gen, info.non_nullable_type)
+            if rec !== nothing
+                WasmBuilder.local_get(b, record)
+                WasmBuilder.ref_cast(b, info.non_nullable_type)
+                WasmBuilder.local_set(b, rec)
+            end
+            # if (!_isSubtype($i, types[i])) return false;
+            for k in 1:n
+                WasmBuilder.i32_const(b, 0)
+                WasmBuilder.local_get(b, rec)
+                WasmBuilder.struct_get(b, info.struct_, t.field_index[fields[k]])
+                WasmBuilder.local_get(b, elements)
+                WasmBuilder.i32_const(b, k - 1)
+                WasmBuilder.array_get(b, data_type)
+                WasmBuilder.ref_cast(b, type_param::WasmBuilder.IR.RefType)
+                call_reference(t, is_subtype_mi, b)
+                WasmBuilder.i32_eqz(b)
+                WasmBuilder.br_if(b, arm)
+                WasmBuilder.drop(b)
+            end
+            # return true
+            WasmBuilder.i32_const(b, 1)
+            WasmBuilder.var"end"(b)   # arm
+            nothing
+        end, () -> WasmBuilder.unreachable(b))
+    return i32
 end
 
 # _InterfaceType.classId (type.dart:276), a DataType value's field (src/julia/classes.jl, the kinds'

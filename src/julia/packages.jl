@@ -11,9 +11,9 @@
 # Julia methods compiled into every closed world (RUNTIME_ROOTS, below)
 @quarantine "Julia has no per-file namespace; dart's patch libraries, the program's runtime (pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries), are a module" Core.Module module Runtime
 # ---- Runtime's imports, written by dev/skeleton.jl write ----
-import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..WasmI32, .._wasm_only, ..jl_to_typeof,
-       ..jl_typetagis, ..wasm_array_length, ..wasm_array_new, ..wasm_array_read,
-       ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_string_codeunit
+import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..WasmI32, .._wasm_only,
+       ..jl_is_tuple_type, ..jl_to_typeof, ..jl_typetagis, ..wasm_array_length, ..wasm_array_new,
+       ..wasm_array_read, ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_string_codeunit
 # ---- end of Runtime's imports ----
 end
 # ---- the runtime's roots, written by dev/skeleton.jl write ----
@@ -112,8 +112,8 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..class_instance_fields, ..class_is_abstract, ..class_is_set_field, ..class_superclass,
        ..closed_world_classes, ..concrete_class_ids, ..concrete_classes, ..divti3,
        ..egal_by_identity, ..field_may_be_null, ..field_selector_calls, ..holds_reference,
-       ..is_interface_class_type, ..jl_egal, ..jl_egal_host_references, ..jl_to_typeof,
-       ..jl_typetagis, ..modti3, ..nir_argument_type, ..nir_binding_is_constant,
+       ..is_interface_class_type, ..jl_egal, ..jl_egal_host_references, ..jl_is_tuple_type,
+       ..jl_to_typeof, ..jl_typetagis, ..modti3, ..nir_argument_type, ..nir_binding_is_constant,
        ..nir_binding_value, ..nir_body_of, ..nir_callee, ..nir_carries_data, ..nir_const_type,
        ..nir_foreign_import, ..nir_foreign_operands, ..nir_invoke_target, ..nir_method_nargs,
        ..nir_operands, ..nir_parameter_types, ..nir_runtime_member, ..nir_tuple_type,
