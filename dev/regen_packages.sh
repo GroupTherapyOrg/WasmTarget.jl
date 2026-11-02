@@ -10,6 +10,16 @@ julia --project=. --startup-file=no -e 'include(joinpath(pwd(), "dev", "skeleton
 normpath(S.ROOT) == normpath(pwd() * "/") || error("dev/skeleton.jl reads $(S.ROOT), not this tree")
 t = S.packages_text(); t == read(S.PACKAGES, String) || write(S.PACKAGES, t)'
 if ! git diff --quiet -- src/julia/packages.jl; then
-  git commit -q --amend --no-edit -- src/julia/packages.jl
-  echo "ship: src/julia/packages.jl's generated blocks rewritten into $(git log -1 --format=%h)"
+  if git diff --quiet HEAD~1 -- .; then
+    # the regenerated tree is the parent's: the commit's change is already upstream under another hash (a stale
+    # re-ship of a landed commit), so the commit is dropped, as the rebase's --empty=drop drops an empty pick; an
+    # amend would refuse to make it empty and leave the tree dirty (wt3-codegen, 14:38 and 14:42)
+    git reset -q --hard HEAD~1
+    echo "ship: after src/julia/packages.jl's regeneration the commit changes nothing over origin; dropped"
+    # a distinct status, so the rebase's --exec runs no check and no push for a pick that is gone (march-monitor-a)
+    exit 3
+  else
+    git commit -q --amend --no-edit -- src/julia/packages.jl
+    echo "ship: src/julia/packages.jl's generated blocks rewritten into $(git log -1 --format=%h)"
+  fi
 fi
