@@ -201,8 +201,11 @@ gi() { awk '/instructions retired/ { printf "%d", $1 / 1e9 }' ".wtd/$1.time"; }
 # the ratchet's git: A54E1), while its CPU seconds hold them all; so a stage is judged at the larger of its
 # instructions at the measured rate and half its CPU seconds, an efficiency core's worst slowdown
 ps_of() { awk -v r="$2" '/instructions retired/ { g = $1 / 1e9 / r } NR == 1 { c = ($3 + $5) / 2 } END { printf "%d", (g > c ? g : c) }' ".wtd/$1.time"; }
-# the load at the shards' rate, from its tree's instructions (dev/tree_instructions.jl)
-c_load=$(awk -v r="$RATE_SRC" '{ printf "%d", $1 / r }' .wtd/load.gi); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
+# the load at the shards' rate, from its tree's instructions (dev/tree_instructions.jl), or its CPU seconds where they
+# are more. A STOPGAP (D6, D20): the tree is counted exactly, but Apple's counters read up to about a third fewer
+# instructions on an efficiency core, so a load on a busy machine could read low and pass on noise (D9, D17); CPU
+# seconds read high there, never low. Its exit: the commit that settles the efficiency-core skew for every stage
+c_load=$(awk -v r="$RATE_SRC" -v c="$(cpu load)" '{ g = $1 / r; printf "%d", (g > c ? g : c) }' .wtd/load.gi); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
 for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
 echo "check: ${path} s on the critical path (load ${c_load} from $(awk '{ printf "%d", $1 }' .wtd/load.gi) G, ratchet ${p_ratchet}, src shards${shards}, from G instructions $(gi ratchet)$(for k in $(seq 1 $SHARDS); do printf ' %s' "$(gi "src_tests.$k")"; done)); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"

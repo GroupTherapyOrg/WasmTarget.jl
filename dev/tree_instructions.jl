@@ -14,7 +14,8 @@
 # ri_instructions (rusage_info_v4, the counter /usr/bin/time -l reports as "instructions retired") in its
 # destructor, which exit() runs after everything else the process does, Julia's writing of the package image
 # included (jl_atexit_hook writes it, then exit), and writes it to a file named by its pid. The tree's count is
-# their sum, exact for every process that exits by exit(); one killed by a signal writes none, and the command fails.
+# their sum, exact for every process that exits by exit(). The library is built by clang into the tree's .wtd at check
+# time from COUNTER_C below, its file named by the source's hash, never a checked-in binary; one killed by a signal writes none, and the command fails.
 # A protected system binary (taskpolicy, git) has the loader strip DYLD_ variables, so it and what it starts are not
 # counted, a few milliseconds in the load. A process reports only when its binary admits inserted libraries: julia's hardened runtime carries
 # com.apple.security.cs.allow-dyld-environment-variables, and the plant fails if a julia grandchild goes uncounted.
