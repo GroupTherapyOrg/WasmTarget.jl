@@ -80,6 +80,28 @@ end
     return __multi3(b, lhs, rhs)
 end
 
+# SDIV, SREM, UDIV and UREM: SDIVREM and UDIVREM are Expand on wasm (WebAssemblyISelLowering.cpp:176),
+# not Custom, so each is the libcall RTLIB names for an i128 (SDIV_I128, SREM_I128, UDIV_I128,
+# UREM_I128: compiler-rt's __divti3, __modti3, __udivti3 and __umodti3), made by `make_lib_call`
+# (TargetLowering::makeLibCall: the caller's call of the routine and SplitInteger of its result). A
+# constant divisor of UDIV and UREM first tries TLI.expandDIVREMByConstant, which needs MULHU or
+# UMUL_LOHI legal or custom on the half (TargetLowering.cpp:8583), neither on wasm, so it declines
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:5086 DAGTypeLegalizer::ExpandIntRes_SDIV" function expand_int_res_sdiv(ops::Tuple{Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}},Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}}, make_lib_call::Function)::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    return make_lib_call(:SDIV_I128, ops)
+end
+
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:5388 DAGTypeLegalizer::ExpandIntRes_SREM" function expand_int_res_srem(ops::Tuple{Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}},Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}}, make_lib_call::Function)::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    return make_lib_call(:SREM_I128, ops)
+end
+
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:5549 DAGTypeLegalizer::ExpandIntRes_UDIV" function expand_int_res_udiv(ops::Tuple{Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}},Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}}, make_lib_call::Function)::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    return make_lib_call(:UDIV_I128, ops)
+end
+
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:5584 DAGTypeLegalizer::ExpandIntRes_UREM" function expand_int_res_urem(ops::Tuple{Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}},Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}}, make_lib_call::Function)::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    return make_lib_call(:UREM_I128, ops)
+end
+
 # SHL, SRL and SRA. A constant amount: ExpandShiftByConstant. ExpandShiftWithKnownAmountBit reads the
 # amount's known bits (DAG.computeKnownBits), which Julia's IR does not compute; WasmTarget knows an
 # amount only as a literal, the branch above. SHL_PARTS, SRL_PARTS and SRA_PARTS are Expand on wasm,

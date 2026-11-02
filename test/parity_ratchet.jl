@@ -1013,6 +1013,10 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
          pc.symbol == "__multi3" && pc.file == "compiler-rt/lib/builtins/multi3.c") ||
             push!(out, "negative missed: a compiler-rt anchor's parts misread")
         parse("compiler-rt/lib/builtins/multi3.cpp:40 __multi3") === nothing || push!(out, "negative missed: a compiler-rt anchor on a .cpp file reads")
+        local pi = parse("compiler-rt/lib/builtins/int_div_impl.inc:73 __divXi3")
+        (pi !== nothing && pi.pin === :llvm && pi.file == "compiler-rt/lib/builtins/int_div_impl.inc") ||
+            push!(out, "negative missed: a compiler-rt anchor on the .inc its units include misread")
+        parse("llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.inc:1 X") === nothing || push!(out, "negative missed: an LLVM anchor on a .inc file reads")
         occursin(getfield(wt, :LLVM_PIN), _text(joinpath(ROOT, "dev", "PARITY_MASTER.md"))) ||
             push!(out, "src/julia/parity.jl's LLVM_PIN is not the commit dev/PARITY_MASTER.md pins for llvm-project")
         # the Julia pin (D45): Julia's own C sources at a planted julia checkout, each C form its anchors

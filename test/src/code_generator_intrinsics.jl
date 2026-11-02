@@ -299,9 +299,22 @@ function literals(a::Int64, b::Int64)
         73 * halves(x >> 100) + 79 * uhalves(u >>> 3) + 83 * uhalves(u >>> 64) + 89 * uhalves(u >>> 100) +
         97 * halves(x << 200) + 101 * halves(x >> 200)
 end
+# division and remainder, signed and unsigned (compiler-rt's __divti3, __modti3, __udivti3, __umodti3
+# in the runtime), a divisor of one half and of both, negative operands, literal divisors, Julia's
+# DivideError at 0 and at typemin ÷ -1, and rem(typemin, -1), which Julia answers 0
+function divmod(a::Int64, d::Int64)
+    local x = BIG * Int128(a) + NEARTOP
+    local y = d == 7 ? BIG + Int128(3) : d == 8 ? typemin(Int128) : Int128(d)
+    local u = reinterpret(UInt128, x)
+    local v = reinterpret(UInt128, y * Int128(d))
+    return halves(div(x, y)) + 3 * halves(rem(x, y)) + 5 * uhalves(div(u, v | UInt128(1))) + 7 * uhalves(rem(u, v | UInt128(1))) +
+        11 * halves(div(x, Int128(10))) + 13 * uhalves(rem(u, UInt128(1) << 70)) +
+        17 * halves(rem(d == 9 ? typemin(Int128) : x, d == 9 ? Int128(-1) : y)) +
+        19 * halves(div(d == 9 ? typemin(Int128) : x, d == 9 ? Int128(-1) : y))
+end
 end
 
-@testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions, equality, arithmetic, compares, product and shifts" begin
+@testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions, equality, arithmetic, compares, product, shifts and division" begin
     local bytes = W.compile(Int128Cases.wide, (Int64,); optimize = false)
     queue_native!("wide", bytes, Int128Cases.wide, [(n,) for n in Int64[0, 5, -3, 300, typemax(Int64), typemin(Int64)]])
     local abytes = W.compile(Int128Cases.arith, (Int64, Int64); optimize = false)
@@ -312,6 +325,10 @@ end
     queue_native!("mulshift", mbytes, Int128Cases.mulshift, [(a, n) for a in Int64[0, 1, -1, 3, typemax(Int64), typemin(Int64)] for n in amounts])
     local lbytes = W.compile(Int128Cases.literals, (Int64, Int64); optimize = false)
     queue_native!("literals", lbytes, Int128Cases.literals, [(a, b) for a in edge for b in edge])
+    local dbytes = W.compile(Int128Cases.divmod, (Int64, Int64); optimize = false)
+    local dcases = [(a, d) for a in Int64[0, 1, -1, 5, typemax(Int64), typemin(Int64)] for d in Int64[1, -1, 3, -10, 7, 8, typemax(Int64), 0, 9]]
+    @test count(c -> WTRunner.native_answer(Int128Cases.divmod, c) == WTRunner.Throws(DivideError), dcases) >= 7
+    append!(NATIVE_RUNS, [WTRunner.RunCase("divmod$c", dbytes, c, WTRunner.native_answer(Int128Cases.divmod, c)) for c in dcases])
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin

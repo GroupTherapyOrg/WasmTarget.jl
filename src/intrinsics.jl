@@ -1995,6 +1995,11 @@ end
 #     ExpandIntRes_Logical
 #   mul_int (:1505 CreateMul): ExpandIntRes_MUL, compiler-rt's __multi3 in place; the product reads no
 #     operand order, so visitMUL's canonicalization changes nothing
+#   sdiv_int, udiv_int, srem_int, urem_int (:1506-:1509 CreateSDiv and its kin): ExpandIntRes_SDIV and
+#     its kin, the libcall into compiler-rt's routine, the runtime's port (src/julia/runtime/rtutils.jl);
+#     their checked forms past Julia's checks first: checked_sdiv_int's divisor valid where y != 0 and
+#     (y != -1 or x != typemin) (:1594), the others' where y != 0 (:1606, :1615, :1096
+#     emit_checked_srem_int), else DivideError, and checked_srem_int's divisor of -1 answering 0
 #   shl_int, lshr_int, ashr_int (:1653, :1666, :1679): the shift of x by y converted to 128 bits
 #     (uint_cnvt), ExpandIntRes_Shift, selected (SplitRes_Select, over the halves) by y >= 128, in y's
 #     type, against 0, or x's arithmetic shift by 127 for ashr_int; a literal y decides the select,
@@ -2140,6 +2145,68 @@ end
         return make(T_, LLVM.expand_int_res_logical(b, :XOR, expanded(args[1]), (Int64(-1), Int64(-1))))
     elseif length(args) == 2 && f === I.mul_int
         return make(T_, LLVM.expand_int_res_mul(b, expanded(args[1]), expanded(args[2])))
+    elseif length(args) == 2 && (f === I.checked_sdiv_int || f === I.checked_srem_int || f === I.checked_udiv_int || f === I.checked_urem_int ||
+                                 f === I.sdiv_int || f === I.srem_int || f === I.udiv_int || f === I.urem_int)
+        local signed = f === I.checked_sdiv_int || f === I.checked_srem_int || f === I.sdiv_int || f === I.srem_int
+        local quotient = f === I.checked_sdiv_int || f === I.checked_udiv_int || f === I.sdiv_int || f === I.udiv_int
+        local checked = f === I.checked_sdiv_int || f === I.checked_srem_int || f === I.checked_udiv_int || f === I.checked_urem_int
+        local RT = signed ? Int128 : UInt128
+        local x = expanded(args[1])
+        local y = expanded(args[2])
+        # makeLibCall: each operand a value of the routine's class over the same halves, the routine
+        # RTLIB names (WebAssemblyRuntimeLibcallSignatures.cpp:124 SDIV_I128, :129 UDIV_I128, :134
+        # SREM_I128, :139 UREM_I128), its result split into its halves (SplitInteger)
+        local make_lib_call(lc::Symbol, ops::Tuple{Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}},Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}}) = begin
+            local routine = lc === :SDIV_I128 ? divti3 : lc === :SREM_I128 ? modti3 : lc === :UDIV_I128 ? udivti3 : lc === :UREM_I128 ? umodti3 :
+                reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: $lc is no 128-bit division libcall"), at)
+            make(RT, ops[1]); make(RT, ops[2])
+            call(code_gen, nir_runtime_member(t.component, routine, at))
+            local r = add_local(code_gen, info_of(RT).non_nullable_type)
+            WasmBuilder.local_set(b, r)
+            local lo = add_local(code_gen, i64); local hi = add_local(code_gen, i64)
+            local (l, h) = fields(RT)
+            WasmBuilder.local_get(b, r); WasmBuilder.struct_get(b, info_of(RT).struct_, l); WasmBuilder.local_set(b, lo)
+            WasmBuilder.local_get(b, r); WasmBuilder.struct_get(b, info_of(RT).struct_, h); WasmBuilder.local_set(b, hi)
+            (lo, hi)
+        end
+        local divide() = signed ? (quotient ? LLVM.expand_int_res_sdiv((x, y), make_lib_call) : LLVM.expand_int_res_srem((x, y), make_lib_call)) :
+                                  (quotient ? LLVM.expand_int_res_udiv((x, y), make_lib_call) : LLVM.expand_int_res_urem((x, y), make_lib_call))
+        # raise_exception_unless (julia/src/cgutils.cpp:1586): Julia's DivideError where the condition fails
+        local raise_unless(cond::WasmBuilder.IR.Local) = begin
+            WasmBuilder.local_get(b, cond); WasmBuilder.i32_eqz(b)
+            WasmBuilder.if_(b)
+            call(code_gen, nir_runtime_member(t.component, throw_divide_error, at))
+            WasmBuilder.unreachable(b)
+            WasmBuilder.var"end"(b)
+        end
+        if f === I.checked_sdiv_int
+            # intrinsics.cpp:1594: the divisor valid where y != 0 and (y != -1 or x != typemin)
+            local nz = LLVM.expand_int_op_setcc(b, y, (Int64(0), Int64(0)), :SETNE)
+            local nm1 = LLVM.expand_int_op_setcc(b, y, (Int64(-1), Int64(-1)), :SETNE)
+            local nmin = LLVM.expand_int_op_setcc(b, x, LLVM.expand_int_res_constant(typemin(Int128)), :SETNE)
+            local valid = add_local(code_gen, i32)
+            WasmBuilder.local_get(b, nz); WasmBuilder.local_get(b, nm1); WasmBuilder.local_get(b, nmin)
+            WasmBuilder.i32_or(b); WasmBuilder.i32_and(b); WasmBuilder.local_set(b, valid)
+            raise_unless(valid)
+        elseif checked
+            # :1606 checked_udiv_int, :1615 checked_urem_int and :1096 emit_checked_srem_int: y != 0
+            raise_unless(LLVM.expand_int_op_setcc(b, y, (Int64(0), Int64(0)), :SETNE))
+        end
+        if f === I.checked_srem_int
+            # emit_checked_srem_int: a divisor of -1 answers 0 (rem(typemin, -1) is undefined in LLVM),
+            # any other the SRem, the two joined by a phi
+            local m1 = LLVM.expand_int_op_setcc(b, y, (Int64(-1), Int64(-1)), :SETEQ)
+            local rl = add_local(code_gen, i64); local rh = add_local(code_gen, i64)
+            WasmBuilder.local_get(b, m1)
+            WasmBuilder.if_(b)
+            WasmBuilder.i64_const(b, 0); WasmBuilder.local_set(b, rl); WasmBuilder.i64_const(b, 0); WasmBuilder.local_set(b, rh)
+            WasmBuilder.else_(b)
+            local sr = divide()
+            sd_get(b, sr[1]); WasmBuilder.local_set(b, rl); sd_get(b, sr[2]); WasmBuilder.local_set(b, rh)
+            WasmBuilder.var"end"(b)
+            return make(T_, (rl, rh))
+        end
+        return make(T_, divide())
     end
     return nothing
 end

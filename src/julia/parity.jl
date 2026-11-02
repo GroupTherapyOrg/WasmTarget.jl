@@ -1174,7 +1174,7 @@ end
 
 # an anchor of either pin: a dart file under pkg/ (1), or an LLVM, compiler-rt or Julia unit (2) and its
 # extension (3); its line (4); its symbol (5), dart's X or X.m, or C++'s X or X::m
-@quarantine "an anchor names a pinned file, a line and the symbol declared there, read by one regex, as dart's debug adapter reads a stack frame's file and line from a line of text (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: an anchor names a declaration at a pin, not a frame of a running program" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia|compiler-rt)/[\w/]+)\.(cpp|c|h|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
+@quarantine "an anchor names a pinned file, a line and the symbol declared there, read by one regex, as dart's debug adapter reads a stack frame's file and line from a line of text (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: an anchor names a declaration at a pin, not a frame of a running program" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia|compiler-rt)/[\w/]+)\.(cpp|c|h|inc|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
 
 """
     Anchor
@@ -1200,7 +1200,7 @@ end
 
 The parts of `s`, an anchor of either pin; nothing when it reads as neither
 "<file>.dart:<line> <X or X.m>" nor "llvm/<unit>.<cpp|h>:<line> <X or X::m>" nor
-"compiler-rt/<unit>.<c|h>:<line> <X>"."""
+"compiler-rt/<unit>.<c|h|inc>:<line> <X>"."""
 @quarantine "an anchor's forms, one per pin, read by one regex into its file, line and symbol, as dart's debug adapter parses a stack frame's location from its pattern's match (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:99 _parseStackFrame)); Julia differs: a part that does not read is a refusal, not a frame skipped" Base.match function parse_anchor(s::AbstractString)::Union{Anchor,Nothing}
     local m = match(ANCHOR_RX, s)
     m === nothing && return nothing
@@ -1218,8 +1218,8 @@ The parts of `s`, an anchor of either pin; nothing when it reads as neither
     if startswith(m[2], "julia/")
         return Anchor(:julia, String(m[2]), m[2][length("julia/")+1:end] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
     end
-    # LLVM's units are C++, compiler-rt's builtins C, both at the llvm pin
-    (startswith(m[2], "compiler-rt/") ? m[3] in ("c", "h") : m[3] in ("cpp", "h")) || return nothing
+    # LLVM's units are C++, compiler-rt's builtins C (an .inc a file its units include), both at the llvm pin
+    (startswith(m[2], "compiler-rt/") ? m[3] in ("c", "h", "inc") : m[3] in ("cpp", "h")) || return nothing
     return Anchor(:llvm, String(m[2]), m[2] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
 end
 
@@ -1443,7 +1443,7 @@ end
 # adds a line, so the list only shrinks (D20).
 
 # the anchors a reason cites, each form of the pins'
-@quarantine "an anchor in a reason's prose is found by its pins' forms, as dart's debug adapter finds a stack frame's location inside a line of output (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:35 parseDartStackFrame)), read with a regex; Julia differs: every anchor of the prose is read, not the first" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia|compiler-rt)/[\w/]+\.(?:cpp|c|h|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
+@quarantine "an anchor in a reason's prose is found by its pins' forms, as dart's debug adapter finds a stack frame's location inside a line of output (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:35 parseDartStackFrame)), read with a regex; Julia differs: every anchor of the prose is read, not the first" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia|compiler-rt)/[\w/]+\.(?:cpp|c|h|inc|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
 @quarantine "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:\.(?:[A-Za-z_$][\w$]*|\[\]=?|[-+*/%<>=~&|^]+))?))?"
 @quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*!?(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
 
@@ -1835,7 +1835,7 @@ end
     anchor isa String || refuse("the anchor is not a string literal")
     local a = parse_anchor(anchor)
     a === nothing &&
-        refuse("the anchor $(repr(anchor)) reads neither \"<file>.dart:<line> <Symbol>\" nor \"llvm/<unit>.<cpp|h>:<line> <X or X::m>\" nor \"compiler-rt/<unit>.<c|h>:<line> <X>\" nor \"julia/<unit>.<c|cpp|h>:<line> <X>\"")
+        refuse("the anchor $(repr(anchor)) reads neither \"<file>.dart:<line> <Symbol>\" nor \"llvm/<unit>.<cpp|h>:<line> <X or X::m>\" nor \"compiler-rt/<unit>.<c|h|inc>:<line> <X>\" nor \"julia/<unit>.<c|cpp|h>:<line> <X>\"")
     a.pin === :dart ? (a.unit in DART_FILES || a.unit in RUNTIME_FILES || refuse("the anchor's file $(a.unit) is no file of the pin tables DART_FILES and RUNTIME_FILES")) :
                       (a.unit in _c_pin_units(a.pin) || refuse("the anchor's unit $(a.unit) is no unit of the $(a.pin === :julia ? "Julia pin table JULIA_FILES" : "LLVM pin table LLVM_FILES")"))
     local file = string(something(source.file, :none))

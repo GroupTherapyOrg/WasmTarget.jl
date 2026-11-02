@@ -92,8 +92,10 @@ end
             @test r isa W.RejectionError && !occursin("outputOrVoid", string(r.rejection))
         elseif st isa W.NirNothing
             @test r === nothing
-        elseif st isa Union{W.NirCall, W.NirInvoke, W.NirNew, W.NirGlobalRead, W.NirForeignCall}
+        elseif st isa Union{W.NirCall, W.NirInvoke, W.NirNew, W.NirGlobalRead, W.NirForeignCall, W.NirBoundscheck}
             # a used value is a local declared with its initializer; an unused one an expression statement
+            # (Julia's bounds-check flag too, a Bool constant translateExpression gives: the runtime's
+            # 128-bit division routines hold one)
             @test r.rejection isa W.Unported && occursin("AstCodeGenerator.b", r.rejection.anchor)
             # the unused one is translated at the void marker: its expression's own visitor, which
             # stops at the first piece not yet given here (a constant, a parameter, an allocation)

@@ -79,6 +79,137 @@ Natively Julia's `===`.
 @quarantine "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK), raising TypeError naming the builtin, as jl_f_typeassert does" Core.TypeError @noinline jl_typechk_type(fname::Symbol, @nospecialize(t::Any))::Type =
     jl_typetagis(t, Type) ? Runtime.unsafe_cast(Type, t) : Runtime.Error__throw_with_current_stack_trace(TypeError(fname, "", Type, t))
 
+# compiler-rt's 128-bit division and remainder (compiler-rt/lib/builtins at the llvm pin), the libcalls
+# LLVM's WebAssembly backend makes for an i128 SDIV, SREM, UDIV and UREM (src/llvm/legalize_integer_types.jl,
+# ExpandIntRes_SDIV and its kin: wasm has no UDIVREM of an i128), each ported over WasmTarget's 128-bit
+# integers (src/intrinsics.jl's int128 arm) and their 64-bit halves, utwords' s.low and s.high, a
+# remainder returned beside the quotient where the C stores it through a pointer. Julia's checks run
+# first (checked_sdiv_int and its kin raise DivideError), so no divisor is 0
+
+# The 128-bit dividend (u1, u0) divided by v where the quotient fits in 64 bits, and the remainder
+# (Hacker's Delight's divlu: Knuth's Algorithm D in 32-bit digits)
+@quarantine "compiler-rt/lib/builtins/udivmodti4.c:23 udiv128by64to64default divides a 128-bit dividend by a 64-bit divisor in 32-bit digits, Knuth's Algorithm D" Core.UInt64 @noinline function udiv128by64to64default(u1::UInt64, u0::UInt64, v::UInt64)::Tuple{UInt64,UInt64}
+    local n_udword_bits = 64
+    local b = UInt64(1) << (n_udword_bits ÷ 2)   # Number base (32 bits)
+    local un64::UInt64 = u1; local un10::UInt64 = u0
+    # Shift amount for normalization
+    local s = leading_zeros(v)
+    if s > 0
+        # Normalize the divisor
+        v = v << s
+        un64 = (u1 << s) | (u0 >> (n_udword_bits - s))
+        un10 = u0 << s   # Shift dividend left
+    else
+        # Avoid undefined behavior of (u0 >> 64)
+        un64 = u1
+        un10 = u0
+    end
+    # Break divisor up into two 32-bit digits
+    local vn1 = v >> (n_udword_bits ÷ 2)
+    local vn0 = v & 0xFFFFFFFF
+    # Break right half of dividend into two digits
+    local un1 = un10 >> (n_udword_bits ÷ 2)
+    local un0 = un10 & 0xFFFFFFFF
+    # Compute the first quotient digit, q1
+    local q1 = div(un64, vn1)
+    local rhat = un64 - q1 * vn1
+    # q1 has at most error 2. No more than 2 iterations
+    while q1 >= b || q1 * vn0 > b * rhat + un1
+        q1 = q1 - UInt64(1)
+        rhat = rhat + vn1
+        rhat >= b && break
+    end
+    local un21 = un64 * b + un1 - q1 * v
+    # Compute the second quotient digit
+    local q0 = div(un21, vn1)
+    rhat = un21 - q0 * vn1
+    # q0 has at most error 2. No more than 2 iterations
+    while q0 >= b || q0 * vn0 > b * rhat + un0
+        q0 = q0 - UInt64(1)
+        rhat = rhat + vn1
+        rhat >= b && break
+    end
+    return (q1 * b + q0, (un21 * b + un0 - q0 * v) >> s)
+end
+
+# The 128-by-64 step: x86-64's divq where the target is x86-64, udiv128by64to64default elsewhere, wasm among them
+@quarantine "compiler-rt/lib/builtins/udivmodti4.c:84 udiv128by64to64 takes udiv128by64to64default on a target other than x86-64" Core.UInt64 @noinline udiv128by64to64(u1::UInt64, u0::UInt64, v::UInt64)::Tuple{UInt64,UInt64} =
+    udiv128by64to64default(u1, u0, v)
+
+# a / b and a % b
+@quarantine "compiler-rt/lib/builtins/udivmodti4.c:100 __udivmodti4 is the quotient and remainder of two 128-bit integers, a 64-bit divisor through the 128-by-64 step, a wider one by shift and subtract" Core.UInt128 @noinline function udivmodti4(a::UInt128, b::UInt128)::Tuple{UInt128,UInt128}
+    local n_utword_bits = 128
+    local dividend = a
+    local divisor = b
+    local quotient_low = UInt64(0); local quotient_high = UInt64(0); local remainder_low = UInt64(0)
+    if divisor > dividend
+        return (UInt128(0), dividend)
+    end
+    local dividend_low = dividend % UInt64
+    local dividend_high = (dividend >> 64) % UInt64
+    local divisor_low = divisor % UInt64
+    local divisor_high = (divisor >> 64) % UInt64
+    # When the divisor fits in 64 bits, we can use an optimized path
+    if divisor_high == UInt64(0)
+        if dividend_high < divisor_low
+            # The result fits in 64 bits
+            (quotient_low, remainder_low) = udiv128by64to64(dividend_high, dividend_low, divisor_low)
+            quotient_high = UInt64(0)
+        else
+            # First, divide with the high part to get the remainder in dividend.s.high. After that
+            # dividend.s.high < divisor.s.low
+            quotient_high = div(dividend_high, divisor_low)
+            dividend_high = rem(dividend_high, divisor_low)
+            (quotient_low, remainder_low) = udiv128by64to64(dividend_high, dividend_low, divisor_low)
+        end
+        # remainder.s.high = 0
+        return ((UInt128(quotient_high) << 64) | UInt128(quotient_low), UInt128(remainder_low))
+    end
+    # 0 <= shift <= 63
+    local shift = leading_zeros(divisor_high) - leading_zeros(dividend_high)
+    divisor <<= shift
+    quotient_high = UInt64(0)
+    quotient_low = UInt64(0)
+    while shift >= 0
+        quotient_low <<= 1
+        # Branch free version of: if (dividend.all >= divisor.all) dividend.all -= divisor.all, carry = 1
+        local s = reinterpret(UInt128, reinterpret(Int128, divisor - dividend - UInt128(1)) >> (n_utword_bits - 1))
+        quotient_low |= (s % UInt64) & UInt64(1)
+        dividend -= divisor & s
+        divisor >>= 1
+        shift -= 1
+    end
+    return ((UInt128(quotient_high) << 64) | UInt128(quotient_low), dividend)
+end
+
+# a / b
+@quarantine "compiler-rt/lib/builtins/udivti3.c:19 __udivti3 is __udivmodti4's quotient" Core.UInt128 @noinline udivti3(a::UInt128, b::UInt128)::UInt128 = udivmodti4(a, b)[1]
+
+# a % b
+@quarantine "compiler-rt/lib/builtins/umodti3.c:19 __umodti3 is __udivmodti4's remainder" Core.UInt128 @noinline umodti3(a::UInt128, b::UInt128)::UInt128 = udivmodti4(a, b)[2]
+
+# a / b, signed: the magnitudes' quotient, negated where the signs differ
+@quarantine "compiler-rt/lib/builtins/divti3.c:24 __divti3 returns compiler-rt/lib/builtins/int_div_impl.inc:73 __divXi3, the magnitudes' quotient (COMPUTE_UDIV, __udivmodti4's) with the operands' signs' xor" Core.Int128 @noinline function divti3(a::Int128, b::Int128)::Int128
+    local N = 127
+    local s_a = a >> N   # s_a = a < 0 ? -1 : 0
+    local s_b = b >> N   # s_b = b < 0 ? -1 : 0
+    local a_u = reinterpret(UInt128, a ⊻ s_a) + reinterpret(UInt128, -s_a)   # negate if s_a == -1
+    local b_u = reinterpret(UInt128, b ⊻ s_b) + reinterpret(UInt128, -s_b)   # negate if s_b == -1
+    s_a ⊻= s_b   # sign of quotient
+    return reinterpret(Int128, (udivmodti4(a_u, b_u)[1] ⊻ reinterpret(UInt128, s_a)) + reinterpret(UInt128, -s_a))   # negate if s_a == -1
+end
+
+# a % b, signed: the magnitudes' remainder, the dividend's sign
+@quarantine "compiler-rt/lib/builtins/modti3.c:24 __modti3 returns compiler-rt/lib/builtins/int_div_impl.inc:85 __modXi3, the magnitudes' remainder (ASSIGN_UMOD, __udivmodti4's) with the dividend's sign" Core.Int128 @noinline function modti3(a::Int128, b::Int128)::Int128
+    local N = 127
+    local s = b >> N   # s = b < 0 ? -1 : 0
+    local b_u = reinterpret(UInt128, b ⊻ s) + reinterpret(UInt128, -s)   # negate if s == -1
+    s = a >> N   # s = a < 0 ? -1 : 0
+    local a_u = reinterpret(UInt128, a ⊻ s) + reinterpret(UInt128, -s)   # negate if s == -1
+    local res = udivmodti4(a_u, b_u)[2]
+    return reinterpret(Int128, (res ⊻ reinterpret(UInt128, s)) + reinterpret(UInt128, -s))   # negate if s == -1
+end
+
 # ---- end of Julia's runtime ----
 
 # Julia's test of a value's kind by its type tag (julia.h:136 jl_typetagis, as jl_is_datatype and
