@@ -5,8 +5,9 @@
 Whether two host references are the same JS value (dart's `bool areEqualInJS(WasmExternRef? l,
 WasmExternRef? r) => JS<bool>("(l, r) => l === r", l, r)`): JS's strict equality, the inline JS a
 foreign call to the interop module hands its host (src/julia/runtime/rtutils.jl JS_INTEROP_LIBRARY),
-its result the JS boolean as an i32. jl_egal compares a field holding a host reference by it, as dart's
-identical compares two JS values (no eqref holds an externref). dart's `WasmExternRef?` crosses as the
+its result the JS boolean as an i32. It is how a field holding a host reference is to be compared by
+jl_egal (no eqref holds an externref), as dart compares two JS values; jl_egal's arm for such a field
+does not call it yet (src/intrinsics.jl, its egal arm, wt3-memory's). dart's `WasmExternRef?` crosses as the
 nullable externref (nir_foreign_param_type), Julia's `nothing` the null.
 """
 @parity "sdk/lib/_internal/wasm/js_common/js_helper.dart:151 areEqualInJS" are_equal_in_js(l::WasmExternRef, r::WasmExternRef)::Bool =

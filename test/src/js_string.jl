@@ -116,29 +116,23 @@ forged(x::Int64) = (ccall(("s => (", "dart2wasm"), Nothing, ()); x)
     local e = try; W.compile(forged, (Int64,)); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.ProgramError && occursin("dart:_js_helper", sprint(showerror, e))
     # two inline JS sites written on one line of a runtime port: Julia's debug info gives no column, so
-    # one name would run the first's JS for both; refused at the site, located, never the first's code
-    Core.eval(W.Runtime, :(two_on_one_line() = (ccall(("() => 1", "dart2wasm"), Nothing, ()); ccall(("() => 2", "dart2wasm"), Nothing, ()); nothing)))
-    local tw = W.build_nir(W.check_subset(getglobal(W.Runtime, :two_on_one_line), (), "print_patch"), "print_patch")
-    local twe = try; W.nir_js_sites(tw, tw.entry); nothing; catch x; x; end
+    # one name would run the first's JS for both; the compile refuses at the site, located, never the
+    # first's code
+    Core.eval(W.Runtime, :(@noinline two_on_one_line() = (ccall(("() => 1", "dart2wasm"), Nothing, ()); ccall(("() => 2", "dart2wasm"), Nothing, ()); nothing)))
+    local one_body = (x::Int64) -> (W.Runtime.two_on_one_line(); x)
+    local twe = try; D.compile(opts, W.check_subset(one_body, (Int64,), "print_patch")); nothing; catch x; x; end
     @test twe isa W.RejectionError && twe.rejection isa W.Internal && occursin("two inline JS sites", twe.rejection.site) &&
           occursin("() => 1", twe.rejection.site) && occursin("() => 2", twe.rejection.site)
     # the same line's two sites inlined into two callers, each keeping one (its branch pruned): each body
-    # holds one site, so generateJsMethods, which writes one code per site across the world, refuses the
-    # second code, located, never the first's JS for both
+    # holds one site, so the compile's generateJsMethods, which writes one code per site across the world,
+    # refuses the second code, located, never the first's JS for both
     Core.eval(W.Runtime, :(@inline one_line_of_two(b::Bool) = b ? ccall(("() => 3", "dart2wasm"), Nothing, ()) : ccall(("() => 4", "dart2wasm"), Nothing, ())))
     Core.eval(W.Runtime, :(@noinline keeps_first() = (one_line_of_two(true); nothing)))
     Core.eval(W.Runtime, :(@noinline keeps_second() = (one_line_of_two(false); nothing)))
     local both = (x::Int64) -> (W.Runtime.keeps_first(); W.Runtime.keeps_second(); x)
     local bw = W.build_nir(W.check_subset(both, (Int64,), "print_patch"), "print_patch")
-    local keepers = [b.ci.def for b in bw if b.ci.def.def.name in (:keeps_first, :keeps_second)]
-    @test length(keepers) == 2 && all(mi -> length(W.nir_js_sites(bw, mi)) == 1, keepers)
-    local bnamer = D.InteropMemberNamer(bw, D.Namer(), D.TranslatorOptions())
-    # each keeper's import named, as the code generator names it at the call (both sites one key, one name)
-    for mi in keepers
-        local kb = only(b for b in bw if b.ci.def === mi)
-        D.get_import_name(bnamer._interop_helper_member_namer, W.nir_foreign_import(kb, only(st for st in kb.stmts if st isa W.NirForeignCall)), mi)
-    end
-    local ge = try; D.generate_js_methods(J.RuntimeFinalizer(bnamer), keepers); nothing; catch x; x; end
+    @test all(b -> length(W.nir_js_sites(bw, b.ci.def)) == 1, [b for b in bw if b.ci.def.def.name in (:keeps_first, :keeps_second)])
+    local ge = try; D.compile(opts, W.check_subset(both, (Int64,), "print_patch")); nothing; catch x; x; end
     @test ge isa W.RejectionError && ge.rejection isa W.Internal && occursin("kept by different callers", ge.rejection.site) &&
           occursin("() => 3", ge.rejection.site) && occursin("() => 4", ge.rejection.site)
 end

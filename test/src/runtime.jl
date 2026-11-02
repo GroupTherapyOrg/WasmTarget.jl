@@ -130,18 +130,17 @@ struct Plain; x::Int64; end
 @noinline pick(k::Int64)::Any = k == 1 ? Circle(1.0) : k == 2 ? Square(2.0) : k == 3 ? Plain(3) : nothing
 # type.dart's _isInterfaceSubtype0 itself, called with a class id: its class-table path
 # (_checkSubclassRelationshipViaTable, the table getters, WasmArray's reads, ClassID.getID), which no
-# code generator site reaches while its interface arm takes a class only for its null case
-probe(k::Int64, tid::Int32) = W.Runtime._is_interface_subtype0(pick(k), false, tid)
+# code generator site reaches while its interface arm takes a class only for its null case; the class
+# id is the one the compiled module gives the type, read from the type value's own classId field
+# (_InterfaceType.classId), so the ids are the compile's, never a second numbering's
+const TYPES = DataType[Shape, Circle, Plain]
+type_at(j::Int64)::DataType = TYPES[j]
+probe(k::Int64, j::Int64) = W.Runtime._is_interface_subtype0(pick(k), false, W.Runtime._InterfaceType_class_id(type_at(j)))
 @testset "type.dart: _isInterfaceSubtype0 reads the class table, against native isa" begin
-    local bytes = W.compile(probe, (Int64, Int32))
-    # the class ids the module numbers, from the same closed world's numbering
-    local t = D.Translator(W.build_nir(W.check_subset(probe, (Int64, Int32), "runtime"), "runtime"),
-        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
-    D._init_modules(t, nothing); collect(D.ClassInfoCollector(t))
+    local bytes = W.compile(probe, (Int64, Int64))
     local cases = Main.WTRunner.RunCase[]
-    for T in (Shape, Circle, Plain), k in 1:4
-        local tid = Int32(D.class_id(t.class_info[T]))
-        push!(cases, Main.WTRunner.RunCase("probe($k, $T)", bytes, (k, tid), pick(k) isa T))
+    for j in 1:3, k in 1:4
+        push!(cases, Main.WTRunner.RunCase("probe($k, $(type_at(j)))", bytes, (k, j), pick(k) isa type_at(j)))
     end
     for r in Main.WTRunner.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
