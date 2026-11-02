@@ -2076,9 +2076,9 @@ end
 # dart roots every procedure carrying @pragma('wasm:entry-point') in every program
 # (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure).
 # The roots are read, never written by hand: each Runtime port (src/runtime) whose @parity anchor's
-# dart declaration carries the pragma, read by this reader at the pin (PRAGMAS), and each raiser of
-# Julia's own runtime (src/julia/runtime/rtutils.jl, a definition returning Union{}), which every Julia
-# process links (libjulia's JL_DLLEXPORT raisers). The block in packages.jl is RUNTIME_ROOTS.
+# dart declaration carries the pragma, read by this reader at the pin (PRAGMAS), and each function of
+# Julia's own runtime (src/julia/runtime/rtutils.jl's section of Julia's runtime), which every Julia
+# process links whole (libjulia's JL_DLLEXPORT functions). The block in packages.jl is RUNTIME_ROOTS.
 const ROOTS_RX = r"(# ---- the runtime's roots, written by dev/skeleton\.jl write ----\n)(?s:.*?)(# ---- end of the runtime's roots ----)"
 
 # the Julia names each top-level definition of `text` binds, with its @parity anchor
@@ -2112,21 +2112,17 @@ function pin_pragmas(path::AbstractString, line::Int)::Vector{String}
     return get(PRAGMAS, (String(path), line), String[])
 end
 
-# the raisers of Julia's own runtime: each top-level definition of `text` declared to return Union{}
-function union_raisers(text::AbstractString, file::AbstractString)::Vector{String}
-    local out = String[]
-    local find(x) = begin
-        x isa Expr || return
-        if Meta.isexpr(x, :(::)) && length(x.args) == 2 && x.args[2] == :(Union{}) && Meta.isexpr(x.args[1], :call)
-            local f = x.args[1].args[1]
-            f isa Symbol && push!(out, string(f))
-            return
-        end
-        Meta.isexpr(x, :macrocall) || Meta.isexpr(x, :(=)) || Meta.isexpr(x, :function) || return
-        foreach(find, x.args)
+# Julia's runtime functions: each function `text` defines between rtutils.jl's markers of Julia's
+# runtime, libjulia's functions the code generator calls, which every Julia process links whole
+const JULIA_RUNTIME_RX = r"# ---- Julia's runtime: [^\n]*\n(?s:(.*?))# ---- end of Julia's runtime ----"
+function julia_runtime_functions(text::AbstractString, file::AbstractString)::Vector{String}
+    local m = match(JULIA_RUNTIME_RX, text)
+    m === nothing && error("skeleton: $file holds no section of Julia's runtime")
+    local out = Set{String}()
+    for ex in Meta.parseall(m[1]; filename = String(file)).args
+        defined_names!(out, ex)
     end
-    foreach(find, Meta.parseall(text; filename = String(file)).args)
-    return sort!(unique!(out))
+    return sort!(collect(out))
 end
 
 function roots_block(read_src::Function = src_text, pragma::Function = pin_pragmas)::String
@@ -2136,8 +2132,8 @@ function roots_block(read_src::Function = src_text, pragma::Function = pin_pragm
     end
     local rt = joinpath(ROOT, "src", "julia", "runtime", "rtutils.jl")
     local items = String["    ((:Runtime,), :$n)," for n in entry_point_ports(ports, pragma)]
-    append!(items, ("    ((), :$n)," for n in union_raisers(read_src(rt), rt)))
-    return "@quarantine \"dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's raisers, which every Julia process links (julia/src/rtutils.c:189 jl_bounds_error)\" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (\n" *
+    append!(items, ("    ((), :$n)," for n in julia_runtime_functions(read_src(rt), rt)))
+    return "@quarantine \"dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's runtime functions the code generator calls (julia/src/rtutils.c:189 jl_bounds_error), which every Julia process links whole, where Julia differs: libjulia has no demand to keep one out, so every one is a root\" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (\n" *
            join(items, "\n") * "\n)"
 end
 

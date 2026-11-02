@@ -16,7 +16,7 @@ import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..WasmI32, .._wasm_on
 # ---- end of Runtime's src/julia names ----
 end
 # ---- the runtime's roots, written by dev/skeleton.jl write ----
-@quarantine "dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's raisers, which every Julia process links (julia/src/rtutils.c:189 jl_bounds_error)" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (
+@quarantine "dart roots every procedure carrying @pragma('wasm:entry-point') in every program (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure), each Runtime port whose anchored dart declaration carries it, and Julia's runtime functions the code generator calls (julia/src/rtutils.c:189 jl_bounds_error), which every Julia process links whole, where Julia differs: libjulia has no demand to keep one out, so every one is a root" Core.Symbol const RUNTIME_ROOTS::Tuple{Vararg{Tuple{Tuple{Vararg{Symbol}},Symbol}}} = (
     ((:Runtime,), :Error__throw_with_current_stack_trace),
     ((:Runtime,), :StackTrace_current),
     ((:Runtime,), :_TypeError__throw_as_check_error),
@@ -27,6 +27,8 @@ end
     ((:Runtime,), :_type_row_displacement_offsets),
     ((:Runtime,), :_type_row_displacement_subst_table),
     ((:Runtime,), :_type_row_displacement_table),
+    ((), :jl_egal),
+    ((), :jl_to_typeof),
     ((), :throw_atomic_error),
     ((), :throw_bounds_error),
     ((), :throw_divide_error),
@@ -34,6 +36,7 @@ end
     ((), :throw_method_error),
     ((), :throw_out_of_memory),
     ((), :throw_undef_ref_error),
+    ((), :wasm_egal),
 )
 # ---- end of the runtime's roots ----
 

@@ -1,9 +1,13 @@
-# The raises of Julia's own C runtime (src/rtutils.c, src/runtime_intrinsics.c), which Julia's codegen
-# calls where a builtin or an intrinsic fails: each builds Julia's exception and throws it through the
-# runtime's thrower (src/runtime/common/errors_patch.jl Error._throwWithCurrentStackTrace). They have
-# no dart counterpart: dart raises its own errors in dart code (boxed_int.dart's
+# ---- Julia's runtime: libjulia's functions the code generator calls, each rooted in every closed world (RUNTIME_ROOTS) ----
+# The functions of Julia's own C runtime (src/rtutils.c, src/runtime_intrinsics.c, julia.h, builtins.c)
+# which Julia's codegen calls: the raises where a builtin or an intrinsic fails, each building Julia's
+# exception and throwing it through the runtime's thrower (src/runtime/common/errors_patch.jl
+# Error._throwWithCurrentStackTrace), jl_egal where === compares no inline, and a type tag's type.
+# They have no dart counterpart: dart raises its own errors in dart code (boxed_int.dart's
 # `throw IntegerDivisionByZeroException()`), where Julia's are raised by its runtime, so they are
-# quarantined, each naming Julia's exception, and kept in every closed world (RUNTIME_ROOTS).
+# quarantined, each naming Julia's own function. libjulia is linked whole into every Julia process, so
+# each is in every closed world (dev/skeleton.jl roots every function of this section), and the code
+# generator emits one only where its code calls it.
 
 # jl_diverror_exception, raised by checked_sdiv_int and its kin at a zero divisor (runtime_intrinsics.c)
 @quarantine "Julia's runtime raises DivideError where a checked integer division fails" Core.DivideError @noinline throw_divide_error()::Union{} =
@@ -47,7 +51,7 @@
 # compare its operands inline (julia/src/codegen.cpp:3379 emit_box_compare: the pointers, then the
 # type tags, then jl_egal__unboxed): jl_egal_ (julia.h:1885), its pointer and tag tests and
 # jl_egal__unboxed_'s switch over the value's class, the intrinsifier's egal arm (wasm_egal), each
-# class's arm builtins.c's own. Kept in the closed world wherever such a `===` is (check_subset's demand of it)
+# class's arm builtins.c's own. A root of every closed world, as every function of this section
 @quarantine "julia/src/julia.h:1885 jl_egal_ compares two values by their pointers, their type tags and then jl_egal__unboxed_'s arm for their class" Core.Bool @noinline jl_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool =
     wasm_egal(a, b)
 
@@ -68,6 +72,8 @@ Natively Julia's `===`.
 # (src/intrinsics.jl), and natively no tag exists, so the body raises
 @quarantine "julia/src/julia.h:971 jl_to_typeof reads a type tag's type from the table of tags' types (jl_small_typeof)" Core.DataType @noinline jl_to_typeof(tag::Int32) =
     _wasm_only(Core.DataType)
+
+# ---- end of Julia's runtime ----
 
 """
     nir_runtime_member(world, f) -> Core.MethodInstance

@@ -955,8 +955,8 @@ see, being an instance with its parameters bound, so the list is empty.
         (superclass === nothing || superclass === Any) && continue
         # dart's translator.subtypes.getSubtypesOf(superclass), less the class itself: the classes
         # whose supertype chain reaches it; a Type{X} class (X no type variable) is below exactly X's
-        # kind, as Julia's subtype decides it (julia/src/subtype.c:1419 subtype's `jl_is_type_type(x)`
-        # arm: `jl_typeof(tp0) == yd`), never along its own chain
+        # kind, as Julia's subtype decides it (julia/src/subtype.c:1550 subtype's `jl_is_type_type(x)`
+        # arm, :1558 `jl_typeof(tp0) == yd`), never along its own chain
         for sub_info in classes
             local subtype = sub_info.cls
             (subtype === nothing || subtype === superclass) && continue

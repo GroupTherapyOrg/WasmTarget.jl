@@ -166,64 +166,13 @@ end
 
 # The runtime's roots, RUNTIME_ROOTS (src/julia/packages.jl), dev/skeleton.jl's generated block: each
 # `(module path, name)`, every Runtime port whose anchored dart declaration carries
-# @pragma('wasm:entry-point') and every raiser of Julia's own runtime, rooted in every closed world as
-# dart's tree shaker roots every entry point in every program
+# @pragma('wasm:entry-point') and every function of Julia's own runtime (src/julia/runtime/rtutils.jl's
+# section of it: the raisers, jl_egal, a type tag's type), rooted in every closed world as dart's tree
+# shaker roots every entry point in every program
 # (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure),
-# so the code generator finds each raise's method wherever it lowers one.
-
-# a statement operand's value: a GlobalRef's binding (nothing when unbound) or the operand itself, as
-# Julia's optimized IR writes a builtin callee or an allocation's type
-@quarantine "Julia's optimized IR names a builtin or a type by its value or its GlobalRef, which argextype reads by the binding (julia/Compiler/src/optimize.jl:423 argextype)" Core.GlobalRef _ir_value(x) =
-    x isa GlobalRef ? (isdefined(x.mod, x.name) ? getglobal(x.mod, x.name) : nothing) : x
-
-# whether a statement `Expr(:call, f, ...)` calls one of `fs`, a builtin or intrinsic
-@quarantine "a builtin call is read from the inferred CodeInfo's statements, as Julia's own passes recognize one (julia/Compiler/src/ssair/passes.jl:3 is_known_call)" Core.Builtin function _calls_builtin(st, fs::Tuple{Vararg{Core.Builtin}})::Bool
-    Meta.isexpr(st, :call) && !isempty(st.args) || return false
-    local v = _ir_value(st.args[1])
-    return any(f -> v === f, fs)
-end
-
-# whether a statement `Core.:(===)(x, y)` of `src` compares operands Julia's jl_egal compares, the call
-# the intrinsifier's === makes where it compares no inline (src/intrinsics.jl, the identical arm, as
-# Julia's codegen calls jl_egal__unboxed at julia/src/codegen.cpp:3379 emit_box_compare): every `===`
-# but one of an operand egal compares by identity, of two DataTypes, of two Strings, of two of one
-# primitive class, of two types no value has both of (emit_f_is's disjoint test) or of `nothing` against
-# a type admitting it (the code generator's EqualsNull), each operand typed by Julia's argextype as the
-# trim verifier types one; the arm's other inline case (an immutable class of reference and bit
-# fields) keeps jl_egal unused, never missing
-@quarantine "julia/src/codegen.cpp:3379 emit_box_compare calls jl_egal__unboxed for operands it cannot compare inline, its operands typed by Core.Compiler.argextype" Core.Compiler.argextype function _compares_by_egal(st, src::Core.CodeInfo, sptypes::Vector{Core.Compiler.VarState}, slottypes::Vector{Any})::Bool
-    _calls_builtin(st, (Core.:(===),)) && length(st.args) == 3 || return false
-    local A = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[2], src, sptypes, slottypes))
-    local B = Core.Compiler.widenconst(Core.Compiler.argextype(st.args[3], src, sptypes, slottypes))
-    (egal_by_identity(A) || egal_by_identity(B)) && return false
-    A !== Union{} && B !== Union{} && A <: DataType && B <: DataType && return false
-    typeintersect(A, B) === Union{} && return false
-    # two of one primitive class: their bits, inline (a primitive class with no wasm number, Float16,
-    # reaches no arm and rejects at the statement, as before jl_egal)
-    A === B && A isa DataType && isprimitivetype(A) && return false
-    count(==(Nothing), (A, B)) == 1 && Nothing <: A && Nothing <: B && return false
-    return !(A === String && B === String)
-end
-
-# whether an inferred body of `codeinfos` holds a statement the demand `holds` accepts, each body read
-# with its method instance's static parameter types, as the trim verifier reads it, and its arguments'
-# types its specialization's, as Julia's codegen types an argument (julia/src/codegen.cpp's
-# emit_function, jl_nth_slot_type of the specTypes): a body from Julia's cache carries no slottypes
-@quarantine "a demanded form is read from the inferred CodeInfo's statements, each body's static parameters its method instance's (julia/Compiler/src/inferencestate.jl:689 sptypes_from_meth_instance)" Core.CodeInfo function _demanded(codeinfos::Vector{Any}, holds::Function)::Bool
-    for i in 1:length(codeinfos) - 1
-        local item = codeinfos[i]
-        local src = codeinfos[i + 1]
-        item isa Core.CodeInstance && src isa Core.CodeInfo || continue
-        local mi = Core.Compiler.get_ci_mi(item)
-        local sptypes = Core.Compiler.sptypes_from_meth_instance(mi)
-        local slottypes = Any[Base.unwrapva(p) for p in (Base.unwrap_unionall(mi.specTypes)::DataType).parameters]
-        # a varargs body's last argument is its packed tuple (src/julia/nir.jl NirVarargPacking)
-        local va = nir_vararg_packing(mi)
-        va === nothing || (slottypes = Any[slottypes[1:va.first - 1]..., va.packed])
-        any(st -> holds(st, src, sptypes, slottypes), src.code) && return true
-    end
-    return false
-end
+# so the code generator finds each one's method wherever it lowers a call of it. Julia differs: libjulia
+# is linked whole, no demand keeping one of its functions out, and the code generator emits a root only
+# where its code calls it.
 
 # a root's function, resolved in `mod` along its module path, or nothing
 @quarantine "a root names its function by module path and name, resolved where the package loaded, as dart's visitor reads each annotated procedure (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Core.getglobal function _runtime_entry_function(mod::Module, path::Tuple{Vararg{Symbol}}, name::Symbol)::Union{Function,Nothing}
@@ -366,15 +315,6 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
     # met from the entry's callable on)
     local roots = _runtime_roots(world)
     local codeinfos, notes, parents = _infer_verified(Any[roots; entry], world, at)
-    # jl_egal (src/julia/runtime/rtutils.jl), the runtime function the intrinsifier's === calls where it
-    # compares no inline (src/intrinsics.jl, the identical arm), queued only where a body holds such a ===
-    # (`_compares_by_egal`): the intrinsic that calls it demands it, as dart's intrinsifier references its
-    # runtime helper only from the call it lowers (pkg/dart2wasm/lib/intrinsics.dart:2974 MemberIntrinsic.identical),
-    # so two values of one primitive class, compared inline, keep it out of the world
-    if _demanded(codeinfos, _compares_by_egal)
-        push!(roots, something(_entry_specialization(only(methods(jl_egal)).sig, world)))
-        (codeinfos, notes, parents) = _infer_verified(Any[roots; entry], world, at)
-    end
     # the ccallables the entry reaches, queued beside it as juliac queues each, so the verifier judges
     # each declared signature and return (CCallableMissing); the inference's cache answers the rest
     local ccallables = _reached_ccallables(codeinfos)
