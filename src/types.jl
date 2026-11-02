@@ -481,10 +481,18 @@ class id passed (`is_interface_class_type`, src/julia/classes.jl). Any other typ
 tested type is a constant. Any other test needs dart's runtime subtype check, `_isSubtype` of the
 runtime library at the pin, not ported: it rejects there, Unported, located.
 """
-@parity "dart2wasm/lib/types.dart:434 Types.emitIsTest" function emit_is_test(self::Types, code_gen::AstCodeGenerator, tested_against_type::Type, operand_type::Type;
+@parity "dart2wasm/lib/types.dart:434 Types.emitIsTest" function emit_is_test(self::Types, code_gen::AstCodeGenerator, tested_against_type::Union{Type,NirValue}, operand_type::Type;
         location::Union{String,Nothing} = nothing)::Nothing
     local at = "dart2wasm/lib/types.dart:434 Types.emitIsTest"
     local b = code_gen.b[]
+    if tested_against_type isa NirValue
+        # a type only run time knows, dart's type parameter: no helper takes it, so dart's general arm,
+        # the operand then the type made (here the value itself, checked a type) and _isSubtype
+        WasmBuilder.comment(b, "type check against a type only run time knows")
+        run_time_type_value!(code_gen, tested_against_type, :isa)
+        call(code_gen, is_subtype(self.translator))
+        return nothing
+    end
     WasmBuilder.comment(b, "type check against $tested_against_type")
     local operand_temp = nothing
     if self.translator.options.verify_type_checks
@@ -524,7 +532,12 @@ runtime library at the pin, not ported: it rejects there, Unported, located.
             WasmBuilder.i32_eqz(b)
         end
     else
-        reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype"), "$at: a test against $tested_against_type needs the runtime's subtype check")
+        # dart's general arm (types.dart:497): makeType and _isSubtype, for a type the runtime's type test
+        # decides (src/julia/runtime/rtutils.jl run_time_type_gap, the one reading), else located
+        local gap = run_time_type_gap(tested_against_type)
+        gap === nothing || reject!(gap, "$at: a test against $tested_against_type")
+        make_type(self, code_gen, tested_against_type)
+        call(code_gen, is_subtype(self.translator))
     end
     if self.translator.options.verify_type_checks
         # the runtime's reference check of the optimized result: the operand, the tested type and the
@@ -549,10 +562,23 @@ its class id (`is_interface_class_type`, src/julia/classes.jl), and the checked 
 dart calls `_asSubtype` for any other constant type; its constant-type arm here rejects, Unported (a
 type only run time knows takes the code generator's own call of `_asSubtype`).
 """
-@parity "dart2wasm/lib/types.dart:527 Types.emitAsCheck" function emit_as_check(self::Types, code_gen::AstCodeGenerator, tested_against_type::Type, operand_type::Type,
+@parity "dart2wasm/lib/types.dart:527 Types.emitAsCheck" function emit_as_check(self::Types, code_gen::AstCodeGenerator, tested_against_type::Union{Type,NirValue}, operand_type::Type,
         boxed_operand_type::WasmBuilder.IR.RefType; location::Union{String,Nothing} = nothing)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/types.dart:527 Types.emitAsCheck"
     local b = code_gen.b[]
+    if tested_against_type isa NirValue
+        # a type only run time knows: dart's general arm, the operand in a local, no null-only check, the
+        # type made (here the value itself, checked a type) and _asSubtype; the checked value is the local's
+        local value = WasmBuilder.add_local(b, boxed_operand_type)
+        WasmBuilder.local_tee(b, value)
+        WasmBuilder.i32_const(b, encoded_bool(false))
+        run_time_type_value!(code_gen, tested_against_type, :typeassert)
+        for _ in call(code_gen, as_subtype(self.translator))
+            WasmBuilder.drop(b)
+        end
+        WasmBuilder.local_get(b, value)
+        return value.type
+    end
     local check_only_null_assignability = _requires_only_null_assignability_check(self, operand_type, tested_against_type)
     local as_checkers = as_checkers_for_module(self, b.module_builder)
     local (type_to_check, check_arguments) = can_use_type_check_helper(as_checkers, tested_against_type, operand_type)
@@ -579,7 +605,12 @@ type only run time knows takes the code generator's own call of `_asSubtype`).
         unmade === nothing || reject!(Unquarantined("src/julia/classes.jl type_value_unmade: an as check against $tested_against_type, whose type value has no constant (its parameter $(repr(something(unmade))) is a primitive with no wasm representation, constants.jl visitInstanceConstant), so its failure could not name it"), "$at")
         outputs_to_drop = call(code_gen, as_interface_subtype0(self.translator))
     else
-        reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype"), "$at: a check against $tested_against_type needs the runtime's _asSubtype")
+        # dart's general arm (types.dart:586): makeType and _asSubtype, for a type the runtime's type test
+        # decides (src/julia/runtime/rtutils.jl run_time_type_gap, the one reading), else located
+        local gap = run_time_type_gap(tested_against_type)
+        gap === nothing || reject!(gap, "$at: a check against $tested_against_type")
+        make_type(self, code_gen, tested_against_type)
+        outputs_to_drop = call(code_gen, as_subtype(self.translator))
     end
     for _ in outputs_to_drop
         WasmBuilder.drop(b)

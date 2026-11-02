@@ -58,7 +58,8 @@ end
     # the Julia methods that are dart library members are the runtime's ports: Runtime.Error__throw is
     # dart:core's Error._throw, the errorThrow intrinsic, filed under it; Runtime.ClassID_get_id is
     # dart:_internal's ClassID.getID, the getID static intrinsic (class_id.dart:10), and Runtime's
-    # _is_record_class_id dart:core's top-level _isRecordClassId (type.dart:2060); no method is a
+    # _is_record_class_id dart:core's top-level _isRecordClassId (type.dart:2060, filed at
+    # intrinsics.dart:287 `isRecordClassId('dart:core', null, '_isRecordClassId')`); no method is a
     # dart:_wasm member
     @test DI.MemberIntrinsic__lookup[] == Dict("dart:core" => Dict("Error" => Dict("_throw" => DI.MemberIntrinsic_errorThrow))) &&
           DI.StaticIntrinsic__lookup[] == Dict("dart:_internal" => Dict("ClassID" => Dict("getID" => DI.StaticIntrinsic_getID)),

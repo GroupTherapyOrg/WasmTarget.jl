@@ -2220,20 +2220,10 @@ end
     local operand = node.args[2]
     local operand_type = dart_type_of(self, operand)
     local tested_static = dart_type_of(self, node.args[3])
-    if !(tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type)
-        # a type only run time knows: dart's _isSubtype of the value and the type value (emitIsTest's
-        # makeType, a value here, its static type no type's), the program's type values checked at link
-        # time (src/julia/runtime/rtutils.jl run_time_type_test!)
-        run_time_type_test!(self.translator, "$(self.enclosing_member)")
-        translate_expression(self, operand, self.translator.top_type[])
-        # Julia's isa checks its type argument first (julia/src/builtins.c:584, JL_TYPECHK)
-        instantiate_constant(self, NirConst(Core.Const(:isa)), translate_type(self.translator, Symbol))
-        translate_expression(self, node.args[3], self.translator.top_type[])
-        call(self, nir_runtime_member(self.translator.component, jl_typechk_type, "$(self.enclosing_member)"))
-        call(self, is_subtype(self.translator))
-        return WasmBuilder.IR.NumType_i32
-    end
-    local tested = tested_static.parameters[1]
+    # the tested type, a type value's literal (its static type Type{T}), or the value itself where only run
+    # time knows it (emitIsTest's general arm takes it)
+    local tested = tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type ?
+        tested_static.parameters[1] : node.args[3]
     local boxed_operand_type = Nothing <: operand_type ? self.translator.top_type[] : self.translator.top_type_non_nullable[]
     translate_expression(self, operand, boxed_operand_type)
     emit_is_test(self.translator.types[], self, tested, operand_type; location = "$(self.enclosing_member)")
@@ -2282,27 +2272,9 @@ end
     local operand_type = dart_type_of(self, operand)
     local tested_static = dart_type_of(self, node.args[3])
     local boxed_operand_type = Nothing <: operand_type ? self.translator.top_type[] : self.translator.top_type_non_nullable[]
-    if !(tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type)
-        # a type only run time knows: dart's emitAsCheck general arm, the operand kept in a local and
-        # _asSubtype of it, no null-only check and the type value, the program's type values checked at
-        # link time (src/julia/runtime/rtutils.jl run_time_type_test!)
-        run_time_type_test!(self.translator, "$(self.enclosing_member)")
-        local b = self.b[]
-        local value = add_local(self, boxed_operand_type)
-        translate_expression(self, operand, boxed_operand_type)
-        WasmBuilder.local_tee(b, value)
-        WasmBuilder.i32_const(b, 0)
-        # Julia's typeassert checks its type argument first (julia/src/builtins.c:591, JL_TYPECHK)
-        instantiate_constant(self, NirConst(Core.Const(:typeassert)), translate_type(self.translator, Symbol))
-        translate_expression(self, node.args[3], self.translator.top_type[])
-        call(self, nir_runtime_member(self.translator.component, jl_typechk_type, "$(self.enclosing_member)"))
-        for _ in call(self, as_subtype(self.translator))
-            WasmBuilder.drop(b)
-        end
-        WasmBuilder.local_get(b, value)
-        return boxed_operand_type
-    end
-    local tested = tested_static.parameters[1]
+    # the tested type, a literal, or the value itself where only run time knows it (emitAsCheck's general arm)
+    local tested = tested_static isa DataType && tested_static <: Type && length(tested_static.parameters) == 1 && tested_static.parameters[1] isa Type ?
+        tested_static.parameters[1] : node.args[3]
     translate_expression(self, operand, boxed_operand_type)
     return emit_as_check(self.translator.types[], self, tested, operand_type, boxed_operand_type; location = "$(self.enclosing_member)")
 end

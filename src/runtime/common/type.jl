@@ -157,19 +157,31 @@ Julia's differs from dart: its Union is a kind of its own, where dart's nullable
     # _buildTypeRules skips the top): every value is of it
     t === Any && return _TopType__check_instance(o)
     if jl_typetagis(t, DataType)
-        return _TypeUniverse_is_object_interface_subtype0(o, _InterfaceType_class_id(unsafe_cast(DataType, t)))
+        return _InterfaceType__check_instance(unsafe_cast(DataType, t), o)
     elseif jl_typetagis(t, Union)
+        # Julia's Union, which dart has no kind of: either member (subtype.c's union rule)
         local u = unsafe_cast(Union, t)
         return _is_subtype(o, unsafe_cast(Type, u.a)) || _is_subtype(o, unsafe_cast(Type, u.b))
     elseif jl_typetagis(t, Core.TypeofBottom)
-        # Union{}'s kind, dart's _BottomType (type.dart:111): no value is of it
-        return false
+        return _BottomType__check_instance(o)
     end
     # a UnionAll, which no type value of the program is where a run-time test compiles (the code
     # generator's link-time check), here only one of WasmTarget's own runtime (a TypeError's `Type`):
     # loud, never an answer
     Error__throw_with_current_stack_trace(ErrorException("WasmTarget: a run-time type test against a UnionAll, which Julia's subtype decides by its environment"))
 end
+
+"""
+Whether `o` is of Union{}, dart's `_BottomType._checkInstance` (`=> false`): no value is.
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:111 _BottomType._checkInstance" _BottomType__check_instance(@nospecialize(o::Any))::Bool = false
+
+"""
+Whether `o` is of the class the DataType `t` denotes (dart's `_InterfaceType._checkInstance`): its class
+id's relation to `t`'s through the class table, no type arguments (a Julia class binds its parameters).
+"""
+@parity "sdk/lib/_internal/wasm/common/type.dart:291 _InterfaceType._checkInstance" _InterfaceType__check_instance(t::DataType, @nospecialize(o::Any))::Bool =
+    _TypeUniverse_is_object_interface_subtype0(o, _InterfaceType_class_id(t))
 
 """
 Whether `o` is of the top type, Julia's Any (dart's `_TopType._checkInstance`, `=> true`): every value
