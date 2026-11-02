@@ -702,6 +702,15 @@ end
     const classes::Vector{DataType}
 end
 
+# the class ids of a type's concrete classes, ClassIdNumbering.getConcreteClassIdRange's ranges read out
+# id by id, and their classes, each id's in the translator's class list (dart's translator.classes,
+# indexed by class id): the one projection of the one reading, which every site taking a type's
+# concrete classes calls
+@quarantine "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers, each a class of the translator's list" Core.Type concrete_class_ids(t, T::Type)::Vector{Int} =
+    Int[id for r in Dart2Wasm.get_concrete_class_id_range(t.class_id_numbering[], T) for id in r.start:r.end_]
+@quarantine "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers, each a class of the translator's list" Core.DataType concrete_classes(t, T::Type)::Vector{DataType} =
+    DataType[t.classes[][id + 1].cls for id in concrete_class_ids(t, T)]
+
 # the field selector a field access names on receivers of the classes `admitted`: a name, its own; a
 # position, the field each class holds there, as Julia's getfield reads it (fieldname(typeof(x), i)).
 # The selectors are named by their fields (DispatchTable.build), so a position naming one field in every

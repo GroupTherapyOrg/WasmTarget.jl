@@ -374,8 +374,7 @@ formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the
     local translator = self.translator
     # the selectors, from the field calls Julia's IR holds (TFA's selector metadata in dart)
     # a receiver's admitted classes: its type's concrete classes, getConcreteClassIdRange's one reading
-    local calls = field_selector_calls(translator.component, receiver -> DataType[translator.classes[][id + 1].cls
-        for r in get_concrete_class_id_range(translator.class_id_numbering[], receiver) for id in r.start:r.end_])
+    local calls = field_selector_calls(translator.component, receiver -> concrete_classes(translator, receiver))
     for c in calls
         local id = length(self._selector_info)
         self._selector_info[id] = SelectorInfo__(self, id, c.name, c.call_count; is_setter = c.is_setter, is_index_setter = false)

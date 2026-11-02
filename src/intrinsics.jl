@@ -352,9 +352,8 @@ end
     # the classes the value can have: T itself, or the records of the arities T admits,
     # their ids read through the one reading of a type's concrete classes (getConcreteClassIdRange),
     # each id's class the translator's (dart's translator.classes, indexed by class id)
-    local ids = isconcretetype(T) ? Int[] :
-        Int[id for r in get_concrete_class_id_range(t.class_id_numbering[], T) for id in r.start:r.end_]
-    local classes = isconcretetype(T) ? DataType[T] : DataType[t.classes[][id + 1].cls for id in ids]
+    local ids = isconcretetype(T) ? Int[] : concrete_class_ids(t, T)
+    local classes = isconcretetype(T) ? DataType[T] : concrete_classes(t, T)
     isempty(classes) && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, which no class of the closed world is"), at)
     # a class's element count: a record's arity, a concrete tuple's field count
     local elements(c::DataType) = something(tuple_record_arity(c), fieldcount(c))
@@ -1680,9 +1679,7 @@ end
     # a class holding a host reference, which no eqref holds: dart's not identical past the reference test
     local host(storage::WasmBuilder.IR.StorageType) = storage isa WasmBuilder.IR.RefType && !WasmBuilder.is_subtype_of(storage, WasmBuilder.IR.RefType_eq(; nullable = true))
     # jl_egal__unboxed_: the class's arm
-    local numbering = t.class_id_numbering[]
-    local ids = Int[id for r in get_concrete_class_id_range(numbering, Any) for id in r.start:r.end_]
-    local ranges = [(range = Range(Val(:_), id, id), value = t.classes[][id + 1].cls) for id in ids]
+    local ranges = [(range = Range(Val(:_), id, id), value = t.classes[][id + 1].cls) for id in concrete_class_ids(t, Any)]
     WasmBuilder.local_get(b, x)
     load_class_id(b, t, top_nn)
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
@@ -1814,8 +1811,8 @@ end
     local at = "$(code_gen.enclosing_member): Julia's nfields of a $T"
     # the closed world's concrete classes below T, their ids read through the one reading of a type's
     # concrete classes (getConcreteClassIdRange), each id's class the translator's (translator.classes)
-    local ids = Int[id for r in get_concrete_class_id_range(t.class_id_numbering[], T) for id in r.start:r.end_]
-    local classes = DataType[t.classes[][id + 1].cls for id in ids]
+    local ids = concrete_class_ids(t, T)
+    local classes = concrete_classes(t, T)
     isempty(classes) && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: nfields of $T, which no class of the closed world is"), at)
     local o = add_local(code_gen, t.top_type_non_nullable[])
     translate_expression(code_gen, args[1], t.top_type_non_nullable[])

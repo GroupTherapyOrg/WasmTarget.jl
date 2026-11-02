@@ -1846,7 +1846,7 @@ end
     cls isa Type && !(cls isa DataType) && cls <: Tuple &&
         reject!(Unquarantined("src/intrinsics.jl generateInstanceGetterIntrinsic: a field read on $cls, a Union of tuples, dart's DynamicGet over the record classes, not lowered"), "$(self.enclosing_member)")
     if !(cls isa DataType && isconcretetype(cls))
-        local reference = SelectorReference(field_selector_name(key, DataType[self.translator.classes[][id + 1].cls for r in get_concrete_class_id_range(self.translator.class_id_numbering[], cls) for id in r.start:r.end_]), FieldReferenceKind_getter)
+        local reference = SelectorReference(field_selector_name(key, concrete_classes(self.translator, cls)), FieldReferenceKind_getter)
         local result = _virtual_call(self, node, reference, _VirtualCallKind_Get,
             signature -> (translate_expression(self, receiver, signature.inputs[1]); nothing), (signature, param_info) -> nothing;
             use_unchecked_entry = false)
@@ -1956,7 +1956,7 @@ end
     if !(cls isa DataType && isconcretetype(cls))
         local b = self.b[]
         local temp = Ref{Union{Nothing,WasmBuilder.IR.Local}}(nothing)
-        _virtual_call(self, node, SelectorReference(field_selector_name(key, DataType[self.translator.classes[][id + 1].cls for r in get_concrete_class_id_range(self.translator.class_id_numbering[], cls) for id in r.start:r.end_]), FieldReferenceKind_setter), _VirtualCallKind_Set,
+        _virtual_call(self, node, SelectorReference(field_selector_name(key, concrete_classes(self.translator, cls)), FieldReferenceKind_setter), _VirtualCallKind_Set,
             signature -> (translate_expression(self, receiver, signature.inputs[1]); nothing),
             function (signature, param_info)
                 local param_type = signature.inputs[end]
