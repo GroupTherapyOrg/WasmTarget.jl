@@ -37,6 +37,7 @@
 # landing's first item.
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :_wt_instructions) || Base.include(Main, joinpath(@__DIR__, "..", "instructions.jl"))
 
 # the corpus's `dart_*` groups, from test/DartCorpus's precompiled image (test/DartCorpus/load.jl)
 include(joinpath(@__DIR__, "..", "DartCorpus", "load.jl"))
@@ -1152,61 +1153,27 @@ end
 const DART_COMPILE_BUDGET = 10.0
 _dart_secs(t::NamedTuple)::Float64 = t.time - t.compile_time
 
-# each case's hard limit (no hang is allowed, Dale 2026-10-28; D17): intent, a case's compile, or the reading of
-# its answer, returns in seconds; band, past DART_CASE_LIMIT seconds of wall time, cold JIT on efficiency cores
-# within it (a process's first compile ~30 s there), a watchdog process interrupts it (SIGINT each second, taken at
-# Julia's next safepoint) and the case fails by name, "past its 120-s hard limit: <group>/<case> compiling <method>", the
-# process going on to the next case; before it a hang held a whole shard to dev/corpus.sh's 1200-s limit and named
-# only its method (355c70e5, 2026-10-29). Code that reaches no safepoint (a loop that allocates nothing, or Julia's
-# own code generation in C) never takes the interrupt, so DART_CASE_GRACE seconds on the watchdog prints the case to
-# the process's stderr and kills the process: the check or the corpus run then fails naming the case, never a shard
-# at its stage limit (wt3-constants' check at 14:12, 2026-10-29: "dart_is/function compiling", cut at 480 s). A
-# watchdog is one process per case, killed when the case returns.
-# Julia cannot be relied on to take the interrupt: an allocating loop, or a compile, may reach every safepoint inside a
-# region that defers it, and a forced throw (^C^C) can crash the process. On 665146f1 every one of the corpus's four
-# shards was killed so, the plant's own loop among them, and each kill lost its shard's verdicts (2026-11-01). So a
-# kill is recovered at the process level, as ReTestItems.jl recovers a test item past its timeout (dev/corpus_shard.sh
-# names the precedent and how WT differs): the watchdog appends the case it kills to WT_DART_KILLED, each
-# finished group block is appended to WT_DART_DONE, and dev/corpus_shard.sh runs the shard again, which skips the done
-# blocks and fails each killed case by name without compiling it again.
-const DART_CASE_LIMIT = 120
-const DART_CASE_GRACE = 5
-Base.exit_on_sigint(false)
-struct _DartPastLimit
-    why::String
-end
-const _DART_WATCHDOG = raw"""
-my ($limit, $grace, $pid, $what, $killed) = @ARGV;
-select(undef, undef, undef, $limit);
-kill('INT', $pid);
-for (1 .. $grace) { sleep(1); kill(0, $pid) or exit 0; kill('INT', $pid); }
-print STDERR "dart_tests.jl: $what is past its $limit-s hard limit and took no interrupt in $grace s: the process is killed\n";
-if (defined($killed) && length($killed)) { open(my $fh, '>>', $killed) or die "$killed: $!"; print $fh "$what\n"; close($fh); }
-kill('KILL', $pid);
-"""
+# each case's hard limit, its watchdog and its cut (test/dart_limit.jl)
+isdefined(Main, :_dart_limited) || Base.include(Main, joinpath(@__DIR__, "..", "dart_limit.jl"))
 # the resume state of a shard run again after a kill (dev/corpus_shard.sh): the cases killed so far, each by its
 # watchdog's line `<group>/<case> <what it was doing>`, and the group blocks finished
-const _DART_KILLED_FILE = get(ENV, "WT_DART_KILLED", "")
 const _DART_DONE_FILE = get(ENV, "WT_DART_DONE", "")
 _dart_read_killed(path::AbstractString)::Dict{String,String} =
     isfile(path) ? Dict(String(first(split(l, ' '))) => String(l) for l in eachline(path) if !isempty(l)) : Dict{String,String}()
 const _DART_KILLED = _dart_read_killed(_DART_KILLED_FILE)
 const _DART_DONE_BLOCKS = isfile(_DART_DONE_FILE) ? Set{String}(eachline(_DART_DONE_FILE)) : Set{String}()
-# a killed case's failure, located by the watchdog's own line
-_dart_killed(what::AbstractString; limit::Real = DART_CASE_LIMIT)::_DartPastLimit =
-    _DartPastLimit("past its $(limit)-s hard limit, took no interrupt, and its process was killed: $what")
-function _dart_limited(f::Function, what::String; limit::Real = DART_CASE_LIMIT, grace::Integer = DART_CASE_GRACE)
-    # SIGINT, then once a second for `grace` seconds; then the case named on stderr and the process killed
-    local dog = run(pipeline(`perl -e $(_DART_WATCHDOG) $limit $grace $(getpid()) $what $(_DART_KILLED_FILE)`; stdout = devnull, stderr = stderr); wait = false)
-    try
-        return f()
-    catch e
-        e isa InterruptException || rethrow()
-        return (_DartPastLimit("past its $(limit)-s hard limit: $what"), UInt8[])
-    finally
-        process_running(dog) && kill(dog)
-    end
-end
+# each case's verdict as the whole run reaches it, one row `<head>\t<case>\t<verdict>\t<CPU-s>\t<why>` appended to WT_DART_CASES
+# (dev/corpus.sh: the common dir's wt-corpus-cases.tsv), WT_DART_HEAD naming the head: pass (it compiled and every
+# fact read is native's), fail (why: the first failure), reject (it rejects located, as its record admits) or timeout
+# (past its hard limit, cut or killed). A case's last row is its verdict. Only failures print, so a run its limit cut
+# gave no count of what passed; the rows count every case reached, cut or complete. A compiled case's row waits for
+# its modules' facts, judged at its block's end. A row's CPU-s are its case's, compile and reading, the measure its
+# 120-CPU-s limit stands beside
+const _DART_CASES_FILE = get(ENV, "WT_DART_CASES", "")
+const _DART_HEAD = get(ENV, "WT_DART_HEAD", "")
+_dart_verdict(key::String, verdict::String, cpu::Real, why::AbstractString = "") = isempty(_DART_CASES_FILE) ||
+    open(io -> println(io, _DART_HEAD, '\t', key, '\t', verdict, '\t', round(cpu; digits = 2), '\t', replace(first(why, 300), r"\s+" => ' ')),
+         _DART_CASES_FILE, "a")
 
 # why a case's outcome breaks its record's property, or "" when it holds
 function _dart_breaks(today::Symbol, got)::String
@@ -1320,25 +1287,26 @@ const _DART_COSTS_OUT = get(ENV, "WT_DART_COSTS_OUT", "")
 # of them, flutter_regession_151473, at 10 s warm). The warm-up's seconds and instructions are the shard's, printed,
 # never a case's, and the 120-s limit judges each case's own cost; the landing compiles no case, so it pays none.
 # The warm-up has its own hard limit, so a hang in the cold compile stands inside a watchdog too: intent, the cold
-# compile returns in minutes; band, DART_WARMUP_LIMIT seconds of wall time, about twice the 129 s it took at background
-# QoS (bc2a6c65's measure, 2026-11-01). A warm-up past it fails by name as the shard attempt's warm-up, and the shard
+# compile returns in minutes; band, DART_WARMUP_LIMIT CPU seconds, over twice its measure (422 to 426 G instructions,
+# 365 to 371 s of wall at 20 to 36% of a core, about 130 CPU-s, 6732d4a6, 2026-11-01). A warm-up past it fails by name as the shard attempt's warm-up, and the shard
 # stops there: with its pipeline uncompiled no case's cost could be judged, and a relaunch would only repeat it
 const DART_WARMUP_LIMIT = 300
-isdefined(Main, :_wt_instructions) || Base.include(Main, joinpath(@__DIR__, "..", "instructions.jl"))
+const DART_WARMUP_WALL = 1500   # DART_WARMUP_LIMIT over 0.2, as DART_CASE_WALL
 _DART_CORE_ONLY || let
     local what = "dart_warmup/$(_DART_SHARD[1])-of-$(_DART_SHARD[2]) the warm-up compile, attempt $(get(ENV, "WT_DART_ATTEMPT", "1"))"
     local killed = sort!([w for (k, w) in _DART_KILLED if startswith(k, "dart_warmup/")])
     local got = if isempty(killed)
         isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: $what")
         local i0 = Sys.isapple() ? _wt_instructions() : nothing
+        local c0 = _wt_cpu_seconds()
         local timed = @timed first(_dart_limited(() -> (WasmTarget.compile(x::Int64 -> x + Int64(1), (Int64,)); (:compiled, UInt8[])),
-                                                 what; limit = DART_WARMUP_LIMIT))
-        println("dart tests: $what took $(round(timed.time; digits = 1)) s",
+                                                 what; limit = DART_WARMUP_LIMIT, wall = DART_WARMUP_WALL))
+        println("dart tests: $what took $(round(timed.time; digits = 1)) s, $(round(_wt_cpu_seconds() - c0; digits = 1)) CPU-s",
                 i0 === nothing ? "" : ", $(round((_wt_instructions() - i0) / 1e9; digits = 1)) G instructions",
                 ", the shard's before any case's limit"); flush(stdout)
         timed.value
     else
-        _dart_killed(first(killed); limit = DART_WARMUP_LIMIT)   # an earlier attempt's warm-up, killed
+        _dart_killed(first(killed))   # an earlier attempt's warm-up, killed
     end
     @testset "the warm-up compile, the shard's before any case's limit" begin
         @test _dart_breaks(:compiled, got) == ""
@@ -1348,27 +1316,33 @@ end
 
 # a group block's modules judged: every module read, a node process per block: each fact native's, in both modules,
 # or the case fails naming the fact by its path and what the modules answered; `gaps` are the block's cases recorded
-# :unread whose modules were read
-function _dart_judge(runs::AbstractVector, unread::AbstractVector, gaps::Set{String}, results::AbstractVector)
+# :unread whose modules were read. It returns each failing case's first failure, by its key
+function _dart_judge(runs::AbstractVector, unread::AbstractVector, gaps::Set{String}, results::AbstractVector)::Dict{String,String}
+    local failed = Dict{String,String}()
     for (key, why) in unread
         @testset "$key runs as native Julia" begin
             @test why == ""
         end
+        get!(failed, key, why)
     end
     # a case recorded :unread keeps a runner gap, a fact the runner does not marshal yet, and only that is admitted
     local runner_gap(r) = startswith(r.why, "the runner marshals no ") || startswith(r.why, "the runner does not read it yet")
     local gap_key_of = Dict(c.label => k for k in gaps for c in runs if c.label == k || startswith(c.label, k * "("))
     for k in sort!(collect(gaps))
+        local held = any(r -> runner_gap(r) && get(gap_key_of, r.label, "") == k, results)
         @testset "$k, recorded :unread, still holds a fact the runner does not read" begin
-            @test any(r -> runner_gap(r) && get(gap_key_of, r.label, "") == k, results)
+            @test held
         end
+        held || get!(failed, k, "recorded :unread, and every fact reads: re-record it")
     end
-    # one @test per fact: its label and why it differs, "" when it equals native's in every module
+    # one @test per fact: its label and why it differs, "" when it equals native's in every module; a fact's case is
+    # its label up to the fact's path, "(…)"
     for r in results
         haskey(gap_key_of, r.label) && runner_gap(r) && continue
         @test (r.label => r.why) == (r.label => "")
+        r.ok || get!(failed, String(first(split(r.label, '('))), "$(r.label): $(r.why)")
     end
-    return nothing
+    return failed
 end
 
 @testset "dart2wasm's tests, Julia the ground truth" begin
@@ -1389,10 +1363,13 @@ end
         local first_run = length(runs) + 1
         local first_unread = length(unread) + 1
         local block_gaps = Set{String}()
+        local pending = Pair{String,Float64}[]   # the block's compiled cases and their CPU-s, their verdicts waiting for their facts
         for case in cases
             local key = "$group/$(case[1])"
             push!(seen, key)
-            @testset "$key" begin
+            local verdict = Ref(("fail", "it has no record"))
+            local c0 = _wt_cpu_seconds()
+            local ts = @testset "$key" begin
                 @test haskey(_DART_RECORDS, key)
                 if haskey(_DART_RECORDS, key)
                     local today = _dart_kind(key)
@@ -1402,12 +1379,16 @@ end
                     if haskey(_DART_KILLED, key)
                         # an earlier attempt's process was killed in it: failed by name, never compiled again
                         @test _dart_breaks(today, _dart_killed(_DART_KILLED[key])) == ""
+                        verdict[] = ("timeout", _dart_killed(_DART_KILLED[key]).why)
                     elseif !_DART_CORE_ONLY
                         local timed = @timed _dart_outcome(f, args, key)
                         local (got, own), secs = timed.value, _dart_secs(timed)
                         @test secs <= DART_COMPILE_BUDGET
                         # the record's property; a failure prints why, the rejection's own text in it (A51E9)
-                        @test _dart_breaks(today, got) == ""
+                        local broke = _dart_breaks(today, got)
+                        @test broke == ""
+                        verdict[] = got isa _DartPastLimit ? ("timeout", got.why) : !isempty(broke) ? ("fail", broke) :
+                                    got === :compiled ? ("pending", "") : ("reject", _dart_said(got))
                         # the modules run in the whole run, every module whatever its record, a wrong answer never
                         # admitted (A53E2)
                         # the whole run proves the native answer after the compiles, the runner's own value
@@ -1424,6 +1405,15 @@ end
                 end
             end
             flush(stdout)   # a failure printed survives a kill later in the shard
+            if !_DART_CORE_ONLY
+                local c = Test.get_test_counts(ts)
+                local v, why = verdict[]
+                # any other test of the case failed (its budget, its native answer): the case fails, its output naming it
+                (c.fails + c.errors + c.cumulative_fails + c.cumulative_errors > 0 && v in ("pending", "reject")) &&
+                    ((v, why) = ("fail", "a test of the case failed, named in the run's output"))
+                local cpu = _wt_cpu_seconds() - c0
+                v == "pending" ? push!(pending, key => cpu) : _dart_verdict(key, v, cpu, why)
+            end
         end
         # the block's modules in node now, so its cost is its own and no shard's node run grows with the corpus
         local block_results = Main.WTRunner.RunResult[]
@@ -1433,7 +1423,8 @@ end
             append!(results, block_results)
         end
         # judged at the block's end, so a kill later in the shard loses no verdict of it
-        _dart_judge(runs[first_run:end], unread[first_unread:end], block_gaps, block_results)
+        local failed = _dart_judge(runs[first_run:end], unread[first_unread:end], block_gaps, block_results)
+        foreach(((k, cpu),) -> haskey(failed, k) ? _dart_verdict(k, "fail", cpu, failed[k]) : _dart_verdict(k, "pass", cpu), pending)
         flush(stdout)
         isempty(_DART_DONE_FILE) || open(io -> println(io, _DART_GROUP_KEYS[bi]), _DART_DONE_FILE, "a")
         (nblocks += 1) > 1 && !isempty(_DART_COSTS_OUT) &&
@@ -1472,32 +1463,39 @@ end
 # attempt fails it by name; dev/corpus_shard.sh runs that attempt, so the shard goes on past the kill
 @testset "a case past its hard limit fails by name, and the run goes on" begin
     @test _dart_limited(() -> (:compiled, UInt8[1]), "dart_plant/quick"; limit = 5) == (:compiled, UInt8[1])
+    # judged by CPU seconds: a sleep that burns none is cut only at its wall backstop, which names the CPU-s it had (the
+    # CPU limit's own cut is the child's below, its CPU-s outside this process's, so the landing's G stays as it was)
+    local idle = first(_dart_limited(() -> (sleep(60); (:compiled, UInt8[])), "dart_plant/sleeps"; limit = 100, wall = 2))
+    @test idle isa _DartPastLimit && startswith(idle.why, "past its 2-s wall backstop, at ") && endswith(idle.why, " CPU-s: dart_plant/sleeps")
     mktempdir() do t
-        # a child julia running the watchdog over an allocation-free loop, which reaches no safepoint
+        # a child julia whose case's inference alone runs past its limit: the watchdog starts before the case is inferred
+        # (_dart_limited does not specialize on it), and inference defers the interrupt, so the cut is the kill, named on
+        # stderr and in the killed record. Specialized, the 30-CPU-s generator ran before the watchdog started, and the
+        # child returned. One child serves both, the kill and the inference (the landing's G kept)
         local killed = joinpath(t, "killed")
-        local child = """
-            Base.exit_on_sigint(false)
-            const _DART_WATCHDOG = $(repr(_DART_WATCHDOG))
-            run(pipeline(`perl -e \$(_DART_WATCHDOG) 1 1 \$(getpid()) "dart_plant/spins compiling f Tuple{Int64}" $(repr(killed))`; stdout = devnull, stderr = stderr); wait = false)
-            function spin(); local x = UInt(0); while true; x = x * 0x9e3779b9 + 1; end; x; end
-            spin()
+        local infers = """
+            Base.include(Main, $(repr(joinpath(@__DIR__, "..", "dart_limit.jl"))))
+            @generated function slow_infer(x)
+                local c = _wt_cpu_seconds()
+                while _wt_cpu_seconds() - c < 30; GC.safepoint(); end
+                return :(x + 1)
+            end
+            _dart_limited(() -> (slow_infer(1); (:compiled, UInt8[])), "dart_plant/infers compiling slow_infer Tuple{Int64}"; limit = 1, wall = 60, grace = 1)
             """
-        local err = IOBuffer()
-        local t1 = time()
-        local p = run(pipeline(ignorestatus(`$(Base.julia_cmd()) --startup-file=no -e $child`); stdout = devnull, stderr = err))
-        @test !success(p) && time() - t1 < 60
-        @test occursin("dart_tests.jl: dart_plant/spins compiling f Tuple{Int64} is past its 1-s hard limit and took no interrupt in 1 s: the process is killed", String(take!(err)))
+        local ierr = IOBuffer()
+        local q = run(pipeline(ignorestatus(addenv(`$(Base.julia_cmd()) --startup-file=no -e $infers`, "WT_DART_KILLED" => killed)); stdout = devnull, stderr = ierr))
+        @test !success(q) && occursin("dart_tests.jl: dart_plant/infers compiling slow_infer Tuple{Int64} is past its 1-CPU-s hard limit and took no interrupt in 1 s: the process is killed", String(take!(ierr)))
         # the next attempt reads the record, and the case fails by name whatever its record
-        @test _dart_read_killed(killed) == Dict("dart_plant/spins" => "dart_plant/spins compiling f Tuple{Int64}")
-        local why = "past its $(DART_CASE_LIMIT)-s hard limit, took no interrupt, and its process was killed: dart_plant/spins compiling f Tuple{Int64}"
-        @test _dart_breaks(:rejects, _dart_killed("dart_plant/spins compiling f Tuple{Int64}")) == why
-        @test _dart_breaks(:compiled, _dart_killed("dart_plant/spins compiling f Tuple{Int64}")) == why
+        local line = "dart_plant/infers compiling slow_infer Tuple{Int64} is past its 1-CPU-s hard limit"
+        @test _dart_read_killed(killed) == Dict("dart_plant/infers" => line)
+        @test _dart_breaks(:rejects, _dart_killed(line)) == "took no interrupt, and its process was killed: $line"
+        @test _dart_breaks(:compiled, _dart_killed(line)) == "took no interrupt, and its process was killed: $line"
         # a shard attempt's warm-up killed past its own limit fails by name as that warm-up
-        write(killed, "dart_warmup/2-of-4 the warm-up compile, attempt 1\n")
+        write(killed, "dart_warmup/2-of-4 the warm-up compile, attempt 1 is past its $(DART_WARMUP_LIMIT)-CPU-s hard limit\n")
         local warm = _dart_read_killed(killed)
         @test collect(keys(warm)) == ["dart_warmup/2-of-4"]
-        @test _dart_breaks(:compiled, _dart_killed(warm["dart_warmup/2-of-4"]; limit = DART_WARMUP_LIMIT)) ==
-              "past its $(DART_WARMUP_LIMIT)-s hard limit, took no interrupt, and its process was killed: dart_warmup/2-of-4 the warm-up compile, attempt 1"
+        @test _dart_breaks(:compiled, _dart_killed(warm["dart_warmup/2-of-4"])) ==
+              "took no interrupt, and its process was killed: dart_warmup/2-of-4 the warm-up compile, attempt 1 is past its $(DART_WARMUP_LIMIT)-CPU-s hard limit"
         # dev/corpus_shard.sh over a planted shard: each run finishes one block, and MODE says how it ends
         local fake = joinpath(t, "shard.sh")
         write(fake, raw"""

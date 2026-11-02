@@ -24,6 +24,8 @@ export WT_DART_KILLED="$state/killed" WT_DART_DONE="$state/done"
 for attempt in $(seq 1 $CORPUS_ATTEMPTS); do
   nk=$(wc -l < "$WT_DART_KILLED")
   ( WT_DART_ATTEMPT=$attempt "$@" ) >> "$out" 2>&1; rc=$?   # a subshell, so the shell's note of a killed run lands in the output
+  # the finished attempts' CPU seconds, user and system, for dev/corpus.sh's limit (bash's `times`, its children's line)
+  times | sed -n 2p | awk '{ s = 0; for (i = 1; i <= 2; i++) { split($i, a, /[ms]/); s += a[1] * 60 + a[2] } printf "%d\n", s }' > "$state/cpu"
   { [ $rc -ne 0 ] && [ "$(wc -l < "$WT_DART_KILLED")" -gt "$nk" ]; } || break
   echo "corpus_shard: attempt $attempt's process was killed at $(tail -n 1 "$WT_DART_KILLED"); the shard runs again past it" >> "$out"
 done

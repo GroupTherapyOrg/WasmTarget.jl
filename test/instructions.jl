@@ -8,3 +8,8 @@ function _wt_instructions()
         error("proc_pid_rusage(RUSAGE_INFO_V4) failed: no instruction count to measure by")
     info[2 + 29 + 1]
 end
+
+# the process's CPU seconds, user and system over its threads: C's clock(), CLOCKS_PER_SEC 10^6 on macOS and on Linux.
+# A limit judged by them judges the program, not the scheduler: at background QoS beside the lanes a corpus shard ran
+# at 20 to 36% of an efficiency core (6732d4a6, 2026-11-01)
+_wt_cpu_seconds()::Float64 = ccall(:clock, Culong, ()) / 1e6
