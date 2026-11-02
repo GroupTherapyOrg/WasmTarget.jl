@@ -36,6 +36,13 @@
 @quarantine "Julia's runtime raises BoundsError with the value and the index where a bounds check fails" Core.BoundsError @noinline throw_bounds_error(@nospecialize(a::Any), i::Int)::Union{} =
     Runtime.Error__throw_with_current_stack_trace(BoundsError(a, i))
 
+# jl_method_error (julia/src/gf.c:3057), raised by the builtin throw_methoderror (builtins.c:604) where
+# Julia's inference proved no method matches a call: MethodError of the function and its arguments'
+# tuple (jl_f_tuple). Julia records the task's world age; a compiled program runs in no session's world,
+# so the error carries Base's own default, MethodError's two-argument constructor's
+@quarantine "julia/src/gf.c:3057 jl_method_error raises MethodError with the function and the tuple of its arguments" Core.MethodError @noinline throw_method_error(@nospecialize(f::Any), @nospecialize(args::Tuple))::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(MethodError(f, args))
+
 # Julia's egal of two values of any classes, which Julia's codegen calls for `===` where it cannot
 # compare its operands inline (julia/src/codegen.cpp:3379 emit_box_compare: the pointers, then the
 # type tags, then jl_egal__unboxed): jl_egal_ (julia.h:1885), its pointer and tag tests and

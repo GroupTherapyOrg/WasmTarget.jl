@@ -262,6 +262,29 @@ fresh String's (wasm_string_alloc): dart's `WasmArray.copy`, `array.copy`. Nativ
 end
 
 """
+    wasm_string_memory(s) -> Memory{UInt8}
+
+A byte Memory over `s`'s data, sharing it: Julia's jl_string_to_genericmemory (genericmemory.c:104),
+which makes a Memory whose `ptr` is the String's bytes and whose owner is the String; over
+WasmTarget's layout a Memory{UInt8} struct whose data array is the String's own and whose length is
+that array's. Natively Julia's own call of it, as `unsafe_wrap(Memory{UInt8}, s)` makes it.
+"""
+@quarantine "julia/src/genericmemory.c:104 jl_string_to_genericmemory makes a byte Memory sharing a String's bytes; WasmGC shares the data array" Core.Memory @noinline wasm_string_memory(s::String)::Memory{UInt8} =
+    ccall(:jl_string_to_genericmemory, Ref{Memory{UInt8}}, (Any,), s)
+
+"""
+    wasm_memory_string(m, n) -> String
+
+A String of the first `n` bytes of `m` (`0 < n <= length(m)`): Julia's jl_genericmemory_to_string
+(genericmemory.c:189), which returns the String owning `m`'s bytes where there is one, else a copy
+(jl_pchar_to_string); over WasmTarget's layout a String struct over `m`'s data array where `n` is its
+length, else over a copy of its first `n` bytes (array.copy), as the copy Julia makes where the owner's
+size class would change. Natively Julia's own call of it, as `unsafe_takestring(m)` makes it.
+"""
+@quarantine "julia/src/genericmemory.c:189 jl_genericmemory_to_string takes a byte Memory as a String, its own bytes or a copy; WasmGC wraps or copies the data array" Core.Memory @noinline wasm_memory_string(m::Memory{UInt8}, n::Int)::String =
+    ccall(:jl_genericmemory_to_string, Ref{String}, (Any, Int), m, n)
+
+"""
     wasm_memory_copy!(dest, src, n) -> Nothing
 
 Copies `n` elements of `src`'s memory from its reference's offset into `dest`'s memory from its own,

@@ -77,11 +77,12 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..nir_used_statements, ..nir_value_operands, ..nir_value_type, ..nir_vararg_call_tuple,
        ..nir_vararg_packing, ..no_counterpart_rejection, ..reject!, ..run_wasm_opt,
        ..throw_atomic_error, ..throw_bounds_error, ..throw_divide_error,
-       ..throw_invalid_memory_size, ..throw_out_of_memory, ..throw_undef_ref_error,
-       ..tuple_record_arity, ..tuple_record_class, ..uf_add!, ..uf_find!, ..uf_union!,
-       ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!, ..wasm_egal,
-       ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_unset!, ..wasm_string_alloc,
-       ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length
+       ..throw_invalid_memory_size, ..throw_method_error, ..throw_out_of_memory,
+       ..throw_undef_ref_error, ..tuple_record_arity, ..tuple_record_class, ..uf_add!, ..uf_find!,
+       ..uf_union!, ..wasm_array_length, ..wasm_array_new, ..wasm_array_write!, ..wasm_egal,
+       ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_string, ..wasm_memory_unset!,
+       ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length,
+       ..wasm_string_memory
 # ---- end of Dart2Wasm's src/julia names ----
 # a dispatcher over every NIR kind is inferred once, not once per kind of node (a compile's first-use cost)
 import Base: @nospecializeinfer

@@ -56,6 +56,9 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
                 local tt = nir_tuple_type(b, st)
                 isconcretetype(tt) ? _meet_value!(out, seen, tt, at) : _meet_tuple_record!(out, seen, tt, at)
             end
+            # throw_methoderror's arguments, the tuple jl_method_error makes of them (jl_f_tuple), passed
+            # as the runtime's open Tuple: the record of their count
+            st isa NirCall && nir_callee(st) === Core.throw_methoderror && _meet_value!(out, seen, tuple_record_class(length(st.args) - 2), at)
             if st isa NirInvoke
                 local vt = nir_vararg_call_tuple(b, st)
                 vt !== nothing && (isconcretetype(vt) ? _meet_value!(out, seen, vt, at) : _meet_tuple_record!(out, seen, vt, at))

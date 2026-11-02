@@ -482,6 +482,7 @@ end
     # alone was compiled ten times, one body per builtin
     f === Core.:(===) && length(args) == 2 && return generate_static_intrinsic(self, Val(:identical), f, args)
     f === Core._svec_len && length(args) == 1 && return generate_static_intrinsic(self, Val(:svec_len), f, args)
+    f === Core.throw_methoderror && length(args) >= 1 && return generate_static_intrinsic(self, Val(:throw_methoderror), f, args)
     f === Core.nfields && length(args) == 1 && return generate_static_intrinsic(self, Val(:nfields), f, args)
     f === Core._svec_ref && length(args) == 2 && return generate_static_intrinsic(self, Val(:svec_ref), f, args)
     f === Core.svec && return generate_static_intrinsic(self, Val(:svec), f, args)
@@ -539,7 +540,8 @@ end
 # wasm array takes, as dart wraps its int.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:string_data_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
     target.def in methods(wasm_string_length) ? :length : target.def in methods(wasm_string_codeunit) ? :codeunit :
-    target.def in methods(wasm_string_alloc) ? :alloc : target.def in methods(wasm_string_copy!) ? :copy : nothing
+    target.def in methods(wasm_string_alloc) ? :alloc : target.def in methods(wasm_string_copy!) ? :copy :
+    target.def in methods(wasm_string_memory) ? :memory : target.def in methods(wasm_memory_string) ? :string : nothing
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:string_data}, op::Symbol, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
@@ -579,6 +581,60 @@ end
         # dart's void intrinsics leave the null of the top type (WasmArrayExt.[]=), Julia's nothing
         WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
         return t.top_type[]
+    elseif op === :memory || op === :string
+        # a byte Memory's struct (src/julia/classes.jl _memory_instance_fields: its data array, the
+        # String's own array type, and its length), the String's data shared by both
+        local minfo = get(t.class_info, Memory{UInt8}, nothing)
+        minfo === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String's Memory where Memory{UInt8} has no class info"), at)
+        local mfields = class_instance_fields(Memory{UInt8}, at)
+        local mdata = only(f for f in mfields if f.name == "data")
+        local mlength = only(f for f in mfields if f.name == "length")
+        length(mfields) == 2 || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Memory{UInt8} holds $(length(mfields)) fields, not its data and length"), at)
+        local data_ref = WasmBuilder.IR.RefType_def(array_type; nullable = false)
+        WasmBuilder.unpacked(minfo.struct_.fields[t.field_index[mdata] + 1].type) == data_ref ||
+            reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Memory{UInt8}'s data is no String's data array"), at)
+        local p = add_local(code_gen, data_ref)
+        if op === :memory
+            # jl_string_to_genericmemory: the String's array, its length the Memory's
+            data_of(args[1])
+            WasmBuilder.local_set(b, p)
+            push_object_header_fields(b, t, minfo)
+            for f in sort(mfields; by = f -> t.field_index[f])
+                WasmBuilder.local_get(b, p)
+                f === mlength && (WasmBuilder.array_len(b); WasmBuilder.i64_extend_i32_u(b))
+            end
+            WasmBuilder.struct_new(b, minfo.struct_)
+            return minfo.non_nullable_type
+        end
+        # jl_genericmemory_to_string: the Memory's array where the String takes all of it, else a copy
+        # of its first n bytes
+        local k = add_local(code_gen, WasmBuilder.IR.NumType_i32)
+        local q = add_local(code_gen, data_ref)
+        translate_expression(code_gen, args[1], minfo.non_nullable_type)
+        WasmBuilder.struct_get(b, minfo.struct_, t.field_index[mdata])
+        WasmBuilder.local_set(b, p)
+        offset(args[2])
+        WasmBuilder.local_set(b, k)
+        push_object_header_fields(b, t, info)
+        WasmBuilder.local_get(b, k)
+        WasmBuilder.local_get(b, p)
+        WasmBuilder.array_len(b)
+        WasmBuilder.i32_eq(b)
+        WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[data_ref])
+        WasmBuilder.local_get(b, p)
+        WasmBuilder.else_(b)
+        WasmBuilder.local_get(b, k)
+        WasmBuilder.array_new_default(b, array_type)
+        WasmBuilder.local_tee(b, q)
+        WasmBuilder.i32_const(b, 0)
+        WasmBuilder.local_get(b, p)
+        WasmBuilder.i32_const(b, 0)
+        WasmBuilder.local_get(b, k)
+        WasmBuilder.array_copy(b, array_type, array_type)
+        WasmBuilder.local_get(b, q)
+        WasmBuilder.var"end"(b)
+        WasmBuilder.struct_new(b, info.struct_)
+        return info.non_nullable_type
     end
     reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String data operation $op"), at)
 end
@@ -1301,6 +1357,35 @@ end
     translate_expression(code_gen, second, tr.top_type[])
     call(code_gen, nir_runtime_member(tr.component, jl_egal, "$(code_gen.enclosing_member): Julia's === on $first_type, $second_type"))
     return i32
+end
+
+# Julia's `throw_methoderror(f, args...)` (julia/src/builtins.c:604), which Julia's inference writes
+# where it proved no method matches a call: jl_method_error's MethodError of `f` and the tuple of the
+# arguments (gf.c:3057, jl_f_tuple), raised through the runtime (src/julia/runtime/rtutils.jl
+# throw_method_error), the tuple the record of its count (the open_tuple arm), as the runtime's open
+# Tuple parameter holds it
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:throw_methoderror}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local at = "$(code_gen.enclosing_member): Julia's throw_methoderror"
+    local callee = add_local(code_gen, t.top_type[])
+    translate_expression(code_gen, args[1], t.top_type[])
+    WasmBuilder.local_set(b, callee)
+    local types = Any[dart_type_of(self, a) for a in args[2:end]]
+    local values = WasmBuilder.IR.Local[]
+    for (a, T) in zip(args[2:end], types)
+        local w = translate_type(t, T)
+        local v = add_local(code_gen, w)
+        translate_expression(code_gen, a, w)
+        WasmBuilder.local_set(b, v)
+        push!(values, v)
+    end
+    WasmBuilder.local_get(b, callee)
+    generate_static_intrinsic(self, Val(:open_tuple), Tuple{types...}, values, at)
+    call(code_gen, nir_runtime_member(t.component, throw_method_error, at))
+    WasmBuilder.unreachable(b)
+    return t.top_type[]
 end
 
 # Julia's egal of two values of any classes, jl_egal_'s body (julia.h:1885, the runtime's jl_egal,
