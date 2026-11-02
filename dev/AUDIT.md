@@ -7917,3 +7917,145 @@ A80S1 leave row 1.L, fixed by 89a5deb2. Open, their rows the lead's to write: A8
 1.L; A81S2 for row 1.L and row 1.A6, as the rows' own repair. By owner: wt3-latency A81E1, A81E2 and A81E3, with A80S2 and
 A80S3; wt3-parity A81S3, with A80S4, A78E2, A78S1, A78S2, A76E4, A76E5, A76E6 and A76S2; lead A81S1 and A81S2, with A77E1,
 A77E2 and A77E3.
+
+## 2026-11-01 — audited through 4ad7e0a1 (6baa3349..4ad7e0a1, after entry 81: D14_RED tied to SHARDS, a call-site effects claim refused, the no-frame plant, the kernel's whole-tree CPU back beside the reported, throwWasmRefError's reason, === over an open slot by a ported jl_egal; with 89a5deb2 and 81427cbd, _virtualCall, read here)
+
+The eighty-second audit, beside the work, covers the 8 commits of 6baa3349..4ad7e0a1 that are not audit entries
+(5b9ada65, entry 81): 89a5deb2 and 81427cbd, which landed before entry 81 and no range held, and a53b3c0c, 61a68809,
+9c971f08, a1c1f1d5, 1dad244a and 4ad7e0a1, read here under Dale's R1 and R2 as standing sections. Every finding rests on one exact command, quoted.
+Standing items. Each commit names its clause in a `Charter:` line (89a5deb2 C10, 81427cbd C2, a53b3c0c C10, 61a68809 C2,
+9c971f08 C2, a1c1f1d5 C10, 1dad244a C6, 4ad7e0a1 C3). No silent catch: `git diff 5b9ada65..4ad7e0a1 | grep -cE
+'^\+.*\bcatch\b'` gives 2 (89a5deb2 and 81427cbd add none), both plants in test/parity_ratchet.jl that rethrow or test what they catch. The debt list reads
+382 (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`), two fewer, RUNTIME_DEMANDS and RUNTIME_ENTRY_POINTS pinned
+by 4ad7e0a1 (A82S1). src reads 3086 of 3404 at 89a5deb2 and 3087 from 81427cbd on (`.git/wt-progress.tsv`), the one step
+_virtualCall's body, its stub count 1 -> 0. Earlier findings: A81E1, A81E2 and A81E3 are fixed by a1c1f1d5; A81S1 and
+A81S2 by a53b3c0c; A78E2 by 61a68809; A78S1 by 9c971f08; A80S5 by 1dad244a only in half (A82S5); A71S3's text is written
+by 81427cbd (code_generator.jl's visitAsExpression comment cites codegen.cpp:6384's &skip and says WasmTarget differs) with
+no `Fixes:` line. A80E2, A80S2, A80S3, A80S4, A81S3, A77E1, A77E2, A77E3, A78S2, A73S3, A76E4, A76E5, A76E6, A76S2, A68E3,
+A71E2, A69E1, A68E2, A68S4, A72E1, A67E1 and A64R1, carried, not re-read. Findings A82E1 and A82S1 to A82S7.
+
+Area: builder — no change under src/wasm_builder (`git diff --stat 5b9ada65..4ad7e0a1 -- src/wasm_builder` gives
+nothing).
+
+Area: collection and planning — 4ad7e0a1 keeps jl_egal in the closed world by a RUNTIME_ENTRY_POINTS row whose demand is
+`:egal` (`grep -n ':egal => _compares_by_egal' src/julia/subset.jl` gives `289:    :egal => _compares_by_egal,`).
+_compares_by_egal (subset.jl:261) decides, from Julia's argextype, which `===` the intrinsifier compares inline. (A82S1,
+medium, R1, D5, D7) that decision is now written three times: the identical arm's own cases (intrinsics.jl:1227-1300, the
+`typeintersect(first_type, second_type) === Union{}` test at :1295), the code generator's EqualsNull test
+(`code_generator.jl:908: equals_null() = f === Core.:(===) && length(c.ar…`), and the predicate, each hand-kept to the
+others, the predicate's comment saying its over-approximation "keeps jl_egal unused, never missing". It is A64R1's class
+(RUNTIME_DEMANDS' predicates bespoke, row 1.C), one row more, as A73S3 was. And the same commit takes both tables off the
+exact debt list by pinning: `sed -n 278p src/julia/subset.jl` begins `@quarantine "julia/src/codegen.cpp:4064
+emit_builtin_call lowers each builtin, calling the runtime where one raises; a runtime root is demanded by the builtin or
+intrinsic whose raise it lowers"`. emit_builtin_call (`sed -n 4064,4068p src/codegen.cpp` at the julia pin gives `static
+bool emit_builtin_call(jl_codectx_t &ctx, jl_cgval_t *ret, jl_value_t *f, … // returns true if the call has been
+handled`) lowers a call; it decides no root, Julia linking its whole runtime, and the reason does not say how WasmTarget
+differs (D7). RUNTIME_ENTRY_POINTS' docstring gains `:egal` and still lacks `:typeassert` (A73S3). Fix: the inline
+decision is one function the identical arm and the predicate both call (D5); until A64R1's roots land, row 1.C's A64R1
+names `:egal`; each of the two reasons states Julia's differing answer (libjulia linked whole, no demand). Owner:
+wt3-memory (the predicate and the arm), wt3-runtime (the roots, A64R1).
+
+81427cbd: _virtualCall. To the lead's second question: yes, a 1:1 port. Read beside `git show
+898a1e4b:pkg/dart2wasm/lib/code_generator.dart | sed -n 2028,2125p`, code_generator.jl:1631-1695 takes dart's steps in
+dart's order: the getter's unchecked-entry assert, selectorForTarget, the signature and entry name, the name check, the
+receiver pushed, targets' allTargetRanges and staticDispatchRanges, noTarget / directCall / callPolymorphicDispatcher as
+dart computes them, the unreachable call, the direct call through getFunctionEntry, signatureForDirectCall and
+paramInfoForDirectCall, the receiver local and its non-nullable assert, loadClassId before the polymorphic dispatcher,
+callDispatchTable with the interface target, then synthesizeNullReturnValue and synthesizeNoReturn with their asserts;
+dart's `node.location` is the enclosing member. visitInstanceSet's virtual arm is dart's (:2451-2475: the temp, the drop of
+the setter's null). paramInfoForDirectCall's instance arm loops `_selector_info` for the selector containing the target
+(translator.jl:1430) where dart reads selectorForTarget then containsTarget; the result is the same while a target lies in
+one selector, as signatureForDirectCall's port already loops (:1400). (A82S2, medium, D5) the classes a receiver admits are
+read again: `grep -n 'info.cls <: cls\|c <: receiver\|isconcretetype(c) &&' src/*.jl src/julia/*.jl` gives
+`class_info.jl:573` (get_concrete_class_id_range, the one reading A71S1 ruled), `code_generator.jl:1784` and `:1894` (each a
+scan of `translator.classes[]` with `!class_is_abstract(info.cls) && info.cls <: cls`) and `classes.jl:672`
+(field_selector_calls' own list); the selector's name comes from the visitors' list at the call and from
+field_selector_calls' at build, and a disagreement rejects Internal at selector_for_target ("no selector for the field").
+Fix: one reading of a type's admitted classes, from get_concrete_class_id_range, called by field_selector_calls and both
+visitors, the two scans deleted. Owner: wt3-cgstubs2 (code_generator.jl), wt3-memory (classes.jl). (A82S3, low, D6) the
+interface target is a ClassField no class holds: `grep -n 'FieldReference(ClassField(class_for_type' src/code_generator.jl`
+gives :1784 and :1894, each `ClassField(class_for_type(...), 0, <name>, Any, ...)`, index 0 (a primitive class's `value`,
+`sed -n 309p src/julia/classes.jl`: `ClassField(c, 0, "value", c, false)`) and type Any, read only for its name and kind
+(dispatch_table.jl:320-323); any reader of its index or type, field_index's Dict among them, would read a field that is not
+there. Fix: a Reference variant naming the selector (the receiver's type, the field's name, the kind), so no fabricated field
+is writable. Owner: wt3-cgstubs2. (A82S7, low, D12) the direct setter path is untested: test/src/code_generator_sub.jl's
+VirtualCases hold a direct read (`154:struct D1 <: T; v::Int; end`, one class) and writes over two classes (`160:mutable
+struct M1 <: U` and `161:mutable struct M2 <: U`), so directCall's setter branch, then the visitor's drop of the null
+`call` synthesizes, runs in no case. Fix: a case with one mutable class under its abstract type, setfield! on it, run
+against native. Owner: wt3-tests2.
+
+Area: emission and diagnostics — 4ad7e0a1: jl_egal. To the lead's first question: a faithful port in its structure, one
+departure sound and one not. Read against the julia pin: jl_egal_ (julia.h:1885: `a == b`, then `jl_typetagof` apart, then
+jl_egal__unboxed_) is the arm's ref.eq, null and class-id tests; jl_egal__unboxed_ (:1874) answers a mutable class 0
+(egal_by_identity); jl_egal__bitstag and compare_fields (builtins.c:243, :100) are the per-class switch, a field of bits by
+its bits (a float reinterpreted, bits_equal), a pointer field by jl_egal again, a String's bytes and a SimpleVector's
+elements by length and elements (memcmp, compare_svec :87); emit_f_is's exhaustive test (`jl_type_intersection(rt1, rt2) ==
+jl_bottom_type`, codegen.cpp:3607) is the identical arm's disjoint answer; emit_box_compare (:3379) the boxed call. The
+kinds answer by reference, sound only while each type is one canonical constant (A68S3), as the inline arm already relies.
+The boxed Bool: sound. Julia answers Bool by its tag because its two Bools are canonical, so `a == b` failed means two
+values; WasmTarget's boxes are not canonical, and comparing the i32 gives Julia's answer on every pair. The host
+reference: unsound. (A82E1, medium, D3, D9) a class holding an externref answers not egal past the reference test:
+`sed -n 1459,1461p src/intrinsics.jl` gives `if Base.iskindtype(cls) || egal_by_identity(cls) || any(f ->
+host(info.struct_.fields[t.field_index[f] + 1].type), fields)` / `WasmBuilder.i32_const(b, 0)`, host being any reference
+not under eqref (:1449). Julia's WasmExternRef is bits (`grep -n 'primitive type WasmExternRef' src/julia/wasm_array.jl`
+gives line 209, `primitive type WasmExternRef <: Any 64`), so jl_egal compares its bits, and one host reference boxed twice
+(two stores of one unboxed value into Any slots) is egal in Julia and not in WasmTarget: a plausible false past a gap. The
+cited precedent does not fit: dart's identical answers false for a class it does not compare by value because dart's
+identity is by reference for every such class; dart's answer for two host references is
+`sdk/lib/_internal/wasm/js_common/js_helper.dart:151` (`git show 898a1e4b:… | sed -n 151,152p` gives `bool
+areEqualInJS(WasmExternRef? l, WasmExternRef? r) =>` / `JS<bool>("(l, r) => l === r", l, r);`), which JSValue's `==`
+calls (:42-43). The differential cannot see it (native Julia runs no host), and `grep -c WasmExternRef test/src/records.jl`
+gives 0. Fix: areEqualInJS ported into the runtime (an inline-JS port beside Runtime's others) and an externref field
+compared by it; until then the arm rejects, located, rather than answering. Owner: wt3-memory (the arm), wt3-runtime (the
+port). (A82S4, low, D9) the arm's own rejection names wasm_egal, not a statement: `sed -n 1330p src/intrinsics.jl` gives
+`local at = "$(code_gen.enclosing_member): Julia's jl_egal"`, and the arm is compiled as wasm_egal's body, so a class of
+the closed world holding a wasm type no arm compares (:1444's Unquarantined) rejects every program with an open `===`,
+naming none of its `===` statements. Fix: the rejection names the first `===` statement that demanded jl_egal (the demand
+already finds it). Owner: wt3-memory.
+
+1dad244a: throwWasmRefError. The new reason is true (`git grep -n throwWasmRefError 898a1e4b -- pkg/dart2wasm/lib` gives
+the definition :655, its call :658, intrinsics.dart:704 and :2013, kernel_nodes.dart:645). (A82S5, low, R2, D9) its
+`Fixes: A80S5` closes a finding half fixed: A80S5 named two reasons (kernel_nodes.jl and code_generator.jl), the commit says
+"kernel_nodes.jl's half is wt3-runtime's", and `sed -n 73p src/kernel_nodes.jl` still says `… and no Julia value is a
+dart:_wasm reference"`, the false ground A80S5 named; L154 reads A80S5 as closed. A81S3's class (a fix trailer on a
+partial fix). Fix: kernel_nodes.jl:73's reason names the two intrinsics; A82S5 carries the half. Owner: wt3-runtime.
+
+Area: enforcement and prose — a1c1f1d5, to the lead's third question: yes, for every process the tree waits for, and the
+refusal leaves no 0-s green. tree_instructions.jl:95-99 and :106-113 read getrusage(RUSAGE_CHILDREN) around the command (the struct's
+two timevals, buf[1..4], RUSAGE_CHILDREN = -1, as macOS lays them), write `max(0, kernel - reported)` as the sixth field,
+and check.sh:224-229 judge it one for one in `ps_of`, `cpu` and the printed split. A process that never reports (perl,
+bash, a killed child, _exit) is in the kernel's sum once its parent reaps it; the header states the one escape, a
+descendant re-parented before it exits (the watchdogs, test/src/dart_tests.jl:1200, sleep). The root that reports nothing
+returns 70 before writing the .gi (tree_instructions.jl:175), and every stage's non-zero exit is red before any .gi is
+read (check.sh:113 the load, :151-157 the ratchet, :169 the shards), so no stale or zero count is judged. The plant plants
+both (a perl-wrapped grandchild, a bash-rooted command). a53b3c0c: (A82S6, low, D6) the tie of D14_RED to SHARDS is
+checked after every stage has run: `grep -n 'SHARDS > 4 ? 140\|^SHARDS=' dev/check.sh` gives `129:SHARDS=6` and `248:[ $((
+SHARDS > 4 ? 140 : 120 )) -eq $D14_RED ] || …`, so a mismatched commit spends the whole check before red, and the tie is a
+check over two literals (a stopgap) not marked as one. Fix: the tie moves above the stages, marked STOPGAP with its exit (one
+value ship.sh and the band both read). Owner: lead. 61a68809 reads both forms Base writes (`sed -n 768,786p base/expr.jl`
+at the pin: an @ccall rewritten to @ccall_effects, a call site's `Expr(:purity)` region), a generated method skipped there
+being refused already (construction.jl:279). 9c971f08's plant reaches the refusal it names.
+
+stopgap in disguise: A82S1's pins, a reason citing a lowering function for a root rule Julia does not have; A82S6's tie.
+
+precedent: julia.h:1874-1895 jl_egal_ and jl_egal__unboxed_, builtins.c:87-300 compare_svec, compare_fields and
+jl_egal__bitstag, codegen.cpp:3379 emit_box_compare and :3566 emit_f_is, at the julia pin, for jl_egal; dart's
+js_helper.dart:151 areEqualInJS for a host reference (A82E1); code_generator.dart:2028 _virtualCall, :2434 visitInstanceSet,
+translator.dart:1896 paramInfoForDirectCall; getrusage(RUSAGE_CHILDREN) for the tree's CPU.
+
+Requirements: D3 and D9 (A82E1), D5 (A82S1, A82S2), D6 (A82S3, A82S6), D7 (A82S1), D9 (A82S4, A82S5), D11 (no model
+touched; jl_egal's switch has no TLA+ model, an algorithm over a closed set of classes the differential reads), D12
+(A82S7), D14 and D17 (a1c1f1d5's band stated: half the grandchild's seconds and a tenth of a second).
+
+R1 and R2. R1: _virtualCall is dart's, line for line; jl_egal is Julia's runtime, ported by line, with dart's identical as
+the precedent for an intrinsified runtime function; its host-reference arm is the one piece answered without a source
+(A82E1), and its demand is A64R1's bespoke class (A82S1). R2: _virtualCall's stub became a body (3086 -> 3087, 1 -> 0
+@unported stubs); 1dad244a's rejection stays Internal, counted with the 273 that never return, not ported; a half fix
+called a fix is A82S5.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A81E1, A81E2, A81E3, A81S1 and A81S2 leave row 1.L,
+fixed by a1c1f1d5 and a53b3c0c; A78E2 leaves row 1.K, fixed by 61a68809; A78S1 leaves row 1.A6, fixed by 9c971f08; A80S5
+leaves row 1.F, its open half carried as A82S5; A71S3 may leave row 1.D, its text written by 81427cbd. Open, their rows
+the lead's to write: A82E1, A82S2, A82S3, A82S4 and A82S7 for row 1.D; A82S1 for row 1.C, beside A64R1; A82S5 for row
+1.F; A82S6 for row 1.L. By owner: wt3-memory A82E1, A82S1 and A82S4, with A82S2's classes.jl half; wt3-runtime A82S5, A82E1's
+areEqualInJS port and A82S1's roots (A64R1); wt3-cgstubs2 A82S2 and A82S3; wt3-tests2 A82S7; lead A82S6.
