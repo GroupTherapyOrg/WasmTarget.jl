@@ -1704,6 +1704,20 @@ end
 # dev/src_progress.sh's output for planted numbers, or for this tree with none
 src_progress(args::String...)::String = read(`bash $(joinpath(ROOT, "dev", "src_progress.sh")) $args`, String)
 
+# this tree's line, its counts read in this process, which has WasmTarget and the generator loaded
+# (progress_counts, the one reading src_progress.sh's own julia shares), and the rest by the program: a second
+# julia loading WasmTarget again was most of L208's children's CPU (wt3-latency's table)
+function src_progress_here()::String
+    local cache = String(readchomp(`bash $(joinpath(ROOT, "dev", "src_progress.sh")) key`))
+    local wt = Base.require(Base.PkgId(Base.UUID("9f3a1415-1112-405b-ae89-c61daf9872bd"), "WasmTarget"))
+    local sk = skeleton_module()
+    local m = Module(:ProgressCounts)
+    Core.eval(m, :(const Skeleton = $sk)); Core.eval(m, :(const WasmTarget = $wt))
+    Base.include(m, joinpath(ROOT, "dev", "progress_kinds.jl"))
+    local c = Base.invokelatest(getglobal(m, :progress_counts), Base.invokelatest(getglobal(sk, :read_scope)), cache)
+    return src_progress("line", string.(c)..., cache)
+end
+
 # the line of dev/ship.sh that prints, after its push, the src progress line its check's ratchet printed
 const SHIP_SRC_LINE = raw"    grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'; exit 0"
 
@@ -3311,7 +3325,7 @@ const LOCKS = [
     "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/ship.sh` prints dev/src_progress.sh's line after every landing, the one the landing's check ran it for (this lock, in the ratchet dev/check.sh runs), which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. A definition counts ported with a body unless Julia's inference finds it never returns (its method inferred over its own signature, unoptimized, by the compiler's typeinf_frame: A64E2), its kind a gap's (Unported, Unquarantined) where a reject! in its typed code takes one, else Internal; an Internal one whose dart member at the pin throws first is DartThrow, counted, naming its throw's line, and one that is abstract DartAbstract, reported beside the headline and never in it, naming its declaration, each read by dev/skeleton.jl's reader (dart_kinds over its declarations' body forms), the one dart reader (A74S1); a return type of Nothing whose typed code calls nothing but reject! for its effect or its returned value a guard and so a rejection (A72S1, output_target_table's form), and a check's rejections alone (InvalidModule, OutsideSubset, ProgramError) a body; with plants (one rejection, a guard and then a rejection, a helper that only rejects, a guard returning nothing otherwise and one whose value a local no return reads holds, each a rejection; a call for its effect whose value goes to a local never read a body; a rejection whose kind the typed code does not fix refused, a method whose own signature matches no method of its own refused (a method deleted after its entry was taken, A75E3), and one Julia's inference gives no frame refused the same (a generator that throws, A78S1), each a located refusal, never a body (A74S2), the Rejection sum's kinds named in one table checked against the sum; a returning path, a check, a call for its effect and a call whose value is returned, each a body; a throwing dart body DartThrow at its throw's line past a comment, an abstract dart getter DartAbstract at its line, a dart body, a bodiless constructor and an enum neither). The kinds are kept in the common dir (wt-rejection-kinds/) under dev/cache_key.sh's key, Base's staleness rule (stale_cachefile) over every input they read (the julia build and flags, the pinned checkouts' heads, and src/, lib/WasmInterpreter, the manifest, the dart reader and the program, each by path and content), read and written by one block (dev/progress_kinds.jl), the line naming the key and a hit or a miss, with plants (the same inputs one key; an edit only to the reader, only to the program, only to a pin, and a text moved between files, each another; a key computed with a tracked input missing, or with the julia's header failing, refused, A78E1). And dev/ship.sh ranks a stack early as port work only when it changes src/'s code, read by the same program (`code <base> <head>`): a changed or removed line neither blank nor a comment (A66E4). Here: land runs the program, this tree's line is printed, the program on planted numbers (4 landings print no note, 5 print it), and its port class on a scratch repository (comments, blank lines and a file outside src/ no port; a changed and a removed line of code a port, and a change past a pipe's buffer; a base naming no commit refused) (dev/CHARTER.md C0)",
         () -> begin
             local v = src_progress_negatives_missed()
-            local o = src_progress()
+            local o = src_progress_here()
             foreach(l -> println("    · ", l), split(rstrip(o), '\n'))
             startswith(o, "src: ") || push!(v, "dev/src_progress.sh printed no src line")
             occursin(SHIP_SRC_LINE, read(joinpath(ROOT, "dev", "ship.sh"), String)) ||

@@ -10,6 +10,8 @@
 #   bash dev/src_progress.sh kinds                 each counted anchor and its kind, one line each (`<kind>\t<anchor>`,
 #                                                 a DartThrow's or DartAbstract's dart line after it), from
 #                                                 which the line's counts are read back (A74S2)
+#   bash dev/src_progress.sh key                   the kinds cache's file (its key), for a caller that reads the kinds
+#   bash dev/src_progress.sh line <7 counts> <file>  the line from counts read in a julia with WasmTarget loaded
 #   bash dev/src_progress.sh code <base> <head>   exits 0 when the change from <base>'s merge base with
 #                                                 <head> changes a line of code under src/ (a line neither
 #                                                 blank nor a comment), 1 when it changes none, 2 when a
@@ -42,6 +44,9 @@ kinds_cache() {
 }
 # a port is a change to src/'s code: its added and removed lines, the diff's file headers aside, less the
 # blank ones and Julia's `#` comments (f4cc916d, comment only, ranked early as port work: A66E4)
+if [ "${1:-}" = key ]; then
+    kinds_cache; exit $?
+fi
 if [ "${1:-}" = kinds ]; then
     . dev/depot.sh; wt_depot_export "$PWD"
     WT_KINDS_CACHE=$(kinds_cache) || exit 1; export WT_KINDS_CACHE
@@ -75,6 +80,13 @@ started=1
 if [ $# -eq 3 ] || [ $# -eq 5 ]; then
     anchored=$1; ported=$2; since=$3
     [ $# -eq 5 ] && { replaced=$4; gaps=$5; }
+elif [ "${1:-}" = line ] && [ $# -eq 9 ]; then
+    # `line <anchored> <ported> <replaced> <gaps> <abstract> <faithful> <kinds_read> <kinds key>`: the counts read in
+    # a julia that has WasmTarget loaded (the ratchet's L208, progress_counts), the rest read here as below
+    anchored=$2; ported=$3; replaced=$4; gaps=$5; abstract=$6; faithful=$7; kinds_read=$8; WT_KINDS_CACHE=$9
+    rt=$(grep -rh 'Unported(' src | grep -oE '"sdk/lib/_internal/wasm/[^"]+"' || true)
+    rt_sites=$(printf '%s' "$rt" | grep -c . || true); rt_defs=$(printf '%s' "$rt" | sort -u | grep -c . || true)
+    since=$(git rev-list --count --no-merges "$(git log -1 --format=%H -- src)"..HEAD)
 else
     if [ -d legacy ]; then
         # the worktree's private depot (dev/depot.sh), never the shared compiled cache another tree can
@@ -87,24 +99,10 @@ else
         WT_KINDS_CACHE=$(kinds_cache) || exit 1; export WT_KINDS_CACHE
         counts=$(julia --project=. --startup-file=no -e 'using WasmTarget
             include("dev/skeleton.jl")
-            S = Skeleton.read_scope()
-            counted = Set(Skeleton.anchor(f, d) for f in Skeleton.scope() for d in S.decls[f] if Skeleton.counted(d))
-            e = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget) && x.anchor in counted]
-            stubbed = Set(x.anchor for x in e if !x.ported)
-            ported = setdiff(Set(x.anchor for x in e), stubbed)
-            # A55S13, A64E2: of the ported, those Julia'"'"'s inference finds never return, by kind
-            # (rejection_only_kinds, then dev/skeleton.jl'"'"'s dart_kinds). Internal: the answer of Julia replacing a construct it never produces
-            # (ruling A55S12); Unported (a dart definition) and Unquarantined (a Julia-only one,
-            # src/julia/reject.jl): gaps; DartThrow: dart'"'"'s own body throws, a body; DartAbstract: dart
-            # declares it abstract, no body to port, never counted
             include("dev/progress_kinds.jl")
-            R, L, hit = progress_kinds(S, ENV["WT_KINDS_CACHE"])
-            k(a) = get(R, a, :body)
-            replaced = count(a -> k(a) === :Internal, ported)
-            gaps = count(a -> k(a) in (:Unported, :Unquarantined), ported)
-            abstract = count(a -> k(a) === :DartAbstract, ported)
-            faithful = count(a -> k(a) === :DartThrow, ported)
-            println(length(counted), " ", length(ported), " ", replaced, " ", gaps, " ", abstract, " ", faithful, " ", hit)') ||
+            # A55S13, A64E2: the anchored and ported counts and, of the ported, the kinds Julia'"'"'s inference
+            # finds (progress_counts, the one reading the ratchet'"'"'s L208 shares)
+            println(join(progress_counts(Skeleton.read_scope(), ENV["WT_KINDS_CACHE"]), " "))') ||
             { echo "src: WasmTarget did not load, so its @parity registry gives no count"; exit 1; }
         read -r anchored ported replaced gaps abstract faithful kinds_read <<< "$counts"
         # the runtime's gaps: the Unported rejections anchored in the wasm runtime library of the same dart-lang/sdk
