@@ -8578,3 +8578,146 @@ c01e360b; A84E3 sat in no row, fixed by 144e7812; A84S6 leaves row 1.T, fixed by
 c17cd8f8. Open, their rows the lead's to write: A85E1, A85S1, A85S2 and A85S3 for row 1.E (dispatch tables and
 records); A85S4 and A85S5 for row 1.B (the probes are its exit). By owner: wt3-cgstubs2 A85E1, A85S1, A85S2 and
 A85S3; wt3-tests2 A85S4 and A85S5's baseline header; lead A85S5's CI pin.
+
+## 2026-11-01 — audited through 47865b93 (c17cd8f8..47865b93: CI pinned to julia 1.12.7, jl_egal a root with the demand scan deleted, a 128-bit integer as two i64 halves with its constants, conversions, equality, add, sub, neg, bitwise operations and compares, an inline JS site keyed by method, signature and line)
+
+The eighty-sixth audit, beside the work, covers the 5 commits of c17cd8f8..47865b93 that are not audit entries
+(958ea5d1, entry 85): 3d30144c, ba45a6c5, 95d33e78, db6e65ac and 47865b93, read under Dale's R1 and R2 as standing
+sections. Every finding rests on one exact command, quoted.
+Standing items. Each commit names its clause in a `Charter:` line (3d30144c C10, ba45a6c5 C1, 95d33e78 C3, db6e65ac
+C6, 47865b93 C3). No silent catch: `git diff c17cd8f8..47865b93 | grep -cE '^\+.*\bcatch\b'` gives 3, one in entry
+85's prose and two in tests (test/src/js_string.jl and test/src/translator.jl), each testing the RejectionError it
+catches. The debt list reads 370 (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`), unchanged. src reads 3087
+of 3404 at every commit of the range (`.git/wt-progress.tsv`), and at 45 landings since 81427cbd
+(`awk -F'\t' '$3 ~ /src: 3087 of/' .git/wt-progress.tsv | wc -l` gives 45). The range's compiler work, Int128, sits
+inside one dart definition that was already counted, so it adds nothing to the count (D40; A86E1). D13 at the head:
+`tail -5 .git/wt-landings.tsv | cut -f3` gives 137, 154, 1153, 178 and 186, a median of 178 s, inside the 300-s
+target. Earlier findings: A83S1 is fixed by ba45a6c5 (`Fixes:`): `grep -rn "_demanded\|_compares_by_egal\|_calls_builtin\|_ir_value\|union_raisers"
+src dev/skeleton.jl test/parity_ratchet.jl` gives nothing, and types.jl's cite reads at the julia pin: `sed -n
+'1550p;1558p' src/subtype.c` gives `if (jl_is_type_type(x) && !jl_is_type_type(y)) {` and `return jl_typeof(tp0) ==
+(jl_value_t*)yd;`. A82S1 is fixed by the same commit in substance, though no `Fixes:` line names it: the third copy
+of the inline === decision is deleted, and RUNTIME_ROOTS' reason (src/julia/packages.jl:19) now ends "where Julia
+differs: libjulia has no demand to keep one out, so every one is a root". A83S6 is fixed by db6e65ac (`Fixes:`) for
+one body; its residue is A86S1. A85S5 is narrowed by 3d30144c (`Narrows:`): ci.yml:77 and :143 name 1.12.7, and the
+baseline's header, wt3-tests2's half, is still owed. 3d30144c's MARCH rows match audit 85's Resolution: A85E1 and
+A85S1 to A85S3 in 1.E, A85S4 and A85S5 in 1.B, A82S2, A82S3 and A83S3 gone from 1.D, A84S6 gone from 1.T. Carried,
+not re-read: A85E1, A85S1 to A85S4, A84E1, A84E2, A84E4, A84S1 to A84S5, A83E1, A83S4, A83S5, A83S9, A83S10, A82E1,
+A82S4, A82S5, A82S7, A80E2, A77S1, A80S2, A80S3, A77E1, A77E2, A77E3, A78S2, A76E5, A76E6, A68E3, A71E2, A69E1,
+A68E2, A68S4, A72E1, A67E1 and A51E3. Findings: A86E1 and A86S1 to A86S3.
+
+Area: builder — no change under src/wasm_builder (`git diff --stat c17cd8f8..47865b93 -- src/wasm_builder` gives
+nothing).
+
+Area: collection and planning — ba45a6c5, to the lead's questions. Is jl_egal rooted with no demand mechanism
+left: yes. dev/skeleton.jl's julia_runtime_functions roots every definition between rtutils.jl's markers ("# ----
+Julia's runtime: ..." at rtutils.jl:1, "# ---- end of Julia's runtime ----" after jl_to_typeof), and the generated
+block adds `((), :jl_egal)`, `((), :jl_to_typeof)` and `((), :wasm_egal)` (packages.jl:30-31, :39). check_subset
+infers once over roots and entry (`sed -n 316,318p src/julia/subset.jl` gives `_runtime_roots(world)` and one
+`_infer_verified`); the second inference under `_demanded` is gone. L220's plant now adds a function inside the
+section, which must be rooted, and one outside it, which must not (parity_ratchet.jl:414-420). Is the +2.8 G
+first-compile cost stated: in the commit message only. `git log -1 --format=%B ba45a6c5 | grep -n "2.8 G"` gives the
+line "on this tree against 283.7 G on its base, 3d30144c's parent tree: +2.8 G for three more roots", with the case
+(test/instructions.jl's counter, f(x) = 3x + 1), in a fresh process. It does not name the unit (G of what, as
+`@time` reports allocation), and no check bands it. That is no finding: no first-compile allocation check exists
+for it to break. Will a module that never calls a root still exclude it? The 105 byte-identity probes would catch a
+change there: a root emitted where nothing calls it changes every probe's bytes.
+
+Area: emission and diagnostics — 95d33e78 and 47865b93, to the lead's questions. Is each 128-bit operation anchored
+at its LLVM function so that L213 resolves it: no, they are named in comments only, in both commits. (A86E1, medium,
+R1, D1, D7, D40) `grep -c '@parity "llvm\|@quarantine.*LegalizeIntegerTypes\|precedent(llvm' src/intrinsics.jl
+src/julia/classes.jl src/constants.jl` gives 0 for each file. Every expansion is one closure inside
+`@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" ... ::Val{:int128}` (intrinsics.jl:1951):
+sext/zext/trunc/bitcast at :1988-2015, eq/ne at :2016-2026, add/sub at :2030-2050, neg at :2051-2058, and the
+logical ops and compares at :2059-2080. Each is anchored at a dart line it does not port. LLVM's file is outside the
+pin table and the checkout: `grep -n "LegalizeIntegerTypes" dev/fetch_llvm.sh src/julia/parity.jl` gives nothing,
+and `git -C ~/.cache/wasmtarget/llvm-project sparse-checkout list | grep -c SelectionDAG` gives 0. So no line can be
+resolved and none is cited. The stackifier, Dale's model for R1, is one file of src/llvm per LLVM unit, each
+definition `@parity` at its LLVM line (`ls src/llvm` gives fourteen such files, cfg_stackify.jl:19
+`@parity "llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:49 WebAssemblyCFGStackify"`). The functions exist
+at the pin (7a941dfb, LegalizeIntegerTypes.cpp fetched from the raw blob):
+ExpandIntRes_ADDSUB :3905, ExpandIntRes_Logical :4695, ExpandIntRes_SIGN_EXTEND :5332, ExpandIntRes_ZERO_EXTEND
+:5619, IntegerExpandSetCCOperands :5879, ExpandIntOp_SETCC :6055, ExpandIntOp_TRUNCATE :6228. Fix: add
+llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes to LLVM_FILES and dev/fetch_llvm.sh's sparse list. Port each
+expansion as its own definition in src/llvm/legalize_integer_types.jl, `@parity` at the lines above, its operands
+the halves (GetExpandedInteger) and its result two i64 values. The int128 arm then calls these functions, as the
+code generator calls the stackifier. The class layout (classes.jl:345-348) cites ExpandIntegerResult :3214 and
+TargetLowering's getTypeAction (TypeExpandInteger) as its precedent. Owner: wt3-memory.
+
+Does the port follow LLVM's text where it claims to: not everywhere, though each departure gives the same answer.
+(A86S2, low, R1, D7) The fetched file shows: (a) equality. ExpandIntOp_SETCC's operands come from :5895-5898, the
+halves xor'd, or'd and compared with 0, with a -1 special case at :5888-5892. The port (intrinsics.jl:2016-2026)
+uses two i64.eq and an i32.and, and its comment admits it ("here their compares and'd", :1942). (b) The ordered
+compares. HiCmp takes the original condition (:5942-5943 `RHSHi, CCCode, false`, so SETLE stays LE), but the port
+makes it strict (:2076, `i64_lt_s`/`i64_lt_u` for sle and ule, commented "each strict" at :2073). The sign-bit
+shortcut at :5902-5908 (X < 0 compares the high halves alone) is not ported. (c) ExpandIntRes_ADDSUB's carry forms
+for a constant 1 and an all-ones constant (:4003-4012, :4024) are not ported, although NirConst operands can be
+seen. (d) The comment at :1948 and 47865b93's message cite `TargetLowering::IntegerExpandSetCCOperands`, but the
+function is `DAGTypeLegalizer::IntegerExpandSetCCOperands` in LegalizeIntegerTypes.cpp:5879. Fix: within A86E1's
+port, each function follows its LLVM body branch for branch, an omitted branch named with its reason, and the cite
+corrected. Owner: wt3-memory.
+
+(A86S3, low, D5) One fact, whether a type is a 128-bit integer, is computed at six sites. `grep -rn
+"sizeof([a-zA-Z_]*) == 16" src` gives translator.jl:1029, intrinsics.jl:576, :1445 and :1958, constants.jl:810 and
+classes.jl:347. constants.jl:852 also finds the halves by their names (`field.name == "lo" || field.name ==
+"hi"`), strings classes.jl:348 writes. Fix: one definition, LLVM's TypeExpandInteger action read once for a Julia
+type (the class layout's), called at all six sites. constants.jl reads the halves by their ClassField from
+class_instance_fields, as the int128 arm's `halves` does. Owner: wt3-memory.
+
+Are there differential cases against native, including carries and borrows at the 2^64 boundary: yes.
+test/src/code_generator_intrinsics.jl:279-281 runs Int128Cases.arith over the 64 pairs of
+`Int64[0, 1, 2, 3, -1, -3, typemax(Int64), typemin(Int64)]`. NEARTOP = 2^64 - 3 plus a crosses 2^64 for a >= 3.
+BIG - b borrows across the halves for b > 12345 and for typemin. `typemax(Int128) + Int128(a) < 0` wraps. Every
+compare runs signed and unsigned. Shifts are not ported, so the high halves are observed only through compares
+against constants (`r > BIG`, `s < -BIG`, `x > Int128(typemax(UInt64))`). 95d33e78's `wide` covers sext and zext
+from 64, 32 and 8 bits, trunc, bitcast and eq/ne/=== over six inputs. Both run at landing: dev/check.sh:149 runs
+test/src_tests.jl, which walks test/src (test/src_tests.jl:1, :15). Any other 128-bit operation reaches
+`return nothing` (intrinsics.jl:2081), and visit_static_invocation rejects it Unported, located at the statement
+(`sed -n 1561,1564p src/code_generator.jl`). That holds D9. jl_egal's class arm compares an Int128 by both halves,
+since it reads class_instance_fields (intrinsics.jl:1683-1709).
+
+db6e65ac, to the lead's question. Is a second distinct JS code at one key refused, located: within one body, yes.
+rtutils.jl:163-170 refuses it Internal, naming the key and both codes, and test/src/js_string.jl's two_on_one_line
+case reaches that refusal. Across bodies, no. (A86S1, low, D9) The refusal runs inside nir_js_sites, one method
+instance at a time. The names are keyed across the whole world: `sed -n 144p src/namer.jl` gives `get!(() ->
+get_name(..., site.site_name; ...), self.interop_member_names, site.site)`, one name per key over every body. And
+`sed -n 106,107p src/js/runtime_generator.jl` gives `for (site, _, js_code) in nir_js_sites(component, p)` and
+`site in used_sites && continue`, which keeps the first body's code for a key and skips any later body's without
+comparing them. Here is how it happens: a runtime port with two sites on one line, inlined into two callers whose
+constants prune a different site in each. Each body then holds one site under the same key. Neither nir_js_sites
+call refuses, and the second caller runs the first's JS, the D9 fault A83S6 named. Fix: generate_js_methods keeps
+site => code and refuses, Internal and located, a second distinct code at a key (or the namer's get! does). Add a
+case where one line's two sites are inlined into two callers with constant branches. Owner: wt3-runtime.
+
+Area: enforcement and prose — 3d30144c: ci.yml's matrix and its probe step both name 1.12.7 (`grep -n "1.12" .github/workflows/ci.yml`
+lines 77 and 143), JULIA_PIN's release. Probes and pin now agree on CI. ba45a6c5's L220 prose describes the section
+and its plant. 95d33e78 and 47865b93 each say every other 128-bit operation still rejects. No lock or ratchet
+changed in the range beyond L220's plant.
+
+stopgap in disguise: none new. A86E1's arm is a port given a dart anchor it does not port, so L213 checks a line
+that has nothing to do with it. That is the gap the stackifier's anchors were built to close.
+
+precedent: LegalizeIntegerTypes.cpp at the llvm pin, ExpandIntegerResult :3214, ExpandIntRes_ADDSUB :3905 (its
+no-carry path :3998-4045, SETULT on the low result), ExpandIntRes_Logical :4695, ExpandIntRes_SIGN_EXTEND :5332,
+ExpandIntRes_ZERO_EXTEND :5619, IntegerExpandSetCCOperands :5879, ExpandIntOp_SETCC :6055, ExpandIntOp_TRUNCATE
+:6228. WebAssemblyISelLowering.cpp:54 `setBooleanContents(ZeroOrOneBooleanContent)` and :178 ADDC/ADDE/SUBC/SUBE
+Expand, with UADDO custom only under wide arithmetic (:186-191), so wasm takes the no-carry path, as 47865b93
+says. dart's inline_expander.dart:21 InlineExpander.expand, one procedure per site (db6e65ac). native_code.dart:144
+PragmaEntryPointsVisitor.visitProcedure (ba45a6c5).
+
+Requirements: D1 and D7 (A86E1, A86S2). D2: 95d33e78 and 47865b93 are differential, native the oracle, though not
+yet LLVM-faithful (A86S2). D3: an i128 is what Julia's codegen hands LLVM, so LLVM's legalization is Julia's
+answer, rightly chosen. D5 (A86S3; ba45a6c5 deletes the demand copy, A82S1). D6: the roots are generated, never
+written. D9 (A86S1; Int128's other operations reject, located). D12: ba45a6c5 fixes A83S1 where it arose,
+db6e65ac fixes A83S6 for one body. D13 (median 178 s). D40 (src flat at 3087 for 45 landings).
+
+R1 and R2. R1: the 128-bit work follows LLVM's legalization in substance, a pinned 1:1 counterpart, but it is not
+built as a port. It has no LLVM anchor, file or pin entry, and sits inside a dart definition (A86E1), and it departs
+from LLVM's text in four places (A86S2). db6e65ac and ba45a6c5 rest on dart's inline expander and entry-point
+roots. R2: no stub is called complete. 95d33e78 and 47865b93 each say every other 128-bit operation still rejects,
+and src stays 3087 of 3404. A fix called done that is not whole: db6e65ac's A83S6, refused per body only (A86S1).
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A83S1 and A83S6 leave their rows, fixed by
+ba45a6c5 and db6e65ac; A82S1 leaves row 1.C, fixed in substance by ba45a6c5 (no `Fixes:` line, read complete
+here). A85S5 stays in row 1.B, narrowed by 3d30144c, for the baseline's header. Open, their rows the lead's to write:
+A86E1, A86S2 and A86S3 for row 1.D (intrinsics, the LLVM ports anchored at the llvm pin); A86S1 for row 1.F (runtime
+and host imports). By owner: wt3-memory A86E1, A86S2 and A86S3; wt3-runtime A86S1.
