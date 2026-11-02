@@ -8418,3 +8418,163 @@ A76E4 leave row 1.L, fixed by c964a22f; A76S2 leaves row 1.K, fixed by 111b93c6;
 row 1.D; A84E2 for row 1.Q; A84E3, A84E4, A84S1 and A84S2 for row 1.L; A84S3 and A84S6 for row 1.T; A84S4 and A84S5
 for row 1.F. By owner: wt3-memory A84E1; wt3-runtime A84S4 and A84S5; wt3-tests2 A84S3 and A84S6, with A84E2's runner;
 wt3-parity A84E4, A84S1 and A84S2; lead A84E2 and A84E3.
+
+## 2026-11-01 — audited through c17cd8f8 (111b93c6..c17cd8f8: D13 judged edit to landed again, 105 byte-identity probes, an FMA host required, an interface target a SelectorReference, a receiver's admitted classes read by getConcreteClassIdRange and tuple receivers given no field selector, the wall-backstop plant's cause measured)
+
+The eighty-fifth audit, beside the work, covers the 5 commits of 111b93c6..c17cd8f8 that are not audit entries
+(01cde546, entry 84): 144e7812, 12b49771, 620c2c86, c01e360b and c17cd8f8, read under Dale's R1 and R2 as standing
+sections. Every finding rests on one exact command, quoted.
+Standing items. Each commit names its clause in a `Charter:` line (144e7812 C10, 12b49771 C10, 620c2c86 C10, c01e360b
+C5, c17cd8f8 C10). No silent catch: `git diff 111b93c6..c17cd8f8 | grep -cE '^\+.*\bcatch\b'` gives 4, one in entry
+84's prose and three in test/src/dispatch_table.jl, each testing the RejectionError it catches. The debt list reads
+370 (`grep -v '^#' dev/quarantine_unpinned.txt | grep -c .`), one fewer: c01e360b deletes `julia/kernel.jl Reference`.
+src reads 3087 of 3404 at every commit of the range (`.git/wt-progress.tsv`), as at the 39 landings from
+81427cbd (2026-11-02T01:21:35Z, `awk -F'\t' '$3 ~ /src: 3087 of/' .git/wt-progress.tsv | wc -l` gives 39): no dart
+definition gained a body in this range or the last (D40). D13 at the head: `tail -5 .git/wt-landings.tsv | cut -f3`
+gives 248, 419, 561, 1285 and 314, a median of 419 s, past the 300-s target and inside the 600-s red line. Earlier
+findings: A84E3 is fixed by 144e7812; A82S2, A82S3 and A83S3 by c01e360b (A83S3's anchors read at the julia pin:
+`sed -n 4371,4377p src/cgutils.cpp` gives `if (nargs < nf)` and the CreateMemSet of zero, `sed -n 4394p` gives
+`emit_allocobj(ctx, sty, nargs >= nf)`, `sed -n 2189p src/codegen.cpp` gives undef_derived_strct, which nulls the
+pointers and the bytes before the first field), its residues A85S1 and A85S3. A84S6 is fixed by 620c2c86, read here as
+complete though its body carries no `Fixes:` line: test/runner.jl:33 refuses a host where
+`Core.Intrinsics.have_fma(Float64)` is false, at load, and test/smoke.jl:27 and test/src/dart_tests.jl:39 include
+the runner before any native answer. A84S3 is narrowed by c17cd8f8 (`Narrows:`), so it stays: the measured cause is
+Julia's runtime, and its own measurement (the interrupt taken 5 of 5 times with one interactive thread) leaves the
+plant able to require the interrupt in a child it starts with JULIA_NUM_THREADS=1,1, which it does not. A77E2 stands,
+re-read: `awk -F'\t' '$1 >= "2026-11-02T04:40"' .git/wt-ship-failures.tsv` gives three wt3-constants rebase conflicts
+in test/src/constants.jl in this range, at 05:04:48Z, 05:10:54Z and 05:22:27Z. A84E1, A84E2, A84E4, A84S1, A84S2,
+A84S4, A84S5, A83E1, A83S1, A83S4, A83S5, A83S6, A83S9, A83S10, A82E1, A82S1, A82S4, A82S5, A82S7, A80E2, A77S1,
+A80S2, A80S3, A77E1, A77E3, A78S2, A76E5, A76E6, A68E3, A71E2, A69E1, A68E2, A68S4, A72E1, A67E1 and A51E3, carried,
+not re-read. Findings A85E1 and A85S1 to A85S5.
+
+Area: builder — no change under src/wasm_builder (`git diff --stat 111b93c6..c17cd8f8 -- src/wasm_builder` gives
+nothing).
+
+Area: collection and planning — c01e360b's admitted classes, to the lead's question: is the reading now one source.
+The reading is: field_selector_calls takes it from DispatchTable.build as a function, and both visitors call
+ClassIdNumbering.getConcreteClassIdRange (class_info.dart:831, `sed -n 831p` at the dart pin gives
+`List<Range> getConcreteClassIdRange(Class klass) {`). The class list built from it is not one definition. (A85S3,
+low, D5) `grep -n "id + 1\].cls for r in get_concrete_class_id_range\|t.classes\[\]\[id + 1\].cls for id in ids"
+src/*.jl` gives src/code_generator.jl:1841, :1951, src/intrinsics.jl:357 and :1802, beside src/dispatch_table.jl:373,
+the same projection from ranges to classes written five times; and the selector's name for one receiver and field is
+computed twice, by field_selector_name in field_selector_calls (src/julia/classes.jl:713) when the table is built
+and again in each visitor (code_generator.jl:1841, :1951), so a receiver build skips (A85E1's tuples) still gets a
+name in the visitor that finds no selector. The test reads neither: `sed -n 142p test/src/dispatch_table.jl` gives
+`admitted_of(cs::Vector{DataType}) = r -> DataType[c for c in cs if c <: r]`, the `<:` filter c01e360b deleted from
+src, so field_selector_calls's own cases never run getConcreteClassIdRange (DD.build's case does). Fix: one
+definition of a type's concrete classes over get_concrete_class_id_range, called at all five sites, and the visitors
+reading the selector field_selector_calls named for that call, not naming it again; the test's admitted classes read
+from a numbered translator. Owner: wt3-cgstubs2.
+
+Area: emission and diagnostics — c01e360b, to the lead's questions. Is the SelectorReference a faithful counterpart
+of dart's interface target: in its use, yes. `sed -n 2037,2044p pkg/dart2wasm/lib/code_generator.dart` gives
+`interfaceTarget.referenceAs(getter:, setter:)` passed to selectorForTarget and `assert(selector.name ==
+interfaceTarget.name.text)`, and src/code_generator.jl:1687-1691 does the same with the reference's name and kind;
+expressions.dart:581 is InstanceGet's `Reference interfaceTargetReference;` (the class at :551), as cited; every
+functions.dart, translator.dart:2195, dispatch_table.dart:118 and code_generator.dart:3528 anchor of the new arms
+reads as cited. In its type, no. (A85S1, low, D6, D7) dart's interface target is a member's Reference, so every
+consumer of the sum accepts it; WasmTarget's names no member, and the sum makes each consumer refuse it by hand:
+`git grep -n "SelectorReference) => reject!(Internal" -- src | cut -d: -f1,2` gives code_generator.jl:2450,
+dispatch_table.jl:195, functions.jl:122, :165, :309, :321, :332, :350 and translator.jl:1604, nine arms, and
+_virtual_call (code_generator.jl:1679) types its target Reference and refuses the other two kinds at :1690. Passing a
+SelectorReference to getFunction can be written and fails only when run. The prose was not carried: `sed -n
+89,95p src/julia/kernel.jl` gives "Julia's differs: … so the sum is a method's specialization or a field's accessor"
+and the @quarantine "names a member or one of its accessors" over a Union whose third kind "is no member". Fix: the
+SelectorReference outside the Reference sum, _virtual_call's interface target typed SelectorReference and
+selector_for_target given its method, so the nine arms and :1690's test cannot be written; or, kept in the sum, its
+docstring and @quarantine reason stating the third kind and how it differs from Kernel's (D7). Owner: wt3-cgstubs2.
+
+Does skipping tuple receivers match dart's record field access: the behavior holds for an open tuple type, the cited
+counterpart does not. (A85S2, low, D7, D26) `sed -n 326,332p pkg/kernel/lib/src/ast/expressions.dart` gives
+`class RecordIndexGet` with `RecordType receiverType;` and `assert(0 <= index && index <
+receiverType.positional.length)`: dart reads a record by RecordIndexGet only where the static type is one record
+shape, Julia's concrete tuple, and `sed -n 705p src/julia/classes.jl` gives `isconcretetype(receiver) && continue`,
+so a concrete tuple never reaches the skip at :709. The receivers the skip removes are tuples of no single shape,
+which dart types as Record or a supertype and reads by DynamicGet (code_generator.dart:2317 visitDynamicGet, its
+dynamic dispatcher switching over the classes that have the member: the record classes' `$1` fields,
+record_class_generator.dart:23). The intrinsifier's class-id switch (intrinsics.jl:310-317) is that dispatcher's
+shape, and is the counterpart to cite. Fix: classes.jl:706-708's comment and the commit's reasoning anchored at
+visitDynamicGet and the dynamic dispatcher, with how Julia differs (the switch over records is generated at the read,
+not in a shared dispatcher). Owner: wt3-cgstubs2.
+
+(A85E1, medium, D2, D9, D12) c01e360b changes which selectors the dispatch table holds, with no case and no probe
+run, and leaves one receiver shape at an Internal rejection. `git show --stat --format= c01e360b` lists src and
+test/src/dispatch_table.jl only, and `git log -1 --format=%B c01e360b | grep -ciE "probe|smoke|differential"` gives
+0, though AGENTS.md asks a semantic change for its cases in smoke and 12b49771 landed the probes five minutes before
+it. The skip drops every tuple receiver (classes.jl:709); the intrinsifier takes over only `T isa DataType && T <:
+Tuple` with an Int index (`sed -n 315p src/intrinsics.jl`). A receiver that is a Union of tuples is no DataType: the
+intrinsifier returns nothing, the visitor names a SelectorReference (code_generator.jl:1841), and the table, which
+build no longer gave that selector, answers `sed -n 327p src/dispatch_table.jl`: `reject!(Internal("$at: no selector
+for the field $name, which no call reads on a receiver Julia left abstract"), at)`, an Internal, a statement WasmTarget
+claims cannot be reached, for a direct getfield the subset admits. `git grep -n 'Union{Tuple\|Union{NTuple' --
+test/src` gives nothing: no case reaches a tuple receiver of either kind, before or after. Fix: a case in
+test/smoke_corpus.jl reading a field of an open tuple and of a Union of tuples, each against native; the Union read
+lowered by the same class-id switch (getConcreteClassIdRange admits its classes) or refused, located, as
+Unquarantined; and the commit's probe run, `bash dev/lanetest.sh test/probe_bytes.jl` at c01e360b against its parent,
+reported. Owner: wt3-cgstubs2.
+
+620c2c86: the refusal is at load, once, and names why; CI's runners answer true. c17cd8f8: a comment only, each
+measurement stated with its configuration; `grep -n "JULIA_NUM_THREADS" dev/check.sh dev/corpus.sh` gives
+check.sh:39 and corpus.sh:47, both `=1`, as the comment says.
+
+Area: enforcement and prose — 12b49771, to the lead's questions. Does the set cover every group exactly once: by
+name, yes. `grep -oE '^_(g|xf)\("[^"]+"' test/smoke_corpus.jl | sort -u | wc -l` gives 165, PROBE_NAMES 105 and
+PROBE_UNCOVERED 60; the first compiled row of each group in the common dir's wt-compile-cases.tsv, recomputed by awk,
+equals PROBE_NAMES as a set and its groups with none equal PROBE_UNCOVERED (`diff` of the sorted lists gives
+nothing). One name stands for two blocks: `grep -n '^_g("dart_nnbd"' test/smoke_corpus.jl` gives :4488 and :5384,
+both pushed into DartCorpus.GROUPS, and probe_corpus.jl's key map merges them. Is it a real byte-identity check a
+restructuring can fail: yes when run. test/probe_bytes.jl hashes `WasmTarget.compile(f, argtypes)` per probe and
+exits 1 on a changed, new or missing hash; a probe that stops compiling throws. It runs at a clause's closure only
+(`grep -rn probe_bytes dev/*.sh .github/workflows/*.yml` gives dev/lanes.sh:136 and ci.yml:141); the landing runs
+test/src/probe_set.jl, names alone. (A85S4, low, D20, D6) the uncovered list is called exact and shrinks by nothing:
+test/probe_set.jl:5 says a group "moves from PROBE_UNCOVERED to PROBE_NAMES, never stays (D20)", while
+test/src/probe_set.jl:10-12 checks only that each group stands in one list, and the set's source, the compile
+measurement at 0f92ada6, is a file in the common dir, outside the tree. A group of PROBE_UNCOVERED whose case
+compiles today stays uncovered, unnoticed. Fix: test/probe_bytes.jl (or dev/corpus.sh, which compiles every case)
+fails when the first compiling case of a group differs from its probe or a PROBE_UNCOVERED group compiles. Owner:
+wt3-tests2. (A85S5, low, D17, D9) the baseline is compared where it was never measured: the 105 hashes were recorded
+with julia 1.12.7 on this aarch64 macOS host (`julia --version` gives `julia version 1.12.7`), and `sed -n 73,82p
+.github/workflows/ci.yml` gives the closure matrix's version `'1.12'`, unpinned, with lanes slices on ubuntu-latest
+(x86_64) and macos-latest, where :141 runs probe_bytes. Base's IR, and the module WasmTarget builds from it, is a
+function of Julia's patch release and may be of the host; test/probe_baseline.txt records neither, so a closure red
+there would be a false alarm and a green on a moved release is luck. Fix: the baseline's first line names the julia
+version and host it was recorded on and probe_bytes refuses, located, any other; CI's 1.12 pinned to JULIA_PIN
+(src/julia/parity.jl); a Linux record, or the probes lane on the recording host's kind only. Owner: wt3-tests2 (the
+baseline's header), lead (ci.yml's pin).
+
+144e7812, to the lead's question: D13 is back to its ledger's measure, and the ship start is a diagnostic only.
+`sed -n 36p dev/LEDGER.md` bands "the median edit-to-landed of the last five landings", and dev/ship.sh:260 reads
+field 3 of wt-landings.tsv, written at :125 as now less the landed commit's author time (`git log -1 --format=%at
+HEAD`), which a rebase keeps, so a red attempt no longer restarts it. Field 4 (WT_SHIP_START) is printed at :261 and
+read by nothing else (`grep -rn "WT_SHIP_START" dev/*.sh test src .github` gives ship.sh:23, :125 and :261). The
+MARCH rows match audit 84's Resolution: A84E1 in 1.D, A84E2 in 1.Q, A84E4, A84S1 and A84S2 in 1.L, A84S3 and A84S6 in
+1.T, A84S4 and A84S5 in 1.F; A83S2, A83S8, A76E4 and A76S2 gone. WT_SHIP_ORIGIN, which now gates the start's
+inheritance, is itself read from the environment at ship.sh:28 (A50E1's class), harmless while the start judges
+nothing.
+
+stopgap in disguise: A85S1's nine Internal arms, a run-time refusal standing in for a type that keeps an interface
+target out of the member paths; A85S4's "exact list", a names check standing in for the shrink it claims.
+
+precedent: code_generator.dart:2028 _virtualCall and :2037-2044, dispatch_table.dart:436 selectorForTarget,
+expressions.dart:551/:581 InstanceGet.interfaceTargetReference, canonical_name.dart:429 Reference, class_info.dart:831
+getConcreteClassIdRange (c01e360b); cgutils.cpp:4151 emit_new_struct, :4371-4377, :4394 and codegen.cpp:2189
+undef_derived_strct (c01e360b's A83S3 comment); and the counterpart c01e360b should have named for an open tuple,
+expressions.dart:326 RecordIndexGet's RecordType against code_generator.dart:2317 visitDynamicGet (A85S2).
+
+Requirements: D1 (c01e360b's anchors each resolve at the pin), D2 (A85E1), D5 (A85S3), D6 (A85S1, A85S4), D7 (A85S1,
+A85S2), D9 (A85E1, A85S5), D12 (A85E1), D13 (144e7812 restores the ledger's measure; the median 419 s), D17 (A85S5;
+c17cd8f8's 2-s wall and 1-s grace unchanged), D40 (src flat at 3087 for 39 landings).
+
+R1 and R2. R1: c01e360b's SelectorReference is a quarantined Julia construction with dart's interfaceTargetReference
+as its precedent, and the admitted classes now come from dart's getConcreteClassIdRange; its tuple skip cites the
+wrong dart counterpart (A85S2). 12b49771's probe selection is test machinery with no dart counterpart owed. R2: no
+stub is called complete; src stays 3087 of 3404 at every commit, and no commit claims a port. Fixes called done that
+are not whole: c01e360b's A82S2 ("one reading"), whose projection is written five times (A85S3), and A82S3, whose
+sum's prose still describes two kinds (A85S1); 12b49771's D20 claim for PROBE_UNCOVERED, which nothing shrinks
+(A85S4).
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A82S2, A82S3 and A83S3 leave row 1.D, fixed by
+c01e360b; A84E3 sat in no row, fixed by 144e7812; A84S6 leaves row 1.T, fixed by 620c2c86 in substance (no `Fixes:` line, read complete here). A84S3 stays in row 1.T, narrowed by
+c17cd8f8. Open, their rows the lead's to write: A85E1, A85S1, A85S2 and A85S3 for row 1.E (dispatch tables and
+records); A85S4 and A85S5 for row 1.B (the probes are its exit). By owner: wt3-cgstubs2 A85E1, A85S1, A85S2 and
+A85S3; wt3-tests2 A85S4 and A85S5's baseline header; lead A85S5's CI pin.
