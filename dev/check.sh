@@ -209,7 +209,11 @@ RATE_LOAD=11.6
 # 1.8 to 1.9; the load 3.0), so its CPU seconds over 1.4
 # read high there, never low, and on a performance core they stay under its instructions at its rate. Intent: never
 # read low; band: the measured minimum, 1.56; the counter's plant prints the ratio it measures, unjudged, since taskpolicy
-# does not hold work on the efficiency cores (dev/tree_instructions.jl)
+# does not hold work on the efficiency cores (dev/tree_instructions.jl). Its limit: a stage split across core types reads
+# low on both terms, at most about a tenth (a fifth of its work on efficiency cores that count half its instructions
+# and run it 1.56 times slower: 0.90 of a performance core's seconds by instructions, 0.79 by CPU seconds over 1.4).
+# No divisor above 1 bounds it, and a divisor of 1 judges a stage at its raw CPU seconds, which reads a contended
+# ratchet at 182 against its 79 from instructions (d0444541's ratchet ran 106 CPU-s for 191 G), red on scheduling (D17)
 ECORE_SLOWDOWN=1.4
 cpu() { awk 'NR == 1 { printf "%d", $3 + $5 }' ".wtd/$1.time"; }
 gi() { awk '/instructions retired/ { printf "%d", $1 / 1e9 }' ".wtd/$1.time"; }
