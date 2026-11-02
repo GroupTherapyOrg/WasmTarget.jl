@@ -14,13 +14,28 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 [ $# -ge 1 ] || { echo "cache_key: name the pathspecs the verdict reads" >&2; exit 2; }
-{
-    julia --startup-file=no -e 'print(Base.GIT_VERSION_INFO.commit, " ", Base.GIT_VERSION_INFO.tagged_commit, " ",
-                                      Sys.MACHINE, " ", ccall(:jl_cache_flags, UInt8, ()), "\n")'
-    for d in dart-sdk julia llvm-project; do
-        printf '%s %s\n' "$d" "$(git -C "$HOME/.cache/wasmtarget/$d" rev-parse HEAD 2>/dev/null || echo none)"
-    done
-    # a named file git ignores (the Manifest) is an input too: read by its name
-    files=$( { git ls-files -co --exclude-standard -- "$@"; for a in "$@"; do if [ -f "$a" ]; then echo "$a"; fi; done; } | LC_ALL=C sort -u)
-    [ -n "$files" ] && paste -d' ' <(printf '%s\n' "$files") <(printf '%s\n' "$files" | git hash-object --stdin-paths)
-} | git hash-object --stdin
+# every input read or the key refused, located (D9, A78E1): a key computed past a failed input would serve a
+# verdict whose inputs were never compared
+header=$(julia --startup-file=no -e 'print(Base.GIT_VERSION_INFO.commit, " ", Base.GIT_VERSION_INFO.tagged_commit, " ",
+                                           Sys.MACHINE, " ", ccall(:jl_cache_flags, UInt8, ()))') ||
+    { echo "cache_key: the julia running gave no header" >&2; exit 1; }
+[ -n "$header" ] || { echo "cache_key: the julia running gave an empty header" >&2; exit 1; }
+pins=""
+for d in dart-sdk julia llvm-project; do
+    pins="$pins$d $(git -C "$HOME/.cache/wasmtarget/$d" rev-parse HEAD 2>/dev/null || echo none)"$'\n'
+done
+# a named file git ignores (the Manifest) is an input too: read by its name
+files=$( { git ls-files -co --exclude-standard -- "$@"; for a in "$@"; do if [ -f "$a" ]; then echo "$a"; fi; done; } | LC_ALL=C sort -u)
+listing=""
+if [ -n "$files" ]; then
+    while IFS= read -r f; do
+        [ -f "$f" ] || { echo "cache_key: $f, an input git tracks, is missing" >&2; exit 1; }
+    done <<< "$files"
+    ids=$(printf '%s\n' "$files" | git hash-object --stdin-paths) || { echo "cache_key: an input could not be read" >&2; exit 1; }
+    [ "$(printf '%s\n' "$files" | wc -l)" -eq "$(printf '%s\n' "$ids" | wc -l)" ] ||
+        { echo "cache_key: $(printf '%s\n' "$files" | wc -l | tr -d ' ') inputs gave $(printf '%s\n' "$ids" | wc -l | tr -d ' ') ids" >&2; exit 1; }
+    listing=$(paste -d' ' <(printf '%s\n' "$files") <(printf '%s\n' "$ids"))
+fi
+key=$(printf '%s\n%s%s\n' "$header" "$pins" "$listing" | git hash-object --stdin)
+[[ $key =~ ^[0-9a-f]{40}$ ]] || { echo "cache_key: no key ($key)" >&2; exit 1; }
+echo "$key"

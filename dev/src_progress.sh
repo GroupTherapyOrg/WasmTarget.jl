@@ -36,14 +36,15 @@ kinds_cache() {
     local dir key
     dir="$(git rev-parse --path-format=absolute --git-common-dir)/wt-rejection-kinds"; mkdir -p "$dir"
     key=$(bash dev/cache_key.sh src lib/WasmInterpreter Manifest.toml Project.toml dev/skeleton.jl dev/skeleton_scope.toml \
-          dev/src_progress.sh dev/progress_kinds.jl dev/cache_key.sh)
+          dev/src_progress.sh dev/progress_kinds.jl dev/cache_key.sh) || { echo "src_progress: the kinds cache's key failed" >&2; return 1; }
+    [[ $key =~ ^[0-9a-f]{40}$ ]] || { echo "src_progress: the kinds cache's key is no key ($key)" >&2; return 1; }
     echo "$dir/$key.tsv"
 }
 # a port is a change to src/'s code: its added and removed lines, the diff's file headers aside, less the
 # blank ones and Julia's `#` comments (f4cc916d, comment only, ranked early as port work: A66E4)
 if [ "${1:-}" = kinds ]; then
     . dev/depot.sh; wt_depot_export "$PWD"
-    WT_KINDS_CACHE=$(kinds_cache); export WT_KINDS_CACHE
+    WT_KINDS_CACHE=$(kinds_cache) || exit 1; export WT_KINDS_CACHE
     exec julia --project=. --startup-file=no -e 'using WasmTarget
         include("dev/skeleton.jl")
         S = Skeleton.read_scope()
@@ -83,7 +84,7 @@ else
         # the anchored count is the generator's in-scope total, each definition dev/skeleton.jl counts
         # (an enum's values and a field's accessors are parts of their definition, not more); a ported
         # one is a counted anchor src fills, no @unported entry left at it
-        WT_KINDS_CACHE=$(kinds_cache); export WT_KINDS_CACHE
+        WT_KINDS_CACHE=$(kinds_cache) || exit 1; export WT_KINDS_CACHE
         counts=$(julia --project=. --startup-file=no -e 'using WasmTarget
             include("dev/skeleton.jl")
             S = Skeleton.read_scope()
