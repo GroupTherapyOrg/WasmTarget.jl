@@ -708,9 +708,11 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
         length(st.args) >= 3 || continue
         local receiver = nir_value_type(b, st.args[2])
         isconcretetype(receiver) && continue
-        # a tuple is dart's record, whose field access is a RecordIndexGet or RecordNameGet, never a
-        # call through the dispatch table (code_generator.dart's visitRecordIndexGet); the intrinsifier
-        # reads an open tuple by a class-id switch over its records
+        # a tuple of no one shape (a concrete tuple never reaches here) is dart's record of a static type
+        # Record or above, which dart reads by DynamicGet (code_generator.dart:2317 visitDynamicGet), its
+        # dynamic dispatcher switching over the record classes holding the field (their `$1` fields,
+        # record_class_generator.dart:23), never a call through the dispatch table. Julia's differs: the
+        # intrinsifier writes that class-id switch at the read (intrinsics.jl), not in a shared dispatcher
         receiver <: Tuple && continue
         local name_op = st.args[3]
         name_op isa NirConst && (name_op.c.val isa Symbol || name_op.c.val isa Int) || continue
