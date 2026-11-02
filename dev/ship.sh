@@ -126,6 +126,9 @@ grep -q "	$h	" "$WT_LANDINGS_LOG" 2>/dev/null || printf '%s\t%s\t%s\t%s\t%s\n' "
 p=$(grep -E '^ *· src:' .wtd/ratchet.out 2>/dev/null | sed 's/^ *· //' | tr '\t\n' '  ')
 if [ -z "$p" ]; then echo "ship: no src line in $h's ratchet output, so no row is written to wt-progress.tsv"
 else grep -q "	$h	" "$WT_PROGRESS_LOG" 2>/dev/null || printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$h" "$p" >> "$WT_PROGRESS_LOG"; fi
+# an admission the landed commit used is spent, so it admits no second landing (A92E1; the one spend step,
+# reading the common dir's wt-no-counterpart-admit, never the scratch's)
+bash dev/no_counterpart_spend.sh
 LANDED
   # src/julia/packages.jl merges with its generated blocks blanked (dev/merge_packages.sh) and, when it did, the
   # commit's own tree rewrites them before its check (dev/regen_packages.sh): two lanes adding imports or roots

@@ -1571,8 +1571,9 @@ Julia's differs: no keyword marks Julia-only code, so the reason is read where t
 end
 
 # ---- the definitions no ecosystem has a counterpart for (A90E1, dev/LEDGER.md D20) -----------------------
-# WasmTarget's own formats (its map from a pinned file to its port, its lists, its pinning rule) are defined by
-# no ecosystem, so a reader of one has no counterpart to pin, and a near-miss pin is no port. They are an exact allowlist, dev/quarantine_no_counterpart.txt, one line per
+# Its criterion, the lead's (A92E1): "lock machinery that reads only WasmTarget's own record formats (anchors,
+# the debt list, this list), for which no ecosystem defines a counterpart", with _jl_rel, WasmTarget's own map
+# from a pinned file to its port; a near-miss pin is no port. They are an exact allowlist, dev/quarantine_no_counterpart.txt, one line per
 # definition, `<its debt-list key> — <why no counterpart exists>`: a line with no reason, a line naming no
 # quarantined definition, one naming a definition whose reason pins a source (it has a counterpart, so it
 # is pinned, never listed), a line written twice, and a key also on the debt list each refuse the load;

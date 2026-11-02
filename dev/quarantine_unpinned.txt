@@ -270,9 +270,7 @@ julia/parity.jl _modules
 julia/parity.jl _pin_julia
 julia/parity.jl _pin_llvm
 julia/parity.jl _pin_sdk
-julia/parity.jl _quarantine_debt
 julia/parity.jl _quarantine_entry
-julia/parity.jl _quarantine_key
 julia/parity.jl _reason_unpinned
 julia/parity.jl _references
 julia/parity.jl _register!
@@ -292,15 +290,9 @@ julia/parity.jl check_package_declared
 julia/parity.jl check_parity
 julia/parity.jl check_patch
 julia/parity.jl check_quarantine
-julia/parity.jl check_quarantine_pinned
 julia/parity.jl check_typed_fields
 julia/parity.jl check_typed_signatures
-julia/parity.jl construction_check(::Val{:check_mirrors})::Int
-julia/parity.jl construction_check(::Val{:check_typed_fields})::Int
-julia/parity.jl construction_check(::Val{:check_typed_signatures})::Int
 julia/parity.jl construction_check(::Val{:include_dart})::Int
-julia/parity.jl construction_check(::Val{:parity})::Int
-julia/parity.jl construction_check(::Val{:quarantine})::Int
 julia/parity.jl include_dart
 julia/parity.jl include_patch
 julia/parity.jl mirror_samples!
