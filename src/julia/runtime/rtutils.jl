@@ -67,8 +67,8 @@ Natively Julia's `===`.
 
 # Julia's type of a type tag: a value's header holds its tag, the type read from the table of tags'
 # types (julia.h:971 jl_to_typeof over jl_small_typeof). A class id is WasmTarget's tag of every
-# class, its type read from the closed world's table of each class's type value (types.jl
-# RuntimeTypeInformation.small_typeof); the code generator lowers the call to that read
+# class, its type read from a table of type values, each the class translator.classes holds at its id,
+# for each class an as check names; the code generator lowers the call to that read
 # (src/intrinsics.jl), and natively no tag exists, so the body raises
 @quarantine "julia/src/julia.h:971 jl_to_typeof reads a type tag's type from the table of tags' types (jl_small_typeof)" Core.DataType @noinline jl_to_typeof(tag::Int32) =
     _wasm_only(Core.DataType)

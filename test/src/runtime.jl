@@ -117,3 +117,34 @@ isint(x::Int) = maybe(x) isa Int
     end
 end
 end
+
+module RuntimeClassTable
+using Test, WasmTarget
+const W = WasmTarget
+const D = W.Dart2Wasm
+isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+abstract type Shape end
+struct Circle <: Shape; r::Float64; end
+struct Square <: Shape; s::Float64; end
+struct Plain; x::Int64; end
+@noinline pick(k::Int64)::Any = k == 1 ? Circle(1.0) : k == 2 ? Square(2.0) : k == 3 ? Plain(3) : nothing
+# type.dart's _isInterfaceSubtype0 itself, called with a class id: its class-table path
+# (_checkSubclassRelationshipViaTable, the table getters, WasmArray's reads, ClassID.getID), which no
+# code generator site reaches while its interface arm takes a class only for its null case
+probe(k::Int64, tid::Int32) = W.Runtime._is_interface_subtype0(pick(k), false, tid)
+@testset "type.dart: _isInterfaceSubtype0 reads the class table, against native isa" begin
+    local bytes = W.compile(probe, (Int64, Int32))
+    # the class ids the module numbers, from the same closed world's numbering
+    local t = D.Translator(W.build_nir(W.check_subset(probe, (Int64, Int32), "runtime"), "runtime"),
+        D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    D._init_modules(t, nothing); collect(D.ClassInfoCollector(t))
+    local cases = Main.WTRunner.RunCase[]
+    for T in (Shape, Circle, Plain), k in 1:4
+        local tid = Int32(D.class_id(t.class_info[T]))
+        push!(cases, Main.WTRunner.RunCase("probe($k, $T)", bytes, (k, tid), pick(k) isa T))
+    end
+    for r in Main.WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
+end

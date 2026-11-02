@@ -261,9 +261,9 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
     type_row_displacement_subst_table::Late{NirConst}
     canonical_substitution_table::Late{NirConst}
     type_names::Late{NirConst}
-    # Julia's: the type value of each class id an as check names (emitAsCheck), as julia.h:969
-    # jl_small_typeof holds the type of each small tag
-    small_typeof::Dict{Int,DataType}
+    # Julia's: the class ids an as check names (emitAsCheck), whose type values the runtime reads back
+    # from the id (jl_to_typeof, julia.h:971), each the class translator.classes holds at its id
+    as_checked_class_ids::Set{Int}
     _requires_substitution_for_subclasses::Dict{Int,Bool}
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
     # :1217, which builds the rules and the tables, is its outer function
@@ -278,7 +278,7 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
             Late{NirConst}("dart2wasm/lib/types.dart:1207 RuntimeTypeInformation.typeRowDisplacementSubstTable"),
             Late{NirConst}("dart2wasm/lib/types.dart:1208 RuntimeTypeInformation.canonicalSubstitutionTable"),
             Late{NirConst}("dart2wasm/lib/types.dart:1209 RuntimeTypeInformation.typeNames"),
-            Dict{Int,DataType}(),
+            Set{Int}(),
             Dict{Int,Bool}())
 end
 
@@ -557,7 +557,7 @@ there, Unported.
         WasmBuilder.i32_const(b, encoded_nullability(tested_against_type))
         WasmBuilder.i32_const(b, class_id(type_class_info))
         # the type its failure names, read back from the class id (src/julia/runtime/rtutils.jl jl_to_typeof)
-        self.rtt[].small_typeof[class_id(type_class_info)] = tested_against_type
+        push!(self.rtt[].as_checked_class_ids, class_id(type_class_info))
         outputs_to_drop = call(code_gen, as_interface_subtype0(self.translator))
     else
         reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1561 _asSubtype"), "$at: a check against $tested_against_type needs the runtime's _asSubtype")

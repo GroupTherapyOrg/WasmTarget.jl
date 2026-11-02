@@ -818,13 +818,16 @@ end
 end
 
 # Julia's type of a type tag (julia.h:971 jl_to_typeof, src/julia/runtime/rtutils.jl): the class id's
-# entry of a table of type values, read as a non-null DataType. The table holds the type of each class
-# an as check names (types.jl emitAsCheck records it in RuntimeTypeInformation.small_typeof), its other
-# entries null: the runtime reads a class id's type only in the as check's failure, its id the check's
-# (src/runtime/common/type.jl _throwInterfaceTypeAsCheckError0), so no read reaches a null entry. The
-# checks are known only once every function is generated, so the read is a patchable region the
-# linking actions fill with the table's constant, as dart patches a constant's read once every use is
-# known (constants.dart:1913)
+# entry of a table of type values, read as a non-null DataType. Each entry is the class of its id in the
+# translator's classes (translator.classes, the one map from a class id to its class), for each class an
+# as check names (types.jl emitAsCheck records its id in RuntimeTypeInformation.as_checked_class_ids),
+# the other entries null: the runtime reads a class id's type only in the as check's failure, its id the
+# check's (src/runtime/common/type.jl _throwInterfaceTypeAsCheckError0). A table of every class's type is
+# not made: a class's type value whose parameter is a primitive value with no wasm representation
+# (GenericMemory's Core.AddrSpace{Core}) has no constant yet (constants.jl visitInstanceConstant). The
+# checks are known only once every function is generated, so the read is a patchable region the linking
+# actions fill with the table's constant, as dart patches a constant's read once every use is known
+# (constants.dart:1913)
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:to_typeof}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local t = translator(self)
     local b = self.code_gen.b[]
@@ -833,8 +836,8 @@ end
     local patch = WasmBuilder.create_patchable_region(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[table_type])
     if patch !== nothing
         push!(t.linking_actions, function ()
-            local small_typeof = t.types[].rtt[].small_typeof
-            local entries = NirConst[NirConst(Core.Const(get(small_typeof, id, nothing))) for id in 0:length(t.classes[])-1]
+            local named = t.types[].rtt[].as_checked_class_ids
+            local entries = NirConst[NirConst(Core.Const(id in named ? info.cls : nothing)) for (id, info) in zip(0:length(t.classes[])-1, t.classes[])]
             instantiate_constant(t.constants[], patch, make_array_of(t.constants[], Union{Nothing,DataType}, entries), table_type)
         end)
     end
