@@ -144,7 +144,11 @@ function plant()::Vector{String}
     # a known split: background QoS runs on the efficiency cores alone on Apple silicon, so that run's performance-core
     # share is nil (band: 2% of its CPU seconds, a process's first microseconds before its QoS applies)
     background.pcpu <= 0.02 * background.cpu || push!(faults, "the background run spent $(round(background.pcpu; digits = 3)) of $(round(background.cpu; digits = 2)) CPU-s on performance cores")
-    # the two runs' per-core counts are printed, unjudged: which cores a default-QoS run lands on is the scheduler's
+    # the default run's split: some of it lands on performance cores. A run with none is a check whose whole tree runs at
+    # background QoS (dev/ship.sh launched under taskpolicy -b, 2026-11-02 08:19: every shard on efficiency cores, a
+    # docs-only commit red on the 480-s hard limit holding the landing lock) or one with every performance core held, and
+    # D14's band means nothing on it: refused here, in seconds (band: the background run's 2%)
+    normal.pcpu > 0.02 * normal.cpu || push!(faults, "the default-QoS run spent $(round(normal.pcpu; digits = 3)) of $(round(normal.cpu; digits = 2)) CPU-s on performance cores: this check runs at background QoS or with every performance core held; launch dev/ship.sh plainly, never under taskpolicy -b")
     # a grandchild behind a protected binary reports nothing (the loader strips DYLD_ variables from perl and what it
     # execs), and its CPU seconds are the kernel's remainder: at least most of the grandchild's own
     local wrapped = `perl -e 'exec @ARGV' $work`
