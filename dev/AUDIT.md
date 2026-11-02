@@ -9173,3 +9173,62 @@ only at 133803d8, which names its reclassified :97 site.
 
 Resolution: this entry lands alone, prose only. A90E1, A90S1, A90S3, A90S4 and A88S1 leave their rows. Fix first:
 A92E1. 1.K: A92E1, A92E2, A92S1, A92S2. 1.E: A92S6. 1.F: A92S5. 1.C: A92S3, A92S4.
+
+## 2026-11-02 — audited through 2d848ea7 (de0224f0..2d848ea7: unsafeCast through dart's table, the D11 lock's computed direction, the landing's float guard, the Guard kind, 128-bit division and bit counts over compiler-rt, one 128-bit predicate, muladd's plain overlay, the no-counterpart admission)
+
+The ninety-third audit, beside the work, covers the 10 commits of de0224f0..2d848ea7 that are not audit entries
+(8c770b8a, entry 92), read under Dale's R1 and R2. Standing items. Each commit names its clause, but in db33ef28 a
+blank line separates `Charter: C10` from the trailer block, so git reads no Charter trailer (A93S6). No new silent
+catch. The debt list goes from 363 to 362 at b1cbfc60 and to 354 at 2d848ea7; the no-counterpart list from 4 to 12.
+src reads 3087 + (271 + 3) + 1 + 42 from 9cf21338. The runtime stays at 9 sites naming 8. D13: 2d848ea7's ship read a
+median of 11129 s: wt3-int128's four commits were authored 09:14–10:39Z and rebased several times (a0cee000 has four
+earlier copies), landing 12:58–13:05Z with each ship 160–576 s, so the median measures a held stack, not the loop.
+Earlier findings: 108d620a fixes A91S2, 80b7bffb fixes A91E1, 9cf21338 fixes A91S1, e838e376 fixes A86S3, b1cbfc60
+fixes A84E1; 2d848ea7 fixes A92E1 but overshoots (A93E2). Findings: A93E1, A93E2, A93S1 to A93S6.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — the counter's 1 gap is collectInitializerUsages (constructor_info.jl:114): the guard
+rule (parity.jl:1762) reads it as rejection-only, and :1774 returns Unported before :1776 can give Guard. The 3 Guard
+reject Internal only.
+
+Area: emission and diagnostics — the division expansions match LegalizeIntegerTypes.cpp:5086, :5388, :5549 and :5584
+at the llvm pin; the compiler-rt ports follow udivmodti4.c:23, :84 and :100, udivti3.c:19, umodti3.c:19 and
+int_div_impl.inc:73 and :85 line for line, and the x86-64 divq branch and the null-rem branches are named.
+rem(typemin, -1) == 0 is Julia's: intrinsics.cpp:1096's minus1 block answers 0. The bit counts match :4277, :4363,
+:4414 and :4445, and flipsign matches intrinsics.cpp:1719. NirBoundscheck's move is honest: the form is quarantined
+(nir.jl:98), its value is Julia's (cgutils.cpp:2067), and translate_statement:1030 routes it through dart's statement
+arms, as it has since b107ca36; the walk had never met one. (A93S5, low, D7) code_generator.jl:936 cites codegen.cpp
+for bounds_check_enabled. (A93S1, low, D7) legalize_integer_types.jl:131 cites WebAssemblyISelLowering.cpp:176 for
+i128's SDIVREM, but that loop sets i32 and i64 only; no line sets i128's action, so it is the zero default: not
+Custom, as claimed, but not Expand either. (A93E1, medium, D12, D2) no case reaches b1cbfc60's change: muladd_fused
+reads _SM_FMA_TABLE, a Vector (smoke_corpus.jl:731, :740), at a run-time k, so no muladd is folded and the guard
+passes under either overlay. (A93S3, low, D3, D9) the reason cites a corpus measurement where Julia states the fact
+itself (Compiler/src/tfuncs.jl:2488, "not interprocedurally consistent"); native folds by runtime_intrinsics.c:1517 `a
+* b + c`, WT now answers fused at every muladd, and no row tracks the sites where native rounds twice. (A93S4, low,
+D2) overlays/isascii_latin1 is a runner gap: _wire (runner.jl:275-285) has no Char, so run_cases refuses the case
+(:405-407), and smoke counts that refusal wrong by its rule (smoke.jl:15-16), so the module's answer is never
+compared.
+
+Area: enforcement and prose — 2d848ea7's admission is exact and single-use: the keys' hash, recomputed from the
+commit, is 4eaecdce; the common dir holds its `used:` line at 2d848ea7, and the commit states the hand bootstrap.
+(A93E2, medium, D20, R1) five of the eight keys read more than WasmTarget's own records: check_quarantine_pinned
+resolves reasons through _reason_unpinned (parity.jl:1555), which stays debt, and names its own precedent (:1543); the
+runners at :2217 and :2366 pass the dart pin; :2105 runs check_parity, which the same commit keeps as debt; :1974 runs
+check_mirrors, which converts Julia's forms (:1948). _quarantine_key keys a method as _identity does (:183), and
+b1cbfc60 pinned _identity at gf.c:3017. (A93S2, low, D5) float_guard.jl:35 names smoke_corpus.jl, so src_tests.jl:61
+queues it last, with the corpus files, where 450bd6da says it "queues as any src file does".
+
+stopgap in disguise: the no-counterpart list now grows on an admission whose authority is a git-ignored file any lane
+can write (A93E2).
+
+precedent: LegalizeIntegerTypes.cpp:4277–:5584, WebAssemblyISelLowering.cpp:176, compiler-rt udivmodti4.c, divti3.c,
+modti3.c and int_div_impl.inc at the llvm pin; julia src/intrinsics.cpp:1096, :1594 and :1719, cgutils.cpp:2067,
+gf.c:3017, runtime_intrinsics.c:1517, Compiler/src/tfuncs.jl:2488; intrinsics.dart:290 and :1521 at the dart pin.
+
+R1: the compiler-rt routines, the ExpandIntRes ports and unsafeCast are near 1:1 ports. Five of the list's eight keys
+miss its own criterion (A93E2). R2: no stub is called complete; Guard stays out of the headline, and
+collectInitializerUsages counts as a gap.
+
+Resolution: this entry lands alone, prose only. A91E1, A91S1, A91S2, A84E1, A86S3 and A92E1 leave their rows. Fix
+first: A93E2. 1.K: A93E2. 1.D: A93E1, A93S1, A93S3, A93S5. 1.F: A93S4. 1.L: A93S2, A93S6.
