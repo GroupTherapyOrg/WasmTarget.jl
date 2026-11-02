@@ -8945,3 +8945,59 @@ are still counted to port at their emit sites (A88S1).
 Resolution: this entry lands alone, prose only. A83E1, A85E1 and A87S3 leave their rows; A87E2 stays on 1.D (the
 arm). Fix first: A88E1, wt3-runtime's ahead of A87S2. 1.F: A88E1, A88S1 (wt3-cgstubs2 the general arm, wt3-runtime
 the kind anchors), A88S3 (wt3-runtime) and A88S4 (A44S1's row stands). 1.E: A88S2 (wt3-tests2, wt3-cgstubs2 the row).
+
+## 2026-11-02 — audited through 4e87b54c (5520cb1d..4e87b54c: the interface target outside the Reference sum, the tuple skip at visitDynamicGet, the plant's default-QoS refusal, @nospecializeinfer's precedent, jl_to_typeof's full table, _isTypeSubtype over _TypeUniverse.isSubtype)
+
+The eighty-ninth audit, beside the work, covers the 6 commits of 5520cb1d..4e87b54c that are not audit entries
+(d2da291c, entry 88): e20a1c46, c1dcd162, 60c269ee, 812c7779, b7f86566 and 4e87b54c, read under Dale's R1 and R2 as
+standing sections. Standing items. Each commit names its clause. No silent catch: the one new catch, in a test, checks
+the RejectionError it catches. The debt list reads 370 at both ends. src reads 3087 of 3404 at every commit of the
+range. The runtime library reads 13 sites naming 11 at every commit, unmoved. D13: a median of 207 s; c1dcd162's 579 s
+and 60c269ee's 734 s waited behind the 08:35 red on the 480-s hard limit. Earlier findings: e20a1c46 fixes A85S1,
+c1dcd162 fixes A85S2, 812c7779 fixes A80S2 and b7f86566 fixes A87S2. A80S3 is narrowed: the cut's identity is shown,
+its default-QoS re-read is not done. A88E1 stands; nothing in the range claims it. Findings: A89E1 and A89S1 to A89S3.
+
+Area: builder — no change under src/wasm_builder.
+
+Area: collection and planning — e20a1c46 leaves every match over the Reference sum exhaustive: the ten @exhaustive
+matches each carry exactly a MethodInstance arm and a FieldReference arm, with no wildcard (D8); the SelectorReference
+reaches only _virtual_call, call_dispatch_table and selector_for_target's own method. (A89S1, low, D5, D12)
+type_value_unmade (classes.jl:27) is offered as "the one list", but it restates visitInstanceConstant's conditions
+(constants.jl:810-813) and the builtin dispatch ahead of them; nothing asks the constant path itself. Its refusal at
+types.jl:561-562 has no case that reaches it: runtime.jl:118-119 reaches the layout's rejection first, and its test
+`occursin("AddrSpace")` matches either message. Each null entry is unreachable today: no as check against Any can
+fail, and the unmade entries are read only past that refusal.
+
+Area: emission and diagnostics — (A89E1, medium, D9, D3, R1, R2) _TypeUniverse_is_subtype (type.jl:221) answers every
+pair of DataTypes from the class table, only part of Julia's DataType arm (subtype.c:1546-1590): Type{X} (:1550-1559)
+and tuples (:1581, subtype_tuple :1348) have supertype Any in that table, so `Type{Int64} <: DataType` and
+`Tuple{Int64,Int64} <: Tuple{Integer,Integer}` answer false where Julia answers true. dart's record rule
+(type.dart:1322, applied :1440-1447) is unported, and the docstring (type.jl:202) says it has "no Julia kind here",
+against classes.jl:148, where a tuple is dart's record. runtime.jl:206's 64 pairs hold neither kind. This is A88E1's
+tuple half again, in a second definition. The UnionAll fallthrough (:222) is a wildcard raised at run time, not a
+located rejection; the Null step (:219) cites no source. The rule order is otherwise dart's at :1351, and the Union
+step matches subtype.c:1419, left before right.
+
+Area: enforcement and prose — 60c269ee's refusal is a real check in the gate (check.sh:125), and the commit quotes it
+firing under taskpolicy -b. (A89S2, low, D17) its band (tree_instructions.jl:151) borrows the background run's 2%
+(:146), whose precedent is a process's first microseconds before its QoS applies: an upper bound on a background run
+that says nothing about a default run's share. No reading of a default run is quoted, and a default run with every
+performance core held is refused by text. (A89S3, low, prose, AGENTS.md's rule) 812c7779 says test/probe_corpus.jl
+holds no probes; at its parent probe_set.jl names 105 (12b49771) and probe_baseline.txt holds 105 lines. The identity
+it shows rests on an ad hoc fingerprint of 774 cases with no command in the tree, not on test/probe_bytes.jl.
+
+stopgap in disguise: type_value_unmade, called the one list of which type values have no constant, is a second reading
+of constants.jl's rejection conditions. The two can drift with nothing to tell, and its refusal is unreached (A89S1).
+
+precedent: type.dart:974, :1322, :1351, :1440-1447, :1555, :1744 and :1759 at the dart pin; code_generator.dart:2317
+visitDynamicGet; julia subtype.c:1348, :1419 and :1546-1590; julia.h:971; Compiler/src/typelattice.jl:210 and :218,
+abstractinterpretation.jl:3904.
+
+R1: _isTypeSubtype, isInterfaceSubtype and _TypeCheckVerificationError with its toString are 1:1 ports (type.dart:974,
+:1555, :1744, :1759). isSubtype follows :1351's order, and its Union step is anchored at subtype.c:1419. Its Null step
+and its UnionAll raise cite nothing, and the record rule (:1322) is neither ported nor named (A89E1). R2: :1351 is
+called ported while its DataType arm answers Type{X} and tuple pairs with a plausible false (A89E1). b7f86566's
+refusal guards a future and is called a fix with no case that reaches it (A89S1).
+
+Resolution: this entry lands alone, prose only. A85S1, A85S2, A80S2 and A87S2 leave their rows; A80S3 stays on 1.L
+(its default-QoS re-read). Fix first: A89E1, with A88E1. 1.F: A89E1, A89S1. 1.L: A89S2, A89S3.
