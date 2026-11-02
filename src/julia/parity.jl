@@ -1515,7 +1515,7 @@ end
 # quarantines more than one method of that name (`count` of each such key), its file and its signature
 # as written, its identity less the module and the form's head, so pinning one method never covers
 # another of its name
-@quarantine "a method is identified by its signature, Julia's method key, where its name has several" Base.relpath function _quarantine_key(e, src::String, count::Union{Dict{String,Int},Nothing} = nothing)::String
+@quarantine "a definition's key is its file and names, and a method is identified by its signature where its name has several, as Julia keys a method in its table by its signature (julia/src/gf.c:3017 jl_method_table_insert), as _identity does; Julia differs: the key is a line of a text list, its file beside the signature" Base.relpath function _quarantine_key(e, src::String, count::Union{Dict{String,Int},Nothing} = nothing)::String
     local file = replace(relpath(string(e.file), src), '\\' => '/')
     local n = file * " " * (isempty(e.names) ? "[" * e.api * "]" : join(string.(e.names), ","))
     count !== nothing && get(count, n, 0) > 1 || return n
