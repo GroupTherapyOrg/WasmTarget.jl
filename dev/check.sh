@@ -127,6 +127,18 @@ julia --startup-file=no dev/tree_instructions.jl .wtd/ratchet.gi julia --project
 # (A71E1): it took the slowest shard from 589 to 575 G, about 3 s, for one more ~300 G first compile and an eighth Julia
 # process on four performance cores (D31)
 SHARDS=6; tpids=""
+# D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
+# change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget, then to 160 s the same day ("Raise
+# to 160 until the cuts") once the load counted whole by instructions read ~33 s and a src path ~155 s (load 33 +
+# max(ratchet 112, shards 122)). It stepped to 140 s when cuts 1 and 2 of the shards' first compile landed (7a2f804e, d0444541: the
+# first compile 348 -> 263 G; d0444541's own src check read 131 s) with the ratchet's L210 cache (ad31d8f6), and steps
+# to 120 s with SHARDS back to four (wt3-latency, A67E1/A68E2); the 60-s target is unchanged
+D14_RED=140
+# the band and the shard count are one schedule, the option Dale chose: 140 s while SHARDS is above four, 120 s at four
+# or fewer. D14_RED stays a literal (dev/ship.sh's retry cap reads it from origin), so a mismatch is refused here, before
+# any stage runs (A81S1, A82S6). STOPGAP: two literals held together by a refusal; it ends when SHARDS is derived from
+# the band (or the band from SHARDS) in one definition that ship.sh can still read
+[ $(( SHARDS > 4 ? 140 : 120 )) -eq $D14_RED ] || { echo "check: RED — D14_RED=$D14_RED disagrees with SHARDS=$SHARDS (140 s while SHARDS > 4, then 120 s, the option Dale chose)"; exit 1; }
 costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-instr.tsv"; rm -f .wtd/src_costs.*
 # the shards take files from one queue (test/src_tests.jl), each claimed by a directory made here
 rm -rf .wtd/claims; mkdir -p .wtd/claims
@@ -236,16 +248,6 @@ for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_P_SRC); shards="$sh
 path=$(( c_load + path_par ))
 echo "check: ${path} s on the critical path (load ${c_load}, ratchet ${p_ratchet}, src shards${shards}; performance-core G + efficiency-core seconds + unreported seconds: load $(split_of load); ratchet ${splits}); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
 [ -z "$slow" ] || echo "check: note, a stage's performance cores ran under its rate, so it reads low there:${slow}"
-# D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
-# change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget, then to 160 s the same day ("Raise
-# to 160 until the cuts") once the load counted whole by instructions read ~33 s and a src path ~155 s (load 33 +
-# max(ratchet 112, shards 122)). It stepped to 140 s when cuts 1 and 2 of the shards' first compile landed (7a2f804e, d0444541: the
-# first compile 348 -> 263 G; d0444541's own src check read 131 s) with the ratchet's L210 cache (ad31d8f6), and steps
-# to 120 s with SHARDS back to four (wt3-latency, A67E1/A68E2); the 60-s target is unchanged
-D14_RED=140
-# the band and the shard count are one schedule, the option Dale chose: 140 s while SHARDS is above four, 120 s at four
-# or fewer. D14_RED stays a literal (dev/ship.sh's retry cap reads it from origin), so a mismatch is refused here (A81S1)
-[ $(( SHARDS > 4 ? 140 : 120 )) -eq $D14_RED ] || { echo "check: RED — D14_RED=$D14_RED disagrees with SHARDS=$SHARDS (140 s while SHARDS > 4, then 120 s, the option Dale chose)"; exit 1; }
 # today's judged path fell by measure alone, nothing the check runs changed: 156 (CPU-s) -> 131 (f8afd6e5) -> ~95
 # (89a5deb2), 2026-11-01/02; D14's intent is about a minute of wall, so a judged path under 120 is not D14 met
 [ $path -gt $D14_RED ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past ${D14_RED} s until four shards, then 120 s)"; exit 1; }
