@@ -2739,17 +2739,10 @@ end
 # (_quarantine_key, over _defines' names and _identity's signature), so a change of whitespace or comments
 # alone reads the same; packages.jl's generated import blocks are dev/skeleton.jl's (L210 regenerates and
 # compares exactly them), never a lane's rewrite of its modules, so each block between its markers is blanked
-# before the parse (a regenerated block rewrites no body) and every line outside one stays the module's body.
-# At the merge base (`base_side`) a one-line import outside a block is blanked too: the hand imports the
-# generator took into its blocks when it came to own every import. This fires only for a base that predates
-# that commit: L210 refuses a hand import outside a block from then on, so no later base holds one and the
-# blanking is inert, the rule the blocks alone; HEAD's lines outside a block all count (the lead's ruling)
+# before the parse (a regenerated block rewrites no body) and every line outside one stays the module's body
 const GENERATED_IMPORTS_RX = r"# ---- (\w+)'s imports, written by dev/skeleton\.jl write ----\n(?s:.*?)# ---- end of \1's imports ----"
-function quarantine_bodies(wt::Module, file::AbstractString, text::AbstractString; base_side::Bool = false)::Dict{String,String}
-    if file == "julia/packages.jl"
-        text = replace(text, GENERATED_IMPORTS_RX => s -> replace(s, r"[^\n]" => " "))
-        base_side && (text = replace(text, r"(?m)^(?:import|using)\b[^\n]*$" => ""))
-    end
+function quarantine_bodies(wt::Module, file::AbstractString, text::AbstractString)::Dict{String,String}
+    file == "julia/packages.jl" && (text = replace(text, GENERATED_IMPORTS_RX => s -> replace(s, r"[^\n]" => " ")))
     local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
     local found = Any[]
     local walk(x) = if Meta.isexpr(x, :macrocall) && (x.args[1] === Symbol("@quarantine") ||
@@ -2796,7 +2789,7 @@ function debt_bodies_changed(root::AbstractString, base::AbstractString)::Vector
     for f in split(readchomp(`git -C $root diff --name-only $mb HEAD -- src`), '\n'; keepempty = false)
         endswith(f, ".jl") && has(mb, f) && has("HEAD", f) || continue
         local rel = f[length("src/")+1:end]
-        local before = quarantine_bodies(wt, rel, readchomp(`git -C $root show $mb:$f`); base_side = true)
+        local before = quarantine_bodies(wt, rel, readchomp(`git -C $root show $mb:$f`))
         local after = quarantine_bodies(wt, rel, readchomp(`git -C $root show HEAD:$f`))
         for (k, body) in after
             k in listed && haskey(before, k) && before[k] != body && !pin_rows_added(k, before[k], body) &&
@@ -2850,10 +2843,6 @@ function debt_negatives_missed()::Vector{String}
         length(debt_bodies_changed(t, p0)) == 1 || push!(out, "negative missed: a debt-listed module of packages.jl rewritten by hand passes")
         write(pkj, pm("import ..a\n", "import ..b\n")); g("commit", "-qam", "outside")
         length(debt_bodies_changed(t, p0)) == 1 || push!(out, "negative missed: a hand import outside the generated block of a debt-listed module passes")
-        # the migration: a base's hand import outside the block taken into it rewrites no body
-        local p1 = readchomp(`git -C $t rev-parse HEAD`)
-        write(pkj, pm("import ..a\nimport ..b\n")); g("commit", "-qam", "taken")
-        isempty(debt_bodies_changed(t, p1)) || push!(out, "negative missed: a base's hand import taken into the generated block reads as a rewrite")
         # a pin table's rows added is no rewrite; a row removed is
         pin_rows_added("julia/parity.jl JULIA_FILES", "const JULIA_FILES::Tuple{Vararg{String}} = (\"a\", \"b\")",
                        "const JULIA_FILES::Tuple{Vararg{String}} = (\"a\", \"b\", \"c\")") ||
