@@ -20,6 +20,9 @@ text() = R.JSStringImpl_from_ascii_bytes(TEXT, 0, ncodeunits(TEXT))
 tail() = R.JSStringImpl_from_ascii_bytes(TEXT, 3, ncodeunits(TEXT))
 broken() = R.JSStringImpl_from_ascii_bytes(BROKEN, 0, ncodeunits(BROKEN))
 empty() = R.JSStringImpl_from_ascii_bytes(TEXT, 2, 2)
+# js_helper.dart's areEqualInJS: JS's ===, which compares two JS strings by their contents
+same_in_js() = R.are_equal_in_js(text(), R.JSStringImpl_from_ascii_bytes(TEXT, 0, ncodeunits(TEXT))) ? 1 : 0
+differ_in_js() = R.are_equal_in_js(text(), tail()) ? 1 : 0
 end
 
 # the JS string an export returns, as its UTF-16 code units, run with the engine's JS string builtins and
@@ -36,6 +39,25 @@ function js_code_units(f)
     return out
 end
 units(bytes) = join(Int.(transcode(UInt16, collect(bytes))), ",")
+
+@testset "js_helper.dart: areEqualInJS is JS's ===, through the JS runtime's inline JS" begin
+    local D = W.Dart2Wasm
+    for (f, want) in ((Cases.same_in_js, 1), (Cases.differ_in_js, 0))
+        local name = string(nameof(f))
+        local opts = D.WasmCompilerOptions(; main_uri = "", output_file = "out/$name.wasm"); opts.translator_options.generate_source_maps = false
+        local r = D.compile(opts, W.check_subset(f, (), "js_helper"))
+        @test occursin(": (l, r) => l === r,", r.js_files["out/$name.mjs"])
+        mktempdir() do dir
+            write(joinpath(dir, "$name.mjs"), r.js_files["out/$name.mjs"])
+            write(joinpath(dir, "$name.wasm"), only(values(r.wasm_files)))
+            local script = "import {compile} from '$(dir)/$name.mjs'; import {readFileSync} from 'fs'; " *
+                "const app = await compile(readFileSync('$(dir)/$name.wasm')); const i = await app.instantiate({}); " *
+                "console.log(String(i.instantiatedModule.exports.$name()));"
+            # (neither runs natively: its JS strings live only in the module)
+            @test readchomp(`perl -e 'alarm 60; exec @ARGV' node --input-type=module -e $script`) == string(want)
+        end
+    end
+end
 
 @testset "js_string.dart: a String's code units made a JS string, widened as Base.transcode widens them" begin
     @test js_code_units(Cases.text) == units(codeunits(Cases.TEXT))
