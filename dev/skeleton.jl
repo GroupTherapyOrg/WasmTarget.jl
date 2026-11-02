@@ -626,11 +626,14 @@ end
 # A3's one naming rule, src/julia/parity.jl's `snake` (its one source): its definition read from there
 # and evaluated here when the generator loads, so the generator and the loader name every definition
 # alike
-let m = match(r"(?s)\bfunction snake(\(s::AbstractString\)::String\n.*?\nend)\n",
-              read(joinpath(ROOT, "src", "julia", "parity.jl"), String))
+function load_snake!()
+    local m = match(r"(?s)\bfunction snake(\(s::AbstractString\)::String\n.*?\nend)\n",
+                    read(joinpath(ROOT, "src", "julia", "parity.jl"), String))
     m === nothing && error("skeleton: src/julia/parity.jl holds no snake")
     Core.eval(@__MODULE__, Meta.parse("function snake" * m[1]))
+    return nothing
 end
+load_snake!()
 
 # the one rule's table of dart operators and Object members that are Base functions, read from
 # src/julia/parity.jl's DART_BASE (its one source)
@@ -2306,6 +2309,15 @@ out_of_scope()::Dict{String,String} = scope_section("out")
 # [out_types] lists (`<library> <Name>`), or a class [out_definitions] takes out
 const OUT_DEFINITIONS = Dict{String,String}()
 const OUT_TYPES = Dict{String,String}()
+
+# every table the generator fills lazily from the pin, src/ and its scope, one list: an image built with a
+# workload (dev/SkeletonImage) would serve the build's rows (a build-time row in KERNEL_USED hides a stale
+# Kernel row, A79E1), so the image's __init__ empties them (reset!) and reads `snake` again, and a load
+# finds them empty (lazy_tables_filled, the ratchet's L210 check)
+const LAZY_TABLES = (:SDK, :DART_BASE, :MODULES, :PLATFORM_URIS, :DIRECTIVES, :OWN_TYPES, :EXPORTED, :SCOPE_SET,
+                     :KERNEL, :KERNEL_USED, :KERNEL_SUMS, :TPARAMS, :OUT_DEFINITIONS, :OUT_TYPES)
+reset!() = (foreach(t -> empty!(getglobal(@__MODULE__, t)), LAZY_TABLES); load_snake!(); nothing)
+lazy_tables_filled()::Vector{Symbol} = Symbol[t for t in LAZY_TABLES if !isempty(getglobal(@__MODULE__, t))]
 function out_reason(file::AbstractString, d::Decl, ext_on::Dict{String,String})::Union{Nothing,String}
     isempty(OUT_DEFINITIONS) && merge!(OUT_DEFINITIONS, scope_section("out_definitions"))
     isempty(OUT_TYPES) && merge!(OUT_TYPES, scope_section("out_types"), OUT_DEFINITIONS)

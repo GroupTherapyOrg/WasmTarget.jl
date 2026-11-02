@@ -457,16 +457,21 @@ function skeleton_module()::Module
     env in LOAD_PATH || push!(LOAD_PATH, env)
     local m = Base.require(Base.PkgId(Base.UUID("c705a088-e6fb-4dc7-9eb7-2981c2d8aed6"), "SkeletonImage"))
     push!(_SKELETON, Base.invokelatest(getglobal, m, :Skeleton))
+    # a load holds none of the build's rows (A79E1)
+    local filled = Base.invokelatest(getglobal(_SKELETON[1], :lazy_tables_filled))
+    isempty(filled) || error("L210: the generator's image loaded with its build's rows in $(join(filled, ", "))")
     return _SKELETON[1]
 end
 skeleton_call(f::Symbol, args...; kw...) = Base.invokelatest(getglobal(skeleton_module(), f), args...; kw...)
 
 # the inputs every file's verdict shares (dev/cache_key.sh's pathspecs): the generator, its scope, its image,
-# this lock's code (this file) and the key itself; the pinned checkouts' heads and the julia build are in every
+# the src files it reads for every file (kernel.jl's KERNEL_TYPES, parity.jl's snake, DART_BASE, DART_MODULES:
+# A79E2), this lock's code (this file) and the key itself; the pinned checkouts' heads and the julia build are in every
 # key. Each in-scope file's verdict adds its own src file's content and the src anchors that touch it
 # (diff_faults' `inputs`), as Base keys an image per include (stale_cachefile), so a one-file port
 # recomputes one file
-const SKELETON_INPUTS = ("dev/skeleton.jl", "dev/skeleton_scope.toml", "dev/SkeletonImage", "test/parity_ratchet.jl", "dev/cache_key.sh")
+const SKELETON_INPUTS = ("dev/skeleton.jl", "dev/skeleton_scope.toml", "dev/SkeletonImage", "src/julia/kernel.jl", "src/julia/parity.jl",
+                         "test/parity_ratchet.jl", "dev/cache_key.sh")
 skeleton_cache_key(root::AbstractString)::String = readchomp(Cmd(`bash dev/cache_key.sh $SKELETON_INPUTS`; dir = root))
 # Julia's own 128 bits of a text, two seeds of Base.hash (the test env declares no SHA; the julia build is in the
 # shared key, so the hash is one function across the runs it is compared between)
@@ -513,13 +518,21 @@ end
 # refused, an edited filled definition passed
 function skeleton_negatives_missed()::Vector{String}
     local out = String[]
+    # the image's tables: a row filled is reported, so a load holding the build's rows refuses (A79E1)
+    local skm = skeleton_module()
+    local kused = getglobal(skm, :KERNEL_USED)
+    push!(kused, ("planted.dart", "Planted"))
+    :KERNEL_USED in Base.invokelatest(getglobal(skm, :lazy_tables_filled)) || push!(out, "negative missed: a filled lazy table is not reported")
+    delete!(kused, ("planted.dart", "Planted"))
     # the verdict's key: an edit only to the generator, or only to this lock's code, misses the cache
     mktempdir() do t
         local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
         g("init", "-q"); foreach(d -> mkpath(joinpath(t, d)), ("src", "dev", "test"))
         cp(joinpath(ROOT, "dev", "cache_key.sh"), joinpath(t, "dev", "cache_key.sh"))
         local w(f, x) = write(joinpath(t, f), x)
+        mkpath(joinpath(t, "src", "julia"))
         w("src/a.jl", "f() = 1\n"); w("src/b.jl", "g() = 1\n"); w("dev/skeleton.jl", "# generator\n"); w("dev/skeleton_scope.toml", "\n"); w("test/parity_ratchet.jl", "# lock\n")
+        w("src/julia/kernel.jl", "const KERNEL_TYPES = (\n)\n"); w("src/julia/parity.jl", "snake(s) = s\n")
         g("add", "-A"); g("commit", "-qm", "k0")
         local k0 = skeleton_cache_key(t)
         # a file's own key: its content and the anchors touching it; another file's edit keeps it
@@ -533,6 +546,8 @@ function skeleton_negatives_missed()::Vector{String}
         w("dev/skeleton.jl", "# generator, changed\n"); skeleton_cache_key(t) == k0 && push!(out, "negative missed: an edit only to the generator keeps its verdict's key")
         w("dev/skeleton.jl", "# generator\n"); w("test/parity_ratchet.jl", "# lock, changed\n")
         skeleton_cache_key(t) == k0 && push!(out, "negative missed: an edit only to this lock's code keeps the generator's verdict's key")
+        w("test/parity_ratchet.jl", "# lock\n"); w("src/julia/kernel.jl", "const KERNEL_TYPES = (\n    (\"a\", \"B\") => C,\n)\n")
+        skeleton_cache_key(t) == k0 && push!(out, "negative missed: an edit only to KERNEL_TYPES keeps the generator's verdict's key")
     end
     local sk = skeleton_module()
     local S = skeleton_call(:read_scope)

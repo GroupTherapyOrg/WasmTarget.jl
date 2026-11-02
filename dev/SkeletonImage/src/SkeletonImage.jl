@@ -8,6 +8,13 @@
 # built keeps its compiled code; the reader's runs are that workload.
 module SkeletonImage
 include(joinpath(@__DIR__, "..", "..", "skeleton.jl"))
+# what the generator reads beside its own file, includes of the image as Base records them (A79E1): an edit to
+# one rebuilds it, as stale_cachefile rebuilds an image whose include changed
+include_dependency(joinpath(@__DIR__, "..", "..", "..", "src", "julia", "parity.jl"))
+include_dependency(joinpath(@__DIR__, "..", "..", "..", "src", "julia", "kernel.jl"))
+include_dependency(joinpath(@__DIR__, "..", "..", "skeleton_scope.toml"))
+# the tables the workload filled are the build's, never a load's: emptied, and `snake` read again (A79E1)
+__init__() = Skeleton.reset!()
 if isdir(joinpath(homedir(), ".cache", "wasmtarget", "dart-sdk", "pkg"))
     let S = Skeleton.read_scope()
         Skeleton.check_faults()
