@@ -1463,11 +1463,19 @@ end
 # attempt fails it by name; dev/corpus_shard.sh runs that attempt, so the shard goes on past the kill
 @testset "a case past its hard limit fails by name, and the run goes on" begin
     @test _dart_limited(() -> (:compiled, UInt8[1]), "dart_plant/quick"; limit = 5) == (:compiled, UInt8[1])
-    # judged by CPU seconds: a sleep that burns none is cut only at its wall backstop, which names the CPU-s it had (the
-    # CPU limit's own cut is the child's below, its CPU-s outside this process's, so the landing's G stays as it was)
-    local idle = first(_dart_limited(() -> (sleep(60); (:compiled, UInt8[])), "dart_plant/sleeps"; limit = 100, wall = 2))
-    @test idle isa _DartPastLimit && startswith(idle.why, "past its 2-s wall backstop, at ") && endswith(idle.why, " CPU-s: dart_plant/sleeps")
     mktempdir() do t
+        # judged by CPU seconds: a sleep that burns none is cut only at its wall backstop, named. In a child of its own,
+        # as every cut is: an interrupt the child does not take ends in the watchdog's kill, which in this process took
+        # down a landing check's shard three times (wt3-parity's ships, 2026-11-02). Either end names the backstop
+        local sleeps = """
+            Base.include(Main, $(repr(joinpath(@__DIR__, "..", "dart_limit.jl"))))
+            print(first(_dart_limited(() -> (sleep(60); (:compiled, UInt8[])), "dart_plant/sleeps"; limit = 100, wall = 2, grace = 1)).why)
+            """
+        local sout, serr = IOBuffer(), IOBuffer()
+        run(pipeline(ignorestatus(`$(Base.julia_cmd()) --startup-file=no -e $sleeps`); stdout = sout, stderr = serr))
+        local said = String(take!(sout)) * String(take!(serr))
+        @test occursin(r"past its 2-s wall backstop, at \d+ CPU-s: dart_plant/sleeps", said) ||
+              occursin("dart_plant/sleeps is past its 2-s wall backstop, at 0 CPU-s and took no interrupt in 1 s: the process is killed", said)
         # a child julia whose case's inference alone runs past its limit: the watchdog starts before the case is inferred
         # (_dart_limited does not specialize on it), and inference defers the interrupt, so the cut is the kill, named on
         # stderr and in the killed record. Specialized, the 30-CPU-s generator ran before the watchdog started, and the
