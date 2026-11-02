@@ -538,11 +538,16 @@ end
 The ranges of the concrete class ids that extend or implement `klass`, directly or transitively:
 the classes Julia's `<:` puts under it. A value's membership is `isa`, which agrees with `<:` of its
 class for every class but a type as a value: `Int isa Type{Int}` though `DataType <: Type{Int}` is
-false. So a singleton type `Type{X}` whose member's class is not under it rejects here, located,
-until type values are tested by their own runtime type (types.dart); `Type{Union{}}`, whose one
-member's class `Core.TypeofBottom` is under it, and the open `Type{T}`, which every kind is under,
-answer as any class. The one reading of a type's concrete classes: the is check's, its inlining
-decision's and a tuple's field read at a run-time index all take their class ids here.
+false. A singleton type `Type{X}`'s one member is X itself (julia/src/subtype.c:2511 jl_isa, its
+`jl_is_type_type(t)` arm: `jl_types_equal(x, jl_tparam0(t))`), whose class at run time is X's own type,
+its kind (`jl_typeof(X)`), so `Type{X}`'s concrete classes are that kind's, as dart answers a receiver
+of static type Type by the runtime's _Type classes (sdk/lib/_internal/wasm/common/type.dart). That holds
+values beside X, so it is a class set, never a membership test: no is or as check of `Type{X}` is a
+class-id check (types.jl's canUseTypeCheckHelper: told_by_class refuses a type splitting a kind's
+instances), each tests the value itself. `Type{Union{}}`, whose one member's class `Core.TypeofBottom`
+is under it, and the open `Type{T}`, which every kind is under, answer as any class. The one reading of
+a type's concrete classes: the is check's, its inlining decision's and a tuple's field read at a
+run-time index all take their class ids here.
 
 Reshaped: `klass` — a type Julia's program has that is no class of the closed world (a UnionAll)
 holds the concrete classes Julia puts under it (`c <: klass`), each its own range, where dart's
@@ -550,8 +555,9 @@ holds the concrete classes Julia puts under it (`c <: klass`), each its own rang
 the record classes of the arities it admits (src/julia/classes.jl TupleRecord), its values' classes.
 """
 @parity "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" function get_concrete_class_id_range(self::ClassIdNumbering, klass::Type)::Vector{Range}
+    # a singleton type Type{X}: the classes of its one member, X's kind (jl_isa's Type{T} arm)
     klass isa DataType && Base.isType(klass) && !(klass.parameters[1] isa TypeVar) && !(typeof(klass.parameters[1]) <: klass) &&
-        reject!(Unquarantined("src/class_info.jl getConcreteClassIdRange: $klass, whose members are types, not the instances of a class"), "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange")
+        return get_concrete_class_id_range(self, typeof(klass.parameters[1]))
     local cached = get(self._concrete_class_id_ranges, klass, nothing)
     cached === nothing || return cached
     local ranges = Range[]

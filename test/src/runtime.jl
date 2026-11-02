@@ -227,8 +227,9 @@ const TYPES = Any[Shape, Circle, Plain, Union{Circle,Plain}, Any, Nothing, Union
 type_at(i::Int64)::Type = TYPES[i]::Type
 sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(type_at(i), type_at(j)) ? 1 : 0
 # tuple pairs, dart's record rule (type.dart:1440) unported: Tuple{Int64,Int64} <: Tuple{Integer,Integer}
-# answered false from the class table; rejected at link time, located. A Type{X} as a value has no
-# constant yet (getConcreteClassIdRange), rejected at it.
+# answered false from the class table; rejected at link time, located. A Type{X} as a value is classed by
+# its member's kind (getConcreteClassIdRange), and its run-time type test, jl_isa's jl_types_equal, is
+# not yet written, rejected at it.
 const TUPLE_TYPES = Any[Tuple{Int64,Int64}, Tuple{Integer,Integer}]
 tuple_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(TUPLE_TYPES[i]::Type, TUPLE_TYPES[j]::Type) ? 1 : 0
 const KIND_TYPES = Any[Type{Int64}, DataType]
@@ -239,7 +240,7 @@ kind_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(KIND_TYPES[i]::Type, K
           occursin("tuple_sub", te.at)
     local ke = try; W.compile(kind_sub, (Int64, Int64)); nothing; catch x; x; end
     @test ke isa W.RejectionError && ke.rejection isa W.Unquarantined &&
-          startswith(ke.rejection.row, "src/class_info.jl getConcreteClassIdRange: Type{Int64}, whose members are types")
+          startswith(ke.rejection.row, "src/julia/runtime/rtutils.jl run_time_type_gap: the type Type{Int64}")
     local bytes = W.compile(sub, (Int64, Int64))
     local n = length(TYPES)
     local cases = [Main.WTRunner.RunCase("sub($(TYPES[i]), $(TYPES[j]))", bytes, (i, j), TYPES[i] <: TYPES[j] ? 1 : 0) for i in 1:n for j in 1:n]
