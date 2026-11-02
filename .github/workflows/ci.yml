@@ -72,7 +72,9 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.12'
+          # the patch release JULIA_PIN names (dev/PARITY_MASTER.md) and test/probe_baseline.txt was recorded on: a
+          # moved 1.12.x changes Base's IR, so an unpinned '1.12' made a closure probe red a false alarm (A85S5)
+          - '1.12.7'
           # ~1.13.0-0 admits prereleases (rc) until 1.13.0 final lands
           - '~1.13.0-0'
         target:
@@ -138,7 +140,7 @@ jobs:
         run: |
           julia --project=. test/smoke.jl
           julia --project=. test/parity_ratchet.jl
-          if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; fi
+          if [ "${{ matrix.version }}" = "1.12.7" ]; then julia --project=. test/probe_bytes.jl; fi
 
       - name: Run tests
         if: matrix.target.slice != 'lanes'
