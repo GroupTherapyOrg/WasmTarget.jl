@@ -1466,7 +1466,13 @@ end
     mktempdir() do t
         # judged by CPU seconds: a sleep that burns none is cut only at its wall backstop, named. In a child of its own,
         # as every cut is: an interrupt the child does not take ends in the watchdog's kill, which in this process took
-        # down a landing check's shard three times (wt3-parity's ships, 2026-11-02). Either end names the backstop
+        # down a landing check's shard three times (wt3-parity's ships, 2026-11-02). Either end names the backstop, and
+        # the plant asserts either, never the interrupt alone (A84S3): Julia delivers a SIGINT only where its thread 0
+        # stands at a safepoint outside a deferring region, or waits on the libuv loop it owns, which is Julia's runtime,
+        # not WasmTarget's. Measured on this child: the interrupt taken 5 of 5 times with Julia's default threads (one
+        # interactive), 0 of 8 under JULIA_NUM_THREADS=1 (--threads=1,0, a landing check's); a loop of @eval compiles,
+        # a case's shape, 0 of 3 either way; and inference defers the signal to its end (a generator of 10 s took it
+        # after 10.1 s). So the guaranteed end is the kill, which dev/corpus_shard.sh's relaunch recovers
         local sleeps = """
             Base.include(Main, $(repr(joinpath(@__DIR__, "..", "dart_limit.jl"))))
             print(first(_dart_limited(() -> (sleep(60); (:compiled, UInt8[])), "dart_plant/sleeps"; limit = 100, wall = 2, grace = 1)).why)
