@@ -17,5 +17,6 @@ node_modules/
 
 # Claude Code
 .claude/worktrees/
-ralph_loops/
 Manifest-v*.toml
+# TLC's default metadir (run_tlc.sh passes its own under $TMPDIR)
+dev/formal/states/

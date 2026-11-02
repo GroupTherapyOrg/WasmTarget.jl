@@ -1,0 +1,821 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# FIRST-CLASS CLOSURES — trampolines + vtable globals
+# (dart ClosureLayouter closures.dart:209 / ClosureRepresentation :65;
+#  the closure object = {classId, identityHash, context, vtable, functionType})
+# ═══════════════════════════════════════════════════════════════════════════
+
+"""True when an erased value or every runtime inhabitant of `T` is callable.
+parity(quarantine: Julia's type lattice has no function type — a callable is any `<: Function`
+type (each closure and generic function its own singleton type) or a Union of them, where dart
+asks `type is FunctionType`)"""
+function is_callable_julia_type(@nospecialize(T))::Bool
+    T === Any && return true
+    T isa Type || return false
+    T <: Function && return true
+    T isa Union || return false
+    local members = Base.uniontypes(T)
+    return !isempty(members) && all(U -> U isa Type && U <: Function, members)
+end
+
+"""
+    ClosureBody(body_idx, params, results, return_type, julia_params, method)
+
+One compiled specialization of a callable type, as the layouter sees it: the body's
+function index, its physical signature, its inferred Julia return type (the trampoline
+re-boxes a numeric result with that type's classId), its Julia parameter types (what an
+entry tests each argument against) and the method it specializes.
+parity(closures.dart:31 ClosureImplementation.functions)
+"""
+struct ClosureBody
+    body_idx::UInt32
+    params::Vector{WasmValType}
+    results::Vector{WasmValType}
+    return_type::Type
+    julia_params::Vector{Type}   # the specialization's Julia parameter types (self included for capturing closures)
+    method::Method               # the method it specializes (Julia's dispatch ranks methods)
+end
+
+"""
+    build_closure_vtable!(mod, registry, closure_type, bodies; takes_context, no_method)
+        -> (vtable_global_idx, vtable_struct_idx)
+
+ONE immutable vtable GLOBAL per closure TYPE (dart ClosureLayouter: one representation
+per function shape, closures.dart:41-118, memoized by the shape itself :1101-1114). The
+vtable struct has an entry for every positional arity 0..max; entry[arity] is a
+TRAMPOLINE for the body of that arity — (closureBase-as-anyref, args...) → cast base →
+context → cast captured struct → call body → result as anyref — and the other entries
+are null. Every specialization of the type the closed world contains is passed at once,
+so a type called through erased bindings at two arities (`string` as a value, with
+`string(x)` and `string(a,b,c,d)` both reachable) gets both entries; several
+specializations of the SAME arity share one dispatching entry that tests the erased
+arguments' runtime classes (`_closure_dispatch_trampoline!`).
+
+`no_method` is the plan's record of the args tuples the callable has no method for: an entry
+whose arguments no body takes throws Julia's MethodError for them.
+For capturing closures, `params` includes the captured-struct self at slot 0 and
+`takes_context=true`. Static tear-offs have only their public parameters and
+`takes_context=false`; both use the same closure object and vtable ABI.
+formal(dev/formal/ClosureLayout.tla): captured fields keep declaration order and the vtable global's shape is the one frozen at creation
+parity(translator.dart:1360 Translator.getClosure)
+"""
+function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
+                               closure_type::Type, bodies::Vector{ClosureBody};
+                               takes_context::Bool=is_closure_type(closure_type),
+                               no_method::Vector{DataType})::Tuple{UInt32, UInt32}
+    cache = registry.closure_vtable_globals
+    cache === nothing && throw(_closure_layout_error(closure_type, bodies, "the layouter is unavailable on a minimal registry"))
+    haskey(cache, closure_type) && throw(_closure_layout_error(closure_type, bodies, "built twice"))
+    isempty(bodies) && throw(_closure_layout_error(closure_type, bodies, "no body"))
+    base_idx = get_closure_base_struct!(mod, registry)
+    captured_info = takes_context ? get(registry.structs, closure_type, nothing) : nothing
+    takes_context && captured_info === nothing &&
+        throw(_closure_layout_error(closure_type, bodies, "the captured-context struct is not registered"))
+
+    # arity → the bodies of that arity, in program order
+    local by_arity = Dict{Int, Vector{ClosureBody}}()
+    local arities = Int[]
+    for body in bodies
+        local arity = length(body.params) - (takes_context ? 1 : 0)
+        haskey(by_arity, arity) || (by_arity[arity] = ClosureBody[]; push!(arities, arity))
+        push!(by_arity[arity], body)
+    end
+    # arity → trampoline: the body's own entry, or — a Julia generic function as a value
+    # (parity(quarantine: dart has one body per closure; `string` as a value has every
+    # reachable specialization)) — a dispatching entry that tests the erased arguments'
+    # classIds against each specialization's parameter types, in Julia's specificity order
+    local tramps = Dict{Int, UInt32}()
+    for arity in arities
+        local cands = _most_specific_first(by_arity[arity], closure_type)
+        tramps[arity] = length(cands) == 1 ?
+            _closure_trampoline!(mod, registry, closure_type, cands[1], arity, takes_context, base_idx, captured_info, no_method) :
+            _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info, no_method)
+    end
+    local max_arity = maximum(keys(tramps))
+    vt_struct = get_closure_vtable_struct!(mod, registry, max_arity)
+
+    # ── the vtable global: entry[a] = trampoline for arity a, null elsewhere ──
+    g = define_global!(mod, ConcreteRef(vt_struct, false), false) do init
+        for a in 0:max_arity
+            haskey(tramps, a) ? ref_func!(init, tramps[a]) : ref_null!(init, FuncRef)
+        end
+        struct_new!(init, vt_struct)
+    end
+    cache[closure_type] = g
+    return (g, vt_struct)
+end
+
+"""
+    _most_specific_first(bodies) -> Vector{ClosureBody}
+
+The bodies in the order a vtable entry tries them: a body of a method more specific than
+another's (Julia's dispatch ranks methods, jl_method_morespecific) before it, and of two
+specializations of one method the more specific first; program order otherwise. The first row
+that matches a value runs the method Julia selects for it: a tuple of candidates two methods
+both admit for which Julia's dispatch is ambiguous rejected the callable before (compile.jl,
+ambiguous_class_tuple); a pair no candidate reaches stays in program order.
+formal(dev/formal/Enrollment.tla): rows are tried in the methods' specificity order.
+parity(quarantine: a Julia callable's methods are selected by specificity; a dart closure has
+one body.)
+"""
+function _most_specific_first(bodies::Vector{ClosureBody}, @nospecialize(closure_type))::Vector{ClosureBody}
+    local sig(c) = Tuple{c.julia_params...}
+    local precedes(d, c) = d.method !== c.method ? Base.morespecific(d.method, c.method) :
+                                                   Base.morespecific(sig(d), sig(c))
+    local rest = copy(bodies)
+    local out = ClosureBody[]
+    while !isempty(rest)
+        local k = findfirst(rest) do c
+            !any(d -> d !== c && precedes(d, c), rest)
+        end
+        k === nothing && throw(_closure_layout_error(closure_type, rest, "the specificity order of these bodies has a cycle"))
+        push!(out, popat!(rest, k))
+    end
+    return out
+end
+
+# a `Type{X}` parameter whose values are one pointer (jl_pointer_egal, the rule emit_isa
+# tests by identity): an entry tests the operand's identity against X's type object
+# (`_emit_closure_arg_tests!`); any other `Type{X}` is tested by type equality, which an entry
+# cannot make (`_closure_param_untestable`)
+# parity(quarantine: a Julia `Type{X}` parameter admits type objects equal to X; a dart parameter is a class.)
+_is_type_identity_param(@nospecialize(T))::Bool = is_pointer_egal_type_type(T)
+
+"""
+    ambiguous_class_tuple(interp, F, overlap, classes) -> Union{Bool, String, Tuple}
+
+A tuple of candidates, one per argument of `overlap` (the argument types two methods both
+admit; a position's candidates are the one class set's, `classes`: the classes a value may have
+and the `Type{X}` of each type object a value may be, class_candidates), for which Julia's
+dispatch of callable type `F` is ambiguous (`wt_method_which` in the consult of `interp`, the
+compile's one WasmInterpreter, finds no one method), or false when
+there is none; when WT does not enumerate the tuples, the reason (the overlap is not one tuple
+type, has a Vararg or a position with no candidate, or has more than _CANDIDATE_BOUND tuples),
+which the caller rejects with. A position's candidates are dispatch_candidates'. A numbered class
+no value has is asked about by no search (formal(dev/formal/Enrollment.tla): AskNumbered).
+parity(quarantine: Julia selects among a callable's methods by specificity and raises for an
+ambiguity; a dart closure has one body.)
+"""
+function ambiguous_class_tuple(interp::WasmInterpreter, @nospecialize(F), @nospecialize(overlap),
+                               classes::ClosedWorldClasses)::Union{Bool, String, Tuple}
+    overlap isa DataType || return "the overlap $(overlap) is not one tuple type"
+    any(P -> P isa Core.TypeofVararg, overlap.parameters) && return "the overlap $(overlap) has a Vararg"
+    local candidates = class_candidates(classes)
+    local choices = Vector{Any}[dispatch_candidates(P, candidates) for P in overlap.parameters]
+    # a position with no candidate is one this search cannot ask about (formal(dev/formal/
+    # Enrollment.tla): ClassesOnly); a tuple too many to ask about, likewise
+    any(isempty, choices) && return "a position of the overlap $(overlap) has no candidate"
+    prod(length, choices; init=1) > _CANDIDATE_BOUND &&
+        return "the overlap $(overlap) has more than $(_CANDIDATE_BOUND) candidate tuples"
+    for cs in Iterators.product(choices...)
+        wt_method_which(interp, Tuple{F, cs...}) === nothing && return cs
+    end
+    return false
+end
+
+"""
+    dispatch_candidates(P, classes) -> Vector{Any}
+
+The dispatch types a value at a position of static type `P` may have: `P` itself when it is
+one dispatch type (`Base.isdispatchelem`: a concrete type, or a `Type{X}`, whose one value is a
+type object of no class of its own), else each of `classes` under `P`.
+parity(quarantine: Julia dispatches on a value's dispatch type, a type object's being its
+singleton `Type{X}`; a dart closure has one body.)
+"""
+dispatch_candidates(@nospecialize(P), classes::Vector{Any})::Vector{Any} =
+    Base.isdispatchelem(P) ? Any[P] : Any[C for C in classes if C <: P]
+
+"""
+    _closure_param_untestable(mod, registry, T) -> Bool
+
+Whether an abstract parameter type `T` other than Any (which an entry does not test)
+admits a value no entry row tells by its classId: a type object (a kind or a TypeVar, which
+carry no class header, or the values of a `Type{X}` that jl_isa tests by type equality) or a
+bare array (a Memory or SimpleVector, represented without one). A callable with such a candidate rejects
+(compile.jl) until rows are enrolled per observed class (MARCH 13.17, A5C4).
+parity(quarantine: Julia type objects and bare arrays have no dart class header; a dart
+closure's parameter is a class.)
+"""
+function _closure_param_untestable(mod::WasmModule, registry::TypeRegistry, @nospecialize(T))::Bool
+    (T === Any || isconcretetype(T)) && return false     # an Any parameter is not tested
+    _is_type_identity_param(T) && return false            # X's one type object, by identity
+    T isa DataType && T.name === Type.body.name && return true   # type equality (jl_isa)
+    any(K -> typeintersect(K, T) !== Union{}, (DataType, Union, UnionAll, Core.TypeofBottom, TypeVar)) && return true
+    return any(p -> typeintersect(p[1], T) !== Union{}, bare_array_partition(mod, registry, nothing).all)
+end
+
+"""
+    _emit_closure_arg_tests!(tb, mod, registry, closure_type, bodies, c, arity, takes_context, tmp, itmp, lbl) -> tb
+
+Branch to `lbl` unless every erased argument is a value of `c`'s Julia parameter type, as
+Julia's dispatch of the call on its arguments' classes requires: an `Any` parameter takes
+anything; a `Type{X}` parameter X's one type object; a bare-array class (a Memory, a
+SimpleVector) the array type only it is (`bare_array_partition`; a shared one was rejected
+before any vtable is built); a type object its kind, a TypeVar first (emit_type_object_test!); any other concrete type the
+value's header classId; an abstract type the classIds of its numbered classes (`nothing`
+too, when it admits Nothing). An abstract parameter that also admits a type object or a bare
+array has no such test here, and the callable rejects before its vtable is built
+(`_closure_param_untestable`, compile.jl). `tmp` is an anyref scratch and `itmp` an i32
+scratch of the entry.
+formal(dev/formal/ClassIdSwitch.tla): a row runs its body only for a value of its parameter type.
+parity(dynamic_dispatchers.dart:596 generateDynamicClosureCallShapeAndTypeCheck): dart checks a
+dynamic closure call's argument types before the entry runs (`_checkClosureType`), the test a
+single body's entry makes here. Choosing among several specializations by these tests is
+Julia's: parity(quarantine: a Julia callable's methods are selected by its arguments' runtime
+classes; a dart closure has one body.)
+"""
+function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                                  closure_type::Type, bodies::Vector{ClosureBody}, c::ClosureBody,
+                                  arity::Int, takes_context::Bool, tmp::UInt32, itmp::UInt32,
+                                  lbl)::InstrBuilder
+    local top_idx = registry.base_struct_idx
+    top_idx === nothing && throw(_closure_layout_error(closure_type, bodies,
+        "an entry's argument tests need the class base struct"))
+    local kinds = ((DataType, JL_TYPE_KIND_DATATYPE), (Union, JL_TYPE_KIND_UNION),
+                   (UnionAll, JL_TYPE_KIND_UNIONALL), (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM))
+    for j in 1:arity
+        local Tj = c.julia_params[j + (takes_context ? 1 : 0)]
+        Tj === Any && continue       # accepts anything
+        if _is_type_identity_param(Tj) || Tj === TypeVar || any(K -> K[1] === Tj, kinds)
+            # a type object: X's identity for a `Type{X}`, else its kind (a TypeVar first, whose
+            # `$kind` is never written), the one test isa makes (emit_type_object_test!)
+            local_get!(tb, UInt32(j))
+            local_set!(tb, tmp)
+            emit_type_object_test!(tb, mod, registry, tmp, Tj, () -> itmp)
+            num!(tb, Opcode.I32_EQZ)
+            br_if!(tb, lbl)
+            continue
+        end
+        if Tj isa DataType && is_bare_array_class(Tj)
+            local told = bare_array_partition(mod, registry, nothing).told
+            local k = findfirst(p -> p[1] === Tj, told)
+            k === nothing && throw(_closure_layout_error(closure_type, bodies,
+                "a candidate takes $(Tj), a bare-array class the closed world did not number (compile.jl rejects a shared one first)"))
+            local_get!(tb, UInt32(j))
+            ref_test!(tb, Int64(told[k][2]), false)
+            num!(tb, Opcode.I32_EQZ)
+            br_if!(tb, lbl)
+            continue
+        end
+        local ids = if isconcretetype(Tj)
+            Int32[ensure_type_id!(registry, Tj)]
+        else
+            # compile.jl rejects such a callable before its vtable is built
+            _closure_param_untestable(mod, registry, Tj) &&
+                throw(_closure_layout_error(closure_type, bodies,
+                    "an entry's argument $j is a $(Tj), which admits a type object or a bare array"))
+            concrete_class_ids(registry, Tj)
+        end
+        local takes_nothing = Nothing <: Tj
+        # a classed value's header classId is one of `ids` (`nothing`, the null reference, too
+        # when the type admits it)
+        local done = block!(tb)
+        local_get!(tb, UInt32(j))
+        local_tee!(tb, tmp)
+        ref_is_null!(tb)
+        if_!(tb)
+        takes_nothing ? br!(tb, done) : br!(tb, lbl)
+        end_block!(tb)
+        local_get!(tb, tmp)
+        ref_test!(tb, Int64(top_idx), false)
+        num!(tb, Opcode.I32_EQZ)
+        br_if!(tb, lbl)
+        local_get!(tb, tmp)
+        ref_cast!(tb, Int64(top_idx), false)
+        struct_get!(tb, UInt32(top_idx), UInt32(0))
+        local_set!(tb, itmp)
+        if isempty(ids)
+            br!(tb, lbl)
+        else
+            for (i, id) in enumerate(ids)
+                local_get!(tb, itmp)
+                i32_const!(tb, Int64(id))
+                num!(tb, Opcode.I32_EQ)
+                i > 1 && num!(tb, Opcode.I32_OR)
+            end
+            num!(tb, Opcode.I32_EQZ)
+            br_if!(tb, lbl)
+        end
+        end_block!(tb)
+    end
+    return tb
+end
+
+# The trampoline: the UNIFORM DYNAMIC SIGNATURE (anyref^(1+arity)) → anyref, dart's
+# vtable entry type (closures.dart:648: `[topType]` for every entry). Args arrive
+# boxed/erased; the trampoline unboxes/casts per the body's REAL signature and converts
+# the result to anyref. The builder declares its params + scratch local so the tracker
+# reads truth (params anyref^(1+arity) → anyref; scratch = the body width).
+# parity(translator.dart:2767 _ClosureTrampolineGenerator)
+function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_type::Type, body::ClosureBody,
+                              arity::Int, takes_context::Bool, base_idx::UInt32, captured_info,
+                              no_method::Vector{DataType})::UInt32
+    tb = InstrBuilder(WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef];
+                      func_name="closure_trampoline", mod=mod)
+    local numeric = !isempty(body.results) && body.results[1] in (I32, I64, F32, F64)
+    # an argument whose parameter type is not Any is tested against it (every one of an
+    # arity-0 entry, or of an all-Any body, takes anything)
+    local tested = any(1:arity) do j
+        body.julia_params[j + (takes_context ? 1 : 0)] !== Any
+    end
+    # locals after the params: the result's re-box scratch (a numeric result), a closure
+    # result's object scratch, then the argument tests' anyref and i32 scratch
+    local res_scratch = numeric ? UInt32(builder_add_local!(tb, body.results[1])) : nothing
+    local obj_scratch = is_context_type(registry, body.return_type) ? UInt32(builder_add_local!(tb, AnyRef)) : nothing
+    if tested
+        local tmp, itmp = UInt32(builder_add_local!(tb, AnyRef)), UInt32(builder_add_local!(tb, I32))
+        local lbl = block!(tb)
+        _emit_closure_arg_tests!(tb, mod, registry, closure_type, ClosureBody[body], body, arity,
+                                 takes_context, tmp, itmp, lbl)
+        _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
+                            captured_info, res_scratch; obj_scratch, arg_scratch=itmp)
+        return_!(tb)
+        end_block!(tb)
+        _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method, itmp)
+    else
+        # every parameter takes anything (an `Any`), so no argument needs the box scratch
+        _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
+                            captured_info, res_scratch; obj_scratch, arg_scratch=nothing)
+    end
+    end_block!(tb)   # the function frame's own end
+    tramp_idx = add_function!(mod, tb;
+                              name=generated_function_name(:closure_trampoline, string(nameof(closure_type))))
+    declare_funcs!(mod, UInt32[tramp_idx])
+    return tramp_idx
+end
+
+"""
+    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method, scratch) -> tb
+
+A vtable entry whose arguments no body takes: Julia's MethodError, `f` the closure (param 0)
+and `args` the tuple of the arguments' classes. Each args tuple of this arity the plan records
+the callable has no method for (`no_method`, its own record) is tested by its elements'
+classIds and built from the erased arguments; arguments of a class with no recorded tuple, or
+read by no class header, trap.
+formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
+parity(dynamic_dispatchers.dart:178 _generateMethodCode): the no-match block, which builds the
+call's error from its arguments and throws it (dart calls noSuchMethod with an Invocation).
+parity(quarantine: a Julia args tuple is typed by its arguments' runtime classes (methoderror_args_types), so the tuple is chosen by class among those numbered at compile time; dart builds its Invocation at run time from whatever arguments arrive.)
+"""
+function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                                       @nospecialize(closure_type), arity::Int,
+                                       no_method::Vector{DataType}, scratch::UInt32)::InstrBuilder
+    local base = registry.base_struct_idx
+    local headed(C) = isconcretetype(C) && !(C <: Type) && !is_bare_array_class(C) &&
+                      (isstructtype(C) || isprimitivetype(C))
+    local tuples = DataType[T for T in no_method if length(T.parameters) == arity && all(headed, T.parameters)]
+    if base === nothing || isempty(tuples)
+        unreachable!(tb)   # structural trap: no numbered args tuple (MARCH 13.17 A3S1)
+        return tb
+    end
+    for T in tuples
+        for (j, C) in enumerate(T.parameters)
+            local_get!(tb, UInt32(j)); ref_test!(tb, Int64(base), false)
+            if_!(tb; results=WasmValType[I32])
+            local_get!(tb, UInt32(j)); emit_typeof!(tb, base)
+            i32_const!(tb, Int64(ensure_type_id!(registry, C))); num!(tb, Opcode.I32_EQ)
+            else_!(tb)
+            # a null is `nothing` (A11E2)
+            C === Nothing ? (local_get!(tb, UInt32(j)); ref_is_null!(tb)) : i32_const!(tb, 0)
+            end_block!(tb)
+            j > 1 && num!(tb, Opcode.I32_AND)
+        end
+        if_!(tb)
+        emit_method_error!(tb, mod, registry, T,
+            # the closure, as the value it was called as
+            (b, fw) -> (local_get!(b, UInt32(0)); fw === AnyRef || ref_cast!(b, fw, true)),
+            Function[(b, w) -> _closure_narrow_arg!(b, mod, registry, j, w; julia=T.parameters[j], scratch,
+                                                    closure_type, bodies=ClosureBody[])
+                     for j in 1:arity])
+        end_block!(tb)
+    end
+    unreachable!(tb)   # structural trap: arguments of a class with no numbered args tuple (A3S1)
+    return tb
+end
+
+# Push the trampoline's erased argument `j` unboxed/cast to the body's parameter `pt`. A layout
+# defect is the vtable pre-pass's, located at `closure_type` and the specializations `bodies`
+# (_closure_layout_error).
+# parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
+function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, j::Int, pt::WasmValType;
+                              julia::Any, scratch::Union{Nothing,UInt32}, @nospecialize(closure_type),
+                              bodies::Vector{ClosureBody})::InstrBuilder
+    if julia === Nothing && (pt === I32 || (pt isa ConcreteRef && !pt.nullable))
+        # `nothing`, which the entry's test admitted (the null its form at a reference of the any
+        # hierarchy is, or a value of Nothing's class), taken as the body's parameter holds it:
+        # its placeholder, boxed under Nothing's class at a non-null reference, never unboxed or
+        # cast, as convert_type! takes it (dev/formal/Coercion.tla NothingNeverCast)
+        i32_const!(tb, 0)
+        pt === I32 && return tb
+        scratch === nothing && throw(_closure_layout_error(closure_type, bodies,
+            "its Nothing argument $j has no scratch local declared for its box"))
+        local box = emit_classid_box!(tb, mod, registry, scratch, I32, Nothing)
+        box == pt.type_idx || throw(_closure_layout_error(closure_type, bodies,
+            "its Nothing parameter $j is a (ref $(pt.type_idx)), not the box of its placeholder (ref $box)"))
+        return tb
+    end
+    if is_closure_context_ref(registry, pt)
+        # a closure argument is its closure object (maybe_wrap_closure!): the body takes its
+        # context, field 2, as dart's direct closure call reads it (code_generator.dart:2656
+        # _generateDirectClosureCall; it trapped casting the object, MARCH 13.17 A7S1 stage 4)
+        local_get!(tb, UInt32(j))
+        return emit_closure_context_unwrap!(tb, mod, registry, UInt32(j), pt)
+    end
+    local_get!(tb, UInt32(j))
+    if pt in (I32, I64, F32, F64)
+        emit_classid_unbox!(tb, mod, registry, pt)
+    elseif pt isa ConcreteRef
+        ref_cast!(tb, Int64(pt.type_idx), pt.nullable)
+    elseif pt isa RefType && pt !== AnyRef
+        # Dynamic entries receive anyref. Abstract heap-typed body parameters
+        # still require the same explicit narrowing as nominal ConcreteRefs.
+        ref_cast!(tb, pt, true)
+    end   # AnyRef already has the body's exact representation.
+    return tb
+end
+
+# The call of `body` from the trampoline's narrowed arguments, its result converted to
+# the entry's anyref (dart `convertType(outputs.single, trampoline output)`): a numeric
+# result re-boxed with the body's REAL Julia classId (a Wasm width alone cannot
+# distinguish Bool/Int32 or the other same-width Julia types); a reference passes as is;
+# a Nothing body — no wasm result — yields `nothing` at the top type, null (as a literal
+# `nothing` reaches every reference sink, values.jl emit_value!, and `isa(x, Nothing)`
+# reads it back, a null); a bottom body never returns — structural trap after it.
+# parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
+function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, closure_type::Type,
+                             body::ClosureBody, arity::Int, takes_context::Bool, base_idx::UInt32, captured_info,
+                             scratch::Union{Nothing,UInt32}; obj_scratch::Union{Nothing,UInt32},
+                             arg_scratch::Union{Nothing,UInt32})::InstrBuilder
+    if takes_context
+        local_get!(tb, UInt32(0))
+        ref_cast!(tb, Int64(base_idx), false)
+        struct_get!(tb, base_idx, UInt32(2))               # .context
+        ref_cast!(tb, Int64(captured_info.wasm_type_idx), false)   # captured struct
+    end
+    for j in 1:arity
+        _closure_narrow_arg!(tb, mod, registry, j, body.params[j + (takes_context ? 1 : 0)];
+                             julia=body.julia_params[j + (takes_context ? 1 : 0)], scratch=arg_scratch,
+                             closure_type, bodies=ClosureBody[body])
+    end
+    call!(tb, body.body_idx)
+    if isempty(body.results)
+        if body.return_type === Nothing
+            ref_null!(tb, AnyRef)
+        elseif body.return_type === Union{}
+            unreachable!(tb)   # structural trap after a call that never returns
+        else
+            throw(_closure_layout_error(closure_type, ClosureBody[body],
+                "the body returning $(body.return_type) has no wasm result"))
+        end
+    elseif body.results[1] in (I32, I64, F32, F64)
+        # the box's classId is the return type's own: a numeric result whose Julia type is
+        # not one concrete class (a Union carried in one width) has no box to go in
+        isconcretetype(body.return_type) || throw(_closure_layout_error(closure_type, ClosureBody[body],
+            "the $(body.results[1]) result of a body returning $(body.return_type) has no single class to box it with"))
+        scratch === nothing && throw(_closure_layout_error(closure_type, ClosureBody[body],
+            "the $(body.results[1]) result has no scratch local declared for its box"))
+        emit_classid_box!(tb, mod, registry, scratch, body.results[1], body.return_type)
+    elseif is_context_type(registry, body.return_type)
+        # a closure result is its object at the entry's anyref result
+        obj_scratch === nothing && throw(_closure_layout_error(closure_type, ClosureBody[body],
+            "the body returns a closure and the entry has no scratch for its object"))
+        emit_context_object!(tb, mod, registry, body.return_type, obj_scratch)
+    end
+    return tb
+end
+
+"""
+    _closure_layout_error(closure_type, bodies, msg) -> WasmInternalError
+
+A closure-layout defect, raised by the vtable pre-pass before any statement exists:
+located at the callable type, naming every specialization of it the layouter was handed
+(Julia parameter types → return type, and the body's wasm signature).
+parity(compile.dart:113 CFECrashError)
+"""
+function _closure_layout_error(@nospecialize(closure_type), bodies::Vector{ClosureBody}, msg::AbstractString)::WasmInternalError
+    local sigs = String[]
+    for c in bodies
+        local jps = join(("::$T" for T in c.julia_params), ", ")
+        push!(sigs, "($jps) -> $(c.return_type)  [wasm func $(c.body_idx): $(c.params) -> $(c.results)]")
+    end
+    local text = "closure vtable for $closure_type: $msg" *
+                 (isempty(sigs) ? "" : "\n    specializations:\n      " * join(sigs, "\n      "))
+    return WasmInternalError(string(closure_type), 0, "", String[], ErrorException(text),
+                             Base.stacktrace()[2:end])
+end
+
+"""
+    _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info, no_method)
+
+The vtable entry for an arity that several specializations of `closure_type` share. Every
+argument arrives erased (anyref); the candidates are tried most specific first
+(`_most_specific_first`), each argument tested against the candidate's Julia parameter type
+(`_emit_closure_arg_tests!`) — and the first match is narrowed, called and its result
+converted exactly as a single-body entry's, then returned. No match throws Julia's MethodError
+for an args tuple the callable's `no_method` record holds, and traps otherwise.
+formal(dev/formal/ClassIdSwitch.tla): the entry runs the specialization Julia selects, or
+traps where Julia has none (a candidate class no test tells apart was rejected before).
+formal(dev/formal/Enrollment.tla): rows are tried most specific first.
+parity(quarantine: a Julia generic function used as a value carries every reachable
+specialization of one arity (`string` as a value), chosen by the erased arguments' runtime
+classes; a dart closure has exactly one body per FunctionNode, so one vtable entry per arity
+calls it directly)
+"""
+function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_type::Type,
+                                       cands::Vector{ClosureBody}, arity::Int, takes_context::Bool,
+                                       base_idx::UInt32, captured_info, no_method::Vector{DataType})::UInt32
+    local top_idx = registry.base_struct_idx
+    top_idx === nothing && throw(_closure_layout_error(closure_type, cands,
+        "a dispatching arity-$arity entry needs the class base struct"))
+    tb = InstrBuilder(WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef];
+                      func_name="closure_dispatch_trampoline", mod=mod)
+    # locals after the params: the classed-value scratch for the tests, then one re-box
+    # scratch per numeric result width the candidates return
+    local tmp = UInt32(builder_add_local!(tb, AnyRef))
+    local scratch_of = Dict{WasmValType, UInt32}()
+    for c in cands
+        if !isempty(c.results) && c.results[1] in (I32, I64, F32, F64) && !haskey(scratch_of, c.results[1])
+            scratch_of[c.results[1]] = UInt32(builder_add_local!(tb, c.results[1]))
+        end
+    end
+    local itmp = UInt32(builder_add_local!(tb, I32))      # the argument tests' i32 scratch
+    # a closure result's object scratch
+    local obj_scratch = any(c -> is_context_type(registry, c.return_type), cands) ? UInt32(builder_add_local!(tb, AnyRef)) : nothing
+    for c in cands
+        local lbl = block!(tb)
+        _emit_closure_arg_tests!(tb, mod, registry, closure_type, cands, c, arity, takes_context, tmp, itmp, lbl)
+        local c_scratch = isempty(c.results) ? nothing : get(scratch_of, c.results[1], nothing)
+        _closure_call_body!(tb, mod, registry, closure_type, c, arity, takes_context, base_idx, captured_info, c_scratch;
+                            obj_scratch, arg_scratch=itmp)
+        return_!(tb)
+        end_block!(tb)
+    end
+    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method, itmp)
+    end_block!(tb)
+    tramp_idx = add_function!(mod, tb;
+                              name=generated_function_name(:closure_dispatching_trampoline, string(nameof(closure_type))))
+    declare_funcs!(mod, UInt32[tramp_idx])
+    return tramp_idx
+end
+
+"""
+    closure_vtable(mod, registry, closure_type, arity) -> (vtable_global_idx, vtable_struct_idx)
+
+The vtable the pre-pass built for `closure_type`, read back from the global's declared
+type — never re-derived from the call at hand — and checked to hold an entry for
+`arity` (ClosureLayout.tla ArityDrift: a shape the creation did not freeze is a layouter
+defect, not a silent re-derivation).
+parity(closures.dart:40 ClosureImplementation.vtable)
+"""
+function closure_vtable(mod::WasmModule, registry::TypeRegistry, closure_type::Type, arity::Int)::Tuple{UInt32, UInt32}
+    cache = registry.closure_vtable_globals
+    cache === nothing && error("closure layouter unavailable on a minimal registry")
+    haskey(cache, closure_type) || error("closure vtable for $closure_type was not built by the pre-pass")
+    local g = cache[closure_type]
+    local vt_decl = mod.globals[Int(g) + 1].valtype
+    vt_decl isa ConcreteRef || error("closure vtable global $g has no struct type")
+    local vt_fields = length(mod.types[Int(vt_decl.type_idx) + 1].fields)
+    arity < vt_fields || error(
+        "closure $closure_type is wrapped for arity $arity; its vtable holds arities 0..$(vt_fields - 1)")
+    return (g, vt_decl.type_idx)
+end
+
+"""
+    get_empty_closure_vtable!(mod, registry) -> UInt32
+
+The vtable global of a closure whose type no dynamic call reaches (the pre-pass built it no
+vtable): the arity-0 vtable struct with its one entry null. Its object is still the closure's
+value of any class, carrying the class header; a dynamic call of it traps at the entry's cast,
+as one of a value that is no closure does (A3S1).
+parity(closures.dart:209 ClosureLayouter): dart builds every closure's vtable, each
+closure being callable; a Julia callable a dynamic call never reaches has none in the closed
+world, so its entries are null.
+"""
+function get_empty_closure_vtable!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.empty_closure_vtable_global !== nothing && return registry.empty_closure_vtable_global
+    local vt_struct = get_closure_vtable_struct!(mod, registry, 0)
+    local g = define_global!(mod, ConcreteRef(vt_struct, false), false) do init
+        ref_null!(init, FuncRef)
+        struct_new!(init, vt_struct)
+    end
+    registry.empty_closure_vtable_global = g
+    return g
+end
+
+"""
+    emit_closure_wrap!(b, ctx, closure_type, body_idx, body_params, body_results)
+
+The captured struct is ON THE STACK; wraps it into the closure OBJECT
+{classId, identityHash, context, vtable, functionType} (dart's implicit function-value creation at the
+erasure seam — convertType when a closure meets a top type).
+parity(code_generator.dart:2560 AstCodeGenerator._pushClosure)
+"""
+function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::UInt32,
+                            body_params::Vector{WasmValType}, body_results::Vector{WasmValType};
+                            takes_context::Bool=is_closure_type(closure_type))::Union{Nothing, ConcreteRef}
+    base_idx = get_closure_base_struct!(ctx.mod, ctx.type_registry)
+    # POST-FREEZE: lookup only — the pre-pass created the vtable; creating here
+    # would add functions mid-body-compile (the index-freeze skew).
+    local cache = ctx.type_registry.closure_vtable_globals
+    # a closure no dynamic call reaches is still an object once erased (the empty vtable): its
+    # class header is what every class read of a value of any class reads (MARCH 13.17 A7S1);
+    # a function's singleton with no vtable is a classed object already
+    (takes_context || (cache !== nothing && haskey(cache, closure_type))) || return nothing
+    local g = closure_vtable_global(ctx.mod, ctx.type_registry, closure_type,
+                                    length(body_params) - (takes_context ? 1 : 0))
+    # stack: [captured] → {classId, identityHash=0, context, vtable, functionType}
+    local ctx_scratch = allocate_local!(ctx, AnyRef)
+    if takes_context
+        local_set!(b, UInt32(ctx_scratch))
+    else
+        # The source singleton struct is only its pre-erasure representation.
+        # Static tear-offs have no receiver/context, so use Julia's real Nothing
+        # singleton as Dart uses its canonical dummy context object.
+        drop!(b)
+        local ng = get_nothing_global!(ctx.mod, ctx.type_registry)
+        global_get!(b, ng)
+        local_set!(b, UInt32(ctx_scratch))
+    end
+    _emit_closure_object!(b, ctx.mod, ctx.type_registry, closure_type, g, ctx_scratch)
+    return ConcreteRef(base_idx, false)
+end
+
+# the closure object {classId, identityHash, context, vtable, functionType} of `closure_type`,
+# its context in anyref local `scratch` and its vtable global `g`: the one construction
+# parity(code_generator.dart:2560 AstCodeGenerator._pushClosure)
+function _emit_closure_object!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                               @nospecialize(closure_type), g::Integer, scratch::Integer)::InstrBuilder
+    local base_idx = get_closure_base_struct!(mod, registry)
+    i32_const!(b, Int64(ensure_type_id!(registry, closure_type)))
+    i32_const!(b, 0)
+    local_get!(b, UInt32(scratch))
+    global_get!(b, g)   # the vtable's declared type, not a re-derivation
+    local type_globals = registry.type_constant_globals
+    (type_globals !== nothing && haskey(type_globals, closure_type)) ||
+        error("closed-world type object missing for closure $closure_type")
+    local type_global = type_globals[closure_type]
+    global_get!(b, type_global)
+    struct_new!(b, base_idx)
+    return b
+end
+
+"""
+    emit_context_object!(b, mod, registry, T, scratch) -> Bool
+
+The captured-fields context of closure type `T` on the stack, meeting a slot of any class
+outside a compiled body (a vtable entry's or a dispatch wrapper's result): its closure object,
+as maybe_wrap_closure! makes it inside one (A11E1: an entry returned the bare context, and
+`isa(g, Function)` answered 2 where native answers 1). `scratch` is an anyref local. False,
+emitting nothing, when `T`'s values are not contexts.
+parity(code_generator.dart:2560 AstCodeGenerator._pushClosure)
+"""
+function emit_context_object!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                              @nospecialize(T), scratch::Integer)::Bool
+    is_context_type(registry, T) || return false
+    local_set!(b, UInt32(scratch))
+    _emit_closure_object!(b, mod, registry, T, closure_vtable_global(mod, registry, T, nothing), scratch)
+    return true
+end
+
+"""
+    closure_vtable_global(mod, registry, T, arity) -> UInt32
+
+The vtable global a closure object of type `T` holds: the pre-pass's (closure_vtable, checked
+to hold an entry for `arity` when one is given), or the empty vtable for a closure type no
+dynamic call reaches. The one lookup for every construction.
+parity(closures.dart:40 ClosureImplementation.vtable)
+"""
+function closure_vtable_global(mod::WasmModule, registry::TypeRegistry, @nospecialize(T),
+                               arity::Union{Nothing,Int})::UInt32
+    local cache = registry.closure_vtable_globals
+    (cache !== nothing && haskey(cache, T)) ||
+        return get_empty_closure_vtable!(mod, registry)
+    arity === nothing && return cache[T]
+    return closure_vtable(mod, registry, T, arity)[1]
+end
+
+# whether `T`'s values are held as a closure's captured-fields context
+# parity(quarantine: a Julia closure is an ordinary struct of its captures, MARCH 13.17 A7S1)
+is_context_type(registry::TypeRegistry, @nospecialize(T))::Bool =
+    T isa DataType && is_closure_type(T) && get(registry.structs, T, nothing) isa StructInfo &&
+    registry.structs[T].field_offset == 1
+
+
+"""
+    _closure_body_for(ctx, closure_type) -> (body_idx, body_params, body_results) | nothing
+
+The compiled body whose SELF param is `closure_type` (WT closures take the
+captured struct as arg 1). Reads the wasm signature from the module.
+parity(pkg/dart2wasm/lib/closures.dart:23 ClosureImplementation)
+"""
+function _closure_body_for(ctx, closure_type::Type)::Union{Nothing, Tuple{UInt32, Vector{WasmValType}, Vector{WasmValType}, Bool}}
+    fr = ctx.func_registry
+    fr === nothing && return nothing
+    for (k, info) in fr.functions
+        # keyed by the closure TYPE (capturing closures have no instance; compile.jl
+        # registers their MI-compiled bodies under func_ref = the DataType)
+        # PRECISE match only: the type-keyed registration (the arg_types[1]
+        # heuristic once matched throw_boundserror taking the closure as arg 1)
+        local takes_context = is_closure_type(closure_type)
+        local matches = takes_context ? info.func_ref === closure_type :
+                        (info.func_ref isa Function && typeof(info.func_ref) === closure_type)
+        matches || continue
+        # the function's defined signature is the truth (every function is defined before any
+        # body compiles), the same one call! reads
+        local _ft = _function_type(ctx.mod, info.wasm_idx)
+        return (info.wasm_idx, WasmValType[q for q in _ft.params], WasmValType[r for r in _ft.results], takes_context)
+    end
+    return nothing
+end
+
+"""
+    maybe_wrap_closure!(b, ctx, from_julia) -> Bool
+
+The ERASURE seam (dart convertType: a callable meeting a top type becomes the
+closure OBJECT). A captured-context struct or named-function singleton is on the
+stack; when its body was enrolled in the closed world, wrap it. Returns whether
+it wrapped.
+parity(quarantine: a Julia closure is an ordinary struct of its captures whose type carries
+the call method, called directly while its type is statically known; it becomes a closure
+object only where it meets a top type. A dart function expression builds the closure object
+where it is created, code_generator.dart:2544 _instantiateClosure)
+"""
+function maybe_wrap_closure!(b::InstrBuilder, ctx, from_julia)::Bool
+    # The Julia static type can remain the captured callable after an earlier
+    # heterogeneous/erasure seam has already produced the closure Object. The
+    # strict builder stack is the representation truth; never wrap that Object
+    # again as if it were a context struct.
+    local base_idx = ctx.type_registry.closure_base_idx
+    if base_idx !== nothing && !isempty(b.v.stack)
+        local actual = b.v.stack[end]
+        actual isa ConcreteRef && actual.type_idx == base_idx && return true
+    end
+    # a closure's context reaching a slot of any class with no class stated (source_class) rejects:
+    # its class cannot be guessed from a layout another type may share
+    if source_class(from_julia) === nothing && !isempty(b.v.stack) && b.v.stack[end] isa ConcreteRef
+        local idx = b.v.stack[end].type_idx
+        if any(((T, info),) -> T isa DataType && info.wasm_type_idx == idx && is_context_type(ctx.type_registry, T),
+               registered_structs(ctx.type_registry))
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a closure context erased into a slot of any class with no Julia type stated")
+            return true
+        end
+    end
+    from_julia isa DataType || return false
+    from_julia <: Function || return false
+    haskey(ctx.type_registry.structs, from_julia) || return false
+    local body = _closure_body_for(ctx, from_julia)
+    if body === nothing
+        # no compiled body: a closure's captured-fields context (no class header) still becomes
+        # its object; a closure type registered as a class, or a function's singleton, is one
+        (is_closure_type(from_julia) && ctx.type_registry.structs[from_julia].field_offset == 1) ||
+            return false
+        return emit_closure_wrap!(b, ctx, from_julia, UInt32(0), WasmValType[], WasmValType[];
+                                  takes_context=true) !== nothing
+    end
+    return emit_closure_wrap!(b, ctx, from_julia, body[1], body[2], body[3];
+                              takes_context=body[4]) !== nothing
+end
+
+
+"""
+    emit_dynamic_closure_call!(b, ctx, func, args, idx) -> Bool
+
+The DYNAMIC function-value call (dart: vtable entry at
+vtableBaseIndex+argCount → call_ref). The callee value is the closure OBJECT
+(wrapped at the erasure seam); args ride the UNIFORM dynamic signature
+(everything anyref). Returns false when the shape doesn't apply.
+parity(code_generator.dart:2673 AstCodeGenerator._generateClosureInvocation)
+"""
+function emit_dynamic_closure_call!(b::InstrBuilder, ctx, func, args, idx::Int)::Bool
+    base_idx = ctx.type_registry.closure_base_idx
+    base_idx === nothing && return false   # no closures wrapped in this module
+    arity = length(args)
+    vt_struct = get_closure_vtable_struct!(ctx.mod, ctx.type_registry, arity)
+    # the uniform dynamic signature
+    sig = FuncType(WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef])
+    sig_idx = add_type!(ctx.mod, sig)
+
+    local scratch = allocate_local!(ctx, AnyRef)
+    emit_value!(b, func, ctx, AnyRef)             # the closure OBJECT (seam-wrapped)
+    ref_cast!(b, Int64(base_idx), false)
+    local_set!(b, UInt32(scratch))
+    local_get!(b, UInt32(scratch))                # arg0: the base (anyref, upcast free)
+    for a in args
+        emit_value!(b, a, ctx, AnyRef)            # each arg boxed/erased by the funnel
+    end
+    local_get!(b, UInt32(scratch))
+    ref_cast!(b, Int64(base_idx), false)
+    struct_get!(b, base_idx, UInt32(3))          # .vtable
+    ref_cast!(b, Int64(vt_struct), false)
+    struct_get!(b, vt_struct, UInt32(arity)) # entry[arity]
+    ref_cast!(b, Int64(sig_idx), false)                      # (ref $sig)
+    call_ref!(b, sig_idx)
+    # the uniform result (anyref) converts to the call's inferred type (the funnel
+    # unboxes numerics / casts refs — dart converts at the same seam)
+    local _rt = get(ctx.ssa_types, idx, Any)
+    if _rt isa Type && _rt !== Any && _rt !== Union{}
+        local _rw = get_concrete_wasm_type(_rt, ctx.mod, ctx.type_registry)
+        _rw !== AnyRef && coerce_stack_top!(b, _rw, ctx; from_julia=_rt)
+    end
+    return true
+end

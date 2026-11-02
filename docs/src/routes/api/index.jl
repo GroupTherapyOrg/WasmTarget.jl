@@ -7,7 +7,6 @@
         ("compile", "Core Compilation"),
         ("types", "Types"),
         ("module-building", "Module Building"),
-        ("caching", "Caching"),
         ("source-maps", "Source Maps"),
         ("low-level", "Low-Level / Advanced"),
     ]
@@ -28,7 +27,7 @@
         # ── Core Compilation ──
         H2(:id => "compile", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Core Compilation"),
         api_entry(
-            "compile(f, arg_types::Tuple; optimize=false, optimize_ir=true, validate=false) -> Vector{UInt8}",
+            "compile(f, arg_types::Tuple; optimize=false, validate=false) -> Vector{UInt8}",
             "Compile a single Julia function for the given concrete argument-type tuple to a self-contained WASM module. \
              The result is a binary `Vector{UInt8}` ready to write to disk and instantiate via `WebAssembly.instantiate`. \
              `optimize=true` runs the Binaryen_jll-provided `wasm-opt` for an ~80–90% size reduction; no system Binaryen installation is required. \
@@ -37,17 +36,12 @@
              remains responsible for validity by construction."
         ),
         api_entry(
-            "compile_multi(functions::Vector; optimize=false, discovery=:trim, ...)",
+            "compile_multi(functions::Vector; optimize=false, ...)",
             "Compile multiple `(f, arg_types[, name])` entries into one module. Functions in the same call share the WasmGC \
              type space and can call each other directly — this is the entry point for vector-bridge patterns and any \
-             multi-function island. Callee discovery defaults to `:trim` — the upstream closed-world collection \
-             (`Compiler.typeinf_ext_toplevel`, the same machinery behind `juliac --trim`) walks every reachable invoke in \
-             one consistent inference world. This is the only supported discovery and module-codegen path."
-        ),
-        api_entry(
-            "compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type, ...)",
-            "Lower-level entry that takes a pre-built `CodeInfo` instead of starting from a function. Used by Therapy.jl's \
-             `@island` compiler when it has already computed the IR for a closure body."
+             multi-function island. Callees are discovered by the upstream closed-world collection \
+             (`Compiler.typeinf_ext_toplevel`, the same machinery behind `juliac --trim`), which walks every reachable \
+             invoke in one consistent inference world: the only discovery and module-codegen path."
         ),
         api_entry(
             "compile_with_base(functions::Vector; ...)",
@@ -55,7 +49,7 @@
              unrelated functions in the same process and the per-call `Base` walk dominates."
         ),
         api_entry(
-            "optimize(bytes::Vector{UInt8}) -> Vector{UInt8}",
+            "optimize(bytes::Vector{UInt8}; level=:size, validate::Bool) -> Vector{UInt8}",
             "Run Binaryen `wasm-opt` on a previously-compiled module. Same effect as passing `optimize=true` to `compile`."
         ),
 
@@ -104,19 +98,6 @@
         api_entry(
             "add_memory!(mod, pages) / add_data_segment!(mod, offset, bytes)",
             "Linear-memory escape hatch. Prefer WasmGC structs/arrays over linear memory for new code."
-        ),
-
-        # ── Caching ──
-        H2(:id => "caching", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Caching"),
-        api_entry(
-            "compile_cached(f, arg_types; ...) / compile_multi_cached(functions; ...)",
-            "Drop-in replacements for `compile` / `compile_multi` that memoize on the input IR + arg types. Returns the \
-             cached bytes immediately on hit — useful for hot-reload dev loops and CI builds that compile the same \
-             islands repeatedly."
-        ),
-        api_entry(
-            "enable_cache!() / disable_cache!() / clear_cache!() / cache_stats()",
-            "Process-wide cache controls. `cache_stats()` returns a NamedTuple of hit/miss counts."
         ),
 
         # ── Source Maps ──
