@@ -665,10 +665,12 @@ end
 The value a binding starts the program with, the one source: its value in this session, which has
 run every module's `__init__` (src/toplevel.c:215-240 when a definition finishes, base/loading.jl:1443
 when a package loads, at Julia v1.12.7), juliac's heap after its startup has run them, so WasmTarget
-compiles no `__init__` (dev/MODULE_INIT.md). A binding of a runtime module (`runtime_module`) that a
-runtime initializer's closed world touches and that no const holds (stdout, the logger), or a const
-object an initializer passes to a call Julia infers may write (DEPOT_PATH), is host state
-(runtime_init_bindings, Julia's trim over juliac's init list and its effects analysis): a located
+compiles no `__init__` (dev/MODULE_INIT.md). A binding of a runtime module (`runtime_module`) that no
+const holds is host state: one a runtime initializer's closed world touches (stdout, the logger), and
+every other, since that closed world holds dynamic calls whose callees it does not follow, any of which
+may set it (A77S1); a const object an initializer passes to a call Julia infers may write, directly or
+through a field read, a PiNode or a PhiNode (DEPOT_PATH), or to any dynamic call, is host state too
+(runtime_init_bindings, Julia's trim over juliac's init list and its effects analysis): each a located
 rejection naming that `__init__`. A const free of mutation (a type, Sys.WORD_SIZE) is Julia's own value.
 Every other binding, a const table such as base36digits among them, starts at its session value, as a
 juliac image holds it.
@@ -685,6 +687,11 @@ juliac image holds it.
         local init = isconst(ref.mod, ref.name) ? get(host.mutated, ref, nothing) : get(host.touched, ref, nothing)
         init === nothing ||
             reject!(Unquarantined("src/julia/nir.jl nir_binding_value: the binding $ref, host state $(parentmodule(init)).__init__ (the runtime's) $(isconst(ref.mod, ref.name) ? "mutates" : "sets or reads")"), at)
+        # (a) untouched by the closed world, yet no binding is proved untouched while it holds dynamic
+        # calls, whose callees juliac's verifier would enumerate (typeinfer.jl:1567 verify_typeinf_trim)
+        local dynamic = filter(p -> last(p) > 0, host.dynamic)
+        isconst(ref.mod, ref.name) || isempty(dynamic) ||
+            reject!(Unquarantined("src/julia/nir.jl nir_binding_value: the binding $ref, which no const holds, unproved host state: the runtime's initializers' closed world holds dynamic calls whose callees may set it ($(join(("$(parentmodule(f)).__init__ $n" for (f, n) in dynamic), ", ")))"), at)
     end
     return NirConst(Core.Const(value))
 end
@@ -692,7 +699,7 @@ end
 # the bindings the runtime's initializers touch, and the const objects among them they pass to a call
 # that may write, each with the first initializer whose closed world does so, computed once per
 # session (runtime_init_bindings)
-@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers the closed world of juliac's entrypoints, the runtime's initializers among them; once per session" Core.GlobalRef const _RUNTIME_INIT_BINDINGS = Ref{Union{Nothing,@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}}}}(nothing)
+@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers the closed world of juliac's entrypoints, the runtime's initializers among them; once per session" Core.GlobalRef const _RUNTIME_INIT_BINDINGS = Ref{Union{Nothing,@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}}}(nothing)
 
 """
     runtime_init_bindings() -> (; touched, mutated)
@@ -703,20 +710,29 @@ own trim infers for an entrypoint (julia/Compiler/src/typeinfer.jl:1534 typeinf_
 makes each module of the init list one, julia/src/precompile.c:98 jl_write_compiler_output), unverified
 (TRIM_NO: Base's initializers are trimmed only once juliac stubs their host setup). `touched`: every
 GlobalRef its statements name. `mutated`: each one whose value an initializer passes, directly or through
-an SSA value, to a call Julia's effects analysis does not infer effect_free (julia/Compiler/src/effects.jl:119
-Effects, the callee's ipo effects; a builtin's or an intrinsic's by Julia's own builtin_effects and
-intrinsic_effects; a call Julia did not resolve counted as one that may write).
+SSA values (the binding read, a field read of it, a PiNode or a PhiNode of one), to a call Julia's effects
+analysis does not infer effect_free (julia/Compiler/src/effects.jl:119 Effects, the callee's ipo effects; a
+builtin's or an intrinsic's by Julia's own builtin_effects and intrinsic_effects; a call Julia did not
+resolve, a dynamic call, counted as one that may write). `dynamic`: each initializer's count of dynamic
+calls (a call of no builtin, Julia's dispatch at run time, or a special builtin calling another function),
+whose callees the closed world does not hold (compile! follows `:invoke` edges, typeinfer.jl:1451).
 A juliac executable starts from the heap before any __init__ (julia/src/toplevel.c defers them, the image
 saved by jl_write_compiler_output) and runs them at startup (julia/src/init.c:563 _finish_jl_init_), so a
 binding no initializer sets, and a const object none mutates, holds the same value in the image, after
 startup and in this session. Computed lazily, once per process: measured 5.5 G of instructions cold, about
 3 G recomputed in a warm process.
 """
-@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each runtime initializer's closed world, as juliac's trim infers the init list's entrypoints (julia/src/precompile.c:98 jl_write_compiler_output); julia/Compiler/src/effects.jl:119 Effects judges each call" Core.Compiler.typeinf_ext_toplevel function runtime_init_bindings()::@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}}
+@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each runtime initializer's closed world, as juliac's trim infers the init list's entrypoints (julia/src/precompile.c:98 jl_write_compiler_output); julia/Compiler/src/effects.jl:119 Effects judges each call; once per session" Core.GlobalRef function runtime_init_bindings()::@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}
     local cached = _RUNTIME_INIT_BINDINGS[]
     cached === nothing || return cached
+    return _RUNTIME_INIT_BINDINGS[] = init_world_bindings(runtime_initializers())
+end
+
+# runtime_init_bindings' analysis over the closed worlds of `inits`, each a function of no argument
+@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each initializer's closed world; julia/Compiler/src/effects.jl:119 Effects judges each call it holds" Core.Compiler.typeinf_ext_toplevel function init_world_bindings(inits::Vector{Function})::@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}
     local touched = IdDict{GlobalRef,Function}()
     local mutated = IdDict{GlobalRef,Function}()
+    local dynamic = Pair{Function,Int}[]
     local world = Base.get_world_counter()
     local collect_refs!(x, init::Function) = begin
         if x isa GlobalRef
@@ -735,6 +751,11 @@ startup and in this session. Computed lazily, once per process: measured 5.5 G o
         end
         nothing
     end
+    # the callee of a `:call` statement, a builtin read through its binding
+    local callee_of(st::Expr) = (local f = st.args[1]; f isa GlobalRef ? (isdefinedglobal(f.mod, f.name) ? getglobal(f.mod, f.name) : nothing) : f)
+    # whether a call is dynamic: Julia dispatches it at run time, or a special builtin calls another function
+    local is_dynamic(st::Expr)::Bool = st.head === :call &&
+        (local f = callee_of(st); !(f isa Core.Builtin) || Core.Compiler.contains_is(Core.Compiler._SPECIAL_BUILTINS, f))
     # whether a call statement may write what it is passed, by Julia's effects
     local may_write(st::Expr, src::Core.CodeInfo)::Bool = begin
         if st.head === :invoke
@@ -755,27 +776,47 @@ startup and in this session. Computed lazily, once per process: measured 5.5 G o
         f isa Core.Builtin && return !Core.Compiler.is_effect_free(Core.Compiler.builtin_effects(Core.Compiler.fallback_lattice, f, argtypes, Any))
         return true
     end
-    for init in runtime_initializers()
+    for init in inits
         local mi = Core.Compiler.specialize_method(only(methods(init, ())), Tuple{typeof(init)}, Core.svec())
+        local ndynamic = 0
         for x in Core.Compiler.typeinf_ext_toplevel(Any[mi], [world], Core.Compiler.TRIM_NO)
             x isa Core.CodeInfo || continue
             foreach(st -> collect_refs!(st, init), x.code)
-            # the SSA values that hold a binding's value, then each call passing one, or a binding itself
-            local holds = Dict{Int,GlobalRef}()
-            for (k, st) in enumerate(x.code)
-                st isa GlobalRef && (holds[k] = st)
+            ndynamic += count(st -> st isa Expr && is_dynamic(st), x.code)
+            # the SSA values that may hold a binding's object or a part of it: the binding read, a field
+            # read of one, a PiNode or a PhiNode of one, to a fixed point over the PhiNodes' back edges;
+            # then each call passing one, or a binding itself
+            local holds = Dict{Int,Base.IdSet{GlobalRef}}()
+            local refs_of(a) = a isa GlobalRef ? Base.IdSet{GlobalRef}((a,)) :
+                a isa Core.SSAValue ? get(holds, a.id, Base.IdSet{GlobalRef}()) : Base.IdSet{GlobalRef}()
+            local changed = true
+            while changed
+                changed = false
+                for (k, st) in enumerate(x.code)
+                    local from = st isa GlobalRef ? refs_of(st) :
+                        st isa Core.PiNode ? refs_of(st.val) :
+                        st isa Core.PhiNode ? reduce(union, (refs_of(st.values[i]) for i in eachindex(st.values) if isassigned(st.values, i)); init = Base.IdSet{GlobalRef}()) :
+                        Meta.isexpr(st, :call) && length(st.args) >= 2 && callee_of(st) === Core.getfield ? refs_of(st.args[2]) :
+                        Base.IdSet{GlobalRef}()
+                    isempty(from) && continue
+                    local held = get!(() -> Base.IdSet{GlobalRef}(), holds, k)
+                    issubset(from, held) && continue
+                    union!(held, from)
+                    changed = true
+                end
             end
             for st in x.code
                 Meta.isexpr(st, (:call, :invoke)) || continue
                 local operands = st.head === :invoke ? st.args[3:end] : st.args[2:end]
-                local refs = GlobalRef[a isa GlobalRef ? a : holds[a.id] for a in operands if a isa GlobalRef || (a isa Core.SSAValue && haskey(holds, a.id))]
+                local refs = reduce(union, (refs_of(a) for a in operands); init = Base.IdSet{GlobalRef}())
                 isempty(refs) && continue
-                may_write(st, x) || continue
+                (is_dynamic(st) || may_write(st, x)) || continue
                 foreach(r -> haskey(mutated, r) || (mutated[r] = init), refs)
             end
         end
+        push!(dynamic, init => ndynamic)
     end
-    return _RUNTIME_INIT_BINDINGS[] = (; touched, mutated)
+    return (; touched, mutated, dynamic)
 end
 
 """

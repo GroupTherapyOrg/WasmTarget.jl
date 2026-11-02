@@ -127,4 +127,39 @@ end
     end
     @test WasmTarget.nir_binding_value(GlobalRef(Base.Sys, :WORD_SIZE), "test").c.val === Sys.WORD_SIZE
     @test WasmTarget.runtime_module(Base.Sys) && WasmTarget.runtime_module(Core.Compiler) && !WasmTarget.runtime_module(InitTwice) && !WasmTarget.runtime_module(Main)
+    # (a) a binding no const holds that the closed world never names, set only behind a dynamic call
+    # (have_color, which the REPL's start sets): unproved, rejected naming the dynamic calls (A77S1)
+    local host = WasmTarget.runtime_init_bindings()
+    @test !haskey(host.touched, GlobalRef(Base, :have_color)) && !isconst(Base, :have_color)
+    @test any(p -> first(p) === Base.__init__ && last(p) > 0, host.dynamic)
+    local d = _rejection(() -> WasmTarget.nir_binding_value(GlobalRef(Base, :have_color), "test"))
+    @test d isa WasmTarget.Unquarantined && occursin("dynamic calls whose callees may set it", d.row) && occursin("Base.__init__", d.row)
+end
+
+# planted initializers for the analysis (init_world_bindings): a const object reached through a PhiNode
+# or a field read and passed to a call that may write is mutated; one only read is not; a dynamic call
+# is counted, and a const object passed to one is mutated
+module InitWorldCases
+const A = Ref(0)
+const B = Ref(0)
+const T = (Ref(0), 1)
+const D = Ref(0)
+const ONLY_READ = Ref(5)
+const FLAG = Ref(true)
+const SINK = Any[]
+@noinline pick() = FLAG[]
+phi_init() = ((pick() ? A : B)[] = 1; nothing)
+field_init() = (T[1][] = 2; nothing)
+read_init() = (ONLY_READ[] + 1; nothing)
+dynamic_init() = (push!(SINK[1], D); nothing)
+end
+
+@testset "init_world_bindings: a const through a PhiNode, a field read or a dynamic call (A77S1)" begin
+    local I = InitWorldCases
+    local w = WasmTarget.init_world_bindings(Function[I.phi_init, I.field_init, I.read_init, I.dynamic_init])
+    @test haskey(w.mutated, GlobalRef(I, :A)) && haskey(w.mutated, GlobalRef(I, :B))
+    @test haskey(w.mutated, GlobalRef(I, :T))
+    @test !haskey(w.mutated, GlobalRef(I, :ONLY_READ))
+    @test haskey(w.mutated, GlobalRef(I, :D))
+    @test Dict(w.dynamic)[I.dynamic_init] >= 1 && Dict(w.dynamic)[I.read_init] == 0
 end
