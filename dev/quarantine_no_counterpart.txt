@@ -4,7 +4,8 @@
 # list), for which no ecosystem defines a counterpart"; every definition meeting it is here, and one that
 # does not stays on dev/quarantine_unpinned.txt. A runner is judged by what it itself reads (it dispatches a
 # check and counts its faults), not by what the check it calls reads, which keeps its own status (the lead's
-# ruling on A93E2). One line per definition, `<its debt-list key> — <why no
+# ruling on A93E2); the runners have a counterpart, dart's analyzer running its registered lints
+# (LibraryAnalyzer._computeLints), and are pinned there, never listed. One line per definition, `<its debt-list key> — <why no
 # counterpart exists>`. The list is exact: a line with no reason, a line naming no quarantined definition,
 # one naming a definition whose reason pins a source, a line written twice and a key also on
 # dev/quarantine_unpinned.txt each refuse the load, and the ratchet's L227 refuses a change that adds a line
@@ -12,12 +13,6 @@
 # only shrinks.
 julia/parity.jl _jl_rel — WasmTarget's own map from a pinned source file to its port's file under src/ (dev/MARCH.md 1.A4); no ecosystem defines it
 julia/parity.jl check_no_counterpart — reads and checks this list, WasmTarget's own format over its own debt-list keys
-julia/parity.jl construction_check(::Val{:check_anchors_resolve})::Int — dispatches the anchors', the no-counterpart list's and the pinned reasons' checks at load, passing the lists' and the checkout's paths, and counts their faults; it reads nothing itself
 julia/parity.jl check_precedent_kinds — checks WasmTarget's own pinning rule (a counterpart is a definition of its own kind) over its reasons' citations
 julia/parity.jl _quarantine_debt — reads the debt list's lines, WasmTarget's own format
-julia/parity.jl check_quarantine_pinned — checks each @quarantine's reason against the debt list, WasmTarget's own record formats
-julia/parity.jl construction_check(::Val{:check_mirrors})::Int — dispatches check_mirrors at load and counts its faults; it reads nothing itself
-julia/parity.jl construction_check(::Val{:check_typed_fields})::Int — dispatches check_typed_fields at load, passing the pinned checkout's path, and counts its faults; it reads nothing itself
-julia/parity.jl construction_check(::Val{:check_typed_signatures})::Int — dispatches check_typed_signatures at load, passing the pinned checkout's path, and counts its faults; it reads nothing itself
-julia/parity.jl construction_check(::Val{:parity})::Int — dispatches check_parity at load and counts its faults; it reads nothing itself
-julia/parity.jl construction_check(::Val{:quarantine})::Int — dispatches check_quarantine and check_package_declared at load and counts their faults; it reads nothing itself
+julia/parity.jl check_quarantine_pinned — checks each @quarantine's reason against the debt list and this list, WasmTarget's own record formats; the precedent it names, rust's clippy undocumented_unsafe_blocks, lies in an ecosystem with no pinned checkout
