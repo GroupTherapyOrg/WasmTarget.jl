@@ -686,9 +686,29 @@ table of Compiler/src/methodtable.jl:37 OverlayMethodTable). Julia's differs: it
         claims(ms[i].method.purity) == claims(m.purity) ||
             push!(out, "the overlay $m claims effects (purity $(m.purity)) its Base method $(ms[i].method) does not (purity $(ms[i].method.purity))")
     end
+    # a call-site claim (@assume_effects on an expression) writes its bits into the lowered statement's ssaflags,
+    # above the IR's own flags (julia/src/julia.h:281 NUM_IR_FLAGS, three), and an @ccall's claim into its
+    # foreigncall's calling convention (Base's @ccall_effects): no Base method backs either, so each is refused
+    # wherever a WasmTarget method writes one (A78E2)
+    local NUM_IR_FLAGS = 3
+    local callsite(m::Method) = begin
+        (isdefined(m, :generator) || m.source === nothing) && return nothing
+        local ci = Base.uncompressed_ast(m)
+        any(f -> (f >> NUM_IR_FLAGS) != 0, ci.ssaflags) && return "an @assume_effects on a call"
+        for st in ci.code
+            local c = Meta.isexpr(st, :(=)) ? st.args[2] : st
+            Meta.isexpr(c, :foreigncall) && length(c.args) >= 5 || continue
+            local cc = c.args[5] isa QuoteNode ? c.args[5].value : c.args[5]
+            cc isa Tuple && length(cc) >= 2 && cc[2] isa Integer && cc[2] != 0 && return "an @ccall's effects claim"
+        end
+        return nothing
+    end
     Base.visit(Core.methodtable) do m
-        _within(m.module, root) && claims(m.purity) != none && !(m in overlays) &&
+        _within(m.module, root) || return
+        claims(m.purity) != none && !(m in overlays) &&
             push!(out, "$m at $(m.file):$(m.line) claims effects (purity $(m.purity)) outside an overlay, which no Base claim backs")
+        local why = callsite(m)
+        why === nothing || push!(out, "$m at $(m.file):$(m.line) writes $why, which no Base claim backs")
     end
     isempty(out) || throw(ConstructionViolation("overlays_agree", join(out, "; ")))
     return 0
