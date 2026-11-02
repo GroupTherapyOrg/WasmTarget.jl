@@ -171,21 +171,21 @@ let defs = quote
 
     # the macros a definition may stand under that leave it the definition it is: Julia's inlining and
     # inference annotations (an effects assumption, as Base's hash(::String) carries, kept by its
-    # overlay), @closed (src/julia/exhaustive.jl) and Julia's consistent overlay, which
+    # overlay), @closed (src/julia/exhaustive.jl) and Julia's overlay, consistent or not, which
     # defines the method in an overlay table instead (src/patch/); every reader of a marked definition
     # looks through these, one list (A54S4: four copies had drifted apart)
-    @quarantine "Julia's annotation macros wrap a definition without changing what it defines (julia/base/expr.jl:277 inline, :354 noinline, julia/base/expr.jl:764 assume_effects)" Core.Symbol const _TRANSPARENT_MACROS = (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"), Symbol("@consistent_overlay"), Symbol("@assume_effects"))
+    @quarantine "Julia's annotation macros wrap a definition without changing what it defines (julia/base/expr.jl:277 inline, :354 noinline, julia/base/expr.jl:764 assume_effects), and its overlays define it in another table (julia/base/experimental.jl:363 overlay, julia/base/experimental.jl:421 consistent_overlay)" Core.Symbol const _TRANSPARENT_MACROS = (Symbol("@inline"), Symbol("@noinline"), Symbol("@nospecializeinfer"), Symbol("@closed"), Symbol("@consistent_overlay"), Symbol("@overlay"), Symbol("@assume_effects"))
 
     # a definition's identity across its evaluations: its module and, for a function or a macro, its
     # signature as written, every line number dropped, and an overlay's method table (a method is its
     # table and signature, as Julia keys it, and a Revise of its file evaluates it again under the same
     # one, wherever its lines moved); for any other form, the form and its names
-    @quarantine "a method is identified by its table and signature, Julia's method key, never by its lines" Core.LineNumberNode function _identity(mod::Module, def, source::LineNumberNode)::String
+    @quarantine "a method is identified by its table and signature, as Julia keys a method in its table (julia/src/gf.c:3017 jl_method_table_insert), never by its lines" Core.LineNumberNode function _identity(mod::Module, def, source::LineNumberNode)::String
         local unlined(x) = x isa LineNumberNode ? nothing : x isa Expr ? Expr(x.head, Any[unlined(a) for a in x.args]...) : x
         local d = def
         local table = ""
         while Meta.isexpr(d, :macrocall) && (d.args[1] in _TRANSPARENT_MACROS || d.args[1] === Symbol("@unported"))
-            d.args[1] === Symbol("@consistent_overlay") && (table = string(" in ", d.args[end-1]))
+            d.args[1] in (Symbol("@consistent_overlay"), Symbol("@overlay")) && (table = string(" in ", d.args[end-1]))
             d = d.args[end]
         end
         local form = Meta.isexpr(d, (:function, :(=), :macro)) && !(d.args[1] isa Symbol) ?

@@ -678,8 +678,9 @@ function patch_negatives_missed(wt::Module, refuses::Function, passes::Function)
     # function, one under a @quarantine naming another, one under none, one outside the patch directory
     local host = Core.eval(Main, :(module PatchPlant
         import WasmTarget: @quarantine
-        using Base.Experimental: @consistent_overlay
+        using Base.Experimental: @consistent_overlay, @overlay
         Base.Experimental.@MethodTable Named
+        Base.Experimental.@MethodTable Plain
         Base.Experimental.@MethodTable Other
         Base.Experimental.@MethodTable Bare
         Base.Experimental.@MethodTable Outside
@@ -690,8 +691,10 @@ function patch_negatives_missed(wt::Module, refuses::Function, passes::Function)
     overlay("named.jl", "@quarantine \"a planted overlay\" Base.sizeof @consistent_overlay Named Base.sizeof(p::P) = 8\n")
     overlay("other.jl", "@quarantine \"a planted overlay\" Base.length @consistent_overlay Other Base.sizeof(p::P) = Base.length(p.v)\n")
     overlay("bare.jl", "@consistent_overlay Bare Base.sizeof(p::P) = 8\n")
+    overlay("plain.jl", "@quarantine \"a planted overlay\" Base.sizeof @overlay Plain Base.sizeof(p::P) = 8\n")
     Core.eval(host, :(@consistent_overlay Outside Base.sizeof(p::P) = 8))
     passes(() -> check(host.Named, P)) || push!(out, "negative missed: an overlay under the @quarantine naming its function fails")
+    passes(() -> check(host.Plain, P)) || push!(out, "negative missed: a plain overlay (no consistency claimed) under the @quarantine naming its function fails")
     refuses(() -> check(host.Other, P)) || push!(out, "negative missed: an overlay under a @quarantine naming another function passes")
     refuses(() -> check(host.Bare, P)) || push!(out, "negative missed: an overlay under no @quarantine passes")
     refuses(() -> check(host.Outside, P)) || push!(out, "negative missed: an overlay outside the patch directory passes")

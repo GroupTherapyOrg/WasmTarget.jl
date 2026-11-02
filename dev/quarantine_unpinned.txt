@@ -254,7 +254,6 @@ julia/parity.jl _expansion
 julia/parity.jl _form_fault
 julia/parity.jl _generic_name
 julia/parity.jl _head_commit
-julia/parity.jl _identity
 julia/parity.jl _inner_constructors
 julia/parity.jl _inside
 julia/parity.jl _is_declaration

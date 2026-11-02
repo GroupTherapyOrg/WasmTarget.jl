@@ -8,9 +8,10 @@ module WasmTarget
 
 # the interpreter the closed world is inferred with, a package of its own (lib/WasmInterpreter), each
 # of its definitions declared in src/julia/interpreter.jl, and Julia's consistent overlay, the form of
-# each overlay of src/patch/
+# each overlay of src/patch/, and its plain overlay, for one whose answer native Julia does not give at
+# every site
 import WasmInterpreter as WasmInterpreterPackage
-using Base.Experimental: @consistent_overlay
+using Base.Experimental: @consistent_overlay, @overlay
 # a method serving every type alike is inferred once, not once per caller's type (src/julia/late.jl's read)
 import Base: @nospecializeinfer
 
