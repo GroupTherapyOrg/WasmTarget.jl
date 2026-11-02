@@ -36,14 +36,15 @@ world_of(p, at) = W.build_nir(W.check_subset(p, at, "runtime"), "runtime")
     local gw = world_of(g, (Int,))
     @test first(gw).ci.def.def.name === :g && first(fw).ci.def.def.name === :f
     @test issubset((:h, :throw_divide_error), names_of(world_of(h, (Int, Int))))
-    # a throw compiles to the call of errorThrowWithCurrentStackTrace's method, and a failed typeassert to
-    # throwAsCheckError's: the compiled modules' function names (their name sections, unoptimized) hold both
-    local names_in(bytes) = mktempdir() do dir
-        local path = joinpath(dir, "m.wasm"); write(path, bytes)
-        read(`wasm-tools print $path`, String)
+    # a throw raises through errorThrowWithCurrentStackTrace's method, and a failed typeassert through
+    # throwAsCheckError's: the compiled modules, run, raise what native Julia raises (the exception and
+    # its fields, the runner's comparison)
+    isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+    local raising = [Main.WTRunner.RunCase("g$(a)", W.compile(g, (Int,)), a, Main.WTRunner.native_answer(g, a)) for a in [(2,), (-2,)]]
+    append!(raising, [Main.WTRunner.RunCase("checked_any$(a)", W.compile(checked_any, (Int,)), a, Main.WTRunner.native_answer(checked_any, a)) for a in [(3,), (-1,)]])
+    for r in Main.WTRunner.run_cases(raising)
+        @test r.ok || (@info r.label r.why; false)
     end
-    @test occursin("Error__throw_with_current_stack_trace", names_in(W.compile(g, (Int,); optimize = false)))
-    @test occursin("_TypeError__throw_as_check_error", names_in(W.compile(checked_any, (Int,); optimize = false)))
 end
 
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
@@ -237,7 +238,8 @@ kind_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(KIND_TYPES[i]::Type, K
     @test te isa W.RejectionError && te.rejection isa W.Unported && te.rejection.anchor == "sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance" &&
           occursin("tuple_sub", te.at)
     local ke = try; W.compile(kind_sub, (Int64, Int64)); nothing; catch x; x; end
-    @test ke isa W.RejectionError && occursin("Type{Int64}", sprint(showerror, ke))
+    @test ke isa W.RejectionError && ke.rejection isa W.Unquarantined &&
+          startswith(ke.rejection.row, "src/class_info.jl getConcreteClassIdRange: Type{Int64}, whose members are types")
     local bytes = W.compile(sub, (Int64, Int64))
     local n = length(TYPES)
     local cases = [Main.WTRunner.RunCase("sub($(TYPES[i]), $(TYPES[j]))", bytes, (i, j), TYPES[i] <: TYPES[j] ? 1 : 0) for i in 1:n for j in 1:n]

@@ -848,8 +848,7 @@ located, as dart's `_isSubtype` would be called.
             WasmBuilder.i32_const(b, 1)
             WasmBuilder.br(b, result_label)
             WasmBuilder.var"end"(b)
-            for t in records, r in get_concrete_class_id_range(numbering, Tuple), id in r.start:r.end_
-                local c = translator.classes[][id + 1].cls
+            for t in records, (id, c) in zip(concrete_class_ids(translator, Tuple), concrete_classes(translator, Tuple))
                 local n = tuple_record_arity(c)
                 n === nothing && reject!(Internal("$at: class $c below Tuple is no record"), at)
                 # the member at the record's arity: no value of it where Julia's intersection is empty
