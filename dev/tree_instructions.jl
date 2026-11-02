@@ -6,7 +6,7 @@
 #                                                       process's instructions; exits with the command's status
 #   julia dev/tree_instructions.jl --plant              a tree whose grandchild does fixed work: the grandchild counted,
 #                                                       each split inside its whole, and a run at background QoS read
-#                                                       wholly on efficiency cores, or exits 1; the measured slowdown
+#                                                       wholly on efficiency cores, or exits 1; the two runs
 #                                                       printed, unjudged
 #
 # The load stage precompiles WasmTarget in a child process of `julia -e 'using WasmTarget'` (Base.compilecache), and
@@ -31,8 +31,8 @@
 #
 # Its limit: Apple's counters retire fewer instructions for the same work on an efficiency core for some instruction
 # mixes (a Julia hash loop, compiled once: 12.2 G on a performance core, 6.2 G on an efficiency core, about half; a C
-# multiply-add loop 10.0 G and 10.1 G), so a process read on efficiency cores can read up to half low, the shards' and
-# the ratchet's as the load's; dev/check.sh states the band this leaves the judged stages, both ways.
+# multiply-add loop 10.0 G and 10.1 G), so dev/check.sh reads a stage's efficiency-core share by its seconds, never its
+# instructions.
 
 const COUNTER_C = """
 #include <libproc.h>
