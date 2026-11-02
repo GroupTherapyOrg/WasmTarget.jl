@@ -63,7 +63,7 @@ forged(x::Int64) = (ccall(("s => (", "dart2wasm"), Nothing, ()); x)
     local mi = only(b.ci.def for b in world if !isempty(W.nir_js_sites(world, b.ci.def)))
     local (site, sname, code) = only(W.nir_js_sites(world, mi))
     # the site is where it was written, print_patch.jl's port, whatever caller Julia inlined it into
-    @test startswith(site, "WasmTarget.Runtime.print_to_console:") && sname == "print_to_console" && code == "s => printToConsole(s)"
+    @test startswith(site, "WasmTarget.Runtime.print_to_console") && occursin("String", site) && sname == "print_to_console" && code == "s => printToConsole(s)"
     # generateJsMethods writes the method under the name the code generator imports it by
     local namer = D.InteropMemberNamer(world, D.Namer(), D.TranslatorOptions())
     local body = only(b for b in world if b.ci.def === mi)
@@ -93,5 +93,12 @@ forged(x::Int64) = (ccall(("s => (", "dart2wasm"), Nothing, ()); x)
     # the interop module named outside the runtime is the program's error, located, never invalid JS
     local e = try; W.compile(forged, (Int64,)); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.ProgramError && occursin("dart:_js_helper", sprint(showerror, e))
+    # two inline JS sites written on one line of a runtime port: Julia's debug info gives no column, so
+    # one name would run the first's JS for both; refused at the site, located, never the first's code
+    Core.eval(W.Runtime, :(two_on_one_line() = (ccall(("() => 1", "dart2wasm"), Nothing, ()); ccall(("() => 2", "dart2wasm"), Nothing, ()); nothing)))
+    local tw = W.build_nir(W.check_subset(getglobal(W.Runtime, :two_on_one_line), (), "print_patch"), "print_patch")
+    local twe = try; W.nir_js_sites(tw, tw.entry); nothing; catch x; x; end
+    @test twe isa W.RejectionError && twe.rejection isa W.Internal && occursin("two inline JS sites", twe.rejection.site) &&
+          occursin("() => 1", twe.rejection.site) && occursin("() => 2", twe.rejection.site)
 end
 end

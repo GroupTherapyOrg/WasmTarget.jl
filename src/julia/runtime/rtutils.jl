@@ -113,20 +113,30 @@ end
 @quarantine "dart's inline JS is an import of the internal interop module (pkg/dart2wasm/lib/namer.dart:108 _InteropHelperMemberNamer.interopModuleName); a Julia port names it in its foreign call" Core.String const JS_INTEROP_LIBRARY::Core.String = "dart2wasm"
 
 """
-    nir_statement_frame(body, k) -> Tuple{Module,Symbol,Int}
+    nir_statement_frame(body, k) -> Tuple{Method,Int}
 
 Where statement `k` of `body` was written: the innermost frame of its debug info (Julia's own
 reading, IRShow's buildLineInfoNode), the inlined callee's where Julia inlined it, else the body's own
-method's: its module, method name and line.
+method's: its method and line.
 """
-@quarantine "Julia records where each statement was written, inlined frames innermost last (julia/Compiler/src/ssair/show.jl:405 buildLineInfoNode)" Core.Module function nir_statement_frame(body::NirBody, k::Int)::Tuple{Module,Symbol,Int}
+@quarantine "Julia records where each statement was written, inlined frames innermost last (julia/Compiler/src/ssair/show.jl:405 buildLineInfoNode)" Core.Method function nir_statement_frame(body::NirBody, k::Int)::Tuple{Method,Int}
     local frames = Base.IRShow.buildLineInfoNode(body.ci.debuginfo, body.ci.def, k)
     local own = body.ci.def.def::Method
-    isempty(frames) && return (own.module, own.name, Int(own.line))
+    isempty(frames) && return (own, Int(own.line))
     local f = last(frames)
     local m = f.method isa Core.MethodInstance ? f.method.def : f.method
-    return m isa Method ? (m.module, m.name, Int(f.line)) : (own.module, own.name, Int(f.line))
+    return m isa Method ? (m, Int(f.line)) : (own, Int(f.line))
 end
+
+"""
+    nir_js_site(method, line) -> String
+
+An inline JS site's key, where it was written: its method, by its module, name and signature (two
+methods of one name are two), and its line, `"<module>.<name><signature>:<line>"`. Julia's debug info
+records no column, so two sites on one line are one key (nir_js_sites refuses two codes at one).
+"""
+@quarantine "dart makes one inline JS procedure per written site (pkg/dart2wasm/lib/js/inline_expander.dart:21 InlineExpander.expand); Julia records a statement's method and line in its debug info, no column" Core.Method nir_js_site(m::Method, line::Int)::String =
+    "$(m.module).$(m.name)$(Base.unwrap_unionall(m.sig).parameters[2:end]):$line"
 
 """
     nir_js_sites(world, mi) -> Vector{Tuple{String,String,String}}
@@ -135,9 +145,10 @@ The inline JS sites `mi`'s body hands its host (dart's JsCodeData, the `wasm:js-
 JsInteropMemberData.fromMember reads from the procedure dart's inline expander makes of each JS<T>
 site, js/util.dart:33, one `_JS_Inline_<n>` per site, inline_expander.dart:64): each foreign call to the internal interop
 module (JS_INTEROP_LIBRARY), in statement order, as `(site, name, code)`. A site is where it was
-written, the innermost frame of its debug info (nir_statement_frame), `"<module>.<method>:<line>"`,
-so a site Julia inlined into several callers is one site, as dart's is one procedure; `name` is its
-method's, the base of its import's name; `code` its symbol.
+written, the innermost frame of its debug info (nir_statement_frame), its method and line
+(nir_js_site), so a site Julia inlined into several callers is one site, as dart's is one procedure;
+`name` is its method's, the base of its import's name; `code` its symbol. Two codes at one site, two
+sites written on one line, refuse, located.
 """
 @quarantine "dart makes one inline JS procedure per written site (pkg/dart2wasm/lib/js/inline_expander.dart:21 InlineExpander.expand); Julia records a site's method and line in its debug info" Core.String function nir_js_sites(world::NirWorld, mi::Core.MethodInstance)::Vector{Tuple{String,String,String}}
     local body = nir_body_of(world, mi)
@@ -146,9 +157,17 @@ method's, the base of its import's name; `code` its symbol.
         st isa NirForeignCall && st.args[1] isa NirConst || continue
         local name = st.args[1].c.val
         name isa Tuple{Union{Symbol,String},Union{Symbol,String}} && String(name[2]) == JS_INTEROP_LIBRARY || continue
-        local (m, f, line) = nir_statement_frame(body, k)
-        local site = "$m.$f:$line"
-        any(x -> x[1] == site, out) || push!(out, (site, String(f), String(name[1])))
+        local (m, line) = nir_statement_frame(body, k)
+        local site = nir_js_site(m, line)
+        local code = String(name[1])
+        local seen = findfirst(x -> x[1] == site, out)
+        if seen === nothing
+            push!(out, (site, String(m.name), code))
+        elseif out[seen][3] != code
+            # two sites on one line, whose debug info tells them apart by no column: one name would run
+            # the first's JS for both
+            reject!(Internal("src/julia/runtime/rtutils.jl nir_js_sites: two inline JS sites at $site, $(repr(out[seen][3])) and $(repr(code)): a runtime port writes each on its own line"), "nir_js_sites")
+        end
     end
     return out
 end
@@ -256,10 +275,10 @@ wasm import cannot take, rejects here, located.
     if lib == JS_INTEROP_LIBRARY
         local k = findfirst(st -> st === node, body.stmts)
         local frame = k === nothing ? nothing : nir_statement_frame(body, k)
-        frame !== nothing && frame[1] === Runtime ||
+        frame !== nothing && frame[1].module === Runtime ||
             reject!(ProgramError("src/julia/runtime/rtutils.jl nir_foreign_import: the foreign call $(repr(item)) of the runtime's internal interop module $lib, written outside WasmTarget's runtime, as no program may import dart's internal dart:_js_helper"), at)
         # the site is where it was written (nir_js_sites), one name per written site
-        site, site_name = "$(frame[1]).$(frame[2]):$(frame[3])", String(frame[2])
+        site, site_name = nir_js_site(frame...), String(frame[1].name)
     end
     local rt, argtypes, nreq, cc = node.args[2], node.args[3], node.args[4], node.args[5]
     rt isa NirConst && rt.c.val isa Type && argtypes isa NirConst && argtypes.c.val isa Core.SimpleVector ||
