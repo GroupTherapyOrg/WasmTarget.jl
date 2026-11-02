@@ -25,9 +25,10 @@
 # libfaketime and the sanitizers' runtimes use it, macOS's DYLD_INSERT_LIBRARIES its counterpart). Julia's differs:
 # none; this reads the kernel's counter at each process's exit, as perf stat's inherited counters sum.
 #
-# Its limit: Apple's counters retire fewer instructions for the same work on an efficiency core (a fixed loop, alone:
-# 9.7 to 10.2 G at default QoS, 8.2 G at background, 2026-11-01), so a stage read on efficiency cores reads up to about
-# a third low, the shards' and the ratchet's as the load's; the plant's band states it.
+# Its limit: Apple's counters retire fewer instructions for the same work on an efficiency core for some instruction
+# mixes (a Julia hash loop, compiled once: 12.2 G on a performance core, 6.2 G on an efficiency core, about half; a C
+# multiply-add loop 10.0 G and 10.1 G), so a process read on efficiency cores can read up to half low, the shards' and
+# the ratchet's as the load's; dev/check.sh states the band this leaves the judged stages, both ways.
 
 const COUNTER_C = """
 #include <libproc.h>

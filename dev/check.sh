@@ -198,22 +198,23 @@ RATE_RATCHET=2.4; RATE_SRC=5.3
 # the load's rate, its own: the precompile's image codegen runs on several threads at a high instruction rate. Measured
 # on three green src checks' load stages on performance cores, 2026-11-01: 08bf22f5 185 G in 16 CPU-s (11.6),
 # 261493b5 186 G in 15 (12.4), 7a2f804e 184 G in 15 (12.3). Intent: a performance core's seconds; band: the lowest of
-# the three, so the load reads high rather than low; a load reading outside 11-13 G a CPU-s on a performance core
-# re-measures it
+# the three, so the load reads high rather than low. Two of the three, 08bf22f5 and 261493b5, were counted by the poll
+# 1fd4ff21 replaced, and none names its core share (A80S1): the exit above re-derives it from exact readings with their
+# shares
 RATE_LOAD=11.6
 # each stage is judged at the larger of its instructions at its rate and its CPU seconds over ECORE_SLOWDOWN. Apple's
 # counters read fewer instructions on an efficiency core for some instruction mixes (a Julia hash loop, compiled once:
-# 12.2 G on a performance core, 6.2 G on an efficiency core; a C multiply-add loop 10.0 G and 10.1 G), so a stage there
-# could read low; an efficiency core runs Julia's work at least 1.56 times slower (a julia tree running a
-# 4x10^8-iteration loop, four runs on a quiet machine: 1.56 to 1.73; dev/tree_instructions.jl's plant tree, a 10^8 loop,
-# 1.8 to 1.9; the load 3.0), so its CPU seconds over 1.4
-# read high there, never low, and on a performance core they stay under its instructions at its rate. Intent: never
-# read low; band: the measured minimum, 1.56; the counter's plant prints the ratio it measures, unjudged, since taskpolicy
-# does not hold work on the efficiency cores (dev/tree_instructions.jl). Its limit: a stage split across core types reads
-# low on both terms, at most about a tenth (a fifth of its work on efficiency cores that count half its instructions
-# and run it 1.56 times slower: 0.90 of a performance core's seconds by instructions, 0.79 by CPU seconds over 1.4).
-# No divisor above 1 bounds it, and a divisor of 1 judges a stage at its raw CPU seconds, which reads a contended
-# ratchet at 182 against its 79 from instructions (d0444541's ratchet ran 106 CPU-s for 191 G), red on scheduling (D17)
+# 12.2 G on a performance core, 6.2 G on an efficiency core, a ratio r of 0.51; a C multiply-add loop 10.0 G and 10.1 G),
+# and an efficiency core runs Julia's work 1.56 to 3.0 times slower (s: a julia tree running a 4x10^8-iteration loop,
+# 1.56 to 1.73 in four runs on a quiet machine; the plant's 10^8 tree 1.8 to 1.9; the load 3.0). Its band, both ways,
+# and neither bound is "never": a stage with a share f of its work on efficiency cores reads G/rate x (1 - (1 - r) f)
+# and CPU/1.4 x (1 + (s - 1) f), so at r = 0.51 and s = 1.56 the larger reads as low as 0.84 of its true seconds at
+# f = 0.32 (A80E1); and a stage wholly on efficiency cores reads up to s/1.4 high, the load 65.6 s (91.8 CPU-s / 1.4)
+# against its 21.6 on performance cores. A STOPGAP (D6, D20) for placement; its exit: each process's performance-core
+# instructions and its performance-core and total CPU time read at its exit (rusage_info_v6's ri_pinstructions,
+# ri_user_ptime and ri_system_ptime), each stage judged by its performance-core instructions at its rate plus its
+# efficiency-core seconds over the slowdown, so neither bound rests on placement. The plant prints the slowdown it
+# measures, unjudged, since taskpolicy does not hold work on the efficiency cores (dev/tree_instructions.jl)
 ECORE_SLOWDOWN=1.4
 cpu() { awk 'NR == 1 { printf "%d", $3 + $5 }' ".wtd/$1.time"; }
 gi() { awk '/instructions retired/ { printf "%d", $1 / 1e9 }' ".wtd/$1.time"; }
