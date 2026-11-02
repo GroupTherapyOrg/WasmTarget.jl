@@ -18,6 +18,13 @@ if ! grep -qE '^Charter: C[0-9]+' "$msg"; then
     echo "commit refused: add a 'Charter: C<n> …' trailer naming the dev/CHARTER.md clause(s) this change advances" >&2
     exit 1
 fi
+# the clause is a trailer git reads, in the message's last paragraph: a Charter line a blank line away from the
+# trailer block is prose to git, and db33ef28 landed with none (audit 93, A93S6). precedent(git:
+# git-interpret-trailers(1) --parse, the trailer block git itself reads)
+if ! git interpret-trailers --parse "$msg" | grep -qE '^Charter: C[0-9]+'; then
+    echo "commit refused: the 'Charter: C<n>' line is not in the trailer block git reads (the message's last paragraph, beside Co-Authored-By): remove the blank line between them" >&2
+    exit 1
+fi
 # the subject says what the change does, `<kind>(<scope>): <what>` as every landed commit does; a placeholder
 # subject (wip, tmp, fixup, squash) tells the history nothing (2e9ead2f landed as "wip", 2026-10-29)
 subject=$(sed -n '/^[[:space:]]*$/!{p;q;}' "$msg")

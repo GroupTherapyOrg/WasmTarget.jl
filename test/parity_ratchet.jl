@@ -1810,8 +1810,11 @@ end
 # L209's negative test: the hook refuses two trailers (one indented), accepts one
 function trailer_negatives_missed()::Vector{String}
     local out = String[]
-    local base = "fix(hooks): a planted subject that says what it does\n\nCharter: C0 (x)\n\nCo-Authored-By: A <a@b>\n"
+    local base = "fix(hooks): a planted subject that says what it does\n\nCharter: C0 (x)\nCo-Authored-By: A <a@b>\n"
     hook_accepts(base) || push!(out, "negative missed: the hook refuses a message with one Co-Authored-By trailer")
+    # the Charter line is a trailer git reads, in the last paragraph: a blank line before Co-Authored-By leaves it prose (A93S6)
+    hook_accepts("fix(hooks): a planted subject that says what it does\n\nCharter: C0 (x)\n\nCo-Authored-By: A <a@b>\n") &&
+        push!(out, "negative missed: the hook accepts a Charter line outside the trailer block")
     hook_accepts(base * "    Co-Authored-By: A <a@b>\n") && push!(out, "negative missed: the hook accepts an indented second trailer")
     hook_accepts(base * "Co-authored-by: B <c@d>\n") && push!(out, "negative missed: the hook accepts a second trailer in another case")
     # a Fixes: line lists IDs alone; a partial fix is Narrows: (A81S3)
@@ -3949,7 +3952,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L209_one_coauthor_trailer" => ("a commit carries one Co-Authored-By trailer (A35E4: bb2c2fee, 3b3a0a0c and edf2327b each carried a second, indented one; dev/LEDGER.md D24): dev/hooks/commit-msg refuses a message with more than one, indented or in any case, and CI's message-hygiene refuses one from the commit that put the rule in the hook on. And the hook refuses a `Fixes:` line that is not a list of finding IDs alone, a partial fix written `Narrows: <ID> — <what>` (A81S3). Behavior, run here: the hook on six planted messages, one trailer accepted, an indented second and a second in another case refused, a Fixes: line of IDs and a Narrows: line accepted, a Fixes: line with a parenthetical refused; and ci.yml holds the rule (dev/CHARTER.md C0)",
+    "L209_one_coauthor_trailer" => ("a commit carries one Co-Authored-By trailer (A35E4: bb2c2fee, 3b3a0a0c and edf2327b each carried a second, indented one; dev/LEDGER.md D24): dev/hooks/commit-msg refuses a message with more than one, indented or in any case, and CI's message-hygiene refuses one from the commit that put the rule in the hook on. And the hook refuses a `Fixes:` line that is not a list of finding IDs alone, a partial fix written `Narrows: <ID> — <what>` (A81S3). Behavior, run here: the hook on seven planted messages, one trailer accepted, an indented second and a second in another case refused, a Fixes: line of IDs and a Narrows: line accepted, a Fixes: line with a parenthetical refused, and a Charter line a blank line above the trailer block refused, since git reads it as prose (A93S6); and ci.yml holds the rule (dev/CHARTER.md C0)",
         () -> begin
             local v = trailer_negatives_missed()
             occursin("commits with more than one Co-Authored-By trailer:", read(joinpath(ROOT, ".github", "workflows", "ci.yml"), String)) ||
