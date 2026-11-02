@@ -72,6 +72,54 @@ end
     return (lo, hi)
 end
 
+# BSWAP: the operand's halves exchanged, each byte-swapped by `bswap_half`, the BSWAP of an i64, which
+# is Expand on wasm (WebAssemblyISelLowering.cpp:176) and so its own expansion (TargetLowering.cpp
+# expandBSWAP, the code generator's i64 byte swap)
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:4277 DAGTypeLegalizer::ExpandIntRes_BSWAP" function expand_int_res_bswap(b::WasmBuilder.InstructionsBuilder, x::Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}, bswap_half::Function)::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    local i64 = WasmBuilder.IR.NumType_i64
+    # Note swapped operands
+    local (hi_in, lo_in) = x
+    local lo = WasmBuilder.add_local(b, i64); local hi = WasmBuilder.add_local(b, i64)
+    sd_get(b, lo_in); bswap_half(); WasmBuilder.local_set(b, lo)
+    sd_get(b, hi_in); bswap_half(); WasmBuilder.local_set(b, hi)
+    return (lo, hi)
+end
+
+# CTLZ: Hi != 0 ? ctlz(Hi) : ctlz(Lo) + 64, the high half zero. wasm's i64.clz answers 64 for zero, so
+# CTLZ and CTLZ_ZERO_POISON are both it
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:4363 DAGTypeLegalizer::ExpandIntRes_CTLZ" function expand_int_res_ctlz(b::WasmBuilder.InstructionsBuilder, x::Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}})::Tuple{WasmBuilder.IR.Local,Int64}
+    local i64 = WasmBuilder.IR.NumType_i64
+    local (lo, hi) = x
+    local hi_not_zero = get_set_cc(b, hi, Int64(0), :SETNE)
+    local lo_lz = WasmBuilder.add_local(b, i64); local hi_lz = WasmBuilder.add_local(b, i64); local sum = WasmBuilder.add_local(b, i64)
+    sd_get(b, lo); WasmBuilder.i64_clz(b); WasmBuilder.local_set(b, lo_lz)
+    sd_get(b, hi); WasmBuilder.i64_clz(b); WasmBuilder.local_set(b, hi_lz)
+    WasmBuilder.local_get(b, lo_lz); WasmBuilder.i64_const(b, Int64(64)); WasmBuilder.i64_add(b); WasmBuilder.local_set(b, sum)
+    return (get_select(b, i64, hi_not_zero, hi_lz, sum), Int64(0))
+end
+
+# CTPOP: ctpop(Hi) + ctpop(Lo), the high half zero. The libcall branch serves a target whose CTPOP
+# action is LibCall; WebAssembly sets none
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:4414 DAGTypeLegalizer::ExpandIntRes_CTPOP" function expand_int_res_ctpop(b::WasmBuilder.InstructionsBuilder, x::Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}})::Tuple{WasmBuilder.IR.Local,Int64}
+    local (lo, hi) = x
+    local r = WasmBuilder.add_local(b, WasmBuilder.IR.NumType_i64)
+    sd_get(b, lo); WasmBuilder.i64_popcnt(b); sd_get(b, hi); WasmBuilder.i64_popcnt(b); WasmBuilder.i64_add(b)
+    WasmBuilder.local_set(b, r)
+    return (r, Int64(0))
+end
+
+# CTTZ: Lo != 0 ? cttz(Lo) : cttz(Hi) + 64, the high half zero; wasm's i64.ctz answers 64 for zero
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:4445 DAGTypeLegalizer::ExpandIntRes_CTTZ" function expand_int_res_cttz(b::WasmBuilder.InstructionsBuilder, x::Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}})::Tuple{WasmBuilder.IR.Local,Int64}
+    local i64 = WasmBuilder.IR.NumType_i64
+    local (lo, hi) = x
+    local lo_not_zero = get_set_cc(b, lo, Int64(0), :SETNE)
+    local lo_lz = WasmBuilder.add_local(b, i64); local hi_lz = WasmBuilder.add_local(b, i64); local sum = WasmBuilder.add_local(b, i64)
+    sd_get(b, lo); WasmBuilder.i64_ctz(b); WasmBuilder.local_set(b, lo_lz)
+    sd_get(b, hi); WasmBuilder.i64_ctz(b); WasmBuilder.local_set(b, hi_lz)
+    WasmBuilder.local_get(b, hi_lz); WasmBuilder.i64_const(b, Int64(64)); WasmBuilder.i64_add(b); WasmBuilder.local_set(b, sum)
+    return (get_select(b, i64, lo_not_zero, lo_lz, sum), Int64(0))
+end
+
 # MUL: TLI.expandMUL needs MULHU or UMUL_LOHI legal or custom, neither on wasm (above), so the libcall
 # RTLIB::getMUL(i128) names, compiler-rt's __multi3, here emitted in place
 # (src/llvm/compiler_rt/multi3.jl). forceExpandMultiply serves a target with no such libcall; wasm's

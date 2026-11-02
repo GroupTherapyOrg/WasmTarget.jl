@@ -312,9 +312,20 @@ function divmod(a::Int64, d::Int64)
         17 * halves(rem(d == 9 ? typemin(Int128) : x, d == 9 ? Int128(-1) : y)) +
         19 * halves(div(d == 9 ? typemin(Int128) : x, d == 9 ? Int128(-1) : y))
 end
+# the bit counts, the byte swap, flipsign (by a value and by literals of either sign) and the float
+# conversions Base writes over them, each against native
+function bits(a::Int64, n::Int64)
+    local x = (BIG * Int128(a)) >> (n % UInt8) + Int128(n)
+    local u = reinterpret(UInt128, x)
+    return Int64(leading_zeros(x)) + 3 * Int64(trailing_zeros(x)) + 5 * Int64(count_ones(u)) + 7 * halves(bswap(x)) +
+        11 * halves(flipsign(x, Int128(n))) + 13 * Int64(reinterpret(UInt64, Float64(x)) % Int64) +
+        17 * Int64(reinterpret(UInt64, Float64(u)) % Int64) + 19 * Int64(reinterpret(UInt32, Float32(x))) +
+        23 * halves(unsafe_trunc(Int128, Float64(n) * 1.0e20)) +
+        29 * halves(Core.Intrinsics.flipsign_int(x, Int128(-3))) + 31 * halves(Core.Intrinsics.flipsign_int(x, Int128(5)))
+end
 end
 
-@testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions, equality, arithmetic, compares, product, shifts and division" begin
+@testset "LegalizeIntegerTypes.cpp: a 128-bit integer is two i64 halves, its conversions, equality, arithmetic, compares, product, shifts, division and bit counts" begin
     local bytes = W.compile(Int128Cases.wide, (Int64,); optimize = false)
     queue_native!("wide", bytes, Int128Cases.wide, [(n,) for n in Int64[0, 5, -3, 300, typemax(Int64), typemin(Int64)]])
     local abytes = W.compile(Int128Cases.arith, (Int64, Int64); optimize = false)
@@ -329,6 +340,8 @@ end
     local dcases = [(a, d) for a in Int64[0, 1, -1, 5, typemax(Int64), typemin(Int64)] for d in Int64[1, -1, 3, -10, 7, 8, typemax(Int64), 0, 9]]
     @test count(c -> WTRunner.native_answer(Int128Cases.divmod, c) == WTRunner.Throws(DivideError), dcases) >= 7
     append!(NATIVE_RUNS, [WTRunner.RunCase("divmod$c", dbytes, c, WTRunner.native_answer(Int128Cases.divmod, c)) for c in dcases])
+    local bbytes = W.compile(Int128Cases.bits, (Int64, Int64); optimize = false)
+    queue_native!("bits", bbytes, Int128Cases.bits, [(a, n) for a in Int64[0, 1, -1, 7, typemax(Int64), typemin(Int64)] for n in Int64[0, 1, 63, 64, 100, 127, -5]])
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin

@@ -1993,6 +1993,12 @@ end
 #     visitADDLike's canonicalization)
 #   and_int, or_int, xor_int (:1649-:1651), not_int (:1404 CreateNot, an xor with all ones):
 #     ExpandIntRes_Logical
+#   ctlz_int, cttz_int, ctpop_int (llvm.ctlz, llvm.cttz, llvm.ctpop, their width answered for zero):
+#     ExpandIntRes_CTLZ, ExpandIntRes_CTTZ, ExpandIntRes_CTPOP; bswap_int (:1692 llvm.bswap):
+#     ExpandIntRes_BSWAP, each half by the i64 byte swap (the unary map's, TargetLowering's expandBSWAP)
+#   flipsign_int (:1719): both literals, their constant; a literal y, x or 0 less x by y's sign; else
+#     tmp = y's arithmetic shift by 127, (x + tmp) ^ tmp: ExpandShiftByConstant, ExpandIntRes_ADDSUB
+#     and ExpandIntRes_Logical
 #   mul_int (:1505 CreateMul): ExpandIntRes_MUL, compiler-rt's __multi3 in place; the product reads no
 #     operand order, so visitMUL's canonicalization changes nothing
 #   sdiv_int, udiv_int, srem_int, urem_int (:1506-:1509 CreateSDiv and its kin): ExpandIntRes_SDIV and
@@ -2143,6 +2149,26 @@ end
         return make(T_, LLVM.expand_int_res_logical(b, opc, expanded(args[1]), expanded(args[2])))
     elseif length(args) == 1 && f === I.not_int
         return make(T_, LLVM.expand_int_res_logical(b, :XOR, expanded(args[1]), (Int64(-1), Int64(-1))))
+    elseif length(args) == 1 && f === I.ctlz_int
+        return make(T_, LLVM.expand_int_res_ctlz(b, expanded(args[1])))
+    elseif length(args) == 1 && f === I.cttz_int
+        return make(T_, LLVM.expand_int_res_cttz(b, expanded(args[1])))
+    elseif length(args) == 1 && f === I.ctpop_int
+        return make(T_, LLVM.expand_int_res_ctpop(b, expanded(args[1])))
+    elseif length(args) == 1 && f === I.bswap_int
+        return make(T_, LLVM.expand_int_res_bswap(b, expanded(args[1]), () -> Intrinsifier__unary_operator_map[][i64][I.bswap_int](code_gen)))
+    elseif length(args) == 2 && f === I.flipsign_int
+        local x = args[1]
+        local y = args[2]
+        if literal(y)
+            # a literal y: x where y is not negative, else 0 less x; both literals, their constant
+            literal(x) && return make(T_, LLVM.expand_int_res_constant(reinterpret(Int128, y.c.val) >= 0 ? x.c.val : -x.c.val))
+            reinterpret(Int128, y.c.val) >= 0 && return make(T_, expanded(x))
+            return make(T_, LLVM.expand_int_res_addsub(b, false, (Int64(0), Int64(0)), expanded(x)))
+        end
+        # tmp = y >> 127 (arithmetic, a constant amount), (x + tmp) ^ tmp
+        local tmp = LLVM.expand_shift_by_constant(b, :SRA, expanded(y), Int64(127))
+        return make(T_, LLVM.expand_int_res_logical(b, :XOR, LLVM.expand_int_res_addsub(b, true, expanded(x), tmp), tmp))
     elseif length(args) == 2 && f === I.mul_int
         return make(T_, LLVM.expand_int_res_mul(b, expanded(args[1]), expanded(args[2])))
     elseif length(args) == 2 && (f === I.checked_sdiv_int || f === I.checked_srem_int || f === I.checked_udiv_int || f === I.checked_urem_int ||
