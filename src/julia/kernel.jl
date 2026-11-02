@@ -55,10 +55,36 @@ its own, so this names one by the field and its kind, compared by value.
 end
 
 """
+    SelectorReference(name, kind)
+
+The interface target of a field access on a receiver Julia's inference left abstract: dart's
+InstanceGet's and InstanceSet's interfaceTargetReference, the member the receiver's static type
+declares, which DispatchTable.selectorForTarget reads to find the call's selector. A Julia abstract
+type declares no field, so the reference names the selector itself: the field's name as
+field_selector_calls names it, and the accessor's kind, a getter or a setter. It is no member: no
+function is made or called for it.
+
+precedent(dart: pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfaceTargetReference, a Reference to a
+member of the static type). Julia's differs: the static type declares no member, so the reference
+names what the member would select.
+"""
+@quarantine "dart's instance access names its interface target (pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfaceTargetReference); a Julia abstract type declares no member, so the selector's name and kind stand for it" Core.String struct SelectorReference
+    name::String
+    kind::FieldReferenceKind
+    # a selector is a getter's or a setter's; an initializer is a static field's, never called
+    # through a selector
+    SelectorReference(name::String, kind::FieldReferenceKind) =
+        kind === FieldReferenceKind_initializer ?
+            reject!(Internal("src/julia/kernel.jl SelectorReference: the selector $name of an initializer, which no call dispatches"), "SelectorReference") :
+            new(name, kind)
+end
+
+"""
     Reference
 
 The Kernel table's Reference: a member's MethodInstance (Julia compiles one function per
-specialization, and a MethodInstance names one callable) or a field's accessor, a `FieldReference`.
+specialization, and a MethodInstance names one callable), a field's accessor, a `FieldReference`, or
+an interface target, a `SelectorReference`.
 
 precedent(dart: kernel/lib/canonical_name.dart's Reference, which names a member or its getter,
 setter, initializer or tear-off). Julia's differs: a method has no tear-off (a Julia function is a
@@ -66,7 +92,7 @@ value already), so the sum is a method's specialization or a field's accessor.
 """
 # the sum's kinds are named in the module that declares it (@closed), Julia's MethodInstance among them
 import Core: MethodInstance
-@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Reference = Union{MethodInstance, FieldReference}
+@quarantine "Kernel's Reference (pkg/kernel/lib/canonical_name.dart:429 Reference) names a member or one of its accessors; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Reference = Union{MethodInstance, FieldReference, SelectorReference}
 
 """
     KERNEL_TYPES

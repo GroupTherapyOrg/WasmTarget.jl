@@ -119,6 +119,7 @@ The export name of `target`, the interop namer's (src/namer.jl _ExternalMemberNa
     @exhaustive target::Reference begin
         (m::MethodInstance) => get_export_name(interop_namer(self), m)
         FieldReference => nothing
+        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName: the interface target $(s.name), a selector's name, no member"), "FunctionCollector.getExportName")
     end
 
 """
@@ -161,6 +162,7 @@ unused where Julia's effects prove it (hasWasmPureFunctionPragma).
         (m::MethodInstance) => (something(Util.get_wasm_never_inline_pragma(m), false), something(Util.get_wasm_prefer_inline_pragma(m), false),
                                 Util.has_wasm_pure_function_pragma(m; component = translator.component))
         (r::FieldReference) => (r.kind === FieldReferenceKind_initializer && never_inline_static_field_initializer(translator, r.field::GlobalRef), false, false)
+        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction: the interface target $(s.name), a selector's name, no member"), "FunctionCollector.getFunction")
     end
     local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
     # If this function is a `@pragma('wasm:import', '<module>.<name>')` we import the function and
@@ -304,6 +306,7 @@ and a field's accessor the visitor's Field arm.
     return @exhaustive target::Reference begin
         (m::MethodInstance) => visit_procedure(generator, m, m)
         (r::FieldReference) => visit_field(generator, r.field, r)
+        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/functions.dart:279 FunctionCollector._getFunctionType: the interface target $(s.name), a selector's name, no member"), "FunctionCollector._getFunctionType")
     end
 end
 
@@ -315,6 +318,7 @@ end
     return @exhaustive target::Reference begin
         (m::MethodInstance) => returns_null(type_of_return_value(self.translator, m))
         (r::FieldReference) => r.kind === FieldReferenceKind_setter || returns_null(type_of_field(self.translator, r.field))
+        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/functions.dart:306 FunctionCollector.synthesizeNullReturnValue: the interface target $(s.name), a selector's name, no member"), "FunctionCollector.synthesizeNullReturnValue")
     end
 end
 
@@ -325,6 +329,7 @@ end
         (m::MethodInstance) => (local w = translate_return_type(self.translator, type_of_return_value(self.translator, m));
             w isa WasmBuilder.IR.RefType && w.heap_type === WasmBuilder.IR.HeapType_none && !w.nullable)
         FieldReference => false
+        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/functions.dart:319 FunctionCollector.synthesizeNoReturn: the interface target $(s.name), a selector's name, no member"), "FunctionCollector.synthesizeNoReturn")
     end
 end
 
@@ -342,6 +347,7 @@ suffix of the accessor's kind.
             local member_name = f isa GlobalRef ? string(f) : "$(f.cls).$(f.name)";
             r.kind === FieldReferenceKind_setter ? "$member_name= implicit setter" :
             r.kind === FieldReferenceKind_initializer ? "$member_name field initializer" : "$member_name implicit getter")
+        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName: the interface target $(s.name), a selector's name, no member"), "FunctionCollector.getFunctionName")
     end
 end
 

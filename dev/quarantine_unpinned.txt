@@ -77,7 +77,6 @@ julia/kernel.jl FieldReferenceKind,FieldReferenceKind_getter,FieldReferenceKind_
 julia/kernel.jl InstanceConstant
 julia/kernel.jl KERNEL_TYPES
 julia/kernel.jl NoCounterpart
-julia/kernel.jl Reference
 julia/kernel.jl no_counterpart_rejection
 julia/late.jl Late
 julia/late.jl [Base.getindex]

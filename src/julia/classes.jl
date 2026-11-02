@@ -689,11 +689,12 @@ Julia's answer where dart reads TFA's selector metadata: the calls of each field
 abstract (no concrete type, or a Union) and whose field `f` is a constant (a name or a position) is a
 dynamic call of the getter or setter selector `f` names (`field_selector_name`), dart's instance field access through the
 dispatch table. Each selector, a `FieldSelectorCalls` of its name and kind, in the order the closed world first meets it,
-maps to its call count and the classes its receivers' types admit, each class of `concrete` (the
-program's concrete classes) Julia's `<:` puts under one. DispatchTable.build (src/dispatch_table.jl)
+maps to its call count and the classes its receivers' types admit, `admitted(receiver)`, the
+receiver type's concrete classes as ClassIdNumbering.getConcreteClassIdRange reads them (the one reading,
+src/class_info.jl), which DispatchTable.build passes. DispatchTable.build (src/dispatch_table.jl)
 reads it where dart reads TFA's selector ids. A receiver of a concrete type is a direct access, no call of a selector.
 """
-@quarantine "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, concrete::Vector{DataType})::Vector{FieldSelectorCalls}
+@quarantine "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, admitted_classes::Function)::Vector{FieldSelectorCalls}
     local out = FieldSelectorCalls[]
     for b in world, st in b.stmts
         st isa NirCall || continue
@@ -702,9 +703,13 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
         length(st.args) >= 3 || continue
         local receiver = nir_value_type(b, st.args[2])
         isconcretetype(receiver) && continue
+        # a tuple is dart's record, whose field access is a RecordIndexGet or RecordNameGet, never a
+        # call through the dispatch table (code_generator.dart's visitRecordIndexGet); the intrinsifier
+        # reads an open tuple by a class-id switch over its records
+        receiver <: Tuple && continue
         local name_op = st.args[3]
         name_op isa NirConst && (name_op.c.val isa Symbol || name_op.c.val isa Int) || continue
-        local admitted = DataType[c for c in concrete if c <: receiver]
+        local admitted = admitted_classes(receiver)::Vector{DataType}
         local name = field_selector_name(name_op.c.val, admitted); local is_setter = f === Core.setfield!
         local k = findfirst(e -> e.name == name && e.is_setter == is_setter, out)
         k === nothing && (push!(out, FieldSelectorCalls(name, is_setter, 0, DataType[])); k = length(out))

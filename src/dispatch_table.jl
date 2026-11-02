@@ -191,6 +191,8 @@ takes the default-value sentinel.
                 positional = f.kind === FieldReferenceKind_getter ? Type[] : Type[type_of_field(translator_, f.field)]
                 returns = f.kind === FieldReferenceKind_getter ? Type[type_of_field(translator_, f.field)] : Type[]
             end
+            # a selector's targets are its classes' accessors (build), never an interface target
+            (s::SelectorReference) => reject!(Internal("dart2wasm/lib/dispatch_table.dart:118 SelectorInfo._computeSignature: the interface target $(s.name) among $(self.name)'s targets"), "SelectorInfo._computeSignature")
         end
         local named = LinkedHashMap{String,Type}()
         length(returns) <= length(output_sets) ||
@@ -309,16 +311,16 @@ end
 """
 The selector of `target`. dart reads the member's selector id from TFA's metadata; a Julia selector
 is a field's, named by the field (DispatchTable.build), so a field accessor's selector is the one of
-its field's name and kind. A Julia method is no instance member and has none: a located rejection.
+its field's name and kind, and an interface target (`SelectorReference`) names its selector's name
+and kind itself. A Julia method is no instance member and has none: a located rejection.
 """
 @parity "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget" function selector_for_target(self::DispatchTable, target::Reference)::SelectorInfo
     local at = "dart2wasm/lib/dispatch_table.dart:436 DispatchTable.selectorForTarget"
-    local r = @exhaustive target::Reference begin
+    local name, is_setter = @exhaustive target::Reference begin
         (m::MethodInstance) => reject!(Internal("$at: $m, no instance member, has no selector"), at)
-        (f::FieldReference) => f
+        (f::FieldReference) => (field_name(f.field), f.kind === FieldReferenceKind_setter)
+        (s::SelectorReference) => (s.name, s.kind === FieldReferenceKind_setter)
     end
-    local name = field_name(r.field)
-    local is_setter = r.kind === FieldReferenceKind_setter
     for (_, selector) in self._selector_info
         selector.name == name && selector.is_setter == is_setter && return selector
     end
@@ -367,8 +369,9 @@ formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the
     local at = "dart2wasm/lib/dispatch_table.dart:501 DispatchTable.build"
     local translator = self.translator
     # the selectors, from the field calls Julia's IR holds (TFA's selector metadata in dart)
-    local calls = field_selector_calls(translator.component,
-        DataType[info.cls for info in translator.classes[] if info.cls isa DataType && !class_is_abstract(info.cls)])
+    # a receiver's admitted classes: its type's concrete classes, getConcreteClassIdRange's one reading
+    local calls = field_selector_calls(translator.component, receiver -> DataType[translator.classes[][id + 1].cls
+        for r in get_concrete_class_id_range(translator.class_id_numbering[], receiver) for id in r.start:r.end_])
     for c in calls
         local id = length(self._selector_info)
         self._selector_info[id] = SelectorInfo__(self, id, c.name, c.call_count; is_setter = c.is_setter, is_index_setter = false)

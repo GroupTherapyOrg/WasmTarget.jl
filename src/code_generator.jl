@@ -1485,11 +1485,12 @@ end
     # whose type admits `nothing` keeps its set flag (class_is_set_field, dart's late lowering's
     # isSet), stored true where `new` gives the field and false where it leaves it out, so its null
     # `nothing` and its #undef stay apart (D9). An isbits field left undefined holds bits Julia leaves
-    # arbitrary: its codegen builds the struct from LLVM's undef, frozen where `new` passes fewer values
-    # than fields (julia/src/cgutils.cpp:4151 emit_new_struct, its `CreateFreeze(UndefValue::get(lt))`),
-    # and LLVM's LangRef lets a frozen undef be any one value. WasmTarget picks the wasm default, the
-    # field type's all-zero bits, as memorynew fills an inline element (intrinsics.jl), where LLVM picks
-    # undef: a refinement of Julia's answer, not a stand-in past a gap
+    # arbitrary. Julia's codegen (julia/src/cgutils.cpp:4151 emit_new_struct) zero-fills an inline
+    # immutable `new` leaves fields of (its memset at :4371-4377), and allocates a heap struct
+    # (emit_allocobj, :4394) with only its pointers nulled (codegen.cpp:2189 undef_derived_strct), the
+    # rest LLVM's undef, which LLVM's LangRef lets be any one value. WasmTarget takes the field type's
+    # all-zero bits in both, as memorynew fills an inline element (intrinsics.jl): Julia's own answer
+    # for the inline struct and a refinement of its undef for the heap one, not a stand-in past a gap
     local nf = fieldcount(cls)
     local given = length(node.args) - 1
     given <= nf ||
@@ -1524,7 +1525,7 @@ end
         elseif storage isa WasmBuilder.IR.RefType && storage.nullable
             WasmBuilder.ref_null(b, storage.heap_type)
         else
-            # an isbits field left undefined: its type's all-zero bits (emit_new_struct's frozen undef)
+            # an isbits field left undefined: its type's all-zero bits (emit_new_struct's zero fill)
             local T = field.type::DataType
             local zero = Base.issingletontype(T) ? T.instance : reinterpret(T, zeros(UInt8, sizeof(T)))[1]
             translate_expression(self, NirConst(Core.Const(zero)), storage)
@@ -1669,8 +1670,8 @@ end
 """
 A call through a selector: dart's virtual call of `interface_target`'s getter, setter or method.
 Julia's selectors are field selectors (DispatchTable.build, ruling (a)): a field access on a receiver
-Julia's inference left abstract, its interface target the field as the receiver's type names it, a
-FieldReference whose name and kind find the selector. No target is dart's unreachable call; one range
+Julia's inference left abstract, its interface target a SelectorReference, the selector's name and
+kind, which a Julia abstract type, declaring no field, stands for. No target is dart's unreachable call; one range
 of one target is a direct call of that target's function; otherwise the receiver is kept in a local
 and the call goes through the dispatch table (callDispatchTable), or a polymorphic dispatcher where
 the selector has static ranges beside its table's.
@@ -1686,7 +1687,7 @@ the selector has static ranges beside its table's.
     local selector = selector_for_target(translator.dispatch_table[], reference)
     local signature = selector.signature[]
     local name = entry_point_name(selector, use_unchecked_entry)
-    reference isa FieldReference && selector.name == field_name(reference.field) ||
+    reference isa SelectorReference && selector.name == reference.name ||
         reject!(Internal("$at: the selector $(selector.name) for $reference"), "$(self.enclosing_member)")
     push_receiver(signature)
     local targets_ = targets(selector; unchecked = use_unchecked_entry)
@@ -1832,11 +1833,12 @@ end
     local key = name.c.val
     # a receiver Julia left abstract has no single target: the field's getter selector (_virtualCall),
     # its interface target the field as the receiver's class names it (dart's node.interfaceTarget, a
-    # member of the static type, which a Julia abstract type does not declare), a FieldReference whose
-    # name and kind DispatchTable.selectorForTarget reads: the selector's name as field_selector_calls
-    # names it over the classes the receiver admits, a position the field each holds there
+    # member of the static type, which a Julia abstract type does not declare), a SelectorReference
+    # naming the selector DispatchTable.selectorForTarget reads: the field's name as field_selector_calls
+    # names it over the classes the receiver admits (getConcreteClassIdRange's one reading), a position
+    # the field each holds there
     if !(cls isa DataType && isconcretetype(cls))
-        local reference = FieldReference(ClassField(class_for_type(self.translator, cls), 0, field_selector_name(key, DataType[info.cls for info in self.translator.classes[] if info.cls isa DataType && !class_is_abstract(info.cls) && info.cls <: cls]), Any, false), FieldReferenceKind_getter)
+        local reference = SelectorReference(field_selector_name(key, DataType[self.translator.classes[][id + 1].cls for r in get_concrete_class_id_range(self.translator.class_id_numbering[], cls) for id in r.start:r.end_]), FieldReferenceKind_getter)
         local result = _virtual_call(self, node, reference, _VirtualCallKind_Get,
             signature -> (translate_expression(self, receiver, signature.inputs[1]); nothing), (signature, param_info) -> nothing;
             use_unchecked_entry = false)
@@ -1946,7 +1948,7 @@ end
     if !(cls isa DataType && isconcretetype(cls))
         local b = self.b[]
         local temp = Ref{Union{Nothing,WasmBuilder.IR.Local}}(nothing)
-        _virtual_call(self, node, FieldReference(ClassField(class_for_type(self.translator, cls), 0, field_selector_name(key, DataType[info.cls for info in self.translator.classes[] if info.cls isa DataType && !class_is_abstract(info.cls) && info.cls <: cls]), Any, true), FieldReferenceKind_setter), _VirtualCallKind_Set,
+        _virtual_call(self, node, SelectorReference(field_selector_name(key, DataType[self.translator.classes[][id + 1].cls for r in get_concrete_class_id_range(self.translator.class_id_numbering[], cls) for id in r.start:r.end_]), FieldReferenceKind_setter), _VirtualCallKind_Set,
             signature -> (translate_expression(self, receiver, signature.inputs[1]); nothing),
             function (signature, param_info)
                 local param_type = signature.inputs[end]
@@ -2445,6 +2447,7 @@ end
                 ImplicitFieldAccessorCodeGenerator(translator, function_type, field, r.kind === FieldReferenceKind_getter, false)
             end
         end
+        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/code_generator.dart:3528 getInlinableMemberCodeGenerator: the interface target $(s.name), a selector's name, no member"), "getInlinableMemberCodeGenerator")
     end
 end
 

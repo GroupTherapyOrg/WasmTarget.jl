@@ -1601,6 +1601,7 @@ accessor dart's field arm (a Julia field carries no pragma).
             _should_inline_procedure_call(self, m, signature)
         end
         (r::FieldReference) => _should_inline_field_accessor(self, r, r.field)
+        (s::SelectorReference) => reject!(Internal("dart2wasm/lib/translator.dart:2195 Translator.shouldInline: the interface target $(s.name), a selector's name, no member"), "Translator.shouldInline")
     end
 end
 
