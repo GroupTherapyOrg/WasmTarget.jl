@@ -1616,7 +1616,11 @@ end
 # Base or the compiler) of the other kind, a function citing only types or a type citing only functions: its
 # counterpart is a near miss, a record cited for its parser (A90E1); a reason that cites one definition of
 # its own kind, or a source whose kind is not read here (a dart, LLVM or C citation), cites a counterpart
-# beside the records it names. Refused, listing each
+# beside the records it names. Refused, listing each. A wider read was measured and rejected (A92S1): reading
+# the kinds of dart, LLVM and C citations, and of constants and modules, refused 13 plausible ports at load
+# (a table taken from the getter that returns it, a record of what a generator builds, a library entered at
+# main), so kind alone cannot tell a near miss from a port where Julia differs; a pin's fit beyond
+# function versus type is the audit's to read
 @quarantine "a citation's kind is read for WasmTarget's own pinning rule, which no ecosystem defines, so it has no counterpart (dev/quarantine_no_counterpart.txt)" Base.Meta.parse function check_precedent_kinds(mod::Module, src::String, cpin::Function = _c_pin_checkout)::Int
     local jl = cpin(:julia)
     jl === nothing && return 0
