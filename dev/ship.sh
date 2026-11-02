@@ -18,8 +18,9 @@ common="$(git rev-parse --path-format=absolute --git-common-dir)"
 # origin's dev/ship.sh, so any older or edited copy is refused with no version to bump by hand (march-monitor-a, 20:06, D6)
 # the rules this copy carries, set on the push alone (A77E1: exported, every check under the lock inherited it)
 ship_rules="$(git hash-object "$0")"
-# when this ship began: D13 judges the loop by ship start to landed (queue and check), never a lane's backlog (march-monitor-a, 04:07)
-export WT_SHIP_START="${WT_SHIP_START:-$(date +%s)}"
+# when this ship began, a diagnostic beside D13 (the queue and check), never its judge: dev/LEDGER.md's D13 bands edit to
+# landed, and only Dale's words change what it measures (A84E3). Inherited only through the trampoline (WT_SHIP_ORIGIN=1)
+[ "${WT_SHIP_ORIGIN:-}" = 1 ] && [ -n "${WT_SHIP_START:-}" ] || WT_SHIP_START=$(date +%s); export WT_SHIP_START
 # the rules that judge a landing are origin's, never the lane's copy: a lane, or a stale loop, on an older tree ran
 # an older ship.sh without the refusals added since (the hold, the retry cap, the progress row; march-monitor-a, 19:47,
 # D6). So when origin's dev/ship.sh differs from this file, this run executes origin's instead, from the lane's .wtd
@@ -253,15 +254,14 @@ export WT_SHIP_RULES="$ship_rules"
 if git push -q origin HEAD:$MARCH; then
   release; trap cleanup_scratch EXIT
   secs=$(( $(date +%s) - first ))
-  # D13 judges the loop: the median, over the last five landings that record it, of ship start to landed (the queue and
-  # the check). Time from a commit to its landing is a lane's backlog (a held stack), reported per lane, never judged as the
-  # loop: one held stack turned D13 red for five landings (4651ec94 17549 s, 5264ac7e 15348, 399ba903 12855; the loop's own
-  # median 249 s over 44 landings, march-monitor-a 04:07)
-  med=$(awk -F'\t' 'NF >= 4 { print $4 }' "$log" | tail -5 | sort -n | awk '{ a[NR] = $1 } END { print (NR ? a[int((NR + 1) / 2)] : 0) }')
-  echo "ship: landed $(git rev-parse --short HEAD) on $MARCH, $(( $(date +%s) - WT_SHIP_START ))s from this ship's start; ${secs}s from its first commit (this lane's backlog, reported, not judged)"
+  # D13 judges edit to landed, as dev/LEDGER.md's row bands it: the median of the last five landings' seconds from first
+  # commit to landed (field 3). A ship's own queue and check (field 4, from its start) is printed beside it as the diagnostic
+  # that tells a slow loop from a held lane; changing which one D13 judges is Dale's to say (A84E3 reverted f08173cf's switch)
+  med=$(tail -5 "$log" | cut -f3 | sort -n | awk '{ a[NR] = $1 } END { print a[int((NR + 1) / 2)] }')
+  echo "ship: landed $(git rev-parse --short HEAD) on $MARCH, ${secs}s from its first commit to landed ($(( $(date +%s) - WT_SHIP_START ))s of it this ship's queue and check)"
   # D13's band judges the loop, not this change: past it, the slowest step is the finding to fix
-  if [ "$med" -gt 600 ]; then echo "ship: RED — the median of the last five landings is ${med}s from ship start to landed, past D13's band (a 300-s target, red past 600 s): find what slows the loop"
-  else echo "ship: median of the last five landings ${med}s from ship start to landed (D13: a 300-s target, red past 600 s)"; fi
+  if [ "$med" -gt 600 ]; then echo "ship: RED — the median of the last five landings is ${med}s from first commit to landed, past D13's band (a 300-s target, red past 600 s): find what slows the loop"
+  else echo "ship: median of the last five landings ${med}s from first commit to landed (D13: a 300-s target, red past 600 s)"; fi
   # the rebuild's src progress, dev/src_progress.sh's line the check's ratchet printed for this tree (L208, D40)
   # the lane's own branch follows when it is as ship found it: clean, and HEAD unmoved
   if [ "$(git -C "$lane" rev-parse HEAD)" = "$start" ] && [ -z "$(git -C "$lane" status --porcelain --untracked-files=no)" ]; then
