@@ -135,6 +135,12 @@ end
     # an entry of the class ids table: the constant i31 reference of the class id
     local ce = DD.build_integer_expression(DD.main_module(t), 7)
     @test ce isa W.WasmBuilder.InstructionsBuilder
+    # _lookupTarget: build makes no DynamicSelector (it rejects any dynamic call shape, none of which a
+    # Julia program has), so a lookup is WasmTarget's own defect, Internal
+    local ddt = DD.DynamicDispatchTable(t)
+    local ds = DD.DynamicSelector(Val(:_), DD.GetterCallShape(:x), W.WasmBuilder.define_function(DD.main_module(t).types[], IR.ValueType[], IR.ValueType[]))
+    local el = try; DD._lookup_target(ddt, ds, 0); nothing; catch x; x; end
+    @test el isa W.RejectionError && el.rejection isa W.Internal && occursin("no DynamicSelector", el.rejection.site)
 end
 
 # a numbered translator of `f`'s world (modules, closures and classes collected), whose admitted classes

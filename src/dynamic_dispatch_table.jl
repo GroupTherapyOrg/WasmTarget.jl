@@ -98,20 +98,14 @@ unique offsets; define the targets and class ids tables. A Julia program has no 
 end
 
 """
-The member a class's instance answers a dynamic selector with, or `nothing`. The top type and wasm
-types answer none. dart asks its class hierarchy for the class's member by the selector's name; a
-Julia method belongs to its generic function and is chosen by every argument's type, not by the
-receiver's class and a name, so the lookup has no answer from a call shape alone, and it rejects,
-located (no Julia program reaches it: the verified subset has no dynamic call).
+The member a class's instance answers a dynamic selector with, or `nothing`. dart's only caller is
+build, over the selectors it makes from the dynamic call shapes; a Julia program has none (Julia's
+trim verifier admits no dynamic call, D32), so build (dynamic_dispatch_table.dart:52, its first
+statement here) rejects any shape before it would make a DynamicSelector, and no DynamicSelector exists
+to look up: Internal.
 """
-@parity "dart2wasm/lib/dynamic_dispatch_table.dart:141 DynamicDispatchTable._lookupTarget" function _lookup_target(self::DynamicDispatchTable, selector::DynamicSelector, class_id::Int64)::Union{Core.MethodInstance,Nothing}
-    local translator = self.translator
-    local cls = translator.classes[][class_id + 1].cls
-    cls === nothing && return nothing
-    # We do not dyanmically dispatch on wasm objects, they are not Dart objects
-    is_wasm_type(translator, cls) && return nothing
-    reject!(Unquarantined("src/dynamic_dispatch_table.jl _lookupTarget: the method $cls answers $(sprint(show, selector)) with, which Julia chooses by every argument's type"), "DynamicDispatchTable._lookupTarget")
-end
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:141 DynamicDispatchTable._lookupTarget" _lookup_target(self::DynamicDispatchTable, selector::DynamicSelector, class_id::Int64)::Union{} =
+    reject!(Internal("dart2wasm/lib/dynamic_dispatch_table.dart:141 DynamicDispatchTable._lookupTarget: a dynamic selector's target, where build makes no DynamicSelector: Julia's trim verifier admits no dynamic call (D32)"), "DynamicDispatchTable._lookupTarget")
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:194 DynamicDispatchTable.output" function output(self::DynamicDispatchTable)::Nothing
     output_target_table(self)
