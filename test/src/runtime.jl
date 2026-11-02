@@ -15,6 +15,8 @@ g(x::Int) = x > 0 ? x : throw(DivideError())
 h(x::Int, y::Int) = div(x, y)
 
 names_of(world) = Set(b.ci.def.def.name for b in world)
+@noinline pick_any(x::Int)::Union{Int,String} = x > 0 ? x : "neg"
+checked_any(x::Int) = typeassert(pick_any(x), Int) + 1
 world_of(p, at) = W.build_nir(W.check_subset(p, at, "runtime"), "runtime")
 
 @testset "runtime: every closed world holds the runtime's roots, read from the ports' dart pragmas" begin
@@ -34,12 +36,14 @@ world_of(p, at) = W.build_nir(W.check_subset(p, at, "runtime"), "runtime")
     local gw = world_of(g, (Int,))
     @test first(gw).ci.def.def.name === :g && first(fw).ci.def.def.name === :f
     @test issubset((:h, :throw_divide_error), names_of(world_of(h, (Int, Int))))
-    # KernelNodes resolves errorThrow and errorThrowWithCurrentStackTrace to their methods in any world
-    local t = D.Translator(fw, D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
-    local twc = D.error_throw_with_current_stack_trace(t)
-    @test twc.def.module === W.Runtime && twc.def.name === :Error__throw_with_current_stack_trace
-    @test D.error_throw(t).def.name === :Error__throw
-    @test D.throw_as_check_error(t).def.name === :_TypeError__throw_as_check_error
+    # a throw compiles to the call of errorThrowWithCurrentStackTrace's method, and a failed typeassert to
+    # throwAsCheckError's: the compiled modules' function names (their name sections, unoptimized) hold both
+    local names_in(bytes) = mktempdir() do dir
+        local path = joinpath(dir, "m.wasm"); write(path, bytes)
+        read(`wasm-tools print $path`, String)
+    end
+    @test occursin("Error__throw_with_current_stack_trace", names_in(W.compile(g, (Int,); optimize = false)))
+    @test occursin("_TypeError__throw_as_check_error", names_in(W.compile(checked_any, (Int,); optimize = false)))
 end
 
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))

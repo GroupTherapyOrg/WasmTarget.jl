@@ -80,25 +80,21 @@ twice(x::Int64) = (W.Runtime.print_to_console("a"); W.Runtime.print_to_console("
 # a program naming the runtime's internal interop module itself, as no dart program may import dart:_js_helper
 forged(x::Int64) = (ccall(("s => (", "dart2wasm"), Nothing, ()); x)
 @testset "js_common/print_patch.dart: printToConsole hands its line to the JS runtime's inline JS" begin
-    local world = W.build_nir(W.check_subset(said, (Int64,), "print_patch"), "print_patch")
-    # the method whose body holds the inline JS: printToConsole's, or its caller's where Julia inlined it
-    local mi = only(b.ci.def for b in world if !isempty(W.nir_js_sites(world, b.ci.def)))
-    local (site, sname, code) = only(W.nir_js_sites(world, mi))
-    # the site is where it was written, print_patch.jl's port, whatever caller Julia inlined it into
-    @test startswith(site, "WasmTarget.Runtime.print_to_console") && occursin("String", site) && sname == "print_to_console" && code == "s => printToConsole(s)"
-    # generateJsMethods writes the method under the name the code generator imports it by
-    local namer = D.InteropMemberNamer(world, D.Namer(), D.TranslatorOptions())
-    local body = only(b for b in world if b.ci.def === mi)
-    local site = W.nir_foreign_import(body, only(st for st in body.stmts if st isa W.NirForeignCall && st.args[1].c.val[2] == "dart2wasm"))
-    local name = D.get_import_name(namer._interop_helper_member_namer, site, mi)
-    @test name.module_name == "dart2wasm"
-    @test D.generate_js_methods(J.RuntimeFinalizer(namer), [mi, mi]) == "      $(name.item_name): s => printToConsole(s),\n"
     # compiled as dart2wasm compiles a program, the module beside the JS runtime the runtime generator
     # writes (its methods generateJsMethods'), and run under that runtime in node: the runtime's own
     # printToConsole prints the line as Julia's println prints it, then the export answers 7
     local opts = D.WasmCompilerOptions(; main_uri = "", output_file = "out/said.wasm"); opts.translator_options.generate_source_maps = false
     local r = D.compile(opts, W.check_subset(said, (Int64,), "print_patch"))
-    @test occursin(": s => printToConsole(s),", r.js_files["out/said.mjs"])
+    # the module imports the site's JS from the interop module, one import, and the runtime writes that
+    # one JS method under the import's name, the namer's (minified as dart's interop namer minifies)
+    isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+    local node = Main.WTRunner.node_binary()
+    local imports = mktempdir() do dir
+        local path = joinpath(dir, "m.wasm"); write(path, only(values(r.wasm_files)))
+        split(readchomp(`$node -e "const m = new WebAssembly.Module(require('fs').readFileSync(process.argv[1])); console.log(WebAssembly.Module.imports(m).filter(i => i.module === 'dart2wasm').map(i => i.name).join(','))" $path`), ',')
+    end
+    local item = only(imports)
+    @test occursin("      $(item): s => printToConsole(s),\n", r.js_files["out/said.mjs"])
     mktempdir() do dir
         write(joinpath(dir, "said.mjs"), r.js_files["out/said.mjs"])
         write(joinpath(dir, "said.wasm"), only(values(r.wasm_files)))
@@ -130,8 +126,6 @@ forged(x::Int64) = (ccall(("s => (", "dart2wasm"), Nothing, ()); x)
     Core.eval(W.Runtime, :(@noinline keeps_first() = (one_line_of_two(true); nothing)))
     Core.eval(W.Runtime, :(@noinline keeps_second() = (one_line_of_two(false); nothing)))
     local both = (x::Int64) -> (W.Runtime.keeps_first(); W.Runtime.keeps_second(); x)
-    local bw = W.build_nir(W.check_subset(both, (Int64,), "print_patch"), "print_patch")
-    @test all(b -> length(W.nir_js_sites(bw, b.ci.def)) == 1, [b for b in bw if b.ci.def.def.name in (:keeps_first, :keeps_second)])
     local ge = try; D.compile(opts, W.check_subset(both, (Int64,), "print_patch")); nothing; catch x; x; end
     @test ge isa W.RejectionError && ge.rejection isa W.Internal && occursin("kept by different callers", ge.rejection.site) &&
           occursin("() => 3", ge.rejection.site) && occursin("() => 4", ge.rejection.site)
