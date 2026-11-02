@@ -586,10 +586,9 @@ end
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f isa Core.IntrinsicFunction || return nothing
     # an operation on a 128-bit integer, an operand's or a conversion's result: its two i64 halves
-    local wide(T::Type) = T isa DataType && T <: Base.BitInteger && sizeof(T) == 16
     local converted = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
-    (any(a -> wide(dart_type_of(self, a)), args) ||
-     converted isa DataType && converted <: Type && length(converted.parameters) == 1 && converted.parameters[1] isa Type && wide(converted.parameters[1])) &&
+    (any(a -> type_expand_integer(dart_type_of(self, a)), args) ||
+     converted isa DataType && converted <: Type && length(converted.parameters) == 1 && converted.parameters[1] isa Type && type_expand_integer(converted.parameters[1])) &&
         return generate_static_intrinsic(self, Val(:int128), f, args)
     local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
     type_operand isa DataType && type_operand <: Type && length(type_operand.parameters) == 1 && type_operand.parameters[1] isa Type &&
@@ -1490,7 +1489,7 @@ end
     end
     first_type === String && second_type === String && return generate_static_intrinsic(self, Val(:string_egal), first, second)
     # two of one 128-bit integer class: their bits, both halves equal (the int128 arm's eq_int)
-    first_type === second_type && first_type isa DataType && first_type <: Base.BitInteger && sizeof(first_type) == 16 &&
+    first_type === second_type && type_expand_integer(first_type) &&
         return generate_static_intrinsic(self, Val(:int128), Core.Intrinsics.eq_int, args)
     # a value of a type below DataType (DataType itself, Type{X} of a DataType X, a Union of such) is a DataType
     local a_data_type(T::Type) = T !== Union{} && T <: DataType
@@ -2020,7 +2019,6 @@ end
     local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
     local I = Core.Intrinsics
     local at = "$(code_gen.enclosing_member): Julia's $f on a 128-bit integer"
-    local wide(T::Type) = T isa DataType && T <: Base.BitInteger && sizeof(T) == 16
     local narrow(T::Type) = generate_static_intrinsic(Val(:narrow), T)
     local put_form(T::Type) = generate_static_intrinsic(Val(:put_form), b, T)
     local unsigned_view(T::Type) = generate_static_intrinsic(Val(:unsigned_view), b, T)
@@ -2064,7 +2062,7 @@ end
         to isa Type || return nothing
         local x = args[2]
         local from = dart_type_of(self, x)
-        if (f === I.sext_int || f === I.zext_int) && wide(to) && from isa DataType && (from <: Base.BitInteger || from === Bool) && sizeof(from) <= 8
+        if (f === I.sext_int || f === I.zext_int) && type_expand_integer(to) && from isa DataType && (from <: Base.BitInteger || from === Bool) && sizeof(from) <= 8
             # the operand in its wasm type, a narrow integer extended within it
             local from_w = type_of_exp(self, x)
             translate_expression(code_gen, x, from_w)
@@ -2072,12 +2070,12 @@ end
             local op = add_local(code_gen, from_w)
             WasmBuilder.local_set(b, op)
             return make(to, f === I.sext_int ? LLVM.expand_int_res_sign_extend(b, op) : LLVM.expand_int_res_zero_extend(b, op))
-        elseif f === I.trunc_int && wide(from) && to isa DataType && to <: Base.BitInteger && sizeof(to) <= 8
+        elseif f === I.trunc_int && type_expand_integer(from) && to isa DataType && to <: Base.BitInteger && sizeof(to) <= 8
             local to_w = translate_type(t, to)
             LLVM.expand_int_op_truncate(b, expanded(x), to_w)
             narrow(to) && put_form(to)
             return to_w
-        elseif f === I.bitcast && wide(from) && wide(to)
+        elseif f === I.bitcast && type_expand_integer(from) && type_expand_integer(to)
             return make(to, expanded(x))
         end
         return nothing
@@ -2086,7 +2084,7 @@ end
                f === I.sle_int ? :SETLE : f === I.ule_int ? :SETULE : nothing
     if length(args) == 2 && cc !== nothing
         local T = dart_type_of(self, args[1])
-        wide(T) && dart_type_of(self, args[2]) === T || return nothing
+        type_expand_integer(T) && dart_type_of(self, args[2]) === T || return nothing
         local (l, r) = (args[1], args[2])
         # SimplifySetCC: a literal on the left moves right, its condition swapped (getSetCCSwappedOperands)
         if literal(l) && !literal(r)
@@ -2096,7 +2094,7 @@ end
         WasmBuilder.local_get(b, LLVM.expand_int_op_setcc(b, expanded(l), expanded(r), cc))
         return i32
     end
-    if length(args) == 2 && (f === I.shl_int || f === I.lshr_int || f === I.ashr_int) && wide(dart_type_of(self, args[1]))
+    if length(args) == 2 && (f === I.shl_int || f === I.lshr_int || f === I.ashr_int) && type_expand_integer(dart_type_of(self, args[1]))
         local T = dart_type_of(self, args[1])::DataType
         local A = dart_type_of(self, args[2])
         (A isa DataType && (A <: Base.BitInteger || A === Bool)) || return nothing
@@ -2114,7 +2112,7 @@ end
         # the amount converted to 128 bits and truncated to the libcall's i32: its low 64 bits, held in
         # an i64; and y >= 128 compared in y's own type
         local amt = add_local(code_gen, i64)
-        local big = if wide(A)
+        local big = if type_expand_integer(A)
             local yh = expanded(y)
             sd_get(b, yh[1]); WasmBuilder.local_set(b, amt)
             LLVM.expand_int_op_setcc(b, yh, (Int64(128), Int64(0)), :SETUGE)
@@ -2135,7 +2133,7 @@ end
         return make(T, LLVM.split_res_select(b, big, other(), shifted))
     end
     local T = dart_type_of(self, args[1])
-    wide(T) && all(a -> dart_type_of(self, a) === T, args) || return nothing
+    type_expand_integer(T) && all(a -> dart_type_of(self, a) === T, args) || return nothing
     local T_ = T::DataType
     if length(args) == 2 && (f === I.add_int || f === I.sub_int)
         local (l, r) = (args[1], args[2])

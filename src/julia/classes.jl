@@ -40,7 +40,7 @@ each of which visitInstanceConstant rejects, found in `T`'s parameters and in th
             return nothing
         end
         local c = typeof(x)
-        isprimitivetype(c) && return !haskey(builtins, c) && !(c <: Base.BitInteger && sizeof(c) == 16) ? Some(x) : nothing
+        isprimitivetype(c) && return !haskey(builtins, c) && !type_expand_integer(c) ? Some(x) : nothing
         # any other value is an instance constant of its class, which must be a class of the closed world
         # (a Vararg parameter's Core.TypeofVararg is none)
         return haskey(translator.class_info, c) ? nothing : Some(x)
@@ -353,6 +353,17 @@ not declared `const`); for a primitive class, index 0, its one `value`, the clas
     mutable::Bool
 end
 
+"""    type_expand_integer(T) -> Bool
+
+Whether LLVM's type legalizer expands a value of Julia's type `T` into two halves: an integer wider than
+the target's largest integer register, i64 on wasm (llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp:64),
+takes TypeExpandInteger. Julia's integers that wide are its 128-bit Base.BitInteger types, Int128 and
+UInt128, whose class is the struct of their two i64 halves (class_instance_fields); another 128-bit
+primitive type has no such class yet and rejects, located, where it is translated."""
+@quarantine "llvm/lib/CodeGen/TargetLoweringBase.cpp:1726 TargetLoweringBase::computeRegisterProperties gives every integer type wider than the largest integer register the action TypeExpandInteger, two halves of the next narrower type" Base.BitInteger function type_expand_integer(@nospecialize(T::Any))::Bool
+    return T isa DataType && T <: Base.BitInteger && 8 * sizeof(T) > 64
+end
+
 """
     class_instance_fields(c, at) -> Vector{ClassField}
 
@@ -376,7 +387,7 @@ allocation may leave undefined whose type admits `nothing`, dart's late lowering
     # a 128-bit integer (Int128, UInt128): its two 64-bit halves, LLVM's legalization of an i128 on a
     # 64-bit target (llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp, ExpandIntegerResult:
     # the low and the high i64), each a field of the class's struct, as the value is one wasm value
-    isprimitivetype(c) && c <: Base.BitInteger && sizeof(c) == 16 &&
+    isprimitivetype(c) && type_expand_integer(c) &&
         return ClassField[ClassField(c, 0, "lo", UInt64, false), ClassField(c, 0, "hi", UInt64, false)]
     isprimitivetype(c) && return ClassField[ClassField(c, 0, "value", c, false)]
     Base.iskindtype(c) && return _kind_instance_fields(c, at)

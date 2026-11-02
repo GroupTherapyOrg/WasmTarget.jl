@@ -1026,7 +1026,7 @@ the representation here is a reference to the join's struct, each value boxed in
             return type_with_nullability(box, nullable)
         end
         # a 128-bit integer is its class's struct of two i64 halves (src/julia/classes.jl), a regular class
-        unbox && !(cls <: Base.BitInteger && sizeof(cls) == 16) &&
+        unbox && !type_expand_integer(cls) &&
             reject!(Unquarantined("src/translator.jl translateStorageType: the primitive class $cls, with no wasm representation"), at)
     end
     # Regular class.

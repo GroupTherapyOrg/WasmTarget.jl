@@ -807,7 +807,7 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
     v isa WasmArrayLiteral && return _make_wasm_array_literal(self, constant; mutable_ = v.mutable)
     local cls = typeof(v)
 
-    isprimitivetype(cls) && !(cls <: Base.BitInteger && sizeof(cls) == 16) &&
+    isprimitivetype(cls) && !type_expand_integer(cls) &&
         reject!(Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation"), at)
     local info = get(translator.class_info, cls, nothing)
     info === nothing && reject!(Internal("$at: the class $cls of the constant has no class info"), at)
@@ -849,9 +849,13 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             else
                 reject!(Internal("$at: the Memory field $(field.name), not classes.jl's data or data#isSet"), at)
             end
-        elseif isprimitivetype(cls) && (field.name == "lo" || field.name == "hi")
-            # a 128-bit integer's halves (src/julia/classes.jl), its low and high 64 bits
-            field.name == "lo" ? v % UInt64 : (v >> 64) % UInt64
+        elseif type_expand_integer(cls)
+            # a 128-bit integer's halves (src/julia/classes.jl), its class's two fields in order, each
+            # the half LLVM's ExpandIntRes_Constant splits off the literal
+            local halves = class_instance_fields(cls, at)
+            local k = findfirst(==(field), halves)
+            k === nothing && reject!(Internal("$at: the field $(field.name) of $cls is neither of its halves"), at)
+            reinterpret(UInt64, LLVM.expand_int_res_constant(v)[k])
         elseif field.index == 0 && haskey(owner, field)
             # a field's set flag (src/julia/classes.jl class_is_set_field): whether Julia holds a value in it
             isdefined(v, owner[field].index)
