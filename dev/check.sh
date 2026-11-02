@@ -188,24 +188,37 @@ if [ -n "$cfgs" ]; then
 fi
 wall=$(( $(date +%s) - s0 ))
 # D14's band judges the check's own cost, never the machine's (A53E1): each stage's instructions retired
-# (/usr/bin/time -l), which neither the core it ran on nor another job's load moves, read as seconds of a
-# performance core at that stage's rate, measured on a995ed8a's green check with the performance cores
+# (/usr/bin/time -l), which another job's load does not move but an efficiency core reads low for some instruction
+# mixes (ECORE_SLOWDOWN below bounds it), read as seconds of a performance core at that stage's rate, measured on a995ed8a's green check with the performance cores
 # its own (ratchet 155 G in 65 CPU-s, the src shards 1195 G in 226: one CPU-s per RATE_* G). The CPU
 # seconds a stolen or efficiency core inflates (a probe held a performance core an hour, 2026-10-28:
 # the same 417 G read 77 CPU-s, then 101) print beside, unjudged. The load stage's precompile runs in a
 # child process whose instructions rusage does not report, so its whole tree is counted (dev/tree_instructions.jl).
 RATE_RATCHET=2.4; RATE_SRC=5.3
+# the load's rate, its own: the precompile's image codegen runs on several threads at a high instruction rate. Measured
+# on three green src checks' load stages on performance cores, 2026-11-01: 08bf22f5 185 G in 16 CPU-s (11.6),
+# 261493b5 186 G in 15 (12.4), 7a2f804e 184 G in 15 (12.3). Intent: a performance core's seconds; band: the lowest of
+# the three, so the load reads high rather than low; a load reading outside 11-13 G a CPU-s on a performance core
+# re-measures it
+RATE_LOAD=11.6
+# each stage is judged at the larger of its instructions at its rate and its CPU seconds over ECORE_SLOWDOWN. Apple's
+# counters read fewer instructions on an efficiency core for some instruction mixes (a Julia hash loop, compiled once:
+# 12.2 G on a performance core, 6.2 G on an efficiency core; a C multiply-add loop 10.0 G and 10.1 G), so a stage there
+# could read low; an efficiency core runs Julia's work at least 1.56 times slower (a julia tree running a
+# 4x10^8-iteration loop, four runs on a quiet machine: 1.56 to 1.73; dev/tree_instructions.jl's plant tree, a 10^8 loop,
+# 1.8 to 1.9; the load 3.0), so its CPU seconds over 1.4
+# read high there, never low, and on a performance core they stay under its instructions at its rate. Intent: never
+# read low; band: the measured minimum, 1.56; the counter's plant prints the ratio it measures, unjudged, since taskpolicy
+# does not hold work on the efficiency cores (dev/tree_instructions.jl)
+ECORE_SLOWDOWN=1.4
 cpu() { awk 'NR == 1 { printf "%d", $3 + $5 }' ".wtd/$1.time"; }
 gi() { awk '/instructions retired/ { printf "%d", $1 / 1e9 }' ".wtd/$1.time"; }
 # rusage reports the instructions of the measured process alone, never its children (node, wasm-opt,
 # the ratchet's git: A54E1), while its CPU seconds hold them all; so a stage is judged at the larger of its
-# instructions at the measured rate and half its CPU seconds, an efficiency core's worst slowdown
-ps_of() { awk -v r="$2" '/instructions retired/ { g = $1 / 1e9 / r } NR == 1 { c = ($3 + $5) / 2 } END { printf "%d", (g > c ? g : c) }' ".wtd/$1.time"; }
-# the load at the shards' rate, from its tree's instructions (dev/tree_instructions.jl), or its CPU seconds where they
-# are more. A STOPGAP (D6, D20): the tree is counted exactly, but Apple's counters read up to about a third fewer
-# instructions on an efficiency core, so a load on a busy machine could read low and pass on noise (D9, D17); CPU
-# seconds read high there, never low. Its exit: the commit that settles the efficiency-core skew for every stage
-c_load=$(awk -v r="$RATE_SRC" -v c="$(cpu load)" '{ g = $1 / r; printf "%d", (g > c ? g : c) }' .wtd/load.gi); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
+# instructions at the measured rate and its CPU seconds over ECORE_SLOWDOWN
+ps_of() { awk -v r="$2" -v e="$ECORE_SLOWDOWN" '/instructions retired/ { g = $1 / 1e9 / r } NR == 1 { c = ($3 + $5) / e } END { printf "%d", (g > c ? g : c) }' ".wtd/$1.time"; }
+# the load at its rate, from its tree's instructions (dev/tree_instructions.jl), by the same rule
+c_load=$(awk -v r="$RATE_LOAD" -v e="$ECORE_SLOWDOWN" -v c="$(cpu load)" '{ g = $1 / r; f = c / e; printf "%d", (g > f ? g : f) }' .wtd/load.gi); p_ratchet=$(ps_of ratchet $RATE_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"
 for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
 echo "check: ${path} s on the critical path (load ${c_load} from $(awk '{ printf "%d", $1 }' .wtd/load.gi) G, ratchet ${p_ratchet}, src shards${shards}, from G instructions $(gi ratchet)$(for k in $(seq 1 $SHARDS); do printf ' %s' "$(gi "src_tests.$k")"; done)); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
