@@ -296,7 +296,6 @@ julia/parity.jl check_quarantine
 julia/parity.jl check_quarantine_pinned
 julia/parity.jl check_typed_fields
 julia/parity.jl check_typed_signatures
-julia/parity.jl construction_check(::Val{:check_anchors_resolve})::Int
 julia/parity.jl construction_check(::Val{:check_mirrors})::Int
 julia/parity.jl construction_check(::Val{:check_typed_fields})::Int
 julia/parity.jl construction_check(::Val{:check_typed_signatures})::Int

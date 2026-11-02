@@ -530,7 +530,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types", "julia/base/hashing", "julia/base/expr", "julia/src/init", "julia/src/precompile", "julia/Compiler/src/effects",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3", "julia/base/floatfuncs", "julia/base/experimental", "julia/base/float",
     "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation", "julia/src/method", "julia/Compiler/src/ssair/show", "julia/Compiler/src/verifytrim", "julia/src/gf", "julia/src/subtype",
-    "julia/base/loading", "julia/base/stacktraces",
+    "julia/base/loading", "julia/base/stacktraces", "julia/base/libc",
 )
 
 """
@@ -758,7 +758,7 @@ Julia's differs: it has no per-file namespace, so a prefix is a module, and a fi
 
 # the module an LLVM unit loads into: LLVM's WebAssembly backend is one namespace, llvm::WebAssembly,
 # and compiler-rt's builtins, the routines its libcalls name, load beside it
-@quarantine "Julia has no per-file namespace; LLVM's ports share one module, as the backend's files share the namespace WebAssembly (llvm/lib/Target/WebAssembly/WebAssemblyUtilities.cpp:41 WebAssembly::mayThrow)" Base.Pair const LLVM_MODULES = (
+@quarantine "Julia has no per-file namespace; LLVM's ports share one module, as Julia keeps its methods over a foreign C library in one module of their own (precedent(julia: base/libc.jl:3 Libc), libc's interface)" Base.Pair const LLVM_MODULES = (
     "llvm/" => (:LLVM,),
     "compiler-rt/" => (:LLVM,),
 )
@@ -952,7 +952,7 @@ end
 
 # the source file of a dart file of the pin table, relative to src/: dart2wasm's lib/<f>.dart is
 # <f>.jl, wasm_builder's lib/<f>.dart and lib/src/<f>.dart are wasm_builder/<f>.jl (dev/MARCH.md 1.A4)
-@quarantine "a Julia package's files sit under one src/, its entry src/<name>.jl (precedent(julia: base/loading.jl:931 entry_path)), where the sdk keeps two packages' lib/ and llvm-project its llvm/ and compiler-rt/" Base.match function _jl_rel(dart::String)::String
+@quarantine "WasmTarget's own map from a pinned source file to its port's file under src/ (dev/MARCH.md 1.A4), where the sdk keeps two packages' lib/ and llvm-project its llvm/ and compiler-rt/: no ecosystem defines the map, so it has no counterpart (dev/quarantine_no_counterpart.txt)" Base.match function _jl_rel(dart::String)::String
     # an LLVM unit's port is src/llvm/<its name, WebAssembly's prefix dropped, snake_case>.jl
     local u = match(r"^llvm/(?:[\w]+/)*(?:WebAssembly)?(\w+)$", dart)
     u === nothing || return "llvm/" * snake(u[1]) * ".jl"
@@ -1174,7 +1174,7 @@ end
 
 # an anchor of either pin: a dart file under pkg/ (1), or an LLVM, compiler-rt or Julia unit (2) and its
 # extension (3); its line (4); its symbol (5), dart's X or X.m, or C++'s X or X::m
-@quarantine "an anchor is a string naming a file, a line and the symbol declared there, the parts Julia's own record of a source position holds (precedent(julia: base/stacktraces.jl:51 StackFrame)), which Julia reads with a regex where dart's analyzer and clang have a name" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia|compiler-rt)/[\w/]+)\.(cpp|c|h|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
+@quarantine "an anchor names a pinned file, a line and the symbol declared there, read by one regex, as dart's debug adapter reads a stack frame's file and line from a line of text (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: an anchor names a declaration at a pin, not a frame of a running program" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia|compiler-rt)/[\w/]+)\.(cpp|c|h|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
 
 """
     Anchor
@@ -1201,7 +1201,7 @@ end
 The parts of `s`, an anchor of either pin; nothing when it reads as neither
 "<file>.dart:<line> <X or X.m>" nor "llvm/<unit>.<cpp|h>:<line> <X or X::m>" nor
 "compiler-rt/<unit>.<c|h>:<line> <X>"."""
-@quarantine "an anchor's forms, one per pin, read by one regex into the file, line and symbol a source position holds (precedent(julia: base/stacktraces.jl:51 StackFrame))" Base.match function parse_anchor(s::AbstractString)::Union{Anchor,Nothing}
+@quarantine "an anchor's forms, one per pin, read by one regex into its file, line and symbol, as dart's debug adapter parses a stack frame's location from its pattern's match (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:99 _parseStackFrame)); Julia differs: a part that does not read is a refusal, not a frame skipped" Base.match function parse_anchor(s::AbstractString)::Union{Anchor,Nothing}
     local m = match(ANCHOR_RX, s)
     m === nothing && return nothing
     local sym = String(m[5])
@@ -1421,12 +1421,14 @@ the load checks every anchor, both where the pinned checkout exists.
 end
 # the oracle's assertion: run when the package loads where the pinned checkout exists
 # (src/WasmTarget.jl), and required by the ratchet's L213, which a missing checkout fails
-@quarantine "the oracle's assertion, run when the package loads" Base.Val function construction_check(::Val{:check_anchors_resolve})::Int
+@quarantine "the oracle's assertion over WasmTarget's own pin tables, debt list and exemption list, formats no ecosystem defines, so it has no counterpart (dev/quarantine_no_counterpart.txt)" Base.Val function construction_check(::Val{:check_anchors_resolve})::Int
     local sdk = _pin_sdk()
     sdk === nothing && throw(ConstructionViolation("check_anchors_resolve",
         "no checkout of dart-lang/sdk at $PIN at ~/.cache/wasmtarget/dart-sdk: bash dev/fetch_dart_sdk.sh"))
-    return check_anchors_resolve(@__MODULE__, sdk) +
-           check_quarantine_pinned(@__MODULE__, SRC, sdk, _quarantine_debt(joinpath(dirname(SRC), "dev", "quarantine_unpinned.txt")))
+    local debt = _quarantine_debt(joinpath(dirname(SRC), "dev", "quarantine_unpinned.txt"))
+    local exempt = check_no_counterpart(@__MODULE__, SRC, sdk, joinpath(dirname(SRC), "dev", "quarantine_no_counterpart.txt"), debt)
+    return check_anchors_resolve(@__MODULE__, sdk) + check_precedent_kinds(@__MODULE__, SRC) +
+           check_quarantine_pinned(@__MODULE__, SRC, sdk, vcat(debt, exempt))
 end
 
 # ---- each @quarantine ports a pinned source (dev/LEDGER.md D45, L213) --------------------------------
@@ -1441,7 +1443,7 @@ end
 # adds a line, so the list only shrinks (D20).
 
 # the anchors a reason cites, each form of the pins'
-@quarantine "an anchor in prose is found by its pins' forms, a file, a line and the symbol declared there (precedent(julia: base/stacktraces.jl:51 StackFrame)), read with a regex" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia|compiler-rt)/[\w/]+\.(?:cpp|c|h|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
+@quarantine "an anchor in a reason's prose is found by its pins' forms, as dart's debug adapter finds a stack frame's location inside a line of output (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:35 parseDartStackFrame)), read with a regex; Julia differs: every anchor of the prose is read, not the first" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia|compiler-rt)/[\w/]+\.(?:cpp|c|h|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
 @quarantine "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:\.(?:[A-Za-z_$][\w$]*|\[\]=?|[-+*/%<>=~&|^]+))?))?"
 @quarantine "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*!?(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
 
@@ -1565,6 +1567,97 @@ Julia's differs: no keyword marks Julia-only code, so the reason is read where t
     end
     empty!(_PIN_LINES)
     isempty(out) || throw(ConstructionViolation("check_quarantine_pinned", join(sort!(out), "; ")))
+    return 0
+end
+
+# ---- the definitions no ecosystem has a counterpart for (A90E1, dev/LEDGER.md D20) -----------------------
+# WasmTarget's own formats (its map from a pinned file to its port, its lists, its pinning rule) are defined by
+# no ecosystem, so a reader of one has no counterpart to pin, and a near-miss pin is no port. They are an exact allowlist, dev/quarantine_no_counterpart.txt, one line per
+# definition, `<its debt-list key> — <why no counterpart exists>`: a line with no reason, a line naming no
+# quarantined definition, one naming a definition whose reason pins a source (it has a counterpart, so it
+# is pinned, never listed), a line written twice, and a key also on the debt list each refuse the load;
+# the ratchet's L227 keeps the list shrink-only once it exists (the lead's ruling on A90E1).
+
+# the keys the exemption list at `path` admits, one per definition, or a refusal listing each line that fails;
+# its lines `<key> — <reason>` (the reason "" where a line gives none), comments and blank lines aside
+@quarantine "WasmTarget's exemption list is a text file in its own format over its own debt-list keys, which no ecosystem defines, so its reader and check have no counterpart (dev/quarantine_no_counterpart.txt)" Base.readlines function check_no_counterpart(mod::Module, src::String, sdk::Union{String,Nothing}, path::String, debt::Vector{String})::Vector{String}
+    local lines = Tuple{String,String}[]
+    for l in (isfile(path) ? readlines(path) : String[])
+        local t = strip(l)
+        (isempty(t) || startswith(t, "#")) && continue
+        local kr = split(t, " — "; limit = 2)
+        push!(lines, (String(strip(kr[1])), length(kr) == 2 ? String(strip(kr[2])) : ""))
+    end
+    local entries = [e for e in REGISTRY if e isa QuarantineEntry && _within(e.mod, mod) && _inside(string(e.file), src)]
+    local count = Dict{String,Int}()
+    foreach(e -> (k = _quarantine_key(e, src); count[k] = get(count, k, 0) + 1), entries)
+    local bykey = Dict{String,Vector{QuarantineEntry}}()
+    foreach(e -> push!(get!(bykey, _quarantine_key(e, src, count), QuarantineEntry[]), e), entries)
+    local out, admitted, seen = String[], String[], Set{String}()
+    local list = "dev/quarantine_no_counterpart.txt"
+    for (k, why) in lines
+        k in seen && (push!(out, "$list lists $k twice"); continue)
+        push!(seen, k)
+        isempty(why) && (push!(out, "$list lists $k with no reason: `$k — <why no counterpart exists>`"); continue)
+        k in debt && (push!(out, "$list lists $k, which dev/quarantine_unpinned.txt lists too: one list names a definition"); continue)
+        local es = get(bykey, k, QuarantineEntry[])
+        isempty(es) && (push!(out, "$list lists $k, which names no quarantined definition: delete the line"); continue)
+        any(e -> _reason_unpinned(e.necessity, sdk) === nothing, es) &&
+            (push!(out, "$list lists $k, whose reason pins a source: a definition with a counterpart is pinned, never listed; delete the line"); continue)
+        append!(admitted, fill(k, length(es)))
+    end
+    empty!(_PIN_LINES)
+    isempty(out) || throw(ConstructionViolation("check_no_counterpart", join(sort!(out), "; ")))
+    return admitted
+end
+
+# each quarantined definition whose every citation is a Julia definition (a precedent or an anchor in a unit of
+# Base or the compiler) of the other kind, a function citing only types or a type citing only functions: its
+# counterpart is a near miss, a record cited for its parser (A90E1); a reason that cites one definition of
+# its own kind, or a source whose kind is not read here (a dart, LLVM or C citation), cites a counterpart
+# beside the records it names. Refused, listing each
+@quarantine "a citation's kind is read for WasmTarget's own pinning rule, which no ecosystem defines, so it has no counterpart (dev/quarantine_no_counterpart.txt)" Base.Meta.parse function check_precedent_kinds(mod::Module, src::String, cpin::Function = _c_pin_checkout)::Int
+    local jl = cpin(:julia)
+    jl === nothing && return 0
+    local out = String[]
+    for e in REGISTRY
+        e isa QuarantineEntry && _within(e.mod, mod) && _inside(string(e.file), src) || continue
+        local form = split(chopprefix(e.identity, join(fullname(e.mod), ".") * " "), ' '; limit = 2)
+        local kind = form[1] in ("function", "macro") || (form[1] == "=" && occursin('(', form[2])) ? :function :
+                     form[1] in ("struct", "abstract", "primitive") ? :type : nothing
+        kind === nothing && continue
+        # a citation whose kind is not read here (another ecosystem's, a C unit's, a dart path) may be the counterpart
+        local unread = any(m -> m.captures[1] != "julia", eachmatch(REASON_PRECEDENT_RX, e.necessity)) ||
+                       !isempty(collect(eachmatch(REASON_PATH_RX, e.necessity)))
+        local cites = String[]
+        for m in eachmatch(REASON_PRECEDENT_RX, e.necessity)
+            m.captures[1] == "julia" && m.captures[4] !== nothing && push!(cites, "$(m.captures[2]):$(m.captures[3])")
+        end
+        for m in eachmatch(REASON_ANCHOR_RX, e.necessity)
+            local a = parse_anchor(m.captures[1])
+            a !== nothing && a.pin === :julia && endswith(a.file, ".jl") ? push!(cites, "$(a.file):$(a.line)") : (unread = true)
+        end
+        (unread || isempty(cites)) && continue
+        local others = String[]
+        local own = false
+        for c in cites
+            local path, ln = rsplit(c, ':'; limit = 2)
+            local file = joinpath(jl, path)
+            local lines = isfile(file) ? get!(() -> readlines(file), _PIN_LINES, file) : String[]
+            local n = parse(Int, ln)
+            n <= length(lines) || (own = true; break)      # unread here; check_quarantine_pinned refuses it
+            local def = first(Meta.parse(join(lines[n:end], "\n"), 1; raise = false))
+            while Meta.isexpr(def, :macrocall) && def.args[1] in _TRANSPARENT_MACROS
+                def = def.args[end]
+            end
+            local ck = Meta.isexpr(def, (:function, :macro)) || (Meta.isexpr(def, :(=)) && _call(def.args[1]) !== nothing) ? :function :
+                       Meta.isexpr(def, (:struct, :abstract, :primitive)) ? :type : nothing
+            ck === nothing || ck === kind ? (own = true; break) : push!(others, "julia/$c, a $ck")
+        end
+        own || push!(out, "$(basename(string(e.file))):$(e.first) $(join(e.names, ",")): a $kind whose every citation is of the other kind ($(join(others, "; "))); a counterpart is a definition of its own kind, never a near miss (a record cited for its parser)")
+    end
+    empty!(_PIN_LINES)
+    isempty(out) || throw(ConstructionViolation("check_precedent_kinds", join(sort!(out), " | ")))
     return 0
 end
 

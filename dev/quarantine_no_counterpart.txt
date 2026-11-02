@@ -1,0 +1,11 @@
+# dev/quarantine_no_counterpart.txt — the @quarantine definitions no ecosystem has a counterpart for
+# (A90E1, dev/LEDGER.md D20; L213's check_no_counterpart, src/julia/parity.jl): each reads or checks one of
+# WasmTarget's own formats, which no ecosystem defines, so no near 1:1 match exists to pin, and a near-miss
+# pin is no port. One line per definition, `<its debt-list key> — <why no counterpart exists>`. The list is
+# exact: a line with no reason, a line naming no quarantined definition, one naming a definition whose
+# reason pins a source, a line written twice and a key also on dev/quarantine_unpinned.txt each refuse the
+# load, and the ratchet's L227 refuses a change that adds a line once the file exists, so it only shrinks.
+julia/parity.jl _jl_rel — WasmTarget's own map from a pinned source file to its port's file under src/ (dev/MARCH.md 1.A4); no ecosystem defines it
+julia/parity.jl check_no_counterpart — reads and checks this list, WasmTarget's own format over its own debt-list keys
+julia/parity.jl construction_check(::Val{:check_anchors_resolve})::Int — runs the oracle's checks over WasmTarget's own pin tables, debt list and this list
+julia/parity.jl check_precedent_kinds — checks WasmTarget's own pinning rule (a counterpart is a definition of its own kind) over its reasons' citations
