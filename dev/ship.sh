@@ -8,6 +8,14 @@
 # side by side only queued for the one slot and then re-checked under the lock when another lane
 # landed meanwhile, two checks a landing; waiting lanes keep working in their own trees.
 set -uo pipefail
+# a climb agent never lands: dev/climb/climb.py runs every agent with WT_CLIMB_AGENT set, and lands only after its own
+# measurement and review (dev/climb/HILL.md G5)
+[ -n "${WT_CLIMB_AGENT:-}" ] && { echo "ship: REFUSED — a climb agent never lands; the driver does (dev/climb/HILL.md)"; exit 2; }
+# … and a climb slot lands only when the driver ships it: a process without the agent's env (a Julia session the
+# agent reaches through Kaimon, outside its sandbox) is refused by default on a slot's branch (climb.py's slot_ready)
+case "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" in
+  climb-[0-9]*|climb-audit|climb-judge) [ -n "${WT_CLIMB_DRIVER:-}" ] || { echo "ship: REFUSED — a climb slot lands only through dev/climb/climb.py"; exit 2; } ;;
+esac
 # a lane may run dev/autoship.sh beside its work, which calls this script whenever its committed work settles
 # the one march branch on origin (D23): every lane lands here; worktrees and their branches stay local
 MARCH=wt2

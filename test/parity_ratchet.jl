@@ -142,8 +142,8 @@ pointers, so it is short, everything it names exists, and it carries no status v
 this harness's output, where it is measured instead of remembered).
 """
 # AGENTS.md's size (A33E6): its hand-written lines, the ledger block's two markers among them, at most
-# AGENTS_HAND_CAP; the block at most one line per live requirement of dev/LEDGER.md; so the whole at
-# most AGENTS_HAND_CAP plus one line per live requirement, a bound that grows with the ledger and still
+# AGENTS_HAND_CAP; the block at most one line per requirement of dev/LEDGER.md; so the whole at
+# most AGENTS_HAND_CAP plus one line per requirement, a bound that grows with the ledger and still
 # shows a stale or duplicated row
 const AGENTS_HAND_CAP = 60
 function agents_size_faults(lines::AbstractVector{<:AbstractString}, live::Int)::Vector{String}
@@ -153,9 +153,9 @@ function agents_size_faults(lines::AbstractVector{<:AbstractString}, live::Int):
     local block = (b === nothing || e === nothing || e < b) ? 0 : e - b - 1
     local hand = length(lines) - block
     hand <= AGENTS_HAND_CAP || push!(out, "AGENTS.md has $hand hand-written lines (cap $AGENTS_HAND_CAP)")
-    block <= live || push!(out, "AGENTS.md's ledger block has $block lines for $live live requirements: one line each")
+    block <= live || push!(out, "AGENTS.md's ledger block has $block lines for $live requirements: one line each")
     length(lines) <= AGENTS_HAND_CAP + live ||
-        push!(out, "AGENTS.md has $(length(lines)) lines, past $AGENTS_HAND_CAP plus one per live requirement ($live)")
+        push!(out, "AGENTS.md has $(length(lines)) lines, past $AGENTS_HAND_CAP plus one per requirement ($live)")
     return out
 end
 
@@ -180,7 +180,7 @@ function agents_md_violations()::Vector{String}
     path = joinpath(ROOT, "AGENTS.md")
     isfile(path) || return push!(v, "AGENTS.md is missing")
     lines = _lines(path)
-    local live = count(ledger_live, first(ledger_rows(isfile(LEDGER_PATH) ? _text(LEDGER_PATH) : "")))
+    local live = length(first(ledger_rows(isfile(LEDGER_PATH) ? _text(LEDGER_PATH) : "")))
     append!(v, agents_size_faults(lines, live))
     for (i, l) in enumerate(lines)
         length(l) <= 100 || push!(v, "AGENTS.md:$i is $(length(l)) chars (cap 100)")
@@ -2285,8 +2285,6 @@ function ledger_rows(text::AbstractString)::Tuple{Vector{LedgerRow},Vector{Strin
     return rows, faults
 end
 
-ledger_live(r::LedgerRow)::Bool = !occursin(r"superseded: D\d+", r.by)
-
 # a number with its unit (seconds, minutes, lines, chars, a percentage, commits, landings, jobs,
 # times): a budget, a target, a cap or a limit, which states its intent and band (L205)
 const QUANT_RX = r"(?<![\w.])(?:[1-9]\d*(?:\.\d+)?|0\.\d+)(?:\s|-)?(?:s|seconds?|minutes?|min|ms|lines?|chars?|%|commits?|landings?|jobs?|times)(?!\w)"
@@ -2298,23 +2296,25 @@ function ledger_faults(rows::Vector{LedgerRow}, checks::AbstractSet{String}, cla
                        path_ok::Function, march::AbstractSet{String})::Vector{String}
     local out = String[]
     isempty(rows) && return push!(out, "dev/LEDGER.md holds no row")
-    local live = Set(r.id for r in rows if ledger_live(r))
     local served = Set{String}()
     for (i, r) in enumerate(rows)
-        r.n == i || push!(out, "row $i is $(r.id): the IDs run D1, D2, … in order, none deleted or renumbered")
+        # a replaced or dropped requirement leaves with its row (Dale 2026-11-04: "do NOT keep stale bloated rules
+        # around -- delete and do not mark superseded"); the IDs still only increase, so none is ever reused
+        i == 1 || r.n > rows[i-1].n || push!(out, "row $i is $(r.id) after $(rows[i-1].id): the IDs only increase, none reused or renumbered")
         occursin(r"[\"“]", r.words) || push!(out, "$(r.id): Dale's words are not quoted")
         occursin(r"^20\d\d-\d\d-\d\d(?:, 20\d\d-\d\d-\d\d)*$", r.date) || push!(out, "$(r.id): its date `$(r.date)` is not YYYY-MM-DD[, …]")
         strip(r.why) in ("", "—") && push!(out, "$(r.id) says no why")
         local n = 0
         for t in eachmatch(r"`([^`]+)`", r.by)
             local k = String(t[1])
-            (startswith(k, "planned: ") || startswith(k, "superseded: ")) && continue
+            startswith(k, "planned: ") && continue
+            startswith(k, "superseded: ") && (push!(out, "$(r.id) is marked superseded: a replaced requirement is deleted, never kept"); continue)
             n += 1
             if occursin(r"^[LR]\d+[a-z]?$", k)
-                k in checks ? (r.id in live && push!(served, k)) :
+                k in checks ? push!(served, k) :
                     push!(out, "$(r.id) cites $k, which is no check of test/parity_ratchet.jl")
             elseif occursin(r"^C\d+$", k)
-                haskey(clauses, k) ? (r.id in live && union!(served, clauses[k])) :
+                haskey(clauses, k) ? union!(served, clauses[k]) :
                     push!(out, "$(r.id) cites $k, which is no clause of dev/CHARTER.md")
             elseif occursin('/', k) && !endswith(k, ".md")
                 path_ok(k) || push!(out, "$(r.id) cites $k, which does not exist")
@@ -2326,21 +2326,13 @@ function ledger_faults(rows::Vector{LedgerRow}, checks::AbstractSet{String}, cla
             n += 1
             String(p[1]) in march || push!(out, "$(r.id) is planned on dev/MARCH.md $(p[1]), which is no row")
         end
-        for s in eachmatch(r"superseded: (D\d+)", r.by)
-            n += 1
-            (String(s[1]) in live && s[1] != r.id) || push!(out, "$(r.id) is superseded by $(s[1]), which is no live row")
-        end
-        n == 0 && push!(out, "$(r.id) names no check, no `planned: <MARCH row>` and no `superseded: D<n>`")
-        if r.id in live
-            strip(r.rule) in ("", "—") && push!(out, "$(r.id) is live and has no rule for agents")
-            occursin(QUANT_RX, r.words * " " * r.rule) && !has_intent_and_band(r.band) &&
-                push!(out, "$(r.id) states a number without its intent and band")
-        else
-            strip(r.rule) == "—" || push!(out, "$(r.id) is superseded and still carries a rule for agents")
-        end
+        n == 0 && push!(out, "$(r.id) names no check and no `planned: <MARCH row>`")
+        strip(r.rule) in ("", "—") && push!(out, "$(r.id) has no rule for agents")
+        occursin(QUANT_RX, r.words * " " * r.rule) && !has_intent_and_band(r.band) &&
+            push!(out, "$(r.id) states a number without its intent and band")
     end
     for k in sort!(collect(checks))
-        k in served || push!(out, "$k serves no requirement: no live row of dev/LEDGER.md cites it or a clause that cites it")
+        k in served || push!(out, "$k serves no requirement: no row of dev/LEDGER.md cites it or a clause that cites it")
     end
     return out
 end
@@ -2369,20 +2361,20 @@ function ledger_negatives_missed()::Vector{String}
                                                 p -> p == "test/smoke.jl", Set(["13.28"])))
     end
     local cases = [
-        ("a whole ledger, a planned and a superseded row among it",
-         vcat(base, row("D3", "`planned: 13.28`"), row("D4", "`superseded: D1`"; rule = "—")), 0),
+        ("a whole ledger, a planned row among it, a deleted row's ID left as a gap",
+         vcat(base, row("D3", "`planned: 13.28`"), row("D5", "`L1`")), 0),
         ("a row citing no check of this file", vcat(base, row("D3", "`L9`")), 1),
         ("a row citing no clause", vcat(base, row("D3", "`C7`")), 1),
         ("a row citing a missing file", vcat(base, row("D3", "`test/none.jl`")), 1),
         ("a row citing prose", vcat(base, row("D3", "`dev/MARCH.md`")), 1),
         ("a row planned on no MARCH row", vcat(base, row("D3", "`planned: 13.99`")), 1),
-        ("a row superseded by no row", vcat(base, row("D3", "`superseded: D9`"; rule = "—")), 1),
+        ("a row marked superseded", vcat(base, row("D3", "`L1` `superseded: D1`")), 1),
         ("a row that names nothing", vcat(base, row("D3", "noted")), 1),
-        ("a deleted row", vcat(base, row("D4", "`L1`")), 1),
+        ("a reused ID", vcat(base, row("D2", "`L1`")), 1),
+        ("IDs out of order", vcat(base, row("D4", "`L1`"), row("D3", "`L1`")), 1),
         ("unquoted words", vcat(base, row("D3", "`L1`"; words = "x")), 1),
         ("a date in no form", vcat(base, row("D3", "`L1`"; date = "Oct 21")), 1),
-        ("a live row with no rule for agents", vcat(base, row("D3", "`L1`"; rule = "—")), 1),
-        ("a superseded row with a rule", vcat(base, row("D3", "`superseded: D1`")), 1),
+        ("a row with no rule for agents", vcat(base, row("D3", "`L1`"; rule = "—")), 1),
         ("a number without its band", vcat(base, row("D3", "`L1`"; words = "\"60 s TOPS\"")), 1),
         ("a number with its band", vcat(base, row("D3", "`L1`"; words = "\"60 s TOPS\"", band = "intent: minutes; band: 120 s")), 0),
         ("a check that serves no row", base[1:1], 1),
@@ -2416,10 +2408,10 @@ function quantity_negatives_missed()::Vector{String}
     return out
 end
 
-# AGENTS.md's ledger block: the lines between its markers, each live row's rule for agents in order
+# AGENTS.md's ledger block: the lines between its markers, each row's rule for agents in order
 const AGENTS_LEDGER_BEGIN = "<!-- ledger:begin -->"
 const AGENTS_LEDGER_END = "<!-- ledger:end -->"
-ledger_agents_lines(rows::Vector{LedgerRow})::Vector{String} = String["- **$(r.id)** $(r.rule)" for r in rows if ledger_live(r)]
+ledger_agents_lines(rows::Vector{LedgerRow})::Vector{String} = String["- **$(r.id)** $(r.rule)" for r in rows]
 
 # whether AGENTS.md's ledger block is exactly the ledger's rules (L206): its faults, the block it
 # should hold printed when it differs
@@ -2436,12 +2428,11 @@ end
 # L206's negative test: planted files each answer as stated
 function agents_ledger_negatives_missed()::Vector{String}
     local rows = LedgerRow[LedgerRow(("D1", 1, "\"a\"", "2026-10-21", "y", "`L1`", "—", "Do a.")),
-                           LedgerRow(("D2", 2, "\"b\"", "2026-10-21", "y", "`superseded: D3`", "—", "—")),
                            LedgerRow(("D3", 3, "\"c\"", "2026-10-21", "y", "`L2`", "—", "Do c."))]
     local file(lines...) = join(["# t", AGENTS_LEDGER_BEGIN, lines..., AGENTS_LEDGER_END, "## x"], '\n')
     local cases = [("the rules in order", file("- **D1** Do a.", "- **D3** Do c."), 0),
                    ("a rule missing", file("- **D1** Do a."), 1),
-                   ("a superseded rule listed", file("- **D1** Do a.", "- **D2** —", "- **D3** Do c."), 1),
+                   ("a deleted rule still listed", file("- **D1** Do a.", "- **D2** Do b.", "- **D3** Do c."), 1),
                    ("the rules out of order", file("- **D3** Do c.", "- **D1** Do a."), 1),
                    ("a rule reworded", file("- **D1** Do a.", "- **D3** Do c, mostly."), 1),
                    ("no block", "# t\n- **D1** Do a.\n- **D3** Do c.", 1)]
@@ -3645,7 +3636,7 @@ const LOCKS = [
             uncited = count(h -> h ∉ Set(cited), have)
             missing_ + dup + uncited
         end),
-    "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 60 hand-written lines (the ledger block's markers among them), its ledger block (L206) at most one line per live requirement of dev/LEDGER.md, so the whole at most 60 plus one line per live requirement, a bound that grows with the ledger and still shows a stale or duplicated row (A33E6), every line at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions; intent: every agent reads AGENTS.md whole and finds nothing stale or bloated (Dale 2026-09-22); band: at most 60 hand-written lines, 60 plus one per live requirement in all, and 100 chars a line, the caps the band's edge; the ledger block grows with the requirements, a line each, so leanness never fights the ledger. Behavior, run here: five planted files answer as stated (dev/CHARTER.md C0)",
+    "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 60 hand-written lines (the ledger block's markers among them), its ledger block (L206) at most one line per requirement of dev/LEDGER.md, so the whole at most 60 plus one line per requirement, a bound that grows with the ledger and still shows a stale or duplicated row (A33E6), every line at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions; intent: every agent reads AGENTS.md whole and finds nothing stale or bloated (Dale 2026-09-22); band: at most 60 hand-written lines, 60 plus one per live requirement in all, and 100 chars a line, the caps the band's edge; the ledger block grows with the requirements, a line each, so leanness never fights the ledger. Behavior, run here: five planted files answer as stated (dev/CHARTER.md C0)",
         () -> (v = vcat(agents_md_violations(), agents_size_negatives_missed()); foreach(x -> println("    ✗ ", x), v); length(v))),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README (dev/CHARTER.md C9)",
         () -> length(unconsumed_files_outside_src())),
@@ -3887,7 +3878,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L204_requirements_are_checks" => ("Dale's requirements are the rows of dev/LEDGER.md, each in his words with its date, its why and the checks that enforce it (Dale 2026-10-21: \"MAKE SURE you actually bake our reqs INTO programmatic checks — not just hoping that memory works\"): dev/CHARTER.md names dev/LEDGER.md; its rows run D1, D2, … in order, none deleted or renumbered; each cites a check of this file, a clause of dev/CHARTER.md (every check that clause cites) or an existing test, hook, script or workflow by path, or names the dev/MARCH.md row where its planned check is written (`planned: <row>`, the row existing), or the live row that supersedes it; a live row carries its rule for agents, a row stating a number its intent and band; and every check of this file serves a live row, directly or through a clause the row cites: a check that serves no requirement is noise. Behavior, run here: seventeen planted ledgers and an empty one answer as stated (dev/CHARTER.md C0)",
+    "L204_requirements_are_checks" => ("Dale's requirements are the rows of dev/LEDGER.md, each in his words with its date, its why and the checks that enforce it (Dale 2026-10-21: \"MAKE SURE you actually bake our reqs INTO programmatic checks — not just hoping that memory works\"): dev/CHARTER.md names dev/LEDGER.md; its IDs only increase, none reused or renumbered, and a requirement Dale replaces or drops is deleted with its row, never kept marked superseded (Dale 2026-11-04: \"do NOT keep stale bloated rules around -- delete and do not mark superseded\"); each cites a check of this file, a clause of dev/CHARTER.md (every check that clause cites) or an existing test, hook, script or workflow by path, or names the dev/MARCH.md row where its planned check is written (`planned: <row>`, the row existing); a row carries its rule for agents, a row stating a number its intent and band; and every check of this file serves a row, directly or through a clause the row cites: a check that serves no requirement is noise. Behavior, run here: seventeen planted ledgers and an empty one answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local v = vcat(ledger_faults_here(), ledger_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)
@@ -3901,7 +3892,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L206_agents_md_carries_the_ledger" => ("AGENTS.md, the file every agent reads first, carries every live requirement of dev/LEDGER.md (Dale 2026-10-21: his desires were \"put into memory and lost or ignored by subagents\"): the lines between `<!-- ledger:begin -->` and `<!-- ledger:end -->` are exactly `- **D<n>** <rule for agents>` for each live row, in the ledger's order, so the list is generated from the ledger, and the lock prints the block it should hold when they differ. Behavior, run here: six planted files answer as stated (dev/CHARTER.md C0)",
+    "L206_agents_md_carries_the_ledger" => ("AGENTS.md, the file every agent reads first, carries every requirement of dev/LEDGER.md (Dale 2026-10-21: his desires were \"put into memory and lost or ignored by subagents\"): the lines between `<!-- ledger:begin -->` and `<!-- ledger:end -->` are exactly `- **D<n>** <rule for agents>` for each row, in the ledger's order, so the list is generated from the ledger, and the lock prints the block it should hold when they differ. Behavior, run here: six planted files answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local agents = joinpath(ROOT, "AGENTS.md")
             local rows = first(ledger_rows(isfile(LEDGER_PATH) ? _text(LEDGER_PATH) : ""))

@@ -37,7 +37,6 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D25** AGENTS.md is the only instructions file: timeless rules and pointers, no status.
 - **D26** Map the dart code and Julia's IR before writing; name the dart counterpart first.
 - **D27** Spend no effort on downstream packages until the rebuild merges.
-- **D28** Fable orchestrates and rules; every spawned agent runs on Opus.
 - **D29** Redraw the project map after every landing, audit and red closure matrix.
 - **D30** Work in the plan's order: one source of truth and strict by construction come first.
 - **D31** Run one Julia at a time: dev/check.sh or your lane's session; never saturate the machine.
@@ -51,6 +50,9 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D44** After the re-audits: assess Lean formalization; then bespoke work; then a fast WT package.
 - **D45** Build nothing bespoke: port a near 1:1 match (dart, LLVM, Julia's C), pinned and anchored.
 - **D46** A stub or rejection-only body is never complete; progress counts bodies only.
+- **D47** Climb the hill (dev/climb/HILL.md): one fresh agent, one move, a score the judge keeps.
+- **D48** Every agent runs on Opus; Fable only on an Opus escalation, at most twice a day.
+- **D49** Delete a replaced or stale rule outright; never keep it marked superseded.
 <!-- ledger:end -->
 
 ## How to work
@@ -93,5 +95,6 @@ in smoke first; a new lock fires when broken before it counts; `WT_RATCHET_UPDAT
 
 `dev/CHARTER.md` the definition of done · `dev/LEDGER.md` Dale's requirements · `dev/MARCH.md` the
 plan · `dev/PARITY_MASTER.md` the oracle pin and scope · `dev/formal/` the models · `dev/ship.sh`
-landing · `test/parity_ratchet.jl` every lock and ratchet. When prose disagrees with the code
+landing · `test/parity_ratchet.jl` every lock and ratchet · `dev/climb/HILL.md` the climb, its
+score `python3 dev/climb/climb.py report`. When prose disagrees with the code
 and the locks, the prose is stale: trust the code, then fix the prose.

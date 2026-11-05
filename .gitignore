@@ -20,3 +20,4 @@ node_modules/
 Manifest-v*.toml
 # TLC's default metadir (run_tlc.sh passes its own under $TMPDIR)
 dev/formal/states/
+__pycache__/

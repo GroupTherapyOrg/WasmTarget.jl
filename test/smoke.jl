@@ -21,6 +21,9 @@
 #         no group has fails the run
 # Part:   WT_SMOKE_PART=i/N: one of N parts (i in 0..N-1), dealt by test/smoke_times.tsv
 # Times:  WT_SMOKE_TIMES=1 also prints each group's wall seconds and the package load's
+# Cases:  WT_SMOKE_CASES=<file> also writes each case's outcome, one line per case,
+#         `<group/case>\t<outcome>\t<seconds>\t<why>` (outcome one of the ladder's: passed, wrong,
+#         errored, unported, outside), the input of the climb's score (dev/climb/climb.py)
 # ============================================================================
 const SMOKE_T_START = time()
 using WasmTarget
@@ -131,6 +134,7 @@ function _ladder(f, args)::Tuple{Symbol,Union{String,Vector{WTRunner.RunCase}}}
 end
 
 const SMOKE_TIMES = get(ENV, "WT_SMOKE_TIMES", "") == "1"
+const SMOKE_CASES = get(ENV, "WT_SMOKE_CASES", "")
 _smoke_time(what, t) = SMOKE_TIMES && println("smoke time: ", what, " ", round(time() - t; digits = 1), " s")
 
 function main()
@@ -147,6 +151,9 @@ function main()
     local count = Dict(:passed => 0, :unported => 0, :outside => 0, :wrong => 0, :errored => 0)
     local failures = String[]
     local runs = Tuple{String,Vector{WTRunner.RunCase}}[]
+    # each case's (label, outcome, seconds, why), written to WT_SMOKE_CASES when it is set
+    local records = Tuple{String,Symbol,Float64,String}[]
+    local case_sec = Dict{String,Float64}()
     local ngroups = 0
     for (group, cases) in vcat(_selected(_smoke_part(GROUPS)), _selected(_smoke_part(XFAIL)))
         ngroups += 1
@@ -155,13 +162,16 @@ function main()
             local name, f, args = case[1], case[2], case[3:end]
             local tc = time()
             local outcome, why = _ladder(f, args)
+            local secs = time() - tc
             if outcome === :compiled
                 push!(runs, ("$group/$name", why))
+                case_sec["$group/$name"] = secs
             else
                 count[outcome] += 1
                 outcome === :errored && push!(failures, "ERROR $group/$name  $why")
+                push!(records, ("$group/$name", outcome, secs, why))
             end
-            push!(case_secs, time() - tc)
+            push!(case_secs, secs)
         end
         _smoke_time("group $group", tg)
     end
@@ -173,9 +183,21 @@ function main()
         k += length(cs)
         if all(r -> r.ok, rs)
             count[:passed] += 1
+            push!(records, (label, :passed, case_sec[label], ""))
         else
             count[:wrong] += 1
-            push!(failures, "WRONG $label  " * join(("$(r.label) $(r.why)" for r in rs if !r.ok), "; "))
+            local why = join(("$(r.label) $(r.why)" for r in rs if !r.ok), "; ")
+            push!(failures, "WRONG $label  " * why)
+            push!(records, (label, :wrong, case_sec[label], why))
+        end
+    end
+    if !isempty(SMOKE_CASES)
+        open(SMOKE_CASES, "w") do io
+            for (label, outcome, secs, why) in records
+                local text = replace(why, r"\s+" => " ")
+                println(io, label, '\t', outcome, '\t', round(secs; digits = 2), '\t',
+                        length(text) > 500 ? first(text, 500) * "…" : text)
+            end
         end
     end
     # the median case's wall
