@@ -14,10 +14,14 @@
 #   true, X < MIN and X > MAX false; X >= C rewritten X > C-1 and X <= C rewritten X < C+1; X < MAX and
 #   X > MIN rewritten !=, and X < MIN+1, X > MAX-1 rewritten == to the bound, each of a constant that is
 #   not opaque.
-# The int128 arm reads each statement's 128-bit operands from their class's struct, so a half is a
-# constant only where its operand is a literal, and a literal left operand is moved right before the
-# legalizer (src/intrinsics.jl): the fold of two constants is reached by two literal operands, the
-# commute by a constant half an expansion makes on the left. Not ported, each reading a fact of a DAG
+# No compile reaches the fold of two constants or the commute; test/src/code_generator_intrinsics.jl
+# calls them on halves directly. The int128 arm (src/intrinsics.jl) reads each statement's 128-bit
+# operands from their class's struct, so a half is a constant only where its operand is a literal (a
+# zero extension's constant high half is stored into its struct and read back into a local); it moves
+# a literal left operand right itself before the legalizer; a compare of two literals Julia's
+# inference folds before the IR it reads; and its division checks compare for equality, which
+# IntegerExpandSetCCOperands answers by an xor and or of the halves without SimplifySetCC. The fold of
+# one node, a value compared with itself, is reached. Not ported, each reading a fact of a DAG
 # that Julia's IR does not build: the folds through the operands' own nodes (a sub, a shift, an and, a
 # zero or sign extension, an or of halves, :4829-:5290 and the equality block from :5383), and the
 # folds past the constant block, which read known bits

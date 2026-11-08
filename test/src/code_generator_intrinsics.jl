@@ -347,6 +347,25 @@ end
     append!(NATIVE_RUNS, [WTRunner.RunCase("divmod$c", dbytes, c, WTRunner.native_answer(Int128Cases.divmod, c)) for c in dcases])
     local bbytes = W.compile(Int128Cases.bits, (Int64, Int64); optimize = false)
     queue_native!("bits", bbytes, Int128Cases.bits, [(a, n) for a in Int64[0, 1, -1, 7, typemax(Int64), typemin(Int64)] for n in Int64[0, 1, 63, 64, 100, 127, -5]])
+    # SimplifySetCC's fold of two constant halves and its commute of a constant left half, which no
+    # compile reaches (src/llvm/target_lowering.jl says why), called on halves directly: two constants
+    # answer Julia's own compare of them, signed or unsigned by the condition (ICmpInst::compare), and
+    # a constant left of a value moves right under the swapped condition (getSetCCSwappedOperands)
+    local S = W.LLVM.simplify_set_cc
+    local v = IR.Local(0, IR.NumType_i64)
+    local halves64 = Int64[0, 1, -1, 3, typemax(Int64), typemin(Int64)]
+    local ops = (:SETEQ => (==), :SETNE => (!=), :SETLT => (<), :SETLE => (<=), :SETGT => (>), :SETGE => (>=))
+    for c0 in halves64, c1 in halves64
+        for (cc, op) in ops
+            @test S(c0, c1, cc) === op(c0, c1)
+            local ucc = cc === :SETEQ || cc === :SETNE ? cc : Symbol(:SETU, String(cc)[4:end])
+            @test S(c0, c1, ucc) === op(reinterpret(UInt64, c0), reinterpret(UInt64, c1))
+        end
+    end
+    for (cc, swapped) in (:SETEQ => :SETEQ, :SETNE => :SETNE, :SETLT => :SETGT, :SETGT => :SETLT, :SETLE => :SETGE,
+                          :SETGE => :SETLE, :SETULT => :SETUGT, :SETUGT => :SETULT, :SETULE => :SETUGE, :SETUGE => :SETULE)
+        @test S(Int64(3), v, cc) === (v, Int64(3), swapped)
+    end
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin
