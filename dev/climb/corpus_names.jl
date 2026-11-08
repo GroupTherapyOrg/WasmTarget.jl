@@ -54,9 +54,27 @@ forms(path) = [nolines(a) for a in Meta.parseall(read(path, String); filename=pa
 base, new = counts(ARGS[1]), counts(ARGS[2])
 for (n, c) in sort!(collect(new))
     b = get(base, n, 0)
+    occursin('.', n) && continue   # a method on another module's function: judged by the types it takes, below
     b > 0 && c > b && println("rebind\t", n, "\t", b, "\t", c)
 end
+# a method added to another module's function (Base.f(...) = ...) must take a type the corpus defines: piracy of
+# Base's own methods would change the native answer the cases are judged against (A98E6)
+sig(ex) = ex isa Expr && ex.head in (:function, :(=)) ? ex.args[1] : ex isa Expr && ex.head === :macrocall ? sig(ex.args[end]) : nothing
+callee(s) = s isa Expr && s.head in (:where, :(::)) ? callee(s.args[1]) : s
+typenames(x, out = Set{Symbol}()) = (x isa Symbol ? push!(out, x) : x isa Expr && foreach(a -> typenames(a, out), x.args); out)
+argtypes(a) = a isa Expr && a.head === :(::) ? typenames(a.args[end]) :
+              a isa Expr && a.head in (:kw, :...) ? argtypes(a.args[1]) : Set{Symbol}()
+deftype(ex) = ex isa Expr && ex.head === :struct ? callee(ex.args[2]) : ex isa Expr && ex.head in (:abstract, :primitive) ? callee(ex.args[1]) :
+              ex isa Expr && ex.head === :macrocall ? deftype(ex.args[end]) : nothing
+basename_(t) = t isa Expr && t.head in (:<:, :curly) ? basename_(t.args[1]) : t
+owned = Set(basename_(deftype(ex)) for ex in forms(ARGS[2]) if deftype(ex) !== nothing)
 old = Set(string.(forms(ARGS[1])))
 for ex in forms(ARGS[2])
-    string(ex) in old || addable(ex) || println("form\t", kind(ex), "\t", replace(first(string(ex), 80), "\n" => " "))
+    string(ex) in old && continue
+    addable(ex) || (println("form\t", kind(ex), "\t", replace(first(string(ex), 80), "\n" => " ")); continue)
+    c = callee(sig(ex))
+    if c isa Expr && c.head === :call && c.args[1] isa Expr && c.args[1].head === :.
+        isempty(intersect(union(Set{Symbol}(), (argtypes(a) for a in c.args[2:end] if !(a isa Expr && a.head === :parameters))...), owned)) &&
+            println("form\tpiracy\t", replace(first(string(ex), 80), "\n" => " "))
+    end
 end

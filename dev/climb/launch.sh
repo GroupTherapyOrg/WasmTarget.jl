@@ -33,8 +33,8 @@ case "${1:-start}" in
   pause)  touch "$state/PAUSE"; echo "paused: no new move starts"; exit 0 ;;
   resume) rm -f "$state/PAUSE"; echo "resumed"; exit 0 ;;
   status) $py report; exit 0 ;;
-  restart)
-    echo "restart: waiting for the moves in flight and any audit" > "$state/PAUSE"
+  restart)   # a PAUSE already set (Dale's, the judge's, the week's, the infrastructure's) is kept and outlives it (A98E8)
+    [ -f "$state/PAUSE" ] || echo "restart: waiting for the moves in flight and any audit" > "$state/PAUSE"
     until [ -z "$(ls "$state/claims")" ] && python3 -c "import fcntl,os,sys; fd=os.open(sys.argv[1], os.O_CREAT|os.O_RDWR); fcntl.flock(fd, fcntl.LOCK_EX|fcntl.LOCK_NB)" "$state/.audit.lock" 2>/dev/null; do sleep 30; done
     for part in run scoreboard; do
       p="$state/pids/$part"; [ -f "$p" ] && { kill -TERM -- "-$(cat "$p")" 2>/dev/null; for _ in $(seq 60); do kill -0 "$(cat "$p")" 2>/dev/null || break; sleep 1; done; }

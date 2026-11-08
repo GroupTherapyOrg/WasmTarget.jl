@@ -104,7 +104,8 @@ ADD_ONLY = [r"^test/smoke_corpus\.jl$", r"^test/smoke_times\.tsv$"]
 # not the compiler: a keeper move ports them in the runner and its test alone, and may flip no other case (HILL.md)
 RUNNER_FILES = ("test/runner.jl", "test/src/runner.jl")
 # (a reader WasmTarget rejects is the compiler's gap until a ruling says otherwise: the reader is compiled by WT)
-RUNNER_GAP_RE = re.compile(r"the runner (marshals no|does not read|reads a tuple's leaves)")
+# ("does not read" is left out: the runner says it only of a reader WasmTarget rejects, a compiler gap, A98E5)
+RUNNER_GAP_RE = re.compile(r"the runner (marshals no|reads a tuple's leaves)")
 NEW_ONLY = [r"^dev/formal/"]
 
 def now():
@@ -1069,6 +1070,9 @@ def audit():
         n = (max(nums) + 1) if nums else 97
         _, prev = audit_lag()
         rng = f"{prev}..{git('rev-parse', '--short', 'HEAD', cwd=slot)}"
+        saved = state_json("audit-saved.json", {})
+        if saved.get("range", "").startswith(f"{prev}..") and "areas" in (saved.get("so") or {}):
+            rng = saved["range"]   # a cut audit lands first, over its own range, under its own number (A98E7)
         commits = git("log", "--format=- %h %s", rng, "--invert-grep", "--grep=^docs(audit)", cwd=slot)
         if not commits:
             return
@@ -1092,6 +1096,7 @@ def audit():
         event("audited", n=n, range=rng, landed=r.returncode == 0, findings=len(so["findings"]))
         if r.returncode != 0:
             return   # kept in audit-saved.json: the next audit lands this one again
+        save_json("audit-saved.json", {})
         lead = []
         def add(ff):
             for f in so["findings"]:
@@ -1189,12 +1194,12 @@ def judge_eval(n=6):
         repo, base, head = isolated_case(git("rev-parse", f"{sha}^{{tree}}"), git("rev-parse", f"{sha}^^{{tree}}"), stem_of(f"{sha}^", sha))
         rv = review(f"judge{i}b", repo, base, head)
         defects.append({"sha": sha[:8], "subject": f["subject"][:120], "refused": bool(rv) and not approved(rv), "review": rv})
-        event("judged", sha=sha[:8], kind="defect", refused=defects[-1]["refused"])
+        event("judged", sha=sha[:8], case="defect", refused=defects[-1]["refused"])
     for i, c in enumerate(clean_moves(n)):
         repo, base, head = isolated_case(git("rev-parse", f"{c}^^{{tree}}"), git("rev-parse", f"{c}^{{tree}}"), stem_of(f"{c}^", c))
         rv = review(f"judge{i}c", repo, base, head)
         cleans.append({"sha": c[:8], "approved": approved(rv), "review": rv})
-        event("judged", sha=c[:8], kind="clean", approved=cleans[-1]["approved"])
+        event("judged", sha=c[:8], case="clean", approved=cleans[-1]["approved"])
     if not defects:
         return
     rec = sum(r["refused"] for r in defects) / len(defects)
