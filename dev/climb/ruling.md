@@ -24,8 +24,9 @@ Reply with only the JSON the schema asks for:
 - `requeue`: whether the hold goes back to the climb with this ruling attached.
 - `keeper`: true when the fault is the test runner's, not the compiler's: the module is right and
   `test/runner.jl` cannot read its answer. The hold then goes to a keeper (`dev/climb/keeper.md`), whose move may
-  change only the runner and its test. A ruling never sends a hold elsewhere in the judge or the rules: those go
-  to `for_dale`.
+  change only the runner and its test. False when a hold a keeper had is the compiler's after all (its fix is in
+  src): it goes back to a climber. Omit it when the hold stays where it is. A ruling never sends a hold elsewhere
+  in the judge or the rules: those go to `for_dale`.
 - `escalate`: true only if the charter does not decide this and the question needs deeper judgment than
   yours, such as a design question that spans several definitions or a conflict between two requirements.
   Almost always false.

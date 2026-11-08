@@ -251,6 +251,7 @@ def holds(cases=None):
     cases = head_cases() if cases is None else cases
     parked = state_json("parked.json", {})
     kept = set(state_json("keeper.json", []))
+    unkept = set(state_json("not-keeper.json", []))
     groups = collections.OrderedDict()
     for label, outcome, secs, why in cases:
         if outcome in ("passed", "outside"):
@@ -268,7 +269,7 @@ def holds(cases=None):
         h["n"] = len(h["cases"]) or len(h.get("defs", []))
         h["id"] = hashlib.sha1(h["key"].encode()).hexdigest()[:10]
         h["parked"] = parked.get(h["id"])
-        h["keeper"] = h.get("keeper") or h["id"] in kept   # a ruling found the runner at fault
+        h["keeper"] = (h.get("keeper") or h["id"] in kept) and h["id"] not in unkept   # a ruling's word on the runner
     # the gates, then fix-first findings, then the corpus (S), then the src tail S does not reach
     rank = lambda h: (0 if h["key"].startswith("G") else 1 if h.get("fixfirst") else 3 if h.get("tail") else 2, -h["n"], h["secs"])
     return sorted(out, key=rank)
@@ -895,8 +896,11 @@ def rule(h, escalation, slot):
     if so.get("for_dale") or so.get("ledger_row"):
         for_dale(h["key"][:100], so.get("for_dale", "") + (f"\nproposed ledger row: {so['ledger_row']}" if so.get("ledger_row") else ""))
     event("ruled", hold=h["key"], requeue=so["requeue"], keeper=bool(so.get("keeper")), ruling=so["ruling"][:300])
-    if so.get("keeper"):   # the runner's gap: a keeper takes the hold, so it goes back to the climb
-        update_json("keeper.json", [], lambda k: k.append(h["id"]) if h["id"] not in k else None)
+    if so.get("keeper") is not None and bool(so["keeper"]) != bool(h.get("keeper")):
+        # the ruling moves the hold between a keeper (the runner's gap) and a climber (the compiler's), and back to the climb
+        name, other = ("keeper.json", "not-keeper.json") if so["keeper"] else ("not-keeper.json", "keeper.json")
+        update_json(name, [], lambda k: k.append(h["id"]) if h["id"] not in k else None)
+        update_json(other, [], lambda k: k.remove(h["id"]) if h["id"] in k else None)
         update_json("parked.json", {}, lambda p: p.pop(h["id"], None))
         return
     if not so["requeue"]:
