@@ -105,6 +105,9 @@ fin_of(x::Int64) = (c = Ref(Int64(0)); v = try; fin(c, x); catch e; e isa E ? e.
 # nested catches: the inner rethrow reads the inner catch's exception, the outer catch its own
 nest(x::Int64) = try; thr(x); catch e; (try; thr(x - 1); catch; e isa E && e.v < -5 && rethrow(); end); -1; end
 nest_of(x::Int64) = try; nest(x); catch e; e isa E ? e.v : -3; end
+# a primitive thrown: Julia's inference narrows the_exception to Int64, an i64 the caught anyref's box unboxes to
+@noinline thi(x::Int64) = x < 0 ? throw(x) : x
+tci(x::Int64) = try; thi(x) + 1; catch e; e isa Int64 ? e * 2 : 0; end
 end
 
 @testset "code_generator.dart: a try/catch, the stackifier's try_table around the call that unwinds to the catch" begin
@@ -122,6 +125,10 @@ end
     # register, which the catch block reads
     local nn = generated_instructions(TryGenCases.tn, (Int64,); standalone = true)
     @test count(==("try_table"), nn) == 2 && count(==("unreachable"), nn) == 2
+    # tci's the_exception, narrowed by Julia to Int64, unboxed from the caught anyref by its class
+    local ir = only(Base.code_ircode(TryGenCases.tci, (Int64,)))[1]
+    @test [ir.stmts.type[i] for i in 1:length(ir.stmts) if Meta.isexpr(ir.stmts.stmt[i], :the_exception)] == [Int64]
+    @test "struct.get" in generated_instructions(TryGenCases.tci, (Int64,); standalone = true)
     # a try region's entry, exit and pop are the stackifier's structure and emit nothing; its catch's
     # exception and exception-edge values are read where visit_block translates them, never as statements
     local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
@@ -147,7 +154,8 @@ end
     @test count(==("throw"), names) == 1
     # run by node, each answers as native Julia: a rethrow caught by the caller, a finally's exception
     # exit, an inner rethrow under two catches
-    for (f, xs) in ((TryGenCases.rt_of, Int64[3, -1, -9]), (TryGenCases.fin_of, Int64[3, -1, -9]), (TryGenCases.nest_of, Int64[3, -1, -9]))
+    for (f, xs) in ((TryGenCases.rt_of, Int64[3, -1, -9]), (TryGenCases.fin_of, Int64[3, -1, -9]), (TryGenCases.nest_of, Int64[3, -1, -9]),
+                    (TryGenCases.tci, Int64[3, -4]))
         queue_native!(string(nameof(f)), W.compile(f, (Int64,); optimize = false), f, [(x,) for x in xs])
     end
 end

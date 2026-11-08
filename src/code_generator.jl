@@ -1249,13 +1249,15 @@ end
                 elseif st isa NirTheException
                     # Julia's the_exception, the top of its exception stack, the exception its catch's
                     # CATCH stashed (codegen.cpp's jl_current_exception); Julia's inference may have
-                    # narrowed its type (the try body's exception type)
+                    # narrowed its type (the try body's exception type), so a primitive's box unboxes
+                    # by that class (convertType's boxed_class)
                     e == 0 && reject!(Internal("src/code_generator.jl visit_block: the_exception at statement $k, where Julia's exception stack is empty"), at)
                     local thrown = self.try_block_locals[end].exception_local
-                    local dest = get(() -> add_local(self, translate_type_of_local_variable(self.translator, node.types[k])), self.locals, NirSSA(k))
+                    local caught_type = node.types[k]
+                    local dest = get(() -> add_local(self, translate_type_of_local_variable(self.translator, caught_type)), self.locals, NirSSA(k))
                     self.locals[NirSSA(k)] = dest
                     WasmBuilder.local_get(b, thrown)
-                    convert_type(self.translator, b, thrown.type, dest.type)
+                    convert_type(self.translator, b, thrown.type, dest.type; boxed_class = caught_type isa DataType ? caught_type : nothing)
                     WasmBuilder.local_set(b, dest)
                 else
                     translate_statement(self, st, k in self.used ? NirSSA(k) : nothing; statement = k)
