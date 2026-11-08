@@ -798,7 +798,8 @@ wasm array class is a WasmArrayLiteral (makeArrayOf), built by `_makeWasmArrayLi
 value classes (WasmI32 and the rest) are Julia's primitive values, never an instance here. A Julia
 class stores no type arguments (its parameters are bound), so the type-argument slots dart fills are
 none.
-A field Julia holds no value in (`#undef`) holds the null, its set flag false where it keeps one.
+A field Julia holds no value in (`#undef`) holds the null, its set flag false where it keeps one. A
+`Module`, whose data Julia holds outside its fields, gives its one field its name, as `nameof` reads it.
 """
 @parity "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant" function visit_instance_constant(self::ConstantCreator, constant::NirConst)::Union{ConstantInfo,Nothing}
     local at = "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant"
@@ -859,6 +860,12 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             local k = findfirst(==(field), halves)
             k === nothing && reject!(Internal("$at: the field $(field.name) of $cls is neither of its halves"), at)
             reinterpret(UInt64, LLVM.expand_int_res_constant(v)[k])
+        elseif field.index == 0 && cls === Module
+            # a module's one field, its name (src/julia/classes.jl _module_instance_fields), the value
+            # Julia holds in jl_module_t's name (julia.h:808) and reads with `nameof` (module.c
+            # jl_module_name), as dart reads a field's value from the constant's fieldValues
+            field.name == "name" || reject!(Internal("$at: the Module field $(field.name), not classes.jl's name"), at)
+            nameof(v)
         elseif field.index == 0 && haskey(owner, field)
             # a field's set flag (src/julia/classes.jl class_is_set_field): whether Julia holds a value in it
             isdefined(v, owner[field].index)
