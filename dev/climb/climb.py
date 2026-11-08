@@ -833,7 +833,7 @@ def slot_ready(name):
             git("add", "-A", cwd=path)
             git("commit", "-q", "--no-verify", "-m", f"wip(salvage): {name}'s uncommitted work, kept by dev/climb", cwd=path)
         event("salvaged", slot=name, branch=salvage)
-    git("checkout", "-q", "-B", name, f"origin/{MARCH}", cwd=path)
+    git("checkout", "-q", "--no-track", "-B", name, f"origin/{MARCH}", cwd=path)   # no upstream: no write to the shared .git/config, which two slots raced for
     if re.fullmatch(r"climb-\d+", name):
         fence_kaimon(path, name)
     return path, salvage
