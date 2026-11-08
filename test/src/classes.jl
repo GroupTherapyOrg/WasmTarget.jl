@@ -191,6 +191,11 @@ const B = Box(2.5)
 boxed(x::Int) = x > 0 ? B : nothing
 # a type as a value, its parameters' classes held by its layout
 params() = Tuple{Int8,String}
+# a binding no const holds, read as a statement of its own (a GlobalRef statement, Kernel's StaticGet):
+# its starting value, the constant its lazy initializer instantiates, holds a Held only the value tells
+struct Held; x::Int64; end
+held::Vector{Any} = Any[Held(7)]
+read_held(n::Int64) = (v = held[1]; v === nothing ? 0 : n + 1)
 end
 
 @testset "a constant's object graph brings its values' classes (dev/formal/ValueClasses.tla)" begin
@@ -202,6 +207,13 @@ end
     # a type value's own fields: DataType's parameters, an svec of the classes the type names
     local ps = _classes(ConstantGraphCases.params, ())
     @test DataType in ps && Core.SimpleVector in ps && Int8 in ps && String in ps
+    # a binding read as a statement brings its value's graph, as an operand's does
+    local hs = _classes(ConstantGraphCases.read_held, (Int64,))
+    @test ConstantGraphCases.Held in hs && Vector{Any} in hs
+    local held_bytes = W.compile(ConstantGraphCases.read_held, (Int64,))
+    for r in WTRunner.run_cases([WTRunner.RunCase("held$(a)", held_bytes, a, ConstantGraphCases.read_held(a...)) for a in [(1,), (-3,)]])
+        @test r.ok || (@info r.label r.why; false)
+    end
 end
 
 module EgalCases

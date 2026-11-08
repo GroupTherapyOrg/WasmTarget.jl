@@ -85,7 +85,7 @@ end
 
 The classes of the closed world `world`, its NIR, in the order its walk first meets them: each body in
 order, its argument types (its MethodInstance's signature), then each statement's type, then the
-type of each literal and constant binding its statements read (nir_value_type: the value's own
+type of each literal and binding its statements read, an operand or a statement of its own (nir_value_type: the value's own
 type, which no statement's type need hold: `"hello"` compared, a `const` Ref read), then its return
 type. A type meets the walk by Julia's own inferred form: a `Union` by its members, a
 `Vararg` by its element, a type as a value (`Type{X}`, or a `UnionAll` under `Type`) by its kind
@@ -120,6 +120,10 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
                 v isa NirGlobal && (_meet_value!(out, seen, nir_value_type(b, v), at);
                                     _meet_constant!(out, seen, objs, nir_binding_value(v.ref, at).c.val, at))
             end
+            # a binding read as a statement of its own (Kernel's StaticGet) starts at its value, the
+            # constant its lazy initializer instantiates (StaticFieldInitializerCodeGenerator): its
+            # object graph, as an operand's; the statement's type is met with b.types
+            st isa NirGlobalRead && _meet_constant!(out, seen, objs, nir_binding_value(st.ref, at).c.val, at)
             # a tuple's class is its operands' (nir_tuple_type), which the statement's widened type
             # may hide; so is the tuple an invoke of a varargs specialization of an open count packs
             # (nir_vararg_call_tuple); one whose class only run time knows is the record of its arity
