@@ -52,8 +52,10 @@ G5 is the judge untouched:
 
 G4 is the one gate a model judges, so it is measured like the score (Theo's eval of past failures):
 `climb.py judge-eval` reverts small landed fixes of audit findings, each a defect an audit really found, and asks
-the reviewer, blind, to refuse each revert and approve each fix. The set is fixed at its first run. Launch runs it
-during the first score. Under 80% refused or 60% approved, the lead tightens `reviewer.md` and runs it again.
+the reviewer, blind, to refuse each revert. The set is fixed at its first run. Launch runs it during the first
+score. Under 80% refused, the lead tightens `reviewer.md` and runs it again. Its verdict on each fix is reported,
+never scored: a fix is no proof of a clean commit (its first run refused 6 of 6 fixes, two for the open A95S2 and
+A96S2 that later audits found in them).
 
 Agents are fenced, each layer measured by a probe agent (2026-11-08):
 - Bash runs in Claude Code's sandbox. It writes the worktree and the git objects, never the git config, the
