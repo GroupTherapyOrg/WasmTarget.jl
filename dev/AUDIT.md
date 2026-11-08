@@ -9405,3 +9405,100 @@ mislabels a gap's kind rather than hiding it.
 Resolution: this entry lands alone, prose only. A94E1, A94S1 and A95S4 leave their rows. A95E2, fixed in substance by
 0613a505, keeps its row until a Fixes: line names it. Fix first: A96E1. 1.F: A96E1, A96E2, A96S1. 1.K: A96S2. 1.L:
 A96S3.
+
+## 2026-11-08 — audited through 6bfa4c83 (fe6c10d2..6bfa4c83: the climb, @quarantine's pin form and its migration, typeof as jl_typeof, FoldSetCC and the commute, egal's null host fields, four audit-95 fixes, ship's .wtd copy)
+
+The ninety-seventh audit, beside the work, covers the ten commits of fe6c10d2..6bfa4c83 that are not audit entries
+(ee1229f0, entry 96). Standing items: every commit carries one Charter trailer (`git show -s --format=%B <c> | grep -c
+'^Charter:'` prints 1 for each). There is no new silent catch. The debt list goes from 353 to 350 at 4b9c15fa and the
+no-counterpart list stays at 2 (`git show <c>:dev/quarantine_unpinned.txt | grep -cv '^\s*#\|^\s*$'`). 988664c3 writes 32
+`pin"…"` sites and 141 `unpinned` sites, matching its body (`git grep -nE '@quarantine (pin"|unpinned)' 988664c3 -- src`:
+33 and 142, the docstring's two examples among them). Every anchor the range cites declares its symbol at its pin:
+- Docs.jl:161 DocStr, :233 doc!, :639 docm;
+- verifytrim.jl:125 verify_create_stackframes and :182, the parents write;
+- tfuncs.jl:2472, with the muladd_float entry commented out at :2486-2488 and read at :3044;
+- runtime_intrinsics.c:1517 and julia.h:117 jl_typeof;
+- gf.c:3017 and expr.jl:277;
+- SelectionDAG.cpp:2707 FoldSetCC and TargetLowering.cpp:4800 and :4810-:4826;
+- code_generator.dart:2258 visitInstanceGet.
+Earlier findings: 9f7d9060 fixes A95E1, 959e548b A95E3, 7e8fc670 A95S1 (but see A97E3), 8aaea0a4 A95S3, and 6a58994c
+narrows A94S4. Findings: A97E1 to A97E5, A97S1 to A97S7.
+
+Area: builder — no change under src/wasm_builder. The two gaps 6a58994c met, `ref null #Top` cast to externref and
+externref stored as anyref, were refused by the builder as InvalidModule at the emitting line, as D10 asks.
+
+Area: collection and planning — 35226c27 rejects a class the operand admits that has no type-value constant, located,
+before any typeof table read (intrinsics.jl's to_typeof arm). Over Any this rejects Memory{Any}, as its test pins.
+9f7d9060's SubsetCycle reaches the cut: without a cycle, ping has no parent and its frames would be [:ping] alone.
+(A97S3, low, D12) 8aaea0a4 lands `Fixes: A95S3` with no case that reaches the restored Internal (constants.jl:815-816).
+Its tests are "unchanged" and 617/617. The comment one line above still names constant_unmade as the one source, and
+:816 tests class info again.
+
+Area: emission and diagnostics —
+- typeof: the lowering takes visitInstanceGet's nullable shape (code_generator.dart:2258-2293: br_on_null past the
+  lookup, the null arm the Null type literal). Julia's optimized IR keeps the builtin, which the new cases reach (a Julia
+  1.12.7 code_typed of code_of and code_of_n prints `builtin Main.typeof(%1)::Union{Type{ToA}, Type{ToB}}`).
+- muladd: 959e548b's reason now states the pin's fact.
+- (A97E3, medium, D12, D2) 7e8fc670's Tests say the zext compares exercise the new arms. They cannot: a zext's constant
+  high half goes through make() into a struct (intrinsics.jl:2311), and a compare reads every non-literal operand back
+  into i64 locals (`expanded`, intrinsics.jl:2214-2224). Every caller of expand_int_op_setcc has a non-literal left
+  operand, or moves a literal left operand right first (intrinsics.jl:2277-2280), or has both sides constant (the
+  division checks, :2396-:2410). So no case reaches the commute (target_lowering.jl:42-47), and the new comment's "the
+  commute by a constant half an expansion makes on the left" is false (`sed -n 2268,2283p src/intrinsics.jl`;
+  `grep -n expand_int_op_setcc src/intrinsics.jl`).
+- (A97S1, low, D5) getSetCCSwappedOperands is now written twice: the int128 arm swaps a literal left operand with its own
+  table (intrinsics.jl:2277-2280), and simplify_set_cc swaps again with a second table (target_lowering.jl:42-47).
+- (A97S4, low, charter rule 5) the two externref-Union gaps 6a58994c's body names, the reason its case cannot be written,
+  sit on no MARCH row (`grep -c externref dev/MARCH.md` prints 0). JSValue's == (js_helper.dart:42) is the right
+  precedent for answering null first.
+
+Area: enforcement and prose —
+- 950ccf5e always execs the .wtd copy.
+- 4b9c15fa's pin form is checked at the definition's line, with plants.
+- (A97E4, medium, D5, D6, D20) the old @quarantine form stays admitted beside the pin form (parity.jl:392, the
+  three-argument macro). It holds 335 sites in 20 files (`grep -rnE '@quarantine "' src`: 337, two of them parity.jl's
+  docs). No ratchet counts them: 4b9c15fa defers one to "a charter line … the lead's to ask of Dale", and `grep -n -i "old
+  form" test/parity_ratchet.jl` finds only a comment. 1.K migrates "by their owners", and the climb has none: its holds
+  come only from corpus rejections and the src tail (climb.py:243-256). A climber can still write a new old-form site.
+- (A97E1, high, D47, D6) HILL.md:58-65 calls the agents fenced, with "None lands". Yet HILL.md:63 says itself that a
+  climber's Kaimon Julia runs outside the sandbox. The only fence there is climber.md:38's prose ("never `run`, `git`, a
+  shell"). From that Julia, `git push --no-verify` skips dev/hooks/pre-push. The hook also admits any push whose
+  WT_SHIP_RULES equals `git rev-parse origin/wt2:dev/ship.sh`, a value anyone can compute (`cat dev/hooks/pre-push`).
+  The same Julia can write .wt-climb's judge-set.json and the pass set, which HILL.md:60 says no agent reaches.
+  ship.sh's climb-* branch refusal binds only a process that runs ship.sh.
+- (A97E2, medium, D47, refusal 4) G5's PROTECTED (climb.py:96-98) leaves out test/src_tests.jl. dev/check.sh:171 runs the
+  slot's copy of that file as the landing check's src tests, so a move can thin G3 with only the model reviewer to see it.
+  The list also leaves out test/codegen_helpers.jl, which four test/src files include, and test/runtests.jl. Its corpus
+  redefinition scan (DEF_RE, climb.py:574) misses `@noinline f(x) = …`, `f(x)::Int = …`, `Base.f(x) = …`, `const` and
+  `struct` (a `python3 -I` match of each prints False).
+- (A97E5, medium, D47, G4) `judge-eval` is called blind, but it is not. The approve case is the real fix commit with its
+  own message (`Fixes: A9…`, "Why: audit #9…"), and reviewer.md has the reviewer run `git show {{COMMIT}}`. The refuse
+  case is committed directly on that fix, in a slot whose history the reviewer reads with Bash (climb.py:957-966, :561).
+  So recall and approval overstate the reviewer. A score under 80/60 takes the default "the climb runs"
+  (climb.py:980-983), while HILL.md:56 has a lead tighten the reviewer first, and HILL.md:121 has no resident lead.
+- (A97S2, low, D12, D46) a src-tail move is measured only by "changes something under src/" (climb.py:668-669). Nothing
+  measures that a listed definition leaves src_progress's not-ported kinds, or that a case reaches it, which HILL.md:26
+  requires; a comment edit passes the driver.
+- (A97S5, low, D14, D21, D48) cfg() lets an uncommitted config.json override audit_every (D21's 5) and fable_per_day
+  (D48's twice a day). Only week_weighted and margin are guarded (climb.py:85-91).
+- (A97S6, low, D14) every dev/ship.sh red is retried once and filed `blocked:infra` (climb.py:859-869). A move's own red
+  check is never sent back to its climber or ruled, and four of them pause the climb as "infrastructure".
+- (A97S7, low, D49) L204 now checks that IDs increase (parity_ratchet.jl:2303), and its message and 6bfa4c83's body say
+  "never reused". Deleting the last row and adding a new row under the same ID passes.
+
+stopgap in disguise: a climber's Kaimon session fenced by a brief's prose and an environment hash the hook compares,
+called a measured fence (A97E1); G5's path list and a name regex standing for "the judge untouched" (A97E2); an eval
+called blind that shows the fix's own message (A97E5).
+
+precedent: SelectionDAG.cpp:2707 FoldSetCC, TargetLowering.cpp:4800 and :4810-:4826 and LegalizeIntegerTypes.cpp:5932 at
+the llvm pin; julia.h:117 jl_typeof, Docs.jl:161, :233 and :639, verifytrim.jl:125 and :182, tfuncs.jl:2472-2489 and
+:3044, and runtime_intrinsics.c:1517 at the julia pin; code_generator.dart:2258 visitInstanceGet and js_helper.dart:42
+JSValue.== at the dart pin; git-push(1) --no-verify.
+
+R1: typeof and FoldSetCC follow their sources; the commute is ported where no case reaches it, and the swap is computed
+twice (A97E3, A97S1). R2: nothing is called complete; the src tail's measure would let a non-port count as a move
+(A97S2).
+
+Resolution: this entry lands alone, prose only. A95E1, A95E3, A95S1 and A95S3 leave their rows. A94S4 stays, narrowed.
+A95E2 keeps its row until a Fixes: line names it. Fix first: A97E1. 1.L: A97E1, A97E2, A97E5, A97S2, A97S5, A97S6, A97S7.
+1.K: A97E4. 1.D: A97E3, A97S1, A97S4. 1.C: A97S3.
