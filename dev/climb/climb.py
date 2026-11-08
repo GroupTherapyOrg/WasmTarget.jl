@@ -93,8 +93,9 @@ def cfg():
 
 # G5: the judge and the rules. A move touching one is refused before review; ADD_ONLY files may only gain lines,
 # and NEW_ONLY directories only gain files (a model's invariant is never loosened in a port move: refusal 9).
-PROTECTED = [r"^dev/(?!formal/)", r"^dev/formal/run_tlc\.sh$", r"^test/smoke\.jl$", r"^test/runner\.jl$",
-             r"^test/parity_ratchet\.jl$", r"^AGENTS\.md$", r"^\.github/", r"^\.gitignore$", r"^Project\.toml$",
+PROTECTED = [r"^dev/(?!formal/)", r"^dev/formal/run_tlc\.sh$",
+             r"^test/(?!smoke_corpus\.jl$|smoke_times\.tsv$)[^/]+$",   # every driver and shared helper the check and smoke load (A97E2)
+             r"^AGENTS\.md$", r"^\.github/", r"^\.gitignore$", r"^Project\.toml$",
              r"^Manifest\.toml$", r"^legacy/"]   # all of dev/: the tooling, the plan and the audit log are the driver's or a ruling's
 ADD_ONLY = [r"^test/smoke_corpus\.jl$", r"^test/smoke_times\.tsv$"]
 NEW_ONLY = [r"^dev/formal/"]
@@ -571,8 +572,6 @@ def added_lines(slot, path=None):
     args = ["diff", "-U0", f"origin/{MARCH}...HEAD"] + (["--", path] if path else [])
     return [l[1:] for l in git(*args, cwd=slot).splitlines() if l.startswith("+") and not l.startswith("+++")]
 
-DEF_RE = re.compile(r"^(?:function\s+)?([A-Za-z_]\w*)\s*\(.*?\)\s*(?:=|$)", re.M)
-
 def g5(slot):
     """The judge untouched (HILL.md G5)."""
     names = git("diff", "--name-only", f"origin/{MARCH}...HEAD", cwd=slot).splitlines()
@@ -591,13 +590,20 @@ def g5(slot):
             if removed:
                 bad.append(f"{n} (removes or changes {len(removed)} line(s); it may only gain lines)")
             if n.endswith(".jl"):
-                base_defs = set(DEF_RE.findall(git("show", f"origin/{MARCH}:{n}", cwd=slot)))
                 for l in added_lines(slot, n):
                     if re.search(r"\b(GROUPS|XFAIL)\b", l):
                         bad.append(f"{n} (an added line names GROUPS or XFAIL: {l.strip()[:80]})")
-                    m = DEF_RE.match(l)
-                    if m and m.group(1) in base_defs and m.group(1) not in ("_g", "_xf", "_lazy_g", "_lazy_xf"):
-                        bad.append(f"{n} (an added line redefines {m.group(1)}, which the corpus already defines)")
+                # a name the corpus binds is never rebound, read by Julia's parser, not a regex (A97E2)
+                base = os.path.join(slot, ".wtd", "corpus-base.jl")
+                os.makedirs(os.path.dirname(base), exist_ok=True)
+                open(base, "w").write(git("show", f"origin/{MARCH}:{n}", cwd=slot))
+                r = sh(["julia", "--startup-file=no", os.path.join(ROOT, "dev", "climb", "corpus_names.jl"), base,
+                        os.path.join(slot, n)], timeout=300)
+                if r.returncode != 0:
+                    bad.append(f"{n} (Julia's parser does not read it: {(r.stderr or r.stdout).strip()[-200:]})")
+                for l in r.stdout.splitlines():
+                    name, before, after = l.split("\t")
+                    bad.append(f"{n} (rebinds {name}, which the corpus binds {before} time(s); {after} after the move)")
     return bad
 
 @contextlib.contextmanager
@@ -674,6 +680,44 @@ def verify(slot, h):
     return unlocked, problems
 
 # ---------------------------------------------------------------- slots and moves
+def fence_kaimon(path, name):
+    """A climber's Kaimon session is Julia outside Claude Code's sandbox (A97E1). Its julia_bin becomes a wrapper in
+    the climb's state, which the agent cannot write, that runs Julia under macOS's sandbox (the seatbelt Claude
+    Code's own sandbox uses): writes only under the slot within GroupTherapyOrg (so never the climb's state, the git
+    refs or hooks, another worktree), and no network but localhost (so no push). Measured 2026-11-08: a slot write,
+    a temp write and a depot compile pass; the state, the hooks and `git ls-remote origin` are refused. A session
+    started before the fence is stopped once, so the next start runs fenced."""
+    org = os.path.dirname(REPO)
+    sb, wrap = os.path.join(STATE, "fence", f"{name}.sb"), os.path.join(STATE, "fence", f"julia-{name}")
+    os.makedirs(os.path.dirname(sb), exist_ok=True)
+    open(sb, "w").write(f"""(version 1)
+(allow default)
+(deny file-write* (subpath "{org}"))
+(allow file-write* (subpath "{path}"))
+(deny network-outbound)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote unix-socket))
+""")
+    depot = sh(["bash", os.path.join(ROOT, "dev", "depot.sh"), "path", path]).stdout.strip()
+    open(wrap, "w").write(f"#!/bin/sh\n# dev/climb/climb.py fence_kaimon: {name}'s Kaimon Julia, sandboxed\n"
+                          f"JULIA_DEPOT_PATH=\"{depot}\" exec /usr/bin/sandbox-exec -f \"{sb}\" \"{shutil.which('julia')}\" \"$@\"\n")
+    os.chmod(wrap, 0o755)
+    proj = os.path.expanduser("~/.config/kaimon/projects.json")
+    with locked():
+        d = json.load(open(proj)) if os.path.exists(proj) else {"projects": []}
+        ps = [p for p in d.get("projects", []) if p.get("project_path") != path]
+        ps.append({"project_path": path, "enabled": True, "launch_config": {"threads": "4", "startup_file": False,
+                   "instantiate": "auto", "julia_bin": wrap}})
+        d["projects"] = ps
+        json.dump(d, open(proj + ".tmp", "w"), indent=2); os.replace(proj + ".tmp", proj)
+    mark = os.path.join(STATE, "fence", f"{name}.fenced")
+    if not os.path.exists(mark):
+        for line in sh(["pgrep", "-f", f"--project={path}"]).stdout.split():
+            with contextlib.suppress(ProcessLookupError, ValueError):
+                os.kill(int(line), signal.SIGTERM)
+        open(mark, "w").write(stamp())
+        event("fenced", slot=name)
+
 def slot_ready(name):
     """A climber's worktree at origin/wt2. Earlier work is kept on a salvage branch, never reset away; the
     branch's name is returned so the next climber starts from it."""
@@ -683,6 +727,8 @@ def slot_ready(name):
         r = sh(["bash", "dev/lane.sh", "start", name])
         if r.returncode != 0:
             raise ClimbError(f"dev/lane.sh start {name}: {(r.stdout + r.stderr)[-300:]}")
+        if re.fullmatch(r"climb-\d+", name):
+            fence_kaimon(path, name)
         return path, None
     gd = git("rev-parse", "--path-format=absolute", "--git-dir", cwd=path)
     for op, cmd in (("rebase-merge", "rebase"), ("rebase-apply", "rebase"), ("MERGE_HEAD", "merge"), ("CHERRY_PICK_HEAD", "cherry-pick")):
@@ -698,6 +744,8 @@ def slot_ready(name):
             git("commit", "-q", "--no-verify", "-m", f"wip(salvage): {name}'s uncommitted work, kept by dev/climb", cwd=path)
         event("salvaged", slot=name, branch=salvage)
     git("checkout", "-q", "-B", name, f"origin/{MARCH}", cwd=path)
+    if re.fullmatch(r"climb-\d+", name):
+        fence_kaimon(path, name)
     return path, salvage
 
 def claim(h, slot):
@@ -959,14 +1007,19 @@ def judge_eval(n=6):
         for i, f in enumerate(judge_set(n)):
             sha = f["sha"]
             stem = os.path.splitext(os.path.basename(git("diff", "--name-only", f"{sha}^", sha, "--", "src/").splitlines()[0]))[0]
-            git("checkout", "-q", "-B", "climb-judge", sha, cwd=slot)
-            git("revert", "--no-commit", sha, cwd=slot)
-            git("-c", "user.name=climb", "-c", "user.email=climb@localhost", "commit", "-q", "--no-verify", "-m",
-                f"feat({stem}): the change under review", cwd=slot)
-            bad = git("rev-parse", "HEAD", cwd=slot)
-            rv_bad = review(f"judge{i}b", slot, sha[:8], bad)
-            git("checkout", "-q", "-B", "climb-judge", sha, cwd=slot)
-            rv_good = review(f"judge{i}g", slot, git("rev-parse", "--short", f"{sha}^", cwd=slot), sha)
+            # blind (A97E5): each case is a parentless base and one change, both with neutral messages, so neither
+            # the fix's message nor its history is reachable from what the reviewer reads
+            fixed, before = git("rev-parse", f"{sha}^{{tree}}"), git("rev-parse", f"{sha}^^{{tree}}")
+            def case(base_tree, tree):
+                ident = ["-c", "user.name=climb", "-c", "user.email=climb@localhost"]
+                b = git(*ident, "commit-tree", base_tree, "-m", "the tree before the change", cwd=slot)
+                return b, git(*ident, "commit-tree", tree, "-p", b, "-m", f"feat({stem}): the change under review", cwd=slot)
+            base, bad = case(fixed, before)
+            git("checkout", "-q", "-B", "climb-judge", bad, cwd=slot)
+            rv_bad = review(f"judge{i}b", slot, base[:8], bad)
+            base, good = case(before, fixed)
+            git("checkout", "-q", "-B", "climb-judge", good, cwd=slot)
+            rv_good = review(f"judge{i}g", slot, base[:8], good)
             results.append({"sha": sha[:8], "subject": f["subject"][:120],
                             "defect_refused": bool(rv_bad) and not approved(rv_bad), "fix_approved": approved(rv_good),
                             "bad": rv_bad, "good": rv_good})
@@ -979,10 +1032,11 @@ def judge_eval(n=6):
     spec = sum(r["fix_approved"] for r in results) / len(results)
     save_json("judge-eval.json", {"t": stamp(), "recall": rec, "approval": spec, "results": results})
     event("judge-eval", recall=rec, approval=spec, n=len(results))
-    if rec < 0.8:   # intent: the reviewer refuses what audits found; band: 80% of the set, its edge a note for Dale
+    if rec < 0.8:   # intent: the reviewer refuses what audits found; band: 80% of the set, under it no move lands
+        open(os.path.join(STATE, "PAUSE"), "w").write("the judge refused under 80% of past defects\n")
         for_dale("the judge misses past defects", f"The blind reviewer refused {rec:.0%} of {len(results)} real past defects "
-                 f"({os.path.join(STATE, 'judge-eval.json')}). Default taken: the climb runs, and the lead tightens "
-                 "dev/climb/reviewer.md against the misses, then re-runs `climb.py judge-eval`.")
+                 f"({os.path.join(STATE, 'judge-eval.json')}). Default taken: moves hold (PAUSE) until the lead tightens "
+                 "dev/climb/reviewer.md against the misses and `climb.py judge-eval` measures it again (A97E5).")
     print(f"judge: refused {rec:.0%} of past defects; approved {spec:.0%} of their fixes, reported only ({len(results)} pairs)")
 
 # ---------------------------------------------------------------- the loops
@@ -1012,11 +1066,28 @@ def scoreboard_once(head):
     draw_map(os.path.join(STATE, "map.html"))
     print(f"scored {head[:8]}: S={s['passed']}/{s['climbable']} lost={len(lost)} bad={len(bad)} ({round(time.time() - t0)} s)", flush=True)
 
+def unlogged_landings():
+    """Commits on origin/wt2 since launch that dev/ship.sh's landing log does not name: a push around the driver."""
+    p = os.path.join(STATE, "launch-base")
+    if not os.path.exists(p):
+        open(p, "w").write(git("rev-parse", f"origin/{MARCH}"))
+    logged = [l.split("\t")[1] for l in open(os.path.join(COMMON, "wt-landings.tsv")) if l.count("\t") >= 2] \
+        if os.path.exists(os.path.join(COMMON, "wt-landings.tsv")) else []
+    return [c for c in git("rev-list", f"{open(p).read().strip()}..origin/{MARCH}").splitlines()
+            if not any(c.startswith(h) for h in logged if len(h) >= 7)]
+
 def scoreboard():
     last, last_t = None, 0.0
     while True:
         try:
             fetch()
+            rogue = unlogged_landings()
+            if rogue and not os.path.exists(os.path.join(STATE, "PAUSE")):
+                open(os.path.join(STATE, "PAUSE"), "w").write("origin/wt2 advanced by a push no landing names\n")
+                for_dale("the climb paused itself: a push around the driver", "These commits reached origin/wt2 with no "
+                         f"dev/ship.sh landing: {', '.join(c[:8] for c in rogue)}. Default taken: paused until the lead "
+                         "reads them and runs `bash dev/climb/launch.sh resume`.")
+                event("rogue-push", commits=[c[:8] for c in rogue])
             head = git("rev-parse", f"origin/{MARCH}")
             n = len(git("rev-list", f"{last}..{head}").splitlines()) if last else 10 ** 6
             if head != last and (n >= cfg()["score_every_landings"] or time.time() - last_t >= cfg()["score_every_s"]):

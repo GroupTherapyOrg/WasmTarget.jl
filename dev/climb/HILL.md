@@ -43,17 +43,20 @@ counted), the runtime library's gaps and the tokens spent. These are tie-breaks,
 | G5 the judge untouched | the driver refuses the diff | Theo's rule: never let the climber edit the eval |
 
 G5 is the judge untouched:
-- The judge's code and the rules may not change at all: the smoke and its runner, `dev/climb/`, the
+- The judge's code and the rules may not change at all: every file directly under `test/` but the corpus and its
+  times (the smoke, its runner, the src tests' driver and helpers), `dev/climb/`, the
   landing tooling, the depot, the progress counter, the hooks, the ratchet, the charter, the ledger,
   AGENTS.md, CI, Project and Manifest. `climb.py`'s PROTECTED list names each one.
 - `test/smoke_corpus.jl` and `test/smoke_times.tsv` may only gain lines. An added line may not touch
-  `GROUPS` or `XFAIL`, and may not redefine anything the corpus already defines.
+  `GROUPS` or `XFAIL`, and may not rebind a name the corpus binds, read by Julia's parser
+  (`dev/climb/corpus_names.jl`).
 - `dev/formal/` may only gain new files. An existing model changes only by ruling.
 
 G4 is the one gate a model judges, so it is measured like the score (Theo's eval of past failures):
 `climb.py judge-eval` reverts small landed fixes of audit findings, each a defect an audit really found, and asks
-the reviewer, blind, to refuse each revert. The set is fixed at its first run. Launch runs it during the first
-score. Under 80% refused, the lead tightens `reviewer.md` and runs it again. Its verdict on each fix is reported,
+the reviewer to refuse each revert, blind: each case is a parentless base and one change with a neutral message.
+The set is fixed at its first run. Launch runs it during the first score. Under 80% refused, moves hold until the
+lead tightens `reviewer.md` and the eval measures it again. Its verdict on each fix is reported,
 never scored: a fix is no proof of a clean commit (its first run refused 6 of 6 fixes, two for the open A95S2 and
 A96S2 that later audits found in them).
 
@@ -62,9 +65,11 @@ Agents are fenced, each layer measured by a probe agent (2026-11-08):
   hooks or the climb's state, which lives outside the repository.
 - Every other tool runs only if its allowlist names it ("dontAsk"): Edit and Write only under the agent's worktree,
   and of Kaimon only `start_session`, `ex`, `manage_repl` and `check_eval`, for a climber alone.
-- Kaimon's Julia runs outside the sandbox, so a climber uses it for Julia questions only (climber.md).
+- A climber's Kaimon Julia runs under the same kind of seatbelt, through a wrapper in the climb's state: it
+  writes only its slot within GroupTherapyOrg and reaches no network but localhost.
 - None lands: the pre-push hook passes only origin's `dev/ship.sh`, which refuses an agent's env and any climb
-  slot the driver does not ship. The driver alone lands.
+  slot the driver does not ship. The driver alone lands, and a commit reaching origin/wt2 that `dev/ship.sh`'s
+  landing log does not name pauses the climb.
 
 The driver re-runs every gate after every change a move makes, including a review's fix.
 
