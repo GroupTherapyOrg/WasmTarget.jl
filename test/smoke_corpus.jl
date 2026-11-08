@@ -761,6 +761,11 @@ _g("bit_exact_math", Any[
     ("tanh_f32", (n::Int64) -> _sm_bits(tanh, Float32, n), Int64(4001)),
     ("fma_branches", _sm_fma_bits, Int64(1)),
     ("muladd_fused", _sm_fma_bits, Int64(2)),
+    # a muladd on literal arguments, which an inference evaluating the call folds at compile time, beside the same muladd
+    # at run time in one module: (1 + 2^-30)(1 - 2^-30) - 1 is -2^-60 rounded once and 0.0 rounded twice, and native
+    # Julia on an FMA host answers -2^-60 at both (A93E1: muladd_fused reads its table at a run-time index, so it folds
+    # no muladd, and it passed under either of b1cbfc60's overlays)
+    ("muladd_folded_and_run", (n::Int64) -> (muladd(1.0 + 2.0^-30, 1.0 - 2.0^-30, -1.0), muladd(1.0 + n * 2.0^-30, 1.0 - n * 2.0^-30, -1.0)), Int64(1)),
 ])
 # Julia's own bit-level bodies, which replaced overlays: shifts by a negative or oversized
 # Int amount (the overlays existed because `0x01 << typemin(Int64)` once answered 1; Julia's

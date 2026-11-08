@@ -39,14 +39,17 @@ let corpus = Meta.parseall(read(joinpath(@__DIR__, "..", "smoke_corpus.jl"), Str
     end
 end
 
-# the kernels bdd08864 broke, a case each
-const FLOAT_GUARD = ("exp_f64", "expm1_f64", "acos_f64", "asin_f64", "sinh_f64", "cosh_f64", "hypot_f64", "exp_f32", "muladd_fused")
+# the kernels bdd08864 broke, a case each, and a muladd folded at compile time beside the same muladd at run time (A93E1)
+const FLOAT_GUARD = ("exp_f64", "expm1_f64", "acos_f64", "asin_f64", "sinh_f64", "cosh_f64", "hypot_f64", "exp_f32", "muladd_fused",
+                     "muladd_folded_and_run")
 @testset "the landing's float guard: bit_exact_math's kernels a change broke, each answer native's" begin
     local group = only(FloatGuardCases.GROUPS)
     @test first(group) == "bit_exact_math"
     local cs = [c for c in last(group) if c[1] in FLOAT_GUARD]
     @test sort!([c[1] for c in cs]) == sort!(collect(FLOAT_GUARD))
-    local cases = [Main.WTRunner.compiled_case("bit_exact_math/$(c[1])", WasmTarget.compile, c[2], Tuple(c[3:end])) for c in cs]
+    # each case's own modules and, for a tuple's answer, a reader per leaf type, its facts read one by one
+    local cases = reduce(vcat, (first(Main.WTRunner.answer_cases("bit_exact_math/$(c[1])", WasmTarget.compile, c[2], Tuple(c[3:end])))
+                                for c in cs))
     for r in Main.WTRunner.run_cases(cases)
         @test (r.label => r.why) == (r.label => "")
     end
