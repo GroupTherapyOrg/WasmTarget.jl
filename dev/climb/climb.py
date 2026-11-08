@@ -177,6 +177,14 @@ def unported_site(why):
     m = UNPORTED_RE.search(why)
     return re.split(r", | \| |; ", m.group(2))[0] if m else None
 
+_INSTANCE_RE = re.compile(r"(?<![\w.])(?:[A-Z_][\w.]*(?:\{[^\s]*\})?|\S*[{(]\S*)")
+
+def _shape(reason):
+    """A reason with the Julia types and values it names cut to `…`: on 2026-11-08 one gap, translateStorageType of a
+    primitive class, was eight holds (Ptr{UInt8} 148 cases, Ptr{Nothing} 21, Ptr{Int64} 20, …, 240 in all, half the
+    failing corpus), each too small to rank."""
+    return re.sub(r"(…[\s,]*)+", "… ", _INSTANCE_RE.sub("…", reason)).strip()
+
 def hold_key(outcome, label, why):
     """One rejection site and reason: the cases one fix can unlock (HILL.md, 'holds')."""
     if outcome == "wrong":
@@ -184,7 +192,9 @@ def hold_key(outcome, label, why):
     if outcome == "unported":
         m = UNPORTED_RE.search(why)
         if m:
-            return _norm(("unported " if m.group(1) == "dart" else "unquarantined ") + unported_site(why))[:200]
+            site = unported_site(why)
+            head, sep, reason = site.partition(": ")
+            return _norm(("unported " if m.group(1) == "dart" else "unquarantined ") + head + sep + _shape(reason))[:200]
         return _norm("unported (unparsed): " + why[:140])
     m = SITE_RE.search(why)   # an Internal or InvalidModule keyed on its dart site alone, not its per-instance text
     if m:
@@ -261,6 +271,8 @@ def holds(cases=None):
         g = groups.setdefault(k, {"key": k, "cases": [], "secs": 0.0, "why": why[:400],
                                   "keeper": bool(RUNNER_GAP_RE.search(why))})
         g["cases"].append(label); g["secs"] += secs
+        inst = (unported_site(why) if outcome == "unported" else None) or why[:160]
+        g.setdefault("instances", collections.Counter())[inst] += 1
     out = list(groups.values())
     for f in state_json("fixfirst.json", []):          # audit findings, G2 losses and harvests: fix first (D21)
         out.append({"key": f["key"], "cases": f.get("cases", []), "secs": 0.0, "why": f["why"], "fixfirst": True,
@@ -804,7 +816,9 @@ def fence_kaimon(path, name):
         json.dump(d, open(proj + ".tmp", "w"), indent=2); os.replace(proj + ".tmp", proj)
     # every move starts with no session of the slot's alive: a private session per move otherwise piles up (ten
     # resident Julias on 2026-11-08, beside D14's red checks), and a session restarted around the fence ends here
-    for line in sh(["pgrep", "-f", f"--project={path}"]).stdout.split():
+    # the pattern never starts with "--": pgrep read "--project=…" as its own flag and matched nothing, so sessions
+    # piled up, twelve on 2026-11-08 with 10.9 of 12 GB of swap used, and every landing check went red on D14
+    for line in sh(["pgrep", "-f", f"project={path}"]).stdout.split():
         with contextlib.suppress(ProcessLookupError, ValueError):
             os.kill(int(line), signal.SIGTERM)
     event("fenced", slot=name)
@@ -945,7 +959,9 @@ def move(h, slot_name):
         hand = (hand or "") + f"\n\nThis slot's earlier unlanded work is on the local branch {salvage} (`git log -p origin/{MARCH}..{salvage}`)."
     rl = state_json("rulings.json", {}).get(h["id"], [])
     brief = render("keeper.md" if h.get("keeper") else "climber.md", WORKTREE=slot, BRANCH=slot_name, BASE=base,
-                   HOLD=f"**{h['key']}**\n\nWhy (the first case's rejection): {h['why']}",
+                   HOLD=f"**{h['key']}**\n\nWhy (the first case's rejection): {h['why']}" + (
+                       "\n\nThe hold's distinct rejections (one gap, its instances; port the gap, not one instance):\n" +
+                       "\n".join(f"- {n} × {r}" for r, n in h["instances"].most_common(15)) if len(h.get("instances", {})) > 1 else ""),
                    CASES=caselines, HANDOFF=f"## The last climber's handoff\n\n{hand}" if hand else "",
                    RULINGS="## Rulings on this hold (bound by these)\n\n" + "\n".join(f"- {x['ruling']}" for x in rl) if rl else "")
     open(os.path.join(STATE, "briefs", f"{task}.md"), "w").write(brief)
@@ -1274,7 +1290,7 @@ def scoreboard():
             event("score-failed", error=repr(e)[:300])
         time.sleep(120)
 
-def pick():
+def pick(slot=None):
     if not head_cases():   # no move before the first scored head: the holds and the sentinel net come from it
         return
     ev = events()
@@ -1284,7 +1300,12 @@ def pick():
     # (by ancestry, not by time: a score runs for an hour, and a landing during it is not in what it scored)
     done = {e.get("hold_id") for e in ev if e["kind"] == "landed"
             and not (head and sh(["git", "merge-base", "--is-ancestor", e.get("commit", ""), head]).returncode == 0)}
-    for h in holds():
+    hs = holds()
+    if slot == "climb-1":   # D40: one slot always ports compiler src, the hold that unlocks most cases first
+        corpus = sorted((h for h in hs if not h["key"].startswith("G") and not h.get("fixfirst") and not h.get("tail")
+                         and not h.get("keeper")), key=lambda h: -h["n"])
+        hs = corpus + [h for h in hs if h not in corpus]
+    for h in hs:
         if h["parked"] or h["id"] in done or h["n"] == 0 and not h.get("fixfirst"):
             continue
         yield h
@@ -1305,7 +1326,7 @@ def run(slots, one=False):
                     event("budget-wait", slot=name); time.sleep(900); continue
                 if i == 1 and audit_lag()[0] >= cfg()["audit_every"]:
                     audit()
-                h = next((h for h in pick() if claim(h, name)), None)
+                h = next((h for h in pick(name) if claim(h, name)), None)
                 if not h:
                     time.sleep(300); continue
                 move(h, name)
