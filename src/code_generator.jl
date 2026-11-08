@@ -1147,7 +1147,7 @@ end
     # a value read where its set does not structurally dominate the read: the stackifier may place the
     # read after the end of the wasm block holding the set, where wasm counts a non-nullable local
     # uninitialized again (a use Julia's dominance allows, a def in a try region read after it). Each
-    # such value's local is defaultable, its reads ref.as_non_null (visitVariableGet), Binaryen's
+    # such value's local is defaultable, each read converted to the type it expects (translateExpression's convertType), Binaryen's
     # TypeUpdating::handleNonDefaultableLocals over its LocalStructuralDominance: the scopes open at
     # each set, a read outside the set's innermost one not dominated
     local def_scope = Dict{Int,Int}()
@@ -1764,14 +1764,10 @@ end
     local local_ = get(self.locals, node, nothing)
     local_ === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:2127 AstCodeGenerator.visitVariableGet: read of undefined variable $node"), "$(self.enclosing_member)")
     WasmBuilder.local_get(self.b[], local_)
-    # a defaultable local of a value Julia types non-nullable (visit_block): the value, never null
-    if node isa NirSSA && local_.type isa WasmBuilder.IR.RefType && local_.type.nullable
-        local declared = translate_type_of_local_variable(self.translator, self.body.types[node.id])
-        if declared isa WasmBuilder.IR.RefType && !declared.nullable
-            WasmBuilder.ref_as_non_null(self.b[])
-            return declared
-        end
-    end
+    # a defaultable local (visit_block) is read at its own type, as dart's is: translateExpression's
+    # convertType narrows it to a non-nullable expected type (ref.as_non_null), and a COPY into a
+    # phi's defaultable register moves it as it stands, as LLVM's PHIElimination COPY moves a register
+    # whatever it holds (a value undefined on the path the copy runs on among them)
     return local_.type
 end
 
