@@ -7,10 +7,16 @@ const D = WasmTarget.Dart2Wasm
 
 module TypesCases
 f_int32(n::Int) = Int32(n)
+# a program holding a record of two fields, Tuple{Int,Float64}
+@noinline pair_of(n::Int)::Any = (n, Float64(n))
+held_pair(n::Int) = pair_of(n) isa Tuple ? 1 : 0
 end
 
-# a checker for the checkers' shared helpers, which read nothing of their checker
-struct TypesCasesChecker <: WasmTarget.Dart2Wasm._TypeCheckers end
+# a checker for the checkers' shared helpers, which read only its translator: a tuple member's records
+# are the translator's record classes (src/julia/classes.jl record_member_tests)
+struct TypesCasesChecker <: WasmTarget.Dart2Wasm._TypeCheckers
+    translator::WasmTarget.Dart2Wasm.Translator
+end
 
 @testset "types.dart: the type values' helpers" begin
     local W = WasmTarget
@@ -54,7 +60,12 @@ struct TypesCasesChecker <: WasmTarget.Dart2Wasm._TypeCheckers end
 end
 
 @testset "types.dart: canUseTypeCheckHelper, against Julia's isa" begin
-    local c = TypesCasesChecker()
+    # a program whose record classes hold a pair
+    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(TypesCases.held_pair, (Int,), "types"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local c = TypesCasesChecker(t)
+    @test WasmTarget.TupleRecord{2} in WasmTarget.concrete_classes(t, Tuple)
     # a checker serves exactly the constant types whose values their class tells
     local values = Any[1, Int32(2), 1.5, "s", nothing, [1, 2], (1, 2.0), Int, Union{Int,Nothing}, Vector, Union{}, :x, 'c']
     local served = (Int, Integer, Union{Int,Nothing}, Nothing, Any, AbstractVector{<:Integer}, Tuple{Int,Float64},
@@ -68,6 +79,11 @@ end
     # constant: neither has a checker
     local tv = TypeVar(:T)
     for T in (Type{Int}, Type{<:Integer}, Union{Type{Int},Int}, Vector{tv})
+        @test D.can_use_type_check_helper(c, T, Any) == (nothing, false)
+    end
+    # a tuple member that is no product of its fields' tests, a Type{X} field or fields that constrain
+    # one another, has no checker: the check takes dart's general arm (types.dart:434 emitIsTest)
+    for T in (Union{Nothing,Tuple{Type{Int},Int}}, Union{Int,Tuple{S,S} where S})
         @test D.can_use_type_check_helper(c, T, Any) == (nothing, false)
     end
     @test any(x -> isa(x, Type{Int}) != (typeof(x) <: Type{Int}), values)

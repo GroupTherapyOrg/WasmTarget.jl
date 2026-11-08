@@ -650,6 +650,11 @@ the value itself. Julia's classes have no type arguments, so the type's argument
     # Julia's kinds (src/julia/classes.jl, read from Base.iskindtype): each wholly in the type or
     # wholly out of it
     told_by_class(tested_against_type) || return (nothing, false)
+    # a tuple member is dart's record type, which no helper checks (dart's `is! InterfaceType`): the
+    # helper tests it inline only where it is a product of its fields' tests (src/julia/classes.jl
+    # record_member_tests), else the check takes the general arm, makeType and _isSubtype
+    record_member_tests(self.translator, tested_against_type, t -> can_use_type_check_helper(self, t, Any)[1] !== nothing) === nothing &&
+        return (nothing, false)
     _has_only_default_type_arguments(self, tested_against_type) && return (tested_against_type, false)
     reject!(Internal("dart2wasm/lib/types.dart:619 _TypeCheckers.canUseTypeCheckHelper: $tested_against_type has type arguments"), "_TypeCheckers.canUseTypeCheckHelper")
 end
@@ -806,8 +811,9 @@ subtype of its type. A tuple in a top-typed operand is always the record of its 
 field's type is the member's at that arity, tested by its own is checker where dart calls
 `_isSubtype` with the type's runtime value: Julia's types here are constants. Julia's subtyping of a
 tuple is covariant (`x isa Tuple{A,B}` exactly when `x[1] isa A && x[2] isa B`); a member whose
-fields constrain one another (`Tuple{T,T} where T`) is no product of its fields' tests and rejects,
-located, as dart's `_isSubtype` would be called.
+fields constrain one another (`Tuple{T,T} where T`), or a field no helper checks, is no product of its
+fields' tests, and canUseTypeCheckHelper gives its type no checker: the check is dart's general arm,
+makeType and `_isSubtype` (src/julia/classes.jl record_member_tests, the one reading of both).
 """
 @parity "dart2wasm/lib/types.dart:907 IsCheckerCodeGenerator.generate" function generate(self::IsCheckerCodeGenerator, b::WasmBuilder.InstructionsBuilder,
         param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
@@ -833,10 +839,14 @@ located, as dart's `_isSubtype` would be called.
     else
         local numbering = translator.class_id_numbering[]
         local ranges = Range[]
-        local records = Type[]
         for t in Base.uniontypes(Base.typesplit(tested, Nothing))
-            t <: Tuple ? push!(records, t) : append!(ranges, get_concrete_class_id_range(numbering, t))
+            t <: Tuple || append!(ranges, get_concrete_class_id_range(numbering, t))
         end
+        local is_checkers = is_checkers_for_module(translator.types[], b.module_builder)
+        # canUseTypeCheckHelper chose this checker only where every tuple member is a product of its
+        # fields' tests (src/julia/classes.jl record_member_tests)
+        local records = record_member_tests(translator, tested, t -> can_use_type_check_helper(is_checkers, t, Any)[1] !== nothing)
+        records === nothing && reject!(Internal("dart2wasm/lib/types.dart:907 IsCheckerCodeGenerator.generate: an is checker for $tested, a record member of which is no product of its fields' tests, which canUseTypeCheckHelper refuses"), "IsCheckerCodeGenerator.generate")
         normalize(ranges)
         WasmBuilder.local_get(b, operand)
         load_class_id(b, translator, operand.type)
@@ -845,18 +855,12 @@ located, as dart's `_isSubtype` would be called.
             # the tuple members, after the other members' range check, whose hit answers 1: each record
             # of an arity a member admits tested by its class id and then its fields (_checkRecordType)
             local at = "sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance: <obj> is $tested"
-            local is_checkers = is_checkers_for_module(translator.types[], b.module_builder)
             WasmBuilder.if_(b)
             WasmBuilder.i32_const(b, 1)
             WasmBuilder.br(b, result_label)
             WasmBuilder.var"end"(b)
-            for t in records, (id, c) in zip(concrete_class_ids(translator, Tuple), concrete_classes(translator, Tuple))
-                local n = tuple_record_arity(c)
-                n === nothing && reject!(Internal("$at: class $c below Tuple is no record"), at)
-                # the member at the record's arity: no value of it where Julia's intersection is empty
-                local shape = typeintersect(t, NTuple{n,Any})
-                shape === Union{} && continue
-                shape isa DataType || reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype"), "$at: $t at arity $n, whose fields constrain one another")
+            for (id, c, shape) in records
+                local n = something(tuple_record_arity(c))
                 local info = translator.class_info[c]
                 local fields = class_instance_fields(c, at)
                 WasmBuilder.local_get(b, operand)
@@ -871,8 +875,7 @@ located, as dart's `_isSubtype` would be called.
                 WasmBuilder.local_set(b, rec)
                 for k in 1:n
                     local field_type = fieldtype(shape, k)
-                    local (type_to_check, _) = can_use_type_check_helper(is_checkers, field_type, Any)
-                    type_to_check === nothing && reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1484 _isSubtype"), "$at: field $k's type $field_type")
+                    local type_to_check = something(can_use_type_check_helper(is_checkers, field_type, Any)[1])
                     WasmBuilder.local_get(b, rec)
                     WasmBuilder.struct_get(b, info.struct_, translator.field_index[fields[k]])
                     MacroAssembler_invoke(b, generate_is_checker(is_checkers, type_to_check, false, true))

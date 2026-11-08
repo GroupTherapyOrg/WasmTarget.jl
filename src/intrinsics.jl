@@ -897,8 +897,10 @@ end
     sv_info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Record._checkRecordType where Core.SimpleVector has no class info"), at)
     local data = only(class_instance_fields(Core.SimpleVector, at))
     local data_type = (translate_type_of_field(t, data)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
-    local is_subtype_mi = is_subtype(t)
-    local type_param = signature_for_direct_call(t, is_subtype_mi).inputs[2]
+    # each field tested by its type, Julia's tuple subtyping (src/julia/runtime/rtutils.jl
+    # jl_subtype_typeof), where dart calls _isSubtype
+    local field_test_mi = nir_runtime_member(t.component, jl_subtype_typeof, at)
+    local type_param = signature_for_direct_call(t, field_test_mi).inputs[2]
     local record = add_local(code_gen, top_nn)
     local elements = add_local(code_gen, WasmBuilder.IR.RefType_def(data_type; nullable = false))
     translate_expression(code_gen, args[1], top_nn)
@@ -929,7 +931,7 @@ end
                 WasmBuilder.ref_cast(b, info.non_nullable_type)
                 WasmBuilder.local_set(b, rec)
             end
-            # if (!_isSubtype($i, types[i])) return false;
+            # if (!_isSubtype($i, types[i])) return false; Julia's field by its type
             for k in 1:n
                 WasmBuilder.i32_const(b, 0)
                 WasmBuilder.local_get(b, rec)
@@ -938,7 +940,7 @@ end
                 WasmBuilder.i32_const(b, k - 1)
                 WasmBuilder.array_get(b, data_type)
                 WasmBuilder.ref_cast(b, type_param::WasmBuilder.IR.RefType)
-                call_reference(t, is_subtype_mi, b)
+                call_reference(t, field_test_mi, b)
                 WasmBuilder.i32_eqz(b)
                 WasmBuilder.br_if(b, arm)
                 WasmBuilder.drop(b)

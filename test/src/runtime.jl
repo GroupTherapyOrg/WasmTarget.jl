@@ -196,6 +196,14 @@ const BOUND_TYPES = Any[Int64, Tuple{Int64,Int64}]
 rt_bound(k::Int64, j::Int64) = isa(value_at(k), BOUND_TYPES[j]) ? 1 : 0
 @noinline vararg_type_at(j::Int64)::Any = j == 1 ? Int64 : Tuple{Vararg{Int64}}
 rt_vararg(k::Int64, j::Int64) = isa(value_at(k), vararg_type_at(j)) ? 1 : 0
+# a Union's tuple member that is no product of its fields' tests takes dart's general arm, a record
+# type's: a Type{X} field, which the runtime decides by kind, and fields constraining one another
+@noinline kind_pair_at(k::Int64)::Any = k == 1 ? (Int64, 1) : k == 2 ? (Float64, 1) : k == 3 ? nothing : k == 4 ? (1, 2) : 3
+rt_kind_pair(k::Int64) = kind_pair_at(k) isa Union{Nothing,Tuple{Type{Int64},Int64}} ? 1 : 0
+# a constant binding, so the test is against the type itself: a `where` written in place is built at
+# run time (Core._typevar), another hold
+const SAME_PAIR = Union{Int64,Tuple{T,T} where T}
+rt_same_pair(k::Int64) = value_at(k) isa SAME_PAIR ? 1 : 0
 @noinline all_type_at(j::Int64)::Any = j == 1 ? Int64 : Vector
 rt_all(k::Int64, j::Int64) = isa(value_at(k), all_type_at(j)) ? 1 : 0
 @testset "type.dart: _isSubtype and _asSubtype test a type only run time knows, against native" begin
@@ -223,6 +231,15 @@ rt_all(k::Int64, j::Int64) = isa(value_at(k), all_type_at(j)) ? 1 : 0
     for r in Main.WTRunner.run_cases(tuple_cases)
         @test r.ok || (@info r.label r.why; false)
     end
+    # a Type{Int64} field: the general arm, against native
+    local kp = W.compile(rt_kind_pair, (Int64,))
+    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("rt_kind_pair($k)", kp, (k,), Main.WTRunner.native_answer(rt_kind_pair, (k,))) for k in 1:5])
+        @test r.ok || (@info r.label r.why; false)
+    end
+    # Tuple{T,T} where T: the general arm, rejected at run_time_type_gap's UnionAll row, located
+    local se = try; W.compile(rt_same_pair, (Int64,)); nothing; catch x; x; end
+    @test se isa W.RejectionError && se.rejection isa W.Unquarantined &&
+          startswith(se.rejection.row, "src/julia/runtime/rtutils.jl run_time_type_gap: the type Tuple{T, T} where T, a UnionAll")
     # a Vararg tuple type, its length only run time knows: rejected at the test, located (Julia's own row)
     local ve = try; W.compile(rt_vararg, (Int64, Int64)); nothing; catch x; x; end
     @test ve isa W.RejectionError && occursin("Vararg", sprint(showerror, ve))

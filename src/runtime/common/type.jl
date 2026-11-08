@@ -145,7 +145,7 @@ type class, here a switch over Julia's kinds by the type value's own class:
   is of either member, subtype.c's rule for a concrete type on the left (julia/src/subtype.c:1419
   subtype, its `jl_is_uniontype(y)` arm), each member a type again;
 - `Union{}`'s kind is dart's `_BottomType`: no value.
-A UnionAll, a Type{X} or an open tuple type never reaches here from the program: a run-time type test
+A UnionAll or an open tuple type never reaches here from the program: a run-time type test
 compiles only where the program's type values hold none (src/julia/runtime/rtutils.jl
 check_run_time_type_values, at link time); a UnionAll of WasmTarget's own runtime raises, loud.
 
@@ -262,8 +262,8 @@ order, over the kinds the runtime ports): reflexivity, nullability, left bottom,
 bottom, then Julia's Union, which dart has no kind of (julia/src/subtype.c:1419 subtype: a Union on the
 left where both members are, on the right where either is), then two classes' DataTypes by the class
 table, the one relation the instance check reads, two tuple types by dart's record rule (type.dart:1440,
-isRecordSubtype, Julia's subtype_tuple). Julia's Type{X} (subtype.c:1550) is not ported: a program
-holding one beside a run-time subtype test rejects, located, at link time, as it does a UnionAll.
+isRecordSubtype, Julia's subtype_tuple), and Julia's Type{X} by subtype.c:1550's rule. A program holding
+a UnionAll beside a run-time subtype test rejects, located, at link time.
 dart's function, FutureOr and type-parameter rules have no Julia kind.
 """
 @parity "sdk/lib/_internal/wasm/common/type.dart:1351 _TypeUniverse.isSubtype" function _TypeUniverse_is_subtype(s::Type, t::Type)::Bool
@@ -290,9 +290,9 @@ dart's function, FutureOr and type-parameter rules have no Julia kind.
     # Julia's Nothing, past the nullabilities, is below Nothing and Any only, both answered above, and no
     # other type is below Nothing (julia/src/subtype.c:1419 subtype)
     (s === Nothing || t === Nothing) && return false
-    # two DataTypes: tuple types by the record rule, any other by the class table; never a Type{X}
-    # (subtype.c:1550), which a program holding beside a run-time subtype test rejects, located, at link
-    # time (src/julia/runtime/rtutils.jl check_run_time_type_values), as it does a UnionAll
+    # two DataTypes: tuple types by the record rule, a Type{X} by subtype.c:1550's, any other by the
+    # class table; a UnionAll, which a program holding beside a run-time subtype test rejects, located,
+    # at link time (src/julia/runtime/rtutils.jl check_run_time_type_values), never reaches here
     if jl_typetagis(s, DataType) && jl_typetagis(t, DataType)
         local sd = unsafe_cast(DataType, s)
         local td = unsafe_cast(DataType, t)

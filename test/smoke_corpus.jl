@@ -1574,12 +1574,24 @@ _xf("shared_bare_arrays", Any[
 @noinline _sm_tt(x::Int64) = (Int64, x)
 @noinline _sm_tv(x::Int64) = (Vector, x)
 @noinline _sm_tu(x::Int64) = (Union{Int64,Nothing}, x)
+# A Union's tuple member whose field is a Type{X} is no product of its fields' tests, so the check is
+# dart's general arm (types.dart:434 emitIsTest), the record type's _isSubtype, and _checkRecordType
+# tests each field by its type: a type value in a field by its kind (julia/src/subtype.c:1348
+# subtype_tuple), so (Int64, 1) isa Tuple{Type{Int64},Int64} is false
+@noinline _sm_tmi_at(k::Int64)::Any = k == 1 ? (Int64, 1) : k == 2 ? (Float64, 1) : k == 3 ? nothing : k == 4 ? (1, 2) : 3
+_sm_tmi_kind(k::Int64) = _sm_tmi_at(k) isa Union{Nothing,Tuple{Type{Int64},Int64}} ? 1 : 0
+_sm_tmi_mixed(k::Int64) = _sm_tmi_at(k) isa Union{Nothing,Tuple{Type{Int64},Int64},Tuple{Int64,Int64}} ? 1 : 0
 _g("tuple_runtime_types", Any[
     ("datatype_element_typeof", (x::Int64) -> (v = Any[_sm_tt(x)]; typeof(v[1]) === Tuple{DataType,Int64} ? 1 : 2), Int64(3)),
     ("datatype_element_egal", (x::Int64) -> (v = Any[_sm_tt(x)]; v[1] === (Int64, 3) ? 1 : 2), Int64(3)),
     ("unionall_element_typeof", (x::Int64) -> (v = Any[_sm_tv(x)]; typeof(v[1]) === Tuple{UnionAll,Int64} ? 1 : 2), Int64(3)),
     ("union_element_typeof", (x::Int64) -> (v = Any[_sm_tu(x)]; typeof(v[1]) === Tuple{Union,Int64} ? 1 : 2), Int64(3)),
     ("type_element_read", (x::Int64) -> (t = _sm_tt(x); t[2] + (t[1] === Int64 ? 10 : 20)), Int64(3)),
+    ("member_type_field_pair", (k::Int64) -> _sm_tmi_kind(k), Int64(1)),
+    ("member_type_field_nothing", (k::Int64) -> _sm_tmi_kind(k), Int64(3)),
+    ("member_type_field_other", (k::Int64) -> _sm_tmi_kind(k), Int64(5)),
+    ("member_mixed_record", (k::Int64) -> _sm_tmi_mixed(k), Int64(4)),
+    ("member_mixed_type_pair", (k::Int64) -> _sm_tmi_mixed(k), Int64(2)),
 ])
 # A dynamic call reaches every class that may be its argument: a tuple, which Core.tuple
 # allocates without a %new, is a candidate class like any struct (dev/AUDIT.md A3S3), and a

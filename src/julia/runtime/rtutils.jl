@@ -79,6 +79,16 @@ Natively Julia's `===`.
 @quarantine "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK), raising TypeError naming the builtin, as jl_f_typeassert does" Core.TypeError @noinline jl_typechk_type(fname::Symbol, @nospecialize(t::Any))::Type =
     jl_typetagis(t, Type) ? Runtime.unsafe_cast(Type, t) : Runtime.Error__throw_with_current_stack_trace(TypeError(fname, "", Type, t))
 
+# A tuple's field tested as Julia tests the tuple: jl_isa(x, T) of a tuple is jl_subtype(jl_typeof(x), T)
+# (julia/src/subtype.c:2511), a tuple's type holding each field's jl_typeof, so subtype_tuple tests a
+# field by its type. A field holding a type value is tested by the value's kind (DataType, Union, UnionAll
+# or TypeofBottom), never by itself as jl_isa's Type{T} arm takes a value outside a tuple:
+# (Int64, 1) isa Tuple{Type{Int64},Int64} is false. Any other value is a subtype by its type exactly
+# where jl_isa holds it. The field test of Record._checkRecordType (src/intrinsics.jl), where dart calls
+# _isSubtype.
+@quarantine "julia/src/subtype.c:1348 subtype_tuple tests a tuple's fields by their types, each field's jl_typeof, so a type value in a field by its kind" Core.Bool @noinline jl_subtype_typeof(@nospecialize(o::Any), t::Type)::Bool =
+    jl_typetagis(o, Type) ? Runtime._TypeUniverse_is_subtype(jl_to_typeof(Runtime.ClassID_get_id(o)), t) : Runtime._is_subtype(o, t)
+
 # jl_egal of two host references, a field of a class the egal arm compares (src/intrinsics.jl): wasm
 # reads no externref's bits, so the two are compared as dart compares two JS values, JSValue's ==, by
 # areEqualInJS, JS's === (Runtime.are_equal_in_js)

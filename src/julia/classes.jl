@@ -17,6 +17,37 @@
     all(k -> k <: T || typeintersect(k, T) === Union{}, _KINDS)
 
 """
+    record_member_tests(translator, T, field_checked) -> Union{Nothing,Vector{Tuple{Int,DataType,DataType}}}
+
+The records an is check against `T` tests inline, field by field (types.jl IsCheckerCodeGenerator.generate):
+for each tuple member of `T` and each record class of an arity the member admits, the class's id, the
+class, and the member's shape at that arity (`typeintersect(member, NTuple{n,Any})`, Julia's tuple
+subtyping covariant), each field of which its own is checker tests. `nothing` where a member is no
+product of its fields' tests: a shape whose fields constrain one another (`Tuple{T,T} where T`), or a
+field whose type no checker helper decides (`field_checked`, types.jl's canUseTypeCheckHelper). Such a check takes dart's general arm (types.dart:434
+emitIsTest, makeType and the runtime's _isSubtype), as dart's every record type does. The one reading of
+both: canUseTypeCheckHelper refuses the helper by it, and the is checker emits what it lists.
+"""
+@quarantine "julia/src/subtype.c:1348 subtype_tuple: a tuple type's subtypes are those of its arity whose every field is a subtype of the type's, so a member is a product of its fields' tests where its shape at the arity is a DataType" Base.typeintersect function record_member_tests(translator, @nospecialize(T::Type), field_checked)::Union{Nothing,Vector{Tuple{Int,DataType,DataType}}}
+    local out = Tuple{Int,DataType,DataType}[]
+    for t in Base.uniontypes(T)
+        t <: Tuple || continue
+        for (id, c) in zip(concrete_class_ids(translator, Tuple), concrete_classes(translator, Tuple))
+            local n = tuple_record_arity(c)
+            n === nothing && reject!(Internal("src/julia/classes.jl record_member_tests: class $c below Tuple is no record"), "record_member_tests")
+            local shape = typeintersect(t, NTuple{n,Any})
+            shape === Union{} && continue
+            shape isa DataType || return nothing
+            for k in 1:n
+                field_checked(fieldtype(shape, k)) || return nothing
+            end
+            push!(out, (id, c, shape))
+        end
+    end
+    return out
+end
+
+"""
     constant_unmade(translator, cls) -> Union{Rejection,Nothing}
 
 Why no constant of the class `cls` can be made, as constants.jl's visitInstanceConstant refuses it, or
