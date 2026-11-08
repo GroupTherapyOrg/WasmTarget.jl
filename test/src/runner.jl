@@ -232,6 +232,9 @@ _runner_shape_s(x::Int64) = (x + 1, "ab")
     local broken(f, ts; optimize::Bool = true) = throw(WasmTarget.RejectionError(WasmTarget.Internal("x"), "y"))
     @test_throws WasmTarget.RejectionError WTR.answer_cases("i", broken, _runner_shape_b, (Int64(3),))
     @test WTR._unwire(UInt8, "255") === 0xff && WTR._unwire(UInt8, "-1") isa String
+    # a Char is its 32 bits on the wire: 'é' is 0xc3a90000, an invalid Char's bits survive the round trip
+    @test WTR._wire('é') == ("i32", string(reinterpret(Int32, 0xc3a90000))) && WTR._unwire(Char, WTR._wire('é')[2]) === 'é' &&
+          WTR._unwire(Char, WTR._wire(reinterpret(Char, 0xff000000))[2]) === reinterpret(Char, 0xff000000)
     # a leaf of a type the runner does not marshal has no reader and fails, named
     @test isempty(cs[6].bytes) && occursin("marshals no Symbol", WTR.run_cases(cs[6:6])[1].why)
 end

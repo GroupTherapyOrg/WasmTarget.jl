@@ -277,6 +277,9 @@ function _wire(x)::Union{Tuple{String,String},Nothing}
     x isa Int32 && return ("i32", string(x))
     x isa UInt32 && return ("i32", string(reinterpret(Int32, x)))
     x isa UInt8 && return ("i32", string(x))
+    # Julia's Char is a 32-bit primitive (base/boot.jl `primitive type Char <: AbstractChar 32`), its UTF-8 bytes
+    # left-aligned: its wire form is those 32 bits, as WT lowers it to an i32 of them
+    x isa Char && return ("i32", string(reinterpret(Int32, x)))
     x isa Int64 && return ("i64", string(x))
     x isa UInt64 && return ("i64", string(reinterpret(Int64, x)))
     x isa Float32 && return ("f32", string(reinterpret(UInt32, x); base = 16))
@@ -297,6 +300,7 @@ function _unwire(::Type{T}, s::AbstractString) where {T}
     T === Bool && return s == "1" ? true : s == "0" ? false : nothing
     T === Int32 && return parse(Int32, s)
     T === UInt32 && return reinterpret(UInt32, parse(Int32, s))
+    T === Char && return reinterpret(Char, parse(Int32, s))   # the 32 bits back, never decoded or validated
     T === UInt8 && return (v = parse(Int32, s); 0 <= v <= 255 ? UInt8(v) : "the i32 $v, no UInt8")   # never truncated to fit
     T === Int64 && return parse(Int64, s)
     T === UInt64 && return reinterpret(UInt64, parse(Int64, s))
