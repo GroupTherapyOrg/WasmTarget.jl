@@ -68,6 +68,8 @@ DEFAULTS = {
     "fable_per_day": 2,                          # D48 (Dale 2026-11-04): "make fable use in the council minimal"
     "week_weighted": 8.38e8,                     # measured: 2026-11-01 10:00Z to 11-02 15:25Z, each message once, hit the limit
     "margin": 0.85,
+    # Dale 2026-11-08: "warn me when we hit 50% usage [for the week] and when we do, please pause"
+    "week_pause": 0.5,
     # the march account's transcripts: run the climb under that account's own CLAUDE_CONFIG_DIR, so the governor counts
     # its sessions alone (another account's sessions in the same directory would be counted against it)
     "claude_home": os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
@@ -82,7 +84,7 @@ DEFAULTS = {
     "smoke_wall_s": 10800,
     "kaimon_url": "http://localhost:2828/mcp",   # D39: every climber develops in a live Kaimon session (MCP)
 }
-BUDGET_KEYS = ("week_weighted", "margin")   # D14: a budget changes by a commit naming Dale's words, never by config
+BUDGET_KEYS = ("week_weighted", "margin", "week_pause")   # D14: a budget changes by a commit naming Dale's words, never by config
 
 def cfg():
     c = dict(DEFAULTS)
@@ -98,6 +100,11 @@ PROTECTED = [r"^dev/(?!formal/)", r"^dev/formal/run_tlc\.sh$",
              r"^AGENTS\.md$", r"^\.github/", r"^\.gitignore$", r"^Project\.toml$",
              r"^Manifest\.toml$", r"^legacy/"]   # all of dev/: the tooling, the plan and the audit log are the driver's or a ruling's
 ADD_ONLY = [r"^test/smoke_corpus\.jl$", r"^test/smoke_times\.tsv$"]
+# the runner's own gaps (a type it does not marshal, a reader it cannot build) are the judge failing to read an answer,
+# not the compiler: a keeper move ports them in the runner and its test alone, and may flip no other case (HILL.md)
+RUNNER_FILES = ("test/runner.jl", "test/src/runner.jl")
+# (a reader WasmTarget rejects is the compiler's gap until a ruling says otherwise: the reader is compiled by WT)
+RUNNER_GAP_RE = re.compile(r"the runner (marshals no|does not read|reads a tuple's leaves)")
 NEW_ONLY = [r"^dev/formal/"]
 
 def now():
@@ -243,22 +250,25 @@ def src_tail():
 def holds(cases=None):
     cases = head_cases() if cases is None else cases
     parked = state_json("parked.json", {})
+    kept = set(state_json("keeper.json", []))
     groups = collections.OrderedDict()
     for label, outcome, secs, why in cases:
         if outcome in ("passed", "outside"):
             continue
         k = hold_key(outcome, label, why)
-        g = groups.setdefault(k, {"key": k, "cases": [], "secs": 0.0, "why": why[:400]})
+        g = groups.setdefault(k, {"key": k, "cases": [], "secs": 0.0, "why": why[:400],
+                                  "keeper": bool(RUNNER_GAP_RE.search(why))})
         g["cases"].append(label); g["secs"] += secs
     out = list(groups.values())
     for f in state_json("fixfirst.json", []):          # audit findings, G2 losses and harvests: fix first (D21)
         out.append({"key": f["key"], "cases": f.get("cases", []), "secs": 0.0, "why": f["why"], "fixfirst": True,
-                    "require_pass": f.get("require_pass", False)})
+                    "require_pass": f.get("require_pass", False), "keeper": f.get("keeper", False)})
     out += src_tail()
     for h in out:
         h["n"] = len(h["cases"]) or len(h.get("defs", []))
         h["id"] = hashlib.sha1(h["key"].encode()).hexdigest()[:10]
         h["parked"] = parked.get(h["id"])
+        h["keeper"] = h.get("keeper") or h["id"] in kept   # a ruling found the runner at fault
     # the gates, then fix-first findings, then the corpus (S), then the src tail S does not reach
     rank = lambda h: (0 if h["key"].startswith("G") else 1 if h.get("fixfirst") else 3 if h.get("tail") else 2, -h["n"], h["secs"])
     return sorted(out, key=rank)
@@ -355,6 +365,30 @@ def account_spend(days=1):
     want = {(now() - datetime.timedelta(days=i)).date().isoformat() for i in range(days)}
     return sum(v for ent in cache.values() for d, v in ent["days"].items() if d in want)
 
+def week_start():
+    """The weekly limit resets on Sunday (2026-11-01 and 11-08): its window counted from Sunday 00:00Z, the earliest
+    the reset can be, so the count errs high."""
+    t = now()
+    return (t - datetime.timedelta(days=(t.weekday() + 1) % 7)).date().isoformat()
+
+def week_spend():
+    account_spend(1)   # refreshes the cache
+    start = week_start()
+    return sum(v for ent in state_json("spend-cache.json", {}).values() for d, v in ent["days"].items() if d >= start)
+
+def week_half():
+    """Half the week's limit spent: the climb pauses and Dale is told (Dale 2026-11-08). Lifted only by hand."""
+    w, lim = week_spend(), cfg()["week_weighted"] * cfg()["week_pause"]
+    if w < lim:
+        return False
+    if not os.path.exists(os.path.join(STATE, "PAUSE")):
+        open(os.path.join(STATE, "PAUSE"), "w").write(f"week-half: {w/1e6:.0f}M of {cfg()['week_weighted']/1e6:.0f}M this week\n")
+        event("week-half", spent=round(w), limit=round(cfg()["week_weighted"]))
+        for_dale("the climb paused at half the week's usage", f"This week (from {week_start()} 00:00Z) the account spent "
+                 f"{w/1e6:.0f}M weighted tokens of the {cfg()['week_weighted']/1e6:.0f}M weekly limit measured on 2026-11-02. "
+                 "Default taken: paused until `bash dev/climb/launch.sh resume`.")
+    return True
+
 def allowance():
     c = cfg()
     return c["week_weighted"] * c["margin"] / 7
@@ -404,6 +438,8 @@ def report(k=12):
     landed = [e for e in ev if e["kind"] == "landed"]
     lines.append(f"landings: {len(landed)} by the climb, {sum(1 for e in landed if e['t'] >= stamp(now() - datetime.timedelta(days=1)))} in 24 h")
     cw, cu = climb_spend(now() - datetime.timedelta(days=1))
+    lines.append(f"this week (from {week_start()}): {week_spend()/1e6:.0f}M of {cfg()['week_weighted']/1e6:.0f}M weighted "
+                 f"({100 * week_spend() / cfg()['week_weighted']:.1f}%; the climb pauses at {100 * cfg()['week_pause']:.0f}%)")
     lines.append(f"budget: the account today {account_spend(1)/1e6:.0f}M of {allowance()/1e6:.0f}M weighted, 7 days "
                  f"{account_spend(7)/1e6:.0f}M of {cfg()['week_weighted']*cfg()['margin']/1e6:.0f}M; the climb's own 24 h {cw/1e6:.0f}M (${cu:.0f})")
     hs = holds(cases)
@@ -469,10 +505,11 @@ SCHEMA_AUDIT = {"type": "object", "required": ["entry", "findings"], "properties
         _FINDING["properties"], severity={"type": "string", "enum": ["high", "medium", "low"]},
         requirement={"type": "string"}, fix_first={"type": "boolean"})}}}}
 SCHEMA_RULING = {"type": "object", "required": ["ruling", "requeue", "escalate"], "properties": {"ruling": {"type": "string"},
+    "keeper": {"type": "boolean"},
     "requeue": {"type": "boolean"}, "escalate": {"type": "boolean"}, "for_dale": {"type": "string"}, "ledger_row": {"type": "string"}}}
 
 # the briefs, each a template the driver fills (their full paths, so the ratchet's L130 sees them consumed)
-TEMPLATES = {"climber.md": "dev/climb/climber.md", "reviewer.md": "dev/climb/reviewer.md",
+TEMPLATES = {"climber.md": "dev/climb/climber.md", "keeper.md": "dev/climb/keeper.md", "reviewer.md": "dev/climb/reviewer.md",
              "auditor.md": "dev/climb/auditor.md", "ruling.md": "dev/climb/ruling.md"}
 
 def render(template, **kw):
@@ -519,7 +556,7 @@ def run_agent(role, task, cmd, cwd, sid):
     t0 = time.time()
     model = cmd[cmd.index("--model") + 1]
     sid = sid or cmd[cmd.index("--session-id") + 1]
-    if over_budget():   # every run, not only a move's first: a move never overshoots the day by its later steps
+    if week_half() or over_budget():   # every run, not only a move's first: a move never overshoots by its later steps
         event("budget-refused", role=role, task=task)
         return None, None
     try:
@@ -572,9 +609,11 @@ def added_lines(slot, path=None):
     args = ["diff", "-U0", f"origin/{MARCH}...HEAD"] + (["--", path] if path else [])
     return [l[1:] for l in git(*args, cwd=slot).splitlines() if l.startswith("+") and not l.startswith("+++")]
 
-def g5(slot):
-    """The judge untouched (HILL.md G5)."""
+def g5(slot, keeper=False):
+    """The judge untouched (HILL.md G5); a keeper move changes the runner and its test, and nothing else."""
     names = git("diff", "--name-only", f"origin/{MARCH}...HEAD", cwd=slot).splitlines()
+    if keeper:
+        return [f"{n} (a keeper move changes only {' and '.join(RUNNER_FILES)})" for n in names if n not in RUNNER_FILES]
     status = {}
     for l in git("diff", "--name-status", f"origin/{MARCH}...HEAD", cwd=slot).splitlines():
         f = l.split("\t")
@@ -671,6 +710,10 @@ def verify(slot, h):
                  if o in ("wrong", "errored") and before.get(l, ("",))[0] not in ("wrong", "errored")]
     problems += [f"newly outside the subset (needs a ruling): {l}" for l, o, _, _ in cases
                  if o == "outside" and l in before and before[l][0] != "outside"]
+    if h.get("keeper"):   # the runner reads more; it never passes a case whose failure was not its own gap
+        problems += [f"a keeper move flips {l} to passing, whose failure was not the runner's: {before[l][1][:160]}"
+                     for l, o, _, _ in cases if o == "passed" and l in before and before[l][0] != "passed"
+                     and l not in hc and not RUNNER_GAP_RE.search(before[l][1])]
     if h.get("tail") and not git("diff", "--name-only", f"origin/{MARCH}...HEAD", "--", "src/", cwd=slot):
         problems.append("a src-tail move that changes nothing under src/")
     if h.get("require_pass"):
@@ -686,7 +729,9 @@ def fence_kaimon(path, name):
     Code's own sandbox uses): writes only under the slot within GroupTherapyOrg (so never the climb's state, the git
     refs or hooks, another worktree), and no network but localhost (so no push). Measured 2026-11-08: a slot write,
     a temp write and a depot compile pass; the state, the hooks and `git ls-remote origin` are refused. A session
-    started before the fence is stopped once, so the next start runs fenced."""
+    started before the fence is stopped once, so the next start runs fenced. It runs at background QoS (taskpolicy -b),
+    as all the climb's Julia does, so a warm session's compile never slows a landing's check on the performance
+    cores (2026-11-08: a check ran 171 s, past D14's band, beside two climbers' sessions)."""
     org = os.path.dirname(REPO)
     sb, wrap = os.path.join(STATE, "fence", f"{name}.sb"), os.path.join(STATE, "fence", f"julia-{name}")
     os.makedirs(os.path.dirname(sb), exist_ok=True)
@@ -700,7 +745,7 @@ def fence_kaimon(path, name):
 """)
     depot = sh(["bash", os.path.join(ROOT, "dev", "depot.sh"), "path", path]).stdout.strip()
     open(wrap, "w").write(f"#!/bin/sh\n# dev/climb/climb.py fence_kaimon: {name}'s Kaimon Julia, sandboxed\n"
-                          f"JULIA_DEPOT_PATH=\"{depot}\" exec /usr/bin/sandbox-exec -f \"{sb}\" \"{shutil.which('julia')}\" \"$@\"\n")
+                          f"JULIA_DEPOT_PATH=\"{depot}\" exec /usr/sbin/taskpolicy -b /usr/bin/sandbox-exec -f \"{sb}\" \"{shutil.which('julia')}\" \"$@\"\n")
     os.chmod(wrap, 0o755)
     proj = os.path.expanduser("~/.config/kaimon/projects.json")
     with locked():
@@ -805,7 +850,11 @@ def rule(h, escalation, slot):
     update_json("rulings.json", {}, lambda r: r.setdefault(h["id"], []).append({"ruling": so["ruling"], "t": stamp()}))
     if so.get("for_dale") or so.get("ledger_row"):
         for_dale(h["key"][:100], so.get("for_dale", "") + (f"\nproposed ledger row: {so['ledger_row']}" if so.get("ledger_row") else ""))
-    event("ruled", hold=h["key"], requeue=so["requeue"], ruling=so["ruling"][:300])
+    event("ruled", hold=h["key"], requeue=so["requeue"], keeper=bool(so.get("keeper")), ruling=so["ruling"][:300])
+    if so.get("keeper"):   # the runner's gap: a keeper takes the hold, so it goes back to the climb
+        update_json("keeper.json", [], lambda k: k.append(h["id"]) if h["id"] not in k else None)
+        update_json("parked.json", {}, lambda p: p.pop(h["id"], None))
+        return
     if not so["requeue"]:
         park(h, so["ruling"], tell=False)
 
@@ -846,7 +895,7 @@ def move(h, slot_name):
     if salvage:
         hand = (hand or "") + f"\n\nThis slot's earlier unlanded work is on the local branch {salvage} (`git log -p origin/{MARCH}..{salvage}`)."
     rl = state_json("rulings.json", {}).get(h["id"], [])
-    brief = render("climber.md", WORKTREE=slot, BRANCH=slot_name, BASE=base,
+    brief = render("keeper.md" if h.get("keeper") else "climber.md", WORKTREE=slot, BRANCH=slot_name, BASE=base,
                    HOLD=f"**{h['key']}**\n\nWhy (the first case's rejection): {h['why']}",
                    CASES=caselines, HANDOFF=f"## The last climber's handoff\n\n{hand}" if hand else "",
                    RULINGS="## Rulings on this hold (bound by these)\n\n" + "\n".join(f"- {x['ruling']}" for x in rl) if rl else "")
@@ -873,7 +922,7 @@ def move(h, slot_name):
         commits, dirty = slot_state(slot)
         if len(commits) != 1 or dirty:
             return [], [f"one commit and a clean tree expected; found {len(commits)} commit(s), tree {'dirty' if dirty else 'clean'}"]
-        bad = g5(slot)
+        bad = g5(slot, keeper=h.get("keeper", False))
         if bad:
             return [], ["G5: " + b for b in bad]
         return verify(slot, h)
@@ -962,12 +1011,22 @@ def audit():
         git("commit", "-q", "-m", f"docs(audit): audit #{n}: {rng}\n\nCharter: C0\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n", cwd=slot)
         r = sh(["bash", "dev/ship.sh"], cwd=slot, timeout=3600, env=dict(os.environ, WT_CLIMB_DRIVER="1"))
         event("audited", n=n, range=rng, landed=r.returncode == 0, findings=len(so["findings"]))
+        lead = []
         def add(ff):
             for f in so["findings"]:
-                if f.get("fix_first") or f.get("severity") in ("high", "medium"):
-                    ff.append({"key": f"audit A{n} {f.get('id')}: {f.get('claim', '')[:110]}", "cases": [],
-                               "why": f"{f.get('file')}:{f.get('line')} {f.get('claim')} Fix: {f.get('fix')} ({f.get('requirement', '')})"})
+                if not (f.get("fix_first") or f.get("severity") in ("high", "medium")):
+                    continue
+                path = (f.get("file") or "").strip()
+                text = f"{path}:{f.get('line')} {f.get('claim')} Fix: {f.get('fix')} ({f.get('requirement', '')})"
+                if path not in RUNNER_FILES and any(re.search(p, path) for p in PROTECTED):
+                    lead.append(f"- A{n} {f.get('id')}: {text}")   # the harness or the rules: no move can land it (G5)
+                    continue
+                ff.append({"key": f"audit A{n} {f.get('id')}: {f.get('claim', '')[:110]}", "cases": [], "why": text,
+                           "keeper": path in RUNNER_FILES})
         update_json("fixfirst.json", [], add)
+        if lead:
+            for_dale(f"audit {n}: findings in protected files", "\n".join(lead) + "\nDefault taken: the climb goes on; "
+                     "the lead lands these in its own commits (dev/climb, the rules and the tooling are no move's).")
         draw_map(os.path.join(STATE, "map.html"))   # D29: after every audit
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
@@ -1101,9 +1160,12 @@ def pick():
     if not head_cases():   # no move before the first scored head: the holds and the sentinel net come from it
         return
     ev = events()
-    scored = max((e["t"] for e in ev if e["kind"] == "scored"), default="")
-    # a hold landed since the last scored head waits for the next score, so no slot climbs it twice
-    done = {e.get("hold_id") for e in ev if e["kind"] == "landed" and e["t"] > scored}
+    sc = [e for e in ev if e["kind"] == "scored"]
+    head = sc[-1]["sha"] if sc else None
+    # a hold landed in no commit the scored head contains waits for a score that does, so no slot climbs it twice
+    # (by ancestry, not by time: a score runs for an hour, and a landing during it is not in what it scored)
+    done = {e.get("hold_id") for e in ev if e["kind"] == "landed"
+            and not (head and sh(["git", "merge-base", "--is-ancestor", e.get("commit", ""), head]).returncode == 0)}
     for h in holds():
         if h["parked"] or h["id"] in done or h["n"] == 0 and not h.get("fixfirst"):
             continue
@@ -1119,6 +1181,8 @@ def run(slots, one=False):
             try:
                 if os.path.exists(os.path.join(COMMON, "wt-line-stop")) or os.path.exists(os.path.join(STATE, "PAUSE")):
                     time.sleep(60); continue
+                if week_half():
+                    time.sleep(300); continue
                 if over_budget():
                     event("budget-wait", slot=name); time.sleep(900); continue
                 if i == 1 and audit_lag()[0] >= cfg()["audit_every"]:

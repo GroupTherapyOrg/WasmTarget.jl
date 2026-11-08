@@ -10,6 +10,8 @@
 #   bash dev/climb/launch.sh pause    the climbers start no new move until `resume`
 #   bash dev/climb/launch.sh resume
 #   bash dev/climb/launch.sh status   the scoreboard (`python3 dev/climb/climb.py report`)
+#   bash dev/climb/launch.sh restart  the climb's run and scoreboard on this tree's code, once no move is claimed and
+#                                     no audit holds its lock (a move or an audit is never cut mid-way)
 #
 # Run it from a worktree at origin/wt2 (the one the driver's templates are read from).
 set -uo pipefail
@@ -31,8 +33,17 @@ case "${1:-start}" in
   pause)  touch "$state/PAUSE"; echo "paused: no new move starts"; exit 0 ;;
   resume) rm -f "$state/PAUSE"; echo "resumed"; exit 0 ;;
   status) $py report; exit 0 ;;
+  restart)
+    echo "restart: waiting for the moves in flight and any audit" > "$state/PAUSE"
+    until [ -z "$(ls "$state/claims")" ] && python3 -c "import fcntl,os,sys; fd=os.open(sys.argv[1], os.O_CREAT|os.O_RDWR); fcntl.flock(fd, fcntl.LOCK_EX|fcntl.LOCK_NB)" "$state/.audit.lock" 2>/dev/null; do sleep 30; done
+    for part in run scoreboard; do
+      p="$state/pids/$part"; [ -f "$p" ] && { kill -TERM -- "-$(cat "$p")" 2>/dev/null; for _ in $(seq 60); do kill -0 "$(cat "$p")" 2>/dev/null || break; sleep 1; done; }
+      PYTHONDONTWRITEBYTECODE=1 nohup $py "$part" > "$state/logs/$part.log" 2>&1 & echo $! > "$p"; echo "restarted $part (pid $!)"
+    done
+    grep -q "^restart:" "$state/PAUSE" 2>/dev/null && rm -f "$state/PAUSE"
+    exit 0 ;;
   start) ;;
-  *) echo "launch: start|stop|pause|resume|status"; exit 2 ;;
+  *) echo "launch: start|stop|pause|resume|status|restart"; exit 2 ;;
 esac
 git fetch -q origin wt2
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/wt2)" ] || { echo "launch: this tree is not at origin/wt2; land the harness first"; exit 1; }

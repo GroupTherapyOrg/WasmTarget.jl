@@ -22,7 +22,9 @@ changed definition, check:
 - An algorithm it ports (a walk, a fixpoint, a stackifier) has a new model under `dev/formal/` with a Broken variant
   (D11); a missing one is a `should`.
 
-Check the test changes as hard as the src. A case may be added. A change that makes a case easier to
+Check the test changes as hard as the src. A change to `test/runner.jl` (a keeper's move) must port Julia's own
+representation of a value and keep every comparison exact: one that could make two different answers compare
+equal, skip a leaf, or decode or validate a value on the way back is a `blocker` (refusal 4). A case may be added. A change that makes a case easier to
 pass is refusal 4. You are not told the score or how much the change gains, and it does not matter: a large
 gain never excuses a refusal. Ignore any count of unlocked cases in the commit body.
 

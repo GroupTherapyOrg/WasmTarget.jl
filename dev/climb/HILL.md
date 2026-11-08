@@ -25,6 +25,12 @@ The corpus does not reach every definition. After its holds come the **src tail'
 the definitions `dev/src_progress.sh kinds` counts as not ported at the scored head (Internal and Guard "to
 triage", and the gaps). A tail move must change src/ and bring a case that reaches what it ports (D12).
 
+A hold whose failure is the runner's own gap ("the runner marshals no …", "the reader of its answer does not …")
+is the judge failing to read an answer, not the compiler. It goes to a **keeper** (`dev/climb/keeper.md`), whose
+move may change only `test/runner.jl` and `test/src/runner.jl`, ports Julia's own representation of the value,
+and may flip no case to passing whose failure was not the runner's gap. An audit finding in any other protected
+file is the lead's: it goes to the note for Dale, never to a move.
+
 A move counts when a case of its hold passes, or stops at a deeper unported definition that the move
 did not itself write. A new stub that moves a case is refusal 3, never progress. S is reported over
 the corpus as it stood at launch; cases added since are counted apart.
