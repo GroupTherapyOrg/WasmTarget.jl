@@ -54,15 +54,17 @@ G5 is the judge untouched:
   landing tooling, the depot, the progress counter, the hooks, the ratchet, the charter, the ledger,
   AGENTS.md, CI, Project and Manifest. `climb.py`'s PROTECTED list names each one.
 - `test/smoke_corpus.jl` and `test/smoke_times.tsv` may only gain lines. An added line may not touch
-  `GROUPS` or `XFAIL`, and may not rebind a name the corpus binds, read by Julia's parser
-  (`dev/climb/corpus_names.jl`).
+  `GROUPS` or `XFAIL`, may not rebind a name the corpus binds, and may add at top level only the kinds of form the
+  corpus is made of (definitions and registrations), all read by Julia's parser (`dev/climb/corpus_names.jl`).
 - `dev/formal/` may only gain new files. An existing model changes only by ruling.
 
 G4 is the one gate a model judges, so it is measured like the score (Theo's eval of past failures):
 `climb.py judge-eval` reverts small landed fixes of audit findings, each a defect an audit really found, and asks
-the reviewer to refuse each revert, blind: each case is a parentless base and one change with a neutral message.
-The set is fixed at its first run. Launch runs it during the first score. Under 80% refused, moves hold until the
-lead tightens `reviewer.md` and the eval measures it again. Its verdict on each fix is reported,
+the reviewer to refuse each revert, blind: each case is reviewed in a repository of its own, the tree before and one
+change with neutral messages, no other ref, and dev/AUDIT.md and dev/MARCH.md blanked. Beside them it reviews the
+climb's landed moves that a later audit passed, which it should approve, since recall alone cannot tell a judge
+from one that refuses everything. The defect set is fixed at its first run. Under 80% refused, moves hold until the
+lead tightens `reviewer.md` and the eval measures it again; under half the clean moves approved, a note for Dale. Its verdict on each fix is reported,
 never scored: a fix is no proof of a clean commit (its first run refused 6 of 6 fixes, two for the open A95S2 and
 A96S2 that later audits found in them).
 
@@ -71,8 +73,10 @@ Agents are fenced, each layer measured by a probe agent (2026-11-08):
   hooks or the climb's state, which lives outside the repository.
 - Every other tool runs only if its allowlist names it ("dontAsk"): Edit and Write only under the agent's worktree,
   and of Kaimon only `start_session`, `ex`, `manage_repl` and `check_eval`, for a climber alone.
-- A climber's Kaimon Julia runs under the same kind of seatbelt, through a wrapper in the climb's state: it
-  writes only its slot within GroupTherapyOrg and reaches no network but localhost.
+- A climber's Kaimon Julia runs under the same kind of seatbelt, through a wrapper in the climb's state, at
+  background QoS: it writes only its slot, its own gate socket and log, the temp dirs and Julia's logs (an
+  allowlist), and connects to nothing but localhost. Every session of a slot ends at a move's start, so each move
+  has one, fenced.
 - None lands: the pre-push hook passes only origin's `dev/ship.sh`, which refuses an agent's env and any climb
   slot the driver does not ship. The driver alone lands, and a commit reaching origin/wt2 that `dev/ship.sh`'s
   landing log does not name pauses the climb.
@@ -131,6 +135,8 @@ every call. (Weighted means cache reads at 0.1, cache writes at 1.25, output at 
 - **Warm Julia, not fresh processes (D39).** A climber develops in its slot's Kaimon session, about 0.2 s
   a compile against 25 s for a fresh process. The slot and its session stay warm from one move to the
   next. A fresh process is for evidence only, and preflight refuses to launch while Kaimon is down.
+- **A landing's check gets the machine.** While the driver lands a move, the other slots' and the scoreboard's
+  Julia are stopped and resumed after (D14's band is a check's idle time).
 - **No resident lead, no LLM monitors.** The driver is a program. The scoreboard and the map are
   programs, and the map is redrawn at every score, landing and audit (D29). Opus rules a stopped hold. Fable is called only when an Opus ruling escalates, at most
   twice a day (D48).

@@ -448,7 +448,7 @@ def report(k=12):
         tag = " [parked]" if h["parked"] else " [claimed]" if os.path.exists(os.path.join(STATE, "claims", h["id"])) else ""
         lines.append(f"  {h['n']:4d}  {h['key'][:110]}{tag}")
     je = state_json("judge-eval.json", None)
-    lines.append(f"judge: refused {je['recall']:.0%} of past defects ({je['t'][:10]}; approved {je['approval']:.0%} of their fixes, reported only)"
+    lines.append(f"judge: refused {je['recall']:.0%} of past defects, approved " + (f"{je['approval']:.0%} of clean moves" if je.get('approval') is not None else "no clean move yet") + f" ({je['t'][:10]})"
                  if je else "judge: not measured yet (`climb.py judge-eval`)")
     fd = os.path.join(STATE, "for-dale.md")
     if os.path.exists(fd) and open(fd).read().strip():
@@ -500,7 +500,11 @@ _FINDING = {"type": "object", "required": ["id", "severity", "claim"], "properti
 SCHEMA_REVIEW = {"type": "object", "required": ["verdict", "fidelity", "findings"], "properties": {
     "verdict": {"type": "string", "enum": ["APPROVE", "CHANGES"]}, "fidelity": {"type": "integer"},
     "findings": {"type": "array", "items": _FINDING}}}
-SCHEMA_AUDIT = {"type": "object", "required": ["entry", "findings"], "properties": {"entry": {"type": "string"},
+AUDIT_AREAS = (("builder", "builder"), ("collection_and_planning", "collection and planning"),
+               ("emission_and_diagnostics", "emission and diagnostics"), ("enforcement_and_prose", "enforcement and prose"))
+SCHEMA_AUDIT = {"type": "object", "required": ["topics", "areas", "stopgap", "precedent", "resolution", "findings"], "properties": {
+    "topics": {"type": "string"}, "stopgap": {"type": "string"}, "precedent": {"type": "string"}, "resolution": {"type": "string"},
+    "areas": {"type": "object", "required": [k for k, _ in AUDIT_AREAS], "properties": {k: {"type": "string"} for k, _ in AUDIT_AREAS}},
     "findings": {"type": "array", "items": {"type": "object", "required": ["id", "severity", "claim"], "properties": dict(
         _FINDING["properties"], severity={"type": "string", "enum": ["high", "medium", "low"]},
         requirement={"type": "string"}, fix_first={"type": "boolean"})}}}}
@@ -585,6 +589,38 @@ def run_agent(role, task, cmd, cwd, sid):
             so = None
     return so, d
 
+_QUIET = {"n": 0, "stopped": []}
+_QUIET_LOCK = threading.Lock()
+
+@contextlib.contextmanager
+def quiesced(slot):
+    """While the driver lands a move, the other slots' Julia and the scoreboard's are stopped (SIGSTOP) and resumed
+    after: a landing's check is at D14's band on an idle machine (139-157 s against a red past 140 s), and two
+    climbers beside it made 171 s and 182 s. The landing slot's own Julia is never stopped: it shares the depot the
+    check compiles into, and a stopped holder of its pidfile would hold the check (2026-10 pidfile deadlock)."""
+    others = [os.path.join(WORKTREES, d) for d in os.listdir(WORKTREES) if re.fullmatch(r"climb-\d+", d)
+              and os.path.join(WORKTREES, d) != os.path.abspath(slot)] + [os.path.join(STATE, "board")]
+    with _QUIET_LOCK:
+        _QUIET["n"] += 1
+        if _QUIET["n"] == 1:
+            for pid in sh(["pgrep", "-x", "julia"]).stdout.split():
+                args = sh(["ps", "-o", "command=", "-p", pid]).stdout
+                cwd = next((l[1:] for l in sh(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"]).stdout.splitlines()
+                            if l.startswith("n")), "")
+                if any(o in args or cwd == o or cwd.startswith(o + "/") for o in others):
+                    with contextlib.suppress(ProcessLookupError, ValueError):
+                        os.kill(int(pid), signal.SIGSTOP); _QUIET["stopped"].append(int(pid))
+    try:
+        yield
+    finally:
+        with _QUIET_LOCK:
+            _QUIET["n"] -= 1
+            if _QUIET["n"] == 0:
+                for pid in _QUIET["stopped"]:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(pid, signal.SIGCONT)
+                _QUIET["stopped"] = []
+
 def slot_state(slot):
     """The one-commit, clean-tree invariant every step of a move holds the slot to."""
     commits = [l[2:] for l in git("cherry", f"origin/{MARCH}", "HEAD", cwd=slot).splitlines() if l.startswith("+")]
@@ -641,8 +677,11 @@ def g5(slot, keeper=False):
                 if r.returncode != 0:
                     bad.append(f"{n} (Julia's parser does not read it: {(r.stderr or r.stdout).strip()[-200:]})")
                 for l in r.stdout.splitlines():
-                    name, before, after = l.split("\t")
-                    bad.append(f"{n} (rebinds {name}, which the corpus binds {before} time(s); {after} after the move)")
+                    f = l.split("\t")
+                    if f[0] == "rebind":
+                        bad.append(f"{n} (rebinds {f[1]}, which the corpus binds {f[2]} time(s); {f[3]} after the move)")
+                    elif f[0] == "form":
+                        bad.append(f"{n} (adds a top-level {f[1]}, no definition or registration: {f[2]})")
     return bad
 
 @contextlib.contextmanager
@@ -729,19 +768,25 @@ def fence_kaimon(path, name):
     Code's own sandbox uses): writes only under the slot within GroupTherapyOrg (so never the climb's state, the git
     refs or hooks, another worktree), and no network but localhost (so no push). Measured 2026-11-08: a slot write,
     a temp write and a depot compile pass; the state, the hooks and `git ls-remote origin` are refused. A session
-    started before the fence is stopped once, so the next start runs fenced. It runs at background QoS (taskpolicy -b),
+    of the slot alive at a move's start is stopped, so each move's starts fenced. It runs at background QoS (taskpolicy -b),
     as all the climb's Julia does, so a warm session's compile never slows a landing's check on the performance
     cores (2026-11-08: a check ran 171 s, past D14's band, beside two climbers' sessions)."""
     org = os.path.dirname(REPO)
     sb, wrap = os.path.join(STATE, "fence", f"{name}.sb"), os.path.join(STATE, "fence", f"julia-{name}")
     os.makedirs(os.path.dirname(sb), exist_ok=True)
+    home = os.path.expanduser("~")
+    # an allowlist (A98E1): the slot, the session's own gate socket and log under Kaimon's cache, the temp dirs, and
+    # Julia's logs, scratch spaces and juliaup state; no outbound connection but localhost, so no other session's
+    # gate socket and no remote. Measured 2026-11-08 on a real Kaimon session: it starts and evaluates, writes its
+    # slot, and is refused ~/.config/kaimon, another gate socket, `git ls-remote origin` and the climb's state.
     open(sb, "w").write(f"""(version 1)
 (allow default)
-(deny file-write* (subpath "{org}"))
-(allow file-write* (subpath "{path}"))
+(deny file-write*)
+(allow file-write* (subpath "{path}") (subpath "{home}/.cache/kaimon/sock") (subpath "{home}/.cache/kaimon/sessions")
+  (subpath "/private/var/folders") (subpath "/private/tmp") (subpath "{home}/.julia/logs") (subpath "{home}/.julia/juliaup")
+  (subpath "{home}/.julia/scratchspaces") (literal "/dev/null") (regex #"^/dev/tty") (literal "/dev/ptmx") (subpath "/dev/fd"))
 (deny network-outbound)
 (allow network-outbound (remote ip "localhost:*"))
-(allow network-outbound (remote unix-socket))
 """)
     depot = sh(["bash", os.path.join(ROOT, "dev", "depot.sh"), "path", path]).stdout.strip()
     open(wrap, "w").write(f"#!/bin/sh\n# dev/climb/climb.py fence_kaimon: {name}'s Kaimon Julia, sandboxed\n"
@@ -755,13 +800,12 @@ def fence_kaimon(path, name):
                    "instantiate": "auto", "julia_bin": wrap}})
         d["projects"] = ps
         json.dump(d, open(proj + ".tmp", "w"), indent=2); os.replace(proj + ".tmp", proj)
-    mark = os.path.join(STATE, "fence", f"{name}.fenced")
-    if not os.path.exists(mark):
-        for line in sh(["pgrep", "-f", f"--project={path}"]).stdout.split():
-            with contextlib.suppress(ProcessLookupError, ValueError):
-                os.kill(int(line), signal.SIGTERM)
-        open(mark, "w").write(stamp())
-        event("fenced", slot=name)
+    # every move starts with no session of the slot's alive: a private session per move otherwise piles up (ten
+    # resident Julias on 2026-11-08, beside D14's red checks), and a session restarted around the fence ends here
+    for line in sh(["pgrep", "-f", f"--project={path}"]).stdout.split():
+        with contextlib.suppress(ProcessLookupError, ValueError):
+            os.kill(int(line), signal.SIGTERM)
+    event("fenced", slot=name)
 
 def slot_ready(name):
     """A climber's worktree at origin/wt2. Earlier work is kept on a salvage branch, never reset away; the
@@ -953,17 +997,34 @@ def move(h, slot_name):
         if problems:
             return finish(h, "blocked:ruling", slot, "after the review's fixes the driver refused the move:\n" + "\n".join(problems[:30]), slot_name)
         prior = {"findings": (rv or {}).get("findings", []), "answers": so2}
-    for attempt in (1, 2):   # ship.sh rebases and checks; a red is infrastructure first, retried once mechanically
+    for attempt in (1, 2, 3):   # ship.sh rebases and checks
         try:
-            r = sh(["bash", "dev/ship.sh"], cwd=slot, timeout=3600, env=dict(os.environ, WT_CLIMB_DRIVER="1"))
+            with quiesced(slot):
+                r = sh(["bash", "dev/ship.sh"], cwd=slot, timeout=3600, env=dict(os.environ, WT_CLIMB_DRIVER="1"))
         except subprocess.TimeoutExpired:
             return finish(h, "blocked:infra", slot, "dev/ship.sh passed its hour", slot_name)
         fetch()
         commits, _ = slot_state(slot)
         if r.returncode == 0 and not commits:
             break
-        if attempt == 2:
-            return finish(h, "blocked:infra", slot, "dev/ship.sh did not land: " + (r.stdout + r.stderr)[-1500:], slot_name)
+        out = r.stdout + r.stderr
+        failed = os.path.join(COMMON, "wt-ship-failed", slot_name)
+        # the move's own fault (a test red, the ratchet failing, a rebase conflict) goes back to its climber once (G3);
+        # a red on D14's time alone, or the tooling, is infrastructure, retried mechanically
+        own = re.search(r"check: (src tests red|the ratchet fails)", out) and "D14" not in out
+        if own and attempt < 3 and resumes < c["resumes_per_move"]:
+            detail = "\n".join(sh(f"grep -hE 'Error During Test|Test Failed|LOCK BROKEN|✗|FieldError|MethodError' "
+                                   f"{failed}/*.out 2>/dev/null | head -30").stdout.splitlines())
+            so2 = resume("The landing check (G3) went red on your commit:\n" + out[-1200:] + "\n\nIts failures:\n" + detail +
+                         "\n\nFix each at its source and amend your one commit, or report blocked.")
+            if not so2 or so2["outcome"] != "committed":
+                return finish(h, "blocked:ruling", slot, "the landing check went red on the move:\n" + out[-800:] + "\n" + detail[:1200], slot_name)
+            unlocked, problems = gated()
+            if problems:
+                return finish(h, "blocked:ruling", slot, "after the check's fixes the driver refused the move:\n" + "\n".join(problems[:30]), slot_name)
+            continue
+        if attempt >= 2:
+            return finish(h, "blocked:infra" if not own else "blocked:ruling", slot, "dev/ship.sh did not land: " + out[-1500:], slot_name)
     landed = git("rev-parse", "--short", "HEAD", cwd=slot)
     event("landed", hold=h["key"], hold_id=h["id"], commit=landed, unlocked=len(unlocked), slot=slot_name)
     draw_map(os.path.join(STATE, "map.html"))   # D29: after every landing
@@ -979,6 +1040,14 @@ def audit_lag():
         return 0, None
     n = len(git("log", "--format=%h", f"{heads[-1]}..origin/{MARCH}", "--invert-grep", "--grep=^docs(audit)").splitlines())
     return n, heads[-1]
+
+def audit_entry(so, rng, head):
+    """The dev/AUDIT.md entry in L148's form, written by the driver from the auditor's fields, so its area labels,
+    its commit and its Resolution are right by construction (audit 98's `Area: the builder` failed L148 twice)."""
+    areas = "\n\n".join(f"Area: {label}. {so['areas'][k].strip()}" for k, label in AUDIT_AREAS)
+    return (f"## {now().date().isoformat()} — audited through {head} ({rng}: {so['topics'].strip()})\n\n{areas}\n\n"
+            f"stopgap in disguise: {so['stopgap'].strip()}\n\nprecedent: {so['precedent'].strip()}\n\n"
+            f"Resolution: {so['resolution'].strip()}\n")
 
 def audit():
     """D21: the landings since the last entry, read by one fresh auditor; its entry lands, its findings fix first.
@@ -999,18 +1068,26 @@ def audit():
         commits = git("log", "--format=- %h %s", rng, "--invert-grep", "--grep=^docs(audit)", cwd=slot)
         if not commits:
             return
-        so, _ = run_agent("audit", f"audit{n}", claude_cmd(c["climber_model"], "high", SCHEMA_AUDIT, ["Bash", "Read", "Grep", "Glob"],
-                          render("auditor.md", WORKTREE=slot, RANGE=rng, N=n, PREV=prev, COMMITS=commits), str(uuid.uuid4()), slot), slot, None)
+        saved = state_json("audit-saved.json", {})   # an audit whose landing was cut is landed again, not paid for twice
+        so = saved.get("so") if saved.get("range") == rng and "areas" in (saved.get("so") or {}) else None
+        if so is None:
+            so, _ = run_agent("audit", f"audit{n}", claude_cmd(c["climber_model"], "high", SCHEMA_AUDIT, ["Bash", "Read", "Grep", "Glob"],
+                              render("auditor.md", WORKTREE=slot, RANGE=rng, N=n, PREV=prev, COMMITS=commits), str(uuid.uuid4()), slot), slot, None)
+            if so:
+                save_json("audit-saved.json", {"range": rng, "so": so})
         if not so:
             event("audit-failed", n=n, range=rng); return
         if git("status", "--porcelain", cwd=slot):
             raise ClimbError("the auditor changed its worktree")
         with open(os.path.join(slot, "dev", "AUDIT.md"), "a") as f:
-            f.write("\n" + so["entry"].strip() + "\n")
+            f.write("\n" + audit_entry(so, rng, rng.split("..")[1]))
         git("add", "dev/AUDIT.md", cwd=slot)
         git("commit", "-q", "-m", f"docs(audit): audit #{n}: {rng}\n\nCharter: C0\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n", cwd=slot)
-        r = sh(["bash", "dev/ship.sh"], cwd=slot, timeout=3600, env=dict(os.environ, WT_CLIMB_DRIVER="1"))
+        with quiesced(slot):
+            r = sh(["bash", "dev/ship.sh"], cwd=slot, timeout=3600, env=dict(os.environ, WT_CLIMB_DRIVER="1"))
         event("audited", n=n, range=rng, landed=r.returncode == 0, findings=len(so["findings"]))
+        if r.returncode != 0:
+            return   # kept in audit-saved.json: the next audit lands this one again
         lead = []
         def add(ff):
             for f in so["findings"]:
@@ -1057,46 +1134,78 @@ def judge_set(n):
     save_json("judge-set.json", out)
     return out
 
+def clean_moves(n):
+    """The climb's landed moves that a later audit read with no high or medium finding naming them: changes the
+    reviewer should approve (A98E4: recall alone cannot tell a judge from one that refuses everything)."""
+    faulted = set()
+    for p in glob.glob(os.path.join(STATE, "runs", "audit*.audit.*.json")) + [os.path.join(STATE, "audit-saved.json")]:
+        with contextlib.suppress(Exception):
+            d = json.load(open(p)); so = d.get("structured_output") or d.get("so") or {}
+            for f in so.get("findings", []):
+                if f.get("severity") in ("high", "medium"):
+                    faulted |= set(re.findall(r"\b[0-9a-f]{8}\b", json.dumps(f)))
+    heads = re.findall(r"^## .* audited through ([0-9a-f]{7,40})", git("show", f"origin/{MARCH}:dev/AUDIT.md"), re.M)
+    out = []
+    for e in reversed(events()):
+        c = e.get("commit", "")
+        if e["kind"] == "landed" and c and c[:8] not in faulted and heads and \
+                sh(["git", "merge-base", "--is-ancestor", c, heads[-1]]).returncode == 0:
+            out.append(c)
+        if len(out) >= n:
+            break
+    return out
+
+def isolated_case(before_tree, tree, stem):
+    """A case in a repository of its own (A98E2): two commits, the tree before and the change, neutral messages, no
+    other ref or history to search, and dev/AUDIT.md and dev/MARCH.md (whose rows name findings) blanked."""
+    repo = os.path.join(STATE, "judge-repo")
+    shutil.rmtree(repo, ignore_errors=True); os.makedirs(repo)
+    ident = ["-c", "user.name=climb", "-c", "user.email=climb@localhost"]
+    sh(["git", "init", "-q", repo], check=True)
+    for t, msg in ((before_tree, "the tree before the change"), (tree, f"feat({stem}): the change under review")):
+        for x in os.listdir(repo):
+            if x != ".git":
+                (shutil.rmtree if os.path.isdir(os.path.join(repo, x)) else os.remove)(os.path.join(repo, x))
+        sh(f"git -C {REPO} archive {t} | tar -x -C {repo}", check=True)
+        for blank in ("dev/AUDIT.md", "dev/MARCH.md"):
+            if os.path.exists(os.path.join(repo, blank)):
+                open(os.path.join(repo, blank), "w").write("(not part of this review)\n")
+        git("add", "-A", cwd=repo); git(*ident, "commit", "-q", "--no-verify", "-m", msg, cwd=repo)
+    return repo, git("rev-parse", "HEAD~1", cwd=repo)[:8], git("rev-parse", "HEAD", cwd=repo)
+
 def judge_eval(n=6):
-    """The blind reviewer (G4) is the climb's one judge that is a model, not a program. Its recall on real past
-    defects and its approval of their fixes are measured before it gates a move, and after any change to reviewer.md."""
-    slot, _ = slot_ready("climb-judge")
-    results = []
-    try:
-        for i, f in enumerate(judge_set(n)):
-            sha = f["sha"]
-            stem = os.path.splitext(os.path.basename(git("diff", "--name-only", f"{sha}^", sha, "--", "src/").splitlines()[0]))[0]
-            # blind (A97E5): each case is a parentless base and one change, both with neutral messages, so neither
-            # the fix's message nor its history is reachable from what the reviewer reads
-            fixed, before = git("rev-parse", f"{sha}^{{tree}}"), git("rev-parse", f"{sha}^^{{tree}}")
-            def case(base_tree, tree):
-                ident = ["-c", "user.name=climb", "-c", "user.email=climb@localhost"]
-                b = git(*ident, "commit-tree", base_tree, "-m", "the tree before the change", cwd=slot)
-                return b, git(*ident, "commit-tree", tree, "-p", b, "-m", f"feat({stem}): the change under review", cwd=slot)
-            base, bad = case(fixed, before)
-            git("checkout", "-q", "-B", "climb-judge", bad, cwd=slot)
-            rv_bad = review(f"judge{i}b", slot, base[:8], bad)
-            base, good = case(before, fixed)
-            git("checkout", "-q", "-B", "climb-judge", good, cwd=slot)
-            rv_good = review(f"judge{i}g", slot, base[:8], good)
-            results.append({"sha": sha[:8], "subject": f["subject"][:120],
-                            "defect_refused": bool(rv_bad) and not approved(rv_bad), "fix_approved": approved(rv_good),
-                            "bad": rv_bad, "good": rv_good})
-            event("judged", sha=sha[:8], refused=results[-1]["defect_refused"], approved=results[-1]["fix_approved"])
-    finally:
-        git("checkout", "-q", "-B", "climb-judge", f"origin/{MARCH}", cwd=slot)   # the eval's commits are synthetic
-    if not results:
+    """The blind reviewer (G4) is the climb's one judge that is a model, not a program. It is measured before it gates
+    a move, and after any change to reviewer.md: its recall on real past defects (reverted audit fixes), which it must
+    refuse, and its approval of the climb's landed moves a later audit passed, which it should approve."""
+    def stem_of(a, b):
+        return os.path.splitext(os.path.basename((git("diff", "--name-only", a, b, "--", "src/").splitlines() or ["src"])[0]))[0]
+    defects, cleans = [], []
+    for i, f in enumerate(judge_set(n)):
+        sha = f["sha"]
+        repo, base, head = isolated_case(git("rev-parse", f"{sha}^{{tree}}"), git("rev-parse", f"{sha}^^{{tree}}"), stem_of(f"{sha}^", sha))
+        rv = review(f"judge{i}b", repo, base, head)
+        defects.append({"sha": sha[:8], "subject": f["subject"][:120], "refused": bool(rv) and not approved(rv), "review": rv})
+        event("judged", sha=sha[:8], kind="defect", refused=defects[-1]["refused"])
+    for i, c in enumerate(clean_moves(n)):
+        repo, base, head = isolated_case(git("rev-parse", f"{c}^^{{tree}}"), git("rev-parse", f"{c}^{{tree}}"), stem_of(f"{c}^", c))
+        rv = review(f"judge{i}c", repo, base, head)
+        cleans.append({"sha": c[:8], "approved": approved(rv), "review": rv})
+        event("judged", sha=c[:8], kind="clean", approved=cleans[-1]["approved"])
+    if not defects:
         return
-    rec = sum(r["defect_refused"] for r in results) / len(results)
-    spec = sum(r["fix_approved"] for r in results) / len(results)
-    save_json("judge-eval.json", {"t": stamp(), "recall": rec, "approval": spec, "results": results})
-    event("judge-eval", recall=rec, approval=spec, n=len(results))
+    rec = sum(r["refused"] for r in defects) / len(defects)
+    app = sum(r["approved"] for r in cleans) / len(cleans) if cleans else None
+    save_json("judge-eval.json", {"t": stamp(), "recall": rec, "approval": app, "defects": defects, "cleans": cleans})
+    event("judge-eval", recall=rec, approval=app, n=len(defects), clean=len(cleans))
     if rec < 0.8:   # intent: the reviewer refuses what audits found; band: 80% of the set, under it no move lands
         open(os.path.join(STATE, "PAUSE"), "w").write("the judge refused under 80% of past defects\n")
-        for_dale("the judge misses past defects", f"The blind reviewer refused {rec:.0%} of {len(results)} real past defects "
+        for_dale("the judge misses past defects", f"The blind reviewer refused {rec:.0%} of {len(defects)} real past defects "
                  f"({os.path.join(STATE, 'judge-eval.json')}). Default taken: moves hold (PAUSE) until the lead tightens "
                  "dev/climb/reviewer.md against the misses and `climb.py judge-eval` measures it again (A97E5).")
-    print(f"judge: refused {rec:.0%} of past defects; approved {spec:.0%} of their fixes, reported only ({len(results)} pairs)")
+    if app is not None and app < 0.5:   # intent: the reviewer passes sound work; band: half the clean moves, a note
+        for_dale("the judge refuses sound moves", f"The blind reviewer approved {app:.0%} of {len(cleans)} landed moves a later "
+                 "audit passed. Default taken: the climb runs; the lead reads its refusals and narrows reviewer.md.")
+    print(f"judge: refused {rec:.0%} of past defects; approved " + (f"{app:.0%} of {len(cleans)} clean moves" if cleans else "no clean move yet"))
 
 # ---------------------------------------------------------------- the loops
 def scoreboard_once(head):

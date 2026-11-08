@@ -24,11 +24,11 @@ Look for drift that no lock measures:
 
 Every finding rests on one exact command, quoted, whose output you read.
 
-Reply with only the JSON the schema asks for:
-- `entry`: the dev/AUDIT.md entry in its house form:
-  - a `## <date> — audited through <hash> (<range>: <topics>)` heading;
-  - the four `Area:` paragraphs, findings inline as `(A{{N}}E1, medium, D<n>) …` (E for an error,
-    S for a smaller defect);
-  - a `stopgap in disguise:` line and a `precedent:` line;
-  - a `Resolution:` line naming the fix-first finding.
+Reply with only the JSON the schema asks for. The driver writes the dev/AUDIT.md entry from your fields:
+- `topics`: the range's topics, a short list for the heading.
+- `areas`: one paragraph for each of the four areas (`builder`, `collection_and_planning`, `emission_and_diagnostics`,
+  `enforcement_and_prose`), findings inline as `(A{{N}}E1, medium, D<n>) …` (E for an error, S for a smaller defect).
+- `stopgap`: is a claimed construction a scan, an allowlist or a test?
+- `precedent`: the precedents the range names, and whether they resolve.
+- `resolution`: the fix-first finding, and where each open finding goes.
 - `findings`: a list of {id, severity, requirement, file, line, claim, fix, fix_first}.
