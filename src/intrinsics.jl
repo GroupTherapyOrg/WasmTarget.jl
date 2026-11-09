@@ -321,7 +321,7 @@ A field read inlined as an intrinsic, or `nothing`. dart's are getters of dart:_
 and Julia's bit counts are its intrinsics (`ctlz_int`, `cttz_int`, `ctpop_int`, the unary map). Julia's
 one field read its codegen inlines past an object's layout is a tuple's field at an index only run time
 knows (`getfield(t, i)`, an Int `i`), lowered here (`Val(:tuple_index)`), and a field at a constant
-index of a tuple whose type has no layout (Tuple{String,Vararg{String}}), which Julia's codegen
+index of a tuple whose type has no layout (Tuple{String,Vararg{String}}, a Union of tuple types), which Julia's codegen
 reads the same way (codegen.cpp:4563, jl_struct_try_layout failing, the index unboxed as at run time);
 every other read is the field's own (visitInstanceGet).
 """
@@ -330,7 +330,9 @@ every other read is the field's own (visitInstanceGet).
     local index = node.args[3]
     dart_type_of(self, index) === Int || return nothing
     local T = dart_type_of(self, node.args[2])
-    T isa DataType && T <: Tuple || return nothing
+    # a tuple type, or a Union of tuple types, which has no layout either (jl_struct_try_layout of no
+    # DataType), so Julia's codegen reads its field as at run time (codegen.cpp:4563)
+    (T isa DataType || T isa Union) && T <: Tuple || return nothing
     index isa NirConst && isconcretetype(T) && return nothing
     return generate_static_intrinsic(self, Val(:tuple_index), node, T)
 end
@@ -351,7 +353,7 @@ end
 # the answer the boxed field jl_get_nth_field_checked returns. The arms are generated from that one list; an empty one rejects, located,
 # and a class outside it is none the program can hold, the closed world holding every class and no
 # type being made at run time (dev/AUDIT.md A68S3, the run_time_type arm), so its miss is unreachable.
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:tuple_index}, node::NirCall, T::DataType)::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:tuple_index}, node::NirCall, T::Union{DataType,Union})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
     local t = translator(self)
     local b = code_gen.b[]
@@ -381,8 +383,14 @@ end
         local n = tuple_record_arity(c)
         n === nothing && return Any[fieldtypes(c)...]
         local shape = typeintersect(T, NTuple{n,Any})
-        shape isa DataType || reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, whose elements at arity $n constrain one another"), at)
-        return Any[fieldtypes(shape)...]
+        shape isa DataType && return Any[fieldtypes(shape)...]
+        # a Union of tuple types of arity n: each element Julia's own type of the field at that index,
+        # getfield_tfunc over the Union (Compiler/src/tfuncs.jl:1213 _getfield_tfunc's Union arm, the
+        # tmerge of its members' field types)
+        local members = Base.uniontypes(shape)
+        shape isa Union && all(m -> m isa DataType && fieldcount(m) == n, members) ||
+            reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, whose elements at arity $n constrain one another"), at)
+        return Any[Core.Compiler.widenconst(Core.Compiler.getfield_tfunc(Core.Compiler.fallback_lattice, shape, Core.Const(k))) for k in 1:n]
     end
     # the read's type: the elements' one type, or their union, the top type where they differ
     local field_types = Base.IdSet{Any}(ft for c in classes for ft in element_types(c))

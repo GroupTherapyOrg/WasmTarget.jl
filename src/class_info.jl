@@ -551,8 +551,9 @@ run-time index all take their class ids here.
 
 Reshaped: `klass` — a type Julia's program has that is no class of the closed world (a UnionAll)
 holds the concrete classes Julia puts under it (`c <: klass`), each its own range, where dart's
-`klass` is always a class of its hierarchy; an open tuple type (`Tuple{String,Vararg{String}}`) holds
-the record classes of the arities it admits (src/julia/classes.jl TupleRecord), its values' classes.
+`klass` is always a class of its hierarchy; an open tuple type (`Tuple{String,Vararg{String}}`), a
+Union of tuple types among them, holds the record classes of the arities it admits (src/julia/classes.jl
+TupleRecord), its values' classes.
 """
 @parity "dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" function get_concrete_class_id_range(self::ClassIdNumbering, klass::Type)::Vector{Range}
     # a singleton type Type{X}: the classes of its one member, X's kind (jl_isa's Type{T} arm)
@@ -561,9 +562,10 @@ the record classes of the arities it admits (src/julia/classes.jl TupleRecord), 
     local cached = get(self._concrete_class_id_ranges, klass, nothing)
     cached === nothing || return cached
     local ranges = Range[]
-    if klass isa DataType && klass <: Tuple && !isconcretetype(klass)
-        # an open tuple type's values are the records of the arities it admits (TupleRecord): a tuple of
-        # a concrete static type is boxed into its arity's record where it flows into an open slot
+    if (klass isa DataType || klass isa Union) && klass <: Tuple && !isconcretetype(klass)
+        # an open tuple type's values, a Union of tuple types' among them (its join an open tuple type,
+        # translateStorageType's top type), are the records of the arities it admits (TupleRecord): a
+        # tuple of a concrete static type is boxed into its arity's record where it flows into an open slot
         for (c, id) in self.class_ids
             open_tuple_holds(klass, c) && push!(ranges, Range(id, id))
         end

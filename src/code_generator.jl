@@ -1872,12 +1872,13 @@ end
     # member of the static type, which a Julia abstract type does not declare), a SelectorReference
     # naming this call site, whose selector DispatchTable.build recorded once (field_selector_calls'
     # sites) and selectorForTarget reads
-    # a field read on a Union of tuples: dart's DynamicGet on a receiver of no one record shape
+    # a field read on a tuple type of no layout the intrinsifier did not take (a UnionAll, or a Union
+    # of tuple types read at no Int index): dart's DynamicGet on a receiver of no one record shape
     # (code_generator.dart:2317 visitDynamicGet), switching over the record classes holding the field,
-    # which the intrinsifier writes for an open tuple type but not yet for a Union of them; no selector
-    # serves it (field_selector_calls skips a tuple receiver), located
+    # which the intrinsifier writes for an open tuple type and a Union of tuple types at an Int index;
+    # no selector serves it (field_selector_calls skips a tuple receiver), located
     cls isa Type && !(cls isa DataType) && cls <: Tuple &&
-        reject!(Unquarantined("src/intrinsics.jl generateInstanceGetterIntrinsic: a field read on $cls, a Union of tuples, dart's DynamicGet over the record classes, not lowered"), "$(self.enclosing_member)")
+        reject!(Unquarantined("src/intrinsics.jl generateInstanceGetterIntrinsic: a field read on $cls, a tuple type of no layout read at no Int index or with free parameters, dart's DynamicGet over the record classes, not lowered"), "$(self.enclosing_member)")
     if !(cls isa DataType && isconcretetype(cls))
         statement === nothing && reject!(Internal("$at: a field access on $cls reached with no statement index, its call site unnamed"), "$(self.enclosing_member)")
         local reference = SelectorReference(FieldAccessSite(self.enclosing_member::Core.MethodInstance, statement), FieldReferenceKind_getter)

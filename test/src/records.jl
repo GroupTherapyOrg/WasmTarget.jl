@@ -237,6 +237,21 @@ end
     foreach(r -> r.ok || println(r.label, ": ", r.why), only_results)
     @test all(r -> r.ok, only_results)
 end
+# a field at a constant index of a Union of tuple types, which has no layout: the class-id switch over
+# its concrete tuple classes, each arm its own field, as at a run-time index
+const UNION_TUPLES = Ref{Union{Tuple{Int64,Bool},Tuple{Nothing,Bool}}}((Int64(0), false))
+function union_tuple_read(n::Int64)
+    UNION_TUPLES[] = n > 0 ? (n, true) : (nothing, false)
+    local t = UNION_TUPLES[]
+    local a = getfield(t, 1)
+    return (a === nothing ? Int64(-1) : a) * 10 + Int64(getfield(t, 2))
+end
+@testset "codegen.cpp: a field at a constant index of a Union of tuple types, by its class" begin
+    local bytes = WasmTarget.compile(union_tuple_read, (Int64,); optimize = false)
+    local results = WTRunner.run_cases([WTRunner.RunCase("union_tuple_read($n)", bytes, (n,), WTRunner.native_answer(union_tuple_read, (n,))) for n in (Int64(4), Int64(-2))])
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    @test length(results) == 2 && all(r -> r.ok, results)
+end
 end
 
 # a tuple literal whose operands' classes only run time knows, Julia's jl_f_tuple's: the record of its arity

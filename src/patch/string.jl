@@ -31,3 +31,43 @@ end
     wasm_string_copy!(out, Int(offs) - 1, s, 0, n)
     return n
 end
+
+# Base's _memcmp compares `len` bytes of the two Strings' data from their offsets by memcmp through pointers;
+# WasmGC compares the data arrays' bytes in order, as dart's VM compareTo walks its code units, and answers
+# the first differing bytes' difference, else 0: memcmp's value on this host (native Base._memcmp("abc",
+# "axc", 3) is -22), so the overlay is consistent with Base's value, not only its sign. dart2wasm at the
+# pin delegates compareTo and indexOf to its embedder (embedder_string.dart:508 and :414), so the VM's
+# walk is the nearest dart counterpart. A Ptr operand (endswith's pointer(a, i)) stays Base's, a located
+# rejection where it is reached.
+@quarantine "julia/base/strings/string.jl:149 _memcmp of a String or SubString{String} compares len bytes by memcmp through pointers; WasmGC compares the data arrays' bytes in order, answering the first differing bytes' difference as memcmp does, as dart's VM compareTo walks its code units (sdk/lib/_internal/vm/lib/string_patch.dart:334 _StringBase.compareTo; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:508 EmbedderStringImpl.compareTo delegates to its embedder)" Base._memcmp @consistent_overlay METHOD_TABLE function Base._memcmp(a::Union{String,SubString{String}}, b::Union{String,SubString{String}}, len::Int)
+    local sa, oa = a isa String ? (a, 0) : (a.string, a.offset)
+    local sb, ob = b isa String ? (b, 0) : (b.string, b.offset)
+    for i in 0:len-1
+        local ca = wasm_string_codeunit(sa, oa + i)
+        local cb = wasm_string_codeunit(sb, ob + i)
+        ca == cb || return Int(ca) - Int(cb)
+    end
+    return 0
+end
+
+# Base's body, its memchr from the byte at `i` (a pointer into the String's bytes) the walk of the
+# data array's bytes from that offset, as dart's one-byte indexOf walks its code units for a
+# one-character pattern (dart2wasm's indexOf delegates to its embedder, so the VM's is the nearest); the
+# index is the found byte's, Base's (q - p + fst). A byte array (codeunits, a Vector{UInt8}) stays Base's,
+# a located rejection where it is reached.
+@quarantine "julia/base/strings/search.jl:81 _search of a byte in a String or SubString{String} is a memchr foreigncall through pointer(a); WasmGC walks the data array's bytes, as dart's one-byte indexOf walks its code units (sdk/lib/_internal/vm/lib/string_patch.dart:1087 _OneByteString.indexOf; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:414 EmbedderStringImpl.indexOf delegates to its embedder)" Base._search @consistent_overlay METHOD_TABLE function Base._search(a::Union{String,SubString{String}}, b::Union{Int8,UInt8}, i::Integer = firstindex(a))
+    local fst = firstindex(a)
+    local lst = Base.last_byteindex(a)
+    if i < fst
+        throw(BoundsError(a, i))
+    end
+    if i > lst
+        return i == lst+1 ? nothing : throw(BoundsError(a, i))
+    end
+    local s, o = a isa String ? (a, 0) : (a.string, a.offset)
+    local c = b % UInt8
+    for j in Int(i):lst
+        wasm_string_codeunit(s, o + j - fst) == c && return j
+    end
+    return nothing
+end
