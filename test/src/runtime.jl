@@ -121,11 +121,12 @@ tagged_x(x::Int) = typeassert(maybe_tagged(x), Tagged{Float16(1)}).x
     local names = Set(b.ci.def.def.name for b in world)
     @test :_as_interface_subtype0 in names && :_throw_interface_type_as_check_error0 in names
     @test (try; unwrapped(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Int, nothing)
-    # a class whose type value has no constant (Memory{Int64}, its Core.AddrSpace{Core}): the program
-    # rejects, located, at the parameter's class layout (translateStorageType) before any as check, as it
-    # does for every parameter constant_unmade rejects; types.jl's as check asserts it, Internal
+    # a class whose type value has no constant (Memory{Int64}, its Core.AddrSpace{Core}, laid out in its
+    # promoted register, its constant not made): the as check rejects, located, at type_value_unmade
     local me = try; W.compile(memory_length, (Int,)); nothing; catch x; x; end
-    @test me isa W.RejectionError && me.rejection isa W.Unquarantined && occursin("AddrSpace", me.rejection.row)
+    @test me isa W.RejectionError && me.rejection isa W.Unquarantined &&
+          startswith(me.rejection.row, "src/julia/classes.jl type_value_unmade: an as check against Memory{Int64}") &&
+          occursin("AddrSpace", me.rejection.row)
     local te = try; W.compile(tagged_x, (Int,)); nothing; catch x; x; end
     @test te isa W.RejectionError && te.rejection isa W.Unquarantined &&
           te.rejection.row == "src/translator.jl translateStorageType: the primitive class Float16, with no wasm representation"

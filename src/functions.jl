@@ -123,15 +123,15 @@ The export name of `target`, the interop namer's (src/namer.jl _ExternalMemberNa
 
 """
 Collect the exports, and record the value classes as allocated. dart's boxed bool, int and double
-are always allocated; Julia's boxes are its primitive classes with a wasm representation, each a
-class of the closed world's class table.
+are always allocated; Julia's boxes are its primitive classes with a wasm value type, builtin or
+promoted (src/julia/classes.jl primitive_value_type), each a class of the closed world's class table.
 """
 @parity "dart2wasm/lib/functions.dart:71 FunctionCollector.initialize" function initialize(self::FunctionCollector)::Nothing
     _collect_imports_and_exports(self)
     local translator = self.translator
     # Value classes are always implicitly allocated.
     for (cls, info) in translator.class_info
-        isprimitivetype(cls) && haskey(translator.builtin_types[], cls) && record_class_allocation(self, class_id(info))
+        isprimitivetype(cls) && primitive_value_type(translator, cls) !== nothing && record_class_allocation(self, class_id(info))
     end
     return nothing
 end

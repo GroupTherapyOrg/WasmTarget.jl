@@ -171,6 +171,10 @@ first_int(n::Int) = (r = first_of(n); r isa Int ? r : -1)
 # position 1 is `tag` in C, `side` in A; position 2 is past C's one field
 first_mixed(n::Int) = read_first(Holder(n > 0 ? A(n, 1) : C(n)))
 second_short(n::Int) = read_second(Holder(n > 0 ? A(n, 1) : C(n)))
+# a MemoryRef's ptr_or_offset read through a Union receiver: Julia's element address, which the index
+# WasmTarget holds is not, for an Int64 and a Float64 memory alike; a union element's is the offset
+union_ref_ptr(n::Int) = (x = n > 0 ? Core.memoryref(Memory{Int64}(undef, 1)) : Core.memoryref(Memory{Float64}(undef, 1)); Int(UInt(getfield(x, :ptr_or_offset))))
+union_ref_offset(n::Int) = (x = n > 0 ? Core.memoryref(Memory{Union{Nothing,Int64}}(undef, 1)) : Core.memoryref(Memory{Union{Nothing,Float64}}(undef, 1)); Int(UInt(getfield(x, :ptr_or_offset))))
 end
 
 @testset "dispatch_table.dart: field selectors, each class's accessor by class id (dev/formal/FieldSelectorTable.tla)" begin
@@ -255,6 +259,12 @@ end
     @test em isa W.RejectionError && em.rejection isa W.Unquarantined && occursin("side, tag", em.rejection.row)
     local eb = try; (ts = numbered(F.second_short); W.field_selector_calls(ts.component, admitted(ts))); nothing; catch x; x; end
     @test eb isa W.RejectionError && eb.rejection isa W.Unquarantined && occursin("BoundsError", eb.rejection.row)
+    # a getter selector's read of a field held in another form than Julia's rejects at its site, as
+    # _directGet's does (memoryref_address_unread); the offset form, Julia's own, is a selector
+    local ep = try; (tp = numbered(F.union_ref_ptr); W.field_selector_calls(tp.component, admitted(tp))); nothing; catch x; x; end
+    @test ep isa W.RejectionError && ep.rejection isa W.Unquarantined && occursin("Julia's element address", ep.rejection.row)
+    local to = numbered(F.union_ref_offset)
+    @test [c.name for c in W.field_selector_calls(to.component, admitted(to))] == ["ptr_or_offset"]
     # the compile calls through the table (_virtualCall): first_of's read by position, run by node,
     # answers as native Julia
     isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))

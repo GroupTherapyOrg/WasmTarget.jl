@@ -1889,6 +1889,10 @@ end
 # an 8- or 16-bit field is stored packed, which wasm reads sign- or zero-extended (struct.get_s for a
 # signed integer, struct.get_u otherwise): dart stores no packed field in a class
 @parity "dart2wasm/lib/code_generator.dart:2353 AstCodeGenerator._directGet" function _direct_get(self::AstCodeGenerator, target::ClassField, receiver::NirValue)::WasmBuilder.IR.ValueType
+    # a field whose value WasmTarget holds in another form than Julia's (a MemoryRef's index where Julia
+    # holds an address) rejects at the read, located (src/julia/classes.jl memoryref_address_unread)
+    local unread = memoryref_address_unread(target)
+    unread === nothing || reject!(unread, "$(self.enclosing_member)")
     local info = get(self.translator.class_info, target.cls, nothing)
     info === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:2353 AstCodeGenerator._directGet: no class info for $(target.cls)"), "$(self.enclosing_member)")
     local field_index = self.translator.field_index[target]

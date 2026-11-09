@@ -52,14 +52,17 @@ end
 
 Why no constant of the class `cls` can be made, as constants.jl's visitInstanceConstant refuses it, or
 `nothing` where one is made: a builtin type's value is its builtin constant; any other primitive type
-with no wasm representation (a 128-bit integer has one, its class's two halves) is Unquarantined; a
+but a 128-bit integer (its class's two halves) is Unquarantined: one with no wasm representation, and
+one held in its promoted integer register (type_promote_integer: a `Ptr`, `Core.AddrSpace`), whose
+constant, dart's visitIntConstant of its bits, is not made yet; a
 class with no class info, outside the closed world, is Internal. The one source of the fact:
 visitInstanceConstant rejects with it, and type_value_unmade reads it.
 """
-@quarantine "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes an instance constant of its class's info; a Julia primitive type with no wasm representation has none" Base.isprimitivetype function constant_unmade(translator, cls::DataType)::Union{Rejection,Nothing}
+@quarantine "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes an instance constant of its class's info; a Julia primitive type with no builtin type has none yet but a 128-bit integer's" Base.isprimitivetype function constant_unmade(translator, cls::DataType)::Union{Rejection,Nothing}
     haskey(translator.builtin_types[], cls) && return nothing
     isprimitivetype(cls) && !type_expand_integer(cls) &&
-        return Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation")
+        return Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, " *
+                             (type_promote_integer(cls) === nothing ? "with no wasm representation" : "held in its promoted integer register, which visitIntConstant does not make yet"))
     haskey(translator.class_info, cls) ||
         return Internal("dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant: the class $cls of the constant has no class info")
     return nothing
@@ -69,12 +72,12 @@ end
     type_value_unmade(translator, T) -> Union{Nothing,Some}
 
 The parameter that keeps the type `T` from being a constant (`Some(p)`), or `nothing` where constants.jl
-makes it: a parameter that is a value of a primitive type with no wasm representation (GenericMemory's
+makes it: a parameter that is a value of a primitive type whose constant is not made (GenericMemory's
 `Core.AddrSpace{Core}`), or a value of no class of the closed world (a `Vararg`'s Core.TypeofVararg),
 each of which visitInstanceConstant rejects, found in `T`'s parameters and in theirs: a parameter value is
 unmade exactly where constant_unmade rejects its class, the one source of which constants are made.
 """
-@quarantine "julia/src/julia.h:971 jl_to_typeof reads every tag's type from its table; a type value whose parameter is a primitive with no wasm representation, or a value of no class, has no constant (src/julia/classes.jl constant_unmade)" Core.typeof function type_value_unmade(translator, @nospecialize(T))::Union{Nothing,Some}
+@quarantine "julia/src/julia.h:971 jl_to_typeof reads every tag's type from its table; a type value whose parameter is a primitive whose constant is not made, or a value of no class, has no constant (src/julia/classes.jl constant_unmade)" Core.typeof function type_value_unmade(translator, @nospecialize(T))::Union{Nothing,Some}
     local walk(@nospecialize(x)) = begin
         if x isa Union
             local a = walk(x.a)
@@ -467,6 +470,50 @@ primitive type has no such class yet and rejects, located, where it is translate
     return T isa DataType && T <: Base.BitInteger && 8 * sizeof(T) > 64
 end
 
+"""    type_promote_integer(T) -> Union{Type{UInt32},Type{UInt64},Nothing}
+
+The integer register that holds a value of the primitive class `T`, one with no builtin type
+(Translator.builtinTypes), as Julia's integer class of its width whose builtin type is that register
+(`UInt32` the i32, `UInt64` the i64), or `nothing` where LLVM's wasm target holds it in none. Julia's codegen gives a
+primitive class its LLVM type (julia/src/cgutils.cpp:668 bitstype_to_llvm): `Float16` and `BFloat16`
+their float types, a `Ptr` the pointer of address space 0, an `LLVMPtr` the pointer of its own, and any
+other the integer of its size in bits (`jl_datatype_size` × 8: `Core.AddrSpace` an i8, a `primitive type
+P 40` an i40). LLVM's type legalizer holds an integer narrower than a legal one in the next legal one,
+TypePromoteInteger (llvm/lib/CodeGen/TargetLoweringBase.cpp:1754 for a simple type; :1421-1435 getTypeConversion's extended-scalar block
+rounds an extended one, an i24 or an i40, up to its power of two first), wasm's legal integers being i32
+and i64 (llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp:63-64); a pointer of address space 0 is the
+integer of the data layout's pointer width, the 64 bits native Julia's `sizeof(Ptr{T})` answers on this
+host. An integer wider than i64 is TypeExpandInteger's (type_expand_integer), the half floats are
+LLVM's soft-promoted halves and an `LLVMPtr` a pointer of another address space: each `nothing`,
+rejected, located, where it is translated.
+
+The register's bits above the class's own are LLVM's promoted value's, undefined: an operation that reads
+them is the promoted operation's (LegalizeIntegerTypes.cpp PromoteIntOp), which the intrinsics port
+apart; one not ported rejects there, located."""
+@quarantine pin"julia/src/cgutils.cpp:668 bitstype_to_llvm" "Julia's codegen gives a primitive class with no wasm builtin type its LLVM integer type, which LLVM's wasm type legalizer promotes to the next legal register (llvm/lib/CodeGen/TargetLoweringBase.cpp:1726 TargetLoweringBase::computeRegisterProperties, its TypePromoteInteger loop at :1754); dart's builtin types are a closed set of its wasm classes" Base.isprimitivetype function type_promote_integer(@nospecialize(T::Any))::Union{Type{UInt32},Type{UInt64},Nothing}
+    T isa DataType && isprimitivetype(T) || return nothing
+    (T === Float16 || T === Core.BFloat16 || T <: Core.LLVMPtr) && return nothing
+    local bits = 8 * sizeof(T)
+    bits <= 32 && return UInt32
+    bits <= 64 && return UInt64
+    return nothing
+end
+
+"""    primitive_value_type(translator, cls) -> Union{WasmBuilder.IR.StorageType,Nothing}
+
+The wasm type that holds a value of the primitive class `cls` unboxed, or `nothing` where it has none:
+its builtin type (Translator.builtinTypes), else the builtin type of the register LLVM promotes it to
+(type_promote_integer). The one source of which primitive classes are value classes: translateStorageType
+unboxes a value by it, preciseThisFor unboxes a promoted class's `this` by it, and
+FunctionCollector.initialize records each one's box allocated, as dart records its value classes
+(functions.dart:71)."""
+@quarantine pin"julia/src/cgutils.cpp:668 bitstype_to_llvm" "a Julia primitive class holds its value in a wasm number type, a builtin one or the register LLVM promotes its LLVM integer to; dart's value classes are a closed set of builtin types" Base.get function primitive_value_type(translator, cls::DataType)::Union{WasmBuilder.IR.StorageType,Nothing}
+    local builtin = get(translator.builtin_types[], cls, nothing)
+    builtin === nothing || return builtin
+    local promoted = type_promote_integer(cls)
+    return promoted === nothing ? nothing : translator.builtin_types[][promoted]
+end
+
 """
     class_instance_fields(c, at) -> Vector{ClassField}
 
@@ -782,6 +829,24 @@ the only one.
 end
 
 """
+    memoryref_address_unread(field) -> Union{Rejection,Nothing}
+
+Why a program's read of the field `field` gives no value of Julia's, or `nothing` where the field holds
+Julia's own: a MemoryRef's `ptr_or_offset` (`_memoryref_instance_fields`) holds the element's index from
+0, Julia's own value only where its memory's elements are a union or of size zero
+(julia/base/pointer.jl:75 unsafe_convert reads it as the offset exactly there, `datatype_arrayelem` and
+`datatype_layoutsize` of the memory's type); for any other memory Julia's value is the element's address,
+which a wasm array does not have: Unquarantined, located at the read, never the index read as an address.
+"""
+@quarantine pin"julia/base/pointer.jl:75 unsafe_convert" "a MemoryRef's ptr_or_offset is the element's address unless its memory's elements are a union or of size zero, as Base's unsafe_convert reads it; WasmTarget holds the index, Julia's value only in the offset form" Base.datatype_arrayelem function memoryref_address_unread(field::ClassField)::Union{Rejection,Nothing}
+    field.cls <: Core.GenericMemoryRef && field.name == "ptr_or_offset" || return nothing
+    local mem_t = fieldtype(field.cls, :mem)
+    local isunion = 2
+    (Base.datatype_arrayelem(mem_t) == isunion || Base.datatype_layoutsize(mem_t) == 0) && return nothing
+    return Unquarantined("src/julia/classes.jl _memoryref_instance_fields: a read of the ptr_or_offset of a $(field.cls), Julia's element address, which a wasm array does not have")
+end
+
+"""
     _module_instance_fields(c, at) -> Vector{ClassField}
 
 The fields of a `Module`, whose data Julia holds outside its fields (`fieldcount(Module) == 0`): one
@@ -887,6 +952,16 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
         name_op isa NirConst && (name_op.c.val isa Symbol || name_op.c.val isa Int) || continue
         local admitted = admitted_classes(receiver)::Vector{DataType}
         local name = field_selector_name(name_op.c.val, admitted); local is_setter = f === Core.setfield!
+        # a getter selector reads its field in every class it admits (ImplicitFieldAccessorCodeGenerator):
+        # a field WasmTarget holds in another form than Julia's rejects at this site, as _directGet's read
+        # rejects (memoryref_address_unread), never the selector's getter reading it as Julia's value
+        is_setter || for c in admitted
+            c <: Core.GenericMemoryRef || continue      # memoryref_address_unread's one class
+            local fs = class_instance_fields(c, "src/julia/classes.jl field_selector_calls")
+            local k = findfirst(x -> x.name == name, fs)
+            local unread = k === nothing ? nothing : memoryref_address_unread(fs[k])
+            unread === nothing || reject!(unread, "$(b.ci.def) statement $index")
+        end
         local k = findfirst(e -> e.name == name && e.is_setter == is_setter, out)
         k === nothing && (push!(out, FieldSelectorCalls(name, is_setter, 0, DataType[], FieldAccessSite[])); k = length(out))
         out[k].call_count += 1

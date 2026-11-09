@@ -79,6 +79,9 @@ abstract type Shape end
 struct Circle <: Shape; r::Float64; end
 struct Square <: Shape; s::Float64; end
 f_shapes(n::Int) = n > 0 ? Circle(1.0) : Square(2.0)
+primitive type P24 24 end
+primitive type P40 40 end
+primitive type P256 256 end
 end
 
 @testset "translator.dart: translateType over a class table" begin
@@ -100,8 +103,16 @@ end
                    (W.WasmF32, IR.NumType_f32), (W.WasmF64, IR.NumType_f64))
         @test D.translate_storage_type(t, T; unbox = false) == w
     end
-    # a primitive class with no wasm representation rejects, located
-    for T in (Float16, Ptr{Nothing})
+    # a primitive class with no builtin type is the integer register LLVM's wasm target promotes Julia's
+    # LLVM type to (bitstype_to_llvm, then TypePromoteInteger): a Ptr the 64-bit pointer, an 8-bit
+    # Core.AddrSpace an i32, a 24-bit primitive type an i32, a 40-bit one an i64
+    for (T, w) in ((Ptr{Nothing}, IR.NumType_i64), (Ptr{UInt8}, IR.NumType_i64), (Core.AddrSpace{Core}, IR.NumType_i32),
+                   (TypeCases.P24, IR.NumType_i32), (TypeCases.P40, IR.NumType_i64))
+        @test D.translate_storage_type(t, T) == w && D.translate_type(t, T) == w
+    end
+    # one LLVM holds in no integer register rejects, located: the soft-promoted half floats, an integer
+    # wider than i64 that is no 128-bit Base.BitInteger
+    for T in (Float16, Core.BFloat16, TypeCases.P256)
         local e = try; D.translate_type(t, T); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end
@@ -112,6 +123,8 @@ end
     @test W.constant_unmade(t, Int64) === nothing
     local pu = W.constant_unmade(t, Float16)
     @test pu isa W.Unquarantined && occursin("visitInstanceConstant: a constant of the primitive type Float16, with no wasm representation", pu.row)
+    local pp = W.constant_unmade(t, Ptr{Nothing})
+    @test pp isa W.Unquarantined && occursin("a constant of the primitive type Ptr{Nothing}, held in its promoted integer register", pp.row)
     local pi = W.constant_unmade(t, Core.TypeofVararg)
     @test pi isa W.Internal && occursin("visitInstanceConstant: the class Core.TypeofVararg of the constant has no class info", pi.site)
     # a 128-bit integer is its class's struct of two i64 halves, a regular class: none in this world
@@ -685,6 +698,10 @@ mutable struct Plain
     Plain() = (@noinline; new(0))
 end
 make_objs(x::Int) = Box{String}(x).n + Plain().n
+# a callable primitive class with no builtin type, held in the register LLVM promotes it to
+primitive type CallP64 64 end
+(p::CallP64)(x::Int) = (@noinline; reinterpret(Int, p) + x)
+call_p(a::Int, b::Int) = reinterpret(CallP64, a)(b)
 end
 
 @testset "translator.dart: preciseThisFor, a closure's `this` its struct" begin
@@ -717,6 +734,19 @@ end
         local e = try; D.precise_this_for(t, mi); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Internal
     end
+end
+
+@testset "translator.dart: preciseThisFor, a promoted primitive class's `this` is primitive_value_type's register, its box its own class" begin
+    local W = WasmTarget
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.call_p, (Int, Int), "translator"), "test"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local P = ClosureThisCases.CallP64
+    local mi = only(b.ci.def for b in t.component if b.ci.def.specTypes == Tuple{P, Int})
+    # the one answer translateStorageType gives an argument of the class: unboxed its register, nullable its box
+    @test D.precise_this_for(t, mi) == D.primitive_value_type(t, P) == D.translate_storage_type(t, P)
+    @test D.precise_this_for(t, mi; nullable = true) == W.WasmBuilder.with_nullability(D.repr(t.class_info[P]), true)
 end
 
 # convertType boxes an i64 as its Julia class: n stored in a field of type Any is Int64's box, whose

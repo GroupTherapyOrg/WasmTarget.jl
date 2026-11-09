@@ -191,4 +191,27 @@ end
     @test W.make_tear_off_function_type(t, named, t.top_type[]).inputs == [t.top_type[]]
 end
 
+module Boxes
+@noinline id_any(v::Vector{Any}, i::Int64) = v[i]
+kind(p::Ptr{Nothing}) = Int64(UInt64(p))
+kind(x::Int64) = -x
+f(n::Int64) = (v = Any[n, Ptr{Nothing}(UInt64(n))]; kind(id_any(v, 2)) + 3 * kind(id_any(v, 1)))
+end
+
+# Value classes are always implicitly allocated (functions.dart:71): every primitive class with a
+# wasm value type, builtin or promoted (a Ptr held in its i64, primitive_value_type), has its box
+# recorded allocated, so a target pending on its class is compiled; a 128-bit integer, two halves, has none
+@testset "FunctionCollector.initialize: a primitive class's box, builtin or promoted, is allocated" begin
+    local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
+    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Boxes.f, (Int64,), "functions"), "test"), data, W.TranslatorOptions())
+    W._init_modules(t, nothing)
+    collect(W.ClassInfoCollector(t))
+    local fc = t.functions[]
+    @test isempty(fc._allocated_classes)
+    W.initialize(fc)
+    local allocated(c) = W.class_id(t.class_info[c]) in fc._allocated_classes
+    @test haskey(t.class_info, Ptr{Nothing}) && allocated(Ptr{Nothing}) && allocated(Int64)
+    @test haskey(t.class_info, Int128) && !allocated(Int128)
+end
+
 end # module FunctionsTest

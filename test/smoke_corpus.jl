@@ -837,7 +837,15 @@ _xf("captured_mixed_step", Any[
 # (_emit_storage_pointer_offset!, calls.jl). The byte store ignored `i` (every store landed on
 # byte 0 of a Vector{UInt8}), a String store was off by one, and a String load read one add_ptr
 # step as the index and ignored `i` and sub_ptr.
+# A Ptr held in Any is its own box, a value class whose box FunctionCollector.initialize records
+# allocated (src/julia/classes.jl primitive_value_type): read back by its isa, unboxed, called by
+# dynamic dispatch on its class (its target compiled because its box is allocated), and egal by its bits
+_sp_kind(p::Ptr{Nothing}) = Int64(UInt64(p))
+_sp_kind(x::Int64) = -x
 _g("storage_pointers", Any[
+    ("boxed_ptr_isa_unbox", (n::Int64) -> (v = Any[n, Ptr{Nothing}(UInt64(n))]; x = _id_any(v, 2); x isa Ptr{Nothing} ? _sp_kind(x) : _sp_kind(x::Int64)), Int64(7)),
+    ("boxed_ptr_dynamic_call", (n::Int64) -> (v = Any[n, Ptr{Nothing}(UInt64(n))]; _sp_kind(_id_any(v, 2)) + 3 * _sp_kind(_id_any(v, 1))), Int64(7)),
+    ("boxed_ptr_egal", (n::Int64) -> (v = Any[n, Ptr{Nothing}(UInt64(n))]; Int64(_id_any(v, 2) === Ptr{Nothing}(UInt64(n))) + 2 * Int64(_id_any(v, 1) === Ptr{Nothing}(UInt64(n)))), Int64(7)),
     ("string_load_offset_index", (n::Int64) -> (s = "abcdefgh"; GC.@preserve s Int64(unsafe_load(pointer(s) + n ÷ 10, n % 10))), Int64(23)),
     ("vector_load_offset_index", (n::Int64) -> (v = UInt8[0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68]; GC.@preserve v Int64(unsafe_load(pointer(v) + n ÷ 10, n % 10))), Int64(23)),
     ("string_store_index", (n::Int64) -> (s = Base._string_n(8); GC.@preserve s (for k in 1:8; unsafe_store!(pointer(s), UInt8(0x40 + k), k); end; unsafe_store!(pointer(s) + n ÷ 10, UInt8(0x7a), n % 10)); sum(Int64(codeunit(s, k)) * k for k in 1:8)), Int64(23)),
@@ -1071,6 +1079,7 @@ _g("memory", Any[
     ("copyto_view_overlap", (n::Int64) -> (v = collect(1:n); copyto!(view(v, 2:n), view(v, 1:n-1)); _sm_enc(v)), Int64(5)),
     ("bcast_reverse_view", (n::Int64) -> (v = collect(1:n); v .= @view v[end:-1:1]; _sm_enc(v)), Int64(5)),
     ("pointer_eq_distinct", (n::Int64) -> (a = collect(1:n); b = collect(1:n); Int64(pointer(a) == pointer(b))), Int64(3)),
+    ("pointer_eq_distinct_union_ref", (n::Int64) -> (x = n > 0 ? Core.memoryref(Memory{Int64}(undef, 1)) : Core.memoryref(Memory{Float64}(undef, 1)); y = n > 0 ? Core.memoryref(Memory{Int64}(undef, 1)) : Core.memoryref(Memory{Float64}(undef, 1)); Int64(getfield(x, :ptr_or_offset) === getfield(y, :ptr_or_offset))), Int64(3)),
     ("pointer_eq_empty_memory", (n::Int64) -> (a = Memory{Int64}(undef, n); b = Memory{Int64}(undef, n); Int64(pointer(a) == pointer(b))), Int64(0)),
     ("mightalias_views_distinct", (n::Int64) -> (a = collect(1:n); b = collect(1:n); Int64(Base.mightalias(view(a, 1:2), view(b, 1:2)))), Int64(3)),
     ("copyto_views_distinct", (n::Int64) -> (a = collect(1:n); b = collect(10:10+n-1); copyto!(view(a, 2:n), view(b, 1:n-1)); _sm_enc(a)), Int64(5)),

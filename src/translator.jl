@@ -973,9 +973,11 @@ its other members' class `Base.nonnothingtype`, and a `Union` of classes is Juli
 its members, their nearest common superclass; a type as a value (`Type{X}`) is its kind
 (`typeof(X)`), as the closed world's walk meets it, and a type as a value of a type Julia left open
 (`Type`, `Type{T}`) the open `Type{T}` every kind is under (dart's `_Type`, translateType(typeType)).
-A class is a primitive one's builtin type (`unbox`; nullable, its own class, the box) or the class's
-representation. A `UnionAll` other than `Type`, a primitive class with no wasm representation
-(`Int128`, `Float16`, `Ptr`) and a class collect gave no info reject, located.
+A class is a primitive one's builtin type (`unbox`; nullable, its own class, the box), a primitive one
+with none its promoted integer register (`Ptr`, `Core.AddrSpace`, a `primitive type` of its own width:
+type_promote_integer), or the class's representation. A `UnionAll` other than `Type`, a primitive class
+with no wasm representation (`Float16`, an integer wider than i64 but `Int128` and `UInt128`) and a class
+collect gave no info reject, located.
 
 The `typejoin` of a Union is its REPRESENTATION only: a value keeps its exact class, an `Int64` in a
 `Union{Int64,Float64}` its own box, never converted to the join's. A packed i8 or i16 is a storage
@@ -1018,7 +1020,9 @@ the representation here is a reference to the join's struct, each value boxed in
     end
     if isprimitivetype(cls)
         # Built-in type? Its box is the primitive class itself
-        local builtin = unbox ? get(self.builtin_types[], cls, nothing) : nothing
+        # its builtin type, or, with none (a Ptr, a primitive type of its own width), the integer register
+        # LLVM's wasm target promotes Julia's LLVM type to; boxed as the class itself (primitive_value_type)
+        local builtin = unbox ? primitive_value_type(self, cls) : nothing
         if builtin !== nothing
             nullable || return builtin
             local box = get(self.class_info, cls, nothing)
@@ -1448,7 +1452,10 @@ method (a singleton callee) and a constructor (its callee `Type{C}`, a constant 
 passes, isconstType) have none: a Julia constructor compiles as a method of its type, its object made by
 its own `new`, never a dart constructor with a `this` (constructor_info.jl), so dart's assert of an
 instance member rejects Internal, located. dart's unboxed `this` follows: a class with a builtin type whose box class
-`boxedClasses` names is its builtin type, or, nullable, its box.
+`boxedClasses` names is its builtin type, or, nullable, its box; a primitive class with no builtin type
+(a `Ptr`, a `primitive type` of its own width) is the register primitive_value_type gives it, or,
+nullable, its own class, the box translateStorageType gives it, so `this` and an argument of the class
+read one answer.
 """
 @parity "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor" function precise_this_for(self::Translator, member::Core.MethodInstance; nullable::Bool = false)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/translator.dart:1909 Translator.preciseThisFor"
@@ -1457,6 +1464,12 @@ instance member rejects Internal, located. dart's unboxed `this` follows: a clas
         reject!(Internal("$at: $member, a method of a function or a constructor, has no `this`"), at)
     local builtin = get(self.builtin_types[], cls, nothing)
     local box_class = builtin === nothing ? nothing : get(self.boxed_classes[], builtin, nothing)
+    if builtin === nothing && isprimitivetype(cls)
+        # a primitive class with no builtin type is held in the register primitive_value_type gives, the
+        # one source translateStorageType unboxes by, and is its own box, as translateStorageType boxes it
+        builtin = primitive_value_type(self, cls)
+        builtin === nothing || (box_class = cls)
+    end
     if box_class !== nothing
         # We represent `this` as an unboxed type.
         nullable || return builtin::WasmBuilder.IR.ValueType

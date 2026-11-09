@@ -273,6 +273,15 @@ end
     @test [f.name for f in W.class_instance_fields(Memory{String}, "classes")] == ["data", "length"]
     @test [f.name for f in W.class_instance_fields(Memory{Union{Nothing,Int}}, "classes")] == ["data", "length"]
     @test W.class_instance_fields(R, "classes") == [W.ClassField(R, 1, "ptr_or_offset", Int, false), W.ClassField(R, 2, "mem", M, false)]
+    # the index is Julia's own value of ptr_or_offset only for a memory of union or zero-size elements
+    # (base/pointer.jl unsafe_convert); a read of it for any other memory, Julia's address, rejects
+    local ru = W.memoryref_address_unread(W.class_instance_fields(R, "classes")[1])
+    @test ru isa W.Unquarantined && occursin("ptr_or_offset of a MemoryRef{$Int}, Julia's element address", ru.row)
+    @test W.memoryref_address_unread(W.class_instance_fields(R, "classes")[2]) === nothing
+    for T in (Union{Nothing,Int}, Nothing)
+        local RT = Core.MemoryRef{T}
+        @test W.memoryref_address_unread(W.class_instance_fields(RT, "classes")[1]) === nothing
+    end
     # an atomic memory, a primitive with no storage class: located rejections
     local e = try; W.class_instance_fields(AtomicMemory{Int}, "classes"); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Unquarantined
