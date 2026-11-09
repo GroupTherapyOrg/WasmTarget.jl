@@ -101,37 +101,48 @@ end
 """
     apply_type_cache(translator, operands, at) -> Vector{Pair{Vector{Any},Any}}
 
-The type cache Julia's apply_type reads for one statement (julia/src/builtins.c:1547 jl_f_apply_type,
-its arms jl_apply_type, jl_apply_tuple_type_v and jl_type_union; julia/src/jltypes.c:1112 lookup_type, a
-typename's linear cache searched by lookup_type_idx_linear, :1078, each key compared by typekey_eq, :952),
-made whole at compile time: each entry a key, one value of each operand, and the type Julia answers for
-it. An operand is a literal (`Some` of its value) or the type Julia inferred for it, whose every member
-must have one value, a type (Julia's isconstType, Compiler/src/typeutils.jl:9), so the operand's values are
-the members', and the keys are the operands' unions split as apply_type_tfunc splits them, under its
-bound (Compiler/src/tfuncs.jl:1812, `unionsplitcost <= max_union_splitting`; typeutils.jl:261
-switchtupleunion): every key the statement can meet at run time is the cache's. Each entry's type is
-Julia's own fold of the call (Compiler/src/tfuncs.jl:1753 apply_type_tfunc, a Const where every operand is
-one and the call cannot raise), a type value that has a constant (type_value_unmade) and that a run-time
-type test decides (run_time_type_gap), so every answer is one of WasmTarget's canonical constants and
-`===` on it stays the ref.eq of the identical arm. An operand of any other type, operands whose split
-passes Julia's bound, a key whose fold is Union{} (the call raises, Julia's TypeError) or no Const
-(apply_type_tfunc answers a wider type), or an entry with no constant rejects at the statement, located.
+The cases of one apply_type statement, split as Julia's inliner splits a call over its arguments' unions
+(Compiler/src/ssair/inlining.jl:526 ir_inline_unionsplit!): each entry a case, its signature one value
+of each operand (a key), its result the constant Julia folds for it (a ConstantCase), tested in order
+(src/intrinsics.jl, the run_time_type arm). An operand is a literal (`Some` of its value) or the type
+Julia inferred for it, whose every member must have one value, a type (Julia's isconstType,
+Compiler/src/typeutils.jl:9), so the operand's values are the members', and the keys are the split of
+the operands' unions (typeutils.jl:261 switchtupleunion), under the bound inference splits within
+(Compiler/src/abstractinterpretation.jl:352 is_union_split_eligible, `unionsplitcost <=
+max_union_splitting`): every key the statement can meet at run time is a case's, so the split is fully
+covered. Each entry's type is Julia's own fold of the call (Compiler/src/tfuncs.jl:1753 apply_type_tfunc,
+a Const where every operand is one and the call cannot raise), a type value that has a constant
+(type_value_unmade) and that a run-time type test decides (run_time_type_gap), so every answer is one of
+WasmTarget's canonical constants and `===` on it stays the ref.eq of the identical arm. An operand of any
+other type, operands whose split passes the bound, a key whose fold is Union{} (the call raises, Julia's
+TypeError) or no Const (apply_type_tfunc answers a wider type), or an entry with no constant rejects at
+the statement, located.
+
+Julia's run time answers the call another way (julia/src/builtins.c:1547 jl_f_apply_type): a Union head
+makes its union by jl_type_union (:1569), and any other head finds its type in its typename's cache
+(julia/src/jltypes.c:1112 lookup_type), the hashed set lookup_type_set for a key typekey_hash can hash
+(:1787), its linear cache (lookup_type_idx_linear, :1078) only for one it cannot, a key with a Union
+parameter (type_hash, :1742). apply_type_tfunc itself splits no Union head:
+it answers it at tfuncs.jl:1771, before its own split at :1812. WasmTarget holds every type value as one
+constant (constants.jl _lowerTypeToConstant), so the run-time half finds the type among the statement's
+cases rather than making it or looking it up in a typename's cache.
 
 formal(dev/formal/TypeCacheLookup.tla): every key the operands can hold finds an entry, the one of its own key
 """
-@quarantine pin"julia/src/jltypes.c:1078 lookup_type_idx_linear" "Julia makes a type at run time and finds it in its typename's cache, so each type stays one object; WasmTarget holds every type value as one constant (constants.jl _lowerTypeToConstant), so the cache is made at compile time, its keys every value Julia's inference lets each operand hold, its types Julia's own fold, and the lookup is the run-time half" Core.Compiler.apply_type_tfunc function apply_type_cache(translator, operands::Vector{Any}, at::String)::Vector{Pair{Vector{Any},Any}}
+@quarantine pin"julia/Compiler/src/ssair/inlining.jl:526 ir_inline_unionsplit!" "Julia's run time makes a Union by jl_type_union and finds any other type in its typename's cache (jltypes.c:1112 lookup_type, hashed by lookup_type_set where typekey_hash can hash the key); WasmTarget holds every type value as one constant (constants.jl _lowerTypeToConstant), so the statement is split at compile time as the inliner splits a call, one constant case per key every value Julia's inference lets each operand hold, its type Julia's own fold, and the run-time half tests the cases in order" Core.Compiler.apply_type_tfunc function apply_type_cache(translator, operands::Vector{Any}, at::String)::Vector{Pair{Vector{Any},Any}}
     local argtypes = Any[op isa Some ? Core.Const(something(op)) : op for op in operands]
     for op in operands
         op isa Some || all(Core.Compiler.isconstType, Base.uniontypes(op)) ||
             reject!(Unquarantined("src/julia/classes.jl apply_type_cache: an operand of Julia's apply_type typed $op, whose values are no types of one value each, which the cache made at compile time cannot key"), at)
     end
-    # apply_type_tfunc splits only within its bound (tfuncs.jl:1812); past it Julia keys no constant per split
+    # inference splits only within its bound (abstractinterpretation.jl:352 is_union_split_eligible);
+    # past it Julia makes no case per split
     local cost = Core.Compiler.unionsplitcost(Core.Compiler.fallback_lattice, argtypes)
     local bound = Core.Compiler.InferenceParams().max_union_splitting
     cost <= bound ||
-        reject!(Unquarantined("src/julia/classes.jl apply_type_cache: Julia's apply_type on operands typed $(join(operands, ", ")), whose union split costs $cost, past apply_type_tfunc's bound $bound (max_union_splitting)"), at)
+        reject!(Unquarantined("src/julia/classes.jl apply_type_cache: Julia's apply_type on operands typed $(join(operands, ", ")), whose union split costs $cost, past inference's bound $bound (max_union_splitting)"), at)
     local entries = Pair{Vector{Any},Any}[]
-    # each key one split of the operands' unions, as apply_type_tfunc splits them (switchtupleunion)
+    # each key one split of the operands' unions (switchtupleunion), a case of the inliner's union split
     for split in Core.Compiler.switchtupleunion(Core.Compiler.fallback_lattice, argtypes)
         local k = Any[a isa Core.Const ? a.val : a.parameters[1] for a in split]
         local folded = Core.Compiler.apply_type_tfunc(Core.Compiler.fallback_lattice, Any[Core.Const(v) for v in k])

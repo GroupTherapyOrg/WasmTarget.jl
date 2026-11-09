@@ -1358,16 +1358,20 @@ end
 # its operands are known, so every call reaching here makes its type at run time; typeof, a read of a
 # value's tag, is the to_typeof arm's). WasmTarget holds each type as one constant, canonical by
 # Julia's egal (constants.jl _lowerTypeToConstant), and `===` on two DataTypes is their ref.eq on that
-# ground (the identical arm, `a_data_type`), so the type is found, never made: Julia's lookup_type
-# (jltypes.c:1112) over the statement's cache, made whole at compile time (src/julia/classes.jl
-# apply_type_cache, the one source of its keys and types). lookup_type_idx_linear (:1078) walks the
-# cache's entries in order and answers the first whose key typekey_eq (:952) finds equal, each
-# parameter by its pointer: here each operand a run-time value compared by ref.eq with the entry's
-# constant (an operand of one value is that value, compared with nothing), the hit's type the entry's
-# constant. A key the cache lacks is none Julia's inference lets the operands hold, so the walk past the
-# last entry is wasm's trap, as Julia's codegen traps where its inference proved a path unreachable
-# (julia/src/codegen.cpp:9202, a ReturnNode with no value, CreateTrap). An operand whose values the
-# cache cannot key, and an entry with no constant, rejects at the statement, located (apply_type_cache)
+# ground (the identical arm, `a_data_type`), so the type is found among the statement's cases, never
+# made (Julia's run time makes a Union by jl_type_union and finds any other type in its typename's
+# cache, jltypes.c:1112 lookup_type), the cases made whole at compile time (src/julia/classes.jl
+# apply_type_cache, the one source of its keys and types). The cases run as Julia's inliner runs a
+# union split's (Compiler/src/ssair/inlining.jl:526 ir_inline_unionsplit!), in order, each a constant
+# case: its test is isa on each operand whose type is not already the case's, here an operand of more
+# than one value compared by ref.eq with the case's constant (isa on a Type{X} of one value is === X),
+# an operand of one value compared with nothing; the first case whose tests hold answers its constant.
+# Julia's differs at the end: a fully covered split with every case handled tests its last case by
+# nothing (inlining.jl:544, `i == ncases && fully_covered && handled_all_cases`); WasmTarget tests it
+# too, the lookup dev/formal/TypeCacheLookup.tla models, and past it is wasm's trap, as Julia's codegen
+# traps where its inference proved a path unreachable (julia/src/codegen.cpp:9202, a ReturnNode with no
+# value, CreateTrap). An operand whose values the cases cannot key, and a case with no constant, rejects
+# at the statement, located (apply_type_cache)
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:run_time_type}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
     local t = translator(self)
