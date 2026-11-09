@@ -609,6 +609,23 @@ wasm import cannot take, rejects here, located.
 end
 
 """
+    nir_libjulia_func(node) -> Union{Symbol,Nothing}
+
+The libjulia function a foreign call names, as Julia's ccall lowering reads it: a name with no
+library is looked up in Julia's own runtime (julia/src/ccall.cpp:623 interpret_symbol_arg, "just
+symbol, default to JuliaDLHandle"), and emit_ccall's special functions are keyed by that name
+(ccall.cpp:1464 _is_libjulia_func). Narrower than Julia's: a `(name, library)` tuple naming one of
+Julia's own libraries (libjulia, libjulia-internal, the executable) is libjulia's too in
+_is_libjulia_func, and is read here as no libjulia function, nothing, so it reaches
+nir_foreign_import and rejects, located.
+"""
+@quarantine "Julia's ccall lowering reads a name with no library as libjulia's own function and keys its special functions by that name (julia/src/ccall.cpp:1419 emit_ccall)" Core.Symbol function nir_libjulia_func(node::NirForeignCall)::Union{Symbol,Nothing}
+    local sym = node.args[1]
+    sym isa NirConst && sym.c.val isa Union{Symbol,String} || return nothing
+    return Symbol(sym.c.val)
+end
+
+"""
     nir_foreign_param_type(T) -> Type
 
 The type a foreign call's argument declared `Any` crosses as, given its operand's inferred type `T`,

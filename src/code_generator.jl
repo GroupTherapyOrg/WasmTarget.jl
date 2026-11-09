@@ -1603,8 +1603,12 @@ end
 # StaticInvocation visited here; Julia's codegen lowers each call site (julia/src/ccall.cpp emit_ccall),
 # so the site's callee is that procedure (nir_foreign_import), imported by getFunction into this
 # function's module, each argument translated to the import's parameter type and the call made as
-# Translator.callFunction makes it. A call to a library no host supplies rejects, located
+# Translator.callFunction makes it. A call to a library no host supplies rejects, located. As dart's
+# visitor asks the intrinsifier first (generateStaticIntrinsic), a foreign call does: Julia's emit_ccall
+# lowers libjulia's special functions inline, keyed by name (julia/src/ccall.cpp:1464 is_libjulia_func)
 @parity "dart2wasm/lib/code_generator.dart:1668 AstCodeGenerator.visitStaticInvocation" function visit_static_invocation(self::AstCodeGenerator, node::NirForeignCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local intrinsic_result = generate_static_intrinsic(self.intrinsifier[], node)
+    intrinsic_result === nothing || return intrinsic_result
     local target = nir_foreign_import(self.body, node)
     target === nothing &&
         reject!(Unquarantined("src/julia/runtime/rtutils.jl nir_foreign_import: a foreign call of $(node.args[1]), whose library no host supplies"), "$(self.enclosing_member)")

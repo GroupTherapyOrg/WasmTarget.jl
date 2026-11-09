@@ -408,8 +408,10 @@ end
     NirWorld
 
 The closed world in NIR, dart's Kernel `Component`: `entry`, the ClosedWorld's entry MethodInstance
-(dart's Component.mainMethod), and `bodies`, every function of the ClosedWorld Julia's trim verifier
-accepted, in Julia's order. Read as a list (iterate, index, length), never built as one.
+(dart's Component.mainMethod), `bodies`, every function of the ClosedWorld Julia's trim verifier
+accepted, in Julia's order, and `world`, the ClosedWorld's world, the one its code was inferred in and
+the compiled program's task runs at (julia/src/jlapi.c:316). Read as a list (iterate, index, length),
+never built as one.
 
 A typestate by construction: its one constructor takes the token `_NirToken`, which only this file
 holds, and `build_nir`, which takes a `ClosedWorld`, is its only caller, so a stage that takes a
@@ -421,10 +423,11 @@ Julia's differs: it has no private constructors, so the sole constructor and the
 by reflection when the package loads (check_sole_constructor), with ClosedWorld's: the next state of the
 same typestate (construction_check(::Val{:ClosedWorld}), src/julia/subset.jl; L220).
 """
-@quarantine "Julia has no private constructors; the NIR of a closed world is a typestate a token guards" Base.Vector struct NirWorld
+@quarantine pin"precedent(dart: pkg/kernel/lib/src/ast/components.dart:12 Component)" "dart's Kernel Component, the program its TFA phase and translator read; Julia differs: it has no private constructors, so the NIR of a closed world, its bodies and the world they were inferred at (julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel), is a typestate a token guards" Base.Vector struct NirWorld
     entry::Core.MethodInstance
     bodies::Vector{NirBody}
-    NirWorld(::_NirToken, entry::Core.MethodInstance, bodies::Vector{NirBody}) = new(entry, bodies)
+    world::UInt
+    NirWorld(::_NirToken, entry::Core.MethodInstance, bodies::Vector{NirBody}, world::UInt) = new(entry, bodies, world)
 end
 
 # the bodies read as a list: iterated, indexed and counted in Julia's order
@@ -463,7 +466,7 @@ census rejects with `Unquarantined`, located at the compile `at` names.
 
 formal(dev/formal/NirHandoff.tla): a record no body, one body per CodeInstance, a repeat asserted, each statement at its position
 """
-@quarantine "the closed world Julia inferred comes as CodeInstance and CodeInfo pairs, read once" Core.CodeInfo function build_nir(world::ClosedWorld, at::String)::NirWorld
+@quarantine pin"julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel" "the closed world Julia inferred comes as CodeInstance and CodeInfo pairs at one world, as julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel returns them, read once" Core.CodeInfo function build_nir(world::ClosedWorld, at::String)::NirWorld
     # a queued ccallable's svec(rettype, signature) is the verifier's record, no body: its
     # specialization is a CodeInstance of the world like any other, which Julia's inference lists a
     # second time when its invokelatest queue compiles it (typeinfer.jl's compile!): one body here, the
@@ -491,7 +494,7 @@ formal(dev/formal/NirHandoff.tla): a record no body, one body per CodeInstance, 
     end
     any(b -> b.ci.def === world.entry, bodies) ||
         reject!(Internal("src/julia/nir.jl: the closed world's entry $(world.entry) has no body"), at)
-    return NirWorld(_NirToken(), world.entry, bodies)
+    return NirWorld(_NirToken(), world.entry, bodies, world.world)
 end
 
 # the two closed sums' assertions, run when the package loads

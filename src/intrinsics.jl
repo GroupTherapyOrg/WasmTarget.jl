@@ -558,6 +558,29 @@ end
 # generateInstanceIntrinsic, :985): a binary one through the binary operator map, a unary one through
 # the unary map. An 8- or 16-bit integer, an i32 in its type's form, is read in its operation's
 # view and its result put back in that form; Bool's bitwise operations and equality need neither. No arm is null, as dart's.
+# a foreign call of libjulia's own function (nir_libjulia_func), lowered inline as Julia's emit_ccall
+# lowers its special functions, keyed by name (julia/src/ccall.cpp:1464 is_libjulia_func), where dart
+# intrinsifies a static call by its target: Julia's differs in that a foreign call names a C function,
+# no member. jl_get_tls_world_age reads the task's world age (ccall.cpp:1717), which in a compiled image
+# is the world its code was inferred in (julia/src/jlapi.c:316, julia/src/codegen.cpp:7190
+# emit_abi_call), the closed world's (NirWorld's world), an i64 constant; emit_ccall's asserts (a UInt
+# result, C's convention, no argument) reject, located. Any other foreign call is no intrinsic, nothing
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::NirForeignCall)::Union{WasmBuilder.IR.ValueType,Nothing}
+    local libjulia = nir_libjulia_func(node)
+    libjulia === :jl_get_tls_world_age || return nothing
+    local at = "$(self.code_gen.enclosing_member)"
+    local rt, cc = node.args[2], node.args[5]
+    rt isa NirConst && rt.c.val === UInt ||
+        reject!(Internal("julia/src/ccall.cpp:1717 emit_ccall: jl_get_tls_world_age declared to return $rt, not UInt"), at)
+    local conv = cc isa NirConst ? (cc.c.val isa Tuple ? cc.c.val[1] : cc.c.val) : nothing
+    conv === :ccall || conv === :cdecl ||
+        reject!(Internal("julia/src/ccall.cpp:1717 emit_ccall: jl_get_tls_world_age called by the convention $(repr(conv)), not C's"), at)
+    isempty(nir_foreign_operands(node)) ||
+        reject!(Internal("julia/src/ccall.cpp:1717 emit_ccall: jl_get_tls_world_age takes no argument"), at)
+    WasmBuilder.i64_const(b(self), reinterpret(Int64, UInt64(translator(self).component.world)))
+    return WasmBuilder.IR.NumType_i64
+end
+
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::Union{NirCall,NirInvoke})::Union{WasmBuilder.IR.ValueType,Nothing}
     if node isa NirInvoke
         local target = nir_invoke_target(node)

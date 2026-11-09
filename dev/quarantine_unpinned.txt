@@ -157,7 +157,6 @@ julia/nir.jl NirThrowUndefIfNot
 julia/nir.jl NirUnreachable
 julia/nir.jl NirUpsilon
 julia/nir.jl NirValue
-julia/nir.jl NirWorld
 julia/nir.jl TreeNode_no_offset
 julia/nir.jl [Base.eltype]
 julia/nir.jl [Base.getindex]
@@ -171,7 +170,6 @@ julia/nir.jl _nir_ccall_name
 julia/nir.jl _nir_operand
 julia/nir.jl _nir_stmt
 julia/nir.jl _nir_types
-julia/nir.jl build_nir
 julia/nir.jl construction_check(::Val{:NirStmt})::Int
 julia/nir.jl construction_check(::Val{:NirValue})::Int
 julia/nir.jl nir_argument_type
@@ -322,7 +320,6 @@ julia/runtime/rtutils.jl throw_undef_ref_error
 julia/serializable.jl _dart_reaches
 julia/serializable.jl check_serializable_writable
 julia/serializable.jl construction_check
-julia/subset.jl ClosedWorld
 julia/subset.jl TRIM_ERROR_KINDS
 julia/subset.jl _SubsetToken
 julia/subset.jl _check_export_names

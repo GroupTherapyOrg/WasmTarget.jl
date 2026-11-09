@@ -26,7 +26,11 @@ call); `codeinfos`, what `typeinf_ext_toplevel` returned, a `Core.CodeInstance` 
 record of each ccallable queued beside it; `notes`, the verifier's warnings,
 each a `TrimError`; and `parents`, the verifier's map from each CodeInstance to the caller and
 statement that first reached it, from which TrimVerifier.verify_create_stackframes locates any
-statement of the world.
+statement of the world; and `world`, the world age the closed world was inferred in, the one source of
+the world a compiled program's task runs at: an embedded or juliac image's task runs at the world its
+code was inferred in (julia/src/jlapi.c:316 jl_call sets ct->world_age to jl_get_world_counter(), the
+image's; a juliac image's @ccallable wrapper stores jl_world_counter into the task's world age,
+julia/src/codegen.cpp:7190 emit_abi_call).
 
 A typestate by construction: its one constructor takes the token `_SubsetToken`, which only this
 file holds, and `check_subset` is its only caller, so every stage after the subset check takes a
@@ -36,13 +40,14 @@ precedent(rust: typestate with a private constructor, the value made by one func
 Julia's differs: it has no private constructors, so the sole constructor and the token's are checked
 by reflection when the package loads (check_sole_constructor).
 """
-@quarantine "Julia's trim inference returns the closed world as an untyped list of CodeInstance and CodeInfo pairs" Core.Any struct ClosedWorld
+@quarantine pin"precedent(dart: pkg/kernel/lib/src/ast/components.dart:12 Component)" "the front end's program, dart's CfeResult.component (src/compile.jl CfeResult); Julia differs: its trim inference returns the closed world as an untyped list of CodeInstance and CodeInfo pairs, inferred at the one world it is given (julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel)" Core.Any struct ClosedWorld
     entry::Core.MethodInstance
     codeinfos::Vector{Any}
     notes::Vector{TrimError}
     parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}
+    world::UInt
     ClosedWorld(::_SubsetToken, entry::Core.MethodInstance, codeinfos::Vector{Any}, notes::Vector{TrimError},
-                parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}) = new(entry, codeinfos, notes, parents)
+                parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}, world::UInt) = new(entry, codeinfos, notes, parents, world)
 end
 
 # Julia's closed-world inference for trimming at `world`, of its queue: the entry's MethodInstance and
@@ -342,7 +347,7 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
         any(x -> x isa Core.CodeInstance && x.def === r, codeinfos) ||
             reject!(Internal("src/julia/subset.jl check_subset: the runtime entry point $r is not in the closed world"), at)
     end
-    return ClosedWorld(_SubsetToken(), entry, codeinfos, notes, parents)
+    return ClosedWorld(_SubsetToken(), entry, codeinfos, notes, parents, world)
 end
 
 # the typestate's assertion, run when the package loads: ClosedWorld and its token each have one

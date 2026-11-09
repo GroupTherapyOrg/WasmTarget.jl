@@ -494,18 +494,20 @@ function maybe(c::Bool)
     end
     return x
 end
+# the error the read raises, its variable and scope read where it is caught
+caught(c::Bool) = try; maybe(c); catch e; e isa UndefVarError ? (e.var === :x ? 10 : 20) + (e.scope === :local ? 1 : 2) : -1; end
 end
 @testset "Julia's undefined-variable check of a local raises UndefVarError through jl_undefined_var_error" begin
     local native = try; UndefVarCases.maybe(false); nothing; catch err; err; end
     @test native isa UndefVarError && native.var === :x && native.scope === :local
     @test any(s -> Meta.isexpr(s, :throw_undef_if_not) && s.args[1] === :x, Base.code_typed(UndefVarCases.maybe, (Bool,))[1][1].code)
-    # the check calls jl_undefined_var_error, whose UndefVarError reads the task's world age by a foreign
-    # call (julia/src/ccall.cpp:1717 jl_get_tls_world_age) no host supplies: a located rejection at that
-    # call, the next definition to port, never a module built past it
-    local e = rejection(() -> W.compile(UndefVarCases.maybe, (Bool,); optimize = false))
-    @test e isa W.RejectionError && e.rejection isa W.Unquarantined
-    @test occursin("jl_get_tls_world_age", e.rejection.row) && occursin("whose library no host supplies", e.rejection.row)
-    @test occursin("jl_undefined_var_error", e.at)
+    # the check calls jl_undefined_var_error, whose UndefVarError reads the task's world age by a call of
+    # libjulia's jl_get_tls_world_age, lowered inline (julia/src/ccall.cpp:1717): the world the closed
+    # world was inferred in, never a host import
+    @test any(s -> Meta.isexpr(s, :foreigncall) && s.args[1] == QuoteNode(:jl_get_tls_world_age), Base.code_typed(UndefVarError, (Symbol, Symbol))[1][1].code)
+    queue_native!("maybe ", W.compile(UndefVarCases.maybe, (Bool,); optimize = false), UndefVarCases.maybe, [(true,)])
+    push!(NATIVE_RUNS, WTRunner.RunCase("maybe(false) throws ", W.compile(UndefVarCases.maybe, (Bool,); optimize = false), (false,), WTRunner.Throws(UndefVarError)))
+    queue_native!("caught ", W.compile(UndefVarCases.caught, (Bool,); optimize = false), UndefVarCases.caught, [(true,), (false,)])
 end
 
 # a field that may be left undefined and may hold nothing keeps dart's late lowering's set flag

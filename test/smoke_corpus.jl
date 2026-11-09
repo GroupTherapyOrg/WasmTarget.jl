@@ -2053,6 +2053,10 @@ _g("undef_slots", Any[
     ("const_memory_unset", (n::Int64) -> ((isassigned(_SmUMemA, n - 2) ? 10 : 20) + (_SmUMemA[n - 1]::Int64)), Int64(3)),
     ("sroa_phi_unset_field_throws", (n::Int64) -> (m = n > 2 ? _SmUI(n) : _SmUI(n, "ab"); try; ncodeunits(m.x); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
     ("sroa_phi_set_field", (n::Int64) -> (m = n > 2 ? _SmUI(n) : _SmUI(n, "ab"); try; ncodeunits(m.x); catch e; e isa UndefRefError ? -1 : -2; end), Int64(1)),
+    # a local read where it may be unassigned: Julia's throw_undef_if_not raises UndefVarError(:x, :local)
+    # through jl_undefined_var_error, whose world is jl_get_tls_world_age's (julia/src/ccall.cpp:1717)
+    ("local_unassigned_read_throws", (n::Int64) -> (n > 2 ? (x = n) : 0; try; x; catch e; e isa UndefVarError ? -1 : -2; end), Int64(1)),
+    ("local_assigned_read", (n::Int64) -> (n > 2 ? (x = n) : 0; try; x; catch e; e isa UndefVarError ? -1 : -2; end), Int64(3)),
 ])
 # A MemoryRef passed through `inferencebarrier`: memoryrefget and memoryrefset! read the element
 # type from the reference's own type (memoryref_eltype, never a guessed Int32 element, A17E1), and
