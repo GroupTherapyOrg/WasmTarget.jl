@@ -586,6 +586,16 @@ struct, an isbits union) is never #undef: it holds bits.
     !Base.allocatedinline(T) || (T isa DataType && !Base.datatype_pointerfree(T))
 
 """
+    generic_memory_elsize(M, add_isunion) -> Int
+
+The element size of the concrete memory type `M`, the constant arm of Julia's codegen's
+emit_genericmemoryelsize, read from the type's own layout: its size, plus the selector byte of an
+isbits union (`arrayelem_isunion`, `Base.datatype_arrayelem`'s 2) where `add_isunion`.
+"""
+@quarantine "julia/src/cgutils.cpp:3292 emit_genericmemoryelsize: a memory type's element size is its layout's size, plus an isbits union's selector byte where add_isunion" Base.datatype_layoutsize generic_memory_elsize(M::DataType, add_isunion::Bool)::Int =
+    Base.datatype_layoutsize(M) + (add_isunion && Base.datatype_arrayelem(M) == 2 ? 1 : 0)
+
+"""
     field_may_be_null(c, i) -> Bool
 
 Whether field `i` of the struct `c` may be undefined (#undef), Julia's codegen's answer: a field past

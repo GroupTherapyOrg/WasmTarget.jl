@@ -2337,6 +2337,7 @@ _g("sizeof_values", Any[
     ("sizeof_memory_uint8", (n::Int64) -> Core.sizeof(Memory{UInt8}(undef, n)), Int64(3)),
     ("sizeof_memory_union", (n::Int64) -> Core.sizeof(Memory{Union{Int64,Nothing}}(undef, n)), Int64(3)),
     ("sizeof_memory_any", (n::Int64) -> Core.sizeof(Memory{Any}(undef, n)), Int64(3)),
+    ("sizeof_svec", (n::Int64) -> Core.sizeof(_sm_sv(n)), Int64(3)),
     ("sizeof_string", (n::Int64) -> sizeof("hé" * string(n)), Int64(3)),
 ])
 _g("memoryref_storage", Any[

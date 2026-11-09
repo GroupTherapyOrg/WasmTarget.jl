@@ -592,6 +592,7 @@ end
     f === Core._svec_len && length(args) == 1 && return generate_static_intrinsic(self, Val(:svec_len), f, args)
     f === Core.throw_methoderror && length(args) >= 1 && return generate_static_intrinsic(self, Val(:throw_methoderror), f, args)
     f === Core.nfields && length(args) == 1 && return generate_static_intrinsic(self, Val(:nfields), f, args)
+    f === Core.sizeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:sizeof), f, args)
     f === Core._svec_ref && length(args) == 2 && return generate_static_intrinsic(self, Val(:svec_ref), f, args)
     f === Core.svec && return generate_static_intrinsic(self, Val(:svec), f, args)
     (f === Core.memorynew || f === Core.memoryrefnew || f === Core.memoryrefget || f === Core.memoryrefset! ||
@@ -1150,7 +1151,7 @@ end
         local storage = array_type.element_type[].type
         # Julia's size limit, emit_memorynew's: nel * elsz (plus a selector byte each for an isbits
         # union) neither overflowing nor past typemax(Int) >> 1 - 1, so one unsigned comparison of nel
-        local elsz = Base.elsize(M) + (Base.isbitsunion(E) ? 1 : 0)
+        local elsz = generic_memory_elsize(M, true)
         local limit = elsz == 0 ? typemax(Int) - 1 : div(typemax(Int) - 1, elsz)
         local n = add_local(code_gen, I64)
         translate_expression(code_gen, args[2], I64)
@@ -2121,6 +2122,46 @@ end
     load_class_id(b, t, o.type)
     local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(ids, classes)]
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i64], c -> WasmBuilder.i64_const(b, something(tuple_record_arity(c), fieldcount(c))), () -> WasmBuilder.unreachable(b))
+    return i64
+end
+
+# Julia's `sizeof` of a value, Julia's codegen arm (codegen.cpp:4769, emit_builtin_call's sizeof): a
+# SimpleVector's (1 + length) * sizeof(void*), its length the _svec_len arm's; a memory's length times
+# its element size (codegen.cpp:4805: emit_genericmemorylen, cgutils.cpp:3335, its `length` field,
+# times emit_genericmemoryelsize with add_isunion, a constant where the memory's type is concrete,
+# generic_memory_elsize). A memory whose element size only its run-time type knows
+# (emit_genericmemoryelsize's emit_datatype_size of the value's typeof) or an atomic memory rejects,
+# located. A String's arm is not taken here: Base's sizeof and ncodeunits of a String reach its data's
+# length through src/patch/string.jl's overlays, its one path; a String and any other value return
+# null, rejected at the call, as dart's
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:sizeof}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i64 = WasmBuilder.IR.NumType_i64
+    local T = dart_type_of(self, args[1])
+    local sty = Base.unwrap_unionall(T)
+    if sty === Core.SimpleVector
+        generate_static_intrinsic(self, Val(:svec_len), Core._svec_len, args)
+        WasmBuilder.i64_const(b, 1)
+        WasmBuilder.i64_add(b)
+        WasmBuilder.i64_const(b, sizeof(Ptr{Cvoid}))
+        WasmBuilder.i64_mul(b)
+        return i64
+    end
+    sty isa DataType && sty <: GenericMemory || return nothing
+    local at = "$(code_gen.enclosing_member): Julia's sizeof of a $T"
+    (T isa DataType && isconcretetype(T)) ||
+        reject!(Unquarantined("julia/src/cgutils.cpp:3292 emit_genericmemoryelsize: the element size of a memory of type $T, which only its run-time type's layout holds"), at)
+    T.parameters[1] === :not_atomic ||
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's sizeof of the atomic memory $T"), at)
+    local info = get(t.class_info, T, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: $T has no class info"), at)
+    local len = only(fld for fld in class_instance_fields(T, at) if fld.name == "length")
+    translate_expression(code_gen, args[1], info.non_nullable_type)
+    WasmBuilder.struct_get(b, info.struct_, t.field_index[len])
+    WasmBuilder.i64_const(b, generic_memory_elsize(T, true))
+    WasmBuilder.i64_mul(b)
     return i64
 end
 
