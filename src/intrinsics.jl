@@ -595,6 +595,7 @@ end
     f === Core.sizeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:sizeof), f, args)
     f === Core._svec_ref && length(args) == 2 && return generate_static_intrinsic(self, Val(:svec_ref), f, args)
     f === Core.svec && return generate_static_intrinsic(self, Val(:svec), f, args)
+    f === Core._expr && length(args) >= 1 && return generate_static_intrinsic(self, Val(:expr), f, args)
     (f === Core.memorynew || f === Core.memoryrefnew || f === Core.memoryrefget || f === Core.memoryrefset! ||
      f === Core.memoryrefoffset || f === Core.memoryref_isassigned || f === Core.memoryrefswap! ||
      f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) &&
@@ -789,6 +790,102 @@ end
     WasmBuilder.array_new_fixed(b, array_type, length(args))
     WasmBuilder.struct_new(b, sv_info.struct_)
     return WasmBuilder.with_nullability(repr(sv_info), false)
+end
+
+# the arms' shared pieces over a class's layout: a class's info and its fields by name; one field of
+# them; a memory's class, its data array type and its set flags (`data#isSet`) where it has them; and
+# a new struct of a class, its header then each field's value in the class's field order, its class
+# recorded allocated as every allocation site records it (dart's recordClassAllocation, functions.dart:446)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:fields_of}, T::Type, at::String)::Tuple{ClassInfo,Dict{String,ClassField}}
+    local info = get(translator(self).class_info, T, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: $T has no class info"), at)
+    return (info, Dict{String,ClassField}(fld.name => fld for fld in class_instance_fields(T, at)))
+end
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:field}, fs::Dict{String,ClassField}, name::String, at::String)::ClassField = get(fs, name, nothing) === nothing ?
+    reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: no field $name in $(collect(keys(fs)))"), at) : fs[name]
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory_of}, M::Type, atomic_gap::Function, at::String)::Tuple
+    local t = translator(self)
+    (M isa DataType && M <: GenericMemory && M.parameters[1] === :not_atomic) || atomic_gap()
+    local info, fs = generate_static_intrinsic(self, Val(:fields_of), M, at)
+    local data = generate_static_intrinsic(Val(:field), fs, "data", at)
+    local array_type = (translate_type_of_field(t, data)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+    # a reference element admitting nothing: WasmTarget's nothing is the null reference, so #undef
+    # is dart's late lowering's set flag (useIsSetField, late_lowering.dart:560), the class's
+    # `data#isSet` array, which the layout gives exactly such elements (classes.jl _needs_is_set)
+    local is_set = get(fs, "data#isSet", nothing)
+    local flag_type = is_set === nothing ? nothing :
+        (translate_type_of_field(t, is_set)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+    return (info, fs, data, array_type, is_set, flag_type)
+end
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:new_struct}, info::ClassInfo, fs::Dict{String,ClassField}, vals::Dict{String,Function})::Nothing
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    push_object_header_fields(b, t, info)
+    for fld in sort(collect(values(fs)); by = (x::ClassField) -> t.field_index[x])
+        vals[fld.name]()
+    end
+    WasmBuilder.struct_new(b, info.struct_)
+    record_class_allocation(t.functions[], class_id(info))
+    return nothing
+end
+
+# Julia's `_expr(head, args...)`, the builtin `Expr(...)` calls: jl_f__expr (julia/src/builtins.c:1670)
+# takes its head, a Symbol (JL_TYPECHK), allocates a Vector{Any} of the other operands (jl_alloc_vec_any,
+# array.c:177: jl_alloc_array_1d, array.c:147, its memory _new_genericmemory_'s, genericmemory.c:56, the
+# type's one empty instance for no element, its reference at the memory's first element, the index 0 in
+# WasmTarget's MemoryRef, and its size (n,), _new_array, array.c:59), stores each operand (jl_array_ptr_set) and allocates the Expr of the head and
+# that vector. Each struct is built by the arms' shared new_struct, each element translated
+# to the memory's element type and the elements made by array.new_fixed, as the svec arm builds its data;
+# every element written, its set flag set (the memory arm's `data#isSet`, late_lowering's isSet). A head
+# Julia did not infer a Symbol is JL_TYPECHK's TypeError, a gap, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:expr}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local b = code_gen.b[]
+    local at = "$(code_gen.enclosing_member): Julia's _expr"
+    dart_type_of(self, args[1]) <: Symbol ||
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: _expr of a head of type $(dart_type_of(self, args[1])), whose check is jl_f__expr's TypeError (JL_TYPECHK)"), at)
+    local n = length(args) - 1
+    local new_struct(T::DataType, vals::Dict{String,Function}) = begin
+        local info, fs = generate_static_intrinsic(self, Val(:fields_of), T, at)
+        sort(collect(keys(fs))) == sort(collect(keys(vals))) ||
+            reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: $T holds the fields $(sort(collect(keys(fs)))), not $(sort(collect(keys(vals))))"), at)
+        generate_static_intrinsic(self, Val(:new_struct), info, fs, vals)
+        WasmBuilder.with_nullability(repr(info), false)
+    end
+    local M = Memory{Any}
+    local minfo, mfs, _, array_type, is_set, flag_type = generate_static_intrinsic(self, Val(:memory_of), M,
+        () -> reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: $M is no memory of :not_atomic"), at), at)
+    local mem = add_local(code_gen, WasmBuilder.with_nullability(repr(minfo), false))
+    if n == 0
+        # _new_genericmemory_'s zero-sized allocation: the type's one empty instance
+        instantiate_constant(code_gen, NirConst(Core.Const(M.instance)), mem.type)
+    else
+        local element = WasmBuilder.unpacked(array_type.element_type[].type)
+        local vals = Dict{String,Function}(
+            "data" => () -> (foreach((a::NirValue) -> translate_expression(code_gen, a, element), args[2:end]); WasmBuilder.array_new_fixed(b, array_type, n)),
+            "length" => () -> WasmBuilder.i64_const(b, n))
+        # every element written, its set flag set (the memory arm's memoryrefset!)
+        is_set === nothing || (vals["data#isSet"] = () -> (WasmBuilder.i32_const(b, 1); WasmBuilder.i32_const(b, n); WasmBuilder.array_new(b, something(flag_type))))
+        new_struct(M, vals)
+    end
+    WasmBuilder.local_set(b, mem)
+    local ref = add_local(code_gen, new_struct(MemoryRef{Any}, Dict{String,Function}(
+        "ptr_or_offset" => () -> WasmBuilder.i64_const(b, 0), "mem" => () -> WasmBuilder.local_get(b, mem))))
+    WasmBuilder.local_set(b, ref)
+    local ainfo, afs = generate_static_intrinsic(self, Val(:fields_of), Vector{Any}, at)
+    local size_type = WasmBuilder.unpacked(ainfo.struct_.fields[translator(self).field_index[generate_static_intrinsic(Val(:field), afs, "size", at)] + 1].type)
+    local vec = add_local(code_gen, new_struct(Vector{Any}, Dict{String,Function}(
+        "ref" => () -> WasmBuilder.local_get(b, ref),
+        "size" => () -> instantiate_constant(code_gen, NirConst(Core.Const((n,))), size_type))))
+    WasmBuilder.local_set(b, vec)
+    local einfo, efs = generate_static_intrinsic(self, Val(:fields_of), Expr, at)
+    local head_type = WasmBuilder.unpacked(einfo.struct_.fields[translator(self).field_index[generate_static_intrinsic(Val(:field), efs, "head", at)] + 1].type)
+    return new_struct(Expr, Dict{String,Function}(
+        "head" => () -> translate_expression(code_gen, args[1], head_type),
+        "args" => () -> WasmBuilder.local_get(b, vec)))
 end
 
 # dart:_wasm's operations on a mutable wasm array Julia code holds (src/julia/wasm_array.jl): the
@@ -1106,35 +1203,11 @@ end
         local opt = Base.JLOptions().check_bounds
         opt == 1 ? true : opt == 2 ? false : !(bc isa NirConst && bc.c.val === false)
     end
-    local fields_of(T::Type) = begin
-        local info = get(t.class_info, T, nothing)
-        info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: $T has no class info"), at)
-        (info, Dict{String,ClassField}(fld.name => fld for fld in class_instance_fields(T, at)))
-    end
-    local field(fs::Dict{String,ClassField}, name::String) = get(fs, name, nothing) === nothing ?
-        reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: no field $name in $(collect(keys(fs)))"), at) : fs[name]
-    # the memory's class and its array type
-    local memory_of(M::Type) = begin
-        (M isa DataType && M <: GenericMemory && M.parameters[1] === :not_atomic) || atomic_gap()
-        local info, fs = fields_of(M)
-        local data = field(fs, "data")
-        local array_type = (translate_type_of_field(t, data)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
-        # a reference element admitting nothing: WasmTarget's nothing is the null reference, so #undef
-        # is dart's late lowering's set flag (useIsSetField, late_lowering.dart:560), the class's
-        # `data#isSet` array, which the layout gives exactly such elements (classes.jl _needs_is_set)
-        local is_set = get(fs, "data#isSet", nothing)
-        local flag_type = is_set === nothing ? nothing :
-            (translate_type_of_field(t, is_set)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
-        (info, fs, data, array_type, is_set, flag_type)
-    end
+    local fields_of(T::Type) = generate_static_intrinsic(self, Val(:fields_of), T, at)
+    local field(fs::Dict{String,ClassField}, name::String) = generate_static_intrinsic(Val(:field), fs, name, at)
+    local memory_of(M::Type) = generate_static_intrinsic(self, Val(:memory_of), M, atomic_gap, at)
     local b = code_gen.b[]
-    local new_struct(info::ClassInfo, fs::Dict{String,ClassField}, vals::Dict{String,Function}) = begin
-        push_object_header_fields(b, t, info)
-        for fld in sort(collect(values(fs)); by = x -> t.field_index[x])
-            vals[fld.name]()
-        end
-        WasmBuilder.struct_new(b, info.struct_)
-    end
+    local new_struct(info::ClassInfo, fs::Dict{String,ClassField}, vals::Dict{String,Function}) = generate_static_intrinsic(self, Val(:new_struct), info, fs, vals)
     local raise_bounds(target::Function, index::Function) = begin
         target()
         index()

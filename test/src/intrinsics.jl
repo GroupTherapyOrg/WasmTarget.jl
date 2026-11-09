@@ -262,6 +262,30 @@ end
     end
 end
 
+module ExprNewCases
+# an Expr made at run time: its head, its arguments' count, an argument read back by index and its
+# class, an argument written into its vector, and an Expr of no argument (the empty memory)
+made(x::Int64, k::Int64) = (e = Expr(:call, :+, x, "s"); a = e.args[k]; a isa Int64 ? a : a isa Symbol ? Int64(-1) : a isa String ? Int64(-2) : Int64(-3))
+heads(b::Bool) = (e = b ? Expr(:block) : Expr(:call, :f, 1); Int64(length(e.args)) + (e.head === :block ? Int64(10) : Int64(20)))
+pushed(x::Int64) = (e = Expr(:tuple, x); push!(e.args, x + 1); e.args[1]::Int64 + e.args[end]::Int64 + length(e.args))
+end
+
+@testset "builtins.c: Julia's _expr, a fresh Vector{Any} of its operands under the Expr of its head" begin
+    # jl_f__expr allocates the Vector{Any} of its operands (jl_alloc_vec_any, the empty memory for none)
+    # and the Expr of the head and that vector; read back by index past its length raising BoundsError
+    local native(f, a) = try; f(a...); catch e; WTRunner.Throws(typeof(e)); end
+    local cases = WTRunner.RunCase[]
+    for (f, argsets) in ((ExprNewCases.made, [(Int64(5), Int64(k)) for k in 0:4]), (ExprNewCases.heads, [(true,), (false,)]),
+                         (ExprNewCases.pushed, [(Int64(3),)]))
+        local bytes = WI.compile(f, map(typeof, first(argsets)))
+        append!(cases, [WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, native(f, a)) for a in argsets])
+    end
+    @test count(c -> c.native isa WTRunner.Throws, cases) == 2
+    for r in WTRunner.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
+
 module IdenticalCases
 mutable struct Cell
     x::Int64
