@@ -285,7 +285,6 @@ julia/parity.jl check_include_patch
 julia/parity.jl check_mirrors
 julia/parity.jl check_package_declared
 julia/parity.jl check_parity
-julia/parity.jl check_patch
 julia/parity.jl check_quarantine
 julia/parity.jl check_typed_fields
 julia/parity.jl check_typed_signatures

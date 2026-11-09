@@ -32,6 +32,9 @@ iow(n::Int64) = (io = IOBuffer(); w1 = write(io, n > 0 ? "hé" : "x"); w2 = writ
 # an append buffer over existing bytes: the write lands after them, its position unmoved
 ioa(n::Int64) = (io = IOBuffer(UInt8[0x61, 0x62]; read = true, write = true, append = true); w = write(io, n > 0 ? SubString("xcd", 2) : "c");
     Int64(w) * 10^6 + Int64(io.size) * 10^4 + Int64(position(io)) * 10^3 + Int64(io.data[3]))
+# String(::Vector{UInt8}): a Vector at its memory's start taken as the String (jl_genericmemory_to_string),
+# one past it after popfirst! copied (jl_pchar_to_string); its length, its first byte, and the Vector left empty
+vstr(n::Int64) = (v = UInt8[0x61, 0x62, 0x63, 0x64]; n > 1 && popfirst!(v); s = String(v); Int64(ncodeunits(s)) * 1000 + Int64(codeunit(s, 1)) * 10 + length(v))
 end
 
 const STRING_OP_CASES = (
@@ -44,7 +47,8 @@ const STRING_OP_CASES = (
     ("fnd", StringOpCases.fnd, (Int64(1),)), ("fnd", StringOpCases.fnd, (Int64(0),)),
     ("mc", StringOpCases.mc, (Int64(1),)), ("mc", StringOpCases.mc, (Int64(0),)),
     ("iow", StringOpCases.iow, (Int64(1),)), ("iow", StringOpCases.iow, (Int64(0),)),
-    ("ioa", StringOpCases.ioa, (Int64(1),)), ("ioa", StringOpCases.ioa, (Int64(0),)))
+    ("ioa", StringOpCases.ioa, (Int64(1),)), ("ioa", StringOpCases.ioa, (Int64(0),)),
+    ("vstr", StringOpCases.vstr, (Int64(1),)), ("vstr", StringOpCases.vstr, (Int64(2),)))
 
 @testset "String's operations against native Julia" begin
     local runs = Main.WTRunner.RunCase[]
@@ -77,6 +81,7 @@ end
     @test :wasm_string_memory in reached(StringOpCases.pts, (Int64,))
     @test :wasm_string_codeunit in reached(StringOpCases.cmps, (Int64,))
     @test :wasm_string_codeunit in reached(StringOpCases.fnd, (Int64,))
+    @test [:wasm_memory_string, :wasm_string_alloc, :wasm_string_memory, :wasm_memory_copy!] ⊆ reached(StringOpCases.vstr, (Int64,))
 end
 
 # string(::Int) answers as native Julia, every sign and width: Base's own dec over the overlays of

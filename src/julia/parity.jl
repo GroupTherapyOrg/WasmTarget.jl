@@ -648,7 +648,7 @@ name; gpucompiler: a device's overlays of Base, each a method of its overlay tab
 an overlay names nothing but its method's signature, so the load reads each overlay's file and the
 @quarantine its line lies in.
 """
-@quarantine unpinned "Julia's overlay methods name only their signature; the load reads each one's file and its @quarantine" Base.visit function check_patch(table::Core.MethodTable, patchdir::String)::Int
+@quarantine pin"julia/base/boot.jl:282 Typeof" "Julia's overlay methods name only their signature, whose first parameter is the function's type as Core.Typeof gives it (Type{T} for a constructor, julia/base/boot.jl:285); the load reads each one's file and its @quarantine" Base.visit function check_patch(table::Core.MethodTable, patchdir::String)::Int
     local out = String[]
     Base.visit(table) do m
         local file = string(m.file)
@@ -661,7 +661,8 @@ an overlay names nothing but its method's signature, so the load reads each over
         for e in REGISTRY
             e isa QuarantineEntry && string(e.file) == file && e.first <= m.line <= e.last || continue
             local api = _resolve_name(e.mod, Meta.parse(e.api))
-            named |= api !== nothing && typeof(something(api)) === f
+            # the method's function type as Julia's signatures write it: a constructor's is Type{T}
+            named |= api !== nothing && Core.Typeof(something(api)) === f
         end
         named || push!(out, "the overlay $m at $(file):$(m.line) is under no @quarantine naming the function it replaces")
     end

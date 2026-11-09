@@ -24,6 +24,30 @@ end
 @quarantine "julia/base/strings/string.jl:83 unsafe_takestring of a byte Memory is a jl_genericmemory_to_string foreigncall; WasmGC wraps or copies the Memory's data array" Base.unsafe_takestring @consistent_overlay METHOD_TABLE Base.unsafe_takestring(m::Memory{UInt8}) =
     isempty(m) ? "" : wasm_memory_string(m, length(m))
 
+# Base's own body (julia/base/strings/string.jl:65): a reference at its memory's start (Base compares
+# `ptr_or_offset` with the memory's `ptr`, the element's address) takes the memory as the String
+# (jl_genericmemory_to_string), any other copies its bytes into a new String (jl_pchar_to_string,
+# julia/src/array.c:307: jl_alloc_string, then memcpy from the reference); the Vector is left empty.
+# WasmTarget's reference holds the element's index, so the start is Julia's own memoryrefoffset of 1
+# (jl_memoryrefoffset), and the copy is _string_n's String, its data shared as a Memory
+# (unsafe_wrap) and filled by unsafe_copyto! from the reference, each an overlay above or in
+# src/patch/genericmemory.jl
+@quarantine "julia/base/strings/string.jl:65 String of a byte Vector compares its reference's address with its memory's, then jl_genericmemory_to_string or jl_pchar_to_string's copy from the address; WasmGC's reference holds the element's index" Base.String @consistent_overlay METHOD_TABLE function Base.String(v::Vector{UInt8})
+    local len = length(v)
+    len == 0 && return ""
+    local ref = v.ref
+    local str = if Core.memoryrefoffset(ref) == 1
+        wasm_memory_string(ref.mem, len)
+    else
+        local s = Base._string_n(len)
+        unsafe_copyto!(memoryref(unsafe_wrap(Memory{UInt8}, s)), ref, len)
+        s
+    end
+    setfield!(v, :size, (0,))
+    setfield!(v, :ref, memoryref(Memory{UInt8}()))
+    return str
+end
+
 # Base's takes any `out` it can take a pointer to; the String its callers allocate is the one a data
 # array holds, so any other `out` stays Base's, a located rejection where it is reached
 @quarantine "Base's __unsafe_string! copies a String's bytes through pointers; WasmGC copies the data arrays (array.copy)" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::String, s::String, offs::Integer)
