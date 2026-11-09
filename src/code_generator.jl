@@ -1044,7 +1044,30 @@ map.
         # Julia's loop hints: its codegen makes them the loop's LLVM metadata (julia/src/codegen.cpp's
         # emit_expr, loopinfo, ctx.LoopID), an optimizer hint WebAssembly's backend emits nothing for
         (s::NirLoopInfo) => nothing
-        (s::NirThrowUndefIfNot) => reject!(Unquarantined("src/julia/runtime/rtutils.jl: Julia's undefined-variable check, its UndefVarError raise (jl_undefined_var_error)"), at)
+        # Julia's undefined-variable check (julia/src/codegen.cpp:6412 emit_expr's throw_undef_if_not):
+        # unless its Bool holds, getfield's undefined-reference name (julia/src/ast.c:407
+        # jl_getfield_undefref_sym, `##getfield##`) raises UndefRefError
+        # (raise_exception_unless over jl_undefref_exception, the runtime's throw_undef_ref_error), any
+        # other name UndefVarError of it in the local scope (cgutils.cpp:1596 undef_var_error_ifnot,
+        # the runtime's jl_undefined_var_error), the error block ending unreachable; no value
+        (s::NirThrowUndefIfNot) => begin
+            local b = self.b[]
+            local name = s.args[1]
+            name isa NirConst && name.c.val isa Symbol ||
+                reject!(Internal("$at: an undefined-variable check whose name $name is no literal symbol"), at)
+            translate_expression(self, s.args[2], WasmBuilder.IR.NumType_i32)
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.if_(b)
+            if name.c.val === Symbol("##getfield##")
+                call(self, nir_runtime_member(self.translator.component, throw_undef_ref_error, "$(self.enclosing_member): $at"))
+            else
+                translate_expression(self, name, translate_type(self.translator, Symbol))
+                translate_expression(self, NirConst(Core.Const(:local)), self.translator.top_type[])
+                call(self, nir_runtime_member(self.translator.component, jl_undefined_var_error, "$(self.enclosing_member): $at"))
+            end
+            WasmBuilder.unreachable(b)
+            WasmBuilder.var"end"(b)
+        end
         (s::NirInvokeModify) => reject!(Unquarantined("src/code_generator.jl visitInstanceSet: an atomic field modify (modifyfield!), its read, call and write"), at)
         (s::NirGoto) => reject!(Internal("$at: a jump of the flat IR, which the stackifier's BR carries (visit_block), as a statement"), at)
         (s::NirGotoIfNot) => reject!(Internal("$at: a conditional jump of the flat IR, which the stackifier's BR_IF or BR_UNLESS carries (visit_block), as a statement"), at)

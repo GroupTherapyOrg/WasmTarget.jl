@@ -34,6 +34,15 @@
 @quarantine "Julia's runtime raises UndefRefError where an undefined reference is read" Core.UndefRefError @noinline throw_undef_ref_error()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(UndefRefError())
 
+# jl_undefined_var_error, which Julia's codegen calls where a variable is read before it is assigned
+# (julia/src/cgutils.cpp:1596 undef_var_error_ifnot): UndefVarError of the variable, the task's world
+# age and the scope it was looked up in (a symbol such as :local, or a module), built by Base's
+# constructor, whose world is jl_get_tls_world_age's (julia/base/boot.jl UndefVarError). dart raises a
+# late local read before its write in dart code (sdk/lib/_internal/wasm/common/error_utils.dart:188
+# _throwLateErrorLocalNI, LateError.localNI); Julia's error is its runtime's
+@quarantine "julia/src/rtutils.c:142 jl_undefined_var_error raises UndefVarError with the variable, the task's world age and the scope" Core.UndefVarError @noinline jl_undefined_var_error(var::Symbol, @nospecialize(scope::Any))::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(UndefVarError(var, scope))
+
 # jl_bounds_error_int, raised with the indexed value and the integer index where a bounds check fails
 # (rtutils.c); BoundsError's constructor specializes on its index, so the index is an Int, as the C
 # runtime's size_t
