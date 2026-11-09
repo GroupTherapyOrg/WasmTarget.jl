@@ -530,8 +530,9 @@ end
 
 # isdefined given an order: one that does not fit the field raises Julia's ConcurrencyViolationError
 # (codegen.cpp's emit_atomic_error), :not_atomic on a plain field reads as without; and a type made at run
-# time (typeof, apply_type of a value only run time knows) rejects at its statement, the ground of ===
-# on DataTypes as ref.eq (A68S3)
+# time is one of the program's canonical constants, the ground of === on DataTypes as ref.eq (A68S3):
+# typeof reads its tag's entry, apply_type finds its type in the statement's cache (jltypes.c lookup_type),
+# and apply_type on an operand whose values the cache cannot key rejects at its statement
 module AtomicOrderCases
 mutable struct Plain
     x::Any
@@ -553,8 +554,12 @@ end
 kind_of(n::Int64) = (v = Union{Int64,Float64,Int32}[Int64(1), 2.0, Int32(3)]; t = typeof(v[n]); Int64(t === Int64) + 2Int64(t === Float64) + 4Int64(t === Int32))
 any_kind_of(v::Vector{Any}) = typeof(v[1])
 apply_of(v::Vector{Any}) = Int64(Core.apply_type(v[1], v[2]) === Vector{Int64})
+# apply_type on an operand of two values, run against native: a DataType (its === the ref.eq of the
+# cache's constant) and a Union (jl_type_union's, its === Julia's egal)
+@noinline made_param(n::Int64) = n > 0 ? Int64 : Float64
+made_of(n::Int64) = (T = made_param(n); Int64(Vector{T} === Vector{Int64}) + 2Int64(Union{T,Nothing} === Union{Float64,Nothing}))
 end
-@testset "codegen.cpp: isdefined's order checks raise ConcurrencyViolationError; typeof is jl_typeof; a type made at run time rejects (A68S3)" begin
+@testset "codegen.cpp: isdefined's order checks raise ConcurrencyViolationError; typeof is jl_typeof; apply_type finds its type in its cache (A68S3)" begin
     local f = AtomicOrderCases.orders
     local bytes = W.compile(f, (Int64,); optimize = false)
     local cases = [WTRunner.RunCase("orders$a", bytes, a, WTRunner.native_answer(f, a)) for a in ((Int64(k),) for k in 1:5)]
@@ -566,7 +571,10 @@ end
     @test ke !== nothing && ke.rejection isa W.Unquarantined && !isempty(ke.at) &&
           startswith(ke.rejection.row, "src/julia/classes.jl type_value_unmade: typeof of a value that may be a Memory{Any}")
     local e = rejection(() -> W.compile(AtomicOrderCases.apply_of, (Vector{Any},); optimize = false))
-    @test e !== nothing && e.rejection isa W.Unquarantined && occursin("a type made at run time", e.rejection.row) && !isempty(e.at)
+    @test e !== nothing && e.rejection isa W.Unquarantined && !isempty(e.at) &&
+          startswith(e.rejection.row, "src/julia/classes.jl apply_type_cache: an operand of Julia's apply_type typed Any")
+    local mbytes = W.compile(AtomicOrderCases.made_of, (Int64,); optimize = false)
+    append!(NATIVE_RUNS, [WTRunner.RunCase("made_of($n)", mbytes, (n,), AtomicOrderCases.made_of(n)) for n in Int64[1, -1]])
 end
 
 # a value held as a reference narrowed to a primitive class (a PiNode): convertType's unboxing, the box

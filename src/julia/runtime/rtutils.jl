@@ -334,8 +334,9 @@ bodies (WasmTarget's runtime aside) and each binding they read (a NirGlobal oper
 statement, its value at compile time), and every value those hold, their elements and fields. What the
 runtime cannot decide (run_time_type_gap, the one reading) rejects at the first run-time test: a
 UnionAll or a free TypeVar (julia/src/subtype.c:1419, its environment) and a tuple type with a Vararg
-field (subtype.c:1348), each Julia's own, Unquarantined. A program's type value is a literal: one made at run time (apply_type, typeof)
-rejects at its statement (src/intrinsics.jl).
+field (subtype.c:1348), each Julia's own, Unquarantined. A program's type value is a literal or one of
+them found at run time: typeof's entry of the table of each class's type value, or an entry of an apply_type
+statement's cache, which run_time_type_gap checks at its statement (src/julia/classes.jl apply_type_cache).
 """
 @quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by subtyping with an environment, which the runtime does not port; dart patches what every use needs once every use is known (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant)" Base.IdSet function check_run_time_type_values(translator)::Nothing
     local at = first(translator.types[].rtt[].run_time_type_tests)

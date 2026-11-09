@@ -1347,12 +1347,56 @@ end
 # its operands are known, so every call reaching here makes its type at run time; typeof, a read of a
 # value's tag, is the to_typeof arm's). WasmTarget holds each type as one constant, canonical by
 # Julia's egal (constants.jl _lowerTypeToConstant), and `===` on two DataTypes is their ref.eq on that
-# ground (the identical arm, `a_data_type`): a type made at run time would be a second object for an
-# egal type, so each rejects at its statement, located, the one place that ground is kept
-# (dev/AUDIT.md A68S3). Porting one makes run-time types canonical first (jl_apply_type's type cache).
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer generate_static_intrinsic(self::Intrinsifier, ::Val{:run_time_type}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{} =
-    reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a type made at run time by Julia's $(nameof(f)), which === on DataTypes (ref.eq of canonical constants) rules out"),
-        "$(self.code_gen.enclosing_member): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))")
+# ground (the identical arm, `a_data_type`), so the type is found, never made: Julia's lookup_type
+# (jltypes.c:1112) over the statement's cache, made whole at compile time (src/julia/classes.jl
+# apply_type_cache, the one source of its keys and types). lookup_type_idx_linear (:1078) walks the
+# cache's entries in order and answers the first whose key typekey_eq (:952) finds equal, each
+# parameter by its pointer: here each operand a run-time value compared by ref.eq with the entry's
+# constant (an operand of one value is that value, compared with nothing), the hit's type the entry's
+# constant. A key the cache lacks is none Julia's inference lets the operands hold, so the walk past the
+# last entry is wasm's trap, as Julia's codegen traps where its inference proved a path unreachable
+# (julia/src/codegen.cpp:9202, a ReturnNode with no value, CreateTrap). An operand whose values the
+# cache cannot key, and an entry with no constant, rejects at the statement, located (apply_type_cache)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:run_time_type}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local at = "$(code_gen.enclosing_member): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))"
+    # an operand's value where compile time knows it, a literal or a constant binding (Julia's Const of
+    # each, abstract_eval_globalref), else the type Julia inferred for it
+    local operands = Any[a isa NirConst ? Some(a.c.val) :
+                         a isa NirGlobal && nir_binding_is_constant(a.ref) ? Some(nir_binding_value(a.ref, at).c.val) :
+                         dart_type_of(self, a) for a in args]
+    local cache = apply_type_cache(t, operands, at)
+    local result = translate_type(t, Union{Any[Core.Typeof(r) for (_, r) in cache]...})
+    local eq = WasmBuilder.IR.RefType_eq(; nullable = true)
+    # each operand of more than one value, held for the walk
+    local held = Dict{Int,WasmBuilder.IR.Local}()
+    for (j, a) in enumerate(args)
+        operands[j] isa Some && continue
+        length(unique(k[j] for (k, _) in cache)) > 1 || continue
+        held[j] = add_local(code_gen, eq)
+        translate_expression(code_gen, a, eq)
+        WasmBuilder.local_set(b, held[j])
+    end
+    local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[result])
+    for (k, r) in cache
+        local miss = WasmBuilder.block(b)
+        for j in sort!(collect(keys(held)))
+            WasmBuilder.local_get(b, held[j])
+            translate_expression(code_gen, NirConst(Core.Const(k[j])), eq)
+            WasmBuilder.ref_eq(b)
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.br_if(b, miss)
+        end
+        translate_expression(code_gen, NirConst(Core.Const(r)), result)
+        WasmBuilder.br(b, done)
+        WasmBuilder.var"end"(b)
+    end
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    return result
+end
 
 # a memory's data operations (src/julia/wasm_array.jl): an element left #undef (Base's _unsetindex!,
 # the null of its data array, array.set, dart's WasmArrayExt.[]=), and the call Julia's runtime copy makes on two
@@ -1611,8 +1655,9 @@ end
 # Two DataTypes are compared by their references too: jl_egal__bitstag (builtins.c) answers a concrete
 # one by its pointer and an abstract one by its name and parameters, and WasmTarget holds each type as
 # one constant, canonical by Julia's egal (constants.jl _lowerTypeToConstant, the constant table keyed
-# by ===), with no type made at run time (Julia's typeof and apply_type reject at their statements, the
-# run_time_type arm), so a reference is equal exactly where Julia's types are egal
+# by ===), with no type made at run time (Julia's typeof reads its tag's entry of the table of type
+# values, the to_typeof arm, and apply_type finds its type in the statement's cache of those constants,
+# the run_time_type arm), so a reference is equal exactly where Julia's types are egal
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:identical}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b

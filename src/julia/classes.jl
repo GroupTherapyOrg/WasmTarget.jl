@@ -96,6 +96,58 @@ unmade exactly where constant_unmade rejects its class, the one source of which 
 end
 
 """
+    apply_type_cache(translator, operands, at) -> Vector{Pair{Vector{Any},Any}}
+
+The type cache Julia's apply_type reads for one statement (julia/src/builtins.c:1547 jl_f_apply_type,
+its arms jl_apply_type, jl_apply_tuple_type_v and jl_type_union; julia/src/jltypes.c:1112 lookup_type, a
+typename's linear cache searched by lookup_type_idx_linear, :1078, each key compared by typekey_eq, :952),
+made whole at compile time: each entry a key, one value of each operand, and the type Julia answers for
+it. An operand is a literal (`Some` of its value) or the type Julia inferred for it, whose every member
+must have one value, a type (Julia's isconstType, Compiler/src/typeutils.jl:9), so the operand's values are
+the members', and the keys are the operands' unions split as apply_type_tfunc splits them, under its
+bound (Compiler/src/tfuncs.jl:1812, `unionsplitcost <= max_union_splitting`; typeutils.jl:261
+switchtupleunion): every key the statement can meet at run time is the cache's. Each entry's type is
+Julia's own fold of the call (Compiler/src/tfuncs.jl:1753 apply_type_tfunc, a Const where every operand is
+one and the call cannot raise), a type value that has a constant (type_value_unmade) and that a run-time
+type test decides (run_time_type_gap), so every answer is one of WasmTarget's canonical constants and
+`===` on it stays the ref.eq of the identical arm. An operand of any other type, operands whose split
+passes Julia's bound, a key whose fold is Union{} (the call raises, Julia's TypeError) or no Const
+(apply_type_tfunc answers a wider type), or an entry with no constant rejects at the statement, located.
+
+formal(dev/formal/TypeCacheLookup.tla): every key the operands can hold finds an entry, the one of its own key
+"""
+@quarantine pin"julia/src/jltypes.c:1078 lookup_type_idx_linear" "Julia makes a type at run time and finds it in its typename's cache, so each type stays one object; WasmTarget holds every type value as one constant (constants.jl _lowerTypeToConstant), so the cache is made at compile time, its keys every value Julia's inference lets each operand hold, its types Julia's own fold, and the lookup is the run-time half" Core.Compiler.apply_type_tfunc function apply_type_cache(translator, operands::Vector{Any}, at::String)::Vector{Pair{Vector{Any},Any}}
+    local argtypes = Any[op isa Some ? Core.Const(something(op)) : op for op in operands]
+    for op in operands
+        op isa Some || all(Core.Compiler.isconstType, Base.uniontypes(op)) ||
+            reject!(Unquarantined("src/julia/classes.jl apply_type_cache: an operand of Julia's apply_type typed $op, whose values are no types of one value each, which the cache made at compile time cannot key"), at)
+    end
+    # apply_type_tfunc splits only within its bound (tfuncs.jl:1812); past it Julia keys no constant per split
+    local cost = Core.Compiler.unionsplitcost(Core.Compiler.fallback_lattice, argtypes)
+    local bound = Core.Compiler.InferenceParams().max_union_splitting
+    cost <= bound ||
+        reject!(Unquarantined("src/julia/classes.jl apply_type_cache: Julia's apply_type on operands typed $(join(operands, ", ")), whose union split costs $cost, past apply_type_tfunc's bound $bound (max_union_splitting)"), at)
+    local entries = Pair{Vector{Any},Any}[]
+    # each key one split of the operands' unions, as apply_type_tfunc splits them (switchtupleunion)
+    for split in Core.Compiler.switchtupleunion(Core.Compiler.fallback_lattice, argtypes)
+        local k = Any[a isa Core.Const ? a.val : a.parameters[1] for a in split]
+        local folded = Core.Compiler.apply_type_tfunc(Core.Compiler.fallback_lattice, Any[Core.Const(v) for v in k])
+        folded === Union{} &&
+            reject!(Unquarantined("src/julia/classes.jl apply_type_cache: Julia's apply_type on $(join(k, ", ")), which apply_type_tfunc answers Union{}: the call raises, Julia's TypeError, which the cache does not port"), at)
+        folded isa Core.Const ||
+            reject!(Unquarantined("src/julia/classes.jl apply_type_cache: Julia's apply_type on $(join(k, ", ")), for which apply_type_tfunc gives no Const, only $folded"), at)
+        local r = folded.val
+        local why = type_value_unmade(translator, r)
+        why === nothing ||
+            reject!(Unquarantined("src/julia/classes.jl type_value_unmade: Julia's apply_type answering $r, whose type value has no constant ($(something(why)))"), at)
+        local gap = r isa Type ? run_time_type_gap(r) : nothing
+        gap === nothing || reject!(gap, "$at: Julia's apply_type answering $r")
+        push!(entries, k => r)
+    end
+    return entries
+end
+
+"""
     is_interface_class_type(translator, T, check_only_null_assignability) -> Bool
 
 Whether dart's emitIsTest and emitAsCheck take their interface arm for the tested type `T`: dart's
