@@ -1,9 +1,8 @@
 # String's operations against native Julia (the String ruling, src/julia/classes.jl
 # _string_instance_fields; its operations by overlay over dart:_wasm's array operations,
 # src/julia/wasm_array.jl): code unit reads, length against ncodeunits on non-ASCII text, == and
-# concatenation. Each case either compiles and answers as native Julia, both modules, or rejects at
-# a definition not yet written, Unported or Unquarantined, located: it flips to the differential when
-# the code generator's lowerings and the overlays land, and never passes on a wrong answer.
+# concatenation. Every case compiles and answers as native Julia, both modules: a case that rejects
+# or answers wrong fails, named.
 using Test, WasmTarget
 isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
 
@@ -59,17 +58,12 @@ const STRING_OP_CASES = (
     local runs = Main.WTRunner.RunCase[]
     for (name, f, args) in STRING_OP_CASES
         local label = "string_ops/$name$args"
-        local cases = try
-            first(Main.WTRunner.answer_cases(label, WasmTarget.compile, f, args))
-        catch e
-            e isa WasmTarget.RejectionError || rethrow()
-            # not yet compiling: a located rejection at a definition not yet written
-            @test e.rejection isa Union{WasmTarget.Unported,WasmTarget.Unquarantined}
-            nothing
+        # every case compiles, both modules: a rejection is this case's located error, never a pass
+        @testset "$label compiles" begin
+            append!(runs, first(Main.WTRunner.answer_cases(label, WasmTarget.compile, f, args)))
         end
-        cases === nothing || append!(runs, cases)
     end
-    for r in (isempty(runs) ? Main.WTRunner.RunResult[] : Main.WTRunner.run_cases(runs))
+    for r in Main.WTRunner.run_cases(runs)
         @test (r.label => r.why) == (r.label => "")
     end
 end
