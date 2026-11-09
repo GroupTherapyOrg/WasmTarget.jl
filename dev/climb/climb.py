@@ -76,7 +76,7 @@ DEFAULTS = {
     "claude_home": os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
     "task_cap_usd": 25.0,                        # --max-budget-usd of a fresh run (calibrate on day 1: `budget`)
     "resume_cap_usd": 8.0,                       # a resume re-creates its cache cold, so it gets its own small cap
-    "resumes_per_move": 2,
+    "resumes_per_move": 3,                       # tstack sol-loop's default: three review rounds a change
     "stops_per_hold": 3,                         # then the hold is parked for Dale, never retried for ever
     "task_wall_s": 5400,                         # no run outlives this (2026-10-28: hangs are never allowed)
     "audit_every": 5,                            # D21: every change read within 5 commits
@@ -937,7 +937,8 @@ def finish(h, outcome, slot, note, salvage_hint=None):
                            f"branch (named in your brief): start from it if it is right." if salvage_hint else "")
     update_json("handoffs.json", {}, lambda hs: hs.__setitem__(h["id"], hand))
     stops = sum(1 for e in events() if e["kind"] == "stopped" and e.get("hold") == h["key"])
-    if stops >= cfg()["stops_per_hold"]:
+    # a hold that unlocks more earns more tries before it waits for Dale: 3 under 50 cases, then 4, 5, 6 at 200
+    if stops >= cfg()["stops_per_hold"] + sum(h.get("n", 0) >= k for k in (50, 100, 200)):
         park(h, f"{stops} moves stopped without landing; the last: {outcome}: {note[:1200]}")
     elif outcome in ("gave-up", "budget"):
         pass                                  # once more, from the handoff
@@ -1010,7 +1011,7 @@ def move(h, slot_name):
         event("refused", hold=h["key"], problems=problems[:20])
         return finish(h, "blocked:ruling", slot, "the driver's measurement refused the move:\n" + "\n".join(problems[:30]), slot_name)
     prior = None
-    for rnd in (1, 2):
+    for rnd in (1, 2, 3):
         if over_budget():
             return finish(h, "budget", slot, "the day's allowance ran out mid-move; the commit is kept", slot_name)
         commit = git("rev-parse", "HEAD", cwd=slot)
@@ -1020,7 +1021,7 @@ def move(h, slot_name):
             break
         so2 = resume("The fidelity review asks for changes. For each blocker or should: fix it at its source and amend "
                      "your one commit, or disagree with evidence (file:line, a command and its output). Nits: decline in "
-                     "one line.\n\n" + json.dumps(rv, indent=1)) if rnd == 1 else None
+                     "one line.\n\n" + json.dumps(rv, indent=1)) if rnd < 3 else None
         if not so2 or so2["outcome"] != "committed":
             return finish(h, "blocked:ruling", slot, "the review did not approve: " + json.dumps((rv or {}).get("findings", []))[:1500], slot_name)
         unlocked, problems = gated()
