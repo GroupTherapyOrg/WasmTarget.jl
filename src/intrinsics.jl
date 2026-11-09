@@ -2275,13 +2275,19 @@ end
     if length(args) == 2 && cc !== nothing
         local T = dart_type_of(self, args[1])
         type_expand_integer(T) && dart_type_of(self, args[2]) === T || return nothing
-        local (l, r) = (args[1], args[2])
-        # SimplifySetCC: a literal on the left moves right, its condition swapped (getSetCCSwappedOperands)
-        if literal(l) && !literal(r)
-            (l, r) = (r, l)
-            cc = cc === :SETLT ? :SETGT : cc === :SETULT ? :SETUGT : cc === :SETLE ? :SETGE : cc === :SETULE ? :SETUGE : cc
+        local (l, r) = (expanded(args[1]), expanded(args[2]))
+        # DAGCombiner::visitSETCC (llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp:14706) simplifies the
+        # 128-bit setcc before the type legalizer expands it (SimplifySetCC: decided, or a literal on the
+        # left moved right, or a constant bound rewritten). The setcc it rewrites to is expanded as it
+        # stands: DAGCombiner's worklist would visit it again (a moved literal's x >= C read as x > C-1),
+        # which this arm does not port; each rewrite answers the same compare
+        local s = LLVM.simplify_set_cc(l, r, cc)
+        if s isa Bool
+            WasmBuilder.local_get(b, LLVM.get_bool_constant(b, s))
+            return i32
         end
-        WasmBuilder.local_get(b, LLVM.expand_int_op_setcc(b, expanded(l), expanded(r), cc))
+        s === nothing || ((l, r, cc) = s)
+        WasmBuilder.local_get(b, LLVM.expand_int_op_setcc(b, l, r, cc))
         return i32
     end
     if length(args) == 2 && (f === I.shl_int || f === I.lshr_int || f === I.ashr_int) && type_expand_integer(dart_type_of(self, args[1]))

@@ -706,6 +706,10 @@ _g("int128_limbs", Any[
     ("urem_big_divisor", (n::Int64) -> Int64(rem(typemax(UInt128) - UInt128(n), (UInt128(1) << 127) + UInt128(n)) >> 100), Int64(5)),
     ("sdiv_typemin_by_minus1", (n::Int64) -> (try; Int64(div(typemin(Int128) + Int128(n), Int128(-1)) % Int64); catch e; e isa DivideError ? -1 : -2; end), Int64(0)),
     ("bswap_u128", (n::Int64) -> Int64(bswap(UInt128(n) << 64 + UInt128(0x0102030405060708)) % Int64), Int64(7)),
+    # a 128-bit compare of a literal on the left and a value: SimplifySetCC moves the literal right,
+    # its condition swapped, and rewrites a bound (x <= C as x < C+1, x >= MIN true, x < 1 as x == 0)
+    ("setcc_literal_left", (n::Int64) -> (x = _sm_one128(n) * Int128(n) << 64 + Int128(n); (Int128(5) < x) + 2 * (Int128(-3) <= x) + 4 * (UInt128(7) < x % UInt128) + 8 * (UInt128(1) <= x % UInt128) + 16 * (typemin(Int128) <= x) + 32 * (typemax(UInt128) <= x % UInt128)), Int64(-2)),
+    ("setcc_literal_left_pos", (n::Int64) -> (x = _sm_one128(n) * Int128(n) << 64 + Int128(n); (Int128(5) < x) + 2 * (Int128(-3) <= x) + 4 * (UInt128(7) < x % UInt128) + 8 * (UInt128(1) <= x % UInt128) + 16 * (x <= Int128(5) << 64) + 32 * (x % UInt128 < UInt128(1))), Int64(3)),
 ])
 # Julia's own math kernels, bit-exact against native: each case hashes the exact result bits
 # of f over n evenly spaced inputs in (-20, 20], so one == compares n answers. A NaN result

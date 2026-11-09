@@ -347,10 +347,11 @@ end
     append!(NATIVE_RUNS, [WTRunner.RunCase("divmod$c", dbytes, c, WTRunner.native_answer(Int128Cases.divmod, c)) for c in dcases])
     local bbytes = W.compile(Int128Cases.bits, (Int64, Int64); optimize = false)
     queue_native!("bits", bbytes, Int128Cases.bits, [(a, n) for a in Int64[0, 1, -1, 7, typemax(Int64), typemin(Int64)] for n in Int64[0, 1, 63, 64, 100, 127, -5]])
-    # SimplifySetCC's fold of two constant halves and its commute of a constant left half, which no
-    # compile reaches (src/llvm/target_lowering.jl says why), called on halves directly: two constants
-    # answer Julia's own compare of them, signed or unsigned by the condition (ICmpInst::compare), and
-    # a constant left of a value moves right under the swapped condition (getSetCCSwappedOperands)
+    # SimplifySetCC's fold of two constants, which no compile reaches (src/llvm/target_lowering.jl says
+    # why), called on halves and on 128-bit pairs directly: two constants answer Julia's own compare of
+    # them, signed or unsigned by the condition (ICmpInst::compare), and a constant left of a value
+    # moves right under the swapped condition (getSetCCSwappedOperands), which the int128 arm's compare
+    # of a literal and a value reaches (test/smoke_corpus.jl int128_limbs setcc_literal_left)
     local S = W.LLVM.simplify_set_cc
     local v = IR.Local(0, IR.NumType_i64)
     local halves64 = Int64[0, 1, -1, 3, typemax(Int64), typemin(Int64)]
@@ -365,7 +366,23 @@ end
     for (cc, swapped) in (:SETEQ => :SETEQ, :SETNE => :SETNE, :SETLT => :SETGT, :SETGT => :SETLT, :SETLE => :SETGE,
                           :SETGE => :SETLE, :SETULT => :SETUGT, :SETUGT => :SETULT, :SETULE => :SETUGE, :SETUGE => :SETULE)
         @test S(Int64(3), v, cc) === (v, Int64(3), swapped)
+        @test S((Int64(3), Int64(1)), (v, v), cc) === ((v, v), (Int64(3), Int64(1)), swapped)
     end
+    # a 128-bit pair is a constant where both halves are: its compare is Julia's of the Int128s, and
+    # its bound rewrites are over 128 bits (x <= C as x < C+1, x >= typemin true)
+    local halves128 = Int128[0, 1, -1, Int128(1) << 64, typemax(Int128), typemin(Int128), -(Int128(1) << 64)]
+    local pair(c::Int128) = W.LLVM.expand_int_res_constant(c)
+    for c0 in halves128, c1 in halves128
+        for (cc, op) in ops
+            @test S(pair(c0), pair(c1), cc) === op(c0, c1)
+            local ucc = cc === :SETEQ || cc === :SETNE ? cc : Symbol(:SETU, String(cc)[4:end])
+            @test S(pair(c0), pair(c1), ucc) === op(reinterpret(UInt128, c0), reinterpret(UInt128, c1))
+        end
+    end
+    @test S((v, v), pair(Int128(5) << 64), :SETLE) === ((v, v), pair((Int128(5) << 64) + 1), :SETLT)
+    @test S((v, v), pair(typemin(Int128)), :SETGE) === true
+    @test S((v, v), pair(Int128(1)), :SETULT) === ((v, v), pair(Int128(0)), :SETEQ)
+    @test S((v, v), pair(Int128(-1)), :SETULE) === true
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin
