@@ -319,7 +319,7 @@ def record(path, sha):
     return s, lost, bad
 
 def advance(path, sha):
-    """The cases a landed move's measurement read, written into the scored head's cases at once: a gap that unlocks
+    """The cases a landed move's measurement read, written into the scored head's cases (not the pass set) at once: a gap that unlocks
     few passes uncovers the next gap of the same cases (on 2026-11-09 the 256-case translateStorageType hold passed 5
     and moved 251 on, 74 to jl_string_ptr, 62 to a memoryref's ptr_or_offset), so its next layer is a hold now, for
     the next move, not after the next full score, an hour and a half on. The full score still decides S and G2."""
@@ -331,8 +331,8 @@ def advance(path, sha):
         with open(os.path.join(STATE, "head-cases.tsv.tmp"), "w") as f:
             f.write("".join(f"{l}\t{o}\t{s_}\t{w}\n" for l, o, s_, w in rows))
         os.replace(os.path.join(STATE, "head-cases.tsv.tmp"), os.path.join(STATE, "head-cases.tsv"))
-        ps = passset() | {l for l, o, _, _ in read_cases(path) if o == "passed"}
-        open(os.path.join(STATE, "passset.txt"), "w").write("\n".join(sorted(ps)) + "\n")
+        # never the pass set: G2 reads a full score's losses against it, and a score of a head older than this landing
+        # would count its new passes lost (2026-11-09: a false G2 of 9 at d72ffacf). Only record() grows it.
     n = len(read_cases(path))
     event("advanced", sha=sha, cases=n)
     return n
