@@ -2,16 +2,15 @@
 # dev/climb/launch.sh — start the climb (dev/climb/HILL.md), every part of it a program run by
 # dev/climb/climb.py; no resident agent waits on anything.
 #
-#   bash dev/climb/launch.sh          stop the stale loops, queue the paused lanes' work, then start the
-#                                     scoreboard, the judge's eval and the climb (which audits first: audit #97's
-#                                     range) in the background
+#   bash dev/climb/launch.sh          stop the stale loops, queue the paused lanes' work, then start the loops in
+#                                     the background: the scoreboard, a lander, and one loop per slot. Each loop runs
+#                                     one iteration of climb.py per process, so every move, landing and score runs the
+#                                     current code: a change to the climb needs no restart, and nothing waits for one
 #   bash dev/climb/launch.sh stop     stop them and every claude and julia they started (each runs in its own
 #                                     process group); a stopped move's work stays on its slot, salvaged next time
 #   bash dev/climb/launch.sh pause    the climbers start no new move until `resume`
 #   bash dev/climb/launch.sh resume
 #   bash dev/climb/launch.sh status   the scoreboard (`python3 dev/climb/climb.py report`)
-#   bash dev/climb/launch.sh restart  the climb's run and scoreboard on this tree's code, once no move is claimed and
-#                                     no audit holds its lock (a move or an audit is never cut mid-way)
 #
 # Run it from a worktree at origin/wt2 (the one the driver's templates are read from).
 set -uo pipefail
@@ -33,17 +32,8 @@ case "${1:-start}" in
   pause)  touch "$state/PAUSE"; echo "paused: no new move starts"; exit 0 ;;
   resume) rm -f "$state/PAUSE"; echo "resumed"; exit 0 ;;
   status) $py report; exit 0 ;;
-  restart)   # a PAUSE already set (Dale's, the judge's, the week's, the infrastructure's) is kept and outlives it (A98E8)
-    [ -f "$state/PAUSE" ] || echo "restart: waiting for the moves in flight and any audit" > "$state/PAUSE"
-    until [ -z "$(ls "$state/claims")" ] && python3 -c "import fcntl,os,sys; fd=os.open(sys.argv[1], os.O_CREAT|os.O_RDWR); fcntl.flock(fd, fcntl.LOCK_EX|fcntl.LOCK_NB)" "$state/.audit.lock" 2>/dev/null; do sleep 30; done
-    for part in run scoreboard; do
-      p="$state/pids/$part"; [ -f "$p" ] && { kill -TERM -- "-$(cat "$p")" 2>/dev/null; for _ in $(seq 60); do kill -0 "$(cat "$p")" 2>/dev/null || break; sleep 1; done; }
-      PYTHONDONTWRITEBYTECODE=1 nohup $py "$part" > "$state/logs/$part.log" 2>&1 & echo $! > "$p"; echo "restarted $part (pid $!)"
-    done
-    grep -q "^restart:" "$state/PAUSE" 2>/dev/null && rm -f "$state/PAUSE"
-    exit 0 ;;
   start) ;;
-  *) echo "launch: start|stop|pause|resume|status|restart"; exit 2 ;;
+  *) echo "launch: start|stop|pause|resume|status"; exit 2 ;;
 esac
 git fetch -q origin wt2
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/wt2)" ] || { echo "launch: this tree is not at origin/wt2; land the harness first"; exit 1; }
@@ -53,13 +43,17 @@ sleep 10   # the stale loops exit before preflight looks again
 $py preflight || { echo "launch: preflight still fails; fix what it names first"; exit 1; }
 $py harvest
 mkdir -p "$state/pids"
-start() {   # one background part, its pid kept for `stop`, its log in the state dir
-  nohup $py "$1" > "$state/logs/$1.log" 2>&1 &
-  echo $! > "$state/pids/$1"; echo "started $1 (pid $!, log $state/logs/$1.log)"
+set -m   # each loop in its own process group, so `stop` ends a loop with the move it runs
+loop() {   # a loop of one part, $1 its name, $2 its pause after an idle (exit 3) iteration, the rest its command
+  local name=$1 idle=$2; shift 2
+  ( while :; do PYTHONDONTWRITEBYTECODE=1 "$@"; rc=$?; [ $rc -eq 0 ] || sleep "$([ $rc -eq 3 ] && echo "$idle" || echo 30)"; done ) \
+    >> "$state/logs/$name.log" 2>&1 &
+  echo $! > "$state/pids/$name"; echo "started $name (pid $!, log $state/logs/$name.log)"
 }
-start scoreboard
+loop scoreboard 0 sh -c "$py score-tick; sleep 120"
+loop lander 0 sh -c "$py lander; sleep 600"
+for i in $(seq "$($py nslots)"); do loop "climb-$i" 120 $py slot "climb-$i"; done
 # the judge's eval runs while the first score does (climbers wait for a scored head anyway); once, then on demand
-[ -f "$state/judge-eval.json" ] || start judge-eval
-start run         # its first slot audits first whenever the lag is past its band (audit #97's range at launch)
+[ -f "$state/judge-eval.json" ] || { nohup $py judge-eval > "$state/logs/judge-eval.log" 2>&1 & }
 echo
 $py report

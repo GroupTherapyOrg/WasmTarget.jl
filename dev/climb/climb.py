@@ -15,9 +15,10 @@ and the git dir, never the judge's state. Agents run in Claude Code's sandbox wi
     python3 dev/climb/climb.py map [<out.html>]    the project map, drawn by this program (D29), no agent
     python3 dev/climb/climb.py preflight [--kill]  what launch needs: stale loops, paused lanes' work, origin, the budget
     python3 dev/climb/climb.py harvest             the paused lanes' unfinished work, queued as fix-first holds (once each)
-    python3 dev/climb/climb.py scoreboard          loop: new heads of origin/wt2 scored with the full smoke
-    python3 dev/climb/climb.py run [--slots N]     loop: the climb itself, with an audit whenever the lag reaches its band
-    python3 dev/climb/climb.py once                one move in one slot, then exit (a dry rehearsal at launch)
+    python3 dev/climb/climb.py score-tick          one look at origin/wt2: the rogue-push alarm, and a score when due
+    python3 dev/climb/climb.py slot <climb-N>      one move (or an audit, on climb-1) in that slot, then exit
+    python3 dev/climb/climb.py lander              one landing of the oldest approved commit that waits
+    python3 dev/climb/climb.py once                one move in climb-1, then exit (a rehearsal)
     python3 dev/climb/climb.py audit               one audit of the landings since the last entry, now
     python3 dev/climb/climb.py judge-eval [-n N]   the reviewer's recall on N real past defects (reverted audit fixes)
 
@@ -1313,26 +1314,24 @@ def unlogged_landings():
     return [c for c in git("rev-list", f"{open(p).read().strip()}..origin/{MARCH}").splitlines()
             if not any(c.startswith(h) for h in logged if len(h) >= 7)]
 
-def scoreboard():
-    last, last_t = None, 0.0
-    while True:
-        try:
-            fetch()
-            rogue = unlogged_landings()
-            if rogue and not os.path.exists(os.path.join(STATE, "PAUSE")):
-                open(os.path.join(STATE, "PAUSE"), "w").write("origin/wt2 advanced by a push no landing names\n")
-                for_dale("the climb paused itself: a push around the driver", "These commits reached origin/wt2 with no "
-                         f"dev/ship.sh landing: {', '.join(c[:8] for c in rogue)}. Default taken: paused until the lead "
-                         "reads them and runs `bash dev/climb/launch.sh resume`.")
-                event("rogue-push", commits=[c[:8] for c in rogue])
-            head = git("rev-parse", f"origin/{MARCH}")
-            n = len(git("rev-list", f"{last}..{head}").splitlines()) if last else 10 ** 6
-            if head != last and (n >= cfg()["score_every_landings"] or time.time() - last_t >= cfg()["score_every_s"]):
-                scoreboard_once(head)
-                last, last_t = head, time.time()
-        except Exception as e:   # the scoreboard never dies of one bad iteration
-            event("score-failed", error=repr(e)[:300])
-        time.sleep(120)
+def score_tick():
+    """One look at origin/wt2, a process of its own (launch.sh loops it), so every tick runs the current code: the
+    rogue-push alarm, and a score when enough has landed or enough time has passed since the last."""
+    sc = [e for e in events() if e["kind"] == "scored"]
+    last = git("rev-parse", "--verify", "-q", sc[-1]["sha"], check=False) if sc else None
+    last_t = datetime.datetime.fromisoformat(sc[-1]["t"]).timestamp() if sc else 0.0
+    fetch()
+    rogue = unlogged_landings()
+    if rogue and not os.path.exists(os.path.join(STATE, "PAUSE")):
+        open(os.path.join(STATE, "PAUSE"), "w").write("origin/wt2 advanced by a push no landing names\n")
+        for_dale("the climb paused itself: a push around the driver", "These commits reached origin/wt2 with no "
+                 f"dev/ship.sh landing: {', '.join(c[:8] for c in rogue)}. Default taken: paused until the lead "
+                 "reads them and runs `bash dev/climb/launch.sh resume`.")
+        event("rogue-push", commits=[c[:8] for c in rogue])
+    head = git("rev-parse", f"origin/{MARCH}")
+    n = len(git("rev-list", f"{last}..{head}").splitlines()) if last else 10 ** 6
+    if head != last and (n >= cfg()["score_every_landings"] or time.time() - last_t >= cfg()["score_every_s"]):
+        scoreboard_once(head)
 
 def pick(slot=None):
     if not head_cases():   # no move before the first scored head: the holds and the sentinel net come from it
@@ -1355,52 +1354,29 @@ def pick(slot=None):
             continue
         yield h
 
-def run(slots, one=False):
-    stop = threading.Event()
+def slot_once(name):
+    """One iteration of a slot, a process of its own (launch.sh loops it), so every move runs the current code and
+    no change to the climb ever waits for a restart (2026-11-09: a restart that waited for the moves in flight held
+    slot 2 idle for two hours). Exit 0 after a move or an audit, 3 when there is nothing to do yet."""
     reap_claims()
-    def worker(i):
-        name = f"climb-{i}"
-        while not stop.is_set():
-            h = None
-            try:
-                if os.path.exists(os.path.join(COMMON, "wt-line-stop")) or os.path.exists(os.path.join(STATE, "PAUSE")):
-                    time.sleep(60); continue
-                if week_half():
-                    time.sleep(300); continue
-                if over_budget():
-                    event("budget-wait", slot=name); time.sleep(900); continue
-                if i == 1 and audit_lag()[0] >= cfg()["audit_every"]:
-                    audit()
-                h = next((h for h in pick(name) if claim(h, name)), None)
-                if not h:
-                    time.sleep(300); continue
-                move(h, name)
-            except BaseException as e:   # every fault is an event and frees its hold; Ctrl-C still stops
-                event("driver-error", slot=name, hold=(h or {}).get("key"), error=repr(e)[:400])
-                if h:
-                    unclaim(h)
-                if isinstance(e, KeyboardInterrupt):
-                    stop.set()
-                time.sleep(30)
-            if one:
-                stop.set()
-    def lander():
-        while not stop.is_set():
-            try:
-                if not os.path.exists(os.path.join(STATE, "PAUSE")):
-                    land_ready()
-            except BaseException as e:
-                event("driver-error", slot="climb-land", error=repr(e)[:400])
-            stop.wait(600)
-    ts = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(1, slots + 1)]
-    ts.append(threading.Thread(target=lander, daemon=True))
-    for t in ts:
-        t.start()
+    if os.path.exists(os.path.join(COMMON, "wt-line-stop")) or os.path.exists(os.path.join(STATE, "PAUSE")):
+        return 3
+    if week_half():
+        return 3
+    if over_budget():
+        event("budget-wait", slot=name); return 3
+    if name == "climb-1" and audit_lag()[0] >= cfg()["audit_every"]:
+        audit(); return 0
+    h = next((h for h in pick(name) if claim(h, name)), None)
+    if not h:
+        return 3
     try:
-        while any(t.is_alive() for t in ts):
-            time.sleep(5)
-    except KeyboardInterrupt:
-        stop.set(); print("climb: stopping after the moves in flight")
+        move(h, name)
+    except BaseException as e:   # every fault is an event and frees its hold
+        event("driver-error", slot=name, hold=h.get("key"), error=repr(e)[:400])
+        unclaim(h)
+        raise
+    return 0
 
 def lanes():
     p = os.path.join(COMMON, "wt-orders", "LANES")
@@ -1493,12 +1469,12 @@ def main():
     g = sp.add_parser("regress"); g.add_argument("tsv")
     sp.add_parser("budget"); m = sp.add_parser("map"); m.add_argument("out", nargs="?", default=os.path.join(STATE, "map.html"))
     p = sp.add_parser("preflight"); p.add_argument("--kill", action="store_true")
-    sp.add_parser("harvest"); sp.add_parser("scoreboard"); sp.add_parser("audit")
+    sp.add_parser("harvest"); sp.add_parser("audit")
     j = sp.add_parser("judge-eval"); j.add_argument("-n", type=int, default=6)
-    rn = sp.add_parser("run"); rn.add_argument("--slots", type=int, default=None)
-    sp.add_parser("once")
+    sp.add_parser("once"); so = sp.add_parser("slot"); so.add_argument("name")
+    sp.add_parser("lander"); sp.add_parser("score-tick"); sp.add_parser("nslots")
     a = ap.parse_args()
-    if a.cmd in ("scoreboard", "run", "audit", "once", "judge-eval"):
+    if a.cmd in ("audit", "once", "judge-eval"):
         os.setpgrp()   # its own process group: `launch.sh stop` stops the claude and julia children with it
     if a.cmd == "report": print(report())
     elif a.cmd == "holds":
@@ -1519,11 +1495,13 @@ def main():
     elif a.cmd == "map": print(draw_map(a.out))
     elif a.cmd == "preflight": sys.exit(0 if preflight(a.kill) else 1)
     elif a.cmd == "harvest": harvest()
-    elif a.cmd == "scoreboard": scoreboard()
     elif a.cmd == "audit": audit()
     elif a.cmd == "judge-eval": judge_eval(a.n)
-    elif a.cmd == "run": run(a.slots or cfg()["slots"])
-    elif a.cmd == "once": run(1, one=True)
+    elif a.cmd == "once": sys.exit(slot_once("climb-1"))
+    elif a.cmd == "slot": sys.exit(slot_once(a.name))
+    elif a.cmd == "lander": land_ready()
+    elif a.cmd == "score-tick": score_tick()
+    elif a.cmd == "nslots": print(cfg()["slots"])
 
 if __name__ == "__main__":
     main()

@@ -137,6 +137,8 @@ every call. (Weighted means cache reads at 0.1, cache writes at 1.25, output at 
   next. A fresh process is for evidence only, and preflight refuses to launch while Kaimon is down.
 - **A landing's check gets the machine.** While the driver lands a move, the other slots' and the scoreboard's
   Julia are stopped and resumed after (D14's band is a check's idle time).
+- **One iteration per process.** Each slot, the lander and the scoreboard are loops in `launch.sh` that run one
+  move, landing or score per process, so every one runs the current code: the climb never stops for a restart.
 - **No resident lead, no LLM monitors.** The driver is a program. The scoreboard and the map are
   programs, and the map is redrawn at every score, landing and audit (D29). Opus rules a stopped hold. Fable is called only when an Opus ruling escalates, at most
   twice a day (D48).
