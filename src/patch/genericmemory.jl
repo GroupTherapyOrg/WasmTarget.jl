@@ -25,3 +25,17 @@ end
     wasm_memory_fill!(a, x isa eltype(a) ? x : convert(eltype(a), x))
     return a
 end
+
+# Base's body (julia/base/array.jl:2106), its memcmp of the two references' bytes through their addresses
+# (unsafe_convert(Ptr{T}, a.ref)) the walk of their elements in order, as Base's generic == of two arrays
+# (julia/base/abstractarray.jl:3032), whose shortcut it is, compares them, and as dart's VM == of two
+# strings tests their lengths and then walks their code units: for a bit integer, equal elements are
+# equal bytes, so the answer is memcmp's == 0
+@quarantine "julia/base/array.jl:2106 == of two bit-integer Vectors compares their bytes by memcmp through the references' addresses; WasmGC has no addresses, so their lengths are tested and their elements walked in order, as dart's VM == of two strings walks their code units (sdk/lib/_internal/vm/lib/string_patch.dart:318 _StringBase.==) and Base's generic == of two arrays (julia/base/abstractarray.jl:3032), whose shortcut it is, compares their elements" Base.:(==) @consistent_overlay METHOD_TABLE function Base.:(==)(a::Arr, b::Arr) where {Arr <: Base.BitIntegerArray{1}}
+    local len = length(a)
+    len == length(b) || return false
+    for i in 1:len
+        @inbounds a[i] == b[i] || return false
+    end
+    return true
+end
