@@ -250,6 +250,22 @@ end
     @test emitted_by(() -> D.generate_static_intrinsic(g.intrinsifier[], W.NirCall(W.NirValue[W.NirConst(Core.Const(Core.Intrinsics.have_fma)), W.NirConst(Core.Const(Float64))])), g) == ["i32.const 1"]
 end
 
+# Julia's donotdelete: its value the constant nothing, each argument with a run-time value consumed
+# (julia/src/codegen.cpp:4988), a constant or ghost argument not
+module DoNotDeleteCases
+keep(x::Int64, y::Float64) = (Base.donotdelete(x, y, 3, nothing); x + 1)
+keepnothing(x::Int64) = Base.donotdelete(x) === nothing ? x : -x
+end
+
+@testset "codegen.cpp: donotdelete consumes its run-time arguments and is nothing, against native" begin
+    local C = DoNotDeleteCases
+    for (f, at, argsets) in ((C.keep, (Int64, Float64), [(Int64(1), 2.5), (typemax(Int64), -0.0)]),
+                             (C.keepnothing, (Int64,), [(Int64(7),), (Int64(-3),)]))
+        local bytes = W.compile(f, at; optimize = false)
+        queue_native!(string(nameof(f)), bytes, f, argsets)
+    end
+end
+
 # a 128-bit integer, its class's struct of two i64 halves (LLVM's expansion of an i128): a constant's
 # halves, sext_int and zext_int into it, trunc_int out of it, bitcast between Int128 and UInt128, and
 # eq_int, ne_int and === over its halves

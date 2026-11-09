@@ -613,6 +613,7 @@ end
     f === Core.typeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:to_typeof), args; tag_of_value = true)
     f === Core.apply_type && return generate_static_intrinsic(self, Val(:run_time_type), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
+    f === Core.donotdelete && return generate_static_intrinsic(self, Val(:donotdelete), f, args)
     f isa Core.IntrinsicFunction || return nothing
     # an operation on a 128-bit integer, an operand's or a conversion's result: its two i64 halves
     local converted = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
@@ -2635,6 +2636,25 @@ end
     T === Type{Float64} || T === Type{Float32} || return nothing
     WasmBuilder.i32_const(self.code_gen.b[], 1)
     return WasmBuilder.IR.NumType_i32
+end
+
+# Julia's donotdelete(args...): its codegen (julia/src/codegen.cpp:4988 emit_builtin_call) makes the
+# call's value the constant `nothing` and passes each argument that has a run-time value (obj.V: not a
+# constant, julia/src/codegen.cpp:2245 mark_julia_const, nor a ghost, nir_carries_data) to julia.donotdelete, a vararg
+# call that reads nothing of them (julia/src/builtins.c:2060 jl_f_donotdelete returns jl_nothing).
+# WasmTarget differs: wasm has no call that only keeps its operands live, so each such argument is
+# translated at its own type and dropped, the value consumed as the vararg call consumes it, and the
+# result is the `nothing` constant, as dart's exportWasmFunction (intrinsics.dart:1555) gives its null
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:donotdelete}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    for a in args
+        (a isa NirConst || !nir_carries_data(dart_type_of(self, a))) && continue
+        translate_expression(code_gen, a, type_of_exp(self, a))
+        WasmBuilder.drop(code_gen.b[])
+    end
+    local nothing_type = translate_type(translator(self), Nothing)
+    translate_expression(code_gen, NirConst(Core.Const(nothing)), nothing_type)
+    return nothing_type
 end
 
 # Julia's fpiseq(x, y): both NaN, or the same bits (julia/src/intrinsics.cpp:1639: fcmp uno of each,
