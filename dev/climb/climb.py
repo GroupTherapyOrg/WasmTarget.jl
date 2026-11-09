@@ -1358,6 +1358,16 @@ def scoreboard_once(head):
                env=env, timeout=cfg()["smoke_wall_s"])
     if not os.path.exists(out):
         event("score-failed", sha=head[:8], secs=round(time.time() - t0), tail=(r.stdout + r.stderr)[-300:]); return
+    # a score whose cases mostly failed for the runner's one reason is the judge broken, not the compiler: never
+    # recorded, so it cannot reset the cases and the pass set (2026-11-09: fc89b8d8 read 0 passed, every case "node
+    # gave no answer", node's string limit, and its record opened a G2 of 1305 cases)
+    cs = read_cases(out)
+    runner_down = sum(1 for _, o, _, w in cs if o == "wrong" and "node gave no answer" in w)
+    if cs and runner_down > len(cs) // 2:
+        event("score-invalid", sha=head[:8], runner_down=runner_down, total=len(cs))
+        for_dale("a score was refused: the runner failed", f"{runner_down} of {len(cs)} cases at {head[:8]} read \"node gave "
+                 "no answer\". Default taken: the score is not recorded; the climb keeps its cases and pass set.")
+        return
     s, lost, bad = record(out, head[:8])
     with julia_slot("score"):   # the src tail's definitions at this head (dev/src_progress.sh kinds, D40)
         k = sh(["bash", "dev/src_progress.sh", "kinds"], cwd=board, env=env, timeout=1800)
