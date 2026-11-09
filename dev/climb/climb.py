@@ -316,6 +316,15 @@ def record(path, sha):
                                "why": f"these cases passed before and do not at {sha}; find the landing that lost them "
                                       "(git bisect between the last scored heads) and fix it at its source (D12)"})
             update_json("fixfirst.json", [], add)
+    # a score takes an hour and a half, so landings advanced the cases past the head it scored: their measurements
+    # are applied again on top, in order, and the ones its head contains are dropped (2026-11-09: d72ffacf's score
+    # put the landed 256-case translateStorageType hold back, and it was climbed and set aside three times)
+    for f in sorted(glob.glob(os.path.join(STATE, "advanced", "*.tsv"))):
+        landed_sha = os.path.basename(f)[:-4].split("-", 1)[1]
+        if sh(["git", "merge-base", "--is-ancestor", landed_sha, sha]).returncode == 0:
+            os.remove(f)
+        else:
+            advance(f, landed_sha)
     return s, lost, bad
 
 def advance(path, sha):
@@ -325,6 +334,9 @@ def advance(path, sha):
     the next move, not after the next full score, an hour and a half on. The full score still decides S and G2."""
     if not os.path.exists(path):
         return 0
+    if os.path.dirname(path) != os.path.join(STATE, "advanced"):   # kept, so a score of an older head re-applies it
+        os.makedirs(os.path.join(STATE, "advanced"), exist_ok=True)
+        shutil.copy(path, os.path.join(STATE, "advanced", f"{now().strftime('%Y%m%dT%H%M%S')}-{sha}.tsv"))
     new = {l: (l, o, s_, w) for l, o, s_, w in read_cases(path)}
     with locked():
         rows = [new.pop(l, (l, o, s_, w)) for l, o, s_, w in head_cases()] + list(new.values())
