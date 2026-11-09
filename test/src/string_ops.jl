@@ -35,6 +35,10 @@ ioa(n::Int64) = (io = IOBuffer(UInt8[0x61, 0x62]; read = true, write = true, app
 # String(::Vector{UInt8}): a Vector at its memory's start taken as the String (jl_genericmemory_to_string),
 # one past it after popfirst! copied (jl_pchar_to_string); its length, its first byte, and the Vector left empty
 vstr(n::Int64) = (v = UInt8[0x61, 0x62, 0x63, 0x64]; n > 1 && popfirst!(v); s = String(v); Int64(ncodeunits(s)) * 1000 + Int64(codeunit(s, 1)) * 10 + length(v))
+# getindex of a String at a UnitRange (first, last, an empty range): the range's bytes copied into a fresh
+# String (src/patch/string.jl); each length, the last byte of the first, and its equality with a literal
+rng(n::Int64) = (s = n > 3 ? "héllo" : "abc"; a = first(s, n); b = last(s, n); c = s[2:1];
+    Int64(ncodeunits(a)) * 10^5 + Int64(ncodeunits(b)) * 10^4 + ncodeunits(c) * 1000 + Int64(codeunit(a, ncodeunits(a))) + Int64(a == "hé") * 10^6)
 end
 
 const STRING_OP_CASES = (
@@ -48,7 +52,8 @@ const STRING_OP_CASES = (
     ("mc", StringOpCases.mc, (Int64(1),)), ("mc", StringOpCases.mc, (Int64(0),)),
     ("iow", StringOpCases.iow, (Int64(1),)), ("iow", StringOpCases.iow, (Int64(0),)),
     ("ioa", StringOpCases.ioa, (Int64(1),)), ("ioa", StringOpCases.ioa, (Int64(0),)),
-    ("vstr", StringOpCases.vstr, (Int64(1),)), ("vstr", StringOpCases.vstr, (Int64(2),)))
+    ("vstr", StringOpCases.vstr, (Int64(1),)), ("vstr", StringOpCases.vstr, (Int64(2),)),
+    ("rng", StringOpCases.rng, (Int64(2),)), ("rng", StringOpCases.rng, (Int64(4),)), ("rng", StringOpCases.rng, (Int64(10),)))
 
 @testset "String's operations against native Julia" begin
     local runs = Main.WTRunner.RunCase[]
@@ -82,6 +87,7 @@ end
     @test :wasm_string_codeunit in reached(StringOpCases.cmps, (Int64,))
     @test :wasm_string_codeunit in reached(StringOpCases.fnd, (Int64,))
     @test [:wasm_memory_string, :wasm_string_alloc, :wasm_string_memory, :wasm_memory_copy!] ⊆ reached(StringOpCases.vstr, (Int64,))
+    @test [:wasm_string_alloc, :wasm_string_copy!] ⊆ reached(StringOpCases.rng, (Int64,))
 end
 
 # string(::Int) answers as native Julia, every sign and width: Base's own dec over the overlays of

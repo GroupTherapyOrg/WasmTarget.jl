@@ -56,6 +56,25 @@ end
     return n
 end
 
+# Base's own body (julia/base/strings/string.jl:497), its copy of the range's bytes into the fresh String
+# through pointer(ss) and pointer(s, i) the data arrays' array.copy from byte i - 1 (wasm_string_copy!), as
+# dart's substring copies its code units into a new string (the VM's StringBase_substringUnchecked;
+# dart2wasm's EmbedderStringImpl.substring delegates to its embedder, so the VM's is the nearest)
+@quarantine "julia/base/strings/string.jl:497 getindex of a String at a UnitRange{Int} copies the range's bytes into a fresh String by unsafe_copyto! through pointer(s, i); WasmGC copies the data arrays' bytes (array.copy), as dart's substring copies its code units (sdk/lib/_internal/vm/lib/string_patch.dart:441 _StringBase._substringUnchecked; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:313 EmbedderStringImpl.substring delegates to its embedder)" Base.getindex @consistent_overlay METHOD_TABLE @inline function Base.getindex(s::String, r::UnitRange{Int})
+    isempty(r) && return ""
+    local i, j = first(r), last(r)
+    @boundscheck begin
+        checkbounds(s, r)
+        @inbounds isvalid(s, i) || Base.string_index_err(s, i)
+        @inbounds isvalid(s, j) || Base.string_index_err(s, j)
+    end
+    j = nextind(s, j) - 1
+    local n = j - i + 1
+    local ss = Base._string_n(n)
+    wasm_string_copy!(ss, 0, s, i - 1, n)
+    return ss
+end
+
 # Base's _memcmp compares `len` bytes of the two Strings' data from their offsets by memcmp through pointers;
 # WasmGC compares the data arrays' bytes in order, as dart's VM compareTo walks its code units, and answers
 # the first differing bytes' difference, else 0: memcmp's value on this host (native Base._memcmp("abc",
