@@ -1411,11 +1411,13 @@ def pick(slot=None):
     if not head_cases():   # no move before the first scored head: the holds and the sentinel net come from it
         return
     ev = events()
-    sc = [e for e in ev if e["kind"] == "scored"]
+    invalid = {e["sha"] for e in ev if e["kind"] == "score-invalid"}
+    sc = [e for e in ev if e["kind"] == "scored" and e["sha"] not in invalid]   # a refused score scored nothing
     head = sc[-1]["sha"] if sc else None
     # a hold landed in no commit the scored head contains waits for a score that does, so no slot climbs it twice
     # (by ancestry, not by time: a score runs for an hour, and a landing during it is not in what it scored)
-    adv = [e["sha"] for e in ev if e["kind"] == "advanced"]
+    # a landing reopens its hold only while its measurement is on file: one a score dropped is not in the cases
+    adv = [os.path.basename(f)[:-4].split("-", 1)[1] for f in glob.glob(os.path.join(STATE, "advanced", "*.tsv"))]
     done = {e.get("hold_id") for e in ev if e["kind"] == "landed" and e.get("commit") not in adv
             and not (head and sh(["git", "merge-base", "--is-ancestor", e.get("commit", ""), head]).returncode == 0)}
     done |= {x["hold_id"] for x in state_json("ready.json", [])}   # its approved commit waits for the lander
