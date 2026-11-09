@@ -75,6 +75,9 @@ const _RUN_EMBEDDER = vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
     @test !r[19].ok && occursin("the module answers \"a_value:number\", native Julia nothing", r[19].why)   # A56E1
     @test r[20].ok
     @test r[21].ok   # the engine runs a try_table of a reference result: an engine that traps it fails here, named
+    # the modules split into parts, here one module a node, read every answer as one node does (node reads its
+    # input as one string of at most 0x1fffffe8 characters, which the whole corpus passed on 2026-11-09)
+    @test [(x.label, x.ok, x.why) for x in WTR.run_cases(cases; part_chars = 1)] == [(x.label, x.ok, x.why) for x in r]
     @test WTR.run_cases(WTR.RunCase[]) == WTR.RunResult[]
 end
 

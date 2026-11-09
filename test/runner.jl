@@ -393,7 +393,11 @@ const instances = new Map();
 Run every case, and each one's wasm-opt'd module, in one node process; compare each answer with
 native Julia's, `===`, and the two modules' answers with each other.
 """
-function run_cases(cases::AbstractVector{RunCase}; run_budget::Float64 = RUN_BUDGET, node_start::Float64 = NODE_START)::Vector{RunResult}
+# a part of the modules one node reads, in characters of its input: well under node's 0x1fffffe8 a string
+const RUN_PART_CHARS = 200_000_000
+
+function run_cases(cases::AbstractVector{RunCase}; run_budget::Float64 = RUN_BUDGET, node_start::Float64 = NODE_START,
+                   part_chars::Int = RUN_PART_CHARS)::Vector{RunResult}
     isempty(cases) && return RunResult[]
     local results = Vector{Union{RunResult,Nothing}}(nothing, length(cases))
     local lines = String[]
@@ -430,25 +434,44 @@ function run_cases(cases::AbstractVector{RunCase}; run_budget::Float64 = RUN_BUD
         else
             local dir = mktempdir()
             local js = joinpath(dir, "run.js")
-            local inp = joinpath(dir, "cases.txt")
             write(js, _JS)
-            write(inp, join(lines, '\n') * "\n")
-            local out = IOBuffer()
-            local err = IOBuffer()
-            local proc = run(pipeline(`$node $js $inp`; stdout = out, stderr = err); wait = false)
-            local limit = run_budget * length(lines) + node_start
-            local killed = Ref(false)
-            local watchdog = Timer(_ -> (process_running(proc) && (killed[] = true; kill(proc))), limit)
-            wait(proc)
-            close(watchdog)
-            local answers = split(String(take!(out)), '\n'; keepempty = false)
-            local stderr_text = strip(String(take!(err)))
+            # the modules in parts, each read by a node of its own: node reads its input as one string, at most
+            # 0x1fffffe8 characters, and the whole corpus's base64 modules passed that on 2026-11-09 (every case
+            # read "node gave no answer: Cannot create a string longer than 0x1fffffe8")
+            local parts = UnitRange{Int}[]
+            local lo, size = 1, 0
+            for (k, l) in enumerate(lines)
+                if k > lo && size + sizeof(l) + 1 > part_chars
+                    push!(parts, lo:k-1); lo, size = k, 0
+                end
+                size += sizeof(l) + 1
+            end
+            isempty(lines) || push!(parts, lo:length(lines))
+            local answers = Vector{String}(undef, length(lines))
+            for (p, part) in enumerate(parts)
+                local inp = joinpath(dir, "cases-$p.txt")
+                write(inp, join(lines[part], '\n') * "\n")
+                local out = IOBuffer()
+                local err = IOBuffer()
+                local proc = run(pipeline(`$node $js $inp`; stdout = out, stderr = err); wait = false)
+                local limit = run_budget * length(part) + node_start
+                local killed = Ref(false)
+                local watchdog = Timer(_ -> (process_running(proc) && (killed[] = true; kill(proc))), limit)
+                wait(proc)
+                close(watchdog)
+                local got = split(String(take!(out)), '\n'; keepempty = false)
+                local stderr_text = strip(String(take!(err)))
+                for (j, k) in enumerate(part)
+                    answers[k] = j <= length(got) ? String(got[j]) :
+                        killed[] ? "err no answer within $(limit) s, node killed: a hang or a blow-up" : "err node gave no answer: $stderr_text"
+                end
+                rm(inp; force = true)
+            end
             # each module's verdict: its answer read back, or why it has none
             local verdicts = Dict{Tuple{Int,Bool},Tuple{Bool,Any,String}}()
             for (k, (i, opt)) in enumerate(sent)
                 local c = cases[i]
-                local a = k <= length(answers) ? answers[k] :
-                    killed[] ? "err no answer within $(limit) s, node killed: a hang or a blow-up" : "err node gave no answer: $stderr_text"
+                local a = answers[k]
                 if startswith(a, "err ")
                     verdicts[(i, opt)] = (false, nothing, String(a[5:end]) * (c.native isa Throws ? ", where native Julia throws $(c.native.type)" : ""))
                 elseif startswith(a, "exc ")
