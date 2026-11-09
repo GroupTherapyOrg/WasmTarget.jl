@@ -14,7 +14,7 @@ set -uo pipefail
 # … and a climb slot lands only when the driver ships it: a process without the agent's env (a Julia session the
 # agent reaches through Kaimon, outside its sandbox) is refused by default on a slot's branch (climb.py's slot_ready)
 case "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" in
-  climb-[0-9]*|climb-audit|climb-judge) [ -n "${WT_CLIMB_DRIVER:-}" ] || { echo "ship: REFUSED — a climb slot lands only through dev/climb/climb.py"; exit 2; } ;;
+  climb-[0-9]*|climb-audit|climb-judge|climb-land) [ -n "${WT_CLIMB_DRIVER:-}" ] || { echo "ship: REFUSED — a climb slot lands only through dev/climb/climb.py"; exit 2; } ;;
 esac
 # a lane may run dev/autoship.sh beside its work, which calls this script whenever its committed work settles
 # the one march branch on origin (D23): every lane lands here; worktrees and their branches stay local

@@ -1033,6 +1033,16 @@ def move(h, slot_name):
         # the move's own fault (a test red, the ratchet failing, a rebase conflict) goes back to its climber once (G3);
         # a red on D14's time alone, or the tooling, is infrastructure, retried mechanically
         own = re.search(r"check: (src tests red|the ratchet fails)", out) and "D14" not in out
+        if "D14" in out and not own:
+            # approved and measured: a red on D14's time alone never costs the move (2026-11-08: approved moves were
+            # parked after three such reds). Its commit waits on a ready branch for the lander; the slot climbs on.
+            branch = f"ready/{h['id']}-{int(time.time())}"
+            git("branch", "-f", branch, "HEAD", cwd=slot)
+            update_json("ready.json", [], lambda q: q.append({"branch": branch, "hold": h["key"], "hold_id": h["id"],
+                        "unlocked": len(unlocked), "fixfirst": bool(h.get("fixfirst")), "t": stamp()}))
+            event("queued", hold=h["key"], branch=branch, why=out[-300:])
+            unclaim(h)
+            return "queued"
         if own and attempt < 3 and resumes < c["resumes_per_move"]:
             detail = "\n".join(sh(f"grep -hE 'Error During Test|Test Failed|LOCK BROKEN|✗|FieldError|MethodError' "
                                    f"{failed}/*.out 2>/dev/null | head -30").stdout.splitlines())
@@ -1046,14 +1056,48 @@ def move(h, slot_name):
             continue
         if attempt >= 2:
             return finish(h, "blocked:infra" if not own else "blocked:ruling", slot, "dev/ship.sh did not land: " + out[-1500:], slot_name)
-    landed = git("rev-parse", "--short", "HEAD", cwd=slot)
-    event("landed", hold=h["key"], hold_id=h["id"], commit=landed, unlocked=len(unlocked), slot=slot_name)
-    draw_map(os.path.join(STATE, "map.html"))   # D29: after every landing
-    if h.get("fixfirst"):
-        update_json("fixfirst.json", [], lambda ff: ff.__setitem__(slice(None), [f for f in ff if f["key"] != h["key"]]))
-    update_json("handoffs.json", {}, lambda hs: hs.pop(h["id"], None))
+    landed_move(h["key"], h["id"], git("rev-parse", "--short", "HEAD", cwd=slot), len(unlocked), slot_name, h.get("fixfirst"))
     unclaim(h)
     return "landed"
+
+def landed_move(key, hold_id, commit, unlocked, slot_name, fixfirst):
+    event("landed", hold=key, hold_id=hold_id, commit=commit, unlocked=unlocked, slot=slot_name)
+    draw_map(os.path.join(STATE, "map.html"))   # D29: after every landing
+    if fixfirst:
+        update_json("fixfirst.json", [], lambda ff: ff.__setitem__(slice(None), [f for f in ff if f["key"] != key]))
+    update_json("handoffs.json", {}, lambda hs: hs.pop(hold_id, None))
+
+def land_ready():
+    """The lander: each approved commit that went red on D14's time alone is shipped again from its own worktree,
+    the climb's other Julia stopped, oldest first, until it lands. ship.sh's own rule (one retry an hour on a D14
+    red) is kept: a refusal waits. A conflict or a red of the move's own goes back to the climb with its branch."""
+    q = state_json("ready.json", [])
+    if not q:
+        return
+    item = q[0]
+    slot = os.path.join(WORKTREES, "climb-land")
+    if not os.path.isdir(slot):
+        slot_ready("climb-land")
+    fetch()
+    git("checkout", "-q", "-f", "--no-track", "-B", "climb-land", item["branch"], cwd=slot)
+    with quiesced(slot):
+        r = sh(["bash", "dev/ship.sh"], cwd=slot, timeout=3600, env=dict(os.environ, WT_CLIMB_DRIVER="1"))
+    fetch()
+    out = r.stdout + r.stderr
+    commits, _ = slot_state(slot)
+    if r.returncode == 0 and not commits:
+        landed_move(item["hold"], item["hold_id"], git("rev-parse", "--short", "HEAD", cwd=slot), item["unlocked"],
+                    "climb-land", item.get("fixfirst"))
+        git("branch", "-D", item["branch"], check=False)
+    elif "D14" in out or "REFUSED" in out:
+        event("land-wait", branch=item["branch"], why=out[-200:])
+        return
+    else:   # a conflict or a red of its own: back to the climb, its handoff naming the branch
+        update_json("handoffs.json", {}, lambda hs: hs.__setitem__(item["hold_id"], (hs.get(item["hold_id"], "") +
+                    f"\n\nAn approved commit for this hold is on the branch {item['branch']}; its landing failed: "
+                    + out[-600:])[-2500:]))
+        event("stopped", hold=item["hold"], outcome="blocked:ruling", note="the lander could not land it: " + out[-600:])
+    update_json("ready.json", [], lambda qq: qq.__setitem__(slice(None), [x for x in qq if x["branch"] != item["branch"]]))
 
 def audit_lag():
     heads = re.findall(r"^## .* audited through ([0-9a-f]{7,40})", git("show", f"origin/{MARCH}:dev/AUDIT.md"), re.M)
@@ -1300,6 +1344,7 @@ def pick(slot=None):
     # (by ancestry, not by time: a score runs for an hour, and a landing during it is not in what it scored)
     done = {e.get("hold_id") for e in ev if e["kind"] == "landed"
             and not (head and sh(["git", "merge-base", "--is-ancestor", e.get("commit", ""), head]).returncode == 0)}
+    done |= {x["hold_id"] for x in state_json("ready.json", [])}   # its approved commit waits for the lander
     hs = holds()
     if slot == "climb-1":   # D40: one slot always ports compiler src, the hold that unlocks most cases first
         corpus = sorted((h for h in hs if not h["key"].startswith("G") and not h.get("fixfirst") and not h.get("tail")
@@ -1339,7 +1384,16 @@ def run(slots, one=False):
                 time.sleep(30)
             if one:
                 stop.set()
+    def lander():
+        while not stop.is_set():
+            try:
+                if not os.path.exists(os.path.join(STATE, "PAUSE")):
+                    land_ready()
+            except BaseException as e:
+                event("driver-error", slot="climb-land", error=repr(e)[:400])
+            stop.wait(600)
     ts = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(1, slots + 1)]
+    ts.append(threading.Thread(target=lander, daemon=True))
     for t in ts:
         t.start()
     try:
