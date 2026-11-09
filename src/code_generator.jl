@@ -917,7 +917,7 @@ end
                 f === Core.setfield! ? visit_instance_set(self, c, expected_type; statement) :
                 f === Core.setglobal! ? visit_static_set(self, c, expected_type) :
                 f === Core.isa ? visit_is_expression(self, c, expected_type) :
-                f === Core.typeassert ? visit_as_expression(self, c, expected_type) :
+                f === Core.typeassert || f === Core.compilerbarrier && length(c.args) == 3 ? visit_as_expression(self, c, expected_type) :
                 f === Core.throw ? visit_throw(self, c, expected_type) :
                 f === Core.tuple ? visit_record_literal(self, c, expected_type) :
                 f === Core.Intrinsics.not_int && length(c.args) == 2 && dart_type_of(self, c.args[2]) === Bool ? visit_not(self, c, expected_type) :
@@ -2264,8 +2264,21 @@ end
 
 # Julia's typeassert(x, T), the checked AsExpression: Julia checks it whatever dart's options say about
 # omitting checks (a failed typeassert is a TypeError Julia's program may catch), so the operand is
-# boxed in the top type and types.dart's emitAsCheck checks it
+# boxed in the top type and types.dart's emitAsCheck checks it.
+# Julia's compilerbarrier(setting, x), the unchecked AsExpression (dart's `node.isUnchecked` arm): a
+# barrier to inference only, whose value is x unchanged. Julia's codegen (julia/src/codegen.cpp:5013
+# emit_builtin_call) type-checks the setting against Symbol (emit_typecheck, julia/src/cgutils.cpp:2026)
+# and gives argv[2], which its context converts by x's own type, so x is translated at the expected
+# type and a box is x's own class, never the barrier's widened type (Any under :type). A setting whose
+# static type is no Symbol is emit_typecheck's run-time TypeError, not written here: it rejects, located
 @parity "dart2wasm/lib/code_generator.dart:3170 AstCodeGenerator.visitAsExpression" function visit_as_expression(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    if nir_callee(node) === Core.compilerbarrier
+        local setting = dart_type_of(self, node.args[2])
+        setting <: Symbol ||
+            reject!(Unquarantined("src/code_generator.jl visitAsExpression: compilerbarrier's setting of type $setting, which Julia's emit_typecheck (julia/src/cgutils.cpp:2026) tests against Symbol at run time"),
+                "$(self.enclosing_member): Julia's compilerbarrier")
+        return translate_expression(self, node.args[3], expected_type)
+    end
     local operand = node.args[2]
     local operand_type = dart_type_of(self, operand)
     local tested_static = dart_type_of(self, node.args[3])

@@ -318,6 +318,18 @@ end
     @test emitted_by(() -> D.translate_statement(g, W.NirPi(W.NirArgument(2), Int32), nothing), g) == ["local.get", "drop"]
 end
 
+@testset "code_generator.dart: Julia's compilerbarrier is the unchecked as" begin
+    local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    local lit(v) = W.NirConst(Core.Const(v))
+    local barrier(setting) = W.NirCall(W.NirValue[lit(Core.compilerbarrier), lit(setting), W.NirArgument(2)])
+    # Julia's answer: the value itself, under every setting
+    @test Base.compilerbarrier(:const, Int32(3)) === Int32(3) && Base.compilerbarrier(:type, Int32(3)) === Int32(3)
+    # the operand translated at the expected type: the argument's local, read
+    @test emitted_by(() -> D.translate_expression(g, barrier(:type), IR.NumType_i32), g) == ["local.get"]
+    # a setting of no Symbol type is emit_typecheck's run-time TypeError, not written: located
+    @test rejection(() -> D.translate_expression(g, barrier(1), IR.NumType_i32)).rejection isa W.Unquarantined
+end
+
 module GlobalCases
 const SCALE = Int32(7)
 counter = 0
