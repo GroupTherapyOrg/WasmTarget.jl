@@ -96,11 +96,15 @@ def cfg():
 
 # G5: the judge and the rules. A move touching one is refused before review; ADD_ONLY files may only gain lines,
 # and NEW_ONLY directories only gain files (a model's invariant is never loosened in a port move: refusal 9).
-PROTECTED = [r"^dev/(?!formal/)", r"^dev/formal/run_tlc\.sh$",
+PROTECTED = [r"^dev/(?!formal/|quarantine_unpinned\.txt$|quarantine_no_counterpart\.txt$)", r"^dev/formal/run_tlc\.sh$",
              r"^test/(?!smoke_corpus\.jl$|smoke_times\.tsv$)[^/]+$",   # every driver and shared helper the check and smoke load (A97E2)
              r"^AGENTS\.md$", r"^\.github/", r"^\.gitignore$", r"^Project\.toml$",
              r"^Manifest\.toml$", r"^legacy/"]   # all of dev/: the tooling, the plan and the audit log are the driver's or a ruling's
 ADD_ONLY = [r"^test/smoke_corpus\.jl$", r"^test/smoke_times\.tsv$"]
+# the debt lists a move may only shrink, and only by the line of a definition its own diff pins: L227 has the commit
+# that pins a debt-listed definition delete its line, and G5 kept every climber from ever doing so (2026-11-09: the
+# 63-case memoryref hold parked behind check_patch's pin, A102 (2))
+DELETE_ONLY = [r"^dev/quarantine_unpinned\.txt$", r"^dev/quarantine_no_counterpart\.txt$"]
 # the runner's own gaps (a type it does not marshal, a reader it cannot build) are the judge failing to read an answer,
 # not the compiler: a keeper move ports them in the runner and its test alone, and may flip no other case (HILL.md)
 RUNNER_FILES = ("test/runner.jl", "test/src/runner.jl")
@@ -705,6 +709,16 @@ def g5(slot, keeper=False):
     bad += [f"{n} (an existing model changes; models change only by ruling)" for n in names
             if any(re.search(p, n) for p in NEW_ONLY) and status.get(n, "M") != "A"]
     for n in names:
+        if any(re.search(p, n) for p in DELETE_ONLY):
+            d = git("diff", "-U0", f"origin/{MARCH}...HEAD", "--", n, cwd=slot).splitlines()
+            if [l for l in d if l.startswith("+") and not l.startswith("+++") and l[1:].strip()]:
+                bad.append(f"{n} (gains a line; a move may only delete a line of a definition it pins)")
+            for l in (l[1:].split() for l in d if l.startswith("-") and not l.startswith("---") and l[1:].strip()):
+                src = f"src/{l[0]}"
+                fd = git("diff", "-U5", f"origin/{MARCH}...HEAD", "--", src, cwd=slot)
+                added = "\n".join(x[1:] for x in fd.splitlines() if x.startswith("+") and not x.startswith("+++"))
+                if not ('pin"' in added and len(l) > 1 and l[1].strip("[]") in fd):
+                    bad.append(f"{n} (deletes `{' '.join(l)}`, whose definition this diff does not pin in {src})")
         if any(re.search(p, n) for p in ADD_ONLY):
             removed = [l for l in git("diff", "-U0", f"origin/{MARCH}...HEAD", "--", n, cwd=slot).splitlines()
                        if l.startswith("-") and not l.startswith("---") and l[1:].strip()]
@@ -789,14 +803,23 @@ def verify(slot, h):
     before = {l: (o, w) for l, o, _, w in head_cases()}
     hc = set(h["cases"])
     unlocked = sorted(l for l, o, _, _ in cases if o == "passed" and l in hc)
-    added = "\n".join(added_lines(slot))
-    # progress: a case passes, or stops at a deeper unported site the move did not itself write (a new stub that
-    # moves a case is refusal 3, never progress)
+    changed = set(git("diff", "--name-only", f"origin/{MARCH}...HEAD", cwd=slot).splitlines())
+    added_in = {f: "\n".join(added_lines(slot, f)) for f in changed}
+    def own(site):
+        """The move wrote that site itself (a new stub that moves a case is refusal 3): its file is one the move
+        changed and its definition is in that file's added lines, or, for a dart anchor, the anchor is. Not a
+        mention of the file anywhere in the diff, which refused real progress (A102 (1))."""
+        path, _, rest = site.partition(" ")
+        name = rest.split(":")[0].strip()
+        if path.startswith("src/"):
+            return path in changed and bool(name) and name in added_in.get(path, "")
+        return any(path in t for t in added_in.values())
+    # progress: a case passes, or stops at a deeper unported site the move did not itself write
     def progressed(l, o, w):
         if o == "passed":
             return True
         site = unported_site(w) if o == "unported" else None
-        return bool(site) and hold_key(o, l, w) != h["key"] and site.split(" ")[0] not in added
+        return bool(site) and hold_key(o, l, w) != h["key"] and not own(site)
     moved = [l for l, o, _, w in cases if l in hc and progressed(l, o, w)]
     problems = [f"G2 lost {l}" for l in lost]
     problems += [f"G1 {o} {l}: {w[:200]}" for l, o, _, w in cases

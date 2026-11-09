@@ -57,6 +57,8 @@ G5 is the judge untouched:
   `GROUPS` or `XFAIL`, may not rebind a name the corpus binds, and may add at top level only the kinds of form the
   corpus is made of (definitions and registrations), all read by Julia's parser (`dev/climb/corpus_names.jl`).
 - `dev/formal/` may only gain new files. An existing model changes only by ruling.
+- The debt lists `dev/quarantine_unpinned.txt` and `dev/quarantine_no_counterpart.txt` may only lose lines, each the
+  line of a definition the same diff pins (L227: the commit that pins a debt-listed definition deletes its line).
 
 G4 is the one gate a model judges, so it is measured like the score (Theo's eval of past failures):
 `climb.py judge-eval` reverts small landed fixes of audit findings, each a defect an audit really found, and asks
