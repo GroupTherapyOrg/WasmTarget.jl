@@ -24,6 +24,10 @@ include(joinpath(@__DIR__, "..", "codegen_helpers.jl"))
     for w in (f32, f64)
         @test issubset((Core.Intrinsics.add_float, Core.Intrinsics.div_float, Core.Intrinsics.lt_float), keys(B[w][w]))
         @test issubset((Core.Intrinsics.neg_float, Core.Intrinsics.sqrt_llvm, Core.Intrinsics.rint_llvm), keys(U[w]))
+        # the fast-math forms Julia's codegen gives the same LLVM operation with fast flags
+        # (src/intrinsics.cpp:1527 llvm.minimum, :1536 llvm.maximum, :1754 llvm.sqrt): wasm's min, max, sqrt
+        @test issubset((Core.Intrinsics.min_float_fast, Core.Intrinsics.max_float_fast), keys(B[w][w]))
+        @test Core.Intrinsics.sqrt_llvm_fast in keys(U[w])
     end
     # no arm mixes operand types, which Julia's intrinsics never do
     @test !haskey(B[i32], i64) && !haskey(B[f64], f32)

@@ -92,11 +92,14 @@ end
 # operand types are each wasm number type. Each answers as Julia's codegen does (src/intrinsics.cpp):
 # integer arithmetic wraps, a division, remainder or comparison is signed or unsigned by the
 # intrinsic's own name, and a float operation is IEEE's (a fast-math one, a single operation, is the
-# same IEEE operation). A raw division or remainder lowers to wasm's div or rem, which trap at a zero
-# divisor and at typemin ÷ -1: Julia's codegen lowers sdiv_int, udiv_int, srem_int and urem_int to
-# LLVM's sdiv, udiv, srem and urem (src/intrinsics.cpp), undefined behavior there, and Julia reaches
-# them only behind its own checks (its `div` and `rem` call checked_sdiv_int and kin, whose arm below
-# raises DivideError first), so the trap is unreachable, as wasm-opt's --traps-never-happen assumes
+# same IEEE operation; min_float_fast and max_float_fast are LLVM's llvm.minimum and llvm.maximum
+# with fast flags, src/intrinsics.cpp:1527, which LLVM's WebAssembly backend selects as wasm's min
+# and max, llvm/lib/Target/WebAssembly/WebAssemblyInstrFloat.td:60). A raw division or remainder
+# lowers to wasm's div or rem, which trap at a zero divisor and at typemin ÷ -1: Julia's codegen
+# lowers sdiv_int, udiv_int, srem_int and urem_int to LLVM's sdiv, udiv, srem and urem
+# (src/intrinsics.cpp), undefined behavior there, and Julia reaches them only behind its own checks
+# (its `div` and `rem` call checked_sdiv_int and kin, whose arm below raises DivideError first), so
+# the trap is unreachable, as wasm-opt's --traps-never-happen assumes
 @parity "dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap" const Intrinsifier__binary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}}("dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(
     WasmBuilder.IR.NumType_i32 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.add_int => c -> WasmBuilder.i32_add(c.b[]),
@@ -145,7 +148,9 @@ end
         Core.Intrinsics.add_float_fast => c -> WasmBuilder.f32_add(c.b[]),
         Core.Intrinsics.sub_float_fast => c -> WasmBuilder.f32_sub(c.b[]),
         Core.Intrinsics.mul_float_fast => c -> WasmBuilder.f32_mul(c.b[]),
-        Core.Intrinsics.div_float_fast => c -> WasmBuilder.f32_div(c.b[]))),
+        Core.Intrinsics.div_float_fast => c -> WasmBuilder.f32_div(c.b[]),
+        Core.Intrinsics.min_float_fast => c -> WasmBuilder.f32_min(c.b[]),
+        Core.Intrinsics.max_float_fast => c -> WasmBuilder.f32_max(c.b[]))),
     WasmBuilder.IR.NumType_f64 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_f64 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.add_float => c -> WasmBuilder.f64_add(c.b[]),
         Core.Intrinsics.sub_float => c -> WasmBuilder.f64_sub(c.b[]),
@@ -159,12 +164,16 @@ end
         Core.Intrinsics.add_float_fast => c -> WasmBuilder.f64_add(c.b[]),
         Core.Intrinsics.sub_float_fast => c -> WasmBuilder.f64_sub(c.b[]),
         Core.Intrinsics.mul_float_fast => c -> WasmBuilder.f64_mul(c.b[]),
-        Core.Intrinsics.div_float_fast => c -> WasmBuilder.f64_div(c.b[])))))
+        Core.Intrinsics.div_float_fast => c -> WasmBuilder.f64_div(c.b[]),
+        Core.Intrinsics.min_float_fast => c -> WasmBuilder.f64_min(c.b[]),
+        Core.Intrinsics.max_float_fast => c -> WasmBuilder.f64_max(c.b[])))))
 
 # a static final, lazily initialized as dart's is (Late); Julia's unary intrinsics by operand type, as Julia's codegen answers them: an integer's negation and
 # complement wrap (dart's `unary-` and `~`, the same instructions), a float's negation, magnitude,
-# square root and rounding are IEEE's (rint_llvm rounds to nearest even, wasm's nearest); an integer's
-# leading and trailing zeros and its population count, the width for zero as Julia's; its byte swap
+# square root (sqrt_llvm_fast too: LLVM's llvm.sqrt with fast flags, src/intrinsics.cpp:1754,
+# wasm's sqrt, WebAssemblyInstrFloat.td:53) and rounding are IEEE's (rint_llvm rounds to nearest
+# even, wasm's nearest); an integer's leading and trailing zeros and its population count, the
+# width for zero as Julia's; its byte swap
 # (bswap_int, LLVM's llvm.bswap, julia/src/intrinsics.cpp:1692), which wasm has no instruction for,
 # as LLVM's WebAssembly backend expands it (llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp:11513
 # expandBSWAP): an i32 by its rotate path, wasm having rotr (t = x ^ rotr(x, 16), t &= 0xFF00FFFF,
@@ -220,6 +229,7 @@ end
         Core.Intrinsics.neg_float => c -> WasmBuilder.f32_neg(c.b[]),
         Core.Intrinsics.abs_float => c -> WasmBuilder.f32_abs(c.b[]),
         Core.Intrinsics.sqrt_llvm => c -> WasmBuilder.f32_sqrt(c.b[]),
+        Core.Intrinsics.sqrt_llvm_fast => c -> WasmBuilder.f32_sqrt(c.b[]),
         Core.Intrinsics.floor_llvm => c -> WasmBuilder.f32_floor(c.b[]),
         Core.Intrinsics.ceil_llvm => c -> WasmBuilder.f32_ceil(c.b[]),
         Core.Intrinsics.trunc_llvm => c -> WasmBuilder.f32_trunc(c.b[]),
@@ -228,6 +238,7 @@ end
         Core.Intrinsics.neg_float => c -> WasmBuilder.f64_neg(c.b[]),
         Core.Intrinsics.abs_float => c -> WasmBuilder.f64_abs(c.b[]),
         Core.Intrinsics.sqrt_llvm => c -> WasmBuilder.f64_sqrt(c.b[]),
+        Core.Intrinsics.sqrt_llvm_fast => c -> WasmBuilder.f64_sqrt(c.b[]),
         Core.Intrinsics.floor_llvm => c -> WasmBuilder.f64_floor(c.b[]),
         Core.Intrinsics.ceil_llvm => c -> WasmBuilder.f64_ceil(c.b[]),
         Core.Intrinsics.trunc_llvm => c -> WasmBuilder.f64_trunc(c.b[]),
