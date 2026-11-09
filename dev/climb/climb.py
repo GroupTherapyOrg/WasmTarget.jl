@@ -318,6 +318,25 @@ def record(path, sha):
             update_json("fixfirst.json", [], add)
     return s, lost, bad
 
+def advance(path, sha):
+    """The cases a landed move's measurement read, written into the scored head's cases at once: a gap that unlocks
+    few passes uncovers the next gap of the same cases (on 2026-11-09 the 256-case translateStorageType hold passed 5
+    and moved 251 on, 74 to jl_string_ptr, 62 to a memoryref's ptr_or_offset), so its next layer is a hold now, for
+    the next move, not after the next full score, an hour and a half on. The full score still decides S and G2."""
+    if not os.path.exists(path):
+        return 0
+    new = {l: (l, o, s_, w) for l, o, s_, w in read_cases(path)}
+    with locked():
+        rows = [new.pop(l, (l, o, s_, w)) for l, o, s_, w in head_cases()] + list(new.values())
+        with open(os.path.join(STATE, "head-cases.tsv.tmp"), "w") as f:
+            f.write("".join(f"{l}\t{o}\t{s_}\t{w}\n" for l, o, s_, w in rows))
+        os.replace(os.path.join(STATE, "head-cases.tsv.tmp"), os.path.join(STATE, "head-cases.tsv"))
+        ps = passset() | {l for l, o, _, _ in read_cases(path) if o == "passed"}
+        open(os.path.join(STATE, "passset.txt"), "w").write("\n".join(sorted(ps)) + "\n")
+    n = len(read_cases(path))
+    event("advanced", sha=sha, cases=n)
+    return n
+
 # ---------------------------------------------------------------- the budget: the account's whole spend
 def weighted(u):
     return (u.get("cache_read_input_tokens", 0) * 0.1 + u.get("cache_creation_input_tokens", 0) * 1.25
@@ -1067,6 +1086,7 @@ def move(h, slot_name):
         if attempt >= 2:
             return finish(h, "blocked:infra" if not own else "blocked:ruling", slot, "dev/ship.sh did not land: " + out[-1500:], slot_name)
     landed_move(h["key"], h["id"], git("rev-parse", "--short", "HEAD", cwd=slot), len(unlocked), slot_name, h.get("fixfirst"))
+    advance(os.path.join(slot, ".wtd", "verify-cases.tsv"), git("rev-parse", "--short", "HEAD", cwd=slot))   # the next layer, now
     unclaim(h)
     return "landed"
 
@@ -1350,7 +1370,8 @@ def pick(slot=None):
     head = sc[-1]["sha"] if sc else None
     # a hold landed in no commit the scored head contains waits for a score that does, so no slot climbs it twice
     # (by ancestry, not by time: a score runs for an hour, and a landing during it is not in what it scored)
-    done = {e.get("hold_id") for e in ev if e["kind"] == "landed"
+    adv = [e["sha"] for e in ev if e["kind"] == "advanced"]
+    done = {e.get("hold_id") for e in ev if e["kind"] == "landed" and e.get("commit") not in adv
             and not (head and sh(["git", "merge-base", "--is-ancestor", e.get("commit", ""), head]).returncode == 0)}
     done |= {x["hold_id"] for x in state_json("ready.json", [])}   # its approved commit waits for the lander
     hs = holds()
