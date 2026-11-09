@@ -484,6 +484,30 @@ end
     push!(NATIVE_RUNS, WTRunner.RunCase("unlinked(4) throws ", W.compile(UndefFieldCases.unlinked, (Int,); optimize = false), (4,), WTRunner.Throws(UndefRefError)))
 end
 
+# a local read where it may be unassigned: Julia's lowering checks it by name (`throw_undef_if_not`), its
+# codegen raising UndefVarError of the variable in the :local scope (julia/src/cgutils.cpp:1596
+# undef_var_error_ifnot) through the runtime's jl_undefined_var_error (julia/src/rtutils.c:142)
+module UndefVarCases
+function maybe(c::Bool)
+    if c
+        x = 1
+    end
+    return x
+end
+end
+@testset "Julia's undefined-variable check of a local raises UndefVarError through jl_undefined_var_error" begin
+    local native = try; UndefVarCases.maybe(false); nothing; catch err; err; end
+    @test native isa UndefVarError && native.var === :x && native.scope === :local
+    @test any(s -> Meta.isexpr(s, :throw_undef_if_not) && s.args[1] === :x, Base.code_typed(UndefVarCases.maybe, (Bool,))[1][1].code)
+    # the check calls jl_undefined_var_error, whose UndefVarError reads the task's world age by a foreign
+    # call (julia/src/ccall.cpp:1717 jl_get_tls_world_age) no host supplies: a located rejection at that
+    # call, the next definition to port, never a module built past it
+    local e = rejection(() -> W.compile(UndefVarCases.maybe, (Bool,); optimize = false))
+    @test e isa W.RejectionError && e.rejection isa W.Unquarantined
+    @test occursin("jl_get_tls_world_age", e.rejection.row) && occursin("whose library no host supplies", e.rejection.row)
+    @test occursin("jl_undefined_var_error", e.at)
+end
+
 # a field that may be left undefined and may hold nothing keeps dart's late lowering's set flag
 # (class_is_set_field): its #undef read raises UndefRefError, a written nothing reads nothing, and
 # isdefined reads the flag; a reference field excluding nothing keeps the null for #undef

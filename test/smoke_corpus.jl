@@ -1966,6 +1966,11 @@ const _SmUDictU = Dict{Int,Union{Nothing,String}}(1 => nothing)
 const _SmUVecA = let v = Vector{Any}(undef, 3); v[1] = 7; v[3] = nothing; v; end
 const _SmUVecS = let v = Vector{String}(undef, 2); v[2] = "ab"; v; end
 const _SmUMemA = let m = Memory{Any}(undef, 2); m[2] = 5; m; end
+# an immutable struct `new` leaves a pointer field undefined: SROA lifts its getfield through the
+# φ of its two allocations, and its definedness as a φ of Bools, into Julia's undefined-variable check
+# of getfield's name (Compiler/src/ssair/passes.jl:1530 `throw_undef_if_not(##getfield##, def)`),
+# native UndefRefError where the field is undefined (dev/AUDIT.md A102E2)
+struct _SmUI; a::Int64; x::String; _SmUI(a) = new(a); _SmUI(a, s) = new(a, s); end
 _g("undef_slots", Any[
     ("isassigned_stored_nothing", (n::Int64) -> (v = Vector{Any}(undef, 2); v[1] = nothing; v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
     ("isassigned_unset", (n::Int64) -> (v = Vector{Any}(undef, 2); v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
@@ -2046,6 +2051,8 @@ _g("undef_slots", Any[
     ("const_vector_values", (n::Int64) -> ((_SmUVecA[n - 2]::Int64) + (_SmUVecA[n] === nothing ? 100 : 0)), Int64(3)),
     ("const_vector_ref_read_throws", (n::Int64) -> (try; ncodeunits(_SmUVecS[n - 2]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
     ("const_memory_unset", (n::Int64) -> ((isassigned(_SmUMemA, n - 2) ? 10 : 20) + (_SmUMemA[n - 1]::Int64)), Int64(3)),
+    ("sroa_phi_unset_field_throws", (n::Int64) -> (m = n > 2 ? _SmUI(n) : _SmUI(n, "ab"); try; ncodeunits(m.x); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("sroa_phi_set_field", (n::Int64) -> (m = n > 2 ? _SmUI(n) : _SmUI(n, "ab"); try; ncodeunits(m.x); catch e; e isa UndefRefError ? -1 : -2; end), Int64(1)),
 ])
 # A MemoryRef passed through `inferencebarrier`: memoryrefget and memoryrefset! read the element
 # type from the reference's own type (memoryref_eltype, never a guessed Int32 element, A17E1), and
