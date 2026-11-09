@@ -38,6 +38,25 @@
     return r
 end
 
+# Return the expression required to zero extend the Op value assuming it was the smaller SrcTy
+# value: the value on the stack in the register `w` (an i32 or i64), its bits above its `bits` cleared
+# by the AND with the low `bits` set (APInt::getLowBitsSet), and none where `bits` is the register's
+# own width (OpVT == VT returns Op); wasm selects the AND as its `and` of the register
+@parity "llvm/include/llvm/CodeGen/SelectionDAG.h:1091 SelectionDAG::getZeroExtendInReg" function get_zero_extend_in_reg(b::WasmBuilder.InstructionsBuilder, w::WasmBuilder.IR.NumType, bits::Int)::Nothing
+    local width = 8 * WasmBuilder.byte_size(w)
+    0 < bits <= width && (w == WasmBuilder.IR.NumType_i32 || w == WasmBuilder.IR.NumType_i64) ||
+        reject!(Internal("llvm/include/llvm/CodeGen/SelectionDAG.h:1091 SelectionDAG::getZeroExtendInReg: an i$bits in the register $w"), "SelectionDAG::getZeroExtendInReg")
+    bits == width && return nothing
+    if w == WasmBuilder.IR.NumType_i64
+        WasmBuilder.i64_const(b, (Int64(1) << bits) - Int64(1))
+        WasmBuilder.i64_and(b)
+    else
+        WasmBuilder.i32_const(b, Int(reinterpret(Int32, (UInt32(1) << bits) - UInt32(1))))
+        WasmBuilder.i32_and(b)
+    end
+    return nothing
+end
+
 # A boolean constant of the target's boolean contents (ZeroOrOneBooleanContent on wasm,
 # WebAssemblyISelLowering.cpp:54): an i32 local holding 1 or 0
 @parity "llvm/include/llvm/CodeGen/SelectionDAG.h:749 SelectionDAG::getBoolConstant" function get_bool_constant(b::WasmBuilder.InstructionsBuilder, v::Bool)::WasmBuilder.IR.Local

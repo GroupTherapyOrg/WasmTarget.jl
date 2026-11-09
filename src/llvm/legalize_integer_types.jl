@@ -309,3 +309,80 @@ end
     vt == WasmBuilder.IR.NumType_i32 && WasmBuilder.i32_wrap_i64(b)
     return nothing
 end
+
+# LLVM's promotion of an integer narrower than a legal register (TypePromoteInteger, an i8 or i24 in an
+# i32 and an i40 in an i64 on wasm: src/julia/classes.jl type_promote_integer), DAGTypeLegalizer's
+# PromoteIntegerResult and PromoteIntegerOperand: the promoted value (GetPromotedInteger) is the register,
+# its bits above the narrow type's own undefined, and an operation whose result reads them extends the
+# value within the register first, as its PromoteIntRes_ or PromoteIntOp_ names, each over the value on
+# the wasm stack in its register `w` and the narrow type's width `bits`. The extensions within the
+# register are SExtPromotedInteger and ZExtPromotedInteger (LegalizeTypes.h), the SIGN_EXTEND_INREG
+# and the zero extension in the register (getZeroExtendInReg) the two operands' extensions make.
+
+# SIGN_EXTEND of a promoted operand: ANY_EXTEND to the result's register, which the caller makes (wasm
+# selects an i32's any-extension as i64.extend_i32_u, WebAssemblyInstrConv.td:54), then the
+# SIGN_EXTEND_INREG of the operand's width, here within `w`: an i8 or i16 (and an i32 in an i64) the
+# sign-ext feature's extend instruction, legal where the subtarget has sign-ext
+# (WebAssemblyISelLowering.cpp:363, WebAssemblyInstrConv.td:30-46, the feature every module WasmTarget
+# writes enables), any other width Expand, the shift left and arithmetic shift right by the bits
+# above it, LegalizeDAG's ExpandNode of SIGN_EXTEND_INREG (llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp,
+# a file the pinned sparse checkout, dev/fetch_llvm.sh, does not hold)
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:2643 DAGTypeLegalizer::PromoteIntOp_SIGN_EXTEND" function promote_int_op_sign_extend(b::WasmBuilder.InstructionsBuilder, w::WasmBuilder.IR.NumType, bits::Int)::Nothing
+    local i64 = w == WasmBuilder.IR.NumType_i64
+    local width = 8 * WasmBuilder.byte_size(w)
+    0 < bits <= width && (i64 || w == WasmBuilder.IR.NumType_i32) ||
+        reject!(Internal("llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:2643 DAGTypeLegalizer::PromoteIntOp_SIGN_EXTEND: an i$bits in the register $w"), "DAGTypeLegalizer::PromoteIntOp_SIGN_EXTEND")
+    bits == width && return nothing
+    if bits == 8
+        i64 ? WasmBuilder.i64_extend8_s(b) : WasmBuilder.i32_extend8_s(b)
+    elseif bits == 16
+        i64 ? WasmBuilder.i64_extend16_s(b) : WasmBuilder.i32_extend16_s(b)
+    elseif bits == 32
+        WasmBuilder.i64_extend32_s(b)
+    else
+        local diff = width - bits
+        i64 ? (WasmBuilder.i64_const(b, diff); WasmBuilder.i64_shl(b); WasmBuilder.i64_const(b, diff); WasmBuilder.i64_shr_s(b)) :
+              (WasmBuilder.i32_const(b, diff); WasmBuilder.i32_shl(b); WasmBuilder.i32_const(b, diff); WasmBuilder.i32_shr_s(b))
+    end
+    return nothing
+end
+
+# ZERO_EXTEND of a promoted operand: ANY_EXTEND to the result's register, which the caller makes, then
+# the zero extension in the register of the operand's width (getZeroExtendInReg), here within `w`
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:2841 DAGTypeLegalizer::PromoteIntOp_ZERO_EXTEND" function promote_int_op_zero_extend(b::WasmBuilder.InstructionsBuilder, w::WasmBuilder.IR.NumType, bits::Int)::Nothing
+    get_zero_extend_in_reg(b, w, bits)
+    return nothing
+end
+
+# CTLZ of a promoted value: zero extend to the promoted type and do the count there, then subtract off
+# the extra leading bits in the bigger type; wasm's clz is legal at i32 and i64, so no early expansion
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:744 DAGTypeLegalizer::PromoteIntRes_CTLZ" function promote_int_res_ctlz(b::WasmBuilder.InstructionsBuilder, w::WasmBuilder.IR.NumType, bits::Int)::Nothing
+    local i64 = w == WasmBuilder.IR.NumType_i64
+    local extract_leading_bits = 8 * WasmBuilder.byte_size(w) - bits
+    promote_int_op_zero_extend(b, w, bits)
+    i64 ? WasmBuilder.i64_clz(b) : WasmBuilder.i32_clz(b)
+    i64 ? (WasmBuilder.i64_const(b, extract_leading_bits); WasmBuilder.i64_sub(b)) : (WasmBuilder.i32_const(b, extract_leading_bits); WasmBuilder.i32_sub(b))
+    return nothing
+end
+
+# CTPOP of a promoted value: zero extend to the promoted type and do the count there; wasm's popcnt is
+# legal at i32 and i64, so no early expansion
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:816 DAGTypeLegalizer::PromoteIntRes_CTPOP_PARITY" function promote_int_res_ctpop_parity(b::WasmBuilder.InstructionsBuilder, w::WasmBuilder.IR.NumType, bits::Int)::Nothing
+    promote_int_op_zero_extend(b, w, bits)
+    w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_popcnt(b) : WasmBuilder.i32_popcnt(b)
+    return nothing
+end
+
+# CTTZ of a promoted value: the count is the same in the promoted type except if the original value was
+# zero, handled by setting the bit just off the top of the original type (an OR of TopBit, no bit above
+# the narrow type's own read), the count CTTZ_ZERO_POISON's, wasm's ctz; its ctz is legal at i32 and
+# i64, so no early expansion. A type of the register's own width is never promoted, and is rejected
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:844 DAGTypeLegalizer::PromoteIntRes_CTTZ" function promote_int_res_cttz(b::WasmBuilder.InstructionsBuilder, w::WasmBuilder.IR.NumType, bits::Int)::Nothing
+    local i64 = w == WasmBuilder.IR.NumType_i64
+    local width = 8 * WasmBuilder.byte_size(w)
+    0 < bits < width ||
+        reject!(Internal("llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:844 DAGTypeLegalizer::PromoteIntRes_CTTZ: an i$bits promoted to $w, no narrower type"), "DAGTypeLegalizer::PromoteIntRes_CTTZ")
+    i64 ? (WasmBuilder.i64_const(b, Int64(1) << bits); WasmBuilder.i64_or(b); WasmBuilder.i64_ctz(b)) :
+          (WasmBuilder.i32_const(b, Int(Int64(1) << bits)); WasmBuilder.i32_or(b); WasmBuilder.i32_ctz(b))
+    return nothing
+end

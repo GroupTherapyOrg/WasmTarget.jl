@@ -1924,6 +1924,14 @@ _g("narrow_primitive", Any[
     # 1099511627778, native 2)
     ("sext128_p40", (n::Int64) -> Core.Intrinsics.slt_int(Core.Intrinsics.sext_int(Int128, Core.Intrinsics.trunc_int(_SmP40, n)), Int128(0)) ? 1 : 2, Int64(2)^40 - 2),
     ("zext128_dirty_p40", (n::Int64) -> (p = Core.Intrinsics.trunc_int(_SmP40, n); Core.Intrinsics.trunc_int(Int64, Core.Intrinsics.zext_int(Int128, Core.Intrinsics.add_int(p, p)))), Int64(2)^39 + 1),
+    # a promoted value compared by jl_egal, boxed or as a struct's field, at its own size (jl_egal__bits)
+    ("boxed_egal_dirty_p24", (n::Int64) -> (a = Core.Intrinsics.trunc_int(_SmP24, (n % UInt32) + 0x01000000); b = Core.Intrinsics.trunc_int(_SmP24, n % UInt32); v = Any[a]; v[1] === b ? 1 : 2), Int64(2)),
+    ("field_egal_dirty_p24", (n::Int64) -> (a = Core.Intrinsics.trunc_int(_SmP24, (n % UInt32) + 0x01000000); b = Core.Intrinsics.trunc_int(_SmP24, n % UInt32); Some(a) === Some(b) ? 1 : 2), Int64(2)),
+    # the counts and flipsign of an 8- or 16-bit integer, promoted as LLVM promotes its i8 or i16
+    ("ctlz_int8", (n::Int64) -> Int64(Core.Intrinsics.ctlz_int(n % Int8)), Int64(3)),
+    ("cttz_zero_uint16", (n::Int64) -> Int64(Core.Intrinsics.cttz_int((n - 3) % UInt16)), Int64(3)),
+    ("ctpop_negative_int8", (n::Int64) -> Int64(Core.Intrinsics.ctpop_int(Core.Intrinsics.neg_int(n % Int8))), Int64(3)),
+    ("flipsign_int16", (n::Int64) -> Int64(Core.Intrinsics.flipsign_int(Int16(5), Core.Intrinsics.neg_int(n % Int16))), Int64(3)),
 ])
 # An erased nothing reaching a selector-dispatched `::Nothing` method, through the selector
 # caller's class read and the dispatch wrapper's argument (dev/AUDIT.md A17E3: the base trapped

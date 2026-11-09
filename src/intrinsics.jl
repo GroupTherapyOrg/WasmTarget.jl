@@ -665,22 +665,59 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:full}, t::Type, w::WasmBuilder.IR.ValueType)::Bool =
     t isa DataType && isprimitivetype(t) && w isa WasmBuilder.IR.NumType && 8 * sizeof(t) == 8 * WasmBuilder.byte_size(w)
 
-# An 8- or 16-bit integer is an i32 held as Julia's ABI holds it (Translator.translateType):
-# sign-extended for a signed type, zero-extended for an unsigned one. An operation reads the
-# operand in the view it needs (a signed comparison, division or arithmetic shift the
-# sign-extended bits, an unsigned one the zero-extended bits) and puts a result back in its type's
-# form, as Julia's codegen computes at the type's own width (an i8 or i16 in LLVM).
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:narrow}, t::Type)::Bool = t isa DataType && t <: Base.BitInteger && sizeof(t) < 4
+# An integer held in a register wider than its own bits, which LLVM's type legalizer promotes
+# (TypePromoteInteger, src/llvm/legalize_integer_types.jl): an 8- or 16-bit integer is an i32 held as
+# Julia's ABI holds it (Translator.translateType), sign-extended for a signed type, zero-extended for
+# an unsigned one; a primitive type of its own width with no builtin type (`primitive type P 24`) is
+# held in the register LLVM promotes its integer to (src/julia/classes.jl type_promote_integer, an i32
+# or an i64), its bits above its own undefined, the promoted value's (GetPromotedInteger). An operation
+# reads the operand in the view it needs (a signed comparison, division or arithmetic shift the
+# sign-extended bits, an unsigned one the zero-extended bits: SExtPromotedInteger and
+# ZExtPromotedInteger, the extensions within the register) and puts a result back in its type's form,
+# as Julia's codegen computes at the type's own width (an i8, i16 or i24 in LLVM); a promoted
+# primitive's result keeps no form, LLVM's promoted result.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:narrow}, t::Type)::Bool =
+    t isa DataType && (t <: Base.BitInteger && sizeof(t) < 4 || generate_static_intrinsic(Val(:promoted), t))
 
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:put_form}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing = (sizeof(t) == 1 ?
-    (t <: Signed ? WasmBuilder.i32_extend8_s(b) : (WasmBuilder.i32_const(b, 255); WasmBuilder.i32_and(b))) :
-    (t <: Signed ? WasmBuilder.i32_extend16_s(b) : (WasmBuilder.i32_const(b, 65535); WasmBuilder.i32_and(b))); nothing)
+# a primitive type with no builtin type held in a register wider than its own bits (type_promote_integer)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:promoted}, t::Type)::Bool =
+    t isa DataType && t !== Bool && !(t <: Base.BitInteger) && (local r = type_promote_integer(t); r !== nothing && sizeof(t) < sizeof(r))
 
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:signed_view}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing =
-    (t <: Unsigned && (sizeof(t) == 1 ? WasmBuilder.i32_extend8_s(b) : WasmBuilder.i32_extend16_s(b)); nothing)
+# a narrow integer's register: a promoted primitive's the one LLVM promotes it to, an 8- or 16-bit integer's the i32
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:register}, t::Type)::WasmBuilder.IR.NumType =
+    generate_static_intrinsic(Val(:promoted), t) && type_promote_integer(t) === UInt64 ? WasmBuilder.IR.NumType_i64 : WasmBuilder.IR.NumType_i32
 
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:unsigned_view}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing =
-    (t <: Signed && (WasmBuilder.i32_const(b, sizeof(t) == 1 ? 255 : 65535); WasmBuilder.i32_and(b)); nothing)
+# the form a narrow integer is held in: sign-extended (:sext), zero-extended (:zext), or a promoted
+# primitive's any-extended register (:any)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:form}, t::Type)::Symbol =
+    generate_static_intrinsic(Val(:promoted), t) ? :any : t <: Signed ? :sext : :zext
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(::Val{:put_form}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing
+    local form = generate_static_intrinsic(Val(:form), t)
+    form === :sext && LLVM.promote_int_op_sign_extend(b, generate_static_intrinsic(Val(:register), t), 8 * sizeof(t))
+    form === :zext && LLVM.promote_int_op_zero_extend(b, generate_static_intrinsic(Val(:register), t), 8 * sizeof(t))
+    return nothing
+end
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(::Val{:signed_view}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing
+    generate_static_intrinsic(Val(:form), t) === :sext || LLVM.promote_int_op_sign_extend(b, generate_static_intrinsic(Val(:register), t), 8 * sizeof(t))
+    return nothing
+end
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(::Val{:unsigned_view}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing
+    generate_static_intrinsic(Val(:form), t) === :zext || LLVM.promote_int_op_zero_extend(b, generate_static_intrinsic(Val(:register), t), 8 * sizeof(t))
+    return nothing
+end
+
+# the view an equality compare reads (LegalizeIntegerTypes.cpp:2338 SExtOrZExtPromotedOperands, which
+# PromoteSetCCOperands takes for an equality and an unsigned compare): a sign-extended value as it is
+# (ComputeMaxSignificantBits no more than its type's width), a zero-extended one as it is too, where LLVM
+# writes the zext_inreg that DAGCombine folds away against its known zero bits (no instruction remains),
+# and an any-extended one zero-extended, as wasm prefers (its isSExtCheaperThanZExt the default, false)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(::Val{:extended_view}, b::WasmBuilder.InstructionsBuilder, t::Type)::Nothing
+    generate_static_intrinsic(Val(:form), t) === :any && LLVM.promote_int_op_zero_extend(b, generate_static_intrinsic(Val(:register), t), 8 * sizeof(t))
+    return nothing
+end
 
 # a String's data operations (src/julia/wasm_array.jl), the calls dart's String patches make on a
 # String's `_data`: each reads the field (an InstanceGet of the String class's `_data`, its
@@ -1800,13 +1837,18 @@ end
     local second_type = dart_type_of(self, second)
     local w = type_of_exp(self, first)
     # an 8- or 16-bit integer is held in its type's one form (sign- or zero-extended, Julia's ABI), so
-    # two of a type are egal exactly when their i32s are equal, as jl_egal compares their bytes
-    local held_small = first_type isa DataType && first_type <: Union{Int8,UInt8,Int16,UInt16} && w == i32
-    if first_type === second_type && (full(first_type, w) || first_type === Bool || held_small)
+    # two of a type are egal exactly when their i32s are equal, as jl_egal compares their bytes; a
+    # promoted primitive's bits are compared at its own width (emit_bits_compare's ICmpEQ of its iN, julia/src/codegen.cpp:3455),
+    # each read in the view an equality compare reads (PromoteSetCCOperands)
+    local narrow = first_type isa DataType && generate_static_intrinsic(Val(:narrow), first_type) && w == generate_static_intrinsic(Val(:register), first_type)
+    local extended_view() = narrow && generate_static_intrinsic(Val(:extended_view), b[], first_type)
+    if first_type === second_type && (full(first_type, w) || first_type === Bool || narrow)
         translate_expression(code_gen, first, w)
+        extended_view()
         w == f64 && WasmBuilder.i64_reinterpret_f64(b[])
         w == f32 && WasmBuilder.i32_reinterpret_f32(b[])
         translate_expression(code_gen, second, w)
+        extended_view()
         w == f64 && WasmBuilder.i64_reinterpret_f64(b[])
         w == f32 && WasmBuilder.i32_reinterpret_f32(b[])
         (w == i64 || w == f64) ? WasmBuilder.i64_eq(b[]) : WasmBuilder.i32_eq(b[])
@@ -2112,9 +2154,15 @@ end
             for (k, field) in enumerate(fields)
                 local index = t.field_index[field]
                 local storage = info.struct_.fields[index + 1].type
+                # a promoted primitive's bits compared at its own size (jl_egal__bits' memcmp of
+                # jl_datatype_size bytes, julia/src/builtins.c:302 jl_egal__bits), its register's bits above them dropped by
+                # the zero extension within the register (getZeroExtendInReg), as LLVM's truncating store
+                # of its iN writes only those bytes (LegalizeIntegerTypes.cpp:2683 PromoteIntOp_STORE)
+                local promoted = generate_static_intrinsic(Val(:promoted), field.type)
                 for w in (u, v)
                     WasmBuilder.local_get(b, w)
                     storage isa WasmBuilder.IR.PackedType ? WasmBuilder.struct_get_u(b, info.struct_, index) : WasmBuilder.struct_get(b, info.struct_, index)
+                    promoted && generate_static_intrinsic(Val(:extended_view), b, field.type)
                 end
                 compare(storage isa WasmBuilder.IR.PackedType ? storage : WasmBuilder.unpacked(storage), "$cls's field $(field.name)")
                 k > 1 && WasmBuilder.i32_and(b)
@@ -2355,19 +2403,27 @@ end
                to_w == f64 ? WasmBuilder.f64_reinterpret_i64 : to_w == i64 ? WasmBuilder.i64_reinterpret_f64 :
                to_w == f32 ? WasmBuilder.f32_reinterpret_i32 : WasmBuilder.i32_reinterpret_f32
     end
-    if emit === nothing && (narrow(from) || narrow(to)) && from isa DataType && from <: Base.BitInteger && to isa DataType
-        # a conversion with an 8- or 16-bit side: the source read in the view the conversion
-        # needs, the instruction between widths, and the result put in its type's form
+    # an integer of either kind: a Julia BitInteger or a narrow one (a promoted primitive among them)
+    local integer(t::Type) = t isa DataType && (t <: Base.BitInteger || narrow(t))
+    if emit === nothing && (narrow(from) || narrow(to)) && integer(from) && to isa DataType
+        # a conversion with a narrow side: the source read in the view the conversion needs, the
+        # instruction between the registers, and the result put in its type's form. Into a promoted
+        # primitive, LLVM's PromoteIntRes_TRUNCATE (LegalizeIntegerTypes.cpp:1859: the operand, truncated to
+        # the promoted register where wider) and PromoteIntRes_BITCAST (:540, the operand of the same
+        # register as it is); out of one, PromoteIntOp_SIGN_EXTEND (:2643) and PromoteIntOp_ZERO_EXTEND
+        # (:2841), the operand extended within its register and any-extended to the result's
         local view = (f === Core.Intrinsics.sext_int || f === Core.Intrinsics.sitofp) ? signed_view :
                      (f === Core.Intrinsics.zext_int || f === Core.Intrinsics.uitofp) ? unsigned_view : (_::Type -> nothing)
         local between = nothing
-        if (f === Core.Intrinsics.trunc_int || f === Core.Intrinsics.bitcast) && to <: Base.BitInteger && sizeof(to) <= sizeof(from)
-            between = from_w == i64 ? WasmBuilder.i32_wrap_i64 : (_ -> nothing)
-        elseif (f === Core.Intrinsics.sext_int || f === Core.Intrinsics.zext_int) && to <: Base.BitInteger && sizeof(to) >= sizeof(from)
-            between = to_w == i64 ? (f === Core.Intrinsics.sext_int ? WasmBuilder.i64_extend_i32_s : WasmBuilder.i64_extend_i32_u) : (_ -> nothing)
+        if (f === Core.Intrinsics.trunc_int || f === Core.Intrinsics.bitcast) && integer(to) && sizeof(to) <= sizeof(from)
+            between = from_w == i64 && to_w == i32 ? WasmBuilder.i32_wrap_i64 : (_ -> nothing)
+        elseif (f === Core.Intrinsics.sext_int || f === Core.Intrinsics.zext_int) && integer(to) && sizeof(to) >= sizeof(from)
+            between = to_w == i64 && from_w == i32 ? (f === Core.Intrinsics.sext_int ? WasmBuilder.i64_extend_i32_s : WasmBuilder.i64_extend_i32_u) : (_ -> nothing)
         elseif (f === Core.Intrinsics.sitofp || f === Core.Intrinsics.uitofp) && full(to, to_w) && (to_w == f32 || to_w == f64)
             local s_ = f === Core.Intrinsics.sitofp
-            between = to_w == f64 ? (s_ ? WasmBuilder.f64_convert_i32_s : WasmBuilder.f64_convert_i32_u) : (s_ ? WasmBuilder.f32_convert_i32_s : WasmBuilder.f32_convert_i32_u)
+            between = from_w == i64 ?
+                (to_w == f64 ? (s_ ? WasmBuilder.f64_convert_i64_s : WasmBuilder.f64_convert_i64_u) : (s_ ? WasmBuilder.f32_convert_i64_s : WasmBuilder.f32_convert_i64_u)) :
+                (to_w == f64 ? (s_ ? WasmBuilder.f64_convert_i32_s : WasmBuilder.f64_convert_i32_u) : (s_ ? WasmBuilder.f32_convert_i32_s : WasmBuilder.f32_convert_i32_u))
         end
         between === nothing && return nothing
         translate_expression(code_gen, x, from_w)
@@ -2466,8 +2522,10 @@ end
         to isa Type || return nothing
         local x = args[2]
         local from = dart_type_of(self, x)
-        if (f === I.sext_int || f === I.zext_int) && type_expand_integer(to) && from isa DataType && (from <: Base.BitInteger || from === Bool) && sizeof(from) <= 8
-            # the operand in its wasm type, a narrow integer extended within it
+        if (f === I.sext_int || f === I.zext_int) && type_expand_integer(to) && from isa DataType && (from <: Base.BitInteger || from === Bool || narrow(from)) && sizeof(from) <= 8
+            # the operand in its wasm type, a narrow integer extended within it (a promoted primitive's
+            # extension LLVM's PromoteIntOp_SIGN_EXTEND or PromoteIntOp_ZERO_EXTEND, ExpandIntRes_SIGN_EXTEND's
+            # and ExpandIntRes_ZERO_EXTEND's operand)
             local from_w = type_of_exp(self, x)
             translate_expression(code_gen, x, from_w)
             narrow(from) && (f === I.sext_int ? signed_view(from) : unsigned_view(from))
@@ -2708,7 +2766,7 @@ end
 end
 
 # Julia's flipsign_int(x, y): x where y is not negative, else its wrapping negation (Julia's
-# codegen: a select over y >= 0); x and y of one full-width integer type
+# codegen: a select over y >= 0); x and y of one integer type, full-width or narrow
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:flipsign}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
@@ -2716,7 +2774,11 @@ end
     local full(t::Type, w::WasmBuilder.IR.ValueType) = generate_static_intrinsic(Val(:full), t, w)
     local x = args[1]
     local w = type_of_exp(self, x)
-    (w == i32 || w == i64) && full(dart_type_of(self, x), w) && dart_type_of(self, args[2]) === dart_type_of(self, x) || return nothing
+    local t = dart_type_of(self, x)
+    # a narrow integer's sign is read sign-extended within its register (the signed compare's
+    # PromoteSetCCOperands), and the result put in its type's form
+    local narrow = generate_static_intrinsic(Val(:narrow), t) && w == generate_static_intrinsic(Val(:register), t)
+    (w == i32 || w == i64) && (full(t, w) || narrow) && dart_type_of(self, args[2]) === t || return nothing
     local tmp = add_local(code_gen, w)
     local zero() = w == i64 ? WasmBuilder.i64_const(b[], 0) : WasmBuilder.i32_const(b[], 0)
     translate_expression(code_gen, x, w)
@@ -2725,9 +2787,11 @@ end
     WasmBuilder.local_get(b[], tmp)
     w == i64 ? WasmBuilder.i64_sub(b[]) : WasmBuilder.i32_sub(b[])
     translate_expression(code_gen, args[2], w)
+    narrow && generate_static_intrinsic(Val(:signed_view), b[], t)
     zero()
     w == i64 ? WasmBuilder.i64_ge_s(b[]) : WasmBuilder.i32_ge_s(b[])
     WasmBuilder.select(b[], w)
+    narrow && generate_static_intrinsic(Val(:put_form), b[], t)
     return w
 end
 
@@ -2751,12 +2815,15 @@ end
     local yt = dart_type_of(self, y)
     local int_operand(t::Type, w::WasmBuilder.IR.ValueType) = (full(t, w) || narrow(t)) && (w == i32 || w == i64)
     (int_operand(xt, xw) && int_operand(yt, yw)) || return nothing
-    # the width is the value's own, an 8- or 16-bit integer's its type's
+    # the width is the value's own, a narrow integer's (an 8- or 16-bit one, a promoted primitive) its type's
     local width = 8 * sizeof(xt)
     local count = add_local(code_gen, yw)
     local xconst(v::Int) = xw == i64 ? WasmBuilder.i64_const(b[], v) : WasmBuilder.i32_const(b[], v)
     local push_count() = begin
         translate_expression(code_gen, y, yw)
+        # a promoted count is compared unsigned at its own width (the ICmpUGE of Julia's shift), read in
+        # the view an unsigned compare reads (PromoteSetCCOperands)
+        narrow(yt) && generate_static_intrinsic(Val(:extended_view), b[], yt)
         WasmBuilder.local_tee(b[], count)
         yw == xw || (xw == i32 ? WasmBuilder.i32_wrap_i64(b[]) : WasmBuilder.i64_extend_i32_u(b[]))
     end
@@ -2853,28 +2920,41 @@ end
     local put_form(t::Type) = generate_static_intrinsic(Val(:put_form), b[], t)
     local signed_view(t::Type) = generate_static_intrinsic(Val(:signed_view), b[], t)
     local unsigned_view(t::Type) = generate_static_intrinsic(Val(:unsigned_view), b[], t)
+    local extended_view(t::Type) = generate_static_intrinsic(Val(:extended_view), b[], t)
     local t = dart_type_of(self, args[1])
+    # the register the integer is held in: an i32, or a promoted primitive's i64
+    local w = generate_static_intrinsic(Val(:register), t)
     local I = Core.Intrinsics
     local signed_ops = (I.sdiv_int, I.srem_int, I.slt_int, I.sle_int)
     local unsigned_ops = (I.udiv_int, I.urem_int, I.ult_int, I.ule_int)
-    local plain_ops = (I.add_int, I.sub_int, I.mul_int, I.and_int, I.or_int, I.xor_int, I.eq_int, I.ne_int)
-    if length(args) == 2 && (f in signed_ops || f in unsigned_ops || f in plain_ops)
-        local code = Intrinsifier__binary_operator_map[][i32][i32][f]
+    local equality_ops = (I.eq_int, I.ne_int)
+    local plain_ops = (I.add_int, I.sub_int, I.mul_int, I.and_int, I.or_int, I.xor_int)
+    if length(args) == 2 && (f in signed_ops || f in unsigned_ops || f in equality_ops || f in plain_ops)
+        local code = Intrinsifier__binary_operator_map[][w][w][f]
         for a in args
-            translate_expression(code_gen, a, i32)
+            translate_expression(code_gen, a, w)
             f in signed_ops && signed_view(t)
             f in unsigned_ops && unsigned_view(t)
+            f in equality_ops && extended_view(t)
         end
         code(code_gen)
         Intrinsifier_is_comparison(f) && return i32
         put_form(t)
-        return i32
+        return w
     elseif length(args) == 1 && (f === I.neg_int || f === I.not_int)
-        translate_expression(code_gen, args[1], i32)
-        Intrinsifier__unary_operator_map[][i32][f](code_gen)
+        translate_expression(code_gen, args[1], w)
+        Intrinsifier__unary_operator_map[][w][f](code_gen)
         put_form(t)
-        return i32
-    elseif length(args) == 1 && f === I.bswap_int && sizeof(t) == 2
+        return w
+    elseif length(args) == 1 && (f === I.ctlz_int || f === I.cttz_int || f === I.ctpop_int)
+        # a count at the type's own width (Julia's llvm.ctlz, llvm.cttz and llvm.ctpop of its iN, zero
+        # defined, intrinsics.cpp:1696-:1708), promoted as LLVM's type legalizer promotes it
+        translate_expression(code_gen, args[1], w)
+        local count = f === I.ctlz_int ? LLVM.promote_int_res_ctlz : f === I.cttz_int ? LLVM.promote_int_res_cttz : LLVM.promote_int_res_ctpop_parity
+        count(b[], w, 8 * sizeof(t))
+        put_form(t)
+        return w
+    elseif length(args) == 1 && f === I.bswap_int && sizeof(t) == 2 && w == i32
         # a 16-bit byte swap, promoted to i32 as LLVM's type legalizer promotes it
         # (DAGTypeLegalizer::PromoteIntRes_BSWAP: the swap of the zero-extended value, shifted down by 16)
         translate_expression(code_gen, args[1], i32)
