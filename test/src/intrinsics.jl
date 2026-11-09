@@ -385,3 +385,32 @@ end
         @test r.ok || (@info r.label r.why; false)
     end
 end
+
+module AllocationCases
+using WasmTarget: wasm_string_length, wasm_string_alloc, wasm_string_memory, wasm_memory_string
+# each a struct one arm of the intrinsics alone builds: a fresh String (wasm_string_alloc), a byte
+# Memory over a String's data (jl_string_to_genericmemory), a String over a byte Memory
+# (jl_genericmemory_to_string), a SimpleVector made at run time, and an Int128 of two Int64s
+salloc(n::Int64) = wasm_string_length(wasm_string_alloc(n))
+smemory(s::String) = length(wasm_string_memory(s))
+mstring(m::Memory{UInt8}, n::Int64) = wasm_string_length(wasm_memory_string(m, n))
+svec(i::Int64) = Core._svec_len(Core.svec(i, i + 1))
+wide(n::Int64) = Int64((Int128(n) + Int128(n)) % Int64)
+end
+
+@testset "functions.dart: every struct the intrinsics build records its class allocated (recordClassAllocation)" begin
+    # the one new_struct of src/intrinsics.jl records the class of each struct an arm builds, as every
+    # allocation site does (FunctionCollector.recordClassAllocation, functions.dart:446): a class no
+    # constant and no other arm makes is allocated in the closed world only through its arm
+    for (f, argtypes, cls) in ((AllocationCases.salloc, (Int64,), String), (AllocationCases.smemory, (String,), Memory{UInt8}),
+                               (AllocationCases.mstring, (Memory{UInt8}, Int64), String), (AllocationCases.svec, (Int64,), Core.SimpleVector),
+                               (AllocationCases.wide, (Int64,), Int128))
+        # standalone, as WasmTarget's compile translates (src/julia/entry.jl compile_world)
+        @testset "$(nameof(f)): $cls" begin
+            local t = DI.Translator(WasmTarget.build_nir(WI.check_subset(f, argtypes, "intrinsics"), "test"),
+                DI.build_module_output_data(DI.DefaultModuleStrategy(DI.WasmCompilerOptions_default_options())), DI.TranslatorOptions(; standalone = true))
+            DI.translate(t, nothing)
+            @test DI.class_id(t.class_info[cls]) in t.functions[]._allocated_classes
+        end
+    end
+end

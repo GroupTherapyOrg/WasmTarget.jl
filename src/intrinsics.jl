@@ -678,7 +678,9 @@ end
     local at = "$(code_gen.enclosing_member): a String's data"
     local info = get(t.class_info, String, nothing)
     info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String's data operation where String has no class info"), at)
-    local data_index = t.field_index[only(class_instance_fields(String, at))]
+    # the String's one field, its data array (src/julia/classes.jl), read and built by every operation
+    local sdata = only(class_instance_fields(String, at))
+    local data_index = t.field_index[sdata]
     local array_type = array_type_for_dart_type(t, WasmI8; mutable_ = true)
     local data_of(s::NirValue) = (translate_expression(code_gen, s, info.non_nullable_type); WasmBuilder.struct_get(b, info.struct_, data_index))
     local offset(v::NirValue) = (translate_expression(code_gen, v, i64); WasmBuilder.i32_wrap_i64(b))
@@ -703,10 +705,8 @@ end
         WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
         return t.top_type[]
     elseif op === :alloc
-        push_object_header_fields(b, t, info)
-        offset(args[1])
-        WasmBuilder.array_new_default(b, array_type)
-        WasmBuilder.struct_new(b, info.struct_)
+        generate_static_intrinsic(self, Val(:new_struct), info, Dict{String,ClassField}(sdata.name => sdata), Dict{String,Function}(
+            sdata.name => () -> (offset(args[1]); WasmBuilder.array_new_default(b, array_type))))
         return info.non_nullable_type
     elseif op === :copy
         data_of(args[1])
@@ -732,15 +732,13 @@ end
             reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Memory{UInt8}'s data is no String's data array"), at)
         local p = add_local(code_gen, data_ref)
         if op === :memory
+            local mfs = Dict{String,ClassField}(f.name => f for f in mfields)
             # jl_string_to_genericmemory: the String's array, its length the Memory's
             data_of(args[1])
             WasmBuilder.local_set(b, p)
-            push_object_header_fields(b, t, minfo)
-            for f in sort(mfields; by = f -> t.field_index[f])
-                WasmBuilder.local_get(b, p)
-                f === mlength && (WasmBuilder.array_len(b); WasmBuilder.i64_extend_i32_u(b))
-            end
-            WasmBuilder.struct_new(b, minfo.struct_)
+            generate_static_intrinsic(self, Val(:new_struct), minfo, mfs, Dict{String,Function}(
+                mdata.name => () -> WasmBuilder.local_get(b, p),
+                mlength.name => () -> (WasmBuilder.local_get(b, p); WasmBuilder.array_len(b); WasmBuilder.i64_extend_i32_u(b))))
             return minfo.non_nullable_type
         end
         # jl_genericmemory_to_string: the Memory's array where the String takes all of it, else a copy
@@ -752,25 +750,25 @@ end
         WasmBuilder.local_set(b, p)
         offset(args[2])
         WasmBuilder.local_set(b, k)
-        push_object_header_fields(b, t, info)
-        WasmBuilder.local_get(b, k)
-        WasmBuilder.local_get(b, p)
-        WasmBuilder.array_len(b)
-        WasmBuilder.i32_eq(b)
-        WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[data_ref])
-        WasmBuilder.local_get(b, p)
-        WasmBuilder.else_(b)
-        WasmBuilder.local_get(b, k)
-        WasmBuilder.array_new_default(b, array_type)
-        WasmBuilder.local_tee(b, q)
-        WasmBuilder.i32_const(b, 0)
-        WasmBuilder.local_get(b, p)
-        WasmBuilder.i32_const(b, 0)
-        WasmBuilder.local_get(b, k)
-        WasmBuilder.array_copy(b, array_type, array_type)
-        WasmBuilder.local_get(b, q)
-        WasmBuilder.var"end"(b)
-        WasmBuilder.struct_new(b, info.struct_)
+        generate_static_intrinsic(self, Val(:new_struct), info, Dict{String,ClassField}(sdata.name => sdata), Dict{String,Function}(sdata.name => () -> begin
+            WasmBuilder.local_get(b, k)
+            WasmBuilder.local_get(b, p)
+            WasmBuilder.array_len(b)
+            WasmBuilder.i32_eq(b)
+            WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[data_ref])
+            WasmBuilder.local_get(b, p)
+            WasmBuilder.else_(b)
+            WasmBuilder.local_get(b, k)
+            WasmBuilder.array_new_default(b, array_type)
+            WasmBuilder.local_tee(b, q)
+            WasmBuilder.i32_const(b, 0)
+            WasmBuilder.local_get(b, p)
+            WasmBuilder.i32_const(b, 0)
+            WasmBuilder.local_get(b, k)
+            WasmBuilder.array_copy(b, array_type, array_type)
+            WasmBuilder.local_get(b, q)
+            WasmBuilder.var"end"(b)
+        end))
         return info.non_nullable_type
     end
     reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String data operation $op"), at)
@@ -791,12 +789,12 @@ end
     local array_type = (translate_type_of_field(t, data)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
     local element_type = WasmBuilder.unpacked(array_type.element_type[].type)
     local b = code_gen.b[]
-    push_object_header_fields(b, t, sv_info)
-    for element in args
-        translate_expression(code_gen, element, element_type)
-    end
-    WasmBuilder.array_new_fixed(b, array_type, length(args))
-    WasmBuilder.struct_new(b, sv_info.struct_)
+    generate_static_intrinsic(self, Val(:new_struct), sv_info, Dict{String,ClassField}(data.name => data), Dict{String,Function}(data.name => () -> begin
+        for element in args
+            translate_expression(code_gen, element, element_type)
+        end
+        WasmBuilder.array_new_fixed(b, array_type, length(args))
+    end))
     return WasmBuilder.with_nullability(repr(sv_info), false)
 end
 
@@ -831,7 +829,10 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:new_struct}, info::ClassInfo, fs::Dict{String,ClassField}, vals::Dict{String,Function})::Nothing
     local t = translator(self)
     local b = self.code_gen.b[]
-    push_object_header_fields(b, t, info)
+    # a primitive class's struct is a box's, its class id alone ahead of its value (a 128-bit integer's
+    # two halves), as dart's boxing sites push it inline (translator.dart:1642 convertType,
+    # constants.dart:854); any other class's header is pushObjectHeaderFields
+    info.cls isa DataType && isprimitivetype(info.cls) ? WasmBuilder.i32_const(b, class_id(info)) : push_object_header_fields(b, t, info)
     for fld in sort(collect(values(fs)); by = (x::ClassField) -> t.field_index[x])
         vals[fld.name]()
     end
@@ -1621,16 +1622,15 @@ end
         reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a tuple of type $tuple_type, of no fixed length, built at run time"), "$(self.enclosing_member)")
     local rinfo = get(t.class_info, tuple_record_class(length(values)), nothing)
     rinfo === nothing && reject!(Internal("$at: no record class for a tuple of $(length(values))"), "$(self.enclosing_member)")
-    record_class_allocation(t.functions[], class_id(rinfo))
-    push_object_header_fields(b, t, rinfo)
     local fields = class_instance_fields(rinfo.cls, at)
+    local vals = Dict{String,Function}()
     for (k, value) in enumerate(values)
         local field = fields[k]
         local p = tt.parameters[k]
-        WasmBuilder.local_get(b, value)
-        convert_type(t, b, value.type, WasmBuilder.unpacked(rinfo.struct_.fields[t.field_index[field] + 1].type); boxed_class = p isa DataType && isconcretetype(p) ? p : nothing)
+        vals[field.name] = () -> (WasmBuilder.local_get(b, value);
+            convert_type(t, b, value.type, WasmBuilder.unpacked(rinfo.struct_.fields[t.field_index[field] + 1].type); boxed_class = p isa DataType && isconcretetype(p) ? p : nothing))
     end
-    WasmBuilder.struct_new(b, rinfo.struct_)
+    generate_static_intrinsic(intrinsifier, Val(:new_struct), rinfo, Dict{String,ClassField}(f.name => f for f in fields), vals)
     return rinfo.non_nullable_type
 end
 
@@ -2432,11 +2432,9 @@ end
     # ahead of its value (dart's boxed classes sit below the top type)
     local make(T::DataType, h::Tuple{Union{WasmBuilder.IR.Local,Int64},Union{WasmBuilder.IR.Local,Int64}}) = begin
         local info = info_of(T)
-        local (l, hf) = fields(T)
-        l < hf || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the 128-bit class $T's halves out of order"), at)
-        WasmBuilder.i32_const(b, class_id(info))
-        sd_get(b, h[1]); sd_get(b, h[2])
-        WasmBuilder.struct_new(b, info.struct_)
+        local halves = class_instance_fields(T, at)
+        generate_static_intrinsic(self, Val(:new_struct), info, Dict{String,ClassField}(f.name => f for f in halves),
+            Dict{String,Function}(halves[1].name => () -> sd_get(b, h[1]), halves[2].name => () -> sd_get(b, h[2])))
         info.non_nullable_type
     end
     if length(args) == 2 && (local c = dart_type_of(self, args[1]); c isa DataType && c <: Type && length(c.parameters) == 1)
