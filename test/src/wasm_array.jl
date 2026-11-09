@@ -18,6 +18,12 @@ const W = WasmTarget
     W.wasm_string_copy!(t, 0, a, 0, ncodeunits(a))
     W.wasm_string_copy!(t, ncodeunits(a), b, 0, ncodeunits(b))
     @test t == a * b && ncodeunits(t) == ncodeunits(a) + ncodeunits(b)
+    # a Char's bytes as Base's __unsafe_string! stores them: each written at its offset
+    local u = W.wasm_string_alloc(3)
+    for (i, v) in enumerate(codeunits("日"))
+        W.wasm_string_write!(u, i - 1, v)
+    end
+    @test u == "日"
 end
 
 end

@@ -133,7 +133,7 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..wasm_array_read, ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_egal,
        ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_string, ..wasm_memory_unset!,
        ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length,
-       ..wasm_string_memory
+       ..wasm_string_memory, ..wasm_string_write!
 import Base: @nospecializeinfer
 import Core: MethodInstance
 import ..LLVM

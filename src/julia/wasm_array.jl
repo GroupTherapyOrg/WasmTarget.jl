@@ -256,6 +256,18 @@ The code unit at offset `i` (from 0) of `s`'s data, unchecked: dart's `WasmArray
 end
 
 """
+    wasm_string_write!(s, i, v) -> Nothing
+
+Stores the code unit `v` at offset `i` (from 0) of `s`'s data, a fresh String's (wasm_string_alloc),
+unchecked: dart's `I8ArrayExt.write`, `struct.get _data; array.set`. Natively Julia's store of the
+byte through the String's pointer, its `i + 1`th, as Base's `__unsafe_string!` fills a fresh String.
+"""
+@quarantine "a String's byte stored at an offset is its wasm data array's element set (sdk/lib/_wasm/wasm_types.dart:768 I8ArrayExt.write), Julia's unsafe_store! natively" Base.unsafe_store! @noinline function wasm_string_write!(s::String, i::Int, v::UInt8)::Nothing
+    GC.@preserve s unsafe_store!(pointer(s), v, i + 1)
+    return nothing
+end
+
+"""
     wasm_string_alloc(n) -> String
 
 A new String of `n` code units, each 0, to be filled before it is read: dart's

@@ -180,15 +180,21 @@ end
 end
 
 module StringDataCases
-using WasmTarget: wasm_string_length, wasm_string_alloc, wasm_string_codeunit, wasm_string_copy!
+using WasmTarget: wasm_string_length, wasm_string_alloc, wasm_string_codeunit, wasm_string_copy!, wasm_string_write!
 # a String's length and a fresh String's (src/julia/wasm_array.jl), === on two Strings, a code unit,
-# and a code unit of two Strings copied into a fresh one, by `k`
+# a code unit written into a fresh String, and a code unit of two Strings copied into a fresh one, by `k`
 function strops(k::Int64, b::Bool)
     k == 0 && return wasm_string_length(b ? "héllo" : "日本")
     k == 1 && return Int64((b ? "abc" : "abd") === "abc")
     k == 2 && return Int64((b ? "abc" : "abcd") === "abc")
     k == 3 && return wasm_string_length(wasm_string_alloc(b ? 7 : 0))
     k == 4 && return Int64(wasm_string_codeunit("héllo", b ? 2 : 0))
+    if k == 5
+        local w = wasm_string_alloc(2)
+        wasm_string_write!(w, 0, 0xc3)
+        wasm_string_write!(w, 1, b ? 0xa9 : 0x80)
+        return Int64(wasm_string_codeunit(w, 1)) + Int64(w === "é")
+    end
     local x = b ? "hé" : "x"
     local y = "llo"
     local s = wasm_string_alloc(wasm_string_length(x) + wasm_string_length(y))
@@ -202,7 +208,7 @@ end
     # wasm_string_length is `struct.get _data; array.len`, wasm_string_alloc a String struct over a
     # fresh array (WasmArrayRef.length, the WasmArray constructor); === compares lengths, then bytes,
     # as jl_egal does: non-ASCII text's bytes, equal and unequal contents of equal and unequal lengths
-    local args = [(Int64(k), b) for k in 0:5 for b in (true, false)]
+    local args = [(Int64(k), b) for k in 0:6 for b in (true, false)]
     local bytes = WI.compile(StringDataCases.strops, (Int64, Bool))
     for r in WTRunner.run_cases([WTRunner.RunCase("strops$a", bytes, a, StringDataCases.strops(a...)) for a in args])
         @test r.ok || (@info r.label r.why; false)

@@ -652,12 +652,12 @@ end
 # String's `_data`: each reads the field (an InstanceGet of the String class's `_data`, its
 # ClassField) and applies the WasmArray operation, one instruction as dart's intrinsifier emits it:
 # WasmArrayRef.length (intrinsics.dart:626, array.len), I8ArrayExt.readUnsigned (:1351, array.get_u),
-# the WasmArray constructor (:1959, array.new_default, here inside the String's struct, its header
+# I8ArrayExt.write (:1372, array.set), the WasmArray constructor (:1959, array.new_default, here inside the String's struct, its header
 # first) and WasmArrayExt.copy (:1254, array.copy). An Int offset or length is wrapped to the i32 a
 # wasm array takes, as dart wraps its int.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:string_data_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
     target.def in methods(wasm_string_length) ? :length : target.def in methods(wasm_string_codeunit) ? :codeunit :
-    target.def in methods(wasm_string_alloc) ? :alloc : target.def in methods(wasm_string_copy!) ? :copy :
+    target.def in methods(wasm_string_write!) ? :write : target.def in methods(wasm_string_alloc) ? :alloc : target.def in methods(wasm_string_copy!) ? :copy :
     target.def in methods(wasm_string_memory) ? :memory : target.def in methods(wasm_memory_string) ? :string : nothing
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:string_data}, op::Symbol, args::Vector{NirValue})::WasmBuilder.IR.ValueType
@@ -682,6 +682,16 @@ end
         offset(args[2])
         WasmBuilder.array_get_u(b, array_type)
         return i32
+    elseif op === :write
+        # the byte a UInt8 is, an i32 already in its form (translateType), so dart's wrap of its int
+        # value to the i32 an i8 array takes has nothing to wrap
+        data_of(args[1])
+        offset(args[2])
+        translate_expression(code_gen, args[3], i32)
+        WasmBuilder.array_set(b, array_type)
+        # dart's void intrinsics leave the null of the top type (I8ArrayExt.write), Julia's nothing
+        WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+        return t.top_type[]
     elseif op === :alloc
         push_object_header_fields(b, t, info)
         offset(args[1])
