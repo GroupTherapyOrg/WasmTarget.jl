@@ -24,6 +24,9 @@
 # Cases:  WT_SMOKE_CASES=<file> also writes each case's outcome, one line per case,
 #         `<group/case>\t<outcome>\t<seconds>\t<why>` (outcome one of the ladder's: passed, wrong,
 #         errored, unported, outside), the input of the climb's score (dev/climb/climb.py)
+# Only:   WT_SMOKE_ONLY=<file> runs, of the groups taken, only the cases the file lists (`<group/case>` a line)
+#         and every case WT_SMOKE_KNOWN=<file> does not list (one the corpus gained since): the climb's
+#         measurement of a move, its hold's cases and the sentinel groups' (dev/climb/climb.py verify)
 # ============================================================================
 const SMOKE_T_START = time()
 using WasmTarget
@@ -135,6 +138,9 @@ end
 
 const SMOKE_TIMES = get(ENV, "WT_SMOKE_TIMES", "") == "1"
 const SMOKE_CASES = get(ENV, "WT_SMOKE_CASES", "")
+_labels(var) = (p = get(ENV, var, ""); isempty(p) ? nothing : Set(String.(filter(!isempty, strip.(readlines(p))))))
+const SMOKE_ONLY, SMOKE_KNOWN = _labels("WT_SMOKE_ONLY"), _labels("WT_SMOKE_KNOWN")
+_runs(label) = SMOKE_ONLY === nothing || label in SMOKE_ONLY || (SMOKE_KNOWN !== nothing && !(label in SMOKE_KNOWN))
 _smoke_time(what, t) = SMOKE_TIMES && println("smoke time: ", what, " ", round(time() - t; digits = 1), " s")
 
 function main()
@@ -159,6 +165,7 @@ function main()
         ngroups += 1
         local tg = time()
         for case in cases
+            _runs("$group/$(case[1])") || continue
             local name, f, args = case[1], case[2], case[3:end]
             local tc = time()
             local outcome, why = _ladder(f, args)

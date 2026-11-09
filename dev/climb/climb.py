@@ -736,6 +736,14 @@ def verify(slot, h):
     env = dict(os.environ, JULIA_NUM_THREADS="1", WT_SMOKE_CASES=out)
     if groups and not full:
         env["WT_SMOKE_EXACT"] = "1"
+        # only the hold's cases and the sentinel groups', and any case the corpus gained since the scored head: a hold
+        # of 256 cases spans most groups, and running them whole took an hour a measurement (2026-11-09)
+        known = [l for l, _, _, _ in head_cases()]
+        sent = set(sentinels())
+        only = set(h["cases"]) | {l for l in known if l.split("/", 1)[0] in sent}
+        for name, labels in (("WT_SMOKE_ONLY", only), ("WT_SMOKE_KNOWN", known)):
+            f = os.path.join(slot, ".wtd", name.lower() + ".txt")
+            open(f, "w").write("\n".join(sorted(labels)) + "\n"); env[name] = f
     env["JULIA_DEPOT_PATH"] = sh(["bash", os.path.join(ROOT, "dev", "depot.sh"), "path", slot]).stdout.strip()
     with julia_slot("verify"):
         try:   # the slot's test/smoke.jl and runner: G5 has held them to origin's before this runs; its corpus may gain cases
