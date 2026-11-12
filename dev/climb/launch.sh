@@ -154,14 +154,14 @@ loop() {   # a loop of one part: $1 its name, $2 its sleep after an idle (exit 3
 }
 loop scoreboard 120 score-tick
 loop lander 180 lander
-for i in $(seq "$(py nslots)"); do loop "climb-$i" 120 slot "climb-$i"; done
+for n in $(py slot-names); do loop "$n" 120 slot "$n"; done   # climb.py slot_names: none for slots: 0
 # the heartbeat (O5-8, O6-6): touched every minute while every loop's stamp (logs/<loop>.stamp, written at each
 # iteration and each step of progress, core.beat) is younger than that loop's DEFAULTS loop_stale_s and none has failed
 # five times in a row, under a power assertion named for it (pmset -g assertions: "caffeinate asserting on behalf of
 # '.../wt-climb-heartbeat'"), so the Mac does not idle to sleep under the climb on AC and the watcher tells Dale when any
 # one loop dies or hangs; `caffeinate -s` holds only on AC (O9-2: on battery the climb starts nothing, and `-i` kept the
 # Mac awake until its battery emptied; the driver's awake clocks survive a sleep, O7-1)
-stamps=""; for n in scoreboard lander $(seq -f 'climb-%g' "$(py nslots)"); do
+stamps=""; for n in scoreboard lander $(py slot-names); do
   stamps="$stamps $n:$(here default loop_stale_s | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d[sys.argv[1].split("-")[0]])' "$n")"
 done
 mkdir -p "$watch"; cat > "$watch/wt-climb-heartbeat" <<BEAT

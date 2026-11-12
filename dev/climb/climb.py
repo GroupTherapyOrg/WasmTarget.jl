@@ -55,6 +55,12 @@ from slots import *   # noqa: F403
 
 
 # ---------------------------------------------------------------- the loops
+def slot_names():
+    """The slots' loops, `climb-1` to `climb-<slots>`, none for `slots: 0`: the one source of the names, read by both of
+    launch.sh's loops (spec v20 F2; macOS `seq 0` prints `1 0`)."""
+    return [f"climb-{i}" for i in range(1, cfg()["slots"] + 1)]
+
+
 @contextlib.contextmanager
 def loop_lock(name):
     """One process per loop and per slot (20): a second one exits at once (yields False)."""
@@ -380,7 +386,7 @@ def main():
     up = sp.add_parser("unpark"); up.add_argument("hold_id")
     j = sp.add_parser("judge-eval"); j.add_argument("-n", type=int, default=None)
     so = sp.add_parser("slot"); so.add_argument("name")
-    sp.add_parser("lander"); sp.add_parser("score-tick"); sp.add_parser("nslots"); sp.add_parser("resume-stopped"); sp.add_parser("hill")
+    sp.add_parser("lander"); sp.add_parser("score-tick"); sp.add_parser("slot-names"); sp.add_parser("resume-stopped"); sp.add_parser("hill")
     sp.add_parser("reap-orphans")
     nt = sp.add_parser("alarm"); nt.add_argument("name"); nt.add_argument("title"); nt.add_argument("text")
     sp.add_parser("door-probe"); sp.add_parser("agent-probe"); sp.add_parser("claim-repo"); df = sp.add_parser("default"); df.add_argument("key")
@@ -437,7 +443,7 @@ def main():
         update_json("parked.json", {}, lambda p: p.pop(a.hold_id, None)); event("unparked", hold_id=a.hold_id)
         print(f"unparked {a.hold_id}")
     elif a.cmd == "judge-eval": judge_eval(a.n)
-    elif a.cmd == "nslots": print(cfg()["slots"])
+    elif a.cmd == "slot-names": print(" ".join(slot_names()))
     elif a.cmd == "resume-stopped": pass   # resume_orphans() above is the whole command
     elif a.cmd == "reap-orphans":   # a killed driver's build-user processes, each role whose lock is free (door.reap_orphans)
         for r, ps in door.reap_orphans().items():
