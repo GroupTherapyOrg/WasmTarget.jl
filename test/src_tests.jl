@@ -18,7 +18,12 @@ if Sys.isapple() && abspath(PROGRAM_FILE) == (@__FILE__) && get(ENV, "CHECK_LAND
     error("test/src_tests.jl runs on the performance cores only as a landing's check: run it under " *
           "`taskpolicy -b`, run one file of test/src/ with `bash dev/lanetest.sh test/src/<file>.jl`, or commit and let dev/autoship.sh check it")
 end
-using Test, WasmTarget, Base64
+using Test, Base64
+# the judge's instruction counter and canary load before any src does, unguarded (spec v20 F3, architect round 17 5): no
+# load-time code in src (an `__init__` defining `Main._wt_canary` first) can stand in for either
+Base.include(Main, joinpath(@__DIR__, "instructions.jl"))
+Base.include(Main, joinpath(@__DIR__, "src_canary.jl"))
+using WasmTarget
 const SRC_TEST_DIR = joinpath(@__DIR__, "src")
 const SRC_TESTS = sort!([relpath(joinpath(d, f), SRC_TEST_DIR)
                          for (d, _, fs) in walkdir(SRC_TEST_DIR) for f in fs if endswith(f, ".jl")])
@@ -121,7 +126,6 @@ wt_progress(s::AbstractString) = isempty(_WT_PROGRESS) || write(_WT_PROGRESS, s)
 # pipeline) goes to WT_SRC_WARM, so the driver predicts a check's shards from the score's measures
 const _WT_RECORDS = get(ENV, "WT_SRC_RECORDS", "")
 const _WT_MEASURED = !isempty(_WT_RECORDS)
-isdefined(Main, :_wt_instructions) || Base.include(Main, joinpath(@__DIR__, "instructions.jl"))
 _WT_MEASURED && !Sys.isapple() && error("WT_SRC_RECORDS measures instructions by macOS's proc_pid_rusage; dev/check.sh and the climb run on macOS alone")
 # a file's cost counts what D14's band reads of its shard's tree: its own instructions, and the CPU seconds of the
 # children it ran (wasm-opt, node, a perl watchdog), which the band judges one for one, at the shards' performance-core
@@ -163,7 +167,6 @@ function _wt_red(ts)::Bool
     local n = Test.get_test_counts(ts)
     return n.fails + n.errors + n.cumulative_fails + n.cumulative_errors > 0
 end
-isdefined(Main, :_wt_canary) || Base.include(Main, joinpath(@__DIR__, "src_canary.jl"))
 # WT_SRC_STOP names a file the climb's driver makes when a landing waits for the score's lock: the run stops before its
 # next file, runs the canary and exits, so every process that wrote records ends with its canary (never killed between
 # files), and the driver starts the rest after the landing (dev/climb/measure.py src_run)
