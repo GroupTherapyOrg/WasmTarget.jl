@@ -119,7 +119,8 @@ def common_path(name, write=False):
 
 def claim_repo():
     """`climb.py claim-repo`: this repository's common dir names the running STATE as its owner, refused when it names
-    another state that exists (its own claim-repo is the way back), so two states never both write its logs."""
+    another state that exists (its own claim-repo is the way back), or any other state when STATE is overridden, so two
+    states never both write its logs."""
     owner, me = claimed_by(), os.path.realpath(STATE)
     # who may claim (spec v19 P4, red round 16 2): the repository's default state (<its parent>/.wt-climb, no
     # WT_CLIMB_STATE override), or an overridden state when the repository is a clone's own .git (its git dir is its
@@ -127,11 +128,17 @@ def claim_repo():
     default = os.path.realpath(os.path.join(os.path.dirname(REPO), ".wt-climb"))
     gitdir = sh(["git", "rev-parse", "--path-format=absolute", "--git-dir"], check=True).stdout.strip()
     own_git = os.path.realpath(gitdir) == os.path.realpath(COMMON)
-    if os.environ.get("WT_CLIMB_STATE") and me != default and not own_git:
+    overridden = bool(os.environ.get("WT_CLIMB_STATE")) and me != default
+    if overridden and not own_git:
         raise ClimbError(f"{me} is an overridden state run from a linked worktree ({gitdir}) of {COMMON}: it claims nothing; "
                          "the repository's own state is its default, and a scratch state claims a clone of its own")
-    if owner and owner != me and os.path.isdir(owner):
-        raise ClimbError(f"{COMMON} is claimed by the state {owner}, which exists: not claimed for {me}")
+    # an overridden state never replaces another's marker, whether or not that state's directory exists (spec v20 F5,
+    # red round 17 3: the default state moved aside, a probe in the real checkout would claim it); only the default
+    # state re-claims a repository whose owner is gone
+    if owner and owner != me and (overridden or os.path.isdir(owner)):
+        raise ClimbError(f"{COMMON} is claimed by the state {owner}"
+                         f"{', which exists' if os.path.isdir(owner) else ''}: not claimed for {me}"
+                         f"{' (an overridden state never replaces a claim; only the default state re-claims)' if overridden else ''}")
     write_atomic(CLAIM, me + "\n")
     return me
 DRIVER = os.path.join(WORKTREES, "climb-driver")   # the loops run landed code only, from here (launch.sh)
