@@ -23,6 +23,19 @@ using Test, Base64
 # load-time code in src (an `__init__` defining `Main._wt_canary` first) can stand in for either
 Base.include(Main, joinpath(@__DIR__, "instructions.jl"))
 Base.include(Main, joinpath(@__DIR__, "src_canary.jl"))
+# the canary's own methods, bound before any src loads (spec v20 G1, red round 18 1): each canary call first requires
+# that `_wt_canary` still dispatches to these, defined in test/src_canary.jl; a method load-time src (or a test file)
+# put in their place reads the canary wrong, which voids the process, located
+const _WT_CANARY_FILE = joinpath(@__DIR__, "src_canary.jl")
+const _WT_CANARY_M = (which(_wt_canary, Tuple{}), which(_wt_canary, Tuple{String}))
+function _wt_canary_bound(f::Union{Nothing,String} = nothing)::Tuple{Bool,String}
+    local now = (which(_wt_canary, Tuple{}), which(_wt_canary, Tuple{String}))
+    if now !== _WT_CANARY_M || any(m -> String(m.file) != _WT_CANARY_FILE, now)
+        return false, "the canary is no longer test/src_canary.jl's: _wt_canary dispatches to " *
+                      join(("$(m.file):$(m.line)" for m in now), " and ") * ", not the methods bound before src loaded"
+    end
+    return f === nothing ? _wt_canary() : _wt_canary(f)
+end
 using WasmTarget
 const SRC_TEST_DIR = joinpath(@__DIR__, "src")
 const SRC_TESTS = sort!([relpath(joinpath(d, f), SRC_TEST_DIR)
@@ -198,12 +211,12 @@ end
         local g = _WT_MEASURED ? _wt_cost(i0, c0) : 0.0
         if !isempty(_WT_RECORDS)   # F's row carries its canary run AS F, after it (spec v17 Z4): passed, or failed
             local why = _wt_why(ts)
-            local cok, cwhy = _wt_canary(f)
+            local cok, cwhy = _wt_canary_bound(f)
             _wt_record("row\t$f\t$(_wt_red(ts) ? "failed" : "passed")\t$g\t$(Base64.base64encode(why))\t$(cok ? "passed" : "failed:" * Base64.base64encode(cwhy))")
         end
     end
     if !isempty(_WT_RECORDS)   # the judge's canary, last, through the same record path (test/src_canary.jl)
-        local ok, why = _wt_canary()
+        local ok, why = _wt_canary_bound()
         _wt_record("started\t~canary")
         _wt_record("row\t~canary\t$(ok ? "passed" : "failed")\t0.0\t$(Base64.base64encode(why))")
     end
