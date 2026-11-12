@@ -19,7 +19,7 @@ f_enum(c::Hue) = c == red ? 1 : 2
 end
 
 const W = WasmTarget
-_classes(f, at) = W.closed_world_classes(W.build_nir(W.check_subset(f, at, "classes"), "classes"), "classes")
+_classes(f, at) = W.closed_world_classes(W.build_nir(W.check_subset(f, at, "classes", Base.get_world_counter()), "classes"), "classes")
 
 @testset "the closed world's classes (1.C)" begin
     # the kinds are Julia's own
@@ -62,7 +62,7 @@ end
 
 @testset "classes: a type value brings the classes it denotes" begin
     local W = WasmTarget
-    local cs(f, at) = W.closed_world_classes(W.build_nir(W.check_subset(f, at, "classes"), "classes"), "classes")
+    local cs(f, at) = W.closed_world_classes(W.build_nir(W.check_subset(f, at, "classes", Base.get_world_counter()), "classes"), "classes")
     # Type{Int8}: its kind, DataType, and Int8 itself, whose class id a type value's layout holds
     local c = cs(ClassesTypeValueCases.f_type, (Type{Int8},))
     @test DataType in c && Int8 in c
@@ -80,7 +80,7 @@ end
 
 @testset "classes: a constant's class, never a name's or a callee's" begin
     local W = WasmTarget
-    local nw = W.build_nir(W.check_subset(ClassesConstantCases.bump, (Int,), "classes"), "classes")
+    local nw = W.build_nir(W.check_subset(ClassesConstantCases.bump, (Int,), "classes", Base.get_world_counter()), "classes")
     # the constant binding's value is read and written through its field; its class is no argument's or
     # statement's type, only the operand's (nir_value_type)
     @test !any(b -> any(t -> t === Base.RefValue{Int64}, b.types), nw)
@@ -90,7 +90,7 @@ end
     @test Base.RefValue{Int64} in cs && Int64 in cs
     # a field builtin's field name and an intrinsic callee name what the call acts on: no class of theirs
     # beyond the runtime's roots', which every closed world holds (a TypeError's Symbol)
-    local root_classes = W.closed_world_classes(W.build_nir(W.check_subset(ClassesCases.f_arith, (Int, Int), "classes"), "classes"), "classes")
+    local root_classes = W.closed_world_classes(W.build_nir(W.check_subset(ClassesCases.f_arith, (Int, Int), "classes", Base.get_world_counter()), "classes"), "classes")
     local own = setdiff(cs, root_classes)
     @test !(Symbol in own) && !(Core.IntrinsicFunction in cs) && !(typeof(Core.getfield) in cs)
     for b in nw, st in b.stmts
@@ -100,7 +100,7 @@ end
     end
     # a Symbol a builtin takes as data is a value: `x === :a`'s operand, read from the program, and
     # tuple's element; one naming a field or a memory ordering is not
-    local sym = W.build_nir(W.check_subset(ClassesConstantCases.is_a, (Symbol,), "classes"), "classes")
+    local sym = W.build_nir(W.check_subset(ClassesConstantCases.is_a, (Symbol,), "classes", Base.get_world_counter()), "classes")
     # the program's own `===`, the runtime's roots holding theirs (type.dart's null tests)
     local eq = only(st for b in sym if b.ci.def.def.name === :is_a for st in b.stmts if st isa W.NirCall && W.nir_callee(st) === Core.:(===))
     @test W.NirConst(Core.Const(:a)) in W.nir_value_operands(eq)
@@ -124,7 +124,7 @@ end
     @test W.nir_value_operands(W.NirNew(W.NirValue[W.NirConst(Core.Const(Base.RefValue{Int})), x])) == [x]
     # a read of a binding that can change is its static field's getter, not ported: Unported there, the
     # kind and site visitStaticGet rejects the read at
-    local e = try; W.nir_value_type(first(nw), W.NirGlobal(GlobalRef(ClassesConstantCases, :changing))); nothing; catch y; y; end
+    local e = try; W.nir_value_type(first(nw), W.NirGlobal(W.nir_binding!(W.NirBindings(nw.world), GlobalRef(ClassesConstantCases, :changing)))); nothing; catch y; y; end
     @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("_generateGetter", e.rejection.anchor)
 end
 
@@ -156,7 +156,7 @@ end
     @test TypeError in cs && GlobalRef in cs && Module in cs && Symbol in cs && String in cs
     # class_info.dart's collector lays the class out: its struct, the object header and then the name
     local D = W.Dart2Wasm
-    local t = D.Translator(W.build_nir(W.check_subset(ModuleCases.pick, (Int,), "classes"), "classes"),
+    local t = D.Translator(W.build_nir(W.check_subset(ModuleCases.pick, (Int,), "classes", Base.get_world_counter()), "classes"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
@@ -164,7 +164,7 @@ end
     @test t.field_index[only(W.class_instance_fields(Module, "classes"))] == length(mod_info.struct_.fields) - 1
 end
 
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 module EmptyMutableCases
 mutable struct Token end
@@ -179,7 +179,7 @@ end
     @test EmptyMutableCases.Token in _classes(EmptyMutableCases.made, (Int,))
     local f = EmptyMutableCases.made
     local bytes = W.compile(f, (Int,))
-    for r in WTRunner.run_cases([WTRunner.RunCase("made$(a)", bytes, a, f(a...)) for a in [(1,), (0,), (-2,)]])
+    for r in WTChild.run_cases([WTChild.RunCase("made$(a)", bytes, a, f(a...)) for a in [(1,), (0,), (-2,)]])
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -211,7 +211,7 @@ end
     local hs = _classes(ConstantGraphCases.read_held, (Int64,))
     @test ConstantGraphCases.Held in hs && Vector{Any} in hs
     local held_bytes = W.compile(ConstantGraphCases.read_held, (Int64,))
-    for r in WTRunner.run_cases([WTRunner.RunCase("held$(a)", held_bytes, a, ConstantGraphCases.read_held(a...)) for a in [(1,), (-3,)]])
+    for r in WTChild.run_cases([WTChild.RunCase("held$(a)", held_bytes, a, ConstantGraphCases.read_held(a...)) for a in [(1,), (-3,)]])
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -236,17 +236,17 @@ end
 @testset "a binding's value at compile time is nir_binding_value's, a tear-off's too; a type as a value reads its kind's layout" begin
     local D = W.Dart2Wasm
     local IR = W.WasmBuilder.IR
-    local t = D.Translator(W.build_nir(W.check_subset(EmptyMutableCases.made, (Int,), "classes"), "classes"),
+    local t = D.Translator(W.build_nir(W.check_subset(EmptyMutableCases.made, (Int,), "classes", Base.get_world_counter()), "classes"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === :made)
     local g = D.get_inlinable_member_code_generator(t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), mi)
     # Base's stdout is host state Base.__init__ set: the tear-off's read of it rejects there, located
-    local e = try; D.visit_static_tear_off(g, W.NirGlobal(GlobalRef(Base, :stdout)), IR.NumType_i32); nothing; catch x; x; end
+    local e = try; D.visit_static_tear_off(g, W.NirGlobal(W.nir_binding!(W.NirBindings(t.component.world), GlobalRef(Base, :stdout))), IR.NumType_i32); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("Base.__init__", e.rejection.row)
     # Tuple{...}.parameters: a getfield of a type constant, its class DataType, run against native
     local f = EgalCases.nparams
     local bytes = W.compile(f, (Int64,); optimize = false)
-    for r in WTRunner.run_cases([WTRunner.RunCase("nparams$(a)", bytes, a, f(a...)) for a in [(0,), (4,), (-3,)]])
+    for r in WTChild.run_cases([WTChild.RunCase("nparams$(a)", bytes, a, f(a...)) for a in [(0,), (4,), (-3,)]])
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -293,7 +293,7 @@ end
     @test String in _classes(MemoryCases.names, (Int,))
     # class_info.dart's collector lays each out: the memory's struct, the header, then data and length
     local D = W.Dart2Wasm
-    local t = D.Translator(W.build_nir(W.check_subset(MemoryCases.alloc, (Int,), "classes"), "classes"),
+    local t = D.Translator(W.build_nir(W.check_subset(MemoryCases.alloc, (Int,), "classes", Base.get_world_counter()), "classes"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))

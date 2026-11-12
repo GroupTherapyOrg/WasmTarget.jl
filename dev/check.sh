@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # The landing check (dev/ship.sh runs it on every commit it lands): WasmTarget loads, so every
-# construction checks itself at load; the ratchet passes (its exit status decides); every test of
-# ported code passes (test/src_tests.jl); and TLC checks every model the change touches, each
+# construction checks itself at load; the ratchet passes (its exit status decides); the test files of
+# ported code the climb's lander hands it pass (test/src_tests.jl over WT_SRC_SET: the move's own, the
+# files the last score did not run green and its window of the rest, below); and TLC checks every model the change touches, each
 # Broken instance required to break its claim (dev/formal/run_tlc.sh). D14's band: a 60-s target,
 # red past 120 s (140 s until four shards, Dale 2026-11-01; D14_RED below). CHECK_BASE names the commit the change is measured from (default origin/wt2).
+# Its exit status is its verdict, the one channel dev/ship.sh reads (never a printed line: the tree's own tests print
+# into this script's output, and a test can print any line, round 6 R6-2, R6-7): 0 green, 1 a red of the tree's own,
+# 2 refused outside a landing, 10 red on D14's band, 11 past the hard limit, 12 the line stop, 13 a hold, 14 red on test
+# files alone (the ratchet and everything before it green: the lander reads which, R3), 15 a test process void (its
+# canary or exit status: the lander locates it as R3 does, spec v17 Z3). Beside it,
+# .wtd/check-path.out holds the critical path's seconds once they are read (D14's input, as reported by the stages).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 # a check runs only inside a landing (dev/ship.sh sets CHECK_LANDING under the landing lock): with one
@@ -22,16 +29,19 @@ cd "$(dirname "$0")/.."
 stop="$(git rev-parse --path-format=absolute --git-common-dir)/wt-line-stop"
 line_stop() {
   if [ -f "$stop" ] && [ "$(head -1 "$stop")" != "$(basename "${WT_DEPOT_DIR:-$(pwd)}")" ]; then
-    echo "check: REFUSED — line stop: only $(head -1 "$stop") lands until $stop is removed"; exit 2
+    echo "check: REFUSED — line stop: only $(head -1 "$stop") lands until $stop is removed"; exit 12
   fi
   # a hold the lead writes while this lane's landing queues or checks stops it here, as the line stop does: dev/ship.sh
   # reads the common dir's wt-held only at its start, and 24201341 landed from a lane held while it checked
   # (march-monitor-a, 13:45)
   if grep -qxF "$(basename "${WT_DEPOT_DIR:-$(pwd)}")" "$(dirname "$stop")/wt-held" 2>/dev/null; then
-    echo "check: REFUSED — this lane is held ($(dirname "$stop")/wt-held names it); the lead lifts it"; exit 2
+    echo "check: REFUSED — this lane is held ($(dirname "$stop")/wt-held names it); the lead lifts it"; exit 13
   fi
 }
 line_stop
+# dev/ship.sh --admissible asks only this far: the line stop and the hold, before a landing stops anything
+[ "${CHECK_ADMISSIBLE:-}" = 1 ] && exit 0
+mkdir -p .wtd; rm -f .wtd/check-path.out .wtd/check-split.out   # this check's own, never an earlier check's in the same tree
 # the depot of the lane being checked: dev/ship.sh checks in a scratch worktree of the lane and
 # names the lane in WT_DEPOT_DIR, so its compiled images are the lane's, never a cold depot
 . dev/depot.sh; wt_depot_export "${WT_DEPOT_DIR:-$(pwd)}"
@@ -64,6 +74,23 @@ for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD"); do
   git log -1 --format=%B "$c" | git interpret-trailers --parse | grep -qE '^Charter: C[0-9]+' ||
     { echo "check: $(git log -1 --format='%h %s' "$c" | cut -c1-80) has no Charter trailer git reads (the Charter line belongs in the last paragraph, beside Co-Authored-By; dev/CHARTER.md rule 3)"; exit 1; }
 done
+# the test files this landing runs (the landing-check ruling, R1-R3, R6): the set the climb's lander computed from
+# origin's code and records before the check (dev/climb/measure.py src_set) and handed through dev/ship.sh to the door's
+# land job (dev/climb/door.py landing), which gives it to this check in its run directory, a file Dale's uid writes and
+# this check's user reads alone: so no candidate's process writes it. A set this check's own user can write, a set
+# made for another commit than this HEAD, or none, is refused before any test runs (D9: never every file by default)
+set_ok() {
+  [ -n "${WT_SRC_SET:-}" ] && [ -f "$WT_SRC_SET" ] && [ -s "$WT_SRC_SET" ] ||
+    { echo "check: RED — no test set handed by the climb's lander (WT_SRC_SET, the door's run directory): a landing runs the set the lander chose"; return 1; }
+  [ -w "$WT_SRC_SET" ] &&
+    { echo "check: RED — the test set $WT_SRC_SET is writable by this check's user: a set comes only from the door's run directory"; return 1; }
+  [ "$(sed -n 's/^# head \([0-9a-f]\{40\}\)$/\1/p' "$WT_SRC_SET" | head -1)" = "$(git rev-parse HEAD)" ] ||
+    { echo "check: RED — the test set $WT_SRC_SET was made for another commit than this HEAD ($(git rev-parse --short HEAD))"; return 1; }
+  return 0
+}
+set_ok || exit 1
+echo "check: the lander's test set: $(grep -cv '^#' "$WT_SRC_SET") of $(git ls-files 'test/src/*.jl' | wc -l | tr -d ' ') test files"
+rm -f .wtd/src_records.* .wtd/src_start.*
 # the ratchet and the tests of ported code run side by side (two processes, one thread each): the
 # landing-lock holder's re-check is the loop's one serial step, so its wall is the slower of the two
 # a dependency the project names but the (gitignored) Manifest lacks is resolved first, once: a
@@ -124,8 +151,14 @@ fi
 # rewrites the shared sparse list without the newer units, and every lane's load then fails check_quarantine_pinned
 # ("WasmTarget does not load"; src/support stripped at 17:14Z, after 686966ac cited it). This tree's script only grows
 # the list and, at the pinned commit, only re-reads the tree, with no fetch (unjudged, a second or two)
-bash dev/fetch_julia.sh > .wtd/fetch_julia.out 2>&1 || { echo "check: the julia checkout cannot be made"; tail -5 .wtd/fetch_julia.out; exit 1; }
-SHARDS=6
+# (a climb landing's check runs as a build user, which reads the pins dev/ship.sh fetched first with origin's copy:
+# WT_PINS_READY, dev/climb/door.py)
+[ -n "${WT_PINS_READY:-}" ] || bash dev/fetch_julia.sh > .wtd/fetch_julia.out 2>&1 || { echo "check: the julia checkout cannot be made"; tail -5 .wtd/fetch_julia.out; exit 1; }
+# five shards, not six (2026-11-10, timing-report E): a landing's check, fenced, on AC, twice at six and once at five on
+# each shape: a change outside src/ 119 and 120 s against 118; a change to src/ paying its image 136 and 136 against
+# 133; the wall 133-148 s against 125-142; the work 6,707-6,912 G against 5,981-6,171 (one first compile fewer); each
+# shard's efficiency-core seconds 43-45 against 25-30. Dale's schedule below gives 140 s to any count above four
+SHARDS=5
 # D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
 # change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget, then to 160 s the same day ("Raise
 # to 160 until the cuts") once the load counted whole by instructions read ~33 s and a src path ~155 s (load 33 +
@@ -138,6 +171,50 @@ D14_RED=140
 # the plant, the load or the ratchet starts (A81S1, A82S6, A83S7). STOPGAP: two literals held together by a refusal; it ends when SHARDS is derived from
 # the band (or the band from SHARDS) in one definition that ship.sh can still read
 [ $(( SHARDS > 4 ? 140 : 120 )) -eq $D14_RED ] || { echo "check: RED — D14_RED=$D14_RED disagrees with SHARDS=$SHARDS (140 s while SHARDS > 4, then 120 s, the option Dale chose)"; exit 1; }
+# D14's band judges the check's own cost in seconds of a performance core (A53E1), read from each stage's whole process
+# tree at each process's exit (dev/tree_instructions.jl, rusage_info_v6): the instructions it retired on performance
+# cores at that stage's performance-core rate, plus the CPU seconds it spent on efficiency cores, one for one, plus the
+# CPU seconds of its processes that reported nothing, one for one (the kernel's whole-tree CPU less the reported:
+# perl- and bash-wrapped node, a process killed by a signal or ended by _exit, A81E1). An efficiency core is never
+# faster than a performance core on the same work (a lower clock and a narrower core; measured, an efficiency core ran
+# Julia's work 1.56 to 3.0 times slower: a julia tree with a 4x10^8-iteration loop, the plant's tree, the load), so its
+# seconds stand for at least a performance core's time for that work; Apple's counters read efficiency-core
+# instructions low for some instruction mixes (a Julia hash loop, compiled once: 12.2 G on a performance core, 6.2 G on
+# an efficiency core), so those are not used. The performance-core instructions are counted exactly, and another
+# job's load does not move them, where CPU seconds inflate under contention (the same 417 G read 77 CPU-s, then 101,
+# 2026-10-28). Each rate is the lowest of three exact splits of that stage on a green check, so the performance-core
+# term reads at or above the time it took (the shards' and the ratchet's splits are printed truncated to whole
+# seconds, so each rate divides by the next whole second). Intent: never read low. Band: high by the efficiency cores'
+# slowdown on that share (1.0 to about 2.2 for the shards, whose counted efficiency-core rate is half their
+# performance-core rate) and by a stage's rate above its lowest (the three splits of each stage span about 12%).
+# A split is taken on AC power: on battery, Low Power Mode ran every stage at about half its rate (the shards 6.0-6.2 G a
+# performance-core second, the ratchet 5.2, the load 6.5; a check of 7a41bafc, 2026-11-10), which slow_of names.
+# The shards, re-measured by this rule when 9.7 read every shard 25-40% above the time it took and no note said so
+# (d14-report, 2026-11-10): every quiet check on AC on record of 23,812 green tests in six shards (performance-core G in
+# performance-core seconds, the lowest of each check's six): e238970f cold, paying its load (d14 b1) 720.9 G in 60.57 s
+# (720.9/61 = 11.82), e238970f warm (d14 b2) 805.9 in 65.58 (805.9/66 = 12.21), with 0fe7094f's queue (d14 v4) 792.6 in
+# 64.02 (792.6/65 = 12.19), 072b1dde fenced as _wtland (v8 item 21) 787.1 in 64.02 (787.1/65 = 12.11); before,
+# 2026-11-02: fd65f41e 375 G in 36 s, f4ea3125 372 in 34, 6baa3349 362 in 36: 362/37 = 9.78
+RATE_P_SRC=11.8
+# THE test-file process (spec v17 Z7, the round-14 architect's finding 8): its environment and its command, declared
+# here once. This script's shards start it from these two lines, and so does the score's src part
+# (dev/climb/measure.py src_process_decl reads them at the commit it runs, as check_rate reads RATE_P_SRC), so the costs
+# one measures are the other's. Each adds only where its process runs and where it writes (the set, the records, the
+# base tree, the counter's wrapper here). GIT_DIR names no repository: a test reads no history (spec v17 Z4)
+SRC_PROCESS_ENV=(JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2 WT_LANDING_CORE=1 GIT_DIR=/var/empty/no-history)
+SRC_PROCESS=(julia --project=. --startup-file=no test/src_tests.jl)
+# the ratchet, re-measured when 812c7779's check ran it at 9.3 G a performance-core second (its children's work, once
+# bash-wrapped julia, now in its own reported processes): three green default-QoS checks' exact splits (.wtd/ratchet.gi,
+# performance-core G in performance-core seconds), 2026-11-02: b7f86566 299.09 G in 32.23 s (9.28), d2da291c 244.36 in
+# 26.01 (9.40), 4e87b54c 290.35 in 31.56 (9.20); the shards' four checks, 2026-11-10: b1 369.4 G in 36.75 s
+# (369.4/37 = 9.98), b2 299.2 in 29.23 (299.2/30 = 9.97), v4 299.3 in 29.27 (299.3/30 = 9.98), item 21 358.8 in 34.82
+# (358.8/35 = 10.25): 9.9, inside the 12% spread of 9.2, so 9.2 stays
+RATE_P_RATCHET=9.2
+# the load of a change to src/, its image removed, three runs at default QoS on a quiet machine, 2026-11-02: 183.9 G in
+# 14.86 s (12.38), 182.1 in 15.08 (12.08), 183.6 in 14.68 (12.50): its image codegen runs on several threads at a high
+# instruction rate; a cold check of e238970f's src (the src 7a41bafc holds) on AC, 2026-11-10: 202.7 G in 15.98 s
+# (202.7/16 = 12.67), inside the spread, so 12.0 stays
+RATE_P_LOAD=12.0
 # every stage runs under dev/tree_instructions.jl, which writes to .wtd/<stage>.gi what its whole process tree retired, each
 # process read at its exit: its instructions and those on performance cores, its CPU seconds and those on performance
 # cores, and the stage's own process's instructions (the load's precompile runs in a child process rusage does not
@@ -162,13 +239,25 @@ julia --startup-file=no dev/tree_instructions.jl .wtd/ratchet.gi julia --project
 # (A71E1): it took the slowest shard from 589 to 575 G, about 3 s, for one more ~300 G first compile and an eighth Julia
 # process on four performance cores (D31)
 tpids=""
-costs="$(git rev-parse --path-format=absolute --git-common-dir)/wt-src-instr.tsv"; rm -f .wtd/src_costs.*
-# the shards take files from one queue (test/src_tests.jl), each claimed by a directory made here
+# the shards take files from one queue (test/src_tests.jl), each claimed by a directory made here; each file's cost
+# counts its children's CPU seconds at RATE_P_SRC (WT_SRC_CHILD_RATE), as the band below reads them
 rm -rf .wtd/claims; mkdir -p .wtd/claims
+# a test process reads no history (spec v17 Z4): the base a test is measured against (dart_tests.jl's records and corpus
+# at CHECK_BASE) is made here, by this script's git, as the base's test/ and the rename map (WT_BASE_TREE), and the
+# shards run with GIT_DIR naming no repository, so every git a test calls fails (not found, never a history read). The
+# ratchet beside them keeps this tree's .git: it reads git, and its plants make scratch repositories that an exported
+# GIT_DIR would point at this one (dev/ship.sh's own note). What a test could still open by path is the static lock's
+# (test/src names no git, L230) and G4's
+rm -rf .wtd/base; mkdir -p .wtd/base/tree
+git archive "$base" -- test 2>/dev/null | tar -x -C .wtd/base/tree 2>/dev/null
+git diff -M --name-status "$base" HEAD > .wtd/base/renames 2>/dev/null
+# and where the dart corpus's images live (test/DartCorpus/load.jl, WT_DART_CORPUS_DIR): the common dir's, as the image
+# built above and the landing's layer hold them, read here by this script's git
+dart_dir="$(git rev-parse --path-format=absolute --git-common-dir)/wt-dart-corpus"
 for k in $(seq 1 $SHARDS); do
   : > ".wtd/progress.$k"
-  WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_CLAIMS="$PWD/.wtd/claims" WT_SRC_COSTS="$costs" WT_SRC_COSTS_OUT="$PWD/.wtd/src_costs.$k" julia --startup-file=no dev/tree_instructions.jl ".wtd/src_tests.$k.gi" \
-    julia --project=. --startup-file=no test/src_tests.jl > ".wtd/src_tests.$k.out" 2>&1 & tpids="$tpids $!"
+  env -u GIT_WORK_TREE "${SRC_PROCESS_ENV[@]}" GIT_CEILING_DIRECTORIES="$PWD" WT_BASE_TREE="$PWD/.wtd/base" WT_DART_CORPUS_DIR="$dart_dir" WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_CLAIMS="$PWD/.wtd/claims" WT_SRC_SET="$WT_SRC_SET" WT_SRC_COSTS="${WT_SRC_COSTS:-}" WT_SRC_RECORDS="$PWD/.wtd/src_records.$k.out" WT_SRC_START="$PWD/.wtd/src_start.$k" WT_SRC_CHILD_RATE="$RATE_P_SRC" julia --startup-file=no dev/tree_instructions.jl ".wtd/src_tests.$k.gi" \
+    "${SRC_PROCESS[@]}" > ".wtd/src_tests.$k.out" 2>&1 & tpids="$tpids $!"
 done
 running() { kill -0 $rpid 2>/dev/null && return 0; for p in $tpids; do kill -0 $p 2>/dev/null && return 0; done; return 1; }
 hung=""
@@ -182,9 +271,9 @@ while running; do
   fi
   sleep 2
 done
-if [ -n "$hung" ]; then echo "check: RED — past the hard limit of ${WT_HARD_LIMIT}s, a hang or a blow-up: $hung"; exit 1; fi
+if [ -n "$hung" ]; then echo "check: RED — past the hard limit of ${WT_HARD_LIMIT}s, a hang or a blow-up: $hung"; exit 11; fi
 wait $rpid; rc=$?
-trc=0; for p in $tpids; do wait $p || trc=1; done
+src=""; for p in $tpids; do wait $p; src="$src $?"; done
 cat .wtd/src_tests.[0-9]*.out > .wtd/src_tests.out
 if [ $rc -ne 0 ]; then
   echo "check: the ratchet fails (exit $rc)"
@@ -194,21 +283,23 @@ if [ $rc -ne 0 ]; then
 fi
 echo "check: ratchet passes ($(( $(date +%s) - s0 ))s)"
 echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $SHARDS reported" 
-[ $trc -eq 0 ] || { echo "check: src tests red"; grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 1; }
+# each shard's records answer for themselves (the round-13 architect's A13-5: the judge's canary last in every shard, its
+# exit status agreeing with its rows) and a red row counts unless it is a known red's own first failing test (spec v17
+# Z1): one reading of the records into the verdict, dev/src_verdict.sh (exit 15 void, 1 not exactly the set, 14 red on
+# test files, 0 green)
+vargs=(); k=0; for r in $src; do k=$((k + 1)); vargs+=("$r" ".wtd/src_records.$k.out"); done
+rm -f .wtd/src_records.void.out
+SRC_VOID_OUT=.wtd/src_records.void.out bash dev/src_verdict.sh "$WT_SRC_SET" "${vargs[@]}"; vrc=$?
+[ $vrc -eq 1 ] && exit 1
+[ $vrc -eq 15 ] && exit 15   # a void process: its files in .wtd/src_records.void.out, which ship.sh hands the lander (Z3)
+[ $vrc -eq 14 ] && { grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 14; }
+[ $vrc -eq 0 ] || { echo "check: dev/src_verdict.sh exited $vrc"; exit 1; }
 # every shard reports its summary, or the check is red: a shard whose output is lost passed on its exit status alone, its
 # tests unread (fd65f41e's check read "0 of 6 reported" and was green, D9)
 reported=$(grep -cE '^src ' .wtd/src_tests.out)
 [ "$reported" -eq "$SHARDS" ] || { echo "check: src tests red, $reported of $SHARDS shards reported a summary"; exit 1; }
 # the ratchet reports its charter block, or the check is red, for the same reason
 grep -q '── charter' .wtd/ratchet.out || { echo "check: the ratchet reported no charter block (its output is lost or cut short)"; exit 1; }
-# a check whose tests pass replaces the kept file costs (instructions, G) with its measured ones, file by file, for
-# the next check's split, whatever D14's band then reads, since a file's instructions are its own; a row
-# for a file this tree, origin/wt2 rebased under the lane, does not hold is dropped, so one lane's unlanded file
-# never steers another tree's split (A62E1: a shelved split's dart_core_1..3.jl rows stood in the table)
-# (each row is the file, its newest measure and the one before, which test/src_tests.jl costs at their larger)
-cat .wtd/src_costs.* 2>/dev/null | awk -F'\t' 'NR == FNR { c[$1] = $2; next } { c[$1] = $2 "\t" ($1 in c ? c[$1] : $2) } END { for (f in c) print f "\t" c[f] }' \
-  "$( [ -f "$costs" ] && echo "$costs" || echo /dev/null )" - | sort |
-  while IFS="$(printf '\t')" read -r f s; do [ -f "test/src/$f" ] && printf '%s\t%s\n' "$f" "$s"; done > "$costs.new" && mv "$costs.new" "$costs"
 # the models the change touches: a changed dev/formal/<Name>.tla or MC<Name>*.{tla,cfg} selects
 # every instance MC<Name>*.cfg of that model
 models=$(git diff --name-only "$base" HEAD -- dev/formal | sed -nE 's#^dev/formal/(MC)?([A-Z][A-Za-z0-9]*)\.(tla|cfg)$#\2#p' | sort -u)
@@ -222,34 +313,6 @@ if [ -n "$cfgs" ]; then
   echo "check: TLC green on $cfgs"
 fi
 wall=$(( $(date +%s) - s0 ))
-# D14's band judges the check's own cost in seconds of a performance core (A53E1), read from each stage's whole process
-# tree at each process's exit (dev/tree_instructions.jl, rusage_info_v6): the instructions it retired on performance
-# cores at that stage's performance-core rate, plus the CPU seconds it spent on efficiency cores, one for one, plus the
-# CPU seconds of its processes that reported nothing, one for one (the kernel's whole-tree CPU less the reported:
-# perl- and bash-wrapped node, a process killed by a signal or ended by _exit, A81E1). An efficiency core is never
-# faster than a performance core on the same work (a lower clock and a narrower core; measured, an efficiency core ran
-# Julia's work 1.56 to 3.0 times slower: a julia tree with a 4x10^8-iteration loop, the plant's tree, the load), so its
-# seconds stand for at least a performance core's time for that work; Apple's counters read efficiency-core
-# instructions low for some instruction mixes (a Julia hash loop, compiled once: 12.2 G on a performance core, 6.2 G on
-# an efficiency core), so those are not used. The performance-core instructions are counted exactly, and another
-# job's load does not move them, where CPU seconds inflate under contention (the same 417 G read 77 CPU-s, then 101,
-# 2026-10-28). Each rate is the lowest of three exact splits of that stage on a green check, so the performance-core
-# term reads at or above the time it took (the shards' and the ratchet's splits are printed truncated to whole
-# seconds, so each rate divides by the next whole second). Intent: never read low. Band: high by the efficiency cores'
-# slowdown on that share (1.0 to about 2.2 for the shards, whose counted efficiency-core rate is half their
-# performance-core rate) and by a stage's rate above its lowest (the three splits of each stage span about 12%).
-# The shards, three green dev-only checks, 2026-11-02 (performance-core G in performance-core seconds, the lowest of
-# each check's six): fd65f41e 375 G in 36 s, f4ea3125 372 in 34, 6baa3349 362 in 36: 362/37 = 9.78
-RATE_P_SRC=9.7
-# the ratchet, re-measured when 812c7779's check ran it at 9.3 G a performance-core second (its children's work, once
-# bash-wrapped julia, now in its own reported processes): three green default-QoS checks' exact splits (.wtd/ratchet.gi,
-# performance-core G in performance-core seconds), 2026-11-02: b7f86566 299.09 G in 32.23 s (9.28), d2da291c 244.36 in
-# 26.01 (9.40), 4e87b54c 290.35 in 31.56 (9.20)
-RATE_P_RATCHET=9.2
-# the load of a change to src/, its image removed, three runs at default QoS on a quiet machine, 2026-11-02: 183.9 G in
-# 14.86 s (12.38), 182.1 in 15.08 (12.08), 183.6 in 14.68 (12.50): its image codegen runs on several threads at a high
-# instruction rate
-RATE_P_LOAD=12.0
 # a stage's .gi (dev/tree_instructions.jl): G, G on performance cores, CPU-s, CPU-s on performance cores, its own process's
 # G, and the CPU-s of its processes that reported nothing (the kernel's whole-tree CPU less the reported)
 cpu() { awk '{ printf "%d", $3 + $6 }' ".wtd/$1.gi"; }
@@ -261,14 +324,31 @@ split_of() { awk '{ printf "%.1f G + %.1f s + %.1f s", $2, $3 - $4, $6 }' ".wtd/
 # a stage whose performance cores ran slower than its rate reads low there: named, and its rate is re-measured from
 # three fresh splits before the next commit that touches it (A80S1)
 slow_of() { awk -v r="$2" -v n="$1" '$4 > 1 && $2 / $4 < r { printf " %s ran %.1f G a performance-core second, under its rate %s;", n, $2 / $4, r }' ".wtd/$1.gi"; }
+# and one whose performance cores ran more than RATE_ABOVE above its rate reads high there: named, so a stale rate is
+# seen (d14-report: RATE_P_SRC 9.7 drifted 25-40% under the shards' rate unseen for a week). Band: a stage's three
+# splits span about 12% (above), so a rate 15% under one stage's split is stale, not that stage's spread
+RATE_ABOVE=0.15
+fast_of() { awk -v r="$2" -v n="$1" -v a="$RATE_ABOVE" '$4 > 1 && $2 / $4 > r * (1 + a) { printf " %s ran %.1f G a performance-core second, over its rate %s by more than %d%%;", n, $2 / $4, r, 100 * a }' ".wtd/$1.gi"; }
 c_load=$(ps_of load $RATE_P_LOAD); p_ratchet=$(ps_of ratchet $RATE_P_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"; splits="$(split_of ratchet)"
-slow="$(slow_of load $RATE_P_LOAD)$(slow_of ratchet $RATE_P_RATCHET)"
-for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_P_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; splits="$splits; $(split_of "src_tests.$k")"; slow="$slow$(slow_of "src_tests.$k" $RATE_P_SRC)"; [ "$p" -gt "$path_par" ] && path_par=$p; done
+slow="$(slow_of load $RATE_P_LOAD)$(slow_of ratchet $RATE_P_RATCHET)"; fast="$(fast_of load $RATE_P_LOAD)$(fast_of ratchet $RATE_P_RATCHET)"
+for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_P_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; splits="$splits; $(split_of "src_tests.$k")"; slow="$slow$(slow_of "src_tests.$k" $RATE_P_SRC)"; fast="$fast$(fast_of "src_tests.$k" $RATE_P_SRC)"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
+echo "$path" > .wtd/check-path.out
+# and the split it is made of, one line a stage: its name, its judged seconds, its performance-core G, its efficiency-core
+# seconds and its unreported seconds (ps_of's three terms), then the wall: dev/ship.sh carries these lines to the climb's
+# lander beside the verdict ($WT_CHECK_RESULT), which keeps them in its `ship` event, the measures the landing-check
+# ruling's predictions are checked against (step 2). Numbers alone, written by the check's own processes' counters
+split_line() { awk -v n="$1" -v r="$2" '{ printf "%s %d %.1f %.1f %.1f\n", n, $2 / r + ($3 - $4) + $6, $2, $3 - $4, $6 }' ".wtd/$3.gi"; }
+{ split_line load $RATE_P_LOAD load; split_line ratchet $RATE_P_RATCHET ratchet
+  for k in $(seq 1 $SHARDS); do split_line "shard.$k" $RATE_P_SRC "src_tests.$k"; done
+  # each shard's start (its G until its first file, test/src_tests.jl's WT_SRC_START): c0, measured (A13-7)
+  for k in $(seq 1 $SHARDS); do [ -s ".wtd/src_start.$k" ] && printf 'start.%s %.1f\n' "$k" "$(head -1 ".wtd/src_start.$k")"; done
+  echo "wall $wall"; } > .wtd/check-split.out
 echo "check: ${path} s on the critical path (load ${c_load}, ratchet ${p_ratchet}, src shards${shards}; performance-core G + efficiency-core seconds + unreported seconds: load $(split_of load); ratchet ${splits}); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
 [ -z "$slow" ] || echo "check: note, a stage's performance cores ran under its rate, so it reads low there:${slow}"
+[ -z "$fast" ] || echo "check: note, a stage's performance cores ran well over its rate, so it reads high there; its rate is re-measured from three fresh splits:${fast}"
 # today's judged path fell by measure alone, nothing the check runs changed: 156 (CPU-s) -> 131 (f8afd6e5) -> ~95
 # (89a5deb2), 2026-11-01/02; D14's intent is about a minute of wall, so a judged path under 120 is not D14 met
-[ $path -gt $D14_RED ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past ${D14_RED} s until four shards, then 120 s)"; exit 1; }
+[ $path -gt $D14_RED ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past ${D14_RED} s until four shards, then 120 s)"; exit 10; }
 line_stop
 echo "check: green (${wall}s)"

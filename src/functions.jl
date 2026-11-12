@@ -337,7 +337,7 @@ suffix of the accessor's kind.
     return @exhaustive target::Reference begin
         (m::MethodInstance) => (local method = m.def::Method;
             local params = (Base.unwrap_unionall(m.specTypes)::DataType).parameters;
-            "$(method.module).$(method.name)($(join(("::$p" for p in params[2:end]), ", ")))")
+            "$(julia_text(method.module)).$(method.name)($(join(("::$(julia_text(p))" for p in params[2:end]), ", ")))")
         (r::FieldReference) => (local f = r.field;
             local member_name = f isa GlobalRef ? string(f) : "$(f.cls).$(f.name)";
             r.kind === FieldReferenceKind_setter ? "$member_name= implicit setter" :

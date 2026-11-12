@@ -37,8 +37,8 @@ end
 # String's hash (src/patch/hashing.jl), and Julia's egal of two MemoryRefs (an offset and a memory)
 module WasmArrayMemoryTest
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 const W = WasmTarget
 const KEYS = ["k$i" for i in 1:40]
 function memory(k::Int64, n::Int64)
@@ -158,8 +158,8 @@ end
     local argsets = [(1, 1), (1, 40), (2, 1), (2, 40), (3, 1), (3, 40), (5, 2), (5, 3), (6, 1), (6, 9),
                      (7, 1), (7, 3), (8, 1), (8, 3), (8, 6), (8, 9), (9, 1), (9, 4), (9, 9), (10, 1), (10, 4), (10, 5), (11, 1), (11, 2), (11, 40), (12, 1), (12, 30),
                      (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (14, 1), (14, 3), (15, 3), (15, 98), (15, 1), (4, 2), (4, 3)]
-    local cases = [WTRunner.RunCase("memory$a", plain, Int64.(a), WTRunner.native_answer(memory, Int64.(a))) for a in argsets]
-    for r in WTRunner.run_cases(cases)
+    local cases = [WTChild.RunCase("memory$a", plain, Int64.(a), WTChild.native_answer(memory, Int64.(a))) for a in argsets]
+    for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
 end

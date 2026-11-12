@@ -1,9 +1,10 @@
-# test/runner.jl, the differential runner: hand-assembled modules show each marshalled type crossing
-# and returning with its bits, a wrong answer failing located, and what the runner cannot run failing,
-# never skipped; WasmTarget's own modules show a tuple answer read leaf by leaf, both modules each.
+# test/runner.jl, the differential runner: hand-assembled modules show each leaf kind crossing and returning with its
+# bits, one fresh instance a call, a wrong answer failing located (test/verdict.jl's verdict, the judge's), and what the
+# runner cannot run failing, never skipped; WasmTarget's own modules show a tuple answer read leaf by leaf, both modules
+# each. (The wire's table, the binding, the plan and the fixtures are the judge's: test/src/verdict.jl.)
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTR = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTR = Main.WTChild
 
 # a module exporting `f`, one function of one parameter of wasm type `t` to `t`: local.get 0, `ops`
 function _run_one_function(t::UInt8, ops::Vector{UInt8} = UInt8[])::Vector{UInt8}
@@ -66,13 +67,13 @@ const _RUN_EMBEDDER = vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
     @test all(x -> x.ok, r[1:7]) && r[14].ok && r[16].ok && r[17].ok && r[18].ok
     @test !r[8].ok && occursin("answers 2", r[8].why) && occursin("native Julia 1", r[8].why)
     @test !r[9].ok && occursin("answers -0.0", r[9].why)
-    @test !r[10].ok && occursin("marshals no Tuple{Int32}", r[10].why)
+    @test !r[10].ok && occursin("the judge's wire has no leaf kind for Tuple{Int32}", r[10].why)
     @test !r[11].ok && occursin("imports m.f", r[11].why)
     @test !r[12].ok && occursin("no entry", r[12].why)
     @test !r[13].ok && !isempty(r[13].why)
     @test !r[15].ok && occursin("the wasm-opt'd module answers 41", r[15].why) && occursin("differ: 42 against 41", r[15].why) &&
           !occursin("the module answers", r[15].why)
-    @test !r[19].ok && occursin("the module answers \"a_value:number\", native Julia nothing", r[19].why)   # A56E1
+    @test !r[19].ok && occursin("the module answers the i32 0x00000002, native Julia nothing", r[19].why)   # A56E1
     @test r[20].ok
     @test r[21].ok   # the engine runs a try_table of a reference result: an engine that traps it fails here, named
     # the modules split into parts, here one module a node, read every answer as one node does (node reads its
@@ -171,7 +172,7 @@ _runner_tup(x::Int64) = (push!(_RUNNER_EVENTS, "native"); (x + 1, x > 0))
     @test WTR.native_answer(x -> div(x, 0), (1,)) === WTR.Throws(DivideError)
 end
 
-@testset "a module that never returns fails as a hang, the others keep their answers" begin
+@testset "a module that never returns fails as a hang, its own call alone (spec v18 P3)" begin
     local forever = _run_one_function(_RUN_I32, UInt8[0x03, 0x40, 0x0c, 0x00, 0x0b])   # loop: br 0; end
     local t0 = time()
     local r = WTR.run_cases([WTR.RunCase("before", _RUN_ADD1, (Int32(1),), Int32(2)), WTR.RunCase("forever", forever, (Int32(1),), Int32(1)),
@@ -179,7 +180,7 @@ end
     @test time() - t0 < 10
     @test r[1].ok
     @test !r[2].ok && occursin("node killed: a hang or a blow-up", r[2].why)
-    @test !r[3].ok && occursin("node killed", r[3].why)
+    @test r[3].ok   # a new node runs the calls after the hang (red round 15 2: its part's later calls went with it)
 end
 
 # a program whose answer is a nest of tuples of two leaf types, compiled by WasmTarget
@@ -204,10 +205,11 @@ _runner_shape_s(x::Int64) = (x + 1, "ab")
     calls[] = 0; WTR.answer_cases("t", counted, _runner_shape_b, (Int64(3),); own = _RUN_ADD1)
     @test calls[] == 1 + 2 * 2
     # the own module must return a non-null reference: a number, as from an i32 module, fails
-    @test occursin("the module returns a_value:number", only(WTR.run_cases([WTR.RunCase("n", _RUN_ADD1, (Int32(1),), WTR.ReturnsRef())])).why)
+    @test occursin("the module answers the i32 0x00000002, native Julia a non-null reference",
+                   only(WTR.run_cases([WTR.RunCase("n", _RUN_ADD1, (Int32(1),), WTR.ReturnsRef())])).why)
     # a leaf of a singleton type crosses as "void": its call returns, its type its value
     local v = first(WTR.answer_cases("v", counted, _runner_shape_n, (Int64(3),)))
-    @test [c.label for c in v[2:end]] == ["v(1,)", "v(2,)"] && WTR._wire_answer(nothing) == ("void", "-") && WTR._unwire(Nothing, "-") === nothing
+    @test [c.label for c in v[2:end]] == ["v(1,)", "v(2,)"] && Main.WTVerdict.leaf_kind(Nothing) === :void
     # a vector inside the answer: its length a leaf, each element a leaf, read by getindex
     local vec = first(WTR.answer_cases("w", counted, _runner_shape_v, (Int64(3),)))
     @test [c.label for c in vec[2:end]] == ["w(1,)", "w(2, :len)", "w(2, (:ix, 1))", "w(2, (:ix, 2))"]
@@ -218,7 +220,7 @@ _runner_shape_s(x::Int64) = (x + 1, "ab")
     @test WTR._pick(Any[Int64(5), true], Val((((:ix, 1),),)), Int64, Int64(1)) === Int64(5)
     @test_throws TypeError WTR._pick(Any[true], Val((((:ix, 1),),)), Int64, Int64(1))
     # a String is read as its ncodeunits and each codeunit; while its reader is rejected (Unported), the String
-    # is one case the runner does not read, "marshals no String", never a failure of WT's
+    # is one case the runner does not read (its reader rejected: the compiler's gap, named), never a failure of WT's
     local sc = first(WTR.answer_cases("s", counted, _runner_shape_s, (Int64(3),)))
     @test [c.label for c in sc[2:end]] == ["s(1,)", "s(2, :ncu)", "s(2, (:cu, 1))", "s(2, (:cu, 2))"]
     @test [c.native for c in sc[2:end]] == Any[4, 2, 0x61, 0x62]
@@ -234,12 +236,8 @@ _runner_shape_s(x::Int64) = (x + 1, "ab")
     @test [c.label for c in bx[2:end]] == ["b(1,)", "b(2,)"] && occursin("convertType", WTR.run_cases(bx[2:2])[1].why) && isempty(bx[3].unread)
     local broken(f, ts; optimize::Bool = true) = throw(WasmTarget.RejectionError(WasmTarget.Internal("x"), "y"))
     @test_throws WasmTarget.RejectionError WTR.answer_cases("i", broken, _runner_shape_b, (Int64(3),))
-    @test WTR._unwire(UInt8, "255") === 0xff && WTR._unwire(UInt8, "-1") isa String
-    # a Char is its 32 bits on the wire: 'é' is 0xc3a90000, an invalid Char's bits survive the round trip
-    @test WTR._wire('é') == ("i32", string(reinterpret(Int32, 0xc3a90000))) && WTR._unwire(Char, WTR._wire('é')[2]) === 'é' &&
-          WTR._unwire(Char, WTR._wire(reinterpret(Char, 0xff000000))[2]) === reinterpret(Char, 0xff000000)
-    # a leaf of a type the runner does not marshal has no reader and fails, named
-    @test isempty(cs[6].bytes) && occursin("marshals no Symbol", WTR.run_cases(cs[6:6])[1].why)
+    # a leaf of a type the judge's wire has no leaf kind for has no reader and fails, named
+    @test isempty(cs[6].bytes) && occursin("the judge's wire has no leaf kind for Symbol", WTR.run_cases(cs[6:6])[1].why)
 end
 
 @testset "a tuple answer read leaf by leaf from WasmTarget's modules" begin
@@ -251,4 +249,61 @@ end
     local r = WTR.run_cases([WTR.RunCase(c.label, c.bytes, c.optimized, c.args, get(planted, c.label, c.native), c.entry) for c in cs])
     @test [x.label for x in r if !x.ok] == ["facts(2, 2)"]
     @test occursin("answers 6, native Julia 7", only(x.why for x in r if !x.ok))
+end
+
+# red's p5 (spec v16 X1): a correct compile of a function with state reads passed, every call a fresh instance, as every
+# native answer is its own process's: the tuple's own module and both its leaves read 1, the counter's first value
+const _RUNNER_R = Ref(Int64(0))
+_runner_state() = (_RUNNER_R[] += 1; (_RUNNER_R[], _RUNNER_R[]))
+const _RUNNER_R2 = Ref(Int64(0))
+_runner_state_scalar(x::Int64) = (_RUNNER_R2[] += x; _RUNNER_R2[])
+
+@testset "one fresh instance a call: a stateful program's leaves and its repeated module read as native's" begin
+    # as the climb measures it: the answer computed where the case runs (the judging process), the modules compiled where
+    # no case ever ran (the compiling process, R2: its heap the corpus's as loaded, so each Ref constant holds 0), the
+    # binding the compiling process's own (test/verdict.jl's bind, from the answer's shape)
+    _RUNNER_R[] = 0
+    local a = Main.WTOracle.answer_of("", _runner_state, ())
+    @test a.native == (1, 1)
+    _RUNNER_R[] = 0
+    local cs = Main.WTVerdict.bind(Main.WTOracleRead.Shape(a), (), WasmTarget.compile; a, f = _runner_state)
+    local r = WTR.run_cases(cs)
+    @test [c.label for c in cs] == ["(own module)", "(1,)", "(2,)"] && all(x -> x.ok, r)
+    # one module, called by two cases (two labels of the same bytes): each reads its own instance's first value
+    _RUNNER_R2[] = 0
+    local b = WasmTarget.compile(_runner_state_scalar, (Int64,))
+    local two = WTR.run_cases([WTR.RunCase("first", b, (Int64(5),), Int64(5)), WTR.RunCase("second", b, (Int64(5),), Int64(5))])
+    @test all(x -> x.ok, two)
+end
+
+# (the store's format, written by test/oracle.jl and read back by test/oracle_read.jl, is tested in test/src/oracle_read.jl,
+# the judge's: spec v14 V2; the wire's table, the binding, the plan, the verdict and the fixtures in test/src/verdict.jl)
+
+# spec v18 P1: a throw answer's reader tests the caught value's type in the module WasmTarget emits, never a constant
+# Julia's inference folded (red round 15 1: the catch arm was `i32.const 1` for any exception)
+_p1_div(x::Int64) = div(Int64(1), x)
+_p1_err(x::Int64) = x > 0 ? throw(ArgumentError("pos")) : throw(DomainError(x))
+_p1_always_div(x::Int64) = throw(DivideError())   # spec v19 P1: an F that always throws one type, a singleton's
+_p1_always_dom(x::Int64) = throw(DomainError(x))   # and one with fields
+
+@testset "a throw answer's reader tests the caught value's type in wasm (spec v18 P1)" begin
+    local W = Main.WTVerdict
+    # the typed IR WasmTarget compiles keeps `isa` on the caught value itself, for a singleton exception type too
+    for (f, T) in ((_p1_div, DivideError), (_p1_always_div, DivideError), (_p1_always_dom, DomainError))
+        local ci = code_typed(W.Catches{f,T}(), (Int64,); optimize = true)[1].first
+        local caught = findall(s -> s isa Expr && s.head === :the_exception, ci.code)
+        @test !isempty(caught) && any(s -> s isa Expr && s.head === :call && length(s.args) == 3 &&
+                                      s.args[2] isa Core.SSAValue && s.args[2].id in caught, ci.code)
+    end
+    # each reader compiled by WasmTarget and run in node answers native's: 1 for its type, 2 for another
+    local cases = WTR.RunCase[]
+    for (f, T, a) in ((_p1_div, DivideError, 0), (_p1_div, ArgumentError, 0), (_p1_err, ArgumentError, 1), (_p1_err, DomainError, 1),
+                      (_p1_always_div, DivideError, 1), (_p1_always_div, DomainError, 1),
+                      (_p1_always_dom, DomainError, 1), (_p1_always_dom, DivideError, 1))
+        local r = W.Catches{f,T}()
+        push!(cases, WTR.RunCase("$f $T", WasmTarget.compile(r, (Int64,); optimize = false), (Int64(a),), r(Int64(a));
+                                 optimized = WasmTarget.compile(r, (Int64,))))
+    end
+    @test [c.native for c in cases] == Int32[1, 2, 1, 2, 1, 2, 1, 2]
+    @test all(r -> r.ok, WTR.run_cases(cases))
 end

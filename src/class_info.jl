@@ -364,7 +364,7 @@ counterpart: Julia's classes are instances, their parameters bound, and implemen
         local has_fields = _requires_subclass_fields(self, super_info, type_parameter_match, cls)
 
         local struct_ = has_fields ?
-            WasmBuilder.define_struct(types_builder(translator), string(cls); super_type = super_info.struct_, brand = unique_types(translator.options)) :
+            WasmBuilder.define_struct(types_builder(translator), julia_text(cls); super_type = super_info.struct_, brand = unique_types(translator.options)) :
             super_info.struct_
         info = ClassInfo(cls, class_id, super_info.depth + 1, struct_, super_info; type_parameter_match = type_parameter_match)
     end

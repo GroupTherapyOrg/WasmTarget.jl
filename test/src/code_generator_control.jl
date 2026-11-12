@@ -145,7 +145,7 @@ end
     # Julia's answer for the exception stack: at rt's rethrow() (a block of its own, past the catch's
     # first), compute_trycatch's top is the catch's EnterNode
     local src = only(code_typed(TryGenCases.rt, (Int64,); optimize = true))[1]
-    local _, _, handlers = W.nir_code(src.code, src.ssaflags, "rt")
+    local _, _, handlers = W.nir_code(src.code, src.ssaflags, W.NirBindings(Base.get_world_counter()), "rt")
     local enter = findfirst(st -> st isa Core.EnterNode, src.code)
     local re = findfirst(st -> Meta.isexpr(st, :invoke) && st.args[2] isa GlobalRef && st.args[2].name === :rethrow, src.code)
     @test re !== nothing && handlers.exception_at[re] == enter && handlers.exception_at[enter] == 0
@@ -188,7 +188,7 @@ end
     # dart's catch of the JS tag boxes the JS exception through the runtime's boxJsException, not
     # ported: the catch rejects there, never a module whose catch lets a JS exception pass
     local ns = D.WasmCompilerOptions(; main_uri = "", output_file = "out/prog.wasm"); ns.translator_options.generate_source_maps = false
-    local r = rejection(() -> D.compile(ns, W.check_subset(TryGenCases.tc, (Int64,), "tc")))
+    local r = rejection(() -> D.compile(ns, W.check_subset(TryGenCases.tc, (Int64,), "tc", Base.get_world_counter())))
     @test r.rejection isa W.Unported && r.rejection.anchor == "sdk/lib/_internal/wasm/js_common/js_helper.dart:803 boxJsException"
 end
 
@@ -276,7 +276,7 @@ end
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin
-    for r in WTRunner.run_cases(NATIVE_RUNS)
+    for r in WTChild.run_cases(NATIVE_RUNS)
         r.ok || println(r.label, ": ", r.why)
         @test r.ok
     end

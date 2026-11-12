@@ -11,7 +11,7 @@ end
 
 @testset "compile.dart: the phases, end to end" begin
     local W = WasmTarget
-    local world = W.check_subset(CompileCases.f, (Int32,), "compile")
+    local world = W.check_subset(CompileCases.f, (Int32,), "compile", Base.get_world_counter())
     local opts() = (o = DCm.WasmCompilerOptions(; main_uri = "", output_file = "out/prog.wasm"); o.translator_options.standalone = true; o.translator_options.generate_source_maps = false; o)
     # dart's library default phases: cfe, tfa, codegen
     local o = opts()
@@ -65,11 +65,11 @@ end
     @test e4 isa W.RejectionError && e4.rejection isa W.InvalidModule
 end
 
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 @testset "compile.dart: the support JS tests the engine's features; the crash and the repository" begin
     # node, an engine with WasmGC and full SIMD, answers the feature test true
-    local node = Main.WTRunner.node_binary()
+    local node = Main.WTChild.node_binary()
     @test node !== nothing
     local support = DCm._generate_support_js(DCm.TranslatorOptions())
     @test readchomp(`perl -e 'alarm 30; exec @ARGV' $node -e "console.log($support)"`) == "true"
@@ -77,7 +77,7 @@ isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runne
     # a compile that is not standalone writes the JS runtime and the support JS beside the module, by
     # dart's file names; node parses the runtime as an ES module
     local ns = DCm.WasmCompilerOptions(; main_uri = "", output_file = "out/prog.wasm"); ns.translator_options.generate_source_maps = false
-    local r = DCm.compile(ns, WasmTarget.check_subset(CompileCases.f, (Int32,), "compile"))
+    local r = DCm.compile(ns, WasmTarget.check_subset(CompileCases.f, (Int32,), "compile", Base.get_world_counter()))
     @test r isa DCm.CodegenResult && collect(keys(r.js_files)) == ["out/prog.mjs", "out/prog.support.js"]
     @test r.js_files["out/prog.support.js"] == support
     mktempdir() do dir

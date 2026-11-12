@@ -129,20 +129,21 @@ which declare Julia's methods, classes and modules as dart's procedures, classes
 @parity "dart2wasm/lib/globals.dart:97 DartGlobals" function DartGlobals(translator::Translator)::DartGlobals
     local self = DartGlobals(Val(:_), translator)
     local seen = Set{GlobalRef}()
-    local count(ref::GlobalRef) = begin
+    local count(binding::NirBinding) = begin
+        local ref = binding.ref
         ref in seen && return nothing
         push!(seen, ref)
         # a declaration is a constant binding of a function, a type or a module (Julia's `function`,
         # `struct` and `module` each define one), its value read at its one source
-        nir_binding_is_constant(ref) && nir_binding_value(ref, "dart2wasm/lib/globals.dart:97 DartGlobals").c.val isa Union{Function,Type,Module} && return nothing
+        nir_binding_is_constant(binding) && nir_binding_value(binding, "dart2wasm/lib/globals.dart:97 DartGlobals").c.val isa Union{Function,Type,Module} && return nothing
         local wasm_type = translate_type_of_field(translator, ref)
         self._field_type_count[wasm_type] = get(self._field_type_count, wasm_type, 0) + 1
         return nothing
     end
     for body in translator.component, st in body.stmts
-        st isa NirGlobalRead && count(st.ref)
+        st isa NirGlobalRead && count(st.binding)
         for v in nir_operands(st)
-            v isa NirGlobal && count(v.ref)
+            v isa NirGlobal && count(v.binding)
         end
     end
     return self
@@ -160,8 +161,9 @@ lazy path.
 A deliberate difference from dart, whose initializer is the field's literal expression.
 """
 @parity "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer" function get_constant_initializer(self::DartGlobals, variable::GlobalRef)::Union{NirConst,Nothing}
-    nir_binding_is_constant(variable) || return nothing
-    local value = nir_binding_value(variable, "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer")
+    local binding = nir_binding(self.translator.component, variable)
+    nir_binding_is_constant(binding) || return nothing
+    local value = nir_binding_value(binding, "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer")
     Base.ismutationfree(typeof(value.c.val)) || return nothing
     return value
 end
@@ -200,7 +202,7 @@ dev/MODULE_INIT.md).
         if use_table_slot && WasmBuilder.nullable(field_type)
             return self._definitions[field] = _define_table_based_field(self, field, field_type::WasmBuilder.IR.RefType, module_, init, nothing)
         end
-        return self._definitions[field] = _define_global_based_field(self, field, field_type, module_, !nir_binding_is_constant(field), init, nothing)
+        return self._definitions[field] = _define_global_based_field(self, field, field_type, module_, !nir_binding_is_constant(nir_binding(translator.component, field)), init, nothing)
     end
 
     # Maybe we can emit the initialization in the start function. If so,

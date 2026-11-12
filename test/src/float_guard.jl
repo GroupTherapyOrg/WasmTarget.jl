@@ -9,7 +9,7 @@
 # to compile again, wt3-latency): the same nine cases in test/src/dart_tests.jl, after that load, measured 308 G
 # instructions, here 212 G (each after the warm-up compile, at background QoS).
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 module FloatGuardCases
 const GROUPS = Pair{String,Vector{Any}}[]
@@ -48,9 +48,9 @@ const FLOAT_GUARD = ("exp_f64", "expm1_f64", "acos_f64", "asin_f64", "sinh_f64",
     local cs = [c for c in last(group) if c[1] in FLOAT_GUARD]
     @test sort!([c[1] for c in cs]) == sort!(collect(FLOAT_GUARD))
     # each case's own modules and, for a tuple's answer, a reader per leaf type, its facts read one by one
-    local cases = reduce(vcat, (first(Main.WTRunner.answer_cases("bit_exact_math/$(c[1])", WasmTarget.compile, c[2], Tuple(c[3:end])))
+    local cases = reduce(vcat, (first(Main.WTChild.answer_cases("bit_exact_math/$(c[1])", WasmTarget.compile, c[2], Tuple(c[3:end])))
                                 for c in cs))
-    for r in Main.WTRunner.run_cases(cases)
+    for r in Main.WTChild.run_cases(cases)
         @test (r.label => r.why) == (r.label => "")
     end
 end

@@ -50,12 +50,12 @@ module JSRuntimeGenerate
 using Test, WasmTarget
 const D = WasmTarget.Dart2Wasm
 const J = WasmTarget.Dart2Wasm.JS
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 entry(x::Int) = x + 1
 @testset "js/runtime_generator.dart: RuntimeFinalizer.generate writes a JS module node parses" begin
-    local world = WasmTarget.build_nir(WasmTarget.check_subset(entry, (Int,), "js_runtime"), "js_runtime")
+    local world = WasmTarget.build_nir(WasmTarget.check_subset(entry, (Int,), "js_runtime", Base.get_world_counter()), "js_runtime")
     local f = J.RuntimeFinalizer(D.InteropMemberNamer(world, D.Namer(), D.TranslatorOptions()))
-    local node = Main.WTRunner.node_binary()
+    local node = Main.WTChild.node_binary()
     @test node !== nothing
     mktempdir() do dir
         # each combination of the string builtin and additional module loading fills every variable of

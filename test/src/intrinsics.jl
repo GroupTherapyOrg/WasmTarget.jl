@@ -12,7 +12,7 @@ eq64(x::Int64) = x + 1
 eqf(x::Float64) = x * 2.0
 end
 
-intr_translator_of(f, argtypes) = DI.Translator(WasmTarget.build_nir(WI.check_subset(f, argtypes, "intrinsics"), "test"),
+intr_translator_of(f, argtypes) = DI.Translator(WasmTarget.build_nir(WI.check_subset(f, argtypes, "intrinsics", Base.get_world_counter()), "test"),
     DI.build_module_output_data(DI.DefaultModuleStrategy(DI.WasmCompilerOptions_default_options())), DI.TranslatorOptions())
 function intr_codegen_of(f, argtypes, ins, outs)
     local t = intr_translator_of(f, argtypes)
@@ -114,7 +114,7 @@ end
     # a resolved call, a field read, a global read and a function value's call are no intrinsics
     @test DI.generate_instance_intrinsic(ii, inv(mi(+, (Int64, Int64)), x, lit(3))) === nothing
     @test DI.generate_instance_getter_intrinsic(ii, WI.NirCall(WI.NirValue[lit(getfield), x, lit(:a)])) === nothing
-    @test DI.generate_static_getter_intrinsic(ii, WI.NirGlobalRead(GlobalRef(Base, :pi))) === nothing
+    @test DI.generate_static_getter_intrinsic(ii, WI.NirGlobalRead(WI.nir_binding!(WI.NirBindings(DI.translator(ii).component.world), GlobalRef(Base, :pi)))) === nothing
     @test DI.generate_function_call_intrinsic(ii, inv(mi(+, (Int64, Int64)), x, lit(3))) === nothing
 end
 
@@ -145,7 +145,7 @@ end
           ["local.get", "struct.get", "array.len", "i64.extend_i32_u"]
 end
 
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 module DivCases
 # each checked division at each width, by `k`: one module per signedness
@@ -163,7 +163,7 @@ end
     local C = DivCases
     local s(a, b, k) = (Int64(a), Int64(b), Int64(k))
     local u(a, b, k) = (UInt64(a), UInt64(b), Int64(k))
-    local cases = WTRunner.RunCase[]
+    local cases = WTChild.RunCase[]
     for (f, argsets) in ((C.sops, [s(7, 2, 0), s(7, 0, 0), (typemin(Int64), Int64(-1), Int64(0)), s(-7, 2, 0),
                                    s(7, 2, 1), s(7, 0, 1), (typemin(Int64), Int64(-1), Int64(1)),
                                    s(typemin(Int32), -1, 2), s(9, -2, 2), s(9, 0, 2),
@@ -171,10 +171,10 @@ end
                          (C.uops, [u(7, 2, 0), u(7, 0, 0), u(typemax(UInt64), 3, 0), u(7, 2, 1), u(7, 0, 1),
                                    u(typemax(UInt32), 3, 2), u(7, 0, 2), u(65535, 7, 3), u(70000, 0, 3), u(9, 65540, 3)]))
         local bytes = WI.compile(f, map(typeof, first(argsets)))
-        append!(cases, [WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, WTRunner.native_answer(f, a)) for a in argsets])
+        append!(cases, [WTChild.RunCase("$(nameof(f))$(a)", bytes, a, WTChild.native_answer(f, a)) for a in argsets])
     end
-    @test count(c -> c.native isa WTRunner.Throws, cases) == 11
-    for r in WTRunner.run_cases(cases)
+    @test count(c -> c.native isa WTChild.Throws, cases) == 11
+    for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -210,7 +210,7 @@ end
     # as jl_egal does: non-ASCII text's bytes, equal and unequal contents of equal and unequal lengths
     local args = [(Int64(k), b) for k in 0:6 for b in (true, false)]
     local bytes = WI.compile(StringDataCases.strops, (Int64, Bool))
-    for r in WTRunner.run_cases([WTRunner.RunCase("strops$a", bytes, a, StringDataCases.strops(a...)) for a in args])
+    for r in WTChild.run_cases([WTChild.RunCase("strops$a", bytes, a, StringDataCases.strops(a...)) for a in args])
         @test r.ok || (@info r.label r.why; false)
     end    # each data operation is dart's external member: the closed world records its call and never
     # collects its body (Julia's native evaluation through pointers); a call the intrinsifier declines
@@ -233,9 +233,9 @@ end
     # raises BoundsError through the runtime's thrower, a wasm exception, never a trap
     local args = [(Int64(k),) for k in (-1, 0, 1, 2, 3, 4)]
     local bytes = WI.compile(SvecRefCases.sref, (Int64,))
-    local cases = [WTRunner.RunCase("sref$a", bytes, a, WTRunner.native_answer(SvecRefCases.sref, a)) for a in args]
-    @test count(c -> c.native isa WTRunner.Throws, cases) == 3
-    for r in WTRunner.run_cases(cases)
+    local cases = [WTChild.RunCase("sref$a", bytes, a, WTChild.native_answer(SvecRefCases.sref, a)) for a in args]
+    @test count(c -> c.native isa WTChild.Throws, cases) == 3
+    for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -250,14 +250,14 @@ end
     # Core.svec builds its data array from its operands, each boxed to the element type, as dart's
     # WasmArray.literal does, under the SimpleVector's header; read back by index and by length, and
     # past its length raising BoundsError
-    local native(f, a) = try; f(a...); catch e; WTRunner.Throws(typeof(e)); end
-    local cases = WTRunner.RunCase[]
+    local native(f, a) = try; f(a...); catch e; WTChild.Throws(typeof(e)); end
+    local cases = WTChild.RunCase[]
     for (f, argsets) in ((SvecNewCases.made, [(Int64(5), Int64(k)) for k in 0:4]), (SvecNewCases.made_len, [(true,), (false,)]))
         local bytes = WI.compile(f, map(typeof, first(argsets)))
-        append!(cases, [WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, native(f, a)) for a in argsets])
+        append!(cases, [WTChild.RunCase("$(nameof(f))$(a)", bytes, a, native(f, a)) for a in argsets])
     end
-    @test count(c -> c.native isa WTRunner.Throws, cases) == 2
-    for r in WTRunner.run_cases(cases)
+    @test count(c -> c.native isa WTChild.Throws, cases) == 2
+    for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -273,15 +273,15 @@ end
 @testset "builtins.c: Julia's _expr, a fresh Vector{Any} of its operands under the Expr of its head" begin
     # jl_f__expr allocates the Vector{Any} of its operands (jl_alloc_vec_any, the empty memory for none)
     # and the Expr of the head and that vector; read back by index past its length raising BoundsError
-    local native(f, a) = try; f(a...); catch e; WTRunner.Throws(typeof(e)); end
-    local cases = WTRunner.RunCase[]
+    local native(f, a) = try; f(a...); catch e; WTChild.Throws(typeof(e)); end
+    local cases = WTChild.RunCase[]
     for (f, argsets) in ((ExprNewCases.made, [(Int64(5), Int64(k)) for k in 0:4]), (ExprNewCases.heads, [(true,), (false,)]),
                          (ExprNewCases.pushed, [(Int64(3),)]))
         local bytes = WI.compile(f, map(typeof, first(argsets)))
-        append!(cases, [WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, native(f, a)) for a in argsets])
+        append!(cases, [WTChild.RunCase("$(nameof(f))$(a)", bytes, a, native(f, a)) for a in argsets])
     end
-    @test count(c -> c.native isa WTRunner.Throws, cases) == 2
-    for r in WTRunner.run_cases(cases)
+    @test count(c -> c.native isa WTChild.Throws, cases) == 2
+    for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -290,8 +290,9 @@ module IdenticalCases
 mutable struct Cell
     x::Int64
 end
-const PRIMES = let m = Memory{Int64}(undef, 2); m .= (2, 3); m end
-const OTHER = let m = Memory{Int64}(undef, 2); m .= (2, 3); m end
+# (boxed: an isbits Memory a constant reaches bare is refused, located, spec v17 Y6)
+const PRIMES = let m = Memory{Any}(undef, 2); m .= (2, 3); m end
+const OTHER = let m = Memory{Any}(undef, 2); m .= (2, 3); m end
 # a mutable object is === only itself, whatever its contents
 cells(b::Bool) = (c = Cell(1); d = b ? c : Cell(1); Int64(c === d))
 # a memory constant against another of the same contents, and an Any against a mutable object
@@ -316,9 +317,9 @@ end
                      (4, 1, 1), (4, 1, 2), (4, 2, 2), (4, 3, 4), (4, 4, 4), (5, 1, 1), (5, 1, 2), (5, 3, 3)]
     local own = WI.compile(f, (Int64, Int64, Int64))
     local plain = WI.compile(f, (Int64, Int64, Int64); optimize = false)
-    local cases = [WTRunner.RunCase("identical$a", plain, Int64.(a), WTRunner.native_answer(f, Int64.(a)); optimized = own) for a in argsets]
+    local cases = [WTChild.RunCase("identical$a", plain, Int64.(a), WTChild.native_answer(f, Int64.(a)); optimized = own) for a in argsets]
     @test count(c -> c.native == 1, cases) == 8
-    for r in WTRunner.run_cases(cases)
+    for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -346,8 +347,9 @@ signed8(i::Int64) = (v = Vector{Int8}(undef, 2); v[1] = Int8(-1); Int64(v[i]))
 unsigned8(i::Int64) = (v = Vector{UInt8}(undef, 2); v[1] = 0xff; Int64(v[i]))
 # a constant Memory read by index (its class struct, the constant's data array), and the one empty
 # instance memorynew answers for 0, identical each time
-const PRIMES = let m = Memory{Int64}(undef, 4); m .= (2, 3, 5, 7); m end
-prime(i::Int64) = PRIMES[i]
+# (boxed: an isbits Memory a constant reaches bare is refused, located, spec v17 Y6)
+const PRIMES = let m = Memory{Any}(undef, 4); m .= (2, 3, 5, 7); m end
+prime(i::Int64) = PRIMES[i]::Int64
 empties(n::Int64) = Int64(Memory{Int64}(undef, n) === Memory{Int64}(undef, n))
 # an inline element holding a reference, #undef until written (UndefRefError), an inline bits union
 # never #undef (its unwritten element nothing), and isassigned of an empty memory of bits false
@@ -378,10 +380,10 @@ end
                      (12, 1, 0), (12, 2, 0), (13, 1, 0), (13, 2, 0), (14, 0, 0), (14, 1, 0), (15, 2, 0), (15, 3, 0)]
     local own = WI.compile(M.memory, (Int64, Int64, Int64))
     local plain = WI.compile(M.memory, (Int64, Int64, Int64); optimize = false)
-    local cases = [WTRunner.RunCase("$(nameof(M.CASES[k]))$((k, a, b))", plain, Int64.((k, a, b)), WTRunner.native_answer(M.memory, Int64.((k, a, b))); optimized = own)
+    local cases = [WTChild.RunCase("$(nameof(M.CASES[k]))$((k, a, b))", plain, Int64.((k, a, b)), WTChild.native_answer(M.memory, Int64.((k, a, b))); optimized = own)
                    for (k, a, b) in argsets]
-    @test count(c -> c.native isa WTRunner.Throws, cases) == 13
-    for r in WTRunner.run_cases(cases)
+    @test count(c -> c.native isa WTChild.Throws, cases) == 13
+    for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -407,7 +409,7 @@ end
                                (AllocationCases.wide, (Int64,), Int128))
         # standalone, as WasmTarget's compile translates (src/julia/entry.jl compile_world)
         @testset "$(nameof(f)): $cls" begin
-            local t = DI.Translator(WasmTarget.build_nir(WI.check_subset(f, argtypes, "intrinsics"), "test"),
+            local t = DI.Translator(WasmTarget.build_nir(WI.check_subset(f, argtypes, "intrinsics", Base.get_world_counter()), "test"),
                 DI.build_module_output_data(DI.DefaultModuleStrategy(DI.WasmCompilerOptions_default_options())), DI.TranslatorOptions(; standalone = true))
             DI.translate(t, nothing)
             @test DI.class_id(t.class_info[cls]) in t.functions[]._allocated_classes

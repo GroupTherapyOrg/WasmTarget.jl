@@ -45,7 +45,7 @@ end
     end
     # a concrete Julia tuple type is a class of its own, Base's; the closed world's walk meets each
     # arity's record, so no Kernel visit fills the map
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(x -> (x, x + 1), (Int,), "records"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(x -> (x, x + 1), (Int,), "records", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     @test isempty(D.generate_record_classes(t.component))
     local g = D._RecordClassGenerator(Dict{D.RecordShape,DataType}())
     @test D.nullable_object_type(g) === Any && D.non_nullable_string_type(g) === String
@@ -81,7 +81,7 @@ end
 # the module of one body, `f` at `argtypes`, built as the code generator builds a member
 function records_compile_one(f, argtypes)
     local W = WasmTarget; local D = W.Dart2Wasm; local B = W.WasmBuilder; local IR = B.IR
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "records"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "records", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     t.constants[] = D.Constants(t)
@@ -115,7 +115,7 @@ end
     @test bytes3[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     # the visit itself: the shape's positional index agrees with the class layout, then the receiver
     # is read and its field
-    local t3 = D.Translator(WasmTarget.build_nir(W.check_subset(RecordCodegenCases.fst, (Tuple{Int64, Float64},), "records"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t3 = D.Translator(WasmTarget.build_nir(W.check_subset(RecordCodegenCases.fst, (Tuple{Int64, Float64},), "records", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t3, nothing)
     collect(D.ClassInfoCollector(t3))
     local nb = first(t3.component)
@@ -140,8 +140,8 @@ end
 # tuples and Julia's bounds-check flag, each program run against native Julia (test/runner.jl)
 module RecordRunCases
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 @inline function checked(x::Int64)
     r = Int64(0)
     @boundscheck r = Int64(100)
@@ -159,11 +159,11 @@ mk(x::Int64, y::Float64) = (x, y)
 @testset "code_generator.dart: tuples and Julia's bounds-check flag, run against native" begin
     # Julia's answers: the flag is the @boundscheck block's guard, its value the compiling process's
     @test plain(1) == 101 && inb(1) == 1 && Base.JLOptions().check_bounds == 0
-    local cases = WTRunner.RunCase[]
+    local cases = WTChild.RunCase[]
     for (f, args) in ((plain, (Int64(1),)), (inb, (Int64(1),)), (idx, (Int64(7),)), (idxin, (Int64(7),)), (named, (Int64(3),)), (mk, (Int64(4), 1.5)))
-        append!(cases, first(WTRunner.answer_cases(string(nameof(f)), WasmTarget.compile, f, args)))
+        append!(cases, first(WTChild.answer_cases(string(nameof(f)), WasmTarget.compile, f, args)))
     end
-    local results = WTRunner.run_cases(cases)
+    local results = WTChild.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) >= 7 && all(r -> r.ok, results)
 end
@@ -174,8 +174,8 @@ end
 # a program testing and reading it answers as native Julia (test/runner.jl)
 module RecordWidenedCases
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 _facts(xs...) = xs
 @noinline Base.@constprop :none function widened(n::Int64)
     a = Ref{Any}(nothing); a[] = 42n
@@ -186,10 +186,10 @@ sumfacts(n::Int64) = (t = widened(n); t isa Tuple{Int64, Int64} ? t[1] + t[2] : 
 @testset "classes, code_generator.dart: a widened tuple statement's class is its operands'" begin
     # Julia's answers: the statement is widened, the object's class is not
     @test Base.code_typed(widened, (Int64,))[1][2] == Tuple{Any, Any} && typeof(widened(1)) === Tuple{Int64, Int64}
-    local world = WasmTarget.build_nir(WasmTarget.check_subset(widened, (Int64,), "records"), "records")
+    local world = WasmTarget.build_nir(WasmTarget.check_subset(widened, (Int64,), "records", Base.get_world_counter()), "records")
     @test Tuple{Int64, Int64} in WasmTarget.closed_world_classes(world, "records")
     @test WasmTarget.compile(widened, (Int64,))[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-    local results = WTRunner.run_cases(first(WTRunner.answer_cases("sumfacts", WasmTarget.compile, sumfacts, (Int64(1),))))
+    local results = WTChild.run_cases(first(WTChild.answer_cases("sumfacts", WasmTarget.compile, sumfacts, (Int64(1),))))
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test !isempty(results) && all(r -> r.ok, results)
 end
@@ -202,8 +202,8 @@ end
 # records of the arities it admits, at two lengths. Out of range each raises BoundsError, as native
 module RecordIndexCases
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 @noinline pick(t::Tuple, i::Int64) = t[i]
 @noinline pickin(t::NTuple{3,Int64}, i::Int64) = @inbounds t[i]
 @noinline nth(@nospecialize(t::Tuple{String,Vararg{String}}), i::Int64) = t[i]
@@ -222,18 +222,18 @@ end
     local plain = WasmTarget.compile(tuple_index, (Int64, Int64); optimize = false)
     local argsets = [(1, 1), (1, 3), (1, 4), (1, 0), (2, 1), (2, 2), (2, 3), (2, 4), (3, 2), (4, 1), (4, 2), (4, 3),
                      (5, 1), (5, 2), (6, 1)]
-    local cases = [WTRunner.RunCase("tuple_index$a", plain, Int64.(a), WTRunner.native_answer(tuple_index, Int64.(a))) for a in argsets]
-    @test count(c -> c.native == WTRunner.Throws(BoundsError), cases) == 6
-    local results = WTRunner.run_cases(cases)
+    local cases = [WTChild.RunCase("tuple_index$a", plain, Int64.(a), WTChild.native_answer(tuple_index, Int64.(a))) for a in argsets]
+    @test count(c -> c.native == WTChild.Throws(BoundsError), cases) == 6
+    local results = WTChild.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == 15 && all(r -> r.ok, results)
     # a program whose one read that can raise BoundsError is a tuple's at a run-time index (an NTuple of
     # 36, the corpus's case): its read calls the runtime's raise, a root of every closed world
     # (RUNTIME_ROOTS)
     local only_bytes = WasmTarget.compile(only_tuple, (Int64,); optimize = false)
-    local only_cases = [WTRunner.RunCase("only_tuple$a", only_bytes, a, WTRunner.native_answer(only_tuple, a)) for a in ((Int64(1),), (Int64(36),), (Int64(37),))]
-    @test only_cases[3].native == WTRunner.Throws(BoundsError)
-    local only_results = WTRunner.run_cases(only_cases)
+    local only_cases = [WTChild.RunCase("only_tuple$a", only_bytes, a, WTChild.native_answer(only_tuple, a)) for a in ((Int64(1),), (Int64(36),), (Int64(37),))]
+    @test only_cases[3].native == WTChild.Throws(BoundsError)
+    local only_results = WTChild.run_cases(only_cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), only_results)
     @test all(r -> r.ok, only_results)
 end
@@ -248,7 +248,7 @@ function union_tuple_read(n::Int64)
 end
 @testset "codegen.cpp: a field at a constant index of a Union of tuple types, by its class" begin
     local bytes = WasmTarget.compile(union_tuple_read, (Int64,); optimize = false)
-    local results = WTRunner.run_cases([WTRunner.RunCase("union_tuple_read($n)", bytes, (n,), WTRunner.native_answer(union_tuple_read, (n,))) for n in (Int64(4), Int64(-2))])
+    local results = WTChild.run_cases([WTChild.RunCase("union_tuple_read($n)", bytes, (n,), WTChild.native_answer(union_tuple_read, (n,))) for n in (Int64(4), Int64(-2))])
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == 2 && all(r -> r.ok, results)
 end
@@ -259,8 +259,8 @@ end
 # index, whatever classes its open operand has
 module OpenLiteralCases
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 const TS = Type[Int64, String, Union{Int64,String}]
 const ANYS = Any[1, "s"]
 @noinline pick(@nospecialize(t::Tuple), i::Int64) = t[i]
@@ -273,13 +273,13 @@ over(n::Int64) = pick((ANYS[n], n), 2)::Int64            # Tuple{Any, Int64}: ev
 @testset "records.dart: a tuple literal of open operands is the record of its arity" begin
     @test Base.return_types(open_literal, (Int64, Int64)) == [Int64]
     local plain = WasmTarget.compile(open_literal, (Int64, Int64); optimize = false)
-    local cases = [WTRunner.RunCase("open_literal$a", plain, Int64.(a), WTRunner.native_answer(open_literal, Int64.(a))) for a in ((k, n) for k in 1:2 for n in 1:3)]
-    local results = WTRunner.run_cases(cases)
+    local cases = [WTChild.RunCase("open_literal$a", plain, Int64.(a), WTChild.native_answer(open_literal, Int64.(a))) for a in ((k, n) for k in 1:2 for n in 1:3)]
+    local results = WTChild.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == 6 && all(r -> r.ok, results)
     # Tuple{Any, Int64}: an operand of every class the closed world has, one record, as native
     local over_bytes = WasmTarget.compile(over, (Int64,); optimize = false)
-    local over_results = WTRunner.run_cases([WTRunner.RunCase("over($n)", over_bytes, (Int64(n),), WTRunner.native_answer(over, (Int64(n),))) for n in 1:2])
+    local over_results = WTChild.run_cases([WTChild.RunCase("over($n)", over_bytes, (Int64(n),), WTChild.native_answer(over, (Int64(n),))) for n in 1:2])
     foreach(r -> r.ok || println(r.label, ": ", r.why), over_results)
     @test length(over_results) == 2 && all(r -> r.ok, over_results)
 end
@@ -296,8 +296,8 @@ end
 # bytes, a boxed Bool, nothing, a nested tuple, a mutable object by identity)
 module RecordModelCases
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 const ANYS = Any[Int64(1), "s"]
 const SLOT = Any[nothing]
 const CT = (Int64(3), "ab")
@@ -344,16 +344,16 @@ end
 @testset "records.dart: a tuple through an open slot is the record of its arity, read as native" begin
     for (f, ks) in ((round_trip, 1:8), (producers, 1:5))
         local bytes = WasmTarget.compile(f, (Int64, Int64); optimize = false)
-        local cases = [WTRunner.RunCase("$(nameof(f))($k, $n)", bytes, (Int64(k), Int64(n)), WTRunner.native_answer(f, (Int64(k), Int64(n)))) for k in ks for n in 1:2]
-        local results = WTRunner.run_cases(cases)
+        local cases = [WTChild.RunCase("$(nameof(f))($k, $n)", bytes, (Int64(k), Int64(n)), WTChild.native_answer(f, (Int64(k), Int64(n)))) for k in ks for n in 1:2]
+        local results = WTChild.run_cases(cases)
         foreach(r -> r.ok || println(r.label, ": ", r.why), results)
         @test length(results) == 2 * length(ks) && all(r -> r.ok, results)
     end
     local bytes = WasmTarget.compile(egal, (Int64, Int64); optimize = false)
     local ks = 1:(2 + length(MIXED)^2)
-    local cases = [WTRunner.RunCase("egal($k, $n)", bytes, (Int64(k), Int64(n)), WTRunner.native_answer(egal, (Int64(k), Int64(n)))) for k in ks for n in 1:2]
+    local cases = [WTChild.RunCase("egal($k, $n)", bytes, (Int64(k), Int64(n)), WTChild.native_answer(egal, (Int64(k), Int64(n)))) for k in ks for n in 1:2]
     @test count(c -> c.native == 1, cases) >= 2 * length(MIXED)
-    local results = WTRunner.run_cases(cases)
+    local results = WTChild.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == length(cases) && all(r -> r.ok, results)
 end

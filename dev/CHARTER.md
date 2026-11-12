@@ -133,19 +133,21 @@ with the per-clause status. A clause is never closed by argument.
   Planned: dev/MARCH.md 1.A6, 1.F — the skeleton derived and never drifting, `legacy/` deleted
   by its rule.
 - **C10 · Fast, precise feedback.** Fast is first, strict is final (Dale, 2026-10-20): a
-  landing is `bash dev/ship.sh` on this machine, which rebases onto the march branch, runs
+  landing is a commit landed by the climb's lander alone, from the commit that brings the lander in (itself one direct push on Dale's word, with its row in the landing log), through `bash dev/ship.sh` on this machine, which rebases onto the march branch, runs
   `bash dev/check.sh` on every commit it lands, its evidence, about a minute of wall (a 60-s
   target, red past 120 s, past 140 s until four shards, cuts 1 and 2 of the shards' first compile (7a2f804e, d0444541: 348 -> 263 G) and the ratchet's L210 cache (ad31d8f6) having landed, then 120 s (the steps of the option Dale chose, 2026-11-01): WasmTarget loads, so every construction checks itself; the ratchet
-  passes; every test of ported code passes; TLC checks every model the change touches), and
+  passes; every test file of the set the lander wrote before the check passes, each with exactly one row across the shards (the set: the change's own test files and its hold's located reds; the files the last score did not read passed, other than located known reds; the flaky known reds; the files carried from the landing before; and the ring's window, as far as D14's band less the margin and no larger than the largest set that margin was measured on, plus one file, the margin measured from the prediction errors of the recent checks of the landing's shape, on AC, that landed or read red on D14's band alone; each row written by a process whose canary read right after each file and last, whose canary's row is its last line, whose records keep their block grammar and whose exit status agrees with its rows, a file a shard skipped as claimed started by another shard; a row whose failing tests (`file:line kind`, each counted) are among those its known red's entry lists is that red's, and the change still lands); TLC checks every model the change touches), and
   pushes fast-forward, logging each landing's seconds from its first commit to landed, the median
-  of the last five inside its band (a 300-s target, red past 600 s: Dale 2026-10-21); the full CI matrix runs at clause
+  of the last five inside its band (a 300-s target, red past 600 s: Dale 2026-10-21); while origin's head has no score's record nothing lands, and a set that cannot be made leaves its item waiting; every test of ported code runs at each score of the march branch's head, where a red is located to its landing and fixed first, and the lander lands nothing while a file other than a located known red has gone `src_unverified_max` landings without a green run; the full CI matrix runs at clause
   closure and never holds a landing (its red is the next batch's first item), and once, blocking,
   on PR #128's merge head; a failure names its site. Checks: `L153` (the full matrix runs every
   test family CI runs, at clause closure, non-blocking; a landing pushes the march branch alone)
   `L162` (the full matrix, every lane of `dev/lanes.sh` on CI's runners, gives its verdict within
   its 20-minute budget per lane job; `bash dev/gate.sh` pushes nothing, it reads the run a wt2
   push started) `L227` (a change that deletes a test file or drops a smoke or probe case names
-  each in its message, `Removes-test: <what> — <reason>`).
+  each in its message, `Removes-test: <what> — <reason>`) `L228` (a landing's check runs the test set the
+  climb's lander chose before it, from origin's code and state, and nothing else; its target is derived from
+  measured checks, never set by hand).
   Legacy (retired with the switch): L144 L145 L157 L158 L159 L160 L161 L196.
   Planned: dev/MARCH.md 1.Q — each case's derived outcome recorded, and a landing never turns a
   passing case loud.

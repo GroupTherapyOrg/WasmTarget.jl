@@ -4,7 +4,7 @@ using Test
 using WasmTarget
 
 const D = WasmTarget.Dart2Wasm
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 @testset "class_info.dart: Range and normalize" begin
     local R = D.Range
@@ -44,7 +44,7 @@ end
 
 @testset "class_info.dart: ClassIdNumbering on the closed world" begin
     local W = WasmTarget
-    local translator(f, at) = D.Translator(WasmTarget.build_nir(W.check_subset(f, at, "class_info"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local translator(f, at) = D.Translator(WasmTarget.build_nir(W.check_subset(f, at, "class_info", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local number(f, at, masq = Base.IdSet{DataType}()) = D.ClassIdNumbering__number(translator(f, at), masq)
     for (f, at) in ((ClassInfoCases.f_shapes, (Int,)), (ClassInfoCases.f_vector, (Vector{Int},)))
         local t = translator(f, at)
@@ -107,7 +107,7 @@ end
     # same kind (Float64) is the value's run-time test, jl_isa's jl_types_equal, never a class-id check
     # answering true for every DataType: Int64 is in it and Float64 is not, as natively
     local kb = W.compile(ClassInfoCases.kind_isa, (Int64,))
-    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("kind_isa$(a)", kb, a, ClassInfoCases.kind_isa(a...)) for a in [(1,), (2,)]])
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("kind_isa$(a)", kb, a, ClassInfoCases.kind_isa(a...)) for a in [(1,), (2,)]])
         @test r.ok || (@info r.label r.why; false)
     end
     # a covariant Tuple class is abstract: no value has it exactly
@@ -161,7 +161,7 @@ end
     @test [(f.name, f.type, f.index) for f in fields(Module)] == [("name", Symbol, 0)]
     # the collector over a translator: no class masquerades in Julia; typeType, read only for a
     # class's type parameters, which Julia's classes do not have, stays unassigned
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ClassInfoCases.f_shapes, (Int,), at), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(optimization_level = 2))
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ClassInfoCases.f_shapes, (Int,), at, Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(optimization_level = 2))
     local c = D.ClassInfoCollector(t)
     @test c.translator === t && D.options(c) === t.options && isempty(c.masqueraded[])
     local e = try; c.type_type[]; nothing; catch x; x; end
@@ -219,7 +219,7 @@ end
     @test e2 isa W.RejectionError && e2.rejection isa W.Internal
     # cyclicness: a struct holding a non-nullable reference to its own class's struct is cyclic; one
     # holding a nullable reference is not
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(S.f_shapes, (Int,), "class_info"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(S.f_shapes, (Int,), "class_info", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     for info in (circle, square)
         info._repr = info.non_nullable_type
         t.class_for_heap_type[info.struct_] = info

@@ -13,15 +13,15 @@ const D = WasmTarget.Dart2Wasm
 const B = WasmTarget.WasmBuilder
 const IR = WasmTarget.WasmBuilder.IR
 
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 
 # the rejection `f()` raises, or nothing
 rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(); end
 
 # node runs each case's module on its arguments, in one run: whether every answer is native Julia's
-function answers_native(cases::Vector{WTRunner.RunCase})
-    local results = WTRunner.run_cases(cases)
+function answers_native(cases::Vector{WTChild.RunCase})
+    local results = WTChild.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     return all(r -> r.ok, results)
 end
@@ -50,7 +50,7 @@ is_int(r::Base.RefValue{Any}) = r[] isa Int64
 # its translator as translate() leaves it before code: modules, closures and classes collected, the
 # globals and constants made; built once for the file's cases
 const TRANSLATOR = Ref{Any}()
-let t = D.Translator(WasmTarget.build_nir(W.check_subset(is_int, (Base.RefValue{Any},), "code_generator_sub"), "test"),
+let t = D.Translator(WasmTarget.build_nir(W.check_subset(is_int, (Base.RefValue{Any},), "code_generator_sub", Base.get_world_counter()), "test"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(t.closure_layouter[]); collect(t.class_info_collector[])
@@ -145,7 +145,7 @@ end
     # Julia's frozen undef (emit_new_struct), which any one value refines; the case reads only fields it
     # set, so run by node it answers as native Julia
     local bytes = W.compile(UndefBitsCases.late, (Int,); optimize = false)
-    @test answers_native([WTRunner.RunCase("late($n)", bytes, (n,), UndefBitsCases.late(n)) for n in (3, -4)])
+    @test answers_native([WTChild.RunCase("late($n)", bytes, (n,), UndefBitsCases.late(n)) for n in (3, -4)])
 end
 
 @testset "code_generator.dart: an instance invocation and an == are never virtual calls: every invoke has its single target" begin
@@ -194,10 +194,10 @@ end
     # reads: the getter selector's two ranges, the receiver kept in a local and the table called
     # indirectly; writes: the setter selector's, its synthesized null dropped and the value kept;
     # direct: one range, a direct call of D1's getter. Run by node each answers as native Julia
-    local cases = WTRunner.RunCase[]
+    local cases = WTChild.RunCase[]
     for (f, xs) in ((V.reads, [5, -7]), (V.direct, [4]), (V.writes, [2, -3]))
         local bytes = W.compile(f, (Int,); optimize = false)
-        append!(cases, [WTRunner.RunCase("$(nameof(f))($x)", bytes, (x,), f(x)) for x in xs])
+        append!(cases, [WTChild.RunCase("$(nameof(f))($x)", bytes, (x,), f(x)) for x in xs])
     end
     @test answers_native(cases)
     # MissingFieldTraps: a class the receiver admits without the field reaches Julia's FieldError, a
@@ -222,10 +222,10 @@ end
 @testset "intrinsics.dart: typeof of a value run time knows is Julia's jl_typeof, its class id's entry in jl_to_typeof's table" begin
     # Julia leaves `typeof(s.x)` a builtin call on the Union; each member's type value is its canonical
     # constant, so === answers as native Julia for either member, `nothing` among them
-    local cases = WTRunner.RunCase[]
+    local cases = WTChild.RunCase[]
     for f in (TypeofCases.pick, TypeofCases.pick_n)
         local bytes = W.compile(f, (Int,); optimize = false)
-        append!(cases, [WTRunner.RunCase("$(nameof(f))($n)", bytes, (n,), f(n)) for n in (1, -1)])
+        append!(cases, [WTChild.RunCase("$(nameof(f))($n)", bytes, (n,), f(n)) for n in (1, -1)])
     end
     @test answers_native(cases)
 end

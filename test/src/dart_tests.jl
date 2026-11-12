@@ -36,29 +36,25 @@
 # codegen's, goes beside the landings on wt2's head (without the variable, dev/corpus.sh), its red the next
 # landing's first item.
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 isdefined(Main, :_wt_instructions) || Base.include(Main, joinpath(@__DIR__, "..", "instructions.jl"))
 
 # the corpus's `dart_*` groups, from test/DartCorpus's precompiled image (test/DartCorpus/load.jl)
 include(joinpath(@__DIR__, "..", "DartCorpus", "load.jl"))
 const DART_GROUPS = filter(g -> startswith(first(g), "dart_"), DartCorpus.GROUPS)
 
-# the text the change is measured against: the file at CHECK_BASE, followed across a rename by git's
-# own rename detection (a move leaves its records unchanged), or "" where the base holds none
-const _DART_BASE = get(ENV, "CHECK_BASE", "origin/wt2")
+# the text the change is measured against: the file at CHECK_BASE, followed across a rename by git's own rename
+# detection (a move leaves its records unchanged), or "" where the base holds none. A test reads no history (spec v17
+# Z4): the process that runs it hands the base, made by its own git, as WT_BASE_TREE (the base's test/ under `tree`, and
+# `renames`, git diff -M --name-status base..HEAD): dev/check.sh and the climb's src_run. With none handed, the base
+# holds nothing, and every native answer runs
+const _DART_BASE_TREE = get(ENV, "WT_BASE_TREE", "")
 function _dart_at_base(path::String)::String
-    local was = try
-        local renames = read(pipeline(`git -C $(@__DIR__) diff -M --name-status $(_DART_BASE)`; stderr = devnull), String)
-        local m = match(Regex("^R\\d*\\t(\\S+)\\t\\Q$(path)\\E\$", "m"), renames)
-        m === nothing ? path : String(m[1])
-    catch
-        path
-    end
-    return try
-        read(pipeline(`git -C $(@__DIR__) show $(_DART_BASE):$was`; stderr = devnull), String)
-    catch
-        ""
-    end
+    isempty(_DART_BASE_TREE) && return ""
+    local rn = joinpath(_DART_BASE_TREE, "renames")
+    local m = isfile(rn) ? match(Regex("^R\\d*\\t(\\S+)\\t\\Q$(path)\\E\$", "m"), read(rn, String)) : nothing
+    local was = joinpath(_DART_BASE_TREE, "tree", m === nothing ? path : String(m[1]))
+    return isfile(was) ? read(was, String) : ""
 end
 
 # each dart group's text in the corpus: its definitions since the group before and its case list, every
@@ -1213,7 +1209,7 @@ const _DART_CORE_ONLY = get(ENV, "WT_LANDING_CORE", "") == "1"
 # plain own module and each leaf type's reader plain and wasm-opt'd (test/runner.jl's answer_cases), so it has the
 # compile's budget per compile it runs: its seconds over its compiles, never their sum, which failed a reading of
 # several compiles by construction (four readings at 12.5 to 42.9 s on f05b2fa8, 2026-11-01)
-function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{String,String}}, key::String, f, args::Tuple,
+function _dart_read!(runs::Vector{Main.WTChild.RunCase}, unread::Vector{Pair{String,String}}, key::String, f, args::Tuple,
                      own::Vector{UInt8})
     isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: reading $key's answer")
     local native = nothing
@@ -1221,7 +1217,7 @@ function _dart_read!(runs::Vector{Main.WTRunner.RunCase}, unread::Vector{Pair{St
     local counted(g, T; kw...) = (compiles += 1; WasmTarget.compile(g, T; kw...))
     local secs = _dart_secs(@timed try
         local read = first(_dart_limited("$key reading its answer") do
-            (Main.WTRunner.answer_cases(key, counted, f, args; own), UInt8[])
+            (Main.WTChild.answer_cases(key, counted, f, args; own), UInt8[])
         end)
         if read isa _DartPastLimit
             push!(unread, key => read.why)
@@ -1347,10 +1343,10 @@ end
 
 @testset "dart2wasm's tests, Julia the ground truth" begin
     local seen = Set{String}()
-    local runs = Main.WTRunner.RunCase[]
+    local runs = Main.WTChild.RunCase[]
     local unread = Pair{String,String}[]
     local nread = 0
-    local results = Main.WTRunner.RunResult[]
+    local results = Main.WTChild.RunResult[]
     local nblocks = 0
     for (bi, (group, cases)) in enumerate(DART_GROUPS)
         bi in _DART_SHARD_BLOCKS || continue
@@ -1397,9 +1393,9 @@ end
                             today === :unread && push!(block_gaps, key)
                             local native = _dart_read!(runs, unread, key, f, args, own)
                             nread += 1
-                            @test _dart_same(native === nothing ? Main.WTRunner.native_answer(f, args) : something(native), _dart_native(key))
+                            @test _dart_same(native === nothing ? Main.WTChild.native_answer(f, args) : something(native), _dart_native(key))
                         else
-                            @test _dart_same(Main.WTRunner.native_answer(f, args), _dart_native(key))
+                            @test _dart_same(Main.WTChild.native_answer(f, args), _dart_native(key))
                         end
                     end
                 end
@@ -1416,10 +1412,10 @@ end
             end
         end
         # the block's modules in node now, so its cost is its own and no shard's node run grows with the corpus
-        local block_results = Main.WTRunner.RunResult[]
+        local block_results = Main.WTChild.RunResult[]
         if first_run <= length(runs)
             isdefined(Main, :wt_progress) && Main.wt_progress("dart_tests.jl: running $group's $(length(runs) - first_run + 1) modules in node")
-            block_results = Main.WTRunner.run_cases(runs[first_run:end])
+            block_results = Main.WTChild.run_cases(runs[first_run:end])
             append!(results, block_results)
         end
         # judged at the block's end, so a kill later in the shard loses no verdict of it
@@ -1439,7 +1435,7 @@ end
     global DART_RUN_COUNTS = (nread, length(results), count(r -> r.ok, results))
 end
 println("dart tests: $(_DART_CORE_ONLY ? "no compile (the landing)" : "$(length(_DART_RECORDS)) compiles checked"); native answers proven for ",
-        _DART_CORE_ONLY ? "the $(length(DART_NATIVE_DUE)) the change adds or edits against $(_DART_BASE)" : "every case", "; $(DART_RUN_COUNTS[1]) compiled cases run in node, $(DART_RUN_COUNTS[3]) of their $(DART_RUN_COUNTS[2]) facts native's")
+        _DART_CORE_ONLY ? "the $(length(DART_NATIVE_DUE)) the change adds or edits against $(get(ENV, "CHECK_BASE", "the base"))" : "every case", "; $(DART_RUN_COUNTS[1]) compiled cases run in node, $(DART_RUN_COUNTS[3]) of their $(DART_RUN_COUNTS[2]) facts native's")
 
 # _dart_unlocated against its own plants (A51E1, A57E1): a located Unported and Unquarantined admitted, and each
 # way a rejection can fail to locate refused

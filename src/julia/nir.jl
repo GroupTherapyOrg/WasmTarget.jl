@@ -17,9 +17,55 @@ end
     n::Int
 end
 
-"""An operand that is a module binding, Julia's `GlobalRef`, as Julia wrote it."""
-@quarantine "Julia's optimized IR reads a module binding through a GlobalRef" Core.GlobalRef struct NirGlobal
+"""
+    NirBinding
+
+A module binding as the program's world holds it, Julia's answers there: `ref`, the binding; `world`, the world it
+was read at, the ClosedWorld's (check_subset's, compile's `world`); `defined` (isdefinedglobal), `constant`
+(jl_is_const), `value` (getglobal; `nothing` when it has no value) and `type`, its declared type
+(`Core.get_binding_type`, `Any` when untyped), each run at that world (_binding_at). Read once, where
+build_nir meets the binding in an operand or a statement of the closed world, and held by that node and by the
+NirWorld's table (nir_binding): no reader of a binding's fact takes a world, so no reader can read one at another
+(the fact's one source, D5; a wrong world cannot be written, D6). A binding's definedness, constancy and value are a
+world's (Julia 1.12 partitions every binding by world age: `isconst` "is specific to a particular world age",
+base/runtime_internals.jl:412), so a compiler whose own code runs in an earlier world than its program's
+(test/smoke.jl's judge) reads the program's bindings where the program lives, never where the compiler runs.
+Its fields are const and it is compared by identity: a closed world holds one per binding (NirBindings).
+
+precedent(julia: src/julia.h:775 jl_binding_partition_t, a binding's kind and value over a range of worlds, which
+Compiler/src/abstractinterpretation.jl:3736 abstract_eval_globalref resolves once, at inference's world, leaving its
+Const in the IR the optimizer and codegen read;
+GPUCompiler: CompilerJob.world, the one world a job's reads use). dart differs: its compiler reads no binding of the
+program's world; a Kernel StaticGet names its Field, whose declaration the compiler holds.
+"""
+@quarantine pin"precedent(julia: src/julia.h:775 jl_binding_partition_t)" "a binding's facts are Julia's answers at the program's world, resolved once where the NIR meets the GlobalRef, as Julia's inference resolves a binding partition at its world (Compiler/src/abstractinterpretation.jl:3736 abstract_eval_globalref)" Core.GlobalRef mutable struct NirBinding
+    const ref::GlobalRef
+    const world::UInt
+    const defined::Bool
+    const constant::Bool
+    const value::Any
+    const type::Any
+end
+
+"""
+    NirBindings(world)
+
+The bindings a conversion to NIR meets, each read once at `world`, the world the converted code was inferred at (the
+ClosedWorld's, in build_nir): `table`, one NirBinding per GlobalRef, made by nir_binding! the first time an operand
+or a statement names it.
+"""
+@quarantine pin"precedent(julia: src/julia.h:799 jl_binding_t)" "a closed world's bindings, each read once at its world, as Julia's binding holds its partitions, each a range of worlds" Base.Dict struct NirBindings
+    world::UInt
+    table::Dict{GlobalRef,NirBinding}
+    NirBindings(world::UInt) = new(world, Dict{GlobalRef,NirBinding}())
+end
+
+"""An operand that is a module binding, Julia's `GlobalRef`, as Julia wrote it: `ref`, and `binding`, its facts at
+the program's world (NirBinding)."""
+@quarantine pin"precedent(julia: src/julia.h:199 jl_globalref_t)" "Julia's optimized IR reads a module binding through a GlobalRef" Core.GlobalRef struct NirGlobal
     ref::GlobalRef
+    binding::NirBinding
+    NirGlobal(binding::NirBinding) = new(binding.ref, binding)
 end
 
 """An operand that is a literal (a `QuoteNode`'s payload or any other constant), as Julia's own
@@ -176,9 +222,12 @@ end
 """A `nothing` statement: a statement the optimizer emptied."""
 @quarantine "Julia's optimizer leaves an emptied statement as nothing" Core.Nothing struct NirNothing
 end
-"""A statement that is a `GlobalRef`: a read of a module binding."""
-@quarantine "Julia's optimized IR can read a binding as a statement of its own" Core.GlobalRef struct NirGlobalRead
+"""A statement that is a `GlobalRef`: a read of a module binding, `ref`, and `binding`, its facts at the program's
+world (NirBinding)."""
+@quarantine pin"precedent(julia: src/julia.h:199 jl_globalref_t)" "Julia's optimized IR can read a binding as a statement of its own" Core.GlobalRef struct NirGlobalRead
     ref::GlobalRef
+    binding::NirBinding
+    NirGlobalRead(binding::NirBinding) = new(binding.ref, binding)
 end
 
 """
@@ -266,13 +315,15 @@ end
 
 # ---- building --------------------------------------------------------------------------------------
 """
-    nir_code(code, ssaflags, at) -> (Vector{NirStmt}, Core.Compiler.CFG, NirHandlers)
+    nir_code(code, ssaflags, bindings, at) -> (Vector{NirStmt}, Core.Compiler.CFG, NirHandlers)
 
 The statements of an optimized CodeInfo's `code` in NIR, Julia's CFG of them (compute_basic_blocks,
 whose blocks and edges name statements by their position, the same in both), and its try regions:
 each statement's catch handler and exception stack top (compute_trycatch, over the CodeInfo's
 statements, whose catch destinations are statements) and whether it sends no exception to that handler. The one reader of a
-body's raw statements, so every later stage, the stackifier's included, reads the closed sums.
+body's raw statements, so every later stage, the stackifier's included, reads the closed sums. Each binding an
+operand or a statement names is read once at `bindings`' world, the world the code was inferred at, into its node
+(NirBinding, nir_binding!).
 
 Whether a statement sends an exception to its handler is inference's rule (typeinf_local,
 Compiler/src/abstractinterpretation.jl): a block's GotoNode, GotoIfNot and EnterNode carry
@@ -281,7 +332,7 @@ propagate_to_error_handler!, so neither throws whatever its flag (the optimizer'
 flags a :leave as it does any unknown head, not nothrow); every other statement throws unless
 flagged.
 """
-@quarantine "Julia's IR is a CFG compute_basic_blocks reads from its optimized statements, read here once" Core.Compiler.compute_basic_blocks function nir_code(code::Vector{Any}, ssaflags::Vector{UInt32}, at::String)::Tuple{Vector{NirStmt},Core.Compiler.CFG,NirHandlers}
+@quarantine pin"precedent(julia: Compiler/src/ssair/ir.jl:94 compute_basic_blocks)" "Julia's IR is a CFG compute_basic_blocks reads from its optimized statements, read here once" Core.Compiler.compute_basic_blocks function nir_code(code::Vector{Any}, ssaflags::Vector{UInt32}, bindings::NirBindings, at::String)::Tuple{Vector{NirStmt},Core.Compiler.CFG,NirHandlers}
     length(ssaflags) == length(code) || reject!(Internal("src/julia/nir.jl nir_code: $(length(ssaflags)) flags for $(length(code)) statements"), at)
     local info = Core.Compiler.compute_trycatch(code)
     local handler_at = info === nothing ? zeros(Int, length(code)) :
@@ -290,14 +341,14 @@ flagged.
         Int[e == 0 ? 0 : info.handlers[e].enter_idx for (_, e) in info.handler_at]
     local nothrow = BitVector([code[i] isa Core.ReturnNode || Meta.isexpr(code[i], :leave) || ssaflags[i] & Core.Compiler.IR_FLAG_NOTHROW != 0
                                for i in eachindex(code)])
-    return NirStmt[_nir_stmt(st, at) for st in code], Core.Compiler.compute_basic_blocks(code), NirHandlers(handler_at, exception_at, nothrow)
+    return NirStmt[_nir_stmt(st, bindings, at) for st in code], Core.Compiler.compute_basic_blocks(code), NirHandlers(handler_at, exception_at, nothrow)
 end
 
 # an operand of Julia's optimized IR as a NirValue; an IR node where a value belongs rejects, located
-@quarantine "Julia's optimized IR operands: SSAValue, Argument, GlobalRef, or a literal Julia quotes or not" Core.SSAValue function _nir_operand(x, at::String)::NirValue
+@quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:2969 abstract_eval_special_value)" "Julia's optimized IR operands: SSAValue, Argument, GlobalRef, or a literal Julia quotes or not, the forms Julia's inference reads as values" Core.SSAValue function _nir_operand(x, bindings::NirBindings, at::String)::NirValue
     x isa Core.SSAValue && return NirSSA(x.id)
     x isa Core.Argument && return NirArgument(x.n)
-    x isa GlobalRef && return NirGlobal(x)
+    x isa GlobalRef && return NirGlobal(nir_binding!(bindings, x))
     x isa QuoteNode && return NirConst(Core.Const(x.value))
     x isa Union{Expr, Core.SlotNumber, Core.NewvarNode, Core.PhiNode, Core.PiNode, Core.GotoNode, Core.GotoIfNot,
                 Core.ReturnNode, Core.EnterNode, Core.UpsilonNode, Core.PhiCNode} &&
@@ -309,10 +360,10 @@ end
 # Expr(:tuple, :memmove) for (:memmove,), and Julia 1.12 a `(name, library)` tuple as a call of
 # Core.tuple, Expr(:call, Core.tuple, :sin, "Math"), each of which Julia's own codegen reads as that
 # tuple (ccall.cpp's static_eval); a literal otherwise, and a name computed at run time rejects, located
-@quarantine "Julia writes a foreigncall's constant name as tuple syntax or a call of Core.tuple, which its codegen reads as the tuple" Core.Expr function _nir_ccall_name(x, at::String)::NirValue
+@quarantine pin"precedent(julia: src/ccall.cpp:571 interpret_symbol_arg)" "Julia writes a foreigncall's constant name as tuple syntax or a call of Core.tuple, which its codegen reads as the tuple" Core.Expr function _nir_ccall_name(x, bindings::NirBindings, at::String)::NirValue
     local elems = x isa Expr && x.head === :tuple ? x.args :
         x isa Expr && x.head === :call && x.args[1] == GlobalRef(Core, :tuple) ? x.args[2:end] : nothing
-    elems === nothing && return _nir_operand(x, at)
+    elems === nothing && return _nir_operand(x, bindings, at)
     local vals = Any[a isa QuoteNode ? a.value : a for a in elems]
     any(v -> v isa Union{Expr, Core.SSAValue, Core.Argument, GlobalRef, Core.SlotNumber}, vals) &&
         reject!(Unquarantined("src/julia/nir.jl: a foreigncall whose name is computed at run time"), at)
@@ -320,10 +371,10 @@ end
 end
 
 # a statement of Julia's optimized IR as its NirStmt kind; a form outside the census rejects, located
-@quarantine "Julia's optimized statement forms, read as they are" Core.Expr function _nir_stmt(st, at::String)::NirStmt
+@quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:3400 abstract_eval_statement_expr)" "Julia's optimized statement forms, read as they are, as Julia's inference reads each Expr head" Core.Expr function _nir_stmt(st, bindings::NirBindings, at::String)::NirStmt
     if st isa Expr
         local h = st.head
-        local ops(xs) = NirValue[_nir_operand(a, at) for a in xs]
+        local ops(xs) = NirValue[_nir_operand(a, bindings, at) for a in xs]
         h === :call && return NirCall(ops(st.args))
         if h === :invoke
             local t = st.args[1]
@@ -332,7 +383,7 @@ end
             return NirInvoke(t, ops(st.args[2:end]))
         end
         h === :new && return NirNew(ops(st.args))
-        h === :foreigncall && return NirForeignCall(NirValue[_nir_ccall_name(st.args[1], at); ops(st.args[2:end])])
+        h === :foreigncall && return NirForeignCall(NirValue[_nir_ccall_name(st.args[1], bindings, at); ops(st.args[2:end])])
         h === :boundscheck && return NirBoundscheck(ops(st.args))
         h === :gc_preserve_begin && return NirGCPreserveBegin(ops(st.args))
         h === :gc_preserve_end && return NirGCPreserveEnd(ops(st.args))
@@ -346,28 +397,34 @@ end
         reject!(Unquarantined("src/julia/nir.jl: Julia's statement form Expr(:$h), outside NirStmt"), at)
     end
     st isa Core.GotoNode && return NirGoto(st.label)
-    st isa Core.GotoIfNot && return NirGotoIfNot(_nir_operand(st.cond, at), st.dest)
-    st isa Core.ReturnNode && return isdefined(st, :val) ? NirReturn(_nir_operand(st.val, at)) : NirUnreachable()
+    st isa Core.GotoIfNot && return NirGotoIfNot(_nir_operand(st.cond, bindings, at), st.dest)
+    st isa Core.ReturnNode && return isdefined(st, :val) ? NirReturn(_nir_operand(st.val, bindings, at)) : NirUnreachable()
     st isa Core.PhiNode && return NirPhi(copy(st.edges),
-        Union{Nothing, NirValue}[isassigned(st.values, k) ? _nir_operand(st.values[k], at) : nothing for k in eachindex(st.values)])
+        Union{Nothing, NirValue}[isassigned(st.values, k) ? _nir_operand(st.values[k], bindings, at) : nothing for k in eachindex(st.values)])
     if st isa Core.PiNode
         st.typ isa Type || reject!(Unquarantined("src/julia/nir.jl: a PiNode narrowing to $(typeof(st.typ)), not a Type"), at)
-        return NirPi(_nir_operand(st.val, at), st.typ)
+        return NirPi(_nir_operand(st.val, bindings, at), st.typ)
     end
-    st isa Core.EnterNode && return NirEnter(st.catch_dest, isdefined(st, :scope) ? _nir_operand(st.scope, at) : nothing)
-    st isa Core.UpsilonNode && return NirUpsilon(isdefined(st, :val) ? _nir_operand(st.val, at) : nothing)
-    st isa Core.PhiCNode && return NirPhiC(NirValue[_nir_operand(v, at) for v in st.values])
+    st isa Core.EnterNode && return NirEnter(st.catch_dest, isdefined(st, :scope) ? _nir_operand(st.scope, bindings, at) : nothing)
+    st isa Core.UpsilonNode && return NirUpsilon(isdefined(st, :val) ? _nir_operand(st.val, bindings, at) : nothing)
+    st isa Core.PhiCNode && return NirPhiC(NirValue[_nir_operand(v, bindings, at) for v in st.values])
     st === nothing && return NirNothing()
-    st isa GlobalRef && return NirGlobalRead(st)
+    st isa GlobalRef && return NirGlobalRead(nir_binding!(bindings, st))
     reject!(Unquarantined("src/julia/nir.jl: Julia's statement form $(typeof(st)), outside NirStmt"), at)
 end
 
 # a sample of each mirror's Julia form, built by Julia's own constructors: converted at load, each must
 # come back as the mirror that names its form (check_mirrors, src/julia/parity.jl; A39S1)
-mirror_samples!(_nir_operand, :NirValue,
+# the converters as the mirror check calls them: a sample's GlobalRef read at the world the package loads in, the
+# compiler's own check of its converters, no program's
+@quarantine pin"precedent(julia: base/runtime_internals.jl:1269 get_world_counter)" "the mirror check converts a sample at the world the package loads in, the compiler's own" Base.get_world_counter _nir_operand_sample(x, at::String)::NirValue =
+    _nir_operand(x, NirBindings(Base.get_world_counter()), at)
+@quarantine pin"precedent(julia: base/runtime_internals.jl:1269 get_world_counter)" "the mirror check converts a sample at the world the package loads in, the compiler's own" Base.get_world_counter _nir_stmt_sample(st, at::String)::NirStmt =
+    _nir_stmt(st, NirBindings(Base.get_world_counter()), at)
+mirror_samples!(_nir_operand_sample, :NirValue,
     NirSSA => Core.SSAValue(1), NirArgument => Core.Argument(2), NirGlobal => GlobalRef(Base, :sin),
     NirConst => QuoteNode(1))
-mirror_samples!(_nir_stmt, :NirStmt,
+mirror_samples!(_nir_stmt_sample, :NirStmt,
     NirCall => Expr(:call, GlobalRef(Base, :+), Core.SSAValue(1), 1),
     NirInvoke => Expr(:invoke, Core.Compiler.specialize_method(only(methods(+, (Int, Int))), Tuple{typeof(+), Int, Int}, Core.svec()),
                       GlobalRef(Base, :+), Core.SSAValue(1), 1),
@@ -409,9 +466,9 @@ end
 
 The closed world in NIR, dart's Kernel `Component`: `entry`, the ClosedWorld's entry MethodInstance
 (dart's Component.mainMethod), `bodies`, every function of the ClosedWorld Julia's trim verifier
-accepted, in Julia's order, and `world`, the ClosedWorld's world, the one its code was inferred in and
-the compiled program's task runs at (julia/src/jlapi.c:316). Read as a list (iterate, index, length),
-never built as one.
+accepted, in Julia's order, `world`, the ClosedWorld's world, the one its code was inferred in and
+the compiled program's task runs at (julia/src/jlapi.c:316), and `bindings`, every binding its bodies name, each
+read once at that world (NirBinding). Read as a list (iterate, index, length), never built as one.
 
 A typestate by construction: its one constructor takes the token `_NirToken`, which only this file
 holds, and `build_nir`, which takes a `ClosedWorld`, is its only caller, so a stage that takes a
@@ -427,7 +484,9 @@ same typestate (construction_check(::Val{:ClosedWorld}), src/julia/subset.jl; L2
     entry::Core.MethodInstance
     bodies::Vector{NirBody}
     world::UInt
-    NirWorld(::_NirToken, entry::Core.MethodInstance, bodies::Vector{NirBody}, world::UInt) = new(entry, bodies, world)
+    bindings::NirBindings
+    NirWorld(::_NirToken, entry::Core.MethodInstance, bodies::Vector{NirBody}, bindings::NirBindings) =
+        new(entry, bodies, bindings.world, bindings)
 end
 
 # the bodies read as a list: iterated, indexed and counted in Julia's order
@@ -474,6 +533,8 @@ formal(dev/formal/NirHandoff.tla): a record no body, one body per CodeInstance, 
     local xs = Any[x for x in world.codeinfos if !(x isa Core.SimpleVector)]
     iseven(length(xs)) || reject!(Internal("src/julia/nir.jl: the closed world holds $(length(xs)) entries, not CodeInstance and CodeInfo pairs"), at)
     local bodies = NirBody[]
+    # every binding the bodies name, each read once at the closed world's world
+    local bindings = NirBindings(world.world)
     local seen = IdDict{Core.CodeInstance,Core.CodeInfo}()
     for k in 1:2:length(xs)
         local ci = xs[k]; local src = xs[k + 1]
@@ -489,12 +550,12 @@ formal(dev/formal/NirHandoff.tla): a record no body, one body per CodeInstance, 
         # an intrinsified member is dart's external member: its call stays in its caller's body, its own
         # body is never collected (nir_intrinsified)
         nir_intrinsified(ci.def) && ci.def !== world.entry && continue
-        local stmts, cfg, handlers = nir_code(src.code, src.ssaflags, at)
+        local stmts, cfg, handlers = nir_code(src.code, src.ssaflags, bindings, at)
         push!(bodies, NirBody(ci, stmts, _nir_types(ci, src, at), cfg, handlers))
     end
     any(b -> b.ci.def === world.entry, bodies) ||
         reject!(Internal("src/julia/nir.jl: the closed world's entry $(world.entry) has no body"), at)
-    return NirWorld(_NirToken(), world.entry, bodies, world.world)
+    return NirWorld(_NirToken(), world.entry, bodies, bindings)
 end
 
 # the two closed sums' assertions, run when the package loads
@@ -636,15 +697,48 @@ treats as a constant (`Core.Compiler.isconstType`). The one source every receive
 @quarantine "Julia's codegen passes no value for a singleton type or a constant Type{X}, isconstType" Core.Compiler.isconstType nir_carries_data(@nospecialize(T))::Bool =
     !(Base.issingletontype(T) || Core.Compiler.isconstType(T))
 
-"""
-    nir_binding_is_constant(ref) -> Bool
+# a binding's facts at `world`, Julia's answers there by its builtins and jl_is_const alone (isdefinedglobal,
+# getglobal, get_binding_type), run in that world: the one reader of a binding's facts (NirBinding)
+@quarantine pin"precedent(julia: base/essentials.jl:1257 _resolve_in_world)" "a binding read at the program's world, as Base.@world reads one, by Julia's builtins and jl_is_const (base/runtime_internals.jl:421 isconst)" Base.invoke_in_world function _binding_at(world::UInt, ref::GlobalRef)::NirBinding
+    local defined = Base.invoke_in_world(world, isdefinedglobal, ref.mod, ref.name)::Bool
+    return NirBinding(ref, world, defined, Base.invoke_in_world(world, _binding_is_const, ref.mod, ref.name)::Bool,
+                      defined ? Base.invoke_in_world(world, getglobal, ref.mod, ref.name) : nothing,
+                      Base.invoke_in_world(world, Core.get_binding_type, ref.mod, ref.name))
+end
+@quarantine pin"precedent(julia: base/runtime_internals.jl:421 isconst)" "Base.isconst(::Module, ::Symbol) is this ccall (base/runtime_internals.jl:421), called here so no generic dispatch runs in the program's world" Base.Cint _binding_is_const(m::Module, s::Symbol)::Bool =
+    ccall(:jl_is_const, Cint, (Any, Any), m, s) != 0
 
-Whether the module binding `ref` names is defined and constant, so a read of it is its one value:
-Julia's `isdefinedglobal` and `isconst`. The one test of a binding's constancy, which the operand's
-type (nir_value_type), the callee's value and globals.dart's constant initializer each read.
 """
-@quarantine "a binding is constant when Julia defines it const" Base.isconst nir_binding_is_constant(ref::GlobalRef)::Bool =
-    isdefinedglobal(ref.mod, ref.name) && isconst(ref.mod, ref.name)
+    nir_binding!(bindings, ref) -> NirBinding
+
+The binding `ref` at `bindings`' world: read the first time a conversion to NIR meets it (_binding_at), the same
+NirBinding every later time.
+"""
+@quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:3736 abstract_eval_globalref)" "a binding's facts are read once per world, as Julia's inference resolves a GlobalRef's binding partition once at its world" Base.get! nir_binding!(bindings::NirBindings, ref::GlobalRef)::NirBinding =
+    get!(() -> _binding_at(bindings.world, ref), bindings.table, ref)
+
+"""
+    nir_binding(world, ref) -> NirBinding
+
+The binding `ref` as the closed world `world` read it, for a reader that holds the binding's name alone (a static
+field, dart's Field reference: globals.dart, the static field initializer, typeOfField), never a world. A binding no
+body of `world` names is WasmTarget's own defect, an Internal rejection located at it.
+"""
+@quarantine pin"precedent(julia: base/runtime_internals.jl:241 convert)" "a static field is named by its binding alone, dart's Field reference, whose facts its closed world read once and keeps by the name, as Julia finds the binding a GlobalRef names" Base.get function nir_binding(world::NirWorld, ref::GlobalRef)::NirBinding
+    local b = get(world.bindings.table, ref, nothing)
+    b === nothing && reject!(Internal("src/julia/nir.jl nir_binding: the binding $ref, which no body of the closed world names"), "the binding $ref")
+    return b
+end
+
+"""
+    nir_binding_is_constant(binding) -> Bool
+
+Whether the module binding is defined and constant at the program's world, so a read of it is its one value: Julia's
+`isdefinedglobal` and `isconst` there (NirBinding). The one test of a binding's constancy, which the operand's type
+(nir_value_type), the callee's value and globals.dart's constant initializer each read.
+"""
+@quarantine pin"precedent(julia: base/runtime_internals.jl:421 isconst)" "a binding is constant when Julia defines it const, at the program's world (NirBinding)" Core.Bool nir_binding_is_constant(binding::NirBinding)::Bool =
+    binding.defined && binding.constant
 
 """
     runtime_module(m) -> Bool
@@ -663,9 +757,9 @@ Julia v1.12.7), the setup dart's embedder does outside the compiled program (dev
 end
 
 """
-    nir_binding_value(ref, at) -> NirConst
+    nir_binding_value(binding, at) -> NirConst
 
-The value a binding starts the program with, the one source: its value in this session, which has
+The value a binding starts the program with, the one source: its value in this session at the program's world (NirBinding), which has
 run every module's `__init__` (src/toplevel.c:215-240 when a definition finishes, base/loading.jl:1443
 when a package loads, at Julia v1.12.7), juliac's heap after its startup has run them, so WasmTarget
 compiles no `__init__` (dev/MODULE_INIT.md). A binding of a runtime module (`runtime_module`) that no
@@ -678,34 +772,71 @@ rejection naming that `__init__`. A const free of mutation (a type, Sys.WORD_SIZ
 Every other binding, a const table such as base36digits among them, starts at its session value, as a
 juliac image holds it.
 """
-@quarantine "a binding starts at its session value, past every __init__, which julia/src/init.c:563 _finish_jl_init_ runs at a juliac executable's startup; a value an __init__ derived from the host (a dlopen handle, a time, Random's seed) is baked at compile time, where juliac computes it at startup (dev/MODULE_INIT.md)" Core.getglobal function nir_binding_value(ref::GlobalRef, at::String)::NirConst
-    isdefinedglobal(ref.mod, ref.name) ||
+@quarantine "a binding starts at its session value, past every __init__, which julia/src/init.c:563 _finish_jl_init_ runs at a juliac executable's startup; a value an __init__ derived from the host (a dlopen handle, a time, Random's seed) is baked at compile time, where juliac computes it at startup (dev/MODULE_INIT.md)" Base.ismutationfree function nir_binding_value(binding::NirBinding, at::String)::NirConst
+    local ref = binding.ref
+    binding.defined ||
         reject!(Unquarantined("src/julia/nir.jl nir_binding_value: the binding $ref has no value, whose read Julia answers with an UndefVarError"), at)
-    local value = getglobal(ref.mod, ref.name)
+    local value = binding.value
+    local constant = binding.constant
     # a const of the runtime free of mutation (a type, Sys.WORD_SIZE) is Julia's own value, whatever reads it
-    if runtime_module(ref.mod) && !(isconst(ref.mod, ref.name) && Base.ismutationfree(typeof(value)))
-        local host = runtime_init_bindings()
+    if runtime_module(ref.mod) && !(constant && Base.ismutationfree(typeof(value)))
+        local host = runtime_init_bindings(binding.world)   # the program's world, the binding's
         # (a) a binding no const holds is what the runtime's initializer left in it; (b) a const object
         # is host state where an initializer passes it to a call Julia infers may write
-        local init = isconst(ref.mod, ref.name) ? get(host.mutated, ref, nothing) : get(host.touched, ref, nothing)
+        local init = constant ? get(host.mutated, ref, nothing) : get(host.touched, ref, nothing)
         init === nothing ||
-            reject!(Unquarantined("src/julia/nir.jl nir_binding_value: the binding $ref, host state $(parentmodule(init)).__init__ (the runtime's) $(isconst(ref.mod, ref.name) ? "mutates" : "sets or reads")"), at)
+            reject!(Unquarantined("src/julia/nir.jl nir_binding_value: the binding $ref, host state $(parentmodule(init)).__init__ (the runtime's) $(constant ? "mutates" : "sets or reads")"), at)
         # (a) untouched by the closed world, yet no binding is proved untouched while it holds dynamic
         # calls, whose callees juliac's verifier would enumerate (typeinfer.jl:1567 verify_typeinf_trim)
         local dynamic = filter(p -> last(p) > 0, host.dynamic)
-        isconst(ref.mod, ref.name) || isempty(dynamic) ||
+        constant || isempty(dynamic) ||
             reject!(Unquarantined("src/julia/nir.jl nir_binding_value: the binding $ref, which no const holds, unproved host state: the runtime's initializers' closed world holds dynamic calls whose callees may set it ($(join(("$(parentmodule(f)).__init__ $n" for (f, n) in dynamic), ", ")))"), at)
     end
     return NirConst(Core.Const(value))
 end
 
-# the bindings the runtime's initializers touch, and the const objects among them they pass to a call
-# that may write, each with the first initializer whose closed world does so, computed once per
-# session (runtime_init_bindings)
-@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers the closed world of juliac's entrypoints, the runtime's initializers among them; once per session" Core.GlobalRef const _RUNTIME_INIT_BINDINGS = Ref{Union{Nothing,@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}}}(nothing)
+# One analysis of the runtime's initializers (runtime_init_bindings: the bindings they touch, the const objects among
+# them they pass to a call that may write, each with the first initializer whose closed world does so) and what Julia
+# says it rests on: the world it was inferred at, the initializers that world holds, every CodeInstance their closed
+# worlds were inferred from, and every binding the analysis read with its partition at that world (spec v13 R8)
+@quarantine pin"precedent(julia: src/julia.h:494 jl_code_instance_t)" "an inference result is Julia's to reuse at a world inside its CodeInstance's [min_world, max_world] (src/gf.c:3150 _jl_rettype_inferred), which a method that invalidates it narrows (base/invalidation.jl:81), and a binding read is the same at a world inside its partition (base/runtime_internals.jl:233 lookup_binding_partition); Julia keeps one result a MethodInstance, this one a whole analysis, valid where every CodeInstance and binding partition it rests on is" Core.CodeInstance struct RuntimeInitAnalysis
+    world::UInt
+    inits::Vector{Function}
+    cis::Vector{Core.CodeInstance}
+    bindings::Vector{Pair{GlobalRef,Core.BindingPartition}}
+    result::@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}
+end
+# every analysis this process made, the oldest first: one is reused at a world while it holds there (_analysis_holds),
+# so a process compiling at many worlds (a unit's labels each at its own) recomputes only when a method or a binding a
+# unit added invalidated what it rests on
+@quarantine pin"precedent(julia: src/gf.c:3150 _jl_rettype_inferred)" "Julia's code cache keeps each inference result with its world range and serves it at a world inside it" Base.Vector const _RUNTIME_INIT_ANALYSES = Vector{RuntimeInitAnalysis}()
+# each world's answer, once found (spec v14 V7): exact, since whether an analysis holds at a world that exists never
+# changes (an invalidation narrows a CodeInstance's max_world to the invalidating world less one, at or above every
+# world that exists then, base/invalidation.jl:81; a later binding partition starts past every existing world), and
+# the runtime's module tree a world holds is Base's and Core's, which no program changes; so the walk of that tree and
+# the search of the analyses run once a world, not once a call
+@quarantine pin"precedent(julia: src/gf.c:3150 _jl_rettype_inferred)" "Julia's code cache serves a world the result it found for it, its range fixed for every world that exists" Base.Dict const _RUNTIME_INIT_AT = Dict{UInt,RuntimeInitAnalysis}()
 
 """
-    runtime_init_bindings() -> (; touched, mutated)
+    _analysis_holds(a, world, inits) -> Bool
+
+Julia's own answer to whether analysis `a` holds at `world`: the initializers `world` holds are `a`'s, every
+CodeInstance `a` was inferred from serves `world` (`world in Core.Compiler.world_range(ci)`, Compiler/src/
+abstractinterpretation.jl:3596, the range Julia's code cache serves a CodeInstance in, src/gf.c:3150
+_jl_rettype_inferred: `min_world <= world <= max_world`; a method that invalidates it narrows its max_world,
+base/invalidation.jl:81), and every binding `a` read is at `world` in the partition it read where `a` was inferred
+(base/runtime_internals.jl:233 lookup_binding_partition finds a binding's partition by the same range: src/julia.h:771
+jl_binding_partition_t's min_world and max_world, which a later partition of the binding narrows).
+"""
+@quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:3596 world_range)" "an inference result is reused at a world inside its CodeInstance's world range, Julia's own validity, and a binding read at a world inside its partition" Core.Compiler.world_range function _analysis_holds(a::RuntimeInitAnalysis, world::UInt, inits::Vector{Function})::Bool
+    length(a.inits) == length(inits) && all(i -> a.inits[i] === inits[i], eachindex(inits)) || return false
+    all(ci -> world in Core.Compiler.world_range(ci), a.cis) || return false
+    # (a partition serves the worlds of its range, src/julia.h:771; a later one for the binding narrows its max_world)
+    return all(p -> p.second.min_world <= world <= p.second.max_world, a.bindings)
+end
+
+"""
+    runtime_init_bindings(world) -> (; touched, mutated)
 
 The bindings the runtime's module initializers touch (runtime_initializers: Base.__init__ and its
 submodules'), each mapped to the first initializer whose closed world does so: the closed world Julia's
@@ -722,21 +853,42 @@ whose callees the closed world does not hold (compile! follows `:invoke` edges, 
 A juliac executable starts from the heap before any __init__ (julia/src/toplevel.c defers them, the image
 saved by jl_write_compiler_output) and runs them at startup (julia/src/init.c:563 _finish_jl_init_), so a
 binding no initializer sets, and a const object none mutates, holds the same value in the image, after
-startup and in this session. Computed lazily, once per process: measured 5.5 G of instructions cold, about
-3 G recomputed in a warm process.
+startup and in this session. Inferred at `world`, the compile's program world (as juliac infers them in the
+program's world), and reused at a later world while Julia says it holds there (_analysis_holds: every CodeInstance
+it rests on serves that world, every binding it read has the same partition), so a process recomputes it only after a
+method or a binding invalidated it; measured 5.5 G of instructions cold, about 3 G recomputed in a warm process.
 """
-@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each runtime initializer's closed world, as juliac's trim infers the init list's entrypoints (julia/src/precompile.c:98 jl_write_compiler_output); julia/Compiler/src/effects.jl:119 Effects judges each call; once per session" Core.GlobalRef function runtime_init_bindings()::@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}
-    local cached = _RUNTIME_INIT_BINDINGS[]
-    cached === nothing || return cached
-    return _RUNTIME_INIT_BINDINGS[] = init_world_bindings(runtime_initializers())
+@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each runtime initializer's closed world, as juliac's trim infers the init list's entrypoints (julia/src/precompile.c:98 jl_write_compiler_output); julia/Compiler/src/effects.jl:119 Effects judges each call; once per world" Core.GlobalRef function runtime_init_bindings(world::UInt)::@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}
+    # a world asked before: its analysis, with no walk and no search (_RUNTIME_INIT_AT)
+    local seen = get(_RUNTIME_INIT_AT, world, nothing)
+    seen === nothing || return seen.result
+    # the runtime's module tree walked at `world` too, its initializers the ones that world holds
+    local inits = Base.invoke_in_world(world, runtime_initializers)
+    for a in _RUNTIME_INIT_ANALYSES
+        _analysis_holds(a, world, inits) && return (_RUNTIME_INIT_AT[world] = a).result
+    end
+    local a = init_world_bindings(inits, world)
+    push!(_RUNTIME_INIT_ANALYSES, a)
+    _RUNTIME_INIT_AT[world] = a
+    return a.result
 end
 
-# runtime_init_bindings' analysis over the closed worlds of `inits`, each a function of no argument
-@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each initializer's closed world; julia/Compiler/src/effects.jl:119 Effects judges each call it holds" Core.Compiler.typeinf_ext_toplevel function init_world_bindings(inits::Vector{Function})::@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}
+# runtime_init_bindings' analysis over the closed worlds of `inits`, each a function of no argument, with what it rests
+# on: the CodeInstances typeinf_ext_toplevel inferred them from (its result holds each beside its source,
+# typeinfer.jl:1520) and each binding it read with its partition at `world`
+@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each initializer's closed world; julia/Compiler/src/effects.jl:119 Effects judges each call it holds" Core.Compiler.typeinf_ext_toplevel function init_world_bindings(inits::Vector{Function}, world::UInt)::RuntimeInitAnalysis
     local touched = IdDict{GlobalRef,Function}()
     local mutated = IdDict{GlobalRef,Function}()
     local dynamic = Pair{Function,Int}[]
-    local world = Base.get_world_counter()
+    local cis = Core.CodeInstance[]
+    local read = IdDict{GlobalRef,Core.BindingPartition}()
+    # a binding's value at `world`, the world the initializers are inferred at (_binding_at), or nothing; its partition
+    # there kept, which the analysis then rests on
+    local value_at(r::GlobalRef) = begin
+        haskey(read, r) || (read[r] = Base.lookup_binding_partition(world, r))
+        local b = _binding_at(world, r)
+        b.defined ? b.value : nothing
+    end
     local collect_refs!(x, init::Function) = begin
         if x isa GlobalRef
             haskey(touched, x) || (touched[x] = init)
@@ -744,7 +896,7 @@ end
             # an assignment of a global is setglobal!(module, :name, value) in Julia's optimized IR, a read
             # by getglobal: the binding they name
             # (the callee and the module each a literal or a binding naming one, Base.setglobal! Core's)
-            local value_of(v) = v isa GlobalRef ? (isdefinedglobal(v.mod, v.name) ? getglobal(v.mod, v.name) : nothing) : v
+            local value_of(v) = v isa GlobalRef ? value_at(v) : v
             if x.head === :call && length(x.args) >= 3 && (value_of(x.args[1]) === Core.setglobal! || value_of(x.args[1]) === Core.getglobal) &&
                     value_of(x.args[2]) isa Module && (x.args[3] isa QuoteNode || x.args[3] isa Symbol)
                 local r = GlobalRef(value_of(x.args[2]), x.args[3] isa QuoteNode ? x.args[3].value : x.args[3])
@@ -755,7 +907,7 @@ end
         nothing
     end
     # the callee of a `:call` statement, a builtin read through its binding
-    local callee_of(st::Expr) = (local f = st.args[1]; f isa GlobalRef ? (isdefinedglobal(f.mod, f.name) ? getglobal(f.mod, f.name) : nothing) : f)
+    local callee_of(st::Expr) = (local f = st.args[1]; f isa GlobalRef ? value_at(f) : f)
     # whether a call is dynamic: Julia dispatches it at run time, or a special builtin calls another function
     local is_dynamic(st::Expr)::Bool = st.head === :call &&
         (local f = callee_of(st); !(f isa Core.Builtin) || Core.Compiler.contains_is(Core.Compiler._SPECIAL_BUILTINS, f))
@@ -767,7 +919,7 @@ end
             return !Core.Compiler.is_effect_free(Core.Compiler.decode_effects(callee.ipo_purity_bits))
         end
         local f = st.args[1]
-        f isa GlobalRef && (f = isdefinedglobal(f.mod, f.name) ? getglobal(f.mod, f.name) : nothing)
+        f isa GlobalRef && (f = value_at(f))
         # each operand's type as the verifier types one, an argument's by the body's slottypes
         local slottypes = src.slottypes === nothing ? Any[] : src.slottypes
         # (an operand that is itself an expression, in a body Julia left unoptimized, typed Any)
@@ -783,6 +935,7 @@ end
         local mi = Core.Compiler.specialize_method(only(methods(init, ())), Tuple{typeof(init)}, Core.svec())
         local ndynamic = 0
         for x in Core.Compiler.typeinf_ext_toplevel(Any[mi], [world], Core.Compiler.TRIM_NO)
+            x isa Core.CodeInstance && push!(cis, x)
             x isa Core.CodeInfo || continue
             foreach(st -> collect_refs!(st, init), x.code)
             ndynamic += count(st -> st isa Expr && is_dynamic(st), x.code)
@@ -819,7 +972,7 @@ end
         end
         push!(dynamic, init => ndynamic)
     end
-    return (; touched, mutated, dynamic)
+    return RuntimeInitAnalysis(world, inits, cis, collect(Pair{GlobalRef,Core.BindingPartition}, read), (; touched, mutated, dynamic))
 end
 
 """
@@ -835,12 +988,12 @@ expression (dartTypeOf) and the closed world's classes (closed_world_classes) bo
 # a literal's type is its value's own, read with no body (a static field's initializer, a constant)
 @quarantine "a Julia literal's type is its value's type, Core.Typeof" Core.Typeof nir_const_type(c::NirConst)::Type = Core.Typeof(c.c.val)
 
-@quarantine "a Julia operand's type is its statement's inferred type, its argument's specialization or its value's type" Core.Typeof function nir_value_type(body::NirBody, v::NirValue)::Type
+@quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:3736 abstract_eval_globalref)" "a Julia operand's type is its statement's inferred type, its argument's specialization or its value's type, a constant binding's its value's at the program's world (NirBinding)" Core.Typeof function nir_value_type(body::NirBody, v::NirValue)::Type
     @exhaustive v::NirValue begin
         (s::NirSSA) => body.types[s.id]
         (a::NirArgument) => nir_argument_type(body.ci.def, a)
         (c::NirConst) => nir_const_type(c)
-        (g::NirGlobal) => nir_binding_is_constant(g.ref) ? Core.Typeof(getglobal(g.ref.mod, g.ref.name)) :
+        (g::NirGlobal) => nir_binding_is_constant(g.binding) ? Core.Typeof(g.binding.value) :
             reject!(Unported("dart2wasm/lib/code_generator.dart:4937 StaticFieldImplicitAccessorCodeGenerator._generateGetter"),
                     "src/julia/nir.jl nir_value_type: a read of the binding $(g.ref), which an assignment can rebind (its getter)")
     end
@@ -906,10 +1059,10 @@ end
 The value a call's callee operand names: a binding's value, or a literal; a callee Julia computes at
 run time rejects, located.
 """
-@quarantine "a call's callee is Julia's value of its operand, a constant binding or a literal of any type" Core.getglobal function nir_callee(node::NirCall)
+@quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:3736 abstract_eval_globalref)" "a call's callee is Julia's value of its operand, a constant binding's at the program's world (NirBinding) or a literal of any type" Core.isa function nir_callee(node::NirCall)
     local f = node.args[1]
     f isa NirConst && return f.c.val
-    f isa NirGlobal && nir_binding_is_constant(f.ref) && return getglobal(f.ref.mod, f.ref.name)
+    f isa NirGlobal && nir_binding_is_constant(f.binding) && return f.binding.value
     reject!(Unquarantined("src/julia/nir.jl: a call whose callee $(f) is computed at run time"), "nir_callee")
 end
 
@@ -1016,11 +1169,11 @@ anywhere else is data (`x === :a`, `tuple(:k, x)`); an undefined
 variable check names the variable before its condition; and a loop hint, a bounds-check flag, a try
 region's leave and an exception pop hold no value.
 """
-@quarantine "Julia's IR passes a call's target, a builtin's names and a statement's annotations as operands; dart's Kernel names them in the node" Core.getglobal function nir_value_operands(st::NirStmt)::Vector{NirValue}
+@quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:3736 abstract_eval_globalref)" "Julia's IR passes a call's target, a builtin's names and a statement's annotations as operands; dart's Kernel names them in the node" Core.Builtin function nir_value_operands(st::NirStmt)::Vector{NirValue}
     local ops = nir_operands(st)
     @exhaustive st::NirStmt begin
         (x::NirCall) => let f = x.args[1],
-                callee = f isa NirConst ? f.c.val : f isa NirGlobal && nir_binding_is_constant(f.ref) ? getglobal(f.ref.mod, f.ref.name) : nothing
+                callee = f isa NirConst ? f.c.val : f isa NirGlobal && nir_binding_is_constant(f.binding) ? f.binding.value : nothing
             names = callee isa Core.Builtin ? _builtin_name_operands(callee) : ()
             NirValue[ops[i] for i in 2:length(ops) if !(i - 1 in names && ops[i] isa NirConst)]
         end

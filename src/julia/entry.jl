@@ -4,17 +4,27 @@
 # not ported yet.
 
 """
-    compile(f, argtypes::Tuple) -> Vector{UInt8}
+    compile(f, argtypes::Tuple; optimize = true, world = Base.get_world_counter()) -> Vector{UInt8}
 
 Compile `f` called with arguments of `argtypes` to a wasm module. The program is first inferred
-once and judged by Julia's own trim verifier (`check_subset`): one outside the strict subset rejects
+once, at `world`, and judged by Julia's own trim verifier (`check_subset`): one outside the strict subset rejects
 with `OutsideSubset`, Julia's text; one Julia accepts that cannot be built as written (two exports of
 one name) rejects with `ProgramError`, the user's to fix. Every path that reaches a definition not yet ported rejects with
 a `RejectionError` naming it; nothing returns a module that was not built (dev/CHARTER.md C6).
+
+`world` is the one world age the program is inferred, verified and compiled in, read here once and passed down
+(check_subset, its verifier, and the ClosedWorld every later stage reads, at whose world build_nir reads each binding
+the program names, once, into its node: src/julia/nir.jl NirBinding), never read again by a later stage: the
+program is the methods visible in that world, whatever the caller defines after it. precedent(GPUCompiler:
+CompilerJob.world, the world a job's code is inferred and compiled in, its interpreter Core.Compiler.NativeInterpreter(world);
+Julia: code_typed(f, types; world)). dart2wasm has no counterpart: its compiler never shares a method table with the
+program it compiles, so a compile there has no world to name; Julia differs in that the compiler and the program are
+methods of one table, so a caller holding code defined later (a test's corpus loaded after its judge) names the
+program's world itself.
 """
-@quarantine "a Julia program is a callable and its argument types, where dart's is a Kernel component" Core.Tuple function compile(@nospecialize(f), argtypes::Tuple; optimize::Bool = true)::Vector{UInt8}
+@quarantine pin"precedent(dart: pkg/dart2wasm/lib/compile.dart:216 compile)" "a Julia program is a callable, its argument types and the world its methods are read in, where dart's is a Kernel component" Core.Tuple function compile(@nospecialize(f), argtypes::Tuple; optimize::Bool = true, world::UInt = Base.get_world_counter())::Vector{UInt8}
     local at = string(f, argtypes)
-    return compile_world(check_subset(f, argtypes, at), at; optimize = optimize)
+    return compile_world(check_subset(f, argtypes, at, world), at; optimize = optimize)
 end
 
 # the stages after the subset check take the ClosedWorld check_subset alone makes: dart's compile

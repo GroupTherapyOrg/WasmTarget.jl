@@ -4,22 +4,26 @@
 # one that does builds it once for every lane, Julia's pidfile holding the others. dev/check.sh runs this file
 # before the judged load when the change leaves the corpus and the package untouched, so a lane's check never
 # builds an image it did not change; test/src/dart_tests.jl includes it. Found through LOAD_PATH, never
-# WasmTarget's own Project.
-const _DART_CORPUS_HOME = let common = readchomp(`git -C $(@__DIR__) rev-parse --path-format=absolute --git-common-dir`),
+# WasmTarget's own Project. Where the images live, the process that runs a test hands as WT_DART_CORPUS_DIR (dev/check.sh:
+# the repository's common dir's `wt-dart-corpus`, as its own git reads it; the score's src part: its run directory's),
+# since a test process reads no history (spec v17 Z4: its git names no repository); a lane's own run, handed none,
+# asks its git
+const _DART_CORPUS_HOME = let dir = let d = get(ENV, "WT_DART_CORPUS_DIR", "")
+                                  isempty(d) ? joinpath(readchomp(`git -C $(@__DIR__) rev-parse --path-format=absolute --git-common-dir`), "wt-dart-corpus") : d
+                              end,
                               test = joinpath(@__DIR__, ".."),
                               files = ("smoke_corpus.jl", joinpath("DartCorpus", "Project.toml"), joinpath("DartCorpus", "src", "DartCorpus.jl")),
                               key = string(hash(map(f -> read(joinpath(test, f), String), files)); base = 16),
-                              home = joinpath(common, "wt-dart-corpus", key)
+                              home = joinpath(dir, key)
     if !isdir(home)
-        local tmp = mktempdir(mkpath(joinpath(common, "wt-dart-corpus")); cleanup = false)
+        local tmp = mktempdir(mkpath(dir); cleanup = false)
         for f in files
             mkpath(dirname(joinpath(tmp, f))); cp(joinpath(test, f), joinpath(tmp, f))
         end
         try mv(tmp, home) catch; rm(tmp; recursive = true, force = true) end   # another lane copied it first
         # the five newest contents kept
-        local olds = sort!(filter(d -> d != "depot" && isdir(joinpath(common, "wt-dart-corpus", d)), readdir(joinpath(common, "wt-dart-corpus")));
-                           by = d -> -mtime(joinpath(common, "wt-dart-corpus", d)))
-        foreach(d -> rm(joinpath(common, "wt-dart-corpus", d); recursive = true, force = true), olds[6:end])
+        local olds = sort!(filter(d -> d != "depot" && isdir(joinpath(dir, d)), readdir(dir)); by = d -> -mtime(joinpath(dir, d)))
+        foreach(d -> rm(joinpath(dir, d); recursive = true, force = true), olds[6:end])
     end
     home
 end

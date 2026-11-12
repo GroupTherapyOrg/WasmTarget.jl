@@ -16,7 +16,7 @@ two(a::Int, b::Int) = a + b
 rest(a::Int, xs::Int...) = a + length(xs)   # sum over a tuple of any length is a dynamic kwcall to the verifier
 end
 
-nir_body(f, at) = only(b for b in WT.build_nir(WT.check_subset(f, at, "functions"), "functions") if b.ci.def.def.name === nameof(f))
+nir_body(f, at) = only(b for b in WT.build_nir(WT.check_subset(f, at, "functions", Base.get_world_counter()), "functions") if b.ci.def.def.name === nameof(f))
 
 @testset "CallShape" begin
     local m = W.MethodCallShape(:two, 0, 2, Symbol[])
@@ -58,7 +58,7 @@ end
 
 @testset "FunctionCollector: names, selector uses, translated procedures" begin
     local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
-    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Members.f, (Int,), "functions"), "test"), data, W.TranslatorOptions())
+    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Members.f, (Int,), "functions", Base.get_world_counter()), "test"), data, W.TranslatorOptions())
     W._init_modules(t, nothing)
     collect(W.ClassInfoCollector(t))
     local fc = t.functions[]
@@ -143,7 +143,7 @@ end
 
 @testset "makeFunctionTypeForBody and typeOfCheckedParameterVariable" begin
     local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
-    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Callables.use, (Int, Int32), "functions"), "test"), data, W.TranslatorOptions())
+    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Callables.use, (Int, Int32), "functions", Base.get_world_counter()), "test"), data, W.TranslatorOptions())
     W._init_modules(t, nothing)
     collect(W.ClassInfoCollector(t))
     local call = only(b.ci.def for b in t.component if b.ci.def.specTypes <: Tuple{Callables.Adder,Vararg})
@@ -169,7 +169,7 @@ end
 
 @testset "a closure's function type and name; a tear-off's type" begin
     local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
-    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Lambdas.use, (Int, Int), "functions"), "test"), data, W.TranslatorOptions())
+    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Lambdas.use, (Int, Int), "functions", Base.get_world_counter()), "test"), data, W.TranslatorOptions())
     W._init_modules(t, nothing)
     collect(W.ClassInfoCollector(t))
     local fc = t.functions[]
@@ -203,7 +203,7 @@ end
 # recorded allocated, so a target pending on its class is compiled; a 128-bit integer, two halves, has none
 @testset "FunctionCollector.initialize: a primitive class's box, builtin or promoted, is allocated" begin
     local data = W.build_module_output_data(W.DefaultModuleStrategy(W.WasmCompilerOptions_default_options()))
-    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Boxes.f, (Int64,), "functions"), "test"), data, W.TranslatorOptions())
+    local t = W.Translator(WasmTarget.build_nir(WT.check_subset(Boxes.f, (Int64,), "functions", Base.get_world_counter()), "test"), data, W.TranslatorOptions())
     W._init_modules(t, nothing)
     collect(W.ClassInfoCollector(t))
     local fc = t.functions[]

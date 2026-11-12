@@ -493,7 +493,7 @@ runtime library at the pin, not ported: it rejects there, Unported, located.
         call(code_gen, is_subtype(self.translator))
         return nothing
     end
-    WasmBuilder.comment(b, "type check against $tested_against_type")
+    WasmBuilder.comment(b, "type check against $(julia_text(tested_against_type))")
     local operand_temp = nothing
     if self.translator.options.verify_type_checks
         # dart keeps the operand in a local of the nullable top type; local.tee leaves the local's type on
@@ -756,7 +756,7 @@ end
 # dart names the class; a Julia type prints itself
 @parity "dart2wasm/lib/types.dart:831 IsCheckerCallTarget.name" function name(self::IsCheckerCallTarget)::String
     local type_arguments_name = self.check_arguments ? "<" * join(("T$i" for i in 0:self.argument_count-1), ", ") * ">" : ""
-    return "<obj> is $(self.tested_against_type)$type_arguments_name"
+    return "<obj> is $(julia_text(self.tested_against_type))$type_arguments_name"
 end
 
 @parity "dart2wasm/lib/types.dart:839 IsCheckerCallTarget.supportsInlining" supports_inlining(self::IsCheckerCallTarget)::Bool = true
@@ -909,7 +909,7 @@ end
 # dart names the class; a Julia type prints itself
 @parity "dart2wasm/lib/types.dart:1039 AsCheckerCallTarget.name" function name(self::AsCheckerCallTarget)::String
     local type_arguments_name = self.check_arguments ? "<" * join(("T$i" for i in 0:self.argument_count-1), ", ") * ">" : ""
-    return "<obj> as $(self.tested_against_type)$type_arguments_name"
+    return "<obj> as $(julia_text(self.tested_against_type))$type_arguments_name"
 end
 
 @parity "dart2wasm/lib/types.dart:1084 AsCheckerCodeGenerator" AsCheckerCodeGenerator(translator::KernelNodes, signature::WasmBuilder.IR.FunctionType, tested_against_type::Type,
@@ -1119,7 +1119,7 @@ end
 
 """Each class's name, the top type's empty: a Julia class's name is its type's text."""
 @parity "dart2wasm/lib/types.dart:1424 RuntimeTypeInformation._getTypeNames" function _get_type_names(self::RuntimeTypeInformation)::NirConst
-    local name_constants = NirConst[NirConst(Core.Const(info.cls === nothing ? "" : string(info.cls)))
+    local name_constants = NirConst[NirConst(Core.Const(info.cls === nothing ? "" : julia_text(info.cls)))
                                     for info in self.translator.classes[]]
     return make_array_of(self.translator.constants[], String, name_constants)
 end

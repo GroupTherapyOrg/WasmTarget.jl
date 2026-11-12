@@ -18,7 +18,7 @@ dynamic_call(xs::Vector{Any}) = length(xs[1])
     local d = D.DynamicDispatchers(DispatcherNodes(), W.ModuleBuilder("m", nothing))
     @test isempty(d._dispatchers)
     # and none ever does: Julia's trim verifier rejects the dynamic call, located, before any NIR exists
-    local e = try; WasmTarget.check_subset(dynamic_call, (Vector{Any},), "dynamic_dispatchers"); nothing; catch x; x; end
+    local e = try; WasmTarget.check_subset(dynamic_call, (Vector{Any},), "dynamic_dispatchers", Base.get_world_counter()); nothing; catch x; x; end
     @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.OutsideSubset
 end
 

@@ -8,7 +8,7 @@ const W = WasmTarget
 const L = WasmTarget.LLVM
 
 # the machine function of a statement list, through the NIR (nir_code)
-machine_of(code, at) = W.machine_function(W.nir_code(code, zeros(UInt32, length(code)), at)..., at)
+machine_of(code, at) = W.machine_function(W.nir_code(code, zeros(UInt32, length(code)), W.NirBindings(Base.get_world_counter()), at)..., at)
 
 @testset "DominanceFrontierImpl.h: each block's dominance frontier" begin
     # %1 branches to %3 or falls to %2, which jumps to %3: machine blocks 2 (%1), 3 (%2), 4 (%3, the join)
@@ -83,7 +83,7 @@ end
     # blocks reach, is in the outer catch's exception and has its own below it; the pads are the
     # catch destinations of Julia's two EnterNodes
     local ci = Base.code_typed(NestedTryCases.tn, (Int64,); optimize = true)[1][1]
-    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, "tn")
+    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, W.NirBindings(Base.get_world_counter()), "tn")
     local enters = [st::W.NirEnter for st in stmts if st isa W.NirEnter]
     @test length(enters) == 2
     local outer_pad, inner_pad = (Core.Compiler.block_for_inst(cfg, e.catch_dest) + 1 for e in enters)
@@ -98,7 +98,7 @@ end
     # a function with no try has no exception
     local ci2 = Base.code_typed(NestedTryCases.thr, (Int64,); optimize = true)[1][1]
     local wei2 = L.WebAssemblyExceptionInfo()
-    L.run_on_machine_function(wei2, W.machine_function(W.nir_code(ci2.code, ci2.ssaflags, "thr")..., "thr"))
+    L.run_on_machine_function(wei2, W.machine_function(W.nir_code(ci2.code, ci2.ssaflags, W.NirBindings(Base.get_world_counter()), "thr")..., "thr"))
     @test L.empty(wei2)
 end
 
@@ -106,7 +106,7 @@ end
     # tn's outer catch: its exception a region headed by its pad, the sort keeping its blocks contiguous
     # below the pad, every check of LLVM's passing
     local ci = Base.code_typed(NestedTryCases.tn, (Int64,); optimize = true)[1][1]
-    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, "tn")
+    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, W.NirBindings(Base.get_world_counter()), "tn")
     local mf = W.machine_function(stmts, cfg, handlers, "tn")
     local outer_pad = Core.Compiler.block_for_inst(cfg, (first(st for st in stmts if st isa W.NirEnter)::W.NirEnter).catch_dest) + 1
     local wei = L.WebAssemblyExceptionInfo()
@@ -127,7 +127,7 @@ end
     # Julia's blocks: %1 enters the try (catch at %6), %2..%4 call thr and leave, %5 returns, %6..
     # catches; machine blocks are Julia's plus one
     local ci = Base.code_typed(TryCases.tc, (Int64,); optimize = true)[1][1]
-    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, "tc")
+    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, W.NirBindings(Base.get_world_counter()), "tc")
     # Julia's answers: the call of thr may throw under the try's handler (its EnterNode, statement 1);
     # the add after it throws nothing
     local call = findfirst(st -> st isa W.NirInvoke, stmts)
@@ -159,7 +159,7 @@ end
     # handler (typeinf_local): only the call's block unwinds to the catch block
     local code = Any[Core.EnterNode(6), Expr(:call, GlobalRef(Base, :identity), 1), Core.GotoNode(4),
                      Expr(:leave, Core.SSAValue(1)), Core.ReturnNode(Core.SSAValue(2)), Core.ReturnNode(2)]
-    local stmts, cfg, handlers = W.nir_code(code, zeros(UInt32, length(code)), "leave")
+    local stmts, cfg, handlers = W.nir_code(code, zeros(UInt32, length(code)), W.NirBindings(Base.get_world_counter()), "leave")
     @test handlers.handler_at[4] == 1 && handlers.nothrow[4] && handlers.nothrow[5] && !handlers.nothrow[2]
     local mf = W.machine_function(stmts, cfg, handlers, "leave")
     # Julia's blocks %1, %2..%3, %4, %5, %6: machine blocks 2 to 6; the :leave's block 4 no predecessor
@@ -185,7 +185,7 @@ end
     local k = findfirst(==(pad), mf.layout)
     @test pad == 5 && mf.layout[k + 1] == 4 && isempty(mf.blocks[4].succs)
     # as sorted, no mismatch
-    @test L.add_pre_emit_pass(W.nir_code(code, zeros(UInt32, length(code)), "try")..., "try", true) isa W.MachineFunction
+    @test L.add_pre_emit_pass(W.nir_code(code, zeros(UInt32, length(code)), W.NirBindings(Base.get_world_counter()), "try")..., "try", true) isa W.MachineFunction
     mf.layout[k], mf.layout[k + 1] = mf.layout[k + 1], mf.layout[k]
     W.renumber_blocks!(mf)
     L.run_on_machine_function(L.WebAssemblyCFGStackify(), mf, li, wei, true)
@@ -204,7 +204,7 @@ end
 
 @testset "CFGStackify.cpp: placeTryTableMarker, a try_table in a block its catch branches to" begin
     local ci = Base.code_typed(TryCases.tc, (Int64,); optimize = true)[1][1]
-    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, "tc")
+    local stmts, cfg, handlers = W.nir_code(ci.code, ci.ssaflags, W.NirBindings(Base.get_world_counter()), "tc")
     local mf = W.machine_function(stmts, cfg, handlers, "tc")
     L.eliminate_phi_nodes(mf, cfg)
     L.run_on_machine_function(L.WebAssemblyFixIrreducibleControlFlow(), mf)

@@ -28,6 +28,9 @@ module ParityRatchet
 # `[section]` + `key = int` lines; the two 10-line helpers below read/write exactly that.
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
+# test/corpus_loader.jl, the one reader of the corpus's groups and labels (dev/climb/HILL.md, the corpus): its module
+# CorpusLoader, defined here as the ratchet loads (it runs nothing at include)
+include(joinpath(ROOT, "test", "corpus_loader.jl"))
 # this julia's header for dev/cache_key.sh, its one definition (julia_header): every verdict the ratchet keys
 # its own process computes, so it passes its header as the script's argument, one julia start saved per key
 # (~0.3 s each), never through the environment (A83S8)
@@ -114,10 +117,11 @@ function unconsumed_files_outside_src()::Vector{String}
         ".release-please-manifest.json", "docs/Project.toml", "docs/input.css"])
     # directories a loader walks, each with the files that loader consumes: run_tlc.sh (the
     # models and their instances), the docs site's file routing, Pkg's [extensions], GitHub Actions,
-    # test/src_tests.jl (every test of ported code),
+    # test/src_tests.jl (every test of ported code), test/corpus_loader.jl (every unit a landing added,
+    # test/corpus/<slug>.jl, in git's order: no file names a unit),
     # and Pkg's loading of legacy/, WT1 as its own package (its module file, its [extensions]). Anything else in them is consumed by nothing.
     walked = ("dev/formal/" => r"\.(tla|cfg)$", "docs/src/" => r"", "ext/" => r"\.jl$", ".github/workflows/" => r"\.ya?ml$",
-              "test/src/" => r"\.jl$", "legacy/" => r"")
+              "test/src/" => r"\.jl$", "test/corpus/" => r"\.jl$", "legacy/" => r"")
     not_consumers = Set(["dev/MARCH.md", "dev/HISTORY.md", "CHANGELOG.md"])
     files = String.(split(readchomp(Cmd(`git ls-files`; dir=ROOT)), '\n'))
     texts = Dict(f => _text(joinpath(ROOT, f)) for f in files
@@ -1814,6 +1818,110 @@ function findings_negatives_missed()::Vector{String}
     return out
 end
 
+# ---- L204, the climb's part: dev/climb/HILL.md states the numbers its driver uses (dev/LEDGER.md D47, council A1) ----
+# dev/climb/defaults.py's verdict on a HILL.md text: "" when its generated paragraph is DEFAULTS', else why
+function hill_faults_of(text::String)::String
+    local f = tempname()
+    write(f, text)
+    local out = IOBuffer()
+    local ok = success(pipeline(`python3 -I $(joinpath(ROOT, "dev", "climb", "defaults.py")) check $f`; stdout = out, stderr = out))
+    rm(f; force = true)
+    return ok ? "" : strip(String(take!(out)))
+end
+
+# L204's negative test for HILL.md: as it is it passes; a number changed, the paragraph gone, and a value added refused
+function hill_negatives_missed()::Vector{String}
+    local out = String[]
+    local t = read(joinpath(ROOT, "dev", "climb", "HILL.md"), String)
+    isempty(hill_faults_of(t)) || push!(out, "negative missed: HILL.md as generated is refused")
+    local m = match(r"`slots` (\d+)", t)
+    m === nothing && return push!(out, "negative missed: HILL.md's paragraph names no `slots`")
+    isempty(hill_faults_of(replace(t, m.match => "`slots` $(parse(Int, m[1]) + 1)"; count = 1))) &&
+        push!(out, "negative missed: a number changed by hand in HILL.md passes")
+    isempty(hill_faults_of(replace(t, "<!-- defaults:begin -->" => ""))) && push!(out, "negative missed: HILL.md with no paragraph passes")
+    isempty(hill_faults_of(replace(t, "<!-- defaults:end -->" => "`planted_s` 1.\n<!-- defaults:end -->"))) &&
+        push!(out, "negative missed: a value DEFAULTS does not hold passes")
+    return out
+end
+
+# the climb's driver imports, under a scratch state, from a copy of dev/climb at `dir` (O5-9: a hand-landed driver
+# change that fails to import kills every loop, and the alarms live in the modules that fail): "" or the error's tail
+function climb_import_fault(dir::String)::String
+    local st = mktempdir()
+    local out = IOBuffer()
+    local ok = success(pipeline(addenv(`python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import climb" $dir`,
+                                       "WT_CLIMB_STATE" => st, "PYTHONDONTWRITEBYTECODE" => "1"); stdout = out, stderr = out))
+    rm(st; recursive = true, force = true)
+    return ok ? "" : last(strip(String(take!(out))), 300)
+end
+
+# L204's negative test for the driver's import: a copy as it is imports, the same copy with a syntax error planted does not
+function climb_import_negatives_missed()::Vector{String}
+    local out = String[]
+    local d = joinpath(ROOT, ".wtd", "climb-import-$(getpid())", "dev", "climb")   # inside the tree, as ROOT's own
+    mkpath(d)
+    try
+        for f in readdir(joinpath(ROOT, "dev", "climb")); endswith(f, ".py") && cp(joinpath(ROOT, "dev", "climb", f), joinpath(d, f)); end
+        isempty(climb_import_fault(d)) || push!(out, "negative missed: a copy of dev/climb as it is does not import")
+        write(joinpath(d, "core.py"), read(joinpath(d, "core.py"), String) * "\ndef planted(:\n")
+        isempty(climb_import_fault(d)) && push!(out, "negative missed: a driver with a syntax error imports")
+    finally
+        rm(dirname(dirname(d)); recursive = true, force = true)
+    end
+    return out
+end
+
+# the climb's build users named once on each side of sudo: dev/climb/setup-users.sh's USERS (what root made) and
+# dev/climb/door.py's ROLES (what the driver runs as) hold the same users, or "" (D5: a user one side forgot is a door
+# that fails at run time, or a user with sudo rights no role uses)
+function door_users_fault(setup::String, door::String)::String
+    local m = match(r"\nUSERS=\(([^)]*)\)", setup)
+    m === nothing && return "dev/climb/setup-users.sh names no USERS=(...)"
+    local made = Set(first.(split.(split(m[1]), ':')))
+    local r = match(r"\nROLES = \{(.*?)\}"s, door)   # the dict spans lines
+    r === nothing && return "dev/climb/door.py names no ROLES"
+    local used = Set(String(x[1]) for x in eachmatch(r"\"(_wt\w+)\"", r[1]))
+    return made == used ? "" : "setup-users.sh makes $(sort(collect(setdiff(made, used)))) no role runs as, and door.py runs as $(sort(collect(setdiff(used, made)))) setup-users.sh does not make"
+end
+
+# the judge's modules named once (spec v17 Y6): CorpusLoader.JUDGE_MODULES, the list test/smoke_judge.jl hands the
+# loader (no unit adds a method to a function of one), is exactly the modules the judge's Julia files define
+# (dev/climb/core.py's JUDGE_WRITE and JUDGE_READ, each file's `module <Name>` lines) and WasmTarget, the compiler's;
+# "" or what differs
+function judge_modules_fault(core::String, text_of, names)::String
+    local m = [match(Regex("\n" * k * raw" = \(([^)]*)\)", "s"), core) for k in ("JUDGE_WRITE", "JUDGE_READ")]
+    any(isnothing, m) && return "dev/climb/core.py names no JUDGE_WRITE or no JUDGE_READ"
+    local files = [String(x[1]) for mm in m for x in eachmatch(r"\"([^\"]+\.jl)\"", mm[1])]
+    local want = Set{Symbol}([:WasmTarget; [Symbol(x[1]) for f in files for x in eachmatch(r"(?m)^module (\w+)\s*$", text_of(f))]])
+    local have = Set{Symbol}(names)
+    return have == want ? "" : "CorpusLoader.JUDGE_MODULES names $(sort(collect(setdiff(have, want)))) no judge file defines, " *
+        "and omits $(sort(collect(setdiff(want, have)))) a judge file defines"
+end
+
+function judge_modules_negatives_missed()::Vector{String}
+    local out = String[]
+    local core = read(joinpath(ROOT, "dev", "climb", "core.py"), String)
+    local text_of(f) = read(joinpath(ROOT, f), String)
+    local names = _corpus_loader().JUDGE_MODULES
+    isempty(judge_modules_fault(core, text_of, names)) || push!(out, "negative missed: the list as it is disagrees with the judge's files")
+    isempty(judge_modules_fault(core, text_of, filter(!=(:WTVerdict), names))) &&
+        push!(out, "negative missed: a list without the verdict's module passes")
+    isempty(judge_modules_fault(core, text_of, (names..., :WTNoJudgeFile))) &&
+        push!(out, "negative missed: a list naming a module no judge file defines passes")
+    return out
+end
+
+function door_users_negatives_missed()::Vector{String}
+    local out = String[]
+    local setup, door = (read(joinpath(ROOT, "dev", "climb", f), String) for f in ("setup-users.sh", "door.py"))
+    isempty(door_users_fault(setup, door)) || push!(out, "negative missed: the two lists as they are disagree")
+    isempty(door_users_fault(replace(setup, "_wtdep:470" => "_wtdep:470 _wtextra:471"), door)) &&
+        push!(out, "negative missed: a user setup-users.sh makes and no role runs as passes")
+    isempty(door_users_fault(setup, replace(door, "\"deps\": \"_wtdep\"" => "\"deps\": \"_wtdeps\""))) &&
+        push!(out, "negative missed: a role run as a user setup-users.sh does not make passes")
+    return out
+end
+
 # ---- L209: one Co-Authored-By trailer per commit (dev/LEDGER.md D24, A35E4) ----------------------
 # the hook's verdict on a planted message: true when dev/hooks/commit-msg accepts it
 function hook_accepts(message::String)::Bool
@@ -2171,7 +2279,10 @@ function corpus_case_keys(text::AbstractString)::Set{String}
     end
     return keys
 end
-smoke_case_keys()::Set{String} = corpus_case_keys(_text(joinpath(ROOT, "test", "smoke_corpus.jl")))
+# the smoke corpus's labels, the snapshot's and every unit's, by the corpus loader's one reader of a registration
+smoke_case_keys()::Set{String} = Set{String}("$g/$c" for p in _corpus_loader().corpus_files(ROOT)
+                                             for (_, g, c) in _corpus_loader().registered(_text(joinpath(ROOT, p)); filename = p))
+_corpus_loader() = CorpusLoader
 
 # this tree's faults, and its counts printed
 function dart_tests_faults_here()::Vector{String}
@@ -2626,11 +2737,8 @@ end
 # versions; the faults counted
 function smoke_dealing_faults()::Int
     local bad = 0
-    local smk_main = read(joinpath(ROOT, "test", "smoke.jl"), String)
-    local smk_src = join([smk_main; [read(joinpath(ROOT, "test", m[1]), String)
-                                     for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smk_main)]], '\n')
-    local want = Set{String}(m[1] in ("g", "lazy_g") ? m[2] : "xfail " * m[2]
-                             for m in eachmatch(r"^_(g|xf|lazy_g|lazy_xf)\(\"([^\"]+)\""m, smk_src))
+    # the corpus's groups (the snapshot's and every unit's) by the corpus loader's one reader of a registration
+    local want = _corpus_loader().corpus_groups(ROOT)
     local got = String[]
     for ln in eachline(joinpath(ROOT, "test", "smoke_times.tsv"))
         (isempty(ln) || startswith(ln, '#')) && continue
@@ -2639,6 +2747,290 @@ function smoke_dealing_faults()::Int
         push!(got, String(f[3]))
     end
     return bad + length(symdiff(want, Set(got))) + (length(got) - length(Set(got)))
+end
+
+# ---- L228: the bounded landing check (the landing-check ruling R1-R3, R6; dev/LEDGER.md D16) ------------------------
+# What can be read without a landing: dev/check.sh runs a test set only from WT_SRC_SET, refuses a landing with none,
+# one its own user can write and one made for another HEAD, and hands it to every shard; the door gives the set from its
+# run directory; the cost table every landing's own processes rewrote (wt-src-instr.tsv) and its writers stay deleted
+# from every code file; and the climb's keys that bound the check exist inside their bands (dev/climb/defaults.py).
+const BOUNDED_KEYS = ("src_margin_min_s" => (10, 20), "src_margin_checks" => (5, 20), "src_margin_start_s" => (20, 40), "src_margin_max_s" => (30, 44),
+                      "src_unverified_max" => (3, 12), "fixfirst_max_landings" => (3, 12))
+# the target is computed at its one source (measure.src_target: D14's band less the measured margin, round 13's S3); the
+# hand-set constant it replaced is named by no code file, and src_set cuts its share to src_target's value alone
+const BOUNDED_HANDSET = r"src_path_target_s"
+const BOUNDED_DELETED = r"wt-src-instr|WT_SRC_COSTS_OUT|land_costs"
+function bounded_check_faults(checksh::AbstractString, doorpy::AbstractString, defaults::AbstractString,
+                              code::Vector{Pair{String,String}}, landerpy::AbstractString="", measurepy::AbstractString="")::Vector{String}
+    local out = String[]
+    # what the driver's text alone shows (its behaviour is CALLED: bounded_behaviour_faults, spec v17 Z6):
+    # a landing that records "all" while running a share: its record is the files its check reported green, never "all"
+    occursin("src_ran(full, ran, \"landing\")", landerpy) && occursin("if not isinstance(files, list):", measurepy) &&
+        !occursin(r"src_ran\([^)\n]*\"all\"", landerpy * measurepy) ||
+        push!(out, "a landing's green record is not exactly the files its check reported green (src_ran with \"all\", or no list guard)")
+    # a fix-first landing that clears a red whose file it did not run
+    occursin("not set(f.get(\"tests\", [])) <= set(ran or [])", landerpy) ||
+        push!(out, "dev/climb/lander.py clears a src-test fix-first whose file its landing did not run green")
+    occursin(r"(?m)^set_ok \|\| exit 1$", checksh) ||
+        push!(out, "dev/check.sh does not refuse a landing before its tests when no set is handed (set_ok || exit 1)")
+    occursin("[ -w \"\$WT_SRC_SET\" ] &&", checksh) ||
+        push!(out, "dev/check.sh does not refuse a set its own user can write")
+    occursin("# head ", checksh) && occursin("\"\$(git rev-parse HEAD)\"", checksh) ||
+        push!(out, "dev/check.sh does not refuse a set made for another HEAD")
+    occursin("WT_SRC_SET=\"\$WT_SRC_SET\" WT_SRC_COSTS=", checksh) ||
+        push!(out, "dev/check.sh's shards do not run the handed set (WT_SRC_SET)")
+    occursin("WT_SRC_SET=f\"{d}/src-set.txt\"", doorpy) ||
+        push!(out, "dev/climb/door.py's land job does not give the set from its run directory")
+    for (path, text) in code
+        occursin(BOUNDED_DELETED, text) && push!(out, "$path names the deleted cost table or a writer of it")
+        occursin(BOUNDED_HANDSET, text) && push!(out, "$path names the hand-set target the live one replaced (src_path_target_s)")
+    end
+    occursin(BOUNDED_HANDSET, defaults) && push!(out, "dev/climb/defaults.py sets a landing's target by hand (src_path_target_s)")
+    occursin("target=(src_set_ or {}).get(\"target\")", landerpy) ||
+        push!(out, "dev/climb/lander.py's ship event does not record the target and margin it used")
+    for (k, (lo, hi)) in BOUNDED_KEYS
+        local m = match(Regex("\"$k\": (\\d+)"), defaults)
+        m === nothing ? push!(out, "dev/climb/defaults.py holds no $k") :
+            (lo <= parse(Int, m[1]) <= hi || push!(out, "dev/climb/defaults.py's $k $(m[1]) is outside its band $lo-$hi"))
+    end
+    return out
+end
+# the driver's behaviour, called (spec v17 Z6, the round-14 architect's finding 7: a scan of its text passed `target =
+# 10 ** 6` and `window = []`): test/climb_l228.py runs a tree's src_target, src_set, the lander's record reading
+# (verified_rows), its origin-red rule (origin_red) and dev/src_verdict.sh on a scratch repository and state with planted
+# checks, a score record and shard records, and prints a line a fault
+function bounded_behaviour_faults(tree::AbstractString)::Vector{String}
+    local out = IOBuffer()
+    local err = IOBuffer()
+    local ok = success(pipeline(`python3 -I $(joinpath(ROOT, "test", "climb_l228.py")) $tree`; stdout = out, stderr = err))
+    local lines = [String(l) for l in split(String(take!(out)), '\n') if !isempty(strip(l))]
+    ok || push!(lines, "test/climb_l228.py failed on $tree: " * last(String(take!(err)), 300))
+    return lines
+end
+# ---- two static stopgaps on what a test process can reach (spec v17 Z4, red's round-14 findings 4 and 5): a test file
+# runs in the process that records its verdict, and src runs there too, so neither may name the harness's means. Each
+# file read through Julia's parser (Meta.parseall), never its text (a comment is not code). STOPGAPS by their
+# kind (D6): Julia has no module privacy, so a name built at run time passes them; the canary as each file and G4 stand
+# behind them. Counted under L228 until the owner's C10 cites them apart (proposed: L229, L230)
+#   src/: no `using`/`import` of Test, no `Test.` name, no `exit`/`atexit` call, no `_WT_` name, no WT_SRC_ or
+#   WT_BASE_TREE string
+#   test/src/: no `Test.` name but its macros, no `exit`/`atexit` call, no WT_SRC_ or .wtd string (WT_BASE_TREE, the base
+#   tree the process hands a test, it may read: dart_tests.jl), no command that runs
+#   git, no clock or date (`time()`, `time_ns()`, `now()`, `today()`, `Dates.`, `Libc.time`), no eval into a module
+#   but its own (`@__MODULE__` or a `module` the file defines); its exact allowlist below, each with its reason
+const REACH_ALLOWED = Set([
+    # tests that plant methods into WasmTarget's own modules to test what it refuses or keeps
+    "test/src/js_string.jl: eval into W.Runtime", "test/src/wasm_builder/barrel_exports.jl: eval into WT.Dart2Wasm",
+    # evals into a module the test itself made at run time (`Module(...)`, or one handed to it), or into the file's own
+    # module through a local name (globals.jl: `local I = InitReuseCases`)
+    "test/src/subset.jl: eval into m", "test/src/parity.jl: eval into e.mod", "test/src/globals.jl: eval into I",
+    # the dart corpus's per-group cost record (its own costs file, never a verdict) and its case verdict's counts
+    "test/src/dart_tests.jl: the clock (time)", "test/src/dart_tests.jl: Test.get_test_counts",
+    # the judge's own test that a test file's child runner gets no record variable (spec v18 P2: run_child.jl's
+    # explicit environment), which must name them to plant them
+    "test/src/verdict.jl: names the harness's records (WT_SRC_*)",
+    # a wall bound on the keeper's runner (test/src/runner.jl, the judge builder's file: spec v17 Y5 rewrites it)
+    "test/src/runner.jl: the clock (time)"])
+_reach_name(x) = x isa Symbol ? String(x) : x isa GlobalRef ? String(x.name) : x isa Expr && x.head === :. && length(x.args) == 2 && x.args[2] isa QuoteNode ?
+    _reach_name(x.args[1]) * "." * String(x.args[2].value) : x isa Expr && x.head === :macrocall ? String(x.args[1]) : string(x)
+function _reach_walk(visit, x, own::Set{String})
+    x isa QuoteNode && return _reach_walk(visit, x.value, own)
+    x isa Expr || (visit(x, own); return)
+    visit(x, own)
+    foreach(a -> _reach_walk(visit, a, own), x.args)
+end
+function reach_faults(path::AbstractString, text::AbstractString, test::Bool, allowed=REACH_ALLOWED)::Vector{String}
+    local out = String[]
+    local ex = try Meta.parseall(text) catch e; return ["$path: does not parse ($(sprint(showerror, e)[1:min(end, 80)]))"] end
+    local own = Set{String}()
+    _reach_walk((x, _) -> (x isa Expr && x.head === :module && push!(own, String(x.args[2]))), ex, own)
+    local add(w) = (k = "$path: $w"; k in allowed || k in out || push!(out, k))
+    _reach_walk(ex, own) do x, own
+        if x isa String
+            occursin(test ? r"WT_SRC_" : r"WT_SRC_|WT_BASE_TREE", x) && add("names the harness's records ($(test ? "WT_SRC_*" : "WT_SRC_*, WT_BASE_TREE"))")
+            test && occursin(".wtd", x) && add("names .wtd")
+        elseif x isa Symbol
+            !test && startswith(String(x), "_WT_") && add("names the harness's $(x)")
+        elseif x isa Expr
+            if x.head in (:using, :import) && !test
+                any(a -> a isa Expr && !isempty(a.args) && a.args[1] === :Test, x.args) && add("loads Test")
+            elseif x.head in (:using, :import) && test   # `import Test: record, ...`: a Test name but its macros (red's p7)
+                for a in x.args
+                    a isa Expr && a.head === :(:) && a.args[1] isa Expr && a.args[1].args == [:Test] || continue
+                    for n in a.args[2:end]
+                        local nm = n isa Expr && !isempty(n.args) ? String(n.args[end]) : string(n)
+                        startswith(nm, "@") || add("Test.$nm")
+                    end
+                end
+            elseif test && x.head === :(=) && length(x.args) == 2 && _reach_name(x.args[2]) in ("Core.eval", "eval", "Base.eval")
+                add("aliases $(_reach_name(x.args[2]))")   # `const E = Core.eval` (red's p7): an eval under another name
+            elseif test && x.head === :const && x.args[1] isa Expr && x.args[1].head === :(=) && _reach_name(x.args[1].args[2]) in ("Core.eval", "eval", "Base.eval")
+                add("aliases $(_reach_name(x.args[1].args[2]))")
+            elseif x.head === :. && length(x.args) == 2 && x.args[1] === :Test && x.args[2] isa QuoteNode
+                local n = String(x.args[2].value)
+                (!test || !startswith(n, "@")) && add("Test.$n")
+            elseif x.head === :call && !isempty(x.args)
+                local f = _reach_name(x.args[1])
+                f in ("exit", "atexit", "Base.exit", "Base.atexit") && add("calls $f")
+                test && f in ("time", "time_ns", "now", "today", "Libc.time", "Base.Libc.time", "Dates.now", "Dates.today", "mtime", "ctime") && add("the clock ($f)")
+                test && f == "Cmd" && length(x.args) >= 2 && x.args[2] isa Expr && x.args[2].head === :vect && !isempty(x.args[2].args) &&
+                    x.args[2].args[1] == "git" && add("runs git")   # `Cmd(["git", ...])` (red's p7)
+                test && f in ("Core.eval", "eval", "Base.eval") && length(x.args) >= 3 &&
+                    !(x.args[2] isa Expr && x.args[2].head === :macrocall && _reach_name(x.args[2].args[1]) == "@__MODULE__") &&
+                    !(_reach_name(x.args[2]) in own) && add("eval into $(_reach_name(x.args[2]))")
+            elseif x.head === :macrocall && !isempty(x.args)
+                local m = _reach_name(x.args[1])
+                if test && m == "@cmd"
+                    any(a -> a isa String && occursin(r"(^|\s)git(\s|$)", a), x.args) && add("runs git")
+                elseif test && m == "@eval" && length(x.args) >= 4 && !(_reach_name(x.args[3]) in own)
+                    add("eval into $(_reach_name(x.args[3]))")
+                end
+            end
+            test && x.head === :. && length(x.args) == 2 && x.args[1] === :Dates && add("the date (Dates.)")
+            test && x.head === :. && length(x.args) == 2 && x.args[2] isa QuoteNode && x.args[2].value in (:mtime, :ctime) &&
+                add("the clock (.$(x.args[2].value))")   # `stat(f).mtime` (red's p7)
+        end
+    end
+    return out
+end
+reach_files(dir) = Pair{String,String}[f => read(joinpath(ROOT, f), String)
+    for f in split(readchomp(Cmd(`git ls-files -- $dir`; dir=ROOT)), '\n') if endswith(f, ".jl") && isfile(joinpath(ROOT, f))]
+# the allowlist is exact: an entry no file needs is a fault, as a site past it is
+function reach_all_faults()::Vector{String}
+    local all = vcat(String[], [reach_faults(f, t, false, Set{String}()) for (f, t) in reach_files("src")]...,
+                     [reach_faults(f, t, true, Set{String}()) for (f, t) in reach_files("test/src")]...)
+    return vcat(filter(k -> !(k in REACH_ALLOWED), all),
+                ["the reach allowlist's entry no file needs: $k" for k in sort!(collect(setdiff(REACH_ALLOWED, all)))])
+end
+# the reach checks on the files a landing changes (spec v18 Q5): a file the landing leaves unchanged was read when it
+# landed, so only its changed src/ and test/src files are parsed; the whole tree, with the allowlist's exactness, when
+# l228_scope says so
+function reach_changed_faults(files::Vector{String})::Vector{String}
+    local out = String[]
+    for f in files
+        endswith(f, ".jl") && isfile(joinpath(ROOT, f)) || continue
+        startswith(f, "src/") && append!(out, reach_faults(f, read(joinpath(ROOT, f), String), false))
+        startswith(f, "test/src/") && append!(out, reach_faults(f, read(joinpath(ROOT, f), String), true))
+    end
+    return out
+end
+# what L228 runs in full (spec v18 Q5; the round-15 architect's finding 8 and red on the lead's (ii): the behaviour
+# harness is a pure function of these blobs, so it belongs in a landing's 140 s only when the landing changes one):
+# the files the landing changes, read from the base a landing is measured against (CHECK_BASE, as L227 reads it, its
+# merge base with HEAD; the working tree's tracked and untracked changes included), and whether its range closes a clause
+# (`Closes: C<n>`, D16) or WT_RATCHET_FULL=1 asks; a base that cannot be read runs everything
+const L228_HARNESS_INPUTS = ("dev/climb/", "dev/src_verdict.sh", "dev/check.sh", "test/src_tests.jl", "test/src_canary.jl",
+                             "test/climb_l228.py", "test/parity_ratchet.jl")
+function l228_scope()::NamedTuple{(:full, :harness, :changed),Tuple{Bool,Bool,Vector{String}}}
+    local base = get(ENV, "CHECK_BASE", "origin/wt2")
+    local mb = try readchomp(pipeline(Cmd(`git merge-base $base HEAD`; dir=ROOT); stderr=devnull)) catch; "" end
+    isempty(mb) && return (full=true, harness=true, changed=String[])
+    local changed = unique!(vcat(split(readchomp(Cmd(`git diff --name-only $mb`; dir=ROOT)), '\n'; keepempty=false),
+                                 split(readchomp(Cmd(`git ls-files --others --exclude-standard`; dir=ROOT)), '\n'; keepempty=false)))
+    local closes = occursin(r"(?m)^Closes: C\d", readchomp(Cmd(`git log --format=%B $mb..HEAD`; dir=ROOT)))
+    local full = closes || get(ENV, "WT_RATCHET_FULL", "0") == "1"
+    local harness = full || any(f -> any(p -> startswith(f, p), L228_HARNESS_INPUTS), changed)
+    return (full=full || "test/parity_ratchet.jl" in changed, harness=harness, changed=String.(changed))
+end
+# its negative: each planted break named, in src and in a test file
+function reach_negatives_missed()::Vector{String}
+    local out = String[]
+    local clean_t = "using Test\nmodule M end\n@testset \"x\" begin @test 1 == 1 end\nCore.eval(@__MODULE__, :(y = 1))\nCore.eval(M, :(z = 1))\n"
+    isempty(reach_faults("test/src/x.jl", clean_t, true)) || push!(out, "the reach checks read a clean test file as a fault")
+    isempty(reach_faults("src/x.jl", "f(x) = x + 1\n", false)) || push!(out, "the reach checks read clean src as a fault")
+    for (what, path, text, test) in (
+            ("src loads Test", "src/x.jl", "using Test\n", false),
+            ("src calls atexit", "src/x.jl", "__init__() = atexit(() -> nothing)\n", false),
+            ("src names a record variable", "src/x.jl", "g() = Main._WT_RECORDS\n", false),
+            ("src names WT_SRC_", "src/x.jl", "h() = get(ENV, \"WT_SRC_RECORDS\", \"\")\n", false),
+            ("a test redefines Test.record", "test/src/x.jl", "Test.record(ts::Test.DefaultTestSet, t::Test.Fail) = t\n", true),
+            ("a test evals into another module", "test/src/x.jl", "Core.eval(Main, :(x = 1))\n", true),
+            ("a test @evals into another module", "test/src/x.jl", "@eval Base f() = 1\n", true),
+            ("a test runs git", "test/src/x.jl", "read(`git log -1`, String)\n", true),
+            ("a test reads the clock", "test/src/x.jl", "@test time() > 0\n", true),
+            ("a test reads the date", "test/src/x.jl", "using Dates\n@test Dates.today() < Dates.Date(2030)\n", true),
+            ("a test names .wtd", "test/src/x.jl", "mkpath(joinpath(pwd(), \".wtd\", \"claims\", \"b.jl\"))\n", true),
+            ("a test calls exit", "test/src/x.jl", "exit(0)\n", true),
+            ("a test imports Test's internals", "test/src/x.jl", "import Test: record, DefaultTestSet, Fail\nrecord(ts::DefaultTestSet, t::Fail) = t\n", true),
+            ("a test reads Base.Libc.time", "test/src/x.jl", "@test Base.Libc.time() > 0\n", true),
+            ("a test reads a file's mtime", "test/src/x.jl", "@test stat(@__FILE__).mtime > 0\n", true),
+            ("a test runs git through Cmd", "test/src/x.jl", "read(Cmd([\"git\", \"log\"]), String)\n", true),
+            ("a test aliases Core.eval", "test/src/x.jl", "const E = Core.eval\nE(Main, :(x = 1))\n", true))
+        isempty(reach_faults(path, text, test)) && push!(out, "the reach checks missed: $what")
+    end
+    return out
+end
+
+# its behaviour breaks, each planted in a copy of the tree's dev/climb and dev/src_verdict.sh (path, the text, its break)
+const BOUNDED_BREAKS = (
+    ("a target of 10 ** 6", "dev/climb/measure.py", "    target, margin = src_target(int(band.group(1)), src_change)",
+     "    target, margin = src_target(int(band.group(1)), src_change); target = 10 ** 6"),
+    ("an empty share (window = [])", "dev/climb/measure.py", "    share = kept\n", "    share = []\n"),
+    ("a set with a missing row accepted", "dev/climb/lander.py", "    outside, missing = sorted(set(recs) - set(files)), sorted(set(files) - set(recs))\n",
+     "    outside, missing = sorted(set(recs) - set(files)), []\n"),
+    ("an innocent move charged", "dev/climb/lander.py", "\n    return ok\n\ndef not_reproduced", "\n    return False\n\ndef not_reproduced"),
+    ("a block after the canary's row read", "dev/src_verdict.sh", "if (\$2 == \"~canary\") done = 1; next }", "next }"),
+    ("records with a broken block grammar read", "dev/src_verdict.sh", "  [ -z \"\$grammar\" ] || void=", "  true || void="),
+    ("a margin from every error, both signs", "dev/climb/measure.py", "        pos = sorted((err for _, err in pairs if err > 0), reverse=True)\n",
+     "        pos = sorted((abs(err) for _, err in pairs), reverse=True)\n"),
+    ("a check that stands with a file of its set unrun", "dev/src_verdict.sh", "[ -z \"\$missing\$twice\$outside\" ] ||", "false &&"),
+    ("a known red's row read as the change's", "dev/src_verdict.sh", "    if is_known \"\$file\" \"\$(fails_of \"\$why\")\"; then", "    if false; then"),
+    ("a known red keyed by its first failure alone", "dev/src_verdict.sh", "print substr(\$0, 1, 120) }' | LC_ALL=C sort; }",
+     "print substr(\$0, 1, 120) }' | head -1; }"),
+    ("a red's identity read as a set", "dev/src_verdict.sh", "print substr(\$0, 1, 120) }' | LC_ALL=C sort; }",
+     "print substr(\$0, 1, 120) }' | LC_ALL=C sort -u; }"),
+    ("a void read as green", "dev/src_verdict.sh", "  echo \"check: RED — the shards' records are void\${void}\"; exit 15", "  :"))
+function bounded_behaviour_negatives_missed()::Vector{String}
+    local out = String[]
+    isempty(bounded_behaviour_faults(ROOT)) || push!(out, "L228's behaviour: the tree itself reads a fault")
+    for (what, path, a, b) in BOUNDED_BREAKS
+        local t = mktempdir()
+        mkpath(joinpath(t, "dev"))
+        cp(joinpath(ROOT, "dev", "climb"), joinpath(t, "dev", "climb"))
+        cp(joinpath(ROOT, "dev", "src_verdict.sh"), joinpath(t, "dev", "src_verdict.sh"))
+        local f = joinpath(t, path)
+        local text = read(f, String)
+        count(a, text) == 1 || (push!(out, "L228's behaviour negative cannot plant: $what"); continue)
+        write(f, replace(text, a => b))
+        isempty(bounded_behaviour_faults(t)) && push!(out, "L228's behaviour negative missed: $what")
+        rm(t; recursive = true, force = true)
+    end
+    return out
+end
+bounded_code() = Pair{String,String}[f => read(joinpath(ROOT, f), String)
+    for f in split(readchomp(Cmd(`git ls-files -- '*.sh' '*.py' '*.jl' '*.toml' '*.yml'`; dir=ROOT)), '\n')
+    if !isempty(f) && f != "test/parity_ratchet.jl" && isfile(joinpath(ROOT, f))]
+# its negative: the real texts answer nothing, and each planted break is named
+function bounded_check_negatives_missed()::Vector{String}
+    local c = read(joinpath(ROOT, "dev", "check.sh"), String)
+    local d = read(joinpath(ROOT, "dev", "climb", "door.py"), String)
+    local k = read(joinpath(ROOT, "dev", "climb", "defaults.py"), String)
+    local l = read(joinpath(ROOT, "dev", "climb", "lander.py"), String)
+    local m = read(joinpath(ROOT, "dev", "climb", "measure.py"), String)
+    local plain = Pair{String,String}["x.sh" => "echo hi\n"]
+    local out = String[]
+    isempty(bounded_check_faults(c, d, k, plain, l, m)) || push!(out, "L228's negative: the real texts read a fault")
+    for (what, ll, mm) in (
+            ("a landing recorded \"all\"", replace(l, "src_ran(full, ran, \"landing\")" => "src_ran(full, \"all\", \"landing\")"), m),
+            ("no list guard on a green record", l, replace(m, "if not isinstance(files, list):" => "if False:")),
+            ("a fix-first cleared unrun", replace(l, "not set(f.get(\"tests\", [])) <= set(ran or [])" => "False"), m),
+            ("the ship event without its target", replace(l, "target=(src_set_ or {}).get(\"target\")" => "target=None"), m))
+        isempty(bounded_check_faults(c, d, k, plain, ll, mm)) && push!(out, "L228's negative missed: $what")
+    end
+    for (what, cc, dd, kk, code) in (
+            ("no refusal without a set", replace(c, "set_ok || exit 1" => "set_ok || true"), d, k, plain),
+            ("a writable set admitted", replace(c, "[ -w \"\$WT_SRC_SET\" ] &&" => "false &&"), d, k, plain),
+            ("another HEAD's set admitted", replace(c, "\"\$(git rev-parse HEAD)\"" => "\"x\""), d, k, plain),
+            ("shards not given the set", replace(c, "WT_SRC_SET=\"\$WT_SRC_SET\" " => ""), d, k, plain),
+            ("the door's set from elsewhere", c, replace(d, "WT_SRC_SET=f\"{d}/src-set.txt\"" => "WT_SRC_SET=\"/tmp/set\""), k, plain),
+            ("the cost table written again", c, d, k, Pair{String,String}["dev/x.sh" => "cp a \"\$common/wt-src-instr.tsv\"\n"]),
+            ("a hand-set target back in the defaults", c, d, replace(k, "\"src_margin_checks\": 10," => "\"src_margin_checks\": 10, \"src_path_target_s\": 115,"), plain),
+            ("a margin key past its band", c, d, replace(k, "\"src_margin_min_s\": 10" => "\"src_margin_min_s\": 5"), plain),
+            ("a hand-set target named in code", c, d, k, Pair{String,String}["dev/x.py" => "t = cfg()[\"src_path_target_s\"]\n"]),
+            ("a key gone", c, d, replace(k, "\"src_unverified_max\"" => "\"src_unverified_maxx\""), plain))
+        isempty(bounded_check_faults(cc, dd, kk, code, l, m)) && push!(out, "L228's negative missed: $what")
+    end
+    return out
 end
 
 # ---- L227: a removed test is named (the Removes-test rule, A33E1; dev/CHARTER.md C10) -------------
@@ -2680,8 +3072,9 @@ function removals_unnamed(root::AbstractString, base::AbstractString)::Vector{St
     local cases = Dict{String,Set{String}}(); local emptied = Set{String}()
     for c in REMOVAL_CORPORA
         has(mb, c) || continue
-        local now = has("HEAD", c) ? corpus_case_keys(git("show", "HEAD:$c")) : Set{String}()
-        cases[c] = setdiff(corpus_case_keys(git("show", "$mb:$c")), now)
+        local keys(t) = c == "test/smoke_corpus.jl" ? Set{String}("$g/$k" for (_, g, k) in _corpus_loader().registered(t)) : corpus_case_keys(t)
+        local now = has("HEAD", c) ? keys(git("show", "HEAD:$c")) : Set{String}()
+        cases[c] = setdiff(keys(git("show", "$mb:$c")), now)
         isempty(now) && push!(emptied, c)
     end
     return ["the change removes $w and its message does not name it: add `Removes-test: $w — <reason>`"
@@ -3878,9 +4271,19 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L204_requirements_are_checks" => ("Dale's requirements are the rows of dev/LEDGER.md, each in his words with its date, its why and the checks that enforce it (Dale 2026-10-21: \"MAKE SURE you actually bake our reqs INTO programmatic checks — not just hoping that memory works\"): dev/CHARTER.md names dev/LEDGER.md; its IDs only increase, none reused or renumbered, and a requirement Dale replaces or drops is deleted with its row, never kept marked superseded (Dale 2026-11-04: \"do NOT keep stale bloated rules around -- delete and do not mark superseded\"); each cites a check of this file, a clause of dev/CHARTER.md (every check that clause cites) or an existing test, hook, script or workflow by path, or names the dev/MARCH.md row where its planned check is written (`planned: <row>`, the row existing); a row carries its rule for agents, a row stating a number its intent and band; and every check of this file serves a row, directly or through a clause the row cites: a check that serves no requirement is noise. Behavior, run here: seventeen planted ledgers and an empty one answer as stated (dev/CHARTER.md C0)",
+    "L204_requirements_are_checks" => ("Dale's requirements are the rows of dev/LEDGER.md, each in his words with its date, its why and the checks that enforce it (Dale 2026-10-21: \"MAKE SURE you actually bake our reqs INTO programmatic checks — not just hoping that memory works\"): dev/CHARTER.md names dev/LEDGER.md; its IDs only increase, none reused or renumbered, and a requirement Dale replaces or drops is deleted with its row, never kept marked superseded (Dale 2026-11-04: \"do NOT keep stale bloated rules around -- delete and do not mark superseded\"); each cites a check of this file, a clause of dev/CHARTER.md (every check that clause cites) or an existing test, hook, script or workflow by path, or names the dev/MARCH.md row where its planned check is written (`planned: <row>`, the row existing); a row carries its rule for agents, a row stating a number its intent and band; and every check of this file serves a row, directly or through a clause the row cites: a check that serves no requirement is noise. And the climb's rules state its numbers as its driver holds them (D47; council round 4, A1: a HILL.md that differed stopped every loop, and nothing kept it from landing): dev/climb/HILL.md's paragraph between `<!-- defaults:begin -->` and `<!-- defaults:end -->` is exactly the one dev/climb/defaults.py generates from DEFAULTS, so a number changed in one place alone cannot land, and the driver's loops only note a difference. Behavior, run here: seventeen planted ledgers and an empty one answer as stated, and HILL.md as it is passes while a number changed by hand, the paragraph removed and a value DEFAULTS does not hold are each refused, and the climb's driver imports under a scratch state while a copy with a syntax error planted does not (O5-9: a driver that fails to import kills every loop silently), and the build users dev/climb/setup-users.sh makes are the ones dev/climb/door.py runs as, a user added on one side alone refused (D-E), and the judge's modules are named once, test/corpus_loader.jl's JUDGE_MODULES, exactly the modules the judge's files define and WasmTarget, a list missing the verdict's or naming a module no judge file defines refused (spec v17 Y6) (dev/CHARTER.md C0)",
         () -> begin
-            local v = vcat(ledger_faults_here(), ledger_negatives_missed())
+            local v = vcat(ledger_faults_here(), ledger_negatives_missed(), hill_negatives_missed(), climb_import_negatives_missed(),
+                           door_users_negatives_missed(), judge_modules_negatives_missed())
+            local jm = judge_modules_fault(read(joinpath(ROOT, "dev", "climb", "core.py"), String), f -> read(joinpath(ROOT, f), String),
+                                           _corpus_loader().JUDGE_MODULES)
+            isempty(jm) || push!(v, jm)
+            local du = door_users_fault(read(joinpath(ROOT, "dev", "climb", "setup-users.sh"), String), read(joinpath(ROOT, "dev", "climb", "door.py"), String))
+            isempty(du) || push!(v, du)
+            local hill = hill_faults_of(read(joinpath(ROOT, "dev", "climb", "HILL.md"), String))
+            isempty(hill) || push!(v, hill)
+            local imp = climb_import_fault(joinpath(ROOT, "dev", "climb"))
+            isempty(imp) || push!(v, "dev/climb/climb.py does not import under a scratch state: " * imp)
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
@@ -3958,6 +4361,24 @@ const LOCKS = [
             any(startswith("lib/WasmInterpreter/"), recorded) || push!(v, "the kinds cache $(basename(cache)) records no file of lib/WasmInterpreter")
             occursin(SHIP_SRC_LINE, read(joinpath(ROOT, "dev", "ship.sh"), String)) ||
                 push!(v, "dev/ship.sh does not print the src progress line after its landing")
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
+    "L228_bounded_landing_check" => ("a landing's check runs the test set the climb's lander chose before it, from origin's code and state, and nothing else (the landing-check ruling R1-R3, R6, built 2026-11-11, waiting on Dale's word on C10's wording; dev/LEDGER.md D16: full suites on every landing cost the loop and answer a different question): dev/check.sh refuses before any Julia a landing with no set handed (WT_SRC_SET), a set its own user can write and a set made for another HEAD, and hands the set to every shard; dev/climb/door.py's land job gives the set from its run directory, which its user reads and cannot write; the cost table each landing's own processes rewrote (wt-src-instr.tsv, WT_SRC_COSTS_OUT, door.land_costs) is named by no code file; and src_margin_min_s (10-20), src_margin_checks (5-20), src_margin_start_s (20-40), src_margin_max_s (30-44), src_unverified_max (3-12) and fixfirst_max_landings (3-12) exist inside their bands in dev/climb/defaults.py; the target a landing's share is cut to is computed live by measure.src_target (D14's band less three times the second-largest positive prediction error of the shape's last landed checks, between src_margin_min_s and src_margin_max_s, spec v17 Z5), the share cut to it alone, the ship event recording it, and the hand-set target it replaced named by no code file. and the four the round-13 architect names are read where the driver writes them: the lander refuses a check's records that name a file outside the set it handed; a landing's green record is exactly the files its check reported green (never \"all\"); a red on test files alone runs its files at origin's head before any move is charged (R3); a fix-first landing clears a src-test red only when its check ran the file green. Behavior, run here: the driver's landing-check code is CALLED (test/climb_l228.py: src_target, src_set, the lander's verified_rows and origin_red, dev/src_verdict.sh, on a scratch repository and state with planted checks, a score record and shard records; spec v17 Z6) and reads no fault; twelve behaviour breaks planted in copies of it (a target of 10 ** 6, an empty share, a missing row accepted, an innocent move charged, a two-sided margin, a check standing with a file unrun, a known red read as the change's, a known red keyed by its first failure alone, a red's identity read as a set, a block after the canary's row read, records with a broken block grammar read, a void read as green) are each caught by what a call returns; and fourteen text breaks of what only the text shows (check.sh's refusals, the door, the deleted table, the keys) are each named. Two static stopgaps on what a test process can reach (spec v17 Z4; proposed apart as L229 and L230), each file read through Julia's parser: src/ loads no Test and names no `Test.`, `exit`, `atexit`, `_WT_` name or the records' variables; a file under test/src names no Test internal but its macros, no `exit`/`atexit`, WT_SRC_*, .wtd, git command, clock or date, and evals into no module but its own, past an exact allowlist each entry of which a file needs; seventeen planted reaches are each named (red's round-15 p7 among them). When each part runs (spec v18 Q5): the text checks and the reach negatives always; the behaviour harness with its negatives (D38) when the landing's diff from CHECK_BASE touches dev/climb, dev/src_verdict.sh, dev/check.sh, test/src_tests.jl, test/src_canary.jl, test/climb_l228.py or this file, when its range closes a clause (`Closes: C<n>`), or when no base can be read; the reach checks on the src and test/src files the landing changes, the whole tree with the allowlist's exactness when this file changes or the run is full (dev/CHARTER.md C10)",
+        () -> begin
+            local v = vcat(bounded_check_faults(read(joinpath(ROOT, "dev", "check.sh"), String),
+                                                read(joinpath(ROOT, "dev", "climb", "door.py"), String),
+                                                read(joinpath(ROOT, "dev", "climb", "defaults.py"), String), bounded_code(),
+                                                read(joinpath(ROOT, "dev", "climb", "lander.py"), String),
+                                                read(joinpath(ROOT, "dev", "climb", "measure.py"), String)),
+                           bounded_check_negatives_missed(), reach_negatives_missed())
+            # spec v18 Q5: the behaviour harness and its negatives (D38: together) when the landing touches what they
+            # test or closes a clause; the reach checks on the files it changes, the whole tree when it is full
+            local sc = l228_scope()
+            sc.harness && append!(v, bounded_behaviour_negatives_missed())
+            append!(v, sc.full ? reach_all_faults() : reach_changed_faults(sc.changed))
+            println("    L228 ran: ", sc.harness ? "the behaviour harness and its negatives" : "no behaviour harness (the landing touches none of its inputs)",
+                    "; the reach checks on ", sc.full ? "every file" : "$(count(f -> startswith(f, "src/") || startswith(f, "test/src/"), sc.changed)) changed file(s)")
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),

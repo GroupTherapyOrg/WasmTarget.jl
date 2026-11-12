@@ -69,7 +69,7 @@ end
     local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
     # an abstract receiver: Julia union-splits the call into isa tests and invokes, so no NIR
     # statement is a dynamic call
-    local t = DD.Translator(WasmTarget.build_nir(W.check_subset(EmptyTableCases.k, (EmptyTableCases.Holder,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
+    local t = DD.Translator(WasmTarget.build_nir(W.check_subset(EmptyTableCases.k, (EmptyTableCases.Holder,), "dispatch_table", Base.get_world_counter()), "test"), data, DD.TranslatorOptions())
     DD._init_modules(t, nothing)
     collect(DD.ClassInfoCollector(t))
     @test isempty(DD.DynamicCallSiteCollector_collect(t.component))
@@ -103,7 +103,7 @@ end
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
     local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
-    local t = DD.Translator(WasmTarget.build_nir(W.check_subset(DispatchCases.f, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
+    local t = DD.Translator(WasmTarget.build_nir(W.check_subset(DispatchCases.f, (Int,), "dispatch_table", Base.get_world_counter()), "test"), data, DD.TranslatorOptions())
     DD._init_modules(t, nothing)
     collect(DD.ClassInfoCollector(t))
     local dt = t.dispatch_table[]
@@ -145,7 +145,7 @@ end
 
 # a numbered translator of `f`'s world (modules, closures and classes collected), whose admitted classes
 # getConcreteClassIdRange reads, as DispatchTable.build passes them (concrete_classes)
-numbered(f) = (t = DD.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f, (Int,), "dispatch_table"), "test"),
+numbered(f) = (t = DD.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f, (Int,), "dispatch_table", Base.get_world_counter()), "test"),
         DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options())), DD.TranslatorOptions());
     DD._init_modules(t, nothing); collect(t.closure_layouter[]); collect(t.class_info_collector[]); t)
 admitted(t) = r -> WasmTarget.concrete_classes(t, r)
@@ -181,7 +181,7 @@ end
     local W = WasmTarget
     local F = FieldSelectorCases
     local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
-    local t = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
+    local t = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table", Base.get_world_counter()), "test"), data, DD.TranslatorOptions())
     DD._init_modules(t, nothing)
     collect(t.closure_layouter[]); collect(t.class_info_collector[])
     # Julia's IR reads both fields on an S, each one call of its getter selector
@@ -237,14 +237,14 @@ end
     @test e isa W.RejectionError && e.rejection isa W.Internal
     # MissingFieldTraps: a class the receiver admits without the field reaches Julia's FieldError, a
     # target not yet written, so the build rejects there, located, never leaving the slot empty
-    local t2 = DD.Translator(W.build_nir(W.check_subset(F.missing_side, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
+    local t2 = DD.Translator(W.build_nir(W.check_subset(F.missing_side, (Int,), "dispatch_table", Base.get_world_counter()), "test"), data, DD.TranslatorOptions())
     DD._init_modules(t2, nothing)
     collect(DD.ClassInfoCollector(t2))
     local e2 = try; DD.build(t2.dispatch_table[]); nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Unquarantined && occursin("FieldError", e2.rejection.row)
     # a read by position is the selector of the field each admitted class holds there (Julia's
     # get_checked_fieldindex), never a selector named "1" that every class lacks (A69S2)
-    local world(f) = W.build_nir(W.check_subset(f, (Int,), "dispatch_table"), "test")
+    local world(f) = W.build_nir(W.check_subset(f, (Int,), "dispatch_table", Base.get_world_counter()), "test")
     local tf = numbered(F.first_of)
     local pc = W.field_selector_calls(tf.component, admitted(tf))
     @test [(c.name, c.is_setter, c.call_count, Set(c.classes)) for c in pc] == [("side", false, 1, Set([F.A, F.B]))]
@@ -267,9 +267,9 @@ end
     @test [c.name for c in W.field_selector_calls(to.component, admitted(to))] == ["ptr_or_offset"]
     # the compile calls through the table (_virtualCall): first_of's read by position, run by node,
     # answers as native Julia
-    isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+    isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
     local fb = W.compile(F.first_int, (Int,); optimize = false)
-    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("first_int($n)", fb, (n,), Main.WTRunner.native_answer(F.first_int, (n,))) for n in (3, -2)])
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("first_int($n)", fb, (n,), Main.WTChild.native_answer(F.first_int, (n,))) for n in (3, -2)])
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -278,7 +278,7 @@ end
     local W = WasmTarget
     local F = FieldSelectorCases
     local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
-    local t = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions(polymorphic_specialization = true))
+    local t = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table", Base.get_world_counter()), "test"), data, DD.TranslatorOptions(polymorphic_specialization = true))
     DD._init_modules(t, nothing)
     collect(t.closure_layouter[]); collect(t.class_info_collector[])
     local dt = t.dispatch_table[]
@@ -307,7 +307,7 @@ end
     local f = DD.var"function"(ct)
     @test f isa W.WasmBuilder.IR.BaseFunction && DD.var"function"(ct) === f
     # a selector of one range is a direct call, no dispatcher
-    local t1 = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table"), "test"), data, DD.TranslatorOptions())
+    local t1 = DD.Translator(W.build_nir(W.check_subset(F.two, (Int,), "dispatch_table", Base.get_world_counter()), "test"), data, DD.TranslatorOptions())
     DD._init_modules(t1, nothing)
     collect(t1.closure_layouter[]); collect(t1.class_info_collector[])
     DD.build(t1.dispatch_table[])

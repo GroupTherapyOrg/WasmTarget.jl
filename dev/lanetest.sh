@@ -31,7 +31,8 @@ fi
 . dev/depot.sh; wt_depot_export "$PWD"
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 slots="$common/wt-lanetest"; mkdir -p "$slots"
-prefix="taskpolicy -b"; mine=""
+# (a climb agent runs at background QoS already, its children inheriting it, and its sandbox refuses taskpolicy: O5-4)
+prefix="taskpolicy -b"; [ -z "${WT_CLIMB_AGENT:-}" ] || prefix=""; mine=""
 # a landing's check running now holds the performance cores (a ratchet and three shards): no slot then, so
 # the check keeps its cores (march-monitor-a, 08:58). A check runs only under the landing lock (dev/ship.sh),
 # so the lock is what is read: a lane's own ship lock is held by a ship still queued for it, and one stale

@@ -179,12 +179,16 @@ same type with null initializer.
     module_uses::IdDict{ConstantInfo,LinkedHashSet{WasmBuilder.ModuleBuilder}}
     lazy_slot_tables::Dict{WasmBuilder.IR.RefType,WasmBuilder.TableBuilder}
     table_importer::Late{WasmTableImporter}
+    # dart's statics of this class (_nextGlobalId, :2234), and the Julia-forced memories of a compile's constants: the
+    # compile's own, one accessor a compile (Constants._constantAccessor, late), src/julia/classes.jl CompileStatics
+    statics::CompileStatics
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
     # :1838 is its outer function; the late importer's initializer reads the accessor itself
     function _ConstantAccessor(::Val{:_}, translator::KernelNodes)
         local self
         self = new(translator, IdDict{ConstantInfo,LinkedHashSet{WasmBuilder.ModuleBuilder}}(), Dict{WasmBuilder.IR.RefType,WasmBuilder.TableBuilder}(),
-            Late{WasmTableImporter}("dart2wasm/lib/constants.dart:1836 _ConstantAccessor.tableImporter", () -> WasmTableImporter(self.translator, "constant-table")))
+            Late{WasmTableImporter}("dart2wasm/lib/constants.dart:1836 _ConstantAccessor.tableImporter", () -> WasmTableImporter(self.translator, "constant-table")),
+            CompileStatics())
         return self
     end
 end
@@ -524,7 +528,7 @@ end
         else
             # This only happens in invalid but unreachable code produced by the
             # TFA dead-code elimination.
-            WasmBuilder.comment(b, "Constant in incompatible context (constant: $(constant isa NirConst ? constant.c.val : constant), " *
+            WasmBuilder.comment(b, "Constant in incompatible context (constant: $(julia_text(constant isa NirConst ? constant.c.val : constant)), " *
                 "expectedType: $expected_type, resultType: $result_type)")
             WasmBuilder.unreachable(b)
         end
@@ -845,6 +849,15 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             # lowering, useIsSetField), 1 where Julia holds a value
             local storage = field.type isa DataType && field.type <: WasmArray ? field.type.parameters[1] :
                 reject!(Internal("$at: the Memory field $(field.name) is no wasm array"), at)
+            # a Memory is its own owner, every element (src/julia/classes.jl _live_memory's rule): one an Array's constant
+            # emits in part (a copy, its live extent) is never also emitted whole, which would part their aliasing
+            local statics = self.constants._constant_accessor[].statics
+            if !any(c -> c[1] === v, values(statics.live_memories))   # no owner defines it (MEMORY_OWNERS)
+                haskey(statics.live_memories, v) &&
+                    reject!(ProgramError("$at: a Memory constant held whole and by an Array that defines part of it (its size): one constant cannot hold both; build the Array in the function"), at)
+                _unowned_memory(v, at)   # an isbits one, refused, located (spec v17 Y6)
+                push!(statics.whole_memories, v)
+            end
             if field.name == "data"
                 make_array_of(self.constants, storage,
                     NirConst[NirConst(Core.Const(isassigned(v, k) ? v[k] : nothing)) for k in eachindex(v)]).c.val
@@ -883,6 +896,11 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             # a MemoryRef's index into its memory, from 0 (src/julia/classes.jl _memoryref_instance_fields),
             # where Julia holds an address: Julia's memoryrefoffset, from 1
             Base.memoryrefoffset(v) - 1
+        elseif (owner_of = memory_owner(v, field.name)) !== nothing
+            # a memory's owner's field (src/julia/classes.jl MEMORY_OWNERS, the one table): an Array's size's elements
+            # from its ref's offset, a Dict's filled slots; the rest of its memory (a capacity tail after sizehint!, a
+            # popped isbits element's bytes, an unfilled slot) holds none, whatever bytes Julia left there
+            owner_of(self.constants._constant_accessor[].statics, v, field.name, at)
         elseif isdefined(v, field.index)
             getfield(v, field.index)
         else
@@ -1553,7 +1571,9 @@ wasm value classes (WasmI32 and the rest) are eager too; Julia has none.
     return constant isa NirConst && (constant.c.val === nothing || constant.c.val isa Union{Bool,Base.BitInteger64,Char,Float32,Float64})
 end
 
-@parity "dart2wasm/lib/constants.dart:2234 _ConstantAccessor._nextGlobalId" const _ConstantAccessor__next_global_id = Ref{Int}(0)
+# dart's static field, a program's counter there (dart2wasm compiles one program a process); the compile's here, its
+# accessor's (src/julia/classes.jl CompileStatics, spec v16 X5 and X8: Julia compiles many programs a process)
+@parity "dart2wasm/lib/constants.dart:2234 _ConstantAccessor._nextGlobalId" _ConstantAccessor__next_global_id(self::_ConstantAccessor)::Base.RefValue{Int} = self.statics.next_global_id
 
 """
 A constant's global name: `C<id> ` when constant names are unique, then a string's first line (at
@@ -1561,8 +1581,8 @@ most 30 code units), a Bool's, integer's or float's value, an object's class nam
 parameters, a dummy value's heap type, or the constant's text.
 """
 @parity "dart2wasm/lib/constants.dart:2235 _ConstantAccessor._constantName" function _constant_name(self::_ConstantAccessor, constant::Union{NirConst,DummyValueConstant})::String
-    local id = _ConstantAccessor__next_global_id[]
-    _ConstantAccessor__next_global_id[] += 1
+    local id = _ConstantAccessor__next_global_id(self)[]
+    _ConstantAccessor__next_global_id(self)[] += 1
     local prefix = self.translator.options.unique_constant_names ? "C$id " : ""
     if constant isa DummyValueConstant
         return "$prefix #Dummy($(constant.type))"
@@ -1587,7 +1607,7 @@ parameters, a dummy value's heap type, or the constant's text.
         local type_arguments = join((t isa Union{Type,TypeVar} ? _name_type(self, t) : "$t" for t in klass.parameters), ", ")
         return "$prefix$name<$type_arguments>"
     end
-    return "$prefix$(sprint(show, v))"
+    return "$prefix$(v isa Type ? julia_text(v) : sprint(show, v))"
 end
 
 # a class parameter's name: a class (dart's InterfaceType) by its name and parameters, anything else

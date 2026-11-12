@@ -14,7 +14,7 @@ f(x::Int) = x + 1
 g(x::Int) = x < 0 ? throw(DomainError(x)) : x
 
 @testset "kernel_nodes.dart: the runtime's classes and procedures, Unported at the sdk" begin
-    local world = W.build_nir(W.check_subset(f, (Int,), "kernel_nodes"), "kernel_nodes")
+    local world = W.build_nir(W.check_subset(f, (Int,), "kernel_nodes", Base.get_world_counter()), "kernel_nodes")
     local data() = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
     local js = D.Translator(world, data(), D.TranslatorOptions())
     local standalone = D.Translator(world, data(), D.TranslatorOptions(; standalone = true))
@@ -35,11 +35,11 @@ g(x::Int) = x < 0 ? throw(DomainError(x)) : x
     # the target's patch: standalone or JS; the standalone StackTrace.current is ported, its method in
     # every closed world (a runtime root)
     @test anchor(D.stack_trace_current, js) == "sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"
-    local throwing = D.Translator(W.build_nir(W.check_subset(g, (Int,), "kernel_nodes"), "kernel_nodes"), data(), D.TranslatorOptions(; standalone = true))
+    local throwing = D.Translator(W.build_nir(W.check_subset(g, (Int,), "kernel_nodes", Base.get_world_counter()), "kernel_nodes"), data(), D.TranslatorOptions(; standalone = true))
     @test D.stack_trace_current(throwing).def === only(methods(W.Runtime.StackTrace_current))
     # the JS patch's printToConsole is ported (src/runtime/js_common/print_patch.jl): its method in a closed
     # world that holds it, an Internal where none does
-    local printing = D.Translator(W.build_nir(W.check_subset(W.Runtime.print_to_console, (String,), "kernel_nodes"), "kernel_nodes"), data(), D.TranslatorOptions())
+    local printing = D.Translator(W.build_nir(W.check_subset(W.Runtime.print_to_console, (String,), "kernel_nodes", Base.get_world_counter()), "kernel_nodes"), data(), D.TranslatorOptions())
     @test D.print_to_console(printing).def === only(methods(W.Runtime.print_to_console))
     @test anchor(D.print_to_console, js) isa W.RejectionError && anchor(D.print_to_console, js).rejection isa W.Internal
     @test anchor(D.print_to_console, standalone) == "sdk/lib/_internal/wasm/standalone/print_patch.dart:9 printToConsole"
@@ -61,7 +61,7 @@ end
 
 
 @testset "kernel_nodes.dart:316 _getLaneReferences: a SIMD vector's lanes, in lane order" begin
-    local world = W.build_nir(W.check_subset(f, (Int,), "kernel_nodes"), "kernel_nodes")
+    local world = W.build_nir(W.check_subset(f, (Int,), "kernel_nodes", Base.get_world_counter()), "kernel_nodes")
     local t = D.Translator(world, D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     # each of dart's six lane classes, as Julia's SIMD vector of the same lanes
     for (T, n) in ((Int8, 16), (Int16, 8), (Int32, 4), (Int64, 2), (Float32, 4), (Float64, 2))

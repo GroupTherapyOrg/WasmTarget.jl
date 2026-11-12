@@ -42,7 +42,7 @@ end
 
 # the body's statements Julia's optimizer leaves, in NIR, and Julia's CFG of them (nir_code), the
 # input machine_function reads
-nir_of(f, types) = (ci = Base.code_typed(f, types; optimize = true)[1][1]; W.nir_code(ci.code, ci.ssaflags, "llvm_loop_info"))
+nir_of(f, types) = (ci = Base.code_typed(f, types; optimize = true)[1][1]; W.nir_code(ci.code, ci.ssaflags, W.NirBindings(Base.get_world_counter()), "llvm_loop_info"))
 
 # the natural loop of `h` (CFGStackify.tla's BodyOf): h and the blocks reaching a predecessor h
 # dominates without passing h
@@ -101,9 +101,9 @@ end
     # unwind mismatch
     local enter = Any[Core.EnterNode(5), Expr(:call, GlobalRef(Base, :identity), 1), Expr(:leave, Core.SSAValue(1)),
                       Core.ReturnNode(1), Core.ReturnNode(2)]
-    local mft = W.machine_function(W.nir_code(enter, zeros(UInt32, length(enter)), "try")..., "try")
+    local mft = W.machine_function(W.nir_code(enter, zeros(UInt32, length(enter)), W.NirBindings(Base.get_world_counter()), "try")..., "try")
     @test mft.blocks[5].ehpad && mft.blocks[5].preds == [3] && !mft.blocks[2].ehpad && mft.blocks[5].instrs[1].opcode == W.CATCH
-    local mfe = L.add_pre_emit_pass(W.nir_code(enter, zeros(UInt32, length(enter)), "try")..., "try", true)
+    local mfe = L.add_pre_emit_pass(W.nir_code(enter, zeros(UInt32, length(enter)), W.NirBindings(Base.get_world_counter()), "try")..., "try", true)
     @test count(mi -> mi.opcode == W.TRY_TABLE, [mi for b in mfe.layout for mi in mfe.blocks[b].instrs]) == 1
 end
 

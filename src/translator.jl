@@ -1545,9 +1545,9 @@ end
 # dart narrows a field's declared type by TFA's inferred type; Julia's inference does not narrow a
 # field, so its type is its declared one: an instance field's (a ClassField), and a static field's,
 # dart's static Field being a Julia global binding, the binding's declared type
-# (`Core.get_binding_type`, `Any` when untyped)
+# (`Core.get_binding_type`, `Any` when untyped), as the program's world holds it (NirBinding)
 @parity "dart2wasm/lib/translator.dart:2087 Translator.typeOfField" type_of_field(self::Translator, node::Union{ClassField,GlobalRef})::Type =
-    node isa ClassField ? node.type : Core.get_binding_type(node.mod, node.name)
+    node isa ClassField ? node.type : nir_binding(self.component, node).type
 
 """
 The wasm type of a parameter: translateType of typeOfParameterVariable, the type its MethodInstance

@@ -363,8 +363,8 @@ end
     queue_native!("literals", lbytes, Int128Cases.literals, [(a, b) for a in edge for b in edge])
     local dbytes = W.compile(Int128Cases.divmod, (Int64, Int64); optimize = false)
     local dcases = [(a, d) for a in Int64[0, 1, -1, 5, typemax(Int64), typemin(Int64)] for d in Int64[1, -1, 3, -10, 7, 8, typemax(Int64), 0, 9]]
-    @test count(c -> WTRunner.native_answer(Int128Cases.divmod, c) == WTRunner.Throws(DivideError), dcases) >= 7
-    append!(NATIVE_RUNS, [WTRunner.RunCase("divmod$c", dbytes, c, WTRunner.native_answer(Int128Cases.divmod, c)) for c in dcases])
+    @test count(c -> WTChild.native_answer(Int128Cases.divmod, c) == WTChild.Throws(DivideError), dcases) >= 7
+    append!(NATIVE_RUNS, [WTChild.RunCase("divmod$c", dbytes, c, WTChild.native_answer(Int128Cases.divmod, c)) for c in dcases])
     local bbytes = W.compile(Int128Cases.bits, (Int64, Int64); optimize = false)
     queue_native!("bits", bbytes, Int128Cases.bits, [(a, n) for a in Int64[0, 1, -1, 7, typemax(Int64), typemin(Int64)] for n in Int64[0, 1, 63, 64, 100, 127, -5]])
     # SimplifySetCC's fold of two constants, which no compile reaches (src/llvm/target_lowering.jl says
@@ -406,7 +406,7 @@ end
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin
-    for r in WTRunner.run_cases(NATIVE_RUNS)
+    for r in WTChild.run_cases(NATIVE_RUNS)
         r.ok || println(r.label, ": ", r.why)
         @test r.ok
     end

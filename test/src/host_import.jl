@@ -34,7 +34,7 @@ pair(x::Int) = host_pair(Pair2(x, x))
 both(x::Int) = Int64(isarr_int(x) + isarr_str("s"))
 end
 
-world_of(f, at) = W.build_nir(W.check_subset(f, at, "host_import"), "host_import")
+world_of(f, at) = W.build_nir(W.check_subset(f, at, "host_import", Base.get_world_counter()), "host_import")
 body_named(world, name) = only(b for b in world if b.ci.def.def.name === name)
 foreign_calls(body) = [st for st in body.stmts if st isa W.NirForeignCall]
 # the module run in node with JS's globals as the host's modules: its imports, sorted (their order is

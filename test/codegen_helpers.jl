@@ -22,7 +22,7 @@ end
 
 # the translator of the closed world of `f` at `argtypes`, one main module
 # outside standalone mode by default, dart's TranslatorOptions; `standalone`, the mode WasmTarget.compile takes
-translator_of(f, argtypes; standalone::Bool = false) = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "code_generator"), "test"),
+translator_of(f, argtypes; standalone::Bool = false) = D.Translator(WasmTarget.build_nir(W.check_subset(f, argtypes, "code_generator", Base.get_world_counter()), "test"),
     D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(; standalone = standalone))
 
 # the body of a world's entry, the program's own: every world also holds the runtime's roots
@@ -65,15 +65,15 @@ end
 # the rejection `f()` raises, or nothing
 rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(); end
 
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "run_child.jl"))
+const WTChild = Main.WTChild
 
 # the modules the file's cases compiled, each with its argument tuples and native Julia's answers,
-# queued for one node process at the file's end (test/runner.jl, the third oracle): a node start per
-# module would cost more than the cases
-const NATIVE_RUNS = WTRunner.RunCase[]
+# queued for one run at the file's end (test/run_child.jl: test/runner.jl, the third oracle, in a child process): a
+# node start per module would cost more than the cases
+const NATIVE_RUNS = WTChild.RunCase[]
 queue_native!(label, bytes, f, argsets) =
-    append!(NATIVE_RUNS, [WTRunner.RunCase("$label$a", bytes, a, f(a...)) for a in argsets])
+    append!(NATIVE_RUNS, [WTChild.RunCase("$label$a", bytes, a, f(a...)) for a in argsets])
 
 # the instructions `generate` emits for the body of `f` at `argtypes`, compile_one's steps, the
 # bodies of the functions it calls not generated

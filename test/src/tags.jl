@@ -18,7 +18,7 @@ g(x::Int) = x < 0 ? throw(DomainError(x)) : x
 end
 
 function translator(standalone, p = Cases.f)
-    local t = D.Translator(WasmTarget.build_nir(WT.check_subset(p, (Int,), "tags"), "test"),
+    local t = D.Translator(WasmTarget.build_nir(WT.check_subset(p, (Int,), "tags", Base.get_world_counter()), "test"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(; standalone))
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))

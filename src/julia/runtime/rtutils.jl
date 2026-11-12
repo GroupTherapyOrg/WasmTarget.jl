@@ -325,7 +325,7 @@ from the type parameters in scope (types.dart:349).
 """
 @quarantine "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK); dart's makeType builds a type from its parameters in scope (pkg/dart2wasm/lib/types.dart:349 Types.makeType)" Base.string function run_time_type_value!(code_gen, value::NirValue, fname::Symbol)::Nothing
     local t = code_gen.translator
-    local at = "$(code_gen.enclosing_member)"
+    local at = "$(julia_text(code_gen.enclosing_member))"
     run_time_type_test!(t, at)
     Dart2Wasm.instantiate_constant(code_gen, NirConst(Core.Const(fname)), Dart2Wasm.translate_type(t, Symbol))
     Dart2Wasm.translate_expression(code_gen, value, t.top_type[])
@@ -377,10 +377,10 @@ statement's cache, which run_time_type_gap checks at its statement (src/julia/cl
             x isa NirConst && visit(x.c.val)
             # a binding's value, the other place a program's value comes from at compile time
             # (src/julia/classes.jl meets each)
-            x isa NirGlobal && isdefined(x.ref.mod, x.ref.name) && visit(getglobal(x.ref.mod, x.ref.name))
+            x isa NirGlobal && x.binding.defined && visit(x.binding.value)
         end
         for st in body.stmts
-            st isa NirGlobalRead && isdefined(st.ref.mod, st.ref.name) && visit(getglobal(st.ref.mod, st.ref.name))
+            st isa NirGlobalRead && st.binding.defined && visit(st.binding.value)
         end
     end
     return nothing

@@ -358,7 +358,7 @@ end
     local t = translator(self)
     local b = code_gen.b[]
     local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
-    local at = "$(code_gen.enclosing_member): Julia's getfield of a $T at an index only run time knows"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's getfield of a $(julia_text(T)) at an index only run time knows"
     # the third operand: a bounds-check flag (Bool) or an order (Symbol); Julia's bounds_check_enabled
     # (cgutils.cpp:2067) checks unless the flag is the constant false, an Expr(:boundscheck, false) here
     local flag = length(node.args) == 4 ? node.args[4] : nothing
@@ -568,7 +568,7 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::NirForeignCall)::Union{WasmBuilder.IR.ValueType,Nothing}
     local libjulia = nir_libjulia_func(node)
     libjulia === :jl_get_tls_world_age || return nothing
-    local at = "$(self.code_gen.enclosing_member)"
+    local at = "$(julia_text(self.code_gen.enclosing_member))"
     local rt, cc = node.args[2], node.args[5]
     rt isa NirConst && rt.c.val === UInt ||
         reject!(Internal("julia/src/ccall.cpp:1717 emit_ccall: jl_get_tls_world_age declared to return $rt, not UInt"), at)
@@ -736,7 +736,7 @@ end
     local t = translator(self)
     local b = code_gen.b[]
     local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
-    local at = "$(code_gen.enclosing_member): a String's data"
+    local at = "$(julia_text(code_gen.enclosing_member)): a String's data"
     local info = get(t.class_info, String, nothing)
     info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String's data operation where String has no class info"), at)
     # the String's one field, its data array (src/julia/classes.jl), read and built by every operation
@@ -843,7 +843,7 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:svec}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local t = translator(self)
-    local at = "$(code_gen.enclosing_member): a SimpleVector made"
+    local at = "$(julia_text(code_gen.enclosing_member)): a SimpleVector made"
     local sv_info = get(t.class_info, Core.SimpleVector, nothing)
     sv_info === nothing && reject!(Internal("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic: Core.SimpleVector has no class info"), at)
     local data = only(class_instance_fields(Core.SimpleVector, at))
@@ -914,7 +914,7 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:expr}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
     local b = code_gen.b[]
-    local at = "$(code_gen.enclosing_member): Julia's _expr"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's _expr"
     dart_type_of(self, args[1]) <: Symbol ||
         reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: _expr of a head of type $(dart_type_of(self, args[1])), whose check is jl_f__expr's TypeError (JL_TYPECHK)"), at)
     local n = length(args) - 1
@@ -973,7 +973,7 @@ end
     local t = translator(self)
     local b = code_gen.b[]
     local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
-    local at = "$(code_gen.enclosing_member): a wasm array"
+    local at = "$(julia_text(code_gen.enclosing_member)): a wasm array"
     local params = Base.unwrap_unionall(target.specTypes).parameters
     # the array's type: WasmArray{T}, the constructor's type argument or the receiver's type
     local array_class = op === :new ? params[2].parameters[1] : params[2]
@@ -1041,7 +1041,7 @@ end
 # or not; a tuple record, TupleRecord, is none)
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:is_tuple_type}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local t = translator(self)
-    local at = "$(self.code_gen.enclosing_member): jl_is_tuple_type"
+    local at = "$(julia_text(self.code_gen.enclosing_member)): jl_is_tuple_type"
     local info = get(t.class_info, DataType, nothing)
     info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_is_tuple_type where DataType has no class info"), at)
     local field = only(f for f in class_instance_fields(DataType, at) if f.name == "classId")
@@ -1057,7 +1057,7 @@ end
 # classId field, against the ids of the closed world's Type{X} classes (Base.isType, X no type variable)
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:is_type_type}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local t = translator(self)
-    local at = "$(self.code_gen.enclosing_member): jl_is_type_type"
+    local at = "$(julia_text(self.code_gen.enclosing_member)): jl_is_type_type"
     local info = get(t.class_info, DataType, nothing)
     info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_is_type_type where DataType has no class info"), at)
     local field = only(f for f in class_instance_fields(DataType, at) if f.name == "classId")
@@ -1080,7 +1080,7 @@ end
     local t = translator(self)
     local b = code_gen.b[]
     local i32 = WasmBuilder.IR.NumType_i32
-    local at = "$(code_gen.enclosing_member): Record._checkRecordType"
+    local at = "$(julia_text(code_gen.enclosing_member)): Record._checkRecordType"
     local top_nn = t.top_type_non_nullable[]
     local sv_info = get(t.class_info, Core.SimpleVector, nothing)
     sv_info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Record._checkRecordType where Core.SimpleVector has no class info"), at)
@@ -1146,7 +1146,7 @@ end
 # fields): its struct.get, as dart's code generator reads an instance field
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:interface_type_class_id}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local t = translator(self)
-    local at = "$(self.code_gen.enclosing_member): _InterfaceType.classId"
+    local at = "$(julia_text(self.code_gen.enclosing_member)): _InterfaceType.classId"
     local info = get(t.class_info, DataType, nothing)
     info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: _InterfaceType.classId where DataType has no class info"), at)
     local field = only(f for f in class_instance_fields(DataType, at) if f.name == "classId")
@@ -1207,7 +1207,7 @@ end
     for c in concrete_classes(t, operand_type)
         local why = type_value_unmade(t, c)
         why === nothing ||
-            reject!(Unquarantined("src/julia/classes.jl type_value_unmade: typeof of a value that may be a $c, whose type value has no constant ($(something(why)))"), "$(self.code_gen.enclosing_member): Julia's typeof on $operand_type")
+            reject!(Unquarantined("src/julia/classes.jl type_value_unmade: typeof of a value that may be a $c, whose type value has no constant ($(something(why)))"), "$(julia_text(self.code_gen.enclosing_member)): Julia's typeof on $operand_type")
     end
     local top = t.top_type_non_nullable[]
     if Nothing <: operand_type
@@ -1263,7 +1263,7 @@ end
     local code_gen = self.code_gen
     local t = translator(self)
     local I32, I64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
-    local at = "$(code_gen.enclosing_member): Julia's $(nameof(f))"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's $(nameof(f))"
     local atomic_gap() = reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $(nameof(f)) with an atomic order or memory"), at)
     (f === Core.memoryrefswap! || f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) && atomic_gap()
     local ty(v::NirValue) = dart_type_of(self, v)
@@ -1530,11 +1530,11 @@ end
     local code_gen = self.code_gen
     local t = translator(self)
     local b = code_gen.b[]
-    local at = "$(code_gen.enclosing_member): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))"
     # an operand's value where compile time knows it, a literal or a constant binding (Julia's Const of
     # each, abstract_eval_globalref), else the type Julia inferred for it
     local operands = Any[a isa NirConst ? Some(a.c.val) :
-                         a isa NirGlobal && nir_binding_is_constant(a.ref) ? Some(nir_binding_value(a.ref, at).c.val) :
+                         a isa NirGlobal && nir_binding_is_constant(a.binding) ? Some(nir_binding_value(a.binding, at).c.val) :
                          dart_type_of(self, a) for a in args]
     local cache = apply_type_cache(t, operands, at)
     local result = translate_type(t, Union{Any[Core.Typeof(r) for (_, r) in cache]...})
@@ -1581,7 +1581,7 @@ end
     local code_gen = self.code_gen
     local t = translator(self)
     local b = code_gen.b[]
-    local at = "$(code_gen.enclosing_member): a memory's data"
+    local at = "$(julia_text(code_gen.enclosing_member)): a memory's data"
     op in (:copy, :unset, :fill) || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory data operation $op"), at)
     if op === :fill
         # a byte memory's every element the byte, one array.fill of its data array from 0 for its length
@@ -1680,9 +1680,9 @@ end
     local b = self.b[]
     local tt = Base.unwrap_unionall(tuple_type)
     (tt isa DataType && tt <: Tuple && length(tt.parameters) == length(values) && !any(p -> p isa Core.TypeofVararg, tt.parameters)) ||
-        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a tuple of type $tuple_type, of no fixed length, built at run time"), "$(self.enclosing_member)")
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a tuple of type $tuple_type, of no fixed length, built at run time"), "$(julia_text(self.enclosing_member))")
     local rinfo = get(t.class_info, tuple_record_class(length(values)), nothing)
-    rinfo === nothing && reject!(Internal("$at: no record class for a tuple of $(length(values))"), "$(self.enclosing_member)")
+    rinfo === nothing && reject!(Internal("$at: no record class for a tuple of $(length(values))"), "$(julia_text(self.enclosing_member))")
     local fields = class_instance_fields(rinfo.cls, at)
     local vals = Dict{String,Function}()
     for (k, value) in enumerate(values)
@@ -1710,7 +1710,7 @@ end
     local t = translator(self)
     local b = code_gen.b[]
     local i32 = WasmBuilder.IR.NumType_i32
-    local at = "$(code_gen.enclosing_member): Julia's isdefined"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's isdefined"
     local obj, fld = args[1], args[2]
     local T = dart_type_of(self, obj)
     T isa DataType && isconcretetype(T) && !(T <: Type) && T !== Module && !(T <: Array) || return nothing
@@ -1777,7 +1777,7 @@ end
     local i64 = WasmBuilder.IR.NumType_i64
     (dart_type_of(self, args[1]) === Core.SimpleVector && dart_type_of(self, args[2]) === Int) || return nothing
     local b = code_gen.b[]
-    local at = "$(code_gen.enclosing_member): a SimpleVector's element"
+    local at = "$(julia_text(code_gen.enclosing_member)): a SimpleVector's element"
     local sv_info = get(t.class_info, Core.SimpleVector, nothing)
     sv_info === nothing && reject!(Internal("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic: Core.SimpleVector has no class info"), at)
     local data = only(class_instance_fields(Core.SimpleVector, at))
@@ -1875,7 +1875,7 @@ end
     if first_type === second_type && first_type isa DataType && isconcretetype(first_type) && !ismutabletype(first_type) &&
             !isprimitivetype(first_type) && fieldcount(first_type) > 0
         local t = translator(self)
-        local at = "$(code_gen.enclosing_member): === on two $(first_type)"
+        local at = "$(julia_text(code_gen.enclosing_member)): === on two $(julia_text(first_type))"
         local fields = class_instance_fields(first_type, at)
         if all(f -> by_reference(f.type) || by_bits(f.type), fields)
             local info = get(t.class_info, first_type, nothing)
@@ -1909,7 +1909,7 @@ end
     local tr = translator(self)
     translate_expression(code_gen, first, tr.top_type[])
     translate_expression(code_gen, second, tr.top_type[])
-    call(code_gen, nir_runtime_member(tr.component, jl_egal, "$(code_gen.enclosing_member): Julia's === on $first_type, $second_type"))
+    call(code_gen, nir_runtime_member(tr.component, jl_egal, "$(julia_text(code_gen.enclosing_member)): Julia's === on $first_type, $second_type"))
     return i32
 end
 
@@ -1922,7 +1922,7 @@ end
     local code_gen = self.code_gen
     local t = translator(self)
     local b = code_gen.b[]
-    local at = "$(code_gen.enclosing_member): Julia's throw_methoderror"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's throw_methoderror"
     local callee = add_local(code_gen, t.top_type[])
     translate_expression(code_gen, args[1], t.top_type[])
     WasmBuilder.local_set(b, callee)
@@ -1970,7 +1970,7 @@ end
     local t = translator(self)
     local b = code_gen.b[]
     local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
-    local at = "$(code_gen.enclosing_member): Julia's jl_egal"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's jl_egal"
     local top = t.top_type[]
     local top_nn = t.top_type_non_nullable[]
     local egal = nir_runtime_member(t.component, jl_egal, at)
@@ -2181,7 +2181,7 @@ end
     local t = translator(self)
     local b = code_gen.b[]
     local i32 = WasmBuilder.IR.NumType_i32
-    local at = "$(code_gen.enclosing_member): === on two Strings"
+    local at = "$(julia_text(code_gen.enclosing_member)): === on two Strings"
     local info = get(t.class_info, String, nothing)
     info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: === on Strings where String has no class info"), at)
     local data_index = t.field_index[only(class_instance_fields(String, at))]
@@ -2263,7 +2263,7 @@ end
         WasmBuilder.i64_const(b, fieldcount(T))
         return i64
     end
-    local at = "$(code_gen.enclosing_member): Julia's nfields of a $T"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's nfields of a $T"
     # the closed world's concrete classes below T, their ids read through the one reading of a type's
     # concrete classes (getConcreteClassIdRange), each id's class the translator's (translator.classes)
     local ids = concrete_class_ids(t, T)
@@ -2303,7 +2303,7 @@ end
         return i64
     end
     sty isa DataType && sty <: GenericMemory || return nothing
-    local at = "$(code_gen.enclosing_member): Julia's sizeof of a $T"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's sizeof of a $T"
     (T isa DataType && isconcretetype(T)) ||
         reject!(Unquarantined("julia/src/cgutils.cpp:3292 emit_genericmemoryelsize: the element size of a memory of type $T, which only its run-time type's layout holds"), at)
     T.parameters[1] === :not_atomic ||
@@ -2480,7 +2480,7 @@ end
     local b = code_gen.b[]
     local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
     local I = Core.Intrinsics
-    local at = "$(code_gen.enclosing_member): Julia's $f on a 128-bit integer"
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's $f on a 128-bit integer"
     local narrow(T::Type) = generate_static_intrinsic(Val(:narrow), T)
     local put_form(T::Type) = generate_static_intrinsic(Val(:put_form), b, T)
     local unsigned_view(T::Type) = generate_static_intrinsic(Val(:unsigned_view), b, T)
@@ -2903,7 +2903,7 @@ end
         WasmBuilder.i32_or(b)
     end
     WasmBuilder.if_(b)
-    call(code_gen, nir_runtime_member(translator(self).component, throw_divide_error, "$(code_gen.enclosing_member): a checked division"))
+    call(code_gen, nir_runtime_member(translator(self).component, throw_divide_error, "$(julia_text(code_gen.enclosing_member)): a checked division"))
     WasmBuilder.unreachable(b)
     WasmBuilder.var"end"(b)
     WasmBuilder.local_get(b, x)

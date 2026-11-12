@@ -4,7 +4,7 @@
 # compiles as a method of its type with no receiver and makes its object with its own `new`.
 using Test
 using WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 module ReceiverCases
 mutable struct Plain      # mutable, so Julia allocates it at run time rather than folding the call
@@ -19,8 +19,8 @@ end
     @test !WasmTarget.nir_carries_data(typeof(sin))
     @test WasmTarget.nir_carries_data(ReceiverCases.Plain)
     # wt3-translator's probe: the constructor compiles with no receiver and the module answers native's value
-    local cases = [Main.WTRunner.compiled_case("plain", WasmTarget.compile, ReceiverCases.f, (5,); optimized = false)]
-    for r in Main.WTRunner.run_cases(cases)
+    local cases = [Main.WTChild.compiled_case("plain", WasmTarget.compile, ReceiverCases.f, (5,); optimized = false)]
+    for r in Main.WTChild.run_cases(cases)
         @test r.ok
     end
 end

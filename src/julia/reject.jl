@@ -92,17 +92,78 @@ end
     errors::Vector{TrimError}
 end
 
-# one verifier error in Julia's own words, as juliac prints it (verify_print_error): its description,
-# the statement and the stack frames, from the records the error keeps
-@quarantine unpinned "the verifier's text is Julia's, printed by its own printers from its own records" Core.Compiler.TrimVerifier.verify_print_stmt function _trim_text(e::TrimError)::String
+# A value of a verifier record as text, built with no read of a program binding and no program `show` (spec v14 V7: the
+# verifier's statement and frames printed by Base at the program's world ran a unit's `show` inside the compiler, and
+# read program bindings): a type, a type variable, a Vararg or a module by julia_text; a generic function by its name
+# (show.jl's show_signature_function port); a value Base prints by itself (a number, a string, a symbol); any other by
+# its type's text. precedent(julia: Compiler/src/verifytrim.jl:103 verify_print_stmt prints Julia's statement): Julia
+# differs in that its printer is Base's show at the current world, which a program's methods extend
+@quarantine pin"precedent(julia: base/show.jl:2552 show_signature_function)" "a record's value prints by its kind's text: a type's julia_text, a function's name, Base's own value" Core.MethodInstance function _trim_value_text(@nospecialize(x))::String
+    x isa Union{Type,TypeVar,Core.TypeofVararg,Module} && return julia_text(x)
+    x isa Core.MethodInstance && return replace(julia_text(x), r"^MethodInstance for " => "")
+    x isa Function && Base.issingletontype(typeof(x)) && return sprint(_jt_show_signature_function, typeof(x))
+    x isa GlobalRef && return string(julia_text(x.mod), ".", x.name)
+    _trim_base_value(x) && return repr(x)
+    # a program's own immutable Number (its show a program method): its type and its fields, as Base's show_default
+    # prints a struct (base/show.jl:487), each field Base's own value or its type's text (spec v16 X5); a mutable one, as
+    # any other value, by its type's text
+    x isa Number && !ismutabletype(typeof(x)) && return julia_text(typeof(x)) * "(" * join((isdefined(x, i) ? (y = getfield(x, i); _trim_base_value(y) ? repr(y) :
+        "::" * julia_text(typeof(y))) : "#undef" for i in 1:nfields(x)), ", ") * ")"
+    return "::" * julia_text(typeof(x))
+end
+# a value Base prints by itself: a number, a string, a symbol, a char or nothing of a type of Core's or Base's, never a
+# mutable Number (BigInt, BigFloat: their digits lie behind a pointer, their show reads MPFR's process-global
+# precision): the corpus loader's _plain rule (test/corpus_loader.jl _plain_type), which a program's own subtype of
+# Number fails, so no show of a program's runs where a record is printed (spec v16 X5)
+@quarantine pin"precedent(julia: base/runtime_internals.jl:32 moduleroot)" "a value's type is Base's own when its module's root is Core or Base" Base.moduleroot function _trim_base_value(@nospecialize(x))::Bool
+    x isa Union{Number,String,Symbol,Char,Nothing} || return false
+    local T = typeof(x)
+    return T isa DataType && Base.moduleroot(T.name.module) in (Core, Base) && !(x isa Number && ismutabletype(T))
+end
+# a statement's text holder: printed as its text, so Base's statement printer prints a program's value through it
+@quarantine pin"precedent(julia: base/docs/utils.jl:87 Text)" "a text that prints as itself, Julia's Docs.Text, where Base's statement printer prints a value" Core.String struct _TrimText
+    text::String
+end
+@quarantine pin"precedent(julia: base/docs/utils.jl:93 show)" "a text prints as itself, as Julia's Docs.Text shows" Base.show Base.show(io::IO, t::_TrimText) = print(io, t.text)
+# the statement verify_print_stmt prints (its Expr of the SSA values' types, Julia's mapssavaluetypes), each value not
+# itself syntax replaced by its text
+@quarantine pin"precedent(julia: Compiler/src/verifytrim.jl:72 mapssavalues)" "a statement's values print by their text, its syntax as Julia's" Core.Expr function _trim_stmt(@nospecialize(x))
+    x isa Expr && return Expr(x.head, Any[_trim_stmt(a) for a in x.args]...)
+    x isa QuoteNode && return QuoteNode(_trim_stmt(x.value))
+    x isa Union{Symbol,Core.SSAValue,Core.SlotNumber,Core.Argument,LineNumberNode,Core.PhiNode} && return x
+    # a name of Julia's own modules prints as Base prints it; a program module's by its bare name (an operator infix)
+    x isa GlobalRef && return Base.moduleroot(x.mod) === Core || Base.moduleroot(x.mod) === Base ? x : x.name
+    return _TrimText(_trim_value_text(x))
+end
+# Julia's stack frames, as show_backtrace prints them (its numbered frames, each the call and its file and line), each
+# frame's call by julia_text
+@quarantine pin"precedent(julia: base/errorshow.jl:815 show_backtrace)" "a stack trace prints each frame numbered, its call and where" Base.StackTraces.StackFrame function _trim_frames(io::IO, frames::Vector{Base.StackTraces.StackFrame})::Nothing
+    isempty(frames) && return nothing
+    print(io, "\nStacktrace:")
+    for (i, f) in enumerate(frames)
+        local li = f.linfo
+        li isa Core.CodeInstance && (li = li.def)
+        local call = li isa Core.MethodInstance ? _trim_value_text(li) :
+            li isa Method ? sprint(_jt_show_tuple_as_call, li.name, li.sig) : string(f.func)
+        print(io, "\n [", i, "] ", call, f.inlined ? " [inlined]" : "", "\n   @ ", f.file, ":", f.line)
+    end
+    return nothing
+end
+
+# one verifier error in Julia's own words, as juliac prints it (verify_print_error): its description, the statement
+# and the stack frames, from the records the error keeps, each value by its text (_trim_value_text)
+@quarantine pin"precedent(julia: Compiler/src/verifytrim.jl:110 verify_print_error)" "the verifier's text, from its own records" Core.Compiler.TrimVerifier.mapssavaluetypes function _trim_text(e::TrimError)::String
     return sprint() do io
         @exhaustive e.cause::TrimCause begin
             (c::TrimCallMissing) => begin
                 print(io, c.record.desc, " from statement ")
-                Core.Compiler.TrimVerifier.verify_print_stmt(IOContext{IO}(io), c.record.codeinfo, c.record.sptypes, c.record.stmtidx)
-                Base.show_backtrace(io, e.frames)
+                local ci = c.record.codeinfo
+                local ctx = ci.slotnames === nothing ? io :
+                    IOContext(io, :SOURCE_SLOTNAMES => Core.Compiler.TrimVerifier.sourceinfo_slotnames(ci))
+                print(ctx, _trim_stmt(Core.Compiler.TrimVerifier.mapssavaluetypes(ci, c.record.sptypes, Core.SSAValue(c.record.stmtidx))))
+                _trim_frames(io, e.frames)
             end
-            (c::TrimCCallableMissing) => Core.Compiler.TrimVerifier.verify_print_error(IOContext{IO}(io), c.record, Core.Compiler.TrimVerifier.ParentMap())
+            (c::TrimCCallableMissing) => print(io, c.record.desc, " for ", _trim_value_text(c.record.sig), " => ", _trim_value_text(c.record.rt))
             (c::TrimEntryText) => print(io, c.text)
         end
     end
@@ -196,7 +257,8 @@ Stop the compile `at` names with `rejection`.
 """
     rejection_text(x) -> String
 
-`x`'s text in a rejection, Julia's own `string(x)`, inferred once over every value: a site that
+`x`'s text in a rejection, Julia's own text of it (src/julia/show.jl julia_text: `string(x)`, a program's binding never
+read), inferred once over every value: a site that
 interpolates a MethodInstance compiles Base's show of it (show_mi, and in it Compiler's
 IRShow.debuginfo_firstline with its `linetable != nothing` on an untyped value), so a package's new
 `==` method invalidated that site, and every compiled caller of it, though the text is built only on
@@ -207,7 +269,7 @@ precedent(julia: src/rtutils.c:1496 jl_static_show, the runtime's printing of a 
 path, which no method's inference sees). Julia's differs: the text is Julia's own `string(x)`, its
 call made where the caller's inference cannot specialize it.
 """
-@quarantine pin"julia/src/rtutils.c:1496 jl_static_show" "a rejection's text of a value, printed where no caller infers its printing, as julia/src/rtutils.c:1496 jl_static_show prints one on an error path" Base.string @nospecializeinfer rejection_text(@nospecialize(x))::String = string(x)
+@quarantine pin"julia/src/rtutils.c:1496 jl_static_show" "a rejection's text of a value, printed where no caller infers its printing, as julia/src/rtutils.c:1496 jl_static_show prints one on an error path" Core.String @nospecializeinfer rejection_text(@nospecialize(x))::String = julia_text(x)
 
 # The sum's load-time check: Rejection is a @closed sum (its kinds concrete, subtyping nothing),
 # `_reason` an @exhaustive match over it, and every match over it names every kind (check_closed).

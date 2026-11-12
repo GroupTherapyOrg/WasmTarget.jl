@@ -66,8 +66,7 @@ end
 # (`WasmCacheOwner`, src/julia/interpreter.jl); each body is judged by Julia's own verify_codeinstance!, and each queued
 # ccallable's svec by Julia's check of its declared return against inference (CCallableMissing), as
 # 1.12 and 1.13 write it.
-@quarantine "Julia's trim verifier resolves a callee among native CodeInstances alone; the closed world's are WasmTarget's" Core.Compiler.TrimVerifier.verify_codeinstance! function _verify_trim(codeinfos::Vector{Any}, at::String)
-    local this_world = Base.get_world_counter()
+@quarantine pin"precedent(julia: Compiler/src/verifytrim.jl:300 get_verify_typeinf_trim)" "Julia's trim verifier resolves a callee among native CodeInstances alone; the closed world's are WasmTarget's" Core.Compiler.TrimVerifier.verify_codeinstance! function _verify_trim(codeinfos::Vector{Any}, this_world::UInt, at::String)
     local interp = Core.Compiler.NativeInterpreter(this_world)
     local inspected = Base.IdSet{Core.CodeInstance}()
     local caches = IdDict{Core.MethodInstance,Core.CodeInstance}()
@@ -225,9 +224,9 @@ end
 
 # The closed world Julia infers for `queue` and its verifier's verdict: the inferred items, the
 # warnings and the parents; an error rejects as OutsideSubset, located at `at`
-@quarantine "the verifier judges what Julia's trim inference returned, errors fatal and warnings notes, as juliac" Base.push! function _infer_verified(queue::Vector{Any}, world::UInt, at::String)
+@quarantine pin"precedent(julia: Compiler/src/verifytrim.jl:361 verify_typeinf_trim)" "the verifier judges what Julia's trim inference returned, errors fatal and warnings notes, as juliac" Base.push! function _infer_verified(queue::Vector{Any}, world::UInt, at::String)
     local codeinfos = _trim_infer(queue, world)
-    local errors, parents = _verify_trim(codeinfos, at)
+    local errors, parents = _verify_trim(codeinfos, world, at)
     local fatal = TrimError[]; local notes = TrimError[]
     for (warn, cause) in errors
         push!(warn ? notes : fatal, _trim_error(cause, parents, at))
@@ -305,9 +304,10 @@ end
 end
 
 """
-    check_subset(f, argtypes::Tuple, at::String) -> ClosedWorld
+    check_subset(f, argtypes::Tuple, at::String, world::UInt) -> ClosedWorld
 
-Infer the program `f(argtypes...)` once, as Julia's trimming does, from the specialization Julia
+Infer the program `f(argtypes...)` once, at `world` (compile's, the one world of a compile: the verifier and every
+later stage read it from here and from the ClosedWorld), as Julia's trimming does, from the specialization Julia
 compiles for that call (`_entry_specialization`), and let Julia's trim verifier judge it. Returns the
 closed world it accepts; rejects with `OutsideSubset` when the entry has no unique method (Julia's
 `which` text) or no compileable specialization, or the verifier reports errors, each a `TrimError`
@@ -315,9 +315,8 @@ holding Julia's own record, its statement and its stack frames.
 
 formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and judged, none the entry never reaches
 """
-@quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed (julia/Compiler/src/verifytrim.jl:300 get_verify_typeinf_trim), its roots the entry and the runtime's, as juliac adds each entrypoint (julia/src/gf.c:3910 jl_add_entrypoint)" Base.signature_type function check_subset(@nospecialize(f), argtypes::Tuple, at::String)::ClosedWorld
+@quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed (julia/Compiler/src/verifytrim.jl:300 get_verify_typeinf_trim), its roots the entry and the runtime's, as juliac adds each entrypoint (julia/src/gf.c:3910 jl_add_entrypoint)" Base.signature_type function check_subset(@nospecialize(f), argtypes::Tuple, at::String, world::UInt)::ClosedWorld
     local sig = Base.signature_type(f, argtypes)
-    local world = Base.get_world_counter()
     local mi = _entry_specialization(sig, world)
     if mi === nothing
         # Julia's own words when the call has no unique method; otherwise it has one Julia compiles none for

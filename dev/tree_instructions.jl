@@ -26,7 +26,11 @@
 # the audit as reported against the kernel: a protected system binary and all it starts, the loader stripping DYLD_
 # variables from it (node under perl 0.00 against 3.56 CPU-s, under /bin/bash -c 0.00 against 3.89; the stages run 4
 # perl-wrapped node runs and 12 bash or sh runs in the ratchet); a process killed by a signal (0.08 against 4.62); and
-# one ending by _exit, which runs no destructor (0 against 0.74). A command whose own process reports nothing is
+# one ending by _exit, which runs no destructor (0 against 0.74): Binaryen's wasm-opt, which ends by _Exit
+# (wasm::flush_and_quick_exit), about 21 CPU-s in the shard holding float_guard.jl. Its seconds are its truer reading:
+# interposing _exit and _Exit made it report (a 5-run wasm-opt tree, 9.6 G and 19.5 s unreported, read 291 G and 0.0),
+# and its C++ retired about 21.7 G a performance-core second, so the shards' rate judged it at about 1.8 times its
+# seconds (a fenced check read 145, red, against 133-134 before; timing-report, 2026-11-10). A command whose own process reports nothing is
 # refused, never read as no work (A81E2). A descendant re-parented before it exits escapes both counts. A process reports only when its binary admits inserted libraries: julia's hardened runtime carries
 # com.apple.security.cs.allow-dyld-environment-variables, and the plant fails if a julia grandchild goes uncounted.
 #
@@ -89,28 +93,23 @@ struct TreeCount
     unreported::Float64
 end
 
-# the user and system seconds of this process's reaped descendants (getrusage(RUSAGE_CHILDREN): ru_utime and ru_stime,
-# each a timeval of 64-bit seconds and 32-bit microseconds); the kernel counts every process of the tree its parents
-# waited for, whether or not it reported
-function children_cpu()::Float64
-    local buf = zeros(Int64, 18)
-    ccall(:getrusage, Cint, (Cint, Ptr{Int64}), -1, buf) == 0 || error("getrusage(RUSAGE_CHILDREN) failed")
-    return buf[1] + (buf[2] & 0xffffffff) / 1e6 + buf[3] + (buf[4] & 0xffffffff) / 1e6
-end
+# the user and system seconds of this process's reaped descendants: test/instructions.jl's _wt_children_cpu, the one
+# definition test/src_tests.jl's per-file costs read too (D5)
+include(joinpath(dirname(@__DIR__), "test", "instructions.jl"))
 
 # run `cmd` with every process of its tree reporting its counters at exit; their sums, the process, and whether the
 # command's own process reported
 function tree_instructions(cmd::Cmd)::Tuple{TreeCount,Base.Process,Bool}
     local lib = counter_library()
     local counts = mktempdir()
-    local c0 = children_cpu()
+    local c0 = _wt_children_cpu()
     # run(...; wait = false) connects a command's standard streams to devnull unless they are given: the stage's output
     # (the ratchet's report, the shards' test summaries) goes where this process's goes
     local p = run(pipeline(ignorestatus(addenv(cmd, "DYLD_INSERT_LIBRARIES" => lib, "WT_TREE_COUNT_DIR" => counts));
                            stdin = stdin, stdout = stdout, stderr = stderr); wait = false)
     local root = getpid(p)
     wait(p)
-    local kernel = children_cpu() - c0
+    local kernel = _wt_children_cpu() - c0
     local sums = zeros(4); local root_g = 0.0; local rooted = false
     for f in readdir(counts)
         local v = parse.(Float64, split(strip(read(joinpath(counts, f), String))))

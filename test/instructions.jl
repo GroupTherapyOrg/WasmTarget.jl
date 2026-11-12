@@ -13,3 +13,13 @@ end
 # A limit judged by them judges the program, not the scheduler: at background QoS beside the lanes a corpus shard ran
 # at 20 to 36% of an efficiency core (6732d4a6, 2026-11-01)
 _wt_cpu_seconds()::Float64 = ccall(:clock, Culong, ()) / 1e6
+
+# the user and system seconds of this process's reaped descendants (getrusage(RUSAGE_CHILDREN): ru_utime and ru_stime,
+# each a timeval of 64-bit seconds and 32-bit microseconds); the kernel counts every process of the tree its parents
+# waited for, whether or not it reported its own counters (dev/tree_instructions.jl's unreported seconds), on macOS and
+# on Linux. One definition for dev/tree_instructions.jl's whole-tree CPU and test/src_tests.jl's per-file costs (D5)
+function _wt_children_cpu()::Float64
+    local buf = zeros(Int64, 18)
+    ccall(:getrusage, Cint, (Cint, Ptr{Int64}), -1, buf) == 0 || error("getrusage(RUSAGE_CHILDREN) failed")
+    return buf[1] + (buf[2] & 0xffffffff) / 1e6 + buf[3] + (buf[4] & 0xffffffff) / 1e6
+end

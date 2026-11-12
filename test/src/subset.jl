@@ -18,18 +18,18 @@ _spec_types(w) = [Core.Compiler.get_ci_mi(c).specTypes for c in w.codeinfos if c
 @testset "check_subset: the entry is Julia's compileable specialization" begin
     local S = SubsetCases
     # a @nospecialize argument: Julia compiles f for Any, not for Int
-    local wf = _spec_types(WasmTarget.check_subset(S.f, (Int,), "subset"))
+    local wf = _spec_types(WasmTarget.check_subset(S.f, (Int,), "subset", Base.get_world_counter()))
     @test Tuple{typeof(S.f), Any} in wf
     @test !(Tuple{typeof(S.f), Int} in wf)
     # five varargs: Julia compiles k for one Int and a Vararg of any count, not for exactly five
-    local wk = _spec_types(WasmTarget.check_subset(S.k, (Int, Int, Int, Int, Int), "subset"))
+    local wk = _spec_types(WasmTarget.check_subset(S.k, (Int, Int, Int, Int, Int), "subset", Base.get_world_counter()))
     @test Tuple{typeof(S.k), Int, Vararg{Int}} in wk
     @test !(Tuple{typeof(S.k), Vararg{Int, 5}} in wk)
     # a signature Julia compiles as written stays as written
-    @test Tuple{typeof(S.g), Int} in _spec_types(WasmTarget.check_subset(S.g, (Int,), "subset"))
+    @test Tuple{typeof(S.g), Int} in _spec_types(WasmTarget.check_subset(S.g, (Int,), "subset", Base.get_world_counter()))
     # no method: Julia's `which` text, located
     local r = try
-        WasmTarget.check_subset(S.g, (String,), "subset"); nothing
+        WasmTarget.check_subset(S.g, (String,), "subset", Base.get_world_counter()); nothing
     catch e
         e isa WasmTarget.RejectionError ? e.rejection : rethrow()
     end
@@ -40,7 +40,7 @@ end
     # juliac verifies after patching Base (depwarn a no-op); WT verifies Base as it is, so the call
     # juliac accepts is outside WT's subset, located
     local r = try
-        WasmTarget.check_subset(SubsetCases.dw, (Int,), "subset"); nothing
+        WasmTarget.check_subset(SubsetCases.dw, (Int,), "subset", Base.get_world_counter()); nothing
     catch e
         e isa WasmTarget.RejectionError ? e.rejection : rethrow()
     end
@@ -61,7 +61,7 @@ end
 @testset "check_subset: OutsideSubset keeps the verifier's records" begin
     local W = WasmTarget
     local rejection(f, at) = try
-        W.check_subset(f, at, "subset"); nothing
+        W.check_subset(f, at, "subset", Base.get_world_counter()); nothing
     catch e
         e isa W.RejectionError ? e : rethrow()
     end
@@ -94,7 +94,22 @@ end
     @test ct.kind == W.unresolved_call && Core.Compiler.get_ci_mi(ct.codeinst).def.name === :ping
     @test [f.func for f in ct.frames if !f.inlined] == [:ping, :pong]
     # an accepted world keeps the verifier's parents, from which any statement is located
-    @test WasmTarget.check_subset(SubsetCases.g, (Int,), "subset").parents isa IdDict
+    @test WasmTarget.check_subset(SubsetCases.g, (Int,), "subset", Base.get_world_counter()).parents isa IdDict
+end
+
+# a record's value prints with repr only when it is Base's own (the corpus loader's _plain rule, spec v16 X5): a program's
+# Number, whose show is the program's, prints from its structure and runs no method of the program's
+struct _SubsetNum <: Number
+    x::Int64
+end
+Base.show(io::IO, ::_SubsetNum) = error("a program's show ran inside the compiler")
+@testset "a verifier record's value: Base's own by repr, a program's Number from its structure" begin
+    local W = WasmTarget
+    @test W._trim_value_text(1.5) == "1.5" && W._trim_value_text(0x03) == "0x03" && W._trim_value_text("s") == "\"s\""
+    local t = W._trim_value_text(_SubsetNum(3))
+    @test endswith(t, "_SubsetNum(3)") && !occursin("ran inside", t)
+    @test W._trim_value_text(big(3)) == "::BigInt"   # a mutable Number, no field of it printed
+    @test W._trim_base_value(:a) && !W._trim_base_value(_SubsetNum(1)) && !W._trim_base_value(big(1))
 end
 
 # The entry's specialization (subset.jl's _entry_specialization) is juliac's on 1.13, the compile-hint
@@ -136,7 +151,7 @@ end
 @testset "check_subset: two exports sharing a name are the program's error, naming both methods" begin
     local E = ExportNameCases
     local r = try
-        WasmTarget.check_subset(E.both_shared, (Int32, Float64), "subset"); nothing
+        WasmTarget.check_subset(E.both_shared, (Int32, Float64), "subset", Base.get_world_counter()); nothing
     catch e
         e isa WasmTarget.RejectionError ? e : rethrow()
     end
@@ -145,13 +160,13 @@ end
     local text = sprint(showerror, r)
     @test occursin("\"shared\"", text) && occursin("Int32", text) && occursin("Float64", text)
     # a C name given to @ccallable is the export name, so the two export apart
-    local w = WasmTarget.check_subset(E.both_named, (Int32, Float64), "subset")
+    local w = WasmTarget.check_subset(E.both_named, (Int32, Float64), "subset", Base.get_world_counter())
     local names = Set(n for x in w.codeinfos if x isa Core.CodeInstance
                       for n in (WasmTarget.program_export_name(x.def, w.entry),) if n !== nothing)
     @test names == Set(["named", "named_float", "both_named"])
 end
 
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 module UndefReadCases
 # Ref{Integer}: its one field, past RefValue's count of fields required initialized (none), is a
@@ -165,14 +180,14 @@ end
 
 @testset "check_subset: a read of a field an allocation may leave undefined finds the runtime's UndefRefError raise, a root of every closed world" begin
     @test Core.Compiler.datatype_min_ninitialized(Base.RefValue{Integer}) == 0
-    local cw = WasmTarget.check_subset(UndefReadCases.held, (Int,), "subset")
+    local cw = WasmTarget.check_subset(UndefReadCases.held, (Int,), "subset", Base.get_world_counter())
     local nw = WasmTarget.build_nir(cw, "subset")
     @test any(nb -> nb.ci.def.def.name === :throw_undef_ref_error, nw)
     # and so does a read of the entry's argument
-    @test any(nb -> nb.ci.def.def.name === :throw_undef_ref_error, WasmTarget.build_nir(WasmTarget.check_subset(UndefReadCases.as_int, (Base.RefValue{Any},), "subset"), "subset"))
+    @test any(nb -> nb.ci.def.def.name === :throw_undef_ref_error, WasmTarget.build_nir(WasmTarget.check_subset(UndefReadCases.as_int, (Base.RefValue{Any},), "subset", Base.get_world_counter()), "subset"))
     # the read compiles, its null test calling the raise, and answers as native Julia
     local bytes = WasmTarget.compile(UndefReadCases.held, (Int,); optimize = false)
-    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("held$(a)", bytes, a, UndefReadCases.held(a...)) for a in [(3,), (-1,)]])
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("held$(a)", bytes, a, UndefReadCases.held(a...)) for a in [(3,), (-1,)]])
         @test r.ok || (@info r.label r.why; false)
     end
 end

@@ -11,8 +11,8 @@ using Test
 using WasmTarget
 
 const W = WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 
 module Cases
 # Julia leaves a varargs call's count open unless the method names it (Vararg{T,N} where N)
@@ -31,7 +31,7 @@ function cat3_read(n::Int64)::Int64
 end
 end
 
-world_of(f, at) = W.build_nir(W.check_subset(f, at, "varargs"), "varargs")
+world_of(f, at) = W.build_nir(W.check_subset(f, at, "varargs", Base.get_world_counter()), "varargs")
 rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(); end
 
 @testset "varargs: Julia's packing of a varargs method's trailing arguments" begin
@@ -65,7 +65,7 @@ end
 @testset "varargs: a fixed count packs at entry and answers as native Julia" begin
     local f = Cases.fixed
     local bytes = W.compile(f, (Int,))
-    for r in WTRunner.run_cases([WTRunner.RunCase("fixed$(a)", bytes, a, f(a...)) for a in [(1,), (0,), (-7,)]])
+    for r in WTChild.run_cases([WTChild.RunCase("fixed$(a)", bytes, a, f(a...)) for a in [(1,), (0,), (-7,)]])
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -77,7 +77,7 @@ end
     # reads the value's own type (emit_datatype_nfields, emit_bounds_check)
     for (f, args) in ((Cases.open_count, [(1,), (0,), (-9,)]), (Cases.cat3_read, [(Int64(0),), (Int64(1),), (Int64(2),)]))
         local bytes = W.compile(f, (Int64,))
-        for r in WTRunner.run_cases([WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, f(a...)) for a in args])
+        for r in WTChild.run_cases([WTChild.RunCase("$(nameof(f))$(a)", bytes, a, f(a...)) for a in args])
             @test r.ok || (@info r.label r.why; false)
         end
     end
@@ -104,16 +104,16 @@ end
     local f = OpenTupleCases.open_tuple
     local bytes = W.compile(f, (Int64, Int64); optimize = false)
     local argsets = [(1, 5), (1, -1), (2, 7), (2, 300), (3, 2), (3, -3), (4, 10)]
-    local cases = [WTRunner.RunCase("open_tuple$(a)", bytes, Int64.(a), WTRunner.native_answer(f, Int64.(a))) for a in argsets]
-    @test count(c -> c.native == WTRunner.Throws(InexactError), cases) == 3
-    for r in WTRunner.run_cases(cases)
+    local cases = [WTChild.RunCase("open_tuple$(a)", bytes, Int64.(a), WTChild.native_answer(f, Int64.(a))) for a in argsets]
+    @test count(c -> c.native == WTChild.Throws(InexactError), cases) == 3
+    for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
     # Tuple{Type{Int64}, Any}: an element of every class the closed world has, one record, raised as native
     local over_bytes = W.compile(OpenTupleCases.over, (Int64,); optimize = false)
-    local over_cases = [WTRunner.RunCase("over($n)", over_bytes, (Int64(n),), WTRunner.native_answer(OpenTupleCases.over, (Int64(n),))) for n in 1:2]
-    @test all(c -> c.native == WTRunner.Throws(InexactError), over_cases)
-    for r in WTRunner.run_cases(over_cases)
+    local over_cases = [WTChild.RunCase("over($n)", over_bytes, (Int64(n),), WTChild.native_answer(OpenTupleCases.over, (Int64(n),))) for n in 1:2]
+    @test all(c -> c.native == WTChild.Throws(InexactError), over_cases)
+    for r in WTChild.run_cases(over_cases)
         @test r.ok || (@info r.label r.why; false)
     end
 end

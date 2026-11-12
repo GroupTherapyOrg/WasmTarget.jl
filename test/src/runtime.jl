@@ -17,7 +17,7 @@ h(x::Int, y::Int) = div(x, y)
 names_of(world) = Set(b.ci.def.def.name for b in world)
 @noinline pick_any(x::Int)::Union{Int,String} = x > 0 ? x : "neg"
 checked_any(x::Int) = typeassert(pick_any(x), Int) + 1
-world_of(p, at) = W.build_nir(W.check_subset(p, at, "runtime"), "runtime")
+world_of(p, at) = W.build_nir(W.check_subset(p, at, "runtime", Base.get_world_counter()), "runtime")
 
 @testset "runtime: every closed world holds the runtime's roots, read from the ports' dart pragmas" begin
     # the roots: each Runtime port whose anchored dart declaration carries @pragma('wasm:entry-point'),
@@ -39,22 +39,22 @@ world_of(p, at) = W.build_nir(W.check_subset(p, at, "runtime"), "runtime")
     # a throw raises through errorThrowWithCurrentStackTrace's method, and a failed typeassert through
     # throwAsCheckError's: the compiled modules, run, raise what native Julia raises (the exception and
     # its fields, the runner's comparison)
-    isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-    local raising = [Main.WTRunner.RunCase("g$(a)", W.compile(g, (Int,)), a, Main.WTRunner.native_answer(g, a)) for a in [(2,), (-2,)]]
-    append!(raising, [Main.WTRunner.RunCase("checked_any$(a)", W.compile(checked_any, (Int,)), a, Main.WTRunner.native_answer(checked_any, a)) for a in [(3,), (-1,)]])
-    for r in Main.WTRunner.run_cases(raising)
+    isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+    local raising = [Main.WTChild.RunCase("g$(a)", W.compile(g, (Int,)), a, Main.WTChild.native_answer(g, a)) for a in [(2,), (-2,)]]
+    append!(raising, [Main.WTChild.RunCase("checked_any$(a)", W.compile(checked_any, (Int,)), a, Main.WTChild.native_answer(checked_any, a)) for a in [(3,), (-1,)]])
+    for r in Main.WTChild.run_cases(raising)
         @test r.ok || (@info r.label r.why; false)
     end
 end
 
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 # the standalone StackTrace.current called, its trace held and dropped
 st(x::Int) = (W.Runtime.StackTrace_current(); x)
 
 @testset "standalone/stack_trace_patch.dart: StackTrace.current, the embedder's trace in an _EmbedderStackTrace" begin
     # its one import, the standalone embedder's stackTraceGetCurrent, the embedder's own function
-    local node = Main.WTRunner.node_binary()
+    local node = Main.WTChild.node_binary()
     local imports_of(bytes) = mktempdir() do dir
         local path = joinpath(dir, "m.wasm")
         write(path, bytes)
@@ -66,18 +66,18 @@ st(x::Int) = (W.Runtime.StackTrace_current(); x)
     # run by node, its raise is a wasm exception under the module's tag, as native Julia throws
     local gbytes = W.compile(g, (Int,); optimize = false)
     @test imports_of(gbytes) == "dart.stackTraceGetCurrent:function"
-    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("g$(a)", gbytes, a, Main.WTRunner.native_answer(g, a)) for a in [(2,), (-2,)]])
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("g$(a)", gbytes, a, Main.WTChild.native_answer(g, a)) for a in [(2,), (-2,)]])
         @test r.ok || (@info r.label r.why; false)
     end
     # run by node, given dart's test runner's embedder, it answers its argument, the host's trace made
     # and dropped (native Julia has no standalone embedder to call: st's answer is its argument whatever
     # the trace)
-    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("st$(a)", bytes, a, a[1]) for a in [(3,), (-7,)]])
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("st$(a)", bytes, a, a[1]) for a in [(3,), (-7,)]])
         @test r.ok || (@info r.label r.why; false)
     end
     # outside standalone mode a JS host supplies no `dart` module: the import rejects, located
     local ns = D.WasmCompilerOptions(; main_uri = "", output_file = "out/prog.wasm"); ns.translator_options.generate_source_maps = false
-    local e = try; D.compile(ns, W.check_subset(st, (Int,), "runtime")); nothing; catch x; x; end
+    local e = try; D.compile(ns, W.check_subset(st, (Int,), "runtime", Base.get_world_counter())); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("dart.stackTraceGetCurrent outside standalone mode", e.rejection.row)
 end
 
@@ -86,16 +86,16 @@ end
 module RuntimeAsCheck
 using Test, WasmTarget
 const W = WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 # a typeassert Julia keeps: the value's class only run time knows, an Int or a String
 @noinline pick(x::Int)::Union{Int,String} = x > 0 ? x : "neg"
 checked(x::Int) = typeassert(pick(x), Int) + 1
 @testset "errors_patch.dart: _throwAsCheckError throws Julia's TypeError where a typeassert fails" begin
-    local world = W.build_nir(W.check_subset(checked, (Int,), "runtime"), "runtime")
+    local world = W.build_nir(W.check_subset(checked, (Int,), "runtime", Base.get_world_counter()), "runtime")
     @test :_TypeError__throw_as_check_error in Set(b.ci.def.def.name for b in world)
     @test (try; checked(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Int, "neg")
     local bytes = W.compile(checked, (Int,))
-    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("checked$(a)", bytes, a, Main.WTRunner.native_answer(checked, a)) for a in [(3,), (-1,)]])
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("checked$(a)", bytes, a, Main.WTChild.native_answer(checked, a)) for a in [(3,), (-1,)]])
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -104,7 +104,7 @@ end
 module RuntimeInterfaceCheck
 using Test, WasmTarget
 const W = WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 # a value only its null case can fail: an Int or nothing, tested and checked as an Int
 @noinline maybe(x::Int)::Union{Nothing,Int} = x > 0 ? x : nothing
 unwrapped(x::Int) = typeassert(maybe(x), Int) + 1
@@ -117,7 +117,7 @@ struct Tagged{V}; x::Int; end
 @noinline maybe_tagged(x::Int)::Union{Nothing,Tagged{Float16(1)}} = x > 0 ? Tagged{Float16(1)}(x) : nothing
 tagged_x(x::Int) = typeassert(maybe_tagged(x), Tagged{Float16(1)}).x
 @testset "type.dart: _asInterfaceSubtype0 and _isNullabilityCheck test a class's null case, the error's type its class id's" begin
-    local world = W.build_nir(W.check_subset(unwrapped, (Int,), "runtime"), "runtime")
+    local world = W.build_nir(W.check_subset(unwrapped, (Int,), "runtime", Base.get_world_counter()), "runtime")
     local names = Set(b.ci.def.def.name for b in world)
     @test :_as_interface_subtype0 in names && :_throw_interface_type_as_check_error0 in names
     @test (try; unwrapped(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Int, nothing)
@@ -132,7 +132,7 @@ tagged_x(x::Int) = typeassert(maybe_tagged(x), Tagged{Float16(1)}).x
           te.rejection.row == "src/translator.jl translateStorageType: the primitive class Float16, with no wasm representation"
     for (f, args) in ((unwrapped, [(3,), (-1,)]), (isint, [(3,), (-1,)]))
         local bytes = W.compile(f, (Int,))
-        for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("$(nameof(f))$(a)", bytes, a, Main.WTRunner.native_answer(f, a)) for a in args])
+        for r in Main.WTChild.run_cases([Main.WTChild.RunCase("$(nameof(f))$(a)", bytes, a, Main.WTChild.native_answer(f, a)) for a in args])
             @test r.ok || (@info r.label r.why; false)
         end
     end
@@ -143,7 +143,7 @@ module RuntimeClassTable
 using Test, WasmTarget
 const W = WasmTarget
 const D = W.Dart2Wasm
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 abstract type Shape end
 struct Circle <: Shape; r::Float64; end
 struct Square <: Shape; s::Float64; end
@@ -159,11 +159,11 @@ type_at(j::Int64)::DataType = TYPES[j]
 probe(k::Int64, j::Int64) = W.Runtime._is_interface_subtype0(pick(k), false, W.Runtime._InterfaceType_class_id(type_at(j)))
 @testset "type.dart: _isInterfaceSubtype0 reads the class table, against native isa" begin
     local bytes = W.compile(probe, (Int64, Int64))
-    local cases = Main.WTRunner.RunCase[]
+    local cases = Main.WTChild.RunCase[]
     for j in 1:3, k in 1:4
-        push!(cases, Main.WTRunner.RunCase("probe($k, $(type_at(j)))", bytes, (k, j), pick(k) isa type_at(j)))
+        push!(cases, Main.WTChild.RunCase("probe($k, $(type_at(j)))", bytes, (k, j), pick(k) isa type_at(j)))
     end
-    for r in Main.WTRunner.run_cases(cases)
+    for r in Main.WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
 end
@@ -172,7 +172,7 @@ end
 module RuntimeTypeTests
 using Test, WasmTarget
 const W = WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 # a type only run time knows: type.dart's _isSubtype and _asSubtype over the kinds the runtime ports, a
 # class's DataType, a Union and Nothing, against native isa and typeassert
 # Any is dart's top type (_TopType._checkInstance), whose row the class table does not hold: 1 isa Any
@@ -208,33 +208,33 @@ rt_same_pair(k::Int64) = value_at(k) isa SAME_PAIR ? 1 : 0
 @noinline all_type_at(j::Int64)::Any = j == 1 ? Int64 : Vector
 rt_all(k::Int64, j::Int64) = isa(value_at(k), all_type_at(j)) ? 1 : 0
 @testset "type.dart: _isSubtype and _asSubtype test a type only run time knows, against native" begin
-    local cases = Main.WTRunner.RunCase[]
+    local cases = Main.WTChild.RunCase[]
     local isa_bytes = W.compile(rt_isa, (Int64, Int64))
     local as_bytes = W.compile(rt_as, (Int64, Int64))
     for k in 1:8, j in 1:9
-        push!(cases, Main.WTRunner.RunCase("rt_isa($k, $j)", isa_bytes, (k, j), Main.WTRunner.native_answer(rt_isa, (k, j))))
-        push!(cases, Main.WTRunner.RunCase("rt_as($k, $j)", as_bytes, (k, j), Main.WTRunner.native_answer(rt_as, (k, j))))
+        push!(cases, Main.WTChild.RunCase("rt_isa($k, $j)", isa_bytes, (k, j), Main.WTChild.native_answer(rt_isa, (k, j))))
+        push!(cases, Main.WTChild.RunCase("rt_as($k, $j)", as_bytes, (k, j), Main.WTChild.native_answer(rt_as, (k, j))))
     end
-    for r in Main.WTRunner.run_cases(cases)
+    for r in Main.WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
     # the open tuple type Tuple{Any}, read field by field as any tuple type: native's answers
     local ob = W.compile(rt_open, (Int64, Int64))
-    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("rt_open($k, $j)", ob, (k, j), Main.WTRunner.native_answer(rt_open, (k, j))) for k in 1:8 for j in 1:2])
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("rt_open($k, $j)", ob, (k, j), Main.WTChild.native_answer(rt_open, (k, j))) for k in 1:8 for j in 1:2])
         @test r.ok || (@info r.label r.why; false)
     end
     # a tuple type, a literal or a binding's element, read field by field: native's answers
-    local tuple_cases = Main.WTRunner.RunCase[]
+    local tuple_cases = Main.WTChild.RunCase[]
     for f in (rt_tuple, rt_bound)
         local fb = W.compile(f, (Int64, Int64))
-        append!(tuple_cases, [Main.WTRunner.RunCase("$(nameof(f))($k, $j)", fb, (k, j), Main.WTRunner.native_answer(f, (k, j))) for k in 1:8 for j in 1:2])
+        append!(tuple_cases, [Main.WTChild.RunCase("$(nameof(f))($k, $j)", fb, (k, j), Main.WTChild.native_answer(f, (k, j))) for k in 1:8 for j in 1:2])
     end
-    for r in Main.WTRunner.run_cases(tuple_cases)
+    for r in Main.WTChild.run_cases(tuple_cases)
         @test r.ok || (@info r.label r.why; false)
     end
     # a Type{Int64} field: the general arm, against native
     local kp = W.compile(rt_kind_pair, (Int64,))
-    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("rt_kind_pair($k)", kp, (k,), Main.WTRunner.native_answer(rt_kind_pair, (k,))) for k in 1:5])
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("rt_kind_pair($k)", kp, (k,), Main.WTChild.native_answer(rt_kind_pair, (k,))) for k in 1:5])
         @test r.ok || (@info r.label r.why; false)
     end
     # Tuple{T,T} where T: the general arm, rejected at run_time_type_gap's UnionAll row, located
@@ -254,7 +254,7 @@ end
 module RuntimeTypeSubtype
 using Test, WasmTarget
 const W = WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 abstract type Shape end
 struct Circle <: Shape; r::Float64; end
 struct Plain; x::Int64; end
@@ -275,21 +275,21 @@ kind_sub(i::Int64, j::Int64) = W.Runtime._is_type_subtype(KIND_TYPES[i]::Type, K
 @testset "type.dart: _isTypeSubtype, _TypeUniverse.isSubtype by kind, against Julia's <:" begin
     local tb = W.compile(tuple_sub, (Int64, Int64))
     local tn = length(TUPLE_TYPES)
-    for r in Main.WTRunner.run_cases([Main.WTRunner.RunCase("tuple_sub($(TUPLE_TYPES[i]), $(TUPLE_TYPES[j]))", tb, (i, j), TUPLE_TYPES[i] <: TUPLE_TYPES[j] ? 1 : 0) for i in 1:tn for j in 1:tn])
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("tuple_sub($(TUPLE_TYPES[i]), $(TUPLE_TYPES[j]))", tb, (i, j), TUPLE_TYPES[i] <: TUPLE_TYPES[j] ? 1 : 0) for i in 1:tn for j in 1:tn])
         @test r.ok || (@info r.label r.why; false)
     end
     local kb = W.compile(kind_sub, (Int64, Int64))
     local kn = length(KIND_TYPES)
-    local kinds = [Main.WTRunner.RunCase("kind_sub($(KIND_TYPES[i]), $(KIND_TYPES[j]))", kb, (i, j), KIND_TYPES[i] <: KIND_TYPES[j] ? 1 : 0) for i in 1:kn for j in 1:kn]
+    local kinds = [Main.WTChild.RunCase("kind_sub($(KIND_TYPES[i]), $(KIND_TYPES[j]))", kb, (i, j), KIND_TYPES[i] <: KIND_TYPES[j] ? 1 : 0) for i in 1:kn for j in 1:kn]
     local ib = W.compile(type_isa, (Int64, Int64))
-    append!(kinds, [Main.WTRunner.RunCase("type_isa($(KIND_VALUES[k]), $(KIND_TYPES[j]))", ib, (k, j), Main.WTRunner.native_answer(type_isa, (k, j))) for k in 1:length(KIND_VALUES) for j in 1:kn])
-    for r in Main.WTRunner.run_cases(kinds)
+    append!(kinds, [Main.WTChild.RunCase("type_isa($(KIND_VALUES[k]), $(KIND_TYPES[j]))", ib, (k, j), Main.WTChild.native_answer(type_isa, (k, j))) for k in 1:length(KIND_VALUES) for j in 1:kn])
+    for r in Main.WTChild.run_cases(kinds)
         @test r.ok || (@info r.label r.why; false)
     end
     local bytes = W.compile(sub, (Int64, Int64))
     local n = length(TYPES)
-    local cases = [Main.WTRunner.RunCase("sub($(TYPES[i]), $(TYPES[j]))", bytes, (i, j), TYPES[i] <: TYPES[j] ? 1 : 0) for i in 1:n for j in 1:n]
-    for r in Main.WTRunner.run_cases(cases)
+    local cases = [Main.WTChild.RunCase("sub($(TYPES[i]), $(TYPES[j]))", bytes, (i, j), TYPES[i] <: TYPES[j] ? 1 : 0) for i in 1:n for j in 1:n]
+    for r in Main.WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
     # _TypeCheckVerificationError's message, dart's toString line for line, natively
@@ -303,7 +303,7 @@ module RuntimeVerifyTypeChecks
 using Test, WasmTarget
 const W = WasmTarget
 const D = W.Dart2Wasm
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 abstract type Shape end
 struct Circle <: Shape; r::Float64; end
 struct Plain; x::Int64; end
@@ -317,9 +317,9 @@ vis(k::Int64) = (pick(k) isa Shape ? 10 : 0) + (pick(k) isa Circle ? 1 : 0)
     opts.translator_options.standalone = true
     opts.translator_options.generate_source_maps = false
     opts.translator_options.verify_type_checks = true
-    local r = D.compile(opts, W.check_subset(vis, (Int64,), "runtime"))
+    local r = D.compile(opts, W.check_subset(vis, (Int64,), "runtime", Base.get_world_counter()))
     local bytes = r.wasm_files[basename(r.main_wasm_file)]
-    for res in Main.WTRunner.run_cases([Main.WTRunner.RunCase("vis($k)", bytes, (k,), Main.WTRunner.native_answer(vis, (k,))) for k in 1:3])
+    for res in Main.WTChild.run_cases([Main.WTChild.RunCase("vis($k)", bytes, (k,), Main.WTChild.native_answer(vis, (k,))) for k in 1:3])
         @test res.ok || (@info res.label res.why; false)
     end
 end

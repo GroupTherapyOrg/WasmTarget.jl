@@ -1,30 +1,36 @@
-# The differential runner, the third oracle (AGENTS.md: native-vs-wasm execution; dev/AUDIT.md A46E1):
-# every module a test gets from WasmTarget, which the builder already accepted (D10), runs in node, the
-# major .github/workflows/ci.yml names, its entry called with the case's arguments, and its answer is
-# compared with native Julia's, === at the answer's type. One node process runs every case of a batch.
-# Marshalled: Int32, UInt32, Int64, UInt64, UInt8, Float32, Float64 and Bool, arguments and answer, ReturnsRef(), a
-# read answer's own module returning a non-null reference, an answer of a
-# singleton type (nothing), whose call must return and whose type is its value, and Throws(T), a native call that
-# throws, whose module must raise a wasm exception, neither trap nor return; any other type, a module that imports anything but the standalone embedder's `dart` functions the runner gives (dart's own test runner's), an entry not found, a trap or a throw is a located failure of its
-# case, never a skip. An unsigned integer crosses as the signed one of its bits, a float as its bit
-# pattern, so NaN payloads and -0.0 keep their bits.
-# A case carries both modules of its program: compile's own (dartdev's default phases, ending with
-# dart's opt phase, wasm-opt) and compile's `optimize = false` (codegen's module). Both run in the same
-# node process, each answer against native's and the two against each other, a difference its own
-# failure (an optimizer miscompile, or a module relying on something undefined).
-# Each module's call has a budget (D17): intent, a call answers in milliseconds; band, past RUN_BUDGET
-# seconds it fails, naming its seconds; node itself is killed past RUN_BUDGET per module plus
-# NODE_START seconds, every module without an answer failing as a hang, named.
+# The differential runner, the third oracle's hands (AGENTS.md: native-vs-wasm execution; dev/AUDIT.md A46E1): it runs
+# modules in node, the major .github/workflows/ci.yml names, and writes each call's RAW result in the judge's wire
+# grammar (test/verdict.jl: `ret <kind> <bits> <ms>`, `exc <text>`, `err <text>` or `gap <text>`, a shape it cannot call
+# or read). It judges nothing: the verdict is
+# test/verdict.jl's, a judge file, which never loads this one (spec v16 X1). A keeper's file: what a keeper ports here is
+# the node script and the marshalling of a new wasm shape into the wire's existing leaf kinds; a NEW leaf kind is the
+# judge's edit (test/verdict.jl's LEAF_TYPES).
 #
-#   isdefined(Main, :WTRunner) || include("runner.jl")
-#   WTRunner.answer_cases(label, WasmTarget.compile, f, args, native) -> Vector{WTRunner.RunCase}
-#   WTRunner.run_cases(cases) -> Vector{WTRunner.RunResult}
+# Each call runs in ONE FRESH INSTANCE: a module's bytes are compiled once (WebAssembly.compile), and every call (every
+# leaf a reader reads is a call) gets its own WebAssembly.Instance, as each native answer gets its own process; no state
+# survives a call. The export is called from a wrapper module, compiled once per module and entry, that imports it (its
+# exact type: the module's type section copied whole, so the import links under Wasm's canonical rec-group equality) and
+# takes and returns integers alone: a float argument crosses JS as its integer bits and is reinterpreted inside wasm
+# (f32.reinterpret_i32, f64.reinterpret_i64), a float result is reinterpreted to its integer bits before it leaves wasm
+# (i32.reinterpret_f32, i64.reinterpret_f64), and a reference result is read as ref.is_null, so no value is ever
+# converted by JS (whose ToWebAssemblyValue and ToJSValue quiet a signaling NaN: spec v16 X1, red 5).
+#
+#   julia test/runner.jl [--run-budget=s] [--node-start=s] [--part-chars=n] <out> <input>...
+#                                           the run process (dev/climb/measure.py smoke; standalone test/smoke.jl and the
+#                                           test suite's test/run_child.jl, as a child): each input's `module <label>
+#                                           <key> <base64>` and `call <label> <j> <entry> <args...>` records (a call of
+#                                           the label's j-th module), every call's raw line written to <out> in order
+#   julia test/runner.jl --node             prints the node it runs (node_binary), or nothing
+# Nothing else loads this file: no process that judges or writes a test's record runs a keeper's code (spec v17 Y5).
+# Each call has a budget (test/verdict.jl's RUN_BUDGET): node is killed when a call gives no line within it (NODE_START
+# more for a node's first), that call failing as a hang, named, and a new node runs the calls after it (spec v18 P3).
+isdefined(Main, :WTVerdict) || Base.include(Main, joinpath(@__DIR__, "verdict.jl"))
 module WTRunner
 
 import Base64
+using ..WTVerdict: RUN_BUDGET
 
 const ROOT = dirname(@__DIR__)
-const RUN_BUDGET = 5.0
 const NODE_START = 30.0
 # WasmTarget answers have_fma(Float64) true and rounds muladd and fma once, as native Julia does on an FMA host, and the
 # differential reads Julia's math kernels bit for bit against native (test/smoke_corpus.jl's bit_exact_math). On a host
@@ -34,221 +40,9 @@ Core.Intrinsics.have_fma(Float64) || error("test/runner.jl: native Julia on this
     "(Core.Intrinsics.have_fma(Float64) is false), so its math kernels take branches WasmTarget's modules do not: " *
     "the differential runs on an FMA host only (A84S6)")
 
-"""One module's case: its bytes, its wasm-opt'd bytes (empty for none), the arguments of its entry,
-native Julia's answer for them."""
-struct RunCase
-    label::String
-    bytes::Vector{UInt8}
-    optimized::Vector{UInt8}
-    args::Tuple
-    native::Any
-    entry::String   # "" for the module's one exported function
-    unread::String  # why the runner cannot read this fact yet ("" when it can): its reader is rejected, unported
-end
-RunCase(label, bytes, optimized, args, native, entry) = RunCase(label, bytes, optimized, args, native, entry, "")
-RunCase(label, bytes, args, native; optimized::Vector{UInt8} = UInt8[], entry::String = "") =
-    RunCase(label, bytes, optimized, args, native, entry, "")
-
-# a program's modules: `compile(f, T; optimize = false)`, codegen's, and `compile(f, T)`, which dartdev's default
-# phases end with opt (wasm-opt), or `own` when the caller holds that compile already; none when `optimized` is false
-# (a run that leaves wasm-opt, an external tool, to another run)
-function _modules(compile, f, args::Tuple; optimized::Bool = true, own::Vector{UInt8} = UInt8[])::Tuple{Vector{UInt8},Vector{UInt8}}
-    local argtypes = Tuple(map(typeof, args))
-    local plain = compile(f, argtypes; optimize = false)
-    local opt = !optimized ? UInt8[] : isempty(own) ? compile(f, argtypes) : own
-    return (plain, isempty(opt) || opt == plain ? UInt8[] : opt)
-end
-
-"""
-    native_answer(f, args)
-
-Native Julia's answer to `f(args...)`, or `Throws(typeof(e))` when the call throws. The runner computes it itself,
-once, after the compiles it is compared against (A61S4): a compile reads the session's heap as it stands, so a
-native call made before it would hand the compile a heap one step on.
-"""
-native_answer(f, args::Tuple) = try
-    f(args...)
-catch e
-    Throws(typeof(e))
-end
-
-"""
-    compiled_case(label, compile, f, args; optimized = true) -> RunCase
-
-The case of a program `compile` compiles: codegen's module as the case's own, and the wasm-opt'd one beside it
-(one module when the two are the same bytes, or when `optimized` is false), its native answer native_answer's,
-computed after both compiles.
-"""
-function compiled_case(label::String, compile, f, args::Tuple; optimized::Bool = true)::RunCase
-    local label′, f′, args′ = _bound(label, f, args)
-    local plain, opt = _modules(compile, f′, args′; optimized)
-    return RunCase(label′, plain, args′, native_answer(f′, args′); optimized = opt)
-end
-
-# A String argument crosses no wire: JS has no way to hand the module a Julia String. It becomes a constant of the
-# program, as a dart test's strings are literals its main holds (dart2wasm's tests at the pin pass their programs
-# no argument; precedent: tests/web/wasm, each a main()). Julia differs in that a case's arguments live in the corpus,
-# not in the program's text, so the runner binds them: Bound{F,P,S} is the callable `(wire arguments...) ->
-# F(...)` with the String S[j] at argument position P[j], each one a literal of the method _call_bound generates,
-# lowered by WT's own constant lowering as a literal of the program is, and passed to F as its argument inside the
-# program, so argument passing is still exercised. The native answer is Bound's own, the same constants, and the
-# case's label names the positions bound, "(String argument 1 bound)", so a bound case reads apart from a wire one.
-# F is the function itself, as Leaves's is: a function of no fields is its own type's one instance.
-struct Bound{F,P,S} <: Function end
-@generated function _call_bound(f, ::Val{P}, ::Val{S}, w::Tuple) where {P,S}
-    local wire = Any[:(getfield(w, $k)) for k in 1:fieldcount(w)]
-    local all = Any[]
-    for i in 1:(length(P) + fieldcount(w))
-        local j = findfirst(==(i), P)
-        push!(all, j === nothing ? popfirst!(wire) : String(S[j]))
-    end
-    return :(f($(all...)))
-end
-# fixed arities, as Leaves's: a varargs method of an open count reads its tuple by a run-time index, not yet compiled
-(::Bound{F,P,S})() where {F,P,S} = _call_bound(F, Val(P), Val(S), ())
-(::Bound{F,P,S})(a) where {F,P,S} = _call_bound(F, Val(P), Val(S), (a,))
-(::Bound{F,P,S})(a, b) where {F,P,S} = _call_bound(F, Val(P), Val(S), (a, b))
-(::Bound{F,P,S})(a, b, c) where {F,P,S} = _call_bound(F, Val(P), Val(S), (a, b, c))
-# the case as the runner compiles it: (label, f, args) unchanged when no argument is a String, else Bound's
-function _bound(label::String, f, args::Tuple)
-    local P = Tuple(i for (i, a) in enumerate(args) if a isa String)
-    isempty(P) && return (label, f, args)
-    local B = Bound{f,P,Tuple(Symbol(args[i]) for i in P)}
-    return ("$label(String argument$(length(P) == 1 ? "" : "s") $(join(P, ", ")) bound)", B(), Tuple(a for a in args if !(a isa String)))
-end
-
-# A tuple answer leaves the module as a reference to a wasm struct, which JS cannot read (and wasm-opt,
-# closed-world, strips the fields nothing in the module reads). Its facts are read in wasm by a reader:
-# a program calling the case's function and returning the fact a run-time index picks, one reader per
-# leaf type, its index chain over the leaves' paths spelt out by Julia's own @generated. The facts are
-# then compared one by one in Julia, so a wrong one names itself. The precedent is dart's own test:
-# its main reads the facts it asserts inside the program (Expect), dart2wasm's JS host reading none.
-# A vector inside the answer is read the same way: its length a leaf, each element a leaf (or a nest); so is a
-# String: its ncodeunits a leaf, each codeunit (a UInt8) a leaf, Base's own reading of a String's bytes.
-# A path's steps: an Int, a tuple's field; (:ix, i), a vector's element; :len, a vector's length; (:cu, i), a
-# String's codeunit; :ncu, its ncodeunits.
-_step(x, i::Int) = getfield(x, i)
-_step(x, s::Tuple{Symbol,Int}) = s[1] === :cu ? codeunit(x, s[2]) : x[s[2]]
-_step(x, s::Symbol) = s === :ncu ? Int64(ncodeunits(x)) : Int64(length(x))
-_step_ex(e, i::Int) = :(getfield($e, $i))
-_step_ex(e, s::Tuple{Symbol,Int}) = s[1] === :cu ? :(codeunit($e, $(s[2]))) : :(getindex($e, $(s[2])))
-_step_ex(e, s::Symbol) = s === :ncu ? :(Int64(ncodeunits($e))) : :(Int64(length($e)))
-_string_step(s) = s === :ncu || (s isa Tuple && s[1] === :cu)
-_on_string(p::Tuple) = any(_string_step, p)
-_string_of(p::Tuple) = p[1:findfirst(_string_step, p)-1]   # the path of the String a leaf reads
-# a reader's pick is typeasserted to its leaves' type, native's, so its export returns that type even where the
-# answer holds the leaf as Any (a record of Any fields): an anyref holding a box JS cannot read otherwise
-struct Leaves{F,P,T} <: Function end
-@generated function _pick(x, ::Val{P}, ::Type{T}, k::Int64) where {P,T}
-    local at(p) = :($(foldl(_step_ex, p; init = :x))::$T)
-    local ex = at(P[end])
-    for i in length(P)-1:-1:1
-        ex = :(k == $i ? $(at(P[i])) : $ex)
-    end
-    return ex
-end
-# fixed arities: a varargs method of an open count reads its tuple by a run-time index, not yet compiled
-(::Leaves{F,P,T})(k::Int64) where {F,P,T} = _pick(F(), Val(P), T, k)
-(::Leaves{F,P,T})(a, k::Int64) where {F,P,T} = _pick(F(a), Val(P), T, k)
-(::Leaves{F,P,T})(a, b, k::Int64) where {F,P,T} = _pick(F(a, b), Val(P), T, k)
-(::Leaves{F,P,T})(a, b, c, k::Int64) where {F,P,T} = _pick(F(a, b, c), Val(P), T, k)
-
-# each leaf's path in a nest of tuples, vectors and Strings, in order
-_leaves(x, p::Tuple = ())::Vector{Tuple} =
-    x isa Tuple ? reduce(vcat, (_leaves(y, (p..., i)) for (i, y) in enumerate(x)); init = Tuple[]) :
-    x isa Vector ? reduce(vcat, (_leaves(y, (p..., (:ix, i))) for (i, y) in enumerate(x)); init = Tuple[(p..., :len)]) :
-    x isa String ? Tuple[(p..., :ncu); [(p..., (:cu, i)) for i in 1:ncodeunits(x)]] :
-    Tuple[p]
-
-"""
-    answer_cases(label, compile, f, args; optimized = true, own = UInt8[]) -> (cases, native)
-
-The cases that read `f(args...)`'s answer from wasm, and the native answer they are read against. `f`'s own modules
-are compiled first, then native_answer runs once (A61S4), and its value is returned beside the cases so a caller
-proving a recorded answer reads the same one. For one value the cases are `f`'s own modules; for a tuple, a vector
-or a String, `f`'s own modules (a non-null reference, returned without a trap) and one reader per leaf type, each
-leaf a case of its reader labelled by its path. A leaf no reader can read (a type the runner does not marshal, or a
-case of more than 3 arguments) is a case with no module, which run_cases fails, naming why. A known limit: a reader's
-shape comes from the native value (a vector's length, a String's code units), so a reader is compiled after the
-native run; for a program that changes global state the reader starts a step on and the case fails, a false
-failure, never a false pass.
-"""
-function answer_cases(label::String, compile, f, args::Tuple; optimized::Bool = true,
-                      own::Vector{UInt8} = UInt8[])::Tuple{Vector{RunCase},Any}
-    # a String argument bound as a constant of the program (Bound); the caller's own compile took it as an argument,
-    # so it is not the bound program's
-    local label′, f′, args′ = _bound(label, f, args)
-    args′ === args || return answer_cases(label′, compile, f′, args′; optimized)
-    # the case's own modules first, `own` the compile the caller already holds (compile's default, wasm-opt'd)
-    local plain, opt = _modules(compile, f, args; optimized, own)
-    local native = native_answer(f, args)
-    (native isa Tuple && !isempty(native)) || native isa Vector || native isa String ||
-        return (RunCase[RunCase(label, plain, args, native; optimized = opt)], native)
-    local paths = _leaves(native)
-    local leaf(p) = foldl(_step, p; init = native)
-    # the own modules run too, a read answer's: a non-null reference, returned without a trap
-    local out = RunCase[RunCase("$label(own module)", plain, args, ReturnsRef(); optimized = opt)]
-    # one reader per leaf type, a String's leaves apart from the rest. A reader WasmTarget rejects as Unported or
-    # Unquarantined (a String's codeunit before its lowering, a boxed leaf before convertType's boxing) leaves its
-    # facts unread, each a case naming the rejection: the runner's gap, which only a :unread record admits; a
-    # String is then one such case, not its codeunits. Any other rejection is WT's and propagates.
-    local rejected(e) = nameof(typeof(e)) === :RejectionError && nameof(typeof(e.rejection)) in (:Unported, :Unquarantined)
-    for (T, on_string) in unique(map(p -> (typeof(leaf(p)), _on_string(p)), paths))
-        local ps = Tuple(filter(p -> typeof(leaf(p)) === T && _on_string(p) == on_string, paths))
-        local readable = length(args) <= 3 && _wire_answer(leaf(first(ps))) !== nothing
-        local reader, why = nothing, ""
-        if readable
-            try
-                local rp, ro = _modules(compile, Leaves{f,ps,T}(), (args..., Int64(1)); optimized)
-                reader = (bytes = rp, optimized = ro)
-            catch e
-                rejected(e) || rethrow()
-                why = first(sprint(showerror, e), 300)
-            end
-        end
-        if !isempty(why)
-            for p in unique(on_string ? map(_string_of, ps) : collect(ps))
-                any(c -> c.label == "$label$p", out) ||
-                    push!(out, RunCase("$label$p", UInt8[], UInt8[], (args..., Int64(1)), leaf(p), "", "its reader is rejected: $why"))
-            end
-            continue
-        end
-        for (k, p) in enumerate(ps)
-            push!(out, RunCase("$label$p", readable ? reader.bytes : UInt8[], readable ? reader.optimized : UInt8[],
-                               (args..., Int64(k)), leaf(p), ""))
-        end
-    end
-    return (out, native)
-end
-
-"""
-    Throws(T)
-
-The answer of a case whose native call throws an exception of type `T`: its module must raise a wasm exception
-under its exception tag (a `WebAssembly.Exception` that `is` the one tag the module exports), never another tag,
-never a trap (a `WebAssembly.RuntimeError`: unreachable, an integer divided by zero) and never a return (A61E1).
-The exception's type is not read yet: its class id needs an exported reader the runtime has not ported.
-"""
-struct Throws
-    type::Type
-end
-
-"""
-    ReturnsRef()
-
-What a case's own module must answer when its answer is read by readers (a tuple, a vector, a String): a
-reference, non-null, returned without a trap. Its facts are the readers'; this is the module itself run.
-"""
-struct ReturnsRef end
-
-"""A case's verdict: `ok` when the module answered native's value; `why` says what differs, located."""
-struct RunResult
-    label::String
-    ok::Bool
-    why::String
-end
-
-# the node of CI's major: Homebrew's node@<major>, else the node on PATH when it is that major
+# the node of CI's major: THE node on PATH, when it is that major (spec v16 X4: one path). A build user's PATH starts with
+# the copy the door pinned at launch (TOP/tools/bin/node, door.pin_node), so a `brew upgrade` mid-launch changes no
+# measurement; CI's is setup-node's
 # the lowest Node major whose V8 runs WT's modules: Node 22's (v22.23.3) traps "unreachable" entering any try_table
 # with a reference result, with no WT code in it (test/src/runner.jl's "a try_table of a reference result" module,
 # 12 lines, returns 7 on Node 26.11 and traps on Node 22; the corpus's wasm-opt'd modules of
@@ -264,74 +58,99 @@ function node_binary()::Union{String,Nothing}
     parse(Int, major) >= NODE_MIN_MAJOR || error(".github/workflows/ci.yml names Node $major, below test/runner.jl's " *
         "NODE_MIN_MAJOR $NODE_MIN_MAJOR: its V8 traps entering a try_table with a reference result " *
         "(test/src/runner.jl's \"a try_table of a reference result\" module)")
-    for pre in ("/opt/homebrew/opt/node@$major/bin", "/usr/local/opt/node@$major/bin")
-        isfile(joinpath(pre, "node")) && return joinpath(pre, "node")
-    end
-    local v = try readchomp(`node --version`) catch; "" end
-    return startswith(v, "v$major.") ? "node" : nothing
+    local p = Sys.which("node")
+    p === nothing && return nothing
+    local v = try readchomp(`$p --version`) catch; "" end
+    return startswith(v, "v$major.") ? p : nothing
 end
 
-# a scalar's wire form: its wasm type and its value as text (an integer in decimal, a float's bits in hex)
-function _wire(x)::Union{Tuple{String,String},Nothing}
-    x isa Bool && return ("i32", x ? "1" : "0")
-    x isa Int32 && return ("i32", string(x))
-    x isa UInt32 && return ("i32", string(reinterpret(Int32, x)))
-    x isa UInt8 && return ("i32", string(x))
-    # Julia's Char is a 32-bit primitive (base/boot.jl `primitive type Char <: AbstractChar 32`), its UTF-8 bytes
-    # left-aligned: its wire form is those 32 bits, as WT lowers it to an i32 of them
-    x isa Char && return ("i32", string(reinterpret(Int32, x)))
-    x isa Int64 && return ("i64", string(x))
-    x isa UInt64 && return ("i64", string(reinterpret(Int64, x)))
-    x isa Float32 && return ("f32", string(reinterpret(UInt32, x); base = 16))
-    x isa Float64 && return ("f64", string(reinterpret(UInt64, x); base = 16))
-    return nothing
-end
-
-# an answer's wire form: a scalar's, or "void" for a value of a singleton type (nothing, a fieldless struct),
-# which carries no bits: its call must return no value (undefined or null in JS), and its type is its value; a
-# module returning a value there, a Union{Nothing,T} answer's T, differs from native (A56E1)
-_wire_answer(x)::Union{Tuple{String,String},Nothing} =
-    x isa Throws ? ("throws", "-") : x isa ReturnsRef ? ("ref", "-") : Base.issingletontype(typeof(x)) ? ("void", "-") : _wire(x)
-
-# the answer read back at native's type
-function _unwire(::Type{T}, s::AbstractString) where {T}
-    T === ReturnsRef && return s == "ref" ? ReturnsRef() : "the module returns $(s == "null" ? "a null reference" : s)"
-    Base.issingletontype(T) && return s == "-" ? T.instance : String(s)   # a value where none is due: compared, it differs
-    T === Bool && return s == "1" ? true : s == "0" ? false : nothing
-    T === Int32 && return parse(Int32, s)
-    T === UInt32 && return reinterpret(UInt32, parse(Int32, s))
-    T === Char && return reinterpret(Char, parse(Int32, s))   # the 32 bits back, never decoded or validated
-    T === UInt8 && return (v = parse(Int32, s); 0 <= v <= 255 ? UInt8(v) : "the i32 $v, no UInt8")   # never truncated to fit
-    T === Int64 && return parse(Int64, s)
-    T === UInt64 && return reinterpret(UInt64, parse(Int64, s))
-    T === Float32 && return reinterpret(Float32, parse(UInt32, s; base = 16))
-    T === Float64 && return reinterpret(Float64, parse(UInt64, s; base = 16))
-    return nothing
-end
-
-# the script node runs: one line per module in, one line per module out, `ok <answer> <ms>` or
-# `err <why>`, each written as it is known, so a hang shows where it stopped; a module is compiled
-# and instantiated once however many lines call it
+# the script node runs: `m <id> <base64>` lines name the modules, each `c <id> <entry> <args...>` line is a call, and
+# each call writes one raw line as it is known, so a hang shows where it stopped
 const _JS = raw"""
+'use strict';
 const fs = require('fs');
 const lines = fs.readFileSync(process.argv[2], 'utf8').split('\n').filter(l => l.length > 0);
-const toWasm = (t, v) => {
-  if (t === 'i32') return Number(BigInt.asIntN(32, BigInt(v)));
-  if (t === 'i64') return BigInt.asIntN(64, BigInt(v));
-  const dv = new DataView(new ArrayBuffer(8));
-  if (t === 'f32') { dv.setUint32(0, parseInt(v, 16)); return dv.getFloat32(0); }
-  dv.setBigUint64(0, BigInt('0x' + v)); return dv.getFloat64(0);
+// ---- a module's binary, read as far as a call needs: its type, import, function and export sections
+class R {
+  constructor(b, pos, end) { this.b = b; this.pos = pos; this.end = end; }
+  byte() { if (this.pos >= this.end) throw new Error('the module ends inside a section'); return this.b[this.pos++]; }
+  u32() { let r = 0, s = 0, x; do { x = this.byte(); r += (x & 0x7f) * 2 ** s; s += 7; } while (x & 0x80); return r; }
+  name() { const n = this.u32(); const s = this.b.subarray(this.pos, this.pos + n).toString('utf8'); this.pos += n; return s; }
+}
+const NUM = {0x7f: 'i32', 0x7e: 'i64', 0x7d: 'f32', 0x7c: 'f64'};
+// a heap type: one byte of 0x40..0x7f is an abstract one (a negative s33), else a type index
+const heap = (r) => { let x = r.b[r.pos]; if (x === 0x65) { r.pos++; x = r.b[r.pos]; } if (x >= 0x40 && x < 0x80) { r.pos++; return; } r.u32(); };
+const valtype = (r) => {
+  const x = r.byte();
+  if (NUM[x] !== undefined) return {num: NUM[x]};
+  if (x === 0x7b) return {vec: true};
+  if (x === 0x63 || x === 0x64) { heap(r); return {ref: true}; }
+  if (x >= 0x40 && x < 0x80) return {ref: true};
+  throw new Error('a value type 0x' + x.toString(16) + ' the runner reads not');
 };
-const fromWasm = (t, x) => {
-  if (t === 'void') return (x === undefined || x === null) ? '-' : 'a_value:' + typeof x;
-  if (t === 'throws') return 'returned';
-  if (t === 'ref') return (x === undefined || x === null) ? 'null' : typeof x === 'object' ? 'ref' : 'a_value:' + typeof x;
-  if (t === 'i32') return String(x | 0);
-  if (t === 'i64') return BigInt.asIntN(64, x).toString();
-  const dv = new DataView(new ArrayBuffer(8));
-  if (t === 'f32') { dv.setFloat32(0, x); return dv.getUint32(0).toString(16); }
-  dv.setFloat64(0, x); return dv.getBigUint64(0).toString(16);
+const storage = (r) => { const x = r.b[r.pos]; if (x === 0x78 || x === 0x77) { r.pos++; return; } valtype(r); };
+const comptype = (r) => {
+  const k = r.byte();
+  if (k === 0x60) { const ps = [], rs = []; for (let n = r.u32(); n > 0; n--) ps.push(valtype(r)); for (let n = r.u32(); n > 0; n--) rs.push(valtype(r)); return {func: true, params: ps, results: rs}; }
+  if (k === 0x5f) { for (let n = r.u32(); n > 0; n--) { storage(r); r.byte(); } return {}; }
+  if (k === 0x5e) { storage(r); r.byte(); return {}; }
+  throw new Error('a composite type 0x' + k.toString(16) + ' the runner reads not');
 };
+const subtype = (r) => { const x = r.b[r.pos]; if (x === 0x50 || x === 0x4f) { r.pos++; for (let n = r.u32(); n > 0; n--) r.u32(); } return comptype(r); };
+const limits = (r) => { const f = r.byte(); r.u32(); if (f & 1) r.u32(); };
+function sections(b) {
+  if (b.length < 8 || b.readUInt32LE(0) !== 0x6d736100) throw new Error('not a wasm module');
+  const r = new R(b, 8, b.length), out = {};
+  while (r.pos < b.length) { const id = r.byte(), n = r.u32(); if (id !== 0) out[id] = [r.pos, r.pos + n]; r.pos += n; }
+  return out;
+}
+function types(b, [s, e]) {   // every type, in index order, and where the rec groups' bytes start
+  const r = new R(b, s, e), n = r.u32(), start = r.pos, all = [];
+  for (let i = 0; i < n; i++) { if (r.b[r.pos] === 0x4e) { r.pos++; for (let m = r.u32(); m > 0; m--) all.push(subtype(r)); } else all.push(subtype(r)); }
+  return {count: n, start, end: e, all};
+}
+function importFuncs(b, [s, e]) {   // each imported function's type index, in order
+  const r = new R(b, s, e), out = [];
+  for (let n = r.u32(); n > 0; n--) {
+    r.name(); r.name(); const k = r.byte();
+    if (k === 0) out.push(r.u32()); else if (k === 1) { valtype(r); limits(r); } else if (k === 2) limits(r);
+    else if (k === 3) { valtype(r); r.byte(); } else if (k === 4) { r.byte(); r.u32(); } else throw new Error('an import kind 0x' + k.toString(16));
+  }
+  return out;
+}
+const funcs = (b, [s, e]) => { const r = new R(b, s, e), out = []; for (let n = r.u32(); n > 0; n--) out.push(r.u32()); return out; };
+const exportsOf = (b, [s, e]) => { const r = new R(b, s, e), out = []; for (let n = r.u32(); n > 0; n--) { const name = r.name(); out.push({name, kind: r.byte(), index: r.u32()}); } return out; };
+const leb = (n) => { const out = []; do { let x = n % 128; n = Math.floor(n / 128); if (n > 0) x |= 0x80; out.push(x); } while (n > 0); return out; };
+const str = (s) => { const b = Buffer.from(s, 'utf8'); return [...leb(b.length), ...b]; };
+const sec = (id, body) => Buffer.concat([Buffer.from([id, ...leb(body.length)]), Buffer.from(body)]);
+// the wrapper of export `entry` (`-`: the module's one exported function): `call`, taking each argument as an integer
+// (an f32 as i32 bits, an f64 as i64 bits) and returning its result as one (a float's bits, a reference's ref.is_null)
+function wrap(b, entry) {
+  const s = sections(b);
+  const fe = (s[7] ? exportsOf(b, s[7]) : []).filter(x => x.kind === 0);
+  const name = entry === '-' ? (fe.length === 1 ? fe[0].name : null) : entry;
+  const e = name === null ? undefined : fe.find(x => x.name === name);
+  if (e === undefined) return {gap: 'no entry: the module exports the functions [' + fe.map(x => x.name).join(', ') + ']'};
+  if (!s[1]) throw new Error('the module has no type section');
+  const T = types(b, s[1]), imp = s[2] ? importFuncs(b, s[2]) : [], fn = s[3] ? funcs(b, s[3]) : [];
+  const ti = e.index < imp.length ? imp[e.index] : fn[e.index - imp.length];
+  const ft = T.all[ti];
+  if (ft === undefined || !ft.func) throw new Error('its export ' + name + ' names no function type');
+  const params = ft.params.map(p => p.num), res = ft.results.length === 0 ? 'void' : ft.results[0].num || (ft.results[0].ref ? 'ref' : undefined);
+  if (params.some(p => p === undefined)) return {gap: 'the runner passes no argument of a reference or vector type (the export takes ' + ft.params.length + ' parameters)'};
+  if (ft.results.length > 1 || res === undefined) return {gap: 'the runner reads no result of ' + (ft.results.length > 1 ? ft.results.length + ' values' : 'a vector type')};
+  const ip = params.map(p => p === 'i32' || p === 'f32' ? 0x7f : 0x7e), ir = res === 'void' ? [] : res === 'i64' || res === 'f64' ? [0x7e] : [0x7f];
+  const body = [0x00];
+  params.forEach((p, i) => { body.push(0x20, ...leb(i)); if (p === 'f32') body.push(0xbe); if (p === 'f64') body.push(0xbf); });
+  body.push(0x10, 0x00);
+  if (res === 'f32') body.push(0xbc); if (res === 'f64') body.push(0xbd); if (res === 'ref') body.push(0xd1);
+  body.push(0x0b);
+  const typesec = Buffer.concat([Buffer.from(leb(T.count + 1)), b.subarray(T.start, T.end), Buffer.from([0x60, ...leb(ip.length), ...ip, ...leb(ir.length), ...ir])]);
+  const w = Buffer.concat([Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]), sec(1, typesec),
+    sec(2, [1, ...str('m'), ...str('f'), 0x00, ...leb(ti)]), sec(3, [1, ...leb(T.all.length)]),
+    sec(7, [1, ...str('call'), 0x00, 1]), sec(10, [1, ...leb(body.length), ...body])]);
+  return {wmod: new WebAssembly.Module(w), name, params, res};
+}
 // the standalone embedder's `dart` imports a module may take, dart's own test runner's
 // (pkg/test_runner/lib/src/browser.dart:441 dartEmbedder, given as {dart: dartEmbedder} at :695): those
 // the runtime's ports import, each as dart's runner writes it
@@ -349,167 +168,184 @@ const dartEmbedder = {
     return frames.slice(drop).join('\n');
   },
 };
-const instances = new Map();
+const text = (e) => String(e && e.message || e).replace(/\s+/g, ' ');
+const out = (l) => process.stdout.write(l + '\n');
+const b64 = new Map(), mods = new Map();
 (async () => {
   for (const line of lines) {
-    const [wasmB64, entry, rtype, ...args] = line.split(' ');
-    let mi;
+    const f = line.split(' ');
+    if (f[0] === 'm') { b64.set(f[1], f[2]); continue; }
+    const [, id, entry, ...args] = f;
+    let m = mods.get(id), inst;
     try {
-      mi = instances.get(wasmB64);
-      if (mi === undefined) {
-        const mod = await WebAssembly.compile(Buffer.from(wasmB64, 'base64'));
-        const missing = WebAssembly.Module.imports(mod).filter(i => !(i.module === 'dart' && i.kind === 'function' && i.name in dartEmbedder));
-        mi = missing.length > 0 ? { imports: missing.map(i => i.module + '.' + i.name) } :
-          { mod, inst: await WebAssembly.instantiate(mod, {dart: dartEmbedder}) };
-        instances.set(wasmB64, mi);
+      if (m === undefined) {
+        m = {bytes: Buffer.from(b64.get(id), 'base64'), wraps: new Map()};
+        try { m.mod = await WebAssembly.compile(m.bytes); } catch (e) { m.err = 'the module does not compile: ' + text(e); }
+        if (m.mod) {
+          const missing = WebAssembly.Module.imports(m.mod).filter(i => !(i.module === 'dart' && i.kind === 'function' && i.name in dartEmbedder));
+          if (missing.length > 0) m.gap = 'the module imports ' + missing.map(i => i.module + '.' + i.name).join(', ') + ', which the runner does not provide';
+        }
+        mods.set(id, m);
       }
-      if (mi.imports) { process.stdout.write('err the module imports ' + mi.imports.join(', ') + ', which the runner does not provide\n'); continue; }
-      const fns = WebAssembly.Module.exports(mi.mod).filter(e => e.kind === 'function').map(e => e.name);
-      const name = entry === '-' ? (fns.length === 1 ? fns[0] : null) : entry;
-      if (name === null || typeof mi.inst.exports[name] !== 'function') { process.stdout.write('err no entry: the module exports the functions [' + fns.join(', ') + ']\n'); continue; }
-      const vals = args.map(a => { const [t, v] = a.split(':'); return toWasm(t, v); });
+      if (m.err) { out('err ' + m.err); continue; }
+      if (m.gap) { out('gap ' + m.gap); continue; }
+      let w = m.wraps.get(entry);
+      if (w === undefined) { try { w = wrap(m.bytes, entry); } catch (e) { w = {err: 'the runner reads no module whose sections it cannot read: ' + text(e)}; } m.wraps.set(entry, w); }
+      if (w.err) { out('err ' + w.err); continue; }
+      if (w.gap) { out('gap ' + w.gap); continue; }
+      const kinds = args.map(a => a.split(':')[0]);
+      if (kinds.join(',') !== w.params.join(',')) { out('err the call passes (' + kinds.join(', ') + ') to an export of (' + w.params.join(', ') + ')'); continue; }
+      const vals = args.map(a => { const [t, v] = a.split(':'); return t === 'i32' || t === 'f32' ? Number(BigInt.asIntN(32, BigInt('0x' + v))) : BigInt.asIntN(64, BigInt('0x' + v)); });
+      inst = new WebAssembly.Instance(m.mod, {dart: dartEmbedder});   // a fresh instance a call: no state survives it
+      const call = new WebAssembly.Instance(w.wmod, {m: {f: inst.exports[w.name]}}).exports.call;
       const t0 = performance.now();
-      const r = mi.inst.exports[name](...vals);
-      const ms = performance.now() - t0;
-      process.stdout.write('ok ' + fromWasm(rtype, r) + ' ' + ms.toFixed(1) + '\n');
+      const r = call(...vals);
+      const ms = (performance.now() - t0).toFixed(1);
+      if (w.res === 'void') out('ret void - ' + ms);
+      else if (w.res === 'ref') out('ret ' + (r === 1 ? 'null' : 'ref') + ' - ' + ms);
+      else if (w.res === 'i32' || w.res === 'f32') out('ret ' + w.res + ' ' + (r >>> 0).toString(16).padStart(8, '0') + ' ' + ms);
+      else out('ret ' + w.res + ' ' + BigInt.asUintN(64, r).toString(16).padStart(16, '0') + ' ' + ms);
     } catch (e) {
-      const why = String(e && e.message || e).replace(/\s+/g, ' ');
       // a wasm exception (the module's throw) apart from a trap (unreachable, an integer divided by zero); a wasm
       // exception counts only under the module's one exported tag, its exception tag (A61E1)
-      if (e instanceof WebAssembly.Exception) {
-        const tags = WebAssembly.Module.exports(mi.mod).filter(x => x.kind === 'tag');
-        if (tags.length !== 1) process.stdout.write('err a wasm exception, and the module exports ' + tags.length + ' tags, not its one exception tag to match it against\n');
-        else if (!e.is(mi.inst.exports[tags[0].name])) process.stdout.write('err a wasm exception under another tag than the module\'s exported ' + tags[0].name + '\n');
-        else process.stdout.write('exc ' + why + '\n');
-      } else process.stdout.write((e instanceof WebAssembly.RuntimeError ? 'err trap: ' : 'err ') + why + '\n');
+      if (e instanceof WebAssembly.Exception && inst !== undefined) {
+        const tags = WebAssembly.Module.exports(m.mod).filter(x => x.kind === 'tag');
+        if (tags.length !== 1) out('err a wasm exception, and the module exports ' + tags.length + ' tags, not its one exception tag to match it against');
+        else if (!e.is(inst.exports[tags[0].name])) out('err a wasm exception under another tag than the module\'s exported ' + tags[0].name);
+        else out('exc ' + text(e));
+      } else out((e instanceof WebAssembly.RuntimeError ? 'err trap: ' : 'err ') + text(e));
     }
   }
 })();
 """
 
-"""
-    run_cases(cases) -> Vector{RunResult}
-
-Run every case, and each one's wasm-opt'd module, in one node process; compare each answer with
-native Julia's, `===`, and the two modules' answers with each other.
-"""
-# a part of the modules one node reads, in characters of its input: well under node's 0x1fffffe8 a string
+# a part of the calls one node reads, in characters of its input: well under node's 0x1fffffe8 a string
 const RUN_PART_CHARS = 200_000_000
 
-function run_cases(cases::AbstractVector{RunCase}; run_budget::Float64 = RUN_BUDGET, node_start::Float64 = NODE_START,
-                   part_chars::Int = RUN_PART_CHARS)::Vector{RunResult}
-    isempty(cases) && return RunResult[]
-    local results = Vector{Union{RunResult,Nothing}}(nothing, length(cases))
-    local lines = String[]
-    local sent = Tuple{Int,Bool}[]   # each line's case and whether it is the wasm-opt'd module
-    for (i, c) in enumerate(cases)
-        if !isempty(c.unread)
-            results[i] = RunResult(c.label, false, "the runner does not read it yet, $(c.unread)")
-            continue
+"""
+    run_lines(calls; run_budget, node_start, part_chars) -> Vector{String}
+
+Each call `(module base64, entry, wire arguments)` run in node, its raw line (test/verdict.jl's wire) in order. The calls
+go in parts, each read by a node of its own (node reads its input as one string, at most 0x1fffffe8 characters, and the
+whole corpus's base64 modules passed that on 2026-11-09), each module once a part. The budget is a call's (spec v18 P3,
+red round 15 2): node is killed when no line comes for `run_budget` seconds (`node_start` more for a node's first
+line), the call in flight answers `err … node killed: a hang`, and a new node runs the part's later calls, so one
+hanging module costs its own call alone, never a fixture or a later case.
+"""
+function run_lines(calls::AbstractVector; run_budget::Float64 = RUN_BUDGET, node_start::Float64 = NODE_START,
+                   part_chars::Int = RUN_PART_CHARS)::Vector{String}
+    isempty(calls) && return String[]
+    local node = node_binary()
+    node === nothing && return fill("err no node of the major .github/workflows/ci.yml names", length(calls))
+    local parts, lo, size, seen = UnitRange{Int}[], 1, 0, Set{String}()
+    for (k, (m, entry, args)) in enumerate(calls)
+        local cost = sizeof(entry) + sum(sizeof, args; init = 0) + 16
+        if k > lo && size + cost + (m in seen ? 0 : sizeof(m) + 16) > part_chars
+            push!(parts, lo:k-1); lo, size = k, 0; empty!(seen)
         end
-        local args = map(_wire, c.args)
-        local rt = _wire_answer(c.native)
-        if any(isnothing, args) || rt === nothing
-            local bad = Any[typeof(a) for (a, w) in zip(c.args, args) if w === nothing]
-            rt === nothing && push!(bad, typeof(c.native))
-            results[i] = RunResult(c.label, false, "the runner marshals no $(join(unique(bad), ", ")) yet (its marshalling is not ported)")
-            continue
-        end
-        if isempty(c.bytes)
-            results[i] = RunResult(c.label, false, "the runner reads a tuple's leaves for a case of at most 3 arguments, this one has $(length(c.args) - 1)")
-            continue
-        end
-        for (opt, bytes) in ((false, c.bytes), (true, c.optimized))
-            opt && isempty(bytes) && continue
-            push!(lines, join([Base64.base64encode(bytes), isempty(c.entry) ? "-" : c.entry, rt[1], ("$(t):$(v)" for (t, v) in args)...], ' '))
-            push!(sent, (i, opt))
+        size += cost + (m in seen ? 0 : sizeof(m) + 16); push!(seen, m)
+    end
+    push!(parts, lo:length(calls))
+    local dir = mktempdir()
+    local js = joinpath(dir, "run.js")
+    write(js, _JS)
+    local raw = Vector{String}(undef, length(calls))
+    for part in parts
+        local todo = collect(part)
+        while !isempty(todo)   # one node for the calls left; a kill or a crash ends its call alone
+            local inp = joinpath(dir, "calls.txt")
+            local ids = Dict{String,Int}()
+            open(inp, "w") do io
+                for k in todo
+                    local m = calls[k][1]
+                    haskey(ids, m) || (ids[m] = length(ids); println(io, "m ", ids[m], " ", m))
+                end
+                for k in todo
+                    local m, entry, args = calls[k]
+                    println(io, join(["c", ids[m], isempty(entry) ? "-" : entry, args...], ' '))
+                end
+            end
+            local out, err = Pipe(), IOBuffer()
+            local proc = run(pipeline(`$node $js $inp`; stdout = out, stderr = err); wait = false)
+            close(out.in)
+            local got, t_last = String[], Ref(time())
+            local reader = @async for l in eachline(out)
+                push!(got, l); t_last[] = time()
+            end
+            local killed, limit = false, run_budget + node_start
+            while process_running(proc)
+                sleep(0.02)
+                limit = run_budget + (isempty(got) ? node_start : 0.0)
+                if time() - t_last[] > limit
+                    killed = true; kill(proc); break
+                end
+            end
+            try wait(proc) catch end
+            wait(reader)
+            local n = min(length(got), length(todo))
+            for j in 1:n
+                raw[todo[j]] = got[j]
+            end
+            n == length(todo) && break
+            raw[todo[n+1]] = killed ? "err no answer within $(round(limit; digits = 2)) s, node killed: a hang or a blow-up" :
+                "err node gave no answer: " * replace(strip(String(take!(err))), r"\s+" => " ")
+            todo = todo[n+2:end]
         end
     end
-    if !isempty(sent)
-        local node = node_binary()
-        if node === nothing
-            for (i, _) in sent
-                results[i] = RunResult(cases[i].label, false, "no node of the major .github/workflows/ci.yml names")
-            end
-        else
-            local dir = mktempdir()
-            local js = joinpath(dir, "run.js")
-            write(js, _JS)
-            # the modules in parts, each read by a node of its own: node reads its input as one string, at most
-            # 0x1fffffe8 characters, and the whole corpus's base64 modules passed that on 2026-11-09 (every case
-            # read "node gave no answer: Cannot create a string longer than 0x1fffffe8")
-            local parts = UnitRange{Int}[]
-            local lo, size = 1, 0
-            for (k, l) in enumerate(lines)
-                if k > lo && size + sizeof(l) + 1 > part_chars
-                    push!(parts, lo:k-1); lo, size = k, 0
-                end
-                size += sizeof(l) + 1
-            end
-            isempty(lines) || push!(parts, lo:length(lines))
-            local answers = Vector{String}(undef, length(lines))
-            for (p, part) in enumerate(parts)
-                local inp = joinpath(dir, "cases-$p.txt")
-                write(inp, join(lines[part], '\n') * "\n")
-                local out = IOBuffer()
-                local err = IOBuffer()
-                local proc = run(pipeline(`$node $js $inp`; stdout = out, stderr = err); wait = false)
-                local limit = run_budget * length(part) + node_start
-                local killed = Ref(false)
-                local watchdog = Timer(_ -> (process_running(proc) && (killed[] = true; kill(proc))), limit)
-                wait(proc)
-                close(watchdog)
-                local got = split(String(take!(out)), '\n'; keepempty = false)
-                local stderr_text = strip(String(take!(err)))
-                for (j, k) in enumerate(part)
-                    answers[k] = j <= length(got) ? String(got[j]) :
-                        killed[] ? "err no answer within $(limit) s, node killed: a hang or a blow-up" : "err node gave no answer: $stderr_text"
-                end
-                rm(inp; force = true)
-            end
-            # each module's verdict: its answer read back, or why it has none
-            local verdicts = Dict{Tuple{Int,Bool},Tuple{Bool,Any,String}}()
-            for (k, (i, opt)) in enumerate(sent)
-                local c = cases[i]
-                local a = answers[k]
-                if startswith(a, "err ")
-                    verdicts[(i, opt)] = (false, nothing, String(a[5:end]) * (c.native isa Throws ? ", where native Julia throws $(c.native.type)" : ""))
-                elseif startswith(a, "exc ")
-                    # a wasm exception: native's answer when native throws, else the module's fault
-                    verdicts[(i, opt)] = c.native isa Throws ? (true, c.native, "") :
-                        (false, nothing, "throws a wasm exception ($(a[5:end])), where native Julia answers $(repr(c.native))")
-                elseif c.native isa Throws
-                    verdicts[(i, opt)] = (false, nothing, "returns, where native Julia throws $(c.native.type)")
-                else
-                    local ans, ms = split(a[4:end], ' ')
-                    local secs = parse(Float64, ms) / 1000
-                    verdicts[(i, opt)] = secs > run_budget ? (false, nothing, "ran $(round(secs; digits = 1)) s, past its $(run_budget) s budget") :
-                        (true, _unwire(typeof(c.native), ans), "")
-                end
-            end
-            for i in unique(first.(sent))
-                local c = cases[i]
-                local why = String[]
-                local answered = Any[]
-                for opt in (false, true)
-                    haskey(verdicts, (i, opt)) || continue
-                    local which = opt ? "the wasm-opt'd module" : "the module"
-                    local ok, got, w = verdicts[(i, opt)]
-                    if !ok
-                        push!(why, "$which: $w")
-                    else
-                        push!(answered, got)
-                        got === c.native || push!(why, "$which answers $(repr(got)), native Julia $(repr(c.native))")
-                    end
-                end
-                length(answered) == 2 && !(answered[1] === answered[2]) &&
-                    push!(why, "the module and the wasm-opt'd module differ: $(repr(answered[1])) against $(repr(answered[2]))")
-                results[i] = RunResult(c.label, isempty(why), join(why, "; "))
-            end
-            rm(dir; recursive = true, force = true)
-        end
-    end
-    return RunResult[r for r in results]
+    rm(dir; recursive = true, force = true)
+    return raw
 end
 
+"""
+    run_files(inputs) -> Vector{String}
+
+The run process's calls: each input's `call <label> <j> <entry> <args...>` records, in order, each of the j-th `module
+<label> <key> <base64>` record of its label before it in the same input; run (run_lines), one raw line a call. A call
+naming a module its input does not hold is its own `err` line, located."""
+function run_files(inputs::AbstractVector{<:AbstractString}; kw...)::Vector{String}
+    local calls, early = Tuple{String,String,Vector{String}}[], Dict{Int,String}()
+    local n = 0
+    for p in inputs
+        local mods = Dict{String,Vector{String}}()
+        for ln in eachline(p)
+            local f = split(ln, '\t')
+            if f[1] == "module" && length(f) >= 4
+                push!(get!(mods, String(f[2]), String[]), String(f[4]))
+            elseif f[1] == "call" && length(f) >= 4
+                n += 1
+                local ms, j = get(mods, String(f[2]), String[]), tryparse(Int, f[3])
+                if j === nothing || !(0 <= j < length(ms))
+                    early[n] = "err the call names module $(f[3]) of $(f[2]), which no module record before it holds"
+                else
+                    push!(calls, (ms[j+1], String(f[4]), String.(f[5:end])))
+                end
+            end
+        end
+    end
+    local ran = run_lines(calls; kw...)
+    local out, k = String[], 0
+    for i in 1:n
+        haskey(early, i) ? push!(out, early[i]) : push!(out, ran[k += 1])
+    end
+    return out
+end
+
+end
+
+abspath(PROGRAM_FILE) == (@__FILE__) && let opts = Dict{String,String}(), args = String[]
+    for a in ARGS   # `--name=value` options, then the out file and the inputs
+        local m = match(r"^--(run-budget|node-start|part-chars)=(.+)$", a)
+        if m !== nothing
+            opts[m[1]] = m[2]
+        elseif a == "--node"
+            print(something(WTRunner.node_binary(), "")); exit(0)
+        else
+            push!(args, a)
+        end
+    end
+    local kw = (; run_budget = parse(Float64, get(opts, "run-budget", string(WTVerdict.RUN_BUDGET))),
+                node_start = parse(Float64, get(opts, "node-start", string(WTRunner.NODE_START))),
+                part_chars = parse(Int, get(opts, "part-chars", string(WTRunner.RUN_PART_CHARS))))
+    local lines = WTRunner.run_files(args[2:end]; kw...)
+    write(args[1], join((l * "\n" for l in lines)))
 end

@@ -33,7 +33,7 @@ const DN = WasmTarget.Dart2Wasm
 entry(x::Int) = helper(x) + 1
 @noinline helper(x::Int) = 2x
 @testset "namer.dart: InteropMemberNamer, Julia's exports and no imports" begin
-    local world = WasmTarget.build_nir(WasmTarget.check_subset(entry, (Int,), "namer"), "namer")
+    local world = WasmTarget.build_nir(WasmTarget.check_subset(entry, (Int,), "namer", Base.get_world_counter()), "namer")
     local mi(f) = only(b.ci.def for b in world if b.ci.def.def.name === nameof(f))
     # the program's entry is its one export, strong, named by its function; no member is an import
     local exports = DN.Namer(; minify = true)

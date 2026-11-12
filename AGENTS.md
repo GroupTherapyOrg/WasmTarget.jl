@@ -39,7 +39,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D27** Spend no effort on downstream packages until the rebuild merges.
 - **D29** Redraw the project map after every landing, audit and red closure matrix.
 - **D30** Work in the plan's order: one source of truth and strict by construction come first.
-- **D31** Run one Julia at a time: dev/check.sh or your lane's session; never saturate the machine.
+- **D31** Run one Julia at a time; in the climb, a check with the climb's other Julia stopped.
 - **D32** WT compiles the strict subset Julia's verifier defines; outside it, a located rejection.
 - **D38** Each lock calls its own <name>_negatives_missed(), run by the ratchet stage in every gate.
 - **D39** Start a lane with bash dev/lane.sh start <name>; develop in its live Kaimon session.
@@ -51,14 +51,23 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D45** Build nothing bespoke: port a near 1:1 match (dart, LLVM, Julia's C), pinned and anchored.
 - **D46** A stub or rejection-only body is never complete; progress counts bodies only.
 - **D47** Climb the hill (dev/climb/HILL.md): one fresh agent, one move, a score the judge keeps.
-- **D48** Every agent runs on Opus; Fable only on an Opus escalation, at most twice a day.
+- **D48** Fable directs and decides; token-heavy work runs in spawned Opus or cheaper Claude agents.
 - **D49** Delete a replaced or stale rule outright; never keep it marked superseded.
+- **D50** In the climb, start no move while 4 approved commits wait to land.
+- **D51** At week-half the climb's lander lands on, spending no tokens; the pause ends at the reset.
+- **D52** A climb finding in a protected file waits in for-dale.md; the climb never waits on it.
+- **D53** Every agent, Kaimon and Julia job of the climb runs as a build user, never as Dale.
+- **D54** Climb agents use a setup-token in a file only Dale reads; a diff holding it is refused.
+- **D55** After v6: councils to no blocker, a 12-hour burn-in of 8 landings, then the final verdict.
+- **D56** While the climb runs, macOS installs nothing itself; a login notifies Dale to launch.
 <!-- ledger:end -->
 
 ## How to work
 
 - `dev/CHARTER.md` decides what done means. Start with `julia --project=. test/parity_ratchet.jl`:
   its last block is the per-clause status; choose work that closes an OPEN clause.
+- Inside the climb (dev/climb/HILL.md) the brief decides the step; a climb agent never runs
+  dev/ship.sh or dev/check.sh, and its clone has the commit hook its driver installed.
 - Three oracles, none a stand-in for another: dart2wasm at the commit `dev/PARITY_MASTER.md` pins
   (`898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e`) for structure, Julia for behavior, and
   native-vs-wasm differential execution for soundness.
@@ -77,7 +86,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 
 | Layer | Command |
 |---|---|
-| the landing check, about a minute, local | `bash dev/check.sh`; land with `bash dev/ship.sh` |
+| land: the lander checks it, about a minute | `python3 dev/climb/climb.py enqueue <ref> <title>` |
 | full matrix at clause closure (`Closes: C<n>`), #128's merge head, dispatch | `bash dev/gate.sh` |
 | CI, Formal models, Downstream: the same triggers, never a plain landing | `.github/workflows` |
 | locks, ratchets, the ledger, charter status | `julia --project=. test/parity_ratchet.jl` |
@@ -86,7 +95,8 @@ L206 generates this list from the ledger: every requirement an agent must honour
 | model checking | `bash dev/formal/run_tlc.sh` |
 | one QA family | `WT_QA_ONLY="<file>.jl" julia --project=. test/runtests.jl` |
 
-`bash dev/ship.sh` rebases a lane onto origin/wt2, runs `bash dev/check.sh` and pushes fast-forward;
+`climb.py enqueue` queues a commit; the lander alone rebases it onto origin/wt2, runs
+`bash dev/check.sh` on the test set it chose and lands it (dev/ship.sh, never run by hand);
 the full matrix runs only at clause closure (`bash dev/lanes.sh`, L153, L162).
 A pure restructuring is byte-identical on the probes; a semantic change is differential, its cases
 in smoke first; a new lock fires when broken before it counts; `WT_RATCHET_UPDATE=1` tightens one.

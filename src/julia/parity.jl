@@ -541,13 +541,16 @@ reads it (dev/fetch_julia.sh makes the checkout at ~/.cache/wasmtarget/julia).
 precedent(llvm: LLVM_FILES, the second oracle's pin table). Julia's differs: its runtime is C, so the
 ports of what Julia forces are anchored at the C that defines it, as the stackifier's are at LLVM's.
 """
-@quarantine unpinned "Julia's runtime is its own C and C++ sources, pinned at the julia WasmTarget runs, which src/julia ports" Core.String const JULIA_FILES::Tuple{Vararg{String}} = (
+@quarantine pin"precedent(julia: base/Base_compiler.jl:10 _included_files)" "Julia's runtime is its own C and C++ sources and its Base and compiler files, pinned at the julia WasmTarget runs, which src/julia ports, as Julia keeps a table of the source files it includes" Core.String const JULIA_FILES::Tuple{Vararg{String}} = (
     "julia/src/julia", "julia/src/genericmemory", "julia/src/builtins", "julia/src/cgutils",
     "julia/src/codegen", "julia/src/rtutils", "julia/src/jl_uv", "julia/src/ccall",
     "julia/base/genericmemory", "julia/base/array", "julia/Compiler/src/typeinfer", "julia/Compiler/src/types", "julia/base/hashing", "julia/base/expr", "julia/src/init", "julia/src/precompile", "julia/Compiler/src/effects",
     "julia/src/support/hashing", "julia/src/support/MurmurHash3", "julia/base/floatfuncs", "julia/base/experimental", "julia/base/float",
     "julia/Compiler/src/methodtable", "julia/Compiler/src/abstractinterpretation", "julia/src/method", "julia/Compiler/src/ssair/show", "julia/Compiler/src/verifytrim", "julia/src/gf", "julia/src/subtype",
     "julia/base/loading", "julia/base/stacktraces", "julia/base/libc", "julia/base/ryu/Ryu", "julia/base/docs/Docs",
+    "julia/base/essentials", "julia/base/runtime_internals", "julia/base/scopedvalues", "julia/base/Base_compiler",
+    "julia/Compiler/src/ssair/ir", "julia/base/show", "julia/base/reflection", "julia/base/errorshow", "julia/base/docs/utils",
+    "julia/base/dict",
 )
 
 """

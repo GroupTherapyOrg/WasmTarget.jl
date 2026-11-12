@@ -9,15 +9,34 @@
 #       (~/.config/kaimon/projects.json: enabled, 4 threads, no startup file; every other entry kept),
 #       and the call that starts its session printed
 #   bash dev/lane.sh stop <name>    # removes the worktree (git refuses a dirty one) and its project entry
+#   bash dev/lane.sh manifest <dir> # start's Manifest and preferences step alone, for a tree made another way (the
+#       climb's slot clones and measurement trees, dev/climb/climb.py)
 #
 # KAIMON_PROJECTS names another projects file (the lock's fixed cases use one).
 set -euo pipefail
-cmd=${1:?usage: dev/lane.sh start|stop|depot <name>}
+cmd=${1:?usage: dev/lane.sh start|stop|depot|manifest <name>}
+# the main tree: the repository whose .git every worktree shares
+MAIN=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+# the main tree's Manifest copied into $1 and, when it names other extensions than $1's project does (WT1's, after
+# A2c), resolved for $1's own Project.toml and checked again, or refused (dev/manifest_check.sh); and a git-excluded
+# LocalPreferences.toml turning WasmTarget's precompile workload off (a src edit reloads in seconds)
+# (the check is the copy beside this script, never the tree's own: a tree's dev/ can be a candidate's, red 1; the
+# resolve runs at background QoS, D31)
+HERE=$(cd "$(dirname "$0")" && pwd)
+manifest() {
+    # each file removed first, so a link planted at its name is never written through (council round 4, R3)
+    rm -f "$1/Manifest.toml" "$1/LocalPreferences.toml"
+    cp "$MAIN/Manifest.toml" "$1/Manifest.toml"
+    if ! bash "$HERE/manifest_check.sh" "$1" >/dev/null; then
+        (cd "$1" && taskpolicy -b julia --startup-file=no --project=. -e 'using Pkg; Pkg.resolve()')
+        mc=$(bash "$HERE/manifest_check.sh" "$1") || { echo "lane: $mc after Pkg.resolve() — refusing"; exit 1; }
+    fi
+    printf '[WasmTarget]\nprecompile_workload = false\n' > "$1/LocalPreferences.toml"
+}
+if [ "$cmd" = manifest ]; then manifest "${2:?usage: dev/lane.sh manifest <dir>}"; exit 0; fi
 name=${2:?usage: dev/lane.sh start|stop|depot <name>}
 case "$name" in */* | .* | "") echo "lane: a lane's name is one path component: $name — refusing"; exit 1 ;; esac
 MARCH=${WT_MARCH_BRANCH:-wt2}
-# the main tree: the repository whose .git every worktree shares
-MAIN=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 WT="$(dirname "$MAIN")/.worktrees/$name"
 PROJ=${KAIMON_PROJECTS:-$HOME/.config/kaimon/projects.json}
 # adds (add) or removes (remove) the worktree's entry in the projects file, keeping every other entry
@@ -44,14 +63,7 @@ start)
     [ ! -e "$WT" ] || { echo "lane: $WT exists — refusing"; exit 1; }
     git -C "$MAIN" fetch -q origin
     git -C "$MAIN" worktree add -q -b "$name" "$WT" "origin/$MARCH"
-    cp "$MAIN/Manifest.toml" "$WT/Manifest.toml"
-    # the main tree's Manifest can name another project's extensions (WT1's, after A2c): resolved for the
-    # lane's own Project.toml when dev/manifest_check.sh says so, and checked again, or the lane refuses
-    if ! bash "$WT/dev/manifest_check.sh" "$WT" >/dev/null; then
-        (cd "$WT" && julia --startup-file=no --project=. -e 'using Pkg; Pkg.resolve()')
-        mc=$(bash "$WT/dev/manifest_check.sh" "$WT") || { echo "lane: $mc after Pkg.resolve() — refusing"; exit 1; }
-    fi
-    printf '[WasmTarget]\nprecompile_workload = false\n' > "$WT/LocalPreferences.toml"
+    manifest "$WT"
     # the lane's Julia compiles into its private depot, its Kaimon session too (dev/depot.sh)
     JULIA_BIN=$(bash "$WT/dev/depot.sh" julia "$WT") projects add
     echo "lane: $WT on $name from origin/$MARCH $(git -C "$WT" rev-parse --short HEAD), a Kaimon project in $PROJ"

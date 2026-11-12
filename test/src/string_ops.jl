@@ -4,7 +4,7 @@
 # concatenation. Every case compiles and answers as native Julia, both modules: a case that rejects
 # or answers wrong fails, named.
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 module StringOpCases
 cu(i::Int64) = UInt32(codeunit("héllo", i))                          # the code unit at a byte index
@@ -55,15 +55,15 @@ const STRING_OP_CASES = (
     ("rng", StringOpCases.rng, (Int64(2),)), ("rng", StringOpCases.rng, (Int64(4),)), ("rng", StringOpCases.rng, (Int64(10),)))
 
 @testset "String's operations against native Julia" begin
-    local runs = Main.WTRunner.RunCase[]
+    local runs = Main.WTChild.RunCase[]
     for (name, f, args) in STRING_OP_CASES
         local label = "string_ops/$name$args"
         # every case compiles, both modules: a rejection is this case's located error, never a pass
         @testset "$label compiles" begin
-            append!(runs, first(Main.WTRunner.answer_cases(label, WasmTarget.compile, f, args)))
+            append!(runs, first(Main.WTChild.answer_cases(label, WasmTarget.compile, f, args)))
         end
     end
-    for r in Main.WTRunner.run_cases(runs)
+    for r in Main.WTChild.run_cases(runs)
         @test (r.label => r.why) == (r.label => "")
     end
 end
@@ -71,7 +71,7 @@ end
 # each String operation reaches dart:_wasm's array operations through src/patch/string.jl's overlays,
 # never Base's pointer forms: its closed world calls the operation on the String's data
 @testset "String's operations reach its data through the overlays" begin
-    local reached(f, T) = Set{Symbol}(Core.Compiler.get_ci_mi(x).def.name for x in WasmTarget.check_subset(f, T, "string_ops").codeinfos
+    local reached(f, T) = Set{Symbol}(Core.Compiler.get_ci_mi(x).def.name for x in WasmTarget.check_subset(f, T, "string_ops", Base.get_world_counter()).codeinfos
                                       if x isa Core.CodeInstance)
     @test :wasm_string_codeunit in reached(StringOpCases.cu, (Int64,))
     @test :wasm_string_length in reached(StringOpCases.lens, (Bool,))
@@ -90,7 +90,7 @@ end
 @testset "string(::Int) against native Julia" begin
     local bytes = WasmTarget.compile(StringOpCases.dec, (Int64,))
     local args = Int64[0, 7, -42, 1000, typemax(Int64), typemin(Int64)]
-    local results = Main.WTRunner.run_cases([Main.WTRunner.RunCase("dec($n)", bytes, (n,), Main.WTRunner.native_answer(StringOpCases.dec, (n,))) for n in args])
+    local results = Main.WTChild.run_cases([Main.WTChild.RunCase("dec($n)", bytes, (n,), Main.WTChild.native_answer(StringOpCases.dec, (n,))) for n in args])
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == length(args) && all(r -> r.ok, results)
 end

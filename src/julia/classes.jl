@@ -215,12 +215,12 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
                 # its object graph (_meet_constant!)
                 v isa NirConst && _meet_constant!(out, seen, objs, v.c.val, at)
                 v isa NirGlobal && (_meet_value!(out, seen, nir_value_type(b, v), at);
-                                    _meet_constant!(out, seen, objs, nir_binding_value(v.ref, at).c.val, at))
+                                    _meet_constant!(out, seen, objs, nir_binding_value(v.binding, at).c.val, at))
             end
             # a binding read as a statement of its own (Kernel's StaticGet) starts at its value, the
             # constant its lazy initializer instantiates (StaticFieldInitializerCodeGenerator): its
             # object graph, as an operand's; the statement's type is met with b.types
-            st isa NirGlobalRead && _meet_constant!(out, seen, objs, nir_binding_value(st.ref, at).c.val, at)
+            st isa NirGlobalRead && _meet_constant!(out, seen, objs, nir_binding_value(st.binding, at).c.val, at)
             # a tuple's class is its operands' (nir_tuple_type), which the statement's widened type
             # may hide; so is the tuple an invoke of a varargs specialization of an open count packs
             # (nir_vararg_call_tuple); one whose class only run time knows is the record of its arity
@@ -992,4 +992,155 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
         end
     end
     return out
+end
+
+"""
+    CompileStatics()
+
+The state dart2wasm keeps in statics, one compile's here (spec v16 X5, X8): `next_global_id`, dart's static
+_ConstantAccessor._nextGlobalId (constants.dart:2234), the count behind each constant's `C<id>` name; and the memories
+a compile's constants emit in part (_array_live_ref: each original Memory's live copy and the extent its Array defines)
+or whole, so one Memory is never both (_live_memory's rule, which dart has no counterpart of). Held by the compile's one
+_ConstantAccessor (Constants._constantAccessor, late: one a compile), the class whose static dart declares, and read
+through it as dart reads a static through its class, so the Translator's fields stay exactly dart's. Julia differs:
+dart2wasm compiles one program a process, so a static is that program's; Julia compiles many a process (a test file,
+the climb's compiling process), so a compile's state lives in the object doing the compile, as Julia's own compiler
+keeps an inference session's results in its NativeInterpreter (inf_cache), never in a module global.
+"""
+@quarantine pin"precedent(julia: Compiler/src/types.jl:380 NativeInterpreter)" "a compile's state is held by the object doing the compile, as Julia's NativeInterpreter holds its session's inf_cache, never a global" Base.IdSet struct CompileStatics
+    next_global_id::Base.RefValue{Int}
+    live_memories::IdDict{GenericMemory,Tuple{GenericMemory,UnitRange{Int}}}
+    whole_memories::Base.IdSet{GenericMemory}
+    CompileStatics() = new(Ref(0), IdDict{GenericMemory,Tuple{GenericMemory,UnitRange{Int}}}(), Base.IdSet{GenericMemory}())
+end
+
+"""
+    _live_memory(m, live, what, at) -> Memory
+
+A constant's memory `m` as its owner defines it (spec v16 X5), the one rule every owner's memory goes through: each
+element `live(i)` marks holds its element; every other holds no defined element, so it is #undef (a boxed element type:
+the null), the all-zero bits (an isbits one) or a singleton's one value (a type that stores no bytes), never the bytes
+Julia left there (host heap bytes, a popped element's, addresses among them, different in each process: a module would
+carry process state). An isbits element type whose zero bits are no value of it (one with padding, an isbits union) is
+refused, located, when an element is not live. The owners, each one function: a Dict's keys and vals, the slots
+`isslotfilled` marks (_dict_live_memory); an Array's memory, its size's elements from its ref's offset
+(_array_live_memory); a Set, its Dict's; a Memory reached bare, through a MemoryRef or in any other struct's field, its
+own owner: every element (src/constants.jl's Memory branch, which refuses one Memory both whole and in part). Julia
+differs: its image writer (src/staticdata.c jl_write_values) copies an isbits memory's bytes as they are, resetting only
+Ptr elements to C_NULL.
+"""
+@quarantine pin"precedent(julia: base/genericmemory.jl:78 _unsetindex!)" "an element its owner leaves undefined holds no value of Julia's (_unsetindex! leaves an isbits element's bytes as they were), so it is emitted as no value, never as those bytes" Base.isbitsunion function _live_memory(m::Memory{T}, live, what::String, at::String)::Memory{T} where {T}
+    local out = Memory{T}(undef, length(m))
+    if !all(live, eachindex(m))
+        if isbitstype(T) && Base.issingletontype(T)
+            fill!(out, T.instance)   # a singleton's one value, its element in every slot (a Set's Dict{T,Nothing})
+        elseif isbitstype(T)
+            local z = try
+                only(reinterpret(T, zeros(UInt8, sizeof(T))))
+            catch e
+                reject!(ProgramError("$at: $what whose element type $T has no all-zero value ($(sprint(showerror, e))): its undefined elements have no value to emit; build it in the function"), at)
+            end
+            fill!(out, z)
+        elseif Base.isbitsunion(T)
+            reject!(ProgramError("$at: $what whose element type $T is an isbits union: its undefined elements have no value to emit; build it in the function"), at)
+        end
+    end
+    for i in eachindex(m)
+        live(i) && isassigned(m, i) && (out[i] = m[i])
+    end
+    return out
+end
+"""
+    _dict_live_memory(d, m, at) -> Memory
+
+A Dict constant's `keys` or `vals` memory `m` as Julia defines it (spec v15 W3): each slot `Base.isslotfilled` marks
+(base/dict.jl:134, the slot byte's high bit, the one record of which elements are live; Julia's own serializer writes
+a Dict as those slots' pairs alone, Serialization's serialize_dict_data) holds its element, every other none
+(_live_memory). A Set is its Dict.
+"""
+@quarantine pin"precedent(julia: base/dict.jl:682 skip_deleted)" "a Dict's live elements are the slots isslotfilled marks (dict.jl:134), the ones Julia's own iteration visits (skip_deleted) and its serializer writes" Base.isslotfilled function _dict_live_memory(d::Dict, m::Memory{T}, at::String)::Memory{T} where {T}
+    return _live_memory(m, i -> Base.isslotfilled(d, i), "a Dict constant", at)
+end
+"""
+    _array_live_memory(a, at) -> (Memory, live extent)
+
+An Array constant's memory as Julia defines it (spec v16 X5): its `size`'s elements (array.jl:194), from its ref's
+offset (memoryrefoffset) on, hold theirs; the rest of the memory holds none (_live_memory): a capacity tail `sizehint!`
+reserved, or the bytes `pop!`/`_deleteend!` (array.jl:1226) leave as they were for an isbits element.
+"""
+@quarantine pin"precedent(julia: base/array.jl:1226 _deleteend!)" "an Array's value is its size's elements from its ref's offset; _deleteend! leaves the elements past them undefined (an isbits element's bytes as they were)" Base.memoryrefoffset function _array_live_memory(a::Array, at::String)
+    local ref = getfield(a, :ref)
+    local live = Base.memoryrefoffset(ref):(Base.memoryrefoffset(ref) + length(a) - 1)
+    return (_live_memory(ref.mem, in(live), "an Array constant", at), live)
+end
+"""
+    _array_live_ref(statics, a, at) -> MemoryRef
+
+An Array constant's `ref` field as the module holds it (spec v16 X5): its ref unchanged when its size covers its whole
+memory; else a ref, at the same offset, into its memory's live copy (_array_live_memory), one copy a Memory a compile
+(statics.live_memories, CompileStatics), so two Arrays sharing a Memory share its copy. A Memory two Arrays define differently, or one
+held both whole and by an Array that defines part of it, is refused, located: one constant cannot hold both.
+"""
+@quarantine pin"precedent(julia: base/array.jl:1226 _deleteend!)" "an Array's value is its size's elements from its ref's offset, the module's ref points into a memory holding exactly those" Base.memoryrefoffset function _array_live_ref(statics::CompileStatics, a::Array, at::String)
+    local ref = getfield(a, :ref)
+    local m, off = ref.mem, Base.memoryrefoffset(ref)
+    local live = off:(off + length(a) - 1)
+    live == eachindex(m) && return ref   # every element of its memory is the Array's: nothing to leave out
+    m in statics.whole_memories &&
+        reject!(ProgramError("$at: a Memory constant held whole and by an Array that defines part of it (its size): one constant cannot hold both; build the Array in the function"), at)
+    local seen = get!(() -> _array_live_memory(a, at), statics.live_memories, m)
+    seen[2] == live || reject!(ProgramError("$at: a Memory held by two Array constants of different sizes ($(seen[2]) and $live of it): one constant cannot hold each one's elements; build the Arrays in the function"), at)
+    return Core.memoryrefnew(Core.memoryrefnew(seen[1]), off, false)
+end
+
+# an Array's `ref` and a Dict's `keys` and `vals`, as MEMORY_OWNERS dispatches them: the memory each defines, recorded
+# as defined by its owner (statics.live_memories, the memory itself its own live copy when its owner defines all of it)
+@quarantine pin"precedent(julia: base/array.jl:194 size)" "an Array's whole memory is its size's elements when its size covers it, its owner's definition of each element" Base.eachindex function _array_owned(statics::CompileStatics, a::Array, at::String)
+    local ref = _array_live_ref(statics, a, at)
+    ref.mem === getfield(a, :ref).mem && get!(statics.live_memories, ref.mem, (ref.mem, eachindex(ref.mem)))
+    return ref
+end
+@quarantine pin"precedent(julia: base/dict.jl:682 skip_deleted)" "a Dict's keys and vals are its filled slots' elements, its owner's definition of each" Base.eachindex function _dict_owned(statics::CompileStatics, d::Dict, name::String, at::String)
+    local m = _dict_live_memory(d, getfield(d, Symbol(name)), at)
+    statics.live_memories[m] = (m, eachindex(m))
+    return m
+end
+# a Dict's `slots`: every byte is the Dict's (its constructor, rehash! and empty! fill the memory with 0x0, then each
+# slot's byte marks it empty, filled or deleted), so the memory is held whole, its owner defining each element
+@quarantine pin"precedent(julia: base/dict.jl:220 empty!)" "a Dict's slots are each a byte its Dict wrote: empty! and the constructor fill them with 0x0, a set slot's byte marks it" Base.eachindex function _dict_slots_owned(statics::CompileStatics, d::Dict, name::String, at::String)
+    local m = getfield(d, :slots)
+    get!(statics.live_memories, m, (m, eachindex(m)))
+    return m
+end
+"""
+    MEMORY_OWNERS
+
+The owners of a constant's memory (spec v17 Y6), the one table: each a type, a field of it whose memory it defines,
+and the function that gives that memory with its live elements alone, each pinned to Julia's own definition (an
+Array's size from its ref's offset, _array_owned; a Dict's filled slots, _dict_owned, and its `slots` bytes, every
+one its Dict's, _dict_slots_owned; a Set is its Dict). A constant
+reaches an isbits memory through no owner here (a bare Memory{T}(undef, n), IOBuffer's `data`, a MemoryRef, any other
+struct's field) only as a refusal, located (_unowned_memory): Julia records nowhere which of its elements a write
+defined, so its bytes are no value to emit. A boxed element type keeps #undef as the null. Julia differs: its image
+writer (src/staticdata.c jl_write_values) copies such bytes as they are.
+"""
+@quarantine pin"precedent(julia: base/array.jl:194 size)" "a memory's live elements are its owner's to define; Julia keeps no other record of them" Base.Dict const MEMORY_OWNERS =
+    ((Array, "ref", (s, v, f, at) -> _array_owned(s, v, at)), (Dict, "keys", _dict_owned), (Dict, "vals", _dict_owned),
+     (Dict, "slots", _dict_slots_owned))
+"""    memory_owner(v, name) -> the owner's function, or nothing (MEMORY_OWNERS)"""
+@quarantine pin"precedent(julia: base/array.jl:194 size)" "MEMORY_OWNERS read: the owner of a constant's field, the one dispatch" Core.isa function memory_owner(v, name::String)
+    for (T, f, g) in MEMORY_OWNERS
+        v isa T && name == f && return g
+    end
+    return nothing
+end
+"""    _unowned_memory(m, at)
+
+A memory a constant holds whole, refused when its elements are isbits bytes no owner defines (MEMORY_OWNERS), located;
+an empty one, or one of a singleton or boxed element type (#undef the null), is held whole."""
+@quarantine pin"precedent(julia: base/genericmemory.jl:78 _unsetindex!)" "an isbits memory's undefined elements are bytes no write defined, which Julia records nowhere outside an owner" Base.isbitsunion function _unowned_memory(m::GenericMemory{K,T}, at::String) where {K,T}
+    isempty(m) && return nothing
+    (isbitstype(T) && !Base.issingletontype(T) || Base.isbitsunion(T)) &&
+        reject!(ProgramError("$at: an isbits Memory{$T} constant reached through no owner MEMORY_OWNERS lists (a bare Memory, a MemoryRef, IOBuffer's data, another struct's field): Julia records nowhere which of its elements a write defined, so its bytes are no value to emit; build it in the function, or hold it in an Array"), at)
+    return nothing
 end

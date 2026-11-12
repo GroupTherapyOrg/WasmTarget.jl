@@ -16,7 +16,7 @@ copies(mf) = [(b, (mi.operands[1]::W.MOImm).imm, (mi.operands[2]::W.MOImm).imm)
     # %1 branches to %3 or falls to %2, which jumps to %3: the phi at %3 takes 10 from %1, 20 from %2
     local diamond = Any[Core.GotoIfNot(Core.Argument(2), 3), Core.GotoNode(3),
                         Core.PhiNode(Int32[1, 2], Any[10, 20]), Core.ReturnNode(Core.SSAValue(3))]
-    local stmts, cfg, h = W.nir_code(diamond, zeros(UInt32, length(diamond)), "diamond")
+    local stmts, cfg, h = W.nir_code(diamond, zeros(UInt32, length(diamond)), W.NirBindings(Base.get_world_counter()), "diamond")
     local mf = W.machine_function(stmts, cfg, h, "diamond")
     @test L.eliminate_phi_nodes(mf, cfg)
     # Julia's block k is machine block k + 1: the copy of edge 1 in block 2, of edge 2 in block 3
@@ -25,14 +25,14 @@ copies(mf) = [(b, (mi.operands[1]::W.MOImm).imm, (mi.operands[2]::W.MOImm).imm)
     # UnreachableMachineBlockElim removes it
     local dead = Any[Core.GotoNode(3), Core.ReturnNode(1),
                      Core.PhiNode(Int32[1, 2], Any[10, 20]), Core.ReturnNode(Core.SSAValue(3))]
-    local dstmts, dcfg, dh = W.nir_code(dead, zeros(UInt32, length(dead)), "dead")
+    local dstmts, dcfg, dh = W.nir_code(dead, zeros(UInt32, length(dead)), W.NirBindings(Base.get_world_counter()), "dead")
     local mfd = W.machine_function(dstmts, dcfg, dh, "dead")
     L.eliminate_phi_nodes(mfd, dcfg)
     @test copies(mfd) == [(2, 3, 1)]
     # an edge from a reachable block that is no predecessor (%2 returns) is WasmTarget's own defect
     local stray = Any[Core.GotoIfNot(Core.Argument(2), 3), Core.ReturnNode(1),
                       Core.PhiNode(Int32[1, 2], Any[10, 20]), Core.ReturnNode(Core.SSAValue(3))]
-    local sstmts, scfg, sh = W.nir_code(stray, zeros(UInt32, length(stray)), "stray")
+    local sstmts, scfg, sh = W.nir_code(stray, zeros(UInt32, length(stray)), W.NirBindings(Base.get_world_counter()), "stray")
     local mfs = W.machine_function(sstmts, scfg, sh, "stray")
     local e = try; L.eliminate_phi_nodes(mfs, scfg); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal && occursin("no predecessor of block", e.rejection.site) &&

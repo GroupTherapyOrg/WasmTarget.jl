@@ -16,8 +16,8 @@ isdefined(Main, :_wt_cpu_seconds) || Base.include(Main, joinpath(@__DIR__, "inst
 # the precedent and how WT differs): the next attempt fails each killed case by name without compiling it again.
 # Each limit is judged by CPU seconds, never the wall clock, which at background QoS measured the scheduler: a shard ran
 # at 20 to 36% of an efficiency core beside the lanes (6732d4a6: CPU-s 243 to 434 in its 1200-s run), so a wall limit
-# killed starvation as a hang. The figures: a case's and the warm-up's, the julia process's CPU time as `ps -o time=`
-# reports it, read by the watchdog four times a second; a shard's in dev/corpus.sh, its finished attempts' children's time
+# killed starvation as a hang. The figures: a case's and the warm-up's, the julia process's CPU time (the watchdog's
+# `cpu`, read four times a second); a shard's in dev/corpus.sh, its finished attempts' children's time
 # from bash's `times` in dev/corpus_shard.sh, plus its live processes' from ps. The numbers are as they were in wall
 # seconds, now CPU seconds. A wall backstop stands only against a true hang, a process that accrues no CPU: each one
 # is its CPU limit over 0.2, the lowest share measured (shard 2 on 6732d4a6, 243 CPU-s in 1200 s of wall), so at that
@@ -34,9 +34,14 @@ Base.exit_on_sigint(false)
 struct _DartPastLimit
     why::String
 end
+# The watchdog's one reading, `cpu`: process $_[0]'s user and system CPU seconds, undef once it is gone, from
+# dev/cpu_seconds.pl, the one CPU reader (the kernel's rusage of the process on macOS: read there why `ps -o time=`
+# reads 0 under the climb's door), which dev/corpus.sh's shards read too
+const _CPU_PL = joinpath(dirname(@__DIR__), "dev", "cpu_seconds.pl")
 const _DART_WATCHDOG = raw"""
 my ($limit, $wall, $grace, $pid, $what, $killed) = @ARGV;
-sub cpu { my $t = `ps -o time= -p $_[0]`; $t =~ s/\s//g; return undef if $t eq ''; my $s = 0; $s = $s * 60 + $_ for split(/:/, $t); return $s; }
+$main::WHO = "dart_tests.jl: the watchdog of $what";
+do $ENV{WT_CPU_PL} or die "dart_tests.jl: the CPU reader $ENV{WT_CPU_PL}: " . ($@ || $!) . "\n";
 my ($c0, $t0, $why) = (cpu($pid), time, '');
 defined($c0) or exit 0;
 while (1) {
@@ -60,7 +65,7 @@ function _dart_limited(@nospecialize(f::Function), what::String; limit::Real = D
     # past `limit` CPU-s or `wall` s: SIGINT, then once a second for `grace` seconds; then the case named on stderr and
     # the process killed
     local c0, t0 = _wt_cpu_seconds(), time()
-    local dog = run(pipeline(`perl -e $(_DART_WATCHDOG) $limit $wall $grace $(getpid()) $what $(_DART_KILLED_FILE)`; stdout = devnull, stderr = stderr); wait = false)
+    local dog = run(pipeline(addenv(`perl -e $(_DART_WATCHDOG) $limit $wall $grace $(getpid()) $what $(_DART_KILLED_FILE)`, "WT_CPU_PL" => _CPU_PL); stdout = devnull, stderr = stderr); wait = false)
     try
         return f()   # a dynamic call: `f` is inferred and compiled here, in the watchdog's time
     catch e

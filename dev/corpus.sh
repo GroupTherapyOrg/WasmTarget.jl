@@ -14,6 +14,7 @@
 set -uo pipefail
 MARCH=wt2
 cd "$(dirname "$0")/.."
+cpu_pl="$(pwd)/dev/cpu_seconds.pl"   # the one CPU reader (test/dart_limit.jl's too)
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 scratch="$common/wt-corpus"   # kept between runs: its private depot stays warm
 tsv="$common/wt-corpus.tsv"; out="$common/wt-corpus.out"
@@ -69,11 +70,11 @@ run_head() {
     # a shard's whole process tree, read before any of it is signalled (a child whose parent died is no longer its child)
     treepids() { local c; echo "$1"; for c in $(pgrep -P "$1"); do treepids "$c"; done; }
     # shard k's CPU seconds so far: its finished attempts' (dev/corpus_shard.sh's `times`, in its state dir) and its live
-    # processes' (ps); /usr/bin/time writes nothing for a process killed under it, so a hung run's CPU-s are read here
+    # processes' (dev/cpu_seconds.pl, the one CPU reader: the kernel's rusage, which a build user reads where its `ps -o
+    # time=` reads 0); /usr/bin/time writes nothing for a process killed under it, so a hung run's CPU-s are read here
     shard_cpu() {
       local done; done=$(cat "$scratch/.wtd/shard.$1/cpu" 2>/dev/null || echo 0)
-      ps -o time= -p "$(treepids "$2" | tr '\n' ',' | sed 's/,$//')" 2>/dev/null |
-        awk -F: -v d="$done" '{ s = 0; for (i = 1; i <= NF; i++) s = s * 60 + $i; t += s } END { printf "%d\n", t + d }'
+      echo $(( $(perl "$cpu_pl" $(treepids "$2")) + done ))
     }
     s0=$(date +%s)
     alive() { for p in $jpids; do kill -0 $p 2>/dev/null && return 0; done; return 1; }

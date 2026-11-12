@@ -35,7 +35,7 @@ _pinfo(pos, named = Pair{String,Any}[]) = DP.ParameterInfo__(true, 0, Union{Noth
 @testset "param_info.dart: a local function, and merging an override group" begin
     # a closure: its specialization's arguments after the callee, all required, its context taken
     local clo = ParamCases.make(2)
-    local world = WasmTarget.build_nir(WasmTarget.check_subset(clo, (Int,), "param_info"), "param_info")
+    local world = WasmTarget.build_nir(WasmTarget.check_subset(clo, (Int,), "param_info", Base.get_world_counter()), "param_info")
     local body = only(b for b in world if b.ci.def.specTypes == Tuple{typeof(clo),Int})
     local pl = DP.ParameterInfo_from_local_function(body)
     @test pl.takes_context_or_receiver && pl.type_param_count == 0 && pl.positional == [nothing] && isempty(pl.named)

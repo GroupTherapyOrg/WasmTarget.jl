@@ -28,10 +28,10 @@ end
 
 @testset "translator.dart: the Translator, its queue and writeULEB128" begin
     local W = WasmTarget
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(standalone = true))
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(standalone = true))
     # the program is the closed world's NIR, the entry's body among it
     @test t.component isa W.NirWorld && !isempty(t.component.bodies)
-    @test D.is_standalone(t) && !D.is_standalone(D.Translator(WasmTarget.build_nir(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions()))
+    @test D.is_standalone(t) && !D.is_standalone(D.Translator(WasmTarget.build_nir(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions()))
     # a translator comes from a NirWorld alone, the typestate build_nir makes from a ClosedWorld, never
     # from loose NIR bodies (audit M2)
     @test all(m -> any(p -> p === W.NirWorld, Base.unwrap_unionall(m.sig).parameters), methods(D.Translator))
@@ -56,7 +56,7 @@ end
 
 @testset "translator.dart: translateStorageType's located rejections" begin
     local W = WasmTarget
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     # a UnionAll and a type as a value of a type Julia left open are no class: located rejections,
     # before any wasm type is made
     for ty in (Vector, AbstractVector{<:Integer})
@@ -87,7 +87,7 @@ end
 @testset "translator.dart: translateType over a class table" begin
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TypeCases.f_shapes, (Int,), "translator"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TypeCases.f_shapes, (Int,), "translator", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     # the builtin types: Julia's primitive classes with a wasm representation
     for (T, w) in ((Bool, IR.NumType_i32), (Int32, IR.NumType_i32), (UInt32, IR.NumType_i32), (Char, IR.NumType_i32),
                    (Int64, IR.NumType_i64), (UInt64, IR.NumType_i64), (Float32, IR.NumType_f32), (Float64, IR.NumType_f64))
@@ -170,7 +170,7 @@ end
 @testset "translator.dart: translateType keeps a Union's values exact" begin
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TypeCases.f_shapes, (Int,), "translator"), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(TypeCases.f_shapes, (Int,), "translator", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     local top = D.ClassInfo(nothing, 0, 0, IR.StructType("#Top"), nothing)
     local anyi = D.ClassInfo(Any, 6, 1, IR.StructType("Any"; super_type = top.struct_), top)
     local real = D.ClassInfo(Real, 5, 3, anyi.struct_, anyi)
@@ -221,7 +221,7 @@ end
     @test D.main_module(data).module_import_name == "M" && D.main_module(data).module_name == "prog.wasm"
     @test sprint(show, D.main_module(data)) == "M"
     @test D.WasmCompilerOptions_module_name_for_id("out/prog.wasm", 3) == "prog_module3.wasm"
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ModuleCases.shapes, (Int,), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ModuleCases.shapes, (Int,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     local e = try; D.main_module(t); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
     D._init_modules(t, nothing)
@@ -260,7 +260,7 @@ end
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ModuleCases.shapes, (Int,), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ModuleCases.shapes, (Int,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     local mi = Core.Compiler.specialize_method(Base._which(Base.signature_type(ModuleCases.shapes, (Int,))))
@@ -389,7 +389,7 @@ end
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local world = W.check_subset(CCallableCases.entry, (Int32,), "translator")
+    local world = W.check_subset(CCallableCases.entry, (Int32,), "translator", Base.get_world_counter())
     local t = D.Translator(W.build_nir(world, "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
@@ -419,7 +419,7 @@ end
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.f, (Int32,), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.f, (Int32,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     local mi = only(b.ci.def for b in t.component if b.ci.def.def.name === :f)
@@ -442,7 +442,7 @@ end
     local q = t.compilation_queue[]
     @test length(q._pending) == 1 && only(q._pending) isa D.AstCompilationTask && only(q._pending).reference === mi
     # a member returning nothing or an Int: not a null-only return, so it returns its nullable box
-    local t2 = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.nothing_or, (Int,), "translator"), "test"), data, D.TranslatorOptions())
+    local t2 = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.nothing_or, (Int,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t2, nothing)
     collect(D.ClassInfoCollector(t2))
     local mi2 = only(b.ci.def for b in t2.component if b.ci.def.def.name === :nothing_or)
@@ -454,13 +454,15 @@ end
 module GlobalCases
 typed_global::Int32 = Int32(3)
 untyped_global = 4
+# a program reading both, so its closed world holds each binding (NirBinding)
+reads(x::Int32) = typed_global + x + Int32(untyped_global::Int)
 end
 
 @testset "translator.dart: the collaborators, the importers and a static field's type" begin
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.f, (Int32,), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.f, (Int32,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     # the constructor's body builds each ported collaborator over the translator
     @test t.class_info_collector[].translator === t && t.types[] isa D.Types && t.closure_layouter[] isa D.ClosureLayouter
     @test t.cross_module_function_table[].translator === t && t.table_based_globals[] isa D.TableBasedGlobals
@@ -472,10 +474,15 @@ end
     local wt = D.get_wasm_table(table, m)
     @test wt === table._defined_wasm_table[] && wt.enclosing_module === m.module_ && !D.has(table._imported_wasm_tables, wt)
     @test isempty(D.imports(table._imported_wasm_tables))
-    # a static field is a global binding, its type the binding's declared one
-    @test D.type_of_field(t, GlobalRef(GlobalCases, :typed_global)) === Int32 === Core.get_binding_type(GlobalCases, :typed_global)
-    @test D.translate_type_of_field(t, GlobalRef(GlobalCases, :typed_global)) == IR.NumType_i32
-    @test D.type_of_field(t, GlobalRef(GlobalCases, :untyped_global)) === Any
+    # a static field is a global binding, its type the binding's declared one, as the closed world reading it holds it
+    local tg = D.Translator(WasmTarget.build_nir(W.check_subset(GlobalCases.reads, (Int32,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
+    D._init_modules(tg, nothing)
+    @test D.type_of_field(tg, GlobalRef(GlobalCases, :typed_global)) === Int32 === Core.get_binding_type(GlobalCases, :typed_global)
+    @test D.translate_type_of_field(tg, GlobalRef(GlobalCases, :typed_global)) == IR.NumType_i32
+    @test D.type_of_field(tg, GlobalRef(GlobalCases, :untyped_global)) === Any
+    # one no body of the closed world names is WasmTarget's own defect, located
+    local e = try; D.type_of_field(t, GlobalRef(GlobalCases, :typed_global)); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
 end
 
 module UndefCases
@@ -487,7 +494,7 @@ end
     local W = WasmTarget
     local IR = W.WasmBuilder.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(UndefCases.mk, (), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(UndefCases.mk, (), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     # Julia's own answer: new() assigns none of M's fields, and `a` is then undefined
@@ -506,7 +513,7 @@ end
     local B = W.WasmBuilder
     local IR = B.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.f, (Int32,), "translator"), "test"), data, D.TranslatorOptions(print_kernel = true))
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(FirstCases.f, (Int32,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions(print_kernel = true))
     # printKernel: each member's header, function type, signature and its NIR statements, printed
     local mods, printed = mktemp() do path, io
         local m = redirect_stdout(() -> D.translate(t, nothing), io)
@@ -534,7 +541,7 @@ end
     local B = W.WasmBuilder
     local IR = B.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ModuleCases.shapes, (Int,), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ModuleCases.shapes, (Int,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     # one array type per element storage type and mutability, its element the storage type
@@ -581,7 +588,7 @@ end
     # DummyValuesCollector declares 5 (translator.dart:3832 to :3841), each held
     @test fieldcount(D.DummyValuesCollector) == 5
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ModuleCases.shapes, (Int,), "translator"), "test"), data, D.TranslatorOptions(optimization_level = 2))
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(ModuleCases.shapes, (Int,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions(optimization_level = 2))
     @test all(i -> isdefined(t, i), 1:fieldcount(D.Translator))
     # the initializer list: the symbols minified as the options say
     @test t.symbols isa D.Symbols && t.symbols.minify == D.minify(t.options) == true
@@ -645,7 +652,7 @@ end
 
 @testset "subset.jl, nir.jl: the closed world carries its entry" begin
     local W = WasmTarget
-    local w = W.check_subset(FirstCases.f, (Int32,), "translator")
+    local w = W.check_subset(FirstCases.f, (Int32,), "translator", Base.get_world_counter())
     local nir = W.build_nir(w, "translator")
     # the entry is the MethodInstance Julia's trim inference was asked for, carried, not positional
     @test w.entry === nir.entry && nir.entry.def === which(FirstCases.f, (Int32,))
@@ -661,7 +668,7 @@ end
 @testset "translator.dart: the inlining decision, Julia's" begin
     local W = WasmTarget
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(W.check_subset(InlineCases.g, (Int,), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(W.check_subset(InlineCases.g, (Int,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     local mi(f, T) = Core.Compiler.specialize_method(Base._which(Base.signature_type(f, T)))
@@ -671,7 +678,7 @@ end
     @test !D.should_inline(t, h, sig).should_inline && D.should_inline(t, h, sig).reason == "@noinline"
     @test D.should_inline(t, mi(InlineCases.k, (Int,)), sig).should_inline
     @test !D.should_inline(t, t.component.entry, sig).should_inline
-    @test !D.should_inline(D.Translator(WasmTarget.build_nir(W.check_subset(InlineCases.g, (Int,), "t"), "test"), data, D.TranslatorOptions(inlining_override = false)), h, sig).should_inline
+    @test !D.should_inline(D.Translator(WasmTarget.build_nir(W.check_subset(InlineCases.g, (Int,), "t", Base.get_world_counter()), "test"), data, D.TranslatorOptions(inlining_override = false)), h, sig).should_inline
     # a member being generated is not inlined into itself
     @test D.supports_inlining(t, h)
     push!(t.members_being_generated, h)
@@ -707,7 +714,7 @@ end
 @testset "translator.dart: preciseThisFor, a closure's `this` its struct" begin
     local W = WasmTarget
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.entry, (Int,), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.entry, (Int,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     # the closure's method: its callee, Argument(1), is the closure, of Julia's typeof(closure)
@@ -723,7 +730,7 @@ end
 @testset "translator.dart: preciseThisFor, a constructor has no `this`: its Type{C} callee is a constant Julia never passes" begin
     local W = WasmTarget
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.make_objs, (Int,), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.make_objs, (Int,), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     # Box{String}(::Int64) and Plain(): the callee is the type object, which Julia's codegen passes as a
@@ -739,7 +746,7 @@ end
 @testset "translator.dart: preciseThisFor, a promoted primitive class's `this` is primitive_value_type's register, its box its own class" begin
     local W = WasmTarget
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.call_p, (Int, Int), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(W.build_nir(W.check_subset(ClosureThisCases.call_p, (Int, Int), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(D.ClassInfoCollector(t))
     local P = ClosureThisCases.CallP64
@@ -764,15 +771,15 @@ unboxed_plus_one(n::Int64) = (c = Cell(nothing); put_value!(c, n); v = get_value
 @noinline put_byte!(c::Cell, v::UInt8) = (c.v = v; nothing)
 unboxed_byte_plus_one(n::Int64) = (c = Cell(nothing); put_byte!(c, n % UInt8); v = get_value(c); v isa UInt8 ? Int64(v) + 1 : Int64(0))
 end
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
 
 @testset "translator.dart: convertType boxes a value as its Julia class and unboxes it as the narrowed one" begin
-    local cases = Main.WTRunner.RunCase[]
+    local cases = Main.WTChild.RunCase[]
     for f in (BoxCases.boxed_is_int, BoxCases.unboxed_plus_one)
-        append!(cases, first(Main.WTRunner.answer_cases(string(nameof(f)), WasmTarget.compile, f, (Int64(5),))))
+        append!(cases, first(Main.WTChild.answer_cases(string(nameof(f)), WasmTarget.compile, f, (Int64(5),))))
     end
-    append!(cases, first(Main.WTRunner.answer_cases("unboxed_byte_plus_one", WasmTarget.compile, BoxCases.unboxed_byte_plus_one, (Int64(200),))))
-    local results = Main.WTRunner.run_cases(cases)
+    append!(cases, first(Main.WTChild.answer_cases("unboxed_byte_plus_one", WasmTarget.compile, BoxCases.unboxed_byte_plus_one, (Int64(200),))))
+    local results = Main.WTChild.run_cases(cases)
     for r in results
         @test r.ok || (println(r); false)
     end
@@ -791,11 +798,11 @@ trap(three::Int64) = (o = Num(1.0); o.f = three; v = o.f; v isa Float64 ? unsafe
 end
 
 @testset "code_generator.dart: a PiNode on a dead branch, Julia's convert_julia_type: a singleton's ghost, a trap between concrete types" begin
-    local cases = Main.WTRunner.RunCase[]
+    local cases = Main.WTChild.RunCase[]
     for f in (DeadPiCases.ghost, DeadPiCases.held_sum, DeadPiCases.trap)
-        append!(cases, first(Main.WTRunner.answer_cases(string(nameof(f)), WasmTarget.compile, f, (Int64(3),))))
+        append!(cases, first(Main.WTChild.answer_cases(string(nameof(f)), WasmTarget.compile, f, (Int64(3),))))
     end
-    local results = Main.WTRunner.run_cases(cases)
+    local results = Main.WTChild.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == 3 && all(r -> r.ok, results)
 end
@@ -810,13 +817,13 @@ end
 @testset "translator.dart: translateExternalType unpacks an 8-bit entry parameter to i32" begin
     local IR = WasmTarget.WasmBuilder.IR
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(PackedEntryCases.add8, (UInt8, UInt8), "translator"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(PackedEntryCases.add8, (UInt8, UInt8), "translator", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     @test D.translate_external_type(t, UInt8) == IR.NumType_i32 && D.translate_external_type(t, Int8) == IR.NumType_i32
     # an Int8 entry compiles; the runner marshals UInt8, so the wrapping add runs against native
     @test WasmTarget.compile(PackedEntryCases.neg8, (Int8, Int8); optimize = false) isa Vector{UInt8}
     local f = PackedEntryCases.add8
-    local results = Main.WTRunner.run_cases(first(Main.WTRunner.answer_cases("add8", WasmTarget.compile, f, (0xc8, 0x64))))
+    local results = Main.WTChild.run_cases(first(Main.WTChild.answer_cases("add8", WasmTarget.compile, f, (0xc8, 0x64))))
     for r in results
         @test r.ok || (println(r); false)
     end

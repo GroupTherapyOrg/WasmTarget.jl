@@ -88,7 +88,7 @@ end
     # the accessor: the eager kinds, and each constant's name, numbered once per name
     local acc = cs._constant_accessor[]
     @test all(x -> D.constant_is_always_eager(acc, kind(x)), (nothing, true, 7, 2.5)) && !D.constant_is_always_eager(acc, kind("s"))
-    local n0 = D._ConstantAccessor__next_global_id[]
+    local n0 = D._ConstantAccessor__next_global_id(acc)[]
     @test D._constant_name(acc, kind("hello\nworld")) == "C$n0 \"hello\""
     @test D._constant_name(acc, kind(repeat("x", 31))) == "C$(n0 + 1) \"$(repeat("x", 30))<...>\""
     @test D._constant_name(acc, kind(false)) == "C$(n0 + 2) false"
@@ -208,7 +208,7 @@ is_int(r::Base.RefValue{Any}) = r[] isa Int64
 k(x) = WasmTarget.NirConst(Core.Const(x))
 @testset "constants.dart: a type literal is its lowered type object, an instance constant" begin
     local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
-    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(is_int, (Base.RefValue{Any},), "constants"), "test"), data, D.TranslatorOptions())
+    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(is_int, (Base.RefValue{Any},), "constants", Base.get_world_counter()), "test"), data, D.TranslatorOptions())
     D._init_modules(t, nothing)
     collect(t.closure_layouter[]); collect(t.class_info_collector[])
     t.globals[] = D.Globals(t); t.dart_globals[] = D.DartGlobals(t); t.constants[] = D.Constants(t)
@@ -246,14 +246,14 @@ end
 # boxed Int64's global), the module run against native Julia (test/runner.jl)
 module ConstantsTupleValue
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 @noinline Base.@constprop :none sum3(t::NTuple{3,Int64}) = getfield(t, 1) + getfield(t, 2) + getfield(t, 3)
 f(n::Int64) = sum3((42, 42, 42)) + n
 @testset "constants.dart: a tuple constant's fields at their own types, run against native" begin
     # the optimized IR passes the tuple itself, a literal, to the call
     @test any(st -> Meta.isexpr(st, :invoke) && (42, 42, 42) in st.args, Base.code_typed(f, (Int64,))[1][1].code)
-    local results = WTRunner.run_cases(first(WTRunner.answer_cases("tuple constant", WasmTarget.compile, f, (Int64(1),))))
+    local results = WTChild.run_cases(first(WTChild.answer_cases("tuple constant", WasmTarget.compile, f, (Int64(1),))))
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test !isempty(results) && all(r -> r.ok, results)
 end
@@ -266,7 +266,7 @@ const I = WasmTarget.WasmBuilder.IR
 const BIG = repeat("é", 6000)     # 12000 UTF-8 code units, past maxArrayNewFixedLength
 lit(b::Bool) = b ? "héllo" : "ab"
 big(b::Bool) = b ? BIG : "x"
-translated(f) = (t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f, (Bool,), "constants"), "constants"),
+translated(f) = (t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(f, (Bool,), "constants", Base.get_world_counter()), "constants"),
     D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions()); D.translate(t, nothing); t)
 @testset "constants.dart: a String literal, its UTF-8 code units as dart's literal path makes them" begin
     local t = translated(lit)
@@ -298,10 +298,11 @@ end
 # folds nothing, run against native
 module MemoryConstants
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
-const PRIMES = let m = Memory{Int64}(undef, 4); m .= (2, 3, 5, 7); m end
-const EMPTY = Memory{Int64}(undef, 0)
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
+# (a boxed element type: an isbits Memory reached through no owner is refused, spec v17 Y6, below)
+const PRIMES = let m = Memory{Any}(undef, 4); m .= (2, 3, 5, 7); m end
+const EMPTY = Memory{Any}(undef, 0)
 const NAMES = let m = Memory{String}(undef, 3); m[1] = "a"; m[3] = "ccc"; m end
 const NONE = Memory{String}(undef, 0)
 # elements admitting nothing: a written nothing, an unset element (#undef, its set flag 0), a String
@@ -339,9 +340,9 @@ consts(k::Int64, i::Int64) =
     @test Base.memoryrefoffset(OFF.ref) == 2
     local argsets = [(1, 1), (1, 0), (2, 1), (2, 0), (3, 1), (3, 2), (3, 3), (4, 2), (4, 3),
                      (11, 1), (11, 3), (11, 4), (12, 1), (12, 3), (12, 4), (13, 2), (14, 3), (15, 0), (16, 7)]
-    local cases = [WTRunner.RunCase("consts$a", plain, Int64.(a), WTRunner.native_answer(consts, Int64.(a)); optimized = own) for a in argsets]
-    @test count(c -> c.native isa WTRunner.Throws, cases) == 3
-    local results = WTRunner.run_cases(cases)
+    local cases = [WTChild.RunCase("consts$a", plain, Int64.(a), WTChild.native_answer(consts, Int64.(a)); optimized = own) for a in argsets]
+    @test count(c -> c.native isa WTChild.Throws, cases) == 3
+    local results = WTChild.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == 19 && all(r -> r.ok, results)
 end
@@ -369,21 +370,96 @@ end
 # through a phi, so Julia folds no `===`, each its own canonical constant, run against native
 module ModuleConstants
 using Test, WasmTarget
-isdefined(Main, :WTRunner) || Base.include(Main, joinpath(@__DIR__, "..", "runner.jl"))
-const WTRunner = Main.WTRunner
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
 which_module(x::Int64) = (x > 0 ? Base : Core) === Base ? Int64(1) : Int64(2)
 @testset "constants.dart: a Module constant is its class's struct, its name its one field" begin
     @test Base.code_typed(which_module, (Int64,))[1][2] === Int64
     # each module a constant, its name, the Symbol, a sub-constant of it
     local D = WasmTarget.Dart2Wasm
-    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(which_module, (Int64,), "constants"), "constants"),
+    local t = D.Translator(WasmTarget.build_nir(WasmTarget.check_subset(which_module, (Int64,), "constants", Base.get_world_counter()), "constants"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     D.translate(t, nothing)
     local made = t.constants[].constant_info
     @test all(m -> haskey(made, WasmTarget.NirConst(Core.Const(m))), (Base, Core, :Base, :Core))
-    local cases = reduce(vcat, [first(WTRunner.answer_cases("module constant $x", WasmTarget.compile, which_module, (x,))) for x in (Int64(1), Int64(-1))])
-    local results = WTRunner.run_cases(cases)
+    local cases = reduce(vcat, [first(WTChild.answer_cases("module constant $x", WasmTarget.compile, which_module, (x,))) for x in (Int64(1), Int64(-1))])
+    local results = WTChild.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test !isempty(results) && all(r -> r.ok, results)
+end
+
+# spec v15 W3: a Dict constant's unfilled slots hold no defined element, so its module is a function of its live pairs
+# alone: one function over one Dict constant compiled, then the bytes in the Dict's unfilled `vals` slots changed (as a
+# process's heap leaves them, addresses among them: v14/v7/dictvals2.out), then compiled again: byte-identical modules
+const _DICT_CONST = Dict("a" => 1, "bb" => 2, "ccc" => 3)
+_dict_const_bb() = _DICT_CONST["bb"]
+@testset "a Dict constant's unfilled slots: its live elements alone (spec v15 W3)" begin
+    local before = WasmTarget.compile(_dict_const_bb, ())
+    local before_plain = WasmTarget.compile(_dict_const_bb, (); optimize = false)
+    local dead = [i for i in eachindex(_DICT_CONST.vals) if !Base.isslotfilled(_DICT_CONST, i)]
+    @test !isempty(dead)
+    for i in dead
+        _DICT_CONST.vals[i] = 4_650_992_688 + i   # heap bytes, an address among them
+    end
+    @test WasmTarget.compile(_dict_const_bb, ()) == before
+    @test WasmTarget.compile(_dict_const_bb, (); optimize = false) == before_plain
+    local results = Main.WTChild.run_cases([Main.WTChild.RunCase("dict_const_bb", before, (), _dict_const_bb())])
+    @test all(r -> r.ok, results)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+end
+
+# spec v16 X5: the constants' `C<id>` names are the compile's (a Translator field), so a module's bytes, its name section
+# among them, are the same whatever the process compiled before it
+_counter_g(x::Int64) = string(x) * "!"
+@testset "a module's bytes are its own compile's: the constants' counter is the translator's" begin
+    local first_ = WasmTarget.compile(_dict_const_bb, ())
+    WasmTarget.compile(_counter_g, (Int64,))   # another program, its own constants named
+    @test WasmTarget.compile(_dict_const_bb, ()) == first_
+end
+
+# spec v17 Y6: a constant's memory is its owner's to define (src/julia/classes.jl MEMORY_OWNERS: an Array's size, a Dict's
+# filled slots); an isbits memory reached through no owner (a bare Memory, IOBuffer's data) is refused, located, never
+# emitted with every element's bytes; an empty one, and a boxed one (#undef the null), are held whole
+const _BARE_BITS = let m = Memory{Int64}(undef, 3); m[1] = 1; m[3] = 3; m end   # its second element: whatever bytes
+_bare_bits(i::Int64) = _BARE_BITS[i]
+const _BUFFER = IOBuffer(UInt8[0x61, 0x62])
+_buffer(i::Int64) = Int64(_BUFFER.data[i])
+const _BARE_EMPTY = Memory{Int64}(undef, 0)
+_bare_empty(i::Int64) = Int64(length(_BARE_EMPTY)) + i
+@testset "a constant's isbits memory is its owner's to define, else refused, located (spec v17 Y6)" begin
+    local refusal(f) = try; WasmTarget.compile(f, (Int64,)); nothing; catch x; x isa WasmTarget.RejectionError ? x.rejection : rethrow(); end
+    for f in (_bare_bits, _buffer)
+        local r = refusal(f)
+        @test r isa WasmTarget.ProgramError && occursin("reached through no owner MEMORY_OWNERS lists", r.text)
+    end
+    @test refusal(_bare_empty) === nothing
+    @test WasmTarget.MEMORY_OWNERS isa Tuple && all(o -> o[1] isa Type && o[2] isa String, WasmTarget.MEMORY_OWNERS)
+end
+
+# spec v16 X5: an Array constant's memory past its size (a capacity tail sizehint! reserved, the bytes pop! left for an
+# isbits element) holds no defined element: the module carries its size's elements alone, whatever the tail holds
+const _VEC_TAIL = let v = UInt64[11, 22, 33]; sizehint!(v, 16); push!(v, 0x0123456789abcdef); pop!(v); v end
+_vec_tail(i::Int64) = _VEC_TAIL[i] + UInt64(length(_VEC_TAIL))
+const _VEC_SHARED = UInt64[1, 2, 3, 4]
+const _VEC_PART = Base.wrap(Array, getfield(_VEC_SHARED, :ref).mem, (2,))   # its first two elements, the same memory
+_vec_shared(i::Int64) = _VEC_SHARED[i] + _VEC_PART[1]
+const _VEC_TAIL2 = let v = UInt64[5, 6]; sizehint!(v, 8); v end
+const _VEC_ALIAS = Base.wrap(Array, getfield(_VEC_TAIL2, :ref).mem, (2,))   # the same memory, the same size
+_vec_alias(i::Int64) = (_VEC_ALIAS[1] = UInt64(i); _VEC_TAIL2[1])
+@testset "an Array constant's memory past its size: its size's elements alone (spec v16 X5)" begin
+    local mem = getfield(_VEC_TAIL, :ref).mem
+    @test length(mem) >= 16 && mem[4] == 0x0123456789abcdef   # the popped element's bytes, in the tail
+    local before = WasmTarget.compile(_vec_tail, (Int64,))
+    for k in 4:length(mem)
+        mem[k] = 0x5a5a5a5a00000000 + UInt64(k)   # the tail as another process's heap leaves it
+    end
+    @test WasmTarget.compile(_vec_tail, (Int64,)) == before
+    @test all(r -> r.ok, Main.WTChild.run_cases([Main.WTChild.RunCase("vec_tail$i", before, (Int64(i),), _vec_tail(Int64(i))) for i in 1:3]))
+    # two Arrays of one Memory and different sizes: one constant cannot hold each one's elements, refused, located
+    local refused = try; WasmTarget.compile(_vec_shared, (Int64,)); nothing; catch x; x isa WasmTarget.RejectionError ? x.rejection : rethrow(); end
+    @test refused isa WasmTarget.ProgramError && occursin("one constant cannot hold", refused.text)
+    # two of one Memory and one size share its one copy: a write through one is read through the other, as natively
+    local alias = WasmTarget.compile(_vec_alias, (Int64,))
+    @test all(r -> r.ok, Main.WTChild.run_cases([Main.WTChild.RunCase("vec_alias", alias, (Int64(9),), Int64(9))]))
 end
 end

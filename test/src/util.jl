@@ -51,7 +51,7 @@ k(x::Int) = x
 Base.@ccallable ext(x::Int)::Int = x + 3
 t(x::Int) = x > 0 ? x : throw(ArgumentError("negative"))
 @testset "util.dart: the pragma readers answer Julia's declarations" begin
-    local world = WasmTarget.build_nir(WasmTarget.check_subset(entry, (Int,), "util"), "util")
+    local world = WasmTarget.build_nir(WasmTarget.check_subset(entry, (Int,), "util", Base.get_world_counter()), "util")
     g(1); h(1); k(1); ext(1)
     local mi(f, at = (Int,)) = only(Base.method_instances(f, at, Base.get_world_counter()))
     # @noinline and @inline are dart's never- and prefer-inline pragmas, true when declared, else none
@@ -67,7 +67,7 @@ t(x::Int) = x > 0 ? x : throw(ArgumentError("negative"))
     # wasm:pure-function is Julia's proof that a call is removable if unused: g's product is, a call
     # that may throw is not
     @test D.Util.has_wasm_pure_function_pragma(mi(g); component = world)
-    local tworld = WasmTarget.build_nir(WasmTarget.check_subset(t, (Int,), "util"), "util")
+    local tworld = WasmTarget.build_nir(WasmTarget.check_subset(t, (Int,), "util", Base.get_world_counter()), "util")
     @test !D.Util.has_wasm_pure_function_pragma(tworld.entry; component = tworld)
     # getPragma is the one source the readers read through: each pragma name answers Julia's record
     @test D.Util.get_pragma(mi(g), "wasm:never-inline"; default_value = true) === true

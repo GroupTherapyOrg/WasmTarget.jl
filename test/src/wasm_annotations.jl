@@ -14,7 +14,7 @@ f(x::Int) = x + 1
 @noinline g(x::Int) = x * 2
 
 @testset "wasm_annotations.dart: MemoryLimits" begin
-    local world = W.build_nir(W.check_subset(f, (Int,), "wasm_annotations"), "wasm_annotations")
+    local world = W.build_nir(W.check_subset(f, (Int,), "wasm_annotations", Base.get_world_counter()), "wasm_annotations")
     local t = D.Translator(world, D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     # a member declares no memory type: the read answers nothing, inlined or not
     for fn in (f, g)

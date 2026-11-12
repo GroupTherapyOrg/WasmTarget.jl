@@ -18,6 +18,7 @@ import Base: @nospecializeinfer
 include("julia/parity.jl")
 include("julia/construction.jl")
 include("julia/reject.jl")
+include("julia/show.jl")
 include("julia/interpreter.jl")
 include("julia/subset.jl")
 include("julia/nir.jl")

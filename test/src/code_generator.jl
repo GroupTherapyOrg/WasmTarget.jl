@@ -346,12 +346,14 @@ end
     D._init_modules(g.translator, nothing)
     collect(D.ClassInfoCollector(g.translator))
     g.translator.dart_globals[] = D.DartGlobals(g.translator)
-    local e = rejection(() -> D.translate_expression(g, W.NirGlobal(GlobalRef(GlobalCases, :SCALE)), IR.NumType_i32))
+    # each binding as the closed world's world holds it (NirBinding)
+    local node(name) = W.NirGlobal(W.nir_binding!(W.NirBindings(g.translator.component.world), GlobalRef(GlobalCases, name)))
+    local e = rejection(() -> D.translate_expression(g, node(:SCALE), IR.NumType_i32))
     @test e.rejection isa W.Unported && occursin("Translator.constants", e.rejection.anchor)
     # a binding's operand whose value an assignment can change has a static type only its getter knows,
     # located at the getter; a constant binding's type is its value's, mutable or not
-    @test occursin("_generateGetter", rejection(() -> D.dart_type_of(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)))).rejection.anchor)
-    @test D.dart_type_of(g, W.NirGlobal(GlobalRef(GlobalCases, :BOX))) === Base.RefValue{Int64}
+    @test occursin("_generateGetter", rejection(() -> D.dart_type_of(g, node(:counter))).rejection.anchor)
+    @test D.dart_type_of(g, node(:BOX)) === Base.RefValue{Int64}
     # a function's binding as an operand, `abs` passed to callf, is Kernel's StaticTearOff, the
     # function's singleton constant: run by node against native
     local tb = W.compile(GlobalCases.tear, (Int32,); optimize = false)
@@ -405,7 +407,7 @@ end
     for (f, x, T) in ((ThrowCases.thr, -1, ThrowCases.E), (ThrowCases.thr_int, -2, Int))
         @test (try; f(x); nothing; catch err; err; end) isa T
         local bytes = W.compile(f, (Int64,); optimize = false)
-        push!(NATIVE_RUNS, WTRunner.RunCase("$(nameof(f))($x) throws ", bytes, (x,), WTRunner.Throws(T)))
+        push!(NATIVE_RUNS, WTChild.RunCase("$(nameof(f))($x) throws ", bytes, (x,), WTChild.Throws(T)))
         queue_native!("$(nameof(f)) ", bytes, f, [(7,)])
     end
     # Base's InexactError is built by its varargs constructor of an open count, InexactError(f, args...),
@@ -414,7 +416,7 @@ end
     # InexactError raised where native raises it
     @test (try; ThrowCases.to_u8(300); nothing; catch err; err; end) isa InexactError
     local iv_bytes = W.compile(ThrowCases.to_u8, (Int64,); optimize = false)
-    push!(NATIVE_RUNS, WTRunner.RunCase("to_u8(300) throws ", iv_bytes, (300,), WTRunner.Throws(InexactError)))
+    push!(NATIVE_RUNS, WTChild.RunCase("to_u8(300) throws ", iv_bytes, (300,), WTChild.Throws(InexactError)))
     queue_native!("to_u8 ", iv_bytes, ThrowCases.to_u8, [(7,)])
     # dart's dynamic invocation has no Julia input: the verifier resolves every call it admits but a
     # must-throw one, so reaching it is WasmTarget's own defect, naming Julia's replacement
@@ -481,7 +483,7 @@ end
     # set before it is read: the value; read while undefined: UndefRefError, a wasm exception, never a trap
     queue_native!("linked ", W.compile(UndefFieldCases.linked, (Int,); optimize = false), UndefFieldCases.linked, [(4,), (-1,)])
     @test (try; UndefFieldCases.unlinked(4); nothing; catch err; err; end) isa UndefRefError
-    push!(NATIVE_RUNS, WTRunner.RunCase("unlinked(4) throws ", W.compile(UndefFieldCases.unlinked, (Int,); optimize = false), (4,), WTRunner.Throws(UndefRefError)))
+    push!(NATIVE_RUNS, WTChild.RunCase("unlinked(4) throws ", W.compile(UndefFieldCases.unlinked, (Int,); optimize = false), (4,), WTChild.Throws(UndefRefError)))
 end
 
 # a local read where it may be unassigned: Julia's lowering checks it by name (`throw_undef_if_not`), its
@@ -506,7 +508,7 @@ end
     # world was inferred in, never a host import
     @test any(s -> Meta.isexpr(s, :foreigncall) && s.args[1] == QuoteNode(:jl_get_tls_world_age), Base.code_typed(UndefVarError, (Symbol, Symbol))[1][1].code)
     queue_native!("maybe ", W.compile(UndefVarCases.maybe, (Bool,); optimize = false), UndefVarCases.maybe, [(true,)])
-    push!(NATIVE_RUNS, WTRunner.RunCase("maybe(false) throws ", W.compile(UndefVarCases.maybe, (Bool,); optimize = false), (false,), WTRunner.Throws(UndefVarError)))
+    push!(NATIVE_RUNS, WTChild.RunCase("maybe(false) throws ", W.compile(UndefVarCases.maybe, (Bool,); optimize = false), (false,), WTChild.Throws(UndefVarError)))
     queue_native!("caught ", W.compile(UndefVarCases.caught, (Bool,); optimize = false), UndefVarCases.caught, [(true,), (false,)])
 end
 
@@ -549,8 +551,8 @@ end
     @test [f.name for f in W.class_instance_fields(IsSetFieldCases.Part, "code_generator")] == ["a", "s", "c", "d", "c#isSet", "d#isSet"]
     @test W.class_instance_fields(IsSetFieldCases.Frozen, "code_generator")[2] == W.ClassField(IsSetFieldCases.Frozen, 0, "x#isSet", Bool, false)
     local bytes = W.compile(f, (Int64, Int64); optimize = false)
-    local cases = [WTRunner.RunCase("undef_case$a", bytes, a, WTRunner.native_answer(f, a)) for a in ((Int64(k), Int64(3)) for k in 1:12)]
-    @test count(c -> c.native isa WTRunner.Throws, cases) == 4
+    local cases = [WTChild.RunCase("undef_case$a", bytes, a, WTChild.native_answer(f, a)) for a in ((Int64(k), Int64(3)) for k in 1:12)]
+    @test count(c -> c.native isa WTChild.Throws, cases) == 4
     append!(NATIVE_RUNS, cases)
 end
 
@@ -588,11 +590,11 @@ end
 @testset "codegen.cpp: isdefined's order checks raise ConcurrencyViolationError; typeof is jl_typeof; apply_type finds its type in its cache (A68S3)" begin
     local f = AtomicOrderCases.orders
     local bytes = W.compile(f, (Int64,); optimize = false)
-    local cases = [WTRunner.RunCase("orders$a", bytes, a, WTRunner.native_answer(f, a)) for a in ((Int64(k),) for k in 1:5)]
-    @test count(c -> c.native == WTRunner.Throws(ConcurrencyViolationError), cases) == 4
+    local cases = [WTChild.RunCase("orders$a", bytes, a, WTChild.native_answer(f, a)) for a in ((Int64(k),) for k in 1:5)]
+    @test count(c -> c.native == WTChild.Throws(ConcurrencyViolationError), cases) == 4
     append!(NATIVE_RUNS, cases)
     local kbytes = W.compile(AtomicOrderCases.kind_of, (Int64,); optimize = false)
-    append!(NATIVE_RUNS, [WTRunner.RunCase("kind_of($n)", kbytes, (n,), AtomicOrderCases.kind_of(n)) for n in Int64[1, 2, 3]])
+    append!(NATIVE_RUNS, [WTChild.RunCase("kind_of($n)", kbytes, (n,), AtomicOrderCases.kind_of(n)) for n in Int64[1, 2, 3]])
     local ke = rejection(() -> W.compile(AtomicOrderCases.any_kind_of, (Vector{Any},); optimize = false))
     @test ke !== nothing && ke.rejection isa W.Unquarantined && !isempty(ke.at) &&
           startswith(ke.rejection.row, "src/julia/classes.jl type_value_unmade: typeof of a value that may be a Memory{Any}")
@@ -600,7 +602,7 @@ end
     @test e !== nothing && e.rejection isa W.Unquarantined && !isempty(e.at) &&
           startswith(e.rejection.row, "src/julia/classes.jl apply_type_cache: an operand of Julia's apply_type typed Any")
     local mbytes = W.compile(AtomicOrderCases.made_of, (Int64,); optimize = false)
-    append!(NATIVE_RUNS, [WTRunner.RunCase("made_of($n)", mbytes, (n,), AtomicOrderCases.made_of(n)) for n in Int64[1, -1]])
+    append!(NATIVE_RUNS, [WTChild.RunCase("made_of($n)", mbytes, (n,), AtomicOrderCases.made_of(n)) for n in Int64[1, -1]])
 end
 
 # a value held as a reference narrowed to a primitive class (a PiNode): convertType's unboxing, the box
@@ -623,7 +625,7 @@ end
 @testset "translator.dart: convertType unboxes a reference to its PiNode's primitive class" begin
     local f = UnboxCases.unbox
     local bytes = W.compile(f, (Int64, Int64); optimize = false)
-    append!(NATIVE_RUNS, [WTRunner.RunCase("unbox$a", bytes, a, WTRunner.native_answer(f, a)) for a in ((Int64(k), Int64(7)) for k in 1:4)])
+    append!(NATIVE_RUNS, [WTChild.RunCase("unbox$a", bytes, a, WTChild.native_answer(f, a)) for a in ((Int64(k), Int64(7)) for k in 1:4)])
 end
 
 @testset "code_generator.dart: the switch statement's info, whose constructors no NIR reaches" begin
@@ -854,7 +856,7 @@ end
     @test D.guard_can_match_js_exception(t, Any)
     @test !D.guard_can_match_js_exception(t, Exception) && !D.guard_can_match_js_exception(t, TypeVar(:T))
     # standalone mode has no JS exceptions: no guard catches one
-    local ts = D.Translator(WasmTarget.build_nir(W.check_subset(CodegenCases.f_add, (Int32,), "code_generator"), "test"),
+    local ts = D.Translator(WasmTarget.build_nir(W.check_subset(CodegenCases.f_add, (Int32,), "code_generator", Base.get_world_counter()), "test"),
         D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions(; standalone = true))
     @test !D.guard_can_match_js_exception(ts, Any)
 end
@@ -896,7 +898,7 @@ end
 end
 
 @testset "the third oracle: every module queued above answers as native Julia" begin
-    for r in WTRunner.run_cases(NATIVE_RUNS)
+    for r in WTChild.run_cases(NATIVE_RUNS)
         r.ok || println(r.label, ": ", r.why)
         @test r.ok
     end
