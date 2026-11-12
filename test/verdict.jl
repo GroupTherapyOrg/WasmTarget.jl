@@ -334,24 +334,33 @@ end
 # Expect.throws<T> and `is T`, read inside the program). Fixed arities, as Leaves's
 struct Catches{F,T} <: Function end
 struct IsA{F,T} <: Function end
-# the type a throw reader tests is the caught value's (spec v18 P1, red round 15 1): Julia's inference knows F's
-# exception type, and where it is one singleton type the optimizer replaces the caught value with that constant and
-# folds `e isa T`, so the module would answer 1 for any exception under its tag. The try body first may throw the
-# judge's own marker, reached behind an inference barrier (never at run time) and BEFORE F (spec v19 P1: after an F
-# that always throws it was dead code), so the caught value's type is a union
-# and `e isa T` is a test the module runs on the value it caught; a reader WasmTarget rejects is `unported`, never a
-# pass. A throw answer is read by its type alone: two exceptions of one type and different messages read alike
-struct _JudgeMark <: Exception end
-_caught(e, ::Type{T}) where {T} = e isa T ? Int32(1) : Int32(2)
-_unfolded() = Base.inferencebarrier(nothing) === 0 && throw(_JudgeMark())
-(::Catches{F,T})() where {F,T} = try _unfolded(); F(); Int32(0) catch e; _caught(e, T) end
-(::Catches{F,T})(a) where {F,T} = try _unfolded(); F(a); Int32(0) catch e; _caught(e, T) end
-(::Catches{F,T})(a, b) where {F,T} = try _unfolded(); F(a, b); Int32(0) catch e; _caught(e, T) end
-(::Catches{F,T})(a, b, c) where {F,T} = try _unfolded(); F(a, b, c); Int32(0) catch e; _caught(e, T) end
-(::IsA{F,T})() where {F,T} = F() isa T
-(::IsA{F,T})(a) where {F,T} = F(a) isa T
-(::IsA{F,T})(a, b) where {F,T} = F(a, b) isa T
-(::IsA{F,T})(a, b, c) where {F,T} = F(a, b, c) isa T
+# a reader's answer is a function of the RUNTIME type of the value it reads, with nothing for inference to decide (spec
+# v20 F1, architect round 17 1 and 2, red round 17 1 and 2). Three readers before this one were wrong: `e isa T` folded
+# by the exception type Julia inferred (r15); a marker thrown after an F that always throws, dead (r16); a marker
+# thrown first, which made the caught value `Union{marker, X}`, whose generic test was union-split into "is it the
+# marker", any other exception answering 1 (r17). A barrier on the caught value alone is not enough either: Julia types
+# `the_exception` by F's inferred exception type, a singleton's replaced by its constant (`compilerbarrier(:type,
+# DivideError())`) and any other's a claim a compiler may rely on (test/src/verdict.jl runs both: wrong throws read 1).
+# So the caught value's TYPE is made unknown at its source: the try body first may throw a value inference knows only
+# as `Any` (`_widened`, behind a guard it cannot decide, never true at run time), so `the_exception` is `Any`, no
+# union exists to split, and the one `isa` the module runs is T's, on that value (test/src/verdict.jl asserts it and
+# runs the reader's own IR with F's throw replaced by a wrong one; test/src/runner.jl runs WasmTarget's module with the
+# thrown object's class rewritten). F is called through a call-site `@noinline`, so what is caught or read is what F's
+# own compiled body produces across a real call, never an inlined copy's. An F inferred never to throw loses its catch
+# arm: a wrong throw then propagates out of the reader and reads `errored`, never passed. IsA reads F's result behind
+# the same builtin barrier; where Julia infers that result one constant (a singleton type F always returns), every use
+# of it, the reader's included, is that constant, so the reader reads only that F returned (dev/climb/HILL.md RISKS).
+# A reader WasmTarget rejects is `unported`, never a pass. A throw answer is read by its type alone: two exceptions of
+# one type and different messages read alike
+_widened() = Core.compilerbarrier(:type, nothing) === 0 && throw(Core.compilerbarrier(:type, nothing))
+(::Catches{F,T})() where {F,T} = try _widened(); @noinline(F()); Int32(0) catch e; e isa T ? Int32(1) : Int32(2) end
+(::Catches{F,T})(a) where {F,T} = try _widened(); @noinline(F(a)); Int32(0) catch e; e isa T ? Int32(1) : Int32(2) end
+(::Catches{F,T})(a, b) where {F,T} = try _widened(); @noinline(F(a, b)); Int32(0) catch e; e isa T ? Int32(1) : Int32(2) end
+(::Catches{F,T})(a, b, c) where {F,T} = try _widened(); @noinline(F(a, b, c)); Int32(0) catch e; e isa T ? Int32(1) : Int32(2) end
+(::IsA{F,T})() where {F,T} = Core.compilerbarrier(:type, @noinline(F())) isa T
+(::IsA{F,T})(a) where {F,T} = Core.compilerbarrier(:type, @noinline(F(a))) isa T
+(::IsA{F,T})(a, b) where {F,T} = Core.compilerbarrier(:type, @noinline(F(a, b))) isa T
+(::IsA{F,T})(a, b, c) where {F,T} = Core.compilerbarrier(:type, @noinline(F(a, b, c))) isa T
 
 """An answer bound to another case or another compile than its own: the binding's refusal, located."""
 struct BindMismatch <: Exception

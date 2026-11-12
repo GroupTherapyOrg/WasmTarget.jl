@@ -239,6 +239,80 @@ _v_none(x::Int64) = x > 0 ? nothing : missing
           WV.case_outcome(WV.RunResult[])[1] === :errored && WV.case_outcome([R(:passed)]) == (:passed, "")
 end
 
+# spec v20 F1's shapes and the values a miscompiled F could throw: the judge's one list (test/throw_shapes.jl)
+isdefined(Main, :_F1_SHAPES) || Base.include(Main, joinpath(@__DIR__, "..", "throw_shapes.jl"))
+_f1_resolve(x) = x isa GlobalRef ? getfield(x.mod, x.name) : x isa QuoteNode ? x.value : x
+_f1_uses(s) = s isa Expr ? s.args : s isa Core.PhiNode ? Any[s.values[i] for i in eachindex(s.values) if isassigned(s.values, i)] :
+              s isa Core.PiNode ? Any[s.val] : Any[]
+_f1_isas(ir, from) = [(_f1_resolve(s.args[3]), ir.stmts[s.args[2].id][:type]) for i in 1:length(ir.stmts)
+                      for s in (ir.stmts[i][:stmt],) if s isa Expr && s.head === :call && length(s.args) == 3 &&
+                      _f1_resolve(s.args[1]) === Core.isa && s.args[2] isa Core.SSAValue && s.args[2].id in from]
+# the reader's own optimized IR: the statements calling F (a call-site @noinline keeps a real call), and every `isa`
+# reachable from the caught value, as (its type argument, its operand's inferred type)
+function _f1_ir(R, args)
+    local ir = Base.code_ircode(R, Tuple{map(typeof, args)...})[1][1]
+    local F = typeof(R).parameters[1]
+    local calls = [i for i in 1:length(ir.stmts) if (s = ir.stmts[i][:stmt]; s isa Expr && s.head === :invoke &&
+                   _f1_resolve(s.args[2]) === F)]
+    local reach = Set{Int}()
+    for _ in 1:2, i in 1:length(ir.stmts)   # twice: a φ's value may come from a later block
+        local s = ir.stmts[i][:stmt]
+        (s isa Expr && s.head === :the_exception || any(u -> u isa Core.SSAValue && u.id in reach, _f1_uses(s))) && push!(reach, i)
+    end
+    return ir, calls, _f1_isas(ir, reach)
+end
+# the reader's own IR run (an OpaqueClosure), F's one call replaced by `stmt`, every other statement and type kept
+function _f1_run(R, args, stmt)
+    local ir, calls, _ = _f1_ir(R, args)
+    ir.stmts[only(calls)][:stmt] = stmt
+    ir.argtypes[1] = Tuple{}
+    return Core.OpaqueClosure(ir; do_compile = true)(args...)
+end
+_f1_throw(v) = Expr(:call, GlobalRef(Core, :throw), QuoteNode(v))
+
+@testset "a throw reader answers by the caught value's runtime type: its IR run with F's throw replaced (spec v20 F1)" begin
+    for (F, T, args) in _F1_SHAPES
+        local R = WV.Catches{F,T}()
+        local ir, calls, isas = _f1_ir(R, args)
+        local at = "$(nameof(F)) read as $T"
+        # F is called once, across a real call; every `isa` on the caught value is T's, on a value inferred Any
+        @test (at, length(calls)) == (at, 1)
+        @test (at, !isempty(isas) && all(((t, ty),) -> t === T && ty === Any, isas)) == (at, true)
+        length(calls) == 1 || continue
+        @test (at, R(args...)) == (at, Int32(1))   # native: F as written
+        local right = _F1_THROWN[findfirst(v -> v isa T, _F1_THROWN)]
+        local other = _F1_THROWN[findfirst(v -> !(v isa T), _F1_THROWN)]   # an exception, unless T is Exception
+        local sibling = _F1_THROWN[findfirst(v -> v isa supertype(T) && !(v isa T), _F1_THROWN)]
+        @test (at, _f1_run(R, args, _f1_throw(right))) == (at, Int32(1))
+        for v in (other, sibling, Int64(42))   # another type, T's supertype's other subtype, a value no exception
+            @test (at, typeof(v), _f1_run(R, args, _f1_throw(v))) == (at, typeof(v), Int32(2))
+        end
+        # a normal return answers 0; after an F inferred always to throw the next statement is `unreachable`, a trap
+        if ir.stmts[calls[1]][:type] === Union{}
+            @test (at, ir.stmts[calls[1] + 1][:stmt]) == (at, Core.ReturnNode())
+        else
+            @test (at, _f1_run(R, args, nothing)) == (at, Int32(0))
+        end
+    end
+    # the singleton reader reads the value F's own compiled body returns, across a real call, by its runtime type: its
+    # IR run with F's call replaced by another singleton reads false, by T's own true
+    for (F, T, other) in ((_v_none, Nothing, missing), (_f1_s2, _F1S1, _F1S2()), (_f1_s2, _F1S2, _F1S1()))
+        local I = WV.IsA{F,T}()
+        local ir, calls, _ = _f1_ir(I, (Int64(1),))
+        local isas = _f1_isas(ir, Set(1:length(ir.stmts)))
+        @test (F, T, length(calls), isas) == (F, T, 1, [(T, Any)])
+        local ops = [s.args[3] for i in 1:length(ir.stmts) for s in (ir.stmts[i][:stmt],) if s isa Expr && s.head === :call &&
+                     _f1_resolve(s.args[1]) === Core.compilerbarrier]
+        @test ops == [Core.SSAValue(calls[1])]   # the barrier reads F's call itself
+        @test (F, T, _f1_run(I, (Int64(1),), QuoteNode(other))) == (F, T, false)
+        @test (F, T, _f1_run(I, (Int64(1),), QuoteNode(T.instance))) == (F, T, true)
+    end
+    # the accepted risk (dev/climb/HILL.md RISKS): where Julia infers F's result one constant, every use of it is that
+    # constant, the reader's barrier included; F is still called, so the reader reads that F returned
+    local ir, calls, _ = _f1_ir(WV.IsA{_f1_s1,_F1S1}(), (Int64(1),))
+    @test length(calls) == 1 && ir.stmts[calls[1]][:type] === Core.Const(_F1S1())
+end
+
 @testset "a shape the runner cannot call or read is the judge's gap, never wrong (spec v18 P2)" begin
     @test WV.read_raw("gap no entry: the module exports the functions [f]") isa WV.Raw
     local g = _v_judge(Int64(1), "gap no entry: the module exports the functions [f]")

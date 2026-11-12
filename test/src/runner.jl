@@ -279,31 +279,59 @@ end
 # (the store's format, written by test/oracle.jl and read back by test/oracle_read.jl, is tested in test/src/oracle_read.jl,
 # the judge's: spec v14 V2; the wire's table, the binding, the plan, the verdict and the fixtures in test/src/verdict.jl)
 
-# spec v18 P1: a throw answer's reader tests the caught value's type in the module WasmTarget emits, never a constant
-# Julia's inference folded (red round 15 1: the catch arm was `i32.const 1` for any exception)
-_p1_div(x::Int64) = div(Int64(1), x)
-_p1_err(x::Int64) = x > 0 ? throw(ArgumentError("pos")) : throw(DomainError(x))
-_p1_always_div(x::Int64) = throw(DivideError())   # spec v19 P1: an F that always throws one type, a singleton's
-_p1_always_dom(x::Int64) = throw(DomainError(x))   # and one with fields
+# spec v20 F1 (red round 17 1): a throw reader answers by the type of the object the module throws, read at run time in
+# the module WasmTarget emits. The module with every object's class id at its creation rewritten (an i32.const of two
+# LEB bytes, 64 to 8191, followed by the next field's i32.const or by struct.new, in the code and global sections; the
+# rewrite is 8191, no class) throws an object of no class, and its reader must answer 2; the module as compiled answers
+# 1. Red's q1/mut.py is the method, test/fixtures/runner_patch.wat the precedent for a patched module; a reader of
+# another T is no evidence (Julia folds it to a constant), so none is run
+isdefined(Main, :_F1_SHAPES) || Base.include(Main, joinpath(@__DIR__, "..", "throw_shapes.jl"))
+function _f1_uleb(b, i)
+    local v = 0
+    local s = 0
+    while true
+        local x = b[i]
+        v |= Int(x & 0x7f) << s
+        s += 7
+        i += 1
+        x & 0x80 == 0 && return (v, i)
+    end
+end
+function _f1_no_class(bytes::Vector{UInt8})::Tuple{Vector{UInt8},Int}
+    local out = copy(bytes)
+    local n = 0
+    local pos = 9
+    while pos <= length(out)
+        local id = out[pos]
+        local size, start = _f1_uleb(out, pos + 1)
+        if id in (0x06, 0x0a)   # the global and code sections
+            for i in start:start+size-5
+                if out[i] == 0x41 && out[i+1] & 0x80 != 0 && out[i+2] & 0xc0 == 0 &&
+                   (out[i+3] == 0x41 || (out[i+3] == 0xfb && out[i+4] == 0x00))
+                    out[i+1], out[i+2] = 0xff, 0x3f
+                    n += 1
+                end
+            end
+        end
+        pos = start + size
+    end
+    return out, n
+end
 
-@testset "a throw answer's reader tests the caught value's type in wasm (spec v18 P1)" begin
+@testset "a throw reader answers by the thrown object's class, read in WasmTarget's module (spec v20 F1)" begin
     local W = Main.WTVerdict
-    # the typed IR WasmTarget compiles keeps `isa` on the caught value itself, for a singleton exception type too
-    for (f, T) in ((_p1_div, DivideError), (_p1_always_div, DivideError), (_p1_always_dom, DomainError))
-        local ci = code_typed(W.Catches{f,T}(), (Int64,); optimize = true)[1].first
-        local caught = findall(s -> s isa Expr && s.head === :the_exception, ci.code)
-        @test !isempty(caught) && any(s -> s isa Expr && s.head === :call && length(s.args) == 3 &&
-                                      s.args[2] isa Core.SSAValue && s.args[2].id in caught, ci.code)
-    end
-    # each reader compiled by WasmTarget and run in node answers native's: 1 for its type, 2 for another
     local cases = WTR.RunCase[]
-    for (f, T, a) in ((_p1_div, DivideError, 0), (_p1_div, ArgumentError, 0), (_p1_err, ArgumentError, 1), (_p1_err, DomainError, 1),
-                      (_p1_always_div, DivideError, 1), (_p1_always_div, DomainError, 1),
-                      (_p1_always_dom, DomainError, 1), (_p1_always_dom, DivideError, 1))
-        local r = W.Catches{f,T}()
-        push!(cases, WTR.RunCase("$f $T", WasmTarget.compile(r, (Int64,); optimize = false), (Int64(a),), r(Int64(a));
-                                 optimized = WasmTarget.compile(r, (Int64,))))
+    for (F, T, args) in _F1_SHAPES   # every shape compiles today, both modules (none is unported)
+        local r = W.Catches{F,T}()
+        local plain = WasmTarget.compile(r, map(typeof, args); optimize = false)
+        local opt = WasmTarget.compile(r, map(typeof, args))
+        local mp, np = _f1_no_class(plain)
+        local mo, no = _f1_no_class(opt)
+        @test (F, T, np > 0, no > 0) == (F, T, true, true)
+        @test r(args...) === Int32(1)
+        push!(cases, WTR.RunCase("$F $T", plain, args, Int32(1); optimized = opt))
+        push!(cases, WTR.RunCase("$F $T, its throw of no class", mp, args, Int32(2); optimized = mo))
     end
-    @test [c.native for c in cases] == Int32[1, 2, 1, 2, 1, 2, 1, 2]
-    @test all(r -> r.ok, WTR.run_cases(cases))
+    local results = WTR.run_cases(cases)
+    @test [(r.label, r.outcome) for r in results] == [(c.label, :passed) for c in cases]
 end

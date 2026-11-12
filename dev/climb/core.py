@@ -194,7 +194,8 @@ JUDGE_WRITE = ("test/smoke_judge.jl", "test/oracle.jl", "test/corpus_loader.jl")
 # hand, so no move edits anything on the verdict's path); no move's either
 JUDGE_READ = ("test/oracle_read.jl", "test/smoke.jl", "test/verdict.jl", "test/runner.jl", "test/src/runner.jl", "test/fixtures/runner.wat",
               "test/fixtures/runner_calls.tsv", "test/fixtures/runner_raw.tsv", "test/fixtures/runner_patch.wat",
-              "test/fixtures/runner_patch.tsv", "test/fixtures/make_fixtures.py", "test/run_child.jl")
+              "test/fixtures/runner_patch.tsv", "test/fixtures/make_fixtures.py", "test/run_child.jl",
+              "test/throw_shapes.jl")
 
 def move_rule(path, kind="port"):
     """The rule `kind` (port, audit) applies to `path`, or None: a path no move of that kind may change (a file
