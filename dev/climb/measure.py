@@ -2369,8 +2369,9 @@ def src_void_split(files, at, task, role="score"):
     return fs, why or "a src process's records are void only with these files together"
 
 def src_first(why):
-    """A red's identity within its file: its first non-passing test's place and kind (`<file>:<line> <kind>`, the
-    records' why), so a different failure of the same file is a NEW red (red's round-13 finding 7), never masked."""
+    """The `first` field of a src-test red's fix-first entry and the place its key names: its first non-passing test's
+    place and kind (`<file>:<line> <kind>`, the records' why). Not the red's identity, which is src_fails's multiset
+    (red_id, dev/src_verdict.sh; spec v20 F4, architect round 17 4)."""
     m = re.match(r"(\S+:\d+ \S+?):", why or "")
     return m.group(1) if m else (why or "")[:120]
 

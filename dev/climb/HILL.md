@@ -1039,7 +1039,8 @@ never WT_CLIMB_STATE.
    - `bash -n dev/check.sh dev/ship.sh dev/climb/launch.sh` passes.
 2. **The fenced check of every file**, in a clone at C0. The set is
    `{ echo "# head $(git rev-parse HEAD)"; git ls-files 'test/src/*.jl' | sed 's#^test/src/##'; } > <set>`, then
-   `chmod 444 <set>`. Run `WT_SRC_SET=<set> CHECK_BASE=HEAD~1 bash dev/check.sh 2>&1 | tee <rec>/check.log`.
+   `chmod 444 <set>`. Run `WT_SRC_SET=<set> CHECK_BASE=HEAD~1 CHECK_LANDING=1 bash dev/check.sh 2>&1 | tee <rec>/check.log`
+   (CHECK_LANDING=1: test/src_tests.jl refuses a run on the performance cores that is not a landing's check).
    - Exit 10 (D14 alone) is expected; any other code stops here.
    - Then `cp .wtd/check-path.out .wtd/check-split.out .wtd/src_records.*.out <rec>/` and `shasum -a 256 <rec>/*`.
    - Every file of the set has one `passed` row, and every canary is right.
@@ -1077,16 +1078,20 @@ never WT_CLIMB_STATE.
     `git fetch origin` (it keys origin/wt2, which is C1), PAUSE present and on AC.
     - About 4.7 h, resumable.
     - Done when preflight passes `store_ready`.
-12. **The watcher:** `bash dev/climb/launch.sh watch-install`.
-13. **The first full score**, on AC, with `slots: 0` in the state's config.json:
+12. **The watcher**, from `.worktrees/climb-driver` (this step and every one after it): `bash dev/climb/launch.sh watch-install`.
+13. **The first full score**, on AC, from `.worktrees/climb-driver`:
     `bash dev/climb/launch.sh resume && bash dev/climb/launch.sh`.
+    - Never `slots: 0` in the state's config.json before spec v20 F2 has landed: launch.sh's `seq 0` printed `1 0` and
+      started `climb-1` and `climb-0`. No slot climbs before the first score anyway (`core.admits`, below).
     - `core.admits` lands and climbs nothing until `src-latest.json`'s head is C1 (spec v18 Q2), and the score needs
       nothing it refuses.
     - Done when `src-latest.json` names C1.
-    - Expect one `score-rebased` note and no `src-failed`.
-14. **The judge eval and the agent probe**, when the week's budget admits agents: restore `slots`, then
-    `bash dev/climb/launch.sh probe`.
-15. **The supervised burn-in** from the first `src-latest.json` for C1: at least 6 landings in 12 h (or 8 in 16 h).
+    - Expect no `score-rebased` (the first score has no table of earlier rows to rebase) and no `src-failed`.
+14. **The judge eval and the agent probe**, from `.worktrees/climb-driver`, when the week's budget admits agents
+    (`python3 dev/climb/climb.py budget` exits 0): `bash dev/climb/launch.sh probe`.
+15. **The supervised burn-in**, from `.worktrees/climb-driver`, starts at the first `src-latest.json` for C1 once
+    `python3 dev/climb/climb.py budget` exits 0 (a budget over the week's line waits, PAUSE kept, and the burn-in's
+    clock starts at that exit): at least 6 landings in 12 h (or 8 in 16 h).
     - Recorded: every `ship` (set, target, margin, predicted against judged), `yielded`, `src-recheck`,
       `src-origin-void`, `src-origin-red`, `src-own-red`, `src-known-red`, `run-failed`, `rogue-push`,
       `score-rebased`, the gap notes, `land-skipped` and `alarm`.
