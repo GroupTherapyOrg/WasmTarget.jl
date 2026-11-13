@@ -981,26 +981,49 @@ def audit():
     enqueue(sha, f"audit #{n}", "audit", hold_id=f"audit{n}", audit={"n": n, "range": rng, "so": so})
     event("audited", n=n, range=rng, queued=True, findings=len(so["findings"]))
 
+def audit_route(f):
+    """Where an audit's finding is filed: None (neither fix-first nor high or medium: it stays on its route in the
+    entry), "lead" or "climb". The lead's when it is about a commit's message, trailers or process, not code
+    (`about`, which the schema requires: a move cannot rewrite a landed commit, whatever line the finding cites;
+    A106E2, anchored at src/julia/show.jl:1, was filed for a climber), when no move may change its file (G5), or when
+    it names no line a move can be measured against (A4); else a fix-first a climber takes."""
+    if not (f.get("fix_first") or f.get("severity") in ("high", "medium")):
+        return None
+    if f.get("about") == "process" or not move_rule((f.get("file") or "").strip()) or not isinstance(f.get("line"), int):
+        return "lead"
+    return "climb"
+
+def audit_rows():
+    """door-probe's rows for audit_route: a process finding anchored at a src line goes to the lead, a code finding there
+    to the climb, a code finding in dev/climb to the lead. Returns [(check, ok, evidence)]."""
+    rows = []
+    for what, f, want in (("a finding about a commit's message, anchored at a src line", {"about": "process", "file": "src/julia/show.jl", "line": 1}, "lead"),
+                          ("a finding about code at a src line", {"about": "code", "file": "src/julia/show.jl", "line": 1}, "climb"),
+                          ("a finding about code in dev/climb", {"about": "code", "file": "dev/climb/core.py", "line": 1}, "lead")):
+        got = audit_route(dict(f, severity="medium"))
+        rows.append((f"audit: {what} goes to the {want}", got == want, f"routed to {got}"))
+    return rows
+
 def audit_landed(n, rng, so):
-    """An audit's entry is on origin: its findings are filed, fix-first or for Dale, and the map redrawn."""
+    """An audit's entry is on origin: its findings are filed (audit_route), fix-first or for Dale, and the map redrawn."""
     event("audited", n=n, range=rng, landed=True, findings=len(so["findings"]))
     save_json("audit-saved.json", {})
     hand, add = [], []
     for f in so["findings"]:
-        if not (f.get("fix_first") or f.get("severity") in ("high", "medium")):
+        route = audit_route(f)
+        if route is None:
             continue
         path = (f.get("file") or "").strip()
         text = f"{path}:{f.get('line')} {f.get('claim')} Fix: {f.get('fix')} ({f.get('requirement', '')})"
-        # no move may change its file, or it names no line a move can be measured against (A4): Dale's
-        if not move_rule(path) or not isinstance(f.get("line"), int):
-            hand.append(f"- A{n} {f.get('id')}: {text}")   # the harness or the rules: no move can land it (G5)
+        if route == "lead":   # no move can land it: a landed commit's message, the harness or the rules (G5)
+            hand.append(f"- A{n} {f.get('id')}: {text}")
             continue
         add.append({"key": f"audit A{n} {f.get('id')}: {f.get('claim', '')[:110]}", "cases": [], "why": text})
     add_fixfirst(add)
     if hand:
-        for_dale(f"audit {n}: findings in protected files", "\n".join(hand) + "\nDefault taken: the climb goes on; "
-                 "these wait for a commit made by hand (dev/climb, the rules and the tooling are no move's), queued with "
-                 "`climb.py enqueue`.")
+        for_dale(f"audit {n}: findings for a commit made by hand", "\n".join(hand) + "\nDefault taken: the climb goes on; "
+                 "these wait for a commit made by hand (a landed commit's message, dev/climb, the rules and the tooling "
+                 "are no move's), queued with `climb.py enqueue`.")
     draw_map(os.path.join(STATE, "map.html"))   # D29: after every audit
 
 # ---------------------------------------------------------------- the judge's own hill (Theo: an eval of past failures)

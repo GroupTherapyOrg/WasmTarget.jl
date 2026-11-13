@@ -31,4 +31,7 @@ Reply with only the JSON the schema asks for. The driver writes the dev/AUDIT.md
 - `stopgap`: is a claimed construction a scan, an allowlist or a test?
 - `precedent`: the precedents the range names, and whether they resolve.
 - `resolution`: the fix-first finding, and where each open finding goes.
-- `findings`: a list of {id, severity, requirement, file, line, claim, fix, fix_first}.
+- `findings`: a list of {id, severity, requirement, about, file, line, claim, fix, fix_first}. `about` is `process`
+  for a finding about a commit's message, its trailers or the process it went through, not about code: such a finding
+  names no src line as its anchor (`file` empty, or the process file it cites) and goes to the lead, since no move can
+  rewrite a landed commit. Every other finding is `code`, anchored at the line a fix must change.

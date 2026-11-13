@@ -1081,9 +1081,11 @@ AUDIT_AREAS = (("builder", "builder"), ("collection_and_planning", "collection a
 SCHEMA_AUDIT = {"type": "object", "required": ["topics", "areas", "stopgap", "precedent", "resolution", "findings"], "properties": {
     "topics": {"type": "string"}, "stopgap": {"type": "string"}, "precedent": {"type": "string"}, "resolution": {"type": "string"},
     "areas": {"type": "object", "required": [k for k, _ in AUDIT_AREAS], "properties": {k: {"type": "string"} for k, _ in AUDIT_AREAS}},
-    "findings": {"type": "array", "items": {"type": "object", "required": ["id", "severity", "claim"], "properties": dict(
+    "findings": {"type": "array", "items": {"type": "object", "required": ["id", "severity", "about", "claim"], "properties": dict(
         _FINDING["properties"], severity={"type": "string", "enum": ["high", "medium", "low"]},
-        requirement={"type": "string"}, fix_first={"type": "boolean"})}}}}
+        requirement={"type": "string"}, fix_first={"type": "boolean"},
+        # what the finding is about: code, or a commit's message, trailers or process, which no move can change (audit_route)
+        about={"type": "string", "enum": ["code", "process"]})}}}}
 SCHEMA_RULING = {"type": "object", "required": ["ruling", "requeue", "escalate"], "properties": {"ruling": {"type": "string"},
     "requeue": {"type": "boolean"}, "escalate": {"type": "boolean"}, "for_dale": {"type": "string"}, "ledger_row": {"type": "string"}}}
 

@@ -38,8 +38,9 @@ prints.
 
 A **fix-first** hold is measured or it is refused: G2's lost cases, which its move must make pass, or an audit
 finding whose why starts with its path:line, which its move must touch within `fixfirst_lines` lines. Any other
-entry of the climb's `fixfirst.json` is skipped with a note naming it (A4); an audit finding that names no line, or
-a file no move may change (G5), goes to the note for Dale instead.
+entry of the climb's `fixfirst.json` is skipped with a note naming it (A4); an audit finding about a commit's message,
+trailers or process (its `about`, which the auditor must give), one that names no line, or one in a file no move may
+change (G5) goes to the note for Dale instead (`lander.audit_route`; door-probe rows).
 
 **The score's src part** runs first, before its smoke: every test file of ported code (test/src_tests.jl's walk of
 test/src) at origin's head, in one process of origin's own harness as a landing's check runs each file (the `check`
