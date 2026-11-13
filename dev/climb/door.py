@@ -272,7 +272,7 @@ def awake(role, t0):
     return now - t0 - sum(max(0.0, min(b, now) - max(a, t0)) for a, b in spans)
 
 class Tick(DoorError):
-    """tick()'s end of a wait: `why` is "disk" (under disk_free_gb), "power" (on battery, for a wait that ends on it) or
+    """tick()'s end of a wait: `why` is "disk" (under disk_free_gb), "power" (the power rule stops work, core.power_works, for a wait that ends on it) or
     "wall" (past the role's awake wall); the role is reaped before it is raised."""
     def __init__(self, role, why, text):
         super().__init__(text); self.role, self.why = role, why
@@ -280,8 +280,8 @@ class Tick(DoorError):
 def tick(role, t0=None, wall=None, battery_ends=False):
     """The one tick of every wait on a build user's process (A8-8: door.wait, measure.watched and land_job): the loop's
     beat, the power read (an event on change, core.power_ok), the disk asked (R7-6), and the role's awake time since
-    `t0` against `wall` (awake(): a landing's stop is never a run's timeout). Under the disk's floor, on battery when
-    `battery_ends` (a measurement or a check: an agent run finishes on battery, O8-3) or past the wall, the role is
+    `t0` against `wall` (awake(): a landing's stop is never a run's timeout). Under the disk's floor, when the power rule
+    stops work and `battery_ends` (a measurement or a check: an agent run finishes, O8-3) or past the wall, the role is
     reaped and Tick raised naming why. Returns the awake seconds left (None with no wall)."""
     HOOKS["beat"]()
     ac = HOOKS["power"]()
@@ -292,7 +292,7 @@ def tick(role, t0=None, wall=None, battery_ends=False):
     if why:
         reap(role)
         raise Tick(role, why, {"disk": f"the disk is under disk_free_gb while {ROLES[role]} ran: the role was reaped",
-                               "power": f"the Mac went on battery while {ROLES[role]} ran: the role was reaped",
+                               "power": f"the power rule stopped work (core.power_works) while {ROLES[role]} ran: the role was reaped",
                                "wall": f"{ROLES[role]} passed its wall of {wall} s of its awake time: the role was reaped"}[why])
     return left
 
@@ -1826,7 +1826,7 @@ def land_job(tree, script, log, out_files=(), wall=DEFAULTS["ship_kill_s"], back
             while p.poll() is None:
                 time.sleep(DEFAULTS["poll_s"]["land_job"])
                 tick("land", t0, wall, battery_ends=True)   # a check run by ship.sh's door process asks no power: its hook
-        except Tick as e:                                   # is the lander's, which ends the check on battery itself
+        except Tick as e:                                   # is the lander's, which ends the check itself by the power rule
             p.wait(); walled = True
             if e.why != "wall":
                 logf.write(f"\ndoor: {e}\n")

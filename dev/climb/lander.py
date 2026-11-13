@@ -274,7 +274,8 @@ def _land(slot, item, c, scan, handed=None):
                 if door.CLOCK() - t0 > c["ship_kill_s"]:
                     break
                 time.sleep(c["poll_s"]["scan"]); beat()
-                # on battery the check ends, redone on AC, never a D14 row (O8-3); ship.sh is stopped only while its step
+                # when the power rule stops work (core.power_works) the check ends, redone when work may run, never a D14
+                # row (O8-3); on battery with Low Power Mode off above the floor it runs on; ship.sh is stopped only while its step
                 # is the regeneration or the check, never at the push or after it: a kill between the push and the landed
                 # hook would leave a landing its log does not name (O9-1)
                 if not power_ok() and (step := ship_step(slot)) in ("regen", "check"):
@@ -296,10 +297,10 @@ def _land(slot, item, c, scan, handed=None):
     pr["during"] = dict(zip((k.lower() for k in CHECK_VM), (b - a for a, b in zip(v0, vm(CHECK_VM)))), secs=round(door.CLOCK() - t_check))
     result, verdict = ship_result(res), check_verdict(chk)
     pr["records"] = read_once(chk + ".records", cap=DEFAULTS["land_outs"]["total_bytes"])   # popped by land_round
-    if (battery or not power_ok()) and result[0] != "LANDED":   # a check that saw battery is no verdict (a landing stands)
+    if (battery or not power_ok()) and result[0] != "LANDED":   # a check the power rule stopped is no verdict (a landing stands)
         event("power-cut", role="land", in_flight=item["hold"], step=step, result=f"{result[0]}:{result[1]}")
-        raise PowerCut(f"the Mac went on battery during the landing check of {item['hold'][:80]} (ship.sh's step {step}): "
-                       "no verdict, redone on AC")
+        raise PowerCut(f"the power rule stopped work (core.power_works) during the landing check of {item['hold'][:80]} "
+                       f"(ship.sh's step {step}): no verdict, redone when work may run")
     pr["battery"] = battery
     return pr, result, verdict, open(log, errors="replace").read()[-20000:]
 
@@ -777,7 +778,7 @@ def land_round():
     approvals that held when it was approved, so no agent's state, the week's half or the budget stops a landing (D51).
     The line stop is ship.sh's to apply (--admissible). Returns 3 when nothing waits or nothing could land."""
     if pause() or waits("lander") or not power_ok():   # every lander:* backoff, by one predicate (Z1)
-        return 3   # no rebased measurement or landing check starts on battery (O8-3)
+        return 3   # no rebased measurement or landing check starts while the power rule stops work (O8-3)
     reconcile()
     overdue = fixfirst_overdue()   # R4, R11: a known red past its age, the lander lands its fix alone
     fixfirst_binds(overdue)

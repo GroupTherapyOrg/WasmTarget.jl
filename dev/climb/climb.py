@@ -61,6 +61,17 @@ def slot_names():
     return [f"climb-{i}" for i in range(1, cfg()["slots"] + 1)]
 
 
+def power_hold():
+    """The heartbeat's power assertion, as caffeinate's flags (spec battery1 B2), asked each minute by launch.sh's
+    heartbeat: with `battery_runs`, `-i -s` while work may run (core.power_ok: `-i` holds the Mac awake on battery too,
+    `-s` on AC as before) and none while the power rule stops work (Low Power Mode on battery, or under
+    battery_floor_pct), so an emptying battery is never held awake (O9-2); with it off, `-s` alone, as before (it holds
+    on AC only). A closed lid still sleeps the Mac."""
+    if not cfg()["battery_runs"]:
+        return "-s"
+    return "-i -s" if power_ok() else ""
+
+
 @contextlib.contextmanager
 def loop_lock(name):
     """One process per loop and per slot (20): a second one exits at once (yields False)."""
@@ -127,7 +138,7 @@ def src_part(head):
     ANY kind in it (a cut, a refused record, the door's, the driver's own bug) is `src-failed` with its traceback and one
     note, and the smoke runs still; that head is then not verified (D9: located, never lost; the operator's round-13
     finding 1, an IndexError out of the locate that killed every score before its smoke). A power cut is the one
-    exception passed on: the score ends there and is redone on AC, as every measurement's is."""
+    exception passed on: the score ends there and is redone when work may run, as every measurement's is."""
     import traceback
     try:
         with julia_slot("score"):
@@ -164,7 +175,7 @@ def alarms():
     # the slots idle by rule, a computed wait, no stall (O8-5): the queue at queue_cap, a D14 wait or its binding, battery
     overdue = fixfirst_overdue()
     by_rule = len(admitted_queue(overdue)) >= cfg()["queue_cap"] or backed_off("lander", "d14") or \
-        state_json("alarms.json", {}).get("d14-binds") or not state_json("power.json", {}).get("ac", True)
+        state_json("alarms.json", {}).get("d14-binds") or not state_json("power.json", {}).get("runs", True)
     if started < cut and not any(e["t"] >= cut for e in ev if e["kind"] in ("climb", "landed")) and not \
             (week_half() or state_json("waits.json", {}) or by_rule):
         alarm("stall", "the climb has stalled", f"No move started and none landed since {cut} (the backoffs: "
@@ -211,7 +222,7 @@ def score_tick():
     head = git("rev-parse", f"origin/{MARCH}")
     n = len(git("rev-list", f"{last}..{head}").splitlines()) if last else 10 ** 6
     if head != last and not backed_off("score") and (n >= cfg()["score_every_landings"] or time.time() - last_t >= cfg()["score_every_s"]) \
-            and power_ok():   # no score starts on battery (O8-3)
+            and power_ok():   # no score starts while the power rule stops work (O8-3, core.power_works)
         scoreboard_once(head)
     if pause() or week_half() or token_refused():
         return
@@ -364,13 +375,15 @@ def landed_code():
 
 def oracle_on_ac(what, fn, *args):
     """A hand command's long run of the oracle (its bootstrap, replay or audit) through the power gate, on_ac: a cut
-    prints one line, waits for AC and runs fn again, which continues from what it kept (the bootstrap's partial file);
-    past task_wall_s of awake time on battery it ends with one line and exit 3, resumable, never a traceback. An
+    prints one line, waits until work may run (core.power_works) and runs fn again, which continues from what it kept
+    (the bootstrap's partial file); past task_wall_s of awake time waiting it ends with one line and exit 3, resumable,
+    never a traceback. An
     interrupt (INT, TERM) is no PowerCut: it ends the command at once."""
     try:
         return on_ac(what, fn, *args, wait=True, say=lambda s: print(f"climb: {s}", flush=True))
     except PowerCut as e:
-        print(f"climb: {what} ended on battery past task_wall_s ({str(e)[:160]}); run it again on AC: it continues "
+        print(f"climb: {what} ended, the power rule stopping work past task_wall_s ({str(e)[:160]}); run it again on AC "
+              "or on battery with Low Power Mode off: it continues "
               "from what it kept", flush=True)
         sys.exit(3)
 
@@ -386,7 +399,7 @@ def main():
     up = sp.add_parser("unpark"); up.add_argument("hold_id")
     j = sp.add_parser("judge-eval"); j.add_argument("-n", type=int, default=None)
     so = sp.add_parser("slot"); so.add_argument("name")
-    sp.add_parser("lander"); sp.add_parser("score-tick"); sp.add_parser("slot-names"); sp.add_parser("resume-stopped"); sp.add_parser("hill")
+    sp.add_parser("lander"); sp.add_parser("score-tick"); sp.add_parser("slot-names"); sp.add_parser("power-hold"); sp.add_parser("resume-stopped"); sp.add_parser("hill")
     sp.add_parser("reap-orphans")
     nt = sp.add_parser("alarm"); nt.add_argument("name"); nt.add_argument("title"); nt.add_argument("text")
     sp.add_parser("door-probe"); sp.add_parser("agent-probe"); sp.add_parser("claim-repo"); df = sp.add_parser("default"); df.add_argument("key")
@@ -444,6 +457,7 @@ def main():
         print(f"unparked {a.hold_id}")
     elif a.cmd == "judge-eval": judge_eval(a.n)
     elif a.cmd == "slot-names": print(" ".join(slot_names()))
+    elif a.cmd == "power-hold": print(power_hold())
     elif a.cmd == "resume-stopped": pass   # resume_orphans() above is the whole command
     elif a.cmd == "reap-orphans":   # a killed driver's build-user processes, each role whose lock is free (door.reap_orphans)
         for r, ps in door.reap_orphans().items():

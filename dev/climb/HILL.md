@@ -509,7 +509,7 @@ alarm, its negative or probe, or the accepted risk (RISKS' letter). An input not
 | the labels measured | the corpus's registrations (`corpus_labels`); a row for every label or none; a group or case name outside [A-Za-z0-9_./-] refused at its registration, located (`_label_refusal`, spec v17 Y4, red 8c: every record of a label is tab- and line-framed) | score-failed; the unit refused | test/src/corpus_loader_negatives.jl (label_tab, label_group) | |
 | a row's provenance | each row names the stored answer it was judged against (its block's hash, `noanswer:` before a stored noanswer) and the judge's key (`judge_id`: the answering program's and the verdict's files, and the launch's tools.json: Julia's build, node's version and sha256), `Row.prov`, kept in the cases files and the table (spec v17 Y4); G2 counts a pass lost only between two rows of the same answer and judge, never a stored noanswer (`same_judgement`: `losses`, `regressions`, `confirmed`) | any other lost pass is a rebase: `score-rebased`, one note naming the labels, the table takes the rows, no G2 | v17 Y4 (council/v17-report.md: a replay turning a pass noanswer and a judge change, no G2; HEAD filed a fix-first no move could fix) | |
 | a gap | one gap rule: OracleGap, `score-failed`, nothing recorded | one note | v14/drv v5 (gapscore) | (e) |
-| a cut, a power loss | MeasureCut; PowerCut | score-failed; power-wait | | |
+| a cut, a power loss (the power rule stops work: core.power_works) | MeasureCut; PowerCut | score-failed; power-wait | | |
 | a driver-booked `noanswer` (a kill, a failed process, refused records) | never stored (`Booked`, refused by `oracle_write`, spec v16 X3): the label keeps no index line, the next lander start answers it again (`oracle_unanswered`), and until then each measurement's gap is that label's, located | the label errored, named | | |
 | **(e) what a landing's check proves** | | | | |
 | a test file's verdict (passed / failed) | test/src_tests.jl's record path (`_wt_red`: Test.get_test_counts over the file's testset, nested included), written by the process that ran the file; the judge's canary (test/src_canary.jl, G5) run last in every process through the same path, one testset that must read failed and one that must read passed; the process's exit status, which must agree with its rows; after EACH file F the canary's two tests run again AS F (F's name, F's testset path), their result F's row's sixth field, a wrong one voiding the process (spec v17 Z4); every test process runs in a tree without history (`git archive` of the commit, its parent's test/ beside it as WT_BASE_TREE), and a located culprit stands only when its file runs green at the culprit's parent | dev/check.sh red (`the shards' records are void`); the score's `src-void` | the architect's p6 (a file overriding Test.get_test_counts), lc's switch probe; red's round-14 p1 (a change keyed on a later file's name: void at that file), a test red by `git log` and one red by the date (flaky, never a culprit); two STOPGAPS by their kind, L228's reach checks (parsed src and test files: no Test internal, eval elsewhere, exit, record variable, .wtd, git, clock or date; an exact allowlist) | NOT fixed by construction, said plainly (round 13's S6, spec v17 Z4): a test file and the src it tests run in the process that records it, so they can change the harness for every file after it; the exit status, the canary at the end and the canary as each file catch a change that lasts to any of them, keyed on a file's name included; a TARGETED change that tells the canary from a real test some other way (its source file, its expressions) and lasts, or one that names the harness through a name built at run time, is caught only by G4 reading the move's diff (reviewer.md; RISKS (g)). One process per file was measured, not built: about 57 s a file, the score's src part about 3,570 s against 284-341 s, 11-12 times, and every landing's share as many times over |
@@ -804,7 +804,7 @@ door's, run as Dale on paths no build user writes.
   replay: with the climb paused, `climb.py oracle-replay` answers every label of origin's corpus again under origin's
   key, one process a label, each written in its source's unit (the bootstrap's, and each unit's commit), resumable
   label by label as the bootstrap is (its partial file kept only under the same whole key line, else started over,
-  said) and waiting for AC; measured, the bootstrap of 1,949 labels took 16,890 s (v12, at default QoS), so a replay of
+  said) and waiting until work may run (core.power_works); measured, the bootstrap of 1,949 labels took 16,890 s (v12, at default QoS), so a replay of
   the store as it stands costs about 4.7 h; an edit of the decoder (`test/oracle_read.jl`), the
   runner (`test/runner.jl`), the compiling side (`test/smoke.jl`) or the verdict (`test/verdict.jl`) changes no key
   and needs no replay (probed in a scratch state: v14/drv). (f) **the compiling process holds the corpus** (G4's): it
@@ -980,7 +980,7 @@ door's, run as Dale on paths no build user writes.
   taken (`src-ring.json`, written when the landing lands). The target is D14's band less a margin
   computed live by `measure.src_target`, never set by hand, per shape, one-sided, robust and bounded (spec v17 Z5):
   three times the SECOND-largest positive error (judged over predicted) of the last `src_margin_checks` checks of the
-  landing's shape that were predicted before they ran, on AC, and passed and landed or read red on D14's band alone
+  landing's shape that were predicted before they ran, not ended by the power rule, and passed and landed or read red on D14's band alone
   (spec v18 Q5: the errors that cross the band are the ones the margin must see; a check red on its tests teaches
   nothing), between `src_margin_min_s` and `src_margin_max_s`, `src_margin_start_s` until that many exist, a note to
   Dale once per crossing of the cap; and no set is admitted larger in G than the largest set those errors were measured
@@ -1176,33 +1176,43 @@ every call. (Weighted means cache reads at 0.1, cache writes at 1.25, output at 
   `logs/<loop>.stamp` at every iteration and every step of progress (an event, a poll of a run it waits on, a
   measured case's record, a wait on a lock: `core.beat`), and `launch.sh` starts a heartbeat that touches
   `~/Library/Application Support/wt-climb/heartbeat` every minute while every loop's stamp is younger than its
-  `loop_stale_s` and none has failed five times in a row, under a power assertion named for it (`pmset -g
-  assertions`, `caffeinate -s`: on AC alone, since on battery the climb starts nothing and `-i` kept the Mac awake
-  until its battery emptied, O9-2), so the Mac does not idle to sleep under the climb and one dead or hung loop stops it (probed: a lander
+  `loop_stale_s` and none has failed five times in a row, holding a power assertion of its own (`caffeinate <flags> -w
+  <the heartbeat>`, its flags asked each minute of `climb.py power-hold`, spec battery1 B2: with `battery_runs`, `-i -s`
+  while work may run, on battery too, and none while the power rule stops work, so an emptying battery is never held
+  awake, O9-2; with it off `-s`, on AC alone; a driver that cannot answer keeps the flags it had; a closed lid still
+  sleeps the Mac), so the Mac does not idle to sleep under the climb and one dead or hung loop stops it (probed: a lander
   stamp 40 min old stopped the heartbeat, which the old one, alive while any loop lived, touched); every git network
   call of the driver, its loops and the ship.sh it runs is cut under `git_low_speed` (git reads it from the
   environment the driver sets), and every wait on a lock of the climb's is bounded (a role's by `role_wait_s`, the
   dependency images' too, the agent probe's, the state's by `state_lock_s`), past it an event and the loop's backoff;
-  a loop's fifth failure in a row is a note written by bash, which needs no driver module. **AC power** (O8-3, R8-5, O9-1):
-one reading of the power source and Low Power Mode (`core.power_ok`, pmset's own words, at most once a second) is
-taken at every tick where the disk is asked and by each loop before it starts work. A change counts only once the new
-reading has held `power_settle_s` (O9-2: the adapter flapped 117 times in six minutes on 2026-11-08): the reading that
+  a loop's fifth failure in a row is a note written by bash, which needs no driver module. **Power** (O8-3, R8-5, O9-1, spec battery1 B1):
+work runs by one rule, `core.power_works`: on AC; or, with `battery_runs` (Dale 2026-11-13: "keep gping with or
+without battery"), on battery with Low Power Mode off and the charge at or above `battery_floor_pct`. Low Power Mode
+on battery waits (it halves the machine's rate: every landing check would read red on D14's band and every learned
+second be wrong), and so does a charge under the floor (so the battery emptying never cuts a landing or a push); with
+`battery_runs` false the climb runs on AC alone, as before. One reading of the power source, Low Power Mode and the
+battery's charge (`core.power_read`, pmset's own words, at most once a second; `core.power_ok` the rule over it) is
+taken at every tick where the disk is asked and by each loop before it starts work. A change of (source, Low Power
+Mode, the charge at or above the floor) counts only once the new reading has held `power_settle_s` (O9-2: the adapter flapped 117 times in six minutes on 2026-11-08): the reading that
 differs is kept in `power.json` with when any process first saw it, dropped when any process reads the settled one
-again, and settled once it has held, which writes the event (`power`) and at most one note for Dale per direction per
-`alarm_s` ("on battery since …: the climb waits; plug in"). Probed (`v10/p3/flap.py`, the operator's, on a simulated
+again, and settled once it has held, which writes the event (`power`, with the charge and whether work runs) and at
+most one note for Dale per direction per `alarm_s`, the directions being work on AC, work on battery and waiting (in
+Low Power Mode the note says exactly what to do: "turn Low Power Mode off on battery (System Settings → Battery → Low
+Power Mode: Never, or Only on Power Adapter is NOT enough) or plug in"). Probed (`v10/p3/flap.py`, the operator's, on a simulated
 clock: `pmset -g log`'s own timeline read every 5 s): each burst wrote one note and one event, the settle to AC once it
 stopped (the windows' other note is a real battery period before each burst), where HEAD wrote 30 and 6; two real
-unplugs 20 minutes apart wrote one note per direction, where HEAD wrote four (`twice.py`). On battery no
-move, measurement, score or landing check starts: each loop's start reads it, and `julia_slot`, which every
-measurement and check holds, waits for AC before it starts anything (`ac_wait`, at most `task_wall_s` of awake time).
-A measurement or check in flight when the source changes ends (`power-cut`, naming the label in flight, or the hold
-for a check), never a verdict, a learned time or a D14 row (`d14_binds` and `near_band` count no check that saw
-battery), and its `PowerCut` is handled in one place, `core.on_ac`, never as a failure: it books `power-wait`, with no
+unplugs 20 minutes apart wrote one note per direction, where HEAD wrote four (`twice.py`). While the rule stops work
+no move, measurement, score or landing check starts: each loop's start reads it, and `julia_slot`, which every
+measurement and check holds, waits until work may run before it starts anything (`ac_wait`, at most `task_wall_s` of
+awake time). A measurement or check in flight when the rule comes to stop work ends (`power-cut`, naming the label in
+flight, or the hold for a check), never a verdict, a learned time or a D14 row (`d14_binds` and `near_band` count no
+check the rule ended); one in flight when the source changes from AC to battery with Low Power Mode off above the
+floor is not ended (nothing about its timing changed). Its `PowerCut` is handled in one place, `core.on_ac`, never as a failure: it books `power-wait`, with no
 backoff, no `base-failed` or `lander-error` and no note beyond the power note. A loop's iteration (a score, the
-lander's round with its rebased check, a land check) ends there, and the loop starts nothing until AC. A move keeps
-its commit and its slot's use: its gate (the bundle, G5, the measurement) and its base measurement wait for AC and run
-again, the wait bounded by `task_wall_s` from the first cut, past which the move ends as infrastructure. On battery the
-lander stops ship.sh only while ship.sh's step (`$WT_SHIP_STEP`) is `regen` or `check`, never at the push or after it,
+lander's round with its rebased check, a land check) ends there, and the loop starts nothing until work may run. A
+move keeps its commit and its slot's use: its gate (the bundle, G5, the measurement) and its base measurement wait
+and run again, the wait bounded by `task_wall_s` from the first cut, past which the move ends as infrastructure. When the rule
+stops work the lander stops ship.sh only while ship.sh's step (`$WT_SHIP_STEP`) is `regen` or `check`, never at the push or after it,
 since a stop between the push and the landed hook would leave a landing its log does not name; a landing that completed
 stands. Agent runs in flight finish. Probed (`v10/p2/power.py`, a stubbed reader, a scratch state): three cuts of the
 lander's rebased check wrote three `power-wait`s, no backoff and no note, where HEAD backed off three times and noted
@@ -1211,7 +1221,8 @@ and one left on battery past `task_wall_s` ended as infrastructure, where HEAD b
 first cut; a base cut by battery was measured again with no alarm, where HEAD wrote `base-failed`; a check on battery
 at its push ran to `LANDED`, and one at its check was stopped with no verdict, where HEAD stopped both. Earlier
 (v9, p3): a slot, the lander and the score tick started nothing on battery, a compile in flight ended at the change
-and learned nothing, and ten D14 reds that saw battery wrote no note.
+and learned nothing, and ten D14 reds that saw battery wrote no note (those probes ran the AC-only rule). Probed
+(battery1, `core.POWER[0]` stubbed, a scratch state in a clone): on battery with Low Power Mode off at 80% work runs and a measurement in flight is not cut (door.tick), where 4945cf3b cut it; in Low Power Mode, and at 15% (also crossing from 80%), work waits, the first note naming the setting to change and the second the floor; the 117 flaps of 2026-11-08, twice within `alarm_s`, write two notes and five events with either battery reading; `power-hold` reads `-i -s` while work runs and nothing while it waits; with `battery_runs` false every one of these reads as 4945cf3b's, line for line (`battery/probe.out`).
   `launch.sh watch-install` installs a launchd agent whose script lives outside ~/Documents (a launchd job is denied
   the protected folders, and Dale grants no Full Disk Access): after every login, and when the heartbeat is
   `watch_stale_s` old, it posts a notification telling Dale to run `launch.sh`; within `watch_stale_s` of the
@@ -1270,20 +1281,21 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `price_usd` {"claude-opus-5-5": {"input": 4.0, "output": 20.0, "cache_write_5m": 5.0, "cache_write_1h": 8.0, "cache_read": 0.2}, "claude-fable-5-1": {"input": 10.0, "output": 50.0, "cache_write_5m": 12.5, "cache_write_1h": 20.0, "cache_read": 0.5}, "claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_write_5m": 2.5, "cache_write_1h": 4.0, "cache_read": 0.1}, "claude-haiku-5-5": {"input": 0.1, "output": 0.5, "cache_write_5m": 0.125, "cache_write_1h": 0.2, "cache_read": 0.01}},
 `price_band` [0.95, 1.05], `resumes_per_move` 3, `stops_per_hold` 3, `park_steps` [50, 100, 200],
 `queue_cap` 4 (locked), `task_wall_s` 5400, `audit_every` 5 (locked), `score_every_landings` 3, `score_every_s` 7200,
-`retry_backoff_s` 1800, `backoff_cap_s` 28800, `alarm_s` 21600, `power_settle_s` 60, `oracle_audit_k` 8,
-`oracle_background` false, `lock_wait_s` 3600, `score_loss_band` 0.02, `judge_n` 10, `judge_lines` 150,
-`judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3, `case_min_s` 900, `case_factor` 20,
-`watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120, `kaimon_start_s` 900,
-`session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000, `decompressions_max` 400000,
-`probe_backoff_s` 600, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6],
-`other_tries` 3, `ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296,
-`cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6,
-`base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
-`src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0},
-`src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9, `src_margin_min_s` 10, `src_margin_checks` 10,
-`src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800, `admissible_wall_s` 600,
-`parse_wall_s` 300, `loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432, `proxy_request_s` 1200,
-`proxy_join_s` 30, `git_low_speed` [1000, 60], `loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
+`retry_backoff_s` 1800, `backoff_cap_s` 28800, `alarm_s` 21600, `power_settle_s` 60, `battery_runs` true,
+`battery_floor_pct` 20, `oracle_audit_k` 8, `oracle_background` false, `lock_wait_s` 3600, `score_loss_band` 0.02,
+`judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3,
+`case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120,
+`kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000,
+`decompressions_max` 400000, `probe_backoff_s` 600, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200,
+`d14_share` [10, 0.6], `other_tries` 3, `ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20,
+`file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4],
+`tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6, `src_unverified_max` 6,
+`src_shape_checks_min` 2, `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375,
+`src_prior_load_s` {"src": 17, "outside": 0}, `src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9,
+`src_margin_min_s` 10, `src_margin_checks` 10, `src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800,
+`kinds_wall_s` 1800, `admissible_wall_s` 600, `parse_wall_s` 300, `loader_wall_s` 600, `proxy_in_flight` 1,
+`proxy_body_bytes` 33554432, `proxy_request_s` 1200, `proxy_join_s` 30, `git_low_speed` [1000, 60],
+`loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
 `role_wait_s` {"slot": 10800, "review": 10800, "measure": 49800, "score": 49800, "land": 5400, "deps": 3600},
 `state_lock_s` 600, `step_wall_s` 60, `tree_wall_s` 600, `kaimon_poll_s` 30, `kaimon_ping_s` 10,
 `poll_s` {"kaimon_up": 5, "scan": 10, "lock": 5, "landing_lock": 20, "yield": 2, "land_job": 5},

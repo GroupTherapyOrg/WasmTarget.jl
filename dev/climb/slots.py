@@ -255,7 +255,7 @@ def move(h, slot_name):
                 warm["error"] = e
         th = threading.Thread(target=warmup, daemon=True)
         th.start()
-        try:   # a power cut waits for AC and measures the base again, the slot's use kept (on_ac, O9-1)
+        try:   # a power cut waits until work may run and measures the base again, the slot's use kept (on_ac, O9-1)
             before = on_ac(f"base {base[:10]}", measure_base, base, labels, wait=True)
         except ClimbError as e:   # origin's own tree failed: the driver's, one note, never the hold's (O5, O14)
             alarm("base-failed", "a base measurement of origin failed", f"origin {base[:10]}: {str(e)[:1200]}\nDefault taken: "
@@ -366,8 +366,8 @@ def climb(h, slot_name, clone, base, task, labels, before, warm, dk):
         if bad:
             return [], ["G5: " + b for b in bad], []
         return measure_candidate(h, base, sha, labels, before, task, keep=os.path.join(STATE, "deltas", f"{task}.answers.tsv"))[:3]
-    # a power cut in a gate waits for AC and runs the gate again on the commit the move holds: the climber's work and
-    # the slot's use are kept (on_ac, O9-1); past task_wall_s on battery the move ends as infrastructure
+    # a power cut in a gate waits until work may run and runs the gate again on the commit the move holds: the
+    # climber's work and the slot's use are kept (on_ac, O9-1); past task_wall_s of waiting the move ends as infrastructure
     gate = lambda: on_ac(f"move {h['key'][:80]}", gated, wait=True)
     unlocked, problems, rows = gate()
     if problems and not any(p_.startswith("G5") for p_ in problems):
@@ -560,7 +560,7 @@ def slot_once(name):
     3 when there is nothing to do yet (the loop sleeps)."""
     reap_claims()
     if line_stopped(name) or pause() or backed_off("slot", name) or week_half() or token_refused() or not power_ok():
-        return 3   # no move starts on battery (O8-3)
+        return 3   # no move starts while the power rule stops work (O8-3)
     if not probe_gate(name):   # what only a model shows, proved per claude the launch chose (item 5, O6-3)
         return 3
     if over_budget():   # the wait's transitions alone are events (A13)

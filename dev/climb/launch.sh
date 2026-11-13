@@ -157,10 +157,13 @@ loop lander 180 lander
 for n in $(py slot-names); do loop "$n" 120 slot "$n"; done   # climb.py slot_names: none for slots: 0
 # the heartbeat (O5-8, O6-6): touched every minute while every loop's stamp (logs/<loop>.stamp, written at each
 # iteration and each step of progress, core.beat) is younger than that loop's DEFAULTS loop_stale_s and none has failed
-# five times in a row, under a power assertion named for it (pmset -g assertions: "caffeinate asserting on behalf of
-# '.../wt-climb-heartbeat'"), so the Mac does not idle to sleep under the climb on AC and the watcher tells Dale when any
-# one loop dies or hangs; `caffeinate -s` holds only on AC (O9-2: on battery the climb starts nothing, and `-i` kept the
-# Mac awake until its battery emptied; the driver's awake clocks survive a sleep, O7-1)
+# five times in a row, holding a power assertion of its own (a `caffeinate <flags> -w <the heartbeat>` it starts), so
+# the Mac does not idle to sleep under the climb and the watcher tells Dale when any one loop dies or hangs. Its flags
+# are asked each minute of `climb.py power-hold` (spec battery1 B2): with battery_runs, `-i -s` while work may run (on
+# battery too) and none while the power rule stops work (Low Power Mode on battery, or under battery_floor_pct), so an
+# emptying battery is never held awake (O9-2); with it off, `-s` alone, which holds on AC only, as before. A driver that
+# cannot answer keeps the flags it had (`-s` at the start). A closed lid still sleeps the Mac; the driver's awake clocks
+# survive a sleep (O7-1)
 stamps=""; for n in scoreboard lander $(py slot-names); do
   stamps="$stamps $n:$(here default loop_stale_s | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d[sys.argv[1].split("-")[0]])' "$n")"
 done
@@ -173,11 +176,18 @@ while :; do
   [ \$fresh -eq 1 ] && [ \$bad -eq 0 ] && touch "$hb"
   # a killed driver's orphans, each minute (door.reap_orphans: a build user's process whose role no process uses)
   (cd "$drv" && python3 dev/climb/climb.py reap-orphans) >> "$state/logs/heartbeat.log" 2>&1
+  # its power assertion (climb.py power_hold): restarted when its flags change or it has ended
+  mode=\$(cd "$drv" && python3 dev/climb/climb.py power-hold 2>> "$state/logs/heartbeat.log") || mode=\${held--s}
+  if [ "\$mode" != "\${held-unset}" ] || { [ -n "\$hpid" ] && ! kill -0 "\$hpid" 2>/dev/null; }; then
+    [ -n "\$hpid" ] && kill "\$hpid" 2>/dev/null; hpid=""
+    [ -n "\$mode" ] && { /usr/bin/caffeinate \$mode -w \$\$ & hpid=\$!; }
+    held=\$mode; echo "\$(date -u +%FT%TZ) power assertion: \${mode:-none}" >> "$state/logs/heartbeat.log"
+  fi
   sleep 60
 done
 BEAT
 chmod 755 "$watch/wt-climb-heartbeat"; rm -f "$state"/logs/*.fails; touch "$hb"
-/usr/bin/caffeinate -s "$watch/wt-climb-heartbeat" > /dev/null 2>&1 &
+"$watch/wt-climb-heartbeat" > /dev/null 2>&1 &
 echo "$! $boot" > "$state/pids/heartbeat"; echo "started the heartbeat (pid $!, $hb)"
 echo
 py report

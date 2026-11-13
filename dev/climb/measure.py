@@ -212,7 +212,7 @@ def julia_slot(kind, first=False):
         while landing_lock_held():
             long_wait(f"{COMMON}/wt-landing-lock")
             time.sleep(cfg()["poll_s"]["landing_lock"]); beat()
-        ac_wait()   # no measurement starts on battery: it waits for AC, task_wall_s at most (O9-1, A9-1)
+        ac_wait()   # no measurement starts while the power rule stops work (core.power_works): it waits, task_wall_s at most (O9-1, A9-1)
         HELD_SLOT[kind] = fd
         yield
     finally:
@@ -838,11 +838,12 @@ def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=Fals
                 door.tick(role, battery_ends=True)
             except door.Tick as e:
                 p.wait()
-                if e.why == "power":   # on battery the measurement ends, redone on AC (on_ac); nothing it timed is learned
+                if e.why == "power":   # the power rule stopped work: the measurement ends, redone when work may run (on_ac); nothing it timed is learned
                     flight = last if last and last not in done else None
                     event("power-cut", role=role, part=part, in_flight=flight, after=max(done) if done else None)
-                    raise PowerCut(f"the Mac went on battery while the {part} process ran (in flight: "
-                                   f"{flight or 'no case, its load or between two'}): the measurement ends, redone on AC")
+                    raise PowerCut(f"the power rule stopped work (core.power_works: battery in Low Power Mode, under "
+                                   f"battery_floor_pct, or with battery_runs off) while the {part} process ran (in flight: "
+                                   f"{flight or 'no case, its load or between two'}): the measurement ends, redone when work may run")
                 raise ClimbError(f"the {part} process: {e}")
             if not alive and th is not None:
                 th.join(c["step_wall_s"])   # every byte it wrote before it ended, drained
@@ -2662,7 +2663,7 @@ def src_target(band, src_change):
     (`band`, origin's dev/check.sh D14_RED) less a margin, one-sided, robust, per shape and bounded (spec v17 Z5; the
     round-14 architect's finding 4, red's 7):
       - its errors: judged less predicted, POSITIVE only (a check faster than predicted never threatens D14), of the last
-        src_margin_checks checks of this shape whose prediction the lander recorded before they ran, on AC, that
+        src_margin_checks checks of this shape whose prediction the lander recorded before they ran, not ended by the power rule, that
         passed and landed OR read red on D14's band alone (spec v18 Q5, the round-15 architect's finding 5: the errors
         that cross the band are exactly the ones the margin must see; every check that ran passed the lander's quiet
         probe); a check red on its tests teaches nothing here;
@@ -2708,7 +2709,7 @@ def src_target(band, src_change):
 
 def checks_measured(n=5):
     """The split of the last `n` landing checks OF EACH SHAPE (a change to src/, one outside it: the src_change its
-    lander recorded) on AC whose tests all passed, green or red on D14's time alone (`ship` events, step 2: a D14 red is
+    lander recorded) not ended by the power rule (probe.battery) whose tests all passed, green or red on D14's time alone (`ship` events, step 2: a D14 red is
     a whole check, and leaving it out would read the machine faster than it ran), in their order, each with the files it
     ran: the measures predict() reads, never a number made up (D9). Per shape, since a change to src/ reads its files
     slower than the score's costs (its changed image compiles more, round 13's ruling S2), so a run of one shape never
@@ -3013,7 +3014,7 @@ def rebased(base, sha, onto):
     try:
         rc = door.land_job(wt, door.REGEN, "regen.log", ["src/julia/packages.jl"], cfg()["pkg_wall_s"],
                            background=True)   # under the caller's verify lock and at background QoS (D31, A7-5)
-    except door.Tick as e:   # cut by battery: no verdict on the commit, redone on AC (on_ac)
+    except door.Tick as e:   # cut by the power rule: no verdict on the commit, redone when work may run (on_ac)
         if e.why == "power":
             raise PowerCut(f"the packages regeneration of {at[:10]}: {e}") from e
         raise

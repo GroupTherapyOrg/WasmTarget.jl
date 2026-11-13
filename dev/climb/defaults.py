@@ -79,6 +79,16 @@ DEFAULTS = {
     # held 12 s and 10 s at the longest inside each burst (v10/p3/holds.out); band 36-120 s: at least three times the
     # longest hold seen inside a burst, and at most two minutes of a real unplug before a measurement in flight ends
     "power_settle_s": 60,
+    # work runs on battery too (spec battery1 B1), Low Power Mode off and the charge at or above battery_floor_pct; Low
+    # Power Mode on battery waits (it halves the machine's rate: D14 reds, wrong learned seconds). Intent and
+    # derivation: Dale 2026-11-13, "keep gping with or without battery"; false is the AC-only climb of O8-3
+    "battery_runs": True,
+    # under this charge the climb waits for AC, as on AC-only, so a landing or a push is never cut by the battery
+    # emptying. Derivation: the load's measured drain, 100% to 75% in about 45 minutes under two builders on
+    # 2026-11-11 (about 33%/h): 20% leaves about 35 minutes for what is in flight to end and the Mac to be plugged in;
+    # band 10-40%: under 10 a check in flight (up to ~10 min) and the push can meet macOS's own low-battery sleep, over
+    # 40 more than half of every battery period idles
+    "battery_floor_pct": 20,
     # the oracle's audit (climb.py oracle-audit) replays this many stored answers, each in a process of its own at its
     # unit's commit. Derivation: a process pays the corpus's load, 60-90 s at normal priority (v8-report: native parts
     # of 66 s and 91 s) and about 7.5 min at background QoS, where the driver's Julia runs (the bootstrap of 2026-11-10:
@@ -115,9 +125,9 @@ DEFAULTS = {
     # seconds, pkg_wall_s for a label never learned; measure.part_wall), so the per-case budgets bound a healthy run and
     # the wall only a run whose cases all run slow; a process past it is never a result (MeasureCut). Intent: no full
     # score passes a fixed wall by its size (the old 10,800 s: v8's own times project a score's compile part at 8,400 to
-    # 14,800 s). Band: the learned seconds are the longest seen on origin's own commits on AC power (learn); a full
+    # 14,800 s). Band: the learned seconds are the longest seen on origin's own commits while work may run (learn); a full
     # score's driver-timed compile measured 2.45 x smoke.jl's own seconds (round 8, p21's 127 labels), which the
-    # learned seconds already carry, and Low Power Mode halves the rate (a measurement is ended on battery, item 3), so 3
+    # learned seconds already carry, and Low Power Mode halves the rate (a measurement is ended in it, item 3), so 3
     # covers a run 50% slower than the slowest seen of each case at once; under 2 a slow hour fails healthy scores, over
     # 4 a hang of every case past its budget is all that ends a run (each case's own budget ends one case)
     "wall_factor": 3,

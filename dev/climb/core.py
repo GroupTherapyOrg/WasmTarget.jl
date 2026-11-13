@@ -19,9 +19,9 @@ class ClimbError(Exception):
     """A failed step of the driver: an event, never a dead process (SystemExit is not an Exception)."""
 
 class PowerCut(Exception):
-    """A measurement or a landing check ended, or could not start, because the Mac draws from its battery (power_ok):
+    """A measurement or a landing check ended, or could not start, because the power rule stops work (power_works):
     never a failure, a verdict or a learned time (O8-3). Not a ClimbError, so no handler of the driver's failures books
-    it: on_ac() is its one handler (O9-1, A9-1). `final`: raised by ac_wait() past task_wall_s on battery."""
+    it: on_ac() is its one handler (O9-1, A9-1). `final`: raised by ac_wait() past task_wall_s of waiting."""
     final = False
 
 # the programs the driver runs as Dale (D10's rule applied to the driver: the wrong program cannot be run): git as
@@ -891,60 +891,99 @@ def disk_room():
     return False
 
 def power_read():
-    """(on AC, Low Power Mode on), read from pmset's own words (`pmset -g batt`: "Now drawing from 'AC Power'" or
-    "'Battery Power'"; `pmset -g`: `lowpowermode 1`); an answer that names neither source is a ClimbError, never a
-    guess (D9)."""
+    """(on AC, Low Power Mode on, the battery's charge in percent), read from pmset's own words (`pmset -g batt`: "Now
+    drawing from 'AC Power'" or "'Battery Power'" and the battery's "<n>%;"; `pmset -g`: `lowpowermode 1`); an answer
+    that names neither source, or a battery source with no charge, is a ClimbError, never a guess (D9). A Mac with no
+    battery reads on AC with no charge (None)."""
     b, g = sh(["pmset", "-g", "batt"]).stdout, sh(["pmset", "-g"]).stdout
     if "'AC Power'" not in b and "'Battery Power'" not in b:
         raise ClimbError(f"pmset names no power source: {b.strip()[:120]!r}")
     m = re.search(r"^\s*lowpowermode\s+(\d+)", g, re.M)
-    return "'AC Power'" in b, bool(m and m.group(1) != "0")
+    pct = re.search(r"\t(\d+)%;", b)
+    if "'Battery Power'" in b and not pct:
+        raise ClimbError(f"pmset names the battery as the source and no charge: {b.strip()[:160]!r}")
+    return "'AC Power'" in b, bool(m and m.group(1) != "0"), int(pct.group(1)) if pct else None
 
 POWER = [power_read, 0.0, None]   # the reader (a probe stubs it), when last read, what it read
 
+def power_works(ac, low, above):
+    """THE rule of when work runs (spec battery1 B1; Dale 2026-11-13: "keep gping with or without battery"): on AC; or,
+    with `battery_runs`, on battery with Low Power Mode off and the charge at or above `battery_floor_pct` (`above`).
+    Low Power Mode on battery waits: it halves the machine's rate, so every landing check would read red on D14's band
+    and every measured second be wrong. Under the floor it waits for AC, so the battery emptying never cuts a landing
+    or a push. With `battery_runs` false: on AC alone, as before."""
+    return bool(ac or (cfg()["battery_runs"] and not low and above))
+
+def _power_note(ac, low, above, pct):
+    """The note for a settled reading: its direction (work runs on AC, runs on battery, or waits) and its text."""
+    if ac:
+        return "ac", f"on AC since {stamp()}: the climb goes on", ("The Mac draws from AC again. Default taken: the "
+                                                                   "climb starts work again; what battery ended is redone.")
+    if power_works(ac, low, above):
+        return "battery-runs", f"on battery since {stamp()} ({pct}%): the climb goes on", (
+            f"The Mac draws from its battery, Low Power Mode off, {pct}% charged. Default taken: the climb keeps working "
+            f"(battery_runs) and waits for AC once the charge is under battery_floor_pct ({cfg()['battery_floor_pct']}%) "
+            "or Low Power Mode turns on. The heartbeat holds the Mac awake while work runs; a closed lid still sleeps it.")
+    if not cfg()["battery_runs"]:
+        return "battery-waits", f"on battery since {stamp()}: the climb waits; plug in", (
+            "The Mac draws from its battery" + (" in Low Power Mode" if low else "") + ". Default taken: no move, "
+            "measurement, score or landing check starts; one in flight ends and waits for AC, never a failure "
+            "(a move keeps its commit); agent runs in flight finish.")
+    why = ("in Low Power Mode, which halves the machine's rate: turn Low Power Mode off on battery (System Settings → "
+           "Battery → Low Power Mode: Never, or Only on Power Adapter is NOT enough) or plug in") if low else (
+           f"at {pct}%, under battery_floor_pct ({cfg()['battery_floor_pct']}%): plug in")
+    return "battery-waits", f"on battery since {stamp()}: the climb waits ({'Low Power Mode' if low else f'{pct}%'})", (
+        f"The Mac draws from its battery {why}. Default taken: no move, measurement, score or landing check starts; one "
+        "in flight ends and is redone when work may run, never a failure (a move keeps its commit); agent runs in "
+        "flight finish. The heartbeat holds no assertion meanwhile, so an emptying battery is never held awake.")
+
 def power_ok():
-    """The one reading of the power source and Low Power Mode (O8-3, R8-5), taken at every tick where the disk is asked
-    (door.wait, measure.watched, the lander's check) and by every loop before it starts work, pmset read at most once a
-    second. A change counts only once it has held power_settle_s (O9-2: the adapter flapped 117 times in six minutes on
-    2026-11-08): the reading that differs from the settled one is kept in power.json with when any process first saw
-    it, dropped when any process reads the settled one again, and settled once it has held; settling writes the event
-    (`power`) and, at most once per direction per alarm_s, one note for Dale. True while the settled source is AC. On
-    battery no move, measurement, score or landing check starts (ac_wait), and one in flight ends, never a failure
-    (on_ac)."""
+    """Whether work may run now (power_works), from the one reading of the power source, Low Power Mode and the
+    battery's charge (O8-3, R8-5), taken at every tick where the disk is asked (door.wait, measure.watched, the lander's
+    check) and by every loop before it starts work, pmset read at most once a second. A change counts only once it has
+    held power_settle_s (O9-2: the adapter flapped 117 times in six minutes on 2026-11-08): the reading (source, Low
+    Power Mode, the charge at or above the floor) that differs from the settled one is kept in power.json with when any
+    process first saw it, dropped when any process reads the settled one again, and settled once it has held; settling
+    writes the event (`power`, with the charge and whether work runs) and, at most once per direction per alarm_s, one
+    note for Dale (_power_note). When it is false no move, measurement, score or landing check starts (ac_wait), and
+    one in flight ends, never a failure (on_ac); a change that leaves it true (AC to battery with Low Power Mode off
+    above the floor) ends nothing."""
     if time.time() - POWER[1] >= 1 or POWER[2] is None:
         POWER[2], POWER[1] = POWER[0](), time.time()
-    ac, low = POWER[2]
+    ac, low, pct = POWER[2]
+    # the floor counts only where battery_runs (with it off the reading is the source and Low Power Mode, as before)
+    above = not cfg()["battery_runs"] or pct is None or pct >= cfg()["battery_floor_pct"]
+    key = [ac, low, above]
     rec = state_json("power.json", {})
-    if "ac" in rec and [rec["ac"], rec.get("lowpower")] == [ac, low] and "seen" not in rec:
-        return ac
+    if "ac" in rec and [rec["ac"], rec.get("lowpower"), rec.get("above", True)] == key and "seen" not in rec:
+        return power_works(rec["ac"], rec.get("lowpower"), rec.get("above", True))
     with locked():
         rec = state_json("power.json", {})
         now_ = time.time()
-        if "ac" not in rec:   # the first reading settles at once: nothing came before it
-            rec = {"ac": ac, "lowpower": low, "since": stamp()}
-            changed, was = True, True
-        elif [rec["ac"], rec.get("lowpower")] == [ac, low]:   # back to the settled reading: a flap, never a change
+        if "ac" not in rec:   # the first reading settles at once: nothing came before it (as if on AC: no note on AC)
+            rec, changed = {"ac": ac, "lowpower": low, "above": above, "since": stamp(), "way": "ac"}, True
+        elif [rec["ac"], rec.get("lowpower"), rec.get("above", True)] == key:   # back to the settled reading: a flap
             rec.pop("seen", None); changed = False
-        elif (rec.get("seen") or [None])[:2] != [ac, low]:   # a new reading: held from now
-            rec["seen"] = [ac, low, now_]; changed = False
-        elif now_ - rec["seen"][2] >= cfg()["power_settle_s"]:   # held power_settle_s: settled
-            was = rec["ac"]
-            rec = dict(rec, ac=ac, lowpower=low, since=stamp()); rec.pop("seen", None); changed = True
+        elif (rec.get("seen") or [None])[:3] != key:   # a new reading: held from now
+            rec["seen"] = key + [now_]; changed = False
+        elif now_ - rec["seen"][3] >= cfg()["power_settle_s"]:   # held power_settle_s: settled
+            # the direction it leaves (a record written before battery1 has none: its own settled reading's)
+            rec.setdefault("way", _power_note(rec["ac"], rec.get("lowpower"), rec.get("above", True), None)[0])
+            rec = dict(rec, ac=ac, lowpower=low, above=above, since=stamp()); rec.pop("seen", None); changed = True
         else:
             changed = False
         if changed:
-            event("power", ac=ac, lowpower=low)
-            way = "ac" if ac else "battery"
+            runs = power_works(ac, low, above)
+            rec["runs"] = runs
+            event("power", ac=ac, lowpower=low, pct=pct, runs=runs)
+            way, title, text = _power_note(ac, low, above, pct)
             noted = rec.setdefault("noted", {})
-            if was != ac and now_ - noted.get(way, 0) >= cfg()["alarm_s"]:   # one note per direction per alarm_s
+            if rec.get("way") != way and now_ - noted.get(way, 0) >= cfg()["alarm_s"]:   # one note per direction per alarm_s
                 noted[way] = now_
-                for_dale(f"on battery since {stamp()}: the climb waits; plug in" if not ac else f"on AC since {stamp()}: the climb goes on",
-                         ("The Mac draws from its battery" + (" in Low Power Mode" if low else "") + ". Default taken: no move, "
-                          "measurement, score or landing check starts; one in flight ends and waits for AC, never a failure "
-                          "(a move keeps its commit); agent runs in flight finish.") if not ac else "The Mac draws from AC again. "
-                         "Default taken: the climb starts work again; what battery ended is redone.")
+                for_dale(title, text)
+            rec["way"] = way
         save_json("power.json", rec)
-    return rec["ac"]
+    return power_works(rec["ac"], rec.get("lowpower"), rec.get("above", True))
 
 def climb_spend(days):
     """The climb's own spend over the last `days` days: its runs' answers' usage, as their proxies booked it (SPEND)."""
@@ -1273,13 +1312,13 @@ def agent_tree(user, run_id, ref, sha, files=None):
     return w
 
 def ac_wait(t0=None):
-    """No measurement or check starts on battery (O9-1, A9-1): waits while power_ok() reads battery, at most
+    """No measurement or check starts while the power rule stops work (O9-1, A9-1): waits while power_ok() is false, at most
     task_wall_s of awake time since `t0` (now), past which PowerCut (`final`): the climb's longest run bounds its
     longest wait."""
     t0 = door.CLOCK() if t0 is None else t0
     while not power_ok():
         if door.CLOCK() - t0 > cfg()["task_wall_s"]:
-            e = PowerCut(f"the Mac has drawn from its battery for task_wall_s ({cfg()['task_wall_s']} s of awake time)")
+            e = PowerCut(f"the power rule has stopped work for task_wall_s ({cfg()['task_wall_s']} s of awake time)")
             e.final = True
             raise e
         time.sleep(cfg()["poll_s"]["lock"]); beat()
@@ -1288,8 +1327,8 @@ def on_ac(what, fn, *args, wait=False, say=None):
     """The one handling of a power cut (O9-1, A9-1, timing-report G): fn's PowerCut is never a failure. It books
     `power-wait` naming `what` and the cut (the label in flight is in its text, measure.watched), with no backoff, no
     alarm and no note beyond power_ok's own. A loop's iteration (`wait` False, guarded: a score, a base, a rebased check,
-    a landing round) ends there (3), and the loop starts nothing until AC. A move's gate and a hand command's long run
-    (`wait` True: the oracle's bootstrap, replay and audit, which keep what they answered) wait for AC, keeping what
+    a landing round) ends there (3), and the loop starts nothing until work may run. A move's gate and a hand command's
+    long run (`wait` True: the oracle's bootstrap, replay and audit, which keep what they answered) wait, keeping what
     they have, and run fn again; the wait is bounded by task_wall_s of awake time from the first cut (ac_wait), past
     which the PowerCut goes on to the caller (a slot's move ends as infrastructure). `say`, a hand command's printer,
     gets one line a cut."""
@@ -1304,7 +1343,7 @@ def on_ac(what, fn, *args, wait=False, say=None):
             if e.final:
                 raise
             if say:
-                say(f"{what}: the Mac went on battery ({str(e)[:160]}); waiting for AC, at most task_wall_s "
+                say(f"{what}: the power rule stopped work ({str(e)[:160]}); waiting until work may run, at most task_wall_s "
                     f"({cfg()['task_wall_s']} s) of awake time, then it continues from what it kept")
             t0 = door.CLOCK() if t0 is None else t0
             ac_wait(t0)
