@@ -9745,6 +9745,22 @@ Anchors 4945cf3b cites, all resolved:
 
 No anchor in the range fails to declare its symbol.
 
+Follow-up, A106E2, the lead's note on 03ae9374 (2026-11-13). Its src is the fourteen src commits of the builders'
+local branch climb-prep, which sits on e9a8a883. By what each does: one world per compile, read once by compile and
+passed to check_subset and the verifier (C3: entry.jl, subset.jl); a binding's facts read once at the program's world
+into its NIR node (C3: nir.jl NirBinding and its readers in code_generator.jl, globals.jl, intrinsics.jl, classes.jl,
+rtutils.jl and translator.jl); the runtime initializers' analysis at that world, reused while Julia says it holds (C3,
+the reuse C10); julia_text, Base's show ported so that no program binding is read, in every rejection text and name
+(C3, C6: show.jl); the trim verifier's text built from its records (C6: reject.jl); the C<id> counter a compile's,
+held on _ConstantAccessor (C2: CompileStatics); a constant's memory emitted as its owner defines it (C6:
+MEMORY_OWNERS); and the generated imports and the pins (C2: packages.jl, parity.jl). The 91 rewritten probe hashes
+are a stale baseline re-recorded, measured in one run a tree: e9a8a883's own src differs from e9a8a883's baseline in
+exactly those 91 probes and already gives 03ae9374's recorded bytes for 90 of them. The 91st,
+abstract_isa/isa_abstractvector_none, moves with the counter, and e9a8a883 compiling it alone in a fresh process gives
+03ae9374's module byte for byte. The added probe has had no baseline row since aea36fc5 listed it. One leftover:
+JULIA_FILES lists julia/base/scopedvalues, which no pin cites since acec228c deleted PROGRAM_WORLD. The full note,
+group by group with its definitions and measurements, is the message of the commit that adds this paragraph.
+
 Resolution: Fix first: A106E1, the lead's, since its files are protected. Run `bash dev/gate.sh` at origin's head, which contains 03ae9374, and keep its output beside the first landing's step-2 record. A red lane is the next item. Record the run in a commit carrying `Fixes: A106E1`. That is the step the one exception skipped, and it is the only full run 03ae9374's 1,396 src lines and 91 rebaselined probes will get before a clause closes.
 
 Hard deadline: A106E4 goes to the lead before 2026-11-15 00:00Z. Land the revert of `week_weighted` to 8.38e8, as 63457629 promises, and add Dale's 2026-11-12 words to D51's ledger row.
