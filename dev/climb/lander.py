@@ -178,11 +178,15 @@ def enqueue(sha, title, kind, hold_id=None, fixfirst=False, unlocked=0, rows=Non
     n, top = int(git("rev-list", "--count", f"origin/{MARCH}..{sha}")), ship_max()
     if n == 0 or n > top:
         raise ClimbError(f"{sha[:10]} has {n} commit(s) past origin/{MARCH}; a queued item carries 1 to {top} (ship.sh's SHIP_MAX)")
+    base = base or git("merge-base", f"origin/{MARCH}", sha)
+    why = bundled(base, sha)   # src never lands beside the harness (A106E2)
+    if why:
+        raise ClimbError(why)
     hid = hold_id or f"{kind}-{sha[:8]}"
     branch = f"ready/{hid}-{int(time.time())}"
     common_write(f"the ready branch {branch}")   # spec v18 P5
     git("branch", "-f", branch, sha)
-    item = {"branch": branch, "sha": sha, "patch_id": next(iter(patch_ids(f"{sha}^!")), ""), "base": base or git("merge-base", f"origin/{MARCH}", sha),
+    item = {"branch": branch, "sha": sha, "patch_id": next(iter(patch_ids(f"{sha}^!")), ""), "base": base,
             "kind": kind, "hold": title, "hold_id": hid, "fixfirst": fixfirst, "unlocked": unlocked,
             "rows": rows, "audit": audit, "labels": sorted(labels), "t": stamp(), "approvals": approvals, "answers": answers,
             # the hold as the move was judged against it, for the lander's rebased judgement (operator 9)

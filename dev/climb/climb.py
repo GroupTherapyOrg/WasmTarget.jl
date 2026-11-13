@@ -467,7 +467,7 @@ def main():
         print(f"claimed {COMMON} for {claim_repo()}")
     elif a.cmd == "door-probe":
         door.seal_home()
-        res = door.probe(STATE, COMMON) + g5_rows() + reader_rows()
+        res = door.probe(STATE, COMMON) + g5_rows() + bundled_rows() + reader_rows()
         for what, ok, ev in res:
             print(("held  " if ok else "FAILED") + f"  {what}: {ev}")
         event("door-probe", ok=all(ok for _, ok, _ in res), failed=[w for w, ok, _ in res if not ok])

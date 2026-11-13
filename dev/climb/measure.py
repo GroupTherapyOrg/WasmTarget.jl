@@ -62,6 +62,21 @@ def g5(base, sha, kind="port"):
         bad.append("the commit holds the agents' token (its text in the diff or the message); it never lands")
     return bad
 
+def bundled(base, sha):
+    """Why base..sha cannot be queued, or None: it changes src/ together with a path no move may change (move_rule:
+    the harness, the judge's files and the rules, D52's protected files), so its src would land under a message and a
+    title written for the harness, its clauses unnamed (A106E2). A src change with its own test/src files is a move's
+    shape and passes; the harness lands in a commit of its own. Read from git alone, before anything is queued
+    (lander.enqueue, every kind)."""
+    paths = [n for _, _, _, n in changes(base, sha)]
+    src = [n for n in paths if n.startswith("src/")]
+    held = [n for n in paths if move_rule(n) is None]
+    if not (src and held):
+        return None
+    name = lambda ps: ", ".join(ps[:6]) + (f" and {len(ps) - 6} more" if len(ps) > 6 else "")
+    return (f"{base[:10]}..{sha[:10]} bundles src with harness work: src/ ({len(src)}: {name(src)}) beside paths no move "
+            f"may change ({len(held)}: {name(held)}); queue the src change and the harness change as commits of their own")
+
 def corpus_problems(base, sha, n):
     """The move's unit `n` loaded by the corpus loader (test/corpus_loader.jl --check, the base's: the one function a
     unit is loaded by, early, in a process with no WasmTarget and no runner) over the base's snapshot and its units in
@@ -90,23 +105,38 @@ def g5_rows(base=None):
     refused; one that adds two unit files, refused; one that adds one honest unit file, admitted (the loader run over
     it). Returns [(check, ok, evidence)]."""
     base = base or git("rev-parse", "HEAD", cwd=ROOT)
-    listing = git("ls-tree", "-r", "--full-tree", base).splitlines()
     unit = '_g("door_probe_unit", Any[\n    ("one", (n::Int64) -> n + 1, Int64(1)),\n])\n'
-    def commit(files):
-        ls = [l for l in listing if l.split("\t", 1)[1] not in files]
-        for path, text in files.items():
-            blob = sh(["git", "hash-object", "-w", "--stdin"], input=text, cwd=REPO, check=True).stdout.strip()
-            ls.append(f"100644 blob {blob}\t{path}")
-        return sh(["git", "commit-tree", tree_of("\n".join(ls) + "\n"), "-p", base, "-m", "door-probe: a corpus move"],
-                  cwd=REPO, check=True).stdout.strip()
     snap = sh(["git", "show", f"{base}:{SNAPSHOT}"], check=True).stdout
     rows = []
     for what, files, want in (("a move that changes the snapshot (test/smoke_corpus.jl)", {SNAPSHOT: snap + "\n" + unit}, False),
                               ("a move that adds two unit files", {"test/corpus/door_probe_a.jl": unit,
                                                                   "test/corpus/door_probe_b.jl": unit.replace("door_probe_unit", "door_probe_unit_b")}, False),
                               ("a move that adds one unit file", {"test/corpus/door_probe_c.jl": unit}, True)):
-        bad = g5(base, commit(files))
+        bad = g5(base, probe_commit(base, files, "door-probe: a corpus move"))
         rows.append((f"G5: {what} is {'admitted' if want else 'refused'}", (not bad) == want, "; ".join(bad)[:300] or "no refusal"))
+    return rows
+
+def probe_commit(base, files, message):
+    """A commit on `base` with `files` (path: text) written, made as objects alone (no ref): a door-probe row's input."""
+    ls = [l for l in git("ls-tree", "-r", "--full-tree", base).splitlines() if l.split("\t", 1)[1] not in files]
+    for path, text in files.items():
+        blob = sh(["git", "hash-object", "-w", "--stdin"], input=text, cwd=REPO, check=True).stdout.strip()
+        ls.append(f"100644 blob {blob}\t{path}")
+    return sh(["git", "commit-tree", tree_of("\n".join(ls) + "\n"), "-p", base, "-m", message], cwd=REPO, check=True).stdout.strip()
+
+def bundled_rows(base=None):
+    """door-probe's rows for `bundled`, the refusal every queued item passes (lander.enqueue): on two commits made on
+    `base` as objects alone, a src change with its own test/src file admitted, and the same src change beside a file of
+    the harness (dev/climb/HILL.md) refused, both sets named. Returns [(check, ok, evidence)]."""
+    base = base or git("rev-parse", "HEAD", cwd=ROOT)
+    src = "src/WasmTarget.jl"
+    edit = lambda p: sh(["git", "show", f"{base}:{p}"], check=True).stdout + "\n# door-probe\n"
+    rows = []
+    for what, files, want in (("a src change with its own test/src file", {src: edit(src), "test/src/door_probe.jl": "# door-probe\n"}, True),
+                              ("a src change beside a harness file (dev/climb/HILL.md)", {src: edit(src), "dev/climb/HILL.md": edit("dev/climb/HILL.md")}, False)):
+        why = bundled(base, probe_commit(base, files, "door-probe: a hand commit"))
+        ok = (why is None) == want and (want or (src in why and "dev/climb/HILL.md" in why))
+        rows.append((f"enqueue: {what} is {'admitted' if want else 'refused'}", ok, (why or "no refusal")[:300]))
     return rows
 
 def log_excerpt(path, head=1 << 16, tail=2000):

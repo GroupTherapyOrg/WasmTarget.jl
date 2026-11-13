@@ -876,6 +876,9 @@ door's, run as Dale on paths no build user writes.
   goes back to origin/wt2. An audit and a commit made by hand (`climb.py enqueue <ref> <title>`) queue the same
   way; a hand fix of a known red (`climb.py enqueue <ref> --fixes <key>`) is queued on that fix-first entry's hold, so
   its check runs the red's file and its landing clears the entry, and it alone is admitted while a red is overdue. No slot starts a move while `queue_cap` commits wait (D50).
+  A hand commit never bundles src with harness work: `enqueue` refuses an item whose commits change `src/` beside
+  a path no move may change (the harness, the judge's files, the rules), naming both sets (`measure.bundled`,
+  A106E2; door-probe rows), so src lands in a commit of its own, under its own message and clauses.
 - **Each round** the lander resolves what a killed round left (a queued patch already on origin: the landed event
   is written before the item leaves the queue, so a landing has that one source; an audit entry on origin with its
   findings unfiled), then takes the queue in order: its gates read again in the main repository (G5 kept on the
