@@ -26,6 +26,18 @@ end
     return a
 end
 
+# Base's byte-memory method (julia/base/Base.jl:72) asks the runtime who owns the memory's data
+# (jl_genericmemory_owner, Julia's codegen reading its data-owner slot: julia/src/cgutils.cpp:3371
+# emit_genericmemoryowner) only to keep a String's bytes in a String: its first arm a new Memory, its
+# second a new String's bytes as a Memory (jl_string_to_genericmemory). A WasmGC byte Memory holds no
+# owner: its data array is the String's own array type, shared with a String both ways
+# (src/intrinsics.jl jl_string_to_genericmemory and jl_genericmemory_to_string), so the two arms build
+# one value, a new data array of newlen bytes beside its length, and the overlay is Base's first arm,
+# the generic method's body (julia/base/array.jl:1067): natively a Memory of the same type, length and
+# unset bytes as either arm's
+@quarantine pin"julia/base/Base.jl:72 array_new_memory" "Base's byte-memory array_new_memory asks jl_genericmemory_owner whether a String owns the data, to keep it in one; a WasmGC byte Memory holds no owner, its data array shared with a String both ways, so both arms are a new data array of newlen bytes, Base's generic body" Base.array_new_memory @consistent_overlay METHOD_TABLE Base.array_new_memory(mem::Memory{UInt8}, newlen::Int) =
+    typeof(mem)(undef, newlen)
+
 # Base's body (julia/base/array.jl:2106), its memcmp of the two references' bytes through their addresses
 # (unsafe_convert(Ptr{T}, a.ref)) the walk of their elements in order, as Base's generic == of two arrays
 # (julia/base/abstractarray.jl:3032), whose shortcut it is, compares them, and as dart's VM == of two

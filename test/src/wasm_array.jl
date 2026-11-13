@@ -125,6 +125,23 @@ function memory(k::Int64, n::Int64)
         local by = UInt8[0x61, UInt8(n % 256)]
         return Int64(x == Int64[1, 2, 3]) + 10 * Int64(by == UInt8[0x61, 0x62]) + 100 * Int64(x == Int64[1, 2]) +
             1000 * Int64(Int64[] == Int64[]) + 10000 * Int64(Int8[-1, Int8(n % 128)] == Int8[-1, 3])
+    elseif k == 16
+        # bytes Base writes through a byte Vector's pointer, each by overlay: a Char's UTF-8 into map's
+        # StringVector (src/patch/substring.jl __unsafe_string!), which grows and shrinks past its memory
+        # (src/patch/genericmemory.jl array_new_memory); Ryu's digits shifted for the decimal point
+        # (src/patch/ryu.jl writeshortest: 3.5, 0.75, -0.0045, 3.0e20) and the digits written into an
+        # IOBuffer (src/patch/io.jl write); a byte Vector pushed past its memory
+        local m = map(c -> c == 'b' ? 'ß' : c, n > 0 ? "abcabcabcabc" : "a")
+        local io = IOBuffer()
+        show(io, n + 0.5); print(io, ' '); show(io, n * 0.25); print(io, ' ')
+        show(io, -n * 1.5e-3); print(io, ' '); show(io, n * 1.0e20)
+        local s = String(take!(io))
+        local g = UInt8[]
+        for i in 1:n
+            push!(g, UInt8(i % 256))
+        end
+        return Int64(ncodeunits(m)) + 100 * Int64(ncodeunits(s)) +
+            10000 * (Int64(sum(codeunits(s))) + Int64(sum(codeunits(m)))) + 1000000000 * (Int64(sum(g)) % 1000)
     elseif k == 7
         local w = Vector{Int64}(undef, 4)
         w[1] = 1; w[2] = 2; w[3] = 3; w[4] = 4
@@ -157,7 +174,7 @@ end
     local plain = W.compile(memory, (Int64, Int64); optimize = false)
     local argsets = [(1, 1), (1, 40), (2, 1), (2, 40), (3, 1), (3, 40), (5, 2), (5, 3), (6, 1), (6, 9),
                      (7, 1), (7, 3), (8, 1), (8, 3), (8, 6), (8, 9), (9, 1), (9, 4), (9, 9), (10, 1), (10, 4), (10, 5), (11, 1), (11, 2), (11, 40), (12, 1), (12, 30),
-                     (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (14, 1), (14, 3), (15, 3), (15, 98), (15, 1), (4, 2), (4, 3)]
+                     (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (14, 1), (14, 3), (15, 3), (15, 98), (15, 1), (16, 0), (16, 3), (16, 40), (4, 2), (4, 3)]
     local cases = [WTChild.RunCase("memory$a", plain, Int64.(a), WTChild.native_answer(memory, Int64.(a))) for a in argsets]
     for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
