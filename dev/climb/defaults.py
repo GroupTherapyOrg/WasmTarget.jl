@@ -15,16 +15,19 @@ DEFAULTS = {
     "ruler_model": "claude-opus-5-5",            # D48: Opus rules first; Fable is the escalation, called rarely
     "fable_model": "claude-fable-5-1",
     "fable_per_day": 2,                          # D48 (Dale 2026-11-04): "make fable use in the council minimal"
-    # measured: 2026-11-01 10:00Z to 11-02 15:25Z, each message once, hit the limit at 8.38e8. FOR THE WEEK FROM 2026-11-08
-    # ONLY it is twice that: the account's capacity with one of Dale's resets (Dale 2026-11-12, asked whether to keep the
-    # weekly pause or lift it: "just push for now -- i have some resetcs"). With week_pause unchanged the climb's agents
-    # then pause at 8.38e8 of account spend, the real limit without a reset, so the climb alone never passes it. The
-    # lead reverts this to 8.38e8 by a second landed commit before the week resets (2026-11-15 00:00Z).
-    "week_weighted": 1.676e9,
+    # measured: 2026-11-01 10:00Z to 11-02 15:25Z, each message once, hit the limit at 8.38e8 (for the week from
+    # 2026-11-08 this stood at twice that on Dale's "just push for now -- i have some resetcs"; reverted here)
+    "week_weighted": 8.38e8,
     "margin": 0.85,
     # Dale 2026-11-08: "warn me when we hit 50% usage [for the week] and when we do, please pause"; the day's allowance
     # is the same half spread over the week (K7), so the climb runs every night up to the pause
     "week_pause": 0.5,
+    # whether the governor HOLDS the climb at the day's allowance, the week's half and the week's margin. Dale
+    # 2026-11-13, with the account past the day's allowance and 4.3M short of the week's half: "dont worry about token
+    # keep going", then "STOP pausing EVER". False: the governor counts and reports every token as before (the budget
+    # line, the week-half note, once a week), each run keeps its own dollar cap, and nothing waits or is refused for
+    # the account's spend. True restores D51's pause at the three numbers above
+    "budget_holds": False,
     # the march account's transcripts: run the climb under that account's own CLAUDE_CONFIG_DIR, so the governor counts
     # its sessions alone (another account's sessions in the same directory would be counted against it)
     "claude_home": "",                           # empty: $CLAUDE_CONFIG_DIR, else ~/.claude (cfg())
@@ -343,7 +346,7 @@ DEFAULTS = {
 }
 # D14 and D48: the budget and the models change by a commit naming Dale's words, never by config; so does every number a
 # ledger row states (K2): D50's queue cap, D21's five commits
-LOCKED_KEYS = ("week_weighted", "margin", "week_pause", "climber_model", "ruler_model", "fable_model", "fable_per_day",
+LOCKED_KEYS = ("week_weighted", "margin", "week_pause", "budget_holds", "climber_model", "ruler_model", "fable_model", "fable_per_day",
                "queue_cap", "audit_every")
 
 def hill_defaults():

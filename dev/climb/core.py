@@ -855,20 +855,23 @@ def week_spend():
     return sum(v for d, v in spend_days()["account"].items() if d >= start)
 
 def week_half():
-    """Half the week's limit spent: no agent runs until the week resets (Dale 2026-11-08, D51). A state computed from
+    """Half the week's limit spent: while budget_holds, no agent runs until the week resets (Dale 2026-11-08, D51);
+    while it does not (Dale 2026-11-13: "STOP pausing EVER"), Dale is told and the climb goes on. A state computed from
     the spend and week_start(), never written to PAUSE (architect 1: one file for a hand pause and the week's made a
-    hand pause do nothing); Dale is told once a week."""
-    w, lim = week_spend(), cfg()["week_weighted"] * cfg()["week_pause"]
+    hand pause do nothing); Dale is told once a week either way."""
+    w, lim, holds = week_spend(), cfg()["week_weighted"] * cfg()["week_pause"], cfg()["budget_holds"]
     if w < lim:
         return False
     if state_json("alarms.json", {}).get("week-half") != week_start():
         update_json("alarms.json", {}, lambda a: a.__setitem__("week-half", week_start()))
-        event("week-half", spent=round(w), limit=round(cfg()["week_weighted"]))
-        for_dale("the climb's agents wait: half the week's usage", f"This week (from {week_start()} 00:00Z) the account "
+        event("week-half", spent=round(w), limit=round(cfg()["week_weighted"]), holds=holds)
+        for_dale("half the week's usage is spent" if not holds else "the climb's agents wait: half the week's usage",
+                 f"This week (from {week_start()} 00:00Z) the account "
                  f"spent {w/1e6:.0f}M weighted tokens of the {cfg()['week_weighted']/1e6:.0f}M weekly limit measured on "
-                 "2026-11-02. Default taken (D51): no agent runs; the lander keeps landing approved commits; agents run "
-                 "again when the week resets.")
-    return True
+                 "2026-11-02. " + ("Default taken (D51): no agent runs; the lander keeps landing approved commits; "
+                                   "agents run again when the week resets." if holds else
+                                   "Default taken (budget_holds false, your word of 2026-11-13): the climb goes on."))
+    return holds
 
 def pause():
     """A hand pause or an alarm's: PAUSE's text, or "hand" for an empty file; any PAUSE file pauses (architect 1)."""
@@ -996,7 +999,9 @@ def allowance():
     return c["week_weighted"] * c["week_pause"] / 7
 
 def over_budget():
-    return account_spend(1) >= allowance() or account_spend(7) >= cfg()["week_weighted"] * cfg()["margin"]
+    """Past the day's allowance or the week's margin, while budget_holds; never while it does not."""
+    return cfg()["budget_holds"] and (account_spend(1) >= allowance() or
+                                      account_spend(7) >= cfg()["week_weighted"] * cfg()["margin"])
 
 def room():
     """The weighted tokens the account may still spend before the week's half, asked by every run's proxy before each
@@ -1005,6 +1010,8 @@ def room():
     (O7-4: a move cut mid-run at the day's crossing kept nothing of what it had spent). A run's own --max-budget-usd is
     its proxy's other refusal (dollars(), DEFAULTS price_usd); a build user's Bash reaches the proxy too."""
     acc, start = spend_days()["account"], week_start()
+    if not cfg()["budget_holds"]:   # the governor counts (spend_days above) and refuses no call (Dale 2026-11-13)
+        return float("inf")
     return cfg()["week_weighted"] * cfg()["week_pause"] - sum(v for d, v in acc.items() if d >= start)
 
 # ---------------------------------------------------------------- the report and the map

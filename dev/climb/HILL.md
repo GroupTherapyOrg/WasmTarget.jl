@@ -1254,6 +1254,10 @@ and learned nothing, and ten D14 reds that saw battery wrote no note (those prob
   week's limit no agent runs until the week resets (D51). An audit (about 0.6M) and the agent probe are exempt from the
   day's allowance (K5); never from the week's half. Each run has its own cap. A slot's wait for the budget is an
   event when it begins and when it ends, never each round (A13).
+  **While `budget_holds` is false none of these holds anything** (Dale 2026-11-13, the account past the day's
+  allowance and 4.3M short of the week's half: "dont worry about token keep going", then "STOP pausing EVER"): the
+  governor counts and reports as above, Dale is told once at the week's half, each run keeps its own cap, and no move,
+  call, eval or audit waits or is refused for the account's spend. Setting it true restores every hold of this item.
 - **Few retries.** A move resumes its climber at most `resumes_per_move` times, each resume under a small cap. A
   climber's own `blocked:*` is ruled at once, but its `blocked:infra` is the driver's, no stop, when the driver sees
   Kaimon, the session or the depot down (O5-5; the session asked `1 + 1` by its key, never "any process of its user",
@@ -1279,9 +1283,10 @@ and learned nothing, and ten D14 reds that saw battery wrote no note (those prob
 The driver's numbers, generated from dev/climb/defaults.py, where each states its intent and band:
 `slots` 2, `climber_model` "claude-opus-5-5" (locked), `climber_effort` "high", `reviewer_effort` "high",
 `ruler_model` "claude-opus-5-5" (locked), `fable_model` "claude-fable-5-1" (locked), `fable_per_day` 2 (locked),
-`week_weighted` 1676000000.0 (locked), `margin` 0.85 (locked), `week_pause` 0.5 (locked), `claude_home` "",
-`task_cap_usd` 25.0, `resume_cap_usd` 8.0, `token_file` "~/Library/Application Support/wt-climb/agent-token",
-`agent_probe_usd` 0.5, `agent_probe_runs` 3, `bundle_cap_bytes` 67108864,
+`week_weighted` 838000000.0 (locked), `margin` 0.85 (locked), `week_pause` 0.5 (locked), `budget_holds` false (locked),
+`claude_home` "", `task_cap_usd` 25.0, `resume_cap_usd` 8.0,
+`token_file` "~/Library/Application Support/wt-climb/agent-token", `agent_probe_usd` 0.5, `agent_probe_runs` 3,
+`bundle_cap_bytes` 67108864,
 `price_usd` {"claude-opus-5-5": {"input": 4.0, "output": 20.0, "cache_write_5m": 5.0, "cache_write_1h": 8.0, "cache_read": 0.2}, "claude-fable-5-1": {"input": 10.0, "output": 50.0, "cache_write_5m": 12.5, "cache_write_1h": 20.0, "cache_read": 0.5}, "claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_write_5m": 2.5, "cache_write_1h": 4.0, "cache_read": 0.1}, "claude-haiku-5-5": {"input": 0.1, "output": 0.5, "cache_write_5m": 0.125, "cache_write_1h": 0.2, "cache_read": 0.01}},
 `price_band` [0.95, 1.05], `resumes_per_move` 3, `stops_per_hold` 3, `park_steps` [50, 100, 200],
 `queue_cap` 4 (locked), `task_wall_s` 5400, `audit_every` 5 (locked), `score_every_landings` 3, `score_every_s` 7200,
