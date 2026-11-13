@@ -139,6 +139,12 @@ def claim_repo():
         raise ClimbError(f"{COMMON} is claimed by the state {owner}"
                          f"{', which exists' if os.path.isdir(owner) else ''}: not claimed for {me}"
                          f"{' (an overridden state never replaces a claim; only the default state re-claims)' if overridden else ''}")
+    # nor claims a repository no state claims while its default state's directory exists (spec v20 G3, red round 18 3
+    # and the architect's nit 4: the real checkout is its own .git too, so with its marker deleted a probe there would
+    # claim it); a scratch clone's default state does not exist
+    if overridden and not owner and os.path.isdir(default):
+        raise ClimbError(f"{COMMON} is claimed by no state and its default state {default} exists: an overridden state "
+                         f"({me}) claims it never; the default state claims it")
     write_atomic(CLAIM, me + "\n")
     return me
 DRIVER = os.path.join(WORKTREES, "climb-driver")   # the loops run landed code only, from here (launch.sh)
