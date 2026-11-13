@@ -98,3 +98,91 @@
     end
     return nothing
 end
+
+# Lower a MULO (SMULO, UMULO: the product's low bits and whether it overflowed), the node of LLVM's
+# llvm.smul.with.overflow and llvm.umul.with.overflow, which LegalizeDAG expands on wasm: SMULO and
+# UMULO keep TargetLoweringBase.cpp:1168's Expand, which WebAssembly never overrides. Its branches in
+# their order, each decided as LLVM's WebAssembly backend decides it: SMUL_LOHI, UMUL_LOHI, MULHS and
+# MULHU are Expand (WebAssemblyISelLowering.cpp:176), so an i32's product is its wide type's, the i64
+# being legal (isTypeLegal), and an i64's is forceExpandWideMUL's, no i128 being legal. The operands
+# are one integer type `vt` (an i32 or an i64), LHS a local and RHS an SDValue as src/julia/machine.jl
+# records it (sd_get), a constant an Int64 holding its bits. Returns the result (the product's low
+# half) and the overflow flag, an i32 ZeroOrOneBooleanContent (WebAssemblyISelLowering.cpp:54), the
+# i1 RType's width needing no truncate. The power-of-two shift expansion is taken where RHS is a
+# literal (isConstOrConstSplat); DAGCombiner::visitMULO's folds before legalization (DAGCombiner.cpp:6102:
+# two constants folded, a constant moved to the right, mulo by 0 or 2, one known not to overflow made a
+# mul) read a DAG Julia's IR does not build, and are not ported: each answers the same product and flag
+@parity "llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp:13153 TargetLowering::expandMULO" function expand_mulo(b::WasmBuilder.InstructionsBuilder, is_signed::Bool, vt::WasmBuilder.IR.NumType, lhs::WasmBuilder.IR.Local, rhs::Union{WasmBuilder.IR.Local,Int64})::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
+    (vt == i32 || vt == i64) || reject!(Internal("llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp:13153 TargetLowering::expandMULO: $vt is no legal integer type"), "TargetLowering::expandMULO")
+    local bits = vt == i64 ? 64 : 32
+    local k(n::Integer) = vt == i64 ? WasmBuilder.i64_const(b, Int64(n)) : WasmBuilder.i32_const(b, Int64(n))
+    local get(v::Union{WasmBuilder.IR.Local,Int64}) = v isa Int64 ? k(v) : WasmBuilder.local_get(b, v)
+    local overflow = WasmBuilder.add_local(b, i32)
+    # For power-of-two multiplications we can use a simpler shift expansion.
+    if rhs isa Int64
+        local c = vt == i64 ? reinterpret(UInt64, rhs) : UInt64(rhs % UInt32)
+        # mulo(X, 1 << S) -> { X << S, (X << S) >> S != X }
+        if ispow2(c)
+            # smulo(x, signed_min) is same as umulo(x, signed_min).
+            local use_arith_shift = is_signed && c != UInt64(1) << (bits - 1)
+            local shift_amt = trailing_zeros(c)
+            local shifted = WasmBuilder.add_local(b, vt)
+            WasmBuilder.local_get(b, lhs); k(shift_amt); vt == i64 ? WasmBuilder.i64_shl(b) : WasmBuilder.i32_shl(b)
+            WasmBuilder.local_tee(b, shifted)
+            k(shift_amt)
+            if use_arith_shift
+                vt == i64 ? WasmBuilder.i64_shr_s(b) : WasmBuilder.i32_shr_s(b)
+            else
+                vt == i64 ? WasmBuilder.i64_shr_u(b) : WasmBuilder.i32_shr_u(b)
+            end
+            WasmBuilder.local_get(b, lhs)
+            vt == i64 ? WasmBuilder.i64_ne(b) : WasmBuilder.i32_ne(b)
+            WasmBuilder.local_set(b, overflow)
+            return (shifted, overflow)
+        end
+    end
+    local bottom_half::WasmBuilder.IR.Local, top_half::Union{WasmBuilder.IR.Local,Int64}
+    if vt == i32
+        # isTypeLegal(WideVT): each operand extended to the i64 (SIGN_EXTEND, ZERO_EXTEND), their MUL,
+        # its TRUNCATE the bottom half and its SRL by the width, truncated, the top half
+        local extend() = is_signed ? WasmBuilder.i64_extend_i32_s(b) : WasmBuilder.i64_extend_i32_u(b)
+        local mul = WasmBuilder.add_local(b, i64)
+        bottom_half = WasmBuilder.add_local(b, i32)
+        top_half = WasmBuilder.add_local(b, i32)
+        WasmBuilder.local_get(b, lhs); extend(); get(rhs); extend(); WasmBuilder.i64_mul(b)
+        WasmBuilder.local_tee(b, mul); WasmBuilder.i32_wrap_i64(b); WasmBuilder.local_set(b, bottom_half)
+        WasmBuilder.local_get(b, mul); WasmBuilder.i64_const(b, 32); WasmBuilder.i64_shr_u(b); WasmBuilder.i32_wrap_i64(b)
+        WasmBuilder.local_set(b, top_half)
+    else
+        bottom_half, top_half = force_expand_wide_mul(b, is_signed, lhs, rhs)
+    end
+    if is_signed
+        # Overflow = TopHalf != BottomHalf >> (width - 1), the arithmetic shift its sign
+        get(top_half); WasmBuilder.local_get(b, bottom_half); k(bits - 1)
+        vt == i64 ? WasmBuilder.i64_shr_s(b) : WasmBuilder.i32_shr_s(b)
+    else
+        # Overflow = TopHalf != 0
+        get(top_half); k(0)
+    end
+    vt == i64 ? WasmBuilder.i64_ne(b) : WasmBuilder.i32_ne(b)
+    WasmBuilder.local_set(b, overflow)
+    return (bottom_half, overflow)
+end
+
+# The full product of two i64s, its low and high halves, where no i128 multiply is legal: MUL_I128's
+# libcall, compiler-rt's __multi3 (src/llvm/compiler_rt/multi3.jl), which wasm's libcalls hold, so the
+# brute-force forceExpandMultiply is never taken. Its operands are the i128s each i64 extends to: the
+# high half an operand's arithmetic shift by 63 where signed (a constant's own, folded as getNode folds
+# a constant's shift), else 0; wasm is little-endian, so the halves are passed and returned low first
+@parity "llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp:12755 TargetLowering::forceExpandWideMUL" function force_expand_wide_mul(b::WasmBuilder.InstructionsBuilder, is_signed::Bool, lhs::Union{WasmBuilder.IR.Local,Int64}, rhs::Union{WasmBuilder.IR.Local,Int64})::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    local high(v::Union{WasmBuilder.IR.Local,Int64})::Union{WasmBuilder.IR.Local,Int64} = begin
+        is_signed || return Int64(0)
+        v isa Int64 && return v >> 63
+        local h = WasmBuilder.add_local(b, WasmBuilder.IR.NumType_i64)
+        WasmBuilder.local_get(b, v); WasmBuilder.i64_const(b, 63); WasmBuilder.i64_shr_s(b); WasmBuilder.local_set(b, h)
+        h
+    end
+    local hi_lhs, hi_rhs = high(lhs), high(rhs)
+    return __multi3(b, (lhs, hi_lhs), (rhs, hi_rhs))
+end

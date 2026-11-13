@@ -654,6 +654,8 @@ end
     length(args) == 2 && (f === Core.Intrinsics.checked_sdiv_int || f === Core.Intrinsics.checked_srem_int ||
                           f === Core.Intrinsics.checked_udiv_int || f === Core.Intrinsics.checked_urem_int) &&
         return generate_static_intrinsic(self, Val(:checked_division), f, args)
+    length(args) == 2 && (f === Core.Intrinsics.checked_smul_int || f === Core.Intrinsics.checked_umul_int) &&
+        return generate_static_intrinsic(self, Val(:checked_multiplication), f, args)
     local narrow(t::Type) = generate_static_intrinsic(Val(:narrow), t)
     all(a -> narrow(dart_type_of(self, a)), args) && allequal(dart_type_of(self, a) for a in args) && 1 <= length(args) <= 2 &&
         return generate_static_intrinsic(self, Val(:narrow_operator), f, args)
@@ -2911,6 +2913,43 @@ end
     Intrinsifier__binary_operator_map[][w][w][raw](code_gen)
     narrow && generate_static_intrinsic(Val(:put_form), b, t)
     return w
+end
+
+# a checked multiplication, Julia's checked_smul_int and checked_umul_int, as its codegen emits it
+# (julia/src/intrinsics.cpp:1563): LLVM's llvm.smul.with.overflow or llvm.umul.with.overflow of the two
+# operands, whose two results are the Tuple{T, Bool} emit_intrinsic names (jl_apply_tuple_type_v of the
+# operand's type and Bool), built as that tuple's own class is (visitRecordLiteral's layout): the
+# product's low bits and the overflow flag, each as LLVM's legalizer expands the MULO on wasm
+# (src/llvm/target_lowering.jl expand_mulo), a literal right operand its constant. An 8- or 16-bit
+# operand's MULO is first promoted to the i32 (PromoteIntRes_XMULO), not ported: rejected, located.
+# dart's int multiplication wraps, with no overflow test, so the arm is Julia's.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:checked_multiplication}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local b = code_gen.b[]
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's $f"
+    local t = dart_type_of(self, args[1])
+    (t isa DataType && t <: Base.BitInteger && sizeof(t) <= 8 && dart_type_of(self, args[2]) === t) || return nothing
+    sizeof(t) < 4 && reject!(Unported("llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:2018 DAGTypeLegalizer::PromoteIntRes_XMULO"), "$at on $t")
+    local w = sizeof(t) == 8 ? WasmBuilder.IR.NumType_i64 : WasmBuilder.IR.NumType_i32
+    local x = add_local(code_gen, w)
+    translate_expression(code_gen, args[1], w)
+    WasmBuilder.local_set(b, x)
+    local y = if args[2] isa NirConst
+        # a literal: the constant SDValue, its bits in an Int64 (an i32's sign-extended, as i32.const reads it)
+        local v = args[2].c.val::t
+        sizeof(t) == 8 ? v % Int64 : Int64(v % Int32)
+    else
+        local l = add_local(code_gen, w)
+        translate_expression(code_gen, args[2], w)
+        WasmBuilder.local_set(b, l)
+        l
+    end
+    local lo, overflow = LLVM.expand_mulo(b, f === Core.Intrinsics.checked_smul_int, w, x, y)
+    local T = Tuple{t,Bool}
+    local info, fs = generate_static_intrinsic(self, Val(:fields_of), T, at)
+    generate_static_intrinsic(self, Val(:new_struct), info, fs, Dict{String,Function}(
+        "1" => () -> WasmBuilder.local_get(b, lo), "2" => () -> WasmBuilder.local_get(b, overflow)))
+    return info.non_nullable_type
 end
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:narrow_operator}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}

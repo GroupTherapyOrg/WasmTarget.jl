@@ -405,6 +405,29 @@ end
     @test S((v, v), pair(Int128(-1)), :SETULE) === true
 end
 
+# checked_smul_int and checked_umul_int (Base.mul_with_overflow), LLVM's MULO as expandMULO lowers it
+# on wasm: an i64's product by __multi3 (forceExpandWideMUL), an i32's by its i64 product, and a
+# literal power of two by the shift expansion (2^k, a signed typemin with its unsigned shift, and 1);
+# each product and overflow flag, signed and unsigned, against native
+module CheckedMulCases
+o(t::Tuple{Integer,Bool}) = Int64(t[1] % Int64) * 3 + Int64(t[2])
+function mulo(a::Int64, b::Int64)
+    local ua, ub = reinterpret(UInt64, a), reinterpret(UInt64, b)
+    return o(Base.mul_with_overflow(a, b)) + 5 * o(Base.mul_with_overflow(ua, ub)) +
+        7 * o(Base.mul_with_overflow(a % Int32, b % Int32)) + 11 * o(Base.mul_with_overflow(a % UInt32, b % UInt32)) +
+        13 * o(Base.mul_with_overflow(a, Int64(4))) + 17 * o(Base.mul_with_overflow(a, typemin(Int64))) +
+        19 * o(Base.mul_with_overflow(ua, UInt64(1) << 63)) + 23 * o(Base.mul_with_overflow(a, Int64(3))) +
+        29 * o(Base.mul_with_overflow(a % Int32, Int32(8))) + 31 * o(Base.mul_with_overflow(a % Int32, typemin(Int32))) +
+        37 * o(Base.mul_with_overflow(a % UInt32, UInt32(5))) + 41 * o(Base.mul_with_overflow(a, Int64(1)))
+end
+end
+
+@testset "TargetLowering.cpp: expandMULO, checked_smul_int and checked_umul_int, product and overflow, against native" begin
+    local bytes = W.compile(CheckedMulCases.mulo, (Int64, Int64); optimize = false)
+    local edge = Int64[0, 1, -1, 2, 3, -3, 1 << 31, -(1 << 31), 1 << 32, 3037000499, 3037000500, -3037000500, typemax(Int64), typemin(Int64)]
+    queue_native!("mulo", bytes, CheckedMulCases.mulo, [(a, b) for a in edge for b in edge])
+end
+
 @testset "the third oracle: every module queued above answers as native Julia" begin
     for r in WTChild.run_cases(NATIVE_RUNS)
         r.ok || println(r.label, ": ", r.why)
