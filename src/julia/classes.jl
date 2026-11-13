@@ -1019,10 +1019,11 @@ end
 
 A constant's memory `m` as its owner defines it (spec v16 X5), the one rule every owner's memory goes through: each
 element `live(i)` marks holds its element; every other holds no defined element, so it is #undef (a boxed element type:
-the null), the all-zero bits (an isbits one) or a singleton's one value (a type that stores no bytes), never the bytes
-Julia left there (host heap bytes, a popped element's, addresses among them, different in each process: a module would
-carry process state). An isbits element type whose zero bits are no value of it (one with padding, an isbits union) is
-refused, located, when an element is not live. The owners, each one function: a Dict's keys and vals, the slots
+the null), the all-zero bits (an isbits one), the value a zeroed allocation holds (an isbits union, which Julia always
+allocates zeroed: its selector-0 type at all-zero bytes) or a singleton's one value (a type that stores no bytes), never
+the bytes Julia left there (host heap bytes, a popped or deleted element's, addresses among them, different in each
+process: a module would carry process state). An isbits element type whose zero bits are no value of it (one with
+padding) is refused, located, when an element is not live. The owners, each one function: a Dict's keys and vals, the slots
 `isslotfilled` marks (_dict_live_memory); an Array's memory, its size's elements from its ref's offset
 (_array_live_memory); a Set, its Dict's; a Memory reached bare, through a MemoryRef or in any other struct's field, its
 own owner: every element (src/constants.jl's Memory branch, which refuses one Memory both whole and in part). Julia
@@ -1042,7 +1043,13 @@ Ptr elements to C_NULL.
             end
             fill!(out, z)
         elseif Base.isbitsunion(T)
-            reject!(ProgramError("$at: $what whose element type $T is an isbits union: its undefined elements have no value to emit; build it in the function"), at)
+            # Julia allocates an isbits union's memory zeroed (datatype.c:551 jl_get_genericmemory_layout's zi = 1,
+            # genericmemory.c:71 _new_genericmemory_'s memset), its data and selector bytes alike: an element no
+            # write defined reads as Julia's own value there, the union's selector-0 type at all-zero bytes, which
+            # `out`, allocated so, already holds in every slot; the flag read is julia.h:619's zeroinit, bit 0x0010 of
+            # a DataType's flags, as runtime_internals.jl:836 isbitstype reads bit 0x0008
+            (Memory{T}.flags & 0x0010) == 0x0010 ||
+                reject!(Internal("$at: $what whose element type $T is an isbits union Julia does not allocate zeroed"), at)
         end
     end
     for i in eachindex(m)

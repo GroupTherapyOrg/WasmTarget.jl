@@ -408,6 +408,25 @@ _dict_const_bb() = _DICT_CONST["bb"]
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
 end
 
+# an isbits union's memory Julia always allocates zeroed (datatype.c:551 zi = 1, genericmemory.c:71 memset), so a Dict
+# constant's unfilled slots of an isbits-union key type hold the value a zeroed allocation reads: its module is a
+# function of its live pairs alone, the dead keys rewritten (as a delete! leaves the deleted key) byte-identical
+const _DICT_UNION_CONST = Dict{Union{Int64,Float64},String}(1 => "a", 2 => "b", 3 => "c")
+_dict_union_const(x::Int64) = Int64(_DICT_UNION_CONST == Dict{Union{Int64,Float64},String}(x => "a", 2 => "b", 3 => "c"))
+@testset "a Dict constant of an isbits-union key: its unfilled slots are a zeroed allocation's" begin
+    @test (Memory{Union{Int64,Float64}}.flags & 0x0010) == 0x0010   # julia.h:619 zeroinit
+    local before = WasmTarget.compile(_dict_union_const, (Int64,))
+    local dead = [i for i in eachindex(_DICT_UNION_CONST.keys) if !Base.isslotfilled(_DICT_UNION_CONST, i)]
+    @test !isempty(dead)
+    for i in dead
+        _DICT_UNION_CONST.keys[i] = isodd(i) ? 7.5 : Int64(4_650_992_688 + i)
+    end
+    @test WasmTarget.compile(_dict_union_const, (Int64,)) == before
+    local results = Main.WTChild.run_cases([Main.WTChild.RunCase("dict_union_const $x", before, (x,), _dict_union_const(x)) for x in (Int64(1), Int64(5))])
+    @test all(r -> r.ok, results)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+end
+
 # spec v16 X5: the constants' `C<id>` names are the compile's (a Translator field), so a module's bytes, its name section
 # among them, are the same whatever the process compiled before it
 _counter_g(x::Int64) = string(x) * "!"
