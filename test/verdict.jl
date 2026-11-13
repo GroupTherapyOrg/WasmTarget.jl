@@ -346,10 +346,12 @@ struct IsA{F,T} <: Function end
 # union exists to split, and the one `isa` the module runs is T's, on that value (test/src/verdict.jl asserts it and
 # runs the reader's own IR with F's throw replaced by a wrong one; test/src/runner.jl runs WasmTarget's module with the
 # thrown object's class rewritten). F is called through a call-site `@noinline`, so what is caught or read is what F's
-# own compiled body produces across a real call, never an inlined copy's. An F inferred never to throw loses its catch
-# arm: a wrong throw then propagates out of the reader and reads `errored`, never passed. IsA reads F's result behind
-# the same builtin barrier; where Julia infers that result one constant (a singleton type F always returns), every use
-# of it, the reader's included, is that constant, so the reader reads only that F returned (dev/climb/HILL.md RISKS).
+# own compiled body produces across a real call, never an inlined copy's. An F inferred never to throw and free of
+# effects has its call deleted all the same: the reader answers 0 without running F, read wrong, never passed. IsA
+# reads F's result behind the same builtin barrier; where Julia infers that result one constant (a singleton type F
+# always returns), every use of it, the reader's included, is that constant and F's wasm result is void, so the reader
+# tells F's return from a trap or a throw, and a miscompiled F has no other singleton to return (dev/climb/HILL.md
+# RISKS (h), spec v20 G4).
 # A reader WasmTarget rejects is `unported`, never a pass. A throw answer is read by its type alone: two exceptions of
 # one type and different messages read alike
 _widened() = Core.compilerbarrier(:type, nothing) === 0 && throw(Core.compilerbarrier(:type, nothing))

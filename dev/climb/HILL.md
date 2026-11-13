@@ -827,11 +827,14 @@ door's, run as Dale on paths no build user writes.
   refuses a test file or a src change that touches any of them (reviewer.md). One process a file would close it
   and costs about 57 s a file (a score's src part ~3,570 s against 284-341 s, 11-12 times, lc's measure of
   2026-11-11): not built. (h) **a type reader reads what Julia leaves unknown** (spec v20 F1): a throw reader's caught
-  value is `Any` at its source, so it reads the thrown object's own type; but an F Julia infers never to throw has no
-  catch arm in its reader, so a wrong throw propagates and reads `errored` (never passed), and where Julia infers a
-  singleton answer's F to return one constant, every use of the result, the IsA reader's included, is that constant:
-  the reader reads that F returned, and the own module's `void` is shared by every singleton type, so a wrong
-  singleton of such an F passes. An agent's Bash reaches its model through
+  value is `Any` at its source, so it reads the thrown object's own type. Two things it does not read (spec v20 G4,
+  the round-18 architect's nits 1 and 2): an F Julia infers never to throw and free of effects has its call deleted
+  (a call-site `@noinline` does not stop dead-code removal), so the reader answers 0 without running F, read `wrong`
+  against the leaf's 1, never passed (reachable only through a false effect claim: sound inference never calls an F
+  nothrow that native saw throw); and where Julia infers a singleton answer's F to return one constant, every use of
+  the result, the IsA reader's included, is that constant, F's wasm result is `void`, so a miscompiled F has no other
+  singleton to return through it, and the reader, whose call to F stays, still tells a return from a trap or a throw.
+  An agent's Bash reaches its model through
   the proxy (no token: the proxy adds it), so it can spend up to its run's `--max-budget-usd` at the proxy's count,
   which is claude's own count while the prices hold (`price_band`); the runs alive at once can pass the room by the calls already admitted when it is reached (the
   governor is asked before a call, and a call's cost is known only from its answer), Bash's calls made in parallel
