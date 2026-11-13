@@ -92,9 +92,9 @@ end
 # operand types are each wasm number type. Each answers as Julia's codegen does (src/intrinsics.cpp):
 # integer arithmetic wraps, a division, remainder or comparison is signed or unsigned by the
 # intrinsic's own name, and a float operation is IEEE's (a fast-math one, a single operation, is the
-# same IEEE operation; min_float_fast and max_float_fast are LLVM's llvm.minimum and llvm.maximum
-# with fast flags, src/intrinsics.cpp:1527, which LLVM's WebAssembly backend selects as wasm's min
-# and max, llvm/lib/Target/WebAssembly/WebAssemblyInstrFloat.td:60). A raw division or remainder
+# same IEEE operation; min_float and max_float are LLVM's llvm.minimum and llvm.maximum,
+# src/intrinsics.cpp:1517, and min_float_fast and max_float_fast the same with fast flags, :1527, which
+# LLVM's WebAssembly backend selects as wasm's min and max, llvm/lib/Target/WebAssembly/WebAssemblyInstrFloat.td:60). A raw division or remainder
 # lowers to wasm's div or rem, which trap at a zero divisor and at typemin ÷ -1: Julia's codegen
 # lowers sdiv_int, udiv_int, srem_int and urem_int to LLVM's sdiv, udiv, srem and urem
 # (src/intrinsics.cpp), undefined behavior there, and Julia reaches them only behind its own checks
@@ -145,6 +145,8 @@ end
         Core.Intrinsics.lt_float => c -> WasmBuilder.f32_lt(c.b[]),
         Core.Intrinsics.le_float => c -> WasmBuilder.f32_le(c.b[]),
         Core.Intrinsics.copysign_float => c -> WasmBuilder.f32_copysign(c.b[]),
+        Core.Intrinsics.min_float => c -> WasmBuilder.f32_min(c.b[]),
+        Core.Intrinsics.max_float => c -> WasmBuilder.f32_max(c.b[]),
         Core.Intrinsics.add_float_fast => c -> WasmBuilder.f32_add(c.b[]),
         Core.Intrinsics.sub_float_fast => c -> WasmBuilder.f32_sub(c.b[]),
         Core.Intrinsics.mul_float_fast => c -> WasmBuilder.f32_mul(c.b[]),
@@ -161,6 +163,8 @@ end
         Core.Intrinsics.lt_float => c -> WasmBuilder.f64_lt(c.b[]),
         Core.Intrinsics.le_float => c -> WasmBuilder.f64_le(c.b[]),
         Core.Intrinsics.copysign_float => c -> WasmBuilder.f64_copysign(c.b[]),
+        Core.Intrinsics.min_float => c -> WasmBuilder.f64_min(c.b[]),
+        Core.Intrinsics.max_float => c -> WasmBuilder.f64_max(c.b[]),
         Core.Intrinsics.add_float_fast => c -> WasmBuilder.f64_add(c.b[]),
         Core.Intrinsics.sub_float_fast => c -> WasmBuilder.f64_sub(c.b[]),
         Core.Intrinsics.mul_float_fast => c -> WasmBuilder.f64_mul(c.b[]),
@@ -2407,6 +2411,23 @@ end
     end
     # an integer of either kind: a Julia BitInteger or a narrow one (a promoted primitive among them)
     local integer(t::Type) = t isa DataType && (t <: Base.BitInteger || narrow(t))
+    if emit === nothing && (f === Core.Intrinsics.fptosi || f === Core.Intrinsics.fptoui) && full(from, from_w) && flt(from_w) && narrow(to) && integer(to)
+        # a float into a narrow integer: LLVM's PromoteIntRes_FP_TO_XINT (LegalizeIntegerTypes.cpp:918), the
+        # conversion at the promoted register NVT, getTypeToTransformTo (an i8 or i16 an i32, an i40 an
+        # i64: the register Val(:register) names), by the opcode getPreferredFPToIntOpcode
+        # (TargetLowering.h:3668) keeps where it is legal there, wasm's saturating truncation as above.
+        # LLVM's arm ends in AssertZext or AssertSext, which emits nothing and asserts the narrow form;
+        # here a narrow value is held in its form (translateType), so the form is computed (put_form):
+        # a value out of the narrow type's range is poison in LLVM (julia/src/intrinsics.cpp:1379
+        # generic_cast's FPToUI and FPToSI, no freeze), so computing the form refines it
+        local s = f === Core.Intrinsics.fptosi
+        local r = generate_static_intrinsic(Val(:register), to)
+        translate_expression(code_gen, x, from_w)
+        (r == i64 ? (from_w == f64 ? (s ? WasmBuilder.i64_trunc_sat_f64_s : WasmBuilder.i64_trunc_sat_f64_u) : (s ? WasmBuilder.i64_trunc_sat_f32_s : WasmBuilder.i64_trunc_sat_f32_u)) :
+                    (from_w == f64 ? (s ? WasmBuilder.i32_trunc_sat_f64_s : WasmBuilder.i32_trunc_sat_f64_u) : (s ? WasmBuilder.i32_trunc_sat_f32_s : WasmBuilder.i32_trunc_sat_f32_u)))(b[])
+        put_form(to)
+        return r
+    end
     if emit === nothing && (narrow(from) || narrow(to)) && integer(from) && to isa DataType
         # a conversion with a narrow side: the source read in the view the conversion needs, the
         # instruction between the registers, and the result put in its type's form. Into a promoted

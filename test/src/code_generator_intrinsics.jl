@@ -161,6 +161,33 @@ end
     @test unsafe_trunc(Int64, 1e30) == typemax(Int64) || Sys.ARCH !== :aarch64
 end
 
+module NarrowTruncCases
+primitive type P40 40 end
+u8(x::Float64) = unsafe_trunc(UInt8, x)
+i8(x::Float32) = unsafe_trunc(Int8, x)
+u16(x::Float32) = unsafe_trunc(UInt16, x)
+i16(x::Float64) = unsafe_trunc(Int16, x)
+# a 40-bit primitive type, promoted to an i64 register, read back through its zero extension
+p40(x::Float64) = Core.Intrinsics.zext_int(Int64, Core.Intrinsics.fptoui(P40, x))
+end
+
+@testset "LegalizeIntegerTypes.cpp: PromoteIntRes_FP_TO_XINT, a float truncated into a narrow integer at its promoted register" begin
+    # an 8- or 16-bit integer's register is an i32: the saturating truncation into it, then the form
+    # (a signed type sign-extended, an unsigned one masked)
+    local C = NarrowTruncCases
+    for (f, at, conv, form) in ((C.u8, (Float64,), "i32.trunc_sat_f64_u", "i32.and"), (C.i8, (Float32,), "i32.trunc_sat_f32_s", "i32.extend8_s"),
+                                (C.u16, (Float32,), "i32.trunc_sat_f32_u", "i32.and"), (C.i16, (Float64,), "i32.trunc_sat_f64_s", "i32.extend16_s"))
+        local ins = generated_instructions(f, at)
+        local k = findfirst(==(conv), ins)
+        @test k !== nothing && form in ins[k+1:end]
+        @test !any(i -> startswith(i, "i64.trunc"), ins)
+    end
+    # a 40-bit primitive type's register is an i64 (getTypeToTransformTo of an i40): the i64 truncation
+    local ins = generated_instructions(C.p40, (Float64,))
+    @test "i64.trunc_sat_f64_u" in ins && !any(i -> startswith(i, "i32.trunc"), ins)
+    queue_native!("p40", compile_one(C.p40, (Float64,)), C.p40, [(x,) for x in (0.0, 3.0, 3.75, 1.0e10, 1.0995e12)])
+end
+
 module NarrowCases
 add8(x::Int8, y::Int8) = x + y
 lt8u(x::UInt8, y::UInt8) = x < y
