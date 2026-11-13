@@ -65,7 +65,8 @@ end
 # CodeInstance (owner nothing), where every one the closed world holds is WasmTarget's
 # (`WasmCacheOwner`, src/julia/interpreter.jl); each body is judged by Julia's own verify_codeinstance!, and each queued
 # ccallable's svec by Julia's check of its declared return against inference (CCallableMissing), as
-# 1.12 and 1.13 write it.
+# 1.12 and 1.13 write it. Julia's reads the world counter again (verifytrim.jl:301); this one judges
+# `this_world`, check_subset's, the world the closed world was inferred at (ClosedWorld.world).
 @quarantine pin"precedent(julia: Compiler/src/verifytrim.jl:300 get_verify_typeinf_trim)" "Julia's trim verifier resolves a callee among native CodeInstances alone; the closed world's are WasmTarget's" Core.Compiler.TrimVerifier.verify_codeinstance! function _verify_trim(codeinfos::Vector{Any}, this_world::UInt, at::String)
     local interp = Core.Compiler.NativeInterpreter(this_world)
     local inspected = Base.IdSet{Core.CodeInstance}()

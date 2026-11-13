@@ -97,6 +97,30 @@ end
     @test WasmTarget.check_subset(SubsetCases.g, (Int,), "subset", Base.get_world_counter()).parents isa IdDict
 end
 
+module WorldCases
+# a @ccallable the entry reaches: the verifier resolves its svec's signature at the world it judges
+# (jl_get_specialization1) and finds the CodeInstance inferred for it there
+Base.@ccallable worldcc(x::Int32)::Int32 = (@noinline; x + Int32(1))
+callcc(x::Int32) = worldcc(x) * Int32(2)
+end
+
+@testset "check_subset: the verifier judges the world the closed world was inferred at, ClosedWorld.world" begin
+    local W = WasmTarget
+    local w0 = Base.get_world_counter()
+    # a later world replaces the ccallable's method, so its signature resolves to a method inference at w0 never saw
+    Core.eval(WorldCases, :(Base.@ccallable worldcc(x::Int32)::Int32 = (@noinline; x + Int32(3))))
+    local w1 = Base.get_world_counter()
+    @test w1 > w0
+    local cw = W.check_subset(WorldCases.callcc, (Int32,), "subset", w0)
+    @test cw.world == w0
+    @test any(x -> x isa Core.SimpleVector && x[2] == Tuple{typeof(WorldCases.worldcc), Int32}, cw.codeinfos)
+    # the verifier at check_subset's world accepts; the same closed world judged at the later world misses the
+    # ccallable's specialization, the verdict a second read of the world counter would have given
+    @test isempty(first(W._verify_trim(cw.codeinfos, w0, "subset")))
+    local later = first(W._verify_trim(cw.codeinfos, w1, "subset"))
+    @test length(later) == 1 && only(later).second isa Core.Compiler.TrimVerifier.CCallableMissing
+end
+
 # a record's value prints with repr only when it is Base's own (the corpus loader's _plain rule, spec v16 X5): a program's
 # Number, whose show is the program's, prints from its structure and runs no method of the program's
 struct _SubsetNum <: Number
