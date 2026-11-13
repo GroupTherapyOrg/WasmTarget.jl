@@ -15,7 +15,12 @@ DEFAULTS = {
     "ruler_model": "claude-opus-5-5",            # D48: Opus rules first; Fable is the escalation, called rarely
     "fable_model": "claude-fable-5-1",
     "fable_per_day": 2,                          # D48 (Dale 2026-11-04): "make fable use in the council minimal"
-    "week_weighted": 8.38e8,                     # measured: 2026-11-01 10:00Z to 11-02 15:25Z, each message once, hit the limit
+    # measured: 2026-11-01 10:00Z to 11-02 15:25Z, each message once, hit the limit at 8.38e8. FOR THE WEEK FROM 2026-11-08
+    # ONLY it is twice that: the account's capacity with one of Dale's resets (Dale 2026-11-12, asked whether to keep the
+    # weekly pause or lift it: "just push for now -- i have some resetcs"). With week_pause unchanged the climb's agents
+    # then pause at 8.38e8 of account spend, the real limit without a reset, so the climb alone never passes it. The
+    # lead reverts this to 8.38e8 by a second landed commit before the week resets (2026-11-15 00:00Z).
+    "week_weighted": 1.676e9,
     "margin": 0.85,
     # Dale 2026-11-08: "warn me when we hit 50% usage [for the week] and when we do, please pause"; the day's allowance
     # is the same half spread over the week (K7), so the climb runs every night up to the pause
