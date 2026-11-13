@@ -250,3 +250,38 @@ end
     local c = WasmTarget.RuntimeInitAnalysis(w1, Function[], Core.CodeInstance[], [ref => b.bindings[end].second], a.result)
     @test WasmTarget._analysis_holds(c, w1, Function[]) && !WasmTarget._analysis_holds(c, w3, Function[])
 end
+
+# the bindings a getglobal reads through its operands: a constant one holding a module, and a non-constant one
+module GetglobalCases
+const cm = Base
+m = Base
+end
+
+@testset "nir_getglobal_ref: a getglobal of a constant module and name, in an order a load admits, reads its binding (codegen.cpp:4650)" begin
+    local W = WasmTarget
+    local k(x) = W.NirConst(Core.Const(x))
+    local call(xs...) = W.NirCall(W.NirValue[xs...])
+    local bindings = W.NirBindings(Base.get_world_counter())
+    local g(name) = W.NirGlobal(W.nir_binding!(bindings, GlobalRef(GetglobalCases, name)))
+    @test W.nir_getglobal_ref(call(k(getglobal), k(Base), k(:pi))) == GlobalRef(Base, :pi)
+    # jl_get_atomic_order (builtins.c:967) for a load: these four read the binding
+    for o in (:unordered, :monotonic, :acquire, :sequentially_consistent)
+        @test W.nir_getglobal_ref(call(k(getglobal), k(Base), k(:pi), k(o))) == GlobalRef(Base, :pi)
+    end
+    # :not_atomic and a store's order, an invalid one: the builtin's call, which errors
+    for o in (:not_atomic, :release, :acquire_release, :bogus)
+        @test W.nir_getglobal_ref(call(k(getglobal), k(Base), k(:pi), k(o))) === nothing
+    end
+    # a constant binding holding a module is the module; a non-constant one is read at run time
+    @test W.nir_getglobal_ref(call(k(getglobal), g(:cm), k(:pi))) == GlobalRef(Base, :pi)
+    @test W.nir_getglobal_ref(call(k(getglobal), g(:m), k(:pi))) === nothing
+    # a name or a module that is no constant of its kind, an arity Julia's arm does not take, another builtin
+    @test W.nir_getglobal_ref(call(k(getglobal), k(Base), k("pi"))) === nothing
+    @test W.nir_getglobal_ref(call(k(getglobal), k(1), k(:pi))) === nothing
+    @test W.nir_getglobal_ref(call(k(getglobal), k(Base))) === nothing
+    @test W.nir_getglobal_ref(call(k(getfield), k(Base), k(:pi))) === nothing
+    # the conversion to NIR makes the call a binding read, a GlobalRef statement's form
+    local st = W._nir_stmt(Expr(:call, GlobalRef(Core, :getglobal), Base, QuoteNode(:pi)), bindings, "test")
+    @test st isa W.NirGlobalRead && st.ref == GlobalRef(Base, :pi)
+    @test W._nir_stmt(Expr(:call, GlobalRef(Core, :getglobal), Base, QuoteNode(:pi), QuoteNode(:not_atomic)), bindings, "test") isa W.NirCall
+end

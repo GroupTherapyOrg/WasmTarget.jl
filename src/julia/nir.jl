@@ -375,7 +375,13 @@ end
     if st isa Expr
         local h = st.head
         local ops(xs) = NirValue[_nir_operand(a, bindings, at) for a in xs]
-        h === :call && return NirCall(ops(st.args))
+        if h === :call
+            local c = NirCall(ops(st.args))
+            # a getglobal of a constant module and name is the read of the binding it names (nir_getglobal_ref):
+            # a GlobalRef statement's form, so every reader of a binding meets it as one
+            local ref = nir_getglobal_ref(c)
+            return ref === nothing ? c : NirGlobalRead(nir_binding!(bindings, ref))
+        end
         if h === :invoke
             local t = st.args[1]
             t isa Union{Core.MethodInstance, Core.CodeInstance} ||
@@ -1064,6 +1070,37 @@ run time rejects, located.
     f isa NirConst && return f.c.val
     f isa NirGlobal && nir_binding_is_constant(f.binding) && return f.binding.value
     reject!(Unquarantined("src/julia/nir.jl: a call whose callee $(f) is computed at run time"), "nir_callee")
+end
+
+"""
+    nir_getglobal_ref(node) -> Union{GlobalRef,Nothing}
+
+The binding a `getglobal(mod, name[, order])` call reads, or nothing. Julia's codegen emits the call as
+the read of the GlobalRef it names (its getglobal arm, codegen.cpp:4650, calls emit_globalref) when the
+module and the name are constants (a literal, or a constant binding's value) and the order is none
+(monotonic) or a constant one jl_get_atomic_order admits for a load other than :not_atomic
+(julia/src/builtins.c:967); any other is the builtin's call at run time, and any other call nothing. The
+conversion to NIR (`_nir_stmt`) makes the call a NirGlobalRead of that binding, its facts read there as
+a literal GlobalRef statement's, so every reader of a binding meets it in that one form.
+
+A deliberate difference from Julia: the arm passes `from_literal_globalref=false`, so emit_globalref
+(codegen.cpp:3247) reads a constant binding the CodeInstance has no edge to at run time
+(emit_globalref_runtime) instead of baking its value. WT reads a constant binding in place
+(get_constant_initializer, as for a GlobalRef): its closed world is one world in which no constant is
+redefined, so the run-time read and the value at that world are the same.
+"""
+@quarantine pin"precedent(julia: src/codegen.cpp:4064 emit_builtin_call)" "Julia's getglobal of a constant module and name is the read of the binding it names, a GlobalRef's; dart's StaticGet names its field in the tree" Core.GlobalRef function nir_getglobal_ref(node::NirCall)::Union{GlobalRef,Nothing}
+    length(node.args) in (3, 4) || return nothing
+    local constant(v::NirValue) = v isa NirConst ? Some(v.c.val) :
+        v isa NirGlobal && nir_binding_is_constant(v.binding) ? Some(v.binding.value) : nothing
+    constant(node.args[1]) == Some(Core.getglobal) || return nothing
+    local mod, name = constant(node.args[2]), constant(node.args[3])
+    mod !== nothing && something(mod) isa Module && name !== nothing && something(name) isa Symbol || return nothing
+    if length(node.args) == 4
+        local order = constant(node.args[4])
+        order !== nothing && something(order) in (:unordered, :monotonic, :acquire, :sequentially_consistent) || return nothing
+    end
+    return GlobalRef(something(mod), something(name))
 end
 
 """
