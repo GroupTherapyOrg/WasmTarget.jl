@@ -280,9 +280,9 @@ end
 # the judge's: spec v14 V2; the wire's table, the binding, the plan, the verdict and the fixtures in test/src/verdict.jl)
 
 # spec v20 F1 (red round 17 1): a throw reader answers by the type of the object the module throws, read at run time in
-# the module WasmTarget emits. The module with every object's class id at its creation rewritten (an i32.const of two
-# LEB bytes, 64 to 8191, followed by the next field's i32.const or by struct.new, in the code and global sections; the
-# rewrite is 8191, no class) throws an object of no class, and its reader must answer 2; the module as compiled answers
+# the module WasmTarget emits. The module with every object's class id at its creation rewritten (_f1_no_class: one
+# LEB byte rewritten to 63, two to 8191, spec v20 G2, red round 18 2; in the code and global sections) throws an object
+# of no class, and its reader must answer 2; the module as compiled answers
 # 1. Red's q1/mut.py is the method, test/fixtures/runner_patch.wat the precedent for a patched module; a reader of
 # another T is no evidence (Julia folds it to a constant), so none is run
 isdefined(Main, :_F1_SHAPES) || Base.include(Main, joinpath(@__DIR__, "..", "throw_shapes.jl"))
@@ -297,6 +297,19 @@ function _f1_uleb(b, i)
         x & 0x80 == 0 && return (v, i)
     end
 end
+# the length of the simple instruction at `i` (local.get, global.get, i32.const, i64.const and its LEB operand), or 0
+function _f1_simple(b, i)
+    (i <= length(b) && b[i] in (0x20, 0x23, 0x41, 0x42)) || return 0
+    local j = i + 1
+    while j <= length(b) && b[j] & 0x80 != 0
+        j += 1
+    end
+    return j - i + 1
+end
+_f1_struct_new(b, i) = i + 1 <= length(b) && b[i] == 0xfb && b[i+1] == 0x00
+# an object's class id at its creation: `i32.const k` (one LEB byte, below 64, or two, 64 to 8191) followed by
+# struct.new, by one simple instruction (a field's value) and struct.new, or by the next field's `i32.const` (the
+# identity hash's 0 where k is one byte)
 function _f1_no_class(bytes::Vector{UInt8})::Tuple{Vector{UInt8},Int}
     local out = copy(bytes)
     local n = 0
@@ -305,10 +318,17 @@ function _f1_no_class(bytes::Vector{UInt8})::Tuple{Vector{UInt8},Int}
         local id = out[pos]
         local size, start = _f1_uleb(out, pos + 1)
         if id in (0x06, 0x0a)   # the global and code sections
-            for i in start:start+size-5
-                if out[i] == 0x41 && out[i+1] & 0x80 != 0 && out[i+2] & 0xc0 == 0 &&
-                   (out[i+3] == 0x41 || (out[i+3] == 0xfb && out[i+4] == 0x00))
-                    out[i+1], out[i+2] = 0xff, 0x3f
+            for i in start:start+size-3
+                out[i] == 0x41 || continue
+                local two = out[i+1] & 0x80 != 0 && out[i+2] & 0xc0 == 0
+                local one = out[i+1] < 0x40
+                (one || two) || continue
+                local next = i + (two ? 3 : 2)
+                local s = _f1_simple(out, next)
+                if _f1_struct_new(out, next) || (s > 0 && _f1_struct_new(out, next + s)) ||
+                   (two && next <= length(out) && out[next] == 0x41) ||
+                   (one && next + 1 <= length(out) && out[next] == 0x41 && out[next+1] == 0x00)
+                    two ? ((out[i+1], out[i+2]) = (0xff, 0x3f)) : (out[i+1] = 0x3f)   # 8191 or 63: no class
                     n += 1
                 end
             end

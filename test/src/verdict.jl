@@ -284,7 +284,8 @@ _f1_throw(v) = Expr(:call, GlobalRef(Core, :throw), QuoteNode(v))
         local other = _F1_THROWN[findfirst(v -> !(v isa T), _F1_THROWN)]   # an exception, unless T is Exception
         local sibling = _F1_THROWN[findfirst(v -> v isa supertype(T) && !(v isa T), _F1_THROWN)]
         @test (at, _f1_run(R, args, _f1_throw(right))) == (at, Int32(1))
-        for v in (other, sibling, Int64(42))   # another type, T's supertype's other subtype, a value no exception
+        local nonexc = _F1_THROWN[findlast(v -> !(v isa Exception) && !(v isa T), _F1_THROWN)]
+        for v in (other, sibling, nonexc)   # another type, T's supertype's other subtype, a value no exception
             @test (at, typeof(v), _f1_run(R, args, _f1_throw(v))) == (at, typeof(v), Int32(2))
         end
         # a normal return answers 0; after an F inferred always to throw the next statement is `unreachable`, a trap

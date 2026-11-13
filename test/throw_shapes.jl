@@ -14,14 +14,15 @@ _f1_two(x::Int64) = x > 0 ? throw(ArgumentError("+")) : throw(DomainError(x))   
 struct _F1S1 end; struct _F1S2 end
 _f1_s2(x::Int64) = x > 0 ? _F1S1() : _F1S2()             # a singleton answer of two types
 _f1_s1(x::Int64) = (x > 100 && println(x); _F1S1())      # one singleton type: its result a constant to inference
+_f1_int(x::Int64) = throw(x)                             # a boxed Int64 thrown: a class id below 64 (spec v20 G2)
 _f1_wrap(x::Int64) = throw(LoadError("f.jl", x, DivideError()))   # Core.WrappedException, abstract, Base's one below Exception
 const _F1_SHAPES = ((_f1_div, DivideError, (Int64(1),)), (_f1_dom, DomainError, (Int64(1),)),
     (_f1_arg, ArgumentError, (Int64(1),)), (_f1_err, ErrorException, (Int64(1),)), (_f1_idiv, DivideError, (Int64(0),)),
     (_f1_bnd, BoundsError, (Int64(3),)), (_f1_zero, ArgumentError, ()), (_f1_one, ArgumentError, (Int64(1),)),
     (_f1_two, ArgumentError, (Int64(1),)), (_f1_two, DomainError, (Int64(-1),)),
     (_f1_wrap, Core.WrappedException, (Int64(1),)), (_f1_idiv, Exception, (Int64(0),)), (_f1_dom, Exception, (Int64(1),)),
-    (_f1_two, Exception, (Int64(1),)))
+    (_f1_two, Exception, (Int64(1),)), (_f1_int, Int64, (Int64(5),)))
 # values a miscompiled F could throw; the first of T's is the right throw (Julia has no ArithmeticError: an abstract T
 # is Exception or Core.WrappedException, and the right throw of the latter is another subtype than F's)
 const _F1_THROWN = Any[OverflowError("w"), DivideError(), DomainError(0), ArgumentError("w"), ErrorException("w"),
-                       KeyError(1), BoundsError(), InitError(:m, DivideError()), Int64(42), "not an exception"]
+                       KeyError(1), BoundsError(), InitError(:m, DivideError()), Int64(42), Int32(7), "not an exception"]
