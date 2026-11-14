@@ -354,3 +354,27 @@ end
     @test ClassesDagCases.Node in cs
     @test t < 60
 end
+
+# A type value's layout holds the id of the class it denotes (constants.dart:430 _makeInterfaceTypeConstant,
+# dart's classIds[type.classNode]): a UnionAll's body, a DataType with a free type variable, denotes itself, a
+# class no value has; and every class's type value (the typeof table) holds its parameters, each a type value
+# whose class the closed world numbers
+module ClassesTypeParamCases
+struct Inner{T} end
+struct Outer{T<:Inner} end
+body(x::Int64) = (v = Any[Vector, Int64]; u = v[x]; u isa UnionAll ? (u.body isa DataType ? 1 : 2) : 0)
+same(n::Int64) = typeof(n == 1 ? Outer{Inner{Int64}}() : Outer{Inner{String}}()) === Outer{Inner{Int64}}
+end
+
+@testset "a type value's classes: a UnionAll's body, and each class's type parameters" begin
+    local cs = _classes(ClassesTypeParamCases.body, (Int64,))
+    @test Vector.body in cs && W.class_is_abstract(Vector.body) && TypeVar in cs
+    local ps = _classes(ClassesTypeParamCases.same, (Int64,))
+    @test ClassesTypeParamCases.Inner{String} in ps && ClassesTypeParamCases.Inner{Int64} in ps
+    for f in (ClassesTypeParamCases.body, ClassesTypeParamCases.same)
+        local bytes = W.compile(f, (Int64,))
+        for r in WTChild.run_cases([WTChild.RunCase("$(nameof(f))$(a)", bytes, a, f(a...)) for a in [(1,), (2,)]])
+            @test r.ok || (@info r.label r.why; false)
+        end
+    end
+end

@@ -219,10 +219,13 @@ type, which no statement's type need hold: `"hello"` compared, a `const` Ref rea
 type. A type meets the walk by Julia's own inferred form: a `Union` by its members, a
 `Vararg` by its element, a type as a value (`Type{X}`, or a `UnionAll` under `Type`) by its kind
 (`typeof(X)`, or every kind when `X` is not known) and by the classes `X` denotes (`X` itself, or each
-member of a Union, that is a DataType with no free type variable), whose ids a type value's layout
-holds; any other `UnionAll` rejects, located. A class
+member of a Union, that is a DataType, one with a free type variable a class no value has), whose ids a
+type value's layout holds (dart's `classIds[type.classNode]`, constants.dart:430
+_makeInterfaceTypeConstant); any other `UnionAll` rejects, located. A class
 met brings its supertype chain to `Any`, the root, and a concrete class that is not a kind brings
-its field types, each met as a value's type. `Union{}`, the type of no value, brings nothing.
+its field types, each met as a value's type. `Union{}`, the type of no value, brings nothing. Where
+the program holds a type value, every class's type value can be made (the typeof table), so each
+class's parameters that are types or type variables are met as constants, to the fixpoint.
 
 precedent(dart: a component's classes, the libraries' classes in order, class_info.dart:864).
 Julia's differs: a program declares no class list, so the list is the types Julia inferred for its
@@ -230,6 +233,7 @@ values, each met once, and a parametric instance (`Vector{Int64}`) is a class of
 `supertype` gives it.
 
 formal(dev/formal/ValueClasses.tla): every class a value can have listed once, closed under supertype and fields, nothing extra
+formal(dev/formal/TypeParamClasses.tla): where a type value is held, every listed class's type parameters are listed, at any depth, nothing extra, the pass ends
 """
 @quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values over the closed world julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers for a trimmed program" Base.unwrap_unionall function closed_world_classes(world::NirWorld, at::String)::Vector{DataType}
     local out = DataType[]
@@ -270,9 +274,24 @@ formal(dev/formal/ValueClasses.tla): every class a value can have listed once, c
         end
         _meet_value!(out, seen, b.ci.rettype, at)
     end
-    # every tuple can reach a slot whose static type is open, where it is the record of its arity
-    # (tuple_record_class, convertType's box): each concrete tuple class's record
-    for c in copy(out)
+    # one pass over the list as it grows (dev/formal/TypeParamClasses.tla). Every tuple can reach a slot whose
+    # static type is open, where it is the record of its arity (tuple_record_class, convertType's box): each
+    # concrete tuple class brings its record. A class's type value holds its parameters (DataType's
+    # `parameters`, _kind_instance_fields), and the table of every class's type value is read by Julia's
+    # typeof (src/intrinsics.jl to_typeof) and by an as check's failure, which names the type it read back
+    # from the class id (src/types.jl:607, src/julia/runtime/rtutils.jl jl_to_typeof); each reader's result
+    # is a DataType, so where the table can be made the walk has met that kind. There, each class's
+    # parameter that is a type or a type variable is a constant whose object graph the walk meets
+    # (_meet_constant!), and each class it brings is passed over in turn, to the fixpoint
+    local held = DataType in seen
+    local k = 0
+    while k < length(out)
+        local c = out[k += 1]
+        if held
+            for p in c.parameters
+                p isa Union{Type,TypeVar} && _meet_constant!(out, seen, objs, p, at)
+            end
+        end
         c <: Tuple && isconcretetype(c) && _meet_value!(out, seen, tuple_record_class(fieldcount(c)), at)
     end
     return out
@@ -373,7 +392,7 @@ end
 end
 
 # a value's type met by the walk, by Julia's inferred form
-@quarantine "a value's type is Julia's inferred form: a DataType, a Union of them, a Vararg's element, or a type as a value" Base.isType function _meet_value!(out::Vector{DataType}, seen::Base.IdSet{DataType}, @nospecialize(t), at::String)::Nothing
+@quarantine pin"julia/base/runtime_internals.jl:924 isType" "a value's type is Julia's inferred form: a DataType, a Union of them, a Vararg's element, or a type as a value, Julia's isType, whose parameter names the classes the value denotes" Base.isType function _meet_value!(out::Vector{DataType}, seen::Base.IdSet{DataType}, @nospecialize(t), at::String)::Nothing
     t === Union{} && return nothing
     if t isa Union
         foreach(u -> _meet_value!(out, seen, u, at), Base.uniontypes(t))
@@ -389,9 +408,11 @@ end
         else
             _meet_class!(out, seen, typeof(x), at)
             # the classes the type value denotes, so its layout's classId has one (the kinds' fields,
-            # below): a DataType with no free type variable, or each such member of a Union
+            # below): a DataType, or each DataType member of a Union; one with a free type variable (a
+            # UnionAll's body, `Array{T,1}`) denotes itself, a class no value has (class_is_abstract), as
+            # DataType's own supertype `Type{T}` is
             for d in (x isa Union ? Base.uniontypes(x) : Any[x])
-                d isa DataType && !Base.has_free_typevars(d) && _meet_class!(out, seen, d, at)
+                d isa DataType && _meet_class!(out, seen, d, at)
             end
         end
     elseif t isa DataType
@@ -410,6 +431,8 @@ end
     _meet_class!(out, seen, supertype(t), at)   # Any's supertype is Any, already met
     # a tuple's record holds top-typed fields, no class of its own (TupleRecord)
     tuple_record_arity(t) === nothing || return nothing
+    # a class no value has exactly (class_is_abstract) holds no field: its supertypes alone
+    isconcretetype(t) || return nothing
     if Base.iskindtype(t)
         # a kind's instance takes dart's runtime type layout, its fields' classes met as Julia's are
         foreach(f -> _meet_value!(out, seen, f.type, at), _kind_instance_fields(t, at))
@@ -426,7 +449,7 @@ end
     elseif t <: Core.GenericMemoryRef
         # a memory reference holds its offset and its memory (_memoryref_instance_fields)
         foreach(f -> _meet_value!(out, seen, f.type, at), class_instance_fields(t, at))
-    elseif isconcretetype(t)
+    else
         foreach(f -> _meet_value!(out, seen, f, at), fieldtypes(t))
     end
     return nothing
