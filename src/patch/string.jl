@@ -192,3 +192,52 @@ end
     end
     return s
 end
+
+# Base's body (julia/base/strings/util.jl:977), its unsafe_write of the preserved portion's j - i bytes from
+# pointer(str, i) the write of those bytes as the SubString of str past i - 1 (the unchecked :noshift
+# SubString of the bytes the pointer names, i and j both indices of characters of str), which
+# src/patch/io.jl's overlay copies into an IOBuffer's data array, as dart2wasm's replaceAll writes each
+# preserved substring(startIndex, match.start) into its StringBuffer. It is overlaid for a String, the str
+# every replace passes (julia/base/strings/util.jl:1093, _replace_(io, String(s), ...)); any other IO stays
+# Base's write, a located rejection where it is reached.
+@quarantine "julia/base/strings/util.jl:977 _replace_finish writes each preserved portion of str by unsafe_write from pointer(str, i); WasmGC writes those bytes as the SubString of str holding them, as dart2wasm's replaceAll writes each preserved substring into its StringBuffer (sdk/lib/_internal/wasm/standalone/embedder_string.dart:201 EmbedderStringImpl.replaceAll; the VM's sdk/lib/_internal/vm/lib/string_patch.dart:706 _StringBase._joinReplaceAllOneByteResult copies the slice's code units)" Base._replace_finish @consistent_overlay METHOD_TABLE function Base._replace_finish(io::IO, str::String, count::Int,
+                                                                                                                                     e1::Int, patterns::Tuple, replaces::Tuple, rs::Tuple)
+    n = 1
+    i = a = firstindex(str)
+    while true
+        p = argmin(map(first, rs))
+        r = rs[p]
+        j, k = first(r), last(r)
+        j > e1 && break
+        if i == a || i <= k
+            # copy out preserved portion
+            write(io, @inbounds SubString{String}(str, i - 1, j - i, Val(:noshift)))
+            # copy out replacement string
+            Base._replace(io, replaces[p], str, r, patterns[p])
+        end
+        if k < j
+            i = j
+            j == e1 && break
+            k = nextind(str, j)
+        else
+            i = k = nextind(str, k)
+        end
+        n == count && break
+        let k = k
+            rs = map(patterns, rs) do p, r
+                if first(r) < k
+                    r = findnext(p, str, k)
+                    if r === nothing || first(r) == 0
+                        return e1+1:0
+                    end
+                    r isa Int && (r = r:r)
+                end
+                return r
+            end
+        end
+        n += 1
+    end
+    foreach(Base._free_pat_replacer, patterns)
+    write(io, SubString(str, i))
+    return io
+end

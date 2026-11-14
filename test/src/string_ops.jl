@@ -75,6 +75,19 @@ end
 rep(n::Int64) = _rsum(repeat("a", n)) + _rsum(repeat("hé!", n)) * 3 + _rsum(repeat("xyz", n + 1)) * 7 +
     _rsum(repeat("ab", n - 1)) * 11 + _rsum(repeat("q", n - n)) * 13 +
     _rsum(repeat('c', n)) * 17 + _rsum(repeat('é', n)) * 19 + _rsum(repeat('€', n)) * 23 + _rsum(repeat('😀', n)) * 29
+# replace of a String (util.jl:977 _replace_finish by overlay): each preserved portion written as a
+# SubString of it into the IOBuffer, a match at the start, in the middle and at the end, two patterns over
+# non-ASCII text, a count, and replace into an IO after its first bytes; each answer's bytes summed by
+# position, so a misplaced byte differs. A SubString's replace compiles String(s), rejected as Base's
+function _rpl_io(n::Int64)
+    local io = IOBuffer()
+    write(io, "zz")
+    replace(io, "ab" * string(n) * "abq", "ab" => "é", count = 2)
+    return String(take!(io))
+end
+rpl(n::Int64) = _rsum(replace("abcabc" * string(n), "b" => "xyz")) + _rsum(replace("bab" * string(n) * "b", "b" => "")) * 3 +
+    _rsum(replace("héllo wörld" * string(n), "ö" => "o", "l" => "LL")) * 7 + _rsum(replace("aXaXa" * string(n), "a" => "ü", count = n)) * 11 +
+    _rsum(_rpl_io(n)) * 13
 end
 
 const STRING_OP_CASES = (
@@ -94,7 +107,8 @@ const STRING_OP_CASES = (
     ("syms", StringOpCases.syms, (Int64(2),)), ("syms", StringOpCases.syms, (Int64(0),)),
     ("ends", StringOpCases.ends, (Int64(1),)), ("ends", StringOpCases.ends, (Int64(0),)),
     ("cus", StringOpCases.cus, (Int64(1),)), ("cus", StringOpCases.cus, (Int64(0),)),
-    ("rep", StringOpCases.rep, (Int64(3),)), ("rep", StringOpCases.rep, (Int64(2),)), ("rep", StringOpCases.rep, (Int64(1),)))
+    ("rep", StringOpCases.rep, (Int64(3),)), ("rep", StringOpCases.rep, (Int64(2),)), ("rep", StringOpCases.rep, (Int64(1),)),
+    ("rpl", StringOpCases.rpl, (Int64(2),)), ("rpl", StringOpCases.rpl, (Int64(1),)), ("rpl", StringOpCases.rpl, (Int64(0),)))
 
 @testset "String's operations against native Julia" begin
     local runs = Main.WTChild.RunCase[]
@@ -133,6 +147,7 @@ end
     @test [:endswith, :wasm_string_codeunit] ⊆ overlaid(StringOpCases.ends, (Int64,))
     @test [:repeat, :wasm_string_write!, :wasm_string_copy!] ⊆ overlaid(StringOpCases.rep, (Int64,))
     @test [:_search, :wasm_string_place, :wasm_string_codeunit] ⊆ overlaid(StringOpCases.cus, (Int64,))
+    @test [:_replace_finish, :write] ⊆ overlaid(StringOpCases.rpl, (Int64,))
 end
 
 # under minify a symbol constant's name is its ordinal (src/symbols.jl get_mangled_symbol_name), so a read
