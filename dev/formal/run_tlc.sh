@@ -15,11 +15,21 @@
 # terminal states an explicit stutter. Exit 1 on any unexpected result.
 set -euo pipefail
 cd "$(dirname "$0")"
+# tla2tools.jar v1.7.4 (the release below), by its sha256: the one place its identity is written. dev/climb/door.py's
+# pins() mirrors the file with this hash into a landing's pins; a landing (CHECK_LANDING) has no network, so a jar
+# missing there is a located failure, never a download
+TLA2TOOLS_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 JAR="${TLA2TOOLS_JAR:-$HOME/.cache/wasmtarget/tla2tools.jar}"
 if [ ! -f "$JAR" ]; then
+  if [ -n "${CHECK_LANDING:-}" ]; then
+    echo "run_tlc: no tla2tools.jar at $JAR inside a landing: dev/climb/door.py pins() mirrors it (sha256 $TLA2TOOLS_SHA256) from ~/.cache/wasmtarget/tla2tools.jar; a landing makes no network call"
+    exit 1
+  fi
   mkdir -p "$(dirname "$JAR")"
   curl -sSL -o "$JAR" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
 fi
+sum=$(shasum -a 256 "$JAR" | cut -d' ' -f1)
+[ "$sum" = "$TLA2TOOLS_SHA256" ] || { echo "run_tlc: $JAR is not tla2tools.jar v1.7.4 (sha256 $sum, pinned $TLA2TOOLS_SHA256)"; exit 1; }
 WORKERS="${TLC_WORKERS:-auto}"
 # TLC_FAST=1 skips the instances listed in DEEP: the first seven each took ~20-60 s, and the five
 # ExceptionStack and OperandStack instances each took 37-200 s locally (Apple M-series, java 11,
@@ -33,6 +43,9 @@ fail=0
 # whose name is generated from the current time", MCSidecar/MCSidecarBroken on CI).
 meta=$(mktemp -d "${TMPDIR:-/tmp}/wt-tlc.XXXXXX")
 trap 'rm -rf "$meta"' EXIT
+# every instance runs through NoListenTLC (this directory's NoListenTLC.java): TLC's fingerprint set exports itself over
+# RMI, which binds a socket, and a landing's sandbox binds none; the launcher's RMI sockets are never bound or connected
+javac -nowarn -cp "$JAR" -d "$meta/nolisten" NoListenTLC.java || { echo "run_tlc: javac failed on dev/formal/NoListenTLC.java"; exit 1; }
 # TLC_NIGHTLY=1 (the scheduled formal.yml job, 5-hour budget) also runs dev/formal/nightly/:
 # instances too large for the 20-minute gate — same naming rules, checked against the
 # models one directory up.
@@ -107,7 +120,7 @@ for cfg in "${cfgs[@]}"; do
   # run and machine (MCConstantsSkipChildBroken reported NoPartialIntern on two workers
   # and MutableNeverAliases on one and on `auto`).
   w="$WORKERS"; [ "$expect" = violation ] && w=1
-  out=$(java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers "$w" -metadir "$meta/${cfg//\//_}" -config "$cfg" "$tla" 2>&1) || true
+  out=$(java -XX:+UseParallelGC -cp "$JAR:$meta/nolisten" NoListenTLC -workers "$w" -metadir "$meta/${cfg//\//_}" -config "$cfg" "$tla" 2>&1) || true
   # Classified with shell pattern matches, not `echo | grep -q`: under pipefail a
   # multi-megabyte counterexample trace makes `echo` die of SIGPIPE when grep -q
   # exits early, which misreported a real violation as "error" (found on Coercion).
@@ -129,7 +142,7 @@ for cfg in "${cfgs[@]}"; do
   fi
   # the LAST count is the final one (TLC prints progress counts on long runs); `|| true`
   # keeps a parse error (no count at all) on the FAIL path instead of aborting under set -e
-  states=$(grep -oE "[0-9]+ distinct states found" <<< "$out" | tail -1 || true)
+  states=$(printf '%s\n' "$out" | grep -oE "[0-9]+ distinct states found" | tail -1 || true)   # no here-string: bash 3.2 writes its temp file to /tmp, which a landing's sandbox cannot
   if [ "$result" = "$expect" ]; then printf '  ok   %-28s %-9s %s\n' "$cfg" "$result" "${states:-}"
   else printf '  FAIL %-28s got %s, expected %s\n' "$cfg" "$result" "$expect"; echo "$out" | grep -E "^Error|Invariant|violated|Exception" | head -5; fail=1; fi
 done

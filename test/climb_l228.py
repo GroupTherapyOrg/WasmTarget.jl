@@ -667,3 +667,92 @@ finally:
 
 for f in faults:
     print(f)
+
+# 17. a landing's model checker reads the pinned jar and makes no network call (door.pins, dev/formal/run_tlc.sh): pins
+# mirrors Dale's tla2tools.jar into TOP/pins when its sha256 is the one the landing tree's run_tlc.sh pins, and removes a
+# copy of another hash; inside a landing (CHECK_LANDING) run_tlc.sh refuses a missing jar or one of another hash,
+# naming it, and never calls curl. TOP and HOME are scratch directories, the checkouts' copies stood in, and curl on
+# run_tlc.sh's PATH a stand-in that records a call
+real17 = {k: getattr(door, k) for k in ("TOP", "HOME", "clone_tree")}
+try:
+    top17, home17, tree17 = f"{tmp}/top17", f"{tmp}/home17", f"{tmp}/tree17"
+    os.makedirs(f"{home17}/.cache/wasmtarget"); os.makedirs(f"{tree17}/dev/formal"); os.makedirs(top17)
+    jar17 = b"PK the pinned jar\n"
+    import hashlib as _h17
+    pin17 = _h17.sha256(jar17).hexdigest()
+    run17 = open(f"{root}/dev/formal/run_tlc.sh").read()
+    m17 = re.search(r"^TLA2TOOLS_SHA256=[0-9a-f]{64}", run17, re.M)
+    if not m17:
+        fault("dev/formal/run_tlc.sh pins no TLA2TOOLS_SHA256: the jar's identity is written nowhere")
+    else:
+        open(f"{tree17}/dev/formal/run_tlc.sh", "w").write(run17.replace(m17.group(0), f"TLA2TOOLS_SHA256={pin17}"))
+    open(f"{home17}/.cache/wasmtarget/tla2tools.jar", "wb").write(jar17)
+    door.TOP, door.HOME, door.clone_tree = top17, home17, lambda src, dst: dst
+    door.pins(tree17)
+    got17 = open(f"{top17}/pins/tla2tools.jar", "rb").read() if os.path.exists(f"{top17}/pins/tla2tools.jar") else None
+    if got17 != jar17:
+        fault(f"door.pins did not mirror the jar the landing tree pins into TOP/pins ({'nothing there' if got17 is None else 'another file'})")
+    open(f"{home17}/.cache/wasmtarget/tla2tools.jar", "wb").write(b"PK another jar\n")
+    open(f"{top17}/pins/tla2tools.jar", "wb").write(b"PK a stale copy\n")
+    door.pins(tree17)
+    if os.path.exists(f"{top17}/pins/tla2tools.jar"):
+        fault("door.pins left or mirrored a jar of another hash than the landing tree pins")
+    # run_tlc.sh inside a landing: a missing jar, then one of another hash, each refused, named, and no curl
+    os.makedirs(f"{tmp}/bin17"); open(f"{tmp}/bin17/curl", "w").write(f'#!/bin/sh\ntouch "{tmp}/curl17.called"\nexit 1\n')
+    os.chmod(f"{tmp}/bin17/curl", 0o755)
+    for what17, jar, says17 in (("missing", f"{tmp}/none17.jar", "run_tlc: no tla2tools.jar at"),
+                                ("of another hash", f"{home17}/.cache/wasmtarget/tla2tools.jar", "is not tla2tools.jar v1.7.4 (sha256")):
+        r17 = subprocess.run(["bash", f"{tree17}/dev/formal/run_tlc.sh"], capture_output=True, text=True, timeout=30,
+                             env=dict(os.environ, CHECK_LANDING="1", TLA2TOOLS_JAR=jar, PATH=f"{tmp}/bin17:/usr/bin:/bin"))
+        if r17.returncode == 0 or says17 not in r17.stdout + r17.stderr or os.path.exists(f"{tmp}/curl17.called"):
+            fault(f"run_tlc.sh inside a landing with a jar {what17}: exit {r17.returncode}, curl "
+                  f"{'called' if os.path.exists(f'{tmp}/curl17.called') else 'not called'}: {(r17.stdout + r17.stderr).strip()[-200:]}")
+except Exception as e:
+    fault(f"the model checker's jar raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    for k, v in real17.items():
+        setattr(door, k, v)
+
+# 18. TLC runs inside a landing's sandbox, and the sandbox still binds and connects nothing (dev/formal/NoListenTLC.java,
+# run_tlc.sh): the tree's run_tlc.sh checks a model to "ok" and its Broken instance to its violation inside the door's
+# `check` profile, and from the same profile a bind and a connect (to localhost and to an outside address) are each
+# refused by the sandbox. Outside a sandbox the profile is the tree's own (door.profile(kind="check")), applied by
+# sandbox-exec; inside a landing, where a sandbox cannot be nested, they run in the profile the landing runs in
+#: limit 150
+try:
+    nested18 = subprocess.run(["/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"],
+                              capture_output=True).returncode != 0
+    home18 = f"{tmp}/home18"; os.makedirs(f"{home18}/tmp")
+    jar18 = os.environ.get("TLA2TOOLS_JAR") or os.path.expanduser("~/.cache/wasmtarget/tla2tools.jar")
+    # the JDK's own bin, never /usr/bin's stubs (they look the JDK up through java_home, which a sandbox refuses): the
+    # PATH's when it holds one (land_job puts it first), else java_home's
+    w18 = shutil.which("javac") or ""
+    jdk18 = os.path.dirname(w18) if w18 and not w18.startswith("/usr/bin/") else \
+        os.path.join(subprocess.run(["/usr/libexec/java_home"], capture_output=True, text=True).stdout.strip(), "bin")
+    pre18 = [] if nested18 else ["/usr/bin/sandbox-exec", "-f", door.profile(f"{tmp}/check18.sb", [home18], kind="check")]
+    env18 = {"HOME": os.environ["HOME"] if nested18 else home18, "TMPDIR": f"{home18}/tmp", "LANG": "en_US.UTF-8",
+             "CHECK_LANDING": "1", "TLA2TOOLS_JAR": jar18, "PATH": f"{jdk18}:/usr/bin:/bin",
+             "DEVELOPER_DIR": "/Library/Developer/CommandLineTools", "TLC_ONLY": "MCBoxJoin.cfg MCBoxJoinOrderBroken.cfg"}
+    if not os.path.isfile(jar18):
+        fault(f"no tla2tools.jar at {jar18}: TLC cannot be run inside the profile here")
+    else:
+        r18 = subprocess.run(pre18 + ["/bin/bash", f"{root}/dev/formal/run_tlc.sh"], capture_output=True, text=True,
+                             env=env18, stdin=subprocess.DEVNULL, timeout=120)
+        o18 = r18.stdout + r18.stderr
+        if r18.returncode != 0 or not re.search(r"^  ok   MCBoxJoin\.cfg +ok ", o18, re.M) or \
+                not re.search(r"^  ok   MCBoxJoinOrderBroken\.cfg +violation of Monotonicity", o18, re.M):
+            which18 = "the landing's" if nested18 else "the tree's"
+            fault(f"TLC inside the check profile ({which18}): exit {r18.returncode}: {o18.strip()[-300:]}")
+    probe18 = ("import socket, errno\n"
+               "def t(f):\n"
+               "    s = socket.socket()\n"
+               "    try: f(s); return 'allowed'\n"
+               "    except OSError as e: return 'refused' if e.errno == errno.EPERM else f'not by the sandbox: {e}'\n"
+               "    finally: s.close()\n"
+               "print(t(lambda s: s.bind(('0.0.0.0', 0))), t(lambda s: s.connect(('127.0.0.1', 9))), t(lambda s: s.connect(('1.1.1.1', 443))))\n")
+    p18 = subprocess.run(pre18 + ["/usr/bin/python3", "-I", "-c", probe18], capture_output=True, text=True, env=env18,
+                         stdin=subprocess.DEVNULL, timeout=60)
+    if p18.stdout.split() != ["refused"] * 3:
+        fault(f"the check profile: a bind, a connect to localhost and one outside read {p18.stdout.strip() or p18.stderr.strip()[-200:]}, not each refused")
+except Exception as e:
+    fault(f"TLC inside the check profile raised {type(e).__name__}: {str(e)[:240]}")

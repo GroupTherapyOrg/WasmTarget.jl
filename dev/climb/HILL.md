@@ -570,7 +570,10 @@ path into Dale's home (one ACE Dale's uid sets on it: list and search denied to 
 main repository, and no right to signal Dale's processes; it reads what the door mirrors under
 `/Users/Shared/wt-climb` (Julia's install, the General registry's packages, the artifacts, the pinned checkouts and
 the agents' `claude`, each an APFS clone keyed by version), refreshed at launch alone (`door.tools`), a landing's job
-refreshing the pinned checkouts alone; each package version is mirrored by its slug, and a registry or global
+refreshing the pinned checkouts alone (and tla2tools.jar, the model checker a landing's check runs, mirrored when Dale's
+copy has the sha256 the landing tree's dev/formal/run_tlc.sh pins; inside a landing run_tlc.sh refuses a missing jar
+or one of another hash, located, and makes no network call; TLC runs through dev/formal/NoListenTLC.java, whose RMI
+export opens no socket, so the `check` profile binds and connects nothing as before); each package version is mirrored by its slug, and a registry or global
 environment whose hash differs is made again (O6-5; probed on scratch depots: a second version's slug, a newer
 General and a changed environment reached the mirror, where the old per-name copy kept none of them). The agents' `claude` is chosen at launch: launch's preflight copies Dale's and
 records its name in the state (`door.pin_claude`), every agent runs the recorded one (`door.claude_bin`), so an update

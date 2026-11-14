@@ -15,7 +15,7 @@ sudo keeps Dale's Mach bootstrap, so every run starts with none (nobootstrap.c).
     python3 dev/climb/door.py reap           every process of every build user killed (launch.sh stop)
     python3 dev/climb/door.py land-check <tree>  dev/ship.sh's check of a climb landing's HEAD at <tree>, as _wtland
 """
-import contextlib, fcntl, glob, json, os, re, shutil, signal, stat, subprocess, sys, time
+import contextlib, fcntl, glob, hashlib, json, os, re, shutil, signal, stat, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from defaults import DEFAULTS   # every number the door uses (dev/ship.sh copies it beside its copy of this file)
 
@@ -1022,11 +1022,40 @@ def prune_tools(state, now, prune):
                 shutil.rmtree(c) if os.path.isdir(c) else os.remove(c)
     return rec
 
-def pins():
+def tla2tools_pin(tree):
+    """The sha256 of tla2tools.jar that `tree`'s dev/formal/run_tlc.sh pins beside the release it names (its
+    TLA2TOOLS_SHA256 line, the one place the jar's identity is written), or None."""
+    p = os.path.join(tree, "dev", "formal", "run_tlc.sh")
+    m = re.search(r"^TLA2TOOLS_SHA256=([0-9a-f]{64})\b", open(p).read(), re.M) if os.path.exists(p) else None
+    return m.group(1) if m else None
+
+def mirror_jar(src, dst, want):
+    """`src` copied to `dst` when its sha256 is `want`; a `dst` of another hash removed, so no landing's model checker
+    reads a jar its tree does not pin. Returns why `dst` is not the pinned jar, or None."""
+    have = lambda f: hashlib.sha256(open(f, "rb").read()).hexdigest() if os.path.isfile(f) else None
+    if want is None:
+        return "no TLA2TOOLS_SHA256 in dev/formal/run_tlc.sh"
+    if have(dst) == want:
+        return None
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(dst)
+    if have(src) != want:
+        return f"{src} is {'missing' if not os.path.exists(src) else 'not the pinned jar (sha256 ' + str(have(src)) + ')'}"
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copyfile(src, f"{dst}.tmp{os.getpid()}")
+    os.chmod(f"{dst}.tmp{os.getpid()}", 0o644)   # readable by every build user
+    os.replace(f"{dst}.tmp{os.getpid()}", dst)
+    return None
+
+def pins(tree=None):
     """The pinned checkouts WasmTarget's anchors read (Dale's ~/.cache/wasmtarget, which dev/ship.sh fetches first with
     origin's dev/fetch_julia.sh: Julia's and utf8proc's, the pin derived from it), each mirrored at its own commit and
     sparse list (a list grown at the same commit, deps/utf8proc.version, is a new copy): at launch (tools()) and before
-    a landing's job (land_job), Dale's own copies, no build user's process."""
+    a landing's job (land_job), Dale's own copies, no build user's process. And tla2tools.jar, the model checker
+    dev/check.sh runs on the models a landing touches (dev/formal/run_tlc.sh), mirrored when Dale's copy is the jar
+    `tree`'s run_tlc.sh pins (TLA2TOOLS_SHA256; `tree` the landing's, else the driver's own): a landing has no network,
+    and its run_tlc.sh refuses a missing or other jar, located, never a download (2026-11-14: a move touching
+    dev/formal went red at its landing on `curl: Could not resolve host`)."""
     def ident(d):   # a checkout's commit and the files its sparse list checks out
         return tuple(open(f).read().strip() if os.path.exists(f) else "none" for f in (f"{d}/.git/HEAD", f"{d}/.git/info/sparse-checkout"))
     for n in ("julia", "utf8proc", "llvm-project", "dart-sdk"):   # each pinned checkout at its own commit
@@ -1035,6 +1064,10 @@ def pins():
         if os.path.exists(dst) and ident(dst) != ident(src):
             shutil.rmtree(dst)
         clone_tree(src, dst)
+    why = mirror_jar(f"{HOME}/.cache/wasmtarget/tla2tools.jar", f"{TOP}/pins/tla2tools.jar",
+                     tla2tools_pin(tree or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
+    if why:   # the landing whose models run reads it red there, located (run_tlc.sh); no other landing needs it
+        print(f"door: tla2tools.jar not mirrored into {TOP}/pins: {why}", file=sys.stderr)
 
 def pin_claude(state, prune=False):
     """The agents' claude, chosen at launch alone (A6-3, O6-2, O6-3): Dale's current claude copied under TOP/bin and
@@ -1813,7 +1846,7 @@ def land_job(tree, script, log, out_files=(), wall=DEFAULTS["ship_kill_s"], back
     status: the job's own, 124 past its wall, 128 + n killed by signal n."""
     os.makedirs(os.path.join(tree, ".wtd"), exist_ok=True)
     with using("land"), open(os.path.join(tree, ".wtd", log), "w") as logf:
-        pins()   # the checkouts this landing's check reads, as dev/ship.sh fetched them: the one mirror a landing refreshes
+        pins(tree)   # the checkouts this landing's check reads, as dev/ship.sh fetched them: the one mirror a landing refreshes
         d, shared = landing(tree, check)   # `check` false: a job that runs no test and is given no set (the regeneration)
         jdk = subprocess.run(["/usr/libexec/java_home"], capture_output=True, text=True).stdout.strip()
         h = home("land")
