@@ -1487,15 +1487,84 @@ end
 # Julia struct has no initializer list or constructor body to call, so that body is the invocation:
 # each operand after the type the value of the field in Julia's order. A field an allocation leaves
 # undefined (fewer operands than fields) holds the null reference, which a read tests (_directGet).
+# The class is the type operand's value where compile time knows it, a literal or a constant binding
+# (Type{T} its static type): Julia's codegen allocates it inline (julia/src/codegen.cpp:6566,
+# emit_new_struct). A class only run time knows (a closure's type made by apply_type from the type of
+# a captured variable) Julia's codegen allocates by its runtime, jl_new_structv (codegen.cpp:6575,
+# jlnew_func; julia/src/datatype.c:1627), which tests each given value against its field's type
+# (jl_isa, :1638), raising TypeError(:new, the field's type, the value) where one is not, and then
+# allocates the type value's struct. WasmTarget holds every type value as one constant, so the
+# allocation is split over the classes Julia's inference lets the operand hold (src/julia/classes.jl
+# new_struct_classes, the one reading of them), in their order, as the run-time half of apply_type
+# finds a type among its cases (src/intrinsics.jl): each case is the operand's ref.eq with the class's
+# constant, jl_new_structv's tests of the values whose types are not already their fields' (the
+# runtime's jl_type_error raising Julia's TypeError), and the class's own allocation, each tested value
+# narrowed to its field's type as the test proved it on that path (Julia's PiNode). Past the last case
+# is wasm's trap, as Julia's codegen traps where its inference proved a path unreachable
+# (julia/src/codegen.cpp:9202)
 @parity "dart2wasm/lib/code_generator.dart:1637 AstCodeGenerator.visitConstructorInvocation" function visit_constructor_invocation(self::AstCodeGenerator, node::NirNew, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
-    local at = "dart2wasm/lib/code_generator.dart:1637 AstCodeGenerator.visitConstructorInvocation"
     local intrinsic_result = generate_constructor_intrinsic(self.intrinsifier[], node)
     intrinsic_result === nothing || return intrinsic_result
-    # the class is the type operand's value, a literal or a constant binding (Type{T} its static type)
     local tyop = node.args[1]
     local tytype = dart_type_of(self, tyop)
     local cls = tytype isa DataType && tytype <: Type && length(tytype.parameters) == 1 ? tytype.parameters[1] : nothing
-    cls isa DataType && isconcretetype(cls) || reject!(Unquarantined("src/julia: an allocation of a class given as $tytype, no concrete class"), "$(julia_text(self.enclosing_member))")
+    cls isa DataType && isconcretetype(cls) && return visit_constructor_invocation(self, cls, Union{NirValue,NirPi}[node.args[2:end]...], expected_type)
+    local where_ = "$(julia_text(self.enclosing_member))"
+    local classes = new_struct_classes(self.translator, tytype, where_)
+    local t = self.translator
+    local b = self.b[]
+    local result = translate_type(t, Union{classes...})
+    local eq = WasmBuilder.IR.RefType_eq(; nullable = true)
+    local held = add_local(self, eq)
+    translate_expression(self, tyop, eq)
+    WasmBuilder.local_set(b, held)
+    local raiser = nir_runtime_member(t.component, jl_type_error, where_)
+    local raiser_inputs = signature_for_direct_call(t, raiser).inputs
+    local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[result])
+    for C in classes
+        local miss = WasmBuilder.block(b)
+        WasmBuilder.local_get(b, held)
+        translate_expression(self, NirConst(Core.Const(C)), eq)
+        WasmBuilder.ref_eq(b)
+        WasmBuilder.i32_eqz(b)
+        WasmBuilder.br_if(b, miss)
+        # jl_new_structv's count of values (datatype.c:1634), which raises "invalid struct allocation" outside it
+        Core.Compiler.datatype_min_ninitialized(C) <= length(node.args) - 1 <= fieldcount(C) ||
+            reject!(Unquarantined("src/code_generator.jl visitConstructorInvocation: $(length(node.args) - 1) values given to $C, which jl_new_structv raises as an invalid struct allocation"), where_)
+        local operands = Union{NirValue,NirPi}[]
+        for (i, a) in enumerate(node.args[2:end])
+            local ft = fieldtype(C, i)
+            local own = dart_type_of(self, a)
+            own <: ft && (push!(operands, a); continue)
+            local narrowed = typeintersect(own, ft)
+            narrowed === Union{} &&
+                reject!(Unquarantined("src/code_generator.jl visitConstructorInvocation: a value of type $own given to the field of type $ft of $C, which jl_new_structv's test raises at every run"), where_)
+            local boxed = Nothing <: own ? t.top_type[] : t.top_type_non_nullable[]
+            local ok = WasmBuilder.block(b)
+            translate_expression(self, a, boxed)
+            emit_is_test(t.types[], self, ft, own; location = where_)
+            WasmBuilder.br_if(b, ok)
+            instantiate_constant(t.constants[], b, NirConst(Core.Const(:new)), raiser_inputs[1])
+            translate_expression(self, NirConst(Core.Const(ft)), raiser_inputs[2])
+            translate_expression(self, a, raiser_inputs[3])
+            call(self, raiser)
+            WasmBuilder.unreachable(b)
+            WasmBuilder.var"end"(b)
+            push!(operands, NirPi(a, narrowed))
+        end
+        local made = visit_constructor_invocation(self, C, operands, result)
+        convert_type(t, b, made, result)
+        WasmBuilder.br(b, done)
+        WasmBuilder.var"end"(b)
+    end
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    return result
+end
+
+# the allocation of one class compile time knows, `cls`
+@parity "dart2wasm/lib/code_generator.dart:1637 AstCodeGenerator.visitConstructorInvocation" function visit_constructor_invocation(self::AstCodeGenerator, cls::DataType, values::Vector{Union{NirValue,NirPi}}, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/code_generator.dart:1637 AstCodeGenerator.visitConstructorInvocation"
     local info = get(self.translator.class_info, cls, nothing)
     info === nothing && reject!(Internal("$at: no class info for $cls"), "$(julia_text(self.enclosing_member))")
     local b = self.b[]
@@ -1522,7 +1591,7 @@ end
     # all-zero bits in both, as memorynew fills an inline element (intrinsics.jl): Julia's own answer
     # for the inline struct and a refinement of its undef for the heap one, not a stand-in past a gap
     local nf = fieldcount(cls)
-    local given = length(node.args) - 1
+    local given = length(values)
     given <= nf ||
         reject!(Internal("$at: an allocation of $cls passing $given values to its $nf fields, which Julia's IR never produces"), "$(julia_text(self.enclosing_member))")
     given >= Core.Compiler.datatype_min_ninitialized(cls) ||
@@ -1551,7 +1620,7 @@ end
             # the set flag: whether `new` gives its field
             WasmBuilder.i32_const(b, owner[field].index <= given ? 1 : 0)
         elseif field.index <= given
-            translate_expression(self, node.args[field.index + 1], storage)
+            translate_expression(self, values[field.index], storage)
         elseif storage isa WasmBuilder.IR.RefType && storage.nullable
             WasmBuilder.ref_null(b, storage.heap_type)
         else

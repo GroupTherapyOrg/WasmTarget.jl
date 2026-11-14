@@ -148,6 +148,64 @@ end
     @test answers_native([WTChild.RunCase("late($n)", bytes, (n,), UndefBitsCases.late(n)) for n in (3, -4)])
 end
 
+module RunTimeClassCases
+# a closure capturing a variable of two types: Julia types the closure by the captured value's type
+# (Core._typeof_captured_variable, apply_type), so its `new` names a class only run time knows,
+# Union{Type{F{Nothing}}, Type{F{Int64}}}, and the captured value is wider than either case's field
+@noinline maybe(x::Int) = x > 0 ? nothing : x
+capture(x::Int) = (r = maybe(x); g = () -> r === nothing ? -1 : r::Int; g())
+# two captures, one of two classes, the other one: F{A, Int64} or F{B, Int64}
+struct A; v::Int; end
+struct B; v::Int; end
+@noinline pick(x::Int) = x > 0 ? A(x) : B(-x)
+two(x::Int) = (p = pick(x); k = 2x; g = () -> p.v + k; g())
+# a value of no field type of its class: Julia's `new` written as it is (Expr(:new), the form an inner
+# constructor's `new{T}(x)` lowers to after its convert), the class P{Int} or P{Cell} and the value an
+# Int, a Cell or nothing, so on a non-positive input jl_new_structv's jl_isa refuses nothing for P{Cell}'s
+# field, TypeError(:new, "", Cell, nothing)
+struct Cell; v::Int; end
+struct P{T}; v::T; end
+@eval made(x::Int) = (T = x > 10 ? P{Int} : P{Cell};
+                      v = x > 10 ? x : x > 0 ? Cell(x) : nothing;
+                      p = $(Expr(:new, :T, :v));
+                      p isa P{Int} ? (p::P{Int}).v : (p::P{Cell}).v.v + 100)
+raised(x::Int) = try
+        made(x)
+    catch e
+        e isa TypeError || return -1
+        local ctx = e.context
+        (e.func === :new) + 2 * (ctx isa String && isempty(ctx)) + 4 * (e.expected === Cell) + 8 * (e.got === nothing)
+    end
+end
+
+@testset "codegen.cpp: a `new` of a class only run time knows is jl_new_structv, split over its classes (visitConstructorInvocation)" begin
+    local R = RunTimeClassCases
+    # the IR's own `new` takes a type value Julia's inference types as a union of two classes
+    local ir = only(Base.code_ircode(R.capture, (Int,)))[1]
+    local news = [st for st in ir.stmts.stmt if Meta.isexpr(st, :new)]
+    @test length(news) == 1 && length(Base.uniontypes(ir.stmts.type[findfirst(st -> Meta.isexpr(st, :new), ir.stmts.stmt)])) == 2
+    # each case's class found by its type value, its values tested against its fields and narrowed; run
+    # by node, each path answers as native Julia
+    local cases = WTChild.RunCase[]
+    # jl_new_structv's raise: native Julia raises TypeError(:new, "", Cell, nothing) on a non-positive input
+    local nir = only(Base.code_ircode(R.made, (Int,)))[1]
+    local inew = findfirst(i -> Meta.isexpr(nir.stmts.stmt[i], :new) && nir.stmts.type[i] isa Union, eachindex(nir.stmts.stmt))
+    @test inew !== nothing && nir.stmts.type[inew] == Union{R.P{Int}, R.P{R.Cell}}
+    @test R.raised(-3) == 15 && R.raised(5) == 105 && R.raised(20) == 20
+    for (f, xs) in ((R.capture, [3, -4]), (R.two, [5, -6]), (R.raised, [20, 5, -3]))
+        local bytes = W.compile(f, (Int,); optimize = false)
+        append!(cases, [WTChild.RunCase("$(nameof(f))($x)", bytes, (x,), f(x)) for x in xs])
+    end
+    @test answers_native(cases)
+    # a union member that is no Type{C} of a concrete class rejects at the statement, located
+    local t = TRANSLATOR[]
+    local e = rejection(() -> D.new_struct_classes(t, Union{Type{R.A}, DataType}, "here"))
+    @test e.rejection isa W.Unquarantined && startswith(e.rejection.row, "src/julia: an allocation of a class given as")
+    # the classes in the union's own order, the order Julia's union split tests its cases
+    local U = Union{Type{R.A}, Type{R.B}}
+    @test D.new_struct_classes(t, U, "here") == DataType[m.parameters[1] for m in Base.uniontypes(U)]
+end
+
 @testset "code_generator.dart: an instance invocation and an == are never virtual calls: every invoke has its single target" begin
     # visitInstanceInvocation and visitEqualsCall reject Internal where singleTarget is nothing; Julia's
     # invoke names its MethodInstance, so over a closed world every invoke's single target is one

@@ -162,6 +162,38 @@ formal(dev/formal/TypeCacheLookup.tla): every key the operands can hold finds an
 end
 
 """
+    new_struct_classes(translator, tytype, at) -> Vector{DataType}
+
+The classes an allocation of a class only run time knows may make (Julia's `new` whose type operand is
+typed `tytype`, a union of `Type{C}`): each member's class, in the union's order. Julia's codegen
+allocates such a `new` by its runtime, jl_new_structv (julia/src/codegen.cpp:6575, its jlnew_func),
+which reads the struct's layout from the type value (julia/src/datatype.c:1627) and raises TypeError
+where the value is no concrete DataType (:1630). A WasmGC struct.new names its type where it is
+written, and WasmTarget holds every type value as one constant (constants.jl _lowerTypeToConstant), so
+the allocation is split at compile time over the type values Julia's inference lets the operand hold, as
+the inliner splits a call over its argument's union (Compiler/src/ssair/inlining.jl:526
+ir_inline_unionsplit!), each case the type value's identity with one class's constant (the code
+generator's visitConstructorInvocation). A member that is no Type{C} of a concrete class (a type only
+run time knows, such as DataType: jl_new_structv's own test, then its layout, at run time), or a class
+whose type value has no constant (type_value_unmade), rejects at the statement, located.
+
+formal(dev/formal/TypeCacheLookup.tla): every class the operand can hold finds its case, the one-operand case of the lookup
+"""
+@quarantine pin"julia/src/datatype.c:1627 jl_new_structv" "Julia's codegen allocates a struct whose type is no constant by its runtime's jl_new_structv (julia/src/codegen.cpp:6575), which reads the layout from the type value at run time; a WasmGC struct.new names its type at compile time and WasmTarget holds every type value as one constant (constants.jl _lowerTypeToConstant), so the allocation is split over the classes Julia's inference lets the operand hold, as the inliner splits a call over a union (julia/Compiler/src/ssair/inlining.jl:526 ir_inline_unionsplit!)" Base.uniontypes function new_struct_classes(translator, @nospecialize(tytype), at::String)::Vector{DataType}
+    local classes = DataType[]
+    for m in Base.uniontypes(tytype)
+        local C = m isa DataType && m <: Type && length(m.parameters) == 1 ? m.parameters[1] : nothing
+        C isa DataType && isconcretetype(C) ||
+            reject!(Unquarantined("src/julia: an allocation of a class given as $tytype, no concrete class"), at)
+        local why = type_value_unmade(translator, C)
+        why === nothing ||
+            reject!(Unquarantined("src/julia/classes.jl type_value_unmade: an allocation of a class given as $tytype, whose class $C has no constant ($(something(why)))"), at)
+        push!(classes, C)
+    end
+    return classes
+end
+
+"""
     is_interface_class_type(translator, T, check_only_null_assignability) -> Bool
 
 Whether dart's emitIsTest and emitAsCheck take their interface arm for the tested type `T`: dart's

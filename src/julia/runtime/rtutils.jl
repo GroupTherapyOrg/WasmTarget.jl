@@ -54,6 +54,12 @@
 @quarantine "julia/src/rtutils.c:169 jl_has_no_field_error raises FieldError with the type and the field's name" Core.FieldError @noinline throw_field_error(t::DataType, fld::Symbol)::Union{} =
     Runtime.Error__throw_with_current_stack_trace(FieldError(t, fld))
 
+# jl_type_error (julia/src/rtutils.c:135), raised by jl_new_structv (julia/src/datatype.c:1639) where a
+# value given to a struct is not of its field's type: TypeError of the function's name, the empty
+# context jl_type_error_rt passes (:113), the expected type and the value
+@quarantine pin"julia/src/rtutils.c:135 jl_type_error" "Julia's runtime raises TypeError with the function's name, an empty context, the expected type and the value" Core.TypeError @noinline jl_type_error(fname::Symbol, @nospecialize(expected::Type), @nospecialize(got::Any))::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(TypeError(fname, "", expected, got))
+
 # jl_method_error (julia/src/gf.c:3057), raised by the builtin throw_methoderror (builtins.c:604) where
 # Julia's inference proved no method matches a call: MethodError of the function and its arguments'
 # tuple (jl_f_tuple). Julia records the task's world age; a compiled program runs in no session's world,
