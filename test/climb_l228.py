@@ -627,5 +627,43 @@ finally:
     with contextlib.suppress(Exception):
         core.update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [x for x in q if x.get("hold") != "l228-15"]))
 
+# 16. the test files the landings' shares leave unrun are run between scores (climb.src_gap, through climb.score_tick):
+# after a landing, files standing unrun and no src record at origin's head, the score tick runs the score's src part
+# there once; not again at that head, not where the head has its src record, not when no file stands unrun. What the
+# tick reaches beyond is stood in (the fetch, the alarms, the score, the src part itself)
+import climb as C
+names16 = ("alarms", "scored_heads", "fetch", "unlogged_landings", "scoreboard_once", "src_part", "power_ok", "pause",
+           "week_half", "token_refused", "src_unverified")
+real16 = {k: getattr(C, k) for k in names16}
+try:
+    head16 = g("rev-parse", "HEAD")
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", head16)
+    ran16, behind16 = [], [2]
+    C.alarms = C.fetch = lambda *a, **k: None
+    C.unlogged_landings = lambda: []
+    C.scored_heads = lambda *a: [{"sha": head16, "t": core.stamp()}]   # scored just now: no score is due
+    C.scoreboard_once = lambda h_: ran16.append(("score", h_))
+    C.src_part = lambda h_: ran16.append(("src", h_))
+    C.power_ok, C.pause, C.week_half, C.token_refused = (lambda: True), (lambda: False), (lambda: True), (lambda: False)
+    C.src_unverified = lambda h_: (behind16[0], ["t00.jl"])
+    for f16 in (C.SRC_GAP, M.SRC_LATEST):
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(os.path.join(state, f16))
+    C.score_tick(); C.score_tick()
+    if ran16 != [("src", head16)]:
+        fault(f"with files unrun since a landing the score tick ran {ran16}, not the src part once at origin's head")
+    os.remove(os.path.join(state, C.SRC_GAP)); ran16.clear()
+    core.save_json(M.SRC_LATEST, {"head": head16}); C.score_tick()
+    os.remove(os.path.join(state, M.SRC_LATEST)); behind16[0] = 0; C.score_tick()
+    if ran16:
+        fault(f"the score tick ran {ran16} where the head has its src record, or no file stands unrun")
+except Exception as e:
+    fault(f"the src part between scores raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    for k, v in real16.items():
+        setattr(C, k, v)
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+
 for f in faults:
     print(f)

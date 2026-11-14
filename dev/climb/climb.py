@@ -95,7 +95,8 @@ def scoreboard_once(head):
     recorded and no G2 filed, with one note naming the key field and the replay."""
     out = os.path.join(STATE, f"cases-{head[:8]}.tsv")
     t0 = door.CLOCK()
-    src_part(head)   # the src suite first (the landing-check ruling, R6): its record, its reds located
+    if state_json(SRC_LATEST, {}).get("head") != head:   # the src suite first (the landing-check ruling, R6), unless
+        src_part(head)   # src_gap ran it at this head already: its record, its reds located
     for attempt in (1, 2):
         try:
             with julia_slot("score"):
@@ -132,6 +133,26 @@ def scoreboard_once(head):
         event("kinds-failed", sha=head[:8], tail=str(e)[-300:])
     draw_map(os.path.join(STATE, "map.html"))
     print(f"scored {head[:8]}: S={s['passed']}/{s['climbable']} lost={len(lost)} bad={len(bad)} ({round(door.CLOCK() - t0)} s)", flush=True)
+
+SRC_GAP = "src-gap.json"   # the head the src part last ran at between scores: {"head": sha, "t": stamp}
+
+def src_gap_due(head):
+    """Whether the score tick runs the score's src part at `head` between scores (src_gap): files stand unrun since a
+    landing (measure.src_unverified: a landing's check runs its share of the test files, never all), `head` has no src
+    record (src-latest.json) and the part has not run at `head` already. After each landing, so the count
+    src_unverified_max bounds stays near zero and the bound stops a landing only when the files cannot be run."""
+    if state_json(SRC_LATEST, {}).get("head") == head or state_json(SRC_GAP, {}).get("head") == head:
+        return False
+    return src_unverified(head)[0] > 0
+
+def src_gap(head):
+    """The score's src part alone at `head` (src_part: under the score's lock, its files yielding to a waiting lander at
+    their boundaries, at the score's QoS), once a head: a failure is src_part's (src-failed, one note), and the bound
+    then holds landings as before."""
+    save_json(SRC_GAP, {"head": head, "t": stamp()})
+    behind, files = src_unverified(head)
+    event("src-gap", sha=head[:8], behind=behind, first=files)
+    src_part(head)
 
 def src_part(head):
     """The score's src part (measure.src_score) under the score's lock, before its smoke, a part of its own: a fault of
@@ -219,6 +240,8 @@ def score_tick():
     if head != last and not backed_off("score") and (n >= cfg()["score_every_landings"] or time.time() - last_t >= cfg()["score_every_s"]) \
             and power_ok():   # no score starts while the power rule stops work (O8-3, core.power_works)
         scoreboard_once(head)
+    elif src_gap_due(head) and power_ok():   # between scores: the test files the landings' shares left unrun
+        src_gap(head)
     if pause() or week_half() or token_refused():
         return
     if not judge_measured() and not backed_off("judge-eval") and not over_budget():
