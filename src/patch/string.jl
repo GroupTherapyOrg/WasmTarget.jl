@@ -145,3 +145,50 @@ end
     end
     return nothing
 end
+
+# Base's body (julia/base/strings/substring.jl:273), its memset through unsafe_convert(Ptr{UInt8}, out) the
+# store of the one byte at each offset of the fresh String's data array (wasm_string_write!) and its
+# unsafe_copyto! from pointer(s) to pointer(out, i*n+1) the array.copy of s's bytes from its place
+# (wasm_string_place, wasm_string_copy!), as dart's one-byte `*` sets each code unit of its allocated result
+# (dart2wasm's `*` delegates to its embedder's stringRepeat, so the VM's is the nearest). Base's checks stay:
+# a negative count throws Base's ArgumentError; String(s) of a count of 1 stays Base's.
+@quarantine "julia/base/strings/substring.jl:273 repeat of a String or SubString{String} fills a fresh String by memset or unsafe_copyto! through pointers; WasmGC stores the byte at each offset of the data array (wasm_string_write!) or copies s's data array from its place (wasm_string_copy!), as dart's one-byte operator * sets its result's code units (sdk/lib/_internal/vm/lib/string_patch.dart:1132 _OneByteString.*; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:379 EmbedderStringImpl.* delegates to its embedder)" Base.repeat @consistent_overlay METHOD_TABLE function Base.repeat(s::Union{String,SubString{String}}, r::Integer)
+    r < 0 && throw(ArgumentError("can't repeat a string $r times"))
+    r = UInt(r)::UInt
+    r == 0 && return ""
+    r == 1 && return String(s)
+    local n = sizeof(s)
+    local out = Base._string_n(n*r)
+    if n == 1
+        local b = @inbounds codeunit(s, 1)
+        for i in 0:Int(r)-1
+            wasm_string_write!(out, i, b)
+        end
+    else
+        local src, o = wasm_string_place(s)
+        for i = 0:r-1
+            wasm_string_copy!(out, Int(i*n), src, o, n)
+        end
+    end
+    return out
+end
+
+# Base's body (julia/base/strings/string.jl:573), its memset, its unsafe_store! of a UInt16, of three bytes
+# or of a UInt32 through pointer(s) each the store of the character's n bytes at each copy's offsets of the
+# fresh String's data array (wasm_string_write!): byte k of a copy is (u >> 8k) % UInt8, the little-endian
+# byte Base's store writes, as dart's one-byte `*` sets each code unit of its result. Base's checks stay.
+# It is overlaid for a Char, the type Base's body converts every character to: an overlay of AbstractChar
+# would cover Base's more specific repeat of an AnnotatedChar (an AnnotatedString), which stays Base's.
+@quarantine "julia/base/strings/string.jl:573 repeat of a Char fills a fresh String by memset or unsafe_store! through pointer(s); WasmGC stores each copy's bytes at their offsets of the data array (wasm_string_write!), as dart's one-byte operator * sets its result's code units (sdk/lib/_internal/vm/lib/string_patch.dart:1132 _OneByteString.*; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:379 EmbedderStringImpl.* delegates to its embedder)" Base.repeat @consistent_overlay METHOD_TABLE function Base.repeat(c::Char, r::Integer)
+    r < 0 && throw(ArgumentError("can't repeat a character $r times"))
+    r = UInt(r)::UInt
+    c = Char(c)::Char
+    r == 0 && return ""
+    local u = bswap(reinterpret(UInt32, c))
+    local n = 4 - (leading_zeros(u | 0xff) >> 3)
+    local s = Base._string_n(n*r)
+    for i in 0:Int(r)-1, k in 0:n-1
+        wasm_string_write!(s, i*n + k, (u >> 8k) % UInt8)
+    end
+    return s
+end

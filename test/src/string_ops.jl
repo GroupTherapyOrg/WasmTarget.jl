@@ -61,6 +61,20 @@ ends(n::Int64) = Int64(endswith(n > 0 ? "vital é" : "x", " é")) * 10^5 + Int64
 cus(n::Int64) = something(findfirst(iszero, codeunits(n > 0 ? "ab\0c" : "abc")), 0) * 1000 +
     something(findnext(isequal(0x62), codeunits(SubString(n > 0 ? "xabcb" : "xaca", 2)), 3), 0) * 100 +
     something(findnext(isequal(0x62), codeunits(SubString("xabcb", 2)), 2), 0) * 10 + something(findfirst(isequal(0xc3), codeunits("aé")), 0)
+# repeat of a String (substring.jl:273 by overlay): a one-byte String (memset's arm), a longer one
+# (unsafe_copyto!'s arm), a count of 1 and of 0; repeat of a Char of one, two, three and four bytes
+# (string.jl:573 by overlay); each answer's bytes summed by position, so a misplaced byte differs. A
+# SubString's repeat compiles its count of 1's String(s), the SubString constructor, rejected as Base's
+function _rsum(s::String)
+    local t = Int64(0)
+    for i in 1:ncodeunits(s)
+        t += Int64(codeunit(s, i)) * i
+    end
+    return t
+end
+rep(n::Int64) = _rsum(repeat("a", n)) + _rsum(repeat("hé!", n)) * 3 + _rsum(repeat("xyz", n + 1)) * 7 +
+    _rsum(repeat("ab", n - 1)) * 11 + _rsum(repeat("q", n - n)) * 13 +
+    _rsum(repeat('c', n)) * 17 + _rsum(repeat('é', n)) * 19 + _rsum(repeat('€', n)) * 23 + _rsum(repeat('😀', n)) * 29
 end
 
 const STRING_OP_CASES = (
@@ -79,7 +93,8 @@ const STRING_OP_CASES = (
     ("symn", StringOpCases.symn, (Int64(1),)), ("symn", StringOpCases.symn, (Int64(0),)),
     ("syms", StringOpCases.syms, (Int64(2),)), ("syms", StringOpCases.syms, (Int64(0),)),
     ("ends", StringOpCases.ends, (Int64(1),)), ("ends", StringOpCases.ends, (Int64(0),)),
-    ("cus", StringOpCases.cus, (Int64(1),)), ("cus", StringOpCases.cus, (Int64(0),)))
+    ("cus", StringOpCases.cus, (Int64(1),)), ("cus", StringOpCases.cus, (Int64(0),)),
+    ("rep", StringOpCases.rep, (Int64(3),)), ("rep", StringOpCases.rep, (Int64(2),)), ("rep", StringOpCases.rep, (Int64(1),)))
 
 @testset "String's operations against native Julia" begin
     local runs = Main.WTChild.RunCase[]
@@ -116,6 +131,7 @@ end
     local overlaid(f, T) = Set{Symbol}(Core.Compiler.get_ci_mi(x).def.name for x in WasmTarget.check_subset(f, T, "string_ops", Base.get_world_counter()).codeinfos
                                        if x isa Core.CodeInstance && Core.Compiler.get_ci_mi(x).def.module === WasmTarget)
     @test [:endswith, :wasm_string_codeunit] ⊆ overlaid(StringOpCases.ends, (Int64,))
+    @test [:repeat, :wasm_string_write!, :wasm_string_copy!] ⊆ overlaid(StringOpCases.rep, (Int64,))
     @test [:_search, :wasm_string_place, :wasm_string_codeunit] ⊆ overlaid(StringOpCases.cus, (Int64,))
 end
 
