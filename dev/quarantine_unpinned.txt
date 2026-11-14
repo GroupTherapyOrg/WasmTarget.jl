@@ -7,7 +7,7 @@
 # pinned or gone, and the ratchet's L227 refuses a change that adds a line, so it only shrinks (D20). A definition is pinned when its reason carries an anchor
 # that resolves at its pin (a dart file, an LLVM unit, a unit of JULIA_FILES, a runtime file) or a
 # `precedent(<ecosystem>: <file>:<line> <symbol>)` resolving the same way in its ecosystem's pinned checkout
-# (dart, llvm or julia; any other ecosystem has no pin table and is refused); its owner pins it and deletes its line in the same commit.
+# (dart, llvm, julia or utf8proc; any other ecosystem has no pin table and is refused); its owner pins it and deletes its line in the same commit.
 julia/classes.jl ClassField
 julia/classes.jl _KINDS
 julia/classes.jl _kind_instance_fields
@@ -215,11 +215,8 @@ julia/parity.jl _PIN_LINES
 julia/parity.jl _SOURCE
 julia/parity.jl _WORLDS
 julia/parity.jl _admitted_names
-julia/parity.jl _anchor_fault
 julia/parity.jl _at
 julia/parity.jl _attribute!
-julia/parity.jl _c_pin_checkout
-julia/parity.jl _c_pin_missing
 julia/parity.jl _c_pin_units
 julia/parity.jl _call
 julia/parity.jl _class_line
@@ -254,7 +251,6 @@ julia/parity.jl _modules
 julia/parity.jl _pin_julia
 julia/parity.jl _pin_llvm
 julia/parity.jl _pin_sdk
-julia/parity.jl _reason_unpinned
 julia/parity.jl _references
 julia/parity.jl _register!
 julia/parity.jl _register_range!

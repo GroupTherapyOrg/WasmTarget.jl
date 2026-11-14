@@ -1134,12 +1134,34 @@ The JuliaLang/julia commit every Julia anchor cites: the julia WasmTarget runs, 
     return _head_commit(dir) == JULIA_PIN ? dir : nothing
 end
 
-# the checkout a C-family pin's anchors resolve at (LLVM's or Julia's), its pin table, and how to make it
-@quarantine unpinned "the C-family pins, LLVM's and Julia's, each a checkout at its commit and a pin table" Base.Symbol _c_pin_checkout(pin::Symbol)::Union{String,Nothing} = pin === :julia ? _pin_julia() : _pin_llvm()
+# A utf8proc anchor names a line of JuliaStrings/utf8proc, Julia's own C dependency (libjulia links it; Base.Unicode
+# ccalls it), a pin derived from JULIA_PIN (dev/LEDGER.md D42, D45): its commit is UTF8PROC_SHA1 in deps/utf8proc.version
+# of the julia checkout at JULIA_PIN, the line Julia's own build reads, never a commit typed here; its checkout is
+# ~/.cache/wasmtarget/utf8proc (dev/fetch_julia.sh makes it from the same line). Its anchors are
+# `utf8proc/<file>.<c|h>:<line> <X>` and `precedent(utf8proc: <file>.<c|h>:<line> <X>)`, read as a Julia C anchor is.
+
+# the checkout a C-family pin's anchors resolve at (LLVM's, Julia's or utf8proc's), or nothing where there is none
+@quarantine pin"julia/base/loading.jl:1109 explicit_manifest_entry_path" "a pin's checkout is the directory holding the commit its record names, or nothing where none is there, as Julia's loader finds a dependency's directory in a depot from the git-tree-sha1 its manifest entry records and gives nothing where no depot holds it (julia/base/loading.jl:1109 explicit_manifest_entry_path); Julia differs: each pin is one checkout at one path under ~/.cache/wasmtarget, confirmed by its HEAD's commit where the loader searches each depot for a slug of the tree hash, and utf8proc's commit, a pin derived from JULIA_PIN, is read from deps/utf8proc.version in the julia checkout as the loader reads its manifest's entry" Base.Filesystem.homedir function _c_pin_checkout(pin::Symbol)::Union{String,Nothing}
+    pin === :julia && return _pin_julia()
+    pin === :llvm && return _pin_llvm()
+    pin === :utf8proc || throw(ConstructionViolation("_c_pin_checkout", "no C-family pin is named $pin: llvm, julia and utf8proc are"))
+    local jl = _pin_julia()
+    jl === nothing && return nothing
+    local version = joinpath(jl, "deps", "utf8proc.version")
+    isfile(version) || return nothing
+    local m = match(r"^UTF8PROC_SHA1=([0-9a-f]{40})$"m, read(version, String))
+    m === nothing && return nothing
+    local dir = joinpath(homedir(), ".cache", "wasmtarget", "utf8proc")
+    return _head_commit(dir) == m[1] ? dir : nothing
+end
 @quarantine unpinned "the C-family pins, LLVM's and Julia's, each a checkout at its commit and a pin table" Base.Symbol _c_pin_units(pin::Symbol)::Tuple{Vararg{String}} = pin === :julia ? JULIA_FILES : LLVM_FILES
-@quarantine unpinned "the C-family pins, LLVM's and Julia's, each a checkout at its commit and a pin table" Base.Symbol _c_pin_missing(pin::Symbol)::String = pin === :julia ?
-    "no checkout of JuliaLang/julia at $JULIA_PIN at ~/.cache/wasmtarget/julia: bash dev/fetch_julia.sh" :
-    "no checkout of llvm-project at $LLVM_PIN at ~/.cache/wasmtarget/llvm-project: bash dev/fetch_llvm.sh"
+# why a C-family pin has no checkout, and the command that makes it
+@quarantine pin"julia/base/loading.jl:2676 __require_prelocked" "a pin whose checkout is missing is refused with the command that makes it, as Julia's loader refuses a package it cannot locate with the command that installs it (julia/base/loading.jl:2676 __require_prelocked, `Pkg.instantiate()`); Julia differs: the message is returned to the check that refuses, located, where the loader throws its ArgumentError itself, and a derived pin's message names the record its commit is read from" Base.Symbol function _c_pin_missing(pin::Symbol)::String
+    pin === :julia && return "no checkout of JuliaLang/julia at $JULIA_PIN at ~/.cache/wasmtarget/julia: bash dev/fetch_julia.sh"
+    pin === :llvm && return "no checkout of llvm-project at $LLVM_PIN at ~/.cache/wasmtarget/llvm-project: bash dev/fetch_llvm.sh"
+    pin === :utf8proc && return "no checkout of JuliaStrings/utf8proc at ~/.cache/wasmtarget/utf8proc at the commit deps/utf8proc.version names (UTF8PROC_SHA1) in the julia checkout at $JULIA_PIN: bash dev/fetch_julia.sh"
+    throw(ConstructionViolation("_c_pin_missing", "no C-family pin is named $pin: llvm, julia and utf8proc are"))
+end
 
 # a C++ class or struct declared at column 0, a template's parameters before it, and its name
 @quarantine unpinned "C++'s class keys, read from LLVM's clang-formatted source" Base.var"@r_str" const CPP_DECL_RX = r"^(?:template\s*<[^>]*>\s*)?(?:class|struct)\s+([A-Za-z_]\w*)"
@@ -1194,9 +1216,9 @@ end
     return occursin(Regex("(?<![\\w:~.>])\\Q" * m * "\\E\\s*(?:[(;={\\[]|\$)"), s) ? nothing : "line $ln does not declare $x::$m"
 end
 
-# an anchor of either pin: a dart file under pkg/ (1), or an LLVM, compiler-rt or Julia unit (2) and its
+# an anchor of either pin: a dart file under pkg/ (1), or an LLVM, compiler-rt, Julia or utf8proc unit (2) and its
 # extension (3); its line (4); its symbol (5), dart's X or X.m, or C++'s X or X::m
-@quarantine pin"precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)" "an anchor names a pinned file, a line and the symbol declared there, read by one regex, as dart's debug adapter reads a stack frame's file, line and column from text by one (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: this regex is anchored to one whole anchor, where :73's is unanchored and read by firstMatch, and it ends in the declared symbol where :73 ends in a column" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia|compiler-rt)/[\w/]+)\.(cpp|c|h|inc|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
+@quarantine pin"precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)" "an anchor names a pinned file, a line and the symbol declared there, read by one regex, as dart's debug adapter reads a stack frame's file, line and column from text by one (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: this regex is anchored to one whole anchor, where :73's is unanchored and read by firstMatch, and it ends in the declared symbol where :73 ends in a column" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia|compiler-rt|utf8proc)/[\w/]+)\.(cpp|c|h|inc|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
 
 """
     Anchor
@@ -1222,7 +1244,8 @@ end
 
 The parts of `s`, an anchor of either pin; nothing when it reads as neither
 "<file>.dart:<line> <X or X.m>" nor "llvm/<unit>.<cpp|h>:<line> <X or X::m>" nor
-"compiler-rt/<unit>.<c|h|inc>:<line> <X>"."""
+"compiler-rt/<unit>.<c|h|inc>:<line> <X>" nor "julia/<unit>.<c|cpp|h|jl>:<line> <X>" nor
+"utf8proc/<file>.<c|h>:<line> <X>"."""
 @quarantine pin"precedent(dart: pkg/dap_adapters/lib/src/utils.dart:99 _parseStackFrame)" "an anchor's forms, one per pin, read by one regex into its file, line and symbol, as dart's debug adapter parses a stack frame's location from its pattern's match (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:99 _parseStackFrame)); Julia differs: it reads a symbol where :99 reads a column; a string that is no anchor gives nothing, as :99 gives null, never a refusal" Base.match function parse_anchor(s::AbstractString)::Union{Anchor,Nothing}
     local m = match(ANCHOR_RX, s)
     m === nothing && return nothing
@@ -1239,6 +1262,11 @@ The parts of `s`, an anchor of either pin; nothing when it reads as neither
     # under llvm-project's
     if startswith(m[2], "julia/")
         return Anchor(:julia, String(m[2]), m[2][length("julia/")+1:end] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
+    end
+    # utf8proc's files, C, lie under its checkout's root, the unit less its `utf8proc/` prefix; C has no member
+    if startswith(m[2], "utf8proc/")
+        m[3] in ("c", "h") && !occursin("::", sym) || return nothing
+        return Anchor(:utf8proc, String(m[2]), m[2][length("utf8proc/")+1:end] * "." * m[3], parse(Int, m[4]), sym, sym)
     end
     # LLVM's units are C++, compiler-rt's builtins C (an .inc a file its units include), both at the llvm pin
     (startswith(m[2], "compiler-rt/") ? m[3] in ("c", "h", "inc") : m[3] in ("cpp", "h")) || return nothing
@@ -1384,11 +1412,11 @@ end
     return nothing
 end
 
-# why an anchor does not resolve in the checkout `sdk` (the llvm-project checkout for an LLVM
-# anchor), or nothing when it does
-@quarantine unpinned "the pinned dart file is read where the anchor is checked" Base.readlines function _anchor_fault(sdk::String, anchor::String)::Union{String,Nothing}
+# why an anchor does not resolve in the checkout `sdk` (the llvm-project, julia or utf8proc checkout for
+# an anchor of that pin), or nothing when it does
+@quarantine pin"pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:29 CommentReferenceResolver.resolve" "one citation is resolved by the reader its form names, as dart's analyzer resolves a comment reference by the resolver its expression's form names, a simple identifier, a prefixed one or a property access (pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:29 CommentReferenceResolver.resolve); Julia differs: the form is the anchor's pin, a C unit of LLVM, Julia or utf8proc read by its declaration's column and keyword, a unit of Julia's Base or compiler read by Julia's parser, a dart file read by its formatter's columns, the declaration is a line of the pinned checkout's file, not of the same program, and it returns why the line does not declare the symbol where dart sets the reference's element and reports nothing" Base.readlines function _anchor_fault(sdk::String, anchor::String)::Union{String,Nothing}
     local a = parse_anchor(anchor)
-    if a !== nothing && a.pin in (:llvm, :julia)
+    if a !== nothing && a.pin in (:llvm, :julia, :utf8proc)
         local file = joinpath(sdk, a.file)
         isfile(file) || return "the $(a.pin) pin has no $(a.file)"
         local clines = get!(() -> readlines(file), _PIN_LINES, file)
@@ -1465,19 +1493,17 @@ end
 # adds a line, so the list only shrinks (D20).
 
 # the anchors a reason cites, each form of the pins'
-@quarantine pin"precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)" "an anchor in a reason's prose is found by its pins' forms with one unanchored regex, as dart's debug adapter finds a stack frame's location inside a line of output with one (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: every anchor of the prose is read (eachmatch), where :73's pattern is read by firstMatch, and each ends in the declared symbol where :73's ends in a column" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia|compiler-rt)/[\w/]+\.(?:cpp|c|h|inc|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
+@quarantine pin"precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)" "an anchor in a reason's prose is found by its pins' forms with one unanchored regex, as dart's debug adapter finds a stack frame's location inside a line of output with one (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: every anchor of the prose is read (eachmatch), where :73's pattern is read by firstMatch, and each ends in the declared symbol where :73's ends in a column" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia|compiler-rt|utf8proc)/[\w/]+\.(?:cpp|c|h|inc|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
 @quarantine unpinned "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:\.(?:[A-Za-z_$][\w$]*|\[\]=?|[-+*/%<>=~&|^]+))?))?"
 @quarantine unpinned "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*!?(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
 
 # why a quarantine's reason pins no source, or nothing when it does: its precedents, each resolving at
 # its ecosystem's pinned checkout, or an anchor that resolves at its pin's checkout (an anchor whose
-# checkout is missing does not); `cpin` gives the LLVM and Julia checkouts. Its checking logic, the
-# precedent resolver among it, is unported: no pinned near 1:1 match is named for it, so it stays on the
-# debt list (dev/quarantine_unpinned.txt) until one is ported (the lead's ruling on A67E2)
-@quarantine unpinned "a reason's anchors are read against the pinned files, as @parity's are" Base.eachmatch function _reason_unpinned(reason::AbstractString, sdk::Union{String,Nothing}, cpin::Function = _c_pin_checkout)::Union{String,Nothing}
+# checkout is missing does not); `cpin` gives the LLVM, Julia and utf8proc checkouts
+@quarantine pin"pkg/analyzer/lib/src/fasta/doc_comment_builder.dart:783 DocCommentBuilder._parseReferences" "a reason's citations are found in its prose by their forms, each read on its own, as dart's analyzer finds each comment reference in a doc comment's text by its bracket form and parses it on its own (pkg/analyzer/lib/src/fasta/doc_comment_builder.dart:783 DocCommentBuilder._parseReferences); Julia differs: a citation's forms are a precedent, an anchor of a pin and a dart path, each found by its regex, and each is resolved here at its pin's checkout (_anchor_fault), the first that does not resolve returned, where dart collects the references and resolves them in a later pass, reporting none" Base.eachmatch function _reason_unpinned(reason::AbstractString, sdk::Union{String,Nothing}, cpin::Function = _c_pin_checkout)::Union{String,Nothing}
     # every precedent resolves, or the reason pins nothing: an invented one never rides beside a real one.
-    # A precedent resolves when its ecosystem has a pinned checkout (dart's at PIN, `sdk`; LLVM's and
-    # Julia's, `cpin(pin)`), its file lies under that checkout (a Julia file a unit of JULIA_FILES), and
+    # A precedent resolves when its ecosystem has a pinned checkout (dart's at PIN, `sdk`; LLVM's, Julia's
+    # and utf8proc's, `cpin(pin)`), its file lies under that checkout (a Julia file a unit of JULIA_FILES), and
     # its line declares its symbol as an anchor's does; any other ecosystem has no pin table
     local precedent_fault(m) = begin
         local eco, path, ln, sym = m.captures
@@ -1490,8 +1516,10 @@ end
             "$path:$ln $sym", :llvm
         elseif eco == "julia"
             "julia/$path:$ln $sym", :julia
+        elseif eco == "utf8proc"
+            "utf8proc/$path:$ln $sym", :utf8proc
         else
-            return "no pin table holds the ecosystem $eco (dart, llvm and julia have pinned checkouts)"
+            return "no pin table holds the ecosystem $eco (dart, llvm, julia and utf8proc have pinned checkouts)"
         end
         local a = parse_anchor(anchor)
         a === nothing && return "$path:$ln $sym reads as no declaration of the $eco pin"
@@ -1877,6 +1905,8 @@ end
     local a = parse_anchor(anchor)
     a === nothing &&
         refuse("the anchor $(repr(anchor)) reads neither \"<file>.dart:<line> <Symbol>\" nor \"llvm/<unit>.<cpp|h>:<line> <X or X::m>\" nor \"compiler-rt/<unit>.<c|h|inc>:<line> <X>\" nor \"julia/<unit>.<c|cpp|h>:<line> <X>\"")
+    # utf8proc is Julia's C dependency, ported by an overlay's @quarantine (src/patch), never mirrored by a @parity
+    a.pin === :utf8proc && refuse("the anchor $(repr(anchor)) names utf8proc, which no file include_dart loads ports: a port of utf8proc is a @quarantine overlay in src/patch, pinned by precedent(utf8proc: <file>.<c|h>:<line> <X>)")
     a.pin === :dart ? (a.unit in DART_FILES || a.unit in RUNTIME_FILES || refuse("the anchor's file $(a.unit) is no file of the pin tables DART_FILES and RUNTIME_FILES")) :
                       (a.unit in _c_pin_units(a.pin) || refuse("the anchor's unit $(a.unit) is no unit of the $(a.pin === :julia ? "Julia pin table JULIA_FILES" : "LLVM pin table LLVM_FILES")"))
     local file = string(something(source.file, :none))
