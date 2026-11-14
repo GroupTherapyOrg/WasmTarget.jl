@@ -966,10 +966,16 @@ end
             if is_i32 || is_i16
                 # Initialize array contents from passive data segment.
                 local segment = byte_segment(self.constants, b.module_builder)
-                # each entry is a WasmI32 constant, Julia's Int32 (makeWasmI32), written little-endian
-                local value(e::NirConst) = e.c.val isa Int32 ? e.c.val :
-                    reject!(Internal("$at: an entry $(e.c.val) of a data-initialized array is no WasmI32"), at)
-                local bytes = is_i16 ? reinterpret(UInt8, UInt16[htol(UInt16(value(e) % UInt16)) for e in elements]) :
+                # each entry is dart's IntConstant value of its WasmI32: here the integer Julia holds in the
+                # storage (src/julia/classes.jl _memory_element_storage): an Int16 or UInt16 of i16; an Int32
+                # (makeWasmI32's), UInt32 or Char of i32; each written as its bits, little-endian, as dart's
+                # Uint16List and Uint32List hold the value (a negative one by its two's-complement bits), the
+                # bits visitIntConstant's operand stores; an entry of any other type, its storage's width
+                # notwithstanding, is no integer this reads, located
+                local width = is_i16 ? 2 : 4
+                local value(e::NirConst) = (local v = e.c.val; v isa Union{Base.BitInteger64,Char} && sizeof(v) == width ? v :
+                    reject!(Unquarantined("src/constants.jl _makeWasmArrayLiteral: an entry of $(typeof(v)) in a data-initialized $(is_i16 ? "i16" : "i32") array, no integer of its storage's width"), at))
+                local bytes = is_i16 ? reinterpret(UInt8, UInt16[htol(reinterpret(UInt16, value(e))) for e in elements]) :
                     reinterpret(UInt8, UInt32[htol(reinterpret(UInt32, value(e))) for e in elements])
                 WasmBuilder.i32_const(b, length(segment))
                 WasmBuilder.i32_const(b, length(elements))
