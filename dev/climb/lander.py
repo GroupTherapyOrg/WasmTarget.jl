@@ -72,6 +72,13 @@ def probe():
     return {"p_idle": idle(pairs[ne:]), "e_idle": idle(pairs[:ne]), "pressure": pressure(), "swapins": s1[0] - s0[0],
             "decompressions": s1[1] - s0[1]}
 
+def quiet(pr, low):
+    """THE one definition of a quiet machine (throughput P0): the quiet probe's reading `pr` within what quiet means
+    (admitted: p_idle, e_idle, swapins_max, decompressions_max, the pressure under critical) and Low Power Mode off
+    (`low`: it halves every rate). D14's band judges a check's cost, and only a check that began and ended on a quiet
+    machine is evidence of it (core.judged_check); the lander starts every check whatever the probe reads."""
+    return bool(admitted(pr) and not low)
+
 def admitted(pr):
     c = cfg()
     return pr["p_idle"] >= c["p_idle"] and pr["e_idle"] >= c["e_idle"] and pr["pressure"] < 4 and \
@@ -255,29 +262,36 @@ def layer(slot):
 def _land(slot, item, c, scan, handed=None):
     """land()'s probe and check, inside its locks and its quiet window (`scan` stops what started meanwhile)."""
     pr = probe()
-    ok = admitted(pr)
+    ok = quiet(pr, power_low())   # quiet at its start: the probe is the measurement, never a gate (throughput P0)
     # what the stopped users still hold in memory (operator 7): read beside the probe, to re-derive the band
     rss = [int(f[1]) for f in (l.split() for l in sh(["ps", "-axo", "user=,rss="]).stdout.splitlines())
            if len(f) == 2 and f[0] in {door.ROLES[r] for r in QUIET}]
     pr["stopped"], pr["stopped_rss_mb"] = len(rss), round(sum(rss) / 1024)
     event("quiet-probe", ok=ok, **pr)
-    if not ok:   # a busy machine: the next probe waits probe_backoff_s, so no round makes the measurements yield for
-        back_off("lander", "probe", why="the machine was not quiet", secs=c["probe_backoff_s"], note_at=0)   # nothing
-        return pr, None, (None, None, None), ""
-    recovered("lander", "probe")
+    # the check starts whatever the probe read (throughput P0, the owner's "STOP pausing EVER"): D14's band judges its
+    # cost only when the machine was quiet at its start and at its end; dev/d14_judge.sh asks this loop (ask) when the
+    # check read red on the band alone, and a check on a machine not quiet at either end lands on correctness alone
     log = os.path.join(STATE, "logs", f"ship-{int(time.time())}.out")
     res, chk = ship_files()
+    ask, q = f"{res}.d14", {"start": ok, "end": None}
+    def answer():   # ship.sh's question, when asked, answered once from the machine at the check's end
+        if q["end"] is None and os.path.exists(ask + ".req"):
+            pe = probe()
+            q["end"], q["end_probe"] = quiet(pe, power_low()), pe
+            write_atomic(ask + ".ans", "judged\n" if q["start"] and q["end"] else "unjudged\n")
     v0, t_check = vm(CHECK_VM), door.CLOCK()
     with open(log, "w") as f:
         p = subprocess.Popen(program(ship_cmd(slot)), cwd=slot, stdout=f, stderr=subprocess.STDOUT, text=True, start_new_session=True,
                              env=dict(os.environ, WT_CLIMB_DRIVER="1", WT_SHIP_EXPECT=item["rebased"]["commit"], WT_SHIP_RESULT=res,
-                                      WT_CHECK_RESULT=chk, **({door.SET_ENV: handed[0], door.COSTS_ENV: handed[1]} if handed else {})))
+                                      WT_CHECK_RESULT=chk, WT_D14_ASK=ask, WT_D14_WAIT=str(c["poll_s"]["scan"] + c["probe_s"] + 60),
+                                      **({door.SET_ENV: handed[0], door.COSTS_ENV: handed[1]} if handed else {})))
         t0, battery, step = door.CLOCK(), False, None
         try:
             while p.poll() is None:
                 if door.CLOCK() - t0 > c["ship_kill_s"]:
                     break
                 time.sleep(c["poll_s"]["scan"]); beat()
+                answer()
                 # when the power rule stops work (core.power_works) the check ends, redone when work may run, never a D14
                 # row (O8-3); on battery with Low Power Mode off above the floor it runs on; ship.sh is stopped only while its step
                 # is the regeneration or the check, never at the push or after it: a kill between the push and the landed
@@ -301,6 +315,13 @@ def _land(slot, item, c, scan, handed=None):
     pr["during"] = dict(zip((k.lower() for k in CHECK_VM), (b - a for a, b in zip(v0, vm(CHECK_VM)))), secs=round(door.CLOCK() - t_check))
     result, verdict = ship_result(res), check_verdict(chk)
     pr["records"] = read_once(chk + ".records", cap=DEFAULTS["land_outs"]["total_bytes"])   # popped by land_round
+    if q["end"] is None:   # not asked (a green, or a red on its tests): the machine at the check's end, read now
+        pe = probe()
+        q["end"], q["end_probe"] = quiet(pe, power_low()), pe
+    pr["quiet"] = q
+    for f_ in (ask + ".req", ask + ".ans"):
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(f_)
     if (battery or not power_ok()) and result[0] != "LANDED":   # a check the power rule stopped is no verdict (a landing stands)
         event("power-cut", role="land", in_flight=item["hold"], step=step, result=f"{result[0]}:{result[1]}")
         raise PowerCut(f"the power rule stopped work (core.power_works) during the landing check of {item['hold'][:80]} "
@@ -318,8 +339,19 @@ def ship_event(item, pr, kind, arg, crc, path, out, split=None, src_set_=None):
     event("ship" if pr else "land-wait", hold=item["hold"], result=f"{kind}:{arg}", check=crc, path=path if crc in (0, 10) else None,
           split=split if crc in (0, 10) else None, src_set=src_set_ if pr else None,
           target=(src_set_ or {}).get("target") if pr else None, margin=((src_set_ or {}).get("margin") or {}).get("margin") if pr else None,
-          d14={"verdict": "red" if crc == 10 else "green" if crc == 0 else None, "band": d14_red()} if pr else None,
+          d14={"verdict": d14_verdict(pr, kind, crc), "band": d14_red()} if pr else None,
           probe=pr, tail=out[-300:])
+
+def d14_verdict(pr, kind, crc):
+    """D14's verdict on a check (throughput P0): red when ship.sh refused it on the band (kind D14: judged, the machine
+    quiet at both ends), green when it passed within the band on a quiet machine, `unjudged` when it ran on a machine
+    not quiet at its start or its end (whatever its time), None when no check verdict exists."""
+    if kind == "D14":
+        return "red"
+    if crc not in (0, 10):
+        return None
+    qq = (pr or {}).get("quiet") or {}
+    return "green" if crc == 0 and qq.get("start") and qq.get("end") else "unjudged"
 
 def item_problems(item):
     """The pinned commit's shape, read again in the main repository before it is checked out: a move's or an audit's
@@ -525,7 +557,7 @@ def d14_binds():
     time alone passes d14_share[1], or falls back under it, naming their critical paths and Dale's band; never a note a
     check (the band is Dale's and is not moved here)."""
     n, share = cfg()["d14_share"]
-    checks = [e for e in events() if e["kind"] == "ship" and (e.get("d14") or {}).get("verdict") and not (e.get("probe") or {}).get("battery")][-n:]
+    checks = [e for e in events() if e["kind"] == "ship" and (e.get("d14") or {}).get("verdict") and judged_check(e)][-n:]
     if len(checks) < n:
         return
     reds = [e for e in checks if e["d14"]["verdict"] == "red"]
@@ -750,7 +782,7 @@ def fixfirst_binds(overdue):
 def near_band():
     """D17: green checks near D14's band are a finding, early; the median of the last five, never one check (O12),
     noted once when it passes near_band of the band and again only when it rises near_band_step more (O5-11)."""
-    greens = sorted(e["path"] for e in [x for x in events() if x["kind"] == "ship" and x.get("path") and not (x.get("probe") or {}).get("battery")
+    greens = sorted(e["path"] for e in [x for x in events() if x["kind"] == "ship" and x.get("path") and judged_check(x)
                                         and x.get("result", "").startswith("LANDED")][-5:])
     if len(greens) < 5:
         return
@@ -820,11 +852,8 @@ def land_round():
         # the cheap refusals first, ship.sh's and the memory's, before a re-measure or a stop (operator 2, red 7)
         (kind, arg), out = admissible(slot)
         pr = None
-        if kind == "ADMISSIBLE":
-            if pressure() >= 4:   # a critical machine measures nothing; a failed probe, so the quiet alarm covers it (O1)
-                event("quiet-probe", ok=False, reason="memory", pressure=pressure(), hold=item["hold"])
-                return 3
-            try:
+        if kind == "ADMISSIBLE":   # a busy machine, memory's critical pressure included, holds nothing (throughput P0):
+            try:                   # the check it runs on such a machine is unjudged (quiet, the probe at its ends)
                 bad, stop = rebased_check(item)
             except OracleGap as e:   # the store does not answer origin's labels, so a moved item cannot be re-measured (S5):
                 # refused here, located, for this item alone; it keeps its place, one event while the gap reads the same,
@@ -854,8 +883,8 @@ def land_round():
             item["src_ring"] = {"hs": ss["hs"], "pos": ss["pos_next"], "carry": ss["dropped"]} if "share" in ss else None
             unqueue(item, src_handed=files, src_ring=item["src_ring"])
             pr, res, (crc, path, split), out = land(slot, item, hand_set(item, files, ss))
-            if res is None:
-                return 3   # not quiet: everything resumed at once, the next round tries again
+            if res is None:   # no check ran (land() returns no result only when it started none): never past a gap (D9)
+                raise ClimbError(f"the landing of {item['hold'][:80]} ran no check and gave no result")
             rtext = pr.pop("records", None)
             recs, vfiles = shard_records(rtext), void_files(rtext)
             # the verified record: the files the check REPORTS it ran green, of the set handed (the operator's round-13

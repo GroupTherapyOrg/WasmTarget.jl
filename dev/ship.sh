@@ -220,6 +220,9 @@ else "${@:2}" bash dev/check.sh 2>&1 | tee .wtd/check.log; rc=${PIPESTATUS[0]}; 
 # and each shard's per-file records (test/src_tests.jl's WT_SRC_RECORDS, a file a shard), headed by their shard, beside
 # the verdict: what the check reports it ran, the climb's lander's verified record and R3's reading, never assumed
 for f in .wtd/src_records.*.out; do [ -f "$f" ] && { printf 'shard\t%s\n' "$(basename "$f")"; cat "$f"; }; done > "$WT_CHECK_RESULT.records" 2>/dev/null
+# a red on D14's band alone is a red only when the machine was quiet at the check's start and its end (throughput P0):
+# dev/d14_judge.sh asks the climb's lander, which named the question (WT_D14_ASK); the verdict file above keeps 10
+[ ! -f dev/d14_judge.sh ] || rc=$(bash dev/d14_judge.sh "$rc")
 [ $rc -eq 0 ] || exit 1
 step still
 { ! grep -qxF "$WT_SHIP_LANE" "$WT_SHIP_COMMON/wt-held" 2>/dev/null; } &&

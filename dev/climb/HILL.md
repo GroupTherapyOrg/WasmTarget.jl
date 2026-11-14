@@ -896,7 +896,16 @@ door's, run as Dale on paths no build user writes.
   measurement (A6-6); a wait past
   `lock_wait_s`, the lander's, a slot's or the scoreboard's, is a note and waits on, never a backoff or a charge:
   each holder has its own wall.
-- **The quiet probe.** No measurement runs beside a check (ruling 1): the lander takes both measurement locks first,
+- **The quiet probe.** It is a measurement, never a gate (throughput P0, the owner's "STOP pausing EVER", 2026-11-13):
+  the lander starts every check whatever the probe reads. D14's band judges a check's cost, and only a check that began
+  and ended on a quiet machine is evidence of it: `lander.quiet`, the one definition (the probe within `p_idle`,
+  `e_idle`, `swapins_max`, `decompressions_max`, the pressure under critical, and Low Power Mode off), read at the
+  check's start and at its end. A check that read red on the band alone asks the lander (`dev/d14_judge.sh`, called by
+  dev/ship.sh on the check's status before its push): quiet at both ends, it is a D14 red as before (the D14 backoff,
+  the hourly cap and the counts apply to these alone); not quiet at either end, it lands on correctness alone (every
+  test, the ratchet and the canaries passed: the band is check.sh's last verdict) and its time is `unjudged`, read by
+  neither the margin, nor `checks_measured`, nor the near-band note, nor `d14_binds` (`core.judged_check`). No
+  measurement runs beside a check (ruling 1): the lander takes both measurement locks first,
   the score's and then the verify lock (O7-5: never the verify lock held idle behind a score's part), its mark served before any other taker, and holds them through the probe and the
   check; a measurement it waits on yields its lock between its parts (a compile at its next case's boundary, its
   finished cases kept and the rest run again after; between its three roles; the score's kinds after its smoke),
@@ -938,8 +947,8 @@ door's, run as Dale on paths no build user writes.
   split (each stage's judged seconds and their three terms, the wall: check.sh's `check-split.out`, carried by ship.sh) and
   D14's verdict on it, so the burn-in reads whether reds follow memory (O6-7; probed with a stub check), and these
   bands are re-derived from them; the median of the last five green checks past `near_band` of D14's band is a note once, again only when it
-  rises `near_band_step` more (O5-11); a queue no probe admits for `alarm_s` is a note for Dale. A busy machine is resumed at once and the next probe waits `probe_backoff_s` (O7-5), so no round forces the
-  measurements to yield for nothing.
+  rises `near_band_step` more (O5-11); a busy machine holds no check (throughput P0: the probe is the measurement of
+  whether the check's time is judged, never a wait).
   Nothing is stopped during a wait, only during the probe and the check, and every stopped process is recorded
   in the window's record, so a killed owner's are resumed by the next climb process to start. Every pid the climb records
   (a stop's owner, a claim, the lander's mark, the quiet window's owner) carries this boot's time, and one test
@@ -1193,18 +1202,18 @@ every call. (Weighted means cache reads at 0.1, cache writes at 1.25, output at 
   dependency images' too, the agent probe's, the state's by `state_lock_s`), past it an event and the loop's backoff;
   a loop's fifth failure in a row is a note written by bash, which needs no driver module. **Power** (O8-3, R8-5, O9-1, spec battery1 B1):
 work runs by one rule, `core.power_works`: on AC; or, with `battery_runs` (Dale 2026-11-13: "keep gping with or
-without battery"), on battery with Low Power Mode off and the charge at or above `battery_floor_pct`. Low Power Mode
-on battery waits (it halves the machine's rate: every landing check would read red on D14's band and every learned
-second be wrong), and so does a charge under the floor (so the battery emptying never cuts a landing or a push); with
+without battery"; 2026-11-13: "STOP pausing EVER"), on battery with the charge at or above `battery_floor_pct`, Low
+Power Mode on or off. Low Power Mode halves the machine's rate, so a landing check in it is not quiet: judged on
+correctness alone, its time unjudged (the quiet probe, throughput P0), never a hold. A charge under the floor waits
+(the battery emptying would cut a landing or a push, a real loss); with
 `battery_runs` false the climb runs on AC alone, as before. One reading of the power source, Low Power Mode and the
 battery's charge (`core.power_read`, pmset's own words, at most once a second; `core.power_ok` the rule over it) is
 taken at every tick where the disk is asked and by each loop before it starts work. A change of (source, Low Power
 Mode, the charge at or above the floor) counts only once the new reading has held `power_settle_s` (O9-2: the adapter flapped 117 times in six minutes on 2026-11-08): the reading that
 differs is kept in `power.json` with when any process first saw it, dropped when any process reads the settled one
 again, and settled once it has held, which writes the event (`power`, with the charge and whether work runs) and at
-most one note for Dale per direction per `alarm_s`, the directions being work on AC, work on battery and waiting (in
-Low Power Mode the note says exactly what to do: "turn Low Power Mode off on battery (System Settings → Battery → Low
-Power Mode: Never, or Only on Power Adapter is NOT enough) or plug in"). Probed (`v10/p3/flap.py`, the operator's, on a simulated
+most one note for Dale per direction per `alarm_s`, the directions being work on AC, work on battery and waiting
+(under the floor: plug in). Probed (`v10/p3/flap.py`, the operator's, on a simulated
 clock: `pmset -g log`'s own timeline read every 5 s): each burst wrote one note and one event, the settle to AC once it
 stopped (the windows' other note is a real battery period before each burst), where HEAD wrote 30 and 6; two real
 unplugs 20 minutes apart wrote one note per direction, where HEAD wrote four (`twice.py`). While the rule stops work
@@ -1297,16 +1306,16 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `score_loss_band` 0.02, `judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4,
 `wall_factor` 3, `case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840,
 `kaimon_http_s` 120, `kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15,
-`swapins_max` 2000, `decompressions_max` 400000, `probe_backoff_s` 600, `near_band` 0.85, `near_band_step` 5,
-`d14_backoff_s` 1200, `d14_share` [10, 0.6], `other_tries` 3, `ship_kill_s` 3600, `watch_stale_s` 600,
-`disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216,
-`fetch_tries` [5, 3, 4], `tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6,
-`src_unverified_max` 6, `src_shape_checks_min` 2, `src_prior_g` {"src": 11.0, "outside": 10.7},
-`src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0}, `src_prior_ratchet_s` 89,
-`src_prior_imbalance_s` 9, `src_margin_min_s` 10, `src_margin_checks` 10, `src_margin_start_s` 25,
-`src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800, `admissible_wall_s` 600, `parse_wall_s` 300,
-`loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432, `proxy_request_s` 1200, `proxy_join_s` 30,
-`git_low_speed` [1000, 60], `loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
+`swapins_max` 2000, `decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200,
+`d14_share` [10, 0.6], `other_tries` 3, `ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20,
+`file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4],
+`tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6, `src_unverified_max` 6,
+`src_shape_checks_min` 2, `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375,
+`src_prior_load_s` {"src": 17, "outside": 0}, `src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9,
+`src_margin_min_s` 10, `src_margin_checks` 10, `src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800,
+`kinds_wall_s` 1800, `admissible_wall_s` 600, `parse_wall_s` 300, `loader_wall_s` 600, `proxy_in_flight` 1,
+`proxy_body_bytes` 33554432, `proxy_request_s` 1200, `proxy_join_s` 30, `git_low_speed` [1000, 60],
+`loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
 `role_wait_s` {"slot": 10800, "review": 10800, "measure": 49800, "score": 49800, "land": 5400, "deps": 3600},
 `state_lock_s` 600, `step_wall_s` 60, `tree_wall_s` 600, `kaimon_poll_s` 30, `kaimon_ping_s` 10,
 `poll_s` {"kaimon_up": 5, "scan": 10, "lock": 5, "landing_lock": 20, "yield": 2, "land_job": 5},

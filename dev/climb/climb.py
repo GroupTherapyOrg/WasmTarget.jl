@@ -195,12 +195,7 @@ def alarms():
         alarm("no-landing", "checks run and nothing lands", f"{len(ships)} landing check(s) since {ships[0]} and no landing "
               f"since {last}: the last results {[e.get('result') for e in ev if e['kind'] == 'ship'][-5:]}. Default taken: "
               "the lander keeps trying; approved commits stay queued.")
-    probes = [e for e in ev if e["kind"] == "quiet-probe"]
-    ok = max((e["t"] for e in probes if e["ok"]), default=started)
-    if state_json("ready.json", []) and ok < cut and any(e["t"] >= cut for e in probes):
-        alarm("quiet", "no quiet probe has passed", f"Approved commits wait, and no probe since {ok} found the machine quiet "
-              f"(p_idle {cfg()['p_idle']}, e_idle {cfg()['e_idle']}): the last probes read "
-              f"{[(e.get('p_idle'), e.get('e_idle'), e.get('pressure')) for e in probes[-5:]]}. Default taken: the lander keeps probing.")
+    # (no alarm for a busy machine: the lander checks whatever the probe reads, throughput P0)
 
 def score_tick():
     """One look at origin/wt2: the alarms, the rogue-push alarm, a score when enough has landed or enough time has

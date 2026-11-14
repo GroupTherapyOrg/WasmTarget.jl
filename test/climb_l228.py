@@ -50,7 +50,8 @@ with open(f"{state}/events.jsonl", "w") as ev:
             ev.write(json.dumps({"t": f"2026-11-12T{i:02d}:00:0{int(shape)}", "kind": "ship", "result": "LANDED:x", "check": 0,
                                  "path": round(100 + er, 1), "src_set": {"src_change": shape, "ran_cost": 1000.0, "predicted": {"path": 100.0}},
                                  "split": {"load": [17 if shape else 0, 200, 0, 0], "ratchet": [79, 400, 0, 0],
-                                           "shards": [[80, 650, 0, 0]] * 5, "starts": [375.0] * 5}}) + "\n")
+                                           "shards": [[80, 650, 0, 0]] * 5, "starts": [375.0] * 5},
+                                 "probe": {"quiet": {"start": True, "end": True}}}) + "\n")
 c = core.cfg()
 def expect_margin(shape):
     pos = sorted((e for e in ERRS[shape][-c["src_margin_checks"]:] if e > 0), reverse=True)
@@ -142,6 +143,69 @@ if verdict(["t00.jl", "t01.jl"], (0, row("t00.jl", "passed") + canary + row("t01
     fault("dev/src_verdict.sh stands a file's block written after the canary's row (spec v19 Q2)")
 if verdict(["t00.jl"], (1, row("t00.jl", "passed") + canary)) != 15:
     fault("dev/src_verdict.sh does not read a void process (exit 1, every row passed) as void")
+
+# 6. no landing check waits for a quiet machine (throughput P0, the owner's "STOP pausing EVER"): lander._land starts
+# the check whatever its probe reads; D14's band judges a check only when the machine was quiet at its start and its
+# end (lander.quiet, the probe and the power reading stood in), dev/d14_judge.sh asking the lander when the check read
+# red on the band alone; a check not quiet at either end lands on correctness alone and its time is unjudged, moving
+# neither the margin nor checks_measured. dev/ship.sh is a stand-in keeping its contract (its result and verdict files,
+# the judge called on the check's status as ship.sh calls it); the judge is this tree's. door.reap, the one door action
+# _land takes, is stood in: nothing here reaches a build user
+import contextlib as _cl
+busy6 = {"p_idle": 10.0, "e_idle": 10.0, "pressure": 1, "swapins": 0, "decompressions": 0}
+quiet6 = {"p_idle": 99.0, "e_idle": 99.0, "pressure": 1, "swapins": 0, "decompressions": 0}
+slot6 = f"{tmp}/slot6"; os.makedirs(f"{slot6}/.wtd")
+shutil.copy(f"{root}/dev/d14_judge.sh", f"{tmp}/d14_judge.sh")
+open(f"{slot6}/.wtd/ship.lander.sh", "w").write(
+    'printf "%s %s\\n" "$FAKE_CRC" "$FAKE_PATH" > "$WT_CHECK_RESULT"\n'
+    f'rc=$(bash "{tmp}/d14_judge.sh" "$FAKE_CRC")\n'
+    'case "$rc" in 0) echo "LANDED $WT_SHIP_EXPECT" > "$WT_SHIP_RESULT" ;; 10) echo "D14 $FAKE_PATH" > "$WT_SHIP_RESULT" ;;\n'
+    '  14) echo "OWN tests" > "$WT_SHIP_RESULT" ;; *) echo "OTHER check-$rc" > "$WT_SHIP_RESULT" ;; esac\n')
+real6 = {"probe": L.probe, "ship_cmd": L.ship_cmd, "reap": door.reap}
+def land6(crc, path, readings, power=(True, False, 90)):
+    """_land with the check's status `crc` and path, the probe reading `readings` in turn, the power reading `power`:
+    (kind, D14 verdict, the probe record)."""
+    seq = iter(readings)
+    L.probe = lambda: dict(next(seq))   # a fresh reading each probe, as probe() returns
+    L.ship_cmd = lambda slot: ["bash", f"{slot6}/.wtd/ship.lander.sh"]
+    door.reap = lambda *a, **k: None
+    core.POWER[0], core.POWER[1], core.POWER[2] = (lambda: power), 0.0, None
+    with _cl.suppress(FileNotFoundError):
+        os.remove(f"{state}/power.json")
+    c6 = dict(core.cfg(), poll_s=dict(core.cfg()["poll_s"], scan=1))
+    old = {k: os.environ.get(k) for k in ("FAKE_CRC", "FAKE_PATH")}
+    os.environ.update(FAKE_CRC=str(crc), FAKE_PATH=str(path))
+    try:
+        pr, result, verdict, _ = L._land(slot6, {"rebased": {"commit": sha}, "hold": "p0-6"}, c6, lambda: None)
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+    return result[0], L.d14_verdict(pr, result[0], verdict[0]), pr
+try:
+    g("update-ref", "refs/remotes/origin/wt2", h)   # d14_red() reads origin's dev/check.sh
+    for what, crc, path, readings, power, want in (
+            ("a busy start, its tests green, 190 s", 10, 190, [busy6, busy6], (True, False, 90), ("LANDED", "unjudged")),
+            ("quiet at its start and its end, 150 s", 10, 150, [quiet6, quiet6], (True, False, 90), ("D14", "red")),
+            ("a busy start, one test failing", 14, 90, [busy6, busy6], (True, False, 90), ("OWN", None)),
+            ("in Low Power Mode on battery, the cores idle, 170 s", 10, 170, [quiet6, quiet6], (False, True, 80), ("LANDED", "unjudged"))):
+        kind6, v6, pr6 = land6(crc, path, readings, power)
+        if (kind6, v6) != want:
+            fault(f"a landing check {what}: {kind6}, D14 {v6}, quiet {pr6.get('quiet')}; want {want[0]}, D14 {want[1]} (throughput P0)")
+    # an unjudged check never moves the margin, nor the measured checks
+    before6, measured6 = M.src_target(140, False), len(M.checks_measured())
+    kind6, v6, pr6 = land6(10, 200, [busy6, busy6])
+    L.ship_event({"hold": "p0-6"}, pr6, kind6, sha, 10, 200.0, "", split={"load": [0, 200, 0, 0], "ratchet": [79, 400, 0, 0],
+                 "shards": [[80, 650, 0, 0]] * 5, "starts": [375.0] * 5},
+                 src_set_={"src_change": False, "ran_cost": 1000.0, "predicted": {"path": 100.0}})
+    if M.src_target(140, False) != before6 or len(M.checks_measured()) != measured6:
+        fault(f"an unjudged landing check moved the margin or the measured checks: {before6} -> {M.src_target(140, False)}, "
+              f"{measured6} -> {len(M.checks_measured())} measured")
+except Exception as e:
+    fault(f"the landing check without a quiet gate raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    L.probe, L.ship_cmd, door.reap = real6["probe"], real6["ship_cmd"], real6["reap"]
+    with _cl.suppress(Exception):
+        g("update-ref", "-d", "refs/remotes/origin/wt2")
 
 for f in faults:
     print(f)

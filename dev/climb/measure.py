@@ -2719,7 +2719,7 @@ def src_target(band, src_change):
     pairs = [(e, round(e["path"] - e["src_set"]["predicted"]["path"], 1)) for e in events()
              if e["kind"] == "ship" and (e.get("check") == 0 and str(e.get("result", "")).startswith("LANDED") or e.get("check") == 10)
              and (e.get("src_set") or {}).get("src_change") is bool(src_change) and e.get("path") is not None
-             and not (e.get("probe") or {}).get("battery")
+             and judged_check(e)   # quiet at its start and its end, and not cut by battery (throughput P0)
              and isinstance(((e.get("src_set") or {}).get("predicted") or {}).get("path"), (int, float))][-n:]
     gmax = max([e["src_set"].get("ran_cost") or 0.0 for e, _ in pairs], default=None)
     shape = "a change to src/" if src_change else "a change outside src/"
@@ -2755,7 +2755,7 @@ def checks_measured(n=5):
     slower than the score's costs (its changed image compiles more, round 13's ruling S2), so a run of one shape never
     pushes the other's measures out."""
     es = [e for e in events() if e["kind"] == "ship" and e.get("check") in (0, 10) and e.get("split") and
-          not (e.get("probe") or {}).get("battery") and (e.get("src_set") or {}).get("src_change") in (True, False)]
+          judged_check(e) and (e.get("src_set") or {}).get("src_change") in (True, False)]
     keep = {id(e) for shape in (True, False) for e in [x for x in es if x["src_set"]["src_change"] is shape][-n:]}
     return [e for e in es if id(e) in keep]
 

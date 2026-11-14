@@ -910,12 +910,13 @@ def power_read():
 POWER = [power_read, 0.0, None]   # the reader (a probe stubs it), when last read, what it read
 
 def power_works(ac, low, above):
-    """THE rule of when work runs (spec battery1 B1; Dale 2026-11-13: "keep gping with or without battery"): on AC; or,
-    with `battery_runs`, on battery with Low Power Mode off and the charge at or above `battery_floor_pct` (`above`).
-    Low Power Mode on battery waits: it halves the machine's rate, so every landing check would read red on D14's band
-    and every measured second be wrong. Under the floor it waits for AC, so the battery emptying never cuts a landing
-    or a push. With `battery_runs` false: on AC alone, as before."""
-    return bool(ac or (cfg()["battery_runs"] and not low and above))
+    """THE rule of when work runs (spec battery1 B1; Dale 2026-11-13: "keep gping with or without battery", and "STOP
+    pausing EVER"): on AC; or, with `battery_runs`, on battery with the charge at or above `battery_floor_pct`
+    (`above`), Low Power Mode on or off. Low Power Mode held work only because it halves the machine's rate, so a
+    landing check would read red on D14's band: a check in it is now not quiet (lander.quiet), judged on correctness
+    alone, its time unjudged (throughput P0). Under the floor work waits for AC: the battery emptying would cut a
+    landing or a push, a real loss. With `battery_runs` false: on AC alone, as before."""
+    return bool(ac or (cfg()["battery_runs"] and above))
 
 def _power_note(ac, low, above, pct):
     """The note for a settled reading: its direction (work runs on AC, runs on battery, or waits) and its text."""
@@ -924,21 +925,33 @@ def _power_note(ac, low, above, pct):
                                                                    "climb starts work again; what battery ended is redone.")
     if power_works(ac, low, above):
         return "battery-runs", f"on battery since {stamp()} ({pct}%): the climb goes on", (
-            f"The Mac draws from its battery, Low Power Mode off, {pct}% charged. Default taken: the climb keeps working "
-            f"(battery_runs) and waits for AC once the charge is under battery_floor_pct ({cfg()['battery_floor_pct']}%) "
-            "or Low Power Mode turns on. The heartbeat holds the Mac awake while work runs; a closed lid still sleeps it.")
+            f"The Mac draws from its battery, Low Power Mode {'on' if low else 'off'}, {pct}% charged. Default taken: the "
+            f"climb keeps working (battery_runs; a landing check in Low Power Mode is judged on correctness alone, its time "
+            f"unjudged) and waits for AC once the charge is under battery_floor_pct ({cfg()['battery_floor_pct']}%). The "
+            "heartbeat holds the Mac awake while work runs; a closed lid still sleeps it.")
     if not cfg()["battery_runs"]:
         return "battery-waits", f"on battery since {stamp()}: the climb waits; plug in", (
             "The Mac draws from its battery" + (" in Low Power Mode" if low else "") + ". Default taken: no move, "
             "measurement, score or landing check starts; one in flight ends and waits for AC, never a failure "
             "(a move keeps its commit); agent runs in flight finish.")
-    why = ("in Low Power Mode, which halves the machine's rate: turn Low Power Mode off on battery (System Settings → "
-           "Battery → Low Power Mode: Never, or Only on Power Adapter is NOT enough) or plug in") if low else (
-           f"at {pct}%, under battery_floor_pct ({cfg()['battery_floor_pct']}%): plug in")
-    return "battery-waits", f"on battery since {stamp()}: the climb waits ({'Low Power Mode' if low else f'{pct}%'})", (
+    why = f"at {pct}%, under battery_floor_pct ({cfg()['battery_floor_pct']}%): plug in"
+    return "battery-waits", f"on battery since {stamp()}: the climb waits ({pct}%)", (
         f"The Mac draws from its battery {why}. Default taken: no move, measurement, score or landing check starts; one "
         "in flight ends and is redone when work may run, never a failure (a move keeps its commit); agent runs in "
         "flight finish. The heartbeat holds no assertion meanwhile, so an emptying battery is never held awake.")
+
+def power_low():
+    """Whether Low Power Mode is on now: the one reading power_ok() keeps (POWER), for lander.quiet (throughput P0)."""
+    power_ok()
+    return bool(POWER[2][1])
+
+def judged_check(e):
+    """A `ship` event's check is evidence of D14's cost (throughput P0): not ended by the power rule (probe.battery) and
+    run on a quiet machine at its start and at its end (`probe.quiet`, lander.quiet). A check on a busy machine or in
+    Low Power Mode, and one that recorded no quiet reading (every check before this record existed), is not (D9): its
+    time is "not quiet, unjudged". The one test src_target, checks_measured, d14_binds and near_band read."""
+    pr = e.get("probe") or {}
+    return not pr.get("battery") and (pr.get("quiet") or {}).get("start") is True and (pr.get("quiet") or {}).get("end") is True
 
 def power_ok():
     """Whether work may run now (power_works), from the one reading of the power source, Low Power Mode and the

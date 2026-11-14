@@ -175,11 +175,6 @@ DEFAULTS = {
     # swaps or thrashes. Every probe (with the level) and the check's critical path that follows are events: both
     # bands are re-derived after the first night
     "p_idle": 85, "e_idle": 60, "probe_s": 15, "swapins_max": 2000, "decompressions_max": 400000,
-    # after a probe that found the machine busy the lander waits this long before the next (O7-5): every round takes
-    # both measurement locks, so a measurement in flight yields and restarts paying its load (a minute or two); the
-    # probes of 2026-11-09 failed about a quarter of the time by day, in spells of minutes, so ten minutes keeps a
-    # landing within a spell's end and the yields it forces to six an hour at most
-    "probe_backoff_s": 600,
     # a green check whose median of the last five critical paths passes this share of D14's red is a note (D17: a
     # check firing inside its band is a bug, so the note reads the median, not one check; O12)
     "near_band": 0.85, "near_band_step": 5,       # ... noted again only when the median rises this many seconds (O5-11)
