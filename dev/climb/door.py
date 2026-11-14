@@ -135,8 +135,29 @@ def argv(role, cmd, env, cwd, profile, background=True):
 # move's own SIGCONT wait while it is open) and the orphan resume (resume_orphans(): a dead owner's stops resumed by
 # the next climb process). An open window whose owner is not alive() is closed for every reader: no wall is ever
 # disabled by a killed lander's record. One window at a time across every state: its owner holds TOP/locks/window.lock.
-LOCKS = f"{TOP}/locks"   # every lock on a global resource, and the window's record: Dale's alone (lock_fd)
-WINDOW = f"{LOCKS}/window.json"
+def locks_dir():
+    """TOP/locks, every lock on a global resource and the window's record (Dale's alone: lock_fd), derived from TOP and
+    from nothing else, so the door has one root: a door pointed elsewhere (a test's scratch root) moves its locks, its
+    generations, its window and its run directories (TOP/in) together. `door.LOCKS` and `door.WINDOW` are read through
+    the module's __getattr__ (this function); a LOCKS set apart from TOP is refused at its first use (using, give, every
+    lock, the generation, the window, the measurement marks): on 2026-11-14 a harness that moved LOCKS alone left TOP
+    the live one, and its using()'s entry removed the live climb's TOP/in/measure.* run directories (16:43:46Z, climb-1's
+    measurement lost) while its generations stayed in the scratch locks, so the live use never knew."""
+    over = globals().get("LOCKS")
+    if over is not None and os.path.realpath(over) != os.path.realpath(f"{TOP}/locks"):
+        raise DoorError(f"the door's root is half-redirected: LOCKS {over} is not TOP/locks of TOP {TOP}; set door.TOP "
+                        "alone (its locks, window and run directories follow it)")
+    return f"{TOP}/locks"
+
+def window_path():
+    return f"{locks_dir()}/window.json"
+
+def __getattr__(name):   # door.LOCKS and door.WINDOW, derived from TOP (locks_dir)
+    if name == "LOCKS":
+        return locks_dir()
+    if name == "WINDOW":
+        return window_path()
+    raise AttributeError(f"module 'door' has no attribute {name!r}")
 
 def lock_fd(name):
     """A lock file of TOP/locks opened for flock (O8-2, A8-6, R8-2): every lock on a resource every state shares (a
@@ -144,9 +165,10 @@ def lock_fd(name):
     agent probe) lives here, beside the users it guards, so a scratch state's process holds the real climb's locks and
     waits as any other; the directory is mode 700 and each file 600, so no build user can open one, and so none can
     flock it (R8-2: flock needs only a read fd, and a slot's agent held a review role's lock for its whole run)."""
-    os.makedirs(LOCKS, mode=0o700, exist_ok=True)
-    os.chmod(LOCKS, 0o700)
-    fd = os.open(os.path.join(LOCKS, name), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    locks = locks_dir()
+    os.makedirs(locks, mode=0o700, exist_ok=True)
+    os.chmod(locks, 0o700)
+    fd = os.open(os.path.join(locks, name), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     os.fchmod(fd, 0o600)
     return fd
 _WINDOW_FD = []   # this process's hold of window.lock while it owns the window
@@ -154,7 +176,7 @@ _WINDOW_FD = []   # this process's hold of window.lock while it owns the window
 def _window():
     """The record, read; one of an earlier boot (its CLOCK readings mean nothing now) or none reads as empty."""
     try:
-        with open(WINDOW) as f:
+        with open(window_path()) as f:
             d = json.load(f)
     except (FileNotFoundError, ValueError):
         d = {}
@@ -173,9 +195,9 @@ def _write_window(fn):
     try:
         flock_within(lk, DEFAULTS["state_lock_s"], "the landing window's record")
         d = _window(); fn(d)
-        with open(f"{WINDOW}.tmp{os.getpid()}", "w") as f:
+        with open(f"{window_path()}.tmp{os.getpid()}", "w") as f:
             json.dump(d, f)
-        os.replace(f"{WINDOW}.tmp{os.getpid()}", WINDOW)
+        os.replace(f"{window_path()}.tmp{os.getpid()}", window_path())
     finally:
         os.close(lk)
     return d
@@ -468,7 +490,7 @@ def assert_order(name, retake=False):
 def _generation(role, new=False):
     """The role's use generation (TOP/locks/.role-<role>.gen): written anew by every process that takes the role's lock
     (using(), hold_roles(), role_free()), so a use that let it go for a yield knows whether another use came between."""
-    p = f"{LOCKS}/.role-{role}.gen"
+    p = f"{locks_dir()}/.role-{role}.gen"
     if new:
         g = f"{os.getpid()}-{time.time_ns()}"
         with open(p, "w") as f:
@@ -625,6 +647,7 @@ def give(role, run_id, files=None):
     plain files; a repository goes in with repo(); removed when the role's using() ends."""
     if role not in HELD:
         raise DoorError(f"give({role!r}, {run_id!r}) outside a use of the role (using()): its run directory would outlive the run")
+    locks_dir()   # one root: a door whose LOCKS was moved apart from TOP refuses (its uses' locks are elsewhere)
     d = f"{TOP}/in/{role}.{run_id}"   # its role named, so clear_in() can tell a live use's
     HELD[role].add(d)
     shutil.rmtree(d, ignore_errors=True)
@@ -1639,7 +1662,7 @@ def _probe(state, gitdir, out, me, mark, label, pid0, calc0, val):
              ("kill -0 of the driver", ["/bin/kill", "-0", str(me)]),
              ("a crontab", ["/bin/sh", "-c", "echo '* * * * * /usr/bin/true' | /usr/bin/crontab -"]),
              ("a flock of a role's lock (R8-2)", ["/usr/bin/perl", "-e", 'use Fcntl qw(:flock); open(my $f, "<", $ARGV[0]) or die "open: $!"; '
-                                                   'flock($f, LOCK_EX | LOCK_NB) or die "flock: $!"', f"{LOCKS}/.role-review3.lock"])]
+                                                   'flock($f, LOCK_EX | LOCK_NB) or die "flock: $!"', f"{locks_dir()}/.role-review3.lock"])]
     for role in ROLES:
         other = ROLES["deps" if role != "deps" else "measure"]
         for what, cmd in tries + [("a read of another build user's home", ["/bin/ls", f"{TOP}/u/{other}"])] + bootstrap_tries(mark, label):

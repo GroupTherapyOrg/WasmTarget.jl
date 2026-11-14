@@ -181,7 +181,7 @@ door.HOOKS["locks"] = lambda: tuple(HELD_SLOT)   # door.assert_order reads them 
 
 def first_mark(kind):
     """The lander's mark on the `kind` lock (julia_slot(first=True)): `<pid> <boot> <start> [stops]`."""
-    return os.path.join(door.LOCKS, f".julia-{kind}.first")
+    return os.path.join(door.locks_dir(), f".julia-{kind}.first")
 
 def back_mark(kind):
     """A paused measurement's claim on the `kind` lock (pause_in_place), `<pid> <boot> <start> wait|next`: while its
@@ -191,7 +191,7 @@ def back_mark(kind):
     lets the lander it paused for take the lock, and once no stops mark is live (that lander has the lock) the claim is
     `next`, which holds the lander's next acquisition back too, so a paused measurement goes on between two landings
     (at least one watch tick, never a restart) and landings in a row never starve it."""
-    return os.path.join(door.LOCKS, f".julia-{kind}.back")
+    return os.path.join(door.locks_dir(), f".julia-{kind}.back")
 
 def my_mark(*rest):
     """This process's identity in a mark: its pid, the boot and its start time (door.proc_start), so a reused pid is

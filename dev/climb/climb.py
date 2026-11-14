@@ -319,7 +319,7 @@ def _preflight(kill):
     # the global locks' files an older driver kept elsewhere (v8: in the state; v7b: the role's stops beside the locks),
     # which nothing reads now (A9-4): cleared, while every role is held
     for p in [*glob.glob(os.path.join(STATE, ".julia-*.lock")), *glob.glob(os.path.join(STATE, ".role-*.lock")),
-              os.path.join(STATE, ".deps.lock"), os.path.join(STATE, ".agent-probe.lock"), *glob.glob(os.path.join(door.LOCKS, "stops-*.json*"))]:
+              os.path.join(STATE, ".deps.lock"), os.path.join(STATE, ".agent-probe.lock"), *glob.glob(os.path.join(door.locks_dir(), "stops-*.json*"))]:
         with contextlib.suppress(FileNotFoundError):
             os.remove(p); print(f"stale: removed {p}")
     def stale():

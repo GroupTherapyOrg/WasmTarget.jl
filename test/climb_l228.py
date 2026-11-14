@@ -115,7 +115,45 @@ shutil.copytree(f"{root}/dev/climb", f"{repo}/dev/climb", ignore=shutil.ignore_p
 os.environ["WT_CLIMB_STATE"] = state
 os.chdir(repo); sys.path.insert(0, f"{repo}/dev/climb")
 import door
-door.LOCKS = locks
+# the door's ONE root, a scratch one (door.locks_dir: its locks, its window and its run directories, TOP/in, all follow
+# TOP): never the live climb's. On 2026-11-14 this harness moved door.LOCKS alone, and its door.using()'s entry removed
+# the live climb's TOP/in/measure.* run directories at 16:43:46Z (climb-1's measurement lost). The harness refuses to
+# start on a root the live climb uses (root_refusal) unless it is the landing user inside a sandbox: its landing check,
+# which can write nothing of TOP. Read from the kernel, never from a variable a caller sets: this process's effective
+# uid against the owner of the landing user's home, and sandbox_check() of this process
+LIVE_TOP = "/Users/Shared/wt-climb"
+def landing_sandboxed():
+    import ctypes
+    try:
+        if os.geteuid() != os.stat(f"{LIVE_TOP}/u/_wtland").st_uid:
+            return False
+        f = ctypes.CDLL("/usr/lib/libSystem.B.dylib").sandbox_check
+        f.restype, f.argtypes = ctypes.c_int, [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        return f(os.getpid(), None, 0) == 1   # SANDBOX_FILTER_NONE: 1 when this process runs under a profile
+    except OSError:
+        return False
+def root_refusal(top, gens=True):
+    """Why this harness may not use `top` as the door's root, or None: the live TOP, or (with `gens`) a root holding a
+    role generation a live process other than this one wrote, i.e. a root some running climb uses."""
+    users = []
+    for gp in (__import__("glob").glob(f"{top}/locks/.role-*.gen") if gens else ()):
+        with contextlib.suppress(OSError, ValueError, ProcessLookupError):
+            pid = int(open(gp).read().split("-")[0])
+            if pid != os.getpid():
+                try:
+                    os.kill(pid, 0)
+                except PermissionError:
+                    pass
+                users.append(f"{os.path.basename(gp)} (pid {pid})")
+    if (os.path.realpath(top) == os.path.realpath(LIVE_TOP) or users) and not landing_sandboxed():
+        return (f"the door's root {top} is a live climb's ({', '.join(users) or 'the live TOP'}): this harness runs on a "
+                "scratch root, or as the landing user inside its check profile")
+    return None
+door.TOP = tmp   # its locks, f"{tmp}/locks", follow
+assert door.locks_dir() == locks
+why = root_refusal(door.TOP)
+if why:
+    print(f"climb_l228: refused: {why}"); sys.exit(0)
 import core, measure as M, lander as L
 measure_base9 = M.measure_base   # the real one: section 7 stands it in and leaves it so; section 9 calls it
 
@@ -790,7 +828,8 @@ try:
     lander19 = _tw19.dedent(f"""
         import os, sys, time, subprocess
         os.environ["WT_CLIMB_STATE"] = {state!r}; os.chdir({repo!r}); sys.path.insert(0, {repo + "/dev/climb"!r})
-        import door; door.LOCKS = {locks!r}
+        import door; door.TOP = {tmp!r}
+        assert os.path.realpath(door.TOP) != os.path.realpath({LIVE_TOP!r}), "an actor on the live root"
         import contextlib
         import measure as M, lander as L
         real = M.cfg
@@ -1056,7 +1095,8 @@ try:
     actor23 = __import__("textwrap").dedent(f"""
         import os, sys, time, json, signal, subprocess, contextlib
         os.environ["WT_CLIMB_STATE"] = {state!r}; os.chdir({repo!r}); sys.path.insert(0, {repo + "/dev/climb"!r})
-        import door; door.LOCKS = {locks!r}
+        import door; door.TOP = {tmp!r}
+        assert os.path.realpath(door.TOP) != os.path.realpath({LIVE_TOP!r}), "an actor on the live root"
         import core, measure as M, lander as L
         who, out, gates = sys.argv[1], sys.argv[2], sys.argv[3]
         GATED = 0.0777   # the yield and pause poll: a sleep of exactly this waits on this actor's gate
@@ -1215,7 +1255,8 @@ def abort24(mode):
     actor = __import__("textwrap").dedent(f"""
         import os, sys, time, json, signal, subprocess, contextlib
         os.environ["WT_CLIMB_STATE"] = {state!r}; os.chdir({repo!r}); sys.path.insert(0, {repo + "/dev/climb"!r})
-        import door; door.LOCKS = {locks!r}
+        import door; door.TOP = {tmp!r}
+        assert os.path.realpath(door.TOP) != os.path.realpath({LIVE_TOP!r}), "an actor on the live root"
         import core, measure as M, lander as L
         who, out, gates, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
         GATED = 0.0777   # the paused poll's sleep (poll_s["yield"]): it waits on this actor's gate
@@ -1384,3 +1425,52 @@ try:
     judge24("exc", *abort24("exc"))
 except Exception as e:
     fault(f"a pause ended by an exception raised {type(e).__name__}: {str(e)[:240]}")
+
+# 26. the door has one root (door.locks_dir): a door whose LOCKS was moved apart from its TOP (the old harness's
+# redirection, which on 2026-11-14 removed the live climb's TOP/in/measure.* run directories at a scratch use's entry)
+# refuses at using(), give() and a measurement mark, and nothing under its TOP is touched; here both of its directories
+# are scratch ones. And the harness's own refusal (root_refusal): a root holding a role generation a live process wrote
+# is refused, one a dead process wrote is not, and the live TOP is refused unless this is the landing user inside a sandbox
+#: limit 60
+try:
+    a26, b26 = f"{tmp}/top26", f"{tmp}/locks26"
+    os.makedirs(f"{a26}/in/measure.someone"); open(f"{a26}/in/measure.someone/compile.log", "w").write("its log\n")
+    script26 = __import__("textwrap").dedent(f"""
+        import os, sys, json
+        os.environ["WT_CLIMB_STATE"] = {state!r}; os.chdir({repo!r}); sys.path.insert(0, {repo + "/dev/climb"!r})
+        import door
+        door.TOP = {a26!r}; door.LOCKS = {b26!r}   # its locks moved, its root not
+        door.reap = lambda role, tries=50: None
+        door.clean = door.prepare = lambda role: None
+        door.acl = lambda *a, **k: None
+        import measure as M
+        out = {{}}
+        def give():
+            door.HELD["measure"] = set(); door.give("measure", "x")
+        for what, f in (("using", lambda: door.using("measure").__enter__()), ("give", give), ("mark", lambda: M.first_mark("verify"))):
+            try:
+                f(); out[what] = "ran"
+            except door.DoorError as e:
+                out[what] = "refused"
+        print(json.dumps(out))
+        """)
+    r26 = subprocess.run([sys.executable, "-I", "-c", script26], capture_output=True, text=True, timeout=40)
+    got26 = json.loads(r26.stdout.strip().splitlines()[-1]) if r26.stdout.strip() else r26.stderr.strip()[-300:]
+    if got26 != {"using": "refused", "give": "refused", "mark": "refused"} or not os.path.exists(f"{a26}/in/measure.someone/compile.log"):
+        fault(f"a door whose LOCKS was moved apart from its TOP: {got26} (each refused expected); its TOP's run directory "
+              f"{'kept' if os.path.exists(f'{a26}/in/measure.someone/compile.log') else 'REMOVED'}")
+    # the harness's refusal of a root a live climb uses
+    sleeper26 = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+    try:
+        for name, pid in (("live", sleeper26.pid), ("dead", 999999)):
+            os.makedirs(f"{tmp}/top26{name}/locks", exist_ok=True)
+            open(f"{tmp}/top26{name}/locks/.role-measure.gen", "w").write(f"{pid}-1")
+        sand26 = landing_sandboxed()
+        seen26 = {"live": root_refusal(f"{tmp}/top26live") is not None, "dead": root_refusal(f"{tmp}/top26dead") is not None,
+                  "the live TOP": root_refusal(LIVE_TOP, gens=False) is not None}
+        if seen26 != {"live": not sand26, "dead": False, "the live TOP": not sand26}:
+            fault(f"the harness's refusal of a live root (refused?): {seen26}, as the landing user in a sandbox: {sand26}")
+    finally:
+        sleeper26.kill(); sleeper26.wait()
+except Exception as e:
+    fault(f"the door's one root raised {type(e).__name__}: {str(e)[:240]}")
