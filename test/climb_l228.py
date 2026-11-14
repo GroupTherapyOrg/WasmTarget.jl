@@ -80,7 +80,7 @@ if __name__ == "__main__" and "--section" not in sys.argv:   # the runner
 
 _n = int(sys.argv[sys.argv.index("--section") + 1])   # a child: the prologue, the sections it needs, then itself
 _pro, _secs = _chunks(open(os.path.abspath(__file__)).read())
-_g = {"__name__": "__l228_section__", "__file__": os.path.abspath(__file__)}
+_g = {"__name__": "__l228_section__", "__file__": os.path.abspath(__file__), "__section__": _n}   # the section run
 exec(compile("import contextlib, json, os, re, signal, subprocess, sys, tempfile, time, base64\n" + _pro + "".join(_secs[k][0] for k in _secs[_n][1]) + _secs[_n][0] +
              "\nfor f in faults:\n    print(f)\n", f"climb_l228 section {_n}", "exec"), _g)
 sys.exit(0)
@@ -757,6 +757,185 @@ try:
 except Exception as e:
     fault(f"TLC inside the check profile raised {type(e).__name__}: {str(e)[:240]}")
 
+# 19. a landing never restarts a measurement in flight (T5): a lander whose work under the verify lock uses no
+# measuring role (julia_slot(first=True, stops=True), the landing's check) finds the measurement's processes stopped
+# in place, and the measurement goes on when the lock comes back, nothing restarted. measure.watched drives a stand-in
+# compile process (sh, one `started` record a case); the lander is a second process calling lander.land itself (its
+# layer, its quiet window and its check stood in), so the landing's own `stops` is what is checked; the role's STOP and
+# CONT (door.signal_role, sudo's) are stood in by the stand-in's; time scaled down, a case's budget (first_s) under the
+# check's length, so a stop counted in the budget cuts the case; a stand-in left stopped once the lander is done is a
+# fault named at once, and every stand-in the section stopped is continued and ended before it returns
+#: limit 90
+import signal as _sig19, textwrap as _tw19
+real19 = {k: getattr(door, k) for k in ("home", "open_home", "tick", "reap", "signal_role")}
+real_cfg19 = M.cfg
+held19 = []
+try:
+    home19 = f"{tmp}/home19"; d19 = f"{tmp}/d19"; os.makedirs(d19)
+    M.cfg = lambda: dict(real_cfg19(), watch_s=0.05, poll_s=dict(real_cfg19()["poll_s"], yield_=0.05, **{"yield": 0.05, "lock": 0.05}))
+    door.home = lambda role: home19
+    door.open_home = lambda role, rel: open(f"{home19}/{rel}", "rb") if os.path.exists(f"{home19}/{rel}") else None
+    door.tick = lambda *a, **k: None
+    door.reap = lambda *a, **k: None
+    standin19 = {}
+    def sig19(role, sig, landing=False):   # pkill's status, as door.signal_role returns it
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(standin19["p"].pid, _sig19.SIGSTOP if sig == "STOP" else _sig19.SIGCONT)
+            return 0
+        return 1
+    door.signal_role = sig19
+    real_stopped19 = M.role_stopped   # the stop read back from the stand-in itself (the role's user has none here)
+    M.role_stopped = lambda role: standin19.get("p") is None or standin19["p"].poll() is not None or \
+        subprocess.run(["ps", "-o", "state=", "-p", str(standin19["p"].pid)], capture_output=True, text=True).stdout.strip().startswith("T")
+    lander19 = _tw19.dedent(f"""
+        import os, sys, time, subprocess
+        os.environ["WT_CLIMB_STATE"] = {state!r}; os.chdir({repo!r}); sys.path.insert(0, {repo + "/dev/climb"!r})
+        import door; door.LOCKS = {locks!r}
+        import contextlib
+        import measure as M, lander as L
+        real = M.cfg
+        M.cfg = lambda: dict(real(), poll_s=dict(real()["poll_s"], **{{"yield": 0.05, "lock": 0.05, "landing_lock": 0.05}}))
+        L.cfg = M.cfg
+        M.ac_wait = lambda *a, **k: None
+        M.landing_lock_held = lambda: False
+        L.layer = lambda slot: None
+        @contextlib.contextmanager
+        def quiet():
+            yield lambda: None
+        L.quiesced = quiet
+        pidfile, n, hold, go = sys.argv[1], int(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
+        print("ready", flush=True)   # the driver loaded: its checks wait for the measurement to be under way
+        while not os.path.exists(go):
+            time.sleep(0.02)
+        pid = int(open(pidfile).read())
+        def check(slot, item, c, scan, handed=None):   # lander._land: the probe and the check, both locks held
+            # ps by PATH: a landing's is TOP/tools/bin's plain copy (/bin/ps is setuid, which a sandbox refuses)
+            st = subprocess.run(["ps", "-o", "state=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+            print("held", (st or "gone")[0], round(time.time(), 2), flush=True)
+            time.sleep(hold)
+            return None, None, None, ""
+        L._land = check
+        for i in range(n):
+            L.land({tmp!r}, {{"hold": "l228-19"}})
+        """)
+    open(f"{tmp}/lander19.py", "w").write(lander19)
+    def measure19(cases, case_s, n_checks, hold, after):
+        """watched on a stand-in of `cases` cases; a lander of n_checks checks of `hold` s each, from `after` s in:
+        (the watch's process count, its kills, its seconds, the lander's lines, whether the lander still ran at the end)"""
+        rel = f"m/c{len(held19)}/compile"; os.makedirs(f"{home19}/{rel}", exist_ok=True)
+        fd = os.open(f"{locks}/.julia-verify.lock", os.O_CREAT | os.O_RDWR); fcntl.flock(fd, fcntl.LOCK_EX)
+        M.HELD_SLOT["verify"] = fd
+        labels = [f"a/{i:02d}" for i in range(cases)]
+        # each case CPU work (a loop until its own process time has advanced case_s), so a stopped stand-in makes no
+        # progress, as a stopped compile makes none (a sleep would run out while it is stopped)
+        script = ("import os, time\nrec = os.environ['REC']\n"   # its labels the run's own (WT_SMOKE_ONLY), as smoke.jl's
+                  "for l in open(os.environ['WT_SMOKE_ONLY']).read().split():\n"
+                  "    open(rec, 'a').write('started\\t' + l + '\\n')\n"
+                  "    t = time.process_time()\n"
+                  f"    while time.process_time() - t < {case_s}:\n"
+                  "        pass\n"
+                  "open(rec, 'a').write('ended\\n')\n")
+        def start(env, log_):
+            standin19["p"] = subprocess.Popen([sys.executable, "-I", "-c", script], env=dict(os.environ, REC=env["WT_SMOKE_COMPILED"],
+                                                                                          WT_SMOKE_ONLY=env["WT_SMOKE_ONLY"]),
+                                              stdout=log_, stderr=subprocess.STDOUT, start_new_session=True)
+            return standin19["p"]
+        k = len(held19)
+        lout, gofile, pidfile = f"{tmp}/lander19.{k}.out", f"{tmp}/go19.{k}", f"{tmp}/pid19.{k}"
+        open(lout, "w").close()
+        lp = [subprocess.Popen([sys.executable, "-I", f"{tmp}/lander19.py", pidfile, str(n_checks), str(hold), gofile],
+                               stdout=open(lout, "w"), stderr=subprocess.STDOUT) if n_checks else None]
+        while lp[0] is not None and "ready" not in open(lout).read() and lp[0].poll() is None:   # the lander loaded first
+            time.sleep(0.05)
+        def go():
+            while "p" not in standin19 or standin19["p"].poll() is not None and not os.path.exists(pidfile):
+                time.sleep(0.01)
+            open(pidfile, "w").write(str(standin19["p"].pid))
+            time.sleep(after)
+            open(gofile, "w").close()
+        import threading as _th19
+        standin19.pop("p", None)
+        th = _th19.Thread(target=go); th.start()
+        t0 = time.time()
+        res = {}
+        def run():
+            try:
+                res["out"] = M.watched(start, "measure", d19, rel, "compile", labels, FIRST19, var="WT_SMOKE_COMPILED",
+                                       keep_done=True, yields=True)
+                if res["out"][3]:   # its records refused (a stop counted in the load's budget reads as a stall there)
+                    res["err"] = RuntimeError(f"the watch refused the measurement: {res['out'][3][:200]}")
+            except Exception as e:
+                res["err"] = e
+        wt = _th19.Thread(target=run); wt.start()
+        try:
+            stuck = None   # the lander done and the stand-in still stopped: never continued (no CONT)
+            while wt.is_alive():
+                wt.join(0.2)
+                p_ = standin19.get("p")
+                if lp[0] is not None and lp[0].poll() is not None and p_ is not None and p_.poll() is None and \
+                        subprocess.run(["ps", "-o", "state=", "-p", str(p_.pid)], capture_output=True, text=True).stdout.strip().startswith("T"):
+                    stuck = stuck or time.time()
+                    if time.time() - stuck > 3:
+                        res["stuck"] = True
+                        os.kill(p_.pid, _sig19.SIGKILL)   # its watch then sees it end
+                else:
+                    stuck = None
+            if "err" in res:
+                raise res["err"]
+            if res.get("stuck"):
+                raise RuntimeError("a paused measurement's processes were not continued after the check that paused them")
+            out = res["out"]
+        finally:
+            secs = time.time() - t0
+            th.join()
+            p_ = standin19.get("p")
+            if p_ is not None and p_.poll() is None:   # nothing of the section outlives it, stopped or not
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(p_.pid, _sig19.SIGCONT); os.kill(p_.pid, _sig19.SIGKILL)
+            running = lp[0] is not None and lp[0].poll() is None
+            M.HELD_SLOT.pop("verify", None)
+            with contextlib.suppress(OSError):   # the lock let go before the lander is waited for
+                fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
+            if lp[0] is not None:
+                lp[0].wait(60)
+        lines = [l.split() for l in open(lout).read().splitlines() if l.startswith("held")]
+        held19.append(lines)
+        return out[2], out[1], secs, lines, running
+    import fcntl
+    FIRST19 = 4.0   # a case's budget here (no label timed): under the check's 6 s, so a stop counted in it cuts the case
+    # (a case is 0.8 CPU-seconds, so after a stop it outlasts the watch's next tick, as a stopped compile's case does)
+    # one check mid-measurement: the measurement pays the check's time alone, nothing restarted
+    # (the lander's process takes a second or two to load the driver: the stand-ins outlast that); the same
+    # measurement with no check first, its time the one the check's is weighed against. Section 22 needs this one's
+    # helpers alone: its scenarios run when it is the section run (__section__)
+    if __section__ != 19:
+        raise StopIteration
+    _, _, base19, _, _ = measure19(4, 0.8, 0, 0, 0.0)
+    n19, k19, s19, l19, _ = measure19(4, 0.8, 1, 6.0, 0.4)
+    if n19 != 1 or k19 or not l19 or l19[0][1] != "T" or s19 > base19 + 6.0 + 3.0:
+        fault(f"a check mid-measurement: {n19} process(es) (1 expected: no restart), kills {k19}, the stand-in "
+              f"{'stopped' if l19 and l19[0][1] == 'T' else 'running'} under the check ({l19}), {s19:.1f} s where it took {base19:.1f} s with no check, for a 6-s check")
+    # a paused measurement whose driver is killed holds nothing: its back mark is a dead process's, and a mark whose pid
+    # another process now holds (its start time not the writer's) is not that process's (the review's F5); each is
+    # removed by the taker that reads it
+    for what19, mark19 in (("a dead pid", f"999999 {door.BOOT} 0 next"), ("a reused pid", f"{os.getppid()} {door.BOOT} 1 next")):
+        with open(M.back_mark("verify"), "w") as f19:
+            f19.write(mark19 + "\n")
+        if M.back_held("verify") or M.back_held("verify", first=True, stops=True) or os.path.exists(M.back_mark("verify")):
+            fault(f"a back mark of {what19} holds the verify lock's takers back, or is left for the next to read")
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(M.back_mark("verify"))
+except StopIteration:   # section 22's: the helpers alone
+    pass
+except Exception as e:
+    import traceback
+    fault(f"the measurement paused in place raised {type(e).__name__}: {str(e)[:200]} {traceback.format_exc()[-300:]}")
+finally:
+    if __section__ == 19:
+        M.cfg, M.role_stopped = real_cfg19, real_stopped19
+        for k, v in real19.items():
+            setattr(door, k, v)
+
 # 20. a measurement's own directory is its holder's (L1, measure.measure_dir through measure.judged as smoke() calls it):
 # a second measurement of the same role and task (the lander's rebased check of the base a slot measures, another
 # slot's) begun and ended inside the first leaves the first's file; each removes its own when it ends; a dead holder's
@@ -817,3 +996,391 @@ except Exception as e:
     fault(f"a slot's driver fault raised {type(e).__name__}: {str(e)[:240]}")
 finally:
     core.driver_tree, SL21.driver_tree, SL21.unclaim = real21["tree"], real21["sltree"], real21["unclaim"]
+
+# 22. landings in a row never starve a paused measurement (T5, back_mark): checks back to back, each finds the
+# measurement stopped or done, and it finishes while they go on, within about one check a case (between two checks it
+# runs at least to its next case). Section 19's stand-ins and lander (its helpers, as section 19 left them in place)
+#: needs 19
+#: limit 90
+try:
+    # the claim itself, by a live process of its own (a paused measurement's, written in its name): `next` holds the
+    # lander's stopping check off a free lock and `wait` does not; either holds a non-stopping first taker (MRetake's
+    # guard in formal(dev/formal/MeasureLocks.tla)); the claim gone, the lander takes it
+    claimer = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+    try:
+        fd22 = os.open(f"{locks}/.julia-score.lock", os.O_CREAT | os.O_RDWR)
+        seen22 = []
+        for claim, first, stops in (("next", True, True), ("wait", True, True), ("next", True, False), ("wait", True, False)):
+            open(M.back_mark("score"), "w").write(f"{claimer.pid} {door.BOOT} {door.proc_start(claimer.pid)} {claim}")
+            took = M.take_lock(fd22, "score", first=first, stops=stops)
+            if took:
+                fcntl.flock(fd22, fcntl.LOCK_UN)
+            seen22.append((claim, stops, took))
+        os.remove(M.back_mark("score"))
+        took = M.take_lock(fd22, "score", first=True, stops=True)
+        if took:
+            fcntl.flock(fd22, fcntl.LOCK_UN)
+        seen22.append(("none", True, took))
+        if seen22 != [("next", True, False), ("wait", True, True), ("next", False, False), ("wait", False, False), ("none", True, True)]:
+            fault(f"a paused measurement's claim against the lander's first take (claim, stops, taken): {seen22}")
+        os.close(fd22)
+    finally:
+        claimer.kill(); claimer.wait()
+    n19, k19, s19, l19, run19 = measure19(8, 0.15, 30, 0.1, 0.0)
+    t19 = sum(x[1] == "T" for x in l19)
+    if n19 != 1 or k19 or any(x[1] not in ("T", "g", "Z") for x in l19) or not run19 or t19 > 8 + 3:
+        fault(f"checks back to back: {n19} process(es), kills {k19}, the stand-in's states under the checks "
+              f"{''.join(x[1] for x in l19)} (T stopped; g gone, Z ended), the measurement "
+              f"{'finished while the checks went on' if run19 else 'finished only once they stopped'}, after {t19} checks "
+              f"found it stopped (8 cases: at most 11) ({s19:.1f} s)")
+except Exception as e:
+    fault(f"checks back to back raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    M.cfg = real_cfg19
+    for k, v in real19.items():
+        setattr(door, k, v)
+
+# 23. two slots and the lander in the review's F1 ordering, driven deterministically through the real julia_slot,
+# door.using, watched, yield_slot and pause_in_place in three processes (formal(dev/formal/MeasureLocks.tla):
+# MCMeasureLocksF1DeadlockBroken's trace): slot A measures; the lander's rebased check (REB: the verify lock without
+# stops, the measure role) makes A yield, its role let go; slot B takes the free lock and the role while A's poll is held;
+# the landing (lander.land itself, its layer, its quiet window and its check stood in) makes B pause in place; once the
+# lander is done, A polls for a full 1.5 s while paused B's poll is held: A must not take the lock past B's claim (the
+# F1 deadlock: A holding the lock and waiting on the role B holds, which the scaled role_wait turns into A's
+# DoorError). The schedule is gates, not timing: each actor's yield and pause poll (its poll_s["yield"] sleep) waits on
+# a gate file the section opens, and the lander waits on one before each round. Every process finishes; B's stand-in
+# is stopped under the check and never restarted. The door's sudo steps (reap, clean, prepare, the role's STOP and CONT)
+# are stood in by each process's own stand-in
+#: limit 120
+try:
+    actor23 = __import__("textwrap").dedent(f"""
+        import os, sys, time, json, signal, subprocess, contextlib
+        os.environ["WT_CLIMB_STATE"] = {state!r}; os.chdir({repo!r}); sys.path.insert(0, {repo + "/dev/climb"!r})
+        import door; door.LOCKS = {locks!r}
+        import core, measure as M, lander as L
+        who, out, gates = sys.argv[1], sys.argv[2], sys.argv[3]
+        GATED = 0.0777   # the yield and pause poll: a sleep of exactly this waits on this actor's gate
+        real = M.cfg
+        M.cfg = lambda: dict(real(), watch_s=0.05, poll_s=dict(real()["poll_s"], **{{"yield": GATED, "lock": 0.05, "landing_lock": 0.05}}))
+        L.cfg = M.cfg
+        class Clock:   # measure's time: its gated sleep waits for the gate
+            def __getattr__(self, n):
+                return getattr(time, n)
+            def sleep(self, s):
+                if s == GATED:
+                    while not os.path.exists(f"{{gates}}/{{who}}"):
+                        time.sleep(0.02)
+                    s = 0.05
+                time.sleep(s)
+        M.time = Clock()
+        M.ac_wait = lambda *a, **k: None
+        M.landing_lock_held = lambda: False
+        home = {tmp!r} + "/home23"
+        door.home = lambda role: home
+        door.open_home = lambda role, rel: open(f"{{home}}/{{rel}}", "rb") if os.path.exists(f"{{home}}/{{rel}}") else None
+        door.tick = lambda *a, **k: None
+        door.role_wait = lambda role: 12   # scaled: a stall on a role fails in seconds, as role_wait_s's 13.8 h would
+        door.clean = door.prepare = lambda role: None
+        st = {{}}
+        def reap(role):
+            p = st.get("p")
+            if p is not None and p.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(p.pid, signal.SIGCONT); os.kill(p.pid, signal.SIGKILL)
+                p.wait()
+        door.reap = reap
+        def sig(role, s, landing=False):
+            p = st.get("p")
+            if p is not None and p.poll() is None:
+                os.kill(p.pid, signal.SIGSTOP if s == "STOP" else signal.SIGCONT)
+                return 0
+            return 1
+        door.signal_role = sig
+        M.role_stopped = lambda role: st.get("p") is None or st["p"].poll() is not None or \\
+            subprocess.run(["ps", "-o", "state=", "-p", str(st["p"].pid)], capture_output=True, text=True).stdout.strip().startswith("T")
+        log = lambda **kw: open(out, "a").write(json.dumps(dict(kw, who=who, t=round(time.time(), 2))) + "\\n")
+        if who in ("A", "B"):
+            n = int(sys.argv[4]); rel = f"m/{{who}}/compile"; os.makedirs(f"{{home}}/{{rel}}", exist_ok=True)
+            labels = [f"a/{{i:02d}}" for i in range(n)]
+            script = "".join(f'printf "started\\\\t{{l}}\\\\n" >> "$REC"; sleep 0.1; ' for l in labels) + 'printf "ended\\\\n" >> "$REC"'
+            def start(env, log_):
+                st["p"] = subprocess.Popen(["/bin/sh", "-c", script], env=dict(os.environ, REC=env["WT_SMOKE_COMPILED"]),
+                                           stdout=log_, stderr=subprocess.STDOUT, start_new_session=True)
+                open(out + "." + who + ".pid", "w").write(str(st["p"].pid))
+                log(ev="start", pid=st["p"].pid)
+                return st["p"]
+            d = {tmp!r} + f"/d23{{who}}"; os.makedirs(d, exist_ok=True)
+            try:
+                with M.julia_slot("verify"):
+                    log(ev="lock")
+                    with door.using("measure"):
+                        log(ev="role")
+                        o = M.watched(start, "measure", d, rel, "compile", labels, 60, var="WT_SMOKE_COMPILED", keep_done=True,
+                                      yields=True, rejoin=lambda: os.makedirs(f"{{home}}/{{rel}}", exist_ok=True))   # compile_dir's part
+                log(ev="done", n=o[2], killed=sorted(o[1]))
+            except Exception as e:
+                log(ev="error", why=f"{{type(e).__name__}}: {{str(e)[:200]}}")
+        else:   # the lander: a move's rebased check, then its landing, each when its gate opens
+            def gate(g):
+                while not os.path.exists(f"{{gates}}/{{g}}"):
+                    time.sleep(0.02)
+            gate("L1")
+            with M.julia_slot("verify", first=True):
+                with door.using("measure"):
+                    log(ev="reb"); time.sleep(0.5)
+            gate("L2")
+            def states():
+                o = {{}}
+                for w in ("A", "B"):
+                    with contextlib.suppress(OSError, ValueError):
+                        pid = open(out + "." + w + ".pid").read()
+                        o[w] = subprocess.run(["ps", "-o", "state=", "-p", pid], capture_output=True, text=True).stdout.strip()[:1] or "g"
+                return o
+            L.layer = lambda slot: None
+            @contextlib.contextmanager
+            def quiet():
+                yield lambda: None
+            L.quiesced = quiet
+            def check(slot, item, c, scan, handed=None):
+                log(ev="check", states=states()); time.sleep(0.5)
+                return None, None, None, ""
+            L._land = check
+            L.land({tmp!r}, {{"hold": "l228-23"}})
+            log(ev="landed")
+        """)
+    open(f"{tmp}/actor23.py", "w").write(actor23)
+    os.makedirs(f"{tmp}/home23", exist_ok=True)
+    out23, gates23 = f"{tmp}/run23.jsonl", f"{tmp}/gates23"
+    open(out23, "w").close(); os.makedirs(gates23, exist_ok=True)
+    def seen23(who, ev, limit=30):   # wait until `who` logged `ev` (or ended): the schedule's next step
+        t_ = time.time()
+        while time.time() - t_ < limit:
+            evs = [json.loads(l) for l in open(out23).read().splitlines() if l.strip()]
+            if any(e["who"] == who and e["ev"] in (ev, "error", "done") for e in evs):
+                return True
+            time.sleep(0.05)
+        return False
+    def open23(g):
+        open(f"{gates23}/{g}", "w").close()
+    procs23 = []
+    try:
+        procs23.append(subprocess.Popen([sys.executable, "-I", f"{tmp}/actor23.py", "A", out23, gates23, "40"]))
+        seen23("A", "start")
+        procs23.append(subprocess.Popen([sys.executable, "-I", f"{tmp}/actor23.py", "B", out23, gates23, "25"]))
+        procs23.append(subprocess.Popen([sys.executable, "-I", f"{tmp}/actor23.py", "L", out23, gates23]))
+        open23("L1")            # the rebased check: A yields (its poll held), the lander measures in the role
+        seen23("B", "start")    # the lock free again, B (unheld) takes it and the role
+        open23("A")             # A polls from now on
+        open23("L2")            # the landing: B pauses in place
+        seen23("L", "landed")
+        time.sleep(1.5)         # A polls for 1.5 s while paused B's poll is held: with F1, A takes the lock past B's claim
+        open23("B")
+        t23 = time.time()
+        for p in procs23:
+            p.wait(timeout=max(1, 60 - (time.time() - t23)))
+    except subprocess.TimeoutExpired:
+        fault("two slots and the lander in F1's ordering did not finish in 60 s after the landing")
+    finally:
+        for p in procs23:
+            if p.poll() is None:
+                p.kill()
+        for w in ("A", "B"):   # a stand-in left stopped is continued and ended: nothing of the section outlives it
+            with contextlib.suppress(OSError, ValueError):
+                pid = int(open(f"{out23}.{w}.pid").read())
+                os.kill(pid, __import__("signal").SIGCONT); os.kill(pid, __import__("signal").SIGKILL)
+    ev23 = [json.loads(l) for l in open(out23).read().splitlines() if l.strip()]
+    done23 = {e["who"]: e for e in ev23 if e["ev"] in ("done", "error", "landed")}
+    errs23 = [e for e in ev23 if e["ev"] == "error"]
+    chk23 = [e for e in ev23 if e["ev"] == "check"]
+    order23 = [e["who"] + ":" + e["ev"] for e in ev23]
+    if errs23 or set(done23) != {"A", "B", "L"}:
+        fault(f"two slots and the lander in F1's ordering: {errs23 or 'not every process finished'}; the order {order23}")
+    elif not chk23 or chk23[0]["states"].get("B") != "T" or done23["B"].get("n") != 1:
+        fault(f"F1's ordering: under the landing's check B's stand-in read {chk23[0]['states'] if chk23 else 'no check'} "
+              f"(stopped, T, expected), B ran {done23['B'].get('n')} process(es) (1: never restarted); the order {order23}")
+except Exception as e:
+    fault(f"two slots and the lander raised {type(e).__name__}: {str(e)[:240]}")
+
+# 24. a pause that ends without its lock never continues its processes (T5, the t5b review's must-fix;
+# formal(dev/formal/MeasureLocks.tla): MAbort, ReapUnheld, MCMeasureLocksContUnheldBroken): a slot's measurement
+# pauses in place for a landing (lander.land itself, its layer, its quiet window and its check stood in) and, while the
+# lander's check holds the lock, its pause passes F7's limit; its stopped processes are reaped (door.reap's KILL,
+# which reaches a stopped process), never continued first, and it restarts after the landing. The schedule is gates:
+# the paused poll waits on one, the reap (stood in, KILL alone as door.reap) waits on another, and the check reads the
+# stand-in's state once the reap has begun: `T` (stopped) is the only right reading. Section 25: the same pause ended
+# by an exception while the lander holds the lock (launch.sh stop's TERM, which climb.py turns into SystemExit)
+#: limit 90
+def abort24(mode):
+    """One run of the scenario (`limit` or `exc`): (its events, the fault lines it found)."""
+    actor = __import__("textwrap").dedent(f"""
+        import os, sys, time, json, signal, subprocess, contextlib
+        os.environ["WT_CLIMB_STATE"] = {state!r}; os.chdir({repo!r}); sys.path.insert(0, {repo + "/dev/climb"!r})
+        import door; door.LOCKS = {locks!r}
+        import core, measure as M, lander as L
+        who, out, gates, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+        GATED = 0.0777   # the paused poll's sleep (poll_s["yield"]): it waits on this actor's gate
+        real = M.cfg
+        extra = dict(ship_kill_s=0, term_grace_s=0) if mode == "limit" and who == "M" else {{}}   # F7's limit at its first poll
+        M.cfg = lambda: dict(real(), watch_s=0.05, **extra, poll_s=dict(real()["poll_s"], **{{"yield": GATED, "lock": 0.05,
+                             "landing_lock": 0.05, **({{"land_job": 0}} if extra else {{}})}}))
+        L.cfg = M.cfg
+        class Clock:
+            def __getattr__(self, n):
+                return getattr(time, n)
+            def sleep(self, s):
+                if s == GATED:
+                    while not os.path.exists(f"{{gates}}/{{who}}"):
+                        time.sleep(0.02)
+                    s = 0.05
+                time.sleep(s)
+        M.time = Clock()
+        M.ac_wait = lambda *a, **k: None
+        M.landing_lock_held = lambda: False
+        home = {tmp!r} + "/home24" + mode
+        door.home = lambda role: home
+        door.open_home = lambda role, rel: open(f"{{home}}/{{rel}}", "rb") if os.path.exists(f"{{home}}/{{rel}}") else None
+        door.tick = lambda *a, **k: None
+        door.clean = door.prepare = lambda role: None
+        log = lambda **kw: open(out, "a").write(json.dumps(dict(kw, who=who, t=round(time.time(), 2))) + "\\n")
+        M.alarm = lambda name, title, text: log(ev="alarm", name=name)
+        st = {{}}
+        def state():
+            p = st.get("p")
+            return "g" if p is None or p.poll() is not None else \\
+                subprocess.run(["ps", "-o", "state=", "-p", str(p.pid)], capture_output=True, text=True).stdout.strip()[:1] or "g"
+        def reap(role):   # door.reap: KILL alone (it reaches a stopped process); the paused role's, once the gate opens
+            p = st.get("p")
+            if p is not None and p.poll() is None:
+                if st.pop("paused", False):
+                    log(ev="reap", state=state())
+                    while not os.path.exists(f"{{gates}}/R"):
+                        time.sleep(0.02)
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(p.pid, signal.SIGKILL)
+                p.wait()
+        door.reap = reap
+        def sig(role, s, landing=False):
+            p = st.get("p")
+            log(ev="sig", sig=s)
+            if p is not None and p.poll() is None:
+                st["paused"] = st.get("paused") or s == "STOP"
+                os.kill(p.pid, signal.SIGSTOP if s == "STOP" else signal.SIGCONT)
+                return 0
+            return 1
+        door.signal_role = sig
+        M.role_stopped = lambda role: state() in ("T", "g")
+        if who == "M":
+            signal.signal(signal.SIGTERM, lambda s, f: sys.exit(128 + s))   # climb.py's: a TERM is SystemExit
+            rel = f"m/M/compile"; os.makedirs(f"{{home}}/{{rel}}", exist_ok=True)
+            labels = [f"a/{{i:02d}}" for i in range(12)]
+            script = "".join(f'printf "started\\\\t{{l}}\\\\n" >> "$REC"; sleep 0.3; ' for l in labels) + 'printf "ended\\\\n" >> "$REC"'
+            def start(env, log_):
+                st["p"] = subprocess.Popen(["/bin/sh", "-c", script], env=dict(os.environ, REC=env["WT_SMOKE_COMPILED"]),
+                                           stdout=log_, stderr=subprocess.STDOUT, start_new_session=True)
+                open(out + ".M.pid", "w").write(str(st["p"].pid))
+                log(ev="start", pid=st["p"].pid)
+                return st["p"]
+            d = {tmp!r} + "/d24" + mode; os.makedirs(d, exist_ok=True)
+            try:
+                with M.julia_slot("verify"):
+                    with door.using("measure"):
+                        o = M.watched(start, "measure", d, rel, "compile", labels, 60, var="WT_SMOKE_COMPILED", keep_done=True,
+                                      yields=True, rejoin=lambda: os.makedirs(f"{{home}}/{{rel}}", exist_ok=True))
+                log(ev="done", n=o[2], killed=sorted(o[1]))
+            except BaseException as e:
+                log(ev="exit" if isinstance(e, SystemExit) else "error", why=f"{{type(e).__name__}}: {{str(e)[:200]}}",
+                    claim=os.path.exists(M.back_mark("verify")))
+        else:   # the lander: one landing; its check reads the stand-in once the paused measurement's reap has begun
+            L.layer = lambda slot: None
+            @contextlib.contextmanager
+            def quiet():
+                yield lambda: None
+            L.quiesced = quiet
+            def check(slot, item, c, scan, handed=None):
+                log(ev="check")
+                t_ = time.time()
+                while time.time() - t_ < 20 and not any(json.loads(l)["who"] == "M" and json.loads(l)["ev"] in ("reap", "done", "error", "exit")
+                                                        for l in open(out).read().splitlines() if l.strip()):
+                    time.sleep(0.02)
+                with contextlib.suppress(OSError, ValueError):
+                    pid = open(out + ".M.pid").read()
+                    st_ = subprocess.run(["ps", "-o", "state=", "-p", pid], capture_output=True, text=True).stdout.strip()[:1] or "g"
+                    log(ev="check-state", state=st_)
+                return None, None, None, ""
+            L._land = check
+            L.land({tmp!r}, {{"hold": "l228-24"}})
+            log(ev="landed")
+        """)
+    path = f"{tmp}/actor24.py"
+    open(path, "w").write(actor)
+    out, gates = f"{tmp}/run24{mode}.jsonl", f"{tmp}/gates24{mode}"
+    os.makedirs(f"{tmp}/home24{mode}", exist_ok=True); os.makedirs(gates, exist_ok=True); open(out, "w").close()
+    evs = lambda: [json.loads(l) for l in open(out).read().splitlines() if l.strip()]
+    def seen(who, ev, limit=30):
+        t_ = time.time()
+        while time.time() - t_ < limit:
+            if any(e["who"] == who and e["ev"] in (ev, "error", "done", "exit") for e in evs()):
+                return True
+            time.sleep(0.05)
+        return False
+    found, ps_ = [], []
+    try:
+        ps_.append(subprocess.Popen([sys.executable, "-I", path, "M", out, gates, mode]))
+        seen("M", "start")
+        ps_.append(subprocess.Popen([sys.executable, "-I", path, "L", out, gates, mode]))
+        seen("L", "check")   # the landing holds the lock; the measurement is paused (its poll held)
+        if mode == "limit":
+            open(f"{gates}/M", "w").close()   # its poll runs: past the limit at once
+        else:
+            os.kill(ps_[0].pid, signal.SIGTERM)   # launch.sh stop's TERM while it waits without the lock
+        seen("L", "check-state")
+        open(f"{gates}/R", "w").close(); open(f"{gates}/M", "w").close()
+        t_ = time.time()
+        for p in ps_:
+            p.wait(timeout=max(1, 45 - (time.time() - t_)))
+    except subprocess.TimeoutExpired:
+        found.append(f"a pause ended by {mode}: the processes did not finish within 45 s")
+    finally:
+        for p in ps_:
+            if p.poll() is None:
+                p.kill()
+        with contextlib.suppress(OSError, ValueError):
+            pid = int(open(f"{out}.M.pid").read())
+            os.kill(pid, signal.SIGKILL)
+    return evs(), found
+
+def judge24(mode, ev, found):
+    what = {"limit": "past F7's limit", "exc": "by an exception (TERM)"}[mode]
+    order = [e["who"] + ":" + e["ev"] + (":" + e.get("sig", e.get("state", "")) if "sig" in e or "state" in e else "") for e in ev]
+    cs = [e for e in ev if e["ev"] == "check-state"]
+    fin = {e["who"]: e for e in ev if e["ev"] in ("done", "error", "exit", "landed")}
+    if found:
+        fault(f"{found[0]}; the order {order}")
+    elif not cs or cs[0]["state"] != "T":
+        fault(f"a pause ended {what} while the lander held the lock: under the landing's check the measurement's stand-in "
+              f"read {cs[0]['state'] if cs else 'nothing'} (T, stopped until its reap, expected): its processes ran beside "
+              f"the check; the order {order}")
+    elif mode == "limit" and (fin.get("M", {}).get("ev") != "done" or fin["M"].get("n") != 2 or
+                              not any(e["ev"] == "alarm" and e["name"] == "pause-verify" for e in ev)):
+        fault(f"a pause past its limit: the measurement {fin.get('M')} (done, after one restart: 2 processes, expected) and "
+              f"one `pause-verify` alarm; the order {order}")
+    elif mode == "exc" and (fin.get("M", {}).get("ev") != "exit" or fin["M"].get("claim")):
+        fault(f"a pause ended by an exception: the measurement {fin.get('M')} (SystemExit, its claim removed, expected); "
+              f"the order {order}")
+    elif fin.get("L", {}).get("ev") != "landed":
+        fault(f"a pause ended {what}: the lander {fin.get('L')} (landed expected); the order {order}")
+
+if __section__ == 24:
+    try:
+        judge24("limit", *abort24("limit"))
+    except Exception as e:
+        fault(f"a pause past its limit raised {type(e).__name__}: {str(e)[:240]}")
+
+# 25. a pause ended by an exception while the lander holds its lock: its processes reaped, never continued (section 24's
+# scenario, its paused measurement sent a TERM instead of its poll let past the limit)
+#: needs 24
+#: limit 90
+try:
+    judge24("exc", *abort24("exc"))
+except Exception as e:
+    fault(f"a pause ended by an exception raised {type(e).__name__}: {str(e)[:240]}")

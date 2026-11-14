@@ -179,33 +179,166 @@ SLOT_KIND = {"measure": "verify", "score": "score"}   # the measurement lock eac
 HELD_SLOT = {}   # kind: the lock's descriptor, while this process holds it (julia_slot)
 door.HOOKS["locks"] = lambda: tuple(HELD_SLOT)   # door.assert_order reads them (LOCK_ORDER, spec v17 Y3)
 
+def first_mark(kind):
+    """The lander's mark on the `kind` lock (julia_slot(first=True)): `<pid> <boot> <start> [stops]`."""
+    return os.path.join(door.LOCKS, f".julia-{kind}.first")
+
+def back_mark(kind):
+    """A paused measurement's claim on the `kind` lock (pause_in_place), `<pid> <boot> <start> wait|next`: while its
+    writer lives, no other measurement takes the lock (its writer keeps its measuring role while paused, so another
+    measurement taking the lock and then that role would wait on it while it waits on the lock: LOCK_ORDER's cycle,
+    closed here), and no lander acquisition without `stops` either (its rebased check takes the measure role); `wait`
+    lets the lander it paused for take the lock, and once no stops mark is live (that lander has the lock) the claim is
+    `next`, which holds the lander's next acquisition back too, so a paused measurement goes on between two landings
+    (at least one watch tick, never a restart) and landings in a row never starve it."""
+    return os.path.join(door.LOCKS, f".julia-{kind}.back")
+
+def my_mark(*rest):
+    """This process's identity in a mark: its pid, the boot and its start time (door.proc_start), so a reused pid is
+    never its writer (the review's F5); then `rest`."""
+    return " ".join((str(os.getpid()), str(door.BOOT), str(door.proc_start(os.getpid())), *rest))
+
+def read_mark(path):
+    """A mark's fields when its writer is a live process other than this one, else None; a mark whose writer is dead
+    (its pid gone, of another boot, or now another process's: its start time differs) is removed by whoever finds it,
+    so a dead process's mark holds nobody (formal(dev/formal/MeasureLocks.tla): DeadMarksHoldNobody)."""
+    try:
+        text = open(path).read()
+    except FileNotFoundError:
+        return None
+    f = text.split()
+    with contextlib.suppress(ValueError, IndexError):
+        pid = int(f[0])
+        if pid == os.getpid():
+            return None
+        if alive(pid, int(f[1])) and str(door.proc_start(pid)) == f[2]:
+            return f
+    with contextlib.suppress(OSError):   # its writer is dead: removed, unless a live writer wrote it meanwhile
+        if open(path).read() == text:
+            os.remove(path)
+    return None
+
 def lander_waits(kind):
     """The lander's mark on the `kind` lock is live and not this process's: it waits to land (ruling 1)."""
-    mark = os.path.join(door.LOCKS, f".julia-{kind}.first")
-    with contextlib.suppress(OSError, ValueError, IndexError):
-        holder, boot = (int(x) for x in open(mark).read().split()[:2])
-        return holder != os.getpid() and alive(holder, boot)
-    return False
+    return read_mark(first_mark(kind)) is not None
 
-def yield_slot(kind):
+def lander_stops(kind):
+    """The lander waiting on the `kind` lock takes it for work that uses no measuring role (its mark's `stops`,
+    julia_slot(stops=True): a landing's check, a hand item's replay and regeneration, the layer after a landing, all as
+    _wtland), so a measurement in flight stays, stopped in place (pause_in_place), instead of leaving its role and
+    restarting."""
+    f = read_mark(first_mark(kind))
+    return f is not None and f[3:4] == ["stops"]
+
+def back_held(kind, first=False, stops=False):
+    """A live process other than this one claims the `kind` lock (back_mark): for any taker but the lander, and for a
+    lander acquisition without `stops`; for the lander's acquisition with `stops`, once the claim is `next`."""
+    f = read_mark(back_mark(kind))
+    return f is not None and (not (first and stops) or f[3:4] == ["next"])
+
+def blocked(kind, first=False, stops=False):
+    """Whether a taker of the `kind` lock waits now: a live lander's mark (for any other taker) or a live claim
+    (back_held). julia_slot and yield_slot read it before their flock and again after it, letting the lock go when it
+    blocks (the review's F2: a claim written between the read and the flock)."""
+    return (not first and lander_waits(kind)) or back_held(kind, first, stops)
+
+def take_lock(fd, kind, first=False, stops=False):
+    """One attempt at the `kind` lock: taken when nothing blocks this taker before the flock and after it."""
+    if blocked(kind, first, stops):
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    if blocked(kind, first, stops):
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    return True
+
+def role_stopped(role):
+    """Every process of the role's user stopped (ps's `T`; a zombie has ended): read as lander.quiesced reads them."""
+    states = [f[1] for f in (l.split() for l in sh(["ps", "-axo", "user=,stat="]).stdout.splitlines())
+              if len(f) == 2 and f[0] == door.ROLES[role]]
+    return all(s.startswith(("T", "Z")) for s in states)
+
+def pause_in_place(role, kind):
+    """A measurement's processes stopped where they stand while the lander holds the `kind` lock for work that uses no
+    measuring role (lander_stops), continued once it lets the lock go: nothing restarted, nothing loaded twice, nothing
+    run beside the check (the stop keeps D31's "never beside a check", where yield_slot kept it by giving the role up).
+    formal(dev/formal/MeasureLocks.tla): NoCheckBesideRunning, OneRoleHolder, DeadMarksHoldNobody, Ends.
+    Called where a yield would restart (watched: before a case, between two, or at one just started; a compile is
+    computation alone, with no clock of its own that a stop would cross). The role stays this process's, so its run
+    directories and depot stay; back_mark holds every other taker back until this process has the lock again. The stop
+    is verified before the lock goes (role_stopped, the sweep sent again a few times; the review's F4): a role that
+    cannot be stopped is continued and the measurement yields as before (returns None), so no check runs beside it.
+    The wait is bounded by ship_kill_s and its margin (a landing's own wall): past it one alarm, the processes reaped,
+    the claim removed, and the measurement restarts after a yield (returns None) rather than wait on. Stopped processes
+    are continued only while this process holds the lock (a resume, or a stop that failed before the lock went); a pause
+    that ends without it (the limit, or an exception while it waits) reaps them, never continues them (door.reap's KILL
+    reaches a stopped process, and it resumes the role's sudo monitors after it): the t5b review's must-fix, a CONT
+    while the lander held the lock ran the compile beside its check until the reap (formal: ReapUnheld).
+    Returns (the seconds stopped, which the caller leaves out of the process's wall and budgets, or None for a yield;
+    whether this process holds the lock)."""
+    fd = HELD_SLOT[kind]
+    t0, served, ok, held = door.CLOCK(), False, False, True
+    lim = cfg()["ship_kill_s"] + cfg()["term_grace_s"] + cfg()["poll_s"]["land_job"] * 10
+    try:   # whatever happens from here: the claim removed, the role continued with the lock held, else reaped
+        write_atomic(back_mark(kind), my_mark("wait"))
+        for _ in range(cfg()["stop_tries"]):
+            if door.signal_role(role, "STOP") > 1:   # pkill: 0 sent, 1 nothing to send, more an error
+                continue
+            if role_stopped(role):
+                break
+        else:
+            event("pause-refused", lock=kind, role=role, why="its processes could not be stopped")
+            return None, True
+        fcntl.flock(fd, fcntl.LOCK_UN); held = False
+        event("paused", lock=kind, role=role)
+        while True:
+            time.sleep(cfg()["poll_s"]["yield"]); beat()
+            if door.CLOCK() - t0 > lim:
+                alarm(f"pause-{kind}", "a measurement paused past a landing's wall", f"{door.ROLES[role]}'s measurement "
+                      f"was paused for the {kind} lock over {round(lim)} s (ship_kill_s and its margin). Default taken: its "
+                      "processes reaped, its claim removed, the measurement restarted after a yield.")
+                return None, False   # the finally reaps them: never continued without the lock
+            if not served and not lander_stops(kind):   # the lander it paused for holds the lock: its next one waits
+                write_atomic(back_mark(kind), my_mark("next")); served = True
+            if served and take_lock(fd, kind, first=True, stops=True):   # the lander's next acquisition waits on `next`
+                ok = held = True
+                break
+    finally:
+        try:
+            if held:   # the lock this process's: its processes continue, beside no check
+                door.signal_role(role, "CONT")
+            else:   # the lander's, or nobody's yet: reaped where they stand, never continued (formal: ReapUnheld)
+                door.reap(role)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(back_mark(kind))
+    secs = door.CLOCK() - t0
+    event("resumed", lock=kind, role=role, secs=round(secs))
+    return (secs, True) if ok else (None, False)
+
+def yield_slot(kind, held=True):
     """Between a measurement's parts (its three roles, and its compile's cases): while the lander waits on the lock this
-    process holds, the lock passes to it, and this process takes it again once the lander is done, so no landing
-    waits more than a measurement's part (ruling 1). Returns the seconds yielded. Taking the lock again is a taking in
-    LOCK_ORDER (spec v17 Y3): refused (door.LockOrder) while this process uses a measuring role, which its caller leaves
-    for the wait (door.released), so the lander's need of that role never waits on this process."""
+    process holds, the lock passes to it, and this process takes it again once the lander is done and no paused
+    measurement claims it (blocked: read before the flock and after it; the review's F1, a retake past a paused one's
+    claim, deadlocked the lander and both slots), so no landing waits more than a measurement's part (ruling 1). `held`
+    False: the lock already let go (a pause that ended as a yield), taken again whether or not the lander still waits.
+    Returns the seconds yielded. Taking the lock again is a taking in LOCK_ORDER (spec v17 Y3): refused
+    (door.LockOrder) while this process uses a measuring role, which its caller leaves for the wait (door.released), so
+    the lander's need of that role never waits on this process. formal(dev/formal/MeasureLocks.tla): Ends."""
     fd = HELD_SLOT.get(kind)
-    if fd is None or not lander_waits(kind):
+    if fd is None or (held and not lander_waits(kind)):
         return 0
     door.assert_order(f"lock:{kind}", retake=True)
     t0 = door.CLOCK()
-    fcntl.flock(fd, fcntl.LOCK_UN)
-    event("yielded", lock=kind)
+    if held:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        event("yielded", lock=kind)
     while True:
         time.sleep(cfg()["poll_s"]["yield"]); beat()
-        if lander_waits(kind):   # its mark goes once it holds the lock; until then the lock is left for it
-            continue
-        with contextlib.suppress(BlockingIOError):
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if take_lock(fd, kind):
             return round(door.CLOCK() - t0)
 
 def part_background(role):
@@ -216,29 +349,28 @@ def part_background(role):
     return cfg()["measure_background"] if role == "measure" else True
 
 @contextlib.contextmanager
-def julia_slot(kind, first=False):
+def julia_slot(kind, first=False, stops=False):
     """The driver's heavy Julia, one of each kind at a time (D31 as amended): one measurement and one score, each a
     single thread (the score at background QoS, a measurement as measure_background says: part_background), never
     beside a landing's check. The lander is served first (red 8): while it
     waits (`first`), its mark holds every other taker back. A wait past lock_wait_s, for the lock or for a live
     ship.sh's landing lock, is a note and waits on (O5): every holder has a wall of its own (its derived wall,
-    ship_kill_s), so no wait is a block, and none is a backoff or charged to a hold."""
+    ship_kill_s), so no wait is a block, and none is a backoff or charged to a hold. `stops` (the lander's, with
+    `first`): the work under the lock uses no measuring role, so a measurement in flight pauses in place rather than
+    restart (lander_stops). Every taker waits while a paused measurement's claim holds it (back_held), and reads the
+    marks again after its flock (take_lock). formal(dev/formal/MeasureLocks.tla): NoCheckBesideRunning,
+    OneRoleHolder, DeadMarksHoldNobody, Ends (no deadlock, no unbounded wait: every taker served)."""
     door.assert_order(f"lock:{kind}")   # LOCK_ORDER, before any wait (spec v17 Y3)
     fd = door.lock_fd(f".julia-{kind}.lock")   # TOP/locks: every state's measurements share the users (O8-2)
-    mark, t0, lim = os.path.join(door.LOCKS, f".julia-{kind}.first"), door.CLOCK(), cfg()["lock_wait_s"]
+    mark, t0, lim = first_mark(kind), door.CLOCK(), cfg()["lock_wait_s"]
     def long_wait(what):
         if door.CLOCK() - t0 > lim:
             alarm(f"wait-{kind}", f"a {kind} measurement waits past lock_wait_s", f"{what} has been held over {lim} s. "
                   "Default taken: it waits on; each holder's own wall ends it.")
     if first:
-        write_atomic(mark, f"{os.getpid()} {door.BOOT}")
+        write_atomic(mark, my_mark(*(["stops"] if stops else [])))
     try:
-        while True:
-            holder = open(mark).read().split() if not first and os.path.exists(mark) else []
-            if not (len(holder) == 2 and alive(holder[0], int(holder[1]) if holder[1].isdigit() else None)):
-                with contextlib.suppress(BlockingIOError):
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
+        while not take_lock(fd, kind, first, stops):
             long_wait(f"the {kind} measurement lock")
             time.sleep(cfg()["poll_s"]["lock"]); beat()
     finally:
@@ -952,9 +1084,22 @@ def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=Fals
                     cut = (flight, "the process ended during the case")   # is, and the process runs on without it (O9-3)
                     event("case-ended", role=role, part=part, label=flight, rc=p.returncode)
                 break
-            if yields and lander_waits(kind) and (last is None or started_now or last in done):   # a case's boundary
-                door.reap(role); p.wait(); gave = True
-                break
+            if yields and lander_waits(kind):
+                if lander_stops(kind):   # the lander's work uses no measuring role: stopped in place, never restarted (T5)
+                    if last is None or started_now or last in done:   # where a restart would come, nothing lost
+                        paused, held = pause_in_place(role, kind)
+                        if paused is not None:
+                            if reload_t is None:   # a stop inside a restart's load is outside the wall already
+                                t0 += paused
+                            t_last += paused   # its wall and its case's budget leave the stop out, and the case
+                            if cur:   # just started its learned time (the driver's clock); the seconds its process
+                                cur = (cur[0], cur[1] + paused, cur[2])   # reports hold it, never a budget (R6-9)
+                            continue
+                        door.reap(role); p.wait(); gave, yield_held = True, held   # its role not stopped, or past the
+                        break   # pause's wall: the yield as before
+                elif last is None or started_now or last in done:   # a case's boundary: the role left, the process again
+                    door.reap(role); p.wait(); gave, yield_held = True, True
+                    break
             budget = case_budget(c, secs, last, fin == 0, first_s) if last or not fin else c["case_min_s"]
             over = elapsed() > wall
             if door.CLOCK() - t_last > budget or over:
@@ -979,7 +1124,7 @@ def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=Fals
         timed = {}
         if gave:   # the lander lands; this measurement goes on after it, its yielded time and the reload never its own
             with door.released(role) if role in door.HELD else contextlib.nullcontext({"lost": False}) as use:
-                t0 += yield_slot(kind)
+                t0 += yield_slot(kind, held=yield_held)
             if use["lost"]:   # another use of the role came between: this part's directories are gone
                 if rejoin is None:
                     raise RoleLost(f"the {part} process of a measurement as {door.ROLES[role]} yielded, and another use of the "
@@ -1797,6 +1942,10 @@ def measure_dir(role, task, root=None):
     for name in os.listdir(root):   # a killed driver's: its holder is dead
         holder = name.rpartition("@")[2].split("-")
         if "@" in name and len(holder) == 3 and holder[0].isdigit() and holder[1].isdigit() and not alive(holder[0], int(holder[1])):
+            shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+        elif "@" not in name and os.path.getmtime(os.path.join(root, name)) < time.time() - cfg()["base_keep_s"]:
+            # an older driver's directory (<role>-<task>, named for no holder): no measurement of that driver is in flight
+            # two days on (base_keep_s, which ends a base's own file), so it is removed then (the review's F9c)
             shutil.rmtree(os.path.join(root, name), ignore_errors=True)
     w = tempfile.mkdtemp(prefix=f"{role}-{task}@{os.getpid()}-{door.BOOT}-", dir=root)
     try:

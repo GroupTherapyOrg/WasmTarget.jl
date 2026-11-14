@@ -241,7 +241,8 @@ def land(slot, item, handed=None):
     c = cfg()
     # the score's lock first (O7-5): a score's part can run for kinds_wall_s, so the verify lock is never held idle
     # while the lander waits behind one
-    with julia_slot("score", first=True), julia_slot("verify", first=True):
+    # `stops`: the layer and the check run as _wtland, no measuring role, so a measurement in flight pauses in place (T5)
+    with julia_slot("score", first=True, stops=True), julia_slot("verify", first=True, stops=True):
         # the warm layer of origin's own images beneath the check's fresh depot (A8-1), made before anything is stopped;
         # made after the landing before it (layer()), so here it is found, never built, unless none landed since launch
         layer(slot)
@@ -264,7 +265,7 @@ def _land(slot, item, c, scan, handed=None):
     ok = quiet(pr, power_low())   # quiet at its start: the probe is the measurement, never a gate (throughput P0)
     # what the stopped users still hold in memory (operator 7): read beside the probe, to re-derive the band
     rss = [int(f[1]) for f in (l.split() for l in sh(["ps", "-axo", "user=,rss="]).stdout.splitlines())
-           if len(f) == 2 and f[0] in {door.ROLES[r] for r in QUIET}]
+           if len(f) == 2 and f[0] in {door.ROLES[r] for r in (*QUIET, "measure", "score")}]   # a paused measurement's too (F9)
     pr["stopped"], pr["stopped_rss_mb"] = len(rss), round(sum(rss) / 1024)
     event("quiet-probe", ok=ok, **pr)
     # the check starts whatever the probe read (throughput P0, the owner's "STOP pausing EVER"): D14's band judges its
@@ -511,7 +512,7 @@ def rebased_check(item):
         return v["problems"], v["stop"]
     if item["kind"] != "move":   # an audit's entry or a commit made by hand: replayed onto origin by the same merge, each
         at, why = origin, None   # of its commits in order, and never measured (A7-5: ship.sh lands what the lander made)
-        with julia_slot("verify", first=True):   # its regen is Julia as _wtland: never beside a measurement (D31, O8-4)
+        with julia_slot("verify", first=True, stops=True):   # its regen is Julia as _wtland: never beside a running measurement (D31, O8-4)
             for c in [] if origin == item["base"] else git("rev-list", "--reverse", f"{item['base']}..{item['sha']}").splitlines():
                 at, why = rebased(f"{c}^", c, at)
                 if at is None or why:
@@ -944,8 +945,8 @@ def land_round():
                 # the next landing's layer, of the head this one made, built now under the verify lock alone, never on
                 # that landing's critical path with both measurement locks held (round 9's architect, S3)
                 try:
-                    with julia_slot("verify", first=True):
-                        layer(land_tree())
+                    with julia_slot("verify", first=True, stops=True):   # the layer as _wtland: no measuring role, so
+                        layer(land_tree())   # a measurement in flight pauses in place, never restarted (T5; the review's F6)
                 except door.DoorError as e:   # the next landing builds it again before its check, failing there loudly
                     event("land-layer-failed", error=str(e)[:300])
                 return 0

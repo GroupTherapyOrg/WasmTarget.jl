@@ -368,6 +368,18 @@ def boot_time():
 
 BOOT = boot_time()
 
+def proc_start(pid):
+    """A live process's start time, microseconds since the epoch (libproc's proc_pidinfo, PROC_PIDTBSDINFO:
+    pbi_start_tvsec and pbi_start_tvusec at bytes 120 and 128 of struct proc_bsdinfo), or None: with the boot and the
+    pid, a process's identity, so a mark's writer whose pid another process now holds is not that process."""
+    import ctypes
+    buf = ctypes.create_string_buffer(136)
+    with contextlib.suppress(OSError, AttributeError):
+        n = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True).proc_pidinfo(int(pid), 3, ctypes.c_uint64(0), buf, 136)
+        if n == 136:
+            return int.from_bytes(buf.raw[120:128], "little") * 1_000_000 + int.from_bytes(buf.raw[128:136], "little")
+    return None
+
 def alive(pid, boot):
     """The one test that a recorded process lives (O6-11): its pid recorded in this boot (`boot`, BOOT then) and
     running; a pid of an earlier boot, or recorded with none, is dead whatever process holds that number now."""
@@ -414,9 +426,11 @@ def signal_role(role, sig, landing=False):
     (after_window); the landing's own (`landing`) ends it."""
     if sig == "CONT" and not landing:
         after_window(role)
-    subprocess.run(["/usr/bin/sudo", "-n", "-u", ROLES[role], "/usr/bin/pkill", f"-{sig}", "-U", ROLES[role]], cwd="/", capture_output=True)
+    rc = subprocess.run(["/usr/bin/sudo", "-n", "-u", ROLES[role], "/usr/bin/pkill", f"-{sig}", "-U", ROLES[role]], cwd="/",
+                        capture_output=True).returncode
     if sig == "CONT":
         resume_monitors(role)
+    return rc   # pkill's: 0 a process signalled, 1 none to signal, more a failure (sudo's, pkill's)
 
 HELD = {}   # role: the run directories give() made during this process's use of it (using())
 USE = {}   # role: (the lock's descriptor, the use's generation) while this process uses it (using())

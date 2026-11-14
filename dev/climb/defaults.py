@@ -81,6 +81,10 @@ DEFAULTS = {
     # (core.running: a landing that fixed it); band 120-900 s (2026-11-14: a slot's 30-min wait on a fault of a removed
     # measurement directory, cleared by hand)
     "driver_fault_backoff_s": 300,
+    # a paused measurement's STOP sweeps before its stop is taken as failed and it yields as before (measure.
+    # pause_in_place: every process of its role's user read stopped, `T`, after a sweep): intent, one sweep, a second for
+    # a process that forked between the sweep and the read; band 2-5 (2026-11-14, the review's F4)
+    "stop_tries": 3,
     "alarm_s": 21600,                            # no move or landing, or no quiet probe with a queue, this long: a note
     # a change of power source counts once the new reading has held this long (O9-2). Derivation: `pmset -g log`'s
     # adapter flaps, 117 changes in six minutes on 2026-11-08 16:15-16:21 and 37 in the minute of 2026-11-09 18:02,

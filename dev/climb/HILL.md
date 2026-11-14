@@ -919,7 +919,23 @@ door's, run as Dale on paths no build user writes.
   measurement runs beside a check (ruling 1): the lander takes both measurement locks first,
   the score's and then the verify lock (O7-5: never the verify lock held idle behind a score's part), its mark served before any other taker, and holds them through the probe and the
   check; a measurement it waits on yields its lock between its parts (a compile at its next case's boundary, its
-  finished cases kept and the rest run again after; between its three roles; the score's kinds after its smoke),
+  finished cases kept and the rest run again after; between its three roles; the score's kinds after its smoke), and,
+  when the lander's work under the locks uses no measuring role (a landing's check, a hand item's replay, the layer
+  after a landing: `julia_slot(stops=True)`), a compile is stopped in place instead (`measure.pause_in_place`,
+  throughput T5: its processes SIGSTOPped and read stopped before the lock goes, else it yields as before, and
+  continued when the lock comes back, nothing restarted or loaded twice, the stopped time outside its wall and
+  budgets; its claim, the back mark, holds every other measurement and every lander acquisition without `stops` off
+  the lock, and the lander's next acquisition once it has been served, until the paused measurement has the lock
+  again; every taker reads the marks again after its flock; a mark names its writer by pid, boot and start time, and a
+  dead writer's mark is removed by whoever finds it; a pause past a landing's wall alarms once and ends as a yield;
+  stopped processes are continued only with the lock held, and a pause that ends without it (that limit, or an
+  exception while it waits) reaps them where they stand, never continuing them first.
+  Modelled first in `dev/formal/MeasureLocks.tla` with the lander, two slots and the scoreboard, a death and a reused
+  pid anywhere: no check beside a running measurement, one holder a role, no dead mark holding anybody, every run
+  ending; the protocol of f13c2ec8, which deadlocked the lander and both slots, a taker that does not read the marks
+  again, an unverified stop, a pid-only identity and a pause that continues its processes without the lock each
+  refuted. The rebased check, which measures in the role itself,
+  still restarts a compile in flight: T5 removes the landing's own restarts, the check's, the replay's and the layer's),
   each part's seconds an event (`smoke-part`), so a landing waits one part, never a whole score. **The locks'
   order** (spec v17 Y3), the one order every process takes the climb's locks in, asserted where each is taken
   (`door.LOCK_ORDER`, `door.assert_order`, in `door.using`, `measure.julia_slot` and `measure.yield_slot`; a lock out of
@@ -1327,21 +1343,21 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `price_usd` {"claude-opus-5-5": {"input": 4.0, "output": 20.0, "cache_write_5m": 5.0, "cache_write_1h": 8.0, "cache_read": 0.2}, "claude-fable-5-1": {"input": 10.0, "output": 50.0, "cache_write_5m": 12.5, "cache_write_1h": 20.0, "cache_read": 0.5}, "claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_write_5m": 2.5, "cache_write_1h": 4.0, "cache_read": 0.1}, "claude-haiku-5-5": {"input": 0.1, "output": 0.5, "cache_write_5m": 0.125, "cache_write_1h": 0.2, "cache_read": 0.01}},
 `price_band` [0.95, 1.05], `resumes_per_move` 3, `stops_per_hold` 3, `park_steps` [50, 100, 200],
 `queue_cap` 4 (locked), `task_wall_s` 5400, `audit_every` 5 (locked), `score_every_landings` 3, `score_every_s` 7200,
-`retry_backoff_s` 1800, `backoff_cap_s` 28800, `driver_fault_backoff_s` 300, `alarm_s` 21600, `power_settle_s` 60,
-`battery_runs` true, `battery_floor_pct` 20, `oracle_audit_k` 8, `oracle_background` false, `measure_background` false,
-`lock_wait_s` 3600, `score_loss_band` 0.02, `judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5,
-`judge_per_tick` 4, `wall_factor` 3, `case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10,
-`kaimon_port` 2840, `kaimon_http_s` 120, `kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60,
-`probe_s` 15, `swapins_max` 2000, `decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5,
-`d14_backoff_s` 1200, `d14_share` [10, 0.6], `other_tries` 3, `ship_kill_s` 3600, `watch_stale_s` 600,
-`disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216,
-`fetch_tries` [5, 3, 4], `tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6,
-`src_unverified_max` 6, `src_shape_checks_min` 2, `src_prior_g` {"src": 11.0, "outside": 10.7},
-`src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0}, `src_prior_ratchet_s` 89,
-`src_prior_imbalance_s` 9, `src_margin_min_s` 10, `src_margin_checks` 10, `src_margin_start_s` 25,
-`src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800, `admissible_wall_s` 600, `parse_wall_s` 300,
-`loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432, `proxy_request_s` 1200, `proxy_join_s` 30,
-`git_low_speed` [1000, 60], `loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
+`retry_backoff_s` 1800, `backoff_cap_s` 28800, `driver_fault_backoff_s` 300, `stop_tries` 3, `alarm_s` 21600,
+`power_settle_s` 60, `battery_runs` true, `battery_floor_pct` 20, `oracle_audit_k` 8, `oracle_background` false,
+`measure_background` false, `lock_wait_s` 3600, `score_loss_band` 0.02, `judge_n` 10, `judge_lines` 150,
+`judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3, `case_min_s` 900, `case_factor` 20,
+`watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120, `kaimon_start_s` 900,
+`session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000, `decompressions_max` 400000,
+`near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6], `other_tries` 3, `ship_kill_s` 3600,
+`watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,
+`answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3,
+`fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
+`src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0},
+`src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9, `src_margin_min_s` 10, `src_margin_checks` 10,
+`src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800, `admissible_wall_s` 600,
+`parse_wall_s` 300, `loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432, `proxy_request_s` 1200,
+`proxy_join_s` 30, `git_low_speed` [1000, 60], `loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
 `role_wait_s` {"slot": 10800, "review": 10800, "measure": 49800, "score": 49800, "land": 5400, "deps": 3600},
 `state_lock_s` 600, `step_wall_s` 60, `tree_wall_s` 600, `kaimon_poll_s` 30, `kaimon_ping_s` 10,
 `poll_s` {"kaimon_up": 5, "scan": 10, "lock": 5, "landing_lock": 20, "yield": 2, "land_job": 5},
