@@ -2859,7 +2859,8 @@ function bounded_behaviour_faults(tree::AbstractString, section::Union{Int,Nothi
     local out = IOBuffer()
     local err = IOBuffer()
     local only = section === nothing ? String[] : ["--only", string(section)]
-    local ok = success(pipeline(`python3 -I $(joinpath(ROOT, "test", "climb_l228.py")) $tree $only`; stdout = out, stderr = err))
+    # `tree` a copy of exactly L228_INPUTS (l228_copy), the harness its own: what it reads is what it is given
+    local ok = success(pipeline(`python3 -I $(joinpath(tree, "test", "climb_l228.py")) $tree $only`; stdout = out, stderr = err))
     local lines = [String(l) for l in split(String(take!(out)), '\n') if !isempty(strip(l))]
     ok || push!(lines, "test/climb_l228.py failed on $tree: " * last(String(take!(err)), 300))
     return lines
@@ -2976,18 +2977,58 @@ end
 # the files the landing changes, read from the base a landing is measured against (CHECK_BASE, as L227 reads it, its
 # merge base with HEAD; the working tree's tracked and untracked changes included), and whether its range closes a clause
 # (`Closes: C<n>`, D16) or WT_RATCHET_FULL=1 asks; a base that cannot be read runs everything
-const L228_HARNESS_INPUTS = ("dev/climb/", "dev/src_verdict.sh", "dev/d14_judge.sh", "dev/formal/run_tlc.sh", "dev/formal/NoListenTLC.java", "dev/ship.sh", "dev/check.sh", "test/src_tests.jl", "test/src_canary.jl",
-                             "test/climb_l228.py", "test/parity_ratchet.jl")
-function l228_scope()::NamedTuple{(:full, :harness, :changed),Tuple{Bool,Bool,Vector{String}}}
-    local base = get(ENV, "CHECK_BASE", "origin/wt2")
-    local mb = try readchomp(pipeline(Cmd(`git merge-base $base HEAD`; dir=ROOT); stderr=devnull)) catch; "" end
-    isempty(mb) && return (full=true, harness=true, changed=String[])
-    local changed = unique!(vcat(split(readchomp(Cmd(`git diff --name-only $mb`; dir=ROOT)), '\n'; keepempty=false),
-                                 split(readchomp(Cmd(`git ls-files --others --exclude-standard`; dir=ROOT)), '\n'; keepempty=false)))
-    local closes = occursin(r"(?m)^Closes: C\d", readchomp(Cmd(`git log --format=%B $mb..HEAD`; dir=ROOT)))
+# THE behaviour harness's inputs, the one list (D5): every run of it, the tree's and each break's, gets a copy of exactly
+# these (l228_copy) and reads its own test/climb_l228.py from that copy, so a file it reads and this list lacks fails its
+# run, never passes unread; the scope reads the same list, and test/parity_ratchet.jl (BOUNDED_BREAKS, this lock) too.
+# The list it replaces was written by hand and lacked the models section 18's TLC runs (dev/formal/MCBoxJoin*), and named
+# files the harness never reads (test/src_tests.jl, test/src_canary.jl)
+const L228_INPUTS = ("dev/climb/", "dev/src_verdict.sh", "dev/d14_judge.sh", "dev/formal/", "dev/check.sh", "dev/ship.sh", "test/climb_l228.py")
+l228_input(f::AbstractString) = f == "test/parity_ratchet.jl" || any(p -> startswith(f, p), L228_INPUTS)
+function l228_copy(root::AbstractString = ROOT)::String
+    local t = mktempdir()
+    for p in L228_INPUTS
+        local rel = rstrip(p, '/')
+        mkpath(dirname(joinpath(t, rel)))
+        cp(joinpath(root, rel), joinpath(t, rel))
+    end
+    return t
+end
+function l228_scope(root::AbstractString = ROOT, base::AbstractString = get(ENV, "CHECK_BASE", "origin/wt2"))::NamedTuple{(:full, :harness, :changed, :base),Tuple{Bool,Bool,Vector{String},String}}
+    local mb = try readchomp(pipeline(Cmd(`git merge-base $base HEAD`; dir=root); stderr=devnull)) catch; "" end
+    isempty(mb) && return (full=true, harness=true, changed=String[], base="")
+    local changed = unique!(vcat(split(readchomp(Cmd(`git diff --name-only $mb`; dir=root)), '\n'; keepempty=false),
+                                 split(readchomp(Cmd(`git ls-files --others --exclude-standard`; dir=root)), '\n'; keepempty=false)))
+    local closes = occursin(r"(?m)^Closes: C\d", readchomp(Cmd(`git log --format=%B $mb..HEAD`; dir=root)))
     local full = closes || get(ENV, "WT_RATCHET_FULL", "0") == "1"
-    local harness = full || any(f -> any(p -> startswith(f, p), L228_HARNESS_INPUTS), changed)
-    return (full=full || "test/parity_ratchet.jl" in changed, harness=harness, changed=String.(changed))
+    local harness = full || any(l228_input, changed)
+    return (full=full || "test/parity_ratchet.jl" in changed, harness=harness, changed=String.(changed), base=String(mb))
+end
+# its negative, run at every landing (the scope decides whether the harness runs at all, so its own check never waits on
+# it): in a scratch history, a change to a file the harness reads (the driver; a model section 18's TLC runs; a file
+# added untracked) since the base runs the harness, and a change to none of them (a src file) does not. The record a
+# landing passes on is origin's history itself (the merge base with CHECK_BASE): the commit under check cannot write
+# it, a commit that changes an input always runs, and every commit of origin's history landed through a check (a push
+# around the driver pauses the climb: core.unlogged_landings)
+function l228_scope_negatives_missed()::Vector{String}
+    local out = String[]
+    local t = mktempdir()
+    local g(args...) = readchomp(Cmd(`git -c user.name=l228 -c user.email=l228@localhost -c commit.gpgsign=false $args`; dir=t))
+    g("init", "-q")
+    for (f, s) in (("src/x.jl", "x = 1\n"), ("dev/formal/MCBoxJoin.cfg", "SPECIFICATION Spec\n"), ("dev/climb/core.py", "a = 1\n"))
+        mkpath(dirname(joinpath(t, f))); write(joinpath(t, f), s)
+    end
+    g("add", "-A"); g("commit", "-q", "-m", "the base"); local base = g("rev-parse", "HEAD")
+    for (what, f, want) in (("a src file", "src/x.jl", false), ("a model section 18's TLC runs", "dev/formal/MCBoxJoin.cfg", true),
+                            ("the driver", "dev/climb/core.py", true))
+        g("checkout", "-q", "-B", "c", base)
+        write(joinpath(t, f), read(joinpath(t, f), String) * "# changed\n"); g("commit", "-q", "-am", what)
+        l228_scope(t, base).harness == want ||
+            push!(out, "L228's scope: a commit changing $what since the record $(base[1:8]) $(want ? "runs no harness" : "runs the harness")")
+    end
+    g("checkout", "-q", "-B", "c", base); write(joinpath(t, "dev", "climb", "new.py"), "b = 2\n")
+    l228_scope(t, base).harness || push!(out, "L228's scope: a file of the driver added untracked runs no harness")
+    rm(t; recursive = true, force = true)
+    return out
 end
 # its negative: each planted break named, in src and in a test file
 function reach_negatives_missed()::Vector{String}
@@ -3188,6 +3229,11 @@ const BOUNDED_BREAKS = (
     ("a window's span read unclipped to the run", "dev/climb/door.py",
      "    return [(max(a, t0), min(b, now)) for a, b in spans if min(b, now) > max(a, t0)]",
      "    return [(a, b) for a, b in spans if min(b, now) > max(a, t0)]", 28),
+    # a plant the machine fails holds the item
+    ("a plant the machine failed read as the commit's (the item dropped)", "dev/climb/lander.py",
+     "    if kind == \"OTHER\" and arg == \"plant\":", "    if False:", 29),
+    ("the check's plant failure exiting as a red of the commit", "dev/check.sh", "  exit 16; }", "  exit 1; }", 29),
+    ("ship.sh reading the check's 16 as any OTHER", "dev/ship.sh", " 16) echo \"OTHER plant\" ;;", "", 29),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",
@@ -3225,7 +3271,10 @@ l228_cpu_fault(cpu, budget) = cpu > budget ? ["L228's harness and its negatives 
 function bounded_behaviour_negatives_missed()::Vector{String}
     local out = String[]
     local t0, c0 = time(), children_cpu()
-    isempty(bounded_behaviour_faults(ROOT)) || push!(out, "L228's behaviour: the tree itself reads a fault")
+    let t = l228_copy()
+        isempty(bounded_behaviour_faults(t)) || push!(out, "L228's behaviour: the tree itself reads a fault")
+        rm(t; recursive = true, force = true)
+    end
     local t_tree = time() - t0
     local harness = read(joinpath(ROOT, "test", "climb_l228.py"), String)
     local cost = Dict{Int,Float64}()
@@ -3235,12 +3284,7 @@ function bounded_behaviour_negatives_missed()::Vector{String}
         local o = String[]
         occursin(Regex("(?m)^# $(section)\\. "), harness) || return (push!(o, "L228's behaviour negative names no section of the harness: $what (section $section)"), section, 0.0)
         local t1 = time()
-        local t = mktempdir()
-        mkpath(joinpath(t, "dev"))
-        cp(joinpath(ROOT, "dev", "climb"), joinpath(t, "dev", "climb"))
-        cp(joinpath(ROOT, "dev", "src_verdict.sh"), joinpath(t, "dev", "src_verdict.sh"))
-        cp(joinpath(ROOT, "dev", "d14_judge.sh"), joinpath(t, "dev", "d14_judge.sh"))   # section 6's judge (throughput P0)
-        cp(joinpath(ROOT, "dev", "formal"), joinpath(t, "dev", "formal"))   # sections 17's and 18's: run_tlc.sh, its launcher, the models
+        local t = l228_copy()   # its own copy of exactly the harness's inputs
         local f = joinpath(t, path)
         local text = read(f, String)
         count(a, text) == 1 || return (push!(o, "L228's behaviour negative cannot plant: $what"), section, time() - t1)
@@ -3255,11 +3299,7 @@ function bounded_behaviour_negatives_missed()::Vector{String}
     end
     # the runner's own: a section that hangs (a planted sleep in what section 1 calls) is a fault naming it, within its
     # limit (WT_L228_LIMIT_S, a few seconds here), never a wait
-    let t = mktempdir()
-        mkpath(joinpath(t, "dev"))
-        cp(joinpath(ROOT, "dev", "climb"), joinpath(t, "dev", "climb"))
-        cp(joinpath(ROOT, "dev", "src_verdict.sh"), joinpath(t, "dev", "src_verdict.sh"))
-        cp(joinpath(ROOT, "dev", "d14_judge.sh"), joinpath(t, "dev", "d14_judge.sh"))
+    let t = l228_copy()
         local f = joinpath(t, "dev", "climb", "measure.py")
         write(f, replace(read(f, String), "def src_target(band, src_change):\n" => "def src_target(band, src_change):\n    __import__(\"time\").sleep(600)\n"))
         local t1 = time()
@@ -3275,11 +3315,7 @@ function bounded_behaviour_negatives_missed()::Vector{String}
     append!(out, l228_cpu_fault(cpu, L228_CPU_BUDGET_S))
     # the budget's own: a section that burns CPU (a planted busy loop in what section 1 calls, 4 CPU-seconds) reads past a
     # budget of 2 through the same measure and comparison
-    let t = mktempdir()
-        mkpath(joinpath(t, "dev"))
-        cp(joinpath(ROOT, "dev", "climb"), joinpath(t, "dev", "climb"))
-        cp(joinpath(ROOT, "dev", "src_verdict.sh"), joinpath(t, "dev", "src_verdict.sh"))
-        cp(joinpath(ROOT, "dev", "d14_judge.sh"), joinpath(t, "dev", "d14_judge.sh"))
+    let t = l228_copy()
         local f = joinpath(t, "dev", "climb", "measure.py")
         write(f, replace(read(f, String), "def src_target(band, src_change):\n" =>
             "def src_target(band, src_change):\n    _t = __import__(\"time\").process_time()\n    while __import__(\"time\").process_time() - _t < 4:\n        pass\n"))
@@ -4659,7 +4695,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L228_bounded_landing_check" => ("a landing's check runs the test set the climb's lander chose before it, from origin's code and state, and nothing else (the landing-check ruling R1-R3, R6, built 2026-11-11, waiting on Dale's word on C10's wording; dev/LEDGER.md D16: full suites on every landing cost the loop and answer a different question): dev/check.sh refuses before any Julia a landing with no set handed (WT_SRC_SET), a set its own user can write and a set made for another HEAD, and hands the set to every shard; dev/climb/door.py's land job gives the set from its run directory, which its user reads and cannot write; the cost table each landing's own processes rewrote (wt-src-instr.tsv, WT_SRC_COSTS_OUT, door.land_costs) is named by no code file; and src_margin_min_s (10-20), src_margin_checks (5-20), src_margin_start_s (20-40), src_margin_max_s (30-44), src_unverified_max (3-12) and fixfirst_max_landings (3-12) exist inside their bands in dev/climb/defaults.py; the target a landing's share is cut to is computed live by measure.src_target: its target is derived from measured checks once ten of the shape exist, from the stated start margin before (D14's band less three times the second-largest positive prediction error of the shape's last src_margin_checks landed checks, src_margin_start_s until that many exist, between src_margin_min_s and src_margin_max_s, spec v17 Z5; spec v20 F4), the share cut to it alone, the ship event recording it, and the hand-set target it replaced named by no code file. and the four the round-13 architect names are read where the driver writes them: the lander refuses a check's records that name a file outside the set it handed; a landing's green record is exactly the files its check reported green (never \"all\"); a red on test files alone runs its files at origin's head before any move is charged (R3); a fix-first landing clears a src-test red only when its check ran the file green. Behavior, run here: the driver's landing-check code is CALLED (test/climb_l228.py: src_target, src_set, the lander's verified_rows and origin_red, dev/src_verdict.sh, on a scratch repository and state with planted checks, a score record and shard records; spec v17 Z6) and reads no fault; seventy-six behaviour breaks planted in copies of it (a target of 10 ** 6, an empty share, a missing row accepted, an innocent move charged, a two-sided margin, a check standing with a file unrun, a known red read as the change's, a known red keyed by its first failure alone, a red's identity read as a set, a block after the canary's row read, records with a broken block grammar read, a void read as green; and no routine hold before a landing check (throughput P0, lander._land with ship.sh stood in): a check gated on a quiet machine again, the band judged whatever the machine read at the check's ends, an unjudged time read into the margin, Low Power Mode taken for quiet; and the rebased check and its bound (judge5 S1, judge6a F1, F2: the table's row of another judge kept, origin's case the table lacks judged as new, a label origin's corpus dropped sent to origin's measurement, a driver fault judging an item retried without a bound, a step before the landing whose fault aborts the round; and the shapes' charge (judge5 S2, judge6a F3, F4: a move's own refused record never charged, a move charged whenever the rerun reads, a git failure choosing the shapes' program not caught as OracleGap, a judge without test/oracle_read.jl read by a failed show; and a landed head's base seeded from its landing (throughput T3(i)): rows of another tree, another driver's rows, another judge's rows, a base measured meanwhile written over the seed's; and a driver fault's backoff ending when the driver's code changes: waiting whatever the driver, written with no driver, counted on from the old driver's; and a move's base costing nothing when it can (throughput T4, slots.move with its door stood in): an older base taken one label short, under another judge, from a file keyed by no driver's tree, a move measured at origin's head whatever is on file, a complete base read under the lock, a judge file a commit lacks naming the commit; a compiling process SIGKILLed from outside booked as its case's row; the report saying the week's pause whatever budget_holds; an item of more than one commit queued; the src-gap job (the files the landings' shares left unrun, run whatever else runs) never started by the lander's round, started when nothing is due, run in the score's lane, run again at a head it ran at, run at a head with its src record; and the model checker's jar in a landing (door.pins, dev/formal/run_tlc.sh): not mirrored, mirrored of another hash, downloaded inside a landing, run of another hash; and TLC inside the check profile (dev/formal/NoListenTLC.java): run with its RMI export binding a socket, the launcher's export binding one; and a measurement in flight never restarted by a landing (T5, modelled in dev/formal/MeasureLocks.tla): restarted by a check that needs no measuring role, its stop neither sent nor read back, land() without stops, the stopped time counted in the wall and the budget, no CONT, a reused pid taken for a mark's writer, the lander's next check past a `next` claim, a yielded measurement past a paused one's claim (two slots and the lander in the review's F1 ordering), a pause that ends without the lock (past its limit, or by an exception) continuing its processes before their reap; and the door's one root: a LOCKS moved apart from its TOP used as it stands, a run directory given under it, a measurement mark read from it; a move's measurement fault ending the move, measured again without end, a move's gate without the re-measure; a climber's run a landing's window stopped never resumed, one resumed though no window stopped it, the resume capped as a counted one, a window's span read unclipped; a slot's move the driver failed: backing off as any infra, a driver fault's first wait retry_backoff_s) are each caught by what a call returns, each break run on its own section alone by the harness's runner (test/climb_l228.py: every section a child of its own under a hard limit that names it, a planted hang read as section 1 past its limit; the 2026-11-14 landing check's ratchet passed its 480-s hard limit when the negative ran the whole harness once a break), the harness and its negatives within L228_CPU_BUDGET_S of their children's CPU (intent: 175-275 CPU-seconds by where it runs, the harness once and each break's own section; band: 200-500 s, past it a fault, the wall time printed beside it; a section burning CPU reads past a budget of 2, the budget's own negative); and fourteen text breaks of what only the text shows (check.sh's refusals, the door, the deleted table, the keys) are each named. Two static stopgaps on what a test process can reach (spec v17 Z4; proposed apart as L229 and L230), each file read through Julia's parser: src/ loads no Test and names no `Test.`, `exit`, `atexit`, `_WT_` name or the records' variables; a file under test/src names no Test internal but its macros, no `exit`/`atexit`, WT_SRC_*, .wtd, git command, clock or date, and evals into no module but its own, past an exact allowlist each entry of which a file needs; seventeen planted reaches are each named (red's round-15 p7 among them). When each part runs (spec v18 Q5): the text checks and the reach negatives always; the behaviour harness with its negatives (D38) when the landing's diff from CHECK_BASE touches dev/climb, dev/src_verdict.sh, dev/check.sh, test/src_tests.jl, test/src_canary.jl, test/climb_l228.py or this file, when its range closes a clause (`Closes: C<n>`), or when no base can be read; the reach checks on the src and test/src files the landing changes, the whole tree with the allowlist's exactness when this file changes or the run is full (dev/CHARTER.md C10)",
+    "L228_bounded_landing_check" => ("a landing's check runs the test set the climb's lander chose before it, from origin's code and state, and nothing else (the landing-check ruling R1-R3, R6, built 2026-11-11, waiting on Dale's word on C10's wording; dev/LEDGER.md D16: full suites on every landing cost the loop and answer a different question): dev/check.sh refuses before any Julia a landing with no set handed (WT_SRC_SET), a set its own user can write and a set made for another HEAD, and hands the set to every shard; dev/climb/door.py's land job gives the set from its run directory, which its user reads and cannot write; the cost table each landing's own processes rewrote (wt-src-instr.tsv, WT_SRC_COSTS_OUT, door.land_costs) is named by no code file; and src_margin_min_s (10-20), src_margin_checks (5-20), src_margin_start_s (20-40), src_margin_max_s (30-44), src_unverified_max (3-12) and fixfirst_max_landings (3-12) exist inside their bands in dev/climb/defaults.py; the target a landing's share is cut to is computed live by measure.src_target: its target is derived from measured checks once ten of the shape exist, from the stated start margin before (D14's band less three times the second-largest positive prediction error of the shape's last src_margin_checks landed checks, src_margin_start_s until that many exist, between src_margin_min_s and src_margin_max_s, spec v17 Z5; spec v20 F4), the share cut to it alone, the ship event recording it, and the hand-set target it replaced named by no code file. and the four the round-13 architect names are read where the driver writes them: the lander refuses a check's records that name a file outside the set it handed; a landing's green record is exactly the files its check reported green (never \"all\"); a red on test files alone runs its files at origin's head before any move is charged (R3); a fix-first landing clears a src-test red only when its check ran the file green. Behavior, run here: the driver's landing-check code is CALLED (test/climb_l228.py: src_target, src_set, the lander's verified_rows and origin_red, dev/src_verdict.sh, on a scratch repository and state with planted checks, a score record and shard records; spec v17 Z6) and reads no fault; seventy-nine behaviour breaks planted in copies of it (a target of 10 ** 6, an empty share, a missing row accepted, an innocent move charged, a two-sided margin, a check standing with a file unrun, a known red read as the change's, a known red keyed by its first failure alone, a red's identity read as a set, a block after the canary's row read, records with a broken block grammar read, a void read as green; and no routine hold before a landing check (throughput P0, lander._land with ship.sh stood in): a check gated on a quiet machine again, the band judged whatever the machine read at the check's ends, an unjudged time read into the margin, Low Power Mode taken for quiet; and the rebased check and its bound (judge5 S1, judge6a F1, F2: the table's row of another judge kept, origin's case the table lacks judged as new, a label origin's corpus dropped sent to origin's measurement, a driver fault judging an item retried without a bound, a step before the landing whose fault aborts the round; and the shapes' charge (judge5 S2, judge6a F3, F4: a move's own refused record never charged, a move charged whenever the rerun reads, a git failure choosing the shapes' program not caught as OracleGap, a judge without test/oracle_read.jl read by a failed show; and a landed head's base seeded from its landing (throughput T3(i)): rows of another tree, another driver's rows, another judge's rows, a base measured meanwhile written over the seed's; and a driver fault's backoff ending when the driver's code changes: waiting whatever the driver, written with no driver, counted on from the old driver's; and a move's base costing nothing when it can (throughput T4, slots.move with its door stood in): an older base taken one label short, under another judge, from a file keyed by no driver's tree, a move measured at origin's head whatever is on file, a complete base read under the lock, a judge file a commit lacks naming the commit; a compiling process SIGKILLed from outside booked as its case's row; the report saying the week's pause whatever budget_holds; an item of more than one commit queued; the src-gap job (the files the landings' shares left unrun, run whatever else runs) never started by the lander's round, started when nothing is due, run in the score's lane, run again at a head it ran at, run at a head with its src record; and the model checker's jar in a landing (door.pins, dev/formal/run_tlc.sh): not mirrored, mirrored of another hash, downloaded inside a landing, run of another hash; and TLC inside the check profile (dev/formal/NoListenTLC.java): run with its RMI export binding a socket, the launcher's export binding one; and a measurement in flight never restarted by a landing (T5, modelled in dev/formal/MeasureLocks.tla): restarted by a check that needs no measuring role, its stop neither sent nor read back, land() without stops, the stopped time counted in the wall and the budget, no CONT, a reused pid taken for a mark's writer, the lander's next check past a `next` claim, a yielded measurement past a paused one's claim (two slots and the lander in the review's F1 ordering), a pause that ends without the lock (past its limit, or by an exception) continuing its processes before their reap; and the door's one root: a LOCKS moved apart from its TOP used as it stands, a run directory given under it, a measurement mark read from it; a move's measurement fault ending the move, measured again without end, a move's gate without the re-measure; a climber's run a landing's window stopped never resumed, one resumed though no window stopped it, the resume capped as a counted one, a window's span read unclipped; a plant the machine failed read as the commit's, the check's plant failure exiting as a red, ship.sh reading its 16 as any OTHER; a slot's move the driver failed: backing off as any infra, a driver fault's first wait retry_backoff_s) are each caught by what a call returns, each break run on its own section alone by the harness's runner (test/climb_l228.py: every section a child of its own under a hard limit that names it, a planted hang read as section 1 past its limit; the 2026-11-14 landing check's ratchet passed its 480-s hard limit when the negative ran the whole harness once a break), the harness and its negatives within L228_CPU_BUDGET_S of their children's CPU (intent: 175-275 CPU-seconds by where it runs, the harness once and each break's own section; band: 200-500 s, past it a fault, the wall time printed beside it; a section burning CPU reads past a budget of 2, the budget's own negative); and fourteen text breaks of what only the text shows (check.sh's refusals, the door, the deleted table, the keys) are each named. Two static stopgaps on what a test process can reach (spec v17 Z4; proposed apart as L229 and L230), each file read through Julia's parser: src/ loads no Test and names no `Test.`, `exit`, `atexit`, `_WT_` name or the records' variables; a file under test/src names no Test internal but its macros, no `exit`/`atexit`, WT_SRC_*, .wtd, git command, clock or date, and evals into no module but its own, past an exact allowlist each entry of which a file needs; seventeen planted reaches are each named (red's round-15 p7 among them). When each part runs (spec v18 Q5): the text checks and the reach negatives always; the behaviour harness with its negatives (D38) when the landing's diff from CHECK_BASE touches dev/climb, dev/src_verdict.sh, dev/check.sh, test/src_tests.jl, test/src_canary.jl, test/climb_l228.py or this file, when its range closes a clause (`Closes: C<n>`), or when no base can be read; the reach checks on the src and test/src files the landing changes, the whole tree with the allowlist's exactness when this file changes or the run is full (dev/CHARTER.md C10)",
         () -> begin
             local v = vcat(bounded_check_faults(read(joinpath(ROOT, "dev", "check.sh"), String),
                                                 read(joinpath(ROOT, "dev", "climb", "door.py"), String),
@@ -4670,9 +4706,10 @@ const LOCKS = [
             # spec v18 Q5: the behaviour harness and its negatives (D38: together) when the landing touches what they
             # test or closes a clause; the reach checks on the files it changes, the whole tree when it is full
             local sc = l228_scope()
+            append!(v, l228_scope_negatives_missed())
             sc.harness && append!(v, bounded_behaviour_negatives_missed())
             append!(v, sc.full ? reach_all_faults() : reach_changed_faults(sc.changed))
-            println("    L228 ran: ", sc.harness ? "the behaviour harness and its negatives" : "no behaviour harness (the landing touches none of its inputs)",
+            println("    L228 ran: ", sc.harness ? "the behaviour harness and its negatives" : "no behaviour harness: the landing touches none of its inputs since the record $(first(sc.base, 10)) (origin's history, where it ran or carried green)",
                     "; the reach checks on ", sc.full ? "every file" : "$(count(f -> startswith(f, "src/") || startswith(f, "test/src/"), sc.changed)) changed file(s)")
             foreach(x -> println("    ✗ ", x), v)
             length(v)

@@ -838,6 +838,22 @@ def src_gap_spawn(origin):
                             env=dict(os.environ, WT_CLIMB_LOOP="src-gap"), stdout=log, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL)
 
+def held_result(kind, arg, out):
+    """Whether ship.sh's result keeps the item queued as it is, no verdict on the commit (a landing round then ends):
+    NETWORK (origin unreachable: a backoff, 17), the line stop or a hold, a stale or busy ship.sh, origin moved past its
+    base (re-measured next round), and `OTHER plant`, dev/check.sh's 16: the machine failed the load counter's plant (its
+    performance cores denied to the check's tree), a backoff of minutes and the check tried again (2026-11-14 17:57:38Z:
+    d0f7ce07 was dropped as landing-red for it, and its next check passed); its evidence is in the check's log
+    (tree_plant.out: the plant's splits, its darwin-background state and QoS, the check's ancestors)."""
+    if kind == "NETWORK":
+        back_off("lander", why=f"dev/ship.sh could not reach origin ({arg}): {out[-300:]}", note_at=1)
+        return True
+    if kind == "OTHER" and arg == "plant":
+        back_off("lander", "plant", why=f"the check's load counter failed its plant (the machine's state): {out[-300:]}",
+                 first=cfg()["driver_fault_backoff_s"], note_at=1)
+        return True
+    return arg in ("held", "linestop", "stale-ship", "busy", "moved")
+
 def land_round():
     """One round: what a killed lander left, then the queue in order; each item through its pinned sha, its gates read
     again, ship.sh's admission, a re-measure when origin moved past its base, the quiet probe and the check. The
@@ -956,7 +972,7 @@ def land_round():
             event("src-known-red", hold=item["hold"], red=sorted(f for f, o in recs.items() if o != "passed"))
         if kind == "LANDED":
             if landed_item(item, arg):
-                near_band(); recovered("lander")
+                near_band(); recovered("lander"); recovered("lander", "plant")
                 # the next landing's layer, of the head this one made, built now under the verify lock alone, never on
                 # that landing's critical path with both measurement locks held (round 9's architect, S3)
                 try:
@@ -985,9 +1001,7 @@ def land_round():
             return 3
         if arg == "hourly":
             continue
-        if kind == "NETWORK" or arg in ("held", "linestop", "stale-ship", "busy", "moved"):   # moved: re-measured next round
-            if kind == "NETWORK":   # never the item's fault: it stays queued (17)
-                back_off("lander", why=f"dev/ship.sh could not reach origin ({arg}): {out[-300:]}", note_at=1)
+        if held_result(kind, arg, out):   # never the item's: it stays queued
             return 3
         if kind == "NOTHING":   # its patch is on origin (booked there), or it carries nothing
             hit = patch_ids(f"{item['base']}..origin/{MARCH}").get(item["patch_id"])

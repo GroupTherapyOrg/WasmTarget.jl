@@ -271,6 +271,7 @@ record_failure() {
     case "$rc" in 10) red="check: RED — ${path:-?} s, past D14's band" ;; 11) red="check: RED — past the hard limit" ;;
       14) red="check: red on its test files (its outputs in wt-ship-failed/$(basename "$lane")/, src_records.*.out)" ;;
       15) red="check: a test process void (its outputs in wt-ship-failed/$(basename "$lane")/, src_records.void.out)" ;;
+      16) red="check: the machine failed the load counter's plant, no verdict on the commit (wt-ship-failed/$(basename "$lane")/tree_plant.out)" ;;
       *) red="check: red, its exit status ${rc:-none} (its outputs in wt-ship-failed/$(basename "$lane")/)" ;; esac
   else red=$(grep -m1 -E '^ship: REFUSED|CONFLICT|could not apply|^pre-push: REFUSED' .wtd/rebase.out 2>/dev/null | cut -c1-240 | tr '\t' ' '); fi
   printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(basename "$lane")" "$at" "$red" >> "$common/wt-ship-failures.tsv"
@@ -286,7 +287,7 @@ red_kind() {
   case "$(cat "$WT_SHIP_STEP" 2>/dev/null)" in
     check) read -r rc path < "$WT_CHECK_RESULT" 2>/dev/null
       case "$rc" in 10) echo "D14 ${path:-0}" ;; 11) echo "OTHER hang" ;; 12) echo "REFUSED linestop" ;; 13) echo "REFUSED held" ;;
-        1) echo "OWN check" ;; 14) echo "OWN tests" ;; 15) echo "OWN void" ;; *) echo "OTHER check-${rc:-none}" ;; esac ;;
+        1) echo "OWN check" ;; 14) echo "OWN tests" ;; 15) echo "OWN void" ;; 16) echo "OTHER plant" ;; *) echo "OTHER check-${rc:-none}" ;; esac ;;
     regen) echo "OTHER regen" ;;
     still) echo "REFUSED held" ;;
     tree) echo "OTHER tree" ;;

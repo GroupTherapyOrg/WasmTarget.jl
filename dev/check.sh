@@ -221,7 +221,22 @@ RATE_P_LOAD=12.0
 # report, and the shards' node and wasm-opt are children too). D14's band reads them below. The counter's plant runs
 # first: a tree whose grandchild does fixed work, counted whole, each split inside its whole, and a run at background
 # QoS read wholly on efficiency cores
-julia --startup-file=no dev/tree_instructions.jl --plant > .wtd/tree_plant.out 2>&1 || { echo "check: the load's instruction counter fails its plant: $(tail -1 .wtd/tree_plant.out)"; exit 1; }
+# A plant that fails is the machine's state (its performance cores denied to this check's tree), never the commit's: exit
+# 16, which dev/ship.sh reads as `OTHER plant` and the lander as infrastructure (the item kept, checked again after a
+# backoff; 2026-11-14 17:57:38Z d0f7ce07 was dropped as landing-red for it, its next check passed); the log keeps the
+# plant's own evidence (each run's split, this process's darwin-background state and QoS: tree_instructions.jl) and this
+# check's ancestors as the kernel shows them, so the next one names what clamped it
+plant_chain() {
+  local p=$$ n=0
+  while [ -n "$p" ] && [ "$p" -gt 1 ] && [ $n -lt 16 ]; do
+    ps -o pid=,ppid=,user=,nice=,pri=,stat=,command= -p "$p" 2>&1 | cut -c1-200
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' '); n=$((n + 1))
+  done
+}
+julia --startup-file=no dev/tree_instructions.jl --plant > .wtd/tree_plant.out 2>&1 || {
+  echo "check: the load's instruction counter fails its plant: $(tail -1 .wtd/tree_plant.out)"
+  { echo "the check's ancestors (pid ppid user nice pri stat command):"; plant_chain; } | tee -a .wtd/tree_plant.out
+  exit 16; }
 julia --startup-file=no dev/tree_instructions.jl .wtd/load.gi julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
 # a hard limit no stage may outlive, whatever the load: a hang is red within minutes and names the
 # test file and case it was running (WT_PROGRESS), never an hour of a pinned core (2026-10-28: a

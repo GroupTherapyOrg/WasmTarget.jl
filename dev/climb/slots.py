@@ -314,7 +314,9 @@ def through_pauses(so, last, again, hold, slot_name):
     at the move's cap (climber_cap). On 2026-11-14 two runs of climb-1 gave up after a landing's window stopped their
     processes: a dev/lanetest.sh past its 900-s wall-clock limit (16:57-17:37Z), a Kaimon job read as hung at 6m52s
     (17:49-17:58Z); the driver's walls count awake time (door.awake), the climber's tools cannot. Once per run stopped:
-    a run no window stopped ends it, so the resumes are bounded by the landings during the move."""
+    a run no window stopped ends it, so the resumes are bounded by the landings during the move. It resumes any outcome
+    but a commit, a stop of the climber's own for a reason the window did not cause (a ruling it needs) among them: at
+    worst one resume that repeats that stop."""
     while isinstance(so, dict) and so.get("outcome") != "committed":
         spans = last()
         if not spans:

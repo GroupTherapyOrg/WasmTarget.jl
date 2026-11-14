@@ -797,7 +797,8 @@ try:
     pre18 = [] if nested18 else ["/usr/bin/sandbox-exec", "-f", door.profile(f"{tmp}/check18.sb", [home18], kind="check")]
     env18 = {"HOME": os.environ["HOME"] if nested18 else home18, "TMPDIR": f"{home18}/tmp", "LANG": "en_US.UTF-8",
              "CHECK_LANDING": "1", "TLA2TOOLS_JAR": jar18, "PATH": f"{jdk18}:/usr/bin:/bin",
-             "DEVELOPER_DIR": "/Library/Developer/CommandLineTools", "TLC_ONLY": "MCBoxJoin.cfg MCBoxJoinOrderBroken.cfg"}
+             "DEVELOPER_DIR": "/Library/Developer/CommandLineTools", "TLC_ONLY": "MCBoxJoin.cfg MCBoxJoinOrderBroken.cfg",
+             "TLC_WORKERS": "1"}   # two models of a few states: one worker (auto spent every core's time)
     if not os.path.isfile(jar18):
         fault(f"no tla2tools.jar at {jar18}: TLC cannot be run inside the profile here")
     else:
@@ -969,17 +970,17 @@ try:
         return out[2], out[1], secs, lines, running
     import fcntl
     FIRST19 = 12.0   # a case's budget here (no label timed): under the check's 15 s, so a stop counted in it cuts the case,
-    # and far over a case's 0.8 CPU-seconds, which at background QoS on a busy machine took over 4 s of wall (2026-11-14,
-    # a 4-s budget killed a/02 in the landing check's sandbox with nothing broken); after a stop a case outlasts the
-    # watch's next tick, as a stopped compile's case does
+    # and far over a case's 0.3 CPU-seconds (a 0.8-CPU-second case took over 4 s of wall at background QoS on a busy
+    # machine, 2026-11-14, and a 4-s budget killed a/02 in the landing check's sandbox with nothing broken); after a stop
+    # a case still outlasts the watch's next tick (0.05 s), as a stopped compile's case does
     # one check mid-measurement: the measurement pays the check's time alone, nothing restarted
     # (the lander's process takes a second or two to load the driver: the stand-ins outlast that); the same
     # measurement with no check first, its time the one the check's is weighed against. Section 22 needs this one's
     # helpers alone: its scenarios run when it is the section run (__section__)
     if __section__ != 19:
         raise StopIteration
-    _, _, base19, _, _ = measure19(4, 0.8, 0, 0, 0.0)
-    n19, k19, s19, l19, _ = measure19(4, 0.8, 1, 15.0, 0.4)
+    _, _, base19, _, _ = measure19(4, 0.3, 0, 0, 0.0)
+    n19, k19, s19, l19, _ = measure19(4, 0.3, 1, 15.0, 0.4)
     if n19 != 1 or k19 or not l19 or l19[0][1] != "T" or s19 > base19 + 15.0 + 3.0:
         fault(f"a check mid-measurement: {n19} process(es) (1 expected: no restart), kills {k19}, the stand-in "
               f"{'stopped' if l19 and l19[0][1] == 'T' else 'running'} under the check ({l19}), {s19:.1f} s where it took {base19:.1f} s with no check, for a 15-s check")
@@ -1602,3 +1603,32 @@ except Exception as e:
     fault(f"a climber's run past a landing's window raised {type(e).__name__}: {str(e)[:240]}")
 finally:
     door._window, door.CLOCK = real28["window"], real28["clock"]
+
+# 29. a plant the machine fails holds the item, never drops it (lander.held_result; dev/check.sh's 16, dev/ship.sh's
+# `OTHER plant`): the load counter's plant failing is the machine's state, so the check exits 16, ship.sh names it OTHER
+# plant (read from their texts: ship.sh is never run here), and the lander keeps the item queued with a backoff of
+# driver_fault_backoff_s (lander:plant) where any other OTHER is retried and then dropped; NETWORK is held as before
+#: limit 60
+try:
+    import time as _t29
+    out29 = {k: L.held_result(*k, "the check's output") for k in (("OTHER", "plant"), ("OTHER", "check-1"), ("NETWORK", "fetch"),
+                                                                    ("REFUSED", "held"), ("OWN", "check"))}
+    want29 = {("OTHER", "plant"): True, ("OTHER", "check-1"): False, ("NETWORK", "fetch"): True, ("REFUSED", "held"): True,
+              ("OWN", "check"): False}
+    b29 = core.state_json("backoff.json", {}).get("lander:plant", {})
+    left29 = b29.get("until", 0) - _t29.time()
+    if out29 != want29 or not (0 < left29 <= core.cfg()["driver_fault_backoff_s"] + 5):
+        fault(f"ship.sh's results the lander holds (held?): {out29} (expected {want29}); the plant's backoff {round(left29)} s "
+              f"(driver_fault_backoff_s {core.cfg()['driver_fault_backoff_s']} expected)")
+    chk29, ship29 = open(f"{root}/dev/check.sh").read(), open(f"{root}/dev/ship.sh").read()
+    at29 = chk29.find("dev/tree_instructions.jl --plant > .wtd/tree_plant.out 2>&1 || {")
+    blk29 = chk29[at29:].split("\n")[:6] if at29 >= 0 else []   # the plant's failure block: its own few lines
+    end29 = next((l for l in blk29 if l.rstrip().endswith("}")), "")
+    if at29 < 0 or "exit 16;" not in end29:
+        fault("dev/check.sh's plant failure does not exit 16 (the machine's state, which the lander holds)")
+    if not re.search(r'16\) echo "OTHER plant" ;;', ship29):
+        fault("dev/ship.sh does not read the check's 16 as OTHER plant")
+except Exception as e:
+    fault(f"a plant the machine fails raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    core.recovered("lander", "plant"); core.recovered("lander")

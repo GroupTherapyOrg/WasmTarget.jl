@@ -147,7 +147,12 @@ function plant()::Vector{String}
     # background QoS (dev/ship.sh launched under taskpolicy -b, 2026-11-02 08:19: every shard on efficiency cores, a
     # docs-only commit red on the 480-s hard limit holding the landing lock) or one with every performance core held, and
     # D14's band means nothing on it: refused here, in seconds (band: the background run's 2%)
-    normal.pcpu > 0.02 * normal.cpu || push!(faults, "the default-QoS run spent $(round(normal.pcpu; digits = 3)) of $(round(normal.cpu; digits = 2)) CPU-s on performance cores: this check runs at background QoS or with every performance core held; launch dev/ship.sh plainly, never under taskpolicy -b")
+    # its evidence, as the kernel shows it: both runs' splits, and this process's darwin-background state
+    # (getpriority(PRIO_DARWIN_PROCESS, 0): nonzero when the process is clamped to background) and its thread's QoS class
+    # (qos_class_self: 0x21 user-interactive, 0x19 user-initiated, 0x15 default, 0x11 utility, 0x09 background)
+    local bg = ccall(:getpriority, Cint, (Cint, Cuint), 4, 0)
+    local qos = ccall(:qos_class_self, Cuint, ())
+    normal.pcpu > 0.02 * normal.cpu || push!(faults, "the default-QoS run spent $(round(normal.pcpu; digits = 3)) of $(round(normal.cpu; digits = 2)) CPU-s on performance cores ($(round(normal.pg; digits = 2)) of $(round(normal.g; digits = 2)) G), the background run $(round(background.pcpu; digits = 3)) of $(round(background.cpu; digits = 2)) CPU-s; this process's darwin-background state $(bg), its thread's QoS class 0x$(string(qos; base = 16)): this check runs at background QoS or with every performance core held; launch dev/ship.sh plainly, never under taskpolicy -b")
     # a grandchild behind a protected binary reports nothing (the loader strips DYLD_ variables from perl and what it
     # execs), and its CPU seconds are the kernel's remainder: at least most of the grandchild's own
     local wrapped = `perl -e 'exec @ARGV' $work`
