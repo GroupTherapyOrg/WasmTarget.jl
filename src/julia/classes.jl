@@ -267,6 +267,12 @@ formal(dev/formal/TypeParamClasses.tla): where a type value is held, every liste
             # throw_methoderror's arguments, the tuple jl_method_error makes of them (jl_f_tuple), passed
             # as the runtime's open Tuple: the record of their count
             st isa NirCall && nir_callee(st) === Core.throw_methoderror && _meet_value!(out, seen, tuple_record_class(length(st.args) - 2), at)
+            # a memory builtin on a reference whose type is no concrete GenericMemoryRef checks its
+            # operand at run time (builtins.c:1781 jl_f_memoryrefget's JL_TYPECHK, the erased arm of
+            # src/intrinsics.jl), raising TypeError with GenericMemoryRef, the type as a value
+            st isa NirCall && length(st.args) >= 2 && nir_callee(st) isa Core.Builtin &&
+                Dart2Wasm.generate_static_intrinsic(Val(:memory_erased_call), nir_callee(st), length(st.args) - 1, nir_value_type(b, st.args[2])) &&
+                _meet_constant!(out, seen, objs, GenericMemoryRef, at)
             if st isa NirInvoke
                 local vt = nir_vararg_call_tuple(b, st)
                 vt !== nothing && (isconcretetype(vt) ? _meet_value!(out, seen, vt, at) : _meet_tuple_record!(out, seen, vt, at))

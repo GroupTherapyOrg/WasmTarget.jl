@@ -635,7 +635,7 @@ end
     (f === Core.memorynew || f === Core.memoryrefnew || f === Core.memoryrefget || f === Core.memoryrefset! ||
      f === Core.memoryrefoffset || f === Core.memoryref_isassigned || f === Core.memoryrefswap! ||
      f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) &&
-        return generate_static_intrinsic(self, Val(:memory), f, args)
+        return generate_static_intrinsic(self, Val(:memory), f, args, nothing)
     f === Core.isdefined && length(args) in (2, 3) && return generate_static_intrinsic(self, Val(:isdefined), f, args)
     # typeof of a value only run time knows: Julia's jl_typeof, a read of the value's tag
     f === Core.typeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:to_typeof), args; tag_of_value = true)
@@ -1283,7 +1283,10 @@ end
 #   defined, true for any other.
 # An order other than :not_atomic (Julia's emit_atomic_error and the atomic orders) and atomic memory,
 # and memoryrefswap!, replace!, setonce! and modify!, reject Unquarantined, located: gaps, never done.
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+# A reference whose type is no concrete GenericMemoryRef is the erased arm's (Val(:memory_erased)), its
+# class-id switch calling this arm once per reference class with `ref`: that class and the local holding
+# the operand, read by a cast to the class where the operand is otherwise translated.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory}, @nospecialize(f::Core.Builtin), args::Vector{NirValue}, ref::Union{Nothing,Tuple{DataType,WasmBuilder.IR.Local}})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local t = translator(self)
     local I32, I64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
@@ -1292,10 +1295,21 @@ end
     (f === Core.memoryrefswap! || f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) && atomic_gap()
     local ty(v::NirValue) = dart_type_of(self, v)
     # cgutils.cpp:2067 bounds_check_enabled: --check-bounds=yes checks, =no never, else unless the flag
-    # is the constant false (a flag known only at run time checks)
+    # is the constant false (a flag known only at run time checks). Reached through the erased arm
+    # (`ref`), where this says no check, Julia's answer depends on what its codegen knows: the runtime's
+    # builtin checks whatever the flag and the option say (jl_f_memoryrefnew's offset bound,
+    # builtins.c:1743-1756; jl_f_memoryrefget's and jl_f_memoryrefset's empty memory, :1801, :1826;
+    # jl_f_memoryref_isassigned's false, :1852), but a reference behind a compilerbarrier reaches
+    # codegen with its own type (emit_builtin_call's compilerbarrier gives its operand's cgval), whose
+    # arm skips the check (measured: an empty Memory{Int64}'s reference through inferencebarrier,
+    # memoryref_isassigned with the constant false flag answers true natively, memoryrefget no
+    # BoundsError). That form rejects, located, a gap
     local bounds_check_enabled(bc::Union{NirValue,Nothing}) = begin
         local opt = Base.JLOptions().check_bounds
-        opt == 1 ? true : opt == 2 ? false : !(bc isa NirConst && bc.c.val === false)
+        local checks = opt == 1 ? true : opt == 2 ? false : !(bc isa NirConst && bc.c.val === false)
+        ref === nothing || checks ||
+            reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $(nameof(f)) without its bounds check on a reference whose type only run time knows, which the runtime's builtin checks and Julia's codegen, knowing the type, does not"), at)
+        checks
     end
     local fields_of(T::Type) = generate_static_intrinsic(self, Val(:fields_of), T, at)
     local field(fs::Dict{String,ClassField}, name::String) = generate_static_intrinsic(Val(:field), fs, name, at)
@@ -1366,7 +1380,7 @@ end
         return mem_type
     end
     # every other builtin takes a reference first
-    local RT = ty(args[1])
+    local RT = ref === nothing ? ty(args[1]) : ref[1]
     local ref_parts(R::Type) = begin
         (R isa DataType && R <: GenericMemoryRef && R.parameters[1] === :not_atomic) || atomic_gap()
         local rinfo, rfs = fields_of(R)
@@ -1383,12 +1397,18 @@ end
         new_struct(new_info, new_fs, Dict{String,Function}("ptr_or_offset" => () -> WasmBuilder.i64_const(b, 0), "mem" => () -> WasmBuilder.local_get(b, m)))
         return WasmBuilder.with_nullability(repr(new_info), false)
     end
-    RT isa DataType && RT <: GenericMemoryRef || return nothing
+    RT isa DataType && RT <: GenericMemoryRef && isconcretetype(RT) ||
+        return generate_static_intrinsic(self, Val(:memory_erased), f, args, RT)
     local rinfo, rfs, off, mem = ref_parts(RT)
     local M = GenericMemory{RT.parameters...}
     local minfo, mfs, data, array_type, is_set, flag_type = memory_of(M)
     local r = add_local(code_gen, WasmBuilder.with_nullability(repr(rinfo), false))
-    translate_expression(code_gen, args[1], r.type)
+    if ref === nothing
+        translate_expression(code_gen, args[1], r.type)
+    else
+        WasmBuilder.local_get(b, ref[2])
+        WasmBuilder.ref_cast(b, r.type)
+    end
     WasmBuilder.local_set(b, r)
     local get_offset() = (WasmBuilder.local_get(b, r); WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[off]))
     local get_mem() = (WasmBuilder.local_get(b, r); WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[mem]))
@@ -1531,6 +1551,89 @@ end
     end
     return nothing
 end
+
+# Julia's memory builtins on a reference whose type only run time knows (`Core.memoryrefget(r, ...)`
+# with `r` held as Any): Julia's codegen has no arm for them (codegen.cpp:4266 and emit_f_opmemory take
+# a GenericMemoryRef type alone) and calls the runtime's builtin, which checks its operand is a
+# reference (julia/src/builtins.c:1781 jl_f_memoryrefget, :1806 jl_f_memoryrefset, JL_TYPECHK: TypeError
+# naming the builtin, GenericMemoryRef and the value), then the order and the empty memory, and
+# reads or writes by the reference's own type's layout (genericmemory.c:377 jl_memoryrefget, :443
+# jl_memoryrefset). The closed world holds every reference class the program makes, so the read by
+# the run-time type is the class-id switch over the reference classes under the operand's static type
+# (dart2wasm/lib/code_generator.dart:5709 MacroAssembler.classIdSearch, as the run-time tuple index
+# takes it), each arm the concrete arm over its class (Val(:memory)), its bounds checked as the builtin
+# checks them, whatever the flag; its result converted to the call's type: the elements' union for a
+# get, the stored value's type for a set; a class outside them, or `nothing` (the top type's null), is no
+# reference, JL_TYPECHK's TypeError raised by the runtime's jl_type_error. jl_memoryrefset raises
+# TypeError where the value is not of the element type, after the empty memory's BoundsError: a value
+# whose type is not under an arm's element type rejects, located. A static type holding no reference
+# class returns null, rejected at the call.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory_erased}, @nospecialize(f::Core.Builtin), args::Vector{NirValue}, @nospecialize(RT::Type))::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's $(nameof(f)) of a $(julia_text(RT))"
+    generate_static_intrinsic(Val(:memory_erased_call), f, length(args), RT) || return nothing
+    # the closed world's reference classes below RT, their ids read through the one reading of a
+    # type's concrete classes (getConcreteClassIdRange), each id's class the translator's
+    local refs = [(id, c) for (id, c) in zip(concrete_class_ids(t, RT), concrete_classes(t, RT)) if c <: GenericMemoryRef]
+    isempty(refs) && return nothing
+    local value_type = f === Core.memoryrefset! ? dart_type_of(self, args[2]) : nothing
+    for (_, c) in refs
+        value_type === nothing || value_type <: eltype(c) ||
+            reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: memoryrefset! of a $value_type into a $c, whose element type jl_memoryrefset tests the value against at run time"), at)
+    end
+    # the call's type: the elements' union for a get, the stored value's for a set, the reference's
+    # union for a new reference, Bool and Int for isassigned and the offset
+    local R = f === Core.memoryrefget ? Union{(eltype(c) for (_, c) in refs)...} :
+        f === Core.memoryrefset! ? value_type :
+        f === Core.memoryref_isassigned ? Bool : f === Core.memoryrefoffset ? Int : Union{(c for (_, c) in refs)...}
+    local out = translate_type(t, R)
+    out isa WasmBuilder.IR.RefType && out.nullable && !(Nothing <: R) && (out = WasmBuilder.with_nullability(out, false))
+    local boxed_class(c::DataType) = (local own = f === Core.memoryrefget ? eltype(c) : f === Core.memoryrefset! ? value_type : c;
+        own isa DataType && isconcretetype(own) ? own : nothing)
+    # JL_TYPECHK(<builtin>, genericmemoryref, x): jl_type_error(<builtin>, GenericMemoryRef, x), the
+    # name as the builtin's check spells it (memoryrefoffset's, builtins.c:1765, `memoryrefoffest`)
+    local o = add_local(code_gen, t.top_type[])
+    local raise() = begin
+        local raiser = nir_runtime_member(t.component, jl_type_error, at)
+        local inputs = signature_for_direct_call(t, raiser).inputs
+        translate_expression(code_gen, NirConst(Core.Const(f === Core.memoryrefoffset ? :memoryrefoffest : nameof(f))), inputs[1])
+        translate_expression(code_gen, NirConst(Core.Const(GenericMemoryRef)), inputs[2])
+        WasmBuilder.local_get(b, o)
+        convert_type(t, b, o.type, inputs[3])
+        call(code_gen, raiser)
+        WasmBuilder.unreachable(b)
+    end
+    translate_expression(code_gen, args[1], o.type)
+    WasmBuilder.local_tee(b, o)
+    # `nothing`, the top type's null, has no class id: no reference, the TypeError
+    WasmBuilder.ref_is_null(b)
+    WasmBuilder.if_(b)
+    raise()
+    WasmBuilder.var"end"(b)
+    WasmBuilder.local_get(b, o)
+    WasmBuilder.ref_as_non_null(b)
+    load_class_id(b, t, t.top_type_non_nullable[])
+    local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in refs]
+    class_id_search(b, ranges, WasmBuilder.IR.ValueType[out], c -> begin
+            local got = generate_static_intrinsic(self, Val(:memory), f, args, (c, o))
+            got === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Julia's $(nameof(f)) of a $c, which the concrete arm does not take"), at)
+            convert_type(t, b, something(got), out; boxed_class = boxed_class(c))
+            nothing
+        end, raise)
+    return out
+end
+
+# whether a call of the builtin `f` with `nargs` operands on a first operand of static type `RT` is the
+# erased arm's (Val(:memory_erased)): a builtin whose first operand is a reference, at an arity the
+# concrete arm takes, on an operand that is no concrete GenericMemoryRef; the one test the arm and the
+# closed world's meet of GenericMemoryRef as a value (src/julia/classes.jl closed_world_classes) read
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:memory_erased_call}, @nospecialize(f::Core.Builtin), nargs::Int, @nospecialize(RT::Type))::Bool =
+    (f === Core.memoryrefget && nargs == 3 || f === Core.memoryrefset! && nargs == 4 ||
+     f === Core.memoryref_isassigned && nargs == 3 || f === Core.memoryrefoffset && nargs == 1 ||
+     f === Core.memoryrefnew && nargs in (2, 3)) &&
+    !(RT isa DataType && RT <: GenericMemoryRef && isconcretetype(RT))
 
 # A type made at run time: Julia's apply_type with an operand only run time knows (Julia folds it where
 # its operands are known, so every call reaching here makes its type at run time; typeof, a read of a
