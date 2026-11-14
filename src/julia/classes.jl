@@ -1227,16 +1227,31 @@ held both whole and by an Array that defines part of it, is refused, located: on
 end
 
 # an Array's `ref` and a Dict's `keys` and `vals`, as MEMORY_OWNERS dispatches them: the memory each defines, recorded
-# as defined by its owner (statics.live_memories, the memory itself its own live copy when its owner defines all of it)
+# under the ORIGINAL Memory as defined by its owner (statics.live_memories, the memory itself its own live copy when its
+# owner leaves nothing out), so one Julia Memory is one module object by every path to it (dev/formal/ObjectIdentity.tla
+# WriteSeenSameConstant)
 @quarantine pin"precedent(julia: base/array.jl:194 size)" "an Array's whole memory is its size's elements when its size covers it, its owner's definition of each element" Base.eachindex function _array_owned(statics::CompileStatics, a::Array, at::String)
     local ref = _array_live_ref(statics, a, at)
     ref.mem === getfield(a, :ref).mem && get!(statics.live_memories, ref.mem, (ref.mem, eachindex(ref.mem)))
     return ref
 end
 @quarantine pin"precedent(julia: base/dict.jl:682 skip_deleted)" "a Dict's keys and vals are its filled slots' elements, its owner's definition of each" Base.eachindex function _dict_owned(statics::CompileStatics, d::Dict, name::String, at::String)
-    local m = _dict_live_memory(d, getfield(d, Symbol(name)), at)
-    statics.live_memories[m] = (m, eachindex(m))
-    return m
+    local m = getfield(d, Symbol(name))
+    local seen = get(statics.live_memories, m, nothing)
+    seen === nothing || return seen[1]   # the Memory met before, by another path: its one module object
+    local copy = _dict_live_memory(d, m, at)
+    # _array_live_ref's rule: where the live copy leaves nothing out (each slot the Dict does not fill already holds no
+    # value: a boxed element's #undef, a singleton's one value), the Memory itself is the module object, so a second
+    # path to it (getfield(d, :vals) held as a constant of its own) reaches the same object
+    if all(i -> isassigned(copy, i) == isassigned(m, i) && (!isassigned(m, i) || copy[i] === m[i]), eachindex(m))
+        statics.live_memories[m] = (m, eachindex(m))
+        return m
+    end
+    # else the copy differs from the Memory (an isbits slot's bytes the Dict left): one constant cannot be both
+    m in statics.whole_memories &&
+        reject!(ProgramError("$at: a Memory constant held whole and by a Dict that defines part of it (its filled slots): one constant cannot hold both; build the Dict in the function"), at)
+    statics.live_memories[m] = (copy, eachindex(m))
+    return copy
 end
 # a Dict's `slots`: every byte is the Dict's (its constructor, rehash! and empty! fill the memory with 0x0, then each
 # slot's byte marks it empty, filled or deleted), so the memory is held whole, its owner defining each element

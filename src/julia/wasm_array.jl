@@ -2,20 +2,57 @@
 # of dart:_wasm's `WasmArray<T>` and `ImmutableWasmArray<T>` classes (constants.dart makeArrayOf,
 # makeTypeArray), which Kernel canonicalizes structurally. Julia's runtime has no such class, and a
 # `Memory` is compared by identity, so the literal is a value of its own, immutable, compared by
-# Julia's egal field by field: two literals of the same element type, mutability and entries are one
-# constant, as two equal Kernel InstanceConstants are.
+# Julia's egal field by field: two literals of the same element type, mutability, owner and entries
+# are one constant, as two equal Kernel InstanceConstants are.
+#
+# Julia differs where the array is the storage of a mutable Julia object (a Memory's `data` and its
+# set flags, src/constants.jl visitInstanceConstant): such a literal names its owner (ConstantOwner,
+# below), so it is keyed by that object's identity, never its contents. A runtime table of dart's (no
+# Julia object's storage) has no owner and keeps dart's canonicalization by value.
 
 """
-    WasmArrayLiteral(element_type, mutable, entries)
+    ConstantOwner(object, storage)
+
+Which Julia object a constant stands for: the one key of a mutable Julia object's storage among the
+program's constants (src/constants.jl make_array_of's `owner`). `object` is the mutable object,
+compared by `===` (its identity, never its contents), and `storage` names which of its storages the
+constant is (a Memory's `"data"` or `"data#isSet"`). Two owners are one exactly when they name one
+object and one storage, so two distinct objects of equal contents are two constants, a write through
+one never read through the other, and one object reached by any number of paths (two bindings, two
+structs' fields, a Vector holding it twice) is one constant (dev/formal/ObjectIdentity.tla:
+WriteSeenSameConstant, WriteUnseenDistinctConstants, ConstantDataAgrees; its ConstByValue variant is
+the key by contents this replaces). An immutable object has no identity apart from its value, so it
+owns nothing: refused, Internal.
+
+precedent(julia: src/staticdata.c:1105 jl_queue_for_serialization_, which enqueues each object once,
+keyed by its address in serialization_order, an object => id table, at :1133: Julia's image writer
+serializes each object once by its identity and never merges two of equal contents). dart keys its constants by value (constants.dart:154
+constantInfo; Kernel's InstanceConstant ==, kernel lib/src/ast/constants.dart:739), every dart
+constant being deeply immutable: Julia's differs for exactly the constants that are, or are owned by,
+a mutable object.
+"""
+@quarantine pin"precedent(julia: src/staticdata.c:1105 jl_queue_for_serialization_)" "a mutable Julia object's identity is the object, never its contents; dart keys its constants, all immutable, by value" Base.ismutable struct ConstantOwner{T}
+    object::T
+    storage::String
+    ConstantOwner(object::T, storage::String) where {T} = ismutable(object) ? new{T}(object, storage) :
+        reject!(Internal("src/julia/wasm_array.jl ConstantOwner: a $T is immutable, so it has no identity to own a constant's storage by"), "ConstantOwner")
+end
+
+"""
+    WasmArrayLiteral(element_type, mutable, owner, entries)
 
 The value of a constant `WasmArray<element_type>` (`mutable`) or `ImmutableWasmArray<element_type>`:
-its `entries`, each a constant (the NIR's literal, `NirConst`), in order. A constant holding it is
+its `entries`, each a constant (the NIR's literal, `NirConst`), in order; `owner`, where the array is a
+mutable Julia object's storage, the ConstantOwner that keys it by the object's identity, else `nothing`
+(a runtime table of dart's, canonicalized by value). A constant holding it is
 the NIR's literal of it, `NirConst(Core.Const(WasmArrayLiteral(...)))`, which ConstantCreator
 recognizes as dart's wasm array class.
 """
-@quarantine "dart2wasm's runtime type tables are constants of dart:_wasm's WasmArray, a class Julia's runtime has no counterpart of" Core.Tuple struct WasmArrayLiteral
+@quarantine pin"pkg/dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" "dart2wasm's runtime type tables are constants of dart:_wasm's WasmArray, the InstanceConstant makeArrayOf builds (pkg/dart2wasm/lib/constants.dart:251 Constants.makeArrayOf), a class Julia's runtime has no counterpart of" Core.Tuple struct WasmArrayLiteral
     element_type::Type
     mutable::Bool
+    # ahead of the entries, so NirConst's bounded hash (src/julia/nir.jl _bounded_hash) reaches it whatever their count
+    owner::Union{Nothing,ConstantOwner}
     entries::Tuple{Vararg{NirConst}}
 end
 

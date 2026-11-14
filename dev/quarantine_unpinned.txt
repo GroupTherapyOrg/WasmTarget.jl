@@ -317,7 +317,6 @@ julia/union_find.jl uf_union!
 julia/wasm_array.jl ImmutableWasmArray
 julia/wasm_array.jl WASM_STORAGE_TYPES
 julia/wasm_array.jl WasmArray
-julia/wasm_array.jl WasmArrayLiteral
 julia/wasm_array.jl WasmF32
 julia/wasm_array.jl WasmF64
 julia/wasm_array.jl WasmI32

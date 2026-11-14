@@ -550,7 +550,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/base/loading", "julia/base/stacktraces", "julia/base/libc", "julia/base/ryu/Ryu", "julia/base/docs/Docs",
     "julia/base/essentials", "julia/base/runtime_internals", "julia/base/scopedvalues", "julia/base/Base_compiler",
     "julia/Compiler/src/ssair/ir", "julia/base/show", "julia/base/reflection", "julia/base/errorshow", "julia/base/docs/utils",
-    "julia/base/dict", "julia/base/reinterpretarray",
+    "julia/base/dict", "julia/base/reinterpretarray", "julia/src/staticdata",
 )
 
 """

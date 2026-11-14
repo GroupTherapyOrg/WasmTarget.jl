@@ -317,9 +317,15 @@ the NIR's literal of a WasmArrayLiteral (src/julia/wasm_array.jl), compared fiel
 compares the InstanceConstant dart builds.
 
 Reshaped: `elementType` — Julia's element type may be a UnionAll (`Type` itself), where dart's is always an InterfaceType.
+Reshaped: `owner` — an array that is a mutable Julia object's storage (a Memory's `data` or `data#isSet`,
+visitInstanceConstant) is keyed by that object's identity, its ConstantOwner (src/julia/wasm_array.jl), as
+Julia's image writer keys it (src/staticdata.c:1105 jl_queue_for_serialization_): two Memories of equal elements are two
+arrays, one Memory reached by any number of paths one. dart's constants are deeply immutable, so it keys every
+array by its value; a runtime table of dart's has no owner and keeps that.
 """
-@parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" make_array_of(self::Constants, element_type::Type, entries::Vector{NirConst}; mutable_::Bool = true)::NirConst =
-    NirConst(Core.Const(WasmArrayLiteral(element_type, mutable_, Tuple(entries))))
+@parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" make_array_of(self::Constants, element_type::Type, entries::Vector{NirConst}; mutable_::Bool = true,
+        owner::Union{Nothing,ConstantOwner} = nothing)::NirConst =
+    NirConst(Core.Const(WasmArrayLiteral(element_type, mutable_, owner, Tuple(entries))))
 
 @parity "dart2wasm/lib/constants.dart:268 Constants.dummyStructConstant" dummy_struct_constant(self::Constants)::DummyValueConstant =
     _get_dummy_value_constant(self, WasmBuilder.IR.HeapType_struct; name = "#DummyStruct")
@@ -912,15 +918,18 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             local statics = self.constants._constant_accessor[].statics
             if !any(c -> c[1] === v, values(statics.live_memories))   # no owner defines it (MEMORY_OWNERS)
                 haskey(statics.live_memories, v) &&
-                    reject!(ProgramError("$at: a Memory constant held whole and by an Array that defines part of it (its size): one constant cannot hold both; build the Array in the function"), at)
+                    reject!(ProgramError("$at: a Memory constant held whole and by an owner that defines part of it (an Array's size, a Dict's filled slots): one constant cannot hold both; build the owner in the function"), at)
                 _unowned_memory(v, at)   # an isbits one, refused, located (spec v17 Y6)
                 push!(statics.whole_memories, v)
             end
+            # each array the Memory's own storage, keyed by its ConstantOwner, the Memory's identity and the field: two
+            # Memories of equal elements never share one (dev/formal/ObjectIdentity.tla WriteUnseenDistinctConstants)
             if field.name == "data"
                 make_array_of(self.constants, storage,
-                    NirConst[NirConst(Core.Const(isassigned(v, k) ? v[k] : nothing)) for k in eachindex(v)]).c.val
+                    NirConst[NirConst(Core.Const(isassigned(v, k) ? v[k] : nothing)) for k in eachindex(v)]; owner = ConstantOwner(v, field.name)).c.val
             elseif field.name == "data#isSet"
-                make_array_of(self.constants, storage, NirConst[NirConst(Core.Const(Int32(isassigned(v, k)))) for k in eachindex(v)]).c.val
+                make_array_of(self.constants, storage, NirConst[NirConst(Core.Const(Int32(isassigned(v, k)))) for k in eachindex(v)];
+                    owner = ConstantOwner(v, field.name)).c.val
             else
                 reject!(Internal("$at: the Memory field $(field.name), not classes.jl's data or data#isSet"), at)
             end
