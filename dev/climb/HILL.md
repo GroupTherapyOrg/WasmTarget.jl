@@ -926,7 +926,11 @@ door's, run as Dale on paths no build user writes.
   lock under the state lock and the window inside a measuring role refused, where HEAD took both). A process takes a lock only while every lock it holds is earlier, so no two processes wait on
   each other; a yield takes its measurement lock again, so no yield happens while a measuring role is held: each of
   smoke()'s parts takes its own use of the role and leaves it before the next (what a part hands the next is kept in
-  the driver's own directory, never a run directory), and a compile's yield at a case's boundary leaves the role's use
+  the driver's own directory, never a run directory; the base cache's file is merged with what is on it when written,
+  under a lock of its own held for the write alone, so neither of two writers drops the other's rows; a landed head's
+  base file is seeded from its own landing's rows when the landed tree is the tree measured, the measuring driver's
+  dev/climb is the head's and each row names the head's judge, `measure.seed_base`, throughput T3(i)), and a compile's
+  yield at a case's boundary leaves the role's use
   for its wait (`door.released`: the role's lock let go and taken again; when another use came between, which the
   role's generation, written by every taker, shows, the part's directories are made again, or, with no way to make
   them, the part is cut, `RoleLost`). Probed with the operator's rolecycle cases (council/v17-report.md): 0 deadlocks in
@@ -1290,7 +1294,8 @@ and learned nothing, and ten D14 reds that saw battery wrote no note (those prob
   the governor refused ended the move `budget`, an empty one `infra`, neither a stop); a base measurement of origin that fails is the driver's, one
   note and the slot's backoff, never the hold's (O5). One wrapper holds every loop's iteration, the slots', the
   lander's, the scoreboard's and the audit's: any exception, a subprocess's timeout among them, is an event and a
-  backoff of `retry_backoff_s`, doubled each time it repeats (`backoff_cap_s` at most), with one note for Dale at
+  backoff of `retry_backoff_s`, doubled each time it repeats (`backoff_cap_s` at most), which ends when the driver's
+  own code changes (`core.running`: the fault may be the code a landing replaced), with one note for Dale at
   the third in a row (the second for an audit, the first for the network); no move or landing for `alarm_s` is a
   note too. A score that loses more than `score_loss_band` of the table's passing cases is run again before it counts.
 - **Cheap first.** A review runs one reviewer. A council adds its next member only when the cheaper

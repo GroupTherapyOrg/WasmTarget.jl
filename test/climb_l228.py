@@ -18,6 +18,8 @@ import contextlib, json, os, re, signal, subprocess, sys, tempfile, time, base64
 
 SECTION_LIMIT_S = 60   # a section's hard limit: intent, every section in seconds (the longest about 8 s on 2026-11-14,
                        # at background QoS); band 30-120: past it the section is a fault naming it, a hang or a blow-up
+SECTIONS_AT_ONCE = 4   # sections run at once: intent, the harness in about its longest section's time; band 1-4, the
+                       # machine's four performance cores (a section is mostly a wait, a child about 50 MB)
 # the runner's own negative (test/parity_ratchet.jl) sets WT_L228_LIMIT_S to a few seconds, so a planted hang costs its
 # limit and no more
 LIMIT_OVERRIDE = os.environ.get("WT_L228_LIMIT_S")
@@ -41,8 +43,8 @@ if __name__ == "__main__" and "--section" not in sys.argv:   # the runner
     _only = int(sys.argv[sys.argv.index("--only") + 1]) if "--only" in sys.argv else None
     if _only is not None and _only not in _secs:
         print(f"climb_l228: no section {_only}"); sys.exit(0)
-    _out = []
-    for _n in sorted(_secs) if _only is None else [_only]:
+    def _run(_n):   # one section's child: (its fault lines, its seconds)
+        _out = []
         _lim, _t0 = min(_secs[_n][2], int(LIMIT_OVERRIDE)) if LIMIT_OVERRIDE else _secs[_n][2], time.time()
         with tempfile.TemporaryDirectory(prefix="l228-run-") as _d:
             with open(f"{_d}/out", "wb") as _o, open(f"{_d}/err", "wb") as _e:
@@ -63,10 +65,17 @@ if __name__ == "__main__" and "--section" not in sys.argv:   # the runner
         elif _rc != 0:
             _out.append(f"section {_n} exited {_rc}: {_err.strip()[-300:]}")
         _out += _lines
+        return _out, time.time() - _t0
+    # SECTIONS_AT_ONCE children at a time (each has a scratch repository and state of its own; most of a section's time
+    # is a wait on a process or a poll), their lines printed in the sections' order
+    import concurrent.futures as _cf
+    with _cf.ThreadPoolExecutor(max_workers=SECTIONS_AT_ONCE) as _ex:
+        _res = dict(zip(_order := sorted(_secs) if _only is None else [_only], _ex.map(_run, _order)))
+    for _n in _order:
         if os.environ.get("WT_L228_TIMES"):
-            print(f"# section {_n}: {time.time() - _t0:.1f} s", file=sys.stderr)
-    for _l in _out:
-        print(_l)
+            print(f"# section {_n}: {_res[_n][1]:.1f} s", file=sys.stderr)
+        for _l in _res[_n][0]:
+            print(_l)
     sys.exit(0)
 
 _n = int(sys.argv[sys.argv.index("--section") + 1])   # a child: the prologue, the sections it needs, then itself
@@ -108,6 +117,7 @@ os.chdir(repo); sys.path.insert(0, f"{repo}/dev/climb")
 import door
 door.LOCKS = locks
 import core, measure as M, lander as L
+measure_base9 = M.measure_base   # the real one: section 7 stands it in and leaves it so; section 9 calls it
 
 # the score's record at h (each file 100 G, the warm-up 350 G) and the measured checks of both shapes: twelve landed
 # checks a shape, predicted before they ran, their positive errors known
@@ -382,3 +392,82 @@ try:
 except Exception as e:
     fault(f"a judge without test/oracle_read.jl raises {type(e).__name__} instead of getting the first program (judge6a F3)")
 
+# 9. a landed head's base seeded from its own landing's rows (throughput T3(i), measure.seed_base): nothing when the
+# rows were measured on another tree or by a driver whose dev/climb is not the head's, no row of another judge; the
+# seeded rows read by measure_base with no measurement; a base measured while a seed writes keeps both (base_write);
+# and a candidate judged against the seeded rows (measure.regressions): a regression outside the hold refused, a case
+# already broken at the base not charged
+real_smoke9 = M.smoke
+try:
+    os.makedirs(f"{repo}/dev/climb", exist_ok=True)
+    open(f"{repo}/dev/climb/marker9", "w").write("driver 1\n"); g("add", "-f", "dev/climb/marker9"); g("commit", "-qm", "c1")
+    c1 = g("rev-parse", "HEAD")
+    open(f"{repo}/dev/climb/marker9", "w").write("driver 2\n"); g("commit", "-qam", "c2")
+    c2 = g("rev-parse", "HEAD")
+    jid9 = M.judge_id(c1)
+    mk9 = lambda l, o, j=jid9: M.Row((l, o, 1.0, ""), ("a" * 40, j))
+    rows9 = [mk9("n/a", "passed"), mk9("n/b", "errored"), mk9("n/c", "passed", "f" * 40)]
+    path9 = os.path.join(state, "base", f"{c1}-{jid9[:16]}.tsv")   # measure_base's file of c1
+    for what, measured, driver in (("by a driver whose dev/climb is not the head's", c1, c2), ("on a tree not the landed one", c2, c1)):
+        n9, why9 = M.seed_base(c1, rows9, measured, driver)
+        if n9 or os.path.exists(path9):
+            fault(f"seed_base took rows measured {what}: {n9} seeded ({why9})")
+    n9, why9 = M.seed_base(c1, rows9, c1, c1)
+    if n9 != 2:
+        fault(f"seed_base from the landed tree and its own driver seeded {n9} rows, not the two of its judge ({why9})")
+    asked9 = []
+    def smoke9(role, only, task, sha_, **kw):   # a measurement during which the landing's seed writes another row
+        asked9.append(set(only))
+        M.seed_base(c1, [mk9("n/d", "passed")], c1, c1)
+        return {l: mk9(l, "passed") for l in only}, None
+    M.smoke = smoke9
+    before9 = measure_base9(c1, {"n/a", "n/b"}, locked_=True)
+    if asked9 or set(before9) != {"n/a", "n/b"}:
+        fault(f"measure_base at a seeded head measured {asked9} for rows the seed holds, or read {sorted(before9)}")
+    measure_base9(c1, {"n/a", "n/e"}, locked_=True)   # n/e measured while the seed writes n/d
+    on9 = {r[0] for r in M.read_cases(path9)}
+    if not {"n/a", "n/b", "n/d", "n/e"} <= on9:
+        fault(f"a base measured while a seed wrote kept {sorted(on9)}: the measurement's and the seed's rows both belong")
+    h9 = {"key": "k9", "cases": ["x/y"]}
+    after9 = {"n/a": mk9("n/a", "wrong"), "n/b": mk9("n/b", "errored")}
+    probs9 = M.regressions(h9, {"n/a", "n/b"}, before9, after9)
+    if not any("n/a" in p_ for p_ in probs9) or any("n/b" in p_ for p_ in probs9):
+        fault(f"a candidate judged against a seeded base: {probs9} (n/a, passing at the base, must be refused; n/b, broken there, not charged)")
+except Exception as e:
+    fault(f"the base's seed raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    M.smoke = real_smoke9
+
+# 10. a driver fault's backoff ends when the driver's code changes (core.running): the lander's loop, guarded, waits
+# out a fault of its driver only while the driver is the tree that faulted; under a new driver the wait is over and a
+# repeat counts from one; a backoff that is not a driver fault (D14's, fixed seconds) waits whatever the driver. The
+# driver's tree is stood in (core.driver_tree); the loop is core.guarded itself
+real_tree10 = core.driver_tree
+try:
+    def fault10():
+        raise core.ClimbError("planted: a fault of the driver's code")
+    core.driver_tree = lambda: "1" * 40
+    if core.guarded("lander", fault10) != 3 or not core.waits("lander"):
+        fault("a driver fault of the lander's round did not back the lander off")
+    core.guarded("lander", fault10)
+    n10 = core.state_json("backoff.json", {}).get("lander", {}).get("n")
+    core.driver_tree = lambda: "2" * 40   # a landing changed dev/climb
+    if core.waits("lander"):
+        fault("the lander waits out a fault of a driver it no longer runs (a landing changed dev/climb)")
+    core.guarded("lander", fault10)
+    if n10 != 2 or core.state_json("backoff.json", {}).get("lander", {}).get("n") != 1 or not core.waits("lander"):
+        fault(f"a driver fault under a new driver does not back off from one: n {n10} then "
+              f"{core.state_json('backoff.json', {}).get('lander', {}).get('n')}")
+    core.recovered("lander")
+    core.back_off("lander", "d14", why="D14", secs=600, note_at=0)
+    core.driver_tree = lambda: "3" * 40
+    if not core.waits("lander"):
+        fault("a D14 backoff, which is no driver fault, ended when the driver changed")
+    core.recovered("lander", "d14")
+except Exception as e:
+    fault(f"the driver fault's backoff raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    core.driver_tree = real_tree10
+
+for f in faults:
+    print(f)

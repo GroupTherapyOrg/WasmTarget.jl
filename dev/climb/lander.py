@@ -176,7 +176,7 @@ def check_verdict(path):
     return (int(f[0]) if f and re.fullmatch(r"-?\d+", f[0]) else None,
             int(f[1]) if len(f) > 1 and f[1].isdigit() else None, split or None)
 
-def enqueue(sha, title, kind, hold_id=None, fixfirst=False, unlocked=0, rows=None, base=None, audit=None, labels=(), h=None,
+def enqueue(sha, title, kind, hold_id=None, fixfirst=False, unlocked=0, rows=None, base=None, audit=None, labels=(), h=None, measured=None, driver=None,
             approvals=1, answers=None):
     """An approved commit of the main repository, pinned: its sha, its patch-id, the base it was measured on, its rows
     (every label measured, under STATE) and its labels, on a ready branch that keeps its objects. The lander, the one process that runs
@@ -195,7 +195,7 @@ def enqueue(sha, title, kind, hold_id=None, fixfirst=False, unlocked=0, rows=Non
     git("branch", "-f", branch, sha)
     item = {"branch": branch, "sha": sha, "patch_id": next(iter(patch_ids(f"{sha}^!")), ""), "base": base,
             "kind": kind, "hold": title, "hold_id": hid, "fixfirst": fixfirst, "unlocked": unlocked,
-            "rows": rows, "audit": audit, "labels": sorted(labels), "t": stamp(), "approvals": approvals, "answers": answers,
+            "rows": rows, "measured": measured, "driver": driver, "audit": audit, "labels": sorted(labels), "t": stamp(), "approvals": approvals, "answers": answers,
             # the hold as the move was judged against it, for the lander's rebased judgement (operator 9)
             "h": {k: h[k] for k in ("key", "cases", "tail", "defs", "require_pass", "fixfirst", "why") if k in h} if h else None}
     update_json("ready.json", [], lambda q: q.append(item))   # the audit rides in the same write (B14)
@@ -438,6 +438,9 @@ def landed_item(item, sha):
     update_json("handoffs.json", {}, lambda hs: hs.pop(item["hold_id"], None))
     if item.get("rows") and os.path.exists(item["rows"]):   # every row it measured, at the landed commit (item 8)
         advance(read_cases(item["rows"]), full, f"the landing of {item['hold'][:80]}")
+        if item.get("measured") and item.get("driver"):   # and the landed head's base, when they are its own (T3(i))
+            n, why = seed_base(full, read_cases(item["rows"]), item["measured"], item["driver"])
+            event("base-seeded", sha=full[:12], rows=n, why=why)
     if item.get("audit"):
         audit_landed(item["audit"]["n"], item["audit"]["range"], item["audit"]["so"])
     # the item leaves the queue LAST (spec v18 Q6, the round-15 operator's finding 5): a lander killed before here leaves
@@ -537,9 +540,9 @@ def rebased_check(item):
                                                                     f"land-{item['hold_id']}", onto=origin, keep=keep)
             if fault != "output":
                 break
-        if not problems:
+        if not problems:   # its rows, the commit they were measured on and the driver that measured them (seed_base)
             kw = {"rows": os.path.join(STATE, "deltas", f"land-{item['hold_id']}-{origin[:10]}.tsv"), "unlocked": len(unlocked),
-                  "answers": keep}
+                  "answers": keep, "measured": at, "driver": driver_commit()}
             write_atomic(kw["rows"], cases_text(rows))
     stop = fault not in ("conflict", "done")   # queue order, or another landing's, never the move's (operator 3)
     unqueue(item, rebased={"origin": origin, "problems": problems, "stop": stop, "commit": at}, **kw)

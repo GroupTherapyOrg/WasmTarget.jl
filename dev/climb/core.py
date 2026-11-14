@@ -323,27 +323,44 @@ def for_dale(title, text):
         _NOTES.append((title, text))
     _send_notes()
 
+def driver_tree():
+    """dev/climb's tree in this process's driver (H1: a loop's tree is one origin commit, so a landing that changes the
+    driver's code changes it), or "" when git cannot say."""
+    return git("rev-parse", "-q", "--verify", "HEAD:dev/climb", cwd=ROOT, check=False)
+
+def running(v, cur=None):
+    """A backoff entry still waiting: before its `until`, and, for a driver fault (one guarded wrote, naming the
+    driver's tree), only while the driver is that tree: a landing that changes the driver's code ends it, since the
+    fault may be the code it replaced (2026-11-14 03:40Z: the lander waited 30 and then 60 min on a fault 60f70485
+    had fixed)."""
+    if not isinstance(v, dict) or time.time() >= v.get("until", 0):
+        return False
+    if v.get("driver"):
+        cur = driver_tree() if cur is None else cur
+        return not cur or v["driver"] == cur
+    return True
+
 def backed_off(kind, key=None):
-    ent = state_json("backoff.json", {}).get(f"{kind}:{key}" if key else kind)
-    return bool(ent) and time.time() < ent["until"]
+    return running(state_json("backoff.json", {}).get(f"{kind}:{key}" if key else kind))
 
 def waits(kind):
     """THE one wait predicate of a loop (spec v17 Z1): any backoff of `kind` or `kind:<key>` still running. A loop reads
     this alone, so no backoff can be written that its loop does not read (the round-14 operator's finding 2: the
     lander wrote `lander:flaky` and read only three of its keys, and checked every item back to back)."""
-    now = time.time()
-    return any((k == kind or k.startswith(kind + ":")) and isinstance(v, dict) and now < v.get("until", 0)
-               for k, v in state_json("backoff.json", {}).items())
+    return any((k == kind or k.startswith(kind + ":")) and running(v) for k, v in state_json("backoff.json", {}).items())
 
-def back_off(kind, key=None, why="", secs=None, note_at=3):
+def back_off(kind, key=None, why="", secs=None, note_at=3, driver=None):
     """One way any failure waits (21): retry_backoff_s, doubled each time it repeats before a success clears it
     (backoff_cap_s at most), and one note for Dale when it has repeated note_at times in a row; `secs` waits a fixed
-    time instead."""
+    time instead. `driver`, a driver fault's (guarded): the driver's tree, so the wait ends when the driver's code
+    changes (running), and the count starts again under a new driver."""
     k = f"{kind}:{key}" if key else kind
     with locked():
         b = state_json("backoff.json", {})
-        n = b.get(k, {}).get("n", 0) + 1
+        n = (b.get(k, {}).get("n", 0) if b.get(k, {}).get("driver") == driver else 0) + 1
         b[k] = {"until": time.time() + (secs or min(cfg()["retry_backoff_s"] * 2 ** (n - 1), cfg()["backoff_cap_s"])), "n": n, "why": why[:300]}
+        if driver:
+            b[k]["driver"] = driver
         save_json("backoff.json", b)
     if n == note_at:
         for_dale(f"{k} failed {n} times in a row", f"The last: {why[:1200]}\nDefault taken: it waits "
@@ -1380,7 +1397,7 @@ def guarded(kind, fn, *args, key=None):
     except Exception as e:
         why = f"{type(e).__name__}: {e}"
         event(f"{kind}-error", key=key, error=why[:400])
-        back_off(kind, key, why=why)
+        back_off(kind, key, why=why, driver=driver_tree())   # a driver fault: ends when the driver's code changes
         return 3
 
 def change_stem(a, b):

@@ -2085,11 +2085,61 @@ def measure_base(base, labels, locked_=False):
             if got is None:   # origin's own tree: the driver's failure, never the move's
                 raise ClimbError(f"the base {base[:10]}: {why}")
             have.update(got)
-            write_atomic(path, cases_text(have.values()))
+            with base_write(path):   # merged with what a landing's seed wrote meanwhile (seed_base), never over it
+                on = {r[0]: r for r in read_cases(path)} if os.path.exists(path) else {}
+                have = {**on, **have}
+                write_atomic(path, cases_text(have.values()))
             for old in glob.glob(os.path.join(STATE, "base", "*.tsv")):   # a base two days old is no move's base
                 if os.path.getmtime(old) < time.time() - cfg()["base_keep_s"]:
                     os.remove(old)
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(old + ".lock")
     return have
+
+@contextlib.contextmanager
+def base_write(path):
+    """A base file's write lock, `<path>.lock`, held for one read-merge-write alone: measure_base and seed_base both
+    write the file, and neither drops the other's rows. Held for no measurement, so the lander seeding a landed head's
+    base never waits on a slot's measurement (which holds the verify lock for its whole run)."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
+
+def driver_commit():
+    """The commit this process's driver runs from: its tree's HEAD (H1: a loop's tree is one origin commit)."""
+    return git("rev-parse", "HEAD", cwd=ROOT).strip()
+
+def seed_base(head, rows, measured, driver, cache=None):
+    """A landed head's base rows taken from its own landing's measurement (throughput T3(i)), so the next move at that
+    head measures only what the landing did not: the rows `rows` of commit `measured`, measured by the driver of commit
+    `driver`, are written into `head`'s base file (measure_base's: `head` and its judge_id) only when all of these hold,
+    each read from git, never assumed: the landed commit's whole tree is the tree measured (`head^{tree}` ==
+    `measured^{tree}`; dev/ship.sh lands only WT_SHIP_EXPECT, the commit the lander measured), the driver that measured
+    is the landed head's own (`driver:dev/climb` == `head:dev/climb`, both present: the budgets, the processes and the
+    judging code the rows came through), and each row names `head`'s judge (its prov's judge_id; a row of another
+    judge, or none, is not taken). A label the file holds already keeps its row. Under the file's write lock alone
+    (base_write), never the verify lock. Returns (rows seeded, why none or None)."""
+    tree = lambda spec: git("rev-parse", "-q", "--verify", spec, check=False).strip()
+    if not tree(f"{head}^{{tree}}") or tree(f"{head}^{{tree}}") != tree(f"{measured}^{{tree}}"):
+        return 0, f"the rows were measured on {measured[:10]}, whose tree is not the landed {head[:10]}'s"
+    if not tree(f"{head}:dev/climb") or tree(f"{driver}:dev/climb") != tree(f"{head}:dev/climb"):
+        return 0, f"the rows were measured by the driver of {driver[:10]}, whose dev/climb is not the landed {head[:10]}'s"
+    jid = judge_id(head)
+    keep = [r for r in rows if r.prov is not None and r.prov[1] == jid]
+    if not keep:
+        return 0, f"no row names {head[:10]}'s judge ({jid[:16]})"
+    cache = cache or os.path.join(STATE, "base")
+    path = os.path.join(cache, f"{head}-{jid[:16]}.tsv")
+    with base_write(path):
+        have = {r[0]: r for r in read_cases(path)} if os.path.exists(path) else {}
+        new = {r[0]: r for r in keep if r[0] not in have}
+        if new:
+            write_atomic(path, cases_text({**have, **new}.values()))
+    return len(new), None
 
 def confirmed(origin, before, after):
     """`before` (the table) with every label whose outcome `after` changes measured at `origin` itself (item 8, A5-1,

@@ -417,6 +417,7 @@ def climb(h, slot_name, clone, base, task, labels, before, warm, dk):
     write_atomic(dpath, cases_text(rows))
     enqueue(cand["sha"], h["key"], "move", hold_id=h["id"], fixfirst=bool(h.get("fixfirst")),
             unlocked=len(unlocked), rows=dpath, base=base, labels=labels, h=h, approvals=need,
+            measured=cand["sha"], driver=driver_commit(),
             answers=os.path.join(STATE, "deltas", f"{task}.answers.tsv"))
     unclaim(h)
     return "queued"
