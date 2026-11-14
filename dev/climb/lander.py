@@ -182,9 +182,12 @@ def enqueue(sha, title, kind, hold_id=None, fixfirst=False, unlocked=0, rows=Non
     (every label measured, under STATE) and its labels, on a ready branch that keeps its objects. The lander, the one process that runs
     dev/ship.sh, lands it."""
     sha = git("rev-parse", f"{sha}^{{commit}}")
-    n, top = int(git("rev-list", "--count", f"origin/{MARCH}..{sha}")), ship_max()
-    if n == 0 or n > top:
-        raise ClimbError(f"{sha[:10]} has {n} commit(s) past origin/{MARCH}; a queued item carries 1 to {top} (ship.sh's SHIP_MAX)")
+    n = int(git("rev-list", "--count", f"origin/{MARCH}..{sha}"))
+    if n != 1:   # the lander's test set is made for the item's one commit (landing_set: its HEAD), and ship.sh checks each
+        # commit of a landing in turn, so a second commit's check reads a set made for another HEAD and is red at once
+        # (2026-11-14 06:59Z: the judge item of five commits dropped landing-red): squash it to one before it is queued
+        raise ClimbError(f"{sha[:10]} has {n} commit(s) past origin/{MARCH}; a queued item is one commit (the lander's test "
+                         "set is made for that commit, and dev/ship.sh checks each commit in turn): squash it to one")
     base = base or git("merge-base", f"origin/{MARCH}", sha)
     why = bundled(base, sha)   # src never lands beside the harness (A106E2)
     if why:
@@ -201,10 +204,6 @@ def enqueue(sha, title, kind, hold_id=None, fixfirst=False, unlocked=0, rows=Non
     update_json("ready.json", [], lambda q: q.append(item))   # the audit rides in the same write (B14)
     event("queued", hold=title, hold_id=hid, sha=sha, branch=branch)
     return item
-
-def ship_max():
-    """dev/ship.sh's SHIP_MAX, read where ship.sh keeps it, origin's copy (A5-9: one source)."""
-    return ship_literal("SHIP_MAX")
 
 def unqueue(item, **kw):
     update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [dict(x, **kw) if kw and x["branch"] == item["branch"] else x

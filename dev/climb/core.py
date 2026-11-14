@@ -1070,10 +1070,15 @@ def report(k=12):
     landed = [e for e in ev if e["kind"] == "landed"]
     lines.append(f"landings: {len(landed)} by the climb, {sum(1 for e in landed if e['t'] >= stamp(now() - datetime.timedelta(days=1)))} in 24 h; "
                  f"{len(state_json('ready.json', []))} approved commit(s) wait for the lander")
-    lines.append(f"this week (from {week_start()}): {week_spend()/1e6:.0f}M of {cfg()['week_weighted']/1e6:.0f}M weighted "
-                 f"({100 * week_spend() / cfg()['week_weighted']:.1f}%; the climb pauses at {100 * cfg()['week_pause']:.0f}%)")
-    lines.append(f"budget: the account today {account_spend(1)/1e6:.0f}M of {allowance()/1e6:.0f}M weighted, 7 days "
-                 f"{account_spend(7)/1e6:.0f}M of {cfg()['week_weighted']*cfg()['margin']/1e6:.0f}M; the climb's own today {climb_spend(1)/1e6:.0f}M")
+    if cfg()["budget_holds"]:   # the limits hold work only while budget_holds (week_half, over_budget): said only then
+        lines.append(f"this week (from {week_start()}): {week_spend()/1e6:.0f}M of {cfg()['week_weighted']/1e6:.0f}M weighted "
+                     f"({100 * week_spend() / cfg()['week_weighted']:.1f}%; the climb pauses at {100 * cfg()['week_pause']:.0f}%)")
+        lines.append(f"budget: the account today {account_spend(1)/1e6:.0f}M of {allowance()/1e6:.0f}M weighted, 7 days "
+                     f"{account_spend(7)/1e6:.0f}M of {cfg()['week_weighted']*cfg()['margin']/1e6:.0f}M; the climb's own today {climb_spend(1)/1e6:.0f}M")
+    else:
+        lines.append(f"spend (no budget hold: budget_holds is false): this week (from {week_start()}) {week_spend()/1e6:.0f}M "
+                     f"weighted; the account today {account_spend(1)/1e6:.0f}M, 7 days {account_spend(7)/1e6:.0f}M; the "
+                     f"climb's own today {climb_spend(1)/1e6:.0f}M")
     hs = holds(cases)
     lines.append(f"holds: {len(hs)} ({sum(1 for h in hs if h['parked'])} parked); the largest:")
     for h in hs[:k]:

@@ -237,9 +237,9 @@ def move(h, slot_name):
     reaped when the move ends."""
     user, _ = users(slot_name)
     update_json("slots.json", {}, lambda s_: s_.__setitem__(slot_name, h["id"]))
-    base = git("rev-parse", f"origin/{MARCH}")
     task = f"{h['id']}-{int(time.time())}"
     labels = labels_for(h)   # once: the same labels at the base and on the move
+    base = base_choice(labels)   # an older head whose base holds every label, measured by this driver (T4), or origin's
     env = environment(base)
     dk = deps(base, env["Manifest.toml"])
     hb = sorted(h["cases"])

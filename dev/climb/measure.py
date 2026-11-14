@@ -941,8 +941,15 @@ def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=Fals
                 break
             if not alive:   # its records read once more after it ended: done, or the case in flight booked by name
                 flight = last if last and last not in done else None
-                if flight is not None:   # it ended during a case (a segfault, an abort, jetsam): that case errored, as a
-                    cut = (flight, "the process ended during the case")   # hang is, and the process runs on without it (O9-3)
+                if flight is not None and p.returncode == -signal.SIGKILL:   # killed from outside (jetsam, memory pressure):
+                    # this watch's every reap is followed by its own break above, so a SIGKILL here came from outside it
+                    # (the host's jetsam, another process's reap), never from the case: no row, the measurement cut (infra), the case measured again (2026-11-13: every one of
+                    # the night's case-ended events was rc -9, each a false `errored` row, one a false G2 hold)
+                    stop = {"part": part, "in_flight": flight, "after": max(done) if done else None, "wall": round(wall),
+                            "over_wall": False, "killed": True, "not_reached": sorted(expect - done - {flight})}
+                    event("case-killed", role=role, part=part, label=flight, rc=p.returncode)
+                elif flight is not None:   # it ended during a case (a segfault, an abort): that case errored, as a hang
+                    cut = (flight, "the process ended during the case")   # is, and the process runs on without it (O9-3)
                     event("case-ended", role=role, part=part, label=flight, rc=p.returncode)
                 break
             if yields and lander_waits(kind) and (last is None or started_now or last in done):   # a case's boundary
@@ -986,7 +993,9 @@ def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=Fals
     door.reap(role)
     if stop:
         raise MeasureCut(f"the {part} process of a measurement as {door.ROLES[role]} was cut " +
-                         (f"past its wall of {stop['wall']} s" if stop["over_wall"] else "with no case of its own in flight") +
+                         ("by a SIGKILL the driver did not send (the host's: jetsam or memory pressure), during its case"
+                          if stop.get("killed") else f"past its wall of {stop['wall']} s" if stop["over_wall"]
+                          else "with no case of its own in flight") +
                          f": in flight {stop['in_flight'] or 'none'} (after {stop['after'] or 'none'}), {len(stop['not_reached'])} "
                          f"label(s) not reached ({', '.join(stop['not_reached'][:5])}); nothing of it is recorded")
     tail = log_excerpt(log)
@@ -1145,8 +1154,13 @@ def judge_id(sha):
     answering program's and the verdict's (JUDGE_WRITE, JUDGE_READ, in order; a path `sha` does not hold names `-`), so
     any edit of the judge makes every row a rebase, never a landing's loss; and the launch's tools (the state's tools.json:
     Julia's build, node's version and sha256, spec v18 P4), so a tool change is the same rebase, one rule."""
-    return hashlib.sha1(("".join(f"{p} {git('rev-parse', f'{sha}:{p}', check=False).strip() or '-'}\n"
-                                 for p in (*JUDGE_WRITE, *JUDGE_READ)) +
+    # the blobs read by one `git ls-tree`, never a rev-parse a file (sixteen processes a key; a base choice reads several
+    # keys): a path `sha` lacks is not listed and names `-` (a bare `rev-parse <sha>:<path>` printed its argument for
+    # one, which named the commit in the key, so two heads lacking one judge file never shared a judge)
+    paths = (*JUDGE_WRITE, *JUDGE_READ)
+    blobs = {f[3]: f[2] for f in (l.split(None, 3) for l in git("ls-tree", sha, "--", *paths, check=False).splitlines())
+             if len(f) == 4 and f[1] == "blob"}
+    return hashlib.sha1(("".join(f"{p} {blobs.get(p, '-')}\n" for p in paths) +
                          "tools " + json.dumps(state_json("tools.json", {}), sort_keys=True) + "\n").encode()).hexdigest()
 
 def answer_hash(block):
@@ -2076,7 +2090,11 @@ def measure_base(base, labels, locked_=False):
     slots, so each label runs once per base. Every run also takes the corpus cases the table does not know (gained
     since), so a case another landing added is judged from its base too, never as new. `locked_`: the caller holds
     the measurement lock already (the lander's rebased check, one acquisition)."""
-    path = os.path.join(STATE, "base", f"{base}-{judge_id(base)[:16]}.tsv")   # (sha, judge_id): spec v18 P4
+    path = base_path(base, driver_tree())   # (sha, judge_id): spec v18 P4; and the measuring driver's tree (T4)
+    if os.path.exists(path):   # a base every label of which is on file: read with no lock, nothing measured (T4)
+        have = {r[0]: r for r in read_cases(path)}
+        if not set(labels) - set(have):
+            return have
     with (contextlib.nullcontext() if locked_ else julia_slot("verify")):
         have = {r[0]: r for r in read_cases(path)} if os.path.exists(path) else {}
         missing = set(labels) - set(have)
@@ -2096,6 +2114,44 @@ def measure_base(base, labels, locked_=False):
                         os.remove(old + ".lock")
     return have
 
+def base_path(head, driver):
+    """A base file: `head`'s rows under its judge (judge_id) as the driver of dev/climb tree `driver` measured them,
+    so a file is read only by a driver whose measuring code is the tree that wrote it (T4's rule, the seed's too)."""
+    return os.path.join(STATE, "base", f"{head}-{judge_id(head)[:16]}-{(driver or 'nodriver')[:12]}.tsv")
+
+def base_choice(labels):
+    """The head a slot's move is measured and climbed on (throughput T4): the newest head of origin's first-parent
+    history whose base file holds every one of `labels` (the move's gate reads exactly these: measure_candidate
+    compares the move's rows with the base's on them), under the judge origin's head has (judge_id equal: the rows
+    are the rows a measurement at the head would judge by) and written by a driver of this driver's dev/climb tree
+    (base_path's key: the measuring code the candidate is measured by). None such: origin's head, measured as before.
+    Sound because the base only gates the move: the lander lands no move whose base is not origin's head without its
+    rebased check (lander.rebased_check: the commit replayed onto origin and every label measured there, judged
+    against the table, every changed outcome measured at origin itself, confirmed), so a regression against origin's
+    head that the older base does not show is refused at landing. Its cost there: a conflict replaying it is the
+    queue's order, no stop, and the hold is climbed again."""
+    origin = git("rev-parse", f"origin/{MARCH}")
+    drv = driver_tree()
+    if not drv:
+        return origin
+    files = {os.path.basename(p)[:40] for p in glob.glob(os.path.join(STATE, "base", f"*-{drv[:12]}.tsv"))}
+    if not files:
+        return origin
+    jo, want, n = judge_id(origin), set(labels), 0
+    for x in git("rev-list", "--first-parent", origin).splitlines():
+        if not files:
+            break
+        if x not in files:
+            n += 1; continue
+        files.discard(x)
+        p = base_path(x, drv)
+        if judge_id(x) == jo and os.path.exists(p) and want <= {r[0] for r in read_cases(p)}:
+            if x != origin:
+                event("base-older", base=x[:12], origin=origin[:12], behind=n, labels=len(want))
+            return x
+        n += 1
+    return origin
+
 @contextlib.contextmanager
 def base_write(path):
     """A base file's write lock, `<path>.lock`, held for one read-merge-write alone: measure_base and seed_base both
@@ -2113,7 +2169,7 @@ def driver_commit():
     """The commit this process's driver runs from: its tree's HEAD (H1: a loop's tree is one origin commit)."""
     return git("rev-parse", "HEAD", cwd=ROOT).strip()
 
-def seed_base(head, rows, measured, driver, cache=None):
+def seed_base(head, rows, measured, driver):
     """A landed head's base rows taken from its own landing's measurement (throughput T3(i)), so the next move at that
     head measures only what the landing did not: the rows `rows` of commit `measured`, measured by the driver of commit
     `driver`, are written into `head`'s base file (measure_base's: `head` and its judge_id) only when all of these hold,
@@ -2132,8 +2188,7 @@ def seed_base(head, rows, measured, driver, cache=None):
     keep = [r for r in rows if r.prov is not None and r.prov[1] == jid]
     if not keep:
         return 0, f"no row names {head[:10]}'s judge ({jid[:16]})"
-    cache = cache or os.path.join(STATE, "base")
-    path = os.path.join(cache, f"{head}-{jid[:16]}.tsv")
+    path = base_path(head, tree(f"{head}:dev/climb"))   # the measuring driver's tree, checked equal to the head's
     with base_write(path):
         have = {r[0]: r for r in read_cases(path)} if os.path.exists(path) else {}
         new = {r[0]: r for r in keep if r[0] not in have}

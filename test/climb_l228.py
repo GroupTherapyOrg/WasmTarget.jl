@@ -397,7 +397,7 @@ except Exception as e:
 # seeded rows read by measure_base with no measurement; a base measured while a seed writes keeps both (base_write);
 # and a candidate judged against the seeded rows (measure.regressions): a regression outside the hold refused, a case
 # already broken at the base not charged
-real_smoke9 = M.smoke
+real_smoke9, real_tree9 = M.smoke, M.driver_tree
 try:
     os.makedirs(f"{repo}/dev/climb", exist_ok=True)
     open(f"{repo}/dev/climb/marker9", "w").write("driver 1\n"); g("add", "-f", "dev/climb/marker9"); g("commit", "-qm", "c1")
@@ -407,7 +407,8 @@ try:
     jid9 = M.judge_id(c1)
     mk9 = lambda l, o, j=jid9: M.Row((l, o, 1.0, ""), ("a" * 40, j))
     rows9 = [mk9("n/a", "passed"), mk9("n/b", "errored"), mk9("n/c", "passed", "f" * 40)]
-    path9 = os.path.join(state, "base", f"{c1}-{jid9[:16]}.tsv")   # measure_base's file of c1
+    M.driver_tree = lambda: g("rev-parse", "c1:dev/climb".replace("c1", c1))   # the driver measuring is c1's
+    path9 = M.base_path(c1, M.driver_tree())   # measure_base's file of c1
     for what, measured, driver in (("by a driver whose dev/climb is not the head's", c1, c2), ("on a tree not the landed one", c2, c1)):
         n9, why9 = M.seed_base(c1, rows9, measured, driver)
         if n9 or os.path.exists(path9):
@@ -436,7 +437,7 @@ try:
 except Exception as e:
     fault(f"the base's seed raised {type(e).__name__}: {str(e)[:240]}")
 finally:
-    M.smoke = real_smoke9
+    M.smoke, M.driver_tree = real_smoke9, real_tree9
 
 # 10. a driver fault's backoff ends when the driver's code changes (core.running): the lander's loop, guarded, waits
 # out a fault of its driver only while the driver is the tree that faulted; under a new driver the wait is over and a
@@ -468,6 +469,163 @@ except Exception as e:
     fault(f"the driver fault's backoff raised {type(e).__name__}: {str(e)[:240]}")
 finally:
     core.driver_tree = real_tree10
+
+# 11. a move's base costs nothing when it can (throughput T4, measure.base_choice, through slots.move): a slot takes
+#: needs 3, 4, 7
+# the newest head whose base file holds every label of the move under origin's judge, written by a driver of its own
+# dev/climb tree, and measures nothing at its start (no lock, no smoke); one label short, it measures origin's head;
+# a file of another driver's tree or a head under another judge is not taken. A regression against origin's head that
+# the older base does not show is refused by the lander's rebased check (section 7's rebased6, the lander's own path).
+# slots.move's door, clone and Kaimon steps are stood in; base_choice, measure_base and the base files are real
+import slots as SL
+real11 = {"tree": M.driver_tree, "smoke": M.smoke, "slot": M.julia_slot, "using": door.using,
+          **{k: getattr(SL, k) for k in ("users", "labels_for", "environment", "deps", "agent_tree", "kaimon_up", "session",
+                                         "already_advanced", "update_json")}}
+try:
+    os.makedirs(f"{repo}/dev/hooks", exist_ok=True); open(f"{repo}/dev/hooks/commit-msg", "w").write("#!/bin/sh\n")
+    open(f"{repo}/src/t11.jl", "w").write("t = 1\n"); g("add", "src/t11.jl"); g("commit", "-qm", "x11"); x11 = g("rev-parse", "HEAD")
+    open(f"{repo}/src/t11.jl", "a").write("t = 2\n"); g("commit", "-qam", "o11"); o11 = g("rev-parse", "HEAD")
+    os.makedirs(f"{repo}/test", exist_ok=True)
+    open(f"{repo}/test/oracle.jl", "w").write("# a judge edit\n"); g("add", "test/oracle.jl"); g("commit", "-qm", "j11"); j11 = g("rev-parse", "HEAD")
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", o11)
+    labels11 = {"m/a", "m/b", "m/c"}
+    drv11 = "d" * 40
+    M.driver_tree = lambda: drv11
+    def file11(head, labels, drv=drv11):
+        jid = M.judge_id(head)
+        core.write_atomic(M.base_path(head, drv), M.cases_text([M.Row((l, "passed", 1.0, ""), ("a" * 40, jid)) for l in sorted(labels)]))
+    file11(x11, labels11)
+    smoked11, locked11, seen11 = [], [], []
+    M.smoke = lambda role, only, task, sha_, **kw: (smoked11.append((sha_, set(only))), ({l: M.Row((l, "passed", 1.0, ""), ("a" * 40, M.judge_id(sha_))) for l in only}, None))[1]
+    @contextlib.contextmanager
+    def slot11(kind, first=False):
+        locked11.append(kind); yield
+    M.julia_slot = slot11
+    door.using = lambda role: contextlib.nullcontext()
+    SL.users = lambda name: ("_wtk1", "review1")
+    SL.update_json = lambda *a, **k: None
+    SL.environment = lambda sha_: {"Manifest.toml": "", "LocalPreferences.toml": ""}
+    SL.deps = lambda sha_, man: "/nonexistent"
+    SL.agent_tree = lambda *a, **k: f"{tmp}/clone11"
+    SL.kaimon_up = lambda *a, **k: None
+    SL.session = lambda *a, **k: "k11"
+    SL.already_advanced = lambda h_, base_, rows: (seen11.append((base_, dict(rows))), True)[1]   # the move ends there
+    def move11(labels):
+        smoked11.clear(); locked11.clear(); seen11.clear()
+        SL.labels_for = lambda h_: set(labels)
+        r = SL.move({"id": "h11", "key": "k11", "cases": ["m/a"]}, "climb-1")
+        return r, (seen11[0][0] if seen11 else None)
+    r11, base11 = move11(labels11)
+    if (r11, base11) != ("already-advanced", x11) or smoked11 or locked11:
+        fault(f"a slot with a complete older base took {base11 and base11[:10]}, not {x11[:10]}, or measured {smoked11} or took {locked11} (T4)")
+    r11, base11 = move11(labels11 | {"m/d"})
+    if base11 != o11 or not smoked11 or smoked11[0][0] != o11:
+        fault(f"a slot one label short of every older base took {base11 and base11[:10]} and measured {smoked11}, not origin's head {o11[:10]} (T4)")
+    M.driver_tree = lambda: "e" * 40
+    r11, base11 = move11(labels11)
+    if base11 != o11:
+        fault(f"a slot took {base11 and base11[:10]}'s base file, written by a driver of another dev/climb tree (T4)")
+    M.driver_tree = lambda: drv11
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", j11)
+    r11, base11 = move11(labels11)
+    if base11 != j11:
+        fault(f"a slot took {base11 and base11[:10]}, a head under another judge than origin's {j11[:10]} (T4)")
+    # a regression only against origin's head: m/a broken at the older base, passing at origin, broken by the move
+    E11 = lambda l: (l, "errored", 1.0, "planted")
+    gate11 = M.regressions({"key": "k11", "cases": ["x/y"]}, {"m/a"}, {"m/a": M.Row(E11("m/a"), (A6, J1))}, {"m/a": M.Row(E11("m/a"), (A6, J1))})
+    land11, _ = rebased6({"m/a": (P("m/a"), J1)}, {"m/a": P("m/a")}, {"m/a": E11("m/a")}, {"m/a"})
+    if gate11 or not any("m/a" in p_ for p_ in land11):
+        fault(f"a regression against origin's head alone: the older base's gate read {gate11} (none expected), the lander's "
+              f"rebased check {land11} (a refusal naming m/a expected) (T4)")
+except Exception as e:
+    import traceback
+    fault(f"the move's base (T4) raised {type(e).__name__}: {str(e)[:240]} {traceback.format_exc()[-300:]}")
+finally:
+    M.driver_tree, M.smoke, M.julia_slot, door.using = real11["tree"], real11["smoke"], real11["slot"], real11["using"]
+    for k in ("users", "labels_for", "environment", "deps", "agent_tree", "kaimon_up", "session", "already_advanced", "update_json"):
+        setattr(SL, k, real11[k])
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+
+# 12. a compiling process killed from outside (SIGKILL the watch did not send: jetsam, memory pressure) is the
+# host's: no row, the measurement cut (MeasureCut, infra), its case measured again; a process that ends by itself
+# during a case (its own exit; an abort's crash report would hold it for minutes) still books that case errored (O9-3). measure.watched itself, with a stand-in process (sh)
+# writing its `started` record and then ending; the door's home, tick and reap stood in
+real12, real_cfg12 = {k: getattr(door, k) for k in ("home", "open_home", "tick", "reap")}, M.cfg
+try:
+    M.cfg = lambda: dict(real_cfg12(), watch_s=0.05)   # the watch's poll injected tiny: a wait by design
+    home12 = f"{tmp}/home12"; os.makedirs(f"{home12}/m/kill/compile", exist_ok=True); os.makedirs(f"{home12}/m/abort/compile", exist_ok=True); d12 = f"{tmp}/d12"; os.makedirs(d12, exist_ok=True)
+    door.home = lambda role: home12
+    door.open_home = lambda role, rel: open(f"{home12}/{rel}", "rb") if os.path.exists(f"{home12}/{rel}") else None
+    door.tick = lambda *a, **k: None
+    door.reap = lambda *a, **k: None
+    def start12(how):
+        def start(env, log_):
+            mark = f"{d12}/ran-{how}"
+            script = ('if [ -e "$MARK" ]; then exit 0; fi; : > "$MARK"; printf "started\\ta/x\\n" >> "$REC"; '
+                      + ("kill -9 $$" if how == "kill" else "exit 3"))
+            return subprocess.Popen(["/bin/sh", "-c", script], env=dict(os.environ, REC=env["WT_SMOKE_COMPILED"], MARK=mark),
+                                    stdout=log_, stderr=subprocess.STDOUT)
+        return start
+    try:
+        out12 = M.watched(start12("kill"), "measure", d12, "m/kill/compile", "compile", ["a/x"], 60, var="WT_SMOKE_COMPILED", keep_done=True)
+        fault(f"a compiling process SIGKILLed from outside during its case booked {out12[1]}, not a cut (infra, no row)")
+    except M.MeasureCut as e:
+        if "SIGKILL" not in str(e):
+            fault(f"a compiling process SIGKILLed from outside was cut, naming another cause: {str(e)[:200]}")
+    out12 = M.watched(start12("abort"), "measure", d12, "m/abort/compile", "compile", ["a/x"], 60, var="WT_SMOKE_COMPILED", keep_done=True)
+    if out12[1] != {"a/x": "the process ended during the case"}:
+        fault(f"a compiling process that aborted during its case booked {out12[1]} (refused: {out12[3]}), not that case errored (O9-3)")
+except Exception as e:
+    fault(f"the watch of a killed process raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    M.cfg = real_cfg12
+    for k, v in real12.items():
+        setattr(door, k, v)
+
+# 13. the report says the budget rule that runs: with budget_holds false it names no pause and no limit it does not
+# hold; with it true, the week's pause and the limits (core.report itself, budget_holds stood in through cfg; the spend
+# counters stood in, which read the account's transcripts under HOME: the harness reads none of the owner's)
+real13 = {k: getattr(core, k) for k in ("cfg", "week_spend", "account_spend", "climb_spend", "allowance")}
+try:
+    core.week_spend, core.account_spend, core.climb_spend, core.allowance = (lambda: 1e6), (lambda d: 1e6), (lambda d: 1e6), (lambda: 9e6)
+    for holds13 in (False, True):
+        core.cfg = lambda h_=holds13: dict(real13["cfg"](), budget_holds=h_)
+        r13 = core.report()
+        said13 = "pauses at" in r13 or " of " + f"{real13['cfg']()['week_weighted'] / 1e6:.0f}M" in r13
+        if said13 != holds13:
+            fault(f"the report with budget_holds {holds13} {'says' if said13 else 'does not say'} the week's pause and limits: "
+                  + next((l for l in r13.splitlines() if "week" in l), "no week line")[:200])
+except Exception as e:
+    fault(f"the report raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    for k, v in real13.items():
+        setattr(core, k, v)
+
+# 15. a queued item is one commit (lander.enqueue): the lander's test set is made for the item's commit and dev/ship.sh
+# checks each commit in turn, so an item of two is refused before it is queued, naming why; one commit is not refused
+# for its count
+try:
+    base15 = g("rev-parse", "HEAD")
+    open(f"{repo}/src/t15.jl", "w").write("a = 1\n"); g("add", "src/t15.jl"); g("commit", "-qm", "a15"); a15 = g("rev-parse", "HEAD")
+    open(f"{repo}/src/t15.jl", "a").write("b = 2\n"); g("commit", "-qam", "b15"); b15 = g("rev-parse", "HEAD")
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", base15)
+    for sha15, n15 in ((b15, 2), (a15, 1)):
+        try:
+            L.enqueue(sha15, "l228-15", "hand")
+            why15 = None
+        except core.ClimbError as e:
+            why15 = str(e)
+        refused15 = bool(why15) and "a queued item is one commit" in why15
+        if refused15 != (n15 > 1):
+            fault(f"an item of {n15} commit(s) {'was' if refused15 else 'was not'} refused for its count: {why15}")
+except Exception as e:
+    fault(f"the one-commit rule raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+    with contextlib.suppress(Exception):
+        core.update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [x for x in q if x.get("hold") != "l228-15"]))
 
 for f in faults:
     print(f)

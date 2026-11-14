@@ -206,7 +206,9 @@ not the wall, bound a healthy run of any size; a lander's yield and the reload a
 pass set: a score so cut is `score-failed`, a base or a rebased check the driver's failure, a candidate's
 infrastructure (O8-1; probed with the operator's five 4-s cases past a 9-s wall: refused, naming g/c2 in flight and
 g/c3, g/c4 not reached, no `scored` event and no table, where HEAD scored the two cases it reached as the head). A case with no new record for its
-budget, or one in flight when its process ends (a segfault, an abort, jetsam: O9-3), is booked errored and named,
+budget, or one in flight when its process ends by itself (a segfault, an abort: O9-3), is booked errored and named
+(a process killed from outside, a SIGKILL the watch did not send, jetsam's or memory pressure's, is the host's: no
+row, the measurement cut, its case measured again),
 and the process started again without it (R5-10; probed with the operator's crash.py, the third of five cases ending
 its process: g/c2 booked "the process ended during the case" and g/c3, g/c4 run, where HEAD's frame was g/c0, g/c1
 and the score stuck): the first case and a
@@ -929,7 +931,11 @@ door's, run as Dale on paths no build user writes.
   the driver's own directory, never a run directory; the base cache's file is merged with what is on it when written,
   under a lock of its own held for the write alone, so neither of two writers drops the other's rows; a landed head's
   base file is seeded from its own landing's rows when the landed tree is the tree measured, the measuring driver's
-  dev/climb is the head's and each row names the head's judge, `measure.seed_base`, throughput T3(i)), and a compile's
+  dev/climb is the head's and each row names the head's judge, `measure.seed_base`, throughput T3(i); a base file is
+  keyed by its head, the head's judge and the measuring driver's dev/climb tree, and a slot's move takes as its base
+  the newest head whose file holds every label of the move under origin's judge and its own driver's tree, reading it
+  with no lock and measuring nothing, else origin's head, `measure.base_choice`, throughput T4: sound because no move
+  on an older base lands without the lander's rebased check at origin), and a compile's
   yield at a case's boundary leaves the role's use
   for its wait (`door.released`: the role's lock let go and taken again; when another use came between, which the
   role's generation, written by every taker, shows, the part's directories are made again, or, with no way to make

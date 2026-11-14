@@ -3,7 +3,9 @@ ONE move: you make the cases of one hold pass, in one commit, and then you stop.
 
 Worktree: {{WORKTREE}} (branch {{BRANCH}}, based on origin/wt2 {{BASE}}), a git clone of its own whose origin is
 the main repository. Work only here: you run in a sandbox that can write only this clone, and you have no way to
-push. The driver measures, reviews and queues your commit; its lander lands it.
+push. The driver measures, reviews and queues your commit; its lander lands it. Your base may be behind origin's head (the
+driver keeps a base it has measured already): work on it as it is; the lander replays your commit onto origin's head
+and measures it there before it lands.
 
 ## Read first, and only this
 
