@@ -61,12 +61,15 @@ member the runtime ports, each under its dart library, class and name, as Member
 
 # dart files each intrinsic under its member's library, class and name; the members the runtime ports
 # are the ones a Julia method can be: ClassID.getID (class_id.dart:10), _isRecordClassId
-# (type.dart:2060) and unsafeCast (internal_patch.dart:49), src/runtime/common
+# (type.dart:2060), unsafeCast (internal_patch.dart:49) and getIdentityHashField and
+# setIdentityHashField (object_helper.dart:9, :11), src/runtime/common
 @parity "dart2wasm/lib/intrinsics.dart:404 StaticIntrinsic._populateLookup" StaticIntrinsic__populate_lookup()::Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}} =
     Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}}(
         "dart:_internal" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}("ClassID" => Dict{String,StaticIntrinsic}("getID" => StaticIntrinsic_getID),
                                                                          nothing => Dict{String,StaticIntrinsic}("unsafeCast" => StaticIntrinsic_unsafeCast)),
-        "dart:core" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}(nothing => Dict{String,StaticIntrinsic}("_isRecordClassId" => StaticIntrinsic_isRecordClassId)))
+        "dart:core" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}(nothing => Dict{String,StaticIntrinsic}("_isRecordClassId" => StaticIntrinsic_isRecordClassId)),
+        "dart:_object_helper" => Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}(nothing => Dict{String,StaticIntrinsic}(
+            "getIdentityHashField" => StaticIntrinsic_getIdentityHashField, "setIdentityHashField" => StaticIntrinsic_setIdentityHashField)))
 
 # a Julia method is a dart library member when it is the runtime's port of one, Runtime.ClassID_get_id
 # of dart:_internal's ClassID.getID, looked up by that member's library, class and name as dart looks
@@ -76,7 +79,9 @@ member the runtime ports, each under its dart library, class and name, as Member
     member.def.module === Runtime || return nothing
     local (library, cls, name) = member.def in methods(Runtime.ClassID_get_id) ? ("dart:_internal", "ClassID", "getID") :
                                  member.def in methods(Runtime._is_record_class_id) ? ("dart:core", nothing, "_isRecordClassId") :
-                                 member.def in methods(Runtime.unsafe_cast) ? ("dart:_internal", nothing, "unsafeCast") : (nothing, nothing, nothing)
+                                 member.def in methods(Runtime.unsafe_cast) ? ("dart:_internal", nothing, "unsafeCast") :
+                                 member.def in methods(Runtime.get_identity_hash_field) ? ("dart:_object_helper", nothing, "getIdentityHashField") :
+                                 member.def in methods(Runtime.set_identity_hash_field) ? ("dart:_object_helper", nothing, "setIdentityHashField") : (nothing, nothing, nothing)
     library === nothing && return nothing
     return get(get(get(StaticIntrinsic__lookup[], library, Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}()), cls, Dict{String,StaticIntrinsic}()), name, nothing)
 end
@@ -614,6 +619,8 @@ end
         intrinsic === StaticIntrinsic_getID && return generate_static_intrinsic(self, Val(:get_id), node.args[2:end])
         intrinsic === StaticIntrinsic_isRecordClassId && return generate_static_intrinsic(self, Val(:is_record_class_id), node.args[2:end])
         intrinsic === StaticIntrinsic_unsafeCast && return generate_static_intrinsic(self, Val(:unsafe_cast), node.args[2:end])
+        intrinsic === StaticIntrinsic_getIdentityHashField && return generate_static_intrinsic(self, Val(:get_identity_hash_field), node.args[2:end])
+        intrinsic === StaticIntrinsic_setIdentityHashField && return generate_static_intrinsic(self, Val(:set_identity_hash_field), node.args[2:end])
         reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "the static intrinsic $intrinsic")
     end
     local f = nir_callee(node)
@@ -1188,6 +1195,34 @@ end
     translate_expression(self.code_gen, only(args), WasmBuilder.IR.NumType_i32)
     emit_class_id_range_check(self.code_gen.b[], ranges)
     return WasmBuilder.IR.NumType_i32
+end
+
+# getIdentityHashField (intrinsics.dart:1498): the operand translated as the non-null Object, its
+# header's identityHash field read and zero-extended to dart's int
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:get_identity_hash_field}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local object_type = t.object_info[].non_nullable_type
+    translate_expression(self.code_gen, only(args), object_type)
+    WasmBuilder.struct_get(b, t.object_info[].struct_, FieldIndex_identity_hash())
+    WasmBuilder.i64_extend_i32_u(b)
+    return WasmBuilder.IR.NumType_i64
+end
+
+# setIdentityHashField (intrinsics.dart:1505): the operand translated as the non-null Object, the hash
+# as dart's int wrapped to the field's i32 and stored; dart's void intrinsics leave the null of the top
+# type, Julia's nothing
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:set_identity_hash_field}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local (arg, hash) = args
+    local object_type = t.object_info[].non_nullable_type
+    translate_expression(self.code_gen, arg, object_type)
+    translate_expression(self.code_gen, hash, WasmBuilder.IR.NumType_i64)
+    WasmBuilder.i32_wrap_i64(b)
+    WasmBuilder.struct_set(b, t.object_info[].struct_, FieldIndex_identity_hash())
+    WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+    return t.top_type[]
 end
 
 # ClassID.getID (intrinsics.dart:1577): the operand translated as the non-null top type, its class id

@@ -61,10 +61,18 @@ end
     # _is_record_class_id dart:core's top-level _isRecordClassId (type.dart:2060, filed at
     # intrinsics.dart:287 `isRecordClassId('dart:core', null, '_isRecordClassId')`); no method is a
     # dart:_wasm member
+    # getIdentityHashField and setIdentityHashField, filed at intrinsics.dart:288-289 under
+    # dart:_object_helper's top level
     @test DI.MemberIntrinsic__lookup[] == Dict("dart:core" => Dict("Error" => Dict("_throw" => DI.MemberIntrinsic_errorThrow))) &&
           DI.StaticIntrinsic__lookup[] == Dict("dart:_internal" => Dict("ClassID" => Dict("getID" => DI.StaticIntrinsic_getID),
                                                                          nothing => Dict("unsafeCast" => DI.StaticIntrinsic_unsafeCast)),
-                                               "dart:core" => Dict(nothing => Dict("_isRecordClassId" => DI.StaticIntrinsic_isRecordClassId)))
+                                               "dart:core" => Dict(nothing => Dict("_isRecordClassId" => DI.StaticIntrinsic_isRecordClassId)),
+                                               "dart:_object_helper" => Dict(nothing => Dict("getIdentityHashField" => DI.StaticIntrinsic_getIdentityHashField,
+                                                                                             "setIdentityHashField" => DI.StaticIntrinsic_setIdentityHashField)))
+    local get_hash_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime.get_identity_hash_field)), Tuple{typeof(WI.Runtime.get_identity_hash_field),Any}, Core.svec())
+    @test DI.StaticIntrinsic_from_procedure(get_hash_mi) === DI.StaticIntrinsic_getIdentityHashField
+    local set_hash_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime.set_identity_hash_field)), Tuple{typeof(WI.Runtime.set_identity_hash_field),Any,Int64}, Core.svec())
+    @test DI.StaticIntrinsic_from_procedure(set_hash_mi) === DI.StaticIntrinsic_setIdentityHashField
     local get_id_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime.ClassID_get_id)), Tuple{typeof(WI.Runtime.ClassID_get_id),Any}, Core.svec())
     @test DI.StaticIntrinsic_from_procedure(get_id_mi) === DI.StaticIntrinsic_getID
     local record_mi = Core.Compiler.specialize_method(only(methods(WI.Runtime._is_record_class_id)), Tuple{typeof(WI.Runtime._is_record_class_id),Int32}, Core.svec())
@@ -220,6 +228,36 @@ end
     @test WI.nir_intrinsified(cu) && !any(nb -> nb.ci.def === cu, t.component)
     local r = intr_rejection(() -> WI.nir_body_of(t.component, cu))
     @test r.rejection isa WI.Internal && occursin("a call it did not lower", r.rejection.site)
+end
+
+module IdentityFieldCases
+using WasmTarget: Runtime
+mutable struct Cell; x::Int64; end
+# the identity hash field of a fresh object (k = 0), and the field after `h` is stored (k = 1): a
+# mutable struct's, a Memory's (k = 2, 3) and a String's (k = 4, 5), every object under Any carrying it
+function idfield(k::Int64, h::Int64)
+    local o = k < 2 ? Cell(h) : k < 4 ? Memory{Int64}(undef, 2) : string("ab", h)
+    iseven(k) && return Runtime.get_identity_hash_field(o)
+    Runtime.set_identity_hash_field(o, h)
+    return Runtime.get_identity_hash_field(o)
+end
+end
+
+@testset "intrinsics.dart: the identity hash field read and written in the object's header" begin
+    # getIdentityHashField is `struct.get identityHash; i64.extend_i32_u` on the Object struct,
+    # setIdentityHashField `i32.wrap_i64; struct.set identityHash` (intrinsics.dart:1498-1514): a fresh
+    # object's field is dart's initialIdentityHash, 0 (class_info.dart:193); a stored value reads back
+    # as its low 32 bits, unsigned. Natively no object carries the field, so the answer is dart's
+    # definition, written here: 0 fresh, else `h & 0xffffffff`
+    local want(k, h) = iseven(k) ? Int64(0) : Int64(h & 0xffffffff)
+    local args = [(Int64(k), h) for k in 0:5 for h in (Int64(5), Int64(-1), Int64(2)^32 + 7, Int64(0x7fffffff))]
+    local bytes = WI.compile(IdentityFieldCases.idfield, (Int64, Int64))
+    for r in WTChild.run_cases([WTChild.RunCase("idfield$a", bytes, a, want(a...)) for a in args])
+        @test r.ok || (@info r.label r.why; false)
+    end
+    # natively the body raises: the field exists only in a module
+    @test_throws ErrorException WI.Runtime.get_identity_hash_field(IdentityFieldCases.Cell(1))
+    @test_throws ErrorException WI.Runtime.set_identity_hash_field(IdentityFieldCases.Cell(1), 3)
 end
 
 module SvecRefCases
