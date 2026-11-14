@@ -162,6 +162,58 @@ formal(dev/formal/TypeCacheLookup.tla): every key the operands can hold finds an
 end
 
 """
+    applicable_cache(translator, operands, at) -> Vector{Pair{Vector{Any},Bool}}
+
+The cases of one `applicable(f, args...)` statement, split as Julia's inliner splits a call over its
+arguments' unions (Compiler/src/ssair/inlining.jl:526 ir_inline_unionsplit!), the split
+apply_type_cache makes: each entry a case, its key one member of each operand (a type, the operand's
+`isa` test), its answer Julia's run time's for every value of that key. An operand is a literal or
+constant (`Some` of its value) or the type Julia inferred for it, each of whose members is a type of
+one value (`Type{X}`, Julia's isconstType, Compiler/src/typeutils.jl:9) or a concrete class that is no
+kind, so the run time's lookup key is the same for every value of the member; the keys are the split of
+the operands' unions (typeutils.jl:261 switchtupleunion), every key the statement can meet at run time,
+so the split is fully covered. Unlike apply_type_cache it splits past inference's bound
+(max_union_splitting, abstractinterpretation.jl:352): there Julia's inference stops making a case per
+split of the call (abstract_applicable answers Bool), but its run time still answers every key by its
+lookup, and the keys are finite, the product of the operands' unions, so every key keeps its case (a
+statement of three two-member operands, 8 keys past the bound of 4, answers as native).
+
+Julia's run time answers the call by its method table (julia/src/builtins.c:1599 jl_f_applicable):
+jl_method_lookup (julia/src/gf.c:3092) looks up the argument tuple type arg_type_tuple makes
+(julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: a type value `X` as `Type{X}`, any other value as its
+type) with jl_mt_assoc_by_type, true where it finds a method. The answer depends on that tuple type
+alone, so each case's answer is that lookup's on its key's tuple type, made at compile time by the run
+time's own jl_method_lookup_by_tt (gf.c:3075) at the program's world. A member of any other type (an
+abstract type, a kind whose values the lookup keys apart, `Type{T}` of more than one value) or a type
+value with no constant (type_value_unmade) rejects at the statement, located.
+
+formal(dev/formal/TypeCacheLookup.tla): every key the operands can hold finds an entry, the one of its own key
+"""
+@quarantine pin"julia/src/builtins.c:1599 jl_f_applicable" "Julia's run time answers applicable by a method table lookup on the arguments' tuple type (gf.c:3092 jl_method_lookup); WasmGC has no method table at run time, so the statement is split at compile time as the inliner splits a call, one case per key every value Julia's inference lets each operand hold, its answer the run time's own lookup on the key's tuple type (gf.c:3075 jl_method_lookup_by_tt), and the run-time half tests the cases in order; past inference's split bound too, as the run time answers every key, whose number is the product of the operands' unions" Core.Compiler.switchtupleunion function applicable_cache(translator, operands::Vector{Any}, at::String)::Vector{Pair{Vector{Any},Bool}}
+    local keyable(@nospecialize(m)) = Core.Compiler.isconstType(m) || m isa DataType && isconcretetype(m) && !Base.iskindtype(m)
+    for op in operands
+        op === Union{} &&
+            reject!(Unquarantined("src/julia/classes.jl applicable_cache: an operand of Julia's applicable typed Union{}, a value no run time holds, whose key no tuple type has"), at)
+        op isa Some || all(keyable, Base.uniontypes(op)) ||
+            reject!(Unquarantined("src/julia/classes.jl applicable_cache: an operand of Julia's applicable typed $op, whose members are no concrete classes or types of one value each, which the run time's lookup keys by value"), at)
+        local unmade = op isa Some ? nothing :
+            findfirst(m -> Core.Compiler.isconstType(m) && type_value_unmade(translator, m.parameters[1]) !== nothing, Base.uniontypes(op))
+        unmade === nothing ||
+            reject!(Unquarantined("src/julia/classes.jl type_value_unmade: an operand of Julia's applicable typed $op, whose type value $(Base.uniontypes(op)[unmade].parameters[1]) has no constant"), at)
+    end
+    local argtypes = Any[op isa Some ? Core.Const(something(op)) : op for op in operands]
+    local entries = Pair{Vector{Any},Bool}[]
+    # each key one split of the operands' unions (switchtupleunion), a case of the inliner's union split
+    for split in Core.Compiler.switchtupleunion(Core.Compiler.fallback_lattice, argtypes)
+        local k = Any[a isa Core.Const ? Core.Typeof(a.val) : a for a in split]
+        # jl_inst_arg_tuple_type's tuple type of the key, and jl_mt_assoc_by_type's lookup of it
+        local found = ccall(:jl_method_lookup_by_tt, Any, (Any, Csize_t, Any), Tuple{k...}, translator.component.world, nothing)
+        push!(entries, k => found !== nothing)
+    end
+    return entries
+end
+
+"""
     new_struct_classes(translator, tytype, at) -> Vector{DataType}
 
 The classes an allocation of a class only run time knows may make (Julia's `new` whose type operand is

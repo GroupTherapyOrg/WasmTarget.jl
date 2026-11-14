@@ -455,6 +455,29 @@ end
     queue_native!("mulo", bytes, CheckedMulCases.mulo, [(a, b) for a in edge for b in edge])
 end
 
+# Julia's applicable, its run time's method lookup (builtins.c:1599 jl_f_applicable): an operand of
+# two closure classes, one of two type values (Type{X}, keyed by the value), one of Nothing or a Float64,
+# and a constant; an operand typed Any, whose values the lookup keys apart, rejects at the statement
+module ApplicableCases
+struct P{T} end
+@noinline mk(n::Int64) = n > 0 ? P{Int64}() : P{String}()
+(::P{T})(x::T) where {T} = x
+g(::P{T}, ::Type{S}, x::Union{Nothing,S}) where {T,S} = 1
+@noinline ty(n::Int64) = n > 1 ? Int64 : Float64
+@noinline val(n::Int64) = n > 2 ? nothing : 1.5
+facts(n::Int64) = Int64(applicable(mk(n), n)) + 2Int64(applicable(mk(n), "s")) +
+    4Int64(applicable(g, mk(n), ty(n), val(n))) + 8Int64(applicable(g, mk(n), Float64, 1.5)) + 16Int64(applicable(g, n))
+any_of(v::Vector{Any}) = applicable(sin, v[1])
+end
+
+@testset "builtins.c: applicable is the run time's method lookup on each key the operands hold, against native" begin
+    local bytes = W.compile(ApplicableCases.facts, (Int64,); optimize = false)
+    queue_native!("applicable", bytes, ApplicableCases.facts, [(n,) for n in Int64[-1, 0, 1, 2, 3]])
+    local e = rejection(() -> W.compile(ApplicableCases.any_of, (Vector{Any},); optimize = false))
+    @test e !== nothing && e.rejection isa W.Unquarantined && !isempty(e.at) &&
+          startswith(e.rejection.row, "src/julia/classes.jl applicable_cache: an operand of Julia's applicable typed Any")
+end
+
 @testset "the third oracle: every module queued above answers as native Julia" begin
     for r in WTChild.run_cases(NATIVE_RUNS)
         r.ok || println(r.label, ": ", r.why)

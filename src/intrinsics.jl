@@ -647,6 +647,7 @@ end
     # typeof of a value only run time knows: Julia's jl_typeof, a read of the value's tag
     f === Core.typeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:to_typeof), args; tag_of_value = true)
     f === Core.apply_type && return generate_static_intrinsic(self, Val(:run_time_type), f, args)
+    f === Core.applicable && length(args) >= 1 && return generate_static_intrinsic(self, Val(:applicable), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f === Core.donotdelete && return generate_static_intrinsic(self, Val(:donotdelete), f, args)
     f isa Core.IntrinsicFunction || return nothing
@@ -1727,6 +1728,62 @@ end
     WasmBuilder.unreachable(b)
     WasmBuilder.var"end"(b)
     return result
+end
+
+# Julia's applicable(f, args...), a method table lookup at run time (julia/src/builtins.c:1599
+# jl_f_applicable, gf.c:3092 jl_method_lookup) that Julia's codegen leaves to its runtime: split at
+# compile time over the keys the operands can hold, each case's answer the run time's lookup on its
+# key's tuple type (src/julia/classes.jl applicable_cache, the one source of its keys and answers). The
+# cases run as Julia's inliner runs a union split's (Compiler/src/ssair/inlining.jl:526
+# ir_inline_unionsplit!), in order, as the apply_type arm runs its own: each case's test is isa on each
+# operand of more than one key, a `Type{X}` key the operand's ref.eq with X's constant (isa on a type of
+# one value is === X), a class key types.dart's emitIsTest of the class; the first case whose tests hold
+# answers its Bool. Past the last case is wasm's trap, as the apply_type arm's: the cases cover every
+# key (dev/formal/TypeCacheLookup.tla)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:applicable}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))"
+    # an operand's value where compile time knows it, a literal or a constant binding, else the type
+    # Julia inferred for it
+    local operands = Any[a isa NirConst ? Some(a.c.val) :
+                         a isa NirGlobal && nir_binding_is_constant(a.binding) ? Some(nir_binding_value(a.binding, at).c.val) :
+                         dart_type_of(self, a) for a in args]
+    local cache = applicable_cache(t, operands, at)
+    # each operand of more than one key, held boxed in the top type for the tests
+    local held = Dict{Int,WasmBuilder.IR.Local}()
+    for (j, a) in enumerate(args)
+        operands[j] isa Some && continue
+        length(unique(k[j] for (k, _) in cache)) > 1 || continue
+        held[j] = add_local(code_gen, t.top_type[])
+        translate_expression(code_gen, a, t.top_type[])
+        WasmBuilder.local_set(b, held[j])
+    end
+    local i32 = WasmBuilder.IR.NumType_i32
+    local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
+    for (k, answer) in cache
+        local miss = WasmBuilder.block(b)
+        for j in sort!(collect(keys(held)))
+            WasmBuilder.local_get(b, held[j])
+            if Core.Compiler.isconstType(k[j])
+                translate_expression(code_gen, NirConst(Core.Const(k[j].parameters[1])), t.top_type[])
+                WasmBuilder.ref_eq(b)
+            else
+                # the operand boxed as visitIsExpression boxes it, non-null where its type admits no `nothing`
+                Nothing <: operands[j] || WasmBuilder.ref_as_non_null(b)
+                emit_is_test(t.types[], code_gen, k[j], operands[j]; location = at)
+            end
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.br_if(b, miss)
+        end
+        WasmBuilder.i32_const(b, answer ? 1 : 0)
+        WasmBuilder.br(b, done)
+        WasmBuilder.var"end"(b)
+    end
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    return i32
 end
 
 # a memory's data operations (src/julia/wasm_array.jl): an element left #undef (Base's _unsetindex!,
