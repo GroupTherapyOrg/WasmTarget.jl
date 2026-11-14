@@ -51,7 +51,9 @@ The cases it stops, as the driver measured them at your base (group/case — out
 3. **Map before you write (D26).** Name the dart counterpart at the pin (the rejection usually names
    its anchor) and read its lines in the pinned checkout: dart at `~/.cache/wasmtarget/dart-sdk` (dart-lang/sdk
    898a1e4b), LLVM at `~/.cache/wasmtarget/llvm-project` (llvm/llvm-project 7a941dfb, llvmorg-23.1.4), Julia at
-   `~/.cache/wasmtarget/julia` (JuliaLang/julia 6d172b02, v1.12.7). If dart has none, find LLVM's or Julia's own
+   `~/.cache/wasmtarget/julia` (JuliaLang/julia 6d172b02, v1.12.7), and Julia's own C dependency utf8proc at
+   `~/.cache/wasmtarget/utf8proc` (JuliaStrings/utf8proc at the commit Julia's `deps/utf8proc.version` names at the
+   julia pin; cited `precedent(utf8proc: utf8proc.c:<line> <X>)`). If dart has none, find LLVM's or Julia's own
    (D42, D45). Read Julia's typed IR for one failing case (`code_typed`, `Base.code_ircode`).
    - If no pinned source fits, stop and report `blocked:no-counterpart` with what you searched.
    - If the move ports an algorithm (a walk, a fixpoint, a stackifier, an allocator), not a single definition, model

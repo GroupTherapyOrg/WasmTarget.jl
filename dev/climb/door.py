@@ -1024,13 +1024,15 @@ def prune_tools(state, now, prune):
 
 def pins():
     """The pinned checkouts WasmTarget's anchors read (Dale's ~/.cache/wasmtarget, which dev/ship.sh fetches first with
-    origin's dev/fetch_julia.sh), each mirrored at its own commit: at launch (tools()) and before a landing's job
-    (land_job), Dale's own copies, no build user's process."""
-    for n in ("julia", "llvm-project", "dart-sdk"):   # each pinned checkout at its own commit
+    origin's dev/fetch_julia.sh: Julia's and utf8proc's, the pin derived from it), each mirrored at its own commit and
+    sparse list (a list grown at the same commit, deps/utf8proc.version, is a new copy): at launch (tools()) and before
+    a landing's job (land_job), Dale's own copies, no build user's process."""
+    def ident(d):   # a checkout's commit and the files its sparse list checks out
+        return tuple(open(f).read().strip() if os.path.exists(f) else "none" for f in (f"{d}/.git/HEAD", f"{d}/.git/info/sparse-checkout"))
+    for n in ("julia", "utf8proc", "llvm-project", "dart-sdk"):   # each pinned checkout at its own commit
         src = os.path.realpath(f"{HOME}/.cache/wasmtarget/{n}")
-        head = open(f"{src}/.git/HEAD").read().strip() if os.path.exists(f"{src}/.git/HEAD") else "none"
         dst = f"{TOP}/pins/{n}"
-        if os.path.exists(dst) and (open(f"{dst}/.git/HEAD").read().strip() if os.path.exists(f"{dst}/.git/HEAD") else "none") != head:
+        if os.path.exists(dst) and ident(dst) != ident(src):
             shutil.rmtree(dst)
         clone_tree(src, dst)
 

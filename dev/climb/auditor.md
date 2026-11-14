@@ -12,7 +12,7 @@ Read these, whole:
 - `dev/CHARTER.md`
 
 Then read each commit with `git show <hash>`, and the anchors it cites at their pins
-(`~/.cache/wasmtarget/{dart-sdk,llvm-project,julia}`), by line range. Read in the four areas: the
+(`~/.cache/wasmtarget/{dart-sdk,llvm-project,julia,utf8proc}`), by line range. Read in the four areas: the
 builder; collection and planning; emission and diagnostics; enforcement and prose.
 
 Look for drift that no lock measures:

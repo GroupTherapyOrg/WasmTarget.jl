@@ -9,6 +9,8 @@ and the anchors the diff cites, at their pins:
 - dart: dart-lang/sdk 898a1e4b, at `~/.cache/wasmtarget/dart-sdk` (or `dev/fetch_dart_sdk.sh`)
 - LLVM: llvm/llvm-project 7a941dfb (llvmorg-23.1.4), at `~/.cache/wasmtarget/llvm-project`
 - Julia: JuliaLang/julia 6d172b02 (v1.12.7), at `~/.cache/wasmtarget/julia`
+- utf8proc, Julia's C dependency: JuliaStrings/utf8proc at the commit `deps/utf8proc.version` names at the julia pin,
+  at `~/.cache/wasmtarget/utf8proc`
 
 Read code by line range, never whole large files.
 

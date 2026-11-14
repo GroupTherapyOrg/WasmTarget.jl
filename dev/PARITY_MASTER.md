@@ -45,6 +45,22 @@ the units `JULIA_FILES` names (`src/julia.h`, `genericmemory.c`, `builtins.c`, `
 `abstractinterpretation.jl`). `dev/fetch_julia.sh` makes the sparse checkout at
 `~/.cache/wasmtarget/julia`; an anchor `julia/src/<unit>.<c|cpp|h>:<line> <X>` or
 `julia/<base|Compiler/src>/<unit>.jl:<line> <X>` resolves there under L213's rule.
+
+### A pin derived from Julia's: utf8proc
+
+Base's Unicode functions (`Base.Unicode.category_code`, `isletter`, `isspace`, `uppercase`, ...) ccall
+utf8proc, Julia's own C dependency: libjulia links it, and the julia pin names its exact commit in
+`deps/utf8proc.version` (`UTF8PROC_SHA1`, the line Julia's build reads, deps/utf8proc.mk). So it is
+no new oracle but a pin derived from the julia pin (dev/LEDGER.md D42, D45), never typed by hand:
+`dev/fetch_julia.sh` reads that line from the julia checkout and checks out JuliaStrings/utf8proc at
+it, at `~/.cache/wasmtarget/utf8proc`, and the resolver (src/julia/parity.jl `_c_pin_checkout`)
+reads the same line. At the julia pin it reads JuliaStrings/utf8proc
+**`a1b99daa2a3393884220264c927a48ba1251a9c6`** (`UTF8PROC_BRANCH=v2.10.0`; derived by
+`git -C ~/.cache/wasmtarget/julia show 6d172b025e4befc4d274d9fbc9339917a8a86b65:deps/utf8proc.version`;
+L213 compares this record with the line). A port of it is a `@quarantine` overlay in src/patch whose
+pin is `precedent(utf8proc: <file>.<c|h>:<line> <X>)` (or the anchor `utf8proc/<file>.<c|h>:<line> <X>`),
+resolving at that checkout as a Julia C anchor does; a table it reads is copied verbatim from the
+pinned file, never regenerated.
 ## The optimizer: wasm-opt, dart's opt phase
 
 dart2wasm's opt phase (`compile.dart:711`, its flags `:159` and `:185` verbatim) runs Binaryen's

@@ -5,7 +5,7 @@
 # build or flags, a required module's build, or any include's content differs). Its inputs:
 #   - the julia running: its commit, its build's tagged commit, its machine and its cache flags (the
 #     header Base checks; never the version string alone, which two builds share);
-#   - the pinned checkouts' heads (dart-lang/sdk, JuliaLang/julia, llvm-project), every pin a verdict reads;
+#   - the pinned checkouts' heads (dart-lang/sdk, JuliaLang/julia, JuliaStrings/utf8proc, llvm-project), every pin a verdict reads;
 #   - each file the pathspecs name, tracked or untracked, by its path and its content's blob id (`git
 #     hash-object`), so a text moved between files changes the key as an edit does.
 # Each cache passes its own program and readers among the pathspecs (dev/src_progress.sh, dev/skeleton.jl,
@@ -74,7 +74,7 @@ fi
 [ -n "$header" ] || { echo "cache_key: the julia running gave an empty header" >&2; exit 1; }
 [ $# -ge 1 ] || { echo "cache_key: name the pathspecs the verdict reads" >&2; exit 2; }
 pins=""
-for d in dart-sdk julia llvm-project; do
+for d in dart-sdk julia utf8proc llvm-project; do
     pins="$pins$d $(git -C "$HOME/.cache/wasmtarget/$d" rev-parse HEAD 2>/dev/null || echo none)"$'\n'
 done
 # a named file git ignores (the Manifest) is an input too: read by its name

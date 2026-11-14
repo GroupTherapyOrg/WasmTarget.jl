@@ -721,7 +721,7 @@ door's, run as Dale on paths no build user writes.
   precompile: registry code, no repository code), KaimonGate in the very load stack a session of the base uses
   (an image is valid for the stack it was built in), and read beneath each slot's depot.
 - **The landing**: under `WT_CLIMB_DRIVER`, origin's `dev/ship.sh` fetches the pins with origin's
-  `dev/fetch_julia.sh` (the land job mirrors those alone, so a landing starts no build user's process but the
+  `dev/fetch_julia.sh` (Julia's and utf8proc's, the pin derived from it; the land job mirrors those alone, so a landing starts no build user's process but the
   landing's: probed by sampling `ps` through a land job, against the old refresh that started five other users'),
   and runs the check (`door.py land-check`; a climb landing regenerates nothing there, A7-5) as `_wtland` in its
   own clone, depot and caches, the depot a fresh one every land job (A8-1: `_wtland` keeps nothing, so one

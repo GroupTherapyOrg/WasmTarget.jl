@@ -126,7 +126,8 @@ jobs:
         shell: bash
         run: bash dev/fetch_llvm.sh
 
-      # Julia's own C and C++ sources the src/julia ports cite, at the julia pin (dev/LEDGER.md D45).
+      # Julia's own C and C++ sources the src/julia ports cite, at the julia pin (dev/LEDGER.md D45), and
+      # utf8proc, Julia's C dependency, at the commit the pin's deps/utf8proc.version names.
       - name: Pinned Julia sources
         shell: bash
         run: bash dev/fetch_julia.sh
