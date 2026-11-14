@@ -14,6 +14,44 @@
     return dest
 end
 
+# Base's body (julia/base/genericmemory.jl:141), word for word, for two memories of one element type: an
+# overlay table answers a call from its own methods alone when one covers it (Julia's OverlayMethodTable,
+# Compiler/src/methodtable.jl:73), so the fallback's overlay below would otherwise take this call from
+# Base's more specific method; held here, specificity picks it, its memoryrefs checking both ranges before
+# the MemoryRef copy above (one array.copy) writes anything
+@quarantine pin"julia/base/genericmemory.jl:141 unsafe_copyto!" "Base's copy between two memories of one element type, word for word: WasmTarget's overlay table answers from its own methods alone once the fallback's overlay covers a call, so Base's more specific method is held here beside it" Base.unsafe_copyto! @consistent_overlay METHOD_TABLE function Base.unsafe_copyto!(dest::Memory{T}, doffs, src::Memory{T}, soffs, n) where {T}
+    n == 0 && return dest
+    unsafe_copyto!(memoryref(dest, doffs), memoryref(src, soffs), n)
+    return dest
+end
+
+# Base's body (julia/base/genericmemory.jl:148), the fallback where the memories' element types differ:
+# each element converted and stored, or left #undef where the source's is, walked forwards unless the
+# destination's first element lies among the source's, its pointer math the alias test of the two
+# memories' data (wasm_memory_overlaps, src/julia/wasm_array.jl)
+@quarantine pin"julia/base/genericmemory.jl:148 unsafe_copyto!" "Base's copy between memories of different element types decides its direction by pointer math on their elements' addresses; WasmGC has no addresses, so the direction is wasm_memory_overlaps's, its data arrays' identity and offsets" Base.unsafe_copyto! @consistent_overlay METHOD_TABLE function Base.unsafe_copyto!(dest::Memory, doffs, src::Memory, soffs, n)
+    Base.@_terminates_locally_meta
+    n == 0 && return dest
+    @inbounds if !wasm_memory_overlaps(dest, Int(doffs), src, Int(soffs), Int(n))
+        for i = 1:n
+            if isassigned(src, soffs + i - 1)
+                dest[doffs + i - 1] = src[soffs + i - 1]
+            else
+                Base._unsetindex!(dest, doffs + i - 1)
+            end
+        end
+    else
+        for i = n:-1:1
+            if isassigned(src, soffs + i - 1)
+                dest[doffs + i - 1] = src[soffs + i - 1]
+            else
+                Base._unsetindex!(dest, doffs + i - 1)
+            end
+        end
+    end
+    return dest
+end
+
 @quarantine "julia/base/genericmemory.jl:78 _unsetindex! of a MemoryRef stores its #undef through pointers (atomic_pointerset of C_NULL); WasmGC stores the data array's null" Base._unsetindex! @consistent_overlay METHOD_TABLE @inline function Base._unsetindex!(A::MemoryRef{T}) where {T}
     Base.@_propagate_inbounds_meta
     @boundscheck memoryref(A, 1)

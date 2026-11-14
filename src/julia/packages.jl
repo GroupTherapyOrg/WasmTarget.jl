@@ -137,9 +137,10 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..tuple_record_class, ..type_expand_integer, ..type_promote_integer, ..type_value_unmade,
        ..udivti3, ..uf_add!, ..uf_find!, ..uf_union!, ..umodti3, ..wasm_array_length,
        ..wasm_array_new, ..wasm_array_read, ..wasm_array_read_unsigned, ..wasm_array_write!,
-       ..wasm_egal, ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_string,
-       ..wasm_memory_unset!, ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!,
-       ..wasm_string_length, ..wasm_string_memory, ..wasm_string_write!, ..wasm_symbol_name
+       ..wasm_egal, ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_overlaps,
+       ..wasm_memory_string, ..wasm_memory_unset!, ..wasm_string_alloc, ..wasm_string_codeunit,
+       ..wasm_string_copy!, ..wasm_string_length, ..wasm_string_memory, ..wasm_string_write!,
+       ..wasm_symbol_name
 import Base: @nospecializeinfer
 import Core: MethodInstance
 import ..LLVM

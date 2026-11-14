@@ -395,3 +395,27 @@ memset written out (its fill! is the overlay's own method in WasmTarget's table,
     GC.@preserve mem Base.memset(Base.unsafe_convert(Ptr{Cvoid}, mem), x, length(mem) % UInt)
     return nothing
 end
+
+"""
+    wasm_memory_overlaps(dest, doffs, src, soffs, n) -> Bool
+
+Whether `dest`'s element `doffs` lies among the `n` elements of `src` from `soffs`: Base's test of
+whether two memories of different element types alias, by their elements' addresses
+(base/genericmemory.jl:148 unsafe_copyto!: `pointer(dest, doffs)` against `pointer(src, soffs)` and
+`pointer(src, soffs + n - 1)`), which picks the direction its element-wise copy walks. A wasm array has
+no addresses: two memories' elements share storage only when their data arrays are one array, the
+identity dart's byte buffers compare (sdk/lib/_internal/wasm/common/typed_data.dart:1243
+`identical(_data, other._data)`) and the test dart's own copy between typed lists makes to choose how
+it copies (typed_data.dart:1940 _TypedIntListMixin.setRange, `destBuffer == fromBuffer` at :1969), and
+then one element storage, so an element's offset is its index.
+Over WasmTarget's layout `ref.eq` of the two data arrays and `soffs <= doffs <= soffs + n - 1`. Never
+inlined, so the code generator meets the call and lowers it (src/intrinsics.jl); natively Base's test.
+"""
+@quarantine pin"julia/base/genericmemory.jl:148 unsafe_copyto!" "Base's fallback copy between memories of different element types tests whether they alias by their elements' addresses (pointer(dest, doffs) against pointer(src, soffs) and pointer(src, soffs + n - 1)); a wasm array has no addresses, so two memories alias when their data arrays are one, the identity dart's byte buffers compare, and then by their offsets" Base.pointer @noinline function wasm_memory_overlaps(dest::Memory, doffs::Int, src::Memory, soffs::Int, n::Int)::Bool
+    GC.@preserve dest src begin
+        local destp = Ptr{Cvoid}(pointer(dest, doffs))
+        local srcp = Ptr{Cvoid}(pointer(src, soffs))
+        local endp = Ptr{Cvoid}(pointer(src, soffs + n - 1))
+        return !(destp < srcp || destp > endp)
+    end
+end

@@ -34,7 +34,9 @@ end
 # (bits, a reference, one admitting nothing with its set flags) past its memory several times, resize!
 # shrinking and growing, pop! and popfirst!, deleteat!, append! and insert! (in range and past it), a byte
 # memory's fill! (wasm_memory_fill!), a Dict{Int64,Int64} built on them, a Dict{String,Int64} and a
-# String's hash (src/patch/hashing.jl), and Julia's egal of two MemoryRefs (an offset and a memory)
+# String's hash (src/patch/hashing.jl), Julia's egal of two MemoryRefs (an offset and a memory), and a copy
+# between memories of different element types (wasm_memory_overlaps, the alias test of Base's fallback),
+# boxed into unboxed and throwing where an element does not convert, and one of one element type out of range
 module WasmArrayMemoryTest
 using Test, WasmTarget
 isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
@@ -142,6 +144,49 @@ function memory(k::Int64, n::Int64)
         end
         return Int64(ncodeunits(m)) + 100 * Int64(ncodeunits(s)) +
             10000 * (Int64(sum(codeunits(s))) + Int64(sum(codeunits(m)))) + 1000000000 * (Int64(sum(g)) % 1000)
+    elseif k == 17
+        # a copy between memories of different element types (Base's fallback unsafe_copyto! by overlay,
+        # src/patch/genericmemory.jl, its alias test wasm_memory_overlaps): Int64s boxed into a
+        # Memory{Real}, and Strings into a Memory{Union{Nothing,String}}, an unset one left unset
+        local r = Memory{Real}(undef, 4)
+        local i = Memory{Int64}(undef, 3)
+        i[1] = n; i[2] = 2; i[3] = 3
+        copyto!(r, 2, i, 1, 3)
+        local a = Memory{String}(undef, 3)
+        a[1] = "ab"; a[3] = "cde"
+        local u = Memory{Union{Nothing,String}}(undef, 3)
+        u[2] = "x"
+        copyto!(u, 1, a, 1, 3)
+        return (r[2]::Int64) + 10 * (r[4]::Int64) + 100 * Int64(ncodeunits(u[1]::String)) +
+            1000 * Int64(isassigned(u, 2)) + 10000 * Int64(ncodeunits(u[3]::String))
+    elseif k == 18
+        # a copy between memories of one element type out of range: Base's own method (genericmemory.jl:141,
+        # held in the overlay table beside the fallback) checks both ranges before anything is written
+        local a = Memory{Int64}(undef, 4)
+        for j in 1:4; a[j] = j; end
+        local b = Memory{Int64}(undef, 3)
+        b[1] = 10; b[2] = 20; b[3] = n
+        local caught = try
+            unsafe_copyto!(a, 4, b, 1, 3); Int64(0)
+        catch e
+            e isa BoundsError ? Int64(1) : Int64(2)
+        end
+        unsafe_copyto!(a, 1, b, 2, 2)
+        return caught + 10 * a[4] + 100 * a[3] + 1000 * a[1] + 100000 * a[2]
+    elseif k == 19
+        # elements of a union into Int64s: each converted, a non-integral one throwing InexactError where it
+        # stands, the elements before it written (a Memory{Real} source is outside the strict subset, its
+        # convert(Int64, ::Real) a call Julia's trim verifier leaves unresolved)
+        local r = Memory{Union{Int64,Float64}}(undef, 3)
+        r[1] = n; r[2] = 2.0; r[3] = n == 1 ? 2.5 : 3.0
+        local d = Memory{Int64}(undef, 3)
+        d[1] = 0; d[2] = 0; d[3] = 0
+        local caught = try
+            copyto!(d, 1, r, 1, 3); Int64(0)
+        catch e
+            e isa InexactError ? Int64(1) : Int64(2)
+        end
+        return caught + 10 * d[1] + 100 * d[2] + 1000 * d[3]
     elseif k == 7
         local w = Vector{Int64}(undef, 4)
         w[1] = 1; w[2] = 2; w[3] = 3; w[4] = 4
@@ -152,6 +197,9 @@ function memory(k::Int64, n::Int64)
     local r = Core.memoryrefnew(Core.memoryrefnew(m), n)
     return Int64(r === Core.memoryrefnew(Core.memoryrefnew(m), 2)) + 2 * Int64(r === Core.memoryrefnew(Core.memoryrefnew(Memory{Int64}(undef, 4)), n))
 end
+same_type_copy(n::Int64) = (a = Memory{Int64}(undef, 4); b = fill!(Memory{UInt8}(undef, 4), 0x01); c = Memory{UInt8}(undef, 4);
+    unsafe_copyto!(c, 1, b, 1, n); copyto!(a, 1, Memory{Int64}(undef, 4), 1, n); Int64(c[1]) + length(copy(a)))
+mixed_type_copy(n::Int64) = (r = Memory{Real}(undef, 4); i = Memory{Int64}(undef, 4); fill!(i, 0); copyto!(r, 1, i, 1, n); length(r))
 @testset "runtime/hashing.jl: Julia's runtime hash of a String's bytes, ported, natively equal to the runtime's" begin
     # memhash_seed (hashing.c over MurmurHash3_x64_128) against the runtime's own, every tail length and
     # several blocks, under three seeds
@@ -171,10 +219,38 @@ end
     local bits = Memory{Int64}(undef, 2); bits[1] = 7
     W.wasm_memory_unset!(Core.memoryrefnew(bits))
     @test !isassigned(a, 2) && a[4] == "q" && bits[1] == 7
+    # Base's alias test of two memories of different element types, natively: the same storage read as
+    # another type (unsafe_wrap over its address), its first element among the other's, and distinct memories
+    local m8 = Memory{UInt8}(undef, 8)
+    GC.@preserve m8 begin
+        local m1 = unsafe_wrap(Memory{Int8}, Ptr{Int8}(pointer(m8)), 8)
+        @test W.wasm_memory_overlaps(m1, 3, m8, 2, 4) && W.wasm_memory_overlaps(m1, 2, m8, 2, 1)
+        @test !W.wasm_memory_overlaps(m1, 1, m8, 2, 4) && !W.wasm_memory_overlaps(m1, 6, m8, 2, 4)
+    end
+    @test !W.wasm_memory_overlaps(Memory{Real}(undef, 4), 1, Memory{Int64}(undef, 4), 1, 4)
+    # elements of different sizes over one storage: Base's test compares addresses, where an element index
+    # test would answer otherwise (the lowering's index test holds only for one data array, one storage)
+    local b32 = Memory{Int8}(undef, 32)
+    GC.@preserve b32 begin
+        local w64 = unsafe_wrap(Memory{Int64}, Ptr{Int64}(pointer(b32)), 4)
+        # byte 5 lies in the two Int64s from the first, index 5 past 1:2
+        @test W.wasm_memory_overlaps(b32, 5, w64, 1, 2)
+        # the third Int64 (bytes 17-24) past bytes 1-10, index 3 within 1:10
+        @test !W.wasm_memory_overlaps(w64, 3, b32, 1, 10)
+    end
+    @test !W.wasm_memory_overlaps(b32, 1, Memory{Int64}(undef, 4), 1, 4)
+    # a copy between memories of one element type takes Base's own method, its memoryrefs and the
+    # MemoryRef copy (wasm_memory_copy!, array.copy); one between different element types the fallback's walk
+    local reached(f, T) = Set{Symbol}(Core.Compiler.get_ci_mi(x).def.name for x in W.check_subset(f, T, "wasm_array", Base.get_world_counter()).codeinfos
+                                      if x isa Core.CodeInstance)
+    local same = reached(same_type_copy, (Int64,))
+    @test :wasm_memory_copy! in same && !(:wasm_memory_overlaps in same)
+    local mixed = reached(mixed_type_copy, (Int64,))
+    @test :wasm_memory_overlaps in mixed && !(:wasm_memory_copy! in mixed)
     local plain = W.compile(memory, (Int64, Int64); optimize = false)
     local argsets = [(1, 1), (1, 40), (2, 1), (2, 40), (3, 1), (3, 40), (5, 2), (5, 3), (6, 1), (6, 9),
                      (7, 1), (7, 3), (8, 1), (8, 3), (8, 6), (8, 9), (9, 1), (9, 4), (9, 9), (10, 1), (10, 4), (10, 5), (11, 1), (11, 2), (11, 40), (12, 1), (12, 30),
-                     (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (14, 1), (14, 3), (15, 3), (15, 98), (15, 1), (16, 0), (16, 3), (16, 40), (4, 2), (4, 3)]
+                     (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (14, 1), (14, 3), (15, 3), (15, 98), (15, 1), (16, 0), (16, 3), (16, 40), (17, 1), (17, 5), (18, 1), (18, 7), (19, 1), (19, 3), (4, 2), (4, 3)]
     local cases = [WTChild.RunCase("memory$a", plain, Int64.(a), WTChild.native_answer(memory, Int64.(a))) for a in argsets]
     for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)

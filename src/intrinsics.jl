@@ -1791,17 +1791,53 @@ end
 # memories (genericmemory.c jl_genericmemory_copyto): the elements of `src`'s data array from its
 # reference's offset copied into `dest`'s from its own, one array.copy, dart's WasmArrayExt.copy
 # (intrinsics.dart:1254), wasm's memmove; for elements admitting nothing (classes.jl `data#isSet`) their
-# set flags copied the same way. An offset or count is wrapped to the i32 a wasm array takes.
+# set flags copied the same way. An offset or count is wrapped to the i32 a wasm array takes. And Base's
+# alias test of two memories of different element types (genericmemory.jl:148, wasm_memory_overlaps):
+# their data arrays one array, and an offset among the other's.
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:memory_data_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
     target.def in methods(wasm_memory_copy!) ? :copy : target.def in methods(wasm_memory_unset!) ? :unset :
-    target.def in methods(wasm_memory_fill!) ? :fill : nothing
+    target.def in methods(wasm_memory_fill!) ? :fill : target.def in methods(wasm_memory_overlaps) ? :overlaps : nothing
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory_data}, op::Symbol, target::Core.MethodInstance, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
     local t = translator(self)
     local b = code_gen.b[]
     local at = "$(julia_text(code_gen.enclosing_member)): a memory's data"
-    op in (:copy, :unset, :fill) || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory data operation $op"), at)
+    op in (:copy, :unset, :fill, :overlaps) || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory data operation $op"), at)
+    if op === :overlaps
+        # whether dest's element doffs lies among src's n from soffs: their data arrays one array (ref.eq,
+        # dart's identical(_data, other._data), typed_data.dart:1243, which setRange asks as destBuffer ==
+        # fromBuffer, typed_data.dart:1969) and soffs <= doffs <= soffs + n - 1
+        local params = Base.unwrap_unionall(target.specTypes).parameters
+        local data_of(k::Int, arg::NirValue) = begin
+            local M = params[k]
+            local minfo = get(t.class_info, M, nothing)
+            minfo === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory overlap test where $M has no class info"), at)
+            local mfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(M, at))
+            translate_expression(code_gen, arg, minfo.non_nullable_type)
+            WasmBuilder.struct_get(b, minfo.struct_, t.field_index[mfs["data"]])
+        end
+        local i64 = WasmBuilder.IR.NumType_i64
+        local doffs, soffs = add_local(code_gen, i64), add_local(code_gen, i64)
+        data_of(2, args[1])
+        data_of(4, args[3])
+        WasmBuilder.ref_eq(b)
+        translate_expression(code_gen, args[2], i64)
+        WasmBuilder.local_tee(b, doffs)
+        translate_expression(code_gen, args[4], i64)
+        WasmBuilder.local_tee(b, soffs)
+        WasmBuilder.i64_ge_s(b)
+        WasmBuilder.i32_and(b)
+        WasmBuilder.local_get(b, doffs)
+        WasmBuilder.local_get(b, soffs)
+        translate_expression(code_gen, args[5], i64)
+        WasmBuilder.i64_add(b)
+        WasmBuilder.i64_const(b, 1)
+        WasmBuilder.i64_sub(b)
+        WasmBuilder.i64_le_s(b)
+        WasmBuilder.i32_and(b)
+        return WasmBuilder.IR.NumType_i32
+    end
     if op === :fill
         # a byte memory's every element the byte, one array.fill of its data array from 0 for its length
         # (dart's WasmArrayExt.fill, intrinsics.dart:1279)
