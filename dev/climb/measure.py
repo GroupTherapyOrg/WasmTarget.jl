@@ -343,15 +343,15 @@ def yield_slot(kind, held=True):
 
 def part_background(role):
     """Whether a measurement's parts (the compiling, the running and the verdict's process) run at background QoS: a
-    slot's and the lander's measurement (role measure) as measure_background says, the score's always (it runs for
-    hours beside everything). Either way one single-threaded process at a time under its measurement lock, which the
+    slot's and the lander's measurement (role measure) as measure_background says, the score's (role score) as
+    score_background says. Either way one single-threaded process at a time under its measurement lock, which the
     lander takes before a check, so never beside one (D31)."""
-    return cfg()["measure_background"] if role == "measure" else True
+    return cfg()["measure_background"] if role == "measure" else cfg()["score_background"]
 
 @contextlib.contextmanager
 def julia_slot(kind, first=False, stops=False):
     """The driver's heavy Julia, one of each kind at a time (D31 as amended): one measurement and one score, each a
-    single thread (the score at background QoS, a measurement as measure_background says: part_background), never
+    single thread (each at the QoS measure_background and score_background say: part_background), never
     beside a landing's check. The lander is served first (red 8): while it
     waits (`first`), its mark holds every other taker back. A wait past lock_wait_s, for the lock or for a live
     ship.sh's landing lock, is a note and waits on (O5): every holder has a wall of its own (its derived wall,
@@ -3400,18 +3400,24 @@ def fixfirst_problems(h, base, sha):
 def rebased(base, sha, onto):
     """`sha`'s one commit on `base` replayed onto `onto` by the one merge a landing makes (R6-8, D5): git's merge-tree
     (plumbing in the main repository, no work tree) with `onto`'s packages merge driver, dev/merge_packages.sh, as
-    dev/ship.sh's rebase runs it, the attributes read from `onto`'s tree; when that driver merged
-    src/julia/packages.jl, its blocks are regenerated from the merged tree as ship.sh's rebase step does (door.REGEN
-    as the landing user, on a fresh depot, in the driver's climb-regen worktree), so the commit measured is the commit
-    ship.sh lands (A7-5: its parent is origin's head, so ship.sh's rebase replays nothing), packages.jl included. Returns (commit, None), (None, None) on a conflict, or (None, why) when the
-    regeneration failed (the commit's own: its src breaks the generator)."""
-    drv, mark = os.path.join(STATE, "merge_packages.sh"), os.path.join(STATE, f".packages-merged-{os.getpid()}")
+    dev/ship.sh's rebase runs it, the attributes read from `onto`'s tree (its generated blocks blanked, so they never
+    conflict); then, after EVERY replay, src/julia/packages.jl's generated blocks are regenerated from the merged tree
+    (door.REGEN, the generator's own packages_text, as the landing user, on a fresh depot, in the driver's climb-regen
+    worktree), and a new commit made only when that changes the file, so the commit measured is the commit ship.sh lands
+    (A7-5: its parent is origin's head, so ship.sh's rebase replays nothing) with the blocks the generator writes, by
+    construction. Before 2026-11-14 the blocks were regenerated only when the merge driver ran, which git does only when
+    both sides changed the file: at 20:41:16Z climb-2's approved move 8b0c8f8e, whose own commit had added
+    `..applicable_cache` to a generated import line by hand, wrapped as the generator does not, replayed with that line
+    as it was (origin's side had not touched the file), and L210 dropped it as landing-red. The approval's identity
+    leaves the file out (core.PATCH_EXCLUDE), so a regenerated block is never a patch other than the approved one.
+    Returns (commit, None), (None, None) on a conflict, or (None, why) when the generator refused the commit's tree (the
+    commit's own: its src breaks the generator, which L210 would refuse at the check); a regeneration the machine ended
+    (a signal: memory pressure's kill) or the door failed is the driver's (ClimbError: lander.item_error holds the item)."""
+    drv = os.path.join(STATE, "merge_packages.sh")
     write_atomic(drv, git("show", f"{onto}:dev/merge_packages.sh") + "\n")
-    with contextlib.suppress(FileNotFoundError):
-        os.remove(mark)
     r = sh(["git", "-c", f"attr.tree={onto}", "-c", "merge.wt-packages.name=src/julia/packages.jl, its generated blocks blanked",
             "-c", f"merge.wt-packages.driver=bash {drv} %O %A %B", "merge-tree", "--write-tree", "--no-messages",
-            f"--merge-base={base}", onto, sha], env=dict(os.environ, WT_PACKAGES_MERGED=mark))
+            f"--merge-base={base}", onto, sha])
     if r.returncode != 0:
         return None, None
     msg = sh(["git", "log", "-1", "--format=%B", sha], check=True).stdout
@@ -3422,9 +3428,6 @@ def rebased(base, sha, onto):
                GIT_COMMITTER_EMAIL="climb@localhost")
     commit = lambda tree: sh(["git", "commit-tree", tree, "-p", onto, "-m", msg], env=who, check=True).stdout.strip()
     at = commit(r.stdout.split()[0])
-    if not os.path.exists(mark):
-        return at, None
-    os.remove(mark)
     wt = os.path.join(WORKTREES, "climb-regen")
     if not os.path.isdir(wt):
         common_write("the regen worktree")
@@ -3442,11 +3445,16 @@ def rebased(base, sha, onto):
         raise
     if rc == door.DOOR_FAILED:
         raise ClimbError(f"the packages regeneration of {at[:10]}: the door failed ({wt}/.wtd/regen.log)")
+    if rc < 0 or rc > 128:   # ended by a signal (128 + its number through the shell): the machine's, never the commit's
+        raise ClimbError(f"the packages regeneration of {at[:10]} was ended by a signal (exit {rc}): the machine's; "
+                         f"the item is held and tried again ({wt}/.wtd/regen.log)")
     if rc != 0:
         return None, f"src/julia/packages.jl's regeneration on origin {onto[:10]} failed (exit {rc}): " + \
             open(os.path.join(wt, ".wtd", "regen.log"), errors="replace").read()[-400:]
     blob = sh(["git", "hash-object", "-w", "--stdin"], input=open(os.path.join(wt, "src/julia/packages.jl")).read(), cwd=REPO,
               check=True).stdout.strip()
+    if blob == git("rev-parse", f"{at}:src/julia/packages.jl"):   # the merged blocks are the generator's already
+        return at, None
     ls = [f"100644 blob {blob}\tsrc/julia/packages.jl" if l.endswith("\tsrc/julia/packages.jl") else l
           for l in sh(["git", "ls-tree", "-r", "--full-tree", at], check=True).stdout.splitlines()]
     return commit(tree_of("\n".join(ls) + "\n")), None

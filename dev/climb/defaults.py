@@ -127,6 +127,16 @@ DEFAULTS = {
     # verify lock first and a measurement in flight yields it at its next part: D31). Dale 2026-11-13, told the lane was
     # the limit and that this was the lead's default: "keep going", "STOP pausing EVER". True restores background QoS
     "measure_background": False,
+    # the QoS of the score's measured parts (measure.part_background for role score: its native answers, shapes, compile,
+    # run and verdict; its src part and the src-gap job run at default QoS already, src_run). Every quiet probe of
+    # 2026-11-14 read the performance cores 90-98% idle and the efficiency cores 5-50% idle while a full score compiled
+    # 1,957 labels at background QoS for five hours and more (17,705 s for the last whole one), so the table the slots
+    # pick holds from was a day's landings old; the oracle's processes measured 4.6 times faster at default QoS (above).
+    # False: each part one process of one Julia thread (JULIA_NUM_THREADS=1 in every declared process) on a performance
+    # core; never beside a landing's check (the lander's LAND takes the score's lock with stops, and since T5 a score's
+    # compile pauses in place), beside at most one measurement (the verify lock's one) and the lander's layer or
+    # replay (background QoS). Band: False while the probes read the performance cores idle; True restores background
+    "score_background": False,
     # a measurement waits this long for the lock or a live landing before a note; it then waits on (O5): every holder
     # has its own wall (a measuring process's derived wall, ship_kill_s), so the wait is bounded by theirs, never by a backoff
     "lock_wait_s": 3600,

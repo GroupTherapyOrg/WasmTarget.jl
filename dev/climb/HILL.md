@@ -334,8 +334,10 @@ index) (probed: a stored answer changed from 5 to 4 with the index's sha256 rewr
 The cases: the hold's, every passing case of the hold's groups, a stratified sample (the
 quickest passing case of every group), every corpus case added since the scored head. When origin has moved past an approved commit's base by its landing (by more than dev/AUDIT.md), the
 lander measures one tree, the commit rebased onto origin by the one merge a landing makes (git's merge with origin's
-packages merge driver, as dev/ship.sh's rebase runs it, and src/julia/packages.jl regenerated on a fresh depot when
-that driver merged it; probed: an origin commit replayed onto a later one gave origin's own tree, where git's text
+packages merge driver, as dev/ship.sh's rebase runs it, and src/julia/packages.jl's generated blocks then regenerated
+on a fresh depot after every replay, a new commit only when that changes the file, so the commit landed holds the
+blocks the generator writes whoever edited them; until 2026-11-14 only when the driver merged the file, and a move
+whose own commit had edited a block by hand was dropped by L210; probed: an origin commit replayed onto a later one gave origin's own tree, where git's text
 merge conflicted), under one hold of the measurement lock (its regeneration at background QoS), against the table; ship.sh lands that
 very commit (`WT_SHIP_EXPECT`), whose parent is origin's head, so its rebase replays nothing and no merge driver or
 regeneration runs in it, and origin having moved since is a refusal (`moved`) the lander measures again, never a
@@ -614,9 +616,9 @@ door's, run as Dale on paths no build user writes.
   (`GIT_CONFIG_GLOBAL=/dev/null`); probed: a planted `~/.gitconfig`, `~/.zshrc` and `claude/projects/*.jsonl` of a
   review user were gone at its next review, and without the clean they stayed and git read the planted config.
 - **Run**: `sudo -n -u <user> env -i <explicit environment> nobootstrap`, at background QoS (at default: a landing's
-  check, the oracle's answering processes while `oracle_background` is false, and the parts of a slot's or the lander's
-  measurement while `measure_background` is false, one single-threaded process on a performance core, never beside a
-  check), every file it writes capped at `file_cap_bytes` (RLIMIT_FSIZE on the door's line, so a run that prints
+  check, the oracle's answering processes while `oracle_background` is false, the parts of a slot's or the lander's
+  measurement while `measure_background` is false, and the score's while `score_background` is false, each one
+  single-threaded process on a performance core, never beside a check), every file it writes capped at `file_cap_bytes` (RLIMIT_FSIZE on the door's line, so a run that prints
   in a loop cannot fill the disk Dale's work shares through a log of his: A6-5; probed as `_wtm1`, a 4200-MB write
   stopped at 4096 MB with SIGXFSZ, where it was written whole before), and a run's total writes bounded while it runs:
   every wait on a build user's run (`door.wait`, a measurement's watch, a land job's) takes one tick, `door.tick`, the
@@ -1353,9 +1355,9 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `queue_cap` 4 (locked), `task_wall_s` 5400, `audit_every` 5 (locked), `score_every_landings` 3, `score_every_s` 7200,
 `retry_backoff_s` 1800, `backoff_cap_s` 28800, `driver_fault_backoff_s` 300, `stop_tries` 3, `alarm_s` 21600,
 `power_settle_s` 60, `battery_runs` true, `battery_floor_pct` 20, `oracle_audit_k` 8, `oracle_background` false,
-`measure_background` false, `lock_wait_s` 3600, `score_loss_band` 0.02, `judge_n` 10, `judge_lines` 150,
-`judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3, `case_min_s` 900, `case_factor` 20,
-`watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120, `kaimon_start_s` 900,
+`measure_background` false, `score_background` false, `lock_wait_s` 3600, `score_loss_band` 0.02, `judge_n` 10,
+`judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3, `case_min_s` 900,
+`case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120, `kaimon_start_s` 900,
 `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000, `decompressions_max` 400000,
 `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6], `other_tries` 3, `ship_kill_s` 3600,
 `watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,

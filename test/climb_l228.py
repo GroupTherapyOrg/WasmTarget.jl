@@ -1632,3 +1632,94 @@ except Exception as e:
     fault(f"a plant the machine fails raised {type(e).__name__}: {str(e)[:240]}")
 finally:
     core.recovered("lander", "plant"); core.recovered("lander")
+
+# 30. a lander's rebase never leaves a generated block as the generator would not write it (measure.rebased): the move's
+# one commit replayed onto origin by the real merge (git merge-tree with this tree's dev/merge_packages.sh, its blocks
+# blanked) and src/julia/packages.jl's generated blocks then regenerated after EVERY replay, a new commit only when that
+# changes the file. The generator is stood in (door.land_job: the block's names, those of the files under src/defs/,
+# sorted and three a line), as the merge driver and git are not. Cases: the move alone edits the block, by hand and wrapped as the
+# generator does not (2026-11-14 20:41:16Z: no merge driver ran, the block was not regenerated, and L210 dropped the
+# approved move); both sides edit it (the driver blanks it); the replay already the generator's (no new commit); the
+# generator ended by a signal (the machine's: ClimbError, which the lander's item_error holds) or refusing the tree
+# (the commit's own)
+#: limit 60
+try:
+    real30 = {"land_job": door.land_job, "environment": M.environment}
+    START30, END30 = "# ---- the imports, written by dev/skeleton.jl write ----", "# ---- end of the imports ----"
+    def gen30(names):
+        rows = [", ".join(names[i:i + 3]) for i in range(0, len(names), 3)]
+        return f"module X\n{START30}\nimport Y: " + ",\n    ".join(rows) + f"\n{END30}\nend\n"
+    def file30(text, rel):
+        os.makedirs(os.path.dirname(f"{repo}/{rel}"), exist_ok=True); open(f"{repo}/{rel}", "w").write(text)
+    rc30 = [0]
+    def land_job30(tree, script, log, out_files=(), wall=0, background=False, check=True):
+        names = sorted(n.strip() for f_ in os.listdir(f"{tree}/src/defs") for n in open(f"{tree}/src/defs/{f_}") if n.strip())
+        if rc30[0] == 0:
+            open(f"{tree}/src/julia/packages.jl", "w").write(gen30(names))
+        os.makedirs(f"{tree}/.wtd", exist_ok=True); open(f"{tree}/.wtd/regen.log", "w").write("the stand-in generator\n")
+        return rc30[0]
+    door.land_job, M.environment = land_job30, (lambda at: {})
+    core.claim_repo()   # the scratch repository, the scratch state's own (the regen worktree is a write under it)
+    shutil.copy(f"{root}/dev/merge_packages.sh", f"{repo}/dev/merge_packages.sh")
+    file30("src/julia/packages.jl merge=wt-packages\n", ".gitattributes")
+    base_names = ["a1", "a2", "a3", "a4"]
+    file30("".join(n + "\n" for n in base_names), "src/defs/base.txt"); file30(gen30(base_names), "src/julia/packages.jl")
+    g("add", "-A"); g("commit", "-qm", "base30"); b30 = g("rev-parse", "HEAD")
+    def side30(name, defs, block, other=None):   # a commit on base30: its own names, its block as written by hand, a file
+        g("checkout", "-q", "--detach", b30)
+        file30("".join(n + "\n" for n in defs if n not in base_names), f"src/defs/{name}.txt")
+        if block is not None:
+            file30(block, "src/julia/packages.jl")
+        if other:
+            file30("x\n", other)
+        g("add", "-A"); g("commit", "-qm", name); return g("rev-parse", "HEAD")
+    hand30 = gen30(base_names).replace("a3,", "a3, a5,")   # a name added by hand to the first line: four on it
+    got30 = {}
+    # the move alone edits the block (origin's side another file): today's case
+    o1 = side30("origin1", base_names, None, "src/other.jl")
+    s1 = side30("move1", base_names + ["a5"], hand30)
+    c1, why1 = M.rebased(b30, s1, o1)
+    got30["the move's hand-wrapped block"] = g("show", f"{c1}:src/julia/packages.jl") == gen30(base_names + ["a5"]).strip() if c1 else why1
+    # both sides edit the block: the driver blanks it, the regeneration writes it
+    o2 = side30("origin2", base_names + ["a0"], gen30(base_names + ["a0"]))
+    c2, why2 = M.rebased(b30, s1, o2)
+    got30["both sides' blocks"] = g("show", f"{c2}:src/julia/packages.jl") == gen30(sorted(base_names + ["a0", "a5"])).strip() if c2 else why2
+    # the replay already the generator's: no new commit (the merged tree's own)
+    s3 = side30("move3", base_names + ["a5"], gen30(base_names + ["a5"]))
+    c3, _ = M.rebased(b30, s3, o1)
+    got30["already the generator's"] = bool(c3) and g("show", f"{c3}:src/julia/packages.jl") == gen30(base_names + ["a5"]).strip() \
+        and g("rev-parse", f"{c3}^") == o1 and g("rev-parse", f"{c3}^{{tree}}") == g("merge-tree", "--write-tree", f"--merge-base={b30}", o1, s3).split()[0]
+    # the generator ended by a signal: the machine's; refusing the tree: the commit's own
+    rc30[0] = 137
+    try:
+        M.rebased(b30, s1, o1); got30["a signal's end"] = "returned"
+    except core.ClimbError:
+        got30["a signal's end"] = "the driver's"
+    rc30[0] = 1
+    c5, why5 = M.rebased(b30, s1, o1)
+    got30["the generator refusing"] = "the commit's own" if c5 is None and why5 else f"{c5} {why5}"
+    want30 = {"the move's hand-wrapped block": True, "both sides' blocks": True, "already the generator's": True,
+              "a signal's end": "the driver's", "the generator refusing": "the commit's own"}
+    if got30 != want30:
+        fault(f"a lander's rebase and the generated blocks: {got30} (expected {want30})")
+except Exception as e:
+    fault(f"a lander's rebase and its generated blocks raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    door.land_job, M.environment = real30["land_job"], real30["environment"]
+
+# 31. the score's parts run at the QoS score_background says (measure.part_background), a measurement's at
+# measure_background's: each key read for its own role alone
+#: limit 30
+real31 = M.cfg
+try:
+    seen31 = {}
+    for v in (False, True):
+        M.cfg = lambda v=v: dict(real31(), score_background=v)
+        seen31[v] = (M.part_background("score"), M.part_background("measure"))
+    mb31 = real31()["measure_background"]
+    if seen31 != {False: (False, mb31), True: (True, mb31)}:
+        fault(f"the parts' QoS (background?) as score_background reads False and True, (score, measure): {seen31}")
+except Exception as e:
+    fault(f"the parts' QoS raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    M.cfg = real31
