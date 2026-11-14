@@ -634,11 +634,66 @@ end
 
 """
 dart's instances of its wasm value classes (WasmI32, WasmI64, WasmF32, WasmF64, the WasmV128 lanes)
-are pushed as wasm values; Julia has no such classes, its primitive values being the integer and
-float constants, so every instance is a heap constant, loaded by `defaultConstant`.
+are pushed as wasm values. Julia's counterpart is a primitive class with no builtin type held in an
+integer register (src/julia/classes.jl register_constant_class: a `Ptr`, an enum, `Core.AddrSpace`, a
+`primitive type P 40`), dart's `wasmI32Class` and `wasmI64Class` arms: its constant is its register's
+literal, the integer of its bits as Julia's codegen makes it (julia/src/intrinsics.cpp:188
+julia_const_to_llvm), one narrower than its register extended as LLVM's PromoteIntRes_Constant folds it.
+A Julia primitive class has a box where dart's wasm value classes have none: where a reference is
+expected, the box of its class, one global per module, `valueTypeConstants`, as visitIntConstant boxes
+an integer. Every other instance is a heap constant, loaded by `defaultConstant`.
+
+How Julia differs for a `Ptr`: julia_const_to_llvm is Julia's codegen within its own process, whose
+literal is the host address itself. A module leaves the process, and Julia has no one answer for a Ptr
+that leaves it: its serializer resets a mutable's Ptr fields and a memory's Ptr elements to C_NULL, all
+ones kept (julia/src/staticdata.c:1774 and :1630; :677 get_replaceable_field and :1002 for one boxed in
+a mutable's field or a memory's slot), keeps a literal in code and an immutable's field as the host
+address, and relocates the bits a TypeName's two Ptr fields point at (:2001). The address is wrong in
+any other process, and C_NULL differs from what the program reads in its own (the differential's
+answer), so a Ptr constant here other than C_NULL or all ones (MAP_FAILED, INVALID_HANDLE, which every
+rule keeps) is rejected, located.
 """
-@parity "dart2wasm/lib/constants.dart:690 ConstantInstantiator.visitInstanceConstant" visit_instance_constant(self::ConstantInstantiator, constant::NirConst)::WasmBuilder.IR.ValueType =
-    default_constant(self, constant)
+@parity "dart2wasm/lib/constants.dart:690 ConstantInstantiator.visitInstanceConstant" function visit_instance_constant(self::ConstantInstantiator, constant::NirConst)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/constants.dart:690 ConstantInstantiator.visitInstanceConstant"
+    local translator = self.constants.translator
+    local b = self.b
+    local v = constant.c.val
+    local cls = typeof(v)
+    register_constant_class(translator, cls) || return default_constant(self, constant)
+    local num_type = WasmBuilder.unpacked(primitive_value_type(translator, cls))
+    local width = 8 * WasmBuilder.byte_size(num_type)
+    # the constant's bits, Julia's APInt of its 8 * jl_datatype_size bits
+    local nbits = 8 * sizeof(v)
+    local raw = nbits == 64 ? Core.Intrinsics.bitcast(UInt64, v)::UInt64 : Core.Intrinsics.zext_int(UInt64, v)::UInt64
+    # the register's literal: the bits themselves where they fill it (as Int32 in an i32), else promoted
+    # a Ptr's bits are the compiling process's host address (above): only C_NULL and all ones are values a
+    # module can hold
+    cls <: Ptr && raw != 0 && raw != typemax(UInt64) &&
+        reject!(Unquarantined("src/constants.jl visitInstanceConstant: a $cls constant holding the host address 0x$(string(raw, base = 16)), which is wrong in any other process (julia/src/staticdata.c resets a mutable's Ptr fields and a memory's Ptr elements to C_NULL, what the program does not read in its own)"), at)
+    local value = nbits == width ? (width == 64 ? reinterpret(Int64, raw) : Int64(reinterpret(Int32, raw % UInt32))) :
+                  LLVM.promote_int_res_constant(raw, nbits, num_type)
+    if self.expected_type isa WasmBuilder.IR.RefType
+        local module_map = get!(() -> LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}(), self.constants.value_type_constants, constant)
+        local per_module_global = get(module_map, b.module_builder, nothing)
+        if per_module_global === nothing
+            local info = get(translator.class_info, cls, nothing)
+            info === nothing && reject!(Internal("$at: the class $cls of the boxed constant has no class info"), at)
+            local global_type = WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType(info.struct_; nullable = false); mutable = false)
+            local defined_global = WasmBuilder.define(b.module_builder.globals[], global_type,
+                _constant_name(self.constants._constant_accessor[], constant))
+            local ib = defined_global.initializer
+            WasmBuilder.i32_const(ib, class_id(info))          # a box holds no identity hash (dart: info.classId alone)
+            num_type == WasmBuilder.IR.NumType_i32 ? WasmBuilder.i32_const(ib, value) : WasmBuilder.i64_const(ib, value)
+            WasmBuilder.struct_new(ib, info.struct_)
+            WasmBuilder.var"end"(ib)
+            per_module_global = module_map[b.module_builder] = defined_global
+        end
+        WasmBuilder.global_get(b, per_module_global)
+        return per_module_global.type.type
+    end
+    num_type == WasmBuilder.IR.NumType_i32 ? WasmBuilder.i32_const(b, value) : WasmBuilder.i64_const(b, value)
+    return num_type
+end
 
 @parity "dart2wasm/lib/constants.dart:784 ConstantCreator" ConstantCreator(constants::Constants)::ConstantCreator = ConstantCreator(Val(:_), constants)
 
@@ -811,6 +866,9 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
     local v = constant.c.val
     v isa WasmArrayLiteral && return _make_wasm_array_literal(self, constant; mutable_ = v.mutable)
     local cls = typeof(v)
+    # dart's wasm value classes make no heap constant: a primitive held in an integer register is its
+    # register's literal, pushed (or boxed) where it is instantiated (src/julia/classes.jl register_constant_class)
+    register_constant_class(translator, cls) && return nothing
 
     # a class no constant of which is made (src/julia/classes.jl constant_unmade, the one source)
     local unmade = constant_unmade(translator, cls)
@@ -902,7 +960,13 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             # popped isbits element's bytes, an unfilled slot) holds none, whatever bytes Julia left there
             owner_of(self.constants._constant_accessor[].statics, v, field.name, at)
         elseif isdefined(v, field.index)
-            getfield(v, field.index)
+            # a value outside its field's declared type (Julia's TypeName holds a SimpleVector in its
+            # `linearcache`, declared Core.MethodCache): the class's struct holds the declared type, so no
+            # constant of it is made here; rejected, located, never written into a slot it does not fit
+            local held = getfield(v, field.index)
+            held isa field.type ||
+                reject!(Unquarantined("src/constants.jl visitInstanceConstant: the field $(field.name) of a $cls constant holds a $(typeof(held)), outside its declared type $(field.type)"), at)
+            held
         else
             # #undef, the null an allocation leaves (visitConstructorInvocation), its set flag false
             # where it keeps one; a field Julia's codegen holds may not be null rejects, located
@@ -1610,10 +1674,26 @@ parameters, a dummy value's heap type, or the constant's text.
         local klass = typeof(v)
         local name = string(nameof(klass))
         isempty(klass.parameters) && return "$prefix$name"
-        local type_arguments = join((t isa Union{Type,TypeVar} ? _name_type(self, t) : "$t" for t in klass.parameters), ", ")
+        local type_arguments = join((t isa Union{Type,TypeVar} ? _name_type(self, t) :
+                                     t isa Union{Nothing,Bool,Base.BitInteger,Base.IEEEFloat,Char,String,Symbol} ? "$t" : sprint(_jt_show, t)
+                                     for t in klass.parameters), ", ")
         return "$prefix$name<$type_arguments>"
     end
-    return "$prefix$(v isa Type ? julia_text(v) : sprint(show, v))"
+    v isa Type && return "$prefix$(julia_text(v))"
+    # dart's `$constant` is Kernel's own text of the constant, never the program's: a tuple's values are
+    # printed where they are all of Base's own scalar kinds, whose show reads no method of the program;
+    # any other tuple (one holding a type, whose value parameters may be the program's, or a value of
+    # the program's class) is named by its type, as a class instance is
+    if v isa Union{Tuple,NamedTuple}
+        local todo = Any[v]
+        while !isempty(todo)
+            local x = pop!(todo)
+            x isa Union{Tuple,NamedTuple} ? append!(todo, x) :
+            x isa Union{Nothing,Bool,Base.BitInteger,Base.IEEEFloat,Char,String,Symbol} ||
+                return "$prefix$(_name_type(self, typeof(v)))"
+        end
+    end
+    return "$prefix$(sprint(show, v))"
 end
 
 # a class parameter's name: a class (dart's InterfaceType) by its name and parameters, anything else
@@ -1622,7 +1702,9 @@ end
     if type_ isa DataType
         local name = string(nameof(type_))
         isempty(type_.parameters) && return name
-        return "$name<$(join((t isa Union{Type,TypeVar} ? _name_type(self, t) : "$t" for t in type_.parameters), ", "))>"
+        return "$name<$(join((t isa Union{Type,TypeVar} ? _name_type(self, t) :
+                               t isa Union{Nothing,Bool,Base.BitInteger,Base.IEEEFloat,Char,String,Symbol} ? "$t" : sprint(_jt_show, t)
+                               for t in type_.parameters), ", "))>"
     end
-    return "$type_"
+    return julia_text(type_)
 end

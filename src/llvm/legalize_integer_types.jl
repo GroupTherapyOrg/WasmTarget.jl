@@ -347,6 +347,18 @@ end
     return nothing
 end
 
+# A constant of an integer type narrower than its register, extended to the register: zero extend things
+# like i1, sign extend everything else (a byte-sized type), the extension folded into the constant. The
+# constant is an APInt, its `bits`-wide value `cst` (its bits above zero); the result is the register's
+# value as the wasm instruction's operand, an Int64 (an i32's within Int32's range)
+@parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:730 DAGTypeLegalizer::PromoteIntRes_Constant" function promote_int_res_constant(cst::UInt64, bits::Int, w::WasmBuilder.IR.NumType)::Int64
+    local width = 8 * WasmBuilder.byte_size(w)
+    0 < bits < width && (w == WasmBuilder.IR.NumType_i64 || w == WasmBuilder.IR.NumType_i32) && cst >> bits == 0 ||
+        reject!(Internal("llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:730 DAGTypeLegalizer::PromoteIntRes_Constant: the i$bits constant $cst promoted to $w"), "DAGTypeLegalizer::PromoteIntRes_Constant")
+    local shift = 64 - bits
+    return bits % 8 == 0 ? reinterpret(Int64, cst << shift) >> shift : reinterpret(Int64, cst)
+end
+
 # ZERO_EXTEND of a promoted operand: ANY_EXTEND to the result's register, which the caller makes, then
 # the zero extension in the register of the operand's width (getZeroExtendInReg), here within `w`
 @parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:2841 DAGTypeLegalizer::PromoteIntOp_ZERO_EXTEND" function promote_int_op_zero_extend(b::WasmBuilder.InstructionsBuilder, w::WasmBuilder.IR.NumType, bits::Int)::Nothing

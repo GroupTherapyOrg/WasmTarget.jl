@@ -51,18 +51,17 @@ end
     constant_unmade(translator, cls) -> Union{Rejection,Nothing}
 
 Why no constant of the class `cls` can be made, as constants.jl's visitInstanceConstant refuses it, or
-`nothing` where one is made: a builtin type's value is its builtin constant; any other primitive type
-but a 128-bit integer (its class's two halves) is Unquarantined: one with no wasm representation, and
-one held in its promoted integer register (type_promote_integer: a `Ptr`, `Core.AddrSpace`), whose
-constant, dart's visitIntConstant of its bits, is not made yet; a
-class with no class info, outside the closed world, is Internal. The one source of the fact:
-visitInstanceConstant rejects with it, and type_value_unmade reads it.
+`nothing` where one is made: a builtin type's value is its builtin constant; one held in an integer
+register is its register's literal (register_constant_class: a `Ptr`, `Core.AddrSpace`, an enum), boxed
+by its class's struct where a reference holds it; any other primitive type but a 128-bit integer (its
+class's two halves) has no wasm representation and is Unquarantined; a class with no class info, outside
+the closed world, is Internal (a register class's too: its box is its class's). The one source of the
+fact: visitInstanceConstant rejects with it, and type_value_unmade reads it.
 """
-@quarantine "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes an instance constant of its class's info; a Julia primitive type with no builtin type has none yet but a 128-bit integer's" Base.isprimitivetype function constant_unmade(translator, cls::DataType)::Union{Rejection,Nothing}
+@quarantine "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes an instance constant of its class's info; a Julia primitive type with no builtin type and no integer register has none but a 128-bit integer's" Base.isprimitivetype function constant_unmade(translator, cls::DataType)::Union{Rejection,Nothing}
     haskey(translator.builtin_types[], cls) && return nothing
-    isprimitivetype(cls) && !type_expand_integer(cls) &&
-        return Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, " *
-                             (type_promote_integer(cls) === nothing ? "with no wasm representation" : "held in its promoted integer register, which visitIntConstant does not make yet"))
+    isprimitivetype(cls) && !type_expand_integer(cls) && !register_constant_class(translator, cls) &&
+        return Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation")
     haskey(translator.class_info, cls) ||
         return Internal("dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant: the class $cls of the constant has no class info")
     return nothing
@@ -637,6 +636,20 @@ FunctionCollector.initialize records each one's box allocated, as dart records i
     local promoted = type_promote_integer(cls)
     return promoted === nothing ? nothing : translator.builtin_types[][promoted]
 end
+
+"""    register_constant_class(translator, cls) -> Bool
+
+Whether a constant of the class `cls` is its integer register's literal, dart's instance constant of a
+wasm value class (constants.dart:690 ConstantInstantiator.visitInstanceConstant, `wasmI32Class` and
+`wasmI64Class`): a primitive class with no builtin type (Translator.builtinTypes) held in the register
+LLVM promotes its integer to (type_promote_integer: a `Ptr`, an enum, `Core.AddrSpace`, a `primitive type
+P 40`). Julia's codegen makes such a constant the integer of its bits (julia/src/intrinsics.cpp:188
+julia_const_to_llvm: an APInt of 8 * jl_datatype_size bits, a pointer its inttoptr). The one source of
+which instance constants are a register's literal: constants.jl's instantiator pushes them, its
+creator makes none, and constant_unmade reads it. Read from primitive_value_type, the one source of a
+primitive class's register: a class it gives one that is no builtin type's."""
+@quarantine pin"julia/src/intrinsics.cpp:188 julia_const_to_llvm" "a Julia constant of a primitive class held in an integer register is the integer of its bits, as dart's wasm value classes' instance constants are their register's literal; dart's are a closed set of classes, Julia's every primitive class with no builtin type held in i32 or i64" Base.haskey register_constant_class(translator, cls::DataType)::Bool =
+    primitive_value_type(translator, cls) !== nothing && !haskey(translator.builtin_types[], cls)
 
 """
     class_instance_fields(c, at) -> Vector{ClassField}

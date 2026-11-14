@@ -547,3 +547,78 @@ translated(f) = (o = D.TranslatorOptions(; standalone = true);
     @test length(bytes) == 93184 && seg.content == bytes
 end
 end
+
+# a constant of a primitive class held in an integer register (src/julia/classes.jl register_constant_class),
+# dart's wasm value class's instance constant: unboxed its register's literal, LLVM's PromoteIntRes_Constant
+# sign-extending one narrower than the register, boxed its class's box; the modules run against native Julia
+module RegisterConstants
+using Test, WasmTarget
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTChild = Main.WTChild
+const I = WasmTarget.WasmBuilder.IR
+primitive type P8 8 end
+primitive type P40 40 end
+@enum Hue hue_red = 1 hue_green = 2
+p8(n::Int64) = Core.Intrinsics.bitcast(P8, (n % UInt8) + 0xc8)
+p40(n::Int64) = Core.Intrinsics.trunc_int(P40, (n % UInt64) + 0x0000008000000000)
+# unboxed: an 8-bit constant above 0x7f and a 40-bit one with its top bit set, each compared to a value
+# computed at run time; boxed: an enum and a promoted primitive stored in an Any slot and read back
+egal_p8(n::Int64) = p8(n) === Core.Intrinsics.bitcast(P8, 0xc8) ? 1 : 2
+ult_p40(n::Int64) = Core.Intrinsics.ult_int(p40(n), Core.Intrinsics.trunc_int(P40, 0x0000008000000002)) ? 1 : 2
+boxed_enum(n::Int64) = (v = Any[n, hue_green]; x = v[2]; y = v[1]; (x isa Hue ? Int64(Int(x::Hue)) : Int64(-1)) + (y isa Hue ? Int64(1) : Int64(0)))
+boxed_p8(n::Int64) = (v = Any[n, Core.Intrinsics.bitcast(P8, 0xc8)]; v[2] === p8(n) ? 3 : 4)
+# a tuple constant of enums: its elements each its register's literal, the tuple named by its type (an enum's
+# text is the program's namemap, which the constant's name never reads)
+hue_sum(n::Int64) = (s = Int64(0); for h in instances(Hue); s += Int64(Int(h)) * n; end; s)
+# a TypeName constant: its Ptr fields their registers' literals, then the SimpleVector Julia holds in its
+# `linearcache`, declared Core.MethodCache, refused, located
+_rt(x::Int64) = x > 0 ? Int64 : Float64
+typename_bounded(x::Int64) = (r = Base.check_world_bounded(_rt(x).name); r === nothing ? -1 : Int64(first(r) >= 0))
+# a Ptr constant (a mutable's field, read at run time): C_NULL and all ones are values a module holds; a host address
+# is wrong in any other process, refused, located
+mutable struct PtrBox
+    p::Ptr{Nothing}
+end
+const PB_NULL = PtrBox(C_NULL)
+const PB_ONES = PtrBox(Ptr{Nothing}(typemax(UInt)))
+const PB_HOST = PtrBox(Ptr{Nothing}(UInt(0x1234)))
+ptr_null(n::Int64) = Core.Intrinsics.bitcast(UInt, PB_NULL.p) == UInt(0) ? n : -n
+ptr_ones(n::Int64) = Core.Intrinsics.bitcast(UInt, PB_ONES.p) == typemax(UInt) ? n : -n
+ptr_host(n::Int64) = Core.Intrinsics.bitcast(UInt, PB_HOST.p) == UInt(0x1234) ? n : -n
+# a constant's name never calls the program's methods: a tuple of types whose value parameter is an enum the compile's
+# world does not see (its show reads its namemap), compiled at the world before the enum
+const W_BEFORE_LATE = Base.get_world_counter()
+Base.include_string(@__MODULE__, """
+@enum LateHue late_red = 1 late_green = 2
+const LATE_TV = (Val{late_red}, Val{late_green})
+late_tup(n::Int64) = LATE_TV[n] === Val{late_red} ? 1 : 2
+""")
+@testset "constants.dart: a primitive held in an integer register is its register's literal, run against native" begin
+    # LLVM's PromoteIntRes_Constant: a byte-sized constant sign-extended into its register
+    @test WasmTarget.LLVM.promote_int_res_constant(UInt64(0xc8), 8, I.NumType_i32) == -56
+    @test WasmTarget.LLVM.promote_int_res_constant(UInt64(0x2c), 8, I.NumType_i32) == 44
+    @test WasmTarget.LLVM.promote_int_res_constant(UInt64(0x0000008000000002), 40, I.NumType_i64) == -(Int64(2)^39) + 2
+    # a constant as wide as its register is no promotion, and one wider than its width no APInt: each refused, located
+    for (c, n, w) in ((UInt64(1), 32, I.NumType_i32), (UInt64(0x1ff), 8, I.NumType_i32))
+        local e = try; WasmTarget.LLVM.promote_int_res_constant(c, n, w); nothing; catch x; x; end
+        @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal
+    end
+    # Base's _show_default text of an enum, never its show
+    @test occursin("Hue(0x00000002)", sprint(WasmTarget._jt_show, Val{hue_green}))
+    @test Base.invoke_in_world(W_BEFORE_LATE, WasmTarget.compile, late_tup, (Int64,); world = Base.get_world_counter()) isa Vector{UInt8}
+    local e3 = try; WasmTarget.compile(ptr_host, (Int64,)); nothing; catch x; x; end
+    @test e3 isa WasmTarget.RejectionError && e3.rejection isa WasmTarget.Unquarantined &&
+          occursin("a Ptr{Nothing} constant holding the host address 0x1234", e3.rejection.row)
+    local e2 = try; WasmTarget.compile(typename_bounded, (Int64,)); nothing; catch x; x; end
+    @test e2 isa WasmTarget.RejectionError && e2.rejection isa WasmTarget.Unquarantined &&
+          occursin("the field linearcache of a Core.TypeName constant holds a Core.SimpleVector, outside its declared type", e2.rejection.row)
+    for (f, args) in ((egal_p8, (Int64(0), Int64(1))), (ult_p40, (Int64(1), Int64(3))), (boxed_enum, (Int64(5),)), (boxed_p8, (Int64(0), Int64(2))), (hue_sum, (Int64(3),)),
+                       (ptr_null, (Int64(4),)), (ptr_ones, (Int64(4),)), (late_tup, (Int64(1), Int64(2))))
+        for a in args
+            local results = WTChild.run_cases(first(WTChild.answer_cases("register constant $(nameof(f))", WasmTarget.compile, f, (a,))))
+            foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+            @test !isempty(results) && all(r -> r.ok, results)
+        end
+    end
+end
+end

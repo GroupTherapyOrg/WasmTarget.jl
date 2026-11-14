@@ -86,14 +86,49 @@ end
     return nothing
 end
 
-# what `show(io, x)` dispatches to for the values a type holds: a type, a type variable, a Vararg, a module; any other
-# value (a type parameter's number, Symbol or tuple of them) is Base's own show of that value
-@quarantine pin"precedent(julia: base/show.jl:968 show)" "a type's parts print by their kind's show, a type parameter's value by Base's" Core.TypeVar function _jt_show(io::IO, @nospecialize(x))::Nothing
+# what `show(io, x)` dispatches to for the values a type holds: a type, a type variable, a Vararg, a module; a value of
+# Base's own kinds (a type parameter's number, Symbol, Char, String, nothing, or a tuple of them) is Base's own show of
+# that value; any other value (an enum's, a struct's of the program) is printed as Base's _show_default prints it
+# (_jt_show_default), never by the program's own show, which reads the program's methods (an enum's its namemap) that a
+# compile running at an older world than the program cannot call
+@quarantine pin"precedent(julia: base/show.jl:968 show)" "a type's parts print by their kind's show, a type parameter's value of Base's kinds by Base's, any other by Base's _show_default" Core.TypeVar function _jt_show(io::IO, @nospecialize(x))::Nothing
     x isa Type && return _jt_show_type(io, x)
     x isa TypeVar && return _jt_show_typevar(io, x)
     x isa Core.TypeofVararg && return _jt_show_vararg(io, x)
     x isa Module && return _jt_show_module(io, x)
+    local todo = Any[x]
+    while !isempty(todo)
+        local y = pop!(todo)
+        y isa Union{Tuple,NamedTuple} ? append!(todo, y) :
+        y isa Union{Nothing,Bool,Base.BitInteger,Base.IEEEFloat,Char,String,Symbol} || return _jt_show_default(io, x)
+    end
     show(io, x)
+    return nothing
+end
+
+# Base's printing of a value no show method of its type's prints (base/show.jl:489 _show_default): its type, then its
+# fields in parentheses, or, for a value of no fields and some bytes (a primitive: an enum, a `primitive type P 8`),
+# `0x` and its bytes from the most significant; the type and each field printed by _jt_show, so no method of the
+# program's is called (a type parameter's value is isbits, so no cycle Base's show_circular guards against)
+@quarantine pin"precedent(julia: base/show.jl:489 _show_default)" "a value is printed as its type and its fields, or its bytes, Base's default show, with no method of the program's" Base.nfields function _jt_show_default(io::IO, @nospecialize(x))::Nothing
+    local t = typeof(x)
+    _jt_show(io, t)
+    print(io, '(')
+    local nf = nfields(x)
+    local nb = sizeof(x)
+    if nf != 0 || nb == 0
+        for i in 1:nf
+            isdefined(x, i) ? _jt_show(io, getfield(x, i)) : print(io, "#undef")
+            i < nf && print(io, ", ")
+        end
+    else
+        print(io, "0x")
+        local bytes = reinterpret(UInt8, [x])
+        for i in nb:-1:1
+            print(io, string(bytes[i], base = 16, pad = 2))
+        end
+    end
+    print(io, ')')
     return nothing
 end
 

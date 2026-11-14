@@ -109,7 +109,8 @@ isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_ch
 @noinline maybe(x::Int)::Union{Nothing,Int} = x > 0 ? x : nothing
 unwrapped(x::Int) = typeassert(maybe(x), Int) + 1
 isint(x::Int) = maybe(x) isa Int
-# an as check naming a class whose type value has no constant yet (Memory{Int64}'s Core.AddrSpace{Core})
+# an as check naming a class whose type value holds a primitive held in an integer register (Memory{Int64}'s
+# Core.AddrSpace{Core}, its register's literal, boxed by its class in the type value's parameters)
 @noinline maybe_memory(x::Int)::Union{Nothing,Memory{Int64}} = x > 0 ? Memory{Int64}(undef, x) : nothing
 memory_length(x::Int) = length(typeassert(maybe_memory(x), Memory{Int64}))
 # a user class whose type value has no constant only by a parameter value (Float16(1))
@@ -121,16 +122,14 @@ tagged_x(x::Int) = typeassert(maybe_tagged(x), Tagged{Float16(1)}).x
     local names = Set(b.ci.def.def.name for b in world)
     @test :_as_interface_subtype0 in names && :_throw_interface_type_as_check_error0 in names
     @test (try; unwrapped(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Int, nothing)
-    # a class whose type value has no constant (Memory{Int64}, its Core.AddrSpace{Core}, laid out in its
-    # promoted register, its constant not made): the as check rejects, located, at type_value_unmade
-    local me = try; W.compile(memory_length, (Int,)); nothing; catch x; x; end
-    @test me isa W.RejectionError && me.rejection isa W.Unquarantined &&
-          startswith(me.rejection.row, "src/julia/classes.jl type_value_unmade: an as check against Memory{Int64}") &&
-          occursin("AddrSpace", me.rejection.row)
+    # a class whose type value holds a Core.AddrSpace{Core}, a primitive held in its promoted register whose
+    # constant is its register's literal (src/julia/classes.jl register_constant_class): the as check compiles,
+    # its type value a constant, and answers as native, the length or the TypeError of its null case (below)
+    @test (try; memory_length(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Memory{Int64}, nothing)
     local te = try; W.compile(tagged_x, (Int,)); nothing; catch x; x; end
     @test te isa W.RejectionError && te.rejection isa W.Unquarantined &&
           te.rejection.row == "src/translator.jl translateStorageType: the primitive class Float16, with no wasm representation"
-    for (f, args) in ((unwrapped, [(3,), (-1,)]), (isint, [(3,), (-1,)]))
+    for (f, args) in ((unwrapped, [(3,), (-1,)]), (isint, [(3,), (-1,)]), (memory_length, [(3,), (-1,)]))
         local bytes = W.compile(f, (Int,))
         for r in Main.WTChild.run_cases([Main.WTChild.RunCase("$(nameof(f))$(a)", bytes, a, Main.WTChild.native_answer(f, a)) for a in args])
             @test r.ok || (@info r.label r.why; false)
