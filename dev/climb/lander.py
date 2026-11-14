@@ -824,6 +824,20 @@ def item_error(item, e):
     else:
         unqueue(item, errors=n, error=why)
 
+def src_gap_spawn(origin):
+    """The src-gap job started when it is due at origin's head (measure.src_gap_due): `climb.py src-gap`, a process of
+    its own, never waited for, so the files a landing's share left unrun are run whether or not a score is in flight
+    (2026-11-14, 16:43:54Z: the gap ran only from the score tick, which sat inside a score of 4-5 hours, and the bound
+    stopped the lander for 20 minutes). One at a time (its loop lock: a second exits at once); in the lander loop's
+    process group, so `launch.sh stop` ends it with the lander; its stamp its own (WT_CLIMB_LOOP), so it keeps no other
+    loop's heartbeat fresh. Returns the process, or None when nothing was due."""
+    if not src_gap_due(origin):
+        return None
+    log = open(os.path.join(STATE, "logs", "src-gap.log"), "a")
+    return subprocess.Popen([sys.executable, os.path.join(ROOT, "dev", "climb", "climb.py"), "src-gap"], cwd=ROOT,
+                            env=dict(os.environ, WT_CLIMB_LOOP="src-gap"), stdout=log, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL)
+
 def land_round():
     """One round: what a killed lander left, then the queue in order; each item through its pinned sha, its gates read
     again, ship.sh's admission, a re-measure when origin moved past its base, the quiet probe and the check. The
@@ -837,6 +851,7 @@ def land_round():
     fixfirst_binds(overdue)
     origin = git("rev-parse", f"origin/{MARCH}")
     behind, files = src_unverified(origin)   # R5, R12: landings standing with a test file unrun since, held at the bound
+    src_gap_spawn(origin)   # those files run by a job of their own, whatever else runs (the bound holds only when they cannot)
     unverified_binds(behind, files)
     if behind >= cfg()["src_unverified_max"]:
         return 3

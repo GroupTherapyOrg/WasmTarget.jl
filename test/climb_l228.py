@@ -665,14 +665,19 @@ finally:
     with contextlib.suppress(Exception):
         core.update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [x for x in q if x.get("hold") != "l228-15"]))
 
-# 16. the test files the landings' shares leave unrun are run between scores (climb.src_gap, through climb.score_tick):
-# after a landing, files standing unrun and no src record at origin's head, the score tick runs the score's src part
-# there once; not again at that head, not where the head has its src record, not when no file stands unrun. What the
-# tick reaches beyond is stood in (the fetch, the alarms, the score, the src part itself)
+# 16. the test files the landings' shares leave unrun are run by a job of their own whatever else runs (climb.src_gap
+# through climb.py src-gap: climb.src_gap_once, started by the lander's round: lander.src_gap_spawn): after a landing,
+# files standing unrun and no src record at origin's head, the job runs the src part there once, as the measure role
+# (the verify lane, never the score's lock, which a score's compile holds for hours); not again at that head, not where
+# the head has its src record, not when no file stands unrun; the lander's round starts it when due, even when the
+# bound stops the round, and not otherwise; the score tick runs it no more. What they reach beyond is stood in
 import climb as C
 names16 = ("alarms", "scored_heads", "fetch", "unlogged_landings", "scoreboard_once", "src_part", "power_ok", "pause",
            "week_half", "token_refused", "src_unverified")
 real16 = {k: getattr(C, k) for k in names16}
+realm16, reall16 = {"src_unverified": M.src_unverified}, {k: getattr(L, k) for k in ("pause", "waits", "power_ok", "reconcile",
+    "fixfirst_overdue", "fixfirst_binds", "src_unverified", "unverified_binds", "src_gap_spawn")}
+popen16 = L.subprocess.Popen
 try:
     head16 = g("rev-parse", "HEAD")
     g("update-ref", f"refs/remotes/origin/{core.MARCH}", head16)
@@ -681,25 +686,47 @@ try:
     C.unlogged_landings = lambda: []
     C.scored_heads = lambda *a: [{"sha": head16, "t": core.stamp()}]   # scored just now: no score is due
     C.scoreboard_once = lambda h_: ran16.append(("score", h_))
-    C.src_part = lambda h_: ran16.append(("src", h_))
+    C.src_part = lambda h_, role="score": ran16.append(("src", h_, role))
     C.power_ok, C.pause, C.week_half, C.token_refused = (lambda: True), (lambda: False), (lambda: True), (lambda: False)
-    C.src_unverified = lambda h_: (behind16[0], ["t00.jl"])
-    for f16 in (C.SRC_GAP, M.SRC_LATEST):
+    C.src_unverified = M.src_unverified = lambda h_: (behind16[0], ["t00.jl"])
+    for f16 in (M.SRC_GAP, M.SRC_LATEST):
         with contextlib.suppress(FileNotFoundError):
             os.remove(os.path.join(state, f16))
-    C.score_tick(); C.score_tick()
-    if ran16 != [("src", head16)]:
-        fault(f"with files unrun since a landing the score tick ran {ran16}, not the src part once at origin's head")
-    os.remove(os.path.join(state, C.SRC_GAP)); ran16.clear()
-    core.save_json(M.SRC_LATEST, {"head": head16}); C.score_tick()
-    os.remove(os.path.join(state, M.SRC_LATEST)); behind16[0] = 0; C.score_tick()
+    rc16 = (C.src_gap_once(), C.src_gap_once())
+    if ran16 != [("src", head16, "measure")] or rc16 != (0, 3):
+        fault(f"with files unrun since a landing the src-gap job ran {ran16} (exits {rc16}), not the src part once at "
+              "origin's head as the measure role")
+    os.remove(os.path.join(state, M.SRC_GAP)); ran16.clear()
+    core.save_json(M.SRC_LATEST, {"head": head16}); C.src_gap_once()
+    os.remove(os.path.join(state, M.SRC_LATEST)); behind16[0] = 0; C.src_gap_once()
     if ran16:
-        fault(f"the score tick ran {ran16} where the head has its src record, or no file stands unrun")
+        fault(f"the src-gap job ran {ran16} where the head has its src record, or no file stands unrun")
+    behind16[0] = 2; C.score_tick()
+    if ran16:
+        fault(f"the score tick ran {ran16}: the gap is the src-gap job's alone")
+    # the lander's round: the job started when due (a process of its own), even when the bound stops the round
+    spawned16 = []
+    L.subprocess.Popen = lambda argv, **k: spawned16.append(argv[-1]) or "p16"
+    p16 = (L.src_gap_spawn(head16), (behind16.__setitem__(0, 0), L.src_gap_spawn(head16))[1])
+    L.subprocess.Popen = popen16
+    if p16 != ("p16", None) or spawned16 != ["src-gap"]:
+        fault(f"the lander's start of the src-gap job: {p16}, {spawned16} (started when due, not otherwise, expected)")
+    calls16 = []
+    L.pause, L.waits, L.power_ok, L.reconcile = (lambda: False), (lambda *a: False), (lambda: True), (lambda: None)
+    L.fixfirst_overdue, L.fixfirst_binds, L.unverified_binds = (lambda: []), (lambda o: None), (lambda b, f: None)
+    L.src_unverified = lambda h_: (10 ** 6, ["t00.jl"])   # past the bound: the round lands nothing
+    L.src_gap_spawn = lambda o: calls16.append(o)
+    if L.land_round() != 3 or calls16 != [head16]:
+        fault(f"a lander's round held by the bound started the src-gap job {calls16} times at {head16[:8]} (once expected)")
 except Exception as e:
-    fault(f"the src part between scores raised {type(e).__name__}: {str(e)[:240]}")
+    fault(f"the src-gap job raised {type(e).__name__}: {str(e)[:240]}")
 finally:
+    L.subprocess.Popen = popen16
     for k, v in real16.items():
         setattr(C, k, v)
+    for k, v in reall16.items():
+        setattr(L, k, v)
+    M.src_unverified = realm16["src_unverified"]
     with contextlib.suppress(Exception):
         g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
 
@@ -941,8 +968,10 @@ try:
         held19.append(lines)
         return out[2], out[1], secs, lines, running
     import fcntl
-    FIRST19 = 4.0   # a case's budget here (no label timed): under the check's 6 s, so a stop counted in it cuts the case
-    # (a case is 0.8 CPU-seconds, so after a stop it outlasts the watch's next tick, as a stopped compile's case does)
+    FIRST19 = 12.0   # a case's budget here (no label timed): under the check's 15 s, so a stop counted in it cuts the case,
+    # and far over a case's 0.8 CPU-seconds, which at background QoS on a busy machine took over 4 s of wall (2026-11-14,
+    # a 4-s budget killed a/02 in the landing check's sandbox with nothing broken); after a stop a case outlasts the
+    # watch's next tick, as a stopped compile's case does
     # one check mid-measurement: the measurement pays the check's time alone, nothing restarted
     # (the lander's process takes a second or two to load the driver: the stand-ins outlast that); the same
     # measurement with no check first, its time the one the check's is weighed against. Section 22 needs this one's
@@ -950,10 +979,10 @@ try:
     if __section__ != 19:
         raise StopIteration
     _, _, base19, _, _ = measure19(4, 0.8, 0, 0, 0.0)
-    n19, k19, s19, l19, _ = measure19(4, 0.8, 1, 6.0, 0.4)
-    if n19 != 1 or k19 or not l19 or l19[0][1] != "T" or s19 > base19 + 6.0 + 3.0:
+    n19, k19, s19, l19, _ = measure19(4, 0.8, 1, 15.0, 0.4)
+    if n19 != 1 or k19 or not l19 or l19[0][1] != "T" or s19 > base19 + 15.0 + 3.0:
         fault(f"a check mid-measurement: {n19} process(es) (1 expected: no restart), kills {k19}, the stand-in "
-              f"{'stopped' if l19 and l19[0][1] == 'T' else 'running'} under the check ({l19}), {s19:.1f} s where it took {base19:.1f} s with no check, for a 6-s check")
+              f"{'stopped' if l19 and l19[0][1] == 'T' else 'running'} under the check ({l19}), {s19:.1f} s where it took {base19:.1f} s with no check, for a 15-s check")
     # a paused measurement whose driver is killed holds nothing: its back mark is a dead process's, and a mark whose pid
     # another process now holds (its start time not the writer's) is not that process's (the review's F5); each is
     # removed by the taker that reads it
@@ -1474,3 +1503,53 @@ try:
         sleeper26.kill(); sleeper26.wait()
 except Exception as e:
     fault(f"the door's one root raised {type(e).__name__}: {str(e)[:240]}")
+
+# 27. a move's measurement fault measures the same commit again (slots.remeasure, through slots.move_gate as climb()
+# runs it): a fault of the driver's measurement (a FileNotFoundError of its run directory, a MeasureCut) is measured
+# again, the climber's work kept; the same fault twice in a row goes on to the caller (the driver's own: a bug), as does
+# any fault past task_wall_s from the first; a failure of the move's own (its problems, returned) and a power cut
+# (on_ac's) are no fault of its
+#: limit 60
+import slots as SL27
+real27 = SL27.cfg
+try:
+    out27 = {}
+    calls = []
+    def flaky27():
+        calls.append(1)
+        if len(calls) == 1:
+            raise FileNotFoundError(2, "No such file or directory", "/x/in/measure.measure-t/compile.log")
+        return (1, [], {"m/a": "passed"})
+    out27["flaky"] = (SL27.move_gate(flaky27, {"key": "l228-27"}, "climb-9")(), len(calls))
+    SL27.cfg = lambda: dict(real27(), task_wall_s=2)
+    calls2 = []
+    def same27():
+        calls2.append(1); raise M.MeasureCut("the compile process of a measurement was cut: the same each time")
+    try:
+        SL27.remeasure(same27, "l228-27", "climb-9"); out27["same"] = ("returned", len(calls2))
+    except M.MeasureCut:
+        out27["same"] = ("raised", len(calls2))
+    calls3 = []
+    def drift27():
+        calls3.append(1); raise OSError(f"a new fault each time: {len(calls3)}")
+    try:
+        SL27.remeasure(drift27, "l228-27", "climb-9"); out27["drift"] = "returned"
+    except OSError:
+        out27["drift"] = "raised" if len(calls3) > 2 else f"raised after {len(calls3)}"
+    calls4 = []
+    out27["own"] = (SL27.remeasure(lambda: (calls4.append(1), (0, ["its own problem"], {}))[1], "l228-27", "climb-9"), len(calls4))
+    calls5 = []
+    def cut27():
+        calls5.append(1); raise core.PowerCut("the power rule stopped work")
+    try:
+        SL27.remeasure(cut27, "l228-27", "climb-9"); out27["power"] = "returned"
+    except core.PowerCut:
+        out27["power"] = ("raised", len(calls5))
+    want27 = {"flaky": ((1, [], {"m/a": "passed"}), 2), "same": ("raised", 2), "drift": "raised",
+              "own": ((0, ["its own problem"], {}), 1), "power": ("raised", 1)}
+    if out27 != want27:
+        fault(f"a move's measurement fault: {out27} (expected {want27})")
+except Exception as e:
+    fault(f"a move's measurement fault raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    SL27.cfg = real27

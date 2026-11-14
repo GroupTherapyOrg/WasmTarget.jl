@@ -22,6 +22,8 @@ candidate wrote: every such process runs as a build user behind the door (dev/cl
     python3 dev/climb/climb.py slot <climb-N>      one move in that slot, then exit
     python3 dev/climb/climb.py lander              one round of the lander, the one process that lands: reconcile, then
                                                    the queue; it runs no agent
+    python3 dev/climb/climb.py src-gap             the test files the landings' shares left unrun, run at origin's head
+                                                   as the measure role (the lander's round starts it), then exit
     python3 dev/climb/climb.py judge-eval [-n N]   the reviewer's recall on N real past defects (reverted audit fixes)
     python3 dev/climb/climb.py resume-stopped      resume every process a dead climb process left stopped
     python3 dev/climb/climb.py reap-orphans        reap a killed driver's build-user processes, each role no process uses
@@ -134,36 +136,39 @@ def scoreboard_once(head):
     draw_map(os.path.join(STATE, "map.html"))
     print(f"scored {head[:8]}: S={s['passed']}/{s['climbable']} lost={len(lost)} bad={len(bad)} ({round(door.CLOCK() - t0)} s)", flush=True)
 
-SRC_GAP = "src-gap.json"   # the head the src part last ran at between scores: {"head": sha, "t": stamp}
-
-def src_gap_due(head):
-    """Whether the score tick runs the score's src part at `head` between scores (src_gap): files stand unrun since a
-    landing (measure.src_unverified: a landing's check runs its share of the test files, never all), `head` has no src
-    record (src-latest.json) and the part has not run at `head` already. After each landing, so the count
-    src_unverified_max bounds stays near zero and the bound stops a landing only when the files cannot be run."""
-    if state_json(SRC_LATEST, {}).get("head") == head or state_json(SRC_GAP, {}).get("head") == head:
-        return False
-    return src_unverified(head)[0] > 0
-
 def src_gap(head):
-    """The score's src part alone at `head` (src_part: under the score's lock, its files yielding to a waiting lander at
-    their boundaries, at the score's QoS), once a head: a failure is src_part's (src-failed, one note), and the bound
+    """The src part alone at `head`, once a head (measure.src_gap_due), as the measure role under the verify lock
+    (src_part): the lane of the slots' measurements and the lander's own src runs (R3), never the score's, so it never
+    waits on a score's compile (2026-11-14: from 12:40Z the score of 93c85222 held the score's lock for hours, the gap
+    ran only between scores, and at 16:43:54Z six landings stood unrun and the lander landed nothing for 20 minutes),
+    and it adds no heavy Julia: one measurement at a time under that lock (D31). Its files stop at their boundaries for
+    a waiting lander and the rest run after it (src_run). A failure is src_part's (src-failed, one note), and the bound
     then holds landings as before."""
     save_json(SRC_GAP, {"head": head, "t": stamp()})
     behind, files = src_unverified(head)
     event("src-gap", sha=head[:8], behind=behind, first=files)
-    src_part(head)
+    src_part(head, role="measure")
 
-def src_part(head):
-    """The score's src part (measure.src_score) under the score's lock, before its smoke, a part of its own: a fault of
+def src_gap_once():
+    """climb.py src-gap: the src-gap job at origin's head when it is due (the lander starts it: lander.src_gap_spawn), one
+    at a time (its loop lock). 3 when nothing was due."""
+    head = git("rev-parse", f"origin/{MARCH}")
+    if not power_ok() or not src_gap_due(head):
+        return 3
+    src_gap(head)
+    return 0
+
+def src_part(head, role="score"):
+    """The src part (measure.src_score) as `role` under its lock (the score's, before its smoke; the measure role's under
+    the verify lock, the src-gap job's), a part of its own: a fault of
     ANY kind in it (a cut, a refused record, the door's, the driver's own bug) is `src-failed` with its traceback and one
     note, and the smoke runs still; that head is then not verified (D9: located, never lost; the operator's round-13
     finding 1, an IndexError out of the locate that killed every score before its smoke). A power cut is the one
     exception passed on: the score ends there and is redone when work may run, as every measurement's is."""
     import traceback
     try:
-        with julia_slot("score"):
-            src_score(head)
+        with julia_slot(SLOT_KIND[role]):
+            src_score(head, role=role)
     except PowerCut:
         raise
     except Exception as e:   # noqa: BLE001 — located, the smoke goes on
@@ -240,8 +245,6 @@ def score_tick():
     if head != last and not backed_off("score") and (n >= cfg()["score_every_landings"] or time.time() - last_t >= cfg()["score_every_s"]) \
             and power_ok():   # no score starts while the power rule stops work (O8-3, core.power_works)
         scoreboard_once(head)
-    elif src_gap_due(head) and power_ok():   # between scores: the test files the landings' shares left unrun
-        src_gap(head)
     if pause() or week_half() or token_refused():
         return
     if not judge_measured() and not backed_off("judge-eval") and not over_budget():
@@ -249,7 +252,7 @@ def score_tick():
     if audit_due():   # D21: an audit only enqueues, so it holds no landing (O13)
         guarded("audit", audit)
 
-LOOP_LOCKS = ("slot-*", "lander", "score-tick")   # the loops' own locks (loop_lock): a live loop holds its
+LOOP_LOCKS = ("slot-*", "lander", "score-tick", "src-gap")   # the loops' own locks (loop_lock): a live loop holds its
 
 def loops_running():
     """The climb's loops alive now: each whose lock (loop_lock, in the state) another process holds."""
@@ -417,7 +420,7 @@ def main():
     up = sp.add_parser("unpark"); up.add_argument("hold_id")
     j = sp.add_parser("judge-eval"); j.add_argument("-n", type=int, default=None)
     so = sp.add_parser("slot"); so.add_argument("name")
-    sp.add_parser("lander"); sp.add_parser("score-tick"); sp.add_parser("slot-names"); sp.add_parser("power-hold"); sp.add_parser("resume-stopped"); sp.add_parser("hill")
+    sp.add_parser("lander"); sp.add_parser("score-tick"); sp.add_parser("src-gap"); sp.add_parser("slot-names"); sp.add_parser("power-hold"); sp.add_parser("resume-stopped"); sp.add_parser("hill")
     sp.add_parser("reap-orphans")
     nt = sp.add_parser("alarm"); nt.add_argument("name"); nt.add_argument("title"); nt.add_argument("text")
     sp.add_parser("door-probe"); sp.add_parser("agent-probe"); sp.add_parser("claim-repo"); df = sp.add_parser("default"); df.add_argument("key")
@@ -431,7 +434,7 @@ def main():
     signal.signal(signal.SIGTERM, lambda s, f: sys.exit(128 + s))
     resume_orphans()
     beat()   # the iteration's first stamp (launch.sh names the loop: WT_CLIMB_LOOP)
-    if a.cmd in ("slot", "lander", "score-tick"):
+    if a.cmd in ("slot", "lander", "score-tick", "src-gap"):
         why = landed_code()
         if why:
             alarm("landed-code", "a loop refuses to run", f"{why}. Default taken: each loop refuses until it is fixed by a commit made by hand.")
@@ -439,6 +442,7 @@ def main():
         with loop_lock(f"slot-{a.name}" if a.cmd == "slot" else a.cmd) as mine:   # one process per loop (20)
             sys.exit(3 if not mine or not disk_room() else guarded("slot", slot_once, a.name, key=a.name) if a.cmd == "slot"
                      else guarded("lander", land_round) if a.cmd == "lander"
+                     else guarded("src-gap", src_gap_once) if a.cmd == "src-gap"
                      else (guarded("score", score_tick), 3)[1])   # the scoreboard sleeps between looks
     if a.cmd == "judge-eval":
         os.setpgrp()   # its own process group: a stop ends the claude children with it

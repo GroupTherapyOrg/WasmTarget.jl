@@ -271,6 +271,31 @@ def move(h, slot_name):
             return finish(h, "infra", slot_name, f"the slot's Kaimon: {warm['error']}")
         return climb(h, slot_name, clone, base, task, labels, before, warm, dk)
 
+def remeasure(fn, hold, slot_name):
+    """A move's gate (fn: the bundle, G5 and the driver's measurement of the climber's one commit) run again on the same
+    commit after a fault of the driver's measurement (MeasureCut and RoleLost, the door's DoorError, an OSError of its
+    files): the climber's work is on its branch, so the slot measures it again rather than climb the hold again from
+    nothing (2026-11-14 16:43:46Z: a run directory removed from outside, a FileNotFoundError, and climb-1's 53-minute move
+    started over). The same fault twice in a row is the driver's own (a bug: no measurement of this commit will pass it)
+    and goes on to the caller, as does any fault past task_wall_s from the first: the move then ends as infrastructure,
+    its hold kept (slot_once). A failure of the move's own is no fault: fn returns it (its problems)."""
+    seen, t0 = [], None
+    while True:
+        try:
+            return fn()
+        except (MeasureCut, door.DoorError, OSError) as e:
+            why = f"{type(e).__name__}: {e}"
+            t0 = door.CLOCK() if t0 is None else t0
+            if (seen and seen[-1] == why) or door.CLOCK() - t0 > cfg()["task_wall_s"]:
+                raise
+            seen.append(why)
+            event("remeasure", hold=hold, slot=slot_name, why=why[:300])
+
+def move_gate(gated, h, slot_name):
+    """A move's gate as climb() runs it: a power cut waits until work may run and runs it again (on_ac), and a fault of
+    the driver's measurement measures the same commit again (remeasure); the climber's work and the slot's use kept."""
+    return lambda: remeasure(lambda: on_ac(f"move {h['key'][:80]}", gated, wait=True), h["key"], slot_name)
+
 def bundle(user, clone, base, slot_name, task):
     """The climber's commits on `base`, back as a git bundle its user writes (in the `check` profile) and the driver
     takes (door.take) and fetches into the main repository (git parses the pack, fsck on): exactly one commit on
@@ -370,7 +395,7 @@ def climb(h, slot_name, clone, base, task, labels, before, warm, dk):
         return measure_candidate(h, base, sha, labels, before, task, keep=os.path.join(STATE, "deltas", f"{task}.answers.tsv"))[:3]
     # a power cut in a gate waits until work may run and runs the gate again on the commit the move holds: the
     # climber's work and the slot's use are kept (on_ac, O9-1); past task_wall_s of waiting the move ends as infrastructure
-    gate = lambda: on_ac(f"move {h['key'][:80]}", gated, wait=True)
+    gate = move_gate(gated, h, slot_name)
     unlocked, problems, rows = gate()
     if problems and not any(p_.startswith("G5") for p_ in problems):
         so2 = resume("The driver measured your commit against its base and found:\n" + "\n".join(f"- {p_}" for p_ in problems[:30]) +

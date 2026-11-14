@@ -3355,6 +3355,18 @@ def src_unverified(h):
     worst = max(behind.values(), default=0)
     return worst, sorted(f for f, k in behind.items() if k == worst)[:5]
 
+SRC_GAP = "src-gap.json"   # the head the src-gap job last ran at: {"head": sha, "t": stamp}
+
+def src_gap_due(head):
+    """Whether the src-gap job (climb.py src-gap: climb.src_gap) runs the src part at `head`: files stand unrun since a
+    landing (src_unverified: a landing's check runs its share of the test files, never all), `head` has no src record
+    (src-latest.json) and the job has not run at `head` already. The lander's round starts it whenever this holds
+    (lander.src_gap_spawn), whatever else runs, so the count src_unverified_max bounds stays near zero and the bound
+    stops a landing only when the files cannot be run."""
+    if state_json(SRC_LATEST, {}).get("head") == head or state_json(SRC_GAP, {}).get("head") == head:
+        return False
+    return src_unverified(head)[0] > 0
+
 def tail_problems(h, base, sha, before, after, task):
     """A src-tail move is measured on what cannot be forged (item 10): each passing case it adds, run at the base
     with the move's corpus (the base's src, origin's code, compiles it), stops at one of the hold's definitions. A
