@@ -1553,3 +1553,52 @@ except Exception as e:
     fault(f"a move's measurement fault raised {type(e).__name__}: {str(e)[:240]}")
 finally:
     SL27.cfg = real27
+
+# 28. a landing's window never ends a climber's run (slots.through_pauses, door.paused_spans): the spans a window stopped
+# a role, clipped to the run (and awake(), the walls' clock, the run's time less them); a run that ended without a
+# commit after a window stopped it is resumed with the exact spans (pause_text), uncounted, at the move's cap
+# (climber_cap), once per run a window stopped, ending at the first run no window stopped; a committed run, or one no
+# window stopped, is not resumed. The window's record is stood in
+#: limit 60
+import slots as SL28
+real28 = {"window": door._window, "clock": door.CLOCK}
+try:
+    door._window = lambda: {"done": {"slot1": [[100.0, 200.0], [300.0, 400.0]]}, "open": None, "roles": {}, "owner": None, "boot": 0}
+    door.CLOCK = lambda: 350.0
+    sp28, aw28 = door.paused_spans("slot1", 150.0), door.awake("slot1", 150.0)
+    if sp28 != [(150.0, 200.0), (300.0, 350.0)] or abs(aw28 - 100.0) > 1e-9:
+        fault(f"the spans a landing's window stopped a run since 150 (to 350): {sp28}, its awake time {aw28} "
+              "([(150, 200), (300, 350)] and 100 expected)")
+    def run28(outcomes, spans):
+        """through_pauses over runs whose outcomes and stopped spans are given in order: (its answer, the texts it
+        resumed with)"""
+        o, s, texts = list(outcomes), list(spans), []
+        cur = [s.pop(0)]
+        def last():
+            return cur[0]
+        def again(text):
+            texts.append(text); cur[0] = s.pop(0) if s else []
+            return {"outcome": o.pop(0)}
+        return SL28.through_pauses({"outcome": o.pop(0)}, last, again, "l228-28", "climb-9"), texts
+    w1, w2 = [(100.0, 200.0)], [(300.0, 340.0)]
+    got28 = {
+        "stopped, then committed": run28(["gave-up", "committed"], [w1, []]),
+        "stopped twice": run28(["gave-up", "gave-up", "gave-up"], [w1, w2, []]),
+        "not stopped": run28(["gave-up"], [[]]),
+        "committed though stopped": run28(["committed"], [w1]),
+    }
+    shape28 = {k: (v[0]["outcome"], len(v[1])) for k, v in got28.items()}
+    want28 = {"stopped, then committed": ("committed", 1), "stopped twice": ("gave-up", 2), "not stopped": ("gave-up", 0),
+              "committed though stopped": ("committed", 0)}
+    if shape28 != want28:
+        fault(f"a climber's runs past a landing's window (outcome, resumes): {shape28} (expected {want28})")
+    t28 = got28["stopped, then committed"][1][0] if got28["stopped, then committed"][1] else ""
+    if "stopped for a landing's check from" not in t28 or "(100 s)" not in t28 or "nothing is broken" not in t28:
+        fault(f"the resume past a window does not name the stop and its seconds: {t28[:200]!r}")
+    if SL28.climber_cap(True, False) is not None or SL28.climber_cap(False, True) is not None or \
+            SL28.climber_cap(True, True) != SL28.cfg()["resume_cap_usd"]:
+        fault("a resume past a landing's window capped as a counted resume (resume_cap_usd), or a first run so")
+except Exception as e:
+    fault(f"a climber's run past a landing's window raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    door._window, door.CLOCK = real28["window"], real28["clock"]

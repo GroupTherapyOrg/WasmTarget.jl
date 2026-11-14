@@ -291,6 +291,39 @@ def remeasure(fn, hold, slot_name):
             seen.append(why)
             event("remeasure", hold=hold, slot=slot_name, why=why[:300])
 
+def climber_cap(resume, counted):
+    """A climber run's dollar cap (claude's --max-budget-usd): a counted resume (resumes_per_move: the driver's own asks)
+    resume_cap_usd; the first run and a resume past a landing's window (through_pauses, uncounted) the move's own
+    (task_cap_usd, claude_cmd's default)."""
+    return cfg()["resume_cap_usd"] if resume and counted else None
+
+def pause_text(spans, clock=None, wall=None):
+    """What a climber is told its processes were stopped for: each span (door.CLOCK) as UTC times and seconds."""
+    clock, wall = door.CLOCK() if clock is None else clock, time.time() if wall is None else wall
+    at = lambda x: datetime.datetime.fromtimestamp(wall - (clock - x), datetime.timezone.utc).strftime("%H:%M:%SZ")
+    total = round(sum(b - a for a, b in spans))
+    return (f"Your processes (your Kaimon session and its jobs, every Bash command, julia and dev/lanetest.sh you ran) were "
+            f"stopped for a landing's check from " + ", and from ".join(f"{at(a)} to {at(b)} ({round(b - a)} s)" for a, b in spans) +
+            f": {total} s in all. A timeout, a hard limit passed or a job that seemed hung in that time was that stop, not "
+            "your code: nothing is broken. Re-run what it cut (a run past its limit; a Kaimon job still running is still "
+            "running: collect it with check_eval) and continue the move.")
+
+def through_pauses(so, last, again, hold, slot_name):
+    """A climber's run that a landing's window stopped (last(): its spans, door.paused_spans) and that ended without a
+    commit resumed with exactly what happened (pause_text) by again(text): uncounted (no resume of resumes_per_move) and
+    at the move's cap (climber_cap). On 2026-11-14 two runs of climb-1 gave up after a landing's window stopped their
+    processes: a dev/lanetest.sh past its 900-s wall-clock limit (16:57-17:37Z), a Kaimon job read as hung at 6m52s
+    (17:49-17:58Z); the driver's walls count awake time (door.awake), the climber's tools cannot. Once per run stopped:
+    a run no window stopped ends it, so the resumes are bounded by the landings during the move."""
+    while isinstance(so, dict) and so.get("outcome") != "committed":
+        spans = last()
+        if not spans:
+            return so
+        event("climber-paused", hold=hold, slot=slot_name, outcome=so.get("outcome"), spans=len(spans),
+              secs=round(sum(b - a for a, b in spans)))
+        so = again(pause_text(spans))
+    return so
+
 def move_gate(gated, h, slot_name):
     """A move's gate as climb() runs it: a power cut waits until work may run and runs it again (on_ac), and a fault of
     the driver's measurement measures the same commit again (remeasure); the climber's work and the slot's use kept."""
@@ -345,16 +378,23 @@ def climb(h, slot_name, clone, base, task, labels, before, warm, dk):
     write_atomic(os.path.join(STATE, "briefs", f"{task}.md"), brief)
     event("climb", hold=h["key"], slot=slot_name, task=task)
     sid = str(uuid.uuid4())
-    def climber(prompt, resume):
+    pauses = []   # the spans a landing's window stopped the climber's last run (door.paused_spans)
+    def climber(prompt, resume, counted=True):
         door.signal_role(user, "CONT")
+        t0c = door.CLOCK()
         try:
             return ask("climb", task, c["climber_model"], c["climber_effort"], SCHEMA_CLIMB, CLIMBER_TOOLS, prompt, clone, user, sid=sid,
-                       resume=resume, cap=c["resume_cap_usd"] if resume else None, mcp=f"{door.home(user)}/mcp.json",
+                       resume=resume, cap=climber_cap(resume, counted), mcp=f"{door.home(user)}/mcp.json",
                        depot=f"{clone}/.wtd/depot:{dk}:{door.TOP}/julia:",
                        again="Your run ended without a report. Finish the move or stop, and reply with only the JSON the schema asks for.")
         finally:
             door.signal_role(user, "STOP")
-    so = climber(brief, False)
+            pauses[:] = door.paused_spans(user, t0c)
+    def climbed(prompt, resume):   # a run, and its resumes past each landing's window that stopped it (through_pauses)
+        return through_pauses(climber(prompt, resume), lambda: list(pauses),
+                              lambda text: climber(text + "\nThen reply with the same JSON as before.", True, counted=False),
+                              h["key"], slot_name)
+    so = climbed(brief, False)
     if so == BUDGET:
         return finish(h, "budget", slot_name, "the governor refused the climber's run")
     if so is None:
@@ -374,7 +414,7 @@ def climb(h, slot_name, clone, base, task, labels, before, warm, dk):
         if resumes >= c["resumes_per_move"]:
             return SPENT
         resumes += 1
-        return climber(ask_text + "\nThen reply with the same JSON as before.", True)
+        return climbed(ask_text + "\nThen reply with the same JSON as before.", True)
     def not_its_own(so2):
         """A resume the governor refused (BUDGET) or that gave no answer (None) ends the move as the governor's or the
         driver's, never a stop charged to the hold (O6-4)."""

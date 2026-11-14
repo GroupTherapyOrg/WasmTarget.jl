@@ -966,7 +966,10 @@ door's, run as Dale on paths no build user writes.
   media analysis are stopped, each stop recorded first, and every wall the driver keeps on such a role counts its
   awake time alone (`door.awake`: door.run's walls, a run's `task_wall_s`, a Kaimon call's `kaimon_http_s`, a session's
   warm and a Kaimon's start), so the driver's own stop is never a run's timeout, an infra fault or a refusal (ruling
-  11). Every wall and case budget the driver keeps reads one clock, `door.CLOCK` (time.monotonic, here
+  11). A climber's own tools cannot read that clock (dev/lanetest.sh's limit and a Kaimon job's elapsed time are the
+  wall's), so a climber's run that a window stopped and that ends without a commit is resumed with the window's exact
+  spans (`slots.through_pauses`, `door.paused_spans`: "your processes were stopped for a landing's check from T1 to
+  T2"), uncounted and at the move's cap, once per run a window stopped; the climber's brief says it up front. Every wall and case budget the driver keeps reads one clock, `door.CLOCK` (time.monotonic, here
   mach_absolute_time, which stops while the machine sleeps: probed, it read 61,637 s less than the wall clock since
   this boot, the sleeps' sum), so a lid closed is never a run's timeout or a case's budget (O7-1; probed with the
   operator's sleep, a 600-s jump of the wall clock mid-case: nothing booked, where HEAD booked the case errored and

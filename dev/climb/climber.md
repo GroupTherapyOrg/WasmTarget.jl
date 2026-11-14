@@ -48,6 +48,11 @@ The cases it stops, as the driver measured them at your base (group/case — out
      instead and say so in your handoff. Never debug the session itself: the march once spent 150 restarts doing that.
    - A fresh process is for evidence only: the smoke run of step 5, and `bash dev/lanetest.sh`. Run one process at a
      time (D31), never `dev/check.sh`.
+   - Landings stop your processes. While the lander checks a commit (a few minutes), every process of yours (Kaimon,
+     its session and jobs, julia, `dev/lanetest.sh`) is stopped, and continued after it. Clocks keep counting through
+     the stop: a run past its limit, or a Kaimon job still running after minutes, may be that stop, never a sign your
+     code or the session is broken, and never a reason to give up. A job still running is still running: collect it
+     with `check_eval`. If your run ends without a commit after such a stop, the driver resumes you and names the stop.
 2. **Reproduce.** In the session, compile one of the hold's cases and confirm its rejection. Run no baseline: the
    driver measured the hold's cases at your base (above), and measures your commit against them.
 3. **Map before you write (D26).** Name the dart counterpart at the pin (the rejection usually names

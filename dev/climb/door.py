@@ -286,12 +286,20 @@ def popen(role, cmd, *, profile, env=None, cwd=None, background=True, **kw):
     return subprocess.Popen(argv(role, cmd, env, cwd, profile, background), cwd="/", start_new_session=True,
                             stdin=kw.pop("stdin", subprocess.DEVNULL), **kw)
 
+def paused_spans(role, t0, now=None):
+    """The spans of CLOCK since `t0` (to `now`) that a landing's window covered the role, each clipped to them: the one
+    reading of the window record's spans (awake's, and what a climber is told its processes were stopped for). A window
+    whose owner is dead counts as closed (A7-4: a killed lander never disables a wall)."""
+    d = _window()
+    now = CLOCK() if now is None else now
+    spans = d["done"].get(role, []) + ([[d["open"], now]] if role in d["roles"] and _live(d) else [])
+    return [(max(a, t0), min(b, now)) for a, b in spans if min(b, now) > max(a, t0)]
+
 def awake(role, t0):
     """Seconds of CLOCK since `t0` that the role was not in a landing's window: the one clock of every wall on a role's
-    work (ruling 11). A window whose owner is dead counts as closed (A7-4: a killed lander never disables a wall)."""
-    d, now = _window(), CLOCK()
-    spans = d["done"].get(role, []) + ([[d["open"], now]] if role in d["roles"] and _live(d) else [])
-    return now - t0 - sum(max(0.0, min(b, now) - max(a, t0)) for a, b in spans)
+    work (ruling 11)."""
+    now = CLOCK()
+    return now - t0 - sum(b - a for a, b in paused_spans(role, t0, now))
 
 class Tick(DoorError):
     """tick()'s end of a wait: `why` is "disk" (under disk_free_gb), "power" (the power rule stops work, core.power_works, for a wait that ends on it) or
