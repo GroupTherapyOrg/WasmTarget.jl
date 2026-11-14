@@ -736,7 +736,8 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:string_data_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
     target.def in methods(wasm_string_length) ? :length : target.def in methods(wasm_string_codeunit) ? :codeunit :
     target.def in methods(wasm_string_write!) ? :write : target.def in methods(wasm_string_alloc) ? :alloc : target.def in methods(wasm_string_copy!) ? :copy :
-    target.def in methods(wasm_string_memory) ? :memory : target.def in methods(wasm_memory_string) ? :string : nothing
+    target.def in methods(wasm_string_memory) ? :memory : target.def in methods(wasm_memory_string) ? :string :
+    target.def in methods(wasm_symbol_name) ? :symbol_name : nothing
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:string_data}, op::Symbol, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
@@ -786,6 +787,22 @@ end
         # dart's void intrinsics leave the null of the top type (WasmArrayExt.[]=), Julia's nothing
         WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
         return t.top_type[]
+    elseif op === :symbol_name
+        # Symbol.getName (sdk/lib/internal/symbol.dart:35), an InstanceGet of the Symbol class's one
+        # field, `_name`, the String (src/julia/classes.jl _symbol_instance_fields). Under minify a symbol
+        # constant's `_name` is its ordinal (src/symbols.jl get_mangled_symbol_name), dart's choice, since
+        # dart keeps no promise a Symbol's name is observable; Julia's String(::Symbol) is the name, so a
+        # read of it there rejects, located, never the ordinal
+        minify(t.options) &&
+            reject!(Unquarantined("src/symbols.jl get_mangled_symbol_name: a Symbol's name read under minify, where a symbol constant's name is its ordinal and Julia's String(::Symbol) is its name"), at)
+        local yinfo = get(t.class_info, Symbol, nothing)
+        yinfo === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a Symbol's name where Symbol has no class info"), at)
+        local yname = only(class_instance_fields(Symbol, at))
+        yname.name == "_name" && yname.type === String ||
+            reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Symbol's field $(yname.name)::$(yname.type), not its name String"), at)
+        translate_expression(code_gen, args[1], yinfo.non_nullable_type)
+        WasmBuilder.struct_get(b, yinfo.struct_, t.field_index[yname])
+        return info.non_nullable_type
     elseif op === :memory || op === :string
         # a byte Memory's struct (src/julia/classes.jl _memory_instance_fields: its data array, the
         # String's own array type, and its length), the String's data shared by both

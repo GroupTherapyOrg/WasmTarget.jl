@@ -303,6 +303,26 @@ that array's. Natively Julia's own call of it, as `unsafe_wrap(Memory{UInt8}, s)
     ccall(:jl_string_to_genericmemory, Ref{Memory{UInt8}}, (Any,), s)
 
 """
+    wasm_symbol_name(s) -> String
+
+The name of `s`, a String: dart's `Symbol.getName` (sdk/lib/internal/symbol.dart:35), which reads the
+symbol's `_name`, over WasmTarget's layout `struct.get` of the Symbol class's `_name`
+(src/julia/classes.jl _symbol_instance_fields). Natively Julia's `String(::Symbol)` body
+(julia/base/strings/string.jl:118), its bytes at jl_symbol_name's pointer copied into a String,
+written out: src/patch/string.jl's overlay of `String(::Symbol)` maps back here, so a call of it would
+be a cycle the closed world infers as never returning.
+
+Reshaped: the String returned is the symbol's own name, shared as dart's getName shares it, where
+Julia's copies it into a fresh String; only a write through `unsafe_wrap` of it, which Julia leaves
+undefined, tells the two apart. dart's getName is a static method whose body is the InstanceGet; here
+the code generator lowers the call (src/intrinsics.jl, its string-data arm), because Julia's body is a
+foreigncall no host supplies. Under minify a symbol constant's `_name` is its ordinal
+(src/symbols.jl get_mangled_symbol_name), so the read rejects there, located.
+"""
+@quarantine "dart's getName reads the symbol's _name (sdk/lib/internal/symbol.dart:35 Symbol.getName); Julia's name lies at jl_symbol_name's pointer, WasmTarget's in the Symbol class's _name field" Base.String @noinline wasm_symbol_name(s::Symbol)::String =
+    GC.@preserve s unsafe_string(Base.unsafe_convert(Ptr{UInt8}, s))
+
+"""
     wasm_memory_string(m, n) -> String
 
 A String of the first `n` bytes of `m` (`0 < n <= length(m)`): Julia's jl_genericmemory_to_string

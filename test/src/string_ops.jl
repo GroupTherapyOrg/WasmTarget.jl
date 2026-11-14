@@ -38,6 +38,11 @@ vstr(n::Int64) = (v = UInt8[0x61, 0x62, 0x63, 0x64]; n > 1 && popfirst!(v); s = 
 # String (src/patch/string.jl); each length, the last byte of the first, and its equality with a literal
 rng(n::Int64) = (s = n > 3 ? "héllo" : "abc"; a = first(s, n); b = last(s, n); c = s[2:1];
     Int64(ncodeunits(a)) * 10^5 + Int64(ncodeunits(b)) * 10^4 + ncodeunits(c) * 1000 + Int64(codeunit(a, ncodeunits(a))) + Int64(a == "hé") * 10^6)
+# a Symbol's name (Symbol.getName, src/julia/wasm_array.jl wasm_symbol_name): String of a Symbol constant,
+# its length and last byte and its equality with a literal, and the Symbol written into an IOBuffer
+# (src/patch/io.jl), the write's count and the buffer's position
+symn(n::Int64) = (s = String(n > 0 ? :héllo : :de); io = IOBuffer(); w = write(io, n > 0 ? :ab : :xyz);
+    Int64(ncodeunits(s)) * 10^5 + Int64(codeunit(s, ncodeunits(s))) * 100 + Int64(s == "de") * 10 + Int64(w) + Int64(position(io)) * 10^7)
 end
 
 const STRING_OP_CASES = (
@@ -52,7 +57,8 @@ const STRING_OP_CASES = (
     ("iow", StringOpCases.iow, (Int64(1),)), ("iow", StringOpCases.iow, (Int64(0),)),
     ("ioa", StringOpCases.ioa, (Int64(1),)), ("ioa", StringOpCases.ioa, (Int64(0),)),
     ("vstr", StringOpCases.vstr, (Int64(1),)), ("vstr", StringOpCases.vstr, (Int64(2),)),
-    ("rng", StringOpCases.rng, (Int64(2),)), ("rng", StringOpCases.rng, (Int64(4),)), ("rng", StringOpCases.rng, (Int64(10),)))
+    ("rng", StringOpCases.rng, (Int64(2),)), ("rng", StringOpCases.rng, (Int64(4),)), ("rng", StringOpCases.rng, (Int64(10),)),
+    ("symn", StringOpCases.symn, (Int64(1),)), ("symn", StringOpCases.symn, (Int64(0),)))
 
 @testset "String's operations against native Julia" begin
     local runs = Main.WTChild.RunCase[]
@@ -82,6 +88,27 @@ end
     @test :wasm_string_codeunit in reached(StringOpCases.fnd, (Int64,))
     @test [:wasm_memory_string, :wasm_string_alloc, :wasm_string_memory, :wasm_memory_copy!] ⊆ reached(StringOpCases.vstr, (Int64,))
     @test [:wasm_string_alloc, :wasm_string_copy!] ⊆ reached(StringOpCases.rng, (Int64,))
+    @test [:wasm_symbol_name, :wasm_string_memory] ⊆ reached(StringOpCases.symn, (Int64,))
+end
+
+# under minify a symbol constant's name is its ordinal (src/symbols.jl get_mangled_symbol_name), so a read
+# of a Symbol's name rejects there, located, never answering the ordinal; unminified it translates
+@testset "a Symbol's name read under minify rejects, located" begin
+    local DI = WasmTarget.Dart2Wasm
+    # WasmTarget's compile (src/julia/entry.jl compile_world), its translator's minify overridden
+    local translated(minify::Bool) = try
+        local options = DI.WasmCompilerOptions(; main_uri = "", output_file = "main.wasm")
+        options.translator_options.standalone = true
+        options.translator_options.generate_source_maps = false
+        options.translator_options.minify_override = minify
+        DI.compile(options, WasmTarget.check_subset(StringOpCases.symn, (Int64,), "string_ops", Base.get_world_counter()))
+        nothing
+    catch e
+        e isa WasmTarget.RejectionError ? e : rethrow()
+    end
+    local e = translated(true)
+    @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Unquarantined && occursin("get_mangled_symbol_name", sprint(showerror, e))
+    @test translated(false) === nothing
 end
 
 # string(::Int) answers as native Julia, every sign and width: Base's own dec over the overlays of

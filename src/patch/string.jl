@@ -18,6 +18,8 @@ end
 
 @quarantine "Base's _string_n is a jl_alloc_string foreigncall; WasmGC allocates the String's struct and a new data array" Base._string_n @consistent_overlay METHOD_TABLE Base._string_n(n::Integer) = wasm_string_alloc(Int(n))
 
+@quarantine "julia/base/strings/string.jl:118 String of a Symbol copies the bytes at its jl_symbol_name pointer; WasmGC reads the Symbol's name, dart's Symbol.getName; Base's @assume_effects :total is not carried over, so no call of it folds" Base.String @consistent_overlay METHOD_TABLE Base.String(s::Symbol) = wasm_symbol_name(s)
+
 @quarantine "julia/base/strings/string.jl:120 unsafe_wrap of a String as a byte Memory is a jl_string_to_genericmemory foreigncall; WasmGC shares the String's data array" Base.unsafe_wrap @consistent_overlay METHOD_TABLE Base.unsafe_wrap(::Type{Memory{UInt8}}, s::String) = wasm_string_memory(s)
 
 # Base's own body, its foreigncall the runtime's operation: an empty Memory is the empty String
