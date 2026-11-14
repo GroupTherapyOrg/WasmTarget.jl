@@ -595,7 +595,7 @@ differs: `include` takes any path, so the overlays' file map is a table too, bes
 """
 @quarantine pin"julia/base/experimental.jl:421 consistent_overlay" "julia/base/experimental.jl:421 consistent_overlay defines a method in an overlay table, from any file; the overlay table's files are a table, each one include_patch loads" Core.String const PATCH_FILES::Tuple{Vararg{String}} = (
     "patch/string.jl", "patch/substring.jl", "patch/genericmemory.jl", "patch/hashing.jl", "patch/floatfuncs.jl", "patch/io.jl", "patch/ryu.jl", "patch/reinterpretarray.jl",
-    "patch/unicode.jl",
+    "patch/unicode.jl", "patch/runtime_internals.jl",
 )
 
 # the patch files include_patch has loaded, in order
