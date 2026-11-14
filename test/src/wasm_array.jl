@@ -33,7 +33,7 @@ end
 # natively Base's, overlapping ranges included; compiled, push! growing a Vector of each kind of element
 # (bits, a reference, one admitting nothing with its set flags) past its memory several times, resize!
 # shrinking and growing, pop! and popfirst!, deleteat!, append! and insert! (in range and past it), a byte
-# memory's fill! (wasm_memory_fill!), a Dict{Int64,Int64} built on them, a Dict{String,Int64} and a
+# memory's fill! and a byte Vector's from its reference's offset (wasm_memory_fill!), a Dict{Int64,Int64} built on them, a Dict{String,Int64} and a
 # String's hash (src/patch/hashing.jl), Julia's egal of two MemoryRefs (an offset and a memory), and a copy
 # between memories of different element types (wasm_memory_overlaps, the alias test of Base's fallback),
 # boxed into unboxed and throwing where an element does not convert, and one of one element type out of range
@@ -92,6 +92,16 @@ function memory(k::Int64, n::Int64)
         local f = Memory{UInt8}(undef, 4)
         fill!(f, 0x07)
         return Int64(f[n])
+    elseif k == 20
+        # fill! of a byte Vector (Base's memset from its reference's address, array.fill from its offset
+        # here): zeros, then two popfirst! moving the reference past its memory's first two bytes and a
+        # pop! leaving its last, filled for its length only, the bytes around it kept
+        local z = zeros(UInt8, 6)
+        z[1] = 0x01; z[2] = 0x02; z[6] = 0x06
+        popfirst!(z); popfirst!(z); pop!(z)
+        fill!(z, n)
+        local m = z.ref.mem
+        return Int64(length(z)) + 10 * Int64(z[1]) + 100 * Int64(z[end]) + 1000 * Int64(m[2]) + 10000 * Int64(m[6])
     elseif k == 11
         # a Dict{Int64,Int64}: inserted, grown past its first slots (rehash!'s fill! and copies),
         # deleted from (_unsetindex!), looked up present and absent
@@ -250,7 +260,7 @@ end
     local plain = W.compile(memory, (Int64, Int64); optimize = false)
     local argsets = [(1, 1), (1, 40), (2, 1), (2, 40), (3, 1), (3, 40), (5, 2), (5, 3), (6, 1), (6, 9),
                      (7, 1), (7, 3), (8, 1), (8, 3), (8, 6), (8, 9), (9, 1), (9, 4), (9, 9), (10, 1), (10, 4), (10, 5), (11, 1), (11, 2), (11, 40), (12, 1), (12, 30),
-                     (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (14, 1), (14, 3), (15, 3), (15, 98), (15, 1), (16, 0), (16, 3), (16, 40), (17, 1), (17, 5), (18, 1), (18, 7), (19, 1), (19, 3), (4, 2), (4, 3)]
+                     (13, 0), (13, 1), (13, 2), (13, 3), (13, 4), (13, 5), (13, 6), (14, 1), (14, 3), (15, 3), (15, 98), (15, 1), (16, 0), (16, 3), (16, 40), (17, 1), (17, 5), (18, 1), (18, 7), (19, 1), (19, 3), (20, 0), (20, 7), (4, 2), (4, 3)]
     local cases = [WTChild.RunCase("memory$a", plain, Int64.(a), WTChild.native_answer(memory, Int64.(a))) for a in argsets]
     for r in WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)

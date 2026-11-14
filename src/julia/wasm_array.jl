@@ -383,16 +383,19 @@ generator meets the call and lowers it (src/intrinsics.jl); natively Base's.
 end
 
 """
-    wasm_memory_fill!(mem, x) -> Nothing
+    wasm_memory_fill!(ref, x, n) -> Nothing
 
-Stores the byte `x` into every element of the byte memory `mem`: Julia's memset of a Memory{UInt8} or
-Memory{Int8} (base/genericmemory.jl:204 fill!, memset through the memory's address), over WasmTarget's
-layout one `array.fill` of the memory's data array from 0 for its length (dart's `WasmArrayExt.fill`).
-Never inlined, so the code generator meets the call and lowers it (src/intrinsics.jl); natively Base's
-memset written out (its fill! is the overlay's own method in WasmTarget's table, src/patch/genericmemory.jl).
+Stores the byte `x` into the `n` elements of a byte memory from the reference `ref`: Julia's memset
+through a reference's address, of a Memory{UInt8} or Memory{Int8} (base/genericmemory.jl:204 fill!,
+from the memory's address for its length) and of an Array of them (base/array.jl:430 fill!, from its
+reference's address, `unsafe_convert(Ptr{Cvoid}, a.ref)`, for the Array's length). Over WasmTarget's
+layout one `array.fill` of the memory's data array from the reference's offset, its element index (dart's
+`WasmArrayExt.fill`). Never inlined, so the code generator meets the call and lowers it
+(src/intrinsics.jl); natively Base's memset written out (each fill! is the overlay's own method in
+WasmTarget's table, src/patch/genericmemory.jl).
 """
-@quarantine "julia/base/genericmemory.jl:204 fill! memsets a byte memory's elements through its address; WasmGC fills the data array (array.fill)" Base.memset @noinline function wasm_memory_fill!(mem::Union{Memory{UInt8},Memory{Int8}}, x::Union{UInt8,Int8})::Nothing
-    GC.@preserve mem Base.memset(Base.unsafe_convert(Ptr{Cvoid}, mem), x, length(mem) % UInt)
+@quarantine "julia/base/genericmemory.jl:204 fill! memsets a byte memory's elements through its address, and julia/base/array.jl:430 fill! a byte Array's through its reference's; WasmGC fills the data array from the reference's offset (array.fill)" Base.memset @noinline function wasm_memory_fill!(ref::Union{MemoryRef{UInt8},MemoryRef{Int8}}, x::Union{UInt8,Int8}, n::Int)::Nothing
+    GC.@preserve ref Base.memset(Base.unsafe_convert(Ptr{Cvoid}, ref), x, n % UInt)
     return nothing
 end
 

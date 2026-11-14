@@ -60,7 +60,15 @@ end
 end
 
 @quarantine "julia/base/genericmemory.jl:204 fill! of a byte memory memsets its elements through its address; WasmGC fills the data array" Base.fill! @consistent_overlay METHOD_TABLE function Base.fill!(a::Union{Memory{UInt8},Memory{Int8}}, x::Integer)
-    wasm_memory_fill!(a, x isa eltype(a) ? x : convert(eltype(a), x))
+    wasm_memory_fill!(memoryref(a), x isa eltype(a) ? x : convert(eltype(a), x), length(a))
+    return a
+end
+
+# Base's body (julia/base/array.jl:430), its memset through the Array's reference's address
+# (unsafe_convert(Ptr{Cvoid}, a.ref)) the fill of the reference's memory from its offset for the Array's
+# length (wasm_memory_fill!, src/julia/wasm_array.jl), the memory's fill! above from its first element
+@quarantine pin"julia/base/array.jl:430 fill!" "fill! of a byte Array memsets its elements through its reference's address, Julia's element address; WasmGC fills the data array from the reference's offset, its element index" Base.fill! @consistent_overlay METHOD_TABLE function Base.fill!(a::Union{Array{UInt8},Array{Int8}}, x::Integer)
+    wasm_memory_fill!(a.ref, x isa eltype(a) ? x : convert(eltype(a), x), length(a))
     return a
 end
 

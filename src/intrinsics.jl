@@ -1838,35 +1838,33 @@ end
         WasmBuilder.i32_and(b)
         return WasmBuilder.IR.NumType_i32
     end
+    local R = Base.unwrap_unionall(target.specTypes).parameters[2]
+    (R isa DataType && R <: GenericMemoryRef && R.parameters[1] === :not_atomic) ||
+        reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory $op of $R, no non-atomic MemoryRef"), at)
+    local M = GenericMemory{R.parameters...}
+    local rinfo, minfo = get(t.class_info, R, nothing), get(t.class_info, M, nothing)
+    (rinfo === nothing || minfo === nothing) && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory $op where $R or $M has no class info"), at)
+    local rfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(R, at))
+    local mfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(M, at))
     if op === :fill
-        # a byte memory's every element the byte, one array.fill of its data array from 0 for its length
-        # (dart's WasmArrayExt.fill, intrinsics.dart:1279)
-        local M = Base.unwrap_unionall(target.specTypes).parameters[2]
-        local minfo = get(t.class_info, M, nothing)
-        minfo === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory fill where $M has no class info"), at)
-        local mfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(M, at))
+        # a byte reference's n elements the byte, one array.fill of its memory's data array from the
+        # reference's offset (dart's WasmArrayExt.fill, intrinsics.dart:1279), Julia's memset from its address
         local array_type = (translate_type_of_field(t, mfs["data"])::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
-        local m = add_local(code_gen, minfo.non_nullable_type)
-        translate_expression(code_gen, args[1], minfo.non_nullable_type)
-        WasmBuilder.local_tee(b, m)
+        local r = add_local(code_gen, rinfo.non_nullable_type)
+        translate_expression(code_gen, args[1], rinfo.non_nullable_type)
+        WasmBuilder.local_tee(b, r)
+        WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[rfs["mem"]])
         WasmBuilder.struct_get(b, minfo.struct_, t.field_index[mfs["data"]])
-        WasmBuilder.i32_const(b, 0)
+        WasmBuilder.local_get(b, r)
+        WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[rfs["ptr_or_offset"]])
+        WasmBuilder.i32_wrap_i64(b)
         translate_expression(code_gen, args[2], WasmBuilder.unpacked(array_type.element_type[].type))
-        WasmBuilder.local_get(b, m)
-        WasmBuilder.struct_get(b, minfo.struct_, t.field_index[mfs["length"]])
+        translate_expression(code_gen, args[3], WasmBuilder.IR.NumType_i64)
         WasmBuilder.i32_wrap_i64(b)
         WasmBuilder.array_fill(b, array_type)
         WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
         return t.top_type[]
     end
-    local R = Base.unwrap_unionall(target.specTypes).parameters[2]
-    (R isa DataType && R <: GenericMemoryRef && R.parameters[1] === :not_atomic) ||
-        reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory copy of $R, no non-atomic MemoryRef"), at)
-    local M = GenericMemory{R.parameters...}
-    local rinfo, minfo = get(t.class_info, R, nothing), get(t.class_info, M, nothing)
-    (rinfo === nothing || minfo === nothing) && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a memory copy where $R or $M has no class info"), at)
-    local rfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(R, at))
-    local mfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(M, at))
     if op === :unset
         # the element's #undef: the null of its data array and 0 in its set flags, where it can be
         # #undef (holds_reference: boxed, or inline holding a reference); an element of bits keeps its bits
