@@ -416,3 +416,30 @@ end
         end
     end
 end
+
+module FieldTypeCases
+struct P; a::Int64; b::String; c::Float64; end
+mutable struct E end
+# a field name only run time knows (Base.inferencebarrier), so Julia leaves fieldtype the runtime's
+# jl_f_fieldtype: each name P has, a NamedTuple's names, a name neither has, and a type with no field at
+# all, by `k` and `j`
+_name(k::Int64) = Base.inferencebarrier(k == 1 ? :a : k == 2 ? :b : k == 3 ? :c : k == 4 ? :x : :y)::Symbol
+_code(@nospecialize(T)) = T === Int64 ? 1 : T === String ? 2 : T === Float64 ? 3 : T === Bool ? 4 : 5
+field_type(k::Int64, j::Int64) = j == 1 ? _code(fieldtype(P, _name(k))) :
+                                 j == 2 ? _code(fieldtype(@NamedTuple{x::Bool, y::Int64}, _name(k))) :
+                                 _code(fieldtype(E, _name(k)))
+end
+
+@testset "builtins.c: fieldtype of a constant type and a name run time knows, jl_field_index's comparisons, FieldError where none matches" begin
+    # get_fieldtype (builtins.c:1179): the field's type at the first name that is the symbol, the
+    # NamedTuple's at its names parameter, and jl_has_no_field_error's FieldError where no name is: a
+    # wasm exception where native Julia throws, never a trap
+    local F = FieldTypeCases
+    local argsets = [(Int64(k), Int64(j)) for j in 1:3 for k in 1:5]
+    local bytes = WI.compile(F.field_type, (Int64, Int64))
+    local cases = [WTChild.RunCase("field_type$(a)", bytes, a, WTChild.native_answer(F.field_type, a)) for a in argsets]
+    @test count(c -> c.native isa WTChild.Throws, cases) == 2 + 3 + 5
+    for r in WTChild.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+end

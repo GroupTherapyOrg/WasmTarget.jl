@@ -628,6 +628,7 @@ end
     f === Core.throw_methoderror && length(args) >= 1 && return generate_static_intrinsic(self, Val(:throw_methoderror), f, args)
     f === Core.nfields && length(args) == 1 && return generate_static_intrinsic(self, Val(:nfields), f, args)
     f === Core.sizeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:sizeof), f, args)
+    f === Core.fieldtype && length(args) in (2, 3) && return generate_static_intrinsic(self, Val(:fieldtype), f, args)
     f === Core._svec_ref && length(args) == 2 && return generate_static_intrinsic(self, Val(:svec_ref), f, args)
     f === Core.svec && return generate_static_intrinsic(self, Val(:svec), f, args)
     f === Core._expr && length(args) >= 1 && return generate_static_intrinsic(self, Val(:expr), f, args)
@@ -2322,6 +2323,55 @@ end
     WasmBuilder.i64_const(b, generic_memory_elsize(T, true))
     WasmBuilder.i64_mul(b)
     return i64
+end
+
+# Julia's `fieldtype` of a concrete type and a field name only run time knows: Julia's codegen inlines
+# an Int index alone (codegen.cpp:4744), so the call is the runtime's jl_f_fieldtype (builtins.c:1258),
+# get_fieldtype (builtins.c:1179) of a DataType, whose jl_field_index (datatype.c:1781) compares the
+# name with each of the type's field names in order (a NamedTuple's its names parameter, any other
+# type's jl_field_names): the first that is the same symbol answers the type of that field
+# (jl_field_type, Julia's own fieldtype of the constant), and none raises jl_has_no_field_error's
+# FieldError of the type and the name (rtutils.c:169, the runtime's throw_field_error). The type is the
+# constant compile time knows, so its names are too, and each comparison is a test of the symbol's
+# identity (each Symbol canonical, as the inline === compares it). A boundscheck flag that is not a
+# Bool (JL_TYPECHK), a type compile time does not know, or one not concrete returns null, rejected at
+# the call, as dart's
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:fieldtype}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's fieldtype"
+    length(args) == 3 && dart_type_of(self, args[3]) !== Bool && return nothing
+    dart_type_of(self, args[2]) === Symbol || return nothing
+    local TT = dart_type_of(self, args[1])
+    TT isa DataType && TT <: Type && length(TT.parameters) == 1 || return nothing
+    local T = TT.parameters[1]
+    T isa DataType && isconcretetype(T) || return nothing
+    local names = T.name === NamedTuple.body.body.name ? (T.parameters[1] isa Tuple ? T.parameters[1] : ()) : T.name.names
+    local fields = Pair{Symbol,Any}[n => fieldtype(T, n) for n in names]
+    local result = isempty(fields) ? t.top_type[] : translate_type(t, Union{Any[Core.Typeof(ft) for (_, ft) in fields]...})
+    local symbol_type = translate_type(t, Symbol)
+    local name = add_local(code_gen, symbol_type)
+    translate_expression(code_gen, args[2], symbol_type)
+    WasmBuilder.local_set(b, name)
+    local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[result])
+    for (n, ft) in fields
+        local miss = WasmBuilder.block(b)
+        WasmBuilder.local_get(b, name)
+        translate_expression(code_gen, NirConst(Core.Const(n)), symbol_type)
+        WasmBuilder.ref_eq(b)
+        WasmBuilder.i32_eqz(b)
+        WasmBuilder.br_if(b, miss)
+        translate_expression(code_gen, NirConst(Core.Const(ft)), result)
+        WasmBuilder.br(b, done)
+        WasmBuilder.var"end"(b)
+    end
+    translate_expression(code_gen, NirConst(Core.Const(T)), translate_type(t, DataType))
+    WasmBuilder.local_get(b, name)
+    call(code_gen, nir_runtime_member(t.component, throw_field_error, at))
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    return result
 end
 
 # Julia's `_svec_len`: a SimpleVector's length, jl_svec_t's own, which its wasm array carries

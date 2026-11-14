@@ -45,6 +45,7 @@ end
     ((), :throw_atomic_error),
     ((), :throw_bounds_error),
     ((), :throw_divide_error),
+    ((), :throw_field_error),
     ((), :throw_host_reference_egal),
     ((), :throw_invalid_memory_size),
     ((), :throw_method_error),
@@ -128,15 +129,15 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..no_counterpart_rejection, ..open_tuple_holds, ..primitive_value_type,
        ..record_member_tests, ..reject!, ..run_time_type_gap, ..run_time_type_test!,
        ..run_time_type_value!, ..run_wasm_opt, ..sd_get, ..throw_atomic_error,
-       ..throw_bounds_error, ..throw_divide_error, ..throw_host_reference_egal,
-       ..throw_invalid_memory_size, ..throw_method_error, ..throw_out_of_memory,
-       ..throw_undef_ref_error, ..told_by_class, ..tuple_record_arity, ..tuple_record_class,
-       ..type_expand_integer, ..type_promote_integer, ..type_value_unmade, ..udivti3, ..uf_add!,
-       ..uf_find!, ..uf_union!, ..umodti3, ..wasm_array_length, ..wasm_array_new,
-       ..wasm_array_read, ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_egal,
-       ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_string, ..wasm_memory_unset!,
-       ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length,
-       ..wasm_string_memory, ..wasm_string_write!
+       ..throw_bounds_error, ..throw_divide_error, ..throw_field_error,
+       ..throw_host_reference_egal, ..throw_invalid_memory_size, ..throw_method_error,
+       ..throw_out_of_memory, ..throw_undef_ref_error, ..told_by_class, ..tuple_record_arity,
+       ..tuple_record_class, ..type_expand_integer, ..type_promote_integer, ..type_value_unmade,
+       ..udivti3, ..uf_add!, ..uf_find!, ..uf_union!, ..umodti3, ..wasm_array_length,
+       ..wasm_array_new, ..wasm_array_read, ..wasm_array_read_unsigned, ..wasm_array_write!,
+       ..wasm_egal, ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_string,
+       ..wasm_memory_unset!, ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!,
+       ..wasm_string_length, ..wasm_string_memory, ..wasm_string_write!
 import Base: @nospecializeinfer
 import Core: MethodInstance
 import ..LLVM

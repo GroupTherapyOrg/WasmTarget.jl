@@ -49,6 +49,11 @@
 @quarantine "Julia's runtime raises BoundsError with the value and the index where a bounds check fails" Core.BoundsError @noinline throw_bounds_error(@nospecialize(a::Any), i::Int)::Union{} =
     Runtime.Error__throw_with_current_stack_trace(BoundsError(a, i))
 
+# jl_has_no_field_error (julia/src/rtutils.c:169), raised by jl_field_index (julia/src/datatype.c:1781)
+# where a type has no field of the name: FieldError of the type and the name
+@quarantine "julia/src/rtutils.c:169 jl_has_no_field_error raises FieldError with the type and the field's name" Core.FieldError @noinline throw_field_error(t::DataType, fld::Symbol)::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(FieldError(t, fld))
+
 # jl_method_error (julia/src/gf.c:3057), raised by the builtin throw_methoderror (builtins.c:604) where
 # Julia's inference proved no method matches a call: MethodError of the function and its arguments'
 # tuple (jl_f_tuple). Julia records the task's world age; a compiled program runs in no session's world,
