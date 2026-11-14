@@ -2853,10 +2853,13 @@ end
 # 10 ** 6` and `window = []`): test/climb_l228.py runs a tree's src_target, src_set, the lander's record reading
 # (verified_rows), its origin-red rule (origin_red) and dev/src_verdict.sh on a scratch repository and state with planted
 # checks, a score record and shard records, and prints a line a fault
-function bounded_behaviour_faults(tree::AbstractString)::Vector{String}
+# the harness's runner (test/climb_l228.py) runs each section in a child of its own under a hard limit that names it:
+# `section` runs that one section alone (a planted break's), else every section
+function bounded_behaviour_faults(tree::AbstractString, section::Union{Int,Nothing} = nothing)::Vector{String}
     local out = IOBuffer()
     local err = IOBuffer()
-    local ok = success(pipeline(`python3 -I $(joinpath(ROOT, "test", "climb_l228.py")) $tree`; stdout = out, stderr = err))
+    local only = section === nothing ? String[] : ["--only", string(section)]
+    local ok = success(pipeline(`python3 -I $(joinpath(ROOT, "test", "climb_l228.py")) $tree $only`; stdout = out, stderr = err))
     local lines = [String(l) for l in split(String(take!(out)), '\n') if !isempty(strip(l))]
     ok || push!(lines, "test/climb_l228.py failed on $tree: " * last(String(take!(err)), 300))
     return lines
@@ -3018,55 +3021,66 @@ end
 # its behaviour breaks, each planted in a copy of the tree's dev/climb and dev/src_verdict.sh (path, the text, its break)
 const BOUNDED_BREAKS = (
     ("a target of 10 ** 6", "dev/climb/measure.py", "    target, margin = src_target(int(band.group(1)), src_change)",
-     "    target, margin = src_target(int(band.group(1)), src_change); target = 10 ** 6"),
-    ("an empty share (window = [])", "dev/climb/measure.py", "    share = kept\n", "    share = []\n"),
+     "    target, margin = src_target(int(band.group(1)), src_change); target = 10 ** 6", 2),
+    ("an empty share (window = [])", "dev/climb/measure.py", "    share = kept\n", "    share = []\n", 2),
     ("a set with a missing row accepted", "dev/climb/lander.py", "    outside, missing = sorted(set(recs) - set(files)), sorted(set(files) - set(recs))\n",
-     "    outside, missing = sorted(set(recs) - set(files)), []\n"),
-    ("an innocent move charged", "dev/climb/lander.py", "\n    return ok\n\ndef not_reproduced", "\n    return False\n\ndef not_reproduced"),
-    ("a block after the canary's row read", "dev/src_verdict.sh", "if (\$2 == \"~canary\") done = 1; next }", "next }"),
-    ("records with a broken block grammar read", "dev/src_verdict.sh", "  [ -z \"\$grammar\" ] || void=", "  true || void="),
+     "    outside, missing = sorted(set(recs) - set(files)), []\n", 3),
+    ("an innocent move charged", "dev/climb/lander.py", "\n    return ok\n\ndef not_reproduced", "\n    return False\n\ndef not_reproduced", 4),
+    ("a block after the canary's row read", "dev/src_verdict.sh", "if (\$2 == \"~canary\") done = 1; next }", "next }", 5),
+    ("records with a broken block grammar read", "dev/src_verdict.sh", "  [ -z \"\$grammar\" ] || void=", "  true || void=", 5),
     ("a margin from every error, both signs", "dev/climb/measure.py", "        pos = sorted((err for _, err in pairs if err > 0), reverse=True)\n",
-     "        pos = sorted((abs(err) for _, err in pairs), reverse=True)\n"),
-    ("a check that stands with a file of its set unrun", "dev/src_verdict.sh", "[ -z \"\$missing\$twice\$outside\" ] ||", "false &&"),
-    ("a known red's row read as the change's", "dev/src_verdict.sh", "    if is_known \"\$file\" \"\$(fails_of \"\$why\")\"; then", "    if false; then"),
+     "        pos = sorted((abs(err) for _, err in pairs), reverse=True)\n", 1),
+    ("a check that stands with a file of its set unrun", "dev/src_verdict.sh", "[ -z \"\$missing\$twice\$outside\" ] ||", "false &&", 5),
+    ("a known red's row read as the change's", "dev/src_verdict.sh", "    if is_known \"\$file\" \"\$(fails_of \"\$why\")\"; then", "    if false; then", 5),
     ("a known red keyed by its first failure alone", "dev/src_verdict.sh", "print substr(\$0, 1, 120) }' | LC_ALL=C sort; }",
-     "print substr(\$0, 1, 120) }' | head -1; }"),
+     "print substr(\$0, 1, 120) }' | head -1; }", 5),
     ("a red's identity read as a set", "dev/src_verdict.sh", "print substr(\$0, 1, 120) }' | LC_ALL=C sort; }",
-     "print substr(\$0, 1, 120) }' | LC_ALL=C sort -u; }"),
-    ("a void read as green", "dev/src_verdict.sh", "  echo \"check: RED — the shards' records are void\${void}\"; exit 15", "  :"),
+     "print substr(\$0, 1, 120) }' | LC_ALL=C sort -u; }", 5),
+    ("a void read as green", "dev/src_verdict.sh", "  echo \"check: RED — the shards' records are void\${void}\"; exit 15", "  :", 5),
     ("a landing check gated on a quiet machine again (throughput P0)", "dev/climb/lander.py",
-     "    event(\"quiet-probe\", ok=ok, **pr)\n", "    event(\"quiet-probe\", ok=ok, **pr)\n    if not ok:\n        return pr, None, (None, None, None), \"\"\n"),
+     "    event(\"quiet-probe\", ok=ok, **pr)\n", "    event(\"quiet-probe\", ok=ok, **pr)\n    if not ok:\n        return pr, None, (None, None, None), \"\"\n", 6),
     ("the band judged whatever the machine read at the check's ends (throughput P0)", "dev/climb/lander.py",
-     "\"judged\\n\" if q[\"start\"] and q[\"end\"] else \"unjudged\\n\"", "\"judged\\n\""),
+     "\"judged\\n\" if q[\"start\"] and q[\"end\"] else \"unjudged\\n\"", "\"judged\\n\"", 6),
     ("an unjudged check's time read into the margin and the measured checks (throughput P0)", "dev/climb/core.py",
-     " and (pr.get(\"quiet\") or {}).get(\"start\") is True and (pr.get(\"quiet\") or {}).get(\"end\") is True", ""),
+     " and (pr.get(\"quiet\") or {}).get(\"start\") is True and (pr.get(\"quiet\") or {}).get(\"end\") is True", "", 6),
     ("a machine in Low Power Mode taken for quiet (throughput P0)", "dev/climb/lander.py",
-     "    return bool(admitted(pr) and not low)", "    return bool(admitted(pr))"),
+     "    return bool(admitted(pr) and not low)", "    return bool(admitted(pr))", 6),
     # the lander's rebased check (judge5 re-check S1; judge6a re-check F1, F2) and its bound on a driver fault
     ("the table's row of another judge kept for a label origin still passes (judge5 S1)", "dev/climb/measure.py",
-     "    return dict(before, **{l: o[l] for l in diff})\n", "    return dict(before, **{r[0]: r for r in theirs})\n"),
+     "    return dict(before, **{l: o[l] for l in diff})\n", "    return dict(before, **{r[0]: r for r in theirs})\n", 7),
     ("origin's case the table lacks judged as the move's new one (judge6a F2)", "dev/climb/measure.py",
-     "    gained = {l for l in after if l not in before and l in corpus}", "    gained = set()"),
+     "    gained = {l for l in after if l not in before and l in corpus}", "    gained = set()", 7),
     ("a label origin's corpus dropped sent to origin's measurement (judge6a F1)", "dev/climb/measure.py",
-     "    stale = {l for l in after if l in before and l not in corpus}", "    stale = set()"),
+     "    stale = {l for l in after if l in before and l not in corpus}", "    stale = set()", 7),
     ("a driver fault judging an item retried without a bound (judge6a F1)", "dev/climb/lander.py",
-     "    if n >= cfg()[\"other_tries\"]:", "    if False:"),
+     "    if n >= cfg()[\"other_tries\"]:", "    if False:", 7),
     ("a step before the landing whose fault aborts the round (judge6a F1)", "dev/climb/lander.py",
-     "                item_error(item, e); continue\n            if files is None:", "                raise\n            if files is None:"),
+     "                item_error(item, e); continue\n            if files is None:", "                raise\n            if files is None:", 7),
     # the shapes' charge (judge5 re-check S2; judge6a re-check F3, F4)
     ("a move's own refused record never charged (judge5 S2)", "dev/climb/measure.py",
-     "    if own is not None and shapes_run(role, task, js_at, stored)[0] is not None:", "    if False:"),
+     "    if own is not None and shapes_run(role, task, js_at, stored)[0] is not None:", "    if False:", 8),
     ("a move charged whenever the rerun reads, a kill too (judge6a F4)", "dev/climb/measure.py",
      "    own = next((l for l in sorted(unit_blocks(added)) if f\"does not read, e.g. {l}: \" in o), None) if added else None",
-     "    own = sorted(unit_blocks(added))[0] if added else None"),
+     "    own = sorted(unit_blocks(added))[0] if added else None", 8),
     ("a git failure choosing the shapes' program not caught as OracleGap (judge6a F3)", "dev/climb/measure.py",
-     "    except ClimbError as e:\n        raise OracleGap(f\"which shapes' program", "    except subprocess.CalledProcessError as e:\n        raise OracleGap(f\"which shapes' program"),
+     "    except ClimbError as e:\n        raise OracleGap(f\"which shapes' program", "    except subprocess.CalledProcessError as e:\n        raise OracleGap(f\"which shapes' program", 8),
     ("a judge without test/oracle_read.jl read by a failed show (judge6a F3)", "dev/climb/measure.py",
-     "        text = git(\"show\", f\"{sha}:test/oracle_read.jl\") if held else \"\"", "        text = git(\"show\", f\"{sha}:test/oracle_read.jl\")"))
+     "        text = git(\"show\", f\"{sha}:test/oracle_read.jl\") if held else \"\"", "        text = git(\"show\", f\"{sha}:test/oracle_read.jl\")", 8))
+# what the harness and its negatives may cost (the lead, 2026-11-14: a landing check's ratchet past its 480-s hard
+# limit, the negative having run the whole harness once a break, 33 x 18 s): intent, the harness once and each break's
+# own section, about a minute on this machine at background QoS; band 30-150 s: past it a section grew or a wait crept
+# in, and the lock says which costs what
+const L228_HARNESS_BUDGET_S = 150
 function bounded_behaviour_negatives_missed()::Vector{String}
     local out = String[]
+    local t0 = time()
     isempty(bounded_behaviour_faults(ROOT)) || push!(out, "L228's behaviour: the tree itself reads a fault")
-    for (what, path, a, b) in BOUNDED_BREAKS
+    local t_tree = time() - t0
+    local harness = read(joinpath(ROOT, "test", "climb_l228.py"), String)
+    local cost = Dict{Int,Float64}()
+    for (what, path, a, b, section) in BOUNDED_BREAKS
+        occursin(Regex("(?m)^# $(section)\\. "), harness) || (push!(out, "L228's behaviour negative names no section of the harness: $what (section $section)"); continue)
+        local t1 = time()
         local t = mktempdir()
         mkpath(joinpath(t, "dev"))
         cp(joinpath(ROOT, "dev", "climb"), joinpath(t, "dev", "climb"))
@@ -3076,9 +3090,31 @@ function bounded_behaviour_negatives_missed()::Vector{String}
         local text = read(f, String)
         count(a, text) == 1 || (push!(out, "L228's behaviour negative cannot plant: $what"); continue)
         write(f, replace(text, a => b))
-        isempty(bounded_behaviour_faults(t)) && push!(out, "L228's behaviour negative missed: $what")
+        isempty(bounded_behaviour_faults(t, section)) && push!(out, "L228's behaviour negative missed: $what")
+        rm(t; recursive = true, force = true)
+        cost[section] = get(cost, section, 0.0) + time() - t1
+    end
+    # the runner's own: a section that hangs (a planted sleep in what section 1 calls) is a fault naming it, within its
+    # limit (WT_L228_LIMIT_S, a few seconds here), never a wait
+    let t = mktempdir()
+        mkpath(joinpath(t, "dev"))
+        cp(joinpath(ROOT, "dev", "climb"), joinpath(t, "dev", "climb"))
+        cp(joinpath(ROOT, "dev", "src_verdict.sh"), joinpath(t, "dev", "src_verdict.sh"))
+        cp(joinpath(ROOT, "dev", "d14_judge.sh"), joinpath(t, "dev", "d14_judge.sh"))
+        local f = joinpath(t, "dev", "climb", "measure.py")
+        write(f, replace(read(f, String), "def src_target(band, src_change):\n" => "def src_target(band, src_change):\n    __import__(\"time\").sleep(600)\n"))
+        local t1 = time()
+        local v = withenv(() -> bounded_behaviour_faults(t, 1), "WT_L228_LIMIT_S" => "3")
+        any(x -> occursin("section 1 passed its limit of 3 s", x), v) && time() - t1 < 30 ||
+            push!(out, "L228's runner: a hang planted in section 1 read $(first(v, 2)) after $(round(time() - t1; digits = 1)) s, not section 1 past its limit")
         rm(t; recursive = true, force = true)
     end
+    local total = time() - t0
+    println("    L228's harness: the tree $(round(t_tree; digits = 1)) s, its $(length(BOUNDED_BREAKS)) breaks ",
+            "$(round(total - t_tree; digits = 1)) s (", join(("section $k $(round(v; digits = 1)) s" for (k, v) in sort(collect(cost))), ", "),
+            "); $(round(total; digits = 1)) s of a budget of $(L228_HARNESS_BUDGET_S) s")
+    total > L228_HARNESS_BUDGET_S && push!(out, "L228's harness and its negatives cost $(round(total; digits = 1)) s, past their " *
+                                       "budget of $(L228_HARNESS_BUDGET_S) s: a section grew or a wait crept in (the costs above)")
     return out
 end
 bounded_code() = Pair{String,String}[f => read(joinpath(ROOT, f), String)
@@ -4448,7 +4484,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L228_bounded_landing_check" => ("a landing's check runs the test set the climb's lander chose before it, from origin's code and state, and nothing else (the landing-check ruling R1-R3, R6, built 2026-11-11, waiting on Dale's word on C10's wording; dev/LEDGER.md D16: full suites on every landing cost the loop and answer a different question): dev/check.sh refuses before any Julia a landing with no set handed (WT_SRC_SET), a set its own user can write and a set made for another HEAD, and hands the set to every shard; dev/climb/door.py's land job gives the set from its run directory, which its user reads and cannot write; the cost table each landing's own processes rewrote (wt-src-instr.tsv, WT_SRC_COSTS_OUT, door.land_costs) is named by no code file; and src_margin_min_s (10-20), src_margin_checks (5-20), src_margin_start_s (20-40), src_margin_max_s (30-44), src_unverified_max (3-12) and fixfirst_max_landings (3-12) exist inside their bands in dev/climb/defaults.py; the target a landing's share is cut to is computed live by measure.src_target: its target is derived from measured checks once ten of the shape exist, from the stated start margin before (D14's band less three times the second-largest positive prediction error of the shape's last src_margin_checks landed checks, src_margin_start_s until that many exist, between src_margin_min_s and src_margin_max_s, spec v17 Z5; spec v20 F4), the share cut to it alone, the ship event recording it, and the hand-set target it replaced named by no code file. and the four the round-13 architect names are read where the driver writes them: the lander refuses a check's records that name a file outside the set it handed; a landing's green record is exactly the files its check reported green (never \"all\"); a red on test files alone runs its files at origin's head before any move is charged (R3); a fix-first landing clears a src-test red only when its check ran the file green. Behavior, run here: the driver's landing-check code is CALLED (test/climb_l228.py: src_target, src_set, the lander's verified_rows and origin_red, dev/src_verdict.sh, on a scratch repository and state with planted checks, a score record and shard records; spec v17 Z6) and reads no fault; twenty-five behaviour breaks planted in copies of it (a target of 10 ** 6, an empty share, a missing row accepted, an innocent move charged, a two-sided margin, a check standing with a file unrun, a known red read as the change's, a known red keyed by its first failure alone, a red's identity read as a set, a block after the canary's row read, records with a broken block grammar read, a void read as green; and no routine hold before a landing check (throughput P0, lander._land with ship.sh stood in): a check gated on a quiet machine again, the band judged whatever the machine read at the check's ends, an unjudged time read into the margin, Low Power Mode taken for quiet; and the rebased check and its bound (judge5 S1, judge6a F1, F2: the table's row of another judge kept, origin's case the table lacks judged as new, a label origin's corpus dropped sent to origin's measurement, a driver fault judging an item retried without a bound, a step before the landing whose fault aborts the round; and the shapes' charge (judge5 S2, judge6a F3, F4: a move's own refused record never charged, a move charged whenever the rerun reads, a git failure choosing the shapes' program not caught as OracleGap, a judge without test/oracle_read.jl read by a failed show) are each caught by what a call returns; and fourteen text breaks of what only the text shows (check.sh's refusals, the door, the deleted table, the keys) are each named. Two static stopgaps on what a test process can reach (spec v17 Z4; proposed apart as L229 and L230), each file read through Julia's parser: src/ loads no Test and names no `Test.`, `exit`, `atexit`, `_WT_` name or the records' variables; a file under test/src names no Test internal but its macros, no `exit`/`atexit`, WT_SRC_*, .wtd, git command, clock or date, and evals into no module but its own, past an exact allowlist each entry of which a file needs; seventeen planted reaches are each named (red's round-15 p7 among them). When each part runs (spec v18 Q5): the text checks and the reach negatives always; the behaviour harness with its negatives (D38) when the landing's diff from CHECK_BASE touches dev/climb, dev/src_verdict.sh, dev/check.sh, test/src_tests.jl, test/src_canary.jl, test/climb_l228.py or this file, when its range closes a clause (`Closes: C<n>`), or when no base can be read; the reach checks on the src and test/src files the landing changes, the whole tree with the allowlist's exactness when this file changes or the run is full (dev/CHARTER.md C10)",
+    "L228_bounded_landing_check" => ("a landing's check runs the test set the climb's lander chose before it, from origin's code and state, and nothing else (the landing-check ruling R1-R3, R6, built 2026-11-11, waiting on Dale's word on C10's wording; dev/LEDGER.md D16: full suites on every landing cost the loop and answer a different question): dev/check.sh refuses before any Julia a landing with no set handed (WT_SRC_SET), a set its own user can write and a set made for another HEAD, and hands the set to every shard; dev/climb/door.py's land job gives the set from its run directory, which its user reads and cannot write; the cost table each landing's own processes rewrote (wt-src-instr.tsv, WT_SRC_COSTS_OUT, door.land_costs) is named by no code file; and src_margin_min_s (10-20), src_margin_checks (5-20), src_margin_start_s (20-40), src_margin_max_s (30-44), src_unverified_max (3-12) and fixfirst_max_landings (3-12) exist inside their bands in dev/climb/defaults.py; the target a landing's share is cut to is computed live by measure.src_target: its target is derived from measured checks once ten of the shape exist, from the stated start margin before (D14's band less three times the second-largest positive prediction error of the shape's last src_margin_checks landed checks, src_margin_start_s until that many exist, between src_margin_min_s and src_margin_max_s, spec v17 Z5; spec v20 F4), the share cut to it alone, the ship event recording it, and the hand-set target it replaced named by no code file. and the four the round-13 architect names are read where the driver writes them: the lander refuses a check's records that name a file outside the set it handed; a landing's green record is exactly the files its check reported green (never \"all\"); a red on test files alone runs its files at origin's head before any move is charged (R3); a fix-first landing clears a src-test red only when its check ran the file green. Behavior, run here: the driver's landing-check code is CALLED (test/climb_l228.py: src_target, src_set, the lander's verified_rows and origin_red, dev/src_verdict.sh, on a scratch repository and state with planted checks, a score record and shard records; spec v17 Z6) and reads no fault; twenty-five behaviour breaks planted in copies of it (a target of 10 ** 6, an empty share, a missing row accepted, an innocent move charged, a two-sided margin, a check standing with a file unrun, a known red read as the change's, a known red keyed by its first failure alone, a red's identity read as a set, a block after the canary's row read, records with a broken block grammar read, a void read as green; and no routine hold before a landing check (throughput P0, lander._land with ship.sh stood in): a check gated on a quiet machine again, the band judged whatever the machine read at the check's ends, an unjudged time read into the margin, Low Power Mode taken for quiet; and the rebased check and its bound (judge5 S1, judge6a F1, F2: the table's row of another judge kept, origin's case the table lacks judged as new, a label origin's corpus dropped sent to origin's measurement, a driver fault judging an item retried without a bound, a step before the landing whose fault aborts the round; and the shapes' charge (judge5 S2, judge6a F3, F4: a move's own refused record never charged, a move charged whenever the rerun reads, a git failure choosing the shapes' program not caught as OracleGap, a judge without test/oracle_read.jl read by a failed show) are each caught by what a call returns, each break run on its own section alone by the harness's runner (test/climb_l228.py: every section a child of its own under a hard limit that names it, a planted hang read as section 1 past its limit; the 2026-11-14 landing check's ratchet passed its 480-s hard limit when the negative ran the whole harness once a break), the harness and its negatives within L228_HARNESS_BUDGET_S (intent: the harness once and each break's own section in about a minute; band: 30-150 s, past it a fault naming each section's cost); and fourteen text breaks of what only the text shows (check.sh's refusals, the door, the deleted table, the keys) are each named. Two static stopgaps on what a test process can reach (spec v17 Z4; proposed apart as L229 and L230), each file read through Julia's parser: src/ loads no Test and names no `Test.`, `exit`, `atexit`, `_WT_` name or the records' variables; a file under test/src names no Test internal but its macros, no `exit`/`atexit`, WT_SRC_*, .wtd, git command, clock or date, and evals into no module but its own, past an exact allowlist each entry of which a file needs; seventeen planted reaches are each named (red's round-15 p7 among them). When each part runs (spec v18 Q5): the text checks and the reach negatives always; the behaviour harness with its negatives (D38) when the landing's diff from CHECK_BASE touches dev/climb, dev/src_verdict.sh, dev/check.sh, test/src_tests.jl, test/src_canary.jl, test/climb_l228.py or this file, when its range closes a clause (`Closes: C<n>`), or when no base can be read; the reach checks on the src and test/src files the landing changes, the whole tree with the allowlist's exactness when this file changes or the run is full (dev/CHARTER.md C10)",
         () -> begin
             local v = vcat(bounded_check_faults(read(joinpath(ROOT, "dev", "check.sh"), String),
                                                 read(joinpath(ROOT, "dev", "climb", "door.py"), String),

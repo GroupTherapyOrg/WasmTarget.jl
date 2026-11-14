@@ -3,8 +3,78 @@
 # checks, a planted score record and planted shard records, and what each call returns asserted. It prints one line a
 # fault and nothing when every behaviour holds; test/parity_ratchet.jl's L228 runs it on the repository's tree, and its
 # negative runs it on copies with one behaviour broken each, every one of which must print a fault.
-#   python3 -I test/climb_l228.py <tree root>
-import contextlib, json, os, subprocess, sys, tempfile, base64
+#   python3 -I test/climb_l228.py <tree root> [--only <section>]
+#
+# THE RUNNER (the owner's rule since 2026-10: no hang, ever; a stage has a hard limit that names the case): this file is
+# a prologue and numbered sections (`# <n>. ...`). The runner runs each section in a child process of its own (the
+# prologue, the sections its `#: needs` line names, then itself), under a hard limit (`#: limit <s>`, else
+# SECTION_LIMIT_S), killed with its process group past it; a section past its limit, or one that exits other than 0, is
+# a fault naming it, never a wait. A child's output goes to files, never a pipe, so nothing it starts can hold the
+# caller's pipe open. `--only <n>` runs that section alone: a planted break names its section (test/parity_ratchet.jl's
+# BOUNDED_BREAKS), and the lock's negative runs only it on its copy, so the negative costs the breaks' sections, never
+# (breaks) x (the harness). A section that waits by design (a lock, a backoff, a poll) takes its wait from an injected
+# clock or a limit of its own under test, so its time stays in seconds.
+import contextlib, json, os, re, signal, subprocess, sys, tempfile, time, base64
+
+SECTION_LIMIT_S = 60   # a section's hard limit: intent, every section in seconds (the longest about 8 s on 2026-11-14,
+                       # at background QoS); band 30-120: past it the section is a fault naming it, a hang or a blow-up
+# the runner's own negative (test/parity_ratchet.jl) sets WT_L228_LIMIT_S to a few seconds, so a planted hang costs its
+# limit and no more
+LIMIT_OVERRIDE = os.environ.get("WT_L228_LIMIT_S")
+
+def _chunks(src):
+    """(the prologue, {n: (its text, needs, limit)}): the prologue runs from `root = ...` to the first section; each
+    section from its `# <n>. ` line to the next or to the end."""
+    body = src[src.index("\nroot = ") + 1:]
+    marks = list(re.finditer(r"^# (\d+)\. ", body, re.M))
+    secs = {}
+    for i, m in enumerate(marks):
+        text = body[m.start():marks[i + 1].start() if i + 1 < len(marks) else len(body)]
+        needs = [int(x) for x in re.findall(r"\d+", (re.search(r"^#: needs ([\d, ]+)", text, re.M) or [None, ""])[1])]
+        lim = re.search(r"^#: limit (\d+)", text, re.M)
+        secs[int(m.group(1))] = (text, needs, int(lim.group(1)) if lim else SECTION_LIMIT_S)
+    return body[:marks[0].start()], secs
+
+if __name__ == "__main__" and "--section" not in sys.argv:   # the runner
+    _src = open(os.path.abspath(__file__)).read()
+    _pro, _secs = _chunks(_src)
+    _only = int(sys.argv[sys.argv.index("--only") + 1]) if "--only" in sys.argv else None
+    if _only is not None and _only not in _secs:
+        print(f"climb_l228: no section {_only}"); sys.exit(0)
+    _out = []
+    for _n in sorted(_secs) if _only is None else [_only]:
+        _lim, _t0 = min(_secs[_n][2], int(LIMIT_OVERRIDE)) if LIMIT_OVERRIDE else _secs[_n][2], time.time()
+        with tempfile.TemporaryDirectory(prefix="l228-run-") as _d:
+            with open(f"{_d}/out", "wb") as _o, open(f"{_d}/err", "wb") as _e:
+                _p = subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), sys.argv[1], "--section", str(_n)],
+                                      stdin=subprocess.DEVNULL, stdout=_o, stderr=_e, start_new_session=True)
+                try:
+                    _rc = _p.wait(timeout=_lim)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(_p.pid, signal.SIGKILL)
+                    _p.wait()
+                    _rc = None
+            _lines = [l for l in open(f"{_d}/out", errors="replace").read().splitlines() if l.strip()]
+            _err = open(f"{_d}/err", errors="replace").read()
+        if _rc is None:
+            _out.append(f"section {_n} passed its limit of {_lim} s (a hang or a blow-up, never a result): "
+                        f"{(_lines[-1] if _lines else _err.strip()[-200:]) or 'no output'}")
+        elif _rc != 0:
+            _out.append(f"section {_n} exited {_rc}: {_err.strip()[-300:]}")
+        _out += _lines
+        if os.environ.get("WT_L228_TIMES"):
+            print(f"# section {_n}: {time.time() - _t0:.1f} s", file=sys.stderr)
+    for _l in _out:
+        print(_l)
+    sys.exit(0)
+
+_n = int(sys.argv[sys.argv.index("--section") + 1])   # a child: the prologue, the sections it needs, then itself
+_pro, _secs = _chunks(open(os.path.abspath(__file__)).read())
+_g = {"__name__": "__l228_section__", "__file__": os.path.abspath(__file__)}
+exec(compile("import contextlib, json, os, re, signal, subprocess, sys, tempfile, time, base64\n" + _pro + "".join(_secs[k][0] for k in _secs[_n][1]) + _secs[_n][0] +
+             "\nfor f in faults:\n    print(f)\n", f"climb_l228 section {_n}", "exec"), _g)
+sys.exit(0)
 
 root = os.path.abspath(sys.argv[1])
 faults = []
@@ -91,6 +161,7 @@ if L.verified_rows(item, {"t00.jl": "passed", "t09.jl": "passed"}, ["t00.jl"]) i
     fault("the lander verifies records that name a file outside the set handed")
 
 # 4. the origin-red rule: a red outside the move's own that origin reads red is origin's (uncharged), else the move's
+#: needs 3
 @contextlib.contextmanager
 def no_slot(kind, first=False):
     yield
@@ -172,7 +243,7 @@ def land6(crc, path, readings, power=(True, False, 90)):
     core.POWER[0], core.POWER[1], core.POWER[2] = (lambda: power), 0.0, None
     with _cl.suppress(FileNotFoundError):
         os.remove(f"{state}/power.json")
-    c6 = dict(core.cfg(), poll_s=dict(core.cfg()["poll_s"], scan=1))
+    c6 = dict(core.cfg(), poll_s=dict(core.cfg()["poll_s"], scan=0.05))   # the lander's poll injected tiny: a wait by design
     old = {k: os.environ.get(k) for k in ("FAKE_CRC", "FAKE_PATH")}
     os.environ.update(FAKE_CRC=str(crc), FAKE_PATH=str(path))
     try:
@@ -208,6 +279,7 @@ finally:
         g("update-ref", "-d", "refs/remotes/origin/wt2")
 
 # 7. the lander's rebased check (the judge5 re-check's S1, the judge6a re-check's F1, F2): every label the rebased
+#: needs 3, 4
 # candidate changes, and every case of origin's the table lacks, is judged against origin's own row of the round, so a
 # pass the move loses is G2 whatever judge the table's row carries; a table label origin's corpus no longer registers is
 # the move's own; and a fault of the driver's judging an item is bounded, the round going on to the next item.
@@ -310,5 +382,3 @@ try:
 except Exception as e:
     fault(f"a judge without test/oracle_read.jl raises {type(e).__name__} instead of getting the first program (judge6a F3)")
 
-for f in faults:
-    print(f)
