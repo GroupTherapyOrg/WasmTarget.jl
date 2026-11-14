@@ -1733,20 +1733,21 @@ def _layer_key(origin, files):
 # user reads and cannot write: no candidate's process writes either (dev/check.sh refuses a set its user can write)
 SET_ENV, COSTS_ENV = "WT_SRC_SET_FILE", "WT_SRC_COSTS_FILE"
 
-def landing(tree):
+def landing(tree, check=True):
     """What a landing's job reads, given as _wtland's run directory: the commit at `tree`'s HEAD (the scratch
     dev/ship.sh rebased, its parent origin's head) in a repository with origin's history, the tree's Manifest and
-    preferences, and the lander's test set and the score's costs (SET_ENV, COSTS_ENV: files of the lander's state named
-    in this process's environment by ship.sh's caller), copied in as `src-set.txt` and `src-costs.tsv`; a landing with no
-    set named is refused, located (D9: never every file by default). Returns (run directory, the depots beneath its own:
-    _shared() of its parent)."""
+    preferences, and, for a CHECK, the lander's test set and the score's costs (SET_ENV, COSTS_ENV: files of the lander's
+    state named in this process's environment by ship.sh's caller), copied in as `src-set.txt` and `src-costs.tsv`; a
+    check with no set named is refused, located (D9: never every file by default). A job that runs no test (`check`
+    false: the packages regeneration of a rebased commit, which the lander runs before any set exists) is given neither
+    file. Returns (run directory, the depots beneath its own: _shared() of its parent)."""
     common = git_("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=tree)
     sha = git_("rev-parse", "HEAD", cwd=tree)
     files = {n: open(os.path.join(tree, n)).read() for n in ("Manifest.toml", "LocalPreferences.toml") if os.path.isfile(os.path.join(tree, n))}
     sp, cp = os.environ.get(SET_ENV, ""), os.environ.get(COSTS_ENV, "")
-    if not sp or not os.path.isfile(sp):
+    if check and (not sp or not os.path.isfile(sp)):
         raise DoorError(f"a landing's check runs the test set its lander chose, and {SET_ENV} names none ({sp!r})")
-    given = {"src-set.txt": open(sp).read(), "src-costs.tsv": open(cp).read() if cp and os.path.isfile(cp) else ""}
+    given = {"src-set.txt": open(sp).read(), "src-costs.tsv": open(cp).read() if cp and os.path.isfile(cp) else ""} if check else {}
     d = give("land", f"land-{sha[:12]}", {**files, **given})
     repo(d, common, {"check": sha})
     return d, _shared(files, git_("rev-parse", "HEAD^", cwd=tree))
@@ -1799,7 +1800,7 @@ REGEN = ('. dev/depot.sh && wt_depot_export "$WT_DEPOT_DIR" && exec julia --proj
          'S = Skeleton; normpath(S.ROOT) == normpath(pwd() * "/") || error("dev/skeleton.jl reads $(S.ROOT), not this '
          'tree"); t = S.packages_text(); t == read(S.PACKAGES, String) || write(S.PACKAGES, t)\'')
 
-def land_job(tree, script, log, out_files=(), wall=DEFAULTS["ship_kill_s"], background=False):
+def land_job(tree, script, log, out_files=(), wall=DEFAULTS["ship_kill_s"], background=False, check=True):
     """`script` (sh, its $1 the run directory) in _wtland's own clone of the landing's commit ($HOME/c), at default
     QoS in the `check` profile (it writes its home alone: its clone, its depot and its caches, so nothing it writes is
     read by another check or by Dale's processes, R5-2); its output to `tree`/.wtd/`log`, never into dev/ship.sh's
@@ -1811,7 +1812,7 @@ def land_job(tree, script, log, out_files=(), wall=DEFAULTS["ship_kill_s"], back
     os.makedirs(os.path.join(tree, ".wtd"), exist_ok=True)
     with using("land"), open(os.path.join(tree, ".wtd", log), "w") as logf:
         pins()   # the checkouts this landing's check reads, as dev/ship.sh fetched them: the one mirror a landing refreshes
-        d, shared = landing(tree)
+        d, shared = landing(tree, check)   # `check` false: a job that runs no test and is given no set (the regeneration)
         jdk = subprocess.run(["/usr/libexec/java_home"], capture_output=True, text=True).stdout.strip()
         h = home("land")
         p = popen("land", ["/bin/sh", "-c", 'rm -rf "$HOME/c" && mkdir -p "$WT_DEPOT_DIR" && git clone -q -b check "$1/repo.git" "$HOME/c" && '

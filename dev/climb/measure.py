@@ -3053,7 +3053,8 @@ def rebased(base, sha, onto):
         safe_write(os.path.join(wt, n), text)
     try:
         rc = door.land_job(wt, door.REGEN, "regen.log", ["src/julia/packages.jl"], cfg()["pkg_wall_s"],
-                           background=True)   # under the caller's verify lock and at background QoS (D31, A7-5)
+                           background=True, check=False)   # under the caller's verify lock and at background QoS (D31,
+                                                           # A7-5); no test runs, so no test set is named
     except door.Tick as e:   # cut by the power rule: no verdict on the commit, redone when work may run (on_ac)
         if e.why == "power":
             raise PowerCut(f"the packages regeneration of {at[:10]}: {e}") from e
