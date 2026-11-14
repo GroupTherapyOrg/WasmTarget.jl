@@ -108,6 +108,16 @@ DEFAULTS = {
     # P core, never beside a landing check (the lander holds verify and score: D31), and ~19-24 h at background. Band:
     # False until a label's process at background QoS answers within 18 s (a night for the bootstrap), then True
     "oracle_background": False,
+    # the QoS of a slot's and the lander's measurement (measure.part_background; the score's stays background). The
+    # burn-in window of 2026-11-13 (council throughput analysis, from the events): the one measurement lane was busy 89%
+    # of the time, the slots spent 66% of their hours measuring or waiting for it and 25% climbing, and the four
+    # performance cores ran landing checks for 25 of 720 minutes; at background QoS the lane's Julia runs on the
+    # efficiency cores alone. The oracle's processes above measured 4.6 times faster at default QoS (7.6 s against
+    # 34.8 s); a measurement's own ratio is to be read from the first measurements after this lands (case-secs.json).
+    # False: one single-threaded process on one performance core, never beside a landing check (the lander takes the
+    # verify lock first and a measurement in flight yields it at its next part: D31). Dale 2026-11-13, told the lane was
+    # the limit and that this was the lead's default: "keep going", "STOP pausing EVER". True restores background QoS
+    "measure_background": False,
     # a measurement waits this long for the lock or a live landing before a note; it then waits on (O5): every holder
     # has its own wall (a measuring process's derived wall, ship_kill_s), so the wait is bounded by theirs, never by a backoff
     "lock_wait_s": 3600,

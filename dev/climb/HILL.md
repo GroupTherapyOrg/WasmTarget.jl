@@ -602,8 +602,10 @@ door's, run as Dale on paths no build user writes.
   plants it), and every role's git reads no global config
   (`GIT_CONFIG_GLOBAL=/dev/null`); probed: a planted `~/.gitconfig`, `~/.zshrc` and `claude/projects/*.jsonl` of a
   review user were gone at its next review, and without the clean they stayed and git read the planted config.
-- **Run**: `sudo -n -u <user> env -i <explicit environment> nobootstrap`, at background QoS (a landing's check at
-  default), every file it writes capped at `file_cap_bytes` (RLIMIT_FSIZE on the door's line, so a run that prints
+- **Run**: `sudo -n -u <user> env -i <explicit environment> nobootstrap`, at background QoS (at default: a landing's
+  check, the oracle's answering processes while `oracle_background` is false, and the parts of a slot's or the lander's
+  measurement while `measure_background` is false, one single-threaded process on a performance core, never beside a
+  check), every file it writes capped at `file_cap_bytes` (RLIMIT_FSIZE on the door's line, so a run that prints
   in a loop cannot fill the disk Dale's work shares through a log of his: A6-5; probed as `_wtm1`, a 4200-MB write
   stopped at 4096 MB with SIGXFSZ, where it was written whole before), and a run's total writes bounded while it runs:
   every wait on a build user's run (`door.wait`, a measurement's watch, a land job's) takes one tick, `door.tick`, the
@@ -1291,20 +1293,20 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `price_band` [0.95, 1.05], `resumes_per_move` 3, `stops_per_hold` 3, `park_steps` [50, 100, 200],
 `queue_cap` 4 (locked), `task_wall_s` 5400, `audit_every` 5 (locked), `score_every_landings` 3, `score_every_s` 7200,
 `retry_backoff_s` 1800, `backoff_cap_s` 28800, `alarm_s` 21600, `power_settle_s` 60, `battery_runs` true,
-`battery_floor_pct` 20, `oracle_audit_k` 8, `oracle_background` false, `lock_wait_s` 3600, `score_loss_band` 0.02,
-`judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3,
-`case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120,
-`kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000,
-`decompressions_max` 400000, `probe_backoff_s` 600, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200,
-`d14_share` [10, 0.6], `other_tries` 3, `ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20,
-`file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4],
-`tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6, `src_unverified_max` 6,
-`src_shape_checks_min` 2, `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375,
-`src_prior_load_s` {"src": 17, "outside": 0}, `src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9,
-`src_margin_min_s` 10, `src_margin_checks` 10, `src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800,
-`kinds_wall_s` 1800, `admissible_wall_s` 600, `parse_wall_s` 300, `loader_wall_s` 600, `proxy_in_flight` 1,
-`proxy_body_bytes` 33554432, `proxy_request_s` 1200, `proxy_join_s` 30, `git_low_speed` [1000, 60],
-`loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
+`battery_floor_pct` 20, `oracle_audit_k` 8, `oracle_background` false, `measure_background` false, `lock_wait_s` 3600,
+`score_loss_band` 0.02, `judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4,
+`wall_factor` 3, `case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840,
+`kaimon_http_s` 120, `kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15,
+`swapins_max` 2000, `decompressions_max` 400000, `probe_backoff_s` 600, `near_band` 0.85, `near_band_step` 5,
+`d14_backoff_s` 1200, `d14_share` [10, 0.6], `other_tries` 3, `ship_kill_s` 3600, `watch_stale_s` 600,
+`disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216,
+`fetch_tries` [5, 3, 4], `tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6,
+`src_unverified_max` 6, `src_shape_checks_min` 2, `src_prior_g` {"src": 11.0, "outside": 10.7},
+`src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0}, `src_prior_ratchet_s` 89,
+`src_prior_imbalance_s` 9, `src_margin_min_s` 10, `src_margin_checks` 10, `src_margin_start_s` 25,
+`src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800, `admissible_wall_s` 600, `parse_wall_s` 300,
+`loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432, `proxy_request_s` 1200, `proxy_join_s` 30,
+`git_low_speed` [1000, 60], `loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
 `role_wait_s` {"slot": 10800, "review": 10800, "measure": 49800, "score": 49800, "land": 5400, "deps": 3600},
 `state_lock_s` 600, `step_wall_s` 60, `tree_wall_s` 600, `kaimon_poll_s` 30, `kaimon_ping_s` 10,
 `poll_s` {"kaimon_up": 5, "scan": 10, "lock": 5, "landing_lock": 20, "yield": 2, "land_job": 5},

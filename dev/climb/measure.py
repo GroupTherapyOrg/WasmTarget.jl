@@ -208,10 +208,18 @@ def yield_slot(kind):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return round(door.CLOCK() - t0)
 
+def part_background(role):
+    """Whether a measurement's parts (the compiling, the running and the verdict's process) run at background QoS: a
+    slot's and the lander's measurement (role measure) as measure_background says, the score's always (it runs for
+    hours beside everything). Either way one single-threaded process at a time under its measurement lock, which the
+    lander takes before a check, so never beside one (D31)."""
+    return cfg()["measure_background"] if role == "measure" else True
+
 @contextlib.contextmanager
 def julia_slot(kind, first=False):
     """The driver's heavy Julia, one of each kind at a time (D31 as amended): one measurement and one score, each a
-    single thread at background QoS, never beside a landing's check. The lander is served first (red 8): while it
+    single thread (the score at background QoS, a measurement as measure_background says: part_background), never
+    beside a landing's check. The lander is served first (red 8): while it
     waits (`first`), its mark holds every other taker back. A wait past lock_wait_s, for the lock or for a live
     ship.sh's landing lock, is a note and waits on (O5): every holder has a wall of its own (its derived wall,
     ship_kill_s), so no wait is a block, and none is a backoff or charged to a hold."""
@@ -1897,7 +1905,7 @@ def smoke_parts(role, task, sha, env, overlay, log, dk, run, learn_, shapes, ans
             argv, env_ = process(COMPILE_PROCESS, scratch=f"{dh}/compile", deps=dk, top=door.TOP, shapes=f"{d}/shapes.tsv",
                                  units=f"{dh}/compile/tree/units.log", only=e["WT_SMOKE_ONLY"], records=e["WT_SMOKE_COMPILED"])
             return door.popen(role, argv, cwd=f"{dh}/compile/tree", env=env_, profile=f"{d}/compile.sb", stdout=log_,
-                              stderr=subprocess.STDOUT)
+                              stderr=subprocess.STDOUT, background=part_background(role))
         out, why = compile_watched(compile_start, role, d, f"m/{task}/compile", run, learn_, w, compile_dir)
         door.reap(role)
         rc, err = door.wipe(role, f"{door.home(role)}/m")
@@ -1930,7 +1938,8 @@ def smoke_parts(role, task, sha, env, overlay, log, dk, run, learn_, shapes, ans
         argv_r, env_r = process(RUN_PROCESS, run=f"{dh}/run", scratch=f"{dh}/run", top=door.TOP)
         try:   # the judge's own per-call allowance (run_allowance); a cut on a candidate is the candidate's (spec v19 P2)
             o, _, _, _ = watched(lambda e, log_: door.popen(role, argv_r, cwd=f"{dh}/run/tree", profile=prof_r, stdout=log_,
-                                                            stderr=subprocess.STDOUT, env=env_r),
+                                                            stderr=subprocess.STDOUT, env=env_r,
+                                                            background=part_background(role)),
                                  role, d, f"m/{task}/run", "run", None, run_allowance(f"{d}/run/tree", ncalls))
         except MeasureCut as e:
             if learn_:   # origin's own commit: never a result, the driver's (O8-1)
@@ -1960,7 +1969,8 @@ def smoke_parts(role, task, sha, env, overlay, log, dk, run, learn_, shapes, ans
                 f.write(data)
         prof_v = door.profile(f"{d}/verdict.sb", [f"{dh}/verdict"], kind="native", reads=[jv, part_log(d, "verdict")])
         argv_v, env_v = process(VERDICT_PROCESS, judge=jv, scratch=f"{dh}/verdict")
-        o, _, _, _ = watched(lambda e, log_: door.popen(role, argv_v, cwd=jv, profile=prof_v, stdout=log_, stderr=subprocess.STDOUT, env=env_v),
+        o, _, _, _ = watched(lambda e, log_: door.popen(role, argv_v, cwd=jv, profile=prof_v, stdout=log_, stderr=subprocess.STDOUT, env=env_v,
+                                                        background=part_background(role)),
                              role, d, f"m/{task}/verdict", "verdict", None, cfg()["case_min_s"] + cfg()["compare_module_s"] * ncalls)
         door.reap(role)
         try:
