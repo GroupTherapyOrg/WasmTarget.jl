@@ -1,0 +1,519 @@
+# ============================================================================
+# parity(dispatch_table.dart:396 DispatchTable): THE DISPATCH TABLE registry
+# ============================================================================
+#
+# Megamorphic dispatch (≥9 specializations of one generic function) routes through
+# the ONE flat selector table: receiver.classId + selector.offset → call_indirect
+# (see selector_table.jl). The FNV-1a hash apparatus that predated it (per-function
+# hash tables, probe loops, i32-array globals) was DELETED in M8.4.
+
+"""A receiver type can drive class-selector dispatch only when it is REPRESENTED as a
+wasm struct with a classId header field. `isstructtype` alone over-admits: `Memory`/
+`MemoryRef` are `isstructtype` in Julia but WT lowers them to a wasm ARRAY (no classId
+field) — giving one a dispatch axis produced a wrapper with no struct to cast to (the
+`_la_sub` regression, trimcollect.jl `_collect_reachable_ir_types`). Numeric/primitive
+receivers dispatch as compile-time-resolved overloads, never through the selector table.
+parity(quarantine: Julia's `isstructtype` admits `Memory`/`MemoryRef`, which WT lowers to wasm
+arrays with no classId header, and `Number`/primitive types; every dart receiver is a class
+whose struct carries a classId, so dart needs no admission predicate)"""
+_classid_dispatchable(@nospecialize(T))::Bool =
+    T isa DataType && isstructtype(T) && !isprimitivetype(T) && !(T <: Number) &&
+    !is_bare_array_class(T) && !(T <: Core.GenericMemoryRef)
+
+"""
+One entry in a dispatch table (compile-time): the typeId tuple of a registered
+specialization and its target/wrapper function indices.
+parity(dispatch_table.dart:333 SelectorTargets.allTargetRanges)
+"""
+struct DispatchEntry
+    type_ids::Vector{Int32}   # DFS type IDs per argument
+    target_idx::UInt32        # Wasm func index of actual specialization
+    wrapper_idx::UInt32       # Wasm func index of anyref wrapper (filled later)
+    return_type::Type         # Julia return type of this specialization
+end
+
+"""
+A generic function's dispatchable specialization set (the selector's target map).
+parity(dispatch_table.dart:30 SelectorInfo)
+"""
+mutable struct DispatchTable
+    func_ref::Any              # Julia function being dispatched
+    arity::Int32               # Number of dispatch arguments
+    entries::Vector{DispatchEntry}
+    # Filled during emit phase:
+    dispatch_sig_idx::UInt32   # Type idx for uniform dispatch signature
+    result_wasm_type::Union{WasmValType,Nothing}  # `nothing` means a genuinely void selector
+    # Per-slot signature types — a slot where ALL
+    # specializations agree on ONE primitive stays UNBOXED; everything else AnyRef.
+    slot_types::Vector{WasmValType}
+end
+
+"""
+Registry of dispatch tables for a module.
+parity(dispatch_table.dart:396 DispatchTable)
+"""
+mutable struct DispatchTableRegistry
+    tables::Dict{Any, DispatchTable}  # func_ref -> DispatchTable
+    # parity(translator.dart:911 callDispatchTable): the dart selector bridge — single-axis tables dispatch via
+    # receiver.classId + offset into the ONE flat table (dispatch_table.dart:445-458);
+    # multi-axis tables via the M8.3 cascade through the SAME table (FNV deleted, M8.4).
+    selector_axis::Dict{Any,Int}                      # func_ref → dispatch-axis position
+    selector_offset::Dict{Any,Int}                    # func_ref → packed table offset
+    selector_positions::Dict{Any,Vector{Tuple{Int,Int}}}  # func_ref → [(table_pos, entry_i)]
+    selector_table_idx::Union{Nothing,UInt32}         # THE one flat funcref table
+    selector_table_len::Int
+    # parity(quarantine: Julia's multi-axis dispatch cascade composes two single-axis dart-shaped
+    # hops through the SAME table; dart selectors vary only on the receiver's classId by
+    # construction (dispatch_table.dart:30 SelectorInfo is single-axis), so no dart structure
+    # composes a second varying axis — looked in dispatch_table.dart and code_generator.dart's
+    # _virtualCall/PolymorphicDispatchers, absent): the multi-axis CASCADE — Julia multiple dispatch as composed
+    # dart single-axis hops through the SAME table. Per func_ref: level-1 rows that
+    # need a second hop, each = (l1_pos, axis2, offset2, rows2::[(pos2, entry_i)]).
+    selector_cascades::Dict{Any,Vector{NamedTuple{(:l1_pos,:axis2,:offset2,:rows2),
+        Tuple{Int,Int,Int,Vector{Tuple{Int,Int}}}}}}
+end
+
+# parity(dispatch_table.dart:427 DispatchTable): the empty table a module's selectors are added to.
+DispatchTableRegistry()::DispatchTableRegistry = DispatchTableRegistry(Dict{Any, DispatchTable}(),
+    Dict{Any,Int}(), Dict{Any,Int}(), Dict{Any,Vector{Tuple{Int,Int}}}(), nothing, 0,
+    Dict{Any,Vector{NamedTuple{(:l1_pos,:axis2,:offset2,:rows2),
+        Tuple{Int,Int,Int,Vector{Tuple{Int,Int}}}}}}())
+
+"""Get the dispatch table for a function.
+parity(dispatch_table.dart:436 DispatchTable.selectorForTarget)"""
+get_dispatch_table(reg::DispatchTableRegistry, func_ref)::Union{Nothing,DispatchTable} = get(reg.tables, func_ref, nothing)
+
+"""A selector's program-determined order key: its first entry's target function index
+(entries are built in registration order, which is itself index-ordered).
+parity(dispatch_table.dart:36 SelectorInfo.id): a selector's program-determined number. dart's
+insertion-ordered maps iterate selectors in that order; a Julia `Dict` must be walked by this key."""
+selector_order_key(reg::DispatchTableRegistry, func_ref)::Int =
+    minimum(Int(e.target_idx) for e in reg.tables[func_ref].entries)
+
+# ==================== Table Building ====================
+
+# The declared supertype of every struct wasm type, read through the abstract synthetics'
+# registry (the DAG's chain lives there + $JlBase terminates). Computed once per table
+# build: dart's `_upperBound` reads `superType` straight off each struct definition.
+# A struct index maps to the parent of the first type (registered order) that owns it; an
+# abstract synthetic's index to its supertype's synthetic; `$JlBase` to `nothing`; any
+# other index to `$JlBase`.
+# parity(dispatch_table.dart:239 _upperBound): each struct's `superType`, read directly.
+function _dispatch_supertype_map(registry)::Dict{UInt32,Union{UInt32,Nothing}}
+    d = registry.abstract_struct_idxs
+    parents = Dict{UInt32,Union{UInt32,Nothing}}()
+    for (T, info) in registered_structs(registry)
+        (T isa DataType && !haskey(parents, info.wasm_type_idx)) || continue
+        local P = supertype(T)
+        parents[info.wasm_type_idx] = (P === Any || !(P isa DataType)) ? registry.base_struct_idx :
+            (d !== nothing && haskey(d, P)) ? d[P] : registry.base_struct_idx
+    end
+    if d !== nothing
+        for (A, aidx) in d
+            haskey(parents, aidx) && continue
+            local PA = supertype(A)
+            parents[aidx] = (PA === Any || !(PA isa DataType)) ? registry.base_struct_idx :
+                haskey(d, PA) ? d[PA] : registry.base_struct_idx
+        end
+    end
+    return parents
+end
+
+# parity(dispatch_table.dart:239 _upperBound): one `s.superType` step.
+_dispatch_supertype_idx(parents::Dict{UInt32,Union{UInt32,Nothing}}, idx::UInt32, registry)::Union{UInt32,Nothing} =
+    haskey(parents, idx) ? parents[idx] :
+    idx == registry.base_struct_idx ? nothing : registry.base_struct_idx
+
+# parity(dispatch_table.dart:501 DispatchTable.build)
+# formal(dev/formal/ClassIdDispatch.tla): first-fit packing is collision-free, every tuple WITH a specialization resolves to it (one hop or the two-axis cascade), and a receiver tuple WITHOUT one traps (span reservation + classId span guard + wrapper slot check: MissingMethodTraps)
+function build_dispatch_tables(func_registry::FunctionRegistry,
+                                type_registry::TypeRegistry;
+                                threshold::Int=2)::DispatchTableRegistry
+    # step3 (LANDED): threshold=2 — dart tables EVERY used targetCount>1 selector
+    # (dispatch_table.dart:919 _isUsedViaDispatchTableCall). The 2-8 machinery was proven at
+    dt_registry = DispatchTableRegistry()
+    supertypes = _dispatch_supertype_map(type_registry)
+
+    for (func_ref, infos) in func_registry.by_ref   # a Vector: registration order
+        length(infos) < threshold && continue
+        # Owns closures: function values dispatch through the closure
+        # VTABLE (call_ref), never the class-selector table — same split as dart.
+        any(i -> occursin("#", string(i.name)), infos) && continue
+        # The selector table dispatches on receiver.classId — a group needs
+        # at least one CLASS axis (every specialization's type at that slot is a real
+        # struct with a classId header). Primitive-only groups (process(Int32)/
+        # process(Int64)) are compile-time-resolved overloads, not runtime dispatch —
+        # dart tables class receivers only.
+        local _has_class_axis = false
+        local _min_ar = minimum(length(i.arg_types) for i in infos)
+        for j in 1:_min_ar
+            if all(i -> _classid_dispatchable(i.arg_types[j]), infos)
+                _has_class_axis = true
+                break
+            end
+        end
+        _has_class_axis || continue
+
+        # Determine arity (skip the function type itself if present in arg_types)
+        # In func_registry, arg_types includes the function type for closures
+        arities = Set{Int}()
+        for info in infos
+            push!(arities, length(info.arg_types))
+        end
+        if length(arities) != 1
+            @debug "Skipping dispatch table for $(func_ref): mixed arities $(arities)"
+            continue
+        end
+        arity = first(arities)
+
+        # Determine return type — if mixed, use AnyRef (boxed dispatch)
+        return_types = Set{Type}()
+        for info in infos
+            push!(return_types, info.return_type)
+        end
+        mixed_returns = length(return_types) != 1
+        return_type = mixed_returns ? Any : first(return_types)
+
+        # Build entries with type IDs
+        entries = DispatchEntry[]
+        all_valid = true
+        for info in infos
+            type_ids = Int32[]
+            for T in info.arg_types
+                tid = get_type_id(type_registry, T)
+                if tid == Int32(0)
+                    @debug "No type ID for $(T) — skipping dispatch entry"
+                    all_valid = false
+                    break
+                end
+                push!(type_ids, tid)
+            end
+            all_valid || continue
+
+            # Dedup by tuple — the un-capped discovery can register a candidate
+            # COPY of an explicit specialization; first registration wins (M8.4 rule).
+            any(e -> e.type_ids == type_ids, entries) && continue
+            push!(entries, DispatchEntry(type_ids, info.wasm_idx, UInt32(0), info.return_type))
+        end
+
+        length(entries) < threshold && continue
+
+        all_no_return = all(T -> T === Nothing || T === Union{}, return_types)
+        result_wasm = all_no_return ? nothing :
+                      mixed_returns ? AnyRef : julia_to_wasm_type(return_type)
+
+        # Per-slot LUB — dart's unboxed-primitive fast lane
+        # (dispatch_table.dart:172-205). A slot stays unboxed iff EVERY
+        # specialization declares the SAME primitive Julia type there.
+        # tag-run item 1: dart _upperBound (dispatch_table.dart:172-205) — the
+        # unboxed-primitive fast lane PLUS the struct-LUB via the class-DAG: walk each
+        # concrete struct's declared supertype chain; the join = the deepest common
+        # ancestor (the DAG's synthetics make real join targets; AnyRef only when the
+        # types cross hierarchies).
+        slot_types = WasmValType[]
+        for j in 1:arity
+            _tys = Set{Type}()
+            for info in infos
+                length(info.arg_types) >= j && push!(_tys, info.arg_types[j])
+            end
+            if length(_tys) == 1
+                _t = first(_tys)
+                # a number in one register is carried in it (the one width rule's), any other
+                # value as anyref
+                push!(slot_types, something(numeric_register(_t), AnyRef))
+            elseif all(T -> T isa DataType && isconcretetype(T) && isstructtype(T) &&
+                            haskey(type_registry.structs, T), _tys)
+                # the struct-LUB: intersect the declared chains
+                local _chains = [begin
+                    local idx = type_registry.structs[T].wasm_type_idx
+                    local ch = UInt32[idx]
+                    local cur = idx
+                    for _ in 1:64
+                        local nxt = _dispatch_supertype_idx(supertypes, cur, type_registry)
+                        nxt === nothing && break
+                        push!(ch, nxt); cur = nxt
+                    end
+                    ch
+                end for T in _tys]
+                local _common = intersect(Set.(_chains)...)
+                if isempty(_common)
+                    push!(slot_types, AnyRef)
+                else
+                    # the deepest common = the one earliest in any chain
+                    local _lub = first(_chains)[findfirst(x -> x in _common, first(_chains))]
+                    push!(slot_types, _lub == type_registry.base_struct_idx ? AnyRef :
+                                      ConcreteRef(UInt32(_lub), true))
+                end
+            else
+                push!(slot_types, AnyRef)
+            end
+        end
+
+        dt = DispatchTable(
+            func_ref, Int32(arity), entries,
+            UInt32(0), result_wasm, slot_types
+        )
+        dt_registry.tables[func_ref] = dt
+    end
+
+    return dt_registry
+end
+
+# ==================== Wasm Codegen ====================
+
+"""
+Phase 1: Emit dispatch metadata (signatures, globals, funcref table placeholder).
+Called BEFORE body compilation so that emit_dispatch_call! can reference global indices.
+Does NOT add wrapper functions — those are deferred to emit_dispatch_wrappers!.
+parity(dispatch_table.dart:118 SelectorInfo._computeSignature)
+"""
+function emit_dispatch_metadata!(mod::WasmModule,
+                                  type_registry::TypeRegistry,
+                                  dt_registry::DispatchTableRegistry)::Nothing
+    isempty(dt_registry.tables) && return
+    # parity(dispatch_table.dart:63 SelectorInfo.signature): the FNV hash-table apparatus (i32-array globals, per-table funcref
+    # tables) is DELETED — the selector table is the only dispatch structure. All this
+    # phase does now is create each selector's uniform call_indirect signature.
+    for (func_ref, dt) in ordered_pairs(dt_registry.tables, r -> selector_order_key(dt_registry, r))
+        param_types = copy(dt.slot_types)   # the per-slot LUB (was uniform AnyRef)
+        result_types = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
+            WasmValType[dt.result_wasm_type] : WasmValType[]
+        dt.dispatch_sig_idx = add_type!(mod, FuncType(param_types, result_types))
+    end
+end
+
+"""
+Phase 2: Emit wrapper functions and element segments.
+Called AFTER all actual functions are added to the module, so entry.target_idx
+values (set from func_registry during build_dispatch_tables) are correct.
+parity(quarantine: a Julia method specialization is its own compiled function with concrete
+parameter types (Int64 vs Float64 vs a struct at one slot); dart's overriding members are all
+compiled against the selector's shared signature, so dart stores the target itself in the table,
+while each Julia entry needs an adapter from the selector's per-slot upper-bound signature to its
+own parameters — unbox/cast, and a classId check at every non-axis slot)
+"""
+function emit_dispatch_wrappers!(mod::WasmModule,
+                                  type_registry::TypeRegistry,
+                                  dt_registry::DispatchTableRegistry)::Nothing
+    isempty(dt_registry.tables) && return
+    # the first type of each classId in the registry's order, found once (the wrappers read it per slot)
+    local _type_of_id = Dict{Int32, Type}()
+    for (T, id) in ordered_pairs(type_registry.type_ids, registry_order_key(type_registry))
+        haskey(_type_of_id, id) || (_type_of_id[id] = T)
+    end
+
+    for (func_ref, dt) in ordered_pairs(dt_registry.tables, r -> selector_order_key(dt_registry, r))
+        # Dispatch signature result type
+        is_anyref_return = dt.result_wasm_type == AnyRef
+
+        wrapper_indices = UInt32[]
+        # the level-1 dispatch axis: verified by the guarded classId index itself
+        local _axis = get(dt_registry.selector_axis, dt.func_ref, 0)
+        for (entry_i, entry) in enumerate(dt.entries)
+            local _wr_res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
+                            WasmValType[dt.result_wasm_type] : WasmValType[]
+            b = InstrBuilder(copy(dt.slot_types), _wr_res; func_name="emit_dispatch_wrappers!", mod=mod)
+            # its one local, after the params: a numeric result's box scratch, or a closure
+            # result's context scratch, each read by the index its declaration returns
+            local _res_scratch = nothing
+            if is_anyref_return
+                local _ewt = julia_to_wasm_type(entry.return_type)
+                if _ewt in (I32, I64, F32, F64)
+                    _res_scratch = UInt32(builder_add_local!(b, _ewt))
+                elseif is_context_type(type_registry, entry.return_type)
+                    _res_scratch = UInt32(builder_add_local!(b, AnyRef))
+                end
+            end
+            local _tsig = _function_type(mod, entry.target_idx)
+
+            # For each parameter: local.get + unbox/cast to concrete type
+            for (j, tid) in enumerate(entry.type_ids)
+                # the concrete Julia type of this typeId: every entry's id is the registry's
+                # (get_type_id), so a missing one raises
+                concrete_type = _type_of_id[tid]
+                local _tparam = (_tsig isa FuncType && j <= length(_tsig.params)) ? _tsig.params[j] : AnyRef
+
+                # parity(quarantine: dart's wrapper only downcasts, code_generator.dart:2028
+                # _virtualCall — the receiver statically has the member; a Julia dynamic
+                # call is routed by the level-1 axis alone, so every OTHER classed slot must
+                # carry exactly this entry's class or the call is a MethodError): a struct
+                # of identical layout passes ref.cast but is a different Julia type, so
+                # compare the classId, not the wasm type.
+                if j != _axis && _tparam isa ConcreteRef &&
+                   (dt.slot_types[j] isa ConcreteRef || dt.slot_types[j] === AnyRef) &&
+                   concrete_type isa DataType && haskey(type_registry.structs, concrete_type) &&
+                   type_registry.structs[concrete_type].field_offset > 0 &&
+                   type_registry.base_struct_idx !== nothing
+                    local _base = type_registry.base_struct_idx
+                    local_get!(b, UInt32(j - 1))
+                    ref_cast!(b, Int64(_base), false)
+                    struct_get!(b, UInt32(_base), UInt32(0))   # field 0 = classId
+                    i32_const!(b, Int64(tid))
+                    num!(b, Opcode.I32_NE)
+                    if_!(b)
+                    unreachable!(b)   # structural trap: MethodError — another class at a non-dispatch slot
+                    end_block!(b)
+                end
+
+                local_get!(b, UInt32(j - 1))
+
+                if dt.slot_types[j] isa ConcreteRef
+                    # tag-run: a struct-LUB slot arrives as the JOIN ref — downcast to
+                    # the TARGET's declared param (a within-hierarchy refinement)
+                    local _tsig_lub = _tsig
+                    if _tsig_lub isa FuncType && j <= length(_tsig_lub.params)
+                        local _tpl = _tsig_lub.params[j]
+                        _tpl isa ConcreteRef && _tpl.type_idx != dt.slot_types[j].type_idx &&
+                            ref_cast!(b, Int64(_tpl.type_idx), _tpl.nullable)
+                    end
+                elseif dt.slot_types[j] !== AnyRef
+                    # The slot arrives UNBOXED — pass through
+                else
+                    # step3 (dart wrapper rule): the cast target is ALWAYS the TARGET's
+                    # declared param — the tid-resolved struct can differ from what the
+                    # body actually takes (the classed-string vs byte-array split broke
+                    # the search family at threshold=2: cast (ref 7), param (ref null 5)).
+                    local _tp = _tparam
+                    if concrete_type === Nothing && _tp === I32
+                        # `nothing` (its null at the anyref slot) taken as the target's Nothing
+                        # parameter holds it: its i32 placeholder, never unboxed, as the closure
+                        # entry takes it (_closure_narrow_arg!; dev/formal/Coercion.tla
+                        # NothingNeverCast)
+                        drop!(b)
+                        i32_const!(b, 0)
+                    elseif _tp in (I32, I64, F32, F64)
+                        # Unbox the numeric arg via THE single unbox consumer (non-null: dispatch-guarded).
+                        emit_classid_unbox!(b, mod, type_registry, _tp)
+                    elseif _tp isa ConcreteRef
+                        ref_cast!(b, Int64(_tp.type_idx), _tp.nullable)
+                    elseif _tp === StructRef
+                        ref_cast!(b, StructRef, false)
+                    elseif _tp === ArrayRef
+                        ref_cast!(b, ArrayRef, false)
+                    elseif _tp === ExternRef
+                        extern_convert_any!(b)
+                    end   # anyref/eq: pass through
+                end
+            end
+
+            # call $target — target_idx is correct because actual functions were added first
+            emit_direct_call!(b, mod, type_registry, entry.target_idx)
+
+            # Box numeric results when dispatch table uses anyref return
+            # tag-run: key on the TRACKED actual — the call's derived (placeholder)
+            # result is the truth; a target already returning a ref needs NO box
+            # (the julia-derived width lied for Any-erased returns).
+            local _wr_actual = isempty(b.v.stack) ? nothing : b.v.stack[end]
+            if is_anyref_return && _wr_actual !== nothing && _wt_is_ref(_wr_actual)
+                # already a ref — anyref-compatible, pass through; a closure's context is
+                # its object at the anyref result (emit_context_object!, A11E1)
+                if is_context_type(type_registry, entry.return_type)
+                    emit_context_object!(b, mod, type_registry, entry.return_type, _res_scratch::UInt32)
+                end
+            elseif is_anyref_return
+                entry_wasm_type = julia_to_wasm_type(entry.return_type)
+                if entry.return_type === Nothing || entry.return_type === Union{}
+                    # Target function returns void (Nothing/Union{}).
+                    # Push ref.null none as the anyref return value.
+                    ref_null!(b, AnyRef)  # ref.null any → (ref null any) = anyref
+                elseif entry_wasm_type in (I32, I64, F32, F64)
+                    # the numeric result boxed under the return type's classId by the one box
+                    # producer, through the wrapper's first local
+                    emit_classid_box!(b, mod, type_registry, _res_scratch::UInt32, entry_wasm_type,
+                                      entry.return_type)
+                end
+            elseif dt.result_wasm_type ∉ (I32, I64, F32, F64, AnyRef) &&
+                   entry.return_type !== Nothing && entry.return_type !== Union{}
+                # A VOID dispatch signature over value-returning targets
+                # (non-core-rep result_wasm_type → results=[]) must DROP the target's
+                # return — the 2-entry tables surfaced wrappers left unbalanced
+                # ("values remaining on stack"; Base.get's wrapper, func 9).
+                drop!(b)
+            end
+
+            end_block!(b)
+
+            # named by the specialization it adapts, the function the selector table reaches
+            local _target_name = mod.functions[_defined_function_slot(mod, entry.target_idx, :dispatch_wrapper)].name
+            wrapper_idx = add_function!(mod, b; name=generated_function_name(:dispatch_wrapper, _target_name))
+            push!(wrapper_indices, wrapper_idx)
+
+            dt.entries[entry_i] = DispatchEntry(
+                entry.type_ids, entry.target_idx, wrapper_idx, entry.return_type
+            )
+        end
+
+    end
+
+    # parity(dispatch_table.dart:800 output): fill the ONE selector table (positions were packed at metadata
+    # time; wrapper indices only now exist). Contiguous runs → one segment each.
+    fill_selector_table_elements!(mod, type_registry, dt_registry)
+end
+
+
+"""
+Check if a body (its NIR boundary) calls a function with a (selector-routed) dispatch table.
+Returns the dispatch table if found, nothing otherwise.
+parity(pkg/dart2wasm/lib/dispatch_table.dart:396 DispatchTable)
+"""
+function find_dispatch_call(nir::Vector{NirStmt},
+                             dt_registry::DispatchTableRegistry)::Union{Nothing,DispatchTable}
+    # This feeds the WHOLE-BODY dispatch replacement — it must fire ONLY
+    # for pure FORWARDERS (a body that IS the dispatch call: the call's args are
+    # exactly the function's params in order, and the call's result is returned).
+    # It used to fire on ANY body containing a megamorphic call (f2-the-loop got
+    # its entire body replaced by a 2-param trampoline — validation failure once
+    # discovery started registering ≥9-method candidates). In-body megamorphic
+    # call SITES are the inline-switch / call-site path's job.
+    for (i, s) in enumerate(nir)
+        local node = s.node
+        if node isa NirCall
+            # NirCall.callee is the RESOLVED callee object; a NirNode there is a dynamic
+            # callee (no static identity) and an unbound GlobalRef stays a GlobalRef —
+            # neither can key a dispatch table.
+            local callee_func = node.callee
+            (callee_func isa NirNode || callee_func isa GlobalRef) && continue
+            callee_func === nothing && continue
+            dt = get_dispatch_table(dt_registry, callee_func)
+            dt === nothing && continue
+            # forwarder shape: args are exactly the params, in order
+            local call_args = node.operands
+            length(call_args) == dt.arity || continue
+            all(k -> call_args[k] isa NirArgument && call_args[k].n == k + 1, 1:length(call_args)) || continue
+            # and the call's value is what the function returns — possibly through the
+            # ::T-annotation lowering (convert/typeassert/PiNode and the φ(call, converted)
+            # join; M8.3's caller2 taught us the phi)
+            local chases_to_call = function(vid::Int, depth::Int)
+                vid == i && return true
+                depth <= 0 && return false
+                local st = nir[vid].node
+                if st isa NirPi && st.value isa NirSSA
+                    return chases_to_call(st.value.id, depth - 1)
+                elseif st isa NirPhi
+                    for ev in st.values
+                        ev isa NirSSA && chases_to_call(ev.id, depth - 1) && return true
+                    end
+                    return false
+                elseif st isa NirCall && !isempty(st.operands)
+                    # `x::T` lowers to `typeassert(value, T)` — the VALUE is the payload.
+                    # Keyed on the resolved builtin, never on a `:typeassert` name any
+                    # module's own function also answers to (the L124 lesson).
+                    local operands = st.operands
+                    local pay = st.callee === Core.typeassert ? operands[1] : operands[end]
+                    pay isa NirSSA && return chases_to_call(pay.id, depth - 1)
+                end
+                return false
+            end
+            local returned = false
+            for s2 in nir
+                local rnode = s2.node
+                if rnode isa NirReturn && rnode.value isa NirSSA
+                    chases_to_call(rnode.value.id, 4) && (returned = true; break)
+                end
+            end
+            returned || continue
+            return dt
+        end
+    end
+    return nothing
+end

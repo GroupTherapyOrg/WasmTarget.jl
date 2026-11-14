@@ -1,0 +1,378 @@
+# test/runner.jl, the differential runner: hand-assembled modules show each leaf kind crossing and returning with its
+# bits, one fresh instance a call, a wrong answer failing located (test/verdict.jl's verdict, the judge's), and what the
+# runner cannot run failing, never skipped; WasmTarget's own modules show a tuple answer read leaf by leaf, both modules
+# each. (The wire's table, the binding, the plan and the fixtures are the judge's: test/src/verdict.jl.)
+using Test, WasmTarget
+isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
+const WTR = Main.WTChild
+
+# a module exporting `f`, one function of one parameter of wasm type `t` to `t`: local.get 0, `ops`
+function _run_one_function(t::UInt8, ops::Vector{UInt8} = UInt8[])::Vector{UInt8}
+    local body = vcat(UInt8[0x00, 0x20, 0x00], ops, UInt8[0x0b])
+    local code = vcat(UInt8[0x01, UInt8(length(body))], body)
+    return vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+                UInt8[0x01, 0x06, 0x01, 0x60, 0x01, t, 0x01, t],
+                UInt8[0x03, 0x02, 0x01, 0x00],
+                UInt8[0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00],
+                UInt8[0x0a, UInt8(length(code))], code)
+end
+const _RUN_I32, _RUN_I64, _RUN_F32, _RUN_F64 = 0x7f, 0x7e, 0x7d, 0x7c
+# a module importing m.f and exporting nothing
+const _RUN_IMPORTS = UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+                      0x02, 0x07, 0x01, 0x01, 0x6d, 0x01, 0x66, 0x00, 0x00]
+const _RUN_ADD1 = _run_one_function(_RUN_I32, UInt8[0x41, 0x01, 0x6a])   # i32.const 1, i32.add
+# a try_table of a reference result, which Node 22's V8 traps with no WT code in it (test/runner.jl's NODE_MIN_MAJOR):
+#   (type $s (struct (field i32))) (tag $t (param (ref $s))) (func $g)
+#   (func (export "f") (result i32)
+#     block (result (ref $s)) try_table (result (ref $s)) (catch $t 0) call $g i32.const 20 struct.new $s end end
+#     drop i32.const 7)
+const _RUN_TRY_TABLE_REF = hex2bytes("0061736d010000000111045f017f0060016400006000006000017f03030202030d03010001" *
+                                     "070501016600010a1d0202000b18000264001f64000100000010004114fb00000b0b1a41070b")
+# a module importing the standalone embedder's dart.stackTraceGetCurrent (() -> externref), its `f`
+# (i32 -> i32) calling it, dropping the trace and returning its argument
+const _RUN_EMBEDDER = vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+    UInt8[0x01, 0x0a, 0x02, 0x60, 0x00, 0x01, 0x6f, 0x60, 0x01, 0x7f, 0x01, 0x7f],     # types: () -> externref, i32 -> i32
+    UInt8[0x02, 0x1d, 0x01, 0x04], Vector{UInt8}("dart"), UInt8[0x14], Vector{UInt8}("stackTraceGetCurrent"), UInt8[0x00, 0x00],
+    UInt8[0x03, 0x02, 0x01, 0x01],                                                    # f has type 1
+    UInt8[0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x01],                                  # export f, function 1
+    UInt8[0x0a, 0x09, 0x01, 0x07, 0x00, 0x10, 0x00, 0x1a, 0x20, 0x00, 0x0b])          # call 0, drop, local.get 0
+
+@testset "each marshalled type crosses with its bits; what differs or cannot run fails, located" begin
+    @test WTR.node_binary() !== nothing
+    local cases = [
+        WTR.RunCase("i32 add", _RUN_ADD1, (Int32(41),), Int32(42)),
+        WTR.RunCase("i32 wraps", _RUN_ADD1, (typemax(Int32),), typemin(Int32)),
+        WTR.RunCase("i64", _run_one_function(_RUN_I64), (typemin(Int64),), typemin(Int64)),
+        WTR.RunCase("f64 -0.0", _run_one_function(_RUN_F64), (-0.0,), -0.0),
+        WTR.RunCase("f64 Inf", _run_one_function(_RUN_F64), (-Inf,), -Inf),
+        WTR.RunCase("f32", _run_one_function(_RUN_F32), (1.5f0,), 1.5f0),
+        WTR.RunCase("Bool", _run_one_function(_RUN_I32), (true,), true),
+        WTR.RunCase("wrong", _RUN_ADD1, (Int32(1),), Int32(1)),
+        WTR.RunCase("-0.0 is not 0.0", _run_one_function(_RUN_F64), (-0.0,), 0.0),
+        WTR.RunCase("a tuple", _RUN_ADD1, (Int32(1),), (Int32(2),)),
+        WTR.RunCase("imports", _RUN_IMPORTS, (Int32(1),), Int32(2)),
+        WTR.RunCase("no such entry", _RUN_ADD1, (Int32(1),), Int32(2); entry = "g"),
+        WTR.RunCase("not wasm", UInt8[0x00, 0x01], (Int32(1),), Int32(2)),
+        WTR.RunCase("both modules agree", _RUN_ADD1, (Int32(41),), Int32(42); optimized = _RUN_ADD1),
+        WTR.RunCase("the optimizer miscompiles", _RUN_ADD1, (Int32(41),), Int32(42); optimized = _run_one_function(_RUN_I32)),
+        WTR.RunCase("i32 add, its module instantiated once", _RUN_ADD1, (Int32(1),), Int32(2)),
+        WTR.RunCase("UInt32 past typemax(Int32)", _RUN_ADD1, (typemax(UInt32) - UInt32(1),), typemax(UInt32)),
+        WTR.RunCase("UInt64 past typemax(Int64)", _run_one_function(_RUN_I64), (typemax(UInt64),), typemax(UInt64)),
+        WTR.RunCase("a value where native answers nothing", _RUN_ADD1, (Int32(1),), nothing),
+        WTR.RunCase("the standalone embedder's import, given", _RUN_EMBEDDER, (Int32(7),), Int32(7)),
+        WTR.RunCase("a try_table of a reference result", _RUN_TRY_TABLE_REF, (), Int32(7)),
+    ]
+    local r = WTR.run_cases(cases)
+    @test length(r) == length(cases) && [x.label for x in r] == [c.label for c in cases]
+    @test all(x -> x.ok, r[1:7]) && r[14].ok && r[16].ok && r[17].ok && r[18].ok
+    @test !r[8].ok && occursin("answers 2", r[8].why) && occursin("native Julia 1", r[8].why)
+    @test !r[9].ok && occursin("answers -0.0", r[9].why)
+    @test !r[10].ok && occursin("the judge's wire has no leaf kind for Tuple{Int32}", r[10].why)
+    @test !r[11].ok && occursin("imports m.f", r[11].why)
+    @test !r[12].ok && occursin("no entry", r[12].why)
+    @test !r[13].ok && !isempty(r[13].why)
+    @test !r[15].ok && occursin("the wasm-opt'd module answers 41", r[15].why) && occursin("differ: 42 against 41", r[15].why) &&
+          !occursin("the module answers", r[15].why)
+    @test !r[19].ok && occursin("the module answers the i32 0x00000002, native Julia nothing", r[19].why)   # A56E1
+    @test r[20].ok
+    @test r[21].ok   # the engine runs a try_table of a reference result: an engine that traps it fails here, named
+    # the modules split into parts, here one module a node, read every answer as one node does (node reads its
+    # input as one string of at most 0x1fffffe8 characters, which the whole corpus passed on 2026-11-09)
+    @test [(x.label, x.ok, x.why) for x in WTR.run_cases(cases; part_chars = 1)] == [(x.label, x.ok, x.why) for x in r]
+    @test WTR.run_cases(WTR.RunCase[]) == WTR.RunResult[]
+end
+
+# modules whose `f` (i32 -> i32) raises a wasm exception: tags of type () -> (), `throw <tag>`, and the tags exported
+function _run_thrower(ntags::Int, thrown::Int, exported::Vector{Int})::Vector{UInt8}
+    local tags = vcat(UInt8[ntags], reduce(vcat, (UInt8[0x00, 0x01] for _ in 1:ntags); init = UInt8[]))
+    local exps = vcat(UInt8[0x01, 0x66, 0x00, 0x00], reduce(vcat, (UInt8[0x01, UInt8('s' + t), 0x04, UInt8(t)] for t in exported); init = UInt8[]))
+    return vcat(UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+                UInt8[0x01, 0x09, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x00],   # types: i32 -> i32, () -> ()
+                UInt8[0x03, 0x02, 0x01, 0x00],                                            # f has type 0
+                UInt8[0x0d, UInt8(length(tags))], tags,
+                UInt8[0x07, UInt8(length(exps) + 1), UInt8(1 + length(exported))], exps,
+                UInt8[0x0a, 0x06, 0x01, 0x04, 0x00, 0x08, UInt8(thrown), 0x0b])          # f: throw <thrown>
+end
+const _RUN_THROWS = _run_thrower(1, 0, [0])
+const _RUN_TRAPS = _run_one_function(_RUN_I32, UInt8[0x00])   # local.get 0, unreachable
+
+@testset "a native throw wants a wasm exception: neither a trap nor a return" begin
+    local r = WTR.run_cases([WTR.RunCase("throws as native does", _RUN_THROWS, (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("traps where native throws", _RUN_TRAPS, (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("returns where native throws", _RUN_ADD1, (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("throws where native returns", _RUN_THROWS, (Int32(1),), Int32(2)),
+                             WTR.RunCase("both modules throw", _RUN_THROWS, (Int32(1),), WTR.Throws(DivideError); optimized = _RUN_THROWS),
+                             WTR.RunCase("throws under another tag", _run_thrower(2, 1, [0]), (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("exports no tag", _run_thrower(1, 0, Int[]), (Int32(1),), WTR.Throws(DivideError)),
+                             WTR.RunCase("exports two tags", _run_thrower(2, 0, [0, 1]), (Int32(1),), WTR.Throws(DivideError))])
+    @test r[1].ok && r[5].ok
+    @test !r[6].ok && occursin("under another tag than the module's exported s", r[6].why)   # A61E1
+    @test !r[7].ok && occursin("exports 0 tags", r[7].why) && !r[8].ok && occursin("exports 2 tags", r[8].why)
+    @test !r[2].ok && occursin("trap: ", r[2].why) && occursin("where native Julia throws DivideError", r[2].why)
+    @test !r[3].ok && occursin("returns, where native Julia throws DivideError", r[3].why)
+    @test !r[4].ok && occursin("throws a wasm exception", r[4].why) && occursin("native Julia answers 2", r[4].why)
+end
+
+_runner_add1(x::Int32) = x + Int32(1)
+
+@testset "a compiled case: codegen's module and compile's wasm-opt'd one, both run" begin
+    local comp(f, ts; optimize::Bool = true) = optimize ? _run_one_function(_RUN_I32) : _RUN_ADD1
+    local c = WTR.compiled_case("two modules", comp, _runner_add1, (Int32(1),))
+    @test c.bytes == _RUN_ADD1 && c.optimized == _run_one_function(_RUN_I32) && c.native === Int32(2)
+    local r = only(WTR.run_cases([c]))
+    @test !r.ok && occursin("the wasm-opt'd module answers 1", r.why)
+    local same = WTR.compiled_case("one module", (f, ts; optimize::Bool = true) -> _RUN_ADD1, _runner_add1, (Int32(1),))
+    @test same.bytes == _RUN_ADD1 && isempty(same.optimized) && only(WTR.run_cases([same])).ok
+    # optimized = false compiles codegen's module alone, compile's optimize = false
+    local calls = Bool[]
+    local logged(f, ts; optimize::Bool = true) = (push!(calls, optimize); _RUN_ADD1)
+    local plain = WTR.compiled_case("codegen's module", logged, _runner_add1, (Int32(1),); optimized = false)
+    @test calls == [false] && isempty(plain.optimized) && only(WTR.run_cases([plain])).ok
+end
+
+# a Char crosses the wire both ways as its 32 bits (hold da9117ca4b): Julia's own representation (base/char.jl
+# `primitive type Char <: AbstractChar 32 end`), read by its bitcast (test/verdict.jl's wire_bits), never by codepoint(),
+# which a malformed Char refuses; the function adds to the bits, so an argument that crossed as anything else answers
+# another Char
+_runner_char_next(c::Char) = reinterpret(Char, reinterpret(UInt32, c) + UInt32(1))
+
+@testset "a Char argument and a Char answer cross as their 32 bits, a malformed Char too (hold da9117ca4b)" begin
+    # one compile (both modules), run on each Char against native's answer and against another Char, its low bit flipped
+    local c1 = WTR.compiled_case("char", WasmTarget.compile, _runner_char_next, ('é',))
+    @test c1.native === _runner_char_next('é') && !isempty(c1.bytes)
+    local cs = WTR.RunCase[]
+    for c in ('é', reinterpret(Char, 0xff000000))
+        local n = _runner_char_next(c)
+        push!(cs, WTR.RunCase("$(repr(c)) answers native's", c1.bytes, c1.optimized, (c,), n, c1.entry))
+        push!(cs, WTR.RunCase("$(repr(c)) against another Char", c1.bytes, c1.optimized, (c,),
+                              reinterpret(Char, reinterpret(UInt32, n) ⊻ UInt32(1)), c1.entry))
+    end
+    @test [(r.label, r.outcome) for r in WTR.run_cases(cs)] ==
+          [(c.label, endswith(c.label, "native's") ? :passed : :wrong) for c in cs]
+end
+
+# a String argument crosses no wire: it is bound as a constant of the program (test/runner.jl's Bound), still passed to
+# the function as its argument inside the program, the case's label naming the position bound
+_runner_is_ho(s::String, n::Int64) = s === "ho" ? n : -n
+
+@testset "a String argument is bound as a constant of the program, its native answer Bound's" begin
+    @test WTR._bound("x", _runner_add1, (Int32(1),)) == ("x", _runner_add1, (Int32(1),))   # no String: the case as given
+    # the compile is handed the bound program and the wire arguments' types alone; WasmTarget's own compile of a
+    # bound String is the corpus's to judge (dart_language/identity_identical, 62 facts), a compile here costing the
+    # landing ~47 G instructions of first-compile paths
+    local handed = Any[]
+    local rec(f, ts; optimize::Bool = true) = (push!(handed, (f, ts)); _RUN_ADD1)
+    local c = WTR.compiled_case("ho", rec, _runner_is_ho, ("ho", Int64(3)); optimized = false)
+    @test c.label == "ho(String argument 1 bound)" && c.args == (Int64(3),) && c.native === Int64(3)
+    @test length(handed) == 1 && first(only(handed)) isa WTR.Bound && last(only(handed)) == (Int64,)
+    # the bound callable is the program native Julia runs too: another String, another answer
+    local label, b, args = WTR._bound("hi", _runner_is_ho, ("hi", Int64(3)))
+    @test label == "hi(String argument 1 bound)" && args == (Int64(3),) && WTR.native_answer(b, args) === Int64(-3)
+end
+
+# the A61S4 plant's log, and programs that log their native call (a reader's type parameter wants a function with
+# no captured state, so they are top-level)
+const _RUNNER_EVENTS = String[]
+_runner_counted(x::Int32) = (push!(_RUNNER_EVENTS, "native"); x + Int32(1))
+_runner_tup(x::Int64) = (push!(_RUNNER_EVENTS, "native"); (x + 1, x > 0))
+
+@testset "the native answer is computed once, by the runner, after the compiles it is compared against (A61S4)" begin
+    local events = _RUNNER_EVENTS
+    local logged(f, ts; optimize::Bool = true) = (push!(events, optimize ? "opt" : "plain"); _RUN_ADD1)
+    empty!(events)
+    local c = WTR.compiled_case("order", logged, _runner_counted, (Int32(1),))
+    @test events == ["plain", "opt", "native"] && c.native === Int32(2)
+    empty!(events)
+    local cs, native = WTR.answer_cases("order", logged, _runner_counted, (Int32(1),))
+    @test events == ["plain", "opt", "native"] && native === Int32(2) && only(cs).native === Int32(2)
+    # a read answer: its own modules, then the one native call, then the readers its shape needs
+    empty!(events)
+    local ts, tn = WTR.answer_cases("tuple", logged, _runner_tup, (Int64(3),))
+    @test events == ["plain", "opt", "native", "plain", "opt", "plain", "opt"] && tn == (4, true)
+    # a native throw is the runner's Throws, never a caller's guess
+    @test WTR.native_answer(x -> div(x, 0), (1,)) === WTR.Throws(DivideError)
+end
+
+@testset "a module that never returns fails as a hang, its own call alone (spec v18 P3)" begin
+    local forever = _run_one_function(_RUN_I32, UInt8[0x03, 0x40, 0x0c, 0x00, 0x0b])   # loop: br 0; end
+    local t0 = time()
+    local r = WTR.run_cases([WTR.RunCase("before", _RUN_ADD1, (Int32(1),), Int32(2)), WTR.RunCase("forever", forever, (Int32(1),), Int32(1)),
+                           WTR.RunCase("after", _RUN_ADD1, (Int32(1),), Int32(2))]; run_budget = 0.2, node_start = 1.0)
+    @test time() - t0 < 10
+    @test r[1].ok
+    @test !r[2].ok && occursin("node killed: a hang or a blow-up", r[2].why)
+    @test r[3].ok   # a new node runs the calls after the hang (red round 15 2: its part's later calls went with it)
+end
+
+# a program whose answer is a nest of tuples of two leaf types, compiled by WasmTarget
+_runner_facts(x::Int64) = (x + 1, (x > 0, x * 2), x < 0)
+# answers of the shapes the readers' plants need, each native's own (A61S4: the runner computes the answer)
+_runner_shape_t(x::Int64) = (x + 1, (x > 0, 2x), 0.5, :x)
+_runner_shape_b(x::Int64) = (x + 1, x > 0)
+_runner_shape_n(x::Int64) = (x + 1, nothing)
+_runner_shape_v(x::Int64) = (x + 1, [x > 0, x < 0])
+_runner_shape_s(x::Int64) = (x + 1, "ab")
+
+@testset "a tuple answer's leaves, one reader per leaf type, each leaf named by its path" begin
+    # the readers as answer_cases builds them, with a compile that only counts its calls
+    local calls = Ref(0)
+    local counted(f, ts; optimize::Bool = true) = (calls[] += 1; _RUN_ADD1)
+    local cs = first(WTR.answer_cases("t", counted, _runner_shape_t, (Int64(3),)))
+    @test cs[1].label == "t(own module)" && cs[1].native === WTR.ReturnsRef()   # the case's own module, run too
+    @test [c.label for c in cs[2:end]] == ["t(1,)", "t(2, 2)", "t(2, 1)", "t(3,)", "t(4,)"]
+    @test [c.args for c in cs[2:end]] == [(3, 1), (3, 2), (3, 1), (3, 1), (3, 1)]
+    @test calls[] == 2 + 2 * 3   # the own module and Int64, Bool and Float64's readers, each both modules; no reader for Symbol
+    # `own`, the caller's compile, spares the own module's second compile
+    calls[] = 0; WTR.answer_cases("t", counted, _runner_shape_b, (Int64(3),); own = _RUN_ADD1)
+    @test calls[] == 1 + 2 * 2
+    # the own module must return a non-null reference: a number, as from an i32 module, fails
+    @test occursin("the module answers the i32 0x00000002, native Julia a non-null reference",
+                   only(WTR.run_cases([WTR.RunCase("n", _RUN_ADD1, (Int32(1),), WTR.ReturnsRef())])).why)
+    # a leaf of a singleton type crosses as "void": its call returns, its type its value
+    local v = first(WTR.answer_cases("v", counted, _runner_shape_n, (Int64(3),)))
+    @test [c.label for c in v[2:end]] == ["v(1,)", "v(2,)"] && Main.WTVerdict.leaf_kind(Nothing) === :void
+    # a vector inside the answer: its length a leaf, each element a leaf, read by getindex
+    local vec = first(WTR.answer_cases("w", counted, _runner_shape_v, (Int64(3),)))
+    @test [c.label for c in vec[2:end]] == ["w(1,)", "w(2, :len)", "w(2, (:ix, 1))", "w(2, (:ix, 2))"]
+    @test [c.native for c in vec[2:end]] == Any[4, 2, true, false]
+    @test WTR._pick((4, [true, false]), Val(((2, (:ix, 2)),)), Bool, Int64(1)) === false &&
+          WTR._pick((4, [true, false]), Val(((2, :len),)), Int64, Int64(1)) === Int64(2)
+    # the pick is typeasserted to the leaves' type: a leaf held as Any comes back at native's type
+    @test WTR._pick(Any[Int64(5), true], Val((((:ix, 1),),)), Int64, Int64(1)) === Int64(5)
+    @test_throws TypeError WTR._pick(Any[true], Val((((:ix, 1),),)), Int64, Int64(1))
+    # a String is read as its ncodeunits and each codeunit; while its reader is rejected (Unported), the String
+    # is one case the runner does not read (its reader rejected: the compiler's gap, named), never a failure of WT's
+    local sc = first(WTR.answer_cases("s", counted, _runner_shape_s, (Int64(3),)))
+    @test [c.label for c in sc[2:end]] == ["s(1,)", "s(2, :ncu)", "s(2, (:cu, 1))", "s(2, (:cu, 2))"]
+    @test [c.native for c in sc[2:end]] == Any[4, 2, 0x61, 0x62]
+    local refused(f, ts; optimize::Bool = true) = f isa WTR.Leaves && any(p -> WTR._on_string(p), typeof(f).parameters[2]) ?
+        throw(WasmTarget.RejectionError(WasmTarget.Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "codeunit")) : _RUN_ADD1
+    local su = first(WTR.answer_cases("s", refused, _runner_shape_s, (Int64(3),)))
+    @test [c.label for c in su[2:end]] == ["s(1,)", "s(2,)"] && su[3].native == "ab" && isempty(su[3].bytes)
+    @test occursin("the runner does not read it yet, its reader is rejected", WTR.run_cases(su[3:3])[1].why)
+    # any reader rejected as Unported leaves its facts unread, named; an Internal propagates
+    local boxed(f, ts; optimize::Bool = true) = f isa WTR.Leaves && Int64 in map(p -> typeof(foldl(WTR._step, p; init = (4, true))), collect(typeof(f).parameters[2])) ?
+        throw(WasmTarget.RejectionError(WasmTarget.Unported("dart2wasm/lib/translator.dart:1597 Translator.convertType"), "boxing")) : _RUN_ADD1
+    local bx = first(WTR.answer_cases("b", boxed, _runner_shape_b, (Int64(3),)))
+    @test [c.label for c in bx[2:end]] == ["b(1,)", "b(2,)"] && occursin("convertType", WTR.run_cases(bx[2:2])[1].why) && isempty(bx[3].unread)
+    local broken(f, ts; optimize::Bool = true) = throw(WasmTarget.RejectionError(WasmTarget.Internal("x"), "y"))
+    @test_throws WasmTarget.RejectionError WTR.answer_cases("i", broken, _runner_shape_b, (Int64(3),))
+    # a leaf of a type the judge's wire has no leaf kind for has no reader and fails, named
+    @test isempty(cs[6].bytes) && occursin("the judge's wire has no leaf kind for Symbol", WTR.run_cases(cs[6:6])[1].why)
+end
+
+@testset "a tuple answer read leaf by leaf from WasmTarget's modules" begin
+    local cs = first(WTR.answer_cases("facts", WasmTarget.compile, _runner_facts, (Int64(3),)))
+    @test all(c -> !isempty(c.bytes) && !isempty(c.optimized), cs)
+    @test all(x -> x.ok, WTR.run_cases(cs))
+    # an answer that differs in one leaf fails that leaf alone, named by its path
+    local planted = Dict("facts(2, 2)" => 7)
+    local r = WTR.run_cases([WTR.RunCase(c.label, c.bytes, c.optimized, c.args, get(planted, c.label, c.native), c.entry) for c in cs])
+    @test [x.label for x in r if !x.ok] == ["facts(2, 2)"]
+    @test occursin("answers 6, native Julia 7", only(x.why for x in r if !x.ok))
+end
+
+# red's p5 (spec v16 X1): a correct compile of a function with state reads passed, every call a fresh instance, as every
+# native answer is its own process's: the tuple's own module and both its leaves read 1, the counter's first value
+const _RUNNER_R = Ref(Int64(0))
+_runner_state() = (_RUNNER_R[] += 1; (_RUNNER_R[], _RUNNER_R[]))
+const _RUNNER_R2 = Ref(Int64(0))
+_runner_state_scalar(x::Int64) = (_RUNNER_R2[] += x; _RUNNER_R2[])
+
+@testset "one fresh instance a call: a stateful program's leaves and its repeated module read as native's" begin
+    # as the climb measures it: the answer computed where the case runs (the judging process), the modules compiled where
+    # no case ever ran (the compiling process, R2: its heap the corpus's as loaded, so each Ref constant holds 0), the
+    # binding the compiling process's own (test/verdict.jl's bind, from the answer's shape)
+    _RUNNER_R[] = 0
+    local a = Main.WTOracle.answer_of("", _runner_state, ())
+    @test a.native == (1, 1)
+    _RUNNER_R[] = 0
+    local cs = Main.WTVerdict.bind(Main.WTOracleRead.Shape(a), (), WasmTarget.compile; a, f = _runner_state)
+    local r = WTR.run_cases(cs)
+    @test [c.label for c in cs] == ["(own module)", "(1,)", "(2,)"] && all(x -> x.ok, r)
+    # one module, called by two cases (two labels of the same bytes): each reads its own instance's first value
+    _RUNNER_R2[] = 0
+    local b = WasmTarget.compile(_runner_state_scalar, (Int64,))
+    local two = WTR.run_cases([WTR.RunCase("first", b, (Int64(5),), Int64(5)), WTR.RunCase("second", b, (Int64(5),), Int64(5))])
+    @test all(x -> x.ok, two)
+end
+
+# (the store's format, written by test/oracle.jl and read back by test/oracle_read.jl, is tested in test/src/oracle_read.jl,
+# the judge's: spec v14 V2; the wire's table, the binding, the plan, the verdict and the fixtures in test/src/verdict.jl)
+
+# spec v20 F1 (red round 17 1): a throw reader answers by the type of the object the module throws, read at run time in
+# the module WasmTarget emits. The module with every object's class id at its creation rewritten (_f1_no_class: one
+# LEB byte rewritten to 63, two to 8191, spec v20 G2, red round 18 2; in the code and global sections) throws an object
+# of no class, and its reader must answer 2; the module as compiled answers
+# 1. Red's q1/mut.py is the method, test/fixtures/runner_patch.wat the precedent for a patched module; a reader of
+# another T is no evidence (Julia folds it to a constant), so none is run
+isdefined(Main, :_F1_SHAPES) || Base.include(Main, joinpath(@__DIR__, "..", "throw_shapes.jl"))
+function _f1_uleb(b, i)
+    local v = 0
+    local s = 0
+    while true
+        local x = b[i]
+        v |= Int(x & 0x7f) << s
+        s += 7
+        i += 1
+        x & 0x80 == 0 && return (v, i)
+    end
+end
+# the length of the simple instruction at `i` (local.get, global.get, i32.const, i64.const and its LEB operand), or 0
+function _f1_simple(b, i)
+    (i <= length(b) && b[i] in (0x20, 0x23, 0x41, 0x42)) || return 0
+    local j = i + 1
+    while j <= length(b) && b[j] & 0x80 != 0
+        j += 1
+    end
+    return j - i + 1
+end
+_f1_struct_new(b, i) = i + 1 <= length(b) && b[i] == 0xfb && b[i+1] == 0x00
+# an object's class id at its creation: `i32.const k` (one LEB byte, below 64, or two, 64 to 8191) followed by
+# struct.new, by one simple instruction (a field's value) and struct.new, or by the next field's `i32.const` (the
+# identity hash's 0 where k is one byte)
+function _f1_no_class(bytes::Vector{UInt8})::Tuple{Vector{UInt8},Int}
+    local out = copy(bytes)
+    local n = 0
+    local pos = 9
+    while pos <= length(out)
+        local id = out[pos]
+        local size, start = _f1_uleb(out, pos + 1)
+        if id in (0x06, 0x0a)   # the global and code sections
+            for i in start:start+size-3
+                out[i] == 0x41 || continue
+                local two = out[i+1] & 0x80 != 0 && out[i+2] & 0xc0 == 0
+                local one = out[i+1] < 0x40
+                (one || two) || continue
+                local next = i + (two ? 3 : 2)
+                local s = _f1_simple(out, next)
+                if _f1_struct_new(out, next) || (s > 0 && _f1_struct_new(out, next + s)) ||
+                   (two && next <= length(out) && out[next] == 0x41) ||
+                   (one && next + 1 <= length(out) && out[next] == 0x41 && out[next+1] == 0x00)
+                    two ? ((out[i+1], out[i+2]) = (0xff, 0x3f)) : (out[i+1] = 0x3f)   # 8191 or 63: no class
+                    n += 1
+                end
+            end
+        end
+        pos = start + size
+    end
+    return out, n
+end
+
+@testset "a throw reader answers by the thrown object's class, read in WasmTarget's module (spec v20 F1)" begin
+    local W = Main.WTVerdict
+    local cases = WTR.RunCase[]
+    for (F, T, args) in _F1_SHAPES   # every shape compiles today, both modules (none is unported)
+        local r = W.Catches{F,T}()
+        local plain = WasmTarget.compile(r, map(typeof, args); optimize = false)
+        local opt = WasmTarget.compile(r, map(typeof, args))
+        local mp, np = _f1_no_class(plain)
+        local mo, no = _f1_no_class(opt)
+        @test (F, T, np > 0, no > 0) == (F, T, true, true)
+        @test r(args...) === Int32(1)
+        push!(cases, WTR.RunCase("$F $T", plain, args, Int32(1); optimized = opt))
+        push!(cases, WTR.RunCase("$F $T, its throw of no class", mp, args, Int32(2); optimized = mo))
+    end
+    local results = WTR.run_cases(cases)
+    @test [(r.label, r.outcome) for r in results] == [(c.label, :passed) for c in cases]
+end

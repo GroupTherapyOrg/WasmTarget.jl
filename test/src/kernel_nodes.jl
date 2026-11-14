@@ -1,0 +1,81 @@
+# dart2wasm's kernel_nodes.dart, ported (src/kernel_nodes.jl): the classes and procedures of dart's
+# runtime library the compiler names. Each is a definition of the sdk at the pin, not ported, so each
+# rejects Unported naming it, the target's patch where the target chooses one.
+
+module KernelNodesTest
+
+using Test
+using WasmTarget
+
+const W = WasmTarget
+const D = WasmTarget.Dart2Wasm
+
+f(x::Int) = x + 1
+g(x::Int) = x < 0 ? throw(DomainError(x)) : x
+
+@testset "kernel_nodes.dart: the runtime's classes and procedures, Unported at the sdk" begin
+    local world = W.build_nir(W.check_subset(f, (Int,), "kernel_nodes", Base.get_world_counter()), "kernel_nodes")
+    local data() = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local js = D.Translator(world, data(), D.TranslatorOptions())
+    local standalone = D.Translator(world, data(), D.TranslatorOptions(; standalone = true))
+    local anchor(f, t) = (e = try; f(t); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Unported ? e.rejection.anchor : e)
+    # dart:_list's WasmListBase is Julia's Array{T,1}, a class per element type: no compile reaches the
+    # one-class lookup, Internal naming why
+    local lb = try; D.list_base_class(js); nothing; catch x; x; end
+    @test lb isa W.RejectionError && lb.rejection isa W.Internal && occursin("Array{T,1}", lb.rejection.site)
+    # dart:_list's ImmutableList, a constant list's class, is Julia's Array{T,1} of its element type
+    @test D.immutable_list_class(js, Int) === Vector{Int}
+    # _throwWasmRefError: only WasmAnyRef.toObject and WasmFunction.fromFuncRef reach it, which the
+    # intrinsifier ports neither of: Internal, naming both
+    local wr = anchor(D.throw_wasm_ref_error, js)
+    @test wr isa W.RejectionError && wr.rejection isa W.Internal &&
+          occursin("WasmAnyRef.toObject (intrinsics.dart:704)", wr.rejection.site) && occursin("WasmFunction.fromFuncRef (intrinsics.dart:2013)", wr.rejection.site)
+    @test anchor(D.embedder_string_from_char_code_array, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:62 stringFromCharCodeArray"
+    @test anchor(D.embedder_string_from_ascii_bytes, standalone) == "sdk/lib/_internal/wasm/standalone/embedder.dart:71 stringFromAsciiBytes"
+    # the target's patch: standalone or JS; the standalone StackTrace.current is ported, its method in
+    # every closed world (a runtime root)
+    @test anchor(D.stack_trace_current, js) == "sdk/lib/_internal/wasm/js_common/stack_trace_patch.dart:13 StackTrace.current"
+    local throwing = D.Translator(W.build_nir(W.check_subset(g, (Int,), "kernel_nodes", Base.get_world_counter()), "kernel_nodes"), data(), D.TranslatorOptions(; standalone = true))
+    @test D.stack_trace_current(throwing).def === only(methods(W.Runtime.StackTrace_current))
+    # the JS patch's printToConsole is ported (src/runtime/js_common/print_patch.jl): its method in a closed
+    # world that holds it, an Internal where none does
+    local printing = D.Translator(W.build_nir(W.check_subset(W.Runtime.print_to_console, (String,), "kernel_nodes", Base.get_world_counter()), "kernel_nodes"), data(), D.TranslatorOptions())
+    @test D.print_to_console(printing).def === only(methods(W.Runtime.print_to_console))
+    @test anchor(D.print_to_console, js) isa W.RejectionError && anchor(D.print_to_console, js).rejection isa W.Internal
+    @test anchor(D.print_to_console, standalone) == "sdk/lib/_internal/wasm/standalone/print_patch.dart:9 printToConsole"
+    @test D._string_impl_class_name(js) == "JSStringImpl" && D._string_impl_class_name(standalone) == "EmbedderStringImpl"
+    # each anchor names a line of the pinned sdk that declares it
+    local sdk = W._pin_sdk()
+    if sdk !== nothing
+        for (fn, t) in ((D.embedder_string_from_char_code_array, standalone),
+                        (D.embedder_string_from_ascii_bytes, standalone), (D.stack_trace_current, js),
+                        (D.print_to_console, standalone))
+            local a = anchor(fn, t)
+            local (path, rest) = split(a, ':'; limit = 2)
+            local (line, name) = split(rest, ' '; limit = 2)
+            local text = readlines(joinpath(sdk, path))[parse(Int, line)]
+            @test occursin(last(split(name, '.')), text)
+        end
+    end
+end
+
+
+@testset "kernel_nodes.dart:316 _getLaneReferences: a SIMD vector's lanes, in lane order" begin
+    local world = W.build_nir(W.check_subset(f, (Int,), "kernel_nodes", Base.get_world_counter()), "kernel_nodes")
+    local t = D.Translator(world, D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    # each of dart's six lane classes, as Julia's SIMD vector of the same lanes
+    for (T, n) in ((Int8, 16), (Int16, 8), (Int32, 4), (Int64, 2), (Float32, 4), (Float64, 2))
+        local lanes = D._get_lane_references(t, NTuple{n,VecElement{T}})
+        @test length(lanes) == n
+        @test [l.index for l in lanes] == collect(1:n)
+        @test all(l -> l.type === VecElement{T} && l.cls === NTuple{n,VecElement{T}}, lanes)
+    end
+    # no SIMD vector: a plain tuple, a vector of the wrong width, mixed lanes; each rejects, located
+    local why(C) = (e = try; D._get_lane_references(t, C); nothing; catch x; x; end; e isa W.RejectionError && e.rejection isa W.Internal ? e.rejection : e)
+    for C in (NTuple{4,Int32}, NTuple{8,VecElement{Int32}}, Tuple{VecElement{Int64},VecElement{Float64}})
+        local r = why(C)
+        @test r isa W.Internal && occursin("kernel_nodes.dart:316", r.site) && occursin("no SIMD vector", r.site)
+    end
+end
+
+end

@@ -1,0 +1,39 @@
+# WasmTargetLegacyStaticArraysExt — StaticArrays (SVector) support.
+#
+# SVector{N,T} === SArray{Tuple{N},T,1,N} is NOT a heap array: it is a struct
+# wrapping a single field `data::NTuple{L,T}`, laid out by that field like every
+# concrete struct (is_struct_type decides by structure).
+#
+# CONSTRUCTION: every SVector ctor — `SVector{N,T}(x...)` and
+#     `SVector{N,T}(::Tuple)` alike — routes through `StaticArrays.construct_type`,
+#     a pile of pure type-level machinery (`adapt_size`/`adapt_eltype`/
+#     `typeintersect`/`has_size`/…). Native folds it to the concrete
+#     `Type{SVector{N,T}}`; WT's interpreter (concrete-eval disabled to protect
+#     overlays) gives up and infers `Any`, so the whole SVector — and every
+#     `getindex` off it — boxes and traps. For an ALREADY-fully-parameterized
+#     `SArray{S,T,N,L}`, `construct_type` is the identity (it only adapts missing
+#     size/eltype). Overlay it to return that type directly: a one-method fix at
+#     the root that re-concretises the result and lets the normal (type-stable)
+#     inner ctor run, for both the positional and tuple construction forms.
+#
+# Verified bit/tolerance-identical to native — see test/fuzz/staticarrays_diff.jl.
+# This is what unblocks SimpleDiffEq's SimpleTsit5 (its Butcher tableau lives in
+# SVector{6/21/22} coefficient caches). Scope: fully-parameterized `SVector{N,T}`
+# (all N ≥ 1, including the degenerate single-element vector) — construction
+# (positional / tuple / converting-eltype), getindex, iterate/destructure,
+# arithmetic and broadcast. SMatrix / MArray are future scope.
+module WasmTargetLegacyStaticArraysExt
+
+using WasmTargetLegacy
+using StaticArrays: StaticArrays, SArray
+using Base.Experimental: @overlay
+
+const WMT = WasmTargetLegacy.WASM_METHOD_TABLE
+
+# For an already-concrete SArray, construct_type is the identity — return it so WT
+# infers the result type (instead of Any) and the normal inner ctor takes over.
+# parity(quarantine: StaticArrays.construct_type derives the SArray type from its argument at run time, which WT does not lower; for an already-concrete SArray it is the identity.)
+@overlay WMT StaticArrays.construct_type(::Type{SArray{S, T, N, L}}, x) where {S <: Tuple, T, N, L} =
+    SArray{S, T, N, L}
+
+end # module

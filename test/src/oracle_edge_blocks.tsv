@@ -1,0 +1,62 @@
+# The store's edge blocks (spec v14 V4), written by test/oracle.jl's own writer (answer_lines): each case a line
+# `case <name> <verdict>` and its records, read alone by both readers of answer records, test/oracle_read.jl's
+# read_answers (test/src/oracle_read.jl) and dev/climb/measure.py's unit_blocks (climb.py door-probe's reader
+# rows), which must give label e/a the case's verdict: whole (its answer, or its noanswer, read), dropped (not
+# whole: no answer read) or refused (named twice). The case `cut` ends with no newline (an append cut short).
+case	whole_scalar	whole
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	-
+case	whole_aggregate	whole
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	opaque,VCBRMjl5WlE9PSBWSFZ3YkdVPSAyIFQgUTI5eVpRPT0gU1c1ME5qUT0gMCBUIFEyOXlaUT09IFNXNTBOalE9IDA=,-	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	1
+group	e/a	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	0	2
+leaf	e/a	i1	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000
+leaf	e/a	i2	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000
+case	whole_digest	whole
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	opaque,VCBRMjl5WlE9PSBWSFZ3YkdVPSAyIFQgUTI5eVpRPT0gU1c1ME5qUT0gMCBUIFEyOXlaUT09IFNXNTBOalE9IDA=,-	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	1
+group	e/a	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	0	2
+leaf	e/a	i1	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000
+leaf	e/a	i2	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000
+digest	e/a	abababababababababababababababababababababababababababababababab	2	bind,UzE6eA==,0123456789abcdef;register,czM6ZS9h,fedcba9876543210
+case	whole_noanswer	whole
+noanswer	e/a	Ym9vbQ==
+case	short	dropped
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	opaque,VCBRMjl5WlE9PSBWSFZ3YkdVPSAyIFQgUTI5eVpRPT0gU1c1ME5qUT0gMCBUIFEyOXlaUT09IFNXNTBOalE9IDA=,-	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	1
+group	e/a	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	0	2
+leaf	e/a	i1	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000
+case	foreign	dropped
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	opaque,VCBRMjl5WlE9PSBWSFZ3YkdVPSAyIFQgUTI5eVpRPT0gU1c1ME5qUT0gMCBUIFEyOXlaUT09IFNXNTBOalE9IDA=,-	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	1
+group	e/a	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	0	2
+leaf	e/other	i1	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000
+leaf	e/a	i2	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000
+case	stray_after_digest	dropped
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	opaque,VCBRMjl5WlE9PSBWSFZ3YkdVPSAyIFQgUTI5eVpRPT0gU1c1ME5qUT0gMCBUIFEyOXlaUT09IFNXNTBOalE9IDA=,-	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	1
+group	e/a	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	0	2
+leaf	e/a	i1	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000
+leaf	e/a	i2	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000
+digest	e/a	abababababababababababababababababababababababababababababababab	2	bind,UzE6eA==,0123456789abcdef;register,czM6ZS9h,fedcba9876543210
+leaf	e/a	i2	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000
+case	stray_after_noanswer	dropped
+noanswer	e/a	Ym9vbQ==
+leaf	e/a	i2	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000
+case	two_digests	dropped
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	opaque,VCBRMjl5WlE9PSBWSFZ3YkdVPSAyIFQgUTI5eVpRPT0gU1c1ME5qUT0gMCBUIFEyOXlaUT09IFNXNTBOalE9IDA=,-	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	1
+group	e/a	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	0	2
+leaf	e/a	i1	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000
+leaf	e/a	i2	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000
+digest	e/a	abababababababababababababababababababababababababababababababab	2	bind,UzE6eA==,0123456789abcdef;register,czM6ZS9h,fedcba9876543210
+digest	e/a	abababababababababababababababababababababababababababababababab	2	bind,UzE6eA==,0123456789abcdef;register,czM6ZS9h,fedcba9876543210
+case	digest_before_leaves	dropped
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	opaque,VCBRMjl5WlE9PSBWSFZ3YkdVPSAyIFQgUTI5eVpRPT0gU1c1ME5qUT0gMCBUIFEyOXlaUT09IFNXNTBOalE9IDA=,-	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	1
+digest	e/a	abababababababababababababababababababababababababababababababab	2	bind,UzE6eA==,0123456789abcdef;register,czM6ZS9h,fedcba9876543210
+group	e/a	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	0	2
+leaf	e/a	i1	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000
+leaf	e/a	i2	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000
+case	duplicated	refused
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	-
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	-
+case	oversized	dropped
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	opaque,VCBRMjl5WlE9PSBWSFZ3YkdVPSAyIFQgUTI5eVpRPT0gU1c1ME5qUT0gMCBUIFEyOXlaUT09IFNXNTBOalE9IDA=,-	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwTmpRPSAw	1
+group	e/a	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	0	999999999999
+leaf	e/a	i1	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000
+leaf	e/a	i2	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000
+case	cut	dropped
+answer	e/a		-	-	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0100000000000000	bits,VCBRMjl5WlE9PSBTVzUwTmpRPSAw,0200000000000000	VCBRMjl5WlE9PSBTVzUwTmpRPSAw	VCBRMjl5WlE9PSBTVzUwTmpRPSAwIDsgVCBRMjl5WlE9PSBTVzUwT
