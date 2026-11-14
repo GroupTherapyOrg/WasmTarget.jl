@@ -142,7 +142,7 @@ def ship_result(path):
     kind, _, arg = text.partition(" ")
     return (kind, arg.strip() or None) if kind in SHIP_KINDS else ("OTHER", f"an unknown result {text[:60]!r}")
 
-SPLIT_RE = re.compile(r"(load|ratchet|shard\.(\d{1,2})) (\d+) ([0-9.]+) ([0-9.]+) ([0-9.]+)|wall (\d+)|start\.(\d{1,2}) ([0-9.]+)")
+SPLIT_RE = re.compile(r"(load|ratchet|shard\.(\d{1,2})) (\d+) ([0-9.]+) ([0-9.]+) ([0-9.]+)|wall (\d+)|start\.(\d{1,2}) ([0-9.]+)|band (\d{1,4})|l228 (harness|none)")
 
 def check_verdict(path):
     """The check's verdict as ship.sh wrote it: (its exit status, its critical path's seconds or None, its split or
@@ -150,8 +150,10 @@ def check_verdict(path):
     and the split are what its stages reported (G3's trust: the processes that load the candidate write them), read for
     D14's note, the band and the predictions of a landing's test set (the landing-check ruling's step 2), never a
     verdict. The split: each stage's [judged seconds, performance-core G, efficiency-core seconds, unreported seconds]
-    (load, ratchet, and the shards in order) and the wall, from the lines ship.sh copied after the first; a line it does
-    not read leaves its stage out, never a number made up (D9)."""
+    (load, ratchet, and the shards in order), the wall, and `band`, the red line the check judged itself against
+    (dev/check.sh: D14_RED, or D14_RED_HARNESS when its ratchet ran the L228 harness), and `l228`, whether it did
+    (`harness` or `none`, the ratchet's l228_scope as the check read it: the class of the check, measure.predict's
+    ratchet term), from the lines ship.sh copied after the first; a line it does not read leaves its stage out, never a number made up (D9)."""
     lines = (read_once(path) or "").splitlines()
     f = lines[0].split() if lines else []
     split = {}
@@ -159,7 +161,11 @@ def check_verdict(path):
         m = SPLIT_RE.fullmatch(l.strip())
         if not m:
             continue
-        if m.group(8):   # a shard's measured start, its G until its first file (A13-7)
+        if m.group(11):   # whether its ratchet ran the L228 harness: the check's class
+            split["l228"] = m.group(11)
+        elif m.group(10):   # the red line this check was judged against
+            split["band"] = int(m.group(10))
+        elif m.group(8):   # a shard's measured start, its G until its first file (A13-7)
             split.setdefault("starts", {})[int(m.group(8))] = float(m.group(9))
         elif m.group(7):
             split["wall"] = int(m.group(7))
@@ -339,7 +345,7 @@ def ship_event(item, pr, kind, arg, crc, path, out, split=None, src_set_=None):
     event("ship" if pr else "land-wait", hold=item["hold"], result=f"{kind}:{arg}", check=crc, path=path if crc in (0, 10) else None,
           split=split if crc in (0, 10) else None, src_set=src_set_ if pr else None,
           target=(src_set_ or {}).get("target") if pr else None, margin=((src_set_ or {}).get("margin") or {}).get("margin") if pr else None,
-          d14={"verdict": d14_verdict(pr, kind, crc), "band": d14_red()} if pr else None,
+          d14={"verdict": d14_verdict(pr, kind, crc), "band": (split or {}).get("band") if crc in (0, 10) else None} if pr else None,
           probe=pr, tail=out[-300:])
 
 def d14_verdict(pr, kind, crc):
@@ -549,7 +555,9 @@ def rebased_check(item):
     return problems, stop
 
 def d14_red():
-    """D14's band, origin's dev/check.sh D14_RED, read where dev/ship.sh reads it."""
+    """D14's red line for a check that runs no L228 harness, origin's dev/check.sh D14_RED, read where dev/ship.sh reads
+    it: the lower of the two (a check whose ratchet ran the harness is red past D14_RED_HARNESS, and records the line it
+    was judged against in its split's `band`)."""
     m = re.search(r"^D14_RED=(\d+)", git("show", f"origin/{MARCH}:dev/check.sh"), re.M)
     if not m:
         raise ClimbError(f"origin/{MARCH}:dev/check.sh names no D14_RED")
@@ -570,7 +578,7 @@ def d14_binds():
         event("alarm", name="d14-binds", over=over, reds=len(reds), of=n)
         paths = ", ".join(f"{e.get('path')} s" for e in checks)
         for_dale("D14's band binds the climb's landings" if over else "D14's band no longer binds the climb's landings",
-                 f"{len(reds)} of the last {n} landing checks read red on D14's time alone (band {d14_red()} s, Dale's; "
+                 f"{len(reds)} of the last {n} landing checks read red on D14's time alone (red past {d14_red()} s, or the L228 harness's higher line for a check that ran it; "
                  f"their critical paths: {paths})." + (" Default taken: approved commits stay queued, each tried again after "
                  f"d14_backoff_s; at queue_cap the slots idle and spend nothing. The band, or the check's rates "
                  f"(council/d14-rates.patch), is Dale's to change." if over else " Default taken: the lander lands as before."))
@@ -605,6 +613,50 @@ def hand_set(item, files, ss):
     return setp, costp
 
 R3_ROLE = "measure"   # the role a red file is run at origin's head as (R3): the lander's measurements' (src_red_at)
+
+def shard_costs(text, warm):
+    """Each file's measured cost in G from a check's shards' records as ship.sh passed them (`shard <name>` before each
+    shard's lines; `row <file> <outcome> <G> <why> <canary>`, the file's instructions and its children's at the shards'
+    rate, test/src_tests.jl), a shard's first file less the warm-up `warm` its first file pays (measure.predict charges
+    every shard that warm-up once more, so it is never counted twice), at least 0. {} when no record was passed."""
+    out, first, cur = {}, True, None
+    for l in (text or "").splitlines():
+        f = l.split("\t")
+        if f[0] == "shard":
+            first, cur = True, None
+        elif f[0] == "started" and len(f) == 2:
+            cur = f[1]
+        elif f[0] == "row" and len(f) == 6 and f[1] == cur and f[2] in ("passed", "failed"):
+            with contextlib.suppress(ValueError):
+                out[cur] = max(0.0, float(f[3]) - (warm if first else 0.0))
+            first, cur = False, None
+    out.pop(CANARY, None)
+    return out
+
+def held_measured(item, ss, text, arg):
+    """A check past D14's band whose own set held a file no score or check had costed (`estimated`, measure.src_costs):
+    the check's own records measure each file (shard_costs), the costs are recorded (measure.SRC_MEASURED, each with
+    the file's size at the commit checked, so a later edit is scaled), and the item is held in its place and tried
+    again with them, its ring's turn kept: never the move's drop on an estimate (2026-11-14 22:35:31Z: the split of
+    test/src/constants.jl, two new files estimated at the average G per byte, ran 402.7 G and 352.5 G, its check read
+    151 s and the item was dropped as the move's own). With measured costs the next round decides: a set that fits
+    lands; an own file that alone predicts past the band is refused (lander.src_refused: held for a split when the
+    file was heavy at origin, the move's own when the move made it heavy). A file the records leave unmeasured is the
+    driver's fault (item_error: held, then dropped uncharged)."""
+    est = sorted(set(ss.get("estimated", [])) & set(ss.get("own", [])))
+    got = shard_costs(text, ss.get("warm") or 0.0)
+    missing = [f for f in est if f not in got]
+    if missing:
+        item_error(item, ClimbError(f"its check read {arg} s past D14's band and its records measure no cost for its "
+                                    f"estimated own file(s) {missing}"))
+        return
+    at = (item.get("rebased") or {}).get("commit") or item["sha"]
+    sizes = src_sizes(at)
+    rec = {f: {"G": round(got[f], 1), "size": sizes.get(f, 0), "sha": at[:10], "t": stamp()} for f in est if sizes.get(f)}
+    update_json(SRC_MEASURED, {}, lambda m: m.update(rec))
+    unqueue(item, measured={f: r["G"] for f, r in rec.items()})
+    event("land-measured", hold=item["hold"], check=arg, files={f: r["G"] for f, r in rec.items()},
+          estimated={f: round(ss.get("costs", {}).get(f, 0.0), 1) for f in est} if ss.get("costs") else None)
 
 def shard_records(text):
     """A check's shards' records as ship.sh passed them (`shard <name>` before each shard's own lines): {file: outcome},
@@ -784,18 +836,22 @@ def fixfirst_binds(overdue):
 
 def near_band():
     """D17: green checks near D14's band are a finding, early; the median of the last five, never one check (O12),
-    noted once when it passes near_band of the band and again only when it rises near_band_step more (O5-11)."""
-    greens = sorted(e["path"] for e in [x for x in events() if x["kind"] == "ship" and x.get("path") and judged_check(x)
-                                        and x.get("result", "").startswith("LANDED")][-5:])
-    if len(greens) < 5:
+    noted once when it passes near_band of the band and again only when it rises near_band_step more (O5-11). Each
+    check is read against the red line it was judged on (its `d14` band: D14_RED, or D14_RED_HARNESS for a check that
+    ran the L228 harness), as seconds under it, so a harness check's longer path is never read as nearness."""
+    rows = [(x["path"], x["d14"]["band"]) for x in events() if x["kind"] == "ship" and x.get("path") and judged_check(x)
+            and x.get("result", "").startswith("LANDED") and (x.get("d14") or {}).get("band")][-5:]
+    if len(rows) < 5:
         return
-    med, prev = greens[2], state_json("alarms.json", {}).get("near-band-state") or [False, 0]
-    over = med > cfg()["near_band"] * d14_red()
+    # seconds past near_band of each check's own line, the median of the five
+    past = sorted(round(p - cfg()["near_band"] * b, 1) for p, b in rows)
+    med, prev = past[2], state_json("alarms.json", {}).get("near-band-state") or [False, 0]
+    over = med > 0
     if over and (not prev[0] or med >= prev[1] + cfg()["near_band_step"]):
         event("alarm", name="near-band")
-        for_dale("landing checks run near D14's band", f"The median of the last five green checks' critical paths, "
-                 f"{med} s ({greens}), is past {cfg()['near_band']:.0%} of D14's {d14_red()} s. Default taken: the lander "
-                 "keeps landing; the probe events and the checks' paths re-derive its band.")
+        for_dale("landing checks run near D14's band", f"The median of the last five green checks' critical paths is "
+                 f"{med} s past {cfg()['near_band']:.0%} of the red line each was judged on (path, line: {rows}). Default "
+                 "taken: the lander keeps landing; the probe events and the checks' paths re-derive its band.")
         prev = [True, med]
     update_json("alarms.json", {}, lambda a: a.__setitem__("near-band-state", prev if over else [False, 0]))
 
@@ -847,11 +903,29 @@ def src_refused(item, ss):
     or gone lets its set fit (2026-11-14 21:53:09Z: a wrong-answer fix that edited test/src/constants.jl, 746.9 G and
     152.3 s alone at origin, was dropped as landing-red). Not a fix-first entry: no move of a hold can clear it (a split
     is the lead's hand move, core.fixfirst_problem), and an overdue one would stop every other landing (core.admits).
+    A refusal whose check would pass the line with NO test file at all (`base_over`: the load, the ratchet of the
+    check's class and the shards' starts alone) is no file's of the commit: it is the predictor's or the machine's, the
+    item is held in its place (one event and one note a change of the prediction, the fault the driver's) and the round
+    goes on to the items behind it; never a drop (2026-11-14 23:15:34Z: an item with no own and no unscored file was
+    dropped as "its own additions or edits" at 265 s, the ratchet term mixing a harness check into every prediction).
     Only when every own file fits at origin is the refusal the move's own (its additions or its edits push the set
     past the band): dropped, as before."""
     if not ss.get("refuse"):
         return False
-    heavy, band = ss.get("origin_heavy") or [], d14_red()
+    heavy, band = ss.get("origin_heavy") or [], ss["band"]
+    if ss.get("base_over"):
+        p0 = ss["base"]
+        why = (f"with no test file a check of {'its class (the L228 harness runs)' if ss.get('harness') else 'it'} predicts "
+               f"{p0['path']} s, past D14's line of {band} s (load {p0['load']}, ratchet {p0['ratchet']}, shards "
+               f"{p0['shards']}; {p0['model']})")
+        if item.get("predictor_held") != p0["path"]:
+            unqueue(item, predictor_held=p0["path"])
+            event("land-held-predictor", hold=item["hold"], path=p0["path"], band=band, model=p0["model"])
+            alarm("land-held-predictor", "the lander's prediction refuses a landing no test file makes",
+                  f"{item['hold'][:160]}: {why}. The commit's files make none of it, so it is the predictor's or the "
+                  "machine's. Default taken: the item is held in its place, never dropped, and the lander goes on to the "
+                  "items behind it; the model (measure.predict) is the lead's to look at.")
+        return True
     if heavy:
         names = [f for f, _, _ in heavy]
         if item.get("split_held") != names:   # once a change of what holds it: an event, and the item marked
@@ -1013,10 +1087,9 @@ def land_round():
                 return 0
             kind, arg = "OTHER", f"its result named {arg}, which origin/{MARCH} does not hold"
         if kind == "D14" and set((ss or {}).get("estimated", [])) & set((ss or {}).get("own", [])):
-            # an own file no score ran has no known cost: its check past the band is the move's own, from its set's own
-            # record, never from output (the design's B.2), never a D14 wait
-            drop(item, "landing-red", f"its own unscored test files {sorted(set(ss['estimated']) & set(ss['own']))}, no score "
-                 f"having costed them, read the check {arg} s, past D14's band of {d14_red()} s: split them"); continue
+            # an own file no score ran was estimated, never measured: the check's own records measure it, the item is
+            # held and tried again with those costs (held_measured), never the move's drop on an estimate
+            held_measured(item, ss, rtext, arg); continue
         if kind == "OWN" and arg == "tests" and ss and origin_red(item, slot, ss, recs):
             continue   # origin's red, located and filed: the item is checked again without it next round, uncharged
         if kind == "OWN" and arg == "void" and ss and origin_void(item, ss, vfiles):

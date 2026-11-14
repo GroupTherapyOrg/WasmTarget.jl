@@ -81,7 +81,8 @@ band=$(git show "origin/$MARCH:dev/check.sh" 2>/dev/null | sed -n 's/^D14_RED=\(
 [ -n "$band" ] || { echo "ship: REFUSED — origin/$MARCH:dev/check.sh names no D14_RED, so the retry cap cannot read today's band"; finish 2 REFUSED no-band; }
 for s in $(git log --format=%s "origin/wt2..HEAD" 2>/dev/null | cut -c1-60 | tr ' ' '\001'); do
   s=$(printf '%s' "$s" | tr '\001' ' ')
-  # a red counts only past today's band (origin's dev/check.sh D14_RED, never the lane's copy, A77E3): a red the band now admits was no red
+  # a red counts only past today's band (origin's dev/check.sh D14_RED, never the lane's copy, A77E3): a red the band now admits was no red;
+  # D14_RED is the lower of its two red lines, and a check that ran the L228 harness is red only past D14_RED_HARNESS, above it
   n=$(awk -F'\t' -v t="$since" -v s="$s" -v band="$band" \
     '$1 >= t && index($3, s) && $4 ~ /past D14/ && match($4, /[0-9]+ s, past/) && substr($4, RSTART, RLENGTH - 8) + 0 > band + 0' \
     "$common/wt-ship-failures.tsv" 2>/dev/null | wc -l | tr -d ' ')
@@ -216,7 +217,7 @@ set -- "$1" env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u G
 if [ -n "${WT_SHIP_DOOR:-}" ]; then "${@:2}" python3 "$WT_SHIP_DOOR" land-check "$PWD"; rc=$?
 else "${@:2}" bash dev/check.sh 2>&1 | tee .wtd/check.log; rc=${PIPESTATUS[0]}; fi
 { printf '%s %s\n' "$rc" "$(tr -cd 0-9 < .wtd/check-path.out 2>/dev/null | cut -c1-6)"
-  grep -E '^(load|ratchet|shard\.[0-9]{1,2}) [0-9]{1,6}( [0-9]{1,9}\.[0-9]){3}$|^wall [0-9]{1,6}$|^start\.[0-9]{1,2} [0-9]{1,9}\.[0-9]$' .wtd/check-split.out 2>/dev/null | head -30; } > "$WT_CHECK_RESULT"
+  grep -E '^(load|ratchet|shard\.[0-9]{1,2}) [0-9]{1,6}( [0-9]{1,9}\.[0-9]){3}$|^wall [0-9]{1,6}$|^band [0-9]{1,4}$|^l228 (harness|none)$|^start\.[0-9]{1,2} [0-9]{1,9}\.[0-9]$' .wtd/check-split.out 2>/dev/null | head -30; } > "$WT_CHECK_RESULT"
 # and each shard's per-file records (test/src_tests.jl's WT_SRC_RECORDS, a file a shard), headed by their shard, beside
 # the verdict: what the check reports it ran, the climb's lander's verified record and R3's reading, never assumed
 for f in .wtd/src_records.*.out; do [ -f "$f" ] && { printf 'shard\t%s\n' "$(basename "$f")"; cat "$f"; }; done > "$WT_CHECK_RESULT.records" 2>/dev/null

@@ -910,7 +910,9 @@ door's, run as Dale on paths no build user writes.
   `lock_wait_s`, the lander's, a slot's or the scoreboard's, is a note and waits on, never a backoff or a charge:
   each holder has its own wall.
 - **The quiet probe.** It is a measurement, never a gate (throughput P0, the owner's "STOP pausing EVER", 2026-11-13):
-  the lander starts every check whatever the probe reads. D14's band judges a check's cost, and only a check that began
+  the lander starts every check whatever the probe reads. D14's band judges a check's cost (dev/check.sh: red past
+  `D14_RED`, 180 s, or past `D14_RED_HARNESS`, 300 s, when its ratchet ran the L228 behaviour harness, as the ratchet's
+  `l228_scope` decided and wrote to the check; the band is the lead's to set, Dale 2026-11-14), and only a check that began
   and ended on a quiet machine is evidence of it: `lander.quiet`, the one definition (the probe within `p_idle`,
   `e_idle`, `swapins_max`, `decompressions_max`, the pressure under critical, and Low Power Mode off), read at the
   check's start and at its end. A check that read red on the band alone asks the lander (`dev/d14_judge.sh`, called by
@@ -988,7 +990,7 @@ door's, run as Dale on paths no build user writes.
   (vm_stat's pageouts, swapouts, swapins and decompressions over it), the critical path its stages reported, its
   split (each stage's judged seconds and their three terms, the wall: check.sh's `check-split.out`, carried by ship.sh) and
   D14's verdict on it, so the burn-in reads whether reds follow memory (O6-7; probed with a stub check), and these
-  bands are re-derived from them; the median of the last five green checks past `near_band` of D14's band is a note once, again only when it
+  bands are re-derived from them; the median of the last five green checks past `near_band` of the red line each was judged on (its split's `band`) is a note once, again only when it
   rises `near_band_step` more (O5-11); a busy machine holds no check (throughput P0: the probe is the measurement of
   whether the check's time is judged, never a wait).
   Nothing is stopped during a wait, only during the probe and the check, and every stopped process is recorded
@@ -1034,8 +1036,8 @@ door's, run as Dale on paths no build user writes.
   files the last landing could not take first, then the score's ring (its files in path order with their costs, the
   one thing a score fixes) from its position, each taken while the set predicts within the target; a ring file that
   does not fit is passed over and carried to head the next landing's, and the position advances past the last file
-  taken (`src-ring.json`, written when the landing lands). The target is D14's band less a margin
-  computed live by `measure.src_target`, never set by hand, per shape, one-sided, robust and bounded (spec v17 Z5):
+  taken (`src-ring.json`, written when the landing lands). The target is D14's packing ceiling (dev/check.sh `D14_PACK`, 140 s, under both red lines)
+  less a margin computed live by `measure.src_target`, never set by hand, per shape, one-sided, robust and bounded (spec v17 Z5):
   three times the SECOND-largest positive error (judged over predicted) of the last `src_margin_checks` checks of the
   landing's shape that were predicted before they ran, not ended by the power rule, and passed and landed or read red on D14's band alone
   (spec v18 Q5: the errors that cross the band are the ones the margin must see; a check red on its tests teaches
@@ -1051,8 +1053,12 @@ door's, run as Dale on paths no build user writes.
   its first claimed file, `start.<k>` in the split) plus the warm-up its first file pays (the score's `warm`), g fitted
   alone to those checks (their shards' judged seconds against the score's costs of the files they ran, their starts
   and their warm-ups), each from the predicted shape's own last five checks (the other shape's while it has fewer than
-  `src_shape_checks_min`); the slowest shard at least the mean plus the checks' imbalance, beside their ratchet and the
-  load of the checks of the same shape (every check loads WasmTarget in its judged load stage). A launch has priors,
+  `src_shape_checks_min`); the slowest shard at least the mean plus the checks' imbalance, beside the ratchet of the
+  checks of the item's CLASS (whether its check's ratchet runs the L228 behaviour harness: `l228_harness`, the
+  ratchet's own rule read by dev/climb/l228scope.py, which L228's scope negative holds to l228_scope; a check records
+  its class in its split's `l228`, and one that recorded none is left out of the ratchet term, never guessed; the
+  classes' priors `src_prior_ratchet_s` and `src_prior_ratchet_harness_s`; 2026-11-14 23:15:34Z: one median over a
+  89-s and a 265-s ratchet refused every item at 265-282 s) and the load of the checks of the same shape (every check loads WasmTarget in its judged load stage). A launch has priors,
   never every file (round 14's T3): until the checks hold a term, `predict` reads its declared prior (`src_prior_g`,
   `src_prior_start_g`, `src_prior_load_s`, `src_prior_ratchet_s`, `src_prior_imbalance_s`, measured on this machine)
   and names it in the prediction's `model`; g and the start are replaced once a shape has `src_shape_checks_min`
@@ -1060,14 +1066,23 @@ door's, run as Dale on paths no build user writes.
   `src_margin_start_s` until `src_margin_checks` predicted checks exist
   stage). A test file a landing could not take and whose lone-shard prediction passes its target is named
   (`src-unfit`, one note each time the set changes): never silently the score's alone (R2); splitting it is the
-  lead's move; the same note names each file whose own cost predicts within `src_near_band` of D14's band for a
+  lead's move; the same note names each file whose own cost predicts within `src_near_band` of D14's band (`D14_RED`) for a
   change to src/, before a landing that edits it is held. A file is costed as it stands (its recorded G scaled by its
   size now over its size where the score measured it), so a commit that splits or shrinks a file is never charged its
-  old weight. Before the check, a move whose own and unscored files alone predict past D14's band is HELD in its place,
+  old weight. Before the check, a move whose own and unscored files alone predict past D14's band (`D14_RED`: a change to the
+  harness's inputs lands no src/, so the lower line is never looser than its check) is HELD in its place,
   never dropped or charged, when one of its own files alone predicts past the band as it stands at origin (one note: split
   test/src/<file>), and tried again each round until a score of a head where that file is lighter or gone lets it fit;
-  only when every own file fits at origin is it refused as its own, located; a check past the band with
-  an own file no score has costed is the move's own red, never a D14 wait. A check red on its test files alone (its exit
+  only when every own file fits at origin is it refused as its own, located; and a refusal its check would read with no
+  test file at all (`base_over`: the load, its class's ratchet and the shards' starts alone past the line) is the
+  predictor's or the machine's, the item held in its place with one note (`land-held-predictor`), never dropped. Its
+  line is its class's: `D14_RED_HARNESS` for a change to the harness's inputs (which takes no share: its ratchet alone
+  passes the target, so the ring's turn waits), `D14_RED` else. A file no score has costed is estimated
+  by its size at the G per byte of the scored files its commit deletes (a split carries its file's weight), else at the
+  highest of its directory's, never the average; a refusal reads only costs a score or a check measured, never an
+  estimate; a set whose own files hold an estimate carries nothing from the ring (its turn waits), and a check of it
+  past the band records the files' costs from its own records and is held and tried again with them
+  (`held_measured`), never dropped on an estimate. A check red on its test files alone (its exit
   14) whose red files are all outside the move's own is run at origin's head in one process (`src_red_at`, R3, R10): red
   there, origin's: located at once (`src_locate`, the fix-first filed, the file into R) and the item checked again
   without it, uncharged; green there, the move's own red, as before, unless a file read so twice within
@@ -1369,10 +1384,11 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6,
 `base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
 `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0},
-`src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9, `src_margin_min_s` 10, `src_margin_checks` 10,
-`src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800, `admissible_wall_s` 600,
-`parse_wall_s` 300, `loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432, `proxy_request_s` 1200,
-`proxy_join_s` 30, `git_low_speed` [1000, 60], `loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
+`src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9, `src_prior_ratchet_harness_s` 252, `src_margin_min_s` 10,
+`src_margin_checks` 10, `src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800,
+`admissible_wall_s` 600, `parse_wall_s` 300, `loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432,
+`proxy_request_s` 1200, `proxy_join_s` 30, `git_low_speed` [1000, 60],
+`loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
 `role_wait_s` {"slot": 10800, "review": 10800, "measure": 49800, "score": 49800, "land": 5400, "deps": 3600},
 `state_lock_s` 600, `step_wall_s` 60, `tree_wall_s` 600, `kaimon_poll_s` 30, `kaimon_ping_s` 10,
 `poll_s` {"kaimon_up": 5, "scan": 10, "lock": 5, "landing_lock": 20, "yield": 2, "land_job": 5},

@@ -4,7 +4,8 @@
 # ported code the climb's lander hands it pass (test/src_tests.jl over WT_SRC_SET: the move's own, the
 # files the last score did not run green and its window of the rest, below); and TLC checks every model the change touches, each
 # Broken instance required to break its claim (dev/formal/run_tlc.sh). D14's band: a 60-s target,
-# red past 120 s (140 s until four shards, Dale 2026-11-01; D14_RED below). CHECK_BASE names the commit the change is measured from (default origin/wt2).
+# red past D14_RED (180 s), or past D14_RED_HARNESS (300 s) for a check whose ratchet ran the L228 behaviour harness
+# (Dale 2026-11-14, the lead's numbers; below). CHECK_BASE names the commit the change is measured from (default origin/wt2).
 # Its exit status is its verdict, the one channel dev/ship.sh reads (never a printed line: the tree's own tests print
 # into this script's output, and a test can print any line, round 6 R6-2, R6-7): 0 green, 1 a red of the tree's own,
 # 2 refused outside a landing, 10 red on D14's band, 11 past the hard limit, 12 the line stop, 13 a hold, 14 red on test
@@ -157,20 +158,25 @@ fi
 # five shards, not six (2026-11-10, timing-report E): a landing's check, fenced, on AC, twice at six and once at five on
 # each shape: a change outside src/ 119 and 120 s against 118; a change to src/ paying its image 136 and 136 against
 # 133; the wall 133-148 s against 125-142; the work 6,707-6,912 G against 5,981-6,171 (one first compile fewer); each
-# shard's efficiency-core seconds 43-45 against 25-30. Dale's schedule below gives 140 s to any count above four
+# shard's efficiency-core seconds 43-45 against 25-30
 SHARDS=5
-# D14's band is red past 120 s; Dale raised it to 140 s on 2026-11-01 ("Raise to 140 s until the cut") while every
-# change to src/ read 121-126 s on each shard's ~300 G first compile of WasmTarget, then to 160 s the same day ("Raise
-# to 160 until the cuts") once the load counted whole by instructions read ~33 s and a src path ~155 s (load 33 +
-# max(ratchet 112, shards 122)). It stepped to 140 s when cuts 1 and 2 of the shards' first compile landed (7a2f804e, d0444541: the
-# first compile 348 -> 263 G; d0444541's own src check read 131 s) with the ratchet's L210 cache (ad31d8f6), and steps
-# to 120 s with SHARDS back to four (wt3-latency, A67E1/A68E2); the 60-s target is unchanged
-D14_RED=140
-# the band and the shard count are one schedule, the option Dale chose: 140 s while SHARDS is above four, 120 s at four
-# or fewer. D14_RED stays a literal (dev/ship.sh's retry cap reads it from origin), so a mismatch is refused here, before
-# the plant, the load or the ratchet starts (A81S1, A82S6, A83S7). STOPGAP: two literals held together by a refusal; it ends when SHARDS is derived from
-# the band (or the band from SHARDS) in one definition that ship.sh can still read
-[ $(( SHARDS > 4 ? 140 : 120 )) -eq $D14_RED ] || { echo "check: RED — D14_RED=$D14_RED disagrees with SHARDS=$SHARDS (140 s while SHARDS > 4, then 120 s, the option Dale chose)"; exit 1; }
+# D14's band (dev/LEDGER.md D14): red past 120 s, raised by Dale's word on 2026-11-01 to 160 then 140 s with the shards'
+# count; on 2026-11-14 Dale gave the lead the band ("just widen the 140s benchmark as needed but be reasonable ... you make
+# the decsions now, not me"), and the lead set two red lines and kept the lander's packing where it was:
+#   D14_RED          a check whose ratchet runs no L228 behaviour harness is red past it;
+#   D14_RED_HARNESS  a check whose ratchet ran the harness (test/parity_ratchet.jl l228_scope: the change touches one
+#                    of its inputs, closes a clause, or WT_RATCHET_FULL) is red past it: the harness's CPU seconds are
+#                    in the ratchet stage's judged seconds (its budget, L228_CPU_BUDGET_S, is 400 CPU-s);
+#   D14_PACK         the ceiling a landing's test set is packed under, less the measured margin (dev/climb/measure.py
+#                    src_target: 115 s at the start margin), so a wider red line admits a slow check without packing
+#                    more tests into every one.
+# The 60-s target is unchanged. All three are literals read from origin by dev/ship.sh's retry cap (D14_RED) and the
+# climb's lander (dev/climb/lander.py d14_red, measure.src_set); the order below is refused before any stage starts
+D14_RED=180
+D14_RED_HARNESS=300
+D14_PACK=140
+[ "$D14_PACK" -lt "$D14_RED" ] && [ "$D14_RED" -lt "$D14_RED_HARNESS" ] ||
+  { echo "check: RED — D14's numbers out of order: D14_PACK=$D14_PACK < D14_RED=$D14_RED < D14_RED_HARNESS=$D14_RED_HARNESS is required"; exit 1; }
 # D14's band judges the check's own cost in seconds of a performance core (A53E1), read from each stage's whole process
 # tree at each process's exit (dev/tree_instructions.jl, rusage_info_v6): the instructions it retired on performance
 # cores at that stage's performance-core rate, plus the CPU seconds it spent on efficiency cores, one for one, plus the
@@ -242,7 +248,10 @@ julia --startup-file=no dev/tree_instructions.jl .wtd/load.gi julia --project=. 
 # test file and case it was running (WT_PROGRESS), never an hour of a pinned core (2026-10-28: a
 # shared-DAG constant hashed in 2^40 steps and held a landing for 50 minutes)
 WT_HARD_LIMIT=480   # a literal, never set from a lane's shell (A50E1); band: today's slowest loaded check is ~170 s
-julia --startup-file=no dev/tree_instructions.jl .wtd/ratchet.gi julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
+# the ratchet writes whether its L228 lock ran the behaviour harness to WT_L228_SCOPE (`harness` or `none`, its
+# l228_scope: the one place that decides it), which D14's band reads below; a file it did not write is no answer (D9)
+rm -f .wtd/l228-scope
+WT_L228_SCOPE="$PWD/.wtd/l228-scope" julia --startup-file=no dev/tree_instructions.jl .wtd/ratchet.gi julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
 # five shards beside the ratchet: each shard's instructions, which D14's band judges, are its own ~49 CPU-s first
 # compile of WasmTarget plus a fifth of the suite's tests, and the suite grows with every port (the judged path read
 # 105-113 s at three shards, 2026-10-29 09:09; at four, every change to src/ read 121 s, load 13 + a shard of 108,
@@ -297,6 +306,13 @@ if [ $rc -ne 0 ]; then
   exit 1
 fi
 echo "check: ratchet passes ($(( $(date +%s) - s0 ))s)"
+# D14's red line for this check, chosen by what its ratchet ran, read now and never again
+l228="$(head -1 .wtd/l228-scope 2>/dev/null)"
+case "$l228" in
+  harness) band=$D14_RED_HARNESS;;
+  none) band=$D14_RED;;
+  *) echo "check: the ratchet passed but wrote no L228 scope to .wtd/l228-scope (read: '${l228:0:40}'), so D14's red line cannot be chosen"; exit 1;;
+esac
 echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $SHARDS reported" 
 # each shard's records answer for themselves (the round-13 architect's A13-5: the judge's canary last in every shard, its
 # exit status agreeing with its rows) and a red row counts unless it is a known red's own first failing test (spec v17
@@ -358,12 +374,12 @@ split_line() { awk -v n="$1" -v r="$2" '{ printf "%s %d %.1f %.1f %.1f\n", n, $2
   for k in $(seq 1 $SHARDS); do split_line "shard.$k" $RATE_P_SRC "src_tests.$k"; done
   # each shard's start (its G until its first file, test/src_tests.jl's WT_SRC_START): c0, measured (A13-7)
   for k in $(seq 1 $SHARDS); do [ -s ".wtd/src_start.$k" ] && printf 'start.%s %.1f\n' "$k" "$(head -1 ".wtd/src_start.$k")"; done
-  echo "wall $wall"; } > .wtd/check-split.out
+  echo "wall $wall"; echo "band $band"; echo "l228 $l228"; } > .wtd/check-split.out
 echo "check: ${path} s on the critical path (load ${c_load}, ratchet ${p_ratchet}, src shards${shards}; performance-core G + efficiency-core seconds + unreported seconds: load $(split_of load); ratchet ${splits}); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
 [ -z "$slow" ] || echo "check: note, a stage's performance cores ran under its rate, so it reads low there:${slow}"
 [ -z "$fast" ] || echo "check: note, a stage's performance cores ran well over its rate, so it reads high there; its rate is re-measured from three fresh splits:${fast}"
 # today's judged path fell by measure alone, nothing the check runs changed: 156 (CPU-s) -> 131 (f8afd6e5) -> ~95
-# (89a5deb2), 2026-11-01/02; D14's intent is about a minute of wall, so a judged path under 120 is not D14 met
-[ $path -gt $D14_RED ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past ${D14_RED} s until four shards, then 120 s)"; exit 10; }
+# (89a5deb2), 2026-11-01/02; D14's intent is about a minute of wall, so a judged path under the red line is not D14 met
+[ $path -gt $band ] && { echo "check: RED — ${path} s, past D14's band (a 60-s target, red past ${band} s: ${D14_RED} s, ${D14_RED_HARNESS} s when the ratchet runs the L228 harness; this one's ran ${l228})"; exit 10; }
 line_stop
 echo "check: green (${wall}s)"

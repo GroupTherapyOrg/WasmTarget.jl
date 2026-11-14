@@ -1,8 +1,9 @@
 """dev/climb/measure.py — the driver's measurements: G5 read on a commit's diff, the environments and dependency
 images, the three-role smoke behind the door, and the judgement of a candidate against its base."""
 from core import *   # noqa: F403  the driver's shared state
-import functools, random, shlex, struct   # unit_log_argv is read once; the oracle report reads a stored float
+import functools, random, shlex, struct, subprocess   # unit_log_argv is read once; the oracle report reads a stored float
 # (_value_text); run_input draws from the system's random source; the test-file process is read from dev/check.sh (shlex)
+import l228scope   # the class of a landing's check: does it run the L228 harness (l228_harness)
 
 # ---------------------------------------------------------------- the gates
 def lines(text, sign):
@@ -3066,10 +3067,11 @@ def src_latest(at):
     rec = src_record(h)
     return None if rec is None else (h, rec[0], rec[1])
 
-def src_target(band, src_change):
+def src_target(pack, src_change):
     """THE target a landing's test set is cut to (round 13's ruling S3, D5: a number that moves with the model and the
-    machine is computed at its one source, never set by hand), for a landing of the shape `src_change`: D14's band
-    (`band`, origin's dev/check.sh D14_RED) less a margin, one-sided, robust, per shape and bounded (spec v17 Z5; the
+    machine is computed at its one source, never set by hand), for a landing of the shape `src_change`: D14's packing
+    ceiling (`pack`, origin's dev/check.sh D14_PACK, under both of its red lines: Dale 2026-11-14 widened the red lines
+    and the lead kept the packing where it stood) less a margin, one-sided, robust, per shape and bounded (spec v17 Z5; the
     round-14 architect's finding 4, red's 7):
       - its errors: judged less predicted, POSITIVE only (a check faster than predicted never threatens D14), of the last
         src_margin_checks checks of this shape whose prediction the lander recorded before they ran, not ended by the power rule, that
@@ -3104,7 +3106,7 @@ def src_target(band, src_change):
         info = {"margin": margin, "checks": len(pairs), "gmax": gmax, "second": second, "largest": pos[0] if pos else 0.0,
                 "why": f"3 x {second:+} s, the second-largest positive error of the last {n} checks of {shape} (landed, or red on D14 alone)"
                        + (f", capped at src_margin_max_s" if raw > margin else "")}
-    target = round(band - margin, 1)
+    target = round(pack - margin, 1)
     over = raw > c["src_margin_max_s"]
     st = state_json("src-margin.json", {})
     if st.get(shape) != over:   # once per crossing of the cap, either way
@@ -3112,7 +3114,7 @@ def src_target(band, src_change):
         if over:
             for_dale("a landing's test set holds little: its prediction errs widely",
                      f"For {shape} the margin would be {raw} s, past src_margin_max_s ({c['src_margin_max_s']} s): {info['why']}. "
-                     f"The target is held at {target} s under D14's {band}. Default taken: shares stay small until the "
+                     f"The target is held at {target} s under D14_PACK's {pack}. Default taken: shares stay small until the "
                      "errors fall back; the model is the lead's to look at.")
     return target, info
 
@@ -3126,26 +3128,50 @@ def checks_measured(n=5):
     es = [e for e in events() if e["kind"] == "ship" and e.get("check") in (0, 10) and e.get("split") and
           judged_check(e) and (e.get("src_set") or {}).get("src_change") in (True, False)]
     keep = {id(e) for shape in (True, False) for e in [x for x in es if x["src_set"]["src_change"] is shape][-n:]}
+    # and the last `n` of each shape and class (predict's ratchet term reads a class alone), so a run of checks of one
+    # class never pushes the other's out
+    keep |= {id(e) for shape in (True, False) for cls in ("harness", "none")
+             for e in [x for x in es if x["src_set"]["src_change"] is shape and x["split"].get("l228") == cls][-n:]}
     return [e for e in es if id(e) in keep]
 
-def src_costs(rows, files, at, scored_at=None):
+SRC_MEASURED = "src-measured.json"   # each file a landing's check measured that no score has costed: {file: {G, size, sha, t}}
+
+def src_sizes(at):
+    """{path under test/src: its size in bytes} of the test files at commit `at`."""
+    return {p[len(SRC_DIR):]: int(sz) for sz, p in (l.split()[3:5] for l in git("ls-tree", "-r", "-l", at, "--", SRC_DIR).splitlines())
+            if p.endswith(".jl")}
+
+def src_costs(rows, files, at, scored_at=None, deleted=(), measured=None):
     """Each of `files`' cost in G as it stands at `at`: its row of the score's record scaled by its size at `at` over its
     size where the score measured it (`scored_at`, the record's head), so a file a commit or a landing since has edited
     is charged as it now stands (recorded G x new size / old size: a file a commit splits or shrinks is never charged its
     old weight; 2026-11-14 21:53:09Z a fix that edited test/src/constants.jl was charged its whole recorded 746.9 G), or,
-    for a file the score did not run (unscored), its size at `at` at the scored files' G per byte as measured
-    (test/src_tests.jl's own rule for an unmeasured file), named."""
+    for a file the score did not run, its cost a landing's check measured (`measured`, SRC_MEASURED: {file: {G, size}},
+    scaled to its size alike), else an estimate by its size, named (`estimated`): at the G per byte of the scored test
+    files the commit DELETES when it deletes any (`deleted`: a split or a rename carries its file's own weight), else at
+    the HIGHEST G per byte among the scored files of its directory, never the average: on 2026-11-14 22:35:31Z the split
+    of test/src/constants.jl into two new files, estimated at the average, ran 402.7 G and 352.5 G, its check read
+    151 s and it was dropped for the estimate. An under-estimate drops approved work; an over-estimate carries less."""
     have = {f: r[1] for f, r in rows.items() if r[0] == "passed" and r[1] is not None}   # unmeasured: by size, named
-    def sizes_at(c):
-        return {p[len(SRC_DIR):]: int(sz) for sz, p in (l.split()[3:5] for l in git("ls-tree", "-r", "-l", c, "--", SRC_DIR).splitlines())
-                if p.endswith(".jl")}
-    sizes = sizes_at(at)
-    was = sizes_at(scored_at) if scored_at and scored_at != at else sizes
-    rate = sum(have.values()) / max(1, sum(was.get(f, 0) for f in have))
-    cost = lambda f: (have[f] * sizes.get(f, 0) / was[f] if was.get(f) else have[f]) if f in have else sizes.get(f, 0) * rate
-    return {f: cost(f) for f in files}, sorted(f for f in files if f not in have)
+    sizes = src_sizes(at)
+    was = src_sizes(scored_at) if scored_at and scored_at != at else sizes
+    measured = {f: m for f, m in (measured or {}).items() if f not in have and m.get("size") and m.get("G") is not None}
+    gone = [f for f in deleted if f in have and was.get(f)]
+    def rate_of(f):
+        if gone:
+            return sum(have[x] for x in gone) / sum(was[x] for x in gone)
+        d = os.path.dirname(f)
+        rs_ = [have[x] / was[x] for x in have if was.get(x) and os.path.dirname(x) == d]
+        return max(rs_) if rs_ else sum(have.values()) / max(1, sum(was.get(x, 0) for x in have))
+    def cost(f):
+        if f in have:
+            return have[f] * sizes.get(f, 0) / was[f] if was.get(f) else have[f]
+        if f in measured:
+            return measured[f]["G"] * sizes.get(f, 0) / measured[f]["size"]
+        return sizes.get(f, 0) * rate_of(f)
+    return {f: cost(f) for f in files}, sorted(f for f in files if f not in have and f not in measured)
 
-def predict(costs, warm, src_change, shards, checks):
+def predict(costs, warm, src_change, shards, checks, *, harness):
     """The critical path a check of the files `costs` ({file: G}) would read (the landing-check ruling's B.2): the files
     by longest processing time over `shards`, each shard read as c0 + its files' G / g judged seconds, c0 its measured
     start plus the warm-up its first file pays (the score's record's `warm`); the slowest shard at least the mean plus
@@ -3155,8 +3181,14 @@ def predict(costs, warm, src_change, shards, checks):
       - g and the start: the predicted shape's own checks with measured starts once src_shape_checks_min exist, else
         the other shape's once it has that many (S2), else the priors (`src_prior_g` of the shape, `src_prior_start_g`);
       - the load: the median of the shape's measured loads from its first measured check, else `src_prior_load_s`;
-      - the ratchet and the imbalance: the medians of the measured checks from the first, else `src_prior_ratchet_s`
-        and `src_prior_imbalance_s`.
+      - the ratchet: the median of the measured checks OF THE CHECK'S CLASS (`harness`: whether its ratchet runs the
+        L228 behaviour harness, l228_harness; a check's own is its split's `l228`, written by dev/check.sh from the
+        ratchet's l228_scope), from the first, else that class's prior (`src_prior_ratchet_s`, or
+        `src_prior_ratchet_harness_s`). Two populations, never mixed: on 2026-11-14 at 23:15:34Z the two judged checks
+        read a ratchet of 89 s and of 265 s (the second ran the harness), their median 265, and every item of either
+        shape predicted 265-282 s and was refused before its check. A check that recorded no `l228` (every check before
+        it was recorded) is left out of the ratchet term (D9: its class is not guessed), its other terms kept;
+      - the imbalance: the median of the measured checks from the first, else `src_prior_imbalance_s`.
     `model` names which. Returns ({path, shards, ratchet, load, g, c0, imbalance, model}, None), or (None, why) when the
     score's record holds no warm-up (no score: the set is then every file, src_handed)."""
     if warm is None:
@@ -3176,7 +3208,7 @@ def predict(costs, warm, src_change, shards, checks):
                 # keeps off every file's cost, its record's `warm`): the shards' own records read 230-375 G over the
                 # score's cost on each shard's first file (step 6's re-run, 2026-11-11), so it is a term of every shard
                 measured[shape].append((ran + sum(sp["starts"]) + len(js) * warm, sum(js), sorted(sp["starts"])[len(sp["starts"]) // 2]))
-        if sp.get("ratchet"):
+        if sp.get("ratchet") and sp.get("l228") == ("harness" if harness else "none"):   # its class's alone
             rat.append(sp["ratchet"][0])
         if sp.get("load") and shape in (True, False):
             load[shape].append(sp["load"][0])
@@ -3195,10 +3227,10 @@ def predict(costs, warm, src_change, shards, checks):
         c0 = (c["src_prior_start_g"] + warm) / g
         model = f"priors (g, start: {len(own)} of {shape_name}'s checks and {len(other)} of the other's measured, under {nmin})"
     ld = med(load[bool(src_change)]) if load[bool(src_change)] else c["src_prior_load_s"][key]
-    rt = med(rat) if rat else c["src_prior_ratchet_s"]
+    rt = med(rat) if rat else c["src_prior_ratchet_harness_s" if harness else "src_prior_ratchet_s"]
     imb = med(gap) if gap else c["src_prior_imbalance_s"]
     if not load[bool(src_change)] or not rat or not gap:
-        model += "; prior " + ", ".join(n for n, m in (("load", load[bool(src_change)]), ("ratchet", rat), ("imbalance", gap)) if not m)
+        model += "; prior " + ", ".join(n for n, m in (("load", load[bool(src_change)]), ("ratchet" + (" (harness)" if harness else ""), rat), ("imbalance", gap)) if not m)
     bins = [0.0] * shards
     for f in sorted(costs, key=lambda f: (-costs[f], f)):
         i = min(range(shards), key=lambda k_: bins[k_]); bins[i] += costs[f]
@@ -3261,6 +3293,14 @@ def src_index(h, hs):
     finding 8, spec v17 Z7)."""
     return landings_at(h) - landings_at(hs)
 
+def l228_harness(h, sha):
+    """Whether a check of `sha` (one commit onto origin's head `h`) runs the L228 behaviour harness: l228scope.harness,
+    the ratchet's rule in the standard library alone (L228's scope negative checks it against l228_scope)."""
+    try:
+        return l228scope.harness(ROOT, h, sha)
+    except (ValueError, subprocess.CalledProcessError) as e:
+        raise ClimbError(f"the class of {sha[:10]}'s check (does it run the L228 harness?) cannot be read: {str(e)[:200]}")
+
 def src_set(h, sha, hold_id):
     """The test files a landing of `sha` onto origin's head `h` would run (the landing-check ruling's R1, R2, R7; the files
     it hands the check, src_handed): `own`, the test files the diff h..sha adds or edits (git diff --raw --no-renames, A and M
@@ -3277,14 +3317,20 @@ def src_set(h, sha, hold_id):
     if rec is None:
         return {"why": f"no score's src record at {h[:10]} or before it"}
     hs, warm, rows = rec
-    m = re.search(r"^SHARDS=(\d+)", git("show", f"{h}:dev/check.sh"), re.M)
-    band = re.search(r"^D14_RED=(\d+)", git("show", f"{h}:dev/check.sh"), re.M)
-    if not m or not band:
-        return {"why": f"{h[:10]}:dev/check.sh names no SHARDS or D14_RED"}
+    # the check's class (l228_harness, computed once here) and the red line it will be judged on: D14_RED, or
+    # D14_RED_HARNESS when its ratchet runs the L228 harness; and the packing ceiling the target is cut from (D14_PACK)
+    checksh = git("show", f"{h}:dev/check.sh")
+    m, red, red_h, pack = (re.search(rf"^{k}=(\d+)", checksh, re.M) for k in ("SHARDS", "D14_RED", "D14_RED_HARNESS", "D14_PACK"))
+    if not m or not red or not red_h or not pack:
+        return {"why": f"{h[:10]}:dev/check.sh names no SHARDS, D14_RED, D14_RED_HARNESS or D14_PACK"}
+    harness = l228_harness(h, sha)
+    band = red_h if harness else red
     shards, checks = int(m.group(1)), checks_measured()
     t_sha, t_h = set(src_files(sha)), src_files(h)
     raw = git("diff", "--raw", "--no-renames", "-z", *DIFF, h, sha, "--", SRC_DIR).split("\0")
     own = {p[len(SRC_DIR):] for st, p in zip(raw[0::2], raw[1::2]) if st.split()[-1:] in (["A"], ["M"]) and p.endswith(".jl")}
+    deleted = {p[len(SRC_DIR):] for st, p in zip(raw[0::2], raw[1::2]) if st.split()[-1:] == ["D"] and p.endswith(".jl")}
+    measured = state_json(SRC_MEASURED, {})
     # a src-test red's file runs in every move of the hold whose landing it is located to (`hold`) and of the entry's own
     # hold (its fix): read from the standing entries alone, so it leaves the set when its entry is cleared
     own |= {f for es in src_reds().values() for e in es if hold_id and hold_id in (e.get("hold"), hashlib.sha1(e["key"].encode()).hexdigest()[:10])
@@ -3295,28 +3341,40 @@ def src_set(h, sha, hold_id):
     unscored = {f for f in set(t_h) & t_sha if rows.get(f, ("",))[0] != "passed"} - reds - own - flaky
     src_change = sh(["git", "diff", "--quiet", h, sha, "--", "src", "Project.toml"]).returncode != 0
     out = {"hs": hs[:10], "own": sorted(own), "unscored": sorted(unscored), "flaky": sorted(flaky), "src_change": src_change,
-           "reds": sorted(reds & t_sha)}
-    every, est = src_costs(rows, sorted(t_sha - reds), sha, hs)
-    pa, why = predict(every, warm, src_change, shards, checks)
+           "reds": sorted(reds & t_sha), "harness": harness}
+    every, est = src_costs(rows, sorted(t_sha - reds), sha, hs, deleted, measured)
+    out["deleted"], out["warm"] = sorted(deleted), warm
+    pa, why = predict(every, warm, src_change, shards, checks, harness=harness)
     out["all"], out["estimated"] = pa or {"why": why}, est
-    target, margin = src_target(int(band.group(1)), src_change)   # D14's band less this shape's measured margin (S3, Z5)
+    target, margin = src_target(int(pack.group(1)), src_change)   # D14_PACK less this shape's measured margin (S3, Z5)
+    out["band"] = int(band.group(1))
     out["target"], out["margin"] = target, margin
     plan = src_plan(hs, rows)
     names = [f for f, _ in plan["ring"]]
     rs = state_json(SRC_RING, {})
     pos = rs.get("pos", 0) % max(1, len(names)) if rs.get("hs") == hs[:10] else 0   # a new score's ring starts at 0
     base_set = sorted(own | unscored | flaky)   # a flaky known red runs in every landing until it resolves (red 7)
-    c_all, _ = src_costs(rows, sorted(set(base_set) | (set(names) & t_sha) | set(rs.get("carry", [])) & t_sha), sha, hs)
-    pb, why = predict({f: c_all[f] for f in base_set}, warm, src_change, shards, checks)
+    c_all, _ = src_costs(rows, sorted(set(base_set) | (set(names) & t_sha) | set(rs.get("carry", [])) & t_sha), sha, hs, deleted, measured)
+    pb, why = predict({f: c_all[f] for f in base_set}, warm, src_change, shards, checks, harness=harness)
     if pb is None:
         out["why"] = why; return out
-    out["refuse"] = pb["path"] > int(band.group(1))
+    # the refusal reads costs a score or a check measured, never an estimate: a file no score or check has costed is
+    # left out of it (an estimate is set high on purpose, src_costs, and a high one only carries less: the check runs
+    # its set with nothing packed around it, and held_measured records what it measures)
+    pk, _ = predict({f: c_all[f] for f in base_set if f not in set(est)}, warm, src_change, shards, checks, harness=harness)
+    out["refuse"] = pk["path"] > int(band.group(1))
+    # what the check costs with no test file at all (the load, the ratchet, each shard's start): past the line, no file of
+    # the commit's makes the refusal, so it is the predictor's or the machine's, never the commit's (lander.src_refused
+    # holds the item; 2026-11-14 23:15:34Z: an item with no own and no unscored file was dropped as its own at 265 s)
+    p0, _ = predict({}, warm, src_change, shards, checks, harness=harness)
+    out["base_over"] = p0["path"] > int(band.group(1))
+    out["base"] = p0
     # an own file that ALONE predicts past the band as it stands at origin (its recorded cost scaled to its size at h):
     # origin's state, never the commit's (lander.src_refused holds the item and names the file to split); only when
     # every own file fits at origin is a refusal the commit's own (its additions, or its edits, push the set past it)
     at_h, _ = src_costs(rows, sorted(own & set(t_h)), h, hs)
     out["origin_heavy"] = [[f, round(g_, 1), p_["path"]] for f, g_ in sorted(at_h.items())
-                           for p_ in [predict({f: g_}, warm, src_change, shards, checks)[0]]
+                           for p_ in [predict({f: g_}, warm, src_change, shards, checks, harness=harness)[0]]
                            if p_["path"] > int(band.group(1))] if out["refuse"] else []
     # the share (round 14's T2): the files the last landing could not take first (deficit round robin, A13-6), then the
     # ring from its position, each taken while the set predicts within THIS landing's target. A ring file that does not
@@ -3329,13 +3387,24 @@ def src_set(h, sha, hold_id):
     # never past `gmax`, the largest set this shape's margin was measured on; no range until a check of the shape exists
     gmax = margin.get("gmax")
     in_range = lambda fs: gmax is None or not fs or sum(c_all[x] for x in base_set + fs[:-1]) <= gmax
-    fits = lambda fs: in_range(fs) and predict({x: c_all[x] for x in base_set + fs}, warm, src_change, shards, checks)[0]["path"] <= target
+    fits = lambda fs: in_range(fs) and predict({x: c_all[x] for x in base_set + fs}, warm, src_change, shards, checks, harness=harness)[0]["path"] <= target
     kept, dropped = [], []
     carry = [f for f in rs.get("carry", []) if f in t_sha and f not in skip] if rs.get("hs") == hs[:10] else []
-    for f in carry:
+    # an estimate is not a measurement: a set whose own files hold an estimated one (a new file no score or check has
+    # costed) carries nothing from the ring, so nothing is packed against the estimate; the ring's turn waits for the
+    # next landing (its position and its carried files kept). 2026-11-14 22:35:31Z: two new files estimated at the
+    # average G per byte, the ring packed to the 115-s target around them, one shard ran 36 s over it, the move dropped
+    est_own = sorted(own & set(est))
+    out["est_own"] = est_own
+    # and a check that runs the L228 harness takes no share: its ratchet alone passes the target (the shards run beside
+    # it), so the ring's turn waits, as for an estimate
+    wait = bool(est_own) or harness
+    for f in ([] if wait else carry):
         (kept if fits(kept + [f]) else dropped).append(f)
+    if wait:
+        dropped = list(carry)
     passed, last = [], None
-    for k in range(len(names)):
+    for k in ([] if wait else range(len(names))):
         f = names[(pos + k) % len(names)]
         if f in skip or f not in t_sha or f in carry:
             continue
@@ -3346,23 +3415,26 @@ def src_set(h, sha, hold_id):
     if last is not None:
         dropped += [f for k, f in passed if k < last]   # passed over on the way to the last file taken: carried
         considered = last + 1
+    elif wait:   # nothing considered: the ring's turn waits
+        considered = 0
     else:
         dropped += [f for _, f in passed[:1]]   # nothing fits: the first file is carried and the ring moves one
         considered = passed[0][0] + 1 if passed else 0
     pos_next = (pos + considered) % max(1, len(names))
     share = kept
-    pr, _ = predict({f: c_all[f] for f in base_set + share}, warm, src_change, shards, checks)
-    lone = [[f, round(c_all[f], 1)] for f in dropped if predict({f: c_all[f]}, warm, src_change, shards, checks)[0]["path"] > target]
+    pr, _ = predict({f: c_all[f] for f in base_set + share}, warm, src_change, shards, checks, harness=harness)
+    # a file's own unfitness is the file's, read in the class without the harness (whose ratchet alone passes the target)
+    lone = [[f, round(c_all[f], 1)] for f in dropped if predict({f: c_all[f]}, warm, src_change, shards, checks, harness=False)[0]["path"] > target]
     # the warning before the wall: each scored file of h whose cost alone, as a change to src/ (the heavier shape) would
     # read it, predicts within src_near_band of D14's band, named before a landing that edits it is refused
-    near_s = cfg()["src_near_band"] * int(band.group(1))
+    near_s = cfg()["src_near_band"] * int(red.group(1))   # a change to src/ never runs the harness (bundled)
     rec_h, _ = src_costs(rows, sorted(f for f in t_h if rows.get(f, ("",))[0] == "passed"), h, hs)
     near = [[f, round(g_, 1), p_] for f, g_ in sorted(rec_h.items())
-            for p_ in [predict({f: g_}, warm, True, shards, checks)[0]["path"]] if p_ >= near_s]
-    src_unfit(hs, lone, src_change, target, near, int(band.group(1)))
+            for p_ in [predict({f: g_}, warm, True, shards, checks, harness=False)[0]["path"]] if p_ >= near_s]
+    src_unfit(hs, lone, src_change, target, near, int(red.group(1)))
     i, T = src_index(h, hs), plan["T"]
     out.update({"i": i, "T": T, "pos": pos, "pos_next": pos_next, "considered": considered, "carried": carry, "share": share,
-                "dropped": dropped, "unfit": [f for f, _ in lone], "predicted": pr, "own_unscored": pb})
+                "dropped": dropped, "unfit": [f for f, _ in lone], "predicted": pr, "own_unscored": pk, "own_estimated": pb})
     return out
 
 def src_handed(ss, h, sha):
@@ -3373,7 +3445,8 @@ def src_handed(ss, h, sha):
         raise ClimbError(f"src_handed with no set made: {ss.get('why', 'no set')}")
     files = sorted(set(ss["own"]) | set(ss["unscored"]) | set(ss.get("flaky", [])) | set(ss["share"]))
     rec = src_latest(h)
-    ss["ran"], ss["ran_cost"] = files, round(sum(src_costs(rec[2], files, sha, rec[0])[0].values()), 1) if rec else None
+    ss["ran"], ss["ran_cost"] = files, round(sum(src_costs(rec[2], files, sha, rec[0], ss.get("deleted", ()),
+                                                           state_json(SRC_MEASURED, {}))[0].values()), 1) if rec else None
     return files
 
 def src_unverified(h):

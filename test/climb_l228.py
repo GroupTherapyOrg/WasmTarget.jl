@@ -100,9 +100,17 @@ FILES = [f"t{i:02d}.jl" for i in range(12)]
 os.makedirs(f"{repo}/test/src"); os.makedirs(f"{repo}/dev"); os.makedirs(f"{repo}/src")
 for i, f in enumerate(FILES):
     open(f"{repo}/test/src/{f}", "w").write(f"# {f}\n" + "x" * (100 + 10 * i) + "\n")
-open(f"{repo}/dev/check.sh", "w").write("SHARDS=5\nD14_RED=140\n")
+open(f"{repo}/dev/check.sh", "w").write("SHARDS=5\nD14_RED=180\nD14_RED_HARNESS=300\nD14_PACK=140\n")
 open(f"{repo}/src/x.jl", "w").write("x = 1\n")
-g("init", "-q"); g("config", "user.email", "l228@scratch"); g("config", "user.name", "l228")
+# the ratchet's list of the harness's inputs, which the lander's class of a check reads (dev/climb/l228scope.py)
+os.makedirs(f"{repo}/test", exist_ok=True)
+open(f"{repo}/test/parity_ratchet.jl", "w").write('const L228_INPUTS = ("dev/climb/", "dev/src_verdict.sh", "dev/d14_judge.sh", '
+                                                  '"dev/formal/", "dev/check.sh", "dev/ship.sh", "dev/merge_packages.sh", "test/climb_l228.py")\n')
+g("init", "-q")
+# the driver is copied in untracked below: no section's commit carries it (a commit that did would touch the harness's
+# inputs, and its check's class would be the harness's)
+open(f"{repo}/.git/info/exclude", "a").write("dev/climb/\n")
+g("config", "user.email", "l228@scratch"); g("config", "user.name", "l228")
 g("add", "-A"); g("commit", "-q", "-m", "origin")
 h = g("rev-parse", "HEAD")
 open(f"{repo}/src/x.jl", "a").write("y = 2\n"); open(f"{repo}/test/src/t00.jl", "a").write("# the move's own\n")
@@ -167,7 +175,7 @@ with open(f"{state}/events.jsonl", "w") as ev:
         for i, er in enumerate(ERRS[shape]):
             ev.write(json.dumps({"t": f"2026-11-12T{i:02d}:00:0{int(shape)}", "kind": "ship", "result": "LANDED:x", "check": 0,
                                  "path": round(100 + er, 1), "src_set": {"src_change": shape, "ran_cost": 1000.0, "predicted": {"path": 100.0}},
-                                 "split": {"load": [17 if shape else 0, 200, 0, 0], "ratchet": [79, 400, 0, 0],
+                                 "split": {"load": [17 if shape else 0, 200, 0, 0], "ratchet": [79, 400, 0, 0], "l228": "none",
                                            "shards": [[80, 650, 0, 0]] * 5, "starts": [375.0] * 5},
                                  "probe": {"quiet": {"start": True, "end": True}}}) + "\n")
 c = core.cfg()
@@ -175,11 +183,11 @@ def expect_margin(shape):
     pos = sorted((e for e in ERRS[shape][-c["src_margin_checks"]:] if e > 0), reverse=True)
     return min(c["src_margin_max_s"], max(c["src_margin_min_s"], round(3 * (pos[1] if len(pos) > 1 else 0.0), 1)))
 
-# 1. src_target: D14's band less three times the second-largest positive error of the shape's last landed checks
+# 1. src_target: D14's packing ceiling (D14_PACK) less three times the second-largest positive error of the shape's last landed checks
 for shape in (True, False):
     t, info = M.src_target(140, shape)
     if abs(t - (140 - expect_margin(shape))) > 0.05:
-        fault(f"src_target(140, {shape}) returns {t}, where D14's band less the measured margin is {140 - expect_margin(shape)}")
+        fault(f"src_target(140, {shape}) returns {t}, where D14_PACK less the measured margin is {140 - expect_margin(shape)}")
 
 # 2. src_set: the move's own file, a share of the ring under src_target's target, its prediction within it
 ss = M.src_set(h, sha, None)
@@ -1729,16 +1737,18 @@ finally:
 # lander.src_refused), and a file is charged as it stands (measure.src_costs: recorded G x its size now / its size where
 # the score measured it). On an origin whose score's record holds t00.jl past the band alone and t01.jl near it: a
 # commit editing t00 is refused with t00 named origin's (the item held in its place, marked, never dropped); one
-# shrinking t00 to a fiftieth fits (charged as it stands, not its old weight); one adding a large new file is refused as
-# its own (dropped); one editing a light file is not refused; and the src-near note names t00 and t01, no other
+# shrinking t00 to a fiftieth fits (charged as it stands, not its old weight); one adding a large new file is not
+# refused on its estimate, and is refused as its own (dropped) once a check has measured it past the band; one editing
+# a light file is not refused; and the src-near note names t00 and t01, no other
 #: limit 60
 real32 = {"drop": L.drop}
 try:
     checks32 = M.checks_measured()
-    path32 = lambda G: M.predict({"f": G}, 350.0, True, 5, checks32)[0]["path"]
-    big32 = next(G for G in range(200, 200000, 50) if path32(G) > 140 + 5)
-    near32 = next(G for G in range(200, 200000, 10) if path32(G) >= 0.85 * 140 + 1)
-    if path32(big32 / 50) > 0.85 * 140:
+    path32 = lambda G: M.predict({"f": G}, 350.0, True, 5, checks32, harness=False)[0]["path"]
+    red32 = 180   # the fixture's D14_RED: a refusal and the src-near note read it, never D14_PACK
+    big32 = next(G for G in range(200, 200000, 50) if path32(G) > red32 + 5)
+    near32 = next(G for G in range(200, 200000, 10) if path32(G) >= 0.85 * red32 + 1)
+    if path32(big32 / 50) > 0.85 * red32:
         fault(f"section 32's fixture: t00 shrunk to a fiftieth ({big32 / 50} G) would not fit")
     g("checkout", "-q", "--detach", h)
     open(f"{repo}/test/src/t00.jl", "w").write("# t00\n" + "x" * 5000 + "\n")
@@ -1757,8 +1767,12 @@ try:
     e_new = commit32("new", {"test/src/t99.jl": "# t99\n" + "x" * 400000 + "\n", "src/x.jl": "z = 5\n"})
     e_light = commit32("light", {"test/src/t05.jl": "# t05 edited\n", "src/x.jl": "z = 6\n"})
     ss32 = {k: M.src_set(h32, c_, None) for k, c_ in (("edit", e_edit), ("shrink", e_shrink), ("new", e_new), ("light", e_light))}
+    # the new file measured by a check (held_measured's record): a refusal reads it; on its estimate alone none does
+    core.save_json(M.SRC_MEASURED, {"t99.jl": {"G": float(big32), "size": M.src_sizes(e_new)["t99.jl"]}})
+    ss32["new, measured"] = M.src_set(h32, e_new, None)
+    core.save_json(M.SRC_MEASURED, {})
     got32 = {k: (bool(v.get("refuse")), [f for f, _, _ in v.get("origin_heavy") or []]) for k, v in ss32.items()}
-    want32 = {"edit": (True, ["t00.jl"]), "shrink": (False, []), "new": (True, []), "light": (False, [])}
+    want32 = {"edit": (True, ["t00.jl"]), "shrink": (False, []), "new": (False, []), "new, measured": (True, []), "light": (False, [])}
     if got32 != want32:
         fault(f"src_set's refusals (refused?, origin's heavy files): {got32} (expected {want32})")
     near_seen32 = core.state_json("alarms.json", {}).get("src-near")
@@ -1769,7 +1783,7 @@ try:
     L.drop = lambda item, outcome, note, stop=True: dropped32.append((item["hold"], outcome))
     item32 = {"branch": "ready/l228-32", "hold": "l228-32", "hold_id": "l228-32", "sha": e_edit}
     core.update_json("ready.json", [], lambda q: q.append(dict(item32)))
-    r32 = (L.src_refused(item32, ss32["edit"]), L.src_refused(item32, ss32["light"]), L.src_refused(dict(item32, hold="l228-32n"), ss32["new"]))
+    r32 = (L.src_refused(item32, ss32["edit"]), L.src_refused(item32, ss32["light"]), L.src_refused(dict(item32, hold="l228-32n"), ss32["new, measured"]))
     q32 = [x for x in core.state_json("ready.json", []) if x["branch"] == "ready/l228-32"]
     if r32 != (True, False, True) or dropped32 != [("l228-32n", "landing-red")] or not q32 or q32[0].get("split_held") != ["t00.jl"]:
         fault(f"the lander on a refused set: {r32} (held, not refused, dropped expected), drops {dropped32} (the new file's "
@@ -1782,3 +1796,180 @@ finally:
         g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
     with contextlib.suppress(Exception):
         core.update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [x for x in q if x.get("branch") != "ready/l228-32"]))
+
+# 33. an estimate is never packed against nor dropped on (measure.src_costs, measure.src_set, lander.held_measured): a
+# new test file no score has costed is charged the G per byte of the scored files its commit deletes (a split), else the
+# highest G per byte of its directory's scored files, never the average, and a cost a check measured, scaled by size;
+# a set whose own files hold an estimated one carries nothing from the ring (its position and its carried files kept);
+# a check past D14's band with an estimated own file records the files' measured costs from its own records (a shard's
+# first file less the warm-up) and holds the item in its place, never dropped; a file its records leave unmeasured is
+# the driver's fault (item_error). 2026-11-14 22:35:31Z: the split of test/src/constants.jl was dropped for the
+# lander's own under-estimate
+#: limit 60
+real33 = {"drop": L.drop, "item_error": L.item_error}
+try:
+    g("checkout", "-q", "--detach", h)
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", h)
+    sz33 = M.src_sizes(h)
+    cost33 = {f: 100.0 for f in FILES}; cost33["t00.jl"] = 1000.0   # t00: the dense one, ten times the others' G a byte
+    open(f"{state}/src-{h[:8]}.tsv", "w").write(f"head\t{h}\twarm\t350\n" + "".join(f"{f}\tpassed\t{cost33[f]}\t0.0\t\n" for f in FILES))
+    open(f"{state}/src-latest.json", "w").write(json.dumps({"head": h}))
+    def commit33(name, writes, rm=()):
+        g("checkout", "-q", "--detach", h)
+        for rel, text in writes.items():
+            open(f"{repo}/{rel}", "w").write(text)
+        for rel in rm:
+            g("rm", "-q", rel)
+        g("add", "-A"); g("commit", "-q", "-m", name); return g("rev-parse", "HEAD")
+    s3 = sz33["t03.jl"]
+    c_split = commit33("split", {"test/src/n1.jl": "#" * (2 * s3 - 1) + "\n"}, rm=("test/src/t03.jl",))
+    c_new = commit33("new", {"test/src/n2.jl": "#" * 999 + "\n"})
+    rows33 = {f: ("passed", cost33[f], 0.0, "") for f in FILES}
+    got33 = {}
+    got33["split: the deleted file's G a byte"] = round(M.src_costs(rows33, ["n1.jl"], c_split, h, ["t03.jl"])[0]["n1.jl"], 1)
+    rate_max = max(cost33[f] / sz33[f] for f in FILES)
+    got33["new: the densest of its directory"] = round(M.src_costs(rows33, ["n2.jl"], c_new, h)[0]["n2.jl"], 1)
+    got33["measured, scaled"] = round(M.src_costs(rows33, ["n2.jl"], c_new, h, (), {"n2.jl": {"G": 50.0, "size": 500}})[0]["n2.jl"], 1)
+    want33 = {"split: the deleted file's G a byte": round(100.0 / s3 * 2 * s3, 1), "new: the densest of its directory": round(rate_max * 1000, 1),
+              "measured, scaled": 100.0}
+    if got33 != want33:
+        fault(f"an unscored file's cost: {got33} (expected {want33})")
+    # nothing packed against an estimate: the ring's position and its carried files kept
+    core.save_json(M.SRC_RING, {"hs": h[:10], "pos": 3, "carry": ["t05.jl", "t06.jl"]})
+    ss33 = M.src_set(h, c_new, None)
+    if ss33.get("est_own") != ["n2.jl"] or ss33.get("share") or ss33.get("pos_next") != 3 or ss33.get("dropped") != ["t05.jl", "t06.jl"]:
+        fault(f"a set with an estimated own file: est_own {ss33.get('est_own')}, share {ss33.get('share')}, the ring's next position "
+              f"{ss33.get('pos_next')} (3: its turn waits), carried {ss33.get('dropped')} (t05, t06 kept)")
+    # a check past the band with an estimated own file: measured, recorded, held
+    dropped33, errors33 = [], []
+    L.drop = lambda item, outcome, note, stop=True: dropped33.append(outcome)
+    L.item_error = lambda item, e: errors33.append(str(e)[:80])
+    item33 = {"branch": "ready/l228-33", "hold": "l228-33", "hold_id": "l228-33", "sha": c_new, "rebased": {"commit": c_new}}
+    core.update_json("ready.json", [], lambda q: q.append(dict(item33)))
+    recs33 = "shard 1\nstarted\tn2.jl\nrow\tn2.jl\tpassed\t750.0\tYQ==\tpassed\nstarted\tt01.jl\nrow\tt01.jl\tpassed\t100.0\tYQ==\tpassed\nshard 2\n"
+    L.held_measured(item33, dict(ss33, warm=350.0), recs33, "151")
+    m33 = core.state_json(M.SRC_MEASURED, {}).get("n2.jl", {})
+    q33 = [x for x in core.state_json("ready.json", []) if x["branch"] == "ready/l228-33"]
+    if dropped33 or errors33 or m33.get("G") != 400.0 or m33.get("size") != M.src_sizes(c_new)["n2.jl"] or not q33 or q33[0].get("measured") != {"n2.jl": 400.0}:
+        fault(f"a check past the band with an estimated own file: drops {dropped33}, errors {errors33}, recorded {m33} "
+              f"(400 G: its shard's first file, 750 less the warm-up 350), the item {q33[0].get('measured') if q33 else 'gone'} (held)")
+    L.held_measured(item33, dict(ss33, warm=350.0), "shard 1\n", "151")
+    if dropped33 or len(errors33) != 1:
+        fault(f"a check whose records measure no estimated own file: drops {dropped33}, driver faults {errors33} (one expected)")
+except Exception as e:
+    fault(f"an estimate's own section raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    L.drop, L.item_error = real33["drop"], real33["item_error"]
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+    with contextlib.suppress(Exception):
+        core.update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [x for x in q if x.get("branch") != "ready/l228-33"]))
+
+# 34. D14's red line is the one each check was judged on (dev/check.sh: D14_RED, or D14_RED_HARNESS when its ratchet ran
+# the L228 harness, its split's `band`): check_verdict reads the line, the ship event keeps it, and the near-band note
+# reads each check against its own line, so five harness checks at 250 s of 300 are no note and five at 160 s of 180 are
+#: limit 30
+try:
+    v34 = os.path.join(tmp, "check34")
+    open(v34, "w").write("0 250\nload 17 200.0 0.0 0.0\nwall 290\nband 300\nl228 harness\n")
+    rc34, p34, sp34 = L.check_verdict(v34)
+    if (rc34, p34, (sp34 or {}).get("band"), (sp34 or {}).get("l228")) != (0, 250, 300, "harness"):
+        fault(f"check_verdict read ({rc34}, {p34}, band {(sp34 or {}).get('band')}, l228 {(sp34 or {}).get('l228')}), "
+              "not (0, 250, band 300, l228 harness)")
+    q34 = {"quiet": {"start": True, "end": True}}
+    L.ship_event({"hold": "l228-34"}, dict(q34), "LANDED", "x", 0, 250, "", sp34, None)
+    e34 = [e for e in core.events() if e.get("hold") == "l228-34"][-1]
+    if (e34.get("d14") or {}).get("band") != 300:
+        fault(f"the ship event kept D14's band {(e34.get('d14') or {}).get('band')}, not the 300 its check was judged on")
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", h)   # d14_red reads origin's dev/check.sh (D14_RED=180)
+    def near34(path, band):
+        with open(f"{state}/events.jsonl", "w") as ev:
+            for i in range(5):
+                ev.write(json.dumps({"t": f"2026-11-14T{i:02d}:00:00", "kind": "ship", "result": "LANDED:x", "check": 0, "path": path,
+                                     "d14": {"verdict": "green", "band": band}, "probe": q34}) + "\n")
+        core.update_json("alarms.json", {}, lambda a: a.pop("near-band-state", None))
+        L.near_band()
+        return any(e.get("name") == "near-band" for e in core.events() if e["kind"] == "alarm")
+    got34 = (near34(250, 300), near34(160, 180))
+    if got34 != (False, True):
+        fault(f"the near-band note on five harness checks at 250 s of 300 and five at 160 s of 180: {got34} (no note, a note)")
+except Exception as e:
+    fault(f"D14's red line per check raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+
+# 35. a check's ratchet is predicted from its own class's checks (measure.predict: a check whose ratchet runs the L228
+# harness and one whose ratchet does not are two populations, a check that recorded no class left out), an item's class
+# is read from its diff (l228scope) and its refusal reads that class's red line, and a refusal no test file makes is held
+# as the predictor's, never dropped as the commit's. Today's history exactly: at 23:15:34Z the two judged checks read a
+# ratchet of 89 s (22:35:31Z, the split) and 265 s (23:02:50Z, its ratchet ran the harness), neither recording a class;
+# their median, 265, went into every prediction, and an item with no own and no unscored test file was dropped
+#: limit 60
+real35 = {"drop": L.drop}
+try:
+    c35 = core.cfg()
+    def check35(t, path, rat, cls):
+        sp = {"load": [0, 0, 0, 0], "ratchet": [rat, 600.0, 22.0, 170.0], "shards": [[80, 650, 0, 0]] * 5, "starts": [375.0] * 5}
+        if cls:
+            sp["l228"] = cls
+        return {"t": t, "kind": "ship", "result": f"D14:{path}", "check": 10, "path": path, "split": sp,
+                "src_set": {"src_change": False, "ran_cost": 1000.0, "predicted": {"path": 115.0}},
+                "probe": {"quiet": {"start": True, "end": True}}}
+    def history35(cls_a, cls_b):
+        with open(f"{state}/events.jsonl", "w") as ev:
+            ev.write(json.dumps(check35("2026-11-14T22:35:31", 151, 89, cls_a)) + "\n")
+            ev.write(json.dumps(check35("2026-11-14T23:02:50", 265, 265, cls_b)) + "\n")
+    def rts35():
+        ch = M.checks_measured()
+        return tuple(M.predict({}, 350.0, False, 5, ch, harness=k)[0]["ratchet"] for k in (False, True))
+    history35(None, None)
+    got35 = rts35()
+    if got35 != (c35["src_prior_ratchet_s"], c35["src_prior_ratchet_harness_s"]):
+        fault(f"on today's two judged checks with no class recorded the ratchet term reads {got35} (without, with the "
+              f"harness), not the priors ({c35['src_prior_ratchet_s']}, {c35['src_prior_ratchet_harness_s']}): a check of "
+              "unknown class is left out, never mixed")
+    history35("none", "harness")
+    if rts35() != (89, 265):
+        fault(f"with their classes recorded the ratchet term reads {rts35()}, not (89, 265): each class its own checks")
+    # an item of each class on today's history: a src move with no test file, a change to the harness's inputs
+    history35(None, None)
+    def commit35(at, name, writes):
+        g("checkout", "-q", "--detach", at)
+        for rel, text in writes.items():
+            open(f"{repo}/{rel}", "w").write(text)
+        g("add", "-A"); g("commit", "-q", "-m", name); return g("rev-parse", "HEAD")
+    c_src = commit35(h, "src35", {"src/x.jl": "z = 35\n"})
+    c_drv = commit35(h, "drv35", {"dev/check.sh": open(f"{repo}/dev/check.sh").read() + "# 35\n"})
+    ss_src, ss_drv = M.src_set(h, c_src, None), M.src_set(h, c_drv, None)
+    got = {"a src move": (ss_src.get("harness"), ss_src.get("band"), bool(ss_src.get("refuse")), (ss_src.get("own_unscored") or {}).get("ratchet")),
+           "a harness change": (ss_drv.get("harness"), ss_drv.get("band"), bool(ss_drv.get("refuse")), (ss_drv.get("own_unscored") or {}).get("ratchet"), ss_drv.get("share"))}
+    want = {"a src move": (False, 180, False, c35["src_prior_ratchet_s"]),
+            "a harness change": (True, 300, False, c35["src_prior_ratchet_harness_s"], [])}
+    if got != want:
+        fault(f"the sets of today's items (class, red line, refused?, ratchet[, share]): {got} (expected {want})")
+    # a refusal no test file makes (the line under the load and the ratchet alone): held as the predictor's, never dropped
+    g("checkout", "-q", "--detach", h)
+    open(f"{repo}/dev/check.sh", "w").write("SHARDS=5\nD14_RED=60\nD14_RED_HARNESS=300\nD14_PACK=50\n")
+    g("add", "-A"); g("commit", "-q", "-m", "origin35"); h35 = g("rev-parse", "HEAD")
+    open(f"{state}/src-{h35[:8]}.tsv", "w").write(f"head\t{h35}\twarm\t350\n" + "".join(f"{f}\tpassed\t100.0\t0.0\t\n" for f in FILES))
+    open(f"{state}/src-latest.json", "w").write(json.dumps({"head": h35}))
+    c_e = commit35(h35, "empty35", {"src/x.jl": "z = 36\n"})
+    ss_e = M.src_set(h35, c_e, None)
+    dropped35 = []
+    L.drop = lambda item, outcome, note, stop=True: dropped35.append(outcome)
+    item35 = {"branch": "ready/l228-35", "hold": "l228-35", "hold_id": "l228-35", "sha": c_e}
+    core.update_json("ready.json", [], lambda q: q.append(dict(item35)))
+    r35 = L.src_refused(item35, ss_e)
+    q35 = [x for x in core.state_json("ready.json", []) if x["branch"] == "ready/l228-35"]
+    held35 = [e for e in core.events() if e["kind"] == "land-held-predictor" and e.get("hold") == "l228-35"]
+    if not (ss_e.get("refuse") and ss_e.get("base_over")) or r35 is not True or dropped35 or not q35 or not q35[0].get("predictor_held") or len(held35) != 1:
+        fault(f"a refusal with no own or unscored file (refuse {ss_e.get('refuse')}, base_over {ss_e.get('base_over')}): "
+              f"src_refused {r35}, drops {dropped35}, the item {'kept' if q35 else 'gone'} "
+              f"{q35[0].get('predictor_held') if q35 else ''}, {len(held35)} land-held-predictor event(s) (held, one)")
+except Exception as e:
+    fault(f"a check's class raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    L.drop = real35["drop"]
+    with contextlib.suppress(Exception):
+        core.update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [x for x in q if x.get("branch") != "ready/l228-35"]))

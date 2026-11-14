@@ -23,7 +23,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D11** Model an algorithm in dev/formal/ first, with a Broken variant; never weaken an invariant.
 - **D12** Fix a bug at its source with a case that reaches it; never route around it.
 - **D13** Land one small commit with bash dev/ship.sh; a landing takes minutes.
-- **D14** bash dev/check.sh is a landing's evidence; it takes about a minute; never edit a budget.
+- **D14** dev/check.sh is a landing's evidence; never edit a budget; only the lead sets its band.
 - **D15** A speedup in src is a real fix to WT's algorithm, never a dev flag or test-only path.
 - **D16** A landing runs bash dev/check.sh only; the full matrix runs at Closes: C<n>.
 - **D17** A number in a check is a target with a band; a check firing inside its band is a bug.

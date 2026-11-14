@@ -137,8 +137,8 @@ DEFAULTS = {
     # compile pauses in place), beside at most one measurement (the verify lock's one) and the lander's layer or
     # replay (background QoS). Band: False while the probes read the performance cores idle; True restores background
     "score_background": False,
-    # a test file's own cost predicting this share of D14's band (for a change to src/, the heavier shape) is named in the
-    # src-unfit note before it reaches the band, where a landing that edits it is held for a split (measure.src_set).
+    # a test file's own cost predicting this share of D14's band (D14_RED, the red line of a check with no L228 harness; for
+    # a change to src/, the heavier shape) is named in the src-unfit note before it reaches the band, where a landing that edits it is held for a split (measure.src_set).
     # 2026-11-14: test/src/constants.jl reached 152.3 s of 140 and a fix that edited it was dropped; five more files stood
     # at 121-128 s. Intent: a split is asked of the lead while every landing still fits; band 0.80-0.90
     "src_near_band": 0.85,
@@ -200,7 +200,8 @@ DEFAULTS = {
     # bands are re-derived after the first night
     "p_idle": 85, "e_idle": 60, "probe_s": 15, "swapins_max": 2000, "decompressions_max": 400000,
     # a green check whose median of the last five critical paths passes this share of D14's red is a note (D17: a
-    # check firing inside its band is a bug, so the note reads the median, not one check; O12)
+    # check firing inside its band is a bug, so the note reads the median, not one check; O12), each check read against
+    # the red line it was judged on (D14_RED, or D14_RED_HARNESS for a check that ran the L228 harness)
     "near_band": 0.85, "near_band_step": 5,       # ... noted again only when the median rises this many seconds (O5-11)
     # the lander waits d14_backoff_s after a check red on D14's time alone, the item kept in its place (A7-2: approved
     # work is never sent back for time); OTHER is retried other_tries times. d14_share [N, share]: one note for Dale
@@ -278,17 +279,26 @@ DEFAULTS = {
     # start 340-420 G, the load 10-30 s for a change to src/ and 0-20 outside it, the ratchet 60-100 s, the imbalance
     # 5-15 s
     "src_prior_g": {"src": 11.0, "outside": 10.7}, "src_prior_start_g": 375, "src_prior_load_s": {"src": 17, "outside": 0},
-    # the ratchet re-derived (spec v18 Q5): 85-90 s in the eight checks of lc's v17 re-run on a found layer (scratch lander
-    # L10, 2026-11-12, every lock run in every landing, L228's behaviour harness among them), 89 at the median, its band
-    # 60-100 as above; a prior over the measured ratchet is safe (a smaller share), and the checks replace it at once
+    # the ratchet of a check whose ratchet runs no L228 behaviour harness (measure.predict reads each class alone)
+    # re-derived (spec v18 Q5): 85-90 s in the eight checks of lc's v17 re-run on a found layer (scratch lander L10,
+    # 2026-11-12), 89 at the median, and 84-96 s in every landing of 2026-11-14 whose ratchet ran no harness (the ship
+    # events from 20:23:38Z to 22:54:26Z); its band 60-100 as above; a prior over the measured ratchet is safe (a smaller
+    # share), and the checks of the class replace it at once
     "src_prior_ratchet_s": 89, "src_prior_imbalance_s": 9,
+    # the ratchet of a check whose ratchet runs the L228 behaviour harness (a change to its inputs: measure.l228_harness),
+    # its own population: the ship events' ratchet stage of the nine landings of 2026-11-14 that ran the harness as it
+    # stands (from 2c4c28c3 at 17:10:44Z to the 23:02:50Z check of 5cfc1d01: 231, 236, 240, 250, 252, 254, 255, 263,
+    # 265 s, each a driver commit, none recording its class), 252 at the median. Band 220-290 s: the harness's CPU
+    # budget is 400 CPU-s (L228_CPU_BUDGET_S) and the ratchet's other locks ~85 s; such a check is red past
+    # D14_RED_HARNESS (300), and its checks of the class replace the prior at once
+    "src_prior_ratchet_harness_s": 252,
     # a landing's test set is cut to a target computed live (measure.src_target, round 13's ruling S3, which deleted the
-    # hand-set target constant and its band: three hand derivations in one day read 125, 115 and 86-112): D14's band
-    # (dev/check.sh D14_RED) less a margin per shape (spec v17 Z5, v18 Q5): three times the SECOND-largest POSITIVE
+    # hand-set target constant and its band: three hand derivations in one day read 125, 115 and 86-112): D14's packing
+    # ceiling (dev/check.sh D14_PACK, 140, under its red lines of 180 and 300 s: Dale 2026-11-14) less a margin per shape (spec v17 Z5, v18 Q5): three times the SECOND-largest POSITIVE
     # judged - predicted of the last src_margin_checks checks of the landing's shape whose prediction was recorded
     # before they ran, on AC, that landed or read red on D14's band alone, between src_margin_min_s and
     # src_margin_max_s, src_margin_start_s until that many exist. src_margin_min_s: intent, the target never sits on
-    # the band whatever the model reads; derivation, the busy machine's six fenced checks of 2026-11-11 morning erred
+    # the packing ceiling whatever the model reads; derivation, the busy machine's six fenced checks of 2026-11-11 morning erred
     # 4.8 s at most, so 3 x that rounded to the next ten; band 10-20
     "src_margin_min_s": 10,
     # the checks of ONE shape the margin reads (src_target, per shape): intent, enough that its second-largest error is
@@ -300,7 +310,7 @@ DEFAULTS = {
     "src_margin_start_s": 25,
     # the margin's cap (spec v17 Z5): src_target's margin never passes it, and a margin that would is one note to Dale
     # per crossing. Intent: the target stays where a change to src/ can still take files, whatever one bad window of
-    # errors reads. Derivation: D14's 140 less the measured smallest path of a change to src/ (its load 17 s and the
+    # errors reads. Derivation: D14_PACK's 140 less the measured smallest path of a change to src/ (its load 17 s and the
     # ratchet 79 s, lc's re-run 2026-11-12) leaves 44 s; 40 keeps a few files of share at the widest margin. Band 30-44
     "src_margin_max_s": 40,
     # the driver's own subprocess walls: a Pkg resolve or the kinds (each loads every package), ship.sh's cheap
