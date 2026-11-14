@@ -43,6 +43,11 @@ rng(n::Int64) = (s = n > 3 ? "héllo" : "abc"; a = first(s, n); b = last(s, n); 
 # (src/patch/io.jl), the write's count and the buffer's position
 symn(n::Int64) = (s = String(n > 0 ? :héllo : :de); io = IOBuffer(); w = write(io, n > 0 ? :ab : :xyz);
     Int64(ncodeunits(s)) * 10^5 + Int64(codeunit(s, ncodeunits(s))) * 100 + Int64(s == "de") * 10 + Int64(w) + Int64(position(io)) * 10^7)
+# a Symbol's byte count, Core.sizeof (jl_f_sizeof's Symbol arm, strlen of its name), alone and in string of
+# a String, a Symbol, a Char and a SubString (Base._string, its Symbol's and SubString's bytes copied by src/patch/substring.jl): the
+# concatenation's length and a byte of the Symbol's part
+syms(n::Int64) = (y = n > 0 ? :héllo : :de; s = string("x", y, 'é', SubString("wab", 2)); Int64(sizeof(n > 1 ? :ab : :xyz)) * 10^6 +
+    Int64(ncodeunits(s)) * 10^4 + Int64(codeunit(s, 3)) * 10 + Int64(s == "xdeéab"))
 end
 
 const STRING_OP_CASES = (
@@ -58,7 +63,8 @@ const STRING_OP_CASES = (
     ("ioa", StringOpCases.ioa, (Int64(1),)), ("ioa", StringOpCases.ioa, (Int64(0),)),
     ("vstr", StringOpCases.vstr, (Int64(1),)), ("vstr", StringOpCases.vstr, (Int64(2),)),
     ("rng", StringOpCases.rng, (Int64(2),)), ("rng", StringOpCases.rng, (Int64(4),)), ("rng", StringOpCases.rng, (Int64(10),)),
-    ("symn", StringOpCases.symn, (Int64(1),)), ("symn", StringOpCases.symn, (Int64(0),)))
+    ("symn", StringOpCases.symn, (Int64(1),)), ("symn", StringOpCases.symn, (Int64(0),)),
+    ("syms", StringOpCases.syms, (Int64(2),)), ("syms", StringOpCases.syms, (Int64(0),)))
 
 @testset "String's operations against native Julia" begin
     local runs = Main.WTChild.RunCase[]
@@ -89,6 +95,7 @@ end
     @test [:wasm_memory_string, :wasm_string_alloc, :wasm_string_memory, :wasm_memory_copy!] ⊆ reached(StringOpCases.vstr, (Int64,))
     @test [:wasm_string_alloc, :wasm_string_copy!] ⊆ reached(StringOpCases.rng, (Int64,))
     @test [:wasm_symbol_name, :wasm_string_memory] ⊆ reached(StringOpCases.symn, (Int64,))
+    @test [:wasm_symbol_name, :wasm_string_copy!] ⊆ reached(StringOpCases.syms, (Int64,))
 end
 
 # under minify a symbol constant's name is its ordinal (src/symbols.jl get_mangled_symbol_name), so a read

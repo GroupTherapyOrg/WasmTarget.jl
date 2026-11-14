@@ -40,3 +40,28 @@ end
     _char_byte_store!(out, o + 3, x % UInt8)
     return n
 end
+
+# A SubString's bytes written into a String, Base's own body (julia/base/strings/substring.jl:223): its
+# byte count is its sizeof, its ncodeunits, and its bytes, which Base copies by unsafe_copyto! from
+# pointer(s), its String's pointer past its offset (julia/base/strings/substring.jl:135 pointer), are its
+# String's data array's from that offset, copied as a String's are (array.copy); any other `out` stays
+# Base's, a located rejection where it is reached
+@quarantine "julia/base/strings/substring.jl:223 __unsafe_string! of a SubString{String} copies its bytes from pointer(s), its String's address past its offset; WasmGC copies its String's data array from that offset (array.copy)" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::String, s::SubString{String}, offs::Integer)
+    local n = sizeof(s)
+    wasm_string_copy!(out, Int(offs) - 1, s.string, s.offset, n)
+    return n
+end
+
+# A Symbol's bytes written into a String, Base's own body (julia/base/strings/substring.jl:229): its byte
+# count is Core.sizeof of the Symbol (src/intrinsics.jl's sizeof arm, jl_f_sizeof's), and its bytes,
+# which Base copies by unsafe_copyto! from jl_symbol_name's pointer, are its name's, dart's
+# Symbol.getName (src/julia/wasm_array.jl wasm_symbol_name), copied as a String's are (array.copy);
+# any other `out` stays Base's, a located rejection where it is reached. Base's @assume_effects :nothrow
+# is not carried over, as String(::Symbol)'s :total is not (src/patch/string.jl): Base promises it of an
+# unchecked pointer copy, and the overlay's array.copy is checked, trapping past the String's end, so no
+# call of it is removed or folded on a promise the overlay does not keep
+@quarantine "julia/base/strings/substring.jl:229 __unsafe_string! of a Symbol copies the bytes at its jl_symbol_name pointer; WasmGC copies its name's data array (array.copy), the name dart's Symbol.getName reads; Base's @assume_effects :nothrow is not carried over, the checked array.copy trapping where Base's unchecked copy promises no throw" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::String, s::Symbol, offs::Integer)
+    local n = sizeof(s)
+    wasm_string_copy!(out, Int(offs) - 1, wasm_symbol_name(s), 0, n)
+    return n
+end

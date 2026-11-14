@@ -2308,9 +2308,12 @@ end
 # times emit_genericmemoryelsize with add_isunion, a constant where the memory's type is concrete,
 # generic_memory_elsize). A memory whose element size only its run-time type knows
 # (emit_genericmemoryelsize's emit_datatype_size of the value's typeof) or an atomic memory rejects,
-# located. A String's arm is not taken here: Base's sizeof and ncodeunits of a String reach its data's
-# length through src/patch/string.jl's overlays, its one path; a String and any other value return
-# null, rejected at the call, as dart's
+# located. A Symbol's has no codegen arm: Julia calls the runtime's jl_f_sizeof (builtins.c:559), whose
+# Symbol arm is strlen of jl_symbol_name, the name's byte count (a Symbol's name holds no NUL,
+# jl_symbol_n); WasmTarget's Symbol holds its name as dart's does (Symbol.getName, the string-data
+# arm's symbol_name), so the count is that String's data array's length. A String's arm is not taken
+# here: Base's sizeof and ncodeunits of a String reach its data's length through src/patch/string.jl's
+# overlays, its one path; a String and any other value return null, rejected at the call, as dart's
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:sizeof}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local t = translator(self)
@@ -2318,6 +2321,16 @@ end
     local i64 = WasmBuilder.IR.NumType_i64
     local T = dart_type_of(self, args[1])
     local sty = Base.unwrap_unionall(T)
+    if sty === Symbol
+        local sat = "$(julia_text(code_gen.enclosing_member)): Julia's sizeof of a Symbol"
+        local sinfo = get(t.class_info, String, nothing)
+        sinfo === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a Symbol's sizeof where String has no class info"), sat)
+        generate_static_intrinsic(self, Val(:string_data), :symbol_name, args)
+        WasmBuilder.struct_get(b, sinfo.struct_, t.field_index[only(class_instance_fields(String, sat))])
+        WasmBuilder.array_len(b)
+        WasmBuilder.i64_extend_i32_u(b)
+        return i64
+    end
     if sty === Core.SimpleVector
         generate_static_intrinsic(self, Val(:svec_len), Core._svec_len, args)
         WasmBuilder.i64_const(b, 1)
