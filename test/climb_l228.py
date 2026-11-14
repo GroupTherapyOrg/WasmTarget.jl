@@ -207,5 +207,108 @@ finally:
     with _cl.suppress(Exception):
         g("update-ref", "-d", "refs/remotes/origin/wt2")
 
+# 7. the lander's rebased check (the judge5 re-check's S1, the judge6a re-check's F1, F2): every label the rebased
+# candidate changes, and every case of origin's the table lacks, is judged against origin's own row of the round, so a
+# pass the move loses is G2 whatever judge the table's row carries; a table label origin's corpus no longer registers is
+# the move's own; and a fault of the driver's judging an item is bounded, the round going on to the next item.
+# lander.rebased_check(item) is CALLED for a move whose base origin moved past: measure_candidate, confirmed,
+# regressions and judge_move real; what measures (rebased, smoke, measure_base) or reaches the door stubbed
+open(f"{repo}/src/z.jl", "w").write("z = 3\n")
+g("checkout", "-q", "-b", "origin6", h); g("add", "src/z.jl"); g("commit", "-q", "-m", "origin moved"); h6 = g("rev-parse", "HEAD")
+g("checkout", "-q", "-")
+L.git = lambda *a, **k: h6 if a[:2] == ("rev-parse", f"origin/{core.MARCH}") else core.git(*a, **k)
+os.makedirs(f"{state}/deltas", exist_ok=True)
+J0, J1, A6 = "1" * 40, "2" * 40, "a" * 40
+rec6 = {}
+M.julia_slot = no_slot
+M.rebased = lambda b, s, onto: ("c" * 40, None)
+M.advance = lambda rows, at, why: rec6.setdefault("advanced", []).extend(r[0] for r in rows)
+M.file_g2 = lambda lost, at: None
+L.stratified = lambda: set()
+L.unqueue = lambda it, **kw: rec6.setdefault("unqueued", []).append(kw)
+L.drop = lambda it, outcome, note, stop=True: rec6.setdefault("dropped", []).append((outcome, stop))
+def rebased6(table_rows, origin_rows, cand_rows, corpus):
+    rec6.clear()
+    L.table = lambda: {l: (M.Row(r, (A6, j)), 1) for l, (r, j) in table_rows.items()}
+    M.labels_at = lambda at, overlay=None: set(corpus)
+    M.measure_base = lambda at, diff, locked_=False: {l: M.Row(origin_rows[l], (A6, J1)) for l in diff if l in origin_rows}
+    M.smoke = lambda role, labels, task, at, known=None, keep=None, **k: ({l: M.Row(r, (A6, J1)) for l, r in cand_rows.items()}, None)
+    item6 = {"kind": "move", "base": h, "sha": sha, "hold": "l228-6", "hold_id": "l2286", "labels": sorted(cand_rows)}
+    return L.rebased_check(item6)
+P, U = lambda l: (l, "passed", 1.0, ""), lambda l: (l, "unported", 1.0, "unported: the dart definition x")
+bad6, _ = rebased6({"g/a": (P("g/a"), J0)}, {"g/a": P("g/a")}, {"g/a": U("g/a")}, {"g/a"})
+if not any(p.startswith("G2 lost g/a") for p in bad6):
+    fault("a rebased move's loss of a pass to unported lands when the table's row is of another judge (judge5 S1)")
+bad6, _ = rebased6({}, {"g/b": P("g/b")}, {"g/b": U("g/b")}, {"g/b"})
+if not any(p.startswith("G2 lost g/b") for p in bad6):
+    fault("a rebased move's loss of origin's pass the table lacks (a hand landing's case) lands (judge6a F2)")
+try:
+    bad6, _ = rebased6({"g/c": (P("g/c"), J1)}, {}, {"g/c": U("g/c")}, set())
+    if bad6 or not any("rebased" in kw for kw in rec6.get("unqueued", [])):
+        fault(f"a table label origin's corpus dropped, which the move adds back, is not judged as the move's new case: {bad6}")
+except Exception as e:
+    fault(f"a table label origin's corpus dropped, which the move adds back, raises out of the rebased check (judge6a F1): {e!r}")
+# the bounded item rule: the driver's fault judging an item, other_tries times, is a drop uncharged, never a raise
+rec6.clear()
+itm = {"hold": "l228-6", "hold_id": "l2286", "sha": sha, "branch": "ready/l2286"}
+for n in range(core.cfg()["other_tries"]):
+    L.item_error(dict(itm, errors=n), core.ClimbError("planted: a re-measure wrote no row"))
+if rec6.get("dropped") != [("landing-failed", False)] or len(rec6.get("unqueued", [])) != core.cfg()["other_tries"] - 1:
+    fault(f"the lander's bound on a driver fault judging an item is not other_tries faults then a drop uncharged: {rec6}")
+landsrc = open(f"{repo}/dev/climb/lander.py").read()
+if len(__import__("re").findall(r"(?<!def )item_error\(item, e\)", landsrc)) < 4:   # its four call sites, not its def
+    fault("the lander's round leaves a step before its landing (item_problems, admissible, rebased_check, landing_set) "
+          "whose fault aborts every round with the items behind it waiting")
+
+# 8. the shapes' charge (the judge5 re-check's S2; the judge6a re-check's F3, F4): a record the shapes' program refuses
+# is the move's only when the refusal names one of the measured corpus's added labels and the stored answers read alone;
+# a stored record refused, or a run ended without a refusal (a kill), is OracleGap, never charged; a git failure choosing
+# the program is OracleGap, and a judge without test/oracle_read.jl gets the first program on origin's history.
+# measure.shapes_of and shapes_judge CALLED; the program's run (shapes_run, the door's) stubbed by a stand-in that
+# refuses a block holding `zz` with the program's own words, or is killed on demand
+def blk(l, v="1"):
+    return (f"answer\t{l}\tx\t-\t-\t-\tbits,x,{v}\tk\tk\t-\n").encode()
+runs7, judge7 = [], M.shapes_judge   # the real one, kept for its own checks below
+def stand_in(role, task, js_at, answers, kill=False):
+    runs7.append(answers.count(b"answer\t"))
+    if kill and len(runs7) == 1:
+        return None, "signal (9): Killed: 9"
+    bad = [l for l, b in M.unit_blocks(answers).items() if b"zz" in b]
+    return (None, f"ERROR: LoadError: test/oracle_read.jl: {len(bad)} answer(s) this judge does not read, e.g. {sorted(bad)[0]}: "
+                  "its answer record does not read") if bad else (b"shape\n", "")
+def charge7(stored, added, kill=False):
+    runs7.clear()
+    M.shapes_run = lambda role, task, js_at, answers: stand_in(role, task, js_at, answers, kill)
+    M.shapes_judge = lambda s_: "f" * 40
+    try:
+        shapes, why = M.shapes_of("measure", "t", "e" * 40, stored, added)
+        return "charged" if shapes is None else "shapes", why or ""
+    except M.OracleGap as e:
+        return "gap", str(e)
+good7 = blk("g/s1") + blk("g/s2")
+if charge7(good7, blk("g/m1") + blk("g/m2", "zz"))[:1] != ("charged",) or "g/m2" not in charge7(good7, blk("g/m1") + blk("g/m2", "zz"))[1]:
+    fault("a move's own added answer the shapes' program refuses is not charged to the move, naming it (judge5 S2)")
+if charge7(blk("g/s1") + blk("g/s2", "zz"), blk("g/m1"))[0] != "gap":
+    fault("a stored answer the shapes' program refuses is charged to the move (judge5 S2)")
+if charge7(good7, blk("g/m1"), kill=True)[0] != "gap":
+    fault("a healthy move is charged when the shapes' program's first run is killed without a refusal (judge6a F4)")
+if charge7(good7, blk("g/m1"))[0] != "shapes" or runs7 != [3]:
+    fault("an answer set the program reads costs more than one run, or reads as no shapes")
+try:
+    judge7("0" * 40)
+    fault("shapes_judge of a sha that is no commit answers, where git failed (judge6a F3)")
+except M.OracleGap:
+    pass
+except Exception as e:
+    fault(f"shapes_judge of a sha that is no commit raises {type(e).__name__}, not OracleGap (judge6a F3)")
+open(f"{repo}/test/oracle_read.jl", "w").write("# the first shapes' program\n" + M.SHAPES_PROGRAM + "\n")
+g("checkout", "-q", "-b", "origin7", h); g("add", "test/oracle_read.jl"); g("commit", "-q", "-m", "the program"); h7 = g("rev-parse", "HEAD")
+g("update-ref", f"refs/remotes/origin/{core.MARCH}", h7); g("checkout", "-q", "-")
+try:
+    if judge7(h) != h7:
+        fault("a judge without test/oracle_read.jl does not get the first shapes' program on origin's history (judge6a F3)")
+except Exception as e:
+    fault(f"a judge without test/oracle_read.jl raises {type(e).__name__} instead of getting the first program (judge6a F3)")
+
 for f in faults:
     print(f)

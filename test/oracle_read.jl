@@ -13,7 +13,14 @@
 #
 #   read_answers(lines; digests) -> Dict{String,Union{Answer,String}}
 #   read_shapes(lines; digests) -> Dict{String,Union{Shape,String}}   what the compiling process is handed (spec v16 X1)
+#   shape_lines(case, s; digest) -> Vector{String}                     its records, which read_shapes reads back
 #   resolve_type_path(s; world) -> Type
+#
+# Run:   WT_SHAPES_ANSWERS=<answers> WT_SHAPES_OUT=<out> julia test/oracle_read.jl        (JULIA_LOAD_PATH=@stdlib)
+#        the shapes' process (dev/climb/measure.py shapes_of): each stored answer's shape, Shape(a), as records, the
+#        one projection of an answer onto what the compiling process is handed (S1 of the judge3 review: the measured
+#        commit's own, never a copy of it in the driver)
+isdefined(Main, :WTOracle) || Base.include(Main, joinpath(@__DIR__, "oracle.jl"))
 module WTOracleRead
 
 import Base64
@@ -95,11 +102,15 @@ function resolve_type_path(s::AbstractString; world::UInt = Base.get_world_count
     return T
 end
 
-struct Named{S} end
-mutable struct Opaque{S} end
-Base.show(io::IO, ::Type{Named{S}}) where {S} = print(io, S)
-Base.show(io::IO, ::Named{S}) where {S} = print(io, S)
-Base.show(io::IO, ::Type{Opaque{S}}) where {S} = print(io, S)
+# the stand-ins of a type this process does not hold: S its own name (what they print), P the type path the store wrote
+# (a Symbol) and, for Opaque, K the kind the store wrote (bits or opaque), which Shape(a) projects as the store holds
+# them, so a shape names a corpus type the shapes' process cannot resolve and the compiling process, which loads the
+# corpus, can
+struct Named{S,P} end
+mutable struct Opaque{S,P,K} end
+Base.show(io::IO, ::Type{Named{S,P}}) where {S,P} = print(io, S)
+Base.show(io::IO, ::Named{S,P}) where {S,P} = print(io, S)
+Base.show(io::IO, ::Type{Opaque{S,P,K}}) where {S,P,K} = print(io, S)
 
 # the name a type path's head names (its type's own name, for a stand-in), read from the tokens alone
 _path_name(tp::AbstractString) = (t = split(tp, ' '); length(t) >= 3 && t[1] == "T" ? Symbol(_unb64(t[3])) : Symbol("?"))
@@ -113,11 +124,11 @@ function _restore(s::AbstractString)
         e isa TypePathError || rethrow()
         nothing   # a type this process does not hold (the corpus's, where no corpus is loaded): a stand-in
     end
-    local name = _path_name(tp)
-    k == "throws" && return Throws(T === nothing ? Named{name} : T)
-    k == "void" && return T isa DataType && Base.issingletontype(T) ? T.instance : Named{name}()
-    k == "bits" && return T === nothing ? Opaque{name}() : _unhex(T, hx)
-    k == "opaque" && return Opaque{name}()
+    local name, tps = _path_name(tp), Symbol(tp)
+    k == "throws" && return Throws(T === nothing ? Named{name,tps} : T)
+    k == "void" && return T isa DataType && Base.issingletontype(T) ? T.instance : Named{name,tps}()
+    k == "bits" && return T === nothing ? Opaque{name,tps,:bits}() : _unhex(T, hx)
+    k == "opaque" && return Opaque{name,tps,:opaque}()
     error("a stored value names no value kind $k")
 end
 
@@ -221,8 +232,8 @@ end
 # count of wire arguments, the argument types' paths (`key`, `rkey`), whether the answer is read by readers, and each
 # leaf group's type path, whether it reads a String and its leaves' paths. Never a native value, a leaf's value or an
 # argument's value: those stay in the store, which the verdict alone reads (test/verdict.jl). The driver writes it from
-# the store (dev/climb/measure.py shape_records, a projection of whole blocks); an answer read here projects to the same
-# (Shape(a)). Records, tab-separated, texts in base64:
+# the store by the shapes' process (this file run as a program: Shape(a) of each stored answer, written by shape_lines),
+# the one projection. Records, tab-separated, texts in base64:
 #   shape <case> <label> <P> <S> <nargs> <key> <rkey> <ngroups or -> <native: throws,<type path> | void,<type path> | ->
 #                                    (spec v17 Y2: a scalar answer that is a type, a thrown exception's or a singleton's,
 #                                    names that type, which its judge-built reader reads; any other answer `-`)
@@ -252,15 +263,17 @@ struct Shape
 end
 Shape(label, P, S, nargs, key, rkey, aggregate, groups) = Shape(label, P, S, nargs, key, rkey, aggregate, groups, :none, "")
 # a read answer's shape: each group's kind is its first leaf's as the capture names it (test/oracle.jl's _capture, the one
-# rule), read off the value as stored (a stand-in's: a corpus singleton's Named is void, a value of a type this process
-# does not hold is opaque, where the store wrote bits: neither has a leaf kind, test/verdict.jl's leaf_kind)
+# rule), read off the value as stored (a stand-in's own: a corpus singleton's Named is void, a value of a type this
+# process does not hold the kind the store wrote, bits or opaque; neither has a leaf kind, test/verdict.jl's leaf_kind)
 _capture_kind(x) = Symbol(first(split(_capture(x), ',')))
+# a leaf's kind as the store wrote it: the capture's, or a stand-in's own (a value of a type this process does not hold)
+_stored_kind(x) = x isa Opaque ? typeof(x).parameters[3] : _capture_kind(x)
 Shape(a::Answer) = Shape(a.label, a.P, a.S, length(a.args), a.key, a.rkey, a.aggregate,
-                         ShapeGroup[ShapeGroup(g.tpath, _capture_kind(first(g.leaves)), g.on_string, g.paths) for g in a.groups],
+                         ShapeGroup[ShapeGroup(g.tpath, _stored_kind(first(g.leaves)), g.on_string, g.paths) for g in a.groups],
                          _native_shape(a)...)
 # a scalar answer's type where the answer is a type (spec v17 Y2): a thrown exception's, or a singleton's (its kind as
-# the capture names it, test/oracle.jl's _capture: the one rule); a stand-in's type has no path this process can give
-_tpath_of(T) = T isa Type && !(T <: Named) && !(T <: Opaque) ? type_path(T) : ""
+# the capture names it, test/oracle.jl's _capture: the one rule); a stand-in's, the path the store wrote
+_tpath_of(T) = T isa DataType && (T <: Named || T <: Opaque) ? String(T.parameters[2]) : T isa Type ? type_path(T) : ""
 function _native_shape(a::Answer)
     a.aggregate && return (:none, "")
     local x = a.native
@@ -342,4 +355,45 @@ function read_shapes(lines; digests = nothing)
     return out
 end
 
+"""
+    shape_lines(case, s; digest) -> Vector{String}
+
+The records of `case`'s shape `s` (the format above), which read_shapes reads back as `s`: its `shape` record, each
+group's `sgroup` record, and its `digest` record when `digest` (its fields) is given."""
+function shape_lines(case::String, s::Shape; digest = nothing)::Vector{String}
+    local nk = s.native_kind === :none ? "-" : "$(s.native_kind),$(WTOracle._b64(s.native_tpath))"
+    local out = [join(["shape", case, WTOracle._b64(s.label), WTOracle._opt(string.(s.P)), WTOracle._opt(WTOracle._b64.(String.(s.S))),
+                       string(s.nargs), WTOracle._b64(s.key), WTOracle._b64(s.rkey), s.aggregate ? string(length(s.groups)) : "-", nk], '\t')]
+    for g in s.groups
+        push!(out, join(["sgroup", case, WTOracle._b64(g.tpath), String(g.kind), g.on_string ? "1" : "0", string(length(g.paths)),
+                         join(map(WTOracle._path_code, g.paths), ';')], '\t'))
+    end
+    digest === nothing || push!(out, join(["digest", case, digest...], '\t'))
+    return out
+end
+
+# the shapes' process: each answer's shape, by label; a stored noanswer a bare `noanswer` record, its why the driver's to
+# book. A block it does not read (a record of a format this judge does not hold: the judge4 re-check's F3) is no shape:
+# the process fails, naming it, and writes none (D9), so the driver books no measurement rather than a case errored per
+# label. The file is written whole or not at all (written aside, then renamed)
+function shapes_main()
+    local env(k) = (v = get(ENV, k, ""); isempty(v) ? error("test/oracle_read.jl: $k names no file (dev/climb/measure.py shapes_of)") : v)
+    local digests = Dict{String,Any}()
+    local got = read_answers(eachline(env("WT_SHAPES_ANSWERS")); digests)
+    local unread = sort!([c for (c, a) in got if a isa String && !startswith(a, "no native answer")])
+    isempty(unread) || error("test/oracle_read.jl: $(length(unread)) answer(s) this judge does not read, e.g. $(unread[1]): " *
+                             "$(got[unread[1]]); no shapes are written")
+    local out = env("WT_SHAPES_OUT")
+    open(out * ".part", "w") do io
+        for case in sort!(collect(keys(got)))
+            local a = got[case]
+            a isa Answer ? foreach(l -> println(io, l), shape_lines(case, Shape(a); digest = get(digests, case, nothing))) :
+                println(io, "noanswer\t", case)
+        end
+    end
+    mv(out * ".part", out; force = true)
+end
+
 end # module WTOracleRead
+
+abspath(PROGRAM_FILE) == (@__FILE__) && WTOracleRead.shapes_main()

@@ -807,6 +807,20 @@ def land_tree():
         safe_write(os.path.join(path, n), text)
     return path
 
+def item_error(item, e):
+    """A fault of the driver's while an item is judged before its landing (its rebased check: a re-measure that wrote
+    no row, a base that failed, a door or git failure; the judge6a re-check's F1): never left to abort every round with
+    the items behind it waiting, and never the item's own. The round goes on to the next item; the item keeps its place
+    for at most `other_tries` such faults in a row, each an event naming it, and is then dropped with the faults named,
+    uncharged (stop=False: its hold back to the climb, its commit on a salvage branch), as ship.sh's OTHER faults are."""
+    n = item.get("errors", 0) + 1
+    why = f"{type(e).__name__}: {str(e)[:300]}"
+    event("land-item-error", hold=item["hold"], sha=item["sha"][:10], n=n, why=why)
+    if n >= cfg()["other_tries"]:
+        drop(item, "landing-failed", f"the driver failed {n} times judging it before its landing; the last: {why}", stop=False)
+    else:
+        unqueue(item, errors=n, error=why)
+
 def land_round():
     """One round: what a killed lander left, then the queue in order; each item through its pinned sha, its gates read
     again, ship.sh's admission, a re-measure when origin moved past its base, the quiet probe and the check. The
@@ -840,7 +854,12 @@ def land_round():
             for_dale("a ready branch moved", f"{item['branch']} moved off the approved {item['sha']}: something wrote "
                      "the git refs between approval and landing. Default taken: the item is dropped and its hold re-climbed.")
             continue
-        bad = item_problems(item)   # before the commit is checked out anywhere (red 1)
+        try:
+            bad = item_problems(item)   # before the commit is checked out anywhere (red 1)
+        except (PowerCut, door.Tick):
+            raise
+        except Exception as e:   # a fault of the driver's judging this item: bounded, the round goes on (item_error)
+            item_error(item, e); continue
         if bad:
             drop(item, "landing-red", "the pinned commit fails its gates at landing:\n" + "\n".join(bad[:20])); continue
         git("checkout", "-q", "-f", "--detach", item["sha"], cwd=slot)
@@ -850,11 +869,18 @@ def land_round():
         # prepared from land_tree's environment: 16-17 s of WasmTarget's image in the judged load of every landing
         git("clean", "-q", "-fd", *[a for n in ENV_FILES for a in ("-e", f"/{n}")], cwd=slot, check=False)
         # the cheap refusals first, ship.sh's and the memory's, before a re-measure or a stop (operator 2, red 7)
-        (kind, arg), out = admissible(slot)
+        try:
+            (kind, arg), out = admissible(slot)
+        except (PowerCut, door.Tick):
+            raise
+        except Exception as e:
+            item_error(item, e); continue
         pr = None
         if kind == "ADMISSIBLE":   # a busy machine, memory's critical pressure included, holds nothing (throughput P0):
             try:                   # the check it runs on such a machine is unjudged (quiet, the probe at its ends)
                 bad, stop = rebased_check(item)
+            except (PowerCut, door.Tick):
+                raise
             except OracleGap as e:   # the store does not answer origin's labels, so a moved item cannot be re-measured (S5):
                 # refused here, located, for this item alone; it keeps its place, one event while the gap reads the same,
                 # and the gap's own note (the score's: one gap rule, spec v14 V5); the round goes on to the next item
@@ -866,11 +892,21 @@ def land_round():
                       f"{str(e)[:1500]}\nDefault taken: every measurement fails, located, and nothing is recorded or landed "
                       "that needs one until the store answers them.")
                 continue
+            except Exception as e:   # any other fault of the driver's before a landing: bounded, never a blocked queue
+                item_error(item, e)
+                continue
+            if item.get("errors"):   # a judged item: its run of the driver's faults ends here
+                unqueue(item, errors=0)
             if bad:
                 drop(item, "landing-red" if stop else "done-elsewhere", "rebased onto origin:\n" + "\n".join(bad[:20]), stop=stop); continue
             item = next(x for x in state_json("ready.json", []) if x["branch"] == item["branch"])   # its rebased rows
             git("checkout", "-q", "-f", "--detach", item["rebased"]["commit"], cwd=slot)   # the commit it measured (A7-5)
-            ss, files = landing_set(item)   # the set the check runs, chosen before it from origin's code and state (R1, R6)
+            try:
+                ss, files = landing_set(item)   # the set the check runs, chosen before it from origin's code and state (R1, R6)
+            except (PowerCut, door.Tick):
+                raise
+            except Exception as e:
+                item_error(item, e); continue
             if files is None:   # no set can be made: the item keeps its place, one note a why (spec v18 Q2)
                 event("land-no-set", hold=item["hold"], why=ss.get("why", "")[:300])
                 alarm(f"land-no-set-{hashlib.sha1(ss.get('why', '').encode()).hexdigest()[:8]}", "a landing's test set cannot be made",

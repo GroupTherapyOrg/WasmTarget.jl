@@ -526,6 +526,8 @@ def write_corpus(d, files, log):
 # verdict's (no runner, no node: spec v16 X1)
 RUN_FILES = ("test/runner.jl", "test/verdict.jl", "test/oracle.jl", "test/oracle_read.jl", ".github/workflows/ci.yml")
 VERDICT_FILES = ("test/verdict.jl", "test/oracle.jl", "test/oracle_read.jl", "test/fixtures/runner_raw.tsv")
+# the shapes' process's (SHAPES_PROCESS): the capture's types and the store's decoder, which projects an answer
+SHAPES_FILES = ("test/oracle.jl", "test/oracle_read.jl")
 # the runner's fixtures as the driver interleaves them (run_input), read by the driver alone: no process that runs a
 # move's code is handed a file that tells a fixture from a case
 FIXTURE_FILES = ("test/fixtures/runner_calls.tsv", "test/fixtures/runner_patch.tsv")
@@ -679,34 +681,6 @@ def run_part_failed(sha, why, candidate=False):
           "is cut as the infrastructure's (no move charged, no stop); the node the run executes (TOP/tools/bin/node, "
           "door.pin_node: `door.py tools --fetch-node`) or the host is the suspect.")
     raise RunFailed(f"the run part failed on origin's run files: {why[:600]}")
-
-def shape_records(blocks):
-    """THE projection of stored answers onto what the compiling process is handed (spec v16 X1, test/oracle_read.jl's
-    Shape and read_shapes): for each label's whole block (unit_blocks'), its `shape` record (the answer record without
-    its arguments' and native's values: their count alone), each group's `sgroup` record (its type path, its leaves'
-    capture kind, never a value, and their paths), its `digest`, or a bare `noanswer` (its why is the driver's to book).
-    A scalar answer that is a type (a thrown exception's, a singleton's: spec v17 Y2) names that type, which its
-    judge-built reader reads; any other answer `-`. Bytes, in label order."""
-    out = []
-    for label in sorted(blocks):
-        ls = blocks[label].decode().split("\n")[:-1]
-        f = ls[0].split("\t")
-        if f[0] == "noanswer":
-            out.append(f"noanswer\t{label}\n"); continue
-        nk = f[6].split(",")[:2] if f[9] == "-" and f[6].split(",")[0] in ("throws", "void") else None
-        out.append("\t".join(["shape", f[1], f[2], f[3], f[4], str(0 if f[5] == "-" else len(f[5].split(";"))), f[7], f[8], f[9],
-                              ",".join(nk) if nk else "-"]) + "\n")
-        i = 1
-        while i < len(ls):
-            g = ls[i].split("\t")
-            if g[0] == "group":
-                leaves = [x.split("\t") for x in ls[i + 1:i + 1 + int(g[4])]]
-                kind = leaves[0][3].split(",")[0] if leaves else "opaque"
-                out.append("\t".join(["sgroup", g[1], g[2], kind, g[3], g[4], ";".join(x[2] for x in leaves)]) + "\n")
-                i += 1 + int(g[4])
-            else:   # its digest, as stored
-                out.append(ls[i] + "\n"); i += 1
-    return "".join(out).encode()
 
 class MeasureCut(ClimbError):
     """A measurement cut where no case of its own is in flight to book (its wall, or a process stalled between cases or
@@ -1099,6 +1073,12 @@ VERDICT_PROCESS = {"argv": ("julia", "--startup-file=no", "test/verdict.jl"),
                            "TMPDIR": "{scratch}/tmp", "WT_VERDICT_ANSWERS": "{judge}/answers.tsv",
                            "WT_VERDICT_MODULES": "{judge}/modules.tsv", "WT_VERDICT_RAW": "{judge}/raw.tsv",
                            "WT_VERDICT_PLAN": "{judge}/plan.tsv", "WT_VERDICT_CASES": "{scratch}/cases.tsv"}}
+# the shapes' process (the judge3 review's S1): the measured commit's own projection of each stored answer onto its shape
+# (test/oracle_read.jl run as a program: Shape(a), written by shape_lines), the one projection, so a driver and a measured
+# tree at different commits cannot disagree on it; no corpus, no src, no runner, in the `native` profile
+SHAPES_PROCESS = {"argv": ("julia", "--startup-file=no", "test/oracle_read.jl"),
+                  "env": {"JULIA_NUM_THREADS": "1", "JULIA_LOAD_PATH": "@stdlib", "JULIA_DEPOT_PATH": "{scratch}/depot:{bundled}",
+                          "TMPDIR": "{scratch}/tmp", "WT_SHAPES_ANSWERS": "{judge}/answers.tsv", "WT_SHAPES_OUT": "{scratch}/shapes.tsv"}}
 
 def julia_adds(role):
     """What a julia process the door starts adds to its own environment before any code of ours runs: Julia's loader sets
@@ -1853,8 +1833,9 @@ def smoke(role, only, task, sha, known=None, overlay=None, learn_=False, keep=No
     # allowlist, its judging directory, its labels and Julia's install, R8-1), and each case's records are kept only
     # in its own block (watched's plan). They stay in the driver's memory until the compile and the run are reaped:
     # no process that runs a move's code (the measured src) is handed an answer, or can read one
-    # (spec v16 X1); the compile is handed each answer's shape alone (shape_records)
-    answers = b"".join(stored[l] for l in sorted(stored)) + b"".join(added_blocks[l] for l in added)
+    # (spec v16 X1); the compile is handed each answer's shape alone (shapes_of: the measured commit's own projection)
+    landed_answers = b"".join(stored[l] for l in sorted(stored))   # the store's; then the measured corpus's own
+    answers = landed_answers + b"".join(added_blocks[l] for l in added)
     unanswered = {l: base64.b64decode(b.split(b"\t")[2]).decode(errors="replace")
                   for l, b in stored.items() if b.startswith(b"noanswer\t")}
     blocks = unit_blocks(answers)
@@ -1866,7 +1847,11 @@ def smoke(role, only, task, sha, known=None, overlay=None, learn_=False, keep=No
             return None, f"the added labels were answered under the key {added_key}, the measurement reads {key}"
         write_atomic(keep, key_line(key, corpus_id(files)) + b"".join(added_blocks[l] for l in added
                                                                        if l in added_blocks and not isinstance(added_blocks[l], Booked)).decode())
-    shapes = shape_records(blocks)
+    # the shapes, charged by whose record a program refuses: an added answer's the measured code's, any other the judge's
+    shapes, swhy = shapes_of(role, task, sha, landed_answers, answers[len(landed_answers):])
+    if shapes is None:
+        return None, swhy
+    part("shapes")
     # each part (compile, run, verdict) takes its own use of the role and leaves it before the next (spec v17 Y3: no
     # yield while a measuring role is held, LOCK_ORDER); what a part hands the next is kept in `w`, the driver's own
     # directory, never in a run directory, which the role's next use removes
@@ -1881,6 +1866,92 @@ def smoke(role, only, task, sha, known=None, overlay=None, learn_=False, keep=No
     # each row names the stored answer it was judged against and the judge (spec v17 Y4: G2 compares like with like)
     jid = judge_id(sha)
     return {l: Row(r, (answer_hash(blocks[l]), jid) if l in blocks else None) for l, r in rows.items()}, why
+
+# the line that makes test/oracle_read.jl the shapes' program (SHAPES_PROCESS): a judge whose file holds it projects its
+# own answers; one before it is projected by the first program origin's history holds (shapes_judge)
+SHAPES_PROGRAM = "abspath(PROGRAM_FILE) == (@__FILE__) && WTOracleRead.shapes_main()"
+
+def shapes_judge(sha):
+    """The commit whose shapes' program projects `sha`'s answers: `sha` itself when its test/oracle_read.jl is the program
+    (SHAPES_PROGRAM); a judge from before the program (a move in flight on a base older than the commit that added it,
+    the judge4 re-check's F1) gets the FIRST commit of origin's history whose test/oracle_read.jl is the program. That is
+    exact, not a fallback: before the program the driver projected the answers itself (shape_records, deleted with it),
+    and the first program's projection is that one byte for byte: each field of a shape record is the stored record's own
+    field re-encoded (its label, P, S, key, rkey and group count as written; its argument count the arguments'; each
+    group's type path and paths as written, its kind its first leaf's as stored, a stand-in carrying the kind the store
+    wrote; a scalar type answer's kind and path as stored), its values resolved against Core and Base alone, so it is a
+    function of the record's text (probed: the live store's 1,949 labels and a store of every kind, corpus types among
+    them, byte-identical to shape_records; council/judge4-report.md). A sha whose program the history does not hold is the
+    store's gap, OracleGap: never the measured code's."""
+    # a git failure is no answer to "is it the program" (D9: the judge5 re-check's N1), never read as "no": core.git
+    # raises ClimbError (the judge6a re-check's F3); a tree without test/oracle_read.jl is a judge from before the
+    # program, read by its presence (ls-tree, which fails only on a sha that is no commit), never by a failed show
+    try:
+        held = bool(git("ls-tree", "--name-only", sha, "--", "test/oracle_read.jl"))
+        text = git("show", f"{sha}:test/oracle_read.jl") if held else ""
+        first = [] if SHAPES_PROGRAM in text else \
+            git("log", "--reverse", "--format=%H", "-S", SHAPES_PROGRAM, f"origin/{MARCH}", "--", "test/oracle_read.jl").split()
+    except ClimbError as e:
+        raise OracleGap(f"which shapes' program projects {sha[:10]}'s answers: git failed: {str(e)[-300:]}") from e
+    if SHAPES_PROGRAM in text:
+        return sha
+    if not first:
+        raise OracleGap(f"no shapes' program projects {sha[:10]}'s answers: its test/oracle_read.jl is none, and origin's history "
+                        "holds none (the judge's, never the measured code's)")
+    return first[0]
+
+def shapes_run(role, task, js_at, answers):
+    """One run of the shapes' program at `js_at` (SHAPES_PROCESS, test/oracle_read.jl's Shape(a) and shape_lines,
+    SHAPES_FILES) over `answers`, in the role's own use of a `native`-profile directory that reads its judge files alone,
+    as the verdict process runs (no corpus, no src, no node): (its shape records, or None when it wrote none, and its
+    output). A failure of the run itself (its directory, its records) is the driver's: OracleGap."""
+    dh = f"{door.home(role)}/m/{task}"
+    with door.using(role):
+        d = door.give(role, f"{role}-{task}")
+        door.run(role, ["/bin/sh", "-c", 'rm -rf "$HOME/m" && mkdir -p "$1/shapes/tmp"', "sh", dh], cfg()["tree_wall_s"], profile=door.NONE)
+        js = judge_files(js_at, f"{d}/judge-shapes", paths=SHAPES_FILES)
+        with open(f"{js}/answers.tsv", "wb") as f:
+            f.write(answers)
+        prof = door.profile(f"{d}/shapes.sb", [f"{dh}/shapes"], kind="native", reads=[js, part_log(d, "shapes")])
+        argv, env_ = process(SHAPES_PROCESS, judge=js, scratch=f"{dh}/shapes")
+        o, _, _, _ = watched(lambda e, log_: door.popen(role, argv, cwd=js, profile=prof, stdout=log_, stderr=subprocess.STDOUT, env=env_,
+                                                        background=part_background(role)),
+                             role, d, f"m/{task}/shapes", "shapes", None, cfg()["case_min_s"])
+        door.reap(role)
+        try:
+            shapes = door.take(role, f"m/{task}/shapes/shapes.tsv", cfg()["cases_cap_bytes"])
+        except door.DoorError as e:
+            shapes = e
+        rc, err = door.wipe(role, f"{door.home(role)}/m")
+    if rc != 0:
+        raise OracleGap(f"the shapes' program at {js_at[:10]}: its directory could not be removed: {err.strip()[-300:]}")
+    if isinstance(shapes, door.DoorError):
+        raise OracleGap(f"the shapes' program at {js_at[:10]}: its records: {shapes}")
+    return shapes, o
+
+def shapes_of(role, task, sha, stored, added):
+    """(the shape records of the measurement's answers, None) or (None, why): the measured commit's own projection
+    (shapes_run at shapes_judge(sha)) of `stored`, the landed labels' answers read from the store, and `added`, the
+    answers of the labels the measured corpus adds, answered by its own corpus. The driver never projects an answer
+    itself (S1, D5). A program that reads every answer writes the shapes. One that does not (F3: a record of a format it
+    does not read) is charged by whose record it is (the judge5 re-check's S2): when the program's refusal names one of
+    the measured corpus's own added labels and the stored answers read alone, the record is the measured code's, (None,
+    why) with the program's own words naming the label (charged: `output`, refused at its second failure, never an
+    infrastructure loop that re-climbs the hold without end); anything else, a stored record refused or a run that
+    ended without a refusal (a kill, a crash: the judge6a re-check's F4), is the store's, the judge's or the
+    infrastructure's, OracleGap (the hold kept, never charged)."""
+    js_at = shapes_judge(sha)
+    shapes, o = shapes_run(role, task, js_at, stored + added)
+    if shapes is not None:
+        return shapes, None
+    # charged only on the program's own refusal naming one of the corpus's added labels (the judge6a re-check's F4: a
+    # first run killed without a refusal, its rerun reading, was charged to a healthy move), and only when the stored
+    # answers read alone; anything else the infrastructure's
+    own = next((l for l in sorted(unit_blocks(added)) if f"does not read, e.g. {l}: " in o), None) if added else None
+    if own is not None and shapes_run(role, task, js_at, stored)[0] is not None:
+        return None, (f"the measured corpus's own added answer {own} is no record its judge reads (the shapes' program at "
+                      f"{js_at[:10]}): " + why_of(o))
+    raise OracleGap(f"the shapes' program at {js_at[:10]} for {sha[:10]} wrote no shapes: " + why_of(o))
 
 def smoke_parts(role, task, sha, env, overlay, log, dk, run, learn_, shapes, answers, unanswered, w, part):
     """smoke()'s three parts after the native answers, each in its own use of `role` (spec v17 Y3), `part` called
@@ -2024,24 +2095,43 @@ def confirmed(origin, before, after):
     """`before` (the table) with every label whose outcome `after` changes measured at `origin` itself (item 8, A5-1,
     R5-12, O5-6): a loss origin shares is origin's, so the table takes origin's rows and a loss of a case the table
     held passing is filed as G2's, and a case origin passes already is no progress of the item's. Runs under the
-    caller's measurement lock."""
-    diff = {l for l, r in after.items() if l in before and before[l][1] != r[1]}
+    caller's measurement lock. The comparison the caller makes (regressions) is against ORIGIN'S row for every label
+    re-measured here, never the table's: the candidate is rebased onto origin, so the two are judged by one judge
+    against one stored answer, like with like, and a pass the item loses is G2's whatever judge the table's row carries
+    (the judge5 re-check's S1: after a judge_id change, a table row of the old judge kept for a label origin still
+    passed made a loss to `unported`, which only G2 catches, land unseen, and the landing wrote it into the table).
+    Two more labels are origin's to judge, never the table's (the judge6a re-check's F1, F2): a label of the candidate
+    origin's corpus registers and the table lacks (a case an unmeasured hand or audit landing added, until the next
+    score) is measured at origin too, so its loss is G2 as well; and a table label origin's corpus no longer registers,
+    which the candidate registers again, is a case the move adds, judged as new, one event naming it (it never reaches
+    origin's measurement, which runs no label origin lacks). The table itself takes origin's rows only where they differ
+    from it or it lacks them (advance)."""
+    corpus = labels_at(origin)
+    stale = {l for l in after if l in before and l not in corpus}
+    if stale:   # the move adds it back: its own case, judged as new (F1)
+        event("rebased-stale", sha=origin[:8], labels=len(stale), first=sorted(stale)[:20])
+        before = {l: r for l, r in before.items() if l not in stale}
+    gained = {l for l in after if l not in before and l in corpus}   # origin's case the table lacks (F2)
+    diff = {l for l, r in after.items() if l in before and before[l][1] != r[1]} | gained
     if not diff:
         return before
     o = measure_base(origin, diff, locked_=True)
-    theirs = [o[l] for l in sorted(diff) if l in o and o[l][1] != before[l][1]]
+    unmeasured = sorted(diff - set(o))
+    if unmeasured:   # a re-measure is a row for every label it was asked, or no result (D9); the lander bounds it
+        raise ClimbError(f"origin {origin[:10]}'s re-measure wrote no row for {len(unmeasured)} label(s), e.g. {unmeasured[0]}")
+    theirs = [o[l] for l in sorted(diff) if l not in before or o[l][1] != before[l][1]]
     advance(theirs, origin, "a rebased check measured origin")
-    like = lambda r: same_judgement(before[r[0]], r)
-    lost = sorted(r[0] for r in theirs if before[r[0]][1] == "passed" and like(r))
+    like = lambda r: r[0] in before and same_judgement(before[r[0]], r)
+    lost = sorted(r[0] for r in theirs if r[0] in before and before[r[0]][1] == "passed" and like(r))
     if lost:
         file_g2(lost, origin[:8])
-    rebased = sorted(r[0] for r in theirs if before[r[0]][1] == "passed" and not like(r))
+    rebased = sorted(r[0] for r in theirs if r[0] in before and before[r[0]][1] == "passed" and not like(r))
     if rebased:   # a stored answer or the judge changed under them: no landing's loss (spec v17 Y4)
         event("score-rebased", sha=origin[:8], answers=True, lost=len(rebased), first=rebased[:20])
         alarm("rebased", f"the store or the judge changed: {len(rebased)} passing case(s) no longer pass", f"At origin "
               f"{origin[:10]} (a rebased check): {', '.join(rebased[:20])}, each judged against another stored answer or "
               "judge than its table row. Default taken: no G2 fix-first; the table takes origin's rows.")
-    return dict(before, **{r[0]: r for r in theirs})
+    return dict(before, **{l: o[l] for l in diff})
 
 def def_spans(at, defs):
     """{d: [(src file, first line, last line)]}: where each definition d sits at commit `at`, read by Julia's parser

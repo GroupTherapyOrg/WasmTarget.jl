@@ -67,6 +67,15 @@ _group_kind(kind::Symbol, tpath::String) = kind === :void ? :void : kind === :bi
 """A group of an answer's leaves is read by a reader when its leaves have a leaf kind and the case has at most 3 wire
 arguments (Leaves's arities)."""
 _readable(s::Shape, g::ShapeGroup) = s.nargs <= 3 && _group_kind(g.kind, g.tpath) !== nothing
+# the most leaves one reader reads (hold 5cf92f1ddb; D17, a target with its reason): a group of more is no reader the
+# judge builds, booked judge-gap at once, its count and this bound named (D9: a located rejection, never a reader run to
+# its budget). Its reason, measured: the largest group of a case passing at 9d9986d4 is 540 leaves
+# (dart_operator/modulo), then 369, 189 and 133; WasmTarget compiled a 1,000-leaf reader in 416 s at background QoS,
+# inside the 900 s a case is given at least (dev/climb/defaults.py case_min_s), and its compile grows near
+# quadratically past it (300 leaves 42 s, 1,000 leaves 416 s: council/judge3-review.md), so a larger reader runs its
+# case to its budget at every score and reads nothing. Over it at 9d9986d4: dart_set_literals' big sets (78,890 leaves)
+# and dart_operator/bit_operations (1,723, unported)
+const LEAVES_MAX = 1000
 _width(k::Symbol) = k === :i32 || k === :f32 ? 32 : 64
 _hexbits(k::Symbol, v::UInt64) = string(v; base = 16, pad = _width(k) ÷ 4)
 _unsigned(x) = sizeof(x) == 1 ? UInt64(reinterpret(UInt8, x)) : sizeof(x) == 4 ? UInt64(reinterpret(UInt32, x)) : reinterpret(UInt64, x)
@@ -311,15 +320,19 @@ _step_ex(e, i::Int) = :(getfield($e, $i))
 _step_ex(e, s::Tuple{Symbol,Int}) = s[1] === :cu ? :(codeunit($e, $(s[2]))) : :(getindex($e, $(s[2])))
 _step_ex(e, s::Symbol) = s === :ncu ? :(Int64(ncodeunits($e))) : :(Int64(length($e)))
 # a reader's pick is typeasserted to its leaves' type, native's, so its export returns that type even where the answer
-# holds the leaf as Any (a record of Any fields)
+# holds the leaf as Any (a record of Any fields).
+# Leaf k is found by one test per leaf in turn, `k == i && return leaf i`, the last leaf returned past them: a flat
+# block, whose nesting is constant in the number of leaves. The nest `k == 1 ? leaf 1 : (k == 2 ? … : leaf n)` that
+# this replaces lowers to the same IR (test/src/verdict.jl compares their code_ircode statement for statement), so every
+# leaf is read by the compiled path the judge's tests prove; but flisp's lowering recursed as deep as the nest and ran
+# out of GC handles near 9,000 leaves (dart_set_literals' big sets, 10,004 and 78,890), so the generator yielded
+# nothing, the reader inferred Any and WasmTarget rejected it: the judge's reader, never src (hold 5cf92f1ddb).
+# A balanced split on k (`k <= mid ? … : …`), the other construction of logarithmic depth, changes the IR, and
+# WasmTarget compiled a 200-leaf reader about 3 times slower split than chained (salvage commit 6c210483's measurement)
 struct Leaves{F,P,T} <: Function end
 @generated function _pick(x, ::Val{P}, ::Type{T}, k::Int64) where {P,T}
     local at(p) = :($(foldl(_step_ex, p; init = :x))::$T)
-    local ex = at(P[end])
-    for i in length(P)-1:-1:1
-        ex = :(k == $i ? $(at(P[i])) : $ex)
-    end
-    return ex
+    return Expr(:block, (:(k == $i && return $(at(P[i]))) for i in 1:length(P)-1)..., :(return $(at(P[end]))))
 end
 # fixed arities: a varargs method of an open count reads its tuple by a run-time index, not yet compiled
 (::Leaves{F,P,T})(k::Int64) where {F,P,T} = _pick(F(), Val(P), T, k)
@@ -453,6 +466,13 @@ function bind(s::Shape, args::Tuple, compile; a::Union{Answer,Nothing} = nothing
     for (gi, g) in enumerate(s.groups)
         local leaves = a === nothing ? nothing : a.groups[gi].leaves
         local leaf(k) = leaves === nothing ? nothing : leaves[k]
+        if length(g.paths) > LEAVES_MAX   # no reader built: one fact for the group, its count and the bound named
+            local name = WTOracleRead._path_name(g.tpath)
+            push!(out, RunCase("$(s.label)(its $(length(g.paths)) leaves of $name)", UInt8[], UInt8[], (args′..., Int64(1)),
+                               nothing, "", "the judge builds no reader of more than LEAVES_MAX = $LEAVES_MAX leaves, and this " *
+                               "group of $name has $(length(g.paths))", JUDGE_GAP))
+            continue
+        end
         local readable = _readable(s, g)
         local reader, why = nothing, ""
         if !readable   # no reader: each leaf unread, the judge's reason named

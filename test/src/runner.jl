@@ -130,6 +130,27 @@ _runner_add1(x::Int32) = x + Int32(1)
     @test calls == [false] && isempty(plain.optimized) && only(WTR.run_cases([plain])).ok
 end
 
+# a Char crosses the wire both ways as its 32 bits (hold da9117ca4b): Julia's own representation (base/char.jl
+# `primitive type Char <: AbstractChar 32 end`), read by its bitcast (test/verdict.jl's wire_bits), never by codepoint(),
+# which a malformed Char refuses; the function adds to the bits, so an argument that crossed as anything else answers
+# another Char
+_runner_char_next(c::Char) = reinterpret(Char, reinterpret(UInt32, c) + UInt32(1))
+
+@testset "a Char argument and a Char answer cross as their 32 bits, a malformed Char too (hold da9117ca4b)" begin
+    # one compile (both modules), run on each Char against native's answer and against another Char, its low bit flipped
+    local c1 = WTR.compiled_case("char", WasmTarget.compile, _runner_char_next, ('é',))
+    @test c1.native === _runner_char_next('é') && !isempty(c1.bytes)
+    local cs = WTR.RunCase[]
+    for c in ('é', reinterpret(Char, 0xff000000))
+        local n = _runner_char_next(c)
+        push!(cs, WTR.RunCase("$(repr(c)) answers native's", c1.bytes, c1.optimized, (c,), n, c1.entry))
+        push!(cs, WTR.RunCase("$(repr(c)) against another Char", c1.bytes, c1.optimized, (c,),
+                              reinterpret(Char, reinterpret(UInt32, n) ⊻ UInt32(1)), c1.entry))
+    end
+    @test [(r.label, r.outcome) for r in WTR.run_cases(cs)] ==
+          [(c.label, endswith(c.label, "native's") ? :passed : :wrong) for c in cs]
+end
+
 # a String argument crosses no wire: it is bound as a constant of the program (test/runner.jl's Bound), still passed to
 # the function as its argument inside the program, the case's label naming the position bound
 _runner_is_ho(s::String, n::Int64) = s === "ho" ? n : -n

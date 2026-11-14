@@ -314,6 +314,89 @@ _f1_throw(v) = Expr(:call, GlobalRef(Core, :throw), QuoteNode(v))
     @test length(calls) == 1 && ir.stmts[calls[1]][:type] === Core.Const(_F1S1())
 end
 
+# the pick's generator before hold 5cf92f1ddb, verbatim: one ternary per leaf, nested as deep as the leaves
+@generated function _v_pick_nest(x, ::Val{P}, ::Type{T}, k::Int64) where {P,T}
+    local at(p) = :($(foldl(WV._step_ex, p; init = :x))::$T)
+    local ex = at(P[end])
+    for i in length(P)-1:-1:1
+        ex = :(k == $i ? $(at(P[i])) : $ex)
+    end
+    return ex
+end
+_v_leaves(x) = Tuple(WVO._leaves(x))
+# a statement with each global it names replaced by the binding's value (the nest above names Main's `getfield`, the
+# pick WTVerdict's: one builtin)
+_v_resolved(x) = x isa GlobalRef ? getglobal(x.mod, x.name) : x isa Expr ? Expr(x.head, map(_v_resolved, x.args)...) : x
+# a reader's leaf judged as the verdict judges it: the read value's wire bits against native's leaf
+_v_read(native, read) = (w = WV.wire_bits(read); _v_judge(native, "ret $(w[1]) $(WV._hexbits(w[1], w[2])) 0.1").outcome)
+
+@testset "a reader picks its leaf by a flat block of tests: the nest's IR, at any number of leaves (hold 5cf92f1ddb)" begin
+    # the same compiled path: the flat block's IR is the nest's, statement for statement, at a tuple and a vector of leaves
+    for x in ((Int64(7), Int64(8), (Int64(9), Int64(10))), (Int64(7), collect(Int64, 101:135)))
+        local P, sig = _v_leaves(x), (typeof(x), Val{_v_leaves(x)}, Type{Int64}, Int64)
+        local flat, nest = only(Base.code_ircode(WV._pick, sig)).first, only(Base.code_ircode(_v_pick_nest, sig)).first
+        @test length(P) > 1 && map(_v_resolved, flat.stmts.stmt) == map(_v_resolved, nest.stmts.stmt) && flat.stmts.type == nest.stmts.type &&
+              [b.stmts for b in flat.cfg.blocks] == [b.stmts for b in nest.cfg.blocks]
+    end
+    # 10,002 leaves (dart_set_literals' big sets read 10,004 and 78,890): the flat block lowers, where the nest ran
+    # flisp's lowering out of GC handles, its generator yielding nothing and the reader inferring Any
+    local big = Tuple(((:ix, i),) for i in 1:10_002)
+    @test length(only(Base.code_lowered(WV._pick, (Vector{Int64}, Val{big}, Type{Int64}, Int64))).code) > 10_002
+    @test_throws ErrorException Base.code_lowered(_v_pick_nest, (Vector{Int64}, Val{big}, Type{Int64}, Int64))
+    # every k picks its own leaf; a value wrong at the first, a middle and the last leaf reads wrong there, never passed
+    local good = (Int64(7), collect(Int64, 101:135))
+    local P = _v_leaves(good)
+    local n = length(P)
+    local leaf(v, k) = foldl(WVO._step, P[k]; init = v)
+    @test all(k -> WV._pick(good, Val(P), Int64, Int64(k)) === leaf(good, k), 1:n)
+    local bad = (Int64(8), [i == 17 || i == 35 ? Int64(0) : v for (i, v) in enumerate(good[2])])   # leaves 1, 19, 37
+    for k in (1, (n + 1) ÷ 2, n)
+        @test (k, _v_read(leaf(good, k), WV._pick(good, Val(P), Int64, Int64(k)))) == (k, :passed)
+        @test (k, _v_read(leaf(good, k), WV._pick(bad, Val(P), Int64, Int64(k)))) == (k, :wrong)
+    end
+    @test all(k -> WV._pick(bad, Val(P), Int64, Int64(k)) === leaf(good, k), setdiff(1:n, (1, (n + 1) ÷ 2, n)))
+end
+
+# a value of exactly n Int64 leaves: an Int64 and a vector of n - 2 (its length a leaf too)
+_v_n_leaves(n) = (Int64(7), collect(Int64, 1:n-2))
+_v_bound_at(x::Int64) = _v_n_leaves(WV.LEAVES_MAX)
+_v_bound_past(x::Int64) = _v_n_leaves(WV.LEAVES_MAX + 1)
+
+@testset "a reader of at most LEAVES_MAX leaves is built; one more is judge-gap, never compiled (hold 5cf92f1ddb)" begin
+    for (f, n) in ((_v_bound_at, WV.LEAVES_MAX), (_v_bound_past, WV.LEAVES_MAX + 1))
+        local a = WVO.answer_of("", f, (Int64(1),))
+        local s = WVR.Shape(a)
+        @test (n, only(length(g.paths) for g in s.groups)) == (n, n)
+        # the compiling side, its compile recorded; a reader's compile is the one whose argument types end in the index
+        local readers, recorded = Ref(0), Tuple{String,Vector{UInt8}}[]
+        local comp(g, ts; optimize::Bool = true) = (length(ts) == 2 && (readers[] += 1);
+            b = UInt8[length(recorded)]; push!(recorded, (WVO._key(ts) * (optimize ? "" : " unoptimized"), b)); b)
+        local mine = WV.bind(s, (Int64(1),), comp; f)
+        # the verdict pops the same compiles
+        local q = copy(recorded)
+        local pop(key; optimize::Bool = true) = (r = popfirst!(q); r[1] == key * (optimize ? "" : " unoptimized") || error("key"); r[2])
+        local theirs = WV.bind(s, a.args, pop; a)
+        @test isempty(q) && [(c.label, c.args) for c in mine] == [(c.label, c.args) for c in theirs]
+        if n == WV.LEAVES_MAX   # read: one reader, every leaf a fact of it
+            @test readers[] == 2 && length(theirs) == 1 + n && all(c -> isempty(c.unread), theirs)
+        else   # one fact, judge-gap, its count and the bound named; no reader compiled on either side
+            @test readers[] == 0 && length(theirs) == 2 && theirs[2].gap === WV.JUDGE_GAP && isempty(theirs[2].bytes)
+            @test occursin("more than LEAVES_MAX = $(WV.LEAVES_MAX) leaves", theirs[2].unread) && occursin("has $n", theirs[2].unread)
+            local cs, (ps, dec) = theirs, WV.plan(theirs)
+            @test length(ps) == 2 &&   # the own modules' calls alone
+                  WV.case_outcome(WV.verdicts(cs, ps, dec, Any[WV.read_raw("ret ref - 0"), WV.read_raw("ret ref - 0")]))[1] === WV.JUDGE_GAP
+        end
+    end
+    # the pick at LEAVES_MAX leaves, run: its last leaf read right passes, wrong reads wrong
+    local good = _v_n_leaves(WV.LEAVES_MAX)
+    local P = _v_leaves(good)
+    local bad = (good[1], [i == length(good[2]) ? Int64(-1) : v for (i, v) in enumerate(good[2])])
+    local n = length(P)
+    @test n == WV.LEAVES_MAX
+    @test _v_read(foldl(WVO._step, P[n]; init = good), WV._pick(good, Val(P), Int64, Int64(n))) === :passed
+    @test _v_read(foldl(WVO._step, P[n]; init = good), WV._pick(bad, Val(P), Int64, Int64(n))) === :wrong
+end
+
 @testset "a shape the runner cannot call or read is the judge's gap, never wrong (spec v18 P2)" begin
     @test WV.read_raw("gap no entry: the module exports the functions [f]") isa WV.Raw
     local g = _v_judge(Int64(1), "gap no entry: the module exports the functions [f]")
