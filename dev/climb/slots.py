@@ -185,16 +185,18 @@ def since_park(h, kind):
     t = max((e["t"] for e in ev if e["kind"] == "parked" and e.get("hold") == h["key"]), default="")
     return sum(1 for e in ev if e["kind"] == kind and e.get("hold") == h["key"] and e["t"] > t)
 
-def finish(h, outcome, slot_name, note):
+def finish(h, outcome, slot_name, note, driver=False):
     """A move that did not land. The driver's own failures (infra) and the governor's (budget) are no stop: the slot
     backs off, the hold stays. A stop keeps its handoff and counts toward a park. Only a climber's own `blocked:*` is
     ruled at once; a driver's refusal or a review that did not approve is `refused`, ruled only when the hold reaches
-    its park (A7), where the ruling is written beside the park for the next climber after it."""
+    its park (A7), where the ruling is written beside the park for the next climber after it. `driver`: an infra
+    outcome the driver's own code raised (slot_once's driver-error), whose backoff is a driver fault's (core.back_off:
+    driver_fault_backoff_s first, ended when the driver's code changes), as the loops' own are (core.guarded)."""
     unclaim(h)
     if outcome in ("infra", "budget"):
         event("infra" if outcome == "infra" else "budget-stop", hold=h["key"], slot=slot_name, note=note[:600])
         if outcome == "infra":
-            back_off("slot", slot_name, why=note)
+            back_off("slot", slot_name, why=note, **(dict(driver=driver_tree(), first=cfg()["driver_fault_backoff_s"]) if driver else {}))
         return outcome
     event("stopped", hold=h["key"], hold_id=h["id"], outcome=outcome, note=note[:600])
     update_json("handoffs.json", {}, lambda hs: hs.__setitem__(h["id"], note[-2500:]))
@@ -579,7 +581,7 @@ def slot_once(name):
         move(h, name)
     except Exception as e:   # every fault of the driver's is infrastructure: an event, a backoff, the hold kept (26)
         event("driver-error", slot=name, hold=h.get("key"), error=repr(e)[:400])
-        finish(h, "infra", name, f"the driver: {e}")
+        finish(h, "infra", name, f"the driver: {e}", driver=True)
         return 3
     except BaseException:   # a stop (TERM, ^C): its hold freed
         unclaim(h)

@@ -1780,6 +1780,30 @@ def measure_key(role, sha, task):
         door.wipe(role, f"{door.home(role)}/m")
     return key
 
+@contextlib.contextmanager
+def measure_dir(role, task, root=None):
+    """The driver's own directory of one measurement (smoke(): what a part hands the next, modules.tsv among them), held
+    by this measurement alone (L1): made new under a name that carries its holder, <role>-<task>@<pid>-<boot>-<random>
+    (the pid and boot as every mark of the driver's: door.alive), removed by its holder when the measurement ends and by
+    a later measurement only once its holder is dead. So no measurement removes or writes a directory another live one
+    holds. The incidents: smoke() kept it at STATE/m/<role>-<task>, removed at its start and its end, and a base's task
+    is base-<sha12> whoever measures it; on 2026-11-13 11:58Z and 2026-11-14 10:03Z a slot's measurement of a base ended
+    with FileNotFoundError on its modules.tsv.blk, when origin moved and another measurement of the same base (the
+    lander's rebased check, another slot's) removed the shared directory under it. No lock: a directory has one holder.
+    A name without a holder is an older driver's, whose own measurement removes it. `root`: another directory (tests)."""
+    import tempfile
+    root = root or os.path.join(STATE, "m")
+    os.makedirs(root, exist_ok=True)
+    for name in os.listdir(root):   # a killed driver's: its holder is dead
+        holder = name.rpartition("@")[2].split("-")
+        if "@" in name and len(holder) == 3 and holder[0].isdigit() and holder[1].isdigit() and not alive(holder[0], int(holder[1])):
+            shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+    w = tempfile.mkdtemp(prefix=f"{role}-{task}@{os.getpid()}-{door.BOOT}-", dir=root)
+    try:
+        yield w
+    finally:
+        shutil.rmtree(w, ignore_errors=True)
+
 def store_gap(missing, key):
     """The one OracleGap of labels the store does not answer under `key` (oracle_read's `missing`): how many, the first,
     why, the key field it names, and the one replay (spec v14 V5)."""
@@ -1866,18 +1890,19 @@ def smoke(role, only, task, sha, known=None, overlay=None, learn_=False, keep=No
     if shapes is None:
         return None, swhy
     part("shapes")
-    # each part (compile, run, verdict) takes its own use of the role and leaves it before the next (spec v17 Y3: no
-    # yield while a measuring role is held, LOCK_ORDER); what a part hands the next is kept in `w`, the driver's own
-    # directory, never in a run directory, which the role's next use removes
-    w = os.path.join(STATE, "m", f"{role}-{task}")
-    shutil.rmtree(w, ignore_errors=True); os.makedirs(w)
-    try:
-        rows, why = smoke_parts(role, task, sha, env, overlay, log, dk, run, learn_, shapes, answers, unanswered, w, part)
-    finally:
-        shutil.rmtree(w, ignore_errors=True)
+    return judged(role, task, sha, blocks, lambda w: smoke_parts(role, task, sha, env, overlay, log, dk, run, learn_, shapes,
+                                                                 answers, unanswered, w, part))
+
+def judged(role, task, sha, blocks, parts):
+    """smoke()'s parts and its rows: each part (compile, run, verdict) takes its own use of the role and leaves it before
+    the next (spec v17 Y3: no yield while a measuring role is held, LOCK_ORDER); what a part hands the next is kept in
+    `w`, the driver's own directory of this measurement alone (measure_dir, L1), never in a run directory, which the
+    role's next use removes. `parts(w)`: smoke_parts, or test/climb_l228.py's stand-in. Each row names the stored answer
+    it was judged against and the judge (spec v17 Y4: G2 compares like with like)."""
+    with measure_dir(role, task) as w:
+        rows, why = parts(w)
     if rows is None:
         return rows, why
-    # each row names the stored answer it was judged against and the judge (spec v17 Y4: G2 compares like with like)
     jid = judge_id(sha)
     return {l: Row(r, (answer_hash(blocks[l]), jid) if l in blocks else None) for l, r in rows.items()}, why
 

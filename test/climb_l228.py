@@ -756,3 +756,64 @@ try:
         fault(f"the check profile: a bind, a connect to localhost and one outside read {p18.stdout.strip() or p18.stderr.strip()[-200:]}, not each refused")
 except Exception as e:
     fault(f"TLC inside the check profile raised {type(e).__name__}: {str(e)[:240]}")
+
+# 20. a measurement's own directory is its holder's (L1, measure.measure_dir through measure.judged as smoke() calls it):
+# a second measurement of the same role and task (the lander's rebased check of the base a slot measures, another
+# slot's) begun and ended inside the first leaves the first's file; each removes its own when it ends; a dead holder's
+# directory is removed and a live holder's kept
+try:
+    seen20 = {}
+    def first20(w):
+        seen20["a"] = w
+        open(f"{w}/modules.tsv.blk", "w").write("module\n")
+        M.judged("measure", "base-l228", h, {}, lambda w2: (seen20.__setitem__("b", w2), ({}, None))[1])
+        seen20["kept"] = os.path.exists(f"{w}/modules.tsv.blk")
+        return {}, None
+    M.judged("measure", "base-l228", h, {}, first20)
+    a20, b20 = seen20.get("a", ""), seen20.get("b", "")
+    if not seen20.get("kept") or a20 == b20:
+        fault(f"a measurement of the same base begun and ended inside another removed or shared the other's directory ({os.path.basename(a20)}, {os.path.basename(b20)})")
+    if not a20 or os.path.exists(a20) or not b20 or os.path.exists(b20):
+        fault("a measurement left its own directory behind when it ended")
+    root20 = f"{tmp}/m20"; os.makedirs(root20)
+    dead20 = os.path.join(root20, f"measure-base-l228@{os.getpid()}-{door.BOOT - 1}-dead")
+    live20 = os.path.join(root20, f"measure-base-l228@{os.getppid()}-{door.BOOT}-live")
+    os.makedirs(dead20); os.makedirs(live20)
+    with M.measure_dir("measure", "base-l228", root20):
+        pass
+    if os.path.exists(dead20) or not os.path.exists(live20):
+        fault(f"measure_dir: a dead holder's directory {'kept' if os.path.exists(dead20) else 'removed'}, a live holder's "
+              f"{'kept' if os.path.exists(live20) else 'removed'}")
+except Exception as e:
+    fault(f"a measurement's own directory raised {type(e).__name__}: {str(e)[:240]}")
+
+# 21. a slot's move that the driver failed backs off as a driver fault (slots.finish(driver=True), core.back_off): its
+# first wait driver_fault_backoff_s, not retry_backoff_s, and it ends when the driver's code changes; an infra outcome
+# that is not the driver's (driver=False) waits retry_backoff_s whatever the driver. The driver's tree is stood in
+import slots as SL21
+real21 = {"tree": core.driver_tree, "sltree": SL21.driver_tree, "unclaim": SL21.unclaim}
+try:
+    SL21.unclaim = lambda h_: None
+    core.driver_tree = SL21.driver_tree = lambda: "1" * 40   # slots names it from core, as the driver's tree
+    h21 = {"key": "l228-21", "id": "l22821"}
+    SL21.finish(h21, "infra", "climb-21", "the driver: planted", driver=True)
+    e21 = core.state_json("backoff.json", {}).get("slot:climb-21", {})
+    left21 = e21.get("until", 0) - time.time()
+    if not e21.get("driver") or not (0 < left21 <= core.cfg()["driver_fault_backoff_s"] + 5):
+        fault(f"a slot's driver fault backs off {round(left21)} s naming driver {e21.get('driver')!r}: not driver_fault_backoff_s naming the driver's tree")
+    if not core.backed_off("slot", "climb-21"):
+        fault("a slot's driver fault did not back the slot off")
+    core.driver_tree = lambda: "2" * 40
+    if core.backed_off("slot", "climb-21"):
+        fault("a slot waits out a driver fault of a driver it no longer runs")
+    core.recovered("slot", "climb-21")
+    SL21.finish(h21, "infra", "climb-21", "the slot's Kaimon: planted", driver=False)
+    e21 = core.state_json("backoff.json", {}).get("slot:climb-21", {})
+    core.driver_tree = lambda: "3" * 40
+    if e21.get("driver") or not core.backed_off("slot", "climb-21"):
+        fault(f"an infra outcome that is not the driver's backed off as a driver fault: {e21}")
+    core.recovered("slot", "climb-21")
+except Exception as e:
+    fault(f"a slot's driver fault raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    core.driver_tree, SL21.driver_tree, SL21.unclaim = real21["tree"], real21["sltree"], real21["unclaim"]

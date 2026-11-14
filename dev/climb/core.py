@@ -349,16 +349,17 @@ def waits(kind):
     lander wrote `lander:flaky` and read only three of its keys, and checked every item back to back)."""
     return any((k == kind or k.startswith(kind + ":")) and running(v) for k, v in state_json("backoff.json", {}).items())
 
-def back_off(kind, key=None, why="", secs=None, note_at=3, driver=None):
+def back_off(kind, key=None, why="", secs=None, note_at=3, driver=None, first=None):
     """One way any failure waits (21): retry_backoff_s, doubled each time it repeats before a success clears it
     (backoff_cap_s at most), and one note for Dale when it has repeated note_at times in a row; `secs` waits a fixed
-    time instead. `driver`, a driver fault's (guarded): the driver's tree, so the wait ends when the driver's code
-    changes (running), and the count starts again under a new driver."""
+    time instead. `driver`, a driver fault's (guarded, a slot's move the driver failed): the driver's tree, so the wait
+    ends when the driver's code changes (running), and the count starts again under a new driver; `first`, the first
+    wait in place of retry_backoff_s (a driver fault's: driver_fault_backoff_s)."""
     k = f"{kind}:{key}" if key else kind
     with locked():
         b = state_json("backoff.json", {})
         n = (b.get(k, {}).get("n", 0) if b.get(k, {}).get("driver") == driver else 0) + 1
-        b[k] = {"until": time.time() + (secs or min(cfg()["retry_backoff_s"] * 2 ** (n - 1), cfg()["backoff_cap_s"])), "n": n, "why": why[:300]}
+        b[k] = {"until": time.time() + (secs or min((first or cfg()["retry_backoff_s"]) * 2 ** (n - 1), cfg()["backoff_cap_s"])), "n": n, "why": why[:300]}
         if driver:
             b[k]["driver"] = driver
         save_json("backoff.json", b)
@@ -1402,7 +1403,7 @@ def guarded(kind, fn, *args, key=None):
     except Exception as e:
         why = f"{type(e).__name__}: {e}"
         event(f"{kind}-error", key=key, error=why[:400])
-        back_off(kind, key, why=why, driver=driver_tree())   # a driver fault: ends when the driver's code changes
+        back_off(kind, key, why=why, driver=driver_tree(), first=cfg()["driver_fault_backoff_s"])   # a driver fault: minutes, ended when the driver's code changes
         return 3
 
 def change_stem(a, b):

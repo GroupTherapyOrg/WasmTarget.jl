@@ -76,6 +76,11 @@ DEFAULTS = {
     # a failure waits this long, doubled each time it repeats, up to the cap: intent, a failing step retries without a
     # loop; band, half an hour to 8 h (a night), a note at the third in a row
     "retry_backoff_s": 1800, "backoff_cap_s": 28800,
+    # a driver fault's first wait (core.guarded's loops, a slot's move that the driver failed), doubled as the others:
+    # intent, minutes, since the fault is the driver's own code and the wait ends at once when that code changes
+    # (core.running: a landing that fixed it); band 120-900 s (2026-11-14: a slot's 30-min wait on a fault of a removed
+    # measurement directory, cleared by hand)
+    "driver_fault_backoff_s": 300,
     "alarm_s": 21600,                            # no move or landing, or no quiet probe with a queue, this long: a note
     # a change of power source counts once the new reading has held this long (O9-2). Derivation: `pmset -g log`'s
     # adapter flaps, 117 changes in six minutes on 2026-11-08 16:15-16:21 and 37 in the minute of 2026-11-09 18:02,
