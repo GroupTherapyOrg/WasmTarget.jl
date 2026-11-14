@@ -137,6 +137,11 @@ DEFAULTS = {
     # compile pauses in place), beside at most one measurement (the verify lock's one) and the lander's layer or
     # replay (background QoS). Band: False while the probes read the performance cores idle; True restores background
     "score_background": False,
+    # a test file's own cost predicting this share of D14's band (for a change to src/, the heavier shape) is named in the
+    # src-unfit note before it reaches the band, where a landing that edits it is held for a split (measure.src_set).
+    # 2026-11-14: test/src/constants.jl reached 152.3 s of 140 and a fix that edited it was dropped; five more files stood
+    # at 121-128 s. Intent: a split is asked of the lead while every landing still fits; band 0.80-0.90
+    "src_near_band": 0.85,
     # a measurement waits this long for the lock or a live landing before a note; it then waits on (O5): every holder
     # has its own wall (a measuring process's derived wall, ship_kill_s), so the wait is bounded by theirs, never by a backoff
     "lock_wait_s": 3600,

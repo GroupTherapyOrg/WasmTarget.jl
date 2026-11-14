@@ -3128,14 +3128,22 @@ def checks_measured(n=5):
     keep = {id(e) for shape in (True, False) for e in [x for x in es if x["src_set"]["src_change"] is shape][-n:]}
     return [e for e in es if id(e) in keep]
 
-def src_costs(rows, files, at):
-    """Each of `files`' cost in G: its row of the score's record, or, for a file the score did not run (unscored), its
-    size at `at` at the scored files' G per byte (test/src_tests.jl's own rule for an unmeasured file), named."""
+def src_costs(rows, files, at, scored_at=None):
+    """Each of `files`' cost in G as it stands at `at`: its row of the score's record scaled by its size at `at` over its
+    size where the score measured it (`scored_at`, the record's head), so a file a commit or a landing since has edited
+    is charged as it now stands (recorded G x new size / old size: a file a commit splits or shrinks is never charged its
+    old weight; 2026-11-14 21:53:09Z a fix that edited test/src/constants.jl was charged its whole recorded 746.9 G), or,
+    for a file the score did not run (unscored), its size at `at` at the scored files' G per byte as measured
+    (test/src_tests.jl's own rule for an unmeasured file), named."""
     have = {f: r[1] for f, r in rows.items() if r[0] == "passed" and r[1] is not None}   # unmeasured: by size, named
-    sizes = {p[len(SRC_DIR):]: int(sz) for sz, p in (l.split()[3:5] for l in git("ls-tree", "-r", "-l", at, "--", SRC_DIR).splitlines())
-             if p.endswith(".jl")}
-    rate = sum(have.values()) / max(1, sum(sizes.get(f, 0) for f in have))
-    return {f: have[f] if f in have else sizes.get(f, 0) * rate for f in files}, sorted(f for f in files if f not in have)
+    def sizes_at(c):
+        return {p[len(SRC_DIR):]: int(sz) for sz, p in (l.split()[3:5] for l in git("ls-tree", "-r", "-l", c, "--", SRC_DIR).splitlines())
+                if p.endswith(".jl")}
+    sizes = sizes_at(at)
+    was = sizes_at(scored_at) if scored_at and scored_at != at else sizes
+    rate = sum(have.values()) / max(1, sum(was.get(f, 0) for f in have))
+    cost = lambda f: (have[f] * sizes.get(f, 0) / was[f] if was.get(f) else have[f]) if f in have else sizes.get(f, 0) * rate
+    return {f: cost(f) for f in files}, sorted(f for f in files if f not in have)
 
 def predict(costs, warm, src_change, shards, checks):
     """The critical path a check of the files `costs` ({file: G}) would read (the landing-check ruling's B.2): the files
@@ -3217,12 +3225,24 @@ def src_plan(hs, rows):
     write_atomic(p, json.dumps(plan))
     return plan
 
-def src_unfit(hs, unfit, src_change, target):
+def src_unfit(hs, unfit, src_change, target, near=(), band=None):
     """LC-A at a landing's own target: the files its fill could not take and that predict past the target alone, so no
     share of that shape holds them at today's measures and target; one event `src-unfit` and one note for Dale each time
     the set changes (an empty set again included). The ring still carries them, the score runs them, and
-    src_unverified_max bounds the landings they stand unrun; splitting a file is the lead's move."""
+    src_unverified_max bounds the landings they stand unrun; splitting a file is the lead's move. `near`, the files whose
+    own cost predicts within src_near_band of D14's `band` for a change to src/ ([file, G, s]), is the same note's: each
+    named once while it stays near, before a landing that edits it is held for a split (lander.src_refused)."""
     names, key = sorted(f for f, _ in unfit), "src-unfit:" + ("src" if src_change else "outside")
+    nkey, nnames = "src-near", sorted(f for f, _, _ in near)
+    if state_json("alarms.json", {}).get(nkey) != nnames:   # the warning before the wall, when its files change
+        update_json("alarms.json", {}, lambda a: a.__setitem__(nkey, nnames))
+        event("src-near", sha=hs[:8], files=[{"file": f, "cost": g_, "path": p_} for f, g_, p_ in near], band=band)
+        if near:
+            for_dale("test files near D14's band: split them before a landing that edits one is held",
+                     f"For a change to src/, D14's band of {band} s: " + ", ".join(
+                         f"test/src/{f} {g_} G predicts {p_} s{' (past the band)' if p_ > (band or 0) else ''}" for f, g_, p_ in near) +
+                     f" (each alone, the score of {hs[:10]}). Default taken: they run; a landing that edits one past the band "
+                     "is held until a score of a head where it is lighter or gone; splitting is the lead's move.")
     # keyed per shape (the round-14 operator's finding 8, spec v17 Z7): the two shapes' sets differ, and one key read the
     # alternation of landings of either shape as a change each time, a note a landing
     if state_json("alarms.json", {}).get(key) == names:
@@ -3276,7 +3296,7 @@ def src_set(h, sha, hold_id):
     src_change = sh(["git", "diff", "--quiet", h, sha, "--", "src", "Project.toml"]).returncode != 0
     out = {"hs": hs[:10], "own": sorted(own), "unscored": sorted(unscored), "flaky": sorted(flaky), "src_change": src_change,
            "reds": sorted(reds & t_sha)}
-    every, est = src_costs(rows, sorted(t_sha - reds), sha)
+    every, est = src_costs(rows, sorted(t_sha - reds), sha, hs)
     pa, why = predict(every, warm, src_change, shards, checks)
     out["all"], out["estimated"] = pa or {"why": why}, est
     target, margin = src_target(int(band.group(1)), src_change)   # D14's band less this shape's measured margin (S3, Z5)
@@ -3286,11 +3306,18 @@ def src_set(h, sha, hold_id):
     rs = state_json(SRC_RING, {})
     pos = rs.get("pos", 0) % max(1, len(names)) if rs.get("hs") == hs[:10] else 0   # a new score's ring starts at 0
     base_set = sorted(own | unscored | flaky)   # a flaky known red runs in every landing until it resolves (red 7)
-    c_all, _ = src_costs(rows, sorted(set(base_set) | (set(names) & t_sha) | set(rs.get("carry", [])) & t_sha), sha)
+    c_all, _ = src_costs(rows, sorted(set(base_set) | (set(names) & t_sha) | set(rs.get("carry", [])) & t_sha), sha, hs)
     pb, why = predict({f: c_all[f] for f in base_set}, warm, src_change, shards, checks)
     if pb is None:
         out["why"] = why; return out
     out["refuse"] = pb["path"] > int(band.group(1))
+    # an own file that ALONE predicts past the band as it stands at origin (its recorded cost scaled to its size at h):
+    # origin's state, never the commit's (lander.src_refused holds the item and names the file to split); only when
+    # every own file fits at origin is a refusal the commit's own (its additions, or its edits, push the set past it)
+    at_h, _ = src_costs(rows, sorted(own & set(t_h)), h, hs)
+    out["origin_heavy"] = [[f, round(g_, 1), p_["path"]] for f, g_ in sorted(at_h.items())
+                           for p_ in [predict({f: g_}, warm, src_change, shards, checks)[0]]
+                           if p_["path"] > int(band.group(1))] if out["refuse"] else []
     # the share (round 14's T2): the files the last landing could not take first (deficit round robin, A13-6), then the
     # ring from its position, each taken while the set predicts within THIS landing's target. A ring file that does not
     # fit is passed over and carried, never ending the window (e6029f5d: one heavy file at the position left a share of
@@ -3326,7 +3353,13 @@ def src_set(h, sha, hold_id):
     share = kept
     pr, _ = predict({f: c_all[f] for f in base_set + share}, warm, src_change, shards, checks)
     lone = [[f, round(c_all[f], 1)] for f in dropped if predict({f: c_all[f]}, warm, src_change, shards, checks)[0]["path"] > target]
-    src_unfit(hs, lone, src_change, target)
+    # the warning before the wall: each scored file of h whose cost alone, as a change to src/ (the heavier shape) would
+    # read it, predicts within src_near_band of D14's band, named before a landing that edits it is refused
+    near_s = cfg()["src_near_band"] * int(band.group(1))
+    rec_h, _ = src_costs(rows, sorted(f for f in t_h if rows.get(f, ("",))[0] == "passed"), h, hs)
+    near = [[f, round(g_, 1), p_] for f, g_ in sorted(rec_h.items())
+            for p_ in [predict({f: g_}, warm, True, shards, checks)[0]["path"]] if p_ >= near_s]
+    src_unfit(hs, lone, src_change, target, near, int(band.group(1)))
     i, T = src_index(h, hs), plan["T"]
     out.update({"i": i, "T": T, "pos": pos, "pos_next": pos_next, "considered": considered, "carried": carry, "share": share,
                 "dropped": dropped, "unfit": [f for f, _ in lone], "predicted": pr, "own_unscored": pb})
@@ -3340,7 +3373,7 @@ def src_handed(ss, h, sha):
         raise ClimbError(f"src_handed with no set made: {ss.get('why', 'no set')}")
     files = sorted(set(ss["own"]) | set(ss["unscored"]) | set(ss.get("flaky", [])) | set(ss["share"]))
     rec = src_latest(h)
-    ss["ran"], ss["ran_cost"] = files, round(sum(src_costs(rec[2], files, sha)[0].values()), 1) if rec else None
+    ss["ran"], ss["ran_cost"] = files, round(sum(src_costs(rec[2], files, sha, rec[0])[0].values()), 1) if rec else None
     return files
 
 def src_unverified(h):

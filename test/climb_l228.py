@@ -970,17 +970,18 @@ try:
         return out[2], out[1], secs, lines, running
     import fcntl
     FIRST19 = 12.0   # a case's budget here (no label timed): under the check's 15 s, so a stop counted in it cuts the case,
-    # and far over a case's 0.3 CPU-seconds (a 0.8-CPU-second case took over 4 s of wall at background QoS on a busy
+    # and far over a case's 0.6 CPU-seconds (a 0.8-CPU-second case took over 4 s of wall at background QoS on a busy
     # machine, 2026-11-14, and a 4-s budget killed a/02 in the landing check's sandbox with nothing broken); after a stop
-    # a case still outlasts the watch's next tick (0.05 s), as a stopped compile's case does
+    # the case in flight outlasts the watch's next tick, as a stopped compile's case does, so a stop counted in its
+    # budget cuts it (at 0.3 CPU-seconds the next case's record could come first on a loaded machine: that break missed)
     # one check mid-measurement: the measurement pays the check's time alone, nothing restarted
     # (the lander's process takes a second or two to load the driver: the stand-ins outlast that); the same
     # measurement with no check first, its time the one the check's is weighed against. Section 22 needs this one's
     # helpers alone: its scenarios run when it is the section run (__section__)
     if __section__ != 19:
         raise StopIteration
-    _, _, base19, _, _ = measure19(4, 0.3, 0, 0, 0.0)
-    n19, k19, s19, l19, _ = measure19(4, 0.3, 1, 15.0, 0.4)
+    _, _, base19, _, _ = measure19(4, 0.6, 0, 0, 0.0)
+    n19, k19, s19, l19, _ = measure19(4, 0.6, 1, 15.0, 0.4)
     if n19 != 1 or k19 or not l19 or l19[0][1] != "T" or s19 > base19 + 15.0 + 3.0:
         fault(f"a check mid-measurement: {n19} process(es) (1 expected: no restart), kills {k19}, the stand-in "
               f"{'stopped' if l19 and l19[0][1] == 'T' else 'running'} under the check ({l19}), {s19:.1f} s where it took {base19:.1f} s with no check, for a 15-s check")
@@ -1723,3 +1724,61 @@ except Exception as e:
     fault(f"the parts' QoS raised {type(e).__name__}: {str(e)[:240]}")
 finally:
     M.cfg = real31
+
+# 32. a test file too heavy for D14's band at origin holds a landing, never drops it (measure.src_set's origin_heavy,
+# lander.src_refused), and a file is charged as it stands (measure.src_costs: recorded G x its size now / its size where
+# the score measured it). On an origin whose score's record holds t00.jl past the band alone and t01.jl near it: a
+# commit editing t00 is refused with t00 named origin's (the item held in its place, marked, never dropped); one
+# shrinking t00 to a fiftieth fits (charged as it stands, not its old weight); one adding a large new file is refused as
+# its own (dropped); one editing a light file is not refused; and the src-near note names t00 and t01, no other
+#: limit 60
+real32 = {"drop": L.drop}
+try:
+    checks32 = M.checks_measured()
+    path32 = lambda G: M.predict({"f": G}, 350.0, True, 5, checks32)[0]["path"]
+    big32 = next(G for G in range(200, 200000, 50) if path32(G) > 140 + 5)
+    near32 = next(G for G in range(200, 200000, 10) if path32(G) >= 0.85 * 140 + 1)
+    if path32(big32 / 50) > 0.85 * 140:
+        fault(f"section 32's fixture: t00 shrunk to a fiftieth ({big32 / 50} G) would not fit")
+    g("checkout", "-q", "--detach", h)
+    open(f"{repo}/test/src/t00.jl", "w").write("# t00\n" + "x" * 5000 + "\n")
+    g("add", "-A"); g("commit", "-q", "-m", "origin32"); h32 = g("rev-parse", "HEAD")
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", h32)   # origin's head (d14_red reads its dev/check.sh)
+    cost32 = {f: 100.0 for f in FILES}; cost32["t00.jl"], cost32["t01.jl"] = float(big32), float(near32)
+    open(f"{state}/src-{h32[:8]}.tsv", "w").write(f"head\t{h32}\twarm\t350\n" + "".join(f"{f}\tpassed\t{cost32[f]}\t0.0\t\n" for f in FILES))
+    open(f"{state}/src-latest.json", "w").write(json.dumps({"head": h32}))
+    def commit32(name, writes):
+        g("checkout", "-q", "--detach", h32)
+        for rel, text in writes.items():
+            open(f"{repo}/{rel}", "w").write(text)
+        g("add", "-A"); g("commit", "-q", "-m", name); return g("rev-parse", "HEAD")
+    e_edit = commit32("edit", {"test/src/t00.jl": "# t00\n" + "x" * 5000 + "\n# one more case\n", "src/x.jl": "z = 3\n"})
+    e_shrink = commit32("shrink", {"test/src/t00.jl": "# t00\n" + "x" * 100 + "\n", "src/x.jl": "z = 4\n"})
+    e_new = commit32("new", {"test/src/t99.jl": "# t99\n" + "x" * 400000 + "\n", "src/x.jl": "z = 5\n"})
+    e_light = commit32("light", {"test/src/t05.jl": "# t05 edited\n", "src/x.jl": "z = 6\n"})
+    ss32 = {k: M.src_set(h32, c_, None) for k, c_ in (("edit", e_edit), ("shrink", e_shrink), ("new", e_new), ("light", e_light))}
+    got32 = {k: (bool(v.get("refuse")), [f for f, _, _ in v.get("origin_heavy") or []]) for k, v in ss32.items()}
+    want32 = {"edit": (True, ["t00.jl"]), "shrink": (False, []), "new": (True, []), "light": (False, [])}
+    if got32 != want32:
+        fault(f"src_set's refusals (refused?, origin's heavy files): {got32} (expected {want32})")
+    near_seen32 = core.state_json("alarms.json", {}).get("src-near")
+    if near_seen32 != ["t00.jl", "t01.jl"]:
+        fault(f"the src-near note named {near_seen32}, not t00.jl and t01.jl (past and near the band)")
+    # the lander: held in its place for origin's file, dropped for its own
+    dropped32 = []
+    L.drop = lambda item, outcome, note, stop=True: dropped32.append((item["hold"], outcome))
+    item32 = {"branch": "ready/l228-32", "hold": "l228-32", "hold_id": "l228-32", "sha": e_edit}
+    core.update_json("ready.json", [], lambda q: q.append(dict(item32)))
+    r32 = (L.src_refused(item32, ss32["edit"]), L.src_refused(item32, ss32["light"]), L.src_refused(dict(item32, hold="l228-32n"), ss32["new"]))
+    q32 = [x for x in core.state_json("ready.json", []) if x["branch"] == "ready/l228-32"]
+    if r32 != (True, False, True) or dropped32 != [("l228-32n", "landing-red")] or not q32 or q32[0].get("split_held") != ["t00.jl"]:
+        fault(f"the lander on a refused set: {r32} (held, not refused, dropped expected), drops {dropped32} (the new file's "
+              f"alone), the held item {q32[0].get('split_held') if q32 else 'gone'} (in its place, t00.jl named)")
+except Exception as e:
+    fault(f"a test file too heavy at origin raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    L.drop = real32["drop"]
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+    with contextlib.suppress(Exception):
+        core.update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [x for x in q if x.get("branch") != "ready/l228-32"]))

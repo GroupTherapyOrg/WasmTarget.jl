@@ -1060,8 +1060,13 @@ door's, run as Dale on paths no build user writes.
   `src_margin_start_s` until `src_margin_checks` predicted checks exist
   stage). A test file a landing could not take and whose lone-shard prediction passes its target is named
   (`src-unfit`, one note each time the set changes): never silently the score's alone (R2); splitting it is the
-  lead's move. Before the check, a move
-  whose own and unscored files alone predict past D14's band is refused as its own, located; a check past the band with
+  lead's move; the same note names each file whose own cost predicts within `src_near_band` of D14's band for a
+  change to src/, before a landing that edits it is held. A file is costed as it stands (its recorded G scaled by its
+  size now over its size where the score measured it), so a commit that splits or shrinks a file is never charged its
+  old weight. Before the check, a move whose own and unscored files alone predict past D14's band is HELD in its place,
+  never dropped or charged, when one of its own files alone predicts past the band as it stands at origin (one note: split
+  test/src/<file>), and tried again each round until a score of a head where that file is lighter or gone lets it fit;
+  only when every own file fits at origin is it refused as its own, located; a check past the band with
   an own file no score has costed is the move's own red, never a D14 wait. A check red on its test files alone (its exit
   14) whose red files are all outside the move's own is run at origin's head in one process (`src_red_at`, R3, R10): red
   there, origin's: located at once (`src_locate`, the fix-first filed, the file into R) and the item checked again
@@ -1355,14 +1360,14 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `queue_cap` 4 (locked), `task_wall_s` 5400, `audit_every` 5 (locked), `score_every_landings` 3, `score_every_s` 7200,
 `retry_backoff_s` 1800, `backoff_cap_s` 28800, `driver_fault_backoff_s` 300, `stop_tries` 3, `alarm_s` 21600,
 `power_settle_s` 60, `battery_runs` true, `battery_floor_pct` 20, `oracle_audit_k` 8, `oracle_background` false,
-`measure_background` false, `score_background` false, `lock_wait_s` 3600, `score_loss_band` 0.02, `judge_n` 10,
-`judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3, `case_min_s` 900,
-`case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120, `kaimon_start_s` 900,
-`session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000, `decompressions_max` 400000,
-`near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6], `other_tries` 3, `ship_kill_s` 3600,
-`watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,
-`answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3,
-`fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
+`measure_background` false, `score_background` false, `src_near_band` 0.85, `lock_wait_s` 3600, `score_loss_band` 0.02,
+`judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3,
+`case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120,
+`kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000,
+`decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6],
+`other_tries` 3, `ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296,
+`cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6,
+`base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
 `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0},
 `src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9, `src_margin_min_s` 10, `src_margin_checks` 10,
 `src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800, `admissible_wall_s` 600,

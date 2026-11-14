@@ -838,6 +838,38 @@ def src_gap_spawn(origin):
                             env=dict(os.environ, WT_CLIMB_LOOP="src-gap"), stdout=log, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL)
 
+def src_refused(item, ss):
+    """Whether the item's own ∪ unscored test files alone predict past D14's band (measure.src_set's `refuse`), before
+    any Julia, and what that is. An own file that ALONE predicts past the band as it stands at origin (`origin_heavy`,
+    its recorded cost scaled to its size there) is origin's, never the move's: the item is HELD in its place, never
+    dropped or charged to its hold, with one note a file naming the split ("split test/src/<file>: no landing that edits
+    it fits D14's band"), and is tried again each round, so it lands once a score of a head where the file is lighter
+    or gone lets its set fit (2026-11-14 21:53:09Z: a wrong-answer fix that edited test/src/constants.jl, 746.9 G and
+    152.3 s alone at origin, was dropped as landing-red). Not a fix-first entry: no move of a hold can clear it (a split
+    is the lead's hand move, core.fixfirst_problem), and an overdue one would stop every other landing (core.admits).
+    Only when every own file fits at origin is the refusal the move's own (its additions or its edits push the set
+    past the band): dropped, as before."""
+    if not ss.get("refuse"):
+        return False
+    heavy, band = ss.get("origin_heavy") or [], d14_red()
+    if heavy:
+        names = [f for f, _, _ in heavy]
+        if item.get("split_held") != names:   # once a change of what holds it: an event, and the item marked
+            unqueue(item, split_held=names)
+            event("land-held-split", hold=item["hold"], files=[{"file": f, "cost": g_, "path": p_} for f, g_, p_ in heavy],
+                  band=band, hs=ss.get("hs"))
+        for f, g_, p_ in heavy:
+            alarm(f"split-{f}", f"split test/src/{f}: no landing that edits it fits D14's band",
+                  f"split test/src/{f}: no landing that edits it fits D14's band ({band} s): it predicts {p_} s alone at the "
+                  f"score's cost of {g_} G (the score of {ss.get('hs')}). Default taken: {item['hold'][:160]} is held in its "
+                  "place, never dropped or charged to its hold, and tried again each round; it lands once a score of a head "
+                  "where the file is lighter or gone lets its test set fit.")
+        return True
+    drop(item, "landing-red", f"its own test files {ss['own']} and the unscored {ss['unscored']} predict "
+         f"{ss['own_unscored']['path']} s at the score's costs, past D14's band of {band} s, every own file within it at "
+         "origin: its own additions or edits pass it; split the file or the move")
+    return True
+
 def held_result(kind, arg, out):
     """Whether ship.sh's result keeps the item queued as it is, no verdict on the commit (a landing round then ends):
     NETWORK (origin unreachable: a backoff, 17), the line stop or a hold, a stale or busy ship.sh, origin moved past its
@@ -946,10 +978,8 @@ def land_round():
                 alarm(f"land-no-set-{hashlib.sha1(ss.get('why', '').encode()).hexdigest()[:8]}", "a landing's test set cannot be made",
                       f"{ss.get('why', '')[:500]}. Default taken: the item keeps its place and nothing lands until a set can be made.")
                 return 3
-            if ss.get("refuse"):   # own ∪ unscored alone predict past D14's band: the move's own, before any Julia (located)
-                drop(item, "landing-red", f"its own test files {ss['own']} and the unscored {ss['unscored']} predict "
-                     f"{ss['own_unscored']['path']} s at the score's costs, past D14's band of {d14_red()} s: split the file "
-                     "or the move"); continue
+            if src_refused(item, ss):   # own ∪ unscored alone predict past D14's band: held (origin's) or dropped (its own)
+                continue
             item["src_ring"] = {"hs": ss["hs"], "pos": ss["pos_next"], "carry": ss["dropped"]} if "share" in ss else None
             unqueue(item, src_handed=files, src_ring=item["src_ring"])
             pr, res, (crc, path, split), out = land(slot, item, hand_set(item, files, ss))
