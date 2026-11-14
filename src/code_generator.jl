@@ -1925,7 +1925,7 @@ end
 # Julia's getfield(x, f[, boundscheck]) is Kernel's InstanceGet: a receiver whose class Julia inferred
 # concrete has the field as its single target (dart's _directGet); one Julia leaves abstract is a
 # virtual get. No field of a Julia struct is one of dart's getter intrinsics (wasm reference types,
-# int's bit counts). A field Julia names at run time rejects, located.
+# int's bit counts). A field Julia names at run time is the method below, a switch over the names.
 @parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" function visit_instance_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType; statement::Union{Int,Nothing} = nothing)::WasmBuilder.IR.ValueType
     local at = "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet"
     length(node.args) in (3, 4) || reject!(Internal("$at: getfield with $(length(node.args) - 1) operands"), "$(julia_text(self.enclosing_member))")
@@ -1937,8 +1937,7 @@ end
     # layout holds the field, as Julia's codegen reads the value's own type (jl_typeof)
     Base.isType(cls) && !Base.has_free_typevars(cls.parameters[1]) && (cls = typeof(cls.parameters[1]))
     local name = node.args[3]
-    name isa NirConst && name.c.val isa Union{Symbol,Int} ||
-        reject!(Unquarantined("src/code_generator.jl visitInstanceGet: a field of $cls named at run time"), "$(julia_text(self.enclosing_member))")
+    name isa NirConst && name.c.val isa Union{Symbol,Int} || return visit_instance_get(self, node, cls)
     local key = name.c.val
     # a receiver Julia left abstract has no single target: the field's getter selector (_virtualCall),
     # its interface target the field as the receiver's class names it (dart's node.interfaceTarget, a
@@ -1974,6 +1973,94 @@ end
     local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
     k === nothing && reject!(Unquarantined("src/julia/classes.jl: the field $key of $cls, which its class layout (a kind's runtime type layout) does not hold"), "$(julia_text(self.enclosing_member))")
     return _direct_get(self, fields[k], receiver)
+end
+
+# A field Julia names at run time, getfield(x, f) with f a Symbol or an Int only run time knows, on a
+# receiver of a concrete class. dart always names the member it reads; its read of a member the call
+# site does not bind to one target is the getter dispatcher (dynamic_dispatchers.dart:99
+# _generateGetterCode, mirrored in src/dynamic_dispatchers.jl): a switch whose arms each read one class's member and whose miss raises the
+# language's error (NoSuchMethodError). Julia's switch is over the names, not the classes: its codegen
+# inlines a Symbol it cannot see only for a struct of one field (julia/src/codegen.cpp:4627) and else
+# finds the index by the runtime's jl_field_index (codegen.cpp:4637), and a struct whose fields share
+# no one layout it reads by the runtime, jl_f_getfield (julia/src/builtins.c:1023):
+# get_checked_fieldindex (builtins.c:994) compares a Symbol with each of the type's field names in
+# order by identity (jl_field_index, julia/src/datatype.c:1781), none raising jl_has_no_field_error's
+# FieldError of the type and the name (rtutils.c:169), and checks an Int against the field count, a
+# miss raising BoundsError of the value and the index (jl_bounds_error, builtins.c:1006); the field
+# is jl_get_nth_field_checked's (datatype.c:1856), an undefined reference raising UndefRefError. So
+# each arm here is one of Julia's fields in Julia's order: the name's identity with the field's name
+# (each Symbol canonical, as the inline === compares it, the precedent of fieldtype's run-time name,
+# intrinsics.jl) or the Int's equality with its position, and the field's own read (_directGet, which
+# raises UndefRefError for a field that may be undefined), boxed into the union of the fields' types
+# where it is a number (Julia's boxed result of jl_f_getfield). Past the last arm is Julia's raise. A
+# Module's getfield is no field read but jl_f_getglobal of a binding (builtins.c:1041), a kind whose
+# class layout holds only some of Julia's fields (a DataType's: dart's runtime type layout,
+# src/julia/classes.jl _kind_instance_fields) has no arm for the rest, and a memory order (the
+# 4-operand form's Symbol) is jl_f_getfield's atomic check: each rejects at the statement, located
+@parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" function visit_instance_get(self::AstCodeGenerator, node::NirCall, @nospecialize(cls::Type))::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet"
+    local where_ = "$(julia_text(self.enclosing_member))"
+    local t = self.translator
+    local receiver = node.args[2]
+    local K = dart_type_of(self, node.args[3])
+    cls === Module &&
+        reject!(Unquarantined("src/code_generator.jl visitInstanceGet: a field of Module named at run time, which Julia reads as the module's global binding (julia/src/builtins.c:1041 jl_f_getglobal), not lowered"), where_)
+    # a tuple's field names are its positions (jl_field_names of a tuple type), so a Symbol is none of
+    # them and raises FieldError at every run; a tuple's Int read is the intrinsifier's (record classes)
+    local tuple = cls isa DataType && cls <: Tuple
+    cls isa DataType && isconcretetype(cls) && (K === Symbol || K === Int && !tuple) ||
+        reject!(Unquarantined("src/code_generator.jl visitInstanceGet: a field of $cls named at run time"), where_)
+    length(node.args) == 4 && dart_type_of(self, node.args[4]) !== Bool &&
+        reject!(Unquarantined("src/code_generator.jl visitInstanceGet: a field of $cls named at run time with a memory order, jl_f_getfield's atomic check (julia/src/builtins.c:1045)"), where_)
+    # Julia's fields in Julia's order (jl_field_names), each the field of the class's layout at its index
+    local layout = class_instance_fields(cls, at)
+    local fields = ClassField[]
+    local unheld = Symbol[]
+    for i in (tuple ? (1:0) : 1:fieldcount(cls))
+        local k = findfirst(f -> f.index == i, layout)
+        k === nothing ? push!(unheld, fieldname(cls, i)) : push!(fields, layout[k])
+    end
+    isempty(unheld) ||
+        reject!(Unquarantined("src/julia/classes.jl: the fields $(join(unheld, ", ")) of $cls, which its class layout (a kind's runtime type layout) does not hold, named at run time"), where_)
+    local why = type_value_unmade(t, cls)
+    why === nothing ||
+        reject!(Unquarantined("src/julia/classes.jl type_value_unmade: a field of $cls named at run time, whose type value has no constant for Julia's FieldError ($(something(why)))"), where_)
+    local b = self.b[]
+    local result = isempty(fields) ? t.top_type[] : translate_type(t, Union{Any[f.type for f in fields]...})
+    local key_type = translate_type(t, K)
+    local key = add_local(self, key_type)
+    translate_expression(self, node.args[3], key_type)
+    WasmBuilder.local_set(b, key)
+    local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[result])
+    for f in fields
+        local miss = WasmBuilder.block(b)
+        WasmBuilder.local_get(b, key)
+        if K === Symbol
+            translate_expression(self, NirConst(Core.Const(fieldname(cls, f.index))), key_type)
+            WasmBuilder.ref_eq(b)
+        else
+            WasmBuilder.i64_const(b, f.index)
+            WasmBuilder.i64_eq(b)
+        end
+        WasmBuilder.i32_eqz(b)
+        WasmBuilder.br_if(b, miss)
+        local got = _direct_get(self, f, receiver)
+        convert_type(t, b, got, result; boxed_class = f.type isa DataType ? f.type : nothing)
+        WasmBuilder.br(b, done)
+        WasmBuilder.var"end"(b)
+    end
+    if K === Symbol
+        translate_expression(self, NirConst(Core.Const(cls)), translate_type(t, DataType))
+        WasmBuilder.local_get(b, key)
+        call(self, nir_runtime_member(t.component, throw_field_error, "$where_: a field of $cls named at run time"))
+    else
+        translate_expression(self, receiver, t.top_type[])
+        WasmBuilder.local_get(b, key)
+        call(self, nir_runtime_member(t.component, throw_bounds_error, "$where_: a field of $cls named at run time"))
+    end
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    return result
 end
 
 @parity "dart2wasm/lib/code_generator.dart:2317 AstCodeGenerator.visitDynamicGet" visit_dynamic_get(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType)::Union{} =

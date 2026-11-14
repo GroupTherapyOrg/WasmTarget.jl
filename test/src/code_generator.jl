@@ -154,6 +154,56 @@ end
     @test e2.rejection isa W.Internal && occursin("no class info for $(FieldGenCases.P)", e2.rejection.site)
 end
 
+# a field Julia names at run time: jl_f_getfield's get_checked_fieldindex (julia/src/builtins.c:994),
+# a Symbol compared with each field name by identity (jl_field_index), an Int against the field count;
+# its misses FieldError(T, name) and BoundsError(x, i), an undefined field UndefRefError
+module RunTimeFieldCases
+struct Mix; a::Int64; b::Float64; s::String; end
+mutable struct Part; a::Int64; b; Part() = new(1); end
+@noinline pick(x::Int) = x > 2 ? :a : x > 0 ? :b : x > -5 ? :s : :z
+# each field's value at the type inference gives the read, Union{Float64, Int64, String}
+code(v) = v isa Int64 ? v : v isa Float64 ? 1000 : v isa String ? 2000 + ncodeunits(v) : -1
+by_name(x::Int) = try
+        code(getfield(Mix(x, 1.5, "qq"), pick(x)))
+    catch e
+        e isa FieldError && e.type === Mix && e.field === :z ? -7 : -8
+    end
+by_index(x::Int) = try
+        code(getfield(Mix(x, 2.5, "q"), x))
+    catch e
+        e isa BoundsError && e.a isa Mix && e.i === x ? -9 : -10
+    end
+undef_read(x::Int) = (m = Part(); try; code(getfield(m, x > 0 ? :b : :a)); catch e; e isa UndefRefError ? -1 : -2; end)
+no_fields(x::Int) = try; getfield(UInt64(x), pick(x)); 0; catch e; e isa FieldError && e.type === UInt64 ? 7 : 8; end
+# a tuple's field names are its positions: a Symbol is none of them
+tuple_name(x::Int) = try; getfield((x, 2), pick(x)); 0; catch e; e isa FieldError && e.type === Tuple{Int64,Int64} && e.field === :a ? 5 : 6; end
+@noinline dt(T::DataType, s::Symbol) = getfield(T, s)
+of_dt(x::Int) = (v = dt(x > 0 ? Int64 : Float64, x > 2 ? :hash : :flags); v isa Int32 ? Int64(v::Int32) : -1)
+of_module(x::Int) = getfield(x > 0 ? Base : Core, x > 2 ? :pi : :nothing) === nothing ? 1 : 2
+end
+
+@testset "builtins.c: a field named at run time is jl_f_getfield's switch over the names (visitInstanceGet)" begin
+    local R = RunTimeFieldCases
+    # the name is no constant in Julia's IR: getfield(::Mix, ::Symbol), its type the union of the fields'
+    local ir = only(Base.code_ircode(R.by_name, (Int,)))[1]
+    local i = findfirst(st -> Meta.isexpr(st, :call) && (local g = st.args[1]; g isa GlobalRef && getglobal(g.mod, g.name) === Core.getfield) && st.args[3] isa Core.SSAValue, ir.stmts.stmt)
+    @test i !== nothing && ir.stmts.type[i] == Union{Int64, Float64, String}
+    # native Julia's own answers: each field, FieldError, BoundsError, UndefRefError
+    @test R.by_name(3) == 3 && R.by_name(1) == 1000 && R.by_name(0) == 2002 && R.by_name(-6) == -7
+    @test R.by_index(1) == 1 && R.by_index(2) == 1000 && R.by_index(3) == 2001 && R.by_index(4) == -9 && R.by_index(0) == -9
+    @test R.undef_read(3) == -1 && R.undef_read(-3) == 1 && R.no_fields(1) == 7 && R.tuple_name(3) == 5
+    # run by node, each arm and each raise answers as native Julia
+    for (f, xs) in ((R.by_name, Int64[3, 1, 0, -6]), (R.by_index, Int64[1, 2, 3, 4, 0, -1]), (R.undef_read, Int64[3, -3]), (R.no_fields, Int64[1]), (R.tuple_name, Int64[3]))
+        queue_native!("$(nameof(f)) ", W.compile(f, (Int,); optimize = false), f, [(x,) for x in xs])
+    end
+    # a DataType's layout holds dart's runtime type fields, not all of Julia's: the rest are named, located
+    local e = rejection(() -> W.compile(R.of_dt, (Int,)))
+    @test e !== nothing && e.rejection isa W.Unquarantined && occursin("the fields name, super, types, instance, layout, hash, flags of DataType", e.rejection.row)
+    # a Module's getfield is jl_f_getglobal, a binding: located
+    local m = rejection(() -> W.compile(R.of_module, (Int,)))
+    @test m !== nothing && m.rejection isa W.Unquarantined && occursin("a field of Module named at run time, which Julia reads as the module's global binding", m.rejection.row)
+end
+
 @testset "code_generator.dart: an allocation Julia's IR never produces is an Internal (A59S1)" begin
     local g = ready_codegen_of(FieldGenCases.mk, (Int32,), [IR.NumType_i32], IR.ValueType[])
     local nw = g.body.stmts[findfirst(s -> s isa W.NirNew, g.body.stmts)]::W.NirNew
