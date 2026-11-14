@@ -550,7 +550,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/base/loading", "julia/base/stacktraces", "julia/base/libc", "julia/base/ryu/Ryu", "julia/base/docs/Docs",
     "julia/base/essentials", "julia/base/runtime_internals", "julia/base/scopedvalues", "julia/base/Base_compiler",
     "julia/Compiler/src/ssair/ir", "julia/base/show", "julia/base/reflection", "julia/base/errorshow", "julia/base/docs/utils",
-    "julia/base/dict",
+    "julia/base/dict", "julia/base/reinterpretarray",
 )
 
 """
@@ -594,7 +594,7 @@ members by the CFE; gpucompiler: the method table a device's overlays of Base li
 differs: `include` takes any path, so the overlays' file map is a table too, beside RUNTIME_FILES.
 """
 @quarantine pin"julia/base/experimental.jl:421 consistent_overlay" "julia/base/experimental.jl:421 consistent_overlay defines a method in an overlay table, from any file; the overlay table's files are a table, each one include_patch loads" Core.String const PATCH_FILES::Tuple{Vararg{String}} = (
-    "patch/string.jl", "patch/substring.jl", "patch/genericmemory.jl", "patch/hashing.jl", "patch/floatfuncs.jl", "patch/io.jl", "patch/ryu.jl",
+    "patch/string.jl", "patch/substring.jl", "patch/genericmemory.jl", "patch/hashing.jl", "patch/floatfuncs.jl", "patch/io.jl", "patch/ryu.jl", "patch/reinterpretarray.jl",
 )
 
 # the patch files include_patch has loaded, in order
