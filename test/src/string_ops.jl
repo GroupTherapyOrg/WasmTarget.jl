@@ -48,6 +48,19 @@ symn(n::Int64) = (s = String(n > 0 ? :héllo : :de); io = IOBuffer(); w = write(
 # concatenation's length and a byte of the Symbol's part
 syms(n::Int64) = (y = n > 0 ? :héllo : :de; s = string("x", y, 'é', SubString("wab", 2)); Int64(sizeof(n > 1 ? :ab : :xyz)) * 10^6 +
     Int64(ncodeunits(s)) * 10^4 + Int64(codeunit(s, 3)) * 10 + Int64(s == "xdeéab"))
+# endswith of Strings and SubStrings of them (Base's body, its _memcmp from pointer(a, astart) the walk of
+# a's data array from astart, src/patch/string.jl): a match, a miss, a suffix longer than the string and the
+# end of a suffix inside a character; and occursin and findfirst of a two-byte String, _searchindex of the two
+# Strings' CodeUnits (search.jl:297, its byte loop; its one-byte arm, _search of CodeUnits, is run by cus
+# below), found and missed, in a SubString and a String
+ends(n::Int64) = Int64(endswith(n > 0 ? "vital é" : "x", " é")) * 10^5 + Int64(endswith(SubString("xabcd", 2), n > 0 ? "cd" : "bd")) * 10^4 +
+    Int64(endswith("é", "\xa9")) * 1000 + Int64(occursin(",b", SubString(n > 0 ? " a,b " : "x", 2))) * 100 + something(findfirst("lo", n > 0 ? "héllo" : "xyz"), 0:0)[1]
+# _search of a byte in CodeUnits (search.jl:81 by overlay, the bytes read from the place of the String or
+# SubString{String} they wrap): findfirst of a zero byte in a String's, found and missed; findnext in a
+# SubString's from a start past its first byte, found and missed, and from its first match; a byte past ASCII
+cus(n::Int64) = something(findfirst(iszero, codeunits(n > 0 ? "ab\0c" : "abc")), 0) * 1000 +
+    something(findnext(isequal(0x62), codeunits(SubString(n > 0 ? "xabcb" : "xaca", 2)), 3), 0) * 100 +
+    something(findnext(isequal(0x62), codeunits(SubString("xabcb", 2)), 2), 0) * 10 + something(findfirst(isequal(0xc3), codeunits("aé")), 0)
 end
 
 const STRING_OP_CASES = (
@@ -64,7 +77,9 @@ const STRING_OP_CASES = (
     ("vstr", StringOpCases.vstr, (Int64(1),)), ("vstr", StringOpCases.vstr, (Int64(2),)),
     ("rng", StringOpCases.rng, (Int64(2),)), ("rng", StringOpCases.rng, (Int64(4),)), ("rng", StringOpCases.rng, (Int64(10),)),
     ("symn", StringOpCases.symn, (Int64(1),)), ("symn", StringOpCases.symn, (Int64(0),)),
-    ("syms", StringOpCases.syms, (Int64(2),)), ("syms", StringOpCases.syms, (Int64(0),)))
+    ("syms", StringOpCases.syms, (Int64(2),)), ("syms", StringOpCases.syms, (Int64(0),)),
+    ("ends", StringOpCases.ends, (Int64(1),)), ("ends", StringOpCases.ends, (Int64(0),)),
+    ("cus", StringOpCases.cus, (Int64(1),)), ("cus", StringOpCases.cus, (Int64(0),)))
 
 @testset "String's operations against native Julia" begin
     local runs = Main.WTChild.RunCase[]
@@ -96,6 +111,12 @@ end
     @test [:wasm_string_alloc, :wasm_string_copy!] ⊆ reached(StringOpCases.rng, (Int64,))
     @test [:wasm_symbol_name, :wasm_string_memory] ⊆ reached(StringOpCases.symn, (Int64,))
     @test [:wasm_symbol_name, :wasm_string_copy!] ⊆ reached(StringOpCases.syms, (Int64,))
+    # endswith and _search of CodeUnits reach their overlays, WasmTarget's methods of Base's names (Base's own
+    # are Base's); wasm_string_memcmp inlines into its callers, so its overlay's method is the one named
+    local overlaid(f, T) = Set{Symbol}(Core.Compiler.get_ci_mi(x).def.name for x in WasmTarget.check_subset(f, T, "string_ops", Base.get_world_counter()).codeinfos
+                                       if x isa Core.CodeInstance && Core.Compiler.get_ci_mi(x).def.module === WasmTarget)
+    @test [:endswith, :wasm_string_codeunit] ⊆ overlaid(StringOpCases.ends, (Int64,))
+    @test [:_search, :wasm_string_place, :wasm_string_codeunit] ⊆ overlaid(StringOpCases.cus, (Int64,))
 end
 
 # under minify a symbol constant's name is its ordinal (src/symbols.jl get_mangled_symbol_name), so a read
