@@ -244,10 +244,14 @@ rt_all(k::Int64, j::Int64) = isa(value_at(k), all_type_at(j)) ? 1 : 0
     # a Vararg tuple type, its length only run time knows: rejected at the test, located (Julia's own row)
     local ve = try; W.compile(rt_vararg, (Int64, Int64)); nothing; catch x; x; end
     @test ve isa W.RejectionError && occursin("Vararg", sprint(showerror, ve))
-    # one holding the UnionAll Vector: a UnionAll as a value has no constant yet, rejected at that
-    # constant, located, before any run-time test is decided
+    # one holding the UnionAll Vector: its constant is made (the closed world numbers Vector.body,
+    # constants.dart:430 _makeInterfaceTypeConstant), so the link-time check of the program's type values
+    # meets it, rejected at run_time_type_gap's UnionAll row, located (Julia's jl_isa decides it by its
+    # environment, subtype.c:1419)
     local u = try; W.compile(rt_all, (Int64, Int64)); nothing; catch x; x; end
-    @test u isa W.RejectionError && u.rejection isa W.Unquarantined && occursin("as a value", u.rejection.row)
+    @test u isa W.RejectionError && u.rejection isa W.Unquarantined &&
+          startswith(u.rejection.row, "src/julia/runtime/rtutils.jl run_time_type_gap: the type Vector, a UnionAll") &&
+          occursin("a run-time type test where the program holds the type Vector", sprint(showerror, u))
 end
 end
 
