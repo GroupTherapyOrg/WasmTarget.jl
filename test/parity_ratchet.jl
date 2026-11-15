@@ -3382,6 +3382,18 @@ const BOUNDED_BREAKS = (
     ("the ratchet's ✗ lines left out of the reason", "dev/climb/lander.py",
      "    lines = [l.strip()[:300] for l in rat.splitlines() if l.lstrip().startswith(\"✗\")][:10]", "    lines = []", 43),
     ("a note's tail kept for the stopped event", "dev/climb/lander.py", "outcome=outcome, note=note[:600])", "outcome=outcome, note=note[-600:])", 43),
+    # the power rule reads the direction of charge (P, 2026-11-14: a 30 W adapter took the battery from 81% to 5% "on AC")
+    ("a weak adapter's discharge read as AC", "dev/climb/core.py", "    return pct < c[\"battery_floor_pct\"] and (not ac or ma < 0)",
+     "    return pct < c[\"battery_floor_pct\"] and not ac", 44),
+    ("held work resumed at the floor, no margin", "dev/climb/core.py",
+     "        return pct < c[\"battery_floor_pct\"] + c[\"battery_resume_margin_pct\"]", "        return pct < c[\"battery_floor_pct\"]", 44),
+    ("a full adapter's discharge held", "dev/climb/core.py", "    if pct is None or ac and watts >= c[\"adapter_full_watts\"]:",
+     "    if pct is None:", 44),
+    ("a negative current read as its unsigned word", "dev/climb/core.py",
+     "        ma = ma - 2 ** 64 if ma >= 2 ** 63 else ma", "        ma = ma", 44),
+    ("the hold read from the reading alone, never the settled hold", "dev/climb/core.py",
+     "    above = not power_held(ac, pct, watts, ma, not rec.get(\"above\", True))", "    above = not power_held(ac, pct, watts, ma, False)", 44),
+    ("the status line silent on what the hold leaves running", "dev/climb/core.py", "NOT stopped: agent runs in flight finish", "nothing else", 44),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

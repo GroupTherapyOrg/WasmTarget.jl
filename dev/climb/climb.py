@@ -66,8 +66,8 @@ def slot_names():
 def power_hold():
     """The heartbeat's power assertion, as caffeinate's flags (spec battery1 B2), asked each minute by launch.sh's
     heartbeat: with `battery_runs`, `-i -s` while work may run (core.power_ok: `-i` holds the Mac awake on battery too,
-    `-s` on AC as before) and none while the power rule stops work (Low Power Mode on battery, or under
-    battery_floor_pct), so an emptying battery is never held awake (O9-2); with it off, `-s` alone, as before (it holds
+    `-s` on AC as before) and none while the power rule stops work (under battery_floor_pct while the battery
+    discharges, on battery or on an adapter under adapter_full_watts: core.power_held), so an emptying battery is never held awake (O9-2); with it off, `-s` alone, as before (it holds
     on AC only). A closed lid still sleeps the Mac."""
     if not cfg()["battery_runs"]:
         return "-s"

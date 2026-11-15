@@ -27,7 +27,7 @@ class PowerCut(Exception):
 # the programs the driver runs as Dale (D10's rule applied to the driver: the wrong program cannot be run): git as
 # plumbing and porcelain in trees no agent wrote, the machine's readers, the door's sudo, the notifier, and bash for
 # origin's dev/ship.sh alone, written from git; Julia, node and claude run behind the door (dev/climb/door.py) only
-PROGRAMS = {"git", "ps", "pgrep", "sysctl", "vm_stat", "sudo", "tar", "grep", "head", "launchctl", "osascript", "lsof", "pmset"}
+PROGRAMS = {"git", "ps", "pgrep", "sysctl", "vm_stat", "sudo", "tar", "grep", "head", "launchctl", "osascript", "lsof", "pmset", "ioreg"}
 
 def program(cmd):
     """`cmd`, an argv list whose program is one of PROGRAMS (or bash running origin's ship.sh as the lander wrote it),
@@ -916,10 +916,15 @@ def disk_room():
     return False
 
 def power_read():
-    """(on AC, Low Power Mode on, the battery's charge in percent), read from pmset's own words (`pmset -g batt`: "Now
-    drawing from 'AC Power'" or "'Battery Power'" and the battery's "<n>%;"; `pmset -g`: `lowpowermode 1`); an answer
-    that names neither source, or a battery source with no charge, is a ClimbError, never a guess (D9). A Mac with no
-    battery reads on AC with no charge (None)."""
+    """(on AC, Low Power Mode on, the battery's charge in percent, the adapter's watts, the battery's current in mA),
+    read from pmset's own words (`pmset -g batt`: "Now drawing from 'AC Power'" or "'Battery Power'" and the battery's
+    "<n>%;"; `pmset -g`: `lowpowermode 1`). On AC with a battery, also the adapter's watts (`pmset -g adapter`:
+    "Wattage = <n>W") and the direction of charge, read as the battery's measured current (ioreg's AppleSmartBattery
+    "Amperage", mA, negative while the battery discharges; pmset's "discharging" is its rendering of the same current):
+    an adapter under adapter_full_watts can discharge the battery while the source reads AC (2026-11-14: 81% to 5% on a
+    30 W adapter). An answer that names neither source, a battery source with no charge, and an AC source with a
+    battery and no wattage or no current are each a ClimbError, never a guess (D9). On battery the watts and the current
+    are None (power_held reads no adapter there), and a Mac with no battery reads on AC with no charge and neither."""
     b, g = sh(["pmset", "-g", "batt"]).stdout, sh(["pmset", "-g"]).stdout
     if "'AC Power'" not in b and "'Battery Power'" not in b:
         raise ClimbError(f"pmset names no power source: {b.strip()[:120]!r}")
@@ -927,24 +932,94 @@ def power_read():
     pct = re.search(r"\t(\d+)%;", b)
     if "'Battery Power'" in b and not pct:
         raise ClimbError(f"pmset names the battery as the source and no charge: {b.strip()[:160]!r}")
-    return "'AC Power'" in b, bool(m and m.group(1) != "0"), int(pct.group(1)) if pct else None
+    ac, watts, ma = "'AC Power'" in b, None, None
+    if ac and pct:
+        a, i = sh(["pmset", "-g", "adapter"]).stdout, sh(["ioreg", "-rn", "AppleSmartBattery"]).stdout
+        w = re.search(r"^\s*Wattage\s*=\s*(\d+)\s*W\s*$", a, re.M)
+        c = re.search(r'^[\s|]*"Amperage"\s*=\s*(-?\d+)\s*$', i, re.M)
+        if not w:
+            raise ClimbError(f"pmset names AC with a battery and no adapter's wattage: {a.strip()[:160]!r}")
+        if not c:
+            raise ClimbError(f"ioreg names no battery current (AppleSmartBattery's Amperage) on AC: {i.strip()[:160]!r}")
+        watts, ma = int(w.group(1)), int(c.group(1))
+        ma = ma - 2 ** 64 if ma >= 2 ** 63 else ma   # ioreg prints a negative current as its unsigned 64-bit word
+    return ac, bool(m and m.group(1) != "0"), int(pct.group(1)) if pct else None, watts, ma
 
 POWER = [power_read, 0.0, None]   # the reader (a probe stubs it), when last read, what it read
 
+def power_held(ac, pct, watts, ma, held):
+    """Whether the floor holds work (P, 2026-11-14: a 30 W adapter discharged the battery 81% to 5% while the source read
+    AC): the charge under `battery_floor_pct` while the battery discharges, on battery or on an adapter under
+    `adapter_full_watts` (the current `ma` negative); once held (`held`, the settled reading's), held until the charge is
+    back at the floor plus `battery_resume_margin_pct` or an adapter of `adapter_full_watts` or more is attached, so a
+    weak adapter's charge with work held never flaps the climb at the floor. An adapter of full wattage never holds, nor
+    does a Mac with no battery; a weak adapter charging (or not discharging) under the floor is not held, the floor
+    being for an emptying battery."""
+    c = cfg()
+    if pct is None or ac and watts >= c["adapter_full_watts"]:
+        return False
+    if held:
+        return pct < c["battery_floor_pct"] + c["battery_resume_margin_pct"]
+    return pct < c["battery_floor_pct"] and (not ac or ma < 0)
+
 def power_works(ac, low, above):
     """THE rule of when work runs (spec battery1 B1; Dale 2026-11-13: "keep gping with or without battery", and "STOP
-    pausing EVER"): on AC; or, with `battery_runs`, on battery with the charge at or above `battery_floor_pct`
-    (`above`), Low Power Mode on or off. Low Power Mode held work only because it halves the machine's rate, so a
+    pausing EVER"): while the floor does not hold it (`above`: not power_held), on AC, or with `battery_runs` on
+    battery, Low Power Mode on or off. Low Power Mode held work only because it halves the machine's rate, so a
     landing check would read red on D14's band: a check in it is now not quiet (lander.quiet), judged on correctness
-    alone, its time unjudged (throughput P0). Under the floor work waits for AC: the battery emptying would cut a
-    landing or a push, a real loss. With `battery_runs` false: on AC alone, as before."""
-    return bool(ac or (cfg()["battery_runs"] and above))
+    alone, its time unjudged (throughput P0). At the floor while the battery discharges, on battery or on an adapter
+    under adapter_full_watts, work waits until the charge is back by battery_resume_margin_pct or a full adapter is
+    attached: the battery emptying would cut a landing or a push, a real loss. With `battery_runs` false: on AC alone,
+    as before, the floor holding a weak adapter's discharge there too."""
+    return bool(above and (ac or cfg()["battery_runs"]))
 
-def _power_note(ac, low, above, pct):
-    """The note for a settled reading: its direction (work runs on AC, runs on battery, or waits) and its text."""
+def power_stops():
+    """What the power rule's hold stops and what it does not, said in its note and in the status line (P): it is not
+    PAUSE, which stops new work alone."""
+    return ("no move, measurement, score or landing check starts; one in flight ends (power-cut) and is redone when work "
+            "may run, never a failure (a move keeps its commit); NOT stopped: agent runs in flight finish, and a ship.sh "
+            "at its push or after it completes")
+
+def power_line(rec=None, reading=None):
+    """The status line of the power rule (P): the reading (source, charge, the adapter's watts, the direction of charge)
+    and the settled verdict in power.json, which it is: work runs, or waits and for what."""
+    rec = state_json("power.json", {}) if rec is None else rec
+    try:
+        ac, low, pct, watts, ma = POWER[0]() if reading is None else reading
+    except ClimbError as e:
+        return f"power: unread ({str(e)[:160]})"
+    c = cfg()
+    src = "on battery" if not ac else "on AC" + (f", a {watts} W adapter ({'full' if watts >= c['adapter_full_watts'] else 'weak'}: "
+                                                 f"adapter_full_watts {c['adapter_full_watts']})" if watts is not None else "")
+    way = "" if ma is None else (f", discharging at {ma} mA" if ma < 0 else f", charging at {ma} mA" if ma > 0 else ", neither charging nor discharging")
+    at = "" if pct is None else f", {pct}%"
+    if "ac" not in rec:
+        return f"power: {src}{way}{at}; no settled reading yet"
+    if rec.get("runs", True):
+        return f"power: {src}{way}{at}{', Low Power Mode' if low else ''}: work runs"
+    if not rec.get("above", True):
+        return (f"power: {src}{way}{at}: HELD at the floor (battery_floor_pct {c['battery_floor_pct']}% while discharging) "
+                f"until {c['battery_floor_pct'] + c['battery_resume_margin_pct']}% (battery_resume_margin_pct "
+                f"{c['battery_resume_margin_pct']}) or an adapter of {c['adapter_full_watts']} W; {power_stops()}")
+    return f"power: {src}{at}: work waits (battery_runs false: AC alone); {power_stops()}"
+
+def _power_note(ac, low, above, pct, watts=None, ma=None):
+    """The note for a settled reading: its direction (work runs on AC, runs on battery, waits on battery, or waits at
+    the floor on a weak adapter) and its text."""
+    c = cfg()
+    if ac and not above:
+        return "adapter-waits", f"on a {watts} W adapter, discharging, since {stamp()}: the climb waits ({pct}%)", (
+            f"The Mac draws from a {watts} W adapter, under adapter_full_watts ({c['adapter_full_watts']} W), and the "
+            f"battery discharges ({ma} mA) at {pct}%, under battery_floor_pct ({c['battery_floor_pct']}%). Default taken: "
+            f"work waits until the charge is back at {c['battery_floor_pct'] + c['battery_resume_margin_pct']}% "
+            f"(battery_resume_margin_pct) or an adapter of {c['adapter_full_watts']} W or more is attached: "
+            f"{power_stops()}.")
     if ac:
-        return "ac", f"on AC since {stamp()}: the climb goes on", ("The Mac draws from AC again. Default taken: the "
-                                                                   "climb starts work again; what battery ended is redone.")
+        weak = watts is not None and watts < c["adapter_full_watts"]
+        return "ac", f"on AC since {stamp()}: the climb goes on", ("The Mac draws from AC again" + (
+            f", a {watts} W adapter, under adapter_full_watts ({c['adapter_full_watts']} W): work waits at "
+            f"battery_floor_pct ({c['battery_floor_pct']}%) if the battery discharges on it" if weak else "") +
+            ". Default taken: the climb starts work again; what battery ended is redone.")
     if power_works(ac, low, above):
         return "battery-runs", f"on battery since {stamp()} ({pct}%): the climb goes on", (
             f"The Mac draws from its battery, Low Power Mode {'on' if low else 'off'}, {pct}% charged. Default taken: the "
@@ -958,9 +1033,10 @@ def _power_note(ac, low, above, pct):
             "(a move keeps its commit); agent runs in flight finish.")
     why = f"at {pct}%, under battery_floor_pct ({cfg()['battery_floor_pct']}%): plug in"
     return "battery-waits", f"on battery since {stamp()}: the climb waits ({pct}%)", (
-        f"The Mac draws from its battery {why}. Default taken: no move, measurement, score or landing check starts; one "
-        "in flight ends and is redone when work may run, never a failure (a move keeps its commit); agent runs in "
-        "flight finish. The heartbeat holds no assertion meanwhile, so an emptying battery is never held awake.")
+        f"The Mac draws from its battery {why}. Default taken: {power_stops()}; work runs again at "
+        f"{cfg()['battery_floor_pct'] + cfg()['battery_resume_margin_pct']}% (battery_resume_margin_pct) or on an "
+        f"adapter of adapter_full_watts ({cfg()['adapter_full_watts']} W). The heartbeat holds no assertion meanwhile, "
+        "so an emptying battery is never held awake.")
 
 def power_low():
     """Whether Low Power Mode is on now: the one reading power_ok() keeps (POWER), for lander.quiet (throughput P0)."""
@@ -976,23 +1052,24 @@ def judged_check(e):
     return not pr.get("battery") and (pr.get("quiet") or {}).get("start") is True and (pr.get("quiet") or {}).get("end") is True
 
 def power_ok():
-    """Whether work may run now (power_works), from the one reading of the power source, Low Power Mode and the
-    battery's charge (O8-3, R8-5), taken at every tick where the disk is asked (door.wait, measure.watched, the lander's
-    check) and by every loop before it starts work, pmset read at most once a second. A change counts only once it has
-    held power_settle_s (O9-2: the adapter flapped 117 times in six minutes on 2026-11-08): the reading (source, Low
-    Power Mode, the charge at or above the floor) that differs from the settled one is kept in power.json with when any
-    process first saw it, dropped when any process reads the settled one again, and settled once it has held; settling
-    writes the event (`power`, with the charge and whether work runs) and, at most once per direction per alarm_s, one
-    note for Dale (_power_note). When it is false no move, measurement, score or landing check starts (ac_wait), and
-    one in flight ends, never a failure (on_ac); a change that leaves it true (AC to battery with Low Power Mode off
-    above the floor) ends nothing."""
+    """Whether work may run now (power_works), from the one reading of the power source, Low Power Mode, the battery's
+    charge, the adapter's watts and the direction of charge (O8-3, R8-5, P; power_read, power_held), taken at every
+    tick where the disk is asked (door.wait, measure.watched, the lander's check) and by every loop before it starts
+    work, pmset read at most once a second. A change counts only once it has held power_settle_s (O9-2: the adapter
+    flapped 117 times in six minutes on 2026-11-08): the reading (source, Low Power Mode, whether the floor holds
+    work: power_held, from the settled reading's hold) that differs from the settled one is kept in power.json with
+    when any process first saw it, dropped when any process reads the settled one again, and settled once it has
+    held; settling writes the event (`power`, with the charge, the adapter's watts, the battery's current and
+    whether work runs) and, at most once per direction per alarm_s, one note for Dale (_power_note). When it is
+    false no move, measurement, score or landing check starts (ac_wait), and one in flight ends, never a failure
+    (on_ac); a change that leaves it true (AC to battery with Low Power Mode off above the floor) ends nothing."""
     if time.time() - POWER[1] >= 1 or POWER[2] is None:
         POWER[2], POWER[1] = POWER[0](), time.time()
-    ac, low, pct = POWER[2]
-    # the floor counts only where battery_runs (with it off the reading is the source and Low Power Mode, as before)
-    above = not cfg()["battery_runs"] or pct is None or pct >= cfg()["battery_floor_pct"]
-    key = [ac, low, above]
+    ac, low, pct, watts, ma = POWER[2]
     rec = state_json("power.json", {})
+    # the floor's hold from the settled reading's (power_held: held until the margin or a full adapter)
+    above = not power_held(ac, pct, watts, ma, not rec.get("above", True))
+    key = [ac, low, above]
     if "ac" in rec and [rec["ac"], rec.get("lowpower"), rec.get("above", True)] == key and "seen" not in rec:
         return power_works(rec["ac"], rec.get("lowpower"), rec.get("above", True))
     with locked():
@@ -1013,8 +1090,8 @@ def power_ok():
         if changed:
             runs = power_works(ac, low, above)
             rec["runs"] = runs
-            event("power", ac=ac, lowpower=low, pct=pct, runs=runs)
-            way, title, text = _power_note(ac, low, above, pct)
+            event("power", ac=ac, lowpower=low, pct=pct, watts=watts, ma=ma, runs=runs)
+            way, title, text = _power_note(ac, low, above, pct, watts, ma)
             noted = rec.setdefault("noted", {})
             if rec.get("way") != way and now_ - noted.get(way, 0) >= cfg()["alarm_s"]:   # one note per direction per alarm_s
                 noted[way] = now_
@@ -1062,6 +1139,7 @@ def report(k=12):
     cases = head_cases()
     ev = events()
     lines = [progress_line()]   # D40: a status leads with src progress
+    lines.append(power_line())   # P: which the power rule reads, and what its hold stops
     sc = scored_heads(ev)
     if cases:
         s = score(cases, baseline())

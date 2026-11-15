@@ -1310,16 +1310,26 @@ every call. (Weighted means cache reads at 0.1, cache writes at 1.25, output at 
 work runs by one rule, `core.power_works`: on AC; or, with `battery_runs` (Dale 2026-11-13: "keep gping with or
 without battery"; 2026-11-13: "STOP pausing EVER"), on battery with the charge at or above `battery_floor_pct`, Low
 Power Mode on or off. Low Power Mode halves the machine's rate, so a landing check in it is not quiet: judged on
-correctness alone, its time unjudged (the quiet probe, throughput P0), never a hold. A charge under the floor waits
-(the battery emptying would cut a landing or a push, a real loss); with
-`battery_runs` false the climb runs on AC alone, as before. One reading of the power source, Low Power Mode and the
-battery's charge (`core.power_read`, pmset's own words, at most once a second; `core.power_ok` the rule over it) is
-taken at every tick where the disk is asked and by each loop before it starts work. A change of (source, Low Power
-Mode, the charge at or above the floor) counts only once the new reading has held `power_settle_s` (O9-2: the adapter flapped 117 times in six minutes on 2026-11-08): the reading that
+correctness alone, its time unjudged (the quiet probe, throughput P0), never a hold. The floor (`core.power_held`, P,
+2026-11-14: a 30 W adapter took the battery from 81% to 5% under the climb while the source read AC): a charge under
+`battery_floor_pct` while the battery discharges, on battery or on an adapter under `adapter_full_watts` (60), holds
+work (the battery emptying would cut a landing or a push, a real loss) until the charge is back at the floor plus
+`battery_resume_margin_pct` (10) or an adapter of `adapter_full_watts` or more is attached, so a weak adapter's charge
+with work held never flaps the climb at the floor; a weak adapter charging under the floor holds nothing, and plain
+battery above the floor holds nothing (Low Power Mode and the floor alone hold, never the source). The hold is not
+PAUSE: no move, measurement, score or landing check starts, and one in flight ends and is redone; agent runs in
+flight finish and a ship.sh at its push or after it completes (`core.power_stops`, said in the note and in the
+status line). With `battery_runs` false the climb runs on AC alone, as before, the floor holding a weak adapter's
+discharge there too. One reading of the power source, Low Power Mode, the battery's charge and, on AC with a battery,
+the adapter's watts (`pmset -g adapter`) and the direction of charge (ioreg's AppleSmartBattery `Amperage`, negative
+while discharging) (`core.power_read`, at most once a second, a missing word a ClimbError; `core.power_ok` the rule
+over it) is taken at every tick where the disk is asked and by each loop before it starts work, and the status line
+(`core.power_line`) says which it reads: work runs, or held at the floor until the margin or a full adapter. A change
+of (source, Low Power Mode, whether the floor holds) counts only once the new reading has held `power_settle_s` (O9-2: the adapter flapped 117 times in six minutes on 2026-11-08): the reading that
 differs is kept in `power.json` with when any process first saw it, dropped when any process reads the settled one
 again, and settled once it has held, which writes the event (`power`, with the charge and whether work runs) and at
-most one note for Dale per direction per `alarm_s`, the directions being work on AC, work on battery and waiting
-(under the floor: plug in). Probed (`v10/p3/flap.py`, the operator's, on a simulated
+most one note for Dale per direction per `alarm_s`, the directions being work on AC, work on battery, waiting
+(under the floor: plug in) and waiting at the floor on a weak adapter. Probed (`v10/p3/flap.py`, the operator's, on a simulated
 clock: `pmset -g log`'s own timeline read every 5 s): each burst wrote one note and one event, the settle to AC once it
 stopped (the windows' other note is a real battery period before each burst), where HEAD wrote 30 and 6; two real
 unplugs 20 minutes apart wrote one note per direction, where HEAD wrote four (`twice.py`). While the rule stops work
@@ -1409,14 +1419,15 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `price_band` [0.95, 1.05], `resumes_per_move` 3, `stops_per_hold` 3, `park_steps` [50, 100, 200],
 `queue_cap` 4 (locked), `task_wall_s` 5400, `audit_every` 5 (locked), `score_every_landings` 3, `score_every_s` 7200,
 `retry_backoff_s` 1800, `backoff_cap_s` 28800, `driver_fault_backoff_s` 300, `stop_tries` 3, `alarm_s` 21600,
-`power_settle_s` 60, `battery_runs` true, `battery_floor_pct` 20, `oracle_audit_k` 8, `oracle_background` false,
-`measure_background` false, `score_background` false, `src_near_band` 0.85, `src_cost_jump` 4, `lock_wait_s` 3600,
-`score_loss_band` 0.02, `judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4,
-`wall_factor` 3, `case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840,
-`kaimon_http_s` 120, `kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15,
-`swapins_max` 2000, `decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200,
-`d14_share` [10, 0.6], `other_tries` 3, `d14_tries` 3, `gap_admit_max_s` 259200, `l228_sweep_wall_s` 900,
-`ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,
+`power_settle_s` 60, `battery_runs` true, `battery_floor_pct` 20, `battery_resume_margin_pct` 10,
+`adapter_full_watts` 60, `oracle_audit_k` 8, `oracle_background` false, `measure_background` false,
+`score_background` false, `src_near_band` 0.85, `src_cost_jump` 4, `lock_wait_s` 3600, `score_loss_band` 0.02,
+`judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3,
+`case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120,
+`kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000,
+`decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6],
+`other_tries` 3, `d14_tries` 3, `gap_admit_max_s` 259200, `l228_sweep_wall_s` 900, `ship_kill_s` 3600,
+`watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,
 `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3,
 `fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
 `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0},

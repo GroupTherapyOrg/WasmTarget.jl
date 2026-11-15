@@ -1051,8 +1051,8 @@ def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=Fals
                 if e.why == "power":   # the power rule stopped work: the measurement ends, redone when work may run (on_ac); nothing it timed is learned
                     flight = last if last and last not in done else None
                     event("power-cut", role=role, part=part, in_flight=flight, after=max(done) if done else None)
-                    raise PowerCut(f"the power rule stopped work (core.power_works: battery in Low Power Mode, under "
-                                   f"battery_floor_pct, or with battery_runs off) while the {part} process ran (in flight: "
+                    raise PowerCut(f"the power rule stopped work (core.power_works: under "
+                                   f"battery_floor_pct while the battery discharges, or on battery with battery_runs off) while the {part} process ran (in flight: "
                                    f"{flight or 'no case, its load or between two'}): the measurement ends, redone when work may run")
                 raise ClimbError(f"the {part} process: {e}")
             if not alive and th is not None:

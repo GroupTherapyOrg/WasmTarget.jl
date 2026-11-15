@@ -101,6 +101,18 @@ DEFAULTS = {
     # band 10-40%: under 10 a check in flight (up to ~10 min) and the push can meet macOS's own low-battery sleep, over
     # 40 more than half of every battery period idles
     "battery_floor_pct": 20,
+    # held at the floor, work runs again once the charge is back this many points over it (or an adapter of
+    # adapter_full_watts or more is attached), so a weak adapter's charge with work held never flaps the climb at the
+    # floor (P, 2026-11-14). Derivation: on the 30 W adapter the charge rose 9% -> 20% in 50 minutes with work running
+    # (the power events of 2026-11-15 01:16:52Z and 02:06:41Z), about 13 points an hour, so 10 points is under an hour
+    # held; the lead's hand watcher resumed at 30%, the floor plus 10. Band 5-30: under 5 work resumes for minutes
+    # before the floor holds it again, over 30 a hold on a 30 W adapter passes two hours
+    "battery_resume_margin_pct": 10,
+    # an adapter under this wattage can discharge the battery while the source reads AC, so at battery_floor_pct, the
+    # battery discharging on it (ioreg's Amperage negative), work waits as on battery (P). Derivation: 2026-11-14, a
+    # 30 W USB-C adapter took the battery from 81% to 5% under the climb (the lead's reading); the lead's line is 60 W.
+    # Band 31-140: over the 30 W adapter that discharged, at most the largest adapter Apple sells for a MacBook
+    "adapter_full_watts": 60,
     # the oracle's audit (climb.py oracle-audit) replays this many stored answers, each in a process of its own at its
     # unit's commit. Derivation: a process pays the corpus's load, 60-90 s at normal priority (v8-report: native parts
     # of 66 s and 91 s) and about 7.5 min at background QoS, where the driver's Julia runs (the bootstrap of 2026-11-10:

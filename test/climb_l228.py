@@ -304,7 +304,7 @@ open(f"{slot6}/.wtd/ship.lander.sh", "w").write(
     'case "$rc" in 0) echo "LANDED $WT_SHIP_EXPECT" > "$WT_SHIP_RESULT" ;; 10) echo "D14 $FAKE_PATH" > "$WT_SHIP_RESULT" ;;\n'
     '  14) echo "OWN tests" > "$WT_SHIP_RESULT" ;; *) echo "OTHER check-$rc" > "$WT_SHIP_RESULT" ;; esac\n')
 real6 = {"probe": L.probe, "ship_cmd": L.ship_cmd, "reap": door.reap}
-def land6(crc, path, readings, power=(True, False, 90)):
+def land6(crc, path, readings, power=(True, False, 90, 96, 0)):
     """_land with the check's status `crc` and path, the probe reading `readings` in turn, the power reading `power`:
     (kind, D14 verdict, the probe record)."""
     seq = iter(readings)
@@ -326,10 +326,10 @@ def land6(crc, path, readings, power=(True, False, 90)):
 try:
     g("update-ref", "refs/remotes/origin/wt2", h)   # d14_red() reads origin's dev/check.sh
     for what, crc, path, readings, power, want in (
-            ("a busy start, its tests green, 190 s", 10, 190, [busy6, busy6], (True, False, 90), ("LANDED", "unjudged")),
-            ("quiet at its start and its end, 150 s", 10, 150, [quiet6, quiet6], (True, False, 90), ("D14", "red")),
-            ("a busy start, one test failing", 14, 90, [busy6, busy6], (True, False, 90), ("OWN", None)),
-            ("in Low Power Mode on battery, the cores idle, 170 s", 10, 170, [quiet6, quiet6], (False, True, 80), ("LANDED", "unjudged"))):
+            ("a busy start, its tests green, 190 s", 10, 190, [busy6, busy6], (True, False, 90, 96, 0), ("LANDED", "unjudged")),
+            ("quiet at its start and its end, 150 s", 10, 150, [quiet6, quiet6], (True, False, 90, 96, 0), ("D14", "red")),
+            ("a busy start, one test failing", 14, 90, [busy6, busy6], (True, False, 90, 96, 0), ("OWN", None)),
+            ("in Low Power Mode on battery, the cores idle, 170 s", 10, 170, [quiet6, quiet6], (False, True, 80, None, None), ("LANDED", "unjudged"))):
         kind6, v6, pr6 = land6(crc, path, readings, power)
         if (kind6, v6) != want:
             fault(f"a landing check {what}: {kind6}, D14 {v6}, quiet {pr6.get('quiet')}; want {want[0]}, D14 {want[1]} (throughput P0)")
@@ -2315,3 +2315,62 @@ try:
               "(each carries the ✗ line)")
 except Exception as e:
     fault(f"a landing's reason raised {type(e).__name__}: {str(e)[:240]}")
+# 44. the power rule reads the direction of charge (core.power_read, core.power_held, core.power_ok, core.power_line, P):
+# at battery_floor_pct while the battery discharges, on battery or on an adapter under adapter_full_watts though the
+# source reads AC, work is held until the floor plus battery_resume_margin_pct or a full adapter; a weak adapter
+# charging, a full adapter, and plain battery above the floor hold nothing; the status line says which, and what the
+# hold leaves running. 2026-11-14: a 30 W adapter took the battery from 81% to 5% under the climb while "on AC"
+#: limit 30
+real44 = {"sh": core.sh, "cfg": core.cfg, "POWER": list(core.POWER)}
+try:
+    # the reader: pmset's words, the adapter's wattage, ioreg's current (a negative one printed as its unsigned word)
+    out44 = {"batt": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t18%; discharging; (no estimate) present: true\n",
+             "g": " lowpowermode         0\n", "adapter": " Wattage = 30W\n Current = 1490mA\n",
+             "ioreg": '  |   "InstantAmperage" = 18446744073709550000\n  |   "Amperage" = 18446744073709550616\n'}
+    def sh44(cmd, **k):
+        o = {("pmset", "-g", "batt"): "batt", ("pmset", "-g"): "g", ("pmset", "-g", "adapter"): "adapter",
+             ("ioreg", "-rn", "AppleSmartBattery"): "ioreg"}[tuple(cmd)]
+        return subprocess.CompletedProcess(cmd, 0, out44[o], "")
+    core.sh = sh44
+    if core.power_read() != (True, False, 18, 30, -1000):
+        fault(f"power_read of AC, 18%, a 30 W adapter, -1000 mA: {core.power_read()}")
+    out44["adapter"] = " No adapter attached.\n"
+    try:
+        core.power_read(); fault("power_read on AC with a battery and no adapter's wattage: no ClimbError (D9)")
+    except core.ClimbError:
+        pass
+    core.sh = real44["sh"]
+    # the rule, each reading (ac, pct, watts, mA, held before) -> held
+    for r44, want in (((True, 15, 30, -500, False), True), ((True, 15, 30, 300, False), False), ((True, 15, 60, -500, False), False),
+                      ((True, 25, 30, 200, True), True), ((True, 30, 30, 200, True), False), ((True, 25, 96, -900, True), False),
+                      ((False, 15, None, None, False), True), ((False, 50, None, None, False), False),
+                      ((True, None, None, None, False), False), ((True, 35, 30, -800, False), False)):
+        if core.power_held(*r44) != want:
+            fault(f"power_held{r44} is {core.power_held(*r44)}, not {want}")
+    # end to end: settled at once (power_settle_s 0), the reading stubbed
+    core.cfg = lambda: dict(real44["cfg"](), power_settle_s=0)
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(f"{state}/power.json")
+    def ok44(reading):
+        core.POWER[0], core.POWER[1], core.POWER[2] = (lambda: reading), 0.0, None
+        core.power_ok(); core.POWER[1] = 0.0   # a change settles on its second reading
+        return core.power_ok()
+    seq44 = [((True, False, 50, 30, -900), True), ((True, False, 19, 30, -900), False), ((True, False, 25, 30, 400), False),
+             ((True, False, 30, 30, 400), True), ((True, False, 19, 30, -900), False), ((True, False, 19, 67, -100), True),
+             ((False, False, 60, None, None), True), ((False, True, 40, None, None), True)]
+    got44 = [ok44(r) for r, _ in seq44]
+    if got44 != [w for _, w in seq44]:
+        fault(f"power_ok over a weak adapter's discharge, the margin, a full adapter, plain battery: {got44}, not {[w for _, w in seq44]}")
+    ev44 = [e for e in core.events() if e["kind"] == "power"]
+    if not any(e.get("watts") == 30 and e.get("ma") == -900 and e.get("runs") is False for e in ev44):
+        fault(f"the power event of a weak adapter's hold names no watts, current or runs false: {ev44[-3:]}")
+    held44 = core.power_line({"ac": True, "above": False, "runs": False}, (True, False, 19, 30, -900))
+    runs44 = core.power_line({"ac": True, "above": True, "runs": True}, (True, False, 50, 30, 400))
+    if "HELD at the floor" not in held44 or "until 30%" not in held44 or "agent runs in flight finish" not in held44 \
+            or "discharging at -900 mA" not in held44 or "work runs" not in runs44 or "charging at 400 mA" not in runs44:
+        fault(f"the status line: held {held44!r}; runs {runs44!r}")
+except Exception as e:
+    fault(f"the power rule raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    core.sh, core.cfg = real44["sh"], real44["cfg"]
+    core.POWER[:] = real44["POWER"]
