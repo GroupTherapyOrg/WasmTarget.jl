@@ -3693,47 +3693,77 @@ def src_unverified(h):
 SRC_GAP = "src-gap.json"   # the head the src-gap job last ran at: {"head": sha, "t": stamp}
 
 L228_SWEEP = "l228-sweep.json"   # the head the last sweep of every L228 break ran at (l228_sweep)
+# the sweep's result, relative to the landing user's clone where its job writes it and to the sweep's worktree the job's
+# output is copied back into (door.land_job, copy_back): the one path the job is told, copies back and the driver reads
+SWEEP_OUT = ".wtd/l228-sweep.json"
+
+SWEEP_TRIES = 2   # sweeps in a row with no result before the alarm and the wait for a change: one run again at the next
+# round (a failure of the machine's own passes), and no endless loop of 255-s sweeps where the failure is the code's
 
 def l228_sweep_due(head):
-    """Whether the sweep of every L228 break runs at `head`: the landings since the last swept head (or since head's
-    parent, before any sweep, or when that head is no ancestor) change an input of the harness (l228scope.harness, the
-    class a landing's check is judged in). A landing's check runs only the breaks its diff selects
-    (l228scope.breaks); this sweep runs them all, once a driver landing, after it lands."""
-    last = state_json(L228_SWEEP, {}).get("head")
+    """Whether the sweep of every L228 break runs at `head`: the landings since the last head a sweep gave a result at
+    (or since head's parent, before any sweep, or when that head is no ancestor) change an input of the harness
+    (l228scope.harness, the class a landing's check is judged in). A landing's check runs only the breaks its diff
+    selects (l228scope.breaks); this sweep runs them all, once a driver landing, after it lands. A sweep that gave no
+    result swept nothing (D9): the record keeps the last swept head, so the sweep is due again at the next round;
+    after SWEEP_TRIES of them in a row it waits for a landing that changes the harness's inputs since the last failure
+    (a fix), named by the alarm l228_sweep wrote."""
+    rec = state_json(L228_SWEEP, {})
+    last, failed = rec.get("head"), rec.get("failed") or {}
     if last == head:
         return False
-    prev = last if last and sh(["git", "merge-base", "--is-ancestor", last, head]).returncode == 0 else git("rev-parse", f"{head}~1")
-    try:
-        return l228scope.harness(ROOT, prev, head)
-    except (ValueError, subprocess.CalledProcessError):
-        return True   # a head whose class cannot be read is swept (D9: never skipped unread)
+    def changed(since):
+        prev = since if since and sh(["git", "merge-base", "--is-ancestor", since, head]).returncode == 0 else git("rev-parse", f"{head}~1")
+        try:
+            return l228scope.harness(ROOT, prev, head)
+        except (ValueError, subprocess.CalledProcessError):
+            return True   # a head whose class cannot be read is swept (D9: never skipped unread)
+    if failed.get("n", 0) >= SWEEP_TRIES:
+        return failed.get("head") != head and changed(failed.get("head"))
+    return changed(last)
 
 def l228_sweep(head):
     """Every L228 break, the tree and the runner's plants at `head` (dev/l228_sweep.py, the ratchet's own reading of
     them), as the landing user in its check profile at background QoS (door.land_job, as the packages regeneration runs:
     no test set, no Julia), from the sweep's worktree. Each fault is a fix-first (`l228 <fault>`, a known red, the
-    lead's hand: no climber's hold), located at `head`; one a clean sweep no longer reads is cleared. The record is
-    written whatever the verdict, so a head is swept once. A door failure or no result is the driver's (ClimbError)."""
-    save_json(L228_SWEEP, {"head": head, "t": stamp(), "running": True})
+    lead's hand: no climber's hold), located at `head`; one a clean sweep no longer reads is cleared. A result records
+    `head` as swept, so a head is swept once. A door failure or no result is the driver's (ClimbError), recorded as a
+    failure beside the last swept head, never as a sweep (2026-11-15: `{"head": a2d1b0d4, "running": true}`, written
+    before the job and kept by its failure, read as swept): due again at the next round, and the SWEEP_TRIES-th in a
+    row an alarm naming the head. A power cut leaves the record as it was before (redone when work may run)."""
+    prior = {k: v for k, v in state_json(L228_SWEEP, {}).items() if k != "running"}
+    save_json(L228_SWEEP, dict(prior, running={"head": head, "t": stamp()}))
     wt = os.path.join(WORKTREES, "climb-sweep")
-    if not os.path.isdir(wt):
-        common_write("the sweep worktree")
-        git("worktree", "add", "-q", "--detach", wt, head)
-    git("checkout", "-q", "-f", "--detach", head, cwd=wt)
-    res_p = os.path.join(wt, ".wtd", "l228-sweep.json")
-    with contextlib.suppress(FileNotFoundError):
-        os.remove(res_p)
+    res_p = os.path.join(wt, SWEEP_OUT)
     try:
-        rc = door.land_job(wt, 'python3 -I dev/l228_sweep.py "$HOME/c" --out .wtd/l228-sweep.json', "l228-sweep.log",
-                           [".wtd/l228-sweep.json"], cfg()["l228_sweep_wall_s"], background=True, check=False)
-    except door.Tick as e:
-        if e.why == "power":
-            save_json(L228_SWEEP, {})   # redone when work may run
-            raise PowerCut(f"the L228 sweep of {head[:10]}: {e}") from e
+        if not os.path.isdir(wt):
+            common_write("the sweep worktree")
+            git("worktree", "add", "-q", "--detach", wt, head)
+        git("checkout", "-q", "-f", "--detach", head, cwd=wt)
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(res_p)
+        try:
+            rc = door.land_job(wt, f'python3 -I dev/l228_sweep.py "$HOME/c" --out {SWEEP_OUT}', "l228-sweep.log",
+                               [SWEEP_OUT], cfg()["l228_sweep_wall_s"], background=True, check=False)
+        except door.Tick as e:
+            if e.why == "power":
+                raise PowerCut(f"the L228 sweep of {head[:10]}: {e}") from e
+            raise
+        if rc == door.DOOR_FAILED or not os.path.exists(res_p):
+            raise ClimbError(f"the L228 sweep of {head[:10]} gave no result (exit {rc}, {wt}/.wtd/l228-sweep.log)")
+        res = json.load(open(res_p))
+    except PowerCut:
+        save_json(L228_SWEEP, prior)   # redone when work may run
         raise
-    if rc == door.DOOR_FAILED or not os.path.exists(res_p):
-        raise ClimbError(f"the L228 sweep of {head[:10]} gave no result (exit {rc}, {wt}/.wtd/l228-sweep.log)")
-    res = json.load(open(res_p))
+    except Exception as e:
+        n = (prior.get("failed") or {}).get("n", 0) + 1
+        save_json(L228_SWEEP, dict(prior, failed={"head": head, "n": n, "t": stamp(), "why": f"{type(e).__name__}: {str(e)[-300:]}"}))
+        if n >= SWEEP_TRIES:
+            alarm("l228-sweep-failed", "the sweep of every L228 break gave no result", f"{n} sweeps in a row gave no result, "
+                  f"the last at {head[:10]}: {type(e).__name__}: {str(e)[:500]}. The last head swept is "
+                  f"{(prior.get('head') or 'none')[:10]}. Default taken: the landings' checks run their diffs' breaks, and "
+                  "the sweep runs again once a landing changes the harness's inputs (a fix).")
+        raise
     bad = res["tree"] + res["missed"] + res["anchors"] + res["runner"]
     keys = {f"l228 {x[:200]}" for x in bad}
     update_json("fixfirst.json", [], lambda ff: ff.__setitem__(slice(None), [f for f in ff if not f["key"].startswith("l228 ") or f["key"] in keys]))

@@ -1145,7 +1145,12 @@ door's, run as Dale on paths no build user writes.
   input of the harness), as the landing user with no test set at background QoS (`door.land_job`, as the packages
   regeneration; dev/l228_sweep.py, the ratchet's own reading of its breaks): each fault a fix-first `l228 <fault>`, a
   known red and the lead's hand (no climber's hold: the harness is no move's to change), cleared by the next clean
-  sweep. A set the lander hands with no file (a change whose own files are none and whose ratchet alone passes the
+  sweep. Its result is written where the job runs, the landing user's clone, its directory made there (`write_out`),
+  and read at the one path the job is told and copies back (`measure.SWEEP_OUT`). A sweep with no result swept nothing:
+  its head is never recorded as swept, so it is due again at the next round, and the second in a row (`SWEEP_TRIES`)
+  is an alarm naming it, after which it waits for a landing that changes the harness's inputs (2026-11-15: the sweeps
+  of 43c5d523 and a2d1b0d4 both read every break caught and then failed to write their result into a clone with no
+  .wtd, and each head, recorded before its job, read as swept). A set the lander hands with no file (a change whose own files are none and whose ratchet alone passes the
   target takes no share) is a valid set: dev/check.sh runs no shard and its shard stage is green; a void reading of
   such a set is the check's fault, the driver's (`lander.empty_set_void`: held, uncharged), never the commit's. A driver commit's evidence is `bash dev/driver_evidence.sh <commit> --state <state> --main <repository>`: the
   sweep and dev/check.sh itself, both run in a landing's shape (a scratch door root, its landing user's home and tmp

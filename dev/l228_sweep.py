@@ -26,6 +26,15 @@ import time
 
 AT_ONCE = 4   # breaks at a time: the ratchet's BREAKS_AT_ONCE
 
+def write_out(path, res):
+    """The sweep's result, `res`, written to `path`, its directory made first: a landing's clone ($HOME/c, where the
+    driver's job runs it, measure.l228_sweep) holds no .wtd, and a result the sweep cannot write is no result
+    (2026-11-15 02:49: the sweep of a2d1b0d4 read every break caught, then raised FileNotFoundError on
+    .wtd/l228-sweep.json, and the driver booked it l228-sweep-failed)."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(res, f)
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__); return 0
@@ -116,8 +125,7 @@ def main(argv):
     for x in bad:
         print("  " + x)
     if out_path:
-        with open(out_path, "w") as f:
-            json.dump(res, f)
+        write_out(out_path, res)
     return 1 if bad else 0
 
 if __name__ == "__main__":

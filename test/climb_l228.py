@@ -2567,3 +2567,72 @@ finally:
         os.remove(pause46)
     with contextlib.suppress(Exception):
         g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+
+# 47. a sweep run in the landing's shape writes its result where the driver reads it (measure.l228_sweep, measure.SWEEP_OUT,
+# dev/l228_sweep.py's write_out): door.land_job stood in as it runs, the job's own command in a fresh clone of the
+# landing's commit ($HOME/c, which holds no .wtd), its declared outputs copied back into the sweep's worktree as
+# copy_back copies them, the real dev/l228_sweep.py writing a clean result (its sweep stood in); and a sweep with no
+# result keeps its head due, bounded: run again once, the second failure in a row an alarm, then none until a landing
+# changes the harness's inputs. 2026-11-15 02:49: every break read caught, then FileNotFoundError on
+# .wtd/l228-sweep.json, booked l228-sweep-failed, and the head, recorded before the job, read as swept
+#: limit 60
+real47 = door.land_job
+try:
+    core.claim_repo()
+    g("checkout", "-q", "--detach", h)
+    open(f"{repo}/dev/check.sh", "a").write("# 47\n"); g("add", "-A"); g("commit", "-q", "-m", "drv47"); d47 = g("rev-parse", "HEAD")
+    stand47 = (f"import sys\nsys.path.insert(0, {root + '/dev'!r})\nimport l228_sweep as W\n"
+               "W.write_out(sys.argv[sys.argv.index('--out') + 1], {'tree': [], 'missed': [], 'anchors': [], 'runner': [], "
+               "'ran': 1, 'of': 1, 'cpu_s': 0.1, 'wall_s': 0.1})\n")
+    jobs47 = []
+    def lj47(wt, script, log, outs, wall, background=False, check=True):
+        home = tempfile.mkdtemp(prefix="home47-", dir=tmp)
+        try:
+            subprocess.run(["git", "clone", "-q", repo, f"{home}/c"], check=True, capture_output=True)   # the landing's clone
+            open(f"{home}/c/dev/l228_sweep.py", "w").write(stand47)
+            r = subprocess.run(["/bin/sh", "-c", 'cd "$HOME/c" && ' + script], env=dict(os.environ, HOME=home),
+                               capture_output=True, text=True)
+            jobs47.append((script, outs, r.returncode, r.stderr.strip()[-200:]))
+            for rel in outs:   # copy_back: the clone's file at `rel` into the worktree at `rel`
+                if os.path.isfile(f"{home}/c/{rel}"):
+                    os.makedirs(os.path.dirname(f"{wt}/{rel}"), exist_ok=True)
+                    shutil.copy(f"{home}/c/{rel}", f"{wt}/{rel}")
+            return r.returncode
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+    door.land_job = lj47
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(f"{state}/{M.L228_SWEEP}")
+    try:
+        bad47 = M.l228_sweep(d47)
+        if bad47 != [] or core.state_json(M.L228_SWEEP, {}).get("running"):
+            fault(f"a clean sweep in the landing's shape read {bad47}, its record {core.state_json(M.L228_SWEEP, {})}")
+    except core.ClimbError as e:
+        fault(f"a clean sweep in the landing's shape gave no result: {str(e)[:160]}; the job: {jobs47}")
+    # a sweep with no result swept nothing: its head stays due, run again at the next round; the second in a row an
+    # alarm naming it, then no sweep until a landing changes the harness's inputs; a result after it records its head
+    def drv47(n):
+        open(f"{repo}/dev/check.sh", "a").write(f"# 47{n}\n"); g("add", "-A"); g("commit", "-q", "-m", f"drv47{n}")
+        return g("rev-parse", "HEAD")
+    b47 = drv47("b")
+    core.update_json("alarms.json", {}, lambda x: x.pop("l228-sweep-failed", None))
+    door.land_job = lambda *a, **k: 1   # the job wrote nothing
+    seen47 = []
+    for n in (1, 2):
+        try:
+            M.l228_sweep(b47); fault(f"a sweep with no result (try {n}) raised nothing")
+        except core.ClimbError:
+            pass
+        seen47.append((M.l228_sweep_due(b47), "l228-sweep-failed" in core.state_json("alarms.json", {})))
+    c47 = drv47("c")
+    seen47.append((M.l228_sweep_due(c47), None))
+    door.land_job = lj47
+    M.l228_sweep(c47)
+    seen47.append((M.l228_sweep_due(c47), core.state_json(M.L228_SWEEP, {}).get("head") == c47))
+    if seen47 != [(True, False), (False, True), (True, None), (False, True)]:
+        fault(f"sweeps with no result (due, alarmed) after the first and the second, then due at a later driver landing, "
+              f"then (due, recorded) after its result: {seen47}, not [(True, False), (False, True), (True, None), (False, True)]")
+except Exception as e:
+    fault(f"the sweep in the landing's shape raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    door.land_job = real47

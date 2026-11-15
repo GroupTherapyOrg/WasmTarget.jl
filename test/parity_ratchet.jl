@@ -3026,7 +3026,7 @@ end
 # (of dev/formal, the two files section 18 copies beside a model of its own: no model there is read, so a change to a
 # model of the compiler runs no harness and is judged in the ordinary class; dev/check.sh's formal stage checks it)
 const L228_INPUTS = ("dev/climb/", "dev/src_verdict.sh", "dev/d14_judge.sh", "dev/formal/run_tlc.sh", "dev/formal/NoListenTLC.java",
-                     "dev/check.sh", "dev/ship.sh", "dev/merge_packages.sh", "test/climb_l228.py")
+                     "dev/check.sh", "dev/ship.sh", "dev/merge_packages.sh", "dev/l228_sweep.py", "test/climb_l228.py")
 l228_input(f::AbstractString) = f == "test/parity_ratchet.jl" || any(p -> startswith(f, p), L228_INPUTS)
 function l228_copy(root::AbstractString = ROOT)::String
     local t = mktempdir()
@@ -3417,6 +3417,17 @@ const BOUNDED_BREAKS = (
      "        freeze(c, role=\"measure\", first=False)", "        pass", 46),
     ("an unfrozen unit's note naming the whole store's replay", "dev/climb/measure.py",
      "    if c is not None and missing[l0].startswith(NO_FROZEN):", "    if False:", 46),
+    # a sweep in the landing's shape writes its result where the driver reads it (2026-11-15 02:49)
+    ("a sweep's result written where its directory is not", "dev/l228_sweep.py",
+     "    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)", "    pass", 47),
+    ("the sweep's result read where the job does not write it", "dev/climb/measure.py",
+     "    res_p = os.path.join(wt, SWEEP_OUT)", "    res_p = os.path.join(wt, \".wtd\", \"l228-sweep.out\")", 47),
+    ("the sweep's job copying back another file", "dev/climb/measure.py",
+     "                           [SWEEP_OUT], cfg()[\"l228_sweep_wall_s\"]", "                           [\".wtd/l228.json\"], cfg()[\"l228_sweep_wall_s\"]", 47),
+    ("a sweep with no result read as swept", "dev/climb/measure.py",
+     "        save_json(L228_SWEEP, dict(prior, failed=", "        save_json(L228_SWEEP, {\"head\": head} if True else dict(prior, failed=", 47),
+    ("sweeps with no result run again without a bound", "dev/climb/measure.py", "    if failed.get(\"n\", 0) >= SWEEP_TRIES:", "    if False:", 47),
+    ("the second sweep in a row with no result unalarmed", "dev/climb/measure.py", "        if n >= SWEEP_TRIES:", "        if False:", 47),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

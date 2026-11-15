@@ -164,9 +164,8 @@ def src_gap_once():
         except PowerCut:
             raise
         except Exception as e:   # noqa: BLE001 — located, the gap's own part still runs
+            # its head stays due: run again at the next round, its alarm the SWEEP_TRIES-th failure's (measure.l228_sweep)
             event("l228-sweep-failed", sha=head[:8], why=f"{type(e).__name__}: {str(e)[-300:]}")
-            alarm("l228-sweep-failed", "the sweep of every L228 break failed", f"At {head[:10]}: {type(e).__name__}: "
-                  f"{str(e)[:500]}. Default taken: the landings' checks run their diffs' breaks; the sweep runs again at the next head.")
         did = True
     if src_gap_due(head):
         src_gap(head); did = True
