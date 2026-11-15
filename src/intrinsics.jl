@@ -1288,12 +1288,17 @@ end
 # entry of the table of each class's type value, the class translator.classes holds at its id (the one
 # map from a class id to its class), read as a non-null DataType. The top's entry, which no value
 # carries, is null, and so is the entry of each class whose type value has no constant yet
-# (src/julia/classes.jl type_value_unmade, the one list of them): an as check naming one refuses at its
-# statement (types.jl emitAsCheck), so no as check's failure reads a null entry.
+# (src/julia/classes.jl type_value_unmade, the one list of them), and so is a tuple record's, whose
+# values' type is their elements' (src/julia/classes.jl record_typeof_unmade): an as check naming one
+# refuses at its statement (types.jl emitAsCheck), so no as check's failure reads a null entry.
 # With `tag_of_value`, the operand is a value and its tag its class id: Julia's typeof, jl_typeof
 # (julia/src/julia.h:117), a read of the value's tag, never a new type, so every answer is one of the
 # table's canonical constants. A class the operand admits whose type value has no constant refuses at
-# the statement, located, so no typeof reads a null entry. Julia's `nothing` is the null reference, so
+# the statement, located, and a tuple record the operand admits is answered by its own arm ahead of the
+# table, the type the operand pins or a raise, so no typeof reads a null entry. Julia's differs: its
+# typeof of a tuple is a type its cache finds or makes (jl_f_tuple); WasmTarget answers it where the
+# closed world knows it and raises where it would have to make a DataType at run time (A68S3).
+# Julia's `nothing` is the null reference, so
 # where the operand admits it the lookup takes dart's shape for an Object member on a nullable receiver
 # (code_generator.dart:2258 visitInstanceGet): null branches past it to Nothing's type, as runtimeType's
 # null arm answers Null's type literal
@@ -1304,7 +1309,7 @@ end
     local array_type = array_type_for_dart_type(t, Union{Nothing,DataType}; mutable_ = true)
     # the table, then the class id pushed by `index`, read as a non-null DataType
     local lookup(index::Function) = begin
-        local entries = NirConst[NirConst(Core.Const(info.cls === nothing || type_value_unmade(t, info.cls) !== nothing ? nothing : info.cls)) for info in t.classes[]]
+        local entries = NirConst[NirConst(Core.Const(info.cls === nothing || type_value_unmade(t, info.cls) !== nothing || record_typeof_unmade(info.cls) ? nothing : info.cls)) for info in t.classes[]]
         instantiate_constant(t.constants[], b, make_array_of(t.constants[], Union{Nothing,DataType}, entries), WasmBuilder.IR.RefType_def(array_type; nullable = false))
         index()
         WasmBuilder.array_get(b, array_type)
@@ -1312,27 +1317,65 @@ end
     end
     tag_of_value || (lookup(() -> translate_expression(self.code_gen, only(args), WasmBuilder.IR.NumType_i32)); return result)
     local operand_type = dart_type_of(self, only(args))
-    for c in concrete_classes(t, operand_type)
+    local at = "$(julia_text(self.code_gen.enclosing_member)): Julia's typeof on $operand_type"
+    # a tuple's record (src/julia/classes.jl TupleRecord) is no Julia type: Julia's typeof of a tuple is the
+    # tuple type of its elements' types (julia/src/builtins.c:946 jl_f_tuple), found in its type cache or
+    # made. Each record class the operand admits is its own arm, by its class id, ahead of the table, whose
+    # entry for it is null: where Julia's inferred type of the operand holds one tuple type of the record's
+    # arity, that type (src/julia/classes.jl record_typeof), Julia's answer known at compile time; else a
+    # type made at run time, which WasmTarget never makes (audit A68S3), so the arm raises, naming this
+    # statement (the runtime's throw_record_typeof). The empty shape's class is Tuple{} itself, Julia's type
+    # of the one empty tuple, its entry the table's. formal(dev/formal/TupleRecordSplat.tla) TypeofAgrees
+    local records = Tuple{Int,DataType,Union{DataType,Nothing}}[]
+    for (id, c) in zip(concrete_class_ids(t, operand_type), concrete_classes(t, operand_type))
         local why = type_value_unmade(t, c)
         why === nothing ||
-            reject!(Unquarantined("src/julia/classes.jl type_value_unmade: typeof of a value that may be a $c, whose type value has no constant ($(something(why)))"), "$(julia_text(self.code_gen.enclosing_member)): Julia's typeof on $operand_type")
+            reject!(Unquarantined("src/julia/classes.jl type_value_unmade: typeof of a value that may be a $c, whose type value has no constant ($(something(why)))"), at)
+        record_typeof_unmade(c) && push!(records, (id, c, record_typeof(operand_type, c)))
+    end
+    # the class id's local, where the null or a record's arm reads it twice
+    local class_id = Nothing <: operand_type || !isempty(records) ? add_local(self.code_gen, WasmBuilder.IR.NumType_i32) : nothing
+    # the records' arms, then the table, the class id in `class_id`; each arm answers by `done`
+    local arms_then_lookup(done::WasmBuilder.Label) = begin
+        for (id, c, answer) in records
+            WasmBuilder.local_get(b, class_id)
+            WasmBuilder.i32_const(b, id)
+            WasmBuilder.i32_eq(b)
+            WasmBuilder.if_(b)
+            if answer === nothing
+                translate_expression(self.code_gen, NirConst(Core.Const(record_typeof_message(c, at))), translate_type(t, String))
+                call(self.code_gen, nir_runtime_member(t.component, throw_record_typeof, at))
+                WasmBuilder.unreachable(b)
+            else
+                translate_expression(self.code_gen, NirConst(Core.Const(answer)), result)
+                WasmBuilder.br(b, done)
+            end
+            WasmBuilder.var"end"(b)
+        end
+        lookup(() -> WasmBuilder.local_get(b, class_id))
     end
     local top = t.top_type_non_nullable[]
     if Nothing <: operand_type
-        local class_id = add_local(self.code_gen, WasmBuilder.IR.NumType_i32)
         local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[result])
         local null_label = WasmBuilder.block(b)
         translate_expression(self.code_gen, only(args), t.top_type[])
         WasmBuilder.br_on_null(b, null_label)
         load_class_id(b, t, top)
         WasmBuilder.local_set(b, class_id)
-        lookup(() -> WasmBuilder.local_get(b, class_id))
+        arms_then_lookup(done)
         WasmBuilder.br(b, done)
         WasmBuilder.var"end"(b)
         translate_expression(self.code_gen, NirConst(Core.Const(Nothing)), result)
         WasmBuilder.var"end"(b)
-    else
+    elseif isempty(records)
         lookup(() -> (translate_expression(self.code_gen, only(args), top); load_class_id(b, t, top)))
+    else
+        local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[result])
+        translate_expression(self.code_gen, only(args), top)
+        load_class_id(b, t, top)
+        WasmBuilder.local_set(b, class_id)
+        arms_then_lookup(done)
+        WasmBuilder.var"end"(b)
     end
     return result
 end

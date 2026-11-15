@@ -397,6 +397,30 @@ end
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses keys each class by its shape, a record's arity its parameter here" Core.DataType tuple_record_arity(@nospecialize(c))::Union{Int,Nothing} =
     c === Tuple{} ? 0 : c isa DataType && c <: TupleRecord && c.parameters[1] isa Int ? c.parameters[1] : nothing
 
+# whether Julia's typeof of a value of the class `c` is a type no table entry holds: a tuple's record of
+# N ≥ 1 elements, whose values' type is the tuple type of their elements' types (jl_f_tuple's
+# jl_inst_arg_tuple_type, jltypes.c:2477), known only at run time; the empty shape's class is Tuple{},
+# the type of Julia's one empty tuple, which its entry holds. The one source of which classes the typeof
+# table holds no entry for and to_typeof answers by their own arms (src/intrinsics.jl, record_typeof)
+@quarantine "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: a tuple's type is the tuple type of its elements' types, which a record class's tag does not name but the empty tuple's, Tuple{}" Core.Tuple record_typeof_unmade(@nospecialize(c))::Bool =
+    c !== Tuple{} && tuple_record_arity(c) !== nothing
+
+# Julia's typeof of a value of the record class `c` (record_typeof_unmade) whose inferred type is `T`, known
+# at compile time: the one tuple type `T` holds at the record's arity where `T` holds one (typeintersect with
+# NTuple{N,Any} a concrete type, every tuple of it its type: jl_typeof of a leaf type's instance), as
+# Union{Tuple{Int64},Tuple{Int64,Float64}} holds Tuple{Int64} at arity 1; else nothing, a type Julia's
+# jl_f_tuple would find or make at run time (julia/src/builtins.c:946), which src/intrinsics.jl to_typeof
+# raises for (formal(dev/formal/TupleRecordSplat.tla) TypeofAgrees)
+@quarantine "julia/src/builtins.c:946 jl_f_tuple: a tuple's type is the tuple type of its elements' types; where Julia's inferred type of the value holds one tuple type of its arity, that leaf type is every such tuple's" Base.typeintersect function record_typeof(@nospecialize(T), @nospecialize(c))::Union{DataType,Nothing}
+    local shape = typeintersect(T, NTuple{something(tuple_record_arity(c)),Any})
+    return shape isa DataType && isconcretetype(shape) ? shape : nothing
+end
+
+# the message of the raise where record_typeof pins no type (the runtime's throw_record_typeof): the record class
+# and the statement `at`, the one text of it
+@quarantine "julia/src/builtins.c:946 jl_f_tuple makes a tuple's type at run time where its cache has none, a DataType WasmTarget never makes (audit A68S3)" Base.string record_typeof_message(@nospecialize(c), at::String)::String =
+    string("WasmTarget: typeof of a tuple held as ", c, ", at ", at, ": its type, the tuple type of its elements' types, is not made at run time (audit A68S3)")
+
 # whether the class `c` holds values of the open tuple type `T` (a Tuple type no concrete class is):
 # the record classes of the arities `T` admits, a tuple of a concrete type boxed into its arity's record
 # where it flows into an open slot (TupleRecord), never a concrete tuple class itself; the one rule the

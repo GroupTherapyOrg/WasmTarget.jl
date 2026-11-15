@@ -120,6 +120,14 @@ Natively Julia's `===`.
 @quarantine "dart2wasm/lib/translator.dart:112 Translator.isStandalone: a standalone module has no JS runtime, so no sdk/lib/_internal/wasm/js_common/js_helper.dart:151 areEqualInJS; Julia's jl_egal compares a field's bits (julia/src/builtins.c:100 compare_fields), which wasm cannot read of a host reference" Core.ErrorException @noinline throw_host_reference_egal()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(ErrorException("WasmTarget: === on two values holding a host reference in a standalone module, which has no JS runtime to compare them (areEqualInJS)"))
 
+# Julia's typeof of a tuple held as its record where the operand's inferred type does not pin the tuple's
+# type (src/intrinsics.jl to_typeof): Julia answers the tuple type of its elements' types, found in its type
+# cache or made (julia/src/builtins.c:946 jl_f_tuple), a type made at run time, which WasmTarget never
+# makes (audit A68S3); the call raises with the message the code generator names the statement in, never
+# answering
+@quarantine "julia/src/builtins.c:946 jl_f_tuple finds a tuple's type in Julia's type cache or makes it at run time (jltypes.c:2477 jl_inst_arg_tuple_type), a DataType WasmTarget never makes at run time (audit A68S3)" Core.ErrorException @noinline throw_record_typeof(msg::String)::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(ErrorException(msg))
+
 # compiler-rt's 128-bit division and remainder (compiler-rt/lib/builtins at the llvm pin), the libcalls
 # LLVM's WebAssembly backend makes for an i128 SDIV, SREM, UDIV and UREM (src/llvm/legalize_integer_types.jl,
 # ExpandIntRes_SDIV and its kin: wasm has no UDIVREM of an i128), each ported over WasmTarget's 128-bit
