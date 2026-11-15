@@ -552,6 +552,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/Compiler/src/ssair/ir", "julia/base/show", "julia/base/reflection", "julia/base/errorshow", "julia/base/docs/utils",
     "julia/base/dict", "julia/base/reinterpretarray", "julia/src/staticdata",
     "julia/src/ast", "julia/src/flisp/julia_extensions", "julia/src/flisp/julia_opsuffs", "julia/src/support/utf8",
+    "julia/src/julia-parser",
 )
 
 """
@@ -1235,7 +1236,7 @@ end
 
 # an anchor of either pin: a dart file under pkg/ (1), or an LLVM, compiler-rt, Julia or utf8proc unit (2) and its
 # extension (3); its line (4); its symbol (5), dart's X or X.m, or C++'s X or X::m
-@quarantine pin"precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)" "an anchor names a pinned file, a line and the symbol declared there, read by one regex, as dart's debug adapter reads a stack frame's file, line and column from text by one (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: this regex is anchored to one whole anchor, where :73's is unanchored and read by firstMatch, and it ends in the declared symbol where :73 ends in a column" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia|compiler-rt|utf8proc)/[\w/]+)\.(cpp|c|h|inc|jl)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)$"
+@quarantine pin"precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)" "an anchor names a pinned file, a line and the symbol declared there, read by one regex, as dart's debug adapter reads a stack frame's file, line and column from text by one (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: this regex is anchored to one whole anchor, where :73's is unanchored and read by firstMatch, and it ends in the declared symbol where :73 ends in a column" Base.var"@r_str" const ANCHOR_RX = r"^(?:([\w/]+\.dart)|((?:llvm|julia|compiler-rt|utf8proc)/[\w/-]+)\.(cpp|c|h|inc|jl|scm)):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?|[A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?|[A-Za-z_][\w<>-]*\??)$"
 
 """
     Anchor
@@ -1277,6 +1278,8 @@ The parts of `s`, an anchor of either pin; nothing when it reads as neither
     occursin('.', sym) && return nothing
     # Julia's units lie under its checkout's root, the unit less its `julia/` prefix; LLVM's (C++ alone)
     # under llvm-project's
+    # a femtolisp name (a hyphen, a trailing `?`, `<` or `>`) is a .scm unit's alone, the femtolisp parser's
+    occursin(r"[-<>?]", sym) && m[3] != "scm" && return nothing
     if startswith(m[2], "julia/")
         return Anchor(:julia, String(m[2]), m[2][length("julia/")+1:end] * "." * m[3], parse(Int, m[4]), replace(sym, "::" => "."), sym)
     end
@@ -1429,6 +1432,17 @@ end
     return nothing
 end
 
+# why line `ln` of a femtolisp file (julia/src/julia-parser.scm) does not define `symbol`, or nothing where it does: a
+# top-level definition at column 0, `(define symbol ...` or a procedure's `(define (symbol ...`
+@quarantine pin"julia/src/julia-parser.scm:4 add-dots" "a femtolisp definition is a top-level form at column 0, (define name value) or (define (name args...) body), as the parser's own file writes add-dots and every table it reads" Base.startswith function _scm_declares(lines::Vector{String}, ln::Int, symbol::AbstractString)::Union{String,Nothing}
+    ln <= length(lines) || return "line $ln is past the file's end ($(length(lines)) lines)"
+    local l = lines[ln]
+    startswith(l, "(define ") || return "line $ln is no top-level (define"
+    local m = match(r"^\(define \(?([^\s()]+)", l)
+    m === nothing && return "line $ln defines no name"
+    return m[1] == symbol ? nothing : "line $ln defines $(m[1]), not $symbol"
+end
+
 # why an anchor does not resolve in the checkout `sdk` (the llvm-project, julia or utf8proc checkout for
 # an anchor of that pin), or nothing when it does
 @quarantine pin"pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:29 CommentReferenceResolver.resolve" "one citation is resolved by the reader its form names, as dart's analyzer resolves a comment reference by the resolver its expression's form names, a simple identifier, a prefixed one or a property access (pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:29 CommentReferenceResolver.resolve); Julia differs: the form is the anchor's pin, a C unit of LLVM, Julia or utf8proc read by its declaration's column and keyword, a unit of Julia's Base or compiler read by Julia's parser, a dart file read by its formatter's columns, the declaration is a line of the pinned checkout's file, not of the same program, and it returns why the line does not declare the symbol where dart sets the reference's element and reports nothing" Base.readlines function _anchor_fault(sdk::String, anchor::String)::Union{String,Nothing}
@@ -1437,6 +1451,7 @@ end
         local file = joinpath(sdk, a.file)
         isfile(file) || return "the $(a.pin) pin has no $(a.file)"
         local clines = get!(() -> readlines(file), _PIN_LINES, file)
+        endswith(a.file, ".scm") && return _scm_declares(clines, a.line, a.written)
         endswith(a.file, ".jl") || return _cpp_declares(clines, a.line, a.written)
         # a unit of Base or of Julia's compiler, in Julia: Julia's parser reads the expression that begins at the line,
         # and it declares the symbol when it is a definition whose name (_defines') is the symbol
@@ -1510,7 +1525,7 @@ end
 # adds a line, so the list only shrinks (D20).
 
 # the anchors a reason cites, each form of the pins'
-@quarantine pin"precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)" "an anchor in a reason's prose is found by its pins' forms with one unanchored regex, as dart's debug adapter finds a stack frame's location inside a line of output with one (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: every anchor of the prose is read (eachmatch), where :73's pattern is read by firstMatch, and each ends in the declared symbol where :73's ends in a column" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia|compiler-rt|utf8proc)/[\w/]+\.(?:cpp|c|h|inc|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?)"
+@quarantine pin"precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)" "an anchor in a reason's prose is found by its pins' forms with one unanchored regex, as dart's debug adapter finds a stack frame's location inside a line of output with one (precedent(dart: pkg/dap_adapters/lib/src/utils.dart:73 _stackFrameLocationPattern)); Julia differs: every anchor of the prose is read (eachmatch), where :73's pattern is read by firstMatch, and each ends in the declared symbol where :73's ends in a column" Base.var"@r_str" const REASON_ANCHOR_RX = r"((?:dart2wasm|wasm_builder)/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|sdk/lib/[\w/]+\.dart:[1-9]\d* [A-Za-z_$][\w$]*(?:\.(?:[\w$]+|\[\]=?|[-+*/%<>=~&|^]+))?|(?:llvm|julia|compiler-rt|utf8proc)/[\w/]+\.(?:cpp|c|h|inc|jl):[1-9]\d* [A-Za-z_]\w*!?(?:::[A-Za-z_]\w*)?|julia/src/[\w/-]+\.scm:[1-9]\d* [A-Za-z_][\w<>-]*\??)"
 @quarantine unpinned "a citation of any file of the dart checkout names its path under the checkout and a line, read with a regex" Base.var"@r_str" const REASON_PATH_RX = r"((?:pkg|sdk)/[\w/.-]+\.dart):([1-9]\d*)(?: ([A-Za-z_$][\w$]*(?:\.(?:[A-Za-z_$][\w$]*|\[\]=?|[-+*/%<>=~&|^]+))?))?"
 @quarantine unpinned "a precedent in prose names its ecosystem and a file and line, read with a regex" Base.var"@r_str" const REASON_PRECEDENT_RX = r"precedent\(([\w+#.-]+): ([^\s():]+):([1-9]\d*)(?: ([A-Za-z_$][\w$]*!?(?:(?:\.|::)[A-Za-z_$][\w$]*)?))?"
 

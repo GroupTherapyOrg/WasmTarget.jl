@@ -6692,48 +6692,120 @@ end
 # Base's answer, which test/src/unicode.jl compares at every operator, its dotted and suffixed forms
 # and every character to U+FFFF, and it re-reads the C tables copied here from their pinned files.
 
-# julia-parser.scm's operator lists at the julia pin, built as its definitions build them: add-dots (line
-# 4), the precedence lists (lines 6-33) in prec-names' order (line 35), trans-op, ctrans-op and vararg-op
-# (lines 40-42), no-suffix?'s list (line 62), unary-ops (line 99) and operators (line 129), the list less
-# its word operators (is-word-operator?, line 126: every character identifier-start-char?, flisp's builtin
-# of jl_id_start_char, natively Base's is_id_start_char). The first list is operators, the second
-# no-suffix?'s
-@quarantine pin"julia/src/ast.c:992 jl_is_operator" "the operator lists of the flisp parser whose operator? jl_is_operator applies, built as julia-parser.scm builds them; a wasm module has no flisp to hold them; Julia differs: a symbol is its name, a String, where flisp interns it; the anchor is jl_is_operator, the C that applies it, since julia-parser.scm is no unit a pin anchors (an anchor names a .c, .h, .cpp, .inc or .jl file), its definitions cited by line in the prose" Base.vcat function fl_operator_lists()::Tuple{Vector{String},Vector{String}}
-    # line 4 add-dots: the list and each of its operators after a dot
-    local add_dots(ops::Vector{String}) = vcat(ops, String["." * op for op in ops])
-    local prec_assignment = vcat(add_dots(String["=", "+=", "-=", "−=", "*=", "/=", "//=", "\\=", "^=", "÷=", "%=", "<<=", ">>=", ">>>=", "|=", "&=", "⊻=", "≔", "⩴", "≕"]), add_dots(String["~"]), String[":=", "\$="])
-    local prec_pair = add_dots(String["=>"])
-    local prec_conditional = String["?"]
-    local prec_arrow = add_dots(String["←", "→", "↔", "↚", "↛", "↞", "↠", "↢", "↣", "↦", "↤", "↮", "⇎", "⇍", "⇏", "⇐", "⇒", "⇔", "⇴", "⇶", "⇷", "⇸", "⇹", "⇺", "⇻", "⇼", "⇽", "⇾", "⇿", "⟵", "⟶", "⟷", "⟹", "⟺", "⟻", "⟼", "⟽", "⟾", "⟿", "⤀", "⤁", "⤂", "⤃", "⤄", "⤅", "⤆", "⤇", "⤌", "⤍", "⤎", "⤏", "⤐", "⤑", "⤔", "⤕", "⤖", "⤗", "⤘", "⤝", "⤞", "⤟", "⤠", "⥄", "⥅", "⥆", "⥇", "⥈", "⥊", "⥋", "⥎", "⥐", "⥒", "⥓", "⥖", "⥗", "⥚", "⥛", "⥞", "⥟", "⥢", "⥤", "⥦", "⥧", "⥨", "⥩", "⥪", "⥫", "⥬", "⥭", "⥰", "⧴", "⬱", "⬰", "⬲", "⬳", "⬴", "⬵", "⬶", "⬷", "⬸", "⬹", "⬺", "⬻", "⬼", "⬽", "⬾", "⬿", "⭀", "⭁", "⭂", "⭃", "⥷", "⭄", "⥺", "⭇", "⭈", "⭉", "⭊", "⭋", "⭌", "￩", "￫", "⇜", "⇝", "↜", "↝", "↩", "↪", "↫", "↬", "↼", "↽", "⇀", "⇁", "⇄", "⇆", "⇇", "⇉", "⇋", "⇌", "⇚", "⇛", "⇠", "⇢", "↷", "↶", "↺", "↻", "-->", "<--", "<-->", "🢲"])
-    local prec_lazy_or = add_dots(String["||"])
-    local prec_lazy_and = add_dots(String["&&"])
-    local prec_comparison = vcat(String["in", "isa"], add_dots(String[">", "<", ">=", "≥", "<=", "≤", "==", "===", "≡", "!=", "≠", "!==", "≢", "∈", "∉", "∋", "∌", "⊆", "⊈", "⊂", "⊄", "⊊", "∝", "∊", "∍", "∥", "∦", "∷", "∺", "∻", "∽", "∾", "≁", "≃", "≂", "≄", "≅", "≆", "≇", "≈", "≉", "≊", "≋", "≌", "≍", "≎", "≐", "≑", "≒", "≓", "≖", "≗", "≘", "≙", "≚", "≛", "≜", "≝", "≞", "≟", "≣", "≦", "≧", "≨", "≩", "≪", "≫", "≬", "≭", "≮", "≯", "≰", "≱", "≲", "≳", "≴", "≵", "≶", "≷", "≸", "≹", "≺", "≻", "≼", "≽", "≾", "≿", "⊀", "⊁", "⊃", "⊅", "⊇", "⊉", "⊋", "⊏", "⊐", "⊑", "⊒", "⊜", "⊩", "⊬", "⊮", "⊰", "⊱", "⊲", "⊳", "⊴", "⊵", "⊶", "⊷", "⋍", "⋐", "⋑", "⋕", "⋖", "⋗", "⋘", "⋙", "⋚", "⋛", "⋜", "⋝", "⋞", "⋟", "⋠", "⋡", "⋢", "⋣", "⋤", "⋥", "⋦", "⋧", "⋨", "⋩", "⋪", "⋫", "⋬", "⋭", "⋲", "⋳", "⋴", "⋵", "⋶", "⋷", "⋸", "⋹", "⋺", "⋻", "⋼", "⋽", "⋾", "⋿", "⟈", "⟉", "⟒", "⦷", "⧀", "⧁", "⧡", "⧣", "⧤", "⧥", "⩦", "⩧", "⩪", "⩫", "⩬", "⩭", "⩮", "⩯", "⩰", "⩱", "⩲", "⩳", "⩵", "⩶", "⩷", "⩸", "⩹", "⩺", "⩻", "⩼", "⩽", "⩾", "⩿", "⪀", "⪁", "⪂", "⪃", "⪄", "⪅", "⪆", "⪇", "⪈", "⪉", "⪊", "⪋", "⪌", "⪍", "⪎", "⪏", "⪐", "⪑", "⪒", "⪓", "⪔", "⪕", "⪖", "⪗", "⪘", "⪙", "⪚", "⪛", "⪜", "⪝", "⪞", "⪟", "⪠", "⪡", "⪢", "⪣", "⪤", "⪥", "⪦", "⪧", "⪨", "⪩", "⪪", "⪫", "⪬", "⪭", "⪮", "⪯", "⪰", "⪱", "⪲", "⪳", "⪴", "⪵", "⪶", "⪷", "⪸", "⪹", "⪺", "⪻", "⪼", "⪽", "⪾", "⪿", "⫀", "⫁", "⫂", "⫃", "⫄", "⫅", "⫆", "⫇", "⫈", "⫉", "⫊", "⫋", "⫌", "⫍", "⫎", "⫏", "⫐", "⫑", "⫒", "⫓", "⫔", "⫕", "⫖", "⫗", "⫘", "⫙", "⫷", "⫸", "⫹", "⫺", "⊢", "⊣", "⟂", "⫪", "⫫", "<:", ">:"]))
-    local prec_pipe_lt = String[".<|", "<|"]
-    local prec_pipe_gt = String[".|>", "|>"]
-    local prec_colon = vcat(String[":", ".."], add_dots(String["…", "⁝", "⋮", "⋱", "⋰", "⋯"]))
-    local prec_plus = vcat(String["\$"], add_dots(String["+", "-", "−", "¦", "|", "⊕", "⊖", "⊞", "⊟", "++", "∪", "∨", "⊔", "±", "∓", "∔", "∸", "≏", "⊎", "⊻", "⊽", "⋎", "⋓", "⟇", "⧺", "⧻", "⨈", "⨢", "⨣", "⨤", "⨥", "⨦", "⨧", "⨨", "⨩", "⨪", "⨫", "⨬", "⨭", "⨮", "⨹", "⨺", "⩁", "⩂", "⩅", "⩊", "⩌", "⩏", "⩐", "⩒", "⩔", "⩖", "⩗", "⩛", "⩝", "⩡", "⩢", "⩣"]))
-    local prec_times = add_dots(String["*", "/", "⌿", "÷", "%", "&", "·", "·", "⋅", "∘", "×", "\\", "∩", "∧", "⊗", "⊘", "⊙", "⊚", "⊛", "⊠", "⊡", "⊓", "∗", "∙", "∤", "⅋", "≀", "⊼", "⋄", "⋆", "⋇", "⋉", "⋊", "⋋", "⋌", "⋏", "⋒", "⟑", "⦸", "⦼", "⦾", "⦿", "⧶", "⧷", "⨇", "⨰", "⨱", "⨲", "⨳", "⨴", "⨵", "⨶", "⨷", "⨸", "⨻", "⨼", "⨽", "⩀", "⩃", "⩄", "⩋", "⩍", "⩎", "⩑", "⩓", "⩕", "⩘", "⩚", "⩜", "⩞", "⩟", "⩠", "⫛", "⊍", "▷", "⨝", "⟕", "⟖", "⟗", "⨟"])
-    local prec_rational = add_dots(String["//"])
-    local prec_bitshift = add_dots(String["<<", ">>", ">>>"])
-    local prec_power = add_dots(String["^", "↑", "↓", "⇵", "⟰", "⟱", "⤈", "⤉", "⤊", "⤋", "⤒", "⤓", "⥉", "⥌", "⥍", "⥏", "⥑", "⥔", "⥕", "⥘", "⥙", "⥜", "⥝", "⥠", "⥡", "⥣", "⥥", "⥮", "⥯", "￪", "￬"])
-    local prec_decl = String["::"]
-    local prec_dot = String["."]
-    local prec_names = (prec_assignment, prec_pair, prec_conditional, prec_arrow, prec_lazy_or, prec_lazy_and, prec_comparison,
-                        prec_pipe_lt, prec_pipe_gt, prec_colon, prec_plus, prec_times, prec_rational, prec_bitshift,
-                        prec_power, prec_decl, prec_dot)
-    local trans_op, ctrans_op, vararg_op = ".'", "'", "..."
-    local no_suffix = vcat(prec_assignment, prec_conditional, prec_lazy_or, prec_lazy_and, prec_colon, prec_decl, prec_dot,
-                           String["->", "<:", ">:", "in", "isa", "\$"], String[ctrans_op, trans_op, vararg_op])
-    local unary_ops = vcat(String["<:", ">:"], add_dots(String["+", "-", "!", "~", "¬", "√", "∛", "∜", "⋆", "±", "∓"]))
-    local is_word_operator(op::String) = all(Base.is_id_start_char, op)
-    local operators = filter(x -> !is_word_operator(x), unique(vcat(String["->", ctrans_op, trans_op, vararg_op], unary_ops, prec_names...)))
-    return operators, no_suffix
-end
+# julia-parser.scm's operator lists at the julia pin, each definition copied from its own define and pinned at
+# that line (julia/src/julia-parser.scm, a unit of JULIA_FILES), a |...| symbol read as femtolisp reads it; the
+# derived lists (prec-names, no-suffix?, operators) built from them by the parser's own rules when WasmTarget loads
 
-# julia-parser.scm line 142: the list operator? is a SuffSet of
-@quarantine pin"julia/src/ast.c:992 jl_is_operator" "the operator list of the flisp parser's operator?, which jl_is_operator applies; a wasm module has no flisp to hold it; the anchor is jl_is_operator, the C that applies it, since julia-parser.scm is no unit a pin anchors (an anchor names a .c, .h, .cpp, .inc or .jl file), its definitions cited by line in the prose" Base.first const FL_OPERATORS = first(fl_operator_lists())
-# julia-parser.scm line 62: the list no-suffix? is a Set of
-@quarantine pin"julia/src/ast.c:992 jl_is_operator" "the list of the flisp parser's no-suffix?, which operator?'s maybe-strip-op-suffix reads; a wasm module has no flisp to hold it; the anchor is jl_is_operator, the C that applies it, since julia-parser.scm is no unit a pin anchors (an anchor names a .c, .h, .cpp, .inc or .jl file), its definitions cited by line in the prose" Base.last const FL_NO_SUFFIX = last(fl_operator_lists())
+# femtolisp's add-dots: each operator, then each with a `.` before it (its elementwise form)
+@quarantine pin"julia/src/julia-parser.scm:4 add-dots" "the femtolisp parser makes each operator's dotted form by add-dots; its tables are built by it" Base.vcat add_dots(ops::Vector{String})::Vector{String} =
+    vcat(ops, String["." * op for op in ops])
+
+# julia/src/julia-parser.scm:6 prec-assignment
+@quarantine pin"julia/src/julia-parser.scm:6 prec-assignment" "the femtolisp parser's assignment operators, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_ASSIGNMENT::Vector{String} =
+    vcat(add_dots(String["=", "+=", "-=", "−=", "*=", "/=", "//=", "\\=", "^=", "÷=", "%=", "<<=", ">>=", ">>>=", "|=", "&=", "⊻=", "≔", "⩴", "≕"]),
+         add_dots(String["~"]),
+         String[":=", "\$="])
+
+# julia/src/julia-parser.scm:11 prec-pair
+@quarantine pin"julia/src/julia-parser.scm:11 prec-pair" "the femtolisp parser's pair operator, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_PAIR::Vector{String} =
+    vcat(add_dots(String["=>"]))
+
+# julia/src/julia-parser.scm:12 prec-conditional
+@quarantine pin"julia/src/julia-parser.scm:12 prec-conditional" "the femtolisp parser's conditional operator, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_CONDITIONAL::Vector{String} =
+    vcat(String["?"])
+
+# julia/src/julia-parser.scm:13 prec-arrow
+@quarantine pin"julia/src/julia-parser.scm:13 prec-arrow" "the femtolisp parser's arrow operators, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_ARROW::Vector{String} =
+    vcat(add_dots(String["←", "→", "↔", "↚", "↛", "↞", "↠", "↢", "↣", "↦", "↤", "↮", "⇎", "⇍", "⇏", "⇐", "⇒", "⇔", "⇴", "⇶", "⇷", "⇸", "⇹", "⇺", "⇻", "⇼", "⇽", "⇾", "⇿", "⟵", "⟶", "⟷", "⟹", "⟺", "⟻", "⟼", "⟽", "⟾", "⟿", "⤀", "⤁", "⤂", "⤃", "⤄", "⤅", "⤆", "⤇", "⤌", "⤍", "⤎", "⤏", "⤐", "⤑", "⤔", "⤕", "⤖", "⤗", "⤘", "⤝", "⤞", "⤟", "⤠", "⥄", "⥅", "⥆", "⥇", "⥈", "⥊", "⥋", "⥎", "⥐", "⥒", "⥓", "⥖", "⥗", "⥚", "⥛", "⥞", "⥟", "⥢", "⥤", "⥦", "⥧", "⥨", "⥩", "⥪", "⥫", "⥬", "⥭", "⥰", "⧴", "⬱", "⬰", "⬲", "⬳", "⬴", "⬵", "⬶", "⬷", "⬸", "⬹", "⬺", "⬻", "⬼", "⬽", "⬾", "⬿", "⭀", "⭁", "⭂", "⭃", "⥷", "⭄", "⥺", "⭇", "⭈", "⭉", "⭊", "⭋", "⭌", "￩", "￫", "⇜", "⇝", "↜", "↝", "↩", "↪", "↫", "↬", "↼", "↽", "⇀", "⇁", "⇄", "⇆", "⇇", "⇉", "⇋", "⇌", "⇚", "⇛", "⇠", "⇢", "↷", "↶", "↺", "↻", "-->", "<--", "<-->", "🢲"]))
+
+# julia/src/julia-parser.scm:14 prec-lazy-or
+@quarantine pin"julia/src/julia-parser.scm:14 prec-lazy-or" "the femtolisp parser's lazy or, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_LAZY_OR::Vector{String} =
+    vcat(add_dots(String["||"]))
+
+# julia/src/julia-parser.scm:15 prec-lazy-and
+@quarantine pin"julia/src/julia-parser.scm:15 prec-lazy-and" "the femtolisp parser's lazy and, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_LAZY_AND::Vector{String} =
+    vcat(add_dots(String["&&"]))
+
+# julia/src/julia-parser.scm:16 prec-comparison
+@quarantine pin"julia/src/julia-parser.scm:16 prec-comparison" "the femtolisp parser's comparison operators, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_COMPARISON::Vector{String} =
+    vcat(String["in", "isa"],
+         add_dots(String[">", "<", ">=", "≥", "<=", "≤", "==", "===", "≡", "!=", "≠", "!==", "≢", "∈", "∉", "∋", "∌", "⊆", "⊈", "⊂", "⊄", "⊊", "∝", "∊", "∍", "∥", "∦", "∷", "∺", "∻", "∽", "∾", "≁", "≃", "≂", "≄", "≅", "≆", "≇", "≈", "≉", "≊", "≋", "≌", "≍", "≎", "≐", "≑", "≒", "≓", "≖", "≗", "≘", "≙", "≚", "≛", "≜", "≝", "≞", "≟", "≣", "≦", "≧", "≨", "≩", "≪", "≫", "≬", "≭", "≮", "≯", "≰", "≱", "≲", "≳", "≴", "≵", "≶", "≷", "≸", "≹", "≺", "≻", "≼", "≽", "≾", "≿", "⊀", "⊁", "⊃", "⊅", "⊇", "⊉", "⊋", "⊏", "⊐", "⊑", "⊒", "⊜", "⊩", "⊬", "⊮", "⊰", "⊱", "⊲", "⊳", "⊴", "⊵", "⊶", "⊷", "⋍", "⋐", "⋑", "⋕", "⋖", "⋗", "⋘", "⋙", "⋚", "⋛", "⋜", "⋝", "⋞", "⋟", "⋠", "⋡", "⋢", "⋣", "⋤", "⋥", "⋦", "⋧", "⋨", "⋩", "⋪", "⋫", "⋬", "⋭", "⋲", "⋳", "⋴", "⋵", "⋶", "⋷", "⋸", "⋹", "⋺", "⋻", "⋼", "⋽", "⋾", "⋿", "⟈", "⟉", "⟒", "⦷", "⧀", "⧁", "⧡", "⧣", "⧤", "⧥", "⩦", "⩧", "⩪", "⩫", "⩬", "⩭", "⩮", "⩯", "⩰", "⩱", "⩲", "⩳", "⩵", "⩶", "⩷", "⩸", "⩹", "⩺", "⩻", "⩼", "⩽", "⩾", "⩿", "⪀", "⪁", "⪂", "⪃", "⪄", "⪅", "⪆", "⪇", "⪈", "⪉", "⪊", "⪋", "⪌", "⪍", "⪎", "⪏", "⪐", "⪑", "⪒", "⪓", "⪔", "⪕", "⪖", "⪗", "⪘", "⪙", "⪚", "⪛", "⪜", "⪝", "⪞", "⪟", "⪠", "⪡", "⪢", "⪣", "⪤", "⪥", "⪦", "⪧", "⪨", "⪩", "⪪", "⪫", "⪬", "⪭", "⪮", "⪯", "⪰", "⪱", "⪲", "⪳", "⪴", "⪵", "⪶", "⪷", "⪸", "⪹", "⪺", "⪻", "⪼", "⪽", "⪾", "⪿", "⫀", "⫁", "⫂", "⫃", "⫄", "⫅", "⫆", "⫇", "⫈", "⫉", "⫊", "⫋", "⫌", "⫍", "⫎", "⫏", "⫐", "⫑", "⫒", "⫓", "⫔", "⫕", "⫖", "⫗", "⫘", "⫙", "⫷", "⫸", "⫹", "⫺", "⊢", "⊣", "⟂", "⫪", "⫫", "<:", ">:"]))
+
+# julia/src/julia-parser.scm:19 prec-pipe<
+@quarantine pin"julia/src/julia-parser.scm:19 prec-pipe<" "the femtolisp parser's left pipes, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_PIPE_LT::Vector{String} =
+    vcat(String[".<|", "<|"])
+
+# julia/src/julia-parser.scm:20 prec-pipe>
+@quarantine pin"julia/src/julia-parser.scm:20 prec-pipe>" "the femtolisp parser's right pipes, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_PIPE_GT::Vector{String} =
+    vcat(String[".|>", "|>"])
+
+# julia/src/julia-parser.scm:21 prec-colon
+@quarantine pin"julia/src/julia-parser.scm:21 prec-colon" "the femtolisp parser's colon operators, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_COLON::Vector{String} =
+    vcat(String[":", ".."], add_dots(String["…", "⁝", "⋮", "⋱", "⋰", "⋯"]))
+
+# julia/src/julia-parser.scm:22 prec-plus
+@quarantine pin"julia/src/julia-parser.scm:22 prec-plus" "the femtolisp parser's plus operators, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_PLUS::Vector{String} =
+    vcat(String["\$"],
+         add_dots(String["+", "-", "−", "¦", "|", "⊕", "⊖", "⊞", "⊟", "++", "∪", "∨", "⊔", "±", "∓", "∔", "∸", "≏", "⊎", "⊻", "⊽", "⋎", "⋓", "⟇", "⧺", "⧻", "⨈", "⨢", "⨣", "⨤", "⨥", "⨦", "⨧", "⨨", "⨩", "⨪", "⨫", "⨬", "⨭", "⨮", "⨹", "⨺", "⩁", "⩂", "⩅", "⩊", "⩌", "⩏", "⩐", "⩒", "⩔", "⩖", "⩗", "⩛", "⩝", "⩡", "⩢", "⩣"]))
+
+# julia/src/julia-parser.scm:24 prec-times
+@quarantine pin"julia/src/julia-parser.scm:24 prec-times" "the femtolisp parser's times operators, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_TIMES::Vector{String} =
+    vcat(add_dots(String["*", "/", "⌿", "÷", "%", "&", "·", "·", "⋅", "∘", "×", "\\", "∩", "∧", "⊗", "⊘", "⊙", "⊚", "⊛", "⊠", "⊡", "⊓", "∗", "∙", "∤", "⅋", "≀", "⊼", "⋄", "⋆", "⋇", "⋉", "⋊", "⋋", "⋌", "⋏", "⋒", "⟑", "⦸", "⦼", "⦾", "⦿", "⧶", "⧷", "⨇", "⨰", "⨱", "⨲", "⨳", "⨴", "⨵", "⨶", "⨷", "⨸", "⨻", "⨼", "⨽", "⩀", "⩃", "⩄", "⩋", "⩍", "⩎", "⩑", "⩓", "⩕", "⩘", "⩚", "⩜", "⩞", "⩟", "⩠", "⫛", "⊍", "▷", "⨝", "⟕", "⟖", "⟗", "⨟"]))
+
+# julia/src/julia-parser.scm:25 prec-rational
+@quarantine pin"julia/src/julia-parser.scm:25 prec-rational" "the femtolisp parser's rational operator, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_RATIONAL::Vector{String} =
+    vcat(add_dots(String["//"]))
+
+# julia/src/julia-parser.scm:26 prec-bitshift
+@quarantine pin"julia/src/julia-parser.scm:26 prec-bitshift" "the femtolisp parser's bit shifts, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_BITSHIFT::Vector{String} =
+    vcat(add_dots(String["<<", ">>", ">>>"]))
+
+# julia/src/julia-parser.scm:30 prec-power
+@quarantine pin"julia/src/julia-parser.scm:30 prec-power" "the femtolisp parser's power operators, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_POWER::Vector{String} =
+    vcat(add_dots(String["^", "↑", "↓", "⇵", "⟰", "⟱", "⤈", "⤉", "⤊", "⤋", "⤒", "⤓", "⥉", "⥌", "⥍", "⥏", "⥑", "⥔", "⥕", "⥘", "⥙", "⥜", "⥝", "⥠", "⥡", "⥣", "⥥", "⥮", "⥯", "￪", "￬"]))
+
+# julia/src/julia-parser.scm:31 prec-decl
+@quarantine pin"julia/src/julia-parser.scm:31 prec-decl" "the femtolisp parser's declaration operator, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_DECL::Vector{String} =
+    vcat(String["::"])
+
+# julia/src/julia-parser.scm:33 prec-dot
+@quarantine pin"julia/src/julia-parser.scm:33 prec-dot" "the femtolisp parser's dot, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const PREC_DOT::Vector{String} =
+    vcat(String["."])
+
+# julia/src/julia-parser.scm:99 unary-ops
+@quarantine pin"julia/src/julia-parser.scm:99 unary-ops" "the femtolisp parser's unary operators, copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const UNARY_OPS::Vector{String} =
+    vcat(String["<:", ">:"], add_dots(String["+", "-", "!", "~", "¬", "√", "∛", "∜", "⋆", "±", "∓"]))
+
+# the parser's precedence tables in their order (prec-names), each a table above
+@quarantine pin"julia/src/julia-parser.scm:35 prec-names" "the femtolisp parser lists its precedence tables in order; operators is built from all of them" Base.Vector const PREC_NAMES::Vector{Vector{String}} =
+    Vector{String}[PREC_ASSIGNMENT, PREC_PAIR, PREC_CONDITIONAL, PREC_ARROW, PREC_LAZY_OR, PREC_LAZY_AND, PREC_COMPARISON,
+     PREC_PIPE_LT, PREC_PIPE_GT, PREC_COLON, PREC_PLUS, PREC_TIMES, PREC_RATIONAL, PREC_BITSHIFT,
+     PREC_POWER, PREC_DECL, PREC_DOT]
+
+@quarantine pin"julia/src/julia-parser.scm:40 trans-op" "the femtolisp parser's transpose operator" Core.String const TRANS_OP::Core.String = ".'"
+@quarantine pin"julia/src/julia-parser.scm:41 ctrans-op" "the femtolisp parser's adjoint operator" Core.String const CTRANS_OP::Core.String = "'"
+@quarantine pin"julia/src/julia-parser.scm:42 vararg-op" "the femtolisp parser's splat operator" Core.String const VARARG_OP::Core.String = "..."
+
+# the list no-suffix? is a Set of: the operators whose suffix maybe-strip-op-suffix (line 66) never strips
+@quarantine pin"julia/src/julia-parser.scm:62 no-suffix?" "the femtolisp parser strips no suffix of these operators (maybe-strip-op-suffix)" Base.vcat const FL_NO_SUFFIX::Vector{String} =
+    vcat(PREC_ASSIGNMENT, PREC_CONDITIONAL, PREC_LAZY_OR, PREC_LAZY_AND, PREC_COLON, PREC_DECL, PREC_DOT,
+         String["->", "<:", ">:", "in", "isa", "\$"], String[CTRANS_OP, TRANS_OP, VARARG_OP])
+
+# is-word-operator?: an operator every character of which may start an identifier (`in`, `isa`), read when WasmTarget
+# loads by Base's is_id_start_char, natively flisp's identifier-start-char? builtin (jl_id_start_char)
+@quarantine pin"julia/src/julia-parser.scm:126 is-word-operator?" "the parser's word operators are those spelled with identifier-start characters alone" Base.is_id_start_char is_word_operator(op::String)::Bool =
+    all(Base.is_id_start_char, op)
+
+# operators, the list operator? (line 142) is a SuffSet of: -> and the adjoint, transpose and splat operators, the unary
+# operators and every precedence table's, without duplicates, less the word operators
+@quarantine pin"julia/src/julia-parser.scm:129 operators" "the parser's operators, built from its tables: every symbol but a word operator" Base.filter const FL_OPERATORS::Vector{String} =
+    filter(op -> !is_word_operator(op), unique(vcat(String["->", CTRANS_OP, TRANS_OP, VARARG_OP], UNARY_OPS, PREC_NAMES...)))
+
+# julia/src/julia-parser.scm:113 syntactic-operators
+@quarantine pin"julia/src/julia-parser.scm:113 syntactic-operators" "the femtolisp parser's syntactic operators (special forms), copied from its define; jl_is_operator reads it (julia/src/ast.c:992), and a wasm module has no libjulia whose parser holds it" Base.vcat const SYNTACTIC_OPERATORS::Vector{String} =
+    vcat(add_dots(String["&&", "||", "=", "+=", "-=", "*=", "/=", "//=", "\\=", "^=", "÷=", "%=", "<<=", ">>=", ">>>=", "|=", "&=", "⊻="]),
+         String[":=", "\$=", ".", "...", "->"])
+
 
 # utf8.c:43 offsetsFromUTF8, its lines 44-45, C's UL suffixes dropped: what u8_nextchar subtracts from a
 # sequence of each length's shifted bytes
@@ -6958,3 +7030,20 @@ end
         throw(ArgumentError("embedded NULs are not allowed in C strings: $(repr(s))"))
     return jl_is_operator(s isa Symbol ? wasm_symbol_name(s) : s) != 0
 end
+
+# syntactic-op? (julia-parser.scm line 118): membership in syntactic-operators (a Set, line 44; no suffix strip, unlike
+# operator?'s SuffSet)
+@quarantine pin"julia/src/julia-parser.scm:118 syntactic-op?" "the parser's test of a syntactic operator, membership in its list" Base.in syntactic_op_p(op::String)::Bool =
+    op in SYNTACTIC_OPERATORS
+
+# ast.c:1019 jl_is_syntactic_operator: flisp's syntactic-op? applied to the name, true where it answers #t. Julia
+# differs: a symbol is its name, a String; C's int is a Cint
+@quarantine pin"julia/src/ast.c:1019 jl_is_syntactic_operator" "libjulia answers jl_is_syntactic_operator by the parser's syntactic-op? over the name; a wasm module has no libjulia and no flisp to call" Base.Cint jl_is_syntactic_operator(sym::String)::Cint =
+    Cint(syntactic_op_p(sym))
+
+# Base's own body (julia/base/show.jl:1605), its ccall of jl_is_syntactic_operator the port above, over the C string
+# Base's conversion passes: cconvert to a Cstring is the Symbol itself (julia/base/strings/cstring.jl:105) and its
+# unsafe_convert (:106) the pointer jl_symbol_name returns, with no NUL check (a Symbol's name holds no NUL: jl_symbol_n
+# refuses one); the name is the Symbol's (wasm_symbol_name, dart's Symbol.getName)
+@quarantine pin"julia/base/show.jl:1605 is_syntactic_operator" "Base's is_syntactic_operator is a jl_is_syntactic_operator foreigncall into libjulia's flisp parser through a Cstring; a wasm module has no libjulia, so the port over the Symbol's name" Base.is_syntactic_operator @consistent_overlay METHOD_TABLE Base.is_syntactic_operator(s::Symbol) =
+    jl_is_syntactic_operator(wasm_symbol_name(s)) != 0
