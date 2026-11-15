@@ -325,7 +325,15 @@ queued, and the next round's reconcile books it again and freezes it once. A fre
 load, its records refused, its answer program not the keyed one) books that label `noanswer` with the reason, located,
 and the item leaves the queue: no item wedges the lander (spec v14 V5). Each reconcile also freezes, by its source
 commit, every label origin's corpus registers that the store does not answer as origin registers it (a hand landing,
-a freeze lost, a unit file edited in place: spec v14 V2); a snapshot edit is a key change (the key's `snapshot`
+a freeze lost, a unit file edited in place: spec v14 V2). A measurement that finds a landed commit's unit unfrozen
+(no index line for its label) freezes that unit first and then reads the store (`store_answers`), so a gap-clearing
+step always comes before the measurement that needs it, whichever loop reaches it first (2026-11-15: 1ce099d1's unit,
+its freeze cut by the power rule, failed the score and every measurement while the lander was paused). It is the one
+freeze (`measure.freeze`): its index read again and its unit written under the verify lock, so when the lander's
+reconcile and a measurement reach the same unfrozen unit, exactly one replays and writes it and the other, served
+after, reads it frozen and runs no process. Its gap's note says which gap it is (`store_gap`): a landed commit's unit
+not frozen (no key change; its freeze clears it), or a key field, a unit's bytes or a snapshot label (the one replay);
+a snapshot edit is a key change (the key's `snapshot`
 field), so every measurement fails, located, until the one replay (`climb.py oracle-replay`, with the climb paused,
 under the verify lock), never served as stored (D9); the
 index line of a label the corpus drops is removed (`oracle_drop`: its unit's file keeps its bytes), so a label
@@ -1042,7 +1050,12 @@ door's, run as Dale on paths no build user writes.
   the next round. NETWORK (fetch or push): the lander backs off
   with a note, the item kept. OTHER (ship.sh's or the door's own fault: no result, a door failure): retried on `other_tries` rounds, then back to its hold with no stop, the lander backing off. A red of its own, or a
   refusal: back to its hold. A PAUSE file (`launch.sh pause`, or an alarm's: a patch landed other than approved, a
-  push around the driver) stops the lander as it stops the slots and the audits. Half the week's limit is no pause
+  push around the driver) stops the lander as it stops the slots and the audits, and it holds every role that needs
+  the store's answers with it, never the gap-clearing step alone (2026-11-15): no slot claims a hold, the score tick
+  starts no score, and no measurement, score or freeze of the climb's loops starts (`measure.pause_wait`, in
+  `julia_slot`, without the lock, so `oracle-replay` and `oracle-bootstrap`, which run only under PAUSE, take it; a
+  wait past `task_wall_s` is `Paused`, handled as a power wait). A measurement in flight runs to its end, and a move's
+  agent run in flight is left alone: the move holds at its next measurement. Half the week's limit is no pause
   (D51): it is a state the driver computes from the spend, under which no agent runs (so neither a K4 review nor an
   audit); the lander lands on, spending no tokens, the rogue-push check and the alarms run, and agents run again
   when the week resets. `launch.sh stop` ends a running ship.sh with the lander.

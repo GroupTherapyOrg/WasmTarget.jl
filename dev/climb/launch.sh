@@ -9,7 +9,8 @@
 #                                     reaches the climb by landing, and nothing waits for a restart
 #   bash dev/climb/launch.sh stop     stop them and every claude and julia they started (each loop runs in its own
 #                                     process group), then resume every process a stopped landing had stopped
-#   bash dev/climb/launch.sh pause    no new move starts and nothing lands until `resume` (any PAUSE file pauses)
+#   bash dev/climb/launch.sh pause    no new move starts, nothing lands and no measurement or score of the climb starts
+#                                     until `resume` (any PAUSE file pauses; measure.pause_wait)
 #   bash dev/climb/launch.sh resume
 #   bash dev/climb/launch.sh status   the scoreboard (`python3 dev/climb/climb.py report`)
 #   bash dev/climb/launch.sh probe    the door's probes: as each build user what the door refuses (no tokens; every
@@ -69,7 +70,7 @@ case "${1:-start}" in
     # every process a landing stopped is recorded with its owner; the owners are gone now, so each is resumed
     if [ -d "$drv" ]; then py resume-stopped; else python3 dev/climb/climb.py resume-stopped; fi
     exit 0 ;;
-  pause)  touch "$state/PAUSE"; echo "paused: no new move starts and nothing lands"; exit 0 ;;
+  pause)  touch "$state/PAUSE"; echo "paused: no new move starts, nothing lands, and no measurement or score of the climb starts (one in flight runs to its end; a move holds at its next)"; exit 0 ;;
   resume) rm -f "$state/PAUSE"; echo "resumed"
           # a killed driver's orphans reaped before work starts again (door.reap_orphans: each role no process uses)
           if [ -d "$drv" ]; then py reap-orphans; else python3 dev/climb/climb.py reap-orphans; fi; exit 0 ;;

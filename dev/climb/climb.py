@@ -257,7 +257,8 @@ def score_tick():
     head = git("rev-parse", f"origin/{MARCH}")
     n = len(git("rev-list", f"{last}..{head}").splitlines()) if last else 10 ** 6
     if head != last and not backed_off("score") and (n >= cfg()["score_every_landings"] or time.time() - last_t >= cfg()["score_every_s"]) \
-            and power_ok():   # no score starts while the power rule stops work (O8-3, core.power_works)
+            and power_ok() and not pause():   # no score starts while the power rule stops work (O8-3, core.power_works),
+        # nor while paused: a pause holds every role that needs the store's answers with the lander (measure.pause_wait)
         scoreboard_once(head)
     if pause() or week_half() or token_refused():
         return

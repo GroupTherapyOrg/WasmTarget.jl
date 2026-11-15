@@ -3405,6 +3405,18 @@ const BOUNDED_BREAKS = (
      "                            pass", 45),
     ("the look-back ending at the newest kept record", "dev/climb/measure.py", "        for ph, _, prow in kept:",
      "        for ph, _, prow in kept[:1]:", 45),
+    # a pause holds every role that needs the store's answers; an unfrozen unit frozen before the measurement (2026-11-15)
+    ("a loop's measurement not held while paused", "dev/climb/measure.py",
+     "        if not loop_paused():   # a loop's measurement starts nothing while the climb is paused", "        if True:   #", 46),
+    ("a hand command held by a pause", "dev/climb/measure.py", "    return LOOP is not None and pause() is not None",
+     "    return pause() is not None", 46),
+    ("a score started while paused", "dev/climb/climb.py", "            and power_ok() and not pause():", "            and power_ok():", 46),
+    ("a freeze's unit read before its lock alone", "dev/climb/measure.py",
+     "        todo = unfrozen(full, labels)   # read again under the lock", "        todo = labels   # read again under the lock", 46),
+    ("a measurement reading the store before the unit's freeze", "dev/climb/measure.py",
+     "        freeze(c, role=\"measure\", first=False)", "        pass", 46),
+    ("an unfrozen unit's note naming the whole store's replay", "dev/climb/measure.py",
+     "    if c is not None and missing[l0].startswith(NO_FROZEN):", "    if False:", 46),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

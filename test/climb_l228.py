@@ -2445,3 +2445,125 @@ finally:
     M.cfg, M.lander_waits, M.lander_stops, M.pause_in_place = real45["cfg"], real45["waits"], real45["stops"], real45["pause"]
     for k, v in real45["door"].items():
         setattr(door, k, v)
+
+# 46. a pause holds every role that needs the store's answers, and a landed commit's unfrozen unit is frozen before
+# the measurement that needs it (measure.pause_wait in julia_slot, the score tick's pause, measure.store_answers,
+# measure.freeze, measure.store_gap). 2026-11-15: PAUSE held the lander, the one step that froze 1ce099d1's unit (its
+# freeze cut by the power rule at 07:17Z), while the score (07:41Z) and every measurement that needed the unit ran and
+# failed, and the note said to renew the whole store "under the new key". Here: a loop's julia_slot waits while
+# paused (Paused past task_wall_s) and a hand command's takes the lock under PAUSE; the score tick starts no score while
+# paused; the lander's freeze and a slot measurement's freeze of the same unit, in two processes at once: exactly one
+# replays and writes, the other reads it frozen; store_answers freezes the unit and reads again; the note says which
+#: limit 60
+import climb as C
+real46 = {"loop": M.LOOP, "cfg": M.cfg, "ac": M.ac_wait, "ll": M.landing_lock_held,
+          "c": {k: getattr(C, k) for k in ("alarms", "scored_heads", "fetch", "unlogged_landings", "scoreboard_once", "power_ok",
+                                           "pause", "week_half", "token_refused", "backed_off")},
+          "m": {k: getattr(M, k) for k in ("oracle_read", "oracle_unanswered", "freeze")}}
+pause46 = f"{state}/PAUSE"
+try:
+    M.cfg = lambda: dict(real46["cfg"](), task_wall_s=0.5, poll_s=dict(real46["cfg"]()["poll_s"], lock=0.05))
+    M.ac_wait, M.landing_lock_held = (lambda *a, **k: None), (lambda: False)
+    open(pause46, "w").write("hand\n")
+    M.LOOP = "climb-1"
+    t46 = time.time()
+    try:
+        with M.julia_slot("verify"):
+            fault("a loop's measurement took the lock while paused")
+    except M.Paused:
+        if time.time() - t46 > 5:
+            fault(f"a loop's measurement waited {time.time() - t46:.1f} s on PAUSE, past task_wall_s (0.5 s)")
+    M.LOOP = None   # a hand command (oracle-replay runs only under PAUSE)
+    with M.julia_slot("verify"):
+        pass
+    M.LOOP = "climb-1"
+    M.cfg = lambda: dict(real46["cfg"](), task_wall_s=30, poll_s=dict(real46["cfg"]()["poll_s"], lock=0.05))
+    __import__("threading").Timer(0.3, lambda: os.remove(pause46)).start()
+    t46 = time.time()
+    with M.julia_slot("verify"):   # the pause lifted: it goes on
+        pass
+    if time.time() - t46 < 0.25:
+        fault("a loop's measurement did not wait while paused")
+    M.LOOP = real46["loop"]
+    # the score tick: no score while paused
+    ran46 = []
+    C.alarms = C.fetch = lambda *a, **k: None
+    C.unlogged_landings = lambda: []
+    C.scored_heads = lambda *a: []   # nothing scored: a score is due
+    C.scoreboard_once = lambda h_: ran46.append(h_)
+    C.power_ok, C.week_half, C.token_refused, C.backed_off = (lambda: True), (lambda: True), (lambda: False), (lambda *a, **k: False)
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", h)
+    C.pause = lambda: "hand"; C.score_tick()
+    C.pause = lambda: None; C.score_tick()
+    if ran46 != [h]:
+        fault(f"the score tick started {len(ran46)} score(s) over a paused tick and an unpaused one (one, the unpaused)")
+    # the note: a landed commit's unit not frozen is no key change
+    key46 = {k: "x" for k in M.KEY_FIELDS}
+    gap46 = str(M.store_gap({"u/a": M.NO_FROZEN + ": oracle/index.tsv names no unit for it"}, key46, {"u/a": "c" * 40}))
+    other46 = str(M.store_gap({"u/a": M.NO_FROZEN + ": oracle/index.tsv names no unit for it"}, key46, {"u/a": None}))
+    if M.REPLAY in gap46 or "cccccccccc" not in gap46 or "not frozen" not in gap46 or M.REPLAY not in other46:
+        fault(f"the gap's note: an unfrozen unit's {gap46[-200:]!r}; a snapshot label's {other46[-120:]!r}")
+    # store_answers: the unfrozen unit frozen, the store read again
+    reads46, frozen46 = [], []
+    def read46(labels, key):
+        reads46.append(1)
+        return ({}, {"u/a": M.NO_FROZEN + ": x"}) if len(reads46) == 1 else ({"u/a": b"rec"}, {})
+    M.oracle_read = read46
+    M.oracle_unanswered = lambda o: {"u/a": "c" * 40, "s/b": None}
+    M.freeze = lambda c, **k: frozen46.append((c, k.get("first")))
+    got46 = M.store_answers({"u/a"}, key46)
+    if got46 != {"u/a": b"rec"} or frozen46 != [("c" * 40, False)] or len(reads46) != 2:
+        fault(f"store_answers over an unfrozen unit: {got46}, froze {frozen46} (once, not first), read {len(reads46)} times (twice)")
+    for k, v in real46["m"].items():
+        setattr(M, k, v)
+    # the lander's freeze and a slot measurement's of the same unit, at once: one replays, the other reads
+    actor46 = __import__("textwrap").dedent(f"""
+        import os, sys, time, json
+        os.environ["WT_CLIMB_STATE"] = {state!r}; os.chdir({repo!r}); sys.path.insert(0, {repo + "/dev/climb"!r})
+        import door; door.TOP = {tmp!r}
+        assert os.path.realpath(door.TOP) != os.path.realpath({LIVE_TOP!r}), "an actor on the live root"
+        import core, measure as M
+        who, out = sys.argv[1], sys.argv[2]
+        M.ac_wait, M.landing_lock_held = (lambda *a, **k: None), (lambda: False)
+        M.added_labels = lambda full: {{"u/a": "1" * 40, "u/b": "2" * 40}}
+        M.store_judge = lambda: "j"
+        def answer(role, corpus_at, judge_at, labels, task, **k):
+            open(out, "a").write(who + " replays\\n"); time.sleep(0.8)
+            return {{l: b"rec" for l in labels}}, {{"judge": "j"}}
+        M.answer_labels = answer
+        def write(unit, blocks, key, blobs, replace=False):
+            os.makedirs(os.path.dirname(M.ORACLE_INDEX), exist_ok=True)
+            idx = M.oracle_index() if os.path.exists(M.ORACLE_INDEX) else {{}}
+            idx.update({{l: (unit, "0" * 64, blobs[l]) for l in blocks}})
+            core.write_atomic(M.ORACLE_INDEX, "".join(f"{{l}}\\t{{u}}\\t{{s}}\\t{{b}}\\n" for l, (u, s, b) in sorted(idx.items())))
+        M.oracle_write = write
+        while not os.path.exists(out + ".go"):
+            time.sleep(0.01)
+        got = M.freeze("c" * 40, role="measure", first=(who == "lander"))
+        open(out, "a").write(who + " got " + ",".join(got) + "\\n")
+        """)
+    open(f"{tmp}/actor46.py", "w").write(actor46)
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(M.ORACLE_INDEX)
+    out46 = f"{tmp}/run46.txt"; open(out46, "w").close()
+    p46 = [subprocess.Popen([sys.executable, "-I", f"{tmp}/actor46.py", w, out46]) for w in ("lander", "slot")]
+    time.sleep(0.5); open(out46 + ".go", "w").close()
+    for p in p46:
+        p.wait(timeout=30)
+    lines46 = open(out46).read().splitlines()
+    idx46 = M.oracle_index()
+    if sum(1 for l in lines46 if l.endswith("replays")) != 1 or sum(1 for l in lines46 if " got u/a,u/b" in l) != 2 \
+            or {l: u for l, (u, _, _) in idx46.items()} != {"u/a": "c" * 40, "u/b": "c" * 40}:
+        fault(f"two freezes of one unit at once: {lines46}, the index {idx46} (one replay, both read the unit, the index naming it)")
+except Exception as e:
+    fault(f"the pause and the freeze raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    M.LOOP, M.cfg, M.ac_wait, M.landing_lock_held = real46["loop"], real46["cfg"], real46["ac"], real46["ll"]
+    for k, v in real46["c"].items():
+        setattr(C, k, v)
+    for k, v in real46["m"].items():
+        setattr(M, k, v)
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(pause46)
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")

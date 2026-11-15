@@ -368,16 +368,21 @@ def julia_slot(kind, first=False, stops=False):
         if door.CLOCK() - t0 > lim:
             alarm(f"wait-{kind}", f"a {kind} measurement waits past lock_wait_s", f"{what} has been held over {lim} s. "
                   "Default taken: it waits on; each holder's own wall ends it.")
-    if first:
-        write_atomic(mark, my_mark(*(["stops"] if stops else [])))
-    try:
-        while not take_lock(fd, kind, first, stops):
-            long_wait(f"the {kind} measurement lock")
-            time.sleep(cfg()["poll_s"]["lock"]); beat()
-    finally:
+    while True:
         if first:
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(mark)
+            write_atomic(mark, my_mark(*(["stops"] if stops else [])))
+        try:
+            while not take_lock(fd, kind, first, stops):
+                long_wait(f"the {kind} measurement lock")
+                time.sleep(cfg()["poll_s"]["lock"]); beat()
+        finally:
+            if first:
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(mark)
+        if not loop_paused():   # a loop's measurement starts nothing while the climb is paused: the lock let go
+            break
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        pause_wait()   # and the pause waited out, without the lock (a hand command under PAUSE takes it)
     try:
         t0 = door.CLOCK()
         while landing_lock_held():
@@ -389,6 +394,29 @@ def julia_slot(kind, first=False, stops=False):
     finally:
         HELD_SLOT.pop(kind, None)
         fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
+
+class Paused(PowerCut):
+    """A loop's measurement that waited task_wall_s on a PAUSE file (pause_wait): handled where a power cut is (on_ac),
+    never a failure; `final`, so a move's gate ends as infrastructure past it, as a power wait does."""
+    final = True
+
+def loop_paused():
+    """Whether this process is one of the climb's loops (core.LOOP: launch.sh's, and the src-gap job's) while a PAUSE file
+    pauses the climb. A hand command (LOOP None: oracle-replay and oracle-bootstrap, which run only under PAUSE) is not."""
+    return LOOP is not None and pause() is not None
+
+def pause_wait():
+    """No measurement, score or freeze of the climb's loops starts while the climb is paused (2026-11-15: PAUSE held the
+    lander, the one step that froze 1ce099d1's unit, while the score and every measurement that needed it ran and
+    failed): julia_slot waits here without its lock (a hand command under PAUSE takes the lock), at most task_wall_s of
+    awake time, past which Paused (on_ac's, as a power wait's). A measurement in flight when PAUSE is written runs to its
+    end, and a move's agent run in flight is left alone: the move holds at its next measurement."""
+    t0 = door.CLOCK()
+    while loop_paused():
+        if door.CLOCK() - t0 > cfg()["task_wall_s"]:
+            raise Paused(f"the climb has been paused ({pause()[:120]}) for task_wall_s ({cfg()['task_wall_s']} s of awake "
+                         "time) while a loop's measurement waited")
+        time.sleep(cfg()["poll_s"]["lock"]); beat()
 
 def stratified():
     """A net under every move (7): the quickest passing case of every group on the scored head, so a change that breaks
@@ -1352,8 +1380,9 @@ class OracleGap(ClimbError):
     """A label the store does not answer, located: no entry, a unit whose bytes are not the index's, or one whose key is
     not this measurement's (D9). Never a recompute."""
 
-# the one command that renews the store after a key change (V5), named by every gap
+# the one command that renews the store after a key change (V5), named by every gap a replay is the remedy of
 REPLAY = "pause the climb, then `python3 dev/climb/climb.py oracle-replay` renews the whole store under the new key"
+NO_FROZEN = "no frozen answer"   # oracle_read's word for a label the index names no unit for
 
 def oracle_index():
     """{label: (unit, sha256, blob)} of oracle/index.tsv: the store's unit holding the label's answer, that unit file's
@@ -1516,7 +1545,7 @@ def oracle_read(labels, key):
     idx, units, got, gaps = oracle_index(), {}, {}, {}
     for l in sorted(labels):
         if l not in idx:
-            gaps[l] = "no frozen answer: oracle/index.tsv names no unit for it"; continue
+            gaps[l] = NO_FROZEN + ": oracle/index.tsv names no unit for it"; continue
         u, h, _ = idx[l]
         if u not in units:
             p = os.path.join(ORACLE, f"{u}.tsv")
@@ -1547,17 +1576,23 @@ def added_labels(c):
     of it is a key change and a replay of the whole store, oracle-replay)."""
     return {l: b for l, (src, b) in label_sources(c).items() if src == c}
 
-def freeze(full, keep=None, role="measure"):
+def unfrozen(full, labels):
+    """The labels of `labels` (commit `full`'s added labels) whose index line does not name `full`'s unit yet."""
+    idx = oracle_index()
+    return [l for l in labels if idx.get(l, ("",))[0] != full]
+
+def freeze(full, keep=None, role="measure", first=True):
     """The unit of landed commit `full`: the labels it adds, answered from `keep` (a measurement's records of them, which
     smoke() wrote with its key and corpus) when that measurement's corpus is `full`'s and its key's capture the store
     judge's, else by a replay (answer_labels on `full`'s corpus, the store's judge: store_judge), written by oracle_write;
-    a commit whose labels the index already names its unit for is frozen already, no process run. Returns the commit's
-    added labels."""
+    a commit whose labels the index already names its unit for is frozen already, no process run. The one freeze of a
+    unit, the lander's (landed_item, oracle_reconcile: `first`) and a measurement's that needs the unit before it reads
+    the store (smoke, `first` False) alike: the index is read again and the unit written under the verify lock (the
+    measurements' lock; taken in LOCK_ORDER after a score's), so when two reach the same unfrozen unit the first replays
+    and writes it, and the second, served after, reads it frozen and runs no process. Returns the commit's added labels."""
     added = added_labels(full)
     labels = sorted(added)
-    idx = oracle_index()
-    todo = [l for l in labels if idx.get(l, ("",))[0] != full]   # the labels its unit does not hold yet (booked before)
-    if not todo:   # nothing to add, or frozen already: once
+    if not unfrozen(full, labels):   # nothing to add, or frozen already: once
         return labels
     blocks, key, source = {}, None, "measured"
     if keep and os.path.exists(keep):
@@ -1565,9 +1600,15 @@ def freeze(full, keep=None, role="measure"):
         k = read_key(data.split(b"\n", 1)[0].decode(errors="replace"))
         if k and k[1] == corpus_id(corpus_files(full)) and k[0]["judge"] == judge_key(store_judge()):
             key, blocks = k[0], unit_blocks(data.split(b"\n", 1)[1])
-    need = [l for l in todo if l not in blocks]
-    if key is None or need:   # no measurement of this corpus holds them: the definition, replayed for the labels it lacks
-        with contextlib.nullcontext() if "verify" in HELD_SLOT else julia_slot("verify", first=True):   # never beside a measurement
+    # a freeze from the records alone uses no measuring role (`stops`: a measurement in flight pauses in place)
+    writes_only = key is not None and not [l for l in labels if l not in blocks]
+    with contextlib.nullcontext() if "verify" in HELD_SLOT else julia_slot("verify", first=first, stops=first and writes_only):
+        todo = unfrozen(full, labels)   # read again under the lock: a freeze of this unit served first wrote it
+        if not todo:
+            event("oracle-frozen", commit=full[:12], labels=0, booked=0, source="frozen meanwhile")
+            return labels
+        need = [l for l in todo if l not in blocks]
+        if key is None or need:   # no measurement of this corpus holds them: the definition, replayed for the labels it lacks
             # a label whose process fails is booked noanswer with why (failed="book"): the item leaves the queue, and the
             # label, never stored (Booked), is the located gap of every measurement until oracle_unanswered answers it
             # again at the next lander start (spec v16 X3, red 6; round12-operator 7)
@@ -1576,12 +1617,12 @@ def freeze(full, keep=None, role="measure"):
                 raise ClimbError(f"the freeze of {full[:12]}: its replay answered under {k2}, its measurement's records under {key}")
             key, source = k2, "replay"
             blocks.update(got)
-    booked = sorted(l for l in todo if isinstance(blocks.get(l), Booked))
-    if booked:
-        event("oracle-booked", commit=full[:12], labels=len(booked), first=booked[0])
-    keepn = {l: blocks[l] for l in todo if l not in booked}
-    if keepn:
-        oracle_write(full, keepn, key, added)
+        booked = sorted(l for l in todo if isinstance(blocks.get(l), Booked))
+        if booked:
+            event("oracle-booked", commit=full[:12], labels=len(booked), first=booked[0])
+        keepn = {l: blocks[l] for l in todo if l not in booked}
+        if keepn:
+            oracle_write(full, keepn, key, added)
     event("oracle-frozen", commit=full[:12], labels=len(keepn), booked=len(booked), source=source)
     return labels
 
@@ -2029,10 +2070,40 @@ def measure_dir(role, task, root=None):
     finally:
         shutil.rmtree(w, ignore_errors=True)
 
-def store_gap(missing, key):
+def store_answers(landed, key):
+    """{label: its stored records} for the `landed` labels under `key`, read before any process answers or compiles. A
+    landed commit's unit not frozen yet (a hand landing's, a freeze the power rule cut) is frozen first, by the one
+    freeze under the measurements' lock (freeze, `first` False), then the store read again: a gap-clearing step always
+    comes before the measurement that needs it, whichever loop reaches it first (2026-11-15 07:41Z: 1ce099d1's unit, its
+    freeze cut at 07:17Z, failed the score and every measurement while the lander, the one step that froze it, was
+    paused). Any gap left is the measurement's located failure, OracleGap (store_gap, one gap rule, spec v14 V5)."""
+    stored, missing = oracle_read(landed, key)
+    if not missing:
+        return stored
+    sources = {l: c for l, c in oracle_unanswered(git("rev-parse", f"origin/{MARCH}")).items() if l in missing}
+    units = sorted({c for l, c in sources.items() if c is not None and missing[l].startswith(NO_FROZEN)})
+    for c in units:
+        freeze(c, role="measure", first=False)
+    if units:
+        stored, missing = oracle_read(landed, key)
+    if missing:
+        raise store_gap(missing, key, sources)
+    return stored
+
+def store_gap(missing, key, sources=None):
     """The one OracleGap of labels the store does not answer under `key` (oracle_read's `missing`): how many, the first,
-    why, the key field it names, and the one replay (spec v14 V5)."""
+    why, and what clears it, which it says (2026-11-15: a cut freeze of one landed commit read "renews the whole store
+    under the new key"): a label of a landed commit's unit that no index line names (`sources`: oracle_unanswered's
+    commit) is that unit not frozen yet, cleared by its freeze (the lander's reconcile, or the next measurement that
+    needs it), a label its freeze booked noanswer standing until reconcile answers it again; any other gap (a key
+    field, a unit's bytes, a snapshot label) names the one replay (spec v14 V5)."""
     l0 = sorted(missing)[0]
+    c = (sources or {}).get(l0)
+    if c is not None and missing[l0].startswith(NO_FROZEN):
+        return OracleGap(f"{len(missing)} landed label(s) the store does not answer, e.g. {l0}: {missing[l0]}; the unit "
+                         f"of landed commit {c[:10]} is not frozen (no key change): its freeze (the lander's reconcile, "
+                         "or the next measurement that needs it, measure.freeze) clears it; a label still unanswered after "
+                         "it is booked noanswer, answered again at the lander's next reconcile")
     return OracleGap(f"{len(missing)} landed label(s) the store does not answer, e.g. {l0}: {missing[l0]}" +
                      ("" if REPLAY in missing[l0] else f"; {REPLAY}"))
 
@@ -2072,9 +2143,7 @@ def smoke(role, only, task, sha, known=None, overlay=None, learn_=False, keep=No
     # the store read first, under this measurement's key, before any process answers or compiles: a gap is the
     # measurement's located failure, OracleGap, raised now (one gap rule, spec v14 V5)
     key = measure_key(role, sha, task)
-    stored, missing = oracle_read(landed, key)
-    if missing:
-        raise store_gap(missing, key)
+    stored = store_answers(landed, key)
     def part(name):   # one part done: its seconds an event, then the lander first if it waits
         event("smoke-part", role=role, task=task, part=name, secs=round(door.CLOCK() - tp[0]), labels=len(run))
         yield_slot(kind); tp[0] = door.CLOCK()
