@@ -99,6 +99,53 @@
     return nothing
 end
 
+# Lower a signed ADDO or SUBO (SADDO, SSUBO: the sum's or difference's low bits and whether it
+# overflowed), the node of LLVM's llvm.sadd.with.overflow and llvm.ssub.with.overflow, which LegalizeDAG
+# expands on wasm: SADDO and SSUBO keep TargetLoweringBase.cpp:1168's Expand, which WebAssembly never
+# overrides. The SADDSAT/SSUBSAT branch is not taken: WebAssembly makes them legal for v16i8 and v8i16
+# alone (WebAssemblyISelLowering.cpp:245), never a scalar, so the overflow is the xor of two signed
+# compares. The operands are one integer type `vt` (an i32 or an i64), LHS a local and RHS an SDValue as
+# src/julia/machine.jl records it (sd_get), a constant an Int64 holding its bits. Returns the result and
+# the overflow flag, an i32 ZeroOrOneBooleanContent (WebAssemblyISelLowering.cpp:54), the i1 ResultType's
+# width needing no truncate (getBoolExtOrTrunc). DAGCombiner::visitADDO's and visitSUBO's folds before
+# legalization (DAGCombiner.cpp:3617, :4753: a dead flag or one known not to overflow made an add or a
+# sub, a constant moved to the right, addo or subo of 0 and subo x, x folded, subo of a constant made an
+# addo of its negation) read a DAG Julia's IR does not build, and are not ported: each answers the same
+# result and flag
+@parity "llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp:13107 TargetLowering::expandSADDSUBO" function expand_saddsubo(b::WasmBuilder.InstructionsBuilder, is_add::Bool, vt::WasmBuilder.IR.NumType, lhs::WasmBuilder.IR.Local, rhs::Union{WasmBuilder.IR.Local,Int64})::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    local i32, i64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
+    (vt == i32 || vt == i64) || reject!(Internal("llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp:13107 TargetLowering::expandSADDSUBO: $vt is no legal integer type"), "TargetLowering::expandSADDSUBO")
+    local k(n::Integer) = vt == i64 ? WasmBuilder.i64_const(b, Int64(n)) : WasmBuilder.i32_const(b, Int64(n))
+    local get(v::Union{WasmBuilder.IR.Local,Int64}) = v isa Int64 ? k(v) : WasmBuilder.local_get(b, v)
+    local lt_s() = vt == i64 ? WasmBuilder.i64_lt_s(b) : WasmBuilder.i32_lt_s(b)
+    # Result = (IsAdd ? ADD : SUB) LHS, RHS
+    local result = WasmBuilder.add_local(b, vt)
+    WasmBuilder.local_get(b, lhs); get(rhs)
+    if is_add
+        vt == i64 ? WasmBuilder.i64_add(b) : WasmBuilder.i32_add(b)
+    else
+        vt == i64 ? WasmBuilder.i64_sub(b) : WasmBuilder.i32_sub(b)
+    end
+    WasmBuilder.local_set(b, result)
+    local overflow = WasmBuilder.add_local(b, i32)
+    if is_add
+        # For an addition, the result should be less than one of the operands (LHS) if and only if the
+        # other operand (RHS) is negative, otherwise there will be overflow.
+        # Overflow = (RHS < 0) xor (Result < LHS)
+        get(rhs); k(0); lt_s()
+        WasmBuilder.local_get(b, result); WasmBuilder.local_get(b, lhs); lt_s()
+    else
+        # For subtraction, overflow occurs when the signed comparison of operands doesn't match the sign
+        # of the result.
+        # Overflow = (LHS < RHS) xor (Result < 0)
+        WasmBuilder.local_get(b, lhs); get(rhs); lt_s()
+        WasmBuilder.local_get(b, result); k(0); lt_s()
+    end
+    WasmBuilder.i32_xor(b)
+    WasmBuilder.local_set(b, overflow)
+    return (result, overflow)
+end
+
 # Lower a MULO (SMULO, UMULO: the product's low bits and whether it overflowed), the node of LLVM's
 # llvm.smul.with.overflow and llvm.umul.with.overflow, which LegalizeDAG expands on wasm: SMULO and
 # UMULO keep TargetLoweringBase.cpp:1168's Expand, which WebAssembly never overrides. Its branches in
