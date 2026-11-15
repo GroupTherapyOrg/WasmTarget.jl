@@ -105,6 +105,7 @@ def scoreboard_once(head):
                 rows, why = smoke("score", None, f"score-{head[:8]}", head, learn_=True)
             if rows is not None:
                 judge_gaps(rows.values())   # the whole corpus's gaps, here alone (spec v19 P5)
+                settle_gap_admits(rows)   # and the lead's admissions of a gap, seen or ended against them
         except MeasureCut as e:
             rows, why = None, str(e)
         except OracleGap as e:   # the store's gap: no score, no row, no G2; one note (alarm_s) naming the field and the replay
@@ -191,16 +192,16 @@ def alarms():
     """Stalls are never silent (21): no move started or landed for alarm_s while not paused, checks run with no landing
     for alarm_s, and a queue that no quiet probe has admitted for alarm_s, each a note. A computed wait is no stall (O6,
     O8-5): the week's half, a slot that waits for the day's budget, and the slots idling by rule (the queue at
-    queue_cap, a D14 wait, battery) (D17: an alarm firing inside its band is a bug)."""
+    queue_cap, D14's binding, battery) (D17: an alarm firing inside its band is a bug)."""
     if pause():
         return
     cut = stamp(now() - datetime.timedelta(seconds=cfg()["alarm_s"]))
     ev = events()
     la = os.path.join(STATE, "launched-at")   # written by launch.sh at each start (architect 13), never launch-base's age
     started = open(la).read().strip() if os.path.exists(la) else cut
-    # the slots idle by rule, a computed wait, no stall (O8-5): the queue at queue_cap, a D14 wait or its binding, battery
+    # the slots idle by rule, a computed wait, no stall (O8-5): the queue at queue_cap, D14's binding (d14-binds; no single item's D14 wait), battery
     overdue = fixfirst_overdue()
-    by_rule = len(admitted_queue(overdue)) >= cfg()["queue_cap"] or backed_off("lander", "d14") or \
+    by_rule = len(admitted_queue(overdue)) >= cfg()["queue_cap"] or \
         state_json("alarms.json", {}).get("d14-binds") or not state_json("power.json", {}).get("runs", True)
     if started < cut and not any(e["t"] >= cut for e in ev if e["kind"] in ("climb", "landed")) and not \
             (week_half() or state_json("waits.json", {}) or by_rule):
@@ -418,6 +419,7 @@ def main():
     e = sp.add_parser("enqueue"); e.add_argument("ref"); e.add_argument("title", nargs="?", default=None)
     e.add_argument("--fixes", default=None, help="the fix-first entry's key this hand commit fixes: admitted while it is overdue")
     up = sp.add_parser("unpark"); up.add_argument("hold_id")
+    ag = sp.add_parser("admit-gap"); ag.add_argument("label"); ag.add_argument("kind"); ag.add_argument("why")
     j = sp.add_parser("judge-eval"); j.add_argument("-n", type=int, default=None)
     so = sp.add_parser("slot"); so.add_argument("name")
     sp.add_parser("lander"); sp.add_parser("score-tick"); sp.add_parser("src-gap"); sp.add_parser("slot-names"); sp.add_parser("power-hold"); sp.add_parser("resume-stopped"); sp.add_parser("hill")
@@ -477,6 +479,9 @@ def main():
     elif a.cmd == "unpark":   # the one command that unparks a hold (an overdue fix-first's stall names it)
         update_json("parked.json", {}, lambda p: p.pop(a.hold_id, None)); event("unparked", hold_id=a.hold_id)
         print(f"unparked {a.hold_id}")
+    elif a.cmd == "admit-gap":   # the lead's ruling on a refusal's "needs a ruling" (measure.admit_gap): that label, that kind
+        rec = admit_gap(a.label, a.kind, a.why)
+        print(f"admitted {a.label}: `{rec['kind']}`")
     elif a.cmd == "judge-eval": judge_eval(a.n)
     elif a.cmd == "slot-names": print(" ".join(slot_names()))
     elif a.cmd == "power-hold": print(power_hold())

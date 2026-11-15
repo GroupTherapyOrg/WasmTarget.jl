@@ -3294,6 +3294,26 @@ const BOUNDED_BREAKS = (
     ("a refusal no test file makes dropped as the commit's own (2026-11-14 23:15:34Z)", "dev/climb/lander.py",
      "    if ss.get(\"base_over\"):", "    if False:", 35),
     ("a check's class not read from its split", "dev/climb/lander.py", "            split[\"l228\"] = m.group(11)", "            pass", 34),
+    # a gap admitted by the lead's ruling, that label and that kind alone, ended when the judge reads it (2026-11-14
+    # 23:21:31Z and 23:58:19Z: a correct port refused twice "needs a ruling", and nothing read a ruling)
+    ("an admission admitting any kind of gap", "dev/climb/measure.py",
+     "    return a is not None and gap_kind(o, w) is not None and a.get(\"kind\") == gap_kind(o, w)", "    return a is not None", 36),
+    ("a ruling read by no refusal", "dev/climb/measure.py",
+     "        if o in GAPS and b[1] not in GAPS and not gap_admitted(l, o, w):", "        if o in GAPS and b[1] not in GAPS:", 36),
+    ("an admission kept after the judge reads its case", "dev/climb/measure.py", "        elif a.get(\"seen\"):\n", "        elif False:\n", 36),
+    ("an admission ended before its port lands", "dev/climb/measure.py", "        elif a.get(\"seen\"):\n", "        elif True:\n", 36),
+    ("a gap past LEAVES_MAX read as no kind", "dev/climb/measure.py", "|(no reader of more than LEAVES_MAX)", "", 36),
+    # a judged D14 red: the commit's own files dropped, else its own wait behind the others (2026-11-14 23:02:50Z)
+    ("a waiting item tried before the items behind it", "dev/climb/lander.py",
+     "        if item.get(\"not_before\", 0) > time.time():", "        if False:", 37),
+    ("a D14 red's item kept at the queue's head", "dev/climb/lander.py",
+     "    update_json(\"ready.json\", [], lambda q: q.__setitem__(slice(None), [x for x in q if x[\"branch\"] != item[\"branch\"]] +",
+     "    (lambda *a_: None)(\"ready.json\", [], lambda q: q.__setitem__(slice(None), [x for x in q if x[\"branch\"] != item[\"branch\"]] +", 37),
+    ("a machine's D14 red dropped as the commit's own", "dev/climb/lander.py",
+     "    if own and pf(own) > ss[\"band\"] and pf({}) <= ss[\"band\"]:", "    if own:", 37),
+    ("the commit's own D14 red waited on", "dev/climb/lander.py",
+     "    if own and pf(own) > ss[\"band\"] and pf({}) <= ss[\"band\"]:", "    if False:", 37),
+    ("a machine's D14 red retried forever", "dev/climb/lander.py", "    if n >= c[\"d14_tries\"]:", "    if False:", 37),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

@@ -203,12 +203,20 @@ DEFAULTS = {
     # check firing inside its band is a bug, so the note reads the median, not one check; O12), each check read against
     # the red line it was judged on (D14_RED, or D14_RED_HARNESS for a check that ran the L228 harness)
     "near_band": 0.85, "near_band_step": 5,       # ... noted again only when the median rises this many seconds (O5-11)
-    # the lander waits d14_backoff_s after a check red on D14's time alone, the item kept in its place (A7-2: approved
-    # work is never sent back for time); OTHER is retried other_tries times. d14_share [N, share]: one note for Dale
+    # an item whose judged check read red on D14's time alone, its own files not the cause, waits d14_backoff_s, doubled
+    # with each of its own D14 reds, at the queue's tail (lander.d14_judged_red; A7-2: approved work is never sent back
+    # for time), and is dropped uncharged at d14_tries such reds: intent, a red the machine or the predictor made is
+    # retried behind the items that can land, and one that keeps reading red is never held forever; band 2-5 (two
+    # retries cover a busy hour's noise; past five an item has cost five checks of a few minutes each); OTHER is
+    # retried other_tries times. d14_share [N, share]: one note for Dale
     # each time the share of the last N checks red on D14's time passes share, or falls back. Band: the climb's 85
     # checks of 2026-11-08 to 11-10 read 34% red (d14-report); 6 or more of 10 at that rate has a 4% chance, so the
     # note means D14 binds now, not a busy hour; tonight's quiet checks read 3 of 3 red (v7b J)
-    "d14_backoff_s": 1200, "d14_share": [10, 0.6], "other_tries": 3,
+    "d14_backoff_s": 1200, "d14_share": [10, 0.6], "other_tries": 3, "d14_tries": 3,
+    # an admission of a gap by the lead's ruling (measure.admit_gap) that no score has read as its gap within this long
+    # ends (settle_gap_admits): intent, a port admitted to make a case a gap lands within a day or two, and an admission
+    # whose port never landed does not wait on a later, different change; band 1-7 days
+    "gap_admit_max_s": 259200,
     # a landing's ship.sh is killed past this (its process group, the check with it). Band: a check's hard limit is
     # 480 s (dev/check.sh WT_HARD_LIMIT) and a ship carries at most 6 commits, each checked: 6 x 480 = 2880 s, plus
     # the landing queue's wait; past an hour the ship is hung, never slow

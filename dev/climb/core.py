@@ -91,6 +91,7 @@ COMMON = sh(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], 
 REPO = os.path.dirname(COMMON) if os.path.basename(COMMON) == ".git" else COMMON
 STATE = os.environ.get("WT_CLIMB_STATE") or os.path.join(os.path.dirname(REPO), ".wt-climb")   # the override: a dry run
 WORKTREES = os.path.join(os.path.dirname(REPO), ".worktrees")
+GAP_ADMITS = "gap-admits.json"   # the lead's rulings that a case may newly read a gap (measure.admit_gap, `climb.py admit-gap`)
 # THE state that owns this repository's logs and refs (spec v18 P5, the incident: a probe run from a worktree of the real
 # repository wrote the real common dir's landing log): COMMON/wt-climb-state holds that state's realpath, written by
 # `climb.py claim-repo` alone. Every driver write under COMMON goes through common_write (or common_path), which
@@ -1088,6 +1089,11 @@ def report(k=12):
     je = state_json("judge-eval.json", None)
     lines.append(f"judge: refused {je['recall']:.0%} of past defects, approved " + (f"{je['approval']:.0%} of clean moves" if je.get('approval') is not None else "no clean move yet") + f" ({je['t'][:10]}{'' if judge_measured() else '; its brief or HILL.md gates changed since: stale'}{'' if je.get('recall', 0) >= cfg()['judge_recall'] else '; under its band: moves need two blind approvals (K4)'})"
                  if je else "judge: not measured yet (the score tick measures it)")
+    adm = state_json(GAP_ADMITS, {})
+    if adm:
+        lines.append(f"gaps admitted by the lead's ruling: {len(adm)}")
+        for l, a in sorted(adm.items()):
+            lines.append(f"  {l}: `{a['kind']}` ({a['t'][:16]}{', seen at a score' if a.get('seen') else ''}): {a['why'][:120]}")
     fd = os.path.join(STATE, "for-dale.md")
     if os.path.exists(fd) and open(fd).read().strip():
         lines.append("for Dale (defaults taken): " + fd)

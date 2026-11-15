@@ -579,8 +579,8 @@ def d14_binds():
         paths = ", ".join(f"{e.get('path')} s" for e in checks)
         for_dale("D14's band binds the climb's landings" if over else "D14's band no longer binds the climb's landings",
                  f"{len(reds)} of the last {n} landing checks read red on D14's time alone (red past {d14_red()} s, or the L228 harness's higher line for a check that ran it; "
-                 f"their critical paths: {paths})." + (" Default taken: approved commits stay queued, each tried again after "
-                 f"d14_backoff_s; at queue_cap the slots idle and spend nothing. The band, or the check's rates "
+                 f"their critical paths: {paths})." + (" Default taken: approved commits stay queued, each on its own wait "
+                 f"after its red (d14_judged_red), the slots idle while D14 binds; at queue_cap the slots idle and spend nothing. The band, or the check's rates "
                  f"(council/d14-rates.patch), is Dale's to change." if over else " Default taken: the lander lands as before."))
 
 def landing_set(item):
@@ -632,6 +632,45 @@ def shard_costs(text, warm):
             first, cur = False, None
     out.pop(CANARY, None)
     return out
+
+def d14_judged_red(item, ss, text, arg):
+    """A check red on D14's time alone, judged (quiet at both ends), whose own files hold no estimate (held_measured
+    takes those). Its own records measure each own file (shard_costs); predicted alone in the item's class, against
+    the line its check was judged on (`band`):
+      - past the line where no test file is not (the commit's own files make it): dropped as the commit's own, naming
+        each own file that alone predicts past the line, else all of them, with its measured G ("split ...");
+      - else the predictor's or the machine's: the item waits on its own timer (`not_before`, d14_backoff_s doubling
+        with its own D14 reds, backoff_cap_s at most) at the queue's tail, so every item behind it is tried first and no
+        item idles the slots; at d14_tries such reds it is dropped uncharged (its paths named), never held forever.
+    2026-11-14 23:02:50Z: hand-a4f56bb9 read 265 s against 140 s, and the lander-wide D14 backoff kept it at the head
+    of the queue, retried and red each time, the slots idle behind it, until the lead dequeued it by hand."""
+    c = cfg()
+    path = int(arg) if (arg or "").isdigit() else 0
+    got = shard_costs(text, ss.get("warm") or 0.0)
+    own = {f: got[f] for f in ss.get("own", []) if f in got}
+    shards, checks = len(ss["own_unscored"]["shards"]), checks_measured()
+    pf = lambda fs: predict(fs, ss["warm"], ss["src_change"], shards, checks, harness=ss["harness"])[0]["path"]
+    if own and pf(own) > ss["band"] and pf({}) <= ss["band"]:
+        alone = [(f, g, pf({f: g})) for f, g in sorted(own.items())]
+        named = [x for x in alone if x[2] > ss["band"]] or alone
+        drop(item, "landing-red", f"its check read {path} s, past D14's line of {ss['band']} s, and its own test files at the "
+             f"G its own records measured predict {pf(own)} s alone: " +
+             "; ".join(f"test/src/{f} {round(g, 1)} G ({p} s alone)" for f, g, p in named) +
+             ": split " + ("the file" if len(named) == 1 else "the files") + " or the move")
+        return
+    hist = (item.get("d14", []) + [[stamp(), path]])[-c["d14_share"][0]:]
+    n = item.get("d14_tries", 0) + 1
+    if n >= c["d14_tries"]:
+        drop(item, "landing-failed", f"its check read past D14's line of {ss['band']} s {n} times on a quiet machine "
+             f"({', '.join(str(p_) for _, p_ in hist[-n:])} s), and its own files at their measured G predict "
+             f"{pf(own) if own else pf({})} s: the predictor's or the machine's, never its own; dropped uncharged at "
+             "d14_tries", stop=False)
+        return
+    wait = min(c["d14_backoff_s"] * 2 ** (n - 1), c["backoff_cap_s"])
+    unqueue(item, d14=hist, d14_tries=n, not_before=time.time() + wait)
+    update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [x for x in q if x["branch"] != item["branch"]] +
+                                                           [x for x in q if x["branch"] == item["branch"]]))
+    event("land-d14-wait", hold=item["hold"], path=path, band=ss["band"], tries=n, wait_s=wait)
 
 def held_measured(item, ss, text, arg):
     """A check past D14's band whose own set held a file no score or check had costed (`estimated`, measure.src_costs):
@@ -983,6 +1022,8 @@ def land_round():
               "no landing's test set can be made. Default taken: nothing lands or climbs until the score's src part runs.")
         return 3
     for item in list(state_json("ready.json", [])):
+        if item.get("not_before", 0) > time.time():   # its own wait after a D14 red (d14_judged_red): the others go first
+            continue
         if not admits(item, overdue, scored):   # it keeps its place: approved work waits, never sent back (A7-2); one event
             if item.get("skipped") != [f["key"] for f in overdue]:
                 unqueue(item, skipped=[f["key"] for f in overdue])
@@ -1094,14 +1135,10 @@ def land_round():
             continue   # origin's red, located and filed: the item is checked again without it next round, uncharged
         if kind == "OWN" and arg == "void" and ss and origin_void(item, ss, vfiles):
             continue   # origin's void, located and filed: as R3's red (spec v17 Z3), uncharged
-        if kind == "D14":   # red on D14's time alone: never the move's (A7-2, O7-3, R7-4)
-            # approved work is never sent back for time: the item keeps its queue place, its approvals, its rebased
-            # verdict and tree, and is tried again after the lander's backoff; while queue_cap items wait the slots idle
-            # (no tokens); whether D14 binds the climb is Dale's band, told once a state (d14_binds)
-            unqueue(item, d14=(item.get("d14", []) + [[stamp(), int(arg) if (arg or "").isdigit() else 0]])[-cfg()["d14_share"][0]:])
-            back_off("lander", "d14", why="D14", secs=cfg()["d14_backoff_s"], note_at=0)
+        if kind == "D14":   # red on D14's time alone, judged: the commit's own files, or its own wait (d14_judged_red)
+            d14_judged_red(item, ss, rtext, arg)
             d14_binds()
-            return 3
+            continue
         if arg == "hourly":
             continue
         if held_result(kind, arg, out):   # never the item's: it stays queued

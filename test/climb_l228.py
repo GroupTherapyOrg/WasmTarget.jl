@@ -487,7 +487,7 @@ finally:
 
 # 10. a driver fault's backoff ends when the driver's code changes (core.running): the lander's loop, guarded, waits
 # out a fault of its driver only while the driver is the tree that faulted; under a new driver the wait is over and a
-# repeat counts from one; a backoff that is not a driver fault (D14's, fixed seconds) waits whatever the driver. The
+# repeat counts from one; a backoff that is not a driver fault (the load counter's plant's, fixed seconds) waits whatever the driver. The
 # driver's tree is stood in (core.driver_tree); the loop is core.guarded itself
 real_tree10 = core.driver_tree
 try:
@@ -506,11 +506,11 @@ try:
         fault(f"a driver fault under a new driver does not back off from one: n {n10} then "
               f"{core.state_json('backoff.json', {}).get('lander', {}).get('n')}")
     core.recovered("lander")
-    core.back_off("lander", "d14", why="D14", secs=600, note_at=0)
+    core.back_off("lander", "plant", why="plant", secs=600, note_at=0)
     core.driver_tree = lambda: "3" * 40
     if not core.waits("lander"):
-        fault("a D14 backoff, which is no driver fault, ended when the driver changed")
-    core.recovered("lander", "d14")
+        fault("a plant's backoff, which is no driver fault, ended when the driver changed")
+    core.recovered("lander", "plant")
 except Exception as e:
     fault(f"the driver fault's backoff raised {type(e).__name__}: {str(e)[:240]}")
 finally:
@@ -1973,3 +1973,129 @@ finally:
     L.drop = real35["drop"]
     with contextlib.suppress(Exception):
         core.update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [x for x in q if x.get("branch") != "ready/l228-35"]))
+
+# 36. a case newly a gap, or newly outside, is admitted by the lead's ruling for that label and that kind alone
+# (measure.admit_gap, `climb.py admit-gap`, gap-admits.json, read by measure.regressions): unadmitted it is refused
+# with the command that admits it; admitted, refused no more; another kind of gap for the same label, or a wrong or
+# errored reading, still refused (G1 stays G1); a malformed kind or an empty reason refused at the command; and the
+# admission is seen at a score that reads the gap and ended (an event) when a score then reads anything else, when the
+# case leaves the corpus, or when no score has read it so within gap_admit_max_s. 2026-11-14 23:21:31Z and 23:58:19Z:
+# hold f96199579c's correct port was refused twice "newly a gap (needs a ruling)" and nothing read a ruling
+#: limit 30
+try:
+    J36 = ("a" * 40, "j36")
+    R36 = lambda l, o, w="": M.Row((l, o, 1.0, w), J36)
+    W36 = ("(its 1723 leaves of Bool) the judge builds no reader of more than LEAVES_MAX = 1000 leaves, and this case's "
+           "answer has more")
+    before36 = {l: R36(l, "unported", "unported at x") for l in ("g/a", "g/b", "g/c")}
+    after36 = {"g/a": R36("g/a", "judge-gap", W36), "g/c": R36("g/c", "outside"),
+               "g/b": R36("g/b", "judge-gap", "the judge's wire has no leaf kind for Foo (a new leaf kind is the judge's edit)")}
+    h36 = {"key": "k36", "cases": ["x/y"]}
+    kind36 = M.gap_kind("judge-gap", W36)
+    if kind36 != "judge-gap: no reader of more than LEAVES_MAX":
+        fault(f"the kind of a gap past LEAVES_MAX reads {kind36!r}, not 'judge-gap: no reader of more than LEAVES_MAX'")
+    p36 = M.regressions(h36, set(before36), before36, after36)
+    if len(p36) != 3 or any(sum(f" {l} " in p_ + " " or f" {l}:" in p_ for p_ in p36) != 1 for l in ("g/a", "g/b", "g/c")) \
+            or not any(f"climb.py admit-gap g/a '{kind36}'" in p_ for p_ in p36):
+        fault(f"unadmitted, the three cases newly gaps or outside read {p36} (each refused, g/a's naming its admit command)")
+    for bad36 in ((kind36, "  "), ("judge-gap", "a reason"), ("wrong", "a reason")):
+        try:
+            M.admit_gap("g/a", *bad36); fault(f"admit-gap took {bad36} (a malformed kind or an empty reason)")
+        except core.ClimbError:
+            pass
+    M.admit_gap("g/a", kind36, "a correct port of LLVM's expandSADDSUBO; the judge's leaf bound is the lead's to raise")
+    M.admit_gap("g/c", "outside", "ruled outside the subset")
+    p36b = M.regressions(h36, set(before36), before36, after36)
+    if len(p36b) != 1 or "g/b" not in p36b[0]:
+        fault(f"admitted g/a (that kind) and g/c (outside): the refusals read {p36b}, not g/b's alone")
+    other36 = dict(after36, **{"g/a": R36("g/a", "judge-gap", "the judge's wire has no leaf kind for Bar (a new leaf kind ...)")})
+    wrong36 = dict(after36, **{"g/a": R36("g/a", "wrong", "planted")})
+    if not any("g/a" in p_ for p_ in M.regressions(h36, set(before36), before36, other36)):
+        fault("an admission of one kind of gap admitted another kind for the same case")
+    if not any(p_.startswith("G1 wrong g/a") for p_ in M.regressions(h36, set(before36), before36, wrong36)):
+        fault("an admitted case that reads wrong is not G1")
+    ev36 = [e for e in core.events() if e["kind"] == "gap-admitted"]
+    if [e["label"] for e in ev36] != ["g/a", "g/c"]:
+        fault(f"the admissions' events: {[e.get('label') for e in ev36]} (g/a, g/c)")
+    # the admission at the scores: unseen while the port has not landed, seen at the gap, ended when the judge reads it
+    row36 = lambda l, o, w="": (l, o, 1.0, w)
+    M.settle_gap_admits({"g/a": row36("g/a", "unported"), "g/c": row36("g/c", "outside")})
+    a36 = core.state_json(M.GAP_ADMITS, {})
+    if set(a36) != {"g/a", "g/c"} or a36["g/a"]["seen"] or not a36["g/c"]["seen"]:
+        fault(f"after a score before the port landed the admissions read {a36} (both kept, g/c seen, g/a not)")
+    M.settle_gap_admits({"g/a": row36("g/a", "judge-gap", W36), "g/c": row36("g/c", "outside")})
+    M.settle_gap_admits({"g/a": row36("g/a", "passed")})
+    end36 = {e["label"]: e["why"] for e in core.events() if e["kind"] == "gap-admit-ended"}
+    if core.state_json(M.GAP_ADMITS, {}) or set(end36) != {"g/a", "g/c"}:
+        fault(f"after the judge read g/a and g/c left the corpus the admissions read {core.state_json(M.GAP_ADMITS, {})}, "
+              f"ended {end36} (both ended)")
+    M.admit_gap("g/d", "outside", "stale")
+    core.update_json(M.GAP_ADMITS, {}, lambda a: a["g/d"].__setitem__("t", "2026-01-01T00:00:00+00:00"))
+    M.settle_gap_admits({"g/d": row36("g/d", "unported")})
+    if "g/d" in core.state_json(M.GAP_ADMITS, {}):
+        fault("an admission no score read as its gap within gap_admit_max_s was kept")
+except Exception as e:
+    fault(f"a gap admitted by the lead's ruling raised {type(e).__name__}: {str(e)[:240]}")
+
+# 37. a check red on D14's time alone, judged, its own files holding no estimate (lander.d14_judged_red): its own
+# measured files past the line where no file is not, dropped as the commit's own naming the file; else the item waits
+# on its own timer at the queue's tail (no lander-wide backoff), the round trying the items behind it, and is dropped
+# uncharged at d14_tries. 2026-11-14 23:02:50Z: one item red at 265 s held the queue's head and idled the slots
+#: limit 60
+real37 = {k: getattr(L, k) for k in ("drop", "pause", "waits", "power_ok", "reconcile", "fixfirst_overdue", "fixfirst_binds",
+                                      "src_unverified", "unverified_binds", "src_gap_spawn", "origin_scored", "admits", "land_tree")}
+try:
+    g("checkout", "-q", "--detach", h)
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", h)
+    open(f"{repo}/test/src/t03.jl", "a").write("# 37\n"); g("add", "-A"); g("commit", "-q", "-m", "c37"); c37 = g("rev-parse", "HEAD")
+    ss37 = M.src_set(h, c37, None)
+    if ss37.get("why") or ss37.get("own") != ["t03.jl"] or ss37.get("harness") is not False:
+        fault(f"section 37's fixture: the set {ss37.get('why') or (ss37.get('own'), ss37.get('harness'))}")
+    rec37 = lambda G: f"shard 1\nstarted\tt03.jl\nrow\tt03.jl\tpassed\t{G}\tYQ==\tpassed\nshard 2\n"
+    dropped37 = []
+    L.drop = lambda item, outcome, note, stop=True: dropped37.append((item["hold"], outcome, stop, note))
+    mk37 = lambda n: {"branch": f"ready/l228-37{n}", "hold": f"l228-37{n}", "hold_id": f"l228-37{n}", "sha": c37}
+    core.save_json("ready.json", [mk37("a"), mk37("b")])
+    # its own file, measured past the line: the commit's own, the file named
+    L.d14_judged_red(mk37("a"), ss37, rec37(350.0 + 60000), "265")
+    if len(dropped37) != 1 or dropped37[0][1] != "landing-red" or "test/src/t03.jl" not in dropped37[0][3]:
+        fault(f"an own file measured past the line: drops {[(d[0], d[1]) for d in dropped37]} (l228-37a landing-red naming t03.jl)")
+    # its own file light: the item waits at the tail on its own timer, no lander-wide backoff, then dropped uncharged
+    dropped37.clear(); core.save_json("ready.json", [mk37("a"), mk37("b")])
+    L.d14_judged_red(mk37("a"), ss37, rec37(350.0 + 100), "190")
+    q37 = core.state_json("ready.json", [])
+    if dropped37 or [x["hold"] for x in q37] != ["l228-37b", "l228-37a"] or not q37[1].get("not_before", 0) > time.time() \
+            or q37[1].get("d14_tries") != 1 or "lander:d14" in core.state_json("backoff.json", {}):
+        fault(f"a red its own light file did not make: drops {dropped37}, the queue {[(x['hold'], x.get('d14_tries')) for x in q37]} "
+              f"(l228-37b first, l228-37a waiting at the tail), backoffs {sorted(core.state_json('backoff.json', {}))}")
+    # the round tries the item behind it while it waits
+    reached37 = []
+    class Stop37(Exception):
+        pass
+    L.pause, L.waits, L.power_ok, L.reconcile = (lambda: False), (lambda *a: False), (lambda: True), (lambda: None)
+    L.fixfirst_overdue, L.fixfirst_binds, L.unverified_binds = (lambda: []), (lambda o: None), (lambda b, f: None)
+    L.src_unverified, L.src_gap_spawn, L.origin_scored = (lambda h_: (0, [])), (lambda o: None), (lambda: True)
+    L.admits = lambda x, o=None, s=None: reached37.append(x["hold"]) or True
+    def stop37():
+        raise Stop37()
+    L.land_tree = stop37
+    core.save_json("ready.json", [q37[1], q37[0]])   # the waiting item first: the round passes it by
+    try:
+        L.land_round()
+    except Stop37:
+        pass
+    if reached37 != ["l228-37b"]:
+        fault(f"the round with a waiting item at the head reached {reached37}, not the item behind it")
+    for n37, path37 in ((2, "191"), (3, "192")):
+        it37 = next(x for x in core.state_json("ready.json", []) if x["hold"] == "l228-37a")
+        L.d14_judged_red(it37, ss37, rec37(350.0 + 100), path37)
+    if [(d[0], d[1], d[2]) for d in dropped37] != [("l228-37a", "landing-failed", False)]:
+        fault(f"at d14_tries reds of the machine's: drops {[(d[0], d[1], d[2]) for d in dropped37]} (l228-37a, uncharged)")
+except Exception as e:
+    import traceback
+    fault(f"a judged D14 red raised {type(e).__name__}: {str(e)[:240]} {traceback.format_exc()[-300:]}")
+finally:
+    for k, v in real37.items():
+        setattr(L, k, v)
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")

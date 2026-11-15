@@ -18,7 +18,12 @@ that raises S. Of the cases that do not pass:
   its answer. Climb these.
 - `judge-gap`: the judge's wire has no leaf kind for the answer or an argument (a new leaf kind is the judge's
   edit, the lead's hand). Counted apart and left out of the denominator; no climber, no G1; one note to the lead
-  for each kind (`judge_gaps`).
+  for each kind (`judge_gaps`). A move or a landing that makes a case NEWLY a gap, or newly `outside`, is refused
+  ("needs a ruling", `measure.regressions`) unless the lead's ruling admits that case and that kind of gap
+  (`climb.py admit-gap <label> '<kind>' '<reason>'`, the kind as the refusal prints it: `gap-admits.json`, an event
+  and one note, shown by `report`). An admitted case that reads `wrong` or `errored` is still G1. An admission ends
+  once a score reads its case as that gap and then as anything else (the judge reads it), when the case leaves the
+  corpus, or when no score reads it as that gap within `gap_admit_max_s` (`settle_gap_admits`, at each score).
 - `errored` / `wrong`: a gate (below). Fix it first. An outcome is decided by its cause (spec v17 Y2,
   test/verdict.jl's `RunResult` carries it): `wrong` only where a module's answer is not native's (`_matches`) or
   the two modules disagree; a line missing or a call past its budget is `errored`.
@@ -916,8 +921,8 @@ door's, run as Dale on paths no build user writes.
   and ended on a quiet machine is evidence of it: `lander.quiet`, the one definition (the probe within `p_idle`,
   `e_idle`, `swapins_max`, `decompressions_max`, the pressure under critical, and Low Power Mode off), read at the
   check's start and at its end. A check that read red on the band alone asks the lander (`dev/d14_judge.sh`, called by
-  dev/ship.sh on the check's status before its push): quiet at both ends, it is a D14 red as before (the D14 backoff,
-  the hourly cap and the counts apply to these alone); not quiet at either end, it lands on correctness alone (every
+  dev/ship.sh on the check's status before its push): quiet at both ends, it is a D14 red as before (the item's own
+  D14 wait, the hourly cap and the counts apply to these alone); not quiet at either end, it lands on correctness alone (every
   test, the ratchet and the canaries passed: the band is check.sh's last verdict) and its time is `unjudged`, read by
   neither the margin, nor `checks_measured`, nor the near-band note, nor `d14_binds` (`core.judged_check`). No
   measurement runs beside a check (ruling 1): the lander takes both measurement locks first,
@@ -1014,8 +1019,14 @@ door's, run as Dale on paths no build user writes.
   lander reads those files and no line of output: the check's output goes to `.wtd/check.log`, never into ship.sh's,
   since a test prints what it likes (R6-2, R6-7). No file is OTHER. LANDED is booked only when origin/wt2, fetched,
   holds the sha it names (else OTHER), by the pushed commit, its delta advancing the hold's cases at once. D14 (a check red on its time alone): approved work is never sent back for time (A7-2,
-  O7-3, R7-4): the item keeps its queue place, its approvals, its rebased verdict and tree, and is tried again after
-  the lander's `d14_backoff_s`; while `queue_cap` items wait the slots idle and spend nothing; one note for Dale each
+  O7-3, R7-4) unless its own files make the red: its own records measure each own file, and an own set that predicts
+  past the line its check was judged on, where no test file does not, is the commit's own (dropped, each file that
+  alone passes the line named, else all of them: split them). Otherwise the item keeps its approvals, its rebased
+  verdict and tree, and waits on its own timer (`not_before`: `d14_backoff_s` doubling with its own D14 reds,
+  `backoff_cap_s` at most) at the queue's tail, so the items behind it land first and no single item idles the slots
+  (`land-d14-wait`); at `d14_tries` such reds it is dropped uncharged, its paths named (`d14_judged_red`; 2026-11-14
+  23:02:50Z: one item red at 265 s held the queue's head under the lander-wide backoff this replaced, the slots idle
+  behind it, until the lead dequeued it by hand); while `queue_cap` items wait the slots idle and spend nothing; one note for Dale each
   time the share of the last `d14_share` checks read red on D14's time passes its share, or falls back, naming their
   critical paths and Dale's band, and an alarm when checks run and no `landed` event follows them for `alarm_s`
   (probed with the real land_round and a stubbed red check: the item kept its place and its rebased tree, no drop, no
@@ -1317,8 +1328,8 @@ and learned nothing, and ten D14 reds that saw battery wrote no note (those prob
   reboot waits for Dale's FileVault password, and automatic macOS installs are off while it runs. Every note for
   Dale is a notification too. A launch refused for any reason is a note through the driver's alarms, at most one in
   `alarm_s` each. The stall alarm counts from the launch's own stamp, and is silent at the week's half, while a
-  slot waits for the day's budget (O6), and while the slots idle by rule: `queue_cap` items waiting, a D14 wait or its
-  binding, battery (O8-5; probed: no `stall` with the queue full, where HEAD wrote it beside its cause's own notes).
+  slot waits for the day's budget (O6), and while the slots idle by rule: `queue_cap` items waiting, D14's
+  binding (`d14-binds`), battery (O8-5; probed: no `stall` with the queue full, where HEAD wrote it beside its cause's own notes).
 - **No resident agent, no LLM monitors.** The driver is a program. The scoreboard and the map are
   programs, and the map is redrawn at every score, landing and audit (D29). Opus rules a stopped hold. Fable is called only when an Opus ruling escalates, at most
   `fable_per_day` a day (D48). The models and the budget are not set by config (D14, D48).
@@ -1380,15 +1391,15 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120,
 `kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000,
 `decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6],
-`other_tries` 3, `ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296,
-`cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6,
-`base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
-`src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0},
-`src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9, `src_prior_ratchet_harness_s` 252, `src_margin_min_s` 10,
-`src_margin_checks` 10, `src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800,
-`admissible_wall_s` 600, `parse_wall_s` 300, `loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432,
-`proxy_request_s` 1200, `proxy_join_s` 30, `git_low_speed` [1000, 60],
-`loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
+`other_tries` 3, `d14_tries` 3, `gap_admit_max_s` 259200, `ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20,
+`file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4],
+`tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6, `src_unverified_max` 6,
+`src_shape_checks_min` 2, `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375,
+`src_prior_load_s` {"src": 17, "outside": 0}, `src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9,
+`src_prior_ratchet_harness_s` 252, `src_margin_min_s` 10, `src_margin_checks` 10, `src_margin_start_s` 25,
+`src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800, `admissible_wall_s` 600, `parse_wall_s` 300,
+`loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432, `proxy_request_s` 1200, `proxy_join_s` 30,
+`git_low_speed` [1000, 60], `loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
 `role_wait_s` {"slot": 10800, "review": 10800, "measure": 49800, "score": 49800, "land": 5400, "deps": 3600},
 `state_lock_s` 600, `step_wall_s` 60, `tree_wall_s` 600, `kaimon_poll_s` 30, `kaimon_ping_s` 10,
 `poll_s` {"kaimon_up": 5, "scan": 10, "lock": 5, "landing_lock": 20, "yield": 2, "land_job": 5},

@@ -766,10 +766,76 @@ def run_files_are_origins(sha):
     at = lambda c: [git("rev-parse", f"{c}:{p}", check=False).strip() for p in paths]
     return at(sha) == at(f"origin/{MARCH}")
 
-JUDGE_GAP_KIND_RE = re.compile(r"no leaf kind for (?:the argument type )?([^(;]+?) \(|(at most 3 arguments)")
+JUDGE_GAP_KIND_RE = re.compile(r"no leaf kind for (?:the argument type )?([^(;]+?) \(|(at most 3 arguments)|(no reader of more than LEAVES_MAX)")
 RUNNER_GAP_KIND_RE = re.compile(r"(no entry|the runner passes no argument[^;(]*|the runner reads no result of [^;(]*|the module imports [^,;]+)")
 
 GAPS = ("judge-gap", "runner-gap")   # the outcomes that are the judge's to read (spec v17 Y2, v18 P2)
+
+def gap_kind(o, w):
+    """The kind of a case's gap, the one reading the gaps' note, a refusal's text and an admission share: `outside` for a
+    case outside the subset, `<outcome>: <its kind>` for a judge-gap (JUDGE_GAP_KIND_RE over test/verdict.jl's why) or a
+    runner-gap (RUNNER_GAP_KIND_RE), `<outcome>: unnamed` when the why names no kind the readers know; None otherwise."""
+    if o == "outside":
+        return "outside"
+    if o not in GAPS:
+        return None
+    m = (JUDGE_GAP_KIND_RE if o == "judge-gap" else RUNNER_GAP_KIND_RE).search(w or "")
+    return f"{o}: " + (next((g for g in m.groups() if g), "").strip() if m else "unnamed")
+
+def gap_admitted(label, o, w):
+    """Whether the lead's ruling admits `label` reading this gap (gap-admits.json, `climb.py admit-gap`): the same label
+    and the same kind, never another kind of gap, never wrong or errored (G1 stays G1)."""
+    a = state_json(GAP_ADMITS, {}).get(label)
+    return a is not None and gap_kind(o, w) is not None and a.get("kind") == gap_kind(o, w)
+
+def admit_gap(label, kind, why):
+    """THE lead's ruling that a case may newly read a gap (a refusal's "needs a ruling"): `kind` exactly as the refusal
+    printed it (gap_kind: `outside`, `judge-gap: <kind>`, `runner-gap: <kind>`), `why` the ruling's reason. Recorded in
+    gap-admits.json with its time, an event and one note; read by regressions for that label and kind alone, shown by
+    `report`, and ended by settle_gap_admits. Returns the record."""
+    if not (kind == "outside" or re.fullmatch(r"(judge-gap|runner-gap): \S.*", kind)):
+        raise ClimbError(f"admit-gap: the kind {kind!r} is no gap's kind (outside, judge-gap: <kind>, runner-gap: <kind>, as "
+                         "the refusal printed it)")
+    if not why.strip():
+        raise ClimbError("admit-gap: a ruling carries its reason")
+    rec = {"kind": kind, "why": why.strip()[:600], "t": stamp(), "seen": False}
+    update_json(GAP_ADMITS, {}, lambda a: a.__setitem__(label, rec))
+    event("gap-admitted", label=label, gap=kind, why=rec["why"][:300])
+    for_dale(f"a gap admitted by the lead's ruling: {label}",
+             f"{label} may newly read `{kind}` in a move or a landing ({rec['why']}). A wrong or errored reading of it is still "
+             "G1. The admission ends when a score reads it as that gap and then no longer as one (the judge reads it), or "
+             "when no score has read it so within gap_admit_max_s.")
+    return rec
+
+def settle_gap_admits(rows):
+    """Each admission read against a score's whole-corpus rows ({label: (label, outcome, secs, why)}): seen once a score
+    reads the label as its admitted kind; ended (an event) once a score reads a seen label as anything else (the judge
+    reads it now, so the list never grows stale), when the label is gone from the corpus, or when no score has read it
+    as its kind within gap_admit_max_s of the ruling (a port that never landed)."""
+    adm = state_json(GAP_ADMITS, {})
+    if not adm:
+        return
+    ended, seen = {}, []
+    for l, a in adm.items():
+        r = rows.get(l)
+        if r is None:
+            ended[l] = "gone from the corpus"
+        elif gap_kind(r[1], r[3]) == a["kind"]:
+            a.get("seen") or seen.append(l)
+        elif a.get("seen"):
+            ended[l] = f"the score reads it {r[1]}, no longer `{a['kind']}`"
+        elif time.time() - datetime.datetime.fromisoformat(a["t"]).timestamp() > cfg()["gap_admit_max_s"]:
+            ended[l] = f"no score read it as `{a['kind']}` within gap_admit_max_s of the ruling"
+    if not ended and not seen:
+        return
+    def upd(a):
+        for l in seen:
+            a[l]["seen"] = True
+        for l in ended:
+            a.pop(l, None)
+    update_json(GAP_ADMITS, {}, upd)
+    for l, why in sorted(ended.items()):
+        event("gap-admit-ended", label=l, gap=adm[l]["kind"], why=why)
 
 def judge_gaps(rows):
     """The judge's gaps a measurement's rows hold (spec v17 Y2, v18 P2): `judge-gap` (the judge's wire has no leaf kind)
@@ -779,9 +845,8 @@ def judge_gaps(rows):
     gap-kinds.json."""
     kinds = collections.defaultdict(list)
     for l, o, _, w in rows:
-        if o in ("judge-gap", "runner-gap"):
-            m = (JUDGE_GAP_KIND_RE if o == "judge-gap" else RUNNER_GAP_KIND_RE).search(w)
-            kinds[f"{o}: " + (((m.group(1) or m.group(2) if o == "judge-gap" else m.group(1)) or "").strip() if m else "unnamed")].append(l)
+        if o in GAPS:
+            kinds[gap_kind(o, w)].append(l)
     have = sorted(kinds)
     if have == state_json("gap-kinds.json", []):
         return
@@ -2469,10 +2534,14 @@ def regressions(h, labels, before, after):
             problems.append(f"G2 lost {l}: {o} {w[:160]}")
         if o in ("wrong", "errored") and b[1] not in ("wrong", "errored"):
             problems.append(f"G1 {o} {l}: {w[:200]}")
-        if o == "outside" and b[1] != "outside":
-            problems.append(f"newly outside the subset (needs a ruling): {l}")
-        if o in GAPS and b[1] not in GAPS:   # a move cannot turn a case into the judge's gap unseen (spec v19 P5)
-            problems.append(f"newly a gap (needs a ruling): {l}: {o} {w[:160]}")
+        # a case newly outside the subset or newly the judge's gap needs the lead's ruling (spec v19 P5: never unseen);
+        # a ruling recorded for that label and that kind (admit_gap) admits it, and names itself in no problem
+        if o == "outside" and b[1] != "outside" and not gap_admitted(l, o, w):
+            problems.append(f"newly outside the subset (needs a ruling): {l} (the lead admits it: climb.py admit-gap {l} "
+                            "'outside' '<the ruling's reason>')")
+        if o in GAPS and b[1] not in GAPS and not gap_admitted(l, o, w):
+            problems.append(f"newly a gap (needs a ruling): {l}: {o} {w[:160]} (the lead admits it: climb.py admit-gap {l} "
+                            f"'{gap_kind(o, w)}' '<the ruling's reason>')")
     return problems + [f"the move's run did not reach {l}" for l in sorted((set(before) & labels) - set(after))]
 
 def judge_move(h, at, base, sha, labels, before, after):
