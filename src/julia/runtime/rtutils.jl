@@ -109,24 +109,18 @@ Natively Julia's `===`.
 @quarantine "julia/src/subtype.c:1348 subtype_tuple tests a tuple's fields by their types, each field's jl_typeof, so a type value in a field by its kind" Core.Bool @noinline jl_subtype_typeof(@nospecialize(o::Any), t::Type)::Bool =
     jl_typetagis(o, Type) ? Runtime._TypeUniverse_is_subtype(jl_to_typeof(Runtime.ClassID_get_id(o)), t) : Runtime._is_subtype(o, t)
 
+# Julia's runtime prints a fatal's report where no exception reaches a handler (julia/src/jl_uv.c:816
+# jl_safe_printf, as src/task.c:727 jl_no_exc_handler prints then exits): in a standalone module, the message to the
+# embedder's console, the embedder's string of its bytes (dart's EmbedderStringImpl.fromAsciiBytes) given to its
+# print. The code generator's fatal arm calls it before the trap (src/intrinsics.jl), its message ASCII
+@quarantine "julia/src/jl_uv.c:816 jl_safe_printf prints a runtime fatal's report; a standalone module's console is its embedder's print (sdk/lib/_internal/wasm/standalone/embedder.dart:437 print)" Base.print @noinline jl_safe_printf(msg::String)::Nothing =
+    print(Runtime.EmbedderStringImpl_from_ascii_bytes(msg, 0, ncodeunits(msg)))
+
 # jl_egal of two host references, a field of a class the egal arm compares (src/intrinsics.jl): wasm
 # reads no externref's bits, so the two are compared as dart compares two JS values, JSValue's ==, by
 # areEqualInJS, JS's === (Runtime.are_equal_in_js)
 @quarantine "sdk/lib/_internal/wasm/js_common/js_helper.dart:42 JSValue.== compares two JS values by areEqualInJS, JS's ===, where Julia's jl_egal compares a field's bits (julia/src/builtins.c:100 compare_fields), which wasm cannot read of a host reference" Core.Bool @noinline jl_egal_host_references(l::WasmExternRef, r::WasmExternRef)::Bool =
     Runtime.are_equal_in_js(l, r)
-
-# jl_egal of two host references in a standalone module, which has no JS runtime and so no areEqualInJS,
-# and no wasm instruction compares two externrefs: the comparison raises, naming the gap, never answering
-@quarantine "dart2wasm/lib/translator.dart:112 Translator.isStandalone: a standalone module has no JS runtime, so no sdk/lib/_internal/wasm/js_common/js_helper.dart:151 areEqualInJS; Julia's jl_egal compares a field's bits (julia/src/builtins.c:100 compare_fields), which wasm cannot read of a host reference" Core.ErrorException @noinline throw_host_reference_egal()::Union{} =
-    Runtime.Error__throw_with_current_stack_trace(ErrorException("WasmTarget: === on two values holding a host reference in a standalone module, which has no JS runtime to compare them (areEqualInJS)"))
-
-# Julia's typeof of a tuple held as its record where the operand's inferred type does not pin the tuple's
-# type (src/intrinsics.jl to_typeof): Julia answers the tuple type of its elements' types, found in its type
-# cache or made (julia/src/builtins.c:946 jl_f_tuple), a type made at run time, which WasmTarget never
-# makes (audit A68S3); the call raises with the message the code generator names the statement in, never
-# answering
-@quarantine "julia/src/builtins.c:946 jl_f_tuple finds a tuple's type in Julia's type cache or makes it at run time (jltypes.c:2477 jl_inst_arg_tuple_type), a DataType WasmTarget never makes at run time (audit A68S3)" Core.ErrorException @noinline throw_record_typeof(msg::String)::Union{} =
-    Runtime.Error__throw_with_current_stack_trace(ErrorException(msg))
 
 # compiler-rt's 128-bit division and remainder (compiler-rt/lib/builtins at the llvm pin), the libcalls
 # LLVM's WebAssembly backend makes for an i128 SDIV, SREM, UDIV and UREM (src/llvm/legalize_integer_types.jl,

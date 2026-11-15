@@ -491,10 +491,10 @@ end
     end
 end
 
-# the message of the raise where record_typeof pins no type (the runtime's throw_record_typeof): the record class
-# and the statement `at`, the one text of it
-@quarantine "julia/src/builtins.c:946 jl_f_tuple makes a tuple's type at run time where its cache has none, a DataType WasmTarget never makes (audit A68S3)" Base.string record_typeof_message(@nospecialize(c), at::String)::String =
-    string("WasmTarget: typeof of a tuple held as ", c, ", at ", at, ": its type, the tuple type of its elements' types, is not made at run time (audit A68S3)")
+# the Julia-only row of the fatal gap where record_typeof pins no type (src/intrinsics.jl, the fatal arm, which reports
+# it as Unquarantined's text at the statement's run-time location): the record class, the one text of it
+@quarantine "julia/src/builtins.c:946 jl_f_tuple makes a tuple's type at run time where its cache has none, a DataType WasmTarget never makes (audit A68S3)" Base.string record_typeof_message(@nospecialize(c))::String =
+    string("julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: typeof of a tuple held as ", c, ", whose type, the tuple type of its elements' types, is not made at run time (audit A68S3)")
 
 # whether the class `c` holds values of the open tuple type `T` (a Tuple type no concrete class is), in a
 # closed world whose records cover `arities` (record_arities): the record classes of the arities `T`
@@ -1165,6 +1165,19 @@ end
     Int[id for r in Dart2Wasm.get_concrete_class_id_range(t.class_id_numbering[], T) for id in r.start:r.end_]
 @quarantine "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers, each a class of the translator's list" Core.DataType concrete_classes(t, T::Type)::Vector{DataType} =
     DataType[t.classes[][id + 1].cls for id in concrete_class_ids(t, T)]
+
+# the classes, each with its id, a value of static type `T` has once held at the top type (convertType's
+# box): its concrete classes, and the record each concrete tuple class among them is boxed into there
+# (TupleRecord; the walk meets every concrete tuple class's record); the one answer of which records an
+# operand's value can be, read by typeof's record arms (src/intrinsics.jl to_typeof)
+@quarantine "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers; a tuple of a concrete type held at the top type is its arity's record, as dart's convertType boxes a value type on upcast (translator.dart:1597)" Core.Type function top_held_classes(t, T::Type)::Vector{Tuple{Int,DataType}}
+    local out = Tuple{Int,DataType}[]
+    for (id, c) in zip(concrete_class_ids(t, T), concrete_classes(t, T))
+        push!(out, (id, c))
+        c <: Tuple && isconcretetype(c) && (local r = tuple_record_class(fieldcount(c)); push!(out, (only(concrete_class_ids(t, r)), r)))
+    end
+    return unique!(p -> p[2], out)
+end
 
 # the field selector a field access names on receivers of the classes `admitted`: a name, its own; a
 # position, the field each class holds there, as Julia's getfield reads it (fieldname(typeof(x), i)).

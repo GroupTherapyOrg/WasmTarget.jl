@@ -66,16 +66,20 @@ units(bytes) = join(Int.(transcode(UInt16, collect(bytes))), ",")
     end
 end
 
-# a standalone module has no JS runtime to compare two host references: jl_egal raises there, never
-# answering (WasmTarget.compile is standalone, translator.dart:112 isStandalone), run with the standalone
-# embedder's imports as test/runner.jl gives them
-@testset "jl_egal of host references in a standalone module raises, naming the gap" begin
+# a standalone module has no JS runtime to compare two host references: jl_egal is a fatal gap there, never
+# answering and never an exception a catch observes (WasmTarget.compile is standalone, translator.dart:112
+# isStandalone): the rejection's text to the embedder's print, then the trap. Run with the standalone embedder's
+# imports, its stringFromAsciiBytes a stand-in answering the length it was given (JS reads no WasmGC array; the text
+# itself is read through test/runner.jl's helper in test/src/tuple_record_array.jl)
+@testset "jl_egal of host references in a standalone module is the fatal gap: reported, then trapped" begin
     local path = tempname() * ".wasm"
     write(path, W.compile(Cases.same_host, ()))
     local script = "(async () => { const m = await WebAssembly.compile(require('fs').readFileSync(process.argv[1]), {builtins: ['js-string'], importedStringConstants: ''}); " *
-        "const dart = {stackTraceGetCurrent: () => new Error().stack, stackTraceToString: (t) => String(t)}; " *
+        "const dart = {stackTraceGetCurrent: () => new Error().stack, stackTraceToString: (t) => String(t), " *
+        "stringFromAsciiBytes: (a, s, l) => 'reported ' + l, print: (l) => console.log(l)}; " *
         "const i = await WebAssembly.instantiate(m, {dart}); try { i.exports.same_host(); console.log('answered'); } catch (e) { console.log(e instanceof WebAssembly.Exception ? 'raised' : 'trapped'); } })()"
-    @test readchomp(`perl -e 'alarm 60; exec @ARGV' node -e $script $path`) == "raised"
+    local lines = readlines(`perl -e 'alarm 60; exec @ARGV' node -e $script $path`)
+    @test length(lines) == 2 && startswith(lines[1], "reported ") && parse(Int, lines[1][10:end]) > 0 && lines[2] == "trapped"
     rm(path)
 end
 

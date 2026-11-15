@@ -12,3 +12,20 @@ stays the import's call, as dart's `external` member's does.
 """
 @parity "sdk/lib/_internal/wasm/standalone/embedder.dart:238 stackTraceGetCurrent" @noinline stack_trace_get_current()::WasmExternRef =
     ccall((:stackTraceGetCurrent, "dart"), WasmExternRef, ())
+
+"""
+A host string of the ASCII bytes `char_codes[start:start+length]` (dart's `@pragma("wasm:import",
+"dart.stringFromAsciiBytes") external WasmExternRef stringFromAsciiBytes(WasmArray<WasmI8> charCodes,
+WasmI32 start, WasmI32 length)`), the string the embedder made of them. A foreign call of the embedder's
+function, never inlined, as stack_trace_get_current; the array crosses as a reference.
+"""
+@parity "sdk/lib/_internal/wasm/standalone/embedder.dart:71 stringFromAsciiBytes" @noinline string_from_ascii_bytes(char_codes::WasmArray{WasmI8}, start::Int32, length::Int32)::WasmExternRef =
+    ccall((:stringFromAsciiBytes, "dart"), WasmExternRef, (Any, Int32, Int32), char_codes, start, length)
+
+"""
+The embedder's print of a host string (dart's `@pragma("wasm:import", "dart.print") external WasmVoid
+print(WasmExternRef? line)`): the line to the host's console, where a standalone module's text goes. A method of
+Base's `print` on WasmTarget's own host reference type, since the module Runtime's `print` is Base's.
+"""
+@parity "sdk/lib/_internal/wasm/standalone/embedder.dart:437 print" @noinline Base.print(line::WasmExternRef)::Nothing =
+    ccall((:print, "dart"), Nothing, (WasmExternRef,), line)

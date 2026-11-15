@@ -703,7 +703,7 @@ end
     # only run time knows
     f === Core._apply_iterate && length(args) >= 2 && return generate_static_intrinsic(self, Val(:apply_iterate), f, args)
     # typeof of a value only run time knows: Julia's jl_typeof, a read of the value's tag
-    f === Core.typeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:to_typeof), args; tag_of_value = true)
+    f === Core.typeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:to_typeof), args; tag_of_value = true, statement = node)
     f === Core.apply_type && return generate_static_intrinsic(self, Val(:run_time_type), f, args)
     f === Core.applicable && length(args) >= 1 && return generate_static_intrinsic(self, Val(:applicable), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
@@ -1406,19 +1406,21 @@ end
 # carries, is null, and so is the entry of each class whose type value has no constant yet
 # (src/julia/classes.jl type_value_unmade, the one list of them), and so is a tuple record's, whose
 # values' type is their elements' (src/julia/classes.jl record_typeof_unmade): an as check naming one
-# refuses at its statement (types.jl emitAsCheck), so no as check's failure reads a null entry.
+# refuses at its statement (types.jl emitAsCheck), and an as check never names a record (it reads the
+# entry of the type it tests, a Julia type, and a record is none), so no as check's failure reads a
+# null entry.
 # With `tag_of_value`, the operand is a value and its tag its class id: Julia's typeof, jl_typeof
 # (julia/src/julia.h:117), a read of the value's tag, never a new type, so every answer is one of the
 # table's canonical constants. A class the operand admits whose type value has no constant refuses at
 # the statement, located, and a tuple record the operand admits is answered by its own arm ahead of the
-# table, the type the operand pins or a raise, so no typeof reads a null entry. Julia's differs: its
+# table, the type the operand pins or the fatal gap (the fatal arm), so no typeof reads a null entry. Julia's differs: its
 # typeof of a tuple is a type its cache finds or makes (jl_f_tuple); WasmTarget answers it where the
-# closed world knows it and raises where it would have to make a DataType at run time (A68S3).
+# closed world knows it and ends the program, located, where it would have to make a DataType at run time (A68S3).
 # Julia's `nothing` is the null reference, so
 # where the operand admits it the lookup takes dart's shape for an Object member on a nullable receiver
 # (code_generator.dart:2258 visitInstanceGet): null branches past it to Nothing's type, as runtimeType's
 # null arm answers Null's type literal
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:to_typeof}, args::Vector{NirValue}; tag_of_value::Bool = false)::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:to_typeof}, args::Vector{NirValue}; tag_of_value::Bool = false, statement::Union{NirCall,Nothing} = nothing)::WasmBuilder.IR.ValueType
     local t = translator(self)
     local b = self.code_gen.b[]
     local result = translate_type(t, DataType)
@@ -1439,14 +1441,17 @@ end
     # made. Each record class the operand admits is its own arm, by its class id, ahead of the table, whose
     # entry for it is null: where Julia's inferred type of the operand holds one tuple type of the record's
     # arity, that type (src/julia/classes.jl record_typeof), Julia's answer known at compile time; else a
-    # type made at run time, which WasmTarget never makes (audit A68S3), so the arm raises, naming this
-    # statement (the runtime's throw_record_typeof). The empty shape's class is Tuple{} itself, Julia's type
+    # type made at run time, which WasmTarget never makes (audit A68S3), so the arm is the fatal gap,
+    # naming this statement (the fatal arm: no catch of the program observes it). The empty shape's class is Tuple{} itself, Julia's type
     # of the one empty tuple, its entry the table's. formal(dev/formal/TupleRecordSplat.tla) TypeofAgrees
     local records = Tuple{Int,DataType,Union{DataType,Nothing}}[]
     for (id, c) in zip(concrete_class_ids(t, operand_type), concrete_classes(t, operand_type))
         local why = type_value_unmade(t, c)
         why === nothing ||
             reject!(Unquarantined("src/julia/classes.jl type_value_unmade: typeof of a value that may be a $c, whose type value has no constant ($(something(why)))"), at)
+    end
+    # every record the value can be at the top type, a boxed concrete tuple's among them (top_held_classes)
+    for (id, c) in top_held_classes(t, operand_type)
         record_typeof_unmade(c) && push!(records, (id, c, record_typeof(operand_type, c)))
     end
     # the class id's local, where the null or a record's arm reads it twice
@@ -1459,9 +1464,9 @@ end
             WasmBuilder.i32_eq(b)
             WasmBuilder.if_(b)
             if answer === nothing
-                translate_expression(self.code_gen, NirConst(Core.Const(record_typeof_message(c, at))), translate_type(t, String))
-                call(self.code_gen, nir_runtime_member(t.component, throw_record_typeof, at))
-                WasmBuilder.unreachable(b)
+                # the deferred gap, fatal (the fatal arm): its message names the statement
+                local site = statement === nothing ? at : "$at (at run time, $(generate_static_intrinsic(self, Val(:statement_location), statement)))"
+                generate_static_intrinsic(self, Val(:fatal), Unquarantined(record_typeof_message(c)), site)
             else
                 translate_expression(self.code_gen, NirConst(Core.Const(answer)), result)
                 WasmBuilder.br(b, done)
@@ -1494,6 +1499,47 @@ end
         WasmBuilder.var"end"(b)
     end
     return result
+end
+
+# Where the statement `node` of the body being compiled stands in Julia's source: its file and line, read from the
+# body's own debuginfo as Julia's IR printer reads it (Compiler/src/ssair/show.jl:405 buildLineInfoNode: the outermost
+# frame, the method's own line, an inlined callee's frames below it), and its position in the body (`%k`); the
+# position alone where Julia keeps no line. dart's statements carry their file offsets (TreeNode.fileOffset); Julia's
+# are its body's debuginfo
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:statement_location}, node::NirCall)::String
+    local body = self.code_gen.body
+    local k = something(findfirst(st -> st === node, body.stmts), 0)
+    k == 0 && return "an unnumbered statement"
+    local frames = Base.IRShow.buildLineInfoNode(body.ci.debuginfo, body.ci.def, k)
+    isempty(frames) && return "statement %$k"
+    local top = first(frames)
+    return "$(top.file):$(top.line), statement %$k"
+end
+
+# A gap WasmTarget defers to run time ends the program, never an exception a catch of the program observes: the
+# message to the host's console (the JS runtime's printToConsole, dart's debugRuntimePrint, code_generator.dart:3390;
+# a standalone module's embedder print, the runtime's jl_safe_printf, Julia's own fatal report) and then the trap (`unreachable`), which no try_table's catch or catch_all takes and after which no
+# finally runs. The message is made ASCII, each other character its `\u{...}` escape, as the standalone
+# printToConsole reads its bytes as ASCII. precedent(rust: panic=abort on wasm32, the panic hook reporting through the
+# host and core::intrinsics::abort the `unreachable` instruction; julia: src/task.c:727 jl_no_exc_handler, a runtime
+# fatal printed then jl_exit). Julia's differs: it defers no gap of its own; WasmTarget's are the facts it does not yet
+# make at run time, each named at its statement. Leaves nothing: the code after it is unreachable
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:fatal}, rejection::Rejection, at::String)::Nothing
+    local t = translator(self)
+    # the compile-time rejection's own text (RejectionError's showerror), so the report names the gap as a rejection
+    # of the same definition names it, its run-time location in `at`
+    local message = sprint(showerror, RejectionError(rejection, at))
+    local text = join(isascii(c) ? string(c) : "\\u{" * string(UInt32(c); base = 16) * "}" for c in message)
+    if is_standalone(t)
+        # the embedder's console, as Julia's runtime prints a fatal (the runtime's jl_safe_printf)
+        local printer = nir_runtime_member(t.component, jl_safe_printf, "the fatal arm")
+        translate_expression(self.code_gen, NirConst(Core.Const(text)), signature_for_direct_call(t, printer).inputs[1])
+        call(self.code_gen, printer)
+    else
+        debug_runtime_print(self.code_gen, text)
+    end
+    WasmBuilder.unreachable(self.code_gen.b[])
+    return nothing
 end
 
 # Julia's Memory builtins, each a port of Julia's own codegen arm at Julia's pin (1.12.7, 6d172b02),
@@ -2662,7 +2708,7 @@ end
 # is compared as dart compares two JS values, JSValue's == (js_helper.dart:42): both null egal, one null
 # not, else areEqualInJS, JS's === (the runtime's jl_egal_host_references). A standalone module has no
 # JS runtime (translator.dart:112 isStandalone), and no wasm instruction compares two externrefs, so
-# there the comparison raises, naming the gap (the runtime's throw_host_reference_egal), never
+# there the comparison is the fatal gap, named (the fatal arm: no catch of the program observes it), never
 # answering; the null cases are answered first, as JSValue's == answers them with no JS runtime. A field
 # of any other wasm type rejects, located
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:egal}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
@@ -2746,8 +2792,8 @@ end
             local nullable = (storage::WasmBuilder.IR.RefType).nullable
             local references() = begin
                 if is_standalone(t)
-                    call(code_gen, nir_runtime_member(t.component, throw_host_reference_egal, at))
-                    WasmBuilder.unreachable(b)
+                    generate_static_intrinsic(self, Val(:fatal), Unported("sdk/lib/_internal/wasm/js_common/js_helper.dart:151 areEqualInJS"),
+                        "$at (at run time): === on two values holding a host reference in a standalone module, which has no JS runtime to compare them")
                 else
                     WasmBuilder.local_get(b, hp); nullable && WasmBuilder.ref_as_non_null(b)
                     WasmBuilder.local_get(b, hq); nullable && WasmBuilder.ref_as_non_null(b)

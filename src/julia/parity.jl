@@ -578,6 +578,7 @@ path, so the runtime's file map is a table too.
     "sdk/lib/_internal/wasm/js_common/js_string.dart",
     "sdk/lib/_internal/wasm/js_common/print_patch.dart",
     "sdk/lib/_internal/wasm/standalone/embedder.dart",
+    "sdk/lib/_internal/wasm/standalone/embedder_string.dart",
     "sdk/lib/_internal/wasm/standalone/stack_trace_patch.dart",
 )
 
