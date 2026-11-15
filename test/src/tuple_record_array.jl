@@ -22,12 +22,10 @@ module Cases
 @noinline u(n::Int64) = n > 2 ? (n,) : (n, 1.0)
 typeof_of_union(n::Int64) = typeof(u(n)) === Tuple{Int64} ? 1 : 2
 # typeof of an Any that holds a tuple at run time: no type of the operand pins the tuple's, so the record's arm looks it
-# up from its fields' typeofs among the world's tuple types (here Tuple{Int64,Int64}, which the program builds). The
-# Memory{UInt8} it compares with is a type constant whose Core.AddrSpace parameter brings that class's constant, without
-# which any typeof of an Any refuses on Memory{Any} (type_value_unmade), as the corpus's typeof_either does
+# up from its fields' typeofs among the world's tuple types (here Tuple{Int64,Int64}, which the program builds)
 mutable struct AnySlot; x::Any; end
 @noinline any_slot(n::Int64) = AnySlot(n > 2 ? (n, n) : n)
-typeof_of_any(n::Int64) = (t = typeof(any_slot(n).x); t === Int64 ? 1 : t === Memory{UInt8} ? 3 : 2)
+typeof_of_any(n::Int64) = (t = typeof(any_slot(n).x); t === Int64 ? 1 : 2)
 # the review's program, whose own try around the typeof answered 5 in both modules while the gap was an exception; its
 # typeof is answered now, and the catch never runs
 @noinline mayfail(n::Int64) = n > 100 ? error("x") : 0
@@ -36,16 +34,16 @@ typeof_of_any(n::Int64) = (t = typeof(any_slot(n).x); t === Int64 ? 1 : t === Me
 c_u3(n::Int64) = typeof(u3(n)) === Tuple{Int64} ? 1 : 2
 # a typeof inlined from a helper (its line kept, which the fatal row names)
 h_typeof(x) = typeof(x); const H_TYPEOF_LINE = @__LINE__
-c_inlined(n::Int64) = (T = h_typeof(any_slot(n).x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)   # Memory{UInt8}: as typeof_of_any
-d_trycatch(n::Int64) = (try; T = typeof(any_slot(n).x); w = mayfail(n); (T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2) + w; catch; 5; end)
+c_inlined(n::Int64) = (T = h_typeof(any_slot(n).x); T === Int64 ? 1 : 2)
+d_trycatch(n::Int64) = (try; T = typeof(any_slot(n).x); w = mayfail(n); (T === Int64 ? 1 : 2) + w; catch; 5; end)
 # the lookup of each tuple an Any holds: elements of two classes, a nested tuple (its own record, looked up the same
 # way), the empty tuple (Tuple{}'s own entry), elements that are a type value and nothing (Tuple{DataType,Nothing})
 @noinline any_tuple(n::Int64) = AnySlot(n == 1 ? (n, 2.0) : n == 2 ? ((n,), n) : n == 3 ? () : n == 4 ? (Int64, nothing) : n)
 typeof_any_tuple(n::Int64) = (T = typeof(any_tuple(n).x); T === Tuple{Int64,Float64} ? 1 : T === Tuple{Tuple{Int64},Int64} ? 2 :
-                                  T === Tuple{} ? 3 : T === Tuple{DataType,Nothing} ? 4 : T === Memory{UInt8} ? 6 : 5)
+                                  T === Tuple{} ? 3 : T === Tuple{DataType,Nothing} ? 4 : 5)
 # two tuples of one arity and different element types: their types are two canonical constants, === by reference
 @noinline any_pair(k::Int64) = AnySlot(k > 3 ? (k, k) : (k, 1.0))
-same_type(n::Int64) = (a = any_pair(n).x; b = any_pair(n + 3).x; typeof(a) === typeof(b) ? 1 : typeof(a) === Memory{UInt8} ? 3 : 2)
+same_type(n::Int64) = (a = any_pair(n).x; b = any_pair(n + 3).x; typeof(a) === typeof(b) ? 1 : 2)
 # a tuple whose type the program never names: a splat of a Vector{Any} holding n and "s" (filled by index, so no
 # varargs call names Tuple{Int64,String}) is the record of 2 elements (the world has it, from any_pair's 2-tuples), its
 # fields an Int64 and a String, and the world holds no Tuple{Int64,String}: Julia would make the type, so the module
@@ -57,26 +55,26 @@ same_type(n::Int64) = (a = any_pair(n).x; b = any_pair(n + 3).x; typeof(a) === t
     v[2] = "s"
     return v
 end
-never_named(n::Int64) = (s = AnySlot(n > 0 ? mk_any(int_and_string(n)) : any_pair(n).x); T = typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)
+never_named(n::Int64) = (s = AnySlot(n > 0 ? mk_any(int_and_string(n)) : any_pair(n).x); T = typeof(s.x); T === Int64 ? 1 : 2)
 # a tuple of the array class, whose arity only run time knows (no record of 7 elements in this world): no row is its type
 @noinline mk_int(v::Vector{Int64}) = Core.tuple(v...)
 @noinline splat_held(n::Int64) = AnySlot(mk_int(collect(1:n)))
-array_typeof(n::Int64) = (s = splat_held(n); T = typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)
+array_typeof(n::Int64) = (s = splat_held(n); T = typeof(s.x); T === Int64 ? 1 : 2)
 # the same tuple where Julia forwards the field, so typeof's operand is a Tuple{Vararg{Int64}}: it pins NTuple{k,Int64}
 # at each record of k elements, a type the table holds no entry of where the program builds no such tuple, so the arm
 # looks it up as an unpinned one (it compiled to a rejection of that type's constant before); the array class's arm is
 # the fatal gap
-array_forwarded(n::Int64) = (s = AnySlot(mk_int(collect(1:n))); T = typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)
+array_forwarded(n::Int64) = (s = AnySlot(mk_int(collect(1:n))); T = typeof(s.x); T === Int64 ? 1 : 2)
 # the never-named tuple's typeof inlined from a helper: the fatal row names the whole inline chain, the helper's line
 # first (inlined), then its caller's
-c_inlined_never(n::Int64) = (s = AnySlot(n > 0 ? mk_any(int_and_string(n)) : any_pair(n).x); T = h_typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2); const C_INLINED_NEVER_LINE = @__LINE__
+c_inlined_never(n::Int64) = (s = AnySlot(n > 0 ? mk_any(int_and_string(n)) : any_pair(n).x); T = h_typeof(s.x); T === Int64 ? 1 : 2); const C_INLINED_NEVER_LINE = @__LINE__
 # a Memory as a tuple's element: its class's own entry (Memory{UInt8}, whose type constant the program names)
 @noinline mem_pair(n::Int64) = AnySlot(n > 0 ? (Memory{UInt8}(undef, 1), n) : n)
-mem_elem(n::Int64) = (T = typeof(mem_pair(n).x); T === Tuple{Memory{UInt8},Int64} ? 1 : T === Int64 ? 2 : T === Memory{UInt8} ? 3 : 4)
+mem_elem(n::Int64) = (T = typeof(mem_pair(n).x); T === Tuple{Memory{UInt8},Int64} ? 1 : T === Int64 ? 2 : 4)
 # a forwarded Tuple{Vararg{Int64}} operand in a world where Tuple{Int64,Int64} is a row for another reason (any_pair's
 # (k, k)): the record of 2 answers exactly Tuple{Int64,Int64}
 o_vararg(n::Int64) = (w = any_pair(n + 3); s = AnySlot(mk_int(collect(1:n))); T = typeof(s.x);
-                      (T === Tuple{Int64,Int64} ? 1 : T === Tuple{Int64,Float64} ? 2 : T === Memory{UInt8} ? 3 : 4) + 10 * (w.x::Tuple{Int64,Int64})[1])
+                      (T === Tuple{Int64,Int64} ? 1 : T === Tuple{Int64,Float64} ? 2 : 4) + 10 * (w.x::Tuple{Int64,Int64})[1])
 # a Union of plain classes keeps its typeof: each member's type value is its canonical constant
 struct A end
 struct B end

@@ -628,9 +628,10 @@ function orders(k::Int64)
     return Int64(isdefined(Plain(), :x, :release))                          # a store's order
 end
 # typeof of a value only run time knows, an element of a Vector of a Union: Julia's jl_typeof, run
-# against native; of an Any, a value that may be a Memory{Any}, whose type value has no constant yet
+# against native; and of an Any, a value that may be a Memory{Any}, whose type value is made: its
+# Core.AddrSpace{Core}(0x00) parameter's class is met by the walk (src/julia/classes.jl closed_world_classes)
 kind_of(n::Int64) = (v = Union{Int64,Float64,Int32}[Int64(1), 2.0, Int32(3)]; t = typeof(v[n]); Int64(t === Int64) + 2Int64(t === Float64) + 4Int64(t === Int32))
-any_kind_of(v::Vector{Any}) = typeof(v[1])
+any_kind_of(n::Int64) = (v = Any[n, 1.0]; t = typeof(v[n > 0 ? 1 : 2]); Int64(t === Int64) + 2Int64(t === Float64))
 apply_of(v::Vector{Any}) = Int64(Core.apply_type(v[1], v[2]) === Vector{Int64})
 # apply_type on an operand of two values, run against native: a DataType (its === the ref.eq of the
 # cache's constant) and a Union (jl_type_union's, its === Julia's egal)
@@ -645,9 +646,8 @@ end
     append!(NATIVE_RUNS, cases)
     local kbytes = W.compile(AtomicOrderCases.kind_of, (Int64,); optimize = false)
     append!(NATIVE_RUNS, [WTChild.RunCase("kind_of($n)", kbytes, (n,), AtomicOrderCases.kind_of(n)) for n in Int64[1, 2, 3]])
-    local ke = rejection(() -> W.compile(AtomicOrderCases.any_kind_of, (Vector{Any},); optimize = false))
-    @test ke !== nothing && ke.rejection isa W.Unquarantined && !isempty(ke.at) &&
-          startswith(ke.rejection.row, "src/julia/classes.jl type_value_unmade: typeof of a value that may be a Memory{Any}")
+    local akbytes = W.compile(AtomicOrderCases.any_kind_of, (Int64,); optimize = false)
+    append!(NATIVE_RUNS, [WTChild.RunCase("any_kind_of($n)", akbytes, (n,), AtomicOrderCases.any_kind_of(n)) for n in Int64[1, -1]])
     local e = rejection(() -> W.compile(AtomicOrderCases.apply_of, (Vector{Any},); optimize = false))
     @test e !== nothing && e.rejection isa W.Unquarantined && !isempty(e.at) &&
           startswith(e.rejection.row, "src/julia/classes.jl apply_type_cache: an operand of Julia's apply_type typed Any")

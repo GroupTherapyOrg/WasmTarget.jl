@@ -385,15 +385,19 @@ formal(dev/formal/TypeParamClasses.tla): where a type value is held, every liste
     # typeof (src/intrinsics.jl to_typeof) and by an as check's failure, which names the type it read back
     # from the class id (src/types.jl:607, src/julia/runtime/rtutils.jl jl_to_typeof); each reader's result
     # is a DataType, so where the table can be made the walk has met that kind. There, each class's
-    # parameter that is a type or a type variable is a constant whose object graph the walk meets
-    # (_meet_constant!), and each class it brings is passed over in turn, to the fixpoint
+    # parameter is a constant of its type value's `parameters` svec whose object graph the walk meets
+    # (_meet_constant!): a type, a type variable, or a value Julia stores in the svec (a bits value boxed,
+    # julia/src/jltypes.c:2089 inst_datatype_inner, its `parameters` svec: GenericMemory's Core.AddrSpace{Core}(0x00), a Val's Int64; a
+    # Symbol; a tuple of them), each of whose classes the type value's constant holds an instance of; a
+    # Vararg (the abstract Tuple's parameter) is of no class, its type value unmade (type_value_unmade); and
+    # each class it brings is passed over in turn, to the fixpoint
     local held = DataType in seen
     local k = 0
     while k < length(out)
         local c = out[k += 1]
         if held
             for p in c.parameters
-                p isa Union{Type,TypeVar} && _meet_constant!(out, seen, objs, p, at)
+                p isa Core.TypeofVararg || _meet_constant!(out, seen, objs, p, at)
             end
         end
         local r = boxed_record_class(c)
