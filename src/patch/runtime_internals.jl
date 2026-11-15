@@ -15,6 +15,13 @@
 # precedent(dart: the wasm target's @patch libraries, sdk/lib/_internal/wasm; gpucompiler: a device's
 # overlays of Base in its method table).
 
-@quarantine "julia/base/runtime_internals.jl:854 objectid calls the runtime's jl_object_id through a ccall, keeping its @_total_meta; WasmGC calls the runtime's function ported" Base.objectid @consistent_overlay METHOD_TABLE @assume_effects :total function Base.objectid(x)
+# Its effects: Base's @_total_meta (julia/base/essentials.jl:192) but nothrow, which is Base's own
+# @_foldable_meta set (:207): consistent, effect-free, terminating, no task state, no memory but its
+# own, no undefined behavior, no return-type call, written `:foldable :notaskstate :inaccessiblememonly`
+# (julia/base/expr.jl:703 `:foldable` holds the rest). Julia differs (D7): natively objectid cannot
+# throw; in a module the identity counter, spent, raises (src/runtime/common/object_patch.jl), so a
+# program's own `catch` around objectid must stay to see it, and Julia deletes a `try` around a call it
+# believes nothrow. Folding is unchanged: concrete evaluation needs the foldable effects alone.
+@quarantine "julia/base/runtime_internals.jl:854 objectid calls the runtime's jl_object_id through a ccall under @_total_meta; WasmGC calls the runtime's function ported, claiming @_total_meta but one effect, nothrow: in a module the spent identity counter raises, where natively objectid cannot throw" Base.objectid @consistent_overlay METHOD_TABLE @assume_effects :foldable :notaskstate :inaccessiblememonly function Base.objectid(x)
     return jl_object_id(x)
 end

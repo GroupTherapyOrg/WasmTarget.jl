@@ -77,6 +77,19 @@ function spent(x::Int64)::Int64
         return e isa ErrorException ? last : Int64(-1)
     end
 end
+# the spent counter through objectid itself: its raise reaches the program's own catch, the overlay
+# claiming no nothrow (src/patch/runtime_internals.jl), so Julia keeps the try; natively objectid cannot
+# throw, so the answer is the module's own, -3
+function spent_oid(x::Int64)::Int64
+    Runtime.Object__hash_code_rnd[] = typemax(Int32) - Int32(1)
+    local a = objectid(MM(x))
+    try
+        local b = objectid(MM(x))
+        return Int64(a != b)
+    catch e
+        return e isa ErrorException ? Int64(-3) : Int64(-4)
+    end
+end
 # a module's first serial: 1, its counter starting at 0 (natively the slot's read raises)
 first_serial(x::Int64)::Int64 = Runtime.Object__object_hash_code(MM(x))
 # the identity hash field of a value Julia boxes fresh: refused, located
@@ -115,6 +128,8 @@ const IC = IdentityCases
     # the last serial given, 2^31 - 1, returned once the next raises
     local (sp, so) = both(IC.spent, (Int64(1),))
     push!(cases, Main.WTChild.RunCase("objectid_identity/spent", sp, (Int64(1),), Int64(typemax(Int32)); optimized = so))
+    local (op, oo) = both(IC.spent_oid, (Int64(1),))
+    push!(cases, Main.WTChild.RunCase("objectid_identity/spent_oid", op, (Int64(1),), Int64(-3); optimized = oo))
     local (fp, fo) = both(IC.first_serial, (Int64(1),))
     push!(cases, Main.WTChild.RunCase("objectid_identity/first_serial", fp, (Int64(1),), Int64(1); optimized = fo))
     for r in Main.WTChild.run_cases(cases)

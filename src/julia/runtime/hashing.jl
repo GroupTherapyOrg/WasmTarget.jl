@@ -375,25 +375,29 @@ body raises.
     _wasm_only(Core.UInt64)
 
 """
-    identity_hash_field_holder(classes, member, at) -> Nothing
+    identity_hash_field_holder(classes, member, at; write) -> Nothing
 
 The read or write of dart's identity hash field (`member`, getIdentityHashField or setIdentityHashField,
 src/runtime/common/object_helper.jl) on an operand whose classes are `classes`, refused, located at `at`,
 where one of them is a class Julia boxes fresh each time it flows to Any (an immutable struct, a
-primitive): such a box holds no field that lasts, its read a plausible 0 and its write lost. Every
-mutable class passes, a String among them though Julia's egal compares Strings by content: a String
-is a heap object carrying the field, and dart reads a String's field itself
-(sdk/lib/_internal/wasm/js_common/js_string.dart:642); the arm that reads identity takes only
-identities (jl_object_id_identity_arm).
+primitive): such a box holds no field that lasts, its read a plausible 0 and its write lost. A read
+admits every mutable class, a String among them though Julia's egal compares Strings by content: a
+String is a heap object carrying the field, and dart reads a String's field itself
+(sdk/lib/_internal/wasm/js_common/js_string.dart:642). A write (`write`) admits only the identities
+(jl_object_id_identity_arm, the one definition of which values Julia answers by their identity): the
+field holds an identity's serial and nothing else, so a String's, whose id is its bytes', is never
+written.
 
 Julia-forced (D7): dart has no such check, its every Object a heap object with its header; Julia
 boxes an immutable value or a primitive anew wherever it flows to Any, so the header such a box
 carries is no value's.
 """
-@quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "dart's every Object is a heap object carrying its identity hash field; Julia boxes an immutable value or a primitive anew where it flows to Any, so only a mutable object keeps the field" Base.ismutabletype function identity_hash_field_holder(classes::Vector{DataType}, member::String, at::String)::Nothing
+@quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "dart's every Object is a heap object carrying its identity hash field; Julia boxes an immutable value or a primitive anew where it flows to Any, so only a mutable object keeps the field" Base.ismutabletype function identity_hash_field_holder(classes::Vector{DataType}, member::String, at::String; write::Bool)::Nothing
     for c in classes
         ismutabletype(c) ||
             reject!(Unquarantined("src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, which Julia boxes fresh each time it flows to Any, so no identity hash field of it lasts"), at)
+        write && !jl_object_id_identity_arm(c) &&
+            reject!(Unquarantined("src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, whose id Julia answers by its own hash or content, not its identity, so its identity hash field holds no serial"), at)
     end
     return nothing
 end

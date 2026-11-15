@@ -1247,7 +1247,7 @@ end
     # identity_hash_field_holder), Julia-forced: dart's every Object is one
     local held = dart_type_of(self, args[1])
     identity_hash_field_holder(isconcretetype(held) ? DataType[held] : concrete_classes(t, held), "getIdentityHashField",
-                               "$(julia_text(self.code_gen.enclosing_member)): getIdentityHashField")
+                               "$(julia_text(self.code_gen.enclosing_member)): getIdentityHashField"; write = false)
     local object_type = t.object_info[].non_nullable_type
     translate_expression(self.code_gen, only(args), object_type)
     WasmBuilder.struct_get(b, t.object_info[].struct_, FieldIndex_identity_hash())
@@ -1264,7 +1264,7 @@ end
     local (arg, hash) = args
     local held = dart_type_of(self, arg)
     identity_hash_field_holder(isconcretetype(held) ? DataType[held] : concrete_classes(t, held), "setIdentityHashField",
-                               "$(julia_text(self.code_gen.enclosing_member)): setIdentityHashField")
+                               "$(julia_text(self.code_gen.enclosing_member)): setIdentityHashField"; write = true)
     local object_type = t.object_info[].non_nullable_type
     translate_expression(self.code_gen, arg, object_type)
     translate_expression(self.code_gen, hash, WasmBuilder.IR.NumType_i64)

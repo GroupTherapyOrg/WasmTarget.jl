@@ -706,22 +706,34 @@ table of Compiler/src/methodtable.jl:37 OverlayMethodTable). Julia's differs: it
         a === b || push!(out, "$sig answers $a natively and $b over the overlay table")
     end
     # an effects claim (@assume_effects, a Method's purity), which Julia's inference trusts to fold or delete
-    # a call, stands only on an overlay that keeps the claim of the Base method it replaces, read from that
-    # method; on any other WasmTarget method it is refused (A75S6)
+    # a call, stands only on an overlay that claims what the Base method it replaces claims, read from that
+    # method, or a part of it, never more: a weaker claim is always sound. Each effect the overlay drops is
+    # stated at its own @quarantine, `<effect>: <why>`, the D7 text of how the module differs (an overlay
+    # whose port may throw where Julia's runtime cannot keeps no nothrow); on any other WasmTarget method a
+    # claim is refused (A75S6)
     local world = Core.Compiler.get_inference_world(interp)
     local overlays = Set{Method}()
     # a purity's claims, Julia's own decoding, less the consistent-overlay bit every overlay carries
-    local claims(p) = (local e = Core.Compiler.decode_effects_override(p);
-                       Tuple(getfield(e, f) for f in fieldnames(typeof(e)) if f !== :consistent_overlay))
+    local effects = [f for f in fieldnames(Core.Compiler.EffectsOverride) if f !== :consistent_overlay]
+    local claims(p) = (local e = Core.Compiler.decode_effects_override(p); Tuple(getfield(e, f) for f in effects))
     local none = claims(0x0000)
+    # whether the @quarantine standing over `m` (its file and lines, REGISTRY's record) states the effect `n` it drops
+    local stated(m::Method, n::Symbol) = any(e -> e isa QuarantineEntry && string(e.file) == string(m.file) &&
+                                                  e.first <= m.line <= e.last && occursin(Regex("\\b$(n): \\S"), e.necessity), REGISTRY)
     Base.visit(table) do m
         push!(overlays, m)
         claims(m.purity) == none && return
         local ms = Base._methods_by_ftype(m.sig, -1, world)
         local i = ms === nothing ? nothing : findfirst(x -> x.method.sig == m.sig && x.method.module !== m.module, ms)
         i === nothing && return push!(out, "the overlay $m claims effects (purity $(m.purity)) and replaces no Base method of its signature")
-        claims(ms[i].method.purity) == claims(m.purity) ||
-            push!(out, "the overlay $m claims effects (purity $(m.purity)) its Base method $(ms[i].method) does not (purity $(ms[i].method.purity))")
+        local base, mine = claims(ms[i].method.purity), claims(m.purity)
+        base == mine && return
+        any(k -> mine[k] && !base[k], eachindex(effects)) &&
+            return push!(out, "the overlay $m claims effects (purity $(m.purity)) its Base method $(ms[i].method) does not (purity $(ms[i].method.purity))")
+        for k in eachindex(effects)
+            base[k] && !mine[k] && !stated(m, effects[k]) &&
+                push!(out, "the overlay $m drops its Base method's $(effects[k]) claim without stating it at its @quarantine (`$(effects[k]): <why>`)")
+        end
     end
     # a call-site claim (@assume_effects on an expression) writes its bits into the lowered statement's ssaflags,
     # above the IR's own flags (julia/src/julia.h:281 NUM_IR_FLAGS, three), and an @ccall's claim into its

@@ -234,13 +234,17 @@ module IdentityFieldCases
 using WasmTarget: Runtime
 mutable struct Cell; x::Int64; end
 # the identity hash field of a fresh object (k = 0), and the field after `h` is stored (k = 1): a
-# mutable struct's, a Memory's (k = 2, 3) and a String's (k = 4, 5), every object under Any carrying it
+# mutable struct's, a Memory's (k = 2, 3) and, read only, a String's (k = 4), every object under Any
+# carrying it; the field is written on an identity alone (a String's id is its bytes')
 function idfield(k::Int64, h::Int64)
     local o = k < 2 ? Cell(h) : k < 4 ? Memory{Int64}(undef, 2) : string("ab", h)
     iseven(k) && return Runtime.get_identity_hash_field(o)
-    Runtime.set_identity_hash_field(o, h)
-    return Runtime.get_identity_hash_field(o)
+    local w = k < 2 ? Cell(h) : Memory{Int64}(undef, 2)
+    Runtime.set_identity_hash_field(w, h)
+    return Runtime.get_identity_hash_field(w)
 end
+# a String's identity hash field written: refused, located
+strfield(h::Int64) = (s = string("ab", h); Runtime.set_identity_hash_field(s, h); Runtime.get_identity_hash_field(s))
 end
 
 @testset "intrinsics.dart: the identity hash field read and written in the object's header" begin
@@ -250,7 +254,7 @@ end
     # as its low 32 bits, unsigned. Natively no object carries the field, so the answer is dart's
     # definition, written here: 0 fresh, else `h & 0xffffffff`
     local want(k, h) = iseven(k) ? Int64(0) : Int64(h & 0xffffffff)
-    local args = [(Int64(k), h) for k in 0:5 for h in (Int64(5), Int64(-1), Int64(2)^32 + 7, Int64(0x7fffffff))]
+    local args = [(Int64(k), h) for k in 0:4 for h in (Int64(5), Int64(-1), Int64(2)^32 + 7, Int64(0x7fffffff))]
     local bytes = WI.compile(IdentityFieldCases.idfield, (Int64, Int64))
     for r in WTChild.run_cases([WTChild.RunCase("idfield$a", bytes, a, want(a...)) for a in args])
         @test r.ok || (@info r.label r.why; false)
@@ -258,6 +262,8 @@ end
     # natively the body raises: the field exists only in a module
     @test_throws ErrorException WI.Runtime.get_identity_hash_field(IdentityFieldCases.Cell(1))
     @test_throws ErrorException WI.Runtime.set_identity_hash_field(IdentityFieldCases.Cell(1), 3)
+    local e = try; WI.compile(IdentityFieldCases.strfield, (Int64,)); nothing; catch x; x; end
+    @test e isa WI.RejectionError && occursin("whose id Julia answers by its own hash or content", sprint(showerror, e))
 end
 
 module SvecRefCases
