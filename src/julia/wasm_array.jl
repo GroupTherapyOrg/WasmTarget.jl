@@ -198,7 +198,7 @@ end
 # write, so it rests on Julia's own barrier, Core.compilerbarrier, whose builtin it cites (A72S2)
 @quarantine "no dart counterpart (dart's external member has no body); a native body that raises, its value hidden from inference by Julia's compilerbarrier builtin (julia/src/builtins.c:2065 jl_f_compilerbarrier)" Base.compilerbarrier @inline function _wasm_only(::Type{R})::R where {R}
     local r = Base.compilerbarrier(:type, nothing)
-    r === nothing && error("src/julia/wasm_array.jl: a wasm array operation, run natively; only the compiled module holds a wasm array")
+    r === nothing && error("src/julia/wasm_array.jl: an operation only a compiled module holds (a wasm array's, an object header's identity hash field, an image object's id), run natively")
     return r::R
 end
 
@@ -334,7 +334,9 @@ end
 A byte Memory over `s`'s data, sharing it: Julia's jl_string_to_genericmemory (genericmemory.c:104),
 which makes a Memory whose `ptr` is the String's bytes and whose owner is the String; over
 WasmTarget's layout a Memory{UInt8} struct whose data array is the String's own and whose length is
-that array's. Natively Julia's own call of it, as `unsafe_wrap(Memory{UInt8}, s)` makes it.
+that array's; an empty String's is Memory{UInt8}'s one empty instance (genericmemory.c:106-107), the
+object memorynew of no element gives. Natively Julia's own call of it, as `unsafe_wrap(Memory{UInt8},
+s)` makes it.
 """
 @quarantine "julia/src/genericmemory.c:104 jl_string_to_genericmemory makes a byte Memory sharing a String's bytes; WasmGC shares the data array" Core.Memory @noinline wasm_string_memory(s::String)::Memory{UInt8} =
     ccall(:jl_string_to_genericmemory, Ref{Memory{UInt8}}, (Any,), s)

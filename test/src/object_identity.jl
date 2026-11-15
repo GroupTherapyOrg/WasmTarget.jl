@@ -20,10 +20,10 @@ const A4 = Base.wrap(Array, getfield(A3, :ref).mem, (3,))   # a second Array ove
 const DV = let d = Dict{String,Int64}("a" => 1, "b" => 2); delete!(d, "b"); d end   # its vals a live copy
 const DT = (DV, DV)                                         # one Dict by two paths
 const S = "a String constant"                              # its id its bytes': no image slot
-slot(@nospecialize(o)) = Runtime.get_identity_hash_field(o) % Int32
+slot(o) = Runtime.get_identity_hash_field(o) % Int32   # specialized: the field read sees the object's class
 # the id a constant's image keeps, read through its slot (-k selects IMAGE_IDS[k]); -1 for a slot no
 # image's (no constant here has the id -1: checked natively below)
-img(@nospecialize(o)) = (s = slot(o); s < 0 ? reinterpret(Int64, image_object_id(-Int(s))) : Int64(-1))
+img(o) = (s = slot(o); s < 0 ? reinterpret(Int64, image_object_id(-Int(s))) : Int64(-1))
 mem3(x::Int64) = getfield(x == 1 ? A3 : A4, :ref).mem
 function ids(k::Int64, x::Int64)
     k == 1 && return img(K1)

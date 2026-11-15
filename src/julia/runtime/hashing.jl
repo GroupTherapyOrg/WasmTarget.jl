@@ -90,9 +90,10 @@ end
 # compiling process's (datatype_hash: for a type of a module made at run time, the answer of that
 # process alone). jl_object_id_ keys its arms by the
 # value's type tag; here by its type, which a call's specialization knows. The id of a mutable object is
-# the hash of its address (jl_object_id__cold's inthash((uintptr_t)v)), and of a type value its
-# DataType's, TypeName's or kind's own hash, neither of which a module holds: those stay Base's ccall,
-# a located rejection where it is reached.
+# the hash of its address (jl_object_id__cold's inthash((uintptr_t)v)), which a module's serial stands
+# for (jl_object_id_identity), or the id an image constant keeps; of a type value its DataType's,
+# TypeName's or kind's own hash, which a module does not hold: those stay Base's ccall, a located
+# rejection where it is reached.
 
 # the integer hashes of julia/src/support/hashing.c, Thomas Wang's
 @quarantine "julia/src/support/hashing.c:17 int32hash, its adds, shifts and xors of a 32-bit word" Base.xor function int32hash(a::UInt32)::UInt32
@@ -224,6 +225,20 @@ end
 end
 
 """
+    jl_object_id_by_hash(T) -> Bool
+
+Whether `T` is a mutable type whose id Julia's runtime answers by the value's own hash or content, never
+by its identity: a Symbol (jl_object_id_'s julia/src/builtins.c:491, its stored hash), a concrete
+DataType's (:496) and a TypeName's (:499) stored hash, and jl_object_id__cold's String (:463, its bytes'
+memhash), SimpleVector (:470, hash_svec), DataType (:472) and Module (:477, its hash): the one list,
+whose complement among mutable types is the identity arm (jl_object_id_identity_arm), the set Julia's
+image writer keeps an id for (julia/src/staticdata.c:1512 object_id_expected).
+"""
+@quarantine pin"julia/src/builtins.c:489 jl_object_id_" "jl_object_id_ and jl_object_id__cold answer a Symbol, a TypeName, a DataType, a String, a SimpleVector and a Module by a hash of their own, every other mutable by its identity" Core.SimpleVector function jl_object_id_by_hash(T::DataType)::Bool
+    return T === Symbol || T === DataType || T === Core.TypeName || T === String || T === Core.SimpleVector || T === Module
+end
+
+"""
     jl_object_id_identity_arm(T) -> Bool
 
 Whether Julia's runtime answers the id of a value of `T` by the object's identity: the last arm of
@@ -236,7 +251,7 @@ staticdata.c:1512 object_id_expected; a Symbol it writes apart, :1247). The one 
 are identities, read by the constants a module keeps the compiling process's id for (image_slot!).
 """
 @quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "a mutable's id is its identity unless the runtime answers it by the value (a String, a SimpleVector, a DataType, a Module) or jl_object_id_ by its stored hash (a Symbol, a TypeName), the set the image writer keeps an id for (julia/src/staticdata.c:1512)" Base.ismutabletype function jl_object_id_identity_arm(T::DataType)::Bool
-    return ismutabletype(T) && T !== Symbol && T !== DataType && T !== Core.TypeName && T !== String && T !== Core.SimpleVector && T !== Module
+    return ismutabletype(T) && !jl_object_id_by_hash(T)
 end
 
 # the inverse of an odd 64-bit multiplier modulo 2^64, by Newton's iteration (each step doubles the correct
@@ -353,16 +368,40 @@ body raises.
 
 Julia's object id of `x` (julia/src/builtins.c:489 jl_object_id_, :459 jl_object_id__cold): a
 Symbol's stored hash (hash_symbol of its name); a String's memhash of its bytes under the seed
-0xedc3b677; an immutable value's immut_id_ from its type's hash, the compiling process's folded in
-(datatype_hash: native Julia's in that process, and in every process for a type of a module saved in an
-image, never for one of a module made at run time). A type value's id (its DataType's,
-TypeName's or kind's hash) and a mutable object's (its address's hash) are Base's ccall, a located
-rejection where it is reached.
+0xedc3b677; an object whose id is its identity (jl_object_id_identity_arm) its identity's
+(jl_object_id_identity: the id an image constant keeps, else int64hash of its serial); an immutable
+value's immut_id_ from its type's hash, the compiling process's folded in (datatype_hash: native
+Julia's in that process, and in every process for a type of a module saved in an image, never for one
+of a module made at run time). A type value's id (its DataType's, TypeName's or kind's hash), a
+Module's and a SimpleVector's are Base's ccall, a located rejection where it is reached.
 """
 @quarantine "julia/src/builtins.c:489 jl_object_id_ answers by the value's type tag: a Symbol's hash, a String's memhash, an immutable's immut_id_" Core.Symbol function jl_object_id(x::T)::UInt64 where {T}
     T === Symbol && return hash_symbol(String(x))
     T === String && return memhash_seed(x, 0xedc3b677)
-    # a mutable object's id is its address's hash, a type value's its own hash: Base's ccall
-    (ismutabletype(T) || T <: Type) && return ccall(:jl_object_id, UInt, (Any,), x)
+    jl_object_id_identity_arm(T) && return jl_object_id_identity(x)
+    # a type value's id is its own hash, a Module's and a SimpleVector's their own: Base's ccall
+    (T <: Type || jl_object_id_by_hash(T)) && return ccall(:jl_object_id, UInt, (Any,), x)
     return immut_id_(x, datatype_hash(T))
+end
+
+"""
+    jl_object_id_identity(x) -> UInt64
+
+The id of an object whose id is its identity, jl_object_id__cold's last arm (julia/src/builtins.c:482-
+484): an object saved in an image keeps the id the compiling process gave it (`((uintptr_t*)v)[-2]`
+under GC_IN_IMAGE), here IMAGE_IDS's entry k where the identity hash slot holds -k (image_slot!,
+image_object_id); any other object's id is `inthash((uintptr_t)v)`, int64hash on a 64-bit word
+(julia/src/support/hashing.h:19), of its address. Julia differs: a WasmGC object has no address, so the
+serial dart's lazy fill gives it (Runtime.Object__object_hash_code, object_patch.dart:16, from a
+counter) stands for the address; int64hash is a bijection, so distinct serials give distinct ids as
+distinct addresses do (dev/formal/ObjectIdentity.tla Unique; an image id a serial could give is
+refused at compile time, dev/formal/ConstantImageIds.tla). The slot is dart's i32 read zero-extended,
+so its sign is recovered (`% Int32`) before it is read as the image's mark. Natively no object carries
+the slot and the read raises: natively Base's own objectid is the answer, and this arm exists only in
+a module.
+"""
+@quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "a mutable's id is inthash of its address, or the id an image object keeps; a WasmGC object has none, so the serial dart's identity hash slot holds stands for the address" Core.Int32 function jl_object_id_identity(x::T)::UInt64 where {T}
+    local s = Runtime.Object__object_hash_code(x) % Core.Int32
+    s < 0 && return image_object_id(-Int(s))
+    return int64hash(UInt64(s))
 end
