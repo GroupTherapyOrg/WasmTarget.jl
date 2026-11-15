@@ -1125,6 +1125,27 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         jfault("julia/src/genericmemory.c:7 jl_alloc_genericmemory") === nothing && push!(out, "negative missed: a Julia anchor moved a line passes the load's check")
         jfault("julia/src/genericmemory.c:5 jl_value_t") === nothing && push!(out, "negative missed: a Julia anchor naming another typedef passes")
         jfault("julia/src/codegen.cpp:6 jl_alloc_genericmemory") === nothing && push!(out, "negative missed: a Julia anchor in a file the julia pin lacks passes")
+        # the femtolisp parser's Scheme (julia/src/julia-parser.scm, a unit of JULIA_FILES): a column-0 `(define name` or
+        # `(define (name` declares name; a define of another name, a line that is no top-level define and a femtolisp name
+        # in a C unit refused, each by its words
+        write(joinpath(jl, "src", "julia-parser.scm"), """
+            (define (add-dots ops) (append! ops ops))
+            (define prec-pair (add-dots '(=>)))
+            ;; a comment
+              (define indented 1)
+            (define operator? (SuffSet operators))
+            """)
+        (jfault("julia/src/julia-parser.scm:1 add-dots") === nothing && jfault("julia/src/julia-parser.scm:2 prec-pair") === nothing &&
+         jfault("julia/src/julia-parser.scm:5 operator?") === nothing) ||
+            push!(out, "negative missed: a femtolisp define of the parser's does not resolve")
+        occursin("defines prec-pair, not operator?", something(jfault("julia/src/julia-parser.scm:2 operator?"), "")) ||
+            push!(out, "negative missed: a Scheme anchor whose (define names another definition passes, or is refused by other words")
+        occursin("no top-level (define", something(jfault("julia/src/julia-parser.scm:3 operator?"), "")) ||
+            push!(out, "negative missed: a Scheme anchor on a comment line passes, or is refused by other words")
+        occursin("no top-level (define", something(jfault("julia/src/julia-parser.scm:4 indented"), "")) ||
+            push!(out, "negative missed: a Scheme anchor on an indented define passes, or is refused by other words")
+        parse("julia/src/genericmemory.c:1 prec-pair") === nothing ||
+            push!(out, "negative missed: a femtolisp name in a C unit reads as an anchor")
         # a unit of Julia's compiler in Julia (julia/Compiler/src/typeinfer): the line begins a definition of the
         # symbol, read by Julia's parser; a call in a body, a comment and another definition's name refused
         mkpath(joinpath(jl, "Compiler", "src"))
