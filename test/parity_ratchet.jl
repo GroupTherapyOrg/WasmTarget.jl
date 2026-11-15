@@ -1298,11 +1298,12 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
             push!(out, "negative missed: a citation of a member its line does not declare pins a @quarantine")
         rm(fe; recursive = true)
         rm(jq; recursive = true)
-        # every unit of JULIA_FILES resolves to a file of the real checkout, where it exists
+        # every unit of JULIA_FILES resolves to a file of the real checkout, where it exists: C or C++, Julia, or the
+        # femtolisp parser's Scheme (julia/src/julia-parser.scm, whose operator tables jl_is_operator reads, ast.c:992)
         local jdir = Base.invokelatest(getfield(wt, :_pin_julia))
         if jdir !== nothing
             for u in getfield(wt, :JULIA_FILES)
-                any(e -> isfile(joinpath(jdir, u[length("julia/")+1:end] * e)), (".h", ".c", ".cpp", ".jl")) ||
+                any(e -> isfile(joinpath(jdir, u[length("julia/")+1:end] * e)), (".h", ".c", ".cpp", ".jl", ".scm")) ||
                     push!(out, "JULIA_FILES' unit $u has no source at the julia pin")
             end
         end
