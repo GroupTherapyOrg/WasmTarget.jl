@@ -1413,9 +1413,10 @@ end
 # (julia/src/julia.h:117), a read of the value's tag, never a new type, so every answer is one of the
 # table's canonical constants. A class the operand admits whose type value has no constant refuses at
 # the statement, located, and a tuple record the operand admits is answered by its own arm ahead of the
-# table, the type the operand pins or the fatal gap (the fatal arm), so no typeof reads a null entry. Julia's differs: its
-# typeof of a tuple is a type its cache finds or makes (jl_f_tuple); WasmTarget answers it where the
-# closed world knows it and ends the program, located, where it would have to make a DataType at run time (A68S3).
+# table: the type the operand pins, else the world's tuple type of its elements' types, else the fatal gap (the fatal
+# arm), so no typeof reads a null entry. Julia's differs: its typeof of a tuple is a type its cache finds or makes
+# (jl_f_tuple); WasmTarget answers it where the closed world knows it and ends the program, located, where it would
+# have to make a DataType at run time (A68S3).
 # Julia's `nothing` is the null reference, so
 # where the operand admits it the lookup takes dart's shape for an Object member on a nullable receiver
 # (code_generator.dart:2258 visitInstanceGet): null branches past it to Nothing's type, as runtimeType's
@@ -1424,11 +1425,12 @@ end
     local t = translator(self)
     local b = self.code_gen.b[]
     local result = translate_type(t, DataType)
-    local array_type = array_type_for_dart_type(t, Union{Nothing,DataType}; mutable_ = true)
+    # the table's type, defined ahead of the operand's types
+    array_type_for_dart_type(t, Union{Nothing,DataType}; mutable_ = true)
+    local entries = type_value_entries(t)
     # the table, then the class id pushed by `index`, read as a non-null DataType
     local lookup(index::Function) = begin
-        local entries = NirConst[NirConst(Core.Const(info.cls === nothing || type_value_unmade(t, info.cls) !== nothing || record_typeof_unmade(info.cls) ? nothing : info.cls)) for info in t.classes[]]
-        instantiate_constant(t.constants[], b, make_array_of(t.constants[], Union{Nothing,DataType}, entries), WasmBuilder.IR.RefType_def(array_type; nullable = false))
+        local array_type = generate_static_intrinsic(self, Val(:type_value_table), entries)
         index()
         WasmBuilder.array_get(b, array_type)
         WasmBuilder.ref_as_non_null(b)
@@ -1440,22 +1442,43 @@ end
     # tuple type of its elements' types (julia/src/builtins.c:946 jl_f_tuple), found in its type cache or
     # made. Each record class the operand admits is its own arm, by its class id, ahead of the table, whose
     # entry for it is null: where Julia's inferred type of the operand holds one tuple type of the record's
-    # arity, that type (src/julia/classes.jl record_typeof), Julia's answer known at compile time; else a
+    # arity, that type (src/julia/classes.jl record_typeof), Julia's answer known at compile time; else the
+    # type its cache holds for the elements' types, looked up at run time among the world's (below); else a
     # type made at run time, which WasmTarget never makes (audit A68S3), so the arm is the fatal gap,
     # naming this statement (the fatal arm: no catch of the program observes it). The empty shape's class is Tuple{} itself, Julia's type
     # of the one empty tuple, its entry the table's. formal(dev/formal/TupleRecordSplat.tla) TypeofAgrees
     local records = Tuple{Int,DataType,Union{DataType,Nothing}}[]
     for (id, c) in zip(concrete_class_ids(t, operand_type), concrete_classes(t, operand_type))
+        # a record's type value is never read: its own arm answers (the array class's, TupleRecord{RunTimeArity()}, has
+        # no constant, its parameter a value of no class)
+        record_typeof_unmade(c) && continue
         local why = type_value_unmade(t, c)
         why === nothing ||
             reject!(Unquarantined("src/julia/classes.jl type_value_unmade: typeof of a value that may be a $c, whose type value has no constant ($(something(why)))"), at)
     end
-    # every record the value can be at the top type, a boxed concrete tuple's among them (top_held_classes)
+    # every record the value can be at the top type, a boxed concrete tuple's among them (top_held_classes); a pinned
+    # type the table holds no entry of (a class the closed world does not number, so no constant of it is made: a
+    # Tuple{Vararg{Int64}} pins NTuple{2,Int64} at the record of 2 where no 2-tuple of Int64 is built) is looked up as an
+    # unpinned one, which no row answers
     for (id, c) in top_held_classes(t, operand_type)
-        record_typeof_unmade(c) && push!(records, (id, c, record_typeof(operand_type, c)))
+        record_typeof_unmade(c) || continue
+        local answer = record_typeof(operand_type, c)
+        push!(records, (id, c, answer === nothing || answer in entries ? answer : nothing))
     end
+    # where the operand pins no type at a record's arity, Julia's typeof is still the tuple type of its elements' types,
+    # found in its cache (julia/src/jltypes.c:2472 jl_lookup_arg_tuple_type) or made (:2477 jl_inst_arg_tuple_type):
+    # the rows of the world's tuple types of the record's arity (tuple_type_rows), which the record's arm searches by
+    # its fields' typeofs (tuple_type_lookup); the array class's arity only run time knows, so no row is its: its arm
+    # stays the fatal gap. formal(dev/formal/TupleRecordLookup.tla) TypeofAgrees, TypeofAnswers
+    local lookup_rows(c::DataType) = @exhaustive something(tuple_record_arity(c))::RecordArity begin
+        (f::FixedArity) => tuple_type_rows(entries, f.n)
+        RunTimeArity => DataType[]
+    end
+    local looked_up = any(((_, c, answer),) -> answer === nothing && !isempty(lookup_rows(c)), records)
     # the class id's local, where the null or a record's arm reads it twice
     local class_id = Nothing <: operand_type || !isempty(records) ? add_local(self.code_gen, WasmBuilder.IR.NumType_i32) : nothing
+    # the value's local, where a record's arm looks its type up from its fields
+    local value = looked_up ? add_local(self.code_gen, t.top_type_non_nullable[]) : nothing
     # the records' arms, then the table, the class id in `class_id`; each arm answers by `done`
     local arms_then_lookup(done::WasmBuilder.Label) = begin
         for (id, c, answer) in records
@@ -1464,7 +1487,15 @@ end
             WasmBuilder.i32_eq(b)
             WasmBuilder.if_(b)
             if answer === nothing
-                # the deferred gap, fatal (the fatal arm): its message names the statement
+                # the type of the tuple's elements' types, where a row of the world is it
+                local rows = lookup_rows(c)
+                if !isempty(rows)
+                    WasmBuilder.local_get(b, value)
+                    generate_static_intrinsic(self, Val(:tuple_type_lookup), entries, rows, at)
+                    WasmBuilder.br_on_non_null(b, done)
+                end
+                # else, a type the program never names, made at run time: the deferred gap, fatal (the fatal arm), its
+                # message naming the statement
                 local site = statement === nothing ? at : "$at (at run time, $(generate_static_intrinsic(self, Val(:statement_location), statement)))"
                 generate_static_intrinsic(self, Val(:fatal), Unquarantined(record_typeof_message(c)), site)
             else
@@ -1481,6 +1512,7 @@ end
         local null_label = WasmBuilder.block(b)
         translate_expression(self.code_gen, only(args), t.top_type[])
         WasmBuilder.br_on_null(b, null_label)
+        value === nothing || WasmBuilder.local_tee(b, value)
         load_class_id(b, t, top)
         WasmBuilder.local_set(b, class_id)
         arms_then_lookup(done)
@@ -1493,12 +1525,142 @@ end
     else
         local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[result])
         translate_expression(self.code_gen, only(args), top)
+        value === nothing || WasmBuilder.local_tee(b, value)
         load_class_id(b, t, top)
         WasmBuilder.local_set(b, class_id)
         arms_then_lookup(done)
         WasmBuilder.var"end"(b)
     end
     return result
+end
+
+# The table of each class's type value (src/julia/classes.jl type_value_entries), pushed as its constant array of
+# nullable DataTypes, the array's type returned: the table Julia's jl_to_typeof reads a tag's type from (julia.h:971)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:type_value_table}, entries::Vector{Union{Nothing,DataType}})::WasmBuilder.IR.ArrayType
+    local t = translator(self)
+    local array_type = array_type_for_dart_type(t, Union{Nothing,DataType}; mutable_ = true)
+    instantiate_constant(t.constants[], self.code_gen.b[], make_array_of(t.constants[], Union{Nothing,DataType}, NirConst[NirConst(Core.Const(e)) for e in entries]),
+        WasmBuilder.IR.RefType_def(array_type; nullable = false))
+    return array_type
+end
+
+# Julia's typeof of a tuple held as its record of `rows`' arity, the record on the stack: the type its cache holds for
+# its elements' types (julia/src/jltypes.c:2472 jl_lookup_arg_tuple_type, the lookup jl_f_tuple makes when it builds
+# the tuple, :2477 jl_inst_arg_tuple_type: each element's jl_typeof, then lookup_typevalue, :1133), among the world's
+# tuple types of the arity (src/julia/classes.jl tuple_type_rows), leaving its canonical constant, or null where the
+# world holds none, a type Julia would make (the caller's fatal gap). dart builds a record's runtime type from its
+# fields' runtime types (record_class_generator.dart:653 _generateRecordRuntimeType: each field's
+# _getActualRuntimeTypeNullable, then a _RecordType of them); Julia finds its type in its cache, and WasmTarget makes no
+# DataType at run time (audit A68S3), so each field's typeof (`field_typeof`) is compared with each row's element, a
+# canonical constant by ref.eq, in the rows' order: the first row equal at every position answers. A field whose own
+# typeof is the gap (null) equals no element, so its tuple's lookup misses: never a partial match.
+# formal(dev/formal/TupleRecordLookup.tla) TypeofAgrees, TypeofAnswers
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:tuple_type_lookup}, entries::Vector{Union{Nothing,DataType}}, rows::Vector{DataType}, at::String)::Nothing
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local result = translate_type(t, DataType)
+    local nullable = WasmBuilder.with_nullability(result, true)::WasmBuilder.IR.RefType
+    local n = fieldcount(first(rows))
+    all(r -> fieldcount(r) == n, rows) || reject!(Internal("src/intrinsics.jl tuple_type_lookup: rows of more than one arity, $rows"), at)
+    local cls = tuple_record_class(n)
+    local info = get(t.class_info, cls, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl tuple_type_lookup: the record class $cls has no class info"), at)
+    local fields = class_instance_fields(cls, at)
+    local rec = add_local(code_gen, info.non_nullable_type)
+    WasmBuilder.ref_cast(b, info.non_nullable_type)
+    WasmBuilder.local_set(b, rec)
+    # each field's typeof, by the elements the rows hold at its position
+    local types = map(1:n) do k
+        WasmBuilder.local_get(b, rec)
+        WasmBuilder.struct_get(b, info.struct_, t.field_index[fields[k]])
+        generate_static_intrinsic(self, Val(:field_typeof), entries, unique!(DataType[r.parameters[k] for r in rows]), at)
+        local l = add_local(code_gen, nullable)
+        WasmBuilder.local_set(b, l)
+        l
+    end
+    # the first row equal at every position, else null
+    local found = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[nullable])
+    for row in rows
+        local next = WasmBuilder.block(b)
+        for k in 1:n
+            WasmBuilder.local_get(b, types[k])
+            translate_expression(code_gen, NirConst(Core.Const(row.parameters[k])), result)
+            WasmBuilder.ref_eq(b)
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.br_if(b, next)
+        end
+        translate_expression(code_gen, NirConst(Core.Const(row)), result)
+        WasmBuilder.br(b, found)
+        WasmBuilder.var"end"(b)   # next
+    end
+    WasmBuilder.ref_null(b, nullable.heap_type)
+    WasmBuilder.var"end"(b)   # found
+    return nothing
+end
+
+# Julia's typeof of a tuple's element, the record's field on the stack (a top-typed reference), where the tuple's type
+# is one of rows whose elements at its position are `elements` (tuple_type_lookup): jl_typeof, its class id's entry of
+# the table; a field that is itself a tuple held as its record (whose entry is null) by the same lookup, among the rows
+# of `elements` that are tuple types of the record's arity; the null, Julia's `nothing`, Nothing's type where an
+# element is Nothing. Else null: the type of no row's element here (a class whose type value has no constant, a record
+# of no such row, the array class, whose arity only run time knows), which equals no element, so the tuple's lookup
+# misses. Leaves a nullable DataType
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:field_typeof}, entries::Vector{Union{Nothing,DataType}}, elements::Vector{DataType}, at::String)::Nothing
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local result = translate_type(t, DataType)
+    local nullable = WasmBuilder.with_nullability(result, true)::WasmBuilder.IR.RefType
+    local top_nn = t.top_type_non_nullable[]
+    local field = add_local(code_gen, t.top_type[])
+    WasmBuilder.local_set(b, field)
+    local got = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[nullable])
+    local null_field = WasmBuilder.block(b)
+    WasmBuilder.local_get(b, field)
+    WasmBuilder.br_on_null(b, null_field)
+    local v = add_local(code_gen, top_nn)
+    local id = add_local(code_gen, WasmBuilder.IR.NumType_i32)
+    WasmBuilder.local_tee(b, v)
+    load_class_id(b, t, top_nn)
+    WasmBuilder.local_set(b, id)
+    # the class's entry
+    local array_type = generate_static_intrinsic(self, Val(:type_value_table), entries)
+    WasmBuilder.local_get(b, id)
+    WasmBuilder.array_get(b, array_type)
+    WasmBuilder.br_on_non_null(b, got)
+    # a null entry: a record of a tuple type among the elements, by its arity's rows that are elements here
+    local nested = Dict{Int,Vector{DataType}}()
+    for e in elements
+        # (the empty tuple's class is Tuple{} itself, its entry the table's)
+        e <: Tuple && fieldcount(e) > 0 && e in tuple_type_rows(entries, fieldcount(e)) && push!(get!(() -> DataType[], nested, fieldcount(e)), e)
+    end
+    local ranges = NamedTuple{(:range, :value), Tuple{Range, Int}}[]
+    for m in sort!(collect(keys(nested)))
+        local r = tuple_record_class(m)
+        local r_info = get(t.class_info, r, nothing)
+        r_info === nothing && reject!(Internal("src/intrinsics.jl field_typeof: the record class $r of the tuple types $(nested[m]) has no class info"), at)
+        push!(ranges, (range = Range(Val(:_), class_id(r_info), class_id(r_info)), value = m))
+    end
+    sort!(ranges; by = x -> x.range.start)
+    if isempty(ranges)
+        WasmBuilder.ref_null(b, nullable.heap_type)
+    else
+        WasmBuilder.local_get(b, id)
+        class_id_search(b, ranges, WasmBuilder.IR.ValueType[nullable], m -> begin
+                WasmBuilder.local_get(b, v)
+                generate_static_intrinsic(self, Val(:tuple_type_lookup), entries, nested[m], at)
+            end, () -> WasmBuilder.ref_null(b, nullable.heap_type))
+    end
+    WasmBuilder.br(b, got)
+    WasmBuilder.var"end"(b)   # null_field
+    if Nothing in elements
+        translate_expression(code_gen, NirConst(Core.Const(Nothing)), result)
+    else
+        WasmBuilder.ref_null(b, nullable.heap_type)
+    end
+    WasmBuilder.var"end"(b)   # got
+    return nothing
 end
 
 # Where the statement `node` of the body being compiled stands in Julia's source: its file and line, read from the

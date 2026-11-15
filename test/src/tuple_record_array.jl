@@ -2,7 +2,8 @@
 # class of a shape: a class of the closed world, never Julia's type of the tuple. Julia's typeof of a tuple is the tuple
 # type of its elements' types (julia/src/builtins.c:946 jl_f_tuple), found in its type cache or made. typeof of a value
 # that may be a record answers the record by its own arm (src/intrinsics.jl to_typeof): the one tuple type the operand's
-# inferred type holds at the record's arity (src/julia/classes.jl record_typeof), else a raise naming the statement,
+# inferred type holds at the record's arity (src/julia/classes.jl record_typeof), else the world's tuple type of its
+# fields' typeofs (src/intrinsics.jl tuple_type_lookup, Julia's cache lookup), else the fatal gap naming the statement,
 # since WasmTarget makes no type at run time (audit A68S3). The empty tuple's class is Tuple{} itself, its type.
 
 module TupleRecordArrayTest
@@ -20,23 +21,52 @@ module Cases
 # the record's own table entry and answered 2 at f(3), where native answers 1; each arity here pins one tuple type
 @noinline u(n::Int64) = n > 2 ? (n,) : (n, 1.0)
 typeof_of_union(n::Int64) = typeof(u(n)) === Tuple{Int64} ? 1 : 2
-# typeof of an Any that holds a tuple at run time: no type of the operand pins the tuple's, so the module ends at the
-# fatal gap, its message reported and named, where native answers (and answers as native where the element is no tuple). The Memory{UInt8} it
-# compares with is a type constant whose Core.AddrSpace parameter brings that class's constant, without which any typeof
-# of an Any refuses on Memory{Any} (type_value_unmade), as the corpus's typeof_either does
+# typeof of an Any that holds a tuple at run time: no type of the operand pins the tuple's, so the record's arm looks it
+# up from its fields' typeofs among the world's tuple types (here Tuple{Int64,Int64}, which the program builds). The
+# Memory{UInt8} it compares with is a type constant whose Core.AddrSpace parameter brings that class's constant, without
+# which any typeof of an Any refuses on Memory{Any} (type_value_unmade), as the corpus's typeof_either does
 mutable struct AnySlot; x::Any; end
 @noinline any_slot(n::Int64) = AnySlot(n > 2 ? (n, n) : n)
 typeof_of_any(n::Int64) = (t = typeof(any_slot(n).x); t === Int64 ? 1 : t === Memory{UInt8} ? 3 : 2)
-# the gap is fatal, never an exception a catch observes: the review's program, whose own try around the typeof answered
-# 5 in both modules where native answers 2 while the gap was an exception
+# the review's program, whose own try around the typeof answered 5 in both modules while the gap was an exception; its
+# typeof is answered now, and the catch never runs
 @noinline mayfail(n::Int64) = n > 100 ? error("x") : 0
-# arity 1 holds two tuple types (Tuple{Int64}, Tuple{Float64}), so the operand pins none: the fatal gap, never 1 or 2
+# arity 1 holds two tuple types (Tuple{Int64}, Tuple{Float64}), so the operand pins none: each answered by the lookup
 @noinline u3(n::Int64) = n > 5 ? (n,) : n > 2 ? (Float64(n),) : n
 c_u3(n::Int64) = typeof(u3(n)) === Tuple{Int64} ? 1 : 2
-# a typeof inlined from a helper: the row names the run-time location of the statement
+# a typeof inlined from a helper
 h_typeof(x) = typeof(x)
 c_inlined(n::Int64) = (T = h_typeof(any_slot(n).x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)   # Memory{UInt8}: as typeof_of_any
 d_trycatch(n::Int64) = (try; T = typeof(any_slot(n).x); w = mayfail(n); (T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2) + w; catch; 5; end)
+# the lookup of each tuple an Any holds: elements of two classes, a nested tuple (its own record, looked up the same
+# way), the empty tuple (Tuple{}'s own entry), elements that are a type value and nothing (Tuple{DataType,Nothing})
+@noinline any_tuple(n::Int64) = AnySlot(n == 1 ? (n, 2.0) : n == 2 ? ((n,), n) : n == 3 ? () : n == 4 ? (Int64, nothing) : n)
+typeof_any_tuple(n::Int64) = (T = typeof(any_tuple(n).x); T === Tuple{Int64,Float64} ? 1 : T === Tuple{Tuple{Int64},Int64} ? 2 :
+                                  T === Tuple{} ? 3 : T === Tuple{DataType,Nothing} ? 4 : T === Memory{UInt8} ? 6 : 5)
+# two tuples of one arity and different element types: their types are two canonical constants, === by reference
+@noinline any_pair(k::Int64) = AnySlot(k > 3 ? (k, k) : (k, 1.0))
+same_type(n::Int64) = (a = any_pair(n).x; b = any_pair(n + 3).x; typeof(a) === typeof(b) ? 1 : typeof(a) === Memory{UInt8} ? 3 : 2)
+# a tuple whose type the program never names: a splat of a Vector{Any} holding n and "s" (filled by index, so no
+# varargs call names Tuple{Int64,String}) is the record of 2 elements (the world has it, from any_pair's 2-tuples), its
+# fields an Int64 and a String, and the world holds no Tuple{Int64,String}: Julia would make the type, so the module
+# ends at the fatal gap, named at the statement
+@noinline mk_any(v::Vector{Any}) = Core.tuple(v...)
+@noinline function int_and_string(n::Int64)
+    local v = Vector{Any}(undef, 2)
+    v[1] = n
+    v[2] = "s"
+    return v
+end
+never_named(n::Int64) = (s = AnySlot(n > 0 ? mk_any(int_and_string(n)) : any_pair(n).x); T = typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)
+# a tuple of the array class, whose arity only run time knows (no record of 7 elements in this world): no row is its type
+@noinline mk_int(v::Vector{Int64}) = Core.tuple(v...)
+@noinline splat_held(n::Int64) = AnySlot(mk_int(collect(1:n)))
+array_typeof(n::Int64) = (s = splat_held(n); T = typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)
+# the same tuple where Julia forwards the field, so typeof's operand is a Tuple{Vararg{Int64}}: it pins NTuple{k,Int64}
+# at each record of k elements, a type the table holds no entry of where the program builds no such tuple, so the arm
+# looks it up as an unpinned one (it compiled to a rejection of that type's constant before); the array class's arm is
+# the fatal gap
+array_forwarded(n::Int64) = (s = AnySlot(mk_int(collect(1:n))); T = typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)
 # a Union of plain classes keeps its typeof: each member's type value is its canonical constant
 struct A end
 struct B end
@@ -61,31 +91,49 @@ end
     end
     push!(cases, WTChild.compiled_case("typeof_of_any(1)", W.compile, Cases.typeof_of_any, (Int64(1),)))
     push!(cases, WTChild.compiled_case("d_trycatch(1)", W.compile, Cases.d_trycatch, (Int64(1),)))
+    # a tuple reaching typeof of an Any, and the review's try around it: answered from the tuple's fields, 2 as native,
+    # the catch never run (5 would be its answer); an operand holding two tuple types of one arity, and a typeof inlined
+    # from a helper, answered as native
+    @test Cases.typeof_of_any(3) == 2 && Cases.d_trycatch(3) == 2
+    @test Cases.c_u3(7) == 1 && Cases.c_u3(3) == 2 && Cases.c_inlined(3) == 2
+    for (label, f, n) in (("typeof_of_any(3)", Cases.typeof_of_any, 3), ("d_trycatch(3)", Cases.d_trycatch, 3),
+                          ("c_u3(7)", Cases.c_u3, 7), ("c_u3(3)", Cases.c_u3, 3), ("c_inlined(3)", Cases.c_inlined, 3))
+        push!(cases, WTChild.compiled_case(label, W.compile, f, (Int64(n),)))
+    end
+    # each tuple an Any holds, by its type: elements of two classes, a nested tuple, the empty tuple, a type value and
+    # nothing; and two tuples of one arity compared by their types
+    @test [Cases.typeof_any_tuple(n) for n in 1:5] == [1, 2, 3, 4, 5] && Cases.same_type(1) == 2 && Cases.same_type(4) == 1
+    for n in 1:5
+        push!(cases, WTChild.compiled_case("typeof_any_tuple($n)", W.compile, Cases.typeof_any_tuple, (Int64(n),)))
+    end
+    for n in (1, 4)
+        push!(cases, WTChild.compiled_case("same_type($n)", W.compile, Cases.same_type, (Int64(n),)))
+    end
     for r in WTChild.run_cases(cases)
         @test (r.label => r.why) == (r.label => "")
     end
-    # a tuple reaching typeof of an Any: the module reports the gap, named at the statement (its method, file and line),
-    # and traps, where native answers 2: unported at run time in both modules, never another value; a try around it, the
-    # program's own, runs no catch
-    @test Cases.typeof_of_any(3) == 2 && Cases.d_trycatch(3) == 2
-    @test Cases.c_u3(7) == 1 && Cases.c_inlined(3) == 2
-    for (label, f, n) in (("typeof_of_any(3)", Cases.typeof_of_any, 3), ("d_trycatch(3)", Cases.d_trycatch, 3))
+    # a tuple whose type the program never names (a record whose fields' types are no row of the world), and a tuple of
+    # the array class: the module reports the gap, named at the statement (its method, file and line), and traps, where
+    # native answers 2: unported at run time in both modules, never another value
+    @test Cases.never_named(1) == 2 && Cases.array_typeof(7) == 2 && Cases.array_forwarded(7) == 2
+    for (label, f, n, record) in (("never_named(1)", Cases.never_named, 1, "WasmTarget.TupleRecord{2}"),
+                                  ("array_typeof(7)", Cases.array_typeof, 7, "WasmTarget.TupleRecord{WasmTarget.RunTimeArity()}"),
+                                  ("array_forwarded(7)", Cases.array_forwarded, 7, "WasmTarget.TupleRecord{WasmTarget.RunTimeArity()}"))
         local fatal = only(WTChild.run_cases([WTChild.compiled_case(label, W.compile, f, (Int64(n),))]))
         @test fatal.outcome === :unported
-        @test count("typeof of a tuple held as WasmTarget.TupleRecord{2}", fatal.why) == 2
+        @test count("typeof of a tuple held as $record", fatal.why) == 2
         @test occursin("(at run time, ", fatal.why) && occursin("tuple_record_array.jl:", fatal.why) && occursin(", statement %", fatal.why)
         # the row parses as the climb keys a rejection (dev/climb/core.py:417 UNPORTED_RE = r"unported: the
         # (dart|Julia-only) definition (.*)"), to the hold a compile-time rejection of the same definition names
         local m = match(r"unported: the (dart|Julia-only) definition (.*)", fatal.why)
         @test m !== nothing && m.captures[1] == "Julia-only" && startswith(m.captures[2], "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: ")
     end
-    # an operand holding two tuple types of one arity, and a typeof inlined from a helper: unported in both modules
-    for (label, f, n) in (("c_u3(7)", Cases.c_u3, 7), ("c_inlined(3)", Cases.c_inlined, 3))
-        local fatal = only(WTChild.run_cases([WTChild.compiled_case(label, W.compile, f, (Int64(n),))]))
-        @test fatal.outcome === :unported && occursin("(at run time, ", fatal.why)
-        local m = match(r"unported: the (dart|Julia-only) definition (.*)", fatal.why)
-        @test m !== nothing && startswith(m.captures[2], "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: ")
-    end
+    # the rows of the lookup: the world's concrete tuple types of the arity among the table's entries, in its order; a
+    # Type{X} element, or one the table holds no entry of, is the type of no tuple of the world
+    local entries = Union{Nothing,DataType}[nothing, Int64, Tuple{Int64,Int64}, Float64, Tuple{Int64,Float64}, Tuple{Int64},
+                                            Tuple{Type{Int64},Int64}, Tuple{Int64,String}, DataType, Tuple{DataType,Int64}, nothing]
+    @test W.tuple_type_rows(entries, 2) == [Tuple{Int64,Int64}, Tuple{Int64,Float64}, Tuple{DataType,Int64}]
+    @test W.tuple_type_rows(entries, 1) == [Tuple{Int64}] && isempty(W.tuple_type_rows(entries, 3))
     # the row, the one text the arm reports
     @test W.record_typeof_message(W.TupleRecord{2}) ==
           "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: typeof of a tuple held as WasmTarget.TupleRecord{2}, whose type, the tuple type of its elements' types, is not made at run time (audit A68S3)"

@@ -106,9 +106,11 @@ end
 @parity "dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType" _generate_check_record_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Core.MethodInstance =
     reject!(Internal("dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType: a Julia tuple's class is its type, checked by isa"), "_RecordClassGenerator._generateCheckRecordType")
 
-# a record's runtime type, built from its fields' runtime types; a Julia tuple's is typeof, its class
+# a record's runtime type, built from its fields' runtime types; a Julia tuple's is typeof: its class where its static
+# type is concrete, and where it is held as its record the type Julia's cache holds for its fields' types, looked up
+# where typeof reads it (src/intrinsics.jl tuple_type_lookup), never a member of the record
 @parity "dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType" _generate_record_runtime_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Core.MethodInstance =
-    reject!(Internal("dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType: a Julia tuple's runtime type is its class, typeof"), "_RecordClassGenerator._generateRecordRuntimeType")
+    reject!(Internal("dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType: a Julia tuple's runtime type is typeof's, its class or, held as its record, its fields' types' tuple type looked up where typeof reads it (src/intrinsics.jl tuple_type_lookup)"), "_RecordClassGenerator._generateRecordRuntimeType")
 
 # a record's masqueraded runtime type; no Julia class masquerades (src/class_info.jl)
 @parity "dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType" _generate_masqueraded_record_runtime_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Core.MethodInstance =

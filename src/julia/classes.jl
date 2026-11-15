@@ -496,6 +496,26 @@ end
 @quarantine "julia/src/builtins.c:946 jl_f_tuple makes a tuple's type at run time where its cache has none, a DataType WasmTarget never makes (audit A68S3)" Base.string record_typeof_message(@nospecialize(c))::String =
     string("julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: typeof of a tuple held as ", c, ", whose type, the tuple type of its elements' types, is not made at run time (audit A68S3)")
 
+# the table of each class's type value, by class id (translator.classes, the one map from an id to its class): the
+# class where its type value is a constant, Julia's typeof of its values; nothing for the top, which no value carries,
+# for a class whose type value has no constant (type_value_unmade) and for a tuple's record, whose values' type is
+# their elements' (record_typeof_unmade). The one list of the type values typeof answers: src/intrinsics.jl to_typeof's
+# table and the rows of its lookup of a tuple's type (tuple_type_rows) read it
+@quarantine "julia/src/julia.h:971 jl_to_typeof reads a tag's type from the table of tags' types; WasmTarget's tag is the class id, its table each class's type value where a constant of it is made" Core.DataType type_value_entries(translator)::Vector{Union{Nothing,DataType}} =
+    Union{Nothing,DataType}[info.cls === nothing || type_value_unmade(translator, info.cls) !== nothing || record_typeof_unmade(info.cls) ? nothing : info.cls for info in translator.classes[]]
+
+# the closed world's tuple types of `n` elements among the table's entries (type_value_entries), in its order: the
+# rows of typeof's lookup of a tuple held as its record (src/intrinsics.jl tuple_type_lookup), Julia's cache of tuple
+# types, which jl_lookup_arg_tuple_type searches by the arguments' types (julia/src/jltypes.c:2472, lookup_typevalue
+# :1133). A row whose element no value's typeof is, a Type{X} (jl_typeof answers no Type{X}: (Int64,) is a
+# Tuple{DataType}) or a type the table holds no entry of, is the type of no tuple of the world: left out, it is never
+# matched, as no field's typeof could equal its element
+@quarantine "julia/src/jltypes.c:1133 lookup_typevalue finds a tuple type in its cache by its elements' types; the closed world's tuple types are the cache a program can hit" Core.Tuple function tuple_type_rows(entries::Vector{Union{Nothing,DataType}}, n::Int)::Vector{DataType}
+    local held = Base.IdSet{DataType}(e for e in entries if e !== nothing)
+    return DataType[e for e in entries if e !== nothing && e <: Tuple && isconcretetype(e) && fieldcount(e) == n &&
+                    all(p -> p isa DataType && !Base.isType(p) && p in held, e.parameters)]
+end
+
 # whether the class `c` holds values of the open tuple type `T` (a Tuple type no concrete class is), in a
 # closed world whose records cover `arities` (record_arities): the record classes of the arities `T`
 # admits, a tuple of a concrete type boxed into its arity's record where it flows into an open slot
