@@ -699,9 +699,6 @@ end
         memory_op === nothing || return generate_static_intrinsic(self, Val(:memory_data), memory_op, target, node.args[2:end])
         local getter = generate_static_getter_intrinsic(self, target)
         getter === nothing || return getter
-        # the spent identity counter: the fatal form (src/julia/runtime/hashing.jl identity_serials_spent)
-        target.def.name === :identity_serials_spent && target.def in methods(identity_serials_spent) &&
-            return generate_static_intrinsic(self, Val(:identity_serials_spent), node)
         # a data id's write of the identity hash field, setIdentityHashField under the data owner's arm
         target.def.name === :set_owner_identity_hash_field && target.def in methods(set_owner_identity_hash_field) &&
             return generate_static_intrinsic(self, Val(:set_identity_hash_field), node.args[2:end], "set_owner_identity_hash_field", jl_genericmemory_owner_arm)
@@ -1635,24 +1632,13 @@ end
 # <file>:<line>` on one line, then its position in the body (`%k`); the position alone where Julia keeps no line.
 # dart's statements carry their file offsets (TreeNode.fileOffset); Julia's are its body's debuginfo. One line, as
 # the fatal report is one line the host prints
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:statement_location}, node::Union{NirCall,NirInvoke})::String
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:statement_location}, node::NirCall)::String
     local body = self.code_gen.body
     local k = something(findfirst(st -> st === node, body.stmts), 0)
     k == 0 && return "an unnumbered statement"
     local frames = Core.Compiler.TrimVerifier.verify_create_stackframes(body.ci, k, Core.Compiler.TrimVerifier.ParentMap())
     isempty(frames) && return "statement %$k"
     return join(("$(f.func)$(f.inlined ? " [inlined]" : "") at $(f.file):$(f.line)" for f in frames), ", ") * ", statement %$k"
-end
-
-# the module's identity counter spent (src/julia/runtime/hashing.jl identity_serials_spent): native Julia's id is its
-# address's and never runs out, so the module's limit is a gap no catch of the program may see, the fatal form, named
-# at the statement that reaches it; the stack after the trap is unreachable, read as the top type
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:identity_serials_spent}, node::Union{NirCall,NirInvoke})::WasmBuilder.IR.ValueType
-    local at = "$(julia_text(self.code_gen.enclosing_member))"
-    generate_static_intrinsic(self, Val(:fatal),
-        Unquarantined("src/julia/runtime/hashing.jl identity_serials_spent: an object's identity, where the module's 2147483647 identity serials are given and a serial never wraps; native Julia's id is its address's, which never runs out"),
-        "$at (at run time, $(generate_static_intrinsic(self, Val(:statement_location), node)))")
-    return translator(self).top_type[]
 end
 
 # A gap WasmTarget defers to run time ends the program, never an exception a catch of the program observes: the

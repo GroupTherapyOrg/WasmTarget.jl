@@ -12,9 +12,9 @@
 @quarantine pin"pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries" "Julia has no per-file namespace; dart's patch libraries, the program's runtime (pkg/dart2wasm/lib/target.dart:156 WasmTarget.extraRequiredLibraries), are a module" Core.Module module Runtime
 # ---- Runtime's imports, written by dev/skeleton.jl write ----
 import ..@parity, ..WasmArray, ..WasmExternRef, ..WasmI16, ..WasmI32, ..WasmI8, .._wasm_only,
-       ..identity_serials_spent, ..jl_is_tuple_type, ..jl_is_type_type, ..jl_to_typeof,
-       ..jl_typetagis, ..set_owner_identity_hash_field, ..wasm_array_length, ..wasm_array_new,
-       ..wasm_array_read, ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_string_codeunit
+       ..jl_is_tuple_type, ..jl_is_type_type, ..jl_to_typeof, ..jl_typetagis,
+       ..set_owner_identity_hash_field, ..wasm_array_length, ..wasm_array_new, ..wasm_array_read,
+       ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_string_codeunit
 # ---- end of Runtime's imports ----
 end
 # ---- the runtime's roots, written by dev/skeleton.jl write ----
@@ -125,11 +125,10 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..class_is_set_field, ..class_superclass, ..closed_world_classes, ..concrete_class_ids,
        ..concrete_classes, ..constant_unmade, ..divti3, ..egal_by_identity, ..field_may_be_null,
        ..field_selector_calls, ..generic_memory_elsize, ..holds_reference,
-       ..identity_hash_field_holder, ..identity_serials_spent, ..image_object_id, ..image_slot!,
-       ..is_interface_class_type, ..jl_egal, ..jl_egal_host_references,
-       ..jl_genericmemory_owner_arm, ..jl_is_tuple_type, ..jl_is_type_type,
-       ..jl_object_id_identity_arm, ..jl_safe_printf, ..jl_subtype_typeof, ..jl_to_typeof,
-       ..jl_type_error, ..jl_typetagis, ..jl_undefined_var_error, ..julia_text,
+       ..identity_hash_field_holder, ..image_object_id, ..image_slot!, ..is_interface_class_type,
+       ..jl_egal, ..jl_egal_host_references, ..jl_genericmemory_owner_arm, ..jl_is_tuple_type,
+       ..jl_is_type_type, ..jl_object_id_identity_arm, ..jl_safe_printf, ..jl_subtype_typeof,
+       ..jl_to_typeof, ..jl_type_error, ..jl_typetagis, ..jl_undefined_var_error, ..julia_text,
        ..memory_constant_object, ..memory_owner, ..memoryref_address_unread, ..modti3,
        ..new_struct_classes, ..nir_argument_type, ..nir_binding, ..nir_binding_is_constant,
        ..nir_binding_value, ..nir_body_of, ..nir_callee, ..nir_carries_data, ..nir_const_type,
