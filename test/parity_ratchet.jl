@@ -3428,6 +3428,18 @@ const BOUNDED_BREAKS = (
      "        save_json(L228_SWEEP, dict(prior, failed=", "        save_json(L228_SWEEP, {\"head\": head} if True else dict(prior, failed=", 47),
     ("sweeps with no result run again without a bound", "dev/climb/measure.py", "    if failed.get(\"n\", 0) >= SWEEP_TRIES:", "    if False:", 47),
     ("the second sweep in a row with no result unalarmed", "dev/climb/measure.py", "        if n >= SWEEP_TRIES:", "        if False:", 47),
+    # a hand fix of a G2 entry measured before it lands (2026-11-15: G2 lost 945dce72)
+    ("a hand fix of a G2 entry replayed unmeasured", "dev/climb/lander.py",
+     "    if item[\"kind\"] != \"move\" and not fix:", "    if item[\"kind\"] != \"move\":", 48),
+    ("a hand fix of a G2 entry unmeasured where origin did not move", "dev/climb/lander.py",
+     "    if not fix and (origin == item[\"base\"] or", "    if (origin == item[\"base\"] or", 48),
+    ("a G2 entry's cases left off its hand fix", "dev/climb/lander.py",
+     "        if f.get(\"require_pass\") and f.get(\"cases\") else None", "        if False else None", 48),
+    ("an audit finding's or a src-test red's hand fix measured", "dev/climb/lander.py",
+     "    return item[\"kind\"] == \"hand\" and bool(item.get(\"fixfirst\")) and bool(h.get(\"require_pass\")) and bool(h.get(\"cases\"))",
+     "    return item[\"kind\"] == \"hand\" and bool(item.get(\"fixfirst\"))", 48),
+    ("the stall note of a parked overdue red without its command first", "dev/climb/climb.py",
+     "f\"Do: `python3 dev/climb/climb.py enqueue <the fix's sha> --fixes {shlex.quote(h['key'])}` (the lander \"", "f\"(the lander \"", 48),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

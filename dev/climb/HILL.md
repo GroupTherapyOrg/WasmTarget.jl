@@ -903,8 +903,15 @@ door's, run as Dale on paths no build user writes.
 - **The lander is the only process that runs `dev/ship.sh`.** An approved move is queued with its sha (fetched
   from the slot's clone into the main repository), its patch-id, its base, its labels and its delta, and its slot
   goes back to origin/wt2. An audit and a commit made by hand (`climb.py enqueue <ref> <title>`) queue the same
-  way; a hand fix of a known red (`climb.py enqueue <ref> --fixes <key>`) is queued on that fix-first entry's hold, so
-  its check runs the red's file and its landing clears the entry, and it alone is admitted while a red is overdue. No slot starts a move while `queue_cap` commits wait (D50).
+  way; a hand fix of a known red (`climb.py enqueue <ref> --fixes <key>`, `lander.enqueue_fix`) is queued on that
+  fix-first entry's hold, so its check runs a src-test red's file and its landing clears the entry, and it alone is
+  admitted while a red is overdue. A hand fix of a G2 entry carries the entry's cases as its hold and is measured by
+  the lander as a move is (`lander.measured_fix`, `rebased_check`: `measure_candidate` at the commit rebased onto
+  origin, moved or not), refused with `G2 still not passing: <label>` and the entry standing while a case fails, and
+  landed (clearing the entry) only when every case passes (2026-11-15: a corpus case no landing check runs, so its
+  hand fix would have landed on a green check whether or not the case passed); an audit finding's and a src-test red's
+  hand fix carry no hold, judged by their landing check as before. The stall note of an overdue fix-first hold that is
+  parked leads with that command, its key quoted whole. No slot starts a move while `queue_cap` commits wait (D50).
   A hand commit never bundles src with harness work: `enqueue` refuses an item whose commits change `src/` beside
   a path no move may change (the harness, the judge's files, the rules), naming both sets (`measure.bundled`,
   A106E2; door-probe rows), so src lands in a commit of its own, under its own message and clauses.

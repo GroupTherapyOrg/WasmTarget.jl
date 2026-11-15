@@ -223,10 +223,11 @@ def alarms():
     for h in holds():
         if h.get("fixfirst") and h["parked"] and any(f["key"] == h["key"] for f in overdue):
             alarm(f"fixfirst-parked-{h['id']}", "an overdue known red's hold is parked: nothing lands",
+                  f"Do: `python3 dev/climb/climb.py enqueue <the fix's sha> --fixes {shlex.quote(h['key'])}` (the lander "
+                  f"lands it only when its cases pass), or `python3 dev/climb/climb.py unpark {h['id']}`.\n"
                   f"{h['key'][:200]} is overdue (filed {cfg()['fixfirst_max_landings']} or more landings ago) and parked "
                   f"({str(h['parked'].get('why', ''))[:300]}), so no slot climbs it and the lander admits fix-first items alone. "
-                  f"Unpark it with `python3 dev/climb/climb.py unpark {h['id']}`, or land a hand fix with "
-                  f"`python3 dev/climb/climb.py enqueue <ref> --fixes '{h['key'][:120]}'`. Default taken: the climb waits.")
+                  "Default taken: the climb waits.")
     # checks ran and none landed (A7-2): from the first `ship` event after the last `landed` (or the launch), alarm_s
     last = max((e["t"] for e in ev if e["kind"] == "landed"), default=started)
     ships = [e["t"] for e in ev if e["kind"] == "ship" and e["t"] > last]
@@ -479,11 +480,10 @@ def main():
     elif a.cmd == "enqueue":
         fetch()
         if a.fixes is not None:   # the lead's deliberate act: a hand fix of a known red, admitted while it is overdue
-            if not any(f["key"] == a.fixes for f in state_json("fixfirst.json", [])):
-                sys.exit(f"enqueue --fixes: no fix-first entry is keyed {a.fixes!r}")
-            # on the entry's own hold (its id, as slots.py's moves on it carry), so measure.src_set runs the red's file
-            # and landed_item may clear the entry: a hand fix whose check never ran the file could only be kept
-            it = enqueue(a.ref, a.fixes, "hand", hold_id=hashlib.sha1(a.fixes.encode()).hexdigest()[:10], fixfirst=True)
+            try:   # a G2 entry's fix measured by the lander as a move is (lander.enqueue_fix, measured_fix)
+                it = enqueue_fix(a.ref, a.fixes)
+            except ClimbError as e:
+                sys.exit(str(e))
         elif a.title is None:
             sys.exit("enqueue: a hand commit names its title, or --fixes <key>")
         else:

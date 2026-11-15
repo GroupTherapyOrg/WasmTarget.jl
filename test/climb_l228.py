@@ -2636,3 +2636,88 @@ except Exception as e:
     fault(f"the sweep in the landing's shape raised {type(e).__name__}: {str(e)[:240]}")
 finally:
     door.land_job = real47
+
+# 48. a hand fix of a G2 entry is measured before it lands (lander.enqueue_fix, lander.measured_fix, rebased_check): the
+# item `climb.py enqueue <sha> --fixes <key>` queues on a G2 entry carries its cases as its hold, and the lander measures
+# it as a move (measure_candidate, judge_move), origin moved or not: refused with `G2 still not passing: <label>`, the
+# entry standing, when its case fails; no problem when it passes (landed_item then clears the entry). A --fixes item on
+# an audit finding or a src-test red carries no hold and is replayed as before (its landing check judges it). The stall
+# note of an overdue parked fix-first hold leads with the one command. 2026-11-15: G2 lost 945dce72's hand fix would
+# have landed on a green check that runs no corpus case, and cleared the entry whether or not the case passed
+#: limit 60
+import climb as C
+real48 = {"L": {k: getattr(L, k) for k in ("table", "stratified", "unqueue", "julia_slot")},
+          "M": {k: getattr(M, k) for k in ("julia_slot", "rebased", "advance", "file_g2", "labels_at", "measure_base", "smoke")},
+          "C": {k: getattr(C, k) for k in ("fixfirst_overdue", "holds", "pause")}, "for_dale": core.for_dale}
+try:
+    core.claim_repo()
+    g("checkout", "-q", "--detach", h)
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", h)
+    open(f"{repo}/src/f48.jl", "w").write("f48 = 1\n"); g("add", "-A"); g("commit", "-q", "-m", "fix48"); c48 = g("rev-parse", "HEAD")
+    key48, aud48, src48 = "G2 lost 0000aaaa: 1 passing case(s)", "audit A1 A1S1: src/x.jl:1 a finding", "src-test t00.jl a red"
+    core.update_json("fixfirst.json", [], lambda ff: ff.extend([
+        {"key": key48, "cases": ["g/x"], "require_pass": True, "why": "lost at a score", "filed_landings": 0},
+        {"key": aud48, "why": "src/x.jl:1 a finding", "filed_landings": 0},
+        {"key": src48, "tests": ["t00.jl"], "why": "a red", "filed_landings": 0}]))
+    it48, ia48, is48 = L.enqueue_fix(c48, key48), L.enqueue_fix(c48, aud48), L.enqueue_fix(c48, src48)
+    if not L.measured_fix(it48) or (it48["h"] or {}).get("cases") != ["g/x"] or it48["hold_id"] != __import__("hashlib").sha1(key48.encode()).hexdigest()[:10] \
+            or L.measured_fix(ia48) or ia48["h"] is not None or L.measured_fix(is48) or is48["h"] is not None:
+        fault(f"enqueue --fixes: a G2 entry's item {it48.get('h')} measured {L.measured_fix(it48)}; an audit's {ia48.get('h')}, "
+              f"a src-test red's {is48.get('h')} (no hold, replayed as before)")
+    @contextlib.contextmanager
+    def slot48(kind, first=False, stops=False):
+        yield
+    A48, J48, smoked48 = "a" * 40, "2" * 40, []
+    L.julia_slot = M.julia_slot = slot48
+    M.rebased = lambda b, s, onto: ("c" * 40, None)
+    M.advance = lambda rows, at, why: None
+    M.file_g2 = lambda lost, at: None
+    M.labels_at = lambda at, overlay=None: {"g/x"}
+    L.stratified = lambda: set()
+    L.unqueue = lambda it, **kw: None
+    L.table = lambda: {"g/x": (M.Row(("g/x", "failed", 1.0, "lost"), (A48, J48)), 1)}
+    M.measure_base = lambda at, diff, locked_=False: {l: M.Row((l, "failed", 1.0, "lost"), (A48, J48)) for l in diff}
+    def run48(item, outcome):
+        smoked48.clear()
+        def smoke(role, labels, task, at, known=None, keep=None, **k):
+            smoked48.append(task)
+            return {"g/x": M.Row(("g/x", outcome, 1.0, ""), (A48, J48))}, None
+        M.smoke = smoke
+        return L.rebased_check(dict(item, rebased=None))[0], list(smoked48)
+    bad48, m_bad48 = run48(it48, "failed")
+    good48, m_good48 = run48(it48, "passed")
+    aud48r, m_aud48 = run48(ia48, "failed")
+    src48r, m_src48 = run48(is48, "failed")
+    if not any(p.startswith("G2 still not passing: g/x") for p in bad48):
+        fault(f"a hand fix of a G2 entry whose case fails at the rebased commit: {bad48} (G2 still not passing: g/x)")
+    if good48 or not m_good48 or not m_bad48:
+        fault(f"a hand fix of a G2 entry whose case passes: {good48} (none), measured {m_good48} and {m_bad48} (both measured)")
+    if aud48r or src48r or m_aud48 or m_src48:
+        fault(f"a --fixes item on an audit finding or a src-test red: {aud48r}, {src48r}, measured {m_aud48}, {m_src48} (replayed, not measured)")
+    if not any(f["key"] == key48 for f in core.state_json("fixfirst.json", [])):
+        fault("the G2 entry was cleared by a refused hand fix")
+    # the stall note: its first line the one command, the key quoted whole
+    notes48 = []
+    core.for_dale = lambda title, text: notes48.append((title, text))
+    core.update_json("alarms.json", {}, lambda a: [a.pop(k) for k in list(a) if k.startswith("fixfirst-parked-")])
+    C.fixfirst_overdue = lambda: [{"key": key48, "age": 9}]
+    C.holds = lambda *a: [{"key": key48, "id": "h48", "fixfirst": True, "parked": {"why": "the lead's bisect"}, "cases": ["g/x"], "n": 1}]
+    C.pause = lambda: None
+    C.alarms()
+    want48 = f"Do: `python3 dev/climb/climb.py enqueue <the fix's sha> --fixes {__import__('shlex').quote(key48)}`"
+    got48 = [t for ti, t in notes48 if ti == "an overdue known red's hold is parked: nothing lands"]
+    if not got48 or not got48[0].split("\n")[0].startswith(want48):
+        fault(f"the stall note of a parked overdue fix-first hold: {[x[:200] for x in got48]} (its first line {want48!r})")
+except Exception as e:
+    import traceback
+    fault(f"a hand fix of a G2 entry raised {type(e).__name__}: {str(e)[:240]} {traceback.format_exc()[-300:]}")
+finally:
+    for k, v in real48["L"].items():
+        setattr(L, k, v)
+    for k, v in real48["M"].items():
+        setattr(M, k, v)
+    for k, v in real48["C"].items():
+        setattr(C, k, v)
+    core.for_dale = real48["for_dale"]
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")

@@ -211,6 +211,27 @@ def enqueue(sha, title, kind, hold_id=None, fixfirst=False, unlocked=0, rows=Non
     event("queued", hold=title, hold_id=hid, sha=sha, branch=branch)
     return item
 
+def enqueue_fix(ref, key):
+    """`climb.py enqueue <ref> --fixes <key>`: the lead's hand fix of the fix-first entry `key`, queued on the entry's own
+    hold (its id, as slots.py's moves on it carry), so measure.src_set runs a src-test red's file and landed_item may
+    clear the entry. A G2 entry (its cases to pass, require_pass) is carried as the item's hold `h`, so the lander
+    measures the item as it measures a move (measured_fix, rebased_check) and lands it, clearing the entry, only when
+    every case passes (2026-11-15: a hand fix of `G2 lost 945dce72` would have landed unmeasured on a green check, the
+    case a corpus case no landing check runs, and cleared the entry whether or not it passed). An audit finding or a
+    src-test red carries no hold, as before: its fix is judged by its landing check (a src-test red's file in its set)."""
+    f = next((x for x in state_json("fixfirst.json", []) if x["key"] == key), None)
+    if f is None:
+        raise ClimbError(f"enqueue --fixes: no fix-first entry is keyed {key!r}")
+    h = {"key": key, "cases": list(f["cases"]), "require_pass": True, "fixfirst": True, "why": f.get("why", "")} \
+        if f.get("require_pass") and f.get("cases") else None
+    return enqueue(ref, key, "hand", hold_id=hashlib.sha1(key.encode()).hexdigest()[:10], fixfirst=True, h=h)
+
+def measured_fix(item):
+    """A hand item queued `--fixes` on a G2 entry (enqueue_fix: its hold `h` holds the cases, require_pass): measured
+    by the lander as a move is, never replayed unmeasured."""
+    h = item.get("h") or {}
+    return item["kind"] == "hand" and bool(item.get("fixfirst")) and bool(h.get("require_pass")) and bool(h.get("cases"))
+
 def unqueue(item, **kw):
     update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [dict(x, **kw) if kw and x["branch"] == item["branch"] else x
                                                                        for x in q if kw or x["branch"] != item["branch"]]))
@@ -542,7 +563,8 @@ def rebased_check(item):
     v = item.get("rebased") or {}
     if v.get("origin") == origin and "commit" in v:
         return v["problems"], v["stop"]
-    if item["kind"] != "move":   # an audit's entry or a commit made by hand: replayed onto origin by the same merge, each
+    fix = measured_fix(item)   # a hand fix of a G2 entry: measured as a move is, whether or not origin moved
+    if item["kind"] != "move" and not fix:   # an audit's entry or a commit made by hand: replayed onto origin by the same merge, each
         at, why = origin, None   # of its commits in order, and never measured (A7-5: ship.sh lands what the lander made)
         with julia_slot("verify", first=True, stops=True):   # its regen is Julia as _wtland: never beside a running measurement (D31, O8-4)
             for c in [] if origin == item["base"] else git("rev-list", "--reverse", f"{item['base']}..{item['sha']}").splitlines():
@@ -553,7 +575,7 @@ def rebased_check(item):
         problems = [why] if why else [] if at else [f"it does not apply on origin {origin[:10]} (git merge-tree: a conflict)"]
         unqueue(item, rebased={"origin": origin, "problems": problems, "stop": bool(why), "commit": at})
         return problems, bool(why)
-    if origin == item["base"] or {c[3] for c in changes(item["base"], origin)} <= {"dev/AUDIT.md"}:
+    if not fix and (origin == item["base"] or {c[3] for c in changes(item["base"], origin)} <= {"dev/AUDIT.md"}):
         at, why = rebased(item["base"], item["sha"], origin) if origin != item["base"] else (item["sha"], None)
         problems = [why] if why else [] if at else [f"it does not apply on origin {origin[:10]} (git merge-tree: a conflict)"]
         stop = bool(why)
