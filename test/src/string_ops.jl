@@ -88,6 +88,20 @@ end
 rpl(n::Int64) = _rsum(replace("abcabc" * string(n), "b" => "xyz")) + _rsum(replace("bab" * string(n) * "b", "b" => "")) * 3 +
     _rsum(replace("héllo wörld" * string(n), "ö" => "o", "l" => "LL")) * 7 + _rsum(replace("aXaXa" * string(n), "a" => "ü", count = n)) * 11 +
     _rsum(_rpl_io(n)) * 13
+# print of a String, an Int and a SubString{String} into an IOContext over an IOBuffer, and a write of a
+# String into it (base/io.jl:454's forward of the bytes to its pipe_writer, by overlay in src/patch/io.jl):
+# the write's count, the buffer's size and a byte of the first part and of the last
+ctx(n::Int64) = (b = IOBuffer(); io = IOContext(b, :compact => true); print(io, n > 0 ? "hé" : "x", n, SubString("xyzw", 2, 3));
+    w = write(io, "Q"); Int64(w) * 10^8 + Int64(b.size) * 10^6 + Int64(b.data[2]) * 1000 + Int64(b.data[b.size - 1]))
+# an IOContext over a program's own AbstractPipe whose write of a String is not its unsafe_write (it writes
+# the string twice, where Base's write into the IOContext reaches the pipe's unsafe_write and writes it once):
+# the IOContext overlay covers a buffer writer alone, so this one stays Base's pointer write, rejected, located
+struct TwicePipe <: Base.AbstractPipe
+    io::IOBuffer
+end
+Base.pipe_writer(p::TwicePipe) = p.io
+Base.write(p::TwicePipe, s::String) = write(p.io, s) + write(p.io, s)
+twc(n::Int64) = (b = IOBuffer(); io = IOContext(TwicePipe(b)); w = write(io, n > 0 ? "hé" : "x"); Int64(w) * 100 + Int64(b.size))
 end
 
 const STRING_OP_CASES = (
@@ -108,7 +122,8 @@ const STRING_OP_CASES = (
     ("ends", StringOpCases.ends, (Int64(1),)), ("ends", StringOpCases.ends, (Int64(0),)),
     ("cus", StringOpCases.cus, (Int64(1),)), ("cus", StringOpCases.cus, (Int64(0),)),
     ("rep", StringOpCases.rep, (Int64(3),)), ("rep", StringOpCases.rep, (Int64(2),)), ("rep", StringOpCases.rep, (Int64(1),)),
-    ("rpl", StringOpCases.rpl, (Int64(2),)), ("rpl", StringOpCases.rpl, (Int64(1),)), ("rpl", StringOpCases.rpl, (Int64(0),)))
+    ("rpl", StringOpCases.rpl, (Int64(2),)), ("rpl", StringOpCases.rpl, (Int64(1),)), ("rpl", StringOpCases.rpl, (Int64(0),)),
+    ("ctx", StringOpCases.ctx, (Int64(7),)), ("ctx", StringOpCases.ctx, (Int64(-12),)))
 
 @testset "String's operations against native Julia" begin
     local runs = Main.WTChild.RunCase[]
@@ -148,6 +163,26 @@ end
     @test [:repeat, :wasm_string_write!, :wasm_string_copy!] ⊆ overlaid(StringOpCases.rep, (Int64,))
     @test [:_search, :wasm_string_place, :wasm_string_codeunit] ⊆ overlaid(StringOpCases.cus, (Int64,))
     @test [:_replace_finish, :write] ⊆ overlaid(StringOpCases.rpl, (Int64,))
+    # print into an IOContext reaches its write by overlay, which forwards to the buffer's; it
+    # inlines into print, so it is read from the inlined callees each CodeInfo's edges record
+    local inlined_writes(f, T) = Set{Any}(e.def.sig for x in WasmTarget.check_subset(f, T, "string_ops", Base.get_world_counter()).codeinfos
+                                          if x isa Core.CodeInfo for e in (y isa Core.CodeInstance ? Core.Compiler.get_ci_mi(y) : y for y in x.edges)
+                                          if e isa Core.MethodInstance && e.def isa Method && e.def.module === WasmTarget && e.def.name === :write)
+    @test Tuple{typeof(write), Base.IOContext{<:Base.GenericIOBuffer}, Union{String,SubString{String}}} in inlined_writes(StringOpCases.ctx, (Int64,))
+end
+
+# a String written into an IOContext over a writer other than a buffer is Base's write through pointer(s),
+# rejected at its jl_string_ptr, located; never the overlay's forward to the writer's own write (natively
+# twc(1) is 303, Base's one write through the pipe's unsafe_write; the forward would answer 606)
+@testset "a String written into an IOContext over a program's own pipe rejects, located" begin
+    @test StringOpCases.twc(1) == 303
+    local e = try
+        WasmTarget.compile(StringOpCases.twc, (Int64,))
+        nothing
+    catch err
+        err isa WasmTarget.RejectionError ? err : rethrow()
+    end
+    @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Unquarantined && occursin("jl_string_ptr", sprint(showerror, e))
 end
 
 # under minify a symbol constant's name is its ordinal (src/symbols.jl get_mangled_symbol_name), so a read
