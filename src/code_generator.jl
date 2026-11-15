@@ -2669,6 +2669,25 @@ end
                 ImplicitFieldAccessorCodeGenerator(translator, function_type, field, r.kind === FieldReferenceKind_getter, false)
             end
         end
+        # a member the record class generator generates, which dart compiles as any Procedure from the Kernel body the
+        # generator builds; Julia holds none, so _recordRuntimeType's code is the helper's that builds it
+        # (src/record_class_generator.jl), and every other member the generator's located rejection
+        (r::RecordMemberReference) => let g = _RecordClassGenerator(Dict{RecordShape,DataType}()), at = "dart2wasm/lib/code_generator.dart:3528 getInlinableMemberCodeGenerator"
+            local positionals() = @exhaustive something(tuple_record_arity(r.cls))::RecordArity begin
+                (f::FixedArity) => f.n
+                RunTimeArity => reject!(Internal("$at: a generated member of the array class, which has no shape of a fixed arity"), at)
+            end
+            local shape() = RecordShape(positionals(), String[])
+            @exhaustive r.member::RecordMember begin
+                RecordRuntimeType => _RecordClassGenerator__generate_record_runtime_type_helper(translator, r.cls)
+                RecordConstructor => _generate_constructor(g, shape(), _generate_fields(g, shape()))
+                RecordHashCode => _generate_hash_code(g, _generate_fields(g, shape()), Int64(0))
+                RecordToString => _generate_to_string(g, shape(), _generate_fields(g, shape()))
+                RecordEquals => _generate_equals(g, shape(), _generate_fields(g, shape()), r.cls, _generate_record_runtime_type(g, shape(), _generate_fields(g, shape())))
+                RecordCheckRecordType => _generate_check_record_type(g, shape(), _generate_fields(g, shape()))
+                RecordMasqueradedRuntimeType => _generate_masqueraded_record_runtime_type(g, shape(), _generate_fields(g, shape()))
+            end
+        end
     end
 end
 

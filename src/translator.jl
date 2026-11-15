@@ -1616,6 +1616,9 @@ accessor dart's field arm (a Julia field carries no pragma).
             _should_inline_procedure_call(self, m, signature)
         end
         (r::FieldReference) => _should_inline_field_accessor(self, r, r.field)
+        # dart reaches a record class's generated member by a virtual call (record_patch.dart:21
+        # Record._getRecordRuntimeType, `record._recordRuntimeType`), never inlined; it carries no prefer-inline pragma
+        RecordMemberReference => InliningDecision(false, "a record class's generated member")
     end
 end
 

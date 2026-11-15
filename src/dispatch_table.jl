@@ -196,6 +196,10 @@ takes the default-value sentinel.
                 positional = f.kind === FieldReferenceKind_getter ? Type[] : Type[type_of_field(translator_, f.field)]
                 returns = f.kind === FieldReferenceKind_getter ? Type[type_of_field(translator_, f.field)] : Type[]
             end
+            # dart dispatches `record._recordRuntimeType` through its selector (record_patch.dart:21); WasmTarget's
+            # typeof site switches on the record's class id itself (src/intrinsics.jl to_typeof) and calls the target
+            # dart's dispatch would pick directly, so build gives a generated member no selector to be a target of
+            (r::RecordMemberReference) => reject!(Internal("dart2wasm/lib/dispatch_table.dart:118 SelectorInfo._computeSignature: the generated member $r, called directly from a class-id arm, is no selector's target"), "SelectorInfo._computeSignature")
         end
         local named = LinkedHashMap{String,Type}()
         length(returns) <= length(output_sets) ||
@@ -323,6 +327,9 @@ for its call site. A Julia method is no instance member and has none: a located 
     local f = @exhaustive target::Reference begin
         (m::MethodInstance) => reject!(Internal("$at: $m, no instance member, has no selector"), at)
         (f::FieldReference) => f
+        # the typeof site calls a record class's generated member directly from its class-id arm, the target
+        # dart's selector dispatch would pick (record_patch.dart:21), so build records no selector for it
+        (r::RecordMemberReference) => reject!(Internal("$at: the generated member $r, called directly from a class-id arm, has no selector"), at)
     end
     local selector_id = get(self.procedure_attribute_metadata, f, nothing)
     selector_id === nothing && reject!(Internal("$at: the accessor $f, for which build recorded no selector"), at)

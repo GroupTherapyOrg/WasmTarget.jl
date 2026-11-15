@@ -82,20 +82,66 @@ names the site the member's selector id would be recorded for.
 end
 
 """
+    RecordMember
+
+The members dart2wasm's record class generator gives each record class it generates
+(pkg/dart2wasm/lib/record_class_generator.dart:246 _generateClass): its constructor, hashCode, toString, ==,
+_checkRecordType, _recordRuntimeType and _masqueradedRecordRuntimeType, each a kind of its own. A closed sum, so a
+member the generator does not make cannot be named (D6), matched @exhaustive where a member is generated.
+"""
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:314 _RecordClassGenerator._generateConstructor generates a record class's constructor" Core.DataType struct RecordConstructor end
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:343 _RecordClassGenerator._generateHashCode generates a record class's hashCode" Core.DataType struct RecordHashCode end
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:389 _RecordClassGenerator._generateToString generates a record class's toString" Core.DataType struct RecordToString end
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals generates a record class's ==" Core.DataType struct RecordEquals end
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType generates a record class's _checkRecordType" Core.DataType struct RecordCheckRecordType end
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType generates a record class's _recordRuntimeType" Core.DataType struct RecordRuntimeType end
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType generates a record class's _masqueradedRecordRuntimeType" Core.DataType struct RecordMasqueradedRuntimeType end
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass gives a record class its members, a closed set; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const RecordMember = Union{RecordConstructor, RecordHashCode, RecordToString, RecordEquals, RecordCheckRecordType, RecordRuntimeType, RecordMasqueradedRuntimeType}
+
+"""
+    RecordMemberReference(cls, member)
+
+dart's Reference of a member the record class generator generates for a record class: a Procedure (or the
+Constructor) record_class_generator.dart adds to the class (:246 _generateClass), compiled like any member through
+FunctionCollector.getFunction by its reference, once per class, on demand. `cls` is the record class (a tuple's
+record, src/julia/classes.jl TupleRecord; tuple_record_arity names it), `member` which member (RecordMember).
+
+precedent(dart: record_class_generator.dart:653 _generateRecordRuntimeType, :675 _generateRecordRuntimeTypeHelper,
+compiled through functions.dart:90 FunctionCollector.getFunction; llvm: a function the compiler synthesizes is keyed
+in its module by what it is for, as MachineOutliner's outlined functions and a thunk are). Julia's differs: Julia has
+no Kernel node to hold a synthesized Procedure, and a record class's generated member has no MethodInstance (making
+one would put a method, hence a function class, into every world), so the reference names the record class and the
+member, compared by value, and the member code generator (src/code_generator.jl getInlinableMemberCodeGenerator)
+matches its member @exhaustive: _recordRuntimeType's code is the record class generator's helper that builds its body
+(src/record_class_generator.jl _generateRecordRuntimeTypeHelper), every other member the generator's located rejection.
+"""
+@quarantine "dart compiles each member record_class_generator.dart generates for a record class by its Reference (pkg/dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType); Julia's record class has no Kernel member, so the class and the member name it" Core.DataType struct RecordMemberReference
+    cls::DataType
+    member::RecordMember
+    # only a record class has generated members
+    RecordMemberReference(cls::DataType, member::RecordMember) =
+        tuple_record_arity(cls) === nothing ?
+            reject!(Internal("src/julia/kernel.jl RecordMemberReference: $cls is no record class, whose members the record class generator generates"), "RecordMemberReference") :
+            new(cls, member)
+end
+
+"""
     Reference
 
 The Kernel table's Reference: a member's MethodInstance (Julia compiles one function per
-specialization, and a MethodInstance names one callable) or a field's accessor, a `FieldReference`.
+specialization, and a MethodInstance names one callable), a field's accessor, a `FieldReference`, or a member the
+record class generator generates for a record class, a `RecordMemberReference`.
 An interface target names no member, so it is no Reference: a `SelectorReference`, which only
 _virtualCall, callDispatchTable and selectorForTarget take.
 
 precedent(dart: kernel/lib/canonical_name.dart's Reference, which names a member or its getter,
 setter, initializer or tear-off). Julia's differs: a method has no tear-off (a Julia function is a
-value already), so the sum is a method's specialization or a field's accessor.
+value already), so the sum is a method's specialization, a field's accessor, or a member the record class
+generator generates, which has no MethodInstance.
 """
 # the sum's kinds are named in the module that declares it (@closed), Julia's MethodInstance among them
 import Core: MethodInstance
-@quarantine "Kernel's Reference (pkg/kernel/lib/canonical_name.dart:429 Reference) names a member or one of its accessors; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Reference = Union{MethodInstance, FieldReference}
+@quarantine "Kernel's Reference (pkg/kernel/lib/canonical_name.dart:429 Reference) names a member or one of its accessors; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Reference = Union{MethodInstance, FieldReference, RecordMemberReference}
 
 """
     KERNEL_TYPES

@@ -67,6 +67,13 @@ array_typeof(n::Int64) = (s = splat_held(n); T = typeof(s.x); T === Int64 ? 1 : 
 # looks it up as an unpinned one (it compiled to a rejection of that type's constant before); the array class's arm is
 # the fatal gap
 array_forwarded(n::Int64) = (s = AnySlot(mk_int(collect(1:n))); T = typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)
+# a Memory as a tuple's element: its class's own entry (Memory{UInt8}, whose type constant the program names)
+@noinline mem_pair(n::Int64) = AnySlot(n > 0 ? (Memory{UInt8}(undef, 1), n) : n)
+mem_elem(n::Int64) = (T = typeof(mem_pair(n).x); T === Tuple{Memory{UInt8},Int64} ? 1 : T === Int64 ? 2 : T === Memory{UInt8} ? 3 : 4)
+# a forwarded Tuple{Vararg{Int64}} operand in a world where Tuple{Int64,Int64} is a row for another reason (any_pair's
+# (k, k)): the record of 2 answers exactly Tuple{Int64,Int64}
+o_vararg(n::Int64) = (w = any_pair(n + 3); s = AnySlot(mk_int(collect(1:n))); T = typeof(s.x);
+                      (T === Tuple{Int64,Int64} ? 1 : T === Tuple{Int64,Float64} ? 2 : T === Memory{UInt8} ? 3 : 4) + 10 * (w.x::Tuple{Int64,Int64})[1])
 # a Union of plain classes keeps its typeof: each member's type value is its canonical constant
 struct A end
 struct B end
@@ -109,6 +116,10 @@ end
     for n in (1, 4)
         push!(cases, WTChild.compiled_case("same_type($n)", W.compile, Cases.same_type, (Int64(n),)))
     end
+    # a Memory element, and the forwarded operand answering exactly Tuple{Int64,Int64}
+    @test Cases.mem_elem(1) == 1 && Cases.o_vararg(2) == 51
+    push!(cases, WTChild.compiled_case("mem_elem(1)", W.compile, Cases.mem_elem, (Int64(1),)))
+    push!(cases, WTChild.compiled_case("o_vararg(2)", W.compile, Cases.o_vararg, (Int64(2),)))
     for r in WTChild.run_cases(cases)
         @test (r.label => r.why) == (r.label => "")
     end

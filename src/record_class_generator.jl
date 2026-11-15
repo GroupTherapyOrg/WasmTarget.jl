@@ -16,6 +16,7 @@ walk meets each arity a program's open tuples have, where dart's visitor meets e
 
 Fields with no Julia counterpart: `coreTypes` :101, `library` :103, `typeRuntimetypeTypeClass` :105, `recordRuntimeTypeClass` :109, `recordRuntimeTypeConstructor` :114, `objectHashProcedure` :117, `objectHashAllProcedure` :123, `objectToStringProcedure` :129, `identical` :135, `objectEqualsProcedure` :140, `integerEqualsFunctionType` :142, `stringPlusProcedure` :148, `isSubtype` :154, `wasmArrayClass` :159, `immutableWasmArrayClass` :164, `wasmArrayRefLength` :169, `wasmArrayIndex` :175, `wasmArrayLiteralConstructor` :186, `wasmArrayValueField` :189, `immutableWasmArrayValueField` :195, `wasmArrayOfType` :201, `immutableWasmArrayOfString` :207, `runtimeTypeType` :213, `nonNullableTypeType` :218, `getActualRuntimeTypeNullable` :223, `getMasqueradedRuntimeTypeNullableProcedure` :226 — each a Kernel library, class, procedure or type the generated
 record class is built from, where Julia's tuple types are Base's classes with Base's methods.
+
 """
 @parity "dart2wasm/lib/record_class_generator.dart:100 _RecordClassGenerator" struct _RecordClassGenerator
     classes::Dict{RecordShape,DataType}
@@ -97,7 +98,7 @@ end
     reject!(Internal("dart2wasm/lib/record_class_generator.dart:389 _RecordClassGenerator._generateToString: a Julia tuple's text is Base's show(::IO, ::Tuple)"), "_RecordClassGenerator._generateToString")
 
 # a record class's ==; a Julia tuple's is Base's ==(::Tuple, ::Tuple)
-@parity "dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals" _generate_equals(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField}, cls::DataType, get_rti::Core.MethodInstance)::Core.MethodInstance =
+@parity "dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals" _generate_equals(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField}, cls::DataType, get_rti::RecordMemberReference)::Core.MethodInstance =
     reject!(Internal("dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals: a Julia tuple's equality is Base's ==(::Tuple, ::Tuple)"), "_RecordClassGenerator._generateEquals")
 
 # a record class's check against a record type's field types; the tested types are Julia's constants,
@@ -106,19 +107,164 @@ end
 @parity "dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType" _generate_check_record_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Core.MethodInstance =
     reject!(Internal("dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType: a Julia tuple's class is its type, checked by isa"), "_RecordClassGenerator._generateCheckRecordType")
 
-# a record's runtime type, built from its fields' runtime types; a Julia tuple's is typeof: its class where its static
-# type is concrete, and where it is held as its record the type Julia's cache holds for its fields' types, looked up
-# where typeof reads it (src/intrinsics.jl tuple_type_lookup), never a member of the record
-@parity "dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType" _generate_record_runtime_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Core.MethodInstance =
-    reject!(Internal("dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType: a Julia tuple's runtime type is typeof's, its class or, held as its record, its fields' types' tuple type looked up where typeof reads it (src/intrinsics.jl tuple_type_lookup)"), "_RecordClassGenerator._generateRecordRuntimeType")
+# a record's runtime type, built from its fields' runtime types: the member's reference, a RecordMemberReference
+# (dart's Procedure, added to the class by _generateClass), its code the record class generator's, written where the
+# member is compiled (_generateRecordRuntimeTypeHelper's code generator and body)
+@parity "dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType" _generate_record_runtime_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::RecordMemberReference =
+    RecordMemberReference(_generate_class(self, shape, Int64(0)), RecordRuntimeType())
 
 # a record's masqueraded runtime type; no Julia class masquerades (src/class_info.jl)
 @parity "dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType" _generate_masqueraded_record_runtime_type(self::_RecordClassGenerator, shape::RecordShape, fields::Vector{ClassField})::Core.MethodInstance =
     reject!(Internal("dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType: no Julia class masquerades"), "_RecordClassGenerator._generateMasqueradedRecordRuntimeType")
 
-# the runtime-type getter both runtime types build; a Julia tuple's runtime type is its class
-@parity "dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper" _generate_record_runtime_type_helper(self::_RecordClassGenerator, name::String, target::Core.MethodInstance, shape::RecordShape, fields::Vector{ClassField})::Core.MethodInstance =
-    reject!(Internal("dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper: a Julia tuple's runtime type is its class, typeof"), "_RecordClassGenerator._generateRecordRuntimeTypeHelper")
+"""
+The code of `_recordRuntimeType`, the record on the stack's tuple type, written into `b` (dart's
+_generateRecordRuntimeTypeHelper builds the getter's body: each field's runtime type, `_getActualRuntimeTypeNullable`
+of `this.\$i`, then a `_RecordType` of them). Julia's typeof of a tuple is fixed when jl_f_tuple builds it
+(julia/src/builtins.c:946), by jl_inst_arg_tuple_type (julia/src/jltypes.c:2477): each element's jl_typeof, then the
+type cache's lookup_typevalue (:1133); the lookup alone is jl_lookup_arg_tuple_type (:2472), NULL on a miss. So the
+body reads each field's typeof and searches the world's tuple types of the record's arity (src/julia/classes.jl
+tuple_type_rows, the rows of the typeof table's entries, type_value_entries), each element compared by ref.eq with the
+field's typeof, a canonical constant: the first row equal at every position answers its constant, else null, a type
+Julia would make and WasmTarget never makes at run time (audit A68S3), which the typeof site's fatal arm reports.
+
+A field's typeof, read as a typeof site reads an Any: null, Julia's `nothing`, Nothing's type; else its class id's
+entry of the typeof table; a null entry is a record's (a nested tuple, by that record class's own `_recordRuntimeType`,
+called, once per record class in the program) or a class whose type value has no constant, the gap. Only the record
+classes of the tuple types a row holds at that position are called: another's type equals no element there. A field
+whose typeof is the gap (null) equals no element, so its tuple's lookup misses: never a partial match. The rows of each
+arity are computed once per member (`rows`). formal(dev/formal/TupleRecordLookup.tla) TypeofAgreesR, TypeofAnswersR
+
+Julia's differs: Julia finds the type in its cache or makes it; dart makes a `_RecordType` at run time; WasmTarget
+answers the world's types and reports any other, located.
+"""
+@parity "dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper" function _generate_record_runtime_type_helper(translator::KernelNodes, b::WasmBuilder.InstructionsBuilder, cls::DataType, at::String)::Nothing
+    local t = translator
+    local result = translate_type(t, DataType)
+    local nullable = WasmBuilder.with_nullability(result, true)::WasmBuilder.IR.RefType
+    local top = t.top_type[]
+    local top_nn = t.top_type_non_nullable[]
+    local i32 = WasmBuilder.IR.NumType_i32
+    local entries = type_value_entries(t)
+    local rows_of = Dict{Int,Vector{DataType}}()
+    local rows(n::Int) = get!(() -> tuple_type_rows(entries, n), rows_of, n)
+    local constant(x::Type) = instantiate_constant(t.constants[], b, NirConst(Core.Const(x)), result)
+    local n = @exhaustive something(tuple_record_arity(cls))::RecordArity begin
+        (f::FixedArity) => f.n
+        # the array class's arity only run time knows, so no row is its type: the typeof site's arm is the fatal gap
+        RunTimeArity => reject!(Internal("$at: the array class's _recordRuntimeType, which no typeof site calls"), at)
+    end
+    local info = get(t.class_info, cls, nothing)
+    info === nothing && reject!(Internal("$at: the record class $cls has no class info"), at)
+    local fields = class_instance_fields(cls, at)
+    local array_type = array_type_for_dart_type(t, Union{Nothing,DataType}; mutable_ = true)
+    local rec = WasmBuilder.add_local(b, info.non_nullable_type)
+    WasmBuilder.ref_cast(b, info.non_nullable_type)
+    WasmBuilder.local_set(b, rec)
+    # a field's typeof, the field in `field`, where the rows hold `elements` at its position
+    local field_typeof(field::WasmBuilder.IR.Local, elements::Vector{DataType}) = begin
+        local got = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[nullable])
+        local null_field = WasmBuilder.block(b)
+        WasmBuilder.local_get(b, field)
+        WasmBuilder.br_on_null(b, null_field)
+        local v = WasmBuilder.add_local(b, top_nn)
+        local id = WasmBuilder.add_local(b, i32)
+        WasmBuilder.local_tee(b, v)
+        load_class_id(b, t, top_nn)
+        WasmBuilder.local_set(b, id)
+        # the class's entry of the typeof table
+        instantiate_constant(t.constants[], b, make_array_of(t.constants[], Union{Nothing,DataType}, NirConst[NirConst(Core.Const(e)) for e in entries]),
+            WasmBuilder.IR.RefType_def(array_type; nullable = false))
+        WasmBuilder.local_get(b, id)
+        WasmBuilder.array_get(b, array_type)
+        WasmBuilder.br_on_non_null(b, got)
+        # a null entry: the record of a tuple type the rows hold here, by its class's own member
+        local arities = sort!(unique!(Int[fieldcount(e) for e in elements if e <: Tuple && fieldcount(e) > 0 && e in rows(fieldcount(e))]))
+        local ranges = NamedTuple{(:range, :value), Tuple{Range, Int}}[]
+        for m in arities
+            local r_info = get(t.class_info, tuple_record_class(m), nothing)
+            r_info === nothing && reject!(Internal("$at: the record class of $m elements, a row's element's, has no class info"), at)
+            push!(ranges, (range = Range(Val(:_), class_id(r_info), class_id(r_info)), value = m))
+        end
+        sort!(ranges; by = x -> x.range.start)
+        if isempty(ranges)
+            WasmBuilder.ref_null(b, nullable.heap_type)
+        else
+            WasmBuilder.local_get(b, id)
+            class_id_search(b, ranges, WasmBuilder.IR.ValueType[nullable], m -> begin
+                    WasmBuilder.local_get(b, v)
+                    local member = RecordMemberReference(tuple_record_class(m), RecordRuntimeType())
+                    call_function(t, get_function(t.functions[], member), b, member)
+                end, () -> WasmBuilder.ref_null(b, nullable.heap_type))
+        end
+        WasmBuilder.br(b, got)
+        WasmBuilder.var"end"(b)   # null_field
+        Nothing in elements ? constant(Nothing) : WasmBuilder.ref_null(b, nullable.heap_type)
+        WasmBuilder.var"end"(b)   # got
+        nothing
+    end
+    local rs = rows(n)
+    if isempty(rs)
+        WasmBuilder.ref_null(b, nullable.heap_type)
+        return nothing
+    end
+    # each field's typeof, by the elements the rows hold at its position
+    local types = map(1:n) do k
+        local field = WasmBuilder.add_local(b, top)
+        WasmBuilder.local_get(b, rec)
+        WasmBuilder.struct_get(b, info.struct_, t.field_index[fields[k]])
+        WasmBuilder.local_set(b, field)
+        field_typeof(field, unique!(DataType[r.parameters[k] for r in rs]))
+        local l = WasmBuilder.add_local(b, nullable)
+        WasmBuilder.local_set(b, l)
+        l
+    end
+    # the first row equal at every position, else null
+    local found = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[nullable])
+    for row in rs
+        local next = WasmBuilder.block(b)
+        for k in 1:n
+            WasmBuilder.local_get(b, types[k])
+            constant(row.parameters[k])
+            WasmBuilder.ref_eq(b)
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.br_if(b, next)
+        end
+        constant(row)
+        WasmBuilder.br(b, found)
+        WasmBuilder.var"end"(b)   # next
+    end
+    WasmBuilder.ref_null(b, nullable.heap_type)
+    WasmBuilder.var"end"(b)   # found
+    return nothing
+end
+
+"""
+The code generator of `_recordRuntimeType`, the member the record class generator generates for the record class
+`cls` (a RecordMemberReference), where it is compiled (getInlinableMemberCodeGenerator): dart compiles it as any
+Procedure, from the Kernel body _generateRecordRuntimeTypeHelper builds; Julia holds no Kernel body for it, so this
+writes the helper's body (`_generate_record_runtime_type_helper`). Julia's differs: no Kernel node holds the body.
+"""
+@parity "dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper" struct _RecordClassGenerator__generate_record_runtime_type_helper <: CodeGenerator
+    translator::KernelNodes
+    cls::DataType
+    # the struct's one constructor, tagged
+    _RecordClassGenerator__generate_record_runtime_type_helper(::Val{:_}, translator::KernelNodes, cls::DataType) = new(translator, cls)
+end
+
+@parity "dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper" _RecordClassGenerator__generate_record_runtime_type_helper(translator::KernelNodes, cls::DataType)::_RecordClassGenerator__generate_record_runtime_type_helper =
+    _RecordClassGenerator__generate_record_runtime_type_helper(Val(:_), translator, cls)
+
+# the member's own function: the record its parameter, its body the helper's, ended; never inlined
+# (Translator.shouldInline), so no return label
+@parity "dart2wasm/lib/code_generator.dart:38 CodeGenerator.generate" function generate(self::_RecordClassGenerator__generate_record_runtime_type_helper, b::WasmBuilder.InstructionsBuilder, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Nothing
+    local at = "dart2wasm/lib/record_class_generator.dart:675 _RecordClassGenerator._generateRecordRuntimeTypeHelper: $(julia_text(self.cls))._recordRuntimeType"
+    return_label === nothing || reject!(Internal("$at: inlined, which shouldInline never decides"), at)
+    WasmBuilder.local_get(b, param_locals[1])
+    _generate_record_runtime_type_helper(self.translator, b, self.cls, at)
+    WasmBuilder.var"end"(b)
+    return nothing
+end
 
 """
 The constant array of a shape's field names, dart's immutable `WasmArray<String>`: the NIR's literal

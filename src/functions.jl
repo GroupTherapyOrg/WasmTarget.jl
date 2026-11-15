@@ -119,6 +119,8 @@ The export name of `target`, the interop namer's (src/namer.jl _ExternalMemberNa
     @exhaustive target::Reference begin
         (m::MethodInstance) => get_export_name(interop_namer(self), m)
         FieldReference => nothing
+        # a generated member carries no export pragma (record_class_generator.dart adds wasm:entry-point alone)
+        RecordMemberReference => nothing
     end
 
 """
@@ -161,6 +163,9 @@ unused where Julia's effects prove it (hasWasmPureFunctionPragma).
         (m::MethodInstance) => (something(Util.get_wasm_never_inline_pragma(m), false), something(Util.get_wasm_prefer_inline_pragma(m), false),
                                 Util.has_wasm_pure_function_pragma(m; component = translator.component))
         (r::FieldReference) => (r.kind === FieldReferenceKind_initializer && never_inline_static_field_initializer(translator, r.field::GlobalRef), false, false)
+        # a generated member carries only wasm:entry-point (record_class_generator.dart's addWasmEntryPointPragma):
+        # no inlining pragma and no pure one
+        RecordMemberReference => (false, false, false)
     end
     local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
     # If this function is a `@pragma('wasm:import', '<module>.<name>')` we import the function and
@@ -304,6 +309,8 @@ and a field's accessor the visitor's Field arm.
     return @exhaustive target::Reference begin
         (m::MethodInstance) => visit_procedure(generator, m, m)
         (r::FieldReference) => visit_field(generator, r.field, r)
+        # a generated member is a Procedure: the visitor's Procedure arm
+        (r::RecordMemberReference) => visit_procedure(generator, r, r)
     end
 end
 
@@ -315,6 +322,8 @@ end
     return @exhaustive target::Reference begin
         (m::MethodInstance) => returns_null(type_of_return_value(self.translator, m))
         (r::FieldReference) => r.kind === FieldReferenceKind_setter || returns_null(type_of_field(self.translator, r.field))
+        # a generated member's result is its own (visit_procedure's), never only null
+        RecordMemberReference => false
     end
 end
 
@@ -325,6 +334,8 @@ end
         (m::MethodInstance) => (local w = translate_return_type(self.translator, type_of_return_value(self.translator, m));
             w isa WasmBuilder.IR.RefType && w.heap_type === WasmBuilder.IR.HeapType_none && !w.nullable)
         FieldReference => false
+        # a generated member returns
+        RecordMemberReference => false
     end
 end
 
@@ -342,6 +353,16 @@ suffix of the accessor's kind.
             local member_name = f isa GlobalRef ? string(f) : "$(f.cls).$(f.name)";
             r.kind === FieldReferenceKind_setter ? "$member_name= implicit setter" :
             r.kind === FieldReferenceKind_initializer ? "$member_name field initializer" : "$member_name implicit getter")
+        # a generated member's: its record class and dart's member name (record_class_generator.dart's)
+        (r::RecordMemberReference) => string(julia_text(r.cls), ".", @exhaustive r.member::RecordMember begin
+            RecordConstructor => "constructor"
+            RecordHashCode => "hashCode"
+            RecordToString => "toString"
+            RecordEquals => "=="
+            RecordCheckRecordType => "_checkRecordType"
+            RecordRuntimeType => "_recordRuntimeType"
+            RecordMasqueradedRuntimeType => "_masqueradedRecordRuntimeType"
+        end)
     end
 end
 
@@ -449,6 +470,27 @@ callee is a context (a closure's captured struct), dart's receiver of an instanc
     return _make_function_type(self.translator, target, receiver_type;
                                synthesize_null_return_value = self.synthesize_null_return_value,
                                synthesize_no_return = self.synthesize_no_return)
+end
+
+# a member the record class generator generates, a Procedure dart types from the FunctionNode the generator builds:
+# _recordRuntimeType (record_class_generator.dart:653) takes the record, dart's `this`, held at the top type where a
+# typeof site or another record's member reads it, and answers its tuple type's canonical constant, or null where the
+# world holds none (Julia would make that type: the caller's fatal gap); every other member is the generator's
+# located rejection (src/record_class_generator.jl), reached when its code is generated
+@parity "dart2wasm/lib/functions.dart:511 _FunctionTypeGenerator.visitProcedure" function visit_procedure(self::_FunctionTypeGenerator, node::RecordMemberReference, target::RecordMemberReference)::WasmBuilder.IR.FunctionType
+    local t = self.translator
+    local at = "dart2wasm/lib/functions.dart:511 _FunctionTypeGenerator.visitProcedure"
+    local unported() = reject!(Internal("$at: the type of $(julia_text(target.cls))'s generated member $(target.member), which the record class generator does not generate (src/record_class_generator.jl)"), at)
+    return @exhaustive target.member::RecordMember begin
+        RecordRuntimeType => WasmBuilder.define_function(types_builder(t), WasmBuilder.IR.ValueType[t.top_type_non_nullable[]],
+            WasmBuilder.IR.ValueType[WasmBuilder.with_nullability(translate_type(t, DataType), true)])
+        RecordConstructor => unported()
+        RecordHashCode => unported()
+        RecordToString => unported()
+        RecordEquals => unported()
+        RecordCheckRecordType => unported()
+        RecordMasqueradedRuntimeType => unported()
+    end
 end
 
 # a Julia constructor is typed as any method (visitProcedure)

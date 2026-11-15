@@ -519,7 +519,7 @@ end
     Union{Nothing,DataType}[info.cls === nothing || type_value_unmade(translator, info.cls) !== nothing || record_typeof_unmade(info.cls) ? nothing : info.cls for info in translator.classes[]]
 
 # the closed world's tuple types of `n` elements among the table's entries (type_value_entries), in its order: the
-# rows of typeof's lookup of a tuple held as its record (src/intrinsics.jl tuple_type_lookup), Julia's cache of tuple
+# rows of typeof's lookup of a tuple held as its record (src/record_class_generator.jl _generateRecordRuntimeTypeHelper), Julia's cache of tuple
 # types, which jl_lookup_arg_tuple_type searches by the arguments' types (julia/src/jltypes.c:2472, lookup_typevalue
 # :1133). A row whose element no value's typeof is, a Type{X} (jl_typeof answers no Type{X}: (Int64,) is a
 # Tuple{DataType}) or a type the table holds no entry of, is the type of no tuple of the world: left out, it is never
