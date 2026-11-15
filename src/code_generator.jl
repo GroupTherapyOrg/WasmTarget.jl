@@ -3362,9 +3362,9 @@ end
     end
 end
 
-@parity "dart2wasm/lib/code_generator.dart:6070 MacroAssembler.pushObjectHeaderFields" function push_object_header_fields(self::WasmBuilder.InstructionsBuilder, translator::Translator, class_info::ClassInfo)::Nothing
+@parity "dart2wasm/lib/code_generator.dart:6070 MacroAssembler.pushObjectHeaderFields" function push_object_header_fields(self::WasmBuilder.InstructionsBuilder, translator::Translator, class_info::ClassInfo, identity_hash::Int = initial_identity_hash())::Nothing
     WasmBuilder.i32_const(self, class_id(class_info))
-    WasmBuilder.i32_const(self, initial_identity_hash())
+    WasmBuilder.i32_const(self, identity_hash)
     return nothing
 end
 

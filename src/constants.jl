@@ -1006,8 +1006,7 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             push_object_header_fields(b, translator, info)
         else
             # the header pushObjectHeaderFields pushes, its identity hash the image's slot
-            WasmBuilder.i32_const(b, class_id(info))
-            WasmBuilder.i32_const(b, Int(image))
+            push_object_header_fields(b, translator, info, Int(image))
         end
         for i in first_field:field_count - 1
             local sub_constant = sub_constants[i + 1]
