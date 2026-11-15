@@ -224,6 +224,131 @@ end
 end
 
 """
+    jl_object_id_identity_arm(T) -> Bool
+
+Whether Julia's runtime answers the id of a value of `T` by the object's identity: the last arm of
+jl_object_id__cold (julia/src/builtins.c:482-484, `inthash((uintptr_t)v)`, or the id kept before the
+header of an object saved in an image), which a mutable type takes unless jl_object_id_ answers it by
+its stored hash first (a Symbol, :491; a TypeName, :499; a concrete DataType, :496) or the cold arm by
+its content (a String, :463, its bytes' memhash; a SimpleVector, :470, hash_svec; a DataType, :472; a
+Module, :477, its hash): exactly the objects Julia's image writer keeps an id for (julia/src/
+staticdata.c:1512 object_id_expected; a Symbol it writes apart, :1247). The one answer of which values
+are identities, read by the constants a module keeps the compiling process's id for (image_slot!).
+"""
+@quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "a mutable's id is its identity unless the runtime answers it by the value (a String, a SimpleVector, a DataType, a Module) or jl_object_id_ by its stored hash (a Symbol, a TypeName), the set the image writer keeps an id for (julia/src/staticdata.c:1512)" Base.ismutabletype function jl_object_id_identity_arm(T::DataType)::Bool
+    return ismutabletype(T) && T !== Symbol && T !== DataType && T !== Core.TypeName && T !== String && T !== Core.SimpleVector && T !== Module
+end
+
+# the inverse of an odd 64-bit multiplier modulo 2^64, by Newton's iteration (each step doubles the correct
+# low bits: 3 from x = a, then 6, 12, 24, 48, 96)
+@quarantine pin"julia/src/support/hashing.c:28 int64hash" "int64hash's multiplications by odd constants are bijections of 64-bit words, each undone by the multiplier's inverse modulo 2^64" Base.:* function _odd_inverse(a::UInt64)::UInt64
+    local x = a
+    for _ in 1:5
+        x *= 0x0000000000000002 - a * x
+    end
+    return x
+end
+
+# `x = y ⊻ (y >> s)` solved for y, its bits recovered from the top, s at a time
+@quarantine pin"julia/src/support/hashing.c:28 int64hash" "int64hash's `key ^ (key >> s)` steps are bijections of 64-bit words, each undone from the top bits down" Base.xor function _xorshift_inverse(x::UInt64, s::Int)::UInt64
+    local y = x
+    local k = s
+    while k < 64
+        y = xor(x, y >> s)
+        k += s
+    end
+    return y
+end
+
+"""
+    int64hash_inverse(h) -> UInt64
+
+The word `int64hash` (julia/src/support/hashing.c:28) maps to `h`: each of its steps undone in reverse
+order, a multiplication by its odd multiplier's inverse, an xor-shift solved from the top bits. Read at
+compile time only (image_id_meets_serial): an image object's id is int64hash of an address, and the
+address is what a serial could meet.
+"""
+@quarantine pin"julia/src/support/hashing.c:28 int64hash" "int64hash is a bijection of 64-bit words: the address an image object's id hashed is its preimage" Base.:* function int64hash_inverse(h::UInt64)::UInt64
+    local key = h * _odd_inverse(0x0000000080000001)         # key + (key << 31)
+    key = _xorshift_inverse(key, 28)
+    key *= _odd_inverse(0x0000000000000015)                  # key + (key << 2) + (key << 4)
+    key = _xorshift_inverse(key, 14)
+    key *= _odd_inverse(0x0000000000000109)                  # key + (key << 3) + (key << 8)
+    key = _xorshift_inverse(key, 24)
+    return (key + 0x0000000000000001) * _odd_inverse(0x00000000001fffff)   # ~key + (key << 21)
+end
+
+"""
+    image_id_meets_serial(id) -> Bool
+
+Whether an image object's compile-time id is one a serial gives: int64hash of a word from 1 to 2^31 - 1,
+the id a module gives an object made at run time (dev/formal/ConstantImageIds.tla: NoCollisionCheck is the
+compile that does not ask). int64hash is a bijection, so the two meet exactly when the image object's
+address, the id's preimage, lies in that range. The one check, read by image_slot!.
+"""
+@quarantine pin"julia/src/support/hashing.c:28 int64hash" "an image object's id is int64hash of an address and a serial's int64hash of the serial: the two meet exactly when the preimage is a serial" Base.typemax image_id_meets_serial(id::UInt64)::Bool =
+    UInt64(1) <= int64hash_inverse(id) <= UInt64(typemax(Int32))
+
+"""
+    image_slot!(statics, component, object, at) -> Union{Int32,Nothing}
+
+formal(dev/formal/ConstantImageIds.tla): a constant's id is the compiling process's id of the Julia object its key names; none a serial gives
+
+The identity hash slot a constant standing for `object` is made with. Julia's image writer stores, before
+the header of every object whose id is its identity, the id the compiling process gave it
+(julia/src/staticdata.c:1512 object_id_expected, :1524 `write_uint(f, jl_object_id(v))`), and
+jl_object_id__cold reads it back when the header's GC_IN_IMAGE bit is set (julia/src/builtins.c:482-483),
+so a module's id of a constant is the one the compiling process folded and laid its Dicts out by. A
+WasmGC object has no word before its header: its identity hash slot (dart's, src/class_info.jl
+FieldIndex_identity_hash) holds -k, the sign standing for GC_IN_IMAGE, and the module's table IMAGE_IDS
+holds the id at k (image_object_id). Taken when the program reads an object's identity slot (its closed
+world calls Runtime.get_identity_hash_field, decided once a compile) and `object`'s id is its identity
+(jl_object_id_identity_arm). `object` is the Julia object the constant stands for, the one its key names
+(src/julia/classes.jl memory_constant_object: a live copy's original), so its id is that object's whether
+or not inference folds objectid of it. Else nothing: the constant keeps dart's initialIdentityHash, so a
+program that never reads identity is the same module, byte for byte. Refused, located: an id a serial
+could give (image_id_meets_serial), more image objects than an i32 slot's negative range, and a constant
+made after the table (WasmTarget's fault).
+
+precedent(julia: julia/src/staticdata.c:1485 jl_write_values, the id kept with the object; dart: the
+header's identity hash slot, object_patch.dart:16 Object._objectHashCode, which reads 0 as "never hashed"
+and any other value as the hash). Julia's differs from dart's: a constant's id is fixed at compile time,
+since Julia's compiler folds objectid of a constant (@_total_meta) and a constant Dict's slots are laid
+out by it.
+"""
+@quarantine pin"julia/src/staticdata.c:1485 jl_write_values" "a WasmGC object has no word before its header for the id Julia's image keeps; its identity slot's sign marks the image and indexes the module's table of the compiling process's ids" Base.objectid function image_slot!(statics::CompileStatics, component::NirWorld, object, at::String)::Union{Int32,Nothing}
+    local reads = statics.reads_identity[]
+    if reads === nothing
+        reads = any(nb -> nb.ci.def.def in methods(Runtime.get_identity_hash_field), component)
+        statics.reads_identity[] = reads
+    end
+    (reads && jl_object_id_identity_arm(typeof(object))) || return nothing
+    # the constant named in each refusal, its text cut to 80 characters
+    local named() = (local t = rejection_text(object); "the constant $(typeof(object)) $(length(t) > 80 ? first(t, 80) * "…" : t)")
+    statics.image_ids_made[] &&
+        reject!(Internal("src/julia/runtime/hashing.jl image_slot!: $(named()) made after the module's table of image ids"), at)
+    local id = objectid(object)
+    image_id_meets_serial(id) &&
+        reject!(Unported("src/julia/runtime/hashing.jl image_slot!: $(named())'s compile-time id is int64hash($(int64hash_inverse(id))), the id that serial gives an object made at run time, so the module could not tell the two apart (its address lies below 2^31 on this host)"), at)
+    length(statics.image_ids) < typemax(Int32) ||
+        reject!(Unported("src/julia/runtime/hashing.jl image_slot!: $(named()) is one image object more than an i32 slot's negative range holds"), at)
+    push!(statics.image_ids, reinterpret(Int64, id))
+    return -Int32(length(statics.image_ids))
+end
+
+"""
+    image_object_id(k) -> UInt64
+
+The id an image object keeps, IMAGE_IDS's entry k (from 1): the word jl_object_id__cold reads before
+the header of an object saved in an image (julia/src/builtins.c:483 `((uintptr_t*)v)[-2]`), here the
+module's table of the ids the compiling process gave its constants (image_slot!). The intrinsifier
+lowers a call to the read of the table's element (src/intrinsics.jl); natively no table exists, so the
+body raises.
+"""
+@quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "an object saved in an image keeps its id in a word before its header, read at julia/src/builtins.c:483; a WasmGC object has none, so the module's table holds it" Core.UInt64 @noinline image_object_id(k::Int)::Core.UInt64 =
+    _wasm_only(Core.UInt64)
+
+"""
     jl_object_id(x) -> UInt64
 
 Julia's object id of `x` (julia/src/builtins.c:489 jl_object_id_, :459 jl_object_id__cold): a

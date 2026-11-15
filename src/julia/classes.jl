@@ -1126,7 +1126,10 @@ end
 The state dart2wasm keeps in statics, one compile's here (spec v16 X5, X8): `next_global_id`, dart's static
 _ConstantAccessor._nextGlobalId (constants.dart:2234), the count behind each constant's `C<id>` name; and the memories
 a compile's constants emit in part (_array_live_ref: each original Memory's live copy and the extent its Array defines)
-or whole, so one Memory is never both (_live_memory's rule, which dart has no counterpart of). Held by the compile's one
+or whole, so one Memory is never both (_live_memory's rule, which dart has no counterpart of); and the image's ids
+(src/julia/runtime/hashing.jl image_slot!): whether the program reads an object's identity slot, decided once, each id
+the compiling process gave a constant whose identity it reads, IMAGE_IDS's entries in order, and whether the table was
+made, after which no constant joins it. Held by the compile's one
 _ConstantAccessor (Constants._constantAccessor, late: one a compile), the class whose static dart declares, and read
 through it as dart reads a static through its class, so the Translator's fields stay exactly dart's. Julia differs:
 dart2wasm compiles one program a process, so a static is that program's; Julia compiles many a process (a test file,
@@ -1137,7 +1140,11 @@ keeps an inference session's results in its NativeInterpreter (inf_cache), never
     next_global_id::Base.RefValue{Int}
     live_memories::IdDict{GenericMemory,Tuple{GenericMemory,UnitRange{Int}}}
     whole_memories::Base.IdSet{GenericMemory}
-    CompileStatics() = new(Ref(0), IdDict{GenericMemory,Tuple{GenericMemory,UnitRange{Int}}}(), Base.IdSet{GenericMemory}())
+    reads_identity::Base.RefValue{Union{Nothing,Bool}}
+    image_ids::Vector{Int64}
+    image_ids_made::Base.RefValue{Bool}
+    CompileStatics() = new(Ref(0), IdDict{GenericMemory,Tuple{GenericMemory,UnitRange{Int}}}(), Base.IdSet{GenericMemory}(),
+                           Ref{Union{Nothing,Bool}}(nothing), Int64[], Ref(false))
 end
 
 """
@@ -1252,6 +1259,25 @@ end
         reject!(ProgramError("$at: a Memory constant held whole and by a Dict that defines part of it (its filled slots): one constant cannot hold both; build the Dict in the function"), at)
     statics.live_memories[m] = (copy, eachindex(m))
     return copy
+end
+"""
+    memory_constant_object(statics, m) -> GenericMemory
+
+The Julia Memory a Memory constant `m` stands for: the original whose live copy `m` is (the one record of copies,
+statics.live_memories, original => (copy, live extent), written by MEMORY_OWNERS' functions), else `m` itself. A
+constant stands for the object the program reaches, never the copy the compiler makes of it, so the constant's key
+(ConstantOwner) and its image id (src/julia/runtime/hashing.jl image_slot!) name the original
+(dev/formal/ConstantImageIds.tla: CopyOwnKey is the key naming the copy).
+
+precedent(julia: src/staticdata.c:1105 jl_queue_for_serialization_, which keys each object by its own address: the
+image holds the object itself, so its id is that object's). Julia differs from dart: dart's constants are values,
+never copies of an object.
+"""
+@quarantine pin"precedent(julia: src/staticdata.c:1105 jl_queue_for_serialization_)" "a constant stands for the Julia object the program reaches; a live copy the compiler makes of a Memory stands for the original" Core.GenericMemory function memory_constant_object(statics::CompileStatics, m::GenericMemory)::GenericMemory
+    for (original, (copy, _)) in statics.live_memories
+        copy === m && return original
+    end
+    return m
 end
 # a Dict's `slots`: every byte is the Dict's (its constructor, rehash! and empty! fill the memory with 0x0, then each
 # slot's byte marks it empty, filled or deleted), so the memory is held whole, its owner defining each element

@@ -896,6 +896,10 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
         local flag = class_is_set_field(field)
         flag === nothing || (owner[flag] = field)
     end
+    # the Julia object the constant stands for, the one answer its key and its image id read: a Memory's original
+    # where the constant is its live copy (src/julia/classes.jl memory_constant_object), else the value itself
+    local statics = self.constants._constant_accessor[].statics
+    local key_object = v isa GenericMemory ? memory_constant_object(statics, v) : v
     for field in class_instance_fields(cls, at)
         local index = translator.field_index[field]
         sub_constants[index + 1] === nothing || reject!(Internal("$at: the field index $index of $cls is given twice"), at)
@@ -915,21 +919,21 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
                 reject!(Internal("$at: the Memory field $(field.name) is no wasm array"), at)
             # a Memory is its own owner, every element (src/julia/classes.jl _live_memory's rule): one an Array's constant
             # emits in part (a copy, its live extent) is never also emitted whole, which would part their aliasing
-            local statics = self.constants._constant_accessor[].statics
             if !any(c -> c[1] === v, values(statics.live_memories))   # no owner defines it (MEMORY_OWNERS)
                 haskey(statics.live_memories, v) &&
                     reject!(ProgramError("$at: a Memory constant held whole and by an owner that defines part of it (an Array's size, a Dict's filled slots): one constant cannot hold both; build the owner in the function"), at)
                 _unowned_memory(v, at)   # an isbits one, refused, located (spec v17 Y6)
                 push!(statics.whole_memories, v)
             end
-            # each array the Memory's own storage, keyed by its ConstantOwner, the Memory's identity and the field: two
-            # Memories of equal elements never share one (dev/formal/ObjectIdentity.tla WriteUnseenDistinctConstants)
+            # each array the Memory's own storage, keyed by its ConstantOwner, the Julia Memory the constant stands for (a
+            # live copy's original, key_object) and the field: two Memories of equal elements never share one
+            # (dev/formal/ObjectIdentity.tla WriteUnseenDistinctConstants), a copy keyed by its original (dev/formal/ConstantImageIds.tla CopyOwnKey)
             if field.name == "data"
                 make_array_of(self.constants, storage,
-                    NirConst[NirConst(Core.Const(isassigned(v, k) ? v[k] : nothing)) for k in eachindex(v)]; owner = ConstantOwner(v, field.name)).c.val
+                    NirConst[NirConst(Core.Const(isassigned(v, k) ? v[k] : nothing)) for k in eachindex(v)]; owner = ConstantOwner(key_object, field.name)).c.val
             elseif field.name == "data#isSet"
                 make_array_of(self.constants, storage, NirConst[NirConst(Core.Const(Int32(isassigned(v, k)))) for k in eachindex(v)];
-                    owner = ConstantOwner(v, field.name)).c.val
+                    owner = ConstantOwner(key_object, field.name)).c.val
             else
                 reject!(Internal("$at: the Memory field $(field.name), not classes.jl's data or data#isSet"), at)
             end
@@ -992,8 +996,19 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
     # a primitive class's struct is a box's, its class id alone ahead of its value (a 128-bit integer's
     # two halves), as convertType's boxing builds one
     local first_field = isprimitivetype(cls) ? FieldIndex_box_value() : FieldIndex_object_field_base()
+    # an object whose identity the program reads keeps the compiling process's id of the object it stands for, as
+    # Julia's image does (src/julia/runtime/hashing.jl image_slot!): its header's identity hash slot -k, IMAGE_IDS's k
+    local image = isprimitivetype(cls) ? nothing : image_slot!(statics, translator.component, key_object, at)
     return create_constant(self, constant, child_constants, type_, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
-        isprimitivetype(cls) ? WasmBuilder.i32_const(b, class_id(info)) : push_object_header_fields(b, translator, info)
+        if isprimitivetype(cls)
+            WasmBuilder.i32_const(b, class_id(info))
+        elseif image === nothing
+            push_object_header_fields(b, translator, info)
+        else
+            # the header pushObjectHeaderFields pushes, its identity hash the image's slot
+            WasmBuilder.i32_const(b, class_id(info))
+            WasmBuilder.i32_const(b, Int(image))
+        end
         for i in first_field:field_count - 1
             local sub_constant = sub_constants[i + 1]
             sub_constant === nothing && reject!(Internal("$at: the field $i of $cls has no constant"), at)

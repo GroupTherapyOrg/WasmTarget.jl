@@ -606,6 +606,8 @@ end
             return generate_static_intrinsic(self, Val(:interface_type_class_id), node.args[2:end])
         target.def.name === :jl_to_typeof && target.def in methods(jl_to_typeof) &&
             return generate_static_intrinsic(self, Val(:to_typeof), node.args[2:end])
+        target.def.name === :image_object_id && target.def in methods(image_object_id) &&
+            return generate_static_intrinsic(self, Val(:image_object_id), node.args[2:end])
         target.def.name === :jl_typetagis && target.def in methods(jl_typetagis) &&
             return generate_static_intrinsic(self, Val(:typetagis), target, node.args[2:end])
         target.def.name === :jl_is_tuple_type && target.def in methods(jl_is_tuple_type) &&
@@ -1197,6 +1199,34 @@ end
     translate_expression(self.code_gen, only(args), WasmBuilder.IR.NumType_i32)
     emit_class_id_range_check(self.code_gen.b[], ranges)
     return WasmBuilder.IR.NumType_i32
+end
+
+# the id an image object keeps (src/julia/runtime/hashing.jl image_object_id, julia/src/builtins.c:483): the
+# module's table of the ids the compiling process gave its constants (image_slot!), an immutable i64 array
+# constant, then its entry k - 1. The table is complete only once every constant is made, so its read is a
+# patchable region filled by a linking action, as dart reads a constant whose module is decided once all
+# its uses are known (constants.dart:1912 _ConstantAccessor.loadConstant)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:image_object_id}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local array_type = array_type_for_dart_type(t, WasmI64; mutable_ = false)
+    local array_ref = WasmBuilder.IR.RefType_def(array_type; nullable = false)
+    local patch = WasmBuilder.create_patchable_region(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[array_ref])
+    if patch !== nothing
+        local statics = t.constants[]._constant_accessor[].statics
+        push!(t.linking_actions, function ()
+            statics.image_ids_made[] = true
+            local table = make_array_of(t.constants[], WasmI64, NirConst[NirConst(Core.Const(id)) for id in statics.image_ids]; mutable_ = false)
+            instantiate_constant(t.constants[], patch, table, array_ref)
+            return nothing
+        end)
+    end
+    translate_expression(self.code_gen, only(args), WasmBuilder.IR.NumType_i64)
+    WasmBuilder.i32_wrap_i64(b)
+    WasmBuilder.i32_const(b, 1)
+    WasmBuilder.i32_sub(b)
+    WasmBuilder.array_get(b, array_type)
+    return WasmBuilder.IR.NumType_i64
 end
 
 # getIdentityHashField (intrinsics.dart:1498): the operand translated as the non-null Object, its
