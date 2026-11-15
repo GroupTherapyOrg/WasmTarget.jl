@@ -861,11 +861,6 @@ makeType and `_isSubtype` (src/julia/classes.jl record_member_tests, the one rea
             WasmBuilder.br(b, result_label)
             WasmBuilder.var"end"(b)
             for (id, c, shape) in records
-                local n = @exhaustive something(tuple_record_arity(c))::RecordArity begin
-                    (f::FixedArity) => f.n
-                    # record_member_tests refuses the array class at the member, located
-                    RunTimeArity => reject!(Internal("$at: the array class $c among a member's records, which record_member_tests refuses"), at)
-                end
                 local info = translator.class_info[c]
                 local fields = class_instance_fields(c, at)
                 WasmBuilder.local_get(b, operand)
@@ -878,14 +873,67 @@ makeType and `_isSubtype` (src/julia/classes.jl record_member_tests, the one rea
                 WasmBuilder.local_get(b, operand)
                 WasmBuilder.ref_cast(b, info.non_nullable_type)
                 WasmBuilder.local_set(b, rec)
-                for k in 1:n
-                    local field_type = fieldtype(shape, k)
+                # the element on the stack tested against `field_type` by its own checker, a failure to `fail`
+                local test_element(field_type::Type) = begin
                     local type_to_check = something(can_use_type_check_helper(is_checkers, field_type, Any)[1])
-                    WasmBuilder.local_get(b, rec)
-                    WasmBuilder.struct_get(b, info.struct_, translator.field_index[fields[k]])
                     MacroAssembler_invoke(b, generate_is_checker(is_checkers, type_to_check, false, true))
                     WasmBuilder.i32_eqz(b)
                     WasmBuilder.br_if(b, fail)
+                end
+                @exhaustive something(tuple_record_arity(c))::RecordArity begin
+                    (f::FixedArity) => begin
+                        for k in 1:f.n
+                            WasmBuilder.local_get(b, rec)
+                            WasmBuilder.struct_get(b, info.struct_, translator.field_index[fields[k]])
+                            test_element(fieldtype(shape, k))
+                        end
+                    end
+                    # the array class against the member `shape` (record_member_tests): subtype_tuple's length
+                    # test first (julia/src/subtype.c:1348: the count of fixed fields, at least that where a
+                    # Vararg ends the member), then each fixed position, then the Vararg tail's elements in a loop
+                    RunTimeArity => begin
+                        local array_type = (translate_type_of_field(translator, fields[1])::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+                        local data = WasmBuilder.add_local(b, WasmBuilder.IR.RefType_def(array_type; nullable = false))
+                        local len = WasmBuilder.add_local(b, WasmBuilder.IR.NumType_i32)
+                        local va = Base.isvatuple(shape)
+                        local p = length(shape.parameters) - (va ? 1 : 0)
+                        WasmBuilder.local_get(b, rec)
+                        WasmBuilder.struct_get(b, info.struct_, translator.field_index[fields[1]])
+                        WasmBuilder.local_tee(b, data)
+                        WasmBuilder.array_len(b)
+                        WasmBuilder.local_tee(b, len)
+                        WasmBuilder.i32_const(b, p)
+                        va ? WasmBuilder.i32_lt_u(b) : WasmBuilder.i32_ne(b)
+                        WasmBuilder.br_if(b, fail)
+                        for k in 1:p
+                            WasmBuilder.local_get(b, data)
+                            WasmBuilder.i32_const(b, k - 1)
+                            WasmBuilder.array_get(b, array_type)
+                            test_element(shape.parameters[k])
+                        end
+                        if va
+                            local j = WasmBuilder.add_local(b, WasmBuilder.IR.NumType_i32)
+                            WasmBuilder.i32_const(b, p)
+                            WasmBuilder.local_set(b, j)
+                            local tail_done = WasmBuilder.block(b)
+                            local next = WasmBuilder.loop(b)
+                            WasmBuilder.local_get(b, j)
+                            WasmBuilder.local_get(b, len)
+                            WasmBuilder.i32_ge_u(b)
+                            WasmBuilder.br_if(b, tail_done)
+                            WasmBuilder.local_get(b, data)
+                            WasmBuilder.local_get(b, j)
+                            WasmBuilder.array_get(b, array_type)
+                            test_element(Base.unwrapva(shape.parameters[end]))
+                            WasmBuilder.local_get(b, j)
+                            WasmBuilder.i32_const(b, 1)
+                            WasmBuilder.i32_add(b)
+                            WasmBuilder.local_set(b, j)
+                            WasmBuilder.br(b, next)
+                            WasmBuilder.var"end"(b)   # next
+                            WasmBuilder.var"end"(b)   # tail_done
+                        end
+                    end
                 end
                 WasmBuilder.i32_const(b, 1)
                 WasmBuilder.br(b, result_label)

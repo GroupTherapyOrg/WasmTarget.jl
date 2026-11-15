@@ -39,6 +39,7 @@ both: canUseTypeCheckHelper refuses the helper by it, and the is checker emits w
 """
 @quarantine "julia/src/subtype.c:1348 subtype_tuple: a tuple type's subtypes are those of its arity whose every field is a subtype of the type's, so a member is a product of its fields' tests where its shape at the arity is a DataType" Base.typeintersect function record_member_tests(translator, @nospecialize(T::Type), field_checked)::Union{Nothing,Vector{Tuple{Int,DataType,DataType}}}
     local out = Tuple{Int,DataType,DataType}[]
+    local arities = record_arities(concrete_classes(translator, Tuple))
     for t in Base.uniontypes(T)
         t <: Tuple || continue
         for (id, c) in zip(concrete_class_ids(translator, Tuple), concrete_classes(translator, Tuple))
@@ -55,9 +56,17 @@ both: canUseTypeCheckHelper refuses the helper by it, and the is checker emits w
                     end
                     push!(out, (id, c, shape))
                 end
-                # the length test and a Vararg tail's loop (julia/src/subtype.c:1348 subtype_tuple) over the
-                # array class's buffer, not yet ported
-                RunTimeArity => reject!(Unquarantined("julia/src/subtype.c:1348 subtype_tuple: an is-check of $t against $c, a tuple whose arity only run time knows"), "record_member_tests: $T")
+                # the array class where the member admits an arity no record covers (open_tuple_holds): the
+                # member itself, its fixed positions and a Vararg tail's element each by its own test, after
+                # the length test (julia/src/subtype.c:1348 subtype_tuple: the length first, then each field)
+                RunTimeArity => begin
+                    open_tuple_holds(t, c, arities) || continue
+                    t isa DataType || return nothing
+                    for p in t.parameters
+                        field_checked(Base.unwrapva(p)) || return nothing
+                    end
+                    push!(out, (id, c, t))
+                end
             end
         end
     end
@@ -332,6 +341,13 @@ formal(dev/formal/TypeParamClasses.tla): where a type value is held, every liste
                 local tt = nir_tuple_type(b, st)
                 isconcretetype(tt) ? _meet_value!(out, seen, tt, at) : _meet_tuple_record!(out, seen, tt, at)
             end
+            # a tuple whose length only run time knows, Core.tuple(v...) (julia/src/builtins.c:661
+            # jl_f__apply_iterate then :946 jl_f_tuple): the record of its run-time arity where the world has
+            # one, else the array class (src/intrinsics.jl's apply_iterate arm), or the empty tuple
+            if st isa NirCall && nir_callee(st) === Core._apply_iterate && length(st.args) >= 3 && applies_tuple(st.args[3])
+                _meet_value!(out, seen, TupleRecordArray, at)
+                _meet_value!(out, seen, Tuple{}, at)
+            end
             # throw_methoderror's arguments, the tuple jl_method_error makes of them (jl_f_tuple), passed
             # as the runtime's open Tuple: the record of their count
             st isa NirCall && nir_callee(st) === Core.throw_methoderror && _meet_value!(out, seen, tuple_record_class(length(st.args) - 2), at)
@@ -370,6 +386,11 @@ formal(dev/formal/TypeParamClasses.tla): where a type value is held, every liste
     end
     return out
 end
+
+# whether `v`, the function an _apply_iterate statement applies, is Julia's tuple builtin, a literal or a constant
+# binding: jl_f__apply_iterate's `f == BUILTIN(tuple)` (julia/src/builtins.c:696), the one test of a splat into a tuple
+@quarantine "julia/src/builtins.c:661 jl_f__apply_iterate applies its function to the arguments it gathers; the tuple builtin's application is the tuple of them (:946 jl_f_tuple)" Core.tuple applies_tuple(v::NirValue)::Bool =
+    v isa NirConst ? v.c.val === Core.tuple : v isa NirGlobal && nir_binding_is_constant(v.binding) && v.binding.value === Core.tuple
 
 # the record class a tuple of static type `T` takes where its class only run time knows: its arity's,
 # a fixed one; a tuple of no fixed length brings none (the code generator rejects it where it meets it)
@@ -760,9 +781,10 @@ allocation may leave undefined whose type admits `nothing`, dart's late lowering
     local arity = tuple_record_arity(c)
     arity === nothing || return @exhaustive arity::RecordArity begin
         (f::FixedArity) => Dart2Wasm._generate_fields(Dart2Wasm._RecordClassGenerator(Dict{Dart2Wasm.RecordShape,DataType}()), Dart2Wasm.RecordShape(f.n, String[]))
-        # the array class's one field, the argument buffer (translator.dart:262 nullableObjectArrayTypeRef),
-        # not yet laid out: no producer builds the class
-        RunTimeArity => reject!(Unquarantined("pkg/dart2wasm/lib/translator.dart:262 nullableObjectArrayTypeRef: the fields of $c, a tuple whose arity only run time knows"), at)
+        # the array class's one field, the argument buffer jl_f__apply_iterate fills (julia/src/builtins.c:738
+        # arg_heap), dart's positional arguments array (translator.dart:262 nullableObjectArrayTypeRef): a
+        # mutable array, filled at a run-time length, its elements top-typed
+        RunTimeArity => ClassField[ClassField(c, 0, "data", WasmArray{Any}, false)]
     end
     # a 128-bit integer (Int128, UInt128): its two 64-bit halves, LLVM's legalization of an i128 on a
     # 64-bit target (llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp, ExpandIntegerResult:

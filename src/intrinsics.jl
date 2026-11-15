@@ -384,20 +384,27 @@ end
     local ids = isconcretetype(T) ? Int[] : concrete_class_ids(t, T)
     local classes = isconcretetype(T) ? DataType[T] : concrete_classes(t, T)
     isempty(classes) && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, which no class of the closed world is"), at)
-    # a record's arity: a fixed one; the array class's, its buffer's array.len and array.get bounded by it
-    # (Julia's emit_datatype_nfields), not yet ported
+    # a record's arity: a fixed one, or nothing for the array class's, its buffer's length at run time
+    # (Julia's emit_datatype_nfields, cgutils.cpp:1411, the bound of its typed load)
     local record_elements(c::DataType, r::RecordArity) = @exhaustive r::RecordArity begin
         (f::FixedArity) => f.n
-        RunTimeArity => reject!(Unquarantined("julia/src/cgutils.cpp:1411 emit_datatype_nfields: getfield of $T at a run-time index of a $c, a tuple whose arity only run time knows"), at)
+        RunTimeArity => nothing
     end
-    # a class's element count: a record's arity, a concrete tuple's field count
+    # a class's element count: a record's arity, a concrete tuple's field count; nothing for the array class
     local elements(c::DataType) = (local r = tuple_record_arity(c); r === nothing ? fieldcount(c) : record_elements(c, r))
     # a class's elements' Julia types: a concrete tuple's field types; a record's, each field boxed, the
-    # types T gives its elements at the record's arity (Julia's typed load reads T's element type)
+    # types T gives its elements at the record's arity (Julia's typed load reads T's element type); the
+    # array class's, every element type T gives at the arities no record covers, a Vararg's element among them
     local element_types(c::DataType) = begin
         local r = tuple_record_arity(c)
         r === nothing && return Any[fieldtypes(c)...]
         local n = record_elements(c, r)
+        if n === nothing
+            local members = Any[Base.unwrap_unionall(m) for m in Base.uniontypes(T)]
+            all(m -> m isa DataType && m <: Tuple, members) ||
+                reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, a tuple of run-time arity whose element types bind one another"), at)
+            return Any[Base.unwrapva(p) for m in members for p in (m::DataType).parameters]
+        end
         local shape = typeintersect(T, NTuple{n,Any})
         shape isa DataType && return Any[fieldtypes(shape)...]
         # a Union of tuple types of arity n: each element Julia's own type of the field at that index,
@@ -416,9 +423,48 @@ end
     translate_expression(code_gen, node.args[3], i64)
     WasmBuilder.local_set(b, i)
     # the concrete arm over `c`, its struct in local `v`, leaving the field at the read's type
+    # the array class's arm: Julia's typed load bounded by the tuple's length (emit_datatype_nfields, its
+    # bounds check BoundsError(t, i) as emit_bounds_check raises it), the buffer's element at i - 1
+    local array_arm(c::DataType, v::WasmBuilder.IR.Local) = begin
+        local info = t.class_info[c]
+        local data_field = only(class_instance_fields(c, at))
+        local array_type = (translate_type_of_field(t, data_field)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+        local data = add_local(code_gen, WasmBuilder.IR.RefType_def(array_type; nullable = false))
+        WasmBuilder.local_get(b, v)
+        WasmBuilder.struct_get(b, info.struct_, t.field_index[data_field])
+        WasmBuilder.local_set(b, data)
+        if check
+            WasmBuilder.local_get(b, i)
+            WasmBuilder.i64_const(b, 1)
+            WasmBuilder.i64_sub(b)
+            WasmBuilder.local_get(b, data)
+            WasmBuilder.array_len(b)
+            WasmBuilder.i64_extend_i32_u(b)
+            WasmBuilder.i64_lt_u(b)
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.if_(b)
+            WasmBuilder.local_get(b, v)
+            convert_type(t, b, v.type, t.top_type[])
+            WasmBuilder.local_get(b, i)
+            call(code_gen, nir_runtime_member(t.component, throw_bounds_error, at))
+            WasmBuilder.unreachable(b)
+            WasmBuilder.var"end"(b)
+        end
+        WasmBuilder.local_get(b, data)
+        WasmBuilder.local_get(b, i)
+        WasmBuilder.i32_wrap_i64(b)
+        WasmBuilder.i32_const(b, 1)
+        WasmBuilder.i32_sub(b)
+        WasmBuilder.array_get(b, array_type)
+        # unboxed by the elements' Julia class where they share one (the record arms' boxed_class)
+        local E = Union{element_types(c)...}
+        convert_type(t, b, WasmBuilder.unpacked(array_type.element_type[].type), R; boxed_class = E isa DataType && isconcretetype(E) ? E : nothing)
+        nothing
+    end
     local concrete_arm(c::DataType, v::WasmBuilder.IR.Local) = begin
         local info = t.class_info[c]
         local n = elements(c)
+        n === nothing && return array_arm(c, v)
         if check
             WasmBuilder.local_get(b, i)
             WasmBuilder.i64_const(b, 1)
@@ -653,6 +699,9 @@ end
      f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) &&
         return generate_static_intrinsic(self, Val(:memory), f, args, nothing)
     f === Core.isdefined && length(args) in (2, 3) && return generate_static_intrinsic(self, Val(:isdefined), f, args)
+    # a splat, f(xs...): jl_f__apply_iterate (builtins.c:661); into Julia's tuple builtin, a tuple whose length
+    # only run time knows
+    f === Core._apply_iterate && length(args) >= 2 && return generate_static_intrinsic(self, Val(:apply_iterate), f, args)
     # typeof of a value only run time knows: Julia's jl_typeof, a read of the value's tag
     f === Core.typeof && length(args) == 1 && return generate_static_intrinsic(self, Val(:to_typeof), args; tag_of_value = true)
     f === Core.apply_type && return generate_static_intrinsic(self, Val(:run_time_type), f, args)
@@ -1149,6 +1198,60 @@ end
     WasmBuilder.struct_get(b, sv_info.struct_, t.field_index[data])
     WasmBuilder.local_set(b, elements)
     local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(concrete_class_ids(t, Tuple), concrete_classes(t, Tuple))]
+    # the array class's arm (src/julia/classes.jl TupleRecordArray): types.length against the buffer's,
+    # then each element by its type (jl_subtype_typeof), at the buffer's index
+    local check_record_array(info::ClassInfo, data_field::ClassField) = begin
+        local array_type = (translate_type_of_field(t, data_field)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+        local buffer = add_local(code_gen, WasmBuilder.IR.RefType_def(array_type; nullable = false))
+        local k = add_local(code_gen, i32)
+        local arm = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
+        WasmBuilder.local_get(b, record)
+        WasmBuilder.ref_cast(b, info.non_nullable_type)
+        WasmBuilder.struct_get(b, info.struct_, t.field_index[data_field])
+        WasmBuilder.local_set(b, buffer)
+        # if (types.length != shape.numFields) return false;
+        WasmBuilder.i32_const(b, 0)
+        WasmBuilder.local_get(b, elements)
+        WasmBuilder.array_len(b)
+        WasmBuilder.local_get(b, buffer)
+        WasmBuilder.array_len(b)
+        WasmBuilder.i32_ne(b)
+        WasmBuilder.br_if(b, arm)
+        WasmBuilder.drop(b)
+        WasmBuilder.i32_const(b, 0)
+        WasmBuilder.local_set(b, k)
+        local done = WasmBuilder.block(b)
+        local next = WasmBuilder.loop(b)
+        WasmBuilder.local_get(b, k)
+        WasmBuilder.local_get(b, buffer)
+        WasmBuilder.array_len(b)
+        WasmBuilder.i32_ge_u(b)
+        WasmBuilder.br_if(b, done)
+        # if (!_isSubtype($k, types[k])) return false; Julia's element by its type
+        WasmBuilder.i32_const(b, 0)
+        WasmBuilder.local_get(b, buffer)
+        WasmBuilder.local_get(b, k)
+        WasmBuilder.array_get(b, array_type)
+        WasmBuilder.local_get(b, elements)
+        WasmBuilder.local_get(b, k)
+        WasmBuilder.array_get(b, data_type)
+        WasmBuilder.ref_cast(b, type_param::WasmBuilder.IR.RefType)
+        call_reference(t, field_test_mi, b)
+        WasmBuilder.i32_eqz(b)
+        WasmBuilder.br_if(b, arm)
+        WasmBuilder.drop(b)
+        WasmBuilder.local_get(b, k)
+        WasmBuilder.i32_const(b, 1)
+        WasmBuilder.i32_add(b)
+        WasmBuilder.local_set(b, k)
+        WasmBuilder.br(b, next)
+        WasmBuilder.var"end"(b)   # next
+        WasmBuilder.var"end"(b)   # done
+        # return true
+        WasmBuilder.i32_const(b, 1)
+        WasmBuilder.var"end"(b)   # arm
+        nothing
+    end
     WasmBuilder.local_get(b, record)
     load_class_id(b, t, top_nn)
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
@@ -1156,11 +1259,12 @@ end
             r === nothing && reject!(Internal("$at: class $cls under the open tuple type is no record"), at)
             local n = @exhaustive r::RecordArity begin
                 (f::FixedArity) => f.n
-                # the length test against the buffer's and a Vararg member's loop, not yet ported
-                RunTimeArity => reject!(Unquarantined("sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance: the general arm's test of a $cls, a tuple whose arity only run time knows"), at)
+                RunTimeArity => nothing
             end
             local info = t.class_info[cls]
             local fields = class_instance_fields(cls, at)
+            # the array class: the same tests over its buffer, its length the tuple's, each element in a loop
+            n === nothing && return check_record_array(info, only(fields))
             local arm = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
             # if (types.length != shape.numFields) return false;
             WasmBuilder.i32_const(b, 0)
@@ -2051,6 +2155,246 @@ end
     return rinfo.non_nullable_type
 end
 
+# Julia's splat into its tuple builtin, `Core.tuple(xs...)`: jl_f__apply_iterate (julia/src/builtins.c:661) gathers the
+# arguments of every segment into one buffer, its arg_heap (:738), an Array's or a Memory's elements read in place and an
+# #undef one raising UndefRefError (:820-823), a tuple's fields one by one (:780 jl_fieldref); then jl_f_tuple (:946) finds the tuple's
+# type in Julia's type cache by its elements (jltypes.c:1133 lookup_typevalue, a hit) or makes it (a miss). Here the
+# buffer is dart's positional arguments array (translator.dart:262 nullableObjectArrayTypeRef), each element boxed to the
+# top type, each Array or Memory element read by the memory arm's memoryrefget (one read of an element, its
+# UndefRefError); the lookup is by the arity alone: no element, Julia's one empty tuple; an arity whose record the closed
+# world has, that record (src/julia/classes.jl TupleRecord), its fields the buffer's elements; any other, the array
+# class holding the buffer (TupleRecordArray), never a type made at run time (A68S3). The arity alone picks the class, so
+# each tuple has one representation (formal(dev/formal/TupleRecordSplat.tla) OneRepresentation, EgalAgrees). Julia's
+# differs: its cache makes the missing tuple type, which WasmTarget never does. A function other than the tuple builtin,
+# and a segment of a kind other than a SimpleVector, a concrete tuple, an Array or a Memory, reject, located. Leaves the tuple at the
+# top type, non-null.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:apply_iterate}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local I32, I64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's _apply_iterate on $(join((dart_type_of(self, a) for a in args), ", "))"
+    applies_tuple(args[2]) ||
+        reject!(Unported("julia/src/builtins.c:661 jl_f__apply_iterate: a splat into $(dart_type_of(self, args[2])), no builtin of Julia's whose application WasmTarget ports"), at)
+    local top = t.top_type[]
+    local top_nn = t.top_type_non_nullable[]
+    local fields_of(T::Type) = generate_static_intrinsic(self, Val(:fields_of), T, at)
+    local field(fs::Dict{String,ClassField}, name::String) = generate_static_intrinsic(Val(:field), fs, name, at)
+    local new_struct(info::ClassInfo, fs::Dict{String,ClassField}, vals::Dict{String,Function}) = generate_static_intrinsic(self, Val(:new_struct), info, fs, vals)
+    local boxed(T::Type) = T isa DataType && isconcretetype(T) ? T : nothing
+    # each segment: its kind, its value in a local, and its count pushed as an i32
+    local segments = Tuple{Symbol,DataType,WasmBuilder.IR.Local}[]
+    for a in args[3:end]
+        local S = dart_type_of(self, a)
+        local kind = S === Core.SimpleVector ? :svec :
+                     S isa DataType && isconcretetype(S) && S <: Tuple ? :tuple :
+                     S isa DataType && isconcretetype(S) && S <: Array ? :array :
+                     S isa DataType && isconcretetype(S) && S <: GenericMemory && S.parameters[1] === :not_atomic ? :memory :
+                     reject!(Unquarantined("julia/src/builtins.c:661 jl_f__apply_iterate: a segment of type $S, no SimpleVector, concrete tuple, Array or Memory, whose arguments WasmTarget does not gather"), at)
+        local info = t.class_info[S]
+        local v = add_local(code_gen, info.non_nullable_type)
+        translate_expression(code_gen, a, v.type)
+        WasmBuilder.local_set(b, v)
+        push!(segments, (kind, S, v))
+    end
+    # an Array's length, the product of its dimensions (jl_array_len); a Memory's, its length field
+    local seg_length(kind::Symbol, S::DataType, v::WasmBuilder.IR.Local) = begin
+        if kind === :tuple
+            WasmBuilder.i32_const(b, fieldcount(S))
+        elseif kind === :svec
+            local vinfo, vfs = fields_of(S)
+            WasmBuilder.local_get(b, v)
+            WasmBuilder.struct_get(b, vinfo.struct_, t.field_index[field(vfs, "data")])
+            WasmBuilder.array_len(b)
+        elseif kind === :memory
+            local minfo, mfs = fields_of(S)
+            WasmBuilder.local_get(b, v)
+            WasmBuilder.struct_get(b, minfo.struct_, t.field_index[field(mfs, "length")])
+            WasmBuilder.i32_wrap_i64(b)
+        else
+            local ainfo, afs = fields_of(S)
+            local ST = fieldtype(S, :size)
+            local sinfo, sfs = fields_of(ST)
+            WasmBuilder.i64_const(b, 1)
+            for d in 1:fieldcount(ST)
+                WasmBuilder.local_get(b, v)
+                WasmBuilder.struct_get(b, ainfo.struct_, t.field_index[field(afs, "size")])
+                WasmBuilder.struct_get(b, sinfo.struct_, t.field_index[field(sfs, string(d))])
+                WasmBuilder.i64_mul(b)
+            end
+            WasmBuilder.i32_wrap_i64(b)
+        end
+    end
+    # the count, the sum of the segments' (builtins.c:704-725)
+    local n = add_local(code_gen, I32)
+    WasmBuilder.i32_const(b, 0)
+    for (kind, S, v) in segments
+        seg_length(kind, S, v)
+        WasmBuilder.i32_add(b)
+    end
+    WasmBuilder.local_set(b, n)
+    # the buffer, the array class's field (arg_heap), filled in order
+    local ainfo = get(t.class_info, TupleRecordArray, nothing)
+    ainfo === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: no class info for $TupleRecordArray, which the walk meets at every splat into a tuple"), at)
+    local data_field = only(class_instance_fields(TupleRecordArray, at))
+    local array_type = (translate_type_of_field(t, data_field)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+    local buffer = add_local(code_gen, WasmBuilder.IR.RefType_def(array_type; nullable = false))
+    local element = WasmBuilder.unpacked(array_type.element_type[].type)
+    WasmBuilder.local_get(b, n)
+    WasmBuilder.array_new_default(b, array_type)
+    WasmBuilder.local_set(b, buffer)
+    local at_k = add_local(code_gen, I32)
+    WasmBuilder.i32_const(b, 0)
+    WasmBuilder.local_set(b, at_k)
+    # the value on the stack, of wasm type `vt` and Julia type `T`, stored at the next index
+    local store(fill::Function, vt::WasmBuilder.IR.ValueType, T::Type) = begin
+        local x = add_local(code_gen, element)
+        fill()
+        convert_type(t, b, vt, element; boxed_class = boxed(T))
+        WasmBuilder.local_set(b, x)
+        WasmBuilder.local_get(b, buffer)
+        WasmBuilder.local_get(b, at_k)
+        WasmBuilder.local_get(b, x)
+        WasmBuilder.array_set(b, array_type)
+        WasmBuilder.local_get(b, at_k)
+        WasmBuilder.i32_const(b, 1)
+        WasmBuilder.i32_add(b)
+        WasmBuilder.local_set(b, at_k)
+    end
+    for (kind, S, v) in segments
+        if kind === :tuple
+            # each field, jl_fieldref (builtins.c:780)
+            local tinfo = t.class_info[S]
+            for (k, fld) in enumerate(class_instance_fields(S, at))
+                local index = t.field_index[fld]
+                local storage = tinfo.struct_.fields[index + 1].type
+                store(WasmBuilder.unpacked(storage), fieldtype(S, k)) do
+                    WasmBuilder.local_get(b, v)
+                    if storage isa WasmBuilder.IR.PackedType
+                        fieldtype(S, k) <: Signed ? WasmBuilder.struct_get_s(b, tinfo.struct_, index) : WasmBuilder.struct_get_u(b, tinfo.struct_, index)
+                    else
+                        WasmBuilder.struct_get(b, tinfo.struct_, index)
+                    end
+                end
+            end
+            continue
+        elseif kind === :svec
+            # each element, already a reference of the top type (builtins.c:766 jl_svecref)
+            local vinfo, vfs = fields_of(S)
+            local vdata = field(vfs, "data")
+            local vtype = (translate_type_of_field(t, vdata)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType
+            local count = add_local(code_gen, I32)
+            local j = add_local(code_gen, I32)
+            seg_length(kind, S, v)
+            WasmBuilder.local_set(b, count)
+            WasmBuilder.i32_const(b, 0)
+            WasmBuilder.local_set(b, j)
+            local done = WasmBuilder.block(b)
+            local next = WasmBuilder.loop(b)
+            WasmBuilder.local_get(b, j)
+            WasmBuilder.local_get(b, count)
+            WasmBuilder.i32_ge_u(b)
+            WasmBuilder.br_if(b, done)
+            store(WasmBuilder.unpacked(vtype.element_type[].type), Any) do
+                WasmBuilder.local_get(b, v)
+                WasmBuilder.struct_get(b, vinfo.struct_, t.field_index[vdata])
+                WasmBuilder.local_get(b, j)
+                WasmBuilder.array_get(b, vtype)
+            end
+            WasmBuilder.local_get(b, j)
+            WasmBuilder.i32_const(b, 1)
+            WasmBuilder.i32_add(b)
+            WasmBuilder.local_set(b, j)
+            WasmBuilder.br(b, next)
+            WasmBuilder.var"end"(b)   # next
+            WasmBuilder.var"end"(b)   # done
+            continue
+        end
+        # an Array's or a Memory's elements in order (builtins.c:785-843): the element at offset j from the
+        # segment's reference, read by memoryrefget, an #undef one raising UndefRefError
+        local RT = kind === :array ? fieldtype(S, :ref) : GenericMemoryRef{S.parameters...}
+        local rinfo, rfs = fields_of(RT)
+        local base = add_local(code_gen, I64)
+        local mem = add_local(code_gen, WasmBuilder.with_nullability(repr(t.class_info[kind === :array ? fieldtype(RT, :mem) : S]), false))
+        if kind === :array
+            local sinfo, sfs = fields_of(S)
+            WasmBuilder.local_get(b, v)
+            WasmBuilder.struct_get(b, sinfo.struct_, t.field_index[field(sfs, "ref")])
+            local r0 = add_local(code_gen, WasmBuilder.with_nullability(repr(rinfo), false))
+            WasmBuilder.local_tee(b, r0)
+            WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[field(rfs, "ptr_or_offset")])
+            WasmBuilder.local_set(b, base)
+            WasmBuilder.local_get(b, r0)
+            WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[field(rfs, "mem")])
+            WasmBuilder.local_set(b, mem)
+        else
+            WasmBuilder.i64_const(b, 0)
+            WasmBuilder.local_set(b, base)
+            WasmBuilder.local_get(b, v)
+            WasmBuilder.local_set(b, mem)
+        end
+        local len = add_local(code_gen, I32)
+        seg_length(kind, S, v)
+        WasmBuilder.local_set(b, len)
+        local j = add_local(code_gen, I32)
+        local r = add_local(code_gen, WasmBuilder.with_nullability(repr(rinfo), false))
+        WasmBuilder.i32_const(b, 0)
+        WasmBuilder.local_set(b, j)
+        local done = WasmBuilder.block(b)
+        local next = WasmBuilder.loop(b)
+        WasmBuilder.local_get(b, j)
+        WasmBuilder.local_get(b, len)
+        WasmBuilder.i32_ge_u(b)
+        WasmBuilder.br_if(b, done)
+        new_struct(rinfo, rfs, Dict{String,Function}(
+            "ptr_or_offset" => () -> (WasmBuilder.local_get(b, base); WasmBuilder.local_get(b, j); WasmBuilder.i64_extend_i32_u(b); WasmBuilder.i64_add(b)),
+            "mem" => () -> WasmBuilder.local_get(b, mem)))
+        WasmBuilder.local_set(b, r)
+        local read = Ref{Any}(nothing)
+        store(top, eltype(S)) do
+            read[] = generate_static_intrinsic(self, Val(:memory), Core.memoryrefget,
+                NirValue[NirConst(Core.Const(nothing)), NirConst(Core.Const(:not_atomic)), NirConst(Core.Const(true))], (RT, r))
+            read[] === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: memoryrefget of a $RT read no element"), at)
+            convert_type(t, b, read[]::WasmBuilder.IR.ValueType, top; boxed_class = boxed(eltype(S)))
+        end
+        WasmBuilder.local_get(b, j)
+        WasmBuilder.i32_const(b, 1)
+        WasmBuilder.i32_add(b)
+        WasmBuilder.local_set(b, j)
+        WasmBuilder.br(b, next)
+        WasmBuilder.var"end"(b)   # next
+        WasmBuilder.var"end"(b)   # done
+    end
+    # jl_f_tuple's lookup by the arity: the empty tuple, the record of a covered arity, else the array class
+    local covered = sort!(collect(record_arities(info.cls for info in t.classes[] if info.cls !== nothing)))
+    local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[top_nn])
+    for arity in covered
+        WasmBuilder.local_get(b, n)
+        WasmBuilder.i32_const(b, arity)
+        WasmBuilder.i32_eq(b)
+        WasmBuilder.if_(b)
+        if arity == 0
+            translate_expression(code_gen, NirConst(Core.Const(())), top_nn)
+        else
+            local rinfo = t.class_info[tuple_record_class(arity)]
+            local rfields = class_instance_fields(rinfo.cls, at)
+            local vals = Dict{String,Function}()
+            for (k, fld) in enumerate(rfields)
+                local ft = WasmBuilder.unpacked(rinfo.struct_.fields[t.field_index[fld] + 1].type)
+                vals[fld.name] = () -> (WasmBuilder.local_get(b, buffer); WasmBuilder.i32_const(b, k - 1);
+                    WasmBuilder.array_get(b, array_type); convert_type(t, b, element, ft))
+            end
+            new_struct(rinfo, Dict{String,ClassField}(fld.name => fld for fld in rfields), vals)
+        end
+        WasmBuilder.br(b, done)
+        WasmBuilder.var"end"(b)
+    end
+    0 in covered || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: no class info for Tuple{}, which the walk meets at every splat into a tuple"), at)
+    new_struct(ainfo, Dict{String,ClassField}(data_field.name => data_field), Dict{String,Function}(data_field.name => () -> WasmBuilder.local_get(b, buffer)))
+    WasmBuilder.var"end"(b)   # done
+    return top_nn
+end
+
 # Julia's `isdefined(x, f)` on a struct field, Julia's codegen arm (codegen.cpp:4864, emit_builtin_call's
 # isdefined): a field named by a constant Symbol or Int of a concrete struct; an order that does not
 # fit the field (an atomic order on a field that is not atomic, :not_atomic on one that is, any order
@@ -2630,16 +2974,26 @@ end
     WasmBuilder.local_tee(b, o)
     load_class_id(b, t, o.type)
     local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(ids, classes)]
-    # each arm a record's arity, the array class's its buffer's array.len (not yet ported), or a concrete class's field count
+    # each arm a record's arity, or a concrete class's field count, a constant; the array class's its buffer's
+    # length, the tuple's own (Julia's emit_datatype_nfields of a type made at run time, cgutils.cpp:1411)
     local field_count(c::DataType) = begin
         local r = tuple_record_arity(c)
-        r === nothing && return fieldcount(c)
-        return @exhaustive r::RecordArity begin
-            (f::FixedArity) => f.n
-            RunTimeArity => reject!(Unquarantined("julia/src/cgutils.cpp:1411 emit_datatype_nfields: nfields of a $c, a tuple whose arity only run time knows"), at)
+        r === nothing && return WasmBuilder.i64_const(b, fieldcount(c))
+        @exhaustive r::RecordArity begin
+            (f::FixedArity) => WasmBuilder.i64_const(b, f.n)
+            RunTimeArity => begin
+                local info = t.class_info[c]
+                local data_field = only(class_instance_fields(c, at))
+                WasmBuilder.local_get(b, o)
+                WasmBuilder.ref_cast(b, info.non_nullable_type)
+                WasmBuilder.struct_get(b, info.struct_, t.field_index[data_field])
+                WasmBuilder.array_len(b)
+                WasmBuilder.i64_extend_i32_u(b)
+            end
         end
+        nothing
     end
-    class_id_search(b, ranges, WasmBuilder.IR.ValueType[i64], c -> WasmBuilder.i64_const(b, field_count(c)), () -> WasmBuilder.unreachable(b))
+    class_id_search(b, ranges, WasmBuilder.IR.ValueType[i64], field_count, () -> WasmBuilder.unreachable(b))
     return i64
 end
 

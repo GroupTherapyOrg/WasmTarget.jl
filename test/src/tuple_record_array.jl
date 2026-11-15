@@ -66,6 +66,42 @@ end
 
 rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(); end
 
+module SplatCases
+# Core.tuple(v...), a tuple whose length only run time knows; no concrete tuple type of 7 elements in this program (an
+# isa against NTuple{7,Int64} would bring that class and its record: a hit)
+@noinline mk(v::Vector{Int64}) = Core.tuple(v...)
+miss(n::Int64) = (t = mk(collect(1:n)); nfields(t) * 100 + t[n])
+# a 3-tuple literal brings its arity's record: the splat's 3 elements are that record, === the literal
+hit(n::Int64) = mk(fill(n, 3)) === (n, n, n) ? 1 : 2
+# a splat into a function that is not the tuple builtin, none of which WasmTarget ports
+@noinline mksvec(v::Vector{Int64}) = Core.svec(v...)
+other(n::Int64) = length(mksvec(collect(1:n)))
+end
+
+world_of(f, at) = W.closed_world_classes(W.build_nir(W.check_subset(f, at, "tuple_record_array", Base.get_world_counter()), "tuple_record_array"), "tuple_record_array")
+
+# Core.tuple(v...): jl_f__apply_iterate's buffer and jl_f_tuple's lookup by the arity (src/intrinsics.jl apply_iterate):
+# the world's record where it has one, else the array class; the corpus's runtime_length_tuple cases run it against
+# native (test/corpus/runtime_length_tuple_splat.jl)
+@testset "a splat into a tuple: its arity's record where the world has one, else the array class" begin
+    # the miss: a world with the array class and no record of 7 elements, so the splat's 7-tuple is the array class
+    local miss = world_of(SplatCases.miss, (Int64,))
+    @test W.TupleRecordArray in miss && Tuple{} in miss && !(W.TupleRecord{7} in miss)
+    # the hit: the literal's record is in the world beside the array class
+    local hit = world_of(SplatCases.hit, (Int64,))
+    @test W.TupleRecord{3} in hit && W.TupleRecordArray in hit
+    local cases = WTChild.RunCase[]
+    for (f, n) in ((SplatCases.miss, Int64(7)), (SplatCases.miss, Int64(6)), (SplatCases.hit, Int64(3)))
+        push!(cases, WTChild.compiled_case("$(nameof(f))($n)", W.compile, f, (n,)))
+    end
+    for r in WTChild.run_cases(cases)
+        @test (r.label => r.why) == (r.label => "")
+    end
+    # a splat into another function rejects at the statement, located
+    local e = rejection(() -> W.compile(SplatCases.other, (Int64,); optimize = false))
+    @test e !== nothing && occursin("julia/src/builtins.c:661 jl_f__apply_iterate", sprint(showerror, e))
+end
+
 # the module a match is loaded into, to show a match missing an arm refuses its load
 module ExhaustiveProbe
 using WasmTarget: @exhaustive, RecordArity, FixedArity
@@ -95,9 +131,8 @@ end
     @test !W.open_tuple_holds(Tuple{Vararg{Int64}}, Int64, covered)
     # the array class's typeof is its elements' type, made at run time: refused as every record's
     @test W.record_typeof_unmade(W.TupleRecordArray) && W.record_typeof(Tuple{Vararg{Int64}}, W.TupleRecordArray) === nothing
-    # its fields are not laid out yet: no producer builds the class, and a consumer reaching it rejects, located
-    local e = rejection(() -> W.class_instance_fields(W.TupleRecordArray, "tuple_record_array"))
-    @test e !== nothing && e.rejection isa W.Unquarantined && occursin("translator.dart:262 nullableObjectArrayTypeRef", e.rejection.row)
+    # its one field, the argument buffer jl_f__apply_iterate fills: a mutable array of top-typed elements
+    @test [(f.name, f.type, f.mutable) for f in W.class_instance_fields(W.TupleRecordArray, "tuple_record_array")] == [("data", W.WasmArray{Any}, false)]
     # a match over the sum without the array class's arm, or with a wildcard, refuses its load, located (D8)
     local missing = try
         Core.eval(ExhaustiveProbe, :(missing_arm(r) = @exhaustive r::RecordArity begin
