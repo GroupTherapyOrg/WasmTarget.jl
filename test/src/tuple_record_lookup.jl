@@ -104,16 +104,23 @@ o_vararg(n::Int64) = (w = any_pair(1); s = AnySlot(mk_int(collect(1:n))); T = ty
 @noinline mayfail(n::Int64) = n > 100 ? error("x") : 0
 b_try(n::Int64) = (try; s = pair(n); T = typeof(s.x); w = mayfail(n); (T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2) + w; catch; 5; end)
 
-# C size: a chain T_k = Tuple{T_{k-1},T_{k-1}}, every level a concrete tuple the world holds
+# C size: a chain T_k = Tuple{T_{k-1},T_{k-1}}, every level a concrete tuple the world holds; each consumer answers the
+# code of the exact type: the chain of depth d over Int64 (n = 1), over Float64 (2), the one of depth d - 1 (3), Int64
+nest_value(x, d::Int) = (for _ in 1:d; x = :(($x, $x)); end; x)
+nest_type(t, d::Int) = (for _ in 1:d; t = :(Tuple{$t,$t}); end; t)
 for d in (2, 4, 6, 8)
     local build = Symbol(:chain, d)
     local cons = Symbol(:c_chain, d)
-    local body = :(n)
-    for _ in 1:d
-        body = :(($body, $body))
-    end
-    @eval @noinline $build(n::Int64) = AnySlot(n > 0 ? $body : n)
-    @eval $cons(n::Int64) = (T = typeof($build(n).x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)
+    @eval @noinline $build(n::Int64) = AnySlot(n == 1 ? $(nest_value(:n, d)) : n == 2 ? $(nest_value(:(Float64(n)), d)) :
+                                               n == 3 ? $(nest_value(:n, d - 1)) : n)
+    @eval $cons(n::Int64) = (T = typeof($build(n).x); @code_of T $(nest_type(:Int64, d)) $(nest_type(:Float64, d)) $(nest_type(:Int64, d - 1)) Int64)
+end
+# two typeof sites of the chain in one function: each calls the one _recordRuntimeType of its record class
+for d in (4, 8)
+    local build = Symbol(:chain, d)
+    local types = (nest_type(:Int64, d), nest_type(:Float64, d), nest_type(:Int64, d - 1), :Int64)
+    @eval $(Symbol(:c_chain, d, :_twice))(n::Int64) = (A = typeof($build(n).x); B = typeof($build(n + 1).x);
+                                                       (@code_of A $(types...)) + 10 * (@code_of B $(types...)))
 end
 # C size: 20 two-tuple types, nesting three deep
 const TWENTY = [:(Int64(n)), :(Float64(n)), :(UInt8(n)), :(Int8(n)), :(Int32(n))]
@@ -123,14 +130,17 @@ const TWENTY = [:(Int64(n)), :(Float64(n)), :(UInt8(n)), :(Int8(n)), :(Int32(n))
     n == 22 && return AnySlot(((((n,), n), n), 1.0))
     return AnySlot(n)
 end
-c_twenty(n::Int64) = (T = typeof(twenty(n).x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : T === Tuple{Tuple{Tuple{Tuple{Int64},Int64},Int64},Float64} ? 4 : 2)
+# the code of each of its 22 tuple types (n = 1..22, the 20 pairs in the order twenty builds them) and of Int64 (23)
+const TWENTY_T = [:Int64, :Float64, :UInt8, :Int8, :Int32]
+@eval c_twenty(n::Int64) = (T = typeof(twenty(n).x);
+                            @code_of T $([:(Tuple{$(TWENTY_T[i]),$(TWENTY_T[j])}) for i in 1:4 for j in 1:5]...) Tuple{Tuple{Tuple{Int64},Int64},Int64} Tuple{Tuple{Tuple{Tuple{Int64},Int64},Int64},Float64} Int64)
 end
 
 const RUNS = [(Q.c_prims, 1:11), (Q.c_refs, 1:9), (Q.c_tvals, 1:6), (Q.c_uval, (1, 2, 6)), (Q.c_nests, 1:9), (Q.c_partial, (6,)),
               (Q.c_partial2, (1, 6)), (Q.c_named_only, (1, 6)), (Q.c_isa_only, (1, 6)), (Q.c_field_only, (1, 6)), (Q.c_ret_only, (1, 6)),
               (Q.r_egal, (1, 4)), (Q.r_isa, (1, 4)), (Q.r_param, (1, 4)), (Q.r_typeoftype, (1, 4)), (Q.o_union_nothing, (1, 3)),
-              (Q.o_integer_w, (1, 3)), (Q.b_try, (6,)), (Q.c_twenty, (1, 7, 20, 21, 22, 23)), (Q.c_chain2, (1,)), (Q.c_chain4, (1,)),
-              (Q.c_chain6, (1,)), (Q.c_chain8, (1,))]
+              (Q.o_integer_w, (1, 3)), (Q.b_try, (6,)), (Q.c_twenty, (1, 7, 13, 20, 21, 22, 23)), (Q.c_chain2, 1:4), (Q.c_chain4, 1:4),
+              (Q.c_chain6, 1:4), (Q.c_chain8, 1:4), (Q.c_chain4_twice, (1, 2)), (Q.c_chain8_twice, (1, 2))]
 
 @testset "the review's programs: typeof of a tuple record answered from its fields, as native" begin
     local cases = WTChild.RunCase[]
@@ -147,6 +157,40 @@ const RUNS = [(Q.c_prims, 1:11), (Q.c_refs, 1:9), (Q.c_tvals, 1:6), (Q.c_uval, (
         local m = match(r"unported: the (dart|Julia-only) definition (.*)", r.why)
         @test m !== nothing && startswith(m.captures[2], "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: ")
     end
+end
+
+# the size the lookup's port exists for (e49812ea, dart's record_class_generator.dart:653 _generateRecordRuntimeType, one
+# generated member per record class compiled once through FunctionCollector.getFunction): a typeof of a record its
+# operand does not pin is one call of its record class's _recordRuntimeType, so the module defines that function once
+# however deep the nesting and however many sites, the site's code is the same at depth 8 as at depth 4, and the
+# member's grows with the rows it tests, never with 2^depth. Read from the defined functions of codegen's module, the
+# phases compile runs (src/compile.jl: cfe, tfa, then codegen's translate, whose modules it serializes)
+@testset "C size: one _recordRuntimeType function per record class, a typeof site's code the same at every depth" begin
+    local D = W.Dart2Wasm
+    local function defined(f)
+        local options = D.WasmCompilerOptions(; main_uri = "", output_file = "main.wasm")
+        options.translator_options.standalone = true
+        options.translator_options.generate_source_maps = false
+        local tfa = D._run_tfa_phase(D._run_cfe_phase(options, W.check_subset(f, (Int64,), "tuple_record_lookup", Base.get_world_counter())), options)
+        local t = D.Translator(tfa.component, D.build_module_output_data(tfa.module_strategy), options.translator_options)
+        return [(fn.function_name, length(fn.body[].instructions)) for (_, m) in D.translate(t, nothing) for fn in m._functions[].defined]
+    end
+    local member = "WasmTarget.TupleRecord{2}._recordRuntimeType"
+    local size_of(fs, name) = only(n for (s, n) in fs if s == name)
+    local site(f) = "$(parentmodule(f)).$(nameof(f))(::Int64)"
+    local f4, f8, f4x2, f8x2 = defined(Q.c_chain4), defined(Q.c_chain8), defined(Q.c_chain4_twice), defined(Q.c_chain8_twice)
+    for fs in (f4, f8, f4x2, f8x2)
+        @test count(((s, _),) -> s == member, fs) == 1
+    end
+    @test size_of(f8, site(Q.c_chain8)) == size_of(f4, site(Q.c_chain4))
+    @test size_of(f8, member) <= 2 * size_of(f4, member)
+    # two sites call the same member, which the second site does not make larger, and are the same code at either depth
+    @test size_of(f8x2, member) == size_of(f8, member) && size_of(f4x2, member) == size_of(f4, member)
+    @test size_of(f8x2, site(Q.c_chain8_twice)) == size_of(f4x2, site(Q.c_chain4_twice))
+    # each consumer answers the code of its exact type natively: the cases above read these in both modules
+    @test [f(n) for f in (Q.c_chain2, Q.c_chain4, Q.c_chain6, Q.c_chain8) for n in 1:4] == repeat(1:4, 4)
+    @test [f(n) for f in (Q.c_chain4_twice, Q.c_chain8_twice) for n in 1:2] == [21, 32, 21, 32]
+    @test [Q.c_twenty(n) for n in 1:23] == 1:23
 end
 
 # the reference of a member the record class generator generates (src/julia/kernel.jl RecordMemberReference): a record
