@@ -39,6 +39,33 @@ a mutable object.
 end
 
 """
+    StringObject(s)
+
+A String constant's key among the program's constants (src/constants.jl ensureConstant): the String
+object the program's IR holds, compared by its address, never by its contents, which `===` compares.
+Natively a String is an object with an address, and its data id is that address
+(julia/base/abstractarray.jl:1591, a byte Memory over it). Julia shares equal literals as one object:
+compressed IR roots each String literal in the global roots by content (julia/src/ircode.c:175
+jl_encode_as_indexed_root calls jl_as_global_root), so two equal literals, in one method or two, are
+one object in the IR and natively. A const binding's String is its own object: the IR holds the binding
+(a NirGlobal), whose value no rooting merged with a literal of equal contents. Keyed by the object, the
+module's constants share exactly where Julia's objects are one. Natively (code_typed and the NIR of one
+program): the literals of two methods and both of one method are one address, and a const binding of
+equal contents another.
+
+precedent(julia: src/staticdata.c:2987 jl_as_global_root, Julia's own table of rooted objects, a String
+among them, which hands back the one object it holds). dart keys its constants by value (constants.dart:154
+constantInfo); Julia's differs because a String's identity is observable (dataids).
+"""
+@quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "Julia's literal Strings are objects, rooted once by contents in compressed IR, and a const binding's String is its own object; dart keys its constants by value, so a String constant is keyed by the object the IR holds" Core.String struct StringObject
+    s::String
+end
+@quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "two String constants are one exactly when the IR holds one object, told by its address" Base.pointer_from_objref Base.:(==)(a::StringObject, b::StringObject) =
+    pointer_from_objref(a.s) == pointer_from_objref(b.s)
+@quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "a String constant's hash is its object's address, as its equality" Base.pointer_from_objref Base.hash(k::StringObject, h::UInt) =
+    hash(UInt(pointer_from_objref(k.s)), h)
+
+"""
     WasmArrayLiteral(element_type, mutable, owner, entries)
 
 The value of a constant `WasmArray<element_type>` (`mutable`) or `ImmutableWasmArray<element_type>`:

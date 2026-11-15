@@ -79,7 +79,7 @@ runtime type representation is (types.dart).
 """
 @parity "dart2wasm/lib/constants.dart:152 Constants" mutable struct Constants
     const translator::KernelNodes
-    const constant_info::Dict{Union{NirConst,DummyValueConstant},ConstantInfo}
+    const constant_info::Dict{Union{NirConst,DummyValueConstant,StringObject},ConstantInfo}
     const value_type_constants::Dict{NirConst,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}
     const _byte_segments::LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.DataSegmentBuilder}
     const type_info::Late{ClassInfo}
@@ -103,7 +103,7 @@ runtime type representation is (types.dart).
     # :201 is its outer function; a late field with an initializer reads the constants themselves
     function Constants(::Val{:_}, translator::KernelNodes)
         local self
-        self = new(translator, Dict{Union{NirConst,DummyValueConstant},ConstantInfo}(), Dict{NirConst,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}(),
+        self = new(translator, Dict{Union{NirConst,DummyValueConstant,StringObject},ConstantInfo}(), Dict{NirConst,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}(),
             LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.DataSegmentBuilder}(),
             Late{ClassInfo}("dart2wasm/lib/constants.dart:157 Constants.typeInfo"),
             Late{_ConstantAccessor}("dart2wasm/lib/constants.dart:159 Constants._constantAccessor", () -> _ConstantAccessor(self.translator)),
@@ -727,7 +727,10 @@ end
         constant = _lower_type_to_constant(self.constants, constant.c.val)
     end
 
-    local info = get(self.constants.constant_info, constant, nothing)
+    # a String constant is keyed by the object the IR holds (StringObject, src/julia/wasm_array.jl), any other by
+    # its value, dart's canonicalization
+    local key = constant isa NirConst && constant.c.val isa String ? StringObject(constant.c.val) : constant
+    local info = get(self.constants.constant_info, key, nothing)
     if info === nothing
         # a constant met again on the way down reaches itself through its fields: a cycle, which only
         # a mutable value makes and no constant expression builds (dart's constants are a DAG)
@@ -775,7 +778,7 @@ end
                 visit_instance_constant(tv, ic)
             end
             t == info.type || reject!(Internal("dart2wasm/lib/constants.dart:808 ConstantCreator.ensureConstant: the constant $(info.constant) is created as $(info.type), its type $t"), "ConstantCreator.ensureConstant")
-            self.constants.constant_info[constant] = info
+            self.constants.constant_info[key] = info
         end
     end
     return info
