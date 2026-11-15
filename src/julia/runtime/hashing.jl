@@ -288,6 +288,19 @@ through Object__object_hash_code. Natively no object carries the field, so the b
 @quarantine pin"julia/base/abstractarray.jl:1591 dataids" "dart writes a String's identity hash field only to cache its hash (sdk/lib/_internal/wasm/js_common/js_string.dart:642); Julia's String keeps its data's id there, the address dataids reads" Core.Int64 @noinline set_owner_identity_hash_field(@nospecialize(obj::Any), hash::Core.Int64)::Nothing =
     (_wasm_only(Int64); nothing)
 
+"""
+    identity_serials_spent() -> Union{}
+
+The module's identity counter is spent: its 2^31 - 1 serials are given (Runtime.Object__object_hash_code), and a
+serial never wraps (dev/formal/ObjectIdentity.tla NoWrap). Natively no counter exists to be spent: a mutable's id is
+inthash of its address (julia/src/builtins.c:484), so native Julia cannot raise here, and an exception raised here
+would be one the program's own `catch` sees where native throws none. The intrinsifier lowers a call of it to the
+fatal form (src/intrinsics.jl Val(:fatal)): the rejection's text to the host, then the trap, which no catch observes.
+Natively no object carries the identity slot, so this is never reached there, and the body raises.
+"""
+@quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "a mutable's id is inthash of its address, which native Julia never runs out of; a module's serial counter can be spent, a limit native has not, so the module stops there, fatal, never with an exception the program could catch" Core.Union @noinline identity_serials_spent() =
+    _wasm_only(Union{})
+
 # the inverse of an odd 64-bit multiplier modulo 2^64, by Newton's iteration (each step doubles the correct
 # low bits: 3 from x = a, then 6, 12, 24, 48, 96)
 @quarantine pin"julia/src/support/hashing.c:28 int64hash" "int64hash's multiplications by odd constants are bijections of 64-bit words, each undone by the multiplier's inverse modulo 2^64" Base.:* function _odd_inverse(a::UInt64)::UInt64

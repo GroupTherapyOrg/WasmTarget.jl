@@ -22,8 +22,10 @@ hash field (getIdentityHashField); 0, dart's initialIdentityHash, means none was
 serial is stored in it (setIdentityHashField) and returned; any other value is returned as it is, an
 image constant's slot -k (zero-extended, src/julia/runtime/hashing.jl image_slot!) among them. Julia
 differs: the value is the next serial (Object__hash_code_rnd), never a random draw, and once the
-2^31 - 1 serials an i32 field holds positive are given it raises, naming the gap, and never wraps: a
-wrapped serial would give a live object's id to another (dev/formal/ObjectIdentity.tla NoWrap).
+2^31 - 1 serials an i32 field holds positive are given the module stops, fatal, naming the gap
+(identity_serials_spent: native Julia, whose id is an address's, cannot raise there, so no catch of the
+program may see it), and never wraps: a wrapped serial would give a live object's id to another
+(dev/formal/ObjectIdentity.tla NoWrap).
 Specialized on the object's type, as Julia specializes a method on its arguments' types unless told
 not to (no @nospecialize), so the field's read and write see its class (src/intrinsics.jl refuses a
 class Julia boxes fresh). Natively no object carries the field and the read raises: natively
@@ -41,8 +43,7 @@ set_identity_hash_field, dataids names the other.
     local result = get_identity_hash_field(obj)
     if result == 0
         local last = Object__hash_code_rnd[]
-        last == typemax(Int32) &&
-            Error__throw_with_current_stack_trace(ErrorException("WasmTarget: an object's identity: the module's 2147483647 identity serials are given, and a serial never wraps (src/runtime/common/object_patch.jl Object__object_hash_code)"))
+        last == typemax(Int32) && identity_serials_spent()
         result = Int64(last) + 1
         Object__hash_code_rnd[] = Int32(result)
         set(obj, result)

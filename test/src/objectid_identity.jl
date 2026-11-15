@@ -66,8 +66,8 @@ function hamt(n::Int64)::Int64
     end
     return s
 end
-# the counter spent: preset to its last serial but one, an object takes the last, the next raises. Read
-# through the runtime's Object__object_hash_code, whose results are kept
+# the counter spent: preset to its last serial but one, an object takes the last, the next is fatal: the module
+# reports the gap and traps, so the catch below never runs. Read through the runtime's Object__object_hash_code
 function spent(x::Int64)::Int64
     Runtime.Object__hash_code_rnd[] = typemax(Int32) - Int32(1)
     local last = Runtime.Object__object_hash_code(MM(x), Runtime.set_identity_hash_field)
@@ -77,9 +77,8 @@ function spent(x::Int64)::Int64
         return e isa ErrorException ? last : Int64(-1)
     end
 end
-# the spent counter through objectid itself: its raise reaches the program's own catch, the overlay
-# claiming no nothrow (src/patch/runtime_internals.jl), so Julia keeps the try; natively objectid cannot
-# throw, so the answer is the module's own, -3
+# the spent counter through objectid itself: fatal, as natively objectid cannot throw (its ids are addresses'), so
+# the catch never runs and the module answers nothing; natively the two ids differ, 1
 function spent_oid(x::Int64)::Int64
     Runtime.Object__hash_code_rnd[] = typemax(Int32) - Int32(1)
     local a = objectid(MM(x))
@@ -124,16 +123,20 @@ const IC = IdentityCases
     local he = try; WasmTarget.compile(IC.hamt, (Int64,)); nothing; catch x; x; end
     @test he isa WasmTarget.RejectionError && occursin("HashState", sprint(showerror, he)) &&
           occursin("a class the closed world does not number", sprint(showerror, he))
-    # the spent counter: never run natively (it would write the compiling process's counter), its answer
-    # the last serial given, 2^31 - 1, returned once the next raises
-    local (sp, so) = both(IC.spent, (Int64(1),))
-    push!(cases, Main.WTChild.RunCase("objectid_identity/spent", sp, (Int64(1),), Int64(typemax(Int32)); optimized = so))
-    local (op, oo) = both(IC.spent_oid, (Int64(1),))
-    push!(cases, Main.WTChild.RunCase("objectid_identity/spent_oid", op, (Int64(1),), Int64(-3); optimized = oo))
     local (fp, fo) = both(IC.first_serial, (Int64(1),))
     push!(cases, Main.WTChild.RunCase("objectid_identity/first_serial", fp, (Int64(1),), Int64(1); optimized = fo))
     for r in Main.WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
+    end
+    # the spent counter, never run natively (it would write the compiling process's counter): fatal in both modules,
+    # the gap's text reported to the host whole, located at the statement that reaches it, then the trap; no catch of
+    # the program runs (natively spent_oid's ids differ, 1; spent has no native answer, its slot read raising)
+    for (label, f, native) in (("spent", IC.spent, Int64(typemax(Int32))), ("spent_oid", IC.spent_oid, Int64(1)))
+        local (p, o) = both(f, (Int64(1),))
+        local fatal = only(Main.WTChild.run_cases([Main.WTChild.RunCase("objectid_identity/$label", p, (Int64(1),), native; optimized = o)]))
+        @test fatal.outcome === :unported
+        @test occursin("unported: the Julia-only definition src/julia/runtime/hashing.jl identity_serials_spent: an object's identity", fatal.why)
+        @test occursin("(at run time, ", fatal.why) && occursin("object_patch.jl:", fatal.why) && occursin(", statement %", fatal.why)
     end
     # natively the identity arm raises: Base's own objectid is the answer there
     @test_throws ErrorException WasmTarget.jl_object_id(IC.MM(2))
