@@ -64,4 +64,60 @@ end
           "WasmTarget: typeof of a tuple held as WasmTarget.TupleRecord{2}, at f: Julia's typeof on Any: its type, the tuple type of its elements' types, is not made at run time (audit A68S3)"
 end
 
+rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e : rethrow(); end
+
+# the module a match is loaded into, to show a match missing an arm refuses its load
+module ExhaustiveProbe
+using WasmTarget: @exhaustive, RecordArity, FixedArity
+end
+
+# The record arity is a closed sum (src/julia/classes.jl RecordArity): a record of a fixed arity, or the array class,
+# TupleRecordArray, a tuple whose arity only run time knows and no record covers (Julia's type cache's miss, jltypes.c:1133
+# lookup_typevalue); every consumer matches it @exhaustive. The array class holds an open tuple type exactly where the
+# type admits an arity no record of the closed world covers (dev/formal/TupleRecordSplat.tla IsaAgrees, HoldsOmitsArray).
+@testset "the record arity is a closed sum, its array class held where no record covers an arity" begin
+    @test W.tuple_record_arity(W.TupleRecord{3}) === W.FixedArity(3) && W.tuple_record_arity(Tuple{}) === W.FixedArity(0)
+    @test W.tuple_record_arity(W.TupleRecordArray) === W.RunTimeArity()
+    @test W.tuple_record_arity(Tuple{Int64}) === nothing && W.tuple_record_arity(Int64) === nothing
+    @test W.record_arities(DataType[W.TupleRecord{2}, Tuple{}, Int64, W.TupleRecordArray, Tuple{Int64}]) == Set([0, 2])
+    local covered = Set([0, 2])
+    # a Vararg member admits every arity, so always one no record covers
+    @test W.open_tuple_holds(Tuple{Vararg{Int64}}, W.TupleRecordArray, covered)
+    @test W.open_tuple_holds(Tuple{Int64,Vararg{Int64}}, W.TupleRecordArray, covered)
+    @test W.open_tuple_holds(NTuple{N,Int64} where N, W.TupleRecordArray, covered)
+    # a fixed open type: the array class exactly where its arity has no record
+    @test W.open_tuple_holds(NTuple{7,Any}, W.TupleRecordArray, covered)
+    @test !W.open_tuple_holds(NTuple{2,Any}, W.TupleRecordArray, covered)
+    @test W.open_tuple_holds(Union{NTuple{2,Any},NTuple{7,Any}}, W.TupleRecordArray, covered)
+    @test !W.open_tuple_holds(Union{Tuple{},NTuple{2,Any}}, W.TupleRecordArray, covered)
+    # a record of a fixed arity, as before: the arities the type admits
+    @test W.open_tuple_holds(Tuple{Vararg{Int64}}, W.TupleRecord{2}, covered) && !W.open_tuple_holds(NTuple{7,Any}, W.TupleRecord{2}, covered)
+    @test !W.open_tuple_holds(Tuple{Vararg{Int64}}, Int64, covered)
+    # the array class's typeof is its elements' type, made at run time: refused as every record's
+    @test W.record_typeof_unmade(W.TupleRecordArray) && W.record_typeof(Tuple{Vararg{Int64}}, W.TupleRecordArray) === nothing
+    # its fields are not laid out yet: no producer builds the class, and a consumer reaching it rejects, located
+    local e = rejection(() -> W.class_instance_fields(W.TupleRecordArray, "tuple_record_array"))
+    @test e !== nothing && e.rejection isa W.Unquarantined && occursin("translator.dart:262 nullableObjectArrayTypeRef", e.rejection.row)
+    # a match over the sum without the array class's arm, or with a wildcard, refuses its load, located (D8)
+    local missing = try
+        Core.eval(ExhaustiveProbe, :(missing_arm(r) = @exhaustive r::RecordArity begin
+            (x::FixedArity) => x.n
+        end))
+        nothing
+    catch x
+        x
+    end
+    @test missing !== nothing && occursin("the kind RunTimeArity of RecordArity has no arm", sprint(showerror, missing))
+    local wildcard = try
+        Core.eval(ExhaustiveProbe, :(wildcard_arm(r) = @exhaustive r::RecordArity begin
+            (x::FixedArity) => x.n
+            _ => 0
+        end))
+        nothing
+    catch x
+        x
+    end
+    @test wildcard !== nothing && occursin("wildcard", sprint(showerror, wildcard))
+end
+
 end

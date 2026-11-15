@@ -566,8 +566,9 @@ TupleRecord), its values' classes.
         # an open tuple type's values, a Union of tuple types' among them (its join an open tuple type,
         # translateStorageType's top type), are the records of the arities it admits (TupleRecord): a
         # tuple of a concrete static type is boxed into its arity's record where it flows into an open slot
+        local arities = record_arities(keys(self.class_ids))
         for (c, id) in self.class_ids
-            open_tuple_holds(klass, c) && push!(ranges, Range(id, id))
+            open_tuple_holds(klass, c, arities) && push!(ranges, Range(id, id))
         end
     elseif klass isa DataType && haskey(self.class_ids, klass)
         local transitive_implementors = _get_transitive_implementors(self, klass)

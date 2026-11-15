@@ -16,6 +16,15 @@
 @quarantine "julia/src/subtype.c:2511 jl_isa tests a type value by itself where the type splits its kind, any other value by its class (jl_typeof)" Base.typeintersect told_by_class(@nospecialize(T::Type))::Bool =
     all(k -> k <: T || typeintersect(k, T) === Union{}, _KINDS)
 
+# a record class's arity: a record of a fixed arity (TupleRecord{N}, or Tuple{} for the empty shape), or
+# the array class's, which only run time knows (TupleRecordArray); every consumer matches it @exhaustive,
+# so none forgets the arity no class names
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys each record class by its RecordShape, its positional count here" Core.Int struct FixedArity
+    n::Int
+end
+@quarantine "julia/src/builtins.c:946 jl_f_tuple builds a tuple of the arity its argument count gives at run time" Core.DataType struct RunTimeArity end
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys its classes by RecordShape, a closed set of shapes; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const RecordArity = Union{FixedArity, RunTimeArity}
+
 """
     record_member_tests(translator, T, field_checked) -> Union{Nothing,Vector{Tuple{Int,DataType,DataType}}}
 
@@ -33,15 +42,23 @@ both: canUseTypeCheckHelper refuses the helper by it, and the is checker emits w
     for t in Base.uniontypes(T)
         t <: Tuple || continue
         for (id, c) in zip(concrete_class_ids(translator, Tuple), concrete_classes(translator, Tuple))
-            local n = tuple_record_arity(c)
-            n === nothing && reject!(Internal("src/julia/classes.jl record_member_tests: class $c below Tuple is no record"), "record_member_tests")
-            local shape = typeintersect(t, NTuple{n,Any})
-            shape === Union{} && continue
-            shape isa DataType || return nothing
-            for k in 1:n
-                field_checked(fieldtype(shape, k)) || return nothing
+            local r = tuple_record_arity(c)
+            r === nothing && reject!(Internal("src/julia/classes.jl record_member_tests: class $c below Tuple is no record"), "record_member_tests")
+            @exhaustive r::RecordArity begin
+                (f::FixedArity) => begin
+                    local n = f.n
+                    local shape = typeintersect(t, NTuple{n,Any})
+                    shape === Union{} && continue
+                    shape isa DataType || return nothing
+                    for k in 1:n
+                        field_checked(fieldtype(shape, k)) || return nothing
+                    end
+                    push!(out, (id, c, shape))
+                end
+                # the length test and a Vararg tail's loop (julia/src/subtype.c:1348 subtype_tuple) over the
+                # array class's buffer, not yet ported
+                RunTimeArity => reject!(Unquarantined("julia/src/subtype.c:1348 subtype_tuple: an is-check of $t against $c, a tuple whose arity only run time knows"), "record_member_tests: $T")
             end
-            push!(out, (id, c, shape))
         end
     end
     return out
@@ -370,7 +387,8 @@ The class of a Julia tuple of `N` elements held where its static type is open (`
 `Tuple{Any,Any}`, a Union of tuple types): dart2wasm's record class of a shape, one class per shape
 with a top-typed field per element (record_class_generator.dart:84 generateRecordClasses: its recordClasses, :280
 _generateFields, its fields `Object? \$1..\$N`), here per arity `N ≥ 1`, a Julia tuple having
-positional elements only; the empty shape's class is `Tuple{}` itself (`tuple_record_class`). A tuple whose static type is concrete is its own class, its fields unboxed;
+positional elements only, and one for the shape of an arity only run time knows, `N` the value
+`RunTimeArity()` (`TupleRecordArray`); the empty shape's class is `Tuple{}` itself (`tuple_record_class`). A tuple whose static type is concrete is its own class, its fields unboxed;
 convertType boxes it into its arity's record where it flows into an open slot and unboxes it where
 Julia narrows it back (a PiNode, a typeassert), as dart boxes a value type on upcast. Julia's egal and
 isa of a tuple read its fields (builtins.c:100 compare_fields; a tuple type is covariant), as dart's
@@ -393,15 +411,48 @@ end
 # superclass's struct, so its reference could not be told apart from that struct's other classes)
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses maps each shape to its class, a tuple's arity to its record here" Core.Int tuple_record_class(n::Int)::DataType = n == 0 ? Tuple{} : TupleRecord{n}
 
-# the arity of the record class `c` (TupleRecord, or Tuple{} for the empty shape), or nothing for any other class
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses keys each class by its shape, a record's arity its parameter here" Core.DataType tuple_record_arity(@nospecialize(c))::Union{Int,Nothing} =
-    c === Tuple{} ? 0 : c isa DataType && c <: TupleRecord && c.parameters[1] isa Int ? c.parameters[1] : nothing
+"""
+    TupleRecordArray
+
+The class of a Julia tuple whose arity only run time knows and whose arity has no record class in the
+closed world: Julia makes that tuple's type on its cache's miss (julia/src/builtins.c:946 jl_f_tuple,
+jltypes.c:2477 jl_inst_arg_tuple_type), where the closed world holds one class built to hold any arity, its
+one field the argument buffer, dart's `WasmArray<Object?>` of positional arguments (translator.dart:262
+nullableObjectArrayTypeRef). The arity alone picks a tuple's class (`tuple_record_arity`), so each tuple
+has one representation (dev/formal/TupleRecordSplat.tla OneRepresentation). It is the record class of that
+shape, `TupleRecord{RunTimeArity()}`, uninhabited as every `TupleRecord` (no Julia value has the type): an
+alias, since Julia 1.12 refuses a struct of no parameter with a field of type `Union{}` ("Tuple field type
+cannot be Union{}", the layout it computes when the type is declared), where a parametric one's waits. Its
+objectid is its contents' (an immutable's, builtins.c jl_object_id), as every record's.
+
+precedent(julia: builtins.c:738 arg_heap, the buffer jl_f__apply_iterate fills; dart: translator.dart:262
+nullableObjectArrayTypeRef; cpython: PyTupleObject, one object of any length). Julia's differs: it
+allocates `jl_datatype_size(tt)` of a type it finds or makes; this keeps the buffer, whose type is never made.
+"""
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys a record class by its shape; a shape of run-time arity is Julia's alone (julia/src/builtins.c:946 jl_f_tuple), its class the record of that shape" WasmTarget.TupleRecord const TupleRecordArray = TupleRecord{RunTimeArity()}
+
+# the arity of the record class `c` (TupleRecord, Tuple{} for the empty shape, TupleRecordArray), or nothing for any other class
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses keys each class by its shape, a record's arity its parameter here" Core.DataType tuple_record_arity(@nospecialize(c))::Union{RecordArity,Nothing} =
+    c === Tuple{} ? FixedArity(0) : c === TupleRecordArray ? RunTimeArity() :
+    c isa DataType && c <: TupleRecord && c.parameters[1] isa Int ? FixedArity(c.parameters[1]) : nothing
+
+# the arities whose record class is among `classes` (the closed world's): Julia's tuple types its cache
+# holds (jltypes.c:1133 lookup_typevalue), the one answer of which arities a record covers
+@quarantine "julia/src/jltypes.c:1133 lookup_typevalue finds a tuple type in its cache; the closed world's record classes are the arities it holds" Base.Set function record_arities(classes)::Set{Int}
+    local out = Set{Int}()
+    for c in classes
+        local r = tuple_record_arity(c)
+        r isa FixedArity && push!(out, r.n)
+    end
+    return out
+end
 
 # whether Julia's typeof of a value of the class `c` is a type no table entry holds: a tuple's record of
-# N ≥ 1 elements, whose values' type is the tuple type of their elements' types (jl_f_tuple's
-# jl_inst_arg_tuple_type, jltypes.c:2477), known only at run time; the empty shape's class is Tuple{},
-# the type of Julia's one empty tuple, which its entry holds. The one source of which classes the typeof
-# table holds no entry for and to_typeof answers by their own arms (src/intrinsics.jl, record_typeof)
+# N ≥ 1 elements or of an arity only run time knows (TupleRecordArray), whose values' type is the tuple
+# type of their elements' types (jl_f_tuple's jl_inst_arg_tuple_type, jltypes.c:2477), known only at
+# run time; the empty shape's class is Tuple{}, the type of Julia's one empty tuple, which its entry
+# holds. The one source of which classes the typeof table holds no entry for and to_typeof answers by
+# their own arms (src/intrinsics.jl, record_typeof)
 @quarantine "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: a tuple's type is the tuple type of its elements' types, which a record class's tag does not name but the empty tuple's, Tuple{}" Core.Tuple record_typeof_unmade(@nospecialize(c))::Bool =
     c !== Tuple{} && tuple_record_arity(c) !== nothing
 
@@ -410,10 +461,13 @@ end
 # NTuple{N,Any} a concrete type, every tuple of it its type: jl_typeof of a leaf type's instance), as
 # Union{Tuple{Int64},Tuple{Int64,Float64}} holds Tuple{Int64} at arity 1; else nothing, a type Julia's
 # jl_f_tuple would find or make at run time (julia/src/builtins.c:946), which src/intrinsics.jl to_typeof
-# raises for (formal(dev/formal/TupleRecordSplat.tla) TypeofAgrees)
+# raises for (formal(dev/formal/TupleRecordSplat.tla) TypeofAgrees); the array class's arity only run
+# time knows, so no type of its pins one
 @quarantine "julia/src/builtins.c:946 jl_f_tuple: a tuple's type is the tuple type of its elements' types; where Julia's inferred type of the value holds one tuple type of its arity, that leaf type is every such tuple's" Base.typeintersect function record_typeof(@nospecialize(T), @nospecialize(c))::Union{DataType,Nothing}
-    local shape = typeintersect(T, NTuple{something(tuple_record_arity(c)),Any})
-    return shape isa DataType && isconcretetype(shape) ? shape : nothing
+    return @exhaustive something(tuple_record_arity(c))::RecordArity begin
+        (f::FixedArity) => (local shape = typeintersect(T, NTuple{f.n,Any}); shape isa DataType && isconcretetype(shape) ? shape : nothing)
+        RunTimeArity => nothing
+    end
 end
 
 # the message of the raise where record_typeof pins no type (the runtime's throw_record_typeof): the record class
@@ -421,13 +475,23 @@ end
 @quarantine "julia/src/builtins.c:946 jl_f_tuple makes a tuple's type at run time where its cache has none, a DataType WasmTarget never makes (audit A68S3)" Base.string record_typeof_message(@nospecialize(c), at::String)::String =
     string("WasmTarget: typeof of a tuple held as ", c, ", at ", at, ": its type, the tuple type of its elements' types, is not made at run time (audit A68S3)")
 
-# whether the class `c` holds values of the open tuple type `T` (a Tuple type no concrete class is):
-# the record classes of the arities `T` admits, a tuple of a concrete type boxed into its arity's record
-# where it flows into an open slot (TupleRecord), never a concrete tuple class itself; the one rule the
-# class-id ranges (getConcreteClassIdRange) and the type rules (_buildTypeRules) read
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: a value of a record type is an instance of the record class of its shape, a tuple's arity here" Base.typeintersect function open_tuple_holds(@nospecialize(T), @nospecialize(c))::Bool
-    local n = tuple_record_arity(c)
-    return n !== nothing && typeintersect(T, NTuple{n,Any}) !== Union{}
+# whether the class `c` holds values of the open tuple type `T` (a Tuple type no concrete class is), in a
+# closed world whose records cover `arities` (record_arities): the record classes of the arities `T`
+# admits, a tuple of a concrete type boxed into its arity's record where it flows into an open slot
+# (TupleRecord), never a concrete tuple class itself; and the array class (TupleRecordArray) where `T`
+# admits an arity no record covers, a Vararg member always (dev/formal/TupleRecordSplat.tla IsaAgrees, its
+# Broken variant HoldsOmitsArray); the one rule the class-id ranges (getConcreteClassIdRange) and the type
+# rules (_buildTypeRules) read
+@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: a value of a record type is an instance of the record class of its shape, a tuple's arity here" Base.typeintersect function open_tuple_holds(@nospecialize(T), @nospecialize(c), arities::Set{Int})::Bool
+    local r = tuple_record_arity(c)
+    r === nothing && return false
+    return @exhaustive r::RecordArity begin
+        (f::FixedArity) => typeintersect(T, NTuple{f.n,Any}) !== Union{}
+        RunTimeArity => any(Base.uniontypes(T)) do m
+            local t = Base.unwrap_unionall(m)
+            t isa DataType && t <: Tuple && (Base.isvatuple(t) || !(fieldcount(t) in arities))
+        end
+    end
 end
 
 # A constant's object graph met by the walk (dev/formal/ValueClasses.tla's MeetObject): the value's
@@ -694,7 +758,12 @@ allocation may leave undefined whose type admits `nothing`, dart's late lowering
     class_is_abstract(c) && return ClassField[]
     # a tuple's record (TupleRecord): a top-typed field per element, dart's record fields $1..$N
     local arity = tuple_record_arity(c)
-    arity === nothing || return Dart2Wasm._generate_fields(Dart2Wasm._RecordClassGenerator(Dict{Dart2Wasm.RecordShape,DataType}()), Dart2Wasm.RecordShape(arity, String[]))
+    arity === nothing || return @exhaustive arity::RecordArity begin
+        (f::FixedArity) => Dart2Wasm._generate_fields(Dart2Wasm._RecordClassGenerator(Dict{Dart2Wasm.RecordShape,DataType}()), Dart2Wasm.RecordShape(f.n, String[]))
+        # the array class's one field, the argument buffer (translator.dart:262 nullableObjectArrayTypeRef),
+        # not yet laid out: no producer builds the class
+        RunTimeArity => reject!(Unquarantined("pkg/dart2wasm/lib/translator.dart:262 nullableObjectArrayTypeRef: the fields of $c, a tuple whose arity only run time knows"), at)
+    end
     # a 128-bit integer (Int128, UInt128): its two 64-bit halves, LLVM's legalization of an i128 on a
     # 64-bit target (llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp, ExpandIntegerResult:
     # the low and the high i64), each a field of the class's struct, as the value is one wasm value

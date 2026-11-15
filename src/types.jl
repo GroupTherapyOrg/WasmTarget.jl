@@ -861,7 +861,11 @@ makeType and `_isSubtype` (src/julia/classes.jl record_member_tests, the one rea
             WasmBuilder.br(b, result_label)
             WasmBuilder.var"end"(b)
             for (id, c, shape) in records
-                local n = something(tuple_record_arity(c))
+                local n = @exhaustive something(tuple_record_arity(c))::RecordArity begin
+                    (f::FixedArity) => f.n
+                    # record_member_tests refuses the array class at the member, located
+                    RunTimeArity => reject!(Internal("$at: the array class $c among a member's records, which record_member_tests refuses"), at)
+                end
                 local info = translator.class_info[c]
                 local fields = class_instance_fields(c, at)
                 WasmBuilder.local_get(b, operand)
@@ -1002,6 +1006,7 @@ see, being an instance with its parameters bound, so the list is empty.
     table[no_substitution] = RuntimeTypeInformation_no_substitution_index()
     push!(table_by_index, no_substitution)
     local classes = translator.classes[]
+    local arities = record_arities(info.cls for info in classes if info.cls !== nothing)
     for class_info in classes
         local superclass = class_info.cls
         # We don't need type rules for any class without a superclass, or for classes whose
@@ -1019,7 +1024,7 @@ see, being an instance with its parameters bound, so the list is empty.
                 # an open tuple type's values are the records of the arities it admits, a concrete
                 # tuple boxed into its record in an open slot (src/julia/classes.jl open_tuple_holds),
                 # as getConcreteClassIdRange holds them
-                open_tuple_holds(superclass, subtype) || continue
+                open_tuple_holds(superclass, subtype, arities) || continue
             elseif Base.isType(subtype) && !(subtype.parameters[1] isa TypeVar)
                 typeof(subtype.parameters[1]) === superclass || continue
             else

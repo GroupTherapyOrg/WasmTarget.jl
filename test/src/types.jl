@@ -159,7 +159,7 @@ end
         # type's values are its arities' records, a concrete tuple boxed into one (the record model,
         # src/julia/classes.jl open_tuple_holds), as the class-id ranges hold them
         local has_rule = haskey(super_to_sub, sid) && haskey(super_to_sub[sid], cid)
-        @test has_rule == (s <: Tuple && !isconcretetype(s) ? W.open_tuple_holds(s, c) : c !== s && c <: s)
+        @test has_rule == (s <: Tuple && !isconcretetype(s) ? W.open_tuple_holds(s, c, W.record_arities(keys(ids))) : c !== s && c <: s)
         # and the displaced row finds it: the superclass's offset plus the class id holds the superclass
         has_rule && @test table[offsets[sid + 1] + cid + 1] == sid
     end

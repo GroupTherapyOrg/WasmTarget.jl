@@ -54,9 +54,9 @@ end
     @test e isa W.RejectionError && e.rejection isa W.Internal
     # a positional shape's class is the record of its arity, its fields \$1..\$N of dart's Object?, Any
     local rec = D._generate_class(g, D.RecordShape(2, String[]), Int64(0))
-    @test rec === W.tuple_record_class(2) && W.tuple_record_arity(rec) == 2 && W.tuple_record_arity(Tuple{Int,Int}) === nothing
+    @test rec === W.tuple_record_class(2) && W.tuple_record_arity(rec) == W.FixedArity(2) && W.tuple_record_arity(Tuple{Int,Int}) === nothing
     # the empty shape's class is Julia's one empty tuple's, Tuple{}, no field to box
-    @test W.tuple_record_class(0) === Tuple{} && W.tuple_record_arity(Tuple{}) == 0 && isempty(D._generate_fields(g, D.RecordShape(0, String[])))
+    @test W.tuple_record_class(0) === Tuple{} && W.tuple_record_arity(Tuple{}) == W.FixedArity(0) && isempty(D._generate_fields(g, D.RecordShape(0, String[])))
     local fs = D._generate_fields(g, D.RecordShape(2, String[]))
     @test [(f.cls, f.index, f.name, f.type, f.mutable) for f in fs] == [(rec, 1, "\$1", Any, false), (rec, 2, "\$2", Any, false)]
     @test W.class_instance_fields(rec, "records") == fs

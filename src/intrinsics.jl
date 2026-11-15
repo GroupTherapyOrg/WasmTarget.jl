@@ -384,13 +384,20 @@ end
     local ids = isconcretetype(T) ? Int[] : concrete_class_ids(t, T)
     local classes = isconcretetype(T) ? DataType[T] : concrete_classes(t, T)
     isempty(classes) && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: getfield of $T at a run-time index, which no class of the closed world is"), at)
+    # a record's arity: a fixed one; the array class's, its buffer's array.len and array.get bounded by it
+    # (Julia's emit_datatype_nfields), not yet ported
+    local record_elements(c::DataType, r::RecordArity) = @exhaustive r::RecordArity begin
+        (f::FixedArity) => f.n
+        RunTimeArity => reject!(Unquarantined("julia/src/cgutils.cpp:1411 emit_datatype_nfields: getfield of $T at a run-time index of a $c, a tuple whose arity only run time knows"), at)
+    end
     # a class's element count: a record's arity, a concrete tuple's field count
-    local elements(c::DataType) = something(tuple_record_arity(c), fieldcount(c))
+    local elements(c::DataType) = (local r = tuple_record_arity(c); r === nothing ? fieldcount(c) : record_elements(c, r))
     # a class's elements' Julia types: a concrete tuple's field types; a record's, each field boxed, the
     # types T gives its elements at the record's arity (Julia's typed load reads T's element type)
     local element_types(c::DataType) = begin
-        local n = tuple_record_arity(c)
-        n === nothing && return Any[fieldtypes(c)...]
+        local r = tuple_record_arity(c)
+        r === nothing && return Any[fieldtypes(c)...]
+        local n = record_elements(c, r)
         local shape = typeintersect(T, NTuple{n,Any})
         shape isa DataType && return Any[fieldtypes(shape)...]
         # a Union of tuple types of arity n: each element Julia's own type of the field at that index,
@@ -1145,8 +1152,13 @@ end
     WasmBuilder.local_get(b, record)
     load_class_id(b, t, top_nn)
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
-            local n = tuple_record_arity(cls)
-            n === nothing && reject!(Internal("$at: class $cls under the open tuple type is no record"), at)
+            local r = tuple_record_arity(cls)
+            r === nothing && reject!(Internal("$at: class $cls under the open tuple type is no record"), at)
+            local n = @exhaustive r::RecordArity begin
+                (f::FixedArity) => f.n
+                # the length test against the buffer's and a Vararg member's loop, not yet ported
+                RunTimeArity => reject!(Unquarantined("sdk/lib/_internal/wasm/common/type.dart:585 _RecordType._checkInstance: the general arm's test of a $cls, a tuple whose arity only run time knows"), at)
+            end
             local info = t.class_info[cls]
             local fields = class_instance_fields(cls, at)
             local arm = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[i32])
@@ -2618,7 +2630,16 @@ end
     WasmBuilder.local_tee(b, o)
     load_class_id(b, t, o.type)
     local ranges = [(range = Range(Val(:_), id, id), value = c) for (id, c) in zip(ids, classes)]
-    class_id_search(b, ranges, WasmBuilder.IR.ValueType[i64], c -> WasmBuilder.i64_const(b, something(tuple_record_arity(c), fieldcount(c))), () -> WasmBuilder.unreachable(b))
+    # each arm a record's arity, the array class's its buffer's array.len (not yet ported), or a concrete class's field count
+    local field_count(c::DataType) = begin
+        local r = tuple_record_arity(c)
+        r === nothing && return fieldcount(c)
+        return @exhaustive r::RecordArity begin
+            (f::FixedArity) => f.n
+            RunTimeArity => reject!(Unquarantined("julia/src/cgutils.cpp:1411 emit_datatype_nfields: nfields of a $c, a tuple whose arity only run time knows"), at)
+        end
+    end
+    class_id_search(b, ranges, WasmBuilder.IR.ValueType[i64], c -> WasmBuilder.i64_const(b, field_count(c)), () -> WasmBuilder.unreachable(b))
     return i64
 end
 

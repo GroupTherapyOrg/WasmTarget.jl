@@ -63,7 +63,7 @@ end
         # a class's ranges hold a concrete class's id exactly when Julia's <: says it is a subtype
         # (the model's RangeIsa), an open tuple type its arities' records, a concrete tuple boxed into one
         # (the record model, src/julia/classes.jl open_tuple_holds; the runtime's roots bring `Tuple`)
-        local holds(k, c) = k <: Tuple && !isconcretetype(k) ? W.open_tuple_holds(k, c) : c <: k
+        local holds(k, c) = k <: Tuple && !isconcretetype(k) ? W.open_tuple_holds(k, c, W.record_arities(conc)) : c <: k
         @test all(((k, c),) -> holds(k, c) == any(r -> contains(r, n.class_ids[c]), D.get_concrete_class_id_range(n, k)),
                   [(k, c) for k in n.dfs_order for c in conc])
         @test D.get_concrete_class_id_range(n, Any) == [D.Range(1, length(conc))]
@@ -94,7 +94,7 @@ end
     @test Tuple{Int} <: Tuple{Any} && supertype(Tuple{Int}) === Any
     @test cov._implementors[Tuple{Any}] == DataType[c for c in cconc if c <: Tuple{Any}]
     local holds(k, c) = k isa DataType && k <: Tuple && !isconcretetype(k) ?
-        (local n = W.tuple_record_arity(c); n !== nothing && typeintersect(k, NTuple{n,Any}) !== Union{}) : c <: k
+        (local r = W.tuple_record_arity(c); r isa W.FixedArity && typeintersect(k, NTuple{r.n,Any}) !== Union{}) : c <: k
     @test all(((k, c),) -> holds(k, c) == any(r -> contains(r, cov.class_ids[c]), D.get_concrete_class_id_range(cov, k)),
               [(k, c) for k in cov.dfs_order for c in cconc])
     @test D.get_concrete_class_id_range(cov, Tuple{Any}) == [D.Range(cov.class_ids[W.tuple_record_class(1)], cov.class_ids[W.tuple_record_class(1)])]
