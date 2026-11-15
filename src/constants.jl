@@ -909,6 +909,15 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             # typeArguments with makeArrayOf
             field.name == "data" || reject!(Internal("$at: the SimpleVector field $(field.name), not classes.jl's data"), at)
             make_array_of(self.constants, eltype(cls), NirConst[NirConst(Core.Const(x)) for x in v]; mutable_ = false).c.val
+        elseif field.index == 0 && cls === Memory{UInt8} && field.name == "data#owner"
+            # a byte Memory's data owner (src/julia/classes.jl _memory_instance_fields, julia.h:1326): `nothing`, the
+            # Memory owning its data, as the constant's data below is its own array, made from the Julia Memory's
+            # elements and shared with no String of the module, so its data id is its own identity's (its image id).
+            # Natively the bytes may be a String's (StringMemory's, julia/base/iobuffer.jl:167), a String no constant
+            # holds: the program reaches it only by taking the memory as a String (julia/base/strings/string.jl:83
+            # unsafe_takestring, after which reading the memory is undefined behaviour; :65 String(::Vector{UInt8}),
+            # which empties the vector)
+            nothing
         elseif field.index == 0 && cls <: GenericMemory
             # a Memory's fields that are not Julia's (src/julia/classes.jl _memory_instance_fields): `data`,
             # its elements as one mutable wasm array of its storage type, as visitStringConstant builds a

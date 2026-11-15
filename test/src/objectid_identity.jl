@@ -70,9 +70,9 @@ end
 # through the runtime's Object__object_hash_code, whose results are kept
 function spent(x::Int64)::Int64
     Runtime.Object__hash_code_rnd[] = typemax(Int32) - Int32(1)
-    local last = Runtime.Object__object_hash_code(MM(x))
+    local last = Runtime.Object__object_hash_code(MM(x), Runtime.set_identity_hash_field)
     try
-        return -Runtime.Object__object_hash_code(MM(x))
+        return -Runtime.Object__object_hash_code(MM(x), Runtime.set_identity_hash_field)
     catch e
         return e isa ErrorException ? last : Int64(-1)
     end
@@ -91,7 +91,7 @@ function spent_oid(x::Int64)::Int64
     end
 end
 # a module's first serial: 1, its counter starting at 0 (natively the slot's read raises)
-first_serial(x::Int64)::Int64 = Runtime.Object__object_hash_code(MM(x))
+first_serial(x::Int64)::Int64 = Runtime.Object__object_hash_code(MM(x), Runtime.set_identity_hash_field)
 # the identity hash field of a value Julia boxes fresh: refused, located
 boxed(x::Int64)::Int64 = Runtime.get_identity_hash_field(x)
 end

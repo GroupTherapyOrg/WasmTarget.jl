@@ -258,6 +258,36 @@ are identities, read by the constants a module keeps the compiling process's id 
     return ismutabletype(T) && !jl_object_id_by_hash(T)
 end
 
+"""
+    jl_genericmemory_owner_arm(T) -> Bool
+
+Whether a value of `T` can own a Memory's data, read by codegen's data-owner reader
+(julia/src/cgutils.cpp:3371 emit_genericmemoryowner, the `jl_genericmemory_owner` ccall, ccall.cpp:1872,
+reading julia.h:1326 jl_genericmemory_data_owner_field): a Memory itself, an identity
+(jl_object_id_identity_arm), or the String whose bytes a byte Memory wraps (julia/src/genericmemory.c:113).
+The write arm of a data id's identity hash field (identity_hash_field_holder), which dataids(::Memory) alone
+writes (src/patch/genericmemory.jl): a String's field holds its data's id, the one id its data has
+(julia/base/abstractarray.jl:1591, `UInt(A.ptr)`, the String's bytes for every Memory over them), and
+nothing else; objectid of a String is its bytes' hash (builtins.c:463), never the field.
+formal(dev/formal/ObjectIdentityStrings.tla): StringSlotDataOnly.
+"""
+@quarantine pin"julia/src/cgutils.cpp:3371 emit_genericmemoryowner" "a Memory's data is its own or the String's whose bytes it wraps (julia/src/genericmemory.c:113), the owner codegen reads from the data-owner field" Core.String function jl_genericmemory_owner_arm(T::DataType)::Bool
+    return T === Core.String || jl_object_id_identity_arm(T)
+end
+
+"""
+    set_owner_identity_hash_field(obj, hash) -> Nothing
+
+Stores `hash` in the identity hash field of `obj`, the data id of the Memory data `obj` owns: the write of
+setIdentityHashField (src/runtime/common/object_helper.jl) under the data owner's arm
+(jl_genericmemory_owner_arm), which admits a String, the owner of the bytes a byte Memory wraps
+(julia/src/genericmemory.c:113), beside the identities set_identity_hash_field admits. The intrinsifier
+lowers a call of it (src/intrinsics.jl); its one caller is dataids(::Memory) (src/patch/genericmemory.jl),
+through Object__object_hash_code. Natively no object carries the field, so the body raises.
+"""
+@quarantine pin"julia/base/abstractarray.jl:1591 dataids" "dart writes a String's identity hash field only to cache its hash (sdk/lib/_internal/wasm/js_common/js_string.dart:642); Julia's String keeps its data's id there, the address dataids reads" Core.Int64 @noinline set_owner_identity_hash_field(@nospecialize(obj::Any), hash::Core.Int64)::Nothing =
+    (_wasm_only(Int64); nothing)
+
 # the inverse of an odd 64-bit multiplier modulo 2^64, by Newton's iteration (each step doubles the correct
 # low bits: 3 from x = a, then 6, 12, 24, 48, 96)
 @quarantine pin"julia/src/support/hashing.c:28 int64hash" "int64hash's multiplications by odd constants are bijections of 64-bit words, each undone by the multiplier's inverse modulo 2^64" Base.:* function _odd_inverse(a::UInt64)::UInt64
@@ -375,29 +405,34 @@ body raises.
     _wasm_only(Core.UInt64)
 
 """
-    identity_hash_field_holder(classes, member, at; write) -> Nothing
+    identity_hash_field_holder(classes, member, at; arm) -> Nothing
 
 The read or write of dart's identity hash field (`member`, getIdentityHashField or setIdentityHashField,
 src/runtime/common/object_helper.jl) on an operand whose classes are `classes`, refused, located at `at`,
 where one of them is a class Julia boxes fresh each time it flows to Any (an immutable struct, a
 primitive): such a box holds no field that lasts, its read a plausible 0 and its write lost. A read
-admits every mutable class, a String among them though Julia's egal compares Strings by content: a
-String is a heap object carrying the field, and dart reads a String's field itself
-(sdk/lib/_internal/wasm/js_common/js_string.dart:642). A write (`write`) admits only the identities
-(jl_object_id_identity_arm, the one definition of which values Julia answers by their identity): the
-field holds an identity's serial and nothing else, so a String's, whose id is its bytes', is never
-written.
+(`arm`, nothing) admits every mutable class, a String among them though Julia's egal compares Strings by
+content: a String is a heap object carrying the field, and dart reads a String's field itself
+(sdk/lib/_internal/wasm/js_common/js_string.dart:642). A write names its arm, each a separate writer:
+objectid's (set_identity_hash_field, `arm` jl_object_id_identity_arm, the one definition of which values
+Julia answers by their identity) admits only the identities, the field an identity's serial, so a
+String's, whose id is its bytes', is never written there; a data id's (set_owner_identity_hash_field,
+`arm` jl_genericmemory_owner_arm) admits what owns a Memory's data, an identity or a String, whose field
+then holds its data's id.
 
 Julia-forced (D7): dart has no such check, its every Object a heap object with its header; Julia
 boxes an immutable value or a primitive anew wherever it flows to Any, so the header such a box
 carries is no value's.
 """
-@quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "dart's every Object is a heap object carrying its identity hash field; Julia boxes an immutable value or a primitive anew where it flows to Any, so only a mutable object keeps the field" Base.ismutabletype function identity_hash_field_holder(classes::Vector{DataType}, member::String, at::String; write::Bool)::Nothing
+@quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "dart's every Object is a heap object carrying its identity hash field; Julia boxes an immutable value or a primitive anew where it flows to Any, so only a mutable object keeps the field" Base.ismutabletype function identity_hash_field_holder(classes::Vector{DataType}, member::String, at::String;
+        arm::Union{typeof(jl_object_id_identity_arm),typeof(jl_genericmemory_owner_arm),Nothing})::Nothing
     for c in classes
         ismutabletype(c) ||
             reject!(Unquarantined("src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, which Julia boxes fresh each time it flows to Any, so no identity hash field of it lasts"), at)
-        write && !jl_object_id_identity_arm(c) &&
-            reject!(Unquarantined("src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, whose id Julia answers by its own hash or content, not its identity, so its identity hash field holds no serial"), at)
+        arm === nothing || arm(c) ||
+            reject!(Unquarantined(arm === jl_object_id_identity_arm ?
+                "src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, whose id Julia answers by its own hash or content, not its identity, so its identity hash field holds no serial" :
+                "src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, which owns no Memory's data and is no identity, so its identity hash field holds no data id"), at)
     end
     return nothing
 end
@@ -440,7 +475,7 @@ the slot and the read raises: natively Base's own objectid is the answer, and th
 a module.
 """
 @quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "a mutable's id is inthash of its address, or the id an image object keeps; a WasmGC object has none, so the serial dart's identity hash slot holds stands for the address" Core.Int32 function jl_object_id_identity(x::T)::UInt64 where {T}
-    local s = Runtime.Object__object_hash_code(x) % Core.Int32
+    local s = Runtime.Object__object_hash_code(x, Runtime.set_identity_hash_field) % Core.Int32
     s < 0 && return image_object_id(-Int(s))
     return int64hash(UInt64(s))
 end

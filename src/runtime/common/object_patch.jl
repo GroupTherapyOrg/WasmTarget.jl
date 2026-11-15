@@ -28,8 +28,16 @@ Specialized on the object's type, as Julia specializes a method on its arguments
 not to (no @nospecialize), so the field's read and write see its class (src/intrinsics.jl refuses a
 class Julia boxes fresh). Natively no object carries the field and the read raises: natively
 Base's own objectid is the answer, and this exists only in a module.
+
+Reshaped: `set`, the field's writer, names the write's arm (src/julia/runtime/hashing.jl
+identity_hash_field_holder): objectid's, set_identity_hash_field, which admits the identities alone, or a
+data id's, set_owner_identity_hash_field, which also admits a String, whose field holds its data's id
+(dataids(::Memory), src/patch/genericmemory.jl). Object ids and data ids are one counter's serials given
+by this one function, so no two objects ever hold one serial; objectid's caller (jl_object_id_identity) names
+set_identity_hash_field, dataids names the other.
 """
-@parity "sdk/lib/_internal/wasm/common/object_patch.dart:16 Object._objectHashCode" function Object__object_hash_code(obj::Any)::Int64
+@parity "sdk/lib/_internal/wasm/common/object_patch.dart:16 Object._objectHashCode" function Object__object_hash_code(obj::Any,
+        set::Union{typeof(set_identity_hash_field),typeof(set_owner_identity_hash_field)})::Int64
     local result = get_identity_hash_field(obj)
     if result == 0
         local last = Object__hash_code_rnd[]
@@ -37,7 +45,7 @@ Base's own objectid is the answer, and this exists only in a module.
             Error__throw_with_current_stack_trace(ErrorException("WasmTarget: an object's identity: the module's 2147483647 identity serials are given, and a serial never wraps (src/runtime/common/object_patch.jl Object__object_hash_code)"))
         result = Int64(last) + 1
         Object__hash_code_rnd[] = Int32(result)
-        set_identity_hash_field(obj, result)
+        set(obj, result)
         return result
     end
     return result

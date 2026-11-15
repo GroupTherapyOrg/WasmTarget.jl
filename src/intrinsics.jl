@@ -629,6 +629,7 @@ end
 # result, C's convention, no argument) reject, located. Any other foreign call is no intrinsic, nothing
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::NirForeignCall)::Union{WasmBuilder.IR.ValueType,Nothing}
     local libjulia = nir_libjulia_func(node)
+    libjulia === :jl_genericmemory_owner && return generate_static_intrinsic(self, Val(:genericmemory_owner), node)
     libjulia === :jl_get_tls_world_age || return nothing
     local at = "$(julia_text(self.code_gen.enclosing_member))"
     local rt, cc = node.args[2], node.args[5]
@@ -643,6 +644,49 @@ end
     return WasmBuilder.IR.NumType_i64
 end
 
+# jl_genericmemory_owner, one of emit_ccall's special functions (julia/src/ccall.cpp:1872): codegen's reader of a
+# Memory's data owner, emit_genericmemoryowner (julia/src/cgutils.cpp:3371), the memory's data-owner field
+# (julia.h:1326) where it holds one, else the memory itself (its data inline, or the field the memory or null).
+# Over WasmTarget's layout a byte memory's `data#owner` (src/julia/classes.jl _memory_instance_fields), null
+# reading as the memory; any other memory owns its data. emit_ccall's asserts (a boxed result, one argument, C's
+# convention) reject, located; an operand of no one Memory class, whose layout the read is at, rejects, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:genericmemory_owner}, node::NirForeignCall)::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local at = "$(julia_text(self.code_gen.enclosing_member))"
+    local rt, cc = node.args[2], node.args[5]
+    rt isa NirConst && rt.c.val === Any ||
+        reject!(Internal("julia/src/ccall.cpp:1874 emit_ccall: jl_genericmemory_owner declared to return $rt, not Any"), at)
+    local conv = cc isa NirConst ? (cc.c.val isa Tuple ? cc.c.val[1] : cc.c.val) : nothing
+    conv === :ccall || conv === :cdecl ||
+        reject!(Internal("julia/src/ccall.cpp:1875 emit_ccall: jl_genericmemory_owner called by the convention $(repr(conv)), not C's"), at)
+    local ops = nir_foreign_operands(node)
+    length(ops) == 1 ||
+        reject!(Internal("julia/src/ccall.cpp:1875 emit_ccall: jl_genericmemory_owner takes one argument, not $(length(ops))"), at)
+    local M = dart_type_of(self, only(ops))
+    M isa DataType && M <: GenericMemory && isconcretetype(M) ||
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: jl_genericmemory_owner of a value that may be a $M, no one Memory class, where codegen reads the data owner at a Memory's layout (julia/src/cgutils.cpp:3371 emit_genericmemoryowner)"), at)
+    local minfo = get(t.class_info, M, nothing)
+    minfo === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_genericmemory_owner of a $M, which has no class info"), at)
+    translate_expression(self.code_gen, only(ops), minfo.non_nullable_type)
+    M === Memory{UInt8} || (convert_type(t, b, minfo.non_nullable_type, t.top_type[]); return t.top_type[])
+    local owner = only(f for f in class_instance_fields(M, at) if f.name == "data#owner")
+    local m = add_local(self.code_gen, minfo.non_nullable_type)
+    WasmBuilder.local_set(b, m)
+    WasmBuilder.local_get(b, m)
+    WasmBuilder.struct_get(b, minfo.struct_, t.field_index[owner])
+    WasmBuilder.ref_is_null(b)
+    WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[t.top_type[]])
+    WasmBuilder.local_get(b, m)
+    convert_type(t, b, minfo.non_nullable_type, t.top_type[])
+    WasmBuilder.else_(b)
+    WasmBuilder.local_get(b, m)
+    WasmBuilder.struct_get(b, minfo.struct_, t.field_index[owner])
+    convert_type(t, b, WasmBuilder.unpacked(minfo.struct_.fields[t.field_index[owner] + 1].type), t.top_type[])
+    WasmBuilder.var"end"(b)
+    return t.top_type[]
+end
+
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::Union{NirCall,NirInvoke})::Union{WasmBuilder.IR.ValueType,Nothing}
     if node isa NirInvoke
         local target = nir_invoke_target(node)
@@ -655,6 +699,9 @@ end
         memory_op === nothing || return generate_static_intrinsic(self, Val(:memory_data), memory_op, target, node.args[2:end])
         local getter = generate_static_getter_intrinsic(self, target)
         getter === nothing || return getter
+        # a data id's write of the identity hash field, setIdentityHashField under the data owner's arm
+        target.def.name === :set_owner_identity_hash_field && target.def in methods(set_owner_identity_hash_field) &&
+            return generate_static_intrinsic(self, Val(:set_identity_hash_field), node.args[2:end], "set_owner_identity_hash_field", jl_genericmemory_owner_arm)
         target.def.module === Runtime && target.def in methods(Runtime._InterfaceType_class_id) &&
             return generate_static_intrinsic(self, Val(:interface_type_class_id), node.args[2:end])
         target.def.name === :jl_to_typeof && target.def in methods(jl_to_typeof) &&
@@ -675,7 +722,8 @@ end
         intrinsic === StaticIntrinsic_isRecordClassId && return generate_static_intrinsic(self, Val(:is_record_class_id), node.args[2:end])
         intrinsic === StaticIntrinsic_unsafeCast && return generate_static_intrinsic(self, Val(:unsafe_cast), node.args[2:end])
         intrinsic === StaticIntrinsic_getIdentityHashField && return generate_static_intrinsic(self, Val(:get_identity_hash_field), node.args[2:end])
-        intrinsic === StaticIntrinsic_setIdentityHashField && return generate_static_intrinsic(self, Val(:set_identity_hash_field), node.args[2:end])
+        intrinsic === StaticIntrinsic_setIdentityHashField &&
+            return generate_static_intrinsic(self, Val(:set_identity_hash_field), node.args[2:end], "setIdentityHashField", jl_object_id_identity_arm)
         reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "the static intrinsic $intrinsic")
     end
     local f = nir_callee(node)
@@ -872,13 +920,14 @@ end
         return info.non_nullable_type
     elseif op === :memory || op === :string
         # a byte Memory's struct (src/julia/classes.jl _memory_instance_fields: its data array, the
-        # String's own array type, and its length), the String's data shared by both
+        # String's own array type, its data owner and its length), the String's data shared by both
         local minfo = get(t.class_info, Memory{UInt8}, nothing)
         minfo === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String's Memory where Memory{UInt8} has no class info"), at)
         local mfields = class_instance_fields(Memory{UInt8}, at)
         local mdata = only(f for f in mfields if f.name == "data")
+        local mowner = only(f for f in mfields if f.name == "data#owner")
         local mlength = only(f for f in mfields if f.name == "length")
-        length(mfields) == 2 || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Memory{UInt8} holds $(length(mfields)) fields, not its data and length"), at)
+        length(mfields) == 3 || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Memory{UInt8} holds $(length(mfields)) fields, not its data, data owner and length"), at)
         local data_ref = WasmBuilder.IR.RefType_def(array_type; nullable = false)
         WasmBuilder.unpacked(minfo.struct_.fields[t.field_index[mdata] + 1].type) == data_ref ||
             reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Memory{UInt8}'s data is no String's data array"), at)
@@ -887,8 +936,12 @@ end
             local mfs = Dict{String,ClassField}(f.name => f for f in mfields)
             # jl_string_to_genericmemory (julia/src/genericmemory.c:104): an empty String's is Memory{UInt8}'s
             # one empty instance (:106-107), as memorynew's of no element is (emit_memorynew's emptymem), so
-            # the two are one object, as natively; else the String's array, its length the Memory's
-            data_of(args[1])
+            # the two are one object, as natively; else the String's array, its length the Memory's, and its
+            # data owner the String (:113)
+            local sv = add_local(code_gen, info.non_nullable_type)
+            translate_expression(code_gen, args[1], info.non_nullable_type)
+            WasmBuilder.local_tee(b, sv)
+            WasmBuilder.struct_get(b, info.struct_, data_index)
             WasmBuilder.local_set(b, p)
             WasmBuilder.local_get(b, p)
             WasmBuilder.array_len(b)
@@ -898,19 +951,36 @@ end
             WasmBuilder.else_(b)
             generate_static_intrinsic(self, Val(:new_struct), minfo, mfs, Dict{String,Function}(
                 mdata.name => () -> WasmBuilder.local_get(b, p),
+                mowner.name => () -> WasmBuilder.local_get(b, sv),
                 mlength.name => () -> (WasmBuilder.local_get(b, p); WasmBuilder.array_len(b); WasmBuilder.i64_extend_i32_u(b))))
             WasmBuilder.var"end"(b)
             return minfo.non_nullable_type
         end
-        # jl_genericmemory_to_string: the Memory's array where the String takes all of it, else a copy
-        # of its first n bytes
+        # jl_genericmemory_to_string (julia/src/genericmemory.c:189): where the String takes all of the Memory and a
+        # String owns its data, that String (:203-207, its size class unchanged); else a String over the Memory's
+        # array where it takes all of it, or over a copy of its first n bytes
         local k = add_local(code_gen, WasmBuilder.IR.NumType_i32)
         local q = add_local(code_gen, data_ref)
+        local mm = add_local(code_gen, minfo.non_nullable_type)
         translate_expression(code_gen, args[1], minfo.non_nullable_type)
+        WasmBuilder.local_tee(b, mm)
         WasmBuilder.struct_get(b, minfo.struct_, t.field_index[mdata])
         WasmBuilder.local_set(b, p)
         offset(args[2])
         WasmBuilder.local_set(b, k)
+        local owner_of() = (WasmBuilder.local_get(b, mm); WasmBuilder.struct_get(b, minfo.struct_, t.field_index[mowner]))
+        WasmBuilder.local_get(b, k)
+        WasmBuilder.local_get(b, p)
+        WasmBuilder.array_len(b)
+        WasmBuilder.i32_eq(b)
+        owner_of()
+        WasmBuilder.ref_is_null(b)
+        WasmBuilder.i32_eqz(b)
+        WasmBuilder.i32_and(b)
+        WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[info.non_nullable_type])
+        owner_of()
+        WasmBuilder.ref_as_non_null(b)
+        WasmBuilder.else_(b)
         generate_static_intrinsic(self, Val(:new_struct), info, Dict{String,ClassField}(sdata.name => sdata), Dict{String,Function}(sdata.name => () -> begin
             WasmBuilder.local_get(b, k)
             WasmBuilder.local_get(b, p)
@@ -930,6 +1000,7 @@ end
             WasmBuilder.local_get(b, q)
             WasmBuilder.var"end"(b)
         end))
+        WasmBuilder.var"end"(b)
         return info.non_nullable_type
     end
     reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a String data operation $op"), at)
@@ -993,6 +1064,9 @@ end
     # a primitive class's struct is a box's, its class id alone ahead of its value (a 128-bit integer's
     # two halves), as dart's boxing sites push it inline (translator.dart:1642 convertType,
     # constants.dart:854); any other class's header is pushObjectHeaderFields
+    # every field its value, named by its constructor: a field no constructor names is refused, never a default
+    sort(collect(keys(fs))) == sort(collect(keys(vals))) ||
+        reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a $(info.cls) built of the values $(sort(collect(keys(vals)))), its fields $(sort(collect(keys(fs))))"), "$(julia_text(self.code_gen.enclosing_member))")
     info.cls isa DataType && isprimitivetype(info.cls) ? WasmBuilder.i32_const(b, class_id(info)) : push_object_header_fields(b, t, info)
     for fld in sort(collect(values(fs)); by = (x::ClassField) -> t.field_index[x])
         vals[fld.name]()
@@ -1020,8 +1094,6 @@ end
     local n = length(args) - 1
     local new_struct(T::DataType, vals::Dict{String,Function}) = begin
         local info, fs = generate_static_intrinsic(self, Val(:fields_of), T, at)
-        sort(collect(keys(fs))) == sort(collect(keys(vals))) ||
-            reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: $T holds the fields $(sort(collect(keys(fs)))), not $(sort(collect(keys(vals))))"), at)
         generate_static_intrinsic(self, Val(:new_struct), info, fs, vals)
         WasmBuilder.with_nullability(repr(info), false)
     end
@@ -1363,7 +1435,7 @@ end
     # identity_hash_field_holder), Julia-forced: dart's every Object is one
     local held = dart_type_of(self, args[1])
     identity_hash_field_holder(isconcretetype(held) ? DataType[held] : concrete_classes(t, held), "getIdentityHashField",
-                               "$(julia_text(self.code_gen.enclosing_member)): getIdentityHashField"; write = false)
+                               "$(julia_text(self.code_gen.enclosing_member)): getIdentityHashField"; arm = nothing)
     local object_type = t.object_info[].non_nullable_type
     translate_expression(self.code_gen, only(args), object_type)
     WasmBuilder.struct_get(b, t.object_info[].struct_, FieldIndex_identity_hash())
@@ -1373,14 +1445,17 @@ end
 
 # setIdentityHashField (intrinsics.dart:1505): the operand translated as the non-null Object, the hash
 # as dart's int wrapped to the field's i32 and stored; dart's void intrinsics leave the null of the top
-# type, Julia's nothing
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:set_identity_hash_field}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+# type, Julia's nothing. Its writer names its arm (src/julia/runtime/hashing.jl identity_hash_field_holder):
+# objectid's, set_identity_hash_field (`member` setIdentityHashField), the identities alone, or a data id's,
+# set_owner_identity_hash_field, what owns a Memory's data, a String among them
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:set_identity_hash_field}, args::Vector{NirValue},
+        member::String, arm::Union{typeof(jl_object_id_identity_arm),typeof(jl_genericmemory_owner_arm)})::WasmBuilder.IR.ValueType
     local t = translator(self)
     local b = self.code_gen.b[]
     local (arg, hash) = args
     local held = dart_type_of(self, arg)
-    identity_hash_field_holder(isconcretetype(held) ? DataType[held] : concrete_classes(t, held), "setIdentityHashField",
-                               "$(julia_text(self.code_gen.enclosing_member)): setIdentityHashField"; write = true)
+    identity_hash_field_holder(isconcretetype(held) ? DataType[held] : concrete_classes(t, held), member,
+                               "$(julia_text(self.code_gen.enclosing_member)): $member"; arm)
     local object_type = t.object_info[].non_nullable_type
     translate_expression(self.code_gen, arg, object_type)
     translate_expression(self.code_gen, hash, WasmBuilder.IR.NumType_i64)
@@ -1699,6 +1774,10 @@ end
             WasmBuilder.array_new_default(b, array_type)
         end
         local vals = Dict{String,Function}("data" => fill, "length" => () -> WasmBuilder.local_get(b, n))
+        # a byte memory's data owner (src/julia/classes.jl _memory_instance_fields): none, the memory owning the
+        # data it allocates, its data inline or its data-owner field itself (jl_alloc_genericmemory_unchecked,
+        # julia/src/genericmemory.c:48), either read as the memory (cgutils.cpp:3371 emit_genericmemoryowner)
+        M === Memory{UInt8} && (vals["data#owner"] = () -> WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none))
         # every set flag 0, no element written (dart's late field starts unset)
         is_set === nothing || (vals["data#isSet"] = () -> (WasmBuilder.local_get(b, n); WasmBuilder.i32_wrap_i64(b); WasmBuilder.array_new_default(b, something(flag_type))))
         new_struct(info, fs, vals)

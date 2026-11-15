@@ -583,7 +583,8 @@ end
         foreach(x -> _meet_constant!(out, seen, objs, x, at), v)
     elseif t <: Core.GenericMemory
         # a memory's length and its elements, the values its data array holds (_memory_instance_fields;
-        # Julia's `ptr`, a host address, is not one), each element written
+        # Julia's `ptr`, a host address, is not one), each element written; a byte memory's data owner, a
+        # constant's `nothing` (src/constants.jl)
         _meet_value!(out, seen, Int, at)
         foreach(k -> isassigned(v, k) && _meet_constant!(out, seen, objs, v[k], at), eachindex(v))
     elseif t <: Core.GenericMemoryRef
@@ -653,8 +654,9 @@ end
         foreach(f -> _meet_value!(out, seen, f.type, at), class_instance_fields(t, at))
     elseif t <: Core.GenericMemory
         # a memory holds its length and its elements, each a value of its element type when the
-        # elements are boxed (_memory_instance_fields)
+        # elements are boxed (_memory_instance_fields), and a byte memory its data owner, a String
         _meet_value!(out, seen, Int, at)
+        t === Memory{UInt8} && _meet_value!(out, seen, String, at)
         local e = _memory_element_storage(t.parameters[2], at)
         e isa Union && _meet_value!(out, seen, e, at)
     elseif t <: Core.GenericMemoryRef
@@ -1082,12 +1084,21 @@ Reshaped: `data#isSet` — dart's late lowering gives a potentially nullable slo
 elements are slots of one array, so where they may hold nothing (`_needs_is_set`) their flags are one
 array beside it, an i8 each, zero (unset) as a new array holds, a write setting it.
 
+Julia-forced: `data#owner`, a byte memory's alone (`Memory{UInt8}`), its data owner, a `String` or
+`nothing`: Julia's data-owner field (julia.h:1326 `jl_genericmemory_data_owner_field`), which
+jl_string_to_genericmemory sets to the String whose bytes the memory wraps (julia/src/genericmemory.c:113)
+and which, of the memories over another's data, only a byte memory holds (:109-110 allocate its word, a
+`jl_memory_uint8_type`'s); codegen
+reads it as the memory's owner (julia/src/cgutils.cpp:3371 emit_genericmemoryowner), `nothing` reading as
+the memory itself. Every constructor of the struct (src/intrinsics.jl's memorynew and its String wrap,
+src/constants.jl's constant) names it; no setter exists.
+
 precedent(dart: list.dart:15 WasmListBase, its `WasmArray<Object?> _data` beside `int _length`;
 Julia's jl_genericmemory_t, its length beside its inline data). Julia's differs: a Memory is an
 object of its own class (it flows into `Any`), so the array sits in a field of its struct, as a
 SimpleVector's does (`_svec_instance_fields`).
 """
-@quarantine "a Memory's elements lie outside its fields: Julia's jl_genericmemory_t, its length beside its inline data" Core.GenericMemory function _memory_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine pin"julia/src/julia.h:181 jl_genericmemory_t" "a Memory's elements lie outside its fields: Julia's jl_genericmemory_t, its length beside its inline data and a byte memory's data owner (julia.h:1326)" Core.GenericMemory function _memory_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c <: Core.GenericMemory || reject!(Internal("src/julia/classes.jl _memory_instance_fields: $c, no GenericMemory"), at)
     c.parameters[1] === :not_atomic && c.parameters[3] === Core.CPU ||
         reject!(Unquarantined("src/julia/classes.jl _memory_instance_fields: $c, an atomic memory or one of another address space"), at)
@@ -1095,8 +1106,11 @@ SimpleVector's does (`_svec_instance_fields`).
     local data = ClassField(c, 0, "data", WasmArray{_memory_element_storage(T, at)}, false)
     local length = ClassField(c, Base.fieldindex(c, :length), "length", fieldtype(c, :length), false)
     # elements that may hold nothing, each its set flag (_needs_is_set), as one array beside the data
-    _needs_is_set(T) || return ClassField[data, length]
-    return ClassField[data, ClassField(c, 0, "data#isSet", WasmArray{WasmI8}, false), length]
+    local fields = _needs_is_set(T) ? ClassField[data, ClassField(c, 0, "data#isSet", WasmArray{WasmI8}, false), length] :
+                   ClassField[data, length]
+    # a byte memory's data owner (julia.h:1326, genericmemory.c:109-113)
+    c === Memory{UInt8} && insert!(fields, 2, ClassField(c, 0, "data#owner", Union{String,Nothing}, false))
+    return fields
 end
 
 """

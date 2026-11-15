@@ -72,17 +72,32 @@ end
     return a
 end
 
-# Base's byte-memory method (julia/base/Base.jl:72) asks the runtime who owns the memory's data
-# (jl_genericmemory_owner, Julia's codegen reading its data-owner slot: julia/src/cgutils.cpp:3371
-# emit_genericmemoryowner) only to keep a String's bytes in a String: its first arm a new Memory, its
-# second a new String's bytes as a Memory (jl_string_to_genericmemory). A WasmGC byte Memory holds no
-# owner: its data array is the String's own array type, shared with a String both ways
-# (src/intrinsics.jl jl_string_to_genericmemory and jl_genericmemory_to_string), so the two arms build
-# one value, a new data array of newlen bytes beside its length, and the overlay is Base's first arm,
-# the generic method's body (julia/base/array.jl:1067): natively a Memory of the same type, length and
-# unset bytes as either arm's
-@quarantine pin"julia/base/Base.jl:72 array_new_memory" "Base's byte-memory array_new_memory asks jl_genericmemory_owner whether a String owns the data, to keep it in one; a WasmGC byte Memory holds no owner, its data array shared with a String both ways, so both arms are a new data array of newlen bytes, Base's generic body" Base.array_new_memory @consistent_overlay METHOD_TABLE Base.array_new_memory(mem::Memory{UInt8}, newlen::Int) =
-    typeof(mem)(undef, newlen)
+# Base's byte-memory method (julia/base/Base.jl:72) asks codegen's data-owner reader (the jl_genericmemory_owner
+# ccall, julia/src/cgutils.cpp:3371 emit_genericmemoryowner, src/intrinsics.jl's lowering of it over the byte
+# memory's `data#owner`) who owns the memory's data, to keep a String's bytes in a String: its first arm a new
+# Memory, its second a new String's bytes as a Memory. Base's own body, its jl_string_to_genericmemory foreigncall
+# WasmTarget's wasm_string_memory (src/julia/wasm_array.jl), natively that very call
+@quarantine pin"julia/base/Base.jl:72 array_new_memory" "Base's byte-memory array_new_memory wraps a new String's bytes by the jl_string_to_genericmemory foreigncall; WasmTarget's is wasm_string_memory, natively that very call" Base.array_new_memory @consistent_overlay METHOD_TABLE function Base.array_new_memory(mem::Memory{UInt8}, newlen::Int)
+    if (Base.@assume_effects :total @ccall jl_genericmemory_owner(mem::Any,)::Any) === mem
+        return typeof(mem)(undef, newlen)
+    else
+        return wasm_string_memory(Base._string_n(newlen))
+    end
+end
+
+# Base's dataids of a Memory (julia/base/abstractarray.jl:1591) is its data's address, `(UInt(A.ptr),)`, one per
+# data: its own, or the String's whose bytes it wraps (julia/src/genericmemory.c:113). WasmGC has no address, so
+# the data's id is its owner's (codegen's data-owner reader, as array_new_memory above reads it): a serial of the
+# one identity counter (src/runtime/common/object_patch.jl Object__object_hash_code), written into the owner's
+# identity hash field by the data owner's arm (set_owner_identity_hash_field, src/julia/runtime/hashing.jl
+# jl_genericmemory_owner_arm), which admits a String, whose field holds its data's id and nothing else. Two
+# Memories answer one id exactly when their data is one, as natively; an image constant's is its image id. A plain
+# overlay, as muladd's (src/patch/floatfuncs.jl): natively the answer is an address, never the module's serial.
+# formal(dev/formal/ObjectIdentity.tla): DataIdsExact; formal(dev/formal/ObjectIdentityStrings.tla): StringSlotDataOnly
+@quarantine pin"julia/base/abstractarray.jl:1591 dataids" "Base's dataids of a Memory is its data's address, A.ptr; WasmGC has none, so the data's id is its owner's, read by codegen's data-owner reader (julia/src/cgutils.cpp:3371 emit_genericmemoryowner), a serial of the one identity counter; natively the answer is the address, never the module's" Base.dataids @overlay METHOD_TABLE function Base.dataids(A::Memory)
+    local owner = A isa Memory{UInt8} ? (@ccall jl_genericmemory_owner(A::Any,)::Any)::Union{String,Memory{UInt8}} : A
+    return (UInt(Runtime.Object__object_hash_code(owner, set_owner_identity_hash_field)),)
+end
 
 # Base's body (julia/base/array.jl:2106), its memcmp of the two references' bytes through their addresses
 # (unsafe_convert(Ptr{T}, a.ref)) the walk of their elements in order, as Base's generic == of two arrays
