@@ -146,9 +146,14 @@ end
 # A Dict's own storage held as a constant of its own (getfield(d, :vals)) is the Dict's Memory: one Julia object, one
 # module object by every path, whichever the compile meets first (the plain module keeps the statements' order: the
 # Dict first, or its Memory first), as _array_live_ref's rule gives an Array's memory when its owner leaves nothing out.
-# An isbits key Memory whose dead slot keeps a deleted key's bytes is no value of the Dict's live copy, so the Memory
-# and the copy cannot be one object: refused, located, in either order (dev/formal/ObjectIdentity.tla
-# WriteSeenSameConstant; never two objects for one Memory)
+# A Memory whose dead slot holds an element the Dict's live copy leaves out cannot be that copy too: one Julia object,
+# never two module objects (dev/formal/ObjectIdentity.tla WriteSeenSameConstant), so it is refused, located, by the
+# refusal of whichever path the compile meets second; each order is fixed by a tuple constant, whose fields the compile
+# visits in order. An isbits key Memory whose dead slot keeps a deleted key's bytes is refused by its own path when met
+# first (_unowned_memory: reached through no owner), by the Memory branch when the Dict is met first (held whole and by
+# an owner). A boxed vals Memory holding a value in a slot the Dict does not fill (written there through
+# getfield(d, :vals)) is held whole when met first, so the Dict's path refuses it (_dict_owned: held whole and by a
+# Dict); met second, the Memory branch refuses it
 module DictStorageIdentity
 using Test, WasmTarget
 isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))
@@ -161,8 +166,17 @@ dict_first(n::Int64) = (D9[1] = n; vsum(DV9) + 1000 * same(getfield(D9, :vals), 
 memory_first(n::Int64) = (v = DV9; D9[1] = n; vsum(v) + 1000 * same(v, getfield(D9, :vals)))
 const DK = let d = Dict{Int64,Int64}(1 => 10, 7 => 70); delete!(d, 7); d end   # key 7's bytes stay in a dead slot
 const KK = getfield(DK, :keys)
-keys_dict_first(n::Int64) = (DK[n] = 1; Int64(length(KK)) + n)
-keys_memory_first(n::Int64) = (k = KK; DK[n] = 1; Int64(length(k)) + n)
+const DS = let d = Dict{Int64,Any}(1 => 10)   # a value in a slot the Dict does not fill, written through its Memory
+    getfield(d, :vals)[findfirst(i -> !Base.isslotfilled(d, i), eachindex(getfield(d, :slots)))] = 99
+    d
+end
+const DSV = getfield(DS, :vals)
+const KEYS_DICT_FIRST = (DK, KK); const KEYS_MEMORY_FIRST = (KK, DK)
+const STALE_DICT_FIRST = (DS, DSV); const STALE_MEMORY_FIRST = (DSV, DS)
+keys_dict_first(n::Int64) = Int64(length(KEYS_DICT_FIRST[2])) + Int64(length(KEYS_DICT_FIRST[1])) + n
+keys_memory_first(n::Int64) = Int64(length(KEYS_MEMORY_FIRST[1])) + Int64(length(KEYS_MEMORY_FIRST[2])) + n
+stale_dict_first(n::Int64) = Int64(length(STALE_DICT_FIRST[2])) + Int64(length(STALE_DICT_FIRST[1])) + n
+stale_memory_first(n::Int64) = Int64(length(STALE_MEMORY_FIRST[1])) + Int64(length(STALE_MEMORY_FIRST[2])) + n
 refusal(f) = try; WasmTarget.compile(f, (Int64,); optimize = false); nothing; catch x; x isa WasmTarget.RejectionError ? x.rejection : rethrow(); end
 @testset "a Dict's storage held as a constant of its own is the Dict's, in either order; never two objects" begin
     @test !Base.isslotfilled(DK, findfirst(==(7), DK.keys))   # the deleted key's bytes, in a slot the Dict does not fill
@@ -172,9 +186,11 @@ refusal(f) = try; WasmTarget.compile(f, (Int64,); optimize = false); nothing; ca
     local results = WTChild.run_cases(cases)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
     @test length(results) == 2 && all(r -> r.ok, results)
-    for f in (keys_dict_first, keys_memory_first)
+    @test count(i -> isassigned(DSV, i) && !Base.isslotfilled(DS, i), eachindex(DSV)) == 1   # the value the Dict leaves out
+    for (f, says) in ((keys_dict_first, "held whole and by an owner"), (keys_memory_first, "reached through no owner"),
+                      (stale_dict_first, "held whole and by an owner"), (stale_memory_first, "held whole and by a Dict"))
         local r = refusal(f)
-        @test r isa WasmTarget.ProgramError
+        @test r isa WasmTarget.ProgramError && occursin(says, r.text)
     end
 end
 end

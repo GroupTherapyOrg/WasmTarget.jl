@@ -1341,13 +1341,16 @@ end
     seen === nothing || return seen[1]   # the Memory met before, by another path: its one module object
     local copy = _dict_live_memory(d, m, at)
     # _array_live_ref's rule: where the live copy leaves nothing out (each slot the Dict does not fill already holds no
-    # value: a boxed element's #undef, a singleton's one value), the Memory itself is the module object, so a second
-    # path to it (getfield(d, :vals) held as a constant of its own) reaches the same object
+    # value: a boxed element's #undef, a singleton's one value, as Base's _delete! and empty! leave a boxed slot), the
+    # Memory itself is the module object, so a second path to it (getfield(d, :vals) held as a constant of its own)
+    # reaches the same object. A non-isbits Memory with a value in a slot the Dict does not fill (one written through
+    # getfield(d, :vals)) differs from its copy; an isbits one never reaches here held whole (_unowned_memory refuses it)
     if all(i -> isassigned(copy, i) == isassigned(m, i) && (!isassigned(m, i) || copy[i] === m[i]), eachindex(m))
         statics.live_memories[m] = (m, eachindex(m))
         return m
     end
-    # else the copy differs from the Memory (an isbits slot's bytes the Dict left): one constant cannot be both
+    # else the copy differs from the Memory: one constant cannot be both. Held whole before (src/constants.jl's Memory
+    # branch), it is refused here; met after this, the Memory branch refuses it
     m in statics.whole_memories &&
         reject!(ProgramError("$at: a Memory constant held whole and by a Dict that defines part of it (its filled slots): one constant cannot hold both; build the Dict in the function"), at)
     statics.live_memories[m] = (copy, eachindex(m))
