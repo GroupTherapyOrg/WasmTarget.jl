@@ -76,6 +76,13 @@ The translator is held as `KernelNodes`, the mixin Translator alone applies (src
 precedent(dart: `class Translator with KernelNodes`, the mixin a field may be typed by; rust: a
 trait object breaking a cycle of struct types). Julia's differs: two structs cannot name each
 other, so the collaborator names the abstract type only Translator subtypes.
+
+Reshaped: `covered_arities` — the arities whose record class is among the closed world's classes
+(src/julia/classes.jl record_arities), set once with `class_ids`; dart's counterpart is the keys of
+`translator.recordClasses` (dart2wasm/lib/translator.dart:228), the record shapes fixed when the
+translator is made. Every reader of which arities a record covers (an open tuple type's ranges, the
+type rules, an is check's record tests, jl_f_tuple's splat lookup) reads this field, so a splat and
+an is check pick one class for one tuple.
 """
 @parity "dart2wasm/lib/class_info.dart:780 ClassIdNumbering" struct ClassIdNumbering
     translator::KernelNodes
@@ -90,6 +97,7 @@ other, so the collaborator names the abstract type only Translator subtypes.
     _transitive_implementors::IdDict{DataType,Base.IdSet{DataType}}
     _concrete_class_id_ranges::IdDict{Type,Vector{Range}}
     first_non_masqueraded_interface_class_cid::Late{Int}
+    covered_arities::Set{Int}
     # dart's constructor `ClassIdNumbering._` with its field initializers, the struct's one
     # constructor tagged by the dart name; the late field's initializer reads the numbering itself
     function ClassIdNumbering(::Val{:_}, translator::KernelNodes, _subclasses::IdDict{DataType,Vector{DataType}},
@@ -107,7 +115,7 @@ other, so the collaborator names the abstract type only Translator subtypes.
         end)
         self = new(translator, _subclasses, _implementors, _concrete_subclass_id_range, _masqueraded, dfs_order,
                          class_ids, max_concrete_class_id, max_class_id, IdDict{DataType,Base.IdSet{DataType}}(),
-                         IdDict{Type,Vector{Range}}(), cid)
+                         IdDict{Type,Vector{Range}}(), cid, record_arities(keys(class_ids)))
         return self
     end
 end
@@ -566,9 +574,8 @@ TupleRecord), its values' classes.
         # an open tuple type's values, a Union of tuple types' among them (its join an open tuple type,
         # translateStorageType's top type), are the records of the arities it admits (TupleRecord): a
         # tuple of a concrete static type is boxed into its arity's record where it flows into an open slot
-        local arities = record_arities(keys(self.class_ids))
         for (c, id) in self.class_ids
-            open_tuple_holds(klass, c, arities) && push!(ranges, Range(id, id))
+            open_tuple_holds(klass, c, self.covered_arities) && push!(ranges, Range(id, id))
         end
     elseif klass isa DataType && haskey(self.class_ids, klass)
         local transitive_implementors = _get_transitive_implementors(self, klass)

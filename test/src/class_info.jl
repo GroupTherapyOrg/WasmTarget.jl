@@ -63,7 +63,11 @@ end
         # a class's ranges hold a concrete class's id exactly when Julia's <: says it is a subtype
         # (the model's RangeIsa), an open tuple type its arities' records, a concrete tuple boxed into one
         # (the record model, src/julia/classes.jl open_tuple_holds; the runtime's roots bring `Tuple`)
-        local holds(k, c) = k <: Tuple && !isconcretetype(k) ? W.open_tuple_holds(k, c, W.record_arities(conc)) : c <: k
+        # the arities the records cover are set once, with the class ids: the record classes of the
+        # closed world's, each covered arity's record class among its concrete classes
+        @test n.covered_arities == W.record_arities(conc) == W.record_arities(n.dfs_order)
+        @test all(a -> any(c -> W.tuple_record_arity(c) == W.FixedArity(a), conc), n.covered_arities)
+        local holds(k, c) = k <: Tuple && !isconcretetype(k) ? W.open_tuple_holds(k, c, n.covered_arities) : c <: k
         @test all(((k, c),) -> holds(k, c) == any(r -> contains(r, n.class_ids[c]), D.get_concrete_class_id_range(n, k)),
                   [(k, c) for k in n.dfs_order for c in conc])
         @test D.get_concrete_class_id_range(n, Any) == [D.Range(1, length(conc))]

@@ -2449,7 +2449,7 @@ end
         WasmBuilder.var"end"(b)   # done
     end
     # jl_f_tuple's lookup by the arity: the empty tuple, the record of a covered arity, else the array class
-    local covered = sort!(collect(record_arities(info.cls for info in t.classes[] if info.cls !== nothing)))
+    local covered = sort!(collect(t.class_id_numbering[].covered_arities))
     local done = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[top_nn])
     for arity in covered
         WasmBuilder.local_get(b, n)

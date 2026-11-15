@@ -1054,7 +1054,7 @@ see, being an instance with its parameters bound, so the list is empty.
     table[no_substitution] = RuntimeTypeInformation_no_substitution_index()
     push!(table_by_index, no_substitution)
     local classes = translator.classes[]
-    local arities = record_arities(info.cls for info in classes if info.cls !== nothing)
+    local arities = translator.class_id_numbering[].covered_arities
     for class_info in classes
         local superclass = class_info.cls
         # We don't need type rules for any class without a superclass, or for classes whose

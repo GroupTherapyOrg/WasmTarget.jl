@@ -53,7 +53,7 @@ both: canUseTypeCheckHelper refuses the helper by it, and the is checker emits w
 """
 @quarantine "julia/src/subtype.c:1348 subtype_tuple: a tuple type's subtypes are those of its arity whose every field is a subtype of the type's, so a member is a product of its fields' tests where its shape at the arity is a DataType" Base.typeintersect function record_member_tests(translator, @nospecialize(T::Type), field_checked)::Union{Nothing,Vector{Tuple{Int,DataType,DataType}}}
     local out = Tuple{Int,DataType,DataType}[]
-    local arities = record_arities(concrete_classes(translator, Tuple))
+    local arities = translator.class_id_numbering[].covered_arities
     for t in Base.uniontypes(T)
         t <: Tuple || continue
         for (id, c) in zip(concrete_class_ids(translator, Tuple), concrete_classes(translator, Tuple))
@@ -482,7 +482,8 @@ allocates `jl_datatype_size(tt)` of a type it finds or makes; this keeps the buf
     c isa DataType && c <: TupleRecord && c.parameters[1] isa Int ? FixedArity(c.parameters[1]) : nothing
 
 # the arities whose record class is among `classes` (the closed world's): Julia's tuple types its cache
-# holds (jltypes.c:1133 lookup_typevalue), the one answer of which arities a record covers
+# holds (jltypes.c:1133 lookup_typevalue), the one answer of which arities a record covers, computed once
+# when the class ids are fixed (src/class_info.jl ClassIdNumbering.covered_arities), which every reader reads
 @quarantine "julia/src/jltypes.c:1133 lookup_typevalue finds a tuple type in its cache; the closed world's record classes are the arities it holds" Base.Set function record_arities(classes)::Set{Int}
     local out = Set{Int}()
     for c in classes
