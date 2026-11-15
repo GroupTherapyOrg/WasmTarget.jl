@@ -979,7 +979,7 @@ def part_log(d, part):
     return os.path.join(d, f"{part}.log")
 
 def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=False, yields=False, learn_=False, plan=None,
-            frame=None, beside=None, rejoin=None):
+            frame=None, beside=None, rejoin=None, pauses=None):
     """One process of a measurement's role, watched case by case: the one watch function of its three roles (compile,
     native, compare; O6-9, R5-10, the rule that no hang is allowed). The process flushes `started <label>` before each
     case into its records (`var` names their file in its environment, read from the role's home, `rel`, through
@@ -1002,7 +1002,11 @@ def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=Fals
     process is reaped at a case's boundary and started again once the lander is done (yield_slot, ruling 1); the
     yielded wait and the restart's load up to its first record are outside its wall. The wait leaves the role's use
     (door.released, spec v17 Y3: no yield while a measuring role is held); when another use came between, `rejoin()`
-    makes the part's run directory and home again before the restart, and with no `rejoin` the part is cut (RoleLost). With `plan` (a judging process,
+    makes the part's run directory and home again before the restart, and with no `rejoin` the part is cut (RoleLost).
+    With `pauses` (a src run's, src_run: {"failed", "reaped"}), which restarts its own process by its stop file and never
+    here, a lander whose work uses no measuring role stops the process in place at a case's boundary (pause_in_place) as
+    a compile's is; a pause that fails is said in `pauses` (failed; reaped when its processes were reaped, the lock let
+    go) and never tried again in this process, src_run's stop file then ending it gracefully. With `plan` (a judging process,
     R8-1) each case's block, its `loads` record (the files its answering program loaded), its `answer` record and then its `group` and `leaf` records and a unit label's `digest`
     (test/smoke_judge.jl: its unit's load, which the compiling process compares with its own), or one `noanswer`, every one
     naming that case, is kept only when it stands between that case's `started` and the next `started` or `ended`, and
@@ -1150,7 +1154,7 @@ def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=Fals
                     cut = (flight, "the process ended during the case")   # is, and the process runs on without it (O9-3)
                     event("case-ended", role=role, part=part, label=flight, rc=p.returncode)
                 break
-            if yields and lander_waits(kind):
+            if (yields or pauses is not None and not pauses["failed"]) and lander_waits(kind):
                 if lander_stops(kind):   # the lander's work uses no measuring role: stopped in place, never restarted (T5)
                     if last is None or started_now or last in done:   # where a restart would come, nothing lost
                         paused, held = pause_in_place(role, kind)
@@ -1161,9 +1165,15 @@ def watched(start, role, d, rel, part, labels, first_s, var=None, keep_done=Fals
                             if cur:   # just started its learned time (the driver's clock); the seconds its process
                                 cur = (cur[0], cur[1] + paused, cur[2])   # reports hold it, never a budget (R6-9)
                             continue
+                        if pauses is not None:   # a src run's: its own stop file ends it (held), or it was reaped (not held)
+                            pauses.update(failed=True, reaped=not held)
+                            if held:
+                                continue
+                            p.wait()
+                            break
                         door.reap(role); p.wait(); gave, yield_held = True, held   # its role not stopped, or past the
                         break   # pause's wall: the yield as before
-                elif last is None or started_now or last in done:   # a case's boundary: the role left, the process again
+                elif yields and (last is None or started_now or last in done):   # a case's boundary: the role left, the process again
                     door.reap(role); p.wait(); gave, yield_held = True, True
                     break
             budget = case_budget(c, secs, last, fin == 0, first_s) if last or not fin else c["case_min_s"]
@@ -2708,10 +2718,15 @@ def src_run(head, files, task, role="score", learn_=False, yields=False):
     records read per process (src_process: a row stands only beside a canary that read passed and an exit status that
     agrees, A13-5). Watched as a measurement's cases are (watched(): each file's `started` and its `row`, a per-file
     budget learned from origin's commits with `learn_`, a file past its budget booked errored by name and the rest run
-    again in a fresh process). With `yields`, a waiting lander makes the run stop gracefully before its next file
-    (WT_SRC_STOP): that process runs its canary and exits, the lock passes to the lander (yield_slot), and the files not
-    yet read run in a new process after. A restarted process's first file pays the shared first compile again: its cost
-    is recorded unmeasured (None; the operator's round-13 finding 7). Returns ({file: (outcome, G, secs, why)}, the
+    again in a fresh process). With `yields`, a waiting lander whose work uses no measuring role (a landing's check, a
+    regeneration, a layer: lander_stops) stops the process in place at a file's boundary (watched's `pauses`,
+    pause_in_place, T5), so the walk goes on in the one process it started in; any other waiting lander (or a pause that
+    failed) makes the run stop gracefully before its next file (WT_SRC_STOP, src_stop_wanted): that process runs its
+    canary and exits, the lock passes to the lander (yield_slot), and the files not yet read run in a new process after.
+    Every file a process after the first runs is recorded unmeasured (None, src_unmeasured): a fresh process pays again
+    what the walk's earlier files had compiled, and that charge lands on whichever of its files first needs it (the score
+    of c783ab62: code_generator.jl 543.2 G after a restart, 185.3 G in one walk), so it belongs to no file;
+    settle_costs carries each from the last record that measured it. Returns ({file: (outcome, G, secs, why)}, the
     warm-up G or None) for every file, or (None, why) when a process's records were void, refused or missing; MeasureCut
     when a part is cut with no file to book."""
     if not files:
@@ -2757,15 +2772,18 @@ def src_run(head, files, task, role="score", learn_=False, yields=False):
                 procs.append(p)
                 return p
             done_ev = threading.Event()
-            def watch_lander(rel=rel):   # a landing waits: the run stops before its next file (its canary still runs)
-                while not done_ev.wait(cfg()["poll_s"]["yield"]):
-                    if yields and lander_waits(kind):
+            pz = {"failed": False, "reaped": False}   # this round's pause in place (watched's `pauses`)
+            def watch_lander(rel=rel, pz=pz):   # a landing that needs the role waits: the run stops before its next file
+                while not done_ev.wait(cfg()["poll_s"]["yield"]):   # (its canary still runs)
+                    if yields and src_stop_wanted(kind, pz):
                         door.put(role, f"{rel}/stop", "stop\n"); stopped[0] = True; return
             th = threading.Thread(target=watch_lander, daemon=True); th.start()
             out, killed, n, refused = watched(start, role, d, rel, "src", remaining + [CANARY], cfg()["pkg_wall_s"],
                                               var="WT_SRC_RECORDS", keep_done=False, yields=False, learn_=learn_,
-                                              frame={"path": os.path.join(d, f"frame.{rnd}.tsv")})
+                                              frame={"path": os.path.join(d, f"frame.{rnd}.tsv")},
+                                              pauses=pz if yields else None)
             done_ev.set(); th.join()
+            stopped[0] = stopped[0] or pz["reaped"]   # a pause past its wall reaped the process: the rest after a yield
             if refused:
                 door.wipe(role, f"{door.home(role)}/s")
                 return None, f"the driver refused the src run's records: {refused}"
@@ -2779,8 +2797,7 @@ def src_run(head, files, task, role="score", learn_=False, yields=False):
                     door.wipe(role, f"{door.home(role)}/s")
                     event("src-void", task=task, why=void[:400])
                     raise SrcVoid(f"a src process's records are void: {void}", [x for x in started if x != CANARY])
-                if (rnd > 0 or k > 0) and started:   # a restarted process's first file: no cost of its own
-                    restarted.add(started[0])
+                restarted |= src_unmeasured(rnd, k, started)   # a restarted process's files: no cost of their own
                 got.update(prows)   # a later process's rows (a killed one's files run again) supersede
             for f_, (o, g, why) in got.items():
                 rows[f_] = (o, None if f_ in restarted else g, secs.get(f_, 0.0), why)
@@ -2795,13 +2812,28 @@ def src_run(head, files, task, role="score", learn_=False, yields=False):
             remaining, rnd = left, rnd + 1
             if stopped[0] and remaining:   # the lander lands; the rest after it, in a fresh process, the role left meanwhile
                 with door.released(role) as use:   # (spec v18 Q4, the round-15 operator's finding 1: a yield that held the
-                    yield_slot(kind)               # role took the score lock against LOCK_ORDER and raised)
+                    yield_slot(kind, held=not pz["reaped"])   # role took the score lock against LOCK_ORDER and raised; a
+                    # pause that reaped the process let the lock go already)
                 if use["lost"]:   # another use of the role came between, which removed the run directory and the home
                     prepare()
         rc, err = door.wipe(role, f"{door.home(role)}/s")
     if rc != 0:
         return None, f"the src run's directory could not be removed: {err.strip()[-300:]}"
     return rows, (min(warms) if warms else None)
+
+def src_stop_wanted(kind, pz):
+    """Whether a src run stops gracefully before its next file (its stop file): a lander waits on its lock, and either
+    its work needs a measuring role (not lander_stops) or this round's pause in place failed (`pz`, watched's
+    `pauses`); a lander whose work uses no measuring role stops the run in place instead (watched, T5)."""
+    return lander_waits(kind) and (not lander_stops(kind) or pz["failed"])
+
+def src_unmeasured(rnd, k, started):
+    """The files of a src process whose costs are recorded unmeasured: every file (`started`, the canary aside) of any
+    process but a run's first (round `rnd` > 0 after a yield, or process `k` > 0 after a file killed past its budget).
+    A fresh process pays again what the walk's earlier files had compiled, on whichever of its files first needs it,
+    which no record can tell (2026-11-15, the score of c783ab62: restarted at closures.jl, 11 G, the charge landed on
+    code_generator.jl, 543.2 G against 185.3 G in one walk), so none of its costs is a file's own."""
+    return {x for x in started if x != CANARY} if rnd > 0 or k > 0 else set()
 
 def src_red_at(files, at, task, role="score"):
     """The one answer to "is this file red at this commit" (R3, D5): `files` run at commit `at` in one process (src_run),
@@ -3072,40 +3104,59 @@ def src_flaky_passed(files):
                 else:
                     src_entry_set(e["key"], passes=e.get("passes", 0) + 1)
 
+def src_kept(head):
+    """The kept score records (STATE/src-<head>.tsv, SRC_KEEP of them) of `head` and its ancestors, newest first:
+    [(their head, warm, {file: row})], where settle_costs reads each file's last measured cost."""
+    out = []
+    for p in sorted(glob.glob(os.path.join(STATE, "src-*.tsv")), key=os.path.getmtime, reverse=True):
+        with contextlib.suppress(OSError, IndexError):
+            h = open(p).readline().split("\t")[1]
+            if sh(["git", "merge-base", "--is-ancestor", h, head]).returncode == 0 and (rec := src_record(h)) is not None:
+                out.append((h, rec[0], rec[1]))
+    return out
+
 def settle_costs(rows, head):
-    """A score's rows ({file: (outcome, G or None, secs, why)}) settled against the previous score's record before they
-    are written: a passed file whose cost src_run left unmeasured (a restarted process's first file, after a yield to
-    the lander: it paid the first compile again) carries its cost from the previous record, scaled by its size now over
-    its size there, its why naming the record ("carried from <head>"); and a measured cost whose G per byte differs from
-    the previous record's by more than src_cost_jump, the file's size unchanged, is a fault (one event and one note
-    naming each file), the previous cost recorded in its place, never the jump. 2026-11-15: the score of f1435467,
+    """A score's rows ({file: (outcome, G or None, secs, why)}) settled against the kept records before they are written,
+    each file against the newest kept record (src_kept) that MEASURED it, passed (2026-11-15: a record whose own cost
+    for classes.jl was blank sent it to the densest-rate estimate, 3,675.3 G, while two kept records had measured it at
+    209.9 and 218.9): a passed file src_run left unmeasured (src_unmeasured: a restarted process's files) carries that
+    record's cost, scaled by its size now over its size there, its why naming the record ("carried from <head>"); and a
+    measured cost whose G per byte differs from that record's by more than src_cost_jump, the file's size unchanged, is
+    a fault (one event and one note naming each file), that record's cost recorded in its place, never the jump. 2026-11-15: the score of f1435467,
     yielding to landings, left classes.jl and closures.jl unmeasured, and src_costs charged them its estimate for a
     file no score has run, the densest G per byte of test/src: 3,723.4 G and 1,537.9 G against about 205 and 11, a
     src-near note and a would-be hold for files that are light. A file the previous record did not measure either is
     left unmeasured (src_costs names it estimated)."""
-    prev = src_latest(head)
-    if prev is None:
+    kept = src_kept(head)
+    if not kept:
         return rows
-    ph, _, prow = prev
-    now_s, was_s = src_sizes(head), src_sizes(ph)
-    carried, jumps, out = {}, {}, dict(rows)
+    now_s, sizes = src_sizes(head), {}
+    def last(f):   # (the newest kept record that measured f, passed; its cost; f's size there)
+        for ph, _, prow in kept:
+            p = prow.get(f)
+            if p and p[0] == "passed" and p[1] is not None:
+                return ph, p[1], sizes.setdefault(ph, src_sizes(ph)).get(f)
+        return None
+    carried, jumps, src, out = {}, {}, {}, dict(rows)
     for f, (o, g, secs, why) in rows.items():
-        p = prow.get(f)
-        if o != "passed" or not p or p[0] != "passed" or p[1] is None or not was_s.get(f) or not now_s.get(f):
+        m = last(f) if o == "passed" else None
+        if m is None or not m[2] or not now_s.get(f):
             continue
-        scale = now_s[f] / was_s[f]
+        ph, pg, was = m
+        scale = now_s[f] / was
         if g is None:
-            out[f] = (o, round(p[1] * scale, 1), secs, f"carried from {ph[:10]}")
-            carried[f] = out[f][1]
-        elif now_s[f] == was_s[f] and p[1] > 0 and g > 0 and max(g / p[1], p[1] / g) > cfg()["src_cost_jump"]:
-            out[f] = (o, p[1], secs, f"a jump from {p[1]} G to {g} G refused, carried from {ph[:10]}")
-            jumps[f] = (p[1], g)
+            out[f] = (o, round(pg * scale, 1), secs, f"carried from {ph[:10]}")
+            carried[f], src[f] = out[f][1], ph[:8]
+        elif now_s[f] == was and pg > 0 and g > 0 and max(g / pg, pg / g) > cfg()["src_cost_jump"]:
+            out[f] = (o, pg, secs, f"a jump from {pg} G to {g} G refused, carried from {ph[:10]}")
+            jumps[f], src[f] = (pg, g), ph[:8]
     if carried:
-        event("src-cost-carried", sha=head[:8], files=carried, prev=ph[:8])
+        event("src-cost-carried", sha=head[:8], files=carried, prev=kept[0][0][:8], records={f: src[f] for f in carried})
     if jumps:
-        event("src-cost-jump", sha=head[:8], files={f: {"was": a, "read": b} for f, (a, b) in jumps.items()}, prev=ph[:8])
+        event("src-cost-jump", sha=head[:8], files={f: {"was": a, "read": b} for f, (a, b) in jumps.items()}, prev=kept[0][0][:8],
+              records={f: src[f] for f in jumps})
         alarm(f"src-cost-jump-{head[:8]}", "a test file's measured cost jumped with its size unchanged",
-              f"The score of {head[:10]} read " + ", ".join(f"test/src/{f} {b} G (the record of {ph[:10]}: {a} G)"
+              f"The score of {head[:10]} read " + ", ".join(f"test/src/{f} {b} G (the record of {src[f]}: {a} G)"
                                                               for f, (a, b) in sorted(jumps.items())) +
               f", each past src_cost_jump ({cfg()['src_cost_jump']}x) with its size unchanged. Default taken: the "
               "previous cost is recorded and used; the measure is the lead's to look at.")

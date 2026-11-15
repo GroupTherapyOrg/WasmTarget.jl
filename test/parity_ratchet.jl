@@ -3375,9 +3375,9 @@ const BOUNDED_BREAKS = (
      "    if kind != \"OWN\" or arg != \"void\" or ss is None or files is None or files:", "    if True:", 41),
     ("an exit status that is no number read as a test", "dev/src_verdict.sh", "  [[ \"\$r\" =~ ^[0-9]+\$ ]] || { void=", "  true || { void=", 41),
     # a score's unmeasured or jumped cost settled against the previous record (2026-11-15: classes.jl at 3,723.4 G)
-    ("a restarted first file left unmeasured", "dev/climb/measure.py", "        if g is None:\n            out[f] = (o, round(p[1] * scale, 1)",
-     "        if False:\n            out[f] = (o, round(p[1] * scale, 1)", 42),
-    ("a cost's jump used", "dev/climb/measure.py", "and max(g / p[1], p[1] / g) > cfg()[\"src_cost_jump\"]:", "and False:", 42),
+    ("a restarted first file left unmeasured", "dev/climb/measure.py", "        if g is None:\n            out[f] = (o, round(pg * scale, 1)",
+     "        if False:\n            out[f] = (o, round(pg * scale, 1)", 42),
+    ("a cost's jump used", "dev/climb/measure.py", "and max(g / pg, pg / g) > cfg()[\"src_cost_jump\"]:", "and False:", 42),
     # a landing-red's reason first (2026-11-15: hold 17c2f6adf0, three drops for one L227 line its notes hid)
     ("the ratchet's ✗ lines left out of the reason", "dev/climb/lander.py",
      "    lines = [l.strip()[:300] for l in rat.splitlines() if l.lstrip().startswith(\"✗\")][:10]", "    lines = []", 43),
@@ -3394,6 +3394,17 @@ const BOUNDED_BREAKS = (
     ("the hold read from the reading alone, never the settled hold", "dev/climb/core.py",
      "    above = not power_held(ac, pct, watts, ma, not rec.get(\"above\", True))", "    above = not power_held(ac, pct, watts, ma, False)", 44),
     ("the status line silent on what the hold leaves running", "dev/climb/core.py", "NOT stopped: agent runs in flight finish", "nothing else", 44),
+    # a restart's charge belongs to no file; an unmeasured file carries the last record that measured it (2026-11-15)
+    ("a restarted process's files measured but its first", "dev/climb/measure.py",
+     "    return {x for x in started if x != CANARY} if rnd > 0 or k > 0 else set()", "    return set(started[:1]) if rnd > 0 or k > 0 else set()", 45),
+    ("a src run stopped for a lander that pauses it in place", "dev/climb/measure.py",
+     "    return lander_waits(kind) and (not lander_stops(kind) or pz[\"failed\"])", "    return lander_waits(kind)", 45),
+    ("a src run never paused in place", "dev/climb/measure.py",
+     "            if (yields or pauses is not None and not pauses[\"failed\"]) and lander_waits(kind):", "            if yields and lander_waits(kind):", 45),
+    ("a src run's failed pause unsaid", "dev/climb/measure.py", "                            pauses.update(failed=True, reaped=not held)",
+     "                            pass", 45),
+    ("the look-back ending at the newest kept record", "dev/climb/measure.py", "        for ph, _, prow in kept:",
+     "        for ph, _, prow in kept[:1]:", 45),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

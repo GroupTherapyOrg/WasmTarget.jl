@@ -2374,3 +2374,74 @@ except Exception as e:
 finally:
     core.sh, core.cfg = real44["sh"], real44["cfg"]
     core.POWER[:] = real44["POWER"]
+
+# 45. a restart's charge belongs to no file (measure.src_unmeasured, measure.src_stop_wanted, watched's `pauses`,
+# measure.settle_costs over measure.src_kept): a src run a landing's check waits on stops in place, never restarted; a
+# restarted process's files are all unmeasured; and an unmeasured file carries the cost of the newest kept record that
+# MEASURED it, never a blank record's estimate. 2026-11-15: the score of c783ab62, restarted at classes.jl and again
+# at closures.jl, charged code_generator.jl 543.2 G (185.3 G in one walk), and a record whose classes.jl was blank
+# would have sent it to the densest-rate estimate though two kept records measured it
+#: limit 30
+real45 = {"cfg": M.cfg, "waits": M.lander_waits, "stops": M.lander_stops, "pause": M.pause_in_place,
+          "door": {k: getattr(door, k) for k in ("home", "open_home", "tick", "reap")}}
+try:
+    # the restarted process's files, and the stop file only for a lander that needs the role or after a failed pause
+    if (M.src_unmeasured(0, 0, ["a.jl", "b.jl", M.CANARY]), M.src_unmeasured(1, 0, ["c.jl", "d.jl", M.CANARY]),
+            M.src_unmeasured(0, 1, ["e.jl"])) != (set(), {"c.jl", "d.jl"}, {"e.jl"}):
+        fault(f"src_unmeasured: {M.src_unmeasured(1, 0, ['c.jl', 'd.jl', M.CANARY])} (every file of a restarted process)")
+    M.lander_waits, M.lander_stops = (lambda k: True), (lambda k: True)
+    want45 = (M.src_stop_wanted("verify", {"failed": False}), M.src_stop_wanted("verify", {"failed": True}))
+    M.lander_stops = lambda k: False
+    want45 += (M.src_stop_wanted("verify", {"failed": False}),)
+    if want45 != (False, True, True):
+        fault(f"src_stop_wanted (a stops lander, the same after a failed pause, a lander needing the role): {want45}, not (False, True, True)")
+    # watched with `pauses`: a stand-in process walks five cases; the lander's mark stands in
+    M.cfg = lambda: dict(real45["cfg"](), watch_s=0.05)
+    home45 = f"{tmp}/home45"; d45 = f"{tmp}/d45"; os.makedirs(d45, exist_ok=True)
+    door.home = lambda role: home45
+    door.open_home = lambda role, rel: open(f"{home45}/{rel}", "rb") if os.path.exists(f"{home45}/{rel}") else None
+    door.tick = lambda *a, **k: None
+    reaped45 = []
+    door.reap = lambda *a, **k: reaped45.append(1)
+    labels45 = [f"a/{i:02d}" for i in range(5)]
+    def start45(env, log_):
+        script = "".join(f'printf "started\\t{l}\\n" >> "$REC"; sleep 0.15; ' for l in labels45) + 'printf "ended\\n" >> "$REC"'
+        return subprocess.Popen(["/bin/sh", "-c", script], env=dict(os.environ, REC=env["WT_SMOKE_COMPILED"]), stdout=log_,
+                                stderr=subprocess.STDOUT)
+    for how, ret, want in (("paused", (0.2, True), {"failed": False, "reaped": False}),
+                           ("refused", (None, True), {"failed": True, "reaped": False}),
+                           ("reaped", (None, False), {"failed": True, "reaped": True})):
+        calls45, waits45 = [], [True]
+        M.lander_waits, M.lander_stops = (lambda k: waits45[0]), (lambda k: True)
+        def pause45(role, kind, ret=ret):
+            calls45.append(kind); waits45[0] = how != "paused"   # a served lander lets the lock go
+            return ret
+        M.pause_in_place = pause45
+        rel45 = f"m/{how}/compile"; os.makedirs(f"{home45}/{rel45}", exist_ok=True)
+        pz45 = {"failed": False, "reaped": False}
+        out45 = M.watched(start45, "measure", d45, rel45, "compile", labels45, 60, var="WT_SMOKE_COMPILED", keep_done=True, pauses=pz45)
+        if len(calls45) != 1 or pz45 != want or out45[1]:
+            fault(f"watched with `pauses`, its pause {how}: pause_in_place called {len(calls45)} time(s) (once), the pause read "
+                  f"{pz45} (want {want}), killed {out45[1]} (none)")
+    # settle_costs: the newest kept record left t00.jl and t01.jl blank; an older one measured them
+    g("checkout", "-q", "--detach", h)
+    open(f"{repo}/src/x.jl", "a").write("# 45a\n"); g("add", "-A"); g("commit", "-q", "-m", "c45a"); h45a = g("rev-parse", "HEAD")
+    open(f"{repo}/src/x.jl", "a").write("# 45b\n"); g("add", "-A"); g("commit", "-q", "-m", "c45b"); h45b = g("rev-parse", "HEAD")
+    old45 = f"{state}/src-{h[:8]}.tsv"
+    if not os.path.exists(old45):
+        open(old45, "w").write(f"head\t{h}\twarm\t350\n" + "".join(f"{f}\tpassed\t100.0\t0.0\t\n" for f in FILES))
+    os.utime(old45, (time.time() - 100, time.time() - 100))
+    open(f"{state}/src-{h45a[:8]}.tsv", "w").write(f"head\t{h45a}\twarm\t350\n" + "".join(
+        f"{f}\tpassed\t{'' if f in ('t00.jl', 't01.jl') else 100.0}\t0.0\t\n" for f in FILES))
+    open(f"{state}/src-latest.json", "w").write(json.dumps({"head": h45a}))
+    got45 = M.settle_costs({"t00.jl": ("passed", None, 3.0, ""), "t01.jl": ("passed", 1000.0, 3.0, ""),
+                            "t02.jl": ("passed", 120.0, 3.0, "")}, h45b)
+    if (got45["t00.jl"][1], got45["t01.jl"][1], got45["t02.jl"][1]) != (100.0, 100.0, 120.0) or h[:10] not in got45["t00.jl"][3]:
+        fault(f"settled against the kept records (t00 and t01 blank in the newest): {({f: (r[1], r[3][:40]) for f, r in got45.items()})} "
+              f"(t00 carried 100.0 from {h[:10]}, t01's jump refused against that record's 100.0, t02 kept)")
+except Exception as e:
+    fault(f"a restart's charge raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    M.cfg, M.lander_waits, M.lander_stops, M.pause_in_place = real45["cfg"], real45["waits"], real45["stops"], real45["pause"]
+    for k, v in real45["door"].items():
+        setattr(door, k, v)
