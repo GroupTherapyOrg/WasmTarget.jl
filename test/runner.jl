@@ -154,7 +154,18 @@ function wrap(b, entry) {
 // the standalone embedder's `dart` imports a module may take, dart's own test runner's
 // (pkg/test_runner/lib/src/browser.dart:441 dartEmbedder, given as {dart: dartEmbedder} at :695): those
 // the runtime's ports import, each as dart's runner writes it
+// dart's standalone array helper (browser.dart:427 _wasmStandaloneArrayHelper, instantiated at :437 with the JS string
+// builtins): JS reads no WasmGC array, so the embedder's string functions call it
+const helper = new WebAssembly.Instance(new WebAssembly.Module(Buffer.from(
+  'AGFzbQEAAAABOQledwFeeAFebwFgA2MAf38BZG9gA29jAH8Bf2ADZAF/fwFkb2ADZAB/fwFkb2ADb2QAfwBgAAFkAgJHAg53YXNtOmpzLXN0cmluZxFmcm9tQ2hhckNvZGVBcnJheQADDndhc206anMtc3RyaW5nEWludG9DaGFyQ29kZUFycmF5AAQDBQQFBgcIB2AEFHN0cmluZ0Zyb21Bc2NpaUJ5dGVzAAIXc3RyaW5nRnJvbUNoYXJDb2RlQXJyYXkAAxVzdHJpbmdUb0NoYXJDb2RlQXJyYXkABBNlbXB0eUV4dGVyblJlZkFycmF5AAUKagRGAgF/AWQAIAIhA0EAIAL7BgAhBAJAA0AgA0F/aiEDIANBAEgNASAEIAMgACADIAFq+w0B+w4ADAALAAsgBEEAIAT7DxAACw0AIAAgASABIAJqEAALCwAgACABIAIQARoLBwBBAPsHAgs=', 'base64'), {builtins: ['js-string']}), {});
+// the lines a call's module prints through the embedder (browser.dart:651 print), kept for the call, never written
+// to the wire as they come: a WasmTarget gap deferred to run time prints its rejection's text, then traps
+let printed = [];
 const dartEmbedder = {
+  // browser.dart:462-465
+  stringFromAsciiBytes: (chars, start, length) => helper.exports.stringFromAsciiBytes(chars, start, length),
+  // browser.dart:651-657
+  print: (line) => { printed.push(String(line)); },
   // browser.dart:509-519
   stackTraceGetCurrent: () => new Error().stack,
   stackTraceToString: (trace) => {
@@ -197,6 +208,7 @@ const b64 = new Map(), mods = new Map();
       if (kinds.join(',') !== w.params.join(',')) { out('err the call passes (' + kinds.join(', ') + ') to an export of (' + w.params.join(', ') + ')'); continue; }
       const vals = args.map(a => { const [t, v] = a.split(':'); return t === 'i32' || t === 'f32' ? Number(BigInt.asIntN(32, BigInt('0x' + v))) : BigInt.asIntN(64, BigInt('0x' + v)); });
       inst = new WebAssembly.Instance(m.mod, {dart: dartEmbedder});   // a fresh instance a call: no state survives it
+      printed = [];
       const call = new WebAssembly.Instance(w.wmod, {m: {f: inst.exports[w.name]}}).exports.call;
       const t0 = performance.now();
       const r = call(...vals);
@@ -213,7 +225,12 @@ const b64 = new Map(), mods = new Map();
         if (tags.length !== 1) out('err a wasm exception, and the module exports ' + tags.length + ' tags, not its one exception tag to match it against');
         else if (!e.is(inst.exports[tags[0].name])) out('err a wasm exception under another tag than the module\'s exported ' + tags[0].name);
         else out('exc ' + text(e));
-      } else out((e instanceof WebAssembly.RuntimeError ? 'err trap: ' : 'err ') + text(e));
+      } else {
+        // a trap after the module reported a WasmTarget gap: the gap, located (`rep`), never the trap
+        const reported = e instanceof WebAssembly.RuntimeError ? printed.find((l) => l.startsWith('WasmTarget rejects ')) : undefined;
+        if (reported !== undefined) out('rep ' + reported.replace(/\s+/g, ' '));
+        else out((e instanceof WebAssembly.RuntimeError ? 'err trap: ' : 'err ') + text(e));
+      }
     }
   }
 })();

@@ -39,6 +39,25 @@ _v_case(native; opt = UInt8[]) = WV.RunCase("c", _V_ADD, opt, (Int64(1),), nativ
 _v_judge(native, raws...; opt = isempty(raws) || length(raws) == 1 ? UInt8[] : UInt8[1]) =
     only(WV.verdicts([_v_case(native; opt)], WV.plan([_v_case(native; opt)])..., Any[WV.read_raw(r) for r in raws]))
 
+# a gap WasmTarget defers to run time is fatal: the module reports the compile-time rejection's text to its embedder and
+# traps, and the runner writes `rep <text>` for it (test/runner.jl), never the trap; the verdict books it unported with
+# the text whole, after wrong and errored, so the climb keys the row as it keys that rejection at compile time
+# (dev/climb/core.py:417 UNPORTED_RE = r"unported: the (dart|Julia-only) definition (.*)")
+@testset "a gap reported before its trap is unported, located, the rejection's text whole" begin
+    local text = "WasmTarget rejects f(::Int64): Julia's typeof on Any (at run time, f.jl:3, statement %2): unported: the Julia-only definition julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: typeof of a tuple"
+    @test WV.read_raw("rep " * text).what === :rep && WV.read_raw("rep " * text).text == text
+    local r = _v_judge(Int64(2), "rep " * text)
+    @test r.outcome === :unported && occursin(text, r.why)
+    @test match(r"unported: the (dart|Julia-only) definition (.*)", r.why).captures[1] == "Julia-only"
+    # both modules report it: unported; a wrong answer of the other module is wrong over it
+    @test _v_judge(Int64(2), "rep " * text, "rep " * text).outcome === :unported
+    @test _v_judge(Int64(2), "rep " * text, "ret i64 0000000000000003 0").outcome === :wrong
+    # a native throw does not make it a pass: the gap stands in for the answer
+    @test _v_judge(WVO.Throws(DivideError), "rep " * text).outcome === :unported
+    # a trap with no report stays the module's answer, wrong
+    @test _v_judge(Int64(2), "err trap: unreachable").outcome === :wrong
+end
+
 @testset "a module's raw result is judged by bits at native's leaf kind, located" begin
     @test _v_judge(0xc8, "ret i32 000000c8 0.1").ok && !_v_judge(0xc8, "ret i32 ffffffc8 0.1").ok   # never truncated to fit
     @test occursin("answers the i32 0xffffffc8, native Julia 0xc8", _v_judge(0xc8, "ret i32 ffffffc8 0.1").why)

@@ -22,6 +22,8 @@
 #   exc <text>                a wasm exception under the module's one exported tag
 #   err <text>                a trap (`err trap: …`), or anything else the run failed at (a module that does not
 #                             compile, a call of other argument kinds), located
+#   rep <text>                a gap WasmTarget defers to run time, which the module reported to its embedder (its
+#                             located message) before it trapped: unported, WasmTarget's located rejection at run time
 #   gap <text>                a shape the runner cannot call or read (no such entry, a reference argument, a result of
 #                             several values, an import it does not give): the judge's gap, booked `runner-gap`
 #                             (spec v18 P2), never wrong
@@ -100,7 +102,7 @@ const _HEX = ('0':'9'..., 'a':'f'...)
 """    read_raw(line) -> Raw, or why the line reads as no raw result (a String)"""
 function read_raw(line::AbstractString)::Union{Raw,String}
     local f = split(line, ' '; limit = 2)
-    f[1] in ("exc", "err", "gap") && return Raw(Symbol(f[1]), :none, 0, 0.0, length(f) == 2 ? String(f[2]) : "")
+    f[1] in ("exc", "err", "gap", "rep") && return Raw(Symbol(f[1]), :none, 0, 0.0, length(f) == 2 ? String(f[2]) : "")
     local g = split(line, ' ')
     local bad = "the runner wrote a line no raw result reads: $(first(line, 120))"
     (g[1] == "ret" && length(g) == 4) || return bad
@@ -265,7 +267,7 @@ function verdicts(cases::AbstractVector{RunCase}, calls::AbstractVector{Call}, d
             push!(out, RunResult(c.label, JUDGE_GAP, "the judge's wire has no leaf kind for $(typeof(native)) (a new leaf kind is the judge's edit)"))
             continue
         end
-        local wrong, errored, gaps, answered = String[], String[], String[], Raw[]
+        local wrong, errored, gaps, reported, answered = String[], String[], String[], String[], Raw[]
         for opt in (false, true)
             haskey(got, (i, opt)) || continue
             local which = opt ? "the wasm-opt'd module" : "the module"
@@ -274,6 +276,8 @@ function verdicts(cases::AbstractVector{RunCase}, calls::AbstractVector{Call}, d
                 push!(errored, "$which: $r")
             elseif r.what === :gap   # a shape the runner cannot call or read: the judge's gap (spec v18 P2)
                 push!(gaps, "$which: $(r.text)")
+            elseif r.what === :rep   # a gap WasmTarget reported before its trap: unported, located, never an answer
+                push!(reported, "$which: $(r.text)")
             elseif r.what === :err   # a trap is the module's answer (wrong); any other failure of the run is no answer
                 push!(startswith(r.text, "trap:") ? wrong : errored,
                       "$which: $(r.text)" * (native isa Throws ? ", where native Julia throws $(native.type)" : ""))
@@ -294,6 +298,7 @@ function verdicts(cases::AbstractVector{RunCase}, calls::AbstractVector{Call}, d
             push!(wrong, "the module and the wasm-opt'd module differ: $(_shown(answered[1], native)) against $(_shown(answered[2], native))")
         push!(out, !isempty(wrong) ? RunResult(c.label, :wrong, join([wrong; errored; gaps], "; ")) :
                    !isempty(errored) ? RunResult(c.label, :errored, join([errored; gaps], "; ")) :
+                   !isempty(reported) ? RunResult(c.label, :unported, join([reported; gaps], "; ")) :
                    !isempty(gaps) ? RunResult(c.label, RUNNER_GAP, join(gaps, "; ")) : RunResult(c.label, :passed, ""))
     end
     return out
