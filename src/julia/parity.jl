@@ -1197,10 +1197,10 @@ end
 end
 
 # why line `ln` of an LLVM source does not declare `symbol`, or nothing when it does: `X` a class or
-# struct X at column 0, or a function X defined or declared at column 0; `X::m` X's member m defined
-# out of line at column 0 (X's template arguments between), or declared at column 2 of X's body (a
-# method, constructor or field)
-@quarantine unpinned "clang resolves a name to its declaration; Julia reads the pinned line" Base.occursin function _cpp_declares(lines::Vector{String}, ln::Int, symbol::AbstractString)::Union{String,Nothing}
+# struct X at column 0, a function X defined or declared at column 0, or an array X declared at column 0
+# (`static const T X[] = {`, a table of C data); `X::m` X's member m defined out of line at column 0 (X's
+# template arguments between), or declared at column 2 of X's body (a method, constructor or field)
+@quarantine pin"pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:29 CommentReferenceResolver.resolve" "a C anchor's symbol is resolved by its form, a simple name read as a top-level declaration and a qualified one X::m as a member of X, as dart's analyzer resolves a comment reference by its form, a simple identifier looked up in scope and a prefixed one as a member of its prefix's element (pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:29 CommentReferenceResolver.resolve); Julia differs: the declaration is the one line of the pinned checkout's file the anchor names, read by clang-format's columns and C's declaration forms where dart looks the name up in the resolved program's scopes, and it returns why the line does not declare the symbol where dart records the element or nothing" Base.occursin function _cpp_declares(lines::Vector{String}, ln::Int, symbol::AbstractString)::Union{String,Nothing}
     ln <= length(lines) || return "line $ln is past the file's end ($(length(lines)) lines)"
     local l = lines[ln]
     local s = lstrip(l)
@@ -1219,7 +1219,7 @@ end
             local n = something(c[1], c[2], c[3], c[4])
             return n == x ? nothing : "line $ln declares $n, not $x"
         end
-        return occursin(Regex("(?<![\\w:~.>])\\Q" * x * "\\E\\s*\\("), s) ? nothing : "line $ln does not declare $x"
+        return occursin(Regex("(?<![\\w:~.>])\\Q" * x * "\\E\\s*(?:\\(|\\[[^\\]]*\\]\\s*[=;])"), s) ? nothing : "line $ln does not declare $x"
     end
     local x, m = parts
     if col == 0

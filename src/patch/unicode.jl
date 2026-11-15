@@ -15,7 +15,7 @@
 
 # utf8proc_data.c:1611 utf8proc_stage1table, its lines 1612-2156: the offset into the second stage
 # of each block of 256 code points
-@quarantine pin"precedent(utf8proc: utf8proc.c:233 unsafe_get_property)" "utf8proc's first-stage table, which unsafe_get_property indexes by a code point's high bits; a wasm module has no libjulia whose utf8proc_data.c holds it, so its entries are copied from the pinned file" Core.UInt16 const UTF8PROC_STAGE1TABLE = UInt16[
+@quarantine pin"precedent(utf8proc: utf8proc_data.c:1611 utf8proc_stage1table)" "utf8proc's first-stage table, which unsafe_get_property indexes by a code point's high bits; a wasm module has no libjulia whose utf8proc_data.c holds it, so its entries are copied from the pinned file" Core.UInt16 const UTF8PROC_STAGE1TABLE = UInt16[
   0, 256, 512, 768, 1024, 1280, 1536,
   1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584,
   3840, 4096, 4352, 4608, 4864, 5120, 5376, 5632,
@@ -564,7 +564,7 @@
 
 # utf8proc_data.c:2158 utf8proc_stage2table, its lines 2159-7983: the index into utf8proc_properties of
 # each code point, by its block's offset and its low eight bits
-@quarantine pin"precedent(utf8proc: utf8proc.c:233 unsafe_get_property)" "utf8proc's second-stage table, which unsafe_get_property indexes by the first stage's offset and a code point's low bits; a wasm module has no libjulia whose utf8proc_data.c holds it, so its entries are copied from the pinned file" Core.UInt16 const UTF8PROC_STAGE2TABLE = UInt16[
+@quarantine pin"precedent(utf8proc: utf8proc_data.c:2158 utf8proc_stage2table)" "utf8proc's second-stage table, which unsafe_get_property indexes by the first stage's offset and a code point's low bits; a wasm module has no libjulia whose utf8proc_data.c holds it, so its entries are copied from the pinned file" Core.UInt16 const UTF8PROC_STAGE2TABLE = UInt16[
   1, 1, 1, 1, 1, 1, 1,
   1, 1, 2, 3, 2, 4, 5, 1,
   1, 1, 1, 1, 1, 1, 1, 1,
@@ -6393,7 +6393,7 @@
 
 # utf8proc_data.c:7985 utf8proc_properties, its lines 7986-16316: each entry's category (its first
 # field, a utf8proc_propval_t), as its utf8proc_category_t value (utf8proc.h:319)
-@quarantine pin"precedent(utf8proc: utf8proc.c:439 utf8proc_category)" "the category column of utf8proc's property table, which utf8proc_category reads of utf8proc_get_property's entry; a wasm module has no libjulia whose utf8proc_data.c holds it, so its entries are copied from the pinned file" Core.Int16 const UTF8PROC_PROPERTIES_CATEGORY = Int16[
+@quarantine pin"precedent(utf8proc: utf8proc_data.c:7985 utf8proc_properties)" "the category column of utf8proc's property table, which utf8proc_category reads of utf8proc_get_property's entry; a wasm module has no libjulia whose utf8proc_data.c holds it, so its entries are copied from the pinned file" Core.Int16 const UTF8PROC_PROPERTIES_CATEGORY = Int16[
   0, 26, 26, 26, 26, 26, 26, 23, 18, 18, 20, 14, 15, 19, 18, 13, 9, 19, 19, 19, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 21, 12, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
   2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 19, 23, 18, 20, 22, 21, 22, 5, 16, 27, 22, 21, 22, 19, 11, 11, 21, 2, 21, 11, 5, 17,

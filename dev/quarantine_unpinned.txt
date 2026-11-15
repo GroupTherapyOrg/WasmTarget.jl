@@ -220,7 +220,6 @@ julia/parity.jl _c_pin_units
 julia/parity.jl _call
 julia/parity.jl _class_line
 julia/parity.jl _closed_sum
-julia/parity.jl _cpp_declares
 julia/parity.jl _cpp_enclosing
 julia/parity.jl _cpp_nullable
 julia/parity.jl _dart_nullable
