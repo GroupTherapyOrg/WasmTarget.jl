@@ -263,8 +263,9 @@ end
 
 Whether a value of `T` can own a Memory's data, read by codegen's data-owner reader
 (julia/src/cgutils.cpp:3371 emit_genericmemoryowner, the `jl_genericmemory_owner` ccall, ccall.cpp:1872,
-reading julia.h:1326 jl_genericmemory_data_owner_field): a Memory itself, an identity
-(jl_object_id_identity_arm), or the String whose bytes a byte Memory wraps (julia/src/genericmemory.c:113).
+reading julia.h:1326 jl_genericmemory_data_owner_field): the Memory itself (julia/src/genericmemory.c:48, :167)
+or the String whose bytes a byte Memory wraps (julia/src/genericmemory.c:113), Julia's every store of the field;
+no other value, an identity or not, is ever an owner.
 The write arm of a data id's identity hash field (identity_hash_field_holder), which dataids(::Memory) alone
 writes (src/patch/genericmemory.jl): a String's field holds its data's id, the one id its data has
 (julia/base/abstractarray.jl:1591, `UInt(A.ptr)`, the String's bytes for every Memory over them), and
@@ -272,7 +273,7 @@ nothing else; objectid of a String is its bytes' hash (builtins.c:463), never th
 formal(dev/formal/ObjectIdentityStrings.tla): StringSlotDataOnly.
 """
 @quarantine pin"julia/src/cgutils.cpp:3371 emit_genericmemoryowner" "a Memory's data is its own or the String's whose bytes it wraps (julia/src/genericmemory.c:113), the owner codegen reads from the data-owner field" Core.String function jl_genericmemory_owner_arm(T::DataType)::Bool
-    return T === Core.String || jl_object_id_identity_arm(T)
+    return T === Core.String || T <: Core.GenericMemory
 end
 
 """
@@ -281,7 +282,7 @@ end
 Stores `hash` in the identity hash field of `obj`, the data id of the Memory data `obj` owns: the write of
 setIdentityHashField (src/runtime/common/object_helper.jl) under the data owner's arm
 (jl_genericmemory_owner_arm), which admits a String, the owner of the bytes a byte Memory wraps
-(julia/src/genericmemory.c:113), beside the identities set_identity_hash_field admits. The intrinsifier
+(julia/src/genericmemory.c:113), beside the Memory that owns its own (:48, :167). The intrinsifier
 lowers a call of it (src/intrinsics.jl); its one caller is dataids(::Memory) (src/patch/genericmemory.jl),
 through Object__object_hash_code. Natively no object carries the field, so the body raises.
 """
@@ -417,7 +418,7 @@ content: a String is a heap object carrying the field, and dart reads a String's
 objectid's (set_identity_hash_field, `arm` jl_object_id_identity_arm, the one definition of which values
 Julia answers by their identity) admits only the identities, the field an identity's serial, so a
 String's, whose id is its bytes', is never written there; a data id's (set_owner_identity_hash_field,
-`arm` jl_genericmemory_owner_arm) admits what owns a Memory's data, an identity or a String, whose field
+`arm` jl_genericmemory_owner_arm) admits what owns a Memory's data, a Memory or a String, whose field
 then holds its data's id.
 
 Julia-forced (D7): dart has no such check, its every Object a heap object with its header; Julia
@@ -432,7 +433,7 @@ carries is no value's.
         arm === nothing || arm(c) ||
             reject!(Unquarantined(arm === jl_object_id_identity_arm ?
                 "src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, whose id Julia answers by its own hash or content, not its identity, so its identity hash field holds no serial" :
-                "src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, which owns no Memory's data and is no identity, so its identity hash field holds no data id"), at)
+                "src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, which owns no Memory's data (Julia's owner is the Memory or a String, julia/src/genericmemory.c:48, :113, :167), so its identity hash field holds no data id"), at)
     end
     return nothing
 end

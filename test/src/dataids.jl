@@ -66,6 +66,9 @@ end
 owner_write(x::Int64)::Int64 = Runtime.Object__object_hash_code(repeat("a", x), WasmTarget.set_owner_identity_hash_field)
 # and through objectid's arm: refused, located
 objectid_write(x::Int64)::Int64 = Runtime.Object__object_hash_code(repeat("a", x), Runtime.set_identity_hash_field)
+# a RefValue through the data owner's arm: refused, located, an identity that owns no Memory's data (Julia's owner
+# is the Memory or a String, julia/src/genericmemory.c:48, :113, :167)
+ref_owner_write(x::Int64)::Int64 = Runtime.Object__object_hash_code(Ref(x), WasmTarget.set_owner_identity_hash_field)
 end
 
 const DC = DataIdsCases
@@ -94,9 +97,14 @@ const DC = DataIdsCases
     # objectid's arm refuses a String, located: its id is its bytes', never the field
     local e = try; WasmTarget.compile(DC.objectid_write, (Int64,)); nothing; catch x; x; end
     @test e isa WasmTarget.RejectionError && occursin("whose id Julia answers by its own hash or content", sprint(showerror, e))
-    # the two arms, one definition each: a String owns data, and is no identity
+    # the data owner's arm refuses a RefValue, located: an identity, but never a Memory's data owner
+    local r = try; WasmTarget.compile(DC.ref_owner_write, (Int64,)); nothing; catch x; x; end
+    @test r isa WasmTarget.RejectionError && occursin("which owns no Memory's data", sprint(showerror, r))
+    # the two arms, one definition each: a String owns data, and is no identity; a RefValue is an identity, and
+    # owns no data
     @test WasmTarget.jl_genericmemory_owner_arm(String) && !WasmTarget.jl_object_id_identity_arm(String)
-    @test all(WasmTarget.jl_genericmemory_owner_arm, (Memory{UInt8}, Memory{Int64}, Base.RefValue{Int}))
+    @test all(WasmTarget.jl_genericmemory_owner_arm, (Memory{UInt8}, Memory{Int64}))
+    @test !WasmTarget.jl_genericmemory_owner_arm(Base.RefValue{Int}) && WasmTarget.jl_object_id_identity_arm(Base.RefValue{Int})
     @test !any(WasmTarget.jl_genericmemory_owner_arm, (Symbol, Core.SimpleVector, Int64, Tuple{Int}))
 end
 
