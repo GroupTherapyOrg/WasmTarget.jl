@@ -43,13 +43,24 @@ if __name__ == "__main__" and "--section" not in sys.argv:   # the runner
     _only = int(sys.argv[sys.argv.index("--only") + 1]) if "--only" in sys.argv else None
     if _only is not None and _only not in _secs:
         print(f"climb_l228: no section {_only}"); sys.exit(0)
-    def _run(_n):   # one section's child: (its fault lines, its seconds)
+    def _run(_n):   # one section's child: (its fault lines, each named by its section, and its seconds)
         _out = []
         _lim, _t0 = min(_secs[_n][2], int(LIMIT_OVERRIDE)) if LIMIT_OVERRIDE else _secs[_n][2], time.time()
+        # the child's scratch is the runner's, made here and removed here however the child ends (its limit's SIGKILL
+        # included, which no exit handler of the child's survives: 2026-11-15 03:11Z, a landing user's tmp kept one)
+        _scratch = tempfile.mkdtemp(prefix="l228-")
+        try:
+            return _child(_n, _lim, _t0, _scratch)
+        finally:
+            import shutil as _shr
+            _shr.rmtree(_scratch, ignore_errors=True)
+    def _child(_n, _lim, _t0, _scratch):
+        _out = []
         with tempfile.TemporaryDirectory(prefix="l228-run-") as _d:
             with open(f"{_d}/out", "wb") as _o, open(f"{_d}/err", "wb") as _e:
                 _p = subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), sys.argv[1], "--section", str(_n)],
-                                      stdin=subprocess.DEVNULL, stdout=_o, stderr=_e, start_new_session=True)
+                                      stdin=subprocess.DEVNULL, stdout=_o, stderr=_e, start_new_session=True,
+                                      env=dict(os.environ, L228_SECTION_TMP=_scratch))
                 try:
                     _rc = _p.wait(timeout=_lim)
                 except subprocess.TimeoutExpired:
@@ -64,7 +75,7 @@ if __name__ == "__main__" and "--section" not in sys.argv:   # the runner
                         f"{(_lines[-1] if _lines else _err.strip()[-200:]) or 'no output'}")
         elif _rc != 0:
             _out.append(f"section {_n} exited {_rc}: {_err.strip()[-300:]}")
-        _out += _lines
+        _out += [f"section {_n}: {_l}" for _l in _lines]   # every fault line names its section
         return _out, time.time() - _t0
     # SECTIONS_AT_ONCE children at a time (each has a scratch repository and state of its own; most of a section's time
     # is a wait on a process or a poll), their lines printed in the sections' order
@@ -82,7 +93,9 @@ _n = int(sys.argv[sys.argv.index("--section") + 1])   # a child: the prologue, t
 _pro, _secs = _chunks(open(os.path.abspath(__file__)).read())
 _g = {"__name__": "__l228_section__", "__file__": os.path.abspath(__file__), "__section__": _n}   # the section run
 exec(compile("import contextlib, json, os, re, signal, subprocess, sys, tempfile, time, base64\n" + _pro + "".join(_secs[k][0] for k in _secs[_n][1]) + _secs[_n][0] +
-             "\nfor f in faults:\n    print(f)\n", f"climb_l228 section {_n}", "exec"), _g)
+             "\nfor f in faults:\n    print(f)\n"
+             # its scratch removed at its exit (B1: a child's tmp is its own; 2,500 of them, 5 GB, leaked in a day)
+             "import shutil as _sh_\n_sh_.rmtree(tmp, ignore_errors=True)\n", f"climb_l228 section {_n}", "exec"), _g)
 sys.exit(0)
 
 root = os.path.abspath(sys.argv[1])
@@ -90,7 +103,7 @@ faults = []
 def fault(why):
     faults.append(why)
 
-tmp = tempfile.mkdtemp(prefix="l228-")
+tmp = os.environ.get("L228_SECTION_TMP") or tempfile.mkdtemp(prefix="l228-")   # the runner's (removed by it), else its own
 repo, state, locks = f"{tmp}/repo", f"{tmp}/state", f"{tmp}/locks"
 for d in (repo, state, locks):
     os.makedirs(d)
@@ -105,7 +118,8 @@ open(f"{repo}/src/x.jl", "w").write("x = 1\n")
 # the ratchet's list of the harness's inputs, which the lander's class of a check reads (dev/climb/l228scope.py)
 os.makedirs(f"{repo}/test", exist_ok=True)
 open(f"{repo}/test/parity_ratchet.jl", "w").write('const L228_INPUTS = ("dev/climb/", "dev/src_verdict.sh", "dev/d14_judge.sh", '
-                                                  '"dev/formal/", "dev/check.sh", "dev/ship.sh", "dev/merge_packages.sh", "test/climb_l228.py")\n')
+                                                  '"dev/formal/run_tlc.sh", "dev/formal/NoListenTLC.java", "dev/check.sh", "dev/ship.sh", '
+                                                  '"dev/merge_packages.sh", "test/climb_l228.py")\n')
 g("init", "-q")
 # the driver is copied in untracked below: no section's commit carries it (a commit that did would touch the harness's
 # inputs, and its check's class would be the harness's)
@@ -128,8 +142,9 @@ import door
 # the live climb's TOP/in/measure.* run directories at 16:43:46Z (climb-1's measurement lost). The harness refuses to
 # start on a root the live climb uses (root_refusal) unless it is the landing user inside a sandbox: its landing check,
 # which can write nothing of TOP. Read from the kernel, never from a variable a caller sets: this process's effective
-# uid against the owner of the landing user's home, and sandbox_check() of this process
-LIVE_TOP = "/Users/Shared/wt-climb"
+# uid against the owner of the landing user's home, and sandbox_check() of this process. The live root is door.TOP's own
+# value, read here before it is redirected below (one source: dev/climb/setup-users.sh's root, door.py's literal)
+LIVE_TOP = door.TOP
 def landing_sandboxed():
     import ctypes
     try:
@@ -684,7 +699,7 @@ names16 = ("alarms", "scored_heads", "fetch", "unlogged_landings", "scoreboard_o
            "week_half", "token_refused", "src_unverified")
 real16 = {k: getattr(C, k) for k in names16}
 realm16, reall16 = {"src_unverified": M.src_unverified}, {k: getattr(L, k) for k in ("pause", "waits", "power_ok", "reconcile",
-    "fixfirst_overdue", "fixfirst_binds", "src_unverified", "unverified_binds", "src_gap_spawn")}
+    "fixfirst_overdue", "fixfirst_binds", "src_unverified", "unverified_binds", "src_gap_spawn", "l228_sweep_due")}
 popen16 = L.subprocess.Popen
 try:
     head16 = g("rev-parse", "HEAD")
@@ -714,6 +729,7 @@ try:
         fault(f"the score tick ran {ran16}: the gap is the src-gap job's alone")
     # the lander's round: the job started when due (a process of its own), even when the bound stops the round
     spawned16 = []
+    L.l228_sweep_due = lambda o: False   # its git would run through the Popen stand-in below; section 38 holds it
     L.subprocess.Popen = lambda argv, **k: spawned16.append(argv[-1]) or "p16"
     p16 = (L.src_gap_spawn(head16), (behind16.__setitem__(0, 0), L.src_gap_spawn(head16))[1])
     L.subprocess.Popen = popen16
@@ -787,7 +803,9 @@ finally:
         setattr(door, k, v)
 
 # 18. TLC runs inside a landing's sandbox, and the sandbox still binds and connects nothing (dev/formal/NoListenTLC.java,
-# run_tlc.sh): the tree's run_tlc.sh checks a model to "ok" and its Broken instance to its violation inside the door's
+# run_tlc.sh): the tree's run_tlc.sh, copied beside a two-instance model of this section's own (MCProbe: no model of
+# dev/formal is read, so a change to a model of the compiler is no input of this harness and its landing is judged in
+# the ordinary class; the formal stage of dev/check.sh checks the models a change touches), checks a model to "ok" and its Broken instance to its violation inside the door's
 # `check` profile, and from the same profile a bind and a connect (to localhost and to an outside address) are each
 # refused by the sandbox. Outside a sandbox the profile is the tree's own (door.profile(kind="check")), applied by
 # sandbox-exec; inside a landing, where a sandbox cannot be nested, they run in the profile the landing runs in
@@ -805,16 +823,27 @@ try:
     pre18 = [] if nested18 else ["/usr/bin/sandbox-exec", "-f", door.profile(f"{tmp}/check18.sb", [home18], kind="check")]
     env18 = {"HOME": os.environ["HOME"] if nested18 else home18, "TMPDIR": f"{home18}/tmp", "LANG": "en_US.UTF-8",
              "CHECK_LANDING": "1", "TLA2TOOLS_JAR": jar18, "PATH": f"{jdk18}:/usr/bin:/bin",
-             "DEVELOPER_DIR": "/Library/Developer/CommandLineTools", "TLC_ONLY": "MCBoxJoin.cfg MCBoxJoinOrderBroken.cfg",
-             "TLC_WORKERS": "1"}   # two models of a few states: one worker (auto spent every core's time)
+             "DEVELOPER_DIR": "/Library/Developer/CommandLineTools", "TLC_ONLY": "MCProbe.cfg MCProbeBroken.cfg",
+             "TLC_HEAVY": "MCProbe.cfg",   # its dealing list names this directory's instances (run_tlc.sh refuses others)
+             "TLC_WORKERS": "1"}   # two instances of a few states: one worker (auto spent every core's time)
+    f18 = f"{tmp}/formal18"; os.makedirs(f18)
+    for n18 in ("run_tlc.sh", "NoListenTLC.java"):
+        shutil.copy(f"{root}/dev/formal/{n18}", f"{f18}/{n18}")
+    open(f"{f18}/Probe.tla", "w").write("---- MODULE Probe ----\nEXTENDS Naturals\nCONSTANT Limit\nVARIABLE x\n"
+                                         "Init == x = 0\nNext == x < 3 /\\ x' = x + 1\nSpec == Init /\\ [][Next]_x\n"
+                                         "Bounded == x <= Limit\n====\n")
+    open(f"{f18}/MCProbe.tla", "w").write("---- MODULE MCProbe ----\nEXTENDS Probe\n====\n")
+    open(f"{f18}/MCProbe.cfg", "w").write("SPECIFICATION Spec\nCONSTANT Limit = 3\nINVARIANT Bounded\nCHECK_DEADLOCK FALSE\n")
+    open(f"{f18}/MCProbeBroken.cfg", "w").write("\\* expect: Bounded\nSPECIFICATION Spec\nCONSTANT Limit = 1\nINVARIANT Bounded\n"
+                                                 "CHECK_DEADLOCK FALSE\n")
     if not os.path.isfile(jar18):
         fault(f"no tla2tools.jar at {jar18}: TLC cannot be run inside the profile here")
     else:
-        r18 = subprocess.run(pre18 + ["/bin/bash", f"{root}/dev/formal/run_tlc.sh"], capture_output=True, text=True,
+        r18 = subprocess.run(pre18 + ["/bin/bash", f"{f18}/run_tlc.sh"], capture_output=True, text=True,
                              env=env18, stdin=subprocess.DEVNULL, timeout=120)
         o18 = r18.stdout + r18.stderr
-        if r18.returncode != 0 or not re.search(r"^  ok   MCBoxJoin\.cfg +ok ", o18, re.M) or \
-                not re.search(r"^  ok   MCBoxJoinOrderBroken\.cfg +violation of Monotonicity", o18, re.M):
+        if r18.returncode != 0 or not re.search(r"^  ok   MCProbe\.cfg +ok ", o18, re.M) or \
+                not re.search(r"^  ok   MCProbeBroken\.cfg +violation of Bounded", o18, re.M):
             which18 = "the landing's" if nested18 else "the tree's"
             fault(f"TLC inside the check profile ({which18}): exit {r18.returncode}: {o18.strip()[-300:]}")
     probe18 = ("import socket, errno\n"
@@ -2099,3 +2128,137 @@ finally:
         setattr(L, k, v)
     with contextlib.suppress(Exception):
         g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+
+# 38. every L228 break runs once a driver landing, after it lands (measure.l228_sweep_due, measure.l228_sweep, through
+# the src-gap job): due at a head whose landings since the last swept head change an input of the harness, not at one
+# that changes none; run as the landing user's job with no test set at background QoS (door.land_job, stood in, writing
+# the result dev/l228_sweep.py writes); each fault filed a fix-first (`l228 ...`, a known red, the lead's hand: no
+# climber's hold), the head recorded so it is swept once; a clean sweep clears the entries it no longer reads
+#: limit 60
+real38 = door.land_job
+try:
+    core.claim_repo()
+    g("checkout", "-q", "--detach", h)
+    open(f"{repo}/dev/check.sh", "a").write("# 38\n"); g("add", "-A"); g("commit", "-q", "-m", "drv38"); d38 = g("rev-parse", "HEAD")
+    g("checkout", "-q", "--detach", h)
+    open(f"{repo}/src/x.jl", "a").write("# 38\n"); g("add", "-A"); g("commit", "-q", "-m", "src38"); s38 = g("rev-parse", "HEAD")
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(f"{state}/{M.L228_SWEEP}")
+    due38 = (M.l228_sweep_due(d38), M.l228_sweep_due(s38))
+    if due38 != (True, False):
+        fault(f"the sweep due at a driver landing and at a src landing: {due38} (True, False expected)")
+    calls38, res38 = [], {}
+    def lj38(wt, script, log, outs, wall, background=False, check=True):
+        calls38.append((script, check, background))
+        os.makedirs(f"{wt}/.wtd", exist_ok=True)
+        json.dump(res38, open(f"{wt}/.wtd/l228-sweep.json", "w"))
+        return 0
+    door.land_job = lj38
+    miss38 = "L228's behaviour negative missed: a planted break (section 3)"
+    res38.update({"tree": [], "missed": [miss38], "anchors": [], "runner": [], "ran": 110, "of": 110, "cpu_s": 1.0, "wall_s": 1.0})
+    M.l228_sweep(d38)
+    ff38 = [f for f in core.state_json("fixfirst.json", []) if f["key"].startswith("l228 ")]
+    if [f["key"] for f in ff38] != [f"l228 {miss38}"] or not core.known_red(ff38[0]) or core.fixfirst_problem(ff38[0]) is not None:
+        fault(f"a break the sweep missed filed {[(f['key'][:60], core.known_red(f)) for f in ff38]} (one l228 known red)")
+    if any(x["key"].startswith("l228 ") for x in core.holds([])):
+        fault("an L228 sweep's fault is offered to the climbers as a hold (the harness is the lead's hand)")
+    if not calls38 or calls38[0][1:] != (False, True) or "dev/l228_sweep.py" not in calls38[0][0]:
+        fault(f"the sweep's job: {calls38} (dev/l228_sweep.py, no test set, background QoS)")
+    if M.l228_sweep_due(d38):
+        fault("a head swept once is due again")
+    res38.update({"missed": []})
+    M.l228_sweep(d38)
+    if any(f["key"].startswith("l228 ") for f in core.state_json("fixfirst.json", [])):
+        fault("a clean sweep left the fault it no longer reads filed")
+except Exception as e:
+    import traceback
+    fault(f"the sweep after a driver landing raised {type(e).__name__}: {str(e)[:240]} {traceback.format_exc()[-300:]}")
+finally:
+    door.land_job = real38
+
+# 39. each estimated file's measured G is recorded from every check's own records, green or red (lander.record_measured,
+# called after every check's verified rows): the next set charges it, scaled by size, not the estimate. 2026-11-15
+# 00:24:26Z: three new files estimated at 10,087.7 G ran at about 2,850 G, and every landing paid the estimate
+#: limit 30
+try:
+    g("checkout", "-q", "--detach", h)
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", h)
+    open(f"{repo}/test/src/n39.jl", "w").write("#" * 999 + "\n"); g("add", "-A"); g("commit", "-q", "-m", "c39"); c39 = g("rev-parse", "HEAD")
+    ss39 = M.src_set(h, c39, None)
+    if "n39.jl" not in (ss39.get("estimated") or []):
+        fault(f"section 39's fixture: n39.jl is not estimated ({ss39.get('estimated')})")
+    est39 = M.src_costs({f: ("passed", 100.0, 0.0, "") for f in FILES}, ["n39.jl"], c39, h)[0]["n39.jl"]
+    rec39, miss39 = L.record_measured({"hold": "l228-39", "sha": c39, "rebased": {"commit": c39}}, dict(ss39, warm=350.0),
+                                      "shard 1\nstarted\tn39.jl\nrow\tn39.jl\tpassed\t400.0\tYQ==\tpassed\n")
+    now39 = M.src_costs({f: ("passed", 100.0, 0.0, "") for f in FILES}, ["n39.jl"], c39, h, (), core.state_json(M.SRC_MEASURED, {}))[0]["n39.jl"]
+    if rec39 != {"n39.jl": 50.0} or miss39 or abs(now39 - 50.0) > 0.01 or abs(est39 - 50.0) < 1:
+        fault(f"a green check's measure of an estimated file: recorded {rec39} (50.0 G: 400 less the warm-up 350), "
+              f"unmeasured {miss39}, then charged {now39} (the estimate was {est39})")
+except Exception as e:
+    fault(f"recording a measured cost raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+
+# 40. the replay of the lander's next round (dev/climb/walk.py, dev/driver_evidence.sh's third stage) on a copy of the
+# state: it refuses the state itself when no copy (no events.jsonl), replays a named item and its own two (a src move,
+# a harness change), each landing on this state, the harness change in the harness's class on its line; and an item
+# the lander would hold (no test file under the line, an origin whose D14_RED is 30) reads HELD, the replay red
+#: limit 60
+try:
+    g("checkout", "-q", "--detach", h)
+    import shutil as _sh40
+    st40 = f"{tmp}/state40"; _sh40.copytree(state, st40)
+    w40 = lambda *a: subprocess.run([sys.executable, "-I", f"{repo}/dev/climb/walk.py", *a], capture_output=True, text=True, cwd=repo)
+    r40 = w40(st40, h, sha)
+    o40 = r40.stdout
+    if r40.returncode != 0 or o40.count("-> lands") != 3 or "class harness, line 300 s" not in o40:
+        fault(f"walk on the state copy: exit {r40.returncode}: {o40.strip()[-400:]} (three items landing, the harness change on 300 s)")
+    # the landing's geometry: its TMPDIR lies under the live door's root (/Users/Shared/wt-climb/u/_wtland/tmp), so
+    # every scratch root a walk makes is under it; the walk runs there and removes its scratch root (2026-11-15
+    # 03:11:53Z: a prefix test refused it, and four walk-top-* stayed in the landing user's tmp)
+    root40 = f"{tmp}/root40"; tmp40 = f"{root40}/u/_wtland/tmp"; os.makedirs(tmp40)
+    g40 = subprocess.run([sys.executable, "-I", f"{repo}/dev/climb/walk.py", st40, h], capture_output=True, text=True, cwd=repo,
+                         env=dict(os.environ, TMPDIR=tmp40, WT_L228_LIVE_TOP=root40))
+    left40 = [x for x in os.listdir(tmp40) if x.startswith("walk-top-")]
+    if g40.returncode != 0 or left40:
+        fault(f"walk with its TMPDIR under the live root's stand-in: exit {g40.returncode}: {g40.stdout.strip()[-200:]}; "
+              f"left {left40} (it runs, and removes its scratch root)")
+    e40 = w40(f"{tmp}/none40", h)
+    if e40.returncode != 2 or "refused" not in e40.stdout:
+        fault(f"walk on no state copy: exit {e40.returncode} {e40.stdout.strip()[:160]} (refused)")
+    open(f"{repo}/dev/check.sh", "w").write("SHARDS=5\nD14_RED=30\nD14_RED_HARNESS=300\nD14_PACK=20\n")
+    g("add", "-A"); g("commit", "-q", "-m", "origin40"); h40 = g("rev-parse", "HEAD")
+    open(f"{st40}/src-{h40[:8]}.tsv", "w").write(f"head\t{h40}\twarm\t350\n" + "".join(f"{f}\tpassed\t100.0\t0.0\t\n" for f in FILES))
+    open(f"{st40}/src-latest.json", "w").write(json.dumps({"head": h40}))
+    r40b = w40(st40, h40)
+    if r40b.returncode != 1 or "HELD as the predictor's" not in r40b.stdout:
+        fault(f"walk where no test file fits the line: exit {r40b.returncode}: {r40b.stdout.strip()[-300:]} (HELD, red)")
+except Exception as e:
+    fault(f"the replay raised {type(e).__name__}: {str(e)[:240]}")
+
+# 41. a set the lander handed with no file (a change whose own files and share are none): a void reading of it is the
+# check's fault, the driver's, held and tried again uncharged, never landing-red (lander.empty_set_void); and
+# dev/src_verdict.sh reads a shard whose exit status is no number, or whose records are missing, as void, named, never a
+# test that errors ("integer expression expected"). 2026-11-15 02:20:43Z: a model commit's empty set read void at five
+# shards, src_verdict.sh line 68 erred four times, and the commit was dropped as its own
+#: limit 30
+real41 = {"item_error": L.item_error}
+try:
+    set41 = f"{tmp}/set41"; open(set41, "w").write("# head x\n")
+    v41 = subprocess.run(["bash", f"{root}/dev/src_verdict.sh", set41, "", f"{tmp}/none41.out"], capture_output=True, text=True)
+    if v41.returncode != 15 or "is no number" not in v41.stdout or "integer expression" in v41.stderr:
+        fault(f"src_verdict on a shard with no exit status and no records: exit {v41.returncode}, {v41.stdout.strip()[:200]!r}, "
+              f"stderr {v41.stderr.strip()[:120]!r} (void, named, no shell error)")
+    errs41 = []
+    L.item_error = lambda item, e: errs41.append(str(e)[:80])
+    it41 = {"hold": "l228-41", "sha": "0" * 40, "branch": "ready/l228-41"}
+    got41 = (L.empty_set_void(it41, "OWN", "void", {}, []), L.empty_set_void(it41, "OWN", "void", {}, ["t00.jl"]),
+             L.empty_set_void(it41, "D14", "200", {}, []))
+    if got41 != (True, False, False) or len(errs41) != 1:
+        fault(f"a void reading of an empty set: {got41} (taken as the driver's only for OWN void on an empty set), "
+              f"driver faults {errs41} (one)")
+except Exception as e:
+    fault(f"an empty handed set raised {type(e).__name__}: {str(e)[:240]}")
+finally:
+    L.item_error = real41["item_error"]

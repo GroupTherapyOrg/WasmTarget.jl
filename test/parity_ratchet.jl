@@ -2836,6 +2836,12 @@ function bounded_check_faults(checksh::AbstractString, doorpy::AbstractString, d
     occursin("WT_SRC_SET=f\"{d}/src-set.txt\"", doorpy) ||
         push!(out, "dev/climb/door.py's land job does not give the set from its run directory")
     for (path, text) in code
+        # the live door's root has one source, door.TOP (dev/climb/setup-users.sh's, the root's script): a second copy
+        # compares paths with it by text (2026-11-15 03:11:53Z: walk.py's own copy, tested by prefix, refused every walk
+        # of a landing's harness, whose TMPDIR lies under the root), so no other code line names it
+        path in ("dev/climb/door.py", "dev/climb/setup-users.sh") ||
+            any(l -> occursin("/Users/Shared/wt-climb", l) && !startswith(lstrip(l), "#"), split(text, '\n')) &&
+            push!(out, "$path names the live door's root itself; read door.TOP")
         occursin(BOUNDED_DELETED, text) && push!(out, "$path names the deleted cost table or a writer of it")
         occursin(BOUNDED_HANDSET, text) && push!(out, "$path names the hand-set target the live one replaced (src_path_target_s)")
     end
@@ -2845,6 +2851,13 @@ function bounded_check_faults(checksh::AbstractString, doorpy::AbstractString, d
         occursin("  none) band=\$D14_RED;;", checksh) && occursin("[ \$path -gt \$band ] &&", checksh) &&
         occursin(r"(?m)^D14_PACK=\d+$", checksh) ||
         push!(out, "dev/check.sh does not judge a check on the red line its ratchet's L228 scope chose (D14_RED, D14_RED_HARNESS)")
+    # a set the lander handed that names no file runs no shard and its shard stage is green (2026-11-15 02:20:43Z: five
+    # shards given an empty set read void and a model commit was dropped as its own)
+    occursin("RUN_SHARDS=\$SHARDS; [ \"\$set_n\" -gt 0 ] || RUN_SHARDS=0", checksh) &&
+        occursin("for ((k = 1; k <= RUN_SHARDS; k++)); do\n  : > \".wtd/progress.\$k\"", checksh) &&
+        !occursin("seq 1 \$RUN_SHARDS", checksh) &&
+        occursin("[ \"\$RUN_SHARDS\" -eq 0 ] || { SRC_VOID_OUT=", checksh) ||
+        push!(out, "dev/check.sh runs shards on an empty handed set, or reads their records (the lander's empty set is green)")
     occursin("target=(src_set_ or {}).get(\"target\")", landerpy) ||
         push!(out, "dev/climb/lander.py's ship event does not record the target and margin it used")
     for (k, (lo, hi)) in BOUNDED_KEYS
@@ -2988,7 +3001,10 @@ end
 # run, never passes unread; the scope reads the same list, and test/parity_ratchet.jl (BOUNDED_BREAKS, this lock) too.
 # The list it replaces was written by hand and lacked the models section 18's TLC runs (dev/formal/MCBoxJoin*), and named
 # files the harness never reads (test/src_tests.jl, test/src_canary.jl)
-const L228_INPUTS = ("dev/climb/", "dev/src_verdict.sh", "dev/d14_judge.sh", "dev/formal/", "dev/check.sh", "dev/ship.sh", "dev/merge_packages.sh", "test/climb_l228.py")
+# (of dev/formal, the two files section 18 copies beside a model of its own: no model there is read, so a change to a
+# model of the compiler runs no harness and is judged in the ordinary class; dev/check.sh's formal stage checks it)
+const L228_INPUTS = ("dev/climb/", "dev/src_verdict.sh", "dev/d14_judge.sh", "dev/formal/run_tlc.sh", "dev/formal/NoListenTLC.java",
+                     "dev/check.sh", "dev/ship.sh", "dev/merge_packages.sh", "test/climb_l228.py")
 l228_input(f::AbstractString) = f == "test/parity_ratchet.jl" || any(p -> startswith(f, p), L228_INPUTS)
 function l228_copy(root::AbstractString = ROOT)::String
     local t = mktempdir()
@@ -2999,15 +3015,16 @@ function l228_copy(root::AbstractString = ROOT)::String
     end
     return t
 end
-function l228_scope(root::AbstractString = ROOT, base::AbstractString = get(ENV, "CHECK_BASE", "origin/wt2"))::NamedTuple{(:full, :harness, :changed, :base),Tuple{Bool,Bool,Vector{String},String}}
+# `every`: every break runs (a clause closes, or WT_RATCHET_FULL); else a check runs the breaks its diff selects
+function l228_scope(root::AbstractString = ROOT, base::AbstractString = get(ENV, "CHECK_BASE", "origin/wt2"))::NamedTuple{(:full, :harness, :changed, :base, :every),Tuple{Bool,Bool,Vector{String},String,Bool}}
     local mb = try readchomp(pipeline(Cmd(`git merge-base $base HEAD`; dir=root); stderr=devnull)) catch; "" end
-    isempty(mb) && return (full=true, harness=true, changed=String[], base="")
+    isempty(mb) && return (full=true, harness=true, changed=String[], base="", every=true)
     local changed = unique!(vcat(split(readchomp(Cmd(`git diff --name-only $mb`; dir=root)), '\n'; keepempty=false),
                                  split(readchomp(Cmd(`git ls-files --others --exclude-standard`; dir=root)), '\n'; keepempty=false)))
     local closes = occursin(r"(?m)^Closes: C\d", readchomp(Cmd(`git log --format=%B $mb..HEAD`; dir=root)))
     local full = closes || get(ENV, "WT_RATCHET_FULL", "0") == "1"
     local harness = full || any(l228_input, changed)
-    return (full=full || "test/parity_ratchet.jl" in changed, harness=harness, changed=String.(changed), base=String(mb))
+    return (full=full || "test/parity_ratchet.jl" in changed, harness=harness, changed=String.(changed), base=String(mb), every=full)
 end
 # its negative, run at every landing (the scope decides whether the harness runs at all, so its own check never waits on
 # it): in a scratch history, a change to a file the harness reads (the driver; a model section 18's TLC runs; a file
@@ -3020,12 +3037,14 @@ function l228_scope_negatives_missed()::Vector{String}
     local t = mktempdir()
     local g(args...) = readchomp(Cmd(`git -c user.name=l228 -c user.email=l228@localhost -c commit.gpgsign=false $args`; dir=t))
     g("init", "-q")
-    for (f, s) in (("src/x.jl", "x = 1\n"), ("dev/formal/MCBoxJoin.cfg", "SPECIFICATION Spec\n"), ("dev/climb/core.py", "a = 1\n"),
+    for (f, s) in (("src/x.jl", "x = 1\n"), ("dev/formal/MCBoxJoin.cfg", "SPECIFICATION Spec\n"), ("dev/formal/run_tlc.sh", "cd .\n"),
+                   ("dev/climb/core.py", "a = 1\n"),
                    ("test/parity_ratchet.jl", "const L228_INPUTS = $(repr(L228_INPUTS))\n"))
         mkpath(dirname(joinpath(t, f))); write(joinpath(t, f), s)
     end
     g("add", "-A"); g("commit", "-q", "-m", "the base"); local base = g("rev-parse", "HEAD")
-    for (what, f, want) in (("a src file", "src/x.jl", false), ("a model section 18's TLC runs", "dev/formal/MCBoxJoin.cfg", true),
+    for (what, f, want) in (("a src file", "src/x.jl", false), ("a model of the compiler", "dev/formal/MCBoxJoin.cfg", false),
+                            ("dev/formal/run_tlc.sh, which section 18 runs", "dev/formal/run_tlc.sh", true),
                             ("the driver", "dev/climb/core.py", true))
         g("checkout", "-q", "-B", "c", base)
         write(joinpath(t, f), read(joinpath(t, f), String) * "# changed\n"); g("commit", "-q", "-am", what)
@@ -3166,7 +3185,7 @@ const BOUNDED_BREAKS = (
      "    src_gap_spawn(origin)   # those files run by a job of their own, whatever else runs (the bound holds only when they cannot)",
      "    pass", 16),
     ("the src-gap job started when nothing is due", "dev/climb/lander.py",
-     "    if not src_gap_due(origin):\n        return None", "    if False:\n        return None", 16),
+     "    if not (src_gap_due(origin) or l228_sweep_due(origin)):\n        return None", "    if False:\n        return None", 16),
     ("the src-gap job in the score's lane, waiting on a score's compile", "dev/climb/climb.py",
      "    src_part(head, role=\"measure\")", "    src_part(head)", 16),
     ("the src-gap job run again at a head it ran at", "dev/climb/measure.py",
@@ -3314,6 +3333,25 @@ const BOUNDED_BREAKS = (
     ("the commit's own D14 red waited on", "dev/climb/lander.py",
      "    if own and pf(own) > ss[\"band\"] and pf({}) <= ss[\"band\"]:", "    if False:", 37),
     ("a machine's D14 red retried forever", "dev/climb/lander.py", "    if n >= c[\"d14_tries\"]:", "    if False:", 37),
+    # every break once a driver landing, after it lands; a fault there a fix-first (the lead's ruling, 2026-11-15)
+    ("the sweep after a driver landing never due", "dev/climb/measure.py", "        return l228scope.harness(ROOT, prev, head)\n",
+     "        return False\n", 38),
+    ("a break the sweep missed filed nowhere", "dev/climb/measure.py", "        add_fixfirst([{\"key\": f\"l228 {x[:200]}\"",
+     "        (lambda *a_: None)([{\"key\": f\"l228 {x[:200]}\"", 38),
+    ("an L228 sweep's fault offered to the climbers as a hold", "dev/climb/core.py",
+     "        if fixfirst_problem(f) is None and not f[\"key\"].startswith(\"l228 \"):", "        if fixfirst_problem(f) is None:", 38),
+    ("a clean sweep keeping the faults it no longer reads", "dev/climb/measure.py",
+     "    update_json(\"fixfirst.json\", [], lambda ff: ff.__setitem__(slice(None), [f for f in ff if not f[\"key\"].startswith(\"l228 \") or f[\"key\"] in keys]))",
+     "    pass", 38),
+    # an estimated file's measured G from every check
+    ("a check's measure of an estimated file left unrecorded", "dev/climb/lander.py", "    if rec:\n        update_json(SRC_MEASURED",
+     "    if False:\n        update_json(SRC_MEASURED", 39),
+    # the replay of the lander's next round
+    ("the replay green with an item held", "dev/climb/walk.py", "        red += not out.startswith(\"lands\")", "        red += 0", 40),
+    # an empty handed set: a void reading of it the driver's (held, uncharged), never the commit's (2026-11-15 02:20:43Z)
+    ("a void reading of an empty set charged to the commit", "dev/climb/lander.py",
+     "    if kind != \"OWN\" or arg != \"void\" or ss is None or files is None or files:", "    if True:", 41),
+    ("an exit status that is no number read as a test", "dev/src_verdict.sh", "  [[ \"\$r\" =~ ^[0-9]+\$ ]] || { void=", "  true || { void=", 41),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",
@@ -3350,11 +3388,62 @@ l228_cpu_fault(cpu, budget) = cpu > budget ? ["L228's harness and its negatives 
     "budget of $(budget): a section grew or burns CPU it should not (each section's wall above)"] : String[]
 # where the runner's two negatives plant (a hang, a CPU burn): the first line of what section 1 calls
 const RUNNER_PLANT_AT = "def src_target(pack, src_change):\n"
-function bounded_behaviour_negatives_missed()::Vector{String}
+# the breaks a check of this tree runs (dev/climb/l228scope.py `breaks`, the one reading of the diff: a break whose entry,
+# section or anchored definition the change touches), or every one; [(index, why)]
+function l228_breaks_selected(root::AbstractString, base::AbstractString)::Vector{Tuple{Int,String}}
+    local o = readchomp(`python3 -I $(joinpath(ROOT, "dev", "climb", "l228scope.py")) breaks $root $base`)   # this tree's reading, of `root`
+    return [(parse(Int, first(split(l, ' '; limit = 2))), String(last(split(l, ' '; limit = 2)))) for l in split(o, '\n'; keepempty = false)]
+end
+# its negative: on a scratch history of two breaks, anchored in two definitions of one file and in two sections, a
+# change to one definition selects its break alone, a change to a section's text that section's break, a new entry
+# itself, and a change to nothing L228 reads none
+function l228_breaks_negatives_missed()::Vector{String}
     local out = String[]
+    local t = mktempdir()
+    local g(args...) = readchomp(Cmd(`git -c user.name=l228 -c user.email=l228@localhost -c commit.gpgsign=false $args`; dir=t))
+    local brk(n, anchor, sec) = "    (\"b$n\", \"dev/climb/m.py\", \"$anchor\", \"x\", $sec),\n"
+    local ratchet(extra = "") = "const BOUNDED_BREAKS = (\n" * brk(1, "    return 1", 1) * brk(2, "    return 2", 2) * extra * ")\nfunction bounded_behaviour_negatives_missed() end\n"
+    local files = Dict("dev/climb/m.py" => "def f():\n    return 1\n\ndef g():\n    return 2\n",
+                       "test/climb_l228.py" => "root = 1\n# 1. one\nx = 1\n# 2. two\ny = 2\n",
+                       "test/parity_ratchet.jl" => ratchet(), "src/x.jl" => "x = 1\n")
+    g("init", "-q")
+    for (f, s_) in files
+        mkpath(dirname(joinpath(t, f))); write(joinpath(t, f), s_)
+    end
+    g("add", "-A"); g("commit", "-q", "-m", "the base"); local base = g("rev-parse", "HEAD")
+    local sel() = [i for (i, _) in l228_breaks_selected(t, base)]
+    for (what, f, text, want) in (("a change to g alone", "dev/climb/m.py", replace(files["dev/climb/m.py"], "return 2\n" => "return 2 + 0\n"), [2]),
+                                  ("a change to section 1's text", "test/climb_l228.py", replace(files["test/climb_l228.py"], "x = 1" => "x = 11"), [1]),
+                                  ("a new break", "test/parity_ratchet.jl", ratchet(brk(3, "    return 1", 2)), [3]),
+                                  ("a change to src alone", "src/x.jl", "x = 2\n", Int[]))
+        g("checkout", "-q", "-f", base); write(joinpath(t, f), text)
+        local got = sel()
+        got == want || push!(out, "L228's break selection: $what selected $got, not $want")
+    end
+    rm(t; recursive = true, force = true)
+    return out
+end
+# every break's anchor matches its file once (no run: a rename, a deletion or a duplicate of an anchor is red at once,
+# whichever breaks the diff selects; the RUNNER_PLANT_AT guard of 5a0644e9, for every plant)
+function l228_anchor_faults(root::AbstractString = ROOT)::Vector{String}
+    local out = String[]
+    for (what, path, a, _, _) in BOUNDED_BREAKS
+        local f = joinpath(root, path)
+        local n = isfile(f) ? count(a, read(f, String)) : 0
+        n == 1 || push!(out, "L228's break \"$what\": its anchor matches $path $n times, not once")
+    end
+    return out
+end
+# `selected`: the indices of BOUNDED_BREAKS to run (nothing: every one)
+function bounded_behaviour_negatives_missed(selected::Union{Nothing,Vector{Int}} = nothing)::Vector{String}
+    local out = l228_anchor_faults()
     local t0, c0 = time(), children_cpu()
     let t = l228_copy()
-        isempty(bounded_behaviour_faults(t)) || push!(out, "L228's behaviour: the tree itself reads a fault")
+        # the tree's faults named, each line its section's (the runner prefixes `section <n>: `), the first 40: a
+        # landing red here is read in one look (2026-11-15 03:11:53Z: "the tree itself reads a fault", nothing more)
+        local tf = bounded_behaviour_faults(t)
+        isempty(tf) || (push!(out, "L228's behaviour: the tree itself reads $(length(tf)) fault line(s), the first $(min(40, length(tf))) below");
+                        append!(out, ["L228's tree: " * first(x, 400) for x in first(tf, 40)]))
         rm(t; recursive = true, force = true)
     end
     local t_tree = time() - t0
@@ -3362,7 +3451,8 @@ function bounded_behaviour_negatives_missed()::Vector{String}
     local cost = Dict{Int,Float64}()
     # BREAKS_AT_ONCE breaks at a time (each its own copy; a break's section is mostly a wait on a process), the faults
     # gathered in BOUNDED_BREAKS's order
-    local results = asyncmap(BOUNDED_BREAKS; ntasks = BREAKS_AT_ONCE) do (what, path, a, b, section)
+    local run = selected === nothing ? collect(BOUNDED_BREAKS) : [BOUNDED_BREAKS[i] for i in selected]
+    local results = asyncmap(run; ntasks = BREAKS_AT_ONCE) do (what, path, a, b, section)
         local o = String[]
         occursin(Regex("(?m)^# $(section)\\. "), harness) || return (push!(o, "L228's behaviour negative names no section of the harness: $what (section $section)"), section, 0.0)
         local t1 = time()
@@ -3398,7 +3488,8 @@ function bounded_behaviour_negatives_missed()::Vector{String}
         rm(t; recursive = true, force = true)
     end
     local total, cpu = time() - t0, children_cpu() - c0
-    println("    L228's harness: the tree $(round(t_tree; digits = 1)) s, its $(length(BOUNDED_BREAKS)) breaks ",
+    println("    L228's harness: the tree $(round(t_tree; digits = 1)) s, ", selected === nothing ? "its $(length(BOUNDED_BREAKS)) breaks " :
+            "$(length(run)) of its $(length(BOUNDED_BREAKS)) breaks (the diff's; every one at the sweep after the landing) ",
             "$(round(total - t_tree; digits = 1)) s, $(BREAKS_AT_ONCE) at a time (their summed seconds: ", join(("section $k $(round(v; digits = 1)) s" for (k, v) in sort(collect(cost))), ", "),
             "): $(round(total; digits = 1)) s of wall, $(round(cpu; digits = 1)) CPU-seconds of a budget of $(L228_CPU_BUDGET_S)")
     append!(out, l228_cpu_fault(cpu, L228_CPU_BUDGET_S))
@@ -3453,9 +3544,12 @@ function bounded_check_negatives_missed()::Vector{String}
             ("a margin key past its band", c, d, replace(k, "\"src_margin_min_s\": 10" => "\"src_margin_min_s\": 5"), plain),
             ("a hand-set target named in code", c, d, k, Pair{String,String}["dev/x.py" => "t = cfg()[\"src_path_target_s\"]\n"]),
             ("a key gone", c, d, replace(k, "\"src_unverified_max\"" => "\"src_unverified_maxx\""), plain),
+            ("a second copy of the live door's root", c, d, k, Pair{String,String}["dev/climb/x.py" => "LIVE = \"/Users/Shared/wt-climb\"\n"]),
             ("the harness's red line for every check", replace(c, "  none) band=\$D14_RED;;" => "  none) band=\$D14_RED_HARNESS;;"), d, k, plain),
             ("the judged line on one red line", replace(c, "[ \$path -gt \$band ] &&" => "[ \$path -gt \$D14_RED_HARNESS ] &&"), d, k, plain),
-            ("the ratchet not told where its scope goes", replace(c, "WT_L228_SCOPE=\"\$PWD/.wtd/l228-scope\" " => ""), d, k, plain))
+            ("the ratchet not told where its scope goes", replace(c, "WT_L228_SCOPE=\"\$PWD/.wtd/l228-scope\" " => ""), d, k, plain),
+            ("shards run on an empty set", replace(c, "|| RUN_SHARDS=0" => "|| true"), d, k, plain),
+            ("an empty set's records read", replace(c, "[ \"\$RUN_SHARDS\" -eq 0 ] || { SRC_VOID_OUT=" => "true && { SRC_VOID_OUT="), d, k, plain))
         isempty(bounded_check_faults(cc, dd, kk, code, l, m)) && push!(out, "L228's negative missed: $what")
     end
     return out
@@ -4806,8 +4900,8 @@ const LOCKS = [
             # what the scope decided, for dev/check.sh's D14 red line (D14_RED_HARNESS when the harness runs, D14_RED else):
             # written here, at the one place that decides it, never computed again by the check
             haskey(ENV, "WT_L228_SCOPE") && write(ENV["WT_L228_SCOPE"], sc.harness ? "harness\n" : "none\n")
-            append!(v, l228_scope_negatives_missed())
-            sc.harness && append!(v, bounded_behaviour_negatives_missed())
+            append!(v, l228_scope_negatives_missed(), l228_breaks_negatives_missed())
+            sc.harness && append!(v, bounded_behaviour_negatives_missed(sc.every ? nothing : [i for (i, _) in l228_breaks_selected(ROOT, sc.base)]))
             append!(v, sc.full ? reach_all_faults() : reach_changed_faults(sc.changed))
             println("    L228 ran: ", sc.harness ? "the behaviour harness and its negatives" : "no behaviour harness: the landing touches none of its inputs since the record $(first(sc.base, 10)) (origin's history, where it ran or carried green)",
                     "; the reach checks on ", sc.full ? "every file" : "$(count(f -> startswith(f, "src/") || startswith(f, "test/src/"), sc.changed)) changed file(s)")

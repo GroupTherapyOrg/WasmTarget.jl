@@ -152,12 +152,25 @@ def src_gap(head):
 
 def src_gap_once():
     """climb.py src-gap: the src-gap job at origin's head when it is due (the lander starts it: lander.src_gap_spawn), one
-    at a time (its loop lock). 3 when nothing was due."""
+    at a time (its loop lock): the sweep of every L228 break after a driver landing (measure.l228_sweep), then the src
+    part where files stand unrun. 3 when nothing was due."""
     head = git("rev-parse", f"origin/{MARCH}")
-    if not power_ok() or not src_gap_due(head):
+    if not power_ok():
         return 3
-    src_gap(head)
-    return 0
+    did = False
+    if l228_sweep_due(head):   # every L228 break once a driver landing, after it lands (a landing's check runs its diff's)
+        try:
+            l228_sweep(head)
+        except PowerCut:
+            raise
+        except Exception as e:   # noqa: BLE001 — located, the gap's own part still runs
+            event("l228-sweep-failed", sha=head[:8], why=f"{type(e).__name__}: {str(e)[-300:]}")
+            alarm("l228-sweep-failed", "the sweep of every L228 break failed", f"At {head[:10]}: {type(e).__name__}: "
+                  f"{str(e)[:500]}. Default taken: the landings' checks run their diffs' breaks; the sweep runs again at the next head.")
+        did = True
+    if src_gap_due(head):
+        src_gap(head); did = True
+    return 0 if did else 3
 
 def src_part(head, role="score"):
     """The src part (measure.src_score) as `role` under its lock (the score's, before its smoke; the measure role's under

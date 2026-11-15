@@ -48,6 +48,7 @@ while [ $# -ge 2 ]; do
     if is_known "$file" "$(fails_of "$why")"; then knownred="$knownred $file"; else unknown=$((unknown + 1)); fi
   done <<< "$rows"
   open=$(awk -F'\t' '$1 == "started" { s[$2] = 1 } $1 == "row" { delete s[$2] } END { n = 0; for (x in s) n++; print n }' "$f" 2>/dev/null)
+  open=${open:-0}   # a records file that is missing or unreadable reads no open file (its canary, below, reads it void)
   ran=$(awk -F'\t' '$1 == "started" && $2 != "~canary" { printf "%s ", $2 }' "$f" 2>/dev/null)
   v0=$void
   # the block grammar (spec v18 Q3, red's round-15 p1 v3; measure.src_process reads the same): a file's records are its
@@ -64,6 +65,9 @@ while [ $# -ge 2 ]; do
   [ "$canary" = passed ] || void="$void; shard $k's canary read ${canary:-nothing} (its files: ${ran:-none})"
   asfile=$(awk -F'\t' '$1 == "row" && $2 != "~canary" && $6 != "passed" { printf "%s ", $2 }' "$f" 2>/dev/null)
   [ -z "$asfile" ] || void="$void; shard $k's canary as ${asfile}read wrong (spec v17 Z4; its files: ${ran:-none})"
+  # an exit status that is no integer is no reading of the shard (2026-11-15 02:20:43Z: line 68's tests read "integer
+  # expression expected" four times): void, named, never a test that errors and reads false
+  [[ "$r" =~ ^[0-9]+$ ]] || { void="$void; shard $k's exit status '${r}' is no number (its files: ${ran:-none})"; r=1; }
   { [ "$r" -eq 0 ] && [ "$n" -gt 0 ]; } && void="$void; shard $k exited 0 with $n red row(s) (its files: $ran)"
   { [ "$r" -ne 0 ] && [ "$n" -eq 0 ] && [ "$open" -eq 0 ]; } && void="$void; shard $k exited $r with every row passed (its files: $ran)"
   [ "$void" = "$v0" ] || voidfiles="$voidfiles $ran"

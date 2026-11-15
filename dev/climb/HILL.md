@@ -917,7 +917,13 @@ door's, run as Dale on paths no build user writes.
 - **The quiet probe.** It is a measurement, never a gate (throughput P0, the owner's "STOP pausing EVER", 2026-11-13):
   the lander starts every check whatever the probe reads. D14's band judges a check's cost (dev/check.sh: red past
   `D14_RED`, 180 s, or past `D14_RED_HARNESS`, 300 s, when its ratchet ran the L228 behaviour harness, as the ratchet's
-  `l228_scope` decided and wrote to the check; the band is the lead's to set, Dale 2026-11-14), and only a check that began
+  `l228_scope` decided and wrote to the check; the band is the lead's to set, Dale 2026-11-14; the lead's ruling of
+  2026-11-15 keeps 300 s and cuts the harness's cost at its source: a check runs the harness's tree and only the breaks
+  its diff selects, `l228scope.breaks` (a break whose entry is new or changed, whose section's text changed, or whose
+  anchor lies in a top-level definition the change touches), every break's anchor asserted to match once at no run's
+  cost, and every break runs once a driver landing after it lands (`measure.l228_sweep`, below); of dev/formal the
+  harness reads `run_tlc.sh` and `NoListenTLC.java` alone, section 18 checking a model of its own, so a change to a
+  model of the compiler is in the ordinary class and dev/check.sh's formal stage checks it), and only a check that began
   and ended on a quiet machine is evidence of it: `lander.quiet`, the one definition (the probe within `p_idle`,
   `e_idle`, `swapins_max`, `decompressions_max`, the pressure under critical, and Low Power Mode off), read at the
   check's start and at its end. A check that read red on the band alone asks the lander (`dev/d14_judge.sh`, called by
@@ -1093,7 +1099,9 @@ door's, run as Dale on paths no build user writes.
   highest of its directory's, never the average; a refusal reads only costs a score or a check measured, never an
   estimate; a set whose own files hold an estimate carries nothing from the ring (its turn waits), and a check of it
   past the band records the files' costs from its own records and is held and tried again with them
-  (`held_measured`), never dropped on an estimate. A check red on its test files alone (its exit
+  (`held_measured`), never dropped on an estimate; every check whose records the lander read, green or red, records
+  each estimated file's measured G (`record_measured`, src-measured.json), so an estimate is paid once, at the first
+  landing that runs its file. A check red on its test files alone (its exit
   14) whose red files are all outside the move's own is run at origin's head in one process (`src_red_at`, R3, R10): red
   there, origin's: located at once (`src_locate`, the fix-first filed, the file into R) and the item checked again
   without it, uncharged; green there, the move's own red, as before, unless a file read so twice within
@@ -1107,7 +1115,17 @@ door's, run as Dale on paths no build user writes.
   verify lock (`climb.src_gap`: the lane of the slots' measurements, never the score's, whose compile holds its lock for
   hours; one measurement at a time, so it adds no heavy Julia; its files stop at their boundaries for a waiting lander
   and the rest run after it), so the count stays near zero and the bound stops a landing only when the files cannot be
-  run; a score at a head the job ran skips its src part. A move's measurement that faults (the driver's: a cut, the
+  run; a score at a head the job ran skips its src part. The same job first runs every L228 break, the tree and the
+  runner's plants once a driver landing (`measure.l228_sweep_due`: the landings since the last swept head change an
+  input of the harness), as the landing user with no test set at background QoS (`door.land_job`, as the packages
+  regeneration; dev/l228_sweep.py, the ratchet's own reading of its breaks): each fault a fix-first `l228 <fault>`, a
+  known red and the lead's hand (no climber's hold: the harness is no move's to change), cleared by the next clean
+  sweep. A set the lander hands with no file (a change whose own files are none and whose ratchet alone passes the
+  target takes no share) is a valid set: dev/check.sh runs no shard and its shard stage is green; a void reading of
+  such a set is the check's fault, the driver's (`lander.empty_set_void`: held, uncharged), never the commit's. A driver commit's evidence is `bash dev/driver_evidence.sh <commit> --state <state> --main <repository>`: the
+  sweep and dev/check.sh itself, both run in a landing's shape (a scratch door root, its landing user's home and tmp
+  under it, `env -i` with the land job's variables, the check profile), the ratchet, and the replay of the lander's
+  next round on a copy of the state (dev/climb/walk.py), one verdict line each (the lead's rule, 2026-11-15). A move's measurement that faults (the driver's: a cut, the
   door's error, a file of its run gone) is measured again on the same commit (`slots.remeasure`), the climber's work
   kept, unless the same fault repeats or task_wall_s passes; then the move ends as infrastructure, its hold kept.
 - **D13 reads red for every climb landing**, by construction: `dev/ship.sh` bands the median of the last five
@@ -1391,15 +1409,16 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120,
 `kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000,
 `decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6],
-`other_tries` 3, `d14_tries` 3, `gap_admit_max_s` 259200, `ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20,
-`file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456, `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4],
-`tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3, `fixfirst_max_landings` 6, `src_unverified_max` 6,
-`src_shape_checks_min` 2, `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375,
-`src_prior_load_s` {"src": 17, "outside": 0}, `src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9,
-`src_prior_ratchet_harness_s` 252, `src_margin_min_s` 10, `src_margin_checks` 10, `src_margin_start_s` 25,
-`src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800, `admissible_wall_s` 600, `parse_wall_s` 300,
-`loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432, `proxy_request_s` 1200, `proxy_join_s` 30,
-`git_low_speed` [1000, 60], `loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
+`other_tries` 3, `d14_tries` 3, `gap_admit_max_s` 259200, `l228_sweep_wall_s` 900, `ship_kill_s` 3600,
+`watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,
+`answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3,
+`fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
+`src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0},
+`src_prior_ratchet_s` 89, `src_prior_imbalance_s` 9, `src_prior_ratchet_harness_s` 252, `src_margin_min_s` 10,
+`src_margin_checks` 10, `src_margin_start_s` 25, `src_margin_max_s` 40, `pkg_wall_s` 1800, `kinds_wall_s` 1800,
+`admissible_wall_s` 600, `parse_wall_s` 300, `loader_wall_s` 600, `proxy_in_flight` 1, `proxy_body_bytes` 33554432,
+`proxy_request_s` 1200, `proxy_join_s` 30, `git_low_speed` [1000, 60],
+`loop_stale_s` {"scoreboard": 1800, "lander": 1800, "climb": 1800},
 `role_wait_s` {"slot": 10800, "review": 10800, "measure": 49800, "score": 49800, "land": 5400, "deps": 3600},
 `state_lock_s` 600, `step_wall_s` 60, `tree_wall_s` 600, `kaimon_poll_s` 30, `kaimon_ping_s` 10,
 `poll_s` {"kaimon_up": 5, "scan": 10, "lock": 5, "landing_lock": 20, "yield": 2, "land_job": 5},

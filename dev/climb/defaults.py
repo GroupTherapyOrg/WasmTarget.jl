@@ -217,6 +217,11 @@ DEFAULTS = {
     # ends (settle_gap_admits): intent, a port admitted to make a case a gap lands within a day or two, and an admission
     # whose port never landed does not wait on a later, different change; band 1-7 days
     "gap_admit_max_s": 259200,
+    # the sweep of every L228 break after a driver landing (measure.l228_sweep, dev/l228_sweep.py, as the landing user
+    # at background QoS): intent, it ends within minutes; derivation, the sweep read 158-201 s of wall at background QoS
+    # with four at a time (2026-11-14/15, 94-110 breaks); band 600-1800 s: three times that and more, past it the door
+    # ends it and it is the driver's fault, the next head sweeps again
+    "l228_sweep_wall_s": 900,
     # a landing's ship.sh is killed past this (its process group, the check with it). Band: a check's hard limit is
     # 480 s (dev/check.sh WT_HARD_LIMIT) and a ship carries at most 6 commits, each checked: 6 x 480 = 2880 s, plus
     # the landing queue's wait; past an hour the ship is hung, never slow

@@ -90,7 +90,14 @@ set_ok() {
   return 0
 }
 set_ok || exit 1
-echo "check: the lander's test set: $(grep -cv '^#' "$WT_SRC_SET") of $(git ls-files 'test/src/*.jl' | wc -l | tr -d ' ') test files"
+# a set the lander handed that names no file is a valid set (a change whose own files are none, its share none: a
+# change to the harness's inputs, whose ratchet alone passes the target, 5a0644e9): no shard runs and the shard stage
+# is green, said so; distinct from no set handed (set_ok, refused above) and from a shard handed files that recorded
+# nothing (void, dev/src_verdict.sh). 2026-11-15 02:20:43Z: five shards given an empty set wrote no records, read void,
+# and dropped a model commit as its own
+set_n=$(grep -v '^#' "$WT_SRC_SET" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')
+echo "check: the lander's test set: $set_n of $(git ls-files 'test/src/*.jl' | wc -l | tr -d ' ') test files"
+[ "$set_n" -gt 0 ] || echo "check: the lander's set is empty: no test file runs (the load, the ratchet and TLC do)"
 rm -f .wtd/src_records.* .wtd/src_start.*
 # the ratchet and the tests of ported code run side by side (two processes, one thread each): the
 # landing-lock holder's re-check is the loop's one serial step, so its wall is the slower of the two
@@ -160,6 +167,10 @@ fi
 # 133; the wall 133-148 s against 125-142; the work 6,707-6,912 G against 5,981-6,171 (one first compile fewer); each
 # shard's efficiency-core seconds 43-45 against 25-30
 SHARDS=5
+# the shards this check runs: SHARDS, or none when the lander's set names no file (set_n, above); set here, once SHARDS is
+# (2026-11-15 02:36:41Z: read above SHARDS's line, `set -u` ended the check before any stage)
+RUN_SHARDS=$SHARDS; [ "$set_n" -gt 0 ] || RUN_SHARDS=0
+# its loops count with bash's own arithmetic: macOS's `seq 1 0` counts down (1 0), and two shards ran on an empty set
 # D14's band (dev/LEDGER.md D14): red past 120 s, raised by Dale's word on 2026-11-01 to 160 then 140 s with the shards'
 # count; on 2026-11-14 Dale gave the lead the band ("just widen the 140s benchmark as needed but be reasonable ... you make
 # the decsions now, not me"), and the lead set two red lines and kept the lander's packing where it was:
@@ -278,7 +289,7 @@ git diff -M --name-status "$base" HEAD > .wtd/base/renames 2>/dev/null
 # and where the dart corpus's images live (test/DartCorpus/load.jl, WT_DART_CORPUS_DIR): the common dir's, as the image
 # built above and the landing's layer hold them, read here by this script's git
 dart_dir="$(git rev-parse --path-format=absolute --git-common-dir)/wt-dart-corpus"
-for k in $(seq 1 $SHARDS); do
+for ((k = 1; k <= RUN_SHARDS; k++)); do
   : > ".wtd/progress.$k"
   env -u GIT_WORK_TREE "${SRC_PROCESS_ENV[@]}" GIT_CEILING_DIRECTORIES="$PWD" WT_BASE_TREE="$PWD/.wtd/base" WT_DART_CORPUS_DIR="$dart_dir" WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_CLAIMS="$PWD/.wtd/claims" WT_SRC_SET="$WT_SRC_SET" WT_SRC_COSTS="${WT_SRC_COSTS:-}" WT_SRC_RECORDS="$PWD/.wtd/src_records.$k.out" WT_SRC_START="$PWD/.wtd/src_start.$k" WT_SRC_CHILD_RATE="$RATE_P_SRC" julia --startup-file=no dev/tree_instructions.jl ".wtd/src_tests.$k.gi" \
     "${SRC_PROCESS[@]}" > ".wtd/src_tests.$k.out" 2>&1 & tpids="$tpids $!"
@@ -298,7 +309,7 @@ done
 if [ -n "$hung" ]; then echo "check: RED — past the hard limit of ${WT_HARD_LIMIT}s, a hang or a blow-up: $hung"; exit 11; fi
 wait $rpid; rc=$?
 src=""; for p in $tpids; do wait $p; src="$src $?"; done
-cat .wtd/src_tests.[0-9]*.out > .wtd/src_tests.out
+cat .wtd/src_tests.[0-9]*.out > .wtd/src_tests.out 2>/dev/null; touch .wtd/src_tests.out
 if [ $rc -ne 0 ]; then
   echo "check: the ratchet fails (exit $rc)"
   grep -E '❌|FAIL|BROKEN|ERROR' .wtd/ratchet.out | cut -c1-300 | head -20
@@ -313,14 +324,15 @@ case "$l228" in
   none) band=$D14_RED;;
   *) echo "check: the ratchet passed but wrote no L228 scope to .wtd/l228-scope (read: '${l228:0:40}'), so D14's red line cannot be chosen"; exit 1;;
 esac
-echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $SHARDS reported" 
+echo "check: src tests $(awk '/^src /{ p += $3; t += $NF+0 } END { print p }' .wtd/src_tests.out) passed in $RUN_SHARDS shards; $(grep -cE '^src ' .wtd/src_tests.out) of $RUN_SHARDS reported" 
 # each shard's records answer for themselves (the round-13 architect's A13-5: the judge's canary last in every shard, its
 # exit status agreeing with its rows) and a red row counts unless it is a known red's own first failing test (spec v17
 # Z1): one reading of the records into the verdict, dev/src_verdict.sh (exit 15 void, 1 not exactly the set, 14 red on
 # test files, 0 green)
 vargs=(); k=0; for r in $src; do k=$((k + 1)); vargs+=("$r" ".wtd/src_records.$k.out"); done
 rm -f .wtd/src_records.void.out
-SRC_VOID_OUT=.wtd/src_records.void.out bash dev/src_verdict.sh "$WT_SRC_SET" "${vargs[@]}"; vrc=$?
+vrc=0   # no shard ran (the lander's set is empty): no record to read
+[ "$RUN_SHARDS" -eq 0 ] || { SRC_VOID_OUT=.wtd/src_records.void.out bash dev/src_verdict.sh "$WT_SRC_SET" "${vargs[@]}"; vrc=$?; }
 [ $vrc -eq 1 ] && exit 1
 [ $vrc -eq 15 ] && exit 15   # a void process: its files in .wtd/src_records.void.out, which ship.sh hands the lander (Z3)
 [ $vrc -eq 14 ] && { grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 14; }
@@ -328,7 +340,7 @@ SRC_VOID_OUT=.wtd/src_records.void.out bash dev/src_verdict.sh "$WT_SRC_SET" "${
 # every shard reports its summary, or the check is red: a shard whose output is lost passed on its exit status alone, its
 # tests unread (fd65f41e's check read "0 of 6 reported" and was green, D9)
 reported=$(grep -cE '^src ' .wtd/src_tests.out)
-[ "$reported" -eq "$SHARDS" ] || { echo "check: src tests red, $reported of $SHARDS shards reported a summary"; exit 1; }
+[ "$reported" -eq "$RUN_SHARDS" ] || { echo "check: src tests red, $reported of $RUN_SHARDS shards reported a summary"; exit 1; }
 # the ratchet reports its charter block, or the check is red, for the same reason
 grep -q '── charter' .wtd/ratchet.out || { echo "check: the ratchet reported no charter block (its output is lost or cut short)"; exit 1; }
 # the models the change touches: a changed dev/formal/<Name>.tla or MC<Name>*.{tla,cfg} selects
@@ -362,7 +374,7 @@ RATE_ABOVE=0.15
 fast_of() { awk -v r="$2" -v n="$1" -v a="$RATE_ABOVE" '$4 > 1 && $2 / $4 > r * (1 + a) { printf " %s ran %.1f G a performance-core second, over its rate %s by more than %d%%;", n, $2 / $4, r, 100 * a }' ".wtd/$1.gi"; }
 c_load=$(ps_of load $RATE_P_LOAD); p_ratchet=$(ps_of ratchet $RATE_P_RATCHET); path_par=$p_ratchet; shards=""; cpus="$(cpu ratchet)"; splits="$(split_of ratchet)"
 slow="$(slow_of load $RATE_P_LOAD)$(slow_of ratchet $RATE_P_RATCHET)"; fast="$(fast_of load $RATE_P_LOAD)$(fast_of ratchet $RATE_P_RATCHET)"
-for k in $(seq 1 $SHARDS); do p=$(ps_of "src_tests.$k" $RATE_P_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; splits="$splits; $(split_of "src_tests.$k")"; slow="$slow$(slow_of "src_tests.$k" $RATE_P_SRC)"; fast="$fast$(fast_of "src_tests.$k" $RATE_P_SRC)"; [ "$p" -gt "$path_par" ] && path_par=$p; done
+for ((k = 1; k <= RUN_SHARDS; k++)); do p=$(ps_of "src_tests.$k" $RATE_P_SRC); shards="$shards $p"; cpus="$cpus $(cpu "src_tests.$k")"; splits="$splits; $(split_of "src_tests.$k")"; slow="$slow$(slow_of "src_tests.$k" $RATE_P_SRC)"; fast="$fast$(fast_of "src_tests.$k" $RATE_P_SRC)"; [ "$p" -gt "$path_par" ] && path_par=$p; done
 path=$(( c_load + path_par ))
 echo "$path" > .wtd/check-path.out
 # and the split it is made of, one line a stage: its name, its judged seconds, its performance-core G, its efficiency-core
@@ -371,9 +383,9 @@ echo "$path" > .wtd/check-path.out
 # ruling's predictions are checked against (step 2). Numbers alone, written by the check's own processes' counters
 split_line() { awk -v n="$1" -v r="$2" '{ printf "%s %d %.1f %.1f %.1f\n", n, $2 / r + ($3 - $4) + $6, $2, $3 - $4, $6 }' ".wtd/$3.gi"; }
 { split_line load $RATE_P_LOAD load; split_line ratchet $RATE_P_RATCHET ratchet
-  for k in $(seq 1 $SHARDS); do split_line "shard.$k" $RATE_P_SRC "src_tests.$k"; done
+  for ((k = 1; k <= RUN_SHARDS; k++)); do split_line "shard.$k" $RATE_P_SRC "src_tests.$k"; done
   # each shard's start (its G until its first file, test/src_tests.jl's WT_SRC_START): c0, measured (A13-7)
-  for k in $(seq 1 $SHARDS); do [ -s ".wtd/src_start.$k" ] && printf 'start.%s %.1f\n' "$k" "$(head -1 ".wtd/src_start.$k")"; done
+  for ((k = 1; k <= RUN_SHARDS; k++)); do [ -s ".wtd/src_start.$k" ] && printf 'start.%s %.1f\n' "$k" "$(head -1 ".wtd/src_start.$k")"; done
   echo "wall $wall"; echo "band $band"; echo "l228 $l228"; } > .wtd/check-split.out
 echo "check: ${path} s on the critical path (load ${c_load}, ratchet ${p_ratchet}, src shards${shards}; performance-core G + efficiency-core seconds + unreported seconds: load $(split_of load); ratchet ${splits}); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
 [ -z "$slow" ] || echo "check: note, a stage's performance cores ran under its rate, so it reads low there:${slow}"

@@ -672,6 +672,37 @@ def d14_judged_red(item, ss, text, arg):
                                                            [x for x in q if x["branch"] == item["branch"]]))
     event("land-d14-wait", hold=item["hold"], path=path, band=ss["band"], tries=n, wait_s=wait)
 
+def record_measured(item, ss, text):
+    """Each file of the set that src_costs estimated, its G as the check's own records measured it (shard_costs: a
+    shard's first file less the warm-up), recorded in measure.SRC_MEASURED with its size at the commit checked, so the
+    next set charges it, scaled by size, until a score's record holds the file: after every check whose records were
+    read, green or red (2026-11-15 00:24:26Z: three new files estimated at 10,087.7 G ran at about 2,850 G, and every
+    landing until the next score paid the estimate and packed no share). Returns ({file: G} recorded, [estimated file
+    the records do not measure])."""
+    est = sorted(set(ss.get("estimated", [])))
+    got = shard_costs(text, ss.get("warm") or 0.0)
+    at = (item.get("rebased") or {}).get("commit") or item["sha"]
+    sizes = src_sizes(at)
+    rec = {f: {"G": round(got[f], 1), "size": sizes.get(f, 0), "sha": at[:10], "t": stamp()} for f in est if f in got and sizes.get(f)}
+    if rec:
+        update_json(SRC_MEASURED, {}, lambda m: m.update(rec))
+        event("src-measured", hold=item["hold"], files={f: r["G"] for f, r in rec.items()},
+              estimated={f: round(ss.get("costs", {}).get(f, 0.0), 1) for f in rec} if ss.get("costs") else None)
+    return {f: r["G"] for f, r in rec.items()}, [f for f in est if f not in got]
+
+def empty_set_void(item, kind, arg, ss, files):
+    """A check that read `void` (dev/src_verdict.sh's 15) on a set the lander handed with no file in it: no shard was
+    given a file, so no record of the commit's can be void; the check's reading is the fault, the driver's, never the
+    commit's (2026-11-15 02:20:43Z: a model commit of the compiler, no own test file and nothing unscored, its five
+    shards given an empty set and read void, was dropped as landing-red). The item is held and tried again, uncharged
+    (item_error: other_tries such faults, then dropped uncharged), never landing-red on its hold. Returns whether it
+    took the item."""
+    if kind != "OWN" or arg != "void" or ss is None or files is None or files:
+        return False
+    item_error(item, ClimbError("its check read void on an empty handed set (no shard was given a file): the check's "
+                                "fault, the driver's, never the commit's"))
+    return True
+
 def held_measured(item, ss, text, arg):
     """A check past D14's band whose own set held a file no score or check had costed (`estimated`, measure.src_costs):
     the check's own records measure each file (shard_costs), the costs are recorded (measure.SRC_MEASURED, each with
@@ -689,12 +720,9 @@ def held_measured(item, ss, text, arg):
         item_error(item, ClimbError(f"its check read {arg} s past D14's band and its records measure no cost for its "
                                     f"estimated own file(s) {missing}"))
         return
-    at = (item.get("rebased") or {}).get("commit") or item["sha"]
-    sizes = src_sizes(at)
-    rec = {f: {"G": round(got[f], 1), "size": sizes.get(f, 0), "sha": at[:10], "t": stamp()} for f in est if sizes.get(f)}
-    update_json(SRC_MEASURED, {}, lambda m: m.update(rec))
-    unqueue(item, measured={f: r["G"] for f, r in rec.items()})
-    event("land-measured", hold=item["hold"], check=arg, files={f: r["G"] for f, r in rec.items()},
+    rec, _ = record_measured(item, ss, text)   # the one recording (every check's, record_measured)
+    unqueue(item, measured={f: rec[f] for f in est if f in rec})
+    event("land-measured", hold=item["hold"], check=arg, files={f: rec[f] for f in est if f in rec},
           estimated={f: round(ss.get("costs", {}).get(f, 0.0), 1) for f in est} if ss.get("costs") else None)
 
 def shard_records(text):
@@ -926,7 +954,7 @@ def src_gap_spawn(origin):
     stopped the lander for 20 minutes). One at a time (its loop lock: a second exits at once); in the lander loop's
     process group, so `launch.sh stop` ends it with the lander; its stamp its own (WT_CLIMB_LOOP), so it keeps no other
     loop's heartbeat fresh. Returns the process, or None when nothing was due."""
-    if not src_gap_due(origin):
+    if not (src_gap_due(origin) or l228_sweep_due(origin)):
         return None
     log = open(os.path.join(STATE, "logs", "src-gap.log"), "a")
     return subprocess.Popen([sys.executable, os.path.join(ROOT, "dev", "climb", "climb.py"), "src-gap"], cwd=ROOT,
@@ -1102,12 +1130,16 @@ def land_round():
                 raise ClimbError(f"the landing of {item['hold'][:80]} ran no check and gave no result")
             rtext = pr.pop("records", None)
             recs, vfiles = shard_records(rtext), void_files(rtext)
+            if recs is None and not files:   # an empty set: no shard ran and none recorded, exactly the set (dev/check.sh)
+                recs = {}
             # the verified record: the files the check REPORTS it ran green, of the set handed (the operator's round-13
             # finding 5, the architect's 7a): never the set assumed, never "every file"; a row naming a file outside
             # the set refuses them all (a check that ran what it was not handed, L228)
             # and exactly the set (spec v17 Z2): a file of the set with no record refuses them too (red's round-14 p5:
             # one file claimed its red sibling away from every shard)
             item["src_verified"] = verified_rows(item, recs, files)
+            if rtext and ss:   # each estimated file's measured G, green or red (record_measured)
+                record_measured(item, ss, rtext)
             fetch()
             kind, arg = res
         else:
@@ -1133,6 +1165,8 @@ def land_round():
             held_measured(item, ss, rtext, arg); continue
         if kind == "OWN" and arg == "tests" and ss and origin_red(item, slot, ss, recs):
             continue   # origin's red, located and filed: the item is checked again without it next round, uncharged
+        if empty_set_void(item, kind, arg, ss, files if ss is not None else None):
+            continue   # the check's fault on an empty set, the driver's: held and tried again, uncharged
         if kind == "OWN" and arg == "void" and ss and origin_void(item, ss, vfiles):
             continue   # origin's void, located and filed: as R3's red (spec v17 Z3), uncharged
         if kind == "D14":   # red on D14's time alone, judged: the commit's own files, or its own wait (d14_judged_red)

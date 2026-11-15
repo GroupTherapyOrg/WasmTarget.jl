@@ -589,7 +589,9 @@ def holds(cases=None):
         g.setdefault("instances", collections.Counter())[inst] += 1
     out = list(groups.values())
     for f in state_json("fixfirst.json", []):   # audit findings and G2 losses: fix first (D21), a measured one only
-        if fixfirst_problem(f) is None:   # (its writers refused any other; one written before them is skipped here)
+        # (its writers refused any other; one written before them is skipped here); an L228 sweep's fault is the lead's
+        # hand (the harness is no move's to change: move_rule), a fix-first no climber's hold
+        if fixfirst_problem(f) is None and not f["key"].startswith("l228 "):
             out.append({"key": f["key"], "cases": f.get("cases", []), "secs": 0.0, "why": f["why"], "fixfirst": True,
                         "require_pass": f.get("require_pass", False), "tests": f.get("tests", [])})
     out += src_tail()
@@ -649,13 +651,14 @@ def fixfirst_problem(f):
     (measure.src_locate: the move's landing check runs them), or an audit finding whose why starts with its path:line.
     Its writers ask (add_fixfirst); holds() only reads (A5-10)."""
     if f.get("require_pass") and f.get("cases") or f["key"].startswith("audit ") and re.match(r"[\w/.-]+:\d+ ", f.get("why", "")) \
-            or f["key"].startswith("src-test ") and f.get("tests"):
+            or f["key"].startswith("src-test ") and f.get("tests") or f["key"].startswith("l228 ") and f.get("why"):
         return None
-    return "neither G2's cases to pass, a src-test red's files, nor an audit finding whose why starts with path:line"
+    return ("neither G2's cases to pass, a src-test red's files, an audit finding whose why starts with path:line, nor an "
+            "L228 sweep's fault (measure.l228_sweep)")
 
 def known_red(f):
     """A fix-first entry that stands for a red on origin (a G2 loss, a src-test red), whose age fixfirst_max_landings bounds."""
-    return bool(f.get("require_pass")) or f["key"].startswith("src-test ")
+    return bool(f.get("require_pass")) or f["key"].startswith(("src-test ", "l228 "))
 
 def add_fixfirst(entries):
     """Fix-first entries, each once by its key, refused at the write when no move on it can be measured; each new one

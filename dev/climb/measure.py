@@ -3532,6 +3532,57 @@ def src_unverified(h):
 
 SRC_GAP = "src-gap.json"   # the head the src-gap job last ran at: {"head": sha, "t": stamp}
 
+L228_SWEEP = "l228-sweep.json"   # the head the last sweep of every L228 break ran at (l228_sweep)
+
+def l228_sweep_due(head):
+    """Whether the sweep of every L228 break runs at `head`: the landings since the last swept head (or since head's
+    parent, before any sweep, or when that head is no ancestor) change an input of the harness (l228scope.harness, the
+    class a landing's check is judged in). A landing's check runs only the breaks its diff selects
+    (l228scope.breaks); this sweep runs them all, once a driver landing, after it lands."""
+    last = state_json(L228_SWEEP, {}).get("head")
+    if last == head:
+        return False
+    prev = last if last and sh(["git", "merge-base", "--is-ancestor", last, head]).returncode == 0 else git("rev-parse", f"{head}~1")
+    try:
+        return l228scope.harness(ROOT, prev, head)
+    except (ValueError, subprocess.CalledProcessError):
+        return True   # a head whose class cannot be read is swept (D9: never skipped unread)
+
+def l228_sweep(head):
+    """Every L228 break, the tree and the runner's plants at `head` (dev/l228_sweep.py, the ratchet's own reading of
+    them), as the landing user in its check profile at background QoS (door.land_job, as the packages regeneration runs:
+    no test set, no Julia), from the sweep's worktree. Each fault is a fix-first (`l228 <fault>`, a known red, the
+    lead's hand: no climber's hold), located at `head`; one a clean sweep no longer reads is cleared. The record is
+    written whatever the verdict, so a head is swept once. A door failure or no result is the driver's (ClimbError)."""
+    save_json(L228_SWEEP, {"head": head, "t": stamp(), "running": True})
+    wt = os.path.join(WORKTREES, "climb-sweep")
+    if not os.path.isdir(wt):
+        common_write("the sweep worktree")
+        git("worktree", "add", "-q", "--detach", wt, head)
+    git("checkout", "-q", "-f", "--detach", head, cwd=wt)
+    res_p = os.path.join(wt, ".wtd", "l228-sweep.json")
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(res_p)
+    try:
+        rc = door.land_job(wt, 'python3 -I dev/l228_sweep.py "$HOME/c" --out .wtd/l228-sweep.json', "l228-sweep.log",
+                           [".wtd/l228-sweep.json"], cfg()["l228_sweep_wall_s"], background=True, check=False)
+    except door.Tick as e:
+        if e.why == "power":
+            save_json(L228_SWEEP, {})   # redone when work may run
+            raise PowerCut(f"the L228 sweep of {head[:10]}: {e}") from e
+        raise
+    if rc == door.DOOR_FAILED or not os.path.exists(res_p):
+        raise ClimbError(f"the L228 sweep of {head[:10]} gave no result (exit {rc}, {wt}/.wtd/l228-sweep.log)")
+    res = json.load(open(res_p))
+    bad = res["tree"] + res["missed"] + res["anchors"] + res["runner"]
+    keys = {f"l228 {x[:200]}" for x in bad}
+    update_json("fixfirst.json", [], lambda ff: ff.__setitem__(slice(None), [f for f in ff if not f["key"].startswith("l228 ") or f["key"] in keys]))
+    if bad:
+        add_fixfirst([{"key": f"l228 {x[:200]}", "why": x, "located": head[:10]} for x in bad])
+    event("l228-sweep", sha=head[:8], ran=res["ran"], of=res["of"], bad=bad[:10], cpu_s=res.get("cpu_s"), wall_s=res.get("wall_s"))
+    save_json(L228_SWEEP, {"head": head, "t": stamp(), "bad": len(bad)})
+    return bad
+
 def src_gap_due(head):
     """Whether the src-gap job (climb.py src-gap: climb.src_gap) runs the src part at `head`: files stand unrun since a
     landing (src_unverified: a landing's check runs its share of the test files, never all), `head` has no src record
