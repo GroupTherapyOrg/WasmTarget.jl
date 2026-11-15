@@ -10,6 +10,18 @@ module UnicodeCases
 cat(x::Int64) = Int64(Base.Unicode.category_code(x))              # a code point's category, and 30 past 0x10ffff
 letter(x::Int64) = isletter(Char(x))                                # Lu..Lo, Base's isletter of a Char
 space(x::Int64) = isspace(Char(x))                                  # Base's isspace, Zs at or above '\ua0'
+# Base._isoperator (jl_is_operator's port): c doubled, after a dot, before a suffix (², a no-suffix operator's
+# kept unstripped), a no-suffix operator with a prime, a word operator, a suffix character first, a
+# non-operator, a combining mark as suffix, a Symbol, a NUL, Base's Cstring conversion's ArgumentError, and
+# sequences cut off by the name's end, which C decodes with the NUL after the name (0xce and NUL, U+0300)
+# and a lone three-byte lead with the zeros past it (0xe3: U+0F80; 0xe1: no suffix, the walk passing the NUL)
+_op(s::Union{String,Symbol}) = Int64(Base._isoperator(s))
+isop(n::Int64) = (c = Char(n);
+    _op(string(c, c)) + 2 * _op(string('.', c)) + 4 * _op(string(c, '²')) + 8 * _op(string('≔', '′')) + 16 * _op(string('i', 'n')) +
+    32 * _op(string('²', c)) + 64 * _op(string(c, 'x')) + 128 * _op(string(c, '̂')) + 256 * _op(n > 0x2b ? :+ : :foo) +
+    512 * (try; _op(string(c, '\0')); 0; catch e; e isa ArgumentError ? 1 : 2; end) +
+    1024 * _op(string(c, "\xce")) + 2048 * _op(string(c, "\xe1\xb9")) + 4096 * _op(string("\xce", c)) +
+    8192 * _op(string(c, "\xe1")) + 16384 * _op(string(c, "\xe3")))
 strip3(n::Int64) = ncodeunits(strip(n > 0 ? "  a　b ﻿ " : " x\t"))   # strip of Unicode space
 end
 
@@ -104,4 +116,58 @@ end
     D.translate(t, nothing)
     local seg = only(values(t.constants[]._byte_segments))
     @test seg.content == Vector{UInt8}(reinterpret(UInt8, htol.(WasmTarget.UTF8PROC_STAGE2TABLE)))
+end
+
+# Base._isoperator by overlay (src/patch/unicode.jl): jl_is_operator's port over julia-parser.scm's operator
+# lists, strip-op-suffix and jl_op_suffix_char. The C tables it copies equal the pinned files', entry for
+# entry, read again here; the port answers as Base's _isoperator, which calls libjulia's flisp, natively,
+# at every operator, its dotted and suffixed forms and every character to U+FFFF alone, doubled and after
+# +; and compiled, the cases answer as native Julia, the closed world reaching the overlay
+@testset "jl_is_operator's C tables are the pinned files', entry for entry" begin
+    local dir = WasmTarget._c_pin_checkout(:julia)
+    @test dir !== nothing   # bash dev/fetch_julia.sh makes it
+    if dir !== nothing
+        local utf8 = readlines(joinpath(dir, "src", "support", "utf8.c"))
+        @test parse.(UInt32, replace.(pinned_entries(utf8, "static const uint32_t offsetsFromUTF8[6] = {"), "UL" => "")) == WasmTarget.U8_OFFSETS_FROM_UTF8
+        @test parse.(UInt8, pinned_entries(utf8, "static const char trailingBytesForUTF8[256] = {")) == WasmTarget.U8_TRAILING_BYTES
+        local h = map(l -> String(first(split(l, "//"))), readlines(joinpath(dir, "src", "flisp", "julia_opsuffs.h")))
+        @test parse.(UInt32, pinned_entries(h, "static const uint32_t opsuffs[] = {")) == WasmTarget.JL_OPSUFFS
+    end
+end
+
+@testset "jl_is_operator's port answers as Base's _isoperator, natively" begin
+    local ours(s) = WasmTarget.jl_is_operator(s) != 0
+    local names = String[]
+    for op in WasmTarget.FL_OPERATORS, s in (op, "." * op, op * "²", op * "′", op * "̂", op * "x", "²" * op)
+        push!(names, s)
+    end
+    append!(names, WasmTarget.FL_NO_SUFFIX)
+    # names whose last sequence is cut off by their end, which C decodes with the NUL after the name and,
+    # past it, bytes it leaves undefined, the port's zeros (dev/formal/StripWalk.tla): every lead byte
+    # 0x80-0xff alone and with one continuation byte, after each prefix
+    for p in ("", "+", "-", "=", ".+", "<", "x", "a", "→"), b in 0x80:0xff, t in (nothing, 0x80:0xbf...)
+        push!(names, p * String(t === nothing ? UInt8[b] : UInt8[b, t]))
+    end
+    @test count(s -> !isvalid(s), names) > 50000
+    for u in 1:0xffff
+        0xd800 <= u <= 0xdfff && continue
+        push!(names, string(Char(u)), string('+', Char(u)), string(Char(u), Char(u)))
+    end
+    @test length(WasmTarget.FL_OPERATORS) > 600
+    @test isempty(filter(s -> ours(s) != Base._isoperator(s), names))
+    @test all(op -> Base._isoperator(op), WasmTarget.FL_OPERATORS)
+end
+
+@testset "_isoperator compiled answers as native Julia" begin
+    local runs = Main.WTChild.RunCase[]
+    for args in ((Int64(0x2b),), (Int64(0x3d),), (Int64(0x61),), (Int64(0x2192),))
+        append!(runs, first(Main.WTChild.answer_cases("unicode/isop$args", WasmTarget.compile, UnicodeCases.isop, args)))
+    end
+    local results = Main.WTChild.run_cases(runs)
+    foreach(r -> r.ok || println(r.label, ": ", r.why), results)
+    @test length(results) == length(runs) && all(r -> r.ok, results)
+    local overlaid = Set{Symbol}(Core.Compiler.get_ci_mi(x).def.name for x in WasmTarget.check_subset(UnicodeCases.isop, (Int64,), "unicode", Base.get_world_counter()).codeinfos
+                                 if x isa Core.CodeInstance && Core.Compiler.get_ci_mi(x).def.module === WasmTarget)
+    # the overlay and jl_is_operator inline into the case; the strip, which they call, is reached
+    @test :fl_julia_strip_op_suffix in overlaid
 end

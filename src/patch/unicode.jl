@@ -6679,3 +6679,282 @@ end
 @quarantine pin"julia/base/strings/unicode.jl:366 category_code" "Base's category_code of an Integer is a utf8proc_category foreigncall into libjulia's utf8proc; a wasm module has no libjulia, so utf8proc's lookup over its pinned tables" Base.Unicode.category_code @consistent_overlay METHOD_TABLE function Base.Unicode.category_code(x::Integer)
     return x ≤ 0x10ffff ? utf8proc_category(reinterpret(Int32, UInt32(x))) : Cint(30)
 end
+
+# Base's _isoperator by overlay (julia/base/show.jl:1577): Base passes the name as a Cstring to libjulia's
+# jl_is_operator (julia/src/ast.c:992), which interns it as a flisp symbol and applies the flisp parser's
+# operator? to it, and a wasm module has no libjulia and no flisp to call. The port follows the C and the
+# parser's own definitions: operator? (julia-parser.scm line 142) is a SuffSet of the parser's operator
+# list, membership after maybe-strip-op-suffix (line 66), whose strip-op-suffix is the C builtin
+# fl_julia_strip_op_suffix (julia/src/flisp/julia_extensions.c:245), walking the name's characters by
+# u8_nextchar (julia/src/support/utf8.c:269) to the first jl_op_suffix_char (julia_extensions.c:163). The
+# operator lists are julia-parser.scm's definitions at the julia pin, their symbols copied as written and
+# built as the parser builds them, when WasmTarget loads. The overlay is consistent: natively it computes
+# Base's answer, which test/src/unicode.jl compares at every operator, its dotted and suffixed forms
+# and every character to U+FFFF, and it re-reads the C tables copied here from their pinned files.
+
+# julia-parser.scm's operator lists at the julia pin, built as its definitions build them: add-dots (line
+# 4), the precedence lists (lines 6-33) in prec-names' order (line 35), trans-op, ctrans-op and vararg-op
+# (lines 40-42), no-suffix?'s list (line 62), unary-ops (line 99) and operators (line 129), the list less
+# its word operators (is-word-operator?, line 126: every character identifier-start-char?, flisp's builtin
+# of jl_id_start_char, natively Base's is_id_start_char). The first list is operators, the second
+# no-suffix?'s
+@quarantine pin"julia/src/ast.c:992 jl_is_operator" "the operator lists of the flisp parser whose operator? jl_is_operator applies, built as julia-parser.scm builds them; a wasm module has no flisp to hold them; Julia differs: a symbol is its name, a String, where flisp interns it; the anchor is jl_is_operator, the C that applies it, since julia-parser.scm is no unit a pin anchors (an anchor names a .c, .h, .cpp, .inc or .jl file), its definitions cited by line in the prose" Base.vcat function fl_operator_lists()::Tuple{Vector{String},Vector{String}}
+    # line 4 add-dots: the list and each of its operators after a dot
+    local add_dots(ops::Vector{String}) = vcat(ops, String["." * op for op in ops])
+    local prec_assignment = vcat(add_dots(String["=", "+=", "-=", "−=", "*=", "/=", "//=", "\\=", "^=", "÷=", "%=", "<<=", ">>=", ">>>=", "|=", "&=", "⊻=", "≔", "⩴", "≕"]), add_dots(String["~"]), String[":=", "\$="])
+    local prec_pair = add_dots(String["=>"])
+    local prec_conditional = String["?"]
+    local prec_arrow = add_dots(String["←", "→", "↔", "↚", "↛", "↞", "↠", "↢", "↣", "↦", "↤", "↮", "⇎", "⇍", "⇏", "⇐", "⇒", "⇔", "⇴", "⇶", "⇷", "⇸", "⇹", "⇺", "⇻", "⇼", "⇽", "⇾", "⇿", "⟵", "⟶", "⟷", "⟹", "⟺", "⟻", "⟼", "⟽", "⟾", "⟿", "⤀", "⤁", "⤂", "⤃", "⤄", "⤅", "⤆", "⤇", "⤌", "⤍", "⤎", "⤏", "⤐", "⤑", "⤔", "⤕", "⤖", "⤗", "⤘", "⤝", "⤞", "⤟", "⤠", "⥄", "⥅", "⥆", "⥇", "⥈", "⥊", "⥋", "⥎", "⥐", "⥒", "⥓", "⥖", "⥗", "⥚", "⥛", "⥞", "⥟", "⥢", "⥤", "⥦", "⥧", "⥨", "⥩", "⥪", "⥫", "⥬", "⥭", "⥰", "⧴", "⬱", "⬰", "⬲", "⬳", "⬴", "⬵", "⬶", "⬷", "⬸", "⬹", "⬺", "⬻", "⬼", "⬽", "⬾", "⬿", "⭀", "⭁", "⭂", "⭃", "⥷", "⭄", "⥺", "⭇", "⭈", "⭉", "⭊", "⭋", "⭌", "￩", "￫", "⇜", "⇝", "↜", "↝", "↩", "↪", "↫", "↬", "↼", "↽", "⇀", "⇁", "⇄", "⇆", "⇇", "⇉", "⇋", "⇌", "⇚", "⇛", "⇠", "⇢", "↷", "↶", "↺", "↻", "-->", "<--", "<-->", "🢲"])
+    local prec_lazy_or = add_dots(String["||"])
+    local prec_lazy_and = add_dots(String["&&"])
+    local prec_comparison = vcat(String["in", "isa"], add_dots(String[">", "<", ">=", "≥", "<=", "≤", "==", "===", "≡", "!=", "≠", "!==", "≢", "∈", "∉", "∋", "∌", "⊆", "⊈", "⊂", "⊄", "⊊", "∝", "∊", "∍", "∥", "∦", "∷", "∺", "∻", "∽", "∾", "≁", "≃", "≂", "≄", "≅", "≆", "≇", "≈", "≉", "≊", "≋", "≌", "≍", "≎", "≐", "≑", "≒", "≓", "≖", "≗", "≘", "≙", "≚", "≛", "≜", "≝", "≞", "≟", "≣", "≦", "≧", "≨", "≩", "≪", "≫", "≬", "≭", "≮", "≯", "≰", "≱", "≲", "≳", "≴", "≵", "≶", "≷", "≸", "≹", "≺", "≻", "≼", "≽", "≾", "≿", "⊀", "⊁", "⊃", "⊅", "⊇", "⊉", "⊋", "⊏", "⊐", "⊑", "⊒", "⊜", "⊩", "⊬", "⊮", "⊰", "⊱", "⊲", "⊳", "⊴", "⊵", "⊶", "⊷", "⋍", "⋐", "⋑", "⋕", "⋖", "⋗", "⋘", "⋙", "⋚", "⋛", "⋜", "⋝", "⋞", "⋟", "⋠", "⋡", "⋢", "⋣", "⋤", "⋥", "⋦", "⋧", "⋨", "⋩", "⋪", "⋫", "⋬", "⋭", "⋲", "⋳", "⋴", "⋵", "⋶", "⋷", "⋸", "⋹", "⋺", "⋻", "⋼", "⋽", "⋾", "⋿", "⟈", "⟉", "⟒", "⦷", "⧀", "⧁", "⧡", "⧣", "⧤", "⧥", "⩦", "⩧", "⩪", "⩫", "⩬", "⩭", "⩮", "⩯", "⩰", "⩱", "⩲", "⩳", "⩵", "⩶", "⩷", "⩸", "⩹", "⩺", "⩻", "⩼", "⩽", "⩾", "⩿", "⪀", "⪁", "⪂", "⪃", "⪄", "⪅", "⪆", "⪇", "⪈", "⪉", "⪊", "⪋", "⪌", "⪍", "⪎", "⪏", "⪐", "⪑", "⪒", "⪓", "⪔", "⪕", "⪖", "⪗", "⪘", "⪙", "⪚", "⪛", "⪜", "⪝", "⪞", "⪟", "⪠", "⪡", "⪢", "⪣", "⪤", "⪥", "⪦", "⪧", "⪨", "⪩", "⪪", "⪫", "⪬", "⪭", "⪮", "⪯", "⪰", "⪱", "⪲", "⪳", "⪴", "⪵", "⪶", "⪷", "⪸", "⪹", "⪺", "⪻", "⪼", "⪽", "⪾", "⪿", "⫀", "⫁", "⫂", "⫃", "⫄", "⫅", "⫆", "⫇", "⫈", "⫉", "⫊", "⫋", "⫌", "⫍", "⫎", "⫏", "⫐", "⫑", "⫒", "⫓", "⫔", "⫕", "⫖", "⫗", "⫘", "⫙", "⫷", "⫸", "⫹", "⫺", "⊢", "⊣", "⟂", "⫪", "⫫", "<:", ">:"]))
+    local prec_pipe_lt = String[".<|", "<|"]
+    local prec_pipe_gt = String[".|>", "|>"]
+    local prec_colon = vcat(String[":", ".."], add_dots(String["…", "⁝", "⋮", "⋱", "⋰", "⋯"]))
+    local prec_plus = vcat(String["\$"], add_dots(String["+", "-", "−", "¦", "|", "⊕", "⊖", "⊞", "⊟", "++", "∪", "∨", "⊔", "±", "∓", "∔", "∸", "≏", "⊎", "⊻", "⊽", "⋎", "⋓", "⟇", "⧺", "⧻", "⨈", "⨢", "⨣", "⨤", "⨥", "⨦", "⨧", "⨨", "⨩", "⨪", "⨫", "⨬", "⨭", "⨮", "⨹", "⨺", "⩁", "⩂", "⩅", "⩊", "⩌", "⩏", "⩐", "⩒", "⩔", "⩖", "⩗", "⩛", "⩝", "⩡", "⩢", "⩣"]))
+    local prec_times = add_dots(String["*", "/", "⌿", "÷", "%", "&", "·", "·", "⋅", "∘", "×", "\\", "∩", "∧", "⊗", "⊘", "⊙", "⊚", "⊛", "⊠", "⊡", "⊓", "∗", "∙", "∤", "⅋", "≀", "⊼", "⋄", "⋆", "⋇", "⋉", "⋊", "⋋", "⋌", "⋏", "⋒", "⟑", "⦸", "⦼", "⦾", "⦿", "⧶", "⧷", "⨇", "⨰", "⨱", "⨲", "⨳", "⨴", "⨵", "⨶", "⨷", "⨸", "⨻", "⨼", "⨽", "⩀", "⩃", "⩄", "⩋", "⩍", "⩎", "⩑", "⩓", "⩕", "⩘", "⩚", "⩜", "⩞", "⩟", "⩠", "⫛", "⊍", "▷", "⨝", "⟕", "⟖", "⟗", "⨟"])
+    local prec_rational = add_dots(String["//"])
+    local prec_bitshift = add_dots(String["<<", ">>", ">>>"])
+    local prec_power = add_dots(String["^", "↑", "↓", "⇵", "⟰", "⟱", "⤈", "⤉", "⤊", "⤋", "⤒", "⤓", "⥉", "⥌", "⥍", "⥏", "⥑", "⥔", "⥕", "⥘", "⥙", "⥜", "⥝", "⥠", "⥡", "⥣", "⥥", "⥮", "⥯", "￪", "￬"])
+    local prec_decl = String["::"]
+    local prec_dot = String["."]
+    local prec_names = (prec_assignment, prec_pair, prec_conditional, prec_arrow, prec_lazy_or, prec_lazy_and, prec_comparison,
+                        prec_pipe_lt, prec_pipe_gt, prec_colon, prec_plus, prec_times, prec_rational, prec_bitshift,
+                        prec_power, prec_decl, prec_dot)
+    local trans_op, ctrans_op, vararg_op = ".'", "'", "..."
+    local no_suffix = vcat(prec_assignment, prec_conditional, prec_lazy_or, prec_lazy_and, prec_colon, prec_decl, prec_dot,
+                           String["->", "<:", ">:", "in", "isa", "\$"], String[ctrans_op, trans_op, vararg_op])
+    local unary_ops = vcat(String["<:", ">:"], add_dots(String["+", "-", "!", "~", "¬", "√", "∛", "∜", "⋆", "±", "∓"]))
+    local is_word_operator(op::String) = all(Base.is_id_start_char, op)
+    local operators = filter(x -> !is_word_operator(x), unique(vcat(String["->", ctrans_op, trans_op, vararg_op], unary_ops, prec_names...)))
+    return operators, no_suffix
+end
+
+# julia-parser.scm line 142: the list operator? is a SuffSet of
+@quarantine pin"julia/src/ast.c:992 jl_is_operator" "the operator list of the flisp parser's operator?, which jl_is_operator applies; a wasm module has no flisp to hold it; the anchor is jl_is_operator, the C that applies it, since julia-parser.scm is no unit a pin anchors (an anchor names a .c, .h, .cpp, .inc or .jl file), its definitions cited by line in the prose" Base.first const FL_OPERATORS = first(fl_operator_lists())
+# julia-parser.scm line 62: the list no-suffix? is a Set of
+@quarantine pin"julia/src/ast.c:992 jl_is_operator" "the list of the flisp parser's no-suffix?, which operator?'s maybe-strip-op-suffix reads; a wasm module has no flisp to hold it; the anchor is jl_is_operator, the C that applies it, since julia-parser.scm is no unit a pin anchors (an anchor names a .c, .h, .cpp, .inc or .jl file), its definitions cited by line in the prose" Base.last const FL_NO_SUFFIX = last(fl_operator_lists())
+
+# utf8.c:43 offsetsFromUTF8, its lines 44-45, C's UL suffixes dropped: what u8_nextchar subtracts from a
+# sequence of each length's shifted bytes
+@quarantine pin"julia/src/support/utf8.c:43 offsetsFromUTF8" "the table u8_nextchar subtracts by a sequence's length; a wasm module has no libjulia whose utf8.c holds it, so its entries are copied from the pinned file" Core.UInt32 const U8_OFFSETS_FROM_UTF8 = UInt32[
+    0x00000000, 0x00003080, 0x000E2080,
+    0x03C82080, 0xFA082080, 0x82082080
+]
+
+# utf8.c:48 trailingBytesForUTF8, its lines 49-56: the bytes after a sequence's first, by that byte
+@quarantine pin"julia/src/support/utf8.c:48 trailingBytesForUTF8" "the table u8_seqlen reads a sequence's length from by its first byte; a wasm module has no libjulia whose utf8.c holds it, so its entries are copied from the pinned file" Core.UInt8 const U8_TRAILING_BYTES = UInt8[
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,4,4,4,4,5,5,5,5
+]
+
+# utf8.c:269 u8_nextchar: the character whose sequence starts at byte offset i (from 0) of s, and the offset
+# after it: u8_seqlen's bytes (utf8.c:60, trailingBytesForUTF8 of the first byte, plus one) shifted in six
+# bits at a time, offsetsFromUTF8 of the length subtracted, uint32_t's arithmetic, UInt32's. C reads the
+# name's bytes and then the NUL flisp's strcpy stores after them (julia/src/flisp/flisp.c:217 mk_symbol), a
+# defined read: the byte at offset ncodeunits(s) is that NUL, 0x00, so a sequence cut off by the name's end
+# decodes with it as C decodes it ("+\xce" is '+' and U+0300). Julia differs: past the NUL C reads bytes it
+# leaves undefined (flisp's malloc padding or beyond), which the port reads as zeros. A walk that passes the
+# NUL interns the name itself whatever those bytes are (strncpy stops at the NUL), so the zeros change only
+# a decode that depends on them, a three- or four-byte lead at the name's end ("+\xe3" decodes 0xe3, NUL, 0
+# as U+0F80, a suffix, as Julia answers); dev/formal/StripWalk.tla models the walk (PortIsZeroGarbage)
+@quarantine pin"julia/src/support/utf8.c:269 u8_nextchar" "the next character of a symbol's name, read from its bytes and the NUL after them as libjulia's UTF-8 support reads it; a wasm module has no libjulia to call; Julia differs: the bytes past that NUL, undefined in C, read as zeros" Base.codeunit function u8_nextchar(s::String, i::Int)::Tuple{UInt32,Int}
+    local n = ncodeunits(s)
+    local byte(k::Int) = k >= n ? 0x00 : codeunit(s, k + 1)
+    local ch = UInt32(0)
+    local sz = Int(getindex(U8_TRAILING_BYTES, Int(byte(i)) + 1)) + 1
+    for _ in 1:sz
+        ch <<= 6
+        ch += byte(i)
+        i += 1
+    end
+    ch -= getindex(U8_OFFSETS_FROM_UTF8, sz)
+    return ch, i
+end
+
+# julia_opsuffs.h:11 opsuffs, its lines 12-128, each C comment a Julia one: the code points other than
+# combining marks allowed as an operator's suffix, primes and sub- and superscripts
+@quarantine pin"julia/src/flisp/julia_opsuffs.h:11 opsuffs" "the operator suffixes jl_op_suffix_char hashes; a wasm module has no libjulia whose julia_opsuffs.h holds them, so its entries are copied from the pinned file" Core.UInt32 const JL_OPSUFFS = UInt32[
+   0x000000b2, # ²
+   0x000000b3, # ³
+   0x000000b9, # ¹
+   0x000002b0, # ʰ
+   0x000002b2, # ʲ
+   0x000002b3, # ʳ
+   0x000002b7, # ʷ
+   0x000002b8, # ʸ
+   0x000002e1, # ˡ
+   0x000002e2, # ˢ
+   0x000002e3, # ˣ
+   0x00001d2c, # ᴬ
+   0x00001d2e, # ᴮ
+   0x00001d30, # ᴰ
+   0x00001d31, # ᴱ
+   0x00001d33, # ᴳ
+   0x00001d34, # ᴴ
+   0x00001d35, # ᴵ
+   0x00001d36, # ᴶ
+   0x00001d37, # ᴷ
+   0x00001d38, # ᴸ
+   0x00001d39, # ᴹ
+   0x00001d3a, # ᴺ
+   0x00001d3c, # ᴼ
+   0x00001d3e, # ᴾ
+   0x00001d3f, # ᴿ
+   0x00001d40, # ᵀ
+   0x00001d41, # ᵁ
+   0x00001d42, # ᵂ
+   0x00001d43, # ᵃ
+   0x00001d47, # ᵇ
+   0x00001d48, # ᵈ
+   0x00001d49, # ᵉ
+   0x00001d4d, # ᵍ
+   0x00001d4f, # ᵏ
+   0x00001d50, # ᵐ
+   0x00001d52, # ᵒ
+   0x00001d56, # ᵖ
+   0x00001d57, # ᵗ
+   0x00001d58, # ᵘ
+   0x00001d5b, # ᵛ
+   0x00001d5d, # ᵝ
+   0x00001d5e, # ᵞ
+   0x00001d5f, # ᵟ
+   0x00001d60, # ᵠ
+   0x00001d61, # ᵡ
+   0x00001d62, # ᵢ
+   0x00001d63, # ᵣ
+   0x00001d64, # ᵤ
+   0x00001d65, # ᵥ
+   0x00001d66, # ᵦ
+   0x00001d67, # ᵧ
+   0x00001d68, # ᵨ
+   0x00001d69, # ᵩ
+   0x00001d6a, # ᵪ
+   0x00001d9c, # ᶜ
+   0x00001da0, # ᶠ
+   0x00001da5, # ᶥ
+   0x00001da6, # ᶦ
+   0x00001dab, # ᶫ
+   0x00001db0, # ᶰ
+   0x00001db8, # ᶸ
+   0x00001dbb, # ᶻ
+   0x00001dbf, # ᶿ
+   0x00002032, # ′
+   0x00002033, # ″
+   0x00002034, # ‴
+   0x00002035, # ‵
+   0x00002036, # ‶
+   0x00002037, # ‷
+   0x00002057, # ⁗
+   0x00002070, # ⁰
+   0x00002071, # ⁱ
+   0x00002074, # ⁴
+   0x00002075, # ⁵
+   0x00002076, # ⁶
+   0x00002077, # ⁷
+   0x00002078, # ⁸
+   0x00002079, # ⁹
+   0x0000207a, # ⁺
+   0x0000207b, # ⁻
+   0x0000207c, # ⁼
+   0x0000207d, # ⁽
+   0x0000207e, # ⁾
+   0x0000207f, # ⁿ
+   0x00002080, # ₀
+   0x00002081, # ₁
+   0x00002082, # ₂
+   0x00002083, # ₃
+   0x00002084, # ₄
+   0x00002085, # ₅
+   0x00002086, # ₆
+   0x00002087, # ₇
+   0x00002088, # ₈
+   0x00002089, # ₉
+   0x0000208a, # ₊
+   0x0000208b, # ₋
+   0x0000208c, # ₌
+   0x0000208d, # ₍
+   0x0000208e, # ₎
+   0x00002090, # ₐ
+   0x00002091, # ₑ
+   0x00002092, # ₒ
+   0x00002093, # ₓ
+   0x00002095, # ₕ
+   0x00002096, # ₖ
+   0x00002097, # ₗ
+   0x00002098, # ₘ
+   0x00002099, # ₙ
+   0x0000209a, # ₚ
+   0x0000209b, # ₛ
+   0x0000209c, # ₜ
+   0x00002c7c, # ⱼ
+   0x00002c7d, # ⱽ
+   0x0000a71b, # ꜛ
+   0x0000a71c, # ꜜ
+   0x0000a71d  # ꜝ
+]
+
+# julia_extensions.c:163 jl_op_suffix_char: whether a code point may follow an operator as part of it: none
+# below U+00A1 or past U+10FFFF; a combining mark (utf8proc's category, the port above, Mn, Mc or Me); else
+# one of opsuffs. Julia differs: C fills a hash table of opsuffs on its first call and looks the code point
+# up there, a membership the list itself answers here; C's int is a Bool
+@quarantine pin"julia/src/flisp/julia_extensions.c:163 jl_op_suffix_char" "whether a code point may suffix an operator, as libjulia's flisp extension answers it; a wasm module has no libjulia to call; Julia differs: opsuffs' membership is the list's, where C hashes it" Base.in function jl_op_suffix_char(wc::UInt32)::Bool
+    (wc < 0xA1 || wc > 0x10ffff) && return false
+    local cat = utf8proc_category(reinterpret(Int32, wc))
+    (cat == Base.Unicode.UTF8PROC_CATEGORY_MN || cat == Base.Unicode.UTF8PROC_CATEGORY_MC || cat == Base.Unicode.UTF8PROC_CATEGORY_ME) &&
+        return true
+    return wc in JL_OPSUFFS
+end
+
+# julia_extensions.c:245 fl_julia_strip_op_suffix: the name up to its first operator-suffix character,
+# walked by u8_nextchar; the name itself where it has none (op[i], the NUL flisp's strcpy stores after
+# the name's bytes, which hold none: the Cstring conversion refuses one) or begins with one; else its
+# first i bytes (strncpy into a fresh block, interned), copied into a fresh String (wasm_string_copy!).
+# Julia differs: a symbol is its name, a String, where flisp interns a fresh one; and where a sequence cut
+# off by the name's end took the NUL into its character (u8_nextchar) and that character is no suffix, the
+# walk's next offset is past the NUL, where C's op[i] reads undefined bytes: the walk ends there, the name
+# unstripped, which C's answer is too whatever those bytes are, a strip there copying the name only up to
+# its NUL (dev/formal/StripWalk.tla, StripPastNulIsName)
+@quarantine pin"julia/src/flisp/julia_extensions.c:245 fl_julia_strip_op_suffix" "an operator's name without its suffix, as libjulia's flisp builtin strip-op-suffix strips it; a wasm module has no libjulia to call; Julia differs: a symbol is its name, a String, where flisp interns one" Base._string_n function fl_julia_strip_op_suffix(op::String)::String
+    local n = ncodeunits(op)
+    local i = 0
+    while i < n
+        local wc, j = u8_nextchar(op, i)
+        jl_op_suffix_char(wc) && break
+        i = j
+    end
+    i < n || return op
+    i == 0 && return op
+    local opnew = Base._string_n(i)
+    wasm_string_copy!(opnew, 0, op, 0, i)
+    return opnew
+end
+
+# ast.c:992 jl_is_operator: flisp's operator? applied to the name (julia-parser.scm line 142, the SuffSet,
+# line 75, of FL_OPERATORS), true where it answers #t: maybe-strip-op-suffix (line 66), the name stripped
+# of its suffix unless nothing was stripped or the stripped name is in no-suffix?'s list (FL_NO_SUFFIX),
+# then its membership in the list (Set, line 44, eq? of interned symbols, the names' equality). Julia
+# differs: a symbol is its name, a String, and Set's membership is the list's (in) where flisp builds a
+# memq or a hash table by the list's length; C's int is a Cint
+@quarantine pin"julia/src/ast.c:992 jl_is_operator" "whether a name is an operator, as libjulia asks the flisp parser's operator?; a wasm module has no libjulia and no flisp to call; Julia differs: a symbol is its name, a String, and a Set's membership is the list's" Base.in function jl_is_operator(sym::String)::Cint
+    local op_ = fl_julia_strip_op_suffix(sym)
+    local op = op_ === sym || op_ in FL_NO_SUFFIX ? sym : op_
+    return Cint(op in FL_OPERATORS)
+end
+
+# Base's own body (julia/base/show.jl:1577), its ccall of jl_is_operator the port above: cconvert to a
+# Cstring is the String or Symbol itself (julia/base/strings/cstring.jl:65, :105), and unsafe_convert of a
+# String (cstring.jl:83) throws Base's ArgumentError where memchr finds a NUL in its bytes (containsnul,
+# cstring.jl:78; Base._search, the memchr port of src/patch/string.jl), a Symbol's name holding none (its
+# unsafe_convert, cstring.jl:106, checks nothing); the name is the String or the Symbol's (wasm_symbol_name)
+@quarantine pin"julia/base/show.jl:1577 _isoperator" "Base's _isoperator is a jl_is_operator foreigncall into libjulia's flisp parser through a Cstring; a wasm module has no libjulia, so the port of jl_is_operator, after the Cstring conversion's NUL check" Base._isoperator @consistent_overlay METHOD_TABLE function Base._isoperator(s::Union{String,Symbol})
+    s isa String && Base._search(s, 0x00) !== nothing &&
+        throw(ArgumentError("embedded NULs are not allowed in C strings: $(repr(s))"))
+    return jl_is_operator(s isa Symbol ? wasm_symbol_name(s) : s) != 0
+end
