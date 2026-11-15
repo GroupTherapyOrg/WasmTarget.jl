@@ -34,8 +34,8 @@ typeof_of_any(n::Int64) = (t = typeof(any_slot(n).x); t === Int64 ? 1 : t === Me
 # arity 1 holds two tuple types (Tuple{Int64}, Tuple{Float64}), so the operand pins none: each answered by the lookup
 @noinline u3(n::Int64) = n > 5 ? (n,) : n > 2 ? (Float64(n),) : n
 c_u3(n::Int64) = typeof(u3(n)) === Tuple{Int64} ? 1 : 2
-# a typeof inlined from a helper
-h_typeof(x) = typeof(x)
+# a typeof inlined from a helper (its line kept, which the fatal row names)
+h_typeof(x) = typeof(x); const H_TYPEOF_LINE = @__LINE__
 c_inlined(n::Int64) = (T = h_typeof(any_slot(n).x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)   # Memory{UInt8}: as typeof_of_any
 d_trycatch(n::Int64) = (try; T = typeof(any_slot(n).x); w = mayfail(n); (T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2) + w; catch; 5; end)
 # the lookup of each tuple an Any holds: elements of two classes, a nested tuple (its own record, looked up the same
@@ -67,6 +67,9 @@ array_typeof(n::Int64) = (s = splat_held(n); T = typeof(s.x); T === Int64 ? 1 : 
 # looks it up as an unpinned one (it compiled to a rejection of that type's constant before); the array class's arm is
 # the fatal gap
 array_forwarded(n::Int64) = (s = AnySlot(mk_int(collect(1:n))); T = typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)
+# the never-named tuple's typeof inlined from a helper: the fatal row names the whole inline chain, the helper's line
+# first (inlined), then its caller's
+c_inlined_never(n::Int64) = (s = AnySlot(n > 0 ? mk_any(int_and_string(n)) : any_pair(n).x); T = h_typeof(s.x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2); const C_INLINED_NEVER_LINE = @__LINE__
 # a Memory as a tuple's element: its class's own entry (Memory{UInt8}, whose type constant the program names)
 @noinline mem_pair(n::Int64) = AnySlot(n > 0 ? (Memory{UInt8}(undef, 1), n) : n)
 mem_elem(n::Int64) = (T = typeof(mem_pair(n).x); T === Tuple{Memory{UInt8},Int64} ? 1 : T === Int64 ? 2 : T === Memory{UInt8} ? 3 : 4)
@@ -139,6 +142,13 @@ end
         local m = match(r"unported: the (dart|Julia-only) definition (.*)", fatal.why)
         @test m !== nothing && m.captures[1] == "Julia-only" && startswith(m.captures[2], "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: ")
     end
+    # the run-time location is the statement's whole inline chain, as Julia builds a stack trace's frames for it
+    # (verify_create_stackframes): the inlined helper's line, then the caller's, on one line
+    @test Cases.c_inlined_never(1) == 2
+    local chain = only(WTChild.run_cases([WTChild.compiled_case("c_inlined_never(1)", W.compile, Cases.c_inlined_never, (Int64(1),))]))
+    @test chain.outcome === :unported
+    local here = @__FILE__
+    @test occursin("(at run time, h_typeof [inlined] at $here:$(Cases.H_TYPEOF_LINE), c_inlined_never at $here:$(Cases.C_INLINED_NEVER_LINE), statement %", chain.why)
     # the rows of the lookup: the world's concrete tuple types of the arity among the table's entries, in its order; a
     # Type{X} element, or one the table holds no entry of, is the type of no tuple of the world
     local entries = Union{Nothing,DataType}[nothing, Int64, Tuple{Int64,Int64}, Float64, Tuple{Int64,Float64}, Tuple{Int64},

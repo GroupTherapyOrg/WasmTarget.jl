@@ -1537,19 +1537,20 @@ end
     return result
 end
 
-# Where the statement `node` of the body being compiled stands in Julia's source: its file and line, read from the
-# body's own debuginfo as Julia's IR printer reads it (Compiler/src/ssair/show.jl:405 buildLineInfoNode: the outermost
-# frame, the method's own line, an inlined callee's frames below it), and its position in the body (`%k`); the
-# position alone where Julia keeps no line. dart's statements carry their file offsets (TreeNode.fileOffset); Julia's
-# are its body's debuginfo
+# Where the statement `node` of the body being compiled stands in Julia's source: its whole inline chain, the frames
+# Julia builds for a statement of a CodeInstance (julia/Compiler/src/verifytrim.jl:125 verify_create_stackframes, over
+# the body's debuginfo: the innermost callee first, each inlined frame marked, the method's own last), the same frames
+# a compile-time rejection's stack trace carries (src/julia/subset.jl _trim_error), each `<function> [inlined] at
+# <file>:<line>` on one line, then its position in the body (`%k`); the position alone where Julia keeps no line.
+# dart's statements carry their file offsets (TreeNode.fileOffset); Julia's are its body's debuginfo. One line, as
+# the fatal report is one line the host prints
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:statement_location}, node::NirCall)::String
     local body = self.code_gen.body
     local k = something(findfirst(st -> st === node, body.stmts), 0)
     k == 0 && return "an unnumbered statement"
-    local frames = Base.IRShow.buildLineInfoNode(body.ci.debuginfo, body.ci.def, k)
+    local frames = Core.Compiler.TrimVerifier.verify_create_stackframes(body.ci, k, Core.Compiler.TrimVerifier.ParentMap())
     isempty(frames) && return "statement %$k"
-    local top = first(frames)
-    return "$(top.file):$(top.line), statement %$k"
+    return join(("$(f.func)$(f.inlined ? " [inlined]" : "") at $(f.file):$(f.line)" for f in frames), ", ") * ", statement %$k"
 end
 
 # A gap WasmTarget defers to run time ends the program, never an exception a catch of the program observes: the
