@@ -149,11 +149,15 @@ end
     return !(Base.allocatedinline(ft) && (!Base.isfieldatomic(T, i) || ft isa DataType))
 end
 
-# a bits value's bytes stored at byte offset `o` of `m` in its layout: a leaf's least significant first
-# (src/patch/reinterpretarray.jl _packed_store!), any other primitive's as Base's reinterpret reads its
-# bytes, and a struct's fields each at its field offset (Julia's fieldoffset)
+# a bits value's bytes stored at byte offset `o` of `m` in its layout: none for a value of no size (a
+# singleton field of a struct occupies no byte of the block bits_hash reads, its jl_field_size 0, so
+# Julia's hash never reads it), a leaf's least significant first (src/patch/reinterpretarray.jl
+# _packed_store!), any other primitive's as Base's reinterpret reads its bytes, and a struct's fields
+# each at its field offset (Julia's fieldoffset)
 @quarantine "julia/src/builtins.c:315 bits_hash reads a bits value's bytes at its address; WasmGC has none, so its leaves are stored into a byte Memory at their field offsets" Base.fieldoffset @inline function bits_store!(m::Memory{UInt8}, o::Int, x::T)::Nothing where {T}
-    if x isa Union{Base.BitInteger, Base.IEEEFloat, Bool, Char}
+    if sizeof(T) == 0
+        # no bytes: the block holds none of it (julia/src/builtins.c:424 bits_hash(v, sz) over the parent's)
+    elseif x isa Union{Base.BitInteger, Base.IEEEFloat, Bool, Char}
         _packed_store!(m, o, x)
     elseif Int(Base.datatype_nfields(T)) == 0
         local bytes = reinterpret(NTuple{sizeof(T), UInt8}, x)
@@ -323,7 +327,8 @@ world calls Runtime.get_identity_hash_field, decided once a compile) and `object
 or not inference folds objectid of it. Else nothing: the constant keeps dart's initialIdentityHash, so a
 program that never reads identity is the same module, byte for byte. Refused, located: an id a serial
 could give (image_id_meets_serial), more image objects than an i32 slot's negative range, and a constant
-made after the table (WasmTarget's fault).
+made after the table (WasmTarget's fault), and a program whose identity counter the compiling process
+holds at anything but 0 (a native run of a program that wrote it).
 
 precedent(julia: julia/src/staticdata.c:1485 jl_write_values, the id kept with the object; dart: the
 header's identity hash slot, object_patch.dart:16 Object._objectHashCode, which reads 0 as "never hashed"
@@ -336,6 +341,12 @@ out by it.
     if reads === nothing
         reads = any(nb -> nb.ci.def.def in methods(Runtime.get_identity_hash_field), component)
         statics.reads_identity[] = reads
+        # the module's identity counter is a constant, its value the compiling process's, as every
+        # constant's is; it means "no serial given" only at 0, and the compiling process never gives one
+        # (natively the slot's read raises first), so a cell a program run natively wrote is refused,
+        # located, never emitted as a module's start
+        reads && Runtime.Object__hash_code_rnd[] != 0 &&
+            reject!(ProgramError("src/julia/runtime/hashing.jl image_slot!: the identity counter Runtime.Object__hash_code_rnd holds $(Runtime.Object__hash_code_rnd[]) in the compiling process, not 0: a program run natively wrote it, so a module made now would give its first object that serial's successor and spend its serials early; restore it to 0"), at)
     end
     (reads && jl_object_id_identity_arm(typeof(object))) || return nothing
     # the constant named in each refusal, its text cut to 80 characters
@@ -362,6 +373,30 @@ body raises.
 """
 @quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "an object saved in an image keeps its id in a word before its header, read at julia/src/builtins.c:483; a WasmGC object has none, so the module's table holds it" Core.UInt64 @noinline image_object_id(k::Int)::Core.UInt64 =
     _wasm_only(Core.UInt64)
+
+"""
+    identity_hash_field_holder(classes, member, at) -> Nothing
+
+The read or write of dart's identity hash field (`member`, getIdentityHashField or setIdentityHashField,
+src/runtime/common/object_helper.jl) on an operand whose classes are `classes`, refused, located at `at`,
+where one of them is a class Julia boxes fresh each time it flows to Any (an immutable struct, a
+primitive): such a box holds no field that lasts, its read a plausible 0 and its write lost. Every
+mutable class passes, a String among them though Julia's egal compares Strings by content: a String
+is a heap object carrying the field, and dart reads a String's field itself
+(sdk/lib/_internal/wasm/js_common/js_string.dart:642); the arm that reads identity takes only
+identities (jl_object_id_identity_arm).
+
+Julia-forced (D7): dart has no such check, its every Object a heap object with its header; Julia
+boxes an immutable value or a primitive anew wherever it flows to Any, so the header such a box
+carries is no value's.
+"""
+@quarantine pin"julia/src/builtins.c:459 jl_object_id__cold" "dart's every Object is a heap object carrying its identity hash field; Julia boxes an immutable value or a primitive anew where it flows to Any, so only a mutable object keeps the field" Base.ismutabletype function identity_hash_field_holder(classes::Vector{DataType}, member::String, at::String)::Nothing
+    for c in classes
+        ismutabletype(c) ||
+            reject!(Unquarantined("src/julia/runtime/hashing.jl identity_hash_field_holder: $member of a value that may be a $c, which Julia boxes fresh each time it flows to Any, so no identity hash field of it lasts"), at)
+    end
+    return nothing
+end
 
 """
     jl_object_id(x) -> UInt64

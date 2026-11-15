@@ -1238,31 +1238,16 @@ end
     return WasmBuilder.IR.NumType_i64
 end
 
-# the identity hash field read or written only on a heap object that keeps it: a value of a class Julia
-# boxes fresh each time it flows to Any (an immutable struct, a primitive) holds no field that lasts,
-# its read a plausible 0 and its write lost, so an operand that may hold such a class is refused, located
-# (dart's Object is always a heap object with its header: dart has no such class). Every mutable class
-# passes, a String among them though Julia's egal compares Strings by content: a String is a heap object
-# carrying the field, and dart reads a String's field itself (sdk/lib/_internal/wasm/js_common/
-# js_string.dart:642); the arm that reads identity takes only identities (jl_object_id_identity_arm)
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:identity_hash_field_holder}, arg::NirValue, member::String)::Nothing
-    local t = translator(self)
-    local T = dart_type_of(self, arg)
-    local classes = isconcretetype(T) ? DataType[T] : concrete_classes(t, T)
-    for c in classes
-        ismutabletype(c) ||
-            reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: $member of a value that may be a $c, which Julia boxes fresh each time it flows to Any, so no identity hash field of it lasts"),
-                    "$(julia_text(self.code_gen.enclosing_member)): $member")
-    end
-    return nothing
-end
-
 # getIdentityHashField (intrinsics.dart:1498): the operand translated as the non-null Object, its
 # header's identityHash field read and zero-extended to dart's int
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:get_identity_hash_field}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local t = translator(self)
     local b = self.code_gen.b[]
-    generate_static_intrinsic(self, Val(:identity_hash_field_holder), args[1], "getIdentityHashField")
+    # the operand's every class a heap object that keeps the field (src/julia/runtime/hashing.jl
+    # identity_hash_field_holder), Julia-forced: dart's every Object is one
+    local held = dart_type_of(self, args[1])
+    identity_hash_field_holder(isconcretetype(held) ? DataType[held] : concrete_classes(t, held), "getIdentityHashField",
+                               "$(julia_text(self.code_gen.enclosing_member)): getIdentityHashField")
     local object_type = t.object_info[].non_nullable_type
     translate_expression(self.code_gen, only(args), object_type)
     WasmBuilder.struct_get(b, t.object_info[].struct_, FieldIndex_identity_hash())
@@ -1277,7 +1262,9 @@ end
     local t = translator(self)
     local b = self.code_gen.b[]
     local (arg, hash) = args
-    generate_static_intrinsic(self, Val(:identity_hash_field_holder), arg, "setIdentityHashField")
+    local held = dart_type_of(self, arg)
+    identity_hash_field_holder(isconcretetype(held) ? DataType[held] : concrete_classes(t, held), "setIdentityHashField",
+                               "$(julia_text(self.code_gen.enclosing_member)): setIdentityHashField")
     local object_type = t.object_info[].non_nullable_type
     translate_expression(self.code_gen, arg, object_type)
     translate_expression(self.code_gen, hash, WasmBuilder.IR.NumType_i64)

@@ -23,7 +23,6 @@ struct PN; p::P2; q::PS; end
 struct E end
 mutable struct MM; x::Int64; end
 struct PM; m::MM; end
-const W = Main.WasmTarget
 # each case's answer the id itself, as a signed integer
 str(x::Int64) = reinterpret(Int64, objectid(string("ab", x)))
 # a Symbol only run time knows, chosen from constants (a Symbol made of a String at run time is

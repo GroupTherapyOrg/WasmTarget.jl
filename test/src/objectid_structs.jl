@@ -20,7 +20,6 @@ struct PU; a::Union{Int8,Float64}; b::Int32; end
 struct PS; s::String; n::Int64; t::Tuple{Int32,Float32}; end
 struct PN; p::P2; q::PS; end
 struct E end
-const W = Main.WasmTarget
 i128(x::Int64) = reinterpret(Int64, objectid(Int128(x) << 70))
 pair(x::Int64) = reinterpret(Int64, objectid((x, x + 1)))
 # the id of a value of a type of this module: equal to native Julia in the compiling process alone
@@ -33,6 +32,22 @@ cu(x::Int64) = objectid(Base.CodeUnits(string(x))) == objectid(Base.CodeUnits(st
 # the id of a value of a type of this module (a struct, a closure): the compiling process alone
 empty(x::Int64) = reinterpret(Int64, objectid(E())) + x
 clo(x::Int64) = (f = () -> x; reinterpret(Int64, hash(f)))
+# a field of no size (a singleton) first, in the middle, last and alone: Julia hashes the struct's whole
+# block, in which such a field occupies no byte (julia/src/builtins.c:424); a closure over a singleton
+# function and an Int (dart_closure/tearoff_dynamic's _ClBound{typeof(string), Int64})
+struct Z1; f::typeof(string); x::Int64; end
+struct Z2; a::Int32; f::typeof(sin); b::Int32; end
+struct Z3; x::Int64; n::Nothing; end
+struct Z4; a::Nothing; f::typeof(sin); end
+function zs(k::Int64, x::Int64)::Int64
+    k == 1 && return reinterpret(Int64, objectid(Z1(string, x)))
+    k == 2 && return reinterpret(Int64, objectid(Z2(x % Int32, sin, -x % Int32)))
+    k == 3 && return reinterpret(Int64, objectid(Z3(x, nothing)))
+    k == 4 && return reinterpret(Int64, objectid(Z4(nothing, sin))) + x
+    local g = string
+    local f = () -> g(x)
+    return reinterpret(Int64, hash(f))
+end
 end
 
 const C = ObjectIdCases
@@ -52,6 +67,19 @@ const OBJECTID_CASES = (
     end
     for r in Main.WTChild.run_cases(runs)
         @test (r.label => r.why) == (r.label => "")
+    end
+end
+
+@testset "a field of no size holds no byte of its struct's block" begin
+    # natively the port's id equals the runtime's, the zero-size field first, in the middle, last and alone
+    local vals = Any[C.Z1(string, 3), C.Z2(Int32(1), sin, Int32(-2)), C.Z3(5, nothing), C.Z4(nothing, sin),
+                     (local g = string; () -> g(7))]
+    @test filter(v -> WasmTarget.jl_object_id(v) != objectid(v), vals) == []
+    # compiled once, each case against native Julia in this process (the ids of this module's types)
+    local bytes = WasmTarget.compile(C.zs, (Int64, Int64))
+    local args = [(Int64(k), Int64(9)) for k in 1:5]
+    for r in Main.WTChild.run_cases([Main.WTChild.RunCase("objectid_structs/zs$a", bytes, a, Main.WTChild.native_answer(C.zs, a)) for a in args])
+        @test r.ok || (@info r.label r.why; false)
     end
 end
 
