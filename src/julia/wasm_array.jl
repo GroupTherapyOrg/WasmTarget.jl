@@ -368,7 +368,8 @@ A String of the first `n` bytes of `m` (`0 < n <= length(m)`): Julia's jl_generi
 (genericmemory.c:189), which returns the String owning `m`'s bytes where there is one, else a copy
 (jl_pchar_to_string); over WasmTarget's layout a String struct over `m`'s data array where `n` is its
 length, else over a copy of its first `n` bytes (array.copy), as the copy Julia makes where the owner's
-size class would change. Natively Julia's own call of it, as `unsafe_takestring(m)` makes it.
+size class would change. `m` is left of length 0, as Julia leaves it (:198). Natively Julia's own call of
+it, as `unsafe_takestring(m)` makes it.
 """
 @quarantine "julia/src/genericmemory.c:189 jl_genericmemory_to_string takes a byte Memory as a String, its own bytes or a copy; WasmGC wraps or copies the data array" Core.Memory @noinline wasm_memory_string(m::Memory{UInt8}, n::Int)::String =
     ccall(:jl_genericmemory_to_string, Ref{String}, (Any, Int), m, n)

@@ -1074,7 +1074,10 @@ immutable. Julia's layout (julia.h `jl_genericmemory_t` at v1.12.7): `length`, t
 address of the elements stored inline after it. `ptr` is left out: a host address, read only through
 `pointer` and `unsafe_load`, foreigncalls the strict subset rejects; the elements are the array.
 Only `memorynew` writes `data` and `length`, `length` the array's length, and no setter exists for
-either, so the two cannot diverge (D6). Julia leaves an undefined bits element's contents
+either, so the two cannot diverge (D6), with one exception Julia makes: a byte memory a String takes
+(jl_genericmemory_to_string, julia/src/genericmemory.c:198 `m->length = 0`) is left of length 0, its
+array kept, so its `length` is mutable (`Memory{UInt8}`'s alone) and that take is its one writer
+(src/intrinsics.jl); every element access is bounded by `length`, never by the array's. Julia leaves an undefined bits element's contents
 unspecified, so the zero a new wasm array holds is one of Julia's own values, never a default past
 a gap (D9). An atomic memory (`AtomicMemory`) or another address space rejects, located: threads lie
 outside the strict subset.
@@ -1104,7 +1107,8 @@ SimpleVector's does (`_svec_instance_fields`).
         reject!(Unquarantined("src/julia/classes.jl _memory_instance_fields: $c, an atomic memory or one of another address space"), at)
     local T = c.parameters[2]
     local data = ClassField(c, 0, "data", WasmArray{_memory_element_storage(T, at)}, false)
-    local length = ClassField(c, Base.fieldindex(c, :length), "length", fieldtype(c, :length), false)
+    # a byte memory's length is written once more, to 0, by the String that takes it (jl_genericmemory_to_string)
+    local length = ClassField(c, Base.fieldindex(c, :length), "length", fieldtype(c, :length), c === Memory{UInt8})
     # elements that may hold nothing, each its set flag (_needs_is_set), as one array beside the data
     local fields = _needs_is_set(T) ? ClassField[data, ClassField(c, 0, "data#isSet", WasmArray{WasmI8}, false), length] :
                    ClassField[data, length]

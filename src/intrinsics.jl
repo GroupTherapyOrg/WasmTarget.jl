@@ -959,9 +959,18 @@ end
             WasmBuilder.var"end"(b)
             return minfo.non_nullable_type
         end
-        # jl_genericmemory_to_string (julia/src/genericmemory.c:189): where the String takes all of the Memory and a
-        # String owns its data, that String (:203-207, its size class unchanged); else a String over the Memory's
-        # array where it takes all of it, or over a copy of its first n bytes
+        # jl_genericmemory_to_string (julia/src/genericmemory.c:189): the Memory left of length 0 (:198, on every
+        # branch, so every later access fails its bounds check as natively); where the String takes all of the Memory
+        # and a String owns its data, that String (:203-207); else a String over the Memory's array where it takes all
+        # of it, or over a copy of its first n bytes.
+        # Where Julia differs, forced and unobservable in values:
+        # - a self-owned Memory's bytes Julia copies (jl_pchar_to_string, :209, :213); the module shares its array
+        #   when the String takes all of it. With the length 0 the Memory reaches no byte again, so the sharing is
+        #   unobservable, and no second wrap reaches those bytes through it, which keeps dataids exact
+        #   (dev/formal/ObjectIdentity.tla DataIdsExact).
+        # - the owner is returned only when the String takes the whole array; Julia also returns it when the take
+        #   stays in its size class (:204), truncating the String in place (`*(size_t*)o = len`), which a WasmGC
+        #   array, its length fixed, cannot do, so the module copies there.
         local k = add_local(code_gen, WasmBuilder.IR.NumType_i32)
         local q = add_local(code_gen, data_ref)
         local mm = add_local(code_gen, minfo.non_nullable_type)
@@ -971,6 +980,10 @@ end
         WasmBuilder.local_set(b, p)
         offset(args[2])
         WasmBuilder.local_set(b, k)
+        # m->length = 0 (:198)
+        WasmBuilder.local_get(b, mm)
+        WasmBuilder.i64_const(b, 0)
+        WasmBuilder.struct_set(b, minfo.struct_, t.field_index[mlength])
         local owner_of() = (WasmBuilder.local_get(b, mm); WasmBuilder.struct_get(b, minfo.struct_, t.field_index[mowner]))
         WasmBuilder.local_get(b, k)
         WasmBuilder.local_get(b, p)
