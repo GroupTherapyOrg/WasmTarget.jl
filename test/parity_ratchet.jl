@@ -787,17 +787,39 @@ function patch_negatives_missed(wt::Module, refuses::Function, passes::Function)
             :(Base.Experimental.@consistent_overlay $table Base.sizeof(q::Q) = Core.sizeof(q))) ||
         push!(out, "negative missed: an overlay answering as Base does fails")
     # an effects claim (A75S6): an overlay keeping its Base method's claim passes, one claiming effects its Base
-    # method does not is refused, and a claim on a method outside any overlay is refused
+    # method does not is refused, one claiming a part of its Base method's claim passes only where its
+    # @quarantine states each effect it drops (`<effect>: <why>`), and a claim on a method outside any overlay is
+    # refused
     local eb = Core.eval(Main, :(module OverlayEffectsBase
         struct R; end
         Base.@assume_effects :total ef(r::R) = 1
+        Base.@assume_effects :nothrow eg(r::R) = 1
     end))
     planted(() -> passes(() -> agree(interp(), table, Method[], cyc)),
             :(Base.Experimental.@consistent_overlay $table Base.@assume_effects :total $(eb).ef(r::$(eb).R) = 1)) ||
         push!(out, "negative missed: an overlay keeping its Base method's effects claim fails")
+    # (a passing plant runs before the refusing ones: the table still lists a plant deleted after its check,
+    # which refuses on its own, so each refusing plant after is read by its own words)
+    local sdir = mktempdir()
+    local stated_host = Core.eval(Main, :(module OverlayEffectsStatedPlant
+        import WasmTarget: @quarantine
+        using Base.Experimental: @consistent_overlay
+        using Base: @assume_effects
+        const T = $table
+        const EB = $eb
+    end))
+    local stated_file = joinpath(sdir, "stated.jl")
+    write(stated_file, "@quarantine \"a planted overlay claiming its Base method's effects but one, nothrow: a planted reason\" Base.identity @consistent_overlay T @assume_effects :foldable :notaskstate :inaccessiblememonly EB.ef(r::EB.R) = identity(1)\n")
+    planted(() -> passes(() -> agree(interp(), table, Method[], cyc)), :(Base.include($stated_host, $stated_file))) ||
+        push!(out, "negative missed: an overlay dropping an effect of its Base method's claim, its reason stated at its @quarantine, fails")
+    rm(sdir; recursive = true)
     planted(() -> refuses(() -> agree(interp(), table, Method[], cyc)),
-            :(Base.Experimental.@consistent_overlay $table Base.@assume_effects :nothrow $(eb).ef(r::$(eb).R) = 1)) ||
+            :(Base.Experimental.@consistent_overlay $table Base.@assume_effects :total $(eb).eg(r::$(eb).R) = 1)) ||
         push!(out, "negative missed: an overlay claiming effects its Base method does not passes")
+    local said_now(f) = try; Base.invokelatest(f); ""; catch e; e isa getfield(wt, :ConstructionViolation) ? sprint(showerror, e) : rethrow(); end
+    planted(() -> occursin("drops its Base method's nothrow claim without stating it", said_now(() -> agree(interp(), table, Method[], cyc))),
+            :(Base.Experimental.@consistent_overlay $table Base.@assume_effects :foldable :notaskstate :inaccessiblememonly $(eb).ef(r::$(eb).R) = 1)) ||
+        push!(out, "negative missed: an overlay dropping an effect of its Base method's claim with no reason stated at its @quarantine passes")
     local ne = Core.eval(Main, :(module EffectsOutsidePlant
         Base.@assume_effects :total g(x::Int) = x
     end))
