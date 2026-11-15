@@ -2792,8 +2792,8 @@ end
             local nullable = (storage::WasmBuilder.IR.RefType).nullable
             local references() = begin
                 if is_standalone(t)
-                    generate_static_intrinsic(self, Val(:fatal), Unported("sdk/lib/_internal/wasm/js_common/js_helper.dart:151 areEqualInJS"),
-                        "$at (at run time): === on two values holding a host reference in a standalone module, which has no JS runtime to compare them")
+                    generate_static_intrinsic(self, Val(:fatal), Unquarantined("src/intrinsics.jl generateStaticIntrinsic: === on two values holding a host reference in a standalone module, which has no JS runtime (dart2wasm/lib/translator.dart:112 Translator.isStandalone) to compare them by areEqualInJS"),
+                        "$at (at run time)")
                 else
                     WasmBuilder.local_get(b, hp); nullable && WasmBuilder.ref_as_non_null(b)
                     WasmBuilder.local_get(b, hq); nullable && WasmBuilder.ref_as_non_null(b)

@@ -30,6 +30,8 @@ struct Host
 end
 same_host() = Host(text()) === Host(R.JSStringImpl_from_ascii_bytes(TEXT, 0, ncodeunits(TEXT))) ? 1 : 0
 differ_host() = Host(text()) === Host(tail()) ? 1 : 0
+# the program's own catch around the gap: it never runs, the gap being fatal
+same_host_try() = (try; same_host(); catch; 5; end)
 end
 
 # the JS string an export returns, as its UTF-16 code units, run with the engine's JS string builtins and
@@ -68,19 +70,29 @@ end
 
 # a standalone module has no JS runtime to compare two host references: jl_egal is a fatal gap there, never
 # answering and never an exception a catch observes (WasmTarget.compile is standalone, translator.dart:112
-# isStandalone): the rejection's text to the embedder's print, then the trap. Run with the standalone embedder's
-# imports, its stringFromAsciiBytes a stand-in answering the length it was given (JS reads no WasmGC array; the text
-# itself is read through test/runner.jl's helper in test/src/tuple_record_array.jl)
-@testset "jl_egal of host references in a standalone module is the fatal gap: reported, then trapped" begin
-    local path = tempname() * ".wasm"
-    write(path, W.compile(Cases.same_host, ()))
-    local script = "(async () => { const m = await WebAssembly.compile(require('fs').readFileSync(process.argv[1]), {builtins: ['js-string'], importedStringConstants: ''}); " *
-        "const dart = {stackTraceGetCurrent: () => new Error().stack, stackTraceToString: (t) => String(t), " *
-        "stringFromAsciiBytes: (a, s, l) => 'reported ' + l, print: (l) => console.log(l)}; " *
-        "const i = await WebAssembly.instantiate(m, {dart}); try { i.exports.same_host(); console.log('answered'); } catch (e) { console.log(e instanceof WebAssembly.Exception ? 'raised' : 'trapped'); } })()"
-    local lines = readlines(`perl -e 'alarm 60; exec @ARGV' node -e $script $path`)
-    @test length(lines) == 2 && startswith(lines[1], "reported ") && parse(Int, lines[1][10:end]) > 0 && lines[2] == "trapped"
-    rm(path)
+# isStandalone): the rejection's text to the embedder's print, then the trap. The module imports the JS string
+# builtins, which test/runner.jl does not give, so it runs here with the standalone embedder's imports as test/runner.jl
+# gives them: stringFromAsciiBytes through dart's helper module, read from test/runner.jl's own text, so the reported
+# line is the module's text; the row is read as the climb reads a rejection (dev/climb/core.py:417 UNPORTED_RE =
+# r"unported: the (dart|Julia-only) definition (.*)")
+@testset "jl_egal of host references in a standalone module is the fatal gap: reported, then trapped, no catch run" begin
+    local helper = match(r"Buffer\.from\(\s*'([A-Za-z0-9+/=]+)', 'base64'\)", read(joinpath(@__DIR__, "..", "runner.jl"), String)).captures[1]
+    for f in (Cases.same_host, Cases.same_host_try)
+        local name = string(nameof(f))
+        local path = tempname() * ".wasm"
+        write(path, W.compile(f, ()))
+        local script = "(async () => { const m = await WebAssembly.compile(require('fs').readFileSync(process.argv[1]), {builtins: ['js-string'], importedStringConstants: ''}); " *
+            "const h = new WebAssembly.Instance(new WebAssembly.Module(Buffer.from(process.argv[2], 'base64'), {builtins: ['js-string']}), {}); " *
+            "const dart = {stackTraceGetCurrent: () => new Error().stack, stackTraceToString: (t) => String(t), " *
+            "stringFromAsciiBytes: (a, s, l) => h.exports.stringFromAsciiBytes(a, s, l), print: (l) => console.log(String(l))}; " *
+            "const i = await WebAssembly.instantiate(m, {dart}); try { console.log('answered ' + i.exports.$name()); } catch (e) { console.log(e instanceof WebAssembly.RuntimeError ? 'trapped' : 'not a trap'); } })()"
+        local lines = readlines(`perl -e 'alarm 60; exec @ARGV' node -e $script $path $helper`)
+        @test length(lines) == 2 && lines[2] == "trapped"
+        local row = match(r"unported: the (dart|Julia-only) definition (.*)", lines[1])
+        @test startswith(lines[1], "WasmTarget rejects ") && row !== nothing && row.captures[1] == "Julia-only" &&
+              startswith(row.captures[2], "src/intrinsics.jl generateStaticIntrinsic: === on two values holding a host reference")
+        rm(path)
+    end
 end
 
 @testset "js_string.dart: a String's code units made a JS string, widened as Base.transcode widens them" begin

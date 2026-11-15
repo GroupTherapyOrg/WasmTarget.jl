@@ -30,6 +30,12 @@ typeof_of_any(n::Int64) = (t = typeof(any_slot(n).x); t === Int64 ? 1 : t === Me
 # the gap is fatal, never an exception a catch observes: the review's program, whose own try around the typeof answered
 # 5 in both modules where native answers 2 while the gap was an exception
 @noinline mayfail(n::Int64) = n > 100 ? error("x") : 0
+# arity 1 holds two tuple types (Tuple{Int64}, Tuple{Float64}), so the operand pins none: the fatal gap, never 1 or 2
+@noinline u3(n::Int64) = n > 5 ? (n,) : n > 2 ? (Float64(n),) : n
+c_u3(n::Int64) = typeof(u3(n)) === Tuple{Int64} ? 1 : 2
+# a typeof inlined from a helper: the row names the run-time location of the statement
+h_typeof(x) = typeof(x)
+c_inlined(n::Int64) = (T = h_typeof(any_slot(n).x); T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2)   # Memory{UInt8}: as typeof_of_any
 d_trycatch(n::Int64) = (try; T = typeof(any_slot(n).x); w = mayfail(n); (T === Int64 ? 1 : T === Memory{UInt8} ? 3 : 2) + w; catch; 5; end)
 # a Union of plain classes keeps its typeof: each member's type value is its canonical constant
 struct A end
@@ -62,8 +68,9 @@ end
     # and traps, where native answers 2: unported at run time in both modules, never another value; a try around it, the
     # program's own, runs no catch
     @test Cases.typeof_of_any(3) == 2 && Cases.d_trycatch(3) == 2
-    for (label, f) in (("typeof_of_any(3)", Cases.typeof_of_any), ("d_trycatch(3)", Cases.d_trycatch))
-        local fatal = only(WTChild.run_cases([WTChild.compiled_case(label, W.compile, f, (Int64(3),))]))
+    @test Cases.c_u3(7) == 1 && Cases.c_inlined(3) == 2
+    for (label, f, n) in (("typeof_of_any(3)", Cases.typeof_of_any, 3), ("d_trycatch(3)", Cases.d_trycatch, 3))
+        local fatal = only(WTChild.run_cases([WTChild.compiled_case(label, W.compile, f, (Int64(n),))]))
         @test fatal.outcome === :unported
         @test count("typeof of a tuple held as WasmTarget.TupleRecord{2}", fatal.why) == 2
         @test occursin("(at run time, ", fatal.why) && occursin("tuple_record_array.jl:", fatal.why) && occursin(", statement %", fatal.why)
@@ -71,6 +78,13 @@ end
         # (dart|Julia-only) definition (.*)"), to the hold a compile-time rejection of the same definition names
         local m = match(r"unported: the (dart|Julia-only) definition (.*)", fatal.why)
         @test m !== nothing && m.captures[1] == "Julia-only" && startswith(m.captures[2], "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: ")
+    end
+    # an operand holding two tuple types of one arity, and a typeof inlined from a helper: unported in both modules
+    for (label, f, n) in (("c_u3(7)", Cases.c_u3, 7), ("c_inlined(3)", Cases.c_inlined, 3))
+        local fatal = only(WTChild.run_cases([WTChild.compiled_case(label, W.compile, f, (Int64(n),))]))
+        @test fatal.outcome === :unported && occursin("(at run time, ", fatal.why)
+        local m = match(r"unported: the (dart|Julia-only) definition (.*)", fatal.why)
+        @test m !== nothing && startswith(m.captures[2], "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: ")
     end
     # the row, the one text the arm reports
     @test W.record_typeof_message(W.TupleRecord{2}) ==
