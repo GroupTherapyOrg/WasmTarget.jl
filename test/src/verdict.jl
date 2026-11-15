@@ -420,3 +420,47 @@ end
     local child = read(`$(Base.julia_cmd()) --startup-file=no -e "include(\"$(joinpath(@__DIR__, "..", "run_child.jl"))\"); print(isdefined(Main, :WTRunner))"`, String)
     @test child == "false"
 end
+
+# a scalar answer whose case Julia infers a type that is not concrete: its own module returns a reference to the value
+# (ci.rettype's), read by Value, typeasserted to native's type (the lead's ruling, 2026-11-15: one_type_reader's
+# box_write_* cases read `wrong` by the reference alone). The binding decides from the case's own module, read as the
+# runner reads it to call it (export_result), so the compiling process and the verdict decide alike
+_vw_uleb(n) = (out = UInt8[]; while true; x = UInt8(n & 0x7f); n >>= 7; n == 0 ? (push!(out, x); break) : push!(out, x | 0x80); end; out)
+_vw_sec(id, body) = UInt8[UInt8(id); _vw_uleb(length(body)); body]
+_vw_mod(secs...) = UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, reduce(vcat, secs)...]
+_vw_export(i) = _vw_sec(7, UInt8[0x01, 0x01, UInt8('f'), 0x00, UInt8(i)])
+_v_box_any(n::Int64) = (x = n; w = @noinline(y -> (x = y; nothing)); w(n + 1); x)
+_v_box_i32(n::Int64) = (x = Any[Int32(n + 4)]; x[1])
+@testset "a value behind a reference: read by Value, typeasserted to native's type, where the own module returns a reference" begin
+    local i64 = _vw_mod(_vw_sec(1, UInt8[0x01, 0x60, 0x01, 0x7e, 0x01, 0x7e]), _vw_sec(3, UInt8[0x01, 0x00]), _vw_export(0))
+    local any = _vw_mod(_vw_sec(1, UInt8[0x01, 0x60, 0x01, 0x7e, 0x01, 0x6e]), _vw_sec(3, UInt8[0x01, 0x00]), _vw_export(0))
+    local rec = _vw_mod(_vw_sec(1, UInt8[0x01, 0x4e, 0x02, 0x5f, 0x01, 0x7e, 0x01, 0x60, 0x01, 0x7e, 0x01, 0x63, 0x00]),
+                        _vw_sec(3, UInt8[0x01, 0x01]), _vw_export(0))
+    local imp = _vw_mod(_vw_sec(1, UInt8[0x02, 0x60, 0x00, 0x00, 0x60, 0x01, 0x7e, 0x01, 0x7e]),
+                        _vw_sec(2, UInt8[0x01, 0x01, UInt8('m'), 0x01, UInt8('f'), 0x00, 0x00]), _vw_sec(3, UInt8[0x01, 0x01]), _vw_export(1))
+    local void = _vw_mod(_vw_sec(1, UInt8[0x01, 0x60, 0x00, 0x00]), _vw_sec(3, UInt8[0x01, 0x00]), _vw_export(0))
+    @test [WV.export_result(b) for b in (i64, any, rec, imp, void)] == [:i64, :ref, :ref, :i64, :void]
+    @test_throws ArgumentError WV.export_result(UInt8[0x01, 0x02])
+    # a scalar answer's shape names its type, and reads back
+    local a = WVO.answer_of("", _v_box_any, (Int64(3),))
+    local s = WVR.Shape(a)
+    @test a.native === Int64(4) && s.native_kind === :value && s.native_tpath == WVO.type_path(Int64)
+    local text = ["shape\tg/v\t$(WVO._b64(a.label))\t-\t-\t1\t$(WVO._b64(a.key))\t$(WVO._b64(a.rkey))\t-\tvalue,$(WVO._b64(s.native_tpath))"]
+    local back = WVR.read_shapes(text)["g/v"]
+    @test back isa WVR.Shape && (back.native_kind, back.native_tpath) == (:value, s.native_tpath)
+    # the binding: a reference result takes Value (the own modules read as a non-null reference); a leaf result binds as
+    # before (one case, native's own); both sides alike, the verdict popping what the compiling side recorded
+    for (own, labels, natives) in ((any, ["(own module)", "(its value)"], Any[WV.ReturnsRef(), 4]), (i64, [""], Any[4]))
+        local recorded = Tuple{String,Vector{UInt8}}[]
+        local comp(f, ts; optimize::Bool = true) = (b = isempty(recorded) || f isa typeof(_v_box_any) ? own : UInt8[0x09, length(recorded)];
+                                                    push!(recorded, (WVO._key(ts) * (optimize ? "" : " unoptimized"), b)); b)
+        local mine = WV.bind(s, (Int64(3),), comp; f = _v_box_any)
+        local q = copy(recorded)
+        local pop(key; optimize::Bool = true) = (r = popfirst!(q); r[1] == key * (optimize ? "" : " unoptimized") || error("key"); r[2])
+        local theirs = WV.bind(s, a.args, pop; a)
+        @test isempty(q) && [c.label for c in theirs] == [c.label for c in mine] == labels && [c.native for c in theirs] == natives
+    end
+    # Value reads the value by native's run-time type, and refuses another class: Int32 7 is no Int64, never a pass
+    @test WV.Value{_v_box_any,Int64}()(Int64(3)) === Int64(4)
+    @test_throws TypeError WV.Value{_v_box_i32,Int64}()(Int64(3))
+end

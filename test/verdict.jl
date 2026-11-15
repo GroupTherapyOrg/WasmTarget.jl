@@ -372,6 +372,16 @@ _widened() = Core.compilerbarrier(:type, nothing) === 0 && throw(Core.compilerba
 (::Catches{F,T})(a) where {F,T} = try _widened(); @noinline(F(a)); Int32(0) catch e; e isa T ? Int32(1) : Int32(2) end
 (::Catches{F,T})(a, b) where {F,T} = try _widened(); @noinline(F(a, b)); Int32(0) catch e; e isa T ? Int32(1) : Int32(2) end
 (::Catches{F,T})(a, b, c) where {F,T} = try _widened(); @noinline(F(a, b, c)); Int32(0) catch e; e isa T ? Int32(1) : Int32(2) end
+# Value, a scalar answer's whose case Julia infers a type that is not concrete (its own module returns a reference to the
+# value, ci.rettype's: src/functions.jl): `F(a...)::T`, T native's run-time type, behind the same barrier, so the value
+# behind the reference is read in the module and compared with native's by bits at T's leaf kind; a value of another
+# class fails the typeassert in the module, which throws where native returns: wrong, never a pass (2026-11-15:
+# one_type_reader's box_write_* cases, a boxed Int64 read as `wrong` by its reference alone). Fixed arities, as Leaves's
+struct Value{F,T} <: Function end
+(::Value{F,T})() where {F,T} = Core.compilerbarrier(:type, @noinline(F()))::T
+(::Value{F,T})(a) where {F,T} = Core.compilerbarrier(:type, @noinline(F(a)))::T
+(::Value{F,T})(a, b) where {F,T} = Core.compilerbarrier(:type, @noinline(F(a, b)))::T
+(::Value{F,T})(a, b, c) where {F,T} = Core.compilerbarrier(:type, @noinline(F(a, b, c)))::T
 (::IsA{F,T})() where {F,T} = Core.compilerbarrier(:type, @noinline(F())) isa T
 (::IsA{F,T})(a) where {F,T} = Core.compilerbarrier(:type, @noinline(F(a))) isa T
 (::IsA{F,T})(a, b) where {F,T} = Core.compilerbarrier(:type, @noinline(F(a, b))) isa T
@@ -391,6 +401,118 @@ Base.showerror(io::IO, e::ReaderRejected) = print(io, e.text)
 # or the verdict's record of one
 _reader_rejected(e) = e isa ReaderRejected ||
     nameof(typeof(e)) === :RejectionError && nameof(typeof(e.rejection)) in (:Unported, :Unquarantined)
+
+# ---- a module's exported function's result, read from its binary as the runner reads it to call it (test/runner.jl's
+# sections/types/importFuncs/funcs/exportsOf/wrap, ported: the type, import, function and export sections): the kind of
+# the one exported function's first result, :void, a NUMERIC kind, :v128 or :ref. The binding reads it from a case's own
+# module, which both the compiling process and the verdict hold, so both decide alike whether a scalar answer needs
+# its value reader (bind)
+function _uleb(b::Vector{UInt8}, i::Int)::Tuple{Int,Int}
+    local v, sh = 0, 0
+    while true
+        i <= length(b) || throw(ArgumentError("the module ends inside a number"))
+        local x = b[i]; i += 1
+        v |= Int(x & 0x7f) << sh; sh += 7
+        x & 0x80 == 0 && return (v, i)
+    end
+end
+const _NUM_BYTE = Dict(0x7f => :i32, 0x7e => :i64, 0x7d => :f32, 0x7c => :f64)
+function _heap(b, i)
+    local x = b[i]
+    x == 0x65 && (i += 1; x = b[i])
+    (0x40 <= x < 0x80) && return i + 1
+    return _uleb(b, i)[2]
+end
+function _valtype(b, i)::Tuple{Symbol,Int}
+    local x = b[i]; i += 1
+    haskey(_NUM_BYTE, x) && return (_NUM_BYTE[x], i)
+    x == 0x7b && return (:v128, i)
+    (x == 0x63 || x == 0x64) && return (:ref, _heap(b, i))
+    (0x40 <= x < 0x80) && return (:ref, i)
+    throw(ArgumentError("a value type 0x$(string(x; base = 16)) the judge reads not"))
+end
+_storage(b, i) = (b[i] == 0x78 || b[i] == 0x77) ? i + 1 : _valtype(b, i)[2]
+function _comptype(b, i)
+    local k = b[i]; i += 1
+    if k == 0x60
+        local n, rs = 0, Symbol[]
+        n, i = _uleb(b, i); for _ in 1:n; i = _valtype(b, i)[2]; end
+        n, i = _uleb(b, i); for _ in 1:n; (t, i) = _valtype(b, i); push!(rs, t); end
+        return (rs, i)
+    elseif k == 0x5f
+        local n; n, i = _uleb(b, i); for _ in 1:n; i = _storage(b, i) + 1; end
+        return (nothing, i)
+    elseif k == 0x5e
+        return (nothing, _storage(b, i) + 1)
+    end
+    throw(ArgumentError("a composite type 0x$(string(k; base = 16)) the judge reads not"))
+end
+function _subtype(b, i)
+    if b[i] == 0x50 || b[i] == 0x4f
+        local n; n, i = _uleb(b, i + 1); for _ in 1:n; i = _uleb(b, i)[2]; end
+    end
+    return _comptype(b, i)
+end
+_limits(b, i) = (f = b[i]; i = _uleb(b, i + 1)[2]; f & 0x01 != 0 ? _uleb(b, i)[2] : i)
+_name(b, i) = (n = _uleb(b, i); n[2] + n[1])
+"""    export_result(bytes) -> Symbol
+
+The kind of a module's one exported function's first result (:void when it has none), read from its binary."""
+function export_result(b::Vector{UInt8})::Symbol
+    (length(b) >= 8 && b[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]) || throw(ArgumentError("not a wasm module"))
+    local secs, i = Dict{Int,Tuple{Int,Int}}(), 9
+    while i <= length(b)
+        local id = Int(b[i]); local n; n, i = _uleb(b, i + 1)
+        id == 0 || (secs[id] = (i, i + n)); i += n
+    end
+    haskey(secs, 1) && haskey(secs, 7) || throw(ArgumentError("the module has no type or export section"))
+    local types = Any[]
+    let i = secs[1][1], n
+        n, i = _uleb(b, i)
+        for _ in 1:n
+            if b[i] == 0x4e
+                local m; m, i = _uleb(b, i + 1)
+                for _ in 1:m; (t, i) = _subtype(b, i); push!(types, t); end
+            else
+                (t, i) = _subtype(b, i); push!(types, t)
+            end
+        end
+    end
+    local imports = Int[]
+    if haskey(secs, 2)
+        local i, n = secs[2][1], 0
+        n, i = _uleb(b, i)
+        for _ in 1:n
+            i = _name(b, _name(b, i)); local k = b[i]; i += 1
+            if k == 0x00; (t, i) = _uleb(b, i); push!(imports, t)
+            elseif k == 0x01; i = _limits(b, _valtype(b, i)[2])
+            elseif k == 0x02; i = _limits(b, i)
+            elseif k == 0x03; i = _valtype(b, i)[2] + 1
+            elseif k == 0x04; i = _uleb(b, i + 1)[2]
+            else throw(ArgumentError("an import kind 0x$(string(k; base = 16))")) end
+        end
+    end
+    local funcs = Int[]
+    if haskey(secs, 3)
+        local i, n = secs[3][1], 0
+        n, i = _uleb(b, i)
+        for _ in 1:n; (t, i) = _uleb(b, i); push!(funcs, t); end
+    end
+    local exported = Int[]
+    let i = secs[7][1], n
+        n, i = _uleb(b, i)
+        for _ in 1:n
+            i = _name(b, i); local k = b[i]; local x; x, i = _uleb(b, i + 1)
+            k == 0x00 && push!(exported, x)
+        end
+    end
+    length(exported) == 1 || throw(ArgumentError("the module exports $(length(exported)) functions, not one"))
+    local fi = only(exported)
+    local ti = fi < length(imports) ? imports[fi + 1] : funcs[fi - length(imports) + 1]
+    local rs = types[ti + 1]
+    rs === nothing && throw(ArgumentError("its export names no function type"))
+    return isempty(rs) ? :void : rs[1]
+end
 
 # a program's modules: `compile(f, T; optimize = false)`, codegen's, and `compile(f, T)`, which dartdev's default phases
 # end with opt (wasm-opt), or `own` when the caller holds that compile already; none when `optimized` is false
@@ -438,7 +560,34 @@ function bind(s::Shape, args::Tuple, compile; a::Union{Answer,Nothing} = nothing
         _modules(compile, prog, xs; optimized)
     local plain, opt = own !== nothing ? own : mods(f′, args′, s.key)
     local native = a === nothing ? nothing : a.native
-    s.aggregate || s.native_kind !== :none || return RunCase[RunCase(s.label, plain, opt, args′, native, "", "")]
+    # a scalar answer (:value: native's type its shape's) whose case's own module returns a reference, its rettype not
+    # concrete (ci.rettype's, src/functions.jl): the own modules read as a non-null reference, and the value behind it
+    # read by Value, typeasserted to native's type, compared with native's by bits (the lead's ruling, 2026-11-15). A
+    # case whose own module returns its leaf binds as before: the same cases and calls as every scalar answer's
+    # (a module this reader cannot read, or a type this process cannot resolve, binds as before: the own module alone,
+    # whose result the runner's own reader reads or names)
+    local vT = !s.aggregate && s.native_kind === :value && !isempty(plain) &&
+        (try export_result(plain) === :ref catch e; e isa ArgumentError || e isa BoundsError || rethrow(); false end) ?
+        (try resolve_type_path(s.native_tpath; world) catch; nothing end) : nothing
+    if vT isa Type && leaf_kind(vT) in NUMERIC   # a value of a wire leaf kind behind a reference
+        local vs = RunCase[RunCase("$(s.label)(own module)", plain, opt, args′, ReturnsRef(), "", "")]
+        if s.nargs > 3
+            push!(vs, RunCase("$(s.label)(its value)", UInt8[], UInt8[], args′, native, "",
+                              "the judge reads a value behind a reference for a case of at most 3 arguments, this one has $(s.nargs)", JUDGE_GAP))
+            return vs
+        end
+        try
+            local prog = f === nothing ? nothing : Value{f′,vT}()
+            local rp, ro = mods(prog, args′, s.key)
+            push!(vs, RunCase("$(s.label)(its value)", rp, ro, args′, native, "", "", :none))
+        catch e
+            _reader_rejected(e) || rethrow()
+            push!(vs, RunCase("$(s.label)(its value)", UInt8[], UInt8[], args′, native, "",
+                              "the runner does not read it yet, its reader is rejected: " * first(sprint(showerror, e), 300), :unported))
+        end
+        return vs
+    end
+    s.aggregate || !(s.native_kind in (:none, :value)) || return RunCase[RunCase(s.label, plain, opt, args′, native, "", "")]
     if !s.aggregate   # a type where the answer is a type (spec v17 Y2): the own modules, then the type's reader
         local throws = s.native_kind === :throws
         local cs = RunCase[RunCase(s.label, plain, opt, args′, throws ? native : ReturnsAny(), "", "")]

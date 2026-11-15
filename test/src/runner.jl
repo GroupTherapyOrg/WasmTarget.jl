@@ -376,3 +376,21 @@ end
     local results = WTR.run_cases(cases)
     @test [(r.label, r.outcome) for r in results] == [(c.label, :passed) for c in cases]
 end
+
+# a value behind a reference, compiled by WasmTarget and run (test/verdict.jl's Value, bind): a case whose rettype Julia
+# infers `Any` (a Core.Box's read, as one_type_reader's box_write_* cases are) reads passed by its value; and a module
+# whose reference holds another class than native's (a boxed Int32 7, native Int64 7) reads wrong, never passed
+_runner_box(n::Int64) = (x = n; w = @noinline(y -> (x = y; nothing)); w(n + 1); x)
+_runner_i64_7(n::Int64) = n + Int64(4)
+_runner_box_i32(n::Int64) = (x = Any[Int32(n + 4)]; x[1])
+@testset "a value behind a reference is read by its value; another class behind it is wrong" begin
+    local a = Main.WTOracle.answer_of("", _runner_box, (Int64(3),))
+    local cs = Main.WTVerdict.bind(Main.WTOracleRead.Shape(a), (Int64(3),), WasmTarget.compile; a, f = _runner_box)
+    local r = WTR.run_cases(cs)
+    @test [c.label for c in cs] == ["(own module)", "(its value)"] && all(x -> x.ok, r)
+    local a7 = Main.WTOracle.answer_of("", _runner_i64_7, (Int64(3),))
+    local cw = Main.WTVerdict.bind(Main.WTOracleRead.Shape(a7), (Int64(3),), WasmTarget.compile; a = a7, f = _runner_box_i32)
+    local rw = WTR.run_cases(cw)
+    @test a7.native === Int64(7) && [c.label for c in cw] == ["(own module)", "(its value)"]
+    @test rw[1].ok && !rw[2].ok && rw[2].outcome === :wrong
+end

@@ -258,7 +258,8 @@ struct Shape
     rkey::String
     aggregate::Bool
     groups::Vector{ShapeGroup}
-    native_kind::Symbol      # :throws, :void (a scalar answer that is a type: spec v17 Y2) or :none
+    native_kind::Symbol      # :throws, :void (a scalar answer that is a type: spec v17 Y2), :value (any other scalar
+                             # answer, its type named: test/verdict.jl's bind reads a value behind a reference by it) or :none
     native_tpath::String     # that type's path ("" for :none, or for a type this process does not hold)
 end
 Shape(label, P, S, nargs, key, rkey, aggregate, groups) = Shape(label, P, S, nargs, key, rkey, aggregate, groups, :none, "")
@@ -279,7 +280,10 @@ function _native_shape(a::Answer)
     local x = a.native
     x isa Throws && return (:throws, _tpath_of(x.type))
     _capture_kind(x) === :void && return (:void, _tpath_of(typeof(x)))
-    return (:none, "")
+    # any other scalar answer: its type, so a reader typeasserted to it can read a value behind a reference where the
+    # case's own module returns one (test/verdict.jl's Value, bind); a type this process does not hold names no path
+    local p = _tpath_of(typeof(x))
+    return isempty(p) ? (:none, "") : (:value, p)
 end
 
 """
@@ -320,7 +324,7 @@ function read_shapes(lines; digests = nothing)
                 (f[9] == "-" || all(isdigit, f[9])) && all(isdigit, f[6]) || error("a shape record whose counts are $(f[6]), $(f[9])")
                 local P = f[4] == "-" ? () : Tuple(parse.(Int, split(f[4], ';')))
                 local S = f[5] == "-" ? () : Tuple(Symbol.(_unb64.(split(f[5], ';'))))
-                local nk = f[10] == "-" ? (:none, "") : (g = split(f[10], ','); length(g) == 2 && g[1] in ("throws", "void") ?
+                local nk = f[10] == "-" ? (:none, "") : (g = split(f[10], ','); length(g) == 2 && g[1] in ("throws", "void", "value") ?
                     (Symbol(g[1]), _unb64(g[2])) : error("a shape record's native $(repr(f[10])) is no type's"))
                 f[9] != "-" && nk[1] !== :none && error("an aggregate's shape names a native type")
                 s = Shape(_unb64(f[3]), P, S, parse(Int, f[6]), _unb64(f[7]), _unb64(f[8]), f[9] != "-", ShapeGroup[], nk...)
