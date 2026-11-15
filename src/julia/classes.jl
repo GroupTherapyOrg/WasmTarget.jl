@@ -16,13 +16,27 @@
 @quarantine "julia/src/subtype.c:2511 jl_isa tests a type value by itself where the type splits its kind, any other value by its class (jl_typeof)" Base.typeintersect told_by_class(@nospecialize(T::Type))::Bool =
     all(k -> k <: T || typeintersect(k, T) === Union{}, _KINDS)
 
-# a record class's arity: a record of a fixed arity (TupleRecord{N}, or Tuple{} for the empty shape), or
-# the array class's, which only run time knows (TupleRecordArray); every consumer matches it @exhaustive,
-# so none forgets the arity no class names
+# a record of a fixed arity's (TupleRecord{N}, or Tuple{} for the empty shape), one arm of RecordArity
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys each record class by its RecordShape, its positional count here" Core.Int struct FixedArity
     n::Int
 end
 @quarantine "julia/src/builtins.c:946 jl_f_tuple builds a tuple of the arity its argument count gives at run time" Core.DataType struct RunTimeArity end
+
+"""
+    RecordArity
+
+A record class's arity: `FixedArity(n)`, the shape dart's record_class_generator.dart keys each record
+class by (`TupleRecord{N}`, or `Tuple{}` for the empty shape), or `RunTimeArity()`, the array class's
+(`TupleRecordArray`), whose arity Julia's jl_f_tuple fixes only at run time. Closed by its type: a
+`@closed` `Union` of two concrete structs that subtype nothing, so no module adds a kind without
+editing this line. The rest is a check, not construction: each `@exhaustive` match over it is checked
+against its kinds when written and again at load (`check_closed`); a consumer may still test one kind
+with `isa` (`record_arities`).
+
+precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch). Julia's differs: a
+`Union` of concrete structs where Rust declares an enum and dart a sealed hierarchy, and its
+exhaustiveness checked when the package loads, since Julia checks no match at compile time.
+"""
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys its classes by RecordShape, a closed set of shapes; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const RecordArity = Union{FixedArity, RunTimeArity}
 
 """
