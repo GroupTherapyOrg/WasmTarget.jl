@@ -81,14 +81,7 @@ names the site the member's selector id would be recorded for.
             new(site, kind)
 end
 
-"""
-    RecordMember
-
-The members dart2wasm's record class generator gives each record class it generates
-(pkg/dart2wasm/lib/record_class_generator.dart:246 _generateClass): its constructor, hashCode, toString, ==,
-_checkRecordType, _recordRuntimeType and _masqueradedRecordRuntimeType, each a kind of its own. A closed sum, so a
-member the generator does not make cannot be named (D6), matched @exhaustive where a member is generated.
-"""
+# the kinds of RecordMember, one per member record_class_generator.dart:246 _generateClass makes
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:314 _RecordClassGenerator._generateConstructor generates a record class's constructor" Core.DataType struct RecordConstructor end
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:343 _RecordClassGenerator._generateHashCode generates a record class's hashCode" Core.DataType struct RecordHashCode end
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:389 _RecordClassGenerator._generateToString generates a record class's toString" Core.DataType struct RecordToString end
@@ -96,6 +89,20 @@ member the generator does not make cannot be named (D6), matched @exhaustive whe
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType generates a record class's _checkRecordType" Core.DataType struct RecordCheckRecordType end
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType generates a record class's _recordRuntimeType" Core.DataType struct RecordRuntimeType end
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType generates a record class's _masqueradedRecordRuntimeType" Core.DataType struct RecordMasqueradedRuntimeType end
+
+"""
+    RecordMember
+
+The members dart2wasm's record class generator gives each record class it generates
+(pkg/dart2wasm/lib/record_class_generator.dart:246 _generateClass): its constructor, hashCode, toString, ==,
+_checkRecordType, _recordRuntimeType and _masqueradedRecordRuntimeType, each a kind of its own. A closed sum, so a
+member the generator does not make cannot be named (D6), matched @exhaustive where a member is generated.
+
+precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch). Julia's differs: a
+`Union` of concrete structs where Rust declares an enum and dart a sealed hierarchy, and its
+exhaustiveness checked when the package loads (`check_closed`), since Julia checks no match at compile
+time.
+"""
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass gives a record class its members, a closed set; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const RecordMember = Union{RecordConstructor, RecordHashCode, RecordToString, RecordEquals, RecordCheckRecordType, RecordRuntimeType, RecordMasqueradedRuntimeType}
 
 """
