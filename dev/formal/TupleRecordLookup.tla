@@ -86,4 +86,51 @@ Spec == Init /\ [][Next]_val
 TypeOK == val \in Values
 TypeofAgrees  == Lookup(val) \in {val, Fatal}
 TypeofAnswers == Named(val) => Lookup(val) = val
+(***************************************************************************)
+(* THE LOOKUP AS THE CODE RETURNS IT (the review of the code, S2 and S3).   *)
+(* Above, a nested field's type is its letter whenever its own lookup is    *)
+(* not fatal, and each arity has one nested type, so a nested lookup that   *)
+(* answered the WRONG row of its arity would pass TypeofAgrees. Here the    *)
+(* field's type is what the nested lookup RETURNS (named by the letter of   *)
+(* the value of that type, "other" where none is), arity 1 has two nested   *)
+(* types, M = (F,), of the type Tuple{Float64}, beside N, and a fatal field *)
+(* matches no element (the code's null, which ref.eq to no constant), so    *)
+(* NestedFatalIgnored is one definition, FieldMatchesR. Broken:             *)
+(* NestedFirstRow, a nested lookup answering the first row of its arity.    *)
+(***************************************************************************)
+CONSTANT NestedFirstRow   \* Broken: a nested field's lookup answers the first row of its arity
+
+NestedOfR == [e \in {"N", "M", "P"} |-> CASE e = "N" -> <<"I">> [] e = "M" -> <<"F">> [] OTHER -> <<"F", "F">>]
+FieldsR   == Scalars \cup DOMAIN NestedOfR
+\* the world's tuple types: Tuple{Int64} and Tuple{Float64} are rows, Tuple{Float64,Float64} is none; both nested types of arity 1 are elements of a row
+WorldR    == {<<"I">>, <<"F">>, <<"I", "F">>, <<"F", "I">>, <<"N", "I">>, <<"M", "I">>}
+ValuesR   == {<<>>} \cup {<<a>> : a \in FieldsR} \cup {<<a, b>> : a \in FieldsR, b \in FieldsR}
+RowsR(n)  == {w \in WorldR : Len(w) = n}
+FirstRowR(n) == CHOOSE w \in RowsR(n) : TRUE
+\* the letter naming a type a nested lookup returns: the nested value of that type, or "other" (no value's)
+LetterR(t) == IF \E l \in DOMAIN NestedOfR : NestedOfR[l] = t THEN CHOOSE l \in DOMAIN NestedOfR : NestedOfR[l] = t ELSE "other"
+
+RECURSIVE LookupR(_)
+\* a field's typeof: a scalar's tag entry; a nested record's, the type its own lookup returns, or the gap
+FieldTypeR(e) ==
+    IF e \in Scalars THEN e
+    ELSE LET r == IF NestedFirstRow /\ RowsR(Len(NestedOfR[e])) # {} THEN FirstRowR(Len(NestedOfR[e])) ELSE LookupR(NestedOfR[e])
+         IN IF r = Fatal THEN FieldFatal ELSE LetterR(r)
+\* a field's typeof against a row's element: equal, and the gap equal to none
+FieldMatchesR(t, el) == IF t = FieldFatal THEN NestedFatalIgnored ELSE el = t
+\* the per-field typeofs, then a row matching at every position; none, the fatal gap
+LookupR(v) ==
+    IF Len(v) = 0 THEN <<>>
+    ELSE LET ts == [i \in 1..Len(v) |-> FieldTypeR(v[i])]
+             hits == {w \in RowsR(Len(v)) : ArityOnly \/ \A i \in 1..Len(v) : FieldMatchesR(ts[i], w[i])}
+         IN IF hits # {} THEN CHOOSE w \in hits : TRUE
+            ELSE IF FirstRowOnMiss /\ RowsR(Len(v)) # {} THEN FirstRowR(Len(v))
+            ELSE Fatal
+
+NamedR(v) == (Len(v) = 0 \/ v \in WorldR) /\ \A i \in 1..Len(v) : v[i] \in DOMAIN NestedOfR => NestedOfR[v[i]] \in WorldR
+
+\* every value of the extended world, the state's among them (Values is within ValuesR; reading the state, TLC checks
+\* each claim as an invariant of every state)
+TypeofAgreesR  == \A v \in ValuesR \cup {val} : LookupR(v) \in {v, Fatal}
+TypeofAnswersR == \A v \in ValuesR \cup {val} : NamedR(v) => LookupR(v) = v
 =============================================================================
