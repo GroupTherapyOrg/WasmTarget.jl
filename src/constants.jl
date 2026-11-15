@@ -493,13 +493,13 @@ end
     # a tuple constant in a slot of another type than its own class is its arity's record (src/julia/
     # classes.jl TupleRecord), as convertType boxes any tuple there: the record of its elements, each
     # instantiated at the top type, no local needed (a global's initializer has none)
-    # (the empty tuple is its own record, tuple_record_class)
-    if constant isa NirConst && constant.c.val isa Tuple && !isempty(constant.c.val) && isconcretetype(typeof(constant.c.val))
+    # (the boxing rule, src/julia/classes.jl boxed_record_class: the empty tuple is its own record, never boxed)
+    if constant isa NirConst && constant.c.val isa Tuple && boxed_record_class(typeof(constant.c.val)) !== nothing
         local tr = self.constants.translator
         local own = get(tr.class_info, typeof(constant.c.val), nothing)
         if own !== nothing && self.expected_type isa WasmBuilder.IR.RefType && self.expected_type.heap_type !== own.struct_
             local v = constant.c.val
-            local rinfo = get(tr.class_info, tuple_record_class(length(v)), nothing)
+            local rinfo = get(tr.class_info, something(boxed_record_class(typeof(v))), nothing)
             rinfo === nothing && reject!(Internal("dart2wasm/lib/constants.dart:568 ConstantInstantiator.instantiate: no record class for the tuple constant $(typeof(v))"), "ConstantInstantiator.instantiate")
             record_class_allocation(tr.functions[], class_id(rinfo))
             push_object_header_fields(self.b, tr, rinfo)

@@ -244,6 +244,11 @@ end
     @test !W.open_tuple_holds(Tuple{Vararg{Int64}}, Int64, covered)
     # the array class's typeof is its elements' type, made at run time: refused as every record's
     @test W.record_typeof_unmade(W.TupleRecordArray) && W.record_typeof(Tuple{Vararg{Int64}}, W.TupleRecordArray) === nothing
+    # the boxing rule, one function: a concrete tuple class of at least one field is boxed into its arity's record at the
+    # top type; the empty tuple's class is its own record, never boxed; no other class is boxed into a record
+    @test W.boxed_record_class(Tuple{Int64}) === W.TupleRecord{1} && W.boxed_record_class(Tuple{Int64,Float64}) === W.TupleRecord{2}
+    @test W.boxed_record_class(Tuple{}) === nothing && W.boxed_record_class(Int64) === nothing && W.boxed_record_class(W.TupleRecord{2}) === nothing
+    @test W.boxed_record_class(Tuple{Any,Any}) === nothing && W.boxed_record_class(Tuple{Vararg{Int64}}) === nothing && W.boxed_record_class(Tuple{Int64,Vararg{Int64}}) === nothing
     # its one field, the argument buffer jl_f__apply_iterate fills: a mutable array of top-typed elements
     @test [(f.name, f.type, f.mutable) for f in W.class_instance_fields(W.TupleRecordArray, "tuple_record_array")] == [("data", W.WasmArray{Any}, false)]
     # a match over the sum without the array class's arm, or with a wildcard, refuses its load, located (D8)

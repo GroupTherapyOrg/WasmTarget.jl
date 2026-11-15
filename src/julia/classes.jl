@@ -396,7 +396,8 @@ formal(dev/formal/TypeParamClasses.tla): where a type value is held, every liste
                 p isa Union{Type,TypeVar} && _meet_constant!(out, seen, objs, p, at)
             end
         end
-        c <: Tuple && isconcretetype(c) && _meet_value!(out, seen, tuple_record_class(fieldcount(c)), at)
+        local r = boxed_record_class(c)
+        r === nothing || _meet_value!(out, seen, r, at)
     end
     return out
 end
@@ -445,6 +446,15 @@ end
 # no field to box, so the empty tuple is never boxed (and a class of no field of its own shares its
 # superclass's struct, so its reference could not be told apart from that struct's other classes)
 @quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses maps each shape to its class, a tuple's arity to its record here" Core.Int tuple_record_class(n::Int)::DataType = n == 0 ? Tuple{} : TupleRecord{n}
+
+# the record a value of the class `c` is boxed into where it is held at the top type (convertType's box, unboxed where
+# Julia narrows it back): its arity's record where `c` is a concrete tuple class of at least one field; else nothing, a
+# class that is no concrete tuple, or Tuple{}, the class of Julia's one empty tuple, which is its own record
+# (tuple_record_class(0)): it has no field to box, so `fieldcount(c) > 0` is the arity-0 case, never boxed. The one
+# statement of the boxing rule, read by the walk (each concrete tuple class brings its record), top_held_classes and
+# convertType
+@quarantine "pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType boxes a value type where it flows into an open slot; a concrete tuple class is boxed into its arity's record" Core.Tuple boxed_record_class(@nospecialize(c))::Union{DataType,Nothing} =
+    c isa DataType && c <: Tuple && isconcretetype(c) && fieldcount(c) > 0 ? tuple_record_class(fieldcount(c)) : nothing
 
 """
     TupleRecordArray
@@ -1208,7 +1218,12 @@ end
     local out = Tuple{Int,DataType}[]
     for (id, c) in zip(concrete_class_ids(t, T), concrete_classes(t, T))
         push!(out, (id, c))
-        c <: Tuple && isconcretetype(c) && (local r = tuple_record_class(fieldcount(c)); push!(out, (only(concrete_class_ids(t, r)), r)))
+        local r = boxed_record_class(c)
+        r === nothing && continue
+        # the walk meets every boxed record (closed_world_classes), so its class has one id
+        local ids = concrete_class_ids(t, r)
+        length(ids) == 1 || reject!(Internal("src/julia/classes.jl top_held_classes: the record $r of the tuple class $c has $(length(ids)) class ids, not the one the walk gives it"), "top_held_classes")
+        push!(out, (only(ids), r))
     end
     return unique!(p -> p[2], out)
 end

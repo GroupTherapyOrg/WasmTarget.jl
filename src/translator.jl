@@ -1182,14 +1182,14 @@ Reshaped: `boxed_class` — dart's boxedClasses keys a box by the wasm type, whi
     # null of a nullable slot stays the null.
     # formal(dev/formal/TupleRecord.tla): no top slot holds a concrete tuple's struct, isa over a top slot answers Julia's, the null kept
     # (a reference's class read from its struct, translator.classForHeapType)
+    # (src/julia/classes.jl boxed_record_class, the boxing rule: a concrete tuple class of at least one field)
     local tuple_of(t::WasmBuilder.IR.ValueType) = t isa WasmBuilder.IR.RefType &&
-        (local info = get(self.class_for_heap_type, t.heap_type, nothing); info !== nothing && info.cls isa DataType &&
-         info.cls <: Tuple && isconcretetype(info.cls) && fieldcount(info.cls) > 0) ? info.cls : nothing
+        (local info = get(self.class_for_heap_type, t.heap_type, nothing); info !== nothing && boxed_record_class(info.cls) !== nothing) ? info.cls : nothing
     local from_tuple = tuple_of(from)
     local to_tuple = tuple_of(to)
     if from_tuple !== nothing && from_tuple !== to_tuple && to isa WasmBuilder.IR.RefType
         local cls = something(from_tuple)
-        local rinfo = get(self.class_info, tuple_record_class(fieldcount(cls)), nothing)
+        local rinfo = get(self.class_info, something(boxed_record_class(cls)), nothing)
         local info = self.class_info[cls]
         rinfo === nothing && reject!(Internal("$at: no record class for the tuple $cls"), at)
         local fields = class_instance_fields(cls, at)
@@ -1233,7 +1233,7 @@ Reshaped: `boxed_class` — dart's boxedClasses keys a box by the wasm type, whi
     end
     if to_tuple !== nothing && from_tuple !== to_tuple && from isa WasmBuilder.IR.RefType
         local cls = something(to_tuple)
-        local rinfo = get(self.class_info, tuple_record_class(fieldcount(cls)), nothing)
+        local rinfo = get(self.class_info, something(boxed_record_class(cls)), nothing)
         local info = self.class_info[cls]
         rinfo === nothing && reject!(Internal("$at: no record class for the tuple $cls"), at)
         local fields = class_instance_fields(cls, at)
