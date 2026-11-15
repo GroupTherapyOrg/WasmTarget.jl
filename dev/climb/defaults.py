@@ -142,6 +142,11 @@ DEFAULTS = {
     # 2026-11-14: test/src/constants.jl reached 152.3 s of 140 and a fix that edited it was dropped; five more files stood
     # at 121-128 s. Intent: a split is asked of the lead while every landing still fits; band 0.80-0.90
     "src_near_band": 0.85,
+    # a test file's measured cost (G per byte) that differs from the previous score's record by more than this factor,
+    # its size unchanged, is a fault, the previous cost kept (measure.settle_costs). Intent: a file's cost moves with
+    # src's changes by tens of percent, never an order of magnitude at one score; derivation, 2026-11-15's records
+    # read class_info.jl 401.4-406.4 G over four scores, and the jumps that misled the lander were 9-140x; band 3-10
+    "src_cost_jump": 4,
     # a measurement waits this long for the lock or a live landing before a note; it then waits on (O5): every holder
     # has its own wall (a measuring process's derived wall, ship_kill_s), so the wait is bounded by theirs, never by a backoff
     "lock_wait_s": 3600,

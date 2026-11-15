@@ -312,6 +312,8 @@ src=""; for p in $tpids; do wait $p; src="$src $?"; done
 cat .wtd/src_tests.[0-9]*.out > .wtd/src_tests.out 2>/dev/null; touch .wtd/src_tests.out
 if [ $rc -ne 0 ]; then
   echo "check: the ratchet fails (exit $rc)"
+  # the reasons first: each `✗` line a lock printed (what broke), then the broken locks' rows
+  grep -E '^\s*✗' .wtd/ratchet.out | cut -c1-300 | head -10
   grep -E '❌|FAIL|BROKEN|ERROR' .wtd/ratchet.out | cut -c1-300 | head -20
   grep -q '── charter' .wtd/ratchet.out || tail -30 .wtd/ratchet.out
   exit 1

@@ -1019,7 +1019,12 @@ try:
         raise StopIteration
     _, _, base19, _, _ = measure19(4, 0.6, 0, 0, 0.0)
     n19, k19, s19, l19, _ = measure19(4, 0.6, 1, 15.0, 0.4)
-    if n19 != 1 or k19 or not l19 or l19[0][1] != "T" or s19 > base19 + 15.0 + 3.0:
+    # no restart is the process count (n19: one process) and nothing killed; the wall bound only catches a measurement
+    # held past the check, and it scales with the machine's pace as base19 measured it (both are wall on a shared
+    # machine: 2026-11-15 05:10Z, at a load of 12-24, 25.4 s and 27.2 s against no-check runs of 4.0 s and 9.2 s, a
+    # fixed 3-s slack read a busy machine as a fault in 1 run of 3, and the sweep after a driver landing files a fault
+    # there as a fix-first)
+    if n19 != 1 or k19 or not l19 or l19[0][1] != "T" or s19 > 15.0 + 2.5 * base19 + 3.0:
         fault(f"a check mid-measurement: {n19} process(es) (1 expected: no restart), kills {k19}, the stand-in "
               f"{'stopped' if l19 and l19[0][1] == 'T' else 'running'} under the check ({l19}), {s19:.1f} s where it took {base19:.1f} s with no check, for a 15-s check")
     # a paused measurement whose driver is killed holds nothing: its back mark is a dead process's, and a mark whose pid
@@ -2262,3 +2267,51 @@ except Exception as e:
     fault(f"an empty handed set raised {type(e).__name__}: {str(e)[:240]}")
 finally:
     L.item_error = real41["item_error"]
+
+# 42. a score's rows are settled against the previous record before they are written (measure.settle_costs): a passed
+# file src_run left unmeasured (a restarted process's first file) carries the previous record's cost, scaled, named;
+# a measured cost past src_cost_jump of the previous with the size unchanged is a fault (an event, a note) and the
+# previous cost is kept. 2026-11-15: classes.jl, unmeasured at the score of f1435467, was charged 3,723.4 G
+#: limit 30
+try:
+    g("checkout", "-q", "--detach", h)
+    open(f"{repo}/src/x.jl", "a").write("# 42\n"); g("add", "-A"); g("commit", "-q", "-m", "c42"); h42 = g("rev-parse", "HEAD")
+    open(f"{state}/src-latest.json", "w").write(json.dumps({"head": h}))   # the previous record: the prologue's, every file 100 G
+    rows42 = {"t00.jl": ("passed", None, 3.0, ""), "t01.jl": ("passed", 1000.0, 3.0, ""), "t02.jl": ("passed", 120.0, 3.0, ""),
+              "t03.jl": ("failed", 90.0, 3.0, "a red")}
+    got42 = M.settle_costs(rows42, h42)
+    ev42 = {e["kind"]: e for e in core.events() if e["kind"] in ("src-cost-carried", "src-cost-jump")}
+    if (got42["t00.jl"][1], got42["t01.jl"][1], got42["t02.jl"][1], got42["t03.jl"]) != (100.0, 100.0, 120.0, rows42["t03.jl"]) \
+            or "carried from" not in got42["t00.jl"][3] or "t00.jl" not in ev42.get("src-cost-carried", {}).get("files", {}) \
+            or "t01.jl" not in ev42.get("src-cost-jump", {}).get("files", {}):
+        fault(f"settled rows {{f: (cost, why)}}: {({f: (r[1], r[3][:40]) for f, r in got42.items()})}, events {sorted(ev42)} "
+              "(t00 carried 100.0, t01's jump refused for 100.0, t02 kept, a red untouched)")
+except Exception as e:
+    fault(f"settling a score's costs raised {type(e).__name__}: {str(e)[:240]}")
+
+# 43. a landing-red's note leads with the check's own failure lines (lander.landing_reason: every ratchet `✗` line and
+# the broken locks' names, never a lock's description), and drop() keeps a note's head, so the climber's handoff and
+# the stopped event carry the reason. 2026-11-15: hold 17c2f6adf0 was dropped three times for one L227 `✗` line, each
+# note the tail of the lock's description
+#: limit 30
+real43 = {}
+try:
+    f43 = f"{tmp}/failed43"; os.makedirs(f43)
+    why43 = ("the change rewrites the debt-listed julia/parity.jl _cpp_declares and leaves its line in "
+             "dev/quarantine_unpinned.txt: pin its source and delete the line")
+    open(f"{f43}/ratchet.out", "w").write("L226_x     0  🔒 locked   # a\n    ✗ " + why43 + "\nL227_removed_tests_are_named     1  ❌ "
+                                          "LOCK BROKEN (want 0)   # " + "a removal named " * 200 + "tion each refused, a definition gone\n")
+    open(f"{f43}/check.log", "w").write("check: the ratchet fails (exit 1)\n")
+    r43 = L.landing_reason("OWN", "check", "ship: a commit's check is red\nship-result: OWN check\n", f43)
+    if not r43.startswith("✗ " + why43[:60]) or "broken: L227_removed_tests_are_named" not in r43 or "tion each refused" in r43:
+        fault(f"the landing's reason reads {r43[:300]!r} (the ✗ line first, the lock by name, no description)")
+    it43 = {"branch": "ready/l228-43", "hold": "l228-43", "hold_id": "l228-43", "sha": "0" * 40, "kind": "move"}
+    core.update_json("ready.json", [], lambda q: q.append(dict(it43)))
+    L.drop(it43, "landing-red", r43 + "\n" + "a long check output " * 200)
+    st43 = [e for e in core.events() if e["kind"] == "stopped" and e.get("hold") == "l228-43"]
+    ho43 = core.state_json("handoffs.json", {}).get("l228-43", "")
+    if not st43 or "pin its source" not in st43[-1].get("note", "") or "pin its source" not in ho43:
+        fault(f"the dropped move's note: stopped {(st43[-1].get('note', '')[:160] if st43 else 'none')!r}, handoff {ho43[:160]!r} "
+              "(each carries the ✗ line)")
+except Exception as e:
+    fault(f"a landing's reason raised {type(e).__name__}: {str(e)[:240]}")

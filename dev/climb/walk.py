@@ -68,19 +68,26 @@ def replay(state, commit, extra, here, repo, g, h):
     for k in (False, True):
         p, _ = M.predict({}, warm, False, 5, ch, harness=k)
         print(f"walk: no test file, {'the harness class' if k else 'no harness'}: {p['path']} s (ratchet {p['ratchet']}; {p['model']})")
-    def pick(name, ref):   # a ref cherry-picked onto h, or `patch:<file>` (a commit's format-patch) applied onto h
-        g("checkout", "-q", "-f", "--detach", h)
+    def apply_onto(at, ref):   # a ref cherry-picked onto `at`, or `patch:<file>` (a commit's format-patch) applied
+        g("checkout", "-q", "-f", "--detach", at)
         try:
             if ref.startswith("patch:"):
                 g("am", "-q", "--3way", ref[len("patch:"):])
             else:
                 g("cherry-pick", "--allow-empty", "--keep-redundant-commits", ref)
+            return g("rev-parse", "HEAD"), None
         except subprocess.CalledProcessError as e:
             for op, mark in (("cherry-pick", "CHERRY_PICK_HEAD"), ("am", "rebase-apply")):
                 if os.path.exists(os.path.join(repo, ".git", mark)):
                     subprocess.run(["git", "-C", repo, op, "--abort"], capture_output=True)
-            return None, f"{name}: does not apply onto {h[:10]} ({(e.stderr or '').strip()[:120]})"
-        return g("rev-parse", "HEAD"), None
+            return None, (e.stderr or "").strip()[:120]
+    def pick(name, ref):   # onto h; an item that applies onto neither h nor h's parent (origin) is its own, not h's
+        sha, err = apply_onto(h, ref)
+        if sha is not None:
+            return sha, None
+        if apply_onto(f"{h}~1", ref)[0] is None:
+            return None, f"{name}: applies onto neither {h[:10]} nor its parent, origin: the item's own conflict, not this commit's ({err})"
+        return None, f"{name}: does not apply onto {h[:10]}, and does onto its parent: THIS commit's conflict ({err})"
     def make(name, edits):   # each edit of a file the tree has, added by name, committed onto h
         g("checkout", "-q", "-f", "--detach", h)
         for rel, fn in edits.items():
@@ -102,7 +109,7 @@ def replay(state, commit, extra, here, repo, g, h):
     for name, ref in items + made:
         sha, why = (ref, None) if (name, ref) in made else pick(name, ref)
         if sha is None:
-            print(f"walk: {why}"); red += 1; continue
+            print(f"walk: {why}"); red += "THIS commit's" in why; continue
         ss = M.src_set(h, sha, None)
         if ss.get("why"):
             print(f"walk: {name}: no set ({ss['why'][:160]})"); red += 1; continue

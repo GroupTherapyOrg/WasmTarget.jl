@@ -1101,7 +1101,13 @@ door's, run as Dale on paths no build user writes.
   past the band records the files' costs from its own records and is held and tried again with them
   (`held_measured`), never dropped on an estimate; every check whose records the lander read, green or red, records
   each estimated file's measured G (`record_measured`, src-measured.json), so an estimate is paid once, at the first
-  landing that runs its file. A check red on its test files alone (its exit
+  landing that runs its file. A score's rows are settled against the previous record before they are written
+  (`settle_costs`): a passed file the run left unmeasured (a restarted process's first file, after a yield to the
+  lander) carries the previous record's cost, scaled by size; a measured cost past `src_cost_jump` of the previous one
+  with the size unchanged is a fault (an event and a note) and the previous cost is kept. A landing-red's note, the
+  `stopped` event, the hold's handoff and Dale's note lead with the check's own failure lines (`landing_reason`: the
+  ratchet's `✗` lines and the broken locks' names, a test red's first failures, else the check's last line), the head
+  of a note kept, never its tail. A check red on its test files alone (its exit
   14) whose red files are all outside the move's own is run at origin's head in one process (`src_red_at`, R3, R10): red
   there, origin's: located at once (`src_locate`, the fix-first filed, the file into R) and the item checked again
   without it, uncharged; green there, the move's own red, as before, unless a file read so twice within
@@ -1404,13 +1410,13 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `queue_cap` 4 (locked), `task_wall_s` 5400, `audit_every` 5 (locked), `score_every_landings` 3, `score_every_s` 7200,
 `retry_backoff_s` 1800, `backoff_cap_s` 28800, `driver_fault_backoff_s` 300, `stop_tries` 3, `alarm_s` 21600,
 `power_settle_s` 60, `battery_runs` true, `battery_floor_pct` 20, `oracle_audit_k` 8, `oracle_background` false,
-`measure_background` false, `score_background` false, `src_near_band` 0.85, `lock_wait_s` 3600, `score_loss_band` 0.02,
-`judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3,
-`case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120,
-`kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000,
-`decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6],
-`other_tries` 3, `d14_tries` 3, `gap_admit_max_s` 259200, `l228_sweep_wall_s` 900, `ship_kill_s` 3600,
-`watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,
+`measure_background` false, `score_background` false, `src_near_band` 0.85, `src_cost_jump` 4, `lock_wait_s` 3600,
+`score_loss_band` 0.02, `judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4,
+`wall_factor` 3, `case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840,
+`kaimon_http_s` 120, `kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15,
+`swapins_max` 2000, `decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200,
+`d14_share` [10, 0.6], `other_tries` 3, `d14_tries` 3, `gap_admit_max_s` 259200, `l228_sweep_wall_s` 900,
+`ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,
 `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3,
 `fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
 `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0},

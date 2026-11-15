@@ -165,7 +165,7 @@ for v in "${verdicts[@]}"; do
   case "$v" in
     *RED*) n=${v%% *}
       case $n in 1) f="$s/sweep.out";; 2) f="$s/ratchet.out";; 3) f="$s/walk.out";; *) f="";; esac
-      [ -n "$f" ] && [ -f "$f" ] && { echo "--- stage $n's output, its last lines:"; grep -E '✗|❌|BROKEN|ERROR|fault|refused|RED' "$f" | tail -25; } ;;
+      [ -n "$f" ] && [ -f "$f" ] && { echo "--- stage $n's output, its last lines:"; grep -E '✗|❌|BROKEN|ERROR|fault|refused|RED|HELD|DROPPED|does not apply|no set|not replayable' "$f" | tail -25; } ;;
   esac
 done
 for kind in empty one; do

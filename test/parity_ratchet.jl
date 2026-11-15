@@ -3352,6 +3352,14 @@ const BOUNDED_BREAKS = (
     ("a void reading of an empty set charged to the commit", "dev/climb/lander.py",
      "    if kind != \"OWN\" or arg != \"void\" or ss is None or files is None or files:", "    if True:", 41),
     ("an exit status that is no number read as a test", "dev/src_verdict.sh", "  [[ \"\$r\" =~ ^[0-9]+\$ ]] || { void=", "  true || { void=", 41),
+    # a score's unmeasured or jumped cost settled against the previous record (2026-11-15: classes.jl at 3,723.4 G)
+    ("a restarted first file left unmeasured", "dev/climb/measure.py", "        if g is None:\n            out[f] = (o, round(p[1] * scale, 1)",
+     "        if False:\n            out[f] = (o, round(p[1] * scale, 1)", 42),
+    ("a cost's jump used", "dev/climb/measure.py", "and max(g / p[1], p[1] / g) > cfg()[\"src_cost_jump\"]:", "and False:", 42),
+    # a landing-red's reason first (2026-11-15: hold 17c2f6adf0, three drops for one L227 line its notes hid)
+    ("the ratchet's ✗ lines left out of the reason", "dev/climb/lander.py",
+     "    lines = [l.strip()[:300] for l in rat.splitlines() if l.lstrip().startswith(\"✗\")][:10]", "    lines = []", 43),
+    ("a note's tail kept for the stopped event", "dev/climb/lander.py", "outcome=outcome, note=note[:600])", "outcome=outcome, note=note[-600:])", 43),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

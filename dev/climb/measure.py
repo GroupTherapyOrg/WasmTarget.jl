@@ -3072,6 +3072,45 @@ def src_flaky_passed(files):
                 else:
                     src_entry_set(e["key"], passes=e.get("passes", 0) + 1)
 
+def settle_costs(rows, head):
+    """A score's rows ({file: (outcome, G or None, secs, why)}) settled against the previous score's record before they
+    are written: a passed file whose cost src_run left unmeasured (a restarted process's first file, after a yield to
+    the lander: it paid the first compile again) carries its cost from the previous record, scaled by its size now over
+    its size there, its why naming the record ("carried from <head>"); and a measured cost whose G per byte differs from
+    the previous record's by more than src_cost_jump, the file's size unchanged, is a fault (one event and one note
+    naming each file), the previous cost recorded in its place, never the jump. 2026-11-15: the score of f1435467,
+    yielding to landings, left classes.jl and closures.jl unmeasured, and src_costs charged them its estimate for a
+    file no score has run, the densest G per byte of test/src: 3,723.4 G and 1,537.9 G against about 205 and 11, a
+    src-near note and a would-be hold for files that are light. A file the previous record did not measure either is
+    left unmeasured (src_costs names it estimated)."""
+    prev = src_latest(head)
+    if prev is None:
+        return rows
+    ph, _, prow = prev
+    now_s, was_s = src_sizes(head), src_sizes(ph)
+    carried, jumps, out = {}, {}, dict(rows)
+    for f, (o, g, secs, why) in rows.items():
+        p = prow.get(f)
+        if o != "passed" or not p or p[0] != "passed" or p[1] is None or not was_s.get(f) or not now_s.get(f):
+            continue
+        scale = now_s[f] / was_s[f]
+        if g is None:
+            out[f] = (o, round(p[1] * scale, 1), secs, f"carried from {ph[:10]}")
+            carried[f] = out[f][1]
+        elif now_s[f] == was_s[f] and p[1] > 0 and g > 0 and max(g / p[1], p[1] / g) > cfg()["src_cost_jump"]:
+            out[f] = (o, p[1], secs, f"a jump from {p[1]} G to {g} G refused, carried from {ph[:10]}")
+            jumps[f] = (p[1], g)
+    if carried:
+        event("src-cost-carried", sha=head[:8], files=carried, prev=ph[:8])
+    if jumps:
+        event("src-cost-jump", sha=head[:8], files={f: {"was": a, "read": b} for f, (a, b) in jumps.items()}, prev=ph[:8])
+        alarm(f"src-cost-jump-{head[:8]}", "a test file's measured cost jumped with its size unchanged",
+              f"The score of {head[:10]} read " + ", ".join(f"test/src/{f} {b} G (the record of {ph[:10]}: {a} G)"
+                                                              for f, (a, b) in sorted(jumps.items())) +
+              f", each past src_cost_jump ({cfg()['src_cost_jump']}x) with its size unchanged. Default taken: the "
+              "previous cost is recorded and used; the measure is the lead's to look at.")
+    return out
+
 def src_score(head, role="score"):
     """The score's src part (R6): every file of T(head) run at origin's `head` in one process (src_run, the score role,
     yielding to a waiting lander at file boundaries, its files' seconds learned), recorded in STATE/src-<head>.tsv (each
@@ -3098,6 +3137,7 @@ def src_score(head, role="score"):
     if rows is None:
         event("src-failed", sha=head[:8], why=warm[-300:] if isinstance(warm, str) else "")
         return None
+    rows = settle_costs(rows, head)
     write_atomic(os.path.join(STATE, f"src-{head[:8]}.tsv"), f"head\t{head}\twarm\t{'' if warm is None else warm}\n" +
                  "".join(f"{f}\t{o}\t{'' if g is None else g}\t{s_}\t{w}\n" for f, (o, g, s_, w) in sorted(rows.items())))
     green = sorted(f for f, r in rows.items() if r[0] == "passed")
