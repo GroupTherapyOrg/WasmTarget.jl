@@ -1,0 +1,15 @@
+# dev/quarantine_no_counterpart.txt — the @quarantine definitions no ecosystem has a counterpart for
+# (A90E1, A92E1, dev/LEDGER.md D20; L213's check_no_counterpart, src/julia/parity.jl). Its criterion, the
+# lead's: "lock machinery that reads only WasmTarget's own record formats (anchors, the debt list, this
+# list), for which no ecosystem defines a counterpart"; every definition meeting it is here, and one that
+# does not stays on dev/quarantine_unpinned.txt. A runner is judged by what it itself reads (it dispatches a
+# check and counts its faults), not by what the check it calls reads, which keeps its own status (the lead's
+# ruling on A93E2); the runners have a counterpart, dart's analyzer running its registered lints
+# (LibraryAnalyzer._computeLints), and are pinned there, never listed. One line per definition, `<its debt-list key> — <why no
+# counterpart exists>`. The list is exact: a line with no reason, a line naming no quarantined definition,
+# one naming a definition whose reason pins a source, a line written twice and a key also on
+# dev/quarantine_unpinned.txt each refuse the load, and the ratchet's L227 refuses a change that adds a line
+# once the file exists, unless the lead admits exactly the keys it adds (dev/no_counterpart_spend.sh), so it
+# only shrinks.
+julia/parity.jl _jl_rel — WasmTarget's own map from a pinned source file to its port's file under src/ (dev/MARCH.md 1.A4); no ecosystem defines it
+julia/parity.jl _quarantine_debt — reads the debt list's lines, WasmTarget's own format

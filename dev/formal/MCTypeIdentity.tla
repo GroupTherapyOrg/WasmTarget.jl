@@ -1,0 +1,3 @@
+---- MODULE MCTypeIdentity ----
+EXTENDS TypeIdentity
+====

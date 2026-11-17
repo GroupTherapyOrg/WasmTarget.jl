@@ -1,0 +1,131 @@
+# Binary serialization for WebAssembly modules
+# Reference: https://webassembly.github.io/spec/core/binary/conventions.html
+
+export encode_leb128_unsigned, encode_leb128_signed, WasmWriter
+
+# ============================================================================
+# LEB128 Encoding (Section 5.2.2)
+# ============================================================================
+
+"""
+    encode_leb128_unsigned(value) -> Vector{UInt8}
+
+Encode an unsigned integer using LEB128 (Little Endian Base 128).
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:69 Serializer.writeUnsigned)
+"""
+function encode_leb128_unsigned(value::Integer)::Vector{UInt8}
+    result = UInt8[]
+    value = unsigned(value)
+    while true
+        byte = UInt8(value & 0x7F)
+        value >>= 7
+        if value != 0
+            byte |= 0x80  # Set continuation bit
+        end
+        push!(result, byte)
+        value == 0 && break
+    end
+    return result
+end
+
+"""
+    encode_leb128_signed(value) -> Vector{UInt8}
+
+Encode a signed integer using LEB128 (Little Endian Base 128).
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:61 Serializer.writeSigned)
+"""
+function encode_leb128_signed(value::Integer)::Vector{UInt8}
+    result = UInt8[]
+    more = true
+    while more
+        byte = UInt8(value & 0x7F)
+        value >>= 7
+        # Check if we need more bytes
+        if (value == 0 && (byte & 0x40) == 0) || (value == -1 && (byte & 0x40) != 0)
+            more = false
+        else
+            byte |= 0x80  # Set continuation bit
+        end
+        push!(result, byte)
+    end
+    return result
+end
+
+# ============================================================================
+# WasmWriter - Binary stream builder
+# ============================================================================
+
+"""
+    WasmWriter
+
+A mutable buffer for building WebAssembly binary data.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:17 Serializer)
+"""
+mutable struct WasmWriter
+    buffer::Vector{UInt8}
+end
+
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:17 Serializer)
+WasmWriter()::WasmWriter = WasmWriter(UInt8[])
+
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:29 Serializer.offset)
+Base.length(w::WasmWriter) = length(w.buffer)
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:141 Serializer.data)
+bytes(w::WasmWriter)::Vector{UInt8} = w.buffer
+
+"""
+Write raw bytes to the buffer.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:55 Serializer.writeBytes)
+"""
+function write_bytes!(w::WasmWriter, data::Vector{UInt8})::WasmWriter
+    append!(w.buffer, data)
+    return w
+end
+
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:55 Serializer.writeBytes)
+function write_bytes!(w::WasmWriter, data::UInt8...)::WasmWriter
+    append!(w.buffer, data)
+    return w
+end
+
+"""
+Write a single byte.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:48 Serializer.writeByte)
+"""
+function write_byte!(w::WasmWriter, b::UInt8)::WasmWriter
+    push!(w.buffer, b)
+    return w
+end
+
+"""
+Write an unsigned LEB128 integer.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:69 Serializer.writeUnsigned)
+"""
+function write_u32!(w::WasmWriter, value::Integer)::WasmWriter
+    append!(w.buffer, encode_leb128_unsigned(value))
+    return w
+end
+
+"""
+Write a signed LEB128 integer.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:61 Serializer.writeSigned)
+"""
+function write_i32!(w::WasmWriter, value::Integer)::WasmWriter
+    append!(w.buffer, encode_leb128_signed(value))
+    return w
+end
+
+"""
+Write a name (UTF-8 string with length prefix). A name that is not valid UTF-8 is refused, naming
+it: dart's `utf8.encode` writes valid UTF-8 for every Dart string, and a Julia String (a Symbol a
+user wrote) may hold bytes that are not, which an engine refuses in an export only at
+instantiation and drops silently from the name section.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:103 Serializer.writeName)
+"""
+function write_name!(w::WasmWriter, name::String)::WasmWriter
+    isvalid(name) || _module_invalid(:write_name, "the name $(repr(name)) is not valid UTF-8")
+    name_bytes = Vector{UInt8}(name)
+    write_u32!(w, length(name_bytes))
+    append!(w.buffer, name_bytes)
+    return w
+end

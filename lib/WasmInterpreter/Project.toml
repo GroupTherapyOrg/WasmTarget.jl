@@ -1,0 +1,7 @@
+name = "WasmInterpreter"
+uuid = "49b019a1-e203-4cd1-8ed5-d7b500e5bcc5"
+version = "0.1.0"
+authors = ["Dale Black"]
+
+[compat]
+julia = "~1.12, ~1.13"

@@ -9,25 +9,37 @@ name: Downstream
 # which locks the specific bug this guards against.
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    # the full matrix's triggers (gate.yml; Dale 2026-10-21: large-scale runs only when a full clause is
+    # closed out): a push of wt2, the march branch `dev/ship.sh` pushes, whose head commit carries a
+    # `Closes: C<n>` line, and a dispatch; any
+    # other wt2 push, a landing, runs nothing.
+    # Every job with no `needs:` runs only under the closure predicate, gate.yml's run-name's and closure
+    # job's text (L153); the pull request, whose branch every landing pushes, triggers nothing (A23E4)
+    branches: ['wt2']
   workflow_dispatch:
+# A wt2 push's run is its head's own group: every landing pushes wt2, and a later landing's push
+# never cancels a closure matrix.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/wt2' && github.sha || github.ref }}
   cancel-in-progress: true
 defaults:
   run:
     shell: bash
 jobs:
   downstream:
+    if: >-
+      ${{ github.event_name != 'push' || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"'))) }}
     timeout-minutes: 60   # hang guard (see ci.yml note)
     name: ${{ matrix.pkg }} (downstream)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        pkg: [WasmMakie.jl, Therapy.jl, Snapshot.jl]
+        # Therapy.jl and WasmMakie.jl are paused until PR #128 lands in full (Dale, 2026-09-29):
+        # each adopts the rewrite's host contract after it lands (a module imports
+        # `wasmtarget.stack_trace`, answered by the runtime its compile hands back), and until then its known
+        # failure is noise. Their steps below stay; dev/MARCH.md 13.16 restores them to this list.
+        pkg: [Snapshot.jl]
     steps:
       # This WasmTarget checkout is the version under test. The downstream test
       # environments resolve it via a sibling path (WasmMakie's test [sources]

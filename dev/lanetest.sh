@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# dev/lanetest.sh — a lane runs one test file of its own, on a performance core when one of LANE_SLOTS is free
+#
+#   bash dev/lanetest.sh test/src/<file>.jl [args...]
+#
+# A lane's own test files ran at background QoS (taskpolicy -b), so with the corpus's shards and six lanes
+# all on the six efficiency cores each ran at a third of its speed while the four performance cores sat idle
+# between landings (march-monitor-a, 08:56: ten background Julia processes, none at normal priority). Two
+# slots let two lanes' runs take performance cores; a third waits for none and runs at background QoS. A
+# landing's check beside them runs slower on the clock but is judged by its instructions and CPU seconds
+# (dev/check.sh), never by its wall time. The whole suite (test/src_tests.jl) is never a lane's run: it
+# refuses at normal priority outside a landing. Every run has a hard limit (a hang is never allowed).
+set -uo pipefail
+LANE_SLOTS=2      # a literal: half the performance cores, the other half the landing check's
+LANE_LIMIT=900    # seconds, a literal naming the file when it is passed
+[ $# -ge 1 ] || { echo "lanetest: name a test file"; exit 2; }
+case "$1" in */src_tests.jl) echo "lanetest: the whole suite is the landing check's run, never a lane's"; exit 2;; esac
+cd "$(git rev-parse --show-toplevel)"
+# the rules a lane's test runs under are origin's, never the lane's copy, as dev/ship.sh does: a tree on an older
+# lanetest.sh kept its stale slot rule and ran at background with both slots free (wt3-codegen-b, 12:44)
+if [ -z "${WT_LANETEST_ORIGIN:-}" ]; then
+  mkdir -p .wtd; git show "origin/wt2:dev/lanetest.sh" > .wtd/lanetest.origin.sh 2>/dev/null
+  # always the copy, never this file in place, as dev/ship.sh: an edit to the tree's file can't change a running test
+  if [ -s .wtd/lanetest.origin.sh ]; then
+    cmp -s .wtd/lanetest.origin.sh dev/lanetest.sh || echo "lanetest: this tree's dev/lanetest.sh differs from origin/wt2's; running origin's"
+    WT_LANETEST_ORIGIN=1 exec bash .wtd/lanetest.origin.sh "$@"
+  fi
+fi
+# the lane's own depot, as dev/check.sh and dev/corpus.sh use (dev/depot.sh): a run on the shared one missed
+# a package the lane's depot holds ("Missing source file for Binaryen_jll", wt3-codegen-b, 09:49)
+. dev/depot.sh; wt_depot_export "$PWD"
+common="$(git rev-parse --path-format=absolute --git-common-dir)"
+slots="$common/wt-lanetest"; mkdir -p "$slots"
+# (a climb agent runs at background QoS already, its children inheriting it, and its sandbox refuses taskpolicy: O5-4)
+prefix="taskpolicy -b"; [ -z "${WT_CLIMB_AGENT:-}" ] || prefix=""; mine=""
+# a landing's check running now holds the performance cores (a ratchet and three shards): no slot then, so
+# the check keeps its cores (march-monitor-a, 08:58). A check runs only under the landing lock (dev/ship.sh),
+# so the lock is what is read: a lane's own ship lock is held by a ship still queued for it, and one stale
+# queued ship (wt3-loop's, four days) sent every lane's test to the efficiency cores with no check running
+# (2026-11-02 11:45, one julia at background, four performance cores idle)
+busy=0
+h=$(cat "$common/wt-landing-lock/pid" 2>/dev/null || true)
+[ -n "$h" ] && kill -0 "$h" 2>/dev/null && busy=1
+[ $busy -eq 1 ] || for s in $(seq 1 $LANE_SLOTS); do
+  holder=$(cat "$slots/$s/pid" 2>/dev/null || true)
+  [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null && rm -rf "$slots/$s"
+  if mkdir "$slots/$s" 2>/dev/null; then echo $$ > "$slots/$s/pid"; mine="$slots/$s"; prefix=""; break; fi
+done
+[ -n "$mine" ] && trap 'rm -rf "$mine"' EXIT
+echo "lanetest: $1 $([ -n "$mine" ] && echo "on a performance core (slot $(basename "$mine"))" || echo "at background QoS (both slots held, or a landing's check running)"), limit ${LANE_LIMIT}s"
+# each run's record, in the common dir's wt-lanetest/<worktree>.last, written when it starts and when it ends
+# (start, end, file, exit status, pid): a lane reads its result there, never waiting on a notice that can be
+# lost, and a "running" record whose pid is dead is a run that died (12:44: four lanes waited ~25 minutes on
+# background runs that had finished or died, march-monitor-a)
+rec="$slots/$(basename "$PWD").last"; t0=$(date -u +%FT%TZ)
+printf 'running\t%s\t-\t%s\tpid %s\n' "$t0" "$*" "$$" > "$rec"
+perl -e 'alarm shift; exec @ARGV' "$LANE_LIMIT" $prefix julia --project=. --startup-file=no "$@"
+rc=$?
+[ $rc -eq 142 ] && echo "lanetest: $1 passed its hard limit of ${LANE_LIMIT}s"
+printf '%s\t%s\t%s\t%s\texit %s\n' "$([ $rc -eq 0 ] && echo green || echo red)" "$t0" "$(date -u +%FT%TZ)" "$*" "$rc" > "$rec"
+exit $rc
