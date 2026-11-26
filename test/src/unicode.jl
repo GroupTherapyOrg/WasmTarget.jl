@@ -120,7 +120,8 @@ end
 
 # Base._isoperator by overlay (src/patch/unicode.jl): jl_is_operator's port over julia-parser.scm's operator
 # lists, strip-op-suffix and jl_op_suffix_char. The C tables it copies equal the pinned files', entry for
-# entry, read again here; the port answers as Base's _isoperator, which calls libjulia's flisp, natively,
+# entry, read again here, and its operator lists the pinned julia-parser.scm's, each define read and evaluated
+# as femtolisp would, every symbol they name asked of Base; the port answers as Base's _isoperator, which calls libjulia's flisp, natively,
 # at every operator, its dotted and suffixed forms and every character to U+FFFF alone, doubled and after
 # +; and compiled, the cases answer as native Julia, the closed world reaching the overlay
 @testset "jl_is_operator's C tables are the pinned files', entry for entry" begin
@@ -132,6 +133,134 @@ end
         @test parse.(UInt8, pinned_entries(utf8, "static const char trailingBytesForUTF8[256] = {")) == WasmTarget.U8_TRAILING_BYTES
         local h = map(l -> String(first(split(l, "//"))), readlines(joinpath(dir, "src", "flisp", "julia_opsuffs.h")))
         @test parse.(UInt32, pinned_entries(h, "static const uint32_t opsuffs[] = {")) == WasmTarget.JL_OPSUFFS
+    end
+end
+
+# femtolisp's reader (julia/src/flisp/read.c) over the parser's text from byte i: peek (:207) skips whitespace
+# and a ; comment, a ( reads a list, a ' a quote, a " a string (read_string, :458, with no escape in the forms
+# read here), and anything else a symbol by read_token (:165): a | toggles escaping, a \ takes the next byte as
+# itself, and an unescaped byte that is no symchar (:14) ends it. A symbol is a Symbol, a string a String, a
+# list a Vector{Any}, 'x the list (quote x)
+function scm_read(s::Vector{UInt8}, i::Int)::Tuple{Any,Int}
+    while true
+        while s[i] in codeunits(" \t\n\v\f\r"); i += 1; end
+        s[i] == UInt8(';') || break
+        while s[i] != UInt8('\n'); i += 1; end
+    end
+    local c = Char(s[i])
+    if c == '('
+        local items = Any[]
+        i += 1
+        while true
+            while s[i] in codeunits(" \t\n\v\f\r"); i += 1; end
+            s[i] == UInt8(')') && return items, i + 1
+            local (x, j) = scm_read(s, i)
+            push!(items, x)
+            i = j
+        end
+    elseif c == '\''
+        local (x, j) = scm_read(s, i + 1)
+        return Any[:quote, x], j
+    elseif c == '"'
+        local e = findnext(==(UInt8('"')), s, i + 1)
+        return String(s[i+1:e-1]), e + 1
+    end
+    local buf = UInt8[]
+    local escaped = false
+    while i <= length(s)
+        local b = s[i]
+        if b == UInt8('|')
+            escaped = !escaped
+        elseif b == UInt8('\\')
+            i += 1
+            push!(buf, s[i])
+        elseif !escaped && b in codeunits("()[]'\";`,\\| \f\n\r\t\v")
+            break
+        else
+            push!(buf, b)
+        end
+        i += 1
+    end
+    return Symbol(String(buf)), i
+end
+
+# a define of julia-parser.scm evaluated by the forms its operator lists use, a symbol's value its name: a
+# quoted symbol or list, a name another define bound, add-dots (:4, each name and then each with a `.` before
+# it), Set (:44) as the list it tests, append and append! (the lists in order), list, list* (the last argument
+# the tail), (apply append L), (map eval L) (each name's value),
+#delete-duplicates (julia/src/flisp/system.lsp:310, the first of
+# each kept), filter by a one-argument lambda, not, is-word-operator? (:126, every character an
+# identifier-start-char?, flisp's builtin of jl_id_start_char, which Base.is_id_start_char calls) and
+# string->symbol; any other form fails, named
+function scm_eval(x, env::Dict{Symbol,Any})
+    x isa Symbol && return env[x]
+    x isa String && return x
+    local (f, args) = (x[1], x[2:end])
+    f === :quote && return args[1] isa Symbol ? String(args[1]) : String[String(a) for a in args[1]]
+    if f === :lambda
+        local (param, body) = (only(args[1]), args[2])
+        return v -> scm_eval(body, merge(env, Dict{Symbol,Any}(param => v)))
+    end
+    # apply and map take a builtin by its name: (apply append L), (map eval L)
+    f === :apply && args[1] === :append && return String[vcat(scm_eval(args[2], env)...)...]
+    f === :map && args[1] === :eval && return Any[env[Symbol(v)] for v in scm_eval(args[2], env)]
+    local vals = Any[scm_eval(a, env) for a in args]
+    f === Symbol("add-dots") && return vcat(vals[1], String["." * op for op in vals[1]])
+    f === :Set && return vals[1]
+    f in (:append, Symbol("append!")) && return String[vcat(vals...)...]
+    f === :list && return String[vals...]
+    f === Symbol("list*") && return String[vals[1:end-1]..., vals[end]...]
+    f === Symbol("delete-duplicates") && return unique(vals[1])
+    f === :filter && return filter(v -> vals[1](v), vals[2])
+    f === :not && return !vals[1]
+    f === Symbol("is-word-operator?") && return all(Base.is_id_start_char, vals[1])
+    f === Symbol("string->symbol") && return vals[1]
+    error("julia-parser.scm: no evaluator for ($f ...)")
+end
+
+# the value of the column-0 `(define <name> ...)` of the parser's text, each earlier define it names in env
+function scm_define(text::String, name::String, env::Dict{Symbol,Any})
+    local s = Vector{UInt8}(codeunits(text))
+    local r = findfirst(Regex("^\\(define \\Q$name\\E[ \\n]", "m"), text)
+    @test r !== nothing
+    local (form, _) = scm_read(s, first(r))
+    @test form[1] === :define && form[2] === Symbol(name)
+    return scm_eval(form[3], env)
+end
+
+@testset "jl_is_operator's operator lists are julia-parser.scm's, define for define" begin
+    local dir = WasmTarget._c_pin_checkout(:julia)
+    @test dir !== nothing   # bash dev/fetch_julia.sh makes it
+    if dir !== nothing
+        local text = read(joinpath(dir, "src", "julia-parser.scm"), String)
+        local W = WasmTarget
+        local env = Dict{Symbol,Any}()
+        # prec-names (:35) names the precedence tables, in order; each is read from its own define
+        local names = env[Symbol("prec-names")] = scm_define(text, "prec-names", env)
+        @test length(names) == 17 && length(W.PREC_NAMES) == 17
+        for (k, name) in enumerate(names)
+            env[Symbol(name)] = scm_define(text, name, env)
+            @test env[Symbol(name)] == W.PREC_NAMES[k] || (@info "julia-parser.scm's $name differs from the port's" setdiff(env[Symbol(name)], W.PREC_NAMES[k]) setdiff(W.PREC_NAMES[k], env[Symbol(name)]); false)
+        end
+        for (name, ours) in (("unary-ops", W.UNARY_OPS), ("syntactic-operators", W.SYNTACTIC_OPERATORS),
+                             ("trans-op", W.TRANS_OP), ("ctrans-op", W.CTRANS_OP), ("vararg-op", W.VARARG_OP))
+            env[Symbol(name)] = scm_define(text, name, env)
+            @test env[Symbol(name)] == ours
+        end
+        # the derived lists from their own defines: no-suffix? (:62) and operators (:129), the word operators out
+        local no_suffix = scm_define(text, "no-suffix?", env)
+        local operators = scm_define(text, "operators", env)
+        @test no_suffix == W.FL_NO_SUFFIX
+        @test operators == W.FL_OPERATORS
+        # a symbol dropped from a define is seen: prec-pipe> without |> differs from the port's
+        @test scm_define(replace(text, " |\\|>|))" => "))"), "prec-pipe>", env) == [".|>"] != W.PREC_PIPE_GT
+        # every symbol the defines name, asked of Base's _isoperator and of the port, alone and dotted: Base
+        # answers each an operator but the word operators (in, isa and 🢲, an identifier-start character), which
+        # operators leaves out
+        local named = unique(vcat(operators, no_suffix, env[Symbol("syntactic-operators")], (env[Symbol(n)] for n in names)...))
+        @test length(operators) > 600 && length(named) > length(operators)
+        @test isempty(filter(s -> (W.jl_is_operator(s) != 0) != Base._isoperator(s), vcat(named, "." .* named)))
+        @test filter(s -> !Base._isoperator(s), named) == filter(s -> all(Base.is_id_start_char, s), named) == ["in", "isa", "🢲"]
     end
 end
 
