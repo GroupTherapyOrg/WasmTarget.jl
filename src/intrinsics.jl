@@ -4838,11 +4838,27 @@ end
     local konst(v::Integer) = w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_const(b, Int64(v)) : WasmBuilder.i32_const(b, Int64(Int32(v)))
     local eqz() = w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_eqz(b) : WasmBuilder.i32_eqz(b)
     local eq() = w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_eq(b) : WasmBuilder.i32_eq(b)
-    # the condition Julia raises on: y == 0, or, signed division, y == -1 and x == typemin. Julia's codegen
-    # builds it with LLVM's IRBuilder (julia/src/intrinsics.cpp emit_checked_sdiv/udiv's raise_exception_if),
-    # whose constant folder folds the comparison of a constant divisor at once (IRBuilder's ConstantFolder
-    # FoldCmp): a divisor that is a nonzero constant, and for a signed division not -1, leaves `false` and no
-    # raise is reached, so none is emitted
+    # the condition Julia raises on: y == 0, or, signed division, y == -1 and x == typemin, as
+    # julia/src/intrinsics.cpp:1594-1620 builds it (emit_checked_srem_int's at :1099), raised through
+    # raise_exception_unless (julia/src/cgutils.cpp:1586), which always emits the fail block and its jl_throw:
+    # Julia's codegen emits the raise for every divisor. Julia's LLVM pipeline then deletes it where the divisor
+    # is a constant no raise can follow, and WasmTarget emits what that pipeline leaves (at the llvm pin):
+    # - the comparisons of a constant divisor fold as the IRBuilder makes them (llvm/include/llvm/IR/IRBuilder.h:2485
+    #   CreateICmp, its ConstantFolder's FoldCmp, llvm/include/llvm/IR/ConstantFolder.h:99): a nonzero constant
+    #   makes `y != 0` the constant true, the whole condition of checked_udiv_int, checked_urem_int and
+    #   emit_checked_srem_int. checked_sdiv_int's, and(true, or(y != -1, x != typemin)), keeps its `or` and `and`
+    #   as instructions (IRBuilder.h:1570 CreateAnd and :1592 CreateOr fold two constants only); for a constant
+    #   y not -1 InstCombine (julia/src/pipeline.cpp:385, -O2, Julia's default) folds both to true, its visitOr
+    #   and visitAnd (llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp:4104, :2419) answering InstSimplify's
+    #   simplifyOrInst (llvm/lib/Analysis/InstructionSimplify.cpp:2346, X | -1 = -1 at :2356) and simplifyAndInst
+    #   (:2071, X & -1 = X at :2092)
+    # - the branch on the constant true then goes to the pass block alone and the fail block, its throw with it,
+    #   is deleted: SimplifyCFGPass (llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp:277), whose
+    #   removeUnreachableBlocks (llvm/lib/Transforms/Utils/Local.cpp:2914) folds each block's terminator by
+    #   ConstantFoldTerminator (:134, called at :2865) and removes the blocks left unreached, run by Julia's early
+    #   simplification at every level (pipeline.cpp:342) and again after InstCombine (:475)
+    # So a nonzero constant divisor, and for checked_sdiv_int one that is not -1, emits no test and no raise; any
+    # other divisor emits Julia's condition and raise
     local ycon = args[2] isa NirConst ? args[2].c.val : nothing
     local never = ycon isa Integer && ycon != 0 && !(f === I.checked_sdiv_int && ycon == -1)
     if !never
