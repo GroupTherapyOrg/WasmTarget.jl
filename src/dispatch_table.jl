@@ -385,8 +385,8 @@ the classes holding the field (field_selector_calls, classes_without_field): no 
 A class a selector admits whose class layout holds no accessor of the field is a located rejection
 here, never an empty slot.
 
-formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the field reaches its own accessor;
-formal(dev/formal/MCFieldSelectorTableSiteCheck.tla): a class without it raises at the site, no row holds an error
+formal(dev/formal/MCFieldSelectorTableSiteCheck.tla): no slot taken twice, a class with the field reaches its own accessor,
+a class without it raises at the site, no row holds an error
 """
 @parity "dart2wasm/lib/dispatch_table.dart:501 DispatchTable.build" function build(self::DispatchTable)::Nothing
     local at = "dart2wasm/lib/dispatch_table.dart:501 DispatchTable.build"

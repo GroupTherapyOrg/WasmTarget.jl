@@ -33,12 +33,11 @@
 (* Claims (at the end of packing):                                           *)
 (*   SlotUnique        no row is placed over an occupied slot                *)
 (*   DispatchExact     a class with the field reaches its own getter         *)
-(*   MissingFieldTraps a class of the receiver's type without the field      *)
-(*                     reaches Julia's FieldError, never a slot of another   *)
-(*                     selector, a null slot or another class's getter       *)
-(* Broken variants: NoOverlapCheck (the fit tests only the row's first       *)
-(* value: SlotUnique), NoFieldError (only classes with the field get a       *)
-(* target, as dart's addMember gives: MissingFieldTraps).                    *)
+(* A class of the receiver's type without the field is the site's: Julia    *)
+(* checks at the read, so its row holds only the classes with the field     *)
+(* (NoFieldError = TRUE), MCFieldSelectorTableSiteCheck.tla's SiteCheckTraps.*)
+(* Broken variant: NoOverlapCheck (the fit tests only the row's first        *)
+(* value: SlotUnique).                                                       *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets, Sequences
 
@@ -138,13 +137,9 @@ SlotUnique == ~clash
 DispatchExact == phase = "done" =>
     \A f \in Names : \A c \in recv[f] : f \in has[c] => Call(f, c) = Get(c, f)
 
-MissingFieldTraps == phase = "done" =>
-    \A f \in Names : \A c \in recv[f] : f \notin has[c] => Call(f, c) = FieldErr
-
 Ends == <>(phase = "done")
 
-\* SUPERSEDED for a class without the field: Julia checks at the read (julia/src/builtins.c:994
-\* get_checked_fieldindex), so the port raises FieldError or BoundsError at the site and the row holds only the
-\* classes with the field; MCFieldSelectorTableSiteCheck.tla models it (SiteCheckTraps). MissingFieldTraps stays
-\* checked here as the row plan it was.
+\* A class without the field: Julia checks at the read (julia/src/builtins.c:994 get_checked_fieldindex), so the
+\* port raises FieldError or BoundsError at the site and the row holds only the classes with the field;
+\* MCFieldSelectorTableSiteCheck.tla models it (SiteCheckTraps), which carries the retired row plan's claim.
 =============================================================================
