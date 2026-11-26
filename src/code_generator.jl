@@ -2462,6 +2462,30 @@ end
     local name = node.args[3]
     name isa NirConst && name.c.val isa Union{Symbol,Int} ||
         reject!(Unquarantined("src/code_generator.jl visitInstanceSet: a field of $cls named at run time"), "$(julia_text(self.enclosing_member))")
+    # jl_f_setfield checks the value against the object's own field type (julia/src/builtins.c:1073): each class the
+    # receiver admits whose settable field (mutable, not const: its setter selector's target) does not fit the value's
+    # type raises TypeError there, by the receiver's class id, visit_instance_set's value check's arm, before the selector stores; a
+    # class whose field fits needs no arm. The class missing the field, its const or immutable case, is the selector's
+    let t = self.translator, own = dart_type_of(self, node.args[4]), where_ = "$(julia_text(self.enclosing_member))", key = name.c.val
+        local checks = Tuple{Int,DataType,Type}[]
+        for (id, c) in zip(concrete_class_ids(t, cls), concrete_classes(t, cls))
+            local fs = class_instance_fields(c, at)
+            local k = key isa Symbol ? findfirst(f -> f.name == string(key), fs) : findfirst(f -> f.index == key, fs)
+            k === nothing && continue
+            local f = fs[k]
+            (f.mutable && !(1 <= f.index <= fieldcount(c) && isconst(c, f.index))) || continue
+            own <: f.type || push!(checks, (id, c, f.type))
+        end
+        if !isempty(checks)
+            local b0 = self.b[]
+            local recv = translate_type(t, cls)
+            translate_expression(self, receiver, recv)
+            load_class_id(b0, t, recv)
+            class_id_search(b0, [(range = Range(Val(:_), id, id), value = c) for (id, c, _) in checks], WasmBuilder.IR.ValueType[],
+                c -> (visit_instance_set(self, node.args[4], own, checks[findfirst(x -> x[2] === c, checks)][3], where_); nothing),
+                () -> nothing)
+        end
+    end
     # a receiver Julia left abstract has no single target: the field's setter selector (_virtualCall),
     # the value kept where the expression's value is used, the setter's synthesized null dropped
     local b = self.b[]
@@ -2542,6 +2566,34 @@ end
     return translate_expression(self, value, translate_type(t, dart_type_of(self, value)))
 end
 
+# jl_f_setfield's value check (julia/src/builtins.c:1073 `if (!jl_isa(v, ft)) jl_type_error_rt(...)`), for a value of
+# Julia's inferred type `own` written to a field of type `ft`: raise TypeError(:setfield!, "", ft, value) where `own` is
+# outside `ft` at every run; where they overlap, types.dart's emitIsTest of the value, the raise where it fails, and the
+# value narrowed to the field's type as the test proved it (Julia's PiNode); nothing where it raises at every run. The
+# one emission of the check, read by a write through a concrete receiver and by each class an abstract one admits
+@parity "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet" function visit_instance_set(self::AstCodeGenerator, value::NirValue, @nospecialize(own::Type), @nospecialize(ft::Type), where_::String)::Union{NirValue,NirPi,Nothing}
+    local t = self.translator
+    # the builder, read where the check emits: a write needing no check reaches _directSet first
+    local b = self.b[]
+    local raiser = nir_runtime_member(t.component, jl_type_error, where_)
+    local raiser_inputs = signature_for_direct_call(t, raiser).inputs
+    local narrowed = typeintersect(own, ft)
+    local ok = narrowed === Union{} ? nothing : WasmBuilder.block(b)
+    if ok !== nothing
+        translate_expression(self, value, Nothing <: own ? t.top_type[] : t.top_type_non_nullable[])
+        emit_is_test(t.types[], self, ft, own; location = where_)
+        WasmBuilder.br_if(b, ok)
+    end
+    instantiate_constant(t.constants[], b, NirConst(Core.Const(:setfield!)), raiser_inputs[1])
+    translate_expression(self, NirConst(Core.Const(ft)), raiser_inputs[2])
+    translate_expression(self, value, raiser_inputs[3])
+    call(self, raiser)
+    WasmBuilder.unreachable(b)
+    ok === nothing && return nothing
+    WasmBuilder.var"end"(b)
+    return NirPi(value, narrowed)
+end
+
 # A field's write past its index. Its checks: a value not of the field's type raises jl_type_error's
 # TypeError(:setfield!, "", the field's type, the value), where the value's inferred type is outside
 # the field's at every run, where it overlaps it by types.dart's emitIsTest of the value, the value then
@@ -2566,28 +2618,7 @@ end
     # the value's type check: the value written, narrowed where tested, or nothing where it raises at every run
     local own = dart_type_of(self, value)
     local ft = f.type
-    local type_checked() = begin
-        own <: ft && return value
-        # the builder, read where the check emits: a write needing no check reaches _directSet first
-        local b = self.b[]
-        local raiser = nir_runtime_member(t.component, jl_type_error, where_)
-        local raiser_inputs = signature_for_direct_call(t, raiser).inputs
-        local narrowed = typeintersect(own, ft)
-        local ok = narrowed === Union{} ? nothing : WasmBuilder.block(b)
-        if ok !== nothing
-            translate_expression(self, value, Nothing <: own ? t.top_type[] : t.top_type_non_nullable[])
-            emit_is_test(t.types[], self, ft, own; location = where_)
-            WasmBuilder.br_if(b, ok)
-        end
-        instantiate_constant(t.constants[], b, NirConst(Core.Const(:setfield!)), raiser_inputs[1])
-        translate_expression(self, NirConst(Core.Const(ft)), raiser_inputs[2])
-        translate_expression(self, value, raiser_inputs[3])
-        call(self, raiser)
-        WasmBuilder.unreachable(b)
-        ok === nothing && return nothing
-        WasmBuilder.var"end"(b)
-        return NirPi(value, narrowed)
-    end
+    local type_checked() = own <: ft ? value : visit_instance_set(self, value, own, ft, where_)
     local written
     if inline
         written = type_checked()
