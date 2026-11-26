@@ -332,9 +332,11 @@ formal(dev/formal/TypeParamClasses.tla): where a type value is held, every liste
     local objs = Set{NirConst}()
     for b in world
         foreach(t -> _meet_value!(out, seen, t, at), Base.unwrap_unionall(b.ci.def.specTypes).parameters)
-        # a varargs method's body reads its trailing arguments as one tuple (NirVarargPacking)
+        # a varargs method's body reads its trailing arguments as one tuple (NirVarargPacking); one packed
+        # at entry whose class only run time knows is the record of its arity (jl_f_tuple's), as a call's is
         local va = nir_vararg_packing(b.ci.def)
         va === nothing || _meet_value!(out, seen, va.packed, at)
+        va !== nothing && va.at_entry && !isconcretetype(va.packed) && _meet_tuple_record!(out, seen, va.packed, at)
         foreach(t -> _meet_value!(out, seen, t, at), b.types)
         for st in b.stmts
             for v in nir_value_operands(st)

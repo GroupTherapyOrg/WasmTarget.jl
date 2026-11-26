@@ -356,18 +356,74 @@ end
     return NirConst(Core.Const(x))
 end
 
-# a foreigncall's name operand: Julia 1.13 writes a constant name tuple as tuple syntax,
-# Expr(:tuple, :memmove) for (:memmove,), and Julia 1.12 a `(name, library)` tuple as a call of
-# Core.tuple, Expr(:call, Core.tuple, :sin, "Math"), each of which Julia's own codegen reads as that
-# tuple (ccall.cpp's static_eval); a literal otherwise, and a name computed at run time rejects, located
-@quarantine pin"precedent(julia: src/ccall.cpp:571 interpret_symbol_arg)" "Julia writes a foreigncall's constant name as tuple syntax or a call of Core.tuple, which its codegen reads as the tuple" Core.Expr function _nir_ccall_name(x, bindings::NirBindings, at::String)::NirValue
-    local elems = x isa Expr && x.head === :tuple ? x.args :
-        x isa Expr && x.head === :call && x.args[1] == GlobalRef(Core, :tuple) ? x.args[2:end] : nothing
-    elems === nothing && return _nir_operand(x, bindings, at)
-    local vals = Any[a isa QuoteNode ? a.value : a for a in elems]
-    any(v -> v isa Union{Expr, Core.SSAValue, Core.Argument, GlobalRef, Core.SlotNumber}, vals) &&
-        reject!(Unquarantined("src/julia/nir.jl: a foreigncall whose name is computed at run time"), at)
-    return NirConst(Core.Const(Tuple(vals)))
+"""
+    _nir_static_eval(x, bindings) -> Union{Some{Any},Nothing}
+
+The value of an operand of Julia's optimized IR known before it runs, as Julia's codegen's static_eval
+(julia/src/codegen.cpp:2924) answers it: a quoted value, a constant binding's value (a GlobalRef, or a
+call of getfield or getglobal on a constant module and name), a call of the builtin tuple or
+apply_type whose every argument is known, applied as codegen applies it (a throw is no value), and
+any other literal itself; nothing for a value computed at run time. Narrower than Julia's: an SSA value is never known (codegen's SAvalues[i].constant, the constant of an SSA value
+already emitted, which the NIR, read before any emission, does not hold), nor a bare Symbol (codegen's
+lookup in the method's module; optimized IR quotes a symbol) nor a static parameter (the optimizer
+substitutes a known one), so a name read through one is read as computed at run time.
+"""
+@quarantine pin"precedent(julia: src/codegen.cpp:2924 static_eval)" "Julia's codegen reads a foreigncall's name by static_eval: a quote, a constant binding, a builtin tuple or apply_type of known values" Core.GlobalRef function _nir_static_eval(x, bindings::NirBindings)::Union{Some{Any},Nothing}
+    x isa Union{Symbol, Core.SlotNumber, Core.Argument, Core.SSAValue, Core.MethodInstance} && return nothing
+    x isa QuoteNode && return Some{Any}(x.value)
+    local constant(ref::GlobalRef) = (local b = nir_binding!(bindings, ref); nir_binding_is_constant(b) ? Some{Any}(b.value) : nothing)
+    x isa GlobalRef && return constant(x)
+    x isa Expr || return Some{Any}(x)
+    x.head === :call && !isempty(x.args) || return nothing
+    local f = _nir_static_eval(x.args[1], bindings)
+    f === nothing && return nothing
+    if length(x.args) == 3 && (something(f) === getfield || something(f) === Core.getglobal)
+        local m, s = _nir_static_eval(x.args[2], bindings), _nir_static_eval(x.args[3], bindings)
+        m !== nothing && something(m) isa Module && s !== nothing && something(s) isa Symbol || return nothing
+        return constant(GlobalRef(something(m), something(s)))
+    end
+    if something(f) === tuple || something(f) === Core.apply_type
+        local vals = Any[]
+        for a in x.args[2:end]
+            local v = _nir_static_eval(a, bindings)
+            v === nothing && return nothing
+            push!(vals, something(v))
+        end
+        # a builtin, whose answer no world changes (codegen runs it in world 1)
+        return try
+            Some{Any}(something(f)(vals...))
+        catch
+            nothing
+        end
+    end
+    return nothing
+end
+
+# a foreigncall's name operand, read as Julia's codegen reads it (ccall.cpp:571 interpret_symbol_arg):
+# its value when static_eval knows it (_nir_static_eval), among them Julia 1.12's `(name, library)` a
+# call of Core.tuple whose library is a constant binding (base/gmp.jl's libgmp); Julia 1.13 writes a
+# constant name tuple as tuple syntax, Expr(:tuple, :memmove) for (:memmove,), read as that tuple. A
+# name static_eval does not know is computed at run time: a `(name, library)` call whose library
+# codegen loads when first called (lib_expr, jl_lazy_load_and_lookup), or a function pointer, each of
+# which rejects, located, with Julia's reading
+@quarantine pin"precedent(julia: src/ccall.cpp:571 interpret_symbol_arg)" "Julia's codegen reads a foreigncall's name by static_eval, a tuple when known; a library computed at run time it loads lazily, and any other name is a pointer" Core.Expr function _nir_ccall_name(x, bindings::NirBindings, at::String)::NirValue
+    if x isa Expr && x.head === :tuple
+        local vals = Any[a isa QuoteNode ? a.value : a for a in x.args]
+        any(v -> v isa Union{Expr, Core.SSAValue, Core.Argument, GlobalRef, Core.SlotNumber}, vals) &&
+            reject!(Unquarantined("src/julia/nir.jl: a foreigncall whose name is computed at run time"), at)
+        return NirConst(Core.Const(Tuple(vals)))
+    end
+    # a literal or an SSA value is the operand it is (static_eval's answer for a literal; an SSA value's
+    # pointer a call through it reads at run time)
+    x isa Union{Expr, GlobalRef} || return _nir_operand(x, bindings, at)
+    local known = _nir_static_eval(x, bindings)
+    known === nothing || return NirConst(Core.Const(something(known)))
+    if x isa Expr && x.head === :call && length(x.args) == 3 && _nir_static_eval(x.args[1], bindings) == Some{Any}(tuple)
+        local name = _nir_static_eval(x.args[2], bindings)
+        name !== nothing && something(name) isa Union{Symbol,String} &&
+            reject!(Unquarantined("src/julia/nir.jl: the foreigncall $(something(name)) of a library computed at run time, $(x.args[3]), which Julia's codegen loads when first called (julia/src/ccall.cpp:589 interpret_symbol_arg, lib_expr)"), at)
+    end
+    reject!(Unquarantined("src/julia/nir.jl: a foreigncall through a function pointer computed at run time, $x"), at)
 end
 
 # a statement of Julia's optimized IR as its NirStmt kind; a form outside the census rejects, located

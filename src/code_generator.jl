@@ -701,8 +701,9 @@ end
 # arguments after the callee itself, `Argument(2)` on, each required. A varargs specialization of a
 # fixed count takes each trailing argument as a parameter of its own and its body reads them as one
 # tuple, which Julia's codegen builds at entry from those parameters (julia/src/codegen.cpp:8859, a
-# concrete tuple by emit_new_struct): the tuple's struct is allocated from them here, its local the
-# packed argument's (NirVarargPacking)
+# concrete tuple by emit_new_struct, any other by jl_f_tuple): the tuple's struct, or the record of its
+# arity where its class only run time knows, is allocated from them here, its local the packed
+# argument's (NirVarargPacking)
 @parity "dart2wasm/lib/code_generator.dart:245 AstCodeGenerator._setupLocalParameters" function _setup_local_parameters(self::AstCodeGenerator, member::Core.MethodInstance, param_info::ParameterInfo, parameter_offset::Int, implicit_params::Int; is_forwarder::Bool = false, can_safely_omit_implicit_checks::Bool = false)::Nothing
     local positional = get_parameters_to_check(self.translator, member).positional
     local names = Base.method_argnames(member.def::Method)
@@ -715,14 +716,22 @@ end
         if va !== nothing && va.at_entry && variable.n == va.first
             local at = "dart2wasm/lib/code_generator.dart:245 AstCodeGenerator._setupLocalParameters"
             local tuple_type = va.packed
-            # codegen.cpp builds a concrete tuple in place and any other by jl_f_tuple, its class the
-            # values' at run time: no case yet reaches one packed at entry (Julia widens such a
-            # specialization to an open count, packed by its callers, _visitArguments)
-            isconcretetype(tuple_type) ||
-                reject!(Unquarantined("src/code_generator.jl _setupLocalParameters: the varargs tuple $tuple_type $(member) packs at entry, whose class only run time knows"), "$(member)")
+            local trailing = self.param_locals[][implicit_params + i + 1:end]
+            if !isconcretetype(tuple_type)
+                # codegen.cpp builds any other by jl_f_tuple over the parameters (:8859), its class
+                # the values' at run time: the record of its arity, each element boxed, as a call
+                # packs an open one (_visitArguments; the open_tuple arm, src/julia/classes.jl
+                # TupleRecord)
+                local result = generate_static_intrinsic(self.intrinsifier[], Val(:open_tuple), tuple_type, collect(trailing), at)
+                local local_type = translate_type(self.translator, tuple_type)
+                convert_type(self.translator, b, result, local_type)
+                local tuple_local = add_local(self, local_type; name = string(names[variable.n]))
+                WasmBuilder.local_set(b, tuple_local)
+                self.locals[variable] = tuple_local
+                continue
+            end
             local info = get(self.translator.class_info, tuple_type, nothing)
             info === nothing && reject!(Internal("$at: no class info for $(member)'s packed varargs tuple $tuple_type"), "$(member)")
-            local trailing = self.param_locals[][implicit_params + i + 1:end]
             local fields = class_instance_fields(tuple_type, at)
             length(fields) == length(trailing) || reject!(Internal("$at: $(length(trailing)) trailing parameters for the $(length(fields)) fields of $tuple_type"), "$(member)")
             record_class_allocation(self.translator.functions[], class_id(info))
@@ -1371,14 +1380,48 @@ end
 @parity "dart2wasm/lib/code_generator.dart:1201 AstCodeGenerator._hasLogicalOperator" _has_logical_operator(self::AstCodeGenerator, condition::NirValue)::Bool = false
 
 # a NIR condition is an operand (_hasLogicalOperator): no Not to fold, no LogicalExpression to split,
-# so the branch is the condition, negated where asked, and br_if
+# so the branch is the condition, negated where asked, and br_if.
+# Reshaped: dart's condition is a bool by its static type; Julia's GotoIfNot takes a value of any type,
+# which Julia's codegen tests (julia/src/codegen.cpp:6117 emit_condition): a value of a type other than
+# Bool is checked against Bool (emit_typecheck, msg "if"), whose failure is the runtime's jl_type_error
+# raising TypeError(:if, "", Bool, value), and then unboxed as a Bool (emit_unbox by jl_bool_type) where
+# Bool is one of its type's values; where it is none the check raises at every run, and Julia's value
+# past it is undef (`UndefValue`), here wasm's unreachable
 @parity "dart2wasm/lib/code_generator.dart:1208 AstCodeGenerator.branchIf" function branch_if(self::AstCodeGenerator, condition::Union{Nothing,NirValue}, target::WasmBuilder.Label; negated::Bool)::Nothing
     local b = self.b[]
     if condition === nothing
         negated || WasmBuilder.br(b, target)
         return nothing
     end
-    translate_expression(self, condition, WasmBuilder.IR.NumType_i32)
+    local cond_type = condition isa NirConst ? nir_const_type(condition) : dart_type_of(self, condition)
+    if cond_type === Bool
+        translate_expression(self, condition, WasmBuilder.IR.NumType_i32)
+    else
+        local t = self.translator
+        local where_ = "$(julia_text(self.enclosing_member))"
+        local held = add_local(self, Nothing <: cond_type ? t.top_type[] : t.top_type_non_nullable[])
+        translate_expression(self, condition, held.type)
+        WasmBuilder.local_set(b, held)
+        local ok = WasmBuilder.block(b)
+        WasmBuilder.local_get(b, held)
+        emit_is_test(t.types[], self, Bool, cond_type; location = where_)
+        WasmBuilder.br_if(b, ok)
+        local raiser = nir_runtime_member(t.component, jl_type_error, where_)
+        local raiser_inputs = signature_for_direct_call(t, raiser).inputs
+        instantiate_constant(t.constants[], b, NirConst(Core.Const(:if)), raiser_inputs[1])
+        translate_expression(self, NirConst(Core.Const(Bool)), raiser_inputs[2])
+        WasmBuilder.local_get(b, held)
+        convert_type(t, b, held.type, raiser_inputs[3])
+        call(self, raiser)
+        WasmBuilder.unreachable(b)
+        WasmBuilder.var"end"(b)
+        if Bool <: cond_type
+            WasmBuilder.local_get(b, held)
+            convert_type(t, b, held.type, WasmBuilder.IR.NumType_i32; boxed_class = Bool)
+        else
+            WasmBuilder.unreachable(b)
+        end
+    end
     negated && WasmBuilder.i32_eqz(b)
     WasmBuilder.br_if(b, target)
     return nothing
