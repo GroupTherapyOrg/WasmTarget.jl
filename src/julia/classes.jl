@@ -100,7 +100,7 @@ fact: visitInstanceConstant rejects with it, and type_value_unmade reads it.
 """
 @quarantine "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes an instance constant of its class's info; a Julia primitive type with no builtin type and no integer register has none but a 128-bit integer's" Base.isprimitivetype function constant_unmade(translator, cls::DataType)::Union{Rejection,Nothing}
     haskey(translator.builtin_types[], cls) && return nothing
-    isprimitivetype(cls) && !type_expand_integer(cls) && !register_constant_class(translator, cls) &&
+    isprimitivetype(cls) && !type_expand_integer(cls) && !managed_pointer(cls) && !register_constant_class(translator, cls) &&
         return Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation")
     haskey(translator.class_info, cls) ||
         return Internal("dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant: the class $cls of the constant has no class info")
@@ -902,6 +902,40 @@ is translated."""
     return T isa DataType && isprimitivetype(T) && 8 * sizeof(T) == 128
 end
 
+"""    managed_pointer(T) -> Bool
+
+Whether `T` is a `Ptr`, whose value WasmTarget holds as a managed pointer: its class's struct of a base
+and a byte offset (`_pointer_instance_fields`), never an address. Julia's `Ptr` is an address; Julia's own
+codegen already treats an address into an object as its base object and a derived offset (its late GC
+lowering finds every derived pointer's base, julia/src/llvm-late-gc-lowering.cpp:108 FindBaseValue, and a
+MemoryRef holds its memory beside the element's address, julia.h jl_genericmemoryref_t). A wasm array has
+no addresses, so the base is the data array itself and the offset its byte distance from the array's
+start, the address the element holds in Julia's own layout (an element's `elsize` times its index).
+precedent(graalvm: Sulong's LLVMManagedPointer, an (object, offset) pair standing for an LLVM pointer into a
+managed object; java: sun.misc.Unsafe's (Object, long offset) addressing). Julia's differs: an address is
+an integer; a pointer whose base is no object (C_NULL, `Ptr{T}(n)`) is WasmTarget's base-less pointer
+whose offset is that integer, and a base's address as an integer is no value WasmTarget has (rejected at
+run time where a program reads it, src/intrinsics.jl's pointer arm).
+"""
+@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "a Ptr is an address; WasmTarget holds its base, the data array it points into, beside its byte offset, as Julia's late GC lowering knows each derived pointer's base and a MemoryRef its memory" Core.Ptr managed_pointer(@nospecialize(T::Any))::Bool =
+    T isa DataType && T <: Ptr
+
+"""
+    _pointer_instance_fields(c, at) -> Vector{ClassField}
+
+The fields of a `Ptr{T}` (managed_pointer), immutable: `base`, the data array it points into or `nothing`
+for a pointer of no object (an integer address: C_NULL, `Ptr{T}(n)`, a union memory's element offset),
+and `offset`, the byte offset from the base's first element, or the integer address itself where there is
+no base.
+
+Reshaped: Julia's `Ptr` is one machine word, the address; a wasm array has none, so the word is split
+into the base it is derived from and the offset within it (managed_pointer's precedents).
+"""
+@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "a Ptr's address is its base and its offset within it, as Julia's late GC lowering derives a pointer from its base; a wasm array has no address" Core.Ptr function _pointer_instance_fields(c::DataType, at::String)::Vector{ClassField}
+    c <: Ptr || reject!(Internal("src/julia/classes.jl _pointer_instance_fields: $c, no Ptr"), at)
+    return ClassField[ClassField(c, 0, "base", Union{Nothing,WasmEqRef}, false), ClassField(c, 0, "offset", UInt64, false)]
+end
+
 """    type_promote_integer(T) -> Union{Type{UInt32},Type{UInt64},Nothing}
 
 The integer register that holds a value of the primitive class `T`, one with no builtin type
@@ -926,6 +960,8 @@ apart; one not ported rejects there, located."""
 @quarantine pin"julia/src/cgutils.cpp:668 bitstype_to_llvm" "Julia's codegen gives a primitive class with no wasm builtin type its LLVM integer type, which LLVM's wasm type legalizer promotes to the next legal register (llvm/lib/CodeGen/TargetLoweringBase.cpp:1726 TargetLoweringBase::computeRegisterProperties, its TypePromoteInteger loop at :1754); dart's builtin types are a closed set of its wasm classes" Base.isprimitivetype function type_promote_integer(@nospecialize(T::Any))::Union{Type{UInt32},Type{UInt64},Nothing}
     T isa DataType && isprimitivetype(T) || return nothing
     (T === Float16 || T === Core.BFloat16 || T <: Core.LLVMPtr) && return nothing
+    # a Ptr is a managed pointer, its class's struct of a base and an offset (managed_pointer)
+    managed_pointer(T) && return nothing
     local bits = 8 * sizeof(T)
     bits <= 32 && return UInt32
     bits <= 64 && return UInt64
@@ -1033,6 +1069,7 @@ allocation may leave undefined whose type admits `nothing`, dart's late lowering
     # the low and the high i64), each a field of the class's struct, as the value is one wasm value
     isprimitivetype(c) && type_expand_integer(c) &&
         return ClassField[ClassField(c, 0, "lo", UInt64, false), ClassField(c, 0, "hi", UInt64, false)]
+    managed_pointer(c) && return _pointer_instance_fields(c, at)
     isprimitivetype(c) && return ClassField[ClassField(c, 0, "value", c, false)]
     Base.iskindtype(c) && return _kind_instance_fields(c, at)
     if fieldcount(c) == 0
@@ -1346,6 +1383,8 @@ allocatedinline, its selector bytes after the data, genericmemory.c `jl_genericm
 is stored boxed, its answers the same, as is an inline struct of bits, whose class a box holds.
 """
 @quarantine "a Memory's element storage is Julia's layout of its element type, julia/src/genericmemory.c:55 _new_genericmemory_'s element size: inline bits by size, else a reference" Base.isprimitivetype function _memory_element_storage(@nospecialize(T), at::String)::Type
+    # a pointer is a managed pointer, its class's struct (managed_pointer), held by reference
+    managed_pointer(T) && return Union{T,Nothing}
     if T isa DataType && isprimitivetype(T)
         local n = sizeof(T)
         T <: AbstractFloat && n == 4 && return WasmF32
@@ -1449,21 +1488,33 @@ the only one.
 end
 
 """
+    memoryref_union_classes(receiver, key) -> Union{Vector{DataType},Nothing}
+
+The MemoryRef classes of a read of `ptr_or_offset` (named `key`, its name or Julia's field index 1) on a
+receiver whose type is a union of concrete MemoryRef classes, or `nothing` for any other read: such a read
+builds each class's element address (src/intrinsics.jl memoryref_address) in a switch over the classes,
+as dart's DynamicGet switches over the classes holding a field (code_generator.dart:2317 visitDynamicGet).
+"""
+@quarantine pin"julia/base/pointer.jl:75 unsafe_convert" "a MemoryRef's ptr_or_offset is the element's address; on a union of reference classes each class's read builds its own managed pointer, never a selector's getter of the held index" Core.GenericMemoryRef function memoryref_union_classes(@nospecialize(receiver::Any), @nospecialize(key::Any))::Union{Vector{DataType},Nothing}
+    key === :ptr_or_offset || key === 1 || return nothing
+    receiver isa Union || return nothing
+    local cs = Base.uniontypes(receiver)
+    all(c -> c isa DataType && isconcretetype(c) && c <: Core.GenericMemoryRef, cs) || return nothing
+    return DataType[c for c in cs]
+end
+
+"""
     memoryref_address_unread(field) -> Union{Rejection,Nothing}
 
-Why a program's read of the field `field` gives no value of Julia's, or `nothing` where the field holds
-Julia's own: a MemoryRef's `ptr_or_offset` (`_memoryref_instance_fields`) holds the element's index from
-0, Julia's own value only where its memory's elements are a union or of size zero
-(julia/base/pointer.jl:75 unsafe_convert reads it as the offset exactly there, `datatype_arrayelem` and
-`datatype_layoutsize` of the memory's type); for any other memory Julia's value is the element's address,
-which a wasm array does not have: Unquarantined, located at the read, never the index read as an address.
+Why a read of the field `field` through a getter selector (a receiver of no one class) gives no value of
+Julia's, or `nothing` where the field holds Julia's own: a MemoryRef's `ptr_or_offset`
+(`_memoryref_instance_fields`) holds the element's index from 0, and Julia's value is the element's address,
+which a direct read builds as a managed pointer (src/intrinsics.jl memoryref_address); a selector's getter
+reads the field as it is held, so that read is Unquarantined, located, never the index read as an address.
 """
-@quarantine pin"julia/base/pointer.jl:75 unsafe_convert" "a MemoryRef's ptr_or_offset is the element's address unless its memory's elements are a union or of size zero, as Base's unsafe_convert reads it; WasmTarget holds the index, Julia's value only in the offset form" Base.datatype_arrayelem function memoryref_address_unread(field::ClassField)::Union{Rejection,Nothing}
+@quarantine pin"julia/base/pointer.jl:75 unsafe_convert" "a MemoryRef's ptr_or_offset is the element's address or, for union or zero-size elements, its index; WasmTarget holds the index, and a selector's getter reads the field as held" Core.GenericMemoryRef function memoryref_address_unread(field::ClassField)::Union{Rejection,Nothing}
     field.cls <: Core.GenericMemoryRef && field.name == "ptr_or_offset" || return nothing
-    local mem_t = fieldtype(field.cls, :mem)
-    local isunion = 2
-    (Base.datatype_arrayelem(mem_t) == isunion || Base.datatype_layoutsize(mem_t) == 0) && return nothing
-    return Unquarantined("src/julia/classes.jl _memoryref_instance_fields: a read of the ptr_or_offset of a $(field.cls), Julia's element address, which a wasm array does not have")
+    return Unquarantined("src/julia/classes.jl _memoryref_instance_fields: a read of the ptr_or_offset of a $(field.cls) through a getter selector, which reads the index WasmTarget holds where Julia holds the element's address")
 end
 
 """
@@ -1593,6 +1644,9 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
         # a getter selector reads its field in every class it admits (ImplicitFieldAccessorCodeGenerator):
         # a field WasmTarget holds in another form than Julia's rejects at this site, as _directGet's read
         # rejects (memoryref_address_unread), never the selector's getter reading it as Julia's value
+        # a MemoryRef's ptr_or_offset on a union of reference classes is read by its own class switch at the
+        # read (src/intrinsics.jl memoryref_union_address), no selector
+        is_setter || memoryref_union_classes(receiver, name_op.c.val) === nothing || continue
         is_setter || for c in admitted
             c <: Core.GenericMemoryRef || continue      # memoryref_address_unread's one class
             local fs = class_instance_fields(c, "src/julia/classes.jl field_selector_calls")

@@ -672,10 +672,6 @@ rule keeps) is rejected, located.
     local nbits = 8 * sizeof(v)
     local raw = nbits == 64 ? Core.Intrinsics.bitcast(UInt64, v)::UInt64 : Core.Intrinsics.zext_int(UInt64, v)::UInt64
     # the register's literal: the bits themselves where they fill it (as Int32 in an i32), else promoted
-    # a Ptr's bits are the compiling process's host address (above): only C_NULL and all ones are values a
-    # module can hold
-    cls <: Ptr && raw != 0 && raw != typemax(UInt64) &&
-        reject!(Unquarantined("src/constants.jl visitInstanceConstant: a $cls constant holding the host address 0x$(string(raw, base = 16)), which is wrong in any other process (julia/src/staticdata.c resets a mutable's Ptr fields and a memory's Ptr elements to C_NULL, what the program does not read in its own)"), at)
     local value = nbits == width ? (width == 64 ? reinterpret(Int64, raw) : Int64(reinterpret(Int32, raw % UInt32))) :
                   LLVM.promote_int_res_constant(raw, nbits, num_type)
     if self.expected_type isa WasmBuilder.IR.RefType
@@ -956,6 +952,17 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             local k = findfirst(==(field), halves)
             k === nothing && reject!(Internal("$at: the field $(field.name) of $cls is neither of its halves"), at)
             reinterpret(UInt64, LLVM.expand_int_res_constant(reinterpret(UInt128, v))[k])
+        elseif managed_pointer(cls)
+            # a pointer constant is an integer address, Julia's constant pointer its inttoptr
+            # (julia/src/intrinsics.cpp:188 julia_const_to_llvm): no base, the address its offset
+            # (src/julia/classes.jl _pointer_instance_fields)
+            # a Ptr's bits are the compiling process's host address (visit_instance_constant's note): only C_NULL
+            # and all ones are values a module can hold
+            local raw = reinterpret(UInt64, v)
+            raw != 0 && raw != typemax(UInt64) &&
+                reject!(Unquarantined("src/constants.jl visitInstanceConstant: a $cls constant holding the host address 0x$(string(raw, base = 16)), which is wrong in any other process (julia/src/staticdata.c resets a mutable's Ptr fields and a memory's Ptr elements to C_NULL, what the program does not read in its own)"), at)
+            field.name == "base" ? nothing : field.name == "offset" ? raw :
+                reject!(Internal("$at: the field $(field.name) of the pointer $cls, neither its base nor its offset"), at)
         elseif field.index == 0 && cls === Module
             # a module's one field, its name (src/julia/classes.jl _module_instance_fields), the value
             # Julia holds in jl_module_t's name (julia.h:808) and reads with `nameof` (module.c

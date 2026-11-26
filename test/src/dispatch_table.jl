@@ -259,12 +259,13 @@ end
     @test em isa W.RejectionError && em.rejection isa W.Unquarantined && occursin("side, tag", em.rejection.row)
     local eb = try; (ts = numbered(F.second_short); W.field_selector_calls(ts.component, admitted(ts))); nothing; catch x; x; end
     @test eb isa W.RejectionError && eb.rejection isa W.Unquarantined && occursin("BoundsError", eb.rejection.row)
-    # a getter selector's read of a field held in another form than Julia's rejects at its site, as
-    # _directGet's does (memoryref_address_unread); the offset form, Julia's own, is a selector
-    local ep = try; (tp = numbered(F.union_ref_ptr); W.field_selector_calls(tp.component, admitted(tp))); nothing; catch x; x; end
-    @test ep isa W.RejectionError && ep.rejection isa W.Unquarantined && occursin("Julia's element address", ep.rejection.row)
-    local to = numbered(F.union_ref_offset)
-    @test [c.name for c in W.field_selector_calls(to.component, admitted(to))] == ["ptr_or_offset"]
+    # a MemoryRef's ptr_or_offset on a union of reference classes is no selector's: the read builds each class's
+    # element address by its own switch (src/julia/classes.jl memoryref_union_classes, src/intrinsics.jl
+    # memoryref_union_address), the address form and the offset form alike
+    for f in (F.union_ref_ptr, F.union_ref_offset)
+        local tu = numbered(f)
+        @test isempty(W.field_selector_calls(tu.component, admitted(tu)))
+    end
     # the compile calls through the table (_virtualCall): first_of's read by position, run by node,
     # answers as native Julia
     isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_child.jl"))

@@ -320,7 +320,8 @@ the translator holds each collaborator.
                 Float32 => WasmBuilder.IR.NumType_f32, Float64 => WasmBuilder.IR.NumType_f64,
                 WasmI8 => WasmBuilder.IR.PackedType_i8, WasmI16 => WasmBuilder.IR.PackedType_i16, WasmI32 => WasmBuilder.IR.NumType_i32, WasmI64 => WasmBuilder.IR.NumType_i64,
                 WasmF32 => WasmBuilder.IR.NumType_f32, WasmF64 => WasmBuilder.IR.NumType_f64,
-                WasmExternRef => WasmBuilder.IR.RefType_extern(; nullable = false))),
+                WasmExternRef => WasmBuilder.IR.RefType_extern(; nullable = false),
+                WasmEqRef => WasmBuilder.IR.RefType_eq(; nullable = false))),
             Late{Dict{WasmBuilder.IR.ValueType,DataType}}("dart2wasm/lib/translator.dart:374 Translator.boxedClasses"),
             Late{Base.IdSet{DataType}}("dart2wasm/lib/translator.dart:380 Translator.boxClasses"),
             Late{IdDict{DataType,DataType}}("dart2wasm/lib/translator.dart:389 Translator.valueClasses"),
@@ -959,7 +960,7 @@ end
 # but the wasm arrays a field's type names (src/julia/wasm_array.jl's WasmArray and ImmutableWasmArray),
 # their element types (WASM_STORAGE_TYPES) and the host reference a host import passes (WasmExternRef)
 @parity "dart2wasm/lib/translator.dart:1064 Translator.isWasmType" is_wasm_type(self::Translator, cls::DataType)::Bool =
-    cls <: WasmArray || cls <: ImmutableWasmArray || any(w -> cls === w, WASM_STORAGE_TYPES) || cls === WasmExternRef
+    cls <: WasmArray || cls <: ImmutableWasmArray || any(w -> cls === w, WASM_STORAGE_TYPES) || cls === WasmExternRef || cls === WasmEqRef
 
 """
 The wasm storage type of a value of the Julia type `type_`, Julia's answers where dart reads a
@@ -1008,7 +1009,7 @@ the representation here is a reference to the join's struct, each value boxed in
     # A wasm type (dart:_wasm's storage classes and WasmExternRef, src/julia/wasm_array.jl) is never
     # boxed: its builtin type even where unbox is false (dart's `!boxClasses.contains(cls)`); a nullable
     # numeric one is dart's throw, a nullable reference its nullable builtin
-    if any(w -> cls === w, WASM_STORAGE_TYPES) || cls === WasmExternRef
+    if any(w -> cls === w, WASM_STORAGE_TYPES) || cls === WasmExternRef || cls === WasmEqRef
         local wasm_builtin = self.builtin_types[][cls]
         nullable || return wasm_builtin
         WasmBuilder.is_primitive(wasm_builtin) && reject!(Internal("$at: Wasm numeric types can't be nullable"), at)
@@ -1025,8 +1026,9 @@ the representation here is a reference to the join's struct, each value boxed in
             box === nothing && reject!(Internal("$at: the primitive class $cls has no class info, its box"), at)
             return type_with_nullability(box, nullable)
         end
-        # a 128-bit primitive class (Julia's i128) is its class's struct of two i64 halves (src/julia/classes.jl), a regular class
-        unbox && !type_expand_integer(cls) &&
+        # a 128-bit primitive class (Julia's i128) is its class's struct of two i64 halves (src/julia/classes.jl), a regular
+        # class, and so is a Ptr, a managed pointer's base and offset (src/julia/classes.jl managed_pointer)
+        unbox && !type_expand_integer(cls) && !managed_pointer(cls) &&
             reject!(Unquarantined("src/translator.jl translateStorageType: the primitive class $cls, with no wasm representation"), at)
     end
     # Regular class.

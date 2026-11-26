@@ -1997,6 +1997,9 @@ end
     # no selector serves it (field_selector_calls skips a tuple receiver), located
     cls isa Type && !(cls isa DataType) && cls <: Tuple &&
         reject!(Unquarantined("src/intrinsics.jl generateInstanceGetterIntrinsic: a field read on $cls, a tuple type of no layout read at no Int index or with free parameters, dart's DynamicGet over the record classes, not lowered"), "$(julia_text(self.enclosing_member))")
+    # a MemoryRef's ptr_or_offset on a union of reference classes: each class's element address, by a switch
+    local union_refs = memoryref_union_classes(cls, key)
+    union_refs === nothing || return generate_static_intrinsic(self.intrinsifier[], Val(:memoryref_union_address), union_refs, receiver)
     if !(cls isa DataType && isconcretetype(cls))
         statement === nothing && reject!(Internal("$at: a field access on $cls reached with no statement index, its call site unnamed"), "$(julia_text(self.enclosing_member))")
         local reference = SelectorReference(FieldAccessSite(self.enclosing_member::Core.MethodInstance, statement), FieldReferenceKind_getter)
@@ -2026,6 +2029,11 @@ end
     # Julia's fields: a Symbol jl_field_index finds (julia/src/datatype.c:1781), an Int in 1:nfields
     k === nothing && !(key isa Symbol ? Base.fieldindex(cls, key, false) != 0 : 1 <= key <= fieldcount(cls)) &&
         return visit_instance_get(self, node, cls)
+    # a Memory's ptr, its data's address, which its class layout does not hold: the managed pointer to its
+    # first element (src/intrinsics.jl element_address)
+    if k === nothing && cls <: Core.GenericMemory && (key === :ptr || key == Base.fieldindex(cls, :ptr))
+        return generate_static_intrinsic(self.intrinsifier[], Val(:memory_address), cls, receiver)
+    end
     k === nothing && reject!(Unquarantined("src/julia/classes.jl: the field $key of $cls, which its class layout (a kind's runtime type layout) does not hold"), "$(julia_text(self.enclosing_member))")
     return _direct_get(self, fields[k], receiver)
 end
@@ -2188,10 +2196,11 @@ end
 # an 8- or 16-bit field is stored packed, which wasm reads sign- or zero-extended (struct.get_s for a
 # signed integer, struct.get_u otherwise): dart stores no packed field in a class
 @parity "dart2wasm/lib/code_generator.dart:2353 AstCodeGenerator._directGet" function _direct_get(self::AstCodeGenerator, target::ClassField, receiver::NirValue)::WasmBuilder.IR.ValueType
-    # a field whose value WasmTarget holds in another form than Julia's (a MemoryRef's index where Julia
-    # holds an address) rejects at the read, located (src/julia/classes.jl memoryref_address_unread)
-    local unread = memoryref_address_unread(target)
-    unread === nothing || reject!(unread, "$(julia_text(self.enclosing_member))")
+    # a MemoryRef's ptr_or_offset, which WasmTarget holds as the element's index where Julia holds its
+    # address: Julia's value, the element's address as a managed pointer (src/intrinsics.jl element_address)
+    if target.cls <: Core.GenericMemoryRef && target.name == "ptr_or_offset"
+        return generate_static_intrinsic(self.intrinsifier[], Val(:memoryref_address), target.cls, receiver)
+    end
     # a field whose type Julia's inference reads as another than the one it holds (Julia 1.12's TypeName
     # linearcache) rejects at the read, located (src/julia/classes.jl declared_type_unheld)
     local unheld = declared_type_unheld(target.cls, target.index)

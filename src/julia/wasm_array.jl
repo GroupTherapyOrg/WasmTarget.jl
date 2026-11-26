@@ -290,6 +290,18 @@ no Julia operation reads it.
 """
 @quarantine "dart:_wasm's WasmExternRef (sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef) is a class of dart's runtime; Julia's runtime has no host reference, so a value's type names it" Core.Any primitive type WasmExternRef <: Any 64 end
 
+"""
+    WasmEqRef
+
+dart:_wasm's `eqref` (sdk/lib/_wasm/wasm_types.dart:118, `class WasmEqRef extends WasmAnyRef`): a
+reference wasm compares by identity (`ref.eq`), the abstract supertype of every struct and array. A
+field's type names it where the field holds a reference of no one class: a managed pointer's base, the
+data array it points into (src/julia/classes.jl _pointer_instance_fields), nullable as
+`Union{Nothing,WasmEqRef}` where it may hold none. Julia's runtime has no such reference; no Julia
+operation reads it.
+"""
+@quarantine "dart:_wasm's WasmEqRef (sdk/lib/_wasm/wasm_types.dart:118 WasmEqRef) is a class of dart's runtime, wasm's eqref; Julia's runtime has no reference compared by identity alone, so a field's type names it" Core.Any primitive type WasmEqRef <: Any 64 end
+
 # ---- a String's data, read and written as dart:_wasm reads and writes a WasmArray --------------------
 # A String is its class's struct, the header and then `_data`, a wasm array of its UTF-8 code units
 # (src/julia/classes.jl _string_instance_fields). dart's string patches read and write their data
@@ -535,3 +547,36 @@ inlined, so the code generator meets the call and lowers it (src/intrinsics.jl);
         return !(destp < srcp || destp > endp)
     end
 end
+
+# ---- a managed pointer's parts (src/julia/classes.jl managed_pointer) ------------------------------------
+# A Ptr is its class's struct of a base, the data array it points into or none, and a byte offset. Base's
+# comparisons of two pointers (julia/base/pointer.jl:310-312) read their integer addresses; these read the
+# parts the address stands for, each lowered by the code generator to its instruction (src/intrinsics.jl's
+# pointer_query arm), so each stays a call (`@noinline`), and natively each answers over Julia's one address
+# space, where no pointer has a base: the overlays written with them (src/patch/pointer.jl) answer as Base.
+
+"""
+    wasm_pointer_based(p) -> Bool
+
+Whether the pointer `p` points into a data array (its base is one), not an integer address. Natively never:
+Julia's pointers are addresses; the answer is hidden from inference (Julia's compilerbarrier builtin,
+julia/src/builtins.c:2065 jl_f_compilerbarrier), so Julia folds no call of it.
+"""
+@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "a pointer derived from an object has that object as its base, Julia's late GC lowering's; natively a Ptr is an address of no base" Core.Ptr @noinline wasm_pointer_based(p::Ptr)::Bool = Base.compilerbarrier(:const, false)
+
+"""
+    wasm_pointer_same_base(x, y) -> Bool
+
+Whether the pointers `x` and `y` share their base: one data array (`ref.eq`, dart's `identical` of two
+buffers, sdk/lib/_internal/wasm/common/typed_data.dart:1243), or both none. Natively always: one address
+space.
+"""
+@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "two pointers derived from one object share its base; natively every Ptr is an address of one space" Core.Ptr @noinline wasm_pointer_same_base(x::Ptr, y::Ptr)::Bool = Base.compilerbarrier(:const, true)
+
+"""
+    wasm_pointer_offset(p) -> UInt
+
+The pointer `p`'s byte offset from its base's first element, or its integer address where it has no base.
+Natively its address, `UInt(p)`.
+"""
+@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "a derived pointer's offset from its base; natively a Ptr's address is its offset in the one address space" Core.Ptr @noinline wasm_pointer_offset(p::Ptr)::UInt = UInt(p)

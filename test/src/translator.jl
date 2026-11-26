@@ -117,9 +117,11 @@ end
         @test D.translate_storage_type(t, T; unbox = false) == w
     end
     # a primitive class with no builtin type is the integer register LLVM's wasm target promotes Julia's
-    # LLVM type to (bitstype_to_llvm, then TypePromoteInteger): a Ptr the 64-bit pointer, an 8-bit
-    # Core.AddrSpace an i32, a 24-bit primitive type an i32, a 40-bit one an i64
-    for (T, w) in ((Ptr{Nothing}, IR.NumType_i64), (Ptr{UInt8}, IR.NumType_i64), (Core.AddrSpace{Core}, IR.NumType_i32),
+    # LLVM type to (bitstype_to_llvm, then TypePromoteInteger): an 8-bit Core.AddrSpace an i32, a 24-bit
+    # primitive type an i32, a 40-bit one an i64; a Ptr is none, a managed pointer, its class's struct
+    # (src/julia/classes.jl managed_pointer)
+    @test W.type_promote_integer(Ptr{Nothing}) === nothing && W.primitive_value_type(t, Ptr{UInt8}) === nothing
+    for (T, w) in ((Core.AddrSpace{Core}, IR.NumType_i32),
                    (TypeCases.P24, IR.NumType_i32), (TypeCases.P40, IR.NumType_i64))
         @test D.translate_storage_type(t, T) == w && D.translate_type(t, T) == w
     end
@@ -145,11 +147,11 @@ end
     end
     # the register's literals, dart's wasm value classes' instance constants: a primitive with no builtin
     # type held in an integer register; a builtin type's (its own constant kind), the half floats, a 128-bit
-    # integer, a primitive wider than i64 and a struct are not
-    for T in (Ptr{Nothing}, Core.AddrSpace{Core}, TypeCases.P24, TypeCases.P40)
+    # integer, a managed pointer, a primitive wider than i64 and a struct are not
+    for T in (Core.AddrSpace{Core}, TypeCases.P24, TypeCases.P40)
         @test W.register_constant_class(t, T)
     end
-    for T in (Int8, Int64, Char, Bool, Float32, Float64, W.WasmI32, Float16, Int128, TypeCases.P256, TypeCases.Circle, Any)
+    for T in (Int8, Int64, Char, Bool, Float32, Float64, W.WasmI32, Float16, Int128, Ptr{Nothing}, TypeCases.P256, TypeCases.Circle, Any)
         @test !W.register_constant_class(t, T)
     end
     local pi = W.constant_unmade(t, Core.TypeofVararg)

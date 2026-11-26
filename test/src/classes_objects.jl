@@ -117,23 +117,30 @@ end
     @test [f.name for f in W.class_instance_fields(Memory{String}, "classes")] == ["data", "length"]
     @test [f.name for f in W.class_instance_fields(Memory{Union{Nothing,Int}}, "classes")] == ["data", "length"]
     @test W.class_instance_fields(R, "classes") == [W.ClassField(R, 1, "ptr_or_offset", Int, false), W.ClassField(R, 2, "mem", M, false)]
-    # the index is Julia's own value of ptr_or_offset only for a memory of union or zero-size elements
-    # (base/pointer.jl unsafe_convert); a read of it for any other memory, Julia's address, rejects
-    local ru = W.memoryref_address_unread(W.class_instance_fields(R, "classes")[1])
-    @test ru isa W.Unquarantined && occursin("ptr_or_offset of a MemoryRef{$Int}, Julia's element address", ru.row)
-    @test W.memoryref_address_unread(W.class_instance_fields(R, "classes")[2]) === nothing
-    for T in (Union{Nothing,Int}, Nothing)
+    # a direct read of ptr_or_offset builds Julia's element address as a managed pointer (src/intrinsics.jl
+    # memoryref_address); through a getter selector, which reads the held index, it rejects for every memory,
+    # the offset form of union and zero-size elements among them; mem reads as held
+    for T in (Int, Union{Nothing,Int}, Nothing)
         local RT = Core.MemoryRef{T}
-        @test W.memoryref_address_unread(W.class_instance_fields(RT, "classes")[1]) === nothing
+        local ru = W.memoryref_address_unread(W.class_instance_fields(RT, "classes")[1])
+        @test ru isa W.Unquarantined && occursin("ptr_or_offset of a $RT through a getter selector", ru.row)
+        @test W.memoryref_address_unread(W.class_instance_fields(RT, "classes")[2]) === nothing
     end
+    # a Ptr is a managed pointer, its base (the data array it points into, or none) and its byte offset; a
+    # memory of pointers holds each by reference
+    local P = Ptr{Int}
+    @test W.managed_pointer(P) && !W.managed_pointer(Int) && W.type_promote_integer(P) === nothing
+    @test W.class_instance_fields(P, "classes") == [W.ClassField(P, 0, "base", Union{Nothing,W.WasmEqRef}, false), W.ClassField(P, 0, "offset", UInt64, false)]
+    @test W.class_instance_fields(Memory{P}, "classes")[1].type === W.WasmArray{Union{P,Nothing}}
     # an atomic memory, a primitive with no storage class: located rejections
     local e = try; W.class_instance_fields(AtomicMemory{Int}, "classes"); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     local e2 = try; W.class_instance_fields(Memory{Int128}, "classes"); nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Unquarantined
-    # a Vector's own fields, its MemoryRef and its size, bring the memory and the reference
+    # a Vector's own fields, its MemoryRef and its size, bring the memory and the reference, and the reference's
+    # ptr_or_offset field type, Ptr{Nothing}, the managed pointer class a read of it builds
     local cs = _classes(MemoryCases.alloc, (Int,))
-    @test Vector{Int} in cs && R in cs && M in cs && !(Ptr{Nothing} in cs)
+    @test Vector{Int} in cs && R in cs && M in cs && Ptr{Nothing} in cs
     @test String in _classes(MemoryCases.names, (Int,))
     # class_info.dart's collector lays each out: the memory's struct, the header, then data and length
     local D = W.Dart2Wasm

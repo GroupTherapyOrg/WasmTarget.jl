@@ -807,6 +807,8 @@ end
         array_op === nothing || return generate_static_intrinsic(self, Val(:wasm_array), array_op, target, node.args[2:end])
         local memory_op = generate_static_intrinsic(Val(:memory_data_op), target)
         memory_op === nothing || return generate_static_intrinsic(self, Val(:memory_data), memory_op, target, node.args[2:end])
+        local pointer_op = generate_static_intrinsic(Val(:pointer_query_op), target)
+        pointer_op === nothing || return generate_static_intrinsic(self, Val(:pointer_query), pointer_op, node.args[2:end])
         local getter = generate_static_getter_intrinsic(self, target)
         getter === nothing || return getter
         # a data id's write of the identity hash field, setIdentityHashField under the data owner's arm
@@ -873,6 +875,11 @@ end
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f === Core.donotdelete && return generate_static_intrinsic(self, Val(:donotdelete), f, args)
     f isa Core.IntrinsicFunction || return nothing
+    # an operation on a pointer, an operand's or a conversion's result: its base and offset (managed_pointer)
+    local pointer_to = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
+    (any(a -> managed_pointer(dart_type_of(self, a)), args) ||
+     pointer_to isa DataType && pointer_to <: Type && length(pointer_to.parameters) == 1 && managed_pointer(pointer_to.parameters[1])) &&
+        return generate_static_intrinsic(self, Val(:pointer), f, args)
     # an operation on a 128-bit integer, an operand's or a conversion's result: its two i64 halves
     local converted = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
     (any(a -> type_expand_integer(dart_type_of(self, a)), args) ||
@@ -2028,7 +2035,7 @@ end
         local done = WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[mem_type])
         instantiate_constant(code_gen, NirConst(Core.Const(M.instance)), mem_type)
         WasmBuilder.else_(b)
-        local fill() = if !isprimitivetype(E) && isbitstype(E)
+        local fill() = if (!isprimitivetype(E) || managed_pointer(E)) && isbitstype(E)
             local zero = Base.issingletontype(E) ? E.instance : reinterpret(E, zeros(UInt8, sizeof(E)))[1]
             instantiate_constant(code_gen, NirConst(Core.Const(zero)), WasmBuilder.unpacked(storage))
             WasmBuilder.local_get(b, n)
@@ -2993,6 +3000,9 @@ end
     # two of one 128-bit integer class: their bits, both halves equal (the int128 arm's eq_int)
     first_type === second_type && type_expand_integer(first_type) &&
         return generate_static_intrinsic(self, Val(:int128), Core.Intrinsics.eq_int, args)
+    # two of one pointer class: their bases one and their offsets equal (managed_pointer)
+    first_type === second_type && managed_pointer(first_type) &&
+        return generate_static_intrinsic(self, Val(:pointer_egal), first, second, "$(julia_text(code_gen.enclosing_member)): === on two $(julia_text(first_type))")
     # a value of a type below DataType (DataType itself, Type{X} of a DataType X, a Union of such) is a DataType
     local a_data_type(T::Type) = T !== Union{} && T <: DataType
     if egal_by_identity(first_type) || egal_by_identity(second_type) || (a_data_type(first_type) && a_data_type(second_type))
@@ -3172,6 +3182,11 @@ end
             WasmBuilder.i64_eq(b)
         elseif storage isa WasmBuilder.IR.RefType && WasmBuilder.is_subtype_of(storage, top)
             call(code_gen, egal)
+        elseif storage isa WasmBuilder.IR.RefType && storage.heap_type === WasmBuilder.IR.HeapType_eq
+            # a managed pointer's base (src/julia/classes.jl managed_pointer): Julia compares a Ptr's bits
+            # (compare_fields' memcmp of the inline word), the address its base and offset stand for, so the
+            # bases by identity (ref.eq, both none among them)
+            WasmBuilder.ref_eq(b)
         elseif host(storage)
             local hp = add_local(code_gen, storage)
             local hq = add_local(code_gen, storage)
@@ -3679,6 +3694,237 @@ end
     translate_expression(code_gen, x, from_w)
     emit(b[])
     return to_w
+end
+
+# a managed pointer's parts as Base's comparisons read them (src/julia/wasm_array.jl): whether it has a base
+# (ref.is_null of its base, negated), whether two share one (ref.eq of their bases, both none among them), and
+# its byte offset
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:pointer_query_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
+    target.def in methods(wasm_pointer_based) ? :based : target.def in methods(wasm_pointer_same_base) ? :same_base :
+    target.def in methods(wasm_pointer_offset) ? :offset : nothing
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_query}, op::Symbol, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local b = self.code_gen.b[]
+    local at = "$(julia_text(self.code_gen.enclosing_member)): a pointer's $op"
+    if op === :based
+        local (base, _) = generate_static_intrinsic(self, Val(:pointer_parts), args[1], at)
+        WasmBuilder.local_get(b, base)
+        WasmBuilder.ref_is_null(b)
+        WasmBuilder.i32_eqz(b)
+        return WasmBuilder.IR.NumType_i32
+    elseif op === :same_base
+        local (xb, _) = generate_static_intrinsic(self, Val(:pointer_parts), args[1], at)
+        local (yb, _) = generate_static_intrinsic(self, Val(:pointer_parts), args[2], at)
+        WasmBuilder.local_get(b, xb)
+        WasmBuilder.local_get(b, yb)
+        WasmBuilder.ref_eq(b)
+        return WasmBuilder.IR.NumType_i32
+    elseif op === :offset
+        local (_, offset) = generate_static_intrinsic(self, Val(:pointer_parts), args[1], at)
+        WasmBuilder.local_get(b, offset)
+        return WasmBuilder.IR.NumType_i64
+    end
+    reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a pointer query $op"), at)
+end
+
+# Julia's intrinsics on a pointer, a managed pointer in WasmTarget (src/julia/classes.jl managed_pointer):
+# its class's struct of a base, the data array it points into or none, and a byte offset from the base's first
+# element, or the integer address itself where there is no base. Each intrinsic is Julia's own on an address
+# (julia/src/intrinsics.cpp), answered over the pair as Julia's late GC lowering carries a derived pointer's base
+# beside it (julia/src/llvm-late-gc-lowering.cpp:108 FindBaseValue: a bitcast keeps its operand's base, a GEP
+# its base pointer's):
+#   bitcast to a pointer type (intrinsics.cpp:633 generic_bitcast): from a pointer, its base and offset, the
+#     value of the other pointer class; from a 64-bit integer, an address of no object, no base and the
+#     integer as its offset (the inttoptr of julia_const_to_llvm and C_NULL's bitcast)
+#   bitcast of a pointer to a 64-bit integer (its ptrtoint): a pointer of no base, its offset; a pointer into a
+#     data array has no integer address, so that read is a gap at run time, the program ended there, located
+#     (the fatal arm), never an invented address
+#   add_ptr, sub_ptr (intrinsics.cpp:1503 emit_untyped_intrinsic's add_ptr, a GEP of i8 by the byte count; sub_ptr
+#     its negation): the base kept, the offset moved by the bytes, wrapping as Julia's i64 arithmetic does
+#   a load or a store through a pointer (pointerref, pointerset, and their atomic forms): not yet ported,
+#     rejected, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local b = code_gen.b[]
+    local i64 = WasmBuilder.IR.NumType_i64
+    local I = Core.Intrinsics
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's $f on a pointer"
+    local word(T::Type) = T === Int64 || T === UInt64
+    if length(args) == 2 && (local c = dart_type_of(self, args[1]); c isa DataType && c <: Type && length(c.parameters) == 1)
+        local to = c.parameters[1]
+        local from = dart_type_of(self, args[2])
+        f === I.bitcast || return nothing
+        if managed_pointer(to) && managed_pointer(from)
+            local (base, offset) = generate_static_intrinsic(self, Val(:pointer_parts), args[2], at)
+            return generate_static_intrinsic(self, Val(:new_pointer), to, () -> WasmBuilder.local_get(b, base), () -> WasmBuilder.local_get(b, offset), at)
+        elseif managed_pointer(to) && word(from)
+            return generate_static_intrinsic(self, Val(:new_pointer), to, () -> WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none),
+                () -> translate_expression(code_gen, args[2], i64), at)
+        elseif managed_pointer(from) && word(to)
+            local (base, offset) = generate_static_intrinsic(self, Val(:pointer_parts), args[2], at)
+            WasmBuilder.local_get(b, base)
+            WasmBuilder.ref_is_null(b)
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.if_(b)
+            generate_static_intrinsic(self, Val(:fatal), Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a pointer into a wasm array read as an integer address, which a wasm array does not have (src/julia/classes.jl managed_pointer)"), at)
+            WasmBuilder.var"end"(b)
+            WasmBuilder.local_get(b, offset)
+            return i64
+        end
+        return nothing
+    end
+    if (f === I.add_ptr || f === I.sub_ptr) && length(args) == 2
+        local P = dart_type_of(self, args[1])
+        managed_pointer(P) && word(dart_type_of(self, args[2])) || return nothing
+        local (base, offset) = generate_static_intrinsic(self, Val(:pointer_parts), args[1], at)
+        return generate_static_intrinsic(self, Val(:new_pointer), P, () -> WasmBuilder.local_get(b, base), () -> begin
+            WasmBuilder.local_get(b, offset)
+            translate_expression(code_gen, args[2], i64)
+            f === I.add_ptr ? WasmBuilder.i64_add(b) : WasmBuilder.i64_sub(b)
+        end, at)
+    end
+    (f === I.pointerref || f === I.pointerset || f === I.atomic_pointerref || f === I.atomic_pointerset ||
+     f === I.atomic_pointerswap || f === I.atomic_pointermodify || f === I.atomic_pointerreplace) &&
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $f, a load or store through a managed pointer (src/julia/classes.jl managed_pointer), not yet ported"), at)
+    return nothing
+end
+
+# a pointer's two parts (src/julia/classes.jl _pointer_instance_fields), each read once into a local: its base
+# (a nullable eqref) and its byte offset
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_parts}, v::NirValue, at::String)::Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}
+    local code_gen = self.code_gen
+    local b = code_gen.b[]
+    local P = dart_type_of(self, v)
+    managed_pointer(P) || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the parts of a $P, no pointer"), at)
+    local info, fs = generate_static_intrinsic(self, Val(:fields_of), P, at)
+    local t = translator(self)
+    local p = add_local(code_gen, info.non_nullable_type)
+    translate_expression(code_gen, v, info.non_nullable_type)
+    WasmBuilder.local_set(b, p)
+    local base = add_local(code_gen, WasmBuilder.IR.RefType_eq(; nullable = true))
+    local offset = add_local(code_gen, WasmBuilder.IR.NumType_i64)
+    WasmBuilder.local_get(b, p)
+    WasmBuilder.struct_get(b, info.struct_, t.field_index[generate_static_intrinsic(Val(:field), fs, "base", at)])
+    WasmBuilder.local_set(b, base)
+    WasmBuilder.local_get(b, p)
+    WasmBuilder.struct_get(b, info.struct_, t.field_index[generate_static_intrinsic(Val(:field), fs, "offset", at)])
+    WasmBuilder.local_set(b, offset)
+    return (base, offset)
+end
+
+# a new pointer of the class P from its base and its offset, each pushed by its function
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:new_pointer}, P::DataType, base::Function, offset::Function, at::String)::WasmBuilder.IR.ValueType
+    managed_pointer(P) || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a new pointer of $P, no pointer class"), at)
+    local info, fs = generate_static_intrinsic(self, Val(:fields_of), P, at)
+    generate_static_intrinsic(self, Val(:new_struct), info, fs, Dict{String,Function}("base" => base, "offset" => offset))
+    return info.non_nullable_type
+end
+
+# two pointers egal (Julia's === of two Ptrs of one class, jl_egal comparing their bits): their bases one
+# (ref.eq, both none among them) and their offsets equal
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_egal}, x::NirValue, y::NirValue, at::String)::WasmBuilder.IR.ValueType
+    local b = self.code_gen.b[]
+    local (xb, xo) = generate_static_intrinsic(self, Val(:pointer_parts), x, at)
+    local (yb, yo) = generate_static_intrinsic(self, Val(:pointer_parts), y, at)
+    WasmBuilder.local_get(b, xb)
+    WasmBuilder.local_get(b, yb)
+    WasmBuilder.ref_eq(b)
+    WasmBuilder.local_get(b, xo)
+    WasmBuilder.local_get(b, yo)
+    WasmBuilder.i64_eq(b)
+    WasmBuilder.i32_and(b)
+    return WasmBuilder.IR.NumType_i32
+end
+
+# An element's address in a memory of the class M (Julia's `ptr_or_offset` of a MemoryRef, `ptr` of a Memory):
+# a Ptr{Cvoid}, the memory pushed by `mem` and the element's index from 0 by `index`. Julia's value
+# (julia.h jl_genericmemoryref_t, base/pointer.jl:75 unsafe_convert): the element's address, the memory's data
+# address plus index times the element size (datatype_layoutsize), except a reference's into a memory of union
+# or zero-size elements, whose ptr_or_offset is the index itself (`offset_form`). Over WasmTarget's layout the
+# address is the managed pointer (src/julia/classes.jl managed_pointer): the memory's data array as its base and
+# index times the element size as its offset; the offset form no base and the index
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:element_address}, M::DataType, mem::Function, index::Function, offset_form::Bool, at::String)::WasmBuilder.IR.ValueType
+    local b = self.code_gen.b[]
+    local t = translator(self)
+    local isunion = 2
+    local elsz = Base.datatype_layoutsize(M)
+    if offset_form && (Base.datatype_arrayelem(M) == isunion || elsz == 0)
+        return generate_static_intrinsic(self, Val(:new_pointer), Ptr{Cvoid}, () -> WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none), index, at)
+    end
+    local minfo, mfs = generate_static_intrinsic(self, Val(:fields_of), M, at)
+    return generate_static_intrinsic(self, Val(:new_pointer), Ptr{Cvoid}, () -> begin
+        mem()
+        WasmBuilder.struct_get(b, minfo.struct_, t.field_index[generate_static_intrinsic(Val(:field), mfs, "data", at)])
+    end, () -> begin
+        index()
+        WasmBuilder.i64_const(b, Int64(elsz))
+        WasmBuilder.i64_mul(b)
+    end, at)
+end
+
+# Julia's ptr_or_offset of a MemoryRef of the class R: the element's address (src/intrinsics.jl element_address),
+# its memory and its index read from the reference's fields, the offset form where Julia keeps it
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memoryref_address}, R::DataType, receiver::Union{NirValue,Function})::WasmBuilder.IR.ValueType
+    local at = "$(julia_text(self.code_gen.enclosing_member)): the ptr_or_offset of a $(julia_text(R))"
+    local b = self.code_gen.b[]
+    R <: Core.GenericMemoryRef || reject!(Internal("src/intrinsics.jl memoryref_address: $R, no MemoryRef"), at)
+    local t = translator(self)
+    local rinfo = get(t.class_info, R, nothing)
+    rinfo === nothing && reject!(Internal("src/intrinsics.jl memoryref_address: $R has no class info"), at)
+    local rfs = Dict{String,ClassField}(f.name => f for f in class_instance_fields(R, at))
+    local r = add_local(self.code_gen, rinfo.non_nullable_type)
+    receiver isa NirValue ? translate_expression(self.code_gen, receiver, rinfo.non_nullable_type) : receiver()
+    WasmBuilder.local_set(b, r)
+    return generate_static_intrinsic(self, Val(:element_address), GenericMemory{R.parameters...},
+        () -> (WasmBuilder.local_get(b, r); WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[rfs["mem"]])),
+        () -> (WasmBuilder.local_get(b, r); WasmBuilder.struct_get(b, rinfo.struct_, t.field_index[rfs["ptr_or_offset"]])),
+        true, at)
+end
+
+# Julia's ptr_or_offset of a reference of a union of MemoryRef classes `Rs` (src/julia/classes.jl
+# memoryref_union_classes): the receiver tested against each class but the last in turn (ref.test) and read as
+# that class (memoryref_address), the last by its cast, as dart's DynamicGet switches over the classes holding
+# the field (code_generator.dart:2317 visitDynamicGet)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memoryref_union_address}, Rs::Vector{DataType}, receiver::NirValue)::WasmBuilder.IR.ValueType
+    local b = self.code_gen.b[]
+    local t = translator(self)
+    local at = "$(julia_text(self.code_gen.enclosing_member)): the ptr_or_offset of a $(julia_text(Union{Rs...}))"
+    all(R -> R <: Core.GenericMemoryRef, Rs) || reject!(Internal("src/intrinsics.jl memoryref_union_address: $Rs, not each a MemoryRef"), at)
+    local pinfo = get(t.class_info, Ptr{Cvoid}, nothing)
+    pinfo === nothing && reject!(Internal("src/intrinsics.jl memoryref_union_address: Ptr{Cvoid} has no class info"), at)
+    local result = pinfo.non_nullable_type
+    local v = add_local(self.code_gen, t.top_type[])
+    translate_expression(self.code_gen, receiver, t.top_type[])
+    WasmBuilder.local_set(b, v)
+    local info_of(R::DataType) = (local i = get(t.class_info, R, nothing);
+        i === nothing ? reject!(Internal("src/intrinsics.jl memoryref_union_address: $R has no class info"), at) : i)
+    for R in Rs[1:end-1]
+        WasmBuilder.local_get(b, v)
+        WasmBuilder.ref_test(b, info_of(R).non_nullable_type)
+        WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[result])
+        generate_static_intrinsic(self, Val(:memoryref_address), R, () -> (WasmBuilder.local_get(b, v); WasmBuilder.ref_cast(b, info_of(R).non_nullable_type)))
+        WasmBuilder.else_(b)
+    end
+    local last = Rs[end]
+    generate_static_intrinsic(self, Val(:memoryref_address), last, () -> (WasmBuilder.local_get(b, v); WasmBuilder.ref_cast(b, info_of(last).non_nullable_type)))
+    for _ in 1:length(Rs) - 1
+        WasmBuilder.var"end"(b)
+    end
+    return result
+end
+
+# Julia's ptr of a Memory of the class M, its data's address: the managed pointer to its first element
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:memory_address}, M::DataType, receiver::NirValue)::WasmBuilder.IR.ValueType
+    local at = "$(julia_text(self.code_gen.enclosing_member)): the ptr of a $(julia_text(M))"
+    local b = self.code_gen.b[]
+    M <: Core.GenericMemory || reject!(Internal("src/intrinsics.jl memory_address: $M, no Memory"), at)
+    local minfo = get(translator(self).class_info, M, nothing)
+    minfo === nothing && reject!(Internal("src/intrinsics.jl memory_address: $M has no class info"), at)
+    local m = add_local(self.code_gen, minfo.non_nullable_type)
+    translate_expression(self.code_gen, receiver, minfo.non_nullable_type)
+    WasmBuilder.local_set(b, m)
+    return generate_static_intrinsic(self, Val(:element_address), M,
+        () -> WasmBuilder.local_get(b, m), () -> WasmBuilder.i64_const(b, 0), false, at)
 end
 
 # Julia's intrinsics on a 128-bit integer (Int128, UInt128), whose value is its class's struct of two
