@@ -75,6 +75,30 @@
 @quarantine "julia/src/julia.h:1885 jl_egal_ compares two values by their pointers, their type tags and then jl_egal__unboxed_'s arm for their class" Core.Bool @noinline jl_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool =
     wasm_egal(a, b)
 
+# Julia's `body where v` (julia/src/jltypes.c:907 jl_type_unionall), the foreign call Julia's inliner makes of every
+# UnionAll(v, t) whose v is a TypeVar (Compiler/src/ssair/inlining.jl:1745), which the code generator calls for it
+# (src/intrinsics.jl), arm for arm: a value that is neither a type nor a type variable, Julia's TypeError("UnionAll",
+# Type, body) (jl_type_error); `v` itself, `T where T<:S` normalized to its upper bound; a body in which `v` does not
+# occur (src/julia/runtime/jltypes.jl jl_has_typevar), the body itself; else a new UnionAll (jl_new_unionall), its
+# nullability Julia's `Nothing <: U` (jl_unionall_nothing_subtype). The C's first arm, a Vararg wrapped directly
+# (:909), meets none: a Vararg is a value of no class of a closed world (src/julia/classes.jl type_value_unmade). A
+# root of every closed world, as every function of this section
+@quarantine pin"julia/src/jltypes.c:907 jl_type_unionall" "Julia's runtime wraps a type in a UnionAll over a type variable, normalizing the forms that need no new object" Core.UnionAll @noinline function jl_type_unionall(v::TypeVar, @nospecialize(body::Any))::Any
+    jl_typetagis(body, Type) || jl_typetagis(body, TypeVar) || jl_type_error(:UnionAll, Type, body)
+    # normalize `T where T<:S` => S
+    body === v && return v.ub
+    # where var doesn't occur in body just return body
+    jl_has_typevar(body, v) || return body
+    return jl_new_unionall(v, body, jl_unionall_nothing_subtype(v, body))::UnionAll
+end
+
+# Julia's egal of two UnionAlls (julia/src/builtins.c jl_egal__bitstag's jl_unionall_tag arm, egal_types(a, b,
+# NULL, 1)), which the egal arm calls for two values of the UnionAll class, jl_type_unionall making one at run time
+# (src/julia/runtime/jltypes.jl jl_new_unionall, jl_egal_types). A root of every closed world, as every function of
+# this section
+@quarantine pin"julia/src/builtins.c:167 egal_types" "Julia's runtime compares two UnionAlls structurally, egal_types with their variables' names" Core.UnionAll @noinline jl_egal_unionall(@nospecialize(a::Any), @nospecialize(b::Any))::Bool =
+    jl_egal_types(a::UnionAll, b::UnionAll, nothing, true)
+
 """
     wasm_egal(a, b) -> Bool
 

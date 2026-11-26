@@ -631,6 +631,7 @@ end
     local libjulia = nir_libjulia_func(node)
     libjulia === :jl_genericmemory_owner && return generate_static_intrinsic(self, Val(:genericmemory_owner), node)
     libjulia === :jl_types_equal && return generate_static_intrinsic(self, Val(:types_equal), node)
+    libjulia === :jl_type_unionall && return generate_static_intrinsic(self, Val(:type_unionall), node)
     libjulia === :jl_get_tls_world_age || return nothing
     local at = "$(julia_text(self.code_gen.enclosing_member))"
     local rt, cc = node.args[2], node.args[5]
@@ -643,6 +644,30 @@ end
         reject!(Internal("julia/src/ccall.cpp:1717 emit_ccall: jl_get_tls_world_age takes no argument"), at)
     WasmBuilder.i64_const(b(self), reinterpret(Int64, UInt64(translator(self).component.world)))
     return WasmBuilder.IR.NumType_i64
+end
+
+# jl_type_unionall, the foreign call Julia's inliner makes of every UnionAll(v, t) whose v is a TypeVar
+# (Compiler/src/ssair/inlining.jl:1745, `Expr(:foreigncall, :jl_type_unionall, Any, svec(Any, Any), 0, :ccall, v, t)`),
+# which Julia's codegen emits as a call of its runtime's function (julia/src/ccall.cpp emit_ccall, a libjulia symbol):
+# here the call of the runtime's port (src/julia/runtime/rtutils.jl jl_type_unionall, a root of every closed world),
+# its operands the declaration's two, v as the port's TypeVar, as dart calls a static target. A declaration other
+# than the inliner's (Any of two Any arguments, C's convention) rejects, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:type_unionall}, node::NirForeignCall)::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local at = "$(julia_text(self.code_gen.enclosing_member))"
+    local rt, argtypes, cc = node.args[2], node.args[3], node.args[5]
+    rt isa NirConst && rt.c.val === Any && argtypes isa NirConst && argtypes.c.val == Core.svec(Any, Any) ||
+        reject!(Internal("julia/Compiler/src/ssair/inlining.jl:1746: jl_type_unionall declared other than Any of two Any arguments"), at)
+    local conv = cc isa NirConst ? (cc.c.val isa Tuple ? cc.c.val[1] : cc.c.val) : nothing
+    conv === :ccall || conv === :cdecl ||
+        reject!(Internal("julia/Compiler/src/ssair/inlining.jl:1746: jl_type_unionall called by the convention $(repr(conv)), not C's"), at)
+    local ops = nir_foreign_operands(node)
+    local target = nir_runtime_member(t.component, jl_type_unionall, at)
+    local inputs = signature_for_direct_call(t, target).inputs
+    for (op, w) in zip(ops, inputs)
+        translate_expression(self.code_gen, op, w)
+    end
+    return output_or_void(t, call(self.code_gen, target))
 end
 
 # jl_genericmemory_owner, one of emit_ccall's special functions (julia/src/ccall.cpp:1872): codegen's reader of a
@@ -741,6 +766,12 @@ end
             return generate_static_intrinsic(self, Val(:interface_type_class_id), node.args[2:end])
         target.def.name === :jl_to_typeof && target.def in methods(jl_to_typeof) &&
             return generate_static_intrinsic(self, Val(:to_typeof), node.args[2:end])
+        target.def.name === :jl_nothing_subtype_var_gap && target.def in methods(jl_nothing_subtype_var_gap) &&
+            return generate_static_intrinsic(self, Val(:nothing_subtype_var_gap))
+        target.def.name === :jl_new_unionall && target.def in methods(jl_new_unionall) &&
+            return generate_static_intrinsic(self, Val(:new_unionall), node.args[2:end])
+        target.def.name === :jl_datatype_same_name && target.def in methods(jl_datatype_same_name) &&
+            return generate_static_intrinsic(self, Val(:datatype_same_name), node.args[2:end])
         target.def.name === :image_object_id && target.def in methods(image_object_id) &&
             return generate_static_intrinsic(self, Val(:image_object_id), node.args[2:end])
         target.def.name === :jl_typetagis && target.def in methods(jl_typetagis) &&
@@ -1314,6 +1345,74 @@ end
     translate_expression(self.code_gen, args[1], type_)
     load_class_id(self.code_gen.b[], t, type_)
     emit_class_id_range_check(self.code_gen.b[], get_concrete_class_id_range(t.class_id_numbering[], K))
+    return WasmBuilder.IR.NumType_i32
+end
+
+# the arms of Julia's `Nothing <: w` for a type variable that need its bounds' full subtyping
+# (src/julia/runtime/jltypes.jl jl_nothing_subtype_var_gap, julia/src/subtype.c:831 var_gt), which the runtime
+# does not port: the deferred gap, the fatal arm, never a value
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:nothing_subtype_var_gap})::WasmBuilder.IR.ValueType
+    generate_static_intrinsic(self, Val(:fatal),
+        Unquarantined("src/julia/runtime/jltypes.jl jl_nothing_subtype_var_gap: Nothing <: a type variable whose lower bound is neither Union{} nor Nothing, or a free one (julia/src/subtype.c:831 var_gt), which needs Julia's full subtyping of its bounds"),
+        "$(julia_text(self.code_gen.enclosing_member)) (at run time)")
+    return WasmBuilder.IR.NumType_i32
+end
+
+# the new UnionAll jl_type_unionall makes (src/julia/runtime/jltypes.jl jl_new_unionall, julia/src/jltypes.c:950
+# jl_new_struct(jl_unionall_type, v, body)): the UnionAll class's struct allocated as dart allocates a class
+# (code_generator.dart:6070 pushObjectHeaderFields, then the fields in the layout's order and struct.new), its
+# fields the kind's layout (src/julia/classes.jl _kind_instance_fields): isDeclaredNullable the operand Julia's
+# `Nothing <: U` computed (jl_unionall_nothing_subtype), then Julia's var and body
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:new_unionall}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local at = "$(julia_text(self.code_gen.enclosing_member)): jl_new_unionall"
+    length(args) == 3 || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_new_unionall takes 3 operands, not $(length(args))"), at)
+    local info = get(t.class_info, UnionAll, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_new_unionall where UnionAll has no class info"), at)
+    local by_name = Dict("isDeclaredNullable" => args[3], "var" => args[1], "body" => args[2])
+    push_object_header_fields(b, t, info)
+    for field in class_instance_fields(UnionAll, at)
+        haskey(by_name, field.name) || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the UnionAll field $(field.name), not one jl_new_unionall fills"), at)
+        local storage = WasmBuilder.unpacked(info.struct_.fields[t.field_index[field] + 1].type)
+        translate_expression(self.code_gen, by_name[field.name], storage)
+    end
+    WasmBuilder.struct_new(b, info.struct_)
+    record_class_allocation(t.functions[], class_id(info))
+    return info.non_nullable_type
+end
+
+# whether two DataTypes share their TypeName (src/julia/runtime/jltypes.jl jl_datatype_same_name,
+# julia/src/builtins.c:177 in egal_types): a DataType value holds the id of the class it denotes
+# (_InterfaceType.classId), so the closed world's table of each class's TypeName, an index per distinct TypeName in
+# class id order (an immutable i32 array constant, made as RuntimeTypeInformation makes its tables, types.dart),
+# read at each operand's class id, the two indices equal
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:datatype_same_name}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local at = "$(julia_text(self.code_gen.enclosing_member)): jl_datatype_same_name"
+    length(args) == 2 || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_datatype_same_name takes 2 operands, not $(length(args))"), at)
+    local numbering = t.class_id_numbering[]
+    local names = Any[]
+    local index = fill(-1, numbering.max_class_id + 1)
+    for (cls, id) in numbering.class_ids
+        local tn = Base.unwrap_unionall(cls).name
+        local k = findfirst(x -> x === tn, names)
+        k === nothing && (push!(names, tn); k = length(names))
+        index[id + 1] = k
+    end
+    local constants = t.constants[]
+    local table = make_array_of(constants, WasmI32, NirConst[make_wasm_i32(constants, k) for k in index])
+    local array_type = WasmBuilder.IR.RefType_def(array_type_for_dart_type(t, WasmI32; mutable_ = true); nullable = false)
+    local arr = add_local(self.code_gen, array_type)
+    instantiate_constant(constants, b, table, array_type)
+    WasmBuilder.local_set(b, arr)
+    for a in args
+        WasmBuilder.local_get(b, arr)
+        generate_static_intrinsic(self, Val(:interface_type_class_id), NirValue[a])
+        WasmBuilder.array_get(b, array_type.heap_type)
+    end
+    WasmBuilder.i32_eq(b)
     return WasmBuilder.IR.NumType_i32
 end
 
@@ -2933,9 +3032,10 @@ end
 # `nothing`) is egal only to null; values of two classes are not (the type tags); else the switch over
 # the closed world's concrete classes, each its class's arm of jl_egal__unboxed_ (julia.h:1874) and
 # jl_egal__bitstag (builtins.c:243): a class egal compares by identity (a mutable one but String,
-# SimpleVector and DataType: name->mutabl) answers no, as do the kinds, each type one canonical constant
-# (constants.jl _lowerTypeToConstant, no type made at run time, A68S3), whose references were already
-# compared; any other class compares its fields, builtins.c:100 compare_fields: a field of bits by its
+# SimpleVector and DataType: name->mutabl) answers no, as do the kinds but UnionAll, each type one canonical
+# constant (constants.jl _lowerTypeToConstant), whose references were already compared; two UnionAlls, which
+# jl_type_unionall makes at run time (src/julia/runtime/jltypes.jl jl_new_unionall), by Julia's structural
+# egal_types (builtins.c:167, the runtime's jl_egal_unionall); any other class compares its fields, builtins.c:100 compare_fields: a field of bits by its
 # bits (a float's as an integer, bits_equal), a reference by jl_egal again (a null egal only to null),
 # and a field holding a wasm array (a String's bytes, a SimpleVector's elements) by its length and
 # elements, jl_string_tag's memcmp and compare_svec (builtins.c:87). Julia answers Bool's and Symbol's
@@ -3119,6 +3219,15 @@ end
     load_class_id(b, t, top_nn)
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
             local info = t.class_info[cls]
+            if cls === UnionAll
+                # two UnionAlls, a made one among them (src/julia/runtime/jltypes.jl jl_new_unionall), by Julia's
+                # structural egal (jl_egal__bitstag's jl_unionall_tag arm, egal_types(a, b, NULL, 1): the runtime's
+                # jl_egal_unionall)
+                WasmBuilder.local_get(b, x)
+                WasmBuilder.local_get(b, y)
+                call(code_gen, nir_runtime_member(t.component, jl_egal_unionall, at))
+                return nothing
+            end
             local fields = Base.iskindtype(cls) || egal_by_identity(cls) ? ClassField[] : class_instance_fields(cls, at)
             if Base.iskindtype(cls) || egal_by_identity(cls)
                 WasmBuilder.i32_const(b, 0)

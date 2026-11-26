@@ -552,7 +552,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/Compiler/src/ssair/ir", "julia/base/show", "julia/base/reflection", "julia/base/errorshow", "julia/base/docs/utils",
     "julia/base/dict", "julia/base/reinterpretarray", "julia/src/staticdata",
     "julia/src/ast", "julia/src/flisp/julia_extensions", "julia/src/flisp/julia_opsuffs", "julia/src/support/utf8",
-    "julia/src/julia-parser", "julia/src/support/strtod",
+    "julia/src/julia-parser", "julia/src/support/strtod", "julia/src/jltypes",
 )
 
 """
