@@ -1440,10 +1440,21 @@ reference to its class (the top type for `Any`), null an element no write has se
 Reshaped: `T` — an element type Julia stores inline as a union of bits types (`Union{Nothing,Int}`,
 allocatedinline, its selector bytes after the data, genericmemory.c `jl_genericmemory_typetagdata`)
 is stored boxed, its answers the same, as is an inline struct of bits, whose class a box holds.
+
+Reshaped: a 128-bit primitive element (`Int128`, `UInt128`, a `primitive type P 128`) — Julia stores it
+inline, 16 bytes (julia/src/genericmemory.c:95 `elsz`, its layout's size), which LLVM's wasm target
+stores as its two i64 halves (llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp ExpandIntOp_STORE); its
+value is already its class's immutable struct of the two halves (type_expand_integer, class_instance_fields),
+so the array holds that struct by reference, as it holds a managed pointer's and an inline struct of bits'.
+precedent(dart: a WasmArray<T> of a class T holds each element by reference, translateStorageType of the class
+unboxed off). The struct is immutable, so a write storing the reference copies the value as Julia's store of
+the 16 bytes does: no write through one element reaches another.
 """
 @quarantine pin"julia/src/genericmemory.c:55 _new_genericmemory_" "a Memory's element storage is Julia's layout of its element type, julia/src/genericmemory.c:55 _new_genericmemory_'s element size: inline bits by size, else a reference" Base.isprimitivetype function _memory_element_storage(@nospecialize(T), at::String)::Type
     # a pointer is a managed pointer, its class's struct (managed_pointer), held by reference
     managed_pointer(T) && return Union{T,Nothing}
+    # a 128-bit integer is its class's struct of two i64 halves (type_expand_integer), held by reference
+    type_expand_integer(T) && return Union{T,Nothing}
     if T isa DataType && isprimitivetype(T)
         local n = sizeof(T)
         T <: AbstractFloat && n == 4 && return WasmF32

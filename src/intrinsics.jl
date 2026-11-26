@@ -2118,8 +2118,8 @@ end
 # - memorynew (codegen.cpp:4206, cgutils.cpp:4563 emit_memorynew): n == 0 answers the type's one empty
 #   instance; a negative n, or one whose byte size passes Julia's limit, raises ArgumentError through
 #   the runtime's raiser (error_unless over jlargumenterror_func); else the allocation, zero filled as
-#   emit_memory_zeroinit_and_stores leaves it (a number's zero and an inline struct's all-zero bits,
-#   Julia's arbitrary contents; a reference's #undef, the null); a count past a wasm array's i32
+#   emit_memory_zeroinit_and_stores leaves it (a number's zero, a 128-bit integer's struct of zero halves
+#   and an inline struct's all-zero bits, Julia's arbitrary contents; a reference's #undef, the null); a count past a wasm array's i32
 #   length is an allocation that cannot be made, raising OutOfMemoryError as Julia's allocator does.
 # - memoryrefnew(m) (codegen.cpp:4230, _emit_memoryref) is {0, m}; memoryrefnew(r, i, bc)
 #   (codegen.cpp:4241, cgutils.cpp:4686 emit_memoryref's offset arm) is {r.offset + i - 1, r.mem},
@@ -2215,7 +2215,7 @@ end
         local done = WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[mem_type])
         instantiate_constant(code_gen, NirConst(Core.Const(M.instance)), mem_type)
         WasmBuilder.else_(b)
-        local fill() = if (!isprimitivetype(E) || managed_pointer(E)) && isbitstype(E)
+        local fill() = if (!isprimitivetype(E) || managed_pointer(E) || type_expand_integer(E)) && isbitstype(E)
             local zero = Base.issingletontype(E) ? E.instance : reinterpret(E, zeros(UInt8, sizeof(E)))[1]
             instantiate_constant(code_gen, NirConst(Core.Const(zero)), WasmBuilder.unpacked(storage))
             WasmBuilder.local_get(b, n)
