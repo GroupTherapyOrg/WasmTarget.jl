@@ -1809,6 +1809,66 @@ end
     return DataType[]
 end
 
+# setfield!'s memory order, its operand `o` (nothing where the call has none, jl_f_setfield's notatomic default,
+# julia/src/builtins.c:1059): a constant Symbol read as jl_get_atomic_order reads a store's (:967, storing):
+# :not_atomic plain, :unordered, :monotonic, :release and :sequentially_consistent atomic, any other invalid
+# (jl_get_atomic_order_checked's "invalid atomic ordering", :990); nothing where only run time knows it (the
+# operand's JL_TYPECHK, :1061)
+@quarantine pin"julia/src/builtins.c:967 jl_get_atomic_order" "Julia reads setfield!'s memory order from its Symbol at run time; a constant one is read here, once, for every write" Core.Symbol function setfield_order(o::Union{Nothing,NirValue})::Union{Symbol,Nothing}
+    o === nothing && return :notatomic
+    o isa NirConst && o.c.val isa Symbol || return nothing
+    local s = o.c.val::Symbol
+    return s === :not_atomic ? :notatomic : s in (:unordered, :monotonic, :release, :sequentially_consistent) ? :atomic : :invalid
+end
+
+# setfield!'s raise of a class holding no field of its key `key`, the raise a getfield of it makes too
+# (classes_without_field): BoundsError of the value and the position past its fields, FieldError of its type and
+# a name it lacks; one arm of SetfieldRaise
+@quarantine pin"julia/src/builtins.c:994 get_checked_fieldindex" "Julia's setfield! finds the field by the key, a position or a name, as getfield does" Core.Symbol struct SetfieldNoField
+    key::Union{Int,Symbol}
+end
+# setfield!'s raise whose message Julia's runtime spells: jl_errorf's ErrorException (a Module, an immutable struct,
+# a const field) or, `atomic`, jl_atomic_error's ConcurrencyViolationError; one arm of SetfieldRaise
+@quarantine pin"julia/src/builtins.c:994 get_checked_fieldindex" "Julia's setfield! raises its mutability's and its const field's ErrorException and its atomic check's ConcurrencyViolationError with a message of its own" Core.String struct SetfieldMessage
+    msg::String
+    atomic::Bool
+end
+
+"""
+    SetfieldRaise
+
+What a setfield! raises on a value of one class before it writes, Julia's checks in jl_f_setfield's order
+(julia/src/builtins.c:1057): `SetfieldNoField` (the key finds no field) or `SetfieldMessage` (the receiver
+or the field takes no write). Closed by its type: a `@closed` `Union` of two concrete structs that subtype
+nothing; `setfield_raise` answers it and visitInstanceSet's site check matches it `@exhaustive`.
+
+precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch). Julia's differs: a
+`Union` of concrete structs, its exhaustiveness checked when the package loads.
+"""
+@quarantine pin"julia/src/builtins.c:1057 jl_f_setfield" "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const SetfieldRaise = Union{SetfieldNoField, SetfieldMessage}
+
+# what a setfield! by the constant key `f` with the memory order `order` (setfield_order, valid) raises on a value
+# of the class `c` before it writes, or nothing where it writes: Julia's checks in their order, jl_f_setfield's
+# get_checked_fieldindex (julia/src/builtins.c:994), with `mutabl`: a Module ("cannot assign variables in other
+# modules", :998), an immutable struct whatever the key (:1000, its type's name, a tuple held as its record a
+# Tuple's), the key finding no field (classes_without_field: :1006 jl_bounds_error, :1010 jl_field_index's
+# FieldError), a const field (:1018); then jl_f_setfield's atomic check (:1068-1071). The type check of the
+# value follows (:1072). The one answer of which classes raise at a setfield!'s site: visitInstanceSet tests the
+# receiver's class id against theirs before its selector call (formal(dev/formal/MCFieldSelectorTableSetCheck.tla)
+# SetCheckTraps), and the setter selector admits the rest (field_selector_calls)
+@quarantine pin"julia/src/builtins.c:1057 jl_f_setfield" "Julia's setfield! checks the receiver's own type before it writes, its mutability first, then the field, its constness and its atomicity" Base.ismutabletype function setfield_raise(c::DataType, f::Union{Int,Symbol}, order::Symbol, at::String)::Union{SetfieldRaise,Nothing}
+    c === Module && return SetfieldMessage("cannot assign variables in other modules", false)
+    local record = tuple_record_arity(c) !== nothing
+    local name = record ? :Tuple : c.name.name
+    !record && ismutabletype(c) || return SetfieldMessage("setfield!: immutable struct of type $name cannot be changed", false)
+    isempty(classes_without_field(DataType[c], f, at)) || return SetfieldNoField(f)
+    local idx = f isa Int ? f : Base.fieldindex(c, f, false)
+    isconst(c, idx) && return SetfieldMessage("setfield!: const field .$(fieldname(c, idx)) of type $name cannot be changed", false)
+    Base.isfieldatomic(c, idx) == (order === :notatomic) &&
+        return SetfieldMessage(order === :notatomic ? "setfield!: atomic field cannot be written non-atomically" : "setfield!: non-atomic field cannot be written atomically", true)
+    return nothing
+end
+
 # the field selector a field access names on receivers of the classes `admitted`: a name, its own; a
 # position, the field each class holds there, as Julia's getfield reads it (fieldname(typeof(x), i), a
 # record's own field for a tuple held as one). The selectors are named by their fields
@@ -1837,8 +1897,9 @@ dispatch table. Each selector, a `FieldSelectorCalls` of its name and kind, in t
 maps to its call count and the classes its receivers' types admit, `admitted(receiver)`, the
 classes the receiver holds (field_receiver_classes: its concrete classes as
 ClassIdNumbering.getConcreteClassIdRange reads them, the one reading, src/class_info.jl, a tuple as its
-record), which DispatchTable.build passes, less those holding no field of its name or position
-(classes_without_field), which raise Julia's FieldError or BoundsError at the site. DispatchTable.build (src/dispatch_table.jl)
+record), which DispatchTable.build passes, less those raising Julia's error at the site: a read's, those
+holding no field of its name or position (classes_without_field, FieldError or BoundsError); a write's,
+those jl_f_setfield refuses before it writes (setfield_raise). DispatchTable.build (src/dispatch_table.jl)
 reads it where dart reads TFA's selector ids. A receiver of a concrete type is a direct access, no call of a selector.
 """
 @quarantine pin"pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall" "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, admitted_classes::Function)::Vector{FieldSelectorCalls}
@@ -1859,14 +1920,19 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
         local name_op = st.args[3]
         name_op isa NirConst && (name_op.c.val isa Symbol || name_op.c.val isa Int) || continue
         local admitted = admitted_classes(receiver)::Vector{DataType}
-        local name = field_selector_name(name_op.c.val, admitted); local is_setter = f === Core.setfield!
-        # a class holding no field of the name or position raises Julia's FieldError or BoundsError at the site
-        # (classes_without_field), so the selector admits only the classes holding the field; a write's check
-        # of the class's mutability comes first (get_checked_fieldindex's mutabl), not yet written
-        local without = classes_without_field(admitted, name_op.c.val, "src/julia/classes.jl field_selector_calls")
-        is_setter && !isempty(without) &&
-            reject!(Unquarantined("src/julia/classes.jl field_selector_calls: Julia's setfield! of the field $(repr(name_op.c.val)) of $(join(without, ", ")), which holds no such field, whose mutability get_checked_fieldindex checks first (julia/src/builtins.c:994), a target not yet written"), "$(b.ci.def) statement $index")
-        admitted = filter(c -> !(c in without), admitted)
+        local is_setter = f === Core.setfield!
+        # a class whose read or write raises before it reaches the field raises Julia's error at the site, so the
+        # selector admits only the rest: a getter's, a class holding no field of the name or position
+        # (classes_without_field: FieldError or BoundsError); a setter's, a class jl_f_setfield refuses before it
+        # writes, its mutability first (setfield_raise). A write of an order only run time knows rejects at its
+        # site and an invalid order raises there before any class's check: no call of the selector
+        local at = "src/julia/classes.jl field_selector_calls"
+        local order = is_setter ? setfield_order(length(st.args) >= 5 ? st.args[5] : nothing) : :notatomic
+        (order === nothing || order === :invalid) && continue
+        local raising = is_setter ? filter(c -> setfield_raise(c, name_op.c.val, order, at) !== nothing, admitted) :
+                                    classes_without_field(admitted, name_op.c.val, at)
+        admitted = filter(c -> !(c in raising), admitted)
+        local name = field_selector_name(name_op.c.val, admitted)
         # a getter selector reads its field in every class it admits (ImplicitFieldAccessorCodeGenerator):
         # a field WasmTarget holds in another form than Julia's rejects at this site, as _directGet's read
         # rejects (memoryref_address_unread), never the selector's getter reading it as Julia's value
